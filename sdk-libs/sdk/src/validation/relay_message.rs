@@ -12,9 +12,10 @@ use solana_message::{v1, VersionedMessage};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::MAX_LOADED_ACCOUNTS_DATA_SIZE;
-use spr_indexer_api::{Base64String, SerializablePubkey};
-use spr_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_indexer_api::{Hash, SerializablePubkey};
+use spr_keypair::{PublicKey, ShieldedAddress, X25519Pubkey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
+use spr_transaction::{Mint, Utxo};
 use thiserror::Error;
 use zolana_ring_client::{
     rpc::{
@@ -72,24 +73,34 @@ pub(crate) struct ExpectedEnroll {
     pub inputs: RelayEnrollInputs,
 }
 
-/// What a public signer of a relayed transfer agrees to, byte for byte, the sealing wallet hands it over.
+/// What one public owner agrees to, its own slots and notes alone, the sealing wallet hands it over.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RelayTransferTerms {
     pub ring: SerializablePubkey,
     pub fee_payer: SerializablePubkey,
-    pub tx_viewing_key: TxViewingSecret,
-    /// Every public owner and co-signer the frame names, no other key signs.
-    pub signers: Vec<SerializablePubkey>,
-    /// One `AuditRecord` encoding per published slot.
-    pub records: Vec<Base64String>,
-    /// One `DataTail` encoding per published slot, empty on a frame with no data.
-    pub tails: Vec<Base64String>,
-    pub nullifiers: Vec<Base64String>,
-    /// One wincode `InterfaceTransfer` per leg.
-    pub legs: Vec<Base64String>,
+    pub signer: SerializablePubkey,
+    /// Each rebuilds its slot's commitment, no key opens another slot.
+    pub slots: Vec<SlotOpening>,
+    /// The signer's notes the transfer spends.
+    pub nullifiers: Vec<Hash>,
     /// The token accounts the fee payer creates ahead of the ring instruction.
     pub setup: Vec<TokenAccountCreate>,
+}
+
+/// The preimage of one published output's `utxo_hash`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SlotOpening {
+    pub slot: u32,
+    pub owner: SerializablePubkey,
+    pub nullifier_pk: Hash,
+    pub mint: SerializablePubkey,
+    pub amount: u64,
+    pub blinding: Hash,
+    pub tree_id: u16,
+    pub data_hash: Hash,
+    pub ring_data_hash: Hash,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,12 +111,17 @@ pub struct TokenAccountCreate {
     pub token_program: SerializablePubkey,
 }
 
+/// One entry per public owner the seal names, an outside co-signer holds none.
 #[derive(Clone, Debug)]
 pub(crate) struct ExpectedTransfer {
-    terms: RelayTransferTerms,
-    /// From the ring account, a frame read under the wrong rail or auditor proves nothing.
+    terms: Vec<SignerTerms>,
+    /// From the ring account, a frame read under the wrong rail proves nothing.
     rail: RingRail,
-    auditor: X25519Pubkey,
+}
+
+#[derive(Clone, Debug)]
+struct SignerTerms {
+    terms: RelayTransferTerms,
     setup: Vec<Instruction>,
 }
 
@@ -203,9 +219,9 @@ impl ExpectedMessage {
         }
     }
 
-    pub fn transfer_terms(&self) -> Option<&RelayTransferTerms> {
+    pub fn terms_for(&self, signer: Address) -> Option<&RelayTransferTerms> {
         match self {
-            Self::Transfer(transfer) => Some(&transfer.terms),
+            Self::Transfer(transfer) => transfer.terms_for(signer),
             Self::Deposit(_) | Self::Delegate(_) | Self::Enroll(_) => None,
         }
     }
@@ -499,94 +515,106 @@ impl ExpectedFrame for ExpectedDelegate {
 }
 
 impl ExpectedTransfer {
-    pub fn new(terms: RelayTransferTerms, config: &CustomRingConfig) -> Result<Self, RingError> {
-        terms.tx_viewing_key.key()?;
-        let setup = terms
-            .setup
-            .iter()
-            .map(|create| {
-                CreateAssociatedTokenAccount {
-                    payer: terms.fee_payer.0,
-                    owner: create.owner.0,
-                    mint: create.mint.0,
-                    token_program: create.token_program.0,
-                }
-                .instruction()
-            })
-            .collect();
-        Ok(Self {
+    pub fn new(terms: Vec<RelayTransferTerms>, config: &CustomRingConfig) -> Self {
+        Self {
+            terms: terms
+                .into_iter()
+                .map(|terms| SignerTerms {
+                    setup: terms
+                        .setup
+                        .iter()
+                        .map(|create| {
+                            CreateAssociatedTokenAccount {
+                                payer: terms.fee_payer.0,
+                                owner: create.owner.0,
+                                mint: create.mint.0,
+                                token_program: create.token_program.0,
+                            }
+                            .instruction()
+                        })
+                        .collect(),
+                    terms,
+                })
+                .collect(),
             rail: match config.mode {
                 RingMode::Anonymous => RingRail::Anonymous,
                 RingMode::Confidential => RingRail::Confidential,
             },
-            auditor: config.auditor_pubkey,
-            setup,
-            terms,
-        })
+        }
     }
 
-    /// Every published slot, nullifier and leg reads exactly as the wallet sealed it.
-    fn check_moved(&self, parsed: &ParsedTransact<'_>) -> Result<(), MessageMismatch> {
-        let data = parsed.data();
+    pub fn terms_for(&self, signer: Address) -> Option<&RelayTransferTerms> {
+        self.signer_terms(signer).map(|held| &held.terms)
+    }
+
+    fn signer_terms(&self, signer: Address) -> Option<&SignerTerms> {
+        self.terms.iter().find(|held| held.terms.signer.0 == signer)
+    }
+}
+
+impl SignerTerms {
+    /// A slot of another owner or an opening that rebuilds another commitment binds nothing.
+    fn check_moved(&self, data: &RingTransactData<'_>) -> Result<(), MessageMismatch> {
         let terms = &self.terms;
-        let opened = open_stream(parsed, &terms.tx_viewing_key, &self.auditor)?;
-        if data.outputs.len() != terms.records.len() {
-            return Err(MessageMismatch::Recipients);
+        if terms.slots.is_empty() && terms.nullifiers.is_empty() {
+            return Err(MessageMismatch::Unrequested);
         }
-        for (slot, (output, expected)) in data.outputs.iter().zip(&terms.records).enumerate() {
-            let record = opened
-                .record(slot, output.record)
-                .map_err(|_| MessageMismatch::Data)?;
-            if record.encode().as_slice() != expected.0.as_slice() {
+        for opening in &terms.slots {
+            let published = data
+                .outputs
+                .get(opening.slot as usize)
+                .ok_or(MessageMismatch::Recipients)?;
+            let rebuilt = opening.utxo_hash(terms.ring.0)?;
+            if opening.owner != terms.signer || rebuilt != *published.hash {
                 return Err(MessageMismatch::Recipients);
             }
-            if let Some(tail) = output.tail {
-                let tail = opened.tail(slot, tail).map_err(|_| MessageMismatch::Data)?;
-                let same = terms
-                    .tails
-                    .get(slot)
-                    .is_some_and(|expected| tail.encode().as_slice() == expected.0.as_slice());
-                if !same {
-                    return Err(MessageMismatch::Data);
-                }
-            }
         }
-        let same_nullifiers = data.nullifiers.iter().map(<[u8; 32]>::as_slice).eq(terms
+        let spends_its_notes = terms
             .nullifiers
             .iter()
-            .map(|nullifier| nullifier.0.as_slice()));
-        let legs = data
-            .interface_transfers
-            .iter()
-            .map(wincode::serialize)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| MessageMismatch::Data)?;
-        let same_legs = legs
-            .iter()
-            .map(Vec::as_slice)
-            .eq(terms.legs.iter().map(|leg| leg.0.as_slice()));
-        if data.has_data == terms.tails.is_empty() || !same_nullifiers || !same_legs {
-            return Err(MessageMismatch::Data);
+            .all(|nullifier| data.nullifiers.contains(&nullifier.0));
+        match spends_its_notes {
+            true => Ok(()),
+            false => Err(MessageMismatch::Data),
         }
-        Ok(())
+    }
+}
+
+impl SlotOpening {
+    fn utxo_hash(&self, ring: Address) -> Result<[u8; 32], MessageMismatch> {
+        Utxo {
+            owner: PublicKey::from_ed25519(self.owner.0.as_array()),
+            asset: Mint::new(self.mint.0, 0),
+            amount: self.amount,
+            blinding: self.blinding.0,
+            ring_program_id: Some(ring),
+            data: Default::default(),
+        }
+        .hash(
+            &self.nullifier_pk.0,
+            &self.data_hash.0,
+            &self.ring_data_hash.0,
+            self.tree_id,
+        )
+        .map_err(|_| MessageMismatch::Recipients)
     }
 }
 
 impl ExpectedFrame for ExpectedTransfer {
     const TAG: InstructionTag = InstructionTag::Transfer;
 
-    /// A key the terms do not name stays refused.
+    /// A key the seal names no slot or note of stays refused.
     fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
-        if !self.terms.signers.iter().any(|named| named.0 == signer) {
-            return Err(MessageMismatch::Unrequested);
-        }
+        let held = self
+            .signer_terms(signer)
+            .ok_or(MessageMismatch::Unrequested)?;
         Ok(Envelope {
-            ring: CustomRing::new(self.terms.ring.0),
-            program: self.terms.ring.0,
+            ring: CustomRing::new(held.terms.ring.0),
+            program: held.terms.ring.0,
             units: compute_unit_limit(tag),
-            fee_payer: self.terms.fee_payer.0,
+            fee_payer: held.terms.fee_payer.0,
             signer,
-            setup: self.setup.clone(),
+            setup: held.setup.clone(),
         })
     }
 
@@ -596,12 +624,15 @@ impl ExpectedFrame for ExpectedTransfer {
         frame: &[u8],
         accounts: &[AccountMeta],
     ) -> Result<(), MessageMismatch> {
+        let held = self
+            .signer_terms(signer)
+            .ok_or(MessageMismatch::Unrequested)?;
         let parsed = frame
             .split_first()
             .filter(|(tag, _)| **tag == tag::TRANSFER)
             .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
             .ok_or(MessageMismatch::Data)?;
-        self.check_moved(&parsed)?;
+        held.check_moved(parsed.data())?;
         check_signer(&self.envelope(signer, Self::TAG)?, accounts)
     }
 }
