@@ -134,11 +134,15 @@ describe("co-signer message check", () => {
       expect(await verdict(rule, honest.message)).toBe("FalseApprovalOpening");
     });
 
-    it("refuses a blinder or an asset at or past the modulus and a zero blinder", async () => {
+    it("refuses a zero blinder", async () => {
+      const rule = exact((opening) => ({ ...opening, blinder: new Uint8Array(32) as Bytes32 }));
+      expect(await verdict(rule, honest.message)).toBe("ZeroApprovalBlinder");
+    });
+
+    it("refuses a blinder or an asset at or past the modulus", async () => {
       const past = new Uint8Array(32).fill(0xff) as Bytes32;
       for (const rule of [
         exact((opening) => ({ ...opening, blinder: past })),
-        exact((opening) => ({ ...opening, blinder: new Uint8Array(32) as Bytes32 })),
         exact((opening) => ({
           ...opening,
           outputs: opening.outputs.map((slot) => ({ ...slot, asset: past })),
@@ -152,7 +156,7 @@ describe("co-signer message check", () => {
         exact((opening) => ({ ...opening, outputs: opening.outputs.slice(1) })),
         exact((opening) => ({ ...opening, public: opening.public.slice(1) })),
       ])
-        expect(await verdict(rule, honest.message)).toBe("FalseApprovalOpening");
+        expect(await verdict(rule, honest.message)).toBe("ApprovalOpeningLayout");
     });
 
     it("reads another signer as unrequested ahead of the rule", async () => {

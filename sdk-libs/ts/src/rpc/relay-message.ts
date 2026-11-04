@@ -16,13 +16,14 @@ import {
 } from "@solana/kit";
 
 import { getCreateAssociatedTokenAccountInstructionAsync } from "@heliuslabs/zolana/instructions";
+import { NO_CACHE_WRITES } from "@heliuslabs/zolana/interface";
 import type {
   Bytes32,
   RequestContext,
+  InterfaceTransfer,
   RingAssetDeposit,
   Signature,
 } from "@heliuslabs/zolana/interface";
-import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import { slotTag } from "../crypto/derivation/ring-stream.js";
 import {
   addressBytes,
@@ -50,13 +51,12 @@ import { RingError } from "../protocol/error.js";
 import {
   openingTotals,
   type ApprovalOpening,
-  type ApprovalTotals,
   type OutputTotalsOpening,
   type PublicTotalsOpening,
 } from "../protocol/membership/approval-totals.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
-import { setPastRun, signerDataCountAt } from "../protocol/membership/signer-data-counts.js";
-import { ringPolicyAddress, STORAGE_PROGRAM_ID } from "../protocol/pda/index.js";
+import { signerDataCountAt } from "../protocol/membership/signer-data-counts.js";
+import { ringAuthAddress, ringPolicyAddress, STORAGE_PROGRAM_ID } from "../protocol/pda/index.js";
 import {
   ENROLL_COMPUTE_UNITS,
   enrollRequestDigest,
@@ -77,6 +77,7 @@ import {
   isAnonymousFrame,
   RingTransactData,
   ringRailOf,
+  type FrameExtensions,
   type RingRail,
 } from "../protocol/transaction/transact.js";
 import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
@@ -94,9 +95,8 @@ const base58 = getBase58Decoder();
 const VERIFIED = Symbol("verified relay message");
 const MAX_SIGNATURES = 12;
 const MAX_INSTRUCTIONS = 64;
-/** The SPP program's place in a ring transact account list, then the rest of its fixed head. */
-const SPP_PROGRAM_INDEX = 2;
-const RING_TRANSACT_ACCOUNT_PREFIX_LEN = 5;
+/** Rust `RING_TRANSACT_RING_CONFIG_INDEX`, the ring auth PDA's place in SPP's account list. */
+const RING_TRANSACT_RING_CONFIG_INDEX = 4;
 
 /** Rust `MessageMismatch`, the variant names the shared vectors carry. */
 export type RelayMessageMismatch =
@@ -113,9 +113,11 @@ export type RelayMessageMismatch =
   | "ApprovalMaskUnaccepted"
   | "MissingApprovalDigest"
   | "FalseApprovalOpening"
+  | "ApprovalOpeningLayout"
+  | "ZeroApprovalBlinder"
   | "ReusedApprovalBlinder"
   | "ApprovalOverLimit"
-  | "SignerDataCount"
+  | "DataOutputCount"
   | "SpendsUnnamedNote"
   | "SettlesBuffer"
   | "Unrequested"
@@ -196,6 +198,8 @@ export interface ExpectedPublicOwner {
   readonly kind: "publicOwner";
   readonly terms: RelayTransferTerms;
   readonly policy: Address;
+  /** Finds SPP's account list inside the ring instruction's. */
+  readonly ringAuth: Address;
   readonly setup: readonly Instruction[];
   /** From the ring account, a frame read under the wrong rail proves nothing. */
   readonly rail: RingRail;
@@ -546,6 +550,7 @@ export async function expectedPublicOwner(
   return Object.freeze({
     kind: "publicOwner",
     terms,
+    ringAuth: await ringAuthAddress(terms.ring),
     ...(await frameSetup(terms.ring, terms.feePayer, terms.setup)),
     rail: ringRailOf(RingInstructionTag.transfer, config.mode),
     knownNullifiers: Object.freeze(input.knownNotes.map((note) => note.nullifier)),
@@ -739,10 +744,7 @@ function checkFrame(
   const frame = withMismatch("Data", () => RingTransactData.parse(data.subarray(1), expected.rail));
   if (expected.kind === "delegate") checkMoved(expected, frame);
   else if (expected.kind === "coSigner") checkCoSignerRule(expected.rule, frame);
-  else {
-    checkOpenings(expected, frame);
-    checkSignerDataCount(expected.terms, frame, accounts);
-  }
+  else checkOpenings(expected, frame, accounts);
   const envelope = frameEnvelope(expected, signer, tag);
   const named = accounts.filter((meta) => meta.address === envelope.signer);
   const signsOnce =
@@ -834,9 +836,17 @@ function openStream(
   });
 }
 
-function checkOpenings(expected: ExpectedPublicOwner, frame: RingTransactData): void {
+/** The signer's openings stay selective, the proof supplies only how many data outputs exist. */
+function checkOpenings(
+  expected: ExpectedPublicOwner,
+  frame: RingTransactData,
+  accounts: readonly AccountMeta[],
+): void {
   const { terms, knownNullifiers } = expected;
   if (terms.slots.length === 0 && terms.nullifiers.length === 0) throw mismatch("Unrequested");
+  // 1. Each opening rebuilds the commitment published at its slot and names the signer. Past the
+  // loop a slot index stands for one real output of the signer, so the count below cannot read
+  // another owner's slot or a preimage the sender made up.
   for (const opening of terms.slots) {
     const published = frame.outputs[opening.slot];
     if (
@@ -849,9 +859,23 @@ function checkOpenings(expected: ExpectedPublicOwner, frame: RingTransactData): 
     )
       throw mismatch("Recipients");
   }
+  // 2. The circuit counts the live slots the signer owns with a nonzero `data_hash`, per entry of
+  // the run `signers.Chain` binds. Equality with the distinct opened slots closes the omission step
+  // 1 leaves open, a second data output the sender keeps out of the terms. Slots dedupe a repeated
+  // opening, the filter keeps an ordinary payment from standing in for a data output, and
+  // `ringDataHash` stays outside since SPP asks no owner signature for it. A member past the last
+  // packed entry reads zero and the circuit holds it to no data output.
+  const opened = new Set(
+    terms.slots.filter((opening) => !isZero(opening.dataHash)).map((opening) => opening.slot),
+  ).size;
+  const proved = signerDataCountAt(
+    frame.extensions.signerDataCounts ?? 0n,
+    signerRunEntry(expected, frame, accounts),
+  );
+  if (opened !== proved) throw mismatch("DataOutputCount");
   const among = (list: readonly Uint8Array[], nullifier: Uint8Array): boolean =>
     list.some((held) => equalBytes(held, nullifier));
-  // A named note the wallet cannot place means no list stood behind the check.
+  // 3. A named note the wallet cannot place means no list stood behind the check.
   if (
     !terms.nullifiers.every(
       (named) => among(frame.nullifiers, named) && among(knownNullifiers, named),
@@ -866,42 +890,6 @@ function checkOpenings(expected: ExpectedPublicOwner, frame: RingTransactData): 
     throw mismatch("SpendsUnnamedNote");
 }
 
-/**
- * A signature authorizes every data-bearing output of its owner, and a selective opening shows only
- * the slots it names. The proved count covers every output SPP accepts under the signature, an
- * opening for each one must exist.
- */
-function checkSignerDataCount(
-  terms: RelayTransferTerms,
-  frame: RingTransactData,
-  accounts: readonly AccountMeta[],
-): void {
-  // 1. `checkOpenings` held every opening to the signer and its slot's published commitment. Only
-  // the slot needs counting here, a repeated slot adds nothing.
-  const opened = new Set(
-    terms.slots.filter((opening) => !isZero(opening.dataHash)).map((opening) => opening.slot),
-  ).size;
-  const packed = frame.extensions.signerDataCounts ?? 0n;
-  if (packed === 0n && opened === 0) return;
-  // 2. The entry sits at the signer's place in the run `signers.Chain` binds, read as the program
-  // reads it. A place taken from the terms would let the sender point the signer at a zero entry.
-  const spp = accounts.findIndex((meta) => meta.address === SHIELDED_POOL_PROGRAM_ID);
-  const trees = frame.inputTrees.kind === "one" ? 1 : 2;
-  const start =
-    spp - SPP_PROGRAM_INDEX + RING_TRANSACT_ACCOUNT_PREFIX_LEN + trees + frame.nullifiers.length;
-  const position = accounts.findIndex((meta) => meta.address === terms.signer) - start;
-  if (spp < 0 || position < 0) throw mismatch("Accounts");
-  const run = accounts.slice(start);
-  const length = run.findIndex((meta) => !isSignerRole(meta.role));
-  if (position >= (length < 0 ? run.length : length)) throw mismatch("Accounts");
-  // 3. Exactly the proved count, an omitted output reads short and an entry past the run names no one.
-  if (
-    setPastRun(packed, length < 0 ? run.length : length) ||
-    signerDataCountAt(packed, position) !== opened
-  )
-    throw mismatch("SignerDataCount");
-}
-
 function checkCoSignerRule(rule: CoSignerRule, frame: RingTransactData): void {
   if (rule.kind === "exact") {
     checkExactApproval(rule.approval, frame);
@@ -910,26 +898,41 @@ function checkCoSignerRule(rule: CoSignerRule, frame: RingTransactData): void {
   if ((frame.approval & ~rule.accepts) !== 0) throw mismatch("ApprovalMaskUnaccepted");
 }
 
-/** The digest binds the totals, the limits then read them with no slot opened. */
+/**
+ * The digest binds the totals, the limits then read them with no slot opened. A ring with no own
+ * registry runs no outflow section and its circuit refuses a nonzero digest, such a frame reads as
+ * `MissingApprovalDigest` and exact approval stays out of reach there, the proven bits remain the
+ * only rule a co-signer can apply to it.
+ */
 function checkExactApproval(exact: ExactApproval, frame: RingTransactData): void {
   const { opening, limits, seenBlinders } = exact;
-  // 1. A frame with no digest binds no totals, nothing past here reads true.
   const digest = frame.extensions.approvalTotals;
   if (digest === undefined) throw mismatch("MissingApprovalDigest");
+  // 1. The chain hashes a flat run of three fields per output and four per public slot with no
+  // length in it, so `4a` more output rows and `3a` fewer public rows rebuild the same digest with
+  // every column shifted. Only the key's exact counts make the limits below read a peak as a peak,
+  // and they hold ahead of hashing since the rows come from the sealing wallet.
+  if (opening.outputs.length !== frame.nOut || opening.public.length !== N_PUBLIC_SLOTS)
+    throw mismatch("ApprovalOpeningLayout");
+  // 2. The circuit accepts any blinder, and a zero one lets anyone test guessed totals against the
+  // public digest. Freshness and hiding rest on the reader's refusal alone.
+  if (isZero(opening.blinder)) throw mismatch("ZeroApprovalBlinder");
   if (seenBlinders.some((seen) => equalBytes(seen, opening.blinder)))
     throw mismatch("ReusedApprovalBlinder");
-  // 2. `HashChain4` carries no length tag and pads zeros, so a trimmed layout can hash alike. The
-  // hasher's range handling is not relied on either: a value past the modulus that reduced would
-  // open the same digest under a blinder `seenBlinders` does not hold.
-  const totals = openedTotals(opening, frame.nOut);
+  // 3. Rust's hasher errors at or past the modulus. A value the TS hasher reduced would open the
+  // digest under a blinder `seenBlinders` does not hold, so each input is held canonical here.
+  const totals = openingTotals(opening);
   if (
+    totals === undefined ||
+    !isCanonicalField(opening.blinder) ||
+    ![...totals.outputs, ...totals.publicSlots].every((slot) => isCanonicalField(slot.asset)) ||
     !equalBytes(
       withMismatch("FalseApprovalOpening", () => totals.commitment(opening.blinder)),
       digest,
     )
   )
     throw mismatch("FalseApprovalOpening");
-  // 3. The commitment bound `totals`, every nonzero asset they name now needs a limit.
+  // 4. The commitment bound `totals`, every nonzero asset they name now needs a limit.
   for (const slot of [...totals.outputs, ...totals.publicSlots]) {
     if (isZero(slot.asset)) continue;
     const limit = withMismatch("ApprovalOverLimit", () =>
@@ -944,19 +947,33 @@ function checkExactApproval(exact: ExactApproval, frame: RingTransactData): void
   }
 }
 
-/** One slot per output of the key and per public slot, every field canonical, no zero blinder. */
-function openedTotals(opening: ApprovalOpening, outputs: number): ApprovalTotals {
-  const totals = openingTotals(opening);
-  if (
-    totals === undefined ||
-    totals.outputs.length !== outputs ||
-    totals.publicSlots.length !== N_PUBLIC_SLOTS ||
-    isZero(opening.blinder) ||
-    !isCanonicalField(opening.blinder) ||
-    ![...totals.outputs, ...totals.publicSlots].every((slot) => isCanonicalField(slot.asset))
-  )
-    throw mismatch("FalseApprovalOpening");
-  return totals;
+/**
+ * The signer's entry in the run the program hashes into `signers.Chain`. The ring auth PDA finds
+ * SPP's list with no read of the registries or co-signers ahead of it, since the program refuses a
+ * second copy anywhere in that list and neither a registry slot nor a signer slot can hold the PDA.
+ * A misplaced run would read another signer's count, the same window the program takes closes that.
+ */
+function signerRunEntry(
+  expected: ExpectedPublicOwner,
+  frame: RingTransactData,
+  accounts: readonly AccountMeta[],
+): number {
+  const copies = accounts.flatMap((meta, at) => (meta.address === expected.ringAuth ? [at] : []));
+  const [ringAuth] = copies;
+  if (ringAuth === undefined || copies.length !== 1 || ringAuth < RING_TRANSACT_RING_CONFIG_INDEX)
+    throw mismatch("Accounts");
+  const trees = frame.inputTrees.kind === "one" ? 1 : 2;
+  const start = ringAuth + 1 + trees + frame.nullifiers.length;
+  const settlements = frame.interfaceTransfers.reduce(
+    (total, transfer) => total + SETTLEMENT_ACCOUNTS[transfer.kind],
+    0,
+  );
+  const cache = frame.extensions.cache;
+  const entry = accounts
+    .slice(start, accounts.length - settlements - cacheAccountCount(cache))
+    .findIndex((meta) => meta.address === expected.terms.signer);
+  if (entry < 0) throw mismatch("Accounts");
+  return entry;
 }
 
 export function openingHash(opening: SlotOpening, ring: Address): Bytes32 {
@@ -1079,4 +1096,21 @@ function withMismatch<T>(reason: RelayMessageMismatch, run: () => T): T {
     if (error instanceof RingError && error.code === "RING_RELAY_MESSAGE_INVALID") throw error;
     throw mismatch(reason);
   }
+}
+
+/** Rust `InterfaceTransfer::settlement_account_count`. */
+const SETTLEMENT_ACCOUNTS: Readonly<Record<InterfaceTransfer["kind"], number>> = Object.freeze({
+  solDeposit: 2,
+  solWithdrawal: 2,
+  splDeposit: 5,
+  splWithdrawal: 5,
+});
+
+/** Rust `settlement_accounts`, the read cache then the write cache and its writer. */
+function cacheAccountCount(cache: FrameExtensions["cache"]): number {
+  if (cache === undefined) return 0;
+  const [none] = NO_CACHE_WRITES;
+  const [first] = cache.writeSlots;
+  const writes = first !== undefined && (first.output !== none?.output || first.slot !== none.slot);
+  return (cache.readBitmap !== 0n ? 1 : 0) + (writes ? 2 : 0);
 }

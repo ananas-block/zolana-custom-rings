@@ -49,8 +49,3 @@ export function signerDataCountAt(packed: bigint, entry: number): number {
     ? Number((packed >> BigInt(entry * SIGNER_DATA_ENTRY_BITS)) & ENTRY_MASK)
     : 0;
 }
-
-/** An entry past the run reads zero in the circuit. */
-export function setPastRun(packed: bigint, runLength: number): boolean {
-  return packed >> BigInt(runLength * SIGNER_DATA_ENTRY_BITS) !== 0n;
-}

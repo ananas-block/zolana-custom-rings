@@ -7,7 +7,6 @@ import { TRANSFER_SHAPES } from "../../../src/protocol/proof/transfer-shapes.js"
 import {
   SIGNER_DATA_ENTRIES,
   SIGNER_DATA_ENTRY_BITS,
-  setPastRun,
   signerDataCountAt,
   signerDataCountsOf,
   validSignerDataCounts,
@@ -32,8 +31,6 @@ describe("signer data counts", () => {
     expect(signerDataCountAt(packed ?? 0n, 1)).toBe(2);
     expect(signerDataCountAt(packed ?? 0n, 2)).toBe(0);
     expect(signerDataCountAt(packed ?? 0n, SIGNER_DATA_ENTRIES)).toBe(0);
-    expect(setPastRun(packed ?? 0n, 2)).toBe(false);
-    expect(setPastRun(packed ?? 0n, 1)).toBe(true);
   });
 
   it("counts nothing on an empty run", () => {

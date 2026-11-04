@@ -17,6 +17,7 @@ import { ringComputeUnitLimit } from "../../../src/operations/management/admin.j
 import { BufferedFrame } from "../../../src/operations/payments/buffered-frame.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
+import { ringAuthAddress } from "../../../src/protocol/pda/index.js";
 import { readFileSync } from "node:fs";
 
 import {
@@ -30,7 +31,6 @@ import { describe, expect, it, vi } from "vitest";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import {
   DepositAsset,
-  SHIELDED_POOL_PROGRAM_ID,
   type Bytes16,
   type Bytes32,
   type Bytes33,
@@ -394,7 +394,7 @@ describe("relay message check", () => {
     });
   });
 
-  describe("the data-bearing slots a public owner opens", () => {
+  describe("the data-bearing slots a public owner opens", async () => {
     const entry = owners.cases.find((owner) => owner.verdict === "Accepted");
     if (entry === undefined) throw new Error("no accepted owner case");
     const terms = decodeRelayTransferTerms(JSON.stringify(entry.terms));
@@ -455,9 +455,10 @@ describe("relay message check", () => {
     };
     const opened = { ...terms, slots: [dataOpening, ...terms.slots.slice(1)] };
     const ordinary = { ...terms, slots: [first, ...terms.slots.slice(1)] };
+    const ringAuth = await ringAuthAddress(terms.ring);
     const position = (): number => {
       const accounts = instruction().accounts ?? [];
-      const spp = accounts.findIndex((meta) => meta.address === SHIELDED_POOL_PROGRAM_ID);
+      const spp = accounts.findIndex((meta) => meta.address === ringAuth) - 4;
       const frame = RingTransactData.parse(
         Uint8Array.from(instruction().data ?? []).subarray(1),
         "anonymous",
@@ -465,7 +466,7 @@ describe("relay message check", () => {
       const trees = frame.inputTrees.kind === "one" ? 1 : 2;
       return (
         accounts.findIndex((meta) => meta.address === terms.signer) -
-        (spp - 2 + 5 + trees + frame.nullifiers.length)
+        (spp + 5 + trees + frame.nullifiers.length)
       );
     };
     const count = (value: bigint): bigint => value << BigInt(5 * position());
@@ -476,14 +477,14 @@ describe("relay message check", () => {
 
     it("refuses an omitted data output", async () => {
       expect(await verdictWith({ ...terms, slots: terms.slots.slice(1) }, count(1n))).toBe(
-        "SignerDataCount",
+        "DataOutputCount",
       );
     });
 
     it("refuses a repeated opening that would pad a count", async () => {
       expect(
         await verdictWith({ ...opened, slots: [dataOpening, ...opened.slots] }, count(2n)),
-      ).toBe("SignerDataCount");
+      ).toBe("DataOutputCount");
     });
 
     it("refuses an ordinary output standing in for a data output", async () => {
@@ -491,9 +492,9 @@ describe("relay message check", () => {
     });
 
     it("refuses a count at another entry and a false count", async () => {
-      expect(await verdictWith(opened, count(1n) << 5n)).toBe("SignerDataCount");
-      expect(await verdictWith(opened, count(2n))).toBe("SignerDataCount");
-      expect(await verdictWith(opened, undefined)).toBe("SignerDataCount");
+      expect(await verdictWith(opened, count(1n) << 5n)).toBe("DataOutputCount");
+      expect(await verdictWith(opened, count(2n))).toBe("DataOutputCount");
+      expect(await verdictWith(opened, undefined)).toBe("DataOutputCount");
     });
   });
 
