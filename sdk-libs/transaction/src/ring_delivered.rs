@@ -6,6 +6,7 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{PublicKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{Data, Mint, Utxo};
 use zeroize::Zeroizing;
@@ -75,27 +76,42 @@ pub struct RingDelivered {
 }
 
 impl RingDeliveryOpening<'_> {
-    /// `None` for keys other than the owner's, a blinding outside the field or a zero amount in no
-    /// held asset, a commitment rebuilt under a sender's choice of keys proves no ownership.
+    /// `None` for keys other than the owner's and zero, a blinding outside the field or a zero
+    /// amount in no held asset, a commitment rebuilt under a sender's choice of keys proves no ownership.
     pub fn open(self, assets: &RingAssets) -> Result<Option<RingDelivered>, RingRailError> {
         let body = open_delivered_body(self.body, self.slot_secret)?;
+        let own_key = *self.owner.nullifier_pubkey;
         let foreign = body.owner_key != self.owner.signing_pubkey.confidential_view_tag()?
-            || body
-                .nullifier_pk
-                .is_some_and(|nullifier_pk| nullifier_pk != *self.owner.nullifier_pubkey);
+            || body.nullifier_pk.is_some_and(|nullifier_pk| {
+                nullifier_pk != own_key && nullifier_pk != ZERO_NULLIFIER_PUBKEY
+            });
         if foreign || !is_canonical_bn254_scalar_be(&body.blinding) {
             return Ok(None);
         }
-        let note = RingDeliveredNote {
+        let note_under = |nullifier_pubkey| RingDeliveredNote {
             owner: *self.owner.signing_pubkey,
-            nullifier_pubkey: *self.owner.nullifier_pubkey,
+            nullifier_pubkey,
             ring: self.ring,
-            body,
+            body: body.clone(),
             utxo_hash: *self.commitment,
             tree_id: self.tree_id,
         };
-        let mint = note.resolve(assets)?;
-        Ok((mint.is_some() || note.body.amount != 0).then_some(RingDelivered { note, mint }))
+        // An escrowed body names no key, an old zero-key note stays readable after enrollment.
+        let candidates = match body.nullifier_pk {
+            Some(named) => [named, named],
+            None => [own_key, ZERO_NULLIFIER_PUBKEY],
+        };
+        for candidate in candidates {
+            let note = note_under(candidate);
+            if let Some(mint) = note.resolve(assets)? {
+                return Ok(Some(RingDelivered {
+                    note,
+                    mint: Some(mint),
+                }));
+            }
+        }
+        let note = note_under(candidates[0]);
+        Ok((note.body.amount != 0).then_some(RingDelivered { note, mint: None }))
     }
 }
 
