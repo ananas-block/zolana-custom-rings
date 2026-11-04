@@ -5,6 +5,7 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_indexer_api::{Base64String, Hash, Limit};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{instructions::transact::canonical_shape, ShieldedTransaction};
 use zolana_ring_client::{
@@ -16,13 +17,16 @@ use zolana_ring_client::{
         AuditedUtxosAttestation, AuditedUtxosPage, AuditorKeyStatement, AuthorityAuth,
         ConfirmedAudit, DecryptedTransaction, DecryptedTransactionsPage, GetAuditedMergesResponse,
         GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsResponse,
-        GetUnspentUtxosRequest, GetUnspentUtxosResponse, GetWalletActivityResponse, PagedRead,
-        ReadAttestation, ReadAuth, ReadTarget, ReaderGrantAction, ReaderGrantAttestation,
-        RingChainStatus, SetReaderGrantRequest, SkippedReason, SkippedTransaction,
-        UnresolvedMergeRecord, UnresolvedReason, UnspentUtxosAttestation, AUDIT_PAGE_LIMIT,
+        GetSpendCoverageRequest, GetSpendCoverageResponse, GetWalletActivityResponse,
+        GetWalletStatusRequest, GetWalletStatusResponse, PagedRead, ReadAttestation, ReadAuth,
+        ReadTarget, ReaderGrantAction, ReaderGrantAttestation, RingChainStatus,
+        SetReaderGrantRequest, SkippedReason, SkippedTransaction, SpendCoverageAttestation,
+        WalletStatusAttestation, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, CreatedUtxos, DepositNote,
-    HistoricalEvidence, ReaderKey, RingOrigin, RowDisposition, TransactionAudit,
+    AuditError, AuditedInput, AuditedMergeOutput, AuditedTransaction, ConfirmedEventKind,
+    ConfirmedMerge, CreatedUtxo, CreatedUtxos, DepositNote, EscrowedKeys, HistoricalEvidence,
+    InputOpening, InputRing, KnownUtxos, MergeInput, MergeLedger, ReaderKey, RingOrigin,
+    RowDisposition, TransactionAudit, UtxoOwner,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
@@ -35,25 +39,29 @@ use zolana_ring_transaction::{
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
-    database::Store,
     error::{redacted, GrantRefusal, RingRpcError},
     grant_rows::{GrantPair, GrantRow},
     grants::{GrantQuery, Grants, ReadScope},
     hub::Shared,
     limits::ReaderPermit,
     replay::ReplayCheck,
-    spent_index::{SpentCommitment, SpentIndex, SpentSource},
+    spend_machine::{InputRead, Observation},
+    spent_index::{LoadSpends, NoteSeal, PageCommit, SpentCommitment, SpentIndex, SpentSource},
     upstream::{
         MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage, TransactionPage,
         TransactionSource,
     },
     utxos::{
-        AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, HeldNote, UnnamedSpend, UnspentQuery,
+        AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, PageDelta, PageWork, WalletStatusQuery,
         MAX_BACKFILL_PAGES,
     },
 };
 
-const UNSPENT_PAGE_LIMIT: usize = 100;
+const WALLET_NOTE_PAGE_LIMIT: usize = 100;
+/// Frames one pass retries, the oldest first.
+const MAX_RETRIED_FRAMES: usize = 16;
+/// A retried slot holds few frames, the next pass reads on.
+const MAX_RETRY_PAGES: usize = 4;
 pub(crate) const ASSET_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// A delivered output of a mint no registration names misses on every read, the floor bounds the registry reads it causes.
 pub(crate) const ASSET_MISS_INTERVAL: Duration = Duration::from_secs(5);
@@ -115,7 +123,8 @@ pub struct AuditRead<'a> {
 struct BoundTransaction<'a> {
     transaction: &'a spr_client::ShieldedTransaction,
     origin: &'a RingOrigin,
-    store: &'a AuditStore,
+    known: &'a dyn KnownUtxos,
+    keys: &'a dyn EscrowedKeys,
     mode: RingMode,
 }
 
@@ -242,40 +251,69 @@ impl<S: TransactionSource> AuditService<S> {
             .await
     }
 
-    pub async fn unspent_utxos(
+    /// Reads only the store's finalized state, the response names no other transaction.
+    pub async fn wallet_status(
         &self,
-        request: &GetUnspentUtxosRequest,
-    ) -> Result<GetUnspentUtxosResponse, RingRpcError> {
+        request: &GetWalletStatusRequest,
+    ) -> Result<GetWalletStatusResponse, RingRpcError> {
         let cursor = request
             .cursor
             .as_ref()
             .map(|cursor| <[u8; 32]>::try_from(cursor.0.as_slice()))
             .transpose()
             .map_err(|_| RingRpcError::InvalidCursor)?;
-        let wallet = request.wallet.map(|wallet| wallet.0);
-        let attestation = UnspentUtxosAttestation {
+        let wallet = request.wallet.0;
+        let attestation = WalletStatusAttestation {
             target: self.read_target(),
-            owner: request.owner.0,
-            cursor: request.cursor.clone(),
             wallet,
+            cursor: request.cursor.clone(),
         };
-        let grant = self.grant(&request.auth, &attestation, wallet).await?;
-        if !grant.scope.covers_member(&request.owner.0) {
-            return Err(GrantRefusal::WalletScope.into());
-        }
+        let grant = self
+            .grant(&request.auth, &attestation, Some(wallet))
+            .await?;
         grant.spend().await?;
-        let store = self.shared.store(self.ring);
-        let page = grant.scope.unspent(store.unspent(UnspentQuery {
-            owner: &request.owner.0,
-            after: cursor,
-            limit: UNSPENT_PAGE_LIMIT,
-        }));
-        Ok(GetUnspentUtxosResponse {
-            utxos: page.utxos,
-            coverage: page.coverage,
-            unresolved: page.unresolved,
-            cursor: page.cursor.map(|cursor| cursor.to_vec().into()),
-        })
+        Ok(self
+            .shared
+            .store(self.ring)
+            .wallet_status(WalletStatusQuery {
+                wallet,
+                after: cursor,
+                limit: WALLET_NOTE_PAGE_LIMIT,
+            }))
+    }
+
+    /// The one read that names an unresolved spend, a reader grant reaches it never.
+    pub async fn spend_coverage(
+        &self,
+        request: &GetSpendCoverageRequest,
+    ) -> Result<GetSpendCoverageResponse, RingRpcError> {
+        let authority = request.authority.0;
+        let now = self.shared.clock.now()?;
+        let nonce = WalletCheck {
+            wallet: authority,
+            timestamp: request.timestamp,
+            nonce: &request.nonce,
+            signature: &request.signature,
+            attestation: &SpendCoverageAttestation {
+                target: self.read_target(),
+                authority,
+            },
+            now,
+        }
+        .decide()?;
+        self.shared
+            .require_ring_authority(self.ring, authority)
+            .await?;
+        self.shared
+            .replay
+            .accept(ReplayCheck {
+                ring: self.ring,
+                nonce,
+                timestamp: request.timestamp,
+                now,
+            })
+            .await?;
+        Ok(self.shared.store(self.ring).spend_coverage())
     }
 
     /// A limited co-signer opens the frame it signs under the served ring's key.
@@ -472,24 +510,79 @@ impl<S: TransactionSource> AuditService<S> {
         .await
     }
 
-    /// Opens the ring's transfers, audited deposits and merges from the store's resume point.
+    /// Opens the ring's transfers, audited deposits and merges from the durable position.
     pub async fn backfill_utxos(&self) -> Result<(), RingRpcError> {
         let store = self.shared.store(self.ring);
-        let outcome = async {
-            let Some(config) = self.shared.source.ring_config(self.ring).await? else {
-                store.pass_unfinished();
-                return Ok(());
-            };
-            if config.auditor_pubkey != self.auditor.pubkey() {
-                return Err(Unauthorized::AuditorKeyMismatch.into());
+        let Some(config) = self.shared.source.ring_config(self.ring).await? else {
+            return Ok(());
+        };
+        if config.auditor_pubkey != self.auditor.pubkey() {
+            return Err(Unauthorized::AuditorKeyMismatch.into());
+        }
+        self.read_history(&store, config.mode).await
+    }
+
+    /// Reads the durable tables once per store, a restart resumes where the last commit stopped.
+    async fn load_tables(
+        &self,
+        store: &AuditStore,
+        position: &mut HistoryPosition,
+    ) -> Result<(), RingRpcError> {
+        let Some(database) = self.shared.database.as_ref() else {
+            return Ok(());
+        };
+        if !store.loads_tables() {
+            return Ok(());
+        }
+        let seal = self.note_seal()?;
+        let loaded = LoadSpends {
+            db: database.connection(),
+            ring: self.ring,
+            seal: &seal,
+        }
+        .load()
+        .await?;
+        *position = loaded.checkpoint.position;
+        store.seed(loaded);
+        store.seed_historical(
+            SpentIndex {
+                conn: database.connection(),
             }
-            self.read_history(&store, config.mode).await
+            .rows()
+            .await?,
+        );
+        Ok(())
+    }
+
+    fn note_seal(&self) -> Result<NoteSeal, RingRpcError> {
+        Ok(NoteSeal::derive(&self.auditor, self.ring)?)
+    }
+
+    /// The transaction commits before the mirror moves, a crash replays the page idempotently.
+    async fn commit_page(&self, store: &AuditStore, delta: PageDelta) -> Result<(), RingRpcError> {
+        if let Some(database) = self.shared.database.as_ref() {
+            let seal = self.note_seal()?;
+            PageCommit {
+                db: database.connection(),
+                ring: self.ring,
+                seal: &seal,
+                delta: &delta,
+            }
+            .commit()
+            .await?;
         }
-        .await;
-        if outcome.is_err() {
-            store.pass_unfinished();
-        }
-        outcome
+        store.commit(delta);
+        Ok(())
+    }
+
+    /// An unreadable secret reads as absent, the note stays `Unknown` until it opens.
+    fn open_tracked_key(&self, owner_key: &[u8; 32]) -> Option<NullifierKey> {
+        self.escrowed_nullifier_key(owner_key)
+            .inspect_err(|error| {
+                log::warn!("a tracked key failed to open because {}", redacted(error));
+            })
+            .ok()
+            .flatten()
     }
 
     /// Moves the position only past a page whose every row applied, a retry reads it again.
@@ -497,19 +590,9 @@ impl<S: TransactionSource> AuditService<S> {
         let source = &self.shared.source;
         let limit = Page::new(None, None)?.limit();
         let mut position = store.backfill.lock().await;
-        if let Some(database) = self
-            .shared
-            .database
-            .as_ref()
-            .filter(|_| store.seeds_spent())
-        {
-            let rows = SpentIndex {
-                conn: database.connection(),
-            }
-            .rows()
-            .await?;
-            store.spend_commitments(rows);
-        }
+        self.load_tables(store, &mut position).await?;
+        self.retry_unread(store, mode, limit).await?;
+        let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
         for _ in 0..MAX_BACKFILL_PAGES {
             let response = source
                 .ring_history(RingHistoryPage {
@@ -524,26 +607,92 @@ impl<S: TransactionSource> AuditService<S> {
                 .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
             self.validate_indexer_response(&response)?;
             // Read after the page, the root every transfer on it proves under is already on chain.
-            if mode == RingMode::ConfidentialEscrow {
-                if let Err(error) = self.refresh_escrow(store).await {
-                    log::warn!(
-                        "escrow refresh of ring {} failed because {}",
-                        self.ring,
-                        redacted(&error)
-                    );
-                }
+            if let Err(error) = self.refresh_escrow(store).await {
+                log::warn!(
+                    "tracked key refresh of ring {} failed because {}",
+                    self.ring,
+                    redacted(&error)
+                );
             }
-            let rows = self.audit_rows(response, mode, store).await?;
+            let mut work = PageWork::new(store, &opener);
+            work.late_keys();
+            let rows = self.audit_rows(response, mode, &mut work, None).await?;
             if let Some(error) = rows.unfinished {
                 return Err(error.into());
             }
+            let terminal = match end {
+                PageEnd::Terminal(context) => Some(context),
+                PageEnd::More => None,
+            };
+            work.checkpoint(next, terminal);
+            self.commit_page(store, work.finish()).await?;
             *position = next;
-            if let PageEnd::Terminal(context) = end {
-                store.absorbed(context);
+            if terminal.is_some() {
                 return Ok(());
             }
         }
-        store.pass_unfinished();
+        Ok(())
+    }
+
+    /// Reads each unreadable frame again at its own slot, the position stays where it is.
+    async fn retry_unread(
+        &self,
+        store: &AuditStore,
+        mode: RingMode,
+        limit: NonZeroU32,
+    ) -> Result<(), RingRpcError> {
+        let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
+        for frame in store.unread_frames().into_iter().take(MAX_RETRIED_FRAMES) {
+            let mut position = frame
+                .slot
+                .checked_sub(1)
+                .map_or_else(HistoryPosition::default, HistoryPosition::after_slot);
+            for _ in 0..MAX_RETRY_PAGES {
+                let response = self
+                    .shared
+                    .source
+                    .ring_history(RingHistoryPage {
+                        ring: self.ring,
+                        position,
+                        limit,
+                    })
+                    .await?;
+                let end = position
+                    .advance(&response, limit.get())
+                    .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+                self.validate_indexer_response(&response)?;
+                let held = response
+                    .data
+                    .iter()
+                    .flat_map(|item| &item.events)
+                    .any(|tx| {
+                        tx.tx_signature == frame.tx_signature
+                            && tx.event_index == Some(frame.event_index)
+                    });
+                if held {
+                    if let Err(error) = self.refresh_escrow(store).await {
+                        log::warn!(
+                            "tracked key refresh of ring {} failed because {}",
+                            self.ring,
+                            redacted(&error)
+                        );
+                    }
+                    let mut work = PageWork::new(store, &opener);
+                    work.late_keys();
+                    let rows = self
+                        .audit_rows(response, mode, &mut work, Some(frame))
+                        .await?;
+                    if let Some(error) = rows.unfinished {
+                        return Err(error.into());
+                    }
+                    self.commit_page(store, work.finish()).await?;
+                    break;
+                }
+                if matches!(end, PageEnd::Terminal(_)) {
+                    break;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -610,11 +759,12 @@ impl<S: TransactionSource> AuditService<S> {
         let trees = bound.origin.event.input_tree_ids(bound.transaction);
         TransactionAudit::new(bound.transaction, bound.origin.audit_stream(bound.mode)?)
             .with_input_trees(&trees)?
-            .with_known_utxos(bound.store)
-            .with_escrowed_keys(bound.store)
+            .with_known_utxos(bound.known)
+            .with_escrowed_keys(bound.keys)
             .run(&self.auditor, assets)
     }
 
+    /// A page read writes nothing, only the backfill's checkpoint feeds the index.
     async fn decrypted_transactions(
         &self,
         page: &Page,
@@ -642,9 +792,10 @@ impl<S: TransactionSource> AuditService<S> {
         self.validate_indexer_response(&response)?;
         let context = response.context;
         let cursor = query.next_cursor(&position).map(Into::into);
-        let rows = self
-            .audit_rows(response, mode, &self.shared.store(self.ring))
-            .await?;
+        let store = self.shared.store(self.ring);
+        let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
+        let mut work = PageWork::new(&store, &opener);
+        let rows = self.audit_rows(response, mode, &mut work, None).await?;
         Ok(GetDecryptedTransactionsResponse {
             context,
             value: DecryptedTransactionsPage {
@@ -684,53 +835,70 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
-    /// Exact inputs join the index, an ambiguous or unnamed one holds the row unresolved.
-    async fn read_historical(&self, row: HistoricalRow<'_>) -> Result<(), RingRpcError> {
+    /// Exact inputs keep their hash rows, every nullifier joins the machine.
+    fn read_historical(&self, row: HistoricalRow<'_, '_>) {
         let HistoricalRow {
             tx,
             origin,
             mode,
             created_in,
-            store,
+            work,
         } = row;
         let evidence = origin
             .transact
             .as_deref()
             .filter(|_| origin.event.kind() == ConfirmedEventKind::Transfer)
             .map(|transact| historical_evidence(tx, transact, mode, &self.auditor));
-        let (commitments, complete) = match evidence {
-            Some(Ok(evidence)) => historical_inputs(store, evidence),
-            // A historical merge's list stays unread, its row holds the claim false.
-            Some(Err(_)) | None => (Vec::new(), false),
+        let commitments = match evidence {
+            Some(Ok(evidence)) => historical_inputs(work, evidence),
+            Some(Err(_)) | None => Vec::new(),
         };
-        record_spent(
-            self.shared.database.as_ref(),
-            store,
-            spent_rows(SpentEvent {
-                created_in,
-                first_nullifier: tx.nullifiers.first().copied().unwrap_or_default(),
-                source: SpentSource::Historical,
-                commitments,
-            }),
-        )
-        .await?;
-        if !complete {
-            store.hold_unnamed(
-                created_in,
-                UnnamedSpend::of(UnresolvedReason::HistoricalPrefix),
-            );
-        }
-        Ok(())
+        work.record_historical(spent_rows(SpentEvent {
+            created_in,
+            first_nullifier: tx.nullifiers.first().copied().unwrap_or_default(),
+            source: SpentSource::Historical,
+            commitments,
+        }));
+        observe_all(work, tx, created_in, |_| InputRead::Real { evidence: None });
+        work.mark_read(created_in);
     }
 
-    /// Every opened UTXO enters `store` before the next row, a later input resolves through it.
+    /// The record names the output, its nullifiers mark the inputs through the machine.
+    fn read_merge(&self, row: MergeRow<'_, '_>) {
+        let MergeRow {
+            tx,
+            merge,
+            created_in,
+            work,
+        } = row;
+        let inputs = merge.inputs.clone();
+        observe_all(work, tx, created_in, |position| {
+            match inputs.get(usize::from(position)) {
+                Some(commitment) => InputRead::Real {
+                    evidence: Some(*commitment),
+                },
+                None => InputRead::Padding,
+            }
+        });
+        match merge_output_note(self.ring, merge, work) {
+            Some(note) => {
+                work.open(created_in, [note]);
+                work.mark_read(created_in);
+            }
+            None => work.mark_unread(created_in),
+        }
+    }
+
+    /// `only` narrows a retry to its frame, a read failure leaves the frame to the next pass.
     async fn audit_rows(
         &self,
         response: GetShieldedTransactionsByTagsResponse,
         mode: RingMode,
-        store: &AuditStore,
+        work: &mut PageWork<'_>,
+        only: Option<CreatedIn>,
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
+        let store = self.shared.store(self.ring);
         let mut assets = self.shared.due_assets().await;
         store.name_assets(&assets);
         let mut items = Vec::new();
@@ -742,6 +910,16 @@ impl<S: TransactionSource> AuditService<S> {
                 continue;
             }
             let event_index = tx.event_index.ok_or(RingRpcError::InvalidIndexerResponse)?;
+            if only.is_some_and(|frame| {
+                frame.tx_signature != tx.tx_signature || frame.event_index != event_index
+            }) {
+                continue;
+            }
+            let created_in = CreatedIn {
+                slot: tx.slot,
+                tx_signature: tx.tx_signature,
+                event_index,
+            };
             let origin = match origins.get(&(tx.tx_signature, event_index)) {
                 Some(known) => known.clone(),
                 None => {
@@ -763,14 +941,7 @@ impl<S: TransactionSource> AuditService<S> {
                                 tx.tx_signature,
                                 redacted(&error)
                             );
-                            store.hold_unnamed(
-                                CreatedIn {
-                                    slot: tx.slot,
-                                    tx_signature: tx.tx_signature,
-                                    event_index,
-                                },
-                                UnnamedSpend::of(UnresolvedReason::UnreadableRow),
-                            );
+                            work.mark_unread(created_in);
                             skipped.push(SkippedTransaction {
                                 slot: tx.slot,
                                 tx_signature: tx.tx_signature.into(),
@@ -786,33 +957,30 @@ impl<S: TransactionSource> AuditService<S> {
                 continue;
             }
             let bound = origin.bind_transaction(&mut tx, self.ring);
-            let created_in = CreatedIn {
-                slot: tx.slot,
-                tx_signature: tx.tx_signature,
-                event_index,
-            };
-            // A confirmed spend holds even when its outputs cannot open yet.
             if bound.is_ok() {
-                store.spend(tx.nullifiers.iter().copied());
-                store.saw_row(tx.slot, origin.is_historical());
                 if origin.is_historical() {
                     self.read_historical(HistoricalRow {
                         tx: &tx,
                         origin: &origin,
                         mode,
                         created_in,
-                        store,
-                    })
-                    .await?;
+                        work,
+                    });
                     continue;
                 }
                 if origin.event.kind() == ConfirmedEventKind::Merge {
                     match confirmed_merge(&tx, event_index, &origin, &self.auditor) {
-                        Ok(merge) => {
-                            if let Some(merge) = merge {
-                                apply_confirmed_merge(self.shared.database.as_ref(), store, merge)
-                                    .await?;
-                            }
+                        Ok(Some(merge)) => self.read_merge(MergeRow {
+                            tx: &tx,
+                            merge,
+                            created_in,
+                            work,
+                        }),
+                        Ok(None) => {
+                            observe_all(work, &tx, created_in, |_| InputRead::Real {
+                                evidence: None,
+                            });
+                            work.mark_read(created_in);
                         }
                         Err(error) if error.disposition() == RowDisposition::Retry => {
                             unfinished.get_or_insert(error);
@@ -824,10 +992,8 @@ impl<S: TransactionSource> AuditService<S> {
                                 tx.tx_signature,
                                 redacted(&error)
                             );
-                            store.hold_unnamed(
-                                created_in,
-                                UnnamedSpend::of(UnresolvedReason::UnreadableRow),
-                            );
+                            observe_all(work, &tx, created_in, |_| InputRead::Unreadable);
+                            work.mark_unread(created_in);
                         }
                     }
                     continue;
@@ -841,21 +1007,27 @@ impl<S: TransactionSource> AuditService<S> {
                         origin: &origin,
                         ring: self.ring,
                     }
-                    .open_for(&self.auditor, store)
+                    .open_for(&self.auditor, &*store)
                 });
                 match created {
                     Ok(created) => {
-                        store.record(created_in, created.utxos);
+                        observe_all(work, &tx, created_in, |_| InputRead::Real {
+                            evidence: None,
+                        });
+                        work.open(created_in, created.utxos);
                         match mode {
-                            // Only an escrow ring's backfill names a held owner.
-                            RingMode::ConfidentialEscrow => store.hold(
-                                created_in,
-                                created.unowned.into_iter().map(HeldNote::Deposit),
-                            ),
-                            RingMode::Confidential | RingMode::Anonymous => store.record(
-                                created_in,
-                                created.unowned.iter().map(DepositNote::deposited),
-                            ),
+                            // Only an escrow ring's retry names an unowned deposit.
+                            RingMode::ConfidentialEscrow if !created.unowned.is_empty() => {
+                                work.mark_unread(created_in);
+                            }
+                            RingMode::ConfidentialEscrow => work.mark_read(created_in),
+                            RingMode::Confidential | RingMode::Anonymous => {
+                                work.open(
+                                    created_in,
+                                    created.unowned.iter().map(DepositNote::deposited),
+                                );
+                                work.mark_read(created_in);
+                            }
                         }
                     }
                     Err(error) => {
@@ -868,22 +1040,24 @@ impl<S: TransactionSource> AuditService<S> {
                         if error.disposition() == RowDisposition::Retry {
                             unfinished.get_or_insert(error);
                         } else {
-                            store.hold_unnamed(
-                                created_in,
-                                UnnamedSpend::of(UnresolvedReason::UnreadableRow),
-                            );
+                            work.mark_unread(created_in);
                         }
                     }
                 }
                 continue;
             }
-            let audit = BoundTransaction {
-                transaction: &tx,
-                origin: &origin,
-                store,
-                mode,
-            };
-            let mut opened = bound.and_then(|()| self.audit(audit, &assets));
+            let mut opened = bound.and_then(|()| {
+                self.audit(
+                    BoundTransaction {
+                        transaction: &tx,
+                        origin: &origin,
+                        known: &*work,
+                        keys: &*store,
+                        mode,
+                    },
+                    &assets,
+                )
+            });
             // A mint registered inside the refresh interval misses the cache.
             if opened
                 .as_ref()
@@ -894,48 +1068,27 @@ impl<S: TransactionSource> AuditService<S> {
                     assets = fresh;
                     store.name_assets(&assets);
                     opened = opened.and_then(|mut opened| {
-                        opened.resolve(store, &assets)?;
+                        opened.resolve(&*store, &assets)?;
                         Ok(opened)
                     });
                 }
             }
             if let Ok(opened) = &opened {
-                store.record(created_in, opened.utxos());
-                store.hold(
-                    created_in,
-                    opened.unresolved.iter().cloned().map(HeldNote::Output),
-                );
-                let unseen: Vec<[u8; 32]> = opened
-                    .inputs
-                    .iter()
-                    .filter(|input| input.opening.is_unseen())
-                    .map(|input| input.hash)
-                    .collect();
-                if !unseen.is_empty() {
-                    store.hold_unnamed(
-                        created_in,
-                        UnnamedSpend {
-                            reason: UnresolvedReason::UnknownSpend,
-                            inputs: unseen,
-                        },
-                    );
+                work.open(created_in, opened.utxos());
+                for (position, input) in opened.inputs.iter().enumerate() {
+                    work.observe(Observation {
+                        nullifier: input.nullifier,
+                        frame: created_in,
+                        position: u16::try_from(position).unwrap_or(u16::MAX),
+                        read: audited_input_read(input),
+                        hit: None,
+                    });
                 }
-                record_spent(
-                    self.shared.database.as_ref(),
-                    store,
-                    spent_rows(SpentEvent {
-                        created_in,
-                        first_nullifier: tx.nullifiers.first().copied().unwrap_or_default(),
-                        source: SpentSource::Transfer,
-                        commitments: opened
-                            .inputs
-                            .iter()
-                            .map(|input| input.hash)
-                            .filter(|hash| *hash != [0; 32])
-                            .collect(),
-                    }),
-                )
-                .await?;
+                match opened.unresolved.is_empty() {
+                    true => work.mark_read(created_in),
+                    // A slot awaits its key, the frame reads again with it.
+                    false => work.mark_unread(created_in),
+                }
             }
             let result = opened.and_then(|opened| Ok((opened, origin.spenders(mode)?)));
             match result {
@@ -952,10 +1105,10 @@ impl<S: TransactionSource> AuditService<S> {
                 ),
                 Err(error) => {
                     if error.disposition() != RowDisposition::Retry {
-                        store.hold_unnamed(
-                            created_in,
-                            UnnamedSpend::of(UnresolvedReason::UnreadableRow),
-                        );
+                        if origin_is_bound(&origin, &tx) {
+                            observe_all(work, &tx, created_in, |_| InputRead::Unreadable);
+                        }
+                        work.mark_unread(created_in);
                     }
                     skipped.push(SkippedTransaction {
                         slot: tx.slot,
@@ -1022,7 +1175,7 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
         let response = service
             .decrypted_transactions(self.page, self.grant.mode)
             .await?;
-        Ok(scope.activity(response))
+        Ok(scope.activity(response, &service.shared.store(service.ring)))
     }
 
     pub(crate) async fn execute_merges(self) -> Result<GetAuditedMergesResponse, RingRpcError> {
@@ -1049,12 +1202,9 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
             cursor: page.next_cursor.map(Into::into),
         };
         for merge in page.merges {
-            let output_commitment = merge.output_commitment;
-            let record = UnresolvedMergeRecord::from(&merge);
-            apply_confirmed_merge(service.shared.database.as_ref(), &store, merge).await?;
-            match store.merged(&output_commitment) {
-                Some(output) => value.opened.push((&output).into()),
-                None => value.unresolved.push(record),
+            // A merge the checkpoint has not opened stays out, no reader learns it is unresolved.
+            if let Some(output) = store.merge_output(&merge) {
+                value.opened.push((&output).into());
             }
         }
         self.grant.scope.merges(&mut value);
@@ -1116,80 +1266,112 @@ fn escrowed_owner(
 }
 
 /// A confirmed row of a frame the v3 path never decodes.
-struct HistoricalRow<'a> {
+struct HistoricalRow<'a, 'w> {
     tx: &'a ShieldedTransaction,
     origin: &'a RingOrigin,
     mode: RingMode,
     created_in: CreatedIn,
-    store: &'a AuditStore,
+    work: &'a mut PageWork<'w>,
 }
 
-/// The row's exact inputs, and whether it named every input it spent.
-fn historical_inputs(store: &AuditStore, evidence: HistoricalEvidence) -> (Vec<[u8; 32]>, bool) {
-    let assigned = |prefixes: &[Option<InputPrefix>], owner: Option<[u8; 32]>| {
-        assign_prefixed_inputs(prefixes, |prefix| store.prefixed(prefix, owner))
-    };
-    let (mut exact, assignments) = match evidence {
-        HistoricalEvidence::Unnamed => return (Vec::new(), false),
-        HistoricalEvidence::Prefixes(prefixes) => (Vec::new(), assigned(&prefixes, None)),
-        HistoricalEvidence::Commitments { first, prefixes } => {
-            let owner = store.note_owner(&first);
-            (vec![first], assigned(&prefixes, owner))
+struct MergeRow<'a, 'w> {
+    tx: &'a ShieldedTransaction,
+    merge: ConfirmedMerge,
+    created_in: CreatedIn,
+    work: &'a mut PageWork<'w>,
+}
+
+fn observe_all(
+    work: &mut PageWork<'_>,
+    tx: &ShieldedTransaction,
+    created_in: CreatedIn,
+    read: impl Fn(u16) -> InputRead,
+) {
+    for (position, nullifier) in tx.nullifiers.iter().enumerate() {
+        let position = u16::try_from(position).unwrap_or(u16::MAX);
+        work.observe(Observation {
+            nullifier: *nullifier,
+            frame: created_in,
+            position,
+            read: read(position),
+            hit: None,
+        });
+    }
+}
+
+/// A hash-bearing frame names its input, a default-ring opening is no note of this ring.
+fn audited_input_read(input: &AuditedInput) -> InputRead {
+    match &input.opening {
+        InputOpening::Dummy => InputRead::Padding,
+        InputOpening::Opened(opening)
+            if matches!(opening.ring, Some(InputRing::Default { .. })) =>
+        {
+            InputRead::External
         }
-    };
-    let mut complete = true;
-    for assignment in assignments {
-        match assignment {
-            PrefixAssignment::Dummy => {}
-            PrefixAssignment::Exact(commitment) => exact.push(commitment),
-            PrefixAssignment::Ambiguous { .. } | PrefixAssignment::Unseen { .. } => {
-                complete = false;
+        InputOpening::Opened(_) | InputOpening::Merged(_) | InputOpening::UnseenHash { .. } => {
+            InputRead::Real {
+                evidence: Some(input.hash),
             }
         }
     }
-    (exact, complete)
 }
 
-/// The row commits before the mirror, a failed write leaves the page to run again.
-async fn record_spent(
-    database: Option<&Store>,
-    store: &AuditStore,
-    rows: Vec<SpentCommitment>,
-) -> Result<(), RingRpcError> {
-    if let Some(database) = database {
-        SpentIndex {
-            conn: database.connection(),
-        }
-        .record(&rows)
-        .await?;
-    }
-    store.spend_commitments(rows);
-    Ok(())
+/// Only a row bound to its confirmed event publishes nullifiers.
+fn origin_is_bound(origin: &RingOrigin, tx: &ShieldedTransaction) -> bool {
+    let mut bound = tx.clone();
+    origin
+        .bind_transaction(&mut bound, tx.ring_program_id.unwrap_or_default())
+        .is_ok()
 }
 
-/// The inputs commit before the ledger applies the merge, a replay of an applied merge does nothing.
-async fn apply_confirmed_merge(
-    database: Option<&Store>,
-    store: &AuditStore,
+/// The output of a merge with every input opened, its blinding derives from the owner's secret.
+fn merge_output_note(
+    ring: Address,
     merge: ConfirmedMerge,
-) -> Result<(), RingRpcError> {
-    record_spent(
-        database,
-        store,
-        spent_rows(SpentEvent {
-            created_in: CreatedIn {
-                slot: merge.slot,
-                tx_signature: merge.tx_signature,
-                event_index: merge.event_index,
-            },
-            first_nullifier: merge.first_nullifier,
-            source: SpentSource::Merge,
-            commitments: merge.inputs.clone(),
-        }),
-    )
-    .await?;
-    store.apply_merge(merge);
-    Ok(())
+    work: &mut PageWork<'_>,
+) -> Option<CreatedUtxo> {
+    let (commitment, leaf_index) = (merge.output_commitment, merge.leaf_index);
+    let output: AuditedMergeOutput = MergeLedger::default()
+        .apply(merge, |input| {
+            work.note(input).map(|note| MergeInput::from(&note.utxo))
+        })
+        .resolved
+        .pop()?;
+    let key = match output.owner {
+        UtxoOwner::Keyed { nullifier_pk } if nullifier_pk == ZERO_NULLIFIER_PUBKEY => {
+            NullifierKey::from_secret([0; 31])
+        }
+        _ => work.open_key(&output.owner_key)?,
+    };
+    let utxo = output.opening(ring, &key).ok().flatten()?;
+    Some(CreatedUtxo {
+        commitment,
+        slot_index: 0,
+        leaf_index,
+        utxo,
+        ring_note: true,
+    })
+}
+
+/// The row's exact inputs, an ambiguous or unnamed input stays out.
+fn historical_inputs(work: &PageWork<'_>, evidence: HistoricalEvidence) -> Vec<[u8; 32]> {
+    let assigned = |prefixes: &[Option<InputPrefix>], owner: Option<[u8; 32]>| {
+        assign_prefixed_inputs(prefixes, |prefix| work.prefixed(prefix, owner))
+    };
+    let (mut exact, assignments) = match evidence {
+        HistoricalEvidence::Unnamed => return Vec::new(),
+        HistoricalEvidence::Prefixes(prefixes) => (Vec::new(), assigned(&prefixes, None)),
+        HistoricalEvidence::Commitments { first, prefixes } => {
+            let owner = work.note(&first).map(|note| note.utxo.owner_key);
+            (vec![first], assigned(&prefixes, owner))
+        }
+    };
+    for assignment in assignments {
+        if let PrefixAssignment::Exact(commitment) = assignment {
+            exact.push(commitment);
+        }
+    }
+    exact
 }
 
 struct SpentEvent {
@@ -1217,252 +1399,4 @@ fn spent_rows(event: SpentEvent) -> Vec<SpentCommitment> {
             source,
         })
         .collect()
-}
-
-#[cfg(test)]
-#[path = "merge_successor_tests.rs"]
-mod merge_successor_tests;
-
-#[cfg(test)]
-mod tests {
-    use spr_keypair::ViewingKey;
-    use zolana_ring_client::ConfirmedMerge;
-
-    use super::*;
-    use crate::{
-        managed_merge::tests::{Fixture, RING},
-        upstream::origin_fixture,
-    };
-
-    fn row(signature: u8, nullifier: u8) -> ShieldedTransaction {
-        ShieldedTransaction {
-            slot: 1,
-            tx_signature: Signature::from([signature; 64]),
-            event_index: Some(0),
-            tx_viewing_pk: Some(ViewingKey::from_bytes(&[signature; 32]).pubkey()),
-            salt: Some([signature; 16]),
-            output_slots: Vec::new(),
-            messages: Vec::new(),
-            nullifiers: vec![[nullifier; 32]],
-            proofless: false,
-            ring_config: None,
-            ring_program_id: Some(RING),
-        }
-    }
-
-    fn origin_of(confirmed: &ShieldedTransaction, ring_invoked: bool) -> RingOrigin {
-        RingOrigin {
-            ring_invoked,
-            event: origin_fixture::event(confirmed),
-            signers: Vec::new(),
-            withdrawals: Vec::new(),
-            deposits: Vec::new(),
-            merge_disclosure: None,
-            transact: None,
-            pool_accounts: Vec::new(),
-        }
-    }
-
-    #[tokio::test]
-    async fn only_a_confirmed_event_marks_a_note_spent() {
-        let fixture = Fixture::serving(None, None).await;
-        let shared = fixture.hub.shared();
-        let forged = row(1, 9);
-        let foreign = row(2, 8);
-        let confirmed = row(3, 7);
-        {
-            let mut origins = shared.source.origins.lock().expect("origins");
-            origins.insert(forged.tx_signature, origin_of(&row(1, 6), true));
-            origins.insert(foreign.tx_signature, origin_of(&foreign, false));
-            origins.insert(confirmed.tx_signature, origin_of(&confirmed, true));
-        }
-        let service = fixture.hub.service(None).expect("service");
-        let store = shared.store(RING);
-        let rows = service
-            .audit_rows(
-                GetShieldedTransactionsByTagsResponse {
-                    context: spr_client::Context {
-                        slot: 1,
-                        block_time: 1,
-                    },
-                    data: [forged, foreign, confirmed]
-                        .into_iter()
-                        .map(|row| spr_client::rpc::TransactionEvents {
-                            slot: row.slot,
-                            signature: row.tx_signature,
-                            events: vec![row],
-                        })
-                        .collect(),
-                    pagination_token: None,
-                    output_tree_id: None,
-                },
-                RingMode::ConfidentialEscrow,
-                &store,
-            )
-            .await
-            .expect("rows");
-        assert!(!store.is_spent(&[9; 32]), "the rejected row");
-        assert!(!store.is_spent(&[6; 32]), "the rejected row's event");
-        assert!(!store.is_spent(&[8; 32]), "the ring never ran");
-        // The row names no ring frame, its outputs cannot open.
-        assert!(store.is_spent(&[7; 32]));
-        let skipped: Vec<_> = rows.skipped.iter().map(|row| row.tx_signature.0).collect();
-        assert_eq!(
-            skipped,
-            [Signature::from([1; 64]), Signature::from([3; 64])]
-        );
-        assert!(rows.unfinished.is_none());
-    }
-
-    fn two_input_merge() -> ConfirmedMerge {
-        ConfirmedMerge {
-            slot: 7,
-            tx_signature: Signature::from([7; 64]),
-            event_index: 0,
-            output_commitment: [0x20; 32],
-            tree_id: 1,
-            leaf_index: 3,
-            first_nullifier: [9; 32],
-            ring_data_hash: [0; 32],
-            inputs: vec![[1; 32], [2; 32]],
-        }
-    }
-
-    async fn rename_spent_table(database: &Store, from: &str, to: &str) {
-        use sea_orm::ConnectionTrait;
-        database
-            .connection()
-            .execute_unprepared(&format!("ALTER TABLE {from} RENAME TO {to}"))
-            .await
-            .expect("rename");
-    }
-
-    #[tokio::test]
-    async fn a_failed_spent_write_leaves_a_merge_to_a_retry_that_repairs_every_input() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
-        let store = AuditStore::default();
-        let merge = two_input_merge();
-        rename_spent_table(&database, "finalized_spent_commitments", "parked").await;
-        assert!(
-            apply_confirmed_merge(Some(&database), &store, merge.clone())
-                .await
-                .is_err()
-        );
-        assert!(store.spent_commitment(&[1; 32]).is_none());
-        rename_spent_table(&database, "parked", "finalized_spent_commitments").await;
-        apply_confirmed_merge(Some(&database), &store, merge.clone())
-            .await
-            .expect("retry");
-        for input in &merge.inputs {
-            assert!(store.spent_commitment(input).is_some());
-        }
-        let rows = SpentIndex {
-            conn: database.connection(),
-        }
-        .rows()
-        .await
-        .expect("rows");
-        assert_eq!(rows.len(), merge.inputs.len());
-
-        // A restart seeds the mirror and replays into a fresh ledger, the first event keeps its rows.
-        let restarted = AuditStore::default();
-        restarted.spend_commitments(rows.clone());
-        for input in &merge.inputs {
-            assert!(restarted.spent_commitment(input).is_some());
-        }
-        apply_confirmed_merge(Some(&database), &restarted, merge)
-            .await
-            .expect("replay");
-        let replayed = SpentIndex {
-            conn: database.connection(),
-        }
-        .rows()
-        .await
-        .expect("rows");
-        assert_eq!(replayed.len(), rows.len());
-    }
-
-    #[tokio::test]
-    async fn a_merge_lost_to_a_restart_before_its_write_replays_every_input() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
-        let merge = two_input_merge();
-        rename_spent_table(&database, "finalized_spent_commitments", "parked").await;
-        assert!(
-            apply_confirmed_merge(Some(&database), &AuditStore::default(), merge.clone())
-                .await
-                .is_err()
-        );
-        rename_spent_table(&database, "parked", "finalized_spent_commitments").await;
-        let restarted = AuditStore::default();
-        apply_confirmed_merge(Some(&database), &restarted, merge.clone())
-            .await
-            .expect("replay");
-        for input in &merge.inputs {
-            assert!(restarted.spent_commitment(input).is_some());
-        }
-    }
-
-    #[test]
-    fn a_historical_row_names_only_exact_inputs_and_holds_the_rest() {
-        let store = AuditStore::default();
-        let (known, other) = ([0x11; 32], [0x12; 32]);
-        for commitment in [known, other] {
-            store.record(
-                CreatedIn {
-                    slot: 1,
-                    tx_signature: Signature::from([1; 64]),
-                    event_index: 0,
-                },
-                [zolana_ring_client::CreatedUtxo {
-                    commitment,
-                    slot_index: 0,
-                    leaf_index: 0,
-                    utxo: zolana_ring_client::KnownUtxo {
-                        owner_key: [2; 32],
-                        owner: zolana_ring_client::UtxoOwner::Keyed {
-                            nullifier_pk: [3; 32],
-                        },
-                        asset: [4; 32],
-                        mint: None,
-                        amount: 1,
-                        blinding: [5; 32],
-                        data_hash: [0; 32],
-                        ring_data_hash: [0; 32],
-                        tree_id: 1,
-                    },
-                    ring_note: true,
-                }],
-            );
-        }
-        let prefix = |commitment: &[u8; 32]| InputPrefix::of(commitment);
-        assert_eq!(
-            historical_inputs(
-                &store,
-                HistoricalEvidence::Prefixes(vec![prefix(&known), None])
-            ),
-            (vec![known], true)
-        );
-        // One note, two inputs of the prefix, no input is exact.
-        assert_eq!(
-            historical_inputs(
-                &store,
-                HistoricalEvidence::Prefixes(vec![prefix(&known), prefix(&known)])
-            ),
-            (Vec::new(), false)
-        );
-        assert_eq!(
-            historical_inputs(
-                &store,
-                HistoricalEvidence::Commitments {
-                    first: known,
-                    prefixes: vec![prefix(&other)],
-                }
-            ),
-            (vec![known, other], true)
-        );
-        assert_eq!(
-            historical_inputs(&store, HistoricalEvidence::Unnamed),
-            (Vec::new(), false)
-        );
-    }
 }

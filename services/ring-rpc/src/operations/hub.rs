@@ -265,6 +265,12 @@ impl<S: TransactionSource> Shared<S> {
     }
 
     pub(crate) async fn read_scope(&self, query: GrantQuery) -> Result<ReadScope, RingRpcError> {
+        // A wallet signing for itself holds its own notes, a PDA owner reads through a grant.
+        if query.wallet.is_some()
+            && matches!(query.reader, ReaderKey::Ed25519(key) if Some(key.address()) == query.wallet)
+        {
+            return Ok(ReadScope::new(query.wallet));
+        }
         let granted = match &self.grants {
             Grants::Tree => {
                 TreeGrants {
@@ -278,7 +284,7 @@ impl<S: TransactionSource> Shared<S> {
         if !granted {
             return Err(Unauthorized::NotGranted.into());
         }
-        ReadScope::new(query.wallet)
+        Ok(ReadScope::new(query.wallet))
     }
 
     pub(crate) async fn cached_assets(&self) -> RingAssets {

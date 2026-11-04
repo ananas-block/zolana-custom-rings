@@ -14,6 +14,7 @@ mod records_000001_queue;
 mod relay_000001_relays;
 mod replay_000001_nonces;
 mod spent2_000001_finalized;
+mod spent3_000001_nullifiers;
 mod spent_000001_commitments;
 
 pub struct Migrator;
@@ -25,7 +26,7 @@ impl Migrator {
             .has_table(Self::migration_table_name().to_string())
             .await?
             && sea_orm_migration::seaql_migrations::Entity::find_by_id(
-                spent2_000001_finalized::Migration.name(),
+                spent3_000001_nullifiers::Migration.name(),
             )
             .one(db)
             .await?
@@ -55,6 +56,7 @@ impl MigratorTrait for Migrator {
             Box::new(spent_000001_commitments::Migration),
             Box::new(cosign4_000001_owner_debits::Migration),
             Box::new(spent2_000001_finalized::Migration),
+            Box::new(spent3_000001_nullifiers::Migration),
         ]
     }
 }

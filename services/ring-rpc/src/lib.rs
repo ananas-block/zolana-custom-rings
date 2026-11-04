@@ -69,6 +69,8 @@ mod replay;
 mod replay_nonces;
 #[path = "rpc/server.rs"]
 mod server;
+#[path = "operations/spend_machine.rs"]
+mod spend_machine;
 #[path = "storage/spent_index.rs"]
 mod spent_index;
 #[path = "rpc/storage_chain.rs"]

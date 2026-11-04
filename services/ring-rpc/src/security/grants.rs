@@ -4,7 +4,7 @@ use solana_address::Address;
 use zolana_ring_client::{
     rpc::{
         AuditedMergesPage, AuditedUtxoView, GetDecryptedTransactionsResponse,
-        GetWalletActivityResponse, InputParty, WalletActivity, WalletActivityPage,
+        GetWalletActivityResponse, WalletActivity, WalletActivityPage,
     },
     ReaderKey,
 };
@@ -14,7 +14,7 @@ use crate::{
     error::{GrantRefusal, RingRpcError},
     grant_rows::GrantRows,
     upstream::{RecordsTip, TransactionSource, VerifiedOpenings},
-    utxos::UnspentPage,
+    utxos::AuditStore,
 };
 
 #[must_use]
@@ -42,8 +42,6 @@ pub enum ReadScope {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WalletScope {
     wallet: Address,
-    /// The wallet's owner identity, the member a merge names.
-    member: Member,
 }
 
 pub(crate) trait GrantSource {
@@ -57,16 +55,14 @@ pub(crate) struct TreeGrants<'a, S> {
 }
 
 impl WalletScope {
-    fn new(wallet: Address) -> Result<Self, RingRpcError> {
-        Ok(Self {
-            wallet,
-            member: Member::owner_tag(wallet.as_array())?,
-        })
+    const fn new(wallet: Address) -> Self {
+        Self { wallet }
     }
 
     pub(crate) fn activity(
         self,
         response: GetDecryptedTransactionsResponse,
+        store: &AuditStore,
     ) -> GetWalletActivityResponse {
         GetWalletActivityResponse {
             context: response.context,
@@ -75,7 +71,11 @@ impl WalletScope {
                     .value
                     .items
                     .into_iter()
-                    .filter_map(|item| WalletActivity::of(self.wallet, item, |_| InputParty::Other))
+                    .filter_map(|item| {
+                        WalletActivity::of(self.wallet, item, |input| {
+                            store.input_party(&self.wallet, input)
+                        })
+                    })
                     .collect(),
                 cursor: response.value.cursor,
             },
@@ -84,11 +84,11 @@ impl WalletScope {
 }
 
 impl ReadScope {
-    pub(crate) fn new(wallet: Option<Address>) -> Result<Self, RingRpcError> {
-        Ok(match wallet {
-            Some(wallet) => Self::Wallet(WalletScope::new(wallet)?),
+    pub(crate) const fn new(wallet: Option<Address>) -> Self {
+        match wallet {
+            Some(wallet) => Self::Wallet(WalletScope::new(wallet)),
             None => Self::Ring,
-        })
+        }
     }
 
     pub(crate) fn merges(self, page: &mut AuditedMergesPage) {
@@ -97,22 +97,6 @@ impl ReadScope {
                 .retain(|merge| merge.owner_key.0 == scope.wallet);
             page.unresolved.clear();
         }
-    }
-
-    /// A wallet grant reads its own member's notes alone.
-    pub(crate) fn covers_member(self, member: &[u8; 32]) -> bool {
-        match self {
-            Self::Ring => true,
-            Self::Wallet(scope) => scope.member.as_bytes() == member,
-        }
-    }
-
-    /// A wallet read keeps the coverage flag and no row, a row's ownership is unknown.
-    pub(crate) fn unspent(self, mut page: UnspentPage) -> UnspentPage {
-        if let Self::Wallet(_) = self {
-            page.unresolved.clear();
-        }
-        page
     }
 
     pub(crate) fn utxo(self, view: Option<AuditedUtxoView>) -> Option<AuditedUtxoView> {
@@ -140,46 +124,5 @@ impl<S: TransactionSource> GrantSource for TreeGrants<'_, S> {
             .await?
             .iter()
             .any(|read| read.listed(ListId::Reader)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use solana_signature::Signature;
-    use zolana_ring_client::rpc::UnresolvedReason;
-
-    use super::*;
-    use crate::utxos::{AuditStore, CreatedIn, UnnamedSpend, UnspentQuery};
-
-    #[test]
-    fn a_wallet_read_sees_no_other_owners_row_and_its_coverage_stays_incomplete() {
-        let store = AuditStore::default();
-        store.saw_row(10, false);
-        store.hold_unnamed(
-            CreatedIn {
-                slot: 10,
-                tx_signature: Signature::from([3; 64]),
-                event_index: 0,
-            },
-            UnnamedSpend {
-                reason: UnresolvedReason::UnknownSpend,
-                inputs: vec![[7; 32]],
-            },
-        );
-        let wallet = Address::new_from_array([2; 32]);
-        let scope = ReadScope::new(Some(wallet)).unwrap();
-        let member = *Member::owner_tag(wallet.as_array()).unwrap().as_bytes();
-        let read = |scope: ReadScope| {
-            scope.unspent(store.unspent(UnspentQuery {
-                owner: &member,
-                after: None,
-                limit: 10,
-            }))
-        };
-        let wallet_page = read(scope);
-        assert!(wallet_page.unresolved.is_empty());
-        assert!(!wallet_page.coverage.complete);
-        let ring_page = read(ReadScope::Ring);
-        assert_eq!(ring_page.unresolved.len(), 1);
     }
 }

@@ -32,15 +32,16 @@ use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, CreateRecordsRegistryRequest,
     GetAuditedMergesResponse, GetAuditedUtxosRequest, GetDecryptedTransactionsRequest,
     GetDecryptedTransactionsResponse, GetPendingEnrolmentsRequest, GetRecordUpdateStatusRequest,
-    GetRelayQuoteRequest, GetRelayStatusRequest, GetUnspentUtxosRequest, GetWalletActivityResponse,
-    HealthResponse, PagedRead, PrepareAuthorityTransferRequest, PrepareRelayRequest,
-    RefuseEnrolmentRequest, RingDepositsRequest, RingDepositsResponse, RingState,
-    RingStatusRequest, RingStatusResponse, SetMergeSettingsRequest, SetReaderGrantRequest,
-    SubmitRecordUpdateRequest, SubmitRelayRequest, CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY,
-    GET_AUDITED_UTXOS, GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE,
-    GET_RELAY_STATUS, GET_UNSPENT_UTXOS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY,
-    REFUSE_ENROLMENT, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
-    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
+    GetRelayQuoteRequest, GetRelayStatusRequest, GetSpendCoverageRequest,
+    GetWalletActivityResponse, GetWalletStatusRequest, HealthResponse, PagedRead,
+    PrepareAuthorityTransferRequest, PrepareRelayRequest, RefuseEnrolmentRequest,
+    RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
+    SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
+    CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_PENDING_ENROLMENTS,
+    GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, GET_SPEND_COVERAGE,
+    GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, REFUSE_ENROLMENT,
+    RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
+    SUBMIT_RELAY,
 };
 
 use crate::{
@@ -270,11 +271,20 @@ pub fn rpc_module<S: TransactionSource + 'static>(
     )?;
     method(
         &mut module,
-        GET_UNSPENT_UTXOS,
-        |hub, request: GetUnspentUtxosRequest| async move {
+        GET_WALLET_STATUS,
+        |hub, request: GetWalletStatusRequest| async move {
             let _authentication = hub.admit(Lane::Authentication)?;
             let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
-            service.unspent_utxos(&request).await
+            service.wallet_status(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_SPEND_COVERAGE,
+        |hub, request: GetSpendCoverageRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            let service = hub.service(Some(request.ring.0))?;
+            service.spend_coverage(&request).await
         },
     )?;
     method(
