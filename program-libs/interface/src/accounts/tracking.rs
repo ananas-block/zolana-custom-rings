@@ -288,11 +288,11 @@ impl TrackingAuthorization {
         Ok(())
     }
 
-    pub fn entry(&self) -> Result<TrackingEntry, HasherError> {
+    pub fn entry(&self) -> Result<TrackingEntry, StorageError> {
         Ok(TrackingEntry {
-            member: solana_owner_identity(self.owner.as_array())?,
+            member: owner_member(&self.owner)?,
             nullifier_pk: self.nullifier_pk,
-            ct_hash: hash_bytes(&self.ciphertext)?,
+            ct_hash: hash_bytes(&self.ciphertext).map_err(|_| StorageError::HashingFailed)?,
             viewing_u: self.viewing_u,
             revision: self.revision(),
             list_tag: self.list_tag,
@@ -304,7 +304,7 @@ impl TrackingAuthorization {
         if !self.is_pending() {
             return Err(StorageError::EnrollmentAlreadyApplied);
         }
-        let entry = self.entry().map_err(|_| StorageError::HashingFailed)?;
+        let entry = self.entry()?;
         self.applied_revision = self.revision;
         Ok(entry)
     }
@@ -443,6 +443,11 @@ impl OwnerGrantIxData {
         }
         Ok(())
     }
+}
+
+/// The leaf member of a signer, a wallet or a PDA alike.
+pub fn owner_member(owner: &Address) -> Result<[u8; 32], StorageError> {
+    solana_owner_identity(owner.as_array()).map_err(|_| StorageError::HashingFailed)
 }
 
 /// `[CRTA, registry, revision]`, an apply proof serves one registry at one revision.

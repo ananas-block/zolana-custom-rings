@@ -309,9 +309,7 @@ impl WriteRecordsIxData {
             member,
             mask,
             value,
-            escrow_key: [0; 32],
             mint_policy: None,
-            address_hash: [0; 32],
         })
     }
 }
