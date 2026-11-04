@@ -1,6 +1,7 @@
 //! The pre-proof refusals an anonymous policy ring adds to the confidential rail.
 
 use custom_ring_interface::{
+    SlotBody,
     tag, CustomRingError, FramedSenderBundle, RingOutput, RingRail, RingTransactData,
     RECIPIENT_BODY_LEN,
 };
@@ -9,7 +10,7 @@ use solana_keypair::{Keypair, Signer};
 
 use crate::{
     common::{reaches_verification, refused, Ring, Sent, Setup},
-    forward_rules::{deposit_instruction, merge_data, merge_instruction_with, ring_deposit},
+    forward_rules::{deposit_instruction, ring_deposit},
     transact_rules::{send, spp_list, Fixture},
 };
 
@@ -58,7 +59,7 @@ fn an_anonymous_policy_transfer_takes_public_co_owners_in_the_run() {
     ));
 }
 
-/// Only the proof judges a canonical tag, the program holds the range and the change rule.
+/// Only the proof judges a tag.
 #[test]
 fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
     let fixture = Fixture::new();
@@ -67,20 +68,12 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
     for (setup, policy) in [(Setup::AnonymousPolicy, true), (Setup::Anonymous, false)] {
         let mut ring = Ring::new(setup);
         let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, policy);
-        for (output, (tag, body)) in data
-            .outputs
-            .iter_mut()
-            .zip([(&tags[0], None), (&tags[1], Some(&body))])
-        {
-            let RingOutput::Anonymous { hash, record, .. } = *output else {
-                panic!("an anonymous transfer publishes anonymous slots");
-            };
-            *output = RingOutput::Anonymous {
-                hash,
-                tag,
-                body,
-                record,
-            };
+        for (output, (tag, body)) in data.outputs.iter_mut().zip([
+            (&tags[0], SlotBody::None),
+            (&tags[1], SlotBody::Recipient(&body)),
+        ]) {
+            output.owner_tag = tag;
+            output.body = body;
         }
         data.sender = data.sender.map(|sender| FramedSenderBundle {
             tag: &tags[1],
@@ -119,129 +112,14 @@ fn a_short_sender_bundle_is_refused() {
     );
 }
 
-fn tag_offset(compact: &[u8], hash: &[u8; 32]) -> usize {
-    compact
-        .windows(32)
-        .position(|window| window == hash)
-        .unwrap()
-        + 32
-}
-
+/// A salted commitment is the SDK's duty, the proof cannot read it.
 #[test]
-fn a_view_tag_off_the_field_or_on_change_is_refused() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::Anonymous);
-    let data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
-    let compact = data.encode().unwrap();
-    let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
-    let bundle = compact
-        .windows(32)
-        .position(|window| window == data.sender.unwrap().tag)
-        .unwrap();
-    for (offset, tag, refusal) in [
-        (
-            tag_offset(&compact, data.outputs[1].hash()),
-            [0xff; 32],
-            CustomRingError::ViewTagNotCanonical,
-        ),
-        (bundle, [0xff; 32], CustomRingError::ViewTagNotCanonical),
-        (
-            tag_offset(&compact, data.outputs[0].hash()),
-            [0x2f; 32],
-            CustomRingError::ChangeTagNotZero,
-        ),
-    ] {
-        let mut bytes = compact.clone();
-        bytes[offset..offset + 32].copy_from_slice(&tag);
-        refused(
-            send(
-                &mut ring,
-                tag::TRANSFER,
-                Vec::new(),
-                bytes,
-                spp.clone(),
-                &[],
-            ),
-            refusal,
-        );
-    }
-}
-
-#[test]
-fn an_anonymous_policy_ring_escrows_no_key() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::AnonymousPolicy);
-    let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, true);
-    data.key_escrow = true;
-    fixture.fit_stream(&mut data);
-    refused(
-        transfer(&mut ring, Vec::new(), &data),
-        CustomRingError::FlagNotAllowed,
-    );
-}
-
-#[test]
-fn an_anonymous_policy_ring_refuses_the_delegate_rail() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::AnonymousPolicy);
-    let data = fixture.transfer(RingRail::Delegate, 2, 2, true);
-    let delegate = Keypair::new();
-    let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
-    refused(
-        send(
-            &mut ring,
-            tag::AUTHORITY_TRANSFER,
-            vec![AccountMeta::new_readonly(delegate.pubkey(), true)],
-            data.encode().unwrap(),
-            spp,
-            &[&delegate],
-        ),
-        CustomRingError::AnonymousRingRefused,
-    );
-}
-
-#[test]
-fn an_anonymous_policy_merge_discloses_its_owner_to_the_auditor_alone() {
-    let mut ring = Ring::new(Setup::AnonymousPolicy);
-    let mut merge = |data| {
-        let instruction = merge_instruction_with(&ring, &data);
-        ring.send(instruction, &[])
-    };
-    let disclosed = |registry, inputs| {
-        let mut data = merge_data(registry, inputs);
-        data.output_ring_data_hash = [0; 32];
-        data
-    };
-    refused(
-        merge(disclosed(Some(1), 8)),
-        CustomRingError::UnexpectedMemberRegistryRoot,
-    );
-    let mut narrow = disclosed(None, 8);
-    narrow.disclosure.fields.pop();
-    refused(merge(narrow), CustomRingError::MergeDisclosureWidth);
-    let mut untagged = disclosed(None, 8);
-    untagged.disclosure.eph_pk[0] = 0;
-    refused(merge(untagged), CustomRingError::InvalidMergeDisclosure);
-    refused(
-        merge(disclosed(None, 25)),
-        CustomRingError::UnsupportedCircuit,
-    );
-    let mut ring_data = disclosed(None, 8);
-    ring_data.output_ring_data_hash = [8; 32];
-    refused(merge(ring_data), CustomRingError::AnonymousRingDataNotZero);
-    reaches_verification(merge(disclosed(None, 8)));
-}
-
-#[test]
-fn an_anonymous_policy_deposit_names_no_recipient() {
+fn an_anonymous_policy_deposit_carries_ring_data() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut named = ring_deposit();
     named.deposits[0].ring_data_hash = [1; 32];
     let instruction = deposit_instruction(&ring, Some(0), &named);
-    refused(
-        ring.send(instruction, &[]),
-        CustomRingError::AnonymousRingDataNotZero,
-    );
+    reaches_verification(ring.send(instruction, &[]));
     let instruction = deposit_instruction(&ring, Some(0), &ring_deposit());
     reaches_verification(ring.send(instruction, &[]));
 }

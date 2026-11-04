@@ -1,7 +1,7 @@
 //! Ring account and policy writes, their roles and their declared budgets.
 
 use custom_ring_interface::{
-    tag, CoSignScope, CoSigner, CustomRingError, InitializeIxData, InstructionTag,
+    tag, tracking::TrackingRegistry, CoSignScope, CoSigner, CustomRingError, InitializeIxData, InstructionTag,
     PolicyBindingIxData, PolicySourceIxData, PolicyTableIxData, RingKind, RingMode, RingPolicy,
     RingRole, SetPausedIxData, SourceSpec, UpdatePolicyIxData, TAGGED_X25519_KEY_LEN,
 };
@@ -11,12 +11,12 @@ use solana_keypair::{Keypair, Signer};
 use solana_transaction_error::TransactionError;
 use spr_account_checks::AccountError;
 use spr_interface::state::RingConfig;
-use zolana_ring_policy::ListId;
+use zolana_ring_policy::{ring_id_field, ListId};
 
 use crate::common::{
     allow_list_table, auditor_pubkey, co_signer_record, list_table, policy_pda, program_data_of,
     refused, refused_with, ring_auth, root, rules_write, set_co_signer, set_delegate,
-    within_budget, ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx, Setup,
+    tracking_registry, within_budget, ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx, Setup,
     UpdateAuthorityIx, UpdatePolicyIx, PROGRAM, RECORDS,
 };
 use crate::transact_rules::SPP;
@@ -43,7 +43,7 @@ fn upgrade_send(ring: &mut Ring, instruction: Instruction) -> Sent {
 /// The state before `Initialize`, the deployed program alone.
 fn uninitialized(setup: Setup) -> Ring {
     let mut ring = Ring::new(setup);
-    for account in [policy_pda(), ring_auth()] {
+    for account in [policy_pda(), ring_auth(), tracking_registry()] {
         ring.drain(&account);
     }
     ring
@@ -110,9 +110,13 @@ fn initialize_creates_the_ring_and_spp_registration_under_the_upgrade_authority(
     assert_eq!(account.roles, ring.roles.addresses());
     assert_eq!(
         (account.co_signers.covered(), account.delegate()),
-        (None, None)
+        (CoSignScope::NONE, None)
     );
     assert_eq!(account.records, RECORDS);
+    assert_eq!(account.tracking, tracking_registry());
+    let tracking: TrackingRegistry = ring.read(&tracking_registry());
+    assert_eq!(tracking.auditor_pubkey, auditor_pubkey());
+    assert_eq!(tracking.ring_id, ring_id_field(PROGRAM.as_array()).unwrap());
     assert!(account.written_policy_hash().is_some());
     let registration: RingConfig = ring.read(&ring_auth());
     assert_eq!(
@@ -211,7 +215,7 @@ fn each_co_signer_lives_in_its_own_record() {
     let record: CoSigner = ring.read(&co_signer_record(&signer));
     assert_eq!((record.signer, record.scope), (signer, 5));
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.co_signers.covered(), CoSignScope::new(5));
+    assert_eq!(account.co_signers.covered(), CoSignScope::new(5).unwrap());
     within_budget(
         InstructionTag::ClearCoSigner,
         send(
@@ -225,7 +229,7 @@ fn each_co_signer_lives_in_its_own_record() {
         ),
     );
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.co_signers.covered(), None);
+    assert_eq!(account.co_signers.covered(), CoSignScope::NONE);
 }
 
 fn appoint(ring: &mut Ring, delegate: &Keypair) -> Sent {
@@ -237,7 +241,7 @@ fn appoint(ring: &mut Ring, delegate: &Keypair) -> Sent {
 }
 
 #[test]
-fn the_delegate_is_permanent_and_needs_a_confidential_policy_ring() {
+fn the_delegate_is_permanent_and_any_ring_takes_one() {
     let delegate = Keypair::new();
     let mut ring = Ring::new(Setup::Policy);
     let pauser = ring.holder(RingRole::Pauser);
@@ -248,19 +252,21 @@ fn the_delegate_is_permanent_and_needs_a_confidential_policy_ring() {
     within_budget(InstructionTag::SetDelegate, appoint(&mut ring, &delegate));
     let account: RingPolicy = ring.read(&policy_pda());
     assert_eq!(account.delegate(), Some(&delegate.pubkey()));
-    assert_eq!(account.mode(), Ok(RingMode::ConfidentialEscrow));
+    assert_eq!(account.mode(), Ok(RingMode::Confidential));
     refused(
         appoint(&mut ring, &Keypair::new()),
         CustomRingError::DelegateAlreadySet,
     );
-    refused(
-        appoint(&mut Ring::new(Setup::AnonymousPolicy), &delegate),
-        CustomRingError::AnonymousRingRefused,
-    );
-    refused(
-        appoint(&mut Ring::new(Setup::AuditOnly), &delegate),
-        CustomRingError::DelegateRequiresPolicy,
-    );
+    for (setup, mode) in [
+        (Setup::AnonymousPolicy, RingMode::Anonymous),
+        (Setup::Anonymous, RingMode::Anonymous),
+        (Setup::AuditOnly, RingMode::Confidential),
+    ] {
+        let mut ring = Ring::new(setup);
+        within_budget(InstructionTag::SetDelegate, appoint(&mut ring, &delegate));
+        let account: RingPolicy = ring.read(&policy_pda());
+        assert_eq!(account.mode(), Ok(mode));
+    }
 }
 
 #[test]
@@ -417,19 +423,27 @@ fn update_policy_binds_records_late_on_an_audit_only_ring() {
 }
 
 #[test]
-fn an_anonymous_ring_needs_a_records_registry() {
-    for (setup, refusal) in [
-        (Setup::Anonymous, CustomRingError::AnonymousRingNeedsRecords),
-        (Setup::AnonymousPolicy, CustomRingError::PolicyNotSet),
-    ] {
-        let mut ring = uninitialized(setup);
-        let data = InitializeIxData {
-            kind: setup.kind(),
-            policy: None,
-            ..policy_config(&ring)
-        };
-        refused(upgrade_initialize(&mut ring, data), refusal);
-    }
+fn only_a_policy_ring_needs_a_records_registry() {
+    let mut ring = uninitialized(Setup::AnonymousPolicy);
+    let data = InitializeIxData {
+        kind: Setup::AnonymousPolicy.kind(),
+        policy: None,
+        ..policy_config(&ring)
+    };
+    refused(
+        upgrade_initialize(&mut ring, data),
+        CustomRingError::PolicyNotSet,
+    );
+    let mut ring = uninitialized(Setup::Anonymous);
+    let data = InitializeIxData {
+        kind: Setup::Anonymous.kind(),
+        policy: None,
+        ..policy_config(&ring)
+    };
+    upgrade_initialize(&mut ring, data).expect("an anonymous ring takes no records");
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.records, Address::default());
+    assert!(!account.thresholds_active());
 }
 
 /// A shared own registry would fail the second ring for an enrolled owner.
