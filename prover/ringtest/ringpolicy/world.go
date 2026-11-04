@@ -37,11 +37,13 @@ type World struct {
 	WithdrawalCapacity int
 	OwnOnly            bool
 	Withdrawals        []Slot
-	// Anonymous publishes no recipient, Unscreened writes no policy hash, Delegate bounds no outflow.
-	Anonymous, Unscreened, Delegate, Exempt, KeyEscrow, ApprovalRequired bool
-	Delivery                                                             bool
-	Sender                                                               int64
-	CoOwners                                                             []int64
+	// Anonymous publishes no recipient, Unscreened writes no policy hash, NoOwnRegistry holds no thresholds, Delegate bypasses every policy.
+	Anonymous, Unscreened, NoOwnRegistry, Delegate, KeyEscrow bool
+	Delivery                                                  bool
+	// Approval is the mask the proof must reach.
+	Approval uint64
+	Sender   int64
+	CoOwners []int64
 	// Nil derives one Sender input per asset the balance needs.
 	Inputs       []Slot
 	Table        Table
@@ -83,7 +85,7 @@ type OutflowLimit struct {
 type Record struct {
 	Lists      uint64
 	Registered bool
-	// WithdrawalThreshold is an asset record's exemption bound, zero leaves it unwritten.
+	// WithdrawalThreshold is an asset record's approval bound, zero leaves it unwritten.
 	WithdrawalThreshold uint64
 	// Address is the bound address hash, zero before enrollment.
 	Address *big.Int

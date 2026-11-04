@@ -66,7 +66,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		if assets[key].IsInt64() {
 			threshold.SetUint64(w.Own[assets[key].Int64()].WithdrawalThreshold)
 		}
-		own.Apply(t, ringregistry.Entry{Member: assets[key], Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0), MintPolicy: update, WithdrawalThreshold: threshold})
+		own.Apply(t, ringregistry.Entry{Member: assets[key], Mask: big.NewInt(0), Value: big.NewInt(0), MintPolicy: update, WithdrawalThreshold: threshold})
 	}
 
 	p.Table = rows.Wires()
@@ -88,18 +88,14 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		}
 	}
 	c.PrivateTxBlinding = privateTxBlinding
-	c.Senders[0] = w.Sender
-	for j := 1; j < len(c.Senders); j++ {
-		c.Senders[j] = 0
-		if j-1 < len(w.CoOwners) {
-			c.Senders[j] = w.CoOwners[j-1]
-		}
+	for j, row := range w.rows(len(c.Senders)) {
+		c.Senders[j] = row
 	}
 	for o := range c.Outputs {
 		s := pick(w.Slots, o)
 		c.Outputs[o] = s.wires(0xb100 + int64(o))
 		p.CtHashes[o], p.Recipients[o] = 0, 0
-		if !w.Anonymous && !w.Unscreened {
+		if !w.Anonymous && !w.Unscreened && !w.Delegate {
 			p.Recipients[o] = s.Owner
 		}
 		if s.Owner != 0 {
@@ -126,8 +122,8 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	}
 	c.InputChain = inputChain
 	c.Delivery = ringtest.Bit(w.Delivery)
-	c.Exempt, c.KeyEscrow, c.Delegate = ringtest.Bit(w.Exempt), ringtest.Bit(w.KeyEscrow), ringtest.Bit(w.Delegate)
-	c.Published, c.ApprovalRequired = ringtest.Bit(!w.Anonymous), ringtest.Bit(w.ApprovalRequired)
+	c.ThresholdsActive, c.KeyEscrow, c.Delegate = ringtest.Bit(!w.NoOwnRegistry && !w.Delegate), ringtest.Bit(w.KeyEscrow), ringtest.Bit(w.Delegate)
+	c.Published, c.ApprovalMask = ringtest.Bit(!w.Anonymous), w.Approval
 	b.pool(t, own, curator)
 	b.Rehash(t)
 	return b
@@ -170,6 +166,17 @@ func (b Witness) Rebind(t testing.TB) {
 	b.Circuit.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(b.Circuit.Statement()))
 }
 
+// rows is the sender and co-owners ascending with zero rows last, the order the circuit holds.
+func (w World) rows(capacity int) []int64 {
+	rows := append([]int64{w.Sender}, w.CoOwners...)
+	slices.Sort(rows)
+	rows = slices.Compact(rows)
+	for len(rows) < capacity {
+		rows = append(rows, 0)
+	}
+	return rows
+}
+
 // balancedInputs spends what balance owes per asset, every output plus every net withdrawal, none on a deposit-funded asset.
 func (w World) balancedInputs() []Slot {
 	owed, order := map[int64]*big.Int{}, []int64{}
@@ -208,12 +215,8 @@ func registry(t testing.TB, records map[int64]Record) *ringregistry.Registry {
 	slices.Sort(ids)
 	for _, id := range ids {
 		record := records[id]
-		escrow := big.NewInt(0)
-		if record.Registered {
-			escrow = ringregistry.EscrowKey(t, nullifierPk(id), ctHash(id))
-		}
 		lists := new(big.Int).SetUint64(record.Lists)
-		entry := ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists, EscrowKey: escrow, AddressHash: record.Address}
+		entry := ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists}
 		if record.WithdrawalThreshold != 0 {
 			// Bit 192 writes the mint policy, the threshold rides on that write.
 			entry.MintPolicy, entry.WithdrawalThreshold = new(big.Int).Lsh(big.NewInt(1), 192), new(big.Int).SetUint64(record.WithdrawalThreshold)

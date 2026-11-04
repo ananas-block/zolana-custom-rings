@@ -6,7 +6,7 @@ from pathlib import Path
 def verifier_relative_path(module: str) -> Path:
     name = module.removesuffix(".rs")
     file = f"{name}.rs"
-    if name.startswith("transfer_anonymous_entry_"):
+    if name.startswith(("transfer_anonymous_entry_", "transfer_confidential_entry_")):
         return Path("transfer/entry") / file
     if name.startswith("transfer_anonymous_"):
         return Path("transfer/anonymous") / file

@@ -68,6 +68,7 @@ pub fn deposit_instruction(
     let prefix = DepositPrefix {
         tag: tag::DEPOSIT,
         proof: Zeroable::zeroed(),
+        tracking_revision: Default::default(),
         own_revision: registry.unwrap_or_default().into(),
         curator_revision: Default::default(),
     };
@@ -88,7 +89,7 @@ pub fn deposit_instruction(
         AccountMeta::new(Address::new_unique(), false),
     ]);
     let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
-    accounts.extend(ring.registries(RootRead::deposit(&ring.read(&policy_pda())).unwrap()));
+    accounts.extend(ring.registries(RootRead::deposit(&ring.read(&policy_pda()))));
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,

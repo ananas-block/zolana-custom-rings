@@ -698,6 +698,8 @@ pub struct RingTransactData<'a> {
     pub has_data: bool,
     /// The key with entry capacity.
     pub entry: bool,
+    /// The key with its full owner rows, a hidden owner count needs the frame to name the key.
+    pub wide_owners: bool,
     /// The `m` published slots, slot `i` keeps its index in every derivation.
     pub outputs: Vec<RingOutput<'a>>,
     /// Set exactly under `REPLY_METADATA`.
@@ -887,6 +889,7 @@ impl<'a> RingTransactData<'a> {
             interface_transfers,
             has_data: header.flags.has_data,
             entry: header.flags.entry,
+            wide_owners: header.flags.wide_owners,
             outputs,
             replies,
             sender,
@@ -1122,6 +1125,14 @@ impl<'a> RingTransactData<'a> {
         if self.own_revision.is_some() != (read != RootRead::None) {
             return Err(CustomRingError::FlagNotAllowed);
         }
+        let private_revision = match (
+            self.extensions.private_revision,
+            ring.private_registry(read),
+        ) {
+            (None, None) => None,
+            (Some(revision), Some(_)) => Some(revision),
+            _ => return Err(CustomRingError::FlagNotAllowed),
+        };
         if !self.co_sign.approval.is_empty() && self.rail.is_delegate() {
             return Err(CustomRingError::UnexpectedApproval);
         }
@@ -1138,16 +1149,27 @@ impl<'a> RingTransactData<'a> {
         if let Some(revision) = curator_revision {
             bound.curator_root = roots.curator(revision)?;
         }
+        if let Some(revision) = private_revision {
+            bound.private_root = roots.private_source(revision)?;
+        }
         Ok(bound)
     }
 
     pub fn transfer_circuit(&self, legs: usize) -> Result<RingCircuit, CustomRingError> {
+        let shapes = TransferShape::family(self.rail, self.entry);
+        let rows = shapes
+            .and_then(|shapes| TransferShape::of(shapes, usize::from(self.n_out)))
+            .map(|shape| shape.owners[usize::from(self.wide_owners)])
+            .filter(|rows| *rows != 0)
+            .ok_or(CustomRingError::RingShapeUnkeyed)?;
         RingCircuit::transfer(TransferSpend {
             rail: self.rail,
             inputs: self.nullifiers.len(),
             outputs: usize::from(self.n_out),
             spends_default_ring: self.entry,
             legs,
+            owners: usize::from(rows),
+            has_data: self.has_data,
         })
         .ok_or(CustomRingError::RingShapeUnkeyed)
     }
@@ -1433,6 +1455,10 @@ pub mod input_flag {
 }
 
 pub const OUTPUT_COUNT_BYTE: usize = 3;
+/// Byte 3, the proof's key opens its full owner rows.
+pub mod output_flag {
+    pub const WIDE_OWNERS: u8 = 1 << 7;
+}
 pub const CO_SIGN_BYTE: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1501,13 +1527,14 @@ impl FrameHeader {
             public_owners: shape & shape_flag::PUBLIC_OWNERS != 0,
             has_data: inputs & input_flag::HAS_DATA != 0,
             entry: inputs & input_flag::ENTRY != 0,
+            wide_owners: output_count & output_flag::WIDE_OWNERS != 0,
         };
         flags.check(rail)?;
         let header = Self {
             n_in: count_byte(spp_shape.n_inputs())?,
             n_out: count_byte(spp_shape.n_outputs())?,
             input_count: inputs & Self::LOW,
-            output_count,
+            output_count: output_count & !output_flag::WIDE_OWNERS,
             flags,
         };
         header.check_output_count()?;
@@ -1553,7 +1580,7 @@ impl FrameHeader {
             self.input_count
                 | flag(flags.has_data, input_flag::HAS_DATA)
                 | flag(flags.entry, input_flag::ENTRY),
-            self.output_count,
+            self.output_count | flag(flags.wide_owners, output_flag::WIDE_OWNERS),
         ])
     }
 }
@@ -1573,6 +1600,8 @@ struct FrameFlags {
     has_data: bool,
     /// Input byte bit 7.
     entry: bool,
+    /// Output count byte bit 7.
+    wide_owners: bool,
 }
 
 impl FrameFlags {
@@ -1584,6 +1613,7 @@ impl FrameFlags {
             public_owners: data.public_owners,
             has_data: data.has_data,
             entry: data.entry,
+            wide_owners: data.wide_owners,
         }
     }
 

@@ -126,6 +126,7 @@ pub fn load_records_registry<'a>(
 pub struct RingRegistries<'a> {
     own: Option<Ref<'a, StorageRegistry>>,
     curator: Option<Ref<'a, StorageRegistry>>,
+    private_source: Option<Ref<'a, StorageRegistry>>,
     tracking: Ref<'a, TrackingRegistry>,
     pub len: usize,
 }
@@ -136,6 +137,7 @@ impl RingRegistries<'_> {
             own: self.own.as_deref(),
             curator: self.curator.as_deref(),
             tracking: &self.tracking,
+            private_source: self.private_source.as_deref(),
             slot,
         }
     }
@@ -148,7 +150,7 @@ pub struct RegistrySlots<'a> {
 }
 
 impl RegistrySlots<'_> {
-    /// `UnboundRegistry` unless each account `next` yields is the bound one, in the order own, curator, tracking.
+    /// `UnboundRegistry` unless each account `next` yields is the bound one, in the order own, curator, private source, tracking.
     #[inline(never)]
     pub fn load<'b>(
         self,
@@ -163,17 +165,24 @@ impl RegistrySlots<'_> {
             len += 1;
             Ok(account)
         };
+        let ring = self.ring;
         let mut storage = |bound: Option<Address>| {
             bound
-                .map(|bound| load_storage_registry(bound_account(&bound)?))
+                .map(|bound| {
+                    let source = load_storage_registry(bound_account(&bound)?)?;
+                    ring.check_source_pair(&source)?;
+                    Ok::<_, ProgramError>(source)
+                })
                 .transpose()
         };
         let own = storage(self.ring.own_registry(self.read))?;
         let curator = storage(self.ring.curator_registry(self.read))?;
+        let private_source = storage(self.ring.private_registry(self.read))?;
         let tracking = load_tracking_registry(bound_account(&self.ring.tracking)?)?;
         Ok(RingRegistries {
             own,
             curator,
+            private_source,
             tracking,
             len,
         })

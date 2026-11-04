@@ -1,8 +1,8 @@
 //! Pins `test-vectors/registry/ring-records.json` for the Go circuits, Photon and the TS SDK.
 
 use custom_ring_interface::{
-    queue_chain, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData,
-    MEMBER_REGISTRY_EMPTY_ROOT,
+    queue_chain, QueueEntry, RecordWriteData, WriteRecordsIxData, MEMBER_REGISTRY_EMPTY_ROOT,
+    QUAD_HEIGHT,
 };
 use serde::{Deserialize, Serialize};
 use spr_hasher::primitives::{hash_bytes, solana_owner_identity};
@@ -50,18 +50,13 @@ struct Application {
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct QueuedWrite {
     position: u64,
-    /// `member_write`, `register_key` or `authority_write`.
+    /// `member_write` or `authority_write`.
     kind: String,
     /// The member's signing key, `member` is its owner identity.
     signer: Option<String>,
     member: String,
     mask: u64,
     value: u64,
-    nullifier_pk: Option<String>,
-    eph_u: Option<String>,
-    ciphertext: Option<String>,
-    escrow_key: String,
-    address_hash: String,
     entry_hash: String,
     /// `chain(position)`.
     chain: String,
@@ -72,13 +67,9 @@ struct WriteInput {
     member: String,
     mask: u64,
     value: u64,
-    escrow_key: String,
-    address_hash: String,
     exists: bool,
     old_next: String,
     old_lists: u64,
-    old_escrow: String,
-    old_address_hash: String,
     slot: Path,
     low: Record,
     low_path: Path,
@@ -89,8 +80,6 @@ struct Record {
     member: String,
     next: String,
     lists: u64,
-    escrow_key: String,
-    address_hash: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -115,12 +104,6 @@ enum Queued {
         write: ListSet,
         clear: ListSet,
     },
-    Key {
-        signer: [u8; 32],
-        nullifier_pk: [u8; 32],
-        eph_u: [u8; 32],
-        ciphertext: [u8; 32],
-    },
     Authority {
         member: [u8; 32],
         set: ListSet,
@@ -141,19 +124,6 @@ impl Queued {
             } => lists(*write, *clear)
                 .entry(identity(signer), Writer::Member)
                 .expect("member write"),
-            Self::Key {
-                signer,
-                nullifier_pk,
-                ciphertext,
-                ..
-            } => QueueEntry::escrow(
-                identity(signer),
-                &EscrowKey {
-                    nullifier_pk,
-                    ciphertext,
-                },
-            )
-            .expect("escrow write"),
             Self::Authority { member, set, clear } => RecordWriteData {
                 mint_policy: custom_ring_interface::mint_policy_write(None),
                 member: *member,
@@ -165,19 +135,9 @@ impl Queued {
     }
 
     fn vector(&self, position: u64, entry: &QueueEntry, chain: &[u8; 32]) -> QueuedWrite {
-        let (kind, signer, key) = match self {
-            Self::Member { signer, .. } => ("member_write", Some(signer), None),
-            Self::Key {
-                signer,
-                nullifier_pk,
-                eph_u,
-                ciphertext,
-            } => (
-                "register_key",
-                Some(signer),
-                Some((nullifier_pk, eph_u, ciphertext)),
-            ),
-            Self::Authority { .. } => ("authority_write", None, None),
+        let (kind, signer) = match self {
+            Self::Member { signer, .. } => ("member_write", Some(signer)),
+            Self::Authority { .. } => ("authority_write", None),
         };
         QueuedWrite {
             position,
@@ -186,11 +146,6 @@ impl Queued {
             member: hex::encode(entry.member),
             mask: entry.mask,
             value: entry.value,
-            nullifier_pk: key.map(|(pk, _, _)| hex::encode(pk)),
-            eph_u: key.map(|(_, eph_u, _)| hex::encode(eph_u)),
-            ciphertext: key.map(|(_, _, ciphertext)| hex::encode(ciphertext)),
-            escrow_key: hex::encode(entry.escrow_key),
-            address_hash: hex::encode(entry.address_hash),
             entry_hash: hex::encode(entry.hash().expect("entry hash")),
             chain: hex::encode(chain),
         }
@@ -211,15 +166,6 @@ fn signer(seed: u8) -> [u8; 32] {
 
 fn asset(seed: u8) -> [u8; 32] {
     hash_bytes(&[seed; 32]).expect("asset field")
-}
-
-fn key(signer_seed: u8, key_seed: u8) -> Queued {
-    Queued::Key {
-        signer: signer(signer_seed),
-        nullifier_pk: hash_bytes(&[key_seed; 32]).expect("nullifier key"),
-        eph_u: [key_seed ^ 0x66; 32],
-        ciphertext: [key_seed ^ 0x77; 32],
-    }
 }
 
 struct Registry {
@@ -327,13 +273,9 @@ fn write_input(input: &RecordWriteProofInput) -> WriteInput {
         member: hex::encode(input.entry.member),
         mask: input.entry.mask,
         value: input.entry.value,
-        escrow_key: hex::encode(input.entry.escrow_key),
-        address_hash: hex::encode(input.entry.address_hash),
         exists: input.exists,
         old_next: hex::encode(input.old_next),
         old_lists: input.old_lists,
-        old_escrow: hex::encode(input.old_escrow),
-        old_address_hash: hex::encode(input.old_address_hash),
         slot: path_vector(&input.slot),
         low: record_vector(&input.low),
         low_path: path_vector(&input.low_path),
@@ -345,8 +287,6 @@ fn record_vector(record: &MemberRecord) -> Record {
         member: hex::encode(record.member),
         next: hex::encode(record.next),
         lists: record.lists,
-        escrow_key: hex::encode(record.escrow_key),
-        address_hash: hex::encode(record.address_hash),
     }
 }
 
@@ -390,8 +330,6 @@ fn compute_vectors() -> RecordVectors {
         write: lists(&[RingViewing]),
         clear: none,
     });
-    registry.write(key(0x23, 0x61));
-    registry.write(key(0x23, 0x62));
     registry.write(Queued::Member {
         signer: signer(0x24),
         write: none,
@@ -402,7 +340,7 @@ fn compute_vectors() -> RecordVectors {
         write: none,
         clear: lists(&[RingViewing]),
     });
-    let members = registry.apply("member_writes_updates_escrow_and_no_op", Vec::new());
+    let members = registry.apply("member_writes_updates_and_no_op", Vec::new());
     for seed in 0x40..0x48 {
         registry.write(Queued::Member {
             signer: signer(seed),
@@ -432,9 +370,8 @@ fn compute_vectors() -> RecordVectors {
     RecordVectors {
         description: "Record queue writes as the ring program receives them and the \
                       applications that fold them into the 4-ary member record tree. A \
-                      member or register-key write's member is owner_identity(signer), an \
-                      escrow key is Poseidon(nullifier_pk, hash_bytes(ciphertext)), an entry \
-                      hash is Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2, address_hash) and chain(p) = \
+                      member write's member is owner_identity(signer), an entry \
+                      hash is Poseidon(CRQW, member, mask, value, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2) and chain(p) = \
                       Poseidon(chain(p - 1), entry_p) from chain(-1) = 0. The writes of an \
                       application are its pending writes then its authority writes, each with \
                       the apply circuit's proof inputs. Paths list three siblings per level, \
@@ -442,7 +379,10 @@ fn compute_vectors() -> RecordVectors {
                       program-libs/member-registry/tests/ring_records_vector.rs."
             .to_string(),
         empty_root: hex::encode(MEMBER_REGISTRY_EMPTY_ROOT),
-        zero_subtrees: ZERO_SUBTREES.iter().map(hex::encode).collect(),
+        zero_subtrees: ZERO_SUBTREES[..=QUAD_HEIGHT]
+            .iter()
+            .map(hex::encode)
+            .collect(),
         applications: vec![first, members, full],
         openings,
     }

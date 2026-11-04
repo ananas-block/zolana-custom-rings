@@ -28,7 +28,7 @@ func init() {
 
 func (k Key) extension() common.ExtensionCircuit {
 	switch k.Family {
-	case TransferConfidential:
+	case TransferConfidential, TransferConfidentialEntry:
 		return bindPolicy[ConfidentialTransferParams](k, transfer.NewConfidentialTransferCircuit, k.confidentialShape())
 	case TransferAnonymous, TransferAnonymousEntry:
 		return bindPolicy[AnonymousTransferParams](k, transfer.NewAnonymousTransferCircuit, k.anonymousShape())

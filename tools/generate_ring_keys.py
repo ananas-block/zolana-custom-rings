@@ -13,10 +13,11 @@ from ring_key_layout import verifier_relative_path
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def variant(k):
-    i, o, w = k['Inputs'], k['Outputs'], k['Withdrawals']
-    return [f'TransferConfidential {{ outputs: {o}, inputs: {i}, withdrawals: {w} }}',
-            f'TransferAnonymous {{ outputs: {o}, class: {i}, withdrawals: {w} }}',
-            f'TransferAnonymousEntry {{ outputs: {o}, class: {i}, withdrawals: {w} }}',
+    i, o, w, s, d = k['Inputs'], k['Outputs'], k['Withdrawals'], k['Owners'], str(k['Data']).lower()
+    return [f'TransferConfidential {{ outputs: {o}, inputs: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
+            f'TransferConfidentialEntry {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
+            f'TransferAnonymous {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
+            f'TransferAnonymousEntry {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
             f'ApplyRecords {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
             'Merge'][k['Family']]
 
