@@ -229,13 +229,7 @@ func (d *Deposit) Ciphertext(t testing.TB) []byte {
 // Elements mirrors DepositPublicInput::elements over the host values as set.
 func (d *Deposit) Elements(t testing.TB) []*big.Int {
 	t.Helper()
-	return d.ElementsOver(t, d.Ciphertext(t))
-}
-
-// ElementsOver is Elements with the stream ciphertext the frame carries.
-func (d *Deposit) ElementsOver(t testing.TB, ciphertext []byte) []*big.Int {
-	t.Helper()
-	c := d.Circuit
+	c, ciphertext := d.Circuit, d.Ciphertext(t)
 	sealed := d.Keys.Sealed(t, ciphertext)
 	chain := []*big.Int{big.NewInt(shared.DepositStatementDomain), ringtest.AsBigInt(c.ContextHash), big.NewInt(int64(len(d.Notes))), ringtest.AsBigInt(c.Anonymous)}
 	for i := range circuits.MaxDeposits {
