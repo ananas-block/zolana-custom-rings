@@ -82,7 +82,7 @@ type OutflowLimit struct {
 
 // Record is one member's registry record.
 type Record struct {
-	Lists      uint64
+	Lists uint64
 	// WithdrawalThreshold is an asset record's approval bound, zero leaves it unwritten.
 	WithdrawalThreshold uint64
 }
@@ -106,14 +106,14 @@ type PublicSlot struct {
 
 func Confidential() World {
 	return World{
-		Outputs:   2,
-		Sender:    Sender,
+		Outputs: 2,
+		Sender:  Sender,
 		Table: Table{
 			Lists:  []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.FrozenBit},
 			Rules:  []Rule{Require(policy.SubjectOutputOwner, ringregistry.AllowBit), Forbid(policy.SubjectSender, ringregistry.FrozenBit)},
 			Limits: []OutflowLimit{{Asset: AssetA, Cap: 1000, CosignAbove: 500}},
 		},
-		Own:     map[int64]Record{Sender: Escrowed(ringregistry.AllowBit), Alice: Escrowed(ringregistry.AllowBit), Bob: Escrowed(ringregistry.AllowBit)},
+		Own:     map[int64]Record{Sender: Record{Lists: ringregistry.AllowBit}, Alice: Record{Lists: ringregistry.AllowBit}, Bob: Record{Lists: ringregistry.AllowBit}},
 		Curator: map[int64]Record{},
 		Slots:   []Slot{{Owner: Alice, Asset: AssetA, Amount: 300}, {Owner: Sender, Asset: AssetA, Amount: 200}},
 	}
@@ -121,7 +121,7 @@ func Confidential() World {
 
 func Anonymous() World {
 	w := Confidential()
-	
+
 	return w
 }
 
@@ -138,7 +138,7 @@ func Wide8() World {
 	w := Four()
 	w.Outputs = 8
 	for _, m := range []int64{Carol, Dave, Erin, Frank, Grace} {
-		w.Own[m] = Escrowed(ringregistry.AllowBit)
+		w.Own[m] = Record{Lists: ringregistry.AllowBit}
 	}
 	w.Own[AssetC] = Record{Lists: ringregistry.AllowBit}
 	w.Slots = []Slot{
@@ -165,10 +165,6 @@ func Delegate(outputs int) World {
 	w := Four()
 	w.Outputs, w.Delegate = outputs, true
 	return w
-}
-
-func Escrowed(lists uint64) Record {
-	return Record{Lists: lists}
 }
 
 // Require admits a subject on any of lists, as Rule::require_any does.

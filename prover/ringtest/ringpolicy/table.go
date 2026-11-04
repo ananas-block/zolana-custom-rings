@@ -8,13 +8,16 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 // Rows are a table's used rows, Wires pads each list with zero rows to its capacity.
 type Rows struct {
-	Sources                           []policy.SourceWires
+	Sources []policy.SourceWires
+	// Source is the private source, its zero value is none.
+	Source                            privatelist.Source
 	Rules, InlineAssets, InlineLimits []frontend.Variable
 	Limits                            []MintLimit
 }
@@ -40,6 +43,10 @@ func (r Rows) Wires() policy.Table {
 	var table policy.Table
 	for i := range table.Sources {
 		table.Sources[i] = pad(r.Sources, i, policy.SourceWires{ListID: 0, Registry: 0})
+	}
+	table.Source = privatelist.Source{OwnerLists: 0, Registry: 0}
+	if r.Source.Registry != nil {
+		table.Source = r.Source
 	}
 	table.PolicyLen = len(r.Rules)
 	for i := range table.Rules {
