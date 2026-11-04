@@ -83,8 +83,8 @@ instruction_tags! {
     Deposit = DEPOSIT: 58 => PROOF_UNITS,
     // Tags 32 to 42 are retired, never reuse them.
     // Tag 48 is retired, never reuse it.
-    /// Signed by the upgrade authority, one budget for the ring account, its policy and the SPP CPI.
-    Initialize = INITIALIZE: 53 => 2 * ACCOUNT_UNITS + POLICY_UNITS,
+    /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.
+    Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
 }
 

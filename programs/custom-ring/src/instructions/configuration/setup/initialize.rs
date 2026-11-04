@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     storage_instruction::{tag as storage_tag, InitializeTrackingIxData},
-    CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, RingKind, RingMode, RingPolicy,
-    STORAGE_PROGRAM_ID,
+    CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, RingKind, RingMode,
+    RingPolicy, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     error::ProgramError,
@@ -112,7 +112,11 @@ pub fn process_initialize_ix(
     ]
     .concat();
     let tracking_accounts = [&*payer, &*ring_auth, &*tracking, &*system_program];
-    placed.invoke_program(&STORAGE_PROGRAM_ID, tracking_accounts.as_slice(), &tracking_data)?;
+    placed.invoke_program(
+        &STORAGE_PROGRAM_ID,
+        tracking_accounts.as_slice(),
+        &tracking_data,
+    )?;
     // 6. SPP's `RingConfig` sits at the ring PDA, the one point where SPP checks the ring's identity.
     let data = encode_instruction(
         tag::CREATE_RING_CONFIG,

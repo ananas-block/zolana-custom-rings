@@ -117,7 +117,9 @@ pub fn process_deposit_ix(
             record: iter.next_account("co_signer_record")?,
             signer: iter.next_account("co_signer")?,
         }
-        .verify(requirement)?;
+        .verify(requirement)?
+        .0
+        .check_satisfied()?;
     }
     let spp_accounts = iter.remaining()?;
     let anonymous = mode == RingMode::Anonymous;

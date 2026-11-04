@@ -10,7 +10,8 @@ use zolana_ring_policy::{
 
 use crate::{
     error::CustomRingError,
-    storage::{root_at, Revision, Root, StorageRegistry},
+    storage::{Revision, StorageRegistry},
+    tracking::TrackingRegistry,
     TAGGED_X25519_KEY_LEN,
 };
 
@@ -380,8 +381,8 @@ impl RootRead {
 pub struct LiveRoots<'a> {
     pub own: Option<&'a StorageRegistry>,
     pub curator: Option<&'a StorageRegistry>,
-    /// The pinned tracking registry's root history.
-    pub tracking: &'a [Root; ROOT_HISTORY],
+    /// Bound by address to the ring's pin.
+    pub tracking: &'a TrackingRegistry,
     pub slot: u64,
 }
 
@@ -397,7 +398,9 @@ impl LiveRoots<'_> {
     }
 
     pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
-        root_at(self.tracking, revision, self.slot).map_err(|_| CustomRingError::RootNotServed)
+        self.tracking
+            .root(revision, self.slot)
+            .map_err(|_| CustomRingError::RootNotServed)
     }
 
     /// Without the records, `None` at revision zero and `unread` otherwise.

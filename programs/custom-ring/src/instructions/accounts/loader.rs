@@ -98,7 +98,9 @@ pub fn load_storage_registry(
 }
 
 /// Owner and discriminator alone, any creator can make one with a matching `ring_id`, a caller compares the address.
-fn load_tracking_registry(account: &AccountView) -> Result<Ref<'_, TrackingRegistry>, ProgramError> {
+fn load_tracking_registry(
+    account: &AccountView,
+) -> Result<Ref<'_, TrackingRegistry>, ProgramError> {
     let invalid = CustomRingError::InvalidTrackingRegistry;
     if !account.owned_by(&STORAGE_PROGRAM_ID) {
         return Err(invalid.into());
@@ -245,11 +247,12 @@ impl CoSigners {
         mut requirement: CoSignRequirement,
     ) -> Result<Self, ProgramError> {
         let mut co_signers = Self::default();
-        for (pair, slot) in pairs.chunks_exact(2).zip(&mut co_signers.signers) {
+        let (pairs, _) = pairs.as_chunks::<2>();
+        for ([record, signer], slot) in pairs.iter().zip(&mut co_signers.signers) {
             let (rest, signer) = CoSignerSlot {
                 program_id,
-                record: &pair[0],
-                signer: &pair[1],
+                record,
+                signer,
             }
             .verify(requirement)?;
             requirement = rest;
