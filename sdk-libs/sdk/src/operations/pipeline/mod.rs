@@ -18,7 +18,7 @@ mod tests;
 
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
-    key_catalog::{RingCircuit, TransferAddresses, TransferSpend},
+    key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend},
     AnonymousParties, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
     InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg, PublicSlots,
     RingPolicy, RingRail, RootRead, Settlement, SignerSet, TransferBinding, ANONYMOUS_PARTIES,
@@ -927,6 +927,7 @@ fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
             spends_default_ring,
             legs: 0,
             owners: 0,
+            pools: RecordPools::default(),
             wide: false,
         })
         .is_some()
@@ -1100,7 +1101,6 @@ pub(crate) fn check_owner_capacity(capacity: &OwnerCapacity) -> Result<(), RingE
         n_inputs: capacity.n_inputs,
         co_signers: capacity.co_signers,
         legs: capacity.legs,
-        buffered: false,
     }
     .owner_signers();
     match capacity.owners > limit {

@@ -484,33 +484,21 @@ impl Serialize for PolicyTable<'_> {
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
-        struct Private {
-            #[serde(with = "fe")]
-            owner_lists: [u8; 32],
-            #[serde(with = "fe")]
-            registry: [u8; 32],
-        }
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
         struct Table<'a> {
             sources: [Source; MAX_SOURCES],
-            source: Private,
+            salted: u8,
             policy_len: u8,
             #[serde(serialize_with = "fe::seq")]
             rules: &'a [[u8; 32]],
         }
         let rules = self.rules;
         let slots = self.sources.slots();
-        let [owner_lists, registry] = self.sources.private().fields();
         Table {
             sources: core::array::from_fn(|i| Source {
                 list_id: slots[i].list_id,
                 registry: slots[i].registry,
             }),
-            source: Private {
-                owner_lists,
-                registry,
-            },
+            salted: self.sources.salted().bits(),
             policy_len: rules.rule_count,
             rules: &rules.rules,
         }
@@ -534,8 +522,6 @@ pub(crate) struct PolicyParams<'a> {
     pub own_root: [u8; 32],
     #[serde(with = "fe")]
     pub curator_root: [u8; 32],
-    #[serde(with = "fe")]
-    pub private_root: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub public_assets: Vec<[u8; 32]>,
     #[serde(serialize_with = "fe::seq")]

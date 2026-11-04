@@ -100,6 +100,7 @@ impl PolicyRead<'_> {
             spends_default_ring: self.spends_default_ring,
             legs: withdrawals.len(),
             owners: live_rows.len(),
+            pools: PoolWidths::default(),
             wide: false,
         }
         .fitted();
@@ -354,7 +355,7 @@ impl PolicyRead<'_> {
                 RecordLists {
                     own: on(&own_pool),
                     curator: curator_pool.as_ref().map_or(0, on),
-                    private: 0,
+                    salted: 0,
                 }
             };
             let subject =
@@ -492,7 +493,6 @@ impl PolicyInputs {
             own_root: self.own.map_or([0; 32], |own| own.root),
             curator_root: self.curator.map_or([0; 32], |curator| curator.root),
             tracking_root: self.tracking.root,
-            private_root: [0; 32],
         }
     }
 
@@ -548,7 +548,6 @@ impl PolicyInputs {
             ring_id: proving.ring_id,
             own_root: roots.own_root,
             curator_root: roots.curator_root,
-            private_root: roots.private_root,
             public_assets: proving.public_assets.to_vec(),
             public_amounts: proving.public_amounts.to_vec(),
             public_gross: proving.public_gross.to_vec(),

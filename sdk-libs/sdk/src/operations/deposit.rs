@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use custom_ring_interface::{
     cosign::CoSignDemand, domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets,
     tag, AuditRecord, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
-    DepositPublicInput, DepositRegistry, DepositedAsset, InstructionTag, OpeningRecord, RecordKind,
+    DepositPublicInput, DepositRegistry, DepositSubjects, DepositedAsset, InstructionTag, OpeningRecord, RecordKind,
     RingDepositAuditCapsule, RingMode, RingPolicy,
 };
 use solana_address::Address;
@@ -511,12 +511,19 @@ impl PreparedRingDeposit {
             let records = disclosure.records(self.ring, client.zolana()).await?;
             let body = disclosure.body(&records)?;
             let roots = records.roots();
-            self.check_size(roots)?;
-            let proof = RingRequest::new(RingCircuit::deposit(body.count as u8), &*body)?
+            let frame = DepositFrame {
+                roots,
+                key_capacity: records.key_capacity()?,
+            };
+            self.check_size(frame)?;
+            let circuit = RingCircuit::Deposit {
+                capacity: frame.key_capacity,
+            };
+            let proof = RingRequest::new(circuit, &*body)?
                 .prove(client, body.public_input_hash)
                 .await?;
             Ok(BoundDeposit {
-                instruction: self.instruction(to_instruction_proof(proof)?, roots)?,
+                instruction: self.instruction(to_instruction_proof(proof)?, frame)?,
                 roots: roots.bound().collect(),
                 policy: records.policy.as_ref().map(|policy| BoundPolicy {
                     ring: self.ring,
@@ -528,7 +535,7 @@ impl PreparedRingDeposit {
     }
 
     /// Sized as the proven instruction, the proof is of fixed width.
-    fn check_size(&self, roots: DepositRoots) -> Result<(), RingError> {
+    fn check_size(&self, frame: DepositFrame) -> Result<(), RingError> {
         let payer = self
             .spp
             .accounts
@@ -536,7 +543,7 @@ impl PreparedRingDeposit {
             .ok_or(CustomRingError::InvalidInstructionData)?;
         check_transaction_size(
             &payer.pubkey,
-            &self.instruction(bytemuck::Zeroable::zeroed(), roots)?,
+            &self.instruction(bytemuck::Zeroable::zeroed(), frame)?,
             send_budget(InstructionTag::Deposit, self.priority_fee),
         )
     }
@@ -545,11 +552,16 @@ impl PreparedRingDeposit {
     fn instruction(
         &self,
         proof: CustomRingProof,
-        roots: DepositRoots,
+        frame: DepositFrame,
     ) -> Result<Instruction, RingError> {
+        let DepositFrame {
+            roots,
+            key_capacity,
+        } = frame;
         let mut instruction = self.spp.clone();
         let prefix = DepositPrefix {
             tag: tag::DEPOSIT,
+            key_capacity,
             proof,
             tracking_revision: roots.tracking.revision,
             own_revision: roots.own.map_or_else(Default::default, |own| own.revision),
@@ -572,6 +584,12 @@ impl PreparedRingDeposit {
         instruction.accounts.splice(0..0, accounts);
         Ok(instruction)
     }
+}
+
+#[derive(Clone, Copy)]
+struct DepositFrame {
+    roots: DepositRoots,
+    key_capacity: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -598,6 +616,17 @@ impl DepositRecords {
             own: self.policy.as_ref().map(|policy| policy.root),
             curator: self.curator().map(|curator| curator.root),
         }
+    }
+
+    fn key_capacity(&self) -> Result<u8, RingError> {
+        DepositSubjects {
+            slots: 1,
+            recipients: 1,
+            assets: 1,
+            salted_keys: 0,
+        }
+        .key_capacity()
+        .ok_or(RingError::DepositUnkeyed)
     }
 
     fn curator(&self) -> Option<&CuratorScreen> {
