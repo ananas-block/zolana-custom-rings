@@ -105,36 +105,15 @@ func TestEveryCoOwnerIsScreened(t *testing.T) {
 	w.CoOwners = []int64{ringpolicy.Bob}
 	w.Inputs = []ringpolicy.Slot{{Owner: ringpolicy.Sender, Asset: ringpolicy.AssetA, Amount: 400}, {Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 100}}
 	requireSolved(t, w.Build(t))
-	w.Own[ringpolicy.Bob] = ringpolicy.Escrowed(ringregistry.AllowBit | ringregistry.FrozenBit)
+	w.Own[ringpolicy.Bob] = ringpolicy.Record{Lists: ringregistry.AllowBit | ringregistry.FrozenBit}
 	requireRefusedIn(t, w, "policy.assertSenderRules")
 }
 
-// A zero secret key owes no escrow record, any other key under the same owner does.
-func TestZeroNullifierKeyWaivesOnlyTheEscrow(t *testing.T) {
-	zeroKey := func() ringpolicy.World {
-		w := ringpolicy.Confidential()
-		w.Own[ringpolicy.Alice] = ringpolicy.Record{Lists: ringregistry.AllowBit}
-		return w
-	}
-	t.Run("a record without a key refuses another nullifier key", func(t *testing.T) {
-		requireRefusedIn(t, zeroKey(), "policy.(*PolicyInputs).assertEscrow")
-	})
-	t.Run("a zero secret owner with a record settles", func(t *testing.T) {
-		w := zeroKey()
-		w.Slots[0].ZeroKey = true
-		requireSolved(t, w.Build(t))
-	})
-	t.Run("a zero secret owner with no record settles off a policy", func(t *testing.T) {
-		w := zeroKey()
-		w.Slots[0].ZeroKey = true
-		w.Unscreened = true
-		delete(w.Own, ringpolicy.Alice)
-		requireSolved(t, w.Build(t))
-	})
-	t.Run("a zero secret owner still answers the owner rules", func(t *testing.T) {
-		w := zeroKey()
-		w.Slots[0].ZeroKey = true
-		w.Own[ringpolicy.Alice] = ringpolicy.Record{}
-		requireRefusedIn(t, w, "policy.assertPaymentRules")
-	})
+// A zero secret key answers the owner rules as any other key does.
+func TestZeroNullifierKeyAnswersTheOwnerRules(t *testing.T) {
+	w := ringpolicy.Confidential()
+	w.Slots[0].ZeroKey = true
+	requireSolved(t, w.Build(t))
+	w.Own[ringpolicy.Alice] = ringpolicy.Record{}
+	requireRefusedIn(t, w, "policy.assertPaymentRules")
 }

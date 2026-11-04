@@ -15,9 +15,8 @@ import (
 type mintPolicyWires struct{ threshold, cap, cosignAbove frontend.Variable }
 
 type publicAsset struct {
-	asset, active frontend.Variable
-	policy        mintPolicyWires
-	// withdrawalThreshold is the asset's own record's bound, zero off a record.
+	limitedAsset
+	// withdrawalThreshold reads zero off a record.
 	withdrawalThreshold frontend.Variable
 }
 
@@ -36,15 +35,15 @@ type limitedAsset struct {
 	policy        mintPolicyWires
 }
 
-// ownerFlow is one row's quantities of one asset, I = debit + kept.
+// held = debit + kept.
 type ownerFlow struct{ debit, kept, charge, outflow frontend.Variable }
 
-// flowSource is what every asset's ownerFlow reads, keyed by row then slot.
 type flowSource struct {
 	inputs, outputs []shared.Output
-	held, returned  [][]frontend.Variable
-	publicAssets    []frontend.Variable
-	// gross is the statement-bound gross withdrawal per public slot.
+	// Keyed by row then slot.
+	held, returned [][]frontend.Variable
+	publicAssets   []frontend.Variable
+	// Statement-bound, the screened legs are empty off a policy.
 	gross []frontend.Variable
 }
 
@@ -55,7 +54,7 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 		assets = append(assets, limitedAsset{asset: out.Asset, active: out.Utxo, policy: resolved.mintPolicies[o]})
 	}
 	for _, public := range resolved.publicAssets {
-		assets = append(assets, limitedAsset{asset: public.asset, active: public.active, policy: public.policy})
+		assets = append(assets, public.limitedAsset)
 	}
 	gross := make([]frontend.Variable, len(p.PublicGross))
 	for k := range gross {
@@ -71,7 +70,7 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 		cosigned := api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cosignAbove))
 		for _, flow := range source.flowsOf(api, cmp, limit.asset) {
 			transaction.AssertWhen(api, capped, cmp.atMost(api, flow.outflow, limit.policy.cap))
-			overOutflow = api.Or(overOutflow, api.Mul(cosigned, api.Sub(1, cmp.atMost(api, flow.outflow, limit.policy.cosignAbove))))
+			overOutflow = api.Or(overOutflow, api.Mul(cosigned, cmp.above(api, flow.outflow, limit.policy.cosignAbove)))
 		}
 	}
 	overWithdrawal := frontend.Variable(0)
@@ -79,7 +78,7 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 		threshold := api.Mul(active, asset.withdrawalThreshold)
 		cmp.rc.Check(threshold, transaction.AmountBits)
 		watched := api.Mul(active, asset.active, ringgadget.IsNonZero(api, threshold))
-		overWithdrawal = api.Or(overWithdrawal, api.Mul(watched, api.Sub(1, cmp.atMost(api, gross[k], threshold))))
+		overWithdrawal = api.Or(overWithdrawal, api.Mul(watched, cmp.above(api, gross[k], threshold)))
 	}
 	return api.Add(api.Mul(ApprovalOutflow, overOutflow), api.Mul(ApprovalWithdrawal, overWithdrawal))
 }
@@ -105,7 +104,7 @@ func newFlowSource(api frontend.API, spend Spend, liveRows []frontend.Variable, 
 // flowsOf attributes the asset's displaced amount over the rows in their constrained order, no prover input selects a share.
 func (s flowSource) flowsOf(api frontend.API, cmp comparator, asset frontend.Variable) []ownerFlow {
 	inputAssets, outputAssets := assetFlags(api, asset, s.inputs), assetFlags(api, asset, s.outputs)
-	// 1. leaving reads the statement's gross, the screened legs are empty off a policy.
+	// 1. Every exit and public withdrawal of the asset leaves.
 	leaving := frontend.Variable(0)
 	for o, out := range s.outputs {
 		leaving = api.Add(leaving, api.Mul(out.Exit, outputAssets[o], out.Amount))
@@ -119,7 +118,7 @@ func (s flowSource) flowsOf(api frontend.API, cmp comparator, asset frontend.Var
 	for j := range flows {
 		held := innerProduct(api, s.held[j], inputAssets)
 		returned := innerProduct(api, s.returned[j], outputAssets)
-		debit := api.Select(cmp.atMost(api, held, returned), 0, api.Sub(held, returned))
+		debit := cmp.saturatingSub(api, held, returned)
 		flows[j] = ownerFlow{debit: debit, kept: api.Sub(held, debit)}
 		sumHeld, sumDebit, sumKept = api.Add(sumHeld, held), api.Add(sumDebit, debit), api.Add(sumKept, flows[j].kept)
 	}
@@ -194,7 +193,7 @@ func init() { solver.RegisterHint(divisionHint) }
 // divisionHint proposes a quotient and remainder, floorDiv range checks and recomposes both.
 func divisionHint(_ *big.Int, inputs, outputs []*big.Int) error {
 	if len(inputs) != 2 || len(outputs) != 2 || inputs[1].Sign() == 0 {
-		return errors.New("division: want numerator, nonzero divisor and two outputs")
+		return errors.New("division wants numerator, nonzero divisor and two outputs")
 	}
 	outputs[0].DivMod(inputs[0], inputs[1], outputs[1])
 	return nil
