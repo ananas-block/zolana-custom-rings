@@ -131,7 +131,7 @@ fn asset_flows(
     rows
 }
 
-/// `a * b / divisor` rounded down, the product can pass a u128 and `a` stays below 2^126.
+/// `a * b / divisor` rounded down, the product can pass a u128 and `divisor` stays below 2^126.
 fn mul_div_floor(a: u128, b: u128, divisor: u128) -> u128 {
     let (whole, part) = (a / divisor, a % divisor);
     let (mut quotient, mut remainder) = (0u128, 0u128);
@@ -148,44 +148,53 @@ fn mul_div_floor(a: u128, b: u128, divisor: u128) -> u128 {
     quotient
 }
 
-/// `receipt + exit + paid` of one owner and asset, compared with amount guards.
-/// `ring_inputs` leaves out default-ring notes, `payments` holds outputs and withdrawals with `ring` clear on an exit or a withdrawal.
-#[must_use]
-pub fn owner_guard(
-    ring_inputs: &[DebitInput],
-    payments: &[DebitOutput],
-    owner: &[u8; 32],
-    asset: &[u8; 32],
-) -> u128 {
-    let total = |ring: bool| -> u128 {
-        payments
-            .iter()
-            .filter(|pay| pay.ring == ring && pay.owner == *owner && pay.asset == *asset)
-            .map(|pay| u128::from(pay.amount))
-            .sum()
-    };
-    let spent: u128 = ring_inputs
-        .iter()
-        .filter(|input| input.owner == *owner && input.asset == *asset)
-        .map(|input| u128::from(input.amount))
-        .sum();
-    total(true).saturating_sub(spent) + total(false)
+/// Compared with amount guards, `receipt + exit + paid`.
+#[derive(Clone, Copy, Debug)]
+pub struct GuardScope<'a> {
+    /// Default-ring notes stay out, entry funding is a receipt.
+    pub ring_inputs: &'a [DebitInput],
+    /// Outputs and withdrawals, `ring` clear on an exit or a withdrawal.
+    pub payments: &'a [DebitOutput],
 }
 
-/// The sum of `owner_guard` over the asset's distinct owners.
-#[must_use]
-pub fn asset_guard(ring_inputs: &[DebitInput], payments: &[DebitOutput], asset: &[u8; 32]) -> u128 {
-    let of_asset: Vec<&DebitOutput> = payments.iter().filter(|pay| pay.asset == *asset).collect();
-    of_asset
-        .iter()
-        .enumerate()
-        .filter(|(position, pay)| {
-            !of_asset[..*position]
+impl GuardScope<'_> {
+    #[must_use]
+    pub fn owner(&self, owner: &[u8; 32], asset: &[u8; 32]) -> u128 {
+        let total = |ring: bool| -> u128 {
+            self.payments
                 .iter()
-                .any(|seen| seen.owner == pay.owner)
-        })
-        .map(|(_, pay)| owner_guard(ring_inputs, payments, &pay.owner, asset))
-        .sum()
+                .filter(|pay| pay.ring == ring && pay.owner == *owner && pay.asset == *asset)
+                .map(|pay| u128::from(pay.amount))
+                .sum()
+        };
+        let spent: u128 = self
+            .ring_inputs
+            .iter()
+            .filter(|input| input.owner == *owner && input.asset == *asset)
+            .map(|input| u128::from(input.amount))
+            .sum();
+        total(true).saturating_sub(spent) + total(false)
+    }
+
+    /// Over the asset's distinct owners.
+    #[must_use]
+    pub fn asset(&self, asset: &[u8; 32]) -> u128 {
+        let of_asset: Vec<&DebitOutput> = self
+            .payments
+            .iter()
+            .filter(|pay| pay.asset == *asset)
+            .collect();
+        of_asset
+            .iter()
+            .enumerate()
+            .filter(|(position, pay)| {
+                !of_asset[..*position]
+                    .iter()
+                    .any(|seen| seen.owner == pay.owner)
+            })
+            .map(|(_, pay)| self.owner(&pay.owner, asset))
+            .sum()
+    }
 }
 
 /// The statement's proven approval bits.
@@ -218,33 +227,32 @@ impl ApprovalMask {
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
+}
 
+#[derive(Clone, Copy, Debug)]
+pub struct ApprovalInputs<'a> {
+    pub flows: &'a [OwnerDebit],
+    pub public_gross: &'a [PublicGross],
+}
+
+impl ApprovalInputs<'_> {
     /// A zero threshold and an asset with no record both mean no threshold.
     #[must_use]
-    pub fn of(
-        flows: &[OwnerDebit],
-        public_gross: &[PublicGross],
-        policy_of: impl Fn(&[u8; 32]) -> MintPolicy,
-    ) -> Self {
-        let over_outflow = flows.iter().any(|flow| {
+    pub fn mask(&self, policy_of: impl Fn(&[u8; 32]) -> MintPolicy) -> ApprovalMask {
+        let over_outflow = self.flows.iter().any(|flow| {
             let above = policy_of(&flow.asset).cosign_above;
             above != 0 && flow.outflow > u128::from(above)
         });
-        let over_withdrawal = public_gross.iter().any(|public| {
+        let over_withdrawal = self.public_gross.iter().any(|public| {
             let threshold = policy_of(&public.asset).withdrawal_threshold;
             threshold != 0 && public.gross > u128::from(threshold)
         });
-        let outflow = if over_outflow {
-            Self::OUTFLOW
-        } else {
-            Self::EMPTY
+        let bit = |set: bool, mask: ApprovalMask| match set {
+            true => mask,
+            false => ApprovalMask::EMPTY,
         };
-        let withdrawal = if over_withdrawal {
-            Self::WITHDRAWAL
-        } else {
-            Self::EMPTY
-        };
-        outflow.union(withdrawal)
+        bit(over_outflow, ApprovalMask::OUTFLOW)
+            .union(bit(over_withdrawal, ApprovalMask::WITHDRAWAL))
     }
 }
 
@@ -437,9 +445,17 @@ mod tests {
             ..ring(ALICE, SOL, 40)
         };
         let payments = [ring(ALICE, SOL, 130), exit, ring(BOB, SOL, 5)];
-        assert_eq!(owner_guard(&ring_inputs, &payments, &ALICE, &SOL), 70);
-        assert_eq!(owner_guard(&[], &payments, &ALICE, &SOL), 170);
-        assert_eq!(asset_guard(&ring_inputs, &payments, &SOL), 75);
+        let scope = GuardScope {
+            ring_inputs: &ring_inputs,
+            payments: &payments,
+        };
+        assert_eq!(scope.owner(&ALICE, &SOL), 70);
+        assert_eq!(scope.asset(&SOL), 75);
+        let unnetted = GuardScope {
+            ring_inputs: &[],
+            payments: &payments,
+        };
+        assert_eq!(unnetted.owner(&ALICE, &SOL), 170);
     }
 
     #[test]
@@ -456,6 +472,11 @@ mod tests {
             asset: SOL,
             gross: 10,
         };
+        let (flows, public_gross) = ([flow], [gross]);
+        let inputs = ApprovalInputs {
+            flows: &flows,
+            public_gross: &public_gross,
+        };
         let policy = |cosign_above, withdrawal_threshold| {
             move |_: &[u8; 32]| MintPolicy {
                 cosign_above,
@@ -463,24 +484,12 @@ mod tests {
                 ..MintPolicy::EMPTY
             }
         };
+        assert_eq!(inputs.mask(policy(0, 0)), ApprovalMask::EMPTY);
+        assert_eq!(inputs.mask(policy(10, 10)), ApprovalMask::EMPTY);
+        assert_eq!(inputs.mask(policy(9, 10)), ApprovalMask::OUTFLOW);
+        assert_eq!(inputs.mask(policy(10, 9)), ApprovalMask::WITHDRAWAL);
         assert_eq!(
-            ApprovalMask::of(&[flow], &[gross], policy(0, 0)),
-            ApprovalMask::EMPTY
-        );
-        assert_eq!(
-            ApprovalMask::of(&[flow], &[gross], policy(10, 10)),
-            ApprovalMask::EMPTY
-        );
-        assert_eq!(
-            ApprovalMask::of(&[flow], &[gross], policy(9, 10)),
-            ApprovalMask::OUTFLOW
-        );
-        assert_eq!(
-            ApprovalMask::of(&[flow], &[gross], policy(10, 9)),
-            ApprovalMask::WITHDRAWAL
-        );
-        assert_eq!(
-            ApprovalMask::of(&[flow], &[gross], policy(9, 9)),
+            inputs.mask(policy(9, 9)),
             ApprovalMask::OUTFLOW.union(ApprovalMask::WITHDRAWAL)
         );
         assert_eq!(ApprovalMask::from_bits(4), None);

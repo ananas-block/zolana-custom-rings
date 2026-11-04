@@ -19,7 +19,6 @@ pub enum PrivateSourceError {
 }
 
 impl PrivateSource {
-    /// Table hash fields.
     pub const FIELDS: usize = 2;
 
     pub fn new(owner_lists: ListSet, registry: [u8; 32]) -> Result<Self, PrivateSourceError> {
