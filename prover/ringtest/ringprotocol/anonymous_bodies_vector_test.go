@@ -12,7 +12,7 @@ const anonymousBodiesDescription = "One ring body and one sender bundle of an ho
 	"Body plaintext be32(blinding) || u64be(amount) || mint under label CRING/rcp and the CRDS slot secret of recipient_key and index. " +
 	"Bundle plaintext mint0 || u64be(amount0) || u64be(amount1) || output_seed || recipient_u * m under label CRING/snd and the CRDS slot secret of sender_viewing_key and index m, recipient_u zero on change and exit. " +
 	"bundle_digest = ciphertext_digest(bundle). body_tag = Poseidon(CRRT, body_slot_secret), bundle_tag = Poseidon(CRST, bundle_slot_secret), dummy_tag = Poseidon(CRRT, dummy_tag_preimage). " +
-	"Produced by prover/ringtest/ringprotocol/anonymous_bodies_vector_test.go with WRITE_AUDIT_VECTORS=1."
+	"body, bundle and bundle_digest produced by prover/ringtest/ringprotocol/anonymous_bodies_vector_test.go with WRITE_AUDIT_VECTORS=1, slot secrets and tags stay pinned in the file."
 
 func TestAnonymousBodiesVector(t *testing.T) {
 	var vector map[string]any

@@ -1023,7 +1023,6 @@ fn relay_proof_inputs() -> RelayProofInputs {
     }
 }
 
-/// `UPDATE_RING_VECTORS=1` rewrites the field.
 fn pinned(file: &str, pointer: &str, actual: &str, expected: &str) {
     if std::env::var_os("UPDATE_RING_VECTORS").is_none() {
         assert_eq!(actual, expected, "{pointer}");

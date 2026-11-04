@@ -209,7 +209,7 @@ func TestDepositZeroTailStaysInjectiveAtTheOneLength(t *testing.T) {
 	zero := new(big.Int)
 	for _, capacity := range circuits.DepositCapacities {
 		for _, count := range []int{1, capacity} {
-			d := ringdeposit.Build(t, count, ringdeposit.ModeConfidential)
+			d := ringdeposit.Build(t, count, ringdeposit.ModeConfidential).Narrow(t, capacity)
 			elements := d.Elements(t)
 			if len(elements) != depositElements {
 				t.Fatalf("capacity %d count %d holds %d elements", capacity, count, len(elements))
@@ -217,7 +217,6 @@ func TestDepositZeroTailStaysInjectiveAtTheOneLength(t *testing.T) {
 			if tail := elements[len(elements)-1]; (count < circuits.MaxDeposits) != (tail.Sign() == 0) {
 				t.Fatalf("count %d ends the chain on %v", count, tail)
 			}
-			d.Narrow(t, capacity)
 			d.Circuit.PublicInputHash = spptest.MustHashChain4(t, elements[:len(elements)-1])
 			requireStatementRefused(t, d)
 		}
