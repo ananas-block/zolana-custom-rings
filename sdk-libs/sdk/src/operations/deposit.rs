@@ -304,6 +304,7 @@ impl RingDeposit<'_> {
             intent: RelayIntent::Deposit {
                 proof_inputs: ProofInputBytes::new(proof_inputs),
             },
+            co_signers: Vec::new(),
         })
         .expecting(ExpectedMessage::Deposit(expected)))
     }
