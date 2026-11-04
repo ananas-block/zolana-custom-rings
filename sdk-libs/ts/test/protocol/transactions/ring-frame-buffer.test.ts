@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import vector from "../../../../../test-vectors/settlement/frame_buffer.json" with { type: "json" };
-import type { Address } from "@heliuslabs/zolana/interface";
+import { AccountRole } from "@solana/kit";
+import type { Address, Instruction } from "@heliuslabs/zolana/interface";
+import { encodeBase58 } from "@heliuslabs/zolana/internal";
+
+import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
+import { BufferedFrame } from "../../../src/operations/payments/buffered-frame.js";
+import { transactionSize } from "../../../src/operations/workflow/compile.js";
+import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 
 import {
   closeFrameBufferData,
@@ -61,5 +68,69 @@ describe("frame_buffer.json", () => {
       expect(() => settledFrame({ ...honest, ...refused })).toThrow(
         expect.objectContaining({ code: "RING_FRAME_EVENT_INVALID" }),
       );
+  });
+});
+
+describe("BufferedFrame", () => {
+  const WRITER = encodeBase58(new Uint8Array(32).fill(7)) as Address;
+  const PROGRAM = encodeBase58(new Uint8Array(32).fill(9)) as Address;
+  const inline = (length: number, tag: number = RingInstructionTag.transfer): Instruction => {
+    const data = Uint8Array.from({ length }, (_, index) => index % 251);
+    data[0] = tag;
+    return {
+      programAddress: PROGRAM,
+      accounts: [{ address: WRITER, role: AccountRole.WRITABLE_SIGNER }],
+      data,
+    };
+  };
+
+  it("writes rebuild the frame and each fits one transaction", async () => {
+    const frame = inline(MAX_FRAME_LEN);
+    const writes = (await BufferedFrame.of(frame, WRITER, 3n)).writes();
+    expect(writes.length).toBeGreaterThan(1);
+    const rebuilt = new Uint8Array(MAX_FRAME_LEN);
+    for (const write of writes) {
+      const size = transactionSize({
+        feePayer: WRITER,
+        instructions: [write],
+        computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.writeFrame),
+      });
+      expect(size.bytes).toBeLessThanOrEqual(4096);
+      const data = write.data as Uint8Array;
+      const view = new DataView(data.buffer, data.byteOffset);
+      expect(data[0]).toBe(RingInstructionTag.writeFrame);
+      expect(view.getBigUint64(1, true)).toBe(3n);
+      expect(view.getUint16(9, true)).toBe(MAX_FRAME_LEN);
+      rebuilt.set(data.subarray(13), view.getUint16(11, true));
+    }
+    expect(rebuilt).toEqual(frame.data);
+  });
+
+  it("settles on the digest ahead of the transfer accounts and closes to the writer", async () => {
+    const frame = inline(5000);
+    const buffered = await BufferedFrame.of(frame, WRITER, 0n);
+    const settle = buffered.settle();
+    expect(settle.data).toEqual(settleBufferedData(frameDigest(frame.data as Uint8Array)));
+    expect(settle.accounts?.[0]?.address).toBe(buffered.buffer);
+    expect(settle.accounts?.[1]?.address).toBe(PROGRAM);
+    expect(settle.accounts?.slice(2)).toEqual(frame.accounts);
+    const close = buffered.close();
+    expect(close.data).toEqual(closeFrameBufferData());
+    expect(close.accounts?.[0]).toMatchObject({
+      address: WRITER,
+      role: AccountRole.WRITABLE_SIGNER,
+    });
+  });
+
+  it("has no buffer past the CPI limit or for another tag", async () => {
+    await expect(BufferedFrame.of(inline(MAX_FRAME_LEN + 1), WRITER, 0n)).rejects.toMatchObject({
+      code: "RING_FRAME_TOO_LARGE",
+    });
+    await expect(
+      BufferedFrame.of(inline(10, RingInstructionTag.authorityTransfer), WRITER, 0n),
+    ).rejects.toMatchObject({ code: "RING_BUFFERED_TAG" });
+    await expect(BufferedFrame.of(inline(10), WRITER, 1n << 64n)).rejects.toMatchObject({
+      code: "RING_BUFFERED_NONCE",
+    });
   });
 });

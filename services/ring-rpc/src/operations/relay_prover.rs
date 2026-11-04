@@ -126,6 +126,10 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             proof_inputs,
             fee_payer: request.parties.fee_payer,
         });
+        // The relay writes the buffer of a frame past one transaction, a delegate settles inline.
+        if !matches!(proof_inputs.rail, RelayRail::Delegate { .. }) {
+            transfer = transfer.with_buffered_settlement();
+        }
         if let Some(signature) = request.owner_signature {
             transfer = transfer.with_owner_signature(signature);
         }

@@ -193,7 +193,13 @@ export type {
 } from "../state/anonymous-scan.js";
 export { AnonymousWallet, ANONYMOUS_WALLET_VERSION } from "../state/anonymous-wallet.js";
 export type { PendingClaim } from "../state/anonymous-wallet.js";
-export { AnonymousSync, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
+export {
+  AnonymousSync,
+  ringFullScan,
+  TAGS_PER_REQUEST,
+  type AuditorRecovery,
+  type RingFullScan,
+} from "../state/anonymous-sync.js";
 export type {
   AnonymousRingUtxo,
   AnonymousScan,
@@ -566,6 +572,8 @@ export {
 } from "../protocol/membership/tracking.js";
 export { privateListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
+export { BufferedFrame } from "../operations/payments/buffered-frame.js";
+export type { TransactionSize } from "../operations/workflow/compile.js";
 export {
   decideAddressCeiling,
   spentInputOf,

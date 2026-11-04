@@ -1,8 +1,4 @@
-import {
-  getBase64Decoder,
-  getCompiledTransactionMessageDecoder,
-  type Instruction,
-} from "@solana/kit";
+import { getBase64Decoder, type Instruction } from "@solana/kit";
 
 import type { ProofDataSourceContext, TreeContext, WalletKeys } from "@heliuslabs/zolana/client";
 import type { LatestBlockhash } from "@heliuslabs/zolana/internal";
@@ -104,8 +100,7 @@ import {
 } from "../workflow/selection.js";
 import { MERGE_ROOT_READ, readOutputKeys, ringRegistrySlots } from "../workflow/ring-reads.js";
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
-import { SIZE_PROBE_LIFETIME } from "../workflow/compile.js";
-import { MAX_TRANSACTION_ADDRESSES } from "../workflow/address-ceiling.js";
+import { fitsOneTransaction, SIZE_PROBE_LIFETIME, transactionSize } from "../workflow/compile.js";
 
 const base64 = getBase64Decoder();
 
@@ -334,24 +329,31 @@ async function buildRingMerge(
         );
     const [registry] = ringRegistrySlots(config, MERGE_ROOT_READ);
     if (registry === undefined) throw new RingError("RING_TRACKING_INVALID");
-    const compile: MergeCompile = async (data, lifetime, sealed) =>
+    const mergeInstruction = (
+      data: MergeTransactInstructionData,
+      sealed: SealedMergeRecord,
+    ): Promise<Instruction> =>
+      ringMergeInstruction({
+        ringProgramId: params.ringProgramId,
+        inputTree: params.client.tree,
+        outputTree: outputTree.tree,
+        payer: params.feePayer,
+        data,
+        outputRingDataHash: ZERO_32,
+        sealed,
+        tracking: registry,
+        trackingRevision: trackingRoot?.revision ?? 0n,
+        ...(ownerAccount === undefined ? {} : { owner: ownerAccount }),
+      });
+    const compile = async (
+      data: MergeTransactInstructionData,
+      lifetime: LatestBlockhash,
+      sealed: SealedMergeRecord,
+    ): Promise<Transaction> =>
       compileUnsignedTransaction({
         feePayer: params.feePayer,
         lifetime,
-        instructions: [
-          await ringMergeInstruction({
-            ringProgramId: params.ringProgramId,
-            inputTree: params.client.tree,
-            outputTree: outputTree.tree,
-            payer: params.feePayer,
-            data,
-            outputRingDataHash: ZERO_32,
-            sealed,
-            tracking: registry,
-            trackingRevision: trackingRoot?.revision ?? 0n,
-            ...(ownerAccount === undefined ? {} : { owner: ownerAccount }),
-          }),
-        ],
+        instructions: [await mergeInstruction(data, sealed)],
         computeUnitLimit: RING_MERGE_COMPUTE_UNIT_LIMIT,
       });
     const selected = entries.map((entry) => ringProofInput(entry, owner, params.client));
@@ -386,24 +388,34 @@ async function buildRingMerge(
     const wipe = (merge: PreparedMerge): void => {
       if (merge.rail.kind === "ringV2ZeroKey") merge.rail.seed.fill(0);
     };
-    let held: PreparedMerge | undefined;
+    // Rust `FittedMerge`, the longest prefix one transaction carries.
+    const { count, value: prepared } = await longestFitting({
+      count: entries.length,
+      minimum: MIN_MERGE_INPUTS,
+      prepare: prepareCount,
+      discard: wipe,
+      fits: async (candidate) =>
+        fitsOneTransaction(
+          transactionSize({
+            feePayer: params.feePayer,
+            instructions: [
+              await mergeInstruction(
+                sizingData(candidate, params.client.tree),
+                EMPTY_SEALED_RECORD,
+              ),
+            ],
+            computeUnitLimit: RING_MERGE_COMPUTE_UNIT_LIMIT,
+          }),
+        ),
+    });
     try {
-      // Rust `FittedMerge`, the longest prefix one transaction carries.
-      let count = entries.length;
-      let prepared = await prepareCount(count);
-      held = prepared;
-      let proofInputs = prepareProverMerge(prepared, params.client.tree);
-      while (
-        count > MIN_MERGE_INPUTS &&
-        !(await fitsOneTransaction(compile, prepared, proofInputs))
-      ) {
-        wipe(prepared);
-        count -= 1;
-        prepared = await prepareCount(count);
-        held = prepared;
-        proofInputs = prepareProverMerge(prepared, params.client.tree);
-      }
-      await compileProbe(compile, prepared, proofInputs);
+      // The minimum passes untested, a width past the limits refuses here.
+      await compile(
+        sizingData(prepared, params.client.tree),
+        SIZE_PROBE_LIFETIME,
+        EMPTY_SEALED_RECORD,
+      );
+      const proofInputs = prepareProverMerge(prepared, params.client.tree);
       const inputs = selected.slice(0, count);
       if (count < entries.length) {
         params.wallet._releaseReservation(retry.reservation.id);
@@ -468,7 +480,7 @@ async function buildRingMerge(
       };
     } finally {
       seed?.fill(0);
-      if (held !== undefined) wipe(held);
+      wipe(prepared);
     }
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
@@ -480,42 +492,38 @@ type RingMergeIntent = Extract<TransactionIntent, { kind: "ringMerge" }>;
 
 const MIN_MERGE_INPUTS = 2;
 
-type MergeCompile = (
-  data: MergeTransactInstructionData,
-  lifetime: LatestBlockhash,
-  sealed: SealedMergeRecord,
-) => Promise<Transaction>;
-
 /** Zeroed proofs over the real accounts size the transaction before any proof request. */
-function compileProbe(
-  compile: MergeCompile,
-  prepared: PreparedMerge,
-  proofInputs: ReturnType<typeof prepareProverMerge>,
-): Promise<Transaction> {
-  const preview = proofInputs.finish({
-    slot: { id: prepared.inputTreeId, utxoRoot: ZERO_32, nullifierRoot: ZERO_32 },
-    utxoRootIndex: 0,
-    nullifierRootIndex: 0,
-  });
-  return compile(
-    preview.instructionData({ a: ZERO_32, b: new Uint8Array(128) as Bytes128, c: ZERO_32 }),
-    SIZE_PROBE_LIFETIME,
-    EMPTY_SEALED_RECORD,
-  );
+function sizingData(prepared: PreparedMerge, tree: Address): MergeTransactInstructionData {
+  return prepareProverMerge(prepared, tree)
+    .finish({
+      slot: { id: prepared.inputTreeId, utxoRoot: ZERO_32, nullifierRoot: ZERO_32 },
+      utxoRootIndex: 0,
+      nullifierRootIndex: 0,
+    })
+    .instructionData({ a: ZERO_32, b: new Uint8Array(128) as Bytes128, c: ZERO_32 });
 }
 
-async function fitsOneTransaction(
-  compile: MergeCompile,
-  prepared: PreparedMerge,
-  proofInputs: ReturnType<typeof prepareProverMerge>,
-): Promise<boolean> {
+/** @internal The minimum is taken unmeasured. */
+export async function longestFitting<T>(
+  input: Readonly<{
+    count: number;
+    minimum: number;
+    prepare: (count: number) => Promise<T>;
+    fits: (value: T) => Promise<boolean>;
+    discard: (value: T) => void;
+  }>,
+): Promise<Readonly<{ count: number; value: T }>> {
+  let { count } = input;
+  let value = await input.prepare(count);
   try {
-    const { messageBytes } = await compileProbe(compile, prepared, proofInputs);
-    const { staticAccounts } = getCompiledTransactionMessageDecoder().decode(messageBytes);
-    return staticAccounts.length <= MAX_TRANSACTION_ADDRESSES;
+    while (count > input.minimum && !(await input.fits(value))) {
+      input.discard(value);
+      count -= 1;
+      value = await input.prepare(count);
+    }
+    return { count, value };
   } catch (cause) {
-    if ((cause as { code?: unknown } | undefined)?.code === "INTERFACE_TRANSACTION_TOO_LARGE")
-      return false;
+    input.discard(value);
     throw cause;
   }
 }

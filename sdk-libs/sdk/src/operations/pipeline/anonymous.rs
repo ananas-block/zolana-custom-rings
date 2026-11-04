@@ -105,8 +105,16 @@ pub struct AnonymousMove<'a> {
     /// The change returns to the sender.
     pub payments: Vec<RingPayment>,
     pub entry: EntrySpend,
+    pub wide_frames: WideFrames,
     /// Read only when the ring demands a co-signer.
     pub co_signer: Option<Address>,
+}
+
+/// A frame past one transaction settles from a buffer only when the caller's send path writes one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WideFrames {
+    Refuse,
+    Buffer,
 }
 
 /// A default-ring spend publishes the hidden owner's key, a move takes one only when allowed.
@@ -294,6 +302,10 @@ impl<'a> AnonymousMove<'a> {
                 })
             })?
             .with_shape(shape)
+            .map(|transfer| match self.wide_frames {
+                WideFrames::Buffer => transfer.with_buffered_settlement(),
+                WideFrames::Refuse => transfer,
+            })
     }
 }
 

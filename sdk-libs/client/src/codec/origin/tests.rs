@@ -1444,3 +1444,37 @@ mod settled_frame {
         assert_eq!(confirmed_transact(&groups, &groups[0].inner[0], RING), None);
     }
 }
+
+/// The buffer is closed by then, the settlement's own event is the only copy a reader needs.
+#[test]
+fn a_buffered_settlement_recovers_through_the_origin_after_its_buffer_closed() {
+    use custom_ring_interface::{frame_digest, settle_buffered_data, tag as ring_tag};
+    let (mut group, indexed) = confirmed_transfer_fixture();
+    let frame = vec![ring_tag::TRANSFER, 1, 2, 3];
+    group.outer.data = settle_buffered_data(&frame_digest(&frame).unwrap());
+    let event = ParsedInstruction::new(
+        RING,
+        Vec::new(),
+        [&[ring_tag::FRAME_EVENT][..], &frame].concat(),
+        2,
+    );
+    group.inner.insert(0, event);
+    let origin = ring_event_origin_in(core::slice::from_ref(&group), 0, RING).unwrap();
+    assert!(origin.ring_invoked);
+    assert_eq!(origin.transact, Some(frame));
+    assert_eq!(origin.event.kind(), ConfirmedEventKind::Transfer);
+    let mut bound = indexed;
+    origin.bind_transaction(&mut bound, RING).unwrap();
+}
+
+#[test]
+fn a_failed_settlement_yields_no_origin() {
+    let settled = withdrawing_transaction(Vec::new(), Vec::new());
+    let mut failed = serde_json::to_value(&settled).unwrap();
+    failed["meta"]["err"] = serde_json::json!("AccountNotFound");
+    let failed: EncodedConfirmedTransactionWithStatusMeta = serde_json::from_value(failed).unwrap();
+    assert!(matches!(
+        confirmed_origin(failed, 0, RING),
+        Err(AuditError::Client(ClientError::TransactionFailed(_)))
+    ));
+}

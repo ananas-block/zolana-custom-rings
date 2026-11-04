@@ -420,3 +420,67 @@ async fn a_merge_relays_with_one_wallet_call() {
         }
     );
 }
+
+/// The relay writes and pays, the one message a co-signer signs carries the digest alone.
+#[tokio::test]
+async fn a_frame_past_one_transaction_relays_through_a_buffer_the_relay_writes() {
+    use custom_ring_interface::{
+        frame_digest, settle_buffered_data, tag as ring_tag, WriteFrameIxData,
+    };
+    let fixture = Fixture::new().await;
+    let mut frame = vec![9; 6000];
+    frame[0] = ring_tag::TRANSFER;
+    *fixture.prover.frame.lock().expect("frame") = Some(frame.clone());
+    let quote = fixture.quote(RelayOperation::Anonymous).await;
+    let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
+
+    let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
+
+    assert!(matches!(step, RelayStep::Submitted { .. }), "{step:?}");
+    let sent = fixture.sent();
+    let (settle, writes) = sent.split_last().expect("a settlement");
+    assert!(writes.len() >= 2);
+    let mut rebuilt = vec![0; frame.len()];
+    for write in writes {
+        assert_eq!(write.message.static_account_keys()[0], fixture.fee_payer);
+        assert!(
+            write.message.instructions()[0].data.len() < solana_message::v1::MAX_TRANSACTION_SIZE
+        );
+        let data = &write.message.instructions()[0].data;
+        assert_eq!(data[0], ring_tag::WRITE_FRAME);
+        let parsed = WriteFrameIxData::parse(&data[1..]).unwrap();
+        let start = usize::from(parsed.offset);
+        rebuilt[start..start + parsed.bytes.len()].copy_from_slice(parsed.bytes);
+    }
+    assert_eq!(rebuilt, frame);
+    assert_eq!(settle.message.static_account_keys()[0], fixture.fee_payer);
+    assert_eq!(
+        settle.message.instructions()[0].data,
+        settle_buffered_data(&frame_digest(&frame).unwrap())
+    );
+}
+
+/// Past the CPI limit no buffer can settle it, nothing is written and nothing is paid.
+#[tokio::test]
+async fn a_frame_past_the_cpi_limit_is_refused_before_any_write() {
+    use custom_ring_interface::{tag as ring_tag, MAX_FRAME_LEN};
+    let fixture = Fixture::new().await;
+    let mut frame = vec![9; MAX_FRAME_LEN + 1];
+    frame[0] = ring_tag::TRANSFER;
+    *fixture.prover.frame.lock().expect("frame") = Some(frame);
+    let quote = fixture.quote(RelayOperation::Anonymous).await;
+    let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
+    let serde_json::Value::Object(params) = serde_json::to_value(request).expect("json") else {
+        panic!("request is no object");
+    };
+    let refused = fixture
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, params)
+        .await;
+    assert!(
+        matches!(&refused, Err(jsonrpsee::MethodsError::JsonRpc(_))),
+        "{refused:?}"
+    );
+    assert!(fixture.sent().is_empty());
+}
+

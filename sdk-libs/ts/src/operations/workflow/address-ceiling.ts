@@ -1,5 +1,10 @@
 /** The address ceiling of one compiled transaction, Rust `validation::address_ceiling`. */
-import type { Address, Bytes32, Instruction } from "@heliuslabs/zolana/interface";
+import {
+  TRANSACTION_SIZE_LIMIT,
+  type Address,
+  type Bytes32,
+  type Instruction,
+} from "@heliuslabs/zolana/interface";
 import {
   equalBytes,
   isZero,
@@ -10,9 +15,14 @@ import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import type { ProofInputUtxo } from "@heliuslabs/zolana/transaction";
 
 import { RingError } from "../../protocol/error.js";
-
-/** Rust `v1::MAX_ADDRESSES`. */
-export const MAX_TRANSACTION_ADDRESSES = 64;
+import { MAX_FRAME_LEN } from "../../protocol/transaction/frame-buffer.js";
+import { BufferedFrame } from "../payments/buffered-frame.js";
+import {
+  fitsOneTransaction,
+  MAX_TRANSACTION_ADDRESSES,
+  transactionSize,
+  type TransactionSize,
+} from "./compile.js";
 
 /** One real input of the transaction, as SPP merge groups it. */
 export interface SpentInput {
@@ -42,8 +52,10 @@ export interface MergeGroup {
 }
 
 export type CeilingDecision =
-  | Readonly<{ kind: "underCeiling"; addresses: number }>
-  /** The fewest merges under the ceiling. */
+  | Readonly<{ kind: "inline"; size: TransactionSize }>
+  /** The frame settles from a buffer, the size is the settlement's. */
+  | Readonly<{ kind: "buffered"; size: TransactionSize }>
+  /** `addresses` counts one nullifier PDA left per merged note. */
   | Readonly<{ kind: "mergeFirst"; groups: readonly MergeGroup[]; addresses: number }>;
 
 export async function spentInputOf(input: ProofInputUtxo, tree: Address): Promise<SpentInput> {
@@ -60,35 +72,61 @@ export async function spentInputOf(input: ProofInputUtxo, tree: Address): Promis
 }
 
 /** Rust `AddressCeiling::decide`, `RING_ADDRESS_CEILING` when merging every valid group falls short. */
-export function decideAddressCeiling(
+export async function decideAddressCeiling(
   input: Readonly<{
     payer: Address;
     instruction: Instruction;
+    computeUnitLimit: number;
+    priorityFeeLamports?: bigint;
+    setupInstructions?: readonly Instruction[];
     inputs: readonly SpentInput[];
     mergeCapacity: MergeCapacity;
   }>,
-): CeilingDecision {
-  const { inputs } = input;
-  const addresses = (mergedAway: ReadonlySet<Address>): number =>
-    new Set([
-      input.payer,
-      input.instruction.programAddress,
-      ...(input.instruction.accounts ?? [])
-        .map((account) => account.address)
-        .filter((address) => !mergedAway.has(address)),
-    ]).size;
-  const compiled = addresses(new Set());
-  if (compiled <= MAX_TRANSACTION_ADDRESSES)
-    return Object.freeze({ kind: "underCeiling", addresses: compiled });
+): Promise<CeilingDecision> {
+  const { inputs, instruction, payer } = input;
+  const frame = instruction.data?.length ?? 0;
+  // Runs before the compile, the kit refuses a frame past its u16 length.
+  if (frame > MAX_FRAME_LEN)
+    throw new RingError("RING_FRAME_TOO_LARGE", {
+      details: { bytes: frame, limit: MAX_FRAME_LEN },
+    });
+  const sized = (form: Instruction, mergedAway: ReadonlySet<Address>): TransactionSize =>
+    transactionSize({
+      feePayer: payer,
+      computeUnitLimit: input.computeUnitLimit,
+      ...(input.priorityFeeLamports === undefined
+        ? {}
+        : { priorityFeeLamports: input.priorityFeeLamports }),
+      ...(input.setupInstructions === undefined
+        ? {}
+        : { setupInstructions: input.setupInstructions }),
+      instructions: [
+        {
+          ...form,
+          accounts: (form.accounts ?? []).filter((account) => !mergedAway.has(account.address)),
+        },
+      ],
+    });
+  const none = new Set<Address>();
+  const inline = sized(instruction, none);
+  if (fitsOneTransaction(inline)) return Object.freeze({ kind: "inline", size: inline });
+  // Past the byte ceiling only the settlement's own compiled count decides.
+  const form =
+    inline.bytes > TRANSACTION_SIZE_LIMIT
+      ? (await BufferedFrame.of(instruction, payer, 0n)).settle()
+      : instruction;
+  const compiled = sized(form, none);
+  if (compiled.addresses <= MAX_TRANSACTION_ADDRESSES)
+    return Object.freeze({ kind: "buffered", size: compiled });
   const mergedAway = new Set<Address>();
   const chosen: MergeGroup[] = [];
-  let afterMerging = compiled;
+  let afterMerging = compiled.addresses;
   for (const group of mergeGroups(inputs, input.mergeCapacity)) {
     // The merged note's own nullifier PDA replaces one of the group's.
     for (const position of group.inputs.slice(1))
       mergedAway.add((inputs[position] as SpentInput).nullifierPda);
     chosen.push(group);
-    afterMerging = addresses(mergedAway);
+    afterMerging = sized(form, mergedAway).addresses;
     if (afterMerging <= MAX_TRANSACTION_ADDRESSES)
       return Object.freeze({
         kind: "mergeFirst",
@@ -98,7 +136,7 @@ export function decideAddressCeiling(
   }
   throw new RingError("RING_ADDRESS_CEILING", {
     details: {
-      compiled,
+      compiled: compiled.addresses,
       limit: MAX_TRANSACTION_ADDRESSES,
       afterMerging,
       dataNotes: inputs.filter(carriesData).length,
