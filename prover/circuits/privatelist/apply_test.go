@@ -25,7 +25,6 @@ func applyCircuit(t testing.TB, writes int) *privatelist.ApplyCircuit {
 	return c
 }
 
-// applied assigns the batch as an honest curator proves it, the host statement is the program's.
 func applied(t testing.TB, tree *ringprivatelist.Tree, width int, restrictive bool, writes []ringprivatelist.Applied, oldRoot *big.Int) *privatelist.ApplyCircuit {
 	t.Helper()
 	c := applyCircuit(t, width)
@@ -70,7 +69,6 @@ func setBlock(owner *big.Int) ringprivatelist.Change {
 	return ringprivatelist.Change{Owner: owner, ListSalt: salt, Mask: privatelist.BlockBit, Value: privatelist.BlockBit}
 }
 
-// A batch writes a salted position and another owner's salt 0 position, a later batch edits a written leaf.
 func TestApplyWritesEachPositionKindThenEditsALeaf(t *testing.T) {
 	curator := ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
 	tag := ringprivatelist.ListTag(t, salt)
@@ -131,13 +129,11 @@ func TestApplyRestrictiveBit(t *testing.T) {
 			}
 			_, honest := honestBatch(t, 2, tt.restrictive, changes...)
 			bound := ringkey.Bind(t, applyCircuit(t, 2), honest)
-			// The program's statement under the opposite bit fails at the binding alone.
 			bound.RefuseStatement(t, honest, statementOf(honest, !tt.restrictive))
 		})
 	}
 }
 
-// Padding past the count cannot raise the bit.
 func TestApplyPaddingNeverRestricts(t *testing.T) {
 	_, honest := honestBatch(t, 2, false, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: privatelist.AllowBit, Value: privatelist.AllowBit})
 	bound := ringkey.Bind(t, applyCircuit(t, 2), honest)
@@ -145,7 +141,6 @@ func TestApplyPaddingNeverRestricts(t *testing.T) {
 	bound.RequireSolved(t, honest)
 }
 
-// Each case changes one wire of an honest batch, the host statement follows it and a predicate refuses.
 func TestApplyRefusals(t *testing.T) {
 	block := privatelist.BlockBit
 	tests := []struct {
@@ -182,11 +177,10 @@ func TestApplyRefusals(t *testing.T) {
 	}
 }
 
-// Without the mask rule a write could change a bit while claiming the permissive form.
 func TestApplyCannotHideARestrictionFromTheBit(t *testing.T) {
 	tree, honest := honestBatch(t, 2, true, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: privatelist.BlockBit, Value: privatelist.BlockBit})
 	bound := ringkey.Bind(t, applyCircuit(t, 2), honest)
-	// The same published leaf with a permissive mask keeps no block bit, so it opens another leaf.
+	// A permissive mask drops the block bit and derives another leaf than the published one.
 	honest.Writes[0].Mask, honest.Writes[0].Value = privatelist.AllowBit, privatelist.AllowBit
 	bindStatement(t, honest, false)
 	bound.Refuse(t, honest)
@@ -211,7 +205,6 @@ func TestReaderRebuildsTheRootFromPublishedWrites(t *testing.T) {
 	if rebuilt.Root().Cmp(curator.Tree.Root()) != 0 {
 		t.Fatal("rebuilt root differs")
 	}
-	// A salt holder opens the rebuilt tree with no curator.
 	if opened := rebuilt.Read(t, alice, salt); !opened.Written || opened.Lists != 0 {
 		t.Fatalf("opened %+v", opened)
 	}
@@ -220,7 +213,6 @@ func TestReaderRebuildsTheRootFromPublishedWrites(t *testing.T) {
 	}
 }
 
-// Pins the stated disclosure, a dictionary over public keys finds salt 0 entries and no enrolled owner.
 func TestDictionaryFindsOnlySaltZeroEntries(t *testing.T) {
 	curator := ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
 	curator.WriteSalted(t, alice, salt, ringprivatelist.ListTag(t, salt), privatelist.BlockBit, privatelist.BlockBit)
