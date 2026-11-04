@@ -48,7 +48,7 @@ import {
   decodeRingPolicy,
 } from "../../../src/protocol/codec/ring-codecs.js";
 import { escrowKeyHash } from "../../../src/protocol/membership/member-opening.js";
-import { checkEscrowedRecipients, readMemberRecords } from "../../../src/rpc/registered-record.js";
+import { readMemberRecords } from "../../../src/rpc/registered-record.js";
 import { sealAudit } from "../../../src/proof/audit-proof.js";
 import { outflowApproval, readPolicy } from "../../../src/proof/policy-proof.js";
 import type { ProvenRingTransfer } from "../../../src/operations/workflow/pipeline.js";
@@ -1276,28 +1276,6 @@ describe("delegate rail", () => {
     );
   });
 
-  it("refuses the delegate as the co-signer of its move before any proof", async () => {
-    const source = ShieldedKeypair.generate();
-    const recipient = ShieldedKeypair.generate();
-    const delegate = randomAddress();
-    const fixture = await ringFixture({
-      mode: "confidentialEscrow",
-      table: EMPTY_TABLE,
-      delegate,
-      records: escrowed([source, recipient]),
-      coSigner: { signer: delegate, scope: RING_COSIGN_TRANSFERS },
-    });
-    await expect(
-      move({ fixture, delegate, source, recipients: [recipient] }).prove(fixture.client),
-    ).rejects.toThrow(
-      ringError("RING_COSIGNER_REQUIRED", {
-        reason: "coSignerIsDelegate",
-        expected: delegate,
-      }),
-    );
-    expect(fixture.ringRequests).toHaveLength(0);
-    expect(fixture.sppCalls).toHaveLength(0);
-  });
 });
 
 describe("member records", () => {
@@ -1326,29 +1304,6 @@ describe("member records", () => {
     const nullifierPk = registered.shieldedAddress().nullifierPublicKey;
     expect(present?.escrowed(nullifierPk)?.record.member).toEqual(identity(registered));
     expect(present?.escrowed(stranger.shieldedAddress().nullifierPublicKey)).toBeUndefined();
-  });
-
-  it("refuses the first recipient without an escrowed key on a key escrow ring alone", async () => {
-    const registered = ShieldedKeypair.generate();
-    const stranger = ShieldedKeypair.generate();
-    const check = (fixture: Fixture, recipients: readonly ShieldedKeypair[]) =>
-      checkEscrowedRecipients({
-        client: fixture.client,
-        ringProgramId: fixture.ringProgramId,
-        recipients: recipients.map((keys) => keys.shieldedAddress()),
-      });
-    const escrowing = await ringFixture({
-      mode: "confidentialEscrow",
-      table: EMPTY_TABLE,
-      records: escrowed([registered]),
-    });
-    await expect(check(escrowing, [registered])).resolves.toBeUndefined();
-    await expect(check(escrowing, [registered, stranger])).rejects.toThrow(
-      ringError("RING_UNREGISTERED_OUTPUT_KEY", {
-        owner: Buffer.from(identity(stranger)).toString("hex"),
-      }),
-    );
-    await expect(check(await ringFixture(), [registered, stranger])).resolves.toBeUndefined();
   });
 });
 

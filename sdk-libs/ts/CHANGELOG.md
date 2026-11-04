@@ -8,6 +8,7 @@
 - A scan worker answers every message, `scanWorkerResponse` replies with an error code, and the `ask` of `scanWorkerMatcher` returns a `ScanWorkerResponse` while a reported failure raises `RING_SCAN_WORKER_FAILED`.
 - A wallet reads a note under its ring key and the zero key, `AnonymousWallet.noteState`, `exposedNotes` and `balances` report a zero-key note as `exposedIfSpent` apart from the spendable balance with `spent` first, no automatic selection or merge takes one, and a shortfall they could cover raises `RING_UNFUNDED_PAST_EXPOSURE` naming the amount.
 - `RingRpc.getWalletStatus` returns a wallet's notes and balance as of `historyThrough`, `RingRpc.getSpendCoverage` gives the ring authority its unresolved spends, and a sender's `RingWalletView` holds its own notes alone with no `payloadErrors`.
+- `RingRpc.getUnspentUtxos`, `readSignedUnspentUtxos`, `RingUnspentUtxosRequest`, `unspentUtxosAttestation`, `GET_UNSPENT_UTXOS` and their result types are removed, along with `checkEscrowedRecipients`, the `coSignerIsDelegate` refusal, and `RingProgramError.anonymousRingDataNotZero` and `viewTagNotCanonical` → read a wallet through `RingRpc.getWalletStatus`.
 
 - `AnonymousWallet.absorb` rejects a scan after its starting history changes, and new ring watches include retained viewing keys.
 - `fullScan` recovers from ring history without tag discovery, and merge recovery checks reconstructed output commitments against complete input history.

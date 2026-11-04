@@ -128,7 +128,7 @@ export type {
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 export { MemberOpeningRead } from "../protocol/membership/member-opening.js";
 export type { EscrowedRecord } from "../protocol/membership/member-opening.js";
-export { checkEscrowedRecipients, readMemberRecords } from "../rpc/registered-record.js";
+export { readMemberRecords } from "../rpc/registered-record.js";
 export type { RingRecordReadClient } from "../rpc/registered-record.js";
 export { NF_KEY_ENC_INFO } from "../crypto/audit/audit.js";
 export {
@@ -463,9 +463,6 @@ export {
   RING_READ_CURSOR_LIMIT,
   RING_READ_PAGE_LIMIT,
   RingAuditedUtxosRequest,
-  RingUnspentUtxosRequest,
-  GET_UNSPENT_UTXOS,
-  unspentUtxosAttestation,
   RingAuditorKeyRequest,
   RingAuthorityTransferRequest,
   RingReadRequest,
@@ -488,13 +485,6 @@ export type {
   AuditedMergesPage,
   AuditedRingMerge,
   UnresolvedRingMerge,
-  SignedUnspentUtxosRead,
-  RingUnspentUtxo,
-  RingUnspentUtxoKind,
-  RingCoverage,
-  RingUnresolvedReason,
-  RingUnresolvedHistory,
-  RingUnspentUtxosPage,
   DecryptedRingInput,
   DecryptedRingDefaultInput,
   DecryptedOutputContext,

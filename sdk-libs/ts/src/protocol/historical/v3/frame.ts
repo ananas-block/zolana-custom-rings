@@ -79,7 +79,7 @@ export interface PolicyProof {
   readonly recipients: PolicyRecipients;
 }
 
-/** Fixed by the rail, Rust `PolicyRecipients`. */
+/** Fixed by the rail. */
 export type PolicyRecipients =
   /** The anonymous rail, every recipient zero. */
   | Readonly<{ kind: "hidden" }>
@@ -462,7 +462,7 @@ export function railShapes(rail: RingRail): readonly Shape[] {
   return rail === "delegate" ? RING_AUTHORITY_SHAPES : SPP_SUPPORTED_SHAPES;
 }
 
-/** The audit key the header names, before the outputs are read, Rust `RingRail::audit_shape`. */
+/** The audit key the header names, before the outputs are read. */
 function auditShape(rail: RingRail, header: FrameHeader): AuditShape {
   const { nIn, nOut, inputCount: inputs, outputCount: outputs, flags } = header;
   const supported = railShapes(rail).some(

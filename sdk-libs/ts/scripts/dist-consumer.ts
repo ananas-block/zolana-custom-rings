@@ -65,7 +65,6 @@ export {
   ringDepositContextHash,
   ringDepositPublicInputHash,
   MemberOpeningRead,
-  checkEscrowedRecipients,
   readMemberRecords,
 } from "@heliuslabs/zolana-custom-rings";
 export type {

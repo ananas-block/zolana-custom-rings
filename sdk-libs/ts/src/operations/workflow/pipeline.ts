@@ -389,7 +389,6 @@ async function assembleStagedTransfer<T>(
           spend.inProofOwner === undefined
             ? staged.ownerSigners
             : [...staged.ownerSigners, encodeBase58(spend.inProofOwner)],
-        ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
       },
       context,
     );

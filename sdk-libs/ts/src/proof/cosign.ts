@@ -107,20 +107,18 @@ export async function resolveRingCoSigner(
     supplied?: Address;
     /** Empty on the anonymous and delegate rails. */
     ownerSigners: readonly Address[];
-    delegate?: Address;
   }>,
   context?: RequestContext,
 ): Promise<RingCoSignerAccounts | undefined> {
-  const { client, ringProgramId, ownerSigners, delegate, supplied: signer } = input;
+  const { client, ringProgramId, ownerSigners, supplied: signer } = input;
   const requirement = demandRequirement(input.demand, input.config);
   if (requirement === undefined) return undefined;
   if (signer === undefined)
     throw new RingError("RING_COSIGNER_REQUIRED", {
       details: { reason: "missing", ringProgramId, classes: requirement.classes },
     });
-  // Rust `CoSignerIsOwner` and `CoSignerIsDelegate`, dual control needs a second key.
+  // Rust `CoSignerIsOwner`, dual control needs a second key.
   if (ownerSigners.includes(signer)) throw coSignerRequired("coSignerIsOwner", signer);
-  if (signer === delegate) throw coSignerRequired("coSignerIsDelegate", signer);
   const record = await fetchRingCoSignerRecord(client, ringProgramId, signer, context);
   if (record === undefined) throw coSignerRequired("noRecord", signer);
   checkCoSigner(requirement, record);

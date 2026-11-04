@@ -45,7 +45,8 @@ All wire fields use camel case.
 | `getWalletActivity` | Ring, wallet, page, and read authorization | The wallet's own part of each transaction it is a party to |
 | `getAuditedMerges` | Ring, page, and read authorization | Merge output records and unresolved merges |
 | `getAuditedUtxos` | Ring, 1 to 100 UTXO hashes, and read authorization | `utxos`, in request order, the opening of each hash the service opened, `null` for any other |
-| `getUnspentUtxos` | Ring, the owner's record member, an optional cursor and wallet, and read authorization | `utxos`, `coverage`, `unresolved` and `cursor`. See [Balance status](#balance-status) |
+| `getWalletStatus` | Ring, wallet, an optional cursor, and read authorization | `historyThrough`, `enrollment`, `balances`, `notes` and `cursor`. See [Balance status](#balance-status) |
+| `getSpendCoverage` | Ring, authority, timestamp, nonce, and the authority's signature | `historyThrough`, the nullifier counts by state, `unresolvedReal`, `unreadable` and `integrityFaults`. See [Balance status](#balance-status) |
 | `setReaderGrant` | Ring, optional wallet, reader, `grant` or `revoke`, timestamp, nonce, and the signature of the wallet or, without one, of the policy authority | The action the service holds for the grant |
 
 `ringDeposits` walks ring history backwards from the newest signature. A deposit publishes its asset and amount, so the method needs no auditor key and no read authorization. Its `limit` counts signatures examined rather than deposits found, so a page can hold no deposits and still have history behind it. The default limit is 50 and the service clamps it to 200.
@@ -191,7 +192,7 @@ The audit proof binds every disclosure field to the settled notes. The recipient
 
 An anonymous transfer that spends no default-ring note names its first spent note by its UTXO hash. It names every later one by the first 16 bytes of its hash. The service keeps every note it opened in process memory and opens such an input from there. It finds a later input among the ring notes of the first note's owner that carry its prefix. When more of the owner's ring notes carry one prefix than inputs name it, each such input lists them as `candidates` and carries no opening. A background backfill reads the ring history from where it stopped and opens every transfer, audited deposit and merge, so a later page finds the notes they created. A deposit's capsule names the owner hash and no nullifier key, so a deposited note carries none, and neither does the sender of a transfer whose first spent note was deposited. A transfer whose spent note the service has not opened yet still returns every output. A first note it lacks reads as `unseenHash` with the full UTXO hash, and the transfer carries no `sender`, so `getWalletActivity` serves that transfer to the sender only as the owner of an output. A later prefix it lacks reads as `unseenPrefix`. A later read resolves each input and names the sender once the service holds the note. The outputs enter the note store at the first read. A restart rebuilds the notes from the ring history.
 
-A transfer's evidence names every spent note by its full hash. The service reads an unseen hash as `unseen`, the outputs stay open, and the row holds `coverage.complete` false until the note opens.
+A transfer's evidence names every spent note by its full hash. The service reads an unseen hash as `unseen`, the outputs stay open, and the spend stays unresolved until the note opens.
 
 `getAuditedUtxos` serves the same notes from memory. A held output reads `null` until it opens, and the response context can already be past its slot. Its read authorization binds the cluster, the service key, the ring, the timestamp, the nonce and the SHA-256 digest of the hashes in request order.
 
@@ -207,9 +208,9 @@ Disclosure errors leave unresolved history. An output waits for a missing escrow
 
 ## Balance status
 
-`getUnspentUtxos` lists notes not seen spent through the finalized `coverage.through_slot`. Notes outside the reported coverage window are excluded. `coverage.complete` requires a terminal page and no unresolved input in that window. Activity after the boundary can spend a listed note.
+`getWalletStatus` lists one wallet's notes as of `historyThrough`, the finalized slot the service verified. Only an unreadable frame holds `historyThrough` back, and an unresolved spend never does. A note created past `historyThrough` stays out, so a spent input and its change never both count. `balances` sums the `unspent` notes over every page. A note with no readable secret reads `unknown` and never counts, and a zero key note of an Ed25519 owner reads `exposedIfSpent` outside the balance. Activity after `historyThrough` can spend a listed note.
 
-A wallet read names the owner the wallet grant covers. It gets `coverage` and an empty `unresolved`, because a row names another owner's spend links. A ring-wide grant gets each unresolved row with the commitments the auditor cannot name.
+`getSpendCoverage` is the one read that names an unresolved spend. Only the ring authority signs it, and a reader grant never reaches it. It lists the unresolved rows, the unreadable frames and each repeated nullifier as an `integrityFaults` row.
 
 `finalized_spent_commitments` records inputs before a merge transition applies. Repeated events do not change the first spend. The projection does not read the separate `spent_commitments` table. Historical frames with incomplete input evidence keep coverage incomplete.
 
