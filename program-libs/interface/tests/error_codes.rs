@@ -173,7 +173,6 @@ fn storage_error_codes_are_stable() {
         (Error::InvalidOwnerGrant, 9031),
         (Error::InvalidReaderKey, 9032),
         (Error::InvalidAuditorKey, 9033),
-        (Error::TrackingRootBelowFloor, 9034),
     ];
     for (error, code) in pins {
         assert_eq!(error as u32, code, "{error:?}");

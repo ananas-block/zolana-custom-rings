@@ -207,11 +207,15 @@ fn read_private_allow_list(ring: &mut Ring, pair: Address, floor: u64) {
 }
 
 fn pin_records(ring: &mut Ring, pair: Address, floor: u64) {
-    let mut records: StorageRegistry = ring.read(&RECORDS);
+    pin_registry(ring, RECORDS, pair, floor);
+}
+
+fn pin_registry(ring: &mut Ring, address: Address, pair: Address, floor: u64) {
+    let mut records: StorageRegistry = ring.read(&address);
     records.tracking_registry = pair;
     records.tracking_floor = Revision::from(floor);
     ring.store(
-        RECORDS,
+        address,
         STORAGE_PROGRAM_ID,
         bytemuck::bytes_of(&records).to_vec(),
     );
@@ -264,6 +268,68 @@ fn an_unpaired_private_source_cannot_name_an_old_tracking_root() {
         transfer_reading(&mut ring, &[RECORDS], &data),
         CustomRingError::TrackingRootBelowFloor,
     );
+}
+
+#[test]
+fn a_curated_public_ring_reads_a_curator_pinned_to_its_own_tracking_registry() {
+    let fixture = Fixture::new();
+    let mut ring = subscriber_ring();
+    store_tracking_history(&mut ring);
+    pin_registry(
+        &mut ring,
+        CURATOR,
+        Address::new_from_array([0x61; 32]),
+        u64::MAX,
+    );
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
+    data.policy.as_mut().unwrap().curator_revision = Some(Revision::from(4));
+    data.tracking_revision = Revision::from(2);
+    reaches_verification(transfer_reading(&mut ring, &[RECORDS, CURATOR], &data));
+}
+
+#[test]
+fn a_private_list_mapped_to_a_curator_on_another_tracking_registry_is_refused() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Policy);
+    let authority = ring.holder(RingRole::Policy);
+    ring.store_registry(CURATOR, &Keypair::new().pubkey(), &[root(4, [0x0c; 32])]);
+    let curated = PolicyTableIxData {
+        sources: vec![SourceSpec {
+            list_id: ListId::PrivateAllow as u8,
+            source: 1,
+        }],
+        ..list_table(ListId::PrivateAllow, Vec::new())
+    };
+    ring.send(
+        UpdatePolicyIx {
+            authority: authority.pubkey(),
+            update: UpdatePolicyIxData::Rules(curated),
+            trailing: &[CURATOR],
+        }
+        .instruction(),
+        &[&authority],
+    )
+    .unwrap();
+    pin_registry(&mut ring, CURATOR, Address::new_from_array([0x61; 32]), 0);
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
+    data.policy.as_mut().unwrap().curator_revision = Some(Revision::from(4));
+    refused(
+        transfer_reading(&mut ring, &[RECORDS, CURATOR], &data),
+        CustomRingError::SaltedSourceOtherTracking,
+    );
+    pin_registry(&mut ring, CURATOR, tracking_registry(), 0);
+    reaches_verification(transfer_reading(&mut ring, &[RECORDS, CURATOR], &data));
+}
+
+#[test]
+fn a_ring_with_no_salted_list_answers_to_no_floor_of_its_pinned_records() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Policy);
+    store_tracking_history(&mut ring);
+    pin_records(&mut ring, tracking_registry(), 3);
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
+    data.tracking_revision = Revision::from(2);
+    reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
 }
 
 #[test]

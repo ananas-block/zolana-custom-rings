@@ -380,6 +380,8 @@ pub struct LiveRoots<'a> {
     pub curator: Option<&'a StorageRegistry>,
     /// Bound by address to the ring's pin.
     pub tracking: &'a TrackingRegistry,
+    /// `RingPolicy::tracking_floor` of the sources passed, zero with no salted read.
+    pub tracking_floor: Revision,
     pub slot: u64,
 }
 
@@ -396,10 +398,8 @@ impl LiveRoots<'_> {
 
     /// Refused below a salted source's floor.
     pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
-        for source in [self.own, self.curator].into_iter().flatten() {
-            source
-                .check_tracking_revision(revision)
-                .map_err(|_| CustomRingError::TrackingRootBelowFloor)?;
+        if revision.value() < self.tracking_floor.value() {
+            return Err(CustomRingError::TrackingRootBelowFloor);
         }
         self.tracking
             .root(revision, self.slot)
@@ -660,16 +660,32 @@ impl RingPolicy {
         address: &Address,
         source: &StorageRegistry,
     ) -> Result<(), CustomRingError> {
-        // A mapped private list needs the pin. An unpaired source serving one takes no floor, and
-        // a blocked enrolled owner then proves itself unenrolled under an old tracking root.
-        let needs_pin = self
-            .salted()
-            .iter()
-            .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address);
-        match source.tracking_registry == self.tracking || (!needs_pin && !source.is_private()) {
+        // An unpaired source serving a private list takes no floor, and a blocked enrolled owner
+        // then proves itself unenrolled under an old tracking root. A public read holds no such
+        // risk, one curator serves many rings and pins at most one of their registries.
+        match source.tracking_registry == self.tracking || !self.reads_salted(address) {
             true => Ok(()),
             false => Err(CustomRingError::SaltedSourceOtherTracking),
         }
+    }
+
+    /// The floor a frame's tracking root answers to through `source`, zero with no salted read.
+    ///
+    /// The one exception to tracking grace, a stale root could prove a blocked owner unenrolled.
+    /// A source's floor counts revisions of the registry it pins, so a public curator's floor
+    /// says nothing of the ring's registry and comparing them would refuse a live root.
+    pub fn tracking_floor(&self, address: &Address, source: &StorageRegistry) -> Revision {
+        match self.reads_salted(address) {
+            true => source.tracking_floor,
+            false => Revision::default(),
+        }
+    }
+
+    /// The ring maps a private list to the source at `address`.
+    fn reads_salted(&self, address: &Address) -> bool {
+        self.salted()
+            .iter()
+            .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address)
     }
 
     pub fn own_registry(&self, read: RootRead) -> Option<Address> {

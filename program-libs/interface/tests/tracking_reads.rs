@@ -51,52 +51,33 @@ fn source(paired: Address, floor: u64) -> StorageRegistry {
 
 fn read(
     tracking: &TrackingRegistry,
-    own: &StorageRegistry,
+    tracking_floor: u64,
     revision: u64,
 ) -> Result<[u8; 32], CustomRingError> {
     LiveRoots {
-        own: Some(own),
+        own: None,
         curator: None,
         tracking,
+        tracking_floor: Revision::from(tracking_floor),
         slot: 1,
     }
     .tracking(Revision::from(revision))
 }
 
 #[test]
-fn a_served_root_below_a_salted_floor_is_refused() {
+fn a_served_root_below_the_floor_is_refused() {
     let tracking = tracking_at(&[5, 4]);
-    let private = source(key(9), 5);
-    assert_eq!(read(&tracking, &private, 5), Ok([6; 32]));
+    assert_eq!(read(&tracking, 5, 5), Ok([6; 32]));
     assert_eq!(
-        read(&tracking, &private, 4),
+        read(&tracking, 5, 4),
         Err(CustomRingError::TrackingRootBelowFloor)
     );
 }
 
 #[test]
-fn a_public_source_keeps_the_tracking_grace() {
+fn a_zero_floor_keeps_the_tracking_grace() {
     let tracking = tracking_at(&[5, 4]);
-    assert_eq!(
-        read(&tracking, &source(Address::default(), 0), 4),
-        Ok([5; 32])
-    );
-}
-
-#[test]
-fn a_floor_above_the_named_root_refuses_a_curator_source_too() {
-    let tracking = tracking_at(&[5, 4]);
-    let private = source(key(9), 5);
-    let live = LiveRoots {
-        own: None,
-        curator: Some(&private),
-        tracking: &tracking,
-        slot: 1,
-    };
-    assert_eq!(
-        live.tracking(Revision::from(4)),
-        Err(CustomRingError::TrackingRootBelowFloor)
-    );
+    assert_eq!(read(&tracking, 0, 4), Ok([5; 32]));
 }
 
 fn salted_ring(curator: Address) -> RingPolicy {
@@ -136,16 +117,63 @@ fn a_source_serving_a_salted_list_pins_the_tracking_registry() {
     }
 }
 
+fn public_ring(curator: Address) -> RingPolicy {
+    let mut ring = *ring();
+    ring.records = key(5);
+    let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
+    sources[ListId::Block.slot()] = SourceSlot {
+        list_id: ListId::Block as u8,
+        registry: curator,
+    };
+    ring.set_policy(PolicyUpdate {
+        sources,
+        rules: RuleTable::builder()
+            .rule(Rule::forbid(Subject::Sender, ListId::Block))
+            .build()
+            .encode(),
+        slot: 5,
+    })
+    .unwrap();
+    ring
+}
+
 #[test]
-fn a_source_serving_no_salted_list_needs_no_pin_and_no_foreign_one() {
-    let ring = salted_ring(key(7));
+fn a_curated_public_ring_reads_a_source_pinned_to_another_registry() {
+    let ring = public_ring(key(7));
+    for pin in [Address::default(), key(8), key(9)] {
+        assert_eq!(ring.check_source_pair(&key(7), &source(pin, 0)), Ok(()));
+    }
+}
+
+#[test]
+fn a_public_read_answers_to_no_floor_of_its_source() {
+    let foreign = source(key(8), 100);
     assert_eq!(
-        ring.check_source_pair(&key(5), &source(Address::default(), 0)),
-        Ok(())
+        public_ring(key(7)).tracking_floor(&key(7), &foreign),
+        Revision::from(0)
+    );
+    let own = source(key(9), 100);
+    assert_eq!(
+        public_ring(Address::default()).tracking_floor(&key(5), &own),
+        Revision::from(0)
+    );
+}
+
+#[test]
+fn a_salted_read_answers_to_its_source_floor_and_no_other() {
+    let ring = salted_ring(key(7));
+    let source_floor = source(key(9), 100);
+    assert_eq!(
+        ring.tracking_floor(&key(7), &source_floor),
+        Revision::from(100)
     );
     assert_eq!(
-        ring.check_source_pair(&key(5), &source(key(8), 0)),
-        Err(CustomRingError::SaltedSourceOtherTracking)
+        ring.tracking_floor(&key(5), &source_floor),
+        Revision::from(0)
+    );
+    assert_eq!(
+        salted_ring(Address::default()).tracking_floor(&key(5), &source_floor),
+        Revision::from(100)
     );
 }
 

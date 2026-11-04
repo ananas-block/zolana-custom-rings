@@ -26,6 +26,5 @@
   "NoEnrollmentsNamed": 9030,
   "InvalidOwnerGrant": 9031,
   "InvalidReaderKey": 9032,
-  "InvalidAuditorKey": 9033,
-  "TrackingRootBelowFloor": 9034
+  "InvalidAuditorKey": 9033
 }

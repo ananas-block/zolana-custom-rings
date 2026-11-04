@@ -733,11 +733,6 @@ fn a_zero_grace_write_records_the_floor_on_any_pinned_source() {
             })
             .unwrap();
         assert_eq!(source.tracking_floor, Revision::from(5));
-        assert_eq!(
-            source.check_tracking_revision(4.into()),
-            Err(StorageError::TrackingRootBelowFloor)
-        );
-        assert_eq!(source.check_tracking_revision(5.into()), Ok(()));
         assert_eq!(source.root(0.into(), 1), Err(StorageError::RootExpired));
         source
             .update(RootUpdate {
@@ -758,7 +753,7 @@ fn a_zero_grace_write_records_the_floor_on_any_pinned_source() {
             tracking_revision: None,
         })
         .unwrap();
-    assert_eq!(public.check_tracking_revision(0.into()), Ok(()));
+    assert_eq!(public.tracking_floor, Revision::from(0));
 }
 
 fn enrollment_vector() -> Value {

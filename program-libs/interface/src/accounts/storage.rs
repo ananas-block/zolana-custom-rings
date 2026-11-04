@@ -39,7 +39,7 @@ pub struct StorageRegistry {
     pub next_index: [u8; 4],
     /// Immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-    /// Immutable, zero on a source no salted list reads.
+    /// Immutable, a ring maps a private list only to a source pinned to its own registry.
     pub tracking_registry: Address,
     /// The pinned registry's newest revision at the last zero grace update, frames name no older tracking root.
     pub tracking_floor: Revision,
@@ -106,8 +106,6 @@ pub enum StorageError {
     InvalidReaderKey = 9032,
     #[error("auditor key is untagged, zero or not canonical")]
     InvalidAuditorKey = 9033,
-    #[error("the frame names a tracking root below the source's floor")]
-    TrackingRootBelowFloor = 9034,
 }
 
 #[must_use]
@@ -201,14 +199,6 @@ impl StorageRegistry {
     /// A salted list may read it.
     pub fn is_private(&self) -> bool {
         self.tracking_registry != Address::default()
-    }
-
-    /// The one exception to tracking grace, a stale root could prove a blocked owner unenrolled.
-    pub fn check_tracking_revision(&self, named: Revision) -> Result<(), StorageError> {
-        if named.value() < self.tracking_floor.value() {
-            return Err(StorageError::TrackingRootBelowFloor);
-        }
-        Ok(())
     }
 
     /// A zero grace write on a pinned source takes the pinned registry's revision as its floor.
