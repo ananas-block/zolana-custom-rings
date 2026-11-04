@@ -1,8 +1,4 @@
-import {
-  type RingMemberOpening,
-  type RingRecordReader,
-  type StorageRoot,
-} from "./ports.js";
+import { type RingMemberOpening, type RingRecordReader, type StorageRoot } from "./ports.js";
 import { type PresentRecordOpening } from "./prover/types.js";
 import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer/indexer-limits.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";

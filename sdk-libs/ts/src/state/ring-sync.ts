@@ -155,7 +155,7 @@ export async function syncRingWallet(
     const owner = keys.address();
     const budget = { remaining: Number.MAX_SAFE_INTEGER };
     const chunkSize = input.config?.queryChunk ?? 64;
-    for (let frontier = fresh; frontier.length > 0; ) {
+    for (let frontier = fresh; frontier.length > 0;) {
       const spends: IndexedShieldedTransaction[] = [];
       for (let offset = 0; offset < frontier.length; offset += chunkSize)
         spends.push(

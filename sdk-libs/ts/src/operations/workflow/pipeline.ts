@@ -11,6 +11,7 @@ import {
   concatBytes,
   encodeBase58,
   equalBytes,
+  isZero,
   meta,
   solanaOwnerIdentity,
   treeAddress,
@@ -55,7 +56,6 @@ import { RingError } from "../../protocol/error.js";
 import {
   policyLegs,
   policyDemand,
-  readsPolicyRoot,
   policyRoots,
   publishedNotes,
   readPolicy,
@@ -67,7 +67,8 @@ import {
   type RingListSalt,
 } from "../../proof/policy-proof.js";
 import { selectTransferKey, transferProofRequest } from "../../proof/transfer-proof.js";
-import { fittedSpend } from "../../protocol/proof/transfer-shapes.js";
+import { sealedWide, unreadSubjectPools } from "../../protocol/proof/transfer-shapes.js";
+import { memberOfAsset, pinnedPolicy, policySourceView } from "../../protocol/membership/policy.js";
 import { policyWithdrawalHash } from "../../proof/withdrawals.js";
 import { framesData, type PublishedSlot, type RingOutputRail } from "../payments/output-rail.js";
 import {
@@ -97,7 +98,12 @@ import {
   interfaceTransferOf,
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
-import { decideAddressCeiling } from "./address-ceiling.js";
+import {
+  decideAddressCeiling,
+  TransactionFit,
+  type FitBudget,
+  type FitSigners,
+} from "./address-ceiling.js";
 import { checkTransferFits } from "./compile.js";
 import { BufferedFrame } from "../payments/buffered-frame.js";
 import { ringRegistrySlots, transferRootRead } from "./ring-reads.js";
@@ -234,6 +240,21 @@ export interface RingTransactionFrame {
   readonly setupInstructions?: readonly Instruction[];
 }
 
+/** The fit's view of a frame, one split for the preproof check and the attempt. */
+export function fitSigners(payer: Address, frame: RingTransactionFrame | undefined): FitSigners {
+  return frame?.setupInstructions === undefined
+    ? { payer }
+    : { payer, setupInstructions: frame.setupInstructions };
+}
+
+export function fitBudget(
+  frame: RingTransactionFrame | undefined,
+): Pick<FitBudget, "priorityFeeLamports"> {
+  return frame?.priorityFeeLamports === undefined
+    ? {}
+    : { priorityFeeLamports: frame.priorityFeeLamports };
+}
+
 export type StagedTransferInput = Readonly<{
   client: RingProvingClient;
   ringProgramId: Address;
@@ -357,7 +378,7 @@ async function selectStagedKey(input: StagedTransferInput, context: RequestConte
   return { demandInput, demand, keySpend, addresses, circuit, wideOwners };
 }
 
-/** Rust `Prepared::unread_wide`. */
+/** Rust `Prepared::sealing_wide`, the flag of a seal ahead of every record read. */
 function unreadWide(
   input: Readonly<{
     config: RingPolicy;
@@ -366,21 +387,58 @@ function unreadWide(
 ): boolean {
   const { config, staged } = input;
   const { proofInputs, spend } = staged;
+  const delegate = isDelegateRail(spend.rail);
+  const transfers = proofInputs.externalData.interfaceTransfers;
   const inputs = publishedNotes(proofInputs);
-  const entry = spendsDefaultRing(proofInputs);
-  const { wide } = fittedSpend({
-    rail: spend.rail,
-    inputs: inputs.length,
-    outputs: proofInputs.checkShape().outputs,
-    spendsDefaultRing: entry,
-    legs: proofInputs.externalData.interfaceTransfers.length,
-    owners: ownerRows({ inputs, delegate: isDelegateRail(spend.rail) }).length,
-    pools: { own: 0, curator: 0, tracking: 0 },
-    wide: false,
-  });
-  const reads = readsPolicyRoot(config, spend.rail);
-  const data = framesData(proofInputs.outputs.filter((output) => !output.isDummy()));
-  return wide || (reads && (data || entry));
+  const live = proofInputs.outputs.filter((output) => !output.isDummy());
+  // 1. The program names the key from the legs its read screens, a ring reading no root screens
+  // none and a deposit never counts, so the wallet counts the same legs.
+  const legs = policyLegs(config, spend.rail, transfers);
+  const rows = ownerRows({ inputs, delegate });
+  // 2. Only a salted list opens more records than the row holding these counts provides, every
+  // other read fits it by the catalog's pool widths.
+  const distinct = (fields: readonly Bytes32[]): number => new Set(fields.map(bytesKey)).size;
+  const pools =
+    transferRootRead(config, delegate) === "policy" && readsSaltedList(config)
+      ? unreadSubjectPools({
+          owners:
+            legs +
+            distinct([
+              ...rows,
+              ...live.flatMap((output) =>
+                output.ownerAddress === undefined
+                  ? []
+                  : [output.ownerAddress.signingPublicKey.ownerProofInputHash()],
+              ),
+            ]),
+          assets: distinct([
+            ...live.map((output) => memberOfAsset(output.asset)),
+            ...proofInputs.inputUtxos
+              .filter((spent) => !spent.isDummy())
+              .map((spent) => memberOfAsset(spent.utxo.asset)),
+            ...publicSlots(transfers).assets.filter((asset) => !isZero(asset)),
+          ]),
+        })
+      : { own: 0, curator: 0, tracking: 0 };
+  // 3. One selection on both sides, only the bound stands in for the reads.
+  return sealedWide(
+    {
+      rail: spend.rail,
+      inputs: inputs.length,
+      outputs: proofInputs.checkShape().outputs,
+      spendsDefaultRing: spendsDefaultRing(proofInputs),
+      legs,
+      owners: rows.length,
+      pools,
+      wide: false,
+    },
+    framesData(live),
+  );
+}
+
+function readsSaltedList(config: RingPolicy): boolean {
+  const { sources, salted } = pinnedPolicy(config);
+  return policySourceView({ slots: sources, salted }).salted !== 0;
 }
 
 /** A relayed owner's seal, the caller wipes `sealed.ephemeralSecret`. */
@@ -461,14 +519,14 @@ async function assembleStagedTransfer<T>(
   const delegate = isDelegateRail(ringRail);
   const selected = await selectStagedKey(input, context);
   const { demandInput, demand, keySpend, addresses, circuit, wideOwners } = selected;
-  const { sealed, layout, published, inputs, senderBundle, shape, proofInputs } =
-    sealStagedTransfer({ ...input, wideOwners });
+  const { sealed, published, inputs, senderBundle, shape, proofInputs } = sealStagedTransfer({
+    ...input,
+    wideOwners,
+  });
   const auditor = config.auditorPublicKey;
   try {
     const transfers = proofInputs.externalData.interfaceTransfers;
     const slots = publicSlots(transfers);
-    const entry = layout.key.entry;
-    const listSalts = input.listSalts ?? [];
     const policy = await readPolicy(
       {
         ...demandInput,
@@ -587,13 +645,18 @@ async function assembleStagedTransfer<T>(
         inputs: [],
         mergeCapacity: { keyed: 0, zeroKey: 0 },
       });
-    else
+    else {
       checkTransferFits(shape, {
         ...input.transaction,
         feePayer: proofInputs.payer,
         instructions: [inline],
         computeUnitLimit,
       });
+      TransactionFit.inline(inline, fitSigners(proofInputs.payer, input.transaction), {
+        ...fitBudget(input.transaction),
+        computeUnitLimit,
+      });
+    }
     return await use(
       Object.freeze({
         sealed,
@@ -994,7 +1057,7 @@ function boundRoots(policy: PolicyInputs): readonly BoundRoot[] {
   );
 }
 
-function transactTag(rail: RingRail): RingInstructionTag {
+export function transactTag(rail: RingRail): RingInstructionTag {
   return isDelegateRail(rail) ? RingInstructionTag.authorityTransfer : RingInstructionTag.transfer;
 }
 

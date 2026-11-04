@@ -360,11 +360,14 @@ export type {
 export type { RingMergeClient } from "../rpc/ports.js";
 export {
   RingTransactionSubmission,
+  closeAbandonedFrameBuffers,
   createKitRingSubmissionTransport,
   reconcileRingSubmissions,
 } from "../operations/workflow/submission.js";
 export type {
   ReservationHold,
+  RingBufferReclaim,
+  RingFrameUpload,
   RingSubmissionAttempt,
   RingSubmissionBuild,
   RingSubmissionResult,

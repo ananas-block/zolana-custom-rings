@@ -298,35 +298,35 @@ describe("createdRingUtxos", () => {
       ringDataHash,
       ringProgramId: RING,
     });
-      const merge = transaction({
-        outputSlots: [
-          {
-            viewTag: nullifiers[0]!,
-            outputContext: outputContext(commitment, 3n),
-            payload: encodeMergeOutputData({
+    const merge = transaction({
+      outputSlots: [
+        {
+          viewTag: nullifiers[0]!,
+          outputContext: outputContext(commitment, 3n),
+          payload: encodeMergeOutputData({
+            salt,
+            ciphertext: encryptMergeOutput(
+              { amount: 12n, mint: SOL_MINT },
+              mergeOutputKey(owner.nullifierKey(), nullifiers[0]!),
               salt,
-              ciphertext: encryptMergeOutput(
-                { amount: 12n, mint: SOL_MINT },
-                mergeOutputKey(owner.nullifierKey(), nullifiers[0]!),
-                salt,
-              ),
-              ringDataHash,
-            }),
-          },
-        ],
-        nullifiers,
-        proofless: false,
-      });
-      const confirmed = {
-        kind: "merge",
-        transaction: merge,
-        sealedRecord: {
-          ephemeralPublicKey: new Uint8Array(33) as Bytes33,
-          ciphertext: new Uint8Array(144),
+            ),
+            ringDataHash,
+          }),
         },
-        authority: 0,
-      } as const;
-      expect(createdRingUtxos({ confirmed, ringProgramId: RING, auditor })).toEqual([]);
-      auditor.destroy();
+      ],
+      nullifiers,
+      proofless: false,
+    });
+    const confirmed = {
+      kind: "merge",
+      transaction: merge,
+      sealedRecord: {
+        ephemeralPublicKey: new Uint8Array(33) as Bytes33,
+        ciphertext: new Uint8Array(144),
+      },
+      authority: 0,
+    } as const;
+    expect(createdRingUtxos({ confirmed, ringProgramId: RING, auditor })).toEqual([]);
+    auditor.destroy();
   });
 });

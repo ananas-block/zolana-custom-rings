@@ -129,7 +129,15 @@ describe("selectTransferKey", () => {
   it("fits an entry past the small keys on the wide entry key", () => {
     const entered = (inputs: number, outputs: number, legs: number, owners: number) =>
       selectTransferKey({
-        spend: { ...SPEND, rail: "anonymous", spendsDefaultRing: true, inputs, outputs, legs, owners },
+        spend: {
+          ...SPEND,
+          rail: "anonymous",
+          spendsDefaultRing: true,
+          inputs,
+          outputs,
+          legs,
+          owners,
+        },
         addresses: { ...ADDRESSES, nInputs: inputs },
         ownerSigners: 0,
       }).circuit;

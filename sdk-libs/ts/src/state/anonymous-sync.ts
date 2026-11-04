@@ -467,12 +467,10 @@ class Scan {
     const entry = this.#entry(index);
     const { viewingPublicKey } = entry;
     const streams: readonly EntryStream[] = ["tx", "request"];
-    let active = streams.map(
-      (stream): ActiveStream => ({
-        stream,
-        scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
-      }),
-    );
+    let active = streams.map((stream): ActiveStream => ({
+      stream,
+      scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
+    }));
     let bootstrap: readonly ViewTag[] = [viewingPublicKey.u(), slotTag(viewingPublicKey.u())];
     while (active.length > 0) {
       const tagged: (readonly [RoundTag, ViewTag])[] = bootstrap.map((tag) => [BOOTSTRAP, tag]);

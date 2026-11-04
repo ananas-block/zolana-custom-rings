@@ -123,7 +123,9 @@ describe("list_salt.json", () => {
     const holder = ShieldedKeypair.fromKeypair(
       SigningKey.fromEd25519Bytes(hexToBytes(vector["signing_secret"] ?? "") as Bytes32),
     );
-    const program = getBase58Decoder().decode(hexToBytes(vector["ring_program_id"] ?? "")) as Address;
+    const program = getBase58Decoder().decode(
+      hexToBytes(vector["ring_program_id"] ?? ""),
+    ) as Address;
     const salt = listSaltOf(holder.viewingKey(), program);
     expect(bytesToHex(salt)).toBe(vector["list_salt"]);
     expect(bytesToHex(listTagOf(salt))).toBe(vector["list_tag"]);

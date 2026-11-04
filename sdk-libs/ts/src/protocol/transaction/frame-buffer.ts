@@ -19,6 +19,11 @@ export function bufferedFrame(account: Uint8Array): Uint8Array | undefined {
     : account.subarray(FRAME_BUFFER_HEADER_LEN);
 }
 
+/** The account's writer, `undefined` on any other account of the program. */
+export function frameBufferWriter(account: Uint8Array): Uint8Array | undefined {
+  return bufferedFrame(account) === undefined ? undefined : account.subarray(1, 33);
+}
+
 /** The first write creates the buffer at `[seed, writer, nonce]`. */
 export interface WriteFrame {
   readonly nonce: bigint;

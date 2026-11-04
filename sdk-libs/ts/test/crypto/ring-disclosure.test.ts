@@ -4,10 +4,7 @@ import stream from "../../../../test-vectors/audit/auditor-stream.json" with { t
 import { initializePoseidon } from "@heliuslabs/zolana";
 import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import {
-  auditSharedSecret,
-  symmetricAuditApply,
-} from "../../src/crypto/audit/audit.js";
+import { auditSharedSecret, symmetricAuditApply } from "../../src/crypto/audit/audit.js";
 
 beforeAll(initializePoseidon);
 
@@ -43,5 +40,4 @@ describe("auditor-stream.json", () => {
     const signer = stream.labels.find((vector) => vector.name === "envelope_signer");
     expect(signer === undefined ? "" : hex(signer.secret)).toEqual(secret);
   });
-
 });

@@ -374,16 +374,15 @@ function mergeGroups(
       positions.slice(run * width, (run + 1) * width),
     )
       .filter((run) => run.length > 1)
-      .map(
-        (run): MergeGroup =>
-          Object.freeze({
-            owner: head.owner,
-            asset: head.asset,
-            nullifierPublicKey: head.nullifierPublicKey,
-            ...(head.ringProgramId === undefined ? {} : { ringProgramId: head.ringProgramId }),
-            treeId: head.treeId,
-            inputs: Object.freeze(run),
-          }),
+      .map((run): MergeGroup =>
+        Object.freeze({
+          owner: head.owner,
+          asset: head.asset,
+          nullifierPublicKey: head.nullifierPublicKey,
+          ...(head.ringProgramId === undefined ? {} : { ringProgramId: head.ringProgramId }),
+          treeId: head.treeId,
+          inputs: Object.freeze(run),
+        }),
       );
   });
   return merges.sort((left, right) => right.inputs.length - left.inputs.length);

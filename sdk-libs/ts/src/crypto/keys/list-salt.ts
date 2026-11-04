@@ -14,7 +14,10 @@ export const LIST_SALT_LABEL = (() => {
 
 /** `key` is the identity viewing key, no root the auditor holds reaches another ring's salt. */
 export function listSaltOf(key: ViewingKey, ringProgramId: Address): Bytes32 {
-  return key.mergeSeed(new Uint8Array(getAddressEncoder().encode(ringProgramId)) as Bytes32, LIST_SALT_LABEL);
+  return key.mergeSeed(
+    new Uint8Array(getAddressEncoder().encode(ringProgramId)) as Bytes32,
+    LIST_SALT_LABEL,
+  );
 }
 
 /** `Poseidon(CRPT, list_salt)`, final in the tracking leaf. */
