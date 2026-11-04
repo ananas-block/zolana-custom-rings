@@ -50,7 +50,7 @@ func TestWithdrawalPrefixZeroPadding(t *testing.T) {
 	for _, capacity := range withdrawalCapacities {
 		for _, count := range []int{0, max(0, capacity-1), capacity} {
 			world := ringpolicy.Confidential()
-			world.OwnOnly, world.WithdrawalCapacity = true, capacity
+			world.WithdrawalCapacity = capacity
 			world.Table.Limits = nil
 			for range count {
 				world.Withdrawals = append(world.Withdrawals, ringpolicy.Slot{Owner: ringpolicy.Alice, Asset: ringpolicy.AssetA, Amount: 1})

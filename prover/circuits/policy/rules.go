@@ -35,11 +35,31 @@ func screenedRules(api frontend.API, screened frontend.Variable, table tableView
 
 // assertSenderRules holds every screened sender to every sender rule, with or without a spent input or an output.
 func assertSenderRules(api frontend.API, active []frontend.Variable, table tableView, resolved subjects) {
+	assertSubjectsAdmitted(api, active, table, resolved.senders, resolved.liveSenders, func(rule ruleFields) frontend.Variable { return rule.onSender })
+}
+
+// assertInputAssetRules holds every live input's asset to every unconditional asset rule, a ring note and a default ring note alike.
+//
+// A payment screens the asset it moves, and SPP's balance keeps a funded input's asset among the output and public assets. A zero value input can name any asset with nothing paid in it, the one spend the payment section never reads, and it would move a delisted note past the rules.
+//
+// A guarded rule stays out. Its obligation reads the payment totals, an input adds nothing to them, and a total of zero sits within every threshold. A guarded rule can then refuse only at a payment of the asset, and the payment section already holds that one.
+func assertInputAssetRules(api frontend.API, active []frontend.Variable, table tableView, resolved subjects) {
+	assertSubjectsAdmitted(api, active, table, resolved.inputAssets, resolved.liveInputs, func(rule ruleFields) frontend.Variable {
+		// The guard tags exclude each other, the difference reads GuardAlways.
+		return api.Mul(rule.onAsset, api.Sub(1, api.Add(rule.scalarGuard, rule.assetGuard)))
+	})
+}
+
+// assertSubjectsAdmitted holds every live subject to the active rules selects sets, a key with no such subject carries no gate.
+func assertSubjectsAdmitted(api frontend.API, active []frontend.Variable, table tableView, views []subjectView, live []frontend.Variable, selects func(ruleFields) frontend.Variable) {
+	if len(views) == 0 {
+		return
+	}
 	for r, rule := range table.rules {
-		screened := api.Mul(active[r], rule.onSender)
-		for j, sender := range resolved.senders {
+		screened := api.Mul(active[r], selects(rule))
+		for j, view := range views {
 			// A zero row reads no lists, its one extra admission keeps it out of every rule.
-			admitting := api.Add(rule.admitting(api, sender.onList), api.Sub(1, resolved.liveSenders[j]))
+			admitting := api.Add(rule.admitting(api, view.onList), api.Sub(1, live[j]))
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: screened, V: api.IsZero(admitting)})
 		}
 	}
@@ -108,9 +128,9 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 	// Each pair folds once, repeats counts the earlier live payments of one owner and asset.
 	for p := range payments {
 		for q := range payments[:p] {
-			sameAsset[p][q] = api.IsZero(api.Sub(payments[p].Asset, payments[q].Asset))
+			sameAsset[p][q] = IsSame(api, payments[p].Asset, payments[q].Asset)
 			sameAsset[q][p] = sameAsset[p][q]
-			samePair := api.Mul(sameAsset[p][q], api.IsZero(api.Sub(payments[p].Owner, payments[q].Owner)))
+			samePair := api.Mul(sameAsset[p][q], IsSame(api, payments[p].Owner, payments[q].Owner))
 			received[p] = api.Add(received[p], api.Mul(samePair, ringAmounts[q]))
 			received[q] = api.Add(received[q], api.Mul(samePair, ringAmounts[p]))
 			passing[p] = api.Add(passing[p], api.Mul(samePair, grossAmounts[q]))
@@ -123,7 +143,7 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 	for p, pay := range payments {
 		spent := frontend.Variable(0)
 		for _, input := range inputs {
-			held := api.Mul(input.Ring, api.IsZero(api.Sub(input.OwnerPkHash, pay.Owner)), api.IsZero(api.Sub(input.Asset, pay.Asset)))
+			held := api.Mul(input.Ring, IsSame(api, input.OwnerPkHash, pay.Owner), IsSame(api, input.Asset, pay.Asset))
 			spent = api.Add(spent, api.Mul(held, input.Amount))
 		}
 		guards[p].owner = api.Add(cmp.saturatingSub(api, received[p], spent), passing[p])

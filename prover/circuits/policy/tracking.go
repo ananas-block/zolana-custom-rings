@@ -59,6 +59,7 @@ func (t *Tracking) TrackingPoolSize() int {
 }
 
 // TrackingPool answers row and output queries, a member absent from the root reads zeros.
+// It shares only the pool's authentication with the policy registries, its leaf is TrackingRecord's, its root TrackingRoot and its absence a zero key.
 type TrackingPool struct {
 	subjects subjectPool
 }
