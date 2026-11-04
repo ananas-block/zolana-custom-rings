@@ -586,9 +586,9 @@ impl Relay {
                     });
                     record.co_signature = Some(signature);
                 }
-                CoSignDecision::Refused(CoSignRefusal::Disabled | CoSignRefusal::OverLimit) => {
-                    return Err(RelayError::CoSignRefused.into())
-                }
+                CoSignDecision::Refused(
+                    CoSignRefusal::Disabled | CoSignRefusal::OverLimit | CoSignRefusal::NotApproved,
+                ) => return Err(RelayError::CoSignRefused.into()),
             }
         }
         Ok(())
@@ -908,7 +908,7 @@ impl RelayPayload {
                         .map_err(|error| RelayError::Proof(error.to_string()))?,
                     flow: AssetFlow {
                         asset: inputs.asset.mint(),
-                        debit: 0,
+                        outflow: 0,
                         deposited: inputs.amount,
                         withdrawn: 0,
                     },

@@ -1,4 +1,4 @@
-//! Each owner's debit of the transfer a co-signer signs, read from the frame with the auditor key.
+//! Each owner's outflow of the transfer a co-signer signs, read from the frame and the note index.
 
 use custom_ring_interface::{
     settlement_mints, tag, InstructionTag, ParsedTransact, RingRail, RingTransactData,
@@ -16,10 +16,11 @@ use zolana_ring_transaction::RingAssets;
 
 use crate::{
     cosign::{AssetFlow, CoSignError, OwnerFlow},
+    cosign_limits::{FrameRead, TransferRead},
     error::RingRpcError,
     hub::Shared,
     upstream::TransactionSource,
-    utxos::AuditStore,
+    utxos::{AuditStore, StoredUtxo},
 };
 
 /// The output tree's position in SPP's transact account list.
@@ -53,12 +54,15 @@ const fn unavailable() -> RingRpcError {
 }
 
 impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
-    pub async fn flows(self) -> Result<Vec<OwnerFlow>, RingRpcError> {
+    pub async fn flows(self) -> Result<FrameRead, RingRpcError> {
         let service = self.shared.service(Some(self.ring))?;
         let config = service.served_config().await?.ok_or_else(unavailable)?;
         let store = self.shared.store(self.ring);
         let assets = self.shared.cached_assets().await;
         let frame = RingFrame::of(self.message, self.ring)?;
+        if frame.tag == tag::AUTHORITY_TRANSFER {
+            return Ok(FrameRead::Delegate);
+        }
         let rail = InstructionTag::try_from(frame.tag)
             .and_then(|tag| RingRail::of(tag, config.mode))
             .map_err(|_| unavailable())?;
@@ -106,8 +110,10 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
             owner_signers,
             public,
             assets: &assets,
+            ring: self.ring,
         }
-        .flows()
+        .read()
+        .map(FrameRead::Transfer)
     }
 }
 
@@ -205,12 +211,14 @@ fn public_flows(
     Ok(flows)
 }
 
-/// A public leg has no owner on the frame, it joins the first sender.
+/// A public leg has no owner on the frame, it joins the first sender or a no-spend frame's ring tag.
 struct OwnerFlows<'a> {
     inputs: &'a [DebitInput],
     outputs: &'a [DebitOutput],
     owner_signers: &'a [[u8; 32]],
     public: &'a [PublicFlow],
+    /// Only ring caps read a public leg, the tag answers for no owner cap.
+    no_spend_owner: Member,
 }
 
 impl OwnerFlows<'_> {
@@ -244,7 +252,7 @@ impl OwnerFlows<'_> {
                 owner: member(debit.owner)?,
                 flow: AssetFlow {
                     asset: mint_of(&debit.asset)?,
-                    debit: u64::try_from(debit.debit).map_err(|_| unavailable())?,
+                    outflow: u64::try_from(debit.debit).map_err(|_| unavailable())?,
                     deposited: 0,
                     withdrawn: 0,
                 },
@@ -252,7 +260,9 @@ impl OwnerFlows<'_> {
         })
         .collect::<Result<Vec<_>, RingRpcError>>()?;
         for public in self.public {
-            let owner = member(*senders.first().ok_or_else(unavailable)?)?;
+            let owner = senders
+                .first()
+                .map_or(Ok(self.no_spend_owner), |sender| member(*sender))?;
             let joined = flows
                 .iter()
                 .position(|flow| flow.flow.asset == public.mint && flow.owner == owner);
@@ -263,7 +273,7 @@ impl OwnerFlows<'_> {
                         owner,
                         flow: AssetFlow {
                             asset: public.mint,
-                            debit: 0,
+                            outflow: 0,
                             deposited: 0,
                             withdrawn: 0,
                         },
@@ -285,45 +295,63 @@ struct FrameFlows<'a> {
     owner_signers: Vec<[u8; 32]>,
     public: Vec<PublicFlow>,
     assets: &'a RingAssets,
+    ring: Address,
 }
 
 impl FrameFlows<'_> {
-    fn flows(&self) -> Result<Vec<OwnerFlow>, RingRpcError> {
-        OwnerFlows {
-            inputs: &self.inputs()?,
-            outputs: &self.outputs()?,
-            owner_signers: &self.owner_signers,
-            public: &self.public,
-        }
-        .rows(|asset| self.mint_of(asset))
+    fn read(&self) -> Result<TransferRead, RingRpcError> {
+        let inputs = self.inputs()?;
+        Ok(TransferRead {
+            flows: OwnerFlows {
+                inputs: &inputs,
+                outputs: &self.outputs()?,
+                owner_signers: &self.owner_signers,
+                public: &self.public,
+                no_spend_owner: Member::owner_tag(self.ring.as_array())
+                    .map_err(|_| unavailable())?,
+            }
+            .rows(|asset| self.mint_of(asset))?,
+            spends_note: !inputs.is_empty(),
+        })
     }
 
-    /// A hash no opening names refuses.
+    /// A real input the index cannot name refuses, as an unknown note does.
     fn inputs(&self) -> Result<Vec<DebitInput>, RingRpcError> {
         let mut inputs = Vec::new();
         for input in &self.audited.inputs {
             match &input.opening {
                 InputOpening::Dummy => {}
-                InputOpening::UnseenHash { .. } => return Err(unavailable()),
-                InputOpening::Merged(merged) => inputs.push(DebitInput {
-                    owner: identity(&merged.input.owner_key)?,
-                    asset: merged.input.asset,
-                    amount: merged.input.amount,
-                }),
+                // The frame's proven entry evidence, a default-ring note holds no index row.
                 InputOpening::Opened(opening) => inputs.push(DebitInput {
                     owner: identity(&self.opened_owner(input)?)?,
                     asset: opening.asset,
                     amount: opening.amount,
                 }),
+                InputOpening::Merged(_) | InputOpening::UnseenHash { .. } => {
+                    let note = self.indexed_note(input).ok_or_else(unavailable)?;
+                    inputs.push(DebitInput {
+                        owner: identity(&note.utxo.owner_key)?,
+                        asset: note.utxo.asset,
+                        amount: note.utxo.amount,
+                    });
+                }
             }
         }
         Ok(inputs)
     }
 
-    /// An entry opening holds no stored note, the envelope's sender owns all of them.
-    fn opened_owner(&self, input: &AuditedInput) -> Result<[u8; 32], RingRpcError> {
+    /// The nullifier first, a hash-bearing frame's evidence when the owner's secret is unread.
+    fn indexed_note(&self, input: &AuditedInput) -> Option<StoredUtxo> {
         self.store
-            .note_owner(&input.hash)
+            .note_of_nullifier(&input.nullifier)
+            .map(|(_, note)| note)
+            .or_else(|| self.store.note(&input.hash))
+    }
+
+    /// An entry opening holds no stored note, the envelope's sender owns it.
+    fn opened_owner(&self, input: &AuditedInput) -> Result<[u8; 32], RingRpcError> {
+        self.indexed_note(input)
+            .map(|note| note.utxo.owner_key)
             .or(self.audited.sender.map(|sender| sender.owner_key))
             .ok_or_else(unavailable)
     }
@@ -546,6 +574,7 @@ mod tests {
             outputs: &outputs,
             owner_signers: &owner_signers,
             public: &public,
+            no_spend_owner: Member::from_bytes([0xee; 32]).expect("tag"),
         }
         .rows(|asset| Ok(Address::new_from_array([asset[31]; 32])))
         .expect("rows")
@@ -554,7 +583,7 @@ mod tests {
             serde_json::json!({
                 "owner": hex::encode(row.owner.as_bytes()),
                 "mint": hex::encode(row.flow.asset.to_bytes()),
-                "debit": row.flow.debit,
+                "debit": row.flow.outflow,
                 "deposited": row.flow.deposited,
                 "withdrawn": row.flow.withdrawn,
             })

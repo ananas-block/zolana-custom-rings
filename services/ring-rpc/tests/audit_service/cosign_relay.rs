@@ -183,6 +183,11 @@ impl CappedRelay {
             .with_origins(origins())
             .with_store(store.clone())
             .with_co_signer(co_signer_key())
+            .with_co_signer_approval(CoSignerApproval::new([
+                ApproveClass::Transfers,
+                ApproveClass::Withdrawals,
+                ApproveClass::Deposits,
+            ]))
             .with_relay(RelayParts {
                 store: store.clone(),
                 prover: Arc::new(FramedProver {

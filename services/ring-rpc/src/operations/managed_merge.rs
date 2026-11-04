@@ -646,7 +646,10 @@ pub(crate) mod tests {
             };
             let mut builder = Hub::builder(source, identity)
                 .with_store(store)
-                .with_co_signer(Keypair::new());
+                .with_co_signer(Keypair::new())
+                .with_co_signer_approval(crate::cosign::CoSignerApproval::new([
+                    crate::cosign::ApproveClass::Transfers,
+                ]));
             if let Some(relay) = relay {
                 builder = builder.with_relay(relay);
             }

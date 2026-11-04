@@ -86,10 +86,10 @@ use zolana_ring_indexer::rpc::{
     RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
 };
 use zolana_ring_rpc::{
-    rpc_module, AuditRead, AuditService, Clock, DepositHistory, DepositPage, GrantRowsSecret, Hub,
-    MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, ReaderGrantStore, RecordsTip,
-    RingConfiguration, RingHistoryPage, RingRpcError, RootSecret, ServiceIdentity, Store,
-    TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
+    rpc_module, ApproveClass, AuditRead, AuditService, Clock, CoSignerApproval, DepositHistory,
+    DepositPage, GrantRowsSecret, Hub, MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck,
+    ReaderGrantStore, RecordsTip, RingConfiguration, RingHistoryPage, RingRpcError, RootSecret,
+    ServiceIdentity, Store, TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
 };
 use zolana_ring_transaction::{seal_delivered_body, RingAssets};
 

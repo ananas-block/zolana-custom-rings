@@ -54,7 +54,7 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
     }
 
     pub async fn window(&self, window: UsageWindow<'_>) -> Result<Vec<Reservation>, DbErr> {
-        let sql = "SELECT asset, owner, slot, debit, deposited, withdrawn FROM cosign_usage \
+        let sql = "SELECT asset, owner, slot, outflow, deposited, withdrawn FROM cosign_usage \
                    WHERE ring=$1 AND asset=$2 AND slot>=$3";
         let mut reservations = Vec::new();
         for asset in window.assets {
@@ -71,7 +71,7 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
     }
 
     pub async fn reserve(&self, reserve: Reserve<'_>) -> Result<(), DbErr> {
-        let sql = "INSERT INTO cosign_usage(signature,asset,ring,owner,slot,debit,deposited,\
+        let sql = "INSERT INTO cosign_usage(signature,asset,ring,owner,slot,outflow,deposited,\
                    withdrawn,confirmed) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)";
         for OwnerFlow { owner, flow } in reserve.flows {
             let values = vec![
@@ -80,7 +80,7 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
                 address_value(reserve.ring),
                 Value::from(owner.as_bytes().to_vec()),
                 slot_value(reserve.slot)?,
-                amount_value(flow.debit),
+                amount_value(flow.outflow),
                 amount_value(flow.deposited),
                 amount_value(flow.withdrawn),
                 Value::from(false),
@@ -119,7 +119,7 @@ fn reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
         slot: u64::try_from(slot).map_err(|_| DbErr::Custom("negative usage slot".into()))?,
         flow: AssetFlow {
             asset: Address::new_from_array(bytes(row, "asset")?),
-            debit: amount("debit")?,
+            outflow: amount("outflow")?,
             deposited: amount("deposited")?,
             withdrawn: amount("withdrawn")?,
         },

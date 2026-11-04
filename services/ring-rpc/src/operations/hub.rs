@@ -24,7 +24,7 @@ use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_MISS_INTERVAL, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
     config::{GrantRowsSecret, ReaderGrantStore, RootSecret},
-    cosign::{CoSignPolicy, RefusingCoSigner},
+    cosign::{CoSignPolicy, CoSignerApproval, RefusingCoSigner},
     cosign_limits::{LimitedCoSignerInit, RecordLimits},
     database::Store,
     error::{redacted, RingRpcError},
@@ -130,6 +130,7 @@ pub struct HubBuilder<S> {
     reader_grants: ReaderGrantStore,
     grant_rows: Option<GrantRowsSecret>,
     co_signer: Option<Keypair>,
+    co_signer_approval: CoSignerApproval,
     relay: Option<RelayParts>,
     merge: Option<MergeParts>,
 }
@@ -342,6 +343,7 @@ impl<S: TransactionSource> Hub<S> {
             reader_grants: ReaderGrantStore::Tree,
             grant_rows: None,
             co_signer: None,
+            co_signer_approval: CoSignerApproval::default(),
             relay: None,
             merge: None,
         }
@@ -604,6 +606,13 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
+    /// Without it the co-signer refuses every operation.
+    #[must_use = "use the updated builder"]
+    pub fn with_co_signer_approval(mut self, approval: CoSignerApproval) -> Self {
+        self.co_signer_approval = approval;
+        self
+    }
+
     #[must_use = "use the updated builder"]
     pub fn with_relay(mut self, relay: RelayParts) -> Self {
         self.relay = Some(relay);
@@ -701,6 +710,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                     signer,
                     limits: RecordLimits(shared.clone()),
                     store: Arc::new(self.store.ok_or(RingRpcError::CoSignerStoreMissing)?),
+                    approval: self.co_signer_approval,
                 }
                 .build(),
             ),

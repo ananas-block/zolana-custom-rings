@@ -643,16 +643,13 @@ impl AuditStore {
         book.notes.get(&commitment).map(|note| (commitment, *note))
     }
 
-    /// The state a co-signer reads, `None` for a nullifier no row holds.
+    #[cfg(test)]
     pub(crate) fn row_state(&self, nullifier: &[u8; 32]) -> Option<SpendState> {
         self.read_book().rows.get(nullifier).map(|row| row.state)
     }
 
-    pub(crate) fn note_owner(&self, commitment: &[u8; 32]) -> Option<[u8; 32]> {
-        self.read_book()
-            .notes
-            .get(commitment)
-            .map(|stored| stored.utxo.owner_key)
+    pub(crate) fn note(&self, commitment: &[u8; 32]) -> Option<StoredUtxo> {
+        self.read_book().notes.get(commitment).copied()
     }
 
     pub(crate) fn wallet_status(&self, query: WalletStatusQuery) -> GetWalletStatusResponse {
