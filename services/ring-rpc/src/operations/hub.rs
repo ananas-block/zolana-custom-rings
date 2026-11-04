@@ -41,6 +41,7 @@ use crate::{
     record_update::RecordUpdateRefusal,
     record_writer::{RecordWriter, WriterParts, RECORD_FLUSH_INTERVAL},
     relay::{Relay, RelayError, RelayParts, ServedRings, RELAY_TRACK_INTERVAL},
+    relay_reservations::RelayBudget,
     relay_services::{MergeParts, RelayServices},
     replay::{LocalNonces, ReplayGuard},
     storage_chain::StorageChain,
@@ -131,7 +132,7 @@ pub struct HubBuilder<S> {
     grant_rows: Option<GrantRowsSecret>,
     co_signer: Option<Keypair>,
     co_signer_approval: CoSignerApproval,
-    enrollment_budget: u64,
+    relay_budget: RelayBudget,
     relay: Option<RelayParts>,
     merge: Option<MergeParts>,
 }
@@ -355,7 +356,7 @@ impl<S: TransactionSource> Hub<S> {
             grant_rows: None,
             co_signer: None,
             co_signer_approval: CoSignerApproval::default(),
-            enrollment_budget: 0,
+            relay_budget: RelayBudget::default(),
             relay: None,
             merge: None,
         }
@@ -625,10 +626,10 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
-    /// Without it the relay funds no enrollment.
+    /// Without it the relay funds no enrollment and no buffer.
     #[must_use = "use the updated builder"]
-    pub const fn with_enrollment_budget(mut self, budget: u64) -> Self {
-        self.enrollment_budget = budget;
+    pub const fn with_relay_budget(mut self, budget: RelayBudget) -> Self {
+        self.relay_budget = budget;
         self
     }
 
@@ -738,7 +739,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         let relay = self.relay.map(|parts| {
             Arc::new(
                 Relay::new(parts)
-                    .with_enrollment_budget(self.enrollment_budget)
+                    .with_budget(self.relay_budget)
                     .with_co_signer(co_signer.clone())
                     .with_rings(Arc::new(HubRings(shared.clone()))),
             )

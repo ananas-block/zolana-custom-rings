@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use custom_ring_interface::{
     compute_unit_limit, storage_instruction, tag as ring_tag, tracking::TrackingAuthorization,
-    InstructionTag, STORAGE_PROGRAM_ID,
+    InstructionTag, FRAME_BUFFER_HEADER_LEN, STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::{
     close_frame_buffer, AddressCeiling, BufferedFrame, CeilingDecision, MergeCapacity, RingError,
@@ -12,8 +12,9 @@ use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
 use sea_orm::{
     sqlx::error::{Error as SqlxError, ErrorKind},
-    ConnectionTrait, DatabaseConnection, DbErr, RuntimeErr, Statement, TransactionTrait,
+    DatabaseConnection, DbErr, RuntimeErr, TransactionTrait,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -22,6 +23,7 @@ use solana_message::VersionedMessage;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
+use spr_indexer_api::{Base64String, SerializablePubkey};
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore};
 use zolana_ring_client::rpc::{
@@ -42,6 +44,9 @@ use crate::{
     landing::{Attempt, ChainOutcome, ChainSubmit, Landing, LatestBlockhash},
     merge_inputs::{HoldInputs, MergeInputs},
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
+    relay_reservations::{
+        RelayBudget, RelayReservations, Reservation, Reserve, ReserveOutcome, ReservedBuffer,
+    },
     relay_submit::{presigned_transaction, CollectedSignature},
     relays::{PendingCoSign, RelayRecord, RelayState, RelayStore},
 };
@@ -56,6 +61,12 @@ const LANDING_POLL: Duration = Duration::from_millis(500);
 const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge/v1";
 /// Modelled, the first enrollment verifies a proof in its instruction.
 const ENROLL_COMPUTE_UNITS: u32 = 400_000;
+/// One blockhash lifetime for the last write to land and one for the wallet to sign.
+pub const ABANDONED_AFTER_SLOTS: u64 = 2 * QUOTE_SLOTS;
+const SWEEP_PAGE: u64 = 16;
+const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
+const FRAME_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-frame/v1";
+const ENROLL_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-enroll/v1";
 
 #[derive(Debug, Error)]
 pub enum RelayError {
@@ -93,8 +104,12 @@ pub enum RelayError {
     DepositorIsFeePayer,
     #[error("the enrollment is no tag 6 of a ring's tracking registry under its own owner")]
     InvalidEnrollment,
-    #[error("the operator funds no further enrollment")]
-    EnrollmentBudget,
+    #[error("the relay budget has no room for the request")]
+    Budget,
+    #[error("the signer holds its whole share of the relay budget")]
+    SignerBudget,
+    #[error("the enrollment request does not carry the owner's signature")]
+    EnrollmentSignature,
 }
 
 pub enum RelayPayload {
@@ -135,8 +150,7 @@ pub struct Relay {
     proofs: Semaphore,
     /// Every record write after the proofs, one relay state at a time.
     transitions: Mutex<()>,
-    /// Enrollments the fee payer funds over the store's life, none by default.
-    enrollment_budget: u64,
+    budget: RelayBudget,
 }
 
 /// Every signature except the fee payer's is collected.
@@ -159,6 +173,7 @@ struct PrepareCheck<'a> {
 
 struct Checked {
     owner_signature: Option<[u8; 64]>,
+    signer: Option<Address>,
     setup: Vec<Instruction>,
 }
 
@@ -209,7 +224,9 @@ impl RelayError {
             Self::TokenAccountSetup(_) => -32200,
             Self::DepositorIsFeePayer => -32201,
             Self::InvalidEnrollment => -32202,
-            Self::EnrollmentBudget => -32203,
+            Self::Budget => -32203,
+            Self::SignerBudget => -32204,
+            Self::EnrollmentSignature => -32205,
         }
     }
 
@@ -251,14 +268,14 @@ impl Relay {
             co_signer: Arc::new(RefusingCoSigner),
             proofs: Semaphore::new(MAX_CONCURRENT_PROOFS),
             transitions: Mutex::new(()),
-            enrollment_budget: 0,
+            budget: RelayBudget::default(),
         }
     }
 
-    /// Each enrollment funds an account's rent the wallet never repays.
+    /// Without it the relay funds no enrollment and no buffer.
     #[must_use = "use the updated relay"]
-    pub const fn with_enrollment_budget(mut self, budget: u64) -> Self {
-        self.enrollment_budget = budget;
+    pub const fn with_budget(mut self, budget: RelayBudget) -> Self {
+        self.budget = budget;
         self
     }
 
@@ -309,9 +326,6 @@ impl Relay {
         self.rings.check(ring).await?;
         let payload = RelayPayload::decode(&request.intent).map_err(RelayError::from)?;
         if let RelayPayload::Enroll(enrollment) = &payload {
-            if self.enrollment_budget == 0 {
-                return Err(RelayError::EnrollmentBudget.into());
-            }
             if enrollment.tracking_registry != self.rings.tracking_registry(ring).await? {
                 return Err(RelayError::InvalidEnrollment.into());
             }
@@ -319,6 +333,7 @@ impl Relay {
         let parties = self.parties(&request.co_signers);
         let Checked {
             owner_signature,
+            signer,
             setup,
         } = PrepareCheck {
             request,
@@ -327,13 +342,19 @@ impl Relay {
             slot: self.chain.slot().await?,
         }
         .check()?;
-        let proven = match &payload {
+        let stored = self
+            .reservations()
+            .by_relay(&relay_id)
+            .await?
+            .and_then(|held| held.proven);
+        let proven = match (&payload, stored) {
+            (_, Some(stored)) => StoredProof::read(&stored)?,
             // The wallet proved its seal, the relay only pays.
-            RelayPayload::Enroll(enrollment) => {
-                self.spend_enrollment(&relay_id).await?;
+            (RelayPayload::Enroll(enrollment), None) => {
+                self.reserve_enrollment(enrollment, &relay_id).await?;
                 enrollment_step(enrollment, parties.fee_payer)
             }
-            _ => {
+            (_, None) => {
                 let _proof = self
                     .proofs
                     .try_acquire()
@@ -354,32 +375,51 @@ impl Relay {
             setup,
             proven,
             parties,
+            signer,
         })
         .await
     }
 
-    /// The count and the row commit together, concurrent prepares never pass the budget.
-    async fn spend_enrollment(&self, relay_id: &RelayId) -> Result<(), RingRpcError> {
-        let transaction = self.store.connection().begin().await?;
-        let backend = transaction.get_database_backend();
-        let inserted = transaction
-            .execute(Statement::from_sql_and_values(
-                backend,
-                "INSERT INTO relay_enrollments(relay_id) SELECT $1 \
-                 WHERE (SELECT COUNT(*) FROM relay_enrollments) < $2",
-                vec![
-                    relay_id.0 .0.to_vec().into(),
-                    i64::try_from(self.enrollment_budget)
-                        .unwrap_or(i64::MAX)
-                        .into(),
-                ],
-            ))
-            .await?;
-        transaction.commit().await?;
-        match inserted.rows_affected() {
-            0 => Err(RelayError::EnrollmentBudget.into()),
-            _ => Ok(()),
+    /// The owner's signature over the digest was checked, a retry finds the held charge.
+    async fn reserve_enrollment(
+        &self,
+        enrollment: &RelayEnrollInputs,
+        relay_id: &RelayId,
+    ) -> Result<(), RingRpcError> {
+        let lamports = self
+            .chain
+            .rent_exempt_lamports(TrackingAuthorization::SIZE)
+            .await?
+            + 2 * LAMPORTS_PER_SIGNATURE;
+        let key = Sha256::new()
+            .chain_update(ENROLL_KEY_DOMAIN)
+            .chain_update(enrollment.request_digest())
+            .finalize()
+            .into();
+        self.reserve(Reserve {
+            key,
+            relay_id,
+            signer: enrollment.owner,
+            lamports,
+            buffer: None,
+            proven: None,
+            slot: self.chain.slot().await?,
+            budget: self.budget,
+        })
+        .await
+        .map(|_| ())
+    }
+
+    async fn reserve(&self, reserve: Reserve<'_>) -> Result<Reservation, RingRpcError> {
+        match self.reservations().reserve(reserve).await? {
+            ReserveOutcome::Held(held) => Ok(*held),
+            ReserveOutcome::OverTotal => Err(RelayError::Budget.into()),
+            ReserveOutcome::OverSigner => Err(RelayError::SignerBudget.into()),
         }
+    }
+
+    fn reservations(&self) -> RelayReservations<'_> {
+        RelayReservations::new(self.store.connection())
     }
 
     pub(crate) async fn stored(
@@ -426,6 +466,7 @@ impl Relay {
             setup: Vec::new(),
             proven,
             parties,
+            signer: None,
         })
         .await
     }
@@ -438,9 +479,11 @@ impl Relay {
             mut setup,
             proven,
             parties,
+            signer,
         } = proven;
         let mut proven = proven;
-        self.buffer_wide_frame(&mut proven).await?;
+        self.buffer_wide_frame(&mut proven, signer, &relay_id)
+            .await?;
         let fee_payer = self.fee_payer();
         let LatestBlockhash {
             blockhash,
@@ -477,8 +520,8 @@ impl Relay {
             Ok(false) => Some(UnstoredWrite::Existing),
             Err(error) => Some(UnstoredWrite::Failed(error)),
         };
+        // A kept reservation resumes on a retry, the sweep closes its buffer otherwise.
         if let Some(write) = write {
-            self.close_buffer(&record.message).await;
             let stored = self.relays().get(&relay_id).await;
             self.free_unless_stored(FailedWrite {
                 write,
@@ -498,7 +541,12 @@ impl Relay {
 
     /// The record and its held inputs commit together before the send.
     /// A frame past one transaction settles from a buffer the relay writes and pays for.
-    async fn buffer_wide_frame(&self, proven: &mut ProvenRelay) -> Result<(), RingRpcError> {
+    async fn buffer_wide_frame(
+        &self,
+        proven: &mut ProvenRelay,
+        signer: Option<Address>,
+        relay_id: &RelayId,
+    ) -> Result<(), RingRpcError> {
         if proven.instruction.data.first() != Some(&ring_tag::TRANSFER) {
             return Ok(());
         }
@@ -518,16 +566,58 @@ impl Relay {
         if !matches!(decision, CeilingDecision::Buffered(_)) {
             return Ok(());
         }
+        let signer = signer.ok_or(RelayError::OwnerSignature)?;
         let frame = BufferedFrame::for_writer(&proven.instruction, writer)
             .map_err(|error| RelayError::proof(error.into()))?;
+        let writes = frame.writes().map_err(RelayError::proof)?;
+        let settle = frame.settle();
+        let held = self
+            .reserve(Reserve {
+                key: frame_key(&proven.instruction.data),
+                relay_id,
+                signer,
+                lamports: self.frame_cost(proven, &settle, writes.len()).await?,
+                buffer: Some(ReservedBuffer {
+                    ring: proven.instruction.program_id,
+                    buffer: frame.buffer(),
+                }),
+                proven: Some(StoredProof::of(proven)?),
+                slot: self.chain.slot().await?,
+                budget: self.budget,
+            })
+            .await?;
         let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::WriteFrame));
-        for write in frame.writes().map_err(RelayError::proof)? {
+        for (index, write) in writes.into_iter().enumerate().skip(held.uploaded) {
             self.land(write, budget).await?;
+            self.reservations()
+                .uploaded(&held.key, index + 1, self.chain.slot().await?)
+                .await?;
         }
-        proven.instruction = frame.settle();
+        proven.instruction = settle;
         proven.budget =
             ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::SettleBuffered));
         Ok(())
+    }
+
+    /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
+    async fn frame_cost(
+        &self,
+        proven: &ProvenRelay,
+        settle: &Instruction,
+        writes: usize,
+    ) -> Result<u64, RingRpcError> {
+        let rent = self
+            .chain
+            .rent_exempt_lamports(FRAME_BUFFER_HEADER_LEN + proven.instruction.data.len())
+            .await?;
+        let settle_signers = settle
+            .accounts
+            .iter()
+            .filter(|account| account.is_signer)
+            .count();
+        // One signature per write and for the close, the fee payer's beside the settlement's own.
+        let signatures = u64::try_from(writes + settle_signers + 2).unwrap_or(u64::MAX);
+        Ok(rent.saturating_add(signatures.saturating_mul(LAMPORTS_PER_SIGNATURE)))
     }
 
     /// One transaction the relay alone signs, carried to its finalized outcome.
@@ -564,22 +654,50 @@ impl Relay {
         }
     }
 
-    /// Returns the rent of a settlement that will not land, a refused close stays logged.
-    async fn close_buffer(&self, message: &VersionedMessage) {
-        let keys = message.static_account_keys();
-        let buffer = message.instructions().iter().find_map(|instruction| {
-            (instruction.data.first() == Some(&ring_tag::SETTLE_BUFFERED)).then_some(())?;
-            let ring = *keys.get(usize::from(instruction.program_id_index))?;
-            let buffer = *keys.get(usize::from(*instruction.accounts.first()?))?;
-            Some(close_frame_buffer(ring, self.fee_payer(), buffer))
-        });
-        let Some(close) = buffer else {
-            return;
-        };
-        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::CloseFrameBuffer));
-        if let Err(error) = self.land(close, budget).await {
-            warn!("relay buffer did not close {}", redacted(&error));
+    /// The rent returns before the charge does, a refused close stays for the next sweep.
+    async fn release(&self, held: &Reservation) -> Result<(), RingRpcError> {
+        if let Some(ReservedBuffer { ring, buffer }) = held.buffer {
+            if self.chain.account_exists(buffer).await? {
+                let close = close_frame_buffer(ring, self.fee_payer(), buffer);
+                let budget =
+                    ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::CloseFrameBuffer));
+                self.land(close, budget).await?;
+            }
         }
+        Ok(self.reservations().release(held).await?)
+    }
+
+    /// Past the window nothing of a live relay is left, a wallet that never signed let the blockhash lapse.
+    pub async fn sweep_abandoned(&self) -> Result<(), RingRpcError> {
+        let slot = self.chain.slot().await?;
+        let before = slot.saturating_sub(ABANDONED_AFTER_SLOTS);
+        for held in self.reservations().abandoned(before, SWEEP_PAGE).await? {
+            let _transition = self.transitions.lock().await;
+            let swept = async {
+                let Some(mut record) = self.relays().get(&held.relay_id).await? else {
+                    return self.release(&held).await;
+                };
+                match record.state {
+                    RelayState::Sent { .. } => Ok(()),
+                    RelayState::Confirmed { .. } => Ok(self.reservations().release(&held).await?),
+                    RelayState::Failed { .. } => self.release(&held).await,
+                    RelayState::AwaitingSignature => {
+                        if self.chain.block_height().await? <= record.last_valid_block_height {
+                            return Ok(());
+                        }
+                        record.state = RelayState::Failed {
+                            reason: EXPIRED.to_owned(),
+                        };
+                        self.close(&held.relay_id, &record).await
+                    }
+                }
+            }
+            .await;
+            if let Err(error) = swept {
+                warn!("relay reservation did not sweep {}", redacted(&error));
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn send_merge(&self, merge: HeldMerge) -> Result<RelayId, RingRpcError> {
@@ -719,6 +837,9 @@ impl Relay {
         loop {
             if let Err(error) = self.track().await {
                 warn!("relay tracking failed {}", redacted(&error));
+            }
+            if let Err(error) = self.sweep_abandoned().await {
+                warn!("relay sweep failed {}", redacted(&error));
             }
             tokio::time::sleep(interval).await;
         }
@@ -870,11 +991,20 @@ impl Relay {
             RelayState::Confirmed { .. } => {
                 self.settle(record.co_signature, CoSignSettlement::Confirmed)
                     .await?;
-                Ok(self.relays().update(relay_id, record).await?)
+                self.relays().update(relay_id, record).await?;
+                // The settlement closed the buffer into the writer.
+                if let Some(held) = self.reservations().by_relay(relay_id).await? {
+                    self.reservations().release(&held).await?;
+                }
+                Ok(())
             }
             _ => {
                 self.relays().update(relay_id, record).await?;
-                self.close_buffer(&record.message).await;
+                if let Some(held) = self.reservations().by_relay(relay_id).await? {
+                    if let Err(error) = self.release(&held).await {
+                        warn!("relay buffer did not close {}", redacted(&error));
+                    }
+                }
                 self.settle(record.co_signature, CoSignSettlement::Failed)
                     .await
             }
@@ -910,6 +1040,8 @@ struct ProvenStep {
     setup: Vec<Instruction>,
     proven: ProvenRelay,
     parties: RelayParties,
+    /// The wallet party whose signature the check verified, it answers for a reservation.
+    signer: Option<Address>,
 }
 
 struct CoSignStep<'a> {
@@ -1014,6 +1146,7 @@ impl PrepareCheck<'_> {
         }
         let unsigned = Checked {
             owner_signature: None,
+            signer: None,
             setup: Vec::new(),
         };
         let proof_inputs = match payload {
@@ -1024,7 +1157,22 @@ impl PrepareCheck<'_> {
             RelayPayload::Deposit(_) | RelayPayload::Merge(_) => return Ok(unsigned),
             RelayPayload::Enroll(enrollment) => {
                 check_enrollment(enrollment, fee_payer)?;
-                return Ok(unsigned);
+                let RelayIntent::Enroll {
+                    owner_signature, ..
+                } = &request.intent
+                else {
+                    return Err(RelayError::EnrollmentSignature.into());
+                };
+                if !owner_signature
+                    .0
+                    .verify(enrollment.owner.as_ref(), &enrollment.request_digest())
+                {
+                    return Err(RelayError::EnrollmentSignature.into());
+                }
+                return Ok(Checked {
+                    signer: Some(enrollment.owner),
+                    ..unsigned
+                });
             }
         };
         if proof_inputs.rail.operation() != request.intent.operation() {
@@ -1060,6 +1208,12 @@ impl PrepareCheck<'_> {
         {
             true => Ok(Checked {
                 owner_signature: Some(signature),
+                signer: proof_inputs
+                    .sender
+                    .signing_pubkey
+                    .as_ed25519()
+                    .ok()
+                    .map(Address::new_from_array),
                 setup,
             }),
             false => Err(RelayError::OwnerSignature.into()),
@@ -1111,6 +1265,70 @@ impl RelayPayload {
                 }])
             }
             Self::Merge(_) | Self::Enroll(_) => CoSignFlows::Published(Vec::new()),
+        })
+    }
+}
+
+fn frame_key(frame: &[u8]) -> [u8; 32] {
+    Sha256::new()
+        .chain_update(FRAME_KEY_DOMAIN)
+        .chain_update(frame)
+        .finalize()
+        .into()
+}
+
+/// A proven frame kept with its reservation, public once it lands.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredProof {
+    program: SerializablePubkey,
+    accounts: Vec<(SerializablePubkey, bool, bool)>,
+    data: Base64String,
+    co_signers: Vec<SerializablePubkey>,
+    signers: Vec<SerializablePubkey>,
+}
+
+impl StoredProof {
+    fn of(proven: &ProvenRelay) -> Result<String, RingRpcError> {
+        serde_json::to_string(&Self {
+            program: proven.instruction.program_id.into(),
+            accounts: proven
+                .instruction
+                .accounts
+                .iter()
+                .map(|meta| (meta.pubkey.into(), meta.is_signer, meta.is_writable))
+                .collect(),
+            data: proven.instruction.data.clone().into(),
+            co_signers: proven.co_signers.iter().copied().map(Into::into).collect(),
+            signers: proven.signers.iter().copied().map(Into::into).collect(),
+        })
+        .map_err(|_| RingRpcError::StateUnavailable)
+    }
+
+    fn read(stored: &str) -> Result<ProvenRelay, RingRpcError> {
+        let Self {
+            program,
+            accounts,
+            data,
+            co_signers,
+            signers,
+        } = serde_json::from_str(stored).map_err(|_| RingRpcError::StateUnavailable)?;
+        Ok(ProvenRelay {
+            instruction: Instruction {
+                program_id: program.0,
+                accounts: accounts
+                    .into_iter()
+                    .map(|(pubkey, is_signer, is_writable)| AccountMeta {
+                        pubkey: pubkey.0,
+                        is_signer,
+                        is_writable,
+                    })
+                    .collect(),
+                data: data.0,
+            },
+            budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
+            co_signers: co_signers.into_iter().map(|signer| signer.0).collect(),
+            signers: signers.into_iter().map(|signer| signer.0).collect(),
         })
     }
 }

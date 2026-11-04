@@ -498,6 +498,17 @@ pub(crate) mod tests {
 
     #[async_trait]
     impl ChainSubmit for ScriptedChain {
+        async fn account_exists(
+            &self,
+            _address: solana_address::Address,
+        ) -> Result<bool, RingRpcError> {
+            Ok(false)
+        }
+
+        async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {
+            Ok(0)
+        }
+
         async fn slot(&self) -> Result<u64, RingRpcError> {
             Ok(1)
         }

@@ -73,8 +73,11 @@ pub enum RelayIntent {
     Deposit { proof_inputs: ProofInputBytes },
     /// `proof_inputs` is a `RelayMergeInputs`.
     Merge { proof_inputs: ProofInputBytes },
-    /// `proof_inputs` is a `RelayEnrollInputs`, the owner signs the returned message.
-    Enroll { proof_inputs: ProofInputBytes },
+    /// `proof_inputs` is a `RelayEnrollInputs`, the owner signs its digest here and the returned message later.
+    Enroll {
+        proof_inputs: ProofInputBytes,
+        owner_signature: SerializableSignature,
+    },
 }
 
 /// The fee payer creates the associated token account a withdrawal of `mint` pays.
@@ -183,7 +186,7 @@ impl RelayIntent {
             | Self::Delegate { proof_inputs, .. }
             | Self::Deposit { proof_inputs }
             | Self::Merge { proof_inputs }
-            | Self::Enroll { proof_inputs } => proof_inputs,
+            | Self::Enroll { proof_inputs, .. } => proof_inputs,
         }
     }
 }
