@@ -2,11 +2,12 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    compute_unit_limit, storage_instruction, tag as ring_tag, tracking::TrackingAuthorization,
-    InstructionTag, FRAME_BUFFER_HEADER_LEN,
+    compute_unit_limit, storage_instruction, tracking::TrackingAuthorization, InstructionTag,
+    FRAME_BUFFER_HEADER_LEN,
 };
 use custom_ring_sdk::{
-    close_frame_buffer, AddressCeiling, BufferedFrame, CeilingDecision, MergeCapacity, RingError,
+    close_frame_buffer, BufferedFrame, FitError, FitSigners, FitTransport, RingError,
+    TransactionFit,
 };
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
@@ -397,8 +398,16 @@ impl Relay {
                 // The wallet proved its seal, the relay only pays.
                 (RelayPayload::Enroll(enrollment), None) => {
                     let lease = lease.ok_or(RelayError::EnrollmentSignature)?;
+                    let step = enrollment_step(enrollment, parties.fee_payer);
+                    // The funding below pays for the exact message, it must fit first.
+                    let _fit = TransactionFit::inline(
+                        &step.instruction,
+                        FitSigners::new(parties.fee_payer),
+                        step.budget,
+                    )
+                    .map_err(refused_fit)?;
                     self.fund_enrollment(lease).await?;
-                    enrollment_step(enrollment, parties.fee_payer)
+                    step
                 }
                 (_, None) => {
                     let _proof = self
@@ -670,9 +679,11 @@ impl Relay {
         let mut proven = proven;
         // 1. Every lamport the message and its upload can cost is held before the first send.
         let setup_rent = self.setup_rent(&setup).await?;
+        let mut instructions: Vec<_> = setup.iter().map(|create| create.instruction()).collect();
         self.reserve_and_upload(RelaySpend {
             proven: &mut proven,
             lease,
+            setup: &instructions,
             setup_rent,
         })
         .await?;
@@ -682,7 +693,6 @@ impl Relay {
             blockhash,
             last_valid_block_height,
         } = self.chain.latest_blockhash().await?;
-        let mut instructions: Vec<_> = setup.iter().map(|create| create.instruction()).collect();
         instructions.push(proven.instruction.clone());
         let message = compile_message(&fee_payer, &instructions, blockhash, proven.budget)?;
         let awaited = CoSignStep {
@@ -802,33 +812,27 @@ impl Relay {
         Ok(staged)
     }
 
-    /// A frame past one transaction settles from a buffer the relay writes and pays for.
-    fn wide_frame(&self, proven: &ProvenRelay) -> Result<Option<BufferedFrame>, RingRpcError> {
-        if !matches!(
-            proven.instruction.data.first(),
-            Some(&(ring_tag::TRANSFER | ring_tag::AUTHORITY_TRANSFER))
-        ) {
-            return Ok(None);
-        }
+    /// A frame past one transaction settles from a buffer the relay writes and pays for. The fit reads
+    /// the final message with its setup, a transport that only setup breaks refuses here, ahead of any
+    /// charge or write.
+    fn wide_frame(
+        &self,
+        proven: &ProvenRelay,
+        setup: &[Instruction],
+    ) -> Result<Option<BufferedFrame>, RingRpcError> {
         let writer = self.fee_payer();
-        let decision = AddressCeiling {
-            payer: writer,
-            instruction: &proven.instruction,
-            budget: proven.budget,
-            inputs: &[],
-            merge_capacity: MergeCapacity {
-                keyed: 0,
-                zero_key: 0,
-            },
+        let fit = TransactionFit::of(
+            &proven.instruction,
+            FitSigners::new(writer).with_setup(setup),
+            proven.budget,
+        )
+        .map_err(refused_fit)?;
+        match fit.transport {
+            FitTransport::Inline => Ok(None),
+            FitTransport::Buffered => BufferedFrame::for_writer(&proven.instruction, writer)
+                .map(Some)
+                .map_err(refused_fit),
         }
-        .decide()
-        .map_err(|error| RelayError::proof(error.into()))?;
-        if !matches!(decision, CeilingDecision::Buffered(_)) {
-            return Ok(None);
-        }
-        BufferedFrame::for_writer(&proven.instruction, writer)
-            .map(Some)
-            .map_err(|error| RelayError::proof(error.into()))
     }
 
     /// Nothing is paid before its reservation commits.
@@ -836,10 +840,11 @@ impl Relay {
         let RelaySpend {
             proven,
             lease,
+            setup,
             setup_rent,
         } = spend;
         // 1. The transport is decided, a frame the relay cannot carry costs nothing.
-        let Some(frame) = self.wide_frame(proven)? else {
+        let Some(frame) = self.wide_frame(proven, setup)? else {
             if setup_rent > 0 {
                 let fee = message_fee_of(&proven.instruction);
                 self.fund(Fund {
@@ -1496,6 +1501,7 @@ struct ProvenStep {
 struct RelaySpend<'a> {
     proven: &'a mut ProvenRelay,
     lease: Option<Lease>,
+    setup: &'a [Instruction],
     setup_rent: u64,
 }
 
@@ -1893,6 +1899,10 @@ fn enrollment_step(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Proven
         co_signers: Vec::new(),
         signers: vec![enrollment.owner],
     }
+}
+
+fn refused_fit(error: FitError) -> RingRpcError {
+    RelayError::proof(error.into())
 }
 
 /// A constraint violation or a failed pool acquire proves the store never committed the write.
