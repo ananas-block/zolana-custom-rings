@@ -16,7 +16,8 @@ use custom_ring_interface::{
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
     ring_sender_bundle_output_body, sender_bundle_len, CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    MIN_REPLY_LEN, OUTPUT_COUNT_BYTE, RING_BODY_SCHEME_TAG, RING_SENDER_BUNDLE_SCHEME_TAG,
+    MIN_REPLY_LEN, OUTPUT_COUNT_BYTE, RECIPIENT_BODY_LEN, RING_BODY_SCHEME_TAG,
+    RING_SENDER_BUNDLE_SCHEME_TAG,
 };
 use serde::{Deserialize, Serialize};
 use spr_event::{
@@ -654,14 +655,20 @@ fn flags_the_rail_forbids_are_refused() {
         RingTransactData::parse(&curator, RingRail::Confidential),
         Err(CustomRingError::FlagNotAllowed)
     );
+}
+
+/// A delegate exit takes SPP's authority exit selector, a move keeps the authority rail.
+#[test]
+fn a_delegate_exit_selects_the_exit_circuit() {
+    let fixture = Fixture::new();
     let mut exit = fixture.delegate();
-    exit.rail = RingRail::Confidential;
+    assert_eq!(exit.circuit(), CircuitId::RingAuthority(2, 2, 3));
     exit.outputs[1] = fixture.exit(1, &fixture.payload);
     let compact = fixture.with_audit_stream(exit).encode().unwrap();
-    assert_eq!(
-        RingTransactData::parse(&compact, RingRail::Delegate),
-        Err(CustomRingError::FlagNotAllowed)
-    );
+    let parsed = RingTransactData::parse(&compact, RingRail::Delegate)
+        .unwrap()
+        .into_data();
+    assert_eq!(parsed.circuit(), CircuitId::RingAuthorityExit(2, 2, 3));
 }
 
 /// Without `has_data` every body has one length, the frame carries none.
@@ -743,6 +750,64 @@ fn the_extensions_reach_the_forwarded_data() {
         RingTransactData::parse(&unknown, RingRail::Confidential),
         Err(CustomRingError::FlagNotAllowed)
     );
+}
+
+/// SPP's proof binds the hash, a byte the ring proof leaves out still cannot move under it.
+#[test]
+fn the_external_data_hash_binds_every_delivery_byte() {
+    let fixture = Fixture::new();
+    let config = config();
+    let hash = |data: &RingTransactData<'_>| data.external_data_hash(&config, &[]).unwrap();
+    let garbage = [0xee; RECIPIENT_BODY_LEN];
+    let other_payload = [0xee; CONFIDENTIAL_DATA_FREE_BODY_LEN];
+    for (name, honest) in [
+        ("confidential", fixture.confidential_delivered()),
+        ("anonymous", fixture.anonymous()),
+        ("delegate", fixture.delegate()),
+        ("anonymous delegate", fixture.anonymous_delegate()),
+    ] {
+        let reference = hash(&honest);
+        let mut body = honest.clone();
+        let slot = body
+            .outputs
+            .iter()
+            .position(|output| matches!(output.body, SlotBody::Recipient(_)))
+            .unwrap();
+        body.outputs[slot].body = SlotBody::Recipient(&garbage);
+        assert_ne!(hash(&body), reference, "{name} body");
+        let mut tag = honest.clone();
+        tag.outputs[slot].owner_tag = &fixture.bytes[40];
+        assert_ne!(hash(&tag), reference, "{name} tag");
+        let mut record = honest.clone();
+        record.outputs[slot].record = &fixture.records[15];
+        assert_ne!(hash(&record), reference, "{name} record");
+    }
+    let confidential = fixture.confidential_delivered();
+    let mut exit = confidential.clone();
+    exit.outputs[3].body = SlotBody::Exit(&other_payload);
+    assert_ne!(hash(&exit), hash(&confidential), "exit body");
+    let honest = fixture.anonymous();
+    let mut bundle = honest.clone();
+    let body = bundle.sender.unwrap().body;
+    bundle.sender = Some(FramedSenderBundle {
+        tag: &fixture.tags[6],
+        body,
+    });
+    assert_ne!(hash(&bundle), hash(&honest), "bundle tag");
+    let mut bundle = honest.clone();
+    let tag = bundle.sender.unwrap().tag;
+    bundle.sender = Some(FramedSenderBundle {
+        tag,
+        body: &fixture.envelope[..sender_bundle_len(4)],
+    });
+    assert_ne!(hash(&bundle), hash(&honest), "bundle body");
+    let replied = fixture.anonymous_replies(MIN_REPLY_LEN as u16);
+    let mut reply = replied.clone();
+    reply.replies = Some(Replies {
+        len: MIN_REPLY_LEN as u16,
+        region: &fixture.envelope[..2 * MIN_REPLY_LEN],
+    });
+    assert_ne!(hash(&reply), hash(&replied), "reply");
 }
 
 #[test]
