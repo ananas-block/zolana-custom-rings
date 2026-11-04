@@ -3367,3 +3367,43 @@ async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
             if member == address.signing_pubkey.owner_proof_input_hash().unwrap()
     ));
 }
+
+/// A wrong salt would write an entry no proof reads, only the row's own salt passes.
+#[tokio::test]
+async fn a_salted_owner_passes_under_its_rows_tag_alone() {
+    use crate::{tests::support::keypair, SaltedOwnerCheck};
+    use custom_ring_interface::domain;
+    use zolana_ring_client::ResolveError;
+    let owner = keypair(1);
+    let salt = [7; 32];
+    let address = ring_address(&owner);
+    assert_eq!(address.list_salt, salt);
+    let enrolled = [address.recipient];
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential))
+        .with_tracking_tag(&enrolled, domain::list_tag(&salt).unwrap());
+    let client = &chain;
+    let read = |address| async move {
+        SaltedOwnerCheck {
+            ring: ring(),
+            address,
+        }
+        .run(client)
+        .await
+    };
+    assert!(read(&address).await.is_ok());
+
+    let forged = RingAddress {
+        list_salt: [8; 32],
+        ..address.clone()
+    };
+    assert!(matches!(
+        read(&forged).await,
+        Err(RingError::Resolve(ResolveError::ListTagMismatch))
+    ));
+
+    let unenrolled = ring_address(&keypair(2));
+    assert!(matches!(
+        read(&unenrolled).await,
+        Err(RingError::Resolve(ResolveError::NotEnrolled))
+    ));
+}

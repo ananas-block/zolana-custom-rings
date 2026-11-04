@@ -91,7 +91,7 @@ pub use crate::{
         RingSender, RingTransfer, TransferKey,
     },
     records::{
-        AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,
+        AuthorityRecordUpdate, MemberRecords, RecordUpdateService, SaltedOwnerCheck, RecordUpdateTarget,
         WalletRecordUpdate,
     },
     register_key::{Enroll, EnrollInstruction, WriteOwnerGrant},

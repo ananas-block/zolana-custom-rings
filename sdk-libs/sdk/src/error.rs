@@ -154,6 +154,8 @@ pub enum RingError {
     PublicSpendInProofOwner,
     #[error(transparent)]
     AddressCeiling(#[from] crate::AddressCeilingError),
+    #[error(transparent)]
+    Resolve(#[from] zolana_ring_client::ResolveError),
     #[error("a deposit frame proves once, a retry draws a new blinding secret")]
     DepositFrameReused,
     #[error("a deposit to another member needs its request's tag, the viewing key is no tag")]

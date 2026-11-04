@@ -16,7 +16,7 @@ use zolana_ring_client::{
         RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest, WalletGrant,
         ENROLMENT_LISTS,
     },
-    AsyncRingIndexer, ReaderKey,
+    AsyncRingIndexer, ReaderKey, RecipientResolver, ResolvedRecipient,
 };
 use zolana_ring_indexer::{
     rpc::{
@@ -25,6 +25,7 @@ use zolana_ring_indexer::{
     },
     tracking::{GetTrackingOpeningsRequest, GetTrackingRecordPoolRequest},
 };
+use zolana_ring_keys::RingAddress;
 use zolana_ring_member_registry::{
     Canopy, OpeningCheck, PoolSubject, SharedPath, SharedProof, TrackingOpening, TrackingPool,
     TrackingRecord,
@@ -211,6 +212,30 @@ impl TrackingPoolRead {
             .records
             .get(subject.record_index as usize)
             .filter(|record| record.member == *member)
+    }
+}
+
+/// A salted entry reads only under the salt the owner's row commits, any other disarms it silently.
+#[must_use]
+pub struct SaltedOwnerCheck<'a> {
+    pub ring: CustomRing,
+    pub address: &'a RingAddress,
+}
+
+impl SaltedOwnerCheck<'_> {
+    pub async fn run(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<ResolvedRecipient, RingError> {
+        let policy = self.ring.require_policy(rpc).await?;
+        let tracking = BoundRoot::tracking(&policy, rpc).await?;
+        Ok(RecipientResolver {
+            address: self.address,
+            registry: tracking.registry,
+            root: tracking.root,
+        }
+        .resolve(rpc)
+        .await?)
     }
 }
 
