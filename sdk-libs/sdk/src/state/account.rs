@@ -1,6 +1,8 @@
 //! The ring's accounts as the chain holds them, every read checked against its canonical address.
 
-use custom_ring_interface::{CoSignScope, CoSigner, RingAccount, RingMode, RingPolicy, RingRoles};
+use custom_ring_interface::{
+    tracking::TrackingRegistry, CoSignScope, CoSigner, RingAccount, RingMode, RingPolicy, RingRoles,
+};
 use solana_account::Account;
 use solana_address::Address;
 use spr_client::AsyncRpc;
@@ -90,6 +92,11 @@ impl CustomRing {
     /// SPP stores the ring config here and requires it as the signer of ring CPIs.
     pub fn ring_auth_pda(self) -> Address {
         self.pda(&[RING_AUTH_PDA_SEED]).0
+    }
+
+    /// The ring PDA signs its creation, the address is its and the ring id's.
+    pub fn tracking_registry(self) -> Result<Address, RingError> {
+        Ok(TrackingRegistry::find_address(&self.ring_auth_pda(), &self.ring_id()?).0)
     }
 
     pub fn program_data_pda(self) -> Address {
