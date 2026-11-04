@@ -11,7 +11,7 @@ const EMPTY: RuleTable = RuleTable::builder().build();
 const GROUP: RuleTable = RuleTable::builder()
     .rule(Rule::require_any(
         Subject::OutputOwner,
-        ListSet::of(&[ListId::Allow, ListId::Frozen]),
+        ListSet::of(&[ListId::Allow, ListId::Approval]),
     ))
     .build();
 
@@ -284,12 +284,12 @@ fn alternatives_list_presences_before_absences_in_slot_order() {
 
 #[test]
 fn validation_needs_a_source_for_every_list_of_a_group() {
-    let both = sources(&[(ListId::Allow, [0u8; 32]), (ListId::Frozen, [5u8; 32])]);
+    let both = sources(&[(ListId::Allow, [0u8; 32]), (ListId::Approval, [5u8; 32])]);
     assert_eq!(GROUP.encode().validate(&both), Ok(GROUP));
     let only_one = sources(&[(ListId::Allow, [0u8; 32])]);
     assert_eq!(
         GROUP.encode().validate(&only_one),
-        Err(PolicyTableError::MissingSource(ListId::Frozen))
+        Err(PolicyTableError::MissingSource(ListId::Approval))
     );
 }
 
@@ -534,5 +534,48 @@ fn per_asset_guards_are_configured_independently_of_mint_records() {
             .rule(Rule::require(Subject::Sender, ListId::Allow).above_by_asset())
             .try_build(),
         Err(RuleTableError::PerAssetGuardNotOwner)
+    );
+}
+
+#[test]
+fn a_grant_list_reads_by_presence_and_a_deny_list_by_absence() {
+    let map = sources(&[
+        (ListId::Allow, [0; 32]),
+        (ListId::Block, [0; 32]),
+        (ListId::Frozen, [0; 32]),
+        (ListId::Approval, [0; 32]),
+    ]);
+    let polarity = |rule| {
+        RuleTable::builder()
+            .rule(rule)
+            .build()
+            .encode()
+            .validate(&map)
+            .map(|_| ())
+    };
+    let refused = Err(PolicyTableError::Table(RuleTableError::ListPolarity));
+    for list_id in [ListId::Allow, ListId::Approval] {
+        assert_eq!(polarity(Rule::require(Subject::Sender, list_id)), Ok(()));
+        assert_eq!(polarity(Rule::forbid(Subject::Sender, list_id)), refused);
+    }
+    for list_id in [ListId::Block, ListId::Frozen] {
+        assert_eq!(polarity(Rule::forbid(Subject::Sender, list_id)), Ok(()));
+        assert_eq!(polarity(Rule::require(Subject::Sender, list_id)), refused);
+    }
+    assert_eq!(
+        polarity(Rule::any_of(
+            Subject::OutputOwner,
+            ListSet::single(ListId::Approval),
+            ListSet::single(ListId::Block),
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        polarity(Rule::any_of(
+            Subject::OutputOwner,
+            ListSet::single(ListId::Block),
+            ListSet::single(ListId::Allow),
+        )),
+        refused
     );
 }

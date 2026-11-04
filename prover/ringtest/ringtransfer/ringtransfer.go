@@ -110,7 +110,8 @@ type Assembled struct {
 	Tracking     *ringregistry.Tracking
 	Sender       *big.Int
 	// Run is the signer set the program rebuilds.
-	Run []*big.Int
+	Run      []*big.Int
+	delegate bool
 }
 
 // spend fills the fixture's inputs, half and half across the sender's two notes.
@@ -316,18 +317,24 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 	c.Rows = rows(a, delegate, len(c.Rows))
 	c.ApprovalMask = w.ApprovalMask
 	c.PrivateRoot = 0
-	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Tracking: w.tracking(t, a)}
+	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Tracking: w.tracking(t, a), delegate: delegate}
 	assembled.Own, assembled.Curator = w.registries(t, a, c.Rows)
-	w.fillPolicy(t, &c.Policy, assembled, delegate, c.Rows, a.Utxos())
-	outputOwners := make([]frontend.Variable, len(a.Outputs))
-	for o, slot := range a.Outputs {
+	w.reopen(t, c, assembled)
+	return assembled
+}
+
+// reopen fills both pools over the circuit's rows.
+func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
+	t.Helper()
+	w.fillPolicy(t, &c.Policy, a, a.delegate, c.Rows, a.Audit.Utxos())
+	outputOwners := make([]frontend.Variable, len(a.Audit.Outputs))
+	for o, slot := range a.Audit.Outputs {
 		outputOwners[o] = 0
 		if slot.Utxo.IsUtxo() && slot.Utxo.RingProgramID.Sign() != 0 {
 			outputOwners[o] = slot.Utxo.OwnerPkHash
 		}
 	}
-	ringpolicy.FillTracking(t, &c.Tracking, assembled.Tracking, c.Rows, outputOwners)
-	return assembled
+	ringpolicy.FillTracking(t, &c.Tracking, a.Tracking, c.Rows, outputOwners)
 }
 
 func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo) {

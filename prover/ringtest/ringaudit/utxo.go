@@ -51,11 +51,6 @@ func (u Utxo) isExit() bool {
 	return u.isUtxo() && u.RingProgramID.Sign() == 0
 }
 
-// isRingOutput is a UTXO that stays in a ring.
-func (u Utxo) isRingOutput() bool {
-	return u.isUtxo() && u.RingProgramID.Sign() != 0
-}
-
 // Owner mirrors the owner hash shared.UtxoWires.Open derives, zero off a UTXO.
 func (u Utxo) Owner(t testing.TB) *big.Int {
 	t.Helper()

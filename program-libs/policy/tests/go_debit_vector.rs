@@ -68,6 +68,7 @@ fn owner_debits_match_the_circuit_table() {
             assets: &assets,
             inputs: &inputs,
             outputs: &outputs,
+            public_gross: &[],
         });
         let want: Vec<([u8; 32], [u8; 32], u128)> = case
             .debits
