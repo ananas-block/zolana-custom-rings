@@ -654,14 +654,49 @@ fn flags_the_rail_forbids_are_refused() {
         RingTransactData::parse(&curator, RingRail::Confidential),
         Err(CustomRingError::FlagNotAllowed)
     );
+}
+
+/// The exit circuit alone lets a delegate's output leave the ring.
+#[test]
+fn a_delegate_exit_selects_the_exit_circuit() {
+    let fixture = Fixture::new();
+    let moved = fixture.delegate();
+    assert!(matches!(moved.circuit(), CircuitId::RingAuthority(..)));
     let mut exit = fixture.delegate();
-    exit.rail = RingRail::Confidential;
     exit.outputs[1] = fixture.exit(1, &fixture.payload);
-    let compact = fixture.with_audit_stream(exit).encode().unwrap();
-    assert_eq!(
-        RingTransactData::parse(&compact, RingRail::Delegate),
-        Err(CustomRingError::FlagNotAllowed)
-    );
+    let exit = fixture.with_audit_stream(exit);
+    assert!(matches!(exit.circuit(), CircuitId::RingAuthorityExit(..)));
+    let compact = exit.encode().unwrap();
+    let parsed = RingTransactData::parse(&compact, RingRail::Delegate).unwrap();
+    assert_eq!(parsed.data().circuit(), exit.circuit());
+}
+
+#[test]
+fn the_rail_follows_the_instruction_and_the_ring_mode() {
+    use custom_ring_interface::{InstructionTag, RingMode};
+    use InstructionTag::{AuthorityTransfer, Deposit, Transfer};
+    let delegate = solana_address::Address::new_from_array([3; 32]);
+    let ring = |mode: RingMode, delegate: Option<solana_address::Address>| {
+        let mut ring = <RingPolicy as bytemuck::Zeroable>::zeroed();
+        ring.mode = mode as u8;
+        ring.delegate = delegate.unwrap_or_default();
+        ring
+    };
+    let rail = |tag, mode| RingRail::new(tag, &ring(mode, Some(delegate)));
+    assert_eq!(rail(Transfer, RingMode::Confidential), Ok(RingRail::Confidential));
+    assert_eq!(rail(Transfer, RingMode::Anonymous), Ok(RingRail::Anonymous));
+    assert_eq!(rail(AuthorityTransfer, RingMode::Confidential), Ok(RingRail::Delegate));
+    assert_eq!(rail(AuthorityTransfer, RingMode::Anonymous), Ok(RingRail::AnonymousDelegate));
+    assert_eq!(rail(Deposit, RingMode::Confidential), Err(CustomRingError::InvalidInstructionData));
+    for mode in [RingMode::Confidential, RingMode::Anonymous] {
+        assert_eq!(
+            RingRail::new(AuthorityTransfer, &ring(mode, None)),
+            Err(CustomRingError::DelegateDisabled)
+        );
+    }
+    let mut retired = ring(RingMode::Confidential, None);
+    retired.mode = 1;
+    assert_eq!(RingRail::new(Transfer, &retired), Err(CustomRingError::InvalidRingMode));
 }
 
 /// Without `has_data` every body has one length, the frame carries none.

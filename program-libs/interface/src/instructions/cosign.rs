@@ -283,6 +283,25 @@ mod tests {
     }
 
     #[test]
+    fn a_record_scope_is_a_nonzero_subset_of_the_five_classes() {
+        assert_eq!(CoSignScope::new(0), None);
+        assert_eq!(CoSignScope::new(32), None);
+        assert_eq!(CoSignScope::new(31), Some(CoSignScope::ALL));
+        let counts = CoSignerCounts::default()
+            .added(CoSignScope::APPROVE_OUTFLOW)
+            .unwrap()
+            .added(CoSignScope::ALL)
+            .unwrap();
+        assert_eq!(counts.covered(), CoSignScope::ALL);
+        let rest = counts.removed(CoSignScope::ALL).unwrap();
+        assert_eq!(rest.covered(), CoSignScope::APPROVE_OUTFLOW);
+        assert_eq!(
+            rest.removed(CoSignScope::TRANSFERS),
+            Err(CustomRingError::CoSignerCountOutOfRange)
+        );
+    }
+
+    #[test]
     fn merge_and_delegate_refuse_any_record() {
         let configured = ring(&[CoSignScope::ALL]);
         let none = CoSignDemand::NONE.requirement(&configured).unwrap();

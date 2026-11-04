@@ -1,9 +1,10 @@
 //! Ring account and policy writes, their roles and their declared budgets.
 
 use custom_ring_interface::{
-    tag, tracking::TrackingRegistry, CoSignScope, CoSigner, CustomRingError, InitializeIxData,
-    InstructionTag, PolicyBindingIxData, PolicySourceIxData, PolicyTableIxData, RingKind, RingMode,
-    RingPolicy, RingRole, SetPausedIxData, SourceSpec, UpdatePolicyIxData, TAGGED_X25519_KEY_LEN,
+    storage::StorageError, tag, tracking::TrackingRegistry, CoSignScope, CoSigner, CustomRingError,
+    InitializeIxData, InstructionTag, PolicyBindingIxData, PolicySourceIxData, PolicyTableIxData,
+    RingKind, RingMode, RingPolicy, RingRole, SetPausedIxData, SourceSpec, UpdatePolicyIxData,
+    TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -123,6 +124,26 @@ fn initialize_creates_the_ring_and_spp_registration_under_the_upgrade_authority(
         (registration.program_id, registration.authority),
         (PROGRAM, ring_auth())
     );
+}
+
+/// Storage fixes the address from the ring PDA and the ring id, a client names no registry of its own.
+#[test]
+fn initialize_refuses_a_tracking_account_off_its_seeds() {
+    let mut ring = uninitialized(Setup::Policy);
+    let data = policy_config(&ring);
+    let authority = ring.authority.pubkey();
+    let mut instruction = initialize(&ring, &authority, data);
+    let position = instruction
+        .accounts
+        .iter()
+        .position(|meta| meta.pubkey == tracking_registry())
+        .unwrap();
+    instruction.accounts[position].pubkey = Address::new_unique();
+    refused_with(
+        upgrade_send(&mut ring, instruction),
+        InstructionError::Custom(StorageError::InvalidTrackingRegistry as u32),
+    );
+    assert_eq!(ring.lamports(&policy_pda()), 0);
 }
 
 #[test]
