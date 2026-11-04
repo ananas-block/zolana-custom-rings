@@ -3,8 +3,9 @@
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use zolana_ring_policy::{
-    registry_field, EncodedRuleTable, Guard, ListId, ListSet, Member, Mode, PolicySource, Rule,
-    RuleSource, RuleTable, SourceMap, Subject, TableParts, MAX_RULES, POLICY_TABLE_VERSION,
+    registry_field, EncodedRuleTable, Guard, ListId, ListSet, Member, Mode, PolicySource,
+    PrivateSource, Rule, RuleSource, RuleTable, SourceMap, Subject, TableParts, MAX_RULES,
+    POLICY_TABLE_VERSION,
 };
 
 const VECTORS: &str = concat!(
@@ -25,6 +26,7 @@ struct PolicyTableVectors {
 struct Case {
     name: String,
     sources: Vec<Source>,
+    private_source: PrivateSourceRow,
     rules: Vec<String>,
     /// `rules[i]` split into its parts.
     rule_parts: Vec<RuleParts>,
@@ -36,6 +38,12 @@ struct Case {
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct Source {
     list_id: u8,
+    registry: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct PrivateSourceRow {
+    owner_lists: u8,
     registry: String,
 }
 
@@ -81,6 +89,11 @@ impl Case {
         let slots: Vec<PolicySource> = self.sources.iter().map(Source::slot).collect();
         SourceMap::from_slots(slots.try_into().expect("one source per slot"))
             .expect("positional sources")
+            .with_private(PrivateSource {
+                owner_lists: ListSet::from_bits(self.private_source.owner_lists),
+                registry: bytes(&self.private_source.registry),
+            })
+            .expect("paired source")
     }
 }
 
@@ -313,6 +326,10 @@ fn case(name: &str, table: &RuleTable, sources: &SourceMap) -> Case {
     Case {
         name: name.to_string(),
         sources: sources.slots().iter().map(Source::new).collect(),
+        private_source: PrivateSourceRow {
+            owner_lists: sources.private().owner_lists.bits(),
+            registry: hex::encode(sources.private().registry),
+        },
         rules: table
             .rules()
             .iter()
@@ -322,6 +339,24 @@ fn case(name: &str, table: &RuleTable, sources: &SourceMap) -> Case {
         fields: encoded.fields(sources).iter().map(hex::encode).collect(),
         policy_hash: hex::encode(encoded.hash(sources).expect("policy hash")),
     }
+}
+
+/// A private owner source beside a public curator, the asset row keeps the public slot.
+fn private_source_case() -> Case {
+    let curator = registry_field(&[0x15; 32]).expect("registry field");
+    let private = registry_field(&[0x16; 32]).expect("registry field");
+    let table = RuleTable::builder()
+        .rule(Rule::forbid(Subject::OutputOwner, ListId::Block))
+        .rule(Rule::forbid(Subject::Asset, ListId::Block))
+        .build();
+    let sources = SourceMap::new(&[(ListId::Block, curator)])
+        .expect("positional map")
+        .with_private(
+            PrivateSource::new(ListSet::single(ListId::Block), private).expect("paired source"),
+        )
+        .expect("paired source");
+    table.encode().validate(&sources).expect("validated");
+    case("private_source_beside_curator", &table, &sources)
 }
 
 fn compute_vectors() -> PolicyTableVectors {
@@ -336,6 +371,7 @@ fn compute_vectors() -> PolicyTableVectors {
         ),
         case("full_with_curator", &full, &full_sources),
         case("full_width_parts", &wide, &wide_sources),
+        private_source_case(),
     ];
     let named = cases.len();
     while cases.len() < named + GENERATED_CASES {
@@ -347,11 +383,11 @@ fn compute_vectors() -> PolicyTableVectors {
         cases.push(case(&name, &table, &sources));
     }
     PolicyTableVectors {
-        description: "The 77 policy table fields and their hash, acc = 0 then \
-                      acc = Poseidon(acc, fields[11c..11c + 11]) for c = 0..7. Fields are \
-                      CRTB, the version, list id and registry field per source slot, the rule, \
-                      16 rule rows and zero padding to four rate-11 blocks. \
-                      then asset, cap and cosign per limit row, every slot past a count zero. \
+        description: "The 44 policy table fields and their hash, acc = 0 then \
+                      acc = Poseidon(acc, fields[11c..11c + 11]) for c = 0..3. Fields are \
+                      CRTB, the version, list id and registry field per source slot, the private \
+                      source's owner list mask and registry field, the rule count, 16 rule rows \
+                      and zero padding to four rate-11 blocks. \
                       rule_parts splits each rule row read as one big-endian field from its low \
                       byte, subject, mode, mask and guard one byte each, the u64 threshold, then \
                       the alternative mask, every higher byte zero. Subject output_owner is 1, \

@@ -11,6 +11,7 @@ import (
 	"github.com/consensys/gnark/test"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 )
@@ -20,6 +21,10 @@ type tableRows struct {
 		ListID   int64        `json:"list_id"`
 		Registry ringtest.Hex `json:"registry"`
 	} `json:"sources"`
+	PrivateSource struct {
+		OwnerLists uint8        `json:"owner_lists"`
+		Registry   ringtest.Hex `json:"registry"`
+	} `json:"private_source"`
 	Rules        []ringtest.Hex `json:"rules"`
 	InlineAssets []ringtest.Hex `json:"inline_assets"`
 	InlineLimits []uint64       `json:"inline_limits"`
@@ -199,6 +204,9 @@ func (r ruleParts) values(t *testing.T) []uint64 {
 
 func (v tableRows) rows() ringpolicy.Rows {
 	var rows ringpolicy.Rows
+	if v.PrivateSource.Registry.Int != nil {
+		rows.Source = privatelist.Source{OwnerLists: v.PrivateSource.OwnerLists, Registry: v.PrivateSource.Registry.Int}
+	}
 	for _, source := range v.Sources {
 		rows.Sources = append(rows.Sources, policy.SourceWires{ListID: source.ListID, Registry: source.Registry.Int})
 	}
