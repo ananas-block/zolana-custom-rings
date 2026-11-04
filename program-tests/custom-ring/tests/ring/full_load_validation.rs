@@ -48,17 +48,13 @@ const STORAGE_POOL: &str = GetStorageRecordPool::NAME;
 const TRACKING_POOL: &str = GetTrackingRecordPool::NAME;
 const NOTE: u64 = 1_000_000_000;
 const SPENT_NOTES: usize = 5;
-const PAYMENTS: usize = 12;
+const PAYMENTS: usize = 15;
 const LEGS: usize = 4;
-const DATA_NOTE: u64 = 50_000_000;
-const PAID: u64 = 100_000_000;
-const EXIT: u64 = 70_000_000;
+const PAID: u64 = 300_000_000;
 const LEG: u64 = 10_000_000;
-const CHANGE: u64 =
-    SPENT_NOTES as u64 * NOTE - DATA_NOTE - PAYMENTS as u64 * PAID - EXIT - LEGS as u64 * LEG;
+const EXIT: u64 = SPENT_NOTES as u64 * NOTE - PAYMENTS as u64 * PAID - LEGS as u64 * LEG;
 const PRIORITY_FEE: u64 = 1_000;
 const DESTINATION_FUNDING: u64 = 1_000_000;
-const DATA_HASH: [u8; 32] = field_value(0x41);
 const RING_DATA_HASH: [u8; 32] = field_value(0x42);
 
 const fn field_value(byte: u8) -> [u8; 32] {
@@ -219,12 +215,6 @@ impl<'a> FullLoad<'a> {
         let ring = self.ring.program_id();
         let mut transaction =
             ConfidentialTransaction::new_with_ring(self.notes.to_vec(), self.payer, ring)?;
-        // The rail plans no data on a paid output.
-        transaction.add_output_utxo(
-            SppProofOutputUtxo::new(Mint::SOL, DATA_NOTE, self.sender.shielded_address()?)?
-                .with_ring_data_hash(ring, RING_DATA_HASH)
-                .with_utxo_data(b"full load".to_vec(), DATA_HASH),
-        )?;
         transaction.transfer_with_ring(
             &self.recipients[0].shielded_address()?,
             Mint::SOL,
@@ -240,14 +230,6 @@ impl<'a> FullLoad<'a> {
                 },
             ));
         }
-        let pay = |to: &ShieldedKeypair, amount| -> Result<_> {
-            Ok(custom_ring_sdk::AnonymousPayment {
-                to: ring_address(to, ring)?,
-                asset: Mint::SOL,
-                amount,
-                reply: None,
-            })
-        };
         let mut transfer = CustomRingTransfer::new(CustomRingTransferInput {
             ring: self.ring,
             sender: self.sender,
@@ -255,10 +237,18 @@ impl<'a> FullLoad<'a> {
             transaction,
         })
         .with_interface_transfer_accounts(settlements)
-        .with_anonymous_signer(&self.sender.signing_key)
-        .with_payment(pay(self.sender, CHANGE)?)?;
+        .with_anonymous_signer(&self.sender.signing_key);
         for recipient in self.recipients {
-            transfer = transfer.with_payment(pay(recipient, PAID)?)?;
+            transfer = transfer.with_payment(custom_ring_sdk::AnonymousPayment {
+                to: ring_address(recipient, ring)?,
+                asset: Mint::SOL,
+                amount: PAID,
+                reply: None,
+                data: custom_ring_sdk::NoteData {
+                    ring_data_hash: Some(RING_DATA_HASH),
+                    application: None,
+                },
+            })?;
         }
         Ok(transfer
             .with_shape(Shape::new(SPENT_NOTES, 16))?
@@ -351,8 +341,7 @@ impl Settlement<'_> {
         ensure!(
             audited.outputs.iter().any(|output| matches!(
                 &output.opening,
-                OutputOpening::Ring { utxo, .. }
-                    if utxo.data_hash == DATA_HASH && utxo.ring_data_hash == RING_DATA_HASH
+                OutputOpening::Ring { utxo, .. } if utxo.ring_data_hash == RING_DATA_HASH
             )),
             "{} opened no data hashes",
             self.label
@@ -541,7 +530,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
     ensure!(
         wallet
             .unspent()
-            .filter(|held| held.utxo.amount == PAID)
+            .filter(|held| held.utxo.amount == PAID && held.ring_data_hash == Some(RING_DATA_HASH))
             .count()
             == 2,
         "the recipient rebuilt another note count"

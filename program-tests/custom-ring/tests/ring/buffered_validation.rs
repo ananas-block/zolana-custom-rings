@@ -179,7 +179,6 @@ struct HiddenTransfer<'a> {
 }
 
 impl HiddenTransfer<'_> {
-    /// The rail plans no data on a paid output.
     fn prove(
         self,
         chain: &Zolana<SolanaRpc, one_key::SeededIndexer>,
@@ -198,6 +197,7 @@ impl HiddenTransfer<'_> {
                 asset: Mint::SOL,
                 amount,
                 reply: None,
+                data: custom_ring_sdk::NoteData::default(),
             })
         };
         let transfer = CustomRingTransfer::new(CustomRingTransferInput {
