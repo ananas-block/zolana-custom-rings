@@ -113,6 +113,17 @@ describe("openRecipientNote", () => {
     expect(openRecipientNote(reader(published), { ...plain(), ringDataHash })).toBeUndefined();
   });
 
+  it("refuses application bytes under a zero hash, the commitment reads no data", () => {
+    const published = commitment(plain(), ENROLLED_KEY);
+    expect(openRecipientNote(reader(published), plain())).toBeDefined();
+    const unbound = new Uint8Array(32 + 7).fill(9);
+    unbound.fill(0, 0, 32);
+    expect(openRecipientNote(reader(published), { ...plain(), data: unbound })).toBeUndefined();
+    expect(
+      openRecipientNote(reader(published), { ...plain(), data: new Uint8Array(32) }),
+    ).toBeUndefined();
+  });
+
   it("refuses data shorter than its leading hash and a blinding off the field", () => {
     const published = commitment(plain(), ENROLLED_KEY);
     expect(

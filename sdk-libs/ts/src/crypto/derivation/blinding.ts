@@ -6,6 +6,7 @@ import {
   equalBytes,
   hashBytes,
   isCanonicalField,
+  isZero,
   rightAlign,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
@@ -130,6 +131,8 @@ export function openRecipientNote(
   if (data.length > 0 && data.length < 32) return undefined;
   if (!isCanonicalField(body.blinding)) return undefined;
   const dataHash = data.length === 0 ? undefined : (data.slice(0, 32) as Bytes32);
+  // The commitment reads a zero hash as no data, bytes under it bind to nothing and a reader would store them as the note's.
+  if (dataHash !== undefined && isZero(dataHash)) return undefined;
   const appData = data.subarray(32);
   const { signingPublicKey, nullifierPublicKey } = reader.owner;
   const utxo = new Utxo({
