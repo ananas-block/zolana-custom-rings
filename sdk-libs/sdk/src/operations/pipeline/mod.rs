@@ -21,9 +21,9 @@ use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
     key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend, UnreadSubjects},
     AnonymousParties, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
-    InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg, PublicSlots,
-    RingPolicy, RingRail, RootRead, Settlement, SignerSet, TransferBinding, ANONYMOUS_PARTIES,
-    AUDIT_RECORD_LEN, DELIVERED_AUDIT_CAPACITIES,
+    InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg,
+    PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts, SignerSet,
+    TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, DELIVERED_AUDIT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -44,7 +44,7 @@ use zolana_ring_client::{rpc::SubjectListSalt, AsyncRingIndexer};
 use zolana_ring_keys::RingKeys;
 use zolana_ring_policy::{ApprovalTotals, Member};
 use zolana_ring_transaction::random_field_element;
-use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
+use zolana_ring_transaction::{published_outputs, PublishedSlot, RingDelivery, RingOutputRail};
 
 pub use self::{
     anonymous::{
@@ -466,6 +466,7 @@ struct Preview {
     /// The key the spend selects fixes every stream counter.
     wide_owners: bool,
     discloses_approval: bool,
+    signer_data_counts: Option<SignerDataCounts>,
 }
 
 impl Preview {
@@ -573,6 +574,7 @@ impl<'a> Pipeline<'a> {
                 .collect(),
             wide_owners: false,
             discloses_approval: self.approval_blinder.is_some(),
+            signer_data_counts: signer_data_counts(&owner_signers, &proof_inputs.output_utxos)?,
         };
 
         Ok(Prepared {
@@ -1299,6 +1301,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             cache: None,
             // Sized here, `frame` writes the digest of the totals.
             approval_totals: preview.discloses_approval.then_some([0; 32]),
+            signer_data_counts: preview.signer_data_counts,
         },
         interface_transfers: external
             .interface_transfers
@@ -1360,6 +1363,35 @@ fn carries_data(output: &SppProofOutputUtxo) -> bool {
             .iter()
             .flatten()
             .any(|hash| *hash != [0; 32])
+}
+
+/// The frame's counts over the owner signer run, absent at zero since one statement value keeps one encoding.
+/// SPP takes one owner signature for all its data-bearing slots, the circuit proves these counts so a
+/// signer's check can notice a slot the sender left out of its terms. A wrong value fails the proof.
+fn signer_data_counts(
+    owner_signers: &[Address],
+    outputs: &[SppProofOutputUtxo],
+) -> Result<Option<SignerDataCounts>, RingError> {
+    let run = owner_signers
+        .iter()
+        .map(|signer| Ok(solana_owner_identity(signer.as_array())?))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    let slots = published_outputs(outputs)
+        .iter()
+        .filter(|output| !output.is_dummy())
+        .filter_map(|output| Some((output.owner_address?, output.data_hash.unwrap_or_default())))
+        .map(|(owner, data_hash)| Ok((owner.signing_pubkey.owner_proof_input_hash()?, data_hash)))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    let counts = SignerDataCounts::of_run(
+        &run,
+        slots
+            .iter()
+            .map(|(owner_identity, data_hash)| LiveSlot {
+                owner_identity,
+                data_hash,
+            }),
+    )?;
+    Ok((counts != SignerDataCounts::default()).then_some(counts))
 }
 
 /// One length per frame, `None` without reply metadata.

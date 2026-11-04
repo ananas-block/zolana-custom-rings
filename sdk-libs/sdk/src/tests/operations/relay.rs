@@ -488,6 +488,107 @@ async fn an_unread_entry_takes_its_capacity_from_its_outputs() {
     }
 }
 
+/// Counts follow the run and only a nonzero `data_hash` of a live slot, a ring data hash stays outside.
+#[test]
+fn signer_data_counts_read_the_signer_run_in_order() {
+    use super::super::signer_data_counts;
+
+    let (alice, bob) = (keypair(1), keypair(2));
+    let address = |owner: &ShieldedKeypair| owner.shielded_address().unwrap();
+    let slot = |owner: &ShieldedKeypair, data_hash, ring_data_hash| SppProofOutputUtxo {
+        owner_address: Some(address(owner)),
+        asset: Mint::SOL,
+        amount: 1,
+        ring_program_id: Some(ring().program_id()),
+        data_hash,
+        ring_data_hash,
+        ..Default::default()
+    };
+    let run = [
+        address(&alice).solana_address().unwrap(),
+        address(&bob).solana_address().unwrap(),
+    ];
+    let outputs = [
+        slot(&bob, Some([1; 32]), None),
+        slot(&alice, Some([2; 32]), None),
+        slot(&bob, Some([3; 32]), None),
+        slot(&alice, None, Some([4; 32])),
+        slot(&bob, Some([0; 32]), None),
+    ];
+    let counts = signer_data_counts(&run, &outputs).unwrap().unwrap();
+    assert_eq!(
+        (counts.count(0), counts.count(1), counts.count(2)),
+        (1, 2, 0)
+    );
+
+    let unsigned = signer_data_counts(&[], &outputs).unwrap();
+    assert_eq!(unsigned, None);
+    let ordinary = [slot(&alice, None, Some([4; 32]))];
+    assert_eq!(signer_data_counts(&run, &ordinary).unwrap(), None);
+}
+
+/// The prover reads the packed value the frame carries, a frame with no count sends none.
+#[tokio::test]
+async fn a_signer_owned_data_slot_reaches_the_frame_and_the_request() {
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let client = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    })
+    .with_registry(
+        Registry::new(&[(&sender, 1), (&recipient, 1)]),
+        &pipeline_rules(),
+    )
+    .client();
+    let assembled = |owner: &ShieldedKeypair, data_hash| {
+        let (client, sender, owner) = (&client, &sender, owner.shielded_address().unwrap());
+        async move {
+            let mut transaction = ConfidentialTransaction::new_with_ring(
+                vec![ring_utxo(sender, Mint::SOL, 10, 0)],
+                FULL_LOAD_PAYER,
+                ring().program_id(),
+            )
+            .unwrap();
+            transaction
+                .add_output_utxo(SppProofOutputUtxo {
+                    owner_address: Some(owner),
+                    asset: Mint::SOL,
+                    amount: 10,
+                    ring_program_id: Some(ring().program_id()),
+                    data_hash,
+                    ..Default::default()
+                })
+                .unwrap();
+            CustomRingTransfer::new(CustomRingTransferInput {
+                ring: ring(),
+                sender,
+                nullifier_key: Some(&sender.nullifier_key),
+                transaction,
+            })
+            .assemble(client)
+            .await
+            .unwrap()
+        }
+    };
+    let body = |assembled: &Assembled| {
+        let request = assembled.request().unwrap();
+        serde_json::to_value(
+            crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+        )
+        .unwrap()
+    };
+
+    let counted = assembled(&sender, Some([5; 32])).await;
+    let counts = counted.frame.parts.extensions.signer_data_counts.unwrap();
+    assert_eq!(counts.count(0), 1);
+    assert_eq!(body(&counted)["signerDataCounts"], counts.packed());
+
+    let plain = assembled(&recipient, None).await;
+    assert_eq!(plain.frame.parts.extensions.signer_data_counts, None);
+    assert!(body(&plain).get("signerDataCounts").is_none());
+}
+
 /// The Go golden test solves the relayed tail.
 #[tokio::test]
 async fn a_relayed_spend_proves_on_the_key_its_owner_sealed() {
