@@ -57,7 +57,6 @@ type transferStatementVector struct {
 	OwnRoot         string                  `json:"own_root"`
 	CuratorRoot     string                  `json:"curator_root"`
 	TrackingRoot    string                  `json:"tracking_root"`
-	PrivateRoot     string                  `json:"private_root"`
 	PublicAssets    []string                `json:"public_assets"`
 	PublicAmounts   []string                `json:"public_amounts"`
 	PublicGross     []string                `json:"public_gross"`
@@ -85,7 +84,7 @@ func vectorOf(t *testing.T, name, family string, s ringtransfer.Statement, run [
 		OutputCapacity: len(s.Outputs), InputCount: s.InputCount, PrivateTxHash: ringtest.FieldHex(s.PrivateTxHash),
 		SignerSlots: slots, Signers: append([]string{}, hexes(run)...), SignerCount: s.SignerCount, SignerChain: ringtest.FieldHex(s.SignerChain),
 		PolicyHash: ringtest.FieldHex(s.PolicyHash), OwnRoot: ringtest.FieldHex(s.OwnRoot), CuratorRoot: ringtest.FieldHex(s.CuratorRoot),
-		TrackingRoot: ringtest.FieldHex(s.TrackingRoot), PrivateRoot: ringtest.FieldHex(s.PrivateRoot),
+		TrackingRoot: ringtest.FieldHex(s.TrackingRoot),
 		PublicAssets: hexes(s.PublicAssets[:]), PublicAmounts: hexes(s.PublicNets[:]), PublicGross: hexes(s.PublicGross[:]),
 		WithdrawalHash: ringtest.FieldHex(s.WithdrawalHash), Elements: hexes(elements), PublicInputHash: ringtest.FieldHex(spptest.MustHashChain4(t, elements)),
 		Withdrawals: []withdrawalVector{},
@@ -107,17 +106,17 @@ func vectorOf(t *testing.T, name, family string, s ringtransfer.Statement, run [
 }
 
 // fixedStatementElements mirrors TRANSFER_FIXED_ELEMENTS, the sender cells, the public slots and the close add to it.
-const fixedStatementElements = 12 + 2 + 2 + 4 + 2 + 2 + 5 + 1
+const fixedStatementElements = 12 + 3 + 2 + 4 + 2 + 2 + 4 + 1
 
 func confidentialCase(t *testing.T, name string, w ringtransfer.Confidential) transferStatementVector {
 	t.Helper()
 	b := w.Build(t)
 	values, elements := b.Values(t), b.Statement(t)
-	if want := fixedStatementElements + 1 + 9 + 2; len(elements) != want {
-		t.Fatalf("%s holds %d elements, the family fixes %d", name, len(elements), want)
+	if want := fixedStatementElements + 1 + shared.AnonymousParties + 9 + 2; len(elements) != want {
+		t.Fatalf("%s holds %d elements, the statement fixes %d", name, len(elements), want)
 	}
 	v := vectorOf(t, name, "confidential", values, b.Run, w.Shape.Inputs, &b.Circuit.Policy, elements)
-	v.InProof, v.Delegate = values.RailBits[0], values.RailBits[1]
+	v.InProof, v.Delegate = values.RailBits[0], values.RailBits[2]
 	sender := ringtest.FieldHex(values.Cells[0])
 	v.Sender = &sender
 	requireSolved(t, b.Circuit)
@@ -128,12 +127,12 @@ func anonymousCase(t *testing.T, name string, w ringtransfer.Anonymous) transfer
 	t.Helper()
 	b := w.Build(t)
 	values, elements := b.Values(t), b.Statement(t)
-	if want := fixedStatementElements + shared.AnonymousParties + 9 + 2; len(elements) != want {
-		t.Fatalf("%s holds %d elements, the family fixes %d", name, len(elements), want)
+	if want := fixedStatementElements + 1 + shared.AnonymousParties + 9 + 2; len(elements) != want {
+		t.Fatalf("%s holds %d elements, the statement fixes %d", name, len(elements), want)
 	}
-	v := vectorOf(t, name, "anonymous", values, b.Run, w.Shape.InputClass, &b.Circuit.Policy, elements)
-	v.PublicOwners, v.Delegate = values.RailBits[0], values.RailBits[1]
-	v.PartyIdentities = hexes(values.Cells)
+	v := vectorOf(t, name, "anonymous", values, b.Run, w.Shape.Inputs, &b.Circuit.Policy, elements)
+	v.PublicOwners, v.Delegate = w.Rail == ringtransfer.PublicOwners, values.RailBits[2]
+	v.PartyIdentities = hexes(values.Cells[1:])
 	requireSolved(t, b.Circuit)
 	return v
 }
@@ -143,7 +142,7 @@ func TestTransferStatementVector(t *testing.T) {
 	asset := ringtransfer.Asset(t)
 	legs := []ringtransfer.Withdrawal{{Owner: big.NewInt(0x0bb0), Asset: asset, Amount: 10}}
 	public := []ringtransfer.PublicSlot{{Asset: asset, Net: -10, Gross: 10}}
-	compact := ringtransfer.Signed(transfer.ConfidentialShape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})
+	compact := ringtransfer.Signed(transfer.Shape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})
 	compact.Exits, compact.Omitted = []int{}, 1
 	coOwned := ringtransfer.Signed(confidential2)
 	coOwned.CoOwners = []*big.Int{coOwner}
@@ -157,14 +156,14 @@ func TestTransferStatementVector(t *testing.T) {
 	noSpend.PublicFunded = true
 	withCoOwner := ringtransfer.Hidden(anonymous2)
 	withCoOwner.CoOwners = []*big.Int{coOwner}
-	omitted := ringtransfer.Hidden(transfer.AnonymousShape{InputClass: 16, Outputs: 4, Withdrawals: 4, Owners: 4})
+	omitted := ringtransfer.Hidden(transfer.Shape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})
 	omitted.Omitted = 1
 	withdrawing := ringtransfer.Hidden(anonymous2)
 	withdrawing.Withdrawals, withdrawing.Public = legs, public
 	anonData := ringtransfer.Hidden(anonData2)
 	anonData.HasData = true
 	ringtest.PinVector(t, "audit/transfer_statement_v4.json", map[string]any{
-		"description": "Honest statements of the Go transfer fixtures, each solves its key, with every preimage of a chain or digest position. Both families: head(12), two rail bits, approval_mask, no_spend, output_count, output_chain, record_chain, tail_chain, input_count, private_tx_hash, sender or seven parties, signer_count, signer_chain, policy_hash, own_root, curator_root, tracking_root, private_root, (asset, net, gross) * 3, withdrawal_hash, length, version. Confidential rail bits are in_proof, delegate, anonymous public_owners, delegate. outputs lists the published slots, chains zero fill to output_capacity, tail_chain is zero while no slot carries a tail. signer_chain is HashChain4(signers, zeros up to signer_slots), zero on an empty run. withdrawal_hash is HashChain4(CRPW, count, owner, asset, amount per leg). envelope_digest is Poseidon(u32 len, HashChain4(pack_left31(bytes))). public_input_hash = HashChain4(elements). Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description": "Honest statements of the Go transfer fixtures, each solves its key, with every preimage of a chain or digest position. Every rail: head(12), in_proof, hidden, delegate, approval_mask, no_spend, output_count, output_chain, record_chain, tail_chain, input_count, private_tx_hash, sender, parties, signer_count, signer_chain, policy_hash, own_root, curator_root, tracking_root, (asset, net, gross) * 3, withdrawal_hash, length, version. outputs lists the published slots, chains zero fill to output_capacity, tail_chain is zero while no slot carries a tail. signer_chain is HashChain4(signers, zeros up to signer_slots), zero on an empty run. withdrawal_hash is HashChain4(CRPW, count, owner, asset, amount per leg). envelope_digest is Poseidon(u32 len, HashChain4(pack_left31(bytes))). public_input_hash = HashChain4(elements). Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
 		"cases": []transferStatementVector{
 			confidentialCase(t, "signer", ringtransfer.Signed(confidential2)),
 			confidentialCase(t, "signer_two_owners", coOwned),
@@ -222,22 +221,15 @@ type poolCapacity struct {
 // The pools a key compiles are the formula Rust's RingCircuit::record_pools keeps.
 func TestPoolCapacityVector(t *testing.T) {
 	var keys []poolCapacity
-	for _, shape := range append(append([]transfer.ConfidentialShape{}, transfer.ConfidentialShapes...), transfer.ConfidentialEntryShapes...) {
-		c, err := transfer.NewConfidentialTransferCircuit(shape)
-		if err != nil {
-			t.Fatal(err)
-		}
-		keys = append(keys, poolCapacity{shape.String(), c.RecordPools().Own, c.RecordPools().Curator, c.TrackingPoolSize()})
-	}
-	for _, shape := range append(append([]transfer.AnonymousShape{}, transfer.AnonymousShapes...), transfer.EntryShapes...) {
-		c, err := transfer.NewAnonymousTransferCircuit(shape)
+	for _, shape := range transfer.Shapes {
+		c, err := transfer.NewTransferCircuit(shape)
 		if err != nil {
 			t.Fatal(err)
 		}
 		keys = append(keys, poolCapacity{shape.String(), c.RecordPools().Own, c.RecordPools().Curator, c.TrackingPoolSize()})
 	}
 	ringtest.PinVector(t, "policy/pool_capacity.json", map[string]any{
-		"description": "The pools each transfer key compiles. distinct = S + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), tracking = S + N + P with P the key's private rows. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description": "The pools each transfer key compiles. distinct = S + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), tracking = S + N + W with W the withdrawal owner rows a key holds. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
 		"keys":        keys,
 	})
 }

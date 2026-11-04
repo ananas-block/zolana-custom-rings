@@ -1,6 +1,6 @@
 use custom_ring_interface::{
-    CustomRingError, PolicySourceIxData, PolicyTableIxData, PrivateSourceWrite, RingPolicy,
-    RingRole, SourceSlot, UpdatePolicyIxData,
+    CustomRingError, PolicySourceIxData, PolicyTableIxData, PolicyUpdate, RingPolicy, RingRole,
+    SourceSlot, UpdatePolicyIxData,
 };
 use pinocchio::{
     sysvars::{clock::Clock, Sysvar},
@@ -11,7 +11,7 @@ use zolana_ring_policy::{ListId, ListSet};
 
 use crate::instructions::{
     instruction_runtime::parse,
-    loader::{load_records_registry, load_storage_registry, RoleHolder},
+    loader::{load_records_registry, RoleHolder},
     policy_binding::{curator_source, TableBinding},
 };
 
@@ -45,7 +45,6 @@ pub fn process_update_policy_ix(
         UpdatePolicyIxData::Rules(table) => write.replace_rules(&table),
         UpdatePolicyIxData::Source(source) => write.move_source(source),
         UpdatePolicyIxData::Records => write.rebind_records(),
-        UpdatePolicyIxData::PrivateSource { owner_lists } => write.private_source(owner_lists),
     }
 }
 
@@ -63,13 +62,17 @@ impl PolicyWrite<'_> {
     fn replace_rules(self, table: &PolicyTableIxData) -> ProgramResult {
         self.policy.policy_hash()?;
         let bound = TableBinding {
-            records: &self.policy.records,
             table,
             curators: self.trailing,
         }
         .bind()?;
-        self.policy
-            .set_policy(bound.sources, bound.rules, self.slot)?;
+        let salted_lists = self.policy.salted();
+        self.policy.set_policy(PolicyUpdate {
+            sources: bound.sources,
+            salted_lists,
+            rules: bound.rules,
+            slot: self.slot,
+        })?;
         Ok(())
     }
 
@@ -80,7 +83,7 @@ impl PolicyWrite<'_> {
             ListId::try_from(source.list_id).map_err(|_| CustomRingError::InvalidListId)?;
         let registry = match (source.source, self.trailing) {
             (0, []) => Address::default(),
-            (1, [curator]) => curator_source(&self.policy.records, curator)?,
+            (1, [curator]) => curator_source(curator)?,
             _ => return Err(CustomRingError::InvalidSource.into()),
         };
         let mut sources = self.policy.sources;
@@ -91,37 +94,19 @@ impl PolicyWrite<'_> {
             list_id: list_id as u8,
             registry,
         };
+        let list = ListSet::single(list_id);
+        let salted_lists = match source.salted {
+            true => self.policy.salted().union(list),
+            false => self.policy.salted().difference(list),
+        };
         // The rehashed source map refuses a second distinct curator.
         let rules = self.policy.rules;
-        self.policy.set_policy(sources, rules, self.slot)?;
-        Ok(())
-    }
-
-    /// A policy ring alone, a table needs to read the lists.
-    #[inline(never)]
-    fn private_source(self, owner_lists: u8) -> ProgramResult {
-        self.policy.policy_hash()?;
-        let owner_lists = ListSet::from_bits(owner_lists);
-        match self.trailing {
-            [] => self.policy.set_private_source(
-                PrivateSourceWrite {
-                    owner_lists,
-                    source: None,
-                },
-                self.slot,
-            )?,
-            [registry] => {
-                let source = load_storage_registry(registry)?;
-                self.policy.set_private_source(
-                    PrivateSourceWrite {
-                        owner_lists,
-                        source: Some((*registry.address(), &source)),
-                    },
-                    self.slot,
-                )?
-            }
-            _ => return Err(CustomRingError::InvalidSource.into()),
-        }
+        self.policy.set_policy(PolicyUpdate {
+            sources,
+            salted_lists,
+            rules,
+            slot: self.slot,
+        })?;
         Ok(())
     }
 

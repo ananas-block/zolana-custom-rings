@@ -59,16 +59,8 @@ const (
 	ListSaltDomain = 0x43525053
 	// ListTagDomain = "CRPT"
 	ListTagDomain = 0x43525054
-	// ListPositionDomain = "CRPL"
-	ListPositionDomain = 0x4352504c
-	// ListLeafDomain = "CRPV"
-	ListLeafDomain = 0x43525056
-	// ListLeafSaltDomain = "CRPU"
-	ListLeafSaltDomain = 0x43525055
-	// ListWriteDomain = "CRPQ"
-	ListWriteDomain = 0x43525051
-	// ApplyListDomain = "CRPA"
-	ApplyListDomain = 0x43525041
+	// ListKeyDomain = "CRPL"
+	ListKeyDomain = 0x4352504c
 )
 
 // TransferStatementVersion is bound nonzero and last into every transfer statement, mirrored by TRANSFER_STATEMENT_VERSION in program-libs/interface/src/proof/domain.rs.
@@ -156,8 +148,13 @@ func ListTag(api frontend.API, listSalt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{ListTagDomain, listSalt})
 }
 
-// AnonymousParties counts payer, five co-signers and exit destination, mirrored by ANONYMOUS_PARTIES.
-const AnonymousParties = 7
+// ListKey is the member key of an owner's salted record, pseudorandom without the salt.
+func ListKey(api frontend.API, owner, listSalt frontend.Variable) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{ListKeyDomain, owner, listSalt})
+}
+
+// AnonymousParties is mirrored by ANONYMOUS_PARTIES.
+const AnonymousParties = 3
 
 // AssertAnonymousParties separates the hidden owner from the public identities
 // reconstructed by the verifier. Zero denotes an absent optional party.

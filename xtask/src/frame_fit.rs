@@ -2,15 +2,14 @@ use std::{collections::BTreeSet, fmt::Write};
 
 use anyhow::{Context, Result};
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignHeader, MAX_CO_SIGNERS},
-    sender_bundle_len, spl_withdrawal_count,
-    storage::Revision,
-    tag, AnonymousProofData, AuditKey, CustomRingMergeIxData, CustomRingProof, DepositPrefix,
-    FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof,
-    RecipientBody, Replies, RingDepositAuditCapsule, RingOutput, RingPolicy, RingRail,
-    RingTransactData, RootRead, SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
-    MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN,
-    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    cosign::ApprovalMask, key_catalog::TransferShape, sender_bundle_len, spl_withdrawal_count,
+    storage::Revision, tag, AnonymousProofData, CustomRingMergeIxData, CustomRingProof,
+    DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
+    RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
+    OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -47,9 +46,10 @@ const SECOND_TREE: Address = address(0xa2);
 const PAYER: Address = address(0xa3);
 const OWN: Address = address(0xa4);
 const CURATOR: Address = address(0xa5);
-const PRIVATE: Address = address(0xa6);
 const TRACKING: Address = address(0xa7);
 const DELEGATE: Address = address(0xa8);
+const COSIGNER_RECORD: Address = address(0xac);
+const COSIGNER: Address = address(0xad);
 const TOKEN_PROGRAM: Address = address(0xab);
 
 const fn address(seed: u8) -> Address {
@@ -141,9 +141,9 @@ enum Legs {
 struct Load {
     name: &'static str,
     outsider_payer: bool,
-    /// Own, curator and private roots beside the tracking root every frame names.
+    /// Own and curator roots beside the tracking root every frame names.
     policy_roots: bool,
-    co_signers: u8,
+    co_signer: bool,
     legs: Legs,
     priority_fee: bool,
     /// Every slot carries a body and the last slot exits.
@@ -157,7 +157,7 @@ const MIN: Load = Load {
     name: "min",
     outsider_payer: false,
     policy_roots: false,
-    co_signers: 0,
+    co_signer: false,
     legs: Legs::None,
     priority_fee: false,
     every_body: false,
@@ -169,13 +169,13 @@ const FULL: Load = Load {
     name: "full",
     outsider_payer: true,
     policy_roots: true,
-    co_signers: 1,
+    co_signer: true,
     legs: Legs::Sol,
     priority_fee: true,
     every_body: true,
     ..MIN
 };
-const LOADS: [Load; 7] = [
+const LOADS: [Load; 6] = [
     MIN,
     FULL,
     Load {
@@ -196,11 +196,6 @@ const LOADS: [Load; 7] = [
     Load {
         name: "full+2tree",
         second_tree: true,
-        ..FULL
-    },
-    Load {
-        name: "full+5cosign",
-        co_signers: MAX_CO_SIGNERS as u8,
         ..FULL
     },
 ];
@@ -282,14 +277,12 @@ impl Transfer {
         let rail = frame.rail();
         let delegate = rail.is_delegate();
         let policy_roots = load.policy_roots && !delegate;
-        let co_signers = if delegate { 0 } else { load.co_signers };
-        // The catalog keys no private rows with tails.
-        let private_source = policy_roots && !load.has_data;
+        let co_signer = load.co_signer && !delegate;
         let read = match policy_roots {
             true => RootRead::Policy,
             false => RootRead::None,
         };
-        let config = ring_config(private_source);
+        let config = ring_config();
         let anonymous_frame = rail.anonymous_frame();
 
         let proof = CustomRingProof {
@@ -376,22 +369,16 @@ impl Transfer {
                 curator_revision: Some(revision),
             }),
             spl_withdrawal_owners: &withdrawal_owners,
-            co_sign: CoSignHeader {
-                approval: match co_signers {
-                    0 => ApprovalMask::default(),
-                    _ => ApprovalMask::OUTFLOW,
-                },
-                co_signers,
+            approval: match co_signer {
+                true => ApprovalMask::OUTFLOW,
+                false => ApprovalMask::default(),
             },
             no_spend: false,
             public_owners: frame == FrameRail::PublicOwners,
             expiry_unix_ts: u32::MAX,
             tx_viewing_u: &field,
             salt: &salt,
-            extensions: FrameExtensions {
-                private_revision: private_source.then_some(revision),
-                ..FrameExtensions::default()
-            },
+            extensions: FrameExtensions::default(),
             interface_transfers,
             has_data: load.has_data,
             entry: frame.entry(),
@@ -429,17 +416,21 @@ impl Transfer {
                 false => InputTrees::One(context),
             },
         };
-        let catalog = data.audit_stream().map(|stream| stream.key);
+        let catalog = data.audit_stream();
         let circuit_legs = if delegate {
             0
         } else {
             data.interface_transfers.len()
         };
         let keyed = catalog.is_ok() && data.transfer_circuit(circuit_legs).is_ok();
-        let key = catalog.unwrap_or(AuditKey {
-            class: inputs,
+        // The shape's own key, a size the catalog may not list.
+        let key = TransferShape {
+            outputs: u8::try_from(outputs)?,
+            inputs: u8::try_from(inputs)?,
+            withdrawals: u8::try_from(LEGS)?,
+            owners: u8::try_from(inputs)?,
             entry: frame.entry(),
-        });
+        };
         let envelope = vec![14u8; data.stream_under(key).envelope().len];
         data.envelope = &envelope;
         let encoded = data
@@ -508,7 +499,7 @@ impl Transfer {
             );
         }
 
-        let mut metas = ring_prefix(&config, read, co_signers);
+        let mut metas = ring_prefix(&config, read, co_signer);
         if delegate {
             metas.push(AccountMeta::new_readonly(DELEGATE, true));
         }
@@ -583,19 +574,16 @@ impl Transfer {
     }
 }
 
-fn ring_config(private_source: bool) -> Box<RingPolicy> {
+fn ring_config() -> Box<RingPolicy> {
     let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
     config.auditor_pubkey[0] = 4;
     config.records = OWN;
     config.tracking = TRACKING;
     config.sources[0].registry = CURATOR;
-    if private_source {
-        config.private_source = PRIVATE;
-    }
     config
 }
 
-fn ring_prefix(config: &RingPolicy, read: RootRead, co_signers: u8) -> Vec<AccountMeta> {
+fn ring_prefix(config: &RingPolicy, read: RootRead, co_signer: bool) -> Vec<AccountMeta> {
     let (policy, _) = Address::find_program_address(&[RingPolicy::SEED], &RING_PROGRAM);
     let mut metas = vec![AccountMeta::new_readonly(policy, false)];
     metas.extend(
@@ -603,9 +591,9 @@ fn ring_prefix(config: &RingPolicy, read: RootRead, co_signers: u8) -> Vec<Accou
             .root_registries(read)
             .map(|registry| AccountMeta::new_readonly(registry, false)),
     );
-    for index in 0..usize::from(co_signers) {
-        metas.push(AccountMeta::new_readonly(indexed(0xe0, index), false));
-        metas.push(AccountMeta::new_readonly(indexed(0xe8, index), true));
+    if co_signer {
+        metas.push(AccountMeta::new_readonly(COSIGNER_RECORD, false));
+        metas.push(AccountMeta::new_readonly(COSIGNER, true));
     }
     metas
 }
@@ -651,7 +639,7 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
     }
     .instruction()
     .accounts;
-    let mut metas = ring_prefix(&ring_config(false), RootRead::merge(), 0);
+    let mut metas = ring_prefix(&ring_config(), RootRead::merge(), false);
     metas.extend(spp);
     let instruction = Instruction {
         program_id: RING_PROGRAM,
@@ -716,7 +704,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
         true => RootRead::Policy,
         false => RootRead::None,
     };
-    let mut metas = ring_prefix(&ring_config(full), read, u8::from(full));
+    let mut metas = ring_prefix(&ring_config(), read, full);
     metas.extend(spp.accounts);
     let instruction = Instruction {
         program_id: RING_PROGRAM,
@@ -744,7 +732,7 @@ fn table() -> Result<String> {
         table,
         "Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings {MAX_TRANSACTION_SIZE} B, {MAX_ADDRESSES} accounts, {MAX_SIGNATURES} signatures."
     )?;
-    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator, private and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The widest owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
+    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The widest owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
     writeln!(table, "| shape | rail | load | key | bytes | accounts | signatures | widest owner run | fits | over |")?;
     writeln!(table, "|---|---|---|---|---|---|---|---|---|---|")?;
     for shape in SPP_SUPPORTED_SHAPES {

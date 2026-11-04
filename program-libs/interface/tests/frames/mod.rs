@@ -1,13 +1,11 @@
 //! Frames of every rail, shared by the codec and the heap budget tests.
 
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignHeader},
-    sender_bundle_len,
-    storage::Revision,
-    AnonymousProofData, AppMessage, CustomRingProof, FrameExtensions, FramedSenderBundle,
-    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy,
-    RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    DATA_TAIL_LEN, RECIPIENT_BODY_LEN, RING_POLICY,
+    cosign::ApprovalMask, sender_bundle_len, storage::Revision, AnonymousProofData, AppMessage,
+    CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy, RingRail, RingTransactData,
+    SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN, RECIPIENT_BODY_LEN,
+    RING_POLICY,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -28,7 +26,7 @@ pub struct Fixture {
     pub tails: [[u8; DATA_TAIL_LEN]; 16],
     /// Cut to the stream layout's envelope length.
     pub envelope: Vec<u8>,
-    pub tags: [[u8; 32]; 8],
+    pub tags: [[u8; 32]; 16],
     pub recipient_body: [u8; RECIPIENT_BODY_LEN],
     /// A body past the plain head, a data-bearing frame's.
     pub extended_body: [u8; RECIPIENT_BODY_LEN + 33],
@@ -87,7 +85,7 @@ impl Fixture {
             own_revision: None,
             policy: None,
             spl_withdrawal_owners: &[],
-            co_sign: CoSignHeader::default(),
+            approval: ApprovalMask::default(),
             no_spend: false,
             public_owners: false,
             expiry_unix_ts: 1_800_000_000,
@@ -141,10 +139,7 @@ impl Fixture {
         data.policy = Some(PolicyProof {
             curator_revision: Some(Revision::from(3)),
         });
-        data.co_sign = CoSignHeader {
-            approval: ApprovalMask::OUTFLOW,
-            co_signers: 1,
-        };
+        data.approval = ApprovalMask::OUTFLOW;
         data.interface_transfers = vec![
             InterfaceTransfer::SolWithdrawal { amount: 5_000 },
             InterfaceTransfer::SplDeposit {
@@ -204,10 +199,7 @@ impl Fixture {
     pub fn confidential_thresholds(&self) -> RingTransactData<'_> {
         let mut data = self.confidential_delivered();
         data.own_revision = Some(Revision::from(7));
-        data.co_sign = CoSignHeader {
-            approval: ApprovalMask::WITHDRAWAL,
-            co_signers: 1,
-        };
+        data.approval = ApprovalMask::WITHDRAWAL;
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 2_500 }];
         data
     }
@@ -232,7 +224,6 @@ impl Fixture {
         data.extensions = FrameExtensions {
             data_hash: Some(&self.fields[70]),
             ring_data_hash: Some(&self.fields[71]),
-            private_revision: None,
             messages: vec![AppMessage {
                 view_tag: &self.fields[72],
                 data: &self.payload,

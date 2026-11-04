@@ -5,13 +5,11 @@ mod frames;
 use frames::{config, spp_b, Fixture};
 
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignHeader},
-    input_flag,
-    key_catalog::RingCircuit,
-    output_flag, shape_flag, transact_flag, AuditKey, AuditStreamLayout, AuditorMessage,
-    ConfidentialSender, CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof,
-    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerSet, SlotBody,
-    TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, CO_SIGN_BYTE,
+    cosign::ApprovalMask, input_flag, key_catalog::RingCircuit, output_flag, shape_flag,
+    transact_flag, AuditKey, AuditStreamLayout, AuditorMessage, ConfidentialSender,
+    CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof, Replies, RingPolicy,
+    RingRail, RingTransactData, Settlement, SignerSet, SlotBody, TransferBinding, TransferFamily,
+    TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
 };
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
@@ -569,6 +567,7 @@ fn counts_outside_the_keyed_shapes_are_refused() {
     );
     let mut wide = fixture.anonymous().encode().unwrap();
     wide[1] = shape_index(2, 16) | (wide[1] & !0b0011_1111);
+    wide[OUTPUT_COUNT_BYTE] |= output_flag::WIDE_OWNERS;
     assert_eq!(
         RingTransactData::parse(&wide, RingRail::Anonymous),
         Err(CustomRingError::RingShapeUnkeyed)
@@ -903,26 +902,20 @@ fn public_owners_select_the_confidential_circuit() {
 }
 
 #[test]
-fn the_co_sign_byte_sits_past_the_header() {
+fn the_approval_byte_sits_past_the_header() {
     let fixture = Fixture::new();
     let data = fixture.confidential_policy();
     let compact = data.encode().unwrap();
-    assert_eq!(compact[CO_SIGN_BYTE], data.co_sign.byte());
-    for byte in [0b0010_0000, 0b0001_1000] {
+    assert_eq!(compact[APPROVAL_BYTE], data.approval.bits());
+    for byte in [0b0000_0100, 0b0010_0000] {
         let mut refused = compact.clone();
-        refused[CO_SIGN_BYTE] = byte;
+        refused[APPROVAL_BYTE] = byte;
         assert!(RingTransactData::parse(&refused, RingRail::Confidential).is_err());
     }
     let parsed = RingTransactData::parse(&compact, RingRail::Confidential)
         .unwrap()
         .into_data();
-    assert_eq!(
-        parsed.co_sign,
-        CoSignHeader {
-            approval: ApprovalMask::OUTFLOW,
-            co_signers: 1
-        }
-    );
+    assert_eq!(parsed.approval, ApprovalMask::OUTFLOW);
 }
 
 #[test]
@@ -1061,14 +1054,14 @@ fn every_rail_reads_its_audit_stream() {
         (fixture.confidential_data(), key(24, false), 2, 2, true),
         (fixture.delegate(), key(24, false), 2, 2, false),
         (fixture.anonymous_delegate(), key(24, false), 2, 2, false),
-        (fixture.anonymous(), key(16, false), 3, 4, false),
+        (fixture.anonymous(), key(24, false), 3, 4, false),
         (fixture.anonymous_entry(), key(8, true), 2, 2, false),
     ] {
         let expected = AuditStreamLayout {
             key,
             inputs,
             outputs,
-            capacity: outputs,
+            capacity: if key.entry { 4 } else { outputs },
             has_data,
         };
         assert_eq!(data.audit_stream(), Ok(expected), "{key:?}");
@@ -1177,13 +1170,12 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
     assert_eq!(proof.bsb22_commitment.commitment, fixture.bytes[20]);
     assert_eq!(
         data.transfer_circuit(1),
-        Ok(RingCircuit::TransferConfidential {
+        Ok(RingCircuit::Transfer {
             outputs: 4,
             inputs: 24,
             withdrawals: 4,
             owners: 4,
-            data: false,
-            private: 0,
+            entry: false,
         })
     );
     assert_eq!(

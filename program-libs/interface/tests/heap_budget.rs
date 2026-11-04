@@ -9,17 +9,16 @@ use std::{
 };
 
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignHeader, CoSignOperation},
-    key_catalog::{
-        TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
-        ENTRY_TRANSFER_SHAPES,
-    },
+    cosign::{ApprovalMask, CoSignOperation},
+    key_catalog::{FrameKey, RecordPools, TransferShape, TransferSpend},
     storage::Revision,
     AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PublicLeg, PublicSlots,
     Replies, RingRail, RingTransactData, MIN_REPLY_LEN,
 };
 use frames::{config, Fixture};
+use solana_message::v1::MAX_TRANSACTION_SIZE;
 use spr_interface::instruction::{InterfaceTransfer, TransactProof};
+use spr_interface::shape::SPP_SUPPORTED_SHAPES;
 
 /// The codec phases of one invocation, parse, the public legs and the SPP expansion, modeled as Pinocchio's bump that reclaims nothing.
 const BUDGET: usize = 12 * 1024;
@@ -135,23 +134,40 @@ struct Pool {
     owners: Vec<[u8; 32]>,
 }
 
-fn widest_legs(shape: &TransferShape) -> usize {
-    shape
-        .withdrawals
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, usize::from)
+/// Each key at the widest SPP shape of every output width it serves on `rail`.
+fn served(rail: RingRail, entry: bool) -> Vec<(TransferShape, usize, usize)> {
+    let mut served = Vec::new();
+    for wide in [false, true] {
+        for outputs in [2, 4, 8, 16] {
+            let key = FrameKey {
+                rail,
+                outputs,
+                spends_default_ring: entry,
+                wide,
+            };
+            let Some(shape) = key.shape() else {
+                continue;
+            };
+            let inputs = SPP_SUPPORTED_SHAPES
+                .iter()
+                .filter(|spp| spp.n_outputs() == outputs)
+                .map(|spp| spp.n_inputs())
+                .filter(|inputs| *inputs <= usize::from(shape.inputs))
+                .max();
+            served.extend(inputs.map(|inputs| (shape, inputs, outputs)));
+        }
+    }
+    served
 }
 
 fn cases() -> Vec<Widest> {
     let mut cases = Vec::new();
-    for shape in &CONFIDENTIAL_TRANSFER_SHAPES {
+    for (shape, inputs, outputs) in served(RingRail::Confidential, false) {
         let base = Widest {
             rail: RingRail::Confidential,
-            inputs: shape.inputs.into(),
-            outputs: shape.outputs.into(),
-            legs: widest_legs(shape),
+            inputs,
+            outputs,
+            legs: usize::from(shape.withdrawals),
             kind: Legs::Sol,
             policy: true,
             thresholds: false,
@@ -174,12 +190,12 @@ fn cases() -> Vec<Widest> {
             ..base
         });
     }
-    for shape in &ANONYMOUS_TRANSFER_SHAPES {
+    for (shape, inputs, outputs) in served(RingRail::Anonymous, false) {
         let base = Widest {
             rail: RingRail::Anonymous,
-            inputs: shape.inputs.into(),
-            outputs: shape.outputs.into(),
-            legs: widest_legs(shape),
+            inputs,
+            outputs,
+            legs: usize::from(shape.withdrawals),
             kind: Legs::Sol,
             policy: true,
             thresholds: false,
@@ -202,12 +218,12 @@ fn cases() -> Vec<Widest> {
             ..base
         });
     }
-    for shape in &ENTRY_TRANSFER_SHAPES {
+    for (shape, inputs, outputs) in served(RingRail::Anonymous, true) {
         let base = Widest {
             rail: RingRail::Anonymous,
-            inputs: shape.inputs.into(),
-            outputs: shape.outputs.into(),
-            legs: widest_legs(shape),
+            inputs,
+            outputs,
+            legs: usize::from(shape.withdrawals),
             kind: Legs::Sol,
             policy: true,
             thresholds: false,
@@ -241,11 +257,21 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
     let anonymous = case.rail == RingRail::Anonymous;
     let mut data = fixture.base(case.rail, case.inputs as u8, case.outputs as u8);
     data.entry = case.entry;
+    data.wide_owners = !case.entry
+        && TransferSpend {
+            rail: case.rail,
+            inputs: case.inputs,
+            outputs: case.outputs,
+            spends_default_ring: false,
+            legs: case.legs,
+            owners: 0,
+            pools: RecordPools::default(),
+            wide: false,
+        }
+        .fitted()
+        .wide;
     if case.policy || case.thresholds {
-        data.co_sign = CoSignHeader {
-            approval: ApprovalMask::OUTFLOW,
-            co_signers: 5,
-        };
+        data.approval = ApprovalMask::OUTFLOW;
         data.own_revision = Some(Revision::from(7));
     }
     data.interface_transfers = (0..case.legs)
@@ -327,7 +353,7 @@ fn measure(compact: &[u8], rail: RingRail) -> Phases {
     let demand = CoSignOperation {
         spends_note: !data.no_spend,
         public_legs: slots.classes(),
-        approval: data.co_sign.approval,
+        approval: data.approval,
     }
     .demand();
     let legs = Arena::used();
@@ -373,6 +399,8 @@ fn the_codec_phases_of_every_widest_frame_stay_within_the_budget() {
     }
     let over: Vec<_> = report
         .iter()
+        // A wider frame reaches no program in one transaction.
+        .filter(|(_, bytes, _)| *bytes <= MAX_TRANSACTION_SIZE)
         .filter(|(_, _, phases)| phases.spp > BUDGET)
         .map(|(name, _, phases)| format!("{name} takes {} of {BUDGET}", phases.spp))
         .collect();

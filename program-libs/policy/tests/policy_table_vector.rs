@@ -3,9 +3,8 @@
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use zolana_ring_policy::{
-    registry_field, EncodedRuleTable, Guard, ListId, ListSet, Member, Mode, PolicySource,
-    PrivateSource, Rule, RuleSource, RuleTable, SourceMap, Subject, TableParts, MAX_RULES,
-    POLICY_TABLE_VERSION,
+    registry_field, EncodedRuleTable, Guard, ListId, ListSet, Member, Mode, PolicySource, Rule,
+    RuleSource, RuleTable, SourceMap, Subject, TableParts, MAX_RULES, POLICY_TABLE_VERSION,
 };
 
 const VECTORS: &str = concat!(
@@ -26,7 +25,7 @@ struct PolicyTableVectors {
 struct Case {
     name: String,
     sources: Vec<Source>,
-    private_source: PrivateSourceRow,
+    salted: u8,
     rules: Vec<String>,
     /// `rules[i]` split into its parts.
     rule_parts: Vec<RuleParts>,
@@ -38,12 +37,6 @@ struct Case {
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct Source {
     list_id: u8,
-    registry: String,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct PrivateSourceRow {
-    owner_lists: u8,
     registry: String,
 }
 
@@ -89,11 +82,7 @@ impl Case {
         let slots: Vec<PolicySource> = self.sources.iter().map(Source::slot).collect();
         SourceMap::from_slots(slots.try_into().expect("one source per slot"))
             .expect("positional sources")
-            .with_private(PrivateSource {
-                owner_lists: ListSet::from_bits(self.private_source.owner_lists),
-                registry: bytes(&self.private_source.registry),
-            })
-            .expect("paired source")
+            .with_salted(ListSet::from_bits(self.salted))
     }
 }
 
@@ -275,21 +264,24 @@ fn full_width_table() -> (RuleTable, SourceMap) {
             Rule::any_of(
                 Subject::OutputOwner,
                 ListSet::of(&[ListId::Allow, ListId::Frozen]),
-                ListSet::of(&[ListId::Block, ListId::Escrow]),
+                ListSet::of(&[ListId::Block, ListId::PrivateAllow]),
             )
             .above(u64::MAX),
         )
-        .rule(Rule::forbid_all(Subject::Sender, ListSet::of(&ListId::ALL)))
+        .rule(Rule::forbid_only_on_all(
+            Subject::Sender,
+            ListSet::of(&ListId::ALL),
+        ))
         .rule(Rule::any_of(
             Subject::Asset,
-            ListSet::single(ListId::Escrow),
+            ListSet::single(ListId::PrivateAllow),
             ListSet::of(&ListId::ALL[..7]),
         ))
         .rule(Rule::require(Subject::Asset, ListId::Approval).above(1))
         .rule(
             Rule::require_any(
                 Subject::OutputOwner,
-                ListSet::of(&[ListId::RingViewing, ListId::Recovery]),
+                ListSet::of(&[ListId::RingViewing, ListId::PrivateBlock]),
             )
             .above_by_asset(),
         )
@@ -326,10 +318,7 @@ fn case(name: &str, table: &RuleTable, sources: &SourceMap) -> Case {
     Case {
         name: name.to_string(),
         sources: sources.slots().iter().map(Source::new).collect(),
-        private_source: PrivateSourceRow {
-            owner_lists: sources.private().owner_lists.bits(),
-            registry: hex::encode(sources.private().registry),
-        },
+        salted: sources.salted().bits(),
         rules: table
             .rules()
             .iter()
@@ -341,22 +330,17 @@ fn case(name: &str, table: &RuleTable, sources: &SourceMap) -> Case {
     }
 }
 
-/// A private owner source beside a public curator, the asset row keeps the public slot.
-fn private_source_case() -> Case {
+fn salted_list_case() -> Case {
     let curator = registry_field(&[0x15; 32]).expect("registry field");
-    let private = registry_field(&[0x16; 32]).expect("registry field");
     let table = RuleTable::builder()
         .rule(Rule::forbid(Subject::OutputOwner, ListId::Block))
+        .rule(Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock))
         .rule(Rule::forbid(Subject::Asset, ListId::Block))
         .build();
-    let sources = SourceMap::new(&[(ListId::Block, curator)])
-        .expect("positional map")
-        .with_private(
-            PrivateSource::new(ListSet::single(ListId::Block), private).expect("paired source"),
-        )
-        .expect("paired source");
+    let sources = SourceMap::new(&[(ListId::Block, curator), (ListId::PrivateBlock, [0; 32])])
+        .expect("positional map");
     table.encode().validate(&sources).expect("validated");
-    case("private_source_beside_curator", &table, &sources)
+    case("salted_list_beside_curator", &table, &sources)
 }
 
 fn compute_vectors() -> PolicyTableVectors {
@@ -371,7 +355,7 @@ fn compute_vectors() -> PolicyTableVectors {
         ),
         case("full_with_curator", &full, &full_sources),
         case("full_width_parts", &wide, &wide_sources),
-        private_source_case(),
+        salted_list_case(),
     ];
     let named = cases.len();
     while cases.len() < named + GENERATED_CASES {
