@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use crate::ZolanaServices;
 use custom_ring_interface::{
-    blinding::ring_blinding_seed, encode_ring_recipient_output, encode_ring_sender_bundle_output,
+    blinding::ring_blinding_seed, encode_ring_body_output, encode_ring_sender_bundle_output,
     stream::DeliveredSlot, RecipientBody, SenderBundle,
 };
 use solana_address::Address;
@@ -16,7 +16,7 @@ use spr_client::{
     PaginationToken, RingHistoryOptions, ShieldedTransaction, WitnessReader,
 };
 use spr_event::MessageData;
-use spr_keypair::{viewing_key::ViewTag, ShieldedAddress};
+use spr_keypair::{viewing_key::ViewTag, ShieldedAddress, ShieldedKeypair};
 use spr_transaction::{
     serialization::proofless::{Proofless, ProoflessEncode},
     utxo::blinding::derive_transact_output_blinding,
@@ -154,11 +154,12 @@ impl Ledger {
                 blinding,
                 amount: sealed.amount,
                 mint: sealed.asset.asset.to_bytes(),
+                ..RecipientBody::default()
             },
             &secret,
         )
         .unwrap();
-        let payload = encode_ring_recipient_output(&ciphertext, &[]).unwrap();
+        let payload = encode_ring_body_output(&ciphertext, &[]).unwrap();
         let tag = secret.recipient_tag().unwrap();
         self.publish(&sealed, &owner, blinding, payload, tag, Vec::new())
     }
@@ -349,7 +350,7 @@ impl Member {
     fn scan(&self, zolana: &Zolana<NoRpc, Ledger>) -> Vec<[u8; 32]> {
         let assets = RingAssets::new([]).unwrap();
         ScanAt {
-            keys: &self.keys,
+            keys: &zolana_ring_keys::RotatingRingKeys::new(&self.keys).unwrap(),
             assets: &assets,
             chain_assets: &|| Ok(RingAssets::new(zolana.indexer().mints.clone())?),
             slot: 9,
@@ -358,6 +359,7 @@ impl Member {
         }
         .fetch(zolana)
         .unwrap()
+        .spendable
         .utxos()
         .map(|utxo| utxo.utxo_hash)
         .collect()

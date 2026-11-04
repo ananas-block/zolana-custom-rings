@@ -884,6 +884,10 @@ impl CoSigner {
 
 impl Requirement {
     fn of(config: &RingPolicy, demand: Demand) -> Result<Self> {
+        ensure!(
+            demand != Demand::Approval || config.co_signers.covered().is_some(),
+            "dual control needs a configured co-signer"
+        );
         let spend = |approval| CoSignOperation {
             spends_note: true,
             public_legs: CoSignScope::NONE,
@@ -1587,13 +1591,12 @@ mod tests {
     fn each_recipient_must_fit_the_rings_mode() {
         let shielded = Recipient::Shielded(keypair(1).shielded_address().unwrap());
         let ring = request(2, RING);
-        for mode in [RingMode::Confidential, RingMode::ConfidentialEscrow] {
-            assert!(PaymentPlan::new(std::slice::from_ref(&shielded))
-                .resolve(mode, RING)
-                .is_ok());
-            let refused = PaymentPlan::new(&[shielded.clone(), ring.clone()]).resolve(mode, RING);
-            assert!(refusal(refused).contains("pays an anonymous ring"));
-        }
+        assert!(PaymentPlan::new(std::slice::from_ref(&shielded))
+            .resolve(RingMode::Confidential, RING)
+            .is_ok());
+        let refused = PaymentPlan::new(&[shielded.clone(), ring.clone()])
+            .resolve(RingMode::Confidential, RING);
+        assert!(refusal(refused).contains("pays an anonymous ring"));
         let anonymous = PaymentPlan::new(std::slice::from_ref(&ring))
             .resolve(RingMode::Anonymous, RING)
             .unwrap();
@@ -1786,13 +1789,22 @@ mod tests {
             Payees::Confidential(_) => Vec::new(),
         };
         assert_eq!(replies(&anonymous), [false]);
-        assert_eq!(replies(&anonymous.with_reply(&sender).unwrap()), [true]);
+        assert_eq!(
+            replies(
+                &anonymous
+                    .with_reply(&sender.shielded_address().unwrap())
+                    .unwrap()
+            ),
+            [true]
+        );
         let confidential = Payments {
             mint: SOL_MINT,
             payees: Payees::Confidential(Vec::new()),
             outputs: None,
         };
-        assert!(confidential.with_reply(&sender).is_err());
+        assert!(confidential
+            .with_reply(&sender.shielded_address().unwrap())
+            .is_err());
     }
 
     fn held_utxo(ring: Option<Address>, amount: u64) -> WalletUtxo {

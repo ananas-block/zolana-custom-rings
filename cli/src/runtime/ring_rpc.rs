@@ -460,7 +460,7 @@ mod tests {
             tx_viewing_pk: Vec::new().into(),
             outputs: Vec::new(),
             payload_errors: Vec::new(),
-            sender: None,
+            real_inputs: 0,
             inputs: Vec::new(),
             nullifiers: Vec::new(),
             spenders: Vec::new(),

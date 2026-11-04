@@ -313,6 +313,8 @@ pub(crate) mod fixtures {
     use solana_address::Address;
     use spr_keypair::SigningKey;
 
+    use spr_keypair::ShieldedKeypair;
+
     use super::*;
 
     pub(crate) const RING: Address = Address::new_from_array([4; 32]);
@@ -336,7 +338,7 @@ pub(crate) mod fixtures {
             let _ = fs::remove_dir_all(&dir);
             let store = StoreLocation {
                 dir: &dir,
-                keys: &keys,
+                viewing_pubkey: keys.viewing_pubkey(),
             }
             .open();
             Self { keys, store, dir }
