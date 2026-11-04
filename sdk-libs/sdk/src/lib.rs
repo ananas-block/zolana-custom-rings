@@ -78,7 +78,7 @@ pub use crate::{
         shape_keyed, Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, CoOwner,
         CustomRingTransfer, CustomRingTransferInput, DelegateMove, DelegateOutput, DelegatePayment,
         DelegateTransfer, DelegateTransferInput, Delegated, EntrySpend, Owner, ProvenRingTransfer,
-        Rail, RailKind, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment, RingSender,
+        PublicOwnerTransfer, PublicOwners, Rail, RailKind, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment, RingSender,
         RingTransfer,
     },
     records::{

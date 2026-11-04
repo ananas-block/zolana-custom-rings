@@ -25,8 +25,12 @@ mod error;
 pub mod history;
 #[path = "rpc/indexer.rs"]
 mod indexer;
+#[path = "state/exposed_notes.rs"]
+mod exposed_notes;
 #[path = "state/known_utxo_index.rs"]
 mod known;
+#[path = "state/list_grant.rs"]
+mod list_grant;
 #[path = "operations/merge_audit.rs"]
 mod merge_audit;
 #[path = "state/merge_ledger.rs"]
@@ -87,8 +91,13 @@ pub use crate::{
         SealedNullifierKey,
     },
     error::{AnonymousError, AuditError, AuditFailureKind, RowDisposition},
+    exposed_notes::{
+        is_zero_key, mint_balances, note_state, verify_ring_owned, MintBalance, NoteState,
+        RingOwnedUtxos,
+    },
     indexer::{AsyncRingIndexer, RingIndexer, RingIndexerError},
     known::KnownUtxoIndex,
+    list_grant::{ListBits, PresentRead},
     merge_audit::{confirmed_merge, MergeAudit, MergeAuditPage},
     merge_ledger::{
         AuditedMergeOutput, ConfirmedMerge, MergeId, MergeInput, MergeLedger, MergeTransition,

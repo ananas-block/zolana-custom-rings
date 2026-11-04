@@ -1216,7 +1216,9 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
         Ok(RingCircuit::TransferConfidential {
             outputs: 4,
             inputs: 24,
-            withdrawals: 4
+            withdrawals: 4,
+            owners: 4,
+            data: false,
         })
     );
     assert_eq!(

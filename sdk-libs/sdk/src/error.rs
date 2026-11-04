@@ -145,6 +145,24 @@ pub enum RingError {
         amount: u64,
         max_inputs: usize,
     },
+    #[error("{exposed_if_spent} of {mint} sits in zero-key notes, a spend of {amount} needs a public spend naming the wallet")]
+    UnfundedPastExposure {
+        mint: Address,
+        amount: u64,
+        exposed_if_spent: u64,
+    },
+    #[error("input {index} is a zero-key note of the sender and spending it publishes the wallet, call spend_public")]
+    ZeroKeyInputUnnamed { index: usize },
+    #[error("a public spend named {named} but the sender is {sender}")]
+    PublicSpendWalletMismatch { named: Address, sender: Address },
+    #[error("a public spend signs the transaction, it cannot prove its owner in the proof")]
+    PublicSpendInProofOwner,
+    #[error("owner {owner:?} enrolled and its salt zero grant no longer reads, the curator must write its salted position")]
+    SaltedGrantMissing { owner: [u8; 32] },
+    #[error("a deposit frame proves once, a retry draws a new blinding secret")]
+    DepositFrameReused,
+    #[error("a deposit to another member needs its request's tag, the viewing key is no tag")]
+    DepositBootstrapTag,
     #[error("tree account {address} is missing")]
     MissingTree { address: Address },
     #[error("tree account {address} is not a shielded pool tree")]

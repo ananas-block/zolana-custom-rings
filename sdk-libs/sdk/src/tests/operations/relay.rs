@@ -89,6 +89,7 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
         to: RingAddress {
             recipient: recipient.shielded_address().unwrap(),
             ring_program_id: ring().program_id(),
+            list_salt: [7; 32],
         },
         asset: Mint::SOL,
         amount: 4,

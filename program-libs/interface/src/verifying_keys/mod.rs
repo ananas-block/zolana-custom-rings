@@ -24,97 +24,7 @@ pub mod merge_v3_24_verifying_key;
 pub mod merge_v3_8_verifying_key;
 #[path = "records/register_key_verifying_key.rs"]
 pub mod register_key_verifying_key;
-#[path = "transfer/anonymous/transfer_anonymous_2_in24_w32_verifying_key.rs"]
-pub mod transfer_anonymous_2_in24_w32_verifying_key;
-#[path = "transfer/anonymous/transfer_anonymous_2_in24_w4_verifying_key.rs"]
-pub mod transfer_anonymous_2_in24_w4_verifying_key;
-#[path = "transfer/anonymous/transfer_anonymous_4_in16_w32_verifying_key.rs"]
-pub mod transfer_anonymous_4_in16_w32_verifying_key;
-#[path = "transfer/anonymous/transfer_anonymous_4_in16_w4_verifying_key.rs"]
-pub mod transfer_anonymous_4_in16_w4_verifying_key;
-#[path = "transfer/anonymous/transfer_anonymous_8_in5_w24_verifying_key.rs"]
-pub mod transfer_anonymous_8_in5_w24_verifying_key;
-#[path = "transfer/entry/transfer_anonymous_entry_2_in8_w4_verifying_key.rs"]
-pub mod transfer_anonymous_entry_2_in8_w4_verifying_key;
-#[path = "transfer/entry/transfer_anonymous_entry_4_in8_w4_verifying_key.rs"]
-pub mod transfer_anonymous_entry_4_in8_w4_verifying_key;
-#[path = "transfer/entry/transfer_anonymous_entry_8_in2_w4_verifying_key.rs"]
-pub mod transfer_anonymous_entry_8_in2_w4_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_16_in5_w8_verifying_key.rs"]
-pub mod transfer_confidential_16_in5_w8_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_2_in24_w32_verifying_key.rs"]
-pub mod transfer_confidential_2_in24_w32_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_2_in24_w4_verifying_key.rs"]
-pub mod transfer_confidential_2_in24_w4_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_4_in24_w32_verifying_key.rs"]
-pub mod transfer_confidential_4_in24_w32_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_4_in24_w4_verifying_key.rs"]
-pub mod transfer_confidential_4_in24_w4_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_8_in16_w32_verifying_key.rs"]
-pub mod transfer_confidential_8_in16_w32_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_8_in16_w4_verifying_key.rs"]
-pub mod transfer_confidential_8_in16_w4_verifying_key;
 pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
-    (
-        "custom_ring_transfer_confidential_2_in24_w4.key",
-        transfer_confidential_2_in24_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_confidential_2_in24_w32.key",
-        transfer_confidential_2_in24_w32_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_confidential_4_in24_w4.key",
-        transfer_confidential_4_in24_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_confidential_4_in24_w32.key",
-        transfer_confidential_4_in24_w32_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_confidential_8_in16_w4.key",
-        transfer_confidential_8_in16_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_confidential_8_in16_w32.key",
-        transfer_confidential_8_in16_w32_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_confidential_16_in5_w8.key",
-        transfer_confidential_16_in5_w8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_anonymous_2_in24_w4.key",
-        transfer_anonymous_2_in24_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_anonymous_2_in24_w32.key",
-        transfer_anonymous_2_in24_w32_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_anonymous_4_in16_w4.key",
-        transfer_anonymous_4_in16_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_anonymous_4_in16_w32.key",
-        transfer_anonymous_4_in16_w32_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_anonymous_8_in5_w24.key",
-        transfer_anonymous_8_in5_w24_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_anonymous_entry_2_in8_w4.key",
-        transfer_anonymous_entry_2_in8_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_anonymous_entry_4_in8_w4.key",
-        transfer_anonymous_entry_4_in8_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_anonymous_entry_8_in2_w4.key",
-        transfer_anonymous_entry_8_in2_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
     (
         "custom_ring_apply_records_1.key",
         apply_records_1_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
@@ -168,81 +78,6 @@ pub fn verifying_key(
     circuit: key_catalog::RingCircuit,
 ) -> Option<&'static groth16_solana::groth16::Groth16Verifyingkey<'static>> {
     match circuit {
-        key_catalog::RingCircuit::TransferConfidential {
-            outputs: 2,
-            inputs: 24,
-            withdrawals: 4,
-        } => Some(&transfer_confidential_2_in24_w4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferConfidential {
-            outputs: 2,
-            inputs: 24,
-            withdrawals: 32,
-        } => Some(&transfer_confidential_2_in24_w32_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferConfidential {
-            outputs: 4,
-            inputs: 24,
-            withdrawals: 4,
-        } => Some(&transfer_confidential_4_in24_w4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferConfidential {
-            outputs: 4,
-            inputs: 24,
-            withdrawals: 32,
-        } => Some(&transfer_confidential_4_in24_w32_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferConfidential {
-            outputs: 8,
-            inputs: 16,
-            withdrawals: 4,
-        } => Some(&transfer_confidential_8_in16_w4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferConfidential {
-            outputs: 8,
-            inputs: 16,
-            withdrawals: 32,
-        } => Some(&transfer_confidential_8_in16_w32_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferConfidential {
-            outputs: 16,
-            inputs: 5,
-            withdrawals: 8,
-        } => Some(&transfer_confidential_16_in5_w8_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferAnonymous {
-            outputs: 2,
-            class: 24,
-            withdrawals: 4,
-        } => Some(&transfer_anonymous_2_in24_w4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferAnonymous {
-            outputs: 2,
-            class: 24,
-            withdrawals: 32,
-        } => Some(&transfer_anonymous_2_in24_w32_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferAnonymous {
-            outputs: 4,
-            class: 16,
-            withdrawals: 4,
-        } => Some(&transfer_anonymous_4_in16_w4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferAnonymous {
-            outputs: 4,
-            class: 16,
-            withdrawals: 32,
-        } => Some(&transfer_anonymous_4_in16_w32_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferAnonymous {
-            outputs: 8,
-            class: 5,
-            withdrawals: 24,
-        } => Some(&transfer_anonymous_8_in5_w24_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferAnonymousEntry {
-            outputs: 2,
-            class: 8,
-            withdrawals: 4,
-        } => Some(&transfer_anonymous_entry_2_in8_w4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferAnonymousEntry {
-            outputs: 4,
-            class: 8,
-            withdrawals: 4,
-        } => Some(&transfer_anonymous_entry_4_in8_w4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::TransferAnonymousEntry {
-            outputs: 8,
-            class: 2,
-            withdrawals: 4,
-        } => Some(&transfer_anonymous_entry_8_in2_w4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::ApplyRecords { writes: 1 } => {
             Some(&apply_records_1_verifying_key::VERIFYINGKEY)
         }
@@ -270,12 +105,6 @@ pub fn verifying_key(
         }
         key_catalog::RingCircuit::Deposit { capacity: 8 } => {
             Some(&deposit_8_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::Merge { width: 8 } => {
-            Some(&merge_v3_8_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::Merge { width: 24 } => {
-            Some(&merge_v3_24_verifying_key::VERIFYINGKEY)
         }
         _ => None,
     }

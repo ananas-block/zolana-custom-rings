@@ -1,101 +1,85 @@
-//! Regions of the ring auditor stream and the byte layout of every plaintext it and the
-//! delivered bodies carry, mirror `prover/circuits/audit`.
+//! Regions of the ring auditor stream and the byte layout of every plaintext it carries, mirror
+//! `prover/circuits/audit`.
 
-use crate::{
-    bytes::Bytes, disclosure::AnonymousAuditKey, error::CustomRingError, TAGGED_X25519_KEY_LEN,
-};
+use crate::{bytes::Bytes, error::CustomRingError, TAGGED_X25519_KEY_LEN};
 
 pub const STREAM_BLOCK_LEN: usize = 16;
 pub const STREAM_FIRST_COUNTER: u32 = 2;
 /// The sealed `tx_viewing_sk`, the envelope's first bytes.
 pub const ENVELOPE_KEY_LEN: usize = 32;
-/// `be32(blinding) || u64be(amount) || owner_key`.
-pub const ESCROWED_DELIVERED_BODY_LEN: usize = 72;
-/// `be32(blinding) || u64be(amount) || owner_key || be32(nullifier_pk)`.
-pub const DELIVERED_BODY_LEN: usize = 104;
-/// `owner_key || be32(asset) || u64be(amount) || be32(nullifier_pk)`.
-pub const ANONYMOUS_RECORD_LEN: usize = 104;
-/// `be32(asset) || u64be(amount)`.
-pub const ESCROWED_EXIT_RECORD_LEN: usize = 40;
-/// `be32(asset) || u64be(amount) || be32(nullifier_pk)`.
-pub const EXIT_RECORD_LEN: usize = 72;
-/// `be32(hash) || u64be(amount) || be32(asset) || be32(blinding)`.
-pub const ENTRY_INPUT_LEN: usize = 104;
-/// `sender_key || be32(sender_nullifier_pk)`.
-pub const ENTRY_EVIDENCE_HEAD_LEN: usize = 64;
-/// `be32(hash_i)`, zero at a dummy.
-pub const INPUT_HASH_LEN: usize = 32;
-/// Scheme 11, `be32(blinding) || u64be(amount) || mint`.
+/// `R`, spent notes among the published inputs, dummies last.
+pub const REAL_INPUT_COUNT_LEN: usize = 1;
+/// Keys with entry capacity alone, bit `i` set when input `i` is a default-ring note.
+pub const DEFAULT_INPUT_BITS_LEN: usize = 8;
+/// `kind || reserved || u64be(amount) || owner_key || mint || be32(nullifier_pk)`.
+pub const AUDIT_RECORD_LEN: usize = 112;
+/// `be32(data_hash) || be32(ring_data_hash)`.
+pub const DATA_TAIL_LEN: usize = 64;
+/// `owner_key || be32(nullifier_pk) || u64be(amount) || mint || be32(blinding) || be32(data_hash) || be32(ring_data_hash)`.
+pub const ENTRY_INPUT_LEN: usize = 200;
+/// `record || secret`, the deposit's blinding or the merge's seed.
+pub const OPENING_RECORD_LEN: usize = AUDIT_RECORD_LEN + FIELD_LEN;
+/// `be32(blinding) || u64be(amount) || mint`.
 pub const RECIPIENT_BODY_LEN: usize = 72;
 /// `mint0 || u64be(amount0) || u64be(amount1) || output_seed`.
 pub const SENDER_BUNDLE_HEAD_LEN: usize = 80;
 /// `viewing_u || owner_key || nullifier_pk`, one byte for the wincode of no data.
 pub const MIN_REPLY_LEN: usize = 97;
-pub const ANONYMOUS_RECORD_BLOCKS: usize = ANONYMOUS_RECORD_LEN.div_ceil(STREAM_BLOCK_LEN);
-pub const CONFIDENTIAL_RECORD_BLOCKS: usize = EXIT_RECORD_LEN.div_ceil(STREAM_BLOCK_LEN);
-const ENVELOPE_KEY_BLOCKS: usize = ENVELOPE_KEY_LEN / STREAM_BLOCK_LEN;
+pub const RECORD_BLOCKS: usize = AUDIT_RECORD_LEN / STREAM_BLOCK_LEN;
+pub const TAIL_BLOCKS: usize = DATA_TAIL_LEN / STREAM_BLOCK_LEN;
+const RECORD_RESERVED_LEN: usize = 7;
 const FIELD_LEN: usize = 32;
 const AMOUNT_LEN: usize = 8;
 
-const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == ESCROWED_DELIVERED_BODY_LEN);
-const _: () = assert!(AMOUNT_LEN + 3 * FIELD_LEN == DELIVERED_BODY_LEN);
-const _: () = assert!(AMOUNT_LEN + 3 * FIELD_LEN == ANONYMOUS_RECORD_LEN);
-const _: () = assert!(AMOUNT_LEN + FIELD_LEN == ESCROWED_EXIT_RECORD_LEN);
-const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == EXIT_RECORD_LEN);
-const _: () = assert!(AMOUNT_LEN + 3 * FIELD_LEN == ENTRY_INPUT_LEN);
+const _: () = assert!(1 + RECORD_RESERVED_LEN + AMOUNT_LEN + 3 * FIELD_LEN == AUDIT_RECORD_LEN);
+const _: () = assert!(AUDIT_RECORD_LEN.is_multiple_of(STREAM_BLOCK_LEN));
+const _: () = assert!(DATA_TAIL_LEN.is_multiple_of(STREAM_BLOCK_LEN));
+const _: () = assert!(AMOUNT_LEN + 6 * FIELD_LEN == ENTRY_INPUT_LEN);
 const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == RECIPIENT_BODY_LEN);
 const _: () = assert!(2 * AMOUNT_LEN + 2 * FIELD_LEN == SENDER_BUNDLE_HEAD_LEN);
 const _: () = assert!(3 * FIELD_LEN + 1 == MIN_REPLY_LEN);
-const _: () = assert!(2 * FIELD_LEN == ENTRY_EVIDENCE_HEAD_LEN);
-const _: () = assert!(DELIVERED_BODY_LEN == ANONYMOUS_RECORD_LEN);
-const _: () = assert!(ESCROWED_DELIVERED_BODY_LEN == EXIT_RECORD_LEN);
 
+/// One key's envelope, every rail of a key shares one circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuditKey {
-    Confidential { class: usize },
-    Anonymous(AnonymousAuditKey),
+pub struct AuditKey {
+    /// The widest published input count.
+    pub class: usize,
+    /// Default bits and one evidence entry per published input.
+    pub entry: bool,
 }
 
 impl AuditKey {
     pub const fn class(self) -> usize {
-        match self {
-            Self::Confidential { class } => class,
-            Self::Anonymous(key) => key.class(),
-        }
+        self.class
     }
 
     /// `S`, the owner signers the key's statement chains.
     pub const fn signer_slots(self) -> usize {
-        match self {
-            Self::Confidential { class } => class,
-            Self::Anonymous(AnonymousAuditKey::Commitment { class }) => class,
-            Self::Anonymous(AnonymousAuditKey::Entry { .. }) => 0,
+        self.class
+    }
+
+    const fn head_len(self) -> usize {
+        match self.entry {
+            true => ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + DEFAULT_INPUT_BITS_LEN,
+            false => ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN,
         }
     }
 
-    /// `E_max`, the same at every rail of a key since one circuit serves them.
-    pub const fn max_evidence_blocks(self) -> usize {
-        let max_evidence_len = match self {
-            Self::Confidential { class }
-            | Self::Anonymous(AnonymousAuditKey::Commitment { class }) => INPUT_HASH_LEN * class,
-            Self::Anonymous(AnonymousAuditKey::Entry { class }) => {
-                ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * class
-            }
-        };
-        max_evidence_len.div_ceil(STREAM_BLOCK_LEN)
+    const fn entry_len(self) -> usize {
+        match self.entry {
+            true => ENTRY_INPUT_LEN,
+            false => 0,
+        }
     }
 
-    /// `R`.
-    pub const fn record_blocks(self) -> usize {
-        match self {
-            Self::Confidential { .. } => CONFIDENTIAL_RECORD_BLOCKS,
-            Self::Anonymous(_) => ANONYMOUS_RECORD_BLOCKS,
-        }
+    /// `E`, the same at every published input count so no record's counter moves.
+    pub const fn envelope_blocks(self) -> usize {
+        (self.head_len() + self.entry_len() * self.class).div_ceil(STREAM_BLOCK_LEN)
     }
 
     /// `R0`.
     pub const fn first_record_counter(self) -> u32 {
-        STREAM_FIRST_COUNTER + (ENVELOPE_KEY_BLOCKS + self.max_evidence_blocks()) as u32
+        STREAM_FIRST_COUNTER + self.envelope_blocks() as u32
     }
 }
 
@@ -115,134 +99,103 @@ impl StreamRegion {
     }
 }
 
-/// Every length of one transfer's ring ciphertexts, a frame of any other length is refused.
+/// Every length of one transfer's auditor stream, a frame of any other length is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditStreamLayout {
     pub key: AuditKey,
-    pub key_escrow: bool,
     /// `n`, the frame's nullifier count, never the key capacity or a private live count.
     pub inputs: usize,
     /// `m`, the published slots.
     pub outputs: usize,
-    /// `N`, the key's output capacity, the keystream spans every slot of it.
+    /// `N`, the key's output capacity, records and tails span every slot of it.
     pub capacity: usize,
-    /// Bit `i` set when slot `i` exits.
-    pub exits: u64,
+    /// The statement's bit, one tail per published slot.
+    pub has_data: bool,
 }
 
 impl AuditStreamLayout {
-    /// Refuses an input count off the key, an output count off the capacity and an exit past the outputs.
+    /// Refuses an input count off the key and an output count off the capacity.
     pub fn checked(self) -> Result<Self, CustomRingError> {
-        let outputs_fit = self.outputs >= 1
-            && self.outputs <= self.capacity
-            && self.outputs <= u64::BITS as usize;
-        let exits_fit = self.exits.checked_shr(self.outputs as u32).unwrap_or(0) == 0;
-        match self.inputs >= 1 && self.inputs <= self.key.class() && outputs_fit && exits_fit {
+        let outputs_fit = self.outputs >= 1 && self.outputs <= self.capacity;
+        match self.inputs >= 1 && self.inputs <= self.key.class() && outputs_fit {
             true => Ok(self),
             false => Err(CustomRingError::RingTransactLength),
         }
-    }
-
-    pub const fn max_evidence_blocks(self) -> usize {
-        self.key.max_evidence_blocks()
-    }
-
-    pub const fn record_blocks(self) -> usize {
-        self.key.record_blocks()
     }
 
     pub const fn first_record_counter(self) -> u32 {
         self.key.first_record_counter()
     }
 
-    /// Slots at or past `n` stay absent from the evidence.
-    pub const fn evidence_len(self) -> usize {
-        match self.key {
-            AuditKey::Confidential { .. }
-            | AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
-                INPUT_HASH_LEN * self.inputs
-            }
-            AuditKey::Anonymous(AnonymousAuditKey::Entry { .. }) => {
-                ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * self.inputs
-            }
-        }
+    /// `T0`, past every record of `N` slots.
+    pub const fn first_tail_counter(self) -> u32 {
+        self.first_record_counter() + (self.capacity * RECORD_BLOCKS) as u32
     }
 
+    /// Slots at or past `n` stay absent from the evidence.
     pub const fn envelope(self) -> StreamRegion {
         StreamRegion {
             start_counter: STREAM_FIRST_COUNTER,
-            max_blocks: ENVELOPE_KEY_BLOCKS + self.max_evidence_blocks(),
-            len: ENVELOPE_KEY_LEN + self.evidence_len(),
+            max_blocks: self.key.envelope_blocks(),
+            len: self.key.head_len() + self.key.entry_len() * self.inputs,
         }
     }
 
-    /// The range of slot `slot`, transmitting nothing on a delivered slot.
+    /// Slot `slot`'s record range, transmitting nothing past the outputs.
     pub const fn record(self, slot: usize) -> StreamRegion {
         StreamRegion {
-            start_counter: self.first_record_counter() + (slot * self.record_blocks()) as u32,
-            max_blocks: self.record_blocks(),
+            start_counter: self.first_record_counter() + (slot * RECORD_BLOCKS) as u32,
+            max_blocks: RECORD_BLOCKS,
             len: self.record_len(slot),
         }
     }
 
-    pub const fn is_exit(self, slot: usize) -> bool {
-        slot < self.outputs && slot < u64::BITS as usize && (self.exits >> slot) & 1 == 1
+    /// Slot `slot`'s tail range, transmitting nothing past the outputs or while `has_data` is clear.
+    pub const fn tail(self, slot: usize) -> StreamRegion {
+        StreamRegion {
+            start_counter: self.first_tail_counter() + (slot * TAIL_BLOCKS) as u32,
+            max_blocks: TAIL_BLOCKS,
+            len: self.tail_len(slot),
+        }
     }
 
-    pub const fn delivered_body_len(self) -> usize {
-        delivered_body_len(self.key_escrow)
-    }
-
-    pub const fn exit_record_len(self) -> usize {
-        exit_record_len(self.key_escrow)
-    }
-
-    /// Zero past the outputs and on a delivered slot.
     pub const fn record_len(self, slot: usize) -> usize {
-        if slot >= self.outputs {
-            return 0;
-        }
-        match (self.is_exit(slot), self.key) {
-            (true, _) => self.exit_record_len(),
-            (false, AuditKey::Anonymous(_)) => ANONYMOUS_RECORD_LEN,
-            (false, AuditKey::Confidential { .. }) => 0,
+        match slot < self.outputs {
+            true => AUDIT_RECORD_LEN,
+            false => 0,
         }
     }
 
-    /// The one ring disclosure ciphertext of slot `slot`, zero past the outputs.
-    pub const fn ciphertext_len(self, slot: usize) -> usize {
-        match self.record_len(slot) {
-            0 if slot < self.outputs => self.delivered_body_len(),
-            len => len,
+    pub const fn tail_len(self, slot: usize) -> usize {
+        match self.has_data && slot < self.outputs {
+            true => DATA_TAIL_LEN,
+            false => 0,
         }
     }
 
-    pub fn records_len(self) -> usize {
-        (0..self.outputs).map(|slot| self.record_len(slot)).sum()
+    pub const fn records_len(self) -> usize {
+        AUDIT_RECORD_LEN * self.outputs
     }
 
-    /// `0x04 || eph_u || envelope_ct || record_ct...`.
-    pub fn message_len(self) -> usize {
-        TAGGED_X25519_KEY_LEN + self.envelope().len + self.records_len()
+    pub const fn tails_len(self) -> usize {
+        match self.has_data {
+            true => DATA_TAIL_LEN * self.outputs,
+            false => 0,
+        }
     }
 
-    /// The blocks one `CTREncrypt` covers.
+    /// `0x04 || eph_u || envelope_ct || record_ct... || tail_ct...`.
+    pub const fn message_len(self) -> usize {
+        TAGGED_X25519_KEY_LEN + self.envelope().len + self.records_len() + self.tails_len()
+    }
+
+    /// The blocks a reader decrypts, a clear `has_data` reaches no tail.
     pub const fn capacity_blocks(self) -> usize {
-        self.envelope().max_blocks + self.capacity * self.record_blocks()
-    }
-}
-
-pub const fn delivered_body_len(key_escrow: bool) -> usize {
-    match key_escrow {
-        true => ESCROWED_DELIVERED_BODY_LEN,
-        false => DELIVERED_BODY_LEN,
-    }
-}
-
-pub const fn exit_record_len(key_escrow: bool) -> usize {
-    match key_escrow {
-        true => ESCROWED_EXIT_RECORD_LEN,
-        false => EXIT_RECORD_LEN,
+        let tails = match self.has_data {
+            true => self.capacity * TAIL_BLOCKS,
+            false => 0,
+        };
+        self.key.envelope_blocks() + self.capacity * RECORD_BLOCKS + tails
     }
 }
 
@@ -251,62 +204,191 @@ pub const fn sender_bundle_len(outputs: usize) -> usize {
     SENDER_BUNDLE_HEAD_LEN + FIELD_LEN * outputs
 }
 
-/// Zero fields off a UTXO.
+/// A record's first byte, the circuit derives it from the slot's domain and ring id.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct EntryInput {
-    pub hash: [u8; 32],
-    pub amount: u64,
-    pub asset: [u8; 32],
-    pub blinding: [u8; 32],
+#[repr(u8)]
+pub enum RecordKind {
+    #[default]
+    Dummy = 0,
+    Ring = 1,
+    Exit = 2,
 }
 
+/// One published slot, the proof holds a dummy's plaintext to zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuditRecord {
+    pub kind: RecordKind,
+    pub amount: u64,
+    pub owner_key: [u8; 32],
+    pub mint: [u8; 32],
+    pub nullifier_pk: [u8; 32],
+}
+
+impl AuditRecord {
+    pub fn encode(&self) -> [u8; AUDIT_RECORD_LEN] {
+        let mut out = [0; AUDIT_RECORD_LEN];
+        out[0] = self.kind as u8;
+        out[8..16].copy_from_slice(&self.amount.to_be_bytes());
+        out[16..48].copy_from_slice(&self.owner_key);
+        out[48..80].copy_from_slice(&self.mint);
+        out[80..].copy_from_slice(&self.nullifier_pk);
+        out
+    }
+
+    /// Refuses a kind off the three, a set reserved byte and a dummy that carries a value.
+    pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
+        read_all(plaintext, |bytes| {
+            let kind = match bytes.byte()? {
+                0 => RecordKind::Dummy,
+                1 => RecordKind::Ring,
+                2 => RecordKind::Exit,
+                _ => return Err(CustomRingError::RingTransactLength),
+            };
+            let reserved: &[u8; RECORD_RESERVED_LEN] = bytes.array()?;
+            if reserved.iter().any(|byte| *byte != 0) {
+                return Err(CustomRingError::RingTransactLength);
+            }
+            let record = Self {
+                kind,
+                amount: read_amount(bytes)?,
+                owner_key: *bytes.array()?,
+                mint: *bytes.array()?,
+                nullifier_pk: *bytes.array()?,
+            };
+            match kind == RecordKind::Dummy && record != Self::default() {
+                true => Err(CustomRingError::RingTransactLength),
+                false => Ok(record),
+            }
+        })
+    }
+}
+
+/// A deposit or merge record, `secret` is the deposit's blinding or the merge's seed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OpeningRecord {
+    pub record: AuditRecord,
+    pub secret: [u8; 32],
+}
+
+impl OpeningRecord {
+    pub fn encode(&self) -> [u8; OPENING_RECORD_LEN] {
+        let mut out = [0; OPENING_RECORD_LEN];
+        out[..AUDIT_RECORD_LEN].copy_from_slice(&self.record.encode());
+        out[AUDIT_RECORD_LEN..].copy_from_slice(&self.secret);
+        out
+    }
+
+    pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
+        read_all(plaintext, |bytes| {
+            Ok(Self {
+                record: AuditRecord::decode(bytes.take(AUDIT_RECORD_LEN)?)?,
+                secret: *bytes.array()?,
+            })
+        })
+    }
+}
+
+/// Zero fields while `has_data` is clear and on a dummy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DataTail {
+    pub data_hash: [u8; 32],
+    pub ring_data_hash: [u8; 32],
+}
+
+impl DataTail {
+    pub fn encode(&self) -> [u8; DATA_TAIL_LEN] {
+        let mut out = [0; DATA_TAIL_LEN];
+        out[..FIELD_LEN].copy_from_slice(&self.data_hash);
+        out[FIELD_LEN..].copy_from_slice(&self.ring_data_hash);
+        out
+    }
+
+    pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
+        read_all(plaintext, |bytes| {
+            Ok(Self {
+                data_hash: *bytes.array()?,
+                ring_data_hash: *bytes.array()?,
+            })
+        })
+    }
+}
+
+/// One default-ring input's opening, zero fields on any other slot, never a secret.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EntryInput {
+    pub owner_key: [u8; 32],
+    pub nullifier_pk: [u8; 32],
+    pub amount: u64,
+    pub mint: [u8; 32],
+    pub blinding: [u8; 32],
+    pub data_hash: [u8; 32],
+    pub ring_data_hash: [u8; 32],
+}
+
+impl EntryInput {
+    fn extend(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.owner_key);
+        out.extend_from_slice(&self.nullifier_pk);
+        out.extend_from_slice(&self.amount.to_be_bytes());
+        out.extend_from_slice(&self.mint);
+        out.extend_from_slice(&self.blinding);
+        out.extend_from_slice(&self.data_hash);
+        out.extend_from_slice(&self.ring_data_hash);
+    }
+
+    fn read(bytes: &mut Bytes<'_>) -> Result<Self, CustomRingError> {
+        Ok(Self {
+            owner_key: *bytes.array()?,
+            nullifier_pk: *bytes.array()?,
+            amount: read_amount(bytes)?,
+            mint: *bytes.array()?,
+            blinding: *bytes.array()?,
+            data_hash: *bytes.array()?,
+            ring_data_hash: *bytes.array()?,
+        })
+    }
+}
+
+/// The envelope past its sealed key and count.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuditEvidence {
-    /// Signer, in-proof, authority and commitment, `be32(hash_i)` for `i < n`.
-    InputHashes(Vec<[u8; 32]>),
-    /// The anonymous entry key, the circuit holds every input to `sender_nullifier_pk`.
+    /// A key with no entry capacity.
+    None,
     Entry {
-        sender_key: [u8; 32],
-        sender_nullifier_pk: [u8; 32],
+        /// Bit `i` set when input `i` is a live default-ring note.
+        default_input_bits: u64,
+        /// One per published input.
         inputs: Vec<EntryInput>,
     },
 }
 
-/// The envelope plaintext `tx_viewing_sk || evidence`.
+/// The envelope plaintext `tx_viewing_sk || R || default_input_bits || entries`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditEnvelope {
     pub tx_viewing_secret: [u8; ENVELOPE_KEY_LEN],
+    /// `R`, nullifiers at or past it are padding.
+    pub real_inputs: u8,
     pub evidence: AuditEvidence,
 }
 
 impl AuditEnvelope {
     pub fn encode(&self) -> Vec<u8> {
         let evidence_len = match &self.evidence {
-            AuditEvidence::InputHashes(hashes) => INPUT_HASH_LEN * hashes.len(),
+            AuditEvidence::None => 0,
             AuditEvidence::Entry { inputs, .. } => {
-                ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * inputs.len()
+                DEFAULT_INPUT_BITS_LEN + ENTRY_INPUT_LEN * inputs.len()
             }
         };
-        let mut out = Vec::with_capacity(ENVELOPE_KEY_LEN + evidence_len);
+        let mut out = Vec::with_capacity(ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + evidence_len);
         out.extend_from_slice(&self.tx_viewing_secret);
-        match &self.evidence {
-            AuditEvidence::InputHashes(hashes) => {
-                hashes.iter().for_each(|hash| out.extend_from_slice(hash));
-            }
-            AuditEvidence::Entry {
-                sender_key,
-                sender_nullifier_pk,
-                inputs,
-            } => {
-                out.extend_from_slice(sender_key);
-                out.extend_from_slice(sender_nullifier_pk);
-                for input in inputs {
-                    out.extend_from_slice(&input.hash);
-                    out.extend_from_slice(&input.amount.to_be_bytes());
-                    out.extend_from_slice(&input.asset);
-                    out.extend_from_slice(&input.blinding);
-                }
-            }
+        out.push(self.real_inputs);
+        if let AuditEvidence::Entry {
+            default_input_bits,
+            inputs,
+        } = &self.evidence
+        {
+            out.extend_from_slice(&default_input_bits.to_be_bytes());
+            inputs.iter().for_each(|input| input.extend(&mut out));
         }
         out
     }
@@ -315,71 +397,84 @@ impl AuditEnvelope {
     pub fn decode(plaintext: &[u8], layout: AuditStreamLayout) -> Result<Self, CustomRingError> {
         read_all(plaintext, |bytes| {
             let tx_viewing_secret = *bytes.array()?;
-            let inputs = layout.inputs;
-            let evidence = match layout.key {
-                AuditKey::Confidential { .. }
-                | AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
-                    AuditEvidence::InputHashes(bytes.fields(inputs)?.to_vec())
-                }
-                AuditKey::Anonymous(AnonymousAuditKey::Entry { .. }) => AuditEvidence::Entry {
-                    sender_key: *bytes.array()?,
-                    sender_nullifier_pk: *bytes.array()?,
-                    inputs: (0..inputs)
-                        .map(|_| {
-                            Ok(EntryInput {
-                                hash: *bytes.array()?,
-                                amount: read_amount(bytes)?,
-                                asset: *bytes.array()?,
-                                blinding: *bytes.array()?,
-                            })
-                        })
+            let real_inputs = bytes.byte()?;
+            let evidence = match layout.key.entry {
+                false => AuditEvidence::None,
+                true => AuditEvidence::Entry {
+                    default_input_bits: u64::from_be_bytes(*bytes.array()?),
+                    inputs: (0..layout.inputs)
+                        .map(|_| EntryInput::read(bytes))
                         .collect::<Result<_, CustomRingError>>()?,
                 },
             };
             Ok(Self {
                 tx_viewing_secret,
+                real_inputs,
                 evidence,
             })
         })
     }
 }
 
-/// Scheme 11, the recipient rebuilds the commitment with its own bound keys.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The recipient's plaintext, outside the proof, one form on every rail.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RecipientBody {
     pub blinding: [u8; 32],
     pub amount: u64,
     pub mint: [u8; 32],
+    /// The commitment covers it, a nonzero value travels with the note.
+    pub ring_data_hash: Option<[u8; 32]>,
+    /// The application data under the note's `data_hash`.
+    pub data: Vec<u8>,
 }
 
 impl RecipientBody {
-    pub fn encode(&self) -> [u8; RECIPIENT_BODY_LEN] {
-        let mut out = [0; RECIPIENT_BODY_LEN];
-        out[..32].copy_from_slice(&self.blinding);
-        out[32..40].copy_from_slice(&self.amount.to_be_bytes());
-        out[40..].copy_from_slice(&self.mint);
+    /// A plain note is exactly the head, an extended one follows it with one presence byte.
+    pub fn encode(&self) -> Vec<u8> {
+        let extended = self.ring_data_hash.is_some() || !self.data.is_empty();
+        let mut out = Vec::with_capacity(RECIPIENT_BODY_LEN + 1 + FIELD_LEN + self.data.len());
+        out.extend_from_slice(&self.blinding);
+        out.extend_from_slice(&self.amount.to_be_bytes());
+        out.extend_from_slice(&self.mint);
+        if extended {
+            out.push(u8::from(self.ring_data_hash.is_some()));
+            if let Some(ring_data_hash) = &self.ring_data_hash {
+                out.extend_from_slice(ring_data_hash);
+            }
+            out.extend_from_slice(&self.data);
+        }
         out
     }
 
     pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
-        read_all(plaintext, |bytes| {
-            Ok(Self {
-                blinding: *bytes.array()?,
-                amount: read_amount(bytes)?,
-                mint: *bytes.array()?,
-            })
-        })
+        let mut bytes = Bytes::new(plaintext, CustomRingError::RingTransactLength);
+        let mut body = Self {
+            blinding: *bytes.array()?,
+            amount: read_amount(&mut bytes)?,
+            mint: *bytes.array()?,
+            ..Self::default()
+        };
+        if plaintext.len() == RECIPIENT_BODY_LEN {
+            return Ok(body);
+        }
+        body.ring_data_hash = match bytes.byte()? {
+            0 => None,
+            1 => Some(*bytes.array()?),
+            _ => return Err(CustomRingError::RingTransactLength),
+        };
+        body.data = bytes.rest().to_vec();
+        Ok(body)
     }
 }
 
-/// Scheme 12, the cells the sender rebuilds change and recipients from.
+/// The cells the sender rebuilds change and recipients from, outside the proof.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SenderBundle {
-    /// Slot 0's mint when `change_bits` bit 0 is set, else zero.
+    /// Slot 0's mint when slot 0 is change, else zero.
     pub mint: [u8; 32],
-    /// Slot 0's amount when `change_bits` bit 0 is set, else zero.
+    /// Slot 0's amount when slot 0 is change, else zero.
     pub amount: u64,
-    /// Slot 1's amount in SOL when `change_bits` bit 1 is set, else zero.
+    /// Slot 1's amount in SOL when slot 1 is change, else zero.
     pub sol_amount: u64,
     pub output_seed: [u8; 32],
     /// One per published slot, zero on change, exit and dummy.
@@ -413,102 +508,6 @@ impl SenderBundle {
     }
 }
 
-/// The plaintext recipient and auditor read from one delivered slot.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DeliveredBody {
-    pub blinding: [u8; 32],
-    pub amount: u64,
-    pub owner_key: [u8; 32],
-    /// `None` exactly under key escrow.
-    pub nullifier_pk: Option<[u8; 32]>,
-}
-
-impl DeliveredBody {
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(delivered_body_len(self.nullifier_pk.is_none()));
-        out.extend_from_slice(&self.blinding);
-        out.extend_from_slice(&self.amount.to_be_bytes());
-        out.extend_from_slice(&self.owner_key);
-        if let Some(nullifier_pk) = &self.nullifier_pk {
-            out.extend_from_slice(nullifier_pk);
-        }
-        out
-    }
-
-    pub fn decode(plaintext: &[u8], key_escrow: bool) -> Result<Self, CustomRingError> {
-        read_all(plaintext, |bytes| {
-            Ok(Self {
-                blinding: *bytes.array()?,
-                amount: read_amount(bytes)?,
-                owner_key: *bytes.array()?,
-                nullifier_pk: read_nullifier_pk(bytes, key_escrow)?,
-            })
-        })
-    }
-}
-
-/// An anonymous ring output, a hidden dummy is the zero record.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AnonymousRecord {
-    pub owner_key: [u8; 32],
-    pub asset: [u8; 32],
-    pub amount: u64,
-    pub nullifier_pk: [u8; 32],
-}
-
-impl AnonymousRecord {
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(ANONYMOUS_RECORD_LEN);
-        out.extend_from_slice(&self.owner_key);
-        out.extend_from_slice(&self.asset);
-        out.extend_from_slice(&self.amount.to_be_bytes());
-        out.extend_from_slice(&self.nullifier_pk);
-        out
-    }
-
-    pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
-        read_all(plaintext, |bytes| {
-            Ok(Self {
-                owner_key: *bytes.array()?,
-                asset: *bytes.array()?,
-                amount: read_amount(bytes)?,
-                nullifier_pk: *bytes.array()?,
-            })
-        })
-    }
-}
-
-/// An exit of either family, its owner stays where zolana publishes it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ExitRecord {
-    pub asset: [u8; 32],
-    pub amount: u64,
-    /// `None` exactly under key escrow.
-    pub nullifier_pk: Option<[u8; 32]>,
-}
-
-impl ExitRecord {
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(exit_record_len(self.nullifier_pk.is_none()));
-        out.extend_from_slice(&self.asset);
-        out.extend_from_slice(&self.amount.to_be_bytes());
-        if let Some(nullifier_pk) = &self.nullifier_pk {
-            out.extend_from_slice(nullifier_pk);
-        }
-        out
-    }
-
-    pub fn decode(plaintext: &[u8], key_escrow: bool) -> Result<Self, CustomRingError> {
-        read_all(plaintext, |bytes| {
-            Ok(Self {
-                asset: *bytes.array()?,
-                amount: read_amount(bytes)?,
-                nullifier_pk: read_nullifier_pk(bytes, key_escrow)?,
-            })
-        })
-    }
-}
-
 fn read_amount(bytes: &mut Bytes<'_>) -> Result<u64, CustomRingError> {
     Ok(u64::from_be_bytes(*bytes.array()?))
 }
@@ -522,15 +521,5 @@ fn read_all<'a, T>(
     match bytes.rest().is_empty() {
         true => Ok(value),
         false => Err(CustomRingError::RingTransactLength),
-    }
-}
-
-fn read_nullifier_pk(
-    bytes: &mut Bytes<'_>,
-    key_escrow: bool,
-) -> Result<Option<[u8; 32]>, CustomRingError> {
-    match key_escrow {
-        true => Ok(None),
-        false => Ok(Some(*bytes.array()?)),
     }
 }

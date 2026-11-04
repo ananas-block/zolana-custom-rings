@@ -316,38 +316,43 @@ type DepositParams struct {
 	CuratorOwnerRecords []*MemberOpening `json:"curatorOwnerRecords"`
 }
 
-// MergeInput is one SPP merge slot as the merge circuit opens it.
-type MergeInput struct {
-	Domain       Field `json:"domain"`
-	TreeID       Field `json:"treeId"`
-	Amount       Field `json:"amount"`
-	Blinding     Field `json:"blinding"`
-	RingDataHash Field `json:"ringDataHash"`
+// TrackingLeaf mirrors registry.TrackingRecord field for field.
+type TrackingLeaf struct {
+	Member      Field `json:"member"`
+	Next        Field `json:"next"`
+	NullifierPk Field `json:"nullifierPk"`
+	CtHash      Field `json:"ctHash"`
+	View0       Field `json:"view0"`
+	View1       Field `json:"view1"`
+	Revision    Field `json:"revision"`
+	ListTag     Field `json:"listTag"`
 }
 
-// MergeParams discloses a ring's SPP merge to its auditor, Member is nil without key escrow.
+// TrackingOpening mirrors registry.TrackingOpening field for field.
+type TrackingOpening struct {
+	Present bool               `json:"present"`
+	Record  TrackingLeaf       `json:"record"`
+	Path    SharedRegistryPath `json:"path"`
+}
+
+// MergeParams seals a ring's SPP merge output to its auditor, Tracking is nil under a zero key.
 type MergeParams struct {
 	RequestHead
-	PartyIdentities    []Field        `json:"partyIdentities"`
-	PrivateTxHash      Field          `json:"privateTxHash"`
-	OutputUtxoHash     Field          `json:"outputUtxoHash"`
-	FirstNullifier     Field          `json:"firstNullifier"`
-	RingProgramID      Field          `json:"ringProgramId"`
-	AuditorPk          Bytes          `json:"auditorPk"`
-	Salt               Field          `json:"salt"`
-	EphSk              Bytes          `json:"ephSk"`
-	DisclosureKey      Bytes          `json:"disclosureKey"`
-	OwnerKey           Bytes          `json:"ownerKey"`
-	NullifierSecret    Field          `json:"nullifierSecret"`
-	Asset              Field          `json:"asset"`
-	InputCount         uint8          `json:"inputCount"`
-	Inputs             []MergeInput   `json:"inputs"`
-	OutputTreeID       Field          `json:"outputTreeId"`
-	OutputRingDataHash Field          `json:"outputRingDataHash"`
-	KeyEscrow          bool           `json:"keyEscrow"`
-	MemberRegistryRoot Field          `json:"memberRegistryRoot"`
-	CtHash             Field          `json:"ctHash"`
-	Member             *RecordOpening `json:"member"`
+	OutputUtxoHash     Field            `json:"outputUtxoHash"`
+	FirstNullifier     Field            `json:"firstNullifier"`
+	RingProgramID      Field            `json:"ringProgramId"`
+	AuditorPk          Bytes            `json:"auditorPk"`
+	Payer              Field            `json:"payer"`
+	TrackingRoot       Field            `json:"trackingRoot"`
+	EphSk              Bytes            `json:"ephSk"`
+	OwnerKey           Bytes            `json:"ownerKey"`
+	Mint               Bytes            `json:"mint"`
+	Amount             Field            `json:"amount"`
+	NullifierPk        Field            `json:"nullifierPk"`
+	Seed               Field            `json:"seed"`
+	OutputTreeID       Field            `json:"outputTreeId"`
+	OutputRingDataHash Field            `json:"outputRingDataHash"`
+	Tracking           *TrackingOpening `json:"tracking"`
 }
 
 // Unmarshal refuses an unknown or repeated key, a missing key without omitempty and trailing data.

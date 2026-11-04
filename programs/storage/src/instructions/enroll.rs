@@ -12,7 +12,7 @@ use pinocchio::{
 };
 
 use crate::loader::{
-    check_signer, load_tracking_registry_mut, load_owned_tracking_authorization_mut,
+    check_signer, load_owned_tracking_authorization_mut, load_tracking_registry_mut,
     TrackingAuthorizationInit,
 };
 

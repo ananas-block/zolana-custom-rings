@@ -6,7 +6,7 @@ use custom_ring_interface::{ring_confidential_delivered_output_body, stream::Slo
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
-use spr_keypair::{shielded::ShieldedAddress, X25519Pubkey};
+use spr_keypair::{shielded::ShieldedAddress, NullifierKey, X25519Pubkey};
 use spr_transaction::{
     DecryptionResult, DeriveRequest, Mint, OutputSlot, ShieldedKeys, ShieldedTransaction,
     TransactionError, WalletUtxo,
@@ -17,7 +17,7 @@ use zolana_ring_transaction::{
     RingUtxoOwner,
 };
 
-use crate::{exactly_one_each, AnonymousError};
+use crate::{exactly_one_each, is_zero_key, AnonymousError};
 
 /// One delivered ring output and the slot secret its recipient agreed for it.
 #[derive(Clone)]
@@ -324,8 +324,13 @@ pub(crate) fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
         })
         .collect();
     let nullifiers = exactly_one_each(shielded_keys.derive(&requests)?, utxos.len())?;
+    let zero_secret = NullifierKey::from_secret([0; 31]);
     for (input, nullifier) in utxos.iter_mut().zip(nullifiers) {
-        input.nullifier = nullifier;
+        // A zero-key note spends under secret zero, never the wallet's.
+        input.nullifier = match is_zero_key(input) {
+            true => zero_secret.nullifier(&input.utxo_hash, &input.utxo.blinding)?,
+            false => nullifier,
+        };
     }
     Ok(())
 }

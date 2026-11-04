@@ -12,6 +12,7 @@ use super::{
         check_anonymous_inputs, public_co_owners, AnonymousExits, AnonymousSpend, HiddenOwner,
     },
     audit::PresealedAudit,
+    public_owners::check_zero_key_inputs,
     sealed, shape_keyed, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged,
     TransferAuthority,
 };
@@ -147,6 +148,7 @@ impl Relayed<'_> {
                 if config.mode == RingMode::Anonymous {
                     return Err(RingError::MissingAnonymousSigner);
                 }
+                check_zero_key_inputs(&proof_inputs.input_utxos, &sender.signing_pubkey)?;
                 if !shape_keyed(
                     RingRail::Confidential,
                     Shape::new(proof_inputs.input_utxos.len(), n_outputs),

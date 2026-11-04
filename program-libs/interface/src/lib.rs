@@ -20,6 +20,8 @@ pub mod disclosure;
 #[path = "proof/domain.rs"]
 pub mod domain;
 pub mod error;
+#[path = "instructions/historical_merge.rs"]
+pub mod historical_merge;
 #[path = "instructions/instruction.rs"]
 pub mod instruction;
 #[path = "proof/key_catalog.rs"]
@@ -30,6 +32,8 @@ pub mod member_registry;
 pub mod merge;
 #[path = "codec/output.rs"]
 pub mod output;
+#[path = "accounts/private_list.rs"]
+pub mod private_list;
 #[path = "proof/ring_keys.rs"]
 pub mod ring_keys;
 #[path = "codec/spp.rs"]
@@ -71,6 +75,7 @@ pub use deposit::*;
 pub use deposit_audit::*;
 pub use disclosure::*;
 pub use error::CustomRingError;
+pub use historical_merge::*;
 pub use instruction::*;
 pub use member_registry::*;
 pub use merge::*;
@@ -97,34 +102,40 @@ pub fn tagged_x25519(u: &[u8; 32]) -> [u8; TAGGED_X25519_KEY_LEN] {
     key
 }
 
-/// `0x04 || eph_u || envelope_ct || record_ct...`, published under the auditor's view tag.
+/// `0x04 || eph_u || envelope_ct || record_ct... || tail_ct...`, published under the auditor's view tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditorMessage<'a> {
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub envelope: &'a [u8],
-    /// The records of the slots that have one, in slot order.
+    /// One record per published slot.
     pub records: &'a [u8],
+    /// One tail per published slot, empty while `has_data` is clear.
+    pub tails: &'a [u8],
 }
 
 impl<'a> AuditorMessage<'a> {
     /// `None` unless the key is tagged and every length is `layout`'s.
     pub fn parse(data: &'a [u8], layout: AuditStreamLayout) -> Option<Self> {
         let (eph_pk, rest) = data.split_first_chunk::<TAGGED_X25519_KEY_LEN>()?;
-        let (envelope, records) = rest.split_at_checked(layout.envelope().len)?;
-        (eph_pk[0] == VIEWING_PUBKEY_TAG && records.len() == layout.records_len()).then_some(Self {
+        let (envelope, rest) = rest.split_at_checked(layout.envelope().len)?;
+        let (records, tails) = rest.split_at_checked(layout.records_len())?;
+        (eph_pk[0] == VIEWING_PUBKEY_TAG && tails.len() == layout.tails_len()).then_some(Self {
             eph_pk,
             envelope,
             records,
+            tails,
         })
     }
 
-    /// The record of `slot`, empty on a delivered slot.
-    pub fn record(&self, layout: AuditStreamLayout, slot: usize) -> Option<&'a [u8]> {
-        let start = (0..slot).map(|before| layout.record_len(before)).sum();
-        self.records.get(start..start + layout.record_len(slot))
+    pub fn record(&self, slot: usize) -> Option<&'a [u8; AUDIT_RECORD_LEN]> {
+        self.records.as_chunks().0.get(slot)
     }
 
-    /// `ciphertexts` is the envelope then the records in slot order.
+    pub fn tail(&self, slot: usize) -> Option<&'a [u8; DATA_TAIL_LEN]> {
+        self.tails.as_chunks().0.get(slot)
+    }
+
+    /// `ciphertexts` is the envelope, the records and the tails in slot order.
     pub fn data<'c>(
         eph_u: &[u8; 32],
         ciphertexts: impl Iterator<Item = &'c [u8]> + Clone,

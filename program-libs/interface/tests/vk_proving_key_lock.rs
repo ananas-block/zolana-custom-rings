@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use custom_ring_interface::{
     key_catalog::{RingCircuit, TransferSpend, RING_KEYS},
-    verifying_key, RingRail, APPLY_BATCH, MERGE_WIDTHS, PROVING_KEY_SHA256S,
+    verifying_key, RingRail, APPLY_BATCH, PROVING_KEY_SHA256S,
 };
 use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
 
@@ -69,6 +69,8 @@ fn selectable_circuits() -> BTreeSet<String> {
                             outputs: n_out,
                             spends_default_ring,
                             legs,
+                            owners: 0,
+                            has_data: false,
                         }));
                     }
                 }
@@ -76,7 +78,7 @@ fn selectable_circuits() -> BTreeSet<String> {
         }
     }
     circuits.extend((1..=APPLY_BATCH as u64).map(RingCircuit::apply_records));
-    circuits.extend(MERGE_WIDTHS.map(|width| RingCircuit::Merge { width: width as u8 }));
+    circuits.push(RingCircuit::Merge);
     circuits
         .iter()
         .map(|circuit| format!("{circuit:?}"))

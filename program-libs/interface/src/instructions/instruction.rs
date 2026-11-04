@@ -54,11 +54,15 @@ instruction_tags! {
     LegacyTransact = LEGACY_TRANSACT: 3 => PROOF_UNITS,
     /// Decoding only, the program refuses it.
     HistoricalTransfer = HISTORICAL_TRANSFER: 43 => PROOF_UNITS,
-    Transfer = TRANSFER: 45 => PROOF_UNITS,
+    /// Decoding only, the program refuses it.
+    HistoricalTransferV3 = HISTORICAL_TRANSFER_V3: 45 => PROOF_UNITS,
+    Transfer = TRANSFER: 55 => PROOF_UNITS,
     // Tag 18 is retired, never reuse it.
     /// Decoding only, the program refuses it.
     HistoricalMerge = HISTORICAL_MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
-    Merge = MERGE: 47 => PROOF_UNITS,
+    /// Decoding only, the program refuses it.
+    HistoricalMergeV3 = HISTORICAL_MERGE_V3: 47 => PROOF_UNITS,
+    Merge = MERGE: 57 => PROOF_UNITS,
     // Tags 4 and 5 are retired, never reuse them.
     UpdateAuthority = UPDATE_AUTHORITY: 6 => ACCOUNT_UNITS,
     // Tags 7 to 10 and 12 are retired, never reuse them.
@@ -72,13 +76,17 @@ instruction_tags! {
     LegacyDelegateTransact = LEGACY_DELEGATE_TRANSACT: 25 => PROOF_UNITS,
     /// Decoding only, the program refuses it.
     HistoricalAuthorityTransfer = HISTORICAL_AUTHORITY_TRANSFER: 44 => PROOF_UNITS,
-    AuthorityTransfer = AUTHORITY_TRANSFER: 46 => PROOF_UNITS,
+    /// Decoding only, the program refuses it.
+    HistoricalAuthorityTransferV3 = HISTORICAL_AUTHORITY_TRANSFER_V3: 46 => PROOF_UNITS,
+    AuthorityTransfer = AUTHORITY_TRANSFER: 56 => PROOF_UNITS,
     // Tags 28 to 30 are retired, never reuse them.
-    Deposit = DEPOSIT: 31 => PROOF_UNITS,
+    /// Decoding only, the program refuses it.
+    HistoricalDeposit = HISTORICAL_DEPOSIT: 31 => PROOF_UNITS,
+    Deposit = DEPOSIT: 58 => PROOF_UNITS,
     // Tags 32 to 42 are retired, never reuse them.
     // Tag 48 is retired, never reuse it.
-    /// Signed by the upgrade authority, one budget for the ring account, its policy and the SPP CPI.
-    Initialize = INITIALIZE: 53 => 2 * ACCOUNT_UNITS + POLICY_UNITS,
+    /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.
+    Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
 }
 
@@ -161,13 +169,14 @@ impl CustomRingProof {
 
 const _: () = assert!(CustomRingProof::SIZE == 192);
 
-/// `tag || proof || own_revision || curator_revision`, then the SPP deposit instruction unchanged.
+/// `tag || proof || tracking_revision || own_revision || curator_revision`, then the SPP deposit instruction unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct DepositPrefix {
     pub tag: u8,
     pub proof: CustomRingProof,
-    /// Zero off an escrow or policy ring.
+    pub tracking_revision: Revision,
+    /// Zero off a policy ring.
     pub own_revision: Revision,
     /// Zero without a curator source.
     pub curator_revision: Revision,
@@ -220,6 +229,9 @@ pub enum UpdatePolicyIxData {
     /// One trailing records registry under any authority.
     #[wincode(tag = 2)]
     Records,
+    /// [`ListSet`](zolana_ring_policy::ListSet) bits and one trailing private registry, zero bits and no registry clear it.
+    #[wincode(tag = 3)]
+    PrivateSource { owner_lists: u8 },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]

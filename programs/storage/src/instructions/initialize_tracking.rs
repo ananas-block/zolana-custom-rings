@@ -1,6 +1,4 @@
-use custom_ring_interface::{
-    storage::StorageError, storage_instruction::InitializeTrackingIxData,
-};
+use custom_ring_interface::{storage::StorageError, storage_instruction::InitializeTrackingIxData};
 use pinocchio::{AccountView, Address, ProgramResult};
 
 use crate::{

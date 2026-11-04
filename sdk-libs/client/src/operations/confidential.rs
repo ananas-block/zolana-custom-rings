@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
 use spr_keypair::KeypairError;
 use spr_transaction::{
-    verify_owned, DecryptionResult, OwnedUtxos, ShieldedKeys, ShieldedTransaction, TransactionError,
+    verify_owned, DecryptionResult, OwnedUtxos, ShieldedKeys, ShieldedTransaction,
+    TransactionError, WalletUtxo,
 };
 use zolana_ring_keys::RingKeys;
 use zolana_ring_transaction::RingAssets;
@@ -14,6 +15,7 @@ use crate::{
     delivered::{confidential_delivered, open_delivered, PendingUtxo},
     deposit::{DepositOpener, OpenedDeposit},
     deposit_payload,
+    exposed_notes::{verify_ring_owned, RingOwnedUtxos},
     tags::IndexerReads,
     AnonymousError,
 };
@@ -21,6 +23,8 @@ use crate::{
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RingConfidentialNotes {
     pub owned: OwnedUtxos,
+    /// Unspent zero-key notes, outside `owned` and every automatic path.
+    pub exposed_if_spent: Vec<WalletUtxo>,
     /// Scheme 10 notes whose commitment no held mint rebuilds.
     pub pending: Vec<PendingUtxo>,
 }
@@ -62,6 +66,7 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> RingConfidentialScan<'a, K> {
                 .iter()
                 .map(|utxo| utxo.nullifier)
                 .filter(|nullifier| !notes.owned.spent.contains(nullifier))
+                .chain(notes.exposed_if_spent.iter().map(|utxo| utxo.nullifier))
                 .filter(|nullifier| queried.insert(*nullifier))
                 .collect();
             if unread.is_empty() {
@@ -72,6 +77,9 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> RingConfidentialScan<'a, K> {
                 .iter()
                 .flat_map(|tx| tx.nullifiers.iter().copied())
                 .collect();
+            notes
+                .exposed_if_spent
+                .retain(|utxo| !read.contains(&utxo.nullifier));
             notes.owned.spent.extend(
                 unread
                     .into_iter()
@@ -132,8 +140,14 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> RingConfidentialScan<'a, K> {
                 }
             }
         }
+        let RingOwnedUtxos {
+            owned,
+            exposed_if_spent,
+            ..
+        } = verify_ring_owned(self.keys, &decrypted)?;
         Ok(RingConfidentialNotes {
-            owned: verify_owned(self.keys, &decrypted)?,
+            owned,
+            exposed_if_spent,
             pending: delivered.pending,
         })
     }

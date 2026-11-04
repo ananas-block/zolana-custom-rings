@@ -1,7 +1,7 @@
 //! One document holds a wallet's scan progress and everything it covers, one write stores both.
 
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt,
 };
 
@@ -12,7 +12,10 @@ use spr_keypair::{x25519::X25519_PUBKEY_LEN, X25519Pubkey};
 use spr_transaction::{DecryptionResult, Mint, WalletUtxo};
 use zolana_ring_transaction::RingAssets;
 
-use crate::{AnonymousError, AnonymousScan, ViewingHistory, VIEWING_HISTORY_VERSION};
+use crate::{
+    is_zero_key, mint_balances, note_state, AnonymousError, AnonymousScan, MintBalance, NoteState,
+    ViewingHistory, VIEWING_HISTORY_VERSION,
+};
 
 pub const ANONYMOUS_WALLET_VERSION: u32 = 1;
 
@@ -109,6 +112,23 @@ impl AnonymousWallet {
 
     pub fn notes(&self) -> &[WalletUtxo] {
         &self.notes
+    }
+
+    pub fn note_state(&self, note: &WalletUtxo) -> NoteState {
+        note_state(note, |nullifier| self.spent_nullifiers.contains(nullifier))
+    }
+
+    /// Unspent zero-key notes, spent only through an explicit public spend.
+    pub fn exposed_notes(&self) -> impl Iterator<Item = &WalletUtxo> {
+        self.notes
+            .iter()
+            .filter(|note| is_zero_key(note) && !self.spent_nullifiers.contains(&note.nullifier))
+    }
+
+    pub fn balances(&self) -> BTreeMap<Address, MintBalance> {
+        mint_balances(&self.notes, |nullifier| {
+            self.spent_nullifiers.contains(nullifier)
+        })
     }
 
     /// Verified notes under a mint with no registration, never among [`Self::notes`].

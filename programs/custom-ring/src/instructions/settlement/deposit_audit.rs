@@ -13,6 +13,7 @@ use crate::instructions::verifier::{ring_key, RingProof};
 
 pub(crate) struct AuditedDeposit<'a> {
     pub proof: CustomRingProof,
+    pub tracking_revision: Revision,
     pub own_revision: Revision,
     pub curator_revision: Revision,
     pub spp_data: &'a [u8],
@@ -29,6 +30,7 @@ impl<'a> AuditedDeposit<'a> {
         }
         Ok(Self {
             proof: prefix.proof,
+            tracking_revision: prefix.tracking_revision,
             own_revision: prefix.own_revision,
             curator_revision: prefix.curator_revision,
             spp_data,
@@ -42,6 +44,7 @@ pub(crate) struct DepositVerification<'a> {
     pub tree: &'a Address,
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub anonymous: bool,
+    pub tracking_root: &'a [u8; 32],
     pub registry: Option<DepositRegistry<'a>>,
     pub assets: &'a [DepositedAsset],
     pub audited: &'a AuditedDeposit<'a>,
@@ -88,6 +91,7 @@ impl DepositVerification<'_> {
             assets: self.assets,
             auditor_pk: self.auditor_pubkey,
             eph_pk: &eph_pk,
+            tracking_root: self.tracking_root,
             registry: self.registry,
         }
         .hash()

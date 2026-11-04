@@ -59,10 +59,20 @@ const (
 	ListSaltDomain = 0x43525053
 	// ListTagDomain = "CRPT"
 	ListTagDomain = 0x43525054
+	// ListPositionDomain = "CRPL"
+	ListPositionDomain = 0x4352504c
+	// ListLeafDomain = "CRPV"
+	ListLeafDomain = 0x43525056
+	// ListLeafSaltDomain = "CRPU"
+	ListLeafSaltDomain = 0x43525055
+	// ListWriteDomain = "CRPQ"
+	ListWriteDomain = 0x43525051
+	// ApplyListDomain = "CRPA"
+	ApplyListDomain = 0x43525041
 )
 
 // TransferStatementVersion is bound nonzero and last into every transfer statement, mirrored by TRANSFER_STATEMENT_VERSION in program-libs/interface/src/proof/domain.rs.
-const TransferStatementVersion = 3
+const TransferStatementVersion = 4
 
 // PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
 const PolicyStatementVersion = 4
@@ -71,8 +81,6 @@ const PolicyStatementVersion = 4
 const (
 	// DomSepCRShared = "CR_S"
 	DomSepCRShared = 0x43525f53
-	// MergeDisclosureDomain = "CR_MD", a merge pad under the same key never repeats an output pad.
-	MergeDisclosureDomain = 0x4352_5f4d44
 )
 
 // Key schedule labels, distinct per ciphertext kind.
@@ -85,7 +93,8 @@ const (
 	NfKeyEncInfo = "CRING/nfk1"
 	// DepositEncInfo mirrors DEPOSIT_AUDIT_LABEL.
 	DepositEncInfo = "CRING/dep1"
-	MergeEncInfo   = "CRING/mrg1"
+	// MergeEncInfo mirrors MERGE_RECORD_LABEL.
+	MergeEncInfo = "CRING/mrg2"
 	// RecipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
 	RecipientBodyEncInfo = "CRING/rcp1"
 	// SenderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
@@ -152,9 +161,12 @@ func ListTag(api frontend.API, listSalt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{ListTagDomain, listSalt})
 }
 
+// AnonymousParties counts payer, five co-signers and exit destination, mirrored by ANONYMOUS_PARTIES.
+const AnonymousParties = 7
+
 // AssertAnonymousParties separates the hidden owner from the public identities
 // reconstructed by the verifier. Zero denotes an absent optional party.
-func AssertAnonymousParties(api frontend.API, owner frontend.Variable, parties [3]frontend.Variable) {
+func AssertAnonymousParties(api frontend.API, owner frontend.Variable, parties []frontend.Variable) {
 	for _, party := range parties {
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: party, V: api.IsZero(api.Sub(owner, party))})
 	}
