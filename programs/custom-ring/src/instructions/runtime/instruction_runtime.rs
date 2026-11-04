@@ -42,10 +42,13 @@ pub(crate) struct Pda<'a, const N: usize> {
 impl<const N: usize> Pda<'_, N> {
     /// The canonical bump, `T::ADDRESS` for another address.
     pub fn bump<T: RingAccount>(&self, address: &Address) -> Result<u8, CustomRingError> {
-        match Address::derive_program_address(self.seeds, self.program_id) {
-            Some((derived, bump)) if address_eq(address, &derived) => Ok(bump),
-            _ => Err(T::ADDRESS),
-        }
+        self.canonical(address).ok_or(T::ADDRESS)
+    }
+
+    pub fn canonical(&self, address: &Address) -> Option<u8> {
+        Address::derive_program_address(self.seeds, self.program_id)
+            .filter(|(derived, _)| address_eq(address, derived))
+            .map(|(_, bump)| bump)
     }
 
     /// Creates `T`'s account at the canonical address, refusing an occupied one.
@@ -59,6 +62,22 @@ impl<const N: usize> Pda<'_, N> {
         if account.data_len() != 0 {
             return Err(T::EXISTS.into());
         }
+        self.allocate(PdaAllocation {
+            payer,
+            account,
+            space: T::SIZE,
+            bump,
+        })?;
+        Ok(bump)
+    }
+
+    pub fn allocate(&self, allocation: PdaAllocation<'_>) -> ProgramResult {
+        let PdaAllocation {
+            payer,
+            account,
+            space,
+            bump,
+        } = allocation;
         let bump_seed = [bump];
         let signer: Vec<Seed> = self
             .seeds
@@ -68,14 +87,20 @@ impl<const N: usize> Pda<'_, N> {
             .collect();
         pinocchio_system::create_account_with_minimum_balance_signed(
             account,
-            T::SIZE,
+            space,
             self.program_id,
             payer,
             None,
             &[Signer::from(signer.as_slice())],
-        )?;
-        Ok(bump)
+        )
     }
+}
+
+pub(crate) struct PdaAllocation<'a> {
+    pub payer: &'a AccountView,
+    pub account: &'a mut AccountView,
+    pub space: usize,
+    pub bump: u8,
 }
 
 /// Refunds the rent and closes, `mismatch` when the recipient is the account.
