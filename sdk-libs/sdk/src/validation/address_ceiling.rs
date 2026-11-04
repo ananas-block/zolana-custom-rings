@@ -9,6 +9,8 @@ use spr_keypair::PublicKey;
 use spr_transaction::utxo::SppProofInputUtxo;
 use thiserror::Error;
 
+use crate::buffered::BufferedFrame;
+
 #[cfg(test)]
 #[path = "../tests/validation/address_ceiling.rs"]
 mod tests;
@@ -55,6 +57,7 @@ impl SpentInput {
 
 #[must_use]
 pub struct AddressCeiling<'a> {
+    /// Writes a buffered frame, the settlement refuses any other payer.
     pub payer: Address,
     pub instruction: &'a Instruction,
     pub budget: ComputeBudgetConfig,
@@ -72,7 +75,9 @@ pub struct MergeCapacity {
 #[must_use]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CeilingDecision {
-    UnderCeiling(TransactionSize),
+    Inline(TransactionSize),
+    /// The frame settles from a buffer, the size is the settlement's.
+    Buffered(TransactionSize),
     MergeFirst {
         /// The fewest merges that bring the compiled count under the ceiling.
         groups: Vec<MergeGroup>,
@@ -102,6 +107,10 @@ pub enum AddressCeilingError {
         after_merging: usize,
         data_notes: usize,
     },
+    #[error("a frame of {bytes} bytes passes the CPI limit of {limit}")]
+    FrameTooLarge { bytes: usize, limit: usize },
+    #[error(transparent)]
+    Program(#[from] custom_ring_interface::CustomRingError),
     #[error(transparent)]
     Compile(#[from] ClientError),
 }
@@ -109,9 +118,19 @@ pub enum AddressCeilingError {
 impl AddressCeiling<'_> {
     pub fn decide(self) -> Result<CeilingDecision, AddressCeilingError> {
         let limit = usize::from(v1::MAX_ADDRESSES);
-        let compiled = self.compiled(&[])?;
+        let inline = self.compiled(self.instruction, &[])?;
+        if inline.fits() {
+            return Ok(CeilingDecision::Inline(inline));
+        }
+        // Past the byte ceiling only the settlement's own compiled count decides.
+        let settle = match inline.bytes > v1::MAX_TRANSACTION_SIZE {
+            true => Some(BufferedFrame::new(self.instruction, self.payer, 0)?.settle()),
+            false => None,
+        };
+        let form = settle.as_ref().unwrap_or(self.instruction);
+        let compiled = self.compiled(form, &[])?;
         if compiled.addresses <= limit {
-            return Ok(CeilingDecision::UnderCeiling(compiled));
+            return Ok(CeilingDecision::Buffered(compiled));
         }
         let mut merged_away = Vec::new();
         let mut chosen = Vec::new();
@@ -124,7 +143,7 @@ impl AddressCeiling<'_> {
                     .map(|position| self.inputs[*position].nullifier_pda),
             );
             chosen.push(group);
-            after_merging = self.compiled(&merged_away)?.addresses;
+            after_merging = self.compiled(form, &merged_away)?.addresses;
             if after_merging <= limit {
                 return Ok(CeilingDecision::MergeFirst {
                     groups: chosen,
@@ -144,8 +163,12 @@ impl AddressCeiling<'_> {
         })
     }
 
-    fn compiled(&self, merged_away: &[Address]) -> Result<TransactionSize, ClientError> {
-        let mut instruction = self.instruction.clone();
+    fn compiled(
+        &self,
+        form: &Instruction,
+        merged_away: &[Address],
+    ) -> Result<TransactionSize, ClientError> {
+        let mut instruction = form.clone();
         instruction
             .accounts
             .retain(|account| !merged_away.contains(&account.pubkey));

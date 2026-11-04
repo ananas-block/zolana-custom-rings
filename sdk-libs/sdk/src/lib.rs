@@ -7,6 +7,8 @@ mod account;
 mod address_ceiling;
 #[path = "operations/admin.rs"]
 mod admin;
+#[path = "operations/buffered.rs"]
+mod buffered;
 #[path = "rpc/client.rs"]
 mod client;
 #[path = "validation/co_signer.rs"]
@@ -68,6 +70,7 @@ pub use crate::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,
         SetDelegate, SourceOwner, UpdateAuthority, UpdatePolicy,
     },
+    buffered::BufferedFrame,
     client::{RingClient, RingIndexerBackend},
     deposit::{
         fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RelayedDeposit, RingDeposit,

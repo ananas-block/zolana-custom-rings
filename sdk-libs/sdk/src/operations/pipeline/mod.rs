@@ -76,12 +76,13 @@ use self::{
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
+    address_ceiling::{AddressCeiling, MergeCapacity},
     co_signer::CoSignerChoice,
     heap::boxed,
     projection::retry_projection_lag,
     submission::{check_transaction_size, send_budget, BoundPolicy, BoundState},
     trees::{spend_trees, SpendTrees},
-    CustomRing, CustomRingConfig, RingError,
+    BufferedFrame, CustomRing, CustomRingConfig, RingError,
 };
 
 mod sealed {
@@ -113,6 +114,7 @@ pub struct RingTransfer<R: Rail> {
     rail: R,
     co_signers: Vec<Address>,
     priority_fee: Option<u64>,
+    buffered: bool,
     list_salts: Vec<SubjectListSalt>,
 }
 
@@ -265,6 +267,13 @@ impl<R: Rail> RingTransfer<R> {
         self
     }
 
+    /// Past one transaction the frame settles from a buffer its payer writes.
+    #[must_use = "use the updated transfer"]
+    pub const fn with_buffered_settlement(mut self) -> Self {
+        self.buffered = true;
+        self
+    }
+
     pub async fn prove<P: AsyncRpc, I: RingIndexerBackend>(
         &self,
         client: &RingClient<P, I>,
@@ -325,6 +334,7 @@ impl<R: Rail> RingTransfer<R> {
                 staged,
                 co_signers: self.co_signers.clone(),
                 priority_fee: self.priority_fee,
+                buffered: self.buffered,
             }
             .seal(client)
         })
@@ -338,6 +348,7 @@ struct Pipeline<'a> {
     staged: Staged<'a>,
     co_signers: Vec<Address>,
     priority_fee: Option<u64>,
+    buffered: bool,
 }
 
 struct Frame {
@@ -366,6 +377,7 @@ struct Unwitnessed<'a> {
     spend: Spend<'a>,
     trees: SpendTrees,
     priority_fee: Option<u64>,
+    buffered: bool,
 }
 
 /// A transfer whose external data is final, before any record read.
@@ -531,6 +543,7 @@ impl<'a> Pipeline<'a> {
         Ok(Sealed {
             pipeline: Pipeline {
                 priority_fee: self.priority_fee,
+                buffered: self.buffered,
                 ring: self.ring,
                 config: self.config,
                 co_signers: self.co_signers,
@@ -567,6 +580,7 @@ impl<'a> Sealed<'a> {
                     staged,
                     co_signers: supplied_co_signers,
                     priority_fee,
+                    buffered,
                 },
             sealed,
             trees,
@@ -737,6 +751,7 @@ impl<'a> Sealed<'a> {
             spend,
             trees,
             priority_fee,
+            buffered,
         };
         unwitnessed.check_size()?;
         Ok(unwitnessed)
@@ -753,6 +768,21 @@ impl Unwitnessed<'_> {
             },
             self.priority_fee,
         );
+        if self.buffered {
+            return AddressCeiling {
+                payer: proof_inputs.payer,
+                instruction: &self.instruction()?,
+                budget,
+                inputs: &[],
+                merge_capacity: MergeCapacity {
+                    keyed: 0,
+                    zero_key: 0,
+                },
+            }
+            .decide()
+            .map(drop)
+            .map_err(RingError::from);
+        }
         match check_transaction_size(&proof_inputs.payer, &self.instruction()?, budget) {
             Err(RingError::TransactionTooLarge { bytes, limit }) => {
                 let shape = proof_inputs.check_shape()?;
@@ -935,6 +965,15 @@ impl ProvenRingTransfer {
     pub fn instruction(&self) -> Result<Instruction, RingError> {
         self.accounts
             .instruction(self.ring, &self.config, &self.parts)
+    }
+
+    /// `nonce` names the buffer, the payer writes it and pays the settlement.
+    pub fn buffered(&self, nonce: u64) -> Result<BufferedFrame, RingError> {
+        Ok(BufferedFrame::new(
+            &self.instruction()?,
+            self.accounts.payer,
+            nonce,
+        )?)
     }
 
     /// The owners who sign the transaction in public, none on the anonymous and in-proof owner rails.

@@ -48,6 +48,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
             ring: input.ring,
             co_signers: Vec::new(),
             priority_fee: None,
+            buffered: false,
             rail: Relayed {
                 proof_inputs: input.proof_inputs,
                 fee_payer: input.fee_payer,

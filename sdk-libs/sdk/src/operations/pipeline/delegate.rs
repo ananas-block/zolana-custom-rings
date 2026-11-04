@@ -100,6 +100,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
             ring: input.ring,
             co_signers: Vec::new(),
             priority_fee: None,
+            buffered: false,
             rail: Delegated {
                 delegate: input.delegate,
                 payer: input.payer,

@@ -1515,3 +1515,69 @@ fn a_base_commit_merge_binds_its_disclosure() {
         })
     );
 }
+
+/// The settlement's own event names the frame, `test-vectors/settlement/frame_buffer.json`.
+mod settled_frame {
+    use spr_interface::instruction::tag;
+
+    use super::*;
+
+    const RING: Address = Address::new_from_array([0x51; 32]);
+
+    fn vector(field: &str) -> Vec<u8> {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../test-vectors/settlement/frame_buffer.json"
+        ))
+        .unwrap();
+        hex::decode(vector[field].as_str().unwrap()).unwrap()
+    }
+
+    fn instruction(program_id: Address, data: Vec<u8>, stack_height: u32) -> ParsedInstruction {
+        ParsedInstruction {
+            program_id,
+            accounts: Vec::new(),
+            data,
+            stack_height,
+        }
+    }
+
+    fn settlement(event: Vec<u8>) -> InstructionGroup {
+        InstructionGroup {
+            outer: instruction(RING, vector("settle"), 1),
+            inner: vec![
+                instruction(RING, event, 2),
+                instruction(
+                    spr_interface::PROGRAM_ID_PUBKEY,
+                    vec![tag::RING_TRANSACT],
+                    2,
+                ),
+            ],
+        }
+    }
+
+    fn read(groups: &[InstructionGroup]) -> Option<Vec<u8>> {
+        confirmed_transact(groups, &groups[0].inner[1], RING)
+    }
+
+    #[test]
+    fn a_settlement_reads_its_frame_from_its_own_event() {
+        assert_eq!(read(&[settlement(vector("event"))]), Some(vector("frame")));
+    }
+
+    /// An event of another settlement carries another frame, the signed digest refuses it.
+    #[test]
+    fn an_event_taken_from_another_transaction_opens_no_frame() {
+        let mut other = vector("event");
+        *other.last_mut().unwrap() ^= 1;
+        assert_eq!(read(&[settlement(other)]), None);
+
+        let mut no_event = settlement(vector("event"));
+        no_event.inner.remove(0);
+        let elsewhere = InstructionGroup {
+            outer: instruction(RING, vector("settle"), 1),
+            inner: vec![instruction(RING, vector("event"), 2)],
+        };
+        let groups = [no_event, elsewhere];
+        assert_eq!(confirmed_transact(&groups, &groups[0].inner[0], RING), None);
+    }
+}

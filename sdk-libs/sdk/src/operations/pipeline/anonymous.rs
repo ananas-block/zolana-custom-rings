@@ -143,6 +143,7 @@ impl<'a> RingTransfer<Owner<'a>> {
             ring: self.ring,
             co_signers: self.co_signers,
             priority_fee: self.priority_fee,
+            buffered: self.buffered,
             rail: Anonymous {
                 owner: self.rail,
                 signer,
