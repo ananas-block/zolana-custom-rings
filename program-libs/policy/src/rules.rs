@@ -160,7 +160,6 @@ impl RuleTable {
                 Subject::OutputOwner | Subject::Asset => {
                     (0..payments.outputs.len()).try_for_each(|output| check.output(output))?
                 }
-                Subject::ExitDestination => {}
             }
         }
         Ok(())

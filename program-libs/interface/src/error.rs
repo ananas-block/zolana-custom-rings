@@ -98,6 +98,9 @@ ring_errors! {
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
     ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
     ListNotPolicyReadable = 8255 => "a policy rule reads a list outside the policy lists",
+    MultiListAbsenceRule = 8235 => "a policy rule reads more than one list by absence",
+    InvertedListPolarity = 8236 => "a policy rule reads a grant list by absence or a deny list by presence",
+    MixedPolarityRule = 8237 => "a policy rule mixes presences and absences",
     InvalidCoSignerRecord = 8260 => "co-signer record account is invalid",
     CoSignerRecordAlreadyExists = 8261 => "co-signer record already exists",
     CoSignerOutOfScope = 8262 => "the co-signer's scope misses a demanded class",
@@ -117,6 +120,7 @@ ring_errors! {
     InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
     TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a salted source's floor",
     SaltedSourceOtherTracking = 8504 => "a salted source pins no tracking registry or another one",
+    SaltedPublicList = 8505 => "a write salts a public list",
     InvalidFrameBuffer = 8520 => "frame buffer account is invalid",
     FrameLength = 8521 => "frame length is zero or exceeds one inner create",
     UnauthorizedFrameWriter = 8522 => "the signer is not the frame buffer writer",
@@ -143,6 +147,9 @@ impl From<RuleTableError> for CustomRingError {
         match error {
             RuleTableError::MemberWrittenList => Self::MemberWrittenListRule,
             RuleTableError::ListNotPolicyReadable => Self::ListNotPolicyReadable,
+            RuleTableError::MultiListAbsence => Self::MultiListAbsenceRule,
+            RuleTableError::InvertedPolarity => Self::InvertedListPolarity,
+            RuleTableError::MixedPolarity => Self::MixedPolarityRule,
             _ => Self::InvalidPolicyRules,
         }
     }

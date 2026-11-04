@@ -57,7 +57,6 @@ struct RuleParts {
 enum SubjectName {
     OutputOwner,
     Sender,
-    ExitDestination,
     Asset,
 }
 

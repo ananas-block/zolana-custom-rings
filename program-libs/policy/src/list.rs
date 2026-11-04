@@ -185,6 +185,12 @@ const _: () = {
     }
 };
 
+/// A rule reads each policy list by one polarity, `RuleTable::validate` refuses the other.
+const _: () = {
+    assert!(ListSet::GRANT_LISTS.union(ListSet::DENY_LISTS).bits() == ListSet::POLICY_LISTS.bits());
+    assert!(!ListSet::GRANT_LISTS.intersects(ListSet::DENY_LISTS));
+};
+
 impl TryFrom<u8> for ListId {
     type Error = ();
 

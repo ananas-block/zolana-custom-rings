@@ -74,19 +74,12 @@ macro_rules! rule_errors {
 
 rule_errors! {
     TooManyRules => "policy table is full",
-    TooManyInlineAssets => "asset thresholds exceed the circuit width",
-    ZeroInlineAsset => "zero is the padding value, never a member",
-    PoolWithoutInlineRule => "asset thresholds without a per-asset guard",
     EmptyLists => "a group names no list",
     ListInBothSets => "a list is both required and forbidden",
     SenderGuard => "sender rules take no amount guard",
-    ExitDestination => "exit destinations are enforced by no plane",
     ZeroThreshold => "a zero threshold is Guard::Always",
     DuplicateRule => "duplicate rule",
     PerAssetGuardNotOwner => "per-asset limits apply to output owners only",
-    MissingAssetLimit => "every mint threshold needs a nonzero limit",
-    AssetLimitWithoutGuard => "asset limits need a per-asset guard",
-    DuplicateInlineAsset => "mint thresholds must name distinct assets",
     UnknownSubject => "unknown subject",
     UnknownMode => "unknown mode",
     UnknownGuardTag => "unknown guard tag",
@@ -100,6 +93,9 @@ rule_errors! {
     LimitWithoutBound => "an outflow limit needs a cap or a cosign threshold",
     MemberWrittenList => "a rule reads a list its members write",
     ListNotPolicyReadable => "a rule reads a list outside the policy lists",
+    MultiListAbsence => "a rule reads more than one list by absence",
+    InvertedPolarity => "a rule reads a grant list by absence or a deny list by presence",
+    MixedPolarity => "a rule mixes presences and absences",
 }
 
 impl SourceMap {
@@ -196,7 +192,6 @@ impl SourceMap {
 pub enum Subject {
     OutputOwner = 1,
     Sender = 2,
-    ExitDestination = 3,
     Asset = 4,
 }
 
@@ -261,12 +256,14 @@ impl Rule {
         Self::any_of(subject, lists, ListSet::EMPTY)
     }
 
-    /// An instance on only some lists passes, `RuleTableBuilder::forbid_each` refuses it.
+    /// An instance on only some lists passes, `RuleTable::validate` refuses the row on a policy
+    /// write and `RuleTableBuilder::forbid_each` is the form a table stores.
     pub const fn forbid_only_on_all(subject: Subject, lists: ListSet) -> Self {
         Self::any_of(subject, ListSet::EMPTY, lists)
     }
 
-    /// A presence in any of `present` or an absence from any one of `absent` passes.
+    /// A presence in any of `present` or an absence from any one of `absent` passes, the circuit
+    /// equation for a row, `RuleTable::validate` bounds the forms a table stores.
     pub const fn any_of(subject: Subject, present: ListSet, absent: ListSet) -> Self {
         Self {
             subject,
@@ -348,7 +345,6 @@ impl Rule {
         let subject = match row.subject {
             1 => Subject::OutputOwner,
             2 => Subject::Sender,
-            3 => Subject::ExitDestination,
             4 => Subject::Asset,
             _ => return Err(RuleTableError::UnknownSubject),
         };
@@ -393,9 +389,6 @@ impl Rule {
     }
 
     const fn check(&self) -> Result<(), RuleTableError> {
-        if matches!(self.subject, Subject::ExitDestination) {
-            return Err(RuleTableError::ExitDestination);
-        }
         match self.source {
             RuleSource::Lists { present, absent } if present.union(absent).is_empty() => {
                 return Err(RuleTableError::EmptyLists)
@@ -415,6 +408,21 @@ impl Rule {
             }
             Guard::Always | Guard::AboveAmount(_) | Guard::AboveAmountByAsset => Ok(()),
         }
+    }
+
+    /// One polarity per row, a grant over grant lists or a denial of one deny list.
+    const fn check_polarity(&self) -> Result<(), RuleTableError> {
+        let RuleSource::Lists { present, absent } = self.source;
+        if !present.is_empty() && !absent.is_empty() {
+            return Err(RuleTableError::MixedPolarity);
+        }
+        if absent.len() > 1 {
+            return Err(RuleTableError::MultiListAbsence);
+        }
+        if !present.is_subset(ListSet::GRANT_LISTS) || !absent.is_subset(ListSet::DENY_LISTS) {
+            return Err(RuleTableError::InvertedPolarity);
+        }
+        Ok(())
     }
 
     const fn signature(&self) -> u32 {
@@ -512,6 +520,32 @@ impl RuleTable {
             i += 1;
         }
         set
+    }
+
+    /// What a stored table may read and how, every policy write runs it through
+    /// `EncodedRuleTable::validate`.
+    ///
+    /// The guarantee is that configured list operations have consistent semantics, never that
+    /// every accepted policy is restrictive. An empty table passes, and a grant over a list the
+    /// authority opens to everyone passes. A rule is a grant requirement, met by presence in any
+    /// of its grant lists, or a denial, met by absence from its one deny list. Every rule holds
+    /// at once, so grants and denials combine with AND and each denied list takes its own rule.
+    ///
+    /// The row layout and the circuit evaluate any OR of presences and absences, `holds` in
+    /// `rules.rs` mirrors them, and three forms read against those semantics. Multi-list absence
+    /// passes a subject off any one list, a publicly blocked owner with no private entry passes
+    /// a row over `{Block, PrivateBlock}`. A mixed row passes on either branch, a grant lifts the
+    /// denial for a blocked owner and the absence lifts the grant for everyone unblocked. Inverted
+    /// polarity makes a set bit on a deny list grant and a set bit on a grant list deny.
+    pub fn validate(&self) -> Result<(), RuleTableError> {
+        let referenced = self.referenced();
+        if referenced.intersects(ListSet::MEMBER_LISTS) {
+            return Err(RuleTableError::MemberWrittenList);
+        }
+        if !referenced.is_subset(ListSet::POLICY_LISTS) {
+            return Err(RuleTableError::ListNotPolicyReadable);
+        }
+        self.rules().iter().try_for_each(Rule::check_polarity)
     }
 
     pub fn encode(&self) -> EncodedRuleTable {
@@ -661,13 +695,7 @@ impl EncodedRuleTable {
     /// The table a policy write stores, every check the circuit leaves to the program.
     pub fn validate(&self, sources: &SourceMap) -> Result<RuleTable, PolicyTableError> {
         let table = self.decode()?;
-        let referenced = self.referenced();
-        if referenced.intersects(ListSet::MEMBER_LISTS) {
-            return Err(RuleTableError::MemberWrittenList.into());
-        }
-        if !referenced.is_subset(ListSet::POLICY_LISTS) {
-            return Err(RuleTableError::ListNotPolicyReadable.into());
-        }
+        table.validate()?;
         let missing = table.rules().iter().find_map(|rule| {
             rule.referenced()
                 .iter()

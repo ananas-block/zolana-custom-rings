@@ -138,6 +138,57 @@ fn a_policy_write_validates_and_repins_the_table() {
     assert_eq!(policy.policy_hash(), Ok(&hash));
 }
 
+#[test]
+fn a_policy_write_refuses_each_table_form_and_keeps_the_pinned_table() {
+    let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
+    for list_id in [ListId::Allow, ListId::Block, ListId::Frozen] {
+        sources[list_id.slot()].list_id = list_id as u8;
+    }
+    let write = |rule: Rule, slot| PolicyUpdate {
+        sources,
+        salted_lists: ListSet::EMPTY,
+        rules: RuleTable::builder().rule(rule).build().encode(),
+        slot,
+    };
+    let subject = Subject::OutputOwner;
+    let allow = ListSet::single(ListId::Allow);
+    let block = ListSet::single(ListId::Block);
+    let mut policy = ring(Address::default());
+    policy
+        .set_policy(PolicyUpdate {
+            rules: RuleTable::builder()
+                .rule(Rule::require(subject, ListId::Allow))
+                .rule(Rule::forbid(subject, ListId::Block))
+                .rule(Rule::forbid(subject, ListId::Frozen))
+                .build()
+                .encode(),
+            ..write(Rule::require(subject, ListId::Allow), 1)
+        })
+        .unwrap();
+    let pinned = *policy;
+    for (rule, refusal) in [
+        (
+            Rule::forbid_only_on_all(subject, ListSet::of(&[ListId::Block, ListId::Frozen])),
+            CustomRingError::MultiListAbsenceRule,
+        ),
+        (
+            Rule::require(subject, ListId::Block),
+            CustomRingError::InvertedListPolarity,
+        ),
+        (
+            Rule::forbid(subject, ListId::Allow),
+            CustomRingError::InvertedListPolarity,
+        ),
+        (
+            Rule::any_of(subject, allow, block),
+            CustomRingError::MixedPolarityRule,
+        ),
+    ] {
+        assert_eq!(policy.set_policy(write(rule, 2)), Err(refusal), "{rule:?}");
+        assert_eq!(*policy, pinned);
+    }
+}
+
 fn enroll_ix(viewing_u: [u8; 32]) -> EnrollIxData {
     EnrollIxData {
         nullifier_pk: [0x14; 32],

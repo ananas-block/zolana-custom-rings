@@ -5,8 +5,8 @@ use custom_ring_interface::{
     storage_instruction::InitializeTrackingIxData,
     tag,
     tracking::TrackingRegistry,
-    CustomRingError, PolicySourceIxData, PolicyTableIxData, RingPolicy, RingRail, RingRole,
-    RingTransactData, SourceSpec, UpdatePolicyIxData, STORAGE_PROGRAM_ID,
+    CustomRingError, PolicyTableIxData, RingPolicy, RingRail, RingRole, RingTransactData,
+    SourceSpec, UpdatePolicyIxData, STORAGE_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::AccountMeta;
@@ -15,8 +15,9 @@ use zolana_ring_policy::{ring_id_field, ListId, ListSet};
 
 use crate::{
     common::{
-        allow_list_table, auditor_pubkey, policy_pda, reaches_verification, refused, retired, root,
-        tracking_registry, transact, Ring, Sent, Setup, UpdatePolicyIx, PROGRAM, RECORDS,
+        allow_list_table, auditor_pubkey, list_table, policy_pda, reaches_verification, refused,
+        retired, root, rules_write, tracking_registry, transact, Ring, Sent, Setup, UpdatePolicyIx,
+        PROGRAM, RECORDS,
     },
     transact_rules::{spp_list, Fixture},
 };
@@ -195,18 +196,13 @@ fn a_forged_tracking_registry_with_a_matching_ring_id_and_an_empty_root_fails_at
     reaches_verification(reading(tracking_registry(), &mut ring));
 }
 
-fn salt_allow_list(ring: &mut Ring, pair: Address, floor: u64) {
+/// The table write leaves the stored salted byte empty, the list is private and read salted.
+fn read_private_allow_list(ring: &mut Ring, pair: Address, floor: u64) {
     let authority = ring.holder(RingRole::Policy);
-    let update = UpdatePolicyIx {
-        authority: authority.pubkey(),
-        update: UpdatePolicyIxData::Source(PolicySourceIxData {
-            list_id: ListId::Allow as u8,
-            source: 0,
-            salted: true,
-        }),
-        trailing: &[],
-    }
-    .instruction();
+    let update = rules_write(
+        &authority.pubkey(),
+        list_table(ListId::PrivateAllow, Vec::new()),
+    );
     ring.send(update, &[&authority]).unwrap();
     pin_records(ring, pair, floor);
 }
@@ -238,9 +234,13 @@ fn a_salted_list_reads_its_own_source_under_the_tracking_pin() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
     let data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    salt_allow_list(&mut ring, Address::default(), 0);
+    read_private_allow_list(&mut ring, Address::default(), 0);
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.salted(), ListSet::single(ListId::Allow));
+    assert_eq!(account.salted(), ListSet::EMPTY);
+    assert_eq!(
+        account.source_map().unwrap().salted(),
+        ListSet::single(ListId::PrivateAllow)
+    );
     for unpaired in [Address::default(), Address::new_from_array([0x61; 32])] {
         pin_records(&mut ring, unpaired, 0);
         refused(
@@ -253,11 +253,30 @@ fn a_salted_list_reads_its_own_source_under_the_tracking_pin() {
 }
 
 #[test]
+fn an_unpaired_private_source_cannot_name_an_old_tracking_root() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Policy);
+    store_tracking_history(&mut ring);
+    read_private_allow_list(&mut ring, Address::default(), 0);
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
+    data.tracking_revision = Revision::from(2);
+    refused(
+        transfer_reading(&mut ring, &[RECORDS], &data),
+        CustomRingError::SaltedSourceOtherTracking,
+    );
+    pin_records(&mut ring, tracking_registry(), 3);
+    refused(
+        transfer_reading(&mut ring, &[RECORDS], &data),
+        CustomRingError::TrackingRootBelowFloor,
+    );
+}
+
+#[test]
 fn a_tracking_root_below_the_salted_floor_is_refused_at_load() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
     store_tracking_history(&mut ring);
-    salt_allow_list(&mut ring, tracking_registry(), 3);
+    read_private_allow_list(&mut ring, tracking_registry(), 3);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     data.tracking_revision = Revision::from(2);
     refused(

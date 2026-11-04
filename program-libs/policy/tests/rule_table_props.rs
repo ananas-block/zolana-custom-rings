@@ -7,7 +7,6 @@ fn subject() -> impl Strategy<Value = Subject> {
     prop_oneof![
         Just(Subject::OutputOwner),
         Just(Subject::Sender),
-        Just(Subject::ExitDestination),
         Just(Subject::Asset),
     ]
 }

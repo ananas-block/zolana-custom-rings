@@ -205,7 +205,7 @@ fn decode_refuses_every_row_encoded_never_emits() {
         (|row| row[0] = 1, RuleTableError::ReservedBytes),
         (|row| row[18] = 1, RuleTableError::ReservedBytes),
         (|row| row[31] = 0, RuleTableError::UnknownSubject),
-        (|row| row[31] = 3, RuleTableError::ExitDestination),
+        (|row| row[31] = 3, RuleTableError::UnknownSubject),
         (|row| row[31] = 5, RuleTableError::UnknownSubject),
         (|row| row[30] = 0, RuleTableError::UnknownMode),
         (|row| row[30] = 3, RuleTableError::UnknownMode),
@@ -537,20 +537,126 @@ fn per_asset_guards_are_configured_independently_of_mint_records() {
     );
 }
 
+/// Each form on each subject a row can name.
+fn refused_forms() -> Vec<(Rule, RuleTableError)> {
+    let deny = ListSet::of(&[ListId::Block, ListId::PrivateBlock]);
+    let forms = |subject| {
+        [
+            (
+                Rule::forbid_only_on_all(subject, deny),
+                RuleTableError::MultiListAbsence,
+            ),
+            (
+                Rule::forbid_only_on_all(subject, ListSet::of(&[ListId::Allow, ListId::Block])),
+                RuleTableError::MultiListAbsence,
+            ),
+            (
+                Rule::require(subject, ListId::Block),
+                RuleTableError::InvertedPolarity,
+            ),
+            (
+                Rule::require_any(subject, ListSet::of(&[ListId::Allow, ListId::Frozen])),
+                RuleTableError::InvertedPolarity,
+            ),
+            (
+                Rule::forbid(subject, ListId::Allow),
+                RuleTableError::InvertedPolarity,
+            ),
+            (
+                Rule::any_of(
+                    subject,
+                    ListSet::single(ListId::Allow),
+                    ListSet::single(ListId::Block),
+                ),
+                RuleTableError::MixedPolarity,
+            ),
+            (
+                Rule::any_of(
+                    subject,
+                    ListSet::single(ListId::Block),
+                    ListSet::single(ListId::Allow),
+                ),
+                RuleTableError::MixedPolarity,
+            ),
+        ]
+    };
+    [Subject::OutputOwner, Subject::Sender, Subject::Asset]
+        .into_iter()
+        .flat_map(forms)
+        .collect()
+}
+
 #[test]
-fn a_rule_reads_a_policy_list_by_presence_or_by_absence() {
-    let map = sources(&[(ListId::Allow, [0; 32]), (ListId::Block, [0; 32])]);
-    for rule in [
-        Rule::require(Subject::Sender, ListId::Block),
-        Rule::forbid(Subject::Sender, ListId::Allow),
-    ] {
-        assert!(RuleTable::builder()
+fn validate_refuses_each_form_alone_and_behind_a_valid_row() {
+    for (rule, refusal) in refused_forms() {
+        let alone = RuleTable::builder().rule(rule).build();
+        assert_eq!(alone.validate(), Err(refusal), "{rule:?}");
+        let behind = RuleTable::builder()
+            .rule(Rule::forbid(Subject::OutputOwner, ListId::Frozen))
             .rule(rule)
-            .build()
-            .encode()
-            .validate(&map)
-            .is_ok());
+            .build();
+        assert_eq!(behind.validate(), Err(refusal), "{rule:?}");
     }
+}
+
+#[test]
+fn a_policy_table_write_refuses_each_form_with_every_source_mapped() {
+    let every = ListSet::POLICY_LISTS
+        .iter()
+        .map(|list_id| (list_id, [0; 32]))
+        .collect::<Vec<_>>();
+    let map = sources(&every);
+    for (rule, refusal) in refused_forms() {
+        let table = RuleTable::builder().rule(rule).build();
+        assert_eq!(
+            table.encode().validate(&map),
+            Err(PolicyTableError::Table(refusal)),
+            "{rule:?}"
+        );
+    }
+}
+
+#[test]
+fn a_mixed_row_decodes_for_the_circuit_and_refuses_only_on_validate() {
+    let mixed = Rule::any_of(
+        Subject::OutputOwner,
+        ListSet::single(ListId::Approval),
+        ListSet::single(ListId::Block),
+    );
+    let table = RuleTable::builder().rule(mixed).build();
+    assert_eq!(table.encode().decode(), Ok(table));
+    assert_eq!(table.validate(), Err(RuleTableError::MixedPolarity));
+}
+
+#[test]
+fn a_grant_over_several_lists_and_one_denial_per_list_pass() {
+    let map = sources(&[
+        (ListId::Allow, [0; 32]),
+        (ListId::Approval, [0; 32]),
+        (ListId::PrivateAllow, [0; 32]),
+        (ListId::Block, [0; 32]),
+        (ListId::Frozen, [0; 32]),
+        (ListId::PrivateBlock, [0; 32]),
+    ]);
+    let table = RuleTable::builder()
+        .rule(Rule::require_any(
+            Subject::OutputOwner,
+            ListSet::GRANT_LISTS,
+        ))
+        .forbid_each(Subject::OutputOwner, ListSet::DENY_LISTS)
+        .rule(Rule::require(Subject::Asset, ListId::Allow).above(7))
+        .rule(Rule::forbid(Subject::Asset, ListId::Block))
+        .rule(Rule::forbid(Subject::Sender, ListId::Frozen))
+        .build();
+    assert_eq!(table.validate(), Ok(()));
+    assert_eq!(table.encode().validate(&map), Ok(table));
+}
+
+/// The guarantee covers consistency, a table that screens nobody is accepted.
+#[test]
+fn an_unrestrictive_table_passes() {
+    assert_eq!(EMPTY.validate(), Ok(()));
+    assert_eq!(EMPTY.encode().validate(&SourceMap::default()), Ok(EMPTY));
 }
 
 #[test]

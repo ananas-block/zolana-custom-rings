@@ -578,6 +578,9 @@ impl RingPolicy {
     }
 
     /// A list no rule reads keeps no salted bit.
+    ///
+    /// `Initialize`, the table write and the source write all end here, the one point a table
+    /// reaches the account, and each validates the whole table it would store.
     pub fn set_policy(&mut self, update: PolicyUpdate) -> Result<(), CustomRingError> {
         let PolicyUpdate {
             sources,
@@ -585,6 +588,11 @@ impl RingPolicy {
             rules,
             slot,
         } = update;
+        // Entries of a public list sit at owner keys. A salted bit moves every read to a salted
+        // key and those entries stop matching, a blocked owner then reads as absent.
+        if !salted_lists.is_subset(ListSet::PRIVATE_LISTS) {
+            return Err(CustomRingError::SaltedPublicList);
+        }
         let salted_lists = ListSet::from_bits(salted_lists.bits() & rules.referenced().bits());
         let source_map = salted_source_map(&sources, salted_lists)?;
         rules.validate(&source_map)?;
@@ -635,6 +643,7 @@ impl RingPolicy {
         salted_source_map(&self.sources, self.salted())
     }
 
+    /// The stored byte, `source_map` adds every private list a rule reads.
     pub const fn salted(&self) -> ListSet {
         ListSet::from_bits(self.salted_lists)
     }
@@ -665,10 +674,14 @@ impl RingPolicy {
         address: &Address,
         source: &StorageRegistry,
     ) -> Result<(), CustomRingError> {
-        let needs_pin = self
-            .salted()
-            .iter()
-            .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address);
+        // The source map's set, a private list is salted whatever the stored byte holds. The byte
+        // alone stays empty after `Initialize`, an unpaired source then serves the private list
+        // with no floor and a blocked enrolled owner proves itself unenrolled under an old
+        // tracking root.
+        let needs_pin =
+            self.source_map()?.salted().iter().any(|list_id| {
+                source_address(&self.sources[list_id.slot()], &self.records) == address
+            });
         match source.tracking_registry == self.tracking || (!needs_pin && !source.is_private()) {
             true => Ok(()),
             false => Err(CustomRingError::SaltedSourceOtherTracking),
