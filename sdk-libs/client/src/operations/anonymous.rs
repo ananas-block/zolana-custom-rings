@@ -96,6 +96,13 @@ pub enum SentCheck {
     Unverified,
 }
 
+/// Bodies no held key rebuilt, an owner's note under a bad body opens only through an auditor read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AuditorRecovery {
+    /// Commitments, foreign notes and dummies among them.
+    pub unopened: Vec<[u8; 32]>,
+}
+
 /// Only [`crate::AnonymousWallet::absorb`] stores what it covers.
 pub struct AnonymousScan {
     starting_history: ViewingHistory,
@@ -108,6 +115,8 @@ pub struct AnonymousScan {
     pub unmatched: Vec<[u8; 32]>,
     /// The wallet's payments in the transfers whose bundle it opened, a body that fails to open left out.
     pub sent: Vec<SentPayment>,
+    /// Filled by a full scan alone.
+    pub auditor_recovery: AuditorRecovery,
 }
 
 impl AnonymousScan {
@@ -287,6 +296,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
             unmatched: Vec::new(),
             sent: Vec::new(),
             sender_claims: Vec::new(),
+            unopened: BTreeSet::new(),
         })
     }
 }
@@ -372,6 +382,7 @@ struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
     unmatched: Vec<[u8; 32]>,
     sent: Vec<SentPayment>,
     sender_claims: Vec<SenderClaim>,
+    unopened: BTreeSet<[u8; 32]>,
 }
 
 /// A recipient body at an output, a sender bundle in a message.
@@ -579,13 +590,19 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         self.read_bodies(index, &matched)
     }
 
-    /// Recovery, every body and bundle opens with no tag read and every deposit is tried.
+    /// The one recovery path of every rail, tags are unproved hints and no tag is read here.
     fn try_every_site(
         &mut self,
         index: usize,
         rows: &[ShieldedTransaction],
     ) -> Result<(), AnonymousError> {
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        self.unopened.extend(
+            rows.iter()
+                .flat_map(|tx| &tx.output_slots)
+                .filter(|slot| recipient_payload(&slot.payload).is_some())
+                .map(|slot| slot.output_context.hash),
+        );
         let bodies: Vec<Body<'_>> = rows
             .iter()
             .flat_map(|tx| {
@@ -1233,11 +1250,15 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             unmatched,
             sent,
             sender_claims,
+            mut unopened,
             ..
         } = self;
         assign_nullifiers(keys, &mut decrypted, found)?;
         let mut held = DecryptionResult::default();
         assign_nullifiers(keys, &mut held, held_back)?;
+        for note in decrypted.utxos.iter().chain(&held.utxos) {
+            unopened.remove(&note.utxo_hash);
+        }
         Ok(AnonymousScan {
             starting_history,
             history,
@@ -1247,6 +1268,9 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             utxos,
             unmatched,
             sent,
+            auditor_recovery: AuditorRecovery {
+                unopened: unopened.into_iter().collect(),
+            },
         })
     }
 

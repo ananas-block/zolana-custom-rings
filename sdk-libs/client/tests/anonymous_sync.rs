@@ -44,9 +44,9 @@ use spr_transaction::{
     TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
 };
 use zolana_ring_client::{
-    note_state, verify_ring_owned, AnonymousError, AnonymousScan, AnonymousStream, AnonymousSync,
-    AnonymousWallet, NoteState, SentCheck, ViewingHistory, TAGS_PER_REQUEST, TAG_GAP,
-    VIEWING_HISTORY_VERSION,
+    note_state, open_ring_confidential, verify_ring_owned, AnonymousError, AnonymousScan,
+    AnonymousStream, AnonymousSync, AnonymousWallet, NoteState, RingConfidentialScan, SentCheck,
+    ViewingHistory, TAGS_PER_REQUEST, TAG_GAP, VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_keys::{
     MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeyError, RingKeys, RingTagFrame,
@@ -2387,4 +2387,112 @@ async fn an_extended_recipient_body_rebuilds_its_commitment_with_its_data() {
         opened.utxo.data.utxo_data().map(<[u8]>::to_vec),
         Some(b"memo".to_vec())
     );
+}
+
+/// Publishes one confidential payment, `published` edits its recipient slot before the indexer serves it.
+fn deliver(
+    sender: &mut Wallet,
+    indexer: &Indexer,
+    to: &ShieldedAddress,
+    published: impl FnOnce(&mut OutputSlot),
+) -> ShieldedTransaction {
+    let input = sender.funding.remove(0);
+    let mut transaction = ConfidentialTransaction::new_with_ring(
+        vec![input],
+        sender.address().solana_address().unwrap(),
+        RING,
+    )
+    .unwrap()
+    .with_output_tree_id(TREE)
+    .unwrap();
+    transaction
+        .transfer_with_ring(to, Mint::SOL, 30, Some(RING))
+        .unwrap();
+    let rail = RingOutputRail::new(ViewingKey::new(), RingDelivery::Delivered);
+    let proof = rail.encrypt(transaction, &sender.address()).unwrap();
+    let external = &proof.external_data;
+    let leaf = indexer.leaves(external.outputs.len());
+    let position = external
+        .resolved_owner_tags
+        .iter()
+        .position(|tag| *tag == custom_ring_interface::stream::slot_tag(to.viewing_pubkey.u()))
+        .unwrap();
+    let mut output_slots: Vec<OutputSlot> = external
+        .outputs
+        .iter()
+        .zip(&external.resolved_owner_tags)
+        .zip(leaf..)
+        .map(|((output, tag), leaf_index)| OutputSlot {
+            view_tag: *tag,
+            output_context: OutputContext {
+                hash: output.utxo_hash,
+                tree_id: TREE,
+                leaf_index,
+            },
+            payload: output.data.clone().unwrap_or_default(),
+        })
+        .collect();
+    published(&mut output_slots[position]);
+    let tx = ShieldedTransaction {
+        slot: leaf + 1,
+        tx_signature: Signature::from(signature(leaf)),
+        event_index: Some(0),
+        tx_viewing_pk: Some(rail.tx_viewing_key().pubkey()),
+        salt: Some(rail.salt()),
+        output_slots,
+        messages: Vec::new(),
+        nullifiers: vec![proof.first_nullifier().unwrap()],
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
+    };
+    indexer.publish(tx.clone());
+    tx
+}
+
+#[tokio::test]
+async fn a_full_scan_finds_a_confidential_note_under_a_wrong_tag() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    let mut hash = [0; 32];
+    let tx = deliver(&mut alice, &indexer, &bob.address(), |slot| {
+        slot.view_tag = [0x55; 32];
+        hash = slot.output_context.hash;
+    });
+
+    let tagged = open_ring_confidential(&bob.keys, &assets(), core::slice::from_ref(&tx)).unwrap();
+    assert!(tagged.owned.utxos.is_empty());
+
+    let recovered = RingConfidentialScan::new(&bob.keys, &assets())
+        .full_scan(&indexer, RING)
+        .await
+        .unwrap();
+    assert_eq!(recovered.owned.owned.utxos.len(), 1);
+    assert_eq!(recovered.owned.owned.utxos[0].utxo_hash, hash);
+    assert!(!recovered.auditor_recovery.unopened.contains(&hash));
+}
+
+#[tokio::test]
+async fn a_bad_body_opens_nothing_and_a_foreign_slot_stays_a_miss_under_auditor_recovery() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    let carol = Wallet::new(3);
+    let mut bad = [0; 32];
+    deliver(&mut alice, &indexer, &bob.address(), |slot| {
+        *slot.payload.last_mut().unwrap() ^= 1;
+        bad = slot.output_context.hash;
+    });
+    let mut foreign = [0; 32];
+    deliver(&mut alice, &indexer, &carol.address(), |slot| {
+        foreign = slot.output_context.hash;
+    });
+    let scan = RingConfidentialScan::new(&bob.keys, &assets())
+        .full_scan(&indexer, RING)
+        .await
+        .unwrap();
+    assert!(scan.owned.owned.utxos.is_empty());
+    assert!(scan.auditor_recovery.unopened.contains(&bad));
+    assert!(scan.auditor_recovery.unopened.contains(&foreign));
 }

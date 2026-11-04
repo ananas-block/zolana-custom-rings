@@ -59,7 +59,7 @@ pub mod viewing_history;
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, SenderClaim, SentCheck,
+    AnonymousRingUtxo, AnonymousScan, AuditorRecovery, AnonymousStream, AnonymousSync, SenderClaim, SentCheck,
     SentPayment,
 };
 pub use crate::anonymous_wallet::{
@@ -73,7 +73,9 @@ pub use crate::viewing_history::{
     VIEWING_HISTORY_VERSION,
 };
 pub use crate::{
-    confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},
+    confidential::{
+        open_ring_confidential, RingConfidentialNotes, RingConfidentialScan, RingFullScan,
+    },
     created::{
         CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
         DepositOwners,

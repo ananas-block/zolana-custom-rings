@@ -2,17 +2,19 @@
 
 use std::collections::HashSet;
 
+use solana_address::Address;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
 use spr_keypair::{KeypairError, ShieldedAddress};
 use spr_transaction::{
     verify_owned, DecryptionResult, OwnedUtxos, ShieldedKeys, ShieldedTransaction,
     TransactionError, WalletUtxo,
 };
-use zolana_ring_keys::RingKeys;
+use zolana_ring_keys::{MergeSeedHolder, RingKeys};
 use zolana_ring_transaction::{open_recipient_body, AnonymousOutput, OpenedBody, RingAssets};
 
 use crate::{
-    anonymous::{published_note, recipient_payload},
+    anonymous::{published_note, recipient_payload, AnonymousSync, AuditorRecovery},
+    anonymous_wallet::PendingNote,
     delivered::{
         assign_nullifiers, confidential_delivered, open_delivered, PendingUtxo,
         RingDeliveredCandidate, RingDeliveryContext,
@@ -21,6 +23,7 @@ use crate::{
     deposit_payload,
     exposed_notes::{verify_ring_owned, RingOwnedUtxos},
     tags::IndexerReads,
+    viewing_history::ViewingHistory,
     AnonymousError,
 };
 
@@ -31,6 +34,14 @@ pub struct RingConfidentialNotes {
     pub exposed_if_spent: Vec<WalletUtxo>,
     /// Scheme 10 notes whose commitment no held mint rebuilds.
     pub pending: Vec<PendingUtxo>,
+}
+
+/// What a read of the whole ring opened with no tag read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RingFullScan {
+    pub owned: RingOwnedUtxos,
+    pub pending: Vec<PendingNote>,
+    pub auditor_recovery: AuditorRecovery,
 }
 
 /// Reads the spends of the notes it opens and the ring merges among them, the scanned transactions alone miss a spend without change.
@@ -166,6 +177,36 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> RingConfidentialScan<'a, K> {
             owned,
             exposed_if_spent,
             pending: delivered.pending,
+        })
+    }
+}
+
+impl<K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidentialScan<'_, K> {
+    /// A wrong tag hides nothing here, every held key tries every site of `ring`.
+    pub async fn full_scan<I: AsyncRpc + ?Sized>(
+        &self,
+        indexer: &I,
+        ring: Address,
+    ) -> Result<RingFullScan, AnonymousError> {
+        let mut held = self.keys.viewing_public_keys().into_iter().rev();
+        let current = held.next().ok_or(AnonymousError::HeldKeyNotInHistory)?;
+        let history = held
+            .zip(1..)
+            .try_fold(
+                ViewingHistory::new(current, 0),
+                |history, (key, created_at)| history.with_rotated_key(key, created_at),
+            )?
+            .with_ring(ring, None);
+        let sync = AnonymousSync::new(self.keys, self.assets);
+        let sync = match self.config {
+            Some(config) => sync.with_indexer_config(config),
+            None => sync,
+        };
+        let scan = sync.full_scan(indexer, &history, ring).await?;
+        Ok(RingFullScan {
+            owned: verify_ring_owned(self.keys, scan.decrypted())?,
+            pending: scan.pending_notes().to_vec(),
+            auditor_recovery: scan.auditor_recovery,
         })
     }
 }
