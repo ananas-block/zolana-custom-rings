@@ -26,7 +26,8 @@ func ListSaltOf(t testing.TB, owner *big.Int) *big.Int {
 func Enroll(t testing.TB, tree *ringregistry.Tracking, owner, nullifierPk *big.Int) {
 	t.Helper()
 	derived := func(offset int64) *big.Int { return new(big.Int).Add(owner, big.NewInt(offset)) }
-	tree.Apply(t, ringregistry.TrackingEntry{Member: owner, NullifierPk: nullifierPk, CtHash: derived(1), View0: derived(2), View1: derived(3), Revision: big.NewInt(1), ListTag: ringregistry.ListTag(t, ListSaltOf(t, owner))})
+	view0, view1 := ringregistry.PackedView(derived(2))
+	tree.Apply(t, ringregistry.TrackingEntry{Member: owner, NullifierPk: nullifierPk, CtHash: derived(1), View0: view0, View1: view1, Revision: big.NewInt(1), ListTag: ringregistry.ListTag(t, ListSaltOf(t, owner))})
 }
 
 // FillTracking opens each live member once and fills the pool cyclically.

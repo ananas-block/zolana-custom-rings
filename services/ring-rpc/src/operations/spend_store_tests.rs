@@ -101,7 +101,7 @@ fn real(nullifier: [u8; 32], at: CreatedIn, position: u16) -> Observation {
         nullifier,
         frame: at,
         position,
-        read: InputRead::Real { evidence: None },
+        read: InputRead::Real,
         hit: None,
     }
 }
@@ -181,7 +181,7 @@ fn a_late_key_recomputes_the_owners_notes_and_resolves_their_rows() {
     });
     assert!(matches!(
         store.row_state(&nullifier),
-        Some(SpendState::UnresolvedReal { .. })
+        Some(SpendState::UnresolvedReal)
     ));
     keys.grant(owner, 7);
     store
@@ -405,50 +405,6 @@ fn a_zero_key_note_of_a_wallet_is_exposed_and_a_pda_note_is_not() {
 }
 
 #[test]
-fn a_frames_evidence_resolves_its_note_and_a_later_opening_settles_an_unseen_one() {
-    let store = AuditStore::default();
-    let owner = wallet(1);
-    let keys = Keys::none();
-    let seen = note(owner, &secret(7), 0x10, 50);
-    let unseen = note(owner, &secret(7), 0x11, 20);
-    let named = |nullifier, commitment, position| Observation {
-        read: InputRead::Real {
-            evidence: Some(commitment),
-        },
-        ..real(nullifier, frame(6), position)
-    };
-    apply(&store, &keys, |work| {
-        work.open(frame(5), [seen]);
-        work.observe(named([1; 32], seen.commitment, 0));
-        work.observe(named([2; 32], unseen.commitment, 1));
-    });
-    assert_eq!(
-        store.row_state(&[1; 32]),
-        Some(SpendState::Resolved {
-            note: seen.commitment
-        })
-    );
-    assert_eq!(
-        store.row_state(&[2; 32]),
-        Some(SpendState::UnresolvedReal {
-            evidence: Some(unseen.commitment)
-        })
-    );
-    apply(&store, &keys, |work| work.open(frame(5), [unseen]));
-    assert_eq!(
-        store.row_state(&[2; 32]),
-        Some(SpendState::Resolved {
-            note: unseen.commitment
-        })
-    );
-    through(&store, &keys, 7);
-    assert_eq!(
-        statuses(&status_of(&store, owner)),
-        [WalletNoteStatus::Spent, WalletNoteStatus::Spent]
-    );
-}
-
-#[test]
 fn merge_selection_skips_a_published_nullifier_and_ignores_an_unrelated_row() {
     let store = AuditStore::default();
     let owner = wallet(1);
@@ -551,40 +507,6 @@ async fn restart(store: &Store, seal: &NoteSeal) -> AuditStore {
         .expect("load"),
     );
     book
-}
-
-#[tokio::test]
-async fn a_waiting_note_survives_a_restart_and_leaves_once_it_opens() {
-    let store = Store::open("sqlite::memory:", 1).await.expect("store");
-    let (book, seal) = (AuditStore::default(), seal());
-    let owner = wallet(1);
-    let keys = Keys::with(owner, 7);
-    let created = note(owner, &secret(7), 0x10, 50);
-    commit_page(&store, &book, &seal, &keys, &|work| {
-        work.await_key(
-            frame(2),
-            [AwaitingKeyOutput {
-                owner_key: created.utxo.owner_key,
-                commitment: created.commitment,
-            }],
-        )
-    })
-    .await
-    .expect("commit");
-    let read = restart(&store, &seal).await;
-    assert_eq!(read.retry_frames(), Vec::new());
-    assert_eq!(read.read_book().awaiting_key.len(), 1);
-    commit_page(&store, &read, &seal, &keys, &|work| {
-        work.open(frame(2), [created])
-    })
-    .await
-    .expect("commit");
-    assert!(read.read_book().awaiting_key.is_empty());
-    assert!(restart(&store, &seal)
-        .await
-        .read_book()
-        .awaiting_key
-        .is_empty());
 }
 
 fn seal() -> NoteSeal {

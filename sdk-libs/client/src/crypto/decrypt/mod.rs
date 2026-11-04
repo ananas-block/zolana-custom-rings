@@ -13,7 +13,6 @@ use spr_transaction::{
     utxo::{derive_output_blinding_seed, derive_transact_output_blinding, DUMMY_DOMAIN},
     OutputContext, OutputSlot, ShieldedTransaction,
 };
-use zolana_ring_transaction::RingAssets;
 
 use crate::{
     disclosure::{canonical, AuditEnvelope},
@@ -25,42 +24,12 @@ use crate::{
     AuditError,
 };
 
-mod historical;
-
-pub use historical::HistoricalLayout;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuditFrame {
-    /// Tags 55 and 56.
-    Records(AuditStreamLayout),
-    /// Tags 45 and 46.
-    Historical(HistoricalLayout),
-}
-
-impl From<AuditStreamLayout> for AuditFrame {
-    fn from(layout: AuditStreamLayout) -> Self {
-        Self::Records(layout)
-    }
-}
-
 /// Only [`crate::RingScan::audit`] binds the transaction to its confirmed event.
 #[must_use = "run the audit explicitly"]
-/// The owner keys a key-escrow frame leaves out, each source implements it.
-pub trait EscrowedKeys {
-    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]>;
-}
-
-impl EscrowedKeys for std::collections::HashMap<[u8; 32], [u8; 32]> {
-    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]> {
-        self.get(owner_key).copied()
-    }
-}
-
 pub struct TransactionAudit<'a> {
     transaction: &'a ShieldedTransaction,
-    frame: AuditFrame,
+    layout: AuditStreamLayout,
     input_trees: Option<&'a [Option<u16>]>,
-    escrowed_keys: Option<&'a dyn EscrowedKeys>,
 }
 
 /// The row a frame's event publishes, the co-signer audits its own message before it lands.
@@ -117,19 +86,12 @@ impl FramedRow<'_, '_> {
 }
 
 impl<'a> TransactionAudit<'a> {
-    pub fn new(transaction: &'a ShieldedTransaction, frame: impl Into<AuditFrame>) -> Self {
+    pub fn new(transaction: &'a ShieldedTransaction, layout: AuditStreamLayout) -> Self {
         Self {
             transaction,
-            frame: frame.into(),
+            layout,
             input_trees: None,
-            escrowed_keys: None,
         }
-    }
-
-    /// Read only on a historical key-escrow frame.
-    pub fn with_escrowed_keys(mut self, keys: &'a dyn EscrowedKeys) -> Self {
-        self.escrowed_keys = Some(keys);
-        self
     }
 
     /// Every input commitment binds its tree id.
@@ -145,33 +107,10 @@ impl<'a> TransactionAudit<'a> {
         Ok(self)
     }
 
-    /// `assets` names mints on a historical frame alone.
-    pub fn run(
-        self,
-        auditor: &X25519Keypair,
-        assets: &RingAssets,
-    ) -> Result<AuditedTransaction, AuditError> {
-        match self.frame {
-            AuditFrame::Records(layout) => self.records(layout, auditor),
-            AuditFrame::Historical(layout) => historical::HistoricalAudit {
-                tx: self.transaction,
-                layout,
-                input_trees: self.input_trees,
-                auditor,
-                assets,
-                escrowed: self.escrowed_keys,
-            }
-            .run(),
-        }
-    }
-
     /// Reads no mint registry or earlier note.
-    fn records(
-        self,
-        layout: AuditStreamLayout,
-        auditor: &X25519Keypair,
-    ) -> Result<AuditedTransaction, AuditError> {
+    pub fn run(self, auditor: &X25519Keypair) -> Result<AuditedTransaction, AuditError> {
         let tx = self.transaction;
+        let layout = self.layout;
         let tx_viewing_pk = tx.tx_viewing_pk.ok_or(AuditError::MissingTxViewingPk)?;
         let salt = tx.salt.ok_or(AuditError::MissingSalt)?;
         let ring = tx.ring_program_id.ok_or(AuditError::MissingRingProgram)?;
@@ -193,7 +132,6 @@ impl<'a> TransactionAudit<'a> {
         }
         let transfer = Transfer::new(ring, first_nullifier, tx_key, &salt)?;
         let mut audited = AuditedTransaction {
-            awaiting_key: Vec::new(),
             tx_signature: tx.tx_signature,
             slot: tx.slot,
             tx_viewing_pk,
@@ -455,6 +393,3 @@ impl AuditedTransaction {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

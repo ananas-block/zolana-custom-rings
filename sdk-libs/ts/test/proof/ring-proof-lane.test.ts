@@ -1,3 +1,4 @@
+import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -465,21 +466,47 @@ describe("tracking predicates", () => {
   });
 
   it("holds an output to the rule of its key", () => {
-    const output = (key: Bytes32): ProofOutputUtxo =>
+    const output = (key: Bytes32, viewingU = fill(4)): ProofOutputUtxo =>
       ({
         ownerAddress: {
           nullifierPublicKey: key,
           signingPublicKey: { ownerProofInputHash: () => fill(1) },
+          viewingPublicKey: { u: () => viewingU },
         },
       }) as unknown as ProofOutputUtxo;
-    checkOutputKeys([output(fill(9)), undefined], () => row(fill(9)));
-    checkOutputKeys([output(zero)], () => undefined);
-    expect(refusal(() => checkOutputKeys([output(zero)], () => row(fill(9)))).code).toBe(
+    const checked = (
+      outputs: readonly (ProofOutputUtxo | undefined)[],
+      served: TrackingRecord | undefined,
+      spenders: readonly ShieldedPublicKey[] = [],
+    ) => checkOutputKeys({ outputs, rowOf: () => served, spenders });
+    checked([output(fill(9)), undefined], row(fill(9)));
+    checked([output(zero)], undefined);
+    expect(refusal(() => checked([output(zero)], row(fill(9)))).code).toBe(
       "RING_RECIPIENT_ENROLLED",
     );
-    expect(refusal(() => checkOutputKeys([output(fill(9))], () => undefined)).code).toBe(
+    expect(refusal(() => checked([output(fill(9))], undefined)).code).toBe(
       "RING_RECIPIENT_NOT_ENROLLED",
     );
+  });
+
+  it("refuses a recipient address sealing to a viewing key the row retired", () => {
+    const spender = {} as ShieldedPublicKey;
+    const output = {
+      ownerAddress: {
+        nullifierPublicKey: fill(9),
+        signingPublicKey: {
+          ownerProofInputHash: () => fill(1),
+          equals: (other: unknown) => other === spender,
+        },
+        viewingPublicKey: { u: () => fill(8) },
+      },
+    } as unknown as ProofOutputUtxo;
+    const stale = refusal(() =>
+      checkOutputKeys({ outputs: [output], rowOf: () => row(fill(9)), spenders: [] }),
+    );
+    expect(stale.code).toBe("RING_RECIPIENT_VIEWING_KEY_STALE");
+    expect(stale.details).toMatchObject({ rowRevision: "1" });
+    checkOutputKeys({ outputs: [output], rowOf: () => row(fill(9)), spenders: [spender] });
   });
 });
 

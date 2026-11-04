@@ -255,9 +255,9 @@ export class ViewingKeyHolder {
       return frames.map((frame) =>
         frame.probes.map((probe) => {
           const secret = agreements.slotSecret(frame, probe.outputIndex);
-          const tag = probe.kind === "recipient" ? recipientTag(secret) : bundleTag(secret);
-          // A historical frame publishes the whole tag.
-          if (equalBytes(tag, probe.tag) || equalBytes(slotTag(tag), probe.tag)) return secret;
+          const tag =
+            probe.kind === "recipient" ? slotTag(recipientTag(secret)) : bundleTag(secret);
+          if (equalBytes(tag, probe.tag)) return secret;
           secret.fill(0);
           return undefined;
         }),

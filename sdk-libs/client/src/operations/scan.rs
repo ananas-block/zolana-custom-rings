@@ -14,7 +14,6 @@ use spr_client::{
 };
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use spr_transaction::ShieldedTransaction;
-use zolana_ring_transaction::RingAssets;
 
 use crate::{
     decrypt::TransactionAudit,
@@ -279,7 +278,6 @@ impl RingScan {
         auditor: &X25519Keypair,
         indexer: &I,
         origin: &O,
-        assets: &RingAssets,
     ) -> Result<AuditedPage, AuditError> {
         self.auditor_key = auditor.pubkey();
         let mode = self.mode;
@@ -291,7 +289,7 @@ impl RingScan {
                 let trees = confirmed.event.input_tree_ids(transaction);
                 TransactionAudit::new(transaction, frame)
                     .with_input_trees(&trees)?
-                    .run(auditor, assets)
+                    .run(auditor)
             });
             match opened {
                 Ok(audited) => transactions.push(audited),

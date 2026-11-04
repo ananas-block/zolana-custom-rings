@@ -45,13 +45,6 @@ import { RowOrigins } from "./row-origins.js";
 export type RingMergeAuditReader = KitRpcAccess &
   Pick<IndexerReader, "getShieldedTransactionsByTags">;
 
-/** A merge row of tag 47 or 18, the historical reader owns it. */
-export interface HistoricalMergeRow {
-  readonly slot: bigint;
-  readonly signature: Signature;
-  readonly eventIndex: number;
-}
-
 /** `Observed` of a merge nullifier, padding is known from the seed alone. */
 export type MergeNullifierClass =
   | Readonly<{ kind: "padding" }>
@@ -76,7 +69,6 @@ export interface OpenedRingMerge {
 
 export interface RingMergeAuditPage {
   readonly merges: readonly OpenedRingMerge[];
-  readonly historical: readonly HistoricalMergeRow[];
   /** Rows that do not decode or fail their record, each opens nothing. */
   readonly skipped: readonly SkippedRingTransaction[];
   /** Set only when the page cap stopped the history scan. */
@@ -105,7 +97,6 @@ export async function auditRingMerges(
     context,
   );
   const merges: OpenedRingMerge[] = [];
-  const historical: HistoricalMergeRow[] = [];
   const seen = new Set<string>();
   const { nextCursor } = await readRingHistory(
     {
@@ -117,16 +108,6 @@ export async function auditRingMerges(
     },
     (confirmed, eventIndex) => {
       const { transaction } = confirmed;
-      if (confirmed.kind === "historicalMerge" || confirmed.kind === "historicalMergeV3") {
-        historical.push(
-          Object.freeze({
-            slot: transaction.slot,
-            signature: transaction.txSignature,
-            eventIndex,
-          }),
-        );
-        return;
-      }
       if (confirmed.kind !== "merge") return;
       const event = `${transaction.txSignature}:${String(eventIndex)}`;
       if (seen.has(event))
@@ -148,7 +129,6 @@ export async function auditRingMerges(
   );
   return Object.freeze({
     merges: Object.freeze(merges),
-    historical: Object.freeze(historical),
     skipped: Object.freeze(rows.skipped),
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });

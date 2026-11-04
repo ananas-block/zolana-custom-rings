@@ -307,20 +307,3 @@ fn evidence_outside_the_field_is_refused() {
     let sealed = raw_envelope(&plaintext(entry_evidence()), &auditor);
     assert!(opened_envelope(&sealed, &auditor, entry_layout()).is_ok());
 }
-
-#[test]
-fn the_merge_pad_masks_every_field_and_unmasks_to_the_plaintext() {
-    let pad = DisclosurePad::keyed(&field(1), &[2; 32], &[3; 16]).unwrap();
-    let plaintext = [field(4), field(5)];
-    let published = pad.encrypt(&plaintext).unwrap();
-    assert_ne!(published[0], plaintext[0]);
-    assert_ne!(
-        published[0], published[1],
-        "each index draws its own pad value"
-    );
-    assert_eq!(pad.decrypt(&published).unwrap(), plaintext);
-    assert!(matches!(
-        pad.encrypt(&[BN254_SCALAR_MODULUS_BE]),
-        Err(AuditError::DisclosureField)
-    ));
-}

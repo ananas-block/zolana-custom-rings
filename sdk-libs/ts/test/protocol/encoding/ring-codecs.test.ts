@@ -657,16 +657,9 @@ describe("ring audited merges", () => {
       asset: getAddressDecoder().decode(assetField(SOL_MINT)),
       mint: SOL_MINT,
       amount: 7,
-      inputCommitments: [addressOf(7), addressOf(8)],
+      realNullifiers: [addressOf(7), addressOf(8)],
     };
-    const unresolved = {
-      slot: 9,
-      txSignature: signatureOf(10),
-      eventIndex: 3,
-      outputCommitment: addressOf(11),
-      inputCommitments: [addressOf(12)],
-    };
-    const value = { opened: [opened], unresolved: [unresolved], cursor: "AQIE" };
+    const value = { opened: [opened], cursor: "AQIE" };
     const merges = (body: unknown) => rpcWith({ context: { slot: 9, blockTime: 10 }, value: body });
     const reader = messageSignerReader(await generateKeyPairSigner());
     const page = await merges(value).getAuditedMerges({
@@ -687,17 +680,7 @@ describe("ring audited merges", () => {
         asset: assetField(SOL_MINT),
         mint: SOL_MINT,
         amount: 7n,
-        inputCommitments: [filled(7, 32), filled(8, 32)],
-        realNullifiers: [],
-      },
-    ]);
-    expect(page.unresolved).toEqual([
-      {
-        slot: 9n,
-        signature: signatureOf(10),
-        eventIndex: 3,
-        outputCommitment: filled(11, 32),
-        inputCommitments: [filled(12, 32)],
+        realNullifiers: [filled(7, 32), filled(8, 32)],
       },
     ]);
     await expect(
@@ -708,36 +691,33 @@ describe("ring audited merges", () => {
       }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
     await expect(
-      merges(value).getAuditedMerges({ target: RING_TARGET, signer: reader, limit: 1n }),
+      merges({ ...value, opened: [opened, opened] }).getAuditedMerges({
+        target: RING_TARGET,
+        signer: reader,
+        limit: 1n,
+      }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
-    const { mint: _mint, ...unnamed } = opened;
-    const unknownAsset = await merges({ ...value, opened: [unnamed] }).getAuditedMerges({
-      target: RING_TARGET,
-      signer: reader,
-    });
-    expect(unknownAsset.opened[0]?.mint).toBeUndefined();
     // The program accepts a one-input merge.
     const single = await merges({
       ...value,
-      opened: [{ ...opened, inputCommitments: [addressOf(7)] }],
+      opened: [{ ...opened, realNullifiers: [addressOf(7)] }],
     }).getAuditedMerges({ target: RING_TARGET, signer: reader });
-    expect(single.opened[0]?.inputCommitments).toEqual([filled(7, 32)]);
-    const { inputCommitments: _inputCommitments, ...uncommitted } = opened;
-    const { inputCommitments: _unresolvedCommitments, ...unresolvedUncommitted } = unresolved;
+    expect(single.opened[0]?.realNullifiers).toEqual([filled(7, 32)]);
+    const { mint: _mint, ...unnamed } = opened;
     for (const bad of [
-      { ...value, opened: [uncommitted] },
-      { ...value, unresolved: [unresolvedUncommitted] },
+      { ...value, opened: [unnamed] },
+      { ...value, unresolved: [] },
       { ...value, opened: [{ ...opened, inputCommitments: [] }] },
       {
         ...value,
         opened: [
           {
             ...opened,
-            inputCommitments: Array.from({ length: MAX_MERGE_INPUTS + 1 }, () => addressOf(7)),
+            realNullifiers: Array.from({ length: MAX_MERGE_INPUTS + 1 }, () => addressOf(7)),
           },
         ],
       },
-      { ...value, opened: [{ ...opened, inputCommitments: [addressOf(255)] }] },
+      { ...value, opened: [{ ...opened, realNullifiers: [addressOf(255)] }] },
       { ...value, opened: [{ ...opened, eventIndex: 65536 }] },
       { ...value, opened: [{ ...opened, asset: addressOf(255) }] },
       { ...value, opened: [{ ...opened, mint: addressOf(12) }] },

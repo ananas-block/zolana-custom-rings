@@ -189,12 +189,14 @@ serde_via_str!(ListName);
 
 impl ListName {
     /// The authority-written lists in `ListId::ALL` order, a lib test pins the set.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self(ListId::Allow),
         Self(ListId::Block),
         Self(ListId::Frozen),
+        Self(ListId::PrivateBlock),
         Self(ListId::Reader),
         Self(ListId::Approval),
+        Self(ListId::PrivateAllow),
     ];
     /// The lists a rule reads in `ListId::ALL` order, a lib test pins the set.
     pub const POLICY: [Self; 6] = [
@@ -651,14 +653,22 @@ mod tests {
     fn list_names_are_the_authority_written_lists_in_slot_order() {
         assert_eq!(
             ListName::ALL.map(ListName::as_str),
-            ["allow", "block", "frozen", "reader", "approval"]
+            [
+                "allow",
+                "block",
+                "frozen",
+                "private-block",
+                "reader",
+                "approval",
+                "private-allow"
+            ]
         );
         for name in ListName::ALL {
             assert_eq!(name.as_str().parse::<ListName>(), Ok(name));
         }
         assert!(matches!(
-            "escrow".parse::<ListName>(),
-            Err(PolicyError::MemberWrittenList { name }) if name == "escrow"
+            "ring-viewing".parse::<ListName>(),
+            Err(PolicyError::MemberWrittenList { name }) if name == "ring-viewing"
         ));
         assert!(matches!(
             "Allow".parse::<ListName>(),
@@ -858,9 +868,9 @@ limits = [
         assert!(both
             .to_string()
             .contains(&PolicyError::SeveralSourceForms.to_string()));
-        let unknown = spec("[[rules]]\nsubject = \"sender\"\nrequire = \"escrow\"\n")
-            .expect_err("member-written list");
-        assert!(unknown.to_string().contains("written by its members"));
+        let unknown = spec("[[rules]]\nsubject = \"sender\"\nrequire = \"nope\"\n")
+            .expect_err("unknown list");
+        assert!(unknown.to_string().contains("unknown list nope"));
         let subject = spec("[[rules]]\nsubject = \"owner\"\nrequire = \"allow\"\n")
             .expect_err("unknown subject");
         assert!(subject.to_string().contains("unknown subject owner"));

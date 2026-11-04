@@ -1,10 +1,12 @@
 //! Each owner's outflow of the transfer a co-signer signs, read from the frame and the note index.
 
 use custom_ring_interface::{
-    ring_deposit_assets, settlement_mints, tag, DepositPrefix, InstructionTag, ParsedTransact,
-    RingRail, RingTransactData, RING_DEPOSIT_RING_CONFIG_INDEX, RING_TRANSACT_RING_CONFIG_INDEX,
+    frame_digest, ring_deposit_assets, settlement_mints, tag, DepositPrefix, FrameBuffer,
+    InstructionTag, ParsedTransact, RingRail, RingTransactData, RING_DEPOSIT_RING_CONFIG_INDEX,
+    RING_TRANSACT_RING_CONFIG_INDEX,
 };
 use custom_ring_sdk::CustomRing;
+use solana_account::Account;
 use solana_address::Address;
 use solana_message::VersionedMessage;
 use spr_hasher::primitives::hash_bytes;
@@ -73,6 +75,19 @@ const fn scope() -> RingRpcError {
 impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
     pub async fn flows(self) -> Result<FrameRead, RingRpcError> {
         let frame = RingFrame::of(self.message, self.ring)?;
+        let held = match frame.tag {
+            tag::SETTLE_BUFFERED => {
+                let buffer = *frame.accounts.first().ok_or_else(scope)?;
+                let source = &self.shared.source;
+                let held = source.account(buffer).await.map_err(|_| unavailable())?;
+                Some(held.ok_or_else(unavailable)?)
+            }
+            _ => None,
+        };
+        let frame = match &held {
+            Some(account) => frame.settled_from(account, self.ring)?,
+            None => frame,
+        };
         let co_signers = frame.co_signers(self.ring);
         Ok(match self.read(frame).await? {
             FrameRead::Transfer(read) => FrameRead::Transfer(TransferRead { co_signers, ..read }),
@@ -115,7 +130,7 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
         .row()
         .map_err(|_| unavailable())?;
         let audited = TransactionAudit::new(&row, parsed.audit_stream())
-            .run(service.auditor_keypair(), &assets)
+            .run(service.auditor_keypair())
             .map_err(|_| unavailable())?;
         let public = public_flows(&parsed, spp)?;
         let window = settlement_accounts(
@@ -169,7 +184,10 @@ impl<'m> RingFrame<'m> {
         let instruction = holding.ok_or_else(scope)?;
         let (tag, data) = instruction.data.split_first().ok_or_else(scope)?;
         if key(instruction.program_id_index)? != ring
-            || !matches!(*tag, tag::TRANSFER | tag::AUTHORITY_TRANSFER | tag::DEPOSIT)
+            || !matches!(
+                *tag,
+                tag::TRANSFER | tag::AUTHORITY_TRANSFER | tag::DEPOSIT | tag::SETTLE_BUFFERED
+            )
         {
             return Err(scope());
         }
@@ -183,6 +201,32 @@ impl<'m> RingFrame<'m> {
             data,
             accounts,
         })
+    }
+
+    /// The inline frame a settlement signs by digest, a buffer rewritten since refuses.
+    fn settled_from<'b>(
+        self,
+        buffer: &'b Account,
+        ring: Address,
+    ) -> Result<RingFrame<'b>, RingRpcError>
+    where
+        'm: 'b,
+    {
+        let [_, _, inner @ ..] = self.accounts.as_slice() else {
+            return Err(scope());
+        };
+        let frame = FrameBuffer::of(&buffer.data).map_err(|_| scope())?.frame();
+        if buffer.owner != ring || frame_digest(frame).map_err(|_| scope())? != *self.data {
+            return Err(scope());
+        }
+        match frame.split_first() {
+            Some((&tag::TRANSFER, data)) => Ok(RingFrame {
+                tag: tag::TRANSFER,
+                data,
+                accounts: inner.to_vec(),
+            }),
+            _ => Err(scope()),
+        }
     }
 
     /// `[record, signer]` pairs in account order.
@@ -521,6 +565,54 @@ mod tests {
             ComputeBudgetConfig::new(1),
         )
         .expect("message")
+    }
+
+    /// A co-signer signs the digest of the bytes it read, a buffer rewritten since refuses.
+    #[test]
+    fn a_settlement_reads_the_buffer_it_signed_and_a_rewritten_one_refuses() {
+        use custom_ring_interface::{
+            frame_digest, settle_buffered_data, FrameBufferHeader, FRAME_BUFFER_HEADER_LEN,
+        };
+        let writer = Address::new_from_array([3; 32]);
+        let buffer = Address::new_from_array([4; 32]);
+        let spp = Address::new_from_array([5; 32]);
+        let frame = [tag::TRANSFER, 1, 2, 3];
+        let settle = Instruction {
+            program_id: RING,
+            accounts: vec![
+                AccountMeta::new(buffer, false),
+                AccountMeta::new_readonly(RING, false),
+                AccountMeta::new_readonly(spp, false),
+            ],
+            data: settle_buffered_data(&frame_digest(&frame).unwrap()),
+        };
+        let message = message(&[settle]);
+        let held = |frame: &[u8], owner| Account {
+            owner,
+            data: [bytemuck::bytes_of(&FrameBufferHeader::new(writer)), frame].concat(),
+            ..Account::default()
+        };
+        assert_eq!(FRAME_BUFFER_HEADER_LEN, held(&[], RING).data.len());
+        let signed = held(&frame, RING);
+        let read = RingFrame::of(&message, RING)
+            .unwrap()
+            .settled_from(&signed, RING)
+            .unwrap();
+        assert_eq!((read.tag, read.data), (tag::TRANSFER, &frame[1..]));
+        assert_eq!(read.accounts, [spp]);
+
+        for refused in [
+            held(&[tag::TRANSFER, 1, 2, 9], RING),
+            held(&frame, Address::new_from_array([6; 32])),
+        ] {
+            assert!(matches!(
+                RingFrame::of(&message, RING)
+                    .unwrap()
+                    .settled_from(&refused, RING)
+                    .err(),
+                Some(RingRpcError::CoSign(CoSignError::MessageScope))
+            ));
+        }
     }
 
     fn refuses_scope(instructions: &[Instruction]) {

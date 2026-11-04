@@ -761,12 +761,10 @@ impl AuditLookup<'_> {
         custom_ring_cli::wait_for_indexed_transaction(&env.client, self.signature)?;
         let client = env.client.as_async();
         env.client
-            .block_on(self.scan.audit(
-                self.auditor,
-                client.indexer(),
-                client.rpc(),
-                &env.ring_assets()?,
-            ))?
+            .block_on(
+                self.scan
+                    .audit(self.auditor, client.indexer(), client.rpc()),
+            )?
             .transactions
             .into_iter()
             .find(|tx| tx.tx_signature == self.signature)

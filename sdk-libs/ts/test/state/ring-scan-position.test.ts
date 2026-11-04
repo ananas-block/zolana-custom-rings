@@ -1,3 +1,4 @@
+import { encodeRingBodyOutput } from "../../src/protocol/transaction/output.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -12,9 +13,8 @@ import {
   Wallet,
 } from "@heliuslabs/zolana/transaction";
 
-import { recipientTag, txKeySlotSecret } from "../../src/crypto/derivation/ring-stream.js";
+import { recipientTag, txKeySlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
 import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
-import { encodeRingOutput, RingScheme } from "../../src/protocol/transaction/output.js";
 
 import { AnonymousSync } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
@@ -66,11 +66,11 @@ function unknownMintPayment(indexer: ScanIndexer, reader: ScanWallet, mint: Addr
     salt,
     outputSlots: [
       {
-        viewTag: recipientTag(secret()),
+        viewTag: slotTag(recipientTag(secret())),
         outputContext: { hash: utxoHash, tree: TREE, treeId: TREE_ID, leafIndex: 0n },
-        payload: encodeRingOutput(
-          RingScheme.ringRecipientBody,
+        payload: encodeRingBodyOutput(
           sealRecipientBody(secret(), { blinding, amount: 7n, mint }),
+          new Uint8Array(),
         ),
       },
     ],

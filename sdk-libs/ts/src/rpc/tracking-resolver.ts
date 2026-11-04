@@ -64,6 +64,10 @@ export async function resolveRingRecipient(
     throw new RingError("RING_ADDRESS_MISMATCH", { details: { field: "nullifierPk" } });
   if (!equalBytes(row.listTag, listTagOf(to.listSalt)))
     throw new RingError("RING_ADDRESS_MISMATCH", { details: { field: "listSalt" } });
+  if (!equalBytes(row.viewingU, to.recipient.viewingPublicKey.u()))
+    throw new RingError("RING_RECIPIENT_VIEWING_KEY_STALE", {
+      details: { rowRevision: row.revision.toString() },
+    });
   return Object.freeze({
     kind: "enrolled",
     root,

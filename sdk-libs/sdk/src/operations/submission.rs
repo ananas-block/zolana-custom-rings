@@ -613,6 +613,38 @@ async fn outcome(
         .unwrap_or(Outcome::Failed(TransactionError::BlockhashNotFound)))
 }
 
+/// One transaction to its end, nothing proves again.
+pub(crate) async fn send_and_settle(
+    client: &(impl AsyncRpc + ?Sized),
+    transaction: &VersionedTransaction,
+    last_valid_block_height: u64,
+) -> Result<SettledSubmission, RingError> {
+    let signature = transaction.signatures[0];
+    let config = RpcSendTransactionConfig {
+        preflight_commitment: Some(CommitmentLevel::Confirmed),
+        ..RpcSendTransactionConfig::default()
+    };
+    if let Some(error) = client
+        .send_transaction_with_config(transaction, config)
+        .await
+        .err()
+        .and_then(transaction_error)
+    {
+        return Ok(SettledSubmission::Failed { signature, error });
+    }
+    loop {
+        match outcome(client, signature, last_valid_block_height).await? {
+            Outcome::Unknown => tokio::time::sleep(PENDING_POLL).await,
+            Outcome::Confirmed { slot } => {
+                return Ok(SettledSubmission::Confirmed { signature, slot })
+            }
+            Outcome::Failed(error) | Outcome::Stale(error) => {
+                return Ok(SettledSubmission::Failed { signature, error })
+            }
+        }
+    }
+}
+
 /// `None` for a signature the cluster does not know.
 async fn observe(
     client: &(impl AsyncRpc + ?Sized),

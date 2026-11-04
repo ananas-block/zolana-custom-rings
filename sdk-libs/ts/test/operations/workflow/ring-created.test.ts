@@ -15,14 +15,12 @@ import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { ShieldedKeypair, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
-import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
 import {
   createdRingUtxos,
   scanCreatedRingUtxos,
 } from "../../../src/operations/workflow/created-utxos.js";
 import { RecordKind } from "../../../src/protocol/codec/audit-stream.js";
 import { sealRingDepositOpenings } from "../../../src/proof/deposit-audit.js";
-import { sealRingMergeDisclosure } from "../../../src/protocol/historical/v3/merge-disclosure.js";
 import {
   ConfirmedDeposit,
   type TransactionOrigin,
@@ -285,7 +283,7 @@ describe("createdRingUtxos", () => {
     }
   });
 
-  it("opens no note of a merge with or without its disclosure and none of a historical row", () => {
+  it("opens no note of a merge", () => {
     const auditor = X25519Keypair.generate();
     const owner = ShieldedKeypair.generate();
     const nullifiers = [field(7n), field(8n)];
@@ -300,14 +298,6 @@ describe("createdRingUtxos", () => {
       ringDataHash,
       ringProgramId: RING,
     });
-    const sealed = sealRingMergeDisclosure(
-      Array.from({ length: 8 }, (_, index) =>
-        index < nullifiers.length ? field(20n + BigInt(index)) : ZERO,
-      ),
-      salt,
-      auditor.publicKey(),
-    );
-    try {
       const merge = transaction({
         outputSlots: [
           {
@@ -327,39 +317,16 @@ describe("createdRingUtxos", () => {
         nullifiers,
         proofless: false,
       });
-      const disclosure = {
-        ...sealed.disclosure,
-        proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-      };
-      for (const confirmed of [
-        { kind: "historicalMergeV3", transaction: merge, disclosure },
-        {
-          kind: "merge",
-          transaction: merge,
-          sealedRecord: {
-            ephemeralPublicKey: new Uint8Array(33) as Bytes33,
-            ciphertext: new Uint8Array(144),
-          },
-          authority: 0,
+      const confirmed = {
+        kind: "merge",
+        transaction: merge,
+        sealedRecord: {
+          ephemeralPublicKey: new Uint8Array(33) as Bytes33,
+          ciphertext: new Uint8Array(144),
         },
-        {
-          kind: "historicalMerge",
-          transaction: merge,
-          instruction: Uint8Array.of(20),
-        },
-        {
-          kind: "historicalTransfer",
-          transaction: merge,
-          inputTreeIds: [undefined, undefined],
-          instruction: Uint8Array.of(43),
-          sppAnonymous: false,
-        },
-      ] as const)
-        expect(createdRingUtxos({ confirmed, ringProgramId: RING, auditor })).toEqual([]);
-    } finally {
-      sealed.ephemeralSecret.fill(0);
-      sealed.disclosureKey.fill(0);
+        authority: 0,
+      } as const;
+      expect(createdRingUtxos({ confirmed, ringProgramId: RING, auditor })).toEqual([]);
       auditor.destroy();
-    }
   });
 });

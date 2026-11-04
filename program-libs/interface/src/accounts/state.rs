@@ -102,7 +102,6 @@ macro_rules! ring_accounts {
 }
 
 // Discriminator zero marks an uninitialized account.
-// Discriminators 1 to 13 are retired, never reuse them.
 ring_accounts! {
     RingPolicy = RING_POLICY: 15, RING_POLICY_PDA_SEED: b"policy",
         InvalidRingPolicy, RingPolicyAlreadyExists, InvalidRingPolicy,
@@ -111,6 +110,9 @@ ring_accounts! {
         InvalidCoSignerRecord, CoSignerRecordAlreadyExists, InvalidCoSignerRecord,
         |record: &CoSigner| record.scope().is_some() && record.signer != Address::default();
 }
+
+/// A variable length account, outside the table.
+pub const FRAME_BUFFER: u8 = 16;
 
 macro_rules! le_getters {
     ($($ty:ident { $($field:ident: $int:ty),* })*) => {$(
@@ -191,7 +193,6 @@ impl RingRoles {
     }
 }
 
-/// Byte 1 is retired, never reuse it.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RingMode {

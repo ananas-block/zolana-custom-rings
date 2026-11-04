@@ -3,7 +3,6 @@
 mod anonymous_rail;
 mod assets;
 mod error;
-pub mod historical;
 mod published;
 mod recipient_delivery;
 mod ring_delivered;

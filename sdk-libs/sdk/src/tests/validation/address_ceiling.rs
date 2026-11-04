@@ -68,7 +68,7 @@ fn decide_under(
 fn a_transaction_at_the_ceiling_stays_one_transaction() {
     let inputs: Vec<_> = (0..10).map(|seed| note(1, seed)).collect();
     let other = LIMIT as u32 - 2 - 10;
-    let Ok(CeilingDecision::UnderCeiling(size)) = decide(&inputs, other) else {
+    let Ok(CeilingDecision::Inline(size)) = decide(&inputs, other) else {
         panic!("under the ceiling");
     };
     assert_eq!(size.addresses, LIMIT);
@@ -296,3 +296,45 @@ async fn a_zero_key_group_splits_at_the_zero_key_capacity() {
 
 /// Inputs a zero-key merge carries in one v1 transaction, measured here.
 const WIDEST_ZERO_KEY_MERGE: usize = 44;
+
+fn decide_frame(frame_len: usize) -> Result<CeilingDecision, AddressCeilingError> {
+    let mut data = vec![0; frame_len];
+    data[0] = custom_ring_interface::tag::TRANSFER;
+    AddressCeiling {
+        payer: address(1),
+        instruction: &Instruction {
+            program_id: address(2),
+            accounts: vec![AccountMeta::new(address(1), true)],
+            data,
+        },
+        budget: ComputeBudgetConfig::new(1_000_000),
+        inputs: &[],
+        merge_capacity: MergeCapacity {
+            keyed: 45,
+            zero_key: 45,
+        },
+    }
+    .decide()
+}
+
+#[test]
+fn past_the_byte_ceiling_a_frame_goes_buffered_and_past_the_cpi_limit_it_is_refused() {
+    use custom_ring_interface::MAX_FRAME_LEN;
+    assert!(matches!(
+        decide_frame(1000),
+        Ok(CeilingDecision::Inline(size)) if size.bytes < v1::MAX_TRANSACTION_SIZE
+    ));
+    assert!(matches!(
+        decide_frame(v1::MAX_TRANSACTION_SIZE),
+        Ok(CeilingDecision::Buffered(size)) if size.bytes < v1::MAX_TRANSACTION_SIZE
+    ));
+    assert!(matches!(
+        decide_frame(MAX_FRAME_LEN),
+        Ok(CeilingDecision::Buffered(_))
+    ));
+    assert!(matches!(
+        decide_frame(MAX_FRAME_LEN + 1),
+        Err(AddressCeilingError::FrameTooLarge { bytes, limit: MAX_FRAME_LEN })
+            if bytes == MAX_FRAME_LEN + 1
+    ));
+}

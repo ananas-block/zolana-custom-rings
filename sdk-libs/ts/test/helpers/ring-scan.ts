@@ -352,7 +352,7 @@ export function depositRow(
         ciphertext: new Uint8Array(RING_DEPOSIT_OPENING_LENGTH),
         recipientCiphertext,
       })
-    : new TextEncoder().encode("CRDEP001");
+    : new TextEncoder().encode("NOTACAPS");
   const amount = new Uint8Array(8);
   new DataView(amount.buffer).setBigUint64(0, 25n, true);
   const length = new Uint8Array(4);

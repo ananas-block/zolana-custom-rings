@@ -64,9 +64,9 @@ fn decode_needs_the_owner_the_length_and_the_discriminator() {
     let other = Address::new_from_array([8; 32]);
     assert_eq!(RingPolicy::decode(&other, &PROGRAM, &bytes), None);
     assert_eq!(RingPolicy::decode(&PROGRAM, &PROGRAM, &bytes[1..]), None);
-    for retired in [10, 13] {
+    for unknown in [10, 13] {
         let mut stale = bytes.clone();
-        stale[0] = retired;
+        stale[0] = unknown;
         assert_eq!(RingPolicy::decode(&PROGRAM, &PROGRAM, &stale), None);
     }
 }

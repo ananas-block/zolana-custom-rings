@@ -95,7 +95,6 @@ impl ReadScope {
         if let Self::Wallet(scope) = self {
             page.opened
                 .retain(|merge| merge.owner_key.0 == scope.wallet);
-            page.unresolved.clear();
         }
     }
 

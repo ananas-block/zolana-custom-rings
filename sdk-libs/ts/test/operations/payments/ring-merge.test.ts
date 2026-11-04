@@ -24,7 +24,6 @@ import {
   compressG2,
   hashBytes,
   encodeMergeTransactInstructionData,
-  Reader,
   addressBytes,
   treeAddress,
   mergeDummyNullifier,
@@ -97,6 +96,8 @@ import { OPENING_RECORD_LEN } from "../../../src/protocol/codec/ring-disclosure-
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 /** Rust `WIDEST_MERGE`, the keyed merge one v1 transaction carries. */
 const WIDEST_MERGE = 45;
+/** Rust `WIDEST_ZERO_KEY_MERGE`, the owner signature and account narrow it. */
+const WIDEST_ZERO_KEY_MERGE = 44;
 /** Pays every merge, the merge circuit refuses the owner as payer. */
 const RELAYER = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
 function field(value: number): Bytes32 {
@@ -281,6 +282,32 @@ function remote(
   };
 }
 
+function zeroKeyWallet(owner: ShieldedKeypair, amounts: readonly bigint[]): Wallet {
+  const utxos = amounts.map((amount) => {
+    const utxo = new Utxo({
+      owner: owner.signingPublicKey(),
+      asset: SOL_MINT,
+      amount,
+      blinding: field(Number(amount)),
+      ringProgramId: RING,
+    });
+    const hash = utxo.proofInput(ZERO_NULLIFIER_PK, 7).hash();
+    return { utxo, hash, nullifier: zeroKeyNullifier(hash, utxo.blinding) };
+  });
+  const wallet = new Wallet({ identity: owner.shieldedAddress(), registry: new AssetRegistry() });
+  wallet._replace({
+    utxos: utxos.map(({ utxo, hash, nullifier }, index) => ({
+      utxo,
+      outputContext: { hash, tree: treeAddress(7), treeId: 7, leafIndex: BigInt(index) },
+      nullifier,
+      spent: false,
+    })),
+    transactions: [],
+    nullifiers: new Set(),
+  });
+  return wallet;
+}
+
 async function ringMergeParams({
   proveMerge,
   wallet,
@@ -455,29 +482,36 @@ describe("ring merge", () => {
     }
   });
 
+  it("trims a zero-key merge to its narrower width, Rust `WIDEST_ZERO_KEY_MERGE`", async () => {
+    const owner = ShieldedKeypair.generate();
+    const wallet = zeroKeyWallet(
+      owner,
+      Array.from({ length: 52 }, (_, index) => BigInt(index + 1)),
+    );
+    const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared }) => {
+      const data = provenMerge(prepared);
+      return { data, outputHash: data.outputUtxoHash };
+    });
+    const params = await ringMergeParams({
+      proveMerge,
+      wallet,
+      keys: walletKeys(owner),
+      proofDataSource: "client",
+      anonymous: false,
+      enrolled: "none",
+    });
+    const transaction = await buildRingMergeTransaction({
+      ...params,
+      mergeZeroKey: true,
+      maxInputs: 52,
+    });
+    expect(getTransactionSize(transaction)).toBeLessThanOrEqual(4096);
+    const [reservation] = wallet._reservationEntries();
+    expect(reservation?.utxoHashes).toHaveLength(WIDEST_ZERO_KEY_MERGE);
+  });
+
   it("publishes the owner of a zero-key merge under a zero root and reads no row", async () => {
-    const utxos = [3n, 5n].map((amount) => {
-      const utxo = new Utxo({
-        owner: owner.signingPublicKey(),
-        asset: SOL_MINT,
-        amount,
-        blinding: field(Number(amount)),
-        ringProgramId: RING,
-      });
-      const hash = utxo.proofInput(ZERO_NULLIFIER_PK, 7).hash();
-      return { utxo, hash, nullifier: zeroKeyNullifier(hash, utxo.blinding) };
-    });
-    const wallet = new Wallet({ identity: owner.shieldedAddress(), registry: new AssetRegistry() });
-    wallet._replace({
-      utxos: utxos.map(({ utxo, hash, nullifier }, index) => ({
-        utxo,
-        outputContext: { hash, tree: treeAddress(7), treeId: 7, leafIndex: BigInt(index) },
-        nullifier,
-        spent: false,
-      })),
-      transactions: [],
-      nullifiers: new Set(),
-    });
+    const wallet = zeroKeyWallet(owner, [3n, 5n]);
     const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared }) => {
       const data = provenMerge(prepared);
       return { data, outputHash: data.outputUtxoHash };
@@ -582,7 +616,7 @@ describe("ring merge", () => {
     }
   });
 
-  it("fits every input one transaction carries and refuses one more before approval and any proof", async () => {
+  it("trims to the longest prefix one transaction carries, Rust `FittedMerge`", async () => {
     const wallet = ringWallet(Array.from({ length: 52 }, (_, index) => BigInt(index + 1)));
     const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared }) => {
       const data = provenMerge(prepared);
@@ -597,24 +631,16 @@ describe("ring merge", () => {
     });
     const approve = vi.fn(approveUnattended);
     try {
-      await expect(
-        buildRingMergeTransaction({ ...params, maxInputs: WIDEST_MERGE + 1, approve }),
-      ).rejects.toMatchObject({
-        code: "RING_BUILD_MERGE",
-        causeCode: "INTERFACE_TRANSACTION_TOO_LARGE",
-      });
-      expect(proveMerge).not.toHaveBeenCalled();
-      expect(approve).not.toHaveBeenCalled();
-      expect(wallet._reservationEntries()).toHaveLength(0);
       const transaction = await buildRingMergeTransaction({
         ...params,
-        maxInputs: WIDEST_MERGE,
+        maxInputs: WIDEST_MERGE + 1,
         approve,
       });
       expect(getTransactionSize(transaction)).toBeLessThanOrEqual(4096);
       expect(proveMerge).toHaveBeenCalledOnce();
       expect(approve).toHaveBeenCalledOnce();
-      expect(wallet._reservationEntries()).toHaveLength(1);
+      const [reservation] = wallet._reservationEntries();
+      expect(reservation?.utxoHashes).toHaveLength(WIDEST_MERGE);
     } finally {
       local.destroy();
     }

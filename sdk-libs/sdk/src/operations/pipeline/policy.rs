@@ -23,7 +23,9 @@ use super::{
 };
 use crate::{
     limits::Outflows,
-    records::{check_output_key, check_recipient_viewing_key, PoolRead, TrackingPoolRead, TrackingRead},
+    records::{
+        check_output_key, check_recipient_viewing_key, PoolRead, TrackingPoolRead, TrackingRead,
+    },
     request::{
         OwnerEntry, PolicyParams, PolicyTable, PolicyWithdrawalRequest, PoolEntry, RecordPools,
         TrackingParams,

@@ -1613,29 +1613,6 @@ fn an_anonymous_spend_leaves_to_one_destination_that_names_one_key() {
 }
 
 #[test]
-fn legacy_transfer_tags_cannot_select_the_weaker_statements() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    for old in [
-        tag::LEGACY_TRANSACT,
-        tag::LEGACY_DELEGATE_TRANSACT,
-        tag::HISTORICAL_TRANSFER,
-        tag::HISTORICAL_TRANSFER_V3,
-        tag::HISTORICAL_AUTHORITY_TRANSFER,
-        tag::HISTORICAL_AUTHORITY_TRANSFER_V3,
-        tag::HISTORICAL_DEPOSIT,
-        tag::HISTORICAL_MERGE,
-    ] {
-        let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
-        refused(
-            send(&mut ring, old, Vec::new(), data.encode().unwrap(), spp, &[]),
-            CustomRingError::InvalidInstructionData,
-        );
-    }
-}
-
-#[test]
 fn policy_spl_metadata_must_match_the_live_token_owner() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);

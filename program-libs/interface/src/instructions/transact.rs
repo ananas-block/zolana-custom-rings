@@ -116,34 +116,12 @@ impl RingRail {
     }
 
     pub fn of(tag: InstructionTag, mode: RingMode) -> Result<Self, CustomRingError> {
-        use InstructionTag::{
-            AuthorityTransfer, HistoricalAuthorityTransfer, HistoricalAuthorityTransferV3,
-            HistoricalTransfer, HistoricalTransferV3, LegacyDelegateTransact, LegacyTransact,
-            Transfer,
-        };
+        use InstructionTag::{AuthorityTransfer, Transfer};
         match (tag, mode) {
-            (
-                Transfer | HistoricalTransferV3 | HistoricalTransfer | LegacyTransact,
-                RingMode::Anonymous,
-            ) => Ok(Self::Anonymous),
-            (
-                Transfer | HistoricalTransferV3 | HistoricalTransfer | LegacyTransact,
-                RingMode::Confidential,
-            ) => Ok(Self::Confidential),
-            (
-                AuthorityTransfer
-                | HistoricalAuthorityTransferV3
-                | HistoricalAuthorityTransfer
-                | LegacyDelegateTransact,
-                RingMode::Anonymous,
-            ) => Ok(Self::AnonymousDelegate),
-            (
-                AuthorityTransfer
-                | HistoricalAuthorityTransferV3
-                | HistoricalAuthorityTransfer
-                | LegacyDelegateTransact,
-                RingMode::Confidential,
-            ) => Ok(Self::Delegate),
+            (Transfer, RingMode::Anonymous) => Ok(Self::Anonymous),
+            (Transfer, RingMode::Confidential) => Ok(Self::Confidential),
+            (AuthorityTransfer, RingMode::Anonymous) => Ok(Self::AnonymousDelegate),
+            (AuthorityTransfer, RingMode::Confidential) => Ok(Self::Delegate),
             _ => Err(CustomRingError::InvalidInstructionData),
         }
     }

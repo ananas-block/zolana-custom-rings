@@ -9,6 +9,13 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 )
 
+// PackedView is the pack_be of a 32 byte viewing u, seed fills its low bytes.
+func PackedView(seed *big.Int) (view0, view1 *big.Int) {
+	var key [32]byte
+	seed.FillBytes(key[:])
+	return new(big.Int).SetBytes(key[:31]), big.NewInt(int64(key[31]))
+}
+
 type TrackingRecord struct {
 	Member, Next, NullifierPk, CtHash, View0, View1, Revision, ListTag *big.Int
 }
