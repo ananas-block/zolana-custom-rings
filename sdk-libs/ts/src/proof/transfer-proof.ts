@@ -1,7 +1,7 @@
 /** The one ring proof of a transfer, one request over the audit and policy sections. */
 import { hashChain, ZERO_32 } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { randomBlinding, type X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { NO_CACHE_WRITES, type Bytes32, type CacheAccess } from "@heliuslabs/zolana/interface";
+import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import type {
   ProofInputUtxo,
   ProofOutputUtxo,
@@ -90,13 +90,16 @@ export interface TransferApproval {
 }
 
 /**
- * A blinder per attempt, the digest hides the totals only under one. Drawn as 31 bytes, so it stays
- * below the field for every draw and the chain can never reject or reduce it. The outputs and legs
- * read here are the ones sealing keeps, the auditor message changes neither.
+ * The digest over every slot of the selected key, `capacity` its `N`. A compact shape's `m` would
+ * leave the rows short of what the circuit commits. The rail draws the blinder once per attempt,
+ * 31 bytes below the field, the digest hides the totals only under a fresh one.
  */
-export function freshTransferApproval(proofInputs: SppProofInputs): TransferApproval {
-  const totals = approvalTotalsOf(proofInputs, proofInputs.checkShape().outputs);
-  const blinder = randomBlinding();
+export function transferApprovalOf(
+  proofInputs: SppProofInputs,
+  capacity: number,
+  blinder: Bytes32,
+): TransferApproval {
+  const totals = approvalTotalsOf(proofInputs, capacity);
   return Object.freeze({
     digest: totals.commitment(blinder),
     opening: approvalOpeningOf(totals, blinder),
@@ -126,6 +129,16 @@ export function ownerDataCounts(
       details: { reason: "InvalidSignerDataCounts" },
     });
   return counts;
+}
+
+/** The cached selector of the slots a rail marked. Reads alone, a cached write refuses at staging. */
+export function cacheAccessOf(proofInputs: SppProofInputs): CacheAccess | undefined {
+  const readBitmap = proofInputs.inputUtxos.reduce(
+    (bits, input) =>
+      input.cacheSlot === undefined ? bits : bits | (1n << BigInt(input.cacheSlot)),
+    0n,
+  );
+  return readBitmap === 0n ? undefined : Object.freeze({ readBitmap, writeSlots: NO_CACHE_WRITES });
 }
 
 /** Mirror `PrivateTxHash`, no chain folds an empty list. */

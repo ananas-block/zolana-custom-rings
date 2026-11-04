@@ -296,6 +296,7 @@ export const RingProgramError = Object.freeze({
   unsupportedBufferedTag: 8525,
   framePayerNotWriter: 8526,
   invalidSignerDataCounts: 8527,
+  tooManyAnonymousParties: 8528,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

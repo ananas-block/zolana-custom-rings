@@ -248,6 +248,7 @@ export type {
   DelegateTransferClient,
   DelegateTransferInput,
   PreparedRingRelay,
+  ReadCache,
   RingRelayInput,
 } from "../operations/payments/transfer-rails.js";
 export {
@@ -260,7 +261,12 @@ export {
   submittedRelay,
 } from "../rpc/relay.js";
 export type { RelaySent, RingAuthorityRelayClient, RingRelayClient } from "../rpc/relay.js";
-export { CoSignerApproval, type CoSignerApprovalInput } from "../proof/cosign.js";
+export {
+  CoSignerApproval,
+  FunderApproval,
+  type CoSignerApprovalInput,
+  type FunderApprovalInput,
+} from "../proof/cosign.js";
 export type {
   ApprovalOpening,
   OutputTotalsOpening,
@@ -269,12 +275,16 @@ export type {
 export {
   VerifiedRelayMessage,
   decodeApprovalOpening,
+  decodeRelayFunderTerms,
   decodeRelayTransferTerms,
   encodeApprovalOpening,
+  encodeRelayFunderTerms,
   encodeRelayTransferTerms,
   type ApprovalLimit,
   type CoSignerRule,
   type ExactApproval,
+  type FundedLeg,
+  type RelayFunderTerms,
   type RelayTransferTerms,
   type SlotOpening,
   type TokenAccountCreate,

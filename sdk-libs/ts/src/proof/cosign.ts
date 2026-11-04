@@ -20,7 +20,9 @@ import { ApprovalMask } from "../protocol/transaction/transact.js";
 import { PendingRelaySignature } from "../rpc/relay.js";
 import {
   expectedCoSigner,
+  expectedFunder,
   type CoSignerRule,
+  type RelayFunderTerms,
   type TokenAccountCreate,
 } from "../rpc/relay-message.js";
 
@@ -156,6 +158,28 @@ export class CoSignerApproval {
     const { relayId, message } = this.#input;
     return new PendingRelaySignature(relayId, message, await expectedCoSigner(this.#input));
   }
+}
+
+/** A funder's approval, its signature moves the legs it names and nothing else of its, Rust `FunderApproval`. */
+export class FunderApproval {
+  readonly #input: FunderApprovalInput;
+
+  constructor(input: FunderApprovalInput) {
+    this.#input = input;
+    Object.freeze(this);
+  }
+
+  async pending(): Promise<PendingRelaySignature> {
+    const { relayId, message, terms, config } = this.#input;
+    return new PendingRelaySignature(relayId, message, await expectedFunder({ terms, config }));
+  }
+}
+
+export interface FunderApprovalInput {
+  readonly relayId: ConstructorParameters<typeof PendingRelaySignature>[0];
+  readonly message: Uint8Array;
+  readonly terms: RelayFunderTerms;
+  readonly config: Pick<RingPolicy, "mode">;
 }
 
 export interface CoSignerApprovalInput {

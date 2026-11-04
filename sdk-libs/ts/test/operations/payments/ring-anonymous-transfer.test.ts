@@ -338,6 +338,24 @@ describe("anonymous ring payment", () => {
     expect((await prove()).approvalOpening?.blinder).not.toEqual(opening.blinder);
   });
 
+  it("names a read cache and its selector, refuses a note it does not spend", async () => {
+    const fixture = await anonymousRing();
+    const sender = anonymousSender();
+    const to = await addressOf(fixture, ShieldedKeypair.generate());
+    const anonymous = rail({ fixture, sender, transfer: spend(fixture, sender) }).withPayment({
+      to,
+      asset: SOL_MINT,
+      amount: 400n,
+      reply: null,
+    });
+    const cache = randomAddress();
+    await expect(
+      anonymous
+        .withReadCache({ cache, notes: [{ nullifier: new Uint8Array(32) as Bytes32, slot: 3 }] })
+        .prove(fixture.client),
+    ).rejects.toMatchObject({ details: { reason: "CachedInputUnknown" } });
+  });
+
   it("carries no digest and no opening unless asked", async () => {
     const fixture = await anonymousRing();
     const sender = anonymousSender();
