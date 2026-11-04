@@ -23,10 +23,10 @@ type QuadOpening struct {
 }
 
 // Resolve zeroes every output for an absent member or an unset cond, and binds the opening to root while the boolean cond is set.
-func (o QuadOpening) Resolve(api frontend.API, cond, root, member frontend.Variable) (lists, escrowKey, mintPolicy, withdrawalThreshold frontend.Variable) {
+func (o QuadOpening) Resolve(api frontend.API, cond, root, member frontend.Variable) (lists, mintPolicy, withdrawalThreshold frontend.Variable) {
 	// A fixed-shape circuit opens no record for a slot it never reads.
 	if ringgadget.IsConstantZero(api, cond) {
-		return 0, 0, 0, 0
+		return 0, 0, 0
 	}
 	// 1. Present is boolean, a fraction would blend the two records below.
 	api.AssertIsBoolean(o.Present)
@@ -38,7 +38,7 @@ func (o QuadOpening) Resolve(api frontend.API, cond, root, member frontend.Varia
 	o.assertEmptyWhen(api, absent)
 	// 4. The opened record folds to root, a record of another registry or root fails.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: cond, A: o.Path.Root(api, record.Hash(api)), B: root})
-	return api.Mul(cond, o.Lists), api.Mul(cond, o.EscrowKey), api.Mul(cond, o.MintPolicy), api.Mul(cond, o.WithdrawalThreshold)
+	return api.Mul(cond, o.Lists), api.Mul(cond, o.MintPolicy), api.Mul(cond, o.WithdrawalThreshold)
 }
 
 type QuadRecordOpening struct {
@@ -46,7 +46,7 @@ type QuadRecordOpening struct {
 	Path QuadPath
 }
 
-// AssertPresent opens the sentinel for member 0, the caller refuses member 0 directly or through the sentinel's zero escrow key.
+// AssertPresent opens the sentinel for member 0, the caller refuses member 0.
 func (o QuadRecordOpening) AssertPresent(api frontend.API, cond, root, member frontend.Variable) {
 	leaf := Record{Member: member, RecordBody: o.RecordBody}.Hash(api)
 	// The leaf names member, an absent member or another member's record fails the fold.

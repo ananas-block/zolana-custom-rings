@@ -30,7 +30,13 @@ const (
 	LimitFields = 3
 )
 
-// The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0, 0, 0, 0, 0, 0) at index 0 brackets every member in [1, q-2].
+// Record list bits, id-1 of ListId in program-libs/policy/src/list.rs, rule polarity keeps grant lists present and deny lists absent.
+var (
+	grantListBits = []int{0, 6}
+	denyListBits  = []int{1, 2}
+)
+
+// The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0, 0, 0, 0) at index 0 brackets every member in [1, q-2].
 type Record struct {
 	Member frontend.Variable
 	RecordBody
@@ -39,12 +45,9 @@ type Record struct {
 type RecordBody struct {
 	Next                frontend.Variable
 	Lists               frontend.Variable
-	EscrowKey           frontend.Variable
 	MintPolicy          frontend.Variable
 	WithdrawalThreshold frontend.Variable
 	AssetLimits         [LimitFields]frontend.Variable
-	// Hash of the owner-signed address, zero before enrollment.
-	AddressHash frontend.Variable
 }
 
 func (r Record) Hash(api frontend.API) frontend.Variable {
@@ -53,17 +56,15 @@ func (r Record) Hash(api frontend.API) frontend.Variable {
 
 // contents keeps the record hash order.
 func (b RecordBody) contents() []frontend.Variable {
-	return slices.Concat([]frontend.Variable{b.Lists, b.EscrowKey, b.MintPolicy, b.WithdrawalThreshold}, b.AssetLimits[:], []frontend.Variable{b.AddressHash})
+	return slices.Concat([]frontend.Variable{b.Lists, b.MintPolicy, b.WithdrawalThreshold}, b.AssetLimits[:])
 }
 
 func (b RecordBody) selectWhen(api frontend.API, cond frontend.Variable, other RecordBody) RecordBody {
 	selected := RecordBody{
 		Next:                api.Select(cond, b.Next, other.Next),
 		Lists:               api.Select(cond, b.Lists, other.Lists),
-		EscrowKey:           api.Select(cond, b.EscrowKey, other.EscrowKey),
 		MintPolicy:          api.Select(cond, b.MintPolicy, other.MintPolicy),
 		WithdrawalThreshold: api.Select(cond, b.WithdrawalThreshold, other.WithdrawalThreshold),
-		AddressHash:         api.Select(cond, b.AddressHash, other.AddressHash),
 	}
 	for i := range selected.AssetLimits {
 		selected.AssetLimits[i] = api.Select(cond, b.AssetLimits[i], other.AssetLimits[i])
