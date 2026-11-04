@@ -199,14 +199,16 @@ impl RingCircuit {
     /// The one transfer key serving the spend, `None` when the catalog keys none.
     pub fn transfer(spend: TransferSpend) -> Option<Self> {
         let shapes = match (spend.rail, spend.spends_default_ring) {
-            (RingRail::Anonymous, false) => &ANONYMOUS_TRANSFER_SHAPES[..],
+            (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => {
+                &ANONYMOUS_TRANSFER_SHAPES[..]
+            }
             (RingRail::Anonymous, true) => &ENTRY_TRANSFER_SHAPES[..],
             (RingRail::Confidential | RingRail::Delegate, false) => {
                 &CONFIDENTIAL_TRANSFER_SHAPES[..]
             }
             (RingRail::Confidential, true) => &ENTRY_TRANSFER_SHAPES[..],
             // SPP's authority rail holds every input to the ring.
-            (RingRail::Delegate, true) => return None,
+            (RingRail::Delegate | RingRail::AnonymousDelegate, true) => return None,
         };
         let shape = TransferShape::of(shapes, spend.outputs)?;
         if spend.inputs == 0 || spend.inputs > usize::from(shape.inputs) {
@@ -216,7 +218,7 @@ impl RingCircuit {
         let owners = shape.owner_capacity(spend.owners)?;
         let (outputs, class) = (shape.outputs, shape.inputs);
         Some(match (spend.rail, spend.spends_default_ring) {
-            (RingRail::Anonymous, false) => Self::TransferAnonymous {
+            (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => Self::TransferAnonymous {
                 outputs,
                 class,
                 withdrawals,
