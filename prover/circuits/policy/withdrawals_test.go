@@ -30,7 +30,7 @@ func TestPolicyWithdrawals(t *testing.T) {
 		{"absent owner", func(w *ringpolicy.World) { w.Withdrawals[0].Owner = ringpolicy.Carol }, false},
 		{"blocked owner", func(w *ringpolicy.World) {
 			w.Table.Rules = append(w.Table.Rules, ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit))
-			w.Own[ringpolicy.Bob] = ringpolicy.Escrowed(ringregistry.AllowBit | ringregistry.BlockBit)
+			w.Own[ringpolicy.Bob] = ringpolicy.Record{Lists: ringregistry.AllowBit | ringregistry.BlockBit}
 		}, false},
 		{"withdrawn asset absent", func(w *ringpolicy.World) {
 			w.Table.Rules = append(w.Table.Rules, ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit))
@@ -73,7 +73,7 @@ func guardSplit(w *ringpolicy.World, amount uint64) {
 	w.Table.Limits = nil
 	w.Table.Rules[0].Guard = policy.GuardAboveAmount
 	w.Table.Rules[0].Threshold = 320
-	w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(0)
+	w.Own[ringpolicy.Alice] = ringpolicy.Record{Lists: 0}
 	w.Withdrawals = []ringpolicy.Slot{{Owner: ringpolicy.Alice, Asset: ringpolicy.AssetA, Amount: 10}, {Owner: ringpolicy.Alice, Asset: ringpolicy.AssetA, Amount: amount}}
 }
 func TestPolicyWithdrawalBindingAndPadding(t *testing.T) {

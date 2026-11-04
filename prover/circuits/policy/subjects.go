@@ -95,7 +95,7 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 		asset := p.PublicAssets[k]
 		active := api.Mul(ringgadget.IsNonZero(api, asset), mintRead)
 		record := pooledRecordAt(own.resolve(api, recordQuery{active: active, member: asset, index: index}))
-		resolved.publicAssets = append(resolved.publicAssets, publicAsset{asset: asset, active: active, policy: record.mintPolicy, withdrawalThreshold: record.withdrawalThreshold})
+		resolved.publicAssets = append(resolved.publicAssets, publicAsset{limitedAsset: limitedAsset{asset: asset, active: active, policy: record.mintPolicy}, withdrawalThreshold: record.withdrawalThreshold})
 	}
 	return resolved
 }

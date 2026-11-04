@@ -77,6 +77,7 @@ impl Outflows<'_> {
             assets: &assets,
             inputs: &inputs,
             outputs: &outputs,
+            public_gross: &[],
         });
         let mut approval = false;
         for debit in debits {
