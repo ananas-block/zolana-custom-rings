@@ -32,8 +32,8 @@ const (
 
 // Record list bits, id-1 of ListId in program-libs/policy/src/list.rs, rule polarity keeps grant lists present and deny lists absent.
 var (
-	grantListBits = []int{0, 6}
-	denyListBits  = []int{1, 2}
+	grantListBits = []int{0, 6, 7}
+	denyListBits  = []int{1, 2, 4}
 )
 
 // The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0, 0, 0, 0) at index 0 brackets every member in [1, q-2].

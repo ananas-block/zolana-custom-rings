@@ -13,8 +13,8 @@ import (
 
 // AnonymousShape sizes a key, Entry a spend of default-ring notes, Data one tail per slot.
 type AnonymousShape struct {
-	InputClass, Outputs, Withdrawals, Owners, Private int
-	Entry, Data                                       bool
+	InputClass, Outputs, Withdrawals, Owners int
+	Entry, Data                              bool
 }
 
 // AnonymousBases and EntryBases mirror ANONYMOUS_TRANSFER_SHAPES and ENTRY_TRANSFER_SHAPES in program-libs/interface/src/proof/key_catalog.rs, each takes every owner and data capacity.
@@ -45,16 +45,6 @@ func anonymousKeys(bases []AnonymousShape) []AnonymousShape {
 			}
 		}
 	}
-	seen := map[[2]int]bool{}
-	for _, base := range bases {
-		if seen[[2]int{base.InputClass, base.Outputs}] {
-			continue
-		}
-		seen[[2]int{base.InputClass, base.Outputs}] = true
-		base.Owners, base.Data = ownerCapacities(base.InputClass)[0], false
-		base.Private = privateRows(base.Owners, base.Outputs, base.Withdrawals)
-		keys = append(keys, base)
-	}
 	return keys
 }
 
@@ -63,11 +53,11 @@ func (s AnonymousShape) String() string {
 	if s.Entry {
 		family = "anonymous_entry"
 	}
-	return fmt.Sprintf("custom_ring_transfer_%s_%d_in%d_w%d_s%d%s", family, s.Outputs, s.InputClass, s.Withdrawals, s.Owners, keySuffix(s.Data, s.Private))
+	return fmt.Sprintf("custom_ring_transfer_%s_%d_in%d_w%d_s%d%s", family, s.Outputs, s.InputClass, s.Withdrawals, s.Owners, keySuffix(s.Data))
 }
 
 func (s AnonymousShape) sectionsShape() SectionsShape {
-	return SectionsShape{inputs: s.InputClass, outputs: s.Outputs, withdrawals: s.Withdrawals, owners: s.Owners, private: s.Private, entry: s.Entry, data: s.Data}
+	return SectionsShape{inputs: s.InputClass, outputs: s.Outputs, withdrawals: s.Withdrawals, owners: s.Owners, entry: s.Entry, data: s.Data}
 }
 
 type AnonymousTransferCircuit struct {

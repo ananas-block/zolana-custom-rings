@@ -206,11 +206,10 @@ pub struct TransferRoots {
     pub own_root: [u8; 32],
     pub curator_root: [u8; 32],
     pub tracking_root: [u8; 32],
-    pub private_root: [u8; 32],
 }
 
 /// Everything but the sender cells, the public slots and the close.
-const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 2 + 2 + 4 + 2 + 2 + 5 + 1;
+const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 2 + 2 + 4 + 2 + 2 + 4 + 1;
 
 impl TransferStatement<'_> {
     pub fn element_count(&self) -> usize {
@@ -259,7 +258,6 @@ impl TransferStatement<'_> {
             self.roots.own_root,
             self.roots.curator_root,
             self.roots.tracking_root,
-            self.roots.private_root,
         ]);
         for (slot, asset) in self.public_assets.iter().enumerate() {
             elements.extend([*asset, self.public_amounts[slot], self.public_gross[slot]]);

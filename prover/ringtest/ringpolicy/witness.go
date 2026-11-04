@@ -36,6 +36,8 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	b := Witness{Circuit: c}
 	p := &c.Policy
 	own, curator := registry(t, w.Own), registry(t, w.Curator)
+	WriteSalted(t, own, w.Salted)
+	WriteSalted(t, curator, w.CuratorSalted)
 	mintPolicies := map[string]*big.Int{}
 	assets := map[string]*big.Int{}
 	for i, a := range rows.InlineAssets {
@@ -74,7 +76,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	if !w.Unscreened {
 		p.PolicyHash = TableHash(t, p.Table)
 	}
-	p.RingProgramID, p.OwnRoot, p.CuratorRoot, p.PrivateRoot = ringID, own.Root(), 0, 0
+	p.RingProgramID, p.OwnRoot, p.CuratorRoot = ringID, own.Root(), 0
 	if slices.ContainsFunc(rows.Sources, func(s policy.SourceWires) bool { return ringtest.AsBigInt(s.Registry).Sign() != 0 }) {
 		p.CuratorRoot = curator.Root()
 	}
@@ -116,7 +118,23 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	c.InputChain = inputChain
 	c.ThresholdsActive, c.Delegate = ringtest.Bit(!w.NoOwnRegistry && !w.Delegate), ringtest.Bit(w.Delegate)
 	c.ApprovalMask = w.Approval
-	b.pool(t, own, curator)
+	tracking := ringregistry.NewTracking(t)
+	for _, owner := range w.Enrolled {
+		Enroll(t, tracking, big.NewInt(owner), big.NewInt(owner+1))
+	}
+	FillPools(t, p, c.Outputs, c.Senders, own, curator, tracking)
+	payments := make([]frontend.Variable, 0, len(p.OwnerEntries))
+	for _, out := range c.Outputs {
+		payments = append(payments, out.OwnerPkHash)
+	}
+	for _, leg := range p.Withdrawals {
+		payments = append(payments, leg.Owner)
+	}
+	outputs := make([]frontend.Variable, len(c.Outputs))
+	for o := range outputs {
+		outputs[o] = 0
+	}
+	FillTracking(t, &c.Tracking, tracking, c.Senders, outputs, p, payments)
 	b.Rehash(t)
 	return b
 }
@@ -156,6 +174,21 @@ func (b Witness) Rebind(t testing.TB) {
 	}
 	p.WithdrawalHash = spptest.MustHashChain4(t, fields)
 	b.Circuit.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(b.Circuit.Statement()))
+}
+
+func WriteSalted(t testing.TB, tree *ringregistry.Registry, records map[int64]uint64) {
+	t.Helper()
+	owners := make([]int64, 0, len(records))
+	for owner := range records {
+		owners = append(owners, owner)
+	}
+	slices.Sort(owners)
+	zero := big.NewInt(0)
+	for _, owner := range owners {
+		identity := big.NewInt(owner)
+		bits := new(big.Int).SetUint64(records[owner])
+		tree.Apply(t, ringregistry.Entry{Member: ringregistry.ListKey(t, identity, ListSaltOf(t, identity)), Mask: bits, Value: bits, MintPolicy: zero, WithdrawalThreshold: zero})
+	}
 }
 
 // rows is the sender and co-owners ascending with zero rows last, the order the circuit holds.

@@ -8,7 +8,6 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
@@ -23,7 +22,7 @@ const (
 // Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table/mod.rs.
 const (
 	// PolicyTableVersion enters the table hash, every layout change bumps it.
-	PolicyTableVersion = 13
+	PolicyTableVersion = 14
 	PolicyTableFields  = 44
 	// PolicyTableRate fields join the accumulator per Poseidon call, twelve inputs is the syscall maximum.
 	PolicyTableRate = 11
@@ -48,8 +47,8 @@ const (
 
 type Table struct {
 	Sources [NSources]SourceWires
-	// Source is the private source owner rows read beside the public slots.
-	Source    privatelist.Source
+	// Bit i puts list i+1 at an owner's salted key, an asset always reads its public record.
+	Salted    frontend.Variable
 	PolicyLen frontend.Variable
 	// Each rule is its 32-byte row read as one field.
 	Rules [NRules]frontend.Variable
@@ -68,8 +67,9 @@ type tableView struct {
 }
 
 type sourceView struct {
-	foreign    [NSources]frontend.Variable
-	anyForeign frontend.Variable
+	foreign, salted          [NSources]frontend.Variable
+	anyForeign               frontend.Variable
+	saltedOwn, saltedCurated frontend.Variable
 }
 
 type ruleFields struct {
@@ -118,8 +118,7 @@ func (t Table) Fields() []frontend.Variable {
 	for _, source := range t.Sources {
 		fields = append(fields, source.ListID, source.Registry)
 	}
-	fields = append(fields, t.Source.Fields()...)
-	fields = append(fields, t.PolicyLen)
+	fields = append(fields, t.Salted, t.PolicyLen)
 	fields = append(fields, t.Rules[:]...)
 	for len(fields) < PolicyTableFields {
 		fields = append(fields, 0)
@@ -140,10 +139,15 @@ func (t Table) hash(api frontend.API) frontend.Variable {
 // readSources marks list i+1 foreign when slot i names a registry field, one curator registry serves them all.
 func (t Table) readSources(api frontend.API) sourceView {
 	var view sourceView
+	var own, curated [NSources]frontend.Variable
+	copy(view.salted[:], api.ToBinary(t.Salted, NSources))
 	for i, source := range t.Sources {
 		view.foreign[i] = ringgadget.IsNonZero(api, source.Registry)
+		curated[i] = api.Mul(view.salted[i], view.foreign[i])
+		own[i] = api.Sub(view.salted[i], curated[i])
 	}
 	view.anyForeign = ringgadget.IsAny(api, view.foreign[:]...)
+	view.saltedOwn, view.saltedCurated = ringgadget.IsAny(api, own[:]...), ringgadget.IsAny(api, curated[:]...)
 	return view
 }
 
@@ -151,6 +155,14 @@ func (s sourceView) lists(api frontend.API, own, curated [NSources]frontend.Vari
 	var onList [NSources]frontend.Variable
 	for i := range onList {
 		onList[i] = api.Select(s.foreign[i], curated[i], own[i])
+	}
+	return onList
+}
+
+func (s sourceView) owner(api frontend.API, public, salted [NSources]frontend.Variable) [NSources]frontend.Variable {
+	var onList [NSources]frontend.Variable
+	for i := range onList {
+		onList[i] = api.Select(s.salted[i], salted[i], public[i])
 	}
 	return onList
 }

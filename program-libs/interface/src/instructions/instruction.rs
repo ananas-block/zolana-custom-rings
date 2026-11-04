@@ -433,7 +433,7 @@ mod tests {
             write(allow, allow),
             Err(CustomRingError::ListBitNotWritable)
         );
-        for unwritable in [ListId::Escrow, ListId::Recovery] {
+        for unwritable in [ListId::PrivateAllow, ListId::PrivateBlock] {
             assert_eq!(
                 write(unwritable.record_bit(), 0),
                 Err(CustomRingError::ListBitNotWritable)
@@ -464,10 +464,6 @@ mod tests {
         assert!(write(ListId::Block.record_bit()).is_ok());
         assert_eq!(
             write(ListId::RingViewing.record_bit()),
-            Err(CustomRingError::ListBitNotWritable)
-        );
-        assert_eq!(
-            write(ListId::Escrow.record_bit()),
             Err(CustomRingError::ListBitNotWritable)
         );
     }

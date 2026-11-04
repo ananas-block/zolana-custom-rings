@@ -28,17 +28,28 @@ type RecordPoolShape struct {
 type PoolEntry struct {
 	Own     frontend.Variable
 	Curator []frontend.Variable
-	// Private indexes the owner's private row, an asset and a key with no rows hold none.
-	Private []frontend.Variable
 }
 
-func newPoolEntry(ownOnly, private bool) PoolEntry {
+type OwnerEntry struct {
+	PoolEntry
+	Tracking      frontend.Variable
+	ListSalt      frontend.Variable
+	OwnSalted     frontend.Variable
+	CuratorSalted []frontend.Variable
+}
+
+func newPoolEntry(ownOnly bool) PoolEntry {
 	entry := PoolEntry{}
 	if !ownOnly {
 		entry.Curator = make([]frontend.Variable, 1)
 	}
-	if private {
-		entry.Private = make([]frontend.Variable, 1)
+	return entry
+}
+
+func newOwnerEntry(ownOnly bool) OwnerEntry {
+	entry := OwnerEntry{PoolEntry: newPoolEntry(ownOnly)}
+	if !ownOnly {
+		entry.CuratorSalted = make([]frontend.Variable, 1)
 	}
 	return entry
 }
@@ -65,22 +76,25 @@ func validatePoolCapacity(records, subjects, maximum int) error {
 	return nil
 }
 
-func (e PoolEntry) validate(ownOnly, private bool) error {
-	expected := 1
-	if ownOnly {
-		expected = 0
-	}
-	if len(e.Curator) != expected {
+func (e PoolEntry) validate(ownOnly bool) error {
+	if len(e.Curator) != curatorEntries(ownOnly) {
 		return fmt.Errorf("policy curator reference shape is invalid")
 	}
-	expected = 0
-	if private {
-		expected = 1
-	}
-	if len(e.Private) != expected {
-		return fmt.Errorf("policy private reference shape is invalid")
-	}
 	return nil
+}
+
+func (e OwnerEntry) validate(ownOnly bool) error {
+	if len(e.CuratorSalted) != curatorEntries(ownOnly) {
+		return fmt.Errorf("policy curator salted reference shape is invalid")
+	}
+	return e.PoolEntry.validate(ownOnly)
+}
+
+func curatorEntries(ownOnly bool) int {
+	if ownOnly {
+		return 0
+	}
+	return 1
 }
 
 func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {

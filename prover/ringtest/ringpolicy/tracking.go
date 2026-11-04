@@ -7,11 +7,8 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	circuitregistry "github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprivatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 )
 
@@ -28,52 +25,8 @@ func Enroll(t testing.TB, tree *ringregistry.Tracking, owner, nullifierPk *big.I
 	tree.Apply(t, ringregistry.TrackingEntry{Member: owner, NullifierPk: nullifierPk, CtHash: derived(1), View0: derived(2), View1: derived(3), Revision: big.NewInt(1), ListTag: ringregistry.ListTag(t, ListSaltOf(t, owner))})
 }
 
-// FillPrivate opens one row per live owner subject, a padding row past them, salt zero for an owner with no tracking row.
-func FillPrivate(t testing.TB, p *policy.Policy, lists *ringprivatelist.Tree, tracking *ringregistry.Tracking, senders []frontend.Variable, outputs []shared.UtxoWires) {
-	t.Helper()
-	seen := map[string]int{}
-	var rows []privatelist.Row
-	var owners []frontend.Variable
-	subject := func(entry policy.PoolEntry, member frontend.Variable) {
-		identity := ringtest.AsBigInt(member)
-		if identity.Sign() == 0 {
-			entry.Private[0] = 0
-			return
-		}
-		index, ok := seen[identity.String()]
-		if !ok {
-			salt := big.NewInt(0)
-			if tracking.Opening(identity).Present {
-				salt = ListSaltOf(t, identity)
-			}
-			index = len(rows)
-			seen[identity.String()] = index
-			rows, owners = append(rows, lists.Row(t, identity, salt)), append(owners, member)
-		}
-		entry.Private[0] = index
-	}
-	for j, sender := range senders {
-		subject(p.SenderEntries[j], sender)
-	}
-	for o, output := range outputs {
-		subject(p.OwnerEntries[o], output.OwnerPkHash)
-	}
-	for i, leg := range p.Withdrawals {
-		subject(p.OwnerEntries[len(outputs)+i], leg.Owner)
-	}
-	if len(rows) > len(p.PrivateRows) {
-		t.Fatalf("private pool needs %d rows with capacity %d", len(rows), len(p.PrivateRows))
-	}
-	for i := range p.PrivateRows {
-		p.PrivateRows[i], p.PrivateOwners[i] = ringprivatelist.PaddingRow(), 0
-		if i < len(rows) {
-			p.PrivateRows[i], p.PrivateOwners[i] = rows[i], owners[i]
-		}
-	}
-}
-
 // FillTracking opens each live member once and fills the pool cyclically.
-func FillTracking(t testing.TB, target *policy.Tracking, tree *ringregistry.Tracking, rows, outputs []frontend.Variable, p *policy.Policy) {
+func FillTracking(t testing.TB, target *policy.Tracking, tree *ringregistry.Tracking, rows, outputs []frontend.Variable, p *policy.Policy, payments []frontend.Variable) {
 	t.Helper()
 	var (
 		records     []circuitregistry.TrackingRecord
@@ -112,8 +65,14 @@ func FillTracking(t testing.TB, target *policy.Tracking, tree *ringregistry.Trac
 		target.OutputEntries[o] = entry(member)
 	}
 	if p != nil {
-		for i, owner := range p.PrivateOwners {
-			p.PrivateTracking[i] = entry(owner)
+		for j := range rows {
+			p.SenderEntries[j].Tracking = target.RowEntries[j]
+		}
+		for o := range payments {
+			p.OwnerEntries[o].Tracking = 0
+			if ringtest.AsBigInt(p.Salted).Sign() != 0 {
+				p.OwnerEntries[o].Tracking = entry(payments[o])
+			}
 		}
 	}
 	// The sentinel fills a pool nothing live opened.
