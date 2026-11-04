@@ -11,10 +11,22 @@ import {
   type Address,
 } from "@solana/kit";
 
-import { SHIELDED_ADDRESS_LENGTH, concatBytes, U64_MAX } from "@heliuslabs/zolana/internal";
-import { ShieldedAddress, type ViewTag } from "@heliuslabs/zolana/keypair";
+import {
+  SHIELDED_ADDRESS_LENGTH,
+  concatBytes,
+  isCanonicalField,
+  U64_MAX,
+  ZERO_NULLIFIER_PK,
+} from "@heliuslabs/zolana/internal";
+import {
+  ShieldedAddress,
+  type Bytes32,
+  type ShieldedKeypairLike,
+  type ViewTag,
+} from "@heliuslabs/zolana/keypair";
 
 import { checkedCounter, RingKeyError } from "../error.js";
+import { listSaltOf } from "./list-salt.js";
 
 const addressDecoder = getAddressDecoder();
 const addressEncoder = getAddressEncoder();
@@ -22,16 +34,17 @@ const base58Decoder = getBase58Decoder();
 const base58Encoder = getBase58Encoder();
 const encoder = new TextEncoder();
 
-export const RING_ADDRESS_VERSION = 3;
+export const RING_ADDRESS_VERSION = 4;
 
-export const RING_ADDRESS_CHECKSUM_DOMAIN = "zolana/ring-addr/v3";
+export const RING_ADDRESS_CHECKSUM_DOMAIN = "zolana/ring-addr/v4";
 
 export const RING_PAYMENT_SCHEME = "zolana:";
 
 const CHECKSUM_LENGTH = 4;
-/** `version ‖ recipient ‖ ring_program_id`. */
-const BODY_LENGTH = 1 + SHIELDED_ADDRESS_LENGTH + 32;
+/** `version ‖ recipient ‖ ring_program_id ‖ list_salt`. */
+const BODY_LENGTH = 1 + SHIELDED_ADDRESS_LENGTH + 32 + 32;
 const PROGRAM_OFFSET = 1 + SHIELDED_ADDRESS_LENGTH;
+const SALT_OFFSET = PROGRAM_OFFSET + 32;
 
 export const RING_ADDRESS_PAYLOAD_LENGTH = BODY_LENGTH + CHECKSUM_LENGTH;
 
@@ -39,23 +52,52 @@ export const RING_ADDRESS_PAYLOAD_LENGTH = BODY_LENGTH + CHECKSUM_LENGTH;
 export class RingAddress {
   readonly recipient: ShieldedAddress;
   readonly ringProgramId: Address;
+  /** Zero exactly under the zero key. */
+  readonly listSalt: Bytes32;
 
-  constructor(fields: Readonly<{ recipient: ShieldedAddress; ringProgramId: Address }>) {
+  constructor(
+    fields: Readonly<{ recipient: ShieldedAddress; ringProgramId: Address; listSalt: Bytes32 }>,
+  ) {
+    const zeroKey = equalBytes(fields.recipient.nullifierPublicKey, ZERO_NULLIFIER_PK);
+    const salt = fields.listSalt;
+    if (
+      !(salt instanceof Uint8Array) ||
+      salt.length !== 32 ||
+      !isCanonicalField(salt) ||
+      zeroKey !== salt.every((byte) => byte === 0)
+    )
+      throw new RingKeyError("KEYPAIR_INVALID_RING_ADDRESS_LIST_SALT");
     this.recipient = fields.recipient;
     this.ringProgramId = fields.ringProgramId;
+    this.listSalt = Uint8Array.from(salt) as Bytes32;
     Object.freeze(this);
+  }
+
+  /** Reveals the owner's list status. */
+  static async enrolled(
+    holder: Pick<ShieldedKeypairLike, "shieldedAddress" | "nullifierKey">,
+    ringProgramId: Address,
+  ): Promise<RingAddress> {
+    const recipient = await holder.shieldedAddress();
+    const key = await holder.nullifierKey();
+    try {
+      return new RingAddress({ recipient, ringProgramId, listSalt: listSaltOf(key) });
+    } finally {
+      key.destroy();
+    }
   }
 
   equals(other: RingAddress): boolean {
     return equalBytes(this.toBytes(), other.toBytes());
   }
 
-  /** `version ‖ recipient ‖ ring_program_id ‖ checksum`. */
+  /** `version ‖ recipient ‖ ring_program_id ‖ list_salt ‖ checksum`. */
   toBytes(): Uint8Array {
     const body = concatBytes(
       Uint8Array.of(RING_ADDRESS_VERSION),
       this.recipient.toBytes(),
       new Uint8Array(addressEncoder.encode(this.ringProgramId)),
+      this.listSalt,
     );
     return concatBytes(body, checksum(body));
   }
@@ -71,7 +113,8 @@ export class RingAddress {
       throw new RingKeyError("KEYPAIR_INVALID_RING_ADDRESS_CHECKSUM");
     return new RingAddress({
       recipient: ShieldedAddress.fromBytes(body.subarray(1, PROGRAM_OFFSET)),
-      ringProgramId: addressDecoder.decode(body.subarray(PROGRAM_OFFSET)),
+      ringProgramId: addressDecoder.decode(body.subarray(PROGRAM_OFFSET, SALT_OFFSET)),
+      listSalt: body.slice(SALT_OFFSET) as Bytes32,
     });
   }
 

@@ -1,14 +1,10 @@
-import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import { getBase64Decoder, type Instruction } from "@solana/kit";
 
-import type {
-  PreparedMergeInputs,
-  ProofDataSourceContext,
-  TreeContext,
-  WalletKeys,
-} from "@heliuslabs/zolana/client";
+import type { ProofDataSourceContext, TreeContext, WalletKeys } from "@heliuslabs/zolana/client";
 import type { LatestBlockhash } from "@heliuslabs/zolana/internal";
 import {
+  addressBytes,
+  bigIntBytes,
   prepareProverMerge,
   compressG2,
   withProofDataRetry,
@@ -19,13 +15,15 @@ import {
   unreserved,
   selectUtxos,
   encodeMergeTransactInstructionData,
+  mergeMintChunks,
   mergePaddedInputCount,
   SYSTEM_PROGRAM,
   instruction,
   meta,
   signerAddress,
+  solanaOwnerIdentity,
+  tagged,
   type SignerAccount,
-  Writer,
   nullifierPdaAddress,
   ZERO_32,
   ZERO_NULLIFIER_PK,
@@ -34,20 +32,26 @@ import {
   equalBytes,
   type UtxoReservation,
 } from "@heliuslabs/zolana/internal";
-import { customRingProof } from "../../rpc/prover/proof.js";
-import { MERGE_WIDTHS } from "../../protocol/codec/ring-disclosure-layout.js";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import { MERGE_INPUT_COUNT, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
+import {
+  MAX_MERGE_INPUTS,
+  MERGE_INPUT_COUNT,
+  SHIELDED_POOL_PROGRAM_ID,
+} from "@heliuslabs/zolana/interface";
 import type {
   Address,
   Bytes32,
+  Bytes33,
+  Bytes64,
   Bytes128,
   MergeTransactInstructionData,
   RequestContext,
   Transaction,
 } from "@heliuslabs/zolana/interface";
-import type { NullifierKey, ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { ShieldedAddress, type NullifierKey } from "@heliuslabs/zolana/keypair";
 import {
+  assetField,
+  Merge,
   SOL_MINT,
   approveUnattended,
   intentHash,
@@ -59,30 +63,29 @@ import type { PreparedMerge, Wallet, WalletUtxo } from "@heliuslabs/zolana/trans
 import { encodeRelayMergeInputs } from "../../protocol/ring-rpc/relay-proof-inputs.js";
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
-import type { RingMergeClient, RingSecretProver } from "../../rpc/ports.js";
-import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../../protocol/pda/index.js";
+import type { RingMergeClient, TrackingReader } from "../../rpc/ports.js";
+import { ringAuthAddress, ringPolicyAddress } from "../../protocol/pda/index.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
+import { OPENING_RECORD_LEN } from "../../protocol/codec/ring-disclosure-layout.js";
+import { ringIdField } from "../../crypto/derivation/ring-stream.js";
+import type { RingKeys } from "../../state/ring-keys.js";
 
 import { checkHiddenParties } from "./anonymous.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
-import { ringRootRegistries } from "../../protocol/codec/ring-codecs.js";
-import { TRANSFER_DEMAND, resolveRingCoSigner } from "../../proof/cosign.js";
+import { isZeroKeyNote } from "../../state/exposed-notes.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
 import {
-  checkMergeWidth,
-  emptyRingMergeDisclosure,
-  ringMergeDisclosureRequest,
-  wipeRingMergeDisclosureRequest,
-  writeRingMergeDisclosure,
-  type RingMergeDisclosure,
-  type RingMergeEscrow,
+  compactMergeBody,
+  completeRingMerge,
+  encodeRingMergeRequest,
+  MergeRingAuthority,
+  type RingMergeDisclosureRequest,
+  type RingMergeSealer,
+  type SealedMergeRecord,
 } from "../../crypto/audit/merge-disclosure.js";
-import {
-  fetchBoundRoot,
-  readRegisteredRecord,
-  type BoundRoot,
-} from "../../rpc/registered-record.js";
-import type { PresentRecordOpening } from "../../rpc/prover/types.js";
+import { newestTrackingRoot } from "../../rpc/tracking-resolver.js";
+import type { TrackingOpening } from "../../protocol/membership/tracking.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
@@ -95,31 +98,36 @@ import {
   ringProofInput,
   ringSelectionErrors,
 } from "../workflow/selection.js";
+import { MERGE_ROOT_READ, readOutputKeys, ringRegistrySlots } from "../workflow/ring-reads.js";
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
 import { SIZE_PROBE_LIFETIME } from "../workflow/compile.js";
 
 const base64 = getBase64Decoder();
 
-/** Rust `MAX_RING_MERGE_INPUTS`, the widest merge whose disclosure fits one v1 transaction. */
-export const MAX_RING_MERGE_INPUTS = Math.max(...MERGE_WIDTHS);
+/** Rust `MAX_RING_MERGE_INPUTS`, one ring merge key serves every SPP width. */
+export const MAX_RING_MERGE_INPUTS = MAX_MERGE_INPUTS;
 /** Rust `compute_unit_limit(Merge)`. */
 export const RING_MERGE_COMPUTE_UNIT_LIMIT = 1_400_000;
-/** `expiry_unix_ts u64 ‖ proof.a` ahead of `proof.b` in the SPP merge body, Rust `MERGE_B_OFFSET`. */
+/** `expiry_unix_ts u64 ‖ proof.a` ahead of `proof.b` in the SPP merge body. */
 const MERGE_B_OFFSET = 8 + 32;
 
 export interface RingMergeTransactionParams {
-  readonly client: RingMergeClient & ProofDataSourceContext;
+  readonly client: RingMergeClient &
+    ProofDataSourceContext &
+    Pick<TrackingReader, "getTrackingOpenings">;
   readonly ringProgramId: Address;
   readonly wallet: Wallet;
-  /** The disclosure proof reaches the nullifier secret only through `proveRingWithSecret`. */
-  readonly keys: WalletKeys & Partial<RingSecretProver>;
+  /** Off the zero key the seed reaches the record only through `sealRingMerge`, under it through `mergeSeeds`. */
+  readonly keys: WalletKeys & Partial<RingMergeSealer> & Partial<Pick<RingKeys, "mergeSeeds">>;
   readonly feePayer: Address;
   readonly asset?: Address;
   /** The most notes merged, smallest first, from 2 through `MAX_RING_MERGE_INPUTS`, default `MERGE_INPUT_COUNT`. */
   readonly maxInputs?: number;
   readonly outputTree?: Address;
-  /** Signs when a record covers transfers, the record must be its own. */
-  readonly cosigner?: SignerAccount;
+  /** Merges the wallet's zero-key notes, publishing its owner, no automatic path sets it. */
+  readonly mergeZeroKey?: true;
+  /** Signs a zero-key merge, the owner's Solana account when absent. */
+  readonly ownerSigner?: SignerAccount;
   readonly approve?: ApprovalHandler;
 }
 
@@ -141,7 +149,7 @@ export async function prepareRingMergeRelay(params: RingMergeRelayParams): Promi
     await initializePoseidon();
     const sender = params.wallet.identity;
     const { feePayer } = params.quote;
-    // The merge circuit keeps the owner off the payer on every ring.
+    // The merge circuit keeps a hidden owner off the payer.
     checkHiddenParties(sender.signingPublicKey.ed25519(), [feePayer]);
     const asset = params.asset ?? SOL_MINT;
     const notes = selectMergeNotes({
@@ -151,6 +159,7 @@ export async function prepareRingMergeRelay(params: RingMergeRelayParams): Promi
       treeId: params.client.treeId,
       asset,
       maxInputs: mergeWidth(params.maxInputs),
+      zeroKey: false,
     });
     reservation = reserveEntries(params.wallet, notes);
     await approveMerge({
@@ -213,8 +222,8 @@ export function createRingMergeSubmission(
 }
 
 /**
- * `MERGE ‖ own_revision ‖ output_ring_data_hash ‖ disclosure ‖ body` with the body's
- * `proof.b` compressed, the accounts `[ring, registries, co-signer record and signer?]` ahead of SPP's merge list.
+ * Tag 57, the accounts `[ring, tracking]` ahead of SPP's `merge_ring_v2` list, the owner signing at
+ * Rust `RING_MERGE_OWNER_INDEX` under `ownerSigned`.
  */
 export async function ringMergeInstruction(
   input: Readonly<{
@@ -224,44 +233,46 @@ export async function ringMergeInstruction(
     payer: SignerAccount;
     data: MergeTransactInstructionData;
     outputRingDataHash: Bytes32;
-    disclosure: RingMergeDisclosure;
-    /** Read only, right after the ring account, the records first. */
-    registries: readonly Address[];
-    /** Key escrow rings only. */
-    ownRevision?: bigint;
-    /** The supplied co-signer when a record covers transfers. */
-    cosigner?: SignerAccount;
+    sealed: SealedMergeRecord;
+    /** The ring's pinned registry, passed under either authority. */
+    tracking: Address;
+    /** Zero under `ownerSigned`. */
+    trackingRevision: bigint;
+    /** Selects `ownerSigned`. */
+    owner?: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [ring, auth, nullifiers, cosigner] = await Promise.all([
+  const [ring, auth, nullifiers] = await Promise.all([
     ringPolicyAddress(input.ringProgramId),
     ringAuthAddress(input.ringProgramId),
     Promise.all(input.data.nullifiers.map((value) => nullifierPdaAddress(input.inputTree, value))),
-    input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
   const body = encodeMergeTransactInstructionData(input.data);
   return instruction(
-    writeRingMergeDisclosure(
-      new Writer()
-        .u8(RingInstructionTag.merge, "instructionTag")
-        .u64(input.ownRevision ?? 0n, "ownRevision")
-        .bytes(input.outputRingDataHash, 32, "outputRingDataHash"),
-      input.disclosure,
-    )
-      .bytes(body.subarray(0, MERGE_B_OFFSET))
-      .bytes(compressG2(body.slice(MERGE_B_OFFSET, MERGE_B_OFFSET + 128) as Bytes128), 64)
-      .bytes(body.subarray(MERGE_B_OFFSET + 128))
-      .finish(),
+    tagged(
+      RingInstructionTag.merge,
+      encodeRingMergeRequest({
+        trackingRevision: input.trackingRevision,
+        outputRingDataHash: input.outputRingDataHash,
+        authority:
+          input.owner === undefined ? MergeRingAuthority.ring : MergeRingAuthority.ownerSigned,
+        sealed: input.sealed,
+        compactBody: compactMergeBody(
+          body,
+          compressG2(body.slice(MERGE_B_OFFSET, MERGE_B_OFFSET + 128) as Bytes128) as Bytes64,
+        ),
+      }),
+    ),
     [
       meta(ring, false, false),
-      ...input.registries.map((registry) => meta(registry, false, false)),
-      ...cosigner,
+      meta(input.tracking, false, false),
       meta(input.inputTree, false, true),
       meta(input.outputTree, false, true),
       meta(auth, false, false),
       meta(input.payer, true, true),
       meta(SYSTEM_PROGRAM, false, false),
       meta(SHIELDED_POOL_PROGRAM_ID, false, false),
+      ...(input.owner === undefined ? [] : [meta(input.owner, true, false)]),
       ...nullifiers.map((key) => meta(key, false, true)),
     ],
     input.ringProgramId,
@@ -277,25 +288,15 @@ async function buildRingMerge(
     await initializePoseidon();
     checkKeysIdentity(params.keys, params.wallet.identity);
     const maxInputs = mergeWidth(params.maxInputs);
+    const zeroKey = params.mergeZeroKey === true;
+    const owner = params.keys.address();
+    const ownerAccount = zeroKey ? mergeOwnerAccount(params, owner) : undefined;
     const [config, outputTree] = await Promise.all([
       fetchRingPolicy(params.client, params.ringProgramId, context),
       resolveRingOutputTree(params.client, params.outputTree, context),
     ]);
-    const demanded = await resolveRingCoSigner(
-      {
-        client: params.client,
-        ringProgramId: params.ringProgramId,
-        config,
-        demand: TRANSFER_DEMAND,
-        approvalRequired: false,
-        supplied: params.cosigner === undefined ? undefined : signerAddress(params.cosigner),
-      },
-      context,
-    );
-    const cosigner = demanded === undefined ? undefined : params.cosigner;
-    const owner = params.keys.address();
-    // The merge circuit keeps the owner off the payer and co-signer on every ring.
-    checkHiddenParties(owner.signingPublicKey.ed25519(), [params.feePayer, demanded]);
+    // A hidden owner stays off the payer, a zero-key owner publishes itself.
+    if (!zeroKey) checkHiddenParties(owner.signingPublicKey.ed25519(), [params.feePayer]);
     const asset = params.asset ?? SOL_MINT;
     if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);
     const entries =
@@ -307,111 +308,151 @@ async function buildRingMerge(
         treeId: params.client.treeId,
         asset,
         maxInputs,
+        zeroKey,
       });
-    checkMergeWidth(mergePaddedInputCount(entries.length) ?? entries.length);
+    if (mergePaddedInputCount(entries.length) === undefined)
+      throw new RingError("RING_TOO_MANY_INPUTS", {
+        details: { selected: entries.length, maximum: MAX_RING_MERGE_INPUTS },
+      });
     retry.entries = entries;
     retry.reservation ??= reserveEntries(params.wallet, entries, retry.lifetime);
     const inputs = entries.map((entry) => ringProofInput(entry, owner, params.client));
-    const prepared = await prepareMerge(
-      {
-        keys: params.keys,
-        inputs,
-        outputTreeId: outputTree.treeId,
-        ring: { programId: params.ringProgramId },
-        invalidAnswers: () => ringIntentMismatch("keyAnswers"),
-      },
-      context,
-    );
-    const expectedHash = prepared.outputHash();
-    const escrowRoot =
-      config.mode === "confidentialEscrow"
-        ? await readMergeEscrow(params, prepared.nullifierPublicKey, owner, context)
-        : undefined;
-    const compile = async (
-      data: MergeTransactInstructionData,
-      lifetime: LatestBlockhash,
-      disclosure: RingMergeDisclosure,
-    ): Promise<Transaction> =>
-      compileUnsignedTransaction({
-        feePayer: params.feePayer,
-        lifetime,
-        instructions: [
-          await ringMergeInstruction({
-            ringProgramId: params.ringProgramId,
-            inputTree: params.client.tree,
-            outputTree: outputTree.tree,
-            payer: params.feePayer,
-            data,
-            // Rust `AnonymousRingDataNotZero` refuses ring data on an anonymous ring.
-            outputRingDataHash: ZERO_32,
-            disclosure,
-            registries: ringRootRegistries(config, "merge"),
-            ...(escrowRoot === undefined ? {} : { ownRevision: escrowRoot.root.revision }),
-            ...(cosigner === undefined ? {} : { cosigner }),
-          }),
-        ],
-        computeUnitLimit: RING_MERGE_COMPUTE_UNIT_LIMIT,
-      });
-    // Zeroed proofs over the real accounts size the transaction before any proof request.
-    const proofInputs = prepareProverMerge(prepared, params.client.tree);
-    const preview = proofInputs.finish({
-      slot: { id: prepared.inputTreeId, utxoRoot: ZERO_32, nullifierRoot: ZERO_32 },
-      utxoRootIndex: 0,
-      nullifierRootIndex: 0,
-    });
-    await compile(
-      preview.instructionData({ a: ZERO_32, b: new Uint8Array(128) as Bytes128, c: ZERO_32 }),
-      SIZE_PROBE_LIFETIME,
-      emptyRingMergeDisclosure(prepared.inputs.length),
-    );
-    const intent: RingMergeIntent = {
-      kind: "ringMerge",
-      ringProgramId: params.ringProgramId,
-      outputTree: outputTree.tree,
-      asset,
-      numInputs: inputs.length,
-      mergedAmount: prepared.output.amount,
-    };
-    const planned = intentHash(intent);
-    if (retry.intent !== undefined && !equalBytes(retry.intent, planned))
-      throw ringIntentMismatch("retryIntent");
-    retry.intent = planned;
-    await approveMerge({ approve: params.approve, owner, feePayer: params.feePayer, intent });
-    const { data } = await withProofDataRetry(
-      params.client.proofDataSource,
-      (attempt) => params.client.proveMerge({ prepared, keys: params.keys }, attempt),
-      context,
-    );
-    if (!equalBytes(data.outputUtxoHash, expectedHash)) throw ringIntentMismatch("output");
-    const disclosure = await proveMergeDisclosure(
-      {
-        partyIdentities: anonymousPartyIdentities(params.feePayer, demanded),
-        keys: params.keys,
-        ringProgramId: params.ringProgramId,
-        auditor: config.auditorPublicKey,
-        prepared,
-        slots: proofInputs.inputs.payload,
-        spp: data,
-        ...(escrowRoot === undefined
-          ? {}
-          : {
-              escrow: {
-                root: escrowRoot.root.root,
-                ctHash: escrowRoot.ctHash,
-                ...(escrowRoot.record === undefined ? {} : { record: escrowRoot.record }),
-              },
+    const seed = zeroKey
+      ? await zeroKeySeed(params, owner, inputs[0]?.nullifier(), context)
+      : undefined;
+    const prepared =
+      seed === undefined
+        ? await prepareMerge(
+            {
+              keys: params.keys,
+              inputs,
+              outputTreeId: outputTree.treeId,
+              ring: { programId: params.ringProgramId, rail: { kind: "ringV2" } },
+              invalidAnswers: () => ringIntentMismatch("keyAnswers"),
+            },
+            context,
+          )
+        : Merge.zeroKey({
+            address: ShieldedAddress.fromPublicKeys(
+              owner.signingPublicKey,
+              ZERO_NULLIFIER_PK,
+              owner.viewingPublicKey,
+            ),
+            inputs,
+            seed,
+            ring: { programId: params.ringProgramId },
+            outputTreeId: outputTree.treeId,
+          }).prepare();
+    try {
+      const expectedHash = prepared.outputHash();
+      const ownerPkHash = owner.signingPublicKey.ownerProofInputHash();
+      const trackingRoot = zeroKey
+        ? undefined
+        : await newestTrackingRoot(
+            {
+              client: params.client,
+              trackingRegistry: config.tracking,
+              ring: params.ringProgramId,
+            },
+            context,
+          );
+      const tracking =
+        trackingRoot === undefined
+          ? undefined
+          : (
+              await readOutputKeys(
+                {
+                  client: params.client,
+                  root: trackingRoot,
+                  outputs: [{ member: ownerPkHash, nullifierPk: prepared.nullifierPublicKey }],
+                },
+                context,
+              )
+            )[0];
+      const [registry] = ringRegistrySlots(config, MERGE_ROOT_READ);
+      if (registry === undefined) throw new RingError("RING_TRACKING_INVALID");
+      const compile = async (
+        data: MergeTransactInstructionData,
+        lifetime: LatestBlockhash,
+        sealed: SealedMergeRecord,
+      ): Promise<Transaction> =>
+        compileUnsignedTransaction({
+          feePayer: params.feePayer,
+          lifetime,
+          instructions: [
+            await ringMergeInstruction({
+              ringProgramId: params.ringProgramId,
+              inputTree: params.client.tree,
+              outputTree: outputTree.tree,
+              payer: params.feePayer,
+              data,
+              outputRingDataHash: ZERO_32,
+              sealed,
+              tracking: registry,
+              trackingRevision: trackingRoot?.revision ?? 0n,
+              ...(ownerAccount === undefined ? {} : { owner: ownerAccount }),
             }),
-      },
-      context,
-    );
-    const lifetime = await params.client.getLatestBlockhash(context);
-    return {
-      transaction: await compile(data, lifetime, disclosure),
-      lastValidBlockHeight: lifetime.lastValidBlockHeight,
-      intentHash: planned,
-      ringInstructionIndex: 0,
-      roots: escrowRoot === undefined ? [] : [escrowRoot.root],
-    };
+          ],
+          computeUnitLimit: RING_MERGE_COMPUTE_UNIT_LIMIT,
+        });
+      // Zeroed proofs over the real accounts size the transaction before any proof request.
+      const proofInputs = prepareProverMerge(prepared, params.client.tree);
+      const preview = proofInputs.finish({
+        slot: { id: prepared.inputTreeId, utxoRoot: ZERO_32, nullifierRoot: ZERO_32 },
+        utxoRootIndex: 0,
+        nullifierRootIndex: 0,
+      });
+      await compile(
+        preview.instructionData({ a: ZERO_32, b: new Uint8Array(128) as Bytes128, c: ZERO_32 }),
+        SIZE_PROBE_LIFETIME,
+        EMPTY_SEALED_RECORD,
+      );
+      const intent: RingMergeIntent = {
+        kind: "ringMerge",
+        ringProgramId: params.ringProgramId,
+        outputTree: outputTree.tree,
+        asset,
+        numInputs: inputs.length,
+        mergedAmount: prepared.output.amount,
+      };
+      const planned = intentHash(intent);
+      if (retry.intent !== undefined && !equalBytes(retry.intent, planned))
+        throw ringIntentMismatch("retryIntent");
+      retry.intent = planned;
+      await approveMerge({ approve: params.approve, owner, feePayer: params.feePayer, intent });
+      const { data } = await withProofDataRetry(
+        params.client.proofDataSource,
+        (attempt) => params.client.proveMerge({ prepared, keys: params.keys }, attempt),
+        context,
+      );
+      if (!equalBytes(data.outputUtxoHash, expectedHash)) throw ringIntentMismatch("output");
+      const request = mergeDisclosureRequest({
+        prepared,
+        spp: data,
+        ringProgramId: params.ringProgramId,
+        auditorU: config.auditorPublicKey.u(),
+        payer: params.feePayer,
+        ownerPkHash,
+        outputTreeId: bigIntBytes(BigInt(proofInputs.inputs.payload.outputTreeId)) as Bytes32,
+        trackingRoot: trackingRoot?.root ?? ZERO_32,
+        ...(tracking === undefined ? {} : { tracking }),
+      });
+      const sealed =
+        seed === undefined
+          ? await sealUnderHolder(params.keys, request, context)
+          : await sealUnderSeed(params.client, request, seed, context);
+      const lifetime = await params.client.getLatestBlockhash(context);
+      return {
+        transaction: await compile(data, lifetime, sealed),
+        lastValidBlockHeight: lifetime.lastValidBlockHeight,
+        intentHash: planned,
+        ringInstructionIndex: 0,
+        ...(trackingRoot === undefined ? {} : { trackingRoot }),
+      };
+    } finally {
+      seed?.fill(0);
+      if (prepared.rail.kind === "ringV2ZeroKey") prepared.rail.seed.fill(0);
+    }
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
     throw wrapRingError("RING_BUILD_MERGE", cause);
@@ -420,30 +461,117 @@ async function buildRingMerge(
 
 type RingMergeIntent = Extract<TransactionIntent, { kind: "ringMerge" }>;
 
-/** The zero nullifier key escrows nothing, its merge binds the root alone. */
-async function readMergeEscrow(
-  params: RingMergeTransactionParams,
-  nullifierPublicKey: Bytes32,
+const EMPTY_SEALED_RECORD: SealedMergeRecord = Object.freeze({
+  proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
+  ephemeralPublicKey: new Uint8Array(33) as Bytes33,
+  ciphertext: new Uint8Array(OPENING_RECORD_LEN),
+});
+
+/** SPP requires the account's signature and publishes its identity. */
+function mergeOwnerAccount(
+  params: Pick<RingMergeTransactionParams, "ownerSigner">,
   owner: ShieldedAddress,
+): SignerAccount {
+  const account = params.ownerSigner ?? owner.solanaAddress();
+  if (
+    !equalBytes(
+      solanaOwnerIdentity(addressBytes(signerAddress(account))),
+      owner.signingPublicKey.ownerProofInputHash(),
+    )
+  )
+    throw new RingError("RING_MERGE_OWNER_MISMATCH", {
+      details: { signer: signerAddress(account) },
+    });
+  return account;
+}
+
+/** A seed no held key derives would leave the merged note unopenable by the owner. */
+async function zeroKeySeed(
+  params: Pick<RingMergeTransactionParams, "keys" | "ringProgramId">,
+  owner: ShieldedAddress,
+  firstNullifier: Bytes32 | undefined,
   context: RequestContext | undefined,
-): Promise<Readonly<{ root: BoundRoot; ctHash: Bytes32; record?: PresentRecordOpening }>> {
-  if (!equalBytes(nullifierPublicKey, ZERO_NULLIFIER_PK)) {
-    return readRegisteredRecord(
+): Promise<Bytes32> {
+  if (params.keys.mergeSeeds === undefined || firstNullifier === undefined)
+    throw new RingError("RING_KEYS_REQUIRED", { details: { reason: "mergeSeeds" } });
+  const [seed] = await params.keys.mergeSeeds(
+    [
       {
-        client: params.client,
+        viewingPublicKey: owner.viewingPublicKey,
         ringProgramId: params.ringProgramId,
-        member: owner.signingPublicKey.ownerProofInputHash(),
-        escrowed: nullifierPublicKey,
+        firstNullifier,
       },
-      context,
-    );
-  }
-  const config = await fetchRingPolicy(params.client, params.ringProgramId, context);
-  const root = await fetchBoundRoot(
-    { client: params.client, ringProgramId: params.ringProgramId, registry: config.records },
+    ],
     context,
   );
-  return Object.freeze({ root, ctHash: ZERO_32 });
+  if (seed === undefined)
+    throw new RingError("RING_KEYS_REQUIRED", { details: { reason: "mergeSeeds" } });
+  return seed;
+}
+
+/** The statement binds the proved SPP merge `spp`. */
+function mergeDisclosureRequest(
+  input: Readonly<{
+    prepared: PreparedMerge;
+    spp: MergeTransactInstructionData;
+    ringProgramId: Address;
+    auditorU: Bytes32;
+    payer: Address;
+    ownerPkHash: Bytes32;
+    outputTreeId: Bytes32;
+    trackingRoot: Bytes32;
+    tracking?: TrackingOpening;
+  }>,
+): RingMergeDisclosureRequest {
+  const { prepared, spp } = input;
+  const firstNullifier = spp.nullifiers[0];
+  if (firstNullifier === undefined) throw ringIntentMismatch("firstNullifier");
+  const mint = prepared.output.asset;
+  return Object.freeze({
+    kind: "merge" as const,
+    outputUtxoHash: spp.outputUtxoHash,
+    firstNullifier,
+    ringProgramId: ringIdField(input.ringProgramId),
+    auditorPk: input.auditorU,
+    payer: solanaOwnerIdentity(addressBytes(input.payer)) as Bytes32,
+    trackingRoot: input.trackingRoot,
+    ownerKey: prepared.signingPublicKey.ed25519(),
+    ownerPkHash: input.ownerPkHash,
+    mint,
+    mintChunks: mergeMintChunks(mint).map((chunk) => bigIntBytes(chunk) as Bytes32),
+    asset: assetField(mint),
+    amount: bigIntBytes(prepared.output.amount) as Bytes32,
+    nullifierPk: prepared.nullifierPublicKey,
+    outputTreeId: input.outputTreeId,
+    outputRingDataHash: ZERO_32,
+    ...(input.tracking === undefined ? {} : { tracking: input.tracking }),
+  });
+}
+
+async function sealUnderHolder(
+  keys: Partial<RingMergeSealer>,
+  request: RingMergeDisclosureRequest,
+  context: RequestContext | undefined,
+): Promise<SealedMergeRecord> {
+  const seal = keys.sealRingMerge?.bind(keys);
+  if (seal === undefined) throw new RingError("RING_KEYS_REQUIRED");
+  return seal(request, context);
+}
+
+/** The owner derives the merge seed from its viewing key. */
+async function sealUnderSeed(
+  client: Pick<RingMergeClient, "proveRing">,
+  request: RingMergeDisclosureRequest,
+  seed: Bytes32,
+  context: RequestContext | undefined,
+): Promise<SealedMergeRecord> {
+  const complete = completeRingMerge({ request, seed });
+  try {
+    const proof = await client.proveRing(complete.request, context);
+    return Object.freeze({ ...complete.sealed, proof });
+  } finally {
+    complete.request.ephSk.fill(0);
+  }
 }
 
 function selectMergeNotes(
@@ -454,21 +582,25 @@ function selectMergeNotes(
     treeId: number;
     asset: Address;
     maxInputs: number;
+    zeroKey: boolean;
   }>,
 ): readonly WalletUtxo[] {
   const reserved = reservedUtxoKeys(input.wallet);
+  const owner = input.wallet.identity;
   return selectUtxos({
     wallet: input.wallet,
     asset: input.asset,
     target: { kind: "consolidate", minInputs: 2 },
     policy: {
-      // One merge spends one nullifier key, a zero key note stays out.
+      // One merge spends one nullifier key, named by the caller.
       eligible: (entry) =>
         unreserved(reserved)(entry) &&
         entry.utxo.ringProgramId === input.ringProgramId &&
+        entry.utxo.owner.equals(owner.signingPublicKey) &&
+        isZeroKeyNote(entry) === input.zeroKey &&
         equalBytes(
-          noteNullifierPublicKey(entry, input.wallet.identity, input.treeId),
-          input.wallet.identity.nullifierPublicKey,
+          noteNullifierPublicKey(entry, owner, input.treeId),
+          input.zeroKey ? ZERO_NULLIFIER_PK : owner.nullifierPublicKey,
         ) &&
         entry.dataHash === undefined &&
         entry.utxo.data.records().every((record) => record.kind !== "utxoData"),
@@ -498,31 +630,6 @@ async function approveMerge(
     summary: `merge ${String(intent.numInputs)} inputs in ring ${intent.ringProgramId}`,
   });
   checkIntentApproval(approval, intent, ringIntentMismatch);
-}
-
-/** Only the key holder adds the nullifier secret. */
-async function proveMergeDisclosure(
-  input: Readonly<{
-    partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-    keys: Partial<RingSecretProver>;
-    ringProgramId: Address;
-    auditor: X25519PublicKey;
-    prepared: PreparedMerge;
-    slots: PreparedMergeInputs;
-    spp: MergeTransactInstructionData;
-    escrow?: RingMergeEscrow;
-  }>,
-  context: RequestContext | undefined,
-): Promise<RingMergeDisclosure> {
-  const prover = input.keys.proveRingWithSecret?.bind(input.keys);
-  if (prover === undefined) throw new RingError("RING_KEYS_REQUIRED");
-  const { request, disclosure } = ringMergeDisclosureRequest(input);
-  try {
-    const proof = await prover(request, context);
-    return Object.freeze({ ...disclosure, proof: customRingProof(proof) });
-  } finally {
-    wipeRingMergeDisclosureRequest(request);
-  }
 }
 
 function mergeWidth(maxInputs = MERGE_INPUT_COUNT): number {

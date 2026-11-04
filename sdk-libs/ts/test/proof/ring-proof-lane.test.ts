@@ -1,0 +1,596 @@
+import { readFileSync } from "node:fs";
+
+import { describe, expect, it } from "vitest";
+
+import { initializePoseidon } from "@heliuslabs/zolana";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { bytesKey, hashChain4 } from "@heliuslabs/zolana/internal";
+import type { Address } from "@solana/kit";
+
+import {
+  checkCoSigner,
+  demandRequirement,
+  operationDemand,
+  publicLegClasses,
+  resolveRingCoSigner,
+} from "../../src/proof/cosign.js";
+import {
+  defaultInputBits,
+  entryInput,
+  ownerRows,
+  realInputCount,
+} from "../../src/proof/audit-proof.js";
+import { depositStatementElements } from "../../src/proof/deposit-audit.js";
+import { checkInputKeys, checkOutputKeys } from "../../src/proof/policy-proof.js";
+import { enrolledSalt } from "../../src/proof/policy-proof.js";
+import { listTagOf } from "../../src/crypto/keys/list-salt.js";
+import { selectTransferKey } from "../../src/proof/transfer-proof.js";
+import {
+  RING_COSIGN_APPROVE_OUTFLOW,
+  RING_COSIGN_APPROVE_WITHDRAWAL,
+  RING_COSIGN_DEPOSITS,
+  RING_COSIGN_TRANSFERS,
+} from "../../src/protocol/codec/ring-codecs.js";
+import { RingError } from "../../src/protocol/error.js";
+import {
+  RING_KEYS,
+  ringAuthorityExitKeyName,
+  ringCircuitType,
+  ringProvingKey,
+} from "../../src/protocol/proof/proving-keys.js";
+import {
+  depositKeyCapacity,
+  ownerSignerCapacity,
+} from "../../src/protocol/proof/transfer-shapes.js";
+import { ApprovalMask } from "../../src/protocol/transaction/transact.js";
+import { unopenedRecordPool } from "../../src/protocol/membership/member-opening.js";
+import { transferPoolCapacity } from "../../src/protocol/proof/transfer-shapes.js";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
+import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
+import type { TrackingRecord } from "../../src/protocol/membership/tracking.js";
+import {
+  ringProofRequestBody,
+  type TransferProofRequest,
+  type MergeProofRequest,
+} from "../../src/rpc/prover/ring.js";
+
+await initializePoseidon();
+
+const field = (text: string): Bytes32 => hexToBytes(text.replace(/^0x/, "")) as Bytes32;
+const vector = (path: string): unknown =>
+  JSON.parse(readFileSync(new URL(`../../../../test-vectors/${path}`, import.meta.url), "utf8"));
+const refusal = (action: () => unknown): RingError => {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof RingError) return error;
+    throw error;
+  }
+  throw new Error("expected a RingError");
+};
+
+const SPEND = {
+  rail: "confidential",
+  inputs: 2,
+  outputs: 2,
+  spendsDefaultRing: false,
+  legs: 0,
+  owners: 2,
+  pools: { own: 0, curator: 0, tracking: 0 },
+  wide: false,
+} as const;
+const ADDRESSES = { nInputs: 2, coSigners: 0, legs: 0 };
+
+describe("selectTransferKey", () => {
+  it("takes the narrowest rows and the wide key past them", () => {
+    const small = selectTransferKey({ spend: SPEND, addresses: ADDRESSES, ownerSigners: 2 });
+    expect(small.circuit.owners).toBe(4);
+    expect(small.wideOwners).toBe(false);
+    const wide = selectTransferKey({
+      spend: { ...SPEND, inputs: 5, owners: 5 },
+      addresses: { ...ADDRESSES, nInputs: 5 },
+      ownerSigners: 5,
+    });
+    expect(wide.circuit.owners).toBe(24);
+    expect(wide.wideOwners).toBe(true);
+  });
+
+  it("refuses past the account bound with the counts", () => {
+    const addresses = { nInputs: 24, coSigners: 1, legs: 2 };
+    const capacity = ownerSignerCapacity(addresses);
+    expect(capacity).toBe(64 - 4 - 6 - 24 - 2 - 2);
+    selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity });
+    const refused = refusal(() =>
+      selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity + 1 }),
+    );
+    expect(refused.code).toBe("RING_TRANSFER_PAST_ACCOUNT_BOUND");
+    expect(refused.details).toMatchObject({ ownerSigners: capacity + 1, capacity, coSigners: 1 });
+  });
+
+  it("names rows past the widest and an unkeyed shape", () => {
+    expect(
+      refusal(() =>
+        selectTransferKey({
+          spend: { ...SPEND, owners: 25 },
+          addresses: ADDRESSES,
+          ownerSigners: 0,
+        }),
+      ).code,
+    ).toBe("RING_TOO_MANY_OWNERS");
+    expect(
+      refusal(() =>
+        selectTransferKey({
+          spend: { ...SPEND, outputs: 17 },
+          addresses: ADDRESSES,
+          ownerSigners: 0,
+        }),
+      ).details,
+    ).toMatchObject({ reason: "RingShapeUnkeyed" });
+  });
+});
+
+describe("enrolledSalt", () => {
+  const owner = new Uint8Array(32).fill(1) as Bytes32;
+  const salt = new Uint8Array(32).fill(2) as Bytes32;
+  const salts = new Map([[bytesKey(owner), salt]]);
+
+  it("takes no salt with no row and the row's salt under its tag", () => {
+    expect(enrolledSalt(owner, undefined, new Map())).toBeUndefined();
+    expect(enrolledSalt(owner, { ...row0(), listTag: listTagOf(salt) }, salts)).toEqual(salt);
+  });
+
+  it("refuses a row with no salt and a salt off the row's tag", () => {
+    expect(refusal(() => enrolledSalt(owner, row0(), new Map())).code).toBe(
+      "RING_LIST_SALT_MISSING",
+    );
+    expect(refusal(() => enrolledSalt(owner, row0(), salts)).code).toBe("RING_ADDRESS_MISMATCH");
+  });
+});
+
+describe("depositKeyCapacity", () => {
+  const subjects = { slots: 1, recipients: 1, assets: 1, saltedKeys: 0 };
+
+  it("takes the narrowest key holding every subject", () => {
+    expect(depositKeyCapacity(subjects)).toBe(1);
+    expect(depositKeyCapacity({ ...subjects, saltedKeys: 1 })).toBe(2);
+  });
+
+  it("refuses a deposit past every key", () => {
+    expect(depositKeyCapacity({ ...subjects, slots: 9 })).toBeUndefined();
+  });
+});
+
+describe("the key table", () => {
+  it("serves one merge key and refuses an unpinned key by name", () => {
+    expect(
+      RING_KEYS.filter((key) => key.circuit.family === "merge").map((key) => key.name),
+    ).toEqual(["custom-ring-merge-v4"]);
+    expect(ringCircuitType({ family: "deposit", capacity: 4 })).toBe("custom-ring-deposit-4");
+    const refused = refusal(() => ringProvingKey({ family: "merge" }));
+    expect(refused.code).toBe("RING_PROVING_KEYS_MISSING");
+    expect(refused.details).toMatchObject({ keyNames: "custom_ring_merge_v4.key" });
+  });
+
+  it("keys the authority exit at two shapes", () => {
+    expect(ringAuthorityExitKeyName({ nInputs: 4, nOutputs: 4 })).toBe(
+      "transfer_ring_authority_exit_4_4.key",
+    );
+    expect(refusal(() => ringAuthorityExitKeyName({ nInputs: 2, nOutputs: 4 })).code).toBe(
+      "RING_PROVING_KEYS_MISSING",
+    );
+  });
+});
+
+describe("co-sign", () => {
+  const demand = (spendsNote: boolean, approval: number, isDeposit?: boolean) =>
+    operationDemand({
+      spendsNote,
+      publicLegs: publicLegClasses(isDeposit === undefined ? [] : [{ isDeposit }]),
+      approval,
+    });
+  const ONE: Address = "11111111111111111111111111111111" as Address;
+
+  it("demands nothing of a ring with no record below its thresholds", () => {
+    expect(demandRequirement(demand(true, 0, false), {})).toBeUndefined();
+  });
+
+  it("drops transfers under no_spend and adds deposits for a deposit leg", () => {
+    const ring = { coSignerClasses: RING_COSIGN_TRANSFERS | RING_COSIGN_DEPOSITS };
+    expect(demandRequirement(demand(false, 0, true), ring)?.classes).toBe(RING_COSIGN_DEPOSITS);
+    expect(demandRequirement(demand(true, 0), ring)?.classes).toBe(RING_COSIGN_TRANSFERS);
+  });
+
+  it("needs one record holding every demanded class", () => {
+    const both = ApprovalMask.outflow | ApprovalMask.withdrawal;
+    const requirement = demandRequirement(demand(false, both), {});
+    if (requirement === undefined) throw new Error("an approval class never drops out");
+    checkCoSigner(requirement, {
+      scope: RING_COSIGN_APPROVE_OUTFLOW | RING_COSIGN_APPROVE_WITHDRAWAL,
+      signer: ONE,
+    });
+    expect(
+      refusal(() => checkCoSigner(requirement, { scope: RING_COSIGN_APPROVE_OUTFLOW, signer: ONE }))
+        .code,
+    ).toBe("RING_COSIGNER_OUT_OF_SCOPE");
+  });
+
+  it("refuses an owner signer as co-signer and a missing approver signature", async () => {
+    const client = { getAccount: async () => undefined };
+    const base = {
+      client,
+      ringProgramId: ONE,
+      config: { coSignerClasses: RING_COSIGN_TRANSFERS },
+      demand: demand(true, 0),
+    };
+    await expect(
+      resolveRingCoSigner({ ...base, supplied: ONE, ownerSigners: [ONE] }),
+    ).rejects.toMatchObject({ code: "RING_COSIGNER_REQUIRED" });
+    await expect(resolveRingCoSigner({ ...base, ownerSigners: [] })).rejects.toMatchObject({
+      code: "RING_COSIGNER_REQUIRED",
+    });
+  });
+});
+
+describe("deposit-v4.json", () => {
+  type Case = Readonly<{
+    name: string;
+    context_hash: string;
+    anonymous: boolean;
+    ciphertexts: readonly string[];
+    owner_utxo_hashes: readonly string[];
+    assets: readonly string[];
+    amounts: readonly number[];
+    auditor_pubkey: string;
+    eph_pk: string;
+    tracking_root: string;
+    own_root: string;
+    curator_root: string;
+    policy_hash: string;
+    elements: readonly string[];
+    public_input_hash: string;
+  }>;
+  const { cases } = vector("deposit/deposit-v4.json") as Readonly<{ cases: readonly Case[] }>;
+
+  it.each(cases.map((entry) => [entry.name, entry] as const))("%s", (_, entry) => {
+    const elements = depositStatementElements({
+      contextHash: field(entry.context_hash),
+      anonymous: entry.anonymous,
+      ownerUtxoHashes: entry.owner_utxo_hashes.map(field),
+      ciphertexts: entry.ciphertexts.map(field),
+      assets: entry.assets.map((asset, slot) => ({
+        asset: field(asset),
+        amount: BigInt(entry.amounts[slot] ?? 0),
+      })),
+      auditorPk: field(entry.auditor_pubkey) as unknown as Bytes33,
+      ephPk: field(entry.eph_pk) as unknown as Bytes33,
+      trackingRoot: field(entry.tracking_root),
+      registry: {
+        ownRoot: field(entry.own_root),
+        curatorRoot: field(entry.curator_root),
+        policyHash: field(entry.policy_hash),
+      },
+    });
+    expect(elements.map((element) => bytesToHex(element))).toEqual(entry.elements);
+    expect(bytesToHex(hashChain4(elements))).toBe(entry.public_input_hash);
+  });
+});
+
+describe("merge_v4.json", () => {
+  type Request = Readonly<Record<string, unknown>> &
+    Readonly<{
+      tracking: Readonly<{
+        present: boolean;
+        record: Readonly<Record<string, string>>;
+        path: Readonly<{ index: number; siblings: readonly (readonly string[])[] }>;
+      }> | null;
+    }>;
+  const { cases } = vector("merge/merge_v4.json") as Readonly<{
+    cases: readonly Readonly<{ name: string; request: Request }>[];
+  }>;
+
+  it.each(cases.map((entry) => [entry.name, entry] as const))("round trips %s", (_, entry) => {
+    const { request } = entry;
+    const text = (key: string): Bytes32 => field(request[key] as string);
+    const opening = (): MergeProofRequest["tracking"] => {
+      const { tracking } = request;
+      if (tracking === null) return undefined;
+      const { record: row, path } = tracking;
+      const record = {
+        member: field(row["member"] ?? ""),
+        next: field(row["next"] ?? ""),
+        nullifierPk: field(row["nullifierPk"] ?? ""),
+        ctHash: field(row["ctHash"] ?? ""),
+        viewingU: viewingU(row["view0"] ?? "", row["view1"] ?? ""),
+        revision: BigInt(row["revision"] ?? 0),
+        listTag: field(row["listTag"] ?? ""),
+      };
+      const quad = { index: path.index, siblings: path.siblings.map((level) => level.map(field)) };
+      return tracking.present
+        ? { kind: "present", record, path: quad }
+        : { kind: "absent", low: record, path: quad };
+    };
+    const tracking = opening();
+    expect(
+      ringProofRequestBody({
+        kind: "merge",
+        publicInputHash: text("publicInputHash"),
+        outputUtxoHash: text("outputUtxoHash"),
+        firstNullifier: text("firstNullifier"),
+        ringProgramId: text("ringProgramId"),
+        auditorPk: text("auditorPk"),
+        payer: text("payer"),
+        trackingRoot: text("trackingRoot"),
+        ephSk: text("ephSk"),
+        ownerKey: text("ownerKey"),
+        ownerPkHash: text("ownerPkHash"),
+        mintChunks: (request["mintChunks"] as readonly string[]).map(field),
+        asset: text("asset"),
+        amount: text("amount"),
+        nullifierPk: text("nullifierPk"),
+        seed: text("seed"),
+        outputTreeId: text("outputTreeId"),
+        outputRingDataHash: text("outputRingDataHash"),
+        ...(tracking === undefined ? {} : { tracking }),
+      }),
+    ).toEqual(request);
+  });
+});
+
+const fill = (byte: number): Bytes32 => new Uint8Array(32).fill(byte) as Bytes32;
+const note = (
+  input: Readonly<{ owner?: Bytes32; key?: Bytes32; ring?: Address; dummy?: boolean }>,
+): ProofInputUtxo =>
+  ({
+    isCompact: () => false,
+    isDummy: () => input.dummy === true,
+    nullifierPublicKey: input.key ?? fill(9),
+    utxo: {
+      owner: {
+        ownerProofInputHash: () => input.owner ?? fill(1),
+        confidentialViewTag: () => fill(7),
+      },
+      ringProgramId: input.ring,
+      asset: RING,
+      amount: 5n,
+      blinding: fill(8),
+    },
+  }) as unknown as ProofInputUtxo;
+const RING = "11111111111111111111111111111111" as Address;
+
+describe("input evidence", () => {
+  it("counts live notes with dummies last and refuses a live note past a dummy", () => {
+    expect(realInputCount([note({ ring: RING }), note({ dummy: true })])).toBe(1);
+    expect(
+      refusal(() => realInputCount([note({ dummy: true }), note({ ring: RING })])).details,
+    ).toMatchObject({ reason: "DummiesLast" });
+  });
+
+  it("sets a default bit and an entry on a live default input alone", () => {
+    const inputs = [note({ ring: RING }), note({}), note({ dummy: true })];
+    expect(defaultInputBits(inputs)).toBe(2n);
+    expect(entryInput(inputs[0] as ProofInputUtxo).amount).toBe(0n);
+    expect(entryInput(inputs[1] as ProofInputUtxo).amount).toBe(5n);
+  });
+
+  it("orders rows as field integers, zero rows last, a delegate's zero key taking none", () => {
+    const [low, high] = [fill(1), fill(2)];
+    const inputs = [
+      note({ owner: high, ring: RING }),
+      note({ owner: low, ring: RING }),
+      note({ owner: high, ring: RING }),
+      note({ dummy: true }),
+    ];
+    expect(ownerRows({ inputs, delegate: false, slots: 4 })).toEqual([
+      low,
+      high,
+      new Uint8Array(32),
+      new Uint8Array(32),
+    ]);
+    const zeroKey = [note({ owner: low, ring: RING, key: ZERO_NULLIFIER_PK as Bytes32 })];
+    expect(ownerRows({ inputs: zeroKey, delegate: true })).toEqual([]);
+    expect(ownerRows({ inputs: zeroKey, delegate: false })).toEqual([low]);
+    expect(refusal(() => ownerRows({ inputs, delegate: false, slots: 1 })).code).toBe(
+      "RING_TOO_MANY_OWNERS",
+    );
+  });
+});
+
+describe("tracking predicates", () => {
+  const row = (nullifierPk: Bytes32): TrackingRecord => ({
+    member: fill(1),
+    next: fill(2),
+    nullifierPk,
+    ctHash: fill(3),
+    viewingU: fill(4),
+    revision: 1n,
+    listTag: fill(5),
+  });
+  const zero = ZERO_NULLIFIER_PK as Bytes32;
+  const check = (input: ProofInputUtxo, rowOf: TrackingRecord | undefined, rail = "confidential") =>
+    checkInputKeys({
+      inputs: [input],
+      rail: rail as "confidential",
+      publicOwners: false,
+      rowOf: () => rowOf,
+    });
+
+  it("holds a nonzero input key to its row and waives only the equality on a zero key", () => {
+    check(note({ ring: RING, key: fill(9) }), row(fill(9)));
+    check(note({ ring: RING, key: zero }), undefined);
+    check(note({ key: fill(6) }), undefined);
+    expect(refusal(() => check(note({ ring: RING, key: fill(9) }), undefined)).code).toBe(
+      "RING_ADDRESS_NOT_ENROLLED",
+    );
+    expect(refusal(() => check(note({ ring: RING, key: fill(9) }), row(fill(6)))).code).toBe(
+      "RING_ADDRESS_MISMATCH",
+    );
+  });
+
+  it("refuses a hidden owner's zero key", () => {
+    expect(refusal(() => check(note({ ring: RING, key: zero }), undefined, "anonymous")).code).toBe(
+      "RING_ZERO_KEY_INPUT_UNNAMED",
+    );
+  });
+
+  it("holds an output to the rule of its key", () => {
+    const output = (key: Bytes32): ProofOutputUtxo =>
+      ({
+        ownerAddress: {
+          nullifierPublicKey: key,
+          signingPublicKey: { ownerProofInputHash: () => fill(1) },
+        },
+      }) as unknown as ProofOutputUtxo;
+    checkOutputKeys([output(fill(9)), undefined], () => row(fill(9)));
+    checkOutputKeys([output(zero)], () => undefined);
+    expect(refusal(() => checkOutputKeys([output(zero)], () => row(fill(9)))).code).toBe(
+      "RING_RECIPIENT_ENROLLED",
+    );
+    expect(refusal(() => checkOutputKeys([output(fill(9))], () => undefined)).code).toBe(
+      "RING_RECIPIENT_NOT_ENROLLED",
+    );
+  });
+});
+
+describe("prover/ring/params.go", () => {
+  const source = readFileSync(
+    new URL("../../../../prover/ring/params.go", import.meta.url),
+    "utf8",
+  );
+  /** Every JSON name a struct and its embedded structs declare. */
+  const tags = (name: string): Readonly<{ required: string[]; optional: string[] }> => {
+    const body = new RegExp(`type ${name} struct \\{\\n([\\s\\S]*?)\\n\\}`).exec(source)?.[1];
+    if (body === undefined) throw new Error(name);
+    const out = { required: [] as string[], optional: [] as string[] };
+    for (const line of body.split("\n")) {
+      const embedded = /^\s*([A-Z]\w*)\s*$/.exec(line)?.[1];
+      if (embedded !== undefined) {
+        const inner = tags(embedded);
+        out.required.push(...inner.required);
+        out.optional.push(...inner.optional);
+        continue;
+      }
+      const tag = /json:"(\w+)(,omitempty)?"/.exec(line);
+      if (tag?.[1] !== undefined) (tag[2] === undefined ? out.required : out.optional).push(tag[1]);
+    }
+    return out;
+  };
+
+  it("takes every required key and adds only the wire the circuit's Table reads", () => {
+    const circuit = {
+      family: "transfer",
+      outputs: 2,
+      class: 24,
+      withdrawals: 4,
+      owners: 4,
+      entry: false,
+      wide: false,
+    } as const;
+    const capacity = transferPoolCapacity(circuit);
+    const zero = fill(0);
+    const opening = Object.fromEntries(
+      [
+        "domain",
+        "treeId",
+        "ownerPkHash",
+        "nullifierPk",
+        "asset",
+        "amount",
+        "blinding",
+        "dataHash",
+        "ringDataHash",
+        "ringProgramId",
+      ].map((key) => [key, zero]),
+    ) as unknown as TransferProofRequest["inputs"][number];
+    const repeat = <T>(length: number, value: T): readonly T[] => Array<T>(length).fill(value);
+    const entry = { own: 0, curator: 0 };
+    const ownerEntry = { ...entry, tracking: 0, listSalt: zero, ownSalted: 0, curatorSalted: 0 };
+    const pool = unopenedRecordPool(capacity.tracking);
+    const request: TransferProofRequest = {
+      kind: "transfer",
+      publicInputHash: zero,
+      firstNullifier: zero,
+      txViewingSk: zero,
+      ephSk: zero,
+      auditorPk: zero,
+      salt: new Uint8Array(16) as TransferProofRequest["salt"],
+      layout: { hasData: false, entry: false },
+      approvalMask: 0,
+      outputCount: 2,
+      outputs: repeat(2, { output: opening, ownerKey: zero, mintChunks: [zero, zero] }),
+      inputCount: 1,
+      inputs: repeat(24, opening),
+      entries: [],
+      signerCount: 0,
+      signers: repeat(24, zero),
+      rows: repeat(4, zero),
+      privateTxHash: zero,
+      privateTxBlinding: zero,
+      addressChain: zero,
+      trackingRoot: zero,
+      trackingPool: {
+        records: repeat(capacity.tracking, row0()),
+        canopy: repeat(16, zero),
+        paths: repeat(capacity.tracking, {
+          index: 0,
+          siblings: repeat(11, repeat(3, zero)),
+        }),
+        subjects: pool.subjects,
+      },
+      rowEntries: repeat(4, 0),
+      outputEntries: repeat(2, 0),
+      withdrawalCount: 0,
+      withdrawalHash: zero,
+      withdrawals: repeat(4, { owner: zero, asset: zero, amount: 0n }),
+      policyHash: zero,
+      ringId: zero,
+      ownRoot: zero,
+      curatorRoot: zero,
+      publicAssets: repeat(3, zero),
+      publicAmounts: repeat(3, zero),
+      publicGross: repeat(3, zero),
+      sources: repeat(8, { listId: 0, registry: zero }),
+      salted: 0,
+      policyLen: 0,
+      rules: repeat(16, zero),
+      ownPool: unopenedRecordPool(capacity.own),
+      curatorPool: unopenedRecordPool(capacity.curator),
+      senderEntries: repeat(4, ownerEntry),
+      ownerEntries: repeat(6, ownerEntry),
+      assetEntries: repeat(6, entry),
+      publicAssetEntries: repeat(3, 0),
+      inProof: false,
+      hidden: false,
+      delegate: false,
+      sender: zero,
+      partyIdentities: repeat(3, zero),
+    };
+    const keys = Object.keys(ringProofRequestBody(request));
+    const go = tags("TransferParams");
+    expect(go.required.filter((key) => !keys.includes(key))).toEqual([]);
+    expect(keys.filter((key) => !go.required.includes(key) && !go.optional.includes(key))).toEqual(
+      [],
+    );
+  });
+});
+
+function row0(): TrackingRecord {
+  const zero = new Uint8Array(32) as Bytes32;
+  return {
+    member: zero,
+    next: zero,
+    nullifierPk: zero,
+    ctHash: zero,
+    viewingU: zero,
+    revision: 0n,
+    listTag: zero,
+  };
+}
+
+/** Inverse of `pack_be`, 31 bytes then the last. */
+function viewingU(view0: string, view1: string): Bytes32 {
+  const out = new Uint8Array(32);
+  out.set(field(view0).subarray(1), 0);
+  out.set(field(view1).subarray(31), 31);
+  return out as Bytes32;
+}

@@ -1,159 +1,233 @@
-/** The transfer key catalog, Rust `key_catalog.rs` and the shape lists in `prover/circuits/transfer`. */
+/** The transfer key catalog, Rust `key_catalog.rs` and `Shapes` in `prover/circuits/transfer`. */
 import type { RingRail } from "../transaction/transact.js";
 import { N_PUBLIC_SLOTS } from "../transaction/spp.js";
 
-/** One transfer family at one output count, Rust `TransferShape`. */
+/** One transfer key, Rust `TransferShape`. */
 export interface TransferShape {
   readonly outputs: number;
-  /** The input slots the key opens, the widest published input count it serves. */
+  /** The widest published input count the key serves. */
   readonly inputs: number;
-  /** The withdrawal leg capacities keyed at the output count, ascending. */
-  readonly withdrawals: readonly number[];
+  readonly withdrawals: number;
+  /** Owner rows the key opens. */
+  readonly owners: number;
+  /** One evidence slot per input, the key also spends default-ring notes. */
+  readonly entry: boolean;
+  /** A salted and a public record per owner fit. */
+  readonly wide: boolean;
 }
 
-const shape = (outputs: number, inputs: number, withdrawals: readonly number[]): TransferShape =>
-  Object.freeze({ outputs, inputs, withdrawals: Object.freeze(withdrawals) });
+const shape = (
+  outputs: number,
+  inputs: number,
+  withdrawals: number,
+  owners: number,
+  entry: boolean,
+  wide: boolean,
+): TransferShape => Object.freeze({ outputs, inputs, withdrawals, owners, entry, wide });
 
-/** The signer, in-proof and authority rails. */
-export const CONFIDENTIAL_TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(2, 24, [4, 32]),
-  shape(4, 24, [4, 32]),
-  shape(8, 16, [4, 32]),
-  shape(16, 5, [8]),
+/** Ascending outputs, a frame takes the first that holds its SPP width. */
+const NARROW_SHAPES: readonly TransferShape[] = Object.freeze([
+  shape(2, 24, 4, 4, false, false),
+  shape(4, 24, 4, 4, false, false),
+  shape(8, 16, 4, 4, false, false),
+  shape(16, 5, 8, 5, false, false),
 ]);
-/** The anonymous rail over ring notes. */
-export const ANONYMOUS_TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(2, 24, [4, 32]),
-  shape(4, 16, [4, 32]),
-  shape(8, 5, [24]),
+/** Ascending outputs, the wide flag takes the first that holds the SPP width. */
+const WIDE_SHAPES: readonly TransferShape[] = Object.freeze([
+  shape(8, 24, 32, 24, false, true),
+  shape(16, 5, 8, 5, false, true),
 ]);
-/** The anonymous rail spending a default-ring note, every input opened. */
-export const ENTRY_TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(2, 8, [4]),
-  shape(4, 8, [4]),
-  shape(8, 2, [4]),
+const ENTRY_SHAPES: readonly TransferShape[] = Object.freeze([
+  shape(4, 8, 4, 8, true, true),
+  shape(8, 2, 4, 2, true, true),
 ]);
 
-/** A transfer key, Rust `RingCircuit::Transfer*`. */
-export type TransferKeyCircuit =
-  | Readonly<{
-      family: "transferConfidential";
-      outputs: number;
-      inputs: number;
-      withdrawals: number;
-    }>
-  | Readonly<{ family: "transferAnonymous"; outputs: number; class: number; withdrawals: number }>
-  | Readonly<{
-      family: "transferAnonymousEntry";
-      outputs: number;
-      class: number;
-      withdrawals: number;
-    }>;
+export const TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
+  ...NARROW_SHAPES,
+  ...WIDE_SHAPES,
+  ...ENTRY_SHAPES,
+]);
 
-/** What selects a transfer key, every count the frame fixes, Rust `TransferSpend`. */
+/** What names a frame's key, nothing else moves a record's counter, Rust `FrameKey`. */
+export interface FrameKey {
+  readonly rail: RingRail;
+  readonly outputs: number;
+  readonly spendsDefaultRing: boolean;
+  readonly wide: boolean;
+}
+
+/** `undefined` when the catalog keys none, Rust `FrameKey::shape`. */
+export function frameKeyShape(key: FrameKey): TransferShape | undefined {
+  const holds = (entry: TransferShape): boolean => key.outputs <= entry.outputs;
+  // SPP's authority rail holds every input to the ring.
+  if (key.spendsDefaultRing)
+    return key.rail === "delegate" || key.rail === "anonymousDelegate"
+      ? undefined
+      : ENTRY_SHAPES.find(holds);
+  return (key.wide ? WIDE_SHAPES : NARROW_SHAPES).find(holds);
+}
+
+/** A transfer key, Rust `RingCircuit::Transfer`. */
+export interface TransferKeyCircuit {
+  readonly family: "transfer";
+  readonly outputs: number;
+  /** The widest published input count. */
+  readonly class: number;
+  readonly withdrawals: number;
+  readonly owners: number;
+  readonly entry: boolean;
+  /** A salted and a public record per owner fit. */
+  readonly wide: boolean;
+}
+
+/** A key's record pool widths, Rust `RecordPools`. */
+export interface PolicyPoolCapacity {
+  readonly own: number;
+  readonly curator: number;
+  readonly tracking: number;
+}
+
+/** What selects a transfer key, Rust `TransferSpend`. */
 export interface TransferSpend {
   readonly rail: RingRail;
   /** Published inputs, the spent notes. */
   readonly inputs: number;
   readonly outputs: number;
-  /** A spent note of the default ring, the anonymous entry layout. */
   readonly spendsDefaultRing: boolean;
   /** Public withdrawal legs. */
   readonly legs: number;
+  /** Distinct live input owners. */
+  readonly owners: number;
+  /** Distinct records the spend opens in each pool, a salted read takes a row beside the public one. */
+  readonly pools: PolicyPoolCapacity;
+  readonly wide: boolean;
 }
 
-/** The one transfer key serving the spend, `undefined` when the catalog keys none, Rust `RingCircuit::transfer`. */
+/** The wide flag follows the narrow key failing to hold the spend, Rust `TransferSpend::fitted`. */
+export function fittedSpend(spend: TransferSpend): TransferSpend {
+  const narrow = frameKeyShape({ ...spend, wide: false });
+  return { ...spend, wide: narrow === undefined || !shapeHolds(narrow, spend) };
+}
+
+/** The one transfer key serving the spend, `undefined` when the catalog keys none. */
 export function ringTransferCircuit(spend: TransferSpend): TransferKeyCircuit | undefined {
-  const family = transferFamily(spend.rail, spend.spendsDefaultRing);
-  const keyed = family === undefined ? undefined : familyShapes(family);
-  const found = keyed?.find((entry) => entry.outputs === spend.outputs);
-  if (family === undefined || found === undefined) return undefined;
-  if (!Number.isInteger(spend.inputs) || spend.inputs < 1 || spend.inputs > found.inputs)
-    return undefined;
-  if (!Number.isInteger(spend.legs) || spend.legs < 0) return undefined;
-  const withdrawals = found.withdrawals.find((capacity) => capacity >= spend.legs);
-  if (withdrawals === undefined) return undefined;
-  return family === "transferConfidential"
-    ? Object.freeze({ family, outputs: found.outputs, inputs: found.inputs, withdrawals })
-    : Object.freeze({ family, outputs: found.outputs, class: found.inputs, withdrawals });
+  const found = frameKeyShape(spend);
+  return found === undefined || !shapeHolds(found, spend) ? undefined : shapeCircuit(found);
 }
 
-export function familyShapes(family: TransferKeyCircuit["family"]): readonly TransferShape[] {
-  switch (family) {
-    case "transferConfidential":
-      return CONFIDENTIAL_TRANSFER_SHAPES;
-    case "transferAnonymous":
-      return ANONYMOUS_TRANSFER_SHAPES;
-    case "transferAnonymousEntry":
-      return ENTRY_TRANSFER_SHAPES;
-  }
-}
-
-export function transferInputClass(circuit: TransferKeyCircuit): number {
-  return circuit.family === "transferConfidential" ? circuit.inputs : circuit.class;
-}
-
-/** Record pool widths, each subject pool as wide. */
-export interface PolicyPoolCapacity {
-  readonly own: number;
-  readonly curator: number;
-}
-
-/** `Q`, the owners one transfer key screens, entry keys spend for one owner. */
-export function screenedOwners(circuit: TransferKeyCircuit): number {
-  return circuit.family === "transferAnonymousEntry" ? 1 : 4;
-}
-
-/** `S`, the SPP owner signers one transfer key binds, entry keys refuse a nonempty run. */
+/** `S`, the owner signer slots of a key's statement chain, Go `Sections.Signers`. */
 export function signerSlots(circuit: TransferKeyCircuit): number {
-  return circuit.family === "transferAnonymousEntry" ? 0 : transferInputClass(circuit);
+  return circuit.class;
 }
 
-/** Go `PolicyInputs.recordCapacity`, Rust `RingCircuit::record_pools`. */
+/** Rust `RingCircuit::record_pools`, each pool takes as many subjects as records. */
 export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCapacity {
   // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
   const withdrawalAssets = Math.min(circuit.withdrawals, N_PUBLIC_SLOTS);
-  const distinct = screenedOwners(circuit) + 2 * circuit.outputs + circuit.withdrawals;
+  const distinct = circuit.owners + 2 * circuit.outputs + circuit.withdrawals + saltedKeys(circuit);
   return Object.freeze({
     own: distinct + Math.max(withdrawalAssets, N_PUBLIC_SLOTS),
     curator: distinct + withdrawalAssets,
+    tracking: circuit.owners + circuit.outputs + trackedWithdrawals(circuit),
   });
 }
 
-/** The circuit type the prover serves the key under, Go `Key.Circuit`. */
+/** The circuit type the prover serves the key under, Go `Key.circuitType`. */
 export function transferCircuitType(circuit: TransferKeyCircuit): string {
-  const family =
-    circuit.family === "transferConfidential"
-      ? "confidential"
-      : circuit.family === "transferAnonymous"
-        ? "anonymous"
-        : "anonymous-entry";
-  return `custom-ring-transfer-${family}-${circuit.outputs}-in${transferInputClass(circuit)}-w${circuit.withdrawals}`;
+  const family = circuit.entry ? "transfer-entry" : circuit.wide ? "transfer-wide" : "transfer";
+  return `custom-ring-${family}-${circuit.outputs}-in${circuit.class}-w${circuit.withdrawals}-s${circuit.owners}`;
 }
 
-/** Every transfer key in the catalog's order, each family's shapes then their capacities ascending. */
+/** Every transfer key in the catalog's order, Go `keys`. */
 export function transferKeys(): readonly TransferKeyCircuit[] {
-  const families: readonly TransferKeyCircuit["family"][] = [
-    "transferConfidential",
-    "transferAnonymous",
-    "transferAnonymousEntry",
-  ];
-  return families.flatMap((family) =>
-    familyShapes(family).flatMap((entry) =>
-      entry.withdrawals.map((withdrawals): TransferKeyCircuit =>
-        family === "transferConfidential"
-          ? Object.freeze({ family, outputs: entry.outputs, inputs: entry.inputs, withdrawals })
-          : Object.freeze({ family, outputs: entry.outputs, class: entry.inputs, withdrawals }),
-      ),
-    ),
+  return TRANSFER_SHAPES.map(shapeCircuit);
+}
+
+/** Rust `MAX_DEPOSIT_ASSETS`. */
+const MAX_DEPOSIT_ASSETS = 5;
+const DEPOSIT_CAPACITIES: readonly number[] = Object.freeze([1, 2, 4, 8]);
+
+/** One record per recipient and asset, and per salted key on the widest key, Rust `DepositSubjects::pool_width`. */
+export function depositPoolWidth(capacity: number): number {
+  const salted = capacity === DEPOSIT_CAPACITIES.at(-1) ? capacity : 0;
+  return capacity + Math.min(capacity, MAX_DEPOSIT_ASSETS) + salted;
+}
+
+/** The narrowest key holding the deposit, Rust `DepositSubjects::key_capacity`. */
+export function depositKeyCapacity(
+  subjects: Readonly<{ slots: number; recipients: number; assets: number; saltedKeys: number }>,
+): number | undefined {
+  const records = subjects.recipients + subjects.assets + subjects.saltedKeys;
+  return DEPOSIT_CAPACITIES.find(
+    (capacity) => subjects.slots <= capacity && records <= depositPoolWidth(capacity),
   );
 }
 
-function transferFamily(
-  rail: RingRail,
-  spendsDefaultRing: boolean,
-): TransferKeyCircuit["family"] | undefined {
-  if (rail === "anonymous")
-    return spendsDefaultRing ? "transferAnonymousEntry" : "transferAnonymous";
-  return spendsDefaultRing ? undefined : "transferConfidential";
+/** Addresses SPP takes beside its nullifier PDAs. */
+const SPP_ADDRESSES = 4;
+/** Ring program, ring, ring config, own, curator, tracking. */
+const RING_ADDRESSES = 6;
+/** Rust `MAX_TRANSACTION_ADDRESSES`, the v1 ceiling. */
+const MAX_TRANSACTION_ADDRESSES = 64;
+/** Go `ownerAddresses`. */
+const OWNER_ADDRESSES = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - RING_ADDRESSES;
+
+/** What takes a v1 transaction's addresses beside its owner signers, Rust `TransferAddresses`. */
+export interface TransferAddresses {
+  /** The shape's nullifier PDAs. */
+  readonly nInputs: number;
+  readonly coSigners: number;
+  readonly legs: number;
+}
+
+/** Contract Output 5, the owner signers that fit, a co-signer takes its record too. */
+export function ownerSignerCapacity(addresses: TransferAddresses): number {
+  const taken =
+    SPP_ADDRESSES + RING_ADDRESSES + addresses.nInputs + 2 * addresses.coSigners + addresses.legs;
+  return Math.max(0, MAX_TRANSACTION_ADDRESSES - taken);
+}
+
+function shapeCircuit(entry: TransferShape): TransferKeyCircuit {
+  return Object.freeze({
+    family: "transfer",
+    outputs: entry.outputs,
+    class: entry.inputs,
+    withdrawals: entry.withdrawals,
+    owners: entry.owners,
+    entry: entry.entry,
+    wide: entry.wide,
+  });
+}
+
+/** Rust `TransferShape::holds`. */
+function shapeHolds(entry: TransferShape, spend: TransferSpend): boolean {
+  const pools = transferPoolCapacity(shapeCircuit(entry));
+  return (
+    Number.isInteger(spend.inputs) &&
+    spend.inputs >= 1 &&
+    spend.inputs <= entry.inputs &&
+    spend.legs <= entry.withdrawals &&
+    spend.owners <= entry.owners &&
+    spend.pools.own <= pools.own &&
+    spend.pools.curator <= pools.curator &&
+    spend.pools.tracking <= pools.tracking
+  );
+}
+
+/** Go `publicOwners`. */
+function publicOwners(circuit: TransferKeyCircuit): number {
+  const fit = Math.floor((OWNER_ADDRESSES - circuit.withdrawals) / 2);
+  return Math.min(circuit.owners, fit) + circuit.withdrawals;
+}
+
+/** Go `trackedWithdrawals`. */
+function trackedWithdrawals(circuit: TransferKeyCircuit): number {
+  return circuit.wide ? publicOwners(circuit) - circuit.owners : 0;
+}
+
+/** Go `saltedKeys`. */
+function saltedKeys(circuit: TransferKeyCircuit): number {
+  return circuit.wide
+    ? 2 * publicOwners(circuit) + circuit.outputs - circuit.owners - circuit.withdrawals
+    : 0;
 }

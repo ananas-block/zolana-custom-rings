@@ -1,7 +1,7 @@
 //! The widest frames of every transfer key reach the pairing within Pinocchio's heap, the validator sweep settles each key's widest policy legs.
 
 use custom_ring_interface::{
-    key_catalog::{FrameKey, TransferShape, TRANSFER_SHAPES},
+    key_catalog::{TransferShape, TRANSFER_SHAPES},
     tag, CustomRingError, RingPolicy, RingRail, RingTransactData, RootRead,
 };
 use solana_address::Address;
@@ -10,8 +10,8 @@ use solana_keypair::Signer;
 use solana_transaction_error::TransactionError;
 use spl_token_2022_interface::pod::PodAccount;
 use spr_interface::{
-    instruction::InterfaceTransfer, MAX_INTERFACE_TRANSFERS, SPL_TOKEN_ACCOUNT_INITIALIZED,
-    SPL_TOKEN_PROGRAM_ID,
+    instruction::InterfaceTransfer, shape::Shape, MAX_INTERFACE_TRANSFERS,
+    SPL_TOKEN_ACCOUNT_INITIALIZED, SPL_TOKEN_PROGRAM_ID,
 };
 
 use crate::{
@@ -76,15 +76,13 @@ impl Wide {
     }
 }
 
-/// The header's flag names the wide key.
-fn wide_key(shape: &TransferShape) -> bool {
-    let wide = FrameKey {
-        rail: RingRail::Confidential,
-        outputs: usize::from(shape.outputs),
-        spends_default_ring: false,
-        wide: true,
-    };
-    wide.shape() == Some(*shape)
+fn keyed_on(rail: RingRail) -> impl Iterator<Item = &'static TransferShape> {
+    TRANSFER_SHAPES.iter().filter(move |shape| {
+        rail.supports(Shape::new(
+            usize::from(shape.inputs),
+            usize::from(shape.outputs),
+        ))
+    })
 }
 
 /// Per key, one input with the widest legs, the input class with them, and the class alone.
@@ -101,26 +99,7 @@ fn cases() -> Vec<Wide> {
             });
         }
     };
-    for shape in &TRANSFER_SHAPES {
-        let wide = wide_key(shape);
-        push(
-            Wide {
-                setup: Setup::AnonymousPolicy,
-                rail: RingRail::Anonymous,
-                inputs: 1,
-                outputs: shape.outputs,
-                legs: Legs::Sol(0),
-                policy: true,
-                exempt: false,
-                entry: shape.entry,
-                in_proof: false,
-                wide,
-            },
-            shape,
-        );
-        if shape.entry {
-            continue;
-        }
+    for shape in keyed_on(RingRail::Confidential).filter(|shape| !shape.entry) {
         let policy = Wide {
             setup: Setup::Policy,
             rail: RingRail::Confidential,
@@ -131,7 +110,7 @@ fn cases() -> Vec<Wide> {
             exempt: false,
             entry: false,
             in_proof: false,
-            wide,
+            wide: shape.wide,
         };
         push(policy, shape);
         push(
@@ -154,6 +133,23 @@ fn cases() -> Vec<Wide> {
                 policy: false,
                 exempt: true,
                 ..policy
+            },
+            shape,
+        );
+    }
+    for shape in keyed_on(RingRail::Anonymous) {
+        push(
+            Wide {
+                setup: Setup::AnonymousPolicy,
+                rail: RingRail::Anonymous,
+                inputs: 1,
+                outputs: shape.outputs,
+                legs: Legs::Sol(0),
+                policy: true,
+                exempt: false,
+                entry: shape.entry,
+                in_proof: false,
+                wide: shape.wide && !shape.entry,
             },
             shape,
         );

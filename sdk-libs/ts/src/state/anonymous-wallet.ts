@@ -1,8 +1,8 @@
 /** One document holds a wallet's scan progress and everything it covers, one write stores both. */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { bytesKey } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { X25519PublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
+import { X25519PublicKey, type ShieldedAddress, type ViewTag } from "@heliuslabs/zolana/keypair";
 import {
   deserializeWallet,
   serializeWallet,
@@ -12,10 +12,12 @@ import {
 } from "@heliuslabs/zolana/transaction";
 
 import { RingError } from "../protocol/error.js";
-import { unseen } from "./batch.js";
+import { exactlyOne, unseen } from "./batch.js";
+import { mintBalances, noteState, type MintBalance, type NoteState } from "./exposed-notes.js";
 import { consumeScan, type AnonymousScan } from "./anonymous-sync.js";
 import { registeredMint } from "../operations/workflow/recover.js";
-import { parseExact, ViewingHistory } from "./viewing-history.js";
+import type { RingKeys } from "./ring-keys.js";
+import { parseExact, viewTagStream, ViewingHistory, type EntryStream } from "./viewing-history.js";
 
 export const ANONYMOUS_WALLET_VERSION = 1;
 
@@ -64,6 +66,19 @@ export class AnonymousWallet {
 
   notes(): readonly WalletUtxo[] {
     return this.wallet.utxos();
+  }
+
+  noteState(note: WalletUtxo): NoteState {
+    return noteState(note);
+  }
+
+  /** Unspent zero-key notes, only a public spend naming the wallet takes one. */
+  exposedNotes(): readonly WalletUtxo[] {
+    return this.wallet.utxos().filter((note) => noteState(note) === "exposedIfSpent");
+  }
+
+  balances(): ReadonlyMap<Address, MintBalance> {
+    return mintBalances(this.wallet.utxos());
   }
 
   /** Stored and unspendable, `promotePending` moves each once its mint registers, no rescan needed. */
@@ -125,7 +140,7 @@ export class AnonymousWallet {
         utxos: marked([...pendingState.utxos, ...freshPending]),
       });
       this.#claims = [...this.#claims, ...claims];
-      this.#history = scan.history;
+      this.#history = this.#history._withScanProgress(scan.history);
     });
   }
 
@@ -147,10 +162,40 @@ export class AnonymousWallet {
     });
   }
 
-  /** A tag counter or an added key, a stored position or watermark never moves here. */
+  /** Only raises a tag counter or adds a key. */
   updateHistory(updated: ViewingHistory): void {
     if (!updated._progressMatches(this.#history)) throw new RingError("RING_SCAN_PROGRESS_MOVED");
     this.#history = updated;
+  }
+
+  /** The current key's next sender tag, concurrent callers never share one. */
+  takeSenderTag(keys: RingKeys, context?: RequestContext): Promise<ViewTag> {
+    return this.#takeTag(keys, "tx", context);
+  }
+
+  /** A fresh `recipientRequestViewTag`, concurrent callers never share one. */
+  takeRequestTag(keys: RingKeys, context?: RequestContext): Promise<ViewTag> {
+    return this.#takeTag(keys, "request", context);
+  }
+
+  /** A holder failure burns the index, the gap scan passes it. */
+  async #takeTag(
+    keys: RingKeys,
+    stream: EntryStream,
+    context: RequestContext | undefined,
+  ): Promise<ViewTag> {
+    const current = this.#history.current();
+    const { index, counter } = current[stream].takeNext();
+    this.#history = this.#history.withEntry(
+      this.#history.entries.length - 1,
+      current.withCounter(stream, counter),
+    );
+    return exactlyOne(
+      await keys.viewTags(
+        [{ viewingPublicKey: current.viewingPublicKey, stream: viewTagStream(stream, index) }],
+        context,
+      ),
+    );
   }
 
   /** Its notes open the wallet's funds, store it as key material under one atomic replace. */

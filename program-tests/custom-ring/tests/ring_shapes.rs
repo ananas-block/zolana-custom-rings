@@ -114,10 +114,9 @@ enum KeyFamily {
 
 impl KeyFamily {
     fn shapes(self) -> impl Iterator<Item = TransferShape> {
-        let entry = matches!(self, Self::AnonymousEntry);
         TRANSFER_SHAPES
             .into_iter()
-            .filter(move |shape| shape.entry == entry)
+            .filter(move |shape| self.keys(*shape) && swept(*shape))
     }
 
     const fn column(self) -> Column {
@@ -135,36 +134,63 @@ impl KeyFamily {
         }
     }
 
-    fn keys(self, circuit: RingCircuit) -> bool {
-        let entry = matches!(self, Self::AnonymousEntry);
-        matches!(circuit, RingCircuit::Transfer { entry: keyed, .. } if keyed == entry)
+    fn keys(self, shape: TransferShape) -> bool {
+        shape.entry == matches!(self, Self::AnonymousEntry)
     }
 }
 
 fn wide_key(shape: TransferShape) -> bool {
-    frame_key(shape.outputs, true) == Some(shape)
+    shape.wide && !shape.entry
 }
 
-fn frame_key(outputs: u8, wide: bool) -> Option<TransferShape> {
+/// Only a salted pool selects a wide key holding no more legs than its narrow key.
+fn swept(shape: TransferShape) -> bool {
+    !wide_key(shape)
+        || narrow_key(shape.outputs).is_some_and(|narrow| narrow.withdrawals < shape.withdrawals)
+}
+
+fn narrow_key(outputs: u8) -> Option<TransferShape> {
     FrameKey {
         rail: RingRail::Confidential,
         outputs: outputs.into(),
         spends_default_ring: false,
-        wide,
+        wide: false,
     }
     .shape()
+}
+
+fn shape_of(circuit: RingCircuit) -> Option<TransferShape> {
+    let RingCircuit::Transfer {
+        outputs,
+        inputs,
+        withdrawals,
+        owners,
+        entry,
+        wide,
+    } = circuit
+    else {
+        return None;
+    };
+    Some(TransferShape {
+        outputs,
+        inputs,
+        withdrawals,
+        owners,
+        entry,
+        wide,
+    })
 }
 
 fn the_wide_key() -> Result<TransferShape> {
     TRANSFER_SHAPES
         .into_iter()
-        .find(|shape| wide_key(*shape))
+        .find(|shape| wide_key(*shape) && swept(*shape))
         .context("the catalog holds a wide key")
 }
 
 /// One leg past the narrow key of the same outputs selects the wide key.
 fn past_narrow_legs(wide: TransferShape) -> Result<usize> {
-    let narrow = frame_key(wide.outputs, false).context("a narrow key of its width")?;
+    let narrow = narrow_key(wide.outputs).context("a narrow key of its width")?;
     Ok(usize::from(narrow.withdrawals) + 1)
 }
 
@@ -201,30 +227,20 @@ impl Coverage {
 
 /// The one sweep that proves the key, every transfer key has one.
 fn key_owner(circuit: RingCircuit) -> Option<Column> {
+    if let Some(shape) = shape_of(circuit) {
+        return match (shape.entry, wide_key(shape), swept(shape)) {
+            (true, ..) => Some(Column::Anonymous),
+            (false, false, _) => Some(Column::Confidential),
+            (false, true, true) => Some(Column::ConfidentialPolicy),
+            (false, true, false) => None,
+        };
+    }
     Some(match circuit {
-        RingCircuit::Transfer {
-            outputs,
-            inputs,
-            withdrawals,
-            owners,
-            entry: false,
-        } => match wide_key(TransferShape {
-            outputs,
-            inputs,
-            withdrawals,
-            owners,
-            entry: false,
-        }) {
-            true => Column::ConfidentialPolicy,
-            false => Column::Confidential,
-        },
-        RingCircuit::Transfer { entry: true, .. } | RingCircuit::Merge => Column::Anonymous,
+        RingCircuit::Merge => Column::Anonymous,
         RingCircuit::Deposit { capacity: 1 }
         | RingCircuit::RegisterKey
         | RingCircuit::ApplyEnrollments { writes: 1 } => Column::Confidential,
-        RingCircuit::Deposit { .. }
-        | RingCircuit::ApplyEnrollments { .. }
-        | RingCircuit::ApplyRecords { .. } => return None,
+        _ => return None,
     })
 }
 
@@ -571,7 +587,10 @@ impl ShapeRing<'_> {
                 );
             }
         }
-        coverage.assert_keys(|circuit| family.keys(circuit) && family.column() == self.column);
+        coverage.assert_keys(|circuit| {
+            family.column() == self.column
+                && shape_of(circuit).is_some_and(|shape| family.keys(shape) && swept(shape))
+        });
         Ok(())
     }
 

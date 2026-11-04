@@ -1,17 +1,22 @@
 import { copyBytes, fail } from "@heliuslabs/zolana/internal";
-import type { Bytes33, Bytes96 } from "@heliuslabs/zolana";
+import type { Bytes33 } from "@heliuslabs/zolana";
+
+import { readHistoricalDepositCapsule } from "../historical/v3/deposit-capsule.js";
+import { OPENING_RECORD_LEN } from "./ring-disclosure-layout.js";
 
 export const RING_DEPOSIT_AUDIT_SLOTS = 8;
-/** One opening is `ownerHash || blinding || ownerKey`. */
-export const RING_DEPOSIT_OPENING_LENGTH = 96;
-export const RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET = 64;
-const MAGIC = new TextEncoder().encode("CRDEP001");
+/** One sealed `OpeningRecord`, its secret the blinding. */
+export const RING_DEPOSIT_OPENING_LENGTH = OPENING_RECORD_LEN;
+/** The batch's stream blocks of one record, slot `i` opens at `STREAM_FIRST_COUNTER + 9i`. */
+export const RING_DEPOSIT_OPENING_BLOCKS = 9;
+const MAGIC = new TextEncoder().encode("CRDEP002");
 const HEADER_LENGTH = 42 + RING_DEPOSIT_OPENING_LENGTH;
 
 export interface RingDepositCapsule {
   readonly slotIndex: number;
   readonly ephemeralPublicKey: Bytes33;
-  readonly ciphertext: Bytes96;
+  /** `RING_DEPOSIT_OPENING_LENGTH` bytes. */
+  readonly ciphertext: Uint8Array;
   readonly recipientCiphertext: Uint8Array;
 }
 
@@ -35,6 +40,7 @@ export function encodeRingDepositCapsule(input: RingDepositCapsule): Uint8Array 
   return bytes;
 }
 
+/** `undefined` without the magic, a truncated capsule or a slot past the batch refuses. */
 export function readRingDepositCapsule(input: Uint8Array): RingDepositCapsule | undefined {
   const bytes = copyBytes(input);
   if (!MAGIC.every((byte, index) => bytes[index] === byte)) return undefined;
@@ -48,12 +54,13 @@ export function readRingDepositCapsule(input: Uint8Array): RingDepositCapsule | 
   return Object.freeze({
     slotIndex,
     ephemeralPublicKey: bytes.slice(9, 42) as Bytes33,
-    ciphertext: bytes.slice(42, HEADER_LENGTH) as Bytes96,
+    ciphertext: bytes.slice(42, HEADER_LENGTH),
     recipientCiphertext: bytes.slice(HEADER_LENGTH),
   });
 }
 
-/** Extracts recipient ciphertext and rejects malformed recognized capsules. */
+/** The recipient ciphertext of either capsule, a malformed recognized one refuses. */
 export function ringDepositRecipientCiphertext(bytes: Uint8Array): Uint8Array {
-  return readRingDepositCapsule(bytes)?.recipientCiphertext ?? bytes;
+  const capsule = readRingDepositCapsule(bytes) ?? readHistoricalDepositCapsule(bytes);
+  return capsule?.recipientCiphertext ?? bytes;
 }

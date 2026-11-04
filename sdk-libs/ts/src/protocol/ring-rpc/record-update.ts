@@ -21,19 +21,8 @@ import {
 } from "../../operations/management/record-writes.js";
 import { RingError } from "../error.js";
 import type { QueueEntry } from "../membership/member-registry.js";
-import {
-  addressRecordHash,
-  checkMember,
-  escrowEntry,
-  queueChain,
-} from "../membership/member-opening.js";
-import {
-  ListId,
-  memberOfTag,
-  recordBit,
-  walletGrantMember,
-  type Member,
-} from "../membership/policy.js";
+import { checkMember, queueChain } from "../membership/member-opening.js";
+import { ListId, recordBit, walletGrantMember, type Member } from "../membership/policy.js";
 import type {
   RecordUpdate,
   RecordUpdateEntry,
@@ -68,7 +57,7 @@ export function recordUpdateQueueEntry(entry: RecordUpdateEntry): QueueEntry {
       const member = checkMember(indexerScalars.hashBytes(entry.member));
       if (entry.mask === 0n && entry.value === 0n) {
         if (entry.mintPolicy === null) throw invalid("EmptyWrite");
-        return { member, mask: 0n, value: 0n, escrowKey: ZERO_32, mintPolicy: entry.mintPolicy };
+        return { member, mask: 0n, value: 0n, mintPolicy: entry.mintPolicy };
       }
       if (entry.mask === 0n || (entry.value & ~entry.mask) !== 0n)
         throw invalid("ValueOutsideMask");
@@ -77,32 +66,7 @@ export function recordUpdateQueueEntry(entry: RecordUpdateEntry): QueueEntry {
         member,
         mask: entry.mask,
         value: entry.value,
-        escrowKey: ZERO_32,
         ...(entry.mintPolicy === null ? {} : { mintPolicy: entry.mintPolicy }),
-      };
-    }
-    case "escrow": {
-      const ciphertext = indexerScalars.base64Bytes(entry.ciphertext);
-      if (ciphertext.length !== 32) throw invalid("CiphertextLength");
-      return escrowEntry(indexerScalars.hashBytes(entry.member), {
-        nullifierPk: indexerScalars.hashBytes(entry.nullifierPk),
-        ciphertext: ciphertext as Bytes32,
-      });
-    }
-    case "address": {
-      const member = checkMember(memberOfTag(addressBytes(entry.owner, "owner")));
-      return {
-        member,
-        mask: 0n,
-        value: 0n,
-        escrowKey: ZERO_32,
-        addressHash: addressRecordHash({
-          member,
-          ringId: indexerScalars.hashBytes(entry.ringId),
-          nullifierPk: indexerScalars.hashBytes(entry.nullifierPk),
-          viewingU: indexerScalars.hashBytes(entry.viewingU),
-          addressRevision: entry.addressRevision,
-        }),
       };
     }
     case "walletGrant": {
@@ -114,7 +78,6 @@ export function recordUpdateQueueEntry(entry: RecordUpdateEntry): QueueEntry {
         ),
         mask: bit,
         value: entry.access === "granted" ? bit : 0n,
-        escrowKey: ZERO_32,
       };
     }
   }

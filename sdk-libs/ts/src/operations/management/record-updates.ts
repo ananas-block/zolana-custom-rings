@@ -32,9 +32,6 @@ export interface RecordUpdateTarget {
   readonly validUntilSlot: bigint;
 }
 
-export type EscrowEntry = Extract<RecordUpdateEntry, { kind: "escrow" }>;
-export type AddressEntry = Extract<RecordUpdateEntry, { kind: "address" }>;
-
 /** Rust `WalletRecordUpdate`, signed by the wallet, every entry names the wallet. */
 export class WalletRecordUpdate {
   readonly #target: RecordUpdateTarget;
@@ -71,18 +68,6 @@ export class WalletRecordUpdate {
       reader: indexerScalars.hash(member),
       access,
     });
-  }
-
-  /** Queues the address the owner already signed with `enrollAddressInstruction`, the service checks its account. */
-  withAddress(enrollment: AddressEntry): WalletRecordUpdate {
-    if (enrollment.owner !== this.#wallet) throw invalid("AddressOwner");
-    return this.#with(enrollment);
-  }
-
-  /** `escrow` comes from `KeyRegistration.prove` for this wallet. */
-  withEscrow(escrow: EscrowEntry): WalletRecordUpdate {
-    if (escrow.member !== indexerScalars.hash(this.#member)) throw invalid("EscrowMember");
-    return this.#with(escrow);
   }
 
   /** Rust `WalletRecordUpdate::awaiting_authority`, held until the policy authority sets every list. */
@@ -137,11 +122,6 @@ export class AuthorityRecordUpdate {
       mask: listMask(lists),
       value: listBits(lists.set),
     });
-  }
-
-  /** An authority applies an owner's enrollment, its hash comes from the owner's signed account. */
-  withAddress(enrollment: AddressEntry): AuthorityRecordUpdate {
-    return this.#with(enrollment);
   }
 
   /** Replaces all mint settings, zero values clear them. */

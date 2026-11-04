@@ -112,6 +112,7 @@ function decryptedItem(overrides: Readonly<Record<string, unknown>> = {}): Recor
     txViewingPk: X25519_BASE64,
     outputs: [],
     payloadErrors: [],
+    realInputs: 0,
     nullifiers: [],
     signers: [],
     withdrawals: [],
@@ -151,30 +152,6 @@ function rustItem(name: string): Record<string, unknown> {
 /** Rust `DecryptedInput` of a fixture row, named by commitment and the last row unseen. */
 function anonymousItem(): Record<string, unknown> {
   return rustItem("decrypted_anonymous_page.json");
-}
-
-/** An unseen input beside a dummy, under the nullifiers they publish. */
-function unseenItem(): Record<string, unknown> {
-  return decryptedItem({
-    inputs: [
-      { nullifier: addressOf(12), hash: addressOf(0x2a), unseen: true },
-      { nullifier: addressOf(11), unseen: false },
-    ],
-    nullifiers: [addressOf(12), addressOf(11)],
-    spenders: [addressOf(13)],
-  });
-}
-
-/** Two unseen inputs and a view tag, no sender names the note. */
-function unseenFirstItem(): Record<string, unknown> {
-  return decryptedItem({
-    outputs: [{ ...outputAt(anonymousItem(), 0), tag: addressOf(9) }],
-    inputs: [
-      { nullifier: addressOf(12), hash: addressOf(0x2b), unseen: true },
-      { nullifier: addressOf(11), hash: addressOf(0x2a), unseen: true },
-    ],
-    nullifiers: [addressOf(12), addressOf(11)],
-  });
 }
 
 describe("ring status", () => {
@@ -711,6 +688,7 @@ describe("ring audited merges", () => {
         mint: SOL_MINT,
         amount: 7n,
         inputCommitments: [filled(7, 32), filled(8, 32)],
+        realNullifiers: [],
       },
     ]);
     expect(page.unresolved).toEqual([
@@ -1255,13 +1233,13 @@ describe("ring read request", () => {
           dataHash: filled(0x14, 32),
           ringDataHash: filled(0x15, 32),
         },
-        ownerTag: { kind: "recipient", u: filled(6, 32) },
+        ownerTag: { kind: "view", tag: filled(6, 32) },
       },
     });
     const exit = item.outputs[1]!.opening;
     expect(exit.kind === "exit" && exit.utxo.mint).toBeUndefined();
     expect(item.payloadErrors).toEqual([{ slotIndex: 3, kind: "commitment" }]);
-    expect(item.sender).toBeUndefined();
+    expect(item.realInputs).toBe(0);
     expect(item.inputs).toEqual([]);
     expect(item.nullifiers).toEqual([filled(12, 32)]);
     expect(item.spenders).toEqual([addressOf(13)]);
@@ -1287,8 +1265,10 @@ describe("ring read request", () => {
     expect(params["wallet"]).toBe(addressOf(0x50));
     const [sent, received] = page.items;
     if (sent?.view.role !== "sender") throw new Error("a sender view");
-    expect(sent.view.inputs).toHaveLength(6);
-    expect(sent.view.inputs[5]?.opening).toEqual({ kind: "unseenHash", hash: filled(0xa0, 32) });
+    expect(sent.view.inputs).toHaveLength(4);
+    expect(sent.view.inputs.every((input) => input.real || input.defaultInput === undefined)).toBe(
+      true,
+    );
     expect(sent.view.outputs.map((output) => output.slotIndex)).toEqual([0, 1, 2]);
     expect(received?.view).toEqual({
       role: "recipient",
@@ -1297,219 +1277,39 @@ describe("ring read request", () => {
     });
   });
 
-  it("reads the anonymous page with its sender, tags and every input ring kind", async () => {
+  it("reads each published input of the anonymous page with its real count", async () => {
     const item = await readItem(anonymousItem());
-    expect(item.sender).toEqual({ ownerKey: filled(0x50, 32), nullifierPk: filled(0x51, 32) });
-    const ring = item.outputs[0]!.opening;
-    expect(ring.kind === "ring" && ring.ownerTag).toEqual({ kind: "view", tag: filled(0x31, 32) });
+    expect(item.realInputs).toBe(3);
     expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
-    expect(
-      item.inputs.map(({ opening }) => (opening.kind === "opened" ? opening.ring : opening.kind)),
-    ).toEqual([
-      { kind: "ring", commitment: filled(0x62, 32) },
-      { kind: "unresolved", ring: filled(0x72, 32), default: filled(0x73, 32) },
-      { kind: "default", commitment: filled(0x82, 32) },
-      undefined,
-      "dummy",
-      "unseenHash",
-    ]);
-    expect(item.inputs.map((input) => input.hash)).toEqual([
-      filled(0x62, 32),
-      filled(0x74, 32),
-      filled(0x82, 32),
-      filled(0x92, 32),
-      undefined,
-      filled(0xa0, 32),
-    ]);
-    expect(item.inputs[3]?.opening).toMatchObject({ amount: 0x90n, mint: addressOf(4) });
-    expect(item.inputs[5]?.opening).toEqual({ kind: "unseenHash", hash: filled(0xa0, 32) });
-  });
-
-  it("keeps an unseen input with its hash and apart from a dummy, on the page and in the sender's view", async () => {
-    const wire = unseenItem();
-    const openings = [{ kind: "unseenHash", hash: filled(0x2a, 32) }, { kind: "dummy" }];
-    const item = await readItem(wire);
-    expect(item.sender).toBeUndefined();
-    expect(item.inputs.map((input) => input.opening)).toEqual(openings);
-    expect(item.inputs.map((input) => input.hash)).toEqual([filled(0x2a, 32), undefined]);
-    expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
-    const { slot, txSignature, eventIndex, inputs, outputs, payloadErrors, withdrawals } = wire;
-    const view = { role: "sender", inputs, outputs, payloadErrors, withdrawals };
-    const activity = await rpcWith({
-      context: { blockTime: 1_700_000_000, slot: 9 },
-      value: { items: [{ slot, txSignature, eventIndex, view }], cursor: null },
-    }).getWalletActivity({
-      target: RING_TARGET,
-      signer: await anyReader(),
-      wallet: addressOf(13),
-    });
-    const sent = activity.items[0]!.view;
-    if (sent.role !== "sender") throw new Error("a sender view");
-    expect(sent.inputs.map((input) => input.opening)).toEqual(openings);
-  });
-
-  it.each<readonly [string, (input: Record<string, unknown>) => void, string]>([
-    ["a hash off its length", (input) => (input["hash"] = "Kioq"), "inputs[0].hash"],
-    ["no hash", (input) => delete input["hash"], "inputs[0].hash"],
-    ["a flag of another type", (input) => (input["unseen"] = "true"), "inputs[0].unseen"],
-    ["an opening", (input) => (input["opening"] = { amount: 1 }), "inputs[0]"],
-    [
-      "a merge record",
-      (input) => (input["merged"] = { ownerKey: addressOf(1), asset: addressOf(2), amount: 1 }),
-      "inputs[0]",
-    ],
-    ["a field the wire lacks", (input) => (input["candidates"] = []), "inputs[0].shape"],
-  ])("refuses an unseen input with %s", async (_name, edit, path) => {
-    const item = unseenItem();
-    edit((item["inputs"] as Record<string, unknown>[])[0]!);
-    await expect(readItem(item)).rejects.toMatchObject({ code: "RING_RPC", details: { path } });
-  });
-
-  it("reads an unseen first note by its hash with no sender", async () => {
-    const item = await readItem(unseenFirstItem());
-    expect(item.sender).toBeUndefined();
-    expect(item.inputs.map((input) => input.opening)).toEqual([
-      { kind: "unseenHash", hash: filled(0x2b, 32) },
-      { kind: "unseenHash", hash: filled(0x2a, 32) },
-    ]);
-    expect(item.outputs[0]?.opening).toMatchObject({
-      kind: "ring",
-      ownerTag: { kind: "view", tag: filled(9, 32) },
-    });
-  });
-
-  it("refuses an unseen hash beside a sender", async () => {
-    const item = unseenFirstItem();
-    item["sender"] = { ownerKey: addressOf(2) };
-    await expect(readItem(item)).rejects.toMatchObject({
-      code: "RING_RPC",
-      details: { path: "inputs" },
-    });
-  });
-
-  it("reads an escrow pending slot with its proven fields", async () => {
-    const item = await readItem(rustItem("decrypted_escrow_pending_page.json"));
-    expect(item.payloadErrors).toEqual([]);
-    expect(item.outputs.map((output) => output.opening)).toEqual([
-      {
-        kind: "escrowPending",
-        ownerKey: filled(0x20, 32),
-        amount: 32n,
-        blinding: filled(0x21, 32),
-        slot: { kind: "ring", recipientU: filled(0x21, 32) },
-      },
-      {
-        kind: "escrowPending",
-        ownerKey: filled(0x30, 32),
-        amount: 48n,
-        blinding: filled(0x31, 32),
-        slot: { kind: "exit", asset: filled(0x31, 32), mint: addressOf(4) },
-      },
-      { kind: "dummy" },
-    ]);
-  });
-
-  it.each<readonly [string, (output: Record<string, unknown>) => void]>([
-    ["no recipient and no asset", (output) => delete output["recipientU"]],
-    [
-      "a recipient and an asset",
-      (output) => ((output["escrowPending"] as Record<string, unknown>)["asset"] = addressOf(1)),
-    ],
-  ])("refuses an escrow pending slot with %s", async (_name, edit) => {
-    const item = rustItem("decrypted_escrow_pending_page.json");
-    edit((item["outputs"] as Record<string, unknown>[])[0]!);
-    await expect(readItem(item)).rejects.toMatchObject({
-      code: "RING_RPC",
-      details: { path: "outputs[0].escrowPending" },
-    });
-  });
-
-  it("refuses a page that discloses inputs for only some published nullifiers", async () => {
-    const item = unseenItem();
-    item["inputs"] = (item["inputs"] as unknown[]).slice(1);
-    await expect(readItem(item)).rejects.toMatchObject({
-      code: "RING_RPC",
-      details: { path: "inputs" },
-    });
-  });
-
-  it("reads a sender whose spent UTXO 0 is a deposit and refuses an output UTXO without its key", async () => {
-    const deposited = anonymousItem();
-    delete (deposited["sender"] as Record<string, unknown>)["nullifierPk"];
-    expect((await readItem(deposited)).sender).toEqual({ ownerKey: filled(0x50, 32) });
-    const keyless = anonymousItem();
-    delete (outputAt(keyless, 0)["utxo"] as Record<string, unknown>)["nullifierPk"];
-    await expect(readItem(keyless)).rejects.toMatchObject({ code: "RING_RPC" });
+    expect(item.inputs.filter((input) => input.defaultInput !== undefined)).toHaveLength(2);
   });
 
   it.each<readonly [string, (item: Record<string, unknown>) => void, string]>([
-    [
-      "a slot opened twice",
-      (item) => (item["payloadErrors"] = [{ slotIndex: 0, kind: "frame" }]),
-      "payloadErrors",
-    ],
-    [
-      "a gap in the published slots",
-      (item) => (item["outputs"] = (item["outputs"] as unknown[]).slice(1)),
-      "payloadErrors",
-    ],
-    [
-      "a ring output without its view tag",
-      (item) => delete outputAt(item, 0)["tag"],
-      "outputs[0].kind",
-    ],
-    [
-      "a ring output with a view tag and a recipient key",
-      (item) => (outputAt(item, 0)["recipientU"] = addressOf(6)),
-      "outputs[0].kind",
-    ],
-    [
-      "an exit with a recipient key",
-      (item) => (outputAt(item, 1)["recipientU"] = addressOf(6)),
-      "outputs[1].kind",
-    ],
-    [
-      "a dummy with a UTXO",
-      (item) => (outputAt(item, 2)["utxo"] = outputAt(item, 1)["utxo"]),
-      "outputs[2].kind",
-    ],
-    [
-      "an unknown output kind",
-      (item) => (outputAt(item, 2)["kind"] = "padding"),
-      "outputs[2].kind",
-    ],
-    ["a tag without a hidden sender", (item) => delete item["sender"], "outputs.tag"],
-    [
-      "an input per published nullifier missing",
-      (item) => (item["inputs"] = (item["inputs"] as unknown[]).slice(1)),
-      "inputs",
-    ],
+    ["a real count past the nullifiers", (item) => (item["realInputs"] = 9), "realInputs"],
+    ["an input missing", (item) => (item["inputs"] as unknown[]).pop(), "inputs"],
     [
       "an input under another nullifier",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["nullifier"] = addressOf(99)),
+      (item) => ((item["nullifiers"] as unknown[])[0] = addressOf(9)),
       "inputs",
     ],
     [
-      "an anonymous ring output under a recipient key",
+      "padding that opens a default note",
       (item) => {
-        const output = outputAt(item, 0);
-        delete output["tag"];
-        output["recipientU"] = addressOf(6);
+        const [padding, opened] = (item["inputs"] as Record<string, unknown>[])
+          .slice(-1)
+          .concat((item["inputs"] as Record<string, unknown>[]).slice(1, 2));
+        if (padding === undefined || opened === undefined) throw new Error("no inputs");
+        padding["real"] = false;
+        padding["defaultInput"] = opened["defaultInput"];
       },
-      "outputs.tag",
+      "inputs[3].defaultInput",
     ],
+    ["a ring output with no tag", (item) => delete outputAt(item, 0)["tag"], "outputs[0].kind"],
+    ["an exit with a tag", (item) => (outputAt(item, 1)["tag"] = addressOf(9)), "outputs[1].kind"],
     [
-      "a dummy input with a hash",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[4]!["hash"] = addressOf(1)),
-      "inputs[4].hash",
-    ],
-    [
-      "an unknown input ring kind",
-      (item) =>
-        (((item["inputs"] as Record<string, unknown>[])[0]!["opening"] as Record<string, unknown>)[
-          "ring"
-        ] = { kind: "pool", commitment: addressOf(1) }),
-      "inputs[0].opening.ring.kind",
+      "a dummy with an opening",
+      (item) => (outputAt(item, 2)["utxo"] = outputAt(item, 0)["utxo"]),
+      "outputs[2].kind",
     ],
     ["an event index past u16", (item) => (item["eventIndex"] = 65536), "eventIndex"],
   ])("refuses %s", async (_name, edit, path) => {

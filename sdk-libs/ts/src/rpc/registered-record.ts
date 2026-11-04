@@ -1,8 +1,18 @@
-import { type RingMemberOpening, type RingRecordReader, type StorageRoot } from "./ports.js";
+import {
+  type RingMemberOpening,
+  type RingRecordReader,
+  type StorageRoot,
+  type TrackingReader,
+} from "./ports.js";
 import { type PresentRecordOpening } from "./prover/types.js";
 import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer/indexer-limits.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";
-import { waitForProjection, equalBytes, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
+import {
+  bytesKey,
+  equalBytes,
+  waitForProjection,
+  ZERO_NULLIFIER_PK,
+} from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
@@ -13,8 +23,10 @@ import {
   ownerEscrowed,
   verifyRecordPool,
 } from "../protocol/membership/member-opening.js";
+import { verifyTrackingOpening } from "../protocol/membership/tracking.js";
 import type { RecordPool } from "../protocol/membership/member-registry.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
+import { newestTrackingRoot } from "./tracking-resolver.js";
 
 export type RingRecordReadClient = Pick<ChainReader, "getAccount"> &
   Pick<RingRecordReader, "getStorageMemberOpenings">;
@@ -36,22 +48,32 @@ export async function fetchBoundRoot(
   }>,
   context?: RequestContext,
 ): Promise<BoundRoot> {
+  const root = await fetchRegistryRoot(input, context);
+  return Object.freeze({ ...root, ringProgramId: input.ringProgramId });
+}
+
+/** No ring proof binds the root. */
+export async function fetchRegistryRoot(
+  input: Readonly<{ client: Pick<ChainReader, "getAccount">; registry: Address }>,
+  context?: RequestContext,
+): Promise<RegistryRoot> {
   const current = (await fetchStorageRegistry(input.client, input.registry, context)).roots[0];
   if (current === undefined)
     throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { registry: input.registry } });
   return Object.freeze({
-    ringProgramId: input.ringProgramId,
     registry: input.registry,
     revision: current.revision,
     root: current.hash,
   });
 }
 
+export type RegistryRoot = Omit<BoundRoot, "ringProgramId">;
+
 /** A member's present record under the ring's newest own root. */
 export interface RegisteredRecord {
   readonly root: BoundRoot;
   readonly record: PresentRecordOpening;
-  /** `hash_bytes` of the escrowed key ciphertext, the record's escrow key binds it. */
+  /** `hash_bytes` of the sealed key ciphertext. */
   readonly ctHash: Bytes32;
 }
 
@@ -94,37 +116,53 @@ export function readOwnRecords(
   );
 }
 
-/** Under key escrow the first recipient without an escrowed nullifier key is refused, Rust `EscrowedRecipients::check`. */
+/** Under key escrow the first recipient with no applied row for its nullifier key is refused. */
 export async function checkEscrowedRecipients(
   input: Readonly<{
-    client: RingRecordReadClient;
+    client: Pick<ChainReader, "getAccount"> & Pick<TrackingReader, "getTrackingOpenings">;
     ringProgramId: Address;
     recipients: readonly ShieldedAddress[];
   }>,
   context?: RequestContext,
 ): Promise<void> {
-  const config = await fetchRingPolicy(input.client, input.ringProgramId, context);
+  const { client, ringProgramId } = input;
+  const config = await fetchRingPolicy(client, ringProgramId, context);
   if (config.mode !== "confidentialEscrow") return;
-  const owners = input.recipients.map((recipient) =>
-    recipient.signingPublicKey.ownerProofInputHash(),
+  // The zero nullifier key escrows nothing.
+  const recipients = input.recipients.filter(
+    (recipient) => !equalBytes(recipient.nullifierPublicKey, ZERO_NULLIFIER_PK),
   );
-  const reads = await readMemberRecords(
-    { client: input.client, ringProgramId: input.ringProgramId, members: owners },
+  if (recipients.length === 0) return;
+  const { root } = await newestTrackingRoot(
+    { client, trackingRegistry: config.tracking, ring: ringProgramId },
     context,
   );
-  input.recipients.forEach((recipient, index) => {
-    const owner = owners[index];
-    // The zero nullifier key escrows nothing.
-    if (owner !== undefined && !equalBytes(recipient.nullifierPublicKey, ZERO_NULLIFIER_PK))
-      ownerEscrowed(owner, reads[index], recipient.nullifierPublicKey);
-  });
+  for (let offset = 0; offset < recipients.length; offset += MAX_RING_MEMBER_BATCH) {
+    const chunk = recipients.slice(offset, offset + MAX_RING_MEMBER_BATCH);
+    const members = chunk.map((recipient) => recipient.signingPublicKey.ownerProofInputHash());
+    const { openings } = await client.getTrackingOpenings(
+      { registry: config.tracking, members, expectedRoot: root },
+      context,
+    );
+    chunk.forEach((recipient, at) => {
+      const member = members[at];
+      const opening = openings[at];
+      if (member === undefined || opening === undefined)
+        throw new RingError("RING_TRACKING_INVALID", { details: { reason: "openings" } });
+      const row = verifyTrackingOpening(opening, root, member);
+      if (row === undefined || !equalBytes(row.nullifierPk, recipient.nullifierPublicKey))
+        throw new RingError("RING_UNREGISTERED_OUTPUT_KEY", {
+          details: { owner: bytesKey(member) },
+        });
+    });
+  }
 }
 
 /** One opening per member in member order, each verified against `root`, Rust `RecordReads::read`. */
 export function readMemberOpenings(
   input: Readonly<{
     client: Pick<RingRecordReader, "getStorageMemberOpenings">;
-    root: BoundRoot;
+    root: RegistryRoot;
     members: readonly Bytes32[];
   }>,
   context?: RequestContext,
@@ -191,7 +229,7 @@ export function readRegisteredRecord(
     client: RingRecordReadClient;
     ringProgramId: Address;
     member: Bytes32;
-    /** The nullifier key the record must escrow. */
+    /** The nullifier key the owner must have enrolled. */
     escrowed: Bytes32;
   }>,
   context?: RequestContext,
@@ -224,7 +262,7 @@ export function readRegisteredRecord(
 }
 
 /** An indexer answer under a root or revision other than the bound one is refused. */
-function checkServedRoot(served: StorageRoot, bound: BoundRoot, reason: string): void {
+function checkServedRoot(served: StorageRoot, bound: RegistryRoot, reason: string): void {
   if (!equalBytes(served.root, bound.root) || served.revision !== bound.revision)
     throw new RingError("RING_ROOT_NOT_SERVED", {
       details: { reason, registry: bound.registry, revision: served.revision.toString() },

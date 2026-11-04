@@ -1,16 +1,20 @@
 import type { Address } from "@solana/kit";
 
 import {
-  type RingProver,
   type RingSealedKey,
   type RingSealedNullifierKey as SealedNullifierKey,
 } from "../../rpc/ports.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";
-import { addressBytes, equalBytes, rightAlign, indexerScalars } from "@heliuslabs/zolana/internal";
+import {
+  addressBytes,
+  equalBytes,
+  hashBytes,
+  rightAlign,
+  waitForProjection,
+} from "@heliuslabs/zolana/internal";
 import type { Bytes31, Bytes32, Bytes33, RequestContext } from "@heliuslabs/zolana/interface";
-import { NullifierKey, X25519Keypair, type X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
-import type { MemberRecord, QuadPath } from "../../protocol/membership/member-registry.js";
+import { NullifierKey, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type { QuadPath } from "../../protocol/membership/member-registry.js";
 import {
   auditSharedSecret,
   NF_KEY_ENC_INFO,
@@ -18,13 +22,14 @@ import {
 } from "../../crypto/audit/audit.js";
 import { STREAM_FIRST_COUNTER } from "../../protocol/codec/ring-disclosure-layout.js";
 
-import { checkedCustomRingProof, type RingPolicy } from "../../protocol/codec/ring-codecs.js";
+import { RingError } from "../../protocol/error.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
-import { RingError, wrapRingError } from "../../protocol/error.js";
 import { memberOfTag } from "../../protocol/membership/policy.js";
-import { readOwnRecords, type RingRecordReadClient } from "../../rpc/registered-record.js";
-import type { EscrowEntry } from "./record-updates.js";
-import { registerKeyStatementHash } from "../../protocol/proof/statement.js";
+import { verifyTrackingOpening, type TrackingRecord } from "../../protocol/membership/tracking.js";
+import type { TrackingSeal } from "../../protocol/indexer/tracking-codec.js";
+import type { TrackingReader } from "../../rpc/ports.js";
+import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../rpc/projection.js";
+import { newestTrackingRoot } from "../../rpc/tracking-resolver.js";
 
 const KEY_STREAM = Object.freeze({ label: NF_KEY_ENC_INFO, counter: STREAM_FIRST_COUNTER });
 
@@ -37,167 +42,55 @@ export interface NullifierKeyEnvelope {
   readonly nullifierPublicKey: Bytes32;
 }
 
-/** The member and the auditor an escrow binds. */
-export interface KeyEscrowRequest {
-  /** The owner identity of the signing member. */
-  readonly member: Bytes32;
-  readonly auditorPublicKey: X25519PublicKey;
-}
+export type RingSealedKeyClient = Pick<ChainReader, "getAccount"> &
+  Pick<TrackingReader, "getTrackingOpenings">;
 
-/** A sealed nullifier key and the 192-byte proof of its envelope. */
-export interface ProvenEscrow {
-  readonly nullifierPk: Bytes32;
-  /** The tagged ephemeral key, its `u` is `ephU`. */
-  readonly ephPk: Bytes33;
-  readonly ephU: Bytes32;
-  readonly ciphertext: Bytes32;
-  readonly proof: Uint8Array;
-}
-
-/** Rust `KeyEscrowAuthority`, the holder seals and proves so the nullifier secret never leaves it. */
-export interface KeyEscrowAuthority {
-  nullifierPublicKey(): Bytes32;
-  proveEscrow(request: KeyEscrowRequest, context?: RequestContext): Promise<ProvenEscrow>;
-}
-
-/** An in-process `KeyEscrowAuthority` over a copy of the key, `destroy` wipes the copy. */
-export class NullifierKeyEscrow implements KeyEscrowAuthority {
-  readonly #key: NullifierKey;
-  readonly #prover: RingProver;
-
-  constructor(nullifierKey: NullifierKey, prover: RingProver) {
-    this.#key = nullifierKey.clone();
-    this.#prover = prover;
-  }
-
-  nullifierPublicKey(): Bytes32 {
-    return this.#key.publicKey();
-  }
-
-  async proveEscrow(request: KeyEscrowRequest, context?: RequestContext): Promise<ProvenEscrow> {
-    const envelope = sealNullifierKey(this.#key, request.auditorPublicKey);
-    const secret = this.#key.secretBytes();
-    const nullifierSecret = rightAlign(secret);
-    secret.fill(0);
-    try {
-      const ephU = envelope.sealed.ephemeralPublicKey.u();
-      const publicInputHash = registerKeyStatementHash({
-        member: request.member,
-        nullifierPk: envelope.nullifierPublicKey,
-        auditorPubkey: request.auditorPublicKey.toBytes(),
-        ephU,
-        ciphertext: envelope.sealed.ciphertext,
-      });
-      const proof = await this.#prover.proveRing(
-        {
-          kind: "registerKey",
-          publicInputHash,
-          member: request.member,
-          nullifierSecret,
-          ephSk: envelope.ephemeralSecret,
-          auditorPk: request.auditorPublicKey.u(),
-        },
-        context,
-      );
-      return Object.freeze({
-        nullifierPk: envelope.nullifierPublicKey,
-        ephPk: envelope.sealed.ephemeralPublicKey.toBytes(),
-        ephU,
-        ciphertext: envelope.sealed.ciphertext,
-        proof: checkedCustomRingProof(proof),
-      });
-    } finally {
-      nullifierSecret.fill(0);
-      envelope.ephemeralSecret.fill(0);
-    }
-  }
-
-  destroy(): void {
-    this.#key.destroy();
-  }
-}
-
-/** Rust `KeyRegistration`, the writer refuses a second escrow key for one member. */
-export class KeyRegistration {
-  readonly #ringProgramId: Address;
-  readonly #member: ShieldedAddress;
-  readonly #authority: KeyEscrowAuthority;
-
-  constructor(
-    input: Readonly<{
-      ringProgramId: Address;
-      /** Its Solana key signs the update, its nullifier key is the one escrowed. */
-      member: ShieldedAddress;
-      authority: KeyEscrowAuthority;
-    }>,
-  ) {
-    this.#ringProgramId = input.ringProgramId;
-    this.#member = input.member;
-    this.#authority = input.authority;
-  }
-
-  async prove(
-    client: Pick<ChainReader, "getAccount">,
-    context?: RequestContext,
-  ): Promise<EscrowEntry> {
-    try {
-      const config = await fetchRingPolicy(client, this.#ringProgramId, context);
-      const member = memberOfTag(addressBytes(this.#member.solanaAddress(), "member"));
-      const proven = await escrowProver({
-        config,
-        member: this.#member,
-        authority: this.#authority,
-      })(member, context);
-      return Object.freeze({
-        kind: "escrow",
-        member: indexerScalars.hash(member),
-        nullifierPk: indexerScalars.hash(proven.nullifierPk),
-        ephPk: indexerScalars.base64String(proven.ephPk),
-        ciphertext: indexerScalars.base64String(proven.ciphertext),
-        proof: indexerScalars.base64String(checkedCustomRingProof(proven.proof)),
-      });
-    } catch (cause) {
-      throw wrapRingError("RING_BUILD_KEY_REGISTRATION", cause);
-    }
-  }
-}
-
-export type RingSealedKeyClient = RingRecordReadClient;
-
-/** A member's record under the ring's newest own root, escrowing `sealed`. */
+/** A member's tracking row under the ring's newest tracking root, sealing `sealed`. */
 export interface RingSealedKeyEntry {
   readonly member: Bytes32;
   readonly root: Bytes32;
-  readonly record: MemberRecord;
+  readonly record: TrackingRecord;
   readonly path: QuadPath;
   readonly sealed: RingSealedKey;
 }
 
-/** The key `member` escrowed, refused unless its record binds the served envelope. */
-export async function fetchRingSealedKey(
+/** The key `member` enrolled, refused unless its applied row binds the served seal. */
+export function fetchRingSealedKey(
   input: Readonly<{ client: RingSealedKeyClient; ringProgramId: Address; member: Bytes32 }>,
   context?: RequestContext,
 ): Promise<RingSealedKeyEntry> {
-  const { root, reads } = await readOwnRecords(
-    { client: input.client, ringProgramId: input.ringProgramId, members: [input.member] },
+  const { client, ringProgramId, member } = input;
+  return waitForProjection(
+    async (attempt) => {
+      const { tracking } = await fetchRingPolicy(client, ringProgramId, attempt);
+      const { root } = await newestTrackingRoot(
+        { client, trackingRegistry: tracking, ring: ringProgramId },
+        attempt,
+      );
+      const { openings } = await client.getTrackingOpenings(
+        { registry: tracking, members: [member], expectedRoot: root },
+        attempt,
+      );
+      const [opening] = openings;
+      if (opening === undefined)
+        throw new RingError("RING_TRACKING_INVALID", { details: { reason: "openings" } });
+      const record = verifyTrackingOpening(opening, root, member);
+      if (record === undefined || opening.kind !== "present" || opening.seal === undefined)
+        throw new RingError("RING_KEY_NOT_REGISTERED");
+      return Object.freeze({
+        member,
+        root,
+        record,
+        path: opening.path,
+        sealed: boundSeal(opening.seal, record),
+      });
+    },
+    MEMBER_REGISTRY_PROJECTION_ERRORS,
     context,
   );
-  const [read] = reads;
-  if (read === undefined)
-    throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "openings" } });
-  const served = read.opening.sealedKey;
-  const escrowed = served === undefined ? undefined : read.escrowed(served.nullifierPk);
-  if (escrowed === undefined) throw new RingError("RING_KEY_NOT_REGISTERED");
-  return Object.freeze({
-    member: input.member,
-    root: root.root,
-    record: escrowed.record,
-    path: escrowed.path,
-    sealed: escrowed.sealed,
-  });
 }
 
-/** The auditor's opening of an escrowed key, the opened key must be the one the record binds. */
+/** The auditor's opening of a sealed key, the opened key must be the one the row binds. */
 export function openRingSealedKey(entry: RingSealedKeyEntry, auditor: X25519Keypair): NullifierKey {
   const key = openNullifierKey(entry.sealed, auditor);
   if (!equalBytes(key.publicKey(), entry.sealed.nullifierPk)) {
@@ -248,7 +141,7 @@ export function sealNullifierKeyWith(
   }
 }
 
-/** The pad alone does not authenticate the key against its registry record. */
+/** The pad alone does not authenticate the key against its tracking row. */
 export function openNullifierKey(sealed: SealedNullifierKey, auditor: X25519Keypair): NullifierKey {
   let dh: Bytes32 | undefined;
   let shared: Bytes32 | undefined;
@@ -266,27 +159,26 @@ export function openNullifierKey(sealed: SealedNullifierKey, auditor: X25519Keyp
   }
 }
 
-/** Refuses before any proof an anonymous ring or an authority holding another nullifier key. */
-function escrowProver({
-  config,
-  member,
-  authority,
-}: Readonly<{
-  config: RingPolicy;
-  member: ShieldedAddress;
-  authority: KeyEscrowAuthority;
-}>): (identity: Bytes32, context: RequestContext | undefined) => Promise<ProvenEscrow> {
-  if (config.mode === "anonymous") throw new RingError("RING_ANONYMOUS_REFUSED");
-  const nullifierPk = authority.nullifierPublicKey();
-  if (!equalBytes(nullifierPk, member.nullifierPublicKey))
-    throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
-  return async (identity, context) => {
-    const proven = await authority.proveEscrow(
-      { member: identity, auditorPublicKey: config.auditorPublicKey },
-      context,
-    );
-    if (!equalBytes(proven.nullifierPk, nullifierPk))
-      throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
-    return proven;
-  };
+/** The row binds the ciphertext by hash and the owner by member, the ephemeral key by neither. */
+function boundSeal(seal: TrackingSeal, record: TrackingRecord): RingSealedKey {
+  if (
+    seal.ciphertext.length !== 32 ||
+    !equalBytes(hashBytes(seal.ciphertext), record.ctHash) ||
+    !equalBytes(memberOfTag(addressBytes(seal.owner, "owner")), record.member)
+  )
+    throw new RingError("RING_KEY_NOT_REGISTERED");
+  return Object.freeze({
+    owner: seal.owner,
+    nullifierPk: record.nullifierPk,
+    ephemeralPublicKey: ephemeralKey(seal.ephPk),
+    ciphertext: seal.ciphertext as Bytes32,
+  });
+}
+
+function ephemeralKey(bytes: Uint8Array): X25519PublicKey {
+  try {
+    return X25519PublicKey.fromBytes(bytes as Bytes33);
+  } catch (cause) {
+    throw new RingError("RING_KEY_ENVELOPE_INVALID", { cause });
+  }
 }

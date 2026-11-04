@@ -143,7 +143,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
         Ok(ProvenRelay {
             instruction: proven.instruction().map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(tag)),
-            co_signer: proven.co_signer,
+            co_signer: proven.co_signers.first().copied(),
             signers: proven
                 .owner_signers()
                 .iter()

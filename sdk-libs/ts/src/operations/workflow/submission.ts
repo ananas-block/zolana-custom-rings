@@ -30,6 +30,7 @@ import {
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../rpc/ports.js";
 import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { RingError, RingProgramError } from "../../protocol/error.js";
+import { fetchTrackingRegistry } from "../../rpc/tracking-resolver.js";
 import type { RingBoundState } from "./pipeline.js";
 
 /** Keeps the signed intent and validity bounds of one transaction attempt. */
@@ -206,9 +207,17 @@ export class RingTransactionSubmission {
 
   /** Rust `BoundState::moved`. */
   async #moved(context?: RequestContext): Promise<boolean> {
-    const { roots = [], policy } = this.#attempt;
+    const { roots = [], trackingRoot, policy } = this.#attempt;
     const chain = this.#registry;
     if (chain === undefined) return false;
+    if (trackingRoot !== undefined) {
+      const tracking = await fetchTrackingRegistry(chain, trackingRoot.registry, context);
+      const held = tracking.roots.some(
+        (root) =>
+          root?.revision === trackingRoot.revision && equalBytes(root.hash, trackingRoot.root),
+      );
+      if (!held) return true;
+    }
     for (const bound of roots) {
       // Expiry is not checked here, an expired root fails on chain as `rootNotServed` and a reproof follows.
       const registry = await fetchStorageRegistry(chain, bound.registry, context);

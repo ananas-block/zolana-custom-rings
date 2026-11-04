@@ -28,8 +28,8 @@ export interface RingDepositSpp {
   readonly accounts: readonly AccountMeta[];
 }
 
-/** `AUDITED_DEPOSIT ‖ proof ‖ own_revision ‖ curator_revision` ahead of the forwarded SPP deposit. */
-export const AUDITED_DEPOSIT_PREFIX_LENGTH = 1 + CUSTOM_RING_PROOF_LENGTH + 2 * REVISION_LENGTH;
+/** Rust `DepositPrefix`, ahead of the forwarded SPP deposit. */
+export const AUDITED_DEPOSIT_PREFIX_LENGTH = 2 + CUSTOM_RING_PROOF_LENGTH + 3 * REVISION_LENGTH;
 
 /** The accounts `[ring, registries, co_signer?]` ahead of SPP's deposit list. */
 export async function ringDepositInstruction(
@@ -38,10 +38,13 @@ export async function ringDepositInstruction(
     tree: Address;
     depositor: SignerAccount;
     deposits: readonly RingAssetDeposit[];
+    /** The deposit key's slots, every key proves one statement. */
+    keyCapacity: number;
     proof: Uint8Array;
-    /** Read only, right after the ring account, the records first. */
+    /** Read only, right after the ring account, tracking last. */
     registries: readonly Address[];
-    /** Escrow or policy rings only. */
+    trackingRevision: bigint;
+    /** Policy rings only. */
     ownRevision?: bigint;
     /** Rings with a curator source only. */
     curatorRevision?: bigint;
@@ -55,7 +58,9 @@ export async function ringDepositInstruction(
     input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
   const prefix = new Writer()
+    .u8(input.keyCapacity, "keyCapacity")
     .bytes(input.proof, CUSTOM_RING_PROOF_LENGTH, "deposit proof")
+    .u64(input.trackingRevision, "trackingRevision")
     .u64(input.ownRevision ?? 0n, "ownRevision")
     .u64(input.curatorRevision ?? 0n, "curatorRevision")
     .finish();

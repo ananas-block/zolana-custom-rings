@@ -20,6 +20,7 @@ import { AnonymousSync } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
+import { ClientError } from "@heliuslabs/zolana/client";
 import {
   ASSETS,
   found,
@@ -219,41 +220,99 @@ describe("ring scan position", () => {
 });
 
 describe("atomic progress", () => {
-  it.each(["counter", "key", "sender", "ring"] as const)(
-    "refuses a scan after a %s change without consuming it",
-    async (change) => {
-      const indexer = new ScanIndexer();
-      const alice = new ScanWallet(1);
-      const bob = new ScanWallet(2);
-      await alice.pay(indexer, [{ to: bob.address, amount: 7n, reply: alice.replyTo() }]);
-      const original = bob.fresh();
-      const wallet = anonymousWallet(bob, original);
-      const scan = await bob.sync(indexer, original);
-      let updated = original;
-      switch (change) {
-        case "counter":
-          updated = (await original.requestTag(bob.keys)).history;
-          break;
-        case "key":
-          updated = original.withRotatedKey(ViewingKey.generate().publicKey(), 5n);
-          break;
-        case "sender":
-          updated = original.withConfirmedSender(alice.viewingKey);
-          break;
-        case "ring":
-          updated = original.withRing(randomAddress());
-          break;
-      }
-      wallet.updateHistory(updated);
-      const stored = wallet.toJson();
-      await expect(wallet.absorb(scan)).rejects.toThrow("RING_SCAN_HISTORY_CHANGED");
-      expect(wallet.toJson()).toBe(stored);
-      const unchanged = anonymousWallet(bob, ViewingHistory.fromJson(original.toJson()));
-      await unchanged.absorb(scan);
-      expect(unchanged.notes().map((note) => note.utxo.amount)).toEqual([7n]);
-      expect(unchanged.pendingClaims()).toHaveLength(1);
-    },
-  );
+  it("keeps a counter taken during a scan, the next deposit tag never repeats", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    const bob = new ScanWallet(2);
+    await alice.pay(indexer, [{ to: bob.address, amount: 7n }], { slot: 9n });
+    const wallet = anonymousWallet(bob, bob.fresh());
+    const scan = await bob.sync(indexer, wallet.history());
+    const during = await wallet.history().senderTag(bob.keys);
+    wallet.updateHistory(during.history);
+    await wallet.absorb(scan);
+    expect(wallet.history().current().txCount).toBe(1n);
+    expect(position(wallet.history())).toBe(9n);
+    expect(wallet.notes().map((note) => note.utxo.amount)).toEqual([7n]);
+    const after = await wallet.history().senderTag(bob.keys);
+    expect(hex(after.tag)).not.toBe(hex(during.tag));
+  });
+
+  it("keeps a key added during a scan, unread for the next sync", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    const bob = new ScanWallet(2);
+    await alice.pay(indexer, [{ to: bob.address, amount: 7n }], { slot: 9n });
+    const wallet = anonymousWallet(bob, bob.fresh());
+    const scan = await bob.sync(indexer, wallet.history());
+    const added = ViewingKey.generate().publicKey();
+    wallet.updateHistory(wallet.history().withRotatedKey(added, 5n));
+    await wallet.absorb(scan);
+    expect(wallet.history().current().viewingPublicKey.equals(added)).toBe(true);
+    expect(wallet.history().entry(added)?.ringPosition(RING)).toBeNull();
+    expect(wallet.history().entry(bob.viewingKey)?.ringPosition(RING)).toBe(9n);
+  });
+
+  it("keeps a sender confirmed and a ring added during a scan", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    const bob = new ScanWallet(2);
+    await alice.pay(indexer, [{ to: bob.address, amount: 7n }], { slot: 9n });
+    const wallet = anonymousWallet(bob, bob.fresh());
+    const scan = await bob.sync(indexer, wallet.history());
+    const ring = randomAddress();
+    wallet.updateHistory(wallet.history().withConfirmedSender(alice.viewingKey).withRing(ring));
+    await wallet.absorb(scan);
+    const entry = wallet.history().current();
+    expect(entry.knownSenders().some((key) => key.equals(alice.viewingKey))).toBe(true);
+    expect(entry.ringPosition(ring)).toBeNull();
+    expect(entry.ringPosition(RING)).toBe(9n);
+  });
+
+  it("refuses a scan once another scan moved the progress, without consuming it", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    const bob = new ScanWallet(2);
+    await alice.pay(indexer, [{ to: bob.address, amount: 7n }], { slot: 9n });
+    const original = bob.fresh();
+    const wallet = anonymousWallet(bob, original);
+    const late = await bob.sync(indexer, original);
+    await wallet.absorb(await bob.sync(indexer, original));
+    const stored = wallet.toJson();
+    await expect(wallet.absorb(late)).rejects.toThrow("RING_SCAN_HISTORY_CHANGED");
+    expect(wallet.toJson()).toBe(stored);
+    const unchanged = anonymousWallet(bob, ViewingHistory.fromJson(original.toJson()));
+    await unchanged.absorb(late);
+    expect(unchanged.notes().map((note) => note.utxo.amount)).toEqual([7n]);
+  });
+
+  it("refuses a history whose tag counter falls, the tag would repeat", async () => {
+    const bob = new ScanWallet(2);
+    const base = bob.fresh();
+    const wallet = anonymousWallet(bob, base);
+    wallet.updateHistory((await base.senderTag(bob.keys)).history);
+    expect(() => wallet.updateHistory(base)).toThrow("RING_SCAN_PROGRESS_MOVED");
+    expect(wallet.history().current().txCount).toBe(1n);
+  });
+
+  it("gives concurrent callers distinct tags and burns the index of a failed holder", async () => {
+    const bob = new ScanWallet(2);
+    const wallet = anonymousWallet(bob, bob.fresh());
+    const tags = await Promise.all([
+      wallet.takeSenderTag(bob.keys),
+      wallet.takeSenderTag(bob.keys),
+      wallet.takeRequestTag(bob.keys),
+      wallet.takeRequestTag(bob.keys),
+    ]);
+    expect(new Set(tags.map(hex)).size).toBe(4);
+    expect(wallet.history().current().txCount).toBe(2n);
+    expect(wallet.history().current().requestCount).toBe(2n);
+    const failing = {
+      ...bob.keys,
+      viewTags: () => Promise.reject(new Error("holder offline")),
+    } as unknown as typeof bob.keys;
+    await expect(wallet.takeSenderTag(failing)).rejects.toThrow("holder offline");
+    expect(wallet.history().current().txCount).toBe(3n);
+  });
 
   it("stores notes, spends, claims and the position in one document", async () => {
     const indexer = new ScanIndexer();
@@ -534,5 +593,72 @@ describe("viewing keys", () => {
     expect(agreements).toHaveBeenCalledTimes(3 * 2);
     agreements.mockRestore();
     expect(found(await bob.sync(indexer, bob.fresh()))).toEqual([]);
+  });
+});
+
+describe("page too large", () => {
+  it("halves the limit from the same token and loses no row", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    const bob = new ScanWallet(2);
+    const paid = [
+      await alice.pay(indexer, [{ to: bob.address, amount: 10n }]),
+      await alice.pay(indexer, [{ to: bob.address, amount: 11n }]),
+    ];
+    indexer.responseLimit = 1;
+    const scan = await bob.sync(indexer, bob.fresh());
+    expect(found(scan)).toEqual(paid.map((tx) => hex(output(tx, 1))));
+    const asked = indexer.ringReads.map((read) => read.limit);
+    expect(asked.slice(0, 2)).toEqual([1000, 500]);
+    expect(asked.filter((limit) => limit === 1)).toHaveLength(2);
+    expect(position(scan.history)).toBe(paid[1]?.slot);
+  });
+
+  it("fails the read at limit one and moves nothing", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    const bob = new ScanWallet(2);
+    await alice.pay(indexer, [{ to: bob.address, amount: 10n }]);
+    indexer.responseLimit = 0;
+    await expect(bob.sync(indexer, bob.fresh())).rejects.toMatchObject({
+      code: "CLIENT_INDEXER_RESPONSE_TOO_LARGE",
+    });
+    expect(indexer.ringReads.at(-1)?.limit).toBe(1);
+  });
+
+  it("keeps every other refusal at the first ask", async () => {
+    const indexer = new ScanIndexer();
+    const bob = new ScanWallet(2);
+    indexer.refuseAt = {
+      read: 1,
+      error: new ClientError("CLIENT_INDEXER", {
+        details: { method: "getShieldedTransactionsByTags", retryable: false },
+      }),
+    };
+    await expect(bob.sync(indexer, bob.fresh())).rejects.toMatchObject({ code: "CLIENT_INDEXER" });
+    expect(indexer.ringReads).toHaveLength(1);
+  });
+
+  it("halves a deposit read from the same request", async () => {
+    const indexer = new ScanIndexer();
+    const bob = new ScanWallet(2);
+    const client = indexer.client();
+    const limits: (number | undefined)[] = [];
+    const scan = await AnonymousSync.create(bob.keys, ASSETS).fetch(
+      {
+        ...client,
+        getEncryptedUtxosByTags: (request, config, context) => {
+          limits.push(request.limit);
+          if (limits.length === 1)
+            throw new ClientError("CLIENT_INDEXER_RESPONSE_TOO_LARGE", {
+              details: { method: "getEncryptedUtxosByTags" },
+            });
+          return client.getEncryptedUtxosByTags(request, config, context);
+        },
+      },
+      bob.fresh(),
+    );
+    expect(scan.found).toEqual([]);
+    expect(limits).toEqual([1000, 500]);
   });
 });

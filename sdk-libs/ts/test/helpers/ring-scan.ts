@@ -1,9 +1,12 @@
 import { getBase58Decoder, type Signature } from "@solana/kit";
 
-import type { GetByNullifiersRequest, GetByTagsRequest } from "@heliuslabs/zolana/client";
+import {
+  ClientError,
+  type GetByNullifiersRequest,
+  type GetByTagsRequest,
+} from "@heliuslabs/zolana/client";
 import { addressBytes, concatBytes, encodeOutputData } from "@heliuslabs/zolana/internal";
 import { InstructionTag, type Bytes32, type Bytes33 } from "@heliuslabs/zolana/interface";
-import type { Bytes96 } from "@heliuslabs/zolana";
 import {
   randomSalt,
   ShieldedKeypair,
@@ -28,7 +31,10 @@ import {
 
 import { AnonymousPlan, RingOutputRail } from "../../src/operations/payments/output-rail.js";
 import type { ReplyMetadata } from "../../src/protocol/codec/anonymous-delivery.js";
-import { encodeRingDepositCapsule } from "../../src/protocol/codec/ring-deposit-capsule.js";
+import {
+  encodeRingDepositCapsule,
+  RING_DEPOSIT_OPENING_LENGTH,
+} from "../../src/protocol/codec/ring-deposit-capsule.js";
 import { encodeRingDepositPlaintext } from "../../src/protocol/codec/ring-deposit-plaintext.js";
 import {
   AnonymousSync,
@@ -86,6 +92,7 @@ export class ScanIndexer {
   readonly contexts: bigint[] = [];
   /** Answers the next by-ring read with the refusal. */
   refuseAt: Readonly<{ read: number; error: Error }> | undefined;
+  responseLimit: number | undefined;
   #nextLeaf = 0n;
 
   publish(transaction: IndexedShieldedTransaction): void {
@@ -112,6 +119,10 @@ export class ScanIndexer {
         }
         this.ringReads.push(request);
         if (this.refuseAt?.read === this.ringReads.length) throw this.refuseAt.error;
+        if (this.responseLimit !== undefined && (request.limit ?? 1000) > this.responseLimit)
+          throw new ClientError("CLIENT_INDEXER_RESPONSE_TOO_LARGE", {
+            details: { method: "getShieldedTransactionsByTags" },
+          });
         return this.#ringPage(request);
       },
       getEncryptedUtxosByTags: async (request: GetByTagsRequest) => ({
@@ -338,7 +349,7 @@ export function depositRow(
     ? encodeRingDepositCapsule({
         slotIndex: 0,
         ephemeralPublicKey: new Uint8Array(33).fill(2) as Bytes33,
-        ciphertext: new Uint8Array(96) as Bytes96,
+        ciphertext: new Uint8Array(RING_DEPOSIT_OPENING_LENGTH),
         recipientCiphertext,
       })
     : new TextEncoder().encode("CRDEP001");

@@ -141,7 +141,7 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn with_anonymous_signer(self, signer: &'a SigningKey) -> RingTransfer<Anonymous<'a>> {
         RingTransfer {
             ring: self.ring,
-            co_signer: self.co_signer,
+            co_signers: self.co_signers,
             priority_fee: self.priority_fee,
             rail: Anonymous {
                 owner: self.rail,
@@ -273,7 +273,7 @@ impl<'a> AnonymousMove<'a> {
             self.ring.program_id(),
         )?;
         let transfer = RingTransfer {
-            co_signer: self.co_signer,
+            co_signers: self.co_signer.into_iter().collect(),
             ..RingTransfer::<Owner<'a>>::new(CustomRingTransferInput {
                 ring: self.ring,
                 sender: self.sender,

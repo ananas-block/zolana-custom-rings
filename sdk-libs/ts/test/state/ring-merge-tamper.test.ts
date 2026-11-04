@@ -10,7 +10,7 @@ import {
   openRingMergeDisclosure,
   sealRingMergeDisclosure,
   type RingMergeDisclosure,
-} from "../../src/crypto/audit/merge-disclosure.js";
+} from "../../src/protocol/historical/v3/merge-disclosure.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
 import { MergeLedger, realMergeInputs, type ConfirmedMerge } from "../../src/state/merge-ledger.js";
 

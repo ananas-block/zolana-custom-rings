@@ -627,7 +627,7 @@ impl OwnerTransfer<'_> {
         };
         let proven = env.run(transfer.prove(env.client.ring_client()))?;
         assert_eq!(
-            proven.co_signer,
+            proven.co_signers.first().copied(),
             self.cosigner.map(|cosigner| cosigner.pubkey()),
             "the proven transfer carries the demanded co-signer"
         );

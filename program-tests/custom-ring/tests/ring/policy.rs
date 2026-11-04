@@ -114,7 +114,7 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
             .is_empty(),
         "an over-threshold send asks the co-signer"
     );
-    assert_eq!(proven.co_signer, Some(cosigner.pubkey()));
+    assert_eq!(proven.co_signers, vec![cosigner.pubkey()]);
     let rejection =
         send_expecting_rejection(rpc, sender, without_signer(instruction, cosigner.pubkey()))?;
     Rejection::custom(CustomRingError::MissingCoSigner as u32)
