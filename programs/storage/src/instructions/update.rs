@@ -32,12 +32,13 @@ pub fn process_update_ix(
         slot: Clock::get()?.slot,
         data: &ix,
     })?;
-    let chain_end =
-        ix.entries()
-            .try_fold(chain_start, |chain, entry| -> Result<[u8; 32], ProgramError> {
-                let entry = entry.map_err(|_| StorageError::InvalidWrite)?;
-                queue_chain(&chain, &entry).map_err(|_| StorageError::HashingFailed.into())
-            })?;
+    let chain_end = ix.entries().try_fold(
+        chain_start,
+        |chain, entry| -> Result<[u8; 32], ProgramError> {
+            let entry = entry.map_err(|_| StorageError::InvalidWrite)?;
+            queue_chain(&chain, &entry).map_err(|_| StorageError::HashingFailed.into())
+        },
+    )?;
     let statement = ApplyRecordsStatement {
         old_root,
         new_root: ix.apply.new_root,
