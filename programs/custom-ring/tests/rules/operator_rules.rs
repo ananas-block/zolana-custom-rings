@@ -215,7 +215,7 @@ fn each_co_signer_lives_in_its_own_record() {
     let record: CoSigner = ring.read(&co_signer_record(&signer));
     assert_eq!((record.signer, record.scope), (signer, 5));
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.co_signers.covered(), CoSignScope::new(5));
+    assert_eq!(account.co_signers.covered(), CoSignScope::new(5).unwrap());
     within_budget(
         InstructionTag::ClearCoSigner,
         send(
@@ -229,7 +229,7 @@ fn each_co_signer_lives_in_its_own_record() {
         ),
     );
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.co_signers.covered(), None);
+    assert_eq!(account.co_signers.covered(), CoSignScope::NONE);
 }
 
 fn appoint(ring: &mut Ring, delegate: &Keypair) -> Sent {

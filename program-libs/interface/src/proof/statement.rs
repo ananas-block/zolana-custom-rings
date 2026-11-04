@@ -280,8 +280,7 @@ impl TransferStatement<'_> {
     }
 }
 
-/// A write clears a grant list, sets a deny list or replaces mint settings, mirror
-/// `registry.Restrictive`.
+/// Mirror `registry.Restrictive`.
 pub const fn restrictive_write(mask: u64, value: u64, replaces_mint_policy: bool) -> bool {
     const GRANT: u64 = ListId::Allow.record_bit() | ListId::Approval.record_bit();
     const DENY: u64 = ListId::Block.record_bit() | ListId::Frozen.record_bit();

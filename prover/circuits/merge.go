@@ -1,7 +1,7 @@
 // Proves that the auditor opens the output of a ring's SPP merge, under the owner, asset
 // and amount the output commits and the seed its blinding derives from. The SPP proof ties
-// every input to that owner, asset and sum, so this proof opens no input and has one key
-// for every merge width.
+// every input to that owner, asset and sum, the ring proof opens no input and one key
+// serves every merge width.
 //
 // Read after shared/envelope.go, registry/opening.go.
 // Read before prover/ring/ring.go.
@@ -69,7 +69,7 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(row.Present, hidden)
 	api.AssertIsEqual(row.NullifierPk, api.Mul(hidden, c.NullifierPk))
 
-	// 3. The output is the SPP merge output, the auditor rebuilds this hash from the record.
+	// 3. The output is the SPP merge output, the auditor rebuilds its hash from the record.
 	api.AssertIsEqual(c.OutputUtxoHash, transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
 		Domain: mergeshared.UtxoDomain, Owner: gadget.PoseidonHash(api, []frontend.Variable{c.OwnerPkHash, c.NullifierPk}),
 		Asset: c.Asset, Amount: c.Amount, Blinding: mergeshared.MergeOutputBlinding(api, c.Seed, c.FirstNullifier),
@@ -85,7 +85,7 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	}.Encode(api, rc), seedBytes[:])
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.MergeEncInfo}.SealStream(api)
 
-	// 5. The statement names the SPP merge, the ring, the record and the owner SPP makes sign.
+	// 5. The statement names the SPP merge, the ring, the record and the owner SPP makes sign, mirrored by MergePublicInput::elements in program-libs/interface/src/instructions/merge.rs.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, slices.Concat(
 		[]frontend.Variable{shared.MergeStatementDomain, c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID},
 		sealed.StatementFields(api),

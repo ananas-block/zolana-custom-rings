@@ -4,14 +4,15 @@ use custom_ring_interface::{
     domain::{RECIPIENT_BODY_LABEL, REPLY_LABEL, SENDER_BUNDLE_LABEL},
     sender_bundle_len,
     stream::SlotSecret,
-    RecipientBody, SenderBundle, RECIPIENT_BODY_LEN,
+    RecipientBody, SenderBundle,
 };
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_x25519_public_key;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ShieldedAddress, X25519Pubkey};
 use spr_transaction::{
-    derive_output_blinding_seed, utxo::derive_transact_output_blinding, Blinding, Data, Mint, Utxo,
+    derive_output_blinding_seed, utxo::derive_transact_output_blinding, Blinding, Data, DataRecord,
+    Mint, SppProofOutputUtxo, Utxo,
 };
 use zeroize::Zeroizing;
 use zolana_ring_keys::symmetric_apply_audit;
@@ -96,7 +97,7 @@ impl ReplyMetadata {
 pub fn seal_recipient_body(
     body: &RecipientBody,
     slot_secret: &SlotSecret,
-) -> Result<[u8; RECIPIENT_BODY_LEN], RingRailError> {
+) -> Result<Vec<u8>, RingRailError> {
     let mut ciphertext = body.encode();
     symmetric_apply_audit(
         slot_secret.as_bytes(),
@@ -108,16 +109,27 @@ pub fn seal_recipient_body(
 
 /// The cipher is unauthenticated, only the commitment a reader rebuilds proves ownership.
 pub fn open_recipient_body(
-    ciphertext: &[u8; RECIPIENT_BODY_LEN],
+    ciphertext: &[u8],
     slot_secret: &SlotSecret,
 ) -> Result<RecipientBody, RingRailError> {
-    let mut plaintext = Zeroizing::new(*ciphertext);
-    symmetric_apply_audit(
-        slot_secret.as_bytes(),
-        RECIPIENT_BODY_LABEL,
-        &mut *plaintext,
-    )?;
-    Ok(RecipientBody::decode(&*plaintext)?)
+    let mut plaintext = Zeroizing::new(ciphertext.to_vec());
+    symmetric_apply_audit(slot_secret.as_bytes(), RECIPIENT_BODY_LABEL, &mut plaintext)?;
+    Ok(RecipientBody::decode(&plaintext)?)
+}
+
+/// The sender's body for `output`, `data` leads with the hash the commitment reads.
+pub fn recipient_body(output: &SppProofOutputUtxo) -> RecipientBody {
+    let data = match output.data_hash.filter(|hash| *hash != [0; 32]) {
+        Some(hash) => [&hash[..], output.data.utxo_data().unwrap_or_default()].concat(),
+        None => Vec::new(),
+    };
+    RecipientBody {
+        blinding: output.blinding,
+        amount: output.amount,
+        mint: output.asset.asset.to_bytes(),
+        ring_data_hash: output.ring_data_hash.filter(|hash| *hash != [0; 32]),
+        data,
+    }
 }
 
 /// `slot_secret` sits at index `m`, past every body's index.
@@ -177,16 +189,22 @@ pub struct AnonymousOutput<'a> {
     pub utxo_hash: &'a [u8; 32],
 }
 
-/// A body whose rebuilt commitment names the reader, a match establishes ownership.
+/// A note its reader rebuilt, a match establishes ownership.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenedNote {
+    pub utxo: Utxo,
+    /// The registered key or `ZERO_NULLIFIER_PUBKEY`, whichever rebuilt.
+    pub nullifier_pk: [u8; 32],
+    pub data_hash: Option<[u8; 32]>,
+    pub ring_data_hash: Option<[u8; 32]>,
+}
+
+/// A body whose rebuilt commitment names the reader.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenedBody {
-    Note {
-        utxo: Utxo,
-        /// The registered key or `ZERO_NULLIFIER_PUBKEY`, whichever rebuilt.
-        nullifier_pk: [u8; 32],
-    },
+    Note(OpenedNote),
     /// The commitment rebuilds under a mint the registry does not name, `utxo` holds its asset id at zero.
-    UnknownMint { utxo: Utxo, nullifier_pk: [u8; 32] },
+    UnknownMint(OpenedNote),
 }
 
 /// `TXOB(first_nullifier, TXOS(first_nullifier, blinding_seed), position)` per output.
@@ -200,13 +218,21 @@ impl AnonymousOutput<'_> {
     pub fn open_body(&self, body: &RecipientBody) -> Result<Option<OpenedBody>, RingRailError> {
         let mint = Address::new_from_array(body.mint);
         let asset = self.assets.by_mint(&mint);
+        let (data_hash, app_data) = match body.data.split_first_chunk::<32>() {
+            Some((hash, app_data)) => (Some(*hash), app_data),
+            None if body.data.is_empty() => (None, &[][..]),
+            None => return Ok(None),
+        };
         let note = |asset: Mint| Utxo {
             owner: self.owner.signing_pubkey,
             asset,
             amount: body.amount,
             blinding: body.blinding,
             ring_program_id: Some(self.ring),
-            data: Data::default(),
+            data: match data_hash {
+                Some(_) => Data::new(vec![DataRecord::UtxoData(app_data.to_vec())]),
+                None => Data::default(),
+            },
         };
         // The commitment reads the mint alone, the id only names a registered one.
         let probe = note(asset.unwrap_or(Mint {
@@ -214,16 +240,24 @@ impl AnonymousOutput<'_> {
             asset_id: 0,
         }));
         for nullifier_pk in [self.owner.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY] {
-            if self.rebuilds_under(&probe, &nullifier_pk) {
+            let rebuilds = probe
+                .hash(
+                    &nullifier_pk,
+                    &data_hash.unwrap_or_default(),
+                    &body.ring_data_hash.unwrap_or_default(),
+                    self.tree_id,
+                )
+                .is_ok_and(|hash| hash == *self.utxo_hash);
+            if rebuilds {
+                let opened = |utxo| OpenedNote {
+                    utxo,
+                    nullifier_pk,
+                    data_hash,
+                    ring_data_hash: body.ring_data_hash,
+                };
                 return Ok(Some(match asset {
-                    Some(asset) => OpenedBody::Note {
-                        utxo: note(asset),
-                        nullifier_pk,
-                    },
-                    None => OpenedBody::UnknownMint {
-                        utxo: probe.clone(),
-                        nullifier_pk,
-                    },
+                    Some(asset) => OpenedBody::Note(opened(note(asset))),
+                    None => OpenedBody::UnknownMint(opened(probe.clone())),
                 }));
             }
         }
@@ -248,12 +282,8 @@ impl AnonymousOutput<'_> {
             blinding,
             amount,
             mint,
+            ..RecipientBody::default()
         })
-    }
-
-    fn rebuilds_under(&self, utxo: &Utxo, nullifier_pk: &[u8; 32]) -> bool {
-        utxo.hash(nullifier_pk, &[0; 32], &[0; 32], self.tree_id)
-            .is_ok_and(|hash| hash == *self.utxo_hash)
     }
 }
 

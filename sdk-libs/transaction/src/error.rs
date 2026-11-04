@@ -19,8 +19,6 @@ pub enum RingRailError {
     Hasher(#[from] HasherError),
     #[error(transparent)]
     Interface(#[from] CustomRingError),
-    #[error("output {slot_index} carries data, a ring rail slot has a fixed body")]
-    DeliveredOutputData { slot_index: usize },
     #[error("output {slot_index} does not frame as its ring rail publishes it")]
     RingOutputFraming { slot_index: usize },
     #[error("anonymous ring output {slot_index} is not the planned payment's recipient, or a payment found no ring output")]

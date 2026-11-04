@@ -84,7 +84,6 @@ func (c *ApplyEnrollmentsCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-// apply moves s by w while active is set, an unset active leaves it.
 func (w EnrollmentWrite) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
 	api.AssertIsBoolean(w.Exists)
 	rotates := api.Mul(active, w.Exists)
@@ -104,7 +103,7 @@ func (w EnrollmentWrite) apply(api frontend.API, active frontend.Variable, s reg
 	// 3. An insert takes the empty leaf at the next index, linking on to the low record's old next.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: inserts, A: w.Slot.Index, B: s.next})
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: inserts, A: w.Old.Next, B: w.Low.Next})
-	// 4. The leaf holds the entry, a rotation's old leaf under the running root, an insert's the empty leaf 0.
+	// 4. The entry replaces the slot's old leaf under the linked root, an insert's old leaf is the empty leaf 0.
 	before := api.Select(w.Exists, w.Old.Hash(api), 0)
 	after := TrackingRecord{
 		Member: w.Entry.Member, Next: w.Old.Next, NullifierPk: w.Entry.NullifierPk, CtHash: w.Entry.CtHash,

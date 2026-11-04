@@ -19,6 +19,9 @@ pub enum PrivateSourceError {
 }
 
 impl PrivateSource {
+    /// Table hash fields.
+    pub const FIELDS: usize = 2;
+
     pub fn new(owner_lists: ListSet, registry: [u8; 32]) -> Result<Self, PrivateSourceError> {
         if !owner_lists.is_subset(ListSet::POLICY_LISTS) {
             return Err(PrivateSourceError::ListNotPolicyReadable);
@@ -33,7 +36,7 @@ impl PrivateSource {
     }
 
     /// Order mirrors `Source.Fields`.
-    pub fn fields(&self) -> [[u8; 32]; 2] {
+    pub fn fields(&self) -> [[u8; 32]; Self::FIELDS] {
         [field_u8(self.owner_lists.bits()), self.registry]
     }
 }

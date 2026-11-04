@@ -5,20 +5,14 @@ use std::{fmt, str::FromStr};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
-use custom_ring_interface::domain;
-use spr_hasher::{
-    primitives::{is_canonical_bn254_scalar_be, right_align},
-    Hasher, Poseidon,
-};
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
     shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN},
     viewing_key::ViewTag,
-    NullifierKey,
 };
-use zeroize::Zeroizing;
 
-use crate::RingKeyError;
+use crate::{RingKeyError, RingNullifierKey};
 
 pub const RING_ADDRESS_VERSION: u8 = 4;
 
@@ -27,11 +21,6 @@ pub const RING_ADDRESS_CHECKSUM_DOMAIN: &[u8] = b"zolana/ring-addr/v4";
 pub const RING_PAYMENT_SCHEME: &str = "zolana:";
 
 const CHECKSUM_LEN: usize = 4;
-
-/// `"CRPS"`
-const LIST_SALT_DOMAIN: u32 = 0x4352_5053;
-/// `"CRPT"`
-const LIST_TAG_DOMAIN: u32 = 0x4352_5054;
 
 const LIST_SALT_LEN: usize = 32;
 
@@ -64,16 +53,16 @@ impl fmt::Debug for RingAddress {
 }
 
 impl RingAddress {
-    /// An enrolled wallet's address, its salt derives from the nullifier key it enrolled.
+    /// An enrolled wallet's address on the key's ring.
     pub fn enrolled(
-        recipient: ShieldedAddress,
+        wallet: ShieldedAddress,
         ring_program_id: Address,
-        nullifier_key: &NullifierKey,
+        key: &RingNullifierKey,
     ) -> Result<Self, RingKeyError> {
         Ok(Self {
-            recipient,
+            recipient: key.address_of(wallet)?,
             ring_program_id,
-            list_salt: list_salt(nullifier_key)?,
+            list_salt: key.list_salt()?,
         })
     }
 
@@ -151,17 +140,6 @@ impl RingAddress {
             })?;
         Self::from_bytes(&bytes[..len])
     }
-}
-
-/// `Poseidon(CRPS, secret)`, one way, a holder learns the owner's list position and never the secret.
-pub fn list_salt(nullifier_key: &NullifierKey) -> Result<[u8; 32], RingKeyError> {
-    let secret = Zeroizing::new(right_align(&*nullifier_key.secret()));
-    Ok(Poseidon::hashv(&[&domain::field(LIST_SALT_DOMAIN), &*secret])?)
-}
-
-/// `Poseidon(CRPT, list_salt)`, the tracking leaf's commitment to the owner's one salt.
-pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], RingKeyError> {
-    Ok(Poseidon::hashv(&[&domain::field(LIST_TAG_DOMAIN), list_salt])?)
 }
 
 /// The first 4 bytes of `SHA256(domain ‖ body)`.

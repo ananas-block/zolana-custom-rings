@@ -48,7 +48,8 @@ use zolana_ring_client::{
     TAG_GAP, VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_keys::{
-    RingDeliveryRequest, RingKeyError, RingKeys, RingTagFrame, RotatingRingKeys, ViewTagRequest,
+    RingDeliveryRequest, RingKeyError, RingKeys, RingNullifierKey, RingTagFrame, RotatingRingKeys,
+    ViewTagRequest,
 };
 use zolana_ring_transaction::{
     historical::{
@@ -65,6 +66,13 @@ use history_page::{position, EventsPage, OutputsPage};
 const RING: Address = Address::new_from_array([4; 32]);
 const TREE: u16 = 2;
 const RESPONSE_TOO_LARGE: &str = "JSON-RPC error from ring: code=Some(-32008) message=\"large\"";
+
+fn ring_address(identity: &ShieldedKeypair) -> ShieldedAddress {
+    RingNullifierKey::derive(identity, &RING)
+        .unwrap()
+        .address_of(identity.shielded_address().unwrap())
+        .unwrap()
+}
 
 fn keypair(seed: u8) -> ShieldedKeypair {
     ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
@@ -580,9 +588,9 @@ async fn a_rotated_wallet_finds_notes_under_both_keys_through_a_restart_and_a_re
     let indexer = Indexer::default();
     let mut alice = Wallet::new(1);
     let identity = keypair(2);
-    let old_address = identity.shielded_address().unwrap();
+    let old_address = ring_address(&identity);
     let to_old = alice.pay(&indexer, &[pay(&old_address, 30)]);
-    let keys = RotatingRingKeys::new(&identity, Vec::new()).unwrap();
+    let keys = RotatingRingKeys::new(&identity, &RING).unwrap();
     let history = ViewingHistory::new(old_address.viewing_pubkey, 0).with_ring(RING, None);
     let mut wallet = AnonymousWallet::new(history);
     let scan = AnonymousSync::new(&keys, &assets())
@@ -609,8 +617,10 @@ async fn a_rotated_wallet_finds_notes_under_both_keys_through_a_restart_and_a_re
     let stored = wallet.to_json();
     let mut current = keypair(2);
     current.viewing_key = next;
-    let restarted_keys =
-        RotatingRingKeys::new(&current, vec![identity.viewing_key.clone()]).unwrap();
+    let restarted_keys = RotatingRingKeys::new(&current, &RING)
+        .unwrap()
+        .with_retired(vec![identity.viewing_key.clone()])
+        .unwrap();
     let mut restarted = AnonymousWallet::from_json(&stored).unwrap();
     let scan = AnonymousSync::new(&restarted_keys, &assets())
         .fetch(&indexer, restarted.history())
@@ -647,8 +657,8 @@ async fn a_ring_watched_after_rotation_reads_payments_to_the_retired_key() {
     let indexer = Indexer::default();
     let mut alice = Wallet::new(1);
     let identity = keypair(2);
-    let old_address = identity.shielded_address().unwrap();
-    let keys = RotatingRingKeys::new(&identity, Vec::new())
+    let old_address = ring_address(&identity);
+    let keys = RotatingRingKeys::new(&identity, &RING)
         .unwrap()
         .rotate(ViewingKey::new())
         .unwrap();
@@ -678,11 +688,11 @@ async fn an_imported_key_finds_the_notes_below_the_wallets_position() {
     let imported_key = ViewingKey::new();
     let old_address = ShieldedAddress {
         viewing_pubkey: imported_key.pubkey(),
-        ..identity.shielded_address().unwrap()
+        ..ring_address(&identity)
     };
     let old_note = alice.pay(&indexer, &[pay(&old_address, 30)]);
     let current = identity.viewing_pubkey();
-    let alone = RotatingRingKeys::new(&identity, Vec::new()).unwrap();
+    let alone = RotatingRingKeys::new(&identity, &RING).unwrap();
     let synced = AnonymousSync::new(&alone, &assets())
         .fetch(
             &indexer,
@@ -704,7 +714,10 @@ async fn an_imported_key_finds_the_notes_below_the_wallets_position() {
         "the current key keeps its position"
     );
     indexer.take_ring_pages();
-    let keys = RotatingRingKeys::new(&identity, vec![imported_key.clone()]).unwrap();
+    let keys = RotatingRingKeys::new(&identity, &RING)
+        .unwrap()
+        .with_retired(vec![imported_key.clone()])
+        .unwrap();
     let scan = AnonymousSync::new(&keys, &assets())
         .fetch(&indexer, &imported)
         .await
@@ -2042,7 +2055,10 @@ fn a_bare_history_of_the_current_version_is_refused() {
 async fn a_held_key_with_no_history_entry_refuses_the_scan() {
     let indexer = Indexer::default();
     let identity = keypair(2);
-    let keys = RotatingRingKeys::new(&identity, vec![ViewingKey::new()]).unwrap();
+    let keys = RotatingRingKeys::new(&identity, &RING)
+        .unwrap()
+        .with_retired(vec![ViewingKey::new()])
+        .unwrap();
     let history = ViewingHistory::new(identity.viewing_pubkey(), 0).with_ring(RING, None);
     assert!(matches!(
         AnonymousSync::new(&keys, &assets())
