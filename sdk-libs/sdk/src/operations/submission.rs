@@ -24,7 +24,7 @@ use spr_client::{
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    address_ceiling::{AddressCeiling, CeilingDecision, MergeCapacity},
+    address_ceiling::{AddressCeiling, CeilingDecision, FitSigners, MergeCapacity, TransactionFit},
     buffered::BufferedFrame,
     heap::boxed,
     AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer, PreparedRingDeposit,
@@ -44,25 +44,15 @@ pub(crate) fn send_budget(tag: InstructionTag, priority_fee: Option<u64>) -> Com
     }
 }
 
+/// The operation fits one transaction with no buffer.
 pub(crate) fn check_transaction_size(
     payer: &Address,
     instruction: &Instruction,
     budget: ComputeBudgetConfig,
 ) -> Result<(), RingError> {
-    let size = spr_client::transaction_size(payer, core::slice::from_ref(instruction), budget)?;
-    if size.bytes > solana_message::v1::MAX_TRANSACTION_SIZE {
-        return Err(RingError::TransactionTooLarge {
-            bytes: size.bytes,
-            limit: solana_message::v1::MAX_TRANSACTION_SIZE,
-        });
-    }
-    if size.addresses > usize::from(solana_message::v1::MAX_ADDRESSES) {
-        return Err(RingError::TooManyAddresses {
-            addresses: size.addresses,
-            limit: usize::from(solana_message::v1::MAX_ADDRESSES),
-        });
-    }
-    Ok(())
+    TransactionFit::inline(instruction, FitSigners::new(*payer), budget)
+        .map(drop)
+        .map_err(RingError::from)
 }
 
 const MAX_ATTEMPTS: u8 = 3;

@@ -11,7 +11,7 @@ use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, transaction_size, AsyncRpc};
 
 use crate::{
-    address_ceiling::AddressCeilingError,
+    address_ceiling::FitError,
     submission::{send_and_settle, send_budget, SettledSubmission},
     RingError,
 };
@@ -37,13 +37,9 @@ pub struct BufferedFrame {
 
 impl BufferedFrame {
     /// `inline` is the transfer as it would send without a buffer.
-    pub fn new(
-        inline: &Instruction,
-        writer: Address,
-        nonce: u64,
-    ) -> Result<Self, AddressCeilingError> {
+    pub fn new(inline: &Instruction, writer: Address, nonce: u64) -> Result<Self, FitError> {
         if inline.data.len() > MAX_FRAME_LEN {
-            return Err(AddressCeilingError::FrameTooLarge {
+            return Err(FitError::FrameTooLarge {
                 bytes: inline.data.len(),
                 limit: MAX_FRAME_LEN,
             });
@@ -70,7 +66,7 @@ impl BufferedFrame {
     }
 
     /// The nonce is the digest's, a resend of one frame finds its own buffer and no other.
-    pub fn for_writer(inline: &Instruction, writer: Address) -> Result<Self, AddressCeilingError> {
+    pub fn for_writer(inline: &Instruction, writer: Address) -> Result<Self, FitError> {
         let digest = frame_digest(&inline.data)?;
         let (nonce, _) = digest
             .split_first_chunk::<8>()

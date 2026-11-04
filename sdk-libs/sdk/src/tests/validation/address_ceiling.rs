@@ -334,7 +334,7 @@ fn past_the_byte_ceiling_a_frame_goes_buffered_and_past_the_cpi_limit_it_is_refu
     ));
     assert!(matches!(
         decide_frame(MAX_FRAME_LEN + 1),
-        Err(AddressCeilingError::FrameTooLarge { bytes, limit: MAX_FRAME_LEN })
+        Err(AddressCeilingError::Fit(FitError::FrameTooLarge { bytes, limit: MAX_FRAME_LEN }))
             if bytes == MAX_FRAME_LEN + 1
     ));
 }
