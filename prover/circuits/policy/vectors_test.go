@@ -46,7 +46,13 @@ type ruleVector struct {
 	OwnRecords     []recordVector `json:"own_records"`
 	CuratorRecords []recordVector `json:"curator_records"`
 	Sender         ringtest.Hex   `json:"sender"`
-	Outputs        []struct {
+	RingInputs     []struct {
+		Owner  ringtest.Hex `json:"owner"`
+		Asset  ringtest.Hex `json:"asset"`
+		Amount uint64       `json:"amount"`
+	} `json:"ring_inputs"`
+	Outputs []struct {
+		Ring   bool         `json:"ring"`
 		Owner  ringtest.Hex `json:"owner"`
 		Asset  ringtest.Hex `json:"asset"`
 		Amount uint64       `json:"amount"`
@@ -160,7 +166,7 @@ func TestPolicyRulesMatchRustVectors(t *testing.T) {
 				if err := v.solve(t, len(v.Rules)); err != nil {
 					t.Fatalf("an admitted transfer is refused, %v", err)
 				}
-			case "lists", "no_asset_limit", "mixed_assets":
+			case "lists":
 				if err := v.solve(t, v.Outcome.Rule); err != nil {
 					t.Fatalf("the rules before rule %d refuse, %v", v.Outcome.Rule, err)
 				}
@@ -223,7 +229,10 @@ func (v ruleVector) solve(t *testing.T, rules int) error {
 	}
 	for _, out := range v.Outputs {
 		owner := memberID(t, out.Owner)
-		w.Slots = append(w.Slots, ringpolicy.Slot{Owner: owner, Asset: memberID(t, out.Asset), Amount: out.Amount, Unowned: owner == 0})
+		w.Slots = append(w.Slots, ringpolicy.Slot{Owner: owner, Asset: memberID(t, out.Asset), Amount: out.Amount, Unowned: owner == 0, Exit: !out.Ring})
+	}
+	for _, input := range v.RingInputs {
+		w.Inputs = append(w.Inputs, ringpolicy.Slot{Owner: memberID(t, input.Owner), Asset: memberID(t, input.Asset), Amount: input.Amount})
 	}
 	rows := v.rows()
 	rows.Rules = rows.Rules[:rules]

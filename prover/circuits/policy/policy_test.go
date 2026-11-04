@@ -94,6 +94,7 @@ func TestPolicySections(t *testing.T) {
 
 const (
 	comparisonHint = "/policy.comparisonHint"
+	divisionHint   = "/policy.divisionHint"
 	rulePartsHint  = "/policy.rulePartsHint"
 )
 
@@ -121,6 +122,14 @@ var forgeries = []struct {
 			out[1].Sub(out[1], step).Mod(out[1], q)
 		}
 	}},
+	{name: "quotient raised over a negative remainder", hint: divisionHint, forge: func(q *big.Int, in, out []*big.Int) {
+		out[0].Add(out[0], big.NewInt(1))
+		out[1].Sub(out[1], in[1]).Mod(out[1], q)
+	}},
+	{name: "quotient lowered over a remainder past the divisor", hint: divisionHint, forge: func(q *big.Int, in, out []*big.Int) {
+		out[0].Sub(out[0], big.NewInt(1)).Mod(out[0], q)
+		out[1].Add(out[1], in[1])
+	}},
 	{name: "rule part carried into its neighbour", hint: rulePartsHint, forge: func(_ *big.Int, _, out []*big.Int) {
 		out[0].Add(out[0], big.NewInt(1<<8))
 		out[1].Sub(out[1], big.NewInt(1))
@@ -143,11 +152,11 @@ var refusals = []struct {
 		b.OwnRecord(b.Policy().OwnerEntries[0]).Lists = ringregistry.AllowBit | ringregistry.BlockBit
 	}, in: "registry.SharedQuadProof.AssertLeavesWhen", wide: true},
 	{name: "withdrawal past the cap", honest: withdrawn, world: func(w *ringpolicy.World) { w.Public[0].Amount = -800 }, in: "policy.(*PolicyInputs).constrainOutflow", wide: true},
-	{name: "approval bit 0 past the co-sign bound", honest: cosigned, world: func(w *ringpolicy.World) { w.ApprovalRequired = false }, in: "ringpolicy.(*SectionCircuit).Define", wide: true},
-	{name: "approval bit 1 within every co-sign bound", honest: ringpolicy.Four, world: func(w *ringpolicy.World) { w.ApprovalRequired = true }, in: "ringpolicy.(*SectionCircuit).Define"},
-	{name: "approval bit 1 under a cap without a co-sign bound", honest: capOnly, world: func(w *ringpolicy.World) { w.ApprovalRequired = true }, in: "ringpolicy.(*SectionCircuit).Define"},
+	{name: "approval bit 0 past the co-sign bound", honest: cosigned, world: func(w *ringpolicy.World) { w.Approval = 0 }, in: "ringpolicy.(*SectionCircuit).Define", wide: true},
+	{name: "approval bit 1 within every co-sign bound", honest: ringpolicy.Four, world: func(w *ringpolicy.World) { w.Approval = policy.ApprovalOutflow }, in: "ringpolicy.(*SectionCircuit).Define"},
+	{name: "approval bit 1 under a cap without a co-sign bound", honest: capOnly, world: func(w *ringpolicy.World) { w.Approval = policy.ApprovalOutflow }, in: "ringpolicy.(*SectionCircuit).Define"},
 	{name: "exit to the sender counted as outflow", honest: exited, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 201 }, in: "ringpolicy.(*SectionCircuit).Define"},
-	{name: "delegate approval bit set", honest: delegate2, world: func(w *ringpolicy.World) { w.ApprovalRequired = true }, in: "ringpolicy.(*SectionCircuit).Define"},
+	{name: "delegate approval bit set", honest: delegate2, world: func(w *ringpolicy.World) { w.Approval = policy.ApprovalOutflow }, in: "ringpolicy.(*SectionCircuit).Define"},
 	{name: "output owner other than its public recipient", honest: ringpolicy.Confidential, witness: func(t testing.TB, b ringpolicy.Witness) {
 		b.Policy().Recipients[0] = ringpolicy.Bob
 		b.Rebind(t)
@@ -163,9 +172,8 @@ var refusals = []struct {
 	{name: "curator list missing from the curator registry", honest: curated, world: func(w *ringpolicy.World) { delete(w.Curator, ringpolicy.Alice) }, in: "policy.assertPaymentRules", wide: true},
 	{name: "subject on an alternative list", honest: alternative, world: func(w *ringpolicy.World) { w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(ringregistry.BlockBit) }, in: "policy.assertPaymentRules", wide: true},
 	{name: "scalar guard above its threshold", honest: scalarGuarded, world: func(w *ringpolicy.World) { w.Slots[0].Amount = 600 }, in: "policy.assertPaymentRules", wide: true},
-	{name: "scalar guard over two assets", honest: scalarGuarded, world: func(w *ringpolicy.World) { w.Slots[1].Asset = ringpolicy.AssetB }, in: "policy.assertPaymentRules"},
 	{name: "asset guard above the inline limit", honest: assetGuarded, world: func(w *ringpolicy.World) { w.Slots[0].Amount = 600 }, in: "policy.assertPaymentRules", wide: true},
-	{name: "asset guard without an inline limit", honest: assetGuardedListed, world: func(w *ringpolicy.World) { w.Slots[0].Asset = ringpolicy.AssetB }, in: "policy.assertPaymentRules"},
+	{name: "unlisted owner of a mint without a threshold", honest: assetGuarded, world: func(w *ringpolicy.World) { w.Slots[0].Asset = ringpolicy.AssetB }, in: "policy.assertPaymentRules"},
 	{name: "scalar guard over split outputs", honest: scalarSplit, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 300 }, in: "policy.assertPaymentRules"},
 	{name: "asset scalar guard above its threshold", honest: assetScalarGuarded, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 300 }, in: "policy.assertPaymentRules"},
 	{name: "escrow of another key ciphertext", honest: ringpolicy.Confidential, witness: func(_ testing.TB, b ringpolicy.Witness) { b.Policy().CtHashes[0] = 7 }, in: "policy.(*PolicyInputs).assertEscrow"},
@@ -212,7 +220,7 @@ func curatedAbsent() ringpolicy.World {
 func withdrawn() ringpolicy.World {
 	w := ringpolicy.Confidential()
 	w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: -500}, {Asset: ringpolicy.AssetB, Amount: 1000}}
-	w.ApprovalRequired = true
+	w.Approval = policy.ApprovalOutflow
 	return w
 }
 
@@ -227,7 +235,7 @@ func extremes(t testing.TB, outputs int) ringpolicy.Witness {
 		w.Slots = append(w.Slots, ringpolicy.Slot{Owner: ringpolicy.Alice, Asset: ringpolicy.AssetA, Amount: math.MaxUint64})
 	}
 	w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: -1}}
-	w.ApprovalRequired = true
+	w.Approval = policy.ApprovalOutflow
 	b := w.Build(t)
 	// A world's int64 public amounts stop short of a u64 maximum withdrawal.
 	b.Policy().PublicAmounts[0] = protocol.SignedToField(new(big.Int).Neg(new(big.Int).SetUint64(math.MaxUint64)))
@@ -244,7 +252,7 @@ func capOnly() ringpolicy.World {
 func cosigned() ringpolicy.World {
 	w := ringpolicy.Confidential()
 	w.Slots[0].Amount = 600
-	w.ApprovalRequired = true
+	w.Approval = policy.ApprovalOutflow
 	return w
 }
 
@@ -282,12 +290,6 @@ func assetGuarded() ringpolicy.World {
 	w.Table.Rules[0].Guard = policy.GuardAboveAmountByAsset
 	w.Table.Inline = []ringpolicy.InlineLimit{{Asset: ringpolicy.AssetA, Limit: 500}}
 	w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(0)
-	return w
-}
-
-func assetGuardedListed() ringpolicy.World {
-	w := assetGuarded()
-	w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(ringregistry.AllowBit)
 	return w
 }
 
@@ -413,7 +415,7 @@ func TestMintThresholdsAndOutflowHaveNoEightRecordLimit(t *testing.T) {
 	t.Run("ninth threshold still enforces lists", func(t *testing.T) {
 		w := world()
 		w.Slots[0].Amount = 501
-		w.ApprovalRequired = true
+		w.Approval = policy.ApprovalOutflow
 		b := w.Build(t)
 		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
 			t.Fatal("unlisted recipient above threshold admitted")
@@ -422,7 +424,7 @@ func TestMintThresholdsAndOutflowHaveNoEightRecordLimit(t *testing.T) {
 	t.Run("public-only mint cannot omit its cap", func(t *testing.T) {
 		w := world()
 		w.Public = []ringpolicy.PublicSlot{{Asset: 3011, Amount: -1001}}
-		w.ApprovalRequired = true
+		w.Approval = policy.ApprovalOutflow
 		b := w.Build(t)
 		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
 			t.Fatal("twelfth mint's cap ignored")
@@ -431,9 +433,9 @@ func TestMintThresholdsAndOutflowHaveNoEightRecordLimit(t *testing.T) {
 	t.Run("public-only mint requires co-sign approval", func(t *testing.T) {
 		w := world()
 		w.Public = []ringpolicy.PublicSlot{{Asset: 3011, Amount: -501}}
-		w.ApprovalRequired = true
+		w.Approval = policy.ApprovalOutflow
 		requireSolved(t, w.Build(t))
-		w.ApprovalRequired = false
+		w.Approval = 0
 		b := w.Build(t)
 		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
 			t.Fatal("twelfth mint's co-sign threshold ignored")

@@ -103,6 +103,7 @@ rule_errors! {
     LimitWithoutBound => "an outflow limit needs a cap or a cosign threshold",
     MemberWrittenList => "a rule reads a list its members write",
     ListNotPolicyReadable => "a rule reads a list outside the policy lists",
+    ListPolarity => "a rule reads a grant list by absence or a deny list by presence",
 }
 
 impl SourceMap {
@@ -282,6 +283,14 @@ impl Rule {
     pub const fn referenced(&self) -> ListSet {
         match self.source {
             RuleSource::Lists { present, absent } => present.union(absent),
+        }
+    }
+
+    const fn has_sound_polarity(&self) -> bool {
+        match self.source {
+            RuleSource::Lists { present, absent } => {
+                present.is_subset(ListSet::GRANT_LISTS) && absent.is_subset(ListSet::DENY_LISTS)
+            }
         }
     }
 
@@ -634,6 +643,10 @@ impl EncodedRuleTable {
         }
         if !referenced.is_subset(ListSet::POLICY_LISTS) {
             return Err(RuleTableError::ListNotPolicyReadable.into());
+        }
+        // Only then does a write's direction alone say whether it can restrict.
+        if table.rules().iter().any(|rule| !rule.has_sound_polarity()) {
+            return Err(RuleTableError::ListPolarity.into());
         }
         match referenced
             .iter()
