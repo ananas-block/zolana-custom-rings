@@ -347,7 +347,7 @@ impl Relay {
             }
         }
         if let RelayPayload::Transfer(RelayProofInputs {
-            rail: RelayRail::Delegate { delegate },
+            rail: RelayRail::Delegate { delegate, .. },
             ..
         }) = &payload
         {
@@ -1332,7 +1332,7 @@ impl PrepareCheck<'_> {
             .map_err(RelayError::from)?;
         let Some(signature) = signature else {
             let (
-                RelayRail::Delegate { delegate },
+                RelayRail::Delegate { delegate, .. },
                 RelayIntent::Delegate {
                     delegate_signature, ..
                 },
