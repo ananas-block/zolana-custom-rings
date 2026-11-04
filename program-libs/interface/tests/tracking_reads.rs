@@ -116,3 +116,71 @@ fn a_private_source_pairs_with_the_pinned_registry_alone() {
         Ok(())
     );
 }
+
+#[test]
+fn a_private_source_needs_a_policy_list_and_its_pair() {
+    let block = ListSet::single(ListId::Block);
+    let write = |owner_lists, source| PrivateSourceWrite {
+        owner_lists,
+        source,
+    };
+    let paired = source(key(9), 0);
+    let mut ring = *ring();
+    assert_eq!(
+        ring.set_private_source(write(block, Some((key(7), &paired))), 5),
+        Ok(())
+    );
+    assert_eq!(ring.private_source, key(7));
+    assert_eq!(ring.private_lists, block.bits());
+    assert_eq!(ring.generation(), 1);
+    let refused = |owner_lists, source, error| {
+        let mut untouched = ring;
+        assert_eq!(
+            untouched.set_private_source(write(owner_lists, source), 6),
+            Err(error)
+        );
+        assert_eq!(untouched, ring);
+    };
+    let (public, foreign) = (source(Address::default(), 0), source(key(8), 0));
+    refused(
+        block,
+        Some((key(7), &public)),
+        CustomRingError::PublicRegistryAsPrivateSource,
+    );
+    refused(
+        block,
+        Some((key(7), &foreign)),
+        CustomRingError::PrivateSourceOtherTracking,
+    );
+    refused(
+        ListSet::single(ListId::Reader),
+        Some((key(7), &paired)),
+        CustomRingError::ListNotPolicyReadable,
+    );
+    refused(block, None, CustomRingError::InvalidSource);
+    refused(
+        ListSet::EMPTY,
+        Some((key(7), &paired)),
+        CustomRingError::InvalidSource,
+    );
+    assert_eq!(
+        ring.set_private_source(write(ListSet::EMPTY, None), 7),
+        Ok(())
+    );
+    assert_eq!(ring.private_source, Address::default());
+}
+
+#[test]
+fn a_transfer_reads_the_private_source_before_the_pinned_tracking_registry() {
+    let mut ring = *ring();
+    ring.records = key(5);
+    ring.private_source = key(7);
+    assert_eq!(
+        ring.root_registries(RootRead::Policy).collect::<Vec<_>>(),
+        vec![key(5), key(7), key(9)]
+    );
+    assert_eq!(
+        ring.root_registries(RootRead::None).collect::<Vec<_>>(),
+        vec![key(9)]
+    );
+}
