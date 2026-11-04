@@ -1,4 +1,5 @@
 /** The Ring RPC relay a wallet sends its transfer through, Rust `relay`. */
+import type { ChainReader } from "@heliuslabs/zolana/client";
 import { getBase58Decoder, getBase64Encoder, type TransactionPartialSigner } from "@solana/kit";
 
 import type { RequestContext } from "@heliuslabs/zolana/interface";
@@ -20,6 +21,8 @@ import type {
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 import {
   checkRelayMessage,
+  checkSettledDelegateMessage,
+  settledBufferOf,
   type ExpectedRelayMessage,
   expectedDelegate,
   mismatch,
@@ -148,12 +151,40 @@ export class PendingRelaySignature {
     return checkRelayMessage(this.#expected, this.#message);
   }
 
+  /** As `sign`, a settling message reads the frame its digest signs from the chain. */
+  async signOnChain(
+    relay: RingRelayClient,
+    chain: Pick<ChainReader, "getAccount">,
+    signer: TransactionPartialSigner,
+    context?: RequestContext,
+  ): Promise<RelayStatus> {
+    const expected = this.#expected;
+    if (expected?.kind === "delegate") {
+      const buffer = settledBufferOf(expected, this.#message);
+      if (buffer !== undefined) {
+        const held = await chain.getAccount(buffer, context);
+        if (held === undefined) throw mismatch("Accounts");
+        const verified = checkSettledDelegateMessage(expected, this.#message, held.data);
+        return this.#submit(relay, verified, signer, context);
+      }
+    }
+    return this.sign(relay, signer, context);
+  }
+
   async sign(
     relay: RingRelayClient,
     signer: TransactionPartialSigner,
     context?: RequestContext,
   ): Promise<RelayStatus> {
-    const verified = this.verify();
+    return this.#submit(relay, this.verify(), signer, context);
+  }
+
+  async #submit(
+    relay: RingRelayClient,
+    verified: VerifiedRelayMessage,
+    signer: TransactionPartialSigner,
+    context: RequestContext | undefined,
+  ): Promise<RelayStatus> {
     const signature = await verified.sign(signer, context);
     return relay.submitRelay(
       { relayId: this.relayId, signer: verified.signer, signature },

@@ -2,6 +2,9 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `RelayIntent` adds `enroll` with an `ownerSignature` over `enrollRequestDigest`, `encodeRelayEnrollInputs` encodes its `proofInputs`, and the Ring RPC refusals add -32202 to -32205.
+- `AnonymousPayment` takes `data` as `NoteData`, a `ringDataHash` goes to any recipient and an `application` hash makes the output's owner a signer, and application bytes under a zero hash refuse with `RING_NOTE_DATA_UNBOUND`.
+- `DelegateTransfer.withBufferedSettlement` and `BufferedFrame` carry a delegate frame, `BufferedFrame.forWriter` names its nonce from the digest, and `PendingRelaySignature.signOnChain` reads a settling message's buffer and runs every delegate check over its frame, while `sign` refuses such a message with the `SettlesBuffer` mismatch.
 - `ringFullScan` reads a whole ring with no tag read, every held key tries every confidential and anonymous slot, and `AuditorRecovery.unopened` lists the commitments no held key opened, where an owner's note under a bad body opens only through an auditor read.
 - `BufferedFrame`, `ProvenRingTransfer.buffered` and `withBufferedSettlement` on `CustomRingTransfer`, `AnonymousTransfer` and `PublicOwnerTransfer` settle a transfer frame past one transaction from a buffer its payer writes, any other instruction refuses with `RING_BUFFERED_TAG`, and a confirmed transaction read takes the frame from its settlement.
 - `decideAddressCeiling` is async, takes `computeUnitLimit`, answers `inline` or `buffered` with a `size` in place of `underCeiling` or `mergeFirst`, and refuses past the frame limit with `RING_FRAME_TOO_LARGE` → await it and match the new kinds.

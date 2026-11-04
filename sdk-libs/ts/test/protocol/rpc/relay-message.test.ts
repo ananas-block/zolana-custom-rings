@@ -1,4 +1,11 @@
 /** Refuses a relay message that moves more than the request, against the Rust check's vectors. */
+import { decompileTransactionMessage, getCompiledTransactionMessageDecoder } from "@solana/kit";
+import type { Instruction } from "@heliuslabs/zolana/interface";
+import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
+import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
+import { BufferedFrame } from "../../../src/operations/payments/buffered-frame.js";
+import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
+import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { readFileSync } from "node:fs";
 
 import {
@@ -21,6 +28,9 @@ import { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
 import {
   checkRelayMessage,
+  checkSettledDelegateMessage,
+  settledBufferOf,
+  type ExpectedDelegate,
   expectedDelegate,
   expectedDeposit,
   type ExpectedRelayMessage,
@@ -206,6 +216,97 @@ describe("relay message check", () => {
       details: { mismatch: "Recipients" },
     });
     expect(delegateSigner.calls).toBe(0);
+  });
+
+  describe("a delegate frame settled from a buffer", () => {
+    const inlineOf = (name: string): Instruction => {
+      const compiled = getCompiledTransactionMessageDecoder().decode(
+        message(delegates.cases, name),
+      );
+      const [instruction] = decompileTransactionMessage(
+        compiled as Parameters<typeof decompileTransactionMessage>[0] & { version: 1 },
+      ).instructions;
+      if (instruction === undefined) throw new Error("no instruction");
+      return instruction as Instruction;
+    };
+    const settling = async (inline: Instruction): Promise<Uint8Array> => {
+      const { feePayer } = delegates.request;
+      const buffered = await BufferedFrame.forWriter(inline, feePayer);
+      const { messageBytes } = compileUnsignedTransaction({
+        feePayer,
+        lifetime: SIZE_PROBE_LIFETIME,
+        instructions: [buffered.settle()],
+        computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.settleBuffered),
+      });
+      return new Uint8Array(messageBytes);
+    };
+    const held = (frame: Uint8Array): Uint8Array =>
+      Uint8Array.of(16, ...new Uint8Array(32), RingInstructionTag.frameEvent, ...frame);
+    const data = (inline: Instruction) => Uint8Array.from(inline.data ?? []);
+
+    it("names the buffer and passes the frame its digest signs", async () => {
+      const expected = (await delegate(delegates.request)) as ExpectedDelegate;
+      const honest = inlineOf("honest");
+      const settle = await settling(honest);
+      const { buffer } = await BufferedFrame.forWriter(honest, delegates.request.feePayer);
+      expect(settledBufferOf(expected, settle)).toBe(buffer);
+      expect(settledBufferOf(expected, message(delegates.cases, "honest"))).toBeUndefined();
+      expect(checkSettledDelegateMessage(expected, settle, held(data(honest))).signer).toBe(
+        delegates.request.prepare.delegate,
+      );
+    });
+
+    it("refuses the plain check, a rewritten buffer and a swapped recipient", async () => {
+      const expected = (await delegate(delegates.request)) as ExpectedDelegate;
+      const honest = inlineOf("honest");
+      const settle = await settling(honest);
+      const reason = (action: () => unknown) => {
+        try {
+          action();
+        } catch (error) {
+          return (error as { details?: { mismatch?: unknown } }).details?.mismatch;
+        }
+        return "Accepted";
+      };
+      expect(reason(() => checkRelayMessage(expected, settle))).toBe("SettlesBuffer");
+      const rewritten = data(honest);
+      rewritten[rewritten.length - 1] = (rewritten[rewritten.length - 1] ?? 0) ^ 1;
+      expect(reason(() => checkSettledDelegateMessage(expected, settle, held(rewritten)))).toBe(
+        "Data",
+      );
+      const swapped = inlineOf("swappedRecipient");
+      expect(reason(() => checkSettledDelegateMessage(expected, settle, held(data(swapped))))).toBe(
+        "Data",
+      );
+      const swappedSettle = await settling(swapped);
+      expect(
+        reason(() => checkSettledDelegateMessage(expected, swappedSettle, held(data(swapped)))),
+      ).toBe("Recipients");
+    });
+
+    it("signs on chain after reading the buffer and refuses a missing one", async () => {
+      const expected = await delegate(delegates.request);
+      const honest = inlineOf("honest");
+      const pending = new PendingRelaySignature(RELAY_ID, await settling(honest), expected);
+      const delegateSigner = signer(delegates.request.prepare.delegate);
+      const ringRpc = relay();
+      await pending.signOnChain(
+        ringRpc,
+        { getAccount: async () => ({ data: held(data(honest)) }) } as never,
+        delegateSigner,
+      );
+      expect(ringRpc.submitRelay).toHaveBeenCalledOnce();
+      await expect(
+        pending.signOnChain(
+          ringRpc,
+          { getAccount: async () => undefined } as never,
+          delegateSigner,
+        ),
+      ).rejects.toMatchObject({ details: { mismatch: "Accounts" } });
+      await expect(pending.sign(ringRpc, delegateSigner)).rejects.toMatchObject({
+        details: { mismatch: "SettlesBuffer" },
+      });
+    });
   });
 
   it("signs the honest messages the relay builds", async () => {

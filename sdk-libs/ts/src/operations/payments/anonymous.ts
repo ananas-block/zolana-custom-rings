@@ -37,6 +37,19 @@ export interface AnonymousSpendSigner {
   sign(message: Uint8Array, context?: RequestContext): Promise<Bytes64>;
 }
 
+/** What a paid note commits beside its amount, the recipient's body carries it. */
+export interface NoteData {
+  readonly ringDataHash?: Bytes32;
+  /** SPP holds a nonzero hash to an owner who signs, the hidden owner or a public signer. */
+  readonly application?: ApplicationData;
+}
+
+/** SPP commits `hash` unchecked, a reader recomputes it from `bytes`. */
+export interface ApplicationData {
+  readonly hash: Bytes32;
+  readonly bytes: Uint8Array;
+}
+
 /** Its tag derives from the slot secret. */
 export interface AnonymousPayment {
   readonly to: RingAddress;
@@ -44,6 +57,7 @@ export interface AnonymousPayment {
   readonly amount: bigint;
   /** `null` sends no reply, the caller always names the choice. */
   readonly reply: ReplyMetadata | null;
+  readonly data?: NoteData;
 }
 
 /** Signs with an in-process key, the caller keeps and destroys it. */

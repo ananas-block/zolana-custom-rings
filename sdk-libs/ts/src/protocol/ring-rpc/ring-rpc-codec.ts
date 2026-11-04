@@ -41,7 +41,14 @@ type Hash = indexerTypes.Hash;
 
 const base58 = getBase58Decoder();
 
-const RELAY_OPERATIONS = ["anonymous", "confidential", "delegate", "deposit", "merge"] as const;
+const RELAY_OPERATIONS = [
+  "anonymous",
+  "confidential",
+  "delegate",
+  "deposit",
+  "merge",
+  "enroll",
+] as const;
 
 function toU64(value: bigint, path: string): number {
   return toWireInteger(value, path, 0n, U64_MAX);
@@ -100,6 +107,12 @@ function encodeRelayIntent(intent: RelayIntent): WireObject {
         proofInputs,
         ownerSignature: checkedSignature(intent.ownerSignature, "intent.ownerSignature"),
         ...encodeTokenAccountSetup(intent.tokenAccountSetup),
+      };
+    case "enroll":
+      return {
+        operation: intent.operation,
+        proofInputs,
+        ownerSignature: checkedSignature(intent.ownerSignature, "intent.ownerSignature"),
       };
     case "delegate":
       return {

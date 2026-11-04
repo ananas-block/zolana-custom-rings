@@ -25,7 +25,13 @@ export const RingRpcMethod = Object.freeze({
 export type RingRpcMethod = (typeof RingRpcMethod)[keyof typeof RingRpcMethod];
 
 /** Rust `RelayOperation`. */
-export type RelayOperation = "anonymous" | "confidential" | "delegate" | "deposit" | "merge";
+export type RelayOperation =
+  | "anonymous"
+  | "confidential"
+  | "delegate"
+  | "deposit"
+  | "merge"
+  | "enroll";
 
 /** Rust `GetRelayQuoteRequest`. */
 export interface RelayQuoteRequest {
@@ -60,7 +66,9 @@ export type RelayIntent =
       tokenAccountSetup?: readonly TokenAccountSetup[];
     }>
   /** `proofInputs` is a Rust `RelayDepositInputs` or `RelayMergeInputs`. */
-  | Readonly<{ operation: "deposit" | "merge"; proofInputs: Base64String }>;
+  | Readonly<{ operation: "deposit" | "merge"; proofInputs: Base64String }>
+  /** `proofInputs` is a Rust `RelayEnrollInputs`, the owner signs its digest here and the returned message later. */
+  | Readonly<{ operation: "enroll"; proofInputs: Base64String; ownerSignature: Signature }>;
 
 /** Rust `PrepareRelayRequest`. */
 export interface PrepareRelayRequest {

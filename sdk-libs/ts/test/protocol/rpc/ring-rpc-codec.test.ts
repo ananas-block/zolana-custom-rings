@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import {
+  encodeRelayEnrollInputs,
+  enrollRequestDigest,
+} from "../../../src/protocol/ring-rpc/relay-enroll-inputs.js";
 import { readFileSync } from "node:fs";
 
 import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
@@ -53,6 +58,51 @@ describe("prepareRelay", () => {
       },
     });
     expect(JSON.stringify(wire)).toBe(vector.wire);
+  });
+});
+
+describe("an enrollment relay", () => {
+  const inputs = {
+    ringProgramId: filled(1, 32) as Address,
+    owner: filled(2, 32) as Address,
+    trackingRegistry: filled(3, 32) as Address,
+    instructionData: Uint8Array.of(6, 7, 8),
+  };
+  const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
+
+  it("encodes the bytes Rust `RelayEnrollInputs::encode` writes", () => {
+    expect(hex(encodeRelayEnrollInputs(inputs))).toBe(
+      `${"01".repeat(32)}${"02".repeat(32)}${"03".repeat(32)}0300000000000000060708`,
+    );
+  });
+
+  it("signs a digest over the domain and every field, a changed field moves it", () => {
+    const expected = createHash("sha256")
+      .update("zolana/ring-rpc-relay-enroll/v1")
+      .update(Buffer.from("01".repeat(32) + "02".repeat(32) + "03".repeat(32) + "060708", "hex"))
+      .digest("hex");
+    expect(hex(enrollRequestDigest(inputs))).toBe(expected);
+    expect(
+      hex(enrollRequestDigest({ ...inputs, instructionData: Uint8Array.of(6, 7, 9) })),
+    ).not.toBe(expected);
+  });
+
+  it("carries the owner signature and refuses an intent without one", () => {
+    const request = (ownerSignature: unknown) => ({
+      ring: filled(1, 32) as Address,
+      quote: { feePayer: filled(2, 32) as Address, validUntilSlot: 4242n },
+      intent: {
+        operation: "enroll" as const,
+        proofInputs: "AwQF" as indexerTypes.Base64String,
+        ownerSignature: ownerSignature as Signature,
+      },
+    });
+    expect(encodePrepareRelayRequest(request(filled(7, 64))).intent).toEqual({
+      operation: "enroll",
+      proofInputs: "AwQF",
+      ownerSignature: filled(7, 64),
+    });
+    expect(() => encodePrepareRelayRequest(request(undefined))).toThrow();
   });
 });
 

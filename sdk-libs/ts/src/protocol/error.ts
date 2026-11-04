@@ -174,6 +174,7 @@ export const RING_ERROR_CODES = [
   "RING_FRAME_EVENT_INVALID",
   "RING_FRAME_TOO_LARGE",
   "RING_BUFFERED_TAG",
+  "RING_NOTE_DATA_UNBOUND",
   "RING_BUFFERED_NONCE",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
