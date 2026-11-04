@@ -124,6 +124,8 @@ export interface CustomRingTransferInput {
   readonly listSalts?: readonly RingListSalt[];
   /** SPP's optional fields the frame carries through. */
   readonly extensions?: FrameExtensions;
+  /** Past one transaction the frame settles from a buffer its payer writes. */
+  readonly bufferedSettlement?: boolean;
 }
 
 /** The confidential rail, the owner signs its spends in public or inside the proof, Rust `RingTransfer<Owner>`. */
@@ -149,6 +151,15 @@ export class CustomRingTransfer {
   static new(input: CustomRingTransferInput): CustomRingTransfer {
     input.transfer.withRingProgramId(input.ringProgramId);
     return new CustomRingTransfer(input, undefined, undefined);
+  }
+
+  withBufferedSettlement(): CustomRingTransfer {
+    return new CustomRingTransfer(
+      { ...this.#input, bufferedSettlement: true },
+      this.#withdrawal,
+      this.#inProofOwner,
+      this.#coOwners,
+    );
   }
 
   /** The settlement accounts of the transfer's public withdrawal, Rust `with_interface_transfer_accounts`. */
@@ -300,6 +311,7 @@ export class CustomRingTransfer {
           ringProgramId,
           config,
           staged: { ...staged, spend: this.#spend(client, owner) },
+          bufferedSettlement: this.#input.bufferedSettlement === true,
           ...suppliedCoSigners(this.#input.coSigners),
           listSalts: this.#input.listSalts ?? [],
           ...approvedStage(approval, prepared),
@@ -532,6 +544,13 @@ export class AnonymousTransfer {
     });
   }
 
+  withBufferedSettlement(): AnonymousTransfer {
+    return new AnonymousTransfer({
+      ...this.#fields(),
+      owner: { ...this.#owner, bufferedSettlement: true },
+    });
+  }
+
   /** Pads to `shape`, else the transfer takes the smallest supported shape. */
   withShape(shape: Shape): AnonymousTransfer {
     this.#owner.transfer.withShape(shape);
@@ -592,6 +611,7 @@ export class AnonymousTransfer {
           staged: { ...staged, spend },
           ...suppliedCoSigners(this.#owner.coSigners),
           listSalts: this.#owner.listSalts ?? [],
+          bufferedSettlement: this.#owner.bufferedSettlement === true,
           ...approvedStage(approval, prepared),
         },
         context,
@@ -852,6 +872,17 @@ export class PublicOwnerTransfer {
     });
   }
 
+  withBufferedSettlement(): PublicOwnerTransfer {
+    return new PublicOwnerTransfer({
+      owner: { ...this.#owner, bufferedSettlement: true },
+      withdrawal: this.#withdrawal,
+      wallet: this.#wallet,
+      inProofOwner: this.#inProofOwner,
+      coOwners: this.#coOwners,
+      payments: this.#payments,
+    });
+  }
+
   prove(client: PublicOwnerTransferClient, context?: RequestContext): Promise<ProvenRingTransfer> {
     return this.#prove(client, undefined, context);
   }
@@ -932,6 +963,7 @@ export class PublicOwnerTransfer {
           client,
           ringProgramId,
           config,
+          bufferedSettlement: this.#owner.bufferedSettlement === true,
           staged: {
             proofInputs,
             rail,

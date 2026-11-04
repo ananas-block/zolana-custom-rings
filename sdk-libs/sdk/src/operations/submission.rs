@@ -24,8 +24,11 @@ use spr_client::{
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    heap::boxed, AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer,
-    PreparedRingDeposit, PublicOwnerTransfer, RingError, RingMergeOperation,
+    address_ceiling::{AddressCeiling, CeilingDecision, MergeCapacity},
+    buffered::BufferedFrame,
+    heap::boxed,
+    AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer, PreparedRingDeposit,
+    PublicOwnerTransfer, RingError, RingMergeOperation,
 };
 
 #[cfg(test)]
@@ -107,9 +110,9 @@ macro_rules! operations {
 }
 
 operations! {
-    Transfer(CustomRingTransfer<'a>) => Box::new,
-    Anonymous(AnonymousTransfer<'a>) => Box::new,
-    PublicOwners(PublicOwnerTransfer<'a>) => Box::new,
+    Transfer(CustomRingTransfer<'a>) => |transfer: CustomRingTransfer<'a>| Box::new(transfer.with_buffered_settlement()),
+    Anonymous(AnonymousTransfer<'a>) => |transfer: AnonymousTransfer<'a>| Box::new(transfer.with_buffered_settlement()),
+    PublicOwners(PublicOwnerTransfer<'a>) => |transfer: PublicOwnerTransfer<'a>| Box::new(transfer.with_buffered_settlement()),
     Delegate(DelegateTransfer<'a>) => Box::new,
     Merge(RingMergeOperation) => Box::new,
     Deposit(PreparedRingDeposit) => Box::new,
@@ -365,6 +368,35 @@ impl<'a> RingSubmission<'a> {
                             .prove(client, payer.pubkey(), self.priority_fee)
                     })
                     .await?;
+                    if self.operation.settles_from_buffer() {
+                        let decision = AddressCeiling {
+                            payer: payer.pubkey(),
+                            instruction: &proved.instruction,
+                            budget: proved.budget,
+                            inputs: &[],
+                            merge_capacity: MergeCapacity {
+                                keyed: 0,
+                                zero_key: 0,
+                            },
+                        }
+                        .decide()?;
+                        if matches!(decision, CeilingDecision::Buffered(_)) {
+                            let settled = boxed(|| {
+                                self.send_buffered(
+                                    client,
+                                    payer,
+                                    signers,
+                                    proved.bound.clone(),
+                                    &proved.instruction,
+                                )
+                            })
+                            .await?;
+                            match settled {
+                                Some(status) => return Ok(status),
+                                None => continue,
+                            }
+                        }
+                    }
                     check_transaction_size(&payer.pubkey(), &proved.instruction, proved.budget)?;
                     let (blockhash, last_valid_block_height) =
                         client.get_latest_blockhash().await?;
@@ -434,6 +466,30 @@ impl<'a> RingSubmission<'a> {
         }
     }
 
+    /// `None` proves again after a stale failure below the attempt limit, a failed buffer closes first.
+    async fn send_buffered<R: AsyncRpc, I: RingIndexerBackend>(
+        &mut self,
+        client: &RingClient<R, I>,
+        payer: &(dyn Signer + Sync),
+        signers: &[&(dyn Signer + Sync)],
+        bound: BoundState,
+        inline: &Instruction,
+    ) -> Result<Option<SubmissionStatus>, RingError> {
+        let frame = BufferedFrame::for_writer(inline, payer.pubkey())?;
+        self.attempts += 1;
+        let settled = frame.send(client.zolana(), payer, signers).await?;
+        if let SettledSubmission::Failed { error, .. } = &settled {
+            // The writer's rent stays locked in a buffer only it can close.
+            frame.abandon(client.zolana(), payer).await?;
+            if self.attempts < MAX_ATTEMPTS && bound.reproof_fixes(error, client.zolana()).await? {
+                return Ok(None);
+            }
+        }
+        let terminal = SubmissionStatus::Settled(settled);
+        self.terminal = Some(terminal.clone());
+        Ok(Some(terminal))
+    }
+
     /// `None` proves again after a stale failure below the attempt limit.
     fn settle(&mut self, signature: Signature, outcome: Outcome) -> Option<SubmissionStatus> {
         let settled = match outcome {
@@ -461,6 +517,14 @@ impl<'a> RingSubmission<'a> {
 }
 
 impl RingOperation<'_> {
+    /// The delegate rails settle inline, the program refuses their tag from a buffer.
+    const fn settles_from_buffer(&self) -> bool {
+        matches!(
+            self,
+            Self::Transfer(_) | Self::Anonymous(_) | Self::PublicOwners(_)
+        )
+    }
+
     fn refresh_for_retry(&mut self) -> Result<(), RingError> {
         if let Self::Deposit(deposit) = self {
             **deposit = deposit.fresh_attempt()?;

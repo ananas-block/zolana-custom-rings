@@ -43,6 +43,8 @@ pub struct RecordingProver {
     pub requests: Mutex<Vec<(Address, Option<[u8; 64]>)>>,
     /// Named as signers on every proven transfer, absent reads the relay's parties.
     pub co_signers: Option<Vec<Address>>,
+    /// The next proven transfer's data, a frame past one transaction.
+    pub frame: Mutex<Option<Vec<u8>>>,
 }
 
 #[async_trait]
@@ -76,6 +78,7 @@ impl RelayProver for RecordingProver {
                     .map(|signer| AccountMeta::new_readonly(*signer, true)),
             )
             .collect();
+        let data = self.frame.lock().expect("frame").take().unwrap_or(data);
         Ok(ProvenRelay {
             instruction: Instruction {
                 program_id: request.ring,

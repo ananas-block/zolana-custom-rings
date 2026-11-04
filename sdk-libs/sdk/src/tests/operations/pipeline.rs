@@ -503,6 +503,7 @@ impl<'a> MoveSender<'a> {
             asset: Mint::SOL,
             payments,
             entry: EntrySpend::Allow,
+            wide_frames: WideFrames::Refuse,
             co_signer: None,
         }
     }
@@ -642,6 +643,7 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
     assert!(spend(30).await.frame.parts.entry);
     let refused = AnonymousMove {
         entry: EntrySpend::Refuse,
+        wide_frames: WideFrames::Refuse,
         ..owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), 30)])
     };
     assert!(matches!(
@@ -2819,6 +2821,8 @@ async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_prov
         ),
         "{refused:?}"
     );
+    let buffered = transfer.with_buffered_settlement();
+    assert!(buffered.measure(&client).await.is_ok());
 }
 
 #[tokio::test]

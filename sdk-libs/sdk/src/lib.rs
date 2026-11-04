@@ -70,7 +70,7 @@ pub use crate::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,
         SetDelegate, SourceOwner, UpdateAuthority, UpdatePolicy,
     },
-    buffered::BufferedFrame,
+    buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
     deposit::{
         fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RelayedDeposit, RingDeposit,
@@ -88,11 +88,11 @@ pub use crate::{
         DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
         DelegateWithdrawal, Delegated, EntrySpend, Owner, ProvenRingTransfer, PublicOwnerTransfer,
         PublicOwners, Rail, RailKind, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment,
-        RingSender, RingTransfer, TransferKey,
+        RingSender, RingTransfer, TransferKey, WideFrames,
     },
     records::{
-        AuthorityRecordUpdate, MemberRecords, RecordUpdateService, SaltedOwnerCheck, RecordUpdateTarget,
-        WalletRecordUpdate,
+        AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,
+        SaltedOwnerCheck, WalletRecordUpdate,
     },
     register_key::{Enroll, EnrollInstruction, WriteOwnerGrant},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},

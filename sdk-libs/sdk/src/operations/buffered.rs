@@ -66,6 +66,15 @@ impl BufferedFrame {
         })
     }
 
+    /// The nonce is the digest's, a resend of one frame finds its own buffer and no other.
+    pub fn for_writer(inline: &Instruction, writer: Address) -> Result<Self, AddressCeilingError> {
+        let digest = frame_digest(&inline.data)?;
+        let (nonce, _) = digest
+            .split_first_chunk::<8>()
+            .ok_or(CustomRingError::FrameLength)?;
+        Self::new(inline, writer, u64::from_le_bytes(*nonce))
+    }
+
     pub const fn buffer(&self) -> Address {
         self.buffer
     }
@@ -97,15 +106,7 @@ impl BufferedFrame {
 
     /// Abandons an unsettled buffer, its rent returns to the writer.
     pub fn close(&self) -> Instruction {
-        Instruction {
-            program_id: self.ring_program,
-            accounts: vec![
-                AccountMeta::new(self.writer, true),
-                AccountMeta::new(self.buffer, false),
-                AccountMeta::new(self.writer, true),
-            ],
-            data: vec![tag::CLOSE_FRAME_BUFFER],
-        }
+        close_frame_buffer(self.ring_program, self.writer, self.buffer)
     }
 
     /// Writes every chunk, then settles, a failed settlement leaves the buffer to [`Self::close`].
@@ -132,6 +133,24 @@ impl BufferedFrame {
         .await
     }
 
+    /// Returns the rent of a buffer whose settlement failed, a buffer never created stays a miss.
+    pub async fn abandon<R: AsyncRpc + ?Sized>(
+        &self,
+        client: &R,
+        writer: &(dyn Signer + Sync),
+    ) -> Result<(), RingError> {
+        if client.get_account(self.buffer).await?.is_none() {
+            return Ok(());
+        }
+        let close = self.close();
+        match land(client, writer, &[], close, InstructionTag::CloseFrameBuffer).await? {
+            SettledSubmission::Confirmed { .. } => Ok(()),
+            SettledSubmission::Failed { signature, error } => {
+                Err(RingError::Rejected { signature, error })
+            }
+        }
+    }
+
     fn write(&self, offset: usize, bytes: &[u8]) -> Result<Instruction, RingError> {
         let narrow = |_| CustomRingError::FrameLength;
         Ok(Instruction {
@@ -149,6 +168,18 @@ impl BufferedFrame {
             }
             .encode(),
         })
+    }
+}
+
+pub fn close_frame_buffer(ring_program: Address, writer: Address, buffer: Address) -> Instruction {
+    Instruction {
+        program_id: ring_program,
+        accounts: vec![
+            AccountMeta::new(writer, true),
+            AccountMeta::new(buffer, false),
+            AccountMeta::new(writer, true),
+        ],
+        data: vec![tag::CLOSE_FRAME_BUFFER],
     }
 }
 

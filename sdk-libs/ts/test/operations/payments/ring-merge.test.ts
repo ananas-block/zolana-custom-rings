@@ -1,3 +1,6 @@
+import { longestFitting } from "../../../src/operations/payments/merge.js";
+import { encodeBase58 } from "@heliuslabs/zolana/internal";
+import { fitsOneTransaction, transactionSize } from "../../../src/operations/workflow/compile.js";
 import { bn254 } from "@noble/curves/bn254.js";
 import {
   AccountRole,
@@ -480,6 +483,38 @@ describe("ring merge", () => {
     } finally {
       local.destroy();
     }
+  });
+
+  it("trims past the address ceiling under the byte limit", async () => {
+    const account = (seed: number) => {
+      const bytes = new Uint8Array(32).fill(0xaa);
+      new DataView(bytes.buffer).setUint32(0, seed);
+      return encodeBase58(bytes) as Address;
+    };
+    const discard = vi.fn();
+    const fitted = await longestFitting({
+      count: 52,
+      minimum: 2,
+      prepare: async (count) => ({
+        programAddress: account(2),
+        accounts: Array.from({ length: count + 12 }, (_, seed) => ({
+          address: account(100 + seed),
+          role: AccountRole.WRITABLE,
+        })),
+      }),
+      fits: async (instruction) => {
+        const size = transactionSize({
+          feePayer: account(1),
+          instructions: [instruction],
+          computeUnitLimit: 1_000_000,
+        });
+        expect(size.bytes).toBeLessThan(4096);
+        return fitsOneTransaction(size);
+      },
+      discard,
+    });
+    expect(fitted.count).toBe(50);
+    expect(discard).toHaveBeenCalledTimes(2);
   });
 
   it("trims a zero-key merge to its narrower width, Rust `WIDEST_ZERO_KEY_MERGE`", async () => {

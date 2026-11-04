@@ -11,11 +11,17 @@ import {
   mergeOutputBlinding,
   mergeOutputKey,
 } from "@heliuslabs/zolana/internal";
-import { SOL_MINT, Utxo, type IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import {
+  SOL_MINT,
+  Utxo,
+  type IndexedShieldedTransaction,
+  type OutputSlot,
+} from "@heliuslabs/zolana/transaction";
 
-import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
+import { deliveredSlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
 import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
-import { AnonymousSync } from "../../src/state/anonymous-sync.js";
+import { AnonymousSync, ringFullScan } from "../../src/state/anonymous-sync.js";
+import { openRingNotes } from "../../src/state/ring-sync.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
 import { TREE, TREE_ID, randomAddress } from "../helpers/ring-pipeline.js";
@@ -39,7 +45,7 @@ function randomTag(): ViewTag {
   return globalThis.crypto.getRandomValues(new Uint8Array(32)) as ViewTag;
 }
 
-/** Every published tag replaced, a live proof refuses the frame. */
+/** A sender chooses its tags. */
 function underWrongTags(tx: IndexedShieldedTransaction): IndexedShieldedTransaction {
   return {
     ...tx,
@@ -325,5 +331,112 @@ describe("full scan recovery", () => {
     expect(recovered.pendingOpenings.map((note) => note.utxo.amount)).toEqual([7n]);
     expect(recovered.unknownMints).toEqual([mint]);
     expect(recovered.unmatched.map(hex)).toEqual([hex(hash)]);
+  });
+
+  describe("a confidential slot", () => {
+    const deliver = (
+      indexer: ScanIndexer,
+      to: ScanWallet,
+      published: (slot: OutputSlot) => OutputSlot,
+    ): Bytes32 => {
+      const txKey = ViewingKey.generate();
+      const salt = randomSalt();
+      const firstNullifier = new Uint8Array(32).fill(0x2f) as Bytes32;
+      const blinding = new Uint8Array(32).fill(0x12) as Bytes32;
+      const { address } = to;
+      const body = sealRecipientBody(
+        deliveredSlotSecret({
+          agreement: txKey.ecdh(address.viewingPublicKey),
+          txViewingKey: txKey.publicKey(),
+          recipientViewingKey: address.viewingPublicKey,
+          salt,
+          outputIndex: 0,
+          firstNullifier,
+        }),
+        { blinding, amount: 30n, mint: SOL_MINT },
+      );
+      const hash = new Utxo({
+        owner: address.signingPublicKey,
+        asset: SOL_MINT,
+        amount: 30n,
+        blinding,
+        ringProgramId: RING,
+      }).hash(address.nullifierPublicKey, TREE_ID);
+      const leafIndex = indexer.leaves(1);
+      const tx = {
+        slot: leafIndex + 1n,
+        txSignature: getBase58Decoder().decode(
+          new Uint8Array(64).fill(Number(leafIndex) + 0x60),
+        ) as Signature,
+        eventIndex: 0,
+        txViewingPublicKey: txKey.publicKey(),
+        salt,
+        outputSlots: [
+          published({
+            viewTag: slotTag(address.viewingPublicKey.u()),
+            outputContext: { hash, tree: TREE, treeId: TREE_ID, leafIndex },
+            payload: encodeRingBodyOutput(body, new Uint8Array()),
+          }),
+        ],
+        messages: [],
+        nullifiers: [firstNullifier],
+        proofless: false,
+        ringProgramId: RING,
+      };
+      indexer.publish(tx);
+      txKey.destroy();
+      return hash;
+    };
+    const scan = (reader: ScanWallet, indexer: ScanIndexer) =>
+      ringFullScan({ keys: reader.keys, assets: ASSETS, client: indexer.client(), ring: RING });
+
+    it("finds a note under a wrong tag, the tag read misses it", async () => {
+      const indexer = new ScanIndexer();
+      const bob = new ScanWallet(2);
+      const hash = deliver(indexer, bob, (slot) => ({
+        ...slot,
+        viewTag: new Uint8Array(32).fill(0x55) as Bytes32,
+      }));
+      const tagged = await openRingNotes({
+        keys: bob.keys,
+        assets: ASSETS,
+        transactions: indexer.transactions,
+      });
+      expect(tagged.utxos).toEqual([]);
+      const recovered = await scan(bob, indexer);
+      expect(recovered.utxos.map((note) => hex(note.outputContext.hash))).toEqual([hex(hash)]);
+      expect(recovered.auditorRecovery.unopened.map(hex)).not.toContain(hex(hash));
+    });
+
+    it("reports a commitment published twice once", async () => {
+      const indexer = new ScanIndexer();
+      const bob = new ScanWallet(2);
+      const hash = deliver(indexer, bob, (slot) => slot);
+      const [first] = indexer.transactions;
+      if (first === undefined) throw new Error("no row");
+      indexer.publish({
+        ...first,
+        slot: first.slot + 1n,
+        txSignature: getBase58Decoder().decode(new Uint8Array(64).fill(0x7e)) as Signature,
+      });
+      const recovered = await scan(bob, indexer);
+      expect(recovered.utxos.map((note) => hex(note.outputContext.hash))).toEqual([hex(hash)]);
+    });
+
+    it("opens nothing from a bad body and leaves it and a foreign slot to the auditor", async () => {
+      const indexer = new ScanIndexer();
+      const bob = new ScanWallet(2);
+      const bad = deliver(indexer, bob, (slot) => {
+        const payload = slot.payload.slice();
+        payload[payload.length - 1] = (payload[payload.length - 1] ?? 0) ^ 1;
+        return { ...slot, payload };
+      });
+      const foreign = deliver(indexer, new ScanWallet(3), (slot) => slot);
+      const recovered = await scan(bob, indexer);
+      expect(recovered.utxos).toEqual([]);
+      expect(recovered.auditorRecovery.unopened.map(hex)).toEqual(
+        expect.arrayContaining([hex(bad), hex(foreign)]),
+      );
+    });
   });
 });
