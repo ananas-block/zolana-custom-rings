@@ -53,8 +53,8 @@ pub use wallet_status::*;
 
 use crate::{
     AuditError, AuditedInput, AuditedMergeOutput, AuditedOutput, AuditedTransaction, AuditedUtxo,
-    ConfirmedMerge, KnownUtxo, OutputOpening, OutputPayloadErrorKind, ReaderKey, ReaderKeyError,
-    RingOwnerTag, RingWithdrawal, UtxoOwner,
+    KnownUtxo, OutputOpening, OutputPayloadErrorKind, ReaderKey, ReaderKeyError, RingOwnerTag,
+    RingWithdrawal, UtxoOwner,
 };
 
 pub const HEALTH: &str = "health";
@@ -300,7 +300,6 @@ pub struct AuditedUtxoView {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditedMergesPage {
     pub opened: Vec<AuditedMergeRecord>,
-    pub unresolved: Vec<UnresolvedMergeRecord>,
     pub cursor: Option<Base64String>,
 }
 
@@ -314,27 +313,11 @@ pub struct AuditedMergeRecord {
     pub output_commitment: Hash,
     pub owner_key: SerializablePubkey,
     pub asset: Hash,
-    /// Absent while the asset registry does not know the asset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mint: Option<SerializablePubkey>,
-    /// The record's, a tag 47 merge's sum of its inputs.
+    pub mint: SerializablePubkey,
     pub amount: u64,
-    /// Tag 47 alone, in slot order with dummies left out.
-    pub input_commitments: Vec<Hash>,
-    /// Tag 57 alone, with padding left out.
+    /// With padding left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub real_nullifiers: Vec<Hash>,
-}
-
-/// A confirmed merge with an input the auditor cannot name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct UnresolvedMergeRecord {
-    pub slot: u64,
-    pub tx_signature: SerializableSignature,
-    pub event_index: u16,
-    pub output_commitment: Hash,
-    pub input_commitments: Vec<Hash>,
 }
 
 impl From<&AuditedMergeOutput> for AuditedMergeRecord {
@@ -346,22 +329,9 @@ impl From<&AuditedMergeOutput> for AuditedMergeRecord {
             output_commitment: Hash(output.commitment),
             owner_key: output.owner_key.into(),
             asset: Hash(output.asset),
-            mint: output.mint.map(Into::into),
+            mint: output.mint.into(),
             amount: output.amount,
-            input_commitments: output.inputs.iter().copied().map(Hash).collect(),
             real_nullifiers: output.real_nullifiers.iter().copied().map(Hash).collect(),
-        }
-    }
-}
-
-impl From<&ConfirmedMerge> for UnresolvedMergeRecord {
-    fn from(merge: &ConfirmedMerge) -> Self {
-        Self {
-            slot: merge.slot,
-            tx_signature: merge.tx_signature.into(),
-            event_index: merge.event_index,
-            output_commitment: Hash(merge.output_commitment),
-            input_commitments: merge.inputs().iter().copied().map(Hash).collect(),
         }
     }
 }
@@ -519,7 +489,6 @@ pub struct DecryptedUtxo {
     pub owner_key: SerializablePubkey,
     pub nullifier_pk: Hash,
     pub asset: Hash,
-    /// Absent on a historical frame while the asset registry does not know the asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint: Option<SerializablePubkey>,
     pub amount: u64,

@@ -7,14 +7,13 @@ use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_hasher::primitives::hash_bytes;
 use spr_indexer_api::{Base64String, Hash, Limit};
-use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{
     instructions::{merge::MergeSeed, transact::canonical_shape},
     ShieldedTransaction,
 };
 use zolana_ring_client::{
-    auditor_view_tag, confirmed_merge, historical_evidence,
+    auditor_view_tag, confirmed_merge,
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream, PageEnd},
     rpc::{
         cursor_in_bounds, limit_in_bounds, utxo_hashes_in_bounds, Attestation, AuditedMergesPage,
@@ -27,9 +26,8 @@ use zolana_ring_client::{
         SetReaderGrantRequest, SkippedReason, SkippedTransaction, SpendCoverageAttestation,
         WalletStatusAttestation, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedInput, AuditedMergeOutput, AuditedTransaction, ConfirmedEventKind,
-    ConfirmedMerge, CreatedUtxo, CreatedUtxos, DepositNote, HistoricalEvidence, InputOpening,
-    KnownUtxo, MergeDisclosed, MergeInput, MergeLedger, MergeRecordOutput, ReaderKey, RingOrigin,
+    AuditError, AuditedInput, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, CreatedUtxo,
+    CreatedUtxos, DepositNote, InputOpening, KnownUtxo, MergeRecordOutput, ReaderKey, RingOrigin,
     RowDisposition, SealedNullifierKey, TransactionAudit, UtxoOwner,
 };
 use zolana_ring_indexer::{
@@ -38,10 +36,6 @@ use zolana_ring_indexer::{
 };
 use zolana_ring_member_registry::{OpeningCheck, TrackingOpening, TrackingPath, TrackingRecord};
 use zolana_ring_policy::Member;
-use zolana_ring_transaction::{
-    historical::{assign_prefixed_inputs, InputPrefix, PrefixAssignment},
-    RingAssets,
-};
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
@@ -52,7 +46,7 @@ use crate::{
     limits::ReaderPermit,
     replay::ReplayCheck,
     spend_machine::{InputRead, Observation},
-    spent_index::{LoadSpends, NoteSeal, PageCommit, SpentCommitment, SpentIndex, SpentSource},
+    spent_index::{LoadSpends, NoteSeal, PageCommit},
     upstream::{
         MergeAuditRequest, RingConfiguration, RingHistoryPage, TransactionPage, TransactionSource,
     },
@@ -551,13 +545,6 @@ impl<S: TransactionSource> AuditService<S> {
         .await?;
         *position = loaded.checkpoint.position;
         store.seed(loaded);
-        store.seed_historical(
-            SpentIndex {
-                conn: database.connection(),
-            }
-            .rows()
-            .await?,
-        );
         Ok(())
     }
 
@@ -649,7 +636,7 @@ impl<S: TransactionSource> AuditService<S> {
         limit: NonZeroU32,
     ) -> Result<(), RingRpcError> {
         let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
-        for frame in store.retry_frames().into_iter().take(MAX_RETRIED_FRAMES) {
+        for frame in store.unread_frames().into_iter().take(MAX_RETRIED_FRAMES) {
             let mut position = frame
                 .slot
                 .checked_sub(1)
@@ -699,7 +686,6 @@ impl<S: TransactionSource> AuditService<S> {
                     break;
                 }
             }
-            store.retried(&frame);
         }
         Ok(())
     }
@@ -745,17 +731,11 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(owners)
     }
 
-    fn audit(
-        &self,
-        bound: BoundTransaction<'_>,
-        assets: &RingAssets,
-    ) -> Result<AuditedTransaction, AuditError> {
+    fn audit(&self, bound: BoundTransaction<'_>) -> Result<AuditedTransaction, AuditError> {
         let trees = bound.origin.event.input_tree_ids(bound.transaction);
-        let store = self.shared.store(self.ring);
         TransactionAudit::new(bound.transaction, bound.origin.audit_frame(bound.mode)?)
             .with_input_trees(&trees)?
-            .with_escrowed_keys(store.as_ref())
-            .run(&self.auditor, assets)
+            .run(&self.auditor)
     }
 
     /// A page read writes nothing, only the backfill's checkpoint feeds the index.
@@ -829,34 +809,6 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
-    /// Exact inputs keep their hash rows, every nullifier joins the machine.
-    fn read_historical(&self, row: HistoricalRow<'_, '_>) {
-        let HistoricalRow {
-            tx,
-            origin,
-            mode,
-            created_in,
-            work,
-        } = row;
-        let evidence = origin
-            .transact
-            .as_deref()
-            .filter(|_| origin.event.kind() == ConfirmedEventKind::Transfer)
-            .map(|transact| historical_evidence(tx, transact, mode, &self.auditor));
-        let commitments = match evidence {
-            Some(Ok(evidence)) => historical_inputs(work, evidence),
-            Some(Err(_)) | None => Vec::new(),
-        };
-        work.record_historical(spent_rows(SpentEvent {
-            created_in,
-            first_nullifier: tx.nullifiers.first().copied().unwrap_or_default(),
-            source: SpentSource::Historical,
-            commitments,
-        }));
-        observe_all(work, tx, created_in, |_| InputRead::Real { evidence: None });
-        work.mark_read(created_in);
-    }
-
     /// The record opens the output, its nullifiers mark the inputs through the machine.
     fn read_merge(&self, row: MergeRow<'_, '_>) {
         let MergeRow {
@@ -865,33 +817,18 @@ impl<S: TransactionSource> AuditService<S> {
             created_in,
             work,
         } = row;
-        let note = match &merge.disclosed {
-            MergeDisclosed::Record(record) => {
-                observe_all(work, tx, created_in, |position| {
-                    match tx
-                        .nullifiers
-                        .get(usize::from(position))
-                        .is_some_and(|nullifier| record.real_nullifiers.contains(nullifier))
-                    {
-                        true => InputRead::Real { evidence: None },
-                        false => InputRead::Padding,
-                    }
-                });
-                merge_record_note(&merge, record)
+        let record = &merge.disclosed;
+        observe_all(work, tx, created_in, |position| {
+            match tx
+                .nullifiers
+                .get(usize::from(position))
+                .is_some_and(|nullifier| record.real_nullifiers.contains(nullifier))
+            {
+                true => InputRead::Real,
+                false => InputRead::Padding,
             }
-            // A tag 47 frame names its inputs by hash, its output needs every one opened.
-            MergeDisclosed::Inputs(inputs) => {
-                observe_all(work, tx, created_in, |position| {
-                    match inputs.get(usize::from(position)) {
-                        Some(commitment) => InputRead::Real {
-                            evidence: Some(*commitment),
-                        },
-                        None => InputRead::Padding,
-                    }
-                });
-                merge_output_note(self.ring, merge.clone(), work)
-            }
-        };
+        });
+        let note = merge_record_note(&merge, record);
         match note {
             Some(note) => {
                 work.open(created_in, [note]);
@@ -911,8 +848,6 @@ impl<S: TransactionSource> AuditService<S> {
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
         let store = self.shared.store(self.ring);
-        let assets = self.shared.due_assets().await;
-        store.name_assets(&assets);
         let mut items = Vec::new();
         let mut skipped = Vec::new();
         let mut unfinished = None;
@@ -969,47 +904,33 @@ impl<S: TransactionSource> AuditService<S> {
                 continue;
             }
             let bound = origin.bind_transaction(&mut tx, self.ring);
-            if bound.is_ok() {
-                if origin.is_historical() {
-                    self.read_historical(HistoricalRow {
+            if bound.is_ok() && origin.event.kind() == ConfirmedEventKind::Merge {
+                match confirmed_merge(&tx, event_index, &origin, &self.auditor) {
+                    Ok(Some(merge)) => self.read_merge(MergeRow {
                         tx: &tx,
-                        origin: &origin,
-                        mode,
+                        merge,
                         created_in,
                         work,
-                    });
-                    continue;
-                }
-                if origin.event.kind() == ConfirmedEventKind::Merge {
-                    match confirmed_merge(&tx, event_index, &origin, &self.auditor) {
-                        Ok(Some(merge)) => self.read_merge(MergeRow {
-                            tx: &tx,
-                            merge,
-                            created_in,
-                            work,
-                        }),
-                        Ok(None) => {
-                            observe_all(work, &tx, created_in, |_| InputRead::Real {
-                                evidence: None,
-                            });
-                            work.mark_read(created_in);
-                        }
-                        Err(error) if error.disposition() == RowDisposition::Retry => {
-                            unfinished.get_or_insert(error);
-                        }
-                        Err(error) => {
-                            log::warn!(
-                                "ring {} merge {}:{event_index} is unreadable because {}",
-                                self.ring,
-                                tx.tx_signature,
-                                redacted(&error)
-                            );
-                            observe_all(work, &tx, created_in, |_| InputRead::Unreadable);
-                            work.mark_unread(created_in);
-                        }
+                    }),
+                    Ok(None) => {
+                        observe_all(work, &tx, created_in, |_| InputRead::Real);
+                        work.mark_read(created_in);
                     }
-                    continue;
+                    Err(error) if error.disposition() == RowDisposition::Retry => {
+                        unfinished.get_or_insert(error);
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "ring {} merge {}:{event_index} is unreadable because {}",
+                            self.ring,
+                            tx.tx_signature,
+                            redacted(&error)
+                        );
+                        observe_all(work, &tx, created_in, |_| InputRead::Unreadable);
+                        work.mark_unread(created_in);
+                    }
                 }
+                continue;
             }
             if !origin.requires_audit() {
                 // A later commitment layout spends a deposited or merged UTXO by hash or prefix.
@@ -1023,9 +944,7 @@ impl<S: TransactionSource> AuditService<S> {
                 });
                 match created {
                     Ok(created) => {
-                        observe_all(work, &tx, created_in, |_| InputRead::Real {
-                            evidence: None,
-                        });
+                        observe_all(work, &tx, created_in, |_| InputRead::Real);
                         work.open(created_in, created.utxos);
                         work.open(
                             created_in,
@@ -1050,18 +969,14 @@ impl<S: TransactionSource> AuditService<S> {
                 continue;
             }
             let opened = bound.and_then(|()| {
-                self.audit(
-                    BoundTransaction {
-                        transaction: &tx,
-                        origin: &origin,
-                        mode,
-                    },
-                    &assets,
-                )
+                self.audit(BoundTransaction {
+                    transaction: &tx,
+                    origin: &origin,
+                    mode,
+                })
             });
             if let Ok(opened) = &opened {
                 work.open(created_in, opened.utxos());
-                work.await_key(created_in, opened.awaiting_key.iter().copied());
                 for (position, input) in opened.inputs.iter().enumerate() {
                     work.observe(Observation {
                         nullifier: input.nullifier,
@@ -1181,7 +1096,6 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
         let store = service.shared.store(service.ring);
         let mut value = AuditedMergesPage {
             opened: Vec::new(),
-            unresolved: Vec::new(),
             cursor: page.next_cursor.map(Into::into),
         };
         for merge in page.merges {
@@ -1282,15 +1196,6 @@ fn tracked_owner(
     })
 }
 
-/// A confirmed row of a frame the v3 path never decodes.
-struct HistoricalRow<'a, 'w> {
-    tx: &'a ShieldedTransaction,
-    origin: &'a RingOrigin,
-    mode: RingMode,
-    created_in: CreatedIn,
-    work: &'a mut PageWork<'w>,
-}
-
 struct MergeRow<'a, 'w> {
     tx: &'a ShieldedTransaction,
     merge: ConfirmedMerge,
@@ -1321,7 +1226,7 @@ fn audited_input_read(input: &AuditedInput) -> InputRead {
     match &input.opening {
         InputOpening::Dummy => InputRead::Padding,
         InputOpening::External(_) => InputRead::External,
-        InputOpening::Real => InputRead::Real { evidence: None },
+        InputOpening::Real => InputRead::Real,
     }
 }
 
@@ -1357,81 +1262,4 @@ fn merge_record_note(merge: &ConfirmedMerge, record: &MergeRecordOutput) -> Opti
         },
         ring_note: true,
     })
-}
-
-/// A tag 47 output with every input opened, its blinding derives from the owner's secret.
-fn merge_output_note(
-    ring: Address,
-    merge: ConfirmedMerge,
-    work: &mut PageWork<'_>,
-) -> Option<CreatedUtxo> {
-    let (commitment, leaf_index) = (merge.output_commitment, merge.leaf_index);
-    let output: AuditedMergeOutput = MergeLedger::default()
-        .apply(merge, |input| {
-            work.note(input).map(|note| MergeInput::from(&note.utxo))
-        })
-        .resolved
-        .pop()?;
-    let key = match output.owner {
-        UtxoOwner::Keyed { nullifier_pk } if nullifier_pk == ZERO_NULLIFIER_PUBKEY => {
-            NullifierKey::from_secret([0; 31])
-        }
-        _ => work.open_key(&output.owner_key)?,
-    };
-    let utxo = output.opening(ring, &key).ok().flatten()?;
-    Some(CreatedUtxo {
-        commitment,
-        slot_index: 0,
-        leaf_index,
-        utxo,
-        ring_note: true,
-    })
-}
-
-/// The row's exact inputs, an ambiguous or unnamed input stays out.
-fn historical_inputs(work: &PageWork<'_>, evidence: HistoricalEvidence) -> Vec<[u8; 32]> {
-    let assigned = |prefixes: &[Option<InputPrefix>], owner: Option<[u8; 32]>| {
-        assign_prefixed_inputs(prefixes, |prefix| work.prefixed(prefix, owner))
-    };
-    let (mut exact, assignments) = match evidence {
-        HistoricalEvidence::Unnamed => return Vec::new(),
-        HistoricalEvidence::Prefixes(prefixes) => (Vec::new(), assigned(&prefixes, None)),
-        HistoricalEvidence::Commitments { first, prefixes } => {
-            let owner = work.note(&first).map(|note| note.utxo.owner_key);
-            (vec![first], assigned(&prefixes, owner))
-        }
-    };
-    for assignment in assignments {
-        if let PrefixAssignment::Exact(commitment) = assignment {
-            exact.push(commitment);
-        }
-    }
-    exact
-}
-
-struct SpentEvent {
-    created_in: CreatedIn,
-    first_nullifier: [u8; 32],
-    source: SpentSource,
-    commitments: Vec<[u8; 32]>,
-}
-
-fn spent_rows(event: SpentEvent) -> Vec<SpentCommitment> {
-    let SpentEvent {
-        created_in,
-        first_nullifier,
-        source,
-        commitments,
-    } = event;
-    commitments
-        .into_iter()
-        .map(|utxo_hash| SpentCommitment {
-            utxo_hash,
-            slot: created_in.slot,
-            tx_signature: created_in.tx_signature,
-            event_index: created_in.event_index,
-            first_nullifier,
-            source,
-        })
-        .collect()
 }

@@ -35,9 +35,6 @@ pub struct GetWalletStatusResponse {
     pub balances: Vec<WalletBalance>,
     pub notes: Vec<WalletNote>,
     pub cursor: Option<Base64String>,
-    /// Key-escrow notes naming the wallet, outside `balances` and `notes` until a key opens them.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub awaiting_key: Vec<Hash>,
 }
 
 /// The owner's own public tracking account, a pending enrollment grants nothing.

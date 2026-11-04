@@ -27,7 +27,7 @@ use crate::{
     merge_audit::RingMergeBody,
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
     scan::{RingHistory, ScanPage, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
-    types::{InputOpening, OutputOpening, OutputPayloadErrorKind},
+    types::{InputOpening, OutputOpening},
     AuditError, KnownUtxo, UtxoOwner,
 };
 
@@ -173,8 +173,6 @@ struct Found {
     known: KnownUtxoIndex,
     /// In history order.
     real_inputs: Vec<[u8; 32]>,
-    /// Commitments of historical slots no held asset or key rebuilds.
-    unopened_slots: Vec<[u8; 32]>,
 }
 
 impl Found {
@@ -257,7 +255,6 @@ impl<'a> MemberRecovery<'a> {
             .filter(|(_, nullifier)| !spent.contains(nullifier))
             .map(|(commitment, _)| commitment)
             .collect();
-        unopened.extend(found.unopened_slots);
         unopened.extend(
             merges
                 .iter()
@@ -286,8 +283,7 @@ impl<'a> MemberRecovery<'a> {
         found: &mut Found,
     ) -> Result<(), AuditError> {
         let frame = origin.audit_frame(self.recovery.mode)?;
-        let audited =
-            TransactionAudit::new(transaction, frame).run(self.recovery.auditor, assets)?;
+        let audited = TransactionAudit::new(transaction, frame).run(self.recovery.auditor)?;
         found.known.extend(
             audited
                 .utxos()
@@ -300,23 +296,11 @@ impl<'a> MemberRecovery<'a> {
                 .filter(|input| input.opening == InputOpening::Real)
                 .map(|input| input.nullifier),
         );
-        for error in &audited.payload_errors {
-            // Another member's unresolved historical slot does not stop the recovery.
-            if !matches!(
-                error.kind,
-                OutputPayloadErrorKind::UnknownAsset | OutputPayloadErrorKind::EscrowPending
-            ) {
-                return Err(AuditError::UnopenedOutput {
-                    slot: error.slot_index,
-                    kind: error.kind,
-                });
-            }
-            found.unopened_slots.extend(
-                transaction
-                    .output_slots
-                    .get(error.slot_index as usize)
-                    .map(|slot| slot.output_context.hash),
-            );
+        if let Some(error) = audited.payload_errors.first() {
+            return Err(AuditError::UnopenedOutput {
+                slot: error.slot_index,
+                kind: error.kind,
+            });
         }
         for output in &audited.outputs {
             let OutputOpening::Ring { utxo: opened, .. } = &output.opening else {
@@ -560,59 +544,52 @@ impl<'h> MergeRecovery<'_, 'h> {
                     continue;
                 }
                 let successor = match inherited {
-                    Some(mut merged) => {
-                        merged.mint = merged
-                            .mint
-                            .or_else(|| assets.by_field(&merged.asset).map(|mint| mint.asset));
-                        match merged.opening(ring, source.nullifier_key)? {
-                            Some(opening) if opening.owner_hash()? == owner_hash => {
-                                if let Some(mint) = opening.mint {
-                                    let utxo = Utxo {
-                                        ring_program_id: Some(ring),
-                                        ..source.utxo(
-                                            spr_transaction::Mint::new(mint, 0),
-                                            opening.amount,
-                                            opening.blinding,
-                                        )
-                                    };
-                                    Some(RecoveredMerge {
-                                        note: WalletUtxo {
-                                            nullifier: source
-                                                .nullifier_key
-                                                .nullifier(&output.hash, &opening.blinding)?,
-                                            utxo,
-                                            nullifier_pubkey: source.address.nullifier_pubkey,
-                                            utxo_hash: output.hash,
-                                            tx_viewing_key: None,
-                                            data_hash: None,
-                                            ring_data_hash: Some(opening.ring_data_hash),
-                                            tree_id: output.tree_id,
-                                            leaf_index: output.leaf_index,
-                                            latest_tree_id: None,
-                                            slot: transaction.slot,
-                                            tx_signature: transaction.tx_signature,
-                                            slot_index: 0,
-                                        },
-                                        opening,
-                                    })
-                                } else if let Some(note) =
-                                    merge_successor(source, transaction, ring)?
-                                {
-                                    Some(RecoveredMerge::from_note(note)?)
-                                } else {
-                                    found.seen.insert(output.hash);
-                                    found.unresolved.push((
-                                        output.hash,
-                                        source
+                    Some(merged) => match merged.opening(ring, source.nullifier_key)? {
+                        Some(opening) if opening.owner_hash()? == owner_hash => {
+                            if let Some(mint) = opening.mint {
+                                let utxo = Utxo {
+                                    ring_program_id: Some(ring),
+                                    ..source.utxo(
+                                        spr_transaction::Mint::new(mint, 0),
+                                        opening.amount,
+                                        opening.blinding,
+                                    )
+                                };
+                                Some(RecoveredMerge {
+                                    note: WalletUtxo {
+                                        nullifier: source
                                             .nullifier_key
                                             .nullifier(&output.hash, &opening.blinding)?,
-                                    ));
-                                    continue;
-                                }
+                                        utxo,
+                                        nullifier_pubkey: source.address.nullifier_pubkey,
+                                        utxo_hash: output.hash,
+                                        tx_viewing_key: None,
+                                        data_hash: None,
+                                        ring_data_hash: Some(opening.ring_data_hash),
+                                        tree_id: output.tree_id,
+                                        leaf_index: output.leaf_index,
+                                        latest_tree_id: None,
+                                        slot: transaction.slot,
+                                        tx_signature: transaction.tx_signature,
+                                        slot_index: 0,
+                                    },
+                                    opening,
+                                })
+                            } else if let Some(note) = merge_successor(source, transaction, ring)? {
+                                Some(RecoveredMerge::from_note(note)?)
+                            } else {
+                                found.seen.insert(output.hash);
+                                found.unresolved.push((
+                                    output.hash,
+                                    source
+                                        .nullifier_key
+                                        .nullifier(&output.hash, &opening.blinding)?,
+                                ));
+                                continue;
                             }
-                            _ => None,
                         }
-                    }
+                        _ => None,
+                    },
                     None => merge_successor(source, transaction, ring)?
                         .map(RecoveredMerge::from_note)
                         .transpose()?,

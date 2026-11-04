@@ -14,7 +14,6 @@ pub enum RingRpcError {
     RegistryRootChanged = -32071,
     #[error("the ring member registry page has an index gap or inconsistent leaf")]
     RegistryPageGap = -32075,
-    // -32076 retired.
 }
 
 impl RingRpcError {

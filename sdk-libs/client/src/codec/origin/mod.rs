@@ -16,14 +16,10 @@ use spr_interface::{
 };
 use spr_transaction::{ShieldedTransaction, SOL_MINT};
 
-use crate::{
-    decrypt::{AuditFrame, HistoricalLayout},
-    encryption::DepositCapsule,
-    AuditError,
-};
+use crate::AuditError;
 use custom_ring_interface::{
-    storage::Revision, tag as ring_tag, transact_flag, CustomRingError, CustomRingMergeIxDataRef,
-    DepositPrefix, HistoricalMergeIxDataRef, InstructionTag, ParsedTransact, RingMode, RingRail,
+    tag as ring_tag, transact_flag, AuditStreamLayout, CustomRingError, CustomRingMergeIxDataRef,
+    DepositPrefix, InstructionTag, ParsedTransact, RingDepositAuditCapsule, RingMode, RingRail,
     RingTransactData,
 };
 
@@ -48,18 +44,9 @@ pub struct RingOrigin {
 
 /// Bound to the forwarded SPP body.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ConfirmedMergeDisclosure {
-    /// Tag 57.
-    Record {
-        eph_pk: [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
-        ciphertext: [u8; custom_ring_interface::OPENING_RECORD_LEN],
-    },
-    /// Tag 47.
-    Historical {
-        eph_pk: [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
-        ciphertext: [u8; custom_ring_interface::MERGE_KEY_CIPHERTEXT_LEN],
-        fields: Vec<[u8; 32]>,
-    },
+pub struct ConfirmedMergeDisclosure {
+    pub eph_pk: [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
+    pub ciphertext: [u8; custom_ring_interface::OPENING_RECORD_LEN],
 }
 
 /// The confirmed instruction selects the recovery path, never indexer metadata.
@@ -163,7 +150,7 @@ impl RingOrigin {
         self.ring_invoked && self.event.kind == ConfirmedEventKind::Transfer
     }
 
-    pub fn audit_frame(&self, mode: RingMode) -> Result<AuditFrame, AuditError> {
+    pub fn audit_frame(&self, mode: RingMode) -> Result<AuditStreamLayout, AuditError> {
         let frame = self
             .transact
             .as_deref()
@@ -171,24 +158,12 @@ impl RingOrigin {
         audit_frame_of(frame, mode)
     }
 
-    /// A row of a frame the v3 path never decodes, the historical reader owns it.
-    pub fn is_historical(&self) -> bool {
-        match self.event.kind {
-            ConfirmedEventKind::Deposit => false,
-            ConfirmedEventKind::Merge => self.merge_disclosure.is_none(),
-            ConfirmedEventKind::Transfer => self.transact.as_deref().is_some_and(is_legacy),
-        }
-    }
-
-    /// The input owners a confidential transfer binds, a historical frame names none.
+    /// The input owners a confidential transfer binds.
     pub fn spenders(&self, mode: RingMode) -> Result<Vec<Address>, AuditError> {
         let frame = self
             .transact
             .as_deref()
             .ok_or(AuditError::MissingRingTransact)?;
-        if is_legacy(frame) || is_version_3(frame) {
-            return Ok(Vec::new());
-        }
         let parsed = parse_frame(mode, frame)?;
         let data = parsed.data();
         let run = match (data.rail, data.in_proof_owner) {
@@ -241,8 +216,12 @@ impl ConfirmedDeposit {
         self.slot_index
     }
 
-    pub(crate) fn matches(&self, capsule: DepositCapsule<'_>, owner_utxo_hash: &[u8; 32]) -> bool {
-        self.slot_index == capsule.slot_index()
+    pub(crate) fn matches(
+        &self,
+        capsule: RingDepositAuditCapsule<'_>,
+        owner_utxo_hash: &[u8; 32],
+    ) -> bool {
+        self.slot_index == capsule.slot_index
             && &self.owner_utxo_hash == owner_utxo_hash
             && self.capsule_hash == <[u8; 32]>::from(Sha256::digest(capsule.encode()))
     }
@@ -251,7 +230,7 @@ impl ConfirmedDeposit {
 /// One public settlement leg out of the ring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingWithdrawal {
-    /// The policy-screened owner from confirmed v2 metadata, absent for legacy/audit-only frames.
+    /// The policy-screened owner from confirmed metadata, absent for audit-only frames.
     pub screened_owner: Option<Address>,
     /// A token account for an SPL leg, a wallet for a SOL leg.
     pub recipient: Address,
@@ -321,9 +300,6 @@ fn bind_withdrawal_owners(
     if withdrawals.is_empty() {
         return Ok(());
     }
-    if is_legacy(frame) || is_version_3(frame) {
-        return Ok(());
-    }
     let (spp, _) = TransactIxDataRef::parse_with_external_data_prefix(&source.data[1..])
         .map_err(|e| AuditError::InvalidTransactData(e.to_string()))?;
     let parsed = parse_frame(forwarded_mode(&spp, frame), frame)?;
@@ -363,29 +339,13 @@ fn confirmed_transact(
     (caller.program_id == ring
         && matches!(
             caller.data.first(),
-            Some(
-                &(ring_tag::TRANSFER
-                    | ring_tag::AUTHORITY_TRANSFER
-                    | ring_tag::HISTORICAL_TRANSFER
-                    | ring_tag::HISTORICAL_AUTHORITY_TRANSFER
-                    | ring_tag::HISTORICAL_TRANSFER_V3
-                    | ring_tag::HISTORICAL_AUTHORITY_TRANSFER_V3
-                    | ring_tag::LEGACY_TRANSACT
-                    | ring_tag::LEGACY_DELEGATE_TRANSACT)
-            )
+            Some(&(ring_tag::TRANSFER | ring_tag::AUTHORITY_TRANSFER))
         ))
     .then(|| caller.data.clone())
 }
 
-/// The tag alone picks the reader.
-fn audit_frame_of(frame: &[u8], mode: RingMode) -> Result<AuditFrame, AuditError> {
-    if is_legacy(frame) {
-        return Err(AuditError::HistoricalFrame);
-    }
-    if is_version_3(frame) {
-        return HistoricalLayout::parse(frame, mode).map(AuditFrame::Historical);
-    }
-    parse_frame(mode, frame).map(|parsed| AuditFrame::Records(parsed.audit_stream()))
+fn audit_frame_of(frame: &[u8], mode: RingMode) -> Result<AuditStreamLayout, AuditError> {
+    parse_frame(mode, frame).map(|parsed| parsed.audit_stream())
 }
 
 fn parse_frame(mode: RingMode, frame: &[u8]) -> Result<ParsedTransact<'_>, AuditError> {
@@ -408,25 +368,6 @@ fn forwarded_mode(spp: &TransactIxDataRef<'_>, frame: &[u8]) -> RingMode {
     }
 }
 
-fn is_version_3(frame: &[u8]) -> bool {
-    matches!(
-        frame.first(),
-        Some(&(ring_tag::HISTORICAL_TRANSFER_V3 | ring_tag::HISTORICAL_AUTHORITY_TRANSFER_V3))
-    )
-}
-
-fn is_legacy(frame: &[u8]) -> bool {
-    matches!(
-        frame.first(),
-        Some(
-            &(ring_tag::HISTORICAL_TRANSFER
-                | ring_tag::HISTORICAL_AUTHORITY_TRANSFER
-                | ring_tag::LEGACY_TRANSACT
-                | ring_tag::LEGACY_DELEGATE_TRANSACT)
-        )
-    )
-}
-
 /// A disclosure counts only when the ring forwarded the exact SPP body it proved against.
 fn confirmed_merge_disclosure(
     groups: &[InstructionGroup],
@@ -438,33 +379,15 @@ fn confirmed_merge_disclosure(
         return None;
     }
     let (&caller_tag, request) = caller.data.split_first()?;
-    match (*source.data.first()?, caller_tag) {
-        (tag::RING_MERGE_V2, ring_tag::MERGE) => {
-            let request = CustomRingMergeIxDataRef::from_bytes(request).ok()?;
-            let forwarded = request.forwarded(&request.spp_merge_body().ok()?);
-            (forwarded == source.data).then_some(ConfirmedMergeDisclosure::Record {
-                eph_pk: *request.eph_pk,
-                ciphertext: *request.ciphertext,
-            })
-        }
-        (tag::RING_MERGE_TRANSACT, ring_tag::HISTORICAL_MERGE_V3) => {
-            let request = HistoricalMergeIxDataRef::from_bytes(request).ok()?;
-            let body = request.spp_merge_body().ok()?;
-            let disclosure = request.disclosure;
-            let forwarded = [
-                &[tag::RING_MERGE_TRANSACT][..],
-                request.output_ring_data_hash,
-                &body,
-            ]
-            .concat();
-            (forwarded == source.data).then(|| ConfirmedMergeDisclosure::Historical {
-                eph_pk: *disclosure.eph_pk,
-                ciphertext: *disclosure.ciphertext,
-                fields: disclosure.fields.to_vec(),
-            })
-        }
-        _ => None,
+    if (*source.data.first()?, caller_tag) != (tag::RING_MERGE_V2, ring_tag::MERGE) {
+        return None;
     }
+    let request = CustomRingMergeIxDataRef::from_bytes(request).ok()?;
+    let forwarded = request.forwarded(&request.spp_merge_body().ok()?);
+    (forwarded == source.data).then_some(ConfirmedMergeDisclosure {
+        eph_pk: *request.eph_pk,
+        ciphertext: *request.ciphertext,
+    })
 }
 
 fn direct_caller<'a>(
@@ -494,15 +417,9 @@ fn confirmed_deposits(
     else {
         return Ok(Vec::new());
     };
-    // Tag 31 ran before the tracking revision and the key capacity entered the prefix.
-    let (prefix_len, historical) = match caller.data.first() {
-        Some(&ring_tag::DEPOSIT) => (DepositPrefix::SIZE, false),
-        Some(&ring_tag::HISTORICAL_DEPOSIT) => {
-            (DepositPrefix::SIZE - size_of::<Revision>() - 1, true)
-        }
-        _ => return Ok(Vec::new()),
-    };
-    if caller.data.get(prefix_len..) != Some(source.data.as_slice()) {
+    if caller.data.first() != Some(&ring_tag::DEPOSIT)
+        || caller.data.get(DepositPrefix::SIZE..) != Some(source.data.as_slice())
+    {
         return Ok(Vec::new());
     }
     let deposit = RingDepositIxData::deserialize(&source.data[1..])
@@ -512,17 +429,14 @@ fn confirmed_deposits(
         .iter()
         .enumerate()
         .map(|(index, entry)| {
-            let capsule = DepositCapsule::parse(&entry.encrypted.ciphertext)
+            let capsule = RingDepositAuditCapsule::parse(&entry.encrypted.ciphertext)
                 .map_err(|error| AuditError::InvalidDepositData(error.to_string()))?
-                .filter(|capsule| {
-                    usize::from(capsule.slot_index()) == index
-                        && capsule.is_historical() == historical
-                })
+                .filter(|capsule| usize::from(capsule.slot_index) == index)
                 .ok_or_else(|| {
                     AuditError::InvalidDepositData("missing or misplaced capsule".into())
                 })?;
             Ok(ConfirmedDeposit {
-                slot_index: capsule.slot_index(),
+                slot_index: capsule.slot_index,
                 owner_utxo_hash: entry.owner_utxo_hash,
                 capsule_hash: Sha256::digest(&entry.encrypted.ciphertext).into(),
             })

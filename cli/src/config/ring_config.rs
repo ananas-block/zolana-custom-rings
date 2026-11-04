@@ -758,7 +758,7 @@ ring_rpc = "http://127.0.0.1:8785"
     }
 
     #[test]
-    fn authority_paths_split_without_breaking_legacy_configs() {
+    fn authority_paths_split_or_share_one_key() {
         let split = EXAMPLE.replacen(
             "\n[localnet]",
             "\nconfig_authority_keypair = \"config.json\"\nupgrade_authority_keypair = \"upgrade.json\"\n\n[localnet]",
@@ -771,9 +771,9 @@ ring_rpc = "http://127.0.0.1:8785"
             Path::new("upgrade.json")
         );
 
-        let legacy: RingConfig = toml::from_str(EXAMPLE).expect("parse legacy authority");
-        assert_eq!(legacy.config_authority_keypair(), legacy.authority_keypair);
-        assert_eq!(legacy.upgrade_authority_keypair(), legacy.authority_keypair);
+        let shared: RingConfig = toml::from_str(EXAMPLE).expect("parse one authority");
+        assert_eq!(shared.config_authority_keypair(), shared.authority_keypair);
+        assert_eq!(shared.upgrade_authority_keypair(), shared.authority_keypair);
     }
 
     #[test]

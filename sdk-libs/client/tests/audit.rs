@@ -39,13 +39,12 @@ use spr_transaction::{owner_utxo_hash, OutputContext, OutputSlot};
 use zolana_ring_client::{
     auditor_view_tag, confirmed_merge,
     history::{HistoryCursor, HistoryQuery, HistoryStream},
-    ring_event_origin_in, seal_deposits, AuditError, AuditFrame, AuditStreamSeal,
-    AuditedTransaction, ConfirmedMerge, ConfirmedMergeDisclosure, CreatedUtxo, CreatedUtxoScan,
-    CreatedUtxos, InputOpening, KnownUtxo, MergeAudit, MergeDisclosed, MergeLedger,
-    MergeRecordSeal, OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOrigin,
-    RingOwnerTag, RingScan, TransactionAudit, TransactionOrigin, UtxoOwner,
+    ring_event_origin_in, seal_deposits, AuditError, AuditStreamSeal, AuditedTransaction,
+    ConfirmedMerge, ConfirmedMergeDisclosure, CreatedUtxo, CreatedUtxoScan, CreatedUtxos,
+    InputOpening, KnownUtxo, MergeAudit, MergeLedger, MergeRecordSeal, OutputOpening,
+    OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan,
+    TransactionAudit, TransactionOrigin, UtxoOwner,
 };
-use zolana_ring_transaction::RingAssets;
 
 use history_page::{position, EventsPage};
 use transfer::{
@@ -57,10 +56,6 @@ const SOL: Address = Address::new_from_array([0; 32]);
 const MINT: Address = Address::new_from_array([0x0a; 32]);
 
 /// A record frame reads no mint.
-fn no_assets() -> RingAssets {
-    RingAssets::new([]).unwrap()
-}
-
 fn utxo(owner: u8, asset_address: Address, amount: u64) -> UtxoFields {
     UtxoFields {
         owner_key: [owner; 32],
@@ -140,7 +135,7 @@ fn audit(
     transaction: &ShieldedTransaction,
     layout: AuditStreamLayout,
 ) -> Result<AuditedTransaction, AuditError> {
-    TransactionAudit::new(transaction, layout).run(&auditor(), &no_assets())
+    TransactionAudit::new(transaction, layout).run(&auditor())
 }
 
 fn slot_error(slot_index: u32, kind: OutputPayloadErrorKind) -> OutputPayloadError {
@@ -359,7 +354,7 @@ fn an_entry_input_opens_under_its_default_bit_and_rebuilds_its_commitment() {
     let audited = TransactionAudit::new(&built.transaction, built.layout)
         .with_input_trees(&tree)
         .unwrap()
-        .run(&auditor(), &no_assets())
+        .run(&auditor())
         .unwrap();
     assert_eq!(audited.inputs[0].opening, InputOpening::Real);
     let opened = audited.inputs[1].opening.default_input().expect("opened");
@@ -591,7 +586,7 @@ fn merged(transfer: &Transfer, spend: &Spend) -> Confirmed {
     let transaction = created_transaction(transfer, hash, payload, vec![first_nullifier]);
     Confirmed {
         origin: RingOrigin {
-            merge_disclosure: Some(ConfirmedMergeDisclosure::Record {
+            merge_disclosure: Some(ConfirmedMergeDisclosure {
                 eph_pk: *sealed.eph_pk.as_bytes(),
                 ciphertext: sealed.ciphertext,
             }),
@@ -684,22 +679,19 @@ fn a_deposited_note_opens_and_a_merge_record_resolves_alone_in_the_ledger() {
     );
     let merge = merged(&transfer, &spent[1]);
     let confirmed_merge = merge.merge().unwrap().expect("a record merge");
-    let MergeDisclosed::Record(record) = &confirmed_merge.disclosed else {
-        panic!("the tag 57 record")
-    };
+    let record = &confirmed_merge.disclosed;
     assert_eq!(record.amount, spent[1].utxo.amount);
     assert_eq!(record.real_nullifiers, [field(0x74)]);
     let mut ledger = MergeLedger::default();
     let hash = confirmed_merge.output_commitment;
-    let transition = ledger.apply(confirmed_merge, |_| None);
-    assert!(transition.spent.is_empty());
+    assert!(ledger.apply(confirmed_merge).is_some());
     let output = ledger.output(&hash).expect("resolved with no input");
     assert_eq!(output.amount, spent[1].utxo.amount);
     assert_eq!(
         output.asset,
         hash_bytes(spent[1].utxo.asset_address.as_array()).unwrap()
     );
-    assert_eq!(output.seed, Some(MERGE_SEED));
+    assert_eq!(output.seed, MERGE_SEED);
     let opened = output
         .opening(
             transfer.ring,
@@ -880,8 +872,7 @@ fn the_auditor_message_is_unique_and_last() {
         Err(AuditError::MissingAuditorMessage)
     ));
     assert!(matches!(
-        TransactionAudit::new(&built.transaction, built.layout)
-            .run(&X25519Keypair::new(), &no_assets()),
+        TransactionAudit::new(&built.transaction, built.layout).run(&X25519Keypair::new()),
         Err(AuditError::MissingAuditorMessage)
     ));
 }
@@ -917,7 +908,7 @@ fn the_layout_comes_from_the_ring_frame() {
         origin(Some(built.frame.clone()))
             .audit_frame(RingMode::Confidential)
             .unwrap(),
-        AuditFrame::Records(built.layout)
+        built.layout
     );
     assert!(matches!(
         origin(None).audit_frame(RingMode::Confidential),
@@ -1096,7 +1087,7 @@ async fn scan_walks_every_page_and_keeps_only_ring_transactions_tagged_for_the_a
     );
     let audited = RingScan::new(ring(), auditor_pk)
         .with_max_pages(NonZeroUsize::new(2).expect("page limit"))
-        .audit(&auditor(), &indexer, &origin, &no_assets())
+        .audit(&auditor(), &indexer, &origin)
         .await
         .expect("audit all")
         .transactions;
@@ -1190,7 +1181,7 @@ async fn a_confirmed_ring_match_without_mandatory_disclosure_is_incomplete() {
     let indexer = indexer(&auditor().pubkey(), vec![vec![tx]]);
     assert!(matches!(
         RingScan::new(ring(), auditor().pubkey())
-            .audit(&auditor(), &indexer, &origin, &no_assets())
+            .audit(&auditor(), &indexer, &origin)
             .await,
         Err(AuditError::MissingAuditorMessage)
     ));
@@ -1411,7 +1402,7 @@ async fn a_scan_goes_past_a_row_that_does_not_decode_and_stops_at_a_failed_read(
         error: |_| AuditError::InvalidTransactData("forged".to_owned()),
     };
     let page = anonymous_scan()
-        .audit(&auditor(), &indexer, &origin, &no_assets())
+        .audit(&auditor(), &indexer, &origin)
         .await
         .expect("audit");
     assert_eq!(page.transactions.len(), 1);
@@ -1425,16 +1416,12 @@ async fn a_scan_goes_past_a_row_that_does_not_decode_and_stops_at_a_failed_read(
         message: "unreachable".to_owned(),
     };
     assert!(matches!(
-        anonymous_scan()
-            .audit(&auditor(), &indexer, &origin, &no_assets())
-            .await,
+        anonymous_scan().audit(&auditor(), &indexer, &origin).await,
         Err(AuditError::Unavailable { .. })
     ));
     origin.error = |_| AuditError::InvalidStackHeight(4);
     assert!(matches!(
-        anonymous_scan()
-            .audit(&auditor(), &indexer, &origin, &no_assets())
-            .await,
+        anonymous_scan().audit(&auditor(), &indexer, &origin).await,
         Err(AuditError::InvalidStackHeight(4))
     ));
 }
@@ -1451,7 +1438,7 @@ async fn a_scan_lists_a_row_its_audit_refuses_and_opens_the_next() {
     refused.data[33] ^= 1;
     let (indexer, origin) = anonymous_page(&[&paid, &spent]);
     let page = anonymous_scan()
-        .audit(&auditor(), &indexer, &origin, &no_assets())
+        .audit(&auditor(), &indexer, &origin)
         .await
         .expect("audit");
     let [row] = page.skipped.as_slice() else {
@@ -1473,9 +1460,7 @@ async fn a_lost_auditor_message_stays_fatal_in_a_local_scan() {
     built.transaction.messages[1].view_tag = field(0x7c);
     let (indexer, origin) = anonymous_page(&[&built]);
     assert!(matches!(
-        anonymous_scan()
-            .audit(&auditor(), &indexer, &origin, &no_assets())
-            .await,
+        anonymous_scan().audit(&auditor(), &indexer, &origin).await,
         Err(AuditError::MissingAuditorMessage)
     ));
 }
@@ -1515,8 +1500,7 @@ async fn the_merge_audit_refuses_a_disclosure_it_cannot_open() {
     let (transfer, _, spent) = anonymous_spend();
     let mut merge = merged(&transfer, &spent[1]);
     merge.transaction.tx_signature = Signature::from([0xd1; 64]);
-    let Some(ConfirmedMergeDisclosure::Record { ciphertext, .. }) =
-        merge.origin.merge_disclosure.as_mut()
+    let Some(ConfirmedMergeDisclosure { ciphertext, .. }) = merge.origin.merge_disclosure.as_mut()
     else {
         panic!("the record")
     };

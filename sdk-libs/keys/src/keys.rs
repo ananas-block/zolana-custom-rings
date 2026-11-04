@@ -263,12 +263,11 @@ fn tag_matches<H: HeldKeys>(
                         &frame.first_nullifier,
                     )?;
                     let tag = match probe.kind {
-                        RingTagKind::Recipient => secret.recipient_tag(),
+                        RingTagKind::Recipient => secret.recipient_tag().map(slot_tag),
                         RingTagKind::SenderBundle => secret.sender_tag(),
                     }
                     .map_err(StreamError::from)?;
-                    // A historical frame publishes the whole tag.
-                    Ok((tag == probe.tag || slot_tag(tag) == probe.tag).then_some(secret))
+                    Ok((tag == probe.tag).then_some(secret))
                 })
                 .collect()
         })
@@ -408,9 +407,17 @@ mod tests {
                 &tx,
                 viewing_pubkey,
                 vec![
-                    probe(RingTagKind::Recipient, 1, body.recipient_tag().unwrap()),
+                    probe(
+                        RingTagKind::Recipient,
+                        1,
+                        slot_tag(body.recipient_tag().unwrap()),
+                    ),
                     probe(RingTagKind::SenderBundle, 2, bundle.sender_tag().unwrap()),
-                    probe(RingTagKind::Recipient, 0, body.recipient_tag().unwrap()),
+                    probe(
+                        RingTagKind::Recipient,
+                        0,
+                        slot_tag(body.recipient_tag().unwrap()),
+                    ),
                     probe(
                         RingTagKind::SenderBundle,
                         2,
@@ -467,7 +474,7 @@ mod tests {
         assert_eq!(rotated.viewing_public_keys(), [current, old]);
         let tx = ViewingKey::new();
         for key in [old, current] {
-            let tag = sealed(&tx, &key, 0).recipient_tag().unwrap();
+            let tag = slot_tag(sealed(&tx, &key, 0).recipient_tag().unwrap());
             let answers = rotated
                 .ring_tag_matches(&[frame(
                     &tx,

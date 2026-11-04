@@ -27,18 +27,10 @@ pub struct AuditedTransaction {
     /// Published order, a slot that did not open sits in `payload_errors` instead.
     pub outputs: Vec<AuditedOutput>,
     pub payload_errors: Vec<OutputPayloadError>,
-    /// The `EscrowPending` slots of a key-escrow frame, the owner read before any commitment holds it.
-    pub awaiting_key: Vec<AwaitingKeyOutput>,
     /// `R`, spent notes among the published inputs.
     pub real_inputs: u8,
     /// One per published nullifier.
     pub inputs: Vec<AuditedInput>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AwaitingKeyOutput {
-    pub owner_key: [u8; 32],
-    pub commitment: [u8; 32],
 }
 
 /// One opened slot, its note rebuilt to the published commitment.
@@ -71,7 +63,6 @@ pub struct AuditedUtxo {
     pub nullifier_pk: [u8; 32],
     /// `hash_bytes(mint)`.
     pub asset: [u8; 32],
-    /// `None` on a historical frame until the asset registry knows the asset.
     pub mint: Option<Address>,
     pub amount: u64,
     pub blinding: [u8; 32],
@@ -169,34 +160,11 @@ pub enum OutputPayloadErrorKind {
     RecipientKey,
     /// The rebuilt opening hashes to another commitment.
     Commitment,
-    /// No held asset rebuilds a version 3 delivered body.
-    UnknownAsset,
-    /// The reader holds no key to rebuild a version 3 key escrow slot.
-    EscrowPending,
 }
 
 impl AuditedTransaction {
     pub fn utxos(&self) -> impl Iterator<Item = CreatedUtxo> + '_ {
         self.outputs.iter().filter_map(AuditedOutput::created)
-    }
-
-    /// A registry refresh may name a historical frame's mint.
-    pub fn has_unknown_assets(&self) -> bool {
-        let outputs = self
-            .outputs
-            .iter()
-            .filter_map(|output| output.opening.utxo())
-            .map(|utxo| utxo.mint);
-        let inputs = self
-            .inputs
-            .iter()
-            .filter_map(|input| input.opening.default_input())
-            .map(|input| input.utxo.mint);
-        outputs.chain(inputs).any(|mint| mint.is_none())
-            || self
-                .payload_errors
-                .iter()
-                .any(|error| error.kind == OutputPayloadErrorKind::UnknownAsset)
     }
 }
 

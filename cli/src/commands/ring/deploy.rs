@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_interface::{RingAccount, RingPolicy, VIEWING_PUBKEY_TAG};
+use custom_ring_interface::{RingAccount, RingPolicy};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_address::Address;
@@ -94,8 +94,6 @@ impl ProgramUpload<'_> {
                 if binary.deployed_sha256(ctx)? == Some(binary.sha256) {
                     return Ok("present");
                 }
-                let retired = Address::find_program_address(&[RETIRED_CONFIG_SEED], &program).0;
-                ensure_no_retired_config(program, ctx.rpc().get_account(retired)?.as_ref())?;
                 let policy = ctx.rpc().get_account(ctx.ring.policy_pda())?;
                 ensure_policy_compatible(program, policy.as_ref())?;
             }
@@ -238,19 +236,6 @@ impl ProgramBinary {
     }
 }
 
-const RETIRED_CONFIG_SEED: &[u8] = b"config";
-
-/// An upgrade must not strand the notes of a retired ring config.
-fn ensure_no_retired_config(program: Address, account: Option<&Account>) -> Result<()> {
-    let retired =
-        account.is_some_and(|account| account.owner == program && !account.data.is_empty());
-    ensure!(
-        !retired,
-        "program {program} keeps a retired ring config, migrate its notes before deploying a fresh ring"
-    );
-    Ok(())
-}
-
 /// The current schema must decode the ring policy and reproduce its pinned policy hash.
 fn ensure_policy_compatible(program: Address, policy: Option<&Account>) -> Result<()> {
     let Some(account) = policy.filter(|account| account.owner == program) else {
@@ -266,10 +251,6 @@ fn ensure_policy_compatible(program: Address, policy: Option<&Account>) -> Resul
     ensure!(
         policy.is_some_and(|policy| Pinned::of(Box::new(policy)).is_ok()),
         "program {program} has an incompatible ring policy or policy commitment, deploy a fresh ring"
-    );
-    ensure!(
-        policy.is_some_and(|policy| policy.auditor_pubkey[0] == VIEWING_PUBKEY_TAG),
-        "program {program} keeps a legacy auditor key, migrate its notes before upgrading"
     );
     Ok(())
 }
@@ -437,23 +418,6 @@ mod tests {
     }
 
     #[test]
-    fn an_upgrade_over_a_retired_ring_config_is_refused() {
-        let program = Address::from([7u8; 32]);
-        let account = |owner, data: Vec<u8>| Account {
-            owner,
-            data,
-            ..Default::default()
-        };
-        assert!(ensure_no_retired_config(program, None).is_ok());
-        assert!(ensure_no_retired_config(program, Some(&account(program, Vec::new()))).is_ok());
-        let foreign = account(Address::from([9u8; 32]), vec![10; 112]);
-        assert!(ensure_no_retired_config(program, Some(&foreign)).is_ok());
-        let error =
-            ensure_no_retired_config(program, Some(&account(program, vec![10; 112]))).unwrap_err();
-        assert!(error.to_string().contains("retired ring config"));
-    }
-
-    #[test]
     fn an_incompatible_ring_policy_refuses_the_upgrade() {
         use custom_ring_interface::N_SOURCE_SLOTS;
         let program = Address::from([7u8; 32]);
@@ -466,7 +430,7 @@ mod tests {
         assert!(ensure_policy_compatible(program, None).is_ok());
         let mut registry: Box<RingPolicy> = bytemuck::zeroed_box();
         registry.discriminator = custom_ring_interface::RING_POLICY;
-        registry.auditor_pubkey[0] = VIEWING_PUBKEY_TAG;
+        registry.auditor_pubkey[0] = custom_ring_interface::VIEWING_PUBKEY_TAG;
         let audit_only = account(program, bytemuck::bytes_of(&*registry));
         assert!(ensure_policy_compatible(program, Some(&audit_only)).is_ok());
         let rules = zolana_ring_policy::RuleTable::builder().build();
@@ -496,14 +460,6 @@ mod tests {
         )
         .expect_err("drifted");
         assert!(drifted.to_string().contains("incompatible ring policy"));
-        registry.policy_hash[0] ^= 1;
-        registry.auditor_pubkey[0] = 2;
-        let legacy = ensure_policy_compatible(
-            program,
-            Some(&account(program, bytemuck::bytes_of(&*registry))),
-        )
-        .expect_err("legacy auditor key");
-        assert!(legacy.to_string().contains("legacy auditor key"));
     }
 
     #[test]

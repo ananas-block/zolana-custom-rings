@@ -229,14 +229,3 @@ fn a_forward_past_the_cpi_account_cap_is_refused() {
     // The record proof precedes the forward, the cap holds the forward alone.
     reaches_verification(ring.send(instruction, &[]));
 }
-
-#[test]
-fn the_replaced_merge_tag_is_refused() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let mut instruction = ring_merge(&ring);
-    instruction.data[0] = tag::HISTORICAL_MERGE_V3;
-    refused(
-        ring.send(instruction, &[]),
-        CustomRingError::InvalidInstructionData,
-    );
-}

@@ -743,7 +743,7 @@ fn update_authority_needs_the_new_keys_signature_and_a_free_key() {
 }
 
 #[test]
-fn retired_and_unknown_tags_are_refused() {
+fn unknown_tags_are_refused() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let instruction = |data: Vec<u8>| Instruction {
         program_id: PROGRAM,
