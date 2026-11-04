@@ -49,6 +49,7 @@ import {
 import { ApprovalMask } from "../../src/protocol/transaction/transact.js";
 import { unopenedRecordPool } from "../../src/protocol/membership/member-opening.js";
 import { transferPoolCapacity } from "../../src/protocol/proof/transfer-shapes.js";
+import { ringStreamLayout } from "../../src/protocol/transaction/transact.js";
 import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import type { TrackingRecord } from "../../src/protocol/membership/tracking.js";
@@ -123,6 +124,39 @@ describe("selectTransferKey", () => {
     expect(refusal(() => select(25, 5)).code).toBe("RING_CATALOG_KEY_MISSING");
     expect(refusal(() => select(25, 0, 13)).code).toBe("RING_TOO_MANY_OWNERS");
     expect(refusal(() => select(50)).code).toBe("RING_CATALOG_KEY_MISSING");
+  });
+
+  it("fits an entry past the small keys on the wide entry key", () => {
+    const entered = (inputs: number, outputs: number, legs: number, owners: number) =>
+      selectTransferKey({
+        spend: { ...SPEND, rail: "anonymous", spendsDefaultRing: true, inputs, outputs, legs, owners },
+        addresses: { ...ADDRESSES, nInputs: inputs },
+        ownerSigners: 0,
+      }).circuit;
+    expect(entered(8, 2, 4, 8)).toMatchObject({ class: 8, outputs: 4, entry: true });
+    expect(entered(2, 8, 4, 2)).toMatchObject({ class: 2, outputs: 8, entry: true });
+    const wide = entered(9, 2, 0, 1);
+    expect(wide).toMatchObject({ class: 24, outputs: 2, withdrawals: 32, owners: 12, entry: true });
+    expect(transferPoolCapacity(wide)).toEqual({ own: 95, curator: 95, tracking: 45 });
+    expect(entered(1, 2, 5, 1)).toEqual(wide);
+    expect(refusal(() => entered(25, 2, 0, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
+    expect(refusal(() => entered(9, 4, 0, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
+  });
+
+  it("seals a tail past the capacity of the key the spend selects", () => {
+    const layout = (wideOwners: boolean) =>
+      ringStreamLayout({
+        rail: "confidential",
+        nIn: 2,
+        nOut: 2,
+        inputs: 2,
+        outputs: 2,
+        entry: false,
+        hasData: true,
+        wideOwners,
+      });
+    expect(layout(false).capacity).toBe(2);
+    expect(layout(true).capacity).toBe(8);
   });
 
   it("refuses past the account bound with the counts", () => {

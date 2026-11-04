@@ -69,6 +69,8 @@ export interface RelayProofInputs {
   readonly withdrawal?: TransactWithdrawal;
   readonly blindingSeed: Bytes32;
   readonly outputTreeId: number;
+  /** The owner sealed under the wide key, the relayer proves on it. */
+  readonly wideOwners: boolean;
   readonly assets: AssetRegistry;
   /** Encoding drops the sender's, Ring RPC derives it from `nullifierKey`. */
   readonly listSalts: readonly RingListSalt[];
@@ -111,7 +113,9 @@ export function encodeRelayProofInputs(value: RelayProofInputs): Uint8Array {
   value.outputs.forEach((output, index) => writeOutput(writer, output, index, value.assets));
   writeExternalData(writer, value.externalData, value.withdrawal);
   writer.bytes(value.blindingSeed, 32, "blindingSeed").u16(value.outputTreeId, "outputTreeId");
-  return writeRelayListSalts(writer, value.listSalts, value.sender).finish();
+  return writeRelayListSalts(writer, value.listSalts, value.sender)
+    .u8(value.wideOwners ? 1 : 0, "wideOwners")
+    .finish();
 }
 
 /** Rust `RelayMergeInputs`, Ring RPC derives the merged note from the nullifier key. */
@@ -181,6 +185,7 @@ export async function decodeRelayProofInputs(
   const listSalts = reader.list("listSalts", () =>
     Object.freeze({ owner: reader.hash("listSalts.owner"), salt: reader.hash("listSalts.salt") }),
   );
+  const wideOwners = reader.u8("wideOwners") === 1;
   reader.done();
   const legs = await Promise.all(external.legs.map(withdrawalLeg));
   const externalData = createExternalData({
@@ -202,6 +207,7 @@ export async function decodeRelayProofInputs(
     withdrawals,
     blindingSeed,
     outputTreeId,
+    wideOwners,
     assets,
     listSalts,
   });

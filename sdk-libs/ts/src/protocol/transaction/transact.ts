@@ -299,10 +299,11 @@ export function ringStreamLayout(
     entry: boolean;
     hasData: boolean;
     publicOwners?: boolean;
+    /** The selected key's flag, unset fits the published counts alone. */
+    wideOwners?: boolean;
   }>,
 ): AuditStreamLayout {
-  // A spend past the narrow key's inputs names the wide key before the policy reads its pools.
-  const spend = fittedSpend({
+  const fitted = fittedSpend({
     rail: shape.rail,
     inputs: shape.inputs,
     outputs: shape.nOut,
@@ -312,6 +313,7 @@ export function ringStreamLayout(
     pools: { own: 0, curator: 0, tracking: 0 },
     wide: false,
   });
+  const spend = { ...fitted, wide: shape.wideOwners ?? fitted.wide };
   const flags: FrameFlags = {
     defaultOwnerTag: false,
     publicOwners: shape.publicOwners ?? false,

@@ -31,7 +31,8 @@ use spr_transaction::{
     SppProofOutputUtxo, TransactionError, UtxoSerialization,
 };
 
-use anonymous_rail::{lead_change, published as published_outputs, AnonymousSeal};
+pub use anonymous_rail::published as published_outputs;
+use anonymous_rail::{lead_change, AnonymousSeal};
 pub use anonymous_rail::{random_tag_preimage, AnonymousPlan, AnonymousSlot};
 pub use assets::RingAssets;
 pub use error::RingRailError;

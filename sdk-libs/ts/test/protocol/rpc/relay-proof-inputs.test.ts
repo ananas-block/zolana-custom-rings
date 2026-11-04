@@ -138,6 +138,7 @@ describe("relay proof inputs", () => {
       withdrawal: TransactWithdrawal.sol({ recipient }),
       blindingSeed: filled(28) as Bytes32,
       outputTreeId: 4,
+      wideOwners: false,
       assets: new AssetRegistry(),
       listSalts: [],
     });

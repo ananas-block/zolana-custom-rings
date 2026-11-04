@@ -1035,18 +1035,18 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 12x2 | anonymous public owners | full+data | yes | 2986 | 30 | 3 | - |  | 1739 | 1725 | 1314 | 31 | inline |  |
 | 12x2 | anonymous public owners | full+reply | yes | 2885 | 30 | 3 | - |  | 1638 | 1626 | 1314 | 31 | inline |  |
 | 12x2 | anonymous public owners | full+2tree | yes | 2825 | 31 | 3 | - |  | 1545 | 1533 | 1347 | 32 | inline |  |
-| 12x2 | confidential entry | min | none | 4463 | 20 | 1 | - | 367 B | 3684 | 3708 | 846 | 21 | buffered |  |
-| 12x2 | confidential entry | full | none | 5018 | 30 | 3 | none | 922 B | 3771 | 3753 | 1314 | 31 | buffered |  |
-| 12x2 | confidential entry | full+spl | none | 5386 | 37 | 3 | - | 1290 B | 3903 | 3757 | 1550 | 38 | buffered |  |
-| 12x2 | confidential entry | full+data | none | 5218 | 30 | 3 | - | 1122 B | 3971 | 3949 | 1314 | 31 | buffered |  |
-| 12x2 | confidential entry | full+reply | none | 5018 | 30 | 3 | - | 922 B | 3771 | 3753 | 1314 | 31 | buffered |  |
-| 12x2 | confidential entry | full+2tree | none | 5057 | 31 | 3 | - | 961 B | 3777 | 3757 | 1347 | 32 | buffered |  |
-| 12x2 | anonymous entry | min | none | 4662 | 20 | 1 | - | 566 B | 3884 | 3907 | 845 | 21 | buffered |  |
-| 12x2 | anonymous entry | full | none | 5097 | 26 | 2 | none | 1001 B | 4043 | 4034 | 1121 | 27 | buffered |  |
-| 12x2 | anonymous entry | full+spl | none | 5465 | 33 | 2 | - | 1369 B | 4175 | 4038 | 1357 | 34 | buffered |  |
-| 12x2 | anonymous entry | full+data | none | 5297 | 26 | 2 | - | 1201 B | 4243 | 4230 | 1121 | 27 | buffered |  |
-| 12x2 | anonymous entry | full+reply | none | 5196 | 26 | 2 | - | 1100 B | 4142 | 4131 | 1121 | 27 | buffered |  |
-| 12x2 | anonymous entry | full+2tree | none | 5136 | 27 | 2 | - | 1040 B | 4049 | 4038 | 1154 | 28 | buffered |  |
+| 12x2 | confidential entry | min | yes | 4463 | 20 | 1 | - | 367 B | 3684 | 3708 | 846 | 21 | buffered |  |
+| 12x2 | confidential entry | full | yes | 5018 | 30 | 3 | none | 922 B | 3771 | 3753 | 1314 | 31 | buffered |  |
+| 12x2 | confidential entry | full+spl | yes | 5386 | 37 | 3 | - | 1290 B | 3903 | 3757 | 1550 | 38 | buffered |  |
+| 12x2 | confidential entry | full+data | yes | 5218 | 30 | 3 | - | 1122 B | 3971 | 3949 | 1314 | 31 | buffered |  |
+| 12x2 | confidential entry | full+reply | yes | 5018 | 30 | 3 | - | 922 B | 3771 | 3753 | 1314 | 31 | buffered |  |
+| 12x2 | confidential entry | full+2tree | yes | 5057 | 31 | 3 | - | 961 B | 3777 | 3757 | 1347 | 32 | buffered |  |
+| 12x2 | anonymous entry | min | yes | 4662 | 20 | 1 | - | 566 B | 3884 | 3907 | 845 | 21 | buffered |  |
+| 12x2 | anonymous entry | full | yes | 5097 | 26 | 2 | none | 1001 B | 4043 | 4034 | 1121 | 27 | buffered |  |
+| 12x2 | anonymous entry | full+spl | yes | 5465 | 33 | 2 | - | 1369 B | 4175 | 4038 | 1357 | 34 | buffered |  |
+| 12x2 | anonymous entry | full+data | yes | 5297 | 26 | 2 | - | 1201 B | 4243 | 4230 | 1121 | 27 | buffered |  |
+| 12x2 | anonymous entry | full+reply | yes | 5196 | 26 | 2 | - | 1100 B | 4142 | 4131 | 1121 | 27 | buffered |  |
+| 12x2 | anonymous entry | full+2tree | yes | 5136 | 27 | 2 | - | 1040 B | 4049 | 4038 | 1154 | 28 | buffered |  |
 | 12x2 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 12x2 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 12x4 | confidential signer | min | yes | 2489 | 20 | 1 | - |  | 1710 | 1806 | 846 | 21 | inline |  |
@@ -1149,18 +1149,18 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 16x2 | anonymous public owners | full+data | yes | 3246 | 34 | 3 | - |  | 1867 | 1857 | 1446 | 35 | inline |  |
 | 16x2 | anonymous public owners | full+reply | yes | 3145 | 34 | 3 | - |  | 1766 | 1758 | 1446 | 35 | inline |  |
 | 16x2 | anonymous public owners | full+2tree | yes | 3085 | 35 | 3 | - |  | 1673 | 1665 | 1479 | 36 | inline |  |
-| 16x2 | confidential entry | min | none | 5523 | 24 | 1 | - | 1427 B | 4612 | 4640 | 978 | 25 | buffered |  |
-| 16x2 | confidential entry | full | none | 6078 | 34 | 3 | none | 1982 B | 4699 | 4685 | 1446 | 35 | buffered |  |
-| 16x2 | confidential entry | full+spl | none | 6446 | 41 | 3 | - | 2350 B | 4831 | 4689 | 1682 | 42 | buffered |  |
-| 16x2 | confidential entry | full+data | none | 6278 | 34 | 3 | - | 2182 B | 4899 | 4881 | 1446 | 35 | buffered |  |
-| 16x2 | confidential entry | full+reply | none | 6078 | 34 | 3 | - | 1982 B | 4699 | 4685 | 1446 | 35 | buffered |  |
-| 16x2 | confidential entry | full+2tree | none | 6117 | 35 | 3 | - | 2021 B | 4705 | 4689 | 1479 | 36 | buffered |  |
-| 16x2 | anonymous entry | min | none | 5722 | 24 | 1 | - | 1626 B | 4812 | 4839 | 977 | 25 | buffered |  |
-| 16x2 | anonymous entry | full | none | 6157 | 30 | 2 | none | 2061 B | 4971 | 4966 | 1253 | 31 | buffered |  |
-| 16x2 | anonymous entry | full+spl | none | 6525 | 37 | 2 | - | 2429 B | 5103 | 4970 | 1489 | 38 | buffered |  |
-| 16x2 | anonymous entry | full+data | none | 6357 | 30 | 2 | - | 2261 B | 5171 | 5162 | 1253 | 31 | buffered |  |
-| 16x2 | anonymous entry | full+reply | none | 6256 | 30 | 2 | - | 2160 B | 5070 | 5063 | 1253 | 31 | buffered |  |
-| 16x2 | anonymous entry | full+2tree | none | 6196 | 31 | 2 | - | 2100 B | 4977 | 4970 | 1286 | 32 | buffered |  |
+| 16x2 | confidential entry | min | yes | 5523 | 24 | 1 | - | 1427 B | 4612 | 4640 | 978 | 25 | buffered |  |
+| 16x2 | confidential entry | full | yes | 6078 | 34 | 3 | none | 1982 B | 4699 | 4685 | 1446 | 35 | buffered |  |
+| 16x2 | confidential entry | full+spl | yes | 6446 | 41 | 3 | - | 2350 B | 4831 | 4689 | 1682 | 42 | buffered |  |
+| 16x2 | confidential entry | full+data | yes | 6278 | 34 | 3 | - | 2182 B | 4899 | 4881 | 1446 | 35 | buffered |  |
+| 16x2 | confidential entry | full+reply | yes | 6078 | 34 | 3 | - | 1982 B | 4699 | 4685 | 1446 | 35 | buffered |  |
+| 16x2 | confidential entry | full+2tree | yes | 6117 | 35 | 3 | - | 2021 B | 4705 | 4689 | 1479 | 36 | buffered |  |
+| 16x2 | anonymous entry | min | yes | 5722 | 24 | 1 | - | 1626 B | 4812 | 4839 | 977 | 25 | buffered |  |
+| 16x2 | anonymous entry | full | yes | 6157 | 30 | 2 | none | 2061 B | 4971 | 4966 | 1253 | 31 | buffered |  |
+| 16x2 | anonymous entry | full+spl | yes | 6525 | 37 | 2 | - | 2429 B | 5103 | 4970 | 1489 | 38 | buffered |  |
+| 16x2 | anonymous entry | full+data | yes | 6357 | 30 | 2 | - | 2261 B | 5171 | 5162 | 1253 | 31 | buffered |  |
+| 16x2 | anonymous entry | full+reply | yes | 6256 | 30 | 2 | - | 2160 B | 5070 | 5063 | 1253 | 31 | buffered |  |
+| 16x2 | anonymous entry | full+2tree | yes | 6196 | 31 | 2 | - | 2100 B | 4977 | 4970 | 1286 | 32 | buffered |  |
 | 16x2 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 16x2 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 16x4 | confidential signer | min | yes | 2749 | 24 | 1 | - |  | 1838 | 1938 | 978 | 25 | inline |  |
@@ -1263,18 +1263,18 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 24x2 | anonymous public owners | full+data | yes | 3766 | 42 | 3 | - |  | 2123 | 2121 | 1710 | 43 | inline |  |
 | 24x2 | anonymous public owners | full+reply | yes | 3665 | 42 | 3 | - |  | 2022 | 2022 | 1710 | 43 | inline |  |
 | 24x2 | anonymous public owners | full+2tree | yes | 3606 | 43 | 3 | - |  | 1930 | 1929 | 1743 | 44 | inline |  |
-| 24x2 | confidential entry | min | none | 7643 | 32 | 1 | - | 3547 B | 6468 | 6504 | 1242 | 33 | buffered |  |
-| 24x2 | confidential entry | full | none | 8198 | 42 | 3 | none | 4102 B | 6555 | 6549 | 1710 | 43 | buffered |  |
-| 24x2 | confidential entry | full+spl | none | 8566 | 49 | 3 | - | 4470 B | 6687 | 6553 | 1946 | 50 | buffered |  |
-| 24x2 | confidential entry | full+data | none | 8398 | 42 | 3 | - | 4302 B | 6755 | 6745 | 1710 | 43 | buffered |  |
-| 24x2 | confidential entry | full+reply | none | 8198 | 42 | 3 | - | 4102 B | 6555 | 6549 | 1710 | 43 | buffered |  |
-| 24x2 | confidential entry | full+2tree | none | 8238 | 43 | 3 | - | 4142 B | 6562 | 6553 | 1743 | 44 | buffered |  |
-| 24x2 | anonymous entry | min | none | 7842 | 32 | 1 | - | 3746 B | 6668 | 6703 | 1241 | 33 | buffered |  |
-| 24x2 | anonymous entry | full | none | 8277 | 38 | 2 | none | 4181 B | 6827 | 6830 | 1517 | 39 | buffered |  |
-| 24x2 | anonymous entry | full+spl | none | 8645 | 45 | 2 | - | 4549 B | 6959 | 6834 | 1753 | 46 | buffered |  |
-| 24x2 | anonymous entry | full+data | none | 8477 | 38 | 2 | - | 4381 B | 7027 | 7026 | 1517 | 39 | buffered |  |
-| 24x2 | anonymous entry | full+reply | none | 8376 | 38 | 2 | - | 4280 B | 6926 | 6927 | 1517 | 39 | buffered |  |
-| 24x2 | anonymous entry | full+2tree | none | 8317 | 39 | 2 | - | 4221 B | 6834 | 6834 | 1550 | 40 | buffered |  |
+| 24x2 | confidential entry | min | yes | 7643 | 32 | 1 | - | 3547 B | 6468 | 6504 | 1242 | 33 | buffered |  |
+| 24x2 | confidential entry | full | yes | 8198 | 42 | 3 | none | 4102 B | 6555 | 6549 | 1710 | 43 | buffered |  |
+| 24x2 | confidential entry | full+spl | yes | 8566 | 49 | 3 | - | 4470 B | 6687 | 6553 | 1946 | 50 | buffered |  |
+| 24x2 | confidential entry | full+data | yes | 8398 | 42 | 3 | - | 4302 B | 6755 | 6745 | 1710 | 43 | buffered |  |
+| 24x2 | confidential entry | full+reply | yes | 8198 | 42 | 3 | - | 4102 B | 6555 | 6549 | 1710 | 43 | buffered |  |
+| 24x2 | confidential entry | full+2tree | yes | 8238 | 43 | 3 | - | 4142 B | 6562 | 6553 | 1743 | 44 | buffered |  |
+| 24x2 | anonymous entry | min | yes | 7842 | 32 | 1 | - | 3746 B | 6668 | 6703 | 1241 | 33 | buffered |  |
+| 24x2 | anonymous entry | full | yes | 8277 | 38 | 2 | none | 4181 B | 6827 | 6830 | 1517 | 39 | buffered |  |
+| 24x2 | anonymous entry | full+spl | yes | 8645 | 45 | 2 | - | 4549 B | 6959 | 6834 | 1753 | 46 | buffered |  |
+| 24x2 | anonymous entry | full+data | yes | 8477 | 38 | 2 | - | 4381 B | 7027 | 7026 | 1517 | 39 | buffered |  |
+| 24x2 | anonymous entry | full+reply | yes | 8376 | 38 | 2 | - | 4280 B | 6926 | 6927 | 1517 | 39 | buffered |  |
+| 24x2 | anonymous entry | full+2tree | yes | 8317 | 39 | 2 | - | 4221 B | 6834 | 6834 | 1550 | 40 | buffered |  |
 | 24x2 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 24x2 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 24x4 | confidential signer | min | yes | 3269 | 32 | 1 | - |  | 2094 | 2202 | 1242 | 33 | inline |  |
@@ -1315,30 +1315,30 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 24x4 | anonymous entry | full+2tree | none | 8815 | 39 | 2 | - | 4719 B | 7332 | 7404 | 1550 | 40 | buffered |  |
 | 24x4 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 24x4 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
-| 32x2 | confidential signer | min | none | 3355 | 40 | 1 | - |  | 1916 | 1960 | 1506 | 41 | inline |  |
-| 32x2 | confidential signer | full | none | 3910 | 50 | 3 | 2 |  | 2003 | 2005 | 1974 | 51 | inline |  |
-| 32x2 | confidential signer | full+spl | none | 4278 | 57 | 3 | - | 182 B | 2135 | 2009 | 2210 | 58 | buffered |  |
-| 32x2 | confidential signer | full+data | none | 4110 | 50 | 3 | - | 14 B | 2203 | 2201 | 1974 | 51 | buffered |  |
-| 32x2 | confidential signer | full+reply | none | 3910 | 50 | 3 | - |  | 2003 | 2005 | 1974 | 51 | inline |  |
-| 32x2 | confidential signer | full+2tree | none | 3951 | 51 | 3 | - |  | 2011 | 2009 | 2007 | 52 | inline |  |
-| 32x2 | confidential in-proof | min | none | 3450 | 40 | 1 | - |  | 2012 | 2057 | 1505 | 41 | inline |  |
-| 32x2 | confidential in-proof | full | none | 3909 | 49 | 2 | 1 |  | 2099 | 2102 | 1877 | 50 | inline |  |
-| 32x2 | confidential in-proof | full+spl | none | 4277 | 56 | 2 | - | 181 B | 2231 | 2106 | 2113 | 57 | buffered |  |
-| 32x2 | confidential in-proof | full+data | none | 4109 | 49 | 2 | - | 13 B | 2299 | 2298 | 1877 | 50 | buffered |  |
-| 32x2 | confidential in-proof | full+reply | none | 3909 | 49 | 2 | - |  | 2099 | 2102 | 1877 | 50 | inline |  |
-| 32x2 | confidential in-proof | full+2tree | none | 3950 | 50 | 2 | - |  | 2107 | 2106 | 1910 | 51 | inline |  |
-| 32x2 | anonymous hidden | min | none | 3522 | 40 | 1 | - |  | 2084 | 2159 | 1505 | 41 | inline |  |
-| 32x2 | anonymous hidden | full | none | 3957 | 46 | 2 | 1 |  | 2243 | 2286 | 1781 | 47 | inline |  |
-| 32x2 | anonymous hidden | full+spl | none | 4325 | 53 | 2 | - | 229 B | 2375 | 2290 | 2017 | 54 | buffered |  |
-| 32x2 | anonymous hidden | full+data | none | 4157 | 46 | 2 | - | 61 B | 2443 | 2482 | 1781 | 47 | buffered |  |
-| 32x2 | anonymous hidden | full+reply | none | 4056 | 46 | 2 | - |  | 2342 | 2383 | 1781 | 47 | inline |  |
-| 32x2 | anonymous hidden | full+2tree | none | 3998 | 47 | 2 | - |  | 2251 | 2290 | 1814 | 48 | inline |  |
-| 32x2 | anonymous public owners | min | none | 3459 | 40 | 1 | - |  | 2020 | 2062 | 1506 | 41 | inline |  |
-| 32x2 | anonymous public owners | full | none | 4086 | 50 | 3 | 1 |  | 2179 | 2189 | 1974 | 51 | inline |  |
-| 32x2 | anonymous public owners | full+spl | none | 4454 | 57 | 3 | - | 358 B | 2311 | 2193 | 2210 | 58 | buffered |  |
-| 32x2 | anonymous public owners | full+data | none | 4286 | 50 | 3 | - | 190 B | 2379 | 2385 | 1974 | 51 | buffered |  |
-| 32x2 | anonymous public owners | full+reply | none | 4185 | 50 | 3 | - | 89 B | 2278 | 2286 | 1974 | 51 | buffered |  |
-| 32x2 | anonymous public owners | full+2tree | none | 4127 | 51 | 3 | - | 31 B | 2187 | 2193 | 2007 | 52 | buffered |  |
+| 32x2 | confidential signer | min | yes | 3355 | 40 | 1 | - |  | 1916 | 1960 | 1506 | 41 | inline |  |
+| 32x2 | confidential signer | full | yes | 3910 | 50 | 3 | 2 |  | 2003 | 2005 | 1974 | 51 | inline |  |
+| 32x2 | confidential signer | full+spl | yes | 4278 | 57 | 3 | - | 182 B | 2135 | 2009 | 2210 | 58 | buffered |  |
+| 32x2 | confidential signer | full+data | yes | 4110 | 50 | 3 | - | 14 B | 2203 | 2201 | 1974 | 51 | buffered |  |
+| 32x2 | confidential signer | full+reply | yes | 3910 | 50 | 3 | - |  | 2003 | 2005 | 1974 | 51 | inline |  |
+| 32x2 | confidential signer | full+2tree | yes | 3951 | 51 | 3 | - |  | 2011 | 2009 | 2007 | 52 | inline |  |
+| 32x2 | confidential in-proof | min | yes | 3450 | 40 | 1 | - |  | 2012 | 2057 | 1505 | 41 | inline |  |
+| 32x2 | confidential in-proof | full | yes | 3909 | 49 | 2 | 1 |  | 2099 | 2102 | 1877 | 50 | inline |  |
+| 32x2 | confidential in-proof | full+spl | yes | 4277 | 56 | 2 | - | 181 B | 2231 | 2106 | 2113 | 57 | buffered |  |
+| 32x2 | confidential in-proof | full+data | yes | 4109 | 49 | 2 | - | 13 B | 2299 | 2298 | 1877 | 50 | buffered |  |
+| 32x2 | confidential in-proof | full+reply | yes | 3909 | 49 | 2 | - |  | 2099 | 2102 | 1877 | 50 | inline |  |
+| 32x2 | confidential in-proof | full+2tree | yes | 3950 | 50 | 2 | - |  | 2107 | 2106 | 1910 | 51 | inline |  |
+| 32x2 | anonymous hidden | min | yes | 3522 | 40 | 1 | - |  | 2084 | 2159 | 1505 | 41 | inline |  |
+| 32x2 | anonymous hidden | full | yes | 3957 | 46 | 2 | 1 |  | 2243 | 2286 | 1781 | 47 | inline |  |
+| 32x2 | anonymous hidden | full+spl | yes | 4325 | 53 | 2 | - | 229 B | 2375 | 2290 | 2017 | 54 | buffered |  |
+| 32x2 | anonymous hidden | full+data | yes | 4157 | 46 | 2 | - | 61 B | 2443 | 2482 | 1781 | 47 | buffered |  |
+| 32x2 | anonymous hidden | full+reply | yes | 4056 | 46 | 2 | - |  | 2342 | 2383 | 1781 | 47 | inline |  |
+| 32x2 | anonymous hidden | full+2tree | yes | 3998 | 47 | 2 | - |  | 2251 | 2290 | 1814 | 48 | inline |  |
+| 32x2 | anonymous public owners | min | yes | 3459 | 40 | 1 | - |  | 2020 | 2062 | 1506 | 41 | inline |  |
+| 32x2 | anonymous public owners | full | yes | 4086 | 50 | 3 | 1 |  | 2179 | 2189 | 1974 | 51 | inline |  |
+| 32x2 | anonymous public owners | full+spl | yes | 4454 | 57 | 3 | - | 358 B | 2311 | 2193 | 2210 | 58 | buffered |  |
+| 32x2 | anonymous public owners | full+data | yes | 4286 | 50 | 3 | - | 190 B | 2379 | 2385 | 1974 | 51 | buffered |  |
+| 32x2 | anonymous public owners | full+reply | yes | 4185 | 50 | 3 | - | 89 B | 2278 | 2286 | 1974 | 51 | buffered |  |
+| 32x2 | anonymous public owners | full+2tree | yes | 4127 | 51 | 3 | - | 31 B | 2187 | 2193 | 2007 | 52 | buffered |  |
 | 32x2 | confidential entry | min | none | 9763 | 40 | 1 | - | 5667 B | 8324 | 8368 | 1506 | 41 | buffered |  |
 | 32x2 | confidential entry | full | none | 10318 | 50 | 3 | none | 6222 B | 8411 | 8413 | 1974 | 51 | buffered |  |
 | 32x2 | confidential entry | full+spl | none | 10686 | 57 | 3 | - | 6590 B | 8543 | 8417 | 2210 | 58 | buffered |  |
@@ -1353,30 +1353,30 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 32x2 | anonymous entry | full+2tree | none | 10438 | 47 | 2 | - | 6342 B | 8691 | 8698 | 1814 | 48 | buffered |  |
 | 32x2 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 32x2 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
-| 40x2 | confidential signer | min | none | 3875 | 48 | 1 | - |  | 2172 | 2224 | 1770 | 49 | inline |  |
-| 40x2 | confidential signer | full | none | 4430 | 58 | 3 | none | 334 B | 2259 | 2269 | 2238 | 59 | buffered |  |
-| 40x2 | confidential signer | full+spl | none | 4798 | 65 | 3 | - | 702 B, 1 accounts | 2391 | 2273 | 2474 | 66 | no | 2 accounts |
-| 40x2 | confidential signer | full+data | none | 4630 | 58 | 3 | - | 534 B | 2459 | 2465 | 2238 | 59 | buffered |  |
-| 40x2 | confidential signer | full+reply | none | 4430 | 58 | 3 | - | 334 B | 2259 | 2269 | 2238 | 59 | buffered |  |
-| 40x2 | confidential signer | full+2tree | none | 4472 | 59 | 3 | - | 376 B | 2268 | 2273 | 2271 | 60 | buffered |  |
-| 40x2 | confidential in-proof | min | none | 3970 | 48 | 1 | - |  | 2268 | 2321 | 1769 | 49 | inline |  |
-| 40x2 | confidential in-proof | full | none | 4429 | 57 | 2 | none | 333 B | 2355 | 2366 | 2141 | 58 | buffered |  |
-| 40x2 | confidential in-proof | full+spl | none | 4797 | 64 | 2 | - | 701 B | 2487 | 2370 | 2377 | 65 | no | 1 accounts |
-| 40x2 | confidential in-proof | full+data | none | 4629 | 57 | 2 | - | 533 B | 2555 | 2562 | 2141 | 58 | buffered |  |
-| 40x2 | confidential in-proof | full+reply | none | 4429 | 57 | 2 | - | 333 B | 2355 | 2366 | 2141 | 58 | buffered |  |
-| 40x2 | confidential in-proof | full+2tree | none | 4471 | 58 | 2 | - | 375 B | 2364 | 2370 | 2174 | 59 | buffered |  |
-| 40x2 | anonymous hidden | min | none | 4042 | 48 | 1 | - |  | 2340 | 2423 | 1769 | 49 | inline |  |
-| 40x2 | anonymous hidden | full | none | 4477 | 54 | 2 | none | 381 B | 2499 | 2550 | 2045 | 55 | buffered |  |
-| 40x2 | anonymous hidden | full+spl | none | 4845 | 61 | 2 | - | 749 B | 2631 | 2554 | 2281 | 62 | buffered |  |
-| 40x2 | anonymous hidden | full+data | none | 4677 | 54 | 2 | - | 581 B | 2699 | 2746 | 2045 | 55 | buffered |  |
-| 40x2 | anonymous hidden | full+reply | none | 4576 | 54 | 2 | - | 480 B | 2598 | 2647 | 2045 | 55 | buffered |  |
-| 40x2 | anonymous hidden | full+2tree | none | 4519 | 55 | 2 | - | 423 B | 2508 | 2554 | 2078 | 56 | buffered |  |
-| 40x2 | anonymous public owners | min | none | 3979 | 48 | 1 | - |  | 2276 | 2326 | 1770 | 49 | inline |  |
-| 40x2 | anonymous public owners | full | none | 4606 | 58 | 3 | none | 510 B | 2435 | 2453 | 2238 | 59 | buffered |  |
-| 40x2 | anonymous public owners | full+spl | none | 4974 | 65 | 3 | - | 878 B, 1 accounts | 2567 | 2457 | 2474 | 66 | no | 2 accounts |
-| 40x2 | anonymous public owners | full+data | none | 4806 | 58 | 3 | - | 710 B | 2635 | 2649 | 2238 | 59 | buffered |  |
-| 40x2 | anonymous public owners | full+reply | none | 4705 | 58 | 3 | - | 609 B | 2534 | 2550 | 2238 | 59 | buffered |  |
-| 40x2 | anonymous public owners | full+2tree | none | 4648 | 59 | 3 | - | 552 B | 2444 | 2457 | 2271 | 60 | buffered |  |
+| 40x2 | confidential signer | min | yes | 3875 | 48 | 1 | - |  | 2172 | 2224 | 1770 | 49 | inline |  |
+| 40x2 | confidential signer | full | yes | 4430 | 58 | 3 | none | 334 B | 2259 | 2269 | 2238 | 59 | buffered |  |
+| 40x2 | confidential signer | full+spl | yes | 4798 | 65 | 3 | - | 702 B, 1 accounts | 2391 | 2273 | 2474 | 66 | no | 2 accounts |
+| 40x2 | confidential signer | full+data | yes | 4630 | 58 | 3 | - | 534 B | 2459 | 2465 | 2238 | 59 | buffered |  |
+| 40x2 | confidential signer | full+reply | yes | 4430 | 58 | 3 | - | 334 B | 2259 | 2269 | 2238 | 59 | buffered |  |
+| 40x2 | confidential signer | full+2tree | yes | 4472 | 59 | 3 | - | 376 B | 2268 | 2273 | 2271 | 60 | buffered |  |
+| 40x2 | confidential in-proof | min | yes | 3970 | 48 | 1 | - |  | 2268 | 2321 | 1769 | 49 | inline |  |
+| 40x2 | confidential in-proof | full | yes | 4429 | 57 | 2 | none | 333 B | 2355 | 2366 | 2141 | 58 | buffered |  |
+| 40x2 | confidential in-proof | full+spl | yes | 4797 | 64 | 2 | - | 701 B | 2487 | 2370 | 2377 | 65 | no | 1 accounts |
+| 40x2 | confidential in-proof | full+data | yes | 4629 | 57 | 2 | - | 533 B | 2555 | 2562 | 2141 | 58 | buffered |  |
+| 40x2 | confidential in-proof | full+reply | yes | 4429 | 57 | 2 | - | 333 B | 2355 | 2366 | 2141 | 58 | buffered |  |
+| 40x2 | confidential in-proof | full+2tree | yes | 4471 | 58 | 2 | - | 375 B | 2364 | 2370 | 2174 | 59 | buffered |  |
+| 40x2 | anonymous hidden | min | yes | 4042 | 48 | 1 | - |  | 2340 | 2423 | 1769 | 49 | inline |  |
+| 40x2 | anonymous hidden | full | yes | 4477 | 54 | 2 | none | 381 B | 2499 | 2550 | 2045 | 55 | buffered |  |
+| 40x2 | anonymous hidden | full+spl | yes | 4845 | 61 | 2 | - | 749 B | 2631 | 2554 | 2281 | 62 | buffered |  |
+| 40x2 | anonymous hidden | full+data | yes | 4677 | 54 | 2 | - | 581 B | 2699 | 2746 | 2045 | 55 | buffered |  |
+| 40x2 | anonymous hidden | full+reply | yes | 4576 | 54 | 2 | - | 480 B | 2598 | 2647 | 2045 | 55 | buffered |  |
+| 40x2 | anonymous hidden | full+2tree | yes | 4519 | 55 | 2 | - | 423 B | 2508 | 2554 | 2078 | 56 | buffered |  |
+| 40x2 | anonymous public owners | min | yes | 3979 | 48 | 1 | - |  | 2276 | 2326 | 1770 | 49 | inline |  |
+| 40x2 | anonymous public owners | full | yes | 4606 | 58 | 3 | none | 510 B | 2435 | 2453 | 2238 | 59 | buffered |  |
+| 40x2 | anonymous public owners | full+spl | yes | 4974 | 65 | 3 | - | 878 B, 1 accounts | 2567 | 2457 | 2474 | 66 | no | 2 accounts |
+| 40x2 | anonymous public owners | full+data | yes | 4806 | 58 | 3 | - | 710 B | 2635 | 2649 | 2238 | 59 | buffered |  |
+| 40x2 | anonymous public owners | full+reply | yes | 4705 | 58 | 3 | - | 609 B | 2534 | 2550 | 2238 | 59 | buffered |  |
+| 40x2 | anonymous public owners | full+2tree | yes | 4648 | 59 | 3 | - | 552 B | 2444 | 2457 | 2271 | 60 | buffered |  |
 | 40x2 | confidential entry | min | none | 11883 | 48 | 1 | - | 7787 B | 10180 | 10232 | 1770 | 49 | buffered |  |
 | 40x2 | confidential entry | full | none | 12438 | 58 | 3 | none | 8342 B | 10267 | 10277 | 2238 | 59 | no | buffer create 61 B, SPP CPI 37 B |
 | 40x2 | confidential entry | full+spl | none | 12806 | 65 | 3 | - | 8710 B, 1 accounts | 10399 | 10281 | 2474 | 66 | no | 2 accounts, buffer create 193 B, SPP CPI 41 B |
@@ -1391,30 +1391,30 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 40x2 | anonymous entry | full+2tree | none | 12559 | 55 | 2 | - | 8463 B | 10548 | 10562 | 2078 | 56 | no | buffer create 342 B, SPP CPI 322 B |
 | 40x2 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 40x2 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
-| 48x2 | confidential signer | min | none | 4395 | 56 | 1 | - | 299 B | 2428 | 2488 | 2034 | 57 | buffered |  |
-| 48x2 | confidential signer | full | none | 4950 | 66 | 3 | none | 854 B, 2 accounts | 2515 | 2533 | 2502 | 67 | no | 3 accounts |
-| 48x2 | confidential signer | full+spl | none | 5318 | 73 | 3 | - | 1222 B, 9 accounts | 2647 | 2537 | 2738 | 74 | no | 10 accounts |
-| 48x2 | confidential signer | full+data | none | 5150 | 66 | 3 | - | 1054 B, 2 accounts | 2715 | 2729 | 2502 | 67 | no | 3 accounts |
-| 48x2 | confidential signer | full+reply | none | 4950 | 66 | 3 | - | 854 B, 2 accounts | 2515 | 2533 | 2502 | 67 | no | 3 accounts |
-| 48x2 | confidential signer | full+2tree | none | 4993 | 67 | 3 | - | 897 B, 3 accounts | 2525 | 2537 | 2535 | 68 | no | 4 accounts |
-| 48x2 | confidential in-proof | min | none | 4490 | 56 | 1 | - | 394 B | 2524 | 2585 | 2033 | 57 | buffered |  |
-| 48x2 | confidential in-proof | full | none | 4949 | 65 | 2 | none | 853 B, 1 accounts | 2611 | 2630 | 2405 | 66 | no | 2 accounts |
-| 48x2 | confidential in-proof | full+spl | none | 5317 | 72 | 2 | - | 1221 B, 8 accounts | 2743 | 2634 | 2641 | 73 | no | 9 accounts |
-| 48x2 | confidential in-proof | full+data | none | 5149 | 65 | 2 | - | 1053 B, 1 accounts | 2811 | 2826 | 2405 | 66 | no | 2 accounts |
-| 48x2 | confidential in-proof | full+reply | none | 4949 | 65 | 2 | - | 853 B, 1 accounts | 2611 | 2630 | 2405 | 66 | no | 2 accounts |
-| 48x2 | confidential in-proof | full+2tree | none | 4992 | 66 | 2 | - | 896 B, 2 accounts | 2621 | 2634 | 2438 | 67 | no | 3 accounts |
-| 48x2 | anonymous hidden | min | none | 4562 | 56 | 1 | - | 466 B | 2596 | 2687 | 2033 | 57 | buffered |  |
-| 48x2 | anonymous hidden | full | none | 4997 | 62 | 2 | none | 901 B | 2755 | 2814 | 2309 | 63 | buffered |  |
-| 48x2 | anonymous hidden | full+spl | none | 5365 | 69 | 2 | - | 1269 B, 5 accounts | 2887 | 2818 | 2545 | 70 | no | 6 accounts |
-| 48x2 | anonymous hidden | full+data | none | 5197 | 62 | 2 | - | 1101 B | 2955 | 3010 | 2309 | 63 | buffered |  |
-| 48x2 | anonymous hidden | full+reply | none | 5096 | 62 | 2 | - | 1000 B | 2854 | 2911 | 2309 | 63 | buffered |  |
-| 48x2 | anonymous hidden | full+2tree | none | 5040 | 63 | 2 | - | 944 B | 2765 | 2818 | 2342 | 64 | buffered |  |
-| 48x2 | anonymous public owners | min | none | 4499 | 56 | 1 | - | 403 B | 2532 | 2590 | 2034 | 57 | buffered |  |
-| 48x2 | anonymous public owners | full | none | 5126 | 66 | 3 | none | 1030 B, 2 accounts | 2691 | 2717 | 2502 | 67 | no | 3 accounts |
-| 48x2 | anonymous public owners | full+spl | none | 5494 | 73 | 3 | - | 1398 B, 9 accounts | 2823 | 2721 | 2738 | 74 | no | 10 accounts |
-| 48x2 | anonymous public owners | full+data | none | 5326 | 66 | 3 | - | 1230 B, 2 accounts | 2891 | 2913 | 2502 | 67 | no | 3 accounts |
-| 48x2 | anonymous public owners | full+reply | none | 5225 | 66 | 3 | - | 1129 B, 2 accounts | 2790 | 2814 | 2502 | 67 | no | 3 accounts |
-| 48x2 | anonymous public owners | full+2tree | none | 5169 | 67 | 3 | - | 1073 B, 3 accounts | 2701 | 2721 | 2535 | 68 | no | 4 accounts |
+| 48x2 | confidential signer | min | yes | 4395 | 56 | 1 | - | 299 B | 2428 | 2488 | 2034 | 57 | buffered |  |
+| 48x2 | confidential signer | full | yes | 4950 | 66 | 3 | none | 854 B, 2 accounts | 2515 | 2533 | 2502 | 67 | no | 3 accounts |
+| 48x2 | confidential signer | full+spl | yes | 5318 | 73 | 3 | - | 1222 B, 9 accounts | 2647 | 2537 | 2738 | 74 | no | 10 accounts |
+| 48x2 | confidential signer | full+data | yes | 5150 | 66 | 3 | - | 1054 B, 2 accounts | 2715 | 2729 | 2502 | 67 | no | 3 accounts |
+| 48x2 | confidential signer | full+reply | yes | 4950 | 66 | 3 | - | 854 B, 2 accounts | 2515 | 2533 | 2502 | 67 | no | 3 accounts |
+| 48x2 | confidential signer | full+2tree | yes | 4993 | 67 | 3 | - | 897 B, 3 accounts | 2525 | 2537 | 2535 | 68 | no | 4 accounts |
+| 48x2 | confidential in-proof | min | yes | 4490 | 56 | 1 | - | 394 B | 2524 | 2585 | 2033 | 57 | buffered |  |
+| 48x2 | confidential in-proof | full | yes | 4949 | 65 | 2 | none | 853 B, 1 accounts | 2611 | 2630 | 2405 | 66 | no | 2 accounts |
+| 48x2 | confidential in-proof | full+spl | yes | 5317 | 72 | 2 | - | 1221 B, 8 accounts | 2743 | 2634 | 2641 | 73 | no | 9 accounts |
+| 48x2 | confidential in-proof | full+data | yes | 5149 | 65 | 2 | - | 1053 B, 1 accounts | 2811 | 2826 | 2405 | 66 | no | 2 accounts |
+| 48x2 | confidential in-proof | full+reply | yes | 4949 | 65 | 2 | - | 853 B, 1 accounts | 2611 | 2630 | 2405 | 66 | no | 2 accounts |
+| 48x2 | confidential in-proof | full+2tree | yes | 4992 | 66 | 2 | - | 896 B, 2 accounts | 2621 | 2634 | 2438 | 67 | no | 3 accounts |
+| 48x2 | anonymous hidden | min | yes | 4562 | 56 | 1 | - | 466 B | 2596 | 2687 | 2033 | 57 | buffered |  |
+| 48x2 | anonymous hidden | full | yes | 4997 | 62 | 2 | none | 901 B | 2755 | 2814 | 2309 | 63 | buffered |  |
+| 48x2 | anonymous hidden | full+spl | yes | 5365 | 69 | 2 | - | 1269 B, 5 accounts | 2887 | 2818 | 2545 | 70 | no | 6 accounts |
+| 48x2 | anonymous hidden | full+data | yes | 5197 | 62 | 2 | - | 1101 B | 2955 | 3010 | 2309 | 63 | buffered |  |
+| 48x2 | anonymous hidden | full+reply | yes | 5096 | 62 | 2 | - | 1000 B | 2854 | 2911 | 2309 | 63 | buffered |  |
+| 48x2 | anonymous hidden | full+2tree | yes | 5040 | 63 | 2 | - | 944 B | 2765 | 2818 | 2342 | 64 | buffered |  |
+| 48x2 | anonymous public owners | min | yes | 4499 | 56 | 1 | - | 403 B | 2532 | 2590 | 2034 | 57 | buffered |  |
+| 48x2 | anonymous public owners | full | yes | 5126 | 66 | 3 | none | 1030 B, 2 accounts | 2691 | 2717 | 2502 | 67 | no | 3 accounts |
+| 48x2 | anonymous public owners | full+spl | yes | 5494 | 73 | 3 | - | 1398 B, 9 accounts | 2823 | 2721 | 2738 | 74 | no | 10 accounts |
+| 48x2 | anonymous public owners | full+data | yes | 5326 | 66 | 3 | - | 1230 B, 2 accounts | 2891 | 2913 | 2502 | 67 | no | 3 accounts |
+| 48x2 | anonymous public owners | full+reply | yes | 5225 | 66 | 3 | - | 1129 B, 2 accounts | 2790 | 2814 | 2502 | 67 | no | 3 accounts |
+| 48x2 | anonymous public owners | full+2tree | yes | 5169 | 67 | 3 | - | 1073 B, 3 accounts | 2701 | 2721 | 2535 | 68 | no | 4 accounts |
 | 48x2 | confidential entry | min | none | 14003 | 56 | 1 | - | 9907 B | 12036 | 12096 | 2034 | 57 | no | buffer create 1830 B, SPP CPI 1856 B |
 | 48x2 | confidential entry | full | none | 14558 | 66 | 3 | none | 10462 B, 2 accounts | 12123 | 12141 | 2502 | 67 | no | 3 accounts, buffer create 1917 B, SPP CPI 1901 B |
 | 48x2 | confidential entry | full+spl | none | 14926 | 73 | 3 | - | 10830 B, 9 accounts | 12255 | 12145 | 2738 | 74 | no | 10 accounts, buffer create 2049 B, SPP CPI 1905 B |
@@ -1429,30 +1429,30 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 48x2 | anonymous entry | full+2tree | none | 14680 | 63 | 2 | - | 10584 B | 12405 | 12426 | 2342 | 64 | no | buffer create 2199 B, SPP CPI 2186 B |
 | 48x2 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 48x2 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
-| 49x2 | confidential signer | min | none | 4460 | 57 | 1 | - | 364 B | 2460 | 2521 | 2067 | 58 | buffered |  |
-| 49x2 | confidential signer | full | none | 5015 | 67 | 3 | none | 919 B, 3 accounts | 2547 | 2566 | 2535 | 68 | no | 4 accounts |
-| 49x2 | confidential signer | full+spl | none | 5383 | 74 | 3 | - | 1287 B, 10 accounts | 2679 | 2570 | 2771 | 75 | no | 11 accounts |
-| 49x2 | confidential signer | full+data | none | 5215 | 67 | 3 | - | 1119 B, 3 accounts | 2747 | 2762 | 2535 | 68 | no | 4 accounts |
-| 49x2 | confidential signer | full+reply | none | 5015 | 67 | 3 | - | 919 B, 3 accounts | 2547 | 2566 | 2535 | 68 | no | 4 accounts |
-| 49x2 | confidential signer | full+2tree | none | 5059 | 68 | 3 | - | 963 B, 4 accounts | 2558 | 2570 | 2568 | 69 | no | 5 accounts |
-| 49x2 | confidential in-proof | min | none | 4555 | 57 | 1 | - | 459 B | 2556 | 2618 | 2066 | 58 | buffered |  |
-| 49x2 | confidential in-proof | full | none | 5014 | 66 | 2 | none | 918 B, 2 accounts | 2643 | 2663 | 2438 | 67 | no | 3 accounts |
-| 49x2 | confidential in-proof | full+spl | none | 5382 | 73 | 2 | - | 1286 B, 9 accounts | 2775 | 2667 | 2674 | 74 | no | 10 accounts |
-| 49x2 | confidential in-proof | full+data | none | 5214 | 66 | 2 | - | 1118 B, 2 accounts | 2843 | 2859 | 2438 | 67 | no | 3 accounts |
-| 49x2 | confidential in-proof | full+reply | none | 5014 | 66 | 2 | - | 918 B, 2 accounts | 2643 | 2663 | 2438 | 67 | no | 3 accounts |
-| 49x2 | confidential in-proof | full+2tree | none | 5058 | 67 | 2 | - | 962 B, 3 accounts | 2654 | 2667 | 2471 | 68 | no | 4 accounts |
-| 49x2 | anonymous hidden | min | none | 4627 | 57 | 1 | - | 531 B | 2628 | 2720 | 2066 | 58 | buffered |  |
-| 49x2 | anonymous hidden | full | none | 5062 | 63 | 2 | none | 966 B | 2787 | 2847 | 2342 | 64 | buffered |  |
-| 49x2 | anonymous hidden | full+spl | none | 5430 | 70 | 2 | - | 1334 B, 6 accounts | 2919 | 2851 | 2578 | 71 | no | 7 accounts |
-| 49x2 | anonymous hidden | full+data | none | 5262 | 63 | 2 | - | 1166 B | 2987 | 3043 | 2342 | 64 | buffered |  |
-| 49x2 | anonymous hidden | full+reply | none | 5161 | 63 | 2 | - | 1065 B | 2886 | 2944 | 2342 | 64 | buffered |  |
-| 49x2 | anonymous hidden | full+2tree | none | 5106 | 64 | 2 | - | 1010 B | 2798 | 2851 | 2375 | 65 | no | 1 accounts |
-| 49x2 | anonymous public owners | min | none | 4564 | 57 | 1 | - | 468 B | 2564 | 2623 | 2067 | 58 | buffered |  |
-| 49x2 | anonymous public owners | full | none | 5191 | 67 | 3 | none | 1095 B, 3 accounts | 2723 | 2750 | 2535 | 68 | no | 4 accounts |
-| 49x2 | anonymous public owners | full+spl | none | 5559 | 74 | 3 | - | 1463 B, 10 accounts | 2855 | 2754 | 2771 | 75 | no | 11 accounts |
-| 49x2 | anonymous public owners | full+data | none | 5391 | 67 | 3 | - | 1295 B, 3 accounts | 2923 | 2946 | 2535 | 68 | no | 4 accounts |
-| 49x2 | anonymous public owners | full+reply | none | 5290 | 67 | 3 | - | 1194 B, 3 accounts | 2822 | 2847 | 2535 | 68 | no | 4 accounts |
-| 49x2 | anonymous public owners | full+2tree | none | 5235 | 68 | 3 | - | 1139 B, 4 accounts | 2734 | 2754 | 2568 | 69 | no | 5 accounts |
+| 49x2 | confidential signer | min | yes | 4460 | 57 | 1 | - | 364 B | 2460 | 2521 | 2067 | 58 | buffered |  |
+| 49x2 | confidential signer | full | yes | 5015 | 67 | 3 | none | 919 B, 3 accounts | 2547 | 2566 | 2535 | 68 | no | 4 accounts |
+| 49x2 | confidential signer | full+spl | yes | 5383 | 74 | 3 | - | 1287 B, 10 accounts | 2679 | 2570 | 2771 | 75 | no | 11 accounts |
+| 49x2 | confidential signer | full+data | yes | 5215 | 67 | 3 | - | 1119 B, 3 accounts | 2747 | 2762 | 2535 | 68 | no | 4 accounts |
+| 49x2 | confidential signer | full+reply | yes | 5015 | 67 | 3 | - | 919 B, 3 accounts | 2547 | 2566 | 2535 | 68 | no | 4 accounts |
+| 49x2 | confidential signer | full+2tree | yes | 5059 | 68 | 3 | - | 963 B, 4 accounts | 2558 | 2570 | 2568 | 69 | no | 5 accounts |
+| 49x2 | confidential in-proof | min | yes | 4555 | 57 | 1 | - | 459 B | 2556 | 2618 | 2066 | 58 | buffered |  |
+| 49x2 | confidential in-proof | full | yes | 5014 | 66 | 2 | none | 918 B, 2 accounts | 2643 | 2663 | 2438 | 67 | no | 3 accounts |
+| 49x2 | confidential in-proof | full+spl | yes | 5382 | 73 | 2 | - | 1286 B, 9 accounts | 2775 | 2667 | 2674 | 74 | no | 10 accounts |
+| 49x2 | confidential in-proof | full+data | yes | 5214 | 66 | 2 | - | 1118 B, 2 accounts | 2843 | 2859 | 2438 | 67 | no | 3 accounts |
+| 49x2 | confidential in-proof | full+reply | yes | 5014 | 66 | 2 | - | 918 B, 2 accounts | 2643 | 2663 | 2438 | 67 | no | 3 accounts |
+| 49x2 | confidential in-proof | full+2tree | yes | 5058 | 67 | 2 | - | 962 B, 3 accounts | 2654 | 2667 | 2471 | 68 | no | 4 accounts |
+| 49x2 | anonymous hidden | min | yes | 4627 | 57 | 1 | - | 531 B | 2628 | 2720 | 2066 | 58 | buffered |  |
+| 49x2 | anonymous hidden | full | yes | 5062 | 63 | 2 | none | 966 B | 2787 | 2847 | 2342 | 64 | buffered |  |
+| 49x2 | anonymous hidden | full+spl | yes | 5430 | 70 | 2 | - | 1334 B, 6 accounts | 2919 | 2851 | 2578 | 71 | no | 7 accounts |
+| 49x2 | anonymous hidden | full+data | yes | 5262 | 63 | 2 | - | 1166 B | 2987 | 3043 | 2342 | 64 | buffered |  |
+| 49x2 | anonymous hidden | full+reply | yes | 5161 | 63 | 2 | - | 1065 B | 2886 | 2944 | 2342 | 64 | buffered |  |
+| 49x2 | anonymous hidden | full+2tree | yes | 5106 | 64 | 2 | - | 1010 B | 2798 | 2851 | 2375 | 65 | no | 1 accounts |
+| 49x2 | anonymous public owners | min | yes | 4564 | 57 | 1 | - | 468 B | 2564 | 2623 | 2067 | 58 | buffered |  |
+| 49x2 | anonymous public owners | full | yes | 5191 | 67 | 3 | none | 1095 B, 3 accounts | 2723 | 2750 | 2535 | 68 | no | 4 accounts |
+| 49x2 | anonymous public owners | full+spl | yes | 5559 | 74 | 3 | - | 1463 B, 10 accounts | 2855 | 2754 | 2771 | 75 | no | 11 accounts |
+| 49x2 | anonymous public owners | full+data | yes | 5391 | 67 | 3 | - | 1295 B, 3 accounts | 2923 | 2946 | 2535 | 68 | no | 4 accounts |
+| 49x2 | anonymous public owners | full+reply | yes | 5290 | 67 | 3 | - | 1194 B, 3 accounts | 2822 | 2847 | 2535 | 68 | no | 4 accounts |
+| 49x2 | anonymous public owners | full+2tree | yes | 5235 | 68 | 3 | - | 1139 B, 4 accounts | 2734 | 2754 | 2568 | 69 | no | 5 accounts |
 | 49x2 | confidential entry | min | none | 14268 | 57 | 1 | - | 10172 B | 12268 | 12329 | 2067 | 58 | no | buffer create 2062 B, SPP CPI 2089 B |
 | 49x2 | confidential entry | full | none | 14823 | 67 | 3 | none | 10727 B, 3 accounts | 12355 | 12374 | 2535 | 68 | no | 4 accounts, buffer create 2149 B, SPP CPI 2134 B |
 | 49x2 | confidential entry | full+spl | none | 15191 | 74 | 3 | - | 11095 B, 10 accounts | 12487 | 12378 | 2771 | 75 | no | 11 accounts, buffer create 2281 B, SPP CPI 2138 B |
@@ -1481,3 +1481,355 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 0x4 | deposit | full | yes | 2419 | 15 | 2 | - |  | - | - | - | - | inline |  |
 | 0x8 | deposit | min | yes | 3660 | 9 | 1 | - |  | - | - | - | - | inline |  |
 | 0x8 | deposit | full | yes | 3931 | 15 | 2 | - |  | - | - | - | - | inline |  |
+
+Entry capacities at two outputs. Each row is the widest owner run any path clears at that leg count, rows = run + a hidden sender. A confidential leg names its own destination, a hidden sender's legs name one. over: what stops the next owner.
+| shape | rail | load | legs | leg kind | owner run | rows | accounts | signatures | frame | SPP CPI | fits | over |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 12x2 | confidential entry | min | 0 | sol | 12 | 12 | 32 | 12 | 3684 | 3708 | buffered | inputs |
+| 12x2 | confidential entry | min | 1 | sol | 12 | 12 | 34 | 12 | 3693 | 3717 | buffered | inputs |
+| 12x2 | confidential entry | min | 4 | sol | 12 | 12 | 37 | 12 | 3720 | 3744 | buffered | inputs |
+| 12x2 | confidential entry | min | 8 | sol | 12 | 12 | 41 | 12 | 3756 | 3780 | buffered | inputs |
+| 12x2 | confidential entry | min | 12 | sol | 12 | 12 | 45 | 12 | 3792 | 3816 | buffered | inputs |
+| 12x2 | confidential entry | min | 16 | sol | 12 | 12 | 49 | 12 | 3828 | 3852 | buffered | inputs |
+| 12x2 | confidential entry | min | 20 | sol | 12 | 12 | 53 | 12 | 3864 | 3888 | buffered | inputs |
+| 12x2 | confidential entry | min | 24 | sol | 12 | 12 | 57 | 12 | 3900 | 3924 | buffered | inputs |
+| 12x2 | confidential entry | min | 28 | sol | 12 | 12 | 61 | 12 | 3936 | 3960 | buffered | inputs |
+| 12x2 | confidential entry | min | 32 | sol | 11 | 11 | 64 | 11 | 3972 | 3996 | buffered | 1 accounts |
+| 12x2 | confidential entry | full | 0 | sol | 10 | 10 | 35 | 12 | 3735 | 3717 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 1 | sol | 10 | 10 | 37 | 12 | 3744 | 3726 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 4 | sol | 10 | 10 | 40 | 12 | 3771 | 3753 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 8 | sol | 10 | 10 | 44 | 12 | 3807 | 3789 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 12 | sol | 10 | 10 | 48 | 12 | 3843 | 3825 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 16 | sol | 10 | 10 | 52 | 12 | 3879 | 3861 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 20 | sol | 10 | 10 | 56 | 12 | 3915 | 3897 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 24 | sol | 10 | 10 | 60 | 12 | 3951 | 3933 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 28 | sol | 10 | 10 | 64 | 12 | 3987 | 3969 | buffered | 1 accounts, 1 signatures |
+| 12x2 | confidential entry | full | 32 | sol | 6 | 6 | 64 | 8 | 4023 | 4005 | buffered | 1 accounts |
+| 12x2 | confidential entry | full+data+reply | 0 | sol | 10 | 10 | 35 | 12 | 3935 | 3913 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 1 | sol | 10 | 10 | 37 | 12 | 3944 | 3922 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 4 | sol | 10 | 10 | 40 | 12 | 3971 | 3949 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 8 | sol | 10 | 10 | 44 | 12 | 4007 | 3985 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 12 | sol | 10 | 10 | 48 | 12 | 4043 | 4021 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 16 | sol | 10 | 10 | 52 | 12 | 4079 | 4057 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 20 | sol | 10 | 10 | 56 | 12 | 4115 | 4093 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 24 | sol | 10 | 10 | 60 | 12 | 4151 | 4129 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 28 | sol | 10 | 10 | 64 | 12 | 4187 | 4165 | buffered | 1 accounts, 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 32 | sol | 6 | 6 | 64 | 8 | 4223 | 4201 | buffered | 1 accounts |
+| 12x2 | confidential entry | min | 0 | spl | 12 | 12 | 32 | 12 | 3684 | 3708 | buffered | inputs |
+| 12x2 | confidential entry | min | 1 | spl | 12 | 12 | 37 | 12 | 3694 | 3718 | buffered | inputs |
+| 12x2 | confidential entry | min | 4 | spl | 12 | 12 | 44 | 12 | 3724 | 3748 | buffered | inputs |
+| 12x2 | confidential entry | min | 8 | spl | 12 | 12 | 48 | 12 | 3764 | 3788 | buffered | inputs |
+| 12x2 | confidential entry | min | 12 | spl | 12 | 12 | 52 | 12 | 3804 | 3828 | buffered | inputs |
+| 12x2 | confidential entry | min | 16 | spl | 12 | 12 | 56 | 12 | 3844 | 3868 | buffered | inputs |
+| 12x2 | confidential entry | min | 20 | spl | 12 | 12 | 60 | 12 | 3884 | 3908 | buffered | inputs |
+| 12x2 | confidential entry | min | 24 | spl | 12 | 12 | 64 | 12 | 3924 | 3948 | buffered | inputs |
+| 12x2 | confidential entry | min | 28 | spl | 8 | 8 | 64 | 8 | 3964 | 3988 | buffered | 1 accounts |
+| 12x2 | confidential entry | min | 32 | spl | 4 | 4 | 64 | 4 | 4004 | 4028 | buffered | 1 accounts |
+| 12x2 | confidential entry | full | 0 | spl | 10 | 10 | 35 | 12 | 3735 | 3717 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 1 | spl | 10 | 10 | 40 | 12 | 3777 | 3727 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 4 | spl | 10 | 10 | 47 | 12 | 3903 | 3757 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 8 | spl | 10 | 10 | 51 | 12 | 4071 | 3797 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 12 | spl | 10 | 10 | 55 | 12 | 4239 | 3837 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 16 | spl | 10 | 10 | 59 | 12 | 4407 | 3877 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 20 | spl | 10 | 10 | 63 | 12 | 4575 | 3917 | buffered | 1 signatures |
+| 12x2 | confidential entry | full | 24 | spl | 7 | 7 | 64 | 9 | 4743 | 3957 | buffered | 1 accounts |
+| 12x2 | confidential entry | full | 28 | spl | 3 | 3 | 64 | 5 | 4911 | 3997 | buffered | 1 accounts |
+| 12x2 | confidential entry | full | 32 | spl | none | - | - | - | - | - | no | 2 accounts |
+| 12x2 | confidential entry | full+data+reply | 0 | spl | 10 | 10 | 35 | 12 | 3935 | 3913 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 1 | spl | 10 | 10 | 40 | 12 | 3977 | 3923 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 4 | spl | 10 | 10 | 47 | 12 | 4103 | 3953 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 8 | spl | 10 | 10 | 51 | 12 | 4271 | 3993 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 12 | spl | 10 | 10 | 55 | 12 | 4439 | 4033 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 16 | spl | 10 | 10 | 59 | 12 | 4607 | 4073 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 20 | spl | 10 | 10 | 63 | 12 | 4775 | 4113 | buffered | 1 signatures |
+| 12x2 | confidential entry | full+data+reply | 24 | spl | 7 | 7 | 64 | 9 | 4943 | 4153 | buffered | 1 accounts |
+| 12x2 | confidential entry | full+data+reply | 28 | spl | 3 | 3 | 64 | 5 | 5111 | 4193 | buffered | 1 accounts |
+| 12x2 | confidential entry | full+data+reply | 32 | spl | none | - | - | - | - | - | no | 2 accounts |
+| 12x2 | anonymous entry | min | 0 | sol | 11 | 12 | 32 | 12 | 3884 | 3907 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 1 | sol | 11 | 12 | 34 | 12 | 3893 | 3916 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 4 | sol | 11 | 12 | 34 | 12 | 3920 | 3943 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 8 | sol | 11 | 12 | 34 | 12 | 3956 | 3979 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 12 | sol | 11 | 12 | 34 | 12 | 3992 | 4015 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 16 | sol | 11 | 12 | 34 | 12 | 4028 | 4051 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 20 | sol | 11 | 12 | 34 | 12 | 4064 | 4087 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 24 | sol | 11 | 12 | 34 | 12 | 4100 | 4123 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 28 | sol | 11 | 12 | 34 | 12 | 4136 | 4159 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 32 | sol | 11 | 12 | 34 | 12 | 4172 | 4195 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 0 | sol | 10 | 11 | 35 | 12 | 4007 | 3998 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 1 | sol | 10 | 11 | 37 | 12 | 4016 | 4007 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 4 | sol | 10 | 11 | 37 | 12 | 4043 | 4034 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 8 | sol | 10 | 11 | 37 | 12 | 4079 | 4070 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 12 | sol | 10 | 11 | 37 | 12 | 4115 | 4106 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 16 | sol | 10 | 11 | 37 | 12 | 4151 | 4142 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 20 | sol | 10 | 11 | 37 | 12 | 4187 | 4178 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 24 | sol | 10 | 11 | 37 | 12 | 4223 | 4214 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 28 | sol | 10 | 11 | 37 | 12 | 4259 | 4250 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 32 | sol | 10 | 11 | 37 | 12 | 4295 | 4286 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 0 | sol | 10 | 11 | 35 | 12 | 4306 | 4291 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 1 | sol | 10 | 11 | 37 | 12 | 4315 | 4300 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 4 | sol | 10 | 11 | 37 | 12 | 4342 | 4327 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 8 | sol | 10 | 11 | 37 | 12 | 4378 | 4363 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 12 | sol | 10 | 11 | 37 | 12 | 4414 | 4399 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 16 | sol | 10 | 11 | 37 | 12 | 4450 | 4435 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 20 | sol | 10 | 11 | 37 | 12 | 4486 | 4471 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 24 | sol | 10 | 11 | 37 | 12 | 4522 | 4507 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 28 | sol | 10 | 11 | 37 | 12 | 4558 | 4543 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 32 | sol | 10 | 11 | 37 | 12 | 4594 | 4579 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 0 | spl | 11 | 12 | 32 | 12 | 3884 | 3907 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 1 | spl | 11 | 12 | 37 | 12 | 3894 | 3917 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 4 | spl | 11 | 12 | 41 | 12 | 3924 | 3947 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 8 | spl | 11 | 12 | 41 | 12 | 3964 | 3987 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 12 | spl | 11 | 12 | 41 | 12 | 4004 | 4027 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 16 | spl | 11 | 12 | 41 | 12 | 4044 | 4067 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 20 | spl | 11 | 12 | 41 | 12 | 4084 | 4107 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 24 | spl | 11 | 12 | 41 | 12 | 4124 | 4147 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 28 | spl | 11 | 12 | 41 | 12 | 4164 | 4187 | buffered | 1 signatures |
+| 12x2 | anonymous entry | min | 32 | spl | 11 | 12 | 41 | 12 | 4204 | 4227 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 0 | spl | 10 | 11 | 35 | 12 | 4007 | 3998 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 1 | spl | 10 | 11 | 40 | 12 | 4049 | 4008 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 4 | spl | 10 | 11 | 44 | 12 | 4175 | 4038 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 8 | spl | 10 | 11 | 44 | 12 | 4343 | 4078 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 12 | spl | 10 | 11 | 44 | 12 | 4511 | 4118 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 16 | spl | 10 | 11 | 44 | 12 | 4679 | 4158 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 20 | spl | 10 | 11 | 44 | 12 | 4847 | 4198 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 24 | spl | 10 | 11 | 44 | 12 | 5015 | 4238 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 28 | spl | 10 | 11 | 44 | 12 | 5183 | 4278 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full | 32 | spl | 10 | 11 | 44 | 12 | 5351 | 4318 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 0 | spl | 10 | 11 | 35 | 12 | 4306 | 4291 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 1 | spl | 10 | 11 | 40 | 12 | 4348 | 4301 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 4 | spl | 10 | 11 | 44 | 12 | 4474 | 4331 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 8 | spl | 10 | 11 | 44 | 12 | 4642 | 4371 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 12 | spl | 10 | 11 | 44 | 12 | 4810 | 4411 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 16 | spl | 10 | 11 | 44 | 12 | 4978 | 4451 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 20 | spl | 10 | 11 | 44 | 12 | 5146 | 4491 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 24 | spl | 10 | 11 | 44 | 12 | 5314 | 4531 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 28 | spl | 10 | 11 | 44 | 12 | 5482 | 4571 | buffered | 1 signatures |
+| 12x2 | anonymous entry | full+data+reply | 32 | spl | 10 | 11 | 44 | 12 | 5650 | 4611 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 0 | sol | 12 | 12 | 36 | 12 | 4612 | 4640 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 1 | sol | 12 | 12 | 38 | 12 | 4621 | 4649 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 4 | sol | 12 | 12 | 41 | 12 | 4648 | 4676 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 8 | sol | 12 | 12 | 45 | 12 | 4684 | 4712 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 12 | sol | 12 | 12 | 49 | 12 | 4720 | 4748 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 16 | sol | 12 | 12 | 53 | 12 | 4756 | 4784 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 20 | sol | 12 | 12 | 57 | 12 | 4792 | 4820 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 24 | sol | 12 | 12 | 61 | 12 | 4828 | 4856 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 28 | sol | 11 | 11 | 64 | 11 | 4864 | 4892 | buffered | 1 accounts |
+| 16x2 | confidential entry | min | 32 | sol | 7 | 7 | 64 | 7 | 4900 | 4928 | buffered | 1 accounts |
+| 16x2 | confidential entry | full | 0 | sol | 10 | 10 | 39 | 12 | 4663 | 4649 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 1 | sol | 10 | 10 | 41 | 12 | 4672 | 4658 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 4 | sol | 10 | 10 | 44 | 12 | 4699 | 4685 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 8 | sol | 10 | 10 | 48 | 12 | 4735 | 4721 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 12 | sol | 10 | 10 | 52 | 12 | 4771 | 4757 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 16 | sol | 10 | 10 | 56 | 12 | 4807 | 4793 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 20 | sol | 10 | 10 | 60 | 12 | 4843 | 4829 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 24 | sol | 10 | 10 | 64 | 12 | 4879 | 4865 | buffered | 1 accounts, 1 signatures |
+| 16x2 | confidential entry | full | 28 | sol | 6 | 6 | 64 | 8 | 4915 | 4901 | buffered | 1 accounts |
+| 16x2 | confidential entry | full | 32 | sol | 2 | 2 | 64 | 4 | 4951 | 4937 | buffered | 1 accounts |
+| 16x2 | confidential entry | full+data+reply | 0 | sol | 10 | 10 | 39 | 12 | 4863 | 4845 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 1 | sol | 10 | 10 | 41 | 12 | 4872 | 4854 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 4 | sol | 10 | 10 | 44 | 12 | 4899 | 4881 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 8 | sol | 10 | 10 | 48 | 12 | 4935 | 4917 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 12 | sol | 10 | 10 | 52 | 12 | 4971 | 4953 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 16 | sol | 10 | 10 | 56 | 12 | 5007 | 4989 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 20 | sol | 10 | 10 | 60 | 12 | 5043 | 5025 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 24 | sol | 10 | 10 | 64 | 12 | 5079 | 5061 | buffered | 1 accounts, 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 28 | sol | 6 | 6 | 64 | 8 | 5115 | 5097 | buffered | 1 accounts |
+| 16x2 | confidential entry | full+data+reply | 32 | sol | 2 | 2 | 64 | 4 | 5151 | 5133 | buffered | 1 accounts |
+| 16x2 | confidential entry | min | 0 | spl | 12 | 12 | 36 | 12 | 4612 | 4640 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 1 | spl | 12 | 12 | 41 | 12 | 4622 | 4650 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 4 | spl | 12 | 12 | 48 | 12 | 4652 | 4680 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 8 | spl | 12 | 12 | 52 | 12 | 4692 | 4720 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 12 | spl | 12 | 12 | 56 | 12 | 4732 | 4760 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 16 | spl | 12 | 12 | 60 | 12 | 4772 | 4800 | buffered | 1 signatures |
+| 16x2 | confidential entry | min | 20 | spl | 12 | 12 | 64 | 12 | 4812 | 4840 | buffered | 1 accounts, 1 signatures |
+| 16x2 | confidential entry | min | 24 | spl | 8 | 8 | 64 | 8 | 4852 | 4880 | buffered | 1 accounts |
+| 16x2 | confidential entry | min | 28 | spl | 4 | 4 | 64 | 4 | 4892 | 4920 | buffered | 1 accounts |
+| 16x2 | confidential entry | min | 32 | spl | none | - | - | - | - | - | no | 1 accounts |
+| 16x2 | confidential entry | full | 0 | spl | 10 | 10 | 39 | 12 | 4663 | 4649 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 1 | spl | 10 | 10 | 44 | 12 | 4705 | 4659 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 4 | spl | 10 | 10 | 51 | 12 | 4831 | 4689 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 8 | spl | 10 | 10 | 55 | 12 | 4999 | 4729 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 12 | spl | 10 | 10 | 59 | 12 | 5167 | 4769 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 16 | spl | 10 | 10 | 63 | 12 | 5335 | 4809 | buffered | 1 signatures |
+| 16x2 | confidential entry | full | 20 | spl | 7 | 7 | 64 | 9 | 5503 | 4849 | buffered | 1 accounts |
+| 16x2 | confidential entry | full | 24 | spl | 3 | 3 | 64 | 5 | 5671 | 4889 | buffered | 1 accounts |
+| 16x2 | confidential entry | full | 28 | spl | none | - | - | - | - | - | no | 2 accounts |
+| 16x2 | confidential entry | full+data+reply | 0 | spl | 10 | 10 | 39 | 12 | 4863 | 4845 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 1 | spl | 10 | 10 | 44 | 12 | 4905 | 4855 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 4 | spl | 10 | 10 | 51 | 12 | 5031 | 4885 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 8 | spl | 10 | 10 | 55 | 12 | 5199 | 4925 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 12 | spl | 10 | 10 | 59 | 12 | 5367 | 4965 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 16 | spl | 10 | 10 | 63 | 12 | 5535 | 5005 | buffered | 1 signatures |
+| 16x2 | confidential entry | full+data+reply | 20 | spl | 7 | 7 | 64 | 9 | 5703 | 5045 | buffered | 1 accounts |
+| 16x2 | confidential entry | full+data+reply | 24 | spl | 3 | 3 | 64 | 5 | 5871 | 5085 | buffered | 1 accounts |
+| 16x2 | confidential entry | full+data+reply | 28 | spl | none | - | - | - | - | - | no | 2 accounts |
+| 16x2 | anonymous entry | min | 0 | sol | 11 | 12 | 36 | 12 | 4812 | 4839 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 1 | sol | 11 | 12 | 38 | 12 | 4821 | 4848 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 4 | sol | 11 | 12 | 38 | 12 | 4848 | 4875 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 8 | sol | 11 | 12 | 38 | 12 | 4884 | 4911 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 12 | sol | 11 | 12 | 38 | 12 | 4920 | 4947 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 16 | sol | 11 | 12 | 38 | 12 | 4956 | 4983 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 20 | sol | 11 | 12 | 38 | 12 | 4992 | 5019 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 24 | sol | 11 | 12 | 38 | 12 | 5028 | 5055 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 28 | sol | 11 | 12 | 38 | 12 | 5064 | 5091 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 32 | sol | 11 | 12 | 38 | 12 | 5100 | 5127 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 0 | sol | 10 | 11 | 39 | 12 | 4935 | 4930 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 1 | sol | 10 | 11 | 41 | 12 | 4944 | 4939 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 4 | sol | 10 | 11 | 41 | 12 | 4971 | 4966 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 8 | sol | 10 | 11 | 41 | 12 | 5007 | 5002 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 12 | sol | 10 | 11 | 41 | 12 | 5043 | 5038 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 16 | sol | 10 | 11 | 41 | 12 | 5079 | 5074 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 20 | sol | 10 | 11 | 41 | 12 | 5115 | 5110 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 24 | sol | 10 | 11 | 41 | 12 | 5151 | 5146 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 28 | sol | 10 | 11 | 41 | 12 | 5187 | 5182 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 32 | sol | 10 | 11 | 41 | 12 | 5223 | 5218 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 0 | sol | 10 | 11 | 39 | 12 | 5234 | 5223 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 1 | sol | 10 | 11 | 41 | 12 | 5243 | 5232 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 4 | sol | 10 | 11 | 41 | 12 | 5270 | 5259 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 8 | sol | 10 | 11 | 41 | 12 | 5306 | 5295 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 12 | sol | 10 | 11 | 41 | 12 | 5342 | 5331 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 16 | sol | 10 | 11 | 41 | 12 | 5378 | 5367 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 20 | sol | 10 | 11 | 41 | 12 | 5414 | 5403 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 24 | sol | 10 | 11 | 41 | 12 | 5450 | 5439 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 28 | sol | 10 | 11 | 41 | 12 | 5486 | 5475 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 32 | sol | 10 | 11 | 41 | 12 | 5522 | 5511 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 0 | spl | 11 | 12 | 36 | 12 | 4812 | 4839 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 1 | spl | 11 | 12 | 41 | 12 | 4822 | 4849 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 4 | spl | 11 | 12 | 45 | 12 | 4852 | 4879 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 8 | spl | 11 | 12 | 45 | 12 | 4892 | 4919 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 12 | spl | 11 | 12 | 45 | 12 | 4932 | 4959 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 16 | spl | 11 | 12 | 45 | 12 | 4972 | 4999 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 20 | spl | 11 | 12 | 45 | 12 | 5012 | 5039 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 24 | spl | 11 | 12 | 45 | 12 | 5052 | 5079 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 28 | spl | 11 | 12 | 45 | 12 | 5092 | 5119 | buffered | 1 signatures |
+| 16x2 | anonymous entry | min | 32 | spl | 11 | 12 | 45 | 12 | 5132 | 5159 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 0 | spl | 10 | 11 | 39 | 12 | 4935 | 4930 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 1 | spl | 10 | 11 | 44 | 12 | 4977 | 4940 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 4 | spl | 10 | 11 | 48 | 12 | 5103 | 4970 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 8 | spl | 10 | 11 | 48 | 12 | 5271 | 5010 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 12 | spl | 10 | 11 | 48 | 12 | 5439 | 5050 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 16 | spl | 10 | 11 | 48 | 12 | 5607 | 5090 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 20 | spl | 10 | 11 | 48 | 12 | 5775 | 5130 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 24 | spl | 10 | 11 | 48 | 12 | 5943 | 5170 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 28 | spl | 10 | 11 | 48 | 12 | 6111 | 5210 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full | 32 | spl | 10 | 11 | 48 | 12 | 6279 | 5250 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 0 | spl | 10 | 11 | 39 | 12 | 5234 | 5223 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 1 | spl | 10 | 11 | 44 | 12 | 5276 | 5233 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 4 | spl | 10 | 11 | 48 | 12 | 5402 | 5263 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 8 | spl | 10 | 11 | 48 | 12 | 5570 | 5303 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 12 | spl | 10 | 11 | 48 | 12 | 5738 | 5343 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 16 | spl | 10 | 11 | 48 | 12 | 5906 | 5383 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 20 | spl | 10 | 11 | 48 | 12 | 6074 | 5423 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 24 | spl | 10 | 11 | 48 | 12 | 6242 | 5463 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 28 | spl | 10 | 11 | 48 | 12 | 6410 | 5503 | buffered | 1 signatures |
+| 16x2 | anonymous entry | full+data+reply | 32 | spl | 10 | 11 | 48 | 12 | 6578 | 5543 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 0 | sol | 12 | 12 | 44 | 12 | 6468 | 6504 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 1 | sol | 12 | 12 | 46 | 12 | 6477 | 6513 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 4 | sol | 12 | 12 | 49 | 12 | 6504 | 6540 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 8 | sol | 12 | 12 | 53 | 12 | 6540 | 6576 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 12 | sol | 12 | 12 | 57 | 12 | 6576 | 6612 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 16 | sol | 12 | 12 | 61 | 12 | 6612 | 6648 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 20 | sol | 11 | 11 | 64 | 11 | 6648 | 6684 | buffered | 1 accounts |
+| 24x2 | confidential entry | min | 24 | sol | 7 | 7 | 64 | 7 | 6684 | 6720 | buffered | 1 accounts |
+| 24x2 | confidential entry | min | 28 | sol | 3 | 3 | 64 | 3 | 6720 | 6756 | buffered | 1 accounts |
+| 24x2 | confidential entry | min | 32 | sol | none | - | - | - | - | - | no | 2 accounts |
+| 24x2 | confidential entry | full | 0 | sol | 10 | 10 | 47 | 12 | 6519 | 6513 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 1 | sol | 10 | 10 | 49 | 12 | 6528 | 6522 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 4 | sol | 10 | 10 | 52 | 12 | 6555 | 6549 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 8 | sol | 10 | 10 | 56 | 12 | 6591 | 6585 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 12 | sol | 10 | 10 | 60 | 12 | 6627 | 6621 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 16 | sol | 10 | 10 | 64 | 12 | 6663 | 6657 | buffered | 1 accounts, 1 signatures |
+| 24x2 | confidential entry | full | 20 | sol | 6 | 6 | 64 | 8 | 6699 | 6693 | buffered | 1 accounts |
+| 24x2 | confidential entry | full | 24 | sol | 2 | 2 | 64 | 4 | 6735 | 6729 | buffered | 1 accounts |
+| 24x2 | confidential entry | full | 28 | sol | none | - | - | - | - | - | no | 3 accounts |
+| 24x2 | confidential entry | full+data+reply | 0 | sol | 10 | 10 | 47 | 12 | 6719 | 6709 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 1 | sol | 10 | 10 | 49 | 12 | 6728 | 6718 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 4 | sol | 10 | 10 | 52 | 12 | 6755 | 6745 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 8 | sol | 10 | 10 | 56 | 12 | 6791 | 6781 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 12 | sol | 10 | 10 | 60 | 12 | 6827 | 6817 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 16 | sol | 10 | 10 | 64 | 12 | 6863 | 6853 | buffered | 1 accounts, 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 20 | sol | 6 | 6 | 64 | 8 | 6899 | 6889 | buffered | 1 accounts |
+| 24x2 | confidential entry | full+data+reply | 24 | sol | 2 | 2 | 64 | 4 | 6935 | 6925 | buffered | 1 accounts |
+| 24x2 | confidential entry | full+data+reply | 28 | sol | none | - | - | - | - | - | no | 3 accounts |
+| 24x2 | confidential entry | min | 0 | spl | 12 | 12 | 44 | 12 | 6468 | 6504 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 1 | spl | 12 | 12 | 49 | 12 | 6478 | 6514 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 4 | spl | 12 | 12 | 56 | 12 | 6508 | 6544 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 8 | spl | 12 | 12 | 60 | 12 | 6548 | 6584 | buffered | 1 signatures |
+| 24x2 | confidential entry | min | 12 | spl | 12 | 12 | 64 | 12 | 6588 | 6624 | buffered | 1 accounts, 1 signatures |
+| 24x2 | confidential entry | min | 16 | spl | 8 | 8 | 64 | 8 | 6628 | 6664 | buffered | 1 accounts |
+| 24x2 | confidential entry | min | 20 | spl | 4 | 4 | 64 | 4 | 6668 | 6704 | buffered | 1 accounts |
+| 24x2 | confidential entry | min | 24 | spl | none | - | - | - | - | - | no | 1 accounts |
+| 24x2 | confidential entry | full | 0 | spl | 10 | 10 | 47 | 12 | 6519 | 6513 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 1 | spl | 10 | 10 | 52 | 12 | 6561 | 6523 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 4 | spl | 10 | 10 | 59 | 12 | 6687 | 6553 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 8 | spl | 10 | 10 | 63 | 12 | 6855 | 6593 | buffered | 1 signatures |
+| 24x2 | confidential entry | full | 12 | spl | 7 | 7 | 64 | 9 | 7023 | 6633 | buffered | 1 accounts |
+| 24x2 | confidential entry | full | 16 | spl | 3 | 3 | 64 | 5 | 7191 | 6673 | buffered | 1 accounts |
+| 24x2 | confidential entry | full | 20 | spl | none | - | - | - | - | - | no | 2 accounts |
+| 24x2 | confidential entry | full+data+reply | 0 | spl | 10 | 10 | 47 | 12 | 6719 | 6709 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 1 | spl | 10 | 10 | 52 | 12 | 6761 | 6719 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 4 | spl | 10 | 10 | 59 | 12 | 6887 | 6749 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 8 | spl | 10 | 10 | 63 | 12 | 7055 | 6789 | buffered | 1 signatures |
+| 24x2 | confidential entry | full+data+reply | 12 | spl | 7 | 7 | 64 | 9 | 7223 | 6829 | buffered | 1 accounts |
+| 24x2 | confidential entry | full+data+reply | 16 | spl | 3 | 3 | 64 | 5 | 7391 | 6869 | buffered | 1 accounts |
+| 24x2 | confidential entry | full+data+reply | 20 | spl | none | - | - | - | - | - | no | 2 accounts |
+| 24x2 | anonymous entry | min | 0 | sol | 11 | 12 | 44 | 12 | 6668 | 6703 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 1 | sol | 11 | 12 | 46 | 12 | 6677 | 6712 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 4 | sol | 11 | 12 | 46 | 12 | 6704 | 6739 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 8 | sol | 11 | 12 | 46 | 12 | 6740 | 6775 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 12 | sol | 11 | 12 | 46 | 12 | 6776 | 6811 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 16 | sol | 11 | 12 | 46 | 12 | 6812 | 6847 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 20 | sol | 11 | 12 | 46 | 12 | 6848 | 6883 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 24 | sol | 11 | 12 | 46 | 12 | 6884 | 6919 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 28 | sol | 11 | 12 | 46 | 12 | 6920 | 6955 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 32 | sol | 11 | 12 | 46 | 12 | 6956 | 6991 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 0 | sol | 10 | 11 | 47 | 12 | 6791 | 6794 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 1 | sol | 10 | 11 | 49 | 12 | 6800 | 6803 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 4 | sol | 10 | 11 | 49 | 12 | 6827 | 6830 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 8 | sol | 10 | 11 | 49 | 12 | 6863 | 6866 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 12 | sol | 10 | 11 | 49 | 12 | 6899 | 6902 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 16 | sol | 10 | 11 | 49 | 12 | 6935 | 6938 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 20 | sol | 10 | 11 | 49 | 12 | 6971 | 6974 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 24 | sol | 10 | 11 | 49 | 12 | 7007 | 7010 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 28 | sol | 10 | 11 | 49 | 12 | 7043 | 7046 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 32 | sol | 10 | 11 | 49 | 12 | 7079 | 7082 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 0 | sol | 10 | 11 | 47 | 12 | 7090 | 7087 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 1 | sol | 10 | 11 | 49 | 12 | 7099 | 7096 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 4 | sol | 10 | 11 | 49 | 12 | 7126 | 7123 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 8 | sol | 10 | 11 | 49 | 12 | 7162 | 7159 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 12 | sol | 10 | 11 | 49 | 12 | 7198 | 7195 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 16 | sol | 10 | 11 | 49 | 12 | 7234 | 7231 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 20 | sol | 10 | 11 | 49 | 12 | 7270 | 7267 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 24 | sol | 10 | 11 | 49 | 12 | 7306 | 7303 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 28 | sol | 10 | 11 | 49 | 12 | 7342 | 7339 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 32 | sol | 10 | 11 | 49 | 12 | 7378 | 7375 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 0 | spl | 11 | 12 | 44 | 12 | 6668 | 6703 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 1 | spl | 11 | 12 | 49 | 12 | 6678 | 6713 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 4 | spl | 11 | 12 | 53 | 12 | 6708 | 6743 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 8 | spl | 11 | 12 | 53 | 12 | 6748 | 6783 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 12 | spl | 11 | 12 | 53 | 12 | 6788 | 6823 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 16 | spl | 11 | 12 | 53 | 12 | 6828 | 6863 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 20 | spl | 11 | 12 | 53 | 12 | 6868 | 6903 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 24 | spl | 11 | 12 | 53 | 12 | 6908 | 6943 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 28 | spl | 11 | 12 | 53 | 12 | 6948 | 6983 | buffered | 1 signatures |
+| 24x2 | anonymous entry | min | 32 | spl | 11 | 12 | 53 | 12 | 6988 | 7023 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 0 | spl | 10 | 11 | 47 | 12 | 6791 | 6794 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 1 | spl | 10 | 11 | 52 | 12 | 6833 | 6804 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 4 | spl | 10 | 11 | 56 | 12 | 6959 | 6834 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 8 | spl | 10 | 11 | 56 | 12 | 7127 | 6874 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 12 | spl | 10 | 11 | 56 | 12 | 7295 | 6914 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 16 | spl | 10 | 11 | 56 | 12 | 7463 | 6954 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 20 | spl | 10 | 11 | 56 | 12 | 7631 | 6994 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 24 | spl | 10 | 11 | 56 | 12 | 7799 | 7034 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 28 | spl | 10 | 11 | 56 | 12 | 7967 | 7074 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full | 32 | spl | 10 | 11 | 56 | 12 | 8135 | 7114 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 0 | spl | 10 | 11 | 47 | 12 | 7090 | 7087 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 1 | spl | 10 | 11 | 52 | 12 | 7132 | 7097 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 4 | spl | 10 | 11 | 56 | 12 | 7258 | 7127 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 8 | spl | 10 | 11 | 56 | 12 | 7426 | 7167 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 12 | spl | 10 | 11 | 56 | 12 | 7594 | 7207 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 16 | spl | 10 | 11 | 56 | 12 | 7762 | 7247 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 20 | spl | 10 | 11 | 56 | 12 | 7930 | 7287 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 24 | spl | 10 | 11 | 56 | 12 | 8098 | 7327 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 28 | spl | 10 | 11 | 56 | 12 | 8266 | 7367 | buffered | 1 signatures |
+| 24x2 | anonymous entry | full+data+reply | 32 | spl | 10 | 11 | 56 | 12 | 8434 | 7407 | buffered | 1 signatures |

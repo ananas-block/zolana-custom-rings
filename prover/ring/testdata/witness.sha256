@@ -17,4 +17,6 @@ b2fe9054eb0974a3f48ae10470608b091a654dd77184e432877014e3a9b80360  custom-ring-tr
 1f8c39915049f995dd742a3e85e2f57a2240d9b72505f1a87edc8a6e45555777  rust/custom-ring-transfer-2-in24-w4-s4.json
 2deba0743e97a6cd880169baee1938503db9923d4e06901e9d9e2558ab3b59a7  rust/custom-ring-transfer-anonymous-exit.json
 d312e3ddf23aeb604624f48f3c803efe84426da0faaaaabf04e0c790b8667c27  rust/custom-ring-transfer-confidential-in-proof.json
+4f1e73bb5c00d1380791fa08b899f34fe8ba9823901ee543b19df63b3a361a3c  rust/custom-ring-transfer-relayed-wide-data.json
+79e5c13d140cd63eceacd964f3d8ef128403b0f8cbc9dfdc0503a37b76ee84ba  rust/custom-ring-transfer-wide-data.json
 edf4f42495983ff0e47849af447f7ac9900693c8eeebd78ce7d8723974c78a17  rust/custom-ring-transfer-wide-owners.json

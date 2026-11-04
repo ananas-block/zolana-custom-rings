@@ -68,11 +68,11 @@ const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferS
 /// Mirror `ownerAddresses`.
 const OWNER_ADDRESSES: usize = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - RING_ADDRESSES;
 
-const fn entry(outputs: u8, inputs: u8, owners: u8) -> TransferShape {
+const fn entry(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
     TransferShape {
         outputs,
         inputs,
-        withdrawals: 4,
+        withdrawals,
         owners,
         entry: true,
         wide: true,
@@ -89,9 +89,11 @@ const NARROW_SHAPES: [TransferShape; 4] = [
 /// The wide flag takes the first row holding the frame, the last only past 24 inputs.
 const WIDE_SHAPES: [TransferShape; 3] =
     [wide(8, 24, 32, 24), wide(16, 5, 8, 5), wide(2, 49, 4, 12)];
-const ENTRY_SHAPES: [TransferShape; 2] = [entry(4, 8, 8), entry(8, 2, 2)];
+const ENTRY_SHAPES: [TransferShape; 2] = [entry(4, 8, 4, 8), entry(8, 2, 4, 2)];
+/// Sized by the entry table of `ring-frame-fit.md`.
+const WIDE_ENTRY_SHAPE: TransferShape = entry(2, 24, 32, 12);
 
-pub const TRANSFER_SHAPES: [TransferShape; 9] = [
+pub const TRANSFER_SHAPES: [TransferShape; 10] = [
     NARROW_SHAPES[0],
     NARROW_SHAPES[1],
     NARROW_SHAPES[2],
@@ -101,6 +103,7 @@ pub const TRANSFER_SHAPES: [TransferShape; 9] = [
     WIDE_SHAPES[2],
     ENTRY_SHAPES[0],
     ENTRY_SHAPES[1],
+    WIDE_ENTRY_SHAPE,
 ];
 
 /// What names a frame's key, nothing else moves a record's counter.
@@ -125,7 +128,8 @@ impl FrameKey {
             return None;
         }
         match (self.spends_default_ring, self.wide) {
-            (true, _) => ENTRY_SHAPES.into_iter().find(holds),
+            (true, false) => ENTRY_SHAPES.into_iter().find(holds),
+            (true, true) => Some(WIDE_ENTRY_SHAPE).filter(holds),
             (false, true) => WIDE_SHAPES.into_iter().find(holds),
             (false, false) => NARROW_SHAPES.into_iter().find(holds),
         }
@@ -521,6 +525,39 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_past_the_small_keys_fits_the_wide_entry_key() {
+        let entered = |inputs, outputs, legs, owners| {
+            RingCircuit::transfer(
+                TransferSpend {
+                    inputs,
+                    legs,
+                    owners,
+                    ..spend(RingRail::Anonymous, outputs, true, false)
+                }
+                .fitted(),
+            )
+        };
+        let wide_entry = Some(entry(2, 24, 32, 12).circuit());
+        assert_eq!(entered(8, 2, 4, 8), Some(entry(4, 8, 4, 8).circuit()));
+        assert_eq!(entered(2, 8, 4, 2), Some(entry(8, 2, 4, 2).circuit()));
+        assert_eq!(entered(9, 2, 0, 1), wide_entry);
+        assert_eq!(entered(24, 2, 32, 12), wide_entry);
+        assert_eq!(entered(1, 2, 5, 1), wide_entry);
+        assert_eq!(entered(25, 2, 0, 1), None);
+        assert_eq!(entered(9, 4, 0, 1), None);
+        assert_eq!(entered(9, 2, 33, 1), None);
+        assert_eq!(entered(9, 2, 0, 13), None);
+        assert_eq!(
+            wide_entry.and_then(RingCircuit::record_pools),
+            Some(RecordPools {
+                own: 95,
+                curator: 95,
+                tracking: 45
+            })
+        );
+    }
+
+    #[test]
     fn a_spend_past_its_key_is_unkeyed() {
         let past = |inputs, legs, owners, wide| {
             RingCircuit::transfer(TransferSpend {
@@ -568,12 +605,12 @@ mod tests {
                 ..spend(rail, outputs, true, false)
             })
         };
-        let first = Some(entry(4, 8, 8).circuit());
+        let first = Some(entry(4, 8, 4, 8).circuit());
         assert_eq!(entered(RingRail::Confidential, 2, 8, 8), first);
         assert_eq!(entered(RingRail::Anonymous, 4, 1, 1), first);
         assert_eq!(
             entered(RingRail::Anonymous, 8, 2, 2),
-            Some(entry(8, 2, 2).circuit())
+            Some(entry(8, 2, 4, 2).circuit())
         );
         assert_eq!(entered(RingRail::Anonymous, 8, 3, 1), None);
         assert_eq!(entered(RingRail::Delegate, 2, 1, 1), None);
@@ -610,8 +647,8 @@ mod tests {
         assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (113, 113, 51));
         assert_eq!(pools(transfer(16, 5, 8, 5)), (48, 48, 21));
         assert_eq!(pools(wide(16, 5, 8, 5).circuit()), (77, 77, 29));
-        assert_eq!(pools(entry(4, 8, 8).circuit()), (39, 39, 16));
-        assert_eq!(pools(entry(8, 2, 2).circuit()), (39, 39, 14));
+        assert_eq!(pools(entry(4, 8, 4, 8).circuit()), (39, 39, 16));
+        assert_eq!(pools(entry(8, 2, 4, 2).circuit()), (39, 39, 14));
     }
 
     #[test]

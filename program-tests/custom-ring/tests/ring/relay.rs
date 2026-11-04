@@ -188,7 +188,7 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
             delegate: delegate.pubkey(),
             transfer: transfer.clone(),
         })
-        .sign(&delegate)?;
+        .sign(&delegate, &spr_keypair::ViewingKey::new())?;
         let prepared = PreparedAuthorityTransfer::new(request, &quote, &config)?;
         Ok(match env.run(prepared.send(&ring_rpc.relay)) {
             Ok(RelaySent::SignMessage(pending)) => Probe::Ready(pending),

@@ -142,6 +142,7 @@ impl AuthorityTransferRequest {
     pub fn sign<S: Signer + ?Sized>(
         self,
         delegate: &S,
+        tx_viewing_key: &ViewingKey,
     ) -> Result<PrepareAuthorityTransferRequest, RequestBuildError> {
         let (timestamp, message) = self.message()?;
         let signature = delegate
@@ -151,7 +152,7 @@ impl AuthorityTransferRequest {
             ring: self.attestation.target.ring.into(),
             delegate: self.attestation.delegate.into(),
             transfer: self.attestation.transfer,
-            tx_viewing_key: TxViewingSecret::from(&ViewingKey::new()),
+            tx_viewing_key: TxViewingSecret::from(tx_viewing_key),
             timestamp,
             nonce: self.nonce.to_vec().into(),
             signature: signature.into(),

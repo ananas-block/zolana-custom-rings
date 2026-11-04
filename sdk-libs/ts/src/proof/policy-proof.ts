@@ -190,7 +190,7 @@ export function policyLegs(
 }
 
 /** Rust `RootRead::transfer` is not `None`. */
-function readsPolicyRoot(
+export function readsPolicyRoot(
   config: Pick<RingPolicy, "records" | "hasPolicy">,
   rail: RingRail,
 ): boolean {

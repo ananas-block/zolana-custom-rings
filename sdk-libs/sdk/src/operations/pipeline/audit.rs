@@ -31,6 +31,8 @@ pub(crate) struct SealedAudit {
 
 pub(crate) struct PresealedAudit {
     pub message: MessageData,
+    /// The owner sealed under the wide key.
+    pub wide_owners: bool,
 }
 
 pub(super) struct AuditSeal<'a> {
@@ -149,7 +151,7 @@ pub(super) fn audit_record(output: &SppProofOutputUtxo) -> Result<AuditRecord, R
     })
 }
 
-fn data_tail(output: &SppProofOutputUtxo) -> DataTail {
+pub(super) fn data_tail(output: &SppProofOutputUtxo) -> DataTail {
     match output.is_dummy() {
         true => DataTail::default(),
         false => DataTail {
