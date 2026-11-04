@@ -28,7 +28,7 @@ pub struct Fixture {
     pub tails: [[u8; DATA_TAIL_LEN]; 16],
     /// Cut to the stream layout's envelope length.
     pub envelope: Vec<u8>,
-    pub tags: [[u8; 32]; 8],
+    pub tags: [[u8; 32]; 16],
     pub recipient_body: [u8; RECIPIENT_BODY_LEN],
     /// A body past the plain head, a data-bearing frame's.
     pub extended_body: [u8; RECIPIENT_BODY_LEN + 33],

@@ -4,7 +4,6 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -21,29 +20,29 @@ const (
 // Confidential is one transfer of the confidential family.
 type Confidential struct {
 	World
-	Shape transfer.ConfidentialShape
+	Shape transfer.Shape
 	Rail  Rail
 }
 
 // Built is a confidential witness with the fixtures it was derived from.
 type Built struct {
 	Assembled
-	Circuit *transfer.ConfidentialTransferCircuit
+	Circuit *transfer.TransferCircuit
 	World   Confidential
 }
 
 // Signed is a policy ring transfer on the signer rail of shape.
-func Signed(shape transfer.ConfidentialShape) Confidential {
+func Signed(shape transfer.Shape) Confidential {
 	return Confidential{Shape: shape, Rail: Signer, World: World{Policy: Policy{Screened: true, Cap: 1_000_000, CosignAbove: 500_000, WithdrawalThreshold: 100_000}}}
 }
 
 func (w Confidential) Build(t testing.TB) Built {
 	t.Helper()
-	c, err := transfer.NewConfidentialTransferCircuit(w.Shape)
+	c, err := transfer.NewTransferCircuit(w.Shape)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := w.newAudit(t, audit.StreamShape{InputClass: w.Shape.Inputs, Outputs: w.Shape.Outputs, Entry: w.Shape.Entry, Data: w.Shape.Data})
+	a := w.newAudit(t, w.Shape.Stream())
 	sender := Sender(t)
 	var run []*big.Int
 	switch w.Rail {
@@ -52,7 +51,10 @@ func (w Confidential) Build(t testing.TB) Built {
 	case InProof:
 		run = w.CoOwners
 	}
-	c.InProof, c.Delegate, c.Sender = ringtest.Bit(w.Rail == InProof), ringtest.Bit(w.Rail == Delegate), 0
+	c.InProof, c.Hidden, c.Delegate, c.Sender = ringtest.Bit(w.Rail == InProof), 0, ringtest.Bit(w.Rail == Delegate), 0
+	for i := range c.PartyIdentities {
+		c.PartyIdentities[i] = 0
+	}
 	if w.Rail == InProof {
 		c.Sender = sender
 	}
@@ -90,9 +92,5 @@ func (b Built) Statement(t testing.TB) []*big.Int {
 // Values is what the program holds for the statement.
 func (b Built) Values(t testing.TB) Statement {
 	t.Helper()
-	c := b.Circuit
-	s := values(t, &c.Sections, b.Assembled)
-	s.RailBits = [2]bool{ringtest.AsBigInt(c.InProof).Sign() != 0, ringtest.AsBigInt(c.Delegate).Sign() != 0}
-	s.Cells = []*big.Int{ringtest.AsBigInt(c.Sender)}
-	return s
+	return railValues(t, b.Circuit, b.Assembled)
 }
