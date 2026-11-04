@@ -16,7 +16,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// The tree shape mirrors TRACKING_QUAD_HEIGHT in program-libs/interface/src/accounts/tracking.rs, enrollment is permissionless so the tree outgrows the policy registry.
+// The tree shape mirrors TRACKING_QUAD_HEIGHT in program-libs/interface/src/accounts/tracking.rs.
 const (
 	TrackingHeight    = 13
 	TrackingIndexBits = 2 * TrackingHeight
@@ -72,7 +72,7 @@ type TrackingRow struct {
 
 // Resolve binds the opening to root while the boolean cond is set.
 func (o TrackingOpening) Resolve(api frontend.API, cond, root, member frontend.Variable) TrackingRow {
-	// 1. Present is boolean, a fraction would pass both branches below.
+	// 1. Present selects exactly one branch below and keeps the row whole or zero.
 	api.AssertIsBoolean(o.Present)
 	present := api.Mul(cond, o.Present)
 	// 2. A present owner's leaf names it, an absent owner lies strictly inside the opened leaf's link.

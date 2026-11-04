@@ -86,7 +86,6 @@ func TestApplyEnrollmentsAppliesEntriesInNamedOrder(t *testing.T) {
 	if !alice.Present || alice.Record.Revision.Int64() != 3 || alice.Record.NullifierPk.Int64() != 0xa0 {
 		t.Fatalf("alice after two rotations: %+v", alice.Record)
 	}
-	// Names in any order, one entry alone, each batch solves.
 	for _, n := range registry.ApplyWidths {
 		one := applyEnrollments(t, tree, n, big.NewInt(1), trackingEntry(int64(0x1000+n), 1, int64(0xe000+n)))
 		if err := solveEnrollments(t, one.circuit); err != nil {
@@ -205,7 +204,6 @@ func TestApplyEnrollmentsRefusals(t *testing.T) {
 	}
 }
 
-// A full tree has no index for a new leaf, an enrolled owner still rotates.
 func TestApplyEnrollmentsAtCapacity(t *testing.T) {
 	capacity := big.NewInt(registry.TrackingCapacity)
 	t.Run("a new enrollment fails", func(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 )
 
-// quadTree is the sparse 4-ary Poseidon tree both registries fold.
 type quadTree struct {
 	nodes []map[uint64]*big.Int
 	empty []*big.Int
