@@ -1,11 +1,10 @@
-//! The UTXOs a ring's auditor opened and the nullifier keys its registry escrows.
+//! The notes a ring's auditor opened, their nullifiers, and the keys its registry tracks.
 
 use std::{
-    borrow::Borrow,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{
         atomic::{AtomicBool, Ordering},
-        PoisonError, RwLock, RwLockReadGuard,
+        PoisonError, RwLock,
     },
     time::Duration,
 };
@@ -13,134 +12,120 @@ use std::{
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_indexer_api::{Context, Hash};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{NullifierKey, PublicKey};
 use spr_transaction::{Data, Mint, Utxo, WalletUtxo};
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_client::{
     history::HistoryPosition,
     rpc::{
-        AuditedUtxoView, Coverage, UnresolvedHistory, UnresolvedReason, UnspentUtxoKind,
-        UnspentUtxoView,
+        AuditedUtxoView, DecryptedInput, GetSpendCoverageResponse, GetWalletStatusResponse,
+        InputParty, SpendCoverageFrame, SpendCoverageRow, WalletBalance, WalletNote,
+        WalletNoteStatus,
     },
-    AuditedMergeOutput, AuditedOutput, ConfirmedMerge, CreatedUtxo, DepositNote, DepositOwner,
-    DepositOwners, EscrowedKeys, KnownUtxo, KnownUtxoIndex, KnownUtxos, MergeInput, MergeLedger,
-    OutputResolution, SealedNullifierKey, UnresolvedOutput, UtxoOwner,
+    AuditedMergeOutput, ConfirmedMerge, CreatedUtxo, DepositOwner, DepositOwners, EscrowedKeys,
+    KnownUtxo, KnownUtxos, SealedNullifierKey, UtxoOwner,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::{historical::InputPrefix, RingAssets};
 
-use crate::{error::RingRpcError, spent_index::SpentCommitment};
+use crate::{
+    error::RingRpcError,
+    spend_machine::{NoteRead, Observation, SpendRow, SpendState, Transition},
+    spent_index::{Checkpoint, LoadedSpends, SpentCommitment},
+};
 
 pub const UTXO_BACKFILL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Pages one backfill run reads, the next run resumes from its position.
 pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 
-/// The guards are never held across an await, the audit reads them synchronously.
+/// The guards are never held across an await, a commit writes the mirror after its transaction.
 #[derive(Default)]
 pub(crate) struct AuditStore {
-    utxos: RwLock<KnownUtxoIndex<StoredUtxo>>,
-    escrow: RwLock<EscrowMap>,
-    /// Notes by commitment that wait for an escrow key or a mint.
-    held: RwLock<HashMap<[u8; 32], (CreatedIn, HeldNote)>>,
-    /// The registry last tried on the held notes, a different one retries them.
+    book: RwLock<SpendBook>,
+    tracked: RwLock<TrackedKeys>,
+    /// The registry last named on the notes, a different one names them again.
     assets: RwLock<Option<RingAssets>>,
-    /// Only finalized ring events contribute nullifiers.
-    spent: RwLock<HashSet<[u8; 32]>>,
-    /// Mirrors `finalized_spent_commitments`.
-    spent_commitments: RwLock<HashMap<[u8; 32], SpentCommitment>>,
-    merges: RwLock<MergeLedger>,
-    /// Rows whose evidence the auditor could not name, kept until each input opens.
-    history: RwLock<BTreeMap<EventKey, UnnamedSpend>>,
-    /// Notes of one record member, ordered by commitment for the unspent cursor.
-    owned: RwLock<HashMap<[u8; 32], BTreeSet<[u8; 32]>>>,
-    coverage: RwLock<CoverageStart>,
-    /// The context of the backfill's newest terminal page.
-    context: RwLock<Context>,
-    /// Set once the spent mirror holds the table's rows.
-    spent_seeded: AtomicBool,
-    /// One backfill and escrow refresh at a time, a restart loses the position with the held notes and replays the history.
+    /// Owners whose key arrived, kept until a committed page derived their notes.
+    late_owners: RwLock<BTreeSet<[u8; 32]>>,
+    /// Set once the book holds the table's rows.
+    loaded: AtomicBool,
+    /// One backfill and escrow refresh at a time.
     pub(crate) backfill: AsyncMutex<HistoryPosition>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
+struct SpendBook {
+    notes: HashMap<[u8; 32], StoredUtxo>,
+    /// The note index, a late secret fills it for that owner's notes.
+    by_nullifier: HashMap<[u8; 32], [u8; 32]>,
+    /// An unresolved row whose frame names a commitment, by that commitment.
+    awaiting: HashMap<[u8; 32], [u8; 32]>,
+    owned: HashMap<[u8; 32], BTreeSet<[u8; 32]>>,
+    rows: HashMap<[u8; 32], SpendRow>,
+    unread: BTreeSet<CreatedIn>,
+    faults: Vec<SpendRow>,
+    historical: HashMap<[u8; 32], SpentCommitment>,
+    context: Context,
+    position_slot: Option<u64>,
+}
+
+/// What one page changes, the mirror takes it after its database transaction commits.
+#[derive(Default)]
+pub(crate) struct PageDelta {
+    notes: BTreeMap<[u8; 32], StoredUtxo>,
+    by_nullifier: HashMap<[u8; 32], [u8; 32]>,
+    rows: BTreeMap<[u8; 32], SpendRow>,
+    unread: BTreeSet<CreatedIn>,
+    read: BTreeSet<CreatedIn>,
+    faults: Vec<SpendRow>,
+    historical: Vec<SpentCommitment>,
+    checkpoint: Option<Checkpoint>,
+    late_owners: Vec<[u8; 32]>,
+}
+
+/// A page's overlay on the book, a later row reads what an earlier row opened.
+#[must_use]
+pub(crate) struct PageWork<'a> {
+    store: &'a AuditStore,
+    delta: PageDelta,
+    /// Read to derive and dropped with the page, never persisted.
+    keys: HashMap<[u8; 32], Option<NullifierKey>>,
+    opener: &'a (dyn Fn(&[u8; 32]) -> Option<NullifierKey> + Sync),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct CreatedIn {
     pub slot: u64,
     pub tx_signature: Signature,
     pub event_index: u16,
 }
 
-type EventKey = (u64, Signature, u16);
-
-/// One row with inputs the auditor has not named, permanent on a reason with no input list.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct UnnamedSpend {
-    pub reason: UnresolvedReason,
-    pub inputs: Vec<[u8; 32]>,
-}
-
-impl UnnamedSpend {
-    pub(crate) const fn of(reason: UnresolvedReason) -> Self {
-        Self {
-            reason,
-            inputs: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct CoverageStart {
-    oldest_row: Option<u64>,
-    newest_historical: Option<u64>,
-    /// The newest backfill pass failed or hit its page cap, cleared at the next terminal page.
-    pass_unfinished: bool,
-}
-
-/// One page of `getUnspentUtxos`, every note listed only as not seen spent.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct UnspentPage {
-    pub utxos: Vec<UnspentUtxoView>,
-    pub coverage: Coverage,
-    pub unresolved: Vec<UnresolvedHistory>,
-    pub cursor: Option<[u8; 32]>,
-}
-
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct UnspentQuery<'a> {
-    pub owner: &'a [u8; 32],
+pub(crate) struct WalletStatusQuery {
+    pub wallet: Address,
     pub after: Option<[u8; 32]>,
     pub limit: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EscrowRoot {
+pub(crate) struct TrackingRoot {
     pub registry: Address,
     pub root: [u8; 32],
     pub revision: u64,
 }
 
-impl EscrowRoot {
+impl TrackingRoot {
     /// A lagging RPC node answers an older root, revisions order one registry alone.
-    pub(crate) fn settles(&self, read: &EscrowRoot) -> bool {
+    pub(crate) fn settles(&self, read: &TrackingRoot) -> bool {
         self.registry == read.registry && (self.root == read.root || read.revision < self.revision)
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum HeldNote {
-    Deposit(DepositNote),
-    Output(UnresolvedOutput),
-}
-
-enum HeldOpening {
-    Waits,
-    Opened(Box<CreatedUtxo>),
-    Refused,
-}
-
-/// Verified under the registry root.
+/// Verified under the tracking root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EscrowedOwner {
+pub(crate) struct TrackedOwner {
     pub owner_key: [u8; 32],
     pub nullifier_pk: [u8; 32],
     pub owner_hash: [u8; 32],
@@ -157,38 +142,213 @@ pub(crate) struct SpendableNotes<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StoredUtxo {
-    utxo: KnownUtxo,
-    created_in: CreatedIn,
-    slot_index: u32,
-    leaf_index: u64,
+    pub utxo: KnownUtxo,
+    pub created_in: CreatedIn,
+    pub slot_index: u32,
+    pub leaf_index: u64,
+    /// False on an exit, its note leaves the ring.
+    pub ring_note: bool,
+    /// `None` until the owner's secret or a frame's evidence names it.
+    pub nullifier: Option<[u8; 32]>,
 }
 
 #[derive(Default)]
-struct EscrowMap {
-    root: Option<EscrowRoot>,
-    keys: HashMap<[u8; 32], EscrowedOwner>,
+struct TrackedKeys {
+    root: Option<TrackingRoot>,
+    keys: HashMap<[u8; 32], TrackedOwner>,
     /// Owner hash to owner key, over the owners of `keys`.
     owner_keys: HashMap<[u8; 32], [u8; 32]>,
 }
 
-impl AuditStore {
-    pub(crate) fn record(
-        &self,
+impl SpendBook {
+    fn absorb(&mut self, delta: PageDelta) {
+        for (commitment, note) in delta.notes {
+            if note.ring_note {
+                if let Ok(member) = Member::owner_tag(&note.utxo.owner_key) {
+                    self.owned
+                        .entry(*member.as_bytes())
+                        .or_default()
+                        .insert(commitment);
+                }
+            }
+            self.notes.insert(commitment, note);
+        }
+        self.by_nullifier.extend(delta.by_nullifier);
+        for (nullifier, row) in delta.rows {
+            match row.state {
+                SpendState::UnresolvedReal {
+                    evidence: Some(commitment),
+                } => {
+                    self.awaiting.insert(commitment, nullifier);
+                }
+                SpendState::Resolved { note } => {
+                    self.awaiting.remove(&note);
+                }
+                _ => {}
+            }
+            self.rows.insert(nullifier, row);
+        }
+        for frame in delta.read {
+            self.unread.remove(&frame);
+        }
+        self.unread.extend(delta.unread);
+        for fault in delta.faults {
+            if !self.faults.contains(&fault) {
+                self.faults.push(fault);
+            }
+        }
+        for row in delta.historical {
+            self.historical.entry(row.utxo_hash).or_insert(row);
+        }
+        if let Some(checkpoint) = delta.checkpoint {
+            self.position_slot = checkpoint.position.checkpoint();
+            if checkpoint.through.slot >= self.context.slot {
+                self.context = checkpoint.through;
+            }
+        }
+    }
+
+    /// Only an unreadable frame holds the claim back, an unresolved row never does.
+    fn history_through(&self) -> u64 {
+        self.unread.first().map_or(self.context.slot, |frame| {
+            self.context.slot.min(frame.slot.saturating_sub(1))
+        })
+    }
+
+    fn spent_at(&self, commitment: &[u8; 32], note: &StoredUtxo) -> Option<u64> {
+        let row = note
+            .nullifier
+            .and_then(|nullifier| self.rows.get(&nullifier));
+        row.map(|row| row.frame.slot)
+            .or_else(|| self.historical.get(commitment).map(|row| row.slot))
+    }
+
+    /// Reads one note's own nullifier and no other row.
+    fn status(&self, commitment: &[u8; 32], note: &StoredUtxo, through: u64) -> WalletNoteStatus {
+        NoteRead {
+            nullifier_known: note.nullifier.is_some(),
+            spent_at: self.spent_at(commitment, note),
+            zero_key_wallet: note.utxo.owner.nullifier_pk() == Some(ZERO_NULLIFIER_PUBKEY)
+                && Address::new_from_array(note.utxo.owner_key).is_on_curve(),
+            history_through: through,
+        }
+        .status()
+    }
+}
+
+impl PageDelta {
+    pub(crate) fn notes(&self) -> impl Iterator<Item = (&[u8; 32], &StoredUtxo)> {
+        self.notes.iter()
+    }
+
+    pub(crate) fn rows(&self) -> impl Iterator<Item = &SpendRow> {
+        self.rows.values()
+    }
+
+    pub(crate) fn faults(&self) -> &[SpendRow] {
+        &self.faults
+    }
+
+    pub(crate) fn read_frames(&self) -> impl Iterator<Item = &CreatedIn> {
+        self.read.iter()
+    }
+
+    pub(crate) fn unread_frames(&self) -> impl Iterator<Item = &CreatedIn> {
+        self.unread.iter()
+    }
+
+    pub(crate) fn historical(&self) -> &[SpentCommitment] {
+        &self.historical
+    }
+
+    pub(crate) const fn checkpoint(&self) -> Option<&Checkpoint> {
+        self.checkpoint.as_ref()
+    }
+}
+
+impl<'a> PageWork<'a> {
+    pub(crate) fn new(
+        store: &'a AuditStore,
+        opener: &'a (dyn Fn(&[u8; 32]) -> Option<NullifierKey> + Sync),
+    ) -> Self {
+        Self {
+            store,
+            delta: PageDelta::default(),
+            keys: HashMap::new(),
+            opener,
+        }
+    }
+
+    pub(crate) fn note(&self, commitment: &[u8; 32]) -> Option<StoredUtxo> {
+        self.delta
+            .notes
+            .get(commitment)
+            .copied()
+            .or_else(|| self.store.read_book().notes.get(commitment).copied())
+    }
+
+    pub(crate) fn note_of_nullifier(&self, nullifier: &[u8; 32]) -> Option<[u8; 32]> {
+        self.delta
+            .by_nullifier
+            .get(nullifier)
+            .copied()
+            .or_else(|| self.store.read_book().by_nullifier.get(nullifier).copied())
+    }
+
+    fn row(&self, nullifier: &[u8; 32]) -> Option<SpendRow> {
+        self.delta
+            .rows
+            .get(nullifier)
+            .copied()
+            .or_else(|| self.store.read_book().rows.get(nullifier).copied())
+    }
+
+    /// The zero key's secret is public, every other opens from the owner's tracked record.
+    fn key_of(&mut self, utxo: &KnownUtxo) -> Option<&NullifierKey> {
+        let nullifier_pk = utxo.owner.nullifier_pk()?;
+        if nullifier_pk == ZERO_NULLIFIER_PUBKEY {
+            return self
+                .keys
+                .entry(ZERO_NULLIFIER_PUBKEY)
+                .or_insert_with(|| Some(NullifierKey::from_secret([0; 31])))
+                .as_ref();
+        }
+        let opener = self.opener;
+        let key = self
+            .keys
+            .entry(utxo.owner_key)
+            .or_insert_with(|| opener(&utxo.owner_key));
+        key.as_ref().filter(|key| {
+            key.pubkey()
+                .is_ok_and(|registered| registered == nullifier_pk)
+        })
+    }
+
+    /// A later opening of a known commitment changes it only to name its mint.
+    pub(crate) fn open(
+        &mut self,
         created_in: CreatedIn,
         utxos: impl IntoIterator<Item = CreatedUtxo>,
     ) {
-        let assets = self.assets.read().unwrap_or_else(PoisonError::into_inner);
-        let mut stored = self.utxos.write().unwrap_or_else(PoisonError::into_inner);
+        let assets = self
+            .store
+            .assets
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         for created in utxos {
-            // A read under an older registry never unnames a stored note.
+            let held = self.note(&created.commitment);
             let mint = created
                 .utxo
                 .mint
-                .or_else(|| stored.get(&created.commitment)?.utxo.mint)
+                .or(held.and_then(|held| held.utxo.mint))
                 .or_else(|| Some(assets.as_ref()?.by_field(&created.utxo.asset)?.asset));
-            stored.insert(
-                created.commitment,
-                StoredUtxo {
+            let note = match held {
+                Some(held) => StoredUtxo {
+                    utxo: KnownUtxo { mint, ..held.utxo },
+                    ..held
+                },
+                None => StoredUtxo {
                     utxo: KnownUtxo {
                         mint,
                         ..created.utxo
@@ -196,36 +356,259 @@ impl AuditStore {
                     created_in,
                     slot_index: created.slot_index,
                     leaf_index: created.leaf_index,
+                    ring_note: created.ring_note,
+                    nullifier: None,
                 },
-            );
-            if created.ring_note {
-                self.own(&created.utxo.owner_key, created.commitment);
+            };
+            if held != Some(note) {
+                self.delta.notes.insert(created.commitment, note);
             }
+            self.derive(&created.commitment);
         }
-        drop(stored);
-        self.resolve_merges();
     }
 
-    /// Tries each note under the current keys and registry, a read's snapshot can be older.
-    pub(crate) fn hold(&self, created_in: CreatedIn, notes: impl IntoIterator<Item = HeldNote>) {
-        let mut opened = Vec::new();
-        {
-            let mut held = self.held.write().unwrap_or_else(PoisonError::into_inner);
-            let assets = self.assets.read().unwrap_or_else(PoisonError::into_inner);
-            for note in notes {
-                match note.open(self, assets.as_ref(), created_in) {
-                    HeldOpening::Waits => {
-                        held.insert(note.commitment(), (created_in, note));
+    /// Fills the index when the secret is readable, then moves the row it names.
+    fn derive(&mut self, commitment: &[u8; 32]) {
+        let Some(mut note) = self.note(commitment) else {
+            return;
+        };
+        if note.ring_note && note.nullifier.is_none() {
+            let blinding = note.utxo.blinding;
+            note.nullifier = self
+                .key_of(&note.utxo)
+                .and_then(|key| key.nullifier(commitment, &blinding).ok());
+            if note.nullifier.is_some() {
+                self.delta.notes.insert(*commitment, note);
+            }
+        }
+        if let Some(nullifier) = note.nullifier {
+            self.delta.by_nullifier.insert(nullifier, *commitment);
+            self.settle(&nullifier, commitment);
+            return;
+        }
+        let awaiting = self
+            .delta
+            .rows
+            .values()
+            .find(|row| {
+                row.state
+                    == SpendState::UnresolvedReal {
+                        evidence: Some(*commitment),
                     }
-                    HeldOpening::Opened(utxo) => opened.push(*utxo),
-                    HeldOpening::Refused => {}
-                }
-            }
+            })
+            .map(|row| row.nullifier)
+            .or_else(|| self.store.read_book().awaiting.get(commitment).copied());
+        if let Some(nullifier) = awaiting {
+            self.link(commitment, nullifier);
+            self.settle(&nullifier, commitment);
         }
-        self.record(created_in, opened);
     }
 
-    /// A different registry names the notes stored without a mint and retries the held ones.
+    fn link(&mut self, commitment: &[u8; 32], nullifier: [u8; 32]) {
+        if let Some(mut note) = self.note(commitment) {
+            if note.nullifier.is_none() {
+                note.nullifier = Some(nullifier);
+                self.delta.notes.insert(*commitment, note);
+            }
+        }
+        self.delta.by_nullifier.insert(nullifier, *commitment);
+    }
+
+    fn settle(&mut self, nullifier: &[u8; 32], commitment: &[u8; 32]) {
+        let Some(row) = self.row(nullifier) else {
+            return;
+        };
+        self.apply(row.opened(*commitment));
+    }
+
+    fn apply(&mut self, transition: Transition) {
+        match transition {
+            Transition::Unchanged => {}
+            Transition::Write(row) => {
+                self.delta.rows.insert(row.nullifier, row);
+            }
+            Transition::Integrity(row) => {
+                log::error!(
+                    "nullifier {} of {}:{} repeats a settled row",
+                    Hash(row.nullifier).to_base58(),
+                    row.frame.tx_signature,
+                    row.frame.event_index
+                );
+                self.delta.faults.push(row);
+            }
+        }
+    }
+
+    /// A frame's evidence wins over the index, which it also fills.
+    pub(crate) fn observe(&mut self, observation: Observation) {
+        use crate::spend_machine::InputRead;
+        let hit = match observation.read {
+            InputRead::Real {
+                evidence: Some(commitment),
+            } => match self.note(&commitment) {
+                Some(_) => {
+                    self.link(&commitment, observation.nullifier);
+                    Some(commitment)
+                }
+                None => self.note_of_nullifier(&observation.nullifier),
+            },
+            InputRead::Real { evidence: None } => self.note_of_nullifier(&observation.nullifier),
+            InputRead::Unreadable | InputRead::Padding | InputRead::External => None,
+        };
+        let existing = self.row(&observation.nullifier);
+        self.apply(Observation { hit, ..observation }.apply(existing.as_ref()));
+    }
+
+    /// Retries with every other frame the backfill keeps.
+    pub(crate) fn mark_unread(&mut self, frame: CreatedIn) {
+        self.delta.read.remove(&frame);
+        self.delta.unread.insert(frame);
+    }
+
+    pub(crate) fn mark_read(&mut self, frame: CreatedIn) {
+        if !self.delta.unread.contains(&frame) {
+            self.delta.read.insert(frame);
+        }
+    }
+
+    pub(crate) fn record_historical(&mut self, rows: Vec<SpentCommitment>) {
+        self.delta.historical.extend(rows);
+    }
+
+    /// A late key recomputes that owner's notes, a failed page leaves the owner to the next.
+    pub(crate) fn late_keys(&mut self) {
+        let owners: Vec<[u8; 32]> = self
+            .store
+            .late_owners
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .copied()
+            .collect();
+        let pending: Vec<[u8; 32]> = {
+            let book = self.store.read_book();
+            owners
+                .iter()
+                .filter_map(|owner| Member::owner_tag(owner).ok())
+                .filter_map(|member| book.owned.get(member.as_bytes()))
+                .flatten()
+                .filter(|commitment| {
+                    book.notes
+                        .get(*commitment)
+                        .is_some_and(|note| note.nullifier.is_none())
+                })
+                .copied()
+                .collect()
+        };
+        for commitment in pending {
+            self.derive(&commitment);
+        }
+        self.delta.late_owners = owners;
+    }
+
+    /// The owner's tracked key, dropped with the page.
+    pub(crate) fn open_key(&self, owner_key: &[u8; 32]) -> Option<NullifierKey> {
+        (self.opener)(owner_key)
+    }
+
+    /// The notes a version 2 prefix can name, under `owner` when the row binds one.
+    pub(crate) fn prefixed(&self, prefix: InputPrefix, owner: Option<[u8; 32]>) -> Vec<[u8; 32]> {
+        let named = |commitment: &[u8; 32], stored: &StoredUtxo| {
+            InputPrefix::of(commitment) == Some(prefix)
+                && owner.is_none_or(|owner| stored.utxo.owner_key == owner)
+        };
+        let mut found: BTreeSet<[u8; 32]> = self
+            .delta
+            .notes
+            .iter()
+            .filter(|(commitment, stored)| named(commitment, stored))
+            .map(|(commitment, _)| *commitment)
+            .collect();
+        found.extend(
+            self.store
+                .read_book()
+                .notes
+                .iter()
+                .filter(|(commitment, stored)| named(commitment, stored))
+                .map(|(commitment, _)| *commitment),
+        );
+        found.into_iter().collect()
+    }
+
+    /// Reads the next position with the terminal page's context, when the page ended the read.
+    pub(crate) fn checkpoint(&mut self, position: HistoryPosition, terminal: Option<Context>) {
+        let through = terminal.unwrap_or_else(|| self.store.context());
+        self.delta.checkpoint = Some(Checkpoint { position, through });
+    }
+
+    pub(crate) fn finish(self) -> PageDelta {
+        self.delta
+    }
+}
+
+impl AuditStore {
+    fn read_book(&self) -> std::sync::RwLockReadGuard<'_, SpendBook> {
+        self.book.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `true` once per store, the caller reads the tables into the book.
+    pub(crate) fn loads_tables(&self) -> bool {
+        !self.loaded.swap(true, Ordering::AcqRel)
+    }
+
+    pub(crate) fn seed(&self, loaded: LoadedSpends) {
+        let LoadedSpends {
+            checkpoint,
+            notes,
+            rows,
+            unread,
+            faults,
+        } = loaded;
+        let delta = PageDelta {
+            by_nullifier: notes
+                .iter()
+                .filter_map(|(commitment, note)| Some((note.nullifier?, *commitment)))
+                .collect(),
+            notes: notes.into_iter().collect(),
+            rows: rows.into_iter().map(|row| (row.nullifier, row)).collect(),
+            unread: unread.into_iter().collect(),
+            faults,
+            checkpoint: Some(checkpoint),
+            ..PageDelta::default()
+        };
+        self.book
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .absorb(delta);
+    }
+
+    pub(crate) fn seed_historical(&self, rows: Vec<SpentCommitment>) {
+        self.book
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .absorb(PageDelta {
+                historical: rows,
+                ..PageDelta::default()
+            });
+    }
+
+    /// Runs after the page's transaction commits, a crash before it replays the page.
+    pub(crate) fn commit(&self, delta: PageDelta) {
+        let mut late = self
+            .late_owners
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        for owner in &delta.late_owners {
+            late.remove(owner);
+        }
+        drop(late);
+        self.book
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .absorb(delta);
+    }
+
+    /// A different registry names the notes stored without a mint.
     pub(crate) fn name_assets(&self, assets: &RingAssets) {
         {
             let mut current = self.assets.write().unwrap_or_else(PoisonError::into_inner);
@@ -234,271 +617,122 @@ impl AuditStore {
             }
             *current = Some(assets.clone());
         }
-        {
-            let mut stored = self.utxos.write().unwrap_or_else(PoisonError::into_inner);
-            let named: Vec<_> = stored
-                .iter()
-                .filter(|(_, stored)| stored.utxo.mint.is_none())
-                .filter_map(|(commitment, stored)| {
-                    let mint = assets.by_field(&stored.utxo.asset)?;
-                    let utxo = KnownUtxo {
-                        mint: Some(mint.asset),
-                        ..stored.utxo
-                    };
-                    Some((*commitment, StoredUtxo { utxo, ..*stored }))
-                })
-                .collect();
-            stored.extend(named);
+        let mut book = self.book.write().unwrap_or_else(PoisonError::into_inner);
+        for note in book.notes.values_mut() {
+            if note.utxo.mint.is_none() {
+                note.utxo.mint = assets.by_field(&note.utxo.asset).map(|mint| mint.asset);
+            }
         }
-        self.merges
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .name_assets(assets);
-        self.open_held();
     }
 
-    /// Only a confirmed event's nullifiers enter, a note stays spendable past a rejected row.
-    pub(crate) fn spend(&self, nullifiers: impl IntoIterator<Item = [u8; 32]>) {
-        self.spent
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(nullifiers);
-    }
-
+    /// Any published row of this nullifier, reads no slot bound.
     pub(crate) fn is_spent(&self, nullifier: &[u8; 32]) -> bool {
-        self.spent
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(nullifier)
+        self.read_book().rows.contains_key(nullifier)
     }
 
-    /// The first event that names a commitment holds its row.
-    pub(crate) fn spend_commitments(&self, rows: impl IntoIterator<Item = SpentCommitment>) {
-        let mut spent = self
-            .spent_commitments
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        for row in rows {
-            spent.entry(row.utxo_hash).or_insert(row);
-        }
-    }
-
-    /// `true` once per store, the caller reads the table into the mirror.
-    pub(crate) fn seeds_spent(&self) -> bool {
-        !self.spent_seeded.swap(true, Ordering::AcqRel)
+    pub(crate) fn note_of_nullifier(&self, nullifier: &[u8; 32]) -> Option<([u8; 32], StoredUtxo)> {
+        let book = self.read_book();
+        let commitment = *book.by_nullifier.get(nullifier)?;
+        book.notes.get(&commitment).map(|note| (commitment, *note))
     }
 
     #[cfg(test)]
-    pub(crate) fn spent_commitment(&self, commitment: &[u8; 32]) -> Option<SpentCommitment> {
-        self.spent_commitments
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(commitment)
-            .copied()
+    pub(crate) fn row_state(&self, nullifier: &[u8; 32]) -> Option<SpendState> {
+        self.read_book().rows.get(nullifier).map(|row| row.state)
     }
 
-    /// Applied once per confirmed merge, its inputs already sit in the spend index.
-    pub(crate) fn apply_merge(&self, merge: ConfirmedMerge) {
-        let known = self.known();
-        let mut merges = self.merges.write().unwrap_or_else(PoisonError::into_inner);
-        let transition = merges.apply(merge, |commitment| {
-            known
-                .get(commitment)
-                .map(|stored| MergeInput::from(&stored.utxo))
-        });
-        drop(known);
-        drop(merges);
-        self.own_merge_outputs(&transition.resolved);
+    pub(crate) fn note(&self, commitment: &[u8; 32]) -> Option<StoredUtxo> {
+        self.read_book().notes.get(commitment).copied()
     }
 
-    /// A new opening can complete a held merge and each of its descendants.
-    fn resolve_merges(&self) {
-        let known = self.known();
-        let mut merges = self.merges.write().unwrap_or_else(PoisonError::into_inner);
-        let resolved = merges.resolve(|commitment| {
-            known
-                .get(commitment)
-                .map(|stored| MergeInput::from(&stored.utxo))
-        });
-        drop(known);
-        drop(merges);
-        self.own_merge_outputs(&resolved);
-    }
-
-    fn own_merge_outputs(&self, outputs: &[AuditedMergeOutput]) {
-        for output in outputs {
-            self.own(&output.owner_key, output.commitment);
-        }
-    }
-
-    /// The notes a version 2 prefix can name, under `owner` when the row binds one.
-    pub(crate) fn prefixed(&self, prefix: InputPrefix, owner: Option<[u8; 32]>) -> Vec<[u8; 32]> {
-        self.known()
-            .iter()
-            .filter(|(commitment, stored)| {
-                InputPrefix::of(commitment) == Some(prefix)
-                    && owner.is_none_or(|owner| stored.utxo.owner_key == owner)
-            })
-            .map(|(commitment, _)| *commitment)
-            .collect()
-    }
-
-    pub(crate) fn note_owner(&self, commitment: &[u8; 32]) -> Option<[u8; 32]> {
-        self.known()
-            .get(commitment)
-            .map(|stored| stored.utxo.owner_key)
-    }
-
-    fn own(&self, owner_key: &[u8; 32], commitment: [u8; 32]) {
-        // A key no identity hash takes owns no listed note.
-        let Ok(member) = Member::owner_tag(owner_key) else {
-            return;
-        };
-        self.owned
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(*member.as_bytes())
-            .or_default()
-            .insert(commitment);
-    }
-
-    /// An audit record of a merge output, `None` until every input opened.
-    pub(crate) fn merged(&self, commitment: &[u8; 32]) -> Option<AuditedMergeOutput> {
-        self.merges
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .output(commitment)
-            .cloned()
-    }
-
-    /// Coverage opens past the newest row the historical reader decoded.
-    pub(crate) fn saw_row(&self, slot: u64, historical: bool) {
-        let mut coverage = self
-            .coverage
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        coverage.oldest_row = Some(coverage.oldest_row.map_or(slot, |oldest| oldest.min(slot)));
-        if historical {
-            coverage.newest_historical = Some(
-                coverage
-                    .newest_historical
-                    .map_or(slot, |newest| newest.max(slot)),
-            );
-        }
-    }
-
-    /// Keeps the first reason of a row, its inputs narrow as openings land.
-    pub(crate) fn hold_unnamed(&self, key: CreatedIn, spend: UnnamedSpend) {
-        self.history
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry((key.slot, key.tx_signature, key.event_index))
-            .or_insert(spend);
-    }
-
-    /// Absence from the index stays "not seen spent", a covered row names its through slot.
-    pub(crate) fn unspent(&self, query: UnspentQuery<'_>) -> UnspentPage {
-        let coverage = self.coverage();
-        let unresolved = self.unresolved_history();
-        let window = coverage.from_slot..=coverage.through_slot;
-        // The note store comes first, `record` writes it before the owner index.
-        let known = self.known();
-        let owned = self.owned.read().unwrap_or_else(PoisonError::into_inner);
-        let merges = self.merges.read().unwrap_or_else(PoisonError::into_inner);
-        let spent = self
-            .spent_commitments
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        let listed = owned
-            .get(query.owner)
+    pub(crate) fn wallet_status(&self, query: WalletStatusQuery) -> GetWalletStatusResponse {
+        let member = Member::owner_tag(query.wallet.as_array()).ok();
+        let book = self.read_book();
+        let through = book.history_through();
+        let commitments = member
+            .and_then(|member| book.owned.get(member.as_bytes()))
             .into_iter()
-            .flatten()
-            .filter(|commitment| query.after.is_none_or(|after| **commitment > after))
-            .filter(|commitment| !spent.contains_key(*commitment))
-            .filter_map(|commitment| {
-                let view = match known.get(commitment) {
-                    Some(stored) => stored.unspent_view(commitment),
-                    None => merge_output_view(merges.output(commitment)?),
-                };
-                window.contains(&view.slot).then_some((*commitment, view))
-            });
-        let mut utxos = Vec::new();
+            .flatten();
+        let mut balances: BTreeMap<[u8; 32], WalletBalance> = BTreeMap::new();
+        let mut notes = Vec::new();
         let mut cursor = None;
-        for (commitment, view) in listed {
-            if utxos.len() == query.limit {
-                cursor = utxos.last().map(|view: &UnspentUtxoView| view.utxo_hash.0);
-                debug_assert!(cursor.is_some_and(|last| last < commitment));
-                break;
+        for commitment in commitments {
+            let Some(note) = book.notes.get(commitment) else {
+                continue;
+            };
+            // A spent input and its change never both count.
+            if note.created_in.slot > through {
+                continue;
             }
-            utxos.push(view);
+            let status = book.status(commitment, note, through);
+            if status == WalletNoteStatus::Unspent {
+                let balance = balances
+                    .entry(note.utxo.asset)
+                    .or_insert_with(|| WalletBalance {
+                        asset: Hash(note.utxo.asset),
+                        mint: note.utxo.mint.map(Into::into),
+                        amount: 0,
+                    });
+                balance.amount = balance.amount.saturating_add(note.utxo.amount);
+            }
+            if query.after.is_some_and(|after| *commitment <= after) {
+                continue;
+            }
+            if notes.len() == query.limit {
+                cursor = notes
+                    .last()
+                    .map(|note: &WalletNote| note.utxo_hash.0.to_vec().into());
+                continue;
+            }
+            notes.push(note.wallet_note(commitment, status));
         }
-        UnspentPage {
-            utxos,
-            coverage,
-            unresolved,
+        GetWalletStatusResponse {
+            history_through: through,
+            balances: balances.into_values().collect(),
+            notes,
             cursor,
         }
     }
 
-    fn coverage(&self) -> Coverage {
-        let start = *self.coverage.read().unwrap_or_else(PoisonError::into_inner);
-        let through_slot = self.context().slot;
-        let unresolved = !self.unresolved_history().is_empty();
-        Coverage {
-            from_slot: start
-                .newest_historical
-                .map_or(start.oldest_row.unwrap_or(through_slot), |newest| {
-                    newest.saturating_add(1)
-                }),
-            through_slot,
-            // No terminal page reached means nothing in the window has been looked at.
-            complete: through_slot != 0 && !start.pass_unfinished && !unresolved,
+    pub(crate) fn spend_coverage(&self) -> GetSpendCoverageResponse {
+        let book = self.read_book();
+        let count = |state: fn(&SpendState) -> bool| {
+            book.rows.values().filter(|row| state(&row.state)).count() as u64
+        };
+        let frame = |frame: &CreatedIn| SpendCoverageFrame {
+            slot: frame.slot,
+            tx_signature: frame.tx_signature.into(),
+            event_index: frame.event_index,
+        };
+        let row = |row: &SpendRow| SpendCoverageRow {
+            nullifier: Hash(row.nullifier),
+            frame: frame(&row.frame),
+        };
+        let mut unresolved_real: Vec<_> = book
+            .rows
+            .values()
+            .filter(|row| matches!(row.state, SpendState::UnresolvedReal { .. }))
+            .map(row)
+            .collect();
+        unresolved_real.sort_by_key(|row| (row.frame.slot, row.frame.event_index));
+        GetSpendCoverageResponse {
+            position_slot: book.position_slot,
+            history_through: book.history_through(),
+            observed: count(|state| matches!(state, SpendState::Observed)),
+            padding: count(|state| matches!(state, SpendState::Padding)),
+            external: count(|state| matches!(state, SpendState::External)),
+            resolved: count(|state| matches!(state, SpendState::Resolved { .. })),
+            unresolved_real,
+            unreadable: book.unread.iter().map(frame).collect(),
+            integrity_faults: book.faults.iter().map(row).collect(),
         }
     }
 
-    fn unresolved_history(&self) -> Vec<UnresolvedHistory> {
-        let known = self.known();
-        let merges = self.merges.read().unwrap_or_else(PoisonError::into_inner);
-        let history = self.history.read().unwrap_or_else(PoisonError::into_inner);
-        let named = |commitment: &[u8; 32]| {
-            known.get(commitment).is_some() || merges.output(commitment).is_some()
-        };
-        let spends = history
-            .iter()
-            .filter_map(|((slot, signature, event), spend)| {
-                let inputs: Vec<Hash> = spend
-                    .inputs
-                    .iter()
-                    .filter(|input| !named(input))
-                    .map(|input| Hash(*input))
-                    .collect();
-                // A row with no input list stays until a reset.
-                (spend.inputs.is_empty() || !inputs.is_empty()).then_some(UnresolvedHistory {
-                    slot: *slot,
-                    tx_signature: (*signature).into(),
-                    event_index: *event,
-                    reason: spend.reason,
-                    inputs,
-                })
-            });
-        let held = merges.unresolved().map(|merge| UnresolvedHistory {
-            slot: merge.slot,
-            tx_signature: merge.tx_signature.into(),
-            event_index: merge.event_index,
-            reason: UnresolvedReason::UnknownMergeInput,
-            inputs: merge
-                .inputs
-                .iter()
-                .filter(|input| !named(input))
-                .map(|input| Hash(*input))
-                .collect(),
-        });
-        let mut rows: Vec<_> = spends.chain(held).collect();
-        rows.sort_by_key(|row| (row.slot, row.event_index));
-        rows
+    pub(crate) fn unread_frames(&self) -> Vec<CreatedIn> {
+        self.read_book().unread.iter().copied().collect()
     }
 
-    /// A stale row hides funds from merge selection and authority transfers, no limit reads it.
+    /// Reads wallet status, an unrelated unresolved spend hides no note, a published row always does.
     pub(crate) fn spendable(
         &self,
         notes: SpendableNotes<'_>,
@@ -506,55 +740,25 @@ impl AuditStore {
         let owner = UtxoOwner::Keyed {
             nullifier_pk: notes.nullifier_key.pubkey()?,
         };
-        let spent = self.spent.read().unwrap_or_else(PoisonError::into_inner);
-        let spent_commitments = self
-            .spent_commitments
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        let known = self.known();
-        let mut selected = known
+        let book = self.read_book();
+        book.notes
             .iter()
             .filter(|(commitment, stored)| {
                 let utxo = &stored.utxo;
-                !spent_commitments.contains_key(*commitment)
+                stored.ring_note
+                    && !book.historical.contains_key(*commitment)
                     && utxo.owner_key == notes.owner_key
                     && utxo.owner == owner
                     && utxo.mint == Some(notes.mint.asset)
                     && utxo.data_hash == [0; 32]
             })
             .map(|(commitment, stored)| stored.wallet_utxo(commitment, &notes))
-            .filter(|note| !matches!(note, Ok(note) if spent.contains(&note.nullifier)))
-            .collect::<Result<Vec<_>, _>>()?;
-        let merges = self.merges.read().unwrap_or_else(PoisonError::into_inner);
-        for output in merges.outputs().filter(|output| {
-            !spent_commitments.contains_key(&output.commitment)
-                && known.get(&output.commitment).is_none()
-                && output.owner_key == notes.owner_key
-                && output.mint == Some(notes.mint.asset)
-        }) {
-            let Some(utxo) = output.opening(notes.ring, notes.nullifier_key)? else {
-                continue;
-            };
-            let opening = StoredUtxo {
-                utxo,
-                created_in: CreatedIn {
-                    slot: output.slot,
-                    tx_signature: output.tx_signature,
-                    event_index: output.event_index,
-                },
-                slot_index: 0,
-                leaf_index: output.leaf_index,
-            };
-            let note = opening.wallet_utxo(&output.commitment, &notes)?;
-            if !spent.contains(&note.nullifier) {
-                selected.push(note);
-            }
-        }
-        Ok(selected)
+            .filter(|note| !matches!(note, Ok(note) if book.rows.contains_key(&note.nullifier)))
+            .collect()
     }
 
-    pub(crate) fn escrowed(&self, owner_key: &[u8; 32]) -> Option<EscrowedOwner> {
-        self.escrow
+    pub(crate) fn tracked(&self, owner_key: &[u8; 32]) -> Option<TrackedOwner> {
+        self.tracked
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .keys
@@ -562,31 +766,12 @@ impl AuditStore {
             .copied()
     }
 
-    pub(crate) fn pass_unfinished(&self) {
-        self.coverage
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pass_unfinished = true;
-    }
-
-    /// Only the backfill's terminal page moves the claim.
-    pub(crate) fn absorbed(&self, context: Context) {
-        self.coverage
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pass_unfinished = false;
-        let mut newest = self.context.write().unwrap_or_else(PoisonError::into_inner);
-        if context.slot >= newest.slot {
-            *newest = context;
-        }
-    }
-
     pub(crate) fn context(&self) -> Context {
-        *self.context.read().unwrap_or_else(PoisonError::into_inner)
+        self.read_book().context
     }
 
     pub(crate) fn view(&self, utxo_hash: &Hash) -> Option<AuditedUtxoView> {
-        let stored = self.stored(&utxo_hash.0)?;
+        let stored = self.read_book().notes.get(&utxo_hash.0).copied()?;
         Some(AuditedUtxoView {
             utxo_hash: Hash(utxo_hash.0),
             utxo: stored.utxo.into(),
@@ -597,144 +782,103 @@ impl AuditStore {
         })
     }
 
-    pub(crate) fn escrow_root(&self) -> Option<EscrowRoot> {
-        self.escrow
+    pub(crate) fn tracking_root(&self) -> Option<TrackingRoot> {
+        self.tracked
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .root
     }
 
-    /// Every key the registry escrows under `root`, the map read under an older root goes.
-    pub(crate) fn replace_escrow(
+    /// Every key the tracking registry holds under `root`, a new owner's notes derive on the next page.
+    pub(crate) fn replace_tracked(
         &self,
-        root: EscrowRoot,
-        owners: HashMap<[u8; 32], EscrowedOwner>,
+        root: TrackingRoot,
+        owners: HashMap<[u8; 32], TrackedOwner>,
     ) {
-        {
-            let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
-            escrow.owner_keys = owners
-                .values()
-                .map(|owner| (owner.owner_hash, owner.owner_key))
-                .collect();
-            escrow.keys = owners
-                .into_values()
-                .map(|owner| (owner.owner_key, owner))
-                .collect();
-            escrow.root = Some(root);
-        }
-        self.open_held();
-    }
-
-    /// An audit holds the guard for its full run, no UTXO enters between two of its lookups.
-    pub(crate) fn known(&self) -> RwLockReadGuard<'_, KnownUtxoIndex<StoredUtxo>> {
-        self.utxos.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn open_held(&self) {
-        let assets = self
-            .assets
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let mut opened = Vec::new();
-        self.held
+        let mut tracked = self.tracked.write().unwrap_or_else(PoisonError::into_inner);
+        self.late_owners
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .retain(
-                |_, (created_in, note)| match note.open(self, assets.as_ref(), *created_in) {
-                    HeldOpening::Waits => true,
-                    HeldOpening::Opened(utxo) => {
-                        opened.push((*created_in, *utxo));
-                        false
-                    }
-                    HeldOpening::Refused => false,
-                },
+            .extend(
+                owners
+                    .values()
+                    .filter(|owner| !tracked.keys.contains_key(&owner.owner_key))
+                    .map(|owner| owner.owner_key),
             );
-        for (created_in, utxo) in opened {
-            self.record(created_in, [utxo]);
-        }
+        tracked.owner_keys = owners
+            .values()
+            .map(|owner| (owner.owner_hash, owner.owner_key))
+            .collect();
+        tracked.keys = owners
+            .into_values()
+            .map(|owner| (owner.owner_key, owner))
+            .collect();
+        tracked.root = Some(root);
     }
 
-    fn stored(&self, utxo_hash: &[u8; 32]) -> Option<StoredUtxo> {
-        self.known().get(utxo_hash).copied()
+    /// The audit view of a merge the checkpoint opened.
+    pub(crate) fn merge_output(&self, merge: &ConfirmedMerge) -> Option<AuditedMergeOutput> {
+        let book = self.read_book();
+        let note = book.notes.get(&merge.output_commitment)?;
+        Some(AuditedMergeOutput {
+            commitment: merge.output_commitment,
+            slot: merge.slot,
+            tx_signature: merge.tx_signature,
+            event_index: merge.event_index,
+            tree_id: merge.tree_id,
+            leaf_index: merge.leaf_index,
+            first_nullifier: merge.first_nullifier,
+            ring_data_hash: merge.ring_data_hash,
+            owner_key: note.utxo.owner_key,
+            owner: note.utxo.owner,
+            asset: note.utxo.asset,
+            mint: note.utxo.mint,
+            amount: note.utxo.amount,
+            inputs: merge.inputs.clone(),
+        })
     }
-}
 
-impl HeldNote {
-    fn commitment(&self) -> [u8; 32] {
-        match self {
-            Self::Deposit(note) => note.commitment,
-            Self::Output(output) => output.context.hash,
-        }
-    }
-
-    fn open(
-        &self,
-        store: &AuditStore,
-        assets: Option<&RingAssets>,
-        created_in: CreatedIn,
-    ) -> HeldOpening {
-        match self {
-            Self::Deposit(note) => note.created(store).map_or(HeldOpening::Waits, |utxo| {
-                HeldOpening::Opened(Box::new(utxo))
-            }),
-            Self::Output(output) => {
-                let Some(assets) = assets else {
-                    return HeldOpening::Waits;
-                };
-                match output.resolve(store, assets) {
-                    Ok(OutputResolution::AwaitsKey | OutputResolution::AwaitsAsset) => {
-                        HeldOpening::Waits
-                    }
-                    Ok(OutputResolution::Opened(opening)) => AuditedOutput {
-                        slot_index: output.slot_index,
-                        context: output.context.clone(),
-                        opening: *opening,
-                    }
-                    .created()
-                    .map_or(HeldOpening::Refused, |utxo| {
-                        HeldOpening::Opened(Box::new(utxo))
-                    }),
-                    Ok(OutputResolution::Refused(_)) | Err(_) => {
-                        log::warn!(
-                            "held output {} of {}:{} rebuilds no commitment",
-                            output.slot_index,
-                            created_in.tx_signature,
-                            created_in.event_index
-                        );
-                        HeldOpening::Refused
-                    }
+    /// Fails closed, an input no row names to this wallet reads as another party's.
+    pub(crate) fn input_party(&self, wallet: &Address, input: &DecryptedInput) -> InputParty {
+        let book = self.read_book();
+        let owned_by = |commitment: &[u8; 32]| {
+            book.notes
+                .get(commitment)
+                .is_some_and(|note| note.utxo.owner_key == wallet.to_bytes())
+        };
+        match book.rows.get(&input.nullifier.0).map(|row| row.state) {
+            Some(SpendState::Padding) => InputParty::Padding,
+            Some(SpendState::Resolved { note }) if owned_by(&note) => InputParty::Own,
+            Some(_) => InputParty::Other,
+            None if input.hash.is_none() && input.opening.is_none() && input.merged.is_none() => {
+                match input.unseen {
+                    true => InputParty::Other,
+                    false => InputParty::Padding,
                 }
             }
+            None => match &input.hash {
+                Some(hash) if owned_by(&hash.0) => InputParty::Own,
+                _ => InputParty::Other,
+            },
         }
-    }
-}
-
-fn merge_output_view(output: &AuditedMergeOutput) -> UnspentUtxoView {
-    UnspentUtxoView {
-        utxo_hash: Hash(output.commitment),
-        asset: Hash(output.asset),
-        mint: output.mint.map(Into::into),
-        amount: output.amount,
-        kind: UnspentUtxoKind::MergeOutput,
-        slot: output.slot,
-        tx_signature: output.tx_signature.into(),
-        event_index: output.event_index,
-        slot_index: 0,
     }
 }
 
 impl StoredUtxo {
-    fn unspent_view(&self, commitment: &[u8; 32]) -> UnspentUtxoView {
-        UnspentUtxoView {
+    fn wallet_note(&self, commitment: &[u8; 32], status: WalletNoteStatus) -> WalletNote {
+        let utxo = &self.utxo;
+        WalletNote {
             utxo_hash: Hash(*commitment),
-            asset: Hash(self.utxo.asset),
-            mint: self.utxo.mint.map(Into::into),
-            amount: self.utxo.amount,
-            kind: UnspentUtxoKind::Opened {
-                blinding: Hash(self.utxo.blinding),
-                tree_id: self.utxo.tree_id,
-            },
+            status,
+            nullifier_pk: utxo.owner.nullifier_pk().map(Hash),
+            asset: Hash(utxo.asset),
+            mint: utxo.mint.map(Into::into),
+            amount: utxo.amount,
+            blinding: Hash(utxo.blinding),
+            data_hash: Hash(utxo.data_hash),
+            ring_data_hash: Hash(utxo.ring_data_hash),
+            tree_id: utxo.tree_id,
+            leaf_index: self.leaf_index,
             slot: self.created_in.slot,
             tx_signature: self.created_in.tx_signature.into(),
             event_index: self.created_in.event_index,
@@ -773,37 +917,10 @@ impl StoredUtxo {
     }
 }
 
-impl Borrow<KnownUtxo> for StoredUtxo {
-    fn borrow(&self) -> &KnownUtxo {
-        &self.utxo
-    }
-}
-
-impl KnownUtxos for AuditStore {
-    fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo> {
-        self.stored(commitment).map(|stored| stored.utxo)
-    }
-
-    fn merged(&self, commitment: &[u8; 32]) -> Option<MergeInput> {
-        self.merged(commitment).as_ref().map(MergeInput::from)
-    }
-}
-
-impl EscrowedKeys for AuditStore {
-    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]> {
-        self.escrow
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .keys
-            .get(owner_key)
-            .map(|owner| owner.nullifier_pk)
-    }
-}
-
 impl DepositOwners for AuditStore {
     fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
-        let escrow = self.escrow.read().unwrap_or_else(PoisonError::into_inner);
-        let owner = escrow.keys.get(escrow.owner_keys.get(owner_hash)?)?;
+        let tracked = self.tracked.read().unwrap_or_else(PoisonError::into_inner);
+        let owner = tracked.keys.get(tracked.owner_keys.get(owner_hash)?)?;
         Some(DepositOwner {
             owner_key: owner.owner_key,
             nullifier_pk: owner.nullifier_pk,
@@ -811,395 +928,72 @@ impl DepositOwners for AuditStore {
     }
 }
 
+/// Decoded state in a fixed order, sealed rows differ in their nonces alone.
 #[cfg(test)]
-mod tests {
-    use solana_address::Address;
-    use spr_keypair::X25519Keypair;
-    use zolana_ring_client::{NullifierKeyEnvelope, UtxoOwner};
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct StoreDump {
+    pub notes: BTreeMap<[u8; 32], StoredUtxo>,
+    pub rows: BTreeMap<[u8; 32], SpendRow>,
+    pub unread: BTreeSet<CreatedIn>,
+    pub faults: BTreeSet<([u8; 32], CreatedIn)>,
+    pub context: Context,
+    pub position_slot: Option<u64>,
+}
 
-    use super::*;
+#[cfg(test)]
+impl AuditStore {
+    /// Notes opened with no secret, a commit with no database.
+    pub(crate) fn record(
+        &self,
+        created_in: CreatedIn,
+        utxos: impl IntoIterator<Item = CreatedUtxo>,
+    ) {
+        let opener = |_: &[u8; 32]| None;
+        let mut work = PageWork::new(self, &opener);
+        work.open(created_in, utxos);
+        self.commit(work.finish());
+    }
 
-    fn created(mint: Option<Address>) -> CreatedUtxo {
-        CreatedUtxo {
-            commitment: [1; 32],
-            slot_index: 0,
-            leaf_index: 0,
-            utxo: KnownUtxo {
-                owner_key: [2; 32],
-                owner: UtxoOwner::Keyed {
-                    nullifier_pk: [3; 32],
+    /// Published rows with no frame the test reads.
+    pub(crate) fn spend(&self, nullifiers: impl IntoIterator<Item = [u8; 32]>) {
+        use crate::spend_machine::InputRead;
+        let opener = |_: &[u8; 32]| None;
+        let mut work = PageWork::new(self, &opener);
+        for nullifier in nullifiers {
+            work.observe(Observation {
+                nullifier,
+                frame: CreatedIn {
+                    slot: 1,
+                    tx_signature: Signature::from(
+                        nullifier.repeat(2).try_into().unwrap_or([0; 64]),
+                    ),
+                    event_index: 0,
                 },
-                asset: [4; 32],
-                mint,
-                amount: 10,
-                blinding: [5; 32],
-                data_hash: [0; 32],
-                ring_data_hash: [0; 32],
-                tree_id: 1,
-            },
-            ring_note: true,
-        }
-    }
-
-    #[test]
-    fn a_stored_utxo_changes_only_to_gain_its_mint() {
-        let store = AuditStore::default();
-        let created_in = CreatedIn {
-            slot: 1,
-            tx_signature: Signature::from([7; 64]),
-            event_index: 0,
-        };
-        let mint = Some(Address::new_from_array([6; 32]));
-        let stored_mint = || store.stored(&[1; 32]).map(|stored| stored.utxo.mint);
-        store.record(created_in, [created(None)]);
-        store.record(created_in, [created(mint)]);
-        assert_eq!(stored_mint(), Some(mint));
-        store.record(created_in, [created(None)]);
-        assert_eq!(stored_mint(), Some(mint));
-    }
-
-    #[test]
-    fn a_note_from_an_older_registry_snapshot_stays_named() {
-        let store = AuditStore::default();
-        let created_in = CreatedIn {
-            slot: 1,
-            tx_signature: Signature::from([7; 64]),
-            event_index: 0,
-        };
-        let mint = Address::new_from_array([6; 32]);
-        let assets = RingAssets::new([Mint::new(mint, 6)]).unwrap();
-        store.name_assets(&assets);
-        let mut stale = created(None);
-        stale.utxo.asset = assets
-            .fields()
-            .find(|(_, registered)| registered.asset == mint)
-            .unwrap()
-            .0;
-        store.record(created_in, [stale]);
-        assert_eq!(
-            store.stored(&[1; 32]).map(|stored| stored.utxo.mint),
-            Some(Some(mint))
-        );
-    }
-
-    #[test]
-    fn a_new_registry_names_a_stored_mint() {
-        let store = AuditStore::default();
-        let created_in = CreatedIn {
-            slot: 1,
-            tx_signature: Signature::from([7; 64]),
-            event_index: 0,
-        };
-        let mint = Address::new_from_array([6; 32]);
-        let assets = RingAssets::new([Mint::new(mint, 3)]).expect("assets");
-        let mut unnamed = created(None);
-        unnamed.utxo.asset = spr_hasher::primitives::hash_bytes(mint.as_array()).unwrap();
-        store.record(created_in, [unnamed]);
-        store.name_assets(&assets);
-        assert_eq!(store.stored(&[1; 32]).unwrap().utxo.mint, Some(mint));
-    }
-
-    #[test]
-    fn a_registry_refresh_names_resolved_merges_and_their_descendants() {
-        let store = AuditStore::default();
-        let mint = Address::new_from_array([6; 32]);
-        let assets = RingAssets::new([Mint::new(mint, 3)]).unwrap();
-        let mut input = created(None);
-        input.utxo.asset = spr_hasher::primitives::hash_bytes(mint.as_array()).unwrap();
-        store.record(created_in(10), [input]);
-        for (slot, input, output) in [(11, [1; 32], [2; 32]), (12, [2; 32], [3; 32])] {
-            store.apply_merge(ConfirmedMerge {
-                slot,
-                tx_signature: Signature::from([slot as u8; 64]),
-                event_index: 0,
-                output_commitment: output,
-                tree_id: 1,
-                leaf_index: slot,
-                first_nullifier: [9; 32],
-                ring_data_hash: [0; 32],
-                inputs: vec![input],
+                position: 0,
+                read: InputRead::Real { evidence: None },
+                hit: None,
             });
-            store.spend_commitments([spent(input)]);
-            assert_eq!(store.merged(&output).unwrap().mint, None);
         }
-        store.name_assets(&assets);
-        store.name_assets(&RingAssets::new([]).unwrap());
-        assert_eq!(store.stored(&[1; 32]).unwrap().utxo.mint, Some(mint));
-        for commitment in [[2; 32], [3; 32]] {
-            assert_eq!(store.merged(&commitment).unwrap().mint, Some(mint));
+        self.commit(work.finish());
+    }
+
+    pub(crate) fn dump(&self) -> StoreDump {
+        let book = self.read_book();
+        StoreDump {
+            notes: book.notes.iter().map(|(key, note)| (*key, *note)).collect(),
+            rows: book.rows.iter().map(|(key, row)| (*key, *row)).collect(),
+            unread: book.unread.clone(),
+            faults: book
+                .faults
+                .iter()
+                .map(|fault| (fault.nullifier, fault.frame))
+                .collect(),
+            context: book.context,
+            position_slot: book.position_slot,
         }
-        store.saw_row(10, false);
-        store.absorbed(frontier(20));
-        let owner = owner_member();
-        let page = store.unspent(UnspentQuery {
-            owner: &owner,
-            after: None,
-            limit: 10,
-        });
-        let [output] = page.utxos.as_slice() else {
-            panic!("one merge output");
-        };
-        assert_eq!(output.utxo_hash.0, [3; 32]);
-        assert_eq!(output.mint, Some(mint.into()));
-        assert_eq!(output.amount, input.utxo.amount);
-    }
-
-    #[test]
-    fn revisions_order_one_registry_alone() {
-        let current = EscrowRoot {
-            registry: Address::new_from_array([1; 32]),
-            root: [1; 32],
-            revision: 100,
-        };
-        let older = EscrowRoot {
-            root: [2; 32],
-            revision: 99,
-            ..current
-        };
-        let newer = EscrowRoot {
-            root: [3; 32],
-            revision: 101,
-            ..current
-        };
-        let replaced = EscrowRoot {
-            registry: Address::new_from_array([2; 32]),
-            root: [4; 32],
-            revision: 1,
-        };
-        assert!(current.settles(&current));
-        assert!(current.settles(&older));
-        assert!(!current.settles(&newer));
-        assert!(!current.settles(&replaced));
-        assert!(!current.settles(&EscrowRoot {
-            root: current.root,
-            ..replaced
-        }));
-    }
-
-    #[test]
-    fn an_escrowed_owner_opens_the_deposits_audited_before_its_key() {
-        let store = AuditStore::default();
-        let created_in = CreatedIn {
-            slot: 1,
-            tx_signature: Signature::from([7; 64]),
-            event_index: 0,
-        };
-        let note = DepositNote {
-            commitment: [1; 32],
-            slot_index: 0,
-            leaf_index: 0,
-            owner_hash: [8; 32],
-            owner_key: [2; 32],
-            asset: [4; 32],
-            mint: Address::new_from_array([6; 32]),
-            amount: 10,
-            blinding: [5; 32],
-            data_hash: [0; 32],
-            ring_data_hash: [0; 32],
-            tree_id: 1,
-        };
-        let owner = EscrowedOwner {
-            owner_key: note.owner_key,
-            nullifier_pk: [3; 32],
-            owner_hash: note.owner_hash,
-            sealed: NullifierKeyEnvelope::new(
-                &NullifierKey::from_secret([9; 31]),
-                &X25519Keypair::new().pubkey(),
-            )
-            .expect("envelope")
-            .sealed,
-        };
-        store.hold(created_in, [HeldNote::Deposit(note)]);
-        assert!(store.stored(&note.commitment).is_none());
-        store.replace_escrow(
-            EscrowRoot {
-                registry: Address::new_from_array([1; 32]),
-                root: [1; 32],
-                revision: 1,
-            },
-            HashMap::from([(owner.owner_key, owner)]),
-        );
-        let opened = store.stored(&note.commitment).expect("reopened deposit");
-        assert_eq!(opened.created_in, created_in);
-        assert_eq!(opened.utxo.owner_key, owner.owner_key);
-        assert_eq!(
-            opened.utxo.owner,
-            UtxoOwner::Keyed {
-                nullifier_pk: owner.nullifier_pk
-            }
-        );
-    }
-
-    fn created_in(slot: u64) -> CreatedIn {
-        CreatedIn {
-            slot,
-            tx_signature: Signature::from([slot as u8; 64]),
-            event_index: 0,
-        }
-    }
-
-    fn owner_member() -> [u8; 32] {
-        *Member::owner_tag(&[2; 32]).unwrap().as_bytes()
-    }
-
-    fn spent(commitment: [u8; 32]) -> SpentCommitment {
-        SpentCommitment {
-            utxo_hash: commitment,
-            slot: 12,
-            tx_signature: Signature::from([12; 64]),
-            event_index: 0,
-            first_nullifier: [9; 32],
-            source: crate::spent_index::SpentSource::Transfer,
-        }
-    }
-
-    fn frontier(slot: u64) -> Context {
-        Context {
-            slot,
-            block_time: 0,
-        }
-    }
-
-    #[test]
-    fn absence_from_the_spend_index_never_reads_as_unspent() {
-        let store = AuditStore::default();
-        let owner = owner_member();
-        let query = UnspentQuery {
-            owner: &owner,
-            after: None,
-            limit: 10,
-        };
-        store.saw_row(10, false);
-        store.record(created_in(10), [created(None)]);
-        // No frontier reached, nothing is claimed about the note.
-        let before = store.unspent(query);
-        assert!(before.utxos.is_empty());
-        assert!(!before.coverage.complete);
-        store.absorbed(frontier(20));
-        let covered = store.unspent(query);
-        assert_eq!(covered.utxos.len(), 1);
-        assert_eq!(
-            covered.coverage,
-            Coverage {
-                from_slot: 10,
-                through_slot: 20,
-                complete: true,
-            }
-        );
-        // A spend the auditor cannot name leaves the note listed and takes the claim away.
-        let unnamed = [7; 32];
-        store.hold_unnamed(
-            created_in(11),
-            UnnamedSpend {
-                reason: UnresolvedReason::UnknownSpend,
-                inputs: vec![unnamed],
-            },
-        );
-        let held = store.unspent(query);
-        assert_eq!(held.utxos.len(), 1);
-        assert!(!held.coverage.complete);
-        assert_eq!(held.unresolved[0].inputs, [Hash(unnamed)]);
-        // Its opening names the input, the claim returns.
-        store.record(
-            created_in(11),
-            [CreatedUtxo {
-                commitment: unnamed,
-                ..created(None)
-            }],
-        );
-        assert!(store.unspent(query).coverage.complete);
-        store.spend_commitments([spent([1; 32]), spent(unnamed)]);
-        assert!(store.unspent(query).utxos.is_empty());
-    }
-
-    #[test]
-    fn a_row_with_no_input_list_keeps_the_claim_false_for_good() {
-        let store = AuditStore::default();
-        store.saw_row(10, false);
-        store.absorbed(frontier(20));
-        store.hold_unnamed(
-            created_in(10),
-            UnnamedSpend::of(UnresolvedReason::UnreadableRow),
-        );
-        store.record(created_in(11), [created(None)]);
-        let owner = owner_member();
-        let page = store.unspent(UnspentQuery {
-            owner: &owner,
-            after: None,
-            limit: 10,
-        });
-        assert!(!page.coverage.complete);
-        assert_eq!(page.unresolved[0].reason, UnresolvedReason::UnreadableRow);
-    }
-
-    #[test]
-    fn a_note_at_or_below_the_newest_historical_row_stays_outside_coverage() {
-        let store = AuditStore::default();
-        store.saw_row(15, true);
-        store.record(created_in(15), [created(None)]);
-        store.record(
-            created_in(16),
-            [CreatedUtxo {
-                commitment: [8; 32],
-                ..created(None)
-            }],
-        );
-        store.absorbed(frontier(20));
-        let owner = owner_member();
-        let page = store.unspent(UnspentQuery {
-            owner: &owner,
-            after: None,
-            limit: 10,
-        });
-        assert_eq!(page.coverage.from_slot, 16);
-        let listed: Vec<_> = page.utxos.iter().map(|view| view.utxo_hash.0).collect();
-        assert_eq!(listed, [[8; 32]]);
-    }
-
-    #[test]
-    fn a_merge_spends_its_inputs_once_and_its_output_lists_after_every_input_opens() {
-        let store = AuditStore::default();
-        store.saw_row(10, false);
-        store.absorbed(frontier(20));
-        store.record(created_in(10), [created(None)]);
-        let merge = ConfirmedMerge {
-            slot: 11,
-            tx_signature: Signature::from([11; 64]),
-            event_index: 0,
-            output_commitment: [0x20; 32],
-            tree_id: 1,
-            leaf_index: 4,
-            first_nullifier: [9; 32],
-            ring_data_hash: [0; 32],
-            inputs: vec![[1; 32], [0x10; 32]],
-        };
-        store.apply_merge(merge.clone());
-        store.apply_merge(merge.clone());
-        let owner = owner_member();
-        let query = UnspentQuery {
-            owner: &owner,
-            after: None,
-            limit: 10,
-        };
-        let held = store.unspent(query);
-        assert!(!held.coverage.complete);
-        assert_eq!(held.unresolved[0].inputs, [Hash([0x10; 32])]);
-        assert!(store.merged(&[0x20; 32]).is_none());
-        store.record(
-            created_in(10),
-            [CreatedUtxo {
-                commitment: [0x10; 32],
-                ..created(None)
-            }],
-        );
-        let output = store.merged(&[0x20; 32]).expect("every input opened");
-        assert_eq!(output.amount, 20);
-        store.spend_commitments(merge.inputs.iter().copied().map(spent));
-        let page = store.unspent(query);
-        assert!(page.coverage.complete);
-        let [view] = page.utxos.as_slice() else {
-            panic!("the output alone stays listed");
-        };
-        assert_eq!(view.kind, UnspentUtxoKind::MergeOutput);
     }
 }
+
+#[cfg(test)]
+#[path = "spend_store_tests.rs"]
+mod spend_store_tests;

@@ -22,7 +22,7 @@ pub(super) struct TransactAccounts {
     pub sender: [u8; 32],
     /// SPP's owner signer run, default on the authority rails.
     pub signers: SignerSet,
-    /// The anonymous frame's party identities, zeros on the other rails.
+    /// Zeros off the anonymous frame.
     pub party_identities: [[u8; 32]; ANONYMOUS_PARTIES],
     pub public_slots: PublicSlots,
     /// Empty without own records and on the authority rails, no rule screens them.
@@ -55,7 +55,6 @@ impl TransactCheck<'_> {
         let window = settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
             .ok_or(CustomRingError::InvalidSettlementAccounts)?;
         let public_slots = public_slots(&data.interface_transfers, window)?;
-        // The bypass empties the demand, whatever records the ring configured.
         let demand = match delegate_rail {
             true => CoSignDemand::NONE,
             false => CoSignOperation {
@@ -198,7 +197,6 @@ fn account_at(accounts: &[AccountView], index: usize) -> Result<&AccountView, Pr
         .ok_or(ProgramError::NotEnoughAccountKeys)
 }
 
-/// Every owner signs, each co-signer stays outside the run.
 fn check_owner_run(owners: &[AccountView], co_signers: &CoSigners) -> Result<(), CustomRingError> {
     if owners.iter().any(|owner| !owner.is_signer()) {
         return Err(CustomRingError::MissingOwnerSigner);

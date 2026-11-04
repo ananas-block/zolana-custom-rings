@@ -3,8 +3,8 @@ use spr_keypair::{PublicKey, X25519Keypair};
 use spr_transaction::{Mint, OutputContext};
 use zolana_ring_client::{
     AuditedInputOpening, AuditedOutput, AuditedSender, AuditedUtxo, CreatedUtxo,
-    EscrowPendingOutput, EscrowPendingSlot, KnownUtxo, MergeInput, MergedInput, OutputPayloadError,
-    OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
+    EscrowPendingOutput, EscrowPendingSlot, KnownUtxo, OutputPayloadError, OutputPayloadErrorKind,
+    RingOwnerTag, UtxoOwner,
 };
 
 use super::*;
@@ -159,15 +159,17 @@ impl Rows {
             owner_signers: Vec::new(),
             public: Vec::new(),
             assets: &self.assets,
+            ring: Address::new_from_array([0x44; 32]),
         }
-        .flows()
+        .read()
+        .map(|read| read.flows)
     }
 }
 
 fn debits(flows: &[OwnerFlow]) -> Vec<([u8; 32], u64)> {
     flows
         .iter()
-        .map(|flow| (*flow.owner.as_bytes(), flow.flow.debit))
+        .map(|flow| (*flow.owner.as_bytes(), flow.flow.outflow))
         .collect()
 }
 
@@ -282,31 +284,89 @@ fn a_dummy_input_and_a_dummy_slot_answer_for_nothing() {
     assert_eq!(debits(&rows.expect("rows")), [(owner_identity(&ALICE), 50)]);
 }
 
+/// A merge output is a note like any other, its record opened it.
 #[test]
-fn a_merge_output_answers_under_its_inherited_owner() {
+fn a_merge_output_answers_under_its_owner_from_the_index() {
     let held = assets();
     let asset = asset_field(&held);
-    let merged = AuditedInput {
+    let output = note(ALICE, OLD_KEY, asset, 70);
+    let spent = AuditedInput {
         nullifier: [0x13; 32],
-        hash: [0x66; 32],
-        opening: InputOpening::Merged(MergedInput {
-            commitment: [0x66; 32],
-            input: MergeInput {
-                owner_key: ALICE,
-                owner: UtxoOwner::Keyed {
-                    nullifier_pk: OLD_KEY,
-                },
-                asset,
-                mint: None,
-                amount: 70,
-            },
-        }),
+        hash: output.commitment,
+        opening: InputOpening::UnseenHash {
+            hash: output.commitment,
+        },
     };
-    let rows = Rows::of(&[]).read(&audited(
-        vec![merged],
+    let rows = Rows::of(&[output]).read(&audited(
+        vec![spent],
         vec![ring_slot(0, BOB, [0x44; 32], asset, 70)],
     ));
     assert_eq!(debits(&rows.expect("rows")), [(owner_identity(&ALICE), 70)]);
+}
+
+/// A real input the index cannot name refuses until its note opens.
+#[test]
+fn an_unresolved_nullifier_refuses_the_signature_until_its_note_opens() {
+    use crate::spend_machine::{InputRead, Observation};
+    let held = assets();
+    let asset = asset_field(&held);
+    let key = spr_keypair::NullifierKey::from_secret([7; 31]);
+    let input = CreatedUtxo {
+        commitment: [0x12; 32],
+        ..note(ALICE, key.pubkey().expect("key"), asset, 40)
+    };
+    let nullifier = key
+        .nullifier(&input.commitment, &input.utxo.blinding)
+        .expect("nullifier");
+    let store = store_with(&[]);
+    // The nullifier alone reads, a version 4 frame names no hash.
+    let unnamed = audited(
+        vec![AuditedInput {
+            nullifier,
+            hash: [0x77; 32],
+            opening: InputOpening::UnseenHash { hash: [0x77; 32] },
+        }],
+        vec![ring_slot(0, BOB, [0x44; 32], asset, 40)],
+    );
+    let read = |store: &AuditStore| {
+        FrameFlows {
+            audited: &unnamed,
+            store,
+            owner_signers: Vec::new(),
+            public: Vec::new(),
+            assets: &held,
+            ring: Address::new_from_array([0x44; 32]),
+        }
+        .read()
+        .map(|read| read.flows)
+    };
+    assert!(refused(read(&store)));
+    let opener = |_: &[u8; 32]| Some(spr_keypair::NullifierKey::from_secret([7; 31]));
+    let mut work = crate::utxos::PageWork::new(&store, &opener);
+    work.observe(Observation {
+        nullifier: [0x99; 32],
+        frame: CreatedIn {
+            slot: 1,
+            tx_signature: Signature::from([9; 64]),
+            event_index: 0,
+        },
+        position: 0,
+        read: InputRead::Real { evidence: None },
+        hit: None,
+    });
+    work.open(
+        CreatedIn {
+            slot: 1,
+            tx_signature: Signature::from([7; 64]),
+            event_index: 0,
+        },
+        [input],
+    );
+    store.commit(work.finish());
+    assert_eq!(
+        debits(&read(&store).expect("rows")),
+        [(owner_identity(&ALICE), 40)]
+    );
 }
 
 #[test]
@@ -395,9 +455,11 @@ fn a_public_leg_joins_the_first_sender_and_leaves_its_debit_alone() {
             withdrawn: 25,
         }],
         assets: &held,
+        ring: Address::new_from_array([0x44; 32]),
     }
-    .flows()
-    .expect("rows");
+    .read()
+    .expect("rows")
+    .flows;
     let row = |owner: &[u8; 32]| {
         flows
             .iter()
@@ -405,16 +467,18 @@ fn a_public_leg_joins_the_first_sender_and_leaves_its_debit_alone() {
             .copied()
     };
     let first = row(&ALICE).expect("first sender");
-    assert_eq!((first.flow.debit, first.flow.withdrawn), (30, 25));
+    assert_eq!((first.flow.outflow, first.flow.withdrawn), (30, 25));
     assert!(row(&BOB).is_none(), "a credit covers the second sender");
 }
 
+/// A no-spend frame sits on the ring's own tag, only ring caps read its legs.
 #[test]
-fn a_public_funded_transfer_with_no_sender_refuses() {
+fn a_public_funded_transfer_with_no_sender_reads_as_no_spend() {
     let held = assets();
     let asset = asset_field(&held);
     let store = store_with(&[]);
-    let flows = FrameFlows {
+    let ring = Address::new_from_array([0x44; 32]);
+    let read = FrameFlows {
         audited: &audited(Vec::new(), vec![ring_slot(0, BOB, NEW_KEY, asset, 15)]),
         store: &store,
         owner_signers: Vec::new(),
@@ -424,9 +488,17 @@ fn a_public_funded_transfer_with_no_sender_refuses() {
             withdrawn: 0,
         }],
         assets: &held,
+        ring,
     }
-    .flows();
-    assert!(refused(flows));
+    .read()
+    .expect("no spend");
+    assert!(!read.spends_note);
+    let [row] = read.flows.as_slice() else {
+        panic!("one public row, {:?}", read.flows);
+    };
+    assert_eq!(row.flow.outflow, 0);
+    assert_eq!(row.flow.deposited, 15);
+    assert_eq!(*row.owner.as_bytes(), owner_identity(ring.as_array()));
 }
 
 /// `test-vectors/policy/debit.json`, the figure the transfer circuit settles at.
@@ -467,6 +539,7 @@ fn the_reserved_figure_matches_the_circuit_debit_table() {
             outputs: &outputs,
             owner_signers: &[],
             public: &[],
+            no_spend_owner: Member::from_bytes([0xee; 32]).expect("tag"),
         }
         .rows(|asset| Ok(Address::new_from_array(*asset)))
         .expect("rows");
@@ -476,7 +549,7 @@ fn the_reserved_figure_matches_the_circuit_debit_table() {
                 (
                     *row.owner.as_bytes(),
                     row.flow.asset.to_bytes(),
-                    row.flow.debit,
+                    row.flow.outflow,
                 )
             })
             .collect();

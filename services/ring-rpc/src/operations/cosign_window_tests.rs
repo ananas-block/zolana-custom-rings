@@ -5,6 +5,7 @@ use std::{
 
 use sea_orm::{ConnectionTrait, Statement};
 use solana_message::Message;
+use zolana_ring_policy::AssetLimits;
 
 use super::*;
 
@@ -15,6 +16,13 @@ const WINDOW: u64 = 50;
 const CAP: u64 = 100;
 const START_SLOT: u64 = 1_000;
 
+fn capped(limits: AssetLimits) -> MintPolicy {
+    MintPolicy {
+        limits,
+        ..MintPolicy::EMPTY
+    }
+}
+
 fn member(byte: u8) -> Member {
     Member::from_bytes([byte; 32]).expect("member")
 }
@@ -24,7 +32,7 @@ fn flow(owner: u8, asset: Address, debit: u64) -> OwnerFlow {
         owner: member(owner),
         flow: AssetFlow {
             asset,
-            debit,
+            outflow: debit,
             deposited: 0,
             withdrawn: 0,
         },
@@ -44,26 +52,32 @@ impl AssetLimitSource for Clocked {
         Ok(self.slot.load(Ordering::Relaxed))
     }
 
-    async fn asset_limits(
+    async fn asset_policies(
         &self,
         _ring: Address,
         assets: &[Address],
-    ) -> Result<Vec<Option<AssetLimits>>, RingRpcError> {
-        let limits = AssetLimits {
-            sender_cap: CAP,
-            sender_window_slots: WINDOW,
-            ..AssetLimits::EMPTY
-        };
-        Ok(vec![Some(limits); assets.len()])
+    ) -> Result<Vec<Option<MintPolicy>>, RingRpcError> {
+        Ok(vec![
+            Some(capped(AssetLimits {
+                sender_cap: CAP,
+                sender_window_slots: WINDOW,
+                ..AssetLimits::EMPTY
+            }));
+            assets.len()
+        ])
     }
 
     async fn transfer_flows(
         &self,
         _ring: Address,
         _message: &VersionedMessage,
-    ) -> Result<Vec<OwnerFlow>, RingRpcError> {
+    ) -> Result<FrameRead, RingRpcError> {
         self.frame_reads.fetch_add(1, Ordering::Relaxed);
-        Ok(self.frame.clone())
+        Ok(FrameRead::Transfer(TransferRead {
+            flows: self.frame.clone(),
+            spends_note: true,
+            approval_bits: None,
+        }))
     }
 }
 
@@ -93,6 +107,7 @@ impl Window {
                 ..Clocked::default()
             },
             store: Arc::new(store.clone()),
+            approval: CoSignerApproval::new([ApproveClass::Transfers, ApproveClass::Deposits]),
         }
         .build();
         Self {
@@ -129,14 +144,14 @@ impl Window {
         let mut rows: Vec<_> = connection
             .query_all(Statement::from_string(
                 connection.get_database_backend(),
-                "SELECT owner, slot, debit FROM cosign_usage",
+                "SELECT owner, slot, outflow FROM cosign_usage",
             ))
             .await
             .expect("rows")
             .iter()
             .map(|row| {
                 let owner: Vec<u8> = row.try_get("", "owner").expect("owner");
-                let debit: Vec<u8> = row.try_get("", "debit").expect("debit");
+                let debit: Vec<u8> = row.try_get("", "outflow").expect("outflow");
                 (
                     owner[0],
                     row.try_get("", "slot").expect("slot"),
@@ -191,11 +206,11 @@ impl Drop for StoreFile {
 fn zero_window() -> AssetCheck {
     AssetCheck {
         asset: SOL,
-        limits: AssetLimits {
+        policy: capped(AssetLimits {
             sender_cap: CAP,
             sender_window_slots: 0,
             ..AssetLimits::EMPTY
-        },
+        }),
     }
 }
 
@@ -238,11 +253,11 @@ fn a_reservation_of_a_slot_past_the_reader_still_counts() {
     };
     let check = [AssetCheck {
         asset: SOL,
-        limits: AssetLimits {
+        policy: capped(AssetLimits {
             sender_cap: CAP,
             sender_window_slots: WINDOW,
             ..AssetLimits::EMPTY
-        },
+        }),
     }];
     assert_eq!(
         LimitDecision {

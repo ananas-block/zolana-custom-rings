@@ -16,7 +16,8 @@ use zolana_ring_client::rpc::{auditor_keypair, KeyFileError};
 use zolana_secret_file::{create_new, read_key32, Access, SecretFileError, Visibility};
 
 use crate::{
-    client_rate::ClientLimitArgs, keys::KeySource, origins::OriginTransport, server::BindPolicy,
+    client_rate::ClientLimitArgs, cosign::ApproveClass, keys::KeySource, origins::OriginTransport,
+    server::BindPolicy,
 };
 
 #[derive(Debug, Parser)]
@@ -79,6 +80,15 @@ pub struct ServeArgs {
     /// Lowercase hex Ed25519 seed, turns on co-signing under the asset limits.
     #[arg(long, env = "RING_RPC_CO_SIGNER_KEY_FILE", requires = "store_url")]
     pub co_signer_key_file: Option<PathBuf>,
+    /// The classes the co-signer signs for, none refuses every operation.
+    #[arg(
+        long,
+        env = "RING_RPC_CO_SIGNER_APPROVE",
+        value_enum,
+        value_delimiter = ',',
+        requires = "co_signer_key_file"
+    )]
+    pub co_signer_approve: Vec<ApproveClass>,
     /// Lowercase hex secret the grant row cipher and lookup keys expand from.
     #[arg(long, env = "RING_RPC_GRANT_ROWS_KEY_FILE")]
     pub grant_rows_key_file: Option<PathBuf>,

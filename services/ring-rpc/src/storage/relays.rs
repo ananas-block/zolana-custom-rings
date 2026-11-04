@@ -93,7 +93,7 @@ struct StoredCoSign {
 struct StoredFlow {
     owner: Hash,
     asset: SerializablePubkey,
-    debit: u64,
+    outflow: u64,
     deposited: u64,
     withdrawn: u64,
 }
@@ -208,7 +208,7 @@ fn state(record: &RelayRecord) -> Result<Value, DbErr> {
                         .map(|OwnerFlow { owner, flow }| StoredFlow {
                             owner: Hash(*owner.as_bytes()),
                             asset: flow.asset.into(),
-                            debit: flow.debit,
+                            outflow: flow.outflow,
                             deposited: flow.deposited,
                             withdrawn: flow.withdrawn,
                         })
@@ -261,7 +261,7 @@ fn pending_co_sign(stored: StoredCoSign) -> Result<PendingCoSign, DbErr> {
                                 .map_err(|_| corrupt("co_sign"))?,
                             flow: AssetFlow {
                                 asset: flow.asset.0,
-                                debit: flow.debit,
+                                outflow: flow.outflow,
                                 deposited: flow.deposited,
                                 withdrawn: flow.withdrawn,
                             },

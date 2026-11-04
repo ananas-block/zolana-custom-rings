@@ -88,6 +88,13 @@ instruction_tags! {
     /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.
     Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
+    // Tags 55 to 58 are reserved for the transfer, merge and deposit renumbering.
+    WriteFrame = WRITE_FRAME: 59 => ACCOUNT_UNITS,
+    CloseFrameBuffer = CLOSE_FRAME_BUFFER: 60 => ACCOUNT_UNITS,
+    SettleBuffered = SETTLE_BUFFERED: 61 => PROOF_UNITS,
+    CreateFrameBuffer = CREATE_FRAME_BUFFER: 62 => ACCOUNT_UNITS,
+    /// Readers accept it only inside tag 61.
+    FrameEvent = FRAME_EVENT: 63 => ACCOUNT_UNITS,
 }
 
 /// Fixed for the ring's life.

@@ -671,6 +671,49 @@ fn a_delegate_exit_selects_the_exit_circuit() {
     assert_eq!(parsed.circuit(), CircuitId::RingAuthorityExit(2, 2, 3));
 }
 
+#[test]
+fn the_rail_follows_the_instruction_and_the_ring_mode() {
+    use custom_ring_interface::{InstructionTag, RingMode};
+    use InstructionTag::{AuthorityTransfer, Deposit, Transfer};
+    let delegate = solana_address::Address::new_from_array([3; 32]);
+    let ring = |mode: RingMode, delegate: Option<solana_address::Address>| {
+        let mut ring = <RingPolicy as bytemuck::Zeroable>::zeroed();
+        ring.mode = mode as u8;
+        ring.delegate = delegate.unwrap_or_default();
+        ring
+    };
+    let rail = |tag, mode| RingRail::new(tag, &ring(mode, Some(delegate)));
+    assert_eq!(
+        rail(Transfer, RingMode::Confidential),
+        Ok(RingRail::Confidential)
+    );
+    assert_eq!(rail(Transfer, RingMode::Anonymous), Ok(RingRail::Anonymous));
+    assert_eq!(
+        rail(AuthorityTransfer, RingMode::Confidential),
+        Ok(RingRail::Delegate)
+    );
+    assert_eq!(
+        rail(AuthorityTransfer, RingMode::Anonymous),
+        Ok(RingRail::AnonymousDelegate)
+    );
+    assert_eq!(
+        rail(Deposit, RingMode::Confidential),
+        Err(CustomRingError::InvalidInstructionData)
+    );
+    for mode in [RingMode::Confidential, RingMode::Anonymous] {
+        assert_eq!(
+            RingRail::new(AuthorityTransfer, &ring(mode, None)),
+            Err(CustomRingError::DelegateDisabled)
+        );
+    }
+    let mut retired = ring(RingMode::Confidential, None);
+    retired.mode = 1;
+    assert_eq!(
+        RingRail::new(Transfer, &retired),
+        Err(CustomRingError::InvalidRingMode)
+    );
+}
+
 /// Without `has_data` every body has one length, the frame carries none.
 #[test]
 fn a_body_past_its_plain_length_needs_has_data() {

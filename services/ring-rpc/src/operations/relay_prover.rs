@@ -84,6 +84,8 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
             RelayPayload::Transfer(proof_inputs) => self.transfer(&request, proof_inputs).await,
             RelayPayload::Deposit(deposit) => self.deposit(&request, deposit).await,
             RelayPayload::Merge(merge) => self.merge(&request, merge).await,
+            // `Relay::prepare` builds it, it holds nothing to prove here.
+            RelayPayload::Enroll(_) => Err(RelayError::InvalidEnrollment.into()),
         }
     }
 

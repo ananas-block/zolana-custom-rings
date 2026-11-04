@@ -28,13 +28,13 @@ use solana_address::Address;
 use thiserror::Error;
 use tower::{Layer, Service};
 
-use zolana_ring_client::rpc::GET_UNSPENT_UTXOS;
 use zolana_ring_client::rpc::{
     CreateRecordsRegistryRequest, PrepareAuthorityTransferRequest, RefuseEnrolmentRequest,
     SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
     CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
-    GET_DECRYPTED_TRANSACTIONS, GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE,
-    GET_RELAY_STATUS, GET_WALLET_ACTIVITY, HEALTH, PREPARE_AUTHORITY_TRANSFER, REFUSE_ENROLMENT,
+    GET_DECRYPTED_TRANSACTIONS, GET_DELEGATE_NOTES, GET_PENDING_ENROLMENTS,
+    GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, GET_SPEND_COVERAGE,
+    GET_WALLET_ACTIVITY, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, REFUSE_ENROLMENT,
     RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
     SUBMIT_RELAY,
 };
@@ -545,7 +545,9 @@ impl RatedCall {
             | GET_WALLET_ACTIVITY
             | GET_AUDITED_MERGES
             | GET_AUDITED_UTXOS
-            | GET_UNSPENT_UTXOS
+            | GET_WALLET_STATUS
+            | GET_SPEND_COVERAGE
+            | GET_DELEGATE_NOTES
             | GET_PENDING_ENROLMENTS => Self::SignedRead,
             SUBMIT_RECORD_UPDATE => write(
                 params

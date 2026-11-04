@@ -34,7 +34,7 @@ bytemuck = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-solana-address = { workspace = true }
+solana-address = { workspace = true, features = ["curve25519"] }
 solana-account = { workspace = true }
 solana-hash = { workspace = true }
 solana-keypair = { workspace = true }
@@ -59,6 +59,7 @@ zeroize = { workspace = true }
 spr-api = { workspace = true, features = ["reqwest"] }
 spr-client = { workspace = true, features = ["solana-rpc"] }
 spr-event = { workspace = true }
+spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
 spr-rpc-http = { workspace = true }
 spr-interface = { workspace = true }
@@ -66,6 +67,7 @@ spr-keypair = { workspace = true }
 zolana-secret-file = { workspace = true }
 zolana-ring-client = { workspace = true, features = ["rpc", "solana-rpc"] }
 zolana-ring-indexer = { workspace = true }
+zolana-ring-keys = { workspace = true }
 zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
@@ -75,4 +77,3 @@ spr-transaction = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 borsh = { workspace = true }
 spr-event-parser = { workspace = true }
-spr-hasher = { workspace = true }

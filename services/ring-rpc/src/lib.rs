@@ -69,6 +69,8 @@ mod replay;
 mod replay_nonces;
 #[path = "rpc/server.rs"]
 mod server;
+#[path = "operations/spend_machine.rs"]
+mod spend_machine;
 #[path = "storage/spent_index.rs"]
 mod spent_index;
 #[path = "rpc/storage_chain.rs"]
@@ -95,11 +97,12 @@ pub use config::{
     ServeKeyError, ServeKeys,
 };
 pub use cosign::{
-    AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy, CoSignRefusal,
-    CoSignRequest, CoSignSettlement, OwnerFlow, RefusingCoSigner,
+    ApproveClass, AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy, CoSignRefusal,
+    CoSignRequest, CoSignSettlement, CoSignerApproval, OwnerFlow, RefusingCoSigner,
 };
 pub use cosign_limits::{
-    AssetCheck, AssetLimitSource, LimitDecision, LimitedCoSigner, LimitedCoSignerInit, WindowUsage,
+    AssetCheck, AssetLimitSource, FrameRead, LimitDecision, LimitedCoSigner, LimitedCoSignerInit,
+    TransferRead, WindowUsage,
 };
 pub use cosign_usage::Reservation;
 pub use database::{Store, STORE_CONNECTIONS};

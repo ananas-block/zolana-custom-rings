@@ -26,6 +26,7 @@ pub(super) async fn require_fresh_operations(manager: &SchemaManager<'_>) -> Res
         "cosign_usage",
         "records_batches",
         "records_updates",
+        "finalized_spent_commitments",
     ] {
         if manager.has_table(table).await?
             && manager

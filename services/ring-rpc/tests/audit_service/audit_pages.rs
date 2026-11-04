@@ -247,14 +247,14 @@ async fn a_transfer_read_before_its_input_note_returns_every_slot_then_resolves(
     assert_eq!(unseen.inputs[0].opening, None);
     assert!(unseen.inputs[0].unseen);
     assert_eq!(unseen.inputs[0].hash, Some(utxos.commitment.into()));
-    // The outputs enter the store at once, a later spend of them resolves.
+    // A page read writes nothing, the checkpoint feeds the index.
     let exit = utxos.spent.output_slots[0].output_context.hash;
     let stored = service
         .audited_utxos(&utxos_request(vec![exit.into()]))
         .await
         .expect("UTXO read");
-    assert!(stored.value.utxos[0].is_some());
-    read_at(&service, None).await;
+    assert!(stored.value.utxos[0].is_none());
+    service.backfill_utxos().await.expect("backfill");
     let after = read_at(&service, Some(9)).await;
     let [resolved] = after.value.items.as_slice() else {
         panic!("the same spend");
@@ -344,7 +344,7 @@ async fn an_input_whose_utxo_an_earlier_page_opened_resolves_through_the_store()
         ],
     );
     let service = fixture.hub(source).service(None).expect("service");
-    read_at(&service, None).await;
+    service.backfill_utxos().await.expect("backfill");
     assert_eq!(
         input_ring(&read_at(&service, Some(1)).await),
         Some(DecryptedInputRing::Ring {

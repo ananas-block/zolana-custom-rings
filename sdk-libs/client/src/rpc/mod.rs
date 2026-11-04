@@ -24,28 +24,30 @@ use zolana_secret_file::{
 };
 
 mod authority_transfer;
+mod delegate_read;
 mod enrolment;
 mod merge_settings;
 mod reader_grant;
 mod record_update;
 mod relay;
 mod relay_deposit;
+mod relay_enroll;
 mod relay_proof;
 mod spend_coverage;
-mod unspent;
 mod wallet_activity;
 mod wallet_status;
 
 pub use authority_transfer::*;
+pub use delegate_read::*;
 pub use enrolment::*;
 pub use merge_settings::*;
 pub use reader_grant::*;
 pub use record_update::*;
 pub use relay::*;
 pub use relay_deposit::*;
+pub use relay_enroll::*;
 pub use relay_proof::*;
 pub use spend_coverage::*;
-pub use unspent::*;
 pub use wallet_activity::*;
 pub use wallet_status::*;
 

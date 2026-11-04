@@ -10,7 +10,10 @@ use custom_ring_interface::{
     UpdateAuthorityIxData, UpdatePolicyIxData, CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED,
     STORAGE_PROGRAM_ID,
 };
-use litesvm::LiteSVM;
+use litesvm::{
+    types::{FailedTransactionMetadata, TransactionMetadata},
+    LiteSVM,
+};
 use solana_account::Account;
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_decompress_be;
@@ -50,7 +53,6 @@ pub fn ring_auth() -> Address {
     pda(RING_AUTH_PDA_SEED)
 }
 
-/// Where `Initialize` creates the tracking registry the ring pins.
 pub fn tracking_registry() -> Address {
     let ring_id = ring_id_field(PROGRAM.as_array()).expect("ring id");
     TrackingRegistry::find_address(&ring_auth(), &ring_id).0
@@ -72,20 +74,24 @@ pub enum Setup {
     LimitedPolicy,
     Anonymous,
     AnonymousPolicy,
+    /// Bound to no records, it holds no thresholds and reads the tracking root alone.
+    Bare,
+    BareAnonymous,
 }
 
 impl Setup {
     pub const fn kind(self) -> RingKind {
         match self {
-            Self::AuditOnly => RingKind::AuditOnly,
+            Self::AuditOnly | Self::Bare => RingKind::AuditOnly,
             Self::Policy | Self::LimitedPolicy => RingKind::Policy,
-            Self::Anonymous => RingKind::Anonymous,
+            Self::Anonymous | Self::BareAnonymous => RingKind::Anonymous,
             Self::AnonymousPolicy => RingKind::AnonymousPolicy,
         }
     }
 }
 
 pub type Sent = Result<u64, (TransactionError, u64)>;
+pub type SentWithMeta = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
 pub struct RoleKeys {
     pub admin: Keypair,
@@ -187,7 +193,8 @@ impl Ring {
                 auditor_pubkey: auditor_pubkey(),
                 kind: setup.kind(),
                 roles: ring.roles.addresses(),
-                policy: Some(PolicyBindingIxData { table }),
+                policy: (!matches!(setup, Setup::Bare | Setup::BareAnonymous))
+                    .then_some(PolicyBindingIxData { table }),
             },
             curators: &[],
         }
@@ -236,6 +243,16 @@ impl Ring {
         );
     }
 
+    pub fn serve_tracking(&mut self, revision: Revision) {
+        let mut tracking: TrackingRegistry = self.read(&tracking_registry());
+        tracking.roots[0] = root(revision.value(), [0x09; 32]);
+        self.store(
+            tracking_registry(),
+            STORAGE_PROGRAM_ID,
+            bytemuck::bytes_of(&tracking).to_vec(),
+        );
+    }
+
     /// The registry after the storage program applies a restrictive update.
     pub fn apply_immediate(&mut self, address: Address, new_root: [u8; 32]) {
         let mut registry: StorageRegistry = self.read(&address);
@@ -250,6 +267,16 @@ impl Ring {
     }
 
     pub fn send(&mut self, instruction: Instruction, signers: &[&Keypair]) -> Sent {
+        self.send_with_meta(instruction, signers)
+            .map(|meta| meta.compute_units_consumed)
+            .map_err(|failed| (failed.err, failed.meta.compute_units_consumed))
+    }
+
+    pub fn send_with_meta(
+        &mut self,
+        instruction: Instruction,
+        signers: &[&Keypair],
+    ) -> SentWithMeta {
         self.svm.expire_blockhash();
         let message = v1::Message::try_compile_with_config(
             &self.payer.pubkey(),
@@ -268,10 +295,11 @@ impl Ring {
         }
         let transaction = VersionedTransaction::try_new(VersionedMessage::V1(message), &keys)
             .expect("sign the v1 transaction");
-        self.svm
-            .send_transaction(transaction)
-            .map(|meta| meta.compute_units_consumed)
-            .map_err(|failed| (failed.err, failed.meta.compute_units_consumed))
+        self.svm.send_transaction(transaction).map_err(Box::new)
+    }
+
+    pub fn svm(&mut self) -> &mut LiteSVM {
+        &mut self.svm
     }
 
     pub fn read<T: Pod>(&self, address: &Address) -> T {
@@ -706,7 +734,6 @@ pub fn set_delegate(admin: &Address, delegate: &Address) -> Instruction {
     )
 }
 
-/// A policy ring with a delegate.
 pub fn delegate_ring(delegate: &Keypair) -> Ring {
     let mut ring = Ring::new(Setup::Policy);
     let admin = ring.holder(RingRole::Admin);

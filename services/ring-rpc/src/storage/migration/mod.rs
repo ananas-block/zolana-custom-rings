@@ -3,6 +3,7 @@ use sea_orm_migration::prelude::*;
 
 mod cosign3_000001_admission;
 mod cosign4_000001_owner_debits;
+mod cosign5_000001_outflow;
 mod cosign_m20261029_000001_usage;
 mod grants;
 mod merge2_000001_inputs;
@@ -14,6 +15,7 @@ mod records_000001_queue;
 mod relay_000001_relays;
 mod replay_000001_nonces;
 mod spent2_000001_finalized;
+mod spent3_000001_nullifiers;
 mod spent_000001_commitments;
 
 pub struct Migrator;
@@ -25,7 +27,7 @@ impl Migrator {
             .has_table(Self::migration_table_name().to_string())
             .await?
             && sea_orm_migration::seaql_migrations::Entity::find_by_id(
-                spent2_000001_finalized::Migration.name(),
+                spent3_000001_nullifiers::Migration.name(),
             )
             .one(db)
             .await?
@@ -55,6 +57,8 @@ impl MigratorTrait for Migrator {
             Box::new(spent_000001_commitments::Migration),
             Box::new(cosign4_000001_owner_debits::Migration),
             Box::new(spent2_000001_finalized::Migration),
+            Box::new(spent3_000001_nullifiers::Migration),
+            Box::new(cosign5_000001_outflow::Migration),
         ]
     }
 }

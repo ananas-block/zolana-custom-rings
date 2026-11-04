@@ -1,7 +1,6 @@
 use std::{collections::HashSet, num::NonZeroU32, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::RingMode;
 use custom_ring_sdk::{select_merge_where, MAX_RING_MERGE_INPUTS};
 use solana_address::Address;
 use solana_message::VersionedMessage;
@@ -16,13 +15,11 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     audit::AuditService,
     authorize::WalletCheck,
-    cosign::{CoSignDecision, CoSignFlows, CoSignRequest},
     error::{redacted, RingRpcError},
     hub::Hub,
     merge_inputs::HeldInput,
     merge_settings::{MergeSettingsBook, SignedMergeSettings, WalletMergeSettings},
-    relay::{HeldMerge, Relay, RelayError},
-    relay_submit::CollectedSignature,
+    relay::{HeldMerge, Relay},
     relays::RelayPhase,
     replay::ReplayCheck,
     upstream::TransactionSource,
@@ -152,7 +149,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
         Ok(sent)
     }
 
-    /// Only a `ConfidentialEscrow` ring escrows the secret a merge needs.
+    /// An enrolled wallet's secret opens from its tracking seal on every ring.
     async fn merge_ring(
         &self,
         book: &MergeSettingsBook<'_>,
@@ -160,11 +157,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
     ) -> Result<Vec<RelayId>, RingRpcError> {
         let service = self.hub.service(Some(ring))?;
         let shared = self.hub.shared();
-        let escrowed = service
-            .served_config()
-            .await?
-            .is_some_and(|config| config.mode == RingMode::ConfidentialEscrow);
-        if !escrowed {
+        if service.served_config().await?.is_none() {
             return Ok(Vec::new());
         }
         let pass = RingPass {
@@ -216,7 +209,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
         let ring = pass.service.ring();
         let owner_key = wallet.owner.to_bytes();
         // 1. The secret opens to the nullifier key the registry record binds.
-        let Some(nullifier_key) = pass.service.escrowed_nullifier_key(&owner_key)? else {
+        let Some(nullifier_key) = pass.service.tracked_nullifier_key(&owner_key)? else {
             return Ok(None);
         };
         let notes = self.hub.shared().store(ring).spendable(SpendableNotes {
@@ -235,7 +228,6 @@ impl<S: TransactionSource> ManagedMerge<S> {
         };
         // 3. The secret leaves memory once the merge is proven.
         let nullifiers: Vec<[u8; 32]> = inputs.iter().map(|input| input.nullifier).collect();
-        let co_signer = self.hub.co_signer();
         let built = self
             .builder
             .build(OwnerMerge {
@@ -243,44 +235,18 @@ impl<S: TransactionSource> ManagedMerge<S> {
                 owner: wallet.owner,
                 nullifier_key: &nullifier_key,
                 inputs,
-                co_signer: co_signer.signer(),
+                co_signer: None,
             })
             .await?;
         drop(nullifier_key);
-        // 4. A co-signer whose scope covers transfers signs, or the merge waits.
-        let mut co_signature = None;
-        if let Some(named) = built.co_signer {
-            let signer = co_signer
-                .signer_named(named)
-                .ok_or(RelayError::CoSignRefused)?;
-            let decision = co_signer
-                .decide(&CoSignRequest {
-                    ring,
-                    message: built.message.clone(),
-                    flows: CoSignFlows::Published(Vec::new()),
-                })
-                .await?;
-            match decision {
-                CoSignDecision::Signed(signature) => {
-                    co_signature = Some(CollectedSignature { signer, signature })
-                }
-                CoSignDecision::Refused(refusal) => {
-                    log::info!(
-                        "co-signer refused the merge of {} as {refusal:?}",
-                        wallet.owner
-                    );
-                    return Ok(None);
-                }
-            }
-        }
-        // 5. The inputs stay held until the relay fails or the ring history spends them.
+        // 4. A merge demands no co-signer, the inputs stay held until the relay fails or the ring history spends them.
         let relay_id = self
             .relay
             .send_merge(HeldMerge {
                 ring,
                 message: built.message,
                 last_valid_block_height: built.last_valid_block_height,
-                co_signature,
+                co_signature: None,
                 nullifiers,
             })
             .await?;
@@ -631,7 +597,7 @@ pub(crate) mod tests {
                         policy: Address::new_from_array([2; 32]),
                         ..bytemuck::Zeroable::zeroed()
                     },
-                    mode: RingMode::ConfidentialEscrow,
+                    mode: RingMode::Confidential,
                     delegate,
                 },
                 origins: Mutex::default(),
@@ -646,7 +612,10 @@ pub(crate) mod tests {
             };
             let mut builder = Hub::builder(source, identity)
                 .with_store(store)
-                .with_co_signer(Keypair::new());
+                .with_co_signer(Keypair::new())
+                .with_co_signer_approval(crate::cosign::CoSignerApproval::new([
+                    crate::cosign::ApproveClass::Transfers,
+                ]));
             if let Some(relay) = relay {
                 builder = builder.with_relay(relay);
             }

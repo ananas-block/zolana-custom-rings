@@ -5,8 +5,9 @@ use std::{
 };
 
 use custom_ring_interface::{
-    storage::{AddressAuthorization, StorageRegistry},
-    storage_instruction::{StorageUpdateIxData, StorageWriteData},
+    storage::StorageRegistry,
+    storage_instruction::StorageUpdateIxData,
+    RecordWriteData,
     QueueEntry, RingAccount, RingPolicy,
 };
 use custom_ring_sdk::{CustomRing, InitializeStorage, UpdateStorage};
@@ -26,7 +27,7 @@ use zolana_ring_client::{
     StorageTip,
 };
 use zolana_ring_indexer::rpc::{
-    GetStorageApplyProofInputsRequest, RingEscrowPreimageView, StorageWriteView,
+    GetStorageApplyProofInputsRequest, StorageWriteView,
 };
 use zolana_ring_policy::Member;
 
@@ -36,8 +37,8 @@ use crate::{
     error::{redacted, RingRpcError},
     landing::{Attempt, ChainOutcome, Landing},
     record_update::{
-        escrowed_members, limits_within_bounds, AddressAuthorizationCheck, ApplyInputsCheck,
-        BatchPlan, CheckedUpdate, EnrolmentApproval, EscrowUniqueness, KeyAgreement, ModeDecision,
+        limits_within_bounds, ApplyInputsCheck,
+        BatchPlan, CheckedUpdate, EnrolmentApproval, ModeDecision,
         QueuedCheck, QueuedState, RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
     },
     storage_chain::StorageChain,
@@ -58,7 +59,7 @@ pub struct RecordWriter {
     authority: Keypair,
     genesis_hash: [u8; 32],
     reader_grants: ReaderGrantStore,
-    /// Holds the escrow check and the insert of one update together.
+    /// Holds the queue check and the insert of one update together.
     submits: tokio::sync::Mutex<()>,
     /// One records creation at a time, a second request finds the first registry.
     creations: tokio::sync::Mutex<()>,
@@ -176,8 +177,6 @@ impl RecordWriter {
         }
         // An expired enrolment joins no approval.
         queue.expire_awaiting(request.registry.0, slot).await?;
-        self.check_escrows(&update, &records).await?;
-        self.check_addresses(&request, &update, &records).await?;
         let approves = EnrolmentApproval {
             update: &update,
             awaiting: &queue
@@ -332,21 +331,11 @@ impl RecordWriter {
             .iter()
             .flat_map(|update| update.writes.iter().copied())
             .collect();
-        let mut entries = Vec::with_capacity(writes.len());
-        for update in batch {
-            for write in &update.writes {
-                match self.queued_entry(registry, write).await? {
-                    Some(entry) => entries.push(entry),
-                    // The owner enrolled again, the update signed an address the account no longer holds.
-                    None => {
-                        queue
-                            .refuse(&update.id, RecordUpdateRefusal::AddressNotAuthorized)
-                            .await?;
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let entries = writes
+            .iter()
+            .map(RecordWriteData::entry)
+            .collect::<Result<Vec<QueueEntry>, _>>()
+            .map_err(|_| DbErr::Custom("stored record update writes are invalid".to_owned()))?;
         let state = self
             .registry(registry)
             .await?
@@ -355,11 +344,7 @@ impl RecordWriter {
             .chain
             .apply_inputs(GetStorageApplyProofInputsRequest {
                 registry: registry.into(),
-                writes: writes
-                    .iter()
-                    .zip(&entries)
-                    .map(|(write, entry)| write_view(write, entry))
-                    .collect(),
+                writes: entries.iter().map(StorageWriteView::from).collect(),
             })
             .await?;
         let checked = ApplyInputsCheck {
@@ -433,116 +418,6 @@ impl RecordWriter {
         Ok(self.queue().settle(batch.id, outcome).await?)
     }
 
-    /// `None` when the owner's account no longer holds the address the write names.
-    async fn queued_entry(
-        &self,
-        registry: Address,
-        write: &StorageWriteData,
-    ) -> Result<Option<QueueEntry>, RingRpcError> {
-        let StorageWriteData::Address(address) = write else {
-            return Ok(Some(write.entry().map_err(|_| {
-                DbErr::Custom("stored record update writes are invalid".to_owned())
-            })?));
-        };
-        let Some(authorization) = self.authorization(registry, address.owner).await? else {
-            return Ok(None);
-        };
-        // An applied revision would fail the batch on chain.
-        Ok(address
-            .entry(&authorization.address())
-            .ok()
-            .filter(|_| authorization.applied_revision() < authorization.revision()))
-    }
-
-    async fn authorization(
-        &self,
-        registry: Address,
-        owner: Address,
-    ) -> Result<Option<AddressAuthorization>, RingRpcError> {
-        let (account, _) = AddressAuthorization::find_address(&registry, &owner);
-        Ok(self
-            .chain
-            .account(account)
-            .await?
-            .and_then(|account| AddressAuthorization::decode(&account.owner, &account.data)))
-    }
-
-    /// Early errors only, the storage program and ApplyRecords enforce both.
-    async fn check_addresses(
-        &self,
-        request: &SubmitRecordUpdateRequest,
-        update: &CheckedUpdate,
-        records: &StorageTip,
-    ) -> Result<(), RingRpcError> {
-        for enrollment in &update.addresses {
-            AddressAuthorizationCheck {
-                enrollment,
-                authorization: self
-                    .authorization(request.registry.0, enrollment.owner.0)
-                    .await?
-                    .as_ref(),
-            }
-            .check()?;
-        }
-        let escrows: Vec<([u8; 32], [u8; 32])> = request
-            .update
-            .entries
-            .iter()
-            .filter_map(|entry| match entry {
-                RecordUpdateEntry::Escrow(registration) => {
-                    Some((registration.member.0, registration.nullifier_pk.0))
-                }
-                _ => None,
-            })
-            .collect();
-        if update.addresses.is_empty() && escrows.is_empty() {
-            return Ok(());
-        }
-        let mut members = escrows
-            .iter()
-            .map(|(member, _)| *member)
-            .collect::<Vec<_>>();
-        for enrollment in &update.addresses {
-            let member = *Member::owner_tag(enrollment.owner.0.as_array())
-                .map_err(|_| RecordUpdateRefusal::InvalidEntry)?
-                .as_bytes();
-            if !members.contains(&member) {
-                members.push(member);
-            }
-        }
-        let reads = self.chain.verified_openings(records, &members).await?;
-        Ok(KeyAgreement {
-            addresses: &update.addresses,
-            escrows: &escrows,
-            members: &members,
-            reads: &reads,
-        }
-        .check()?)
-    }
-
-    /// Refuses an escrow key for a member whose record or pending update holds one.
-    async fn check_escrows(
-        &self,
-        update: &CheckedUpdate,
-        records: &StorageTip,
-    ) -> Result<(), RingRpcError> {
-        let registering = escrowed_members(&update.writes)?;
-        if registering.is_empty() {
-            return Ok(());
-        }
-        let openings = self.chain.verified_openings(records, &registering).await?;
-        let pending = self
-            .queue()
-            .pending_writes(records.registry, &registering)
-            .await?;
-        Ok(EscrowUniqueness {
-            registering: &registering,
-            records: &openings,
-            pending: &pending,
-        }
-        .check()?)
-    }
-
     async fn check_limited_assets(
         &self,
         update: &CheckedUpdate,
@@ -599,20 +474,5 @@ impl RecordWriter {
 
     fn queue(&self) -> UpdateQueue<'_> {
         UpdateQueue::new(self.store.connection())
-    }
-}
-
-/// An escrow write carries the preimage ApplyRecords reads beside an address.
-fn write_view(write: &StorageWriteData, entry: &QueueEntry) -> StorageWriteView {
-    let escrow_preimage = match write {
-        StorageWriteData::Escrow(escrow) => Some(RingEscrowPreimageView {
-            nullifier_pk: Hash(escrow.nullifier_pk),
-            ciphertext: escrow.ciphertext.to_vec().into(),
-        }),
-        StorageWriteData::Record(_) | StorageWriteData::Address(_) => None,
-    };
-    StorageWriteView {
-        escrow_preimage,
-        ..StorageWriteView::from(entry)
     }
 }
