@@ -150,6 +150,19 @@ describe("relay proof inputs", () => {
     const read = await decodeRelayProofInputs(wire, new AssetRegistry());
     expect(read.inputs[0]?.nullifier()).toEqual(spend.nullifier());
     expect(encodeRelayProofInputs(read)).toEqual(wire);
+    expect(read.approvalBlinder).toBeUndefined();
+
+    const blinder = filled(29) as Bytes32;
+    const disclosed = encodeRelayProofInputs({ ...proofInputs, approvalBlinder: blinder });
+    expect(disclosed).toEqual(Uint8Array.of(...wire.subarray(0, -1), 1, ...blinder));
+    expect((await decodeRelayProofInputs(disclosed, new AssetRegistry())).approvalBlinder).toEqual(
+      blinder,
+    );
+    const badTag = wire.slice();
+    badTag[badTag.length - 1] = 2;
+    await expect(decodeRelayProofInputs(badTag, new AssetRegistry())).rejects.toMatchObject({
+      code: "RING_RELAY_PROOF_INPUTS",
+    });
 
     const { plan } = proofInputs.rail as Extract<RelayRail, { kind: "anonymous" }>;
     const delegated = await decodeRelayProofInputs(

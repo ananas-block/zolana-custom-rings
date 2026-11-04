@@ -17,6 +17,12 @@ import { RingError } from "../protocol/error.js";
 import { fetchRingCoSignerRecord } from "../protocol/membership/config.js";
 import { ringCoSignerAddress } from "../protocol/pda/index.js";
 import { ApprovalMask } from "../protocol/transaction/transact.js";
+import { PendingRelaySignature } from "../rpc/relay.js";
+import {
+  expectedCoSigner,
+  type CoSignerRule,
+  type TokenAccountCreate,
+} from "../rpc/relay-message.js";
 
 const APPROVALS = RING_COSIGN_APPROVE_OUTFLOW | RING_COSIGN_APPROVE_WITHDRAWAL;
 
@@ -135,4 +141,31 @@ export async function resolveRingCoSigners(
 
 function coSignerRequired(reason: string, signer: Address): RingError {
   return new RingError("RING_COSIGNER_REQUIRED", { details: { reason, signer } });
+}
+
+/** A co-signer the frame names, what it signs is the rule it holds, Rust `CoSignerApproval`. */
+export class CoSignerApproval {
+  readonly #input: CoSignerApprovalInput;
+
+  constructor(input: CoSignerApprovalInput) {
+    this.#input = input;
+    Object.freeze(this);
+  }
+
+  async pending(): Promise<PendingRelaySignature> {
+    const { relayId, message } = this.#input;
+    return new PendingRelaySignature(relayId, message, await expectedCoSigner(this.#input));
+  }
+}
+
+export interface CoSignerApprovalInput {
+  readonly relayId: ConstructorParameters<typeof PendingRelaySignature>[0];
+  readonly message: Uint8Array;
+  readonly ring: Address;
+  readonly feePayer: Address;
+  readonly signer: Address;
+  readonly config: Pick<RingPolicy, "mode">;
+  /** The public creates a relay puts ahead of the ring instruction. */
+  readonly setup: readonly TokenAccountCreate[];
+  readonly rule: CoSignerRule;
 }

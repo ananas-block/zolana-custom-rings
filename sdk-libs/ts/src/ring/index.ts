@@ -260,10 +260,21 @@ export {
   submittedRelay,
 } from "../rpc/relay.js";
 export type { RelaySent, RingAuthorityRelayClient, RingRelayClient } from "../rpc/relay.js";
+export { CoSignerApproval, type CoSignerApprovalInput } from "../proof/cosign.js";
+export type {
+  ApprovalOpening,
+  OutputTotalsOpening,
+  PublicTotalsOpening,
+} from "../protocol/membership/approval-totals.js";
 export {
   VerifiedRelayMessage,
+  decodeApprovalOpening,
   decodeRelayTransferTerms,
+  encodeApprovalOpening,
   encodeRelayTransferTerms,
+  type ApprovalLimit,
+  type CoSignerRule,
+  type ExactApproval,
   type RelayTransferTerms,
   type SlotOpening,
   type TokenAccountCreate,

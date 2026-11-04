@@ -78,6 +78,8 @@ export interface RelayProofInputs {
   readonly listSalts: readonly RingListSalt[];
   /** The public co-owners whose keys the seal holds. */
   readonly coOwners: readonly CoOwner[];
+  /** The relayer rebuilds the totals and proves their digest under it, Rust `approval_blinder`. */
+  readonly approvalBlinder?: Bytes32;
 }
 
 export function writeRelayListSalts(
@@ -127,6 +129,8 @@ export function encodeRelayProofInputs(value: RelayProofInputs): Uint8Array {
       .bytes(secret, BLINDING_LENGTH, "coOwner.nullifierSecret");
     secret.fill(0);
   }
+  if (value.approvalBlinder === undefined) writer.u8(0, "approvalBlinder");
+  else writer.u8(1, "approvalBlinder").bytes(value.approvalBlinder, 32, "approvalBlinder");
   return writer.finish();
 }
 
@@ -207,6 +211,7 @@ export async function decodeRelayProofInputs(
       ),
     }),
   );
+  const approvalBlinder = readApprovalBlinder(reader);
   reader.done();
   const inputs = unresolved.map((input) => input(coOwners));
   const legs = await Promise.all(external.legs.map(withdrawalLeg));
@@ -233,7 +238,15 @@ export async function decodeRelayProofInputs(
     assets,
     listSalts,
     coOwners,
+    ...(approvalBlinder === undefined ? {} : { approvalBlinder }),
   });
+}
+
+/** A wincode `Option`, any tag past one is not a canonical frame. */
+function readApprovalBlinder(reader: WireReader): Bytes32 | undefined {
+  const tag = reader.u8("approvalBlinder");
+  if (tag > 1) throw refused("approvalBlinder", tag);
+  return tag === 1 ? reader.hash("approvalBlinder") : undefined;
 }
 
 function writeRail(writer: Writer, rail: RelayRail): void {

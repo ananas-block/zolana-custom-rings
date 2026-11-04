@@ -118,6 +118,8 @@ export {
 export {
   ApprovalTotals,
   APPROVAL_TOTALS_DOMAIN,
+  approvalOpeningOf,
+  openingTotals,
   type OutputTotals,
   type PublicTotals,
 } from "../protocol/membership/approval-totals.js";

@@ -22,12 +22,14 @@ import type {
   RingAssetDeposit,
   Signature,
 } from "@heliuslabs/zolana/interface";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import { slotTag } from "../crypto/derivation/ring-stream.js";
 import {
   addressBytes,
   encodeBase58,
   equalBytes,
   isCanonicalField,
+  isZero,
   U64_MAX,
   LOADED_ACCOUNTS_DATA_SIZE_LIMIT,
 } from "@heliuslabs/zolana/internal";
@@ -45,6 +47,15 @@ import {
   settleBufferedData,
 } from "../protocol/transaction/frame-buffer.js";
 import { RingError } from "../protocol/error.js";
+import {
+  openingTotals,
+  type ApprovalOpening,
+  type ApprovalTotals,
+  type OutputTotalsOpening,
+  type PublicTotalsOpening,
+} from "../protocol/membership/approval-totals.js";
+import { memberOfAsset } from "../protocol/membership/policy.js";
+import { setPastRun, signerDataCountAt } from "../protocol/membership/signer-data-counts.js";
 import { ringPolicyAddress, STORAGE_PROGRAM_ID } from "../protocol/pda/index.js";
 import {
   ENROLL_COMPUTE_UNITS,
@@ -76,13 +87,16 @@ import {
   type RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
 import { x25519FromU } from "../crypto/keys/x25519.js";
+import { rawJson } from "../protocol/codec/raw-json.js";
+import { N_PUBLIC_SLOTS } from "../protocol/transaction/spp.js";
 
 const base58 = getBase58Decoder();
-/** The engine floor holds `JSON.rawJSON`, the TS lib does not type it. */
-const rawJson = (JSON as unknown as { rawJSON(text: string): unknown }).rawJSON;
 const VERIFIED = Symbol("verified relay message");
 const MAX_SIGNATURES = 12;
 const MAX_INSTRUCTIONS = 64;
+/** The SPP program's place in a ring transact account list, then the rest of its fixed head. */
+const SPP_PROGRAM_INDEX = 2;
+const RING_TRANSACT_ACCOUNT_PREFIX_LEN = 5;
 
 /** Rust `MessageMismatch`, the variant names the shared vectors carry. */
 export type RelayMessageMismatch =
@@ -96,6 +110,12 @@ export type RelayMessageMismatch =
   | "Accounts"
   | "Recipients"
   | "TransactionKey"
+  | "ApprovalMaskUnaccepted"
+  | "MissingApprovalDigest"
+  | "FalseApprovalOpening"
+  | "ReusedApprovalBlinder"
+  | "ApprovalOverLimit"
+  | "SignerDataCount"
   | "SpendsUnnamedNote"
   | "SettlesBuffer"
   | "Unrequested"
@@ -186,6 +206,42 @@ export interface ExpectedPublicOwner {
 export interface ExpectedSealed {
   readonly kind: "sealed";
   readonly terms: readonly RelayTransferTerms[];
+  /** The opening of the frame's digest, handed to an outside co-signer. */
+  readonly approval?: ApprovalOpening;
+}
+
+/** An outside co-signer reads the proven bits or the totals, never a slot, Rust `CoSignerRule`. */
+export type CoSignerRule =
+  /** The proven mask alone, no opening and no digest. */
+  | Readonly<{ kind: "threshold"; accepts: number }>
+  | Readonly<{ kind: "exact"; approval: ExactApproval }>;
+
+export interface ExactApproval {
+  readonly opening: ApprovalOpening;
+  /** An asset the totals name with no limit here is refused. */
+  readonly limits: readonly ApprovalLimit[];
+  /** The blinders of its earlier attempts, the only record of reuse the SDK has. */
+  readonly seenBlinders: readonly Bytes32[];
+}
+
+/** `peak` bounds one owner's outflow, `outflow` the sum over owners. */
+export interface ApprovalLimit {
+  readonly mint: Address;
+  readonly peak: bigint;
+  readonly outflow: bigint;
+}
+
+/** A co-signer the frame names, what it signs is the rule it holds, Rust `ExpectedCoSigner`. */
+export interface ExpectedCoSigner {
+  readonly kind: "coSigner";
+  readonly ring: Address;
+  readonly policy: Address;
+  readonly feePayer: Address;
+  readonly signer: Address;
+  /** From the ring account, a frame read under the wrong rail proves nothing. */
+  readonly rail: RingRail;
+  readonly setup: readonly Instruction[];
+  readonly rule: CoSignerRule;
 }
 
 export interface ExpectedEnroll {
@@ -201,7 +257,11 @@ export type ExpectedRelayMessage =
   | ExpectedDelegate
   | ExpectedSealed
   | ExpectedPublicOwner
+  | ExpectedCoSigner
   | ExpectedEnroll;
+
+/** A frame a signer reads inline or, past one transaction, from the buffer its digest names. */
+type ExpectedFrame = ExpectedDelegate | ExpectedPublicOwner | ExpectedCoSigner;
 
 /** Rust `VerifiedMessage`, only a check builds one. */
 export class VerifiedRelayMessage {
@@ -397,6 +457,84 @@ function u64Amount(value: unknown): bigint {
   return value;
 }
 
+/** Rust serde JSON byte for byte, `RelayTransferTerms` hands nothing of it over. */
+export function encodeApprovalOpening(opening: ApprovalOpening): string {
+  return JSON.stringify({
+    blinder: encodeBase58(opening.blinder),
+    outputs: opening.outputs.map((slot) => ({
+      asset: encodeBase58(slot.asset),
+      peak: slot.peak,
+      outflow: slot.outflow,
+    })),
+    public: opening.public.map((slot) => ({
+      asset: encodeBase58(slot.asset),
+      peak: slot.peak,
+      outflow: slot.outflow,
+      gross: slot.gross,
+    })),
+  });
+}
+
+export function decodeApprovalOpening(json: string): ApprovalOpening {
+  return withMismatch("Undecodable", () => decodedApprovalOpening(JSON.parse(json)));
+}
+
+/** Rust `deny_unknown_fields`, an amount reads as text and is parsed at the check. */
+function decodedApprovalOpening(wire: unknown): ApprovalOpening {
+  const row = fields(wire, ["blinder", "outputs", "public"]);
+  return Object.freeze({
+    blinder: hash32(row["blinder"]),
+    outputs: Object.freeze(
+      (row["outputs"] as readonly unknown[]).map((entry): OutputTotalsOpening => {
+        const slot = fields(entry, ["asset", "peak", "outflow"]);
+        return Object.freeze({
+          asset: hash32(slot["asset"]),
+          peak: text(slot["peak"]),
+          outflow: text(slot["outflow"]),
+        });
+      }),
+    ),
+    public: Object.freeze(
+      (row["public"] as readonly unknown[]).map((entry): PublicTotalsOpening => {
+        const slot = fields(entry, ["asset", "peak", "outflow", "gross"]);
+        return Object.freeze({
+          asset: hash32(slot["asset"]),
+          peak: text(slot["peak"]),
+          outflow: text(slot["outflow"]),
+          gross: text(slot["gross"]),
+        });
+      }),
+    ),
+  });
+}
+
+function text(value: unknown): string {
+  if (typeof value !== "string") throw mismatch("Undecodable");
+  return value;
+}
+
+/** The ring account and the creates a relay puts ahead of the ring instruction. */
+async function frameSetup(
+  ring: Address,
+  feePayer: Address,
+  creates: readonly TokenAccountCreate[],
+): Promise<Readonly<{ policy: Address; setup: readonly Instruction[] }>> {
+  const [policy, setup] = await Promise.all([
+    ringPolicyAddress(ring),
+    Promise.all(
+      creates.map((create) =>
+        getCreateAssociatedTokenAccountInstructionAsync({
+          payer: feePayer,
+          owner: create.owner,
+          mint: create.mint,
+          tokenProgram: create.tokenProgram,
+        }),
+      ),
+    ),
+  ]);
+  return { policy, setup: Object.freeze(setup) };
+}
+
 export async function expectedPublicOwner(
   input: Readonly<{
     terms: RelayTransferTerms;
@@ -405,26 +543,33 @@ export async function expectedPublicOwner(
   }>,
 ): Promise<ExpectedPublicOwner> {
   const { terms, config } = input;
-  const [policy, setup] = await Promise.all([
-    ringPolicyAddress(terms.ring),
-    Promise.all(
-      terms.setup.map((create) =>
-        getCreateAssociatedTokenAccountInstructionAsync({
-          payer: terms.feePayer,
-          owner: create.owner,
-          mint: create.mint,
-          tokenProgram: create.tokenProgram,
-        }),
-      ),
-    ),
-  ]);
   return Object.freeze({
     kind: "publicOwner",
     terms,
-    policy,
-    setup: Object.freeze(setup),
+    ...(await frameSetup(terms.ring, terms.feePayer, terms.setup)),
     rail: ringRailOf(RingInstructionTag.transfer, config.mode),
     knownNullifiers: Object.freeze(input.knownNotes.map((note) => note.nullifier)),
+  });
+}
+
+export async function expectedCoSigner(
+  input: Readonly<{
+    ring: Address;
+    feePayer: Address;
+    signer: Address;
+    config: Pick<RingPolicy, "mode">;
+    setup: readonly TokenAccountCreate[];
+    rule: CoSignerRule;
+  }>,
+): Promise<ExpectedCoSigner> {
+  return Object.freeze({
+    kind: "coSigner",
+    ring: input.ring,
+    feePayer: input.feePayer,
+    signer: input.signer,
+    ...(await frameSetup(input.ring, input.feePayer, input.setup)),
+    rail: ringRailOf(RingInstructionTag.transfer, input.config.mode),
+    rule: input.rule,
   });
 }
 
@@ -540,14 +685,14 @@ export function checkSettledMessage(
   return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
 }
 
-function frameTag(expected: ExpectedDelegate | ExpectedPublicOwner): RingInstructionTag {
+function frameTag(expected: ExpectedFrame): RingInstructionTag {
   return expected.kind === "delegate"
     ? RingInstructionTag.authorityTransfer
     : RingInstructionTag.transfer;
 }
 
 function frameEnvelope(
-  expected: ExpectedDelegate | ExpectedPublicOwner,
+  expected: ExpectedFrame,
   signer: Address,
   tag: RingInstructionTag,
 ): Envelope {
@@ -560,6 +705,17 @@ function frameEnvelope(
       signer: expected.delegate,
       setup: [],
     };
+  if (expected.kind === "coSigner") {
+    if (expected.signer !== signer) throw mismatch("Unrequested");
+    return {
+      program: expected.ring,
+      policy: expected.policy,
+      units: ringComputeUnitLimit(tag),
+      feePayer: expected.feePayer,
+      signer,
+      setup: expected.setup,
+    };
+  }
   const { terms, policy, setup } = expected;
   if (terms.signer !== signer) throw mismatch("Unrequested");
   return {
@@ -573,7 +729,7 @@ function frameEnvelope(
 }
 
 function checkFrame(
-  expected: ExpectedDelegate | ExpectedPublicOwner,
+  expected: ExpectedFrame,
   signer: Address,
   data: Uint8Array,
   accounts: readonly AccountMeta[],
@@ -582,7 +738,11 @@ function checkFrame(
   if (data[0] !== tag) throw mismatch("Data");
   const frame = withMismatch("Data", () => RingTransactData.parse(data.subarray(1), expected.rail));
   if (expected.kind === "delegate") checkMoved(expected, frame);
-  else checkOpenings(expected, frame);
+  else if (expected.kind === "coSigner") checkCoSignerRule(expected.rule, frame);
+  else {
+    checkOpenings(expected, frame);
+    checkSignerDataCount(expected.terms, frame, accounts);
+  }
   const envelope = frameEnvelope(expected, signer, tag);
   const named = accounts.filter((meta) => meta.address === envelope.signer);
   const signsOnce =
@@ -704,6 +864,99 @@ function checkOpenings(expected: ExpectedPublicOwner, frame: RingTransactData): 
     )
   )
     throw mismatch("SpendsUnnamedNote");
+}
+
+/**
+ * A signature authorizes every data-bearing output of its owner, and a selective opening shows only
+ * the slots it names. The proved count covers every output SPP accepts under the signature, an
+ * opening for each one must exist.
+ */
+function checkSignerDataCount(
+  terms: RelayTransferTerms,
+  frame: RingTransactData,
+  accounts: readonly AccountMeta[],
+): void {
+  // 1. `checkOpenings` held every opening to the signer and its slot's published commitment. Only
+  // the slot needs counting here, a repeated slot adds nothing.
+  const opened = new Set(
+    terms.slots.filter((opening) => !isZero(opening.dataHash)).map((opening) => opening.slot),
+  ).size;
+  const packed = frame.extensions.signerDataCounts ?? 0n;
+  if (packed === 0n && opened === 0) return;
+  // 2. The entry sits at the signer's place in the run `signers.Chain` binds, read as the program
+  // reads it. A place taken from the terms would let the sender point the signer at a zero entry.
+  const spp = accounts.findIndex((meta) => meta.address === SHIELDED_POOL_PROGRAM_ID);
+  const trees = frame.inputTrees.kind === "one" ? 1 : 2;
+  const start =
+    spp - SPP_PROGRAM_INDEX + RING_TRANSACT_ACCOUNT_PREFIX_LEN + trees + frame.nullifiers.length;
+  const position = accounts.findIndex((meta) => meta.address === terms.signer) - start;
+  if (spp < 0 || position < 0) throw mismatch("Accounts");
+  const run = accounts.slice(start);
+  const length = run.findIndex((meta) => !isSignerRole(meta.role));
+  if (position >= (length < 0 ? run.length : length)) throw mismatch("Accounts");
+  // 3. Exactly the proved count, an omitted output reads short and an entry past the run names no one.
+  if (
+    setPastRun(packed, length < 0 ? run.length : length) ||
+    signerDataCountAt(packed, position) !== opened
+  )
+    throw mismatch("SignerDataCount");
+}
+
+function checkCoSignerRule(rule: CoSignerRule, frame: RingTransactData): void {
+  if (rule.kind === "exact") {
+    checkExactApproval(rule.approval, frame);
+    return;
+  }
+  if ((frame.approval & ~rule.accepts) !== 0) throw mismatch("ApprovalMaskUnaccepted");
+}
+
+/** The digest binds the totals, the limits then read them with no slot opened. */
+function checkExactApproval(exact: ExactApproval, frame: RingTransactData): void {
+  const { opening, limits, seenBlinders } = exact;
+  // 1. A frame with no digest binds no totals, nothing past here reads true.
+  const digest = frame.extensions.approvalTotals;
+  if (digest === undefined) throw mismatch("MissingApprovalDigest");
+  if (seenBlinders.some((seen) => equalBytes(seen, opening.blinder)))
+    throw mismatch("ReusedApprovalBlinder");
+  // 2. `HashChain4` carries no length tag and pads zeros, so a trimmed layout can hash alike. The
+  // hasher's range handling is not relied on either: a value past the modulus that reduced would
+  // open the same digest under a blinder `seenBlinders` does not hold.
+  const totals = openedTotals(opening, frame.nOut);
+  if (
+    !equalBytes(
+      withMismatch("FalseApprovalOpening", () => totals.commitment(opening.blinder)),
+      digest,
+    )
+  )
+    throw mismatch("FalseApprovalOpening");
+  // 3. The commitment bound `totals`, every nonzero asset they name now needs a limit.
+  for (const slot of [...totals.outputs, ...totals.publicSlots]) {
+    if (isZero(slot.asset)) continue;
+    const limit = withMismatch("ApprovalOverLimit", () =>
+      limits.find((entry) => equalBytes(memberOfAsset(entry.mint), slot.asset)),
+    );
+    if (
+      limit === undefined ||
+      totals.peakOf(slot.asset) > limit.peak ||
+      totals.outflowOf(slot.asset) > limit.outflow
+    )
+      throw mismatch("ApprovalOverLimit");
+  }
+}
+
+/** One slot per output of the key and per public slot, every field canonical, no zero blinder. */
+function openedTotals(opening: ApprovalOpening, outputs: number): ApprovalTotals {
+  const totals = openingTotals(opening);
+  if (
+    totals === undefined ||
+    totals.outputs.length !== outputs ||
+    totals.publicSlots.length !== N_PUBLIC_SLOTS ||
+    isZero(opening.blinder) ||
+    !isCanonicalField(opening.blinder) ||
+    ![...totals.outputs, ...totals.publicSlots].every((slot) => isCanonicalField(slot.asset))
+  )
+    throw mismatch("FalseApprovalOpening");
+  return totals;
 }
 
 export function openingHash(opening: SlotOpening, ring: Address): Bytes32 {

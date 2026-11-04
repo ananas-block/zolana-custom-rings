@@ -30,6 +30,7 @@ import { describe, expect, it, vi } from "vitest";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import {
   DepositAsset,
+  SHIELDED_POOL_PROGRAM_ID,
   type Bytes16,
   type Bytes32,
   type Bytes33,
@@ -47,6 +48,7 @@ import {
   expectedDeposit,
   expectedEnroll,
   expectedPublicOwner,
+  openingHash,
   type ExpectedRelayMessage,
   type DelegateRingConfig,
 } from "../../../src/rpc/relay-message.js";
@@ -389,6 +391,109 @@ describe("relay message check", () => {
           })),
         }),
       ).toBe("Data");
+    });
+  });
+
+  describe("the data-bearing slots a public owner opens", () => {
+    const entry = owners.cases.find((owner) => owner.verdict === "Accepted");
+    if (entry === undefined) throw new Error("no accepted owner case");
+    const terms = decodeRelayTransferTerms(JSON.stringify(entry.terms));
+    const [first] = terms.slots;
+    if (first === undefined) throw new Error("no opening");
+    const dataOpening = { ...first, dataHash: new Uint8Array(32).fill(9) as Bytes32 };
+    const instruction = (): Instruction => {
+      const compiled = getCompiledTransactionMessageDecoder().decode(
+        new Uint8Array(base64.encode(entry.message)),
+      );
+      const found = decompileTransactionMessage(
+        compiled as Parameters<typeof decompileTransactionMessage>[0] & { version: 1 },
+      ).instructions.at(-1);
+      if (found === undefined) throw new Error("no instruction");
+      return found as Instruction;
+    };
+    const verdictWith = async (
+      named: typeof terms,
+      signerDataCounts: bigint | undefined,
+    ): Promise<string> => {
+      const frame = RingTransactData.parse(
+        Uint8Array.from(instruction().data ?? []).subarray(1),
+        "anonymous",
+      );
+      const { messageBytes } = compileUnsignedTransaction({
+        feePayer: terms.feePayer,
+        lifetime: SIZE_PROBE_LIFETIME,
+        instructions: [
+          {
+            ...instruction(),
+            data: ringInstructionData({
+              ...frame,
+              extensions: {
+                ...frame.extensions,
+                ...(signerDataCounts === undefined ? {} : { signerDataCounts }),
+              },
+              outputs: frame.outputs.map((output, slot) =>
+                slot === dataOpening.slot
+                  ? { ...output, hash: openingHash(dataOpening, terms.ring) }
+                  : output,
+              ),
+            }),
+          },
+        ],
+        computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.transfer),
+      });
+      return verdict(
+        await expectedPublicOwner({
+          terms: named,
+          config: { mode: "anonymous" } as DelegateRingConfig,
+          knownNotes: entry.knownNullifiers.map((nullifier) => ({
+            nullifier: new Uint8Array(base58.encode(nullifier)) as Bytes32,
+          })),
+        }),
+        Buffer.from(new Uint8Array(messageBytes)).toString("base64"),
+        terms.signer,
+      );
+    };
+    const opened = { ...terms, slots: [dataOpening, ...terms.slots.slice(1)] };
+    const ordinary = { ...terms, slots: [first, ...terms.slots.slice(1)] };
+    const position = (): number => {
+      const accounts = instruction().accounts ?? [];
+      const spp = accounts.findIndex((meta) => meta.address === SHIELDED_POOL_PROGRAM_ID);
+      const frame = RingTransactData.parse(
+        Uint8Array.from(instruction().data ?? []).subarray(1),
+        "anonymous",
+      );
+      const trees = frame.inputTrees.kind === "one" ? 1 : 2;
+      return (
+        accounts.findIndex((meta) => meta.address === terms.signer) -
+        (spp - 2 + 5 + trees + frame.nullifiers.length)
+      );
+    };
+    const count = (value: bigint): bigint => value << BigInt(5 * position());
+
+    it("passes one opening for each proved slot at the signer's place in the run", async () => {
+      expect(await verdictWith(opened, count(1n))).toBe("Accepted");
+    });
+
+    it("refuses an omitted data output", async () => {
+      expect(await verdictWith({ ...terms, slots: terms.slots.slice(1) }, count(1n))).toBe(
+        "SignerDataCount",
+      );
+    });
+
+    it("refuses a repeated opening that would pad a count", async () => {
+      expect(
+        await verdictWith({ ...opened, slots: [dataOpening, ...opened.slots] }, count(2n)),
+      ).toBe("SignerDataCount");
+    });
+
+    it("refuses an ordinary output standing in for a data output", async () => {
+      expect(await verdictWith(ordinary, count(1n))).toBe("Recipients");
+    });
+
+    it("refuses a count at another entry and a false count", async () => {
+      expect(await verdictWith(opened, count(1n) << 5n)).toBe("SignerDataCount");
+      expect(await verdictWith(opened, count(2n))).toBe("SignerDataCount");
+      expect(await verdictWith(opened, undefined)).toBe("SignerDataCount");
     });
   });
 

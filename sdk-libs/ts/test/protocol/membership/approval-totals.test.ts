@@ -6,7 +6,11 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 
 import digests from "../../../../../test-vectors/policy/approval_totals.json" with { type: "json" };
 import quantities from "../../../../../test-vectors/policy/quantities.json" with { type: "json" };
-import { ApprovalTotals } from "../../../src/protocol/membership/approval-totals.js";
+import {
+  ApprovalTotals,
+  approvalOpeningOf,
+  openingTotals,
+} from "../../../src/protocol/membership/approval-totals.js";
 import type { DebitTransfer } from "../../../src/protocol/membership/owner-debits.js";
 
 await initializePoseidon();
@@ -45,7 +49,7 @@ function totalsOf(vector: Case, slots: number): ApprovalTotals {
     outputs,
     publicGross,
   };
-  return new ApprovalTotals({
+  return ApprovalTotals.new({
     transfer,
     slotAssets: Array.from({ length: slots }, (_, slot) => outputs[slot]?.asset),
     publicSlots: Array.from(
@@ -70,7 +74,7 @@ describe("approval_totals.json", () => {
 });
 
 describe("ApprovalTotals reads", () => {
-  const totals = new ApprovalTotals({
+  const totals = ApprovalTotals.new({
     transfer: {
       senders: [identity(1), identity(2)],
       assets: [],
@@ -100,7 +104,7 @@ describe("ApprovalTotals reads", () => {
     const blinder = identity(0x51);
     const base = totals.commitment(blinder);
     expect(totals.commitment(identity(0x52))).not.toEqual(base);
-    const bigger = new ApprovalTotals({
+    const bigger = ApprovalTotals.new({
       transfer: {
         senders: [identity(1)],
         assets: [],
@@ -112,5 +116,46 @@ describe("ApprovalTotals reads", () => {
       publicSlots: [{ asset: identity(8), gross: 5n }],
     });
     expect(bigger.commitment(blinder)).not.toEqual(base);
+  });
+});
+
+describe("ApprovalOpening", () => {
+  const totals = ApprovalTotals.new({
+    transfer: {
+      senders: [identity(1)],
+      assets: [],
+      inputs: [{ owner: identity(1), asset: identity(7), amount: 10n }],
+      outputs: [{ owner: identity(3), asset: identity(7), amount: 10n, ring: true }],
+      publicGross: [],
+    },
+    slotAssets: [identity(7), undefined],
+    publicSlots: [{ asset: identity(8), gross: 5n }],
+  });
+  const blinder = identity(0x51);
+
+  it("rebuilds the commitment from its text", () => {
+    const opened = openingTotals(approvalOpeningOf(totals, blinder));
+    expect(opened?.commitment(blinder)).toEqual(totals.commitment(blinder));
+  });
+
+  it.each(["", " 4 ", "0x10", "-1", "1e3", "340282366920938463463374607431768211456"])(
+    "refuses the amount %j as Rust `u128::from_str` does",
+    (peak) => {
+      const opening = approvalOpeningOf(totals, blinder);
+      const [slot, ...rest] = opening.outputs;
+      expect(openingTotals({ ...opening, outputs: [{ ...slot!, peak }, ...rest] })).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["+4", 4n],
+    ["04", 4n],
+    ["340282366920938463463374607431768211455", (1n << 128n) - 1n],
+  ])("reads the amount %j as Rust `u128::from_str` does", (peak, expected) => {
+    const opening = approvalOpeningOf(totals, blinder);
+    const [slot, ...rest] = opening.outputs;
+    expect(
+      openingTotals({ ...opening, outputs: [{ ...slot!, peak }, ...rest] })?.outputs[0]?.peak,
+    ).toBe(expected);
   });
 });
