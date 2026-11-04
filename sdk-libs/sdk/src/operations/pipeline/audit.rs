@@ -149,7 +149,7 @@ pub(super) fn audit_record(output: &SppProofOutputUtxo) -> Result<AuditRecord, R
     })
 }
 
-fn data_tail(output: &SppProofOutputUtxo) -> DataTail {
+pub(super) fn data_tail(output: &SppProofOutputUtxo) -> DataTail {
     match output.is_dummy() {
         true => DataTail::default(),
         false => DataTail {

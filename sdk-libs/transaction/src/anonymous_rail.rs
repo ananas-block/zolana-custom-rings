@@ -286,7 +286,7 @@ impl AnonymousSeal<'_> {
 }
 
 /// The outputs the frame publishes, compact padding is an omitted suffix.
-pub(crate) fn published(outputs: &[SppProofOutputUtxo]) -> &[SppProofOutputUtxo] {
+pub fn published(outputs: &[SppProofOutputUtxo]) -> &[SppProofOutputUtxo] {
     let omitted = outputs
         .iter()
         .rev()

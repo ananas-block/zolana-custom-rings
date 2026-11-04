@@ -3,15 +3,24 @@
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::AsyncRpc;
-use spr_indexer_api::{SerializablePubkey, SerializableSignature};
+use spr_hasher::primitives::solana_owner_identity;
+use spr_indexer_api::{Base64String, SerializablePubkey, SerializableSignature};
 use spr_keypair::{NullifierKey, SigningKey};
+use spr_program::instruction::CreateAssociatedTokenAccount;
 use zolana_ring_client::rpc::{
-    PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
+    PrepareRelayRequest, ProofInputBytes, RelayCoOwner, RelayIntent, RelayProofInputs, RelayQuote,
+    RelayRail, TxViewingSecret,
 };
-use zolana_ring_transaction::RingDelivery;
+use zolana_ring_transaction::{published_outputs, RingDelivery};
 
-use super::{Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed};
-use crate::{PreparedRelay, RingError};
+use super::{
+    audit::{audit_record, data_tail},
+    carries_data, Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed,
+};
+use crate::{
+    relay_message::{ExpectedMessage, ExpectedTransfer, RelayTransferTerms, TokenAccountCreate},
+    PreparedRelay, RingError,
+};
 
 impl RingTransfer<Anonymous<'_>> {
     /// The hidden owner signs the message hash, the wallet reads no Merkle path and no record.
@@ -83,13 +92,21 @@ impl<R: Rail> WalletRelay<'_, R> {
         let owner_signature = SerializableSignature(Signature::from(
             self.signer.sign_message(&inputs.message_hash()?)?,
         ));
+        let token_account_setup = self.owner.token_account_setup.clone();
+        let setup = sealed
+            .relay_proof_inputs(RelayRail::Confidential, nullifier_key.clone())?
+            .token_account_setup(payer, &token_account_setup)
+            .map_err(|_| RingError::RelayAuditorMessage)?;
+        let terms = sealed.transfer_terms(payer, &self.transfer.co_signers, &setup)?;
+        let config = self.transfer.ring.require_config(client).await?;
+        let expected = ExpectedTransfer::new(terms, &config)?;
         let encode = |rail| {
             sealed
-                .relay_proof_inputs(rail, nullifier_key)
+                .relay_proof_inputs(rail, nullifier_key)?
                 .encode()
                 .map(ProofInputBytes::new)
+                .map_err(RingError::from)
         };
-        let token_account_setup = self.owner.token_account_setup.clone();
         let intent = match staged.rail.delivery() {
             RingDelivery::Anonymous(plan) => RelayIntent::Anonymous {
                 proof_inputs: encode(RelayRail::Anonymous {
@@ -116,7 +133,8 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .copied()
                 .map(SerializablePubkey)
                 .collect(),
-        }))
+        })
+        .expecting(ExpectedMessage::Transfer(expected)))
     }
 }
 
@@ -131,25 +149,107 @@ impl RingTransfer<Delegated<'_>> {
             RingDelivery::Anonymous(plan) => Some(plan.clone()),
             RingDelivery::Delivered => None,
         };
-        Ok(sealed.relay_proof_inputs(
+        sealed.relay_proof_inputs(
             RelayRail::Delegate {
                 delegate: self.rail.delegate,
                 plan,
             },
             self.rail.source_key.clone(),
-        ))
+        )
     }
 }
 
 impl Sealed<'_> {
-    fn relay_proof_inputs(&self, rail: RelayRail, nullifier_key: NullifierKey) -> RelayProofInputs {
+    /// A signer whose key the seal holds spends beside the sender, any other owns no input.
+    fn relay_co_owners(&self) -> Result<Vec<RelayCoOwner>, RingError> {
+        let staged = &self.pipeline.staged;
+        let mut co_owners = Vec::new();
+        for owner in &staged.owner_signers {
+            let identity = solana_owner_identity(owner.as_array())?;
+            if let Some(held) = staged
+                .authority
+                .co_owners
+                .iter()
+                .find(|held| held.owner_pk_hash == identity)
+            {
+                co_owners.push(RelayCoOwner {
+                    owner: *owner,
+                    nullifier_key: held.key.clone(),
+                });
+            }
+        }
+        Ok(co_owners)
+    }
+
+    fn transfer_terms(
+        &self,
+        fee_payer: Address,
+        co_signers: &[Address],
+        setup: &[CreateAssociatedTokenAccount],
+    ) -> Result<RelayTransferTerms, RingError> {
         let staged = &self.pipeline.staged;
         let inputs = &staged.proof_inputs;
-        RelayProofInputs {
+        let slots = published_outputs(&inputs.output_utxos);
+        let bytes = |encoded: &[u8]| Base64String(encoded.to_vec());
+        Ok(RelayTransferTerms {
+            ring: SerializablePubkey(self.pipeline.ring.program_id()),
+            fee_payer: SerializablePubkey(fee_payer),
+            tx_viewing_key: TxViewingSecret::from(staged.rail.tx_viewing_key()),
+            signers: staged
+                .owner_signers
+                .iter()
+                .chain(co_signers)
+                .copied()
+                .map(SerializablePubkey)
+                .collect(),
+            records: slots
+                .iter()
+                .map(|slot| Ok(bytes(&audit_record(slot)?.encode())))
+                .collect::<Result<_, RingError>>()?,
+            tails: match inputs.output_utxos.iter().any(carries_data) {
+                true => slots
+                    .iter()
+                    .map(|slot| bytes(&data_tail(slot).encode()))
+                    .collect(),
+                false => Vec::new(),
+            },
+            nullifiers: inputs
+                .input_utxos
+                .iter()
+                .filter(|input| !input.is_compact())
+                .map(|input| bytes(&input.nullifier()))
+                .collect(),
+            legs: inputs
+                .external_data
+                .interface_transfers
+                .iter()
+                .map(|leg| wincode::serialize(&leg.interface_transfer()).map(Base64String))
+                .collect::<Result<_, _>>()
+                .map_err(|_| RingError::RelayAuditorMessage)?,
+            setup: setup
+                .iter()
+                .map(|create| TokenAccountCreate {
+                    owner: SerializablePubkey(create.owner),
+                    mint: SerializablePubkey(create.mint),
+                    token_program: SerializablePubkey(create.token_program),
+                })
+                .collect(),
+        })
+    }
+
+    fn relay_proof_inputs(
+        &self,
+        rail: RelayRail,
+        nullifier_key: NullifierKey,
+    ) -> Result<RelayProofInputs, RingError> {
+        let staged = &self.pipeline.staged;
+        let inputs = &staged.proof_inputs;
+        Ok(RelayProofInputs {
             rail,
             ring_program_id: self.pipeline.ring.program_id(),
             sender: staged.sender,
             nullifier_key,
+            co_owners: self.relay_co_owners()?,
             tx_viewing_key: staged.rail.tx_viewing_key().clone(),
             inputs: inputs.input_utxos.clone(),
             outputs: inputs.output_utxos.clone(),
@@ -158,7 +258,7 @@ impl Sealed<'_> {
             blinding_seed: inputs.blinding_seed,
             output_tree_id: inputs.output_tree_id,
             list_salts: staged.list_salts.clone(),
-        }
+        })
     }
 }
 
