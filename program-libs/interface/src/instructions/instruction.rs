@@ -55,8 +55,8 @@ instruction_tags! {
     SetPaused = SET_PAUSED: 11 => ACCOUNT_UNITS,
     /// Ring-local tags must not collide with the forwarded SPP deposit and merge tags.
     SetCoSigner = SET_CO_SIGNER: 27 => ACCOUNT_UNITS,
-    ClearCoSigner = CLEAR_CO_SIGNER: 21 => ACCOUNT_UNITS,
-    SetDelegate = SET_DELEGATE: 24 => ACCOUNT_UNITS,
+    ClearCoSigner = CLEAR_CO_SIGNER: 62 => ACCOUNT_UNITS,
+    SetDelegate = SET_DELEGATE: 64 => ACCOUNT_UNITS,
     AuthorityTransfer = AUTHORITY_TRANSFER: 56 => PROOF_UNITS,
     Deposit = DEPOSIT: 58 => PROOF_UNITS,
     /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.

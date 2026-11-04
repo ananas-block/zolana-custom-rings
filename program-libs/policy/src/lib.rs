@@ -19,7 +19,7 @@ pub use quantities::{
 pub use rule_table::{
     EncodedRuleTable, Guard, Mode, OutflowLimit, PolicySource, PolicyTableError, Rule, RuleSource,
     RuleTable, RuleTableBuilder, RuleTableError, SourceMap, SourceMapError, Subject, TableParts,
-    MAX_RULES, MAX_SOURCES, POLICY_TABLE_DOMAIN, POLICY_TABLE_FIELDS, POLICY_TABLE_VERSION,
+    MAX_RULES, MAX_SOURCES, POLICY_TABLE_DOMAIN, POLICY_TABLE_FIELDS,
 };
 pub use rules::{OutputSubjects, RecordLists, RuleRefusal, TransferSubject, TransferSubjects};
 

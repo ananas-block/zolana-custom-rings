@@ -6,7 +6,7 @@ use spr_indexer_api::{Base64String, SerializablePubkey, SerializableSignature};
 use super::{base64, wallet_line, Attestation, ReadTarget, RequestBuildError, SignedRequest};
 use crate::ReaderKey;
 
-const READER_GRANT_DOMAIN: &str = "zolana/ring-rpc-reader-grant/v1";
+const READER_GRANT_DOMAIN: &str = "zolana/ring-rpc-reader-grant";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

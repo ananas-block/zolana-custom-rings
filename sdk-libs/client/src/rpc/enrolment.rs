@@ -5,7 +5,7 @@ use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignat
 
 use super::{base64, Attestation, ReadTarget, RecordUpdateId, RequestBuildError, SignedRequest};
 
-const ENROLMENT_DOMAIN: &str = "zolana/ring-rpc-enrolment/v1";
+const ENROLMENT_DOMAIN: &str = "zolana/ring-rpc-enrolment";
 
 /// Raw Ed25519 over the `EnrolmentAttestation` message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

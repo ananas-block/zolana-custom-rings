@@ -125,7 +125,7 @@ export type InputTrees =
 export type SlotBody =
   /** A slot another message covers, such as change the sender bundle holds. */
   | Readonly<{ kind: "none" }>
-  /** Scheme 13 under the slot's view tag or recipient key. */
+  /** Ring body under the slot's view tag or recipient key. */
   | Readonly<{ kind: "recipient"; body: Uint8Array }>
   /** Scheme 3 under its own owner tag, a default-ring wallet reads it. */
   | Readonly<{ kind: "exit"; payload: Uint8Array }>;
@@ -141,7 +141,7 @@ export interface RingOutput {
   readonly tail?: Uint8Array;
 }
 
-/** Scheme 12, forwarded under its tag as the first SPP message, its length fixed by `m`. */
+/** Sender bundle, forwarded under its tag as the first SPP message, its length fixed by `m`. */
 export interface PublishedSenderBundle {
   readonly tag: Bytes32;
   readonly body: Uint8Array;

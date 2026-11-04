@@ -50,7 +50,7 @@ impl RingDeliveryContext {
     }
 }
 
-/// Scheme 13 slots under the wallet's viewing keys.
+/// Ring body slots under the wallet's viewing keys.
 pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
     shielded_keys: &K,
     transactions: &'a [ShieldedTransaction],

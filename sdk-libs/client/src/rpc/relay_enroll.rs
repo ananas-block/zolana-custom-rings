@@ -16,7 +16,7 @@ pub struct RelayEnrollInputs {
     pub instruction_data: Vec<u8>,
 }
 
-const ENROLL_REQUEST_DOMAIN: &[u8] = b"zolana/ring-rpc-relay-enroll/v1";
+const ENROLL_REQUEST_DOMAIN: &[u8] = b"zolana/ring-rpc-relay-enroll";
 
 /// The ceiling a relayed enrollment asks and its owner checks.
 pub const ENROLL_COMPUTE_UNITS: u32 = 400_000;

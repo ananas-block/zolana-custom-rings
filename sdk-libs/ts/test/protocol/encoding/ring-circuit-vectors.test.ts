@@ -193,13 +193,13 @@ describe("anonymous_bodies.json", () => {
     txViewingKey.destroy();
   });
 
-  it("seals and opens the scheme 13 body", () => {
+  it("seals and opens the ring body", () => {
     const secret = field(bodies.body_slot_secret);
     expect(hex(sealRecipientBody(secret, body))).toBe(bodies.body);
     expect(openRecipientBody(secret, bytes(bodies.body, 72))).toEqual(body);
   });
 
-  it("seals and opens the scheme 12 bundle and hashes its digest", () => {
+  it("seals and opens the sender bundle and hashes its digest", () => {
     const secret = field(bodies.bundle_slot_secret);
     const sealed = bytes(bodies.bundle, 80 + 32 * bodies.output_count);
     expect(hex(sealSenderBundle(secret, bundle))).toBe(bodies.bundle);

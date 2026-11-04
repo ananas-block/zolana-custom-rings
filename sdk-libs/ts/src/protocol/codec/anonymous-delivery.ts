@@ -42,7 +42,7 @@ export function senderBundleLen(outputs: number): number {
   return SENDER_BUNDLE_HEAD_LEN + FIELD_LEN * outputs;
 }
 
-/** A scheme 13 plaintext, the recipient rebuilds the commitment with its own bound keys, Rust `RecipientBody`. */
+/** A ring body plaintext, the recipient rebuilds the commitment with its own bound keys, Rust `RecipientBody`. */
 export interface RecipientBody {
   readonly blinding: Bytes32;
   readonly amount: bigint;
@@ -61,7 +61,7 @@ export interface ReplyMetadata {
   readonly data: Data;
 }
 
-/** What the sender's scheme 12 bundle opens to, the sender rebuilds its change from it. */
+/** What the sender bundle opens to, the sender rebuilds its change from it. */
 export interface SenderBundle {
   /** Slot 0's mint under `change_bits` bit 0, else the zero address. */
   readonly mint: Address;

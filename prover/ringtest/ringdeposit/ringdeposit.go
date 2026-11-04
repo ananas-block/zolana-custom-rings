@@ -287,7 +287,7 @@ func (d *Deposit) Elements(t testing.TB) []*big.Int {
 		}
 		chain = append(chain, ringtest.AsBigInt(c.Assets[i]), ringtest.AsBigInt(c.Amounts[i]))
 	}
-	return append(chain, big.NewInt(circuits.DepositStatementVersion))
+	return chain
 }
 
 // RefillTracking opens every owner under the tree's current root and rebinds.

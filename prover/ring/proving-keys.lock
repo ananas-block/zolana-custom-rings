@@ -46,16 +46,6 @@
       "size": 77431584,
       "source": "release"
     },
-    "custom_ring_merge_v3_24.key": {
-      "sha256": "2d7027a592972d0085b2e078abea6e3f23b877b648a11149ee91b8a6243cf0b4",
-      "size": 32898241,
-      "source": "release"
-    },
-    "custom_ring_merge_v3_8.key": {
-      "sha256": "92b5c560f4d2ea1dccee16a0118698350e6415b3822305b16d459fbb9956e3e9",
-      "size": 23527454,
-      "source": "release"
-    },
     "custom_ring_register_key.key": {
       "sha256": "75d755b97e6acb5449ac575314c897a8c15f17da363e5c871889123183a4df37",
       "size": 16799029,

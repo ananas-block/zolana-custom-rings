@@ -33,16 +33,14 @@ const base58Decoder = getBase58Decoder();
 const base58Encoder = getBase58Encoder();
 const encoder = new TextEncoder();
 
-export const RING_ADDRESS_VERSION = 4;
-
-export const RING_ADDRESS_CHECKSUM_DOMAIN = "zolana/ring-addr/v4";
+export const RING_ADDRESS_CHECKSUM_DOMAIN = "zolana/ring-addr";
 
 export const RING_PAYMENT_SCHEME = "zolana:";
 
 const CHECKSUM_LENGTH = 4;
-/** `version ‖ recipient ‖ ring_program_id ‖ list_salt`. */
-const BODY_LENGTH = 1 + SHIELDED_ADDRESS_LENGTH + 32 + 32;
-const PROGRAM_OFFSET = 1 + SHIELDED_ADDRESS_LENGTH;
+/** `recipient ‖ ring_program_id ‖ list_salt`. */
+const BODY_LENGTH = SHIELDED_ADDRESS_LENGTH + 32 + 32;
+const PROGRAM_OFFSET = SHIELDED_ADDRESS_LENGTH;
 const SALT_OFFSET = PROGRAM_OFFSET + 32;
 
 export const RING_ADDRESS_PAYLOAD_LENGTH = BODY_LENGTH + CHECKSUM_LENGTH;
@@ -85,10 +83,9 @@ export class RingAddress {
     return equalBytes(this.toBytes(), other.toBytes());
   }
 
-  /** `version ‖ recipient ‖ ring_program_id ‖ list_salt ‖ checksum`. */
+  /** `recipient ‖ ring_program_id ‖ list_salt ‖ checksum`. */
   toBytes(): Uint8Array {
     const body = concatBytes(
-      Uint8Array.of(RING_ADDRESS_VERSION),
       this.recipient.toBytes(),
       new Uint8Array(addressEncoder.encode(this.ringProgramId)),
       this.listSalt,
@@ -100,13 +97,10 @@ export class RingAddress {
     if (!(bytes instanceof Uint8Array) || bytes.length !== RING_ADDRESS_PAYLOAD_LENGTH)
       throw new RingKeyError("KEYPAIR_INVALID_RING_ADDRESS_LENGTH");
     const body = bytes.subarray(0, BODY_LENGTH);
-    const version = body[0] ?? -1;
-    if (version !== RING_ADDRESS_VERSION)
-      throw new RingKeyError("KEYPAIR_UNKNOWN_RING_ADDRESS_VERSION", { actual: version });
     if (!equalBytes(bytes.subarray(BODY_LENGTH), checksum(body)))
       throw new RingKeyError("KEYPAIR_INVALID_RING_ADDRESS_CHECKSUM");
     return new RingAddress({
-      recipient: ShieldedAddress.fromBytes(body.subarray(1, PROGRAM_OFFSET)),
+      recipient: ShieldedAddress.fromBytes(body.subarray(0, PROGRAM_OFFSET)),
       ringProgramId: addressDecoder.decode(body.subarray(PROGRAM_OFFSET, SALT_OFFSET)),
       listSalt: body.slice(SALT_OFFSET) as Bytes32,
     });

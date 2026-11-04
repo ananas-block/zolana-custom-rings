@@ -140,7 +140,7 @@ function syncClient(transactions: readonly IndexedShieldedTransaction[]) {
   };
 }
 
-/** Scheme 13 under the sender's agreement with the recipient key. */
+/** Ring body under the sender's agreement with the recipient key. */
 function ringBody(
   recipient: ShieldedKeypair,
   hash: Bytes32 = note(recipient).hash,
@@ -169,7 +169,7 @@ function ringBody(
   );
 }
 
-describe("scheme 13 bodies", () => {
+describe("ring bodies", () => {
   it("opens a note under the ring key with its mint from the body", async () => {
     const recipient = ShieldedKeypair.generate();
     const notes = await opened(LocalRingKeys.fromKeypair(recipient), [
@@ -199,7 +199,7 @@ describe("scheme 13 bodies", () => {
     expect(await opened(keys, [ringBody(recipient, other)])).toEqual({ utxos: [], pending: 0 });
   });
 
-  it("refuses the sync when the holder fails on a scheme 13 slot", async () => {
+  it("refuses the sync when the holder fails on a ring body slot", async () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const failure = new Error("holder offline");

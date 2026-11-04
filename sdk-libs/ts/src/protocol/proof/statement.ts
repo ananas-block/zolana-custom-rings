@@ -13,11 +13,7 @@ import { u32Field } from "../../crypto/error.js";
 import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { auditLayoutValue, type AuditLayout } from "../codec/ring-disclosure-layout.js";
 
-import {
-  TRANSFER_STATEMENT_VERSION,
-  RingDomain,
-  domainField,
-} from "../../crypto/derivation/ring-domain.js";
+import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import {
   ANONYMOUS_PARTIES,
@@ -192,12 +188,8 @@ export function transferStatementElements(statement: TransferStatement): readonl
     ]),
     checkedBytes<Bytes32>(statement.withdrawalHash, 32, "withdrawal hash"),
   ];
-  // The length counts itself and the version, both close the chain.
-  return [
-    ...elements,
-    bigIntBytes(BigInt(elements.length + 2)) as Bytes32,
-    bigIntBytes(TRANSFER_STATEMENT_VERSION) as Bytes32,
-  ];
+  // The nonzero length counts itself and closes the chain, HashChain4 pads zeros.
+  return [...elements, bigIntBytes(BigInt(elements.length + 1)) as Bytes32];
 }
 
 export function transferStatementHash(statement: TransferStatement): Bytes32 {

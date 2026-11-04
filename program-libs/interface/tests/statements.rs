@@ -594,14 +594,14 @@ fn compute_vectors() -> StatementVectors {
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
                       zero padded to 8 slots, both tagged keys packed, the tracking root, the \
                       registry root, the curator root, the policy hash, each asset hash with its amount zero \
-                      padded to 8 slots and the version. The transfer statements are version 4, HashChain4 over the \
+                      padded to 8 slots. The transfer statements are HashChain4 over the \
                       audit head under CRTX, in_proof, hidden, delegate, \
                       approval_mask, no_spend, output_count, output_chain, record_chain \
                       HashChain4(hash_bytes(record_i)), tail_chain HashChain4(hash_bytes(tail_i)) or \
                       zero while has_data is clear, input_count, private_tx_hash, the sender, the \
                       party identities, signer_count, signer_chain, policy_hash, own_root, \
                       curator_root, tracking_root, asset, net and gross per public \
-                      slot, withdrawal_hash, the element count and the version. No body, tag, \
+                      slot, withdrawal_hash and the element count. No body, tag, \
                       bundle or reply digest and no slot class enters it. Every per-slot chain is \
                       zero filled to the capacity. signer_chain is HashChain4 over the deduplicated \
                       owner identities zero filled to the key's S, and zero when signer_count is \
@@ -700,7 +700,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert!(transfer.iter().all(|len| *len == 49));
+    assert!(transfer.iter().all(|len| *len == 48));
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS
@@ -810,8 +810,8 @@ fn the_element_count_follows_the_family_alone() {
         class: 16,
         entry: false,
     };
-    // Head, rail bits, mask, no_spend, m, three chains, n, private_tx_hash, sender, parties, signer count and chain, four roots, nine public cells, withdrawals, length and version.
-    let cells = AUDIT_HEAD_ELEMENTS + 3 + 2 + 4 + 2 + 1 + ANONYMOUS_PARTIES + 2 + 4 + 9 + 1 + 2;
+    // Head, rail bits, mask, no_spend, m, three chains, n, private_tx_hash, sender, parties, signer count and chain, four roots, nine public cells, withdrawals, and length.
+    let cells = AUDIT_HEAD_ELEMENTS + 3 + 2 + 4 + 2 + 1 + ANONYMOUS_PARTIES + 2 + 4 + 9 + 1 + 1;
     for capacity in [2usize, 4, 8] {
         for published in [1, capacity] {
             let statement = TransferStatement {
@@ -843,8 +843,7 @@ fn the_element_count_follows_the_family_alone() {
                 elements[AUDIT_HEAD_ELEMENTS + 5],
                 right_aligned(published as u64)
             );
-            assert_eq!(elements[elements.len() - 2], right_aligned(expected as u64));
-            assert_eq!(elements[elements.len() - 1], right_aligned(4));
+            assert_eq!(elements[elements.len() - 1], right_aligned(expected as u64));
             let anonymous = TransferStatement {
                 family: TransferFamily::Anonymous {
                     party_identities: &parties,
@@ -856,7 +855,7 @@ fn the_element_count_follows_the_family_alone() {
             assert_eq!(anonymous.element_count(), expected);
             let elements = anonymous.elements().unwrap();
             assert_eq!(elements.len(), expected);
-            assert_eq!(elements[elements.len() - 2], right_aligned(expected as u64));
+            assert_eq!(elements[elements.len() - 1], right_aligned(expected as u64));
         }
     }
 }
@@ -934,8 +933,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
     tail.extend([zero; 9]);
     tail.extend([
         values.fields[8],
-        right_aligned((AUDIT_HEAD_ELEMENTS + tail.len() + 3) as u64),
-        right_aligned(4),
+        right_aligned((AUDIT_HEAD_ELEMENTS + tail.len() + 2) as u64),
     ]);
     assert_eq!(elements.len(), AUDIT_HEAD_ELEMENTS + tail.len());
     assert_eq!(elements[AUDIT_HEAD_ELEMENTS..], tail);

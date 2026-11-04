@@ -26,9 +26,6 @@ export const RingDomain = Object.freeze({
 } as const);
 export type RingDomain = (typeof RingDomain)[keyof typeof RingDomain];
 
-/** The nonzero last element of every transfer statement, a layout change raises it. */
-export const TRANSFER_STATEMENT_VERSION = 4n;
-
 export function domainField(domain: RingDomain): Bytes32 {
   return rightAlign(u32be(domain));
 }

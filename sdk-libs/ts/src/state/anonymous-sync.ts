@@ -378,7 +378,7 @@ type Site =
   | Readonly<{ kind: "output"; position: number }>
   | Readonly<{ kind: "message"; message: number }>;
 
-/** A scheme 13 body or a scheme 12 bundle a held key may open. */
+/** A ring body or a sender bundle a held key may open. */
 interface Body {
   readonly tx: IndexedShieldedTransaction;
   readonly site: Site;

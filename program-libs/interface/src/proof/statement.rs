@@ -246,7 +246,7 @@ impl TransferFamily<'_> {
 
 impl TransferStatement<'_> {
     pub const fn element_count(&self) -> usize {
-        TRANSFER_FIXED_ELEMENTS + ANONYMOUS_PARTIES + 3 * N_PUBLIC_SLOTS + 2
+        TRANSFER_FIXED_ELEMENTS + ANONYMOUS_PARTIES + 3 * N_PUBLIC_SLOTS + 1
     }
 
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
@@ -278,12 +278,9 @@ impl TransferStatement<'_> {
             elements.extend([*asset, self.public_amounts[slot], self.public_gross[slot]]);
         }
         elements.push(*self.withdrawal_hash);
-        // The length counts itself and the version, both close the chain.
-        let length = (elements.len() + 2) as u64;
-        elements.extend([
-            right_align(&length.to_be_bytes()),
-            right_align(&[domain::TRANSFER_STATEMENT_VERSION]),
-        ]);
+        // The nonzero length counts itself and closes the chain, HashChain4 pads zeros.
+        let length = (elements.len() + 1) as u64;
+        elements.push(right_align(&length.to_be_bytes()));
         Ok(elements)
     }
 

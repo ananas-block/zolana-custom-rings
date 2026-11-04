@@ -14,8 +14,6 @@ export const RING_PROVING_KEY_SHA256S: Readonly<Record<string, string>> = Object
   "custom_ring_deposit_2.key": "56038e0a6563ccb53b6992e8284f134af6bb8dd6ac1e030f6952f5b28d107114",
   "custom_ring_deposit_4.key": "ebe4c95d2b3f96404ccb20a84df3a9eb3ec2ae85bfcf7030df63066800e01d8f",
   "custom_ring_deposit_8.key": "98c3d3d5f300989b2ac0a0d7482e83b37b059c4b88f607d9af4cc4ad4883622a",
-  "custom_ring_merge_v3_24.key": "2d7027a592972d0085b2e078abea6e3f23b877b648a11149ee91b8a6243cf0b4",
-  "custom_ring_merge_v3_8.key": "92b5c560f4d2ea1dccee16a0118698350e6415b3822305b16d459fbb9956e3e9",
   "custom_ring_register_key.key":
     "75d755b97e6acb5449ac575314c897a8c15f17da363e5c871889123183a4df37",
   "custom_ring_transfer_anonymous_2_in24_w32.key":

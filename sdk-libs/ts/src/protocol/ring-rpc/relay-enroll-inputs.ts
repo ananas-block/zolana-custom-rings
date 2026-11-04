@@ -25,7 +25,7 @@ export interface RelayEnrollInputs {
 /** The ceiling a relayed enrollment asks and its owner checks. */
 export const ENROLL_COMPUTE_UNITS = 400_000;
 
-const ENROLL_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-enroll/v1");
+const ENROLL_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-enroll");
 
 export function encodeRelayEnrollInputs(value: RelayEnrollInputs): Uint8Array {
   return new Writer()

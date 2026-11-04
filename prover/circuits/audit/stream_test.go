@@ -318,7 +318,7 @@ func TestStreamVector(t *testing.T) {
 	}
 	txViewingSk, auditorSk := sections[0].section.Keys.TxViewingSk(), ringaudit.AuditorSk()
 	ringtest.PinVector(t, "audit/audit-stream.json", map[string]any{
-		"description":     "Auditor streams of statement version 4 from solved witnesses. envelope = tx_viewing_sk || R || default_input_bits (entry keys) || entries, records at first_record_counter + 7 * i, tails at first_tail_counter + 4 * i under label CRING/adt1. Produced by prover/circuits/audit/stream_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description":     "Auditor streams from solved witnesses. envelope = tx_viewing_sk || R || default_input_bits (entry keys) || entries, records at first_record_counter + 7 * i, tails at first_tail_counter + 4 * i under label CRING/adt. Produced by prover/circuits/audit/stream_test.go with WRITE_AUDIT_VECTORS=1.",
 		"tx_viewing_sk":   hex.EncodeToString(txViewingSk[:]),
 		"auditor_sk":      hex.EncodeToString(auditorSk[:]),
 		"salt":            hex.EncodeToString(sections[0].section.Salt[:]),

@@ -84,7 +84,7 @@ function bundle(outputs: number): SenderBundle {
 
 beforeAll(initializePoseidon);
 
-describe("scheme 13 recipient body", () => {
+describe("ring body", () => {
   it("opens what it sealed at the fixed length", () => {
     const sealed = sealRecipientBody(SECRET, BODY);
     expect(sealed).toHaveLength(RECIPIENT_BODY_LEN);
@@ -201,7 +201,7 @@ describe("the shared reply vector", () => {
   });
 });
 
-describe("scheme 12 sender bundle", () => {
+describe("sender bundle", () => {
   it.each([1, 2, 4, 8])("opens what it sealed at %i published outputs", (outputs) => {
     const sealed = sealSenderBundle(SECRET, bundle(outputs));
     expect(sealed).toHaveLength(senderBundleLen(outputs));

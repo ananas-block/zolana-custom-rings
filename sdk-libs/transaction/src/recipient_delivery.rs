@@ -1,4 +1,4 @@
-//! Scheme 13 bodies, scheme 12 bundles and reply metadata, each under its own label over a CRDS slot secret.
+//! Ring bodies, sender bundles and reply metadata, each under its own label over a CRDS slot secret.
 
 use custom_ring_interface::{
     domain::{RECIPIENT_BODY_LABEL, REPLY_LABEL, SENDER_BUNDLE_LABEL},

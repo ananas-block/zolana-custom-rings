@@ -1,4 +1,4 @@
-/** Ring notes of scheme 13 and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
+/** Ring notes and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
 import { syncWallet, WalletError, type SyncReport, type SyncWalletInput } from "@heliuslabs/zolana";
 import type { IndexerReader } from "@heliuslabs/zolana/client";
 import {
@@ -42,7 +42,7 @@ export interface RingNotes {
   readonly pending: number;
 }
 
-/** Every note is unspent, scheme 13 opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
+/** Every note is unspent, a ring body opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
 export async function openRingNotes(
   input: Readonly<{
     keys: ShieldedKeys;

@@ -338,7 +338,7 @@ async fn derived_keys_are_ring_and_cluster_specific() {
     );
     assert_eq!(
         hex::encode(key_a.as_bytes()),
-        "046ac65f6fa828249939ac012a53b665c474fadedc018f71010fb7fcf4b5585248"
+        "04243e7bc394b6e8200dc94653bd041a5ac65a5cf3e20b41cf6a3e14ece6f8386c"
     );
     assert_ne!(key_a, key_b);
     let second = Hub::builder(fixture.source(), identity(genesis_hash))

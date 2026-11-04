@@ -10,8 +10,6 @@ import { RingError } from "../protocol/error.js";
 import { exactlyOne } from "./batch.js";
 import type { RingKeys, ViewTagStream } from "./ring-keys.js";
 
-export const VIEWING_HISTORY_VERSION = 8;
-
 /** How far below its watermark a sync still reads an unobserved index. */
 export const PENDING_RETENTION = 256n;
 
@@ -413,10 +411,9 @@ export class ViewingHistory {
         `"ringPositions":[${positions.join(",")}]}`
       );
     });
-    return `{"version":${VIEWING_HISTORY_VERSION},"viewingHistory":[${entries.join(",")}]}`;
+    return `{"viewingHistory":[${entries.join(",")}]}`;
   }
 
-  /** Another version fails with `RING_VIEWING_HISTORY_VERSION`. */
   static fromJson(text: string): ViewingHistory {
     return ViewingHistory._fromValue(parseExact(text));
   }
@@ -424,14 +421,7 @@ export class ViewingHistory {
   /** @internal Integers already exact bigints. */
   static _fromValue(value: unknown): ViewingHistory {
     const stored = record(value, "history");
-    const version = stored["version"];
-    if (typeof version !== "bigint" || version < 0n || version > 0xffff_ffffn)
-      throw invalid("version is not a u32");
-    if (version !== BigInt(VIEWING_HISTORY_VERSION))
-      throw new RingError("RING_VIEWING_HISTORY_VERSION", {
-        details: { version: version.toString() },
-      });
-    known(stored, "history", ["version", "viewingHistory"]);
+    known(stored, "history", ["viewingHistory"]);
     const entries: ViewingKeyEntry[] = [];
     for (const value of list(stored["viewingHistory"], "viewingHistory")) {
       const entry = storedEntry(value);

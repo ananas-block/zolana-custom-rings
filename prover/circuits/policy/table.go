@@ -21,9 +21,7 @@ const (
 
 // Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table/mod.rs.
 const (
-	// PolicyTableVersion enters the table hash, every layout change bumps it.
-	PolicyTableVersion = 14
-	PolicyTableFields  = 44
+	PolicyTableFields = 44
 	// PolicyTableRate fields join the accumulator per Poseidon call, twelve inputs is the syscall maximum.
 	PolicyTableRate = 11
 )
@@ -115,7 +113,7 @@ func (t Table) view(api frontend.API, rc frontend.Rangechecker) tableView {
 // Fields lists the hashed fields in EncodedRuleTable::fields order.
 func (t Table) Fields() []frontend.Variable {
 	fields := make([]frontend.Variable, 0, PolicyTableFields)
-	fields = append(fields, shared.PolicyTableDomain, PolicyTableVersion)
+	fields = append(fields, shared.PolicyTableDomain)
 	for _, source := range t.Sources {
 		fields = append(fields, source.ListID, source.Registry)
 	}

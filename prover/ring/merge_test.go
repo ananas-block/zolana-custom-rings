@@ -9,23 +9,14 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
-	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
-
-func TestOldMergeKeysAreGone(t *testing.T) {
-	for _, kind := range []common.CircuitType{"custom-ring-merge-v3-8", "custom-ring-merge-v3-24", "custom-ring-merge-anonymous-v2-8"} {
-		if kind.IsExtension() {
-			t.Fatalf("%s is registered", kind)
-		}
-	}
-}
 
 // Rust and TypeScript pin the same file.
 const mergeVectorPath = "../../test-vectors/merge/merge.json"
 
 const mergeVectorDescription = "Known-answer vector for the ring merge record and statement, one case per key mode. " +
 	"record = kind 1, u64be(amount), owner_key, mint, be32(nullifier_pk), 7 zero bytes, be32(seed), 144 bytes. " +
-	"ciphertext seals the record from eph to auditor under the audit stream schedule of label CRING/mrg2 at counter 2. " +
+	"ciphertext seals the record from eph to auditor under the audit stream schedule of label CRING/mrg at counter 2. " +
 	"output_blinding = Poseidon(TMOB, seed, first_nullifier). " +
 	"elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(ciphertext), payer, published_owner, tracking_root, " +
 	"public_input_hash = hash_chain(elements). published_owner is zero off ZERO_NULLIFIER_PUBKEY and the owner identity under it. " +

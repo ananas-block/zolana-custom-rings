@@ -27,17 +27,17 @@ import { packBytesBe } from "../derivation/hasher.js";
 import { RingKeyError } from "../error.js";
 
 /** Schedule labels, one secret under two labels gives two unrelated keys. */
-export const AUDIT_ENC_INFO = new TextEncoder().encode("CRING/adt1");
-export const NF_KEY_ENC_INFO = new TextEncoder().encode("CRING/nfk1");
-export const DEPOSIT_ENC_INFO = new TextEncoder().encode("CRING/dep1");
-export const RECIPIENT_BODY_ENC_INFO = new TextEncoder().encode("CRING/rcp1");
-export const REPLY_ENC_INFO = new TextEncoder().encode("CRING/rpl1");
-export const SENDER_BUNDLE_ENC_INFO = new TextEncoder().encode("CRING/snd1");
-export const MERGE_RECORD_ENC_INFO = new TextEncoder().encode("CRING/mrg2");
+export const AUDIT_ENC_INFO = new TextEncoder().encode("CRING/adt");
+export const NF_KEY_ENC_INFO = new TextEncoder().encode("CRING/nfk");
+export const DEPOSIT_ENC_INFO = new TextEncoder().encode("CRING/dep");
+export const RECIPIENT_BODY_ENC_INFO = new TextEncoder().encode("CRING/rcp");
+export const REPLY_ENC_INFO = new TextEncoder().encode("CRING/rpl");
+export const SENDER_BUNDLE_ENC_INFO = new TextEncoder().encode("CRING/snd");
+export const MERGE_RECORD_ENC_INFO = new TextEncoder().encode("CRING/mrg");
 
 /** `"CR_S"`, Rust `DOM_SEP_CR_SHARED`. */
 const DOM_SEP_CR_SHARED = 0x4352_5f53;
-const STREAM_LABEL_BYTES = 10;
+const STREAM_LABEL_BYTES = 9;
 const U32_MAX = 0xffff_ffff;
 
 export interface StreamPosition {

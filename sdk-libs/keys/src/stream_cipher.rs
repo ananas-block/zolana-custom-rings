@@ -19,11 +19,11 @@ pub struct RingStream {
 }
 
 impl RingStream {
-    pub fn new(shared_secret: &[u8; 32], label: &[u8; 10]) -> Result<Self, RingKeyError> {
-        let mut tag = [0u8; 11];
-        tag[..10].copy_from_slice(label);
+    pub fn new(shared_secret: &[u8; 32], label: &[u8; 9]) -> Result<Self, RingKeyError> {
+        let mut tag = [0u8; 10];
+        tag[..9].copy_from_slice(label);
         let head = Zeroizing::new(poseidon(&[&right_align(&tag), shared_secret])?);
-        tag[10] = 1;
+        tag[9] = 1;
         let tail = Zeroizing::new(poseidon(&[&right_align(&tag), shared_secret])?);
         let mut key = Zeroizing::new([0u8; 32]);
         key[..31].copy_from_slice(&head[1..]);
@@ -45,7 +45,7 @@ impl RingStream {
 /// The whole stream of `label` from its first counter.
 pub fn symmetric_apply_audit(
     shared_secret: &[u8; 32],
-    label: &[u8; 10],
+    label: &[u8; 9],
     buf: &mut [u8],
 ) -> Result<(), RingKeyError> {
     RingStream::new(shared_secret, label)?.apply_at(STREAM_FIRST_COUNTER, buf);
@@ -74,7 +74,7 @@ mod audit_stream_tests {
         symmetric_apply_audit(&shared, AUDIT_STREAM_LABEL, &mut ciphertext).unwrap();
         assert_eq!(
             hex::encode(ciphertext),
-            "001d45a89ea12a64c7e6886ce543a66f77971b2c1052688ff668fe8c0c5d7c7b"
+            "1bdac2890094c5e4113d9e5b60b17aca409d3f9baba3912c65c8fc76bef1ae3c"
         );
         symmetric_apply_audit(&shared, AUDIT_STREAM_LABEL, &mut ciphertext).unwrap();
         assert_eq!(ciphertext, [0; 32]);

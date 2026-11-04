@@ -145,7 +145,7 @@ fn the_merge_record_is_an_opening_record_of_a_ring_note() {
     let encoded = opening.encode();
     assert_eq!(encoded.len(), 144);
     assert_eq!(OpeningRecord::decode(&encoded).unwrap(), opening);
-    assert_eq!(MERGE_RECORD_LABEL, b"CRING/mrg2");
+    assert_eq!(MERGE_RECORD_LABEL, b"CRING/mrg");
 }
 
 fn compressed_b(bytes: &[u8]) -> Range<usize> {

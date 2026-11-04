@@ -125,16 +125,16 @@ export interface WebAuthnSignature {
   readonly clientDataJSON: Uint8Array;
 }
 
-const READ_DOMAIN = "zolana/ring-rpc-read/v2";
-const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key/v2";
-const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request/v1";
-const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos/v1";
-const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
-const LIST_SALT_DOMAIN = "zolana/ring-rpc-list-salt/v1";
-const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment/v1";
-const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant/v1";
-const WALLET_STATUS_DOMAIN = "zolana/ring-rpc-wallet-status/v1";
-const SPEND_COVERAGE_DOMAIN = "zolana/ring-rpc-spend-coverage/v1";
+const READ_DOMAIN = "zolana/ring-rpc-read";
+const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key";
+const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request";
+const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos";
+const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer";
+const LIST_SALT_DOMAIN = "zolana/ring-rpc-list-salt";
+const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment";
+const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant";
+const WALLET_STATUS_DOMAIN = "zolana/ring-rpc-wallet-status";
+const SPEND_COVERAGE_DOMAIN = "zolana/ring-rpc-spend-coverage";
 /** Rust `AUDIT_PAGE_LIMIT`. */
 export const RING_READ_PAGE_LIMIT = 100n;
 /** Rust `AUDITED_UTXOS_LIMIT`, the UTXO hashes one read names. */

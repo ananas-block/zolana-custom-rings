@@ -254,9 +254,9 @@ func (b transactionBinding) bindTransaction(api frontend.API, inputChain fronten
 	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, b.AddressChain, b.PrivateTxBlinding}))
 }
 
-// closeStatement binds the element count and the nonzero version last, a statement of another length or layout hashes apart.
+// closeStatement binds the nonzero element count last, a statement of another length hashes apart.
 func closeStatement(fields []frontend.Variable) []frontend.Variable {
-	return append(fields, len(fields)+2, shared.TransferStatementVersion)
+	return append(fields, len(fields)+1)
 }
 
 func publicSlots(assets, amounts, gross []frontend.Variable) []frontend.Variable {
