@@ -19,7 +19,6 @@ import (
 // ConfidentialShape sizes a key, Inputs the slots every rail opens and the signers it can bind.
 type ConfidentialShape struct {
 	Inputs, Outputs, Withdrawals int
-	Records                      policy.RecordPoolShape
 }
 
 // ConfidentialShapes are the confidential keys, mirrored by CONFIDENTIAL_TRANSFER_SHAPES in program-libs/interface/src/proof/key_catalog.rs.
@@ -63,7 +62,7 @@ func NewConfidentialTransferCircuit(shape ConfidentialShape) (*ConfidentialTrans
 	if !slices.Contains(ConfidentialShapes[:], keyed) {
 		return nil, fmt.Errorf("transfer: unsupported confidential shape %+v, want one of %v", keyed, ConfidentialShapes)
 	}
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: screenedOwners}.Inputs(), shape.Records, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: screenedOwners}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
 		return nil, err
 	}

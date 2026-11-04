@@ -20,7 +20,6 @@ import (
 type AnonymousShape struct {
 	InputClass, Outputs, Withdrawals int
 	FullOpenings                     bool
-	Records                          policy.RecordPoolShape
 }
 
 func (s AnonymousShape) audit() audit.AnonymousAuditShape {
@@ -96,7 +95,7 @@ func NewAnonymousTransferCircuit(shape AnonymousShape) (*AnonymousTransferCircui
 	if !slices.Contains(AnonymousShapes[:], keyed) && !slices.Contains(EntryShapes[:], keyed) {
 		return nil, fmt.Errorf("transfer: unsupported anonymous shape %+v, want one of %v or %v", keyed, AnonymousShapes, EntryShapes)
 	}
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.screenedOwners()}.Inputs(), shape.Records, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.screenedOwners()}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
 		return nil, err
 	}
