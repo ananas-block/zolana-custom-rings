@@ -1,5 +1,3 @@
-//! `key`, the member's nullifier key enrolled on the ring's tracking registry.
-
 use anyhow::Result;
 use custom_ring_interface::tracking::TrackingAuthorization;
 use custom_ring_sdk::{CustomRing, Enroll, EnrollPending};
@@ -62,7 +60,6 @@ impl KeyEnrolment<'_> {
     }
 }
 
-/// A pending enrollment grants nothing until its root lands.
 fn apply(ctx: &Context) -> Result<()> {
     let applied = ctx.block(EnrollPending { ring: ctx.ring }.prove(ctx.ring_client()))?;
     let Some(instruction) = applied else {

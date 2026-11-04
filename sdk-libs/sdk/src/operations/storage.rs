@@ -161,7 +161,7 @@ impl StorageApplyProof<'_> {
     }
 }
 
-/// Proves queued enrollments and names their authorizations in chain order, anyone may send it.
+/// Anyone may send it.
 #[must_use]
 pub struct ApplyEnrollments<'a> {
     pub tracking_registry: Address,
@@ -225,7 +225,7 @@ impl ApplyEnrollments<'_> {
     }
 }
 
-/// The oldest pending enrollments of a ring, up to one apply key's batch.
+/// Oldest first, up to one apply key's batch.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EnrollPending {

@@ -423,7 +423,7 @@ pub struct TransferArgs {
     /// `in-proof` signs the spend inside the proof and the authority pays, on a confidential ring.
     #[arg(long, value_enum, default_value_t = OwnerRail::Signer)]
     pub owner_rail: OwnerRail,
-    /// The sender's wallet address, it signs in public and spends its zero-key notes too, the sender of each note learns the spend.
+    /// Wallet that signs in public and spends its zero-key notes, each note's sender learns the spend.
     #[arg(long, value_name = "WALLET")]
     pub spend_public: Option<Address>,
 }

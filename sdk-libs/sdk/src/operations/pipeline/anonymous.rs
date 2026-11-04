@@ -498,7 +498,7 @@ fn check_audit_key(inputs: &SppProofInputs) -> Result<(), RingError> {
     }
 }
 
-/// SPP publishes a hidden owner spending its default-ring note, its ring note beside it would link.
+/// SPP publishes a hidden owner spending its default-ring note.
 fn check_entry_inputs(inputs: &SppProofInputs, sender: &ShieldedAddress) -> Result<(), RingError> {
     let live = || {
         inputs

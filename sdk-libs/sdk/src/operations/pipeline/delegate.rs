@@ -25,7 +25,7 @@ pub struct DelegateOutput {
     pub amount: u64,
 }
 
-/// A public leg the delegate pays, a deposit leg would bring an unlisted asset in.
+/// A deposit leg would bring an unlisted asset in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DelegateWithdrawal {
     pub asset: Address,
@@ -116,7 +116,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
         }
     }
 
-    /// An output leaving the ring, the proof settles on `ring_authority_exit` and publishes its owner tag.
+    /// The proof settles on `ring_authority_exit` and publishes the output's owner tag.
     #[must_use = "use the updated move"]
     pub fn with_exit(mut self, exit: DelegateOutput) -> Self {
         self.rail.exits.push(exit);
@@ -211,7 +211,7 @@ impl<'a> DelegateMove<'a> {
     }
 }
 
-/// The ring's mode fixes the frame, an anonymous ring keeps the victim and recipients hidden.
+/// An anonymous ring keeps the victim and recipients hidden.
 pub(super) const fn delegate_rail(mode: RingMode) -> RingRail {
     match mode {
         RingMode::Anonymous => RingRail::AnonymousDelegate,

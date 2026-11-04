@@ -222,7 +222,7 @@ pub enum RingError {
     MissingAnonymousSigner,
     #[error("a default-ring spend of {inputs} inputs fits no entry key, split the transfer")]
     DefaultRingSpendTooWide { inputs: usize },
-    #[error("a hidden owner spending a default-ring note takes no ring note of its own, input {index} is one, use the public-owner rail")]
+    #[error("input {index} is a ring note beside the hidden owner's default-ring note, use the public-owner rail")]
     EntryRingInput { index: usize },
     #[error("the hidden signer does not match the sender")]
     AnonymousSignerMismatch,

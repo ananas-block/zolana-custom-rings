@@ -34,7 +34,6 @@ pub(super) struct PolicyInputs {
     pub read: RootRead,
     /// The key opens its full owner rows.
     pub wide_owners: bool,
-    /// The key's `S` rows, ascending with zero rows last.
     pub rows: Vec<[u8; 32]>,
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
     withdrawals: Vec<PolicyWithdrawal>,
@@ -53,7 +52,6 @@ pub(super) struct PolicyInputs {
     /// `None` is the unopened pool of a key whose queries are all off.
     own_pool: Option<RecordPoolRead>,
     curator_pool: Option<RecordPoolRead>,
-    /// `S` entries in row order.
     sender_entries: Vec<PoolEntry>,
     owner_entries: Vec<PoolEntry>,
     asset_entries: Vec<PoolEntry>,

@@ -176,7 +176,6 @@ async fn the_next_merge_width_past_the_ring_widest_does_not_fit() {
     ));
 }
 
-/// The zero-key rail is explicit, a keyed address cannot take it.
 #[test]
 fn a_zero_key_merge_names_a_zero_key_owner() {
     use spr_interface::ZERO_NULLIFIER_PUBKEY;

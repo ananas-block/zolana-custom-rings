@@ -125,7 +125,6 @@ pub(crate) struct BoundRoot {
     pub tree: RootTree,
 }
 
-/// The account layout a root is read from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RootTree {
     Storage,

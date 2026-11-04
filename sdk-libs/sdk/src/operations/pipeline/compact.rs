@@ -105,7 +105,6 @@ pub(crate) struct OwnedAppMessage {
     pub data: Vec<u8>,
 }
 
-/// [`FrameExtensions`] with every borrowed part owned.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OwnedExtensions {
     pub data_hash: Option<[u8; 32]>,
@@ -183,7 +182,7 @@ pub(crate) struct TransactParts {
 }
 
 impl TransactParts {
-    /// The sealed stream joins the frame, each record and tail beside its slot.
+    /// Each record and tail sits beside its slot.
     pub fn seal_audit(
         &mut self,
         eph_u: [u8; 32],

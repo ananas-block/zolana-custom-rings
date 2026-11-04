@@ -1,4 +1,4 @@
-//! Enrolls a member's nullifier key on the ring's tracking registry, the first enrollment proves the sealed key.
+//! The first enrollment proves the sealed key.
 
 use custom_ring_interface::{
     key_catalog::RingCircuit,
@@ -33,7 +33,7 @@ pub struct Enroll<'a> {
     pub viewing_key: &'a ViewingKey,
 }
 
-/// The owner's consent to a reader, the program signs it through CPI for a PDA.
+/// The program signs through CPI for a PDA.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WriteOwnerGrant {
@@ -46,7 +46,7 @@ pub struct WriteOwnerGrant {
 }
 
 impl Enroll<'_> {
-    /// Tag 6 with the `RegisterKey` proof, the program refuses a second key for one owner.
+    /// The program refuses a second key for one owner.
     pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
@@ -100,7 +100,7 @@ impl Enroll<'_> {
     }
 }
 
-/// Tag 6, a first enrollment holds the proof and a rotation none.
+/// A first enrollment holds the proof, a rotation none.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EnrollInstruction {

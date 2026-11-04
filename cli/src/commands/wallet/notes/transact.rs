@@ -278,7 +278,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
 }
 
 /// Every recipient is checked against the ring's mode before anything is deposited.
-/// Zero-key funds stay apart, spending one names the wallet and shows its sender the spend.
+/// Spending a zero-key note names the wallet and shows its sender the spend.
 pub fn run_balance(ctx: &Context, args: BalanceArgs) -> Result<()> {
     let config = ctx.ring_config()?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;

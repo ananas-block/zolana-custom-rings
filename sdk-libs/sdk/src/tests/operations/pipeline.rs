@@ -3044,7 +3044,7 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
     ));
 }
 
-/// One record holds every demanded class, a record of one class covers nothing.
+/// A record of one class covers nothing.
 #[tokio::test]
 async fn the_one_co_signer_record_holds_every_demanded_class() {
     use crate::co_signer::CoSignerChoice;
@@ -3086,7 +3086,6 @@ async fn the_one_co_signer_record_holds_every_demanded_class() {
     ));
 }
 
-/// A withdrawal past its threshold proves the bit and needs the approver the ring configured.
 #[tokio::test]
 async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
     use crate::tests::support::{keypair, Registry};
@@ -3156,7 +3155,6 @@ fn delegate_transfer<'a>(
     .with_assets(assets)
 }
 
-/// A delegate leaves through `ring_authority_exit` and pays a withdrawal, no policy or mask applies.
 #[tokio::test]
 async fn a_delegate_exit_and_withdrawal_read_no_policy() {
     use crate::tests::support::keypair;

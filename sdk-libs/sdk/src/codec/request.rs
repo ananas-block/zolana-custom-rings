@@ -150,7 +150,6 @@ pub(crate) struct AuditParams {
     pub layout: u8,
 }
 
-/// One output slot and the preimages its record names.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutputOpening {
@@ -161,7 +160,7 @@ pub(crate) struct OutputOpening {
     pub mint_chunks: [[u8; 32]; 2],
 }
 
-/// A default-ring input's preimages, zero off one.
+/// Zero off a default-ring input.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EntryOpening {
@@ -359,7 +358,6 @@ impl Serialize for RecordPools {
     }
 }
 
-/// One tracking leaf as the circuits read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrackingLeafRequest {
@@ -397,7 +395,6 @@ impl From<&TrackingRecord> for TrackingLeafRequest {
     }
 }
 
-/// Every owner row and live ring output under the frame's tracking root.
 pub(crate) struct TrackingParams {
     pub tracking_root: [u8; 32],
     pub pool: TrackingPool,
@@ -430,7 +427,6 @@ impl Serialize for TrackingParams {
     }
 }
 
-/// A row's opening under a tracking root, the record a deposit or merge binds.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrackingOpeningRequest {
@@ -754,7 +750,7 @@ pub(crate) struct KeyRegister {
     pub auditor_pk: X25519Pubkey,
 }
 
-/// The witness of one applied tracking entry, mirror Go `TrackingWrite`.
+/// Mirror Go `TrackingWrite`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrackingWrite {
@@ -826,7 +822,7 @@ pub(crate) struct ApplyEnrollments {
     pub writes: Vec<Option<TrackingWrite>>,
 }
 
-/// Seals a ring's SPP merge output to its auditor, `tracking` is `None` under a zero key.
+/// `tracking` is `None` under a zero key.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MergeRequest {

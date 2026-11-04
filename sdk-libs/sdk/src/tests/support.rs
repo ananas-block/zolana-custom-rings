@@ -61,7 +61,6 @@ pub(crate) const SLOT: u64 = 2_359_301;
 /// The ring's own `StorageRegistry`, its newest root at `REVISION`.
 pub(crate) const RECORDS: Address = Address::new_from_array([0x5a; 32]);
 pub(crate) const REVISION: u64 = 1;
-/// The ring's pinned tracking registry.
 pub(crate) const TRACKING: Address = Address::new_from_array([0x5b; 32]);
 /// Every `keypair(seed)` below it holds a tracking row under its own nullifier key.
 const ENROLLED_SEEDS: u8 = 64;
@@ -653,7 +652,6 @@ impl Chain {
     }
 }
 
-/// The ring's tracking tree at `REVISION`.
 struct TrackingFixture {
     tree: TrackingTree,
 }
@@ -780,7 +778,6 @@ impl AsyncWitnessReader for Chain {
     }
 }
 
-/// The ring's own record tree.
 pub(crate) struct Registry {
     tree: MemberRegistryTree,
 }

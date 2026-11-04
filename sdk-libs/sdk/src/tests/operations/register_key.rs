@@ -29,7 +29,6 @@ async fn member_records_come_back_in_member_order() {
     assert_eq!(reads[1].record().unwrap().lists, 1);
 }
 
-/// A first enrollment carries its proof and a rotation none, the owner's authorization names both.
 #[test]
 fn an_enrollment_writes_the_owner_authorization_on_the_pinned_registry() {
     let owner = Address::new_from_array([3; 32]);

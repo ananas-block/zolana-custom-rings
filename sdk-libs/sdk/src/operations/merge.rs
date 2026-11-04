@@ -1,4 +1,4 @@
-//! The custom-ring binding of SPP's `merge_ring_v2`, the record opens the merged note for its auditor.
+//! The record opens the merged note for its auditor.
 
 use custom_ring_interface::{
     key_catalog::RingCircuit, AuditRecord, CustomRingMergeIxData, InstructionTag, MergePublicInput,
@@ -46,7 +46,7 @@ use crate::{
 };
 
 pub use spr_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
-/// The widest SPP width a ring merge fits in one v1 transaction, a test pins the next one past it.
+/// The widest SPP width a ring merge fits in one v1 transaction.
 pub const MAX_RING_MERGE_INPUTS: usize = MERGE_SUPPORTED_INPUT_COUNTS[1];
 
 #[must_use]
@@ -89,7 +89,7 @@ impl CustomRingMerge {
         self
     }
 
-    /// The nonzero key's merge, its secret seeds every derivation.
+    /// The key's secret seeds every derivation.
     pub fn encrypt<K: ShieldedKeys + ?Sized>(
         self,
         keys: &K,
@@ -262,7 +262,7 @@ impl PreparedCustomRingMerge {
         let config = self.ring.require_config(client.zolana()).await?;
         self.ring.require_active(client.zolana()).await?;
         let owner = self.signing_owner()?;
-        // A keyed owner stays apart from the payer, a zero-key owner signs in public.
+        // A keyed owner stays apart from the payer.
         if owner.is_none() {
             HiddenOwner::of(&self.inner.signing_pubkey)?.check_signers([payer])?;
         }
@@ -428,7 +428,7 @@ const fn authority_of(owner: Option<Address>) -> MergeRingAuthority {
 }
 
 impl ProvenCustomRingMerge {
-    /// `Some` on a zero-key merge, it signs the transaction.
+    /// `Some` on a zero-key merge.
     pub fn owner_signer(&self) -> Option<Address> {
         self.owner
     }

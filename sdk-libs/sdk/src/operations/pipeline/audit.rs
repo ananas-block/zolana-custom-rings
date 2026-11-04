@@ -109,7 +109,7 @@ impl AuditSeal<'_> {
     }
 }
 
-/// `R`, the spent notes among the published inputs, dummies last.
+/// The circuit's `R`, dummies last.
 pub(super) fn real_input_count(inputs: &[SppProofInputUtxo]) -> Result<u8, RingError> {
     let real = inputs
         .iter()

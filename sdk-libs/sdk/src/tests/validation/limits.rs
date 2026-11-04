@@ -69,7 +69,7 @@ fn a_withdrawal_counts_against_the_cap_through_its_debit() {
     ));
 }
 
-/// `S 1000 + deposit 1000, return 1000, exit 1000` nets no debit, an empty gross would undercount the charge.
+/// `S 1000 + deposit 1000, return 1000, exit 1000` nets no debit.
 #[test]
 fn a_deposit_funded_return_does_not_hide_what_leaves() {
     let flows = Case {
@@ -86,7 +86,6 @@ fn a_deposit_funded_return_does_not_hide_what_leaves() {
     ));
 }
 
-/// A same-owner return with nothing leaving moves no funds out.
 #[test]
 fn change_alone_is_no_outflow() {
     let flows = Case {

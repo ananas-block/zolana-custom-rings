@@ -330,7 +330,6 @@ struct Frame {
     published_inputs: usize,
     policy: PolicyInputs,
     private_tx_blinding: [u8; 32],
-    /// SPP's chain of address slot nullifiers, zero without one.
     address_chain: [u8; 32],
     sender_pk_hash: [u8; 32],
     public_assets: [[u8; 32]; N_PUBLIC_SLOTS],
@@ -1091,7 +1090,6 @@ impl DeliveredRail {
     }
 }
 
-/// What takes a v1 transaction's addresses beside its owner signers.
 pub(crate) struct OwnerCapacity {
     pub owners: usize,
     pub n_inputs: usize,
@@ -1099,7 +1097,6 @@ pub(crate) struct OwnerCapacity {
     pub legs: usize,
 }
 
-/// A transaction past the account bound never reaches the prover.
 pub(crate) fn check_owner_capacity(capacity: &OwnerCapacity) -> Result<(), RingError> {
     let limit = TransferAddresses {
         n_inputs: capacity.n_inputs,
