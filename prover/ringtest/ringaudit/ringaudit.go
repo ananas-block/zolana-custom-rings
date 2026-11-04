@@ -136,27 +136,42 @@ func (k Keys) Sealed(t testing.TB, ciphertext []byte) Sealed {
 	}
 }
 
+// Stream is the auditor keystream's ciphertext over every region of a key.
 type Stream struct {
 	Ranges     audit.StreamRanges
 	Ciphertext []byte
 }
 
-// SealAuditorStream mirrors audit.AuditWires.SealStream.
-func (k Keys) SealAuditorStream(t testing.TB, ranges audit.StreamRanges, evidence []byte, records [][]byte) Stream {
+// SealAuditorStream mirrors audit.AuditWires.SealStream, a region the key lacks stays empty.
+func (k Keys) SealAuditorStream(t testing.TB, ranges audit.StreamRanges, envelope []byte, records, tails [][]byte) Stream {
 	t.Helper()
-	plaintext := slices.Concat(k.txViewingSk[:], evidence)
-	plaintext = append(plaintext, make([]byte, ranges.RecordOffset(0)-len(plaintext))...)
-	for i, record := range records {
-		plaintext = append(append(plaintext, record...), make([]byte, ranges.RecordOffset(i+1)-len(plaintext)-len(record))...)
-	}
+	plaintext := append(slices.Clone(envelope), make([]byte, ranges.RecordOffset(0)-len(envelope))...)
+	plaintext = append(plaintext, slices.Concat(records...)...)
+	plaintext = append(plaintext, slices.Concat(tails...)...)
 	return Stream{Ranges: ranges, Ciphertext: k.StreamCiphertext(t, plaintext, shared.AuditEncInfo)}
+}
+
+// Open decrypts a stream the auditor read, the keystream is the zero plaintext's ciphertext.
+func (k Keys) Open(t testing.TB, stream Stream) []byte {
+	t.Helper()
+	keystream := k.StreamCiphertext(t, make([]byte, len(stream.Ciphertext)), shared.AuditEncInfo)
+	plaintext := make([]byte, len(keystream))
+	for i := range plaintext {
+		plaintext[i] = keystream[i] ^ stream.Ciphertext[i]
+	}
+	return plaintext
 }
 
 func (s Stream) Envelope(count int) []byte {
 	return s.Ciphertext[:s.Ranges.EnvelopeLen(count)]
 }
 
-func (s Stream) Record(i, length int) []byte {
+func (s Stream) Record(i int) []byte {
 	offset := s.Ranges.RecordOffset(i)
-	return s.Ciphertext[offset : offset+length]
+	return s.Ciphertext[offset : offset+audit.RecordLen]
+}
+
+func (s Stream) Tail(i int) []byte {
+	offset := s.Ranges.TailOffset(i)
+	return s.Ciphertext[offset : offset+audit.TailLen]
 }
