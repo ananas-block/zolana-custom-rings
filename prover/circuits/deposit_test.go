@@ -23,8 +23,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// 4 head, 8 slots of commitment and ciphertext, 4 keys, 4 roots, 8 slots of asset and amount, the version.
-const circuitsDepositElements = 4 + 2*circuits.MaxDeposits + 4 + 4 + 2*circuits.MaxDeposits + 1
+const depositElements = 4 + 2*circuits.MaxDeposits + 4 + 4 + 2*circuits.MaxDeposits + 1
 
 const (
 	depositDefine = "circuits.(*DepositCircuit).Define"
@@ -55,7 +54,6 @@ func TestDepositSolvesEachCountAndMode(t *testing.T) {
 	}
 }
 
-// Each case changes one value of an honest deposit and names the check that refuses it.
 func TestDepositSlotRefusals(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -91,6 +89,9 @@ func TestDepositSlotRefusals(t *testing.T) {
 		}, []string{"[assertIsEqual]", outputKey}},
 		{"a nonzero key with no row", ringdeposit.Spec{Count: 2, ZeroKeys: []int{0}}, func(d *ringdeposit.Deposit) {
 			d.Circuit.NullifierPks[0] = spptest.MustNullifierPk(t, big.NewInt(0x77))
+		}, []string{"[assertIsEqual]", outputKey}},
+		{"a literal zero key with no row", ringdeposit.Spec{Count: 2, ZeroKeys: []int{0}}, func(d *ringdeposit.Deposit) {
+			d.Circuit.NullifierPks[0] = 0
 		}, []string{"[assertIsEqual]", outputKey}},
 		{"a zero key on an enrolled owner", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
 			d.Circuit.NullifierPks[1] = new(big.Int).Set(shared.ZeroNullifierPk)
@@ -194,8 +195,8 @@ func TestDepositStatementBindsEveryElement(t *testing.T) {
 	d := ringdeposit.Spec{Count: 1}.Build(t)
 	elements := d.Elements(t)
 	d.Narrow(t, 1)
-	if len(elements) != circuitsDepositElements {
-		t.Fatalf("%d elements, want %d", len(elements), circuitsDepositElements)
+	if len(elements) != depositElements {
+		t.Fatalf("%d elements, want %d", len(elements), depositElements)
 	}
 	for i := range elements {
 		moved := slices.Clone(elements)
