@@ -17,7 +17,7 @@ mod spp;
 mod tests;
 
 use custom_ring_interface::{
-    cosign::{CoSignDemand, CoSignHeader, CoSignOperation},
+    cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
     key_catalog::{RingCircuit, TransferAddresses, TransferSpend},
     AnonymousParties, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
     InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg, PublicSlots,
@@ -49,7 +49,7 @@ pub use self::{
     },
     delegate::{
         DelegateMove, DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
-        Delegated,
+        DelegateWithdrawal, Delegated,
     },
     owner::{CustomRingTransfer, CustomRingTransferInput, Owner},
     public_owners::{PublicOwnerTransfer, PublicOwners},
@@ -105,7 +105,7 @@ pub enum RailKind<'a> {
 pub struct RingTransfer<R: Rail> {
     ring: CustomRing,
     rail: R,
-    co_signers: Vec<Address>,
+    co_signer: Option<Address>,
     priority_fee: Option<u64>,
 }
 
@@ -119,8 +119,8 @@ pub struct ProvenRingTransfer {
     pub tx_viewing_key: ViewingKey,
     /// Padding included.
     pub outputs: Vec<SppProofOutputUtxo>,
-    /// The supplied co-signers the demand needs, each signs the transaction.
-    pub co_signers: Vec<Address>,
+    /// The supplied co-signer when the ring demands one, it signs the transaction.
+    pub co_signer: Option<Address>,
     pub co_sign_demand: CoSignDemand,
 }
 
@@ -233,10 +233,10 @@ impl<R: Rail> RingTransfer<R> {
         self.ring
     }
 
-    /// Read only when the ring demands a co-signer, each record covers a class the others leave.
+    /// Read only when the ring demands a co-signer, its record must cover the demand.
     #[must_use = "use the updated transfer"]
     pub fn with_co_signer(mut self, signer: Address) -> Self {
-        self.co_signers.push(signer);
+        self.co_signer = Some(signer);
         self
     }
 
@@ -304,7 +304,7 @@ impl<R: Rail> RingTransfer<R> {
                 ring: self.ring,
                 config,
                 staged,
-                co_signers: self.co_signers.clone(),
+                co_signer: self.co_signer,
                 priority_fee: self.priority_fee,
             }
             .seal(client)
@@ -317,7 +317,7 @@ struct Pipeline<'a> {
     ring: CustomRing,
     config: CustomRingConfig,
     staged: Staged<'a>,
-    co_signers: Vec<Address>,
+    co_signer: Option<Address>,
     priority_fee: Option<u64>,
 }
 
@@ -330,7 +330,6 @@ struct Frame {
     published_inputs: usize,
     policy: PolicyInputs,
     private_tx_blinding: [u8; 32],
-    /// SPP's chain of address slot nullifiers, zero without one.
     address_chain: [u8; 32],
     sender_pk_hash: [u8; 32],
     public_assets: [[u8; 32]; N_PUBLIC_SLOTS],
@@ -425,6 +424,15 @@ impl<'a> Pipeline<'a> {
             u32::try_from(proof_inputs.external_data.expiry_unix_ts).unwrap_or(u32::MAX);
         proof_inputs.external_data.expiry_unix_ts = u64::from(expiry_unix_ts);
         check_distinct(&proof_inputs.input_utxos)?;
+        if ring_rail.is_delegate()
+            && proof_inputs
+                .external_data
+                .interface_transfers
+                .iter()
+                .any(|transfer| transfer.is_deposit())
+        {
+            return Err(CustomRingError::DelegatePublicLeg.into());
+        }
         if matches!(spend, Spend::InProofOwner(_)) {
             if let Some(index) = default_ring_input(&proof_inputs.input_utxos) {
                 return Err(RingError::InProofDefaultRingInput { index });
@@ -498,7 +506,7 @@ impl<'a> Pipeline<'a> {
                 priority_fee: self.priority_fee,
                 ring: self.ring,
                 config: self.config,
-                co_signers: self.co_signers,
+                co_signer: self.co_signer,
                 staged: Staged {
                     proof_inputs,
                     rail,
@@ -529,7 +537,7 @@ impl<'a> Sealed<'a> {
                     ring,
                     config: ring_config,
                     staged,
-                    co_signers: supplied_co_signers,
+                    co_signer: supplied_co_signer,
                     priority_fee,
                 },
             sealed,
@@ -573,7 +581,6 @@ impl<'a> Sealed<'a> {
             inputs: &proof_inputs,
             published_inputs,
             spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
-            has_data: proof_inputs.output_utxos.iter().any(carries_data),
             n_out,
             public: &public,
         }
@@ -590,17 +597,17 @@ impl<'a> Sealed<'a> {
             }
             .demand(),
         };
-        let co_signers = CoSignerChoice {
+        let co_signer = CoSignerChoice {
             ring,
             config,
             demand,
-            supplied: &supplied_co_signers,
+            supplied: supplied_co_signer,
         }
         .resolve(client.zolana())
         .await?;
         let in_proof_owner = preview.in_proof_owner.map(Address::new_from_array);
-        if co_signers.iter().any(|co_signer| {
-            owner_signers.contains(co_signer) || in_proof_owner == Some(*co_signer)
+        if co_signer.is_some_and(|co_signer| {
+            owner_signers.contains(&co_signer) || in_proof_owner == Some(co_signer)
         }) {
             return Err(CustomRingError::CoSignerIsOwner.into());
         }
@@ -612,13 +619,12 @@ impl<'a> Sealed<'a> {
             | Spend::Delegate { .. } => None,
         };
         if let Some(anonymous) = anonymous {
-            HiddenOwner::of(&anonymous.signer.public_key())?
-                .check_signers(co_signers.iter().copied())?;
+            HiddenOwner::of(&anonymous.signer.public_key())?.check_signers(co_signer)?;
         }
         check_owner_capacity(&OwnerCapacity {
             owners: owner_signers.len(),
             n_inputs: published_inputs,
-            co_signers: co_signers.len(),
+            co_signers: usize::from(co_signer.is_some()),
             legs: transfers.len(),
         })?;
         let accounts = TransactAccounts {
@@ -627,7 +633,7 @@ impl<'a> Sealed<'a> {
             output_tree: trees.output,
             owner_signers,
             interface_transfer_accounts,
-            co_signers,
+            co_signer,
             delegate,
         };
         let mut parts = preview.parts(&proof_inputs, &rail, &sender)?;
@@ -637,11 +643,7 @@ impl<'a> Sealed<'a> {
             &sealed.records,
             &sealed.tails,
         );
-        parts.co_sign = CoSignHeader {
-            approval: policy.approval,
-            co_signers: u8::try_from(accounts.co_signers.len())
-                .map_err(|_| CustomRingError::TooManyCoSigners)?,
-        };
+        parts.approval = policy.approval;
         parts.tracking_revision = policy.tracking.revision;
         parts.own_revision = policy.own.map(|own| own.revision);
         parts.policy = (policy.read == RootRead::Policy).then(|| PolicyProof {
@@ -766,7 +768,7 @@ impl Unwitnessed<'_> {
         let party_identities = match frame.parts.rail.anonymous_frame() {
             true => AnonymousParties {
                 payer: frame.proof_inputs.payer.as_array(),
-                co_signers: &frame.accounts.co_signers,
+                co_signer: frame.accounts.co_signer.as_ref().map(Address::as_array),
                 exit_destination: exit_destination.as_ref().map(Address::as_array),
             }
             .identities()?,
@@ -880,7 +882,7 @@ impl Assembled {
             owner.commitment = commitment.commitment;
             owner.commitment_pok = commitment.commitment_pok;
         }
-        let accounts_co_signers = accounts.co_signers.clone();
+        let accounts_co_signer = accounts.co_signer;
         Ok(ProvenRingTransfer {
             ring,
             config: self.config,
@@ -889,7 +891,7 @@ impl Assembled {
             accounts,
             tx_viewing_key: rail.tx_viewing_key().clone(),
             outputs: proof_inputs.output_utxos,
-            co_signers: accounts_co_signers,
+            co_signer: accounts_co_signer,
             co_sign_demand,
         })
     }
@@ -925,8 +927,7 @@ fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
             spends_default_ring,
             legs: 0,
             owners: 0,
-            has_data: false,
-            private_source: false,
+            wide: false,
         })
         .is_some()
 }
@@ -965,7 +966,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
         own_revision: None,
         policy: None,
         spl_withdrawal_owners: Vec::new(),
-        co_sign: CoSignHeader::default(),
+        approval: ApprovalMask::default(),
         no_spend: parts
             .inputs
             .input_utxos
@@ -978,7 +979,6 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
         extensions: OwnedExtensions {
             data_hash: external.data_hash,
             ring_data_hash: external.ring_data_hash,
-            private_revision: None,
             messages: preview.app_messages.clone(),
             cache: None,
         },
@@ -1088,7 +1088,6 @@ impl DeliveredRail {
     }
 }
 
-/// What takes a v1 transaction's addresses beside its owner signers.
 pub(crate) struct OwnerCapacity {
     pub owners: usize,
     pub n_inputs: usize,
@@ -1096,7 +1095,6 @@ pub(crate) struct OwnerCapacity {
     pub legs: usize,
 }
 
-/// A transaction past the account bound never reaches the prover.
 pub(crate) fn check_owner_capacity(capacity: &OwnerCapacity) -> Result<(), RingError> {
     let limit = TransferAddresses {
         n_inputs: capacity.n_inputs,

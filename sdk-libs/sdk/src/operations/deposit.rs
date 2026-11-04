@@ -1,4 +1,4 @@
-//! Deposits whose proof binds the SPP data, the owner's tracking row and any screened record.
+//! The proof binds the SPP data, the owner's tracking row and any screened record.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -183,14 +183,13 @@ struct DepositDisclosure {
     blinding_secret: Zeroizing<[u8; 32]>,
     encryption: DepositEncryption,
     auditor: X25519Pubkey,
-    /// The raw mint the record names.
     mint: [u8; 32],
     asset: DepositedAsset,
 }
 
 struct DepositRecords {
     tracking: BoundRoot,
-    /// The owner's row, or its absence under a zero key.
+    /// Its absence under a zero key.
     row: TrackingOpening,
     policy: Option<DepositScreen>,
 }
@@ -576,10 +575,10 @@ impl PreparedRingDeposit {
 }
 
 #[derive(Clone, Copy)]
-struct DepositRoots {
-    tracking: BoundRoot,
-    own: Option<BoundRoot>,
-    curator: Option<BoundRoot>,
+pub(crate) struct DepositRoots {
+    pub tracking: BoundRoot,
+    pub own: Option<BoundRoot>,
+    pub curator: Option<BoundRoot>,
 }
 
 impl DepositRoots {
@@ -775,16 +774,14 @@ impl DepositAssembly<'_> {
         })?[..] else {
             return Err(CustomRingError::InvalidDepositData.into());
         };
-        let supplied: Vec<Address> = co_signer.into_iter().collect();
         let cosigner = CoSignerChoice {
             ring,
             config,
             demand: CoSignDemand::DEPOSIT,
-            supplied: &supplied,
+            supplied: co_signer,
         }
         .resolve(rpc)
-        .await?
-        .pop();
+        .await?;
         let address = note.address;
         Ok(PreparedRingDeposit {
             priority_fee: None,

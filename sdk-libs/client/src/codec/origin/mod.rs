@@ -497,7 +497,9 @@ fn confirmed_deposits(
     // Tag 31 ran before the tracking revision and the key capacity entered the prefix.
     let (prefix_len, historical) = match caller.data.first() {
         Some(&ring_tag::DEPOSIT) => (DepositPrefix::SIZE, false),
-        Some(&ring_tag::HISTORICAL_DEPOSIT) => (DepositPrefix::SIZE - size_of::<Revision>() - 1, true),
+        Some(&ring_tag::HISTORICAL_DEPOSIT) => {
+            (DepositPrefix::SIZE - size_of::<Revision>() - 1, true)
+        }
         _ => return Ok(Vec::new()),
     };
     if caller.data.get(prefix_len..) != Some(source.data.as_slice()) {

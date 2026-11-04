@@ -144,14 +144,14 @@ impl MemberRead {
     }
 }
 
-/// Distinct members' tracking rows under a bound root, the canopy sized for `openings` paths.
+/// `members` stay distinct, the canopy sized for `openings` paths.
 pub(crate) struct TrackingRead<'a> {
     pub root: BoundRoot,
     pub members: &'a [[u8; 32]],
     pub openings: usize,
 }
 
-/// Every subject's row or the low row bracketing its absence, read under one root.
+/// An absent subject reads its bracketing low row.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct TrackingPoolRead {
     pool: TrackingPool,
@@ -221,7 +221,7 @@ impl TrackingPoolRead {
         &self.pool
     }
 
-    /// The member's row, `None` for an absent member or one outside the pool.
+    /// `None` for an absent member or one outside the pool.
     pub fn record(&self, member: &[u8; 32]) -> Option<&TrackingRecord> {
         let subject = self
             .pool
@@ -235,7 +235,6 @@ impl TrackingPoolRead {
     }
 }
 
-/// One member's row or its absence under a tracking root.
 pub(crate) struct TrackingMemberRead {
     pub root: BoundRoot,
     pub member: [u8; 32],

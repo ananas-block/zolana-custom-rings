@@ -109,7 +109,7 @@ impl AuditSeal<'_> {
     }
 }
 
-/// `R`, the spent notes among the published inputs, dummies last.
+/// The circuit's `R`, dummies last.
 pub(super) fn real_input_count(inputs: &[SppProofInputUtxo]) -> Result<u8, RingError> {
     let real = inputs
         .iter()
@@ -244,10 +244,11 @@ impl AuditSection<'_> {
         })
     }
 
-    /// The key's `N` slots, a dummy and an omitted slot name no owner.
-    pub fn output_openings(&self) -> Result<Vec<OutputOpening>, RingError> {
+    /// The key's `N` slots, a dummy and a slot past the SPP shape name no owner.
+    pub fn output_openings(&self, capacity: usize) -> Result<Vec<OutputOpening>, RingError> {
         let tree = self.inputs.output_tree_id;
-        self.inputs
+        let mut openings = self
+            .inputs
             .output_utxos
             .iter()
             .map(|output| {
@@ -261,7 +262,9 @@ impl AuditSection<'_> {
                     },
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, RingError>>()?;
+        openings.resize_with(capacity, OutputOpening::default);
+        Ok(openings)
     }
 
     /// The spent notes' openings in SPP order, dummies past them to the key's input class.

@@ -70,16 +70,16 @@ pub use crate::{
     },
     error::RingError,
     merge::{
-        CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, MergeRelay,
+        CustomRingMerge, CustomRingMergeInstruction, FittedMerge, MergeProofInput, MergeRelay,
         PreparedCustomRingMerge, ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
         MERGE_DEFAULT_INPUT_COUNT,
     },
     pipeline::{
         shape_keyed, Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, CoOwner,
         CustomRingTransfer, CustomRingTransferInput, DelegateMove, DelegateOutput, DelegatePayment,
-        DelegateTransfer, DelegateTransferInput, Delegated, EntrySpend, Owner, ProvenRingTransfer,
-        PublicOwnerTransfer, PublicOwners, Rail, RailKind, Relayed, RelayedTransfer,
-        RelayedTransferInput, RingPayment, RingSender, RingTransfer,
+        DelegateTransfer, DelegateTransferInput, DelegateWithdrawal, Delegated, EntrySpend, Owner,
+        ProvenRingTransfer, PublicOwnerTransfer, PublicOwners, Rail, RailKind, Relayed,
+        RelayedTransfer, RelayedTransferInput, RingPayment, RingSender, RingTransfer,
     },
     records::{
         AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,
@@ -89,7 +89,10 @@ pub use crate::{
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     relay_message::{MessageMismatch, VerifiedMessage},
     select::{select_merge_where, select_spend_where},
-    storage::{InitializeStorage, StorageApplyProof, UpdateStorage, UpdateStorageAuthority},
+    storage::{
+        ApplyEnrollments, EnrollPending, InitializeStorage, StorageApplyProof, UpdateStorage,
+        UpdateStorageAuthority,
+    },
     submission::{
         live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,
     },

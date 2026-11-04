@@ -135,7 +135,6 @@ mod tests {
     const FULL_LOCK: &str = r#"{
         "release_tag": "v1",
         "ring_program": {"asset": "custom-ring-program-v1.so", "size": 1, "sha256": "x"},
-        "transfer_confidential_2_in24_w4_key": {"asset": "custom-ring-transfer-confidential-2-in24-w4-key-v1.key", "size": 1, "sha256": "x"},
         "register_key": {"asset": "custom-ring-register-key-v1.key", "size": 1, "sha256": "x"}
     }"#;
 
@@ -166,7 +165,8 @@ mod tests {
         let file = transfer.file_name();
         let pins = |hash: [u8; 32]| [(file.as_str(), hash)];
         let mut lock: serde_json::Value = serde_json::from_str(FULL_LOCK).unwrap();
-        lock[transfer.section()]["sha256"] = serde_json::json!(hex::encode([5; 32]));
+        lock[transfer.section()] =
+            serde_json::json!({"asset": file, "size": 1, "sha256": hex::encode([5; 32])});
         let release = RingRelease::parse(&lock.to_string()).unwrap();
         release.validate_keys(pins([5; 32])).unwrap();
         assert!(release.validate_keys(pins([6; 32])).is_err());
@@ -188,7 +188,7 @@ mod tests {
         );
         let key = release.key(RING_KEYS[0]).expect_err("no key").to_string();
         assert!(
-            key.contains("ships no key for custom-ring-transfer-confidential-2-in24-w4"),
+            key.contains(&format!("ships no key for {}", RING_KEYS[0].name)),
             "{key}"
         );
         assert_eq!(

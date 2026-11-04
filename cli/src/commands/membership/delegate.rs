@@ -1,18 +1,19 @@
 //! `delegate move`, the permanent delegate spends a member's ring notes.
 
 use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_sdk::{DelegateMove, DelegatePayment, MemberRecords};
+use custom_ring_interface::tracking::TrackingAuthorization;
+use custom_ring_sdk::{DelegateMove, DelegatePayment};
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc};
+use spr_keypair::X25519Pubkey;
 use spr_transaction::SOL_MINT;
-use zolana_ring_client::{RingRecovery, SourceMember};
-use zolana_ring_policy::Member;
+use zolana_ring_client::{RingRecovery, SealedNullifierKey, SourceMember};
 
 use crate::{
     assets,
     controls::{ring_auditor_key, DualControl},
-    file, line, records,
-    transact::{CoSigner, Demand, PAYER_FEE_BUDGET, SENDER_FEE_BUDGET},
+    file, line,
+    transact::{PAYER_FEE_BUDGET, SENDER_FEE_BUDGET},
     Context, DelegateMoveArgs,
 };
 
@@ -29,26 +30,28 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
         "the delegate keypair {} is not the ring's delegate {stored}",
         delegate.pubkey()
     );
-    let cosigner = CoSigner::read(ctx, &args.cosigner)?;
-    let move_cosigner = cosigner.sign(&config, Demand::Transfer)?;
     DualControl {
-        cosigner: move_cosigner.map(|signer| signer.pubkey()),
+        cosigner: None,
         delegate: Some(stored),
     }
     .check()?;
     // The auditor key decrypts recovery material, only the delegate signs.
     let auditor = ring_auditor_key(ctx, &args.auditor_key)?;
-    let read = records::read_one(
-        &ctx.zolana,
-        MemberRecords {
-            ring: ctx.ring,
-            members: &[Member::owner_tag(&source.confidential_view_tag()?)?],
-        },
-    )?;
-    let Some(escrowed) = read.escrowed(&source.nullifier_pubkey)? else {
-        bail!("member {source} has no registered key, it runs `zolana-ring key register` first");
+    let owner = source.solana_address()?;
+    let (authorization, _) =
+        TrackingAuthorization::find_address(&config.account().tracking, &owner);
+    let enrolled = ctx
+        .rpc()
+        .get_account(authorization)?
+        .and_then(|account| TrackingAuthorization::decode(&account.owner, &account.data));
+    let Some(enrolled) = enrolled else {
+        bail!("member {source} has no enrolled key, it runs `zolana-ring key register` first");
     };
-    let nullifier_key = escrowed.sealed.open(&auditor)?;
+    let nullifier_key = SealedNullifierKey {
+        eph_pk: X25519Pubkey::from_u(enrolled.eph_u)?,
+        ciphertext: enrolled.ciphertext,
+    }
+    .open(&auditor)?;
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
     let recovery = RingRecovery::new(ctx.ring.program_id(), &auditor)
         .with_mode(config.mode)
@@ -90,15 +93,12 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
                 })
                 .collect(),
             assets: assets.registry(),
-            co_signer: move_cosigner.map(|signer| signer.pubkey()),
         }
         .select(ctx.ring_client()),
     )?;
     ctx.require_balance(authority.pubkey(), SENDER_FEE_BUDGET + PAYER_FEE_BUDGET)?;
     ctx.ring_rpc().check_serves(ctx.ring.program_id())?;
-    let signers: Vec<_> = std::iter::once(&delegate as &(dyn Signer + Sync))
-        .chain(move_cosigner)
-        .collect();
+    let signers = [&delegate as &(dyn Signer + Sync)];
     let moved = ctx.submit(transfer, authority, &signers)?;
     for to in &args.to {
         line("to", to);

@@ -1,4 +1,4 @@
-//! The custom-ring binding of SPP's `merge_ring_v2`, the record opens the merged note for its auditor.
+//! The record opens the merged note for its auditor.
 
 use custom_ring_interface::{
     key_catalog::RingCircuit, AuditRecord, CustomRingMergeIxData, InstructionTag, MergePublicInput,
@@ -46,9 +46,8 @@ use crate::{
 };
 
 pub use spr_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
-/// The most real inputs a ring merge forwards in one v1 transaction.
-pub const MAX_RING_MERGE_INPUTS: usize =
-    MERGE_SUPPORTED_INPUT_COUNTS[MERGE_SUPPORTED_INPUT_COUNTS.len() - 1];
+/// The widest SPP circuit, [`FittedMerge`] finds what one transaction carries.
+pub const MAX_RING_MERGE_INPUTS: usize = MERGE_SUPPORTED_INPUT_COUNTS[2];
 
 #[must_use]
 #[derive(Clone)]
@@ -58,18 +57,53 @@ pub struct CustomRingMerge {
     first_nullifier: [u8; 32],
 }
 
+/// The longest prefix of `inputs` whose keyed merge fits one transaction, compact padding publishes nothing.
+#[must_use]
+pub struct FittedMerge<'a, K: ?Sized> {
+    pub ring: CustomRing,
+    pub inputs: Vec<WalletUtxo>,
+    pub output_tree_id: u16,
+    pub keys: &'a K,
+    pub proof_input: &'a MergeProofInput,
+    pub payer: Address,
+}
+
+impl<K: ShieldedKeys + ?Sized> FittedMerge<'_, K> {
+    /// The size refusal of the shortest mergeable prefix when none fits.
+    pub async fn prepare(
+        self,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<PreparedCustomRingMerge, RingError> {
+        let config = self.ring.require_config(rpc).await?;
+        let budget = send_budget(InstructionTag::Merge, None);
+        let mut count = self.inputs.len();
+        loop {
+            let prepared = CustomRingMerge::new(self.ring, self.inputs[..count].to_vec(), None)?
+                .with_output_tree_id(self.output_tree_id)
+                .encrypt(self.keys)?;
+            let instruction =
+                prepared.preview_instruction(self.proof_input, self.payer, &config)?;
+            match check_transaction_size(&self.payer, &instruction, budget) {
+                Ok(()) => return Ok(prepared),
+                Err(RingError::TransactionTooLarge { .. } | RingError::TooManyAddresses { .. })
+                    if count > MIN_MERGE_INPUTS =>
+                {
+                    count -= 1
+                }
+                Err(refusal) => return Err(refusal),
+            }
+        }
+    }
+}
+
+const MIN_MERGE_INPUTS: usize = 2;
+
 impl CustomRingMerge {
     pub fn new(
         ring: CustomRing,
         inputs: Vec<WalletUtxo>,
         output_ring_data_hash: Option<[u8; 32]>,
     ) -> Result<Self, TransactionError> {
-        if inputs.len() > MAX_RING_MERGE_INPUTS {
-            return Err(TransactionError::TooManyInputs {
-                got: inputs.len(),
-                max: MAX_RING_MERGE_INPUTS,
-            });
-        }
         let first_nullifier = inputs.first().ok_or(TransactionError::NoInputs)?.nullifier;
         let inner =
             MergeTransaction::new_ring_v2(inputs, ring.program_id(), output_ring_data_hash)?;
@@ -90,7 +124,7 @@ impl CustomRingMerge {
         self
     }
 
-    /// The nonzero key's merge, its secret seeds every derivation.
+    /// The key's secret seeds every derivation.
     pub fn encrypt<K: ShieldedKeys + ?Sized>(
         self,
         keys: &K,
@@ -102,7 +136,7 @@ impl CustomRingMerge {
         })
     }
 
-    /// The owner signs the merge in public, no selection reaches this path on its own.
+    /// The owner signs the merge in public, nothing selects a zero-key merge.
     pub fn encrypt_zero_key<H: MergeSeedHolder + ?Sized>(
         self,
         holder: &H,
@@ -128,9 +162,9 @@ impl CustomRingMerge {
 #[must_use]
 #[derive(Clone)]
 pub struct PreparedCustomRingMerge {
-    ring: CustomRing,
-    inner: MergeProofInputs,
-    priority_fee: Option<u64>,
+    pub(crate) ring: CustomRing,
+    pub(crate) inner: MergeProofInputs,
+    pub(crate) priority_fee: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -187,7 +221,7 @@ impl PreparedCustomRingMerge {
     }
 
     /// `Some` exactly on the zero-key rail.
-    fn signing_owner(&self) -> Result<Option<Address>, RingError> {
+    pub(crate) fn signing_owner(&self) -> Result<Option<Address>, RingError> {
         match self.inner.rail {
             MergeRail::RingV2ZeroKey(_) => Ok(Some(Address::new_from_array(
                 self.inner.signing_pubkey.as_ed25519()?,
@@ -263,7 +297,7 @@ impl PreparedCustomRingMerge {
         let config = self.ring.require_config(client.zolana()).await?;
         self.ring.require_active(client.zolana()).await?;
         let owner = self.signing_owner()?;
-        // A keyed owner stays apart from the payer, a zero-key owner signs in public.
+        // A keyed owner stays apart from the payer.
         if owner.is_none() {
             HiddenOwner::of(&self.inner.signing_pubkey)?.check_signers([payer])?;
         }
@@ -429,7 +463,7 @@ const fn authority_of(owner: Option<Address>) -> MergeRingAuthority {
 }
 
 impl ProvenCustomRingMerge {
-    /// `Some` on a zero-key merge, it signs the transaction.
+    /// `Some` on a zero-key merge.
     pub fn owner_signer(&self) -> Option<Address> {
         self.owner
     }

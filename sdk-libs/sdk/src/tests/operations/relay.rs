@@ -198,8 +198,7 @@ mod delegate_message {
     use std::sync::Mutex;
 
     use custom_ring_interface::{
-        compute_unit_limit, tag, InstructionTag, PolicyProof, PolicyRecipients, RingRail,
-        RingTransactData,
+        compute_unit_limit, tag, InstructionTag, RingRail, RingTransactData,
     };
     use solana_instruction::Instruction;
     use solana_signer::Signer;
@@ -226,17 +225,15 @@ mod delegate_message {
     enum Answer {
         Honest,
         SwappedRecipient,
-        ChangeToStranger,
         DelegateWritable,
         ExtraSystemTransfer,
         DelegatePaysFee,
     }
 
     impl Answer {
-        const ALL: [Self; 6] = [
+        const ALL: [Self; 5] = [
             Self::Honest,
             Self::SwappedRecipient,
-            Self::ChangeToStranger,
             Self::DelegateWritable,
             Self::ExtraSystemTransfer,
             Self::DelegatePaysFee,
@@ -247,7 +244,6 @@ mod delegate_message {
             match self {
                 Self::Honest => ("honest", "Accepted"),
                 Self::SwappedRecipient => ("swappedRecipient", "Recipients"),
-                Self::ChangeToStranger => ("changeToStranger", "Recipients"),
                 Self::DelegateWritable => ("delegateWritable", "Accounts"),
                 Self::ExtraSystemTransfer => ("extraSystemTransfer", "Instructions"),
                 Self::DelegatePaysFee => ("delegatePaysFee", "FeePayer"),
@@ -260,7 +256,6 @@ mod delegate_message {
             match self {
                 Self::Honest => send(honest.clone()),
                 Self::SwappedRecipient => send(paying(honest, 0, stranger)),
-                Self::ChangeToStranger => send(paying(honest, 1, stranger)),
                 Self::DelegateWritable => {
                     let mut widened = honest.clone();
                     widened
@@ -298,20 +293,11 @@ mod delegate_message {
             .unwrap()
     }
 
-    /// The honest data with output `slot` published as paying `owner`.
-    fn paying(honest: &Instruction, slot: usize, owner: [u8; 32]) -> Instruction {
+    /// The honest data with output `slot` published under `owner_tag`.
+    fn paying(honest: &Instruction, slot: usize, owner_tag: [u8; 32]) -> Instruction {
         let parsed = RingTransactData::parse(&honest.data[1..], RingRail::Delegate).unwrap();
         let mut data = parsed.into_data();
-        let policy = data.policy.unwrap();
-        let PolicyRecipients::Framed(framed) = policy.recipients else {
-            panic!("a delegate frame names its recipients");
-        };
-        let mut recipients = framed.to_vec();
-        recipients[slot] = owner;
-        data.policy = Some(PolicyProof {
-            recipients: PolicyRecipients::Framed(&recipients),
-            ..policy
-        });
+        data.outputs[slot].owner_tag = &owner_tag;
         Instruction {
             data: [vec![tag::AUTHORITY_TRANSFER], data.encode().unwrap()].concat(),
             ..honest.clone()
@@ -335,7 +321,7 @@ mod delegate_message {
             let chain = Chain::ring(RingSettings {
                 has_policy: true,
                 delegate: Some(delegate),
-                ..RingSettings::new(RingMode::ConfidentialEscrow)
+                ..RingSettings::new(RingMode::Confidential)
             })
             .with_registry(
                 Registry::new(&[(&member, 1), (&keypair(2), 1)]),
@@ -372,7 +358,6 @@ mod delegate_message {
                     })
                     .collect(),
                 assets: &assets,
-                co_signer: None,
             }
             .select(&self.client)
             .await?

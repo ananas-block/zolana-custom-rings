@@ -1,4 +1,4 @@
-//! Each owner's quantities per asset, a shared vector pins `owner_debits` to the circuit.
+//! A shared vector pins `owner_debits` to the circuit.
 
 use spr_interface::N_PUBLIC_SLOTS;
 use spr_transaction::{instructions::transact::SppProofOutputUtxo, utxo::SppProofInputUtxo};
@@ -15,7 +15,7 @@ pub(crate) struct Outflows<'a> {
     pub inputs: &'a [SppProofInputUtxo],
     pub outputs: &'a [SppProofOutputUtxo],
     pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
-    /// Gross withdrawals per slot, no deposit subtracted, a net of the legs undercounts `leaving`.
+    /// No deposit subtracted, a net of the legs undercounts `leaving`.
     pub public_gross: &'a [u128; N_PUBLIC_SLOTS],
 }
 
@@ -68,7 +68,7 @@ impl Outflows<'_> {
             .collect()
     }
 
-    /// `outflow` per row and asset, the quantity caps and the approval mask read.
+    /// `outflow` per row and asset.
     pub fn flows(&self) -> Result<Vec<OwnerDebit>, RingError> {
         let inputs = self.debit_inputs()?;
         let outputs = self.debit_outputs()?;

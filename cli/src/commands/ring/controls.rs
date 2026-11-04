@@ -5,8 +5,7 @@ use std::path::Path;
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use custom_ring_interface::RingRole;
 use custom_ring_sdk::{
-    ClearCoSigner, CoSignScope, CustomRingCoSigner, RingMode, RingRegistration, SetCoSigner,
-    SetDelegate,
+    ClearCoSigner, CoSignScope, CustomRingCoSigner, RingRegistration, SetCoSigner, SetDelegate,
 };
 use solana_address::Address;
 use solana_signer::Signer;
@@ -242,10 +241,6 @@ pub fn delegate(ctx: &Context, command: DelegateCommand) -> Result<()> {
                 delegate: Some(delegate.pubkey()),
             }
             .check()?;
-            ensure!(
-                config.has_policy && config.mode != RingMode::Anonymous,
-                "a delegate escrows keys only on a confidential policy ring"
-            );
             ring_auditor_key(ctx, Path::new(AUDITOR_KEY_FILE))?;
             let payer = ctx.funded_authority()?;
             let admin = ctx.role_keypair(RingRole::Admin)?;
@@ -256,7 +251,6 @@ pub fn delegate(ctx: &Context, command: DelegateCommand) -> Result<()> {
             };
             ctx.send(&[payer, &admin, &delegate], &[set.instruction()])?;
             line("delegate", format_args!("{} set", delegate.pubkey()));
-            ui::warn("every later transfer escrows its output keys");
         }
         DelegateCommand::Show => {}
         DelegateCommand::Move(args) => return crate::delegate::run_move(ctx, *args),

@@ -7,7 +7,7 @@ use crate::tests::support::{ring, Chain, Registry, RingSettings, SLOT};
 async fn a_policy_write_moves_the_proof() {
     let chain = Chain::ring(RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::ConfidentialEscrow)
+        ..RingSettings::new(RingMode::Confidential)
     })
     .with_registry(Registry::new(&[]), &crate::tests::pipeline_rules());
     let pinned = ring().require_policy(&chain).await.unwrap().policy_hash;

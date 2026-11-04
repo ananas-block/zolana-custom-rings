@@ -20,6 +20,8 @@ use crate::{CustomRing, CustomRingConfig, RingError};
 pub struct PublicOwners<'a> {
     pub(super) owner: Owner<'a>,
     wallet: Address,
+    /// An unenrolled wallet's only key on a tracking root.
+    zero_key_change: bool,
     /// In declared order, the order of their ring outputs.
     payments: Vec<AnonymousPayment>,
 }
@@ -39,11 +41,12 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn spend_public(self, wallet: Address) -> RingTransfer<PublicOwners<'a>> {
         RingTransfer {
             ring: self.ring,
-            co_signers: self.co_signers,
+            co_signer: self.co_signer,
             priority_fee: self.priority_fee,
             rail: PublicOwners {
                 owner: self.rail,
                 wallet,
+                zero_key_change: false,
                 payments: Vec::new(),
             },
         }
@@ -51,6 +54,13 @@ impl<'a> RingTransfer<Owner<'a>> {
 }
 
 impl RingTransfer<PublicOwners<'_>> {
+    /// For a wallet with no tracking row, a keyed change refuses at the output check.
+    #[must_use = "use the updated transfer"]
+    pub fn with_zero_key_change(mut self) -> Self {
+        self.rail.zero_key_change = true;
+        self
+    }
+
     /// Every ring output owner other than the wallet is paid here, before the transaction is padded.
     pub fn with_payment(mut self, payment: AnonymousPayment) -> Result<Self, RingError> {
         check_payment_ring(&payment, self.ring)?;
@@ -85,7 +95,10 @@ impl PublicOwners<'_> {
         config: &CustomRingConfig,
     ) -> Result<Staged<'_>, RingError> {
         let keys = self.owner.sender;
-        let sender = keys.address()?;
+        let mut sender = keys.address()?;
+        if self.zero_key_change {
+            sender.nullifier_pubkey = ZERO_NULLIFIER_PUBKEY;
+        }
         let named = HiddenOwner::of(&sender.signing_pubkey)?.0;
         if named != self.wallet {
             return Err(RingError::PublicSpendWalletMismatch {
@@ -97,7 +110,7 @@ impl PublicOwners<'_> {
             return Err(RingError::PublicSpendInProofOwner);
         }
         if config.mode != RingMode::Anonymous {
-            return self.owner.stage_signers();
+            return self.owner.stage_signers(sender);
         }
         self.owner.check_settlement_accounts()?;
         let transaction = SenderChange {

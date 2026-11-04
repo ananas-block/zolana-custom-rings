@@ -28,7 +28,6 @@ pub(super) enum SppRail<'a> {
     /// SPP's anonymous rail, the hidden owner of the anonymous ring or the in-proof owner of a confidential one.
     Anonymous(OwnerAuthorization<'a>),
     Delegate,
-    /// The delegate's frame with an output leaving the ring.
     DelegateExit,
 }
 

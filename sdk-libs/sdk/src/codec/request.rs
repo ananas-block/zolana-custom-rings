@@ -11,7 +11,7 @@ use spr_transaction::{
 use zeroize::Zeroizing;
 use zolana_ring_member_registry::{
     MemberRecord, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput, SharedProof,
-    TrackingOpening, TrackingPool, TrackingRecord,
+    TrackingOpening, TrackingPool, TrackingRecord, TrackingWriteProofInput,
 };
 use zolana_ring_policy::{AssetLimits, EncodedRuleTable, SourceMap, MAX_SOURCES};
 
@@ -150,8 +150,7 @@ pub(crate) struct AuditParams {
     pub layout: u8,
 }
 
-/// One output slot and the preimages its record names.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutputOpening {
     pub output: Opening,
@@ -161,7 +160,7 @@ pub(crate) struct OutputOpening {
     pub mint_chunks: [[u8; 32]; 2],
 }
 
-/// A default-ring input's preimages, zero off one.
+/// Zero off a default-ring input.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EntryOpening {
@@ -359,7 +358,6 @@ impl Serialize for RecordPools {
     }
 }
 
-/// One tracking leaf as the circuits read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrackingLeafRequest {
@@ -397,7 +395,6 @@ impl From<&TrackingRecord> for TrackingLeafRequest {
     }
 }
 
-/// Every owner row and live ring output under the frame's tracking root.
 pub(crate) struct TrackingParams {
     pub tracking_root: [u8; 32],
     pub pool: TrackingPool,
@@ -430,7 +427,6 @@ impl Serialize for TrackingParams {
     }
 }
 
-/// A row's opening under a tracking root, the record a deposit or merge binds.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrackingOpeningRequest {
@@ -591,34 +587,19 @@ pub(crate) struct TransferParams<'a> {
     /// SPP's chain of address slot nullifiers, zero without one.
     #[serde(with = "fe")]
     pub address_chain: [u8; 32],
+    pub in_proof: bool,
+    pub hidden: bool,
+    pub delegate: bool,
+    /// The in-proof owner, zero on every other rail.
+    #[serde(with = "fe")]
+    pub sender: [u8; 32],
+    /// Payer, co-signer and exit destination of an anonymous frame, zero when absent.
+    #[serde(serialize_with = "fe::seq")]
+    pub party_identities: Vec<[u8; 32]>,
     #[serde(flatten)]
     pub tracking: TrackingParams,
     #[serde(flatten)]
     pub policy: PolicyParams<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ConfidentialTransfer<'a> {
-    #[serde(flatten)]
-    pub transfer: TransferParams<'a>,
-    pub in_proof: bool,
-    pub delegate: bool,
-    /// The in-proof owner, zero on the signer and authority rails.
-    #[serde(with = "fe")]
-    pub sender: [u8; 32],
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AnonymousTransfer<'a> {
-    #[serde(flatten)]
-    pub transfer: TransferParams<'a>,
-    pub public_owners: bool,
-    pub delegate: bool,
-    /// Payer, five co-signers and exit destination, zero when absent.
-    #[serde(serialize_with = "fe::seq")]
-    pub party_identities: Vec<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -754,7 +735,79 @@ pub(crate) struct KeyRegister {
     pub auditor_pk: X25519Pubkey,
 }
 
-/// Seals a ring's SPP merge output to its auditor, `tracking` is `None` under a zero key.
+/// Mirror Go `TrackingWrite`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TrackingWrite {
+    #[serde(with = "fe")]
+    pub member: [u8; 32],
+    #[serde(with = "fe")]
+    pub nullifier_pk: [u8; 32],
+    #[serde(with = "fe")]
+    pub ct_hash: [u8; 32],
+    #[serde(with = "fe")]
+    pub view0: [u8; 32],
+    #[serde(with = "fe")]
+    pub view1: [u8; 32],
+    #[serde(with = "fe")]
+    pub revision: [u8; 32],
+    #[serde(with = "fe")]
+    pub list_tag: [u8; 32],
+    pub exists: bool,
+    pub old_record: TrackingLeafRequest,
+    pub index: u64,
+    #[serde(serialize_with = "fe::seq")]
+    pub path: Vec<[u8; 32]>,
+    pub low_record: TrackingLeafRequest,
+    pub low_index: u64,
+    #[serde(serialize_with = "fe::seq")]
+    pub low_path: Vec<[u8; 32]>,
+}
+
+impl From<&TrackingWriteProofInput> for TrackingWrite {
+    fn from(write: &TrackingWriteProofInput) -> Self {
+        let entry = &write.entry;
+        let [view0, view1] = pack_be(&entry.viewing_u);
+        Self {
+            member: entry.member,
+            nullifier_pk: entry.nullifier_pk,
+            ct_hash: entry.ct_hash,
+            view0,
+            view1,
+            revision: right_align(&entry.revision.to_be_bytes()),
+            list_tag: entry.list_tag,
+            exists: write.exists,
+            old_record: (&write.old).into(),
+            index: write.slot.index,
+            path: write.slot.siblings.as_flattened().to_vec(),
+            low_record: (&write.low).into(),
+            low_index: write.low_path.index,
+            low_path: write.low_path.siblings.as_flattened().to_vec(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApplyEnrollments {
+    #[serde(with = "fe")]
+    pub public_input_hash: [u8; 32],
+    #[serde(with = "fe")]
+    pub old_root: [u8; 32],
+    #[serde(with = "fe")]
+    pub new_root: [u8; 32],
+    pub old_next_index: u32,
+    pub new_next_index: u32,
+    #[serde(with = "fe")]
+    pub chain_start: [u8; 32],
+    #[serde(with = "fe")]
+    pub chain_end: [u8; 32],
+    pub count: u8,
+    /// The key's batch, writes past `count` assign zeros.
+    pub writes: Vec<Option<TrackingWrite>>,
+}
+
+/// `tracking` is `None` under a zero key.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MergeRequest {

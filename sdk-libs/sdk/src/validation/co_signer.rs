@@ -1,4 +1,4 @@
-//! The co-signers a ring operation carries, decided by the program's own rule.
+//! The co-signer a ring operation carries, decided by the program's own rule.
 
 use custom_ring_interface::{cosign::CoSignDemand, CustomRingError};
 use solana_address::Address;
@@ -12,30 +12,26 @@ pub(crate) struct CoSignerChoice<'a> {
     pub ring: CustomRing,
     pub config: &'a CustomRingConfig,
     pub demand: CoSignDemand,
-    /// The caller's co-signers, read only when the demand needs one.
-    pub supplied: &'a [Address],
+    /// The caller's co-signer, read only when the demand needs one.
+    pub supplied: Option<Address>,
 }
 
 impl CoSignerChoice<'_> {
-    /// Each signer's record covers a class the earlier ones left, the first uncovered class refuses.
-    pub async fn resolve(self, rpc: &(impl AsyncRpc + ?Sized)) -> Result<Vec<Address>, RingError> {
-        let mut requirement = self.demand.requirement(self.config.account())?;
-        let mut signers = Vec::new();
-        for signer in self.supplied {
-            if requirement.is_satisfied() {
-                break;
-            }
-            let record = self
-                .ring
-                .co_signer(rpc, signer)
-                .await?
-                .ok_or(CustomRingError::InvalidCoSignerRecord)?;
-            let (rest, signer) = requirement.cover(record.account())?;
-            requirement = rest;
-            signers.push(signer);
-        }
-        requirement.check_satisfied()?;
-        Ok(signers)
+    /// One record holds every demanded class, `None` when nothing is demanded.
+    pub async fn resolve(
+        self,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Option<Address>, RingError> {
+        let Some(requirement) = self.demand.requirement(self.config.account()) else {
+            return Ok(None);
+        };
+        let signer = self.supplied.ok_or(CustomRingError::MissingCoSigner)?;
+        let record = self
+            .ring
+            .co_signer(rpc, &signer)
+            .await?
+            .ok_or(CustomRingError::InvalidCoSignerRecord)?;
+        Ok(Some(requirement.check(record.account())?))
     }
 }
 

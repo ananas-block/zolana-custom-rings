@@ -53,7 +53,7 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn new(input: CustomRingTransferInput<'a>) -> Self {
         Self {
             ring: input.ring,
-            co_signers: Vec::new(),
+            co_signer: None,
             priority_fee: None,
             rail: Owner {
                 sender: input.sender,
@@ -167,12 +167,11 @@ impl Owner<'_> {
             self.transaction.inputs(),
             &self.sender.address()?.signing_pubkey,
         )?;
-        self.stage_signers()
+        self.stage_signers(self.sender.address()?)
     }
 
     /// The signer rail, zero-key notes admitted by the caller.
-    pub(super) fn stage_signers(&self) -> Result<Staged<'_>, RingError> {
-        let sender = self.sender.address()?;
+    pub(super) fn stage_signers(&self, sender: ShieldedAddress) -> Result<Staged<'_>, RingError> {
         self.check_settlement_accounts()?;
         let shape = self.shape(&sender)?;
         let transaction = self.transaction.clone();

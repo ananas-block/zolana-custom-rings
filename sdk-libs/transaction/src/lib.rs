@@ -218,6 +218,7 @@ impl RingOutputRail {
 
     /// Replaces every published slot with its body, scheme 3 or dummy encoding.
     fn reencode_delivered(&self, inputs: &mut SppProofInputs) -> Result<(), RingRailError> {
+        check_carried(published_outputs(&inputs.output_utxos))?;
         let first_nullifier = inputs.first_nullifier()?;
         let mut published = inputs.external_data.outputs.iter_mut();
         let mut resolved = inputs.external_data.resolved_owner_tags.iter();
@@ -253,6 +254,7 @@ impl RingOutputRail {
         sender: &ShieldedAddress,
     ) -> Result<(), RingRailError> {
         let published = published_outputs(&inputs.output_utxos);
+        check_carried(published)?;
         let slots = plan.slots(&inputs.output_utxos, sender)?;
         let first_nullifier = inputs.first_nullifier()?;
         let seal = AnonymousSeal {
@@ -476,6 +478,21 @@ struct SlotEncode<'a> {
     slot_index: u32,
     first_nullifier: [u8; 32],
     owner_tag: ResolvedOwnerTag,
+}
+
+/// A ring body holds the hashes and application data alone, nothing else may vanish from a note.
+fn check_carried(outputs: &[SppProofOutputUtxo]) -> Result<(), RingRailError> {
+    let refused = outputs.iter().position(|output| {
+        let unbound_data = output.data.utxo_data().is_some()
+            && output.data_hash.is_none_or(|hash| hash == [0; 32]);
+        output.ring_program_id.is_some()
+            && !output.is_dummy()
+            && (unbound_data || output.data.memo().is_some() || output.data.ring_data().is_some())
+    });
+    match refused {
+        Some(slot_index) => Err(RingRailError::OutputDataNotCarried { slot_index }),
+        None => Ok(()),
+    }
 }
 
 fn random_body(len: usize) -> Vec<u8> {

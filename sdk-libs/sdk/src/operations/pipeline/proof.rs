@@ -1,7 +1,6 @@
 //! The one ring proof of a transfer, one request over the audit and policy sections.
 
-use custom_ring_interface::{key_catalog::RingCircuit, CustomRingProof, RingRail};
-use serde::Serialize;
+use custom_ring_interface::{key_catalog::RingCircuit, CustomRingProof};
 use spr_client::AsyncRpc;
 use spr_hasher::primitives::solana_owner_identity;
 use spr_transaction::TransactionError;
@@ -10,21 +9,14 @@ use super::{audit::AuditSection, policy::PolicyProving, Assembled};
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     prover::{to_instruction_proof, RingRequest},
-    request::{AnonymousTransfer, ConfidentialTransfer, TransferParams},
+    request::TransferParams,
     RingError,
 };
 
 pub(crate) struct TransferRequest<'a> {
     pub circuit: RingCircuit,
     pub public_input_hash: [u8; 32],
-    pub body: TransferBody<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-pub(crate) enum TransferBody<'a> {
-    Confidential(Box<ConfidentialTransfer<'a>>),
-    Anonymous(Box<AnonymousTransfer<'a>>),
+    pub body: Box<TransferParams<'a>>,
 }
 
 impl Assembled {
@@ -44,7 +36,8 @@ impl Assembled {
         };
         let byte = |count: usize| u8::try_from(count).map_err(|_| too_many(count));
         let owner_run = &frame.accounts.owner_signers;
-        let class = parts.data().audit_stream()?.key.class();
+        let stream = parts.data().audit_stream()?;
+        let class = stream.key.class();
         let entries = match parts.entry {
             true => audit.entry_openings(class)?,
             false => Vec::new(),
@@ -54,7 +47,7 @@ impl Assembled {
             audit: audit.params()?,
             approval_mask: frame.policy.approval.bits(),
             output_count: byte(parts.outputs.len())?,
-            outputs: audit.output_openings()?,
+            outputs: audit.output_openings(stream.capacity)?,
             input_count: byte(frame.published_inputs)?,
             inputs: audit.input_openings(class)?,
             entries,
@@ -64,6 +57,11 @@ impl Assembled {
             private_tx_hash: parts.private_tx_hash,
             private_tx_blinding: frame.private_tx_blinding,
             address_chain: frame.address_chain,
+            in_proof: parts.in_proof_owner.is_some(),
+            hidden: parts.anonymous.is_some(),
+            delegate: parts.rail.is_delegate(),
+            sender: self.sender,
+            party_identities: self.party_identities.to_vec(),
             tracking: frame.policy.tracking_params()?,
             policy: frame.policy.params(&PolicyProving {
                 ring_id: frame.ring_id,
@@ -72,25 +70,10 @@ impl Assembled {
                 public_gross: &frame.public_gross,
             })?,
         };
-        let delegate = parts.rail.is_delegate();
-        let body = match parts.rail.anonymous_frame() {
-            false => TransferBody::Confidential(Box::new(ConfidentialTransfer {
-                transfer,
-                in_proof: parts.in_proof_owner.is_some(),
-                delegate: parts.rail == RingRail::Delegate,
-                sender: self.sender,
-            })),
-            true => TransferBody::Anonymous(Box::new(AnonymousTransfer {
-                transfer,
-                public_owners: parts.public_owners,
-                delegate,
-                party_identities: self.party_identities.to_vec(),
-            })),
-        };
         Ok(TransferRequest {
             circuit,
             public_input_hash: self.public_input_hash,
-            body,
+            body: Box::new(transfer),
         })
     }
 }
