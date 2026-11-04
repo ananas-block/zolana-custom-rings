@@ -23,26 +23,24 @@ import (
 )
 
 const (
-	confidentialKey     common.CircuitType = "custom-ring-transfer-confidential-2-in24-w4-s4"
-	wideConfidentialKey common.CircuitType = "custom-ring-transfer-confidential-16-in5-w8-s4"
-	anonymousKey        common.CircuitType = "custom-ring-transfer-anonymous-2-in24-w4-s4"
-	wideAnonymousKey    common.CircuitType = "custom-ring-transfer-anonymous-8-in5-w24-s4"
-	entryKey            common.CircuitType = "custom-ring-transfer-anonymous-entry-2-in8-w4-s4"
-	applyKey            common.CircuitType = "custom-ring-apply-records-1"
-	batchKey            common.CircuitType = "custom-ring-apply-records-16"
-	wideOwnersKey       common.CircuitType = "custom-ring-transfer-confidential-2-in24-w4-s24"
-	dataKey             common.CircuitType = "custom-ring-transfer-confidential-2-in24-w4-s4-data"
-	confEntryKey        common.CircuitType = "custom-ring-transfer-confidential-entry-2-in8-w4-s4"
-	privateKey          common.CircuitType = "custom-ring-transfer-confidential-2-in24-w4-s4-p10"
-	enrollKey           common.CircuitType = "custom-ring-apply-enrollments-2"
-	privateListKey      common.CircuitType = "custom-ring-apply-private-list-2"
-	registerKey         common.CircuitType = "custom-ring-register-key"
-	depositKey          common.CircuitType = "custom-ring-deposit-8"
-	mergeKey            common.CircuitType = "custom-ring-merge-v4"
+	transferKey    common.CircuitType = "custom-ring-transfer-2-in24-w4-s4"
+	transfer4Key   common.CircuitType = "custom-ring-transfer-4-in24-w4-s4"
+	transfer8Key   common.CircuitType = "custom-ring-transfer-8-in16-w4-s4"
+	transfer16Key  common.CircuitType = "custom-ring-transfer-16-in5-w8-s5"
+	wideKey        common.CircuitType = "custom-ring-transfer-8-in24-w32-s24"
+	entryKey       common.CircuitType = "custom-ring-transfer-entry-4-in8-w4-s8"
+	entry8Key      common.CircuitType = "custom-ring-transfer-entry-8-in2-w4-s2"
+	applyKey       common.CircuitType = "custom-ring-apply-records-1"
+	batchKey       common.CircuitType = "custom-ring-apply-records-16"
+	enrollKey      common.CircuitType = "custom-ring-apply-enrollments-2"
+	privateListKey common.CircuitType = "custom-ring-apply-private-list-2"
+	registerKey    common.CircuitType = "custom-ring-register-key"
+	depositKey     common.CircuitType = "custom-ring-deposit-8"
+	mergeKey       common.CircuitType = "custom-ring-merge-v4"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{confidentialKey, wideConfidentialKey, wideOwnersKey, dataKey, confEntryKey, privateKey, anonymousKey, wideAnonymousKey, entryKey, applyKey, batchKey, enrollKey, privateListKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, entryKey, entry8Key, applyKey, batchKey, enrollKey, privateListKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -64,15 +62,11 @@ func TestHostRequestsDecodeAndSolve(t *testing.T) {
 func hostRequest(t testing.TB, k Key) any {
 	t.Helper()
 	switch k.Family {
-	case TransferConfidential, TransferConfidentialEntry:
-		w := ringtransfer.Signed(k.confidentialShape())
+	case Transfer:
+		w := ringtransfer.Signed(k.transferShape())
 		w.Withdrawals, w.Public = fixtureLeg(t)
-		w.DefaultInput = k.Family == TransferConfidentialEntry
-		return requestOf[ConfidentialTransferParams](t, k.Circuit, w.Build(t).Circuit)
-	case TransferAnonymous, TransferAnonymousEntry:
-		w := ringtransfer.Hidden(k.anonymousShape())
-		w.Withdrawals, w.Public = fixtureLeg(t)
-		return requestOf[AnonymousTransferParams](t, k.Circuit, w.Build(t).Circuit)
+		w.DefaultInput = k.Entry
+		return requestOf[TransferParams](t, k.Circuit, w.Build(t).Circuit)
 	case ApplyRecords:
 		return applyRequest(t, k.Circuit, k.Inputs)
 	case ApplyEnrollments:

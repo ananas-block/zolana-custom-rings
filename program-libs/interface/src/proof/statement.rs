@@ -208,33 +208,53 @@ pub struct TransferRoots {
     pub private_root: [u8; 32],
 }
 
-/// Everything but the sender cells, the public slots and the close.
-const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 2 + 2 + 4 + 2 + 2 + 5 + 1;
+/// Everything but the party cells, the public slots and the close.
+const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 2 + 4 + 2 + 1 + 2 + 5 + 1;
+
+impl TransferFamily<'_> {
+    /// `in_proof`, `hidden`, `delegate`, a clear set is the signer rail.
+    fn rail_bits(&self) -> [bool; 3] {
+        match self {
+            Self::Confidential { sender } => [
+                matches!(sender, ConfidentialSender::InProof(_)),
+                false,
+                matches!(sender, ConfidentialSender::Authority),
+            ],
+            Self::Anonymous {
+                public_owners,
+                delegate,
+                ..
+            } => [false, !public_owners && !delegate, *delegate],
+        }
+    }
+
+    fn sender(&self) -> &[u8; 32] {
+        match self {
+            Self::Confidential { sender } => sender.identity(),
+            Self::Anonymous { .. } => &ZERO_FIELD,
+        }
+    }
+
+    fn parties(&self) -> [[u8; 32]; ANONYMOUS_PARTIES] {
+        match self {
+            Self::Confidential { .. } => [ZERO_FIELD; ANONYMOUS_PARTIES],
+            Self::Anonymous {
+                party_identities, ..
+            } => **party_identities,
+        }
+    }
+}
 
 impl TransferStatement<'_> {
-    pub fn element_count(&self) -> usize {
-        let sender_cells = match self.family {
-            TransferFamily::Confidential { .. } => 1,
-            TransferFamily::Anonymous { .. } => ANONYMOUS_PARTIES,
-        };
-        TRANSFER_FIXED_ELEMENTS + sender_cells + 3 * N_PUBLIC_SLOTS + 2
+    pub const fn element_count(&self) -> usize {
+        TRANSFER_FIXED_ELEMENTS + ANONYMOUS_PARTIES + 3 * N_PUBLIC_SLOTS + 2
     }
 
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
         let capacity = self.output_capacity;
         let mut elements = Vec::with_capacity(self.element_count());
         elements.extend(self.head.elements_under(domain::TRANSFER_STATEMENT)?);
-        match self.family {
-            TransferFamily::Confidential { sender } => elements.extend([
-                bit(matches!(sender, ConfidentialSender::InProof(_))),
-                bit(matches!(sender, ConfidentialSender::Authority)),
-            ]),
-            TransferFamily::Anonymous {
-                public_owners,
-                delegate,
-                ..
-            } => elements.extend([bit(public_owners), bit(delegate)]),
-        }
+        elements.extend(self.family.rail_bits().map(bit));
         elements.extend([
             right_align(&[self.approval_mask.bits()]),
             bit(self.no_spend),
@@ -244,13 +264,9 @@ impl TransferStatement<'_> {
             tail_chain(self.outputs, capacity)?,
             count(self.input_count),
             *self.private_tx_hash,
+            *self.family.sender(),
         ]);
-        match self.family {
-            TransferFamily::Confidential { sender } => elements.push(*sender.identity()),
-            TransferFamily::Anonymous {
-                party_identities, ..
-            } => elements.extend(*party_identities),
-        }
+        elements.extend(self.family.parties());
         elements.extend([
             count(self.signers.count),
             self.signers.chain,

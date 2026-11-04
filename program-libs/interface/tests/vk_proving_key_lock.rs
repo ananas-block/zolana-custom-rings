@@ -66,9 +66,7 @@ fn selectable_circuits() -> BTreeSet<String> {
                 for spends_default_ring in [false, true] {
                     for legs in 0..=MAX_INTERFACE_TRANSFERS {
                         for owners in 0..=n_in {
-                            for (has_data, private_source) in
-                                [(false, false), (true, false), (false, true)]
-                            {
+                            for wide in [false, true] {
                                 circuits.extend(RingCircuit::transfer(TransferSpend {
                                     rail,
                                     inputs,
@@ -76,8 +74,7 @@ fn selectable_circuits() -> BTreeSet<String> {
                                     spends_default_ring,
                                     legs,
                                     owners,
-                                    has_data,
-                                    private_source,
+                                    wide,
                                 }));
                             }
                         }

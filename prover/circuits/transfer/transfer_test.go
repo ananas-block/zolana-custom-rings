@@ -15,7 +15,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprivatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
@@ -24,13 +23,13 @@ import (
 )
 
 var (
-	confidential2 = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	wideOwners2   = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 24}
-	dataKey2      = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4, Data: true}
-	confEntry2    = transfer.ConfidentialShape{Inputs: 8, Outputs: 2, Withdrawals: 4, Owners: 4, Entry: true}
-	anonymous2    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	anonData2     = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4, Owners: 4, Data: true}
-	entry2        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, Owners: 4, Entry: true}
+	confidential2 = transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
+	wideOwners2   = transfer.Shape{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24}
+	dataKey2      = confidential2
+	confEntry2    = transfer.Shape{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true}
+	anonymous2    = confidential2
+	anonData2     = confidential2
+	entry2        = confEntry2
 	coOwner       = big.NewInt(0x0c0c)
 	otherOwner    = big.NewInt(0x0d0d)
 )
@@ -47,13 +46,13 @@ func refused(t *testing.T, circuit frontend.Circuit, frame string) {
 	ringtest.RequireRefused(t, test.IsSolved(circuit, circuit, ecc.BN254.ScalarField()), frame)
 }
 
-func onRail(shape transfer.ConfidentialShape, rail ringtransfer.Rail) ringtransfer.Confidential {
+func onRail(shape transfer.Shape, rail ringtransfer.Rail) ringtransfer.Confidential {
 	w := ringtransfer.Signed(shape)
 	w.Rail = rail
 	return w
 }
 
-func onAnonymous(shape transfer.AnonymousShape, rail ringtransfer.AnonymousRail) ringtransfer.Anonymous {
+func onAnonymous(shape transfer.Shape, rail ringtransfer.AnonymousRail) ringtransfer.Anonymous {
 	w := ringtransfer.Hidden(shape)
 	w.Rail = rail
 	return w
@@ -117,27 +116,15 @@ func TestEveryKeySolves(t *testing.T) {
 	if testing.Short() {
 		t.Skip("solves every catalog key")
 	}
-	for _, shape := range transfer.ConfidentialShapes {
-		t.Run(shape.String(), func(t *testing.T) {
-			requireSolved(t, ringtransfer.Signed(shape).Build(t).Circuit)
-		})
-	}
-	for _, shape := range transfer.AnonymousShapes {
-		t.Run(shape.String(), func(t *testing.T) {
-			requireSolved(t, ringtransfer.Hidden(shape).Build(t).Circuit)
-		})
-	}
-	for _, shape := range transfer.EntryShapes {
-		t.Run(shape.String(), func(t *testing.T) {
-			w := ringtransfer.Hidden(shape)
-			w.DefaultInput = shape.InputClass > 2
+	for _, shape := range transfer.Shapes {
+		t.Run(shape.String()+"/signer", func(t *testing.T) {
+			w := ringtransfer.Signed(shape)
+			w.DefaultInput = shape.Entry
 			requireSolved(t, w.Build(t).Circuit)
 		})
-	}
-	for _, shape := range transfer.ConfidentialEntryShapes {
-		t.Run(shape.String(), func(t *testing.T) {
-			w := ringtransfer.Signed(shape)
-			w.DefaultInput = true
+		t.Run(shape.String()+"/hidden", func(t *testing.T) {
+			w := ringtransfer.Hidden(shape)
+			w.DefaultInput = shape.Entry && shape.Inputs > 2
 			requireSolved(t, w.Build(t).Circuit)
 		})
 	}
@@ -162,11 +149,8 @@ func TestCatalogCompilesToTheVerifiedShape(t *testing.T) {
 			}
 		})
 	}
-	for _, shape := range append(transfer.ConfidentialShapes[:len(transfer.ConfidentialShapes):len(transfer.ConfidentialShapes)], transfer.ConfidentialEntryShapes...) {
-		compile(shape.String(), func() (frontend.Circuit, error) { return transfer.NewConfidentialTransferCircuit(shape) })
-	}
-	for _, shape := range append(transfer.AnonymousShapes[:len(transfer.AnonymousShapes):len(transfer.AnonymousShapes)], transfer.EntryShapes...) {
-		compile(shape.String(), func() (frontend.Circuit, error) { return transfer.NewAnonymousTransferCircuit(shape) })
+	for _, shape := range transfer.Shapes {
+		compile(shape.String(), func() (frontend.Circuit, error) { return transfer.NewTransferCircuit(shape) })
 	}
 }
 
@@ -270,7 +254,7 @@ func TestDelegateBypass(t *testing.T) {
 		requireSolved(t, w.Build(t).Circuit)
 	})
 	t.Run("exits with the owner published by SPP", func(t *testing.T) {
-		shape := transfer.AnonymousShape{InputClass: 16, Outputs: 4, Withdrawals: 4, Owners: 4}
+		shape := transfer.Shape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4}
 		requireSolved(t, onAnonymous(shape, ringtransfer.AnonymousDelegate).Build(t).Circuit)
 	})
 	t.Run("several victims move in one transfer", func(t *testing.T) {
@@ -301,13 +285,13 @@ func TestDelegateBypass(t *testing.T) {
 	t.Run("a mask on the authority rail", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.Delegate)
 		w.ApprovalMask = policy.ApprovalOutflow
-		refused(t, w.Build(t).Circuit, "transfer.(*Sections).prove")
+		refused(t, w.Build(t).Circuit, "transfer.(*TransferCircuit).Define")
 	})
 	t.Run("a run on the authority rail", func(t *testing.T) {
 		b := onRail(confidential2, ringtransfer.Delegate).Build(t)
 		b.Run, b.Circuit.SignerCount, b.Circuit.Signers[0] = []*big.Int{b.Sender}, 1, b.Sender
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*Sections).prove")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).Define")
 	})
 	t.Run("an output still reads its row", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.Delegate)
@@ -351,14 +335,14 @@ func TestOutputPredicateOnEveryRail(t *testing.T) {
 		requireSolved(t, w.Build(t).Circuit)
 	})
 	t.Run("an exit to an owner with no row", func(t *testing.T) {
-		w := ringtransfer.Signed(transfer.ConfidentialShape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})
+		w := ringtransfer.Signed(transfer.Shape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})
 		requireSolved(t, w.Build(t).Circuit)
 	})
 }
 
 // The program sets the delegate bit and the signer and delegate rails share a key, a signer proof with the bit set is the wall.
 func TestDelegateBitIsTheProgramsWall(t *testing.T) {
-	circuit, err := transfer.NewConfidentialTransferCircuit(confidential2)
+	circuit, err := transfer.NewTransferCircuit(confidential2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,15 +366,15 @@ func TestDelegateBitIsTheProgramsWall(t *testing.T) {
 // The public owner rail has no hidden sender, the hidden rail keeps input 0 out of the run.
 func TestAnonymousOwnerRails(t *testing.T) {
 	t.Run("bits exclude each other", func(t *testing.T) {
-		b := onAnonymous(anonymous2, ringtransfer.PublicOwners).Build(t)
+		b := ringtransfer.Hidden(anonymous2).Build(t)
 		b.Circuit.Delegate = 1
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*AnonymousTransferCircuit).Define")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).assertRail")
 	})
 	t.Run("a hidden frame with no live input", func(t *testing.T) {
 		w := ringtransfer.Hidden(anonymous2)
 		w.PublicFunded = true
-		refused(t, w.Build(t).Circuit, "transfer.(*AnonymousTransferCircuit).hiddenOwner")
+		refused(t, w.Build(t).Circuit, "transfer.(*TransferCircuit).hiddenOwner")
 	})
 	t.Run("public owners spend no input", func(t *testing.T) {
 		w := onAnonymous(anonymous2, ringtransfer.PublicOwners)
@@ -402,7 +386,7 @@ func TestAnonymousOwnerRails(t *testing.T) {
 		b := w.Build(t)
 		b.Run, b.Circuit.SignerCount, b.Circuit.Signers[0] = []*big.Int{b.Sender}, 1, b.Sender
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*AnonymousTransferCircuit).hiddenOwner")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).hiddenOwner")
 	})
 	t.Run("a public owner rail input off the run", func(t *testing.T) {
 		w := onAnonymous(anonymous2, ringtransfer.PublicOwners)
@@ -604,13 +588,13 @@ func TestRailCells(t *testing.T) {
 		b := ringtransfer.Signed(confidential2).Build(t)
 		b.Circuit.Sender = b.Sender
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*ConfidentialTransferCircuit).assertRail")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).assertRail")
 	})
 	t.Run("a delegate with in_proof", func(t *testing.T) {
 		b := onRail(confidential2, ringtransfer.Delegate).Build(t)
 		b.Circuit.InProof = 1
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*ConfidentialTransferCircuit).assertRail")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).assertRail")
 	})
 	t.Run("an in-proof input of another owner", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.InProof)
@@ -619,86 +603,11 @@ func TestRailCells(t *testing.T) {
 	})
 }
 
-// Owner rows read a private source through a salted position, under the tracking row's salt.
-func TestPrivateSource(t *testing.T) {
-	private := transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4, Private: 10}
-	recipient := ringtest.MustSolanaPkField(t, ringaudit.Recipient(t, 0, 0, 1).OwnerKey)
-	source := func(t testing.TB, write func(*ringprivatelist.Curator)) *ringtransfer.PrivateSource {
-		t.Helper()
-		curator := &ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
-		if write != nil {
-			write(curator)
-		}
-		return &ringtransfer.PrivateSource{Tree: curator.Tree, OwnerLists: ringregistry.BlockBit, Registry: big.NewInt(0x77)}
-	}
-	salted := func(t testing.TB, owner *big.Int) *big.Int {
-		t.Helper()
-		return ringpolicy.ListSaltOf(t, owner)
-	}
-	blockSalted := func(t testing.TB, owner *big.Int) func(*ringprivatelist.Curator) {
-		t.Helper()
-		salt := salted(t, owner)
-		return func(c *ringprivatelist.Curator) {
-			c.WriteSalted(t, owner, salt, ringregistry.ListTag(t, salt), ringregistry.BlockBit, ringregistry.BlockBit)
-		}
-	}
-	world := func(s *ringtransfer.PrivateSource) ringtransfer.Confidential {
-		w := ringtransfer.Signed(private)
-		w.Private = s
-		return w
-	}
-	t.Run("an owner with no curator action passes through a nonmembership path", func(t *testing.T) {
-		requireSolved(t, world(source(t, nil)).Build(t).Circuit)
-	})
-	t.Run("a privately blocked owner fails the rule", func(t *testing.T) {
-		refused(t, world(source(t, blockSalted(t, recipient))).Build(t).Circuit, "policy.assertPaymentRules")
-	})
-	t.Run("a block written before enrollment stays read at salt zero", func(t *testing.T) {
-		s := source(t, func(c *ringprivatelist.Curator) {
-			c.WriteUnenrolled(t, recipient, ringregistry.BlockBit, ringregistry.BlockBit)
-		})
-		refused(t, world(s).Build(t).Circuit, "policy.assertPaymentRules")
-	})
-	t.Run("an enrolled owner claiming salt zero", func(t *testing.T) {
-		b := world(source(t, nil)).Build(t)
-		for i, owner := range b.Circuit.PrivateOwners {
-			if ringtest.AsBigInt(owner).Cmp(recipient) == 0 {
-				b.Circuit.PrivateRows[i].ListSalt = 0
-				b.Circuit.PrivateRows[i].Salted = b.World.Private.Tree.Opening(t, recipient, big.NewInt(0))
-			}
-		}
-		refused(t, b.Circuit, "privatelist.Row.read")
-	})
-	t.Run("an enrolled owner under another salt", func(t *testing.T) {
-		b := world(source(t, nil)).Build(t)
-		other := big.NewInt(0x1234)
-		for i, owner := range b.Circuit.PrivateOwners {
-			if ringtest.AsBigInt(owner).Cmp(recipient) == 0 {
-				b.Circuit.PrivateRows[i].ListSalt = other
-				b.Circuit.PrivateRows[i].Salted = b.World.Private.Tree.Opening(t, recipient, other)
-			}
-		}
-		refused(t, b.Circuit, "privatelist.Row.read")
-	})
-	t.Run("a stale private root", func(t *testing.T) {
-		b := world(source(t, nil)).Build(t)
-		b.Circuit.PrivateRoot = 7
-		b.Rebind(t)
-		refused(t, b.Circuit, "privatelist.Opening.read")
-	})
-	t.Run("a key with no private rows refuses a source", func(t *testing.T) {
-		w := ringtransfer.Signed(confidential2)
-		w.Private = source(t, nil)
-		refused(t, w.Build(t).Circuit, "policy.(*Policy).openPrivateRows")
-	})
-	t.Run("a private key with no source pays for padding rows only", func(t *testing.T) {
-		requireSolved(t, ringtransfer.Signed(private).Build(t).Circuit)
-	})
-	t.Run("a delegate reads no private root", func(t *testing.T) {
-		w := onRail(private, ringtransfer.Delegate)
-		w.Private = source(t, blockSalted(t, recipient))
-		requireSolved(t, w.Build(t).Circuit)
-	})
+// No key has private rows, a source fails closed.
+func TestPrivateSourceRefused(t *testing.T) {
+	w := ringtransfer.Signed(confidential2)
+	w.Private = &ringtransfer.PrivateSource{Tree: ringprivatelist.New(t), OwnerLists: ringregistry.BlockBit, Registry: big.NewInt(0x77)}
+	refused(t, w.Build(t).Circuit, "policy.(*Policy).openPrivateRows")
 }
 
 // A statement cell moves the public input alone.
@@ -706,7 +615,7 @@ func TestStatementBindsEveryElement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("solves the compiled key once per statement element")
 	}
-	circuit, err := transfer.NewConfidentialTransferCircuit(confidential2)
+	circuit, err := transfer.NewTransferCircuit(confidential2)
 	if err != nil {
 		t.Fatal(err)
 	}

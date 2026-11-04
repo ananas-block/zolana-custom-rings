@@ -5,20 +5,20 @@ import (
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 )
 
 // Statement is what the program holds for a transfer statement.
 type Statement struct {
-	Head ringaudit.AuditHead
-	// RailBits are in_proof, delegate on the confidential family, public_owners, delegate on the anonymous one.
-	RailBits      [2]bool
-	ApprovalMask  *big.Int
-	NoSpend       bool
-	Outputs       []ringaudit.StatementOutput
-	InputCount    int
-	PrivateTxHash *big.Int
-	// Cells are the sender or the seven party identities.
+	Head                                                        ringaudit.AuditHead
+	RailBits                                                    [3]bool
+	ApprovalMask                                                *big.Int
+	NoSpend                                                     bool
+	Outputs                                                     []ringaudit.StatementOutput
+	InputCount                                                  int
+	PrivateTxHash                                               *big.Int
 	Cells                                                       []*big.Int
 	SignerCount                                                 int
 	SignerChain                                                 *big.Int
@@ -27,11 +27,22 @@ type Statement struct {
 	WithdrawalHash                                              *big.Int
 }
 
+func railValues(t testing.TB, c *transfer.TransferCircuit, a Assembled) Statement {
+	t.Helper()
+	s := values(t, &c.Sections, a)
+	s.RailBits = [3]bool{ringtest.AsBigInt(c.InProof).Sign() != 0, ringtest.AsBigInt(c.Hidden).Sign() != 0, ringtest.AsBigInt(c.Delegate).Sign() != 0}
+	s.Cells = []*big.Int{ringtest.AsBigInt(c.Sender)}
+	for _, party := range c.PartyIdentities {
+		s.Cells = append(s.Cells, ringtest.AsBigInt(party))
+	}
+	return s
+}
+
 // Elements mirrors TransferStatement::elements.
 func (s Statement) Elements(t testing.TB) []*big.Int {
 	t.Helper()
 	elements := append(s.Head.ElementsUnder(t, shared.TransferStatementDomain),
-		bitField(s.RailBits[0]), bitField(s.RailBits[1]), s.ApprovalMask, bitField(s.NoSpend),
+		bitField(s.RailBits[0]), bitField(s.RailBits[1]), bitField(s.RailBits[2]), s.ApprovalMask, bitField(s.NoSpend),
 		big.NewInt(int64(ringaudit.OutputCount(s.Outputs))),
 		ringaudit.OutputChain(t, s.Outputs), ringaudit.RecordChain(t, s.Outputs), ringaudit.TailChain(t, s.Outputs),
 		big.NewInt(int64(s.InputCount)), s.PrivateTxHash,
