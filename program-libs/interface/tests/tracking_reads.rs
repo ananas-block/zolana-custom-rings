@@ -126,12 +126,14 @@ fn a_private_source_needs_a_policy_list_and_its_pair() {
     };
     let paired = source(key(9), 0);
     let mut ring = *ring();
+    let unwritten_hash = ring.policy_hash;
     assert_eq!(
         ring.set_private_source(write(block, Some((key(7), &paired))), 5),
         Ok(())
     );
     assert_eq!(ring.private_source, key(7));
     assert_eq!(ring.private_lists, block.bits());
+    assert_ne!(ring.policy_hash, unwritten_hash);
     assert_eq!(ring.generation(), 1);
     let refused = |owner_lists, source, error| {
         let mut untouched = ring;
