@@ -46,9 +46,8 @@ use crate::{
 };
 
 pub use spr_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
-/// The most real inputs a ring merge forwards in one v1 transaction.
-pub const MAX_RING_MERGE_INPUTS: usize =
-    MERGE_SUPPORTED_INPUT_COUNTS[MERGE_SUPPORTED_INPUT_COUNTS.len() - 1];
+/// The widest SPP width a ring merge fits in one v1 transaction, a test pins the next one past it.
+pub const MAX_RING_MERGE_INPUTS: usize = MERGE_SUPPORTED_INPUT_COUNTS[1];
 
 #[must_use]
 #[derive(Clone)]
@@ -128,9 +127,9 @@ impl CustomRingMerge {
 #[must_use]
 #[derive(Clone)]
 pub struct PreparedCustomRingMerge {
-    ring: CustomRing,
-    inner: MergeProofInputs,
-    priority_fee: Option<u64>,
+    pub(crate) ring: CustomRing,
+    pub(crate) inner: MergeProofInputs,
+    pub(crate) priority_fee: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -187,7 +186,7 @@ impl PreparedCustomRingMerge {
     }
 
     /// `Some` exactly on the zero-key rail.
-    fn signing_owner(&self) -> Result<Option<Address>, RingError> {
+    pub(crate) fn signing_owner(&self) -> Result<Option<Address>, RingError> {
         match self.inner.rail {
             MergeRail::RingV2ZeroKey(_) => Ok(Some(Address::new_from_array(
                 self.inner.signing_pubkey.as_ed25519()?,

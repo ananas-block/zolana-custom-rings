@@ -1,130 +1,101 @@
 use solana_address::Address;
 use spr_interface::N_PUBLIC_SLOTS;
 use spr_transaction::{instructions::transact::SppProofOutputUtxo, utxo::SppProofInputUtxo, Mint};
-use zolana_ring_policy::{Member, OutflowLimit};
+use zolana_ring_policy::{Member, MintPolicy};
 
 use super::support::{keypair, program, ring_utxo};
 use crate::{limits::Outflows, RingError};
 
-fn sol_outflows(net: i128, limit: OutflowLimit) -> Result<bool, RingError> {
-    let owner = keypair(1);
-    let sender = owner.shielded_address().unwrap();
-    let other = keypair(2).shielded_address().unwrap();
-    let sol = Member::asset(&Mint::SOL.asset).unwrap();
-    let output = |owner, amount, ring: Option<Address>| {
-        let output = SppProofOutputUtxo::new(Mint::SOL, amount, owner).unwrap();
-        match ring {
-            Some(ring) => output.with_ring_program_id(ring),
-            None => output,
-        }
-    };
-    let outputs = [
-        output(other, 3, Some(program())),
-        output(sender, 7, Some(program())),
-        output(sender, 2, None),
-    ];
-    let inputs: Vec<SppProofInputUtxo> = vec![ring_utxo(&owner, Mint::SOL, 12, 0).into()];
-    let mut public_assets = [[0; 32]; N_PUBLIC_SLOTS];
-    public_assets[0] = *sol.as_bytes();
-    let mut public_amounts = [0; N_PUBLIC_SLOTS];
-    public_amounts[0] = net;
-    Outflows {
-        senders: &[sender.signing_pubkey.owner_proof_input_hash().unwrap()],
-        inputs: &inputs,
-        outputs: &outputs,
-        public_assets: &public_assets,
-        public_amounts: &public_amounts,
-    }
-    .approval_required(&[limit])
+fn sol() -> [u8; 32] {
+    *Member::asset(&Mint::SOL.asset).unwrap().as_bytes()
 }
 
-/// An exit to the sender leaves the ring, ring change stays its own.
+struct Case {
+    held: u64,
+    returned: u64,
+    gross: u128,
+}
+
+impl Case {
+    fn flows(&self) -> Vec<zolana_ring_policy::OwnerDebit> {
+        let owner = keypair(1);
+        let sender = owner.shielded_address().unwrap();
+        let mut public_assets = [[0; 32]; N_PUBLIC_SLOTS];
+        public_assets[0] = sol();
+        let mut public_gross = [0; N_PUBLIC_SLOTS];
+        public_gross[0] = self.gross;
+        let outputs = [SppProofOutputUtxo::new(Mint::SOL, self.returned, sender)
+            .unwrap()
+            .with_ring_program_id(program())];
+        let inputs: Vec<SppProofInputUtxo> =
+            vec![ring_utxo(&owner, Mint::SOL, self.held, 0).into()];
+        Outflows {
+            senders: &[sender.signing_pubkey.owner_proof_input_hash().unwrap()],
+            inputs: &inputs,
+            outputs: &outputs,
+            public_assets: &public_assets,
+            public_gross: &public_gross,
+        }
+        .flows()
+        .unwrap()
+    }
+}
+
+fn capped(cap: u64) -> impl Fn(&[u8; 32]) -> MintPolicy {
+    move |_| MintPolicy {
+        cap,
+        ..MintPolicy::EMPTY
+    }
+}
+
+/// `S 200, withdraw 150, S 50`, the public leg is what leaves.
 #[test]
-fn the_debit_counts_what_leaves_the_sender_and_clamps_at_zero() {
-    let sol = Member::asset(&Mint::SOL.asset).unwrap();
-    let limit = |cap, cosign| {
-        OutflowLimit::of(&sol)
-            .with_cap(cap)
-            .with_cosign_above(cosign)
-    };
-    assert!(!sol_outflows(0, limit(5, 5)).unwrap());
-    assert!(sol_outflows(0, limit(5, 4)).unwrap());
+fn a_withdrawal_counts_against_the_cap_through_its_debit() {
+    let flows = Case {
+        held: 200,
+        returned: 50,
+        gross: 150,
+    }
+    .flows();
+    assert_eq!(flows[0].outflow, 150);
+    assert!(Outflows::check_caps(&flows, capped(150)).is_ok());
     assert!(matches!(
-        sol_outflows(0, limit(4, 0)),
+        Outflows::check_caps(&flows, capped(100)),
         Err(RingError::OutflowCapExceeded {
-            outflow: 5,
-            cap: 4,
+            cap: 100,
+            outflow: 150,
             ..
         })
     ));
 }
 
-/// A deposit funding outputs lowers one owner's net.
+/// `S 1000 + deposit 1000, return 1000, exit 1000` nets no debit, an empty gross would undercount the charge.
 #[test]
-fn a_single_owner_deposit_offset_stays_below_its_cap() {
-    let owner = keypair(1);
-    let sender = owner.shielded_address().unwrap();
-    let other = keypair(2).shielded_address().unwrap();
-    let sol = Member::asset(&Mint::SOL.asset).unwrap();
-    let outputs = [
-        SppProofOutputUtxo::new(Mint::SOL, 3, other)
-            .unwrap()
-            .with_ring_program_id(program()),
-        SppProofOutputUtxo::new(Mint::SOL, 9, sender)
-            .unwrap()
-            .with_ring_program_id(program()),
-    ];
-    let inputs: Vec<SppProofInputUtxo> = vec![ring_utxo(&owner, Mint::SOL, 7, 0).into()];
-    let mut public_assets = [[0; 32]; N_PUBLIC_SLOTS];
-    public_assets[0] = *sol.as_bytes();
-    let mut public_amounts = [0; N_PUBLIC_SLOTS];
-    public_amounts[0] = 5;
-    let flows = Outflows {
-        senders: &[sender.signing_pubkey.owner_proof_input_hash().unwrap()],
-        inputs: &inputs,
-        outputs: &outputs,
-        public_assets: &public_assets,
-        public_amounts: &public_amounts,
-    };
-    flows.check_deposits().unwrap();
-    assert!(!flows
-        .approval_required(&[OutflowLimit::of(&sol).with_cap(1).with_cosign_above(1)])
-        .unwrap());
+fn a_deposit_funded_return_does_not_hide_what_leaves() {
+    let flows = Case {
+        held: 1000,
+        returned: 1000,
+        gross: 1000,
+    }
+    .flows();
+    assert_eq!(flows[0].debit, 0);
+    assert_eq!(flows[0].outflow, 1000);
+    assert!(matches!(
+        Outflows::check_caps(&flows, capped(100)),
+        Err(RingError::OutflowCapExceeded { .. })
+    ));
 }
 
+/// A same-owner return with nothing leaving moves no funds out.
 #[test]
-fn a_mixed_owner_deposit_of_a_spent_asset_is_refused() {
-    let first = keypair(1);
-    let second = keypair(2);
-    let other = keypair(3).shielded_address().unwrap();
-    let sol = Member::asset(&Mint::SOL.asset).unwrap();
-    let inputs: Vec<SppProofInputUtxo> = vec![
-        ring_utxo(&first, Mint::SOL, 7, 0).into(),
-        ring_utxo(&second, Mint::SOL, 7, 1).into(),
-    ];
-    let outputs = [SppProofOutputUtxo::new(Mint::SOL, 3, other)
-        .unwrap()
-        .with_ring_program_id(program())];
-    let mut public_assets = [[0; 32]; N_PUBLIC_SLOTS];
-    public_assets[0] = *sol.as_bytes();
-    let mut public_amounts = [0; N_PUBLIC_SLOTS];
-    public_amounts[0] = 5;
-    let flows = Outflows {
-        senders: &[],
-        inputs: &inputs,
-        outputs: &outputs,
-        public_assets: &public_assets,
-        public_amounts: &public_amounts,
-    };
-    assert!(matches!(
-        flows.check_deposits(),
-        Err(RingError::MixedOwnerDeposit)
-    ));
-    let unrelated = [[9; 32], [0; 32], [0; 32]];
-    Outflows {
-        public_assets: &unrelated,
-        ..flows
+fn change_alone_is_no_outflow() {
+    let flows = Case {
+        held: 100,
+        returned: 100,
+        gross: 0,
     }
-    .check_deposits()
-    .unwrap();
+    .flows();
+    assert!(flows.is_empty());
+    assert!(Outflows::check_caps(&flows, capped(1)).is_ok());
+    let _ = Address::default();
 }

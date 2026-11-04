@@ -196,7 +196,7 @@ impl PolicyRead<'_> {
             .collect();
         let pool = TrackingRead {
             root,
-            members: &subjects.members,
+            members: subjects.opened(),
             openings: widths.tracking,
         }
         .read(client)
@@ -301,7 +301,7 @@ impl PolicyRead<'_> {
             asset_entries.push(entry(subjects.index(asset)));
         }
         // Public assets resolve in the own pool alone.
-        let curator_members = subjects.members.clone();
+        let curator_members = subjects.opened().to_vec();
         let public_assets = self.public.asset_fields()?;
         inputs.public_asset_entries = public_assets
             .iter()
@@ -309,7 +309,7 @@ impl PolicyRead<'_> {
             .collect();
         let own_pool = PoolRead {
             root: own,
-            members: &subjects.members,
+            members: subjects.opened(),
             openings: inputs.widths.own,
         }
         .read(client)
@@ -429,7 +429,23 @@ struct PoolSubjects {
     members: Vec<[u8; 32]>,
 }
 
+/// A read with no subject still opens one path, the proof folds every pool slot under the root.
+const NO_SUBJECT: [[u8; 32]; 1] = [right_align_one()];
+
+const fn right_align_one() -> [u8; 32] {
+    let mut member = [0; 32];
+    member[31] = 1;
+    member
+}
+
 impl PoolSubjects {
+    fn opened(&self) -> &[[u8; 32]] {
+        match self.members.is_empty() {
+            true => &NO_SUBJECT,
+            false => &self.members,
+        }
+    }
+
     fn index(&mut self, member: Option<[u8; 32]>) -> u32 {
         let Some(member) = member else {
             return 0;

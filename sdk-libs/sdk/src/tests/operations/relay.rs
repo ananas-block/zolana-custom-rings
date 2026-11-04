@@ -198,7 +198,7 @@ mod delegate_message {
     use std::sync::Mutex;
 
     use custom_ring_interface::{
-        compute_unit_limit, tag, InstructionTag, PolicyProof, PolicyRecipients, RingRail,
+        compute_unit_limit, tag, InstructionTag, RingRail,
         RingTransactData,
     };
     use solana_instruction::Instruction;
@@ -298,20 +298,11 @@ mod delegate_message {
             .unwrap()
     }
 
-    /// The honest data with output `slot` published as paying `owner`.
-    fn paying(honest: &Instruction, slot: usize, owner: [u8; 32]) -> Instruction {
+    /// The honest data with output `slot` published under `owner_tag`.
+    fn paying(honest: &Instruction, slot: usize, owner_tag: [u8; 32]) -> Instruction {
         let parsed = RingTransactData::parse(&honest.data[1..], RingRail::Delegate).unwrap();
         let mut data = parsed.into_data();
-        let policy = data.policy.unwrap();
-        let PolicyRecipients::Framed(framed) = policy.recipients else {
-            panic!("a delegate frame names its recipients");
-        };
-        let mut recipients = framed.to_vec();
-        recipients[slot] = owner;
-        data.policy = Some(PolicyProof {
-            recipients: PolicyRecipients::Framed(&recipients),
-            ..policy
-        });
+        data.outputs[slot].owner_tag = &owner_tag;
         Instruction {
             data: [vec![tag::AUTHORITY_TRANSFER], data.encode().unwrap()].concat(),
             ..honest.clone()
@@ -335,7 +326,7 @@ mod delegate_message {
             let chain = Chain::ring(RingSettings {
                 has_policy: true,
                 delegate: Some(delegate),
-                ..RingSettings::new(RingMode::ConfidentialEscrow)
+                ..RingSettings::new(RingMode::Confidential)
             })
             .with_registry(
                 Registry::new(&[(&member, 1), (&keypair(2), 1)]),
@@ -372,7 +363,6 @@ mod delegate_message {
                     })
                     .collect(),
                 assets: &assets,
-                co_signer: None,
             }
             .select(&self.client)
             .await?

@@ -576,10 +576,10 @@ impl PreparedRingDeposit {
 }
 
 #[derive(Clone, Copy)]
-struct DepositRoots {
-    tracking: BoundRoot,
-    own: Option<BoundRoot>,
-    curator: Option<BoundRoot>,
+pub(crate) struct DepositRoots {
+    pub tracking: BoundRoot,
+    pub own: Option<BoundRoot>,
+    pub curator: Option<BoundRoot>,
 }
 
 impl DepositRoots {
