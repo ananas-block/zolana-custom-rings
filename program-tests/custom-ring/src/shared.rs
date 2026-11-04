@@ -197,6 +197,32 @@ impl TestEnv {
         Ok(keypair)
     }
 
+    /// Keeps the account's owner and lamports.
+    pub fn set_account_data(&self, address: Address, data: &[u8]) -> Result<()> {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "surfnet_setAccount",
+            "params": [address.to_string(), { "data": hex::encode(data) }],
+        });
+        let reply: serde_json::Value = self.client.block_on(async {
+            anyhow::Ok(
+                reqwest::Client::new()
+                    .post(&self.rpc_url)
+                    .json(&request)
+                    .send()
+                    .await?
+                    .json()
+                    .await?,
+            )
+        })?;
+        ensure!(
+            reply.get("error").is_none(),
+            "surfnet_setAccount refused {reply}"
+        );
+        Ok(())
+    }
+
     pub fn member_record(&self, ring: CustomRing, member: Member) -> Result<MemberOpeningRead> {
         let records = MemberRecords {
             ring,

@@ -1620,6 +1620,7 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "solana-system-interface 3.2.0",
+ "spr-api",
  "spr-client",
  "spr-hasher",
  "spr-indexer-api",

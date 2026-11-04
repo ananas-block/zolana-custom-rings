@@ -18,28 +18,10 @@ fn exhaust_dummy_input_headroom(env: &TestEnv) -> Result<()> {
             .map_err(|error| anyhow!("headroom {error:?}"))?
             == 0
     );
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "surfnet_setAccount",
-        "params": [env.tree.to_string(), { "data": hex::encode(&data) }],
-    });
-    let reply: serde_json::Value = env.client.block_on(async {
-        anyhow::Ok(
-            reqwest::Client::new()
-                .post(&env.rpc_url)
-                .json(&request)
-                .send()
-                .await?
-                .json()
-                .await?,
-        )
-    })?;
-    ensure!(reply.get("error").is_none(), "surfnet_setAccount: {reply}");
-    Ok(())
+    env.set_account_data(env.tree, &data)
 }
 
-fn tree_data(env: &TestEnv) -> Result<Vec<u8>> {
+pub(super) fn tree_data(env: &TestEnv) -> Result<Vec<u8>> {
     Ok(env
         .client
         .rpc()
@@ -48,7 +30,7 @@ fn tree_data(env: &TestEnv) -> Result<Vec<u8>> {
         .data)
 }
 
-fn nullifier_queue_index(env: &TestEnv) -> Result<u64> {
+pub(super) fn nullifier_queue_index(env: &TestEnv) -> Result<u64> {
     let mut data = tree_data(env)?;
     let mut tree = TreeAccount::from_bytes(&mut data, env.tree.to_bytes())
         .map_err(|error| anyhow!("tree layout {error:?}"))?;

@@ -157,6 +157,44 @@ test-custom-ring-rules: (_custom-ring-suite "policy_rules")
 # UpdatePolicy rewrites the rule table of a live ring.
 test-custom-ring-repin: (_custom-ring-suite "policy_repin")
 
+# One real key proven in a scratch export of HEAD.
+one-key-validation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git diff --quiet HEAD -- . ':(exclude)zolana' || { echo "Commit the tree, the run exports HEAD" >&2; exit 1; }
+    git -C zolana diff --quiet HEAD || { echo "Commit zolana, the run exports its HEAD" >&2; exit 1; }
+    run="{{justfile_directory()}}/target/one-key/$(git rev-parse --short=12 HEAD)-$(git -C zolana rev-parse --short=12 HEAD)"
+    tree="$run/tree" keys="$run/keys"
+    key=custom-ring-transfer-2-in24-w4-s4
+    file="${key//-/_}.key"
+    module="${file#custom_ring_}"
+    module="${module%.key}_verifying_key.rs"
+    if [[ ! -d "$tree" ]]; then
+        rm -rf "$tree.partial"
+        mkdir -p "$tree.partial/zolana"
+        git archive HEAD | tar -x -C "$tree.partial"
+        git -C zolana archive HEAD | tar -x -C "$tree.partial/zolana"
+        # The build script resolves each root through git.
+        git init -q "$tree.partial"
+        git init -q "$tree.partial/zolana"
+        mv "$tree.partial" "$tree"
+    fi
+    mkdir -p "$keys/.setup"
+    cd "$tree"
+    if [[ ! -s "$keys/$file" ]]; then
+        (cd prover && go run ./cmd/prover "setup-$key" --output "$keys/.setup/$file" --vk-out "$keys/vk.bin")
+        mv "$keys/.setup/$file" "$keys/$file"
+    fi
+    cargo run -q --manifest-path zolana/Cargo.toml -p xtask -- bsb22-vk "$keys/vk.bin" "$keys/$file" \
+        "$tree/program-libs/interface/src/verifying_keys/transfer" "$module"
+    lock=prover/ring/proving-keys.lock
+    jq --arg name "$file" --arg sha256 "$(shasum -a 256 "$keys/$file" | awk '{ print $1 }')" \
+        --argjson size "$(wc -c < "$keys/$file")" \
+        '.keys = { ($name): { sha256: $sha256, size: $size, source: "release" } }' "$lock" > "$keys/lock"
+    cp "$keys/lock" "$lock"
+    python3 tools/generate_ring_keys.py --allow-missing
+    env -u RING_INDEXER_BIN ZOLANA_SPP_KEYS_DIR="$keys" {{just_executable()}} test-custom-ring-validator 'test(one_key)' --features proofs
+
 _custom-ring-suite test: fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool
     #!/usr/bin/env bash
     set -euo pipefail

@@ -48,6 +48,9 @@ mod exemptions;
 mod lifecycle;
 #[path = "ring/merge.rs"]
 mod merge;
+#[cfg(feature = "proofs")]
+#[path = "ring/one_key.rs"]
+mod one_key;
 #[path = "ring/migration.rs"]
 mod migration;
 #[path = "ring/policy.rs"]
