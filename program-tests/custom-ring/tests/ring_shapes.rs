@@ -152,6 +152,7 @@ fn swept(shape: TransferShape) -> bool {
 fn narrow_key(outputs: u8) -> Option<TransferShape> {
     FrameKey {
         rail: RingRail::Confidential,
+        inputs: 1,
         outputs: outputs.into(),
         spends_default_ring: false,
         wide: false,

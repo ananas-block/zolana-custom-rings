@@ -172,7 +172,7 @@ pub enum RingError {
     },
     #[error("indexer returned an incomplete proof set")]
     IncompleteProofSet,
-    #[error("the transfer needs a shape no {rail} key serves")]
+    #[error("the catalog has no {rail} key for the transfer")]
     ShapeUnkeyed { rail: RingRail },
     #[error("the deposit needs more records than any deposit key holds")]
     DepositUnkeyed,

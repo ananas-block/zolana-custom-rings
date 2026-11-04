@@ -1460,14 +1460,14 @@ describe("anonymous ring relay", () => {
   });
 
   it("spends the widest commitment class and refuses a payment past it before approval", async () => {
-    const widest = await anonymousSpend({ notes: 24, amount: 235n });
-    expect((await payload(await widest.relay)).inputs).toHaveLength(24);
+    const widest = await anonymousSpend({ notes: 49, amount: 485n });
+    expect((await payload(await widest.relay)).inputs).toHaveLength(49);
     expect(widest.requests).toHaveLength(1);
-    const wider = await anonymousSpend({ notes: 25, amount: 245n });
+    const wider = await anonymousSpend({ notes: 50, amount: 495n });
     await expect(wider.relay).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_TOO_MANY_INPUTS",
-      cause: { details: { maximum: 24 } },
+      cause: { details: { maximum: 49 } },
     });
     expect(wider.requests).toEqual([]);
     noProofs(wider.fixture);
@@ -2147,7 +2147,7 @@ describe("anonymous entry key bound", () => {
   it("refuses a ninth default-ring note before any proof", async () => {
     const fixture = await anonymousRing();
     await expect(entry(fixture, anonymousSender(), 9)).rejects.toThrow(
-      ringError("RING_TRANSACT_DATA_INVALID", { reason: "RingShapeUnkeyed" }),
+      ringError("RING_CATALOG_KEY_MISSING"),
     );
     noProofs(fixture);
   });

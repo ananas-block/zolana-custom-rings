@@ -513,7 +513,15 @@ impl<'a> Pipeline<'a> {
         // The auditor message precedes every hash over the external data.
         let unsealed = preview.parts(&proof_inputs, &rail, &sender)?;
         let (layout, flags) = (
-            unsealed.data().audit_stream()?,
+            unsealed
+                .data()
+                .audit_stream()
+                .map_err(|error| match error {
+                    CustomRingError::RingShapeUnkeyed => {
+                        RingError::ShapeUnkeyed { rail: ring_rail }
+                    }
+                    error => error.into(),
+                })?,
             unsealed.data().audit_layout(),
         );
         let sealed = match presealed {
@@ -1036,7 +1044,7 @@ const UNSEALED_RECORD: [u8; AUDIT_RECORD_LEN] = [0; AUDIT_RECORD_LEN];
 fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
     let preview = parts.preview;
     let external = &parts.inputs.external_data;
-    let nullifiers = parts
+    let nullifiers: Vec<_> = parts
         .inputs
         .input_utxos
         .iter()
@@ -1079,7 +1087,19 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             .collect(),
         has_data: parts.inputs.output_utxos.iter().any(carries_data),
         entry: spends_default_ring(&parts.inputs.input_utxos),
-        wide_owners: false,
+        // A spend past the narrow key's inputs names the wide key before the policy reads its pools.
+        wide_owners: TransferSpend {
+            rail: preview.rail,
+            inputs: nullifiers.len(),
+            outputs: usize::from(preview.n_out),
+            spends_default_ring: spends_default_ring(&parts.inputs.input_utxos),
+            legs: 0,
+            owners: 0,
+            pools: RecordPools::default(),
+            wide: false,
+        }
+        .fitted()
+        .wide,
         outputs: parts
             .published
             .iter()
