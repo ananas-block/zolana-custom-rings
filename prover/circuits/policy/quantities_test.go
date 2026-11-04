@@ -39,7 +39,7 @@ func guarded(threshold uint64) ringpolicy.World {
 	w.Table.Limits = nil
 	w.Table.Rules[0].Guard, w.Table.Rules[0].Threshold = policy.GuardAboveAmount, threshold
 	for _, member := range []int64{s, bob, alice} {
-		w.Own[member] = ringpolicy.Escrowed(0)
+		w.Own[member] = ringpolicy.Record{Lists: 0}
 	}
 	return w
 }
@@ -78,7 +78,7 @@ func TestReceiptTable(t *testing.T) {
 			}
 			requireRefusedIn(t, w, "policy.assertPaymentRules")
 			for _, member := range []int64{s, bob, alice} {
-				w.Own[member] = ringpolicy.Escrowed(ringregistry.AllowBit)
+				w.Own[member] = ringpolicy.Record{Lists: ringregistry.AllowBit}
 			}
 			requireSolved(t, w.Build(t))
 		})

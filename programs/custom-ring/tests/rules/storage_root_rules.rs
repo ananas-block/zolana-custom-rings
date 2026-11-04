@@ -156,7 +156,7 @@ fn update_policy_rebinds_the_records_to_a_registry_of_any_authority() {
     reaches_verification(transfer_reading(&mut ring, &[records], &data));
 }
 
-/// The registry state a creator other than the ring PDA holds, valid but for its address.
+/// Valid but for its address.
 fn forged_tracking() -> Vec<u8> {
     let registry = TrackingRegistry::new(
         254,
@@ -201,7 +201,6 @@ fn a_forged_tracking_registry_with_a_matching_ring_id_and_an_empty_root_fails_at
 
 const PRIVATE: Address = Address::new_from_array([0x5f; 32]);
 
-/// A private registry paired with `pair`, holding one root at revision 2 and `floor`.
 fn store_private(ring: &mut Ring, pair: Address, floor: u64) {
     let mut registry = StorageRegistry::new(
         Keypair::new().pubkey(),
@@ -233,7 +232,6 @@ fn name_private_source(ring: &mut Ring) -> Sent {
     ring.send(update, &[&authority])
 }
 
-/// The pinned registry at revision 3 with revision 2 still in its grace.
 fn store_tracking_history(ring: &mut Ring) {
     let mut tracking: TrackingRegistry = ring.read(&tracking_registry());
     tracking.roots[0] = root(3, [0x09; 32]);

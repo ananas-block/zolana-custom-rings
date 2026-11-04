@@ -112,7 +112,6 @@ impl PublicSlots {
         self.slots.is_empty()
     }
 
-    /// The co-sign classes the public legs add, `NONE` without a leg.
     pub const fn classes(&self) -> CoSignScope {
         self.classes
     }

@@ -38,6 +38,7 @@ fn served(rail: RingRail, spends_default_ring: bool) -> Value {
                     legs: 0,
                     owners: 0,
                     has_data: false,
+                    private_source: false,
                 })
                 .is_some()
         })

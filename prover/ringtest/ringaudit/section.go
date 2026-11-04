@@ -306,3 +306,25 @@ func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int
 	}
 	return &note, nil
 }
+
+// ReadEntry rebuilds default input i from its evidence and accepts only an exact match, nil on any other slot.
+func (r AuditReader) ReadEntry(t testing.TB, stream Stream, i int, treeID uint16, spent *big.Int) (*Note, error) {
+	t.Helper()
+	plaintext := r.Keys.Open(t, stream)
+	_, bits := r.Envelope(t, stream)
+	if bits&(1<<i) == 0 {
+		return nil, nil
+	}
+	offset := stream.Ranges.EnvelopeHeadLen() + i*audit.EntryInputLen
+	entry := plaintext[offset : offset+audit.EntryInputLen]
+	note := Note{Kind: audit.KindExit, OwnerKey: [32]byte(entry[:32]), NullifierPk: new(big.Int).SetBytes(entry[32:64]), Amount: binary.BigEndian.Uint64(entry[64:72]), Mint: [32]byte(entry[72:104]), Blinding: new(big.Int).SetBytes(entry[104:136])}
+	note.Hash = Utxo{
+		Domain: protocol.UtxoDomain, TreeID: treeID, OwnerPkHash: ringtest.MustSolanaPkField(t, note.OwnerKey), NullifierPk: note.NullifierPk,
+		Asset: ringtest.AssetField(t, note.Mint), Amount: note.Amount, Blinding: note.Blinding,
+		DataHash: new(big.Int).SetBytes(entry[136:168]), RingDataHash: new(big.Int).SetBytes(entry[168:200]), RingProgramID: big.NewInt(0),
+	}.Hash(t)
+	if note.Hash.Cmp(spent) != 0 {
+		return nil, fmt.Errorf("input %d: the evidence rebuilds no spent commitment", i)
+	}
+	return &note, nil
+}

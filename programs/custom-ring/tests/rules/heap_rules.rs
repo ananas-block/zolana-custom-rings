@@ -5,7 +5,6 @@ use custom_ring_interface::{
         TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
         ENTRY_TRANSFER_SHAPES,
     },
-    storage::Revision,
     tag, CustomRingError, RingPolicy, RingRail, RingTransactData, RootRead,
 };
 use solana_address::Address;
@@ -19,7 +18,7 @@ use spr_interface::{
 };
 
 use crate::{
-    common::{policy_pda, transact, Ring, Sent, Setup, RECORDS},
+    common::{policy_pda, transact, Ring, Sent, Setup},
     transact_rules::{spp_list, Fixture},
 };
 

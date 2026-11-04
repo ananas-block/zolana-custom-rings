@@ -12,8 +12,8 @@ import (
 
 // ConfidentialShape sizes a key, Inputs the slots every rail opens and the signers it can bind, Owners the rows, Entry a spend of default-ring notes, Data one tail per slot.
 type ConfidentialShape struct {
-	Inputs, Outputs, Withdrawals, Owners int
-	Entry, Data                          bool
+	Inputs, Outputs, Withdrawals, Owners, Private int
+	Entry, Data                                   bool
 }
 
 // ConfidentialBases mirrors CONFIDENTIAL_TRANSFER_SHAPES in program-libs/interface/src/proof/key_catalog.rs, each takes every owner and data capacity.
@@ -43,6 +43,22 @@ func confidentialKeys(bases []ConfidentialShape, entry bool) []ConfidentialShape
 			}
 		}
 	}
+	return append(keys, confidentialPrivateKeys(bases, entry)...)
+}
+
+// confidentialPrivateKeys are the keys a private source ring proves on, the narrowest of each input and output count at small rows.
+func confidentialPrivateKeys(bases []ConfidentialShape, entry bool) []ConfidentialShape {
+	var keys []ConfidentialShape
+	seen := map[[2]int]bool{}
+	for _, base := range bases {
+		if seen[[2]int{base.Inputs, base.Outputs}] {
+			continue
+		}
+		seen[[2]int{base.Inputs, base.Outputs}] = true
+		base.Owners, base.Entry, base.Data = ownerCapacities(base.Inputs)[0], entry, false
+		base.Private = privateRows(base.Owners, base.Outputs, base.Withdrawals)
+		keys = append(keys, base)
+	}
 	return keys
 }
 
@@ -59,18 +75,21 @@ func (s ConfidentialShape) String() string {
 	if s.Entry {
 		family = "confidential_entry"
 	}
-	return fmt.Sprintf("custom_ring_transfer_%s_%d_in%d_w%d_s%d%s", family, s.Outputs, s.Inputs, s.Withdrawals, s.Owners, dataSuffix(s.Data))
+	return fmt.Sprintf("custom_ring_transfer_%s_%d_in%d_w%d_s%d%s", family, s.Outputs, s.Inputs, s.Withdrawals, s.Owners, keySuffix(s.Data, s.Private))
 }
 
-func dataSuffix(data bool) string {
-	if data {
+func keySuffix(data bool, private int) string {
+	switch {
+	case data:
 		return "_data"
+	case private > 0:
+		return fmt.Sprintf("_p%d", private)
 	}
 	return ""
 }
 
 func (s ConfidentialShape) sectionsShape() SectionsShape {
-	return SectionsShape{inputs: s.Inputs, outputs: s.Outputs, withdrawals: s.Withdrawals, owners: s.Owners, entry: s.Entry, data: s.Data}
+	return SectionsShape{inputs: s.Inputs, outputs: s.Outputs, withdrawals: s.Withdrawals, owners: s.Owners, private: s.Private, entry: s.Entry, data: s.Data}
 }
 
 type ConfidentialTransferCircuit struct {

@@ -97,7 +97,7 @@ pub fn load_storage_registry(
     Ref::filter_map(data, StorageRegistry::from_data).map_err(|_| invalid.into())
 }
 
-/// Owner and discriminator alone, any creator can make one with a matching `ring_id`, a caller compares the address.
+/// Any creator can make one with a matching `ring_id`, a caller compares the address.
 fn load_tracking_registry(
     account: &AccountView,
 ) -> Result<Ref<'_, TrackingRegistry>, ProgramError> {
@@ -150,7 +150,6 @@ pub struct RegistrySlots<'a> {
 }
 
 impl RegistrySlots<'_> {
-    /// `UnboundRegistry` unless each account `next` yields is the bound one, in the order own, curator, private source, tracking.
     #[inline(never)]
     pub fn load<'b>(
         self,
@@ -215,7 +214,6 @@ pub fn check_funding_signer(
     Ok(funder)
 }
 
-/// One carried co-signature's `[co_signer_record, co_signer]` slot.
 #[must_use]
 pub struct CoSignerSlot<'a> {
     pub program_id: &'a Address,
@@ -224,7 +222,6 @@ pub struct CoSignerSlot<'a> {
 }
 
 impl CoSignerSlot<'_> {
-    /// The record's signer, signing, and what stays uncovered after it.
     pub fn verify(
         self,
         requirement: CoSignRequirement,
@@ -241,7 +238,7 @@ impl CoSignerSlot<'_> {
     }
 }
 
-/// The carried co-signers, each covering a class no earlier one covered.
+/// Each covers a class no earlier one covered.
 #[derive(Default)]
 pub struct CoSigners {
     signers: [Address; MAX_CO_SIGNERS],
@@ -249,7 +246,7 @@ pub struct CoSigners {
 }
 
 impl CoSigners {
-    /// `pairs` holds the frame's count of slots, `MissingCoSigner` while a demanded class stays uncovered.
+    /// `pairs` holds the frame's count of slots.
     pub fn verify(
         program_id: &Address,
         pairs: &[AccountView],

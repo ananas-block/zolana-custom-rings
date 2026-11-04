@@ -4,22 +4,20 @@ mod frames;
 
 use frames::{config, spp_b, Fixture};
 
-use bytemuck::Zeroable;
-use custom_ring_interface::{
-    encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
-    ring_sender_bundle_output_body, sender_bundle_len, CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    MIN_REPLY_LEN, OUTPUT_COUNT_BYTE, RING_BODY_SCHEME_TAG, RING_SENDER_BUNDLE_SCHEME_TAG,
-};
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignHeader},
     input_flag,
     key_catalog::RingCircuit,
-    shape_flag,
-    storage::Revision,
-    transact_flag, AuditKey, AuditStreamLayout, AuditorMessage, ConfidentialSender,
-    CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof, Replies, RingOutput,
-    RingPolicy, RingRail, RingTransactData, Settlement, SignerSet, SlotBody, TransferBinding,
-    TransferFamily, TransferRoots, ANONYMOUS_PARTIES, CO_SIGN_BYTE,
+    output_flag, shape_flag, transact_flag, AuditKey, AuditStreamLayout, AuditorMessage,
+    ConfidentialSender, CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof,
+    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerSet, SlotBody,
+    TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, CO_SIGN_BYTE,
+};
+use custom_ring_interface::{
+    encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
+    ring_sender_bundle_output_body, sender_bundle_len, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    MIN_REPLY_LEN, OUTPUT_COUNT_BYTE, RECIPIENT_BODY_LEN, RING_BODY_SCHEME_TAG,
+    RING_SENDER_BUNDLE_SCHEME_TAG,
 };
 use serde::{Deserialize, Serialize};
 use spr_event::{
@@ -257,7 +255,12 @@ fn recipient_and_exit_slots_keep_the_borsh_framing_at_exact_capacity() {
     let body_and_reply = [&body[..], &reply].concat();
     for (data, scheme, payload) in [
         (
-            fixture.tagged(1).transact_output(&[]).unwrap().data.unwrap(),
+            fixture
+                .tagged(1)
+                .transact_output(&[])
+                .unwrap()
+                .data
+                .unwrap(),
             RING_BODY_SCHEME_TAG,
             &body[..],
         ),
@@ -352,6 +355,21 @@ fn the_output_count_stays_between_one_and_the_capacity() {
         empty.outputs.clear();
         assert_eq!(empty.encode(), Err(CustomRingError::OutputCountOutOfRange));
     }
+}
+
+/// The wide owner bit names a key and never reaches `m`.
+#[test]
+fn the_wide_owner_bit_sits_above_the_output_count() {
+    let fixture = Fixture::new();
+    let mut data = fixture.confidential_compact();
+    data.wide_owners = true;
+    let compact = data.encode().unwrap();
+    assert_eq!(compact[OUTPUT_COUNT_BYTE], output_flag::WIDE_OWNERS | 5);
+    let parsed = RingTransactData::parse(&compact, RingRail::Confidential)
+        .unwrap()
+        .into_data();
+    assert_eq!(parsed, data);
+    assert_eq!(parsed.outputs.len(), 5);
 }
 
 /// `m` moves the chains' prefix, never a slot's index, the suffix leaves the frame.
@@ -594,10 +612,13 @@ fn the_delegate_reads_no_policy_and_spends_no_default_note() {
         );
     }
     let mut cached = fixture.delegate();
-    cached.extensions.cache = Some(spr_interface::instruction::instruction_data::transact::CacheAccess {
-        read_bitmap: 1,
-        write_slots: spr_interface::instruction::instruction_data::transact::CacheAccess::NO_WRITES,
-    });
+    cached.extensions.cache = Some(
+        spr_interface::instruction::instruction_data::transact::CacheAccess {
+            read_bitmap: 1,
+            write_slots:
+                spr_interface::instruction::instruction_data::transact::CacheAccess::NO_WRITES,
+        },
+    );
     assert_eq!(cached.encode(), Err(CustomRingError::FlagNotAllowed));
 }
 
@@ -609,7 +630,10 @@ fn a_frame_on_the_entry_key_parses_on_the_owner_rails() {
     data.outputs = vec![fixture.recipient(0), fixture.recipient(1)];
     let data = fixture.with_audit_stream(data);
     let compact = data.encode().unwrap();
-    assert_eq!(compact[input_flag::BYTE] & input_flag::ENTRY, input_flag::ENTRY);
+    assert_eq!(
+        compact[input_flag::BYTE] & input_flag::ENTRY,
+        input_flag::ENTRY
+    );
     assert_eq!(
         RingTransactData::parse(&compact, RingRail::Confidential)
             .unwrap()
@@ -631,13 +655,62 @@ fn flags_the_rail_forbids_are_refused() {
         RingTransactData::parse(&curator, RingRail::Confidential),
         Err(CustomRingError::FlagNotAllowed)
     );
+}
+
+/// A delegate exit takes SPP's authority exit selector, a move keeps the authority rail.
+#[test]
+fn a_delegate_exit_selects_the_exit_circuit() {
+    let fixture = Fixture::new();
     let mut exit = fixture.delegate();
-    exit.rail = RingRail::Confidential;
+    assert_eq!(exit.circuit(), CircuitId::RingAuthority(2, 2, 3));
     exit.outputs[1] = fixture.exit(1, &fixture.payload);
     let compact = fixture.with_audit_stream(exit).encode().unwrap();
+    let parsed = RingTransactData::parse(&compact, RingRail::Delegate)
+        .unwrap()
+        .into_data();
+    assert_eq!(parsed.circuit(), CircuitId::RingAuthorityExit(2, 2, 3));
+}
+
+#[test]
+fn the_rail_follows_the_instruction_and_the_ring_mode() {
+    use custom_ring_interface::{InstructionTag, RingMode};
+    use InstructionTag::{AuthorityTransfer, Deposit, Transfer};
+    let delegate = solana_address::Address::new_from_array([3; 32]);
+    let ring = |mode: RingMode, delegate: Option<solana_address::Address>| {
+        let mut ring = <RingPolicy as bytemuck::Zeroable>::zeroed();
+        ring.mode = mode as u8;
+        ring.delegate = delegate.unwrap_or_default();
+        ring
+    };
+    let rail = |tag, mode| RingRail::new(tag, &ring(mode, Some(delegate)));
     assert_eq!(
-        RingTransactData::parse(&compact, RingRail::Delegate),
-        Err(CustomRingError::FlagNotAllowed)
+        rail(Transfer, RingMode::Confidential),
+        Ok(RingRail::Confidential)
+    );
+    assert_eq!(rail(Transfer, RingMode::Anonymous), Ok(RingRail::Anonymous));
+    assert_eq!(
+        rail(AuthorityTransfer, RingMode::Confidential),
+        Ok(RingRail::Delegate)
+    );
+    assert_eq!(
+        rail(AuthorityTransfer, RingMode::Anonymous),
+        Ok(RingRail::AnonymousDelegate)
+    );
+    assert_eq!(
+        rail(Deposit, RingMode::Confidential),
+        Err(CustomRingError::InvalidInstructionData)
+    );
+    for mode in [RingMode::Confidential, RingMode::Anonymous] {
+        assert_eq!(
+            RingRail::new(AuthorityTransfer, &ring(mode, None)),
+            Err(CustomRingError::DelegateDisabled)
+        );
+    }
+    let mut retired = ring(RingMode::Confidential, None);
+    retired.mode = 1;
+    assert_eq!(
+        RingRail::new(Transfer, &retired),
+        Err(CustomRingError::InvalidRingMode)
     );
 }
 
@@ -722,6 +795,64 @@ fn the_extensions_reach_the_forwarded_data() {
     );
 }
 
+/// SPP's proof binds the hash, a byte the ring proof leaves out still cannot move under it.
+#[test]
+fn the_external_data_hash_binds_every_delivery_byte() {
+    let fixture = Fixture::new();
+    let config = config();
+    let hash = |data: &RingTransactData<'_>| data.external_data_hash(&config, &[]).unwrap();
+    let garbage = [0xee; RECIPIENT_BODY_LEN];
+    let other_payload = [0xee; CONFIDENTIAL_DATA_FREE_BODY_LEN];
+    for (name, honest) in [
+        ("confidential", fixture.confidential_delivered()),
+        ("anonymous", fixture.anonymous()),
+        ("delegate", fixture.delegate()),
+        ("anonymous delegate", fixture.anonymous_delegate()),
+    ] {
+        let reference = hash(&honest);
+        let mut body = honest.clone();
+        let slot = body
+            .outputs
+            .iter()
+            .position(|output| matches!(output.body, SlotBody::Recipient(_)))
+            .unwrap();
+        body.outputs[slot].body = SlotBody::Recipient(&garbage);
+        assert_ne!(hash(&body), reference, "{name} body");
+        let mut tag = honest.clone();
+        tag.outputs[slot].owner_tag = &fixture.bytes[40];
+        assert_ne!(hash(&tag), reference, "{name} tag");
+        let mut record = honest.clone();
+        record.outputs[slot].record = &fixture.records[15];
+        assert_ne!(hash(&record), reference, "{name} record");
+    }
+    let confidential = fixture.confidential_delivered();
+    let mut exit = confidential.clone();
+    exit.outputs[3].body = SlotBody::Exit(&other_payload);
+    assert_ne!(hash(&exit), hash(&confidential), "exit body");
+    let honest = fixture.anonymous();
+    let mut bundle = honest.clone();
+    let body = bundle.sender.unwrap().body;
+    bundle.sender = Some(FramedSenderBundle {
+        tag: &fixture.tags[6],
+        body,
+    });
+    assert_ne!(hash(&bundle), hash(&honest), "bundle tag");
+    let mut bundle = honest.clone();
+    let tag = bundle.sender.unwrap().tag;
+    bundle.sender = Some(FramedSenderBundle {
+        tag,
+        body: &fixture.envelope[..sender_bundle_len(4)],
+    });
+    assert_ne!(hash(&bundle), hash(&honest), "bundle body");
+    let replied = fixture.anonymous_replies(MIN_REPLY_LEN as u16);
+    let mut reply = replied.clone();
+    reply.replies = Some(Replies {
+        len: MIN_REPLY_LEN as u16,
+        region: &fixture.envelope[..2 * MIN_REPLY_LEN],
+    });
+    assert_ne!(hash(&reply), hash(&replied), "reply");
+}
+
 #[test]
 fn a_cached_selector_keeps_the_rail_key() {
     use spr_interface::instruction::instruction_data::transact::CacheAccess;
@@ -759,8 +890,11 @@ fn public_owners_select_the_confidential_circuit() {
         data
     );
     let mut with_proof = data.clone();
-    with_proof.anonymous = fixture.anonymous().anonymous;
-    assert_eq!(with_proof.encode(), Err(CustomRingError::RingTransactLength));
+    with_proof.anonymous = fixture.anonymous_compact().anonymous;
+    assert_eq!(
+        with_proof.encode(),
+        Err(CustomRingError::RingTransactLength)
+    );
     let hidden = fixture.anonymous();
     assert!(matches!(
         hidden.circuit(),
@@ -867,9 +1001,6 @@ fn the_sender_bundle_is_present_exactly_on_the_anonymous_frame() {
     let mut anonymous = fixture.anonymous();
     anonymous.sender = None;
     assert_eq!(anonymous.encode(), Err(CustomRingError::RingTransactLength));
-    let mut unrevised = fixture.anonymous();
-    unrevised.own_revision = None;
-    assert_eq!(unrevised.encode(), Err(CustomRingError::RingTransactLength));
     let mut confidential = fixture.confidential_policy();
     confidential.sender = fixture.sender(2);
     assert_eq!(
@@ -913,7 +1044,13 @@ fn every_rail_reads_its_audit_stream() {
     let key = |class, entry| AuditKey { class, entry };
     for (data, key, inputs, outputs, has_data) in [
         (fixture.confidential_policy(), key(24, false), 2, 2, false),
-        (fixture.confidential_delivered(), key(16, false), 1, 8, false),
+        (
+            fixture.confidential_delivered(),
+            key(16, false),
+            1,
+            8,
+            false,
+        ),
         (
             fixture.confidential_in_proof_owner(),
             key(24, false),
@@ -1046,6 +1183,7 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
             withdrawals: 4,
             owners: 4,
             data: false,
+            private: 0,
         })
     );
     assert_eq!(
@@ -1078,23 +1216,7 @@ fn the_transfer_statement_reads_the_frame_and_names_its_family() {
     let fixture = Fixture::new();
     let config = config();
     let roots = TransferRoots::default();
-    let family = |data| {
-        ParsedTransact::new(data)
-            .unwrap()
-            .transfer_statement(binding(&fixture, &config, &roots))
-            .map(|statement| {
-                format!(
-                    "{:?}",
-                    (
-                        statement.family,
-                        statement.no_spend,
-                        statement.approval_mask,
-                        statement.head.layout.value()
-                    )
-                )
-            })
-            .unwrap()
-    };
+    let parties = [[0; 32]; ANONYMOUS_PARTIES];
     let parsed = ParsedTransact::new(fixture.anonymous()).unwrap();
     let data = parsed.data();
     let statement = parsed
@@ -1102,72 +1224,103 @@ fn the_transfer_statement_reads_the_frame_and_names_its_family() {
         .unwrap();
     assert_eq!(statement.head.first_nullifier, &data.nullifiers[0]);
     assert_eq!(statement.head.salt, data.salt);
-    assert_eq!(statement.head.layout.value(), 0);
     assert_eq!(statement.head.envelope, data.envelope);
     assert_eq!(statement.input_count, data.nullifiers.len());
     assert_eq!(statement.private_tx_hash, data.private_tx_hash);
     assert_eq!(statement.output_capacity, 4);
-    let anonymous = |public_owners, delegate| TransferFamily::Anonymous {
-        party_identities: &[[0; 32]; ANONYMOUS_PARTIES],
-        public_owners,
-        delegate,
-    };
-    assert_eq!(statement.family, anonymous(false, false));
-    let family_of = |data: RingTransactData<'_>| {
-        ParsedTransact::new(data)
-            .unwrap()
+    for (data, family, layout, no_spend) in [
+        (
+            fixture.anonymous(),
+            TransferFamily::Anonymous {
+                party_identities: &parties,
+                public_owners: false,
+                delegate: false,
+            },
+            0,
+            false,
+        ),
+        (
+            fixture.anonymous_public_owners(),
+            TransferFamily::Anonymous {
+                party_identities: &parties,
+                public_owners: true,
+                delegate: false,
+            },
+            0,
+            false,
+        ),
+        (
+            fixture.anonymous_delegate(),
+            TransferFamily::Anonymous {
+                party_identities: &parties,
+                public_owners: false,
+                delegate: true,
+            },
+            0,
+            false,
+        ),
+        (
+            fixture.anonymous_entry(),
+            TransferFamily::Anonymous {
+                party_identities: &parties,
+                public_owners: false,
+                delegate: false,
+            },
+            2,
+            false,
+        ),
+        (
+            fixture.confidential_delivered(),
+            TransferFamily::Confidential {
+                sender: ConfidentialSender::Signer,
+            },
+            0,
+            false,
+        ),
+        (
+            fixture.confidential_data(),
+            TransferFamily::Confidential {
+                sender: ConfidentialSender::Signer,
+            },
+            1,
+            false,
+        ),
+        (
+            fixture.confidential_no_spend(),
+            TransferFamily::Confidential {
+                sender: ConfidentialSender::Signer,
+            },
+            0,
+            true,
+        ),
+        (
+            fixture.confidential_in_proof_owner(),
+            TransferFamily::Confidential {
+                sender: ConfidentialSender::InProof(&fixture.fields[61]),
+            },
+            0,
+            false,
+        ),
+        (
+            fixture.delegate(),
+            TransferFamily::Confidential {
+                sender: ConfidentialSender::Authority,
+            },
+            0,
+            false,
+        ),
+    ] {
+        let parsed = ParsedTransact::new(data).unwrap();
+        let statement = parsed
             .transfer_statement(binding(&fixture, &config, &roots))
-            .unwrap()
-            .family
-            .clone()
-    };
-    assert_eq!(
-        family_of(fixture.anonymous_public_owners()),
-        anonymous(true, false)
-    );
-    assert_eq!(family_of(fixture.anonymous_delegate()), anonymous(false, true));
-    assert_eq!(
-        family_of(fixture.confidential_delivered()),
-        TransferFamily::Confidential {
-            sender: ConfidentialSender::Signer,
-        }
-    );
-    assert_eq!(
-        family_of(fixture.confidential_in_proof_owner()),
-        TransferFamily::Confidential {
-            sender: ConfidentialSender::InProof(&fixture.fields[61]),
-        }
-    );
+            .unwrap();
+        assert_eq!(statement.family, family);
+        assert_eq!(statement.head.layout.value(), layout, "{family:?}");
+        assert_eq!(statement.no_spend, no_spend, "{family:?}");
+    }
     assert_eq!(
         fixture.confidential_in_proof_owner().in_proof_sender(),
         Ok(Some(solana_owner_identity(&fixture.bytes[16]).unwrap()))
-    );
-    assert_eq!(
-        family_of(fixture.delegate()),
-        TransferFamily::Confidential {
-            sender: ConfidentialSender::Authority,
-        }
-    );
-    assert!(family(fixture.confidential_no_spend()).contains("true"));
-    assert_eq!(
-        ParsedTransact::new(fixture.confidential_data())
-            .unwrap()
-            .transfer_statement(binding(&fixture, &config, &roots))
-            .unwrap()
-            .head
-            .layout
-            .value(),
-        1
-    );
-    assert_eq!(
-        ParsedTransact::new(fixture.anonymous_entry())
-            .unwrap()
-            .transfer_statement(binding(&fixture, &config, &roots))
-            .unwrap()
-            .head
-            .layout
-            .value(),
-        2
     );
 }
 

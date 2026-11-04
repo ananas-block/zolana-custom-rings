@@ -128,8 +128,8 @@ fn an_audited_deposit_without_a_bound_root_reaches_its_proof() {
     reaches_verification(audited_deposit(&mut ring, None));
 }
 
-/// The deposit's forwarded list starts after the ring account.
-const DEPOSIT_SPP: usize = 1;
+/// The deposit's forwarded list starts after the ring account and the pinned tracking registry.
+const DEPOSIT_SPP: usize = 2;
 
 #[test]
 fn an_audited_deposit_forwards_deposit_data_its_capsules_open() {

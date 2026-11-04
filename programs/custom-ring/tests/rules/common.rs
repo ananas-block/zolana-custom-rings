@@ -3,11 +3,12 @@ use custom_ring_interface::{
     compute_unit_limit,
     storage::{Revision, Root, StorageRegistry},
     storage_instruction::InitializeIxData as StorageInitialize,
+    tag,
     tracking::TrackingRegistry,
-    tag, CustomRingError, InitializeIxData, InstructionTag,
-    PolicyBindingIxData, PolicyTableIxData, RingKind, RingPolicy, RingRole, RingRoles, RootRead,
-    SetCoSignerRecordIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
-    CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
+    CustomRingError, InitializeIxData, InstructionTag, PolicyBindingIxData, PolicyTableIxData,
+    RingKind, RingPolicy, RingRole, RingRoles, RootRead, SetCoSignerRecordIxData, SourceSpec,
+    UpdateAuthorityIxData, UpdatePolicyIxData, CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED,
+    STORAGE_PROGRAM_ID,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -49,7 +50,6 @@ pub fn ring_auth() -> Address {
     pda(RING_AUTH_PDA_SEED)
 }
 
-/// Where `Initialize` creates the tracking registry the ring pins.
 pub fn tracking_registry() -> Address {
     let ring_id = ring_id_field(PROGRAM.as_array()).expect("ring id");
     TrackingRegistry::find_address(&ring_auth(), &ring_id).0
@@ -71,14 +71,17 @@ pub enum Setup {
     LimitedPolicy,
     Anonymous,
     AnonymousPolicy,
+    /// Bound to no records, it holds no thresholds and reads the tracking root alone.
+    Bare,
+    BareAnonymous,
 }
 
 impl Setup {
     pub const fn kind(self) -> RingKind {
         match self {
-            Self::AuditOnly => RingKind::AuditOnly,
+            Self::AuditOnly | Self::Bare => RingKind::AuditOnly,
             Self::Policy | Self::LimitedPolicy => RingKind::Policy,
-            Self::Anonymous => RingKind::Anonymous,
+            Self::Anonymous | Self::BareAnonymous => RingKind::Anonymous,
             Self::AnonymousPolicy => RingKind::AnonymousPolicy,
         }
     }
@@ -186,7 +189,8 @@ impl Ring {
                 auditor_pubkey: auditor_pubkey(),
                 kind: setup.kind(),
                 roles: ring.roles.addresses(),
-                policy: Some(PolicyBindingIxData { table }),
+                policy: (!matches!(setup, Setup::Bare | Setup::BareAnonymous))
+                    .then_some(PolicyBindingIxData { table }),
             },
             curators: &[],
         }
@@ -232,6 +236,16 @@ impl Ring {
             address,
             STORAGE_PROGRAM_ID,
             bytemuck::bytes_of(&registry).to_vec(),
+        );
+    }
+
+    pub fn serve_tracking(&mut self, revision: Revision) {
+        let mut tracking: TrackingRegistry = self.read(&tracking_registry());
+        tracking.roots[0] = root(revision.value(), [0x09; 32]);
+        self.store(
+            tracking_registry(),
+            STORAGE_PROGRAM_ID,
+            bytemuck::bytes_of(&tracking).to_vec(),
         );
     }
 
@@ -705,7 +719,6 @@ pub fn set_delegate(admin: &Address, delegate: &Address) -> Instruction {
     )
 }
 
-/// A policy ring with a delegate.
 pub fn delegate_ring(delegate: &Keypair) -> Ring {
     let mut ring = Ring::new(Setup::Policy);
     let admin = ring.holder(RingRole::Admin);
