@@ -3,21 +3,18 @@
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::AsyncRpc;
-use spr_indexer_api::{Base64String, SerializablePubkey, SerializableSignature};
-use spr_keypair::{NullifierKey, SigningKey};
+use spr_indexer_api::{Hash, SerializablePubkey, SerializableSignature};
+use spr_keypair::{NullifierKey, PublicKey, SigningKey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
 use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayCoOwner, RelayIntent, RelayProofInputs, RelayQuote,
-    RelayRail, TxViewingSecret,
+    RelayRail,
 };
 use zolana_ring_transaction::{published_outputs, RingDelivery};
 
-use super::{
-    audit::{audit_record, data_tail},
-    carries_data, Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed,
-};
+use super::{Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed};
 use crate::{
-    relay_message::{ExpectedMessage, ExpectedTransfer, RelayTransferTerms, TokenAccountCreate},
+    relay_message::{ExpectedMessage, RelayTransferTerms, SlotOpening, TokenAccountCreate},
     PreparedRelay, RingError,
 };
 
@@ -96,9 +93,7 @@ impl<R: Rail> WalletRelay<'_, R> {
             .relay_proof_inputs(RelayRail::Confidential, nullifier_key.clone())
             .token_account_setup(payer, &token_account_setup)
             .map_err(|_| RingError::RelayAuditorMessage)?;
-        let terms = sealed.transfer_terms(payer, &self.transfer.co_signers, &setup)?;
-        let config = self.transfer.ring.require_config(client).await?;
-        let expected = ExpectedTransfer::new(terms, &config)?;
+        let terms = sealed.transfer_terms(payer, &setup)?;
         let encode = |rail| {
             sealed
                 .relay_proof_inputs(rail, nullifier_key)
@@ -133,7 +128,7 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .map(SerializablePubkey)
                 .collect(),
         })
-        .expecting(ExpectedMessage::Transfer(expected)))
+        .expecting(ExpectedMessage::Sealed(terms)))
     }
 }
 
@@ -159,60 +154,63 @@ impl RingTransfer<Delegated<'_>> {
 }
 
 impl<P> Sealed<'_, P> {
+    /// One per public owner, its own slots and notes alone.
     fn transfer_terms(
         &self,
         fee_payer: Address,
-        co_signers: &[Address],
         setup: &[CreateAssociatedTokenAccount],
-    ) -> Result<RelayTransferTerms, RingError> {
+    ) -> Result<Vec<RelayTransferTerms>, RingError> {
         let staged = &self.pipeline.staged;
         let inputs = &staged.proof_inputs;
-        let slots = published_outputs(&inputs.output_utxos);
-        let bytes = |encoded: &[u8]| Base64String(encoded.to_vec());
-        Ok(RelayTransferTerms {
-            ring: SerializablePubkey(self.pipeline.ring.program_id()),
-            fee_payer: SerializablePubkey(fee_payer),
-            tx_viewing_key: TxViewingSecret::from(staged.rail.tx_viewing_key()),
-            signers: staged
-                .owner_signers
-                .iter()
-                .chain(co_signers)
-                .copied()
-                .map(SerializablePubkey)
-                .collect(),
-            records: slots
-                .iter()
-                .map(|slot| Ok(bytes(&audit_record(slot)?.encode())))
-                .collect::<Result<_, RingError>>()?,
-            tails: match inputs.output_utxos.iter().any(carries_data) {
-                true => slots
+        let ring = self.pipeline.ring.program_id();
+        let setup: Vec<TokenAccountCreate> = setup
+            .iter()
+            .map(|create| TokenAccountCreate {
+                owner: SerializablePubkey(create.owner),
+                mint: SerializablePubkey(create.mint),
+                token_program: SerializablePubkey(create.token_program),
+            })
+            .collect();
+        Ok(staged
+            .owner_signers
+            .iter()
+            .map(|signer| {
+                let key = PublicKey::from_ed25519(signer.as_array());
+                let slots = published_outputs(&inputs.output_utxos)
                     .iter()
-                    .map(|slot| bytes(&data_tail(slot).encode()))
-                    .collect(),
-                false => Vec::new(),
-            },
-            nullifiers: inputs
-                .input_utxos
-                .iter()
-                .filter(|input| !input.is_compact())
-                .map(|input| bytes(&input.nullifier()))
-                .collect(),
-            legs: inputs
-                .external_data
-                .interface_transfers
-                .iter()
-                .map(|leg| wincode::serialize(&leg.interface_transfer()).map(Base64String))
-                .collect::<Result<_, _>>()
-                .map_err(|_| RingError::RelayAuditorMessage)?,
-            setup: setup
-                .iter()
-                .map(|create| TokenAccountCreate {
-                    owner: SerializablePubkey(create.owner),
-                    mint: SerializablePubkey(create.mint),
-                    token_program: SerializablePubkey(create.token_program),
-                })
-                .collect(),
-        })
+                    .zip(0u32..)
+                    .filter_map(|(output, slot)| {
+                        let owner = output
+                            .owner_address
+                            .filter(|owner| !output.is_dummy() && owner.signing_pubkey == key)?;
+                        Some(SlotOpening {
+                            slot,
+                            owner: SerializablePubkey(*signer),
+                            nullifier_pk: Hash(owner.nullifier_pubkey),
+                            mint: SerializablePubkey(output.asset.asset),
+                            amount: output.amount,
+                            blinding: Hash(output.blinding),
+                            tree_id: inputs.output_tree_id,
+                            data_hash: Hash(output.data_hash.unwrap_or_default()),
+                            ring_data_hash: Hash(output.ring_data_hash.unwrap_or_default()),
+                        })
+                    })
+                    .collect();
+                RelayTransferTerms {
+                    ring: SerializablePubkey(ring),
+                    fee_payer: SerializablePubkey(fee_payer),
+                    signer: SerializablePubkey(*signer),
+                    slots,
+                    nullifiers: inputs
+                        .input_utxos
+                        .iter()
+                        .filter(|input| !input.is_dummy() && input.utxo.owner == key)
+                        .map(|input| Hash(input.nullifier()))
+                        .collect(),
+                    setup: setup.clone(),
+                }
+            })
+            .collect())
     }
 
     fn relay_proof_inputs(&self, rail: RelayRail, nullifier_key: NullifierKey) -> RelayProofInputs {

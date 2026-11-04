@@ -11,7 +11,7 @@ use zolana_ring_client::rpc::{
 };
 
 use crate::{
-    relay_message::{ExpectedDelegate, ExpectedMessage, ExpectedTransfer, RelayTransferTerms},
+    relay_message::{ExpectedDelegate, ExpectedMessage, ExpectedPublicOwner, RelayTransferTerms},
     CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
 };
 
@@ -164,24 +164,21 @@ impl PendingSignature {
         &self.message
     }
 
-    /// What the wallet sealed, for each other named signer of the relay.
-    pub fn transfer_terms(&self) -> Option<&RelayTransferTerms> {
-        self.expected.as_deref()?.transfer_terms()
+    /// What the wallet sealed for one public owner, an outside co-signer holds none.
+    pub fn transfer_terms(&self, signer: Address) -> Option<&RelayTransferTerms> {
+        self.expected.as_deref()?.terms_for(signer)
     }
 
-    /// A public signer other than the sealing wallet, `terms` is what it agreed to.
-    pub fn for_transfer_terms(
+    pub(crate) fn expecting_owner(
         relay_id: RelayId,
         message: Vec<u8>,
-        terms: RelayTransferTerms,
-        config: &CustomRingConfig,
-    ) -> Result<Self, RingError> {
-        let expected = ExpectedTransfer::new(terms, config)?;
-        Ok(Self {
+        expected: ExpectedPublicOwner,
+    ) -> Self {
+        Self {
             relay_id,
             message,
-            expected: Some(Box::new(ExpectedMessage::Transfer(expected))),
-        })
+            expected: Some(Box::new(ExpectedMessage::PublicOwner(expected))),
+        }
     }
 
     /// The expectation comes from the wallet's own request, never from Ring RPC's answer.
