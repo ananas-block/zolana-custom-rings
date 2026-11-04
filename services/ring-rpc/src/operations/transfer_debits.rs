@@ -644,7 +644,7 @@ mod tests {
         let frame = hex::decode(
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../test-vectors/settlement/frame_v4.hex"
+                "/../../test-vectors/settlement/frame.hex"
             ))
             .lines()
             .next()

@@ -63,7 +63,7 @@ mod tests {
 
     use super::*;
 
-    const VECTOR: &str = include_str!("../../../../../test-vectors/merge/merge_v4.json");
+    const VECTOR: &str = include_str!("../../../../../test-vectors/merge/merge.json");
 
     fn hex_bytes(value: &Value) -> Vec<u8> {
         hex::decode(value.as_str().unwrap().trim_start_matches("0x")).unwrap()

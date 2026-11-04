@@ -46,6 +46,7 @@ solana-rpc-client = { workspace = true }
 solana-rpc-client-api = { workspace = true }
 solana-signature = { workspace = true, features = ["verify"] }
 solana-instruction = { workspace = true }
+spl-token-2022-interface = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true }
 solana-transaction-status-client-types = { workspace = true }
@@ -62,6 +63,7 @@ spr-event = { workspace = true }
 spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
 spr-rpc-http = { workspace = true }
+spr-instruction = { workspace = true }
 spr-interface = { workspace = true }
 spr-keypair = { workspace = true }
 zolana-secret-file = { workspace = true }

@@ -18,6 +18,11 @@ import { equalBytes, LOADED_ACCOUNTS_DATA_SIZE_LIMIT } from "@heliuslabs/zolana/
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
 import { ringComputeUnitLimit } from "../operations/management/admin.js";
+import {
+  bufferedFrame,
+  frameDigest,
+  settleBufferedData,
+} from "../protocol/transaction/frame-buffer.js";
 import { RingError } from "../protocol/error.js";
 import { ringPolicyAddress } from "../protocol/pda/index.js";
 import type {
@@ -54,6 +59,7 @@ export type RelayMessageMismatch =
   | "Data"
   | "Accounts"
   | "Recipients"
+  | "SettlesBuffer"
   | "Unrequested"
   | "Signer";
 
@@ -199,12 +205,52 @@ export function checkDelegateMessage(
   expected: ExpectedDelegate,
   message: Uint8Array,
 ): VerifiedRelayMessage {
-  const envelope: Envelope = {
-    ...expected,
-    signer: expected.delegate,
-    tag: RingInstructionTag.authorityTransfer,
-  };
+  const envelope = delegateEnvelope(expected, RingInstructionTag.authorityTransfer);
   const { data, accounts } = open(envelope, message);
+  if (data[0] === RingInstructionTag.settleBuffered) throw mismatch("SettlesBuffer");
+  checkDelegateFrame(expected, data, accounts);
+  return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
+}
+
+/** The account a settling message reads its frame from, `undefined` on an inline message. */
+export function settledBufferOf(
+  expected: ExpectedDelegate,
+  message: Uint8Array,
+): Address | undefined {
+  const { data, accounts } = open(
+    delegateEnvelope(expected, RingInstructionTag.settleBuffered),
+    message,
+  );
+  return data[0] === RingInstructionTag.settleBuffered ? accounts[0]?.address : undefined;
+}
+
+/** The digest binds the buffer's frame, every check of an inline message then reads it. */
+export function checkSettledDelegateMessage(
+  expected: ExpectedDelegate,
+  message: Uint8Array,
+  buffer: Uint8Array,
+): VerifiedRelayMessage {
+  const envelope = delegateEnvelope(expected, RingInstructionTag.settleBuffered);
+  const { data, accounts } = open(envelope, message);
+  const inner = accounts.slice(2);
+  if (accounts.length < 2) throw mismatch("Accounts");
+  const frame = bufferedFrame(buffer);
+  if (frame === undefined || !equalBytes(data, settleBufferedData(frameDigest(frame))))
+    throw mismatch("Data");
+  checkDelegateFrame(expected, frame, inner);
+  return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
+}
+
+function delegateEnvelope(expected: ExpectedDelegate, tag: RingInstructionTag): Envelope {
+  return { ...expected, signer: expected.delegate, tag };
+}
+
+function checkDelegateFrame(
+  expected: ExpectedDelegate,
+  data: Uint8Array,
+  accounts: readonly AccountMeta[],
+): void {
+  const envelope = delegateEnvelope(expected, RingInstructionTag.authorityTransfer);
   if (data[0] !== RingInstructionTag.authorityTransfer) throw mismatch("Data");
   const parsed = withMismatch("Data", () => {
     const frame = RingTransactData.parse(data.subarray(1), expected.rail);
@@ -228,7 +274,6 @@ export function checkDelegateMessage(
     named.length === 1 &&
     named.every((meta) => isSignerRole(meta.role) && !isWritableRole(meta.role));
   if (!signsOnce || !readsOnly(envelope, accounts.slice(0, 1))) throw mismatch("Accounts");
-  return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
 }
 
 export function mismatch(reason: RelayMessageMismatch): RingError {

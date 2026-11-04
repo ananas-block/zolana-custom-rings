@@ -1,3 +1,5 @@
+import { encodeBase58 } from "@heliuslabs/zolana/internal";
+import type { NoteData } from "../../../src/operations/payments/anonymous.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
@@ -966,6 +968,92 @@ describe("anonymous ring exits and entries", () => {
     const buffered = await proven.buffered(1n);
     expect(buffered.settle().data?.[0]).toBe(RingInstructionTag.settleBuffered);
     expect(buffered.writes().length).toBeGreaterThan(1);
+  });
+
+  describe("a payment carrying data", () => {
+    const pay = async (data: NoteData) => {
+      const fixture = await anonymousRing();
+      const sender = anonymousSender();
+      const bob = ShieldedKeypair.generate();
+      const to = await addressOf(fixture, bob);
+      const proven = await rail({ fixture, sender, transfer: spend(fixture, sender) })
+        .withPayment({ to, asset: SOL_MINT, amount: 400n, reply: null, data })
+        .prove(fixture.client);
+      const { data: frame, call } = await expanded(fixture, proven, "anonymous");
+      const slot = call.proofInputs.outputs.findIndex((output) =>
+        output.ownerAddress?.signingPublicKey.equals(bob.signingPublicKey()),
+      );
+      return { proven, frame, call, bob, slot, output: itemAt(call.proofInputs.outputs, slot) };
+    };
+
+    it("commits a ring data hash with no owner signature", async () => {
+      const ringDataHash = small(0x33);
+      const { proven, output } = await pay({ ringDataHash });
+      expect(output.ringDataHash).toEqual(ringDataHash);
+      expect(proven.accounts.ownerSigners).toEqual([]);
+    });
+
+    it("holds application data to a signing owner and carries it in the body", async () => {
+      const hash = small(0x44);
+      const bytes = new TextEncoder().encode("app");
+      const { proven, output, frame, bob, slot, call } = await pay({
+        application: { hash, bytes },
+      });
+      expect(output.dataHash).toEqual(hash);
+      expect(frame.hasData).toBe(true);
+      expect(proven.accounts.ownerSigners).toEqual([
+        encodeBase58(bob.signingPublicKey().ed25519()),
+      ]);
+      const body = frame.outputs[slot]?.body;
+      if (body?.kind !== "recipient") throw new Error("no body");
+      const opened = openRecipientBody(slotSecretOf(bob, frame, call, slot), body.body);
+      expect(opened.data).toEqual(Uint8Array.of(...hash, ...bytes));
+    });
+
+    it("keeps a payment's data on its slot past an exit", async () => {
+      const fixture = await anonymousRing();
+      const sender = anonymousSender();
+      const bob = ShieldedKeypair.generate();
+      const to = await addressOf(fixture, bob);
+      const transfer = spend(fixture, sender);
+      const leaving = ShieldedKeypair.generate();
+      fixture.enroll(leaving.shieldedAddress());
+      transfer.sendDefaultRing(leaving.shieldedAddress(), SOL_MINT, 100n);
+      const ringDataHash = small(0x33);
+      const proven = await rail({ fixture, sender, transfer })
+        .withPayment({ to, asset: SOL_MINT, amount: 400n, reply: null, data: { ringDataHash } })
+        .prove(fixture.client);
+      const { call } = await expanded(fixture, proven, "anonymous");
+      const owned = (owner: ShieldedKeypair) =>
+        call.proofInputs.outputs.find((output) =>
+          output.ownerAddress?.signingPublicKey.equals(owner.signingPublicKey()),
+        );
+      expect(owned(bob)?.ringDataHash).toEqual(ringDataHash);
+      expect(owned(leaving)?.ringDataHash).toBeUndefined();
+    });
+
+    it("refuses application bytes under a zero hash before any proof", async () => {
+      const fixture = await anonymousRing();
+      const sender = anonymousSender();
+      const to = await addressOf(fixture, ShieldedKeypair.generate());
+      await expect(
+        rail({ fixture, sender, transfer: spend(fixture, sender) })
+          .withPayment({
+            to,
+            asset: SOL_MINT,
+            amount: 400n,
+            reply: null,
+            data: {
+              application: {
+                hash: new Uint8Array(32) as Bytes32,
+                bytes: new TextEncoder().encode("app"),
+              },
+            },
+          })
+          .prove(fixture.client),
+      ).rejects.toThrow(ringError("RING_NOTE_DATA_UNBOUND"));
+      noProofs(fixture);
+    });
   });
 
   it("refuses a recipient viewing key off its record", async () => {

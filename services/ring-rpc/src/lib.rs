@@ -59,6 +59,8 @@ mod record_writer;
 mod relay;
 #[path = "operations/relay_prover.rs"]
 mod relay_prover;
+#[path = "storage/relay_reservations.rs"]
+mod relay_reservations;
 #[path = "operations/relay_services.rs"]
 mod relay_services;
 #[path = "rpc/relay_submit.rs"]
@@ -126,11 +128,13 @@ pub use record_update::{
 };
 pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
 pub use relay::{
-    Relay, RelayError, RelayParts, RelayPayload, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL,
+    Relay, RelayError, RelayParts, RelayPayload, ServedRings, ABANDONED_AFTER_SLOTS, QUOTE_SLOTS,
+    RELAY_TRACK_INTERVAL,
 };
 pub use relay_prover::{
     DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver, SdkRelayProver,
 };
+pub use relay_reservations::RelayBudget;
 pub use relay_services::{RelayServices, RelayServicesInit};
 pub use relay_submit::CollectedSignature;
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};

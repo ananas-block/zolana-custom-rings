@@ -32,7 +32,6 @@ impl<'a> RingWallet<'a> {
         }
     }
 
-    /// Reads the default ring, the ring by proven tags and every deposit stream from the start at the indexer's tip.
     pub fn sync(&mut self, env: &TestEnv) -> Result<()> {
         let config = IndexerRpcConfig::at_slot(env.client.rpc().get_slot()?);
         let owned = UtxoScan::new(self.keys, self.assets.registry())

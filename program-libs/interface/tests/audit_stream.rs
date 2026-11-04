@@ -1,4 +1,4 @@
-//! Pins the version 4 audit vectors the Go circuits read.
+//! Pins the audit vectors the Go circuits read.
 
 use custom_ring_interface::{
     ciphertext_digest, key_catalog::TRANSFER_SHAPES, sender_bundle_len, AuditEnvelope,
@@ -13,7 +13,7 @@ use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::hash_by
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/audit/ring-disclosure-ranges-v4.json"
+    "/../../test-vectors/audit/ring-disclosure-ranges.json"
 );
 
 struct KeyCase {
@@ -95,7 +95,7 @@ fn the_ranges_are_the_shared_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/audit/ring-disclosure-ranges-v4.json"]
+#[ignore = "rewrites test-vectors/audit/ring-disclosure-ranges.json"]
 fn write_ring_disclosure_ranges_vector() {
     let json = serde_json::to_string_pretty(&compute_vector()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");
@@ -518,7 +518,7 @@ fn region_chain<const N: usize>(ciphertexts: &[String], capacity: usize) -> [u8;
 fn the_solved_go_stream_reads_back_under_the_rust_layout() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../test-vectors/audit/audit-stream-v4.json"
+        "/../../test-vectors/audit/audit-stream.json"
     );
     let vector: StreamVector =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();

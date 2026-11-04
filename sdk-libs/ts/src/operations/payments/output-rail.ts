@@ -47,6 +47,7 @@ import {
 } from "../../crypto/derivation/ring-stream.js";
 import { randomTagPreimage } from "../../crypto/derivation/dummy-tag.js";
 import { withOutputFields } from "../../protocol/proof/proof-output.js";
+import type { NoteData } from "./anonymous.js";
 import {
   OutputBlindings,
   ringBlindedOutputs,
@@ -249,6 +250,28 @@ export function recipientBody(output: ProofOutputUtxo): RecipientBody {
   });
 }
 
+function withPaymentData(
+  outputs: readonly ProofOutputUtxo[],
+  senderOutputCount: number,
+  paymentData: readonly (NoteData | undefined)[],
+): readonly ProofOutputUtxo[] {
+  const payments = paymentData[Symbol.iterator]();
+  return outputs.map((output, slot) => {
+    // An exit past the sender's outputs takes no payment.
+    if (slot < senderOutputCount || output.isDummy() || output.ringProgramId === undefined)
+      return output;
+    const { value: data } = payments.next();
+    if (data === undefined) return output;
+    const { ringDataHash, application } = data;
+    if (application !== undefined && isZero(application.hash))
+      throw new RingError("RING_NOTE_DATA_UNBOUND", { details: { slotIndex: slot } });
+    const hashed = ringDataHash === undefined ? output : withOutputFields(output, { ringDataHash });
+    return application === undefined
+      ? hashed
+      : hashed.withUtxoData(application.bytes, application.hash);
+  });
+}
+
 /** The statement's `has_data`, one tail per published slot. */
 export function framesData(outputs: readonly ProofOutputUtxo[]): boolean {
   return outputs.some(carriesData);
@@ -288,13 +311,20 @@ type FramedSlot = Readonly<{ viewTag: Bytes32; data?: Uint8Array }>;
 
 /** Rust `RingOutputRail`, keyed by a transaction viewing key the caller destroys, a rebuild draws a new salt so a slot secret never repeats. */
 export class RingOutputRail {
+  readonly #paymentData: readonly (NoteData | undefined)[];
   readonly txViewingKey: ViewingKey;
   readonly salt: Bytes16;
   readonly delivery: RingDelivery;
   readonly #firstNullifier: Bytes32;
 
   /** `firstNullifier` is the transfer's input slot 0, padding never moves it. */
-  constructor(txViewingKey: ViewingKey, firstNullifier: Bytes32, delivery: RingDelivery) {
+  constructor(
+    txViewingKey: ViewingKey,
+    firstNullifier: Bytes32,
+    delivery: RingDelivery,
+    paymentData: readonly (NoteData | undefined)[] = [],
+  ) {
+    this.#paymentData = paymentData;
     this.txViewingKey = txViewingKey;
     this.salt = randomSalt();
     this.delivery = delivery;
@@ -335,7 +365,11 @@ export class RingOutputRail {
     const { prepared, sender } = input;
     if (!equalBytes(prepared.firstNullifier, this.#firstNullifier)) throw framingError(0);
     const anonymous = this.delivery.kind === "anonymous";
-    const proofOutputs = prepared.proofOutputs();
+    const proofOutputs = withPaymentData(
+      prepared.proofOutputs(),
+      prepared.senderOutputCount,
+      this.#paymentData,
+    );
     checkCompactSuffix(proofOutputs);
     const planned = anonymous
       ? leadChange(withSenderChange(proofOutputs, sender), sender).map((output) =>

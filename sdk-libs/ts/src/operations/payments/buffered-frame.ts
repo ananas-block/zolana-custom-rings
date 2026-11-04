@@ -65,7 +65,11 @@ export class BufferedFrame {
       throw new RingError("RING_FRAME_TOO_LARGE", {
         details: { bytes: frame.length, limit: MAX_FRAME_LEN },
       });
-    if (frame[0] !== RingInstructionTag.transfer) throw new RingError("RING_BUFFERED_TAG");
+    if (
+      frame[0] !== RingInstructionTag.transfer &&
+      frame[0] !== RingInstructionTag.authorityTransfer
+    )
+      throw new RingError("RING_BUFFERED_TAG");
     const seedNonce = new Uint8Array(8);
     new DataView(seedNonce.buffer).setBigUint64(0, nonce, true);
     const [buffer] = await getProgramDerivedAddress({
@@ -73,6 +77,13 @@ export class BufferedFrame {
       seeds: [FRAME_BUFFER_PDA_SEED, addressBytes(signerAddress(writer)), seedNonce],
     });
     return new BufferedFrame({ buffer, inline, frame, writer, nonce });
+  }
+
+  /** The digest names the nonce, a writer and a frame keep one buffer. */
+  static forWriter(inline: Instruction, writer: SignerAccount): Promise<BufferedFrame> {
+    const digest = frameDigest(Uint8Array.from(inline.data ?? []));
+    const nonce = new DataView(digest.buffer, digest.byteOffset).getBigUint64(0, true);
+    return BufferedFrame.of(inline, writer, nonce);
   }
 
   /** In offset order, the first creates the buffer at the frame's full length. */

@@ -11,8 +11,8 @@ use zolana_ring_client::{
 use zolana_ring_rpc::{
     run_server, write_grant_rows_secret, write_keypair, write_root_secret, ChainSource, Cli,
     CoSignerApproval, Command, EnrollmentApplierParts, Hub, KeyKind, KeySource, KeygenArgs,
-    LiveStorageChain, OriginPolicy, RelayServicesInit, ServeArgs, ServeKeys, ServerOptions,
-    ServiceIdentity, Store, TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL,
+    LiveStorageChain, OriginPolicy, RelayBudget, RelayServicesInit, ServeArgs, ServeKeys,
+    ServerOptions, ServiceIdentity, Store, TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL,
     RECORD_FLUSH_INTERVAL, STORE_CONNECTIONS,
 };
 
@@ -130,7 +130,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let mut builder = Hub::builder(source, identity)
         .with_origins(origin_policy.build()?)
         .with_reader_grants(args.reader_grants)
-        .with_enrollment_budget(args.enrollment_budget);
+        .with_relay_budget(RelayBudget {
+            total_lamports: args.relay_budget_lamports,
+            signer_lamports: args.relay_signer_budget_lamports,
+        });
     if let Some(store) = store {
         builder = builder.with_store(store);
     }

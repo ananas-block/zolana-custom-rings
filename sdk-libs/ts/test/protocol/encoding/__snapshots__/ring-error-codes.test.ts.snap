@@ -178,6 +178,7 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_FRAME_EVENT_INVALID",
   "RING_FRAME_TOO_LARGE",
   "RING_BUFFERED_TAG",
+  "RING_NOTE_DATA_UNBOUND",
   "RING_BUFFERED_NONCE",
 ]
 `;

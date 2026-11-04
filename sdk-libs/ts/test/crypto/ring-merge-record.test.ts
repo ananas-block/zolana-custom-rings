@@ -6,7 +6,7 @@ import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { hashChain } from "@heliuslabs/zolana/internal";
 import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 
-import vector from "../../../../test-vectors/merge/merge_v4.json" with { type: "json" };
+import vector from "../../../../test-vectors/merge/merge.json" with { type: "json" };
 import {
   decodeRingMergeRequest,
   encodeRingMergeRequest,

@@ -34,8 +34,8 @@ import {
   X25519Keypair,
 } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
-import depositVector from "../../../../test-vectors/deposit/deposit-v4.json" with { type: "json" };
-import mergeVector from "../../../../test-vectors/merge/merge_v4.json" with { type: "json" };
+import depositVector from "../../../../test-vectors/deposit/deposit.json" with { type: "json" };
+import mergeVector from "../../../../test-vectors/merge/merge.json" with { type: "json" };
 import {
   encodeOpeningRecord,
   RecordKind,
@@ -208,7 +208,7 @@ describe("deposit disclosure", () => {
   });
 
   it.each(depositVector.cases.map((vector) => [vector.name, vector] as const))(
-    "opens the %s record of deposit-v4.json and refuses another commitment",
+    "opens the %s record of deposit.json and refuses another commitment",
     (_, vector) => {
       const auditor = X25519Keypair.fromBytes(
         Uint8Array.from(Buffer.from(mergeVector.auditor_sk.slice(2), "hex")) as Bytes32,

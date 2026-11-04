@@ -1198,7 +1198,7 @@ fn rpc_origin_binds_the_confirmed_slot() {
 fn policy_owners_come_from_confirmed_metadata_without_live_accounts() {
     use custom_ring_interface::{RingRail, RingTransactData};
     let vectors: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../test-vectors/proof/ring-transact-expansion-v4.json"
+        "../../../../../test-vectors/proof/ring-transact-expansion.json"
     ))
     .unwrap();
     let bytes = hex::decode(vectors["cases"][0]["compact"].as_str().unwrap()).unwrap();
@@ -1369,7 +1369,7 @@ fn tagged_frames(committed: &str, tag_byte: u8) -> Vec<Vec<u8>> {
 
 #[test]
 fn a_frame_reads_under_its_tag_alone() {
-    let current = include_str!("../../../../../test-vectors/settlement/frame_v4.hex");
+    let current = include_str!("../../../../../test-vectors/settlement/frame.hex");
     let [first, ..] = &tagged_frames(current, ring_tag::TRANSFER)[..] else {
         panic!("a vector frame")
     };

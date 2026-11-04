@@ -229,7 +229,7 @@ fn array<const N: usize>(value: &str) -> [u8; N] {
 fn solved_go_deposits_reach_the_program_statement_and_the_reader() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../test-vectors/deposit/deposit-v4.json"
+        "/../../test-vectors/deposit/deposit.json"
     );
     let vectors: Vectors = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     for case in &vectors.cases {

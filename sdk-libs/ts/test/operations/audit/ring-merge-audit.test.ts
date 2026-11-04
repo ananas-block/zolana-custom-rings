@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { describe, expect, it, vi } from "vitest";
 
-import mergeVector from "../../../../../test-vectors/merge/merge_v4.json" with { type: "json" };
+import mergeVector from "../../../../../test-vectors/merge/merge.json" with { type: "json" };
 import {
   wireDecoder,
   treeAddress,
