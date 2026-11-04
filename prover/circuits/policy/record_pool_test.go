@@ -24,8 +24,8 @@ type recordPoolCircuit struct {
 }
 
 type poolQueryWires struct {
-	Member, Index, Active        frontend.Variable
-	Lists, EscrowKey, MintPolicy frontend.Variable
+	Member, Index, Active frontend.Variable
+	Lists, MintPolicy     frontend.Variable
 }
 
 func (c *recordPoolCircuit) Define(api frontend.API) error {
@@ -72,7 +72,6 @@ func TestRecordPoolBindsEveryActiveQuery(t *testing.T) {
 		{"index beyond pool", func(c *recordPoolCircuit) { c.Queries[1].Index = 3 }},
 		{"negative index", func(c *recordPoolCircuit) { c.Queries[1].Index = -1 }},
 		{"wrong lists", func(c *recordPoolCircuit) { c.Queries[1].Lists = 1 }},
-		{"wrong escrow", func(c *recordPoolCircuit) { c.Queries[1].EscrowKey = 37 }},
 		{"wrong mint policy", func(c *recordPoolCircuit) { c.Queries[1].MintPolicy = 37 }},
 		{"wrong root", func(c *recordPoolCircuit) { c.Root = 37 }},
 		{"wrong opening member", func(c *recordPoolCircuit) { c.Records[0].Member = 17 }},

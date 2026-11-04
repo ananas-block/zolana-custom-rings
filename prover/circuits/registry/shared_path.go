@@ -33,7 +33,6 @@ func NewSharedQuadProof(openings int) (SharedQuadProof, error) {
 	return newSharedProof(openings, 0)
 }
 
-// NewTrackingProof shapes a proof over the tracking tree of TrackingHeight.
 func NewTrackingProof(openings int) (SharedQuadProof, error) {
 	return newSharedProof(openings, TrackingHeight)
 }

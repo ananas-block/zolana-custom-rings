@@ -32,7 +32,7 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	// 1. A zero lead byte keeps the secret below q, the envelope's cipher bounds the other 31 bytes.
 	api.AssertIsEqual(c.NullifierSecret[0], 0)
 	secret := shared.PackBounded(api, c.NullifierSecret[1:])[0]
-	// A zero key has no secret to seal, its note spends only under a public owner.
+	// Poseidon(0) is the zero key, never enrolled.
 	api.AssertIsDifferent(secret, 0)
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{secret})
 	// 2. A list tag from another secret would move the owner's private list position.
