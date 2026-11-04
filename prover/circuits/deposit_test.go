@@ -13,7 +13,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringdeposit"
@@ -370,24 +369,39 @@ func TestDepositRepeatedSubjectsOpenOneRecord(t *testing.T) {
 	if err := solveDeposit(d.Circuit); err != nil {
 		t.Fatal(err)
 	}
-	for _, entries := range [][]policy.PoolEntry{d.Circuit.OwnerEntries, d.Circuit.AssetEntries} {
-		for _, entry := range entries {
-			if ringtest.AsBigInt(entry.Own).Cmp(ringtest.AsBigInt(entries[0].Own)) != 0 {
-				t.Fatal("a repeated subject took a second pool entry")
-			}
+	for slot := range d.Circuit.OwnerEntries {
+		if ringtest.AsBigInt(d.Circuit.OwnerEntries[slot].Own).Cmp(ringtest.AsBigInt(d.Circuit.OwnerEntries[0].Own)) != 0 || ringtest.AsBigInt(d.Circuit.AssetEntries[slot].Own).Cmp(ringtest.AsBigInt(d.Circuit.AssetEntries[0].Own)) != 0 {
+			t.Fatal("a repeated subject took a second pool entry")
 		}
 	}
 	blocked := ringdeposit.Spec{Count: circuits.MaxDeposits, Recipients: 1, Policy: ringdeposit.RecipientsBlocked(0)}.Build(t)
 	ringtest.RequireRefused(t, solveDeposit(blocked.Circuit), paymentRule, depositScreen)
 }
 
-// A key with no private rows refuses a private source, the source's lists would read as public ones.
-func TestDepositRefusesAPrivateSourceWithNoRows(t *testing.T) {
-	d := ringdeposit.BuildScreened(t, 2, ringdeposit.RecipientsBlocked())
-	d.Circuit.Source.OwnerLists = 1
-	d.Circuit.PolicyHash = ringpolicy.TableHash(t, d.Circuit.Table)
-	d.Rebind(t)
-	ringtest.RequireRefused(t, solveDeposit(d.Circuit), "gadget.AssertZeroWhen", "policy.(*Policy).openPrivateRows")
+// A salted list reads the recipient's salted key, a dictionary of owners finds nothing.
+func TestDepositReadsTheSaltedList(t *testing.T) {
+	if err := solveDeposit(ringdeposit.BuildScreened(t, 2, ringdeposit.SaltedBlock()).Circuit); err != nil {
+		t.Fatalf("unlisted recipients refused: %v", err)
+	}
+	blocked := ringdeposit.BuildScreened(t, 2, ringdeposit.SaltedBlock(1))
+	ringtest.RequireRefused(t, solveDeposit(blocked.Circuit), paymentRule, depositScreen)
+	// A wrong salt misses the blocked record, the tracking row's list tag refuses it.
+	forged := ringdeposit.BuildScreened(t, 2, ringdeposit.SaltedBlock(1))
+	forged.Circuit.OwnerEntries[1].ListSalt = 7
+	ringtest.RequireRefused(t, solveDeposit(forged.Circuit), "gadget.AssertEqualWhen", "policy.(*Policy).resolveSubjects")
+	// A zero key recipient has no salt, a deny rule passes.
+	zero := ringdeposit.Spec{Count: 2, ZeroKeys: []int{1}, Policy: ringdeposit.SaltedBlock()}.Build(t)
+	if err := solveDeposit(zero.Circuit); err != nil {
+		t.Fatalf("an unenrolled recipient refused: %v", err)
+	}
+}
+
+// Every slot distinct, each owner's public and salted record, five assets.
+func TestDepositPoolsHoldTheSaltedWidestDeposit(t *testing.T) {
+	d := ringdeposit.Spec{Count: circuits.MaxDeposits, Assets: 5, Policy: ringdeposit.SaltedBlock()}.Build(t)
+	if err := solveDeposit(d.Circuit); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDepositKeys(t *testing.T) {

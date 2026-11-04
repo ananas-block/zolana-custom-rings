@@ -197,11 +197,13 @@ impl ListName {
         Self(ListId::Approval),
     ];
     /// The lists a rule reads in `ListId::ALL` order, a lib test pins the set.
-    pub const POLICY: [Self; 4] = [
+    pub const POLICY: [Self; 6] = [
         Self(ListId::Allow),
         Self(ListId::Block),
         Self(ListId::Frozen),
+        Self(ListId::PrivateBlock),
         Self(ListId::Approval),
+        Self(ListId::PrivateAllow),
     ];
 
     pub const fn id(self) -> ListId {
@@ -217,7 +219,6 @@ impl ListName {
         match list_id.writer() {
             Writer::Authority => Ok(Self(list_id)),
             Writer::Member => Err(PolicyError::MemberWrittenList { name }),
-            Writer::Reserved => Err(PolicyError::UnknownList { name }),
         }
     }
 }

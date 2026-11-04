@@ -187,7 +187,7 @@
       "tracking_root": "01b5116151390419b2ee34c3163e28ce51f1fd07433d66d2097e8beaf5bd4b57",
       "own_root": "053b2136ce0e6cffb89cb76c7a81b6d7e1bd424159ff4579f284a7e5f198956d",
       "curator_root": "0057efd12a21b217a03fa21da0699e4363fab9f2054718cebbbe011aad2ddeef",
-      "policy_hash": "2f62f04dec31b909c2a85836467d708efdb870bc1096e6cd8bbf59cbc573373a",
+      "policy_hash": "21fc01dea1fa6ba0c6a1ccbc4065348bbf9674f26638f61154dd07531e78a840",
       "elements": [
         "0000000000000000000000000000000000000000000000000000000043524450",
         "0000000000000000000000000000000000000000000000000000000000abcdef",
@@ -216,7 +216,7 @@
         "01b5116151390419b2ee34c3163e28ce51f1fd07433d66d2097e8beaf5bd4b57",
         "053b2136ce0e6cffb89cb76c7a81b6d7e1bd424159ff4579f284a7e5f198956d",
         "0057efd12a21b217a03fa21da0699e4363fab9f2054718cebbbe011aad2ddeef",
-        "2f62f04dec31b909c2a85836467d708efdb870bc1096e6cd8bbf59cbc573373a",
+        "21fc01dea1fa6ba0c6a1ccbc4065348bbf9674f26638f61154dd07531e78a840",
         "025b184343d0eab8659aeb4aa81c4d23ca4dfe182fcdcc7efbf5264f8c8dca23",
         "0000000000000000000000000000000000000000000000000000000000000064",
         "0000000000000000000000000000000000000000000000000000000000000000",
@@ -235,7 +235,7 @@
         "0000000000000000000000000000000000000000000000000000000000000000",
         "0000000000000000000000000000000000000000000000000000000000000004"
       ],
-      "public_input_hash": "281ee0699418bcb97b160571adab4f292f758f8d1df8d796b50ffce67bf4af7e"
+      "public_input_hash": "17e44cba15a1be6180594646e04aa9b80e9d78c1e5bf3b03a96746f79968ada1"
     }
   ],
   "description": "Solved deposit witnesses. A record is kind || reserved || u64be(amount) || owner_key || mint || be32(nullifier_pk) || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep1. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1."

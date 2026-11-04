@@ -1,9 +1,7 @@
 use solana_program_error::ProgramError;
 use spr_hasher::HasherError;
 use thiserror::Error;
-use zolana_ring_policy::{
-    AssetLimitsError, PolicyTableError, PrivateSourceError, RuleTableError, SourceMapError,
-};
+use zolana_ring_policy::{AssetLimitsError, PolicyTableError, RuleTableError, SourceMapError};
 
 macro_rules! ring_errors {
     ($($variant:ident = $code:literal => $message:literal,)*) => {
@@ -228,12 +226,6 @@ impl From<crate::PublicSlotError> for CustomRingError {
             crate::PublicSlotError::AmountOverflow { .. } => Self::PublicAmountOverflow,
             crate::PublicSlotError::ZeroNet { .. } => Self::ZeroNetPublicAmount,
         }
-    }
-}
-
-impl From<PrivateSourceError> for CustomRingError {
-    fn from(_: PrivateSourceError) -> Self {
-        Self::InvalidSource
     }
 }
 

@@ -9,10 +9,12 @@ import (
 // maxDepositAssets is SPP's MAX_DEPOSIT_ASSETS, DepositAccounts::validate_and_parse refuses more.
 const maxDepositAssets = 5
 
-// NewDepositPolicy holds one record per recipient and per asset SPP admits, no sender, leg or public slot reads the pools.
+// NewDepositPolicy holds a public and a salted record per recipient and one per asset SPP admits, no sender, leg or public slot reads the pools.
 func NewDepositPolicy(deposits int) (Policy, error) {
-	records := deposits + min(deposits, maxDepositAssets)
-	return NewPolicy(InputsShape{Outputs: deposits}.Inputs(), RecordPoolShape{Own: records, Curator: records}, 0)
+	records := 2*deposits + min(deposits, maxDepositAssets)
+	inputs := InputsShape{Outputs: deposits}.Inputs()
+	inputs.SaltedKeys = deposits
+	return NewPolicy(inputs, RecordPoolShape{Own: records, Curator: records}, 0)
 }
 
 // ScreenDeposit runs the payment section alone, public funds spend no input and every deposit reads as a receipt.

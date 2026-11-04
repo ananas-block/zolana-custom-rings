@@ -18,12 +18,14 @@ var fieldMax = new(big.Int).Sub(poseidon.Modulus, big.NewInt(1))
 
 // Record list bits mirror ListId::record_bit in program-libs/policy/src/list.rs.
 const (
-	AllowBit    = 1 << 0
-	BlockBit    = 1 << 1
-	FrozenBit   = 1 << 2
-	ReaderBit   = 1 << 5
-	ApprovalBit = 1 << 6
-	EscrowBit   = 1 << 7
+	AllowBit  = 1 << 0
+	BlockBit  = 1 << 1
+	FrozenBit = 1 << 2
+	// PrivateBlockBit and PrivateAllowBit are always salted.
+	PrivateBlockBit = 1 << 4
+	ReaderBit       = 1 << 5
+	ApprovalBit     = 1 << 6
+	PrivateAllowBit = 1 << 7
 )
 
 // Record mirrors registry.Record.
@@ -172,8 +174,8 @@ func (e Entry) Hash(t testing.TB) *big.Int {
 
 // Restrictive mirrors registry.Restrictive.
 func (e Entry) Restrictive() bool {
-	clearsGrant := new(big.Int).AndNot(new(big.Int).And(e.Mask, big.NewInt(AllowBit|ApprovalBit)), e.Value).Sign() != 0
-	setsDeny := new(big.Int).And(e.Value, big.NewInt(BlockBit|FrozenBit)).Sign() != 0
+	clearsGrant := new(big.Int).AndNot(new(big.Int).And(e.Mask, big.NewInt(AllowBit|ApprovalBit|PrivateAllowBit)), e.Value).Sign() != 0
+	setsDeny := new(big.Int).And(e.Value, big.NewInt(BlockBit|FrozenBit|PrivateBlockBit)).Sign() != 0
 	return clearsGrant || setsDeny || (e.MintPolicy != nil && e.MintPolicy.Sign() != 0)
 }
 

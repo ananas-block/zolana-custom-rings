@@ -259,9 +259,9 @@ mod tests {
             change(BLOCK, ALLOW).checked(),
             Err(PrivateListError::ValueOutsideMask)
         );
-        let escrow = ListSet::single(ListId::Escrow);
+        let viewing = ListSet::single(ListId::RingViewing);
         assert_eq!(
-            change(escrow, ListSet::EMPTY).checked(),
+            change(viewing, ListSet::EMPTY).checked(),
             Err(PrivateListError::ListNotWritable)
         );
     }

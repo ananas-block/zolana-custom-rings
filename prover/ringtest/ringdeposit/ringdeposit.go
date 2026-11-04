@@ -65,6 +65,9 @@ type Policy struct {
 	OwnerLists map[int]uint64
 	Curator    bool
 	Mint       [32]byte
+	// SaltedBlocked slots sit on PrivateBlockBit at their salted keys.
+	SaltedBlocked []int
+	Salted        bool
 }
 
 // Spec names one deposit, an unset field takes the honest default.
@@ -115,6 +118,11 @@ func RecipientsBlocked(slots ...int) Policy {
 	return Policy{Rules: []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit)}, OwnerLists: lists, Mint: MintA}
 }
 
+// SaltedBlock forbids PrivateBlockBit read at each recipient's salted key.
+func SaltedBlock(slots ...int) Policy {
+	return Policy{Rules: []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.PrivateBlockBit)}, Mint: MintA, Salted: true, SaltedBlocked: slots}
+}
+
 func BuildScreened(t testing.TB, count int, policy Policy) *Deposit {
 	t.Helper()
 	return Spec{Count: count, Policy: policy}.Build(t)
@@ -148,7 +156,11 @@ func (s Spec) Build(t testing.TB) *Deposit {
 		lists = curator
 	}
 	if screened {
-		c.Table = ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit, ringregistry.BlockBit}, Curator: map[uint64]bool{ringregistry.AllowBit: s.Policy.Curator, ringregistry.BlockBit: s.Policy.Curator}, Rules: s.Policy.Rules}.Wires()
+		salted := uint64(0)
+		if s.Policy.Salted {
+			salted = ringregistry.PrivateBlockBit
+		}
+		c.Table = ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.PrivateBlockBit}, Curator: map[uint64]bool{ringregistry.AllowBit: s.Policy.Curator, ringregistry.BlockBit: s.Policy.Curator, ringregistry.PrivateBlockBit: s.Policy.Curator}, Rules: s.Policy.Rules, Salted: salted}.Wires()
 		c.PolicyHash = ringpolicy.TableHash(t, c.Table)
 		for _, mint := range s.Policy.Listed {
 			lists.Apply(t, ringregistry.Entry{Member: ringtest.AssetField(t, mint), Mask: big.NewInt(ringregistry.AllowBit), Value: big.NewInt(ringregistry.AllowBit)})
@@ -182,6 +194,9 @@ func (s Spec) Build(t testing.TB) *Deposit {
 			} else if !d.Tracking.Opening(ownerPkHash).Present {
 				ringpolicy.Enroll(t, d.Tracking, ownerPkHash, note.NullifierPk)
 			}
+			if slices.Contains(s.Policy.SaltedBlocked, i) {
+				lists.Apply(t, ringregistry.Entry{Member: ringregistry.ListKey(t, ownerPkHash, ringpolicy.ListSaltOf(t, ownerPkHash)), Mask: big.NewInt(ringregistry.PrivateBlockBit), Value: big.NewInt(ringregistry.PrivateBlockBit)})
+			}
 			if bits, listed := s.Policy.OwnerLists[i]; listed {
 				lists.Apply(t, ringregistry.Entry{Member: ownerPkHash, Mask: new(big.Int).SetUint64(bits), Value: new(big.Int).SetUint64(bits)})
 			}
@@ -204,8 +219,8 @@ func (s Spec) Build(t testing.TB) *Deposit {
 			outputs[i].Domain = big.NewInt(protocol.UtxoDomain)
 		}
 	}
-	ringpolicy.FillPools(t, &c.Policy, outputs, nil, own, curator)
-	ringpolicy.FillTracking(t, &c.Tracking, d.Tracking, nil, owners, &c.Policy)
+	ringpolicy.FillPools(t, &c.Policy, outputs, nil, own, curator, d.Tracking)
+	ringpolicy.FillTracking(t, &c.Tracking, d.Tracking, nil, owners, &c.Policy, owners)
 	c.OwnRoot, c.CuratorRoot = big.NewInt(0), big.NewInt(0)
 	if screened {
 		c.OwnRoot = own.Root()
@@ -219,7 +234,7 @@ func (s Spec) Build(t testing.TB) *Deposit {
 
 // zeroUnreadInputs assigns the wires a deposit shares with a transfer and never reads.
 func zeroUnreadInputs(p *policy.Policy) {
-	p.WithdrawalCount, p.WithdrawalHash, p.RingProgramID, p.PrivateRoot = 0, 0, 0, 0
+	p.WithdrawalCount, p.WithdrawalHash, p.RingProgramID = 0, 0, 0
 	for k := range p.PublicAssets {
 		p.PublicAssets[k], p.PublicAmounts[k], p.PublicGross[k] = 0, 0, 0
 	}
@@ -278,7 +293,7 @@ func (d *Deposit) Elements(t testing.TB) []*big.Int {
 // RefillTracking opens every owner under the tree's current root and rebinds.
 func (d *Deposit) RefillTracking(t testing.TB) {
 	t.Helper()
-	ringpolicy.FillTracking(t, &d.Circuit.Tracking, d.Tracking, nil, d.Circuit.OwnerPkHashes, &d.Circuit.Policy)
+	ringpolicy.FillTracking(t, &d.Circuit.Tracking, d.Tracking, nil, d.Circuit.OwnerPkHashes, &d.Circuit.Policy, d.Circuit.OwnerPkHashes)
 	d.Rebind(t)
 }
 

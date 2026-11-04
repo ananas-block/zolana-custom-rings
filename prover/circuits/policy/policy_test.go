@@ -149,7 +149,7 @@ var refusals = []struct {
 	wide    bool
 }{
 	{name: "owner record claiming a list it lacks", honest: ringpolicy.Confidential, witness: func(_ testing.TB, b ringpolicy.Witness) {
-		b.OwnRecord(b.Policy().OwnerEntries[0]).Lists = ringregistry.AllowBit | ringregistry.BlockBit
+		b.OwnRecord(b.Policy().OwnerEntries[0].PoolEntry).Lists = ringregistry.AllowBit | ringregistry.BlockBit
 	}, in: "registry.SharedQuadProof.AssertLeavesWhen", wide: true},
 	{name: "withdrawal past the cap", honest: withdrawn, world: func(w *ringpolicy.World) { w.Public[0].Amount = -800 }, in: "policy.(*PolicyInputs).constrainOutflow", wide: true},
 	{name: "approval bit 0 past the co-sign bound", honest: cosigned, world: func(w *ringpolicy.World) { w.Approval = 0 }, in: "ringpolicy.(*SectionCircuit).Define", wide: true},

@@ -24,11 +24,6 @@ const (
 	ownerAddresses = 64 - 4 - 6
 )
 
-// privateRows opens every owner and four withdrawal owners, a transaction past them fails closed.
-func privateRows(owners, outputs, withdrawals int) int {
-	return owners + outputs + min(withdrawals, smallOwners)
-}
-
 // ownerCapacities are the row counts a key of inputs input slots takes, ascending, mirrored by TransferShape::owners.
 func ownerCapacities(inputs int) []int {
 	small, full := min(smallOwners, inputs), min(inputs, ownerAddresses-inputs)
@@ -66,8 +61,18 @@ type Sections struct {
 }
 
 type SectionsShape struct {
-	inputs, outputs, withdrawals, owners, private int
-	entry, data                                   bool
+	inputs, outputs, withdrawals, owners int
+	entry, data                          bool
+}
+
+const narrowWithdrawals = 4
+
+// trackedWithdrawals holds no row on a narrow key off entry, a transaction past its rows moves to a wider sibling.
+func (s SectionsShape) trackedWithdrawals() int {
+	if s.withdrawals <= narrowWithdrawals && !s.entry {
+		return 0
+	}
+	return s.withdrawals
 }
 
 func (s SectionsShape) stream() audit.StreamShape {
@@ -75,11 +80,11 @@ func (s SectionsShape) stream() audit.StreamShape {
 }
 
 func NewSections(shape SectionsShape) (Sections, error) {
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.outputs, Withdrawals: shape.withdrawals, Senders: shape.owners, Private: shape.private}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.outputs, Withdrawals: shape.withdrawals, Senders: shape.owners}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
 		return Sections{}, err
 	}
-	tracking, err := policy.NewTracking(shape.owners, shape.outputs, shape.private)
+	tracking, err := policy.NewTracking(shape.owners, shape.outputs, shape.trackedWithdrawals())
 	if err != nil {
 		return Sections{}, err
 	}
@@ -111,7 +116,7 @@ func (c *Sections) validate(shape SectionsShape) error {
 		shared.ValidateLength("transfer", "signer", len(c.Signers), shape.inputs),
 		shared.ValidateLength("transfer", "owner row", len(c.Rows), shape.owners),
 		shared.ValidateLength("transfer", "withdrawal", len(c.Withdrawals), shape.withdrawals),
-		c.ValidateTracking(shape.owners, shape.outputs, shape.private),
+		c.ValidateTracking(shape.owners, shape.outputs, shape.trackedWithdrawals()),
 	)
 }
 
@@ -157,7 +162,7 @@ func (c *Sections) prove(api frontend.API, shape SectionsShape, r rail) {
 
 // assertBypass holds the authority rail's statement off every policy registry, a curator's update then cannot fail a delegate's proof.
 func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
-	for _, value := range []frontend.Variable{c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.PrivateRoot} {
+	for _, value := range []frontend.Variable{c.PolicyHash, c.OwnRoot, c.CuratorRoot} {
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: delegate, V: value})
 	}
 }
@@ -170,7 +175,7 @@ func (c *Sections) statement(e audit.Envelope, w audit.AuditWires, s audit.Strea
 		c.InputCount, c.PrivateTxHash,
 	}, r.cells, []frontend.Variable{
 		c.SignerCount, signers.Chain,
-		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot, c.PrivateRoot,
+		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot,
 	}, publicSlots(c.PublicAssets[:], c.PublicAmounts[:], c.PublicGross[:]), []frontend.Variable{c.WithdrawalHash})
 	return closeStatement(fields)
 }
