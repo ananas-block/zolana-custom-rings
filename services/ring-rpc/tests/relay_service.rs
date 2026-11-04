@@ -829,7 +829,7 @@ fn delegate_request(
 }
 
 fn delegate_inputs(delegate: Address) -> RelayProofInputs {
-    proof_inputs(RING, RelayRail::Delegate { delegate })
+    proof_inputs(RING, RelayRail::Delegate { delegate, plan: None })
 }
 
 #[tokio::test]
