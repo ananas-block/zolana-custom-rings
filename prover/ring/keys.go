@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
@@ -18,7 +17,6 @@ const (
 	Transfer Family = iota
 	ApplyRecords
 	ApplyEnrollments
-	ApplyPrivateList
 	RegisterKey
 	Deposit
 	Merge
@@ -57,9 +55,6 @@ func keys() []Key {
 	for _, writes := range registry.ApplyWidths {
 		add(Key{Family: ApplyEnrollments, Inputs: writes})
 	}
-	for _, writes := range privatelist.ApplyWidths {
-		add(Key{Family: ApplyPrivateList, Inputs: writes})
-	}
 	add(Key{Family: RegisterKey})
 	for _, capacity := range circuits.DepositCapacities {
 		add(Key{Family: Deposit, Inputs: capacity})
@@ -87,8 +82,6 @@ func (k Key) circuitType() common.CircuitType {
 		return named("apply-records-%d", k.Inputs)
 	case ApplyEnrollments:
 		return named("apply-enrollments-%d", k.Inputs)
-	case ApplyPrivateList:
-		return named("apply-private-list-%d", k.Inputs)
 	case RegisterKey:
 		return named("register-key")
 	case Deposit:

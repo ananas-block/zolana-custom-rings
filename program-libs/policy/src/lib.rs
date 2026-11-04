@@ -4,7 +4,6 @@ mod asset_limits;
 mod list;
 mod member;
 mod mint;
-mod private_source;
 mod quantities;
 mod rule_table;
 mod rules;
@@ -13,7 +12,6 @@ pub use asset_limits::{AssetLimits, AssetLimitsError};
 pub use list::{ListChange, ListId, ListSet, ListWrite, ListWriteError, Writer};
 pub use member::{Member, MemberError, WALLET_GRANT_DOMAIN};
 pub use mint::MintPolicy;
-pub use private_source::{PrivateSource, PrivateSourceError};
 pub use quantities::{
     owner_debits, ApprovalInputs, ApprovalMask, DebitInput, DebitOutput, DebitTransfer, GuardScope,
     OwnerDebit, PublicGross,
@@ -21,8 +19,7 @@ pub use quantities::{
 pub use rule_table::{
     EncodedRuleTable, Guard, Mode, OutflowLimit, PolicySource, PolicyTableError, Rule, RuleSource,
     RuleTable, RuleTableBuilder, RuleTableError, SourceMap, SourceMapError, Subject, TableParts,
-    MAX_RULES, MAX_SOURCES, N_FOREIGN, POLICY_TABLE_DOMAIN, POLICY_TABLE_FIELDS,
-    POLICY_TABLE_VERSION,
+    MAX_RULES, MAX_SOURCES, POLICY_TABLE_DOMAIN, POLICY_TABLE_FIELDS, POLICY_TABLE_VERSION,
 };
 pub use rules::{OutputSubjects, RecordLists, RuleRefusal, TransferSubject, TransferSubjects};
 

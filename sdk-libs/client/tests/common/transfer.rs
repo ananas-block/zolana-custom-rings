@@ -372,7 +372,12 @@ impl Transfer {
                     data: AuditorMessage::data(
                         &sealed.eph_u,
                         core::iter::once(sealed.envelope.as_slice())
-                            .chain(sealed.records.iter().map(<[u8; 112]>::as_slice))
+                            .chain(
+                                sealed
+                                    .records
+                                    .iter()
+                                    .map(<[u8; AUDIT_RECORD_LEN]>::as_slice),
+                            )
                             .chain(sealed.tails.iter().map(<[u8; 64]>::as_slice)),
                     ),
                 }])

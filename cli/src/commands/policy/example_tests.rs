@@ -8,10 +8,11 @@ use crate::{
     policy::SourceSpec,
 };
 
-const EXAMPLES: [&str; 7] = [
+const EXAMPLES: [&str; 8] = [
     "audit-only",
     "empty-policy",
     "own-blocklist",
+    "private-blocklist",
     "curated-blocklist-approval-exception",
     "allowlist",
     "asset-allowlist-owner-threshold",

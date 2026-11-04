@@ -15,7 +15,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 def variant(k):
     i, o, w, s, e = k['Inputs'], k['Outputs'], k['Withdrawals'], k['Owners'], str(k['Entry']).lower()
     return [f'Transfer {{ outputs: {o}, inputs: {i}, withdrawals: {w}, owners: {s}, entry: {e} }}',
-            f'ApplyRecords {{ writes: {i} }}', f'ApplyEnrollments {{ writes: {i} }}', f'ApplyPrivateList {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
+            f'ApplyRecords {{ writes: {i} }}', f'ApplyEnrollments {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
             'Merge'][k['Family']]
 
 def main():

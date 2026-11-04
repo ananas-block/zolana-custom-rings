@@ -10,7 +10,7 @@ use std::{
 
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignOperation},
-    key_catalog::{FrameKey, TransferShape, TransferSpend},
+    key_catalog::{FrameKey, RecordPools, TransferShape, TransferSpend},
     storage::Revision,
     AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PublicLeg, PublicSlots,
     Replies, RingRail, RingTransactData, MIN_REPLY_LEN,
@@ -265,6 +265,7 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
             spends_default_ring: false,
             legs: case.legs,
             owners: 0,
+            pools: RecordPools::default(),
             wide: false,
         }
         .fitted()
