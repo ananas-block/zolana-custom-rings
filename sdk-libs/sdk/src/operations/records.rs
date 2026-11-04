@@ -1,7 +1,6 @@
 //! Registry records, read under a root or signed as record updates.
 
 use async_trait::async_trait;
-use custom_ring_interface::storage::AddressAuthorization;
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_api::ZolanaApi;
@@ -9,23 +8,30 @@ use spr_client::{AsyncRpc, ClientError};
 use spr_indexer_api::Hash;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use zolana_ring_client::{
-    records::{EscrowedRecord, MemberOpeningRead, RecordPoolCheck, RecordPoolRead},
+    records::{path_of, MemberOpeningRead, RecordPoolCheck, RecordPoolRead},
+    resolver::tracking_record,
     rpc::{
         method::{GetRecordUpdateStatus, SubmitRecordUpdate},
-        AddressEnrollment, EscrowRegistration, GetRecordUpdateStatusRequest, ReaderAccess,
-        RecordUpdate, RecordUpdateEntry, RecordUpdateId, RecordUpdateStatus,
-        SubmitRecordUpdateRequest, WalletGrant, ENROLMENT_LISTS,
+        GetRecordUpdateStatusRequest, ReaderAccess, RecordUpdate, RecordUpdateEntry,
+        RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest, WalletGrant,
+        ENROLMENT_LISTS,
     },
     AsyncRingIndexer, ReaderKey,
 };
-use zolana_ring_indexer::rpc::{
-    GetStorageMemberOpeningsRequest, GetStorageRecordPoolRequest, RingListWriteView,
-    MAX_RING_MEMBER_PAGE_LIMIT,
+use zolana_ring_indexer::{
+    rpc::{
+        GetStorageMemberOpeningsRequest, GetStorageRecordPoolRequest, RingListWriteView,
+        MAX_RING_MEMBER_PAGE_LIMIT,
+    },
+    tracking::{GetTrackingOpeningsRequest, GetTrackingRecordPoolRequest},
 };
-use zolana_ring_member_registry::RecordOpening;
+use zolana_ring_member_registry::{
+    Canopy, OpeningCheck, PoolSubject, SharedPath, SharedProof, TrackingOpening, TrackingPool,
+    TrackingRecord,
+};
 use zolana_ring_policy::{ListSet, ListWrite, Member, MintPolicy, Writer};
 
-use crate::{request::RecordOpeningRequest, submission::BoundRoot, CustomRing, RingError};
+use crate::{submission::BoundRoot, CustomRing, RingError};
 
 /// Members' records under the newest root of the ring's records registry.
 #[must_use]
@@ -117,111 +123,149 @@ impl PoolRead<'_> {
     }
 }
 
-pub(crate) struct MemberRead {
+/// `members` stay distinct, the canopy sized for `openings` paths.
+pub(crate) struct TrackingRead<'a> {
+    pub root: BoundRoot,
+    pub members: &'a [[u8; 32]],
+    pub openings: usize,
+}
+
+/// An absent subject reads its bracketing low row.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct TrackingPoolRead {
+    pool: TrackingPool,
+}
+
+impl TrackingRead<'_> {
+    pub async fn read(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<TrackingPoolRead, RingError> {
+        let BoundRoot { registry, root, .. } = self.root;
+        let response = rpc
+            .get_tracking_record_pool(GetTrackingRecordPoolRequest {
+                registry: registry.into(),
+                members: self.members.iter().copied().map(Hash).collect(),
+                expected_root: Hash(root),
+                openings: self.openings as u64,
+            })
+            .await?;
+        let canopy = Canopy::covering_tracking(self.openings)?;
+        if response.root.root.0 != root
+            || response.canopy.len() != canopy.width()
+            || response.subjects.len() != self.members.len()
+        {
+            return Err(RingError::InvalidRecordOpening);
+        }
+        let pool = TrackingPool {
+            records: response
+                .records
+                .iter()
+                .map(|row| tracking_record(&row.record))
+                .collect(),
+            proof: SharedProof {
+                canopy: response.canopy.iter().map(|node| node.0).collect(),
+                paths: response
+                    .records
+                    .iter()
+                    .map(|row| SharedPath {
+                        index: row.path.index,
+                        siblings: row
+                            .path
+                            .siblings
+                            .iter()
+                            .map(|level| level.clone().map(|sibling| sibling.0))
+                            .collect(),
+                    })
+                    .collect(),
+            },
+            subjects: self
+                .members
+                .iter()
+                .zip(&response.subjects)
+                .map(|(member, record_index)| PoolSubject {
+                    member: *member,
+                    record_index: *record_index,
+                })
+                .collect(),
+        };
+        pool.verify(&root)
+            .map_err(|_| RingError::InvalidRecordOpening)?;
+        Ok(TrackingPoolRead { pool })
+    }
+}
+
+impl TrackingPoolRead {
+    pub fn pool(&self) -> &TrackingPool {
+        &self.pool
+    }
+
+    /// `None` for an absent member or one outside the pool.
+    pub fn record(&self, member: &[u8; 32]) -> Option<&TrackingRecord> {
+        let subject = self
+            .pool
+            .subjects
+            .iter()
+            .find(|subject| subject.member == *member)?;
+        self.pool
+            .records
+            .get(subject.record_index as usize)
+            .filter(|record| record.member == *member)
+    }
+}
+
+pub(crate) struct TrackingMemberRead {
     pub root: BoundRoot,
     pub member: [u8; 32],
 }
 
-impl MemberRead {
+impl TrackingMemberRead {
     pub async fn read(
         self,
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-    ) -> Result<MemberOpeningRead, RingError> {
-        RecordReads {
-            root: self.root,
-            members: core::slice::from_ref(&self.member),
+    ) -> Result<TrackingOpening, RingError> {
+        let BoundRoot { registry, root, .. } = self.root;
+        let response = rpc
+            .get_tracking_openings(GetTrackingOpeningsRequest {
+                registry: registry.into(),
+                members: vec![Hash(self.member)],
+                expected_root: Hash(root),
+            })
+            .await?;
+        let [view] = response.openings.as_slice() else {
+            return Err(RingError::InvalidRecordOpening);
+        };
+        let path = path_of(&view.path)?;
+        let record = tracking_record(&view.record);
+        let opening = match view.present {
+            true => TrackingOpening::Present { record, path },
+            false => TrackingOpening::Absent { low: record, path },
+        };
+        OpeningCheck {
+            opening: &opening,
+            root: &root,
+            member: &self.member,
         }
-        .read(rpc)
-        .await?
-        .pop()
-        .ok_or(RingError::InvalidRecordOpening)
+        .verify()
+        .map_err(|_| RingError::InvalidRecordOpening)?;
+        Ok(opening)
     }
 }
 
-/// A member's opening read under a root the statement binds.
-pub(crate) struct OwnerRead<'a> {
-    pub owner: [u8; 32],
-    pub read: &'a MemberOpeningRead,
-}
-
-impl<'a> OwnerRead<'a> {
-    /// Refuses an owner whose record escrows no key for `nullifier_pk`.
-    pub fn escrowed(self, nullifier_pk: &[u8; 32]) -> Result<EscrowedRecord<'a>, RingError> {
-        match self.read.escrowed(nullifier_pk)? {
-            Some(escrowed) => Ok(escrowed),
-            None => Err(RingError::UnregisteredOutputKey {
-                owner: Member::from_bytes(self.owner)?,
-            }),
+/// An enrolled owner takes its enrolled key, only an owner with no row takes zero.
+pub(crate) fn check_output_key(
+    row: Option<&TrackingRecord>,
+    nullifier_pk: &[u8; 32],
+    slot_index: usize,
+) -> Result<(), RingError> {
+    match (row, *nullifier_pk == ZERO_NULLIFIER_PUBKEY) {
+        (None, true) => Ok(()),
+        (None, false) => Err(RingError::RecipientNotEnrolled { slot_index }),
+        (Some(_), true) => Err(RingError::EnrolledRecipientAtZeroKey { slot_index }),
+        (Some(record), false) if record.nullifier_pk != *nullifier_pk => {
+            Err(RingError::RecipientKeyMismatch { slot_index })
         }
-    }
-}
-
-/// The owner's enrollment as a record update entry, the writer checks it against the same account.
-pub async fn address_enrollment(
-    rpc: &(impl AsyncRpc + ?Sized),
-    registry: Address,
-    owner: Address,
-) -> Result<AddressEnrollment, RingError> {
-    let (account, _) = AddressAuthorization::find_address(&registry, &owner);
-    let authorization = rpc
-        .get_account(account)
-        .await?
-        .and_then(|account| AddressAuthorization::decode(&account.owner, &account.data))
-        .ok_or(RingError::AddressNotEnrolled)?;
-    let address = authorization.address();
-    Ok(AddressEnrollment {
-        owner: owner.into(),
-        ring_id: Hash(address.ring_id),
-        nullifier_pk: Hash(address.nullifier_pk),
-        viewing_u: Hash(address.viewing_u),
-        address_revision: address.address_revision,
-    })
-}
-
-/// The owner's record under `root`, refused unless it escrows `nullifier_pk`.
-#[derive(Clone, Copy)]
-pub(crate) struct EscrowRead {
-    pub root: BoundRoot,
-    pub owner: [u8; 32],
-    pub nullifier_pk: [u8; 32],
-}
-
-pub(crate) struct EscrowOpening {
-    pub opening: RecordOpeningRequest,
-    pub ct_hash: [u8; 32],
-}
-
-impl EscrowRead {
-    pub async fn read(
-        self,
-        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-    ) -> Result<EscrowOpening, RingError> {
-        let read = MemberRead {
-            root: self.root,
-            member: self.owner,
-        }
-        .read(rpc)
-        .await?;
-        // A zero secret owner owes no record, the proof reads none of the opening.
-        if self.nullifier_pk == ZERO_NULLIFIER_PUBKEY {
-            let (record, path) = match &read.opening {
-                RecordOpening::Present { record, path } => (record, path),
-                RecordOpening::Absent { low, path } => (low, path),
-            };
-            return Ok(EscrowOpening {
-                opening: RecordOpeningRequest::present(record, path),
-                ct_hash: [0; 32],
-            });
-        }
-        let escrowed = OwnerRead {
-            owner: self.owner,
-            read: &read,
-        }
-        .escrowed(&self.nullifier_pk)?;
-        Ok(EscrowOpening {
-            opening: RecordOpeningRequest::present(escrowed.record, escrowed.path),
-            ct_hash: escrowed.ct_hash()?,
-        })
+        (Some(_), false) => Ok(()),
     }
 }
 
@@ -307,26 +351,7 @@ impl WalletRecordUpdate {
         Ok(self)
     }
 
-    /// `registration` comes from [`KeyRegistration`](crate::KeyRegistration) for this wallet.
-    pub fn with_escrow(mut self, registration: EscrowRegistration) -> Result<Self, RingError> {
-        if registration.member.0 != *self.member.as_bytes() {
-            return Err(RingError::EscrowMemberMismatch);
-        }
-        self.draft
-            .entries
-            .push(RecordUpdateEntry::Escrow(registration));
-        Ok(self)
-    }
-
     /// The writer holds the update until a config authority update sets every list of `lists` on the member.
-    /// The wallet's own enrollment, `address_enrollment` reads it from the account.
-    pub fn with_address(mut self, enrollment: AddressEnrollment) -> Self {
-        self.draft
-            .entries
-            .push(RecordUpdateEntry::Address(enrollment));
-        self
-    }
-
     pub fn awaiting_authority(mut self, lists: ListSet) -> Result<Self, RingError> {
         if lists.is_empty() || !lists.is_subset(ENROLMENT_LISTS) {
             return Err(RingError::EnrolmentLists);
@@ -360,14 +385,6 @@ impl AuthorityRecordUpdate {
     }
 
     /// Replaces all mint settings, zero values clear them.
-    /// A PDA's enrollment, its program signed the account and the authority only carries it.
-    pub fn with_address(mut self, enrollment: AddressEnrollment) -> Self {
-        self.draft
-            .entries
-            .push(RecordUpdateEntry::Address(enrollment));
-        self
-    }
-
     pub fn with_mint_policy(mut self, member: Member, policy: MintPolicy) -> Self {
         self.draft
             .entries

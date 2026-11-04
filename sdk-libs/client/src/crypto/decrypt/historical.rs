@@ -1,4 +1,4 @@
-//! The auditor's read of a statement version 3 frame, tags 45 and 46, its frozen layout kept here alone.
+//! Statement version 3 frames, tags 45 and 46.
 
 use custom_ring_interface::{
     domain::AUDIT_STREAM_LABEL, ring_confidential_delivered_output_body, stream::DeliveredSlot,
@@ -33,7 +33,7 @@ const EXIT_RECORD_LEN: usize = 72;
 const ESCROWED_EXIT_RECORD_LEN: usize = 40;
 const DELIVERED_BODY_LEN: usize = 104;
 const ESCROWED_DELIVERED_BODY_LEN: usize = 72;
-/// `(outputs, widest inputs)` of every version 3 key, frozen with its verifying keys.
+/// `(outputs, widest inputs)` per version 3 verifying key.
 const CONFIDENTIAL_CLASSES: [(usize, usize); 4] = [(2, 24), (4, 24), (8, 16), (16, 5)];
 const COMMITMENT_CLASSES: [(usize, usize); 3] = [(2, 24), (4, 16), (8, 5)];
 const ENTRY_CLASSES: [(usize, usize); 3] = [(2, 8), (4, 8), (8, 2)];
@@ -42,7 +42,7 @@ const ENTRY_CLASSES: [(usize, usize); 3] = [(2, 8), (4, 8), (8, 2)];
 const SHAPE_AT: usize = 2;
 const INPUTS_AT: usize = 3;
 const OUTPUTS_AT: usize = 4;
-/// The shape index or the input count, the bits above carry flags.
+/// Holds the shape index or the input count below the flag bits.
 const LOW_BITS: u8 = 0b0011_1111;
 const SHAPE_RESERVED: u8 = 1 << 7;
 pub(super) const KEY_ESCROW: u8 = 1 << 6;
@@ -90,7 +90,6 @@ impl V3Key {
     }
 }
 
-/// What a tag 45 or 46 frame's head fixes of its auditor message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HistoricalLayout {
     pub(super) key: V3Key,
@@ -100,7 +99,7 @@ pub struct HistoricalLayout {
 }
 
 impl HistoricalLayout {
-    /// `frame` is `tag || data`, a shape off every version 3 key is refused.
+    /// `frame` is `tag || data`.
     pub fn parse(frame: &[u8], mode: RingMode) -> Result<Self, AuditError> {
         let invalid = || AuditError::DisclosureLayout;
         let tag =
@@ -173,7 +172,7 @@ impl HistoricalLayout {
 
 enum Evidence {
     Hashes(Vec<[u8; 32]>),
-    /// Every input of one sender, a zero entry a dummy.
+    /// A zero entry is a dummy.
     Entry {
         sender_key: [u8; 32],
         sender_nullifier_pk: [u8; 32],
@@ -189,7 +188,6 @@ struct EntryOpening {
     blinding: [u8; 32],
 }
 
-/// A reader over bytes whose length the layout fixed.
 struct Read<'a>(&'a [u8]);
 
 impl Read<'_> {
@@ -247,7 +245,7 @@ impl Evidence {
     }
 }
 
-/// One slot's decrypted record, the key off it under key escrow.
+/// `nullifier_pk` stays `None` under key escrow.
 struct RecordRead {
     owner_key: [u8; 32],
     asset: [u8; 32],
@@ -288,7 +286,6 @@ impl RecordRead {
     }
 }
 
-/// The fields a version 3 slot opens, the key candidates its layout leaves.
 struct V3Note {
     owner_key: [u8; 32],
     amount: u64,
@@ -297,7 +294,7 @@ struct V3Note {
 }
 
 impl V3Note {
-    /// The disclosed key, or under key escrow the one key the reader knows with no registry.
+    /// Under key escrow the zero key is the one key known with no registry.
     fn candidate(&self) -> [u8; 32] {
         self.disclosed.unwrap_or(ZERO_NULLIFIER_PUBKEY)
     }
@@ -315,7 +312,6 @@ impl V3Note {
         }
     }
 
-    /// Off the rebuilt commitment an escrowed key stays unnamed, no registry resolves it here.
     fn missed(&self, without_key: OutputPayloadErrorKind) -> OutputPayloadErrorKind {
         match self.disclosed {
             Some(_) => without_key,
@@ -324,7 +320,7 @@ impl V3Note {
     }
 }
 
-/// Opens outputs and inputs from one frame and its row, old hash evidence reads as spent notes.
+/// Old hash evidence reads as spent notes.
 pub(super) fn audit(
     tx: &ShieldedTransaction,
     layout: HistoricalLayout,
@@ -431,7 +427,6 @@ impl V3Slots<'_> {
         self.assets.by_field(asset).map(|mint| mint.asset)
     }
 
-    /// The zero record of a hidden dummy and a record outside the field open nothing.
     fn anonymous(&self, slot: Slot<'_>, plaintext: &[u8]) -> Result<SlotOpening, AuditError> {
         let record = RecordRead::anonymous(plaintext)?;
         if record.is_zero() {
@@ -476,7 +471,7 @@ impl V3Slots<'_> {
         })
     }
 
-    /// A dummy publishes a random body, its commitment alone tells it from a ring output.
+    /// Only its commitment tells a dummy's random body from a ring output.
     fn delivered(&self, slot: Slot<'_>) -> Result<SlotOpening, AuditError> {
         let dummy = self.transfer.verify_dummy(slot)?;
         if dummy.is_ok() {
@@ -517,7 +512,7 @@ impl V3Slots<'_> {
             blinding,
             disclosed: body.nullifier_pk,
         };
-        // A delivered body names no asset, only a held one rebuilds it.
+        // A delivered body names no asset.
         for (asset, mint) in self.assets.fields() {
             let utxo = note.utxo(*asset, Some(mint.asset));
             if utxo.commitment(slot.tree_id(), Some(self.transfer.ring))?
@@ -569,7 +564,7 @@ impl V3Slots<'_> {
         }
     }
 
-    /// The hash names the note, only a default-ring match is a note the auditor holds no ring record of.
+    /// Only a default-ring note rebuilds the hash.
     fn entry(
         &self,
         opening: &EntryOpening,

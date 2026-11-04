@@ -5,7 +5,14 @@ import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interf
 import type { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import type { OutputSlot } from "@heliuslabs/zolana/transaction";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
+import { RecordKind } from "../../protocol/codec/audit-stream.js";
+import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import type { RingDepositOutput } from "../../protocol/codec/ring-deposit-plaintext.js";
+import { readHistoricalDepositCapsule } from "../../protocol/historical/v3/deposit-capsule.js";
+import {
+  openHistoricalDepositOpening,
+  type HistoricalDepositOpening,
+} from "../../protocol/historical/v3/deposit-opening.js";
 
 import {
   knownUtxoHash,
@@ -18,24 +25,23 @@ import {
   ringDepositOutput,
   type RingDepositOpening,
 } from "../../proof/deposit-audit.js";
-import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import { RingError } from "../../protocol/error.js";
 import { RowOrigins, rowEventIndex } from "../audit/row-origins.js";
 import { readRingHistory, scanLimits } from "../../rpc/history.js";
 import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
   RpcTransactionOrigin,
+  type ConfirmedDeposit,
   type ConfirmedRingTransaction,
   type TransactionOrigin,
 } from "../../protocol/transaction/origin.js";
 import { outputTreeId } from "../../protocol/membership/trees.js";
-import { confirmedMerge } from "../audit/audit-merge.js";
-import type { ConfirmedMerge } from "../../state/merge-ledger.js";
+import { openRingMerge, type OpenedRingMerge } from "../audit/audit-merge.js";
 
 /** Rust `CreatedUtxoPage`. */
 export interface CreatedRingUtxosPage {
   readonly utxos: readonly CreatedRingUtxo[];
-  readonly merges: readonly ConfirmedMerge[];
+  readonly merges: readonly OpenedRingMerge[];
   /** Rows that do not decode or fail to open, their notes stay out of `utxos`. */
   readonly skipped: readonly SkippedRingTransaction[];
   /** Set only when the page cap stopped the read. */
@@ -57,7 +63,7 @@ export async function scanCreatedRingUtxos(
 ): Promise<CreatedRingUtxosPage> {
   await initializePoseidon();
   const utxos: CreatedRingUtxo[] = [];
-  const merges: ConfirmedMerge[] = [];
+  const merges: OpenedRingMerge[] = [];
   const rows = new RowOrigins(
     input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc),
     input.ringProgramId,
@@ -73,12 +79,13 @@ export async function scanCreatedRingUtxos(
     },
     (confirmed) => {
       if (confirmed.kind === "merge") {
-        const merge = confirmedMerge({
-          transaction: confirmed.transaction,
-          eventIndex: rowEventIndex(confirmed.transaction),
-          disclosure: confirmed.disclosure,
-          auditor: input.auditor,
-        });
+        const merge = rows.attempt(confirmed.transaction, () =>
+          openRingMerge({
+            confirmed,
+            eventIndex: rowEventIndex(confirmed.transaction),
+            auditor: input.auditor,
+          }),
+        );
         if (merge !== undefined) merges.push(merge);
       }
       utxos.push(
@@ -120,12 +127,7 @@ function depositUtxos(
     const output = ringDepositOutput(slot.payload, input.ringProgramId);
     const binding = confirmed.deposits.find((deposit) => deposit.slotIndex === slotIndex);
     if (output === undefined || binding === undefined) continue;
-    const capsule = readRingDepositCapsule(output.encrypted.ciphertext);
-    if (capsule === undefined)
-      throw new RingError("RING_AUDIT_MESSAGE", {
-        details: { reason: "deposit opening" },
-      });
-    const opening = openRingDepositOpening(capsule, input.auditor, output.ownerUtxoHash, binding);
+    const opening = openConfirmedDeposit({ output, auditor: input.auditor, binding });
     try {
       utxos.push(
         createdDepositUtxo({
@@ -144,23 +146,62 @@ function depositUtxos(
   return Object.freeze(utxos);
 }
 
-/** @internal */
+/** A deposit's auditor opening, `version` names the capsule the program sealed. */
+export type OpenedDeposit =
+  | (Readonly<{ version: "v4" }> & Omit<RingDepositOpening, "recipientCiphertext">)
+  | (Readonly<{ version: "historicalV3" }> & HistoricalDepositOpening);
+
+/** Refuses a capsule the confirmed binding does not name and a record off the published owner hash. */
+export function openConfirmedDeposit(
+  input: Readonly<{
+    output: RingDepositOutput;
+    auditor: X25519Keypair;
+    binding: ConfirmedDeposit;
+  }>,
+): OpenedDeposit {
+  const { output, auditor, binding } = input;
+  const { ciphertext } = output.encrypted;
+  if (binding.version === "historicalV3") {
+    const capsule = readHistoricalDepositCapsule(ciphertext);
+    if (capsule === undefined) throw depositRefusal();
+    return Object.freeze({
+      version: "historicalV3",
+      ...openHistoricalDepositOpening(capsule, auditor, output.ownerUtxoHash, binding),
+    });
+  }
+  const capsule = readRingDepositCapsule(ciphertext);
+  if (capsule === undefined) throw depositRefusal();
+  const opening = openRingDepositOpening(capsule, auditor, output.ownerUtxoHash, binding);
+  if (opening.record.kind !== RecordKind.ring) {
+    opening.blinding.fill(0);
+    throw depositRefusal();
+  }
+  return Object.freeze({ version: "v4", ...opening });
+}
+
+/** @internal Rebuilds the full commitment, the record names the mint and amount the event publishes. */
 export function createdDepositUtxo(
   input: Readonly<{
     ringProgramId: Address;
     slotIndex: number;
     slot: OutputSlot;
     output: RingDepositOutput;
-    opening: Omit<RingDepositOpening, "recipientCiphertext">;
+    opening: OpenedDeposit;
   }>,
 ): CreatedRingUtxo {
   const { output, opening, slot } = input;
+  if (
+    opening.version === "v4" &&
+    (opening.record.mint !== output.asset || opening.record.amount !== output.amount)
+  )
+    throw depositRefusal();
   const utxo: KnownUtxo = Object.freeze({
     ownerKey: opening.ownerKey,
-    owner: Object.freeze({
-      kind: "deposited",
-      ownerHash: opening.ownerHash.slice() as Bytes32,
-    }),
+    owner: Object.freeze(
+      opening.version === "v4"
+        ? { kind: "keyed", nullifierPk: opening.record.nullifierPk }
+        : { kind: "deposited", ownerHash: opening.ownerHash.slice() as Bytes32 },
+    ),
     asset: hashBytes(addressBytes(output.asset)) as Bytes32,
     mint: output.asset,
     amount: output.amount,
@@ -170,9 +211,10 @@ export function createdDepositUtxo(
     treeId: outputTreeId(slot.outputContext),
   });
   const commitment = knownUtxoHash(utxo, ringIdField(input.ringProgramId));
-  if (!equalBytes(commitment, slot.outputContext.hash))
-    throw new RingError("RING_AUDIT_MESSAGE", {
-      details: { reason: "deposit opening" },
-    });
+  if (!equalBytes(commitment, slot.outputContext.hash)) throw depositRefusal();
   return Object.freeze({ commitment, slotIndex: input.slotIndex, utxo });
+}
+
+function depositRefusal(): RingError {
+  return new RingError("RING_AUDIT_MESSAGE", { details: { reason: "deposit opening" } });
 }

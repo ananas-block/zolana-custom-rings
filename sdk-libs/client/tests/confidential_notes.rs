@@ -1,5 +1,3 @@
-//! Scheme 13 opened into a wallet by `open_ring_confidential`.
-
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{OutputContext, OutputSlot, ShieldedTransaction};

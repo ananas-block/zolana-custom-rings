@@ -31,7 +31,7 @@ use crate::{
     cosign::ApprovalMask,
     disclosure::AuditLayout,
     error::CustomRingError,
-    key_catalog::{FrameKey, RingCircuit, TransferShape, TransferSpend},
+    key_catalog::{FrameKey, RecordPools, RingCircuit, TransferShape, TransferSpend},
     output::{
         encode_confidential_output, encode_ring_body_output, encode_ring_sender_bundle_output,
         CONFIDENTIAL_DATA_FREE_BODY_LEN,
@@ -874,11 +874,16 @@ impl<'a> RingTransactData<'a> {
 
     /// The bytes `parse` reads back, refusing what it refuses.
     pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
+        self.encode_under(self.rail.key_shape(&FrameHeader::of(self)?)?)
+    }
+
+    /// For catalog sizing, `parse` refuses a `shape` off the catalog.
+    pub fn encode_under(&self, shape: TransferShape) -> Result<Vec<u8>, CustomRingError> {
         let flags = self.flags();
         flags.check(self.rail)?;
         let header = FrameHeader::of(self)?;
         check_extensions(&self.extensions, self.rail)?;
-        let stream = self.audit_stream()?;
+        let stream = self.stream_under(shape);
         let anonymous_frame = self.rail.anonymous_frame();
         let hidden_owner_proof = self.rail == RingRail::Anonymous && !self.public_owners;
         let output_count = usize::from(header.output_count);
@@ -1117,6 +1122,7 @@ impl<'a> RingTransactData<'a> {
             spends_default_ring: self.entry,
             legs,
             owners: 0,
+            pools: RecordPools::default(),
             wide: self.wide_owners,
         })
         .ok_or(CustomRingError::RingShapeUnkeyed)
@@ -1194,13 +1200,17 @@ impl<'a> RingTransactData<'a> {
     /// Every ciphertext length of the transfer, refusing a frame no key serves.
     pub fn audit_stream(&self) -> Result<AuditStreamLayout, CustomRingError> {
         let shape = self.rail.key_shape(&FrameHeader::of(self)?)?;
-        Ok(AuditStreamLayout {
+        Ok(self.stream_under(shape))
+    }
+
+    pub fn stream_under(&self, shape: TransferShape) -> AuditStreamLayout {
+        AuditStreamLayout {
             key: shape.audit_key(),
             inputs: self.nullifiers.len(),
             outputs: self.outputs.len(),
             capacity: usize::from(shape.outputs),
             has_data: self.has_data,
-        })
+        }
     }
 
     fn recipient_body_count(&self) -> usize {

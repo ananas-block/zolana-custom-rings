@@ -40,7 +40,7 @@ func (c *depositStatementCircuit) Define(api frontend.API) error {
 		Ciphertext: c.Ciphertext[:],
 	}
 	statement := circuit.statement(api, ringgadget.SelectCount(api, c.Count, 1, MaxDeposits), c.Commitments[:], sealed)
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, statement))
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
 }
 

@@ -9,13 +9,10 @@ import {
   bigIntToBytes,
   bytesToBigInt,
   fieldAdd,
-  solanaOwnerIdentity,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { DISCLOSURE_CHUNK_BYTES } from "../../src/protocol/codec/ring-disclosure-layout.js";
-import { EMPTY_MINT_POLICY } from "../../src/protocol/membership/mint-policy.js";
-import { ringProofRequestBody } from "../../src/rpc/prover/ring.js";
+import { DISCLOSURE_CHUNK_BYTES } from "../../src/protocol/historical/v3/layout.js";
 import {
   mergeDisclosureFieldCount,
   openRingMergeDisclosure,
@@ -26,7 +23,7 @@ import {
   writeRingMergeDisclosure,
   type RingMergeDisclosure,
   type RingMergeOpening,
-} from "../../src/crypto/audit/merge-disclosure.js";
+} from "../../src/protocol/historical/v3/merge-disclosure.js";
 
 const request = vector.request;
 
@@ -252,58 +249,6 @@ describe("ring merge disclosure (test-vectors/merge/merge_v2.json)", () => {
       ephemeral.destroy();
       auditor.destroy();
     }
-  });
-
-  it("writes the Go prover body of custom-ring-merge-v3-8", () => {
-    const field = (value: string) => bytes<Bytes32>(value, 32);
-    const siblings = request.member.path.map(field);
-    const body = ringProofRequestBody({
-      kind: "merge",
-      partyIdentities: request.partyIdentities.map(field) as [Bytes32, Bytes32, Bytes32],
-      publicInputHash: field(request.publicInputHash),
-      privateTxHash: field(request.privateTxHash),
-      outputUtxoHash: field(request.outputUtxoHash),
-      firstNullifier: field(request.firstNullifier),
-      ringProgramId: field(request.ringProgramId),
-      auditorPk: field(request.auditorPk),
-      salt: field(request.salt),
-      ephSk: field(request.ephSk),
-      disclosureKey: field(request.disclosureKey),
-      ownerKey: field(request.ownerKey),
-      nullifierSecret: field(request.nullifierSecret),
-      asset: field(request.asset),
-      inputCount: request.inputCount,
-      inputs: request.inputs.map((slot) => ({
-        domain: field(slot.domain),
-        treeId: field(slot.treeId),
-        amount: field(slot.amount),
-        blinding: field(slot.blinding),
-        ringDataHash: field(slot.ringDataHash),
-      })),
-      outputTreeId: field(request.outputTreeId),
-      outputRingDataHash: field(request.outputRingDataHash),
-      keyEscrow: request.keyEscrow,
-      memberRegistryRoot: field(request.memberRegistryRoot),
-      ctHash: field(request.ctHash),
-      member: {
-        kind: "present",
-        record: {
-          member: solanaOwnerIdentity(field(request.ownerKey)) as Bytes32,
-          next: field(request.member.next),
-          lists: BigInt(request.member.lists),
-          escrowKey: field(request.member.escrowKey),
-          mintPolicy: EMPTY_MINT_POLICY,
-          addressHash: field(request.member.addressHash),
-        },
-        path: {
-          index: request.member.index,
-          siblings: Array.from({ length: siblings.length / 3 }, (_, level) =>
-            siblings.slice(3 * level, 3 * level + 3),
-          ),
-        },
-      },
-    });
-    expect(JSON.parse(JSON.stringify(body))).toEqual(request);
   });
 
   it("writes the disclosure ahead of the SPP body and reads back its own layout", () => {

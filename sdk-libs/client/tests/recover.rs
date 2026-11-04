@@ -431,7 +431,6 @@ impl Fixture {
 #[derive(Clone, Copy)]
 enum Beside {
     Alone,
-    /// Another member, whose note the recovery does not claim.
     OtherMember(UtxoFields),
 }
 
@@ -739,7 +738,7 @@ async fn missing_or_invalid_mandatory_disclosure_never_returns_a_partial_balance
         if missing {
             tx.messages.clear();
         } else {
-            // The cipher is a stream, a flipped record byte rebuilds no commitment.
+            // A flipped record byte rebuilds no commitment.
             let message = &mut tx.messages.last_mut().expect("auditor message").data;
             let slot_0 = message.len() - 2 * custom_ring_interface::AUDIT_RECORD_LEN;
             message[slot_0 + 20] ^= 1;

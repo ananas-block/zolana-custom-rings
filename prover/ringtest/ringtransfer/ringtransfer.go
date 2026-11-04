@@ -10,13 +10,11 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprivatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -74,15 +72,8 @@ type World struct {
 	Unenrolled []*big.Int
 	// Enrolled owners hold this row in place of their note's key.
 	Enrolled map[string]*big.Int
-	// Private is the private source, its lists overlay the public slots.
-	Private *PrivateSource
-}
-
-// PrivateSource serves OwnerLists from Tree, the tree's root binds the statement.
-type PrivateSource struct {
-	Tree       *ringprivatelist.Tree
-	OwnerLists uint64
-	Registry   *big.Int
+	// A nil slice leaves the policy reading no salted list.
+	SaltedBlock []*big.Int
 }
 
 // Asset is the fixture asset of every ring output and spent note.
@@ -108,17 +99,16 @@ func SenderNullifierPk(t testing.TB) *big.Int {
 	return spptest.MustNullifierPk(t, big.NewInt(7))
 }
 
-// table admits every output owner on the allow list and refuses a frozen sender, a private source also refuses a blocked owner.
+// table admits every output owner on the allow list and refuses a frozen sender, a salted block list also refuses its owners.
 func (w World) table() policy.Table {
 	rules := []ringpolicy.Rule{ringpolicy.Require(policy.SubjectOutputOwner, ringregistry.AllowBit), ringpolicy.Forbid(policy.SubjectSender, ringregistry.FrozenBit)}
-	if w.Private != nil {
-		rules = append(rules, ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit))
+	lists := []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.FrozenBit}
+	salted := uint64(0)
+	if w.SaltedBlock != nil {
+		rules = append(rules, ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.PrivateBlockBit))
+		lists, salted = append(lists, ringregistry.PrivateBlockBit), ringregistry.PrivateBlockBit
 	}
-	table := ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.FrozenBit}, Rules: rules}.Wires()
-	if w.Private != nil {
-		table.Source = privatelist.Source{OwnerLists: new(big.Int).SetUint64(w.Private.OwnerLists), Registry: w.Private.Registry}
-	}
-	return table
+	return ringpolicy.Table{Lists: lists, Rules: rules, Salted: salted}.Wires()
 }
 
 // Assembled is what both families' Build share.
@@ -300,6 +290,10 @@ func (w World) registries(t testing.TB, a ringaudit.Audit, senders []frontend.Va
 	}
 	p := w.Policy
 	// Bit 192 writes the mint policy, cap at 2^64 and the co-sign bound below it.
+	for _, owner := range w.SaltedBlock {
+		bits := big.NewInt(ringregistry.PrivateBlockBit)
+		own.Apply(t, ringregistry.Entry{Member: ringregistry.ListKey(t, owner, ringpolicy.ListSaltOf(t, owner)), Mask: bits, Value: bits, MintPolicy: zero, WithdrawalThreshold: zero})
+	}
 	mintPolicy := new(big.Int).Lsh(big.NewInt(1), 192)
 	mintPolicy.Or(mintPolicy, new(big.Int).Lsh(new(big.Int).SetUint64(p.Cap), 64))
 	mintPolicy.Or(mintPolicy, new(big.Int).SetUint64(p.CosignAbove))
@@ -345,19 +339,28 @@ func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
 	t.Helper()
 	w.fillPolicy(t, &c.Policy, a, a.delegate, c.Rows, a.Audit.Utxos())
 	outputOwners := make([]frontend.Variable, len(a.Audit.Outputs))
+	payments := make([]frontend.Variable, 0, len(c.OwnerEntries))
 	for o, slot := range a.Audit.Outputs {
 		outputOwners[o] = 0
 		if slot.Utxo.IsUtxo() && slot.Utxo.RingProgramID.Sign() != 0 {
 			outputOwners[o] = slot.Utxo.OwnerPkHash
 		}
+		if !slot.Utxo.IsUtxo() {
+			payments = append(payments, 0)
+			continue
+		}
+		payments = append(payments, slot.Utxo.OwnerPkHash)
 	}
-	ringpolicy.FillTracking(t, &c.Tracking, a.Tracking, c.Rows, outputOwners, &c.Policy)
+	for _, leg := range c.Withdrawals {
+		payments = append(payments, leg.Owner)
+	}
+	ringpolicy.FillTracking(t, &c.Tracking, a.Tracking, c.Rows, outputOwners, &c.Policy, payments)
 }
 
 func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo) {
 	t.Helper()
 	p.Table = w.table()
-	p.PolicyHash, p.OwnRoot, p.CuratorRoot, p.PrivateRoot = 0, 0, 0, 0
+	p.PolicyHash, p.OwnRoot, p.CuratorRoot = 0, 0, 0
 	if !delegate {
 		if w.Policy.Screened {
 			p.PolicyHash = ringpolicy.TableHash(t, p.Table)
@@ -388,14 +391,7 @@ func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate 
 	for o, utxo := range utxos {
 		wires[o] = utxo.Wires()
 	}
-	ringpolicy.FillPools(t, p, wires, senders, a.Own, a.Curator)
-	switch {
-	case p.Private > 0 && w.Private != nil && !delegate:
-		p.PrivateRoot = w.Private.Tree.Root()
-		ringpolicy.FillPrivate(t, p, w.Private.Tree, a.Tracking, senders, wires)
-	case p.Private > 0:
-		ringpolicy.FillPrivate(t, p, ringprivatelist.New(t), a.Tracking, make([]frontend.Variable, 0), nil)
-	}
+	ringpolicy.FillPools(t, p, wires, senders, a.Own, a.Curator, a.Tracking)
 }
 
 // withdrawalHash mirrors policy openWithdrawals over the live legs.
@@ -426,7 +422,7 @@ func values(t testing.TB, c *transfer.Sections, a Assembled) Statement {
 		PrivateTxHash: ringtest.AsBigInt(c.PrivateTxHash),
 		SignerCount:   len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
 		PolicyHash: ringtest.AsBigInt(c.PolicyHash), OwnRoot: ringtest.AsBigInt(c.OwnRoot), CuratorRoot: ringtest.AsBigInt(c.CuratorRoot),
-		TrackingRoot: ringtest.AsBigInt(c.TrackingRoot), PrivateRoot: ringtest.AsBigInt(c.PrivateRoot),
+		TrackingRoot:   ringtest.AsBigInt(c.TrackingRoot),
 		WithdrawalHash: ringtest.AsBigInt(c.WithdrawalHash),
 	}
 	for k := range c.PublicAssets {

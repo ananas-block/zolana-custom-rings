@@ -23,10 +23,8 @@ use zolana_ring_indexer::tree::{
 
 use crate::{block::BlockMetadata, indexer::Quarantine};
 
-mod private_list;
 mod tracking;
 
-pub(crate) use private_list::ListWritePage;
 pub(crate) use tracking::{AppliedRevision, Enrollment, EnrollmentRevision};
 
 /// A read takes each row's newest version at or below `version`.
@@ -502,6 +500,12 @@ pub(crate) struct ProjectedStore<'c, C, A: ProjectedAccount> {
 pub(crate) type StorageStore<'c, C> = ProjectedStore<'c, C, StorageRegistry>;
 pub(crate) type TrackingStore<'c, C> = ProjectedStore<'c, C, TrackingRegistry>;
 
+impl<C: ConnectionTrait> StorageStore<'_, C> {
+    pub async fn tracking_state(&self, registry: [u8; 32]) -> Result<Option<TrackingState>> {
+        TrackingStore::new(self.tree.conn, registry).state().await
+    }
+}
+
 impl<'c, C: ConnectionTrait, A: ProjectedAccount> ProjectedStore<'c, C, A> {
     pub fn new(conn: &'c C, registry: [u8; 32]) -> Self {
         Self {
@@ -561,7 +565,6 @@ impl<'c, C: ConnectionTrait, A: ProjectedAccount> ProjectedStore<'c, C, A> {
                 format!("DELETE FROM {leaves}"),
                 "DELETE FROM ring_record_nodes WHERE program=$1".into(),
                 "DELETE FROM storage_roots WHERE registry=$1".into(),
-                "DELETE FROM private_list_writes WHERE registry=$1".into(),
                 format!("DELETE FROM {} WHERE registry=$1", A::STATES),
             ] {
                 self.tree.exec(&sql, vec![]).await?;
@@ -573,7 +576,6 @@ impl<'c, C: ConnectionTrait, A: ProjectedAccount> ProjectedStore<'c, C, A> {
             format!("DELETE FROM {leaves} AND applied>$2"),
             "DELETE FROM ring_record_nodes WHERE program=$1 AND applied>$2".into(),
             "DELETE FROM storage_roots WHERE registry=$1 AND revision>$2".into(),
-            "DELETE FROM private_list_writes WHERE registry=$1 AND revision>$2".into(),
         ] {
             self.tree.exec(&sql, revision.clone()).await?;
         }

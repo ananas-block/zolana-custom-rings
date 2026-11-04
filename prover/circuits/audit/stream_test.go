@@ -290,7 +290,7 @@ func TestStreamVector(t *testing.T) {
 			TailChain:    ringtest.FieldHex(ringaudit.TailChain(t, s.StatementOutputs(t, stream))),
 		}
 		for i := range s.OutputCount() {
-			v.Records = append(v.Records, hex.EncodeToString(p.Records[i]))
+			v.Records = append(v.Records, hex.EncodeToString(p.Records[i][:audit.RecordLen]))
 			v.RecordCts = append(v.RecordCts, hex.EncodeToString(stream.Record(i)))
 			v.OutputHashes = append(v.OutputHashes, ringtest.FieldHex(s.Outputs[i].Utxo.Hash(t)))
 			v.Blindings = append(v.Blindings, ringtest.FieldHex(s.Blinding(t, i)))

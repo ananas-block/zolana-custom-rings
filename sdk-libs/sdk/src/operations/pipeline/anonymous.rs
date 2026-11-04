@@ -2,6 +2,7 @@
 
 use custom_ring_interface::{
     anonymous_exit::{AnonymousExitDestination, TokenAccountControl, TokenAccountState},
+    key_catalog::{RecordPools, TransferSpend},
     CustomRingError, RingMode, RingRail,
 };
 use solana_account::Account;
@@ -15,6 +16,7 @@ use spr_transaction::{
     },
     Mint, WalletUtxo,
 };
+use zolana_ring_client::rpc::SubjectListSalt;
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_transaction::{AnonymousPlan, ReplyMetadata, RingDelivery, RingOutputRail};
 
@@ -25,8 +27,8 @@ use super::{
     public_owners::check_zero_key_inputs,
     sealed,
     selection::{payment_total, widest, Candidate, Funding},
-    spends_default_ring, transaction_key, CoOwnerKey, Rail, RailKind, RingSender, RingTransfer,
-    Spend, Staged, TransferAuthority,
+    spends_default_ring, transaction_key, transfer_key, CoOwnerKey, Rail, RailKind, RingSender,
+    RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{
     client::{RingClient, RingIndexerBackend},
@@ -148,6 +150,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 exit_token_owner: None,
                 co_owners: Vec::new(),
             },
+            list_salts: self.list_salts,
         }
     }
 }
@@ -234,9 +237,7 @@ impl<'a> AnonymousMove<'a> {
             }
             .candidates(|utxo| {
                 // The prover refuses a spend that mixes ring and default-ring UTXOs.
-                utxo.utxo.owner == owner
-                    && utxo.is_default_ring_spendable()
-                    && carries_no_data([utxo.data_hash, utxo.ring_data_hash])
+                utxo.utxo.owner == owner && utxo.is_default_ring_spendable()
             })
         });
         let attempts = ring_only
@@ -311,26 +312,9 @@ impl AnonymousKey {
 pub(crate) struct HiddenOwner(pub Address);
 
 pub(crate) struct AnonymousSpend<'a> {
-    pub payer: Address,
     pub exit_destination: Option<Address>,
     pub token_owner: Option<Address>,
     pub signer: OwnerAuthorization<'a>,
-}
-
-impl AnonymousSpend<'_> {
-    /// Binds the signing co-signer, zero when none signs.
-    pub(super) fn party_identities(
-        &self,
-        co_signer: Option<Address>,
-    ) -> Result<[[u8; 32]; 3], RingError> {
-        HiddenOwner::of(&self.signer.public_key())?.check_signers(co_signer)?;
-        Ok(custom_ring_interface::AnonymousParties {
-            payer: self.payer.as_array(),
-            cosigner: co_signer.as_ref().map(Address::as_array),
-            exit_destination: self.exit_destination.as_ref().map(Address::as_array),
-        }
-        .identities()?)
-    }
 }
 
 impl HiddenOwner {
@@ -422,12 +406,12 @@ impl Anonymous<'_> {
             owner_signers,
             interface_transfer_accounts: self.owner.interface_transfer_accounts.clone(),
             spend: Spend::Anonymous(Box::new(AnonymousSpend {
-                payer,
                 exit_destination: exits.destination,
                 token_owner: exits.token_owner,
                 signer: OwnerAuthorization::SigningKey(self.signer),
             })),
             presealed: None,
+            list_salts: payment_salts(&self.payments)?,
         })
     }
 }
@@ -443,6 +427,24 @@ pub(super) fn check_payment_ring(
             ring: ring.program_id(),
         }),
     }
+}
+
+pub(super) fn payment_salts(
+    payments: &[AnonymousPayment],
+) -> Result<Vec<SubjectListSalt>, RingError> {
+    payments
+        .iter()
+        .map(|payment| {
+            Ok(SubjectListSalt {
+                member: payment
+                    .to
+                    .recipient
+                    .signing_pubkey
+                    .owner_proof_input_hash()?,
+                list_salt: payment.to.list_salt,
+            })
+        })
+        .collect()
 }
 
 /// The send call alone attaches a reply, no default path does.
@@ -505,47 +507,40 @@ fn check_audit_key(inputs: &SppProofInputs) -> Result<(), RingError> {
         .iter()
         .filter(|input| !input.is_compact())
         .count();
-    let spend = custom_ring_interface::AnonymousSpend {
+    let keyed = transfer_key(TransferSpend {
+        rail: RingRail::Anonymous,
         inputs: published,
         outputs: inputs.output_utxos.len(),
         spends_default_ring: default_ring,
-    };
-    match (spend.audit_key(), default_ring) {
-        (Some(_), _) => Ok(()),
-        (None, true) => Err(RingError::DefaultRingSpendTooWide { inputs: published }),
-        (None, false) => Err(RingError::ShapeUnkeyed {
+        legs: 0,
+        owners: 0,
+        pools: RecordPools::default(),
+        wide: false,
+    })
+    .is_some();
+    match (keyed, default_ring) {
+        (true, _) => Ok(()),
+        (false, true) => Err(RingError::DefaultRingSpendTooWide { inputs: published }),
+        (false, false) => Err(RingError::ShapeUnkeyed {
             rail: RingRail::Anonymous,
         }),
     }
 }
 
-/// The entry key rebuilds every spent UTXO from its opening, all of one owner.
+/// SPP publishes a hidden owner spending its default-ring note.
 fn check_entry_inputs(inputs: &SppProofInputs, sender: &ShieldedAddress) -> Result<(), RingError> {
-    if !spends_default_ring(&inputs.input_utxos) {
-        return Ok(());
+    let live = || {
+        inputs
+            .input_utxos
+            .iter()
+            .enumerate()
+            .filter(|(_, input)| !input.is_dummy() && input.utxo.owner == sender.signing_pubkey)
+    };
+    let holds_default = live().any(|(_, input)| input.utxo.ring_program_id.is_none());
+    match live().find(|(_, input)| holds_default && input.utxo.ring_program_id.is_some()) {
+        Some((index, _)) => Err(RingError::EntryRingInput { index }),
+        None => Ok(()),
     }
-    inputs
-        .input_utxos
-        .iter()
-        .enumerate()
-        .filter(|(_, input)| !input.is_dummy())
-        .try_for_each(|(index, input)| {
-            if input.utxo.owner != sender.signing_pubkey {
-                Err(RingError::MixedOwners { index })
-            } else if input.utxo.ring_program_id.is_some() {
-                Err(RingError::EntryRingInput { index })
-            } else if carries_no_data([input.data_hash, input.ring_data_hash]) {
-                Ok(())
-            } else {
-                Err(RingError::EntryInputData { index })
-            }
-        })
-}
-
-fn carries_no_data(hashes: [Option<[u8; 32]>; 2]) -> bool {
-    hashes
-        .iter()
-        .all(|hash| hash.is_none_or(|hash| hash == [0; 32]))
 }
 
 pub(super) struct AnonymousExits<'a> {

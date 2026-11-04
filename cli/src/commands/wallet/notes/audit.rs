@@ -4,9 +4,7 @@ use std::fmt;
 
 use anyhow::{Context as _, Result};
 use solana_address::Address;
-use zolana_ring_client::{
-    AuditError, AuditedTransaction, CreatedUtxoScan, KnownUtxoIndex, OutputOpening, RingScan,
-};
+use zolana_ring_client::{AuditedTransaction, OutputOpening, RingScan};
 
 use crate::{
     controls::ring_auditor_key,
@@ -36,26 +34,6 @@ pub fn run(ctx: &Context, args: AuditArgs) -> Result<()> {
         );
     }
     let chain = ctx.chain();
-    {
-        let created = ctx.block(
-            CreatedUtxoScan::new(ctx.ring.program_id(), &auditor).run(chain.indexer(), chain.rpc()),
-        )?;
-        if created.next_cursor.is_some() {
-            return Err(AuditError::IncompleteScan.into());
-        }
-        if let Some(skipped) = created.skipped.into_iter().next() {
-            return Err(skipped.error.into());
-        }
-        let mut known: KnownUtxoIndex = created
-            .utxos
-            .into_iter()
-            .map(|note| (note.commitment, note.utxo))
-            .collect();
-        for merge in created.merges {
-            known.apply_merge(merge);
-        }
-        scan = scan.with_known_utxos(known);
-    }
     let page = ctx.block(scan.audit(&auditor, chain.indexer(), chain.rpc(), &assets))?;
     for transaction in &page.transactions {
         print(transaction);
@@ -86,12 +64,6 @@ impl fmt::Display for OpenedSlot<'_> {
 fn print(transaction: &AuditedTransaction) {
     let heading = format!("{} at slot {}", transaction.tx_signature, transaction.slot);
     ui::heading(icon::AUDITOR, &heading);
-    if let Some(sender) = &transaction.sender {
-        println!(
-            "  hidden sender {}",
-            Address::new_from_array(sender.owner_key)
-        );
-    }
     println!("  nullifiers {}", transaction.inputs.len());
     for output in &transaction.outputs {
         let (kind, utxo) = match &output.opening {
@@ -99,15 +71,6 @@ fn print(transaction: &AuditedTransaction) {
             OutputOpening::Exit(utxo) => ("exit", utxo),
             OutputOpening::Dummy => {
                 println!("  slot {}  dummy", output.slot_index);
-                continue;
-            }
-            OutputOpening::EscrowPending(pending) => {
-                println!(
-                    "  slot {}  escrow pending  owner {}  amount {}",
-                    output.slot_index,
-                    Address::new_from_array(pending.owner_key),
-                    pending.amount
-                );
                 continue;
             }
         };

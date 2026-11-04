@@ -22,8 +22,9 @@ import {
   solanaRpcReads,
   transactionsPage,
 } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { sealRingMergeDisclosure } from "../../src/crypto/audit/merge-disclosure.js";
 import { auditRingMerges } from "../../src/operations/audit/audit-merge.js";
+import { auditRingMergesV3 } from "../../src/protocol/historical/v3/audit.js";
+import { sealRingMergeDisclosure } from "../../src/protocol/historical/v3/merge-disclosure.js";
 import { knownUtxoOwnerHash, type KnownUtxo } from "../../src/operations/audit/audit.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
 import type { TransactionOrigin } from "../../src/protocol/transaction/origin.js";
@@ -349,7 +350,7 @@ describe("MergeLedger", () => {
   });
 });
 
-describe("auditRingMerges", () => {
+describe("auditRingMergesV3", () => {
   const auditor = X25519Keypair.generate();
   const key = NullifierKey.fromSecret(new Uint8Array(31).fill(5) as Bytes31);
   const ring = getBase58Decoder().decode(filled(23)) as Address;
@@ -417,31 +418,29 @@ describe("auditRingMerges", () => {
       knownUtxos?: { utxo(commitment: Bytes32): KnownUtxo | undefined };
       ledger?: MergeLedger;
     }> = {},
-    bare: readonly IndexedShieldedTransaction[] = [],
   ) {
     const origin: TransactionOrigin = {
       confirmedTransaction: async (transaction) => {
         const row = rows.find((entry) => entry.transaction === transaction);
-        return {
-          kind: "merge",
-          transaction,
-          ...(row === undefined ? {} : { disclosure: row.disclosure }),
-        };
+        if (row === undefined) throw new Error("no row");
+        return { kind: "historicalMergeV3", transaction, disclosure: row.disclosure };
       },
     };
-    return auditRingMerges({
-      client: {
-        ...kitReads({ solanaRpc: solanaRpcReads({}) }),
-        getShieldedTransactionsByTags: async () =>
-          transactionsPage({
-            data: transactionItems([...rows.map((row) => row.transaction), ...bare]),
-          }),
-      },
+    return auditRingMergesV3({
+      client: readerOf([...rows.map((row) => row.transaction)]),
       ringProgramId: ring,
       auditor,
       origin,
       ...extra,
     });
+  }
+
+  function readerOf(transactions: readonly IndexedShieldedTransaction[]) {
+    return {
+      ...kitReads({ solanaRpc: solanaRpcReads({}) }),
+      getShieldedTransactionsByTags: async () =>
+        transactionsPage({ data: transactionItems(transactions) }),
+    };
   }
 
   function knownNote(amount: bigint): KnownUtxo {
@@ -491,8 +490,19 @@ describe("auditRingMerges", () => {
 
   it("leaves a row without a v3 disclosure to the historical reader", async () => {
     const { transaction } = disclosedMerge([10]);
-    const page = await audit([], {}, [transaction]);
-    expect(page.spent).toEqual([]);
+    const page = await auditRingMerges({
+      client: readerOf([transaction]),
+      ringProgramId: ring,
+      auditor,
+      origin: {
+        confirmedTransaction: async (row) => ({
+          kind: "historicalMerge",
+          transaction: row,
+          instruction: Uint8Array.of(20),
+        }),
+      },
+    });
+    expect(page.merges).toEqual([]);
     expect(page.historical).toEqual([
       {
         slot: transaction.slot,

@@ -50,14 +50,11 @@ describe("live root registries", () => {
   });
 
   it.each<[Parameters<typeof ring>[0], RootReader, readonly string[]]>([
-    [{}, "transfer", []],
-    [{}, "exemptTransfer", [RECORDS]],
-    [{ policy: true, curator: true }, "exemptTransfer", [RECORDS, CURATOR]],
+    [{}, "transfer", [RECORDS]],
+    [{ policy: true, curator: true }, "delegateTransfer", []],
     [{}, "deposit", []],
-    [{ mode: "confidentialEscrow" }, "deposit", [RECORDS]],
     [{ policy: true, curator: true }, "deposit", [RECORDS, CURATOR]],
     [{ policy: true, curator: true }, "merge", []],
-    [{ mode: "confidentialEscrow", policy: true, curator: true }, "merge", [RECORDS]],
   ])("reads the roots Rust `RootRead` names for %o on %s", (input, reader, registries) => {
     expect(ringRootRegistries(ring(input), reader)).toEqual(registries);
   });

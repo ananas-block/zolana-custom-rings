@@ -188,11 +188,10 @@ pub struct DepositOpening {
     pub blinding: Zeroizing<[u8; 32]>,
     /// The proof binds its Solana owner identity into `owner_hash`.
     pub owner_key: [u8; 32],
-    /// `None` under `CRDEP001`, which named only the commitment preimage.
+    /// `None` under `CRDEP001`.
     pub note: Option<DepositedNote>,
 }
 
-/// What a `CRDEP002` record names of its note.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DepositedNote {
     pub nullifier_pk: [u8; 32],
@@ -201,7 +200,6 @@ pub struct DepositedNote {
 }
 
 impl DepositOpening {
-    /// False when a record names another mint or amount than the confirmed output.
     pub(crate) fn agrees_with(&self, mint: &[u8; 32], amount: u64) -> bool {
         self.note
             .is_none_or(|note| note.mint == *mint && note.amount == amount)
@@ -217,11 +215,11 @@ pub struct DepositEncryption {
 
 const DEPOSIT_STREAM_LEN: usize = RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN * MAX_RING_DEPOSIT_AUDIT_SLOTS;
 const DEPOSIT_SCHEDULE: StreamSchedule = StreamSchedule::Ring(DEPOSIT_AUDIT_LABEL);
-/// AES blocks per slot, slot i starts at `2 + 9i`.
+/// Slot `i` starts at counter `2 + 9i`.
 const DEPOSIT_SLOT_BLOCKS: u32 = (RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN / STREAM_BLOCK_LEN) as u32;
 const _: () = assert!(RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN.is_multiple_of(STREAM_BLOCK_LEN));
 
-/// Seals one record per deposit to the ring's pinned auditor key, each record's secret its blinding.
+/// Each record's secret is its blinding.
 pub fn seal_deposits(
     records: &[OpeningRecord],
     auditor_pk: &X25519Pubkey,
@@ -270,7 +268,6 @@ pub fn open_deposit(
     Ok(opening)
 }
 
-/// Slot `i` at counter `2 + 9i`, the owner hash rebuilt from the record's key and owner.
 fn open_record(
     capsule: &RingDepositAuditCapsule<'_>,
     auditor: &X25519Keypair,
@@ -434,7 +431,6 @@ mod tests {
         bytes(&format!("{digits:0>64}"))
     }
 
-    /// The prover's own request, its statement names every sealed byte through `hash_bytes`.
     #[test]
     fn the_seal_reaches_the_public_hash_of_the_go_request() {
         let request: serde_json::Value = serde_json::from_str(include_str!(
@@ -524,7 +520,6 @@ mod tests {
         assert_eq!(hash, hex_field(&request["publicInputHash"]));
     }
 
-    /// One real wallet identity per slot, the hash the proof holds the record to.
     fn deposit_record(index: u8) -> OpeningRecord {
         let mut nullifier_pk = [index + 3; 32];
         nullifier_pk[0] = 0;
@@ -600,7 +595,7 @@ mod tests {
         }
     }
 
-    /// Seals a `CRDEP001` slot as its circuit did, one stream with slot `i` at counter `2 + 6i`.
+    /// One stream with slot `i` at counter `2 + 6i`.
     fn historical_capsule_bytes(
         auditor: &X25519Pubkey,
         slot_index: u8,

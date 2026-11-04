@@ -5,8 +5,7 @@ use solana_address::Address;
 use spr_hasher::HasherError;
 use wincode::{SchemaRead, SchemaWrite};
 use zolana_ring_policy::{
-    registry_field, EncodedRuleTable, ListId, ListSet, PolicySource, PrivateSource, RuleTable,
-    SourceMap,
+    registry_field, EncodedRuleTable, ListId, ListSet, PolicySource, RuleTable, SourceMap,
 };
 
 use crate::{
@@ -586,7 +585,7 @@ impl RingPolicy {
             slot,
         } = update;
         let salted_lists = ListSet::from_bits(salted_lists.bits() & rules.referenced().bits());
-        let source_map = salted_source_map(&sources, salted_lists, &self.records)?;
+        let source_map = salted_source_map(&sources, salted_lists)?;
         rules.validate(&source_map)?;
         let policy_hash = rules.hash(&source_map)?;
         self.count_generation(slot)?;
@@ -598,9 +597,6 @@ impl RingPolicy {
     }
 
     pub fn rebind_records(&mut self, records: Address, slot: u64) -> Result<(), CustomRingError> {
-        if self.curator() == Some(records) {
-            return Err(CustomRingError::InvalidSource);
-        }
         self.count_generation(slot)?;
         self.records = records;
         Ok(())
@@ -635,7 +631,7 @@ impl RingPolicy {
 
     /// The map `policy_hash` was computed over.
     pub fn source_map(&self) -> Result<SourceMap, CustomRingError> {
-        salted_source_map(&self.sources, self.salted(), &self.records)
+        salted_source_map(&self.sources, self.salted())
     }
 
     pub const fn salted(&self) -> ListSet {
@@ -696,19 +692,12 @@ fn source_address<'a>(slot: &'a SourceSlot, records: &'a Address) -> &'a Address
 fn salted_source_map(
     sources: &[SourceSlot; N_SOURCE_SLOTS],
     salted: ListSet,
-    records: &Address,
 ) -> Result<SourceMap, CustomRingError> {
     let mut slots = [PolicySource::default(); N_SOURCE_SLOTS];
     for (dst, slot) in slots.iter_mut().zip(sources) {
         *dst = slot.policy_source()?;
     }
-    let registry = match salted.iter().next() {
-        Some(list_id) => {
-            registry_field(source_address(&sources[list_id.slot()], records).as_array())?
-        }
-        None => [0; 32],
-    };
-    Ok(SourceMap::from_slots(slots)?.with_private(PrivateSource::new(salted, registry)?)?)
+    Ok(SourceMap::from_slots(slots)?.with_salted(salted))
 }
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);

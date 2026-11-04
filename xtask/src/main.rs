@@ -9,6 +9,8 @@ use xtask::create_release::{
     PROVING_KEYS_DIR,
 };
 
+mod frame_fit;
+
 const RING_KEYS_LOCK: &str = "prover/ring/proving-keys.lock";
 
 const PROGRAM_SOURCES: [ProgramSource; 2] = [
@@ -129,8 +131,14 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("frame-fit") => {
+            if let Err(error) = frame_fit::run() {
+                eprintln!("frame-fit failed: {error:?}");
+                std::process::exit(1);
+            }
+        }
         _ => {
-            eprintln!("usage: ring-xtask create-release --tag <tag> [options]");
+            eprintln!("usage: ring-xtask create-release --tag <tag> [options] | frame-fit");
             std::process::exit(2);
         }
     }

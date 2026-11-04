@@ -4,7 +4,6 @@ import bodies from "../../../../../test-vectors/audit/anonymous_bodies.json" wit
 import signerSet from "../../../../../test-vectors/audit/signer_set.json" with { type: "json" };
 import statements from "../../../../../test-vectors/audit/transfer_statement_v3.json" with { type: "json" };
 import debits from "../../../../../test-vectors/policy/debit.json" with { type: "json" };
-import pools from "../../../../../test-vectors/policy/pool_capacity.json" with { type: "json" };
 import zeroNullifier from "../../../../../test-vectors/registry/zero_nullifier.json" with { type: "json" };
 import {
   ZERO_32,
@@ -50,16 +49,8 @@ import {
   transferStatementHash,
   type TransferFamily,
   type TransferStatement,
-} from "../../../src/protocol/proof/statement.js";
-import {
-  screenedOwners,
-  signerSlots,
-  transferCircuitType,
-  transferInputClass,
-  transferKeys,
-  transferPoolCapacity,
-} from "../../../src/protocol/proof/transfer-shapes.js";
-import type { RingOutput } from "../../../src/protocol/transaction/transact.js";
+} from "../../../src/protocol/historical/v3/statement.js";
+import type { RingOutput } from "../../../src/protocol/historical/v3/frame.js";
 import { LocalRingKeys, type RingTagProbe } from "../../../src/state/ring-keys.js";
 
 function bytes<T extends Uint8Array>(value: string, length: number): T {
@@ -433,6 +424,7 @@ describe("debit.json", () => {
         assets: vector.debits.map((row) => identity(row.asset)),
         inputs: vector.inputs.map(slot),
         outputs: vector.outputs.map((output) => ({ ...slot(output), ring: output.ring })),
+        publicGross: [],
       });
       expect(
         rows.map((row) => [bytesToBigInt(row.owner), bytesToBigInt(row.asset), row.debit]),
@@ -443,26 +435,6 @@ describe("debit.json", () => {
       );
     },
   );
-});
-
-describe("pool_capacity.json", () => {
-  it("names every key in catalog order at its pool widths, Q and S", () => {
-    const keys = transferKeys();
-    expect(keys.map((key) => transferCircuitType(key).replaceAll("-", "_"))).toEqual(
-      pools.keys.map((key) => key.key),
-    );
-    keys.forEach((key, index) => {
-      const vector = pools.keys[index];
-      expect(transferPoolCapacity(key)).toEqual({ own: vector?.own, curator: vector?.curator });
-      const assets = Math.max(Math.min(key.withdrawals, 3), 3);
-      expect(screenedOwners(key)).toBe(
-        (vector?.own ?? 0) - 2 * key.outputs - key.withdrawals - assets,
-      );
-      expect(signerSlots(key)).toBe(
-        key.family === "transferAnonymousEntry" ? 0 : transferInputClass(key),
-      );
-    });
-  });
 });
 
 describe("zero_nullifier.json", () => {

@@ -12,19 +12,19 @@ import (
 
 // Statement is what the program holds for a transfer statement.
 type Statement struct {
-	Head                                                        ringaudit.AuditHead
-	RailBits                                                    [3]bool
-	ApprovalMask                                                *big.Int
-	NoSpend                                                     bool
-	Outputs                                                     []ringaudit.StatementOutput
-	InputCount                                                  int
-	PrivateTxHash                                               *big.Int
-	Cells                                                       []*big.Int
-	SignerCount                                                 int
-	SignerChain                                                 *big.Int
-	PolicyHash, OwnRoot, CuratorRoot, TrackingRoot, PrivateRoot *big.Int
-	PublicAssets, PublicNets, PublicGross                       [3]*big.Int
-	WithdrawalHash                                              *big.Int
+	Head                                           ringaudit.AuditHead
+	RailBits                                       [3]bool
+	ApprovalMask                                   *big.Int
+	NoSpend                                        bool
+	Outputs                                        []ringaudit.StatementOutput
+	InputCount                                     int
+	PrivateTxHash                                  *big.Int
+	Cells                                          []*big.Int
+	SignerCount                                    int
+	SignerChain                                    *big.Int
+	PolicyHash, OwnRoot, CuratorRoot, TrackingRoot *big.Int
+	PublicAssets, PublicNets, PublicGross          [3]*big.Int
+	WithdrawalHash                                 *big.Int
 }
 
 func railValues(t testing.TB, c *transfer.TransferCircuit, a Assembled) Statement {
@@ -48,7 +48,7 @@ func (s Statement) Elements(t testing.TB) []*big.Int {
 		big.NewInt(int64(s.InputCount)), s.PrivateTxHash,
 	)
 	elements = append(elements, s.Cells...)
-	elements = append(elements, big.NewInt(int64(s.SignerCount)), s.SignerChain, s.PolicyHash, s.OwnRoot, s.CuratorRoot, s.TrackingRoot, s.PrivateRoot)
+	elements = append(elements, big.NewInt(int64(s.SignerCount)), s.SignerChain, s.PolicyHash, s.OwnRoot, s.CuratorRoot, s.TrackingRoot)
 	for k := range s.PublicAssets {
 		elements = append(elements, s.PublicAssets[k], s.PublicNets[k], s.PublicGross[k])
 	}

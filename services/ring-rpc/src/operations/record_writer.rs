@@ -5,15 +5,14 @@ use std::{
 };
 
 use custom_ring_interface::{
-    storage::StorageRegistry,
-    storage_instruction::StorageUpdateIxData,
-    RecordWriteData,
-    QueueEntry, RingAccount, RingPolicy,
+    storage::StorageRegistry, storage_instruction::StorageUpdateIxData, QueueEntry,
+    RecordWriteData, RingAccount, RingPolicy, ROOT_HISTORY,
 };
 use custom_ring_sdk::{CustomRing, InitializeStorage, UpdateStorage};
 use log::warn;
 use sea_orm::DbErr;
 use solana_address::Address;
+use solana_instruction::AccountMeta;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
@@ -21,15 +20,12 @@ use spr_indexer_api::Hash;
 use zolana_ring_client::{
     rpc::{
         GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest,
-        PendingEnrolment, RecordUpdateEntry, RecordUpdateId, RecordUpdateStatus,
-        SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, PENDING_ENROLMENTS_PAGE_LIMIT,
+        PendingEnrolment, RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest,
+        SubmitRecordUpdateResponse, PENDING_ENROLMENTS_PAGE_LIMIT,
     },
     StorageTip,
 };
-use zolana_ring_indexer::rpc::{
-    GetStorageApplyProofInputsRequest, StorageWriteView,
-};
-use zolana_ring_policy::Member;
+use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
 
 use crate::{
     config::ReaderGrantStore,
@@ -37,8 +33,7 @@ use crate::{
     error::{redacted, RingRpcError},
     landing::{Attempt, ChainOutcome, Landing},
     record_update::{
-        limits_within_bounds, ApplyInputsCheck,
-        BatchPlan, CheckedUpdate, EnrolmentApproval, ModeDecision,
+        limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate, EnrolmentApproval,
         QueuedCheck, QueuedState, RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
     },
     storage_chain::StorageChain,
@@ -49,7 +44,7 @@ use crate::{
 pub const RECORD_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 const CONFIRM_POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// The apply proof pairing fits under the transaction ceiling.
-const UPDATE_COMPUTE_UNITS: u32 = 1_400_000;
+pub(crate) const UPDATE_COMPUTE_UNITS: u32 = 1_400_000;
 const CREATE_COMPUTE_UNITS: u32 = 100_000;
 
 /// The one writer of every registry its authority key holds.
@@ -333,7 +328,7 @@ impl RecordWriter {
             .collect();
         let entries = writes
             .iter()
-            .map(RecordWriteData::entry)
+            .map(RecordWriteData::storage_entry)
             .collect::<Result<Vec<QueueEntry>, _>>()
             .map_err(|_| DbErr::Custom("stored record update writes are invalid".to_owned()))?;
         let state = self
@@ -353,36 +348,30 @@ impl RecordWriter {
             entries: &entries,
         }
         .check()?;
-        let tables = policies
-            .iter()
-            .filter(|(ring, _)| batch.iter().any(|update| update.ring == **ring))
-            .filter_map(|(_, policy)| policy.as_ref())
-            .map(RingPolicy::rule_table)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| RingRpcError::StorageUpdate(Box::new(error.into())))?;
-        let Some(mode) = (ModeDecision {
-            inputs: &checked.inputs,
-            registry: &state,
-            tables: &tables,
-            slot,
-        })
-        .decide() else {
-            return Ok(());
-        };
         let apply = self.chain.prove_apply(&checked.inputs).await?;
         // 4. The storage update is the transaction's one instruction.
-        let instruction = UpdateStorage {
+        let data = StorageUpdateIxData {
+            revision: checked.revision,
+            writes,
+            apply: &apply,
+        };
+        // The program rotates a write no rule can read with grace, over a full history it fails.
+        if !data.reaches_policy() && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
+            return Ok(());
+        }
+        let floor_account = state
+            .reads_tracking(&data)
+            .then_some(state.tracking_registry);
+        let mut instruction = UpdateStorage {
             authority: self.authority(),
             registry,
-            mode,
-            data: StorageUpdateIxData {
-                revision: checked.revision,
-                writes,
-                apply: &apply,
-            },
+            data,
         }
         .instruction()
         .map_err(|error| RingRpcError::StorageUpdate(error.into()))?;
+        instruction
+            .accounts
+            .extend(floor_account.map(|tracking| AccountMeta::new_readonly(tracking, false)));
         let latest = self.chain.latest_blockhash().await?;
         let message = compile_message(
             &self.authority(),

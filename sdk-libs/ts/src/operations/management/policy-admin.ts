@@ -14,8 +14,8 @@ import {
   type RingPolicyUpdate,
   type RingSharedSource,
 } from "./admin.js";
-import { registryCurator } from "../../protocol/codec/ring-codecs.js";
-import { fetchRingPolicy } from "../../protocol/membership/config.js";
+import { isPrivateSource, registryCurator } from "../../protocol/codec/ring-codecs.js";
+import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 
 export type RingPolicyAdminClient = BlockhashProvider & Pick<ChainReader, "getAccount">;
@@ -61,6 +61,14 @@ async function checkSource(
   const policy = await fetchRingPolicy(params.client, params.ringProgramId, context);
   if (policy.sources[update.listId - 1]?.listId !== update.listId)
     throw sourceInvalid("UnreferencedList", { listId: update.listId });
+  const address = update.source.kind === "own" ? policy.records : update.source.registry;
+  const source = await fetchStorageRegistry(params.client, address, context);
+  // Rust `check_source_pair`.
+  if (
+    source.trackingRegistry !== policy.tracking &&
+    (update.salted === true || isPrivateSource(source))
+  )
+    throw sourceInvalid("SaltedSourceOtherTracking");
   if (update.source.kind !== "curator") return;
   const curator = update.source.registry;
   const others = policy.sources.filter((slot) => slot.listId !== update.listId);

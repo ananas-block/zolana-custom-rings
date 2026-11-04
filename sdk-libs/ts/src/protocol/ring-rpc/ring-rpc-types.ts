@@ -98,23 +98,6 @@ export type RecordUpdateEntry =
       value: bigint;
     }>
   | Readonly<{
-      kind: "escrow";
-      member: Hash;
-      nullifierPk: Hash;
-      ephPk: Base64String;
-      ciphertext: Base64String;
-      proof: Base64String;
-    }>
-  /** The newest address the owner signed on chain, an authority can delay it and never change it. */
-  | Readonly<{
-      kind: "address";
-      owner: Address;
-      ringId: Hash;
-      nullifierPk: Hash;
-      viewingU: Hash;
-      addressRevision: bigint;
-    }>
-  | Readonly<{
       kind: "walletGrant";
       wallet: Hash;
       reader: Hash;

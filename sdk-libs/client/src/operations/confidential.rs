@@ -179,7 +179,7 @@ pub fn open_ring_confidential<K: ShieldedKeys + RingKeys + ?Sized>(
     RingConfidentialScan::new(keys, assets).open(transactions)
 }
 
-/// Scheme 13 under the slot's secret, `None` off that scheme or on a body that rebuilds nothing.
+/// `None` off scheme 13 or on a body that rebuilds nothing.
 fn open_recipient_candidate(
     address: &ShieldedAddress,
     assets: &RingAssets,
@@ -236,5 +236,87 @@ impl RingMerges {
             }
         }
         Ok(opened)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use solana_address::Address;
+    use solana_signature::Signature;
+    use spr_event::{encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef};
+    use spr_keypair::{ShieldedKeypair, SigningKey};
+    use spr_transaction::{
+        instructions::merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
+        Mint, OutputContext, OutputSlot, Utxo,
+    };
+
+    use super::*;
+
+    const RING: Address = Address::new_from_array([0x90; 32]);
+
+    /// `merge_ring_v2` under a nonzero key, the proven encoding and its first nullifier tag.
+    #[test]
+    fn a_proven_ring_merge_opens_under_the_nullifier_secret() {
+        let owner =
+            ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[7; 32])).unwrap();
+        let address = owner.shielded_address().unwrap();
+        let first = [0x11; 32];
+        let salt = [8; 16];
+        let merged = Utxo {
+            owner: address.signing_pubkey,
+            asset: Mint::SOL,
+            amount: 100,
+            blinding: merge_output_blinding(&owner.nullifier_key, &first).unwrap(),
+            ring_program_id: Some(RING),
+            data: Default::default(),
+        };
+        let hash = merged
+            .hash(&address.nullifier_pubkey, &[0; 32], &[0; 32], 9)
+            .unwrap();
+        let ciphertext = MergeOutputPlaintext {
+            amount: 100,
+            mint: Mint::SOL.asset,
+        }
+        .encrypt(
+            &merge_output_key(&owner.nullifier_key, &first).unwrap(),
+            &salt,
+        )
+        .unwrap();
+        let row = ShieldedTransaction {
+            slot: 1,
+            tx_signature: Signature::from([1; 64]),
+            event_index: Some(0),
+            tx_viewing_pk: None,
+            salt: None,
+            output_slots: vec![OutputSlot {
+                view_tag: first,
+                output_context: OutputContext {
+                    hash,
+                    tree_id: 9,
+                    leaf_index: 0,
+                },
+                payload: encode_merge_output_data(MergeOutputDataRef {
+                    salt: &salt,
+                    ciphertext: &ciphertext,
+                    prefix: &[[0; 32]],
+                    binding: MergeCiphertextBinding::Proven,
+                }),
+            }],
+            messages: Vec::new(),
+            nullifiers: vec![first],
+            proofless: false,
+            ring_config: None,
+            ring_program_id: Some(RING),
+        };
+        let assets = RingAssets::new([]).unwrap();
+        let opened = RingMerges::among(vec![row]).open(&owner, &assets).unwrap();
+        assert_eq!(
+            opened
+                .utxos
+                .iter()
+                .map(|utxo| utxo.utxo_hash)
+                .collect::<Vec<_>>(),
+            [hash]
+        );
     }
 }

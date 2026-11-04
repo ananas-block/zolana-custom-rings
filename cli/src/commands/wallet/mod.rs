@@ -11,9 +11,12 @@ use custom_ring_interface::RingMode;
 use custom_ring_sdk::CustomRingConfig;
 use solana_address::Address;
 use spr_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
-use spr_keypair::{ShieldedKeypair, X25519Pubkey};
-use spr_transaction::{verify_owned, SpendableDecryptionResult};
-use zolana_ring_client::{AnonymousSync, AnonymousWallet, RingConfidentialScan, ViewingHistory};
+use spr_keypair::X25519Pubkey;
+use spr_transaction::{ShieldedKeys, SpendableDecryptionResult, WalletUtxo};
+use zolana_ring_client::{
+    verify_ring_owned, AnonymousSync, AnonymousWallet, RingConfidentialScan, ViewingHistory,
+};
+use zolana_ring_keys::RotatingRingKeys;
 use zolana_ring_transaction::RingAssets;
 use zolana_secret_file::{create_new, Visibility};
 
@@ -31,19 +34,19 @@ pub struct AnonymousWalletStore {
 #[must_use]
 pub struct StoreLocation<'a> {
     pub dir: &'a Path,
-    pub keys: &'a ShieldedKeypair,
+    pub viewing_pubkey: X25519Pubkey,
 }
 
 #[must_use]
 pub struct WalletScan<'a> {
-    pub keys: &'a ShieldedKeypair,
+    pub keys: &'a RotatingRingKeys,
     pub assets: &'a RingAssets,
     pub config: &'a CustomRingConfig,
 }
 
 #[must_use]
 struct ScanAt<'a> {
-    keys: &'a ShieldedKeypair,
+    keys: &'a RotatingRingKeys,
     assets: &'a RingAssets,
     /// Read only when a found note's mint is missing from `assets`.
     chain_assets: &'a dyn Fn() -> Result<RingAssets>,
@@ -62,7 +65,7 @@ struct StoreLock {
 
 impl StoreLocation<'_> {
     pub fn open(self) -> AnonymousWalletStore {
-        let viewing_pubkey = self.keys.viewing_pubkey();
+        let viewing_pubkey = self.viewing_pubkey;
         AnonymousWalletStore {
             path: self
                 .dir
@@ -138,10 +141,22 @@ impl AnonymousWalletStore {
     }
 }
 
+/// Zero-key notes stay apart, no automatic path selects them.
+#[must_use]
+pub struct WalletNotes {
+    pub spendable: SpendableDecryptionResult,
+    pub exposed_if_spent: Vec<WalletUtxo>,
+}
+
 impl WalletScan<'_> {
     pub fn fetch(self, ctx: &Context) -> Result<SpendableDecryptionResult> {
+        Ok(self.fetch_notes(ctx)?.spendable)
+    }
+
+    pub fn fetch_notes(self, ctx: &Context) -> Result<WalletNotes> {
+        let viewing_pubkey = self.keys.address()?.viewing_pubkey;
         let store = (self.config.mode == RingMode::Anonymous)
-            .then(|| ctx.anonymous_wallet_store(self.keys));
+            .then(|| ctx.anonymous_wallet_store(viewing_pubkey));
         ScanAt {
             keys: self.keys,
             assets: self.assets,
@@ -159,7 +174,7 @@ impl ScanAt<'_> {
     fn fetch<R: BlockingRpc, I: BlockingIndexer>(
         self,
         zolana: &Zolana<R, I>,
-    ) -> Result<SpendableDecryptionResult> {
+    ) -> Result<WalletNotes> {
         let (keys, assets) = (self.keys, self.assets);
         let config = IndexerRpcConfig::at_slot(self.slot);
         let owned = UtxoScan::new(keys, assets.registry())
@@ -179,6 +194,7 @@ impl ScanAt<'_> {
         if !notes.pending.is_empty() {
             notes = ring_notes(&(self.chain_assets)()?)?;
         }
+        let mut exposed_if_spent = notes.exposed_if_spent.clone();
         let notes = notes.owned.spendable();
         for utxo in notes.utxos() {
             if !spendable
@@ -191,7 +207,10 @@ impl ScanAt<'_> {
         spendable.unknown_asset_ids.extend(notes.unknown_asset_ids);
         spendable.unknown_mints.extend(notes.unknown_mints);
         let Some(store) = self.store else {
-            return Ok(spendable);
+            return Ok(WalletNotes {
+                spendable,
+                exposed_if_spent,
+            });
         };
         let sync = |assets: &RingAssets, wallet: &AnonymousWallet| {
             zolana.block_on(async {
@@ -224,9 +243,9 @@ impl ScanAt<'_> {
             unknown_mints.extend(wallet.pending_notes().iter().map(|note| note.mint()));
             Ok((wallet.decrypted(), unknown_mints))
         })?;
-        let found = verify_owned(keys, &held)?
-            .spendable()
-            .with_transaction_keys(keys)?;
+        let verified = verify_ring_owned(keys, &held)?;
+        exposed_if_spent.extend(verified.exposed_if_spent);
+        let found = verified.owned.spendable().with_transaction_keys(keys)?;
         let spent = &held.spent_nullifiers;
         for balance in &mut spendable.balances.assets {
             balance
@@ -249,7 +268,10 @@ impl ScanAt<'_> {
             }
         }
         spendable.unknown_mints.extend(unknown_mints);
-        Ok(spendable)
+        Ok(WalletNotes {
+            spendable,
+            exposed_if_spent,
+        })
     }
 }
 
@@ -269,10 +291,10 @@ impl StoreLock {
 }
 
 impl Context {
-    pub fn anonymous_wallet_store(&self, keys: &ShieldedKeypair) -> AnonymousWalletStore {
+    pub fn anonymous_wallet_store(&self, viewing_pubkey: X25519Pubkey) -> AnonymousWalletStore {
         StoreLocation {
             dir: &self.path(Path::new(ANONYMOUS_RING_DIR)),
-            keys,
+            viewing_pubkey,
         }
         .open()
     }
@@ -290,6 +312,8 @@ fn unix_now() -> Result<i64> {
 pub(crate) mod fixtures {
     use solana_address::Address;
     use spr_keypair::SigningKey;
+
+    use spr_keypair::ShieldedKeypair;
 
     use super::*;
 
@@ -314,7 +338,7 @@ pub(crate) mod fixtures {
             let _ = fs::remove_dir_all(&dir);
             let store = StoreLocation {
                 dir: &dir,
-                keys: &keys,
+                viewing_pubkey: keys.viewing_pubkey(),
             }
             .open();
             Self { keys, store, dir }

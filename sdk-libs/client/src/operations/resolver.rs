@@ -1,5 +1,3 @@
-//! A payer's read of a ring address against the verified tracking leaf.
-
 use custom_ring_interface::domain;
 use solana_address::Address;
 use spr_hasher::HasherError;
@@ -18,7 +16,7 @@ use crate::{
     records::path_of,
 };
 
-/// The key a payer names, the salt stays with the address it came from.
+/// The salt stays with the address it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResolvedRecipient {
     pub nullifier_pk: [u8; 32],
@@ -55,7 +53,7 @@ pub enum ResolveError {
     EnrolledOwnerAtZeroKey,
 }
 
-/// One address against one accepted root, the registry named by the ring's policy.
+/// `registry` is the one the ring's policy names.
 #[must_use]
 pub struct RecipientResolver<'a> {
     pub address: &'a RingAddress,
@@ -86,7 +84,6 @@ impl RecipientResolver<'_> {
         self.verify(&member, opening)
     }
 
-    /// Accepts only an opening under the root that agrees with the address.
     pub fn verify(
         &self,
         member: &[u8; 32],
@@ -136,7 +133,7 @@ impl RecipientResolver<'_> {
     }
 }
 
-/// The wire seal stays out, the leaf hashes only `ct_hash`.
+/// The leaf hashes only `ct_hash`.
 pub fn tracking_record(view: &RingTrackingRecordView) -> TrackingRecord {
     TrackingRecord {
         member: view.member.0,

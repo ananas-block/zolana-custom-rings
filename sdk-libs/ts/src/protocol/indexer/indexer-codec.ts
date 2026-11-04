@@ -11,8 +11,6 @@ import {
 import { MAX_RING_MEMBER_BATCH } from "./indexer-limits.js";
 import type {
   RingMemberOpeningView,
-  RingAddressEscrowPairView,
-  RingAuthorizedAddressView,
   RingMemberRecordView,
   RingRecordPathView,
   RingRecordWriteView,
@@ -28,7 +26,7 @@ import type {
 } from "./indexer-types.js";
 
 const { array, context, object, toWireInteger, wireInteger } = indexerCodec;
-const { checkedAddress, checkedBase64, checkedHash, schemaFailure } = indexerScalars;
+const { checkedAddress, checkedHash, schemaFailure } = indexerScalars;
 
 type WireObject = Record<string, unknown>;
 type Hash = indexerTypes.Hash;
@@ -74,61 +72,13 @@ export function encodeStorageMemberRecordsRequest(value: StorageMemberRecordsReq
   };
 }
 
-function memberFields(record: WireObject) {
+function memberRecord(value: unknown, path: string): RingMemberRecordView {
+  const record = object(value, path, ["member", "next", "lists", "mintPolicy"]);
   return {
-    member: checkedHash(record["member"], "member"),
-    next: checkedHash(record["next"], "next"),
-    lists: wireInteger(record["lists"], "lists", 0n, (1n << 64n) - 1n),
-    escrowKey: checkedHash(record["escrowKey"], "escrowKey"),
-    addressHash: checkedHash(record["addressHash"], "addressHash"),
+    member: checkedHash(record["member"], `${path}.member`),
+    next: checkedHash(record["next"], `${path}.next`),
+    lists: wireInteger(record["lists"], `${path}.lists`, 0n, U64_MAX),
     mintPolicy: decodeMintPolicy(record["mintPolicy"]),
-  };
-}
-
-function authorizedAddress(value: unknown, path: string): RingAuthorizedAddressView {
-  const row = object(value, path, ["ringId", "nullifierPk", "viewingU", "addressRevision"]);
-  return {
-    ringId: checkedHash(row["ringId"], `${path}.ringId`),
-    nullifierPk: checkedHash(row["nullifierPk"], `${path}.nullifierPk`),
-    viewingU: checkedHash(row["viewingU"], `${path}.viewingU`),
-    addressRevision: unboundedU64(row["addressRevision"], `${path}.addressRevision`),
-  };
-}
-
-function sealedMemberRecord(value: unknown, path: string): RingMemberRecordView {
-  const record = object(value, path, [
-    "member",
-    "next",
-    "lists",
-    "escrowKey",
-    "addressHash",
-    "address",
-    "mintPolicy",
-    "ownerPubkey",
-    "nullifierPk",
-    "ephPk",
-    "ciphertext",
-  ]);
-  const ephPk = record["ephPk"] == null ? null : checkedBase64(record["ephPk"], `${path}.ephPk`);
-  const ciphertext =
-    record["ciphertext"] == null ? null : checkedBase64(record["ciphertext"], `${path}.ciphertext`);
-  if ((ephPk === null) !== (ciphertext === null))
-    return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", path, "paired sealed key", record);
-  return {
-    ...memberFields(record),
-    ...(record["address"] == null
-      ? {}
-      : { address: authorizedAddress(record["address"], `${path}.address`) }),
-    ownerPubkey:
-      record["ownerPubkey"] == null
-        ? null
-        : checkedAddress(record["ownerPubkey"], `${path}.ownerPubkey`),
-    nullifierPk:
-      record["nullifierPk"] == null
-        ? null
-        : checkedHash(record["nullifierPk"], `${path}.nullifierPk`),
-    ephPk,
-    ciphertext,
   };
 }
 
@@ -167,7 +117,7 @@ function memberOpening(value: unknown, path: string): RingMemberOpeningView {
   const row = object(value, path, ["present", "record", "path"]);
   return {
     present: boolean(row["present"], `${path}.present`),
-    record: sealedMemberRecord(row["record"], `${path}.record`),
+    record: memberRecord(row["record"], `${path}.record`),
     path: recordPath(row["path"], `${path}.path`),
   };
 }
@@ -244,7 +194,7 @@ function decodeRecordPool<Root>(value: unknown, root: (value: unknown, path: str
   const records = array(row["records"], "records", (entry, path) => {
     const item = object(entry, path, ["record", "path"]);
     return {
-      record: sealedMemberRecord(item["record"], `${path}.record`),
+      record: memberRecord(item["record"], `${path}.record`),
       path: recordPath(item["path"], `${path}.path`, QUAD_HEIGHT - levels),
     };
   });
@@ -280,7 +230,7 @@ function decodeMemberPage<Root extends Readonly<{ nextIndex: bigint }>>(
   const records = array(row["records"], "records", (entry, path) => {
     const item = object(entry, path, ["record", "path"]);
     return {
-      record: sealedMemberRecord(item["record"], `${path}.record`),
+      record: memberRecord(item["record"], `${path}.record`),
       path: recordPath(item["path"], `${path}.path`),
     };
   });
@@ -314,22 +264,6 @@ export function encodeStorageApplyProofInputsRequest(
         member: checkedHash(write.member, `${path}.member`),
         mask: toU64(write.mask, `${path}.mask`),
         value: toU64(write.value, `${path}.value`),
-        escrowKey: checkedHash(write.escrowKey, `${path}.escrowKey`),
-        addressHash: checkedHash(write.addressHash, `${path}.addressHash`),
-        ...(write.escrowPreimage === undefined
-          ? {}
-          : {
-              escrowPreimage: {
-                nullifierPk: checkedHash(
-                  write.escrowPreimage.nullifierPk,
-                  `${path}.escrowPreimage.nullifierPk`,
-                ),
-                ciphertext: checkedBase64(
-                  write.escrowPreimage.ciphertext,
-                  `${path}.escrowPreimage.ciphertext`,
-                ),
-              },
-            }),
         mintPolicy: encodeMintPolicy(write.mintPolicy),
       };
     }),
@@ -381,29 +315,16 @@ function applyProofInputs(row: WireObject): Omit<StorageApplyProofInputsResponse
   };
 }
 
-function addressEscrowPair(value: unknown, path: string): RingAddressEscrowPairView {
-  const row = object(value, path, ["address", "escrowCiphertextHash"]);
-  return {
-    address: authorizedAddress(row["address"], `${path}.address`),
-    escrowCiphertextHash: checkedHash(row["escrowCiphertextHash"], `${path}.escrowCiphertextHash`),
-  };
-}
-
 function recordWrite(entry: unknown, path: string): RingRecordWriteView {
   const item = object(entry, path, [
     "member",
     "mask",
     "value",
-    "escrowKey",
-    "addressHash",
     "mintPolicy",
     "exists",
     "oldNext",
     "oldLists",
-    "oldEscrow",
     "oldMintPolicy",
-    "oldAddressHash",
-    "pair",
     "slot",
     "low",
     "lowPath",
@@ -412,18 +333,13 @@ function recordWrite(entry: unknown, path: string): RingRecordWriteView {
     member: checkedHash(item["member"], `${path}.member`),
     mask: u64(item["mask"], `${path}.mask`),
     value: u64(item["value"], `${path}.value`),
-    escrowKey: checkedHash(item["escrowKey"], `${path}.escrowKey`),
-    addressHash: checkedHash(item["addressHash"], `${path}.addressHash`),
     mintPolicy: item["mintPolicy"] == null ? null : decodeMintPolicy(item["mintPolicy"]),
     exists: boolean(item["exists"], `${path}.exists`),
     oldNext: checkedHash(item["oldNext"], `${path}.oldNext`),
     oldLists: unboundedU64(item["oldLists"], `${path}.oldLists`),
-    oldEscrow: checkedHash(item["oldEscrow"], `${path}.oldEscrow`),
     oldMintPolicy: decodeMintPolicy(item["oldMintPolicy"]),
-    oldAddressHash: checkedHash(item["oldAddressHash"], `${path}.oldAddressHash`),
-    ...(item["pair"] == null ? {} : { pair: addressEscrowPair(item["pair"], `${path}.pair`) }),
     slot: recordPath(item["slot"], `${path}.slot`),
-    low: sealedMemberRecord(item["low"], `${path}.low`),
+    low: memberRecord(item["low"], `${path}.low`),
     lowPath: recordPath(item["lowPath"], `${path}.lowPath`),
   };
 }

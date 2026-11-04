@@ -9,6 +9,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
@@ -127,15 +128,16 @@ func (s *Statement) outputHash(t testing.TB, blinding *big.Int) *big.Int {
 	}, big.NewInt(OutputTreeID))
 }
 
-// PlainRecord is kind 1, 7 reserved bytes, amount, owner key, mint, nullifier key and seed.
+// PlainRecord mirrors OpeningRecord::encode.
 func (s *Statement) PlainRecord(t testing.TB) []byte {
 	t.Helper()
-	record := make([]byte, 16, circuits.MergeRecordLen)
+	record := make([]byte, 9, circuits.MergeRecordLen)
 	record[0] = 1
-	binary.BigEndian.PutUint64(record[8:], s.Amount.Uint64())
+	binary.BigEndian.PutUint64(record[1:], s.Amount.Uint64())
 	record = append(append(record, s.OwnerKey[:]...), s.Mint[:]...)
 	nullifierPk, seed := spptest.MustFieldBytes(t, s.NullifierPk), spptest.MustFieldBytes(t, s.Seed)
-	return append(append(record, nullifierPk[:]...), seed[:]...)
+	record = append(append(record, nullifierPk[:]...), make([]byte, audit.RecordStride-audit.RecordLen)...)
+	return append(record, seed[:]...)
 }
 
 // Ciphertext is the record under the one-time envelope, the auditor reverses it.
@@ -177,11 +179,11 @@ func Open(t testing.TB, s *Statement) Opened {
 	plain := s.Keys.StreamCiphertext(t, s.Ciphertext(t), shared.MergeEncInfo)
 	return Opened{
 		Plain:       plain,
-		Amount:      binary.BigEndian.Uint64(plain[8:16]),
-		OwnerKey:    [32]byte(plain[16:48]),
-		Mint:        [32]byte(plain[48:80]),
-		NullifierPk: new(big.Int).SetBytes(plain[80:112]),
-		Seed:        new(big.Int).SetBytes(plain[112:144]),
+		Amount:      binary.BigEndian.Uint64(plain[1:9]),
+		OwnerKey:    [32]byte(plain[9:41]),
+		Mint:        [32]byte(plain[41:73]),
+		NullifierPk: new(big.Int).SetBytes(plain[73:audit.RecordLen]),
+		Seed:        new(big.Int).SetBytes(plain[audit.RecordStride:circuits.MergeRecordLen]),
 	}
 }
 

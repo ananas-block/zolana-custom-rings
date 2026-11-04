@@ -50,7 +50,9 @@ export interface RingCoSigner {
 export const RING_COSIGN_TRANSFERS = 1;
 export const RING_COSIGN_DEPOSITS = 2;
 export const RING_COSIGN_WITHDRAWALS = 4;
-export const RING_COSIGN_SCOPE_MASK = 7;
+export const RING_COSIGN_APPROVE_OUTFLOW = 8;
+export const RING_COSIGN_APPROVE_WITHDRAWAL = 16;
+export const RING_COSIGN_SCOPE_MASK = 31;
 
 /** Mirrors Rust `SourceSlot`, slot `i` is empty (`listId === 0`) or serves list `i + 1`. */
 export interface RingSourceSlot {
@@ -77,8 +79,12 @@ export interface StorageRegistry {
   readonly authority: Address;
   readonly graceSlots: bigint;
   readonly nextIndex: number;
-  /** Immutable, every address enrolled here binds it, zero serves as a curator only. */
+  /** Immutable, zero serves as a curator only. */
   readonly ringId: Bytes32;
+  /** Immutable, the zero address on a public source. */
+  readonly trackingRegistry: Address;
+  /** The pinned registry's newest revision at the last zero grace update, frames name no older tracking root. */
+  readonly trackingFloor: bigint;
   /** Newest first, `undefined` where the history holds no root. */
   readonly roots: readonly (StorageRegistryRoot | undefined)[];
 }
@@ -98,6 +104,10 @@ export interface RingPolicy {
   readonly createdSlot: bigint;
   /** The ring's own `StorageRegistry`, the zero address on an audit-only ring bound to none. */
   readonly records: Address;
+  /** Every read compares it, a forged registry would prove any wallet absent. */
+  readonly tracking: Address;
+  /** `ListSet` bits owners read at salted keys, the private lists always. */
+  readonly saltedLists: number;
   /** Zero on an audit-only ring. */
   readonly policyHash: Bytes32;
   /** Rust `RingPolicy::has_policy`, a written `policyHash`. */
@@ -109,7 +119,7 @@ export interface RingPolicy {
 }
 
 /** The instructions that bind roots, Rust `RootRead::transfer`, `deposit` and `merge`. */
-export type RootReader = "transfer" | "exemptTransfer" | "deposit" | "merge";
+export type RootReader = "transfer" | "delegateTransfer" | "deposit" | "merge";
 
 /** Rust `GRACE_SLOTS`, the grace a new storage registry gives an outgoing root. */
 export const GRACE_SLOTS = 750n;
@@ -117,11 +127,12 @@ export const GRACE_SLOTS = 750n;
 const RING_MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];
 export const RING_CO_SIGNER_DISCRIMINATOR = 14;
 export const RING_CO_SIGNER_SIZE = 35;
+/** Rust `CoSignerCounts::CLASSES`. */
 const RING_COSIGN_CLASSES = [RING_COSIGN_TRANSFERS, RING_COSIGN_DEPOSITS, RING_COSIGN_WITHDRAWALS];
 export const RING_POLICY_DISCRIMINATOR = 15;
-export const RING_POLICY_SIZE = 1060;
+export const RING_POLICY_SIZE = 1093;
 export const STORAGE_REGISTRY_DISCRIMINATOR = 1;
-export const STORAGE_REGISTRY_SIZE = 1613;
+export const STORAGE_REGISTRY_SIZE = 1653;
 
 /** Mirrors Rust `CoSigner::valid`, a nonzero signer under a valid scope. */
 export function decodeRingCoSigner(data: Uint8Array): RingCoSigner & Readonly<{ bump: number }> {
@@ -159,6 +170,8 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
   const auditorPublicKey = auditorKey(reader.bytes(33, "auditorPubkey") as Bytes33);
   const createdSlot = reader.u64("createdSlot");
   const records = encodeBase58(reader.bytes(32, "records"));
+  const tracking = encodeBase58(reader.bytes(32, "tracking"));
+  const saltedLists = reader.u8("saltedLists");
   const policy = readPolicyFields(reader, "RING_POLICY_INVALID");
   reader.done();
   const classes = RING_COSIGN_CLASSES.reduce(
@@ -175,6 +188,8 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
     auditorPublicKey,
     createdSlot,
     records,
+    tracking,
+    saltedLists,
     ...policy,
     hasPolicy: !equalBytes(policy.policyHash, ZERO_32),
   });
@@ -188,9 +203,9 @@ export function registryCurator(registry: Pick<RingPolicy, "sources">): Address 
 /** Rust `RingPolicy::root_registries`, the live registries `reader` passes after the ring account, the records first. */
 export function ringRootRegistries(policy: RingPolicy, reader: RootReader): readonly Address[] {
   const read = rootRead(policy, reader);
-  const curator = read === "policy" ? registryCurator(policy) : undefined;
   if (read === "none") return Object.freeze([]);
-  return Object.freeze(curator === undefined ? [policy.records] : [policy.records, curator]);
+  const curator = read === "policy" ? registryCurator(policy) : undefined;
+  return Object.freeze([policy.records, ...(curator === undefined ? [] : [curator])]);
 }
 
 /** Mirrors Rust `StorageRegistry::from_data`, a nonzero next index within the tree capacity. */
@@ -204,6 +219,8 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
   const graceSlots = reader.u64("graceSlots");
   const nextIndex = reader.u32("nextIndex");
   const ringId = reader.bytes(32, "ringId") as Bytes32;
+  const trackingRegistry = encodeBase58(reader.bytes(32, "trackingRegistry"));
+  const trackingFloor = reader.u64("trackingFloor");
   const roots = Array.from({ length: ROOT_HISTORY }, () => {
     const hash = reader.bytes(32, "root.hash") as Bytes32;
     const revision = reader.u64("root.revision");
@@ -213,7 +230,20 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
   reader.done();
   if (nextIndex < 1 || BigInt(nextIndex) > MEMBER_REGISTRY_CAPACITY)
     throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { nextIndex } });
-  return Object.freeze({ authority, graceSlots, nextIndex, ringId, roots: Object.freeze(roots) });
+  return Object.freeze({
+    authority,
+    graceSlots,
+    nextIndex,
+    ringId,
+    trackingRegistry,
+    trackingFloor,
+    roots: Object.freeze(roots),
+  });
+}
+
+/** Rust `StorageRegistry::is_private`, a salted list may read it. */
+export function isPrivateSource(registry: Pick<StorageRegistry, "trackingRegistry">): boolean {
+  return !isZeroAddress(registry.trackingRegistry);
 }
 
 /** Rust `StorageRegistry::root`, the current root or a retired one before its expiry. */
@@ -298,13 +328,12 @@ function rootRead(policy: RingPolicy, reader: RootReader): "none" | "own" | "pol
   switch (reader) {
     case "transfer":
       if (policy.hasPolicy) return "policy";
-      return policy.mode === "anonymous" ? "own" : "none";
-    case "exemptTransfer":
-      return policy.hasPolicy ? "policy" : "own";
+      return isZeroAddress(policy.records) ? "none" : "own";
     case "deposit":
-      return policy.hasPolicy || policy.keyEscrow ? "policy" : "none";
+      return policy.hasPolicy ? "policy" : "none";
+    case "delegateTransfer":
     case "merge":
-      return policy.keyEscrow ? "own" : "none";
+      return "none";
   }
 }
 

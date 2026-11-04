@@ -254,6 +254,7 @@ pub fn proof_inputs(ring: Address, rail: RelayRail) -> RelayProofInputs {
         interface_transfer_accounts: Vec::new(),
         blinding_seed: [28; 32],
         output_tree_id: 4,
+        list_salts: Vec::new(),
     }
 }
 
@@ -269,6 +270,7 @@ pub fn deposit_request(
         tree: Address::new_from_array([42; 32]),
         depositor,
         recipient: owner().shielded_address().expect("address"),
+        list_salt: [0; 32],
         asset: DepositAsset::Sol,
         amount,
         view_tag: [43; 32],

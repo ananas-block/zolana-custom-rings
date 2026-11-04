@@ -61,6 +61,11 @@ export class StreamCounter {
     });
   }
 
+  /** @internal `next` never falls below a taken tag. */
+  _scannedUnder(next: bigint): StreamCounter {
+    return new StreamCounter(max(this.next, next), this.scanned, this.pending);
+  }
+
   /** Refuses a watermark past `next` and a pending index outside its retention window. */
   static restore(stored: Readonly<{ next: bigint; scanned: bigint; pending: readonly bigint[] }>) {
     const { next, scanned, pending } = stored;
@@ -219,10 +224,11 @@ export class ViewingKeyEntry {
     });
   }
 
-  /** @internal */
+  /** @internal A lower `next` would issue a tag again. */
   _progressMatches(stored: ViewingKeyEntry): boolean {
     const counters = (["tx", "request"] as const).every(
       (stream) =>
+        this[stream].next >= stored[stream].next &&
         this[stream].scanned === stored[stream].scanned &&
         this[stream].pending.join() === stored[stream].pending.join(),
     );
@@ -233,6 +239,16 @@ export class ViewingKeyEntry {
       ({ ring, afterSlot }) => stored.ringPosition(ring) !== undefined || afterSlot === null,
     );
     return counters && keptEvery && addedUnread;
+  }
+
+  /** @internal `read` is the same key after a scan, a ring added since keeps its unread position. */
+  _withScanProgress(read: ViewingKeyEntry): ViewingKeyEntry {
+    return new ViewingKeyEntry({
+      ...this.#fields(),
+      tx: read.tx._scannedUnder(this.tx.next),
+      request: read.request._scannedUnder(this.request.next),
+      ringPositions: new Map([...this.#ringPositions, ...read.#ringPositions]),
+    });
   }
 
   #fields(): EntryFields {
@@ -361,6 +377,16 @@ export class ViewingHistory {
             entry.request.scanned === 0n &&
             entry.ringPositions().every(({ afterSlot }) => afterSlot === null)),
       )
+    );
+  }
+
+  /** @internal A counter, key, sender or ring added during the scan stays. */
+  _withScanProgress(scanned: ViewingHistory): ViewingHistory {
+    return new ViewingHistory(
+      this.entries.map((entry) => {
+        const read = scanned.entry(entry.viewingPublicKey);
+        return read === undefined ? entry : entry._withScanProgress(read);
+      }),
     );
   }
 

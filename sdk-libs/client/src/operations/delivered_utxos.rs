@@ -164,7 +164,7 @@ pub fn resolve_pending<K: ShieldedKeys + ?Sized>(
     Ok(resolved)
 }
 
-/// Every scheme 10 or 13 slot published under one of the wallet's viewing keys, its owner tag.
+/// Scheme 10 or 13 slots under the wallet's viewing keys.
 pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
     shielded_keys: &K,
     transactions: &'a [ShieldedTransaction],

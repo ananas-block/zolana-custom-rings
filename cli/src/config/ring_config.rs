@@ -157,10 +157,9 @@ pub struct Urls {
 }
 
 impl ModeName {
-    /// Key escrow is a confidential ring after `delegate set`.
     pub const fn of(mode: RingMode) -> Self {
         match mode {
-            RingMode::Confidential | RingMode::ConfidentialEscrow => Self::Confidential,
+            RingMode::Confidential => Self::Confidential,
             RingMode::Anonymous => Self::Anonymous,
         }
     }
@@ -741,16 +740,6 @@ ring_rpc = "http://127.0.0.1:8785"
         );
         let refused = format!("mode = \"registry\"\n{EXAMPLE}");
         assert!(toml::from_str::<RingConfig>(&refused).is_err());
-    }
-
-    #[test]
-    fn key_escrow_reads_as_the_confidential_ring_it_was_created_as() {
-        assert_eq!(ModeName::of(RingMode::Confidential), ModeName::Confidential);
-        assert_eq!(
-            ModeName::of(RingMode::ConfidentialEscrow),
-            ModeName::Confidential
-        );
-        assert_eq!(ModeName::of(RingMode::Anonymous), ModeName::Anonymous);
     }
 
     #[test]

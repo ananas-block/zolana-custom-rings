@@ -41,7 +41,10 @@ type ownerFlow struct{ debit, kept, charge, outflow frontend.Variable }
 type flowSource struct {
 	inputs, outputs []shared.Output
 	// Keyed by row then slot.
-	held, returned [][]frontend.Variable
+	heldBy, returnedBy [][]frontend.Variable
+	// Zero on a zero owner, a zero row matches it.
+	held, returned []frontend.Variable
+	exits          []frontend.Variable
 	publicAssets   []frontend.Variable
 	// Statement-bound, the screened legs are empty off a policy.
 	gross []frontend.Variable
@@ -49,29 +52,31 @@ type flowSource struct {
 
 // constrainOutflow holds each row's outflow per asset to the asset's cap and returns the proven approval mask, zero while active is off.
 func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active frontend.Variable, spend Spend, outputs []shared.Output, resolved subjects) frontend.Variable {
-	assets := make([]limitedAsset, 0, len(outputs)+len(resolved.publicAssets))
-	for o, out := range outputs {
-		assets = append(assets, limitedAsset{asset: out.Asset, active: out.Utxo, policy: resolved.mintPolicies[o]})
-	}
-	for _, public := range resolved.publicAssets {
-		assets = append(assets, public.limitedAsset)
-	}
 	gross := make([]frontend.Variable, len(p.PublicGross))
 	for k := range gross {
 		// An active gross lies below 2^64 as the comparator needs, an inactive one is unread.
 		gross[k] = api.Mul(active, p.PublicGross[k])
 		cmp.rc.Check(gross[k], transaction.AmountBits)
 	}
-	source := newFlowSource(api, spend, resolved.liveSenders, outputs, p.PublicAssets[:], gross)
+	source := newFlowSource(api, spend, outputs, p.PublicAssets[:], gross)
 	overOutflow := frontend.Variable(0)
-	for _, limit := range assets {
-		bounded := api.Mul(active, limit.active)
-		capped := api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cap))
-		cosigned := api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cosignAbove))
-		for _, flow := range source.flowsOf(api, cmp, limit.asset) {
-			transaction.AssertWhen(api, capped, cmp.atMost(api, flow.outflow, limit.policy.cap))
-			overOutflow = api.Or(overOutflow, api.Mul(cosigned, cmp.above(api, flow.outflow, limit.policy.cosignAbove)))
+	bound := func(limit limitedAsset, flows []ownerFlow) {
+		outflows := make([]frontend.Variable, len(flows))
+		for j, flow := range flows {
+			outflows[j] = flow.outflow
 		}
+		peak := cmp.peak(api, outflows)
+		bounded := api.Mul(active, limit.active)
+		transaction.AssertWhen(api, api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cap)), cmp.atMost(api, peak, limit.policy.cap))
+		cosigned := api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cosignAbove))
+		overOutflow = api.Or(overOutflow, api.Mul(cosigned, cmp.above(api, peak, limit.policy.cosignAbove)))
+	}
+	for o, out := range outputs {
+		bound(limitedAsset{asset: out.Asset, active: out.Utxo, policy: resolved.mintPolicies[o]}, source.flowsOf(api, cmp, out.Asset))
+	}
+	for _, public := range resolved.publicAssets {
+		// An asset any row keeps is a live output's asset, whose flow above holds the charge.
+		bound(public.limitedAsset, source.splitOf(api, cmp, source.flagsOf(api, public.asset)).rows)
 	}
 	overWithdrawal := frontend.Variable(0)
 	for k, asset := range resolved.publicAssets {
@@ -83,53 +88,48 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 	return api.Add(api.Mul(ApprovalOutflow, overOutflow), api.Mul(ApprovalWithdrawal, overWithdrawal))
 }
 
-func newFlowSource(api frontend.API, spend Spend, liveRows []frontend.Variable, outputs []shared.Output, publicAssets, gross []frontend.Variable) flowSource {
-	liveInputs, ringOutputs := make([]frontend.Variable, len(spend.Inputs)), make([]frontend.Variable, len(outputs))
-	for i, input := range spend.Inputs {
-		// A default-ring input is a held input.
-		liveInputs[i] = input.Utxo
-	}
+func newFlowSource(api frontend.API, spend Spend, outputs []shared.Output, publicAssets, gross []frontend.Variable) flowSource {
+	// A default-ring input is a held input.
+	held, heldBy := ownedAmounts(api, spend.Senders, spend.Inputs, func(input shared.Output) frontend.Variable { return input.Utxo })
+	// An exit reads no Ring flag, it leaves the ring whoever receives it.
+	returned, returnedBy := ownedAmounts(api, spend.Senders, outputs, func(out shared.Output) frontend.Variable { return out.Ring })
+	exits := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
-		// An exit reads no Ring flag, it leaves the ring whoever receives it.
-		ringOutputs[o] = out.Ring
+		exits[o] = api.Mul(out.Exit, out.Amount)
 	}
 	return flowSource{
 		inputs: spend.Inputs, outputs: outputs,
-		held:         amountsByOwner(api, spend.Senders, liveRows, spend.Inputs, liveInputs),
-		returned:     amountsByOwner(api, spend.Senders, liveRows, outputs, ringOutputs),
+		heldBy: heldBy, returnedBy: returnedBy,
+		held: held, returned: returned, exits: exits,
 		publicAssets: publicAssets, gross: gross,
 	}
 }
 
 // flowsOf attributes the asset's displaced amount over the rows in their constrained order, no prover input selects a share.
 func (s flowSource) flowsOf(api frontend.API, cmp comparator, asset frontend.Variable) []ownerFlow {
-	inputAssets, outputAssets := assetFlags(api, asset, s.inputs), assetFlags(api, asset, s.outputs)
+	flags := s.flagsOf(api, asset)
 	// 1. Every exit and public withdrawal of the asset leaves.
 	leaving := frontend.Variable(0)
-	for o, out := range s.outputs {
-		leaving = api.Add(leaving, api.Mul(out.Exit, outputAssets[o], out.Amount))
+	for o, exit := range s.exits {
+		leaving = api.Add(leaving, api.Mul(flags.outputs[o], exit))
 	}
 	for k, public := range s.publicAssets {
 		leaving = api.Add(leaving, api.Mul(api.IsZero(api.Sub(public, asset)), s.gross[k]))
 	}
 	// 2. Each row splits its held funds into a net debit and the part returned to it.
-	flows := make([]ownerFlow, len(s.held))
-	sumHeld, sumDebit, sumKept := frontend.Variable(0), frontend.Variable(0), frontend.Variable(0)
-	for j := range flows {
-		held := innerProduct(api, s.held[j], inputAssets)
-		returned := innerProduct(api, s.returned[j], outputAssets)
-		debit := cmp.saturatingSub(api, held, returned)
-		flows[j] = ownerFlow{debit: debit, kept: api.Sub(held, debit)}
-		sumHeld, sumDebit, sumKept = api.Add(sumHeld, held), api.Add(sumDebit, debit), api.Add(sumKept, flows[j].kept)
-	}
-	// 3. displaced <= sumKept since sumDebit + sumKept = sumHeld, a zero sumKept forces a zero displaced and a divisor of one.
-	displaced := api.Sub(cmp.min(api, leaving, sumHeld), cmp.min(api, leaving, sumDebit))
-	divisor := api.Add(sumKept, api.IsZero(sumKept))
-	// 4. The running floors telescope to displaced exactly, so no dust and charge <= kept.
+	split := s.splitOf(api, cmp, flags)
+	flows := split.rows
+	// 3. displaced <= split.kept since split.debit + split.kept = split.held, a zero kept total forces a zero displaced and a divisor of one.
+	displaced := api.Sub(cmp.min(api, leaving, split.held), cmp.min(api, leaving, split.debit))
+	divisor := api.Add(split.kept, api.IsZero(split.kept))
+	// 4. Running floors telescope to displaced so charge <= kept, the last floor is displaced itself.
 	running, previous := frontend.Variable(0), frontend.Variable(0)
 	for j := range flows {
-		running = api.Add(running, flows[j].kept)
-		share := cmp.floorDiv(api, api.Mul(displaced, running), divisor)
+		share := displaced
+		if j < len(flows)-1 {
+			running = api.Add(running, flows[j].kept)
+			share = cmp.floorDiv(api, api.Mul(displaced, running), divisor)
+		}
 		flows[j].charge = api.Sub(share, previous)
 		flows[j].outflow = api.Add(flows[j].debit, flows[j].charge)
 		previous = share
@@ -137,16 +137,44 @@ func (s flowSource) flowsOf(api frontend.API, cmp comparator, asset frontend.Var
 	return flows
 }
 
-// Keyed by identity alone, an owner's notes aggregate across nullifier keys, a zero row holds nothing.
-func amountsByOwner(api frontend.API, rows, liveRows []frontend.Variable, slots []shared.Output, flags []frontend.Variable) [][]frontend.Variable {
-	amounts := make([][]frontend.Variable, len(rows))
+type slotFlags struct{ inputs, outputs []frontend.Variable }
+
+func (s flowSource) flagsOf(api frontend.API, asset frontend.Variable) slotFlags {
+	return slotFlags{inputs: assetFlags(api, asset, s.inputs), outputs: assetFlags(api, asset, s.outputs)}
+}
+
+type assetSplit struct {
+	// A row's outflow reads its debit until flowsOf charges it.
+	rows              []ownerFlow
+	held, debit, kept frontend.Variable
+}
+
+func (s flowSource) splitOf(api frontend.API, cmp comparator, flags slotFlags) assetSplit {
+	heldAmounts, returnedAmounts := weighted(api, s.held, flags.inputs), weighted(api, s.returned, flags.outputs)
+	split := assetSplit{rows: make([]ownerFlow, len(s.heldBy)), held: 0, debit: 0, kept: 0}
+	for j := range split.rows {
+		held := innerProduct(api, s.heldBy[j], heldAmounts)
+		debit := cmp.saturatingSub(api, held, innerProduct(api, s.returnedBy[j], returnedAmounts))
+		kept := api.Sub(held, debit)
+		split.rows[j] = ownerFlow{debit: debit, kept: kept, charge: 0, outflow: debit}
+		split.held, split.debit, split.kept = api.Add(split.held, held), api.Add(split.debit, debit), api.Add(split.kept, kept)
+	}
+	return split
+}
+
+// Keyed by identity alone, a zero owner reads no amount so a zero row holds nothing.
+func ownedAmounts(api frontend.API, rows []frontend.Variable, slots []shared.Output, flag func(shared.Output) frontend.Variable) (amounts []frontend.Variable, ownedBy [][]frontend.Variable) {
+	amounts, ownedBy = make([]frontend.Variable, len(slots)), make([][]frontend.Variable, len(rows))
+	for i, slot := range slots {
+		amounts[i] = api.Mul(flag(slot), ringgadget.IsNonZero(api, slot.OwnerPkHash), slot.Amount)
+	}
 	for j, row := range rows {
-		amounts[j] = make([]frontend.Variable, len(slots))
+		ownedBy[j] = make([]frontend.Variable, len(slots))
 		for i, slot := range slots {
-			amounts[j][i] = api.Mul(liveRows[j], flags[i], api.IsZero(api.Sub(slot.OwnerPkHash, row)), slot.Amount)
+			ownedBy[j][i] = api.IsZero(api.Sub(slot.OwnerPkHash, row))
 		}
 	}
-	return amounts
+	return amounts, ownedBy
 }
 
 func assetFlags(api frontend.API, asset frontend.Variable, slots []shared.Output) []frontend.Variable {
@@ -155,6 +183,14 @@ func assetFlags(api frontend.API, asset frontend.Variable, slots []shared.Output
 		flags[i] = api.IsZero(api.Sub(slot.Asset, asset))
 	}
 	return flags
+}
+
+func weighted(api frontend.API, values, flags []frontend.Variable) []frontend.Variable {
+	products := make([]frontend.Variable, len(values))
+	for i, value := range values {
+		products[i] = api.Mul(value, flags[i])
+	}
+	return products
 }
 
 func innerProduct(api frontend.API, values, flags []frontend.Variable) frontend.Variable {
@@ -188,7 +224,24 @@ func (c comparator) floorDiv(api frontend.API, numerator, divisor frontend.Varia
 	return quotient
 }
 
-func init() { solver.RegisterHint(divisionHint) }
+// The caller holds each value below 2^width.
+func (c comparator) peak(api frontend.API, values []frontend.Variable) frontend.Variable {
+	parts, err := api.Compiler().NewHint(peakHint, 1, values...)
+	if err != nil {
+		panic(err)
+	}
+	// Every value lies at or under the peak and one equals it.
+	product := frontend.Variable(1)
+	for _, value := range values {
+		gap := api.Sub(parts[0], value)
+		c.rc.Check(gap, c.width)
+		product = api.Mul(product, gap)
+	}
+	api.AssertIsEqual(product, 0)
+	return parts[0]
+}
+
+func init() { solver.RegisterHint(divisionHint, peakHint) }
 
 // divisionHint proposes a quotient and remainder, floorDiv range checks and recomposes both.
 func divisionHint(_ *big.Int, inputs, outputs []*big.Int) error {
@@ -196,5 +249,18 @@ func divisionHint(_ *big.Int, inputs, outputs []*big.Int) error {
 		return errors.New("division wants numerator, nonzero divisor and two outputs")
 	}
 	outputs[0].DivMod(inputs[0], inputs[1], outputs[1])
+	return nil
+}
+
+// Untrusted until peak bounds it from both sides.
+func peakHint(_ *big.Int, inputs, outputs []*big.Int) error {
+	if len(outputs) != 1 {
+		return errors.New("peak wants one output")
+	}
+	for _, input := range inputs {
+		if input.Cmp(outputs[0]) > 0 {
+			outputs[0].Set(input)
+		}
+	}
 	return nil
 }

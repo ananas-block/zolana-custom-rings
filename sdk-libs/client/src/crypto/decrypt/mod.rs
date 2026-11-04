@@ -1,5 +1,3 @@
-//! Opens a ring transfer for its auditor, the instruction tag picks the reader of its frame.
-
 use custom_ring_interface::{
     blinding::ring_blinding_seed, AuditEvidence, AuditRecord, AuditStreamLayout, AuditorMessage,
     DataTail, EntryInput, ParsedTransact, RecordKind,
@@ -31,7 +29,6 @@ mod historical;
 
 pub use historical::HistoricalLayout;
 
-/// What a frame's instruction tag fixes, a statement version 4 tag never reaches the historical reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditFrame {
     /// Tags 55 and 56.
@@ -46,7 +43,7 @@ impl From<AuditStreamLayout> for AuditFrame {
     }
 }
 
-/// Takes the transaction as given, [`crate::RingScan::audit`] binds it to its confirmed event.
+/// Only [`crate::RingScan::audit`] binds the transaction to its confirmed event.
 #[must_use = "run the audit explicitly"]
 pub struct TransactionAudit<'a> {
     transaction: &'a ShieldedTransaction,
@@ -108,7 +105,6 @@ impl FramedRow<'_, '_> {
 }
 
 impl<'a> TransactionAudit<'a> {
-    /// `frame` comes from [`crate::RingOrigin::audit_frame`].
     pub fn new(transaction: &'a ShieldedTransaction, frame: impl Into<AuditFrame>) -> Self {
         Self {
             transaction,
@@ -130,7 +126,7 @@ impl<'a> TransactionAudit<'a> {
         Ok(self)
     }
 
-    /// `assets` names mints on a historical frame alone, a record names its own.
+    /// `assets` names mints on a historical frame alone.
     pub fn run(
         self,
         auditor: &X25519Keypair,
@@ -144,7 +140,7 @@ impl<'a> TransactionAudit<'a> {
         }
     }
 
-    /// Rebuilds every slot from the proven records, no mint registry or earlier note is read.
+    /// Reads no mint registry or earlier note.
     fn records(
         self,
         layout: AuditStreamLayout,
@@ -205,7 +201,6 @@ impl<'a> TransactionAudit<'a> {
     }
 }
 
-/// The frame fixes `n` and `m`, a transaction of any other shape is refused.
 fn check_published(layout: AuditStreamLayout, tx: &ShieldedTransaction) -> Result<(), AuditError> {
     let consistent =
         layout.outputs == tx.output_slots.len() && layout.inputs == tx.nullifiers.len();
@@ -282,7 +277,6 @@ impl Transfer {
         })
     }
 
-    /// Rebuilt from the record, the blinding and the slot alone, the registry is never read.
     fn slot(
         &self,
         slot: Slot<'_>,
@@ -350,7 +344,7 @@ impl Transfer {
         )?)
     }
 
-    /// Dummies sit last, a position at or past `R` is padding and nothing else is.
+    /// Dummies sit last, at or past `R`.
     fn inputs(&self, spent: SpentInputs<'_>) -> Result<Vec<AuditedInput>, AuditError> {
         let SpentInputs {
             real_inputs,
@@ -382,7 +376,7 @@ impl Transfer {
             .collect()
     }
 
-    /// Per-input owner and key, a mixed entry names each.
+    /// A mixed entry names each input's owner and key.
     fn default_input(
         &self,
         entry: &EntryInput,

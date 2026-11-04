@@ -1,6 +1,6 @@
 use custom_ring_interface::{
-    storage::{chain_start, PrivateRootUpdate, RootUpdate, StorageError, StorageRegistry},
-    storage_instruction::{tag, InitializeIxData, PrivateUpdateIxData, StorageUpdateIxData},
+    storage::{chain_start, Revision, RootUpdate, StorageError, StorageRegistry},
+    storage_instruction::{tag, InitializeIxData, StorageUpdateIxData},
     QUAD_HEIGHT,
 };
 use sea_orm::ConnectionTrait;
@@ -17,7 +17,6 @@ use crate::{
 pub(crate) enum StorageCall<'a> {
     Initialize(StorageInit<'a>),
     Update(StorageUpdate<'a>),
-    UpdatePrivate(PrivateUpdate<'a>),
     UpdateAuthority {
         authority: Address,
         new_authority: Address,
@@ -31,13 +30,9 @@ pub(crate) struct StorageInit<'a> {
 
 pub(crate) struct StorageUpdate<'a> {
     pub authority: Address,
+    /// Read only by a zero grace write on a pinned source.
+    pub tracking_registry: Option<Address>,
     pub data: StorageUpdateIxData<'a>,
-}
-
-pub(crate) struct PrivateUpdate<'a> {
-    pub authority: Address,
-    pub tracking_registry: Address,
-    pub data: PrivateUpdateIxData<'a>,
 }
 
 /// Account order the tags document in `storage_instruction`.
@@ -65,17 +60,8 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<RegistryInstruction<St
             call: account(0).and_then(|authority| {
                 Ok(StorageCall::Update(StorageUpdate {
                     authority,
+                    tracking_registry: account(2).ok(),
                     data: StorageUpdateIxData::parse(data)?,
-                }))
-            }),
-        },
-        tag::UPDATE_PRIVATE => RegistryInstruction {
-            registry: registry(1)?,
-            call: account(0).and_then(|authority| {
-                Ok(StorageCall::UpdatePrivate(PrivateUpdate {
-                    authority,
-                    tracking_registry: account(2)?,
-                    data: PrivateUpdateIxData::parse(data)?,
                 }))
             }),
         },
@@ -110,10 +96,7 @@ impl RegistryCall<StorageRegistry> for StorageCall<'_> {
         store: &StorageStore<'_, C>,
         state: &StorageState,
     ) -> anyhow::Result<()> {
-        // A private source opens through its published writes, it has no policy leaves.
-        if !state.account.is_private() {
-            plant_tree::<_, _, QUAD_HEIGHT>(store.tree()).await?;
-        }
+        plant_tree::<_, _, QUAD_HEIGHT>(store.tree()).await?;
         store
             .save_root(&StorageRoot::current(&*state.account))
             .await?;
@@ -128,7 +111,6 @@ impl RegistryCall<StorageRegistry> for StorageCall<'_> {
         match self {
             Self::Initialize(_) => Err(fault("initialized twice")),
             Self::Update(update) => projection.update(update).await,
-            Self::UpdatePrivate(update) => projection.update_private(update).await,
             Self::UpdateAuthority {
                 authority,
                 new_authority,
@@ -143,15 +125,24 @@ impl RegistryCall<StorageRegistry> for StorageCall<'_> {
 
 impl<C: ConnectionTrait> Projection<'_, '_, C, StorageRegistry> {
     async fn update(self, update: StorageUpdate<'_>) -> Result<(), ApplyError> {
-        let StorageUpdate { authority, data } = update;
+        let StorageUpdate {
+            authority,
+            tracking_registry,
+            data,
+        } = update;
         // 1. The program admits the update at the projected revision.
         self.authorize(&authority)?;
         let account = &*self.state.account;
+        let tracking_revision = match account.reads_tracking(&data) {
+            true => Some(self.pinned_tracking_revision(tracking_registry).await?),
+            false => None,
+        };
         let mut rotated = *account;
         rotated
             .update(RootUpdate {
                 slot: self.slot,
                 data: &data,
+                tracking_revision,
             })
             .map_err(|error| fault(format!("update refused ({error})")))?;
         let revision = rotated.roots[0].revision.value();
@@ -186,46 +177,21 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, StorageRegistry> {
         Ok(())
     }
 
-    /// The proof binds the writes' chain to the root.
-    async fn update_private(self, update: PrivateUpdate<'_>) -> Result<(), ApplyError> {
-        let PrivateUpdate {
-            authority,
-            tracking_registry,
-            data,
-        } = update;
-        self.authorize(&authority)?;
-        if tracking_registry != self.state.account.tracking_registry {
+    async fn pinned_tracking_revision(
+        &self,
+        named: Option<Address>,
+    ) -> Result<Revision, ApplyError> {
+        let pinned = self.state.account.tracking_registry;
+        if named != Some(pinned) {
             return Err(fault("the update names another tracking registry"));
         }
         let tracking = self
             .store
-            .tracking_state(tracking_registry.to_bytes())
+            .tracking_state(pinned.to_bytes())
             .await
             .map_err(from_storage)?
-            .ok_or_else(|| fault("the paired tracking registry has not been indexed"))?;
-        let mut rotated = *self.state.account;
-        rotated
-            .update_private(PrivateRootUpdate {
-                revision: data.revision,
-                restrictive: data.restrictive,
-                slot: self.slot,
-                new_root: data.apply.new_root,
-                tracking_revision: tracking.account.newest().revision,
-            })
-            .map_err(|error| fault(format!("update refused ({error})")))?;
-        for write in &data.writes {
-            rotated
-                .advance_write_counter(write.published().write_counter)
-                .map_err(|error| fault(format!("update refused ({error})")))?;
-        }
-        self.store
-            .save_list_writes(&data.writes, rotated.newest().revision.value())
-            .await?;
-        *self.state.account = rotated;
-        self.store
-            .save_root(&StorageRoot::current(&rotated))
-            .await?;
-        Ok(())
+            .ok_or_else(|| fault("the pinned tracking registry has not been indexed"))?;
+        Ok(tracking.account.newest().revision)
     }
 
     fn authorize(&self, signer: &Address) -> Result<(), ApplyError> {

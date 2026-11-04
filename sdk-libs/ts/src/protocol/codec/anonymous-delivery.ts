@@ -1,4 +1,4 @@
-/** Rust `custom_ring_interface::anonymous`. */
+/** Rust `custom_ring_interface::audit_stream` bodies and `zolana_ring_transaction::recipient_delivery`. */
 import {
   addressBytes,
   bytesToBigInt,
@@ -23,7 +23,7 @@ import {
 import { checkedCounter } from "../../crypto/error.js";
 import { x25519FromU } from "../../crypto/keys/x25519.js";
 import { checkedViewingU } from "../membership/member-opening.js";
-import { STREAM_FIRST_COUNTER } from "./ring-disclosure-layout.js";
+const STREAM_FIRST_COUNTER = 2;
 import { RingError } from "../error.js";
 
 const FIELD_LEN = 32;
@@ -42,11 +42,15 @@ export function senderBundleLen(outputs: number): number {
   return SENDER_BUNDLE_HEAD_LEN + FIELD_LEN * outputs;
 }
 
-/** What a scheme 11 body opens to, the recipient rebuilds the commitment with its own bound keys. */
+/** A scheme 13 plaintext, the recipient rebuilds the commitment with its own bound keys, Rust `RecipientBody`. */
 export interface RecipientBody {
   readonly blinding: Bytes32;
   readonly amount: bigint;
   readonly mint: Address;
+  /** The commitment covers it, a nonzero value travels with the note. */
+  readonly ringDataHash?: Bytes32;
+  /** The `data_hash` then the application data under it, empty on a plain note. */
+  readonly data?: Uint8Array;
 }
 
 /** Semantics unproved, the statement binds only its presence, length and bytes. */
@@ -70,25 +74,52 @@ export interface SenderBundle {
   readonly recipientKeys: readonly Bytes32[];
 }
 
-export function sealRecipientBody(slotSecret: Bytes32, body: RecipientBody): Uint8Array {
-  return seal(slotSecret, RECIPIENT_BODY_ENC_INFO, () =>
-    concatBytes(
-      checkedBytes<Bytes32>(body.blinding, FIELD_LEN, "blinding"),
-      u64be(checkedCounter(body.amount, "amount")),
-      addressBytes(body.mint, "mint"),
-    ),
+/** A plain note is exactly the head, an extended one follows it with one presence byte. */
+export function encodeRecipientBody(body: RecipientBody): Uint8Array {
+  const { ringDataHash, data = new Uint8Array() } = body;
+  const head = concatBytes(
+    checkedBytes<Bytes32>(body.blinding, FIELD_LEN, "blinding"),
+    u64be(checkedCounter(body.amount, "amount")),
+    addressBytes(body.mint, "mint"),
+  );
+  if (ringDataHash === undefined && data.length === 0) return head;
+  return concatBytes(
+    head,
+    Uint8Array.of(ringDataHash === undefined ? 0 : 1),
+    ...(ringDataHash === undefined
+      ? []
+      : [checkedBytes<Bytes32>(ringDataHash, FIELD_LEN, "ring data hash")]),
+    data,
   );
 }
 
-/** Refuses a body off its length, the caller rebuilds the commitment. */
+/** Refuses a short head and a presence byte off its two values. */
+export function decodeRecipientBody(plaintext: Uint8Array): RecipientBody {
+  if (plaintext.length < RECIPIENT_BODY_LEN) throw bodyInvalid("length");
+  const head = {
+    blinding: plaintext.slice(0, FIELD_LEN) as Bytes32,
+    amount: bytesToBigInt(plaintext.subarray(FIELD_LEN, FIELD_LEN + AMOUNT_LEN)),
+    mint: encodeBase58(plaintext.subarray(FIELD_LEN + AMOUNT_LEN, RECIPIENT_BODY_LEN)),
+  };
+  if (plaintext.length === RECIPIENT_BODY_LEN) return Object.freeze(head);
+  const presence = plaintext[RECIPIENT_BODY_LEN];
+  const rest = plaintext.subarray(RECIPIENT_BODY_LEN + 1);
+  if (presence === 0) return Object.freeze({ ...head, data: rest.slice() });
+  if (presence !== 1 || rest.length < FIELD_LEN) throw bodyInvalid("presence");
+  return Object.freeze({
+    ...head,
+    ringDataHash: rest.slice(0, FIELD_LEN) as Bytes32,
+    data: rest.slice(FIELD_LEN),
+  });
+}
+
+export function sealRecipientBody(slotSecret: Bytes32, body: RecipientBody): Uint8Array {
+  return seal(slotSecret, RECIPIENT_BODY_ENC_INFO, () => encodeRecipientBody(body));
+}
+
+/** The cipher is unauthenticated, only the commitment a reader rebuilds proves ownership. */
 export function openRecipientBody(slotSecret: Bytes32, body: Uint8Array): RecipientBody {
-  return open(slotSecret, RECIPIENT_BODY_ENC_INFO, body, RECIPIENT_BODY_LEN, (plaintext) =>
-    Object.freeze({
-      blinding: plaintext.slice(0, FIELD_LEN) as Bytes32,
-      amount: bytesToBigInt(plaintext.subarray(FIELD_LEN, FIELD_LEN + AMOUNT_LEN)),
-      mint: encodeBase58(plaintext.subarray(FIELD_LEN + AMOUNT_LEN)),
-    }),
-  );
+  return open(slotSecret, RECIPIENT_BODY_ENC_INFO, body, body.length, decodeRecipientBody);
 }
 
 /** The longest reply `replies` encode to, every body of a frame shares one length. */
@@ -231,6 +262,12 @@ function open<T>(
 
 function position(label: Uint8Array) {
   return Object.freeze({ label, counter: STREAM_FIRST_COUNTER });
+}
+
+function bodyInvalid(reason: string): RingError {
+  return new RingError("RING_TRANSACT_DATA_INVALID", {
+    details: { reason: "RingTransactLength", name: reason },
+  });
 }
 
 function replyInvalid(reason: string): RingError {

@@ -25,7 +25,6 @@ fn assets() -> RingAssets {
     RingAssets::new([Mint::new(MINT, 7)]).unwrap()
 }
 
-/// An anonymous commitment key frame head, one input and one published slot.
 fn commitment_layout() -> HistoricalLayout {
     let shape = spr_interface::shape::SPP_SUPPORTED_SHAPES
         .iter()
@@ -86,7 +85,6 @@ impl Row {
         (record, utxo.commitment(TREE, Some(RING)).unwrap())
     }
 
-    /// Seals the envelope and each record at its own counter, the frozen stream.
     fn publish(
         &self,
         auditor: &X25519Keypair,
@@ -207,7 +205,7 @@ fn a_version_3_read_refuses_a_foreign_key_a_changed_record_and_a_hash_off_the_fi
     ));
 }
 
-/// An escrowed exit names no key, only the zero candidate can rebuild it.
+/// Only the zero candidate can rebuild an escrowed exit.
 #[test]
 fn a_version_3_escrowed_slot_reports_its_missing_key_by_name() {
     let auditor = X25519Keypair::new();

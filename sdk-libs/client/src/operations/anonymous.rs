@@ -291,7 +291,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
     }
 }
 
-/// One form on every rail, scheme 11 on a frame before statement version 4.
+/// Scheme 11 only on a frame before statement version 4.
 pub(crate) fn recipient_payload(payload: &[u8]) -> Option<(&[u8], &[u8])> {
     ring_body_output(payload).or_else(|| {
         ring_recipient_output_body(payload).map(|(body, reply)| (body.as_slice(), reply))
@@ -709,7 +709,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         Ok(())
     }
 
-    /// A zero-key merge carries its owner's tag, only the seed a held key derives opens it.
+    /// Only the seed a held key derives opens a zero-key merge.
     fn open_owner_merges(
         &mut self,
         index: usize,
@@ -1259,7 +1259,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
     }
 }
 
-/// A merge row under the wallet's owner tag, nothing of it is authentic until its commitment rebuilds.
+/// Nothing of it is authentic until its commitment rebuilds.
 struct OwnerMerge {
     ring: Address,
     first_nullifier: [u8; 32],
@@ -1281,7 +1281,7 @@ impl OwnerMerge {
         })
     }
 
-    /// `None` under another wallet's seed, an unauthenticated cipher decrypts it to noise.
+    /// `None` under another wallet's seed.
     fn open(
         &self,
         tx: &ShieldedTransaction,

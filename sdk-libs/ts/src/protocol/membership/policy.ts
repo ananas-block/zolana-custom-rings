@@ -16,6 +16,7 @@ import {
   poseidon,
   rightAlign,
   equalBytes,
+  isZero,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../../rpc/prover/types.js";
@@ -27,6 +28,7 @@ import {
   type RingSourceSlot,
 } from "../codec/ring-codecs.js";
 import { RingError } from "../error.js";
+import { GuardScope, type DebitInput } from "./owner-debits.js";
 
 /** Mirrors Rust `ListId`, the on-chain discriminant of a list, never `0`. */
 export const ListId = Object.freeze({
@@ -34,11 +36,10 @@ export const ListId = Object.freeze({
   block: 2,
   frozen: 3,
   ringViewing: 4,
-  /** Unused, holds slot 5 of the circuit's `NSources`. */
-  recovery: 5,
+  privateBlock: 5,
   reader: 6,
   approval: 7,
-  escrow: 8,
+  privateAllow: 8,
 } as const);
 export type ListId = (typeof ListId)[keyof typeof ListId];
 
@@ -50,8 +51,13 @@ export const POLICY_LISTS: readonly ListId[] = Object.freeze([
   ListId.allow,
   ListId.block,
   ListId.frozen,
+  ListId.privateBlock,
   ListId.approval,
+  ListId.privateAllow,
 ]);
+
+/** Rust `ListSet::PRIVATE_LISTS`, an owner reads them at a salted key on every ring. */
+const PRIVATE_LIST_BITS = (1 << (ListId.privateBlock - 1)) | (1 << (ListId.privateAllow - 1));
 
 export function listIdFromByte(byte: number): ListId | undefined {
   return LIST_IDS.find((id) => id === byte);
@@ -114,6 +120,28 @@ export interface OutflowLimit {
 export interface PolicySource {
   readonly listId: number;
   readonly registry: Bytes32;
+}
+
+/** Mirrors Rust `SourceMap`. */
+export interface SourceMap {
+  readonly slots: readonly PolicySource[];
+  /** `ListSet` bits owners read at salted keys, the private lists always. */
+  readonly salted: number;
+}
+
+/** A bare slot list salts the private lists alone. */
+export type PolicySources = readonly PolicySource[] | SourceMap;
+
+/** Go `sourceView`. */
+export interface SourceView {
+  /** Bits a curator serves. */
+  readonly foreign: number;
+  /** Rust `SourceMap::salted`, an empty slot keeps no bit. */
+  readonly salted: number;
+  readonly saltedOwn: boolean;
+  readonly saltedCurated: boolean;
+  /** Clear, an owner takes no curator row under its public key. */
+  readonly publicForeign: boolean;
 }
 
 /** Rules and their list sources; per-mint amounts live in authenticated asset records. */
@@ -307,10 +335,14 @@ export interface RecordLists {
   readonly own: bigint;
   /** Read only for a list a curator serves. */
   readonly curator: bigint;
+  /** Read only for an owner's salted list, zero with no tracking row. */
+  readonly salted?: bigint;
 }
 
 /** Rust `OutputSubjects`. */
 export interface OutputSubjects {
+  /** Set on a same-ring output, clear on an exit or a withdrawal. */
+  readonly ring: boolean;
   /** Zero carries no owner obligation. */
   readonly owner: Bytes32;
   /** `memberOfAsset` of the mint. */
@@ -321,9 +353,12 @@ export interface OutputSubjects {
   readonly mintPolicy: MintPolicy;
 }
 
-/** Rust `TransferSubjects`, the UTXO outputs in slot order with every dummy left out. */
+/** Rust `TransferSubjects`. */
 export interface TransferSubjects {
   readonly sender: RecordLists;
+  /** Live inputs of the ring, a default-ring note and a deposit net no receipt. */
+  readonly ringInputs: readonly DebitInput[];
+  /** The payments in slot order, dummies and compact padding left out. */
   readonly outputs: readonly OutputSubjects[];
 }
 
@@ -334,79 +369,61 @@ export type TransferSubject =
   | Readonly<{ kind: "asset"; output: number }>;
 
 /** Rust `RuleRefusal`. */
-export type RuleRefusal =
-  | Readonly<{ kind: "lists"; rule: number; subject: TransferSubject }>
-  | Readonly<{ kind: "noAssetLimit"; rule: number; output: number }>
-  | Readonly<{ kind: "mixedAssets"; rule: number; output: number }>;
+export type RuleRefusal = Readonly<{ kind: "lists"; rule: number; subject: TransferSubject }>;
 
 /** Rust `RuleTable::admit`, the first refusal in the circuit's constraint order, caps, outflow and co-sign left out. */
 export function admitTransfer(
   table: RuleTable,
-  sources: readonly PolicySource[],
+  sources: PolicySources,
   transfer: TransferSubjects,
 ): RuleRefusal | undefined {
+  const view = policySourceView(sources);
+  const foreign = BigInt(view.foreign);
+  const salted = BigInt(view.salted);
   const { outputs } = transfer;
-  const scalarOwner = table.rules.findIndex(
-    (rule) => rule.subject === "outputOwner" && rule.guard.kind === "aboveAmount",
-  );
-  const [first] = outputs;
-  const mixed =
-    first === undefined
-      ? -1
-      : outputs.findIndex((output) => !equalBytes(output.asset, first.asset));
-  if (scalarOwner >= 0 && mixed >= 0)
-    return { kind: "mixedAssets", rule: scalarOwner, output: mixed };
-  const foreign = sources.reduce(
-    (bits, slot, index) =>
-      equalBytes(slot.registry, ZERO_32) ? bits : bits | (1n << BigInt(index)),
-    0n,
-  );
-  const listed = (
-    rule: Rule,
-    index: number,
-    subject: TransferSubject,
-    records: RecordLists,
-  ): RuleRefusal | undefined => {
-    const on = (records.own & ~foreign) | (records.curator & foreign);
-    const present = BigInt(listBits(rule.source.present));
-    const absent = BigInt(listBits(rule.source.absent));
-    return (present & on) !== 0n || (absent & ~on) !== 0n
-      ? undefined
-      : { kind: "lists", rule: index, subject };
-  };
-  const total = (grouped: (other: OutputSubjects) => boolean): bigint =>
-    outputs.reduce((sum, other) => (grouped(other) ? sum + other.amount : sum), 0n);
+  const scope = new GuardScope({ ringInputs: transfer.ringInputs, payments: outputs });
   for (const [index, rule] of table.rules.entries()) {
+    const listed = (subject: TransferSubject, records: RecordLists): RuleRefusal | undefined => {
+      const owned = subject.kind === "asset" ? 0n : salted;
+      const onPublic = (records.own & ~foreign) | (records.curator & foreign);
+      const on = (onPublic & ~owned) | ((records.salted ?? 0n) & owned);
+      return holds(rule, on) ? undefined : { kind: "lists", rule: index, subject };
+    };
     if (rule.subject === "sender") {
-      const refused = listed(rule, index, { kind: "sender" }, transfer.sender);
+      const refused = listed({ kind: "sender" }, transfer.sender);
       if (refused !== undefined) return refused;
       continue;
     }
     if (rule.subject === "exitDestination") continue;
     const onAsset = rule.subject === "asset";
     for (const [position, output] of outputs.entries()) {
-      if (!onAsset && equalBytes(output.owner, ZERO_32)) continue;
-      const limit = output.mintPolicy.threshold === 0n ? undefined : output.mintPolicy.threshold;
-      if (rule.guard.kind === "aboveAmountByAsset" && limit === undefined)
-        return { kind: "noAssetLimit", rule: index, output: position };
-      const liveOwner = (other: OutputSubjects): boolean =>
-        !equalBytes(other.owner, ZERO_32) && equalBytes(other.owner, output.owner);
-      const sameAsset = (other: OutputSubjects): boolean => equalBytes(other.asset, output.asset);
-      const { guard } = rule;
-      const exempt =
-        guard.kind === "aboveAmount"
-          ? total(onAsset ? sameAsset : liveOwner) <= guard.amount
-          : guard.kind === "aboveAmountByAsset" &&
-            limit !== undefined &&
-            total((other) => liveOwner(other) && sameAsset(other)) <= limit;
-      if (exempt) continue;
+      if (!onAsset && isZero(output.owner)) continue;
+      if (passesGuard(rule, scope, output)) continue;
       const refused = onAsset
-        ? listed(rule, index, { kind: "asset", output: position }, output.assetLists)
-        : listed(rule, index, { kind: "owner", output: position }, output.ownerLists);
+        ? listed({ kind: "asset", output: position }, output.assetLists)
+        : listed({ kind: "owner", output: position }, output.ownerLists);
       if (refused !== undefined) return refused;
     }
   }
   return undefined;
+}
+
+/** A guard reads `guard(o,a)` per asset, never a scalar across assets, a mint with no record reads threshold zero. */
+function passesGuard(rule: Rule, scope: GuardScope, output: OutputSubjects): boolean {
+  const { guard } = rule;
+  if (guard.kind === "always") return false;
+  if (guard.kind === "aboveAmountByAsset")
+    return scope.owner(output.owner, output.asset) <= output.mintPolicy.threshold;
+  return rule.subject === "asset"
+    ? scope.asset(output.asset) <= guard.amount
+    : scope.owner(output.owner, output.asset) <= guard.amount;
+}
+
+/** On any list of the present set, or off any list of the absent set. */
+function holds(rule: Rule, on: bigint): boolean {
+  const present = BigInt(listBits(rule.source.present));
+  const absent = BigInt(listBits(rule.source.absent));
+  return (present & on) !== 0n || (absent & ~on) !== 0n;
 }
 
 function ruleTableInvalid(reason: string): RingError {
@@ -429,6 +446,28 @@ export function policySourceOwners(sources: readonly RingSourceSlot[]): readonly
       ),
     ),
   );
+}
+
+function sourceMapOf(sources: PolicySources): SourceMap {
+  return "slots" in sources ? sources : { slots: sources, salted: 0 };
+}
+
+export function policySourceView(sources: PolicySources): SourceView {
+  const map = sourceMapOf(sources);
+  const bits = (keep: (slot: PolicySource) => boolean): number =>
+    map.slots.reduce(
+      (set, slot) => (slot.listId !== 0 && keep(slot) ? set | (1 << (slot.listId - 1)) : set),
+      0,
+    );
+  const salted = bits(() => true) & (map.salted | PRIVATE_LIST_BITS);
+  const foreign = bits((slot) => !equalBytes(slot.registry, ZERO_32));
+  return Object.freeze({
+    foreign,
+    salted,
+    saltedOwn: (salted & ~foreign) !== 0,
+    saltedCurated: (salted & foreign) !== 0,
+    publicForeign: (foreign & ~salted) !== 0,
+  });
 }
 
 function checkedSourceOwners(owners: readonly PolicySource[]): readonly PolicySource[] {
@@ -454,50 +493,48 @@ function sourceInvalid(reason: string, details: Readonly<Record<string, unknown>
 }
 
 /** Rust `POLICY_TABLE_VERSION`, the second field of the table hash. */
-export const POLICY_TABLE_VERSION = 12;
+export const POLICY_TABLE_VERSION = 14;
 /** Fields absorbed per Poseidon call beside the accumulator, the 12-input syscall maximum. */
 const POLICY_TABLE_RATE = 11;
 
 /** The table at its slot widths, every slot past a count zero, the one layout the hash and the policy proof read. */
 export function policyTableProofInputs(
   input: RuleTable,
-  sources: readonly PolicySource[],
+  sources: PolicySources,
 ): PolicyTableProofInputs {
   const table = buildRuleTable(input);
-  const owners = checkedSourceOwners(sources);
-  for (const listId of referencedLists(table.rules)) {
+  const map = sourceMapOf(sources);
+  const owners = checkedSourceOwners(map.slots);
+  for (const listId of referencedLists(table.rules))
     if (owners[listId - 1]?.listId !== listId) throw sourceInvalid("MissingSource", { listId });
-  }
-  const slot = <T, U>(values: readonly T[], count: number, at: (value: T) => U, zero: U): U[] =>
-    Array.from({ length: count }, (_, index) => {
-      const value = values[index];
-      return value === undefined ? zero : at(value);
-    });
   return Object.freeze({
     sources: owners,
+    salted: policySourceView(map).salted,
     policyLen: table.rules.length,
-    rules: slot(table.rules, RING_RULE_SLOTS, encodeRule, ZERO_32),
+    rules: Array.from({ length: RING_RULE_SLOTS }, (_, index) => {
+      const rule = table.rules[index];
+      return rule === undefined ? ZERO_32 : encodeRule(rule);
+    }),
   });
 }
 
-/** Rust `EncodedRuleTable::fields`, the 77 fields the policy circuit opens. */
-export function policyTableFields(
-  table: RuleTable,
-  sources: readonly PolicySource[],
-): readonly Bytes32[] {
+/** Rust `EncodedRuleTable::fields`, the fields the policy circuit opens, zero to a full rate. */
+export function policyTableFields(table: RuleTable, sources: PolicySources): readonly Bytes32[] {
   const slots = policyTableProofInputs(table, sources);
-  return Object.freeze([
+  const values = [
     domainField(RingDomain.policyTable),
     fieldU8(POLICY_TABLE_VERSION),
     ...slots.sources.flatMap((owner) => [fieldU8(owner.listId), owner.registry]),
+    fieldU8(slots.salted),
     fieldU8(slots.policyLen),
     ...slots.rules,
-    ...Array<Bytes32>(9).fill(ZERO_32),
-  ]);
+  ];
+  const padding = (POLICY_TABLE_RATE - (values.length % POLICY_TABLE_RATE)) % POLICY_TABLE_RATE;
+  return Object.freeze([...values, ...Array<Bytes32>(padding).fill(ZERO_32)]);
 }
 
 /** `acc = Poseidon(acc, fields[11c .. 11c + 11])` from `acc = 0`, Rust `EncodedRuleTable::hash`. */
-export function policyTableHash(table: RuleTable, sources: readonly PolicySource[]): Bytes32 {
+export function policyTableHash(table: RuleTable, sources: PolicySources): Bytes32 {
   const fields = policyTableFields(table, sources);
   let acc = ZERO_32;
   for (let offset = 0; offset < fields.length; offset += POLICY_TABLE_RATE) {
@@ -510,6 +547,7 @@ export function policyTableHash(table: RuleTable, sources: readonly PolicySource
 export interface PinnedPolicy {
   readonly table: RuleTable;
   readonly sources: readonly PolicySource[];
+  readonly salted: number;
   readonly policyHash: Bytes32;
   /** The one curator registry a source names. */
   readonly curator?: Address;
@@ -517,13 +555,15 @@ export interface PinnedPolicy {
 
 /** Mirrors Rust `PinnedPolicy::of`, `RING_POLICY_HASH_MISMATCH` unless the stored table reproduces the hash. */
 export function pinnedPolicy(
-  registry: Pick<RingPolicy, "policyHash" | "sources" | "rules" | "generation">,
+  registry: Pick<RingPolicy, "policyHash" | "sources" | "rules" | "generation"> &
+    Partial<Pick<RingPolicy, "saltedLists">>,
 ): PinnedPolicy {
   if (equalBytes(registry.policyHash, ZERO_32))
     throw new RingError("RING_POLICY_NOT_SET", { details: { generation: registry.generation } });
   const sources = policySourceOwners(registry.sources);
+  const salted = registry.saltedLists ?? 0;
   const table = decodeRuleTable(registry.rules);
-  if (!equalBytes(policyTableHash(table, sources), registry.policyHash))
+  if (!equalBytes(policyTableHash(table, { slots: sources, salted }), registry.policyHash))
     throw new RingError("RING_POLICY_HASH_MISMATCH", {
       details: { generation: registry.generation },
     });
@@ -531,6 +571,7 @@ export function pinnedPolicy(
   return Object.freeze({
     table,
     sources,
+    salted,
     policyHash: registry.policyHash,
     ...(curator === undefined ? {} : { curator }),
   });
@@ -572,21 +613,20 @@ function checkedMember(bytes: Bytes32): Member {
   return bytes as Member;
 }
 
-export type ListWriter = "authority" | "member" | "reserved";
+export type ListWriter = "authority" | "member";
 
 /** Mirrors Rust `ListId::writer`. */
 export function listWriter(listId: ListId): ListWriter {
   switch (checkedListId(listId)) {
-    case ListId.recovery:
-      return "reserved";
     case ListId.ringViewing:
-    case ListId.escrow:
       return "member";
     case ListId.allow:
     case ListId.block:
     case ListId.frozen:
+    case ListId.privateBlock:
     case ListId.reader:
     case ListId.approval:
+    case ListId.privateAllow:
       return "authority";
   }
 }

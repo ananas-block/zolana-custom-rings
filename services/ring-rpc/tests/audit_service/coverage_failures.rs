@@ -10,7 +10,9 @@ async fn status(service: &AuditService<StaticSource>, wallet: [u8; 32]) -> GetWa
     service.wallet_status(&request).await.expect("status read")
 }
 
-fn coverage_request(signer: &Keypair) -> zolana_ring_client::rpc::GetSpendCoverageRequest {
+pub(super) fn coverage_request(
+    signer: &Keypair,
+) -> zolana_ring_client::rpc::GetSpendCoverageRequest {
     SpendCoverageRequest::new(SpendCoverageAttestation {
         target: target(RING),
         authority: signer.pubkey(),

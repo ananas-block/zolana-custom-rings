@@ -1,12 +1,9 @@
-//! The seed a zero-key ring merge keys on, derived inside the holder.
-
 use solana_address::Address;
 use spr_keypair::{shielded::ShieldedKeypair, X25519Pubkey};
 use spr_transaction::instructions::merge::MergeSeed;
 
 use crate::{keys::HeldKeys, RingKeyError, RotatingRingKeys};
 
-/// One merge under one held viewing key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MergeSeedRequest {
     pub viewing_pubkey: X25519Pubkey,
@@ -14,7 +11,7 @@ pub struct MergeSeedRequest {
     pub first_nullifier: [u8; 32],
 }
 
-/// No viewing key leaves the holder, one seed answers one merge.
+/// No viewing key leaves the holder.
 pub trait MergeSeedHolder {
     fn merge_seeds(&self, requests: &[MergeSeedRequest]) -> Result<Vec<MergeSeed>, RingKeyError>;
 }

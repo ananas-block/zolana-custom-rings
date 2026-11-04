@@ -9,6 +9,8 @@ export interface RelayDepositInputs {
   readonly tree: Address;
   readonly depositor: Address;
   readonly recipient: ShieldedAddress;
+  /** The recipient's, zero when unknown or on a ring reading no salted list. */
+  readonly listSalt: Bytes32;
   readonly deposit: RingAssetDeposit;
   readonly blindingSecret: Bytes32;
   /** Ephemeral secret of the auditor capsule in `deposit.encrypted`. */
@@ -22,7 +24,8 @@ export function encodeRelayDepositInputs(value: RelayDepositInputs): Uint8Array 
     .bytes(addressBytes(value.ringProgramId), 32, "ringProgramId")
     .bytes(addressBytes(value.tree), 32, "tree")
     .bytes(addressBytes(value.depositor), 32, "depositor")
-    .bytes(value.recipient.toBytes(), undefined, "recipient");
+    .bytes(value.recipient.toBytes(), undefined, "recipient")
+    .bytes(value.listSalt, 32, "listSalt");
   if (deposit.asset.kind === "sol") writer.u8(0, "asset");
   else
     writer

@@ -56,6 +56,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_budget(0).await
+    }
+
+    async fn with_budget(budget: u64) -> Self {
         let prover = Arc::new(RecordingProver::default());
         let chain = Arc::new(RecordingChain::default());
         let fee_payer = Keypair::new_from_array([31; 32]);
@@ -66,7 +70,8 @@ impl Fixture {
             fee_payer,
             chain: chain.clone(),
         })
-        .with_rings(Arc::new(OneRing(RING)));
+        .with_rings(Arc::new(OneRing(RING)))
+        .with_enrollment_budget(budget);
         Self {
             module: relay_module(Arc::new(relay)).expect("module"),
             prover,
@@ -252,7 +257,7 @@ fn enrollment_under(
 /// A wallet with no SOL enrolls, the relay pays and the owner's signature authorizes.
 #[tokio::test]
 async fn an_enrollment_relays_through_the_owners_signature() {
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::with_budget(8).await;
     let owner = Keypair::new_from_array([42; 32]);
     let quote = fixture.quote(RelayOperation::Enroll).await;
     let request = enrollment(owner.pubkey(), vec![6, 1, 2, 3], quote);
@@ -292,9 +297,41 @@ async fn an_enrollment_relays_through_the_owners_signature() {
     assert_eq!(instruction.data, [6, 1, 2, 3]);
 }
 
+/// The operator's budget counts every funded enrollment, zero funds none.
+#[tokio::test]
+async fn enrollment_stays_off_until_the_operator_budgets_it_and_stops_at_the_budget() {
+    let owner = Keypair::new_from_array([42; 32]).pubkey();
+    let prepare = |fixture: Fixture, data: Vec<u8>| async move {
+        let quote = fixture.quote(RelayOperation::Enroll).await;
+        let serde_json::Value::Object(params) =
+            serde_json::to_value(enrollment(owner, data, quote)).expect("json")
+        else {
+            panic!("request is no object");
+        };
+        let refused = fixture
+            .module
+            .call::<_, RelayStep>(PREPARE_RELAY, params)
+            .await;
+        (fixture, refused)
+    };
+    let budget_refusal = |refused: &Result<RelayStep, jsonrpsee::MethodsError>| {
+        matches!(
+            refused,
+            Err(jsonrpsee::MethodsError::JsonRpc(error))
+                if error.code() == RelayError::EnrollmentBudget.code()
+        )
+    };
+    let (_, off) = prepare(Fixture::new().await, vec![6, 1]).await;
+    assert!(budget_refusal(&off), "{off:?}");
+    let (fixture, first) = prepare(Fixture::with_budget(1).await, vec![6, 1]).await;
+    assert!(first.is_ok(), "{first:?}");
+    let (_, second) = prepare(fixture, vec![6, 2]).await;
+    assert!(budget_refusal(&second), "{second:?}");
+}
+
 #[tokio::test]
 async fn the_relay_forwards_no_other_storage_instruction_and_never_enrolls_itself() {
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::with_budget(8).await;
     let owner = Keypair::new_from_array([42; 32]);
     let quote = fixture.quote(RelayOperation::Enroll).await;
     for request in [

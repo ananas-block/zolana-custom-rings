@@ -134,6 +134,7 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         asset: DepositAsset::Sol,
         amount,
         cosigner: None,
+        list_salt: None,
     };
     let proven_while_open = {
         let prepared = env.run(deposit(RING_DEPOSIT_A).prepare(env.client.as_async()))?;

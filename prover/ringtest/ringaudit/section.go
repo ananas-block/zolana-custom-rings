@@ -271,7 +271,7 @@ func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int
 		}
 		return nil, nil
 	}
-	if kind != audit.KindRing && kind != audit.KindExit || slices.ContainsFunc(record[1:8], func(b byte) bool { return b != 0 }) {
+	if kind != audit.KindRing && kind != audit.KindExit {
 		return nil, fmt.Errorf("slot %d: not a record", i)
 	}
 	dataHash, ringDataHash := big.NewInt(0), big.NewInt(0)
@@ -283,7 +283,7 @@ func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int
 	// The sealed key, salt and first nullifier fix the blinding.
 	seedOut, err := protocol.OutputBlindingSeed(r.FirstNullifier, ringprotocol.BlindingSeed(t, [32]byte(plaintext[:audit.EnvelopeKeyLen]), r.Salt))
 	blinding := ringprotocol.OutputBlinding(t, r.FirstNullifier, spptest.MustHash(t, seedOut, err), i)
-	note := Note{Kind: kind, OwnerKey: [32]byte(record[16:48]), Mint: [32]byte(record[48:80]), Amount: binary.BigEndian.Uint64(record[8:16]), NullifierPk: new(big.Int).SetBytes(record[80:]), Blinding: blinding}
+	note := Note{Kind: kind, OwnerKey: [32]byte(record[9:41]), Mint: [32]byte(record[41:73]), Amount: binary.BigEndian.Uint64(record[1:9]), NullifierPk: new(big.Int).SetBytes(record[73:]), Blinding: blinding}
 	ringID := big.NewInt(0)
 	if kind == audit.KindRing {
 		ringID = r.RingProgramID

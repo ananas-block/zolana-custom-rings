@@ -1,127 +1,60 @@
-/** Regions of the ring auditor stream and the lengths of its ciphertexts, Rust `custom_ring_interface::audit_stream`. */
+/** Regions of the ring auditor stream, Rust `custom_ring_interface::audit_stream`. */
 import { InterfaceError } from "@heliuslabs/zolana/interface";
-
-import { ringTransferCircuit, transferInputClass } from "../proof/transfer-shapes.js";
-import type { RingRail } from "../transaction/transact.js";
 
 /** Rust `DELIVERED_AUDIT_CAPACITIES`, the output counts of the confidential keys. */
 export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
-/** Rust `MERGE_WIDTHS`, the merge widths whose disclosure still fits one v1 transaction. */
-export const MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
 /** Rust `PACK_BE_CHUNK_BYTES`, the bytes of one packed field. */
 export const DISCLOSURE_CHUNK_BYTES = 31;
 export const STREAM_BLOCK_LEN = 16;
 export const STREAM_FIRST_COUNTER = 2;
 /** The sealed `tx_viewing_sk`, the envelope's first bytes. */
 export const ENVELOPE_KEY_LEN = 32;
-/** `be32(blinding) ‖ u64be(amount) ‖ owner_key`. */
-export const ESCROWED_DELIVERED_BODY_LEN = 72;
-/** `be32(blinding) ‖ u64be(amount) ‖ owner_key ‖ be32(nullifier_pk)`. */
-export const DELIVERED_BODY_LEN = 104;
-/** `owner_key ‖ be32(asset) ‖ u64be(amount) ‖ be32(nullifier_pk)`. */
-export const ANONYMOUS_RECORD_LEN = 104;
-/** `be32(asset) ‖ u64be(amount)`. */
-export const ESCROWED_EXIT_RECORD_LEN = 40;
-/** `be32(asset) ‖ u64be(amount) ‖ be32(nullifier_pk)`. */
-export const EXIT_RECORD_LEN = 72;
-/** `be32(hash) ‖ u64be(amount) ‖ be32(asset) ‖ be32(blinding)`. */
-export const ENTRY_INPUT_LEN = 104;
-/** `sender_key ‖ be32(sender_nullifier_pk)`. */
-export const ENTRY_EVIDENCE_HEAD_LEN = 64;
-/** One input hash of the non-entry evidence. */
-export const INPUT_HASH_LEN = 32;
+/** `R`, spent notes among the published inputs, dummies last. */
+export const REAL_INPUT_COUNT_LEN = 1;
+/** Keys with entry capacity alone, bit `i` set when input `i` is a default-ring note. */
+export const DEFAULT_INPUT_BITS_LEN = 8;
+/** `kind ‖ u64be(amount) ‖ owner_key ‖ mint ‖ be32(nullifier_pk)`. */
+export const AUDIT_RECORD_LEN = 105;
+/** `be32(data_hash) ‖ be32(ring_data_hash)`. */
+export const DATA_TAIL_LEN = 64;
+/** `owner_key ‖ be32(nullifier_pk) ‖ u64be(amount) ‖ mint ‖ be32(blinding) ‖ be32(data_hash) ‖ be32(ring_data_hash)`. */
+export const ENTRY_INPUT_LEN = 200;
 /** `0x04 ‖ eph_u` ahead of the auditor ciphertexts. */
 export const TAGGED_KEY_LEN = 33;
 
-const ENVELOPE_KEY_BLOCKS = ENVELOPE_KEY_LEN / STREAM_BLOCK_LEN;
+export const RECORD_BLOCKS = Math.ceil(AUDIT_RECORD_LEN / STREAM_BLOCK_LEN);
+/** The padding past a record keeps slot `i` at its counter, a transfer frame omits it. */
+export const RECORD_STRIDE = RECORD_BLOCKS * STREAM_BLOCK_LEN;
+/** The secret is the deposit's blinding or the merge's seed. */
+export const OPENING_RECORD_LEN = RECORD_STRIDE + 32;
+export const TAIL_BLOCKS = DATA_TAIL_LEN / STREAM_BLOCK_LEN;
 
 /** Rust `pack_be_chunks`, the fields `length` bytes pack into. */
 export function packedChunks(length: number): number {
   return Math.ceil(length / DISCLOSURE_CHUNK_BYTES);
 }
 
-/** The audit statement's layout element, Rust `AuditLayout`. */
+/** The statement's layout element, Rust `AuditLayout`. */
 export interface AuditLayout {
-  /** The policy section escrows every output nullifier key the ciphertexts leave out. */
-  readonly keyEscrow: boolean;
-  /** The anonymous entry key, every spent UTXO opens in full. */
-  readonly fullOpenings: boolean;
+  /** One tail per published slot, the proof holds every data hash to zero while clear. */
+  readonly hasData: boolean;
+  /** The key carries default bits and one evidence entry per published input. */
+  readonly entry: boolean;
 }
 
-/** `key_escrow << 1 | full_openings << 3`, bits 0 and 2 stay clear. */
+/** `has_data | entry << 1`. */
 export function auditLayoutValue(layout: AuditLayout): number {
-  const flags = [
-    [layout.keyEscrow, 1],
-    [layout.fullOpenings, 3],
-  ] as const;
-  if (flags.some(([flag]) => typeof flag !== "boolean")) throw shapeError("layout");
-  return flags.reduce((value, [flag, bit]) => (flag ? value | (1 << bit) : value), 0);
+  if (typeof layout.hasData !== "boolean" || typeof layout.entry !== "boolean")
+    throw shapeError("layout");
+  return (layout.hasData ? 1 : 0) | (layout.entry ? 2 : 0);
 }
 
-/** The transfer key family at its input class, Rust `AuditKey`. */
-export type AuditKey = Readonly<{
-  kind: "confidential" | "commitment" | "entry";
-  class: number;
-}>;
-
-/** Rust `TransferSpend`. */
-export interface AuditKeySpend {
-  readonly rail: RingRail;
-  /** Published inputs. */
-  readonly inputs: number;
-  readonly capacity: number;
-  /** A spent UTXO is a default-ring note, the commitment keys refuse ring id zero. */
-  readonly spendsDefaultRing: boolean;
-}
-
-/** `undefined` when the catalog keys no such spend, a larger spend splits. */
-export function transferAuditKey(spend: AuditKeySpend): AuditKey | undefined {
-  const circuit = ringTransferCircuit({
-    rail: spend.rail,
-    inputs: spend.inputs,
-    outputs: spend.capacity,
-    spendsDefaultRing: spend.spendsDefaultRing,
-    legs: 0,
-  });
-  if (circuit === undefined) return undefined;
-  const kinds = {
-    transferConfidential: "confidential",
-    transferAnonymous: "commitment",
-    transferAnonymousEntry: "entry",
-  } as const;
-  return Object.freeze({ kind: kinds[circuit.family], class: transferInputClass(circuit) });
-}
-
-/** `E_max`, the same at every rail of a key since one circuit serves them. */
-export function maxEvidenceBlocks(key: AuditKey): number {
-  return Math.ceil(evidenceLen(key, key.class) / STREAM_BLOCK_LEN);
-}
-
-/** `R`. */
-export function recordBlocks(key: AuditKey): number {
-  const longest = key.kind === "confidential" ? EXIT_RECORD_LEN : ANONYMOUS_RECORD_LEN;
-  return Math.ceil(longest / STREAM_BLOCK_LEN);
-}
-
-/** `R0`. */
-export function firstRecordCounter(key: AuditKey): number {
-  return STREAM_FIRST_COUNTER + ENVELOPE_KEY_BLOCKS + maxEvidenceBlocks(key);
-}
-
-/** Every length of one transfer's ring ciphertexts, a frame of any other length is refused, Rust `AuditStreamLayout`. */
-export interface AuditStreamLayout {
-  readonly key: AuditKey;
-  readonly keyEscrow: boolean;
-  /** `n`, the frame's nullifier count, never the key capacity or a private live count. */
-  readonly inputs: number;
-  /** `N`, the key's output capacity. */
-  readonly capacity: number;
-  /** `m`, the published slots. */
-  readonly outputs: number;
-  /** Bit `i` set when slot `i` exits. */
-  readonly exits: bigint;
-  /** Bit `i` set when slot `i` is anonymous change. */
-  readonly change: bigint;
+/** One key's envelope, every rail of a key shares one circuit, Rust `AuditKey`. */
+export interface AuditKey {
+  /** The widest published input count, also `S`. */
+  readonly class: number;
+  /** Default bits and one evidence entry per published input. */
+  readonly entry: boolean;
 }
 
 /** One stretch of the auditor keystream, no counter serves two regions, Rust `StreamRegion`. */
@@ -132,9 +65,22 @@ export interface AuditStreamRegion {
   readonly length: number;
 }
 
-/** Refuses an input count off the key, a slot count off the capacity and a flag past the slots. */
+/** Every length of one transfer's auditor stream, a frame of any other length is refused, Rust `AuditStreamLayout`. */
+export interface AuditStreamLayout {
+  readonly key: AuditKey;
+  /** `n`, the frame's nullifier count, never the key capacity or a private live count. */
+  readonly inputs: number;
+  /** `m`, the published slots. */
+  readonly outputs: number;
+  /** `N`, the key's output capacity, records and tails span every slot of it. */
+  readonly capacity: number;
+  /** The statement's bit, one tail per published slot. */
+  readonly hasData: boolean;
+}
+
+/** Refuses an input count off the key and an output count off the capacity. */
 export function checkedStreamLayout(layout: AuditStreamLayout): AuditStreamLayout {
-  const { key, inputs, capacity, outputs, exits, change } = layout;
+  const { key, inputs, outputs, capacity } = layout;
   const counted =
     Number.isInteger(inputs) &&
     inputs >= 1 &&
@@ -143,96 +89,90 @@ export function checkedStreamLayout(layout: AuditStreamLayout): AuditStreamLayou
     Number.isInteger(outputs) &&
     outputs >= 1 &&
     outputs <= capacity;
-  if (
-    !counted ||
-    typeof layout.keyEscrow !== "boolean" ||
-    !slotBits(exits, outputs) ||
-    !slotBits(change, outputs) ||
-    (exits & change) !== 0n ||
-    !CHANGE_PREFIXES.includes(change)
-  )
-    throw shapeError("layout");
+  if (!counted || typeof layout.hasData !== "boolean") throw shapeError("layout");
   return layout;
 }
 
-/** Slots at or past `n` stay absent from the evidence. */
-export function evidenceBytes(layout: AuditStreamLayout): number {
-  return evidenceLen(layout.key, layout.inputs);
+function headLen(key: AuditKey): number {
+  return ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + (key.entry ? DEFAULT_INPUT_BITS_LEN : 0);
 }
 
+function entryLen(key: AuditKey): number {
+  return key.entry ? ENTRY_INPUT_LEN : 0;
+}
+
+/** `E`, the same at every published input count, no record's counter moves. */
+export function envelopeBlocks(key: AuditKey): number {
+  return Math.ceil((headLen(key) + entryLen(key) * key.class) / STREAM_BLOCK_LEN);
+}
+
+/** `R0`. */
+export function firstRecordCounter(key: AuditKey): number {
+  return STREAM_FIRST_COUNTER + envelopeBlocks(key);
+}
+
+/** `T0`, past every record of `N` slots. */
+export function firstTailCounter(layout: Pick<AuditStreamLayout, "key" | "capacity">): number {
+  return firstRecordCounter(layout.key) + layout.capacity * RECORD_BLOCKS;
+}
+
+/** Slots at or past `n` stay absent from the evidence. */
 export function envelopeRegion(layout: AuditStreamLayout): AuditStreamRegion {
   return Object.freeze({
     startCounter: STREAM_FIRST_COUNTER,
-    maxBlocks: ENVELOPE_KEY_BLOCKS + maxEvidenceBlocks(layout.key),
-    length: ENVELOPE_KEY_LEN + evidenceBytes(layout),
+    maxBlocks: envelopeBlocks(layout.key),
+    length: headLen(layout.key) + entryLen(layout.key) * layout.inputs,
   });
 }
 
 /** Its counter fixed by the slot index alone, omission moves no region. */
 export function recordRegion(layout: AuditStreamLayout, slot: number): AuditStreamRegion {
-  const blocks = recordBlocks(layout.key);
   return Object.freeze({
-    startCounter: firstRecordCounter(layout.key) + slot * blocks,
-    maxBlocks: blocks,
+    startCounter: firstRecordCounter(layout.key) + slot * RECORD_BLOCKS,
+    maxBlocks: RECORD_BLOCKS,
     length: recordLen(layout, slot),
   });
 }
 
-export function isExitSlot(layout: Pick<AuditStreamLayout, "exits">, slot: number): boolean {
-  return ((layout.exits >> BigInt(slot)) & 1n) === 1n;
+/** Transmits nothing past the outputs or while `hasData` is clear. */
+export function tailRegion(layout: AuditStreamLayout, slot: number): AuditStreamRegion {
+  return Object.freeze({
+    startCounter: firstTailCounter(layout) + slot * TAIL_BLOCKS,
+    maxBlocks: TAIL_BLOCKS,
+    length: tailLen(layout, slot),
+  });
 }
 
-export function isChangeSlot(layout: Pick<AuditStreamLayout, "change">, slot: number): boolean {
-  return ((layout.change >> BigInt(slot)) & 1n) === 1n;
+export function recordLen(layout: Pick<AuditStreamLayout, "outputs">, slot: number): number {
+  return slot < layout.outputs ? AUDIT_RECORD_LEN : 0;
 }
 
-export function deliveredBodyLen(keyEscrow: boolean): number {
-  return keyEscrow ? ESCROWED_DELIVERED_BODY_LEN : DELIVERED_BODY_LEN;
+export function tailLen(
+  layout: Pick<AuditStreamLayout, "outputs" | "hasData">,
+  slot: number,
+): number {
+  return layout.hasData && slot < layout.outputs ? DATA_TAIL_LEN : 0;
 }
 
-export function exitRecordLen(keyEscrow: boolean): number {
-  return keyEscrow ? ESCROWED_EXIT_RECORD_LEN : EXIT_RECORD_LEN;
+export function recordsLen(layout: Pick<AuditStreamLayout, "outputs">): number {
+  return AUDIT_RECORD_LEN * layout.outputs;
 }
 
-/** Zero past the outputs and on a delivered slot. */
-export function recordLen(layout: AuditStreamLayout, slot: number): number {
-  if (slot >= layout.outputs) return 0;
-  if (isExitSlot(layout, slot)) return exitRecordLen(layout.keyEscrow);
-  return layout.key.kind === "confidential" ? 0 : ANONYMOUS_RECORD_LEN;
+export function tailsLen(layout: Pick<AuditStreamLayout, "outputs" | "hasData">): number {
+  return layout.hasData ? DATA_TAIL_LEN * layout.outputs : 0;
 }
 
-/** The one ring disclosure ciphertext of `slot`, zero past the outputs. */
-export function ciphertextLen(layout: AuditStreamLayout, slot: number): number {
-  if (slot >= layout.outputs) return 0;
-  const record = recordLen(layout, slot);
-  return record === 0 ? deliveredBodyLen(layout.keyEscrow) : record;
-}
-
-export function recordSlots(layout: AuditStreamLayout): readonly number[] {
-  return Array.from({ length: layout.outputs }, (_, slot) => slot).filter(
-    (slot) => recordLen(layout, slot) !== 0,
-  );
-}
-
-/** `0x04 ‖ eph_u ‖ envelope_ct ‖ record_ct...`. */
+/** `0x04 ‖ eph_u ‖ envelope_ct ‖ record_ct... ‖ tail_ct...`. */
 export function auditorMessageLen(layout: AuditStreamLayout): number {
-  return recordSlots(layout).reduce(
-    (total, slot) => total + recordLen(layout, slot),
-    TAGGED_KEY_LEN + envelopeRegion(layout).length,
-  );
+  return TAGGED_KEY_LEN + envelopeRegion(layout).length + recordsLen(layout) + tailsLen(layout);
 }
 
-/** The bundle holds two change cells, change is a prefix of at most two slots. */
-const CHANGE_PREFIXES: readonly bigint[] = Object.freeze([0n, 1n, 3n]);
-
-function slotBits(bits: bigint, slots: number): boolean {
-  return typeof bits === "bigint" && bits >= 0n && bits >> BigInt(slots) === 0n;
-}
-
-function evidenceLen(key: AuditKey, count: number): number {
-  return key.kind === "entry"
-    ? ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * count
-    : INPUT_HASH_LEN * count;
+/** The blocks a reader decrypts, a clear `hasData` reaches no tail. */
+export function capacityBlocks(
+  layout: Pick<AuditStreamLayout, "key" | "capacity" | "hasData">,
+): number {
+  const tails = layout.hasData ? layout.capacity * TAIL_BLOCKS : 0;
+  return envelopeBlocks(layout.key) + layout.capacity * RECORD_BLOCKS + tails;
 }
 
 function shapeError(name: string): InterfaceError {

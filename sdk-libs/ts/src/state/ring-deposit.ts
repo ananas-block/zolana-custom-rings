@@ -1,5 +1,5 @@
 /** Ring deposits opened by the wallet they were sealed to, Rust `zolana_ring_client::deposit`. */
-import { equalBytes, isZero, readOutputData } from "@heliuslabs/zolana/internal";
+import { equalBytes, isZero, readOutputData, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import {
@@ -27,6 +27,8 @@ export interface RingDepositSlot {
 
 export interface RingDepositNote {
   readonly utxo: Utxo;
+  /** The registered key or the zero key, whichever rebuilt. */
+  readonly nullifierPublicKey: Bytes32;
   readonly dataHash?: Bytes32;
   readonly ringDataHash?: Bytes32;
 }
@@ -77,15 +79,19 @@ export async function openRingDeposit(
         (output.dataHash === undefined || isZero(output.dataHash))
       )
         return undefined;
-      const hash = opened.hash(
+      const nullifierPublicKey = [
         input.owner.nullifierPublicKey,
-        treeId,
-        output.dataHash,
-        ringDataHash,
+        ZERO_NULLIFIER_PK as Bytes32,
+      ].find((candidate) =>
+        equalBytes(
+          opened.hash(candidate, treeId, output.dataHash, ringDataHash),
+          slot.outputContext.hash,
+        ),
       );
-      if (!equalBytes(hash, slot.outputContext.hash)) return undefined;
+      if (nullifierPublicKey === undefined) return undefined;
       return Object.freeze({
         utxo: opened,
+        nullifierPublicKey,
         ...(output.dataHash === undefined ? {} : { dataHash: output.dataHash }),
         ...(ringDataHash === undefined ? {} : { ringDataHash }),
       });

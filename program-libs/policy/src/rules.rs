@@ -16,8 +16,8 @@ pub struct RecordLists {
     pub own: u64,
     /// Read only for a list a curator serves.
     pub curator: u64,
-    /// Read only for an owner row's list a private source serves.
-    pub private: u64,
+    /// Zero with no tracking row.
+    pub salted: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +69,7 @@ impl RuleTable {
         transfer: &TransferSubjects<'_>,
     ) -> Result<(), RuleRefusal> {
         let foreign = foreign_lists(sources);
-        let private = sources.private().owner_lists;
+        let salted = sources.salted();
         let payments: Vec<DebitOutput> = transfer
             .outputs
             .iter()
@@ -88,7 +88,7 @@ impl RuleTable {
                     payments: &payments,
                 },
                 foreign,
-                private,
+                salted,
                 index,
                 rule,
             };
@@ -117,10 +117,10 @@ impl fmt::Display for TransferSubject {
 
 impl RecordLists {
     /// List `i + 1` reads the curator record when a curator serves it, else the own record.
-    fn on(self, foreign: ListSet, private: ListSet) -> ListSet {
-        let (foreign, private) = (foreign.record_bits(), private.record_bits());
+    fn on(self, foreign: ListSet, salted: ListSet) -> ListSet {
+        let (foreign, salted) = (foreign.record_bits(), salted.record_bits());
         let public = (self.own & !foreign) | (self.curator & foreign);
-        ListSet::from_bits(((public & !private) | (self.private & private)) as u8)
+        ListSet::from_bits(((public & !salted) | (self.salted & salted)) as u8)
     }
 }
 
@@ -128,7 +128,7 @@ struct RuleCheck<'a> {
     outputs: &'a [OutputSubjects],
     scope: GuardScope<'a>,
     foreign: ListSet,
-    private: ListSet,
+    salted: ListSet,
     index: usize,
     rule: &'a Rule,
 }
@@ -160,11 +160,11 @@ impl RuleCheck<'_> {
     }
 
     fn listed(&self, subject: TransferSubject, records: RecordLists) -> Result<(), RuleRefusal> {
-        let private = match subject {
+        let salted = match subject {
             TransferSubject::Asset(_) => ListSet::EMPTY,
-            TransferSubject::Sender | TransferSubject::Owner(_) => self.private,
+            TransferSubject::Sender | TransferSubject::Owner(_) => self.salted,
         };
-        if holds(self.rule, records.on(self.foreign, private)) {
+        if holds(self.rule, records.on(self.foreign, salted)) {
             return Ok(());
         }
         Err(RuleRefusal::Lists {
@@ -193,18 +193,16 @@ fn foreign_lists(sources: &SourceMap) -> ListSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DebitInput, ListId, MintPolicy, PrivateSource, RuleTableBuilder};
+    use crate::{DebitInput, ListId, MintPolicy, RuleTableBuilder};
 
     const OWNER: [u8; 32] = [1; 32];
     const ASSET: [u8; 32] = [2; 32];
     const BLOCK: u64 = ListId::Block.record_bit();
+    const PRIVATE_BLOCK: u64 = ListId::PrivateBlock.record_bit();
 
     fn admit(table: RuleTableBuilder, lists: RecordLists) -> Result<(), RuleRefusal> {
-        let private = PrivateSource::new(ListSet::single(ListId::Block), [7; 32]).unwrap();
-        let sources = SourceMap::new(&[(ListId::Block, [0; 32])])
-            .unwrap()
-            .with_private(private)
-            .unwrap();
+        let sources =
+            SourceMap::new(&[(ListId::Block, [0; 32]), (ListId::PrivateBlock, [0; 32])]).unwrap();
         let outputs = [OutputSubjects {
             ring: true,
             owner: OWNER,
@@ -225,21 +223,55 @@ mod tests {
         )
     }
 
+    fn listed(public: bool, salted: bool, enrolled: bool) -> RecordLists {
+        RecordLists {
+            own: if public { BLOCK } else { 0 },
+            curator: 0,
+            salted: if salted && enrolled { PRIVATE_BLOCK } else { 0 },
+        }
+    }
+
     #[test]
-    fn an_owner_row_reads_the_private_bit_and_an_asset_row_the_public_one() {
-        let owner = RuleTable::builder().rule(Rule::forbid(Subject::OutputOwner, ListId::Block));
-        let asset = RuleTable::builder().rule(Rule::forbid(Subject::Asset, ListId::Block));
-        let private_only = RecordLists {
-            private: BLOCK,
+    fn two_deny_rules_hold_each_owner_to_both_lists_before_and_after_enrolling() {
+        let both = ListSet::of(&[ListId::Block, ListId::PrivateBlock]);
+        let each = || RuleTable::builder().forbid_each(Subject::OutputOwner, both);
+        for (public, salted, before, after) in [
+            (false, false, true, true),
+            (true, false, false, false),
+            (false, true, true, false),
+            (true, true, false, false),
+        ] {
+            assert_eq!(admit(each(), listed(public, salted, false)).is_ok(), before);
+            assert_eq!(admit(each(), listed(public, salted, true)).is_ok(), after);
+        }
+    }
+
+    #[test]
+    fn one_rule_over_both_lists_admits_an_owner_off_either() {
+        let both = ListSet::of(&[ListId::Block, ListId::PrivateBlock]);
+        let one =
+            || RuleTable::builder().rule(Rule::forbid_only_on_all(Subject::OutputOwner, both));
+        assert!(admit(one(), listed(true, false, true)).is_ok());
+        assert!(admit(one(), listed(false, true, true)).is_ok());
+        assert!(admit(one(), listed(true, true, true)).is_err());
+    }
+
+    #[test]
+    fn an_owner_row_reads_the_salted_bit_and_an_asset_row_the_public_one() {
+        let owner =
+            RuleTable::builder().rule(Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock));
+        let asset = RuleTable::builder().rule(Rule::forbid(Subject::Asset, ListId::PrivateBlock));
+        let salted_only = RecordLists {
+            salted: PRIVATE_BLOCK,
             ..RecordLists::default()
         };
         let public_only = RecordLists {
-            own: BLOCK,
+            own: PRIVATE_BLOCK,
             ..RecordLists::default()
         };
-        assert!(admit(owner, private_only).is_err());
+        assert!(admit(owner, salted_only).is_err());
         assert!(admit(owner, public_only).is_ok());
-        assert!(admit(asset, private_only).is_ok());
+        assert!(admit(asset, salted_only).is_ok());
         assert!(admit(asset, public_only).is_err());
     }
 }

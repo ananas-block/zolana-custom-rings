@@ -1,4 +1,4 @@
-//! The 144 byte record a tag 57 merge seals to its auditor, mirrored by Go `prover/circuits/merge.go`.
+//! Tag 57 record, mirrored by Go `prover/circuits/merge.go`.
 
 use custom_ring_interface::{
     domain::MERGE_RECORD_LABEL, OpeningRecord, OPENING_RECORD_LEN, STREAM_FIRST_COUNTER,
@@ -21,12 +21,12 @@ pub struct SealedMergeOpening {
 }
 
 impl MergeRecordSeal {
-    /// A fresh ephemeral key per call, a reused one repeats the stream under another record.
+    /// A reused ephemeral key repeats the stream under another record.
     pub fn seal(self, auditor_pk: &X25519Pubkey) -> Result<SealedMergeOpening> {
         self.seal_with(X25519Keypair::new(), auditor_pk)
     }
 
-    /// Pins a vector, every build seals through [`Self::seal`].
+    /// Vectors only.
     #[doc(hidden)]
     pub fn seal_with(
         self,
@@ -44,7 +44,7 @@ impl MergeRecordSeal {
     }
 }
 
-/// The cipher is unauthenticated, the caller rebuilds the output from the record.
+/// Unauthenticated, the caller rebuilds the output from the record.
 pub fn open_merge_record(
     auditor: &X25519Keypair,
     eph_pk: &X25519Pubkey,

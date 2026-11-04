@@ -13,20 +13,17 @@ export {
   ringProvingKey,
 } from "../protocol/proof/proving-keys.js";
 export type { RingKeyCircuit } from "../protocol/proof/proving-keys.js";
-export { MERGE_WIDTHS } from "../protocol/codec/ring-disclosure-layout.js";
 export { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
-  AnonymousSlotProofInputs,
-  AnonymousTransferProofRequest,
+  ApplyEnrollmentsProofRequest,
   ApplyRecordsProofRequest,
   AuditEnvelopeProofInputs,
-  ConfidentialTransferProofRequest,
-  DeliveredSlotProofInputs,
+  TransferProofRequest,
   DepositProofRequest,
+  EntryOpeningProofInput,
   MergeProofRequest,
-  MergeInputOpening,
-  OutflowLimitProofInput,
+  OutputOpeningProofInput,
   PolicyProofInputs,
   PolicySourceProofInput,
   PolicySubjectEntry,
@@ -36,7 +33,6 @@ export type {
   RingSlotOpening,
   TransferProofInputs,
 } from "../rpc/prover/ring.js";
-export type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
 export type {
   AnonymousRingTransactProver,
   ProvenAnonymousRingTransact,
@@ -51,6 +47,7 @@ export type {
   RingSubmissionPending,
   RingSubmissionStatus,
   RingSubmissionTransport,
+  TrackingReader,
   StorageMemberOpenings,
   StorageMemberPage,
   StorageOpeningsRequest,

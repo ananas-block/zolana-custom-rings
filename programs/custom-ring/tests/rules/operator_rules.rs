@@ -393,18 +393,16 @@ fn policy_writes_need_a_policy_ring_and_a_foreign_curator() {
     let mut own = allow_list_table(Vec::new());
     own.sources[0].source = 1;
     let send = |ring: &mut Ring, instruction| ring.role_send(RingRole::Policy, instruction);
-    refused(
-        send(
-            &mut ring,
-            UpdatePolicyIx {
-                authority: policy,
-                update: UpdatePolicyIxData::Rules(own),
-                trailing: &[RECORDS],
-            }
-            .instruction(),
-        ),
-        CustomRingError::InvalidSource,
-    );
+    send(
+        &mut ring,
+        UpdatePolicyIx {
+            authority: policy,
+            update: UpdatePolicyIxData::Rules(own),
+            trailing: &[RECORDS],
+        }
+        .instruction(),
+    )
+    .expect("two pools read one tree");
     let mut unreferenced = allow_list_table(Vec::new());
     unreferenced.sources[0].list_id = ListId::Block as u8;
     refused(

@@ -66,13 +66,16 @@ const (
 	DefaultInputBitsLen = 8
 	fieldLen            = 32
 	amountLen           = 8
-	recordHeadLen       = 8
-	RecordLen           = recordHeadLen + amountLen + 3*fieldLen
-	TailLen             = 2 * fieldLen
+	kindLen             = 1
+	// RecordLen is the bytes a transfer frame carries, mirrored by AUDIT_RECORD_LEN.
+	RecordLen = kindLen + amountLen + 3*fieldLen
+	TailLen   = 2 * fieldLen
 	// EntryInputLen mirrors ENTRY_INPUT_LEN.
 	EntryInputLen = amountLen + 6*fieldLen
-	RecordBlocks  = RecordLen / streamBlockLen
-	TailBlocks    = TailLen / streamBlockLen
+	RecordBlocks  = (RecordLen + streamBlockLen - 1) / streamBlockLen
+	// RecordStride mirrors RECORD_STRIDE, slot i keeps its counter and a transfer frame omits the padding.
+	RecordStride = RecordBlocks * streamBlockLen
+	TailBlocks   = TailLen / streamBlockLen
 )
 
 func (s StreamShape) Ranges() StreamRanges {
@@ -150,7 +153,7 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, shape
 	plaintext := slices.Concat(w.TxViewingSk[:], evidence.head, slices.Concat(evidence.entries...))
 	// The envelope's padding ends on the block before R0, the longest evidence never reaches a record's counter.
 	plaintext = append(plaintext, shared.Zeros(ranges.EnvelopeBlocks()*streamBlockLen-len(plaintext))...)
-	// A record fills exactly its blocks, a counter serving two regions reveals the XOR of their plaintexts.
+	// A record holds its blocks alone, a counter serving two regions reveals the XOR of their plaintexts.
 	plaintext = slices.Concat(plaintext, slices.Concat(opened.records...), slices.Concat(opened.tails...))
 	// A plaintext off its ranges moves every record off the counters the readers use.
 	if len(plaintext) != ranges.CapacityBlocks()*streamBlockLen {
@@ -162,7 +165,7 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, shape
 		ranges:      ranges,
 		sealed:      sealed,
 		digest:      countedDigest(api, sealed.Ciphertext, EnvelopeKeyLen+len(evidence.head), ranges.entryLen(), spent.Count),
-		RecordChain: regionChain(api, sealed.Ciphertext, ranges.RecordOffset(0), RecordLen, opened.Count),
+		RecordChain: regionChain(api, sealed.Ciphertext, ranges.RecordOffset(0), RecordStride, RecordLen, opened.Count),
 		TailChain:   tailChain(api, sealed.Ciphertext, ranges, opened),
 		RealInputs:  evidence.realInputs,
 		NoSpend:     api.IsZero(evidence.realInputs),
@@ -170,10 +173,10 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, shape
 }
 
 // regionChain is HashChain4(hash_bytes(region_i)), zero past the published count.
-func regionChain(api frontend.API, ciphertext []frontend.Variable, start, length int, count ringgadget.Count) frontend.Variable {
+func regionChain(api frontend.API, ciphertext []frontend.Variable, start, stride, length int, count ringgadget.Count) frontend.Variable {
 	hashes := make([]frontend.Variable, len(count.Active))
 	for i, active := range count.Active {
-		offset := start + i*length
+		offset := start + i*stride
 		hashes[i] = api.Mul(active, gadget.HashBoundedBytes(api, ciphertext[offset:offset+length]))
 	}
 	return gadget.HashChain4(api, hashes)
@@ -184,7 +187,7 @@ func tailChain(api frontend.API, ciphertext []frontend.Variable, ranges StreamRa
 		return 0
 	}
 	// A clear has_data transmits no tail, the program binds zero.
-	return api.Mul(opened.hasData, regionChain(api, ciphertext, ranges.TailOffset(0), TailLen, opened.Count))
+	return api.Mul(opened.hasData, regionChain(api, ciphertext, ranges.TailOffset(0), TailLen, TailLen, opened.Count))
 }
 
 // countedDigest mirrors ciphertext_digest in program-libs/interface/src/proof/statement.rs over the head and the count's entries.

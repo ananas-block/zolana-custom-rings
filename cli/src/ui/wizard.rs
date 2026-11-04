@@ -37,9 +37,10 @@ pub struct Answers {
     pub policy: Option<PolicySpec>,
 }
 
-const POLICY_OPTIONS: [&str; 10] = [
+const POLICY_OPTIONS: [&str; 11] = [
     "participant allowlist",
     "recipient blocklist",
+    "recipient public and private blocklist",
     "sender freeze",
     "asset allowlist",
     "blocklist with approval exception",
@@ -235,6 +236,10 @@ impl Wizard<'_> {
             let rules = match POLICY_OPTIONS[picked] {
                 "participant allowlist" => Some(participant_allowlist()),
                 "recipient blocklist" => Some(vec![forbid(SubjectName::OutputOwner, "block")]),
+                "recipient public and private blocklist" => Some(forbid_each(
+                    SubjectName::OutputOwner,
+                    &["block", "private-block"],
+                )),
                 "sender freeze" => Some(vec![forbid(SubjectName::Sender, "frozen")]),
                 "asset allowlist" => Some(vec![self.asset_rule(target, false)?]),
                 "blocklist with approval exception" => Some(vec![simple_rule(
@@ -492,6 +497,11 @@ fn forbid(subject: SubjectName, list: &str) -> RuleSpec {
     simple_rule(subject, SourceSpec::Forbid(named_list(list)))
 }
 
+/// One rule per list, one rule over both admits an owner off either.
+fn forbid_each(subject: SubjectName, lists: &[&str]) -> Vec<RuleSpec> {
+    lists.iter().map(|list| forbid(subject, list)).collect()
+}
+
 fn participant_allowlist() -> Vec<RuleSpec> {
     vec![
         require(SubjectName::Sender, "allow"),
@@ -502,7 +512,10 @@ fn participant_allowlist() -> Vec<RuleSpec> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use zolana_ring_policy::{ListId, ListSet, Rule, RuleTable, Subject};
+    use zolana_ring_policy::{
+        ListId, ListSet, MintPolicy, OutputSubjects, RecordLists, Rule, RuleTable, SourceMap,
+        Subject, TransferSubjects,
+    };
 
     use super::*;
     use crate::{
@@ -680,6 +693,56 @@ pub(crate) mod tests {
                 .rule(Rule::forbid(Subject::OutputOwner, ListId::Block))
                 .build()
         );
+    }
+
+    #[test]
+    fn a_public_and_private_blocklist_refuses_an_owner_on_either_list() {
+        let answers = run(script(&[
+            Answer::from("recipient public and private blocklist"),
+            Answer::from("finish"),
+            Answer::from(OWN_ENTRIES),
+            Answer::from(OWN_ENTRIES),
+        ]))
+        .expect("wizard");
+        let table = answers
+            .policy
+            .expect("policy tier")
+            .compile(Target::Localnet)
+            .expect("compiles")
+            .rules;
+        let both = ListSet::of(&[ListId::Block, ListId::PrivateBlock]);
+        assert_eq!(
+            table,
+            RuleTable::builder()
+                .forbid_each(Subject::OutputOwner, both)
+                .build()
+        );
+        let sources =
+            SourceMap::new(&[(ListId::Block, [0; 32]), (ListId::PrivateBlock, [0; 32])]).unwrap();
+        let admit = |own: u64| {
+            let lists = RecordLists {
+                own,
+                ..RecordLists::default()
+            };
+            table.admit(
+                &sources,
+                &TransferSubjects {
+                    sender: RecordLists::default(),
+                    ring_inputs: &[],
+                    outputs: &[OutputSubjects {
+                        ring: true,
+                        owner: [1; 32],
+                        asset: [2; 32],
+                        amount: 1,
+                        owner_lists: lists,
+                        asset_lists: RecordLists::default(),
+                        mint_policy: MintPolicy::EMPTY,
+                    }],
+                },
+            )
+        };
+        assert!(admit(ListId::Block.record_bit()).is_err());
+        assert!(admit(0).is_ok());
     }
 
     #[test]

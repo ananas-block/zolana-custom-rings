@@ -202,6 +202,7 @@ async function addressOf(fixture: Fixture, owner: ShieldedKeypair): Promise<Ring
   return new RingAddress({
     recipient: owner.shieldedAddress(),
     ringProgramId: fixture.ringProgramId,
+    listSalt: new Uint8Array(32).fill(1) as Bytes32,
   });
 }
 
@@ -454,6 +455,7 @@ describe("anonymous ring payment", () => {
         X25519PublicKey.fromBytes(Uint8Array.of(4, ...new Uint8Array(32))),
       ),
       ringProgramId: fixture.ringProgramId,
+      listSalt: new Uint8Array(32).fill(1) as Bytes32,
     });
     await expect(
       rail({ fixture, sender, transfer: spend(fixture, sender) })
@@ -487,6 +489,7 @@ describe("anonymous ring payment", () => {
       transactionKeys: (requests) => track("transactionKeys", local.transactionKeys(requests)),
       ringDeliverySecrets: (requests) =>
         track("ringDeliverySecrets", local.ringDeliverySecrets(requests)),
+      mergeSeeds: (requests) => track("mergeSeeds", local.mergeSeeds(requests)),
       ringTagMatches: (frames) => track("ringTagMatches", local.ringTagMatches(frames)),
       viewTags: (requests) => track("viewTags", local.viewTags(requests)),
       prove: (inputs, context) => track("prove", local.prove(inputs, context)),
@@ -957,6 +960,7 @@ describe("anonymous ring exits and entries", () => {
     const unenrolled = new RingAddress({
       recipient: bob.shieldedAddress(),
       ringProgramId: fixture.ringProgramId,
+      listSalt: new Uint8Array(32).fill(1) as Bytes32,
     });
     const pay = (enrolled: boolean, to: RingAddress) =>
       rail({ fixture, sender, transfer: spend(fixture, sender), enrolled })

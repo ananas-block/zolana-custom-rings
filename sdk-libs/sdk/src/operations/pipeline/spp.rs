@@ -28,6 +28,7 @@ pub(super) enum SppRail<'a> {
     /// SPP's anonymous rail, the hidden owner of the anonymous ring or the in-proof owner of a confidential one.
     Anonymous(OwnerAuthorization<'a>),
     Delegate,
+    DelegateExit,
 }
 
 pub(super) struct ProvenSpp {
@@ -63,6 +64,7 @@ pub(super) struct CompleteSpp {
 enum SppInputs {
     Ring(TransferInputs),
     Authority(TransferInputs),
+    AuthorityExit(TransferInputs),
     Anonymous {
         inputs: Box<AnonymousEddsaTransferInputs>,
         default_owner_tag: Option<[u8; 32]>,
@@ -93,6 +95,7 @@ impl SppWitness<'_> {
                     owner,
                 },
                 SppRail::Delegate => IndexedTransferRail::RingAuthority(self.ring),
+                SppRail::DelegateExit => IndexedTransferRail::RingAuthorityExit(self.ring),
                 SppRail::OwnerSigners => IndexedTransferRail::Ring(self.ring),
             };
             let prepared = IndexedTransferPreparation {
@@ -166,8 +169,8 @@ impl SppWitness<'_> {
                     private_tx_hash: result.private_tx_hash,
                 }
             }
-            SppRail::Delegate => {
-                let result = RingAuthorityProver {
+            SppRail::Delegate | SppRail::DelegateExit => {
+                let prover = RingAuthorityProver {
                     inputs: spends,
                     outputs: inputs.output_utxos.clone(),
                     blinding_seed: inputs.blinding_seed,
@@ -178,10 +181,17 @@ impl SppWitness<'_> {
                     allow_dummy_inputs,
                     ring_program_id: Some(self.ring),
                     shape,
-                }
-                .build()?;
+                };
+                let exit = matches!(self.rail, SppRail::DelegateExit);
+                let result = match exit {
+                    true => prover.build_exit()?,
+                    false => prover.build()?,
+                };
                 CompleteSpp {
-                    inputs: SppInputs::Authority(result.inputs),
+                    inputs: match exit {
+                        true => SppInputs::AuthorityExit(result.inputs),
+                        false => SppInputs::Authority(result.inputs),
+                    },
                     nullifiers: result.nullifiers,
                     input_tree_indexes: result.input_tree_indexes,
                     tree_contexts: result.tree_contexts,
@@ -190,7 +200,9 @@ impl SppWitness<'_> {
             }
         };
         let transfer = match &mut complete.inputs {
-            SppInputs::Ring(inputs) | SppInputs::Authority(inputs) => inputs,
+            SppInputs::Ring(inputs)
+            | SppInputs::Authority(inputs)
+            | SppInputs::AuthorityExit(inputs) => inputs,
             SppInputs::Anonymous { inputs, .. } => &mut inputs.transfer,
         };
         self.authority.complete_inputs(&mut transfer.inputs)?;
@@ -255,6 +267,10 @@ impl Spp {
                     SppInputs::Authority(inputs) => {
                         (client.prover().prove_ring_authority(inputs).await?, None)
                     }
+                    SppInputs::AuthorityExit(inputs) => (
+                        client.prover().prove_ring_authority_exit(inputs).await?,
+                        None,
+                    ),
                     SppInputs::Anonymous {
                         inputs,
                         default_owner_tag,

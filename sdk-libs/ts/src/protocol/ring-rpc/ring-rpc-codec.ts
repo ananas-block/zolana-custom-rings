@@ -214,24 +214,6 @@ function encodeRecordUpdateEntry(entry: RecordUpdateEntry, path: string): WireOb
         mask: toU64(entry.mask, `${path}.mask`),
         value: toU64(entry.value, `${path}.value`),
       };
-    case "escrow":
-      return {
-        kind: entry.kind,
-        member: checkedHash(entry.member, `${path}.member`),
-        nullifierPk: checkedHash(entry.nullifierPk, `${path}.nullifierPk`),
-        ephPk: checkedBase64(entry.ephPk, `${path}.ephPk`),
-        ciphertext: checkedBase64(entry.ciphertext, `${path}.ciphertext`),
-        proof: checkedBase64(entry.proof, `${path}.proof`),
-      };
-    case "address":
-      return {
-        kind: entry.kind,
-        owner: checkedAddress(entry.owner, `${path}.owner`),
-        ringId: checkedHash(entry.ringId, `${path}.ringId`),
-        nullifierPk: checkedHash(entry.nullifierPk, `${path}.nullifierPk`),
-        viewingU: checkedHash(entry.viewingU, `${path}.viewingU`),
-        addressRevision: toU64(entry.addressRevision, `${path}.addressRevision`),
-      };
     case "walletGrant":
       if (entry.access !== "granted" && entry.access !== "revoked")
         return schemaFailure(

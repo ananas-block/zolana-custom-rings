@@ -273,7 +273,7 @@ impl RingScan {
         })
     }
 
-    /// Each transfer opens from its own frame, no earlier page is read.
+    /// Reads no earlier page.
     pub async fn audit<I: AsyncRpc, O: TransactionOrigin>(
         mut self,
         auditor: &X25519Keypair,

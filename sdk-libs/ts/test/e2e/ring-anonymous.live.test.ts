@@ -2,6 +2,8 @@
 import { generateKeyPairSigner, type KeyPairSigner } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
+
 import type { RuleTable } from "../../src/ring/advanced.js";
 import {
   AnonymousSync,
@@ -185,6 +187,7 @@ describe("anonymous ring", () => {
       const to = new RingAddress({
         recipient: recipient.keypair.shieldedAddress(),
         ringProgramId: ring.ringProgramId,
+        listSalt: new Uint8Array(32).fill(1) as Bytes32,
       });
       const signature = await pay(ring, sender, to);
       await expectAudited(ring, sender, signature);

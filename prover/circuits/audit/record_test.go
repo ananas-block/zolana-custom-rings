@@ -37,7 +37,7 @@ func TestSectionSolvesEveryKeyShape(t *testing.T) {
 // Each byte range of a record is sealed from its slot, a stream naming another value fails the binding.
 func TestEveryRecordFieldIsSealed(t *testing.T) {
 	s := ringaudit.NewSection(t, plainShape)
-	for name, offset := range map[string]int{"kind": 0, "reserved": 3, "amount": 15, "owner key": 16, "mint": 48, "nullifier key": 111} {
+	for name, offset := range map[string]int{"kind": 0, "amount": 8, "owner key": 9, "mint": 41, "nullifier key": 104} {
 		t.Run(name, func(t *testing.T) {
 			refuseSealed(t, s, func(p *ringaudit.Plaintexts) { p.Records[0][offset] ^= 1 })
 		})
@@ -53,7 +53,7 @@ func TestKindFollowsTheSlot(t *testing.T) {
 		"kind 1 on a dummy":          func(p *ringaudit.Plaintexts) { p.Records[dummy][0] = audit.KindRing },
 		"kind 2 on a ring slot":      func(p *ringaudit.Plaintexts) { p.Records[zeroKey][0] = audit.KindExit },
 		"kind 1 on an exit":          func(p *ringaudit.Plaintexts) { p.Records[exit][0] = audit.KindRing },
-		"a dummy naming an owner":    func(p *ringaudit.Plaintexts) { p.Records[dummy][16] = 1 },
+		"a dummy naming an owner":    func(p *ringaudit.Plaintexts) { p.Records[dummy][9] = 1 },
 	} {
 		t.Run(name, func(t *testing.T) { refuseSealed(t, s, edit) })
 	}

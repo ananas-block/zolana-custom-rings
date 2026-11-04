@@ -218,7 +218,6 @@ fn labels() -> Vec<Value> {
     .collect()
 }
 
-/// `R0 + slot * R`, the block counts of the key each case names.
 fn record_counter(key: RecordKey, slot: u32) -> u32 {
     let (first, blocks) = match key {
         RecordKey::Commitment => (4 + 8, 7),
