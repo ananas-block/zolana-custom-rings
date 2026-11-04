@@ -1,7 +1,10 @@
 use custom_ring_interface::{
-    anonymous_exit_destination, cosign::CoSignRequirement, storage::StorageRegistry, CoSigner,
-    CustomRingError, LiveRoots, RingAccount, RingPolicy, RingRole, RootRead, SettlementAccount,
-    TokenAccountState, STORAGE_PROGRAM_ID,
+    anonymous_exit_destination,
+    cosign::{CoSignRequirement, MAX_CO_SIGNERS},
+    storage::StorageRegistry,
+    tracking::TrackingRegistry,
+    CoSigner, CustomRingError, LiveRoots, RingAccount, RingPolicy, RingRole, RootRead,
+    SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     account::{Ref, RefMut},
@@ -94,6 +97,16 @@ pub fn load_storage_registry(
     Ref::filter_map(data, StorageRegistry::from_data).map_err(|_| invalid.into())
 }
 
+/// Owner and discriminator alone, any creator can make one with a matching `ring_id`, a caller compares the address.
+fn load_tracking_registry(account: &AccountView) -> Result<Ref<'_, TrackingRegistry>, ProgramError> {
+    let invalid = CustomRingError::InvalidTrackingRegistry;
+    if !account.owned_by(&STORAGE_PROGRAM_ID) {
+        return Err(invalid.into());
+    }
+    let data = account.try_borrow().map_err(|_| invalid)?;
+    Ref::filter_map(data, TrackingRegistry::from_data).map_err(|_| invalid.into())
+}
+
 /// A registry fit to hold the ring's records, one own registry per ring, its ring id scopes every address.
 pub fn load_records_registry<'a>(
     program_id: &Address,
@@ -111,6 +124,7 @@ pub fn load_records_registry<'a>(
 pub struct RingRegistries<'a> {
     own: Option<Ref<'a, StorageRegistry>>,
     curator: Option<Ref<'a, StorageRegistry>>,
+    tracking: Ref<'a, TrackingRegistry>,
     pub len: usize,
 }
 
@@ -119,6 +133,7 @@ impl RingRegistries<'_> {
         LiveRoots {
             own: self.own.as_deref(),
             curator: self.curator.as_deref(),
+            tracking: &self.tracking,
             slot,
         }
     }
@@ -131,30 +146,35 @@ pub struct RegistrySlots<'a> {
 }
 
 impl RegistrySlots<'_> {
-    /// `UnboundRegistry` unless each account `next` yields is the bound one, the records first.
+    /// `UnboundRegistry` unless each account `next` yields is the bound one, in the order own, curator, tracking.
     #[inline(never)]
     pub fn load<'b>(
         self,
         mut next: impl FnMut() -> Result<&'b AccountView, ProgramError>,
     ) -> Result<RingRegistries<'b>, ProgramError> {
-        let mut registries = RingRegistries {
-            own: None,
-            curator: None,
-            len: 0,
-        };
-        for (index, bound) in self.ring.root_registries(self.read).enumerate() {
+        let mut len = 0;
+        let mut bound_account = |bound: &Address| {
             let account = next()?;
-            if account.address() != &bound {
-                return Err(CustomRingError::UnboundRegistry.into());
+            if account.address() != bound {
+                return Err(ProgramError::from(CustomRingError::UnboundRegistry));
             }
-            let registry = Some(load_storage_registry(account)?);
-            match index {
-                0 => registries.own = registry,
-                _ => registries.curator = registry,
-            }
-            registries.len = index + 1;
-        }
-        Ok(registries)
+            len += 1;
+            Ok(account)
+        };
+        let mut storage = |bound: Option<Address>| {
+            bound
+                .map(|bound| load_storage_registry(bound_account(&bound)?))
+                .transpose()
+        };
+        let own = storage(self.ring.own_registry(self.read))?;
+        let curator = storage(self.ring.curator_registry(self.read))?;
+        let tracking = load_tracking_registry(bound_account(&self.ring.tracking)?)?;
+        Ok(RingRegistries {
+            own,
+            curator,
+            tracking,
+            len,
+        })
     }
 }
 
@@ -184,7 +204,7 @@ pub fn check_funding_signer(
     Ok(funder)
 }
 
-/// The demanded co-signature's `[co_signer_record, co_signer]` slot.
+/// One carried co-signature's `[co_signer_record, co_signer]` slot.
 #[must_use]
 pub struct CoSignerSlot<'a> {
     pub program_id: &'a Address,
@@ -193,16 +213,59 @@ pub struct CoSignerSlot<'a> {
 }
 
 impl CoSignerSlot<'_> {
-    /// The record's signer, signing.
-    pub fn verify(self, requirement: CoSignRequirement) -> Result<Address, ProgramError> {
-        let expected = requirement.check(&*load::<CoSigner>(self.program_id, self.record)?)?;
+    /// The record's signer, signing, and what stays uncovered after it.
+    pub fn verify(
+        self,
+        requirement: CoSignRequirement,
+    ) -> Result<(CoSignRequirement, Address), ProgramError> {
+        let (rest, expected) =
+            requirement.cover(&*load::<CoSigner>(self.program_id, self.record)?)?;
         if !self.signer.is_signer() {
             return Err(CustomRingError::MissingCoSigner.into());
         }
         if self.signer.address() != &expected {
             return Err(CustomRingError::UnauthorizedCoSigner.into());
         }
-        Ok(expected)
+        Ok((rest, expected))
+    }
+}
+
+/// The carried co-signers, each covering a class no earlier one covered.
+#[derive(Default)]
+pub struct CoSigners {
+    signers: [Address; MAX_CO_SIGNERS],
+    len: usize,
+}
+
+impl CoSigners {
+    /// `pairs` holds the frame's count of slots, `MissingCoSigner` while a demanded class stays uncovered.
+    pub fn verify(
+        program_id: &Address,
+        pairs: &[AccountView],
+        mut requirement: CoSignRequirement,
+    ) -> Result<Self, ProgramError> {
+        let mut co_signers = Self::default();
+        for (pair, slot) in pairs.chunks_exact(2).zip(&mut co_signers.signers) {
+            let (rest, signer) = CoSignerSlot {
+                program_id,
+                record: &pair[0],
+                signer: &pair[1],
+            }
+            .verify(requirement)?;
+            requirement = rest;
+            *slot = signer;
+            co_signers.len += 1;
+        }
+        requirement.check_satisfied()?;
+        Ok(co_signers)
+    }
+
+    pub fn as_slice(&self) -> &[Address] {
+        &self.signers[..self.len]
+    }
+
+    pub fn contains(&self, address: &Address) -> bool {
+        self.as_slice().contains(address)
     }
 }
 

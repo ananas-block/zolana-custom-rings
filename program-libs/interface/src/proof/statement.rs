@@ -8,7 +8,9 @@ use spr_hasher::{
 use spr_interface::N_PUBLIC_SLOTS;
 
 use crate::{
+    anonymous_exit::ANONYMOUS_PARTIES,
     audit_stream::{ANONYMOUS_RECORD_LEN, ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN},
+    cosign::ApprovalMask,
     disclosure::{pack_disclosure, AuditLayout},
     domain,
     error::CustomRingError,
@@ -211,12 +213,16 @@ pub enum TransferFamily<'a> {
     },
     /// The anonymous rail, the head's layout picks the commitment or entry disclosure.
     Anonymous {
-        /// `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, zero when absent.
-        party_identities: &'a [[u8; 32]; 3],
+        /// `solana_owner_identity` of the payer, each co-signer and the withdrawal destination, zero when absent.
+        party_identities: &'a [[u8; 32]; ANONYMOUS_PARTIES],
         /// The ciphertext the sender reads back under its proven tag, the length follows `m`.
         sender: FramedSenderBundle<'a>,
         /// Every reply in slot order, `None` without reply metadata.
         replies: Option<&'a [u8]>,
+        /// No hidden sender, the owners are the published signer set.
+        public_owners: bool,
+        /// Set by the authority tag alone, a signer proof cannot claim the bypass.
+        delegate: bool,
     },
 }
 
@@ -225,9 +231,9 @@ pub enum TransferFamily<'a> {
 pub struct TransferStatement<'a> {
     pub head: AuditHead<'a>,
     pub family: TransferFamily<'a>,
-    /// Every public slot's gross withdrawal stays at or below its record's threshold.
-    pub exempt: bool,
-    pub approval_required: bool,
+    pub approval_mask: ApprovalMask,
+    /// Equals `R == 0`, drops the transfers class.
+    pub no_spend: bool,
     /// The `m` published slots.
     pub outputs: &'a [RingOutput<'a>],
     /// `N`, the key's output capacity.
@@ -243,6 +249,7 @@ pub struct TransferStatement<'a> {
     pub own_root: &'a [u8; 32],
     /// Zero without a curator source.
     pub curator_root: &'a [u8; 32],
+    pub tracking_root: &'a [u8; 32],
     pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
     /// SPP's signed nets, a withdrawal is `q - |amount|`.
     pub public_amounts: &'a [[u8; 32]; N_PUBLIC_SLOTS],
@@ -254,8 +261,8 @@ pub struct TransferStatement<'a> {
 impl TransferStatement<'_> {
     pub fn element_count(&self) -> usize {
         match self.family {
-            TransferFamily::Confidential { .. } => 41 + self.output_capacity,
-            TransferFamily::Anonymous { .. } => 45,
+            TransferFamily::Confidential { .. } => 42 + self.output_capacity,
+            TransferFamily::Anonymous { .. } => 42 + ANONYMOUS_PARTIES + 3,
         }
     }
 
@@ -263,15 +270,20 @@ impl TransferStatement<'_> {
         let capacity = self.output_capacity;
         let mut elements = Vec::with_capacity(self.element_count());
         elements.extend(self.head.elements_under(domain::TRANSFER_STATEMENT)?);
-        if let TransferFamily::Confidential { sender, .. } = self.family {
-            elements.extend([
+        match self.family {
+            TransferFamily::Confidential { sender, .. } => elements.extend([
                 bit(matches!(sender, ConfidentialSender::InProof(_))),
                 bit(matches!(sender, ConfidentialSender::Authority)),
-            ]);
+            ]),
+            TransferFamily::Anonymous {
+                public_owners,
+                delegate,
+                ..
+            } => elements.extend([bit(public_owners), bit(delegate)]),
         }
         elements.extend([
-            bit(self.exempt),
-            bit(self.approval_required),
+            right_align(&[self.approval_mask.bits()]),
+            bit(self.no_spend),
             count(self.outputs.len()),
             output_chain(self.outputs, capacity)?,
             output_ciphertext_chain(self.outputs, capacity)?,
@@ -304,6 +316,7 @@ impl TransferStatement<'_> {
             *self.policy_hash,
             *self.own_root,
             *self.curator_root,
+            *self.tracking_root,
         ]);
         if let TransferFamily::Confidential { recipients, .. } = self.family {
             elements.extend(

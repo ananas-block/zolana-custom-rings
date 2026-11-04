@@ -10,7 +10,7 @@ use zolana_ring_policy::{
 
 use crate::{
     error::CustomRingError,
-    storage::{Revision, StorageRegistry},
+    storage::{root_at, Revision, Root, StorageRegistry},
     TAGGED_X25519_KEY_LEN,
 };
 
@@ -190,13 +190,12 @@ impl RingRoles {
     }
 }
 
+/// Byte 1 is retired, never reuse it.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RingMode {
     Confidential = 0,
-    /// Escrows every output nullifier key in the registry.
-    ConfidentialEscrow = 1,
-    /// Hides the sender and discloses every opening to the auditor.
+    /// Hides the sender and the ring recipients.
     Anonymous = 2,
 }
 
@@ -206,23 +205,29 @@ impl TryFrom<u8> for RingMode {
     fn try_from(byte: u8) -> Result<Self, CustomRingError> {
         match byte {
             0 => Ok(Self::Confidential),
-            1 => Ok(Self::ConfidentialEscrow),
             2 => Ok(Self::Anonymous),
             _ => Err(CustomRingError::InvalidRingMode),
         }
     }
 }
 
-/// Nonzero subset of the class bits.
+/// Subset of the class bits, a record's scope is nonzero.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct CoSignScope(u8);
 
 impl CoSignScope {
+    pub const NONE: Self = Self(0);
     pub const TRANSFERS: Self = Self(1);
     pub const DEPOSITS: Self = Self(2);
     pub const WITHDRAWALS: Self = Self(4);
-    pub const ALL: Self = Self(Self::TRANSFERS.0 | Self::DEPOSITS.0 | Self::WITHDRAWALS.0);
+    pub const APPROVE_OUTFLOW: Self = Self(8);
+    pub const APPROVE_WITHDRAWAL: Self = Self(16);
+    /// A proven mask bit demands these, with no record they fail closed.
+    pub const APPROVALS: Self = Self(Self::APPROVE_OUTFLOW.0 | Self::APPROVE_WITHDRAWAL.0);
+    pub const ALL: Self =
+        Self(Self::TRANSFERS.0 | Self::DEPOSITS.0 | Self::WITHDRAWALS.0 | Self::APPROVALS.0);
 
+    /// A record's scope, `None` for zero or an unknown bit.
     pub const fn new(bits: u8) -> Option<Self> {
         if bits == 0 || bits & !Self::ALL.0 != 0 {
             return None;
@@ -234,12 +239,24 @@ impl CoSignScope {
         self.0
     }
 
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
 
     pub const fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
+    }
+
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    pub const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
     }
 }
 
@@ -251,26 +268,26 @@ impl BitOr for CoSignScope {
     }
 }
 
-/// Count of `CoSigner` records covering each class, a class with none demands no co-signer.
+/// Count of `CoSigner` records covering each class, an optional class with none demands no co-signer.
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
-pub struct CoSignerCounts([u8; 3]);
+pub struct CoSignerCounts([u8; 5]);
 
 impl CoSignerCounts {
-    const CLASSES: [CoSignScope; 3] = [
+    const CLASSES: [CoSignScope; 5] = [
         CoSignScope::TRANSFERS,
         CoSignScope::DEPOSITS,
         CoSignScope::WITHDRAWALS,
+        CoSignScope::APPROVE_OUTFLOW,
+        CoSignScope::APPROVE_WITHDRAWAL,
     ];
 
-    /// `None` without a record.
-    pub fn covered(&self) -> Option<CoSignScope> {
-        let bits = Self::CLASSES
+    pub fn covered(&self) -> CoSignScope {
+        Self::CLASSES
             .iter()
             .zip(self.0)
             .filter(|(_, count)| *count != 0)
-            .fold(0, |bits, (class, _)| bits | class.bits());
-        CoSignScope::new(bits)
+            .fold(CoSignScope::NONE, |covered, (class, _)| covered | *class)
     }
 
     pub fn added(self, scope: CoSignScope) -> Result<Self, CustomRingError> {
@@ -325,7 +342,8 @@ pub enum ListRegistry {
     Curator(Address),
 }
 
-/// The roots an instruction binds, each read from a live registry account after the ring account.
+/// The policy roots an instruction binds, each read from a live registry after the ring account.
+/// Every read also takes the pinned tracking registry.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RootRead {
     None,
@@ -335,31 +353,25 @@ pub enum RootRead {
 }
 
 impl RootRead {
-    /// An anonymous transfer opens every delivery address under the own root.
-    pub fn transfer(ring: &RingPolicy, exempt: bool) -> Self {
-        if ring.has_policy() {
-            Self::Policy
-        } else if exempt || ring.mode == RingMode::Anonymous as u8 {
-            Self::Own
-        } else {
-            Self::None
+    /// A delegate reads no policy root, a restrictive update cannot fail its in-flight proof.
+    pub fn transfer(ring: &RingPolicy, delegate: bool) -> Self {
+        match (delegate, ring.has_policy(), ring.thresholds_active()) {
+            (true, _, _) | (false, false, false) => Self::None,
+            (false, true, _) => Self::Policy,
+            (false, false, true) => Self::Own,
         }
     }
 
-    pub fn deposit(ring: &RingPolicy) -> Result<Self, CustomRingError> {
-        Ok(
-            match ring.has_policy() || ring.mode()? == RingMode::ConfidentialEscrow {
-                true => Self::Policy,
-                false => Self::None,
-            },
-        )
+    pub fn deposit(ring: &RingPolicy) -> Self {
+        match ring.has_policy() {
+            true => Self::Policy,
+            false => Self::None,
+        }
     }
 
-    pub fn merge(ring: &RingPolicy) -> Result<Self, CustomRingError> {
-        Ok(match ring.mode()? {
-            RingMode::ConfidentialEscrow => Self::Own,
-            RingMode::Confidential | RingMode::Anonymous => Self::None,
-        })
+    /// A merge runs no rules.
+    pub const fn merge() -> Self {
+        Self::None
     }
 }
 
@@ -368,6 +380,8 @@ impl RootRead {
 pub struct LiveRoots<'a> {
     pub own: Option<&'a StorageRegistry>,
     pub curator: Option<&'a StorageRegistry>,
+    /// The pinned tracking registry's root history.
+    pub tracking: &'a [Root; ROOT_HISTORY],
     pub slot: u64,
 }
 
@@ -380,6 +394,10 @@ impl LiveRoots<'_> {
     pub fn curator(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
         self.served(self.curator, revision)?
             .ok_or(CustomRingError::MissingRegistry)
+    }
+
+    pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
+        root_at(self.tracking, revision, self.slot).map_err(|_| CustomRingError::RootNotServed)
     }
 
     /// Without the records, `None` at revision zero and `unread` otherwise.
@@ -442,8 +460,10 @@ pub struct RingPolicy {
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     /// Little endian, the slot `Initialize` ran in.
     pub created_slot: [u8; 8],
-    /// The ring's own `StorageRegistry`, zero on an audit-only ring bound to none.
+    /// The ring's own `StorageRegistry`, zero on a ring bound to none, which holds no thresholds.
     pub records: Address,
+    /// The ring's tracking registry, every read checks this address, a forged registry would prove any wallet absent.
+    pub tracking: Address,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
     /// Non-empty exactly for the lists `rules` references.
@@ -475,6 +495,7 @@ pub struct NewRing {
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     pub created_slot: u64,
     pub records: Address,
+    pub tracking: Address,
 }
 
 impl NewRing {
@@ -488,6 +509,7 @@ impl NewRing {
         ring.auditor_pubkey = self.auditor_pubkey;
         ring.created_slot = self.created_slot.to_le_bytes();
         ring.records = self.records;
+        ring.tracking = self.tracking;
         ring
     }
 }
@@ -500,6 +522,11 @@ impl RingPolicy {
     /// A policy ring pins its table at `Initialize`, an audit-only ring never writes one.
     pub fn has_policy(&self) -> bool {
         self.written_policy_hash().is_some()
+    }
+
+    /// Thresholds live in the own registry, the approval mask reads them with or without a policy.
+    pub fn thresholds_active(&self) -> bool {
+        self.records != Address::default()
     }
 
     pub fn delegate(&self) -> Option<&Address> {
@@ -596,11 +623,14 @@ impl RingPolicy {
         Ok(self.rules.validate(&self.source_map()?)?)
     }
 
-    /// The registries `read` passes after the ring account, the records first.
-    pub fn root_registries(&self, read: RootRead) -> impl Iterator<Item = Address> {
-        let own = (read != RootRead::None).then_some(self.records);
-        let curator = (read == RootRead::Policy).then(|| self.curator()).flatten();
-        own.into_iter().chain(curator)
+    /// The own registry `read` passes after the ring account.
+    pub fn own_registry(&self, read: RootRead) -> Option<Address> {
+        (read != RootRead::None).then_some(self.records)
+    }
+
+    /// The curator registry `read` passes after the own registry.
+    pub fn curator_registry(&self, read: RootRead) -> Option<Address> {
+        (read == RootRead::Policy).then(|| self.curator()).flatten()
     }
 }
 
@@ -620,9 +650,10 @@ fn source_map(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, Custo
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 1060);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, records) == 207);
+const _: () = assert!(RingPolicy::SIZE == 1094);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 8);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 136);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 168);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, records) == 209);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, tracking) == 241);
 const _: () = assert!(CoSigner::SIZE == 35);

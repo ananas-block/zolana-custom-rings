@@ -139,9 +139,19 @@ impl RingAuth {
 }
 
 impl PlacedRingAuth {
+    /// Calls SPP.
+    pub fn invoke<A: AsRef<AccountView>>(&self, accounts: &[A], data: &[u8]) -> ProgramResult {
+        self.invoke_program(&Address::new_from_array(SHIELDED_POOL_PROGRAM_ID), accounts, data)
+    }
+
     /// Raises the PDA alone to a signer.
     #[inline(never)]
-    pub fn invoke<A: AsRef<AccountView>>(&self, accounts: &[A], data: &[u8]) -> ProgramResult {
+    pub fn invoke_program<A: AsRef<AccountView>>(
+        &self,
+        program_id: &Address,
+        accounts: &[A],
+        data: &[u8],
+    ) -> ProgramResult {
         if accounts.len() > MAX_CPI_ACCOUNTS {
             return Err(CustomRingError::TooManyAccounts.into());
         }
@@ -157,7 +167,7 @@ impl PlacedRingAuth {
         let bump = [*bump];
         let seeds = [Seed::from(RING_AUTH_PDA_SEED), Seed::from(&bump)];
         let instruction = InstructionView {
-            program_id: &Address::new_from_array(SHIELDED_POOL_PROGRAM_ID),
+            program_id,
             accounts: &metas,
             data,
         };
