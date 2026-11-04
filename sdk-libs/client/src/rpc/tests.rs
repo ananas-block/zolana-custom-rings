@@ -1189,7 +1189,7 @@ fn a_signed_authority_transfer_matches_the_shared_vector() {
         target: target(),
         delegate: delegate.pubkey(),
         transfer: AuthorityTransfer {
-            source: shielded_address(5).into(),
+            sources: vec![shielded_address(5).into()],
             mint: Address::new_from_array([3; 32]).into(),
             payments: vec![AuthorityPayment {
                 recipient: shielded_address(9).into(),

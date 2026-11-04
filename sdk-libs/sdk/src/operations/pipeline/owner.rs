@@ -2,7 +2,6 @@
 
 use custom_ring_interface::{CustomRingError, RingMode, RingRail};
 use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
-use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::shape::Shape;
 use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
@@ -224,12 +223,7 @@ impl Owner<'_> {
             co_owners: self
                 .co_owners
                 .iter()
-                .map(|co_owner| {
-                    Ok(CoOwnerKey {
-                        owner_pk_hash: solana_owner_identity(co_owner.owner.as_array())?,
-                        key: co_owner.nullifier_key.clone(),
-                    })
-                })
+                .map(CoOwnerKey::of)
                 .collect::<Result<_, RingError>>()?,
         })
     }

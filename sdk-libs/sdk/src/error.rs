@@ -190,6 +190,8 @@ pub enum RingError {
     DuplicateInput { nullifier: [u8; 32] },
     #[error("the transfer spends one owner's notes, input {index} has another owner")]
     MixedOwners { index: usize },
+    #[error("a delegate move names one source twice")]
+    RepeatedDelegateSource,
     #[error("input {index} spends under a key its owner's tracking row does not hold")]
     InputKeyNotEnrolled { index: usize },
     #[error("the owner at output {slot_index} holds no tracking row, only the zero key pays it")]

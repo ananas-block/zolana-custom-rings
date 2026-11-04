@@ -304,69 +304,101 @@ mod tests {
 
     const RING: Address = Address::new_from_array([0x90; 32]);
 
+    struct ProvenMerge {
+        /// Enters the commitment, the proof holds the published value to it.
+        committed: [u8; 32],
+        published: [u8; 32],
+    }
+
+    impl ProvenMerge {
+        /// The utxo hash the row commits and what its owner opens from the row.
+        fn opened(self) -> ([u8; 32], Vec<[u8; 32]>) {
+            let owner =
+                ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[7; 32])).unwrap();
+            let address = owner.shielded_address().unwrap();
+            let first = [0x11; 32];
+            let salt = [8; 16];
+            let merged = Utxo {
+                owner: address.signing_pubkey,
+                asset: Mint::SOL,
+                amount: 100,
+                blinding: merge_output_blinding(&owner.nullifier_key, &first).unwrap(),
+                ring_program_id: Some(RING),
+                data: Default::default(),
+            };
+            let hash = merged
+                .hash(&address.nullifier_pubkey, &[0; 32], &self.committed, 9)
+                .unwrap();
+            let ciphertext = MergeOutputPlaintext {
+                amount: 100,
+                mint: Mint::SOL.asset,
+            }
+            .encrypt(
+                &merge_output_key(&owner.nullifier_key, &first).unwrap(),
+                &salt,
+            )
+            .unwrap();
+            let row = ShieldedTransaction {
+                tx_signature: Signature::default(),
+                slot: 1,
+                event_index: Some(0),
+                tx_viewing_pk: None,
+                salt: None,
+                output_slots: vec![OutputSlot {
+                    view_tag: first,
+                    output_context: OutputContext {
+                        hash,
+                        tree_id: 9,
+                        leaf_index: 0,
+                    },
+                    payload: encode_merge_output_data(MergeOutputDataRef {
+                        salt: &salt,
+                        ciphertext: &ciphertext,
+                        prefix: &[self.published],
+                        binding: MergeCiphertextBinding::Proven,
+                    }),
+                }],
+                messages: Vec::new(),
+                nullifiers: vec![first],
+                proofless: false,
+                ring_config: None,
+                ring_program_id: Some(RING),
+            };
+            let assets = RingAssets::new([]).unwrap();
+            let opened = RingMerges::among(vec![row]).open(&owner, &assets).unwrap();
+            (
+                hash,
+                opened.utxos.iter().map(|utxo| utxo.utxo_hash).collect(),
+            )
+        }
+    }
+
     /// `merge_ring_v2` under a nonzero key, the proven encoding and its first nullifier tag.
     #[test]
     fn a_proven_ring_merge_opens_under_the_nullifier_secret() {
-        let owner =
-            ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[7; 32])).unwrap();
-        let address = owner.shielded_address().unwrap();
-        let first = [0x11; 32];
-        let salt = [8; 16];
-        let merged = Utxo {
-            owner: address.signing_pubkey,
-            asset: Mint::SOL,
-            amount: 100,
-            blinding: merge_output_blinding(&owner.nullifier_key, &first).unwrap(),
-            ring_program_id: Some(RING),
-            data: Default::default(),
-        };
-        let hash = merged
-            .hash(&address.nullifier_pubkey, &[0; 32], &[0; 32], 9)
-            .unwrap();
-        let ciphertext = MergeOutputPlaintext {
-            amount: 100,
-            mint: Mint::SOL.asset,
+        let (hash, opened) = ProvenMerge {
+            committed: [0; 32],
+            published: [0; 32],
         }
-        .encrypt(
-            &merge_output_key(&owner.nullifier_key, &first).unwrap(),
-            &salt,
-        )
-        .unwrap();
-        let row = ShieldedTransaction {
-            slot: 1,
-            tx_signature: Signature::from([1; 64]),
-            event_index: Some(0),
-            tx_viewing_pk: None,
-            salt: None,
-            output_slots: vec![OutputSlot {
-                view_tag: first,
-                output_context: OutputContext {
-                    hash,
-                    tree_id: 9,
-                    leaf_index: 0,
-                },
-                payload: encode_merge_output_data(MergeOutputDataRef {
-                    salt: &salt,
-                    ciphertext: &ciphertext,
-                    prefix: &[[0; 32]],
-                    binding: MergeCiphertextBinding::Proven,
-                }),
-            }],
-            messages: Vec::new(),
-            nullifiers: vec![first],
-            proofless: false,
-            ring_config: None,
-            ring_program_id: Some(RING),
-        };
-        let assets = RingAssets::new([]).unwrap();
-        let opened = RingMerges::among(vec![row]).open(&owner, &assets).unwrap();
-        assert_eq!(
-            opened
-                .utxos
-                .iter()
-                .map(|utxo| utxo.utxo_hash)
-                .collect::<Vec<_>>(),
-            [hash]
-        );
+        .opened();
+        assert_eq!(opened, [hash]);
+    }
+
+    /// `merge.go` leaves the value free, the commitment holds it and the owner rebuilds from the row.
+    #[test]
+    fn a_relay_chosen_ring_data_hash_binds_the_commitment_and_stays_the_owners_note() {
+        let chosen = [3; 32];
+        let (hash, opened) = ProvenMerge {
+            committed: chosen,
+            published: chosen,
+        }
+        .opened();
+        assert_eq!(opened, [hash]);
+        let (_, unbound) = ProvenMerge {
+            committed: chosen,
+            published: [4; 32],
+        }
+        .opened();
+        assert!(unbound.is_empty());
     }
 }
