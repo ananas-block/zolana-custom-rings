@@ -99,3 +99,22 @@ export interface StorageRecordPoolResponse {
 
 /** Rust `StorageWriteView`. */
 export type StorageWriteView = RingListWriteView;
+
+/** Rust `GetStorageApplyProofInputsRequest`. */
+export interface StorageApplyProofInputsRequest {
+  readonly registry: Address;
+  readonly writes: readonly StorageWriteView[];
+}
+
+export interface StorageApplyProofInputsResponse {
+  readonly context: IndexerContext;
+  readonly revision: bigint;
+  readonly oldRoot: Hash;
+  readonly newRoot: Hash;
+  readonly oldNextIndex: bigint;
+  readonly newNextIndex: bigint;
+  readonly chainStart: Hash;
+  readonly chainEnd: Hash;
+  /** In request order. */
+  readonly writes: readonly RingRecordWriteView[];
+}

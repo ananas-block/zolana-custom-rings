@@ -339,6 +339,20 @@ export function packDisclosure(plaintext: Uint8Array): readonly Bytes32[] {
   );
 }
 
+/** Rust `unpack_disclosure`, a field with bytes outside its chunk is refused. */
+export function unpackDisclosure(fields: readonly Bytes32[], length: number): Uint8Array {
+  if (fields.length !== Math.ceil(length / DISCLOSURE_CHUNK_BYTES))
+    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { expected: length, actual: fields.length });
+  const plaintext = new Uint8Array(length);
+  fields.forEach((field, index) => {
+    const chunk = Math.min(length - index * DISCLOSURE_CHUNK_BYTES, DISCLOSURE_CHUNK_BYTES);
+    if (field[0] !== 0 || field.subarray(1 + chunk).some((byte) => byte !== 0))
+      throw new RingKeyError("KEYPAIR_DISCLOSURE_PADDING", { index });
+    plaintext.set(field.subarray(1, 1 + chunk), index * DISCLOSURE_CHUNK_BYTES);
+  });
+  return plaintext;
+}
+
 function checkLabel(label: Uint8Array): void {
   if (label.length !== STREAM_LABEL_BYTES)
     throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "label" });

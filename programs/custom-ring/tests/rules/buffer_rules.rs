@@ -12,7 +12,7 @@ use solana_transaction_error::TransactionError;
 use spr_interface::instruction::InterfaceTransfer;
 
 use crate::{
-    common::{policy_pda, refused, Ring, SentWithMeta, Setup, PROGRAM, SYSTEM},
+    common::{delegate_ring, policy_pda, refused, Ring, SentWithMeta, Setup, PROGRAM, SYSTEM},
     transact_rules::{spp_list, Fixture},
 };
 
@@ -105,6 +105,20 @@ fn unique_accounts(accounts: &[AccountMeta]) -> usize {
         .len()
 }
 
+fn swap_key(accounts: &[AccountMeta], from: &Address, to: &Address) -> Vec<AccountMeta> {
+    accounts
+        .iter()
+        .map(|meta| AccountMeta {
+            pubkey: if meta.pubkey == *from {
+                *to
+            } else {
+                meta.pubkey
+            },
+            ..meta.clone()
+        })
+        .collect()
+}
+
 fn custom_code(sent: &SentWithMeta) -> Option<u32> {
     match sent {
         Err(failed) => match failed.err {
@@ -115,12 +129,12 @@ fn custom_code(sent: &SentWithMeta) -> Option<u32> {
     }
 }
 
-struct LargestFrame {
+struct BufferedFrame {
     bytes: Vec<u8>,
     accounts: Vec<AccountMeta>,
 }
 
-fn largest_frame(ring: &mut Ring) -> LargestFrame {
+fn largest_frame(ring: &mut Ring) -> BufferedFrame {
     let fixture = Fixture::new().with_identity_proof();
     let body = RecipientBody {
         ring_data_hash: Some([0x5a; 32]),
@@ -153,7 +167,7 @@ fn largest_frame(ring: &mut Ring) -> LargestFrame {
         spp.extend([pool.clone(), destination.clone()]);
     }
     let policy: RingPolicy = ring.read(&policy_pda());
-    LargestFrame {
+    BufferedFrame {
         bytes: [vec![tag::TRANSFER], data.encode().unwrap()].concat(),
         accounts: [
             vec![AccountMeta::new_readonly(policy_pda(), false)],
@@ -165,7 +179,7 @@ fn largest_frame(ring: &mut Ring) -> LargestFrame {
 }
 
 #[test]
-fn the_largest_keyed_frame_clears_every_check_ahead_of_the_key_and_its_event_rebuilds_it() {
+fn the_largest_keyed_frame_clears_every_check_ahead_of_the_key_and_its_event_decodes() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let frame = largest_frame(&mut ring);
     let write_units = write_all(&mut ring, &frame.bytes);
@@ -193,6 +207,7 @@ fn the_largest_keyed_frame_clears_every_check_ahead_of_the_key_and_its_event_reb
         event: &event.instruction.data,
     };
     assert!(settled(false).frame().is_err());
+    // Reader decoding only, the transaction failed and nothing settled.
     let rebuilt = settled(true).frame().unwrap();
     assert_eq!(rebuilt, frame.bytes);
     RingTransactData::parse(&rebuilt[1..], RingRail::Anonymous).unwrap();
@@ -225,16 +240,8 @@ fn a_settlement_whose_payer_is_not_the_writer_is_refused() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let frame = largest_frame(&mut ring);
     write_all(&mut ring, &frame.bytes);
-    let writer = ring.payer.pubkey();
     let other = Keypair::new();
-    let inline = frame
-        .accounts
-        .iter()
-        .map(|meta| match meta.pubkey == writer {
-            true => AccountMeta::new(other.pubkey(), true),
-            false => meta.clone(),
-        })
-        .collect();
+    let inline = swap_key(&frame.accounts, &ring.payer.pubkey(), &other.pubkey());
     let sent = settle(&mut ring, settle_data(&frame.bytes), inline, &[&other]);
     assert_eq!(
         custom_code(&sent),
@@ -295,15 +302,11 @@ fn only_the_writer_writes_and_closes_and_a_closed_buffer_does_not_settle() {
 }
 
 #[test]
-fn a_write_outside_the_frame_and_a_frame_past_the_ceiling_are_refused() {
+fn an_empty_frame_and_a_write_outside_the_frame_are_refused() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let writer = ring.payer.insecure_clone();
     refused(
         write(&mut ring, &writer, 0, 0, &[]),
-        CustomRingError::FrameLength,
-    );
-    refused(
-        write(&mut ring, &writer, MAX_FRAME_LEN as u16 + 1, 0, &[]),
         CustomRingError::FrameLength,
     );
     refused(
@@ -326,9 +329,16 @@ fn a_frame_of_another_tag_does_not_settle_from_a_buffer() {
 }
 
 #[test]
-fn a_frame_at_the_ceiling_passes_the_inner_create_and_the_event() {
+fn a_synthetic_frame_of_10206_bytes_reaches_the_parser_and_one_more_byte_is_refused() {
+    assert_eq!(MAX_FRAME_LEN, 10_206);
     let mut ring = Ring::new(Setup::AnonymousPolicy);
-    let mut frame = vec![0u8; MAX_FRAME_LEN];
+    let writer = ring.payer.insecure_clone();
+    refused(
+        write(&mut ring, &writer, 10_207, 0, &[]),
+        CustomRingError::FrameLength,
+    );
+    assert_eq!(ring.lamports(&buffer_of(&writer.pubkey())), 0);
+    let mut frame = vec![0u8; 10_206];
     frame[0] = tag::TRANSFER;
     write_all(&mut ring, &frame);
     let policy: RingPolicy = ring.read(&policy_pda());
@@ -340,12 +350,13 @@ fn a_frame_at_the_ceiling_passes_the_inner_create_and_the_event() {
     let failed = settle(&mut ring, settle_data(&frame), inline, &[]).unwrap_err();
     assert_eq!(
         failed.meta.inner_instructions[0][0].instruction.data.len(),
-        MAX_FRAME_LEN + 1
+        10_207
     );
     assert!(
         matches!(
             failed.err,
-            TransactionError::InstructionError(0, InstructionError::Custom(_))
+            TransactionError::InstructionError(0, InstructionError::Custom(code))
+                if code == CustomRingError::OutputCountOutOfRange as u32
         ),
         "{:?}",
         failed.err
@@ -353,6 +364,124 @@ fn a_frame_at_the_ceiling_passes_the_inner_create_and_the_event() {
     println!(
         "ceiling frame to the parser {} CU",
         failed.meta.compute_units_consumed
+    );
+}
+
+fn delegate_frame(ring: &mut Ring, delegate: &Keypair) -> BufferedFrame {
+    let fixture = Fixture::new().with_identity_proof();
+    let data = fixture.transfer(RingRail::Delegate, 2, 2, false);
+    let policy: RingPolicy = ring.read(&policy_pda());
+    BufferedFrame {
+        bytes: [vec![tag::AUTHORITY_TRANSFER], data.encode().unwrap()].concat(),
+        accounts: [
+            vec![AccountMeta::new_readonly(policy_pda(), false)],
+            ring.registries(RootRead::transfer(&policy, true)),
+            vec![AccountMeta::new_readonly(delegate.pubkey(), true)],
+            spp_list(&ring.payer.pubkey(), &data, &[]),
+        ]
+        .concat(),
+    }
+}
+
+#[test]
+fn an_authority_frame_clears_every_check_ahead_of_the_key_and_its_event_decodes() {
+    let delegate = Keypair::new();
+    let mut ring = delegate_ring(&delegate);
+    let frame = delegate_frame(&mut ring, &delegate);
+    write_all(&mut ring, &frame.bytes);
+    let data = settle_data(&frame.bytes);
+    let failed = settle(&mut ring, data.clone(), frame.accounts, &[&delegate]).unwrap_err();
+    assert!(
+        matches!(
+            failed.err,
+            TransactionError::InstructionError(0, InstructionError::Custom(code))
+                if code == CustomRingError::UnsupportedCircuit as u32
+        ),
+        "{:?}",
+        failed.err
+    );
+    let event = &failed.meta.inner_instructions[0][0].instruction.data;
+    // Reader decoding only, the transaction failed and nothing settled.
+    let rebuilt = SettledFrame {
+        ring_program: &PROGRAM,
+        settle_program: &PROGRAM,
+        event_program: &PROGRAM,
+        succeeded: true,
+        settle: &data,
+        event,
+    }
+    .frame()
+    .unwrap();
+    assert_eq!(rebuilt, frame.bytes);
+    RingTransactData::parse(&rebuilt[1..], RingRail::Delegate).unwrap();
+}
+
+#[test]
+fn a_rewritten_authority_frame_fails_the_signed_digest() {
+    let delegate = Keypair::new();
+    let mut ring = delegate_ring(&delegate);
+    let frame = delegate_frame(&mut ring, &delegate);
+    write_all(&mut ring, &frame.bytes);
+    let writer = ring.payer.insecure_clone();
+    let frame_len = u16::try_from(frame.bytes.len()).unwrap();
+    write(&mut ring, &writer, frame_len, 40, &[0xee]).unwrap();
+    let sent = settle(
+        &mut ring,
+        settle_data(&frame.bytes),
+        frame.accounts,
+        &[&delegate],
+    );
+    assert_eq!(
+        custom_code(&sent),
+        Some(CustomRingError::FrameDigestMismatch as u32)
+    );
+}
+
+#[test]
+fn an_authority_settlement_whose_payer_is_not_the_writer_is_refused() {
+    let delegate = Keypair::new();
+    let mut ring = delegate_ring(&delegate);
+    let frame = delegate_frame(&mut ring, &delegate);
+    write_all(&mut ring, &frame.bytes);
+    let other = Keypair::new();
+    let inline = swap_key(&frame.accounts, &ring.payer.pubkey(), &other.pubkey());
+    let sent = settle(
+        &mut ring,
+        settle_data(&frame.bytes),
+        inline,
+        &[&delegate, &other],
+    );
+    assert_eq!(
+        custom_code(&sent),
+        Some(CustomRingError::FramePayerNotWriter as u32)
+    );
+}
+
+#[test]
+fn an_authority_frame_the_delegate_did_not_sign_is_refused() {
+    let delegate = Keypair::new();
+    let mut ring = delegate_ring(&delegate);
+    let frame = delegate_frame(&mut ring, &delegate);
+    write_all(&mut ring, &frame.bytes);
+    let other = Keypair::new();
+    let inline = swap_key(&frame.accounts, &delegate.pubkey(), &other.pubkey());
+    let sent = settle(&mut ring, settle_data(&frame.bytes), inline, &[&other]);
+    assert_eq!(
+        custom_code(&sent),
+        Some(CustomRingError::UnauthorizedDelegate as u32)
+    );
+    let unsigned = frame
+        .accounts
+        .iter()
+        .map(|meta| match meta.pubkey == delegate.pubkey() {
+            true => AccountMeta::new_readonly(meta.pubkey, false),
+            false => meta.clone(),
+        })
+        .collect();
+    let sent = settle(&mut ring, settle_data(&frame.bytes), unsigned, &[]);
+    assert_eq!(
+        custom_code(&sent),
+        Some(CustomRingError::UnauthorizedDelegate as u32)
     );
 }
 
