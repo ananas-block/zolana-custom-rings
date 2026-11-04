@@ -68,7 +68,7 @@ impl<'a> HistoricalMergeIxDataRef<'a> {
             own_revision,
             output_ring_data_hash,
             disclosure,
-            body: SppMergeBody::read(&mut bytes)?,
+            body: SppMergeBody::read(bytes)?,
         })
     }
 
