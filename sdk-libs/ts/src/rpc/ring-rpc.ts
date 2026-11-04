@@ -325,9 +325,9 @@ export function authorityTransferAttestation(
       ...targetLines(input.target),
       `delegate: ${input.delegate}`,
       ...input.transfer.sources.map((source) => `source: ${shieldedAddressText(source)}`),
-      `mint: ${input.transfer.mint}`,
       ...input.transfer.payments.map(
-        (payment) => `payment: ${shieldedAddressText(payment.recipient)} ${payment.amount}`,
+        (payment) =>
+          `payment: ${shieldedAddressText(payment.recipient)} ${payment.mint} ${payment.amount}`,
       ),
       `timestamp: ${input.timestamp}`,
       `nonce: ${base64Decoder.decode(input.nonce)}`,

@@ -248,7 +248,7 @@ export function ringTransferStatement(
     }),
     family,
     approvalMask: data.approval,
-    approvalTotals: data.extensions.approvalTotals ?? new Uint8Array(32),
+    approvalTotals: data.extensions.approvalTotals ?? ZERO_FIELD,
     noSpend: data.noSpend,
     outputs: data.outputs,
     capacity: RingTransactData.streamLayout(data).capacity,

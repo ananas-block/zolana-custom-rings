@@ -210,7 +210,7 @@ function delegateProofs(
     equalBytes(address.toBytes(), changeOwner.toBytes()),
   );
   if (source === undefined)
-    throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
+    throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
   const proofs = new NullifierKeyProofAuthority(source.nullifierKey, authority.proofs);
   return { proofs, release: () => proofs.destroy() };
 }
@@ -254,23 +254,38 @@ async function buildDelegateTransaction(
     const ownerOf = (entry: WalletUtxo): ShieldedAddress => {
       const found = owners.find((candidate) => entry.utxo.owner.equals(candidate.signingPublicKey));
       if (found === undefined)
-        throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
+        throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
       return found;
     };
-    const last = selected.at(-1);
-    if (last === undefined)
+    // Every note of a mint but the last is spent whole, its change is that note's owner's.
+    const spentMints = [...amounts].map(([asset, amount]) => {
+      const notes = selected.filter((entry) => entry.utxo.asset === asset);
+      const last = notes.at(-1);
+      if (last === undefined)
+        throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
+      const spent = notes.reduce((total, entry) => total + entry.utxo.amount, 0n);
+      return { asset, owner: ownerOf(last), change: spent - amount };
+    });
+    const [firstMint] = spentMints;
+    if (firstMint === undefined)
       throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
-    const owner = ownerOf(last);
+    const owner = firstMint.owner;
     const coSources = delegateCoSources(source, selected.map(ownerOf), owner);
-    // Every note but the last is spent whole, a second mint would pay its change to another owner.
-    if (coSources.length !== 0 && amounts.size > 1)
-      throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
+    // The sender's change pads in, another owner's is a slot of its own.
+    const moved = [
+      ...outputs,
+      ...spentMints
+        .filter((mint) => mint.change > 0n && !equalBytes(mint.owner.toBytes(), owner.toBytes()))
+        .map((mint) =>
+          Object.freeze({ recipient: mint.owner, asset: mint.asset, amount: mint.change }),
+        ),
+    ];
     const intent: TransactionIntent = Object.freeze({
       kind: "ringDelegate",
       ringProgramId: move.ringProgramId,
       delegate: signerAddress(move.delegate),
       source: owner,
-      outputs: outputs.map(({ recipient, asset, amount }) =>
+      outputs: moved.map(({ recipient, asset, amount }) =>
         Object.freeze({ recipient, asset, amount }),
       ),
     });
@@ -288,7 +303,7 @@ async function buildDelegateTransaction(
       sourceProofs: spender.proofs,
       inputs: selected.map((entry) => ringProofInput(entry, ownerOf(entry), move.client)),
       coSources,
-      outputs,
+      outputs: moved,
       assets,
       outputTreeId: move.client.treeId,
       ...(move.txViewingKey === undefined ? {} : { txViewingKey: move.txViewingKey }),

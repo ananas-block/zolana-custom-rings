@@ -122,6 +122,7 @@ interface ExpectedOwner {
 
 interface ExpectedPayment {
   readonly owner: ExpectedOwner;
+  readonly mint: Address;
   readonly amount: bigint;
 }
 
@@ -138,7 +139,6 @@ export interface ExpectedDelegate {
   readonly txViewingKey: Bytes32;
   /** Change returns to an input's owner. */
   readonly sources: readonly ExpectedOwner[];
-  readonly mint: Address;
   readonly payments: readonly ExpectedPayment[];
 }
 
@@ -277,10 +277,13 @@ export async function expectedDelegate(
     auditor: config.auditorPublicKey,
     txViewingKey: request.txViewingKey,
     sources: Object.freeze(transfer.sources.map(expectedOwner)),
-    mint: transfer.mint,
     payments: Object.freeze(
       transfer.payments.map((payment) =>
-        Object.freeze({ owner: expectedOwner(payment.recipient), amount: payment.amount }),
+        Object.freeze({
+          owner: expectedOwner(payment.recipient),
+          mint: payment.mint,
+          amount: payment.amount,
+        }),
       ),
     ),
   });
@@ -604,7 +607,7 @@ function checkMoved(expected: ExpectedDelegate, frame: RingTransactData): void {
     if (record.kind === RecordKind.exit) throw mismatch("Recipients");
     const paid = unpaid.findIndex(
       (payment) =>
-        record.mint === expected.mint &&
+        record.mint === payment.mint &&
         record.amount === payment.amount &&
         owns(payment.owner, record),
     );

@@ -17,6 +17,7 @@ import {
   type Address,
 } from "@solana/kit";
 import { describe, expect, it } from "vitest";
+import { ringIntentMismatch } from "../../../src/operations/workflow/selection.js";
 
 import type { WalletKeys, RpcAccount } from "@heliuslabs/zolana/client";
 import {
@@ -53,8 +54,11 @@ import {
   Wallet,
   SppProofInputs,
   Data,
+  type PreparedTransfer,
+  type ProofOutputUtxo,
 } from "@heliuslabs/zolana/transaction";
 import {
+  checkRingPreparedTransfer,
   approveRingUnattended,
   type RingApprovalRequest,
 } from "../../../src/protocol/transaction/intent.js";
@@ -88,6 +92,8 @@ import {
   buildRingExitTransaction,
   buildRingTransferTransaction,
   buildRingWithdrawalTransaction,
+  createRingEntrySubmission,
+  prepareRingEntryRelay,
   prepareRingTransferRelay,
   prepareRingWithdrawalRelay,
 } from "../../../src/operations/payments/transfer.js";
@@ -1231,6 +1237,7 @@ describe("anonymous ring relay", () => {
       dataNotes?: readonly Readonly<{ amount: bigint; dataHash: Bytes32 }>[];
       policy?: boolean;
       withdraw?: boolean;
+      entry?: boolean;
     }>,
   ) {
     const sender = anonymousSender();
@@ -1322,17 +1329,19 @@ describe("anonymous ring relay", () => {
       },
     };
     const relay =
-      input.withdraw === true
-        ? prepareRingWithdrawalRelay({ ...params, recipient: randomAddress() })
-        : prepareRingTransferRelay({
-            ...params,
-            recipient: await addressOf(fixture, ShieldedKeypair.generate()),
-            ...(input.ring === "default"
-              ? { inputs: "default" as const }
-              : input.defaultNotes === undefined
-                ? {}
-                : { inputs: "ring-or-default" as const }),
-          });
+      input.entry === true
+        ? prepareRingEntryRelay(params)
+        : input.withdraw === true
+          ? prepareRingWithdrawalRelay({ ...params, recipient: randomAddress() })
+          : prepareRingTransferRelay({
+              ...params,
+              recipient: await addressOf(fixture, ShieldedKeypair.generate()),
+              ...(input.ring === "default"
+                ? { inputs: "default" as const }
+                : input.defaultNotes === undefined
+                  ? {}
+                  : { inputs: "ring-or-default" as const }),
+            });
     return { fixture, requests, relay, params, sender };
   }
 
@@ -1420,6 +1429,103 @@ describe("anonymous ring relay", () => {
         sender.keypair.signingPublicKey().ed25519(),
       ),
     ).toBe(true);
+  });
+
+  describe("an entry of 25 out of a default note of 40", () => {
+    const entered = (
+      outputs: readonly ProofOutputUtxo[],
+      sender: Sender,
+    ): readonly (readonly [bigint, boolean, Address | undefined])[] =>
+      outputs
+        .filter((output) => !output.isDummy())
+        .map((output) => [
+          output.amount,
+          output.ownerAddress?.signingPublicKey.equals(sender.keypair.signingPublicKey()) === true,
+          output.ringProgramId,
+        ]);
+    const moved = (ring: Address) => [
+      [25n, true, ring],
+      [15n, true, ring],
+    ];
+
+    it("relays the 15 change in the ring, owned by the sender", async () => {
+      const { fixture, requests, relay, sender } = await anonymousSpend({
+        notes: 0,
+        amount: 25n,
+        defaultNotes: [40n],
+        entry: true,
+      });
+      const sent = await payload(await relay);
+      expect(sent.inputs.map((input) => input.utxo.amount)).toEqual([40n]);
+      expect(entered(sent.outputs, sender)).toEqual(
+        expect.arrayContaining(moved(fixture.ringProgramId)),
+      );
+      expect(entered(sent.outputs, sender)).toHaveLength(2);
+      expect(requests[0]?.intent).toMatchObject({ kind: "ringEntry", amount: 25n });
+      noProofs(fixture);
+    });
+
+    it("proves the 15 change in the ring, owned by the sender, from another payer", async () => {
+      const { fixture, params, relay, sender } = await anonymousSpend({
+        notes: 0,
+        amount: 25n,
+        defaultNotes: [40n, 40n],
+        entry: true,
+      });
+      await relay;
+      const payer = await generateKeyPairSigner();
+      const { anonymous, ...plain } = params;
+      await createRingEntrySubmission({
+        ...plain,
+        feePayer: payer.address,
+        anonymous: { signer: anonymous.signer, reply: anonymous.reply },
+      });
+      const outputs = fixture.sppCalls.at(-1)?.proofInputs.outputs ?? [];
+      expect(entered(outputs, sender)).toEqual(
+        expect.arrayContaining(moved(fixture.ringProgramId)),
+      );
+      expect(entered(outputs, sender)).toHaveLength(2);
+    });
+
+    it("refuses change of another owner, another ring or the default ring", () => {
+      const owner = ShieldedKeypair.generate().shieldedAddress();
+      const ring = randomAddress();
+      const output = (slot: Readonly<Record<string, unknown>>) =>
+        ({
+          isDummy: () => false,
+          ownerAddress: owner,
+          asset: SOL_MINT,
+          amount: 25n,
+          ringProgramId: ring,
+          ...slot,
+        }) as unknown as ProofOutputUtxo;
+      const check = (change: Readonly<Record<string, unknown>>) =>
+        checkRingPreparedTransfer(
+          {
+            owner,
+            inputs: [],
+            interfaceTransfers: [],
+            senderOutputCount: 1,
+            outputs: [output({ amount: 15n, ...change }), output({})],
+          } as unknown as PreparedTransfer,
+          { kind: "ringEntry", ringProgramId: ring, asset: SOL_MINT, amount: 25n },
+          ringIntentMismatch,
+        );
+      expect(() => check({})).not.toThrow();
+      for (const wrong of [
+        { ownerAddress: ShieldedKeypair.generate().shieldedAddress() },
+        { ownerAddress: undefined },
+        { ringProgramId: randomAddress() },
+        { ringProgramId: undefined },
+        { asset: randomAddress() },
+      ])
+        expect(() => check(wrong)).toThrow(
+          expect.objectContaining({
+            code: "RING_INTENT_MISMATCH",
+            details: { field: "change" },
+          }),
+        );
+    });
   });
 
   it("refuses a plain build on an anonymous ring and sends the hidden owner's submission from another payer", async () => {

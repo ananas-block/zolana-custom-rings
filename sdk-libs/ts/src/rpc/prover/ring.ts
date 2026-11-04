@@ -165,6 +165,10 @@ export interface TransferProofInputs
   readonly publicInputHash: Bytes32;
   /** The statement's proven bits. */
   readonly approvalMask: number;
+  /** Absent reads zero, a frame that discloses nothing. */
+  readonly approvalTotals?: Bytes32;
+  /** Fresh per transaction, absent reads zero. */
+  readonly approvalBlinder?: Bytes32;
   /** `m`, the slots past it leave the frame. */
   readonly outputCount: number;
   readonly outputs: readonly OutputOpeningProofInput[];
@@ -488,6 +492,12 @@ function transferJson(request: TransferProofRequest): Json {
     sender: field(request.sender, "sender"),
     partyIdentities: fields(request.partyIdentities, ANONYMOUS_PARTIES, "partyIdentities"),
     approvalMask: integer(request.approvalMask, "approvalMask", 0, APPROVAL_MASK_MAX),
+    ...(request.approvalTotals === undefined
+      ? {}
+      : { approvalTotals: field(request.approvalTotals, "approvalTotals") }),
+    ...(request.approvalBlinder === undefined
+      ? {}
+      : { approvalBlinder: field(request.approvalBlinder, "approvalBlinder") }),
     outputCount: integer(request.outputCount, "outputCount", 1, request.outputs.length),
     outputs: request.outputs.map((output, i) => outputJson(output, `outputs[${i}]`)),
     inputCount: integer(request.inputCount, "inputCount", 1, slots),
@@ -676,9 +686,11 @@ function policyJson(policy: PolicyProofInputs, shape: PolicySectionShape): Json 
     assetEntries: sized(policy.assetEntries, slots, "assetEntries").map((entry, i) =>
       entryJson(entry, capacity, `assetEntries[${i}]`),
     ),
-    publicAssetEntries: sized(policy.publicAssetEntries, shape.publicAssets, "publicAssetEntries").map(
-      (index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1),
-    ),
+    publicAssetEntries: sized(
+      policy.publicAssetEntries,
+      shape.publicAssets,
+      "publicAssetEntries",
+    ).map((index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1)),
   };
 }
 

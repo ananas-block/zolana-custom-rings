@@ -212,8 +212,7 @@ describe("prepareAuthorityTransfer", () => {
     };
     const transfer = {
       sources: [address(5)],
-      mint: filled(3, 32) as Address,
-      payments: [{ recipient: address(9), amount: 250n }],
+      payments: [{ recipient: address(9), mint: filled(3, 32) as Address, amount: 250n }],
     };
     const message = authorityTransferAttestation({
       target,
