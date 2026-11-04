@@ -77,7 +77,9 @@ func TestReceiptTable(t *testing.T) {
 				return
 			}
 			requireRefusedIn(t, w, "policy.assertPaymentRules")
-			w.Own[alice], w.Own[s] = ringpolicy.Escrowed(ringregistry.AllowBit), ringpolicy.Escrowed(ringregistry.AllowBit)
+			for _, member := range []int64{s, bob, alice} {
+				w.Own[member] = ringpolicy.Escrowed(ringregistry.AllowBit)
+			}
 			requireSolved(t, w.Build(t))
 		})
 	}
@@ -382,8 +384,7 @@ func (tc quantityCase) circuit(t *testing.T) *quantityCircuit {
 func (tc quantityCase) world() ringpolicy.World {
 	w := ringpolicy.Confidential()
 	w.Outputs, w.WithdrawalCapacity = 4, 2
-	w.Table.Rules = nil
-	w.Table.Limits = nil
+	w.Table.Rules, w.Table.Limits, w.Slots = nil, nil, nil
 	w.Approval = uint64(tc.Mask)
 	for _, input := range tc.Inputs {
 		w.Inputs = append(w.Inputs, ringpolicy.Slot{Owner: input.Owner, Asset: input.Asset, Amount: input.Amount, Exit: !input.Ring})

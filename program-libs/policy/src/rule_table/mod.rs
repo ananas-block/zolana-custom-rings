@@ -211,7 +211,7 @@ pub enum Mode {
     Absent = 2,
 }
 
-/// Amount guards compare output sums in asset base units.
+/// Amount guards compare `owner_guard` or `asset_guard` in asset base units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Guard {
     Always,
