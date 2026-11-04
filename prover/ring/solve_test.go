@@ -36,7 +36,7 @@ const (
 	enrollKey     common.CircuitType = "custom-ring-apply-enrollments-2"
 	registerKey   common.CircuitType = "custom-ring-register-key"
 	depositKey    common.CircuitType = "custom-ring-deposit-8"
-	mergeKey      common.CircuitType = "custom-ring-merge-v4"
+	mergeKey      common.CircuitType = "custom-ring-merge"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
