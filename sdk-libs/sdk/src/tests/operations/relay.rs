@@ -225,17 +225,15 @@ mod delegate_message {
     enum Answer {
         Honest,
         SwappedRecipient,
-        ChangeToStranger,
         DelegateWritable,
         ExtraSystemTransfer,
         DelegatePaysFee,
     }
 
     impl Answer {
-        const ALL: [Self; 6] = [
+        const ALL: [Self; 5] = [
             Self::Honest,
             Self::SwappedRecipient,
-            Self::ChangeToStranger,
             Self::DelegateWritable,
             Self::ExtraSystemTransfer,
             Self::DelegatePaysFee,
@@ -246,7 +244,6 @@ mod delegate_message {
             match self {
                 Self::Honest => ("honest", "Accepted"),
                 Self::SwappedRecipient => ("swappedRecipient", "Recipients"),
-                Self::ChangeToStranger => ("changeToStranger", "Recipients"),
                 Self::DelegateWritable => ("delegateWritable", "Accounts"),
                 Self::ExtraSystemTransfer => ("extraSystemTransfer", "Instructions"),
                 Self::DelegatePaysFee => ("delegatePaysFee", "FeePayer"),
@@ -259,7 +256,6 @@ mod delegate_message {
             match self {
                 Self::Honest => send(honest.clone()),
                 Self::SwappedRecipient => send(paying(honest, 0, stranger)),
-                Self::ChangeToStranger => send(paying(honest, 1, stranger)),
                 Self::DelegateWritable => {
                     let mut widened = honest.clone();
                     widened

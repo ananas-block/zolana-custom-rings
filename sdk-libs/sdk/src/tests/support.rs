@@ -11,8 +11,8 @@ use custom_ring_interface::{
     storage::{RegistryId, Revision, StorageRegistry},
     storage_instruction::{InitializeIxData, InitializeTrackingIxData},
     tracking::TrackingRegistry,
-    CoSignScope, CoSigner, CoSignerCounts, NewRing, RingMode, RingPolicy, RingRoles, SourceSlot,
-    CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
+    CoSignScope, CoSigner, CoSignerCounts, NewRing, PolicyUpdate, RingMode, RingPolicy, RingRoles,
+    SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -52,7 +52,7 @@ use zolana_ring_member_registry::{
     Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree, TrackingOpening,
     TrackingRecord, TrackingTree,
 };
-use zolana_ring_policy::{Member, RuleTable};
+use zolana_ring_policy::{ListSet, Member, RuleTable};
 
 use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
@@ -271,6 +271,15 @@ impl RingSettings {
     }
 }
 
+fn policy_update(sources: [SourceSlot; N_SOURCE_SLOTS], rules: &RuleTable) -> PolicyUpdate {
+    PolicyUpdate {
+        sources,
+        salted_lists: ListSet::EMPTY,
+        rules: rules.encode(),
+        slot: SLOT,
+    }
+}
+
 /// Clones share the query log.
 #[derive(Clone, Default)]
 pub(crate) struct Chain {
@@ -368,7 +377,7 @@ impl Chain {
         }
         sources[ListId::Block.slot()].registry = curator;
         ring_account
-            .set_policy(sources, rules.encode(), SLOT)
+            .set_policy(policy_update(sources, rules))
             .unwrap();
         let records = self
             .registry
@@ -697,13 +706,10 @@ impl TrackingFixture {
     }
 
     fn account(&self) -> Account {
-        let mut registry = TrackingRegistry::new(
-            1,
-            &InitializeTrackingIxData {
-                ring_id: ring().ring_id().unwrap(),
-                auditor_pubkey: *auditor().pubkey().as_bytes(),
-            },
-        );
+        let mut registry = TrackingRegistry::new(&InitializeTrackingIxData {
+            ring_id: ring().ring_id().unwrap(),
+            auditor_pubkey: *auditor().pubkey().as_bytes(),
+        });
         registry.roots[0].hash = self.tree.root().unwrap();
         registry.roots[0].revision = Revision::from(REVISION);
         account(STORAGE_PROGRAM_ID, &registry)
@@ -860,7 +866,7 @@ impl Registry {
         for list in rules.referenced().iter() {
             sources[list.slot()].list_id = list as u8;
         }
-        policy.set_policy(sources, rules.encode(), SLOT).unwrap();
+        policy.set_policy(policy_update(sources, rules)).unwrap();
         account(program(), &*policy)
     }
 

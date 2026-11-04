@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     ring_body_output, ring_sender_bundle_output_body, CustomRingError, RecipientBody, RingMode,
-    RingRail, RingTransactData, SenderBundle, RECIPIENT_BODY_LEN,
+    RingRail, RingTransactData, SenderBundle,
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
@@ -3050,89 +3050,44 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
     ));
 }
 
-/// One record per class, an unrelated signer covers nothing.
+/// One record holds every demanded class, a record of one class covers nothing.
 #[tokio::test]
-async fn each_proven_class_takes_its_own_co_signer() {
-    use crate::{co_signer::CoSignerChoice, tests::support::keypair};
+async fn the_one_co_signer_record_holds_every_demanded_class() {
+    use crate::co_signer::CoSignerChoice;
     use custom_ring_interface::{
         cosign::{ApprovalMask, CoSignOperation},
-        CoSignScope, CoSigner, CoSignerCounts, CO_SIGNER,
+        CoSignScope,
     };
-    let _ = keypair(1);
-    let (outflow, withdrawal, stranger) = (
-        Address::new_from_array([61; 32]),
-        Address::new_from_array([62; 32]),
-        Address::new_from_array([63; 32]),
-    );
-    let record = |signer: Address, scope: CoSignScope| {
-        let bump = Address::find_program_address(
-            &[CoSigner::SEED, signer.as_ref()],
-            &crate::tests::support::program(),
-        )
-        .1;
-        account(
-            crate::tests::support::program(),
-            &CoSigner {
-                discriminator: CO_SIGNER,
-                signer,
-                scope: scope.bits(),
-                bump,
-            },
-        )
+    let signer = Address::new_from_array([61; 32]);
+    let chain = |scope| {
+        Chain::ring(RingSettings {
+            co_signer: Some((signer, scope)),
+            ..RingSettings::new(RingMode::Confidential)
+        })
     };
-    let mut ring_settings = RingSettings::new(RingMode::Confidential).config();
-    ring_settings.co_signers = CoSignerCounts::default()
-        .added(CoSignScope::APPROVE_OUTFLOW)
-        .unwrap()
-        .added(CoSignScope::APPROVE_WITHDRAWAL)
-        .unwrap();
-    let chain = Chain::ring(RingSettings::new(RingMode::Confidential))
-        .with(
-            ring().policy_pda(),
-            account(crate::tests::support::program(), &*ring_settings),
-        )
-        .with(
-            ring().co_signer_pda(&outflow),
-            record(outflow, CoSignScope::APPROVE_OUTFLOW),
-        )
-        .with(
-            ring().co_signer_pda(&withdrawal),
-            record(withdrawal, CoSignScope::APPROVE_WITHDRAWAL),
-        )
-        .with(
-            ring().co_signer_pda(&stranger),
-            record(stranger, CoSignScope::TRANSFERS),
-        );
-    let config = ring().require_config(&chain).await.unwrap();
     let demand = CoSignOperation {
-        spends_note: true,
+        spends_note: false,
         public_legs: CoSignScope::NONE,
         approval: ApprovalMask::new(3).unwrap(),
     }
     .demand();
-    let resolve = |supplied: Vec<Address>| {
-        let (config, chain) = (&config, &chain);
-        async move {
-            CoSignerChoice {
-                ring: ring(),
-                config,
-                demand,
-                supplied: &supplied,
-            }
-            .resolve(chain)
-            .await
+    let resolve = |chain: Chain| async move {
+        let config = ring().require_config(&chain).await.unwrap();
+        CoSignerChoice {
+            ring: ring(),
+            config: &config,
+            demand,
+            supplied: Some(signer),
         }
+        .resolve(&chain)
+        .await
     };
     assert_eq!(
-        resolve(vec![outflow, withdrawal]).await.unwrap(),
-        [outflow, withdrawal]
+        resolve(chain(CoSignScope::APPROVALS)).await.unwrap(),
+        Some(signer)
     );
     assert!(matches!(
-        resolve(vec![outflow]).await,
-        Err(RingError::Program(CustomRingError::MissingCoSigner))
-    ));
-    assert!(matches!(
-        resolve(vec![stranger, outflow, withdrawal]).await,
+        resolve(chain(CoSignScope::APPROVE_OUTFLOW)).await,
         Err(RingError::Program(CustomRingError::CoSignerOutOfScope))
     ));
 }
@@ -3170,17 +3125,13 @@ async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
     let unconfigured = Chain::ring(RingSettings::new(RingMode::Confidential))
         .with_records(thresholds())
         .client();
-    let below = withdrawing(100)
-        .frame(&unconfigured)
-        .await
-        .ok()
-        .unwrap()
-        .frame;
+    let at_threshold = withdrawing(100);
+    let below = at_threshold.frame(&unconfigured).await.ok().unwrap().frame;
     assert!(below.parts.approval.is_empty());
     assert!(below.parts.own_revision.is_some());
     assert!(matches!(
         withdrawing(101).frame(&unconfigured).await.err(),
-        Some(RingError::Program(CustomRingError::ApproverMissing))
+        Some(RingError::Program(CustomRingError::MissingCoSigner))
     ));
     let configured = Chain::ring(RingSettings {
         co_signer: Some((approver, CoSignScope::APPROVE_WITHDRAWAL)),
@@ -3188,16 +3139,10 @@ async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
     })
     .with_records(thresholds())
     .client();
-    let above = withdrawing(101)
-        .with_co_signer(approver)
-        .frame(&configured)
-        .await
-        .ok()
-        .unwrap()
-        .frame;
+    let past_threshold = withdrawing(101).with_co_signer(approver);
+    let above = past_threshold.frame(&configured).await.ok().unwrap().frame;
     assert_eq!(above.parts.approval, ApprovalMask::WITHDRAWAL);
-    assert_eq!(above.parts.co_sign.co_signers, 1);
-    assert_eq!(above.accounts.co_signers, [approver]);
+    assert_eq!(above.accounts.co_signer, Some(approver));
 }
 
 fn delegate_transfer<'a>(
@@ -3229,7 +3174,7 @@ async fn a_delegate_exit_and_withdrawal_read_no_policy() {
         ..RingSettings::new(RingMode::Confidential)
     };
     let client = Chain::ring(settings).client();
-    let exit = delegate_transfer(&member, &key, &assets)
+    let moved = delegate_transfer(&member, &key, &assets)
         .with_exit(DelegateOutput {
             recipient: keypair(2).shielded_address().unwrap(),
             asset: Mint::SOL.asset,
@@ -3240,11 +3185,8 @@ async fn a_delegate_exit_and_withdrawal_read_no_policy() {
             amount: 2,
             recipient: Address::new_from_array([0x47; 32]),
             token_program: None,
-        })
-        .frame(&client)
-        .await
-        .ok()
-        .unwrap();
+        });
+    let exit = moved.frame(&client).await.ok().unwrap();
     let frame = &exit.frame;
     assert_eq!(frame.parts.rail, RingRail::Delegate);
     assert!(frame.parts.own_revision.is_none() && frame.parts.policy.is_none());
@@ -3266,7 +3208,7 @@ async fn a_delegate_frame_on_an_anonymous_ring_stays_anonymous() {
         delegate: Some(Address::new_from_array([0x44; 32])),
         ..RingSettings::new(RingMode::Anonymous)
     };
-    let framed = DelegateTransfer::new(DelegateTransferInput {
+    let moved = DelegateTransfer::new(DelegateTransferInput {
         ring: ring(),
         delegate: Address::new_from_array([0x44; 32]),
         payer: crate::tests::support::payer(),
@@ -3279,11 +3221,12 @@ async fn a_delegate_frame_on_an_anonymous_ring_stays_anonymous() {
             amount: 3,
         }],
     })
-    .with_assets(&assets)
-    .frame(&Chain::ring(settings).client())
-    .await
-    .ok()
-    .unwrap();
+    .with_assets(&assets);
+    let framed = moved
+        .frame(&Chain::ring(settings).client())
+        .await
+        .ok()
+        .unwrap();
     let parts = &framed.frame.parts;
     assert_eq!(parts.rail, RingRail::AnonymousDelegate);
     assert!(parts.sender.is_some() && parts.anonymous.is_none());
@@ -3294,7 +3237,7 @@ async fn a_delegate_frame_on_an_anonymous_ring_stays_anonymous() {
 async fn a_public_spend_on_an_anonymous_ring_publishes_its_owners_alone() {
     use crate::tests::support::keypair;
     let sender = keypair(1);
-    let wallet = sender.pubkey();
+    let wallet = sender.shielded_address().unwrap().solana_address().unwrap();
     let paid = ring_address(&keypair(2));
     let transfer = || {
         owner_transfer(
@@ -3306,7 +3249,8 @@ async fn a_public_spend_on_an_anonymous_ring_publishes_its_owners_alone() {
         .unwrap()
     };
     let enrolled = Chain::ring(anonymous()).client();
-    let framed = transfer().frame(&enrolled).await.ok().unwrap();
+    let public = transfer();
+    let framed = public.frame(&enrolled).await.ok().unwrap();
     let parts = &framed.frame.parts;
     assert!(parts.public_owners && parts.anonymous.is_none());
     assert_eq!(framed.frame.accounts.owner_signers, [wallet]);
@@ -3345,6 +3289,9 @@ fn a_record_names_its_kind_owner_and_raw_mint() {
         audit::audit_record(&ring_slot).unwrap().kind,
         RecordKind::Ring
     );
-    let dummy = SppProofOutputUtxo::dummy(0, Mint::SOL).unwrap();
+    let dummy = SppProofOutputUtxo {
+        owner_address: None,
+        ..exit
+    };
     assert_eq!(audit::audit_record(&dummy).unwrap(), AuditRecord::default());
 }
