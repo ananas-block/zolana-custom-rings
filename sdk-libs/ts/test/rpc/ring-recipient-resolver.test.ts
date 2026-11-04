@@ -7,7 +7,7 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ShieldedAddress, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
 
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
-import { listTagOf, RingNullifierKey } from "../../src/crypto/keys/ring-nullifier-key.js";
+import { listTagOf } from "../../src/crypto/keys/list-salt.js";
 import {
   TRACKING_QUAD_HEIGHT,
   TRACKING_SENTINEL,
@@ -53,16 +53,15 @@ function chain(leaf: TrackingRecord, kind: "present" | "absent"): RingRecipientC
 
 async function addressed() {
   const wallet = holder();
-  const key = await RingNullifierKey.derive(wallet, RING);
-  const to = key.ringAddress(wallet.shieldedAddress(), RING);
+  const to = await RingAddress.enrolled(wallet, RING);
   const member = to.recipient.signingPublicKey.ownerProofInputHash();
   const row: TrackingRecord = {
     ...TRACKING_SENTINEL,
     member,
-    nullifierPk: key.nullifierPublicKey(),
+    nullifierPk: wallet.nullifierPublicKey(),
     viewingU: new Uint8Array(32).fill(9) as Bytes32,
     revision: 3n,
-    listTag: key.listTag(),
+    listTag: listTagOf(to.listSalt),
   };
   return { to, row, wallet };
 }

@@ -10,7 +10,8 @@ import { SOL_MINT, Wallet, type WalletUtxo } from "@heliuslabs/zolana/transactio
 import { getBase58Decoder, type Address } from "@solana/kit";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 
-import { RingNullifierKey } from "../../src/crypto/keys/ring-nullifier-key.js";
+import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
+import { RingAddress } from "../../src/crypto/keys/ring-address.js";
 import { selectRingInputs } from "../../src/operations/payments/transfer.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { isZeroKeyNote, mintBalances, noteState } from "../../src/state/exposed-notes.js";
@@ -117,23 +118,19 @@ describe("list_salt.json", () => {
     ),
   ) as Record<string, string>;
 
-  it("derives the ring key, list salt and tag of the shared vector", async () => {
+  it("derives the list salt and tag of the wallet's one secret from the shared vector", async () => {
     const holder = ShieldedKeypair.fromKeypair(
       SigningKey.fromEd25519Bytes(hexToBytes(vector["signing_secret"] ?? "") as Bytes32),
     );
-    const program = getBase58Decoder().decode(
-      hexToBytes(vector["ring_program_id"] ?? ""),
-    ) as Address;
-    const key = await RingNullifierKey.derive(holder, program);
-    const secret = key.nullifierKey();
-    expect(bytesToHex(Uint8Array.of(0, ...secret.secretBytes()))).toBe(vector["nullifier_secret"]);
-    secret.destroy();
-    expect(bytesToHex(key.listSalt())).toBe(vector["list_salt"]);
-    expect(bytesToHex(key.listTag())).toBe(vector["list_tag"]);
-    const addressed = key.ringAddress(holder.shieldedAddress(), program);
-    expect(addressed.recipient.nullifierPublicKey).toEqual(key.nullifierPublicKey());
-    expect(addressed.recipient.nullifierPublicKey).not.toEqual(holder.nullifierPublicKey());
-    expect(addressed.listSalt).toEqual(key.listSalt());
+    const key = holder.nullifierKey();
+    expect(bytesToHex(Uint8Array.of(0, ...key.secretBytes()))).toBe(vector["nullifier_secret"]);
+    const salt = listSaltOf(key);
+    expect(bytesToHex(salt)).toBe(vector["list_salt"]);
+    expect(bytesToHex(listTagOf(salt))).toBe(vector["list_tag"]);
+    const program = getBase58Decoder().decode(new Uint8Array(32).fill(4)) as Address;
+    const addressed = await RingAddress.enrolled(holder, program);
+    expect(addressed.recipient.toBytes()).toEqual(holder.shieldedAddress().toBytes());
+    expect(addressed.listSalt).toEqual(salt);
     key.destroy();
   });
 });

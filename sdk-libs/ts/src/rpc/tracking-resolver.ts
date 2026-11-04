@@ -5,7 +5,7 @@ import { equalBytes, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
-import { listTagOf } from "../crypto/keys/ring-nullifier-key.js";
+import { listTagOf } from "../crypto/keys/list-salt.js";
 import type { RingAddress } from "../crypto/keys/ring-address.js";
 import { x25519FromU } from "../crypto/keys/x25519.js";
 import { RingError } from "../protocol/error.js";

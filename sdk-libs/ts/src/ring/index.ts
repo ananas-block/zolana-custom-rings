@@ -550,8 +550,8 @@ export {
   ENROLL_TAG,
   OWNER_GRANT_TAG,
   applyEnrollmentsInstruction,
-  checkEnrollment,
   enrollInstruction,
+  type EnrollmentClient,
   enrollmentState,
   ownerGrantInstruction,
   proveEnrollment,
@@ -581,7 +581,7 @@ export {
   type TrackingRegistry,
 } from "../protocol/membership/tracking.js";
 export { privateListKey } from "../protocol/membership/private-list.js";
-export { RingNullifierKey, listTagOf } from "../crypto/keys/ring-nullifier-key.js";
+export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
 export type { RingPublicSpend } from "../operations/payments/transfer.js";
 export type { RingMergeSealer } from "../crypto/audit/merge-disclosure.js";
 export { openZeroKeyMerges, type OpenedZeroKeyMerge } from "../state/zero-key-merge.js";

@@ -1,7 +1,7 @@
 /** A nonzero key enrolls in the ring's tracking registry, Rust `zolana_custom_ring_sdk::storage`. */
 import type { Address, Instruction } from "@solana/kit";
 
-import type { ChainReader } from "@heliuslabs/zolana/client";
+import type { ChainReader, SlotReader } from "@heliuslabs/zolana/client";
 import {
   SYSTEM_PROGRAM,
   Writer,
@@ -15,9 +15,9 @@ import {
   type SignerAccount,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, Bytes33, RequestContext } from "@heliuslabs/zolana/interface";
-import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { X25519PublicKey, type ShieldedKeypairLike } from "@heliuslabs/zolana/keypair";
 
-import type { RingNullifierKey } from "../../crypto/keys/ring-nullifier-key.js";
+import { listSaltOf, listTagOf } from "../../crypto/keys/list-salt.js";
 import { checkedCustomRingProof } from "../../protocol/codec/ring-codecs.js";
 import { RingError } from "../../protocol/error.js";
 import { checkedViewingU } from "../../protocol/membership/member-opening.js";
@@ -60,10 +60,20 @@ export interface Enroll {
   readonly proof?: Uint8Array;
 }
 
-export async function enrollInstruction(input: Enroll): Promise<Instruction> {
+/** An enrolled key is final. */
+export async function enrollInstruction(
+  input: Enroll,
+  client: EnrollmentClient,
+  context?: RequestContext,
+): Promise<Instruction> {
   const owner = signerAddress(input.owner);
-  const [authorization] = await trackingAuthorizationPda(input.trackingRegistry, owner);
-  const { seal } = input;
+  const { seal, trackingRegistry } = input;
+  const [stored, slot] = await Promise.all([
+    enrollmentState({ trackingRegistry, owner }, client, context),
+    client.getSlot(context),
+  ]);
+  checkEnrollment({ seal, stored, slot });
+  const [authorization] = await trackingAuthorizationPda(trackingRegistry, owner);
   const writer = new Writer()
     .u8(ENROLL_TAG, "tag")
     .bytes(seal.nullifierPk, 32, "nullifierPk")
@@ -78,7 +88,7 @@ export async function enrollInstruction(input: Enroll): Promise<Instruction> {
     [
       meta(input.payer, true, true),
       meta(input.owner, true, false),
-      meta(input.trackingRegistry, false, true),
+      meta(trackingRegistry, false, true),
       meta(authorization, false, true),
       meta(SYSTEM_PROGRAM, false, false),
     ],
@@ -87,6 +97,8 @@ export async function enrollInstruction(input: Enroll): Promise<Instruction> {
 }
 
 export type EnrollmentReadClient = Pick<ChainReader, "getAccount">;
+
+export type EnrollmentClient = EnrollmentReadClient & SlotReader;
 
 /** `undefined` before the owner's first enrollment. */
 export async function enrollmentState(
@@ -124,10 +136,10 @@ export function checkEnrollment(
     });
 }
 
-/** Seals the ring key to the registry's auditor and proves it. */
+/** Seals the nullifier key to the registry's auditor and proves it. */
 export async function proveEnrollment(
   input: Readonly<{
-    key: RingNullifierKey;
+    holder: Pick<ShieldedKeypairLike, "nullifierKey">;
     owner: Address;
     trackingRegistry: Address;
     client: EnrollmentReadClient;
@@ -141,7 +153,7 @@ export async function proveEnrollment(
   const registry = decodeTrackingRegistry(account.data);
   const auditor = X25519PublicKey.fromBytes(registry.auditorPubkey);
   const member = memberOfTag(addressBytes(input.owner, "owner"));
-  const nullifierKey = input.key.nullifierKey();
+  const nullifierKey = await input.holder.nullifierKey();
   const secret = nullifierKey.secretBytes();
   const nullifierSecret = rightAlign(secret);
   secret.fill(0);
@@ -149,7 +161,7 @@ export async function proveEnrollment(
   try {
     const seal: EnrollmentSeal = Object.freeze({
       nullifierPk: envelope.nullifierPublicKey,
-      listTag: input.key.listTag(),
+      listTag: listTagOf(listSaltOf(nullifierKey)),
       ephU: envelope.sealed.ephemeralPublicKey.u(),
       ciphertext: envelope.sealed.ciphertext,
     });

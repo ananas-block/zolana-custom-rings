@@ -18,9 +18,15 @@ import {
   U64_MAX,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
-import { ShieldedAddress, type Bytes32, type ViewTag } from "@heliuslabs/zolana/keypair";
+import {
+  ShieldedAddress,
+  type Bytes32,
+  type ShieldedKeypairLike,
+  type ViewTag,
+} from "@heliuslabs/zolana/keypair";
 
 import { checkedCounter, RingKeyError } from "../error.js";
+import { listSaltOf } from "./list-salt.js";
 
 const addressDecoder = getAddressDecoder();
 const addressEncoder = getAddressEncoder();
@@ -65,6 +71,20 @@ export class RingAddress {
     this.ringProgramId = fields.ringProgramId;
     this.listSalt = Uint8Array.from(salt) as Bytes32;
     Object.freeze(this);
+  }
+
+  /** Reveals the owner's list status. */
+  static async enrolled(
+    holder: Pick<ShieldedKeypairLike, "shieldedAddress" | "nullifierKey">,
+    ringProgramId: Address,
+  ): Promise<RingAddress> {
+    const recipient = await holder.shieldedAddress();
+    const key = await holder.nullifierKey();
+    try {
+      return new RingAddress({ recipient, ringProgramId, listSalt: listSaltOf(key) });
+    } finally {
+      key.destroy();
+    }
   }
 
   equals(other: RingAddress): boolean {

@@ -14,7 +14,7 @@ import {
 } from "@heliuslabs/zolana/keypair";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
-import { listTagOf, RingNullifierKey } from "../../../src/crypto/keys/ring-nullifier-key.js";
+import { listSaltOf, listTagOf } from "../../../src/crypto/keys/list-salt.js";
 import {
   applyEnrollmentsInstruction,
   checkEnrollment,
@@ -73,6 +73,11 @@ function stored(fields: Partial<TrackingAuthorization> = {}): TrackingAuthorizat
     ...fields,
   };
 }
+
+const unenrolled = {
+  getAccount: async () => undefined,
+  getSlot: async () => 0n,
+} as never;
 
 function authorizationBytes(): Uint8Array {
   const data = new Uint8Array(250);
@@ -248,14 +253,17 @@ describe("tracking openings", () => {
 describe("enrollment instructions", () => {
   it("lays out tag 6, the fields then the proof on a first enrollment, none on a rotation", async () => {
     const owner = await generateKeyPairSigner();
-    const first = await enrollInstruction({
-      payer: owner,
-      owner,
-      trackingRegistry: REGISTRY,
-      seal: SEAL,
-      viewingU: field(0x15),
-      proof: PROOF,
-    });
+    const first = await enrollInstruction(
+      {
+        payer: owner,
+        owner,
+        trackingRegistry: REGISTRY,
+        seal: SEAL,
+        viewingU: field(0x15),
+        proof: PROOF,
+      },
+      unenrolled,
+    );
     const data = new Reader(new Uint8Array(first.data ?? []));
     expect(data.u8("tag")).toBe(6);
     expect(data.bytes(32, "nullifierPk")).toEqual(SEAL.nullifierPk);
@@ -274,14 +282,51 @@ describe("enrollment instructions", () => {
       authorization,
       "11111111111111111111111111111111",
     ]);
-    const rotation = await enrollInstruction({
-      payer: owner,
-      owner,
-      trackingRegistry: REGISTRY,
-      seal: SEAL,
-      viewingU: field(0x15),
-    });
+    const rotation = await enrollInstruction(
+      {
+        payer: owner,
+        owner,
+        trackingRegistry: REGISTRY,
+        seal: SEAL,
+        viewingU: field(0x15),
+      },
+      unenrolled,
+    );
     expect(rotation.data).toHaveLength(1 + 160);
+  });
+
+  it("checks the stored authorization of the signing owner before it builds", async () => {
+    const owner = await generateKeyPairSigner();
+    const [authorization] = await trackingAuthorizationPda(REGISTRY, owner.address);
+    const enrolled = (slot: bigint) => ({
+      getAccount: async (key: Address) =>
+        key === authorization ? { data: authorizationBytes() } : undefined,
+      getSlot: async () => slot,
+    });
+    const enroll = (seal: EnrollmentSeal, slot: bigint) =>
+      enrollInstruction(
+        { payer: owner, owner, trackingRegistry: REGISTRY, seal, viewingU: field(0x15) },
+        enrolled(slot) as never,
+      );
+    await expect(enroll(SEAL, 900n + TRACKING_GRACE_SLOTS)).resolves.toBeDefined();
+    await expect(
+      enroll({ ...SEAL, ciphertext: field(0x16) }, 900n + TRACKING_GRACE_SLOTS),
+    ).rejects.toMatchObject({ code: "RING_ENROLLMENT_KEY_MISMATCH" });
+    await expect(enroll(SEAL, 900n + TRACKING_GRACE_SLOTS - 1n)).rejects.toMatchObject({
+      code: "RING_ENROLLMENT_ROTATION_TOO_SOON",
+    });
+    await expect(
+      enrollInstruction(
+        {
+          payer: owner,
+          owner,
+          trackingRegistry: REGISTRY,
+          seal: { ...SEAL, nullifierPk: ZERO_NULLIFIER_PK as Bytes32 },
+          viewingU: field(0x15),
+        },
+        unenrolled,
+      ),
+    ).rejects.toMatchObject({ code: "RING_ENROLLMENT_ZERO_KEY" });
   });
 
   it("names the authorizations in chain order and refuses an apply naming none", async () => {
@@ -347,12 +392,10 @@ describe("proveEnrollment", () => {
     const holder = ShieldedKeypair.fromKeypair(
       SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(7) as Bytes32),
     );
-    const ring = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
-    const key = await RingNullifierKey.derive(holder, ring);
     const ringId = field(0x1e);
     const seen: RegisterKeyProofRequest[] = [];
     const { seal, proof } = await proveEnrollment({
-      key,
+      holder,
       owner: OWNER,
       trackingRegistry: REGISTRY,
       client: {
@@ -366,9 +409,8 @@ describe("proveEnrollment", () => {
       } as never,
     });
     expect(proof).toEqual(PROOF);
-    expect(seal.nullifierPk).toEqual(key.nullifierPublicKey());
-    expect(seal.nullifierPk).not.toEqual(holder.nullifierPublicKey());
-    expect(seal.listTag).toEqual(listTagOf(key.listSalt()));
+    expect(seal.nullifierPk).toEqual(holder.nullifierPublicKey());
+    expect(seal.listTag).toEqual(listTagOf(listSaltOf(holder.nullifierKey())));
     const [request] = seen;
     if (request === undefined) throw new Error("no proof asked");
     expect(request.ringId).toEqual(ringId);
@@ -387,18 +429,16 @@ describe("proveEnrollment", () => {
     // The holder wipes its copies once the prover answers.
     expect(request.nullifierSecret.every((byte) => byte === 0)).toBe(true);
     expect(request.ephSk.every((byte) => byte === 0)).toBe(true);
-    key.destroy();
   });
 
   it("refuses a registry account it cannot read before any proof", async () => {
     const holder = ShieldedKeypair.fromKeypair(
       SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(7) as Bytes32),
     );
-    const key = await RingNullifierKey.derive(holder, OWNER);
     const proveRing = vi.fn();
     await expect(
       proveEnrollment({
-        key,
+        holder,
         owner: OWNER,
         trackingRegistry: REGISTRY,
         client: { getAccount: async () => undefined } as never,
@@ -406,7 +446,6 @@ describe("proveEnrollment", () => {
       }),
     ).rejects.toMatchObject({ code: "RING_TRACKING_INVALID" });
     expect(proveRing).not.toHaveBeenCalled();
-    key.destroy();
   });
 
   it("reads the stored enrollment by its account address", async () => {
@@ -439,10 +478,8 @@ describe("list salt vector", () => {
     if (secret === undefined || salt === undefined || tag === undefined)
       throw new Error("no vector");
     const key = NullifierKey.fromSecret(hexToBytes(secret).subarray(1) as never);
-    const derived = RingNullifierKey.derive({ ringNullifierKey: () => key }, OWNER);
-    return derived.then((ring) => {
-      expect(Buffer.from(ring.listSalt()).toString("hex")).toBe(salt);
-      expect(Buffer.from(ring.listTag()).toString("hex")).toBe(tag);
-    });
+    const derivedSalt = listSaltOf(key);
+    expect(Buffer.from(derivedSalt).toString("hex")).toBe(salt);
+    expect(Buffer.from(listTagOf(derivedSalt)).toString("hex")).toBe(tag);
   });
 });
