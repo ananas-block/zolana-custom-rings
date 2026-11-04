@@ -62,6 +62,13 @@ build-ring-program: build-storage-program
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
         --manifest-path programs/custom-ring/Cargo.toml -- --locked --features bpf-entrypoint
+    SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
+        --manifest-path programs/custom-ring/tests/gate-probe/Cargo.toml -- --locked
+
+# The buffered gate's heap figures, the ring program returning its bump allocator peak.
+build-ring-heap-report:
+    SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
+        --manifest-path programs/custom-ring/tests/heap-report/Cargo.toml -- --locked
 
 build-storage-program:
     #!/usr/bin/env bash
