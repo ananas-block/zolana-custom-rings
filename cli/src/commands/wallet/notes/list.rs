@@ -4,8 +4,8 @@ use anyhow::{bail, ensure, Context as _, Result};
 use clap::{builder::PossibleValue, Args, ValueEnum};
 use custom_ring_interface::ListRegistry;
 use custom_ring_sdk::{
-    AuthorityRecordUpdate, MemberRecords, PolicyUpdate, SourceOwner, UpdatePolicy,
-    WalletRecordUpdate,
+    AuthorityRecordUpdate, MemberRecords, PolicyUpdate, SaltedOwnerCheck, SourceOwner,
+    UpdatePolicy, WalletRecordUpdate,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -214,9 +214,32 @@ impl ListChange {
 }
 
 impl EntryArgs {
-    fn write(self, ctx: &Context, change: ListChange) -> Result<()> {
+    /// Checked against the chain, a salted entry under any other salt is one no proof reads.
+    fn checked_subjects(&self, ctx: &Context) -> Result<Vec<Subject>> {
         let list_id = self.list_id.id();
         let subjects = self.members.subjects(list_id, ctx.ring.program_id())?;
+        for address in &self.members.salted_owners {
+            ctx.zolana
+                .block_on(
+                    SaltedOwnerCheck {
+                        ring: ctx.ring,
+                        address,
+                    }
+                    .run(ctx.zolana.as_async()),
+                )
+                .with_context(|| {
+                    format!(
+                        "the salt of {} does not reach a list entry",
+                        address.to_base58()
+                    )
+                })?;
+        }
+        Ok(subjects)
+    }
+
+    fn write(self, ctx: &Context, change: ListChange) -> Result<()> {
+        let list_id = self.list_id.id();
+        let subjects = self.checked_subjects(ctx)?;
         let outcomes = ListUpdate {
             authority: ctx.authority()?,
             list_id,
@@ -236,7 +259,7 @@ impl EntryArgs {
 
     fn show(self, ctx: &Context) -> Result<()> {
         let list_id = self.list_id.id();
-        let subjects = self.members.subjects(list_id, ctx.ring.program_id())?;
+        let subjects = self.checked_subjects(ctx)?;
         let members: Vec<Member> = subjects.iter().map(|subject| subject.member).collect();
         let pinned = policy::pinned(ctx)?;
         let (source, reads) = match pinned.account.registry_for(list_id) {
