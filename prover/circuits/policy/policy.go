@@ -111,7 +111,7 @@ func (p *Policy) Validate(publicAssets int) error {
 	if p.Outputs == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments {
 		return fmt.Errorf("policy requires owner and asset references for every payment")
 	}
-	if p.Senders == 0 || len(p.SenderEntries) != p.Senders {
+	if len(p.SenderEntries) != p.Senders {
 		return fmt.Errorf("policy requires one reference per screened sender")
 	}
 	if len(p.PublicAssetEntries) != publicAssets {

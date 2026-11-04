@@ -18,9 +18,9 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -52,15 +52,12 @@ type DepositCircuit struct {
 	BlindingSecrets []frontend.Variable
 	EphSk           [32]frontend.Variable
 	AuditorPk       [32]frontend.Variable
-	TrackingRoot    frontend.Variable
-	Tracking        []registry.TrackingOpening
-	OwnRoot         frontend.Variable
-	PolicyHash      frontend.Variable
 	// Each asset is SPP's asset field of its deposit's group.
 	Assets     []frontend.Variable
 	Amounts    []frontend.Variable
 	MintChunks [][2]frontend.Variable
-	policy.DepositScreen
+	policy.Tracking
+	policy.Policy
 }
 
 var DepositCapacities = []int{1, 2, 4, 8}
@@ -69,9 +66,17 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 	if err := shared.ValidateWidth("deposit", capacity, DepositCapacities); err != nil {
 		return nil, err
 	}
+	screen, err := policy.NewDepositPolicy(capacity)
+	if err != nil {
+		return nil, err
+	}
+	tracking, err := policy.NewTracking(0, capacity, 0)
+	if err != nil {
+		return nil, err
+	}
 	return &DepositCircuit{
-		Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity), Tracking: make([]registry.TrackingOpening, capacity),
-		Assets: make([]frontend.Variable, capacity), Amounts: make([]frontend.Variable, capacity), MintChunks: make([][2]frontend.Variable, capacity), DepositScreen: policy.NewDepositScreen(capacity),
+		Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity),
+		Assets: make([]frontend.Variable, capacity), Amounts: make([]frontend.Variable, capacity), MintChunks: make([][2]frontend.Variable, capacity), Tracking: tracking, Policy: screen,
 	}, nil
 }
 
@@ -82,14 +87,12 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		shared.ValidateLength("deposit", "owner key", len(c.OwnerKeys), c.Capacity),
 		shared.ValidateLength("deposit", "nullifier key", len(c.NullifierPks), c.Capacity),
 		shared.ValidateLength("deposit", "blinding secret", len(c.BlindingSecrets), c.Capacity),
-		shared.ValidateLength("deposit", "tracking opening", len(c.Tracking), c.Capacity),
 		shared.ValidateLength("deposit", "asset", len(c.Assets), c.Capacity),
 		shared.ValidateLength("deposit", "amount", len(c.Amounts), c.Capacity),
 		shared.ValidateLength("deposit", "mint", len(c.MintChunks), c.Capacity),
-		shared.ValidateLength("deposit", "asset record", len(c.AssetRecords), c.Capacity),
-		shared.ValidateLength("deposit", "curator asset record", len(c.CuratorAssetRecords), c.Capacity),
-		shared.ValidateLength("deposit", "owner record", len(c.OwnerRecords), c.Capacity),
-		shared.ValidateLength("deposit", "curator owner record", len(c.CuratorOwnerRecords), c.Capacity),
+		shared.ValidateLength("deposit", "payment", c.Policy.Outputs, c.Capacity),
+		c.Validate(0),
+		c.ValidateTracking(0, c.Capacity, 0),
 	); err != nil {
 		return err
 	}
@@ -98,41 +101,38 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	commitments := make([]frontend.Variable, c.Capacity)
 	var plaintext []frontend.Variable
-	deposits := make([]policy.Payment, c.Capacity)
-	for i := range commitments {
+	slots := make([]shared.Output, c.Capacity)
+	for i := range slots {
 		active := count.Active[i]
 		// 2. A padding slot carries no owner, nullifier key, blinding secret, asset or amount.
 		for _, value := range []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i], c.BlindingSecrets[i], c.Assets[i], c.Amounts[i]} {
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: value})
 		}
-		// 3. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under the root.
-		c.assertOutputKey(api, i, active)
-		// 4. The blinding is derived in the CRDB domain, the commitment is the deposited UTXO's owner part.
+		slots[i] = shared.Output{
+			UtxoWires: shared.UtxoWires{OwnerPkHash: c.OwnerPkHashes[i], NullifierPk: c.NullifierPks[i], Asset: c.Assets[i], Amount: c.Amounts[i]},
+			Utxo:      active, Ring: active, Exit: 0,
+		}
+		// 3. The blinding is derived in the CRDB domain, the commitment is the deposited UTXO's owner part.
 		owner := gadget.PoseidonHash(api, []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i]})
 		blinding := shared.DepositBlinding(api, c.BlindingSecrets[i])
 		commitments[i] = gadget.PoseidonHash(api, []frontend.Variable{owner, blinding})
-		// 5. The record seals the blinding the reader rebuilds the commitment with.
+		// 4. The record seals the blinding the reader rebuilds the commitment with, and bounds a live amount below 2^64 as the comparator needs.
 		record := audit.RecordOpening{
 			Live: active, Kind: api.Mul(active, audit.KindRing), Amount: c.Amounts[i], OwnerPkHash: c.OwnerPkHashes[i], NullifierPk: c.NullifierPks[i], Asset: c.Assets[i],
 			OwnerKey: c.OwnerKeys[i], MintChunks: c.MintChunks[i],
 		}.Encode(api, rc)
 		blindingBytes := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(active, blinding))
 		plaintext = slices.Concat(plaintext, record, blindingBytes[:])
-		deposits[i] = policy.Payment{Owner: c.OwnerPkHashes[i], Asset: c.Assets[i], Amount: c.Amounts[i], Active: active}
 	}
+	// 5. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under the root.
+	tracking := c.OpenTracking(api)
+	transfer.AssertOutputOwners(api, tracking, slots, c.OutputEntries)
 	// 6. On a policy ring every recipient and deposited asset meets the rules under the bound roots.
-	c.DepositScreen.Assert(api, rc, c.PolicyHash, c.OwnRoot, deposits)
+	c.ScreenDeposit(api, rc, tracking, slots)
 	// 7. The statement binds each commitment SPP receives to the ciphertext the auditor opens, one CRING/dep1 stream puts slot i at counter 2 + 9i.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.SealStream(api)
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, c.statement(api, count, commitments, sealed)))
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(api, count, commitments, sealed)))
 	return nil
-}
-
-func (c *DepositCircuit) assertOutputKey(api frontend.API, i int, active frontend.Variable) {
-	enrolled := api.Mul(active, api.Sub(1, api.IsZero(api.Sub(c.NullifierPks[i], shared.ZeroNullifierPk))))
-	row := c.Tracking[i].Resolve(api, active, c.TrackingRoot, c.OwnerPkHashes[i])
-	api.AssertIsEqual(row.Present, enrolled)
-	api.AssertIsEqual(row.NullifierPk, api.Mul(enrolled, c.NullifierPks[i]))
 }
 
 // statement mirrors DepositPublicInput::elements in program-libs/interface/src/instructions/deposit.rs.

@@ -1,5 +1,5 @@
 use spr_hasher::{
-    hash_chain::create_hash_chain_from_slice,
+    hash_chain::{create_hash_chain_4_from_slice, create_hash_chain_from_slice},
     primitives::{hash_bytes, pack_be, right_align, PACK_BE_CHUNK_BYTES},
     HasherError,
 };
@@ -74,7 +74,7 @@ pub const DEPOSIT_STATEMENT_VERSION: u8 = 4;
 
 impl DepositPublicInput<'_> {
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        create_hash_chain_from_slice(&self.elements()?)
+        create_hash_chain_4_from_slice(&self.elements()?)
     }
 
     pub fn elements(&self) -> Result<[[u8; 32]; DEPOSIT_PUBLIC_INPUT_ELEMENTS], HasherError> {

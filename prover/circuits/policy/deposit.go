@@ -2,52 +2,24 @@ package policy
 
 import (
 	"github.com/consensys/gnark/frontend"
-	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
-	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 )
 
-type DepositScreen struct {
-	Table               Table
-	AssetRecords        []registry.QuadOpening
-	OwnerRecords        []registry.QuadOpening
-	CuratorRoot         frontend.Variable
-	CuratorAssetRecords []registry.QuadOpening
-	CuratorOwnerRecords []registry.QuadOpening
+// maxDepositAssets is SPP's MAX_DEPOSIT_ASSETS, DepositAccounts::validate_and_parse refuses more.
+const maxDepositAssets = 5
+
+// NewDepositPolicy holds one record per recipient and per asset SPP admits, no sender, leg or public slot reads the pools.
+func NewDepositPolicy(deposits int) (Policy, error) {
+	records := deposits + min(deposits, maxDepositAssets)
+	return NewPolicy(InputsShape{Outputs: deposits}.Inputs(), RecordPoolShape{Own: records, Curator: records}, 0)
 }
 
-func NewDepositScreen(capacity int) DepositScreen {
-	return DepositScreen{
-		AssetRecords: make([]registry.QuadOpening, capacity), OwnerRecords: make([]registry.QuadOpening, capacity),
-		CuratorAssetRecords: make([]registry.QuadOpening, capacity), CuratorOwnerRecords: make([]registry.QuadOpening, capacity),
-	}
-}
-
-// Assert screens nothing under a zero policyHash, the program binds zero off a policy ring.
-func (d DepositScreen) Assert(api frontend.API, rc frontend.Rangechecker, policyHash, ownRoot frontend.Variable, deposits []Payment) {
-	// 1. A nonzero policy_hash fixes the table the rules read.
-	screened := ringgadget.IsNonZero(api, policyHash)
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: screened, A: policyHash, B: d.Table.hash(api)})
-	table := d.Table.view(api, rc)
-	// 2. Each deposited asset and recipient opens its record, or its absence, under own_root and under curator_root when a source names the curator.
-	resolved := subjects{owners: make([]subjectView, len(deposits)), assets: make([]subjectView, len(deposits)), mintPolicies: make([]mintPolicyWires, len(deposits))}
-	payments := make([]Payment, len(deposits))
-	for i, deposit := range deposits {
-		active := api.Mul(screened, deposit.Active)
-		// The comparator width holds for u64 amounts only.
-		rc.Check(deposit.Amount, 64)
-		lists, mintPolicy, _ := d.AssetRecords[i].Resolve(api, active, ownRoot, deposit.Asset)
-		curated, _, _ := d.CuratorAssetRecords[i].Resolve(api, api.Mul(active, table.sources.anyForeign), d.CuratorRoot, deposit.Asset)
-		resolved.assets[i] = subjectView{onList: table.sources.lists(api, sourceLists(api, lists), sourceLists(api, curated))}
-		resolved.mintPolicies[i] = decodeMintPolicy(api, mintPolicy)
-		ownerLists, _, _ := d.OwnerRecords[i].Resolve(api, active, ownRoot, deposit.Owner)
-		curatedOwner, _, _ := d.CuratorOwnerRecords[i].Resolve(api, api.Mul(active, table.sources.anyForeign), d.CuratorRoot, deposit.Owner)
-		resolved.owners[i] = subjectView{onList: table.sources.lists(api, sourceLists(api, ownerLists), sourceLists(api, curatedOwner))}
-		// Public funds are no same-ring input, every deposit is a receipt.
-		payments[i] = Payment{Owner: deposit.Owner, Asset: deposit.Asset, Amount: deposit.Amount, Active: active, Ring: 1}
-	}
-	// 3. Every active owner and asset rule holds for each deposit as for a transfer output.
-	assertPaymentRules(api, newComparator(rc), screenedRules(api, screened, table), table, resolved, payments, nil)
+// ScreenDeposit runs the payment section alone, public funds spend no input and every deposit reads as a receipt.
+func (p *Policy) ScreenDeposit(api frontend.API, rc frontend.Rangechecker, tracking TrackingPool, deposits []shared.Output) {
+	g := Rail{ThresholdsActive: 0, Delegate: 0}.Gates(api, p.PolicyHash)
+	table := p.Table.decodeWhen(api, rc, g.Screened, p.PolicyHash)
+	payments := slotPayments(deposits)
+	resolved := p.resolveSubjects(api, rc, table, g, Spend{Tracking: tracking}, payments)
+	assertPaymentRules(api, newComparator(rc), screenedRules(api, g.Screened, table), table, resolved, payments, nil)
 }

@@ -604,7 +604,7 @@ fn compute_vectors() -> StatementVectors {
                       pack_be(0x04 || eph_u), digest(envelope), salt, layout] with the frame's \
                       random salt and layout = has_data | entry << 1. \
                       digest(ct) = Poseidon(u32 len(ct), HashChain4(pack_left31(ct))). Each \
-                      envelope has the length of its stream layout. The deposit statement is HashChain(elements) \
+                      envelope has the length of its stream layout. The deposit statement is HashChain4(elements) \
                       over CRDP, the context hash of the program id, tree and SPP data, the \
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
                       zero padded to 8 slots, both tagged keys packed, the tracking root, the \

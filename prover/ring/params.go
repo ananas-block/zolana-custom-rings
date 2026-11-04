@@ -358,30 +358,20 @@ type RegisterKeyParams struct {
 
 type DepositParams struct {
 	RequestHead
-	ContextHash     Field   `json:"contextHash"`
-	Count           uint32  `json:"count"`
-	Anonymous       bool    `json:"anonymous,omitempty"`
-	OwnerPkHashes   []Field `json:"ownerPkHashes"`
-	OwnerKeys       []Bytes `json:"ownerKeys"`
-	NullifierPks    []Field `json:"nullifierPks"`
-	BlindingSecrets []Field `json:"blindingSecrets"`
-	EphSk           Bytes   `json:"ephSk"`
-	AuditorPk       Bytes   `json:"auditorPk"`
-	TrackingRoot    Field   `json:"trackingRoot"`
-	// Tracking is nil at a padding slot.
-	Tracking    []*TrackingOpening `json:"tracking"`
-	OwnRoot     Field              `json:"ownRoot"`
-	CuratorRoot Field              `json:"curatorRoot"`
-	PolicyHash  Field              `json:"policyHash"`
-	Assets      []Field            `json:"assets"`
-	Amounts     []Field            `json:"amounts"`
-	MintChunks  [][]Field          `json:"mintChunks"`
-	// Table and the records are absent without a written policy, the curator records also without a curator source.
-	Table               *PolicyTable     `json:"table,omitempty"`
-	AssetRecords        []*MemberOpening `json:"assetRecords"`
-	OwnerRecords        []*MemberOpening `json:"ownerRecords"`
-	CuratorAssetRecords []*MemberOpening `json:"curatorAssetRecords"`
-	CuratorOwnerRecords []*MemberOpening `json:"curatorOwnerRecords"`
+	ContextHash     Field     `json:"contextHash"`
+	Count           uint32    `json:"count"`
+	Anonymous       bool      `json:"anonymous,omitempty"`
+	OwnerPkHashes   []Field   `json:"ownerPkHashes"`
+	OwnerKeys       []Bytes   `json:"ownerKeys"`
+	NullifierPks    []Field   `json:"nullifierPks"`
+	BlindingSecrets []Field   `json:"blindingSecrets"`
+	EphSk           Bytes     `json:"ephSk"`
+	AuditorPk       Bytes     `json:"auditorPk"`
+	Assets          []Field   `json:"assets"`
+	Amounts         []Field   `json:"amounts"`
+	MintChunks      [][]Field `json:"mintChunks"`
+	TrackingParams
+	PolicyParams
 }
 
 // TrackingLeaf mirrors registry.TrackingRecord field for field.

@@ -42,7 +42,7 @@ func (k Key) extension() common.ExtensionCircuit {
 	case RegisterKey:
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:
-		return bind[DepositParams](k, circuits.NewDepositCircuit, k.Inputs)
+		return bindPolicy[DepositParams](k, circuits.NewDepositCircuit, k.Inputs)
 	case Merge:
 		return bind[MergeParams](k, unsized[circuits.MergeCircuit], struct{}{})
 	}
@@ -129,6 +129,8 @@ func (r *policyRequest[P]) Assignment() (frontend.Circuit, error) {
 func (p PolicyParams) pooled() PolicyParams { return p }
 
 func (p TransferParams) tracking() TrackingParams { return p.TrackingParams }
+
+func (p DepositParams) tracking() TrackingParams { return p.TrackingParams }
 
 func (p PolicyParams) validateIndices(pools policy.RecordPoolShape) error {
 	if err := validatePoolIndices(p.OwnSubjects, p.OwnProof, pools.Own); err != nil {

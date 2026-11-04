@@ -77,7 +77,7 @@
         "0000000000000000000000000000000000000000000000000000000000000000",
         "0000000000000000000000000000000000000000000000000000000000000004"
       ],
-      "public_input_hash": "2fa9661eee001200f0860f9267ac499a69b8a118c6665ec903d08b7310b6e9df"
+      "public_input_hash": "07200cc83270d592110cec6f3c9dc2cceb16448cd9f7e64ab3ed4a83a4752c66"
     },
     {
       "name": "anonymous_mixed_keys",
@@ -161,7 +161,7 @@
         "0000000000000000000000000000000000000000000000000000000000000000",
         "0000000000000000000000000000000000000000000000000000000000000004"
       ],
-      "public_input_hash": "0527c7652c802b0da81bee9fdad7f978ad775550ff7c4212236c0fe9e6dd9d32"
+      "public_input_hash": "086a2d92e43fb584b97a21d5631760af01603f0239faf2d43c3cd877d1f12e62"
     },
     {
       "name": "screened_curator",
@@ -235,7 +235,7 @@
         "0000000000000000000000000000000000000000000000000000000000000000",
         "0000000000000000000000000000000000000000000000000000000000000004"
       ],
-      "public_input_hash": "1d941ef2bd8b4d5edc8277ae18166604a9ef85a12d2b9960547ba553c545812f"
+      "public_input_hash": "281ee0699418bcb97b160571adab4f292f758f8d1df8d796b50ffce67bf4af7e"
     }
   ],
   "description": "Solved deposit witnesses. A record is kind || reserved || u64be(amount) || owner_key || mint || be32(nullifier_pk) || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep1. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1."
