@@ -30,6 +30,7 @@ use custom_ring_interface::{
     tagged_x25519, AuditEvidence, DeliveredBody, EntryInput, QueueEntry, RingMode,
     DELIVERED_AUDIT_CAPACITIES, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
 };
+use solana_account::Account;
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
     collections::{HashMap, HashSet},
@@ -439,6 +440,7 @@ struct StaticSource {
     config_down: Arc<AtomicBool>,
     registry: Arc<Mutex<Address>>,
     records_down: Arc<AtomicBool>,
+    frame_buffers: Arc<Mutex<HashMap<Address, Account>>>,
 }
 
 /// The indexer page one cursor reads.
@@ -586,6 +588,10 @@ impl StaticSource {
 }
 
 impl TransactionSource for StaticSource {
+    async fn frame_buffer(&self, address: Address) -> Result<Option<Account>, ClientError> {
+        Ok(self.frame_buffers.lock().unwrap().get(&address).cloned())
+    }
+
     async fn merge_audit_page(
         &self,
         _request: MergeAuditRequest<'_>,
@@ -1100,6 +1106,7 @@ impl Fixture {
             config_down: Arc::default(),
             registry: Arc::new(Mutex::new(RECORDS)),
             records_down: Arc::default(),
+            frame_buffers: Arc::default(),
         };
         source.with_transactions(vec![
             self.audited.clone(),

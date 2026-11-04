@@ -86,6 +86,8 @@ pub enum CoSignError {
     MessageScope = -32164,
     #[error("the co-signer approves no class this operation demands")]
     NotApproved = -32165,
+    #[error("the frame buffer is no sealed buffer of the signed digest")]
+    FrameBuffer = -32166,
     #[error("the co-sign request names an asset with no record")]
     UnrecordedAsset = -32296,
 }
@@ -177,6 +179,7 @@ mod tests {
             (LimitsUnavailable, -32163),
             (MessageScope, -32164),
             (NotApproved, -32165),
+            (FrameBuffer, -32166),
             (UnrecordedAsset, -32296),
         ] {
             assert_eq!(ErrorObjectOwned::from(error).code(), code);
