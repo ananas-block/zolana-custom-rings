@@ -5,6 +5,7 @@ use std::time::Duration;
 use custom_ring_interface::{
     compute_unit_limit,
     storage::{Revision, StorageRegistry},
+    tracking::TrackingRegistry,
     CustomRingError, InstructionTag, RingPolicy,
 };
 use solana_address::Address;
@@ -121,6 +122,14 @@ pub(crate) struct BoundRoot {
     pub registry: Address,
     pub revision: Revision,
     pub root: [u8; 32],
+    pub tree: RootTree,
+}
+
+/// The account layout a root is read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RootTree {
+    Storage,
+    Tracking,
 }
 
 impl BoundRoot {
@@ -159,14 +168,37 @@ impl BoundRoot {
             registry,
             revision: newest.revision,
             root: newest.hash,
+            tree: RootTree::Storage,
+        })
+    }
+
+    /// The newest root of the ring's pinned tracking registry.
+    pub(crate) async fn tracking(
+        policy: &RingPolicy,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Self, RingError> {
+        let newest = live_tracking(policy.tracking, rpc).await?.newest();
+        Ok(Self {
+            registry: policy.tracking,
+            revision: newest.revision,
+            root: newest.hash,
+            tree: RootTree::Tracking,
         })
     }
 
     /// `true` once the registry no longer serves the root at its revision.
     async fn replaced(self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
-        let registry = live_registry(self.registry, client).await?;
-        let slot = client.get_slot().await?;
-        Ok(registry.root(self.revision, slot) != Ok(self.root))
+        let served = match self.tree {
+            RootTree::Storage => {
+                let registry = live_registry(self.registry, client).await?;
+                registry.root(self.revision, client.get_slot().await?)
+            }
+            RootTree::Tracking => {
+                let registry = live_tracking(self.registry, client).await?;
+                registry.root(self.revision, client.get_slot().await?)
+            }
+        };
+        Ok(served != Ok(self.root))
     }
 }
 
@@ -178,6 +210,16 @@ pub async fn live_registry(
     rpc.get_account(registry)
         .await?
         .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+        .ok_or(RingError::NotStorageRegistry { registry })
+}
+
+async fn live_tracking(
+    registry: Address,
+    rpc: &(impl AsyncRpc + ?Sized),
+) -> Result<TrackingRegistry, RingError> {
+    rpc.get_account(registry)
+        .await?
+        .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data))
         .ok_or(RingError::NotStorageRegistry { registry })
 }
 
@@ -437,9 +479,7 @@ impl RingOperation<'_> {
             Self::Anonymous(transfer) => transfer.check_public_signers(signers),
             Self::Merge(operation) => {
                 let config = operation.prepared.ring().require_config(client).await?;
-                operation
-                    .prepared
-                    .check_public_signers(signers.chain(operation.input.co_signer), &config)
+                operation.prepared.check_public_signers(signers, &config)
             }
             Self::Deposit(deposit) => deposit.check_public_signers(signers),
             Self::Transfer(_)

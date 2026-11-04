@@ -1,19 +1,19 @@
-//! Deposits whose proof binds the SPP data and the record of any escrowed owner or screened asset.
+//! Deposits whose proof binds the SPP data, the owner's tracking row and any screened record.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use custom_ring_interface::{
     cosign::CoSignDemand, domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets,
-    tag, CoSignScope, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
-    DepositPublicInput, DepositRegistry, DepositedAsset, InstructionTag, RingDepositAuditCapsule,
-    RingMode, RingPolicy,
+    tag, AuditRecord, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
+    DepositPublicInput, DepositRegistry, DepositedAsset, InstructionTag, OpeningRecord, RecordKind,
+    RingDepositAuditCapsule, RingMode, RingPolicy,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{AsyncRpc, ClientError};
-use spr_hasher::primitives::right_align;
+use spr_hasher::primitives::{pack_be, right_align};
 use spr_indexer_api::SerializablePubkey;
 use spr_interface::{
     instruction::instruction_data::deposit::RingDepositIxDataRef, pda, state::SplAssetRegistry,
@@ -27,10 +27,10 @@ use spr_transaction::{owner_utxo_hash, Data, Mint, Utxo, SOL_ASSET_ID, SOL_MINT}
 use zeroize::Zeroizing;
 use zolana_ring_client::{
     rpc::{PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayIntent, RelayQuote},
-    seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, DepositOpening,
-    ViewingHistory,
+    seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, ViewingHistory,
 };
 use zolana_ring_keys::RingAddress;
+use zolana_ring_member_registry::TrackingOpening;
 use zolana_ring_policy::SourceMap;
 use zolana_ring_transaction::RingDepositPlaintext;
 
@@ -40,9 +40,9 @@ use crate::{
     pipeline::{HiddenOwner, RingSender},
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
-    records::{EscrowOpening, EscrowRead, MemberRead},
+    records::{check_output_key, MemberRead, TrackingMemberRead},
     relay_message::{ExpectedDeposit, ExpectedMessage},
-    request::{self, DepositRequest, MemberOpening, PolicyTable, RecordOpeningRequest},
+    request::{self, DepositRequest, MemberOpening, MintChunks, PolicyTable},
     submission::{check_transaction_size, send_budget, BoundPolicy, BoundRoot},
     CustomRing, CustomRingConfig, PinnedPolicy, PreparedRelay, RingError, RingSubmission,
     SettledSubmission,
@@ -161,7 +161,7 @@ struct NoteTerms {
 
 pub(crate) struct BoundDeposit {
     pub instruction: Instruction,
-    /// Empty off an escrow or policy ring.
+    /// The tracking root, a policy ring's own and curator roots beside it.
     pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
 }
@@ -183,19 +183,20 @@ struct DepositDisclosure {
     blinding_secret: Zeroizing<[u8; 32]>,
     encryption: DepositEncryption,
     auditor: X25519Pubkey,
-    /// The recipient's record must escrow the key the note uses.
-    key_escrow: bool,
-    has_policy: bool,
+    /// The raw mint the record names.
+    mint: [u8; 32],
     asset: DepositedAsset,
 }
 
 struct DepositRecords {
-    root: BoundRoot,
-    escrowed: Option<EscrowOpening>,
+    tracking: BoundRoot,
+    /// The owner's row, or its absence under a zero key.
+    row: TrackingOpening,
     policy: Option<DepositScreen>,
 }
 
 struct DepositScreen {
+    root: BoundRoot,
     policy: Box<RingPolicy>,
     sources: SourceMap,
     policy_hash: [u8; 32],
@@ -295,7 +296,7 @@ impl RingDeposit<'_> {
         let anonymous = config.mode == RingMode::Anonymous;
         if anonymous == matches!(self.recipient, DepositRecipient::Confidential(_)) {
             return Err(match anonymous {
-                true => CustomRingError::AnonymousRingRefused.into(),
+                true => RingError::AnonymousDepositUntagged,
                 false => RingError::NotAnonymousRing,
             });
         }
@@ -381,10 +382,15 @@ impl NoteTerms {
             .encrypt(&self.address.viewing_pubkey)?,
         };
         let encryption = seal_deposits(
-            &[DepositOpening {
-                owner_hash,
-                blinding: Zeroizing::new(blinding),
-                owner_key: self.owner.key(),
+            &[OpeningRecord {
+                record: AuditRecord {
+                    kind: RecordKind::Ring,
+                    amount: self.amount,
+                    owner_key: self.owner.key(),
+                    mint: self.asset.mint().to_bytes(),
+                    nullifier_pk: self.address.nullifier_pubkey,
+                },
+                secret: blinding,
             }],
             auditor,
         )?;
@@ -440,8 +446,7 @@ impl PreparedRingDeposit {
                 owner_pk_hash: self.disclosure.owner_pk_hash,
                 nullifier_pk: self.disclosure.nullifier_pk,
                 auditor: self.disclosure.auditor,
-                key_escrow: self.disclosure.key_escrow,
-                has_policy: self.disclosure.has_policy,
+                mint: self.disclosure.mint,
                 asset: self.disclosure.asset,
             },
             spp,
@@ -480,7 +485,7 @@ impl PreparedRingDeposit {
     }
 
     pub fn co_sign_demand(&self) -> CoSignDemand {
-        deposit_demand()
+        CoSignDemand::DEPOSIT
     }
 
     pub fn viewing_history(&self) -> Option<&ViewingHistory> {
@@ -504,33 +509,27 @@ impl PreparedRingDeposit {
         }
         let disclosure = &self.disclosure;
         retry_projection_lag(|| async {
-            let records = match disclosure.key_escrow || disclosure.has_policy {
-                true => Some(disclosure.records(self.ring, client.zolana()).await?),
-                false => None,
-            };
-            let body = disclosure.body(records.as_ref())?;
-            self.check_size(records.as_ref().map(DepositRecords::roots))?;
+            let records = disclosure.records(self.ring, client.zolana()).await?;
+            let body = disclosure.body(&records)?;
+            let roots = records.roots();
+            self.check_size(roots)?;
             let proof = RingRequest::new(RingCircuit::deposit(body.count as u8), &*body)?
                 .prove(client, body.public_input_hash)
                 .await?;
-            let roots = records.as_ref().map(DepositRecords::roots);
             Ok(BoundDeposit {
                 instruction: self.instruction(to_instruction_proof(proof)?, roots)?,
-                roots: roots.map_or_else(Vec::new, |roots| roots.bound().collect()),
-                policy: records
-                    .as_ref()
-                    .and_then(|records| records.policy.as_ref())
-                    .map(|policy| BoundPolicy {
-                        ring: self.ring,
-                        hash: policy.policy_hash,
-                    }),
+                roots: roots.bound().collect(),
+                policy: records.policy.as_ref().map(|policy| BoundPolicy {
+                    ring: self.ring,
+                    hash: policy.policy_hash,
+                }),
             })
         })
         .await
     }
 
     /// Sized as the proven instruction, the proof is of fixed width.
-    fn check_size(&self, roots: Option<DepositRoots>) -> Result<(), RingError> {
+    fn check_size(&self, roots: DepositRoots) -> Result<(), RingError> {
         let payer = self
             .spp
             .accounts
@@ -547,23 +546,23 @@ impl PreparedRingDeposit {
     fn instruction(
         &self,
         proof: CustomRingProof,
-        roots: Option<DepositRoots>,
+        roots: DepositRoots,
     ) -> Result<Instruction, RingError> {
         let mut instruction = self.spp.clone();
         let prefix = DepositPrefix {
             tag: tag::DEPOSIT,
             proof,
-            own_revision: roots.map_or_else(Default::default, |roots| roots.own.revision),
+            tracking_revision: roots.tracking.revision,
+            own_revision: roots.own.map_or_else(Default::default, |own| own.revision),
             curator_revision: roots
-                .and_then(|roots| roots.curator)
+                .curator
                 .map_or_else(Default::default, |curator| curator.revision),
         };
         instruction.data = [bytemuck::bytes_of(&prefix), &instruction.data].concat();
         let mut accounts = vec![AccountMeta::new_readonly(self.ring.policy_pda(), false)];
         accounts.extend(
             roots
-                .into_iter()
-                .flat_map(DepositRoots::bound)
+                .bound()
                 .map(|root| AccountMeta::new_readonly(root.registry, false)),
         );
         accounts.extend(
@@ -578,20 +577,26 @@ impl PreparedRingDeposit {
 
 #[derive(Clone, Copy)]
 struct DepositRoots {
-    own: BoundRoot,
+    tracking: BoundRoot,
+    own: Option<BoundRoot>,
     curator: Option<BoundRoot>,
 }
 
 impl DepositRoots {
+    /// The program's account order, `RingPolicy::root_registries`.
     fn bound(self) -> impl Iterator<Item = BoundRoot> {
-        core::iter::once(self.own).chain(self.curator)
+        self.own
+            .into_iter()
+            .chain(self.curator)
+            .chain([self.tracking])
     }
 }
 
 impl DepositRecords {
     fn roots(&self) -> DepositRoots {
         DepositRoots {
-            own: self.root,
+            tracking: self.tracking,
+            own: self.policy.as_ref().map(|policy| policy.root),
             curator: self.curator().map(|curator| curator.root),
         }
     }
@@ -770,14 +775,16 @@ impl DepositAssembly<'_> {
         })?[..] else {
             return Err(CustomRingError::InvalidDepositData.into());
         };
+        let supplied: Vec<Address> = co_signer.into_iter().collect();
         let cosigner = CoSignerChoice {
             ring,
             config,
-            demand: &deposit_demand(),
-            supplied: co_signer,
+            demand: CoSignDemand::DEPOSIT,
+            supplied: &supplied,
         }
         .resolve(rpc)
-        .await?;
+        .await?
+        .pop();
         let address = note.address;
         Ok(PreparedRingDeposit {
             priority_fee: None,
@@ -805,8 +812,7 @@ impl DepositAssembly<'_> {
                 blinding_secret: note.blinding_secret,
                 encryption: note.encryption,
                 auditor: config.auditor_pubkey,
-                key_escrow: config.mode == RingMode::ConfidentialEscrow,
-                has_policy: config.account().has_policy(),
+                mint: note.deposit.asset.mint().to_bytes(),
                 asset,
             },
             depositor,
@@ -818,13 +824,6 @@ impl DepositAssembly<'_> {
     }
 }
 
-fn deposit_demand() -> CoSignDemand {
-    CoSignDemand {
-        approval_required: false,
-        classes: CoSignScope::DEPOSITS,
-    }
-}
-
 /// An anonymous ring spends only through the hidden Ed25519 proof.
 fn disclosed_owner(mode: RingMode, address: &ShieldedAddress) -> Result<DisclosedOwner, RingError> {
     let owner = &address.signing_pubkey;
@@ -833,9 +832,7 @@ fn disclosed_owner(mode: RingMode, address: &ShieldedAddress) -> Result<Disclose
             Err(RingError::AnonymousRecipient)
         }
         RingMode::Anonymous => Ok(DisclosedOwner::Anonymous(owner.as_ed25519()?)),
-        RingMode::Confidential | RingMode::ConfidentialEscrow => {
-            Ok(DisclosedOwner::Confidential(request::owner_key(owner)?))
-        }
+        RingMode::Confidential => Ok(DisclosedOwner::Confidential(request::owner_key(owner)?)),
     }
 }
 
@@ -846,13 +843,21 @@ impl DepositDisclosure {
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
     ) -> Result<DepositRecords, RingError> {
         let policy = ring.require_policy(rpc).await?;
-        let root = BoundRoot::own(&policy, rpc).await?;
-        let escrowed = match self.key_escrow {
-            true => Some(self.record(rpc, root).await?),
-            false => None,
+        let tracking = BoundRoot::tracking(&policy, rpc).await?;
+        let row = TrackingMemberRead {
+            root: tracking,
+            member: self.owner_pk_hash,
+        }
+        .read(rpc)
+        .await?;
+        let enrolled = match &row {
+            TrackingOpening::Present { record, .. } => Some(record),
+            TrackingOpening::Absent { .. } => None,
         };
+        check_output_key(enrolled, &self.nullifier_pk, 0)?;
         let screen = match policy.written_policy_hash() {
             Some(_) => {
+                let root = BoundRoot::own(&policy, rpc).await?;
                 let pinned = PinnedPolicy::of(&policy)?;
                 let asset = self.member_opening(rpc, root, self.asset.asset).await?;
                 let owner = self.member_opening(rpc, root, self.owner_pk_hash).await?;
@@ -865,6 +870,7 @@ impl DepositDisclosure {
                     None => None,
                 };
                 Some(DepositScreen {
+                    root,
                     sources: pinned.sources,
                     policy_hash: pinned.policy_hash,
                     asset,
@@ -876,8 +882,8 @@ impl DepositDisclosure {
             None => None,
         };
         Ok(DepositRecords {
-            root,
-            escrowed,
+            tracking,
+            row,
             policy: screen,
         })
     }
@@ -892,28 +898,9 @@ impl DepositDisclosure {
         Ok(MemberOpening::from(&read.opening))
     }
 
-    /// The recipient's record under `root`, it must escrow the deposited key.
-    async fn record(
-        &self,
-        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-        root: BoundRoot,
-    ) -> Result<EscrowOpening, RingError> {
-        EscrowRead {
-            root,
-            owner: self.owner_pk_hash,
-            nullifier_pk: self.nullifier_pk,
-        }
-        .read(rpc)
-        .await
-    }
-
-    fn body<'a>(
-        &self,
-        records: Option<&'a DepositRecords>,
-    ) -> Result<Box<DepositRequest<'a>>, RingError> {
-        let record = records.and_then(|records| records.escrowed.as_ref());
-        let policy = records.and_then(|records| records.policy.as_ref());
-        let curator = records.and_then(DepositRecords::curator);
+    fn body<'a>(&self, records: &'a DepositRecords) -> Result<Box<DepositRequest<'a>>, RingError> {
+        let policy = records.policy.as_ref();
+        let curator = records.curator();
         let public_input_hash = DepositPublicInput {
             context_hash: &self.context_hash,
             anonymous: self.owner.is_anonymous(),
@@ -922,17 +909,15 @@ impl DepositDisclosure {
             assets: &[self.asset],
             auditor_pk: self.auditor.as_bytes(),
             eph_pk: self.encryption.ephemeral_pk.as_bytes(),
-            registry: records.map(|records| DepositRegistry {
-                own_root: &records.root.root,
+            tracking_root: &records.tracking.root,
+            registry: policy.map(|policy| DepositRegistry {
+                own_root: &policy.root.root,
                 curator_root: curator.map(|curator| &curator.root.root),
-                key_escrow: self.key_escrow,
-                policy_hash: policy.map(|policy| &policy.policy_hash),
+                policy_hash: Some(&policy.policy_hash),
             }),
         }
         .hash()?;
         let first = |value: [u8; 32]| [value];
-        let mut members: [Option<RecordOpeningRequest>; 1] = Default::default();
-        members[0] = record.map(|record| record.opening.clone());
         Ok(Box::new(DepositRequest {
             public_input_hash,
             context_hash: self.context_hash,
@@ -942,16 +927,16 @@ impl DepositDisclosure {
             owner_keys: first(self.owner.key()),
             nullifier_pks: first(self.nullifier_pk),
             blinding_secrets: Zeroizing::new(first(*self.blinding_secret)),
-            ct_hashes: first(record.map_or([0; 32], |record| record.ct_hash)),
-            members,
             eph_sk: self.encryption.ephemeral_sk.clone(),
             auditor_pk: self.auditor,
-            key_escrow: record.is_some(),
-            member_registry_root: records.map_or([0; 32], |records| records.root.root),
+            tracking_root: records.tracking.root,
+            tracking: [Some((&records.row).into())],
+            own_root: policy.map_or([0; 32], |policy| policy.root.root),
             curator_root: curator.map_or([0; 32], |curator| curator.root.root),
             policy_hash: policy.map_or([0; 32], |policy| policy.policy_hash),
             assets: first(self.asset.asset),
             amounts: first(right_align(&self.asset.amount.to_be_bytes())),
+            mint_chunks: [MintChunks(pack_be::<32, 2>(&self.mint))],
             table: policy.map(|policy| PolicyTable {
                 rules: &policy.policy.rules,
                 sources: &policy.sources,

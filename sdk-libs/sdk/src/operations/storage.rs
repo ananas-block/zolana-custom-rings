@@ -1,25 +1,18 @@
 use custom_ring_interface::{
     key_catalog::RingCircuit,
-    storage::{AddressAuthorization, RegistryId, StorageRegistry},
-    storage_instruction::{
-        tag, EnrollAddressIxData, InitializeIxData, StorageUpdateIxData, StorageWriteData,
-        UpdateMode,
-    },
+    storage::{RegistryId, StorageRegistry},
+    storage_instruction::{tag, InitializeIxData, StorageUpdateIxData},
     ApplyRecordsIxData, GRACE_SLOTS, STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use spr_client::AsyncRpc;
-use zolana_ring_client::{records::MemberOpeningRead, AsyncRingIndexer};
-use zolana_ring_member_registry::{ApplyProofInputs, RecordOpening};
-use zolana_ring_policy::Member;
+use zolana_ring_member_registry::ApplyProofInputs;
 
 use crate::{
     client::{RingClient, RingIndexerBackend},
     prover::{to_instruction_proof, RingRequest},
-    records::MemberRead,
     request::{ApplyRecords, RecordWrite},
-    submission::BoundRoot,
     CustomRing, RingError,
 };
 
@@ -33,18 +26,8 @@ pub struct InitializeStorage {
     pub grace_slots: u64,
     /// `ring_id_field` of the ring it serves, immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-}
-
-/// The owner signs, a wallet with its key and a PDA through its program's `invoke_signed`.
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EnrollAddress {
-    pub payer: Address,
-    pub owner: Address,
-    pub registry: Address,
-    /// Fixed after the first enrollment.
-    pub nullifier_pk: [u8; 32],
-    pub viewing_u: [u8; 32],
+    /// Nonzero creates a private source paired with the named tracking registry.
+    pub tracking_registry: Address,
 }
 
 #[must_use]
@@ -52,7 +35,6 @@ pub struct EnrollAddress {
 pub struct UpdateStorage<'a> {
     pub authority: Address,
     pub registry: Address,
-    pub mode: UpdateMode,
     pub data: StorageUpdateIxData<'a>,
 }
 
@@ -80,6 +62,7 @@ impl InitializeStorage {
             registry_id: RegistryId(ring.program_id().to_bytes()),
             grace_slots: GRACE_SLOTS,
             ring_id: ring.ring_id().unwrap_or_default(),
+            tracking_registry: Address::default(),
         }
     }
 
@@ -92,6 +75,7 @@ impl InitializeStorage {
             registry_id: self.registry_id,
             grace_slots: self.grace_slots.to_le_bytes(),
             ring_id: self.ring_id,
+            tracking_registry: self.tracking_registry,
         };
         storage_ix(
             vec![
@@ -105,78 +89,14 @@ impl InitializeStorage {
     }
 }
 
-impl EnrollAddress {
-    /// The owner's authorization account, every apply of its address reads it.
-    pub fn authorization(&self) -> Address {
-        AddressAuthorization::find_address(&self.registry, &self.owner).0
-    }
-
-    /// The instruction cannot read a leaf, the first key is permanent and ApplyRecords enforces it.
-    pub async fn checked_instruction(
-        self,
-        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-    ) -> Result<Instruction, RingError> {
-        let read = MemberRead {
-            root: BoundRoot::newest_of(self.registry, rpc).await?,
-            member: *Member::owner_tag(self.owner.as_array())?.as_bytes(),
-        }
-        .read(rpc)
-        .await?;
-        self.check_record(&read)?;
-        Ok(self.instruction())
-    }
-
-    /// A record that withholds its escrow preimage refuses, its key is not known to agree.
-    fn check_record(&self, read: &MemberOpeningRead) -> Result<(), RingError> {
-        let RecordOpening::Present { record, .. } = &read.opening else {
-            return Ok(());
-        };
-        let escrow_agrees =
-            record.escrow_key == [0; 32] || read.escrowed(&self.nullifier_pk)?.is_some();
-        let address_agrees = read
-            .address
-            .is_none_or(|address| address.nullifier_pk == self.nullifier_pk);
-        match escrow_agrees && address_agrees {
-            true => Ok(()),
-            false => Err(RingError::EnrollmentKeyMismatch),
-        }
-    }
-
-    pub fn instruction(self) -> Instruction {
-        let data = EnrollAddressIxData {
-            nullifier_pk: self.nullifier_pk,
-            viewing_u: self.viewing_u,
-        };
-        storage_ix(
-            vec![
-                AccountMeta::new(self.payer, true),
-                AccountMeta::new_readonly(self.owner, true),
-                AccountMeta::new_readonly(self.registry, false),
-                AccountMeta::new(self.authorization(), false),
-                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-            ],
-            [&[tag::ENROLL_ADDRESS], bytemuck::bytes_of(&data)].concat(),
-        )
-    }
-}
-
 impl UpdateStorage<'_> {
-    /// One writable authorization per address write follows the registry, in write order.
     pub fn instruction(self) -> Result<Instruction, RingError> {
-        let mut accounts = vec![
-            AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new(self.registry, false),
-        ];
-        accounts.extend(self.data.writes.iter().filter_map(|write| match write {
-            StorageWriteData::Address(address) => Some(AccountMeta::new(
-                AddressAuthorization::find_address(&self.registry, &address.owner).0,
-                false,
-            )),
-            StorageWriteData::Record(_) | StorageWriteData::Escrow(_) => None,
-        }));
         Ok(storage_ix(
-            accounts,
-            [vec![self.mode.tag()], self.data.encode()?].concat(),
+            vec![
+                AccountMeta::new_readonly(self.authority, true),
+                AccountMeta::new(self.registry, false),
+            ],
+            [vec![tag::UPDATE], self.data.encode()?].concat(),
         ))
     }
 }
@@ -234,7 +154,7 @@ impl StorageApplyProof<'_> {
     }
 }
 
-fn storage_ix(accounts: Vec<AccountMeta>, data: Vec<u8>) -> Instruction {
+pub(crate) fn storage_ix(accounts: Vec<AccountMeta>, data: Vec<u8>) -> Instruction {
     Instruction {
         program_id: STORAGE_PROGRAM_ID,
         accounts,

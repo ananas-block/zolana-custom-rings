@@ -12,6 +12,7 @@ use super::{
         check_anonymous_inputs, public_co_owners, AnonymousExits, AnonymousSpend, HiddenOwner,
     },
     audit::PresealedAudit,
+    delegate::delegate_rail,
     public_owners::check_zero_key_inputs,
     sealed, shape_keyed, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged,
     TransferAuthority,
@@ -45,7 +46,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
     pub fn relayed(input: RelayedTransferInput<'a>) -> Self {
         Self {
             ring: input.ring,
-            co_signer: None,
+            co_signers: Vec::new(),
             priority_fee: None,
             rail: Relayed {
                 proof_inputs: input.proof_inputs,
@@ -130,7 +131,6 @@ impl Relayed<'_> {
                 };
                 let exits = exits.owners(client).await?;
                 let spend = AnonymousSpend {
-                    payer: self.fee_payer,
                     exit_destination: exits.destination,
                     token_owner: exits.token_owner,
                     signer: OwnerAuthorization::Prepared {
@@ -160,7 +160,6 @@ impl Relayed<'_> {
                 let delivery = DeliveredRail {
                     outputs: n_outputs,
                     rail: RingRail::Confidential,
-                    mode: config.mode,
                 }
                 .delivery()?;
                 let signature = self
@@ -183,26 +182,22 @@ impl Relayed<'_> {
                     }
                     Some(_) => {}
                 }
-                if config.mode != RingMode::ConfidentialEscrow || !config.has_policy {
-                    return Err(RingError::DelegateRequiresEscrow);
-                }
+                let ring_rail = delegate_rail(config.mode);
                 if !Shape::new(proof_inputs.input_utxos.len(), n_outputs).is_ring_authority() {
-                    return Err(RingError::ShapeUnkeyed {
-                        rail: RingRail::Delegate,
-                    });
+                    return Err(RingError::ShapeUnkeyed { rail: ring_rail });
                 }
                 (
                     rail(
                         DeliveredRail {
                             outputs: n_outputs,
-                            rail: RingRail::Delegate,
-                            mode: config.mode,
+                            rail: ring_rail,
                         }
                         .delivery()?,
                     ),
                     Vec::new(),
                     Spend::Delegate {
                         delegate: *delegate,
+                        rail: ring_rail,
                     },
                 )
             }

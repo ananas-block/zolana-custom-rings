@@ -43,8 +43,6 @@ pub struct DelegateMove<'a> {
     /// The change returns to the source.
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
-    /// Read only when the ring demands a co-signer.
-    pub co_signer: Option<Address>,
 }
 
 /// The delegate moves a member's notes with the recovered key, the member does not sign.
@@ -87,7 +85,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
     pub fn new(input: DelegateTransferInput<'_>) -> Self {
         Self {
             ring: input.ring,
-            co_signer: None,
+            co_signers: Vec::new(),
             priority_fee: None,
             rail: Delegated {
                 delegate: input.delegate,
@@ -164,7 +162,7 @@ impl<'a> DelegateMove<'a> {
     }
 
     fn transfer(&self, utxos: Vec<WalletUtxo>) -> DelegateTransfer<'a> {
-        let transfer = DelegateTransfer::new(DelegateTransferInput {
+        DelegateTransfer::new(DelegateTransferInput {
             ring: self.ring,
             delegate: self.delegate,
             payer: self.payer,
@@ -181,11 +179,15 @@ impl<'a> DelegateMove<'a> {
                 })
                 .collect(),
         })
-        .with_assets(self.assets);
-        DelegateTransfer {
-            co_signer: self.co_signer,
-            ..transfer
-        }
+        .with_assets(self.assets)
+    }
+}
+
+/// The ring's mode fixes the frame, an anonymous ring keeps the victim and recipients hidden.
+pub(super) const fn delegate_rail(mode: RingMode) -> RingRail {
+    match mode {
+        RingMode::Anonymous => RingRail::AnonymousDelegate,
+        RingMode::Confidential => RingRail::Delegate,
     }
 }
 
@@ -202,9 +204,6 @@ impl Delegated<'_> {
                 return Err(custom_ring_interface::CustomRingError::UnauthorizedDelegate.into())
             }
             Some(_) => {}
-        }
-        if config.mode != RingMode::ConfidentialEscrow || !config.has_policy {
-            return Err(RingError::DelegateRequiresEscrow);
         }
         if self.source_key.pubkey()? != self.source.nullifier_pubkey {
             return Err(RingError::NullifierKeyMismatch);
@@ -246,10 +245,10 @@ impl Delegated<'_> {
                     })?
             }
         };
+        let ring_rail = delegate_rail(config.mode);
         let delivery = DeliveredRail {
             outputs: shape.n_outputs(),
-            rail: RingRail::Delegate,
-            mode: config.mode,
+            rail: ring_rail,
         }
         .delivery()?;
         // The delegate holds no viewing key of the member, a fresh transaction key seals the move.
@@ -261,9 +260,7 @@ impl Delegated<'_> {
             proof_inputs.output_utxos.len(),
         );
         if !shape.is_ring_authority() {
-            return Err(RingError::ShapeUnkeyed {
-                rail: RingRail::Delegate,
-            });
+            return Err(RingError::ShapeUnkeyed { rail: ring_rail });
         }
         Ok(Staged {
             proof_inputs,
@@ -277,6 +274,7 @@ impl Delegated<'_> {
             interface_transfer_accounts: Vec::new(),
             spend: Spend::Delegate {
                 delegate: self.delegate,
+                rail: ring_rail,
             },
             presealed: None,
         })

@@ -99,7 +99,7 @@ impl<R: Rail> WalletRelay<'_, R> {
                 owner_signature,
                 token_account_setup,
             },
-            RingDelivery::Delivered { .. } => RelayIntent::Confidential {
+            RingDelivery::Delivered => RelayIntent::Confidential {
                 proof_inputs: encode(RelayRail::Confidential)?,
                 owner_signature,
                 token_account_setup,

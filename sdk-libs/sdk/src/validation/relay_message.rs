@@ -1,8 +1,7 @@
 //! The message a wallet signs for Ring RPC, checked against the request the wallet made.
 
 use custom_ring_interface::{
-    compute_unit_limit, tag, DepositPrefix, InstructionTag, PolicyRecipients, RingRail,
-    RingTransactData,
+    compute_unit_limit, tag, DepositPrefix, InstructionTag, RingRail, RingTransactData,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -10,10 +9,8 @@ use solana_message::{v1, VersionedMessage};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::MAX_LOADED_ACCOUNTS_DATA_SIZE;
-use spr_keypair::ShieldedAddress;
 use thiserror::Error;
 use zolana_ring_client::rpc::{PrepareAuthorityTransferRequest, RelayQuote};
-use zolana_ring_policy::Member;
 
 use crate::{CustomRing, RingError};
 
@@ -64,9 +61,8 @@ pub(crate) struct ExpectedDelegate {
     pub ring: CustomRing,
     pub fee_payer: Address,
     pub delegate: Address,
-    pub source: Member,
-    /// In payment order.
-    pub payees: Vec<Member>,
+    /// In payment order, the viewing key each confidential slot publishes as its owner tag.
+    pub payees: Vec<[u8; 32]>,
 }
 
 /// Only a check builds one.
@@ -128,26 +124,20 @@ impl ExpectedDelegate {
         request: &PrepareAuthorityTransferRequest,
         quote: &RelayQuote,
     ) -> Result<Self, RingError> {
-        let owner = |address: &ShieldedAddress| {
-            Ok::<_, RingError>(Member::from_bytes(
-                address.signing_pubkey.owner_proof_input_hash()?,
-            )?)
-        };
         let transfer = &request.transfer;
         Ok(Self {
             ring: CustomRing::new(request.ring.0),
             fee_payer: quote.fee_payer.0,
             delegate: request.delegate.0,
-            source: owner(&transfer.source.0)?,
             payees: transfer
                 .payments
                 .iter()
-                .map(|payment| owner(&payment.recipient.0))
-                .collect::<Result<_, _>>()?,
+                .map(|payment| payment.recipient.0.viewing_pubkey.u())
+                .collect(),
         })
     }
 
-    /// Outputs are hidden, the check binds each output owner the policy proof publishes.
+    /// A confidential slot alone shows its viewing key, a dummy publishes as a real recipient's would.
     pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
         let envelope = Envelope {
             ring: self.ring,
@@ -160,30 +150,25 @@ impl ExpectedDelegate {
             .data
             .split_first()
             .filter(|(tag, _)| **tag == tag::AUTHORITY_TRANSFER)
-            .and_then(|(_, data)| RingTransactData::parse(data, RingRail::Delegate).ok())
+            .and_then(|(_, data)| {
+                RingTransactData::parse(data, RingRail::Delegate)
+                    .or_else(|_| RingTransactData::parse(data, RingRail::AnonymousDelegate))
+                    .ok()
+            })
             .ok_or(MessageMismatch::Data)?;
         let data = parsed.data();
-        if !data.interface_transfers.is_empty() {
-            return Err(MessageMismatch::Data);
-        }
-        // A delegate moves under a policy, the frame names every recipient.
-        let recipients = match data.policy.map(|policy| policy.recipients) {
-            Some(PolicyRecipients::Framed(recipients)) => recipients,
-            Some(PolicyRecipients::Hidden) | None => return Err(MessageMismatch::Data),
-        };
-        let (paid, rest) = recipients
-            .split_at_checked(self.payees.len())
-            .ok_or(MessageMismatch::Recipients)?;
-        let pays_each_payee = paid
-            .iter()
-            .zip(&self.payees)
-            .all(|(slot, payee)| slot == payee.as_bytes());
-        // Change returns to the source, a zero slot is padding.
-        let returns_change = rest
-            .iter()
-            .all(|slot| slot == self.source.as_bytes() || *slot == [0; 32]);
-        if !pays_each_payee || !returns_change {
-            return Err(MessageMismatch::Recipients);
+        if !data.rail.anonymous_frame() {
+            let paid = data
+                .outputs
+                .get(..self.payees.len())
+                .ok_or(MessageMismatch::Recipients)?;
+            if !paid
+                .iter()
+                .zip(&self.payees)
+                .all(|(slot, payee)| slot.owner_tag == payee)
+            {
+                return Err(MessageMismatch::Recipients);
+            }
         }
         let mut named = instruction
             .accounts
