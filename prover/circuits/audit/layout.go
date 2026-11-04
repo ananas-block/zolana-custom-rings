@@ -1,50 +1,48 @@
-// The program cuts every ciphertext from the layout flags and the exits bitmap, a flag off the key shifts every frame length.
+// The program cuts every ciphertext from the layout flags, a flag off the key shifts every frame length.
 //
-// Read after audit/audit.go, ringgadget/count.go. Read before
-// audit/delivered.go, audit/anonymous.go.
+// Read after audit/audit.go. Read before audit/record.go.
 
 package audit
 
 import (
-	"math/bits"
-
 	"github.com/consensys/gnark/frontend"
 )
 
 // Flags of the audit statement's layout value, mirrored by AuditLayout::value in program-libs/interface/src/proof/disclosure.rs.
 const (
-	// Bits 0 and 2 stay clear in every key, exits_bitmap alone records exits.
-	_ = 1 << iota
-	// LayoutEscrow is the config's key escrow, the policy section escrows every output nullifier key the ciphertexts leave out.
-	LayoutEscrow
-	_
-	// LayoutFullOpenings is the anonymous entry layout, every spent UTXO opens in the envelope.
-	LayoutFullOpenings
+	// LayoutHasData sets the statement's has_data bit, the frame transmits one tail per published slot.
+	LayoutHasData = 1 << iota
+	// LayoutEntry names a key with entry capacity, the envelope carries default bits and one evidence entry per published input.
+	LayoutEntry
 )
 
-const layoutBits = 4
+const layoutBits = 2
 
-// Layout is the decoded layout value, every flag outside free pinned.
+// StreamShape sizes one key's auditor stream.
+type StreamShape struct {
+	InputClass, Outputs int
+	// Entry adds default bits and one evidence entry per input slot.
+	Entry bool
+	// Data adds one tail per output slot, a key without it runs no tail cipher blocks.
+	Data bool
+}
+
+// Layout is the decoded layout value.
 type Layout struct {
-	flags [layoutBits]frontend.Variable
+	HasData, Entry frontend.Variable
 }
 
-// DecodeLayout pins every flag outside free to its bit of fixed.
-func DecodeLayout(api frontend.API, layout frontend.Variable, free, fixed int) Layout {
-	if free&fixed != 0 {
-		panic("audit: a layout flag is both free and fixed")
-	}
+// DecodeLayout pins the entry flag to the key and has_data to zero off a data key.
+func (s StreamShape) DecodeLayout(api frontend.API, layout frontend.Variable) Layout {
 	// The decomposition bounds the layout to its flags.
-	l := Layout{flags: [layoutBits]frontend.Variable(api.ToBinary(layout, layoutBits))}
-	for i, flag := range l.flags {
-		if free&(1<<i) == 0 {
-			// A pinned flag names the one layout the key proves.
-			api.AssertIsEqual(flag, fixed>>i&1)
-		}
+	bits := api.ToBinary(layout, layoutBits)
+	entry := 0
+	if s.Entry {
+		entry = 1
 	}
-	return l
-}
-
-func (l Layout) Flag(f int) frontend.Variable {
-	return l.flags[bits.TrailingZeros(uint(f))]
+	api.AssertIsEqual(bits[1], entry)
+	if !s.Data {
+		api.AssertIsEqual(bits[0], 0)
+	}
+	return Layout{HasData: bits[0], Entry: bits[1]}
 }
