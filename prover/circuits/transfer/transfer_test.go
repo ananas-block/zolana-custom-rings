@@ -645,6 +645,25 @@ func Test49InputsOnTheWideKey(t *testing.T) {
 	refused(t, built.Circuit, "transfer.OpenInputs")
 }
 
+// A count below the live notes leaves one past it.
+func Test24DefaultNotesOnTheWideEntryKey(t *testing.T) {
+	shape := transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 32, Owners: 12, Entry: true, Wide: true}
+	w := ringtransfer.Signed(shape)
+	sender, key := ringtransfer.Sender(t), ringtransfer.SenderNullifierPk(t)
+	w.Inputs = make([]ringaudit.Input, 24)
+	for i := range w.Inputs {
+		amount := uint64(4)
+		if i == 23 {
+			amount = 8
+		}
+		w.Inputs[i] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, key, big.NewInt(0), amount, int64(51+i)), OwnerKey: ringtransfer.SenderKey(), Mint: ringaudit.FixtureMint}
+	}
+	built := w.Build(t)
+	requireSolved(t, built.Circuit)
+	built.Circuit.InputCount = 23
+	refused(t, built.Circuit, "transfer.OpenInputs")
+}
+
 // A statement cell moves the public input alone.
 func TestStatementBindsEveryElement(t *testing.T) {
 	if testing.Short() {

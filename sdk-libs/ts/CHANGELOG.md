@@ -2,6 +2,7 @@
 
 ## 0.1.0-alpha — unreleased
 
+- A two-output default-ring spend of 9 to 24 published inputs proves on `custom-ring-transfer-entry-2-in24-w32-s12` and `encodeRelayProofInputs` takes `wideOwners`.
 - A two-output spend of 25 to 49 published inputs proves on `custom-ring-transfer-wide-2-in49-w4-s12`, `FrameKey` takes `inputs`, and a spend no key holds refuses with `RING_CATALOG_KEY_MISSING` where it read `RING_TRANSACT_DATA_INVALID`.
 - `ringFullScan` reads a whole ring with no tag read, every held key tries every confidential and anonymous slot, and `AuditorRecovery.unopened` lists the commitments no held key opened, where an owner's note under a bad body opens only through an auditor read.
 - `BufferedFrame`, `ProvenRingTransfer.buffered` and `withBufferedSettlement` on `CustomRingTransfer`, `AnonymousTransfer` and `PublicOwnerTransfer` settle a transfer frame past one transaction from a buffer its payer writes, any other instruction refuses with `RING_BUFFERED_TAG`, and a confirmed transaction read takes the frame from its settlement.

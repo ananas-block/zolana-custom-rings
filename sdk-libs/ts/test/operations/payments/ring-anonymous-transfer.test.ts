@@ -1487,22 +1487,22 @@ describe("anonymous ring relay", () => {
 
   it("spends the entry key's input class of default-ring notes and refuses one more", async () => {
     const entry = await anonymousSpend({
-      notes: 8,
-      amount: 75n,
+      notes: 24,
+      amount: 235n,
       ring: "default",
       policy: true,
     });
-    expect((await payload(await entry.relay)).inputs).toHaveLength(8);
+    expect((await payload(await entry.relay)).inputs).toHaveLength(24);
     expect(entry.requests).toHaveLength(1);
     const wider = await anonymousSpend({
-      notes: 9,
-      amount: 85n,
+      notes: 25,
+      amount: 245n,
       ring: "default",
     });
     await expect(wider.relay).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_TOO_MANY_INPUTS",
-      cause: { details: { maximum: 8 } },
+      cause: { details: { maximum: 24 } },
     });
     expect(wider.requests).toEqual([]);
     noProofs(wider.fixture);
@@ -2144,9 +2144,9 @@ describe("anonymous entry key bound", () => {
     expect(anonymousTransfer(fixture).circuit).toBe("custom-ring-transfer-entry-4-in8-w4-s8");
   });
 
-  it("refuses a ninth default-ring note before any proof", async () => {
+  it("refuses a default-ring note past the widest entry key before any proof", async () => {
     const fixture = await anonymousRing();
-    await expect(entry(fixture, anonymousSender(), 9)).rejects.toThrow(
+    await expect(entry(fixture, anonymousSender(), 25)).rejects.toThrow(
       ringError("RING_CATALOG_KEY_MISSING"),
     );
     noProofs(fixture);

@@ -2,14 +2,19 @@ use std::{collections::BTreeSet, fmt::Write};
 
 use anyhow::{Context, Result};
 use custom_ring_interface::{
-    cosign::ApprovalMask, frame_digest, key_catalog::TransferShape, sender_bundle_len,
-    settle_buffered_data, spl_withdrawal_count, storage::Revision, stream::slot_tag, tag,
-    AnonymousProofData, CustomRingMergeIxData, CustomRingProof, DepositPrefix, FrameExtensions,
-    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, RecipientBody,
-    Replies, RingDepositAuditCapsule, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead,
-    SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_FRAME_LEN,
-    MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN,
-    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    cosign::ApprovalMask,
+    frame_digest,
+    key_catalog::{RecordPools, TransferShape, TransferSpend},
+    sender_bundle_len, settle_buffered_data, spl_withdrawal_count,
+    storage::Revision,
+    stream::slot_tag,
+    tag, AnonymousProofData, CustomRingMergeIxData, CustomRingProof, DepositPrefix,
+    FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof,
+    RecipientBody, Replies, RingDepositAuditCapsule, RingOutput, RingPolicy, RingRail,
+    RingTransactData, RootRead, SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    MAX_CPI_DATA_LEN, MAX_FRAME_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
+    OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -24,7 +29,7 @@ use spr_interface::{
         InterfaceTransfer, TransactProof, TreeContext,
     },
     shape::{Shape, SPP_SUPPORTED_SHAPES},
-    N_PUBLIC_SLOTS,
+    MAX_INTERFACE_TRANSFERS, N_PUBLIC_SLOTS,
 };
 use spr_keypair::ViewingKey;
 use spr_program::instruction::{
@@ -258,11 +263,13 @@ impl Fit {
 }
 
 /// Every input and output slot of `shape` published.
+#[derive(Clone, Copy)]
 struct Transfer {
     frame: FrameRail,
     shape: Shape,
     load: Load,
     owners: usize,
+    legs: usize,
 }
 
 struct Measured {
@@ -444,7 +451,18 @@ impl Transfer {
             interface_transfers,
             has_data: load.has_data,
             entry: frame.entry(),
-            wide_owners: false,
+            wide_owners: TransferSpend {
+                rail,
+                inputs,
+                outputs,
+                spends_default_ring: frame.entry(),
+                legs: if delegate { 0 } else { legs.len() },
+                owners: 0,
+                pools: RecordPools::default(),
+                wide: false,
+            }
+            .fitted()
+            .wide,
             outputs: slots,
             replies: (load.replies && anonymous_frame).then_some(Replies {
                 len: MIN_REPLY_LEN as u16,
@@ -608,7 +626,7 @@ impl Transfer {
             true => indexed(0xd0, 0),
             false => indexed(0xd0, leg),
         };
-        (0..LEGS)
+        (0..self.legs)
             .filter_map(|leg| match self.load.legs {
                 Legs::None => None,
                 Legs::Sol => Some((
@@ -639,16 +657,24 @@ impl Transfer {
     fn widest_owner_run(&self) -> Result<Option<usize>> {
         let mut widest = None;
         for owners in self.frame.required_owners()..=self.shape.n_inputs() {
-            let attempt = Self {
-                frame: self.frame,
-                shape: self.shape,
-                load: self.load,
-                owners,
-            };
+            let attempt = Self { owners, ..*self };
             if !attempt.measure()?.fit.fits() {
                 break;
             }
             widest = Some(owners);
+        }
+        Ok(widest)
+    }
+
+    /// The most owner signers any path clears.
+    fn widest_settled_run(&self) -> Result<Option<(usize, Measured)>> {
+        let mut widest = None;
+        for owners in self.frame.required_owners()..=self.shape.n_inputs() {
+            let measured = Self { owners, ..*self }.measure()?;
+            if matches!(measured.outcome(), Outcome::No(_)) {
+                break;
+            }
+            widest = Some((owners, measured));
         }
         Ok(widest)
     }
@@ -838,6 +864,7 @@ fn table() -> Result<String> {
                     shape,
                     load,
                     owners: frame.required_owners(),
+                    legs: LEGS,
                 };
                 let measured = transfer.measure()?;
                 let widest = match frame.has_owner_run() && load.name == FULL.name {
@@ -904,7 +931,83 @@ fn table() -> Result<String> {
             )?;
         }
     }
+    entry_capacities(&mut table)?;
     Ok(table)
+}
+
+/// Widest owner runs at sampled leg counts, 12 to 24 input entries.
+fn entry_capacities(table: &mut String) -> Result<()> {
+    writeln!(table)?;
+    writeln!(table, "Entry capacities at two outputs. Each row is the widest owner run any path clears at that leg count, rows = run + a hidden sender. A confidential leg names its own destination, a hidden sender's legs name one. over: what stops the next owner.")?;
+    writeln!(table, "| shape | rail | load | legs | leg kind | owner run | rows | accounts | signatures | frame | SPP CPI | fits | over |")?;
+    writeln!(
+        table,
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+    )?;
+    let shapes = [Shape::new(12, 2), Shape::new(16, 2), Shape::new(24, 2)];
+    for (shape, frame) in shapes.into_iter().flat_map(|shape| {
+        [FrameRail::SignerEntry, FrameRail::HiddenEntry].map(|frame| (shape, frame))
+    }) {
+        for (kind, name) in [(Legs::Sol, "sol"), (Legs::Spl, "spl")] {
+            for load in [
+                Load { legs: kind, ..MIN },
+                Load { legs: kind, ..FULL },
+                Load {
+                    name: "full+data+reply",
+                    legs: kind,
+                    has_data: true,
+                    replies: true,
+                    ..FULL
+                },
+            ] {
+                for legs in (0..=MAX_INTERFACE_TRANSFERS).filter(|legs| legs % 4 == 0 || *legs < 2)
+                {
+                    let transfer = Transfer {
+                        frame,
+                        shape,
+                        load,
+                        owners: frame.required_owners(),
+                        legs,
+                    };
+                    let Some((owners, measured)) = transfer.widest_settled_run()? else {
+                        let limit = transfer.measure()?.outcome().limit().to_owned();
+                        writeln!(table, "| {}x{} | {} | {} | {legs} | {name} | none | - | - | - | - | - | no | {limit} |", shape.n_inputs(), shape.n_outputs(), frame.name(), load.name)?;
+                        break;
+                    };
+                    let over = match owners == shape.n_inputs() {
+                        true => "inputs".to_owned(),
+                        false => Transfer {
+                            owners: owners + 1,
+                            ..transfer
+                        }
+                        .measure()?
+                        .outcome()
+                        .limit()
+                        .to_owned(),
+                    };
+                    let path = match measured.fits_inline() {
+                        true => measured.fit,
+                        false => measured.buffered,
+                    };
+                    writeln!(
+                        table,
+                        "| {}x{} | {} | {} | {legs} | {name} | {owners} | {} | {} | {} | {} | {} | {} | {over} |",
+                        shape.n_inputs(),
+                        shape.n_outputs(),
+                        frame.name(),
+                        load.name,
+                        owners + usize::from(frame.hidden_sender()),
+                        path.addresses,
+                        path.signatures,
+                        measured.frame_len,
+                        measured.spp_cpi_len,
+                        measured.outcome().fits(),
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

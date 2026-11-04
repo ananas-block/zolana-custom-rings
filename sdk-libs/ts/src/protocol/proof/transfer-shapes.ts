@@ -42,11 +42,14 @@ const ENTRY_SHAPES: readonly TransferShape[] = Object.freeze([
   shape(4, 8, 4, 8, true, true),
   shape(8, 2, 4, 2, true, true),
 ]);
+/** Sized by the entry table of `ring-frame-fit.md`. */
+const WIDE_ENTRY_SHAPE = shape(2, 24, 32, 12, true, true);
 
 export const TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
   ...NARROW_SHAPES,
   ...WIDE_SHAPES,
   ...ENTRY_SHAPES,
+  WIDE_ENTRY_SHAPE,
 ]);
 
 /** What names a frame's key, nothing else moves a record's counter, Rust `FrameKey`. */
@@ -64,10 +67,10 @@ export function frameKeyShape(key: FrameKey): TransferShape | undefined {
   const holds = (entry: TransferShape): boolean =>
     key.outputs <= entry.outputs && key.inputs <= entry.inputs;
   // SPP's authority rail holds every input to the ring.
-  if (key.spendsDefaultRing)
-    return key.rail === "delegate" || key.rail === "anonymousDelegate"
-      ? undefined
-      : ENTRY_SHAPES.find(holds);
+  if (key.spendsDefaultRing) {
+    if (key.rail === "delegate" || key.rail === "anonymousDelegate") return undefined;
+    return (key.wide ? [WIDE_ENTRY_SHAPE] : ENTRY_SHAPES).find(holds);
+  }
   return (key.wide ? WIDE_SHAPES : NARROW_SHAPES).find(holds);
 }
 

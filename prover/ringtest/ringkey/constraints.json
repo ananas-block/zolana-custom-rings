@@ -19,6 +19,7 @@
   "custom_ring_transfer_2_in24_w4_s4": 260753,
   "custom_ring_transfer_4_in24_w4_s4": 334192,
   "custom_ring_transfer_8_in16_w4_s4": 467323,
+  "custom_ring_transfer_entry_2_in24_w32_s12": 1365776,
   "custom_ring_transfer_entry_4_in8_w4_s8": 609650,
   "custom_ring_transfer_entry_8_in2_w4_s2": 552569,
   "custom_ring_transfer_wide_16_in5_w8_s5": 959468,
