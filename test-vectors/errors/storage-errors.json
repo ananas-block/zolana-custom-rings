@@ -21,15 +21,11 @@
   "InvalidTrackingAuthorization": 9023,
   "EnrollmentAlreadyApplied": 9024,
   "EnrollmentKeyFinal": 9025,
-  "TrackingTreeFull": 9026,
-  "RotationTooSoon": 9027,
   "ZeroNullifierKey": 9028,
   "EnrollmentProofShape": 9029,
   "NoEnrollmentsNamed": 9030,
   "InvalidOwnerGrant": 9031,
   "InvalidReaderKey": 9032,
   "InvalidAuditorKey": 9033,
-  "TrackingRootBelowFloor": 9034,
-  "SourceKindMismatch": 9035,
-  "WriteCounterNotIncreasing": 9036
+  "TrackingRootBelowFloor": 9034
 }

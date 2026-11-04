@@ -1,18 +1,15 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     domain,
-    storage::{
-        PrivateRootUpdate, RegistryId, Revision, RootUpdate, StorageError, StorageRegistry,
-        PRIVATE_SOURCE_EMPTY_ROOT,
-    },
+    storage::{RegistryId, Revision, RootUpdate, StorageError, StorageRegistry},
     storage_instruction::{
         EnrollIxData, EnrollRequest, InitializeIxData, InitializeTrackingIxData, OwnerGrantIxData,
         StorageUpdateIxData,
     },
     tracking::{
-        tracking_chain_start, EnrollmentRotation, FirstEnrollment, OwnerGrant,
-        TrackingAuthorization, TrackingEntry, TrackingRegistry, TrackingRootUpdate,
-        TRACKING_CAPACITY, TRACKING_EMPTY_ROOT, TRACKING_GRACE_SLOTS,
+        tracking_chain_start, FirstEnrollment, OwnerGrant, TrackingAuthorization, TrackingEntry,
+        TrackingRegistry, TrackingRootUpdate, TRACKING_CAPACITY, TRACKING_EMPTY_ROOT,
+        TRACKING_GRACE_SLOTS,
     },
     ApplyRecordsIxData, CustomRingError, CustomRingProof, NewRing, RecordWriteData, RingAccount,
     RingMode, RingPolicy, RingRole, RingRoles, SourceSlot, WriteRecordsIxData,
@@ -25,7 +22,7 @@ use spr_hasher::{
     primitives::{hash_bytes, pack_be, right_align, solana_owner_identity},
     Hasher, Poseidon,
 };
-use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
+use zolana_ring_policy::{ListId, MintPolicy, Rule, RuleTable, Subject};
 
 const PROGRAM: Address = Address::new_from_array([7; 32]);
 const ENROLL_VECTOR: &str = concat!(
@@ -145,28 +142,18 @@ fn enroll_ix(viewing_u: [u8; 32]) -> EnrollIxData {
     }
 }
 
-fn first_enrollment(slot: u64) -> TrackingAuthorization {
+fn first_enrollment() -> TrackingAuthorization {
     FirstEnrollment {
         registry: key(0x11),
         owner: key(0x12),
-        bump: 253,
-        slot,
         ix: &enroll_ix([0x18; 32]),
     }
     .account()
 }
 
-fn rotate(
-    account: &mut TrackingAuthorization,
-    slot: u64,
-    ix: &EnrollIxData,
-) -> Result<(), StorageError> {
-    account.rotate(EnrollmentRotation { slot, ix })
-}
-
 #[test]
 fn the_entry_binds_every_field_and_comes_from_the_account() {
-    let account = first_enrollment(0);
+    let account = first_enrollment();
     let entry = account.entry().unwrap();
     let [view0, view1] = pack_be(&entry.viewing_u);
     assert_eq!(
@@ -221,14 +208,14 @@ fn the_entry_binds_every_field_and_comes_from_the_account() {
 
 #[test]
 fn an_enrollment_applies_once_and_a_rotation_opens_the_next() {
-    let mut account = first_enrollment(0);
+    let mut account = first_enrollment();
     assert!(account.is_pending());
     assert_eq!(account.applied_revision(), 0);
     assert_eq!(account.apply().unwrap().revision, 1);
     assert_eq!(account.applied_revision(), 1);
     assert!(!account.is_pending());
     assert_eq!(account.apply(), Err(StorageError::EnrollmentAlreadyApplied));
-    rotate(&mut account, TRACKING_GRACE_SLOTS, &enroll_ix([0x19; 32])).unwrap();
+    account.rotate(&enroll_ix([0x19; 32])).unwrap();
     assert!(account.is_pending());
     let entry = account.apply().unwrap();
     assert_eq!((entry.revision, entry.viewing_u), (2, [0x19; 32]));
@@ -236,42 +223,17 @@ fn an_enrollment_applies_once_and_a_rotation_opens_the_next() {
 
 #[test]
 fn rotations_coalesce_into_the_latest_state() {
-    let mut account = first_enrollment(0);
-    rotate(&mut account, TRACKING_GRACE_SLOTS, &enroll_ix([0x19; 32])).unwrap();
-    rotate(
-        &mut account,
-        2 * TRACKING_GRACE_SLOTS,
-        &enroll_ix([0x1a; 32]),
-    )
-    .unwrap();
+    let mut account = first_enrollment();
+    account.rotate(&enroll_ix([0x19; 32])).unwrap();
+    account.rotate(&enroll_ix([0x1a; 32])).unwrap();
     let entry = account.apply().unwrap();
     assert_eq!((entry.revision, entry.viewing_u), (3, [0x1a; 32]));
     assert_eq!(account.apply(), Err(StorageError::EnrollmentAlreadyApplied));
 }
 
 #[test]
-fn a_rotation_waits_out_the_rate_limit_from_the_stored_slot() {
-    let start = 100;
-    let mut account = first_enrollment(start);
-    let ready = start + TRACKING_GRACE_SLOTS;
-    let before = account;
-    assert_eq!(
-        rotate(&mut account, ready - 1, &enroll_ix([0x19; 32])),
-        Err(StorageError::RotationTooSoon)
-    );
-    assert_eq!(account, before);
-    rotate(&mut account, ready, &enroll_ix([0x19; 32])).unwrap();
-    assert_eq!(account.last_enroll_slot(), ready);
-    assert_eq!(
-        rotate(&mut account, ready + 1, &enroll_ix([0x1a; 32])),
-        Err(StorageError::RotationTooSoon)
-    );
-}
-
-#[test]
 fn a_rotation_refuses_every_final_field_and_moves_the_viewing_key_alone() {
-    let mut account = first_enrollment(0);
-    let slot = TRACKING_GRACE_SLOTS;
+    let mut account = first_enrollment();
     let rotated = enroll_ix([0x19; 32]);
     let before = account;
     for changed in [
@@ -293,24 +255,23 @@ fn a_rotation_refuses_every_final_field_and_moves_the_viewing_key_alone() {
         },
     ] {
         assert_eq!(
-            rotate(&mut account, slot, &changed),
+            account.rotate(&changed),
             Err(StorageError::EnrollmentKeyFinal)
         );
     }
     assert_eq!(account, before);
-    rotate(&mut account, slot, &rotated).unwrap();
+    account.rotate(&rotated).unwrap();
     assert_eq!(
         account,
         TrackingAuthorization {
             viewing_u: [0x19; 32],
             revision: 2u64.to_le_bytes(),
-            last_enroll_slot: slot.to_le_bytes(),
             ..before
         }
     );
     account.revision = u64::MAX.to_le_bytes();
     assert_eq!(
-        rotate(&mut account, 2 * slot, &rotated),
+        account.rotate(&rotated),
         Err(StorageError::RevisionOverflow)
     );
 }
@@ -384,12 +345,12 @@ fn tracking_ix() -> InitializeTrackingIxData {
 fn a_tracking_registry_starts_at_the_sentinel_and_pins_ring_and_auditor() {
     let ix = tracking_ix();
     assert_eq!(ix.check(), Ok(()));
-    let registry = TrackingRegistry::new(254, &ix);
+    let registry = TrackingRegistry::new(&ix);
     assert_eq!(registry.ring_id, ix.ring_id);
     assert_eq!(registry.auditor_pubkey, ix.auditor_pubkey);
     assert_eq!(registry.newest().hash, TRACKING_EMPTY_ROOT);
     assert_eq!(registry.newest().revision, Revision::from(0));
-    assert_eq!((registry.next_index(), registry.reserved_leaves()), (1, 1));
+    assert_eq!(registry.next_index(), 1);
     let bytes = bytemuck::bytes_of(&registry);
     assert_eq!(
         TrackingRegistry::decode(&STORAGE_PROGRAM_ID, bytes),
@@ -438,7 +399,7 @@ fn tracking_update(revision: u64, slot: u64, byte: u8) -> TrackingRootUpdate {
 
 #[test]
 fn a_tracking_update_serves_the_old_root_for_its_grace_and_never_evicts_it() {
-    let mut registry = TrackingRegistry::new(254, &tracking_ix());
+    let mut registry = TrackingRegistry::new(&tracking_ix());
     registry.update(tracking_update(0, 10, 1)).unwrap();
     let first_root = TRACKING_EMPTY_ROOT;
     assert_eq!(registry.root(0.into(), 10), Ok(first_root));
@@ -469,17 +430,8 @@ fn a_tracking_update_serves_the_old_root_for_its_grace_and_never_evicts_it() {
 }
 
 #[test]
-fn a_full_tracking_tree_refuses_a_new_leaf_by_name_and_no_rotation_needs_one() {
-    let mut registry = TrackingRegistry::new(254, &tracking_ix());
-    registry.reserve_leaf().unwrap();
-    assert_eq!(registry.reserved_leaves(), 2);
-    registry.reserved_leaves = (TRACKING_CAPACITY as u32 - 1).to_le_bytes();
-    registry.reserve_leaf().unwrap();
-    assert_eq!(u64::from(registry.reserved_leaves()), TRACKING_CAPACITY);
-    let full = registry;
-    assert_eq!(registry.reserve_leaf(), Err(StorageError::TrackingTreeFull));
-    assert_eq!(registry, full);
-    // The bytes stay valid at capacity, a full tree keeps applying.
+fn a_tracking_tree_stays_valid_at_capacity_and_not_past_it() {
+    let mut registry = TrackingRegistry::new(&tracking_ix());
     registry.next_index = (TRACKING_CAPACITY as u32).to_le_bytes();
     assert!(TrackingRegistry::from_data(bytemuck::bytes_of(&registry)).is_some());
     registry.next_index = (TRACKING_CAPACITY as u32 + 1).to_le_bytes();
@@ -529,24 +481,35 @@ fn apply_ix() -> ApplyRecordsIxData {
     }
 }
 
-fn update_data<'a>(
+fn list_write(list: ListId) -> RecordWriteData {
+    RecordWriteData {
+        member: [1; 32],
+        lists: WriteRecordsIxData {
+            mask: list.record_bit().to_le_bytes(),
+            value: list.record_bit().to_le_bytes(),
+        },
+        mint_policy: custom_ring_interface::mint_policy_write(None),
+    }
+}
+
+fn update_of<'a>(
     revision: u64,
-    restrictive: bool,
+    writes: Vec<RecordWriteData>,
     apply: &'a ApplyRecordsIxData,
 ) -> StorageUpdateIxData<'a> {
     StorageUpdateIxData {
         revision: revision.into(),
-        restrictive,
-        writes: vec![RecordWriteData {
-            member: [1; 32],
-            lists: WriteRecordsIxData {
-                mask: 1u64.to_le_bytes(),
-                value: 1u64.to_le_bytes(),
-            },
-            mint_policy: custom_ring_interface::mint_policy_write(None),
-        }],
+        writes,
         apply,
     }
+}
+
+fn update_data<'a>(
+    revision: u64,
+    list: ListId,
+    apply: &'a ApplyRecordsIxData,
+) -> StorageUpdateIxData<'a> {
+    update_of(revision, vec![list_write(list)], apply)
 }
 
 fn public_registry(grace_slots: u64) -> StorageRegistry {
@@ -561,26 +524,27 @@ fn public_registry(grace_slots: u64) -> StorageRegistry {
     )
 }
 
-fn private_registry() -> StorageRegistry {
+fn pinned_registry(ring_id: [u8; 32]) -> StorageRegistry {
     StorageRegistry::new(
         key(1),
         &InitializeIxData {
             registry_id: RegistryId([1; 32]),
             grace_slots: 10u64.to_le_bytes(),
-            ring_id: [0; 32],
+            ring_id,
             tracking_registry: key(5),
         },
     )
 }
 
 #[test]
-fn a_restrictive_update_ends_every_older_root_at_once_and_a_permissive_one_keeps_grace() {
+fn a_policy_write_ends_every_older_root_at_once_and_a_reader_write_keeps_grace() {
     let apply = apply_ix();
     let mut registry = public_registry(10);
     registry
         .update(RootUpdate {
             slot: 1,
-            data: &update_data(0, false, &apply),
+            data: &update_data(0, ListId::Reader, &apply),
+            tracking_revision: None,
         })
         .unwrap();
     assert!(registry.root(0.into(), 1).is_ok());
@@ -589,7 +553,8 @@ fn a_restrictive_update_ends_every_older_root_at_once_and_a_permissive_one_keeps
     registry
         .update(RootUpdate {
             slot: 1,
-            data: &update_data(1, true, &apply),
+            data: &update_data(1, ListId::Block, &apply),
+            tracking_revision: None,
         })
         .unwrap();
     assert_eq!(registry.root(1.into(), 1), Err(StorageError::RootExpired));
@@ -598,7 +563,7 @@ fn a_restrictive_update_ends_every_older_root_at_once_and_a_permissive_one_keeps
 }
 
 #[test]
-fn a_restrictive_update_runs_through_a_full_history() {
+fn a_policy_write_runs_through_a_full_history() {
     let apply = apply_ix();
     let mut registry = public_registry(u64::MAX);
     let revision = ROOT_HISTORY as u64 - 1;
@@ -606,21 +571,24 @@ fn a_restrictive_update_runs_through_a_full_history() {
         registry
             .update(RootUpdate {
                 slot: 1,
-                data: &update_data(earlier, false, &apply),
+                data: &update_data(earlier, ListId::Reader, &apply),
+                tracking_revision: None,
             })
             .unwrap();
     }
     assert_eq!(
         registry.update(RootUpdate {
             slot: 2,
-            data: &update_data(revision, false, &apply),
+            data: &update_data(revision, ListId::Reader, &apply),
+            tracking_revision: None,
         }),
         Err(StorageError::HistoryFull)
     );
     registry
         .update(RootUpdate {
             slot: 2,
-            data: &update_data(revision, true, &apply),
+            data: &update_data(revision, ListId::Block, &apply),
+            tracking_revision: None,
         })
         .unwrap();
     assert_eq!(
@@ -630,19 +598,13 @@ fn a_restrictive_update_runs_through_a_full_history() {
 }
 
 #[test]
-fn update_data_round_trips_only_a_boolean_restrictive_byte() {
+fn update_data_round_trips_and_refuses_no_writes() {
     let apply = apply_ix();
-    let data = update_data(7, true, &apply);
+    let data = update_data(7, ListId::Block, &apply);
     let encoded = data.encode().unwrap();
     assert_eq!(StorageUpdateIxData::parse(&encoded), Ok(data));
-    let mut not_boolean = encoded.clone();
-    not_boolean[8] = 2;
-    assert_eq!(
-        StorageUpdateIxData::parse(&not_boolean),
-        Err(StorageError::InvalidInstructionData)
-    );
     let mut no_writes = encoded;
-    no_writes[9] = 0;
+    no_writes[8] = 0;
     assert_eq!(
         StorageUpdateIxData::parse(&no_writes),
         Err(StorageError::InvalidInstructionData)
@@ -652,90 +614,96 @@ fn update_data_round_trips_only_a_boolean_restrictive_byte() {
 #[test]
 fn a_mint_settings_tag_above_one_is_no_entry() {
     let apply = apply_ix();
-    let mut data = update_data(0, false, &apply);
+    let mut data = update_data(0, ListId::Reader, &apply);
     data.writes[0].mint_policy[0] = 2;
     assert!(data.entries().next().unwrap().is_err());
 }
 
-fn private_update(revision: u64, restrictive: bool, tracking: u64) -> PrivateRootUpdate {
-    PrivateRootUpdate {
-        revision: revision.into(),
-        restrictive,
-        slot: 1,
-        new_root: [8; 32],
-        tracking_revision: tracking.into(),
-    }
-}
-
 #[test]
-fn only_a_restrictive_private_update_moves_the_floor() {
-    let mut source = private_registry();
-    assert!(source.is_private());
-    assert_eq!(source.newest().hash, PRIVATE_SOURCE_EMPTY_ROOT);
-    source.update_private(private_update(0, false, 5)).unwrap();
-    assert_eq!(source.tracking_floor, Revision::from(0));
-    source.update_private(private_update(1, true, 5)).unwrap();
-    assert_eq!(source.tracking_floor, Revision::from(5));
-    assert_eq!(
-        source.check_tracking_revision(4.into()),
-        Err(StorageError::TrackingRootBelowFloor)
-    );
-    assert_eq!(source.check_tracking_revision(5.into()), Ok(()));
-    assert_eq!(source.check_tracking_revision(6.into()), Ok(()));
-    source.update_private(private_update(2, false, 9)).unwrap();
-    assert_eq!(source.tracking_floor, Revision::from(5));
-    assert_eq!(source.root(2.into(), 1), Ok([8; 32]));
-    assert_eq!(source.root(1.into(), 1), Err(StorageError::RootExpired));
-}
-
-#[test]
-fn a_refused_private_update_leaves_the_floor_and_each_kind_takes_its_own_update() {
-    let mut source = private_registry();
-    let before = source;
-    assert_eq!(
-        source.update_private(private_update(3, true, 5)),
-        Err(StorageError::RevisionChanged)
-    );
-    assert_eq!(source, before);
+fn the_masks_alone_decide_zero_grace() {
     let apply = apply_ix();
-    assert_eq!(
-        source.update(RootUpdate {
-            slot: 1,
-            data: &update_data(0, true, &apply),
-        }),
-        Err(StorageError::SourceKindMismatch)
-    );
+    for list in [
+        ListId::Allow,
+        ListId::Block,
+        ListId::Frozen,
+        ListId::Approval,
+    ] {
+        assert!(update_data(0, list, &apply).reaches_policy(), "{list:?}");
+        let mut clears = list_write(list);
+        clears.lists.value = [0; 8];
+        assert!(update_of(0, vec![clears], &apply).reaches_policy());
+    }
+    for list in [ListId::Reader, ListId::RingViewing] {
+        assert!(!update_data(0, list, &apply).reaches_policy(), "{list:?}");
+    }
+    let mixed = vec![list_write(ListId::Reader), list_write(ListId::Allow)];
+    assert!(update_of(0, mixed, &apply).reaches_policy());
+    let mut mint = list_write(ListId::Reader);
+    mint.mint_policy = custom_ring_interface::mint_policy_write(Some(MintPolicy::EMPTY));
+    assert!(update_of(0, vec![mint], &apply).reaches_policy());
+}
+
+/// Own and curator sources alike, a stale tracking root must not outlive a new private block.
+#[test]
+fn a_zero_grace_write_records_the_floor_on_any_pinned_source() {
+    let apply = apply_ix();
+    for ring_id in [[3; 32], [0; 32]] {
+        let mut source = pinned_registry(ring_id);
+        assert!(source.is_private());
+        assert_eq!(source.newest().hash, MEMBER_REGISTRY_EMPTY_ROOT);
+        let before = source;
+        assert_eq!(
+            source.update(RootUpdate {
+                slot: 1,
+                data: &update_data(0, ListId::Block, &apply),
+                tracking_revision: None,
+            }),
+            Err(StorageError::InvalidTrackingRegistry)
+        );
+        assert_eq!(source, before);
+        assert_eq!(
+            source.update(RootUpdate {
+                slot: 1,
+                data: &update_data(3, ListId::Block, &apply),
+                tracking_revision: Some(5.into()),
+            }),
+            Err(StorageError::RevisionChanged)
+        );
+        assert_eq!(source, before);
+        source
+            .update(RootUpdate {
+                slot: 1,
+                data: &update_data(0, ListId::Block, &apply),
+                tracking_revision: Some(5.into()),
+            })
+            .unwrap();
+        assert_eq!(source.tracking_floor, Revision::from(5));
+        assert_eq!(
+            source.check_tracking_revision(4.into()),
+            Err(StorageError::TrackingRootBelowFloor)
+        );
+        assert_eq!(source.check_tracking_revision(5.into()), Ok(()));
+        assert_eq!(source.root(0.into(), 1), Err(StorageError::RootExpired));
+        source
+            .update(RootUpdate {
+                slot: 1,
+                data: &update_data(1, ListId::Reader, &apply),
+                tracking_revision: None,
+            })
+            .unwrap();
+        assert_eq!(source.tracking_floor, Revision::from(5));
+        assert_eq!(source.root(1.into(), 1), Ok([8; 32]));
+    }
     let mut public = public_registry(10);
     assert!(!public.is_private());
-    assert_eq!(public.newest().hash, MEMBER_REGISTRY_EMPTY_ROOT);
-    assert_eq!(
-        public.update_private(private_update(0, true, 5)),
-        Err(StorageError::SourceKindMismatch)
-    );
-    // A public source has no floor, every tracking root stays readable.
+    public
+        .update(RootUpdate {
+            slot: 1,
+            data: &update_data(0, ListId::Block, &apply),
+            tracking_revision: None,
+        })
+        .unwrap();
     assert_eq!(public.check_tracking_revision(0.into()), Ok(()));
-}
-
-#[test]
-fn a_write_counter_only_increases() {
-    let mut source = private_registry();
-    assert_eq!(
-        source.advance_write_counter(0),
-        Err(StorageError::WriteCounterNotIncreasing)
-    );
-    source.advance_write_counter(5).unwrap();
-    for repeated_or_lower in [5, 4] {
-        assert_eq!(
-            source.advance_write_counter(repeated_or_lower),
-            Err(StorageError::WriteCounterNotIncreasing)
-        );
-    }
-    assert_eq!(source.last_write_counter(), 5);
-    source.advance_write_counter(u64::MAX).unwrap();
-    assert_eq!(
-        source.advance_write_counter(u64::MAX),
-        Err(StorageError::WriteCounterNotIncreasing)
-    );
 }
 
 fn enrollment_vector() -> Value {
@@ -752,15 +720,13 @@ fn enrollment_vector() -> Value {
     let mut account = FirstEnrollment {
         registry,
         owner,
-        bump,
-        slot: 77,
         ix: &ix,
     }
     .account();
     let entry = account.apply().unwrap();
     let chain_start = tracking_chain_start(&registry, Revision::from(0)).unwrap();
     json!({
-        "description": "One enrollment and its permissionless apply. enroll_data follows tag 6, nullifier_pk || list_tag || viewing_u || eph_u || ciphertext, and a first enrollment appends a RegisterKey proof. The authorization PDA has seeds [tracking, registry, owner]. entry_hash is Poseidon(CRTQ, member, nullifier_pk, ct_hash, view0, view1, revision, list_tag), chain_start is the hash chain of [CRTA, registry field, revision], chain_end is Poseidon(chain_start, entry_hash). account is the authorization after the apply, at slot 77. Produced by program-libs/interface/tests/accounts.rs.",
+        "description": "One enrollment and its permissionless apply. enroll_data follows tag 6, nullifier_pk || list_tag || viewing_u || eph_u || ciphertext, and a first enrollment appends a RegisterKey proof. The authorization PDA has seeds [tracking, registry, owner]. entry_hash is Poseidon(CRTQ, member, nullifier_pk, ct_hash, view0, view1, revision, list_tag), chain_start is the hash chain of [CRTA, registry field, revision], chain_end is Poseidon(chain_start, entry_hash). account is the authorization after the apply. Produced by program-libs/interface/tests/accounts.rs.",
         "registry": hex::encode(registry),
         "owner": hex::encode(owner),
         "member": hex::encode(entry.member),

@@ -180,8 +180,6 @@ fn storage_error_codes_are_stable() {
         (Error::InvalidTrackingAuthorization, 9023),
         (Error::EnrollmentAlreadyApplied, 9024),
         (Error::EnrollmentKeyFinal, 9025),
-        (Error::TrackingTreeFull, 9026),
-        (Error::RotationTooSoon, 9027),
         (Error::ZeroNullifierKey, 9028),
         (Error::EnrollmentProofShape, 9029),
         (Error::NoEnrollmentsNamed, 9030),
@@ -189,8 +187,6 @@ fn storage_error_codes_are_stable() {
         (Error::InvalidReaderKey, 9032),
         (Error::InvalidAuditorKey, 9033),
         (Error::TrackingRootBelowFloor, 9034),
-        (Error::SourceKindMismatch, 9035),
-        (Error::WriteCounterNotIncreasing, 9036),
     ];
     for (error, code) in pins {
         assert_eq!(error as u32, code, "{error:?}");
