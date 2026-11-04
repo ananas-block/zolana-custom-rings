@@ -33,6 +33,7 @@ use zolana_ring_indexer::{
     rpc::{GetStorageApplyProofInputsRequest, StorageWriteView},
     tracking::GetPendingEnrollmentsRequest,
 };
+use zolana_ring_keys::ListSaltHolder;
 use zolana_ring_policy::{
     ListChange, ListId, ListSet, Member, MintPolicy, Rule, RuleTable, Subject,
 };
@@ -435,6 +436,7 @@ impl EnrollOwners<'_> {
                         owner: owner.pubkey(),
                         nullifier_key: &owner.nullifier_key,
                         viewing_key: &owner.viewing_key,
+                        list_salt: owner.list_salt(&self.ring.program_id())?,
                     }
                     .prove(env.client.ring_client()),
                 )?,

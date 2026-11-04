@@ -67,6 +67,10 @@ fn a_pda_enrolls_and_applies_its_key_on_the_validator() -> Result<()> {
             owner,
             nullifier_key: &NullifierKey::from_secret([7; 31]),
             viewing_key: &viewing_key,
+            list_salt: viewing_key.merge_seed(
+                ring.program_id().as_array(),
+                &zolana_ring_keys::LIST_SALT_LABEL,
+            )?,
         }
         .prove(env.client.ring_client()),
     )?;
