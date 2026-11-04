@@ -202,7 +202,8 @@ impl GuardScope<'_> {
     }
 }
 
-/// The statement's proven approval bits.
+/// The statement's proven approval bits, the program derives no threshold itself.
+#[must_use]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ApprovalMask(u8);
 
@@ -214,7 +215,7 @@ impl ApprovalMask {
     pub const WITHDRAWAL: Self = Self(2);
 
     /// `None` when a bit no class names is set.
-    pub const fn from_bits(bits: u8) -> Option<Self> {
+    pub const fn new(bits: u8) -> Option<Self> {
         if bits & !(Self::OUTFLOW.0 | Self::WITHDRAWAL.0) != 0 {
             return None;
         }
@@ -223,6 +224,10 @@ impl ApprovalMask {
 
     pub const fn bits(self) -> u8 {
         self.0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
     }
 
     pub const fn union(self, other: Self) -> Self {
@@ -497,6 +502,6 @@ mod tests {
             inputs.mask(policy(9, 9)),
             ApprovalMask::OUTFLOW.union(ApprovalMask::WITHDRAWAL)
         );
-        assert_eq!(ApprovalMask::from_bits(4), None);
+        assert_eq!(ApprovalMask::new(4), None);
     }
 }
