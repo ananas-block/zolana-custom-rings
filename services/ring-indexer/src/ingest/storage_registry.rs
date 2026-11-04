@@ -1,6 +1,6 @@
 use custom_ring_interface::{
-    storage::{chain_start, RootUpdate, StorageError, StorageRegistry},
-    storage_instruction::{tag, InitializeIxData, StorageUpdateIxData},
+    storage::{chain_start, PrivateRootUpdate, RootUpdate, StorageError, StorageRegistry},
+    storage_instruction::{tag, InitializeIxData, PrivateUpdateIxData, StorageUpdateIxData},
     QUAD_HEIGHT,
 };
 use sea_orm::ConnectionTrait;
@@ -17,6 +17,7 @@ use crate::{
 pub(crate) enum StorageCall<'a> {
     Initialize(StorageInit<'a>),
     Update(StorageUpdate<'a>),
+    UpdatePrivate(PrivateUpdate<'a>),
     UpdateAuthority {
         authority: Address,
         new_authority: Address,
@@ -31,6 +32,12 @@ pub(crate) struct StorageInit<'a> {
 pub(crate) struct StorageUpdate<'a> {
     pub authority: Address,
     pub data: StorageUpdateIxData<'a>,
+}
+
+pub(crate) struct PrivateUpdate<'a> {
+    pub authority: Address,
+    pub tracking_registry: Address,
+    pub data: PrivateUpdateIxData<'a>,
 }
 
 /// `call` fails on data the program refuses.
@@ -68,6 +75,16 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
                 }))
             }),
         },
+        tag::UPDATE_PRIVATE => StorageInstruction {
+            registry: registry(1)?,
+            call: account(0).and_then(|authority| {
+                Ok(StorageCall::UpdatePrivate(PrivateUpdate {
+                    authority,
+                    tracking_registry: account(2)?,
+                    data: PrivateUpdateIxData::parse(data)?,
+                }))
+            }),
+        },
         tag::UPDATE_AUTHORITY => StorageInstruction {
             registry: registry(2)?,
             call: account(0).and_then(|authority| {
@@ -98,7 +115,10 @@ pub(crate) async fn create<C: ConnectionTrait>(
     store: &StorageStore<'_, C>,
     state: &StorageState,
 ) -> anyhow::Result<()> {
-    plant_tree::<_, _, QUAD_HEIGHT>(store.tree()).await?;
+    // A private source opens through its published writes, it has no policy leaves.
+    if !state.account.is_private() {
+        plant_tree::<_, _, QUAD_HEIGHT>(store.tree()).await?;
+    }
     store
         .save_root(&StorageRoot::current(&*state.account))
         .await?;
@@ -117,6 +137,7 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
         match call {
             StorageCall::Initialize(_) => Err(fault("initialized twice")),
             StorageCall::Update(update) => self.update(update).await,
+            StorageCall::UpdatePrivate(update) => self.update_private(update).await,
             StorageCall::UpdateAuthority {
                 authority,
                 new_authority,
@@ -182,6 +203,43 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
             .save_nodes(&batch.rows.nodes, revision)
             .await?;
         // 4. The roots rotate as the program rotates them.
+        *self.state.account = rotated;
+        self.store
+            .save_root(&StorageRoot::current(&rotated))
+            .await?;
+        Ok(())
+    }
+
+    /// The proof binds the writes' chain to the root, the index keeps only what they publish.
+    async fn update_private(self, update: PrivateUpdate<'_>) -> Result<(), ApplyError> {
+        let PrivateUpdate {
+            authority,
+            tracking_registry,
+            data,
+        } = update;
+        self.authorize(&authority)?;
+        if tracking_registry != self.state.account.tracking_registry {
+            return Err(fault("the update names another tracking registry"));
+        }
+        let tracking = self
+            .store
+            .tracking_state(tracking_registry.to_bytes())
+            .await
+            .map_err(from_storage)?
+            .ok_or_else(|| fault("the paired tracking registry has not been indexed"))?;
+        let mut rotated = *self.state.account;
+        rotated
+            .update_private(PrivateRootUpdate {
+                revision: data.revision,
+                restrictive: data.restrictive,
+                slot: self.slot,
+                new_root: data.apply.new_root,
+                tracking_revision: tracking.account.newest().revision,
+            })
+            .map_err(|error| fault(format!("update refused ({error})")))?;
+        self.store
+            .save_list_writes(&data.writes, rotated.newest().revision.value())
+            .await?;
         *self.state.account = rotated;
         self.store
             .save_root(&StorageRoot::current(&rotated))
