@@ -6,6 +6,7 @@ mod common;
 mod forward_rules;
 mod heap_rules;
 mod in_proof_owner_rules;
+mod merge_rules;
 mod operator_rules;
 mod storage_root_rules;
 mod transact_rules;
