@@ -163,9 +163,14 @@ impl RegistrySlots<'_> {
             len += 1;
             Ok(account)
         };
+        let ring = self.ring;
         let mut storage = |bound: Option<Address>| {
             bound
-                .map(|bound| load_storage_registry(bound_account(&bound)?))
+                .map(|bound| {
+                    let source = load_storage_registry(bound_account(&bound)?)?;
+                    ring.check_source_pair(&source)?;
+                    Ok::<_, ProgramError>(source)
+                })
                 .transpose()
         };
         let own = storage(self.ring.own_registry(self.read))?;

@@ -397,7 +397,13 @@ impl LiveRoots<'_> {
             .ok_or(CustomRingError::MissingRegistry)
     }
 
+    /// A root below a private source's floor stays served, so a subject could still prove itself unenrolled and read salt 0.
     pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
+        for source in self.own.into_iter().chain(self.curator) {
+            source
+                .check_tracking_revision(revision)
+                .map_err(|_| CustomRingError::TrackingRootBelowFloor)?;
+        }
         self.tracking
             .root(revision, self.slot)
             .map_err(|_| CustomRingError::RootNotServed)
@@ -465,7 +471,7 @@ pub struct RingPolicy {
     pub created_slot: [u8; 8],
     /// The ring's own `StorageRegistry`, zero on a ring bound to none, which holds no thresholds.
     pub records: Address,
-    /// The ring's tracking registry, every read checks this address, a forged registry would prove any wallet absent.
+    /// Every read compares it, a forged registry would prove any wallet absent.
     pub tracking: Address,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
@@ -632,6 +638,14 @@ impl RingPolicy {
             .into_iter()
             .chain(self.curator_registry(read))
             .chain([self.tracking])
+    }
+
+    /// A floor stored against another tracking registry guards nothing.
+    pub fn check_source_pair(&self, source: &StorageRegistry) -> Result<(), CustomRingError> {
+        match source.is_private() && source.tracking_registry != self.tracking {
+            true => Err(CustomRingError::PrivateSourceOtherTracking),
+            false => Ok(()),
+        }
     }
 
     /// The own registry `read` passes after the ring account.

@@ -39,7 +39,7 @@ impl ApprovalMask {
     }
 }
 
-/// A co-signer serves a class or adds nothing, the rail refuses it past this count.
+/// One record per class at most, a further record covers nothing.
 pub const MAX_CO_SIGNERS: usize = 5;
 
 /// The frame's co-signer byte, the mask below the count.
