@@ -492,7 +492,7 @@ impl Transfer {
             own_revision: None,
             policy: None,
             spl_withdrawal_owners: &[],
-            co_sign: Default::default(),
+            approval: Default::default(),
             no_spend: disclosure.real_inputs == 0,
             public_owners: false,
             expiry_unix_ts: 0,

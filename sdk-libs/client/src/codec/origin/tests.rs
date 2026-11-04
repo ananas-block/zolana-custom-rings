@@ -1338,7 +1338,7 @@ fn origin_of_frame(
         own_revision: None,
         policy: None,
         spl_withdrawal_owners: &[],
-        co_sign: Default::default(),
+        approval: Default::default(),
         no_spend: false,
         public_owners: false,
         expiry_unix_ts: 0,
