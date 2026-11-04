@@ -2,14 +2,14 @@ use std::{collections::BTreeSet, fmt::Write};
 
 use anyhow::{Context, Result};
 use custom_ring_interface::{
-    cosign::ApprovalMask, key_catalog::TransferShape, sender_bundle_len, spl_withdrawal_count,
-    storage::Revision, stream::slot_tag, tag, AnonymousProofData, CustomRingMergeIxData,
-    CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
-    RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
-    OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
-    TAGGED_X25519_KEY_LEN,
+    cosign::ApprovalMask, frame_digest, key_catalog::TransferShape, sender_bundle_len,
+    settle_buffered_data, spl_withdrawal_count, storage::Revision, stream::slot_tag, tag,
+    AnonymousProofData, CustomRingMergeIxData, CustomRingProof, DepositPrefix, FrameExtensions,
+    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, RecipientBody,
+    Replies, RingDepositAuditCapsule, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead,
+    SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_FRAME_LEN,
+    MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN,
+    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -50,6 +50,7 @@ const TRACKING: Address = address(0xa7);
 const DELEGATE: Address = address(0xa8);
 const COSIGNER_RECORD: Address = address(0xac);
 const COSIGNER: Address = address(0xad);
+const BUFFER: Address = address(0xae);
 const TOKEN_PROGRAM: Address = address(0xab);
 
 const fn address(seed: u8) -> Address {
@@ -266,8 +267,30 @@ struct Transfer {
 
 struct Measured {
     fit: Fit,
+    buffered: Fit,
+    frame_len: usize,
+    spp_cpi_len: usize,
     /// The catalog keys it and `parse` read it back.
     keyed: bool,
+}
+
+impl Measured {
+    fn ceiling_verdict(&self) -> String {
+        let mut over = Vec::new();
+        if !self.buffered.fits() {
+            over.push(self.buffered.over());
+        }
+        if self.frame_len > MAX_FRAME_LEN {
+            over.push(format!("frame {} B", self.frame_len - MAX_FRAME_LEN));
+        }
+        if self.spp_cpi_len > MAX_CPI_DATA_LEN {
+            over.push(format!("CPI {} B", self.spp_cpi_len - MAX_CPI_DATA_LEN));
+        }
+        match over.is_empty() {
+            true => "yes".to_owned(),
+            false => format!("no, {}", over.join(", ")),
+        }
+    }
 }
 
 impl Transfer {
@@ -457,6 +480,7 @@ impl Transfer {
         let accounts: Vec<TransactInterfaceTransferAccounts> =
             legs.iter().map(|(_, accounts)| *accounts).collect();
         let expanded = data.transact_ix_data(&config, TransactProof::zeroed())?;
+        let spp_cpi_len = 1 + expanded.serialize()?.len();
         let spp = match delegate {
             true => {
                 RingAuthorityTransact {
@@ -508,13 +532,30 @@ impl Transfer {
             true => tag::AUTHORITY_TRANSFER,
             false => tag::TRANSFER,
         };
-        let instruction = Instruction {
-            program_id: RING_PROGRAM,
-            accounts: metas,
-            data: [&[ring_tag][..], &encoded].concat(),
+        let frame_bytes = [&[ring_tag][..], &encoded].concat();
+        let settle = settle_buffered_data(&frame_digest(&frame_bytes)?);
+        let mut settling = vec![
+            AccountMeta::new(BUFFER, false),
+            AccountMeta::new_readonly(RING_PROGRAM, false),
+        ];
+        settling.extend_from_slice(&metas);
+        let frame_len = frame_bytes.len();
+        let fit_of = |accounts, data| {
+            Fit::of(
+                &Instruction {
+                    program_id: RING_PROGRAM,
+                    accounts,
+                    data,
+                },
+                &payer,
+                load.priority_fee,
+            )
         };
         Ok(Measured {
-            fit: Fit::of(&instruction, &payer, load.priority_fee)?,
+            fit: fit_of(metas, frame_bytes)?,
+            buffered: fit_of(settling, settle)?,
+            frame_len,
+            spp_cpi_len,
             keyed,
         })
     }
@@ -734,8 +775,11 @@ fn table() -> Result<String> {
         "Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings {MAX_TRANSACTION_SIZE} B, {MAX_ADDRESSES} accounts, {MAX_SIGNATURES} signatures."
     )?;
     writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The widest owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
-    writeln!(table, "| shape | rail | load | key | bytes | accounts | signatures | widest owner run | fits | over |")?;
-    writeln!(table, "|---|---|---|---|---|---|---|---|---|---|")?;
+    writeln!(table, "| shape | rail | load | key | bytes | accounts | signatures | widest owner run | fits | over | frame | SPP CPI | buffered bytes | buffered accounts | clears ceilings |")?;
+    writeln!(
+        table,
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+    )?;
     for shape in SPP_SUPPORTED_SHAPES {
         for frame in FrameRail::ALL {
             if !frame.rail().supports(shape) {
@@ -758,7 +802,7 @@ fn table() -> Result<String> {
                 let fit = measured.fit;
                 writeln!(
                     table,
-                    "| {}x{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    "| {}x{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                     shape.n_inputs(),
                     shape.n_outputs(),
                     frame.name(),
@@ -770,6 +814,11 @@ fn table() -> Result<String> {
                     widest,
                     verdict(fit),
                     fit.over(),
+                    measured.frame_len,
+                    measured.spp_cpi_len,
+                    measured.buffered.bytes,
+                    measured.buffered.addresses,
+                    measured.ceiling_verdict(),
                 )?;
             }
         }
@@ -782,7 +831,7 @@ fn table() -> Result<String> {
             let fit = merge_fit(width, authority)?;
             writeln!(
                 table,
-                "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | {} | {} |",
+                "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | {} | {} | - | - | - | - | - |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
@@ -796,7 +845,7 @@ fn table() -> Result<String> {
             let fit = deposit_fit(width, full)?;
             writeln!(
                 table,
-                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | {} | {} |",
+                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | {} | {} | - | - | - | - | - |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
