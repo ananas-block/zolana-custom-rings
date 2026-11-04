@@ -118,11 +118,6 @@ var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f0
 // SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.
 var SolAssetField, _ = new(big.Int).SetString("2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864", 16)
 
-// EscrowOwed is escrowed while the key is no ZeroNullifierPk, a program-owned note escrows nothing and still answers every other rule.
-func EscrowOwed(api frontend.API, escrowed, nullifierPk frontend.Variable) frontend.Variable {
-	return api.Mul(escrowed, api.Sub(1, api.IsZero(api.Sub(nullifierPk, ZeroNullifierPk))))
-}
-
 // DeliveredSlot is a delivered slot secret preimage, Agreement = pack_be(X25519(tx_viewing_sk, u)) and each key pack_be(0x04 ‖ u).
 type DeliveredSlot struct {
 	Agreement      [2]frontend.Variable
