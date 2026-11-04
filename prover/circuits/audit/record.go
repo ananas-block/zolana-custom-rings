@@ -1,9 +1,6 @@
-// Proves the plaintext the auditor reads per slot. The record of a live slot
-// opens its commitment with the sealed blinding, a dummy's plaintext is all
-// zero, so the auditor skips it by one byte under a proof.
+// A dummy's plaintext is all zero, the auditor skips it by one byte under a proof.
 //
-// Read after audit/audit.go, audit/layout.go, shared/utxo.go. Read before
-// transfer/transfer.go.
+// Read after audit/audit.go, audit/layout.go, shared/utxo.go, before transfer/transfer.go.
 
 package audit
 
@@ -25,7 +22,6 @@ const (
 	KindExit  = 2
 )
 
-// OutputWires is one output slot and the preimages its record names.
 type OutputWires struct {
 	Output   shared.UtxoWires
 	OwnerKey [32]frontend.Variable
@@ -33,7 +29,7 @@ type OutputWires struct {
 	MintChunks [2]frontend.Variable
 }
 
-// RecordOpening is a note's record fields, Live clear masks every byte to zero.
+// Live clear masks every byte but Kind, a dummy's Kind derives to zero.
 type RecordOpening struct {
 	Live, Kind, Amount, OwnerPkHash, NullifierPk, Asset frontend.Variable
 	OwnerKey                                            [32]frontend.Variable
@@ -79,18 +75,15 @@ func dataTail(api frontend.API, rc frontend.Rangechecker, slot shared.Output) []
 	return slices.Concat(dataHash[:], ringDataHash[:])
 }
 
-// EntryWires are the preimages a default-ring input's evidence names.
 type EntryWires struct {
 	OwnerKey   [32]frontend.Variable
 	MintChunks [2]frontend.Variable
 }
 
-// SpentInputs is the opened input section the envelope summarizes.
 type SpentInputs struct {
 	Slots []shared.Output
-	// Count is the published n.
-	Count ringgadget.Count
-	// Entries holds one per slot on a key with entry capacity, none otherwise.
+	// The published n, R may sit below it.
+	Count   ringgadget.Count
 	Entries []EntryWires
 }
 
@@ -108,7 +101,7 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 	realInputs := frontend.Variable(0)
 	defaults := make([]frontend.Variable, len(s.Slots))
 	for i, slot := range s.Slots {
-		// The same bits SPP chains into private_tx_hash, dummies stay last so position below R is a spend.
+		// OpenInputs holds dummies last, position below R is a spend.
 		realInputs = api.Add(realInputs, slot.Utxo)
 		defaults[i] = slot.Exit
 	}
@@ -131,11 +124,11 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 	return evidence{head: head, entries: entries, realInputs: realInputs}
 }
 
-// encode mirrors EntryInput::encode in program-libs/interface/src/proof/audit_stream.rs, zero off a default-ring note.
+// encode mirrors EntryInput::extend in program-libs/interface/src/proof/audit_stream.rs, zero off a default-ring note.
 func (e EntryWires) encode(api frontend.API, rc frontend.Rangechecker, slot shared.Output) []frontend.Variable {
 	live := slot.Exit
 	mint := assertMint(api, live, slot.Asset, e.MintChunks)
-	// Per input owner and key, mixed owners read apart with no secret disclosed.
+	// Per input owner and key, mixed owners read apart with no nullifier secret disclosed.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: live, A: slot.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, e.OwnerKey)})
 	field := func(value frontend.Variable) []frontend.Variable {
 		bytes := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(live, value))

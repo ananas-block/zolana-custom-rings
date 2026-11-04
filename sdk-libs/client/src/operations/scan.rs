@@ -1,7 +1,6 @@
 //! Photon matches the auditor tag on outputs and messages alike, the message match is re-applied.
 
 use std::{
-    collections::HashMap,
     future::Future,
     num::{NonZeroU32, NonZeroUsize},
 };
@@ -22,7 +21,6 @@ use crate::{
     encryption::auditor_view_tag,
     error::RowDisposition,
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream, PageEnd},
-    known::KnownUtxoIndex,
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
     types::AuditedTransaction,
     AuditError,
@@ -216,8 +214,6 @@ pub struct RingScan {
     page_size: NonZeroU32,
     max_pages: NonZeroUsize,
     indexer_config: Option<IndexerRpcConfig>,
-    known: KnownUtxoIndex,
-    escrowed: HashMap<[u8; 32], [u8; 32]>,
 }
 
 impl RingScan {
@@ -230,8 +226,6 @@ impl RingScan {
             page_size: DEFAULT_PAGE_SIZE,
             max_pages: DEFAULT_MAX_PAGES,
             indexer_config: None,
-            known: KnownUtxoIndex::default(),
-            escrowed: HashMap::new(),
         }
     }
 
@@ -262,18 +256,6 @@ impl RingScan {
         self
     }
 
-    /// Notes opened before by commitment, earlier pages and [`crate::CreatedUtxos`] alike.
-    pub fn with_known_utxos(mut self, utxos: KnownUtxoIndex) -> Self {
-        self.known = utxos;
-        self
-    }
-
-    /// Each owner key's nullifier key as the ring's escrow records hold it.
-    pub fn with_escrowed_keys(mut self, keys: HashMap<[u8; 32], [u8; 32]>) -> Self {
-        self.escrowed = keys;
-        self
-    }
-
     pub async fn run<I: AsyncRpc, O: TransactionOrigin>(
         self,
         indexer: &I,
@@ -291,7 +273,7 @@ impl RingScan {
         })
     }
 
-    /// An input resolves within the page and the known notes.
+    /// Each transfer opens from its own frame, no earlier page is read.
     pub async fn audit<I: AsyncRpc, O: TransactionOrigin>(
         mut self,
         auditor: &X25519Keypair,
@@ -301,41 +283,23 @@ impl RingScan {
     ) -> Result<AuditedPage, AuditError> {
         self.auditor_key = auditor.pubkey();
         let mode = self.mode;
-        let mut known = core::mem::take(&mut self.known);
-        let escrowed = core::mem::take(&mut self.escrowed);
         let page = self.confirmed(indexer, origin).await?;
         let mut transactions = Vec::with_capacity(page.transactions.len());
         let mut skipped = page.skipped;
         for (transaction, confirmed) in &page.transactions {
-            let opened = confirmed.audit_stream(mode).and_then(|layout| {
+            let opened = confirmed.audit_frame(mode).and_then(|frame| {
                 let trees = confirmed.event.input_tree_ids(transaction);
-                let audited = TransactionAudit::new(transaction, layout)
+                TransactionAudit::new(transaction, frame)
                     .with_input_trees(&trees)?
-                    .with_known_utxos(&known)
-                    .with_escrowed_keys(&escrowed)
-                    .run(auditor, assets)?;
-                Ok((audited, layout.key))
+                    .run(auditor, assets)
             });
             match opened {
-                Ok((audited, key)) => {
-                    known.extend(
-                        audited
-                            .utxos()
-                            .map(|created| (created.commitment, created.utxo)),
-                    );
-                    transactions.push((audited, key));
-                }
+                Ok(audited) => transactions.push(audited),
                 Err(error) => skipped.push(SkippedRow::of(transaction, error)?),
             }
         }
         Ok(ScanPage {
-            transactions: transactions
-                .into_iter()
-                .map(|(mut audited, key)| {
-                    audited.resolve_inputs(&known, key);
-                    audited
-                })
-                .collect(),
+            transactions,
             next_cursor: page.next_cursor,
             skipped,
         })

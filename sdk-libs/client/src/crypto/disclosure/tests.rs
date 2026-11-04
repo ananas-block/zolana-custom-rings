@@ -1,6 +1,5 @@
 use custom_ring_interface::{
-    AnonymousAuditKey, AnonymousRecord, AuditEvidence, AuditKey, AuditStreamLayout, EntryInput,
-    ExitRecord,
+    AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout, DataTail, EntryInput, RecordKind,
 };
 use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
 
@@ -13,55 +12,65 @@ fn field(byte: u8) -> [u8; 32] {
     field
 }
 
-fn signer_layout(exits: u64) -> AuditStreamLayout {
+fn plain_layout() -> AuditStreamLayout {
     AuditStreamLayout {
-        key: AuditKey::Confidential { class: 2 },
-        key_escrow: false,
+        key: AuditKey {
+            class: 2,
+            entry: false,
+        },
         inputs: 1,
         outputs: 2,
         capacity: 2,
-        exits,
+        has_data: false,
     }
 }
 
 fn entry_layout() -> AuditStreamLayout {
     AuditStreamLayout {
-        key: AuditKey::Anonymous(AnonymousAuditKey::Entry { class: 8 }),
-        key_escrow: false,
+        key: AuditKey {
+            class: 8,
+            entry: true,
+        },
         inputs: 2,
         outputs: 2,
         capacity: 2,
-        exits: 0b10,
+        has_data: false,
     }
 }
 
-fn exit_record(key_escrow: bool) -> OutputRecord {
-    OutputRecord::Exit(ExitRecord {
-        asset: field(0x27),
-        amount: 40,
-        nullifier_pk: (!key_escrow).then_some(field(0x26)),
-    })
+fn data_layout() -> AuditStreamLayout {
+    AuditStreamLayout {
+        has_data: true,
+        ..plain_layout()
+    }
+}
+
+fn ring_record(byte: u8) -> AuditRecord {
+    AuditRecord {
+        kind: RecordKind::Ring,
+        amount: u64::from(byte),
+        owner_key: [byte; 32],
+        mint: [byte ^ 1; 32],
+        nullifier_pk: field(byte),
+    }
 }
 
 fn entry_evidence() -> AuditEvidence {
     AuditEvidence::Entry {
-        sender_key: [0xa1; 32],
-        sender_nullifier_pk: field(0x5a),
+        default_input_bits: 0b01,
         inputs: vec![
             EntryInput {
-                hash: field(0x62),
+                owner_key: [0xa1; 32],
+                nullifier_pk: field(0x5a),
                 amount: 5000,
-                asset: field(0x60),
+                mint: [0x60; 32],
                 blinding: field(0x61),
+                data_hash: [0; 32],
+                ring_data_hash: [0; 32],
             },
             EntryInput::default(),
         ],
     }
-}
-
-/// One hash per published input, the evidence every non-entry rail carries.
-fn hashes(inputs: u8) -> AuditEvidence {
-    AuditEvidence::InputHashes((0..inputs).map(|input| field(0x70 + input)).collect())
 }
 
 fn opened_envelope(
@@ -91,6 +100,7 @@ fn raw_envelope(plaintext: &[u8], auditor: &X25519Keypair) -> SealedAuditStream 
         eph_u: ephemeral.pubkey().u(),
         envelope,
         records: Vec::new(),
+        tails: Vec::new(),
         ephemeral_sk: ephemeral.secret_bytes(),
     }
 }
@@ -101,10 +111,12 @@ fn the_envelope_opens_to_the_sealed_key_under_a_fresh_ephemeral_key() {
     let tx_viewing_key = ViewingKey::new();
     let seal = || {
         AuditStreamSeal {
-            layout: signer_layout(0),
+            layout: plain_layout(),
             tx_viewing_key: &tx_viewing_key,
-            evidence: hashes(1),
-            records: vec![OutputRecord::Delivered; 2],
+            real_inputs: 1,
+            evidence: AuditEvidence::None,
+            records: vec![ring_record(1), AuditRecord::default()],
+            tails: Vec::new(),
         }
         .seal(&auditor.pubkey())
         .unwrap()
@@ -112,10 +124,11 @@ fn the_envelope_opens_to_the_sealed_key_under_a_fresh_ephemeral_key() {
     let (first, second) = (seal(), seal());
     assert_ne!(first.eph_u, second.eph_u);
     assert_ne!(first.envelope, second.envelope);
-    let opened = opened_envelope(&first, &auditor, signer_layout(0)).unwrap();
+    let opened = opened_envelope(&first, &auditor, plain_layout()).unwrap();
     assert_eq!(opened.tx_viewing_key.pubkey(), tx_viewing_key.pubkey());
-    assert_eq!(opened.evidence, hashes(1));
-    assert!(first.records.iter().all(Vec::is_empty));
+    assert_eq!(opened.real_inputs, 1);
+    assert_eq!(opened.evidence, AuditEvidence::None);
+    assert!(first.tails.is_empty());
 }
 
 #[test]
@@ -124,17 +137,14 @@ fn an_unclamped_envelope_secret_is_refused() {
     let canonical = ViewingKey::new();
     let mut unclamped = *canonical.secret_bytes();
     unclamped[0] |= 0b111;
-    let sealed = raw_envelope(&[&unclamped[..], &field(0x70)].concat(), &auditor);
+    let sealed = raw_envelope(&[&unclamped[..], &[1]].concat(), &auditor);
     assert!(matches!(
-        opened_envelope(&sealed, &auditor, signer_layout(0)),
+        opened_envelope(&sealed, &auditor, plain_layout()),
         Err(AuditError::NonCanonicalViewingKey)
     ));
-    let sealed = raw_envelope(
-        &[&canonical.secret_bytes()[..], &field(0x70)].concat(),
-        &auditor,
-    );
+    let sealed = raw_envelope(&[&canonical.secret_bytes()[..], &[1]].concat(), &auditor);
     assert_eq!(
-        opened_envelope(&sealed, &auditor, signer_layout(0))
+        opened_envelope(&sealed, &auditor, plain_layout())
             .unwrap()
             .tx_viewing_key
             .pubkey(),
@@ -147,52 +157,80 @@ fn an_unclamped_envelope_secret_is_refused() {
 fn a_record_opens_only_at_the_counter_of_its_slot() {
     let auditor = X25519Keypair::new();
     let tx_viewing_key = ViewingKey::new();
-    let layout = AuditStreamLayout {
-        key: AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 4 }),
-        inputs: 1,
-        exits: 0,
-        ..signer_layout(0)
-    };
-    let record = OutputRecord::Anonymous(AnonymousRecord {
-        owner_key: [0xb5; 32],
-        asset: field(0x15),
-        amount: 70,
-        nullifier_pk: field(0x25),
-    });
+    let record = ring_record(0x15);
     let sealed = AuditStreamSeal {
-        layout,
+        layout: plain_layout(),
         tx_viewing_key: &tx_viewing_key,
-        evidence: hashes(1),
-        records: vec![record, record],
+        real_inputs: 1,
+        evidence: AuditEvidence::None,
+        records: vec![record, AuditRecord::default()],
+        tails: Vec::new(),
     }
     .seal(&auditor.pubkey())
     .unwrap();
-    assert_ne!(sealed.records[0], sealed.records[1]);
-    let opened = opened_envelope(&sealed, &auditor, layout).unwrap();
+    let opened = opened_envelope(&sealed, &auditor, plain_layout()).unwrap();
     assert_eq!(opened.record(0, &sealed.records[0]).unwrap(), record);
-    assert_eq!(opened.record(1, &sealed.records[1]).unwrap(), record);
-    assert_ne!(opened.record(0, &sealed.records[1]).unwrap(), record);
+    assert_eq!(
+        opened.record(1, &sealed.records[1]).unwrap(),
+        AuditRecord::default()
+    );
+    assert!(!matches!(
+        opened.record(1, &sealed.records[0]),
+        Ok(moved) if moved == record
+    ));
+}
+
+/// Each tail has its own counter past every record.
+#[test]
+fn a_tail_opens_only_at_the_counter_of_its_slot() {
+    let auditor = X25519Keypair::new();
+    let tx_viewing_key = ViewingKey::new();
+    let tail = DataTail {
+        data_hash: field(0x31),
+        ring_data_hash: field(0x32),
+    };
+    let sealed = AuditStreamSeal {
+        layout: data_layout(),
+        tx_viewing_key: &tx_viewing_key,
+        real_inputs: 1,
+        evidence: AuditEvidence::None,
+        records: vec![ring_record(1), AuditRecord::default()],
+        tails: vec![tail, DataTail::default()],
+    }
+    .seal(&auditor.pubkey())
+    .unwrap();
+    let opened = opened_envelope(&sealed, &auditor, data_layout()).unwrap();
+    assert_eq!(opened.tail(0, &sealed.tails[0]).unwrap(), tail);
+    assert_eq!(
+        opened.tail(1, &sealed.tails[1]).unwrap(),
+        DataTail::default()
+    );
+    assert_ne!(opened.tail(1, &sealed.tails[0]).unwrap(), tail);
 }
 
 #[test]
-fn the_entry_evidence_and_an_exit_record_read_back() {
+fn the_entry_evidence_and_records_round_their_own_regions() {
     let auditor = X25519Keypair::new();
     let tx_viewing_key = ViewingKey::new();
-    let dummy = OutputRecord::Anonymous(AnonymousRecord::default());
     let sealed = AuditStreamSeal {
         layout: entry_layout(),
         tx_viewing_key: &tx_viewing_key,
+        real_inputs: 1,
         evidence: entry_evidence(),
-        records: vec![dummy, exit_record(false)],
+        records: vec![AuditRecord::default(), ring_record(0x27)],
+        tails: Vec::new(),
     }
     .seal(&auditor.pubkey())
     .unwrap();
     let opened = opened_envelope(&sealed, &auditor, entry_layout()).unwrap();
     assert_eq!(opened.evidence, entry_evidence());
-    assert_eq!(opened.record(0, &sealed.records[0]).unwrap(), dummy);
+    assert_eq!(
+        opened.record(0, &sealed.records[0]).unwrap(),
+        AuditRecord::default()
+    );
     assert_eq!(
         opened.record(1, &sealed.records[1]).unwrap(),
-        exit_record(false)
+        ring_record(0x27)
     );
 }
 
@@ -200,28 +238,34 @@ fn the_entry_evidence_and_an_exit_record_read_back() {
 fn a_seal_off_its_layout_is_refused() {
     let auditor = X25519Keypair::new().pubkey();
     let tx_viewing_key = ViewingKey::new();
-    let seal = |layout, evidence, records| {
+    let seal = |layout, evidence, records, tails| {
         AuditStreamSeal {
             layout,
             tx_viewing_key: &tx_viewing_key,
+            real_inputs: 1,
             evidence,
             records,
+            tails,
         }
         .seal(&auditor)
     };
-    let delivered = vec![OutputRecord::Delivered; 2];
-    for (layout, evidence, records) in [
-        (signer_layout(0), hashes(1), vec![OutputRecord::Delivered]),
-        (signer_layout(0), hashes(2), delivered.clone()),
-        (signer_layout(0b10), hashes(1), delivered),
+    let two = vec![AuditRecord::default(); 2];
+    let tail = DataTail::default();
+    let cases = [
         (
-            signer_layout(0b10),
-            hashes(1),
-            vec![OutputRecord::Delivered, exit_record(true)],
+            plain_layout(),
+            AuditEvidence::None,
+            vec![AuditRecord::default()],
+            vec![],
         ),
-    ] {
+        (plain_layout(), entry_evidence(), two.clone(), vec![]),
+        (plain_layout(), AuditEvidence::None, two.clone(), vec![tail]),
+        (data_layout(), AuditEvidence::None, two.clone(), vec![tail]),
+        (entry_layout(), AuditEvidence::None, two, vec![]),
+    ];
+    for (layout, evidence, records, tails) in cases {
         assert!(matches!(
-            seal(layout, evidence, records),
+            seal(layout, evidence, records, tails),
             Err(AuditError::DisclosureLayout)
         ));
     }
@@ -235,59 +279,32 @@ fn evidence_outside_the_field_is_refused() {
     let plaintext = |evidence: AuditEvidence| {
         custom_ring_interface::AuditEnvelope {
             tx_viewing_secret: secret,
+            real_inputs: 1,
             evidence,
         }
         .encode()
     };
-    let commitment = AuditStreamLayout {
-        key: AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 4 }),
-        inputs: 2,
-        ..signer_layout(0)
-    };
-    for position in 0..2 {
-        let mut named = [field(0x70), [0; 32]];
-        named[position] = BN254_SCALAR_MODULUS_BE;
-        let sealed = raw_envelope(
-            &plaintext(AuditEvidence::InputHashes(named.to_vec())),
-            &auditor,
-        );
+    type Spoil = fn(&mut EntryInput);
+    let spoiled: [Spoil; 4] = [
+        |input| input.nullifier_pk = BN254_SCALAR_MODULUS_BE,
+        |input| input.blinding = BN254_SCALAR_MODULUS_BE,
+        |input| input.data_hash = BN254_SCALAR_MODULUS_BE,
+        |input| input.ring_data_hash = BN254_SCALAR_MODULUS_BE,
+    ];
+    for spoil in spoiled {
+        let mut entry = entry_evidence();
+        let AuditEvidence::Entry { inputs, .. } = &mut entry else {
+            unreachable!("the entry evidence");
+        };
+        spoil(&mut inputs[1]);
+        let sealed = raw_envelope(&plaintext(entry), &auditor);
         assert!(matches!(
-            opened_envelope(&sealed, &auditor, commitment),
+            opened_envelope(&sealed, &auditor, entry_layout()),
             Err(AuditError::DisclosureField)
         ));
     }
-    let sealed = raw_envelope(
-        &plaintext(AuditEvidence::InputHashes(vec![field(0x70)])),
-        &auditor,
-    );
-    assert!(matches!(
-        opened_envelope(&sealed, &auditor, commitment),
-        Err(AuditError::DisclosureField)
-    ));
-    let mut entry = entry_evidence();
-    let AuditEvidence::Entry { inputs, .. } = &mut entry else {
-        unreachable!("the entry evidence");
-    };
-    inputs[1].blinding = BN254_SCALAR_MODULUS_BE;
-    let sealed = raw_envelope(&plaintext(entry), &auditor);
-    assert!(matches!(
-        opened_envelope(&sealed, &auditor, entry_layout()),
-        Err(AuditError::DisclosureField)
-    ));
-}
-
-#[test]
-fn input_hash_evidence_keeps_the_full_hash_and_refuses_one_outside_the_field() {
-    assert!(matches!(
-        input_hash_evidence(&[Some(BN254_SCALAR_MODULUS_BE)]),
-        Err(AuditError::DisclosureField)
-    ));
-    let mut short = [0; 32];
-    short[31] = 1;
-    assert_eq!(
-        input_hash_evidence(&[Some(short), None]).unwrap(),
-        AuditEvidence::InputHashes(vec![short, [0; 32]])
-    );
+    let sealed = raw_envelope(&plaintext(entry_evidence()), &auditor);
+    assert!(opened_envelope(&sealed, &auditor, entry_layout()).is_ok());
 }
 
 #[test]

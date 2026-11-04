@@ -24,24 +24,28 @@ use zolana_secret_file::{
 };
 
 mod authority_transfer;
+mod delegate_read;
 mod enrolment;
 mod merge_settings;
 mod reader_grant;
 mod record_update;
 mod relay;
 mod relay_deposit;
+mod relay_enroll;
 mod relay_proof;
 mod spend_coverage;
 mod wallet_activity;
 mod wallet_status;
 
 pub use authority_transfer::*;
+pub use delegate_read::*;
 pub use enrolment::*;
 pub use merge_settings::*;
 pub use reader_grant::*;
 pub use record_update::*;
 pub use relay::*;
 pub use relay_deposit::*;
+pub use relay_enroll::*;
 pub use relay_proof::*;
 pub use spend_coverage::*;
 pub use wallet_activity::*;
@@ -49,8 +53,8 @@ pub use wallet_status::*;
 
 use crate::{
     AuditError, AuditedInput, AuditedMergeOutput, AuditedOutput, AuditedTransaction, AuditedUtxo,
-    ConfirmedMerge, EscrowPendingSlot, InputOpening, InputRing, KnownUtxo, OutputOpening,
-    OutputPayloadErrorKind, ReaderKey, ReaderKeyError, RingOwnerTag, RingWithdrawal, UtxoOwner,
+    ConfirmedMerge, KnownUtxo, OutputOpening, OutputPayloadErrorKind, ReaderKey, ReaderKeyError,
+    RingOwnerTag, RingWithdrawal, UtxoOwner,
 };
 
 pub const HEALTH: &str = "health";
@@ -313,10 +317,13 @@ pub struct AuditedMergeRecord {
     /// Absent while the asset registry does not know the asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint: Option<SerializablePubkey>,
-    /// The sum of its inputs.
+    /// The record's, a tag 47 merge's sum of its inputs.
     pub amount: u64,
-    /// The real inputs in slot order, a dummy of the list left out.
+    /// The real inputs of a tag 47 merge in slot order, a dummy of the list left out.
     pub input_commitments: Vec<Hash>,
+    /// The nullifiers of a tag 57 merge its seed names no padding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub real_nullifiers: Vec<Hash>,
 }
 
 /// A confirmed merge with an input the auditor cannot name.
@@ -342,6 +349,7 @@ impl From<&AuditedMergeOutput> for AuditedMergeRecord {
             mint: output.mint.map(Into::into),
             amount: output.amount,
             input_commitments: output.inputs.iter().copied().map(Hash).collect(),
+            real_nullifiers: output.real_nullifiers.iter().copied().map(Hash).collect(),
         }
     }
 }
@@ -353,7 +361,7 @@ impl From<&ConfirmedMerge> for UnresolvedMergeRecord {
             tx_signature: merge.tx_signature.into(),
             event_index: merge.event_index,
             output_commitment: Hash(merge.output_commitment),
-            input_commitments: merge.inputs.iter().copied().map(Hash).collect(),
+            input_commitments: merge.inputs().iter().copied().map(Hash).collect(),
         }
     }
 }
@@ -441,10 +449,9 @@ pub struct DecryptedTransaction {
     /// Every slot whose rebuilt opening reaches its published commitment, in published order.
     pub outputs: Vec<DecryptedOutput>,
     pub payload_errors: Vec<DecryptedPayloadError>,
-    /// The hidden sender of an anonymous ring, absent while `hash_0` names an unseen note.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sender: Option<DecryptedSender>,
-    /// One per published nullifier, every rail's evidence names its hash.
+    /// `R`, spent notes among the published inputs.
+    pub real_inputs: u8,
+    /// One per published nullifier.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<DecryptedInput>,
     pub nullifiers: Vec<Hash>,
@@ -489,31 +496,12 @@ pub struct DecryptedOutput {
     pub slot_index: u32,
     pub output_context: DecryptedOutputContext,
     pub kind: DecryptedOutputKind,
-    /// Absent for a dummy and a slot awaiting its owner's escrow record.
+    /// Absent for a dummy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utxo: Option<DecryptedUtxo>,
-    /// The recipient's X25519 u of a ring output.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recipient_u: Option<Hash>,
-    /// The view tag of an anonymous ring output.
+    /// The tag a ring output publishes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<Hash>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub escrow_pending: Option<DecryptedEscrowPending>,
-}
-
-/// The fields a key escrow slot's proof fixes, its commitment rebuilds once the service holds the key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DecryptedEscrowPending {
-    pub owner_key: SerializablePubkey,
-    pub amount: u64,
-    pub blinding: Hash,
-    /// Set on an exit, a delivered ring body omits the asset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub asset: Option<Hash>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mint: Option<SerializablePubkey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -522,7 +510,6 @@ pub enum DecryptedOutputKind {
     Ring,
     Exit,
     Dummy,
-    EscrowPending,
 }
 
 /// Exact field encodings keep an unknown asset readable.
@@ -533,7 +520,7 @@ pub struct DecryptedUtxo {
     pub owner_key: SerializablePubkey,
     pub nullifier_pk: Hash,
     pub asset: Hash,
-    /// Absent while the asset registry does not know the asset.
+    /// Absent on a historical frame while the asset registry does not know the asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint: Option<SerializablePubkey>,
     pub amount: u64,
@@ -564,60 +551,22 @@ pub struct DecryptedKnownUtxo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DecryptedSender {
-    pub owner_key: SerializablePubkey,
-    /// Absent when spent note 0 is a deposit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nullifier_pk: Option<Hash>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedInput {
     pub nullifier: Hash,
-    /// The commitment the evidence names, absent at a dummy.
+    /// False on padding, the nullifier index names which note a true one spent.
+    pub real: bool,
+    /// A default-ring note whose opening the frame carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hash: Option<Hash>,
-    /// Absent for a dummy, a merge output and a note the service lacks.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opening: Option<DecryptedInputOpening>,
-    /// The inherited fields of a merge output, an audit record with no blinding.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub merged: Option<DecryptedMergedInput>,
-    /// The evidence names a note the service lacks.
-    #[serde(default)]
-    pub unseen: bool,
+    pub default_input: Option<DecryptedDefaultInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DecryptedMergedInput {
-    pub owner_key: SerializablePubkey,
-    pub asset: Hash,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mint: Option<SerializablePubkey>,
-    pub amount: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DecryptedInputOpening {
-    pub asset: Hash,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mint: Option<SerializablePubkey>,
-    pub amount: u64,
-    pub blinding: Hash,
+pub struct DecryptedDefaultInput {
+    pub utxo: DecryptedUtxo,
     /// Absent without the input's tree id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ring: Option<DecryptedInputRing>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum DecryptedInputRing {
-    Ring { commitment: Hash },
-    Default { commitment: Hash },
-    Unresolved { ring: Hash, default: Hash },
+    pub commitment: Option<Hash>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -789,10 +738,7 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
                     kind: error.kind,
                 })
                 .collect(),
-            sender: audited.sender.map(|sender| DecryptedSender {
-                owner_key: sender.owner_key.into(),
-                nullifier_pk: sender.nullifier_pk.map(Into::into),
-            }),
+            real_inputs: audited.real_inputs,
             inputs: audited.inputs.into_iter().map(Into::into).collect(),
             nullifiers: nullifiers.into_iter().map(Into::into).collect(),
             spenders: spenders
@@ -820,52 +766,13 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
 
 impl From<AuditedOutput> for DecryptedOutput {
     fn from(output: AuditedOutput) -> Self {
-        let (kind, utxo, recipient_u, tag, escrow_pending) = match output.opening {
+        let (kind, utxo, tag) = match output.opening {
             OutputOpening::Ring {
                 utxo,
-                owner_tag: RingOwnerTag::Recipient(recipient_u),
-            } => (
-                DecryptedOutputKind::Ring,
-                Some(utxo),
-                Some(recipient_u.into()),
-                None,
-                None,
-            ),
-            OutputOpening::Ring {
-                utxo,
-                owner_tag: RingOwnerTag::View(tag),
-            } => (
-                DecryptedOutputKind::Ring,
-                Some(utxo),
-                None,
-                Some(tag.into()),
-                None,
-            ),
-            OutputOpening::Exit(utxo) => (DecryptedOutputKind::Exit, Some(utxo), None, None, None),
-            OutputOpening::Dummy => (DecryptedOutputKind::Dummy, None, None, None, None),
-            OutputOpening::EscrowPending(pending) => {
-                let (recipient_u, asset, mint) = match pending.slot {
-                    EscrowPendingSlot::Ring { recipient_u } => {
-                        (Some(recipient_u.into()), None, None)
-                    }
-                    EscrowPendingSlot::Exit { asset, mint } => {
-                        (None, Some(asset.into()), mint.map(Into::into))
-                    }
-                };
-                (
-                    DecryptedOutputKind::EscrowPending,
-                    None,
-                    recipient_u,
-                    None,
-                    Some(DecryptedEscrowPending {
-                        owner_key: pending.owner_key.into(),
-                        amount: pending.amount,
-                        blinding: pending.blinding.into(),
-                        asset,
-                        mint,
-                    }),
-                )
-            }
+                owner_tag: RingOwnerTag(tag),
+            } => (DecryptedOutputKind::Ring, Some(utxo), Some(tag.into())),
+            OutputOpening::Exit(utxo) => (DecryptedOutputKind::Exit, Some(utxo), None),
+            OutputOpening::Dummy => (DecryptedOutputKind::Dummy, None, None),
         };
         Self {
             slot_index: output.slot_index,
@@ -876,9 +783,7 @@ impl From<AuditedOutput> for DecryptedOutput {
             },
             kind,
             utxo: utxo.map(Into::into),
-            recipient_u,
             tag,
-            escrow_pending,
         }
     }
 }
@@ -886,11 +791,7 @@ impl From<AuditedOutput> for DecryptedOutput {
 impl DecryptedOutput {
     /// `None` for a dummy.
     pub fn owner_key(&self) -> Option<SerializablePubkey> {
-        self.utxo.as_ref().map(|utxo| utxo.owner_key).or_else(|| {
-            self.escrow_pending
-                .as_ref()
-                .map(|pending| pending.owner_key)
-        })
+        self.utxo.as_ref().map(|utxo| utxo.owner_key)
     }
 }
 
@@ -996,37 +897,14 @@ impl From<AuditedInput> for DecryptedInput {
     fn from(input: AuditedInput) -> Self {
         Self {
             nullifier: input.nullifier.into(),
-            hash: (input.hash != [0; 32]).then(|| input.hash.into()),
-            unseen: input.opening.is_unseen(),
-            merged: match &input.opening {
-                InputOpening::Merged(merged) => Some(DecryptedMergedInput {
-                    owner_key: merged.input.owner_key.into(),
-                    asset: merged.input.asset.into(),
-                    mint: merged.input.mint.map(Into::into),
-                    amount: merged.input.amount,
+            real: input.opening.is_real(),
+            default_input: input
+                .opening
+                .default_input()
+                .map(|input| DecryptedDefaultInput {
+                    utxo: input.utxo.into(),
+                    commitment: input.commitment.map(Into::into),
                 }),
-                InputOpening::Dummy | InputOpening::Opened(_) | InputOpening::UnseenHash { .. } => {
-                    None
-                }
-            },
-            opening: input.opening.opened().map(|opening| DecryptedInputOpening {
-                asset: opening.asset.into(),
-                mint: opening.mint.map(Into::into),
-                amount: opening.amount,
-                blinding: opening.blinding.into(),
-                ring: opening.ring.map(|ring| match ring {
-                    InputRing::Ring { commitment } => DecryptedInputRing::Ring {
-                        commitment: commitment.into(),
-                    },
-                    InputRing::Default { commitment } => DecryptedInputRing::Default {
-                        commitment: commitment.into(),
-                    },
-                    InputRing::Unresolved { ring, default } => DecryptedInputRing::Unresolved {
-                        ring: ring.into(),
-                        default: default.into(),
-                    },
-                }),
-            }),
         }
     }
 }

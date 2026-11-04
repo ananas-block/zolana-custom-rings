@@ -1,4 +1,7 @@
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
+use clap::ValueEnum;
 use jsonrpsee::types::ErrorObjectOwned;
 use solana_address::Address;
 use solana_message::VersionedMessage;
@@ -7,6 +10,20 @@ use thiserror::Error;
 use zolana_ring_policy::Member;
 
 use crate::error::RingRpcError;
+
+/// One class of the five a ring's `CoSigner` records hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum ApproveClass {
+    Outflow,
+    Withdrawal,
+    Transfers,
+    Deposits,
+    Withdrawals,
+}
+
+/// Explicit, an empty set refuses every operation whatever its limits.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoSignerApproval(BTreeSet<ApproveClass>);
 
 pub struct CoSignRequest {
     pub ring: Address,
@@ -32,8 +49,8 @@ pub struct OwnerFlow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AssetFlow {
     pub asset: Address,
-    /// `zolana_ring_policy::owner_debits`, what the owner's ring balance lost.
-    pub debit: u64,
+    /// `zolana_ring_policy::owner_debits`, compared with owner caps and `cosign_above`.
+    pub outflow: u64,
     pub deposited: u64,
     pub withdrawn: u64,
 }
@@ -50,6 +67,8 @@ pub enum CoSignDecision {
 pub enum CoSignRefusal {
     Disabled,
     OverLimit,
+    /// No class the operation demands sits in the explicit approval.
+    NotApproved,
 }
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -65,6 +84,10 @@ pub enum CoSignError {
     LimitsUnavailable = -32163,
     #[error("the message holds anything but one ring transfer the co-signer can read")]
     MessageScope = -32164,
+    #[error("the co-signer approves no class this operation demands")]
+    NotApproved = -32165,
+    #[error("the frame buffer is no sealed buffer of the signed digest")]
+    FrameBuffer = -32166,
     #[error("the co-sign request names an asset with no record")]
     UnrecordedAsset = -32296,
 }
@@ -73,6 +96,16 @@ pub enum CoSignError {
 pub enum CoSignSettlement {
     Confirmed(Signature),
     Failed(Signature),
+}
+
+impl CoSignerApproval {
+    pub fn new(classes: impl IntoIterator<Item = ApproveClass>) -> Self {
+        Self(classes.into_iter().collect())
+    }
+
+    pub(crate) fn covers_any(&self, demand: &BTreeSet<ApproveClass>) -> bool {
+        !self.0.is_disjoint(demand)
+    }
 }
 
 impl CoSignError {
@@ -86,6 +119,7 @@ impl From<CoSignRefusal> for CoSignError {
         match refusal {
             CoSignRefusal::Disabled => Self::Disabled,
             CoSignRefusal::OverLimit => Self::OverLimit,
+            CoSignRefusal::NotApproved => Self::NotApproved,
         }
     }
 }
@@ -144,6 +178,8 @@ mod tests {
             (RepeatedAsset, -32162),
             (LimitsUnavailable, -32163),
             (MessageScope, -32164),
+            (NotApproved, -32165),
+            (FrameBuffer, -32166),
             (UnrecordedAsset, -32296),
         ] {
             assert_eq!(ErrorObjectOwned::from(error).code(), code);

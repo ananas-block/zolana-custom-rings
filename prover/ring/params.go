@@ -99,6 +99,7 @@ type TransferParams struct {
 	Rows              []Field         `json:"rows"`
 	PrivateTxHash     Field           `json:"privateTxHash"`
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
+	AddressChain      Field           `json:"addressChain"`
 	TrackingParams
 	PolicyParams
 }
@@ -125,10 +126,17 @@ type Source struct {
 	Registry Field `json:"registry"`
 }
 
+// PrivateSourceParams serves OwnerLists from the private tree of Registry, zeros when none.
+type PrivateSourceParams struct {
+	OwnerLists Field `json:"ownerLists"`
+	Registry   Field `json:"registry"`
+}
+
 type PolicyTable struct {
-	Sources   []Source `json:"sources"`
-	PolicyLen uint8    `json:"policyLen"`
-	Rules     []Field  `json:"rules"`
+	Sources   []Source            `json:"sources"`
+	Source    PrivateSourceParams `json:"source"`
+	PolicyLen uint8               `json:"policyLen"`
+	Rules     []Field             `json:"rules"`
 }
 
 // RecordOpening opens a member's record in a member registry, Path the three siblings of every level from the leaf up in child order.

@@ -21,12 +21,12 @@ mod disclosure;
 #[path = "crypto/encryption/mod.rs"]
 mod encryption;
 mod error;
+#[path = "state/exposed_notes.rs"]
+mod exposed_notes;
 #[path = "rpc/history.rs"]
 pub mod history;
 #[path = "rpc/indexer.rs"]
 mod indexer;
-#[path = "state/exposed_notes.rs"]
-mod exposed_notes;
 #[path = "state/known_utxo_index.rs"]
 mod known;
 #[path = "state/list_grant.rs"]
@@ -45,6 +45,8 @@ mod reader;
 pub mod records;
 #[path = "operations/recover.rs"]
 mod recover;
+#[path = "operations/resolver.rs"]
+pub mod resolver;
 #[cfg(feature = "rpc")]
 #[path = "rpc/mod.rs"]
 pub mod rpc;
@@ -78,16 +80,17 @@ pub use crate::{
         CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
         DepositOwners,
     },
-    decrypt::{EscrowedKeys, FramedRow, KnownUtxos, TransactionAudit},
+    decrypt::{AuditFrame, FramedRow, HistoricalLayout, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,
     disclosure::{
-        historical_evidence, input_hash_evidence, AuditEnvelope, AuditStreamSeal, DisclosurePad,
-        HistoricalEvidence, OpenedAudit, OutputRecord, SealedAuditStream,
+        historical_evidence, AuditEnvelope, AuditStreamSeal, DisclosurePad, HistoricalEvidence,
+        OpenedAudit, SealedAuditStream,
     },
     encryption::{
-        auditor_view_tag, open_deposit, open_merge_disclosure, seal_deposits, DepositEncryption,
-        DepositOpening, MergeDisclosureEncryption, MergeOpening, NullifierKeyEnvelope,
+        auditor_view_tag, open_deposit, open_merge_disclosure, open_merge_record, seal_deposits,
+        DepositCapsule, DepositEncryption, DepositOpening, DepositedNote, HistoricalDepositCapsule,
+        MergeOpening, MergeRecordSeal, NullifierKeyEnvelope, SealedMergeOpening,
         SealedNullifierKey,
     },
     error::{AnonymousError, AuditError, AuditFailureKind, RowDisposition},
@@ -100,7 +103,8 @@ pub use crate::{
     list_grant::{ListBits, PresentRead},
     merge_audit::{confirmed_merge, MergeAudit, MergeAuditPage},
     merge_ledger::{
-        AuditedMergeOutput, ConfirmedMerge, MergeId, MergeInput, MergeLedger, MergeTransition,
+        AuditedMergeOutput, ConfirmedMerge, MergeDisclosed, MergeId, MergeInput, MergeLedger,
+        MergeRecordOutput, MergeTransition,
     },
     origin::{
         ring_event_origin_in, ConfirmedDeposit, ConfirmedEvent, ConfirmedEventKind,
@@ -112,12 +116,12 @@ pub use crate::{
         RecordPoolRead, StorageTip,
     },
     recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
+    resolver::{RecipientResolver, ResolveError, ResolvedRecipient},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
-        AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
-        AuditedUtxo, CreatedUtxo, EscrowPendingOutput, EscrowPendingSlot, InputOpening, InputRing,
-        KnownUtxo, MergedInput, OutputOpening, OutputPayloadError, OutputPayloadErrorKind,
-        OutputResolution, RingOwnerTag, UnresolvedOutput, UtxoOwner,
+        AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
+        CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
+        OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};

@@ -1,4 +1,4 @@
-//! Scheme 10 opened into a wallet by `open_ring_confidential`.
+//! Scheme 13 opened into a wallet by `open_ring_confidential`.
 
 use solana_address::Address;
 use solana_signature::Signature;
@@ -87,7 +87,9 @@ fn transfer(
                 ref other => panic!("inline owner tag expected, got {other:?}"),
             },
             output_context: OutputContext {
-                hash: *slot.wire.hash(),
+                hash: *slot
+                    .wire(&[0; custom_ring_interface::AUDIT_RECORD_LEN], None)
+                    .hash,
                 tree_id: TREE,
                 leaf_index: leaf as u64,
             },
@@ -129,13 +131,9 @@ fn held(owner: &ShieldedKeypair, transactions: &[ShieldedTransaction]) -> Vec<(u
 }
 
 #[test]
-fn a_delivered_transfer_opens_for_its_recipient_by_trial_over_the_held_mints() {
+fn a_delivered_transfer_opens_for_its_recipient_under_the_mint_its_body_names() {
     let (sender, recipient) = (keypair(1), keypair(2));
-    let tx = transfer(
-        &sender,
-        &recipient,
-        RingDelivery::Delivered { key_escrow: false },
-    );
+    let tx = transfer(&sender, &recipient, RingDelivery::Delivered);
     assert_eq!(held(&recipient, std::slice::from_ref(&tx)), [(SENT, false)]);
     assert_eq!(
         held(&sender, std::slice::from_ref(&tx)),
@@ -147,11 +145,7 @@ fn a_delivered_transfer_opens_for_its_recipient_by_trial_over_the_held_mints() {
 #[test]
 fn a_note_reads_spent_once_a_scanned_transaction_spends_it() {
     let (sender, recipient) = (keypair(1), keypair(2));
-    let received = transfer(
-        &sender,
-        &recipient,
-        RingDelivery::Delivered { key_escrow: false },
-    );
+    let received = transfer(&sender, &recipient, RingDelivery::Delivered);
     let notes = open_ring_confidential(
         &recipient,
         &RingAssets::new([]).unwrap(),

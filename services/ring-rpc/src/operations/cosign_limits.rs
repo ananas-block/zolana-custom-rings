@@ -7,12 +7,14 @@ use solana_keypair::Keypair;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_ring_policy::{AssetLimits, Member};
+use zolana_ring_policy::{
+    ApprovalInputs, ApprovalMask, Member, MintPolicy, OwnerDebit, PublicGross,
+};
 
 use crate::{
     cosign::{
-        AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy, CoSignRefusal,
-        CoSignRequest, CoSignSettlement, OwnerFlow,
+        ApproveClass, AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy,
+        CoSignRefusal, CoSignRequest, CoSignSettlement, CoSignerApproval, OwnerFlow,
     },
     cosign_usage::{Reservation, Reserve, UsageLedger, UsageWindow},
     database::Store,
@@ -26,18 +28,35 @@ pub trait AssetLimitSource: Send + Sync {
     fn current_slot(&self) -> impl Future<Output = Result<u64, RingRpcError>> + Send;
 
     /// In `assets` order, `None` for an asset without a record.
-    fn asset_limits(
+    fn asset_policies(
         &self,
         ring: Address,
         assets: &[Address],
-    ) -> impl Future<Output = Result<Vec<Option<AssetLimits>>, RingRpcError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Option<MintPolicy>>, RingRpcError>> + Send;
 
     /// One flow per owner and asset of the transfer `message` carries, refused on an unknown input.
     fn transfer_flows(
         &self,
         ring: Address,
         message: &VersionedMessage,
-    ) -> impl Future<Output = Result<Vec<OwnerFlow>, RingRpcError>> + Send;
+    ) -> impl Future<Output = Result<FrameRead, RingRpcError>> + Send;
+}
+
+/// What the frame a co-signer signs moves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrameRead {
+    /// The delegate rail demands no class and no limit reads it.
+    Delegate,
+    Transfer(TransferRead),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferRead {
+    pub flows: Vec<OwnerFlow>,
+    /// Clear on a frame of public legs alone.
+    pub spends_note: bool,
+    /// The frame's proven mask, `None` on a frame that carries none.
+    pub approval_bits: Option<u8>,
 }
 
 /// Reads each asset record under the newest root of the ring's records registry.
@@ -47,18 +66,20 @@ pub struct LimitedCoSignerInit<L> {
     pub signer: Keypair,
     pub limits: L,
     pub store: Arc<Store>,
+    pub approval: CoSignerApproval,
 }
 
 pub struct LimitedCoSigner<L> {
     signer: Keypair,
     limits: L,
     store: Arc<Store>,
+    approval: CoSignerApproval,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AssetCheck {
     pub asset: Address,
-    pub limits: AssetLimits,
+    pub policy: MintPolicy,
 }
 
 /// Windows end at the current `slot`.
@@ -77,7 +98,7 @@ pub struct LimitDecision<'a> {
 
 #[derive(Clone, Copy)]
 enum Measure {
-    Debit,
+    Outflow,
     Volume,
     Deposited,
     Withdrawn,
@@ -102,6 +123,7 @@ impl<L> LimitedCoSignerInit<L> {
             signer: self.signer,
             limits: self.limits,
             store: self.store,
+            approval: self.approval,
         }
     }
 }
@@ -113,14 +135,26 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
     }
 
     async fn decide(&self, request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError> {
-        // 1. The frame names every transfer debit, an owner and asset appears once.
-        let flows = match &request.flows {
+        // 1. The frame names every transfer outflow, an owner and asset appears once.
+        let (flows, operation) = match &request.flows {
             CoSignFlows::Frame => {
-                self.limits
+                match self
+                    .limits
                     .transfer_flows(request.ring, &request.message)
                     .await?
+                {
+                    // A delegate transfer demands no class, no limit reads it and nothing reserves.
+                    FrameRead::Delegate => {
+                        return Ok(CoSignDecision::Signed(
+                            self.signer.sign_message(&request.message.serialize()),
+                        ))
+                    }
+                    FrameRead::Transfer(read) => {
+                        (read.flows, Operation::Transfer(read.spends_note))
+                    }
+                }
             }
-            CoSignFlows::Published(flows) => flows.clone(),
+            CoSignFlows::Published(flows) => (flows.clone(), Operation::Published),
         };
         let rows: BTreeSet<_> = flows
             .iter()
@@ -137,34 +171,38 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             .into_iter()
             .collect();
         let slot = self.limits.current_slot().await?;
-        let limits = self.limits.asset_limits(request.ring, &assets).await?;
-        if limits.len() != assets.len() {
+        let policies = self.limits.asset_policies(request.ring, &assets).await?;
+        if policies.len() != assets.len() {
             return Err(CoSignError::LimitsUnavailable.into());
         }
         let checks: Vec<AssetCheck> = assets
             .iter()
-            .zip(limits)
+            .zip(policies)
             .map(|(asset, recorded)| {
-                recorded.map(|limits| AssetCheck {
+                recorded.map(|policy| AssetCheck {
                     asset: *asset,
-                    limits,
+                    policy,
                 })
             })
             .collect::<Option<_>>()
             .ok_or(CoSignError::UnrecordedAsset)?;
+        // 3. No explicit approval of a demanded class, no signature, whatever the caps say.
+        if !self.approval.covers_any(&operation.demand(&flows, &checks)) {
+            return Ok(CoSignDecision::Refused(CoSignRefusal::NotApproved));
+        }
         let signature = self.signer.sign_message(&request.message.serialize());
 
-        // 3. Co-signers sharing the store decide one at a time for each asset.
+        // 4. Co-signers sharing the store decide one at a time for each asset.
         let transaction = self.store.connection().begin().await?;
         let ledger = UsageLedger { conn: &transaction };
         ledger.admit(&request.ring, &assets).await?;
 
-        // 4. A repeated message keeps its rows.
+        // 5. A repeated message keeps its rows.
         if ledger.reserved(&signature).await? {
             return Ok(CoSignDecision::Signed(signature));
         }
 
-        // 5. The window read and the reservation commit in one database transaction.
+        // 6. The window read and the reservation commit in one database transaction.
         let usage = WindowUsage {
             slot,
             reservations: ledger
@@ -213,11 +251,11 @@ impl<S: TransactionSource + 'static> AssetLimitSource for RecordLimits<S> {
     }
 
     /// No record without a ring policy, refused without a records registry.
-    async fn asset_limits(
+    async fn asset_policies(
         &self,
         ring: Address,
         assets: &[Address],
-    ) -> Result<Vec<Option<AssetLimits>>, RingRpcError> {
+    ) -> Result<Vec<Option<MintPolicy>>, RingRpcError> {
         if assets.is_empty() {
             return Ok(Vec::new());
         }
@@ -236,7 +274,7 @@ impl<S: TransactionSource + 'static> AssetLimitSource for RecordLimits<S> {
             .verified_openings(&tip, &members)
             .await?
             .iter()
-            .map(|opening| opening.record().map(|record| record.mint_policy.limits))
+            .map(|opening| opening.record().map(|record| record.mint_policy))
             .collect())
     }
 
@@ -244,7 +282,7 @@ impl<S: TransactionSource + 'static> AssetLimitSource for RecordLimits<S> {
         &self,
         ring: Address,
         message: &VersionedMessage,
-    ) -> Result<Vec<OwnerFlow>, RingRpcError> {
+    ) -> Result<FrameRead, RingRpcError> {
         TransferDebits {
             shared: &self.0,
             ring,
@@ -255,11 +293,93 @@ impl<S: TransactionSource + 'static> AssetLimitSource for RecordLimits<S> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Operation {
+    Transfer {
+        spends_note: bool,
+        approval_bits: Option<u8>,
+    },
+    /// A deposit's public leg, or a merge's nothing.
+    Published,
+}
+
+/// The shared formula over the flows a reservation holds, the mint stands for its asset.
+fn approval_mask(flows: &[OwnerFlow], checks: &[AssetCheck]) -> ApprovalMask {
+    let debits: Vec<OwnerDebit> = flows
+        .iter()
+        .map(|flow| OwnerDebit {
+            owner: *flow.owner.as_bytes(),
+            asset: flow.flow.asset.to_bytes(),
+            debit: flow.flow.outflow.into(),
+            kept: 0,
+            charge: 0,
+            outflow: flow.flow.outflow.into(),
+        })
+        .collect();
+    let public_gross: Vec<PublicGross> = flows
+        .iter()
+        .map(|flow| PublicGross {
+            asset: flow.flow.asset.to_bytes(),
+            gross: flow.flow.withdrawn.into(),
+        })
+        .collect();
+    ApprovalInputs {
+        flows: &debits,
+        public_gross: &public_gross,
+    }
+    .mask(|asset| {
+        checks
+            .iter()
+            .find(|check| check.asset.as_array() == asset)
+            .map_or(MintPolicy::EMPTY, |check| check.policy)
+    })
+}
+
+impl Operation {
+    /// A frame's proven bits meet the thresholds this service reads, or it signs nothing.
+    fn frame_holds(self, mask: ApprovalMask) -> bool {
+        match self {
+            Self::Transfer {
+                approval_bits: Some(bits),
+                ..
+            } => bits == mask.bits(),
+            Self::Transfer { .. } | Self::Published => true,
+        }
+    }
+
+    /// The classes the ring's rule demands of this operation.
+    fn demand(self, flows: &[OwnerFlow], mask: ApprovalMask) -> BTreeSet<ApproveClass> {
+        let mut demand = BTreeSet::new();
+        for moved in flows.iter().map(|flow| flow.flow) {
+            if moved.deposited != 0 {
+                demand.insert(ApproveClass::Deposits);
+            }
+            if moved.withdrawn != 0 {
+                demand.insert(ApproveClass::Withdrawals);
+            }
+        }
+        if mask.contains(ApprovalMask::OUTFLOW) {
+            demand.insert(ApproveClass::Outflow);
+        }
+        if mask.contains(ApprovalMask::WITHDRAWAL) {
+            demand.insert(ApproveClass::Withdrawal);
+        }
+        let spends_note = match self {
+            Self::Transfer { spends_note, .. } => spends_note,
+            Self::Published => !demand.contains(&ApproveClass::Deposits),
+        };
+        if spends_note {
+            demand.insert(ApproveClass::Transfers);
+        }
+        demand
+    }
+}
+
 impl LimitDecision<'_> {
     /// `signature` is the co-signature over the request message.
     pub fn decide(self, signature: Signature) -> CoSignDecision {
         let within = self.assets.iter().all(|check| {
-            window_caps(&check.limits)
+            window_caps(&check.policy.limits)
                 .iter()
                 .all(|cap| self.within(check.asset, cap))
         });
@@ -270,6 +390,7 @@ impl LimitDecision<'_> {
     }
 
     fn within(&self, asset: Address, cap: &WindowCap) -> bool {
+        // A zero cap sets no window limit, the approval decided the signature.
         if cap.cap == 0 {
             return true;
         }
@@ -304,11 +425,11 @@ impl LimitDecision<'_> {
 
 impl Measure {
     fn of(self, flow: &AssetFlow) -> u128 {
-        let [debit, deposited, withdrawn] =
-            [flow.debit, flow.deposited, flow.withdrawn].map(u128::from);
+        let [outflow, deposited, withdrawn] =
+            [flow.outflow, flow.deposited, flow.withdrawn].map(u128::from);
         match self {
-            Self::Debit => debit,
-            Self::Volume => debit + deposited,
+            Self::Outflow => outflow,
+            Self::Volume => outflow + deposited,
             Self::Deposited => deposited,
             Self::Withdrawn => withdrawn,
         }
@@ -316,7 +437,7 @@ impl Measure {
 }
 
 /// A zero window counts the checked transaction alone.
-fn window_caps(limits: &AssetLimits) -> [WindowCap; 4] {
+fn window_caps(limits: &zolana_ring_policy::AssetLimits) -> [WindowCap; 4] {
     let ring = |cap, window_slots, measure| WindowCap {
         cap,
         window_slots,
@@ -327,7 +448,7 @@ fn window_caps(limits: &AssetLimits) -> [WindowCap; 4] {
         WindowCap {
             cap: limits.sender_cap,
             window_slots: limits.sender_window_slots,
-            measure: Measure::Debit,
+            measure: Measure::Outflow,
             scope: Scope::Owner,
         },
         ring(
@@ -351,7 +472,7 @@ fn window_caps(limits: &AssetLimits) -> [WindowCap; 4] {
 fn longest_window(checks: &[AssetCheck]) -> u64 {
     checks
         .iter()
-        .flat_map(|check| window_caps(&check.limits))
+        .flat_map(|check| window_caps(&check.policy.limits))
         .map(|cap| cap.window_slots)
         .max()
         .unwrap_or_default()
@@ -365,6 +486,7 @@ mod cosign_window_tests;
 mod tests {
     use sea_orm::ConnectionTrait;
     use solana_message::Message;
+    use zolana_ring_policy::AssetLimits;
 
     use super::*;
 
@@ -384,7 +506,7 @@ mod tests {
             owner: member(owner),
             flow: AssetFlow {
                 asset: ASSET,
-                debit: amount,
+                outflow: amount,
                 deposited: 0,
                 withdrawn: 0,
             },
@@ -402,10 +524,17 @@ mod tests {
         }
     }
 
+    fn policy(limits: AssetLimits) -> MintPolicy {
+        MintPolicy {
+            limits,
+            ..MintPolicy::EMPTY
+        }
+    }
+
     fn sender_check() -> [AssetCheck; 1] {
         [AssetCheck {
             asset: ASSET,
-            limits: SENDER_LIMITS,
+            policy: policy(SENDER_LIMITS),
         }]
     }
 
@@ -464,11 +593,11 @@ mod tests {
         let signature = Signature::from([1; 64]);
         let check = [AssetCheck {
             asset: ASSET,
-            limits: AssetLimits {
+            policy: policy(AssetLimits {
                 volume_cap: 100,
                 volume_window_slots: 50,
                 ..AssetLimits::EMPTY
-            },
+            }),
         }];
         let usage = WindowUsage {
             slot: 1_000,
@@ -493,8 +622,8 @@ mod tests {
     }
 
     struct FixedLimits {
-        limits: Option<AssetLimits>,
-        flows: Result<Vec<OwnerFlow>, CoSignError>,
+        limits: Option<MintPolicy>,
+        flows: Result<FrameRead, CoSignError>,
     }
 
     impl AssetLimitSource for FixedLimits {
@@ -502,11 +631,11 @@ mod tests {
             Ok(1_000)
         }
 
-        async fn asset_limits(
+        async fn asset_policies(
             &self,
             _ring: Address,
             assets: &[Address],
-        ) -> Result<Vec<Option<AssetLimits>>, RingRpcError> {
+        ) -> Result<Vec<Option<MintPolicy>>, RingRpcError> {
             Ok(vec![self.limits; assets.len()])
         }
 
@@ -514,7 +643,7 @@ mod tests {
             &self,
             _ring: Address,
             _message: &VersionedMessage,
-        ) -> Result<Vec<OwnerFlow>, RingRpcError> {
+        ) -> Result<FrameRead, RingRpcError> {
             self.flows.clone().map_err(Into::into)
         }
     }
@@ -546,19 +675,172 @@ mod tests {
             .len()
     }
 
+    fn all_classes() -> CoSignerApproval {
+        CoSignerApproval::new([
+            ApproveClass::Outflow,
+            ApproveClass::Withdrawal,
+            ApproveClass::Transfers,
+            ApproveClass::Deposits,
+            ApproveClass::Withdrawals,
+        ])
+    }
+
     fn signer_over(store: Store, limits: FixedLimits) -> LimitedCoSigner<FixedLimits> {
+        approving(store, limits, all_classes())
+    }
+
+    fn approving(
+        store: Store,
+        limits: FixedLimits,
+        approval: CoSignerApproval,
+    ) -> LimitedCoSigner<FixedLimits> {
         LimitedCoSignerInit {
             signer: Keypair::new_from_array([5; 32]),
             limits,
             store: Arc::new(store),
+            approval,
         }
         .build()
     }
 
+    fn frame(flows: Vec<OwnerFlow>) -> FrameRead {
+        FrameRead::Transfer(TransferRead {
+            flows,
+            spends_note: true,
+            approval_bits: None,
+        })
+    }
+
+    fn frame_request() -> CoSignRequest {
+        CoSignRequest {
+            ring: Address::new_from_array([9; 32]),
+            message: message(1),
+            flows: CoSignFlows::Frame,
+        }
+    }
+
+    async fn decided(
+        limits: MintPolicy,
+        read: FrameRead,
+        approval: CoSignerApproval,
+    ) -> CoSignDecision {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        approving(
+            store,
+            FixedLimits {
+                limits: Some(limits),
+                flows: Ok(read),
+            },
+            approval,
+        )
+        .decide(&frame_request())
+        .await
+        .expect("decision")
+    }
+
+    #[tokio::test]
+    async fn zero_caps_with_no_approval_refuse() {
+        assert_eq!(
+            decided(
+                MintPolicy::EMPTY,
+                frame(vec![debit(7, 1_000_000)]),
+                CoSignerApproval::default()
+            )
+            .await,
+            CoSignDecision::Refused(CoSignRefusal::NotApproved)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_approved_class_signs_and_an_undemanded_one_does_not() {
+        let transfer = frame(vec![debit(7, 10)]);
+        assert!(matches!(
+            decided(
+                MintPolicy::EMPTY,
+                transfer.clone(),
+                CoSignerApproval::new([ApproveClass::Transfers])
+            )
+            .await,
+            CoSignDecision::Signed(_)
+        ));
+        assert_eq!(
+            decided(
+                MintPolicy::EMPTY,
+                transfer,
+                CoSignerApproval::new([ApproveClass::Deposits])
+            )
+            .await,
+            CoSignDecision::Refused(CoSignRefusal::NotApproved)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_threshold_passes_demand_its_approval_class() {
+        let over = MintPolicy {
+            cosign_above: 100,
+            withdrawal_threshold: 100,
+            ..MintPolicy::EMPTY
+        };
+        let moved = |outflow, withdrawn| {
+            FrameRead::Transfer(TransferRead {
+                flows: vec![OwnerFlow {
+                    owner: member(7),
+                    flow: AssetFlow {
+                        asset: ASSET,
+                        outflow,
+                        deposited: 0,
+                        withdrawn,
+                    },
+                }],
+                spends_note: false,
+                approval_bits: None,
+            })
+        };
+        let outflow = CoSignerApproval::new([ApproveClass::Outflow]);
+        let withdrawal = CoSignerApproval::new([ApproveClass::Withdrawal]);
+        assert!(matches!(
+            decided(over, moved(101, 0), outflow.clone()).await,
+            CoSignDecision::Signed(_)
+        ));
+        assert_eq!(
+            decided(over, moved(100, 0), outflow.clone()).await,
+            CoSignDecision::Refused(CoSignRefusal::NotApproved),
+            "at the threshold no approval is demanded"
+        );
+        assert_eq!(
+            decided(over, moved(101, 0), withdrawal.clone()).await,
+            CoSignDecision::Refused(CoSignRefusal::NotApproved),
+            "an approver of the other class does not count"
+        );
+        assert!(matches!(
+            decided(over, moved(0, 101), withdrawal).await,
+            CoSignDecision::Signed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_delegate_frame_reads_no_limit_and_reserves_nothing() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let reader = store.clone();
+        let co_signer = approving(
+            store,
+            FixedLimits {
+                limits: None,
+                flows: Ok(FrameRead::Delegate),
+            },
+            CoSignerApproval::default(),
+        );
+        assert!(matches!(
+            co_signer.decide(&frame_request()).await.expect("decision"),
+            CoSignDecision::Signed(_)
+        ));
+        assert_eq!(store_rows(&reader).await, 0);
+    }
+
     fn within_limits() -> FixedLimits {
         FixedLimits {
-            limits: Some(SENDER_LIMITS),
-            flows: Ok(Vec::new()),
+            limits: Some(policy(SENDER_LIMITS)),
+            flows: Ok(frame(Vec::new())),
         }
     }
 
@@ -594,7 +876,7 @@ mod tests {
             store,
             FixedLimits {
                 limits: None,
-                flows: Ok(Vec::new()),
+                flows: Ok(frame(Vec::new())),
             },
         );
 
@@ -610,8 +892,8 @@ mod tests {
         let co_signer = signer_over(
             store,
             FixedLimits {
-                limits: Some(SENDER_LIMITS),
-                flows: Ok(vec![debit(7, 101)]),
+                limits: Some(policy(SENDER_LIMITS)),
+                flows: Ok(frame(vec![debit(7, 101)])),
             },
         );
         let decision = co_signer
@@ -631,7 +913,7 @@ mod tests {
         let co_signer = signer_over(
             store,
             FixedLimits {
-                limits: Some(SENDER_LIMITS),
+                limits: Some(policy(SENDER_LIMITS)),
                 flows: Err(CoSignError::LimitsUnavailable),
             },
         );

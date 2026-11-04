@@ -1,21 +1,34 @@
-//! Each owner's debit of the transfer a co-signer signs, read from the frame with the auditor key.
+//! Each owner's outflow of the transfer a co-signer signs, read from the frame and the note index.
 
 use custom_ring_interface::{
-    settlement_mints, tag, InstructionTag, ParsedTransact, RingRail, RingTransactData,
-    RING_TRANSACT_RING_CONFIG_INDEX,
+    ring_deposit_assets, settlement_mints, tag, DepositPrefix, FrameBuffer, InstructionTag,
+    ParsedTransact, RingRail, RingTransactData, SettleBufferedIxData,
+    RING_DEPOSIT_RING_CONFIG_INDEX, RING_TRANSACT_RING_CONFIG_INDEX,
 };
+use solana_account::Account;
 use solana_address::Address;
 use solana_message::VersionedMessage;
-use spr_interface::{instruction::instruction_data::settlement_accounts, pda, PROGRAM_ID_PUBKEY};
+use spr_interface::{
+    instruction::{
+        instruction_data::{deposit::RingDepositIxDataRef, settlement_accounts},
+        tag::RING_DEPOSIT,
+    },
+    pda, PROGRAM_ID_PUBKEY,
+};
+use spr_hasher::primitives::hash_bytes;
+use spr_interface::SOL_ASSET_FIELD;
 use spr_transaction::SOL_MINT;
 use zolana_ring_client::{
-    AuditedInput, AuditedTransaction, FramedRow, InputOpening, OutputOpening, TransactionAudit,
+    AuditedTransaction, FramedRow, InputOpening, OutputOpening, TransactionAudit,
 };
-use zolana_ring_policy::{owner_debits, DebitInput, DebitOutput, DebitTransfer, Member};
+use zolana_ring_policy::{
+    owner_debits, DebitInput, DebitOutput, DebitTransfer, Member, PublicGross,
+};
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
     cosign::{AssetFlow, CoSignError, OwnerFlow},
+    cosign_limits::{FrameRead, TransferRead},
     error::RingRpcError,
     hub::Shared,
     upstream::TransactionSource,
@@ -24,6 +37,8 @@ use crate::{
 
 /// The output tree's position in SPP's transact account list.
 const TRANSACT_OUTPUT_TREE_INDEX: usize = 1;
+/// `buffer, rent_payer, program` ahead of a buffered frame's own accounts.
+const BUFFERED_FIXED_ACCOUNTS: usize = 3;
 
 /// A ring whose auditor key the service does not hold refuses the limited co-signer.
 #[must_use]
@@ -31,6 +46,15 @@ pub(crate) struct TransferDebits<'a, S> {
     pub shared: &'a std::sync::Arc<Shared<S>>,
     pub ring: Address,
     pub message: &'a VersionedMessage,
+}
+
+/// A settling message's named buffer, the frame's bytes come from it alone.
+struct SealedFrame<'a> {
+    settle: &'a SettleBufferedIxData<'a>,
+    fixed: &'a [Address],
+    ring: Address,
+    account: &'a Account,
+    now_unix_ts: i64,
 }
 
 /// The ring instruction of a message, the only one the co-signer's signature admits.
@@ -43,6 +67,8 @@ struct RingFrame<'m> {
 /// One asset's public legs, a deposit joins the volume and a withdrawal stays gross.
 struct PublicFlow {
     mint: Address,
+    /// The field the statement's gross and every note of the mint hash under.
+    asset: [u8; 32],
     deposited: u64,
     withdrawn: u64,
 }
@@ -52,13 +78,68 @@ const fn unavailable() -> RingRpcError {
     RingRpcError::CoSign(CoSignError::LimitsUnavailable)
 }
 
+const fn scope() -> RingRpcError {
+    RingRpcError::CoSign(CoSignError::MessageScope)
+}
+
 impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
-    pub async fn flows(self) -> Result<Vec<OwnerFlow>, RingRpcError> {
+    pub async fn flows(self) -> Result<FrameRead, RingRpcError> {
+        let frame = RingFrame::of(self.message, self.ring)?;
+        if frame.tag != tag::SETTLE_BUFFERED {
+            return self.read(frame).await;
+        }
+        let settle = SettleBufferedIxData::parse(frame.data).map_err(|_| scope())?;
+        let refused = || RingRpcError::CoSign(CoSignError::FrameBuffer);
+        let (fixed, inner) = frame
+            .accounts
+            .split_at_checked(BUFFERED_FIXED_ACCOUNTS)
+            .ok_or_else(scope)?;
+        let account = self
+            .shared
+            .source
+            .frame_buffer(Address::new_from_array(*settle.buffer))
+            .await
+            .map_err(|_| unavailable())?
+            .ok_or_else(refused)?;
+        let now_unix_ts =
+            i64::try_from(self.shared.clock.now()?).map_err(|_| RingRpcError::StateUnavailable)?;
+        // The bytes read here hash to the digest the signature covers, a rewrite fails settlement.
+        let sealed = SealedFrame {
+            settle: &settle,
+            fixed,
+            ring: self.ring,
+            account: &account,
+            now_unix_ts,
+        }
+        .bytes()?;
+        let (inner_tag, body) = sealed.split_first().ok_or_else(refused)?;
+        if !matches!(
+            *inner_tag,
+            tag::TRANSFER | tag::AUTHORITY_TRANSFER | tag::DEPOSIT
+        ) {
+            return Err(scope());
+        }
+        self.read(RingFrame {
+            tag: *inner_tag,
+            data: body,
+            accounts: inner.to_vec(),
+        })
+        .await
+    }
+
+    /// The same read and refusals for an inline frame and a sealed one.
+    async fn read(&self, frame: RingFrame<'_>) -> Result<FrameRead, RingRpcError> {
         let service = self.shared.service(Some(self.ring))?;
         let config = service.served_config().await?.ok_or_else(unavailable)?;
-        let store = self.shared.store(self.ring);
         let assets = self.shared.cached_assets().await;
-        let frame = RingFrame::of(self.message, self.ring)?;
+        match frame.tag {
+            tag::AUTHORITY_TRANSFER => return Ok(FrameRead::Delegate),
+            tag::DEPOSIT => {
+                return deposit_read(&frame, self.ring, &assets).map(FrameRead::Transfer)
+            }
+            _ => {}
+        }
+        let store = self.shared.store(self.ring);
         let rail = InstructionTag::try_from(frame.tag)
             .and_then(|tag| RingRail::of(tag, config.mode))
             .map_err(|_| unavailable())?;
@@ -82,9 +163,7 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
         .row()
         .map_err(|_| unavailable())?;
         let audited = TransactionAudit::new(&row, parsed.audit_stream())
-            .with_known_utxos(&*store)
-            .with_escrowed_keys(&*store)
-            .run(service.auditor_keypair(), &assets)
+            .run(service.auditor_keypair())
             .map_err(|_| unavailable())?;
         let public = public_flows(&parsed, spp)?;
         let window = settlement_accounts(
@@ -106,15 +185,41 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
             owner_signers,
             public,
             assets: &assets,
+            ring: self.ring,
         }
-        .flows()
+        .read(parsed.data().co_sign.approval.bits())
+        .map(FrameRead::Transfer)
+    }
+}
+
+impl<'a> SealedFrame<'a> {
+    /// Refuses anything settlement would, the owner and seal first since they decide what the bytes mean.
+    fn bytes(self) -> Result<&'a [u8], RingRpcError> {
+        let refused = |_| RingRpcError::CoSign(CoSignError::FrameBuffer);
+        let [buffer, rent_payer, _program] = self.fixed else {
+            return Err(scope());
+        };
+        if buffer.as_array() != self.settle.buffer {
+            return Err(scope());
+        }
+        let frame = FrameBuffer::inspect(
+            &self.account.owner,
+            &self.ring,
+            &self.account.data,
+            self.settle.digest,
+        )
+        .map_err(refused)?;
+        FrameBuffer::of(&self.account.data)
+            .map_err(refused)?
+            .check_settlement(self.settle, rent_payer, self.now_unix_ts)
+            .map_err(refused)?;
+        Ok(frame)
     }
 }
 
 impl<'m> RingFrame<'m> {
     /// The signature covers the whole message, debits derive from all of it or it refuses.
     fn of(message: &'m VersionedMessage, ring: Address) -> Result<Self, RingRpcError> {
-        let scope = || RingRpcError::CoSign(CoSignError::MessageScope);
         // Version 1 carries no lookup table, one could hide the ring from the check.
         let VersionedMessage::V1(_) = message else {
             return Err(scope());
@@ -137,7 +242,10 @@ impl<'m> RingFrame<'m> {
         let instruction = holding.ok_or_else(scope)?;
         let (tag, data) = instruction.data.split_first().ok_or_else(scope)?;
         if key(instruction.program_id_index)? != ring
-            || !matches!(*tag, tag::TRANSFER | tag::AUTHORITY_TRANSFER)
+            || !matches!(
+                *tag,
+                tag::TRANSFER | tag::AUTHORITY_TRANSFER | tag::DEPOSIT | tag::SETTLE_BUFFERED
+            )
         {
             return Err(scope());
         }
@@ -165,6 +273,62 @@ impl<'m> RingFrame<'m> {
     }
 }
 
+/// A deposit spends no note, its legs answer on the ring's own tag.
+fn deposit_read(
+    frame: &RingFrame<'_>,
+    ring: Address,
+    assets: &RingAssets,
+) -> Result<TransferRead, RingRpcError> {
+    let (_, spp_data) = frame
+        .data
+        .split_at_checked(DepositPrefix::SIZE - 1)
+        .ok_or_else(unavailable)?;
+    let body = match spp_data.split_first() {
+        Some((&RING_DEPOSIT, body)) => body,
+        _ => return Err(unavailable()),
+    };
+    let deposit = RingDepositIxDataRef::from_bytes(body).map_err(|_| unavailable())?;
+    let start = frame
+        .accounts
+        .iter()
+        .position(|account| *account == pda::ring_auth(&ring).0)
+        .and_then(|position| position.checked_sub(RING_DEPOSIT_RING_CONFIG_INDEX))
+        .ok_or_else(unavailable)?;
+    let spp = frame.accounts.get(start..).ok_or_else(unavailable)?;
+    let deposited = ring_deposit_assets(&deposit, |position| {
+        spp.get(position).map(|address| address.to_bytes())
+    })
+    .map_err(|_| unavailable())?;
+    let owner = Member::owner_tag(ring.as_array()).map_err(|_| unavailable())?;
+    let mut flows: Vec<OwnerFlow> = Vec::new();
+    for leg in deposited {
+        let asset = assets.by_field(&leg.asset).ok_or_else(unavailable)?.asset;
+        match flows.iter_mut().find(|flow| flow.flow.asset == asset) {
+            Some(flow) => {
+                flow.flow.deposited = flow
+                    .flow
+                    .deposited
+                    .checked_add(leg.amount)
+                    .ok_or_else(unavailable)?;
+            }
+            None => flows.push(OwnerFlow {
+                owner,
+                flow: AssetFlow {
+                    asset,
+                    outflow: 0,
+                    deposited: leg.amount,
+                    withdrawn: 0,
+                },
+            }),
+        }
+    }
+    Ok(TransferRead {
+        flows,
+        spends_note: false,
+        approval_bits: None,
+    })
+}
+
 fn public_flows(
     parsed: &ParsedTransact<'_>,
     spp: &[Address],
@@ -178,16 +342,18 @@ fn public_flows(
         .iter()
         .zip(settlement_mints(&data.interface_transfers, window))
     {
-        let mint = mint
-            .map_err(|_| unavailable())?
-            .copied()
-            .unwrap_or(SOL_MINT);
+        let named = mint.map_err(|_| unavailable())?.copied();
+        let mint = named.unwrap_or(SOL_MINT);
+        let asset = named.map_or(Ok(SOL_ASSET_FIELD), |mint| {
+            hash_bytes(mint.as_array()).map_err(|_| unavailable())
+        })?;
         let position = flows.iter().position(|flow| flow.mint == mint);
         let flow = match position {
             Some(position) => &mut flows[position],
             None => {
                 flows.push(PublicFlow {
                     mint,
+                    asset,
                     deposited: 0,
                     withdrawn: 0,
                 });
@@ -205,12 +371,14 @@ fn public_flows(
     Ok(flows)
 }
 
-/// A public leg has no owner on the frame, it joins the first sender.
+/// A public leg has no owner on the frame, it joins the first sender or a no-spend frame's ring tag.
 struct OwnerFlows<'a> {
     inputs: &'a [DebitInput],
     outputs: &'a [DebitOutput],
     owner_signers: &'a [[u8; 32]],
     public: &'a [PublicFlow],
+    /// Only ring caps read a public leg, the tag answers for no owner cap.
+    no_spend_owner: Member,
 }
 
 impl OwnerFlows<'_> {
@@ -226,18 +394,27 @@ impl OwnerFlows<'_> {
             .map(|input| input.owner)
             .chain(self.owner_signers.iter().copied())
             .collect();
+        let public_gross: Vec<PublicGross> = self
+            .public
+            .iter()
+            .map(|public| PublicGross {
+                asset: public.asset,
+                gross: public.withdrawn.into(),
+            })
+            .collect();
         let assets: Vec<[u8; 32]> = self
             .outputs
             .iter()
             .map(|output| output.asset)
             .chain(self.inputs.iter().map(|input| input.asset))
+            .chain(public_gross.iter().map(|public| public.asset))
             .collect();
         let mut flows = owner_debits(&DebitTransfer {
             senders: &senders,
             assets: &assets,
             inputs: self.inputs,
             outputs: self.outputs,
-            public_gross: &[],
+            public_gross: &public_gross,
         })
         .iter()
         .map(|debit| {
@@ -245,7 +422,7 @@ impl OwnerFlows<'_> {
                 owner: member(debit.owner)?,
                 flow: AssetFlow {
                     asset: mint_of(&debit.asset)?,
-                    debit: u64::try_from(debit.debit).map_err(|_| unavailable())?,
+                    outflow: u64::try_from(debit.outflow).map_err(|_| unavailable())?,
                     deposited: 0,
                     withdrawn: 0,
                 },
@@ -253,7 +430,9 @@ impl OwnerFlows<'_> {
         })
         .collect::<Result<Vec<_>, RingRpcError>>()?;
         for public in self.public {
-            let owner = member(*senders.first().ok_or_else(unavailable)?)?;
+            let owner = senders
+                .first()
+                .map_or(Ok(self.no_spend_owner), |sender| member(*sender))?;
             let joined = flows
                 .iter()
                 .position(|flow| flow.flow.asset == public.mint && flow.owner == owner);
@@ -264,7 +443,7 @@ impl OwnerFlows<'_> {
                         owner,
                         flow: AssetFlow {
                             asset: public.mint,
-                            debit: 0,
+                            outflow: 0,
                             deposited: 0,
                             withdrawn: 0,
                         },
@@ -286,59 +465,64 @@ struct FrameFlows<'a> {
     owner_signers: Vec<[u8; 32]>,
     public: Vec<PublicFlow>,
     assets: &'a RingAssets,
+    ring: Address,
 }
 
 impl FrameFlows<'_> {
-    fn flows(&self) -> Result<Vec<OwnerFlow>, RingRpcError> {
-        OwnerFlows {
-            inputs: &self.inputs()?,
-            outputs: &self.outputs()?,
-            owner_signers: &self.owner_signers,
-            public: &self.public,
-        }
-        .rows(|asset| self.mint_of(asset))
+    fn read(&self, approval_bits: u8) -> Result<TransferRead, RingRpcError> {
+        let inputs = self.inputs()?;
+        Ok(TransferRead {
+            flows: OwnerFlows {
+                inputs: &inputs,
+                outputs: &self.outputs()?,
+                owner_signers: &self.owner_signers,
+                public: &self.public,
+                no_spend_owner: Member::owner_tag(self.ring.as_array())
+                    .map_err(|_| unavailable())?,
+            }
+            .rows(|asset| self.mint_of(asset))?,
+            spends_note: !inputs.is_empty(),
+            approval_bits: Some(approval_bits),
+        })
     }
 
-    /// A hash no opening names refuses.
+    /// A real input the index cannot name refuses, as an unknown note does.
     fn inputs(&self) -> Result<Vec<DebitInput>, RingRpcError> {
         let mut inputs = Vec::new();
         for input in &self.audited.inputs {
             match &input.opening {
                 InputOpening::Dummy => {}
-                InputOpening::UnseenHash { .. } => return Err(unavailable()),
-                InputOpening::Merged(merged) => inputs.push(DebitInput {
-                    owner: identity(&merged.input.owner_key)?,
-                    asset: merged.input.asset,
-                    amount: merged.input.amount,
+                // The frame's proven entry evidence, a default-ring note holds no index row.
+                InputOpening::External(external) => inputs.push(DebitInput {
+                    owner: identity(&external.utxo.owner_key)?,
+                    asset: external.utxo.asset,
+                    amount: external.utxo.amount,
                 }),
-                InputOpening::Opened(opening) => inputs.push(DebitInput {
-                    owner: identity(&self.opened_owner(input)?)?,
-                    asset: opening.asset,
-                    amount: opening.amount,
-                }),
+                InputOpening::Real => {
+                    let (_, note) = self
+                        .store
+                        .note_of_nullifier(&input.nullifier)
+                        .ok_or_else(unavailable)?;
+                    inputs.push(DebitInput {
+                        owner: identity(&note.utxo.owner_key)?,
+                        asset: note.utxo.asset,
+                        amount: note.utxo.amount,
+                    });
+                }
             }
         }
         Ok(inputs)
     }
 
-    /// An entry opening holds no stored note, the envelope's sender owns all of them.
-    fn opened_owner(&self, input: &AuditedInput) -> Result<[u8; 32], RingRpcError> {
-        self.store
-            .note_owner(&input.hash)
-            .or(self.audited.sender.map(|sender| sender.owner_key))
-            .ok_or_else(unavailable)
-    }
-
-    /// A slot still waiting on a key or a mint could return funds, the debit stays unknown.
+    /// A slot that failed to open could return funds, the outflow stays unknown.
     fn outputs(&self) -> Result<Vec<DebitOutput>, RingRpcError> {
-        if !self.audited.payload_errors.is_empty() || !self.audited.unresolved.is_empty() {
+        if !self.audited.payload_errors.is_empty() {
             return Err(unavailable());
         }
         let mut outputs = Vec::new();
         for output in &self.audited.outputs {
             let (ring, utxo) = match &output.opening {
                 OutputOpening::Dummy => continue,
-                OutputOpening::EscrowPending(_) => return Err(unavailable()),
                 OutputOpening::Ring { utxo, .. } => (true, utxo),
                 OutputOpening::Exit(utxo) => (false, utxo),
             };
@@ -547,6 +731,7 @@ mod tests {
             outputs: &outputs,
             owner_signers: &owner_signers,
             public: &public,
+            no_spend_owner: Member::from_bytes([0xee; 32]).expect("tag"),
         }
         .rows(|asset| Ok(Address::new_from_array([asset[31]; 32])))
         .expect("rows")
@@ -555,7 +740,7 @@ mod tests {
             serde_json::json!({
                 "owner": hex::encode(row.owner.as_bytes()),
                 "mint": hex::encode(row.flow.asset.to_bytes()),
-                "debit": row.flow.debit,
+                "debit": row.flow.outflow,
                 "deposited": row.flow.deposited,
                 "withdrawn": row.flow.withdrawn,
             })
@@ -717,6 +902,115 @@ mod tests {
             RingFrame::of(&wrapper_program, RING).err(),
             Some(RingRpcError::CoSign(CoSignError::MessageScope))
         ));
+    }
+
+    fn sealed_account(frame: &[u8], rent_payer: Address, sealed: bool) -> Account {
+        use custom_ring_interface::{
+            frame_digest, CreateFrameBufferIxData, FrameBufferHeader, FrameBufferWrite,
+            WriteFrameIxData, FRAME_BUFFER_HEADER_LEN,
+        };
+        let header = FrameBufferHeader::new(
+            &CreateFrameBufferIxData {
+                nonce: 1,
+                length: frame.len() as u16,
+                digest: frame_digest(frame).expect("digest"),
+                expiry_unix_ts: 1_000,
+            },
+            PAYER,
+            rent_payer,
+        )
+        .expect("header");
+        let mut data = vec![0; FRAME_BUFFER_HEADER_LEN + frame.len()];
+        data[..FRAME_BUFFER_HEADER_LEN].copy_from_slice(bytemuck::bytes_of(&header));
+        FrameBufferWrite::of(&mut data)
+            .expect("buffer")
+            .apply(
+                &PAYER,
+                &WriteFrameIxData {
+                    offset: 0,
+                    seal: sealed,
+                    bytes: frame,
+                },
+            )
+            .expect("write");
+        Account {
+            lamports: 1,
+            data,
+            owner: RING,
+            executable: false,
+            rent_epoch: 0,
+        }
+    }
+
+    fn sealed_bytes(
+        account: &Account,
+        digest: &[u8; 32],
+        now_unix_ts: i64,
+    ) -> Result<Vec<u8>, CoSignError> {
+        let buffer = Address::new_from_array([0x55; 32]);
+        let settle = SettleBufferedIxData {
+            digest,
+            buffer: buffer.as_array(),
+            inner_tag: tag::TRANSFER,
+        };
+        SealedFrame {
+            settle: &settle,
+            fixed: &[buffer, PAYER, RING],
+            ring: RING,
+            account,
+            now_unix_ts,
+        }
+        .bytes()
+        .map(<[u8]>::to_vec)
+        .map_err(|error| match error {
+            RingRpcError::CoSign(error) => error,
+            other => panic!("{other}"),
+        })
+    }
+
+    #[test]
+    fn a_sealed_buffer_serves_the_bytes_of_the_signed_digest_and_refuses_every_other() {
+        use custom_ring_interface::frame_digest;
+        let frame_a = [tag::TRANSFER, 1, 2, 3];
+        let frame_b = [tag::TRANSFER, 9, 9, 9];
+        let digest_a = frame_digest(&frame_a).expect("digest");
+        let sealed_a = sealed_account(&frame_a, PAYER, true);
+        assert_eq!(sealed_bytes(&sealed_a, &digest_a, 10).expect("a"), frame_a);
+        let refused = Err(CoSignError::FrameBuffer);
+        // The signed digest names A, a buffer holding B serves nothing.
+        assert_eq!(
+            sealed_bytes(&sealed_account(&frame_b, PAYER, true), &digest_a, 10),
+            refused
+        );
+        assert_eq!(
+            sealed_bytes(&sealed_account(&frame_a, PAYER, false), &digest_a, 10),
+            refused,
+            "an unsealed buffer can still change"
+        );
+        assert_eq!(
+            sealed_bytes(&sealed_a, &digest_a, 1_000),
+            refused,
+            "expired"
+        );
+        assert_eq!(
+            sealed_bytes(
+                &sealed_account(&frame_a, OTHER_PROGRAM, true),
+                &digest_a,
+                10
+            ),
+            refused,
+            "another rent payer"
+        );
+        let mut foreign = sealed_a.clone();
+        foreign.owner = OTHER_PROGRAM;
+        assert_eq!(sealed_bytes(&foreign, &digest_a, 10), refused);
+        let mut short = sealed_a.clone();
+        short.data.pop();
+        assert_eq!(
+            sealed_bytes(&short, &digest_a, 10),
+            refused,
+            "another length"
+        );
     }
 
     #[test]

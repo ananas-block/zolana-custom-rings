@@ -2,7 +2,10 @@ use std::{future::Future, num::NonZeroU32, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    storage::StorageRegistry, RingAccount, RingMode, RingPolicy, RingRoles,
+    storage::StorageRegistry,
+    tracking::{OwnerGrant, TrackingRegistry},
+    ReaderKeyBytes, RingAccount, RingMode, RingPolicy,
+    RingRoles,
 };
 use custom_ring_sdk::RingError;
 use solana_account::Account;
@@ -36,6 +39,7 @@ use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
     GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
 };
+use zolana_ring_indexer::tracking::{GetTrackingRecordsRequest, GetTrackingRecordsResponse};
 use zolana_ring_transaction::RingAssets;
 
 use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
@@ -46,6 +50,7 @@ use crate::{
     finalized_history::{
         FinalizedHistory, FinalizedPage, FinalizedUpstreams, HistorySelection, OriginRead,
     },
+    utxos::TrackingRoot,
 };
 
 pub trait TransactionSource: Send + Sync {
@@ -119,6 +124,33 @@ pub trait TransactionSource: Send + Sync {
 
     /// The id a tree's commitments hash under.
     fn tree_id(&self, tree: Address) -> impl Future<Output = Result<u16, RingError>> + Send;
+
+    /// The newest root of the ring's pinned tracking registry, `None` before the ring exists.
+    fn tracking_root(
+        &self,
+        ring: Address,
+    ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send;
+
+    fn tracking_records(
+        &self,
+        request: GetTrackingRecordsRequest,
+    ) -> impl Future<Output = Result<GetTrackingRecordsResponse, RingIndexerError>> + Send;
+
+    /// Whether the owner's own `OwnerGrant` account names this reader, a PDA grants through CPI.
+    fn owner_grant_held(
+        &self,
+        ring: Address,
+        owner: Address,
+        reader: ReaderKeyBytes,
+    ) -> impl Future<Output = Result<bool, ClientError>> + Send;
+
+    /// The account a buffered settlement names, `None` when it does not exist.
+    fn frame_buffer(
+        &self,
+        _address: Address,
+    ) -> impl Future<Output = Result<Option<Account>, ClientError>> + Send {
+        async { Ok(None) }
+    }
 }
 
 /// Unverified, callers read openings through `VerifiedOpenings`.
@@ -366,6 +398,10 @@ impl TransactionSource for ChainSource {
         custom_ring_sdk::tree_id(&self.rpc, tree).await
     }
 
+    async fn frame_buffer(&self, address: Address) -> Result<Option<Account>, ClientError> {
+        self.rpc.get_account(address).await
+    }
+
     async fn merge_audit_page<'a>(
         &'a self,
         request: MergeAuditRequest<'a>,
@@ -539,6 +575,58 @@ impl TransactionSource for ChainSource {
             .map_or(RecordsTip::NoRegistry, |registry| {
                 RecordsTip::Newest(StorageTip::newest(records, &registry))
             }))
+    }
+
+    async fn tracking_root(&self, ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+        let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+        let Some(account) = self.owned_account(address, ring).await? else {
+            return Ok(None);
+        };
+        let tracking = CanonicalAccount {
+            account: &account,
+            ring,
+            bump,
+        }
+        .decode::<RingPolicy>()
+        .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?
+        .tracking;
+        let account = self.rpc.get_account(tracking).await?;
+        // The pin names the registry, an account it does not decode to serves no root.
+        Ok(account
+            .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data))
+            .map(|registry| {
+                let newest = registry.newest();
+                TrackingRoot {
+                    registry: tracking,
+                    root: newest.hash,
+                    revision: newest.revision.value(),
+                }
+            }))
+    }
+
+    async fn tracking_records(
+        &self,
+        request: GetTrackingRecordsRequest,
+    ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
+        self.indexer.get_tracking_records(request).await
+    }
+
+    async fn owner_grant_held(
+        &self,
+        ring: Address,
+        owner: Address,
+        reader: ReaderKeyBytes,
+    ) -> Result<bool, ClientError> {
+        let Some(root) = self.tracking_root(ring).await? else {
+            return Ok(false);
+        };
+        let (address, _) = OwnerGrant::find_address(&root.registry, &owner, &reader);
+        Ok(self
+            .rpc
+            .get_account(address)
+            .await?
+            .and_then(|account| OwnerGrant::decode(&account.owner, &account.data))
+            .is_some_and(|grant| grant.is_active()))
     }
 
     async fn storage_member_openings(

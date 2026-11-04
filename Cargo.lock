@@ -1526,6 +1526,7 @@ dependencies = [
  "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-bn254",
+ "solana-clock",
  "solana-instruction",
  "solana-keypair",
  "solana-loader-v3-interface 8.0.1",
@@ -1538,6 +1539,7 @@ dependencies = [
  "spr-account-checks",
  "spr-hasher",
  "spr-interface",
+ "spr-tree",
  "wincode",
  "x25519-dalek",
  "zolana-ring-policy",
@@ -7574,6 +7576,7 @@ dependencies = [
  "spr-keypair",
  "thiserror 2.0.20",
  "wincode",
+ "zeroize",
 ]
 
 [[package]]
@@ -9280,6 +9283,7 @@ dependencies = [
  "zeroize",
  "zolana-ring-client",
  "zolana-ring-indexer",
+ "zolana-ring-keys",
  "zolana-ring-member-registry",
  "zolana-ring-policy",
  "zolana-ring-transaction",

@@ -1,8 +1,8 @@
 //! The auditor stream of a ring transfer, mirrored by Go `prover/circuits/audit`, and the pad a merge keeps.
 
 use custom_ring_interface::{
-    domain::AUDIT_STREAM_LABEL, AnonymousRecord, AuditEvidence, AuditKey, AuditStreamLayout,
-    CustomRingError, ExitRecord, STREAM_FIRST_COUNTER,
+    domain::AUDIT_STREAM_LABEL, AuditEvidence, AuditRecord, AuditStreamLayout, DataTail,
+    StreamRegion, AUDIT_RECORD_LEN, DATA_TAIL_LEN, STREAM_FIRST_COUNTER,
 };
 use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
@@ -22,60 +22,26 @@ mod historical;
 
 pub use historical::{historical_evidence, HistoricalEvidence};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutputRecord {
-    /// Its delivered body opens the slot, no bytes leave the prover.
-    Delivered,
-    /// A hidden dummy is the zero record.
-    Anonymous(AnonymousRecord),
-    Exit(ExitRecord),
-}
-
-impl OutputRecord {
-    fn encode(&self) -> Vec<u8> {
-        match self {
-            Self::Delivered => Vec::new(),
-            Self::Anonymous(record) => record.encode(),
-            Self::Exit(record) => record.encode(),
-        }
-    }
-
-    /// The layout picks the kind, the message parse already fixed the length.
-    fn decode(
-        plaintext: &[u8],
-        layout: AuditStreamLayout,
-        slot: usize,
-    ) -> Result<Self, AuditError> {
-        Ok(match (layout.is_exit(slot), layout.key) {
-            (true, _) => {
-                Self::Exit(ExitRecord::decode(plaintext, layout.key_escrow).map_err(layout_error)?)
-            }
-            (false, AuditKey::Anonymous(_)) => {
-                Self::Anonymous(AnonymousRecord::decode(plaintext).map_err(layout_error)?)
-            }
-            (false, AuditKey::Confidential { .. }) => Self::Delivered,
-        })
-    }
-}
-
-fn layout_error(_: CustomRingError) -> AuditError {
-    AuditError::DisclosureLayout
-}
-
 /// Everything one transfer seals to its auditor under one ephemeral key.
 pub struct AuditStreamSeal<'a> {
     pub layout: AuditStreamLayout,
     pub tx_viewing_key: &'a ViewingKey,
+    /// `R`, nullifiers at or past it are padding.
+    pub real_inputs: u8,
     pub evidence: AuditEvidence,
     /// One per slot.
-    pub records: Vec<OutputRecord>,
+    pub records: Vec<AuditRecord>,
+    /// One per slot under `has_data`, else none.
+    pub tails: Vec<DataTail>,
 }
 
 pub struct SealedAuditStream {
     pub eph_u: [u8; 32],
     pub envelope: Vec<u8>,
-    /// One per slot, empty on a delivered slot.
-    pub records: Vec<Vec<u8>>,
+    /// One per slot.
+    pub records: Vec<[u8; AUDIT_RECORD_LEN]>,
+    /// One per slot under `has_data`, else none.
+    pub tails: Vec<[u8; DATA_TAIL_LEN]>,
     pub ephemeral_sk: Zeroizing<[u8; 32]>,
 }
 
@@ -95,15 +61,19 @@ impl AuditStreamSeal<'_> {
         let Self {
             layout,
             tx_viewing_key,
+            real_inputs,
             evidence,
             records,
+            tails,
         } = self;
-        if records.len() != layout.outputs {
+        let tails_expected = if layout.has_data { layout.outputs } else { 0 };
+        if records.len() != layout.outputs || tails.len() != tails_expected {
             return Err(AuditError::DisclosureLayout);
         }
         let stream = sealing_ring_stream(&ephemeral, auditor_pk, AUDIT_STREAM_LABEL)?;
         let mut plaintext = custom_ring_interface::AuditEnvelope {
             tx_viewing_secret: *tx_viewing_key.secret_bytes(),
+            real_inputs,
             evidence,
         };
         let mut envelope = plaintext.encode();
@@ -118,18 +88,24 @@ impl AuditStreamSeal<'_> {
             .enumerate()
             .map(|(slot, record)| {
                 let mut ciphertext = record.encode();
-                let region = layout.record(slot);
-                if ciphertext.len() != region.len {
-                    return Err(AuditError::DisclosureLayout);
-                }
-                stream.apply_at(region.start_counter, &mut ciphertext);
-                Ok(ciphertext)
+                stream.apply_at(layout.record(slot).start_counter, &mut ciphertext);
+                ciphertext
             })
-            .collect::<Result<_, AuditError>>()?;
+            .collect();
+        let tails = tails
+            .iter()
+            .enumerate()
+            .map(|(slot, tail)| {
+                let mut ciphertext = tail.encode();
+                stream.apply_at(layout.tail(slot).start_counter, &mut ciphertext);
+                ciphertext
+            })
+            .collect();
         Ok(SealedAuditStream {
             eph_u: ephemeral.pubkey().u(),
             envelope,
             records,
+            tails,
             ephemeral_sk: ephemeral.secret_bytes(),
         })
     }
@@ -144,6 +120,7 @@ pub struct AuditEnvelope<'a> {
 
 pub struct OpenedAudit {
     pub tx_viewing_key: ViewingKey,
+    pub real_inputs: u8,
     pub evidence: AuditEvidence,
     layout: AuditStreamLayout,
     stream: RingStream,
@@ -171,6 +148,7 @@ impl AuditEnvelope<'_> {
         check_evidence(&envelope.evidence)?;
         Ok(OpenedAudit {
             tx_viewing_key: tx_viewing_key?,
+            real_inputs: envelope.real_inputs,
             evidence: envelope.evidence,
             layout,
             stream,
@@ -180,46 +158,41 @@ impl AuditEnvelope<'_> {
 
 impl OpenedAudit {
     /// `ciphertext` is the slot's bytes in the auditor message.
-    pub fn record(&self, slot: usize, ciphertext: &[u8]) -> Result<OutputRecord, AuditError> {
-        let region = self.layout.record(slot);
+    pub fn record(&self, slot: usize, ciphertext: &[u8]) -> Result<AuditRecord, AuditError> {
+        let plaintext = self.open_region(self.layout.record(slot), ciphertext)?;
+        AuditRecord::decode(&plaintext).map_err(|_| AuditError::DisclosureField)
+    }
+
+    pub fn tail(&self, slot: usize, ciphertext: &[u8]) -> Result<DataTail, AuditError> {
+        let plaintext = self.open_region(self.layout.tail(slot), ciphertext)?;
+        DataTail::decode(&plaintext).map_err(|_| AuditError::DisclosureField)
+    }
+
+    fn open_region(
+        &self,
+        region: StreamRegion,
+        ciphertext: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, AuditError> {
         if ciphertext.len() != region.len {
             return Err(AuditError::DisclosureLayout);
         }
         let mut plaintext = Zeroizing::new(ciphertext.to_vec());
         self.stream.apply_at(region.start_counter, &mut plaintext);
-        OutputRecord::decode(&plaintext, self.layout, slot)
+        Ok(plaintext)
     }
 }
 
-/// Refuses evidence the proof cannot have bound, a hash outside the field names no input.
+/// Refuses an opening the proof cannot have bound.
 fn check_evidence(evidence: &AuditEvidence) -> Result<(), AuditError> {
     match evidence {
-        AuditEvidence::InputHashes(hashes) => hashes
-            .iter()
-            .try_for_each(|hash| canonical(*hash).map(drop)),
-        AuditEvidence::Entry {
-            sender_nullifier_pk,
-            inputs,
-            ..
-        } => {
-            canonical(*sender_nullifier_pk)?;
-            inputs.iter().try_for_each(|input| {
-                canonical(input.hash)?;
-                canonical(input.asset)?;
-                canonical(input.blinding).map(drop)
-            })
-        }
+        AuditEvidence::None => Ok(()),
+        AuditEvidence::Entry { inputs, .. } => inputs.iter().try_for_each(|input| {
+            canonical(input.nullifier_pk)?;
+            canonical(input.blinding)?;
+            canonical(input.data_hash)?;
+            canonical(input.ring_data_hash).map(drop)
+        }),
     }
-}
-
-/// `be32(hash_i)` on every non-entry rail, a `None` input is a published dummy and reads zero.
-pub fn input_hash_evidence(hashes: &[Option<[u8; 32]>]) -> Result<AuditEvidence, AuditError> {
-    Ok(AuditEvidence::InputHashes(
-        hashes
-            .iter()
-            .map(|hash| canonical(hash.unwrap_or_default()))
-            .collect::<Result<_, _>>()?,
-    ))
 }
 
 /// `pad_j = Poseidon(seed, j)`, a known pad reveals no other.

@@ -31,17 +31,17 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, CreateRecordsRegistryRequest,
     GetAuditedMergesResponse, GetAuditedUtxosRequest, GetDecryptedTransactionsRequest,
-    GetDecryptedTransactionsResponse, GetPendingEnrolmentsRequest, GetRecordUpdateStatusRequest,
-    GetRelayQuoteRequest, GetRelayStatusRequest, GetSpendCoverageRequest,
-    GetWalletActivityResponse, GetWalletStatusRequest, HealthResponse, PagedRead,
-    PrepareAuthorityTransferRequest, PrepareRelayRequest, RefuseEnrolmentRequest,
+    GetDecryptedTransactionsResponse, GetDelegateNotesRequest, GetPendingEnrolmentsRequest,
+    GetRecordUpdateStatusRequest, GetRelayQuoteRequest, GetRelayStatusRequest,
+    GetSpendCoverageRequest, GetWalletActivityResponse, GetWalletStatusRequest, HealthResponse,
+    PagedRead, PrepareAuthorityTransferRequest, PrepareRelayRequest, RefuseEnrolmentRequest,
     RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
     SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
-    CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_PENDING_ENROLMENTS,
-    GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, GET_SPEND_COVERAGE,
-    GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, REFUSE_ENROLMENT,
-    RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
-    SUBMIT_RELAY,
+    CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_DELEGATE_NOTES,
+    GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS,
+    GET_SPEND_COVERAGE, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY,
+    REFUSE_ENROLMENT, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
+    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -276,6 +276,14 @@ pub fn rpc_module<S: TransactionSource + 'static>(
             let _authentication = hub.admit(Lane::Authentication)?;
             let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
             service.wallet_status(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_DELEGATE_NOTES,
+        |hub, request: GetDelegateNotesRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.delegate_notes(&request).await
         },
     )?;
     method(

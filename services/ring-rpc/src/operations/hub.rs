@@ -24,7 +24,7 @@ use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_MISS_INTERVAL, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
     config::{GrantRowsSecret, ReaderGrantStore, RootSecret},
-    cosign::{CoSignPolicy, RefusingCoSigner},
+    cosign::{CoSignPolicy, CoSignerApproval, RefusingCoSigner},
     cosign_limits::{LimitedCoSignerInit, RecordLimits},
     database::Store,
     error::{redacted, RingRpcError},
@@ -130,6 +130,7 @@ pub struct HubBuilder<S> {
     reader_grants: ReaderGrantStore,
     grant_rows: Option<GrantRowsSecret>,
     co_signer: Option<Keypair>,
+    co_signer_approval: CoSignerApproval,
     relay: Option<RelayParts>,
     merge: Option<MergeParts>,
 }
@@ -245,6 +246,15 @@ impl<S: TransactionSource + 'static> ServedRings for HubRings<S> {
             false => Err(RelayError::RingNotServed.into()),
         }
     }
+
+    async fn tracking_registry(&self, ring: Address) -> Result<Address, RingRpcError> {
+        self.0
+            .source
+            .tracking_root(ring)
+            .await?
+            .map(|root| root.registry)
+            .ok_or_else(|| RelayError::RingNotServed.into())
+    }
 }
 
 impl<S: TransactionSource> Shared<S> {
@@ -270,6 +280,15 @@ impl<S: TransactionSource> Shared<S> {
             && matches!(query.reader, ReaderKey::Ed25519(key) if Some(key.address()) == query.wallet)
         {
             return Ok(ReadScope::new(query.wallet));
+        }
+        if let Some(owner) = query.wallet {
+            if self
+                .source
+                .owner_grant_held(query.ring, owner, query.reader.to_bytes())
+                .await?
+            {
+                return Ok(ReadScope::new(query.wallet));
+            }
         }
         let granted = match &self.grants {
             Grants::Tree => {
@@ -342,6 +361,7 @@ impl<S: TransactionSource> Hub<S> {
             reader_grants: ReaderGrantStore::Tree,
             grant_rows: None,
             co_signer: None,
+            co_signer_approval: CoSignerApproval::default(),
             relay: None,
             merge: None,
         }
@@ -604,6 +624,13 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
+    /// Without it the co-signer refuses every operation.
+    #[must_use = "use the updated builder"]
+    pub fn with_co_signer_approval(mut self, approval: CoSignerApproval) -> Self {
+        self.co_signer_approval = approval;
+        self
+    }
+
     #[must_use = "use the updated builder"]
     pub fn with_relay(mut self, relay: RelayParts) -> Self {
         self.relay = Some(relay);
@@ -701,6 +728,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                     signer,
                     limits: RecordLimits(shared.clone()),
                     store: Arc::new(self.store.ok_or(RingRpcError::CoSignerStoreMissing)?),
+                    approval: self.co_signer_approval,
                 }
                 .build(),
             ),

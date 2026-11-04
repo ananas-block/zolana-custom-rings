@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use solana_address::Address;
 use solana_signature::Signature;
+use spr_hasher::primitives::hash_bytes;
 use spr_keypair::NullifierKey;
-use spr_transaction::instructions::merge::merge_output_blinding;
+use spr_transaction::instructions::merge::{merge_output_blinding, MergeSeed};
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
     types::{KnownUtxo, UtxoOwner},
-    AuditError,
+    AuditError, REDACTED,
 };
 
 /// `(tx_signature, event_index)`, one confirmed merge.
@@ -27,8 +28,49 @@ pub struct ConfirmedMerge {
     pub leaf_index: u64,
     pub first_nullifier: [u8; 32],
     pub ring_data_hash: [u8; 32],
-    /// The real inputs, a zero entry of the disclosed list is a dummy.
-    pub inputs: Vec<[u8; 32]>,
+    pub disclosed: MergeDisclosed,
+}
+
+/// What a merge's frame tells its auditor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MergeDisclosed {
+    /// Tag 47, the real inputs, a zero entry of the disclosed list is a dummy.
+    Inputs(Vec<[u8; 32]>),
+    /// Tag 57, the output itself and no input.
+    Record(MergeRecordOutput),
+}
+
+/// A rebuilt tag 57 record, its seed opens the output and classifies the padding.
+#[derive(Clone, PartialEq, Eq)]
+pub struct MergeRecordOutput {
+    pub owner_key: [u8; 32],
+    pub nullifier_pk: [u8; 32],
+    pub mint: Address,
+    pub amount: u64,
+    pub seed: [u8; 32],
+    /// Published nullifiers no seed derivation names as padding.
+    pub real_nullifiers: Vec<[u8; 32]>,
+}
+
+impl core::fmt::Debug for MergeRecordOutput {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self {
+            owner_key,
+            nullifier_pk,
+            mint,
+            amount,
+            seed: _,
+            real_nullifiers,
+        } = self;
+        f.debug_struct("MergeRecordOutput")
+            .field("owner_key", owner_key)
+            .field("nullifier_pk", nullifier_pk)
+            .field("mint", mint)
+            .field("amount", amount)
+            .field("seed", &REDACTED)
+            .field("real_nullifiers", real_nullifiers)
+            .finish()
+    }
 }
 
 /// The fields a merge output inherits, an audit record and no wallet opening.
@@ -46,9 +88,14 @@ pub struct AuditedMergeOutput {
     pub owner: UtxoOwner,
     pub asset: [u8; 32],
     pub mint: Option<Address>,
-    /// The sum of its inputs.
+    /// The record's, a tag 47 merge's sum of its inputs.
     pub amount: u64,
+    /// Tag 47 alone.
     pub inputs: Vec<[u8; 32]>,
+    /// Tag 57 alone.
+    pub real_nullifiers: Vec<[u8; 32]>,
+    /// Tag 57 alone, a tag 47 output derives its blinding from the nullifier secret.
+    pub seed: Option<[u8; 32]>,
 }
 
 /// The fields of one spent commitment, from an opening or an earlier merge output.
@@ -112,7 +159,7 @@ impl MergeLedger {
         if !self.applied.insert((merge.tx_signature, merge.event_index)) {
             return MergeTransition::default();
         }
-        let spent = merge.inputs.clone();
+        let spent = merge.inputs().to_vec();
         self.unresolved
             .insert((merge.slot, merge.tx_signature, merge.event_index), merge);
         MergeTransition {
@@ -191,7 +238,12 @@ impl AuditedMergeOutput {
             asset: self.asset,
             mint: self.mint,
             amount: self.amount,
-            blinding: merge_output_blinding(nullifier_key, &self.first_nullifier)?,
+            blinding: match self.seed {
+                Some(seed) => {
+                    MergeSeed::from_bytes(seed)?.output_blinding(&self.first_nullifier)?
+                }
+                None => merge_output_blinding(nullifier_key, &self.first_nullifier)?,
+            },
             data_hash: [0; 32],
             ring_data_hash: self.ring_data_hash,
             tree_id: self.tree_id,
@@ -217,12 +269,38 @@ impl ConfirmedMerge {
             .collect()
     }
 
+    /// The commitments a tag 47 merge disclosed, a record names none.
+    pub fn inputs(&self) -> &[[u8; 32]] {
+        match &self.disclosed {
+            MergeDisclosed::Inputs(inputs) => inputs,
+            MergeDisclosed::Record(_) => &[],
+        }
+    }
+
     /// `None` while an input is unknown, on inputs of two owners or assets and on an overflow.
     fn resolved(
         &self,
         input: impl Fn(&[u8; 32]) -> Option<MergeInput>,
     ) -> Option<AuditedMergeOutput> {
-        let inputs = self.inputs.iter().map(&input).collect::<Option<Vec<_>>>()?;
+        let inputs = match &self.disclosed {
+            MergeDisclosed::Inputs(inputs) => inputs,
+            MergeDisclosed::Record(record) => {
+                return Some(self.output(MergedFields {
+                    owner_key: record.owner_key,
+                    owner: UtxoOwner::Keyed {
+                        nullifier_pk: record.nullifier_pk,
+                    },
+                    asset: hash_bytes(record.mint.as_array()).ok()?,
+                    mint: Some(record.mint),
+                    amount: record.amount,
+                    inputs: Vec::new(),
+                    real_nullifiers: record.real_nullifiers.clone(),
+                    seed: Some(record.seed),
+                }));
+            }
+        };
+        let list = inputs;
+        let inputs = list.iter().map(&input).collect::<Option<Vec<_>>>()?;
         let first = inputs.first()?;
         let owner_hash = first.owner.hash(&first.owner_key).ok()?;
         let same_note_kind = inputs.iter().all(|input| {
@@ -238,7 +316,32 @@ impl ConfirmedMerge {
         let amount = inputs
             .iter()
             .try_fold(0u64, |sum, input| sum.checked_add(input.amount))?;
-        same_note_kind.then(|| AuditedMergeOutput {
+        same_note_kind.then(|| {
+            self.output(MergedFields {
+                owner_key: first.owner_key,
+                owner,
+                asset: first.asset,
+                mint: inputs.iter().find_map(|input| input.mint),
+                amount,
+                inputs: list.clone(),
+                real_nullifiers: Vec::new(),
+                seed: None,
+            })
+        })
+    }
+
+    fn output(&self, fields: MergedFields) -> AuditedMergeOutput {
+        let MergedFields {
+            owner_key,
+            owner,
+            asset,
+            mint,
+            amount,
+            inputs,
+            real_nullifiers,
+            seed,
+        } = fields;
+        AuditedMergeOutput {
             commitment: self.output_commitment,
             slot: self.slot,
             tx_signature: self.tx_signature,
@@ -247,14 +350,27 @@ impl ConfirmedMerge {
             leaf_index: self.leaf_index,
             first_nullifier: self.first_nullifier,
             ring_data_hash: self.ring_data_hash,
-            owner_key: first.owner_key,
+            owner_key,
             owner,
-            asset: first.asset,
-            mint: inputs.iter().find_map(|input| input.mint),
+            asset,
+            mint,
             amount,
-            inputs: self.inputs.clone(),
-        })
+            inputs,
+            real_nullifiers,
+            seed,
+        }
     }
+}
+
+struct MergedFields {
+    owner_key: [u8; 32],
+    owner: UtxoOwner,
+    asset: [u8; 32],
+    mint: Option<Address>,
+    amount: u64,
+    inputs: Vec<[u8; 32]>,
+    real_nullifiers: Vec<[u8; 32]>,
+    seed: Option<[u8; 32]>,
 }
 
 #[cfg(test)]
@@ -285,7 +401,7 @@ mod tests {
             leaf_index: u64::from(id),
             first_nullifier: [id; 32],
             ring_data_hash: [0; 32],
-            inputs: inputs.to_vec(),
+            disclosed: MergeDisclosed::Inputs(inputs.to_vec()),
         }
     }
 
@@ -300,6 +416,32 @@ mod tests {
         assert_eq!(output.amount, 21);
         assert_eq!(output.owner_key, note(0).owner_key);
         assert_eq!(output.asset, ASSET);
+    }
+
+    #[test]
+    fn a_record_merge_resolves_alone_and_spends_no_named_input() {
+        let mint = Address::new_from_array([3; 32]);
+        let record = MergeRecordOutput {
+            owner_key: [1; 32],
+            nullifier_pk: [2; 32],
+            mint,
+            amount: 9,
+            seed: [0; 32],
+            real_nullifiers: vec![[8; 32]],
+        };
+        let mut ledger = MergeLedger::default();
+        let transition = ledger.apply(
+            ConfirmedMerge {
+                disclosed: MergeDisclosed::Record(record),
+                ..merge(1, &[], [20; 32])
+            },
+            |_| None,
+        );
+        assert!(transition.spent.is_empty());
+        let output = ledger.output(&[20; 32]).expect("resolved");
+        assert_eq!((output.amount, output.mint), (9, Some(mint)));
+        assert_eq!(output.asset, hash_bytes(mint.as_array()).unwrap());
+        assert_eq!(output.real_nullifiers, [[8; 32]]);
     }
 
     #[test]

@@ -12,7 +12,7 @@ import (
 // Ownership stays with the rail's predicates.
 type InputSection struct {
 	Slots []shared.Output
-	// utxo * hash per slot, one list for private_tx_hash and the evidence.
+	// utxo * hash per slot, the list private_tx_hash chains.
 	Hashes []frontend.Variable
 	Count  ringgadget.Count
 }
@@ -21,7 +21,7 @@ func OpenInputs(api frontend.API, inputs []shared.UtxoWires, inputCount frontend
 	section := InputSection{Slots: make([]shared.Output, len(inputs)), Hashes: make([]frontend.Variable, len(inputs)), Count: ringgadget.SelectCount(api, inputCount, 1, len(inputs))}
 	for i, input := range inputs {
 		slot := input.OpenInput(api)
-		// A spent note past the published count would escape the evidence.
+		// A spent note past the published count has no nullifier to bind.
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, section.Count.Active[i]), V: slot.Utxo})
 		if i > 0 {
 			// Twin of SPP's AssertDummiesLast, pairing spent UTXO k with nullifier k needs both.

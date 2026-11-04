@@ -15,9 +15,10 @@ use solana_transaction::versioned::VersionedTransaction;
 use spr_keypair::NullifierKey;
 use spr_transaction::{utxo::SppProofInputUtxo, WalletUtxo};
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, ProofInputBytes, RelayIntent,
-    RelayMergeInputs, RelayOperation, RelayQuote, RelayRail, RelayStatus, RelayStep,
-    SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, ProofInputBytes,
+    RelayEnrollInputs, RelayIntent, RelayMergeInputs, RelayOperation, RelayQuote, RelayRail,
+    RelayStatus, RelayStep, SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY,
+    SUBMIT_RELAY,
 };
 use zolana_ring_rpc::{
     relay_module, Relay, RelayError, RelayParts, RingRpcError, ServedRings, Store,
@@ -39,6 +40,10 @@ impl ServedRings for OneRing {
             true => Ok(()),
             false => Err(RelayError::RingNotServed.into()),
         }
+    }
+
+    async fn tracking_registry(&self, _ring: Address) -> Result<Address, RingRpcError> {
+        Ok(TRACKING_REGISTRY)
     }
 }
 
@@ -213,6 +218,114 @@ async fn a_deposit_relays_through_the_depositors_signature() {
             slot: SLOT + 1,
         }
     );
+}
+
+const TRACKING_REGISTRY: Address = Address::new_from_array([0x71; 32]);
+
+fn enrollment(owner: Address, data: Vec<u8>, quote: RelayQuote) -> PrepareRelayRequest {
+    enrollment_under(TRACKING_REGISTRY, owner, data, quote)
+}
+
+fn enrollment_under(
+    registry: Address,
+    owner: Address,
+    data: Vec<u8>,
+    quote: RelayQuote,
+) -> PrepareRelayRequest {
+    let inputs = RelayEnrollInputs {
+        ring_program_id: RING,
+        owner,
+        tracking_registry: registry,
+        instruction_data: data,
+    };
+    PrepareRelayRequest {
+        ring: RING.into(),
+        quote,
+        intent: RelayIntent::Enroll {
+            proof_inputs: ProofInputBytes::new(zeroize::Zeroizing::new(
+                inputs.encode().expect("encode"),
+            )),
+        },
+    }
+}
+
+/// A wallet with no SOL enrolls, the relay pays and the owner's signature authorizes.
+#[tokio::test]
+async fn an_enrollment_relays_through_the_owners_signature() {
+    let fixture = Fixture::new().await;
+    let owner = Keypair::new_from_array([42; 32]);
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    let request = enrollment(owner.pubkey(), vec![6, 1, 2, 3], quote);
+
+    let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
+
+    let RelayStep::SignMessage { relay_id, message } = step else {
+        panic!("the owner signs its enrollment, got {step:?}");
+    };
+    assert!(fixture.sent().is_empty());
+    let _: RelayStatus = fixture
+        .call(
+            SUBMIT_RELAY,
+            SubmitRelayRequest {
+                relay_id: relay_id.clone(),
+                signer: owner.pubkey().into(),
+                signature: owner.sign_message(&message.0).into(),
+            },
+        )
+        .await;
+    let [sent] = fixture.sent().try_into().expect("one sent transaction");
+    assert_eq!(
+        sent.message.static_account_keys()[..2],
+        [fixture.fee_payer, owner.pubkey()]
+    );
+    assert!(signers_verify(&sent));
+    let keys = sent.message.static_account_keys();
+    let instruction = sent
+        .message
+        .instructions()
+        .iter()
+        .find(|instruction| {
+            keys[usize::from(instruction.program_id_index)]
+                == custom_ring_interface::STORAGE_PROGRAM_ID
+        })
+        .expect("the enrollment");
+    assert_eq!(instruction.data, [6, 1, 2, 3]);
+}
+
+#[tokio::test]
+async fn the_relay_forwards_no_other_storage_instruction_and_never_enrolls_itself() {
+    let fixture = Fixture::new().await;
+    let owner = Keypair::new_from_array([42; 32]);
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    for request in [
+        enrollment(owner.pubkey(), vec![7, 1, 2, 3], quote.clone()),
+        enrollment(owner.pubkey(), Vec::new(), quote.clone()),
+        enrollment_under(
+            Address::new_from_array([0x72; 32]),
+            owner.pubkey(),
+            vec![6, 1, 2, 3],
+            quote.clone(),
+        ),
+        enrollment(fixture.fee_payer, vec![6, 1, 2, 3], quote),
+    ] {
+        let serde_json::Value::Object(params) = serde_json::to_value(&request).expect("json")
+        else {
+            panic!("request is no object");
+        };
+        let refused = fixture
+            .module
+            .call::<_, RelayStep>(PREPARE_RELAY, params)
+            .await;
+        assert!(
+            matches!(
+                &refused,
+                Err(jsonrpsee::MethodsError::JsonRpc(error))
+                    if error.code() == RelayError::InvalidEnrollment.code()
+            ),
+            "{refused:?}"
+        );
+    }
+    assert!(fixture.sent().is_empty());
 }
 
 #[tokio::test]

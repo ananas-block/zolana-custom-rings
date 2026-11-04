@@ -114,7 +114,6 @@ impl TransferCase {
 
 /// Every position rebuilds from the preimages, through the final hash.
 #[test]
-#[ignore = "transfer-rails writes audit/transfer_statement_v4.json from its solved witnesses"]
 fn transfer_statements_reach_the_go_public_inputs() {
     #[derive(Deserialize)]
     struct Vector {
@@ -226,6 +225,62 @@ fn transfer_statements_reach_the_go_public_inputs() {
 }
 
 #[test]
+fn merge_statement_matches_the_go_vector() {
+    #[derive(Deserialize)]
+    struct Request {
+        #[serde(rename = "outputUtxoHash")]
+        output_utxo_hash: String,
+        #[serde(rename = "firstNullifier")]
+        first_nullifier: String,
+        #[serde(rename = "ringProgramId")]
+        ring_id: String,
+        payer: String,
+        #[serde(rename = "trackingRoot")]
+        tracking_root: String,
+    }
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        record: String,
+        ciphertext: String,
+        elements: Vec<String>,
+        public_input_hash: String,
+        request: Request,
+    }
+    #[derive(Deserialize)]
+    struct Vector {
+        auditor_pk: String,
+        eph_pk: String,
+        cases: Vec<Case>,
+    }
+    let vector: Vector = vector("merge/merge_v4.json");
+    for case in &vector.cases {
+        let request = &case.request;
+        let record = OpeningRecord::decode(&bytes(&case.record)).unwrap();
+        assert_eq!(record.record.kind, RecordKind::Ring);
+        // Element 10 is what the program computes from the signer under a zero key.
+        let elements = arrays::<32>(&case.elements);
+        assert_eq!(elements[10] == [0; 32], case.name == "nonzero");
+        let statement = MergePublicInput {
+            output_utxo_hash: &array(&request.output_utxo_hash),
+            first_nullifier: &array(&request.first_nullifier),
+            ring_id: &array(&request.ring_id),
+            auditor_pk: &array(&vector.auditor_pk),
+            eph_pk: &array(&vector.eph_pk),
+            ciphertext: &array(&case.ciphertext),
+            payer: &array(&request.payer),
+            published_owner: &elements[10],
+            tracking_root: &array(&request.tracking_root),
+        };
+        assert_eq!(elements, statement.elements().unwrap());
+        assert_eq!(
+            array::<32>(&case.public_input_hash),
+            statement.hash().unwrap()
+        );
+    }
+}
+
+#[test]
 fn signer_chains_match_the_go_run() {
     #[derive(Deserialize)]
     struct Case {
@@ -270,13 +325,20 @@ fn record_pools_match_the_compiled_keys() {
         key: String,
         own: usize,
         curator: usize,
+        tracking: usize,
     }
     #[derive(Deserialize)]
     struct Vector {
         keys: Vec<Key>,
     }
     let vector: Vector = vector("policy/pool_capacity.json");
-    assert_eq!(vector.keys.len(), 15);
+    assert!(RING_KEYS
+        .iter()
+        .filter(|ring_key| ring_key.circuit.record_pools().is_some())
+        .all(|ring_key| vector
+            .keys
+            .iter()
+            .any(|key| key.key.replace('_', "-") == ring_key.name)));
     for key in vector.keys {
         let name = key.key.replace('_', "-");
         let ring_key = RING_KEYS
@@ -284,6 +346,10 @@ fn record_pools_match_the_compiled_keys() {
             .find(|ring_key| ring_key.name == name)
             .unwrap_or_else(|| panic!("{name} is no catalog key"));
         let pools = ring_key.circuit.record_pools().unwrap();
-        assert_eq!((pools.own, pools.curator), (key.own, key.curator), "{name}");
+        assert_eq!(
+            (pools.own, pools.curator, pools.tracking),
+            (key.own, key.curator, key.tracking),
+            "{name}"
+        );
     }
 }

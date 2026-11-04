@@ -1,17 +1,19 @@
-use custom_ring_interface::RingDepositAuditCapsule;
 use spr_transaction::error::TransactionError;
+
+use crate::encryption::DepositCapsule;
 
 /// The recipient's ciphertext inside a deposit's audit capsule, or `None` for
 /// a deposit published without one.
 pub fn deposit_payload(bytes: &[u8]) -> Result<Option<&[u8]>, TransactionError> {
-    RingDepositAuditCapsule::parse(bytes)
-        .map(|capsule| capsule.map(|capsule| capsule.recipient_ciphertext))
+    DepositCapsule::parse(bytes)
+        .map(|capsule| capsule.map(|capsule| capsule.recipient_ciphertext()))
         .map_err(|error| TransactionError::Deserialize(error.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use custom_ring_interface::RingDepositAuditCapsule;
     use spr_keypair::ViewingKey;
     use zolana_ring_transaction::RingDepositPlaintext;
 

@@ -62,6 +62,7 @@ impl RelayProver for RecordingProver {
             ),
             RelayPayload::Deposit(deposit) => (vec![deposit.depositor], vec![1, 2, 3]),
             RelayPayload::Merge(_) => (Vec::new(), vec![1, 2, 3]),
+            RelayPayload::Enroll(_) => panic!("the relay builds an enrollment itself"),
         };
         let accounts = core::iter::once(AccountMeta::new(request.parties.fee_payer, true))
             .chain(

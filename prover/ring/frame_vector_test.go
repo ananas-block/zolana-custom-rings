@@ -19,6 +19,8 @@ const (
 	frameSppProofLen = 128
 	frameTreeLen     = 4
 	frameExitBodyLen = 83
+	frameViewTagLen  = 32
+	frameCacheWrites = 16
 )
 
 type frameRail int
@@ -26,12 +28,15 @@ type frameRail int
 const (
 	frameConfidential frameRail = iota
 	frameDelegate
-	frameCommitment
-	frameEntry
+	frameAnonymous
+	frameAnonymousDelegate
 )
 
-// frameCases lists the rail of every line of settlement/frame_v3.hex, in Fixture::cases order.
-var frameCases = []frameRail{frameConfidential, frameConfidential, frameConfidential, frameConfidential, frameCommitment, frameEntry, frameDelegate, frameCommitment, frameCommitment, frameConfidential}
+// frameCases lists the rail of every line of settlement/frame_v4.hex, in Fixture::cases order.
+var frameCases = []frameRail{
+	frameConfidential, frameConfidential, frameConfidential, frameConfidential, frameConfidential, frameConfidential, frameConfidential,
+	frameAnonymous, frameAnonymous, frameAnonymous, frameDelegate, frameAnonymousDelegate, frameAnonymous, frameAnonymous, frameConfidential,
+}
 
 type frameCursor struct {
 	t    *testing.T
@@ -59,7 +64,7 @@ func (c *frameCursor) bits(count int) uint64 {
 
 // The Go lengths walk every frame the program parses to its last byte, a length off the program's would miss the end.
 func TestFrameVectorWalksEveryField(t *testing.T) {
-	lines := vectorLines(t, "../../test-vectors/settlement/frame_v3.hex")
+	lines := vectorLines(t, "../../test-vectors/settlement/frame_v4.hex")
 	if len(lines) != len(frameCases) {
 		t.Fatalf("%d frames, %d cases", len(lines), len(frameCases))
 	}
@@ -71,28 +76,30 @@ func TestFrameVectorWalksEveryField(t *testing.T) {
 func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	t.Helper()
 	const (
-		policyFlag, curatorFlag, ownerInProof, exemptFlag, secondTree, replyFlag = 1, 2, 8, 16, 32, 64
-		defaultOwnerTag, keyEscrow, lowBits                                      = 64, 64, 63
+		curatorFlag, ownerInProof, ownRoot, secondTree, replyFlag, extensionsFlag = 2, 8, 16, 32, 64, 128
+		defaultOwnerTag, publicOwners                                             = 64, 128
+		hasData, entry                                                            = 64, 128
+		wideOwners, lowBits                                                       = 128, 63
 	)
-	anonymous := rail == frameCommitment || rail == frameEntry
+	anonymousFrame := rail == frameAnonymous || rail == frameAnonymousDelegate
 	c := frameCursor{t: t, rest: line}
-	head := c.take(4)
-	flags, shape, inputByte, m := head[0], head[1], head[2], int(head[3])
+	head := c.take(5)
+	flags, shape, inputByte, m := head[0], head[1], head[2], int(head[3]&^wideOwners)
 	n := int(inputByte & lowBits)
 	if m < 1 || m > 16 {
 		t.Fatalf("output count %d", m)
 	}
-	c.take(frameProofLen)
-	if flags&(policyFlag|exemptFlag) != 0 || anonymous {
+	c.take(frameProofLen + 8)
+	if flags&ownRoot != 0 {
 		c.take(8)
 	}
 	if flags&curatorFlag != 0 {
 		c.take(8)
 	}
-	if flags&policyFlag != 0 && !anonymous {
-		c.take(32 * m)
-	}
 	c.take(4 + 32 + 16)
+	if flags&extensionsFlag != 0 {
+		walkExtensions(&c)
+	}
 	transfers := int(c.take(1)[0])
 	splWithdrawals := 0
 	for range transfers {
@@ -105,55 +112,43 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 			splWithdrawals++
 		}
 	}
-	if flags&policyFlag != 0 {
+	if flags&ownRoot != 0 {
 		c.take(32 * splWithdrawals)
 	}
-	exits := c.bits(m)
-	changes := uint64(0)
-	if anonymous {
-		changes = c.bits(m)
-	}
-	escrow := inputByte&keyEscrow != 0
+	exits, bodiless := c.bits(m), c.bits(m)
 	bodies := 0
 	for slot := range m {
+		exit, bears := exits>>slot&1 == 1, bodiless>>slot&1 == 0
+		length := 0
 		switch {
-		case exits>>slot&1 == 1:
-			c.take(32 + 32 + frameExitBodyLen)
-		case changes>>slot&1 == 1:
-			c.take(32 + 32)
-		case anonymous:
-			c.take(32 + 32 + shared.RecipientBodyLen)
-			bodies++
-		case escrow:
-			c.take(32 + 32 + shared.EscrowBodyLen)
+		case !bears:
+		case inputByte&hasData != 0:
+			length = int(binary.LittleEndian.Uint16(c.take(2)))
+		case exit:
+			length = frameExitBodyLen
 		default:
-			c.take(32 + 32 + shared.BodyLen)
+			length = shared.RecipientBodyLen
+		}
+		c.take(32 + 32 + length)
+		if bears && !exit {
+			bodies++
 		}
 	}
 	if flags&replyFlag != 0 {
 		c.take(int(binary.LittleEndian.Uint16(c.take(2))) * bodies)
 	}
-	if anonymous {
+	if anonymousFrame {
 		c.take(32 + shared.SenderBundleHeadLen + 32*m)
 	}
 	c.take(32)
-	ranges := audit.ConfidentialRanges(n, m)
-	if rail == frameEntry {
-		ranges = audit.EntryRanges(n, m)
-	}
-	c.take(ranges.EnvelopeLen(n))
-	for slot := range m {
-		switch {
-		case exits>>slot&1 == 1 && escrow:
-			c.take(audit.EscrowExitRecordLen)
-		case exits>>slot&1 == 1:
-			c.take(audit.ExitRecordLen)
-		case anonymous:
-			c.take(audit.AnonymousRecordLen)
-		}
+	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0, Data: inputByte&hasData != 0}.Ranges()
+	c.take(stream.EnvelopeLen(n))
+	c.take(m * audit.RecordLen)
+	if inputByte&hasData != 0 {
+		c.take(m * audit.TailLen)
 	}
 	c.take(32)
-	if anonymous {
+	if rail == frameAnonymous && shape&publicOwners == 0 {
 		c.take(64)
 		if shape&defaultOwnerTag != 0 {
 			c.take(32)
@@ -170,6 +165,30 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	c.take(frameTreeLen)
 	if len(c.rest) != 0 {
 		t.Fatalf("%d bytes past the last field", len(c.rest))
+	}
+}
+
+// walkExtensions mirrors FrameExtensions::read.
+func walkExtensions(c *frameCursor) {
+	const dataHash, ringDataHash, privateSource, messages, cache = 1, 2, 4, 8, 16
+	flags := c.take(1)[0]
+	if flags&dataHash != 0 {
+		c.take(32)
+	}
+	if flags&ringDataHash != 0 {
+		c.take(32)
+	}
+	if flags&privateSource != 0 {
+		c.take(8)
+	}
+	if flags&messages != 0 {
+		for range int(c.take(1)[0]) {
+			c.take(frameViewTagLen)
+			c.take(int(binary.LittleEndian.Uint16(c.take(2))))
+		}
+	}
+	if flags&cache != 0 {
+		c.take(8 + 2*frameCacheWrites)
 	}
 }
 

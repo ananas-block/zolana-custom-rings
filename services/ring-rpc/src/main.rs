@@ -10,7 +10,7 @@ use zolana_ring_client::{
 };
 use zolana_ring_rpc::{
     run_server, write_grant_rows_secret, write_keypair, write_root_secret, ChainSource, Cli,
-    Command, Hub, KeyKind, KeySource, KeygenArgs, LiveStorageChain, OriginPolicy,
+    CoSignerApproval, Command, Hub, KeyKind, KeySource, KeygenArgs, LiveStorageChain, OriginPolicy,
     RelayServicesInit, ServeArgs, ServeKeys, ServerOptions, ServiceIdentity, Store,
     TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL, STORE_CONNECTIONS,
 };
@@ -135,7 +135,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         builder = builder.with_grant_rows_key(secret);
     }
     if let Some(signer) = co_signer {
-        builder = builder.with_co_signer(signer);
+        builder = builder
+            .with_co_signer(signer)
+            .with_co_signer_approval(CoSignerApproval::new(
+                args.co_signer_approve.iter().copied(),
+            ));
     }
     if let Some(services) = relay_services {
         builder = builder.with_relay_services(services);

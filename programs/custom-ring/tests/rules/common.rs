@@ -10,7 +10,10 @@ use custom_ring_interface::{
     UpdateAuthorityIxData, UpdatePolicyIxData, CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED,
     STORAGE_PROGRAM_ID,
 };
-use litesvm::LiteSVM;
+use litesvm::{
+    types::{FailedTransactionMetadata, TransactionMetadata},
+    LiteSVM,
+};
 use solana_account::Account;
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_decompress_be;
@@ -88,6 +91,7 @@ impl Setup {
 }
 
 pub type Sent = Result<u64, (TransactionError, u64)>;
+pub type SentWithMeta = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
 pub struct RoleKeys {
     pub admin: Keypair,
@@ -263,6 +267,16 @@ impl Ring {
     }
 
     pub fn send(&mut self, instruction: Instruction, signers: &[&Keypair]) -> Sent {
+        self.send_with_meta(instruction, signers)
+            .map(|meta| meta.compute_units_consumed)
+            .map_err(|failed| (failed.err, failed.meta.compute_units_consumed))
+    }
+
+    pub fn send_with_meta(
+        &mut self,
+        instruction: Instruction,
+        signers: &[&Keypair],
+    ) -> SentWithMeta {
         self.svm.expire_blockhash();
         let message = v1::Message::try_compile_with_config(
             &self.payer.pubkey(),
@@ -281,10 +295,11 @@ impl Ring {
         }
         let transaction = VersionedTransaction::try_new(VersionedMessage::V1(message), &keys)
             .expect("sign the v1 transaction");
-        self.svm
-            .send_transaction(transaction)
-            .map(|meta| meta.compute_units_consumed)
-            .map_err(|failed| (failed.err, failed.meta.compute_units_consumed))
+        self.svm.send_transaction(transaction).map_err(Box::new)
+    }
+
+    pub fn svm(&mut self) -> &mut LiteSVM {
+        &mut self.svm
     }
 
     pub fn read<T: Pod>(&self, address: &Address) -> T {

@@ -3,6 +3,7 @@ use sea_orm_migration::prelude::*;
 
 mod cosign3_000001_admission;
 mod cosign4_000001_owner_debits;
+mod cosign5_000001_outflow;
 mod cosign_m20261029_000001_usage;
 mod grants;
 mod merge2_000001_inputs;
@@ -57,6 +58,7 @@ impl MigratorTrait for Migrator {
             Box::new(cosign4_000001_owner_debits::Migration),
             Box::new(spent2_000001_finalized::Migration),
             Box::new(spent3_000001_nullifiers::Migration),
+            Box::new(cosign5_000001_outflow::Migration),
         ]
     }
 }

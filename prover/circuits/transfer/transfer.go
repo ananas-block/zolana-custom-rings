@@ -179,12 +179,14 @@ func (c *Sections) statement(e audit.Envelope, w audit.AuditWires, s audit.Strea
 type transactionBinding struct {
 	PrivateTxHash     frontend.Variable
 	PrivateTxBlinding frontend.Variable
+	// AddressChain is SPP's chain of address slot nullifiers, zero without one, SPP alone reads the slots.
+	AddressChain frontend.Variable
 }
 
-// bindTransaction holds PrivateTxHash to Poseidon(input chain, output chain, 0, blinding), a ring transfer carries no address input.
+// bindTransaction holds PrivateTxHash to Poseidon(input chain, output chain, address chain, blinding), a note called an address would leave the input chain SPP hashed.
 func (b transactionBinding) bindTransaction(api frontend.API, inputChain frontend.Variable, outputs []shared.Output) {
 	outputChain := gadget.NonZeroHashChain(api, shared.UtxoHashes(api, outputs))
-	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, 0, b.PrivateTxBlinding}))
+	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, b.AddressChain, b.PrivateTxBlinding}))
 }
 
 // closeStatement binds the element count and the nonzero version last, a statement of another length or layout hashes apart.

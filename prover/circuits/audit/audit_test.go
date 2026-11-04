@@ -11,7 +11,6 @@ import (
 
 var compiledSections = map[string]*ringkey.Bound{}
 
-// compileSection compiles the section once per shape and locates the public input binding with the honest assignment.
 func compileSection(t *testing.T, shape audit.StreamShape) *ringkey.Bound {
 	t.Helper()
 	name := fmt.Sprintf("%+v", shape)

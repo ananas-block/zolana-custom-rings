@@ -27,7 +27,7 @@ func TestAnApplyProofOverAssetLimitsVerifies(t *testing.T) {
 		t.Fatal("amount")
 	}
 	write := ringregistry.Entry{
-		Member: row.Member.Int, Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0),
+		Member: row.Member.Int, Mask: big.NewInt(0), Value: big.NewInt(0),
 		MintPolicy: new(big.Int).Or(row.Field.Int, new(big.Int).Lsh(big.NewInt(1), 192)), WithdrawalThreshold: amount,
 		AssetLimits: ringregistry.VectorLimits(t, row.Limits),
 	}

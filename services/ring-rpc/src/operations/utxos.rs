@@ -1,7 +1,6 @@
 //! The notes a ring's auditor opened, their nullifiers, and the keys its registry tracks.
 
 use std::{
-    borrow::Borrow,
     collections::{BTreeMap, BTreeSet, HashMap},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -45,7 +44,7 @@ pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 #[derive(Default)]
 pub(crate) struct AuditStore {
     book: RwLock<SpendBook>,
-    escrow: RwLock<EscrowMap>,
+    tracked: RwLock<TrackedKeys>,
     /// The registry last named on the notes, a different one names them again.
     assets: RwLock<Option<RingAssets>>,
     /// Owners whose key arrived, kept until a committed page derived their notes.
@@ -111,22 +110,22 @@ pub(crate) struct WalletStatusQuery {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EscrowRoot {
+pub(crate) struct TrackingRoot {
     pub registry: Address,
     pub root: [u8; 32],
     pub revision: u64,
 }
 
-impl EscrowRoot {
+impl TrackingRoot {
     /// A lagging RPC node answers an older root, revisions order one registry alone.
-    pub(crate) fn settles(&self, read: &EscrowRoot) -> bool {
+    pub(crate) fn settles(&self, read: &TrackingRoot) -> bool {
         self.registry == read.registry && (self.root == read.root || read.revision < self.revision)
     }
 }
 
-/// Verified under the registry root.
+/// Verified under the tracking root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EscrowedOwner {
+pub(crate) struct TrackedOwner {
     pub owner_key: [u8; 32],
     pub nullifier_pk: [u8; 32],
     pub owner_hash: [u8; 32],
@@ -154,9 +153,9 @@ pub(crate) struct StoredUtxo {
 }
 
 #[derive(Default)]
-struct EscrowMap {
-    root: Option<EscrowRoot>,
-    keys: HashMap<[u8; 32], EscrowedOwner>,
+struct TrackedKeys {
+    root: Option<TrackingRoot>,
+    keys: HashMap<[u8; 32], TrackedOwner>,
     /// Owner hash to owner key, over the owners of `keys`.
     owner_keys: HashMap<[u8; 32], [u8; 32]>,
 }
@@ -547,12 +546,6 @@ impl<'a> PageWork<'a> {
     }
 }
 
-impl KnownUtxos for PageWork<'_> {
-    fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo> {
-        self.note(commitment).map(|stored| stored.utxo)
-    }
-}
-
 impl AuditStore {
     fn read_book(&self) -> std::sync::RwLockReadGuard<'_, SpendBook> {
         self.book.read().unwrap_or_else(PoisonError::into_inner)
@@ -643,16 +636,13 @@ impl AuditStore {
         book.notes.get(&commitment).map(|note| (commitment, *note))
     }
 
-    /// The state a co-signer reads, `None` for a nullifier no row holds.
+    #[cfg(test)]
     pub(crate) fn row_state(&self, nullifier: &[u8; 32]) -> Option<SpendState> {
         self.read_book().rows.get(nullifier).map(|row| row.state)
     }
 
-    pub(crate) fn note_owner(&self, commitment: &[u8; 32]) -> Option<[u8; 32]> {
-        self.read_book()
-            .notes
-            .get(commitment)
-            .map(|stored| stored.utxo.owner_key)
+    pub(crate) fn note(&self, commitment: &[u8; 32]) -> Option<StoredUtxo> {
+        self.read_book().notes.get(commitment).copied()
     }
 
     pub(crate) fn wallet_status(&self, query: WalletStatusQuery) -> GetWalletStatusResponse {
@@ -767,8 +757,8 @@ impl AuditStore {
             .collect()
     }
 
-    pub(crate) fn escrowed(&self, owner_key: &[u8; 32]) -> Option<EscrowedOwner> {
-        self.escrow
+    pub(crate) fn tracked(&self, owner_key: &[u8; 32]) -> Option<TrackedOwner> {
+        self.tracked
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .keys
@@ -792,38 +782,38 @@ impl AuditStore {
         })
     }
 
-    pub(crate) fn escrow_root(&self) -> Option<EscrowRoot> {
-        self.escrow
+    pub(crate) fn tracking_root(&self) -> Option<TrackingRoot> {
+        self.tracked
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .root
     }
 
-    /// Every key the registry escrows under `root`, a new owner's notes derive on the next page.
-    pub(crate) fn replace_escrow(
+    /// Every key the tracking registry holds under `root`, a new owner's notes derive on the next page.
+    pub(crate) fn replace_tracked(
         &self,
-        root: EscrowRoot,
-        owners: HashMap<[u8; 32], EscrowedOwner>,
+        root: TrackingRoot,
+        owners: HashMap<[u8; 32], TrackedOwner>,
     ) {
-        let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
+        let mut tracked = self.tracked.write().unwrap_or_else(PoisonError::into_inner);
         self.late_owners
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(
                 owners
                     .values()
-                    .filter(|owner| !escrow.keys.contains_key(&owner.owner_key))
+                    .filter(|owner| !tracked.keys.contains_key(&owner.owner_key))
                     .map(|owner| owner.owner_key),
             );
-        escrow.owner_keys = owners
+        tracked.owner_keys = owners
             .values()
             .map(|owner| (owner.owner_hash, owner.owner_key))
             .collect();
-        escrow.keys = owners
+        tracked.keys = owners
             .into_values()
             .map(|owner| (owner.owner_key, owner))
             .collect();
-        escrow.root = Some(root);
+        tracked.root = Some(root);
     }
 
     /// The audit view of a merge the checkpoint opened.
@@ -927,33 +917,10 @@ impl StoredUtxo {
     }
 }
 
-impl Borrow<KnownUtxo> for StoredUtxo {
-    fn borrow(&self) -> &KnownUtxo {
-        &self.utxo
-    }
-}
-
-impl KnownUtxos for AuditStore {
-    fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo> {
-        self.read_book().notes.get(commitment).map(|note| note.utxo)
-    }
-}
-
-impl EscrowedKeys for AuditStore {
-    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]> {
-        self.escrow
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .keys
-            .get(owner_key)
-            .map(|owner| owner.nullifier_pk)
-    }
-}
-
 impl DepositOwners for AuditStore {
     fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
-        let escrow = self.escrow.read().unwrap_or_else(PoisonError::into_inner);
-        let owner = escrow.keys.get(escrow.owner_keys.get(owner_hash)?)?;
+        let tracked = self.tracked.read().unwrap_or_else(PoisonError::into_inner);
+        let owner = tracked.keys.get(tracked.owner_keys.get(owner_hash)?)?;
         Some(DepositOwner {
             owner_key: owner.owner_key,
             nullifier_pk: owner.nullifier_pk,

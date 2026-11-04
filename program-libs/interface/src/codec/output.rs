@@ -4,9 +4,9 @@ use spr_event::{OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG};
 
 use crate::{audit_stream::RECIPIENT_BODY_LEN, CustomRingError};
 
-/// Read-only, frames before statement version 4.
+/// Read only, nothing encodes it.
 pub const RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG: u8 = 10;
-/// Read-only, frames before statement version 4.
+/// Read only, nothing encodes it.
 pub const RING_RECIPIENT_SCHEME_TAG: u8 = 11;
 pub const RING_SENDER_BUNDLE_SCHEME_TAG: u8 = 12;
 /// `u16le(body_len) || body || reply`, one form on every rail, the reply absent without reply metadata.
@@ -52,7 +52,7 @@ pub fn encode_ring_sender_bundle_output(body: &[u8]) -> Result<Vec<u8>, CustomRi
     encode_encrypted_output(RING_SENDER_BUNDLE_SCHEME_TAG, body)
 }
 
-/// `body || reply` of a scheme 13 output, `None` below the plain body's length.
+/// `body || reply` of a well-formed scheme 13 output, `None` otherwise.
 pub fn ring_body_output(data: &[u8]) -> Option<(&[u8], &[u8])> {
     let (body_len, rest) =
         encrypted_output_body(data, RING_BODY_SCHEME_TAG)?.split_first_chunk()?;

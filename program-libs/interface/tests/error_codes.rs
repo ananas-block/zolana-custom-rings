@@ -119,6 +119,23 @@ pinned_codes! {
     PrivateSourceOtherTracking = 8504,
     PublicRegistryAsPrivateSource = 8505,
     RuleListPolarity = 8506,
+    InvalidFrameBuffer = 8520,
+    FrameBufferExists = 8521,
+    FrameBufferAddress = 8522,
+    FrameLength = 8523,
+    UnauthorizedFrameWriter = 8524,
+    FrameBufferSealed = 8525,
+    FrameBufferNotSealed = 8526,
+    FrameDigestMismatch = 8527,
+    FrameBufferExpired = 8528,
+    UnauthorizedFrameCloser = 8529,
+    FrameRentPayer = 8530,
+    FrameBufferMismatch = 8531,
+    UnsupportedBufferedTag = 8532,
+    FrameTagMismatch = 8533,
+    FrameWriteOutOfRange = 8534,
+    InvalidFrameEvent = 8535,
+    FramePartyNotPayer = 8536,
 }
 
 #[test]
