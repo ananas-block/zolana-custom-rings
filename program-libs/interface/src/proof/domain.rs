@@ -27,6 +27,10 @@ pub const TRACKING_LEAF: u32 = 0x4352_544b;
 pub const TRACKING_ENTRY: u32 = 0x4352_5451;
 /// `"CRTA"`
 pub const APPLY_ENROLLMENTS: u32 = 0x4352_5441;
+/// `"CRPS"`
+pub const LIST_SALT: u32 = 0x4352_5053;
+/// `"CRPT"`
+pub const LIST_TAG: u32 = 0x4352_5054;
 /// `"CRDB"`
 pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
 /// `"CRDP"`
@@ -39,6 +43,16 @@ pub const WITHDRAWALS: u32 = 0x4352_5057;
 pub const RECORD_UPDATE: u32 = 0x4352_5255;
 /// `"CRWG"`
 pub use zolana_ring_policy::WALLET_GRANT_DOMAIN as WALLET_GRANT;
+/// `"CRPL"`
+pub const LIST_POSITION: u32 = 0x4352_504c;
+/// `"CRPV"`
+pub const LIST_LEAF: u32 = 0x4352_5056;
+/// `"CRPU"`
+pub const LIST_LEAF_SALT: u32 = 0x4352_5055;
+/// `"CRPQ"`
+pub const LIST_WRITE: u32 = 0x4352_5051;
+/// `"CRPA"`
+pub const APPLY_LIST: u32 = 0x4352_5041;
 
 /// `"CRTX"`
 pub const TRANSFER_STATEMENT: u32 = 0x4352_5458;
@@ -55,6 +69,16 @@ pub const DEPOSIT_AUDIT_LABEL: &[u8; 10] = b"CRING/dep1";
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
+}
+
+/// `Poseidon(CRPS, nullifier_secret)`, a holder reads the owner's private list position and never the secret.
+pub fn list_salt(nullifier_secret: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_SALT), nullifier_secret])
+}
+
+/// `Poseidon(CRPT, list_salt)`, final in the tracking leaf.
+pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_TAG), list_salt])
 }
 
 /// `Poseidon(CRDB, blinding_secret)`.

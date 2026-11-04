@@ -1,0 +1,90 @@
+{
+  "description": "Curator writes on the private list tree, one salted owner and one salt 0 owner. Produced by program-libs/member-registry/tests/private_list_vector.rs.",
+  "depth": 96,
+  "empty_root": "11d2afd5ff7946d0516792a9a387452be828debd39baf7e1e4c8023e72fa1635",
+  "nullifier_secret": "000000000000000000000000000000000000000000000000000000000000005e",
+  "list_salt": "1fdae1c47650751d1e1777a9df86bd0f68a3fdd87c603176485f68c366b60186",
+  "list_tag": "0cf8d0c16eedd43ebd997881cdaa21655f99790544364a71e3150aac02357183",
+  "batches": [
+    {
+      "registry": "4444444444444444444444444444444444444444444444444444444444444444",
+      "revision": 1,
+      "chain_start": "24220f71f23615963e79a8c7fb4e24c37ae56173fa1f0dee89f910a936b834ed",
+      "old_root": "11d2afd5ff7946d0516792a9a387452be828debd39baf7e1e4c8023e72fa1635",
+      "new_root": "28762b573674fd374aa5437a73fe1491c275598b87d9c5f3b5dfccfd95cdca90",
+      "chain_end": "0001f579f46eb707e67f592e4417e156b403437551696cc686dc3ae238ea5ae6",
+      "restrictive": true,
+      "statement_hash": "16636a2049bfeb8760c43ef4680d7360375847ae36894784a014d896d9e82d61",
+      "writes": [
+        {
+          "owner": "00000000000000000000000000000000000000000000000000000000000000a1",
+          "enrolled": true,
+          "mask": 2,
+          "value": 2,
+          "write_counter": 1,
+          "position": "1eafee94d0416d140aeba7e2e822c99e77b02dd503bf79664130dc5873be89d4",
+          "leaf": "16e64465f04ee8931a9ba180637f4a7cc1842ade966fb71ec431f9bce5e0bec3",
+          "entry_hash": "28f4e6703a93e376ced747cba0f4f6eec2dc57d3d78f2e0f8d00d35594ff6363",
+          "root": "1330aba472242b2e4dc5ce58f8b361a10c2408fec090bd38904d390e7d9c0429"
+        },
+        {
+          "owner": "00000000000000000000000000000000000000000000000000000000000000b0",
+          "enrolled": false,
+          "mask": 1,
+          "value": 1,
+          "write_counter": 2,
+          "position": "0b84f5cf6ffd2a81e003d8edc9988dfaccecdfb580a817df80f153994df8ae1e",
+          "leaf": "063b617eae947571d865fa5c1f06f61866922b432377ef90050ea4330fce286b",
+          "entry_hash": "287ee99bab0db894cee2718ec4dbf3217fac177118eee10863a68219cdcfd5bb",
+          "root": "28762b573674fd374aa5437a73fe1491c275598b87d9c5f3b5dfccfd95cdca90"
+        }
+      ]
+    },
+    {
+      "registry": "4444444444444444444444444444444444444444444444444444444444444444",
+      "revision": 2,
+      "chain_start": "10a80bfcebddbdc98d44417ad83c56f437bf4a9b1ef318215ed696690b0c4487",
+      "old_root": "28762b573674fd374aa5437a73fe1491c275598b87d9c5f3b5dfccfd95cdca90",
+      "new_root": "0112c82aa50c55c85fb0af15b9040c5c96d4a03f87b015857c30f278b6ab272a",
+      "chain_end": "2490ac1db81d19d653dc8b6380f5c043c4bcd607460835aa36752c5154313035",
+      "restrictive": false,
+      "statement_hash": "07439a91c86096606679c1cf6a2ea11bc4ab98cea4a1035901bbc90705917e19",
+      "writes": [
+        {
+          "owner": "00000000000000000000000000000000000000000000000000000000000000a1",
+          "enrolled": true,
+          "mask": 1,
+          "value": 1,
+          "write_counter": 3,
+          "position": "1eafee94d0416d140aeba7e2e822c99e77b02dd503bf79664130dc5873be89d4",
+          "leaf": "03841df56915786f9ac94a864ec66d63a1f9eed6a8f514e69f9d56d6acdab5e6",
+          "entry_hash": "0e91b3fd3b7fb12dbaa6f074eee544ebff39b19fa6afcb876c50f0076951710b",
+          "root": "0112c82aa50c55c85fb0af15b9040c5c96d4a03f87b015857c30f278b6ab272a"
+        }
+      ]
+    },
+    {
+      "registry": "4444444444444444444444444444444444444444444444444444444444444444",
+      "revision": 3,
+      "chain_start": "00e636c019b03ffdd3cab9a0cb89ee7853fbe84dec2ddf34a7458b6b2f4127d5",
+      "old_root": "0112c82aa50c55c85fb0af15b9040c5c96d4a03f87b015857c30f278b6ab272a",
+      "new_root": "228436baff32f6816fbc11e70c1e3b425da51564568155623fd43832e912b878",
+      "chain_end": "17e325a596af3498c4b1dfaeacbecf130c30722b92c0672894d3b09f753c0bd8",
+      "restrictive": false,
+      "statement_hash": "170880ededa565ec9a2ecd77acdd0c1d5fc4409a3e479b0bd41299e3659bb71d",
+      "writes": [
+        {
+          "owner": "00000000000000000000000000000000000000000000000000000000000000a1",
+          "enrolled": true,
+          "mask": 2,
+          "value": 0,
+          "write_counter": 4,
+          "position": "1eafee94d0416d140aeba7e2e822c99e77b02dd503bf79664130dc5873be89d4",
+          "leaf": "1a4a3c075adae772abb258a4115f89c5c855a622c752acb70598ac23b046db45",
+          "entry_hash": "05d12467827bdba7b5b36272bb76761caf1be9d6927f8003055658243ac2c096",
+          "root": "228436baff32f6816fbc11e70c1e3b425da51564568155623fd43832e912b878"
+        }
+      ]
+    }
+  ]
+}

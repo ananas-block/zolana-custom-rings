@@ -227,6 +227,9 @@ pub enum UpdatePolicyIxData {
     /// One trailing records registry under any authority.
     #[wincode(tag = 2)]
     Records,
+    /// [`ListSet`](zolana_ring_policy::ListSet) bits and one trailing private registry, zero bits and no registry clear it.
+    #[wincode(tag = 3)]
+    PrivateSource { owner_lists: u8 },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]

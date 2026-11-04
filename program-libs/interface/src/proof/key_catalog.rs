@@ -1,7 +1,9 @@
 //! Every ring circuit and its proving key, no verifying keys.
 use spr_interface::N_PUBLIC_SLOTS;
 
-use crate::{member_registry::APPLY_BATCH, transact::RingRail};
+use crate::{
+    member_registry::APPLY_BATCH, private_list::PRIVATE_LIST_APPLY_WIDTHS, transact::RingRail,
+};
 
 pub use crate::ring_keys::RING_KEYS;
 
@@ -26,6 +28,12 @@ pub enum RingCircuit {
         withdrawals: u8,
     },
     ApplyRecords {
+        writes: u8,
+    },
+    ApplyEnrollments {
+        writes: u8,
+    },
+    ApplyPrivateList {
         writes: u8,
     },
     RegisterKey,
@@ -186,16 +194,38 @@ impl RingCircuit {
         }
     }
 
+    /// The narrowest width holding `count` writes, `None` for an empty or oversized batch.
+    pub fn apply_private_list(count: u64) -> Option<Self> {
+        (count > 0)
+            .then(|| {
+                PRIVATE_LIST_APPLY_WIDTHS
+                    .into_iter()
+                    .find(|width| u64::from(*width) >= count)
+            })
+            .flatten()
+            .map(|writes| Self::ApplyPrivateList { writes })
+    }
+
     pub const fn apply_records(pending: u64) -> Self {
         Self::ApplyRecords {
-            writes: match pending {
-                0..=1 => 1,
-                2 => 2,
-                3..=4 => 4,
-                5..=8 => 8,
-                _ => APPLY_BATCH as u8,
-            },
+            writes: apply_width(pending),
         }
+    }
+
+    pub const fn apply_enrollments(pending: u64) -> Self {
+        Self::ApplyEnrollments {
+            writes: apply_width(pending),
+        }
+    }
+}
+
+const fn apply_width(pending: u64) -> u8 {
+    match pending {
+        0..=1 => 1,
+        2 => 2,
+        3..=4 => 4,
+        5..=8 => 8,
+        _ => APPLY_BATCH as u8,
     }
 }
 
