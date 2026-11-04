@@ -521,8 +521,8 @@ mod tests {
         };
         assert_eq!(bound(24, 0, 0), 30);
         assert_eq!(bound(32, 0, 0), 22);
-        assert_eq!(bound(24, 5, 4), 16);
-        assert_eq!(bound(64, 5, 32), 0);
+        assert_eq!(bound(24, 1, 4), 24);
+        assert_eq!(bound(64, 1, 32), 0);
         for shape in TRANSFER_SHAPES {
             let n_inputs = usize::from(shape.inputs);
             assert!(usize::from(shape.owners) <= bound(n_inputs, 0, 0));

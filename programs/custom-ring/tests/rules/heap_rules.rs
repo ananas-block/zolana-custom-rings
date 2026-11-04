@@ -1,10 +1,7 @@
 //! The widest frames of every transfer key reach the pairing within Pinocchio's heap, the validator sweep settles each key's widest policy legs.
 
 use custom_ring_interface::{
-    key_catalog::{
-        TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
-        ENTRY_TRANSFER_SHAPES,
-    },
+    key_catalog::{FrameKey, TransferShape, TRANSFER_SHAPES},
     tag, CustomRingError, RingPolicy, RingRail, RingTransactData, RootRead,
 };
 use solana_address::Address;
@@ -56,6 +53,7 @@ struct Wide {
     exempt: bool,
     entry: bool,
     in_proof: bool,
+    wide: bool,
 }
 
 impl Wide {
@@ -65,7 +63,7 @@ impl Wide {
             Legs::Spl(count) => (count, "spl"),
         };
         format!(
-            "{} {}x{} {legs} {kind}{}{}{}{}",
+            "{} {}x{} {legs} {kind}{}{}{}{}{}",
             self.rail,
             self.inputs,
             self.outputs,
@@ -73,24 +71,27 @@ impl Wide {
             if self.exempt { " exempt" } else { "" },
             if self.entry { " entry" } else { "" },
             if self.in_proof { " in-proof" } else { "" },
+            if self.wide { " wide" } else { "" },
         )
     }
 }
 
-fn widest(shape: &TransferShape) -> usize {
-    shape
-        .withdrawals
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, usize::from)
+/// The header's flag names this key.
+fn wide_key(shape: &TransferShape) -> bool {
+    let wide = FrameKey {
+        rail: RingRail::Confidential,
+        outputs: usize::from(shape.outputs),
+        spends_default_ring: false,
+        wide: true,
+    };
+    wide.shape() == Some(*shape)
 }
 
 /// Per key, one input with the widest legs, the input class with them, and the class alone.
 fn cases() -> Vec<Wide> {
     let mut cases = Vec::new();
     let mut push = |base: Wide, shape: &TransferShape| {
-        let legs = widest(shape);
+        let legs = usize::from(shape.withdrawals);
         let fewest = usize::from(base.exempt);
         for (inputs, count) in [(1, legs), (shape.inputs, legs), (shape.inputs, fewest)] {
             cases.push(Wide {
@@ -100,7 +101,26 @@ fn cases() -> Vec<Wide> {
             });
         }
     };
-    for shape in &CONFIDENTIAL_TRANSFER_SHAPES {
+    for shape in &TRANSFER_SHAPES {
+        let wide = wide_key(shape);
+        push(
+            Wide {
+                setup: Setup::AnonymousPolicy,
+                rail: RingRail::Anonymous,
+                inputs: 1,
+                outputs: shape.outputs,
+                legs: Legs::Sol(0),
+                policy: true,
+                exempt: false,
+                entry: shape.entry,
+                in_proof: false,
+                wide,
+            },
+            shape,
+        );
+        if shape.entry {
+            continue;
+        }
         let policy = Wide {
             setup: Setup::Policy,
             rail: RingRail::Confidential,
@@ -111,6 +131,7 @@ fn cases() -> Vec<Wide> {
             exempt: false,
             entry: false,
             in_proof: false,
+            wide,
         };
         push(policy, shape);
         push(
@@ -137,27 +158,6 @@ fn cases() -> Vec<Wide> {
             shape,
         );
     }
-    for (family, entry) in [
-        (&ANONYMOUS_TRANSFER_SHAPES[..], false),
-        (&ENTRY_TRANSFER_SHAPES[..], true),
-    ] {
-        for shape in family {
-            push(
-                Wide {
-                    setup: Setup::AnonymousPolicy,
-                    rail: RingRail::Anonymous,
-                    inputs: 1,
-                    outputs: shape.outputs,
-                    legs: Legs::Sol(0),
-                    policy: true,
-                    exempt: false,
-                    entry,
-                    in_proof: false,
-                },
-                shape,
-            );
-        }
-    }
     cases
 }
 
@@ -167,6 +167,7 @@ fn frame<'a>(fixture: &'a Fixture, owners: &'a [[u8; 32]], case: Wide) -> RingTr
         false => fixture.transfer(case.rail, case.inputs, case.outputs, case.policy),
     };
     data.entry = case.entry;
+    data.wide_owners = case.wide;
     let count = case.legs.count();
     let amount = |leg: usize| 1_000 + leg as u64;
     data.interface_transfers = match case.legs {

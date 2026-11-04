@@ -741,7 +741,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     let data = parsed.data();
     assert!(matches!(
         data.transfer_circuit(0),
-        Ok(RingCircuit::TransferAnonymousEntry { .. })
+        Ok(RingCircuit::Transfer { entry: true, .. })
     ));
     anonymous.serve_tracking(data.tracking_revision);
     let spp = spp_list(&anonymous.payer.pubkey(), data, &[]);
