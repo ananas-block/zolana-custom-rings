@@ -2,15 +2,15 @@
 
 use spr_event::{OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG};
 
-use crate::{
-    audit_stream::{DELIVERED_BODY_LEN, ESCROWED_DELIVERED_BODY_LEN, RECIPIENT_BODY_LEN},
-    CustomRingError,
-};
+use crate::{audit_stream::RECIPIENT_BODY_LEN, CustomRingError};
 
+/// Read-only, frames before statement version 4.
 pub const RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG: u8 = 10;
-/// `body || reply`, the reply absent without reply metadata.
+/// Read-only, frames before statement version 4.
 pub const RING_RECIPIENT_SCHEME_TAG: u8 = 11;
 pub const RING_SENDER_BUNDLE_SCHEME_TAG: u8 = 12;
+/// `u16le(body_len) || body || reply`, one form on every rail, the reply absent without reply metadata.
+pub const RING_BODY_SCHEME_TAG: u8 = 13;
 
 /// `0x04 || u`, the recipient key a scheme 3 body leads with.
 pub const RECIPIENT_KEY_LEN: usize = 33;
@@ -25,32 +25,10 @@ pub const CONFIDENTIAL_DATA_FREE_BODY_LEN: usize =
 /// The encoding tag and the u32 body length before the scheme byte.
 const BODY_OFFSET: usize = 1 + 4;
 
-/// `None` unless the body has a delivered length.
+/// A scheme 10 body at its escrowed or full length, `None` otherwise.
 pub fn ring_confidential_delivered_output_body(data: &[u8]) -> Option<&[u8]> {
     encrypted_output_body(data, RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG)
-        .filter(|body| is_delivered_body_len(body.len()))
-}
-
-pub fn encode_confidential_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
-    encode_encrypted_output(CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, body)
-}
-
-pub fn encode_ring_confidential_delivered_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
-    if !is_delivered_body_len(body.len()) {
-        return Err(CustomRingError::RingTransactLength);
-    }
-    encode_encrypted_output(RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG, body)
-}
-
-pub fn encode_ring_recipient_output(
-    body: &[u8; RECIPIENT_BODY_LEN],
-    reply: &[u8],
-) -> Result<Vec<u8>, CustomRingError> {
-    encode_encrypted_output_parts(RING_RECIPIENT_SCHEME_TAG, &[body, reply])
-}
-
-pub fn encode_ring_sender_bundle_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
-    encode_encrypted_output(RING_SENDER_BUNDLE_SCHEME_TAG, body)
+        .filter(|body| matches!(body.len(), 72 | 104))
 }
 
 /// `body || reply` of a scheme 11 output, `None` below the body's length.
@@ -58,12 +36,32 @@ pub fn ring_recipient_output_body(data: &[u8]) -> Option<(&[u8; RECIPIENT_BODY_L
     encrypted_output_body(data, RING_RECIPIENT_SCHEME_TAG)?.split_first_chunk()
 }
 
-pub fn ring_sender_bundle_output_body(data: &[u8]) -> Option<&[u8]> {
-    encrypted_output_body(data, RING_SENDER_BUNDLE_SCHEME_TAG)
+pub fn encode_confidential_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
+    encode_encrypted_output(CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, body)
 }
 
-const fn is_delivered_body_len(len: usize) -> bool {
-    matches!(len, ESCROWED_DELIVERED_BODY_LEN | DELIVERED_BODY_LEN)
+pub fn encode_ring_body_output(body: &[u8], reply: &[u8]) -> Result<Vec<u8>, CustomRingError> {
+    let body_len = u16::try_from(body.len()).map_err(|_| CustomRingError::OutputBodyLength)?;
+    encode_encrypted_output_parts(
+        RING_BODY_SCHEME_TAG,
+        &[&body_len.to_le_bytes(), body, reply],
+    )
+}
+
+pub fn encode_ring_sender_bundle_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
+    encode_encrypted_output(RING_SENDER_BUNDLE_SCHEME_TAG, body)
+}
+
+/// `body || reply` of a scheme 13 output, `None` below the plain body's length.
+pub fn ring_body_output(data: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (body_len, rest) =
+        encrypted_output_body(data, RING_BODY_SCHEME_TAG)?.split_first_chunk()?;
+    rest.split_at_checked(usize::from(u16::from_le_bytes(*body_len)))
+        .filter(|(body, _)| body.len() >= RECIPIENT_BODY_LEN)
+}
+
+pub fn ring_sender_bundle_output_body(data: &[u8]) -> Option<&[u8]> {
+    encrypted_output_body(data, RING_SENDER_BUNDLE_SCHEME_TAG)
 }
 
 /// `Encrypted(len || scheme || payload)`, the length counting the scheme byte.

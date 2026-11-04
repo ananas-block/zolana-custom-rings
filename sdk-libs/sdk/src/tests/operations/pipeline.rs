@@ -2389,6 +2389,7 @@ async fn ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs() {
                                 outputs: shape.n_outputs(),
                                 spends_default_ring: rail.entry(),
                                 legs,
+                                owners: 0,
                             },
                         );
                         if served.is_none() {

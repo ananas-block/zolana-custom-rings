@@ -1,6 +1,6 @@
 //! The confidential rail.
 
-use custom_ring_interface::{key_catalog::SCREENED_OWNERS, CustomRingError, RingMode, RingRail};
+use custom_ring_interface::{CustomRingError, RingMode, RingRail};
 use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
 use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::shape::Shape;
@@ -195,13 +195,6 @@ impl Owner<'_> {
             }
             None => (proof_inputs.owner_signer_pubkeys()?, Spend::Owner),
         };
-        // A policy needs a screened owner, past `Q` owners no key screens them all.
-        if config.has_policy
-            && self.in_proof_owner.is_none()
-            && !(1..=SCREENED_OWNERS).contains(&owner_signers.len())
-        {
-            return Err(CustomRingError::OwnerSignerCount.into());
-        }
         Ok(Staged {
             authority: self.authority()?,
             owner_signers,

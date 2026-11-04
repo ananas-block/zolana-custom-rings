@@ -32,18 +32,14 @@ func OpenInputs(api frontend.API, inputs []shared.UtxoWires, inputCount frontend
 	return section
 }
 
-// The auditor matches a hash against notes of the ring.
-func (s InputSection) AssertRingNotes(api frontend.API, ringID frontend.Variable) {
+// AssertRingNotes holds every live input to this ring, a key with entry capacity also spends a default-ring note.
+func (s InputSection) AssertRingNotes(api frontend.API, ringID frontend.Variable, entry bool) {
 	for _, slot := range s.Slots {
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Utxo, A: slot.RingProgramID, B: ringID})
-	}
-}
-
-// AssertOwnedBy holds input 0 live and every live input to owner while cond is set, the policy and the auditor would read a sender that owns no spent input.
-func (s InputSection) AssertOwnedBy(api frontend.API, cond, owner frontend.Variable) {
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: cond, V: api.Sub(1, s.Slots[0].Utxo)})
-	for _, slot := range s.Slots {
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Mul(cond, slot.Utxo), A: slot.OwnerPkHash, B: owner})
+		cond := slot.Utxo
+		if entry {
+			cond = slot.Ring
+		}
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: cond, A: slot.RingProgramID, B: ringID})
 	}
 }
 
@@ -51,7 +47,7 @@ func (s InputSection) AssertOwnedBy(api frontend.API, cond, owner frontend.Varia
 type SignerSet struct {
 	Members []frontend.Variable
 	Count   ringgadget.Count
-	// Chain is zero at a count of zero, the value the in-proof, authority and entry rails bind.
+	// Chain is zero at a count of zero, the value the in-proof and authority rails bind.
 	Chain frontend.Variable
 }
 
@@ -64,13 +60,6 @@ func OpenSigners(api frontend.API, members []frontend.Variable, signerCount fron
 	return SignerSet{Members: members, Count: count, Chain: api.Mul(api.Sub(1, count.OneHot[0]), gadget.HashChain4(api, members))}
 }
 
-func (s SignerSet) At(j int) frontend.Variable {
-	if j < len(s.Members) {
-		return s.Members[j]
-	}
-	return 0
-}
-
 // missing is zero exactly when owner is a counted member, a zero owner never matches padding.
 func (s SignerSet) missing(api frontend.API, owner frontend.Variable) frontend.Variable {
 	product := frontend.Variable(1)
@@ -81,9 +70,9 @@ func (s SignerSet) missing(api frontend.API, owner frontend.Variable) frontend.V
 	return product
 }
 
-// AssertAtMost holds the count to limit while cond is set, an unscreened owner would spend past the key's sender rows.
-func (s SignerSet) AssertAtMost(api frontend.API, cond frontend.Variable, limit int) {
-	if limit < len(s.Count.Active) {
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: cond, V: s.Count.Active[limit]})
+// AssertOwners holds every live input to a counted member or to private while active is set, a zero private matches no owner.
+func (s SignerSet) AssertOwners(api frontend.API, section InputSection, active, private frontend.Variable) {
+	for _, slot := range section.Slots {
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(active, slot.Utxo), V: api.Mul(s.missing(api, slot.OwnerPkHash), api.Sub(slot.OwnerPkHash, private))})
 	}
 }

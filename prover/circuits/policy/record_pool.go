@@ -120,7 +120,7 @@ type recordColumns struct {
 var (
 	ownColumns = recordColumns{width: 6 + NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {
 		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
-		return pooledRecord{escrowKey: record.EscrowKey, onList: sourceLists(api, record.Lists), mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold, addressHash: record.AddressHash}.columns()
+		return pooledRecord{escrowKey: 0, onList: sourceLists(api, record.Lists), mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold, addressHash: 0}.columns()
 	}}
 	// A curator lookup reads list bits alone, every other field binds through the leaf hash only.
 	curatorColumns = recordColumns{width: NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {
@@ -143,7 +143,7 @@ type subjectPool struct{ pooledTable }
 
 func openRecordPool(api frontend.API, active, root frontend.Variable, records []registry.Record, proof registry.SharedQuadProof, columns recordColumns) recordPool {
 	api.AssertIsBoolean(active)
-	pool := recordPool{pooledTable{active: active, table: lookup.New(api, 2+columns.width)}, columns.width}
+	pool := newRecordPool(api, active, columns.width)
 	leaves := make([]frontend.Variable, len(records))
 	for i, record := range records {
 		leaves[i] = record.Hash(api)
@@ -151,6 +151,10 @@ func openRecordPool(api frontend.API, active, root frontend.Variable, records []
 	}
 	proof.AssertLeavesWhen(api, active, root, leaves)
 	return pool
+}
+
+func newRecordPool(api frontend.API, active frontend.Variable, width int) recordPool {
+	return recordPool{pooledTable{active: active, table: lookup.New(api, 2+width)}, width}
 }
 
 // sourceLists keeps the NSources list bits a table can source, the split bounds lists below 2^ListBits.
