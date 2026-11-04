@@ -2,8 +2,8 @@
 
 use serde::Deserialize;
 use zolana_ring_policy::{
-    asset_guard, owner_debits, owner_guard, ApprovalMask, DebitInput, DebitOutput, DebitTransfer,
-    MintPolicy, PublicGross,
+    owner_debits, ApprovalInputs, DebitInput, DebitOutput, DebitTransfer, GuardScope, MintPolicy,
+    PublicGross,
 };
 
 #[derive(Deserialize)]
@@ -170,14 +170,13 @@ fn every_quantity_matches_the_circuit() {
             })
             .collect();
         assert_eq!(got, want, "{}", case.name);
+        let scope = GuardScope {
+            ring_inputs: &ring_inputs,
+            payments: &payments,
+        };
         for guard in &case.guards {
             assert_eq!(
-                owner_guard(
-                    &ring_inputs,
-                    &payments,
-                    &identity(guard.owner),
-                    &identity(guard.asset)
-                ),
+                scope.owner(&identity(guard.owner), &identity(guard.asset)),
                 guard.guard,
                 "{}",
                 case.name
@@ -185,7 +184,7 @@ fn every_quantity_matches_the_circuit() {
         }
         for guard in &case.asset_guards {
             assert_eq!(
-                asset_guard(&ring_inputs, &payments, &identity(guard.asset)),
+                scope.asset(&identity(guard.asset)),
                 guard.guard,
                 "{}",
                 case.name
@@ -202,7 +201,12 @@ fn every_quantity_matches_the_circuit() {
                 })
         };
         assert_eq!(
-            ApprovalMask::of(&flows, &public_gross, policy_of).bits(),
+            ApprovalInputs {
+                flows: &flows,
+                public_gross: &public_gross,
+            }
+            .mask(policy_of)
+            .bits(),
             case.mask,
             "{}",
             case.name

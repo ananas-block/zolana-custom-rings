@@ -205,7 +205,7 @@ func (r ruleParts) values(t *testing.T) []uint64 {
 func (v tableRows) rows() ringpolicy.Rows {
 	var rows ringpolicy.Rows
 	if v.PrivateSource.Registry.Int != nil {
-		rows.Source = privatelist.Source{OwnerLists: v.PrivateSource.OwnerLists, Registry: v.PrivateSource.Registry.Int}
+		rows.Source = privatelist.Source{OwnerLists: int64(v.PrivateSource.OwnerLists), Registry: v.PrivateSource.Registry.Int}
 	}
 	for _, source := range v.Sources {
 		rows.Sources = append(rows.Sources, policy.SourceWires{ListID: source.ListID, Registry: source.Registry.Int})

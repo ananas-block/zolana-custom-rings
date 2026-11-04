@@ -6,8 +6,8 @@ use core::fmt;
 use thiserror::Error;
 
 use crate::{
-    asset_guard, owner_guard, DebitInput, DebitOutput, Guard, ListSet, Rule, RuleSource, RuleTable,
-    SourceMap, Subject,
+    DebitInput, DebitOutput, Guard, GuardScope, ListSet, Rule, RuleSource, RuleTable, SourceMap,
+    Subject,
 };
 
 /// A member's record `lists` in each registry, zero for an absent member.
@@ -83,8 +83,10 @@ impl RuleTable {
         for (index, rule) in self.rules().iter().enumerate() {
             let check = RuleCheck {
                 outputs: transfer.outputs,
-                ring_inputs: transfer.ring_inputs,
-                payments: &payments,
+                scope: GuardScope {
+                    ring_inputs: transfer.ring_inputs,
+                    payments: &payments,
+                },
                 foreign,
                 private,
                 index,
@@ -124,8 +126,7 @@ impl RecordLists {
 
 struct RuleCheck<'a> {
     outputs: &'a [OutputSubjects],
-    ring_inputs: &'a [DebitInput],
-    payments: &'a [DebitOutput],
+    scope: GuardScope<'a>,
     foreign: ListSet,
     private: ListSet,
     index: usize,
@@ -139,15 +140,14 @@ impl RuleCheck<'_> {
         if !on_asset && output.owner == [0; 32] {
             return Ok(());
         }
+        let owner_guard = self.scope.owner(&output.owner, &output.asset);
         let exempt = match self.rule.guard {
             Guard::Always => false,
             Guard::AboveAmount(threshold) if on_asset => {
-                asset_guard(self.ring_inputs, self.payments, &output.asset) <= u128::from(threshold)
+                self.scope.asset(&output.asset) <= u128::from(threshold)
             }
-            Guard::AboveAmount(threshold) => self.guard(output) <= u128::from(threshold),
-            Guard::AboveAmountByAsset => {
-                self.guard(output) <= u128::from(output.mint_policy.threshold)
-            }
+            Guard::AboveAmount(threshold) => owner_guard <= u128::from(threshold),
+            Guard::AboveAmountByAsset => owner_guard <= u128::from(output.mint_policy.threshold),
         };
         if exempt {
             return Ok(());
@@ -157,15 +157,6 @@ impl RuleCheck<'_> {
         } else {
             self.listed(TransferSubject::Owner(index), output.owner_lists)
         }
-    }
-
-    fn guard(&self, output: &OutputSubjects) -> u128 {
-        owner_guard(
-            self.ring_inputs,
-            self.payments,
-            &output.owner,
-            &output.asset,
-        )
     }
 
     fn listed(&self, subject: TransferSubject, records: RecordLists) -> Result<(), RuleRefusal> {
