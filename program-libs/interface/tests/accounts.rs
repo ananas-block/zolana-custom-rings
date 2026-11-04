@@ -42,6 +42,7 @@ fn ring(records: Address) -> Box<RingPolicy> {
         auditor_pubkey: [4; 33],
         created_slot: 0,
         records,
+        tracking: key(9),
     }
     .account()
 }

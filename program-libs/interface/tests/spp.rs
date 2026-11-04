@@ -250,16 +250,13 @@ fn public_slots_name_the_classes_of_their_legs() {
             .unwrap()
             .classes()
     };
-    assert_eq!(classes(&[]), CoSignScope::TRANSFERS);
+    assert_eq!(classes(&[]), CoSignScope::NONE);
+    assert_eq!(classes(&[sol(1, true)]), CoSignScope::DEPOSITS);
+    assert_eq!(classes(&[sol(1, false)]), CoSignScope::WITHDRAWALS);
     assert_eq!(
-        classes(&[sol(1, true)]),
-        CoSignScope::TRANSFERS | CoSignScope::DEPOSITS
+        classes(&[sol(2, false), sol(1, true)]),
+        CoSignScope::DEPOSITS | CoSignScope::WITHDRAWALS
     );
-    assert_eq!(
-        classes(&[sol(1, false)]),
-        CoSignScope::TRANSFERS | CoSignScope::WITHDRAWALS
-    );
-    assert_eq!(classes(&[sol(2, false), sol(1, true)]), CoSignScope::ALL);
 }
 
 #[test]

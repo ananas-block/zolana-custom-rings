@@ -626,6 +626,14 @@ impl RingPolicy {
         Ok(self.rules.validate(&self.source_map()?)?)
     }
 
+    /// The registries `read` passes after the ring account, own, curator, then the pinned tracking registry.
+    pub fn root_registries(&self, read: RootRead) -> impl Iterator<Item = Address> {
+        self.own_registry(read)
+            .into_iter()
+            .chain(self.curator_registry(read))
+            .chain([self.tracking])
+    }
+
     /// The own registry `read` passes after the ring account.
     pub fn own_registry(&self, read: RootRead) -> Option<Address> {
         (read != RootRead::None).then_some(self.records)
