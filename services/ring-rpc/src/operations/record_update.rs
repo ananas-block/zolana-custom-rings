@@ -519,7 +519,6 @@ fn invalid_entry<E>(_: E) -> RecordUpdateRefusal {
 
 #[cfg(test)]
 mod tests {
-    use zolana_ring_policy::{Rule, Subject};
 
     use super::*;
 

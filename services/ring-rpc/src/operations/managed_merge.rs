@@ -335,7 +335,7 @@ pub(crate) mod tests {
             DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
             RingHistoryPage, TransactionPage,
         },
-        utxos::{CreatedIn, EscrowRoot, EscrowedOwner},
+        utxos::{CreatedIn, TrackedOwner, TrackingRoot},
     };
 
     pub(crate) const RING: Address = Address::new_from_array([8; 32]);
@@ -473,7 +473,6 @@ pub(crate) mod tests {
                     ComputeBudgetConfig::new(400_000),
                 )?,
                 last_valid_block_height: LAST_VALID_BLOCK_HEIGHT,
-                co_signer: None,
             })
         }
     }
@@ -633,7 +632,7 @@ pub(crate) mod tests {
                 .auditor_pubkey();
             let store = self.hub.shared().store(RING);
             let owner_key = wallet.pubkey().to_bytes();
-            let owner = EscrowedOwner {
+            let owner = TrackedOwner {
                 owner_key,
                 nullifier_pk,
                 owner_hash: spr_keypair::hash::owner_hash(
@@ -645,8 +644,8 @@ pub(crate) mod tests {
                     .expect("envelope")
                     .sealed,
             };
-            store.replace_escrow(
-                EscrowRoot {
+            store.replace_tracked(
+                TrackingRoot {
                     registry: Address::new_from_array([1; 32]),
                     root: [1; 32],
                     revision: 0,

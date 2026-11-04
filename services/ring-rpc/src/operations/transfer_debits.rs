@@ -521,7 +521,7 @@ mod tests {
         let frame = hex::decode(
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../test-vectors/settlement/frame_v3.hex"
+                "/../../test-vectors/settlement/frame_v4.hex"
             ))
             .lines()
             .next()
@@ -580,7 +580,7 @@ mod tests {
         let field = |byte: u8| hex::encode(right_aligned(byte));
         let input = |owner: u8, asset: u8, amount: u64| serde_json::json!({"owner": field(owner), "asset": field(asset), "amount": amount});
         let output = |ring: bool, owner: u8, asset: u8, amount: u64| serde_json::json!({"ring": ring, "owner": field(owner), "asset": field(asset), "amount": amount});
-        let public = |asset: u8, deposited: u64, withdrawn: u64| serde_json::json!({"mint": hex::encode(mint_of_field(asset)), "deposited": deposited, "withdrawn": withdrawn});
+        let public = |asset: u8, deposited: u64, withdrawn: u64| serde_json::json!({"mint": hex::encode(mint_of_field(asset)), "asset": field(asset), "deposited": deposited, "withdrawn": withdrawn});
         serde_json::json!([
             {"name": "one owner keeps change", "inputs": [input(1, 7, 30), input(1, 7, 20)], "outputs": [output(true, 2, 7, 15), output(true, 1, 7, 35)], "ownerSigners": [field(1)], "public": []},
             {"name": "an exit to the owner leaves the ring", "inputs": [input(1, 7, 30)], "outputs": [output(false, 1, 7, 30)], "ownerSigners": [field(1)], "public": [public(7, 0, 30)]},
@@ -641,6 +641,7 @@ mod tests {
             .iter()
             .map(|flow| PublicFlow {
                 mint: Address::new_from_array(bytes32(&flow["mint"])),
+                asset: bytes32(&flow["asset"]),
                 deposited: flow["deposited"].as_u64().expect("deposited"),
                 withdrawn: flow["withdrawn"].as_u64().expect("withdrawn"),
             })

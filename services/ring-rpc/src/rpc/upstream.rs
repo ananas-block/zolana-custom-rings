@@ -124,24 +124,30 @@ pub trait TransactionSource: Send + Sync {
     /// The id a tree's commitments hash under.
     fn tree_id(&self, tree: Address) -> impl Future<Output = Result<u16, RingError>> + Send;
 
-    /// The newest root of the ring's pinned tracking registry, `None` before the ring exists.
+    /// The newest root of the ring's pinned tracking registry, `None` reads no owner's secret.
     fn tracking_root(
         &self,
-        ring: Address,
-    ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send;
+        _ring: Address,
+    ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send {
+        async { Ok(None) }
+    }
 
     fn tracking_records(
         &self,
-        request: GetTrackingRecordsRequest,
-    ) -> impl Future<Output = Result<GetTrackingRecordsResponse, RingIndexerError>> + Send;
+        _request: GetTrackingRecordsRequest,
+    ) -> impl Future<Output = Result<GetTrackingRecordsResponse, RingIndexerError>> + Send {
+        async { Err(ClientError::Rpc("no tracking records".to_owned()).into()) }
+    }
 
     /// Whether the owner's own `OwnerGrant` account names this reader, a PDA grants through CPI.
     fn owner_grant_held(
         &self,
-        ring: Address,
-        owner: Address,
-        reader: ReaderKeyBytes,
-    ) -> impl Future<Output = Result<bool, ClientError>> + Send;
+        _ring: Address,
+        _owner: Address,
+        _reader: ReaderKeyBytes,
+    ) -> impl Future<Output = Result<bool, ClientError>> + Send {
+        async { Ok(false) }
+    }
 }
 
 /// Unverified, callers read openings through `VerifiedOpenings`.
