@@ -1,0 +1,95 @@
+//! `getSpendCoverage`, the one surface that names an unresolved spend, for the ring authority alone.
+
+use serde::{Deserialize, Serialize};
+use solana_address::Address;
+use solana_signer::Signer;
+use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
+
+use super::{base64, Attestation, ReadTarget, RequestBuildError, SignedRequest};
+
+pub const GET_SPEND_COVERAGE: &str = "getSpendCoverage";
+const SPEND_COVERAGE_DOMAIN: &str = "zolana/ring-rpc-spend-coverage/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetSpendCoverageRequest {
+    pub ring: SerializablePubkey,
+    pub authority: SerializablePubkey,
+    pub timestamp: u64,
+    pub nonce: Base64String,
+    /// Raw Ed25519 over the `SpendCoverageAttestation` message.
+    pub signature: SerializableSignature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetSpendCoverageResponse {
+    /// The slot the next read starts past, absent inside a paged read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_slot: Option<u64>,
+    pub history_through: u64,
+    pub observed: u64,
+    pub padding: u64,
+    pub external: u64,
+    pub resolved: u64,
+    pub unresolved_real: Vec<SpendCoverageRow>,
+    /// Frames whose stream is unreadable, the only rows that hold `history_through` back.
+    pub unreadable: Vec<SpendCoverageFrame>,
+    /// A second event on one nullifier, its first state stays.
+    pub integrity_faults: Vec<SpendCoverageRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SpendCoverageRow {
+    pub nullifier: Hash,
+    pub frame: SpendCoverageFrame,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SpendCoverageFrame {
+    pub slot: u64,
+    pub tx_signature: SerializableSignature,
+    pub event_index: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpendCoverageAttestation {
+    pub target: ReadTarget,
+    pub authority: Address,
+}
+
+pub type SpendCoverageRequest = SignedRequest<SpendCoverageAttestation>;
+
+impl Attestation for SpendCoverageAttestation {
+    fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
+        format!(
+            "{SPEND_COVERAGE_DOMAIN}\n{}\nauthority: {}\ntimestamp: {timestamp}\nnonce: {}",
+            self.target.lines(),
+            self.authority,
+            base64(nonce),
+        )
+        .into_bytes()
+    }
+}
+
+impl SpendCoverageRequest {
+    /// `authority` must be the attestation's authority, the service checks the signature against it.
+    pub fn sign<S: Signer + ?Sized>(
+        self,
+        authority: &S,
+    ) -> Result<GetSpendCoverageRequest, RequestBuildError> {
+        let (timestamp, message) = self.message()?;
+        let signature = authority
+            .try_sign_message(&message)
+            .map_err(RequestBuildError::Signature)?;
+        Ok(GetSpendCoverageRequest {
+            ring: self.attestation.target.ring.into(),
+            authority: self.attestation.authority.into(),
+            timestamp,
+            nonce: self.nonce.to_vec().into(),
+            signature: signature.into(),
+        })
+    }
+}
