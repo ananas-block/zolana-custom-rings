@@ -1,7 +1,7 @@
 //! The pre-proof refusals an anonymous policy ring adds to the confidential rail.
 
 use custom_ring_interface::{
-    tag, CustomRingError, FramedSenderBundle, RingOutput, RingRail, RingTransactData, SlotBody,
+    tag, CustomRingError, FramedSenderBundle, RingRail, RingTransactData, SlotBody,
     RECIPIENT_BODY_LEN,
 };
 use solana_instruction::AccountMeta;
