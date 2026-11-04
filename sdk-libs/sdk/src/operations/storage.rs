@@ -276,7 +276,7 @@ impl EnrollPending {
     }
 }
 
-fn tracking_apply_inputs(
+pub fn tracking_apply_inputs(
     response: &GetTrackingApplyProofInputsResponse,
 ) -> Result<ApplyProofInputs<TrackingWriteProofInput>, RingError> {
     let writes = response

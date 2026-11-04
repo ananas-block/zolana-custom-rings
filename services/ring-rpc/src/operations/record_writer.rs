@@ -44,7 +44,7 @@ use crate::{
 pub const RECORD_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 const CONFIRM_POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// The apply proof pairing fits under the transaction ceiling.
-const UPDATE_COMPUTE_UNITS: u32 = 1_400_000;
+pub(crate) const UPDATE_COMPUTE_UNITS: u32 = 1_400_000;
 const CREATE_COMPUTE_UNITS: u32 = 100_000;
 
 /// The one writer of every registry its authority key holds.

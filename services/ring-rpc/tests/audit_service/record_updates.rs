@@ -176,6 +176,21 @@ impl StorageChain for StubChain {
         })
     }
 
+    async fn pending_enrollments(
+        &self,
+        _request: zolana_ring_indexer::tracking::GetPendingEnrollmentsRequest,
+    ) -> Result<zolana_ring_indexer::tracking::GetPendingEnrollmentsResponse, RingRpcError> {
+        unreachable!("the record writer applies no enrollment")
+    }
+
+    async fn prove_enrollments(
+        &self,
+        _registry: Address,
+        _owners: &[Address],
+    ) -> Result<zolana_ring_rpc::ProvedEnrollments, RingRpcError> {
+        unreachable!("the record writer applies no enrollment")
+    }
+
     async fn prove_apply(
         &self,
         inputs: &ApplyProofInputs,
