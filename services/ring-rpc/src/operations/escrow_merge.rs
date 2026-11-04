@@ -53,7 +53,6 @@ impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
         Ok(BuiltMerge {
             message,
             last_valid_block_height,
-            co_signer: proven.co_signer(),
         })
     }
 }
@@ -92,7 +91,6 @@ impl<R: AsyncRpc, I: RingIndexerBackend> OwnerMergeProof<'_, R, I> {
                     nullifier_key: merge.nullifier_key.clone(),
                     input_tree: tree,
                     output_tree: tree,
-                    co_signer: merge.co_signer,
                 },
                 self.payer,
                 self.client,

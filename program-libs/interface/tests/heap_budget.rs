@@ -16,6 +16,7 @@ use custom_ring_interface::{
     Replies, RingRail, RingTransactData, MIN_REPLY_LEN,
 };
 use frames::{config, Fixture};
+use solana_message::v1::MAX_TRANSACTION_SIZE;
 use spr_interface::instruction::{InterfaceTransfer, TransactProof};
 use spr_interface::shape::SPP_SUPPORTED_SHAPES;
 
@@ -398,6 +399,8 @@ fn the_codec_phases_of_every_widest_frame_stay_within_the_budget() {
     }
     let over: Vec<_> = report
         .iter()
+        // A wider frame reaches no program in one transaction.
+        .filter(|(_, bytes, _)| *bytes <= MAX_TRANSACTION_SIZE)
         .filter(|(_, _, phases)| phases.spp > BUDGET)
         .map(|(name, _, phases)| format!("{name} takes {} of {BUDGET}", phases.spp))
         .collect();

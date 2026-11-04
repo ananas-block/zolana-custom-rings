@@ -142,7 +142,7 @@ pub(crate) mod fe {
 
     const HEX: &[u8; 16] = b"0123456789abcdef";
     /// The longest byte string a ring request carries, a longer one fails the request.
-    const MAX_BYTES: usize = custom_ring_interface::DELIVERED_BODY_LEN;
+    const MAX_BYTES: usize = 32;
 
     /// The hex lives in a zeroized stack buffer, never in an intermediate heap string.
     pub(crate) fn bytes<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {

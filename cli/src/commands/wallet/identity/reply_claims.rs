@@ -2,6 +2,8 @@ use anyhow::{ensure, Context as _, Result};
 use custom_ring_interface::RingMode;
 use spr_keypair::{ShieldedKeypair, X25519Pubkey};
 
+use zolana_ring_keys::RotatingRingKeys;
+
 use crate::{file, ui::line, wallet::WalletScan, Context, ReplyClaimsArgs};
 
 pub fn run(ctx: &Context, args: ReplyClaimsArgs) -> Result<()> {
@@ -16,10 +18,11 @@ pub fn run(ctx: &Context, args: ReplyClaimsArgs) -> Result<()> {
         None => ctx.sender()?,
     };
     let member = ShieldedKeypair::from_keypair(&keypair)?;
-    let store = ctx.anonymous_wallet_store(&member);
+    let store = ctx.anonymous_wallet_store(member.viewing_pubkey());
+    let keys = RotatingRingKeys::new(&member)?;
     let assets = crate::assets::ring_assets(ctx.rpc())?;
     WalletScan {
-        keys: &member,
+        keys: &keys,
         assets: &assets,
         config: &config,
     }

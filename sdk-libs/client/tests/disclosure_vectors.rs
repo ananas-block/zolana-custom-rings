@@ -1,4 +1,4 @@
-//! Reads the committed auditor streams, version 4 from solved witnesses and version 3 frozen.
+//! Version 4 streams from solved witnesses, version 3 frozen.
 
 use custom_ring_interface::{
     encode_confidential_output, tag, tagged_x25519, AuditKey, AuditStreamLayout, AuditorMessage,
@@ -140,7 +140,6 @@ fn every_version_4_stream_rebuilds_its_published_hashes_with_no_mint_registry() 
     }
 }
 
-/// Every mint the case names under its own registry id.
 fn held_assets(slots: &[Value]) -> RingAssets {
     let mut mints: Vec<Address> = slots
         .iter()
@@ -159,7 +158,7 @@ fn held_assets(slots: &[Value]) -> RingAssets {
     .unwrap()
 }
 
-/// `tag || flags || shape || inputs || outputs`, the head a version 3 frame opens with.
+/// `tag || flags || shape || inputs || outputs`.
 fn version_3_head(outputs: usize, inputs: usize, key_escrow: bool) -> [u8; 5] {
     let shape = SPP_SUPPORTED_SHAPES
         .iter()
@@ -175,7 +174,7 @@ fn version_3_head(outputs: usize, inputs: usize, key_escrow: bool) -> [u8; 5] {
     ]
 }
 
-/// `head` under an anonymous ring's flags, bit 7 of the inputs names the entry key.
+/// Bit 7 of the inputs names the entry key.
 fn anonymous_head(outputs: usize, inputs: usize, entry: bool) -> [u8; 5] {
     let mut head = version_3_head(outputs, inputs, false);
     head[3] |= u8::from(entry) << 7;

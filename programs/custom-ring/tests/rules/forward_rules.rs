@@ -64,6 +64,7 @@ pub fn deposit_instruction(
 ) -> Instruction {
     let prefix = DepositPrefix {
         tag: tag::DEPOSIT,
+        key_capacity: 1,
         proof: Zeroable::zeroed(),
         tracking_revision: Default::default(),
         own_revision: registry.unwrap_or_default().into(),

@@ -36,8 +36,11 @@ func screenedRules(api frontend.API, screened frontend.Variable, table tableView
 // assertSenderRules holds every screened sender to every sender rule, with or without a spent input or an output.
 func assertSenderRules(api frontend.API, active []frontend.Variable, table tableView, resolved subjects) {
 	for r, rule := range table.rules {
+		screened := api.Mul(active[r], rule.onSender)
 		for j, sender := range resolved.senders {
-			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(active[r], rule.onSender, resolved.liveSenders[j]), V: rule.refuses(api, sender.onList)})
+			// A zero row reads no lists, its one extra admission keeps it out of every rule.
+			admitting := api.Add(rule.admitting(api, sender.onList), api.Sub(1, resolved.liveSenders[j]))
+			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: screened, V: api.IsZero(admitting)})
 		}
 	}
 }
@@ -138,12 +141,16 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 
 // refuses is set when no list admits the subject, neither a present list it is on nor an absent list it is off.
 func (r ruleFields) refuses(api frontend.API, onList [NSources]frontend.Variable) frontend.Variable {
+	return api.IsZero(r.admitting(api, onList))
+}
+
+// Each list adds 0, 1 or 2 so no sum wraps to zero.
+func (r ruleFields) admitting(api frontend.API, onList [NSources]frontend.Variable) frontend.Variable {
 	admitting := r.admitBase
 	for i, on := range onList {
 		admitting = api.Add(admitting, api.Mul(on, r.admitWeight[i]))
 	}
-	// Each list adds 0, 1 or 2, the count is zero exactly when no list admits the subject.
-	return api.IsZero(admitting)
+	return admitting
 }
 
 func subjectLists(api frontend.API, onAsset frontend.Variable, asset, owner subjectView) [NSources]frontend.Variable {

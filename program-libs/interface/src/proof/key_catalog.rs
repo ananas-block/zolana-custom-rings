@@ -74,8 +74,6 @@ const NARROW_SHAPES: [TransferShape; 4] = [
 ];
 const WIDE_SHAPE: TransferShape = narrow(8, 24, 32, 24);
 const ENTRY_SHAPES: [TransferShape; 2] = [entry(4, 8, 8), entry(8, 2, 2)];
-/// A wider anonymous frame with replies exceeds the program's heap budget.
-const ANONYMOUS_OUTPUTS: usize = 8;
 
 pub const TRANSFER_SHAPES: [TransferShape; 7] = [
     NARROW_SHAPES[0],
@@ -101,9 +99,7 @@ impl FrameKey {
         let holds = |shape: &TransferShape| self.outputs <= usize::from(shape.outputs);
         // SPP's authority rail holds every input to the ring.
         let delegate = matches!(self.rail, RingRail::Delegate | RingRail::AnonymousDelegate);
-        if delegate && self.spends_default_ring
-            || self.rail.anonymous_frame() && self.outputs > ANONYMOUS_OUTPUTS
-        {
+        if delegate && self.spends_default_ring {
             return None;
         }
         match (self.spends_default_ring, self.wide) {
@@ -178,8 +174,6 @@ impl TransferShape {
 const SPP_ADDRESSES: usize = 4;
 /// Ring program, ring, ring config, own, curator, tracking.
 const RING_ADDRESSES: usize = 6;
-/// A buffered settle's buffer and rent payer.
-const BUFFER_ADDRESSES: usize = 2;
 
 /// What takes a v1 transaction's addresses beside its owner signers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -188,15 +182,13 @@ pub struct TransferAddresses {
     pub n_inputs: usize,
     pub co_signers: usize,
     pub legs: usize,
-    pub buffered: bool,
 }
 
 impl TransferAddresses {
     /// The owner signers that fit, a co-signer takes its record too.
     pub const fn owner_signers(self) -> usize {
-        let buffer = if self.buffered { BUFFER_ADDRESSES } else { 0 };
         MAX_TRANSACTION_ADDRESSES
-            .saturating_sub(SPP_ADDRESSES + RING_ADDRESSES + buffer)
+            .saturating_sub(SPP_ADDRESSES + RING_ADDRESSES)
             .saturating_sub(self.n_inputs + 2 * self.co_signers + self.legs)
     }
 }
@@ -443,17 +435,9 @@ mod tests {
             assert_eq!(key(2), Some(transfer(2, 24, 4, 4)));
             assert_eq!(key(4), Some(transfer(4, 24, 4, 4)));
             assert_eq!(key(8), Some(transfer(8, 16, 4, 4)));
+            assert_eq!(key(16), Some(transfer(16, 5, 8, 5)));
             assert_eq!(key(17), None);
         }
-    }
-
-    #[test]
-    fn only_a_confidential_frame_reaches_sixteen_outputs() {
-        let key = |rail| RingCircuit::transfer(spend(rail, 16, false, false));
-        assert_eq!(key(RingRail::Confidential), Some(transfer(16, 5, 8, 5)));
-        assert_eq!(key(RingRail::Delegate), Some(transfer(16, 5, 8, 5)));
-        assert_eq!(key(RingRail::Anonymous), None);
-        assert_eq!(key(RingRail::AnonymousDelegate), None);
     }
 
     #[test]
@@ -527,23 +511,21 @@ mod tests {
 
     #[test]
     fn the_address_bound_leaves_room_for_each_key_of_the_catalog() {
-        let bound = |n_inputs, co_signers, legs, buffered| {
+        let bound = |n_inputs, co_signers, legs| {
             TransferAddresses {
                 n_inputs,
                 co_signers,
                 legs,
-                buffered,
             }
             .owner_signers()
         };
-        assert_eq!(bound(24, 0, 0, false), 30);
-        assert_eq!(bound(32, 0, 0, false), 22);
-        assert_eq!(bound(24, 5, 4, false), 16);
-        assert_eq!(bound(24, 0, 0, true), 28);
-        assert_eq!(bound(64, 5, 32, true), 0);
+        assert_eq!(bound(24, 0, 0), 30);
+        assert_eq!(bound(32, 0, 0), 22);
+        assert_eq!(bound(24, 5, 4), 16);
+        assert_eq!(bound(64, 5, 32), 0);
         for shape in TRANSFER_SHAPES {
             let n_inputs = usize::from(shape.inputs);
-            assert!(usize::from(shape.owners) <= bound(n_inputs, 0, 0, false));
+            assert!(usize::from(shape.owners) <= bound(n_inputs, 0, 0));
         }
     }
 

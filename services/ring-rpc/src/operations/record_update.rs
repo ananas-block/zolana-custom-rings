@@ -1,21 +1,17 @@
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
-    storage_instruction::UpdateMode,
-    ListRegistry, QueueEntry, RecordWriteData, RingPolicy, APPLY_BATCH, ROOT_HISTORY,
+    ListRegistry, QueueEntry, RecordWriteData, RingPolicy, APPLY_BATCH,
 };
 use solana_address::Address;
 use spr_indexer_api::Hash;
 use thiserror::Error;
 use zolana_ring_client::{
-    rpc::{
-        RecordUpdateEntry, RecordUpdateId,
-        SubmitRecordUpdateRequest, ENROLMENT_LISTS,
-    },
-    storage_apply_proof_inputs, MemberOpeningRead,
+    rpc::{RecordUpdateEntry, RecordUpdateId, SubmitRecordUpdateRequest, ENROLMENT_LISTS},
+    storage_apply_proof_inputs,
 };
 use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsResponse, RingListWriteView};
-use zolana_ring_member_registry::{ApplyProofInputs, RecordWriteProofInput};
-use zolana_ring_policy::{AssetLimits, ListId, ListSet, Member, MintPolicy, RuleSource, RuleTable};
+use zolana_ring_member_registry::ApplyProofInputs;
+use zolana_ring_policy::{AssetLimits, ListId, ListSet, Member};
 
 use crate::{config::ReaderGrantStore, error::RingRpcError, upstream::RingConfiguration};
 
@@ -130,7 +126,7 @@ pub(crate) struct EnrolmentApproval<'a> {
 pub(crate) struct QueuedUpdate {
     pub id: [u8; 32],
     pub ring: Address,
-    pub writes: Vec<StorageWriteData>,
+    pub writes: Vec<RecordWriteData>,
     pub signer: UpdateSigner,
     pub queued_slot: u64,
     pub valid_until_slot: u64,
@@ -182,16 +178,6 @@ pub(crate) struct CheckedInputs {
     pub revision: Revision,
     pub inputs: ApplyProofInputs,
 }
-
-#[must_use]
-pub(crate) struct ModeDecision<'a> {
-    pub inputs: &'a ApplyProofInputs,
-    pub registry: &'a StorageRegistry,
-    /// The current table of every ring the batch writes for.
-    pub tables: &'a [RuleTable],
-    pub slot: u64,
-}
-
 
 impl RecordUpdateRefusal {
     pub const fn code(self) -> i32 {
@@ -283,9 +269,8 @@ impl CheckedUpdate {
     pub fn written_members(&self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
         let mut members = Vec::new();
         for write in &self.writes {
-            let member = write.member().map_err(invalid_entry)?;
-            if !members.contains(&member) {
-                members.push(member);
+            if !members.contains(&write.member) {
+                members.push(write.member);
             }
         }
         Ok(members)
@@ -390,12 +375,7 @@ impl<'a> BatchPlan<'a> {
         let mut wallet_members = Vec::new();
         let mut authority = Vec::new();
         for update in self.queue {
-            let members = update
-                .writes
-                .iter()
-                .map(StorageWriteData::member)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(invalid_entry)?;
+            let members: Vec<[u8; 32]> = update.writes.iter().map(|write| write.member).collect();
             if !update.signer.is_authority() {
                 wallet_members.extend(members);
             } else if members.iter().any(|member| wallet_members.contains(member)) {
@@ -460,23 +440,6 @@ impl ApplyInputsCheck<'_> {
             revision: current.revision,
             inputs,
         })
-    }
-}
-
-impl ModeDecision<'_> {
-    /// `None` waits for the oldest retired root to expire.
-    pub fn decide(self) -> Option<UpdateMode> {
-        if self
-            .inputs
-            .writes
-            .iter()
-            .any(|write| self.tables.iter().any(|table| revokes(table, write)))
-        {
-            return Some(UpdateMode::Immediate);
-        }
-        // A graced update over an unexpired oldest root fails on chain.
-        let history_full = self.slot < self.registry.roots[ROOT_HISTORY - 1].expires_at();
-        (!history_full).then_some(UpdateMode::Graced)
     }
 }
 
@@ -550,79 +513,14 @@ fn authority_write(entry: &RecordUpdateEntry) -> bool {
     }
 }
 
-fn revokes(table: &RuleTable, write: &RecordWriteProofInput) -> bool {
-    revokes_lists(table, &write.entry)
-        || write
-            .entry
-            .mint_policy
-            .is_some_and(|new| restricts(write.old_mint_policy, new))
-}
-
-/// A clear of a list a rule accepts on, or a set of one it accepts off, can refuse an admitted subject.
-fn revokes_lists(table: &RuleTable, entry: &QueueEntry) -> bool {
-    let (accepted_on, accepted_off) =
-        table
-            .rules()
-            .iter()
-            .fold((ListSet::EMPTY, ListSet::EMPTY), |(on, off), rule| {
-                let RuleSource::Lists { present, absent } = rule.source;
-                (on.union(present), off.union(absent))
-            });
-    let cleared = entry.mask & !entry.value;
-    let set = entry.mask & entry.value;
-    cleared & accepted_on.record_bits() != 0 || set & accepted_off.record_bits() != 0
-}
-
-/// Zero turns a cap or co-sign bound off, so a bound set from zero restricts.
-fn restricts(old: MintPolicy, new: MintPolicy) -> bool {
-    let bound = |old: u64, new: u64| new != 0 && (old == 0 || new < old);
-    new.threshold < old.threshold
-        || new.withdrawal_threshold < old.withdrawal_threshold
-        || bound(old.cap, new.cap)
-        || bound(old.cosign_above, new.cosign_above)
-}
-
 fn invalid_entry<E>(_: E) -> RecordUpdateRefusal {
     RecordUpdateRefusal::InvalidEntry
 }
 
 #[cfg(test)]
 mod tests {
-    use zolana_ring_policy::{Rule, Subject};
 
     use super::*;
-
-    fn set(list_id: ListId) -> QueueEntry {
-        QueueEntry {
-            member: [1; 32],
-            mask: list_id.record_bit(),
-            value: list_id.record_bit(),
-            ..QueueEntry::default()
-        }
-    }
-
-    fn cleared(list_id: ListId) -> QueueEntry {
-        QueueEntry {
-            value: 0,
-            ..set(list_id)
-        }
-    }
-
-    #[test]
-    fn a_forbid_rule_set_and_an_allow_rule_clear_are_both_urgent() {
-        let table = RuleTable::builder()
-            .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
-            .rule(Rule::forbid(Subject::Sender, ListId::Approval))
-            .build();
-
-        assert!(revokes_lists(&table, &set(ListId::Approval)));
-        assert!(revokes_lists(&table, &cleared(ListId::Allow)));
-        // Each write only widens what its rule admits.
-        assert!(!revokes_lists(&table, &set(ListId::Allow)));
-        assert!(!revokes_lists(&table, &cleared(ListId::Approval)));
-        // No rule reads Block.
-        assert!(!revokes_lists(&table, &set(ListId::Block)));
-    }
 
     #[test]
     fn an_enrolment_awaiting_reader_needs_no_reader_rule() {

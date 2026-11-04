@@ -55,7 +55,7 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 // No two regions share a counter on these shapes.
 func TestStreamRegionsHoldTheirPlaintext(t *testing.T) {
 	const blockLen = 16
-	if audit.RecordBlocks*blockLen != audit.RecordLen || audit.TailBlocks*blockLen != audit.TailLen {
+	if audit.RecordBlocks*blockLen != audit.RecordStride || audit.RecordLen > audit.RecordStride || audit.TailBlocks*blockLen != audit.TailLen {
 		t.Fatal("a region differs from its plaintext")
 	}
 	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 5, Outputs: 16, Data: true}} {

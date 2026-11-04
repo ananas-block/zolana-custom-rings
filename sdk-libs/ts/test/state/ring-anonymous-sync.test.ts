@@ -208,6 +208,7 @@ describe("anonymous sync", () => {
       viewingPublicKeys: () => alice.keys.viewingPublicKeys(),
       decrypt: alice.keys.decrypt.bind(alice.keys),
       derive: alice.keys.derive.bind(alice.keys),
+      mergeSeeds: alice.keys.mergeSeeds.bind(alice.keys),
       ringDeliverySecrets: alice.keys.ringDeliverySecrets.bind(alice.keys),
       ringTagMatches: alice.keys.ringTagMatches.bind(alice.keys),
       viewTags: alice.keys.viewTags.bind(alice.keys),

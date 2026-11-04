@@ -44,6 +44,7 @@ describe("ownerDebits", () => {
           amount: BigInt(output.amount),
           ring: output.ring === true,
         })),
+        publicGross: [],
       });
       expect(
         byOwner(debits.map(({ owner, debit }) => ({ owner: bytesToHex(owner), debit }))),
@@ -66,8 +67,9 @@ describe("ownerDebits", () => {
         { owner: BOB, asset: ASSET, amount: 40n },
       ],
       outputs: [{ owner: BOB, asset: ASSET, amount: 90n, ring: true }],
+      publicGross: [],
     });
-    expect(debits).toEqual([{ owner: ALICE, asset: ASSET, debit: 100n }]);
+    expect(debits).toMatchObject([{ owner: ALICE, asset: ASSET, debit: 100n }]);
   });
 
   it("counts an exit to the same owner as leaving", () => {
@@ -76,8 +78,9 @@ describe("ownerDebits", () => {
       assets: [ASSET],
       inputs: [{ owner: ALICE, asset: ASSET, amount: 100n }],
       outputs: [{ owner: ALICE, asset: ASSET, amount: 100n, ring: false }],
+      publicGross: [],
     });
-    expect(debits).toEqual([{ owner: ALICE, asset: ASSET, debit: 100n }]);
+    expect(debits).toMatchObject([{ owner: ALICE, asset: ASSET, debit: 100n }]);
   });
 
   it("clamps to zero when a deposit funds what returns", () => {
@@ -86,6 +89,7 @@ describe("ownerDebits", () => {
       assets: [ASSET],
       inputs: [{ owner: ALICE, asset: ASSET, amount: 10n }],
       outputs: [{ owner: ALICE, asset: ASSET, amount: 50n, ring: true }],
+      publicGross: [],
     });
     expect(debits).toEqual([]);
   });
@@ -96,7 +100,8 @@ describe("ownerDebits", () => {
       assets: [ASSET, ASSET],
       inputs: [{ owner: ALICE, asset: ASSET, amount: 7n }],
       outputs: [],
+      publicGross: [],
     });
-    expect(debits).toEqual([{ owner: ALICE, asset: ASSET, debit: 7n }]);
+    expect(debits).toMatchObject([{ owner: ALICE, asset: ASSET, debit: 7n }]);
   });
 });

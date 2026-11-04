@@ -1,7 +1,9 @@
 import type { IndexerReader, KitRpcAccess } from "@heliuslabs/zolana/client";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import {
+  addressBytes,
   isCanonicalField,
+  hashBytes,
   mergePaddedInputCount,
   mergeOutputBlinding,
   mergeOutputKey,
@@ -10,57 +12,72 @@ import {
   MERGE_OUTPUT_BODY_LENGTH,
   decryptMergeOutput,
   readMergeOutputBody,
+  seededMergeDummyNullifier,
+  seededMergeOutputBlinding,
+  ZERO_32,
 } from "@heliuslabs/zolana/internal";
-import type {
-  Address,
-  Bytes16,
-  Bytes32,
-  RequestContext,
-  Signature,
-} from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, RequestContext, Signature } from "@heliuslabs/zolana/interface";
 import type { NullifierKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import type { IndexedShieldedTransaction, OutputContext } from "@heliuslabs/zolana/transaction";
+import type { OutputContext, IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
 import { ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 
+import { openMergeRecord, type MergeRingAuthority } from "../../crypto/audit/merge-disclosure.js";
+import { ringIdField } from "../../crypto/derivation/ring-stream.js";
+import { RecordKind } from "../../protocol/codec/audit-stream.js";
 import { RingError } from "../../protocol/error.js";
-import { RowOrigins } from "./row-origins.js";
+import { outputTreeId } from "../../protocol/membership/trees.js";
+import {
+  RpcTransactionOrigin,
+  type ConfirmedRingTransaction,
+  type TransactionOrigin,
+} from "../../protocol/transaction/origin.js";
 import { readRingHistory, scanLimits } from "../../rpc/history.js";
 import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
-  openRingMergeDisclosure,
-  type RingMergeDisclosure,
-} from "../../crypto/audit/merge-disclosure.js";
-import { RpcTransactionOrigin, type TransactionOrigin } from "../../protocol/transaction/origin.js";
-import { outputTreeId } from "../../protocol/membership/trees.js";
-import {
-  MergeLedger,
-  mergeInputOf,
-  realMergeInputs,
-  type AuditedMergeOutput,
-  type ConfirmedMerge,
-  type KnownMergeInput,
-} from "../../state/merge-ledger.js";
-import type { KnownUtxos } from "./audit.js";
+  knownUtxoHash,
+  openedUtxo,
+  type AuditedUtxo,
+  type KnownNote,
+  type KnownUtxos,
+} from "./audit.js";
+import { RowOrigins } from "./row-origins.js";
 
 export type RingMergeAuditReader = KitRpcAccess &
   Pick<IndexerReader, "getShieldedTransactionsByTags">;
 
-/** A merge row whose frame carries no v3 disclosure, the historical reader owns it. */
+/** A merge row of tag 47 or 18, the historical reader owns it. */
 export interface HistoricalMergeRow {
   readonly slot: bigint;
   readonly signature: Signature;
   readonly eventIndex: number;
 }
 
+/** `Observed` of a merge nullifier, padding is known from the seed alone. */
+export type MergeNullifierClass =
+  | Readonly<{ kind: "padding" }>
+  | Readonly<{ kind: "resolved"; note: KnownNote }>
+  | Readonly<{ kind: "unresolvedReal" }>;
+
+export interface MergeNullifierRow {
+  readonly nullifier: Bytes32;
+  readonly state: MergeNullifierClass;
+}
+
+/** A tag 57 merge, its record opens the output and its nullifiers mark inputs. */
+export interface OpenedRingMerge {
+  readonly slot: bigint;
+  readonly signature: Signature;
+  readonly eventIndex: number;
+  readonly outputContext: OutputContext;
+  readonly utxo: AuditedUtxo;
+  readonly authority: MergeRingAuthority;
+  readonly nullifiers: readonly MergeNullifierRow[];
+}
+
 export interface RingMergeAuditPage {
-  /** Every nonzero list entry the page applied, known to the auditor or not. */
-  readonly spent: readonly Bytes32[];
-  /** Audit records the page resolved, descendants included. */
-  readonly outputs: readonly AuditedMergeOutput[];
-  /** Every merge the ledger holds on an unknown input. */
-  readonly unresolved: readonly ConfirmedMerge[];
+  readonly merges: readonly OpenedRingMerge[];
   readonly historical: readonly HistoricalMergeRow[];
-  /** Rows that do not decode or fail their disclosure, each opens nothing. */
+  /** Rows that do not decode or fail their record, each opens nothing. */
   readonly skipped: readonly SkippedRingTransaction[];
   /** Set only when the page cap stopped the history scan. */
   readonly nextCursor?: string;
@@ -76,10 +93,8 @@ export async function auditRingMerges(
     cursor?: string;
     pageSize?: number;
     maxPages?: number;
-    /** The auditor's openings, a merge of an unknown input stays unresolved. */
-    knownUtxos?: Pick<KnownUtxos, "utxo">;
-    /** One per ring across pages, a later opening resolves what an earlier page held. */
-    ledger?: MergeLedger;
+    /** A nullifier no known note answers reads `unresolvedReal`. */
+    knownUtxos?: KnownUtxos;
   }>,
   context?: RequestContext,
 ): Promise<RingMergeAuditPage> {
@@ -89,7 +104,7 @@ export async function auditRingMerges(
     input.ringProgramId,
     context,
   );
-  const merges: ConfirmedMerge[] = [];
+  const merges: OpenedRingMerge[] = [];
   const historical: HistoricalMergeRow[] = [];
   const seen = new Set<string>();
   const { nextCursor } = await readRingHistory(
@@ -101,21 +116,8 @@ export async function auditRingMerges(
       limits: scanLimits(input),
     },
     (confirmed, eventIndex) => {
-      if (confirmed.kind !== "merge") return;
-      const { transaction, disclosure } = confirmed;
-      const event = `${transaction.txSignature}:${String(eventIndex)}`;
-      if (seen.has(event))
-        throw new RingError("RING_RPC", {
-          details: { reason: "duplicate merge" },
-        });
-      seen.add(event);
-      const merge = confirmedMerge({
-        transaction,
-        eventIndex,
-        disclosure,
-        auditor: input.auditor,
-      });
-      if (merge === undefined)
+      const { transaction } = confirmed;
+      if (confirmed.kind === "historicalMerge" || confirmed.kind === "historicalMergeV3") {
         historical.push(
           Object.freeze({
             slot: transaction.slot,
@@ -123,57 +125,59 @@ export async function auditRingMerges(
             eventIndex,
           }),
         );
-      else merges.push(merge);
+        return;
+      }
+      if (confirmed.kind !== "merge") return;
+      const event = `${transaction.txSignature}:${String(eventIndex)}`;
+      if (seen.has(event))
+        throw new RingError("RING_RPC", {
+          details: { reason: "duplicate merge" },
+        });
+      seen.add(event);
+      const merge = rows.attempt(transaction, () =>
+        openRingMerge({
+          confirmed,
+          eventIndex,
+          auditor: input.auditor,
+          ...(input.knownUtxos === undefined ? {} : { known: input.knownUtxos }),
+        }),
+      );
+      if (merge !== undefined) merges.push(merge);
     },
     context,
   );
-  const ledger = input.ledger ?? new MergeLedger();
-  const known: KnownMergeInput = (commitment) => {
-    const utxo = input.knownUtxos?.utxo(commitment);
-    return utxo === undefined ? undefined : mergeInputOf(utxo);
-  };
-  const spent: Bytes32[] = [];
-  const outputs: AuditedMergeOutput[] = [];
-  for (const merge of merges) {
-    // Listed ahead of the ledger, a retried page over a carried ledger still names its inputs.
-    spent.push(...merge.inputs);
-    outputs.push(...ledger.apply(merge, known).resolved);
-  }
-  outputs.push(...ledger.resolve(known));
   return Object.freeze({
-    spent: Object.freeze(spent),
-    outputs: Object.freeze(outputs),
-    unresolved: ledger.unresolved(),
+    merges: Object.freeze(merges),
     historical: Object.freeze(historical),
     skipped: Object.freeze(rows.skipped),
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });
 }
 
-/** `undefined` on a frame with no v3 disclosure. */
-export function confirmedMerge(
+/** Rebuilds the output from the record under `Poseidon(TMOB, seed, n0)`, the seed is wiped once read. */
+export function openRingMerge(
   input: Readonly<{
-    transaction: IndexedShieldedTransaction;
+    confirmed: Extract<ConfirmedRingTransaction, { kind: "merge" }>;
     eventIndex: number;
-    disclosure: RingMergeDisclosure | undefined;
     auditor: X25519Keypair;
+    known?: KnownUtxos;
   }>,
-): ConfirmedMerge | undefined {
-  if (input.disclosure === undefined) return undefined;
-  const { transaction, eventIndex } = input;
+): OpenedRingMerge {
+  const { confirmed, eventIndex, known } = input;
+  const { transaction } = confirmed;
   const slot = transaction.outputSlots[0];
   const firstNullifier = transaction.nullifiers[0];
-  const width = mergePaddedInputCount(transaction.nullifiers.length);
   const body = slot === undefined ? undefined : readMergeOutputBody(slot.payload);
   const ringDataHash = body?.ringDataHash;
+  const ring = transaction.ringProgramId;
   if (
     slot === undefined ||
     firstNullifier === undefined ||
+    ring === undefined ||
     transaction.outputSlots.length !== 1 ||
-    width === undefined ||
-    body === undefined ||
+    mergePaddedInputCount(transaction.nullifiers.length) === undefined ||
     ringDataHash === undefined ||
-    body.encrypted.length !== MERGE_OUTPUT_BODY_LENGTH ||
+    body?.encrypted.length !== MERGE_OUTPUT_BODY_LENGTH ||
     !isCanonicalField(firstNullifier) ||
     !isCanonicalField(slot.outputContext.hash) ||
     !isCanonicalField(ringDataHash)
@@ -181,24 +185,76 @@ export function confirmedMerge(
     throw new RingError("RING_ORIGIN_DECODE", {
       details: { reason: "ring merge output" },
     });
-  const salt = body.encrypted.slice(0, 16) as Bytes16;
-  const list = openRingMergeDisclosure(input.auditor, input.disclosure, salt);
-  if (list.length !== width)
-    throw new RingError("RING_AUDIT_MESSAGE", {
-      details: { reason: "merge disclosure width" },
+  const { record, secret: seed } = openMergeRecord(input.auditor, confirmed.sealedRecord);
+  try {
+    if (
+      record.kind !== RecordKind.ring ||
+      !isCanonicalField(record.nullifierPk) ||
+      !isCanonicalField(seed)
+    )
+      throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "merge record" } });
+    const utxo: AuditedUtxo = Object.freeze({
+      ownerKey: record.ownerKey,
+      nullifierPk: record.nullifierPk,
+      asset: hashBytes(addressBytes(record.mint, "mint")) as Bytes32,
+      mint: record.mint,
+      amount: record.amount,
+      blinding: seededMergeOutputBlinding(seed, firstNullifier),
+      dataHash: ZERO_32,
+      ringDataHash,
     });
-  return Object.freeze({
-    slot: transaction.slot,
-    signature: transaction.txSignature,
-    eventIndex,
-    outputCommitment: slot.outputContext.hash,
-    treeId: outputTreeId(slot.outputContext),
-    leafIndex: slot.outputContext.leafIndex,
-    firstNullifier,
-    ringDataHash,
-    inputs: realMergeInputs(list, transaction.nullifiers.length),
-  });
+    const rebuilt = knownUtxoHash(
+      openedUtxo(utxo, outputTreeId(slot.outputContext)),
+      ringIdField(ring),
+    );
+    if (!equalBytes(rebuilt, slot.outputContext.hash))
+      throw new RingError("RING_AUDIT_OUTPUT_MISMATCH", { details: { reason: "merge record" } });
+    return Object.freeze({
+      slot: transaction.slot,
+      signature: transaction.txSignature,
+      eventIndex,
+      outputContext: slot.outputContext,
+      utxo,
+      authority: confirmed.authority,
+      nullifiers: Object.freeze(
+        transaction.nullifiers.map((nullifier, position) =>
+          Object.freeze({
+            nullifier,
+            state: classifyMergeNullifier({
+              seed,
+              firstNullifier,
+              nullifier,
+              position,
+              ...(known === undefined ? {} : { known }),
+            }),
+          }),
+        ),
+      ),
+    });
+  } finally {
+    seed.fill(0);
+  }
 }
+
+/** Padding is `Poseidon(TMDN, seed, n0, i)`, a real spend never reads as it. */
+export function classifyMergeNullifier(
+  input: Readonly<{
+    seed: Bytes32;
+    firstNullifier: Bytes32;
+    nullifier: Bytes32;
+    position: number;
+    known?: KnownUtxos;
+  }>,
+): MergeNullifierClass {
+  const { seed, firstNullifier, nullifier, position, known } = input;
+  if (equalBytes(seededMergeDummyNullifier(seed, firstNullifier, position), nullifier))
+    return PADDING;
+  const note = known?.byNullifier?.(nullifier);
+  return note === undefined ? UNRESOLVED_REAL : Object.freeze({ kind: "resolved", note });
+}
+
+const PADDING: MergeNullifierClass = Object.freeze({ kind: "padding" });
+const UNRESOLVED_REAL: MergeNullifierClass = Object.freeze({ kind: "unresolvedReal" });
 
 /** A verified merge opening when only the registered member hash is known. */
 export interface MergeAuditorOpening {

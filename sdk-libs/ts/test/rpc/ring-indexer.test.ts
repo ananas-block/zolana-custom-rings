@@ -40,12 +40,6 @@ describe("ring member registry wire", () => {
     member: MEMBER,
     next: TAG,
     lists: 3,
-    escrowKey: TAG,
-    addressHash: TAG,
-    ownerPubkey: null,
-    nullifierPk: null,
-    ephPk: null,
-    ciphertext: null,
   };
   const root = { root: TAG, revision: 1, nextIndex: 2 };
   const opening = { present: true, record, path: quadPath(1) };
@@ -59,7 +53,7 @@ describe("ring member registry wire", () => {
     );
   const zero = new Uint8Array(32) as Bytes32;
 
-  it("refuses an opening under another root or with part of a sealed key", async () => {
+  it("refuses an opening under another root or with a field a record no longer holds", async () => {
     const request = {
       registry: REGISTRY,
       members: [new Uint8Array(32).fill(5) as Bytes32],
@@ -70,7 +64,7 @@ describe("ring member registry wire", () => {
     expect(decoded.openings[0]?.path.siblings).toHaveLength(QUAD_HEIGHT);
     for (const changed of [
       { root: { ...root, root: OTHER } },
-      { openings: [{ ...opening, record: { ...record, ownerPubkey: REGISTRY } }] },
+      { openings: [{ ...opening, record: { ...record, escrowKey: TAG } }] },
     ])
       await expect(
         indexerFor({ result: { ...openings, ...changed } }).getStorageMemberOpenings(request),

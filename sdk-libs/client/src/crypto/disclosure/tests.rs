@@ -180,7 +180,6 @@ fn a_record_opens_only_at_the_counter_of_its_slot() {
     ));
 }
 
-/// Each tail has its own counter past every record.
 #[test]
 fn a_tail_opens_only_at_the_counter_of_its_slot() {
     let auditor = X25519Keypair::new();

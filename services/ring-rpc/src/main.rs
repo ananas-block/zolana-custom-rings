@@ -10,9 +10,10 @@ use zolana_ring_client::{
 };
 use zolana_ring_rpc::{
     run_server, write_grant_rows_secret, write_keypair, write_root_secret, ChainSource, Cli,
-    CoSignerApproval, Command, Hub, KeyKind, KeySource, KeygenArgs, LiveStorageChain, OriginPolicy,
-    RelayServicesInit, ServeArgs, ServeKeys, ServerOptions, ServiceIdentity, Store,
-    TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL, STORE_CONNECTIONS,
+    CoSignerApproval, Command, EnrollmentApplierParts, Hub, KeyKind, KeySource, KeygenArgs,
+    LiveStorageChain, OriginPolicy, RelayServicesInit, ServeArgs, ServeKeys, ServerOptions,
+    ServiceIdentity, Store, TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL,
+    RECORD_FLUSH_INTERVAL, STORE_CONNECTIONS,
 };
 
 #[tokio::main]
@@ -52,7 +53,11 @@ fn keygen(args: KeygenArgs) -> anyhow::Result<()> {
                 .with_context(|| format!("writing {}", args.out.display()))?;
             println!("{:<11} {}", args.kind.role(), args.out.display());
         }
-        KeyKind::FeePayer | KeyKind::Service | KeyKind::StorageAuthority | KeyKind::CoSigner => {
+        KeyKind::FeePayer
+        | KeyKind::Service
+        | KeyKind::StorageAuthority
+        | KeyKind::CoSigner
+        | KeyKind::EnrollmentApplier => {
             let key = write_keypair(&args.out)
                 .with_context(|| format!("writing {}", args.out.display()))?;
             println!("secret      {}", args.out.display());
@@ -70,6 +75,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         co_signer,
         grant_rows,
         fee_payer,
+        enrollment_applier,
     } = args.read_keys()?;
     let upstreams = Upstreams {
         indexer_url: &args.indexer_url,
@@ -123,9 +129,20 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let mut builder = Hub::builder(source, identity)
         .with_origins(origin_policy.build()?)
-        .with_reader_grants(args.reader_grants);
+        .with_reader_grants(args.reader_grants)
+        .with_enrollment_budget(args.enrollment_budget);
     if let Some(store) = store {
         builder = builder.with_store(store);
+    }
+    if let (Some(prover_url), Some(payer)) = (&args.prover_url, enrollment_applier) {
+        let applier = EnrollmentApplierParts {
+            chain: Arc::new(LiveStorageChain::connect(upstreams, prover_url)?),
+            payer,
+            rings: args.enrollment_apply_rings.clone(),
+        }
+        .applier();
+        info!("enrollment applier {}", applier.payer());
+        tokio::spawn(applier.run(RECORD_FLUSH_INTERVAL));
     }
     if let (Some(prover_url), Some(authority)) = (&args.prover_url, storage_authority) {
         let chain = LiveStorageChain::connect(upstreams, prover_url)?;

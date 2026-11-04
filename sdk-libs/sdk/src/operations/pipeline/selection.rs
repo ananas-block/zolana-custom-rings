@@ -103,7 +103,8 @@ impl Funding<'_> {
             .utxos
             .iter()
             .filter(|utxo| {
-                utxo.utxo.asset.asset == self.asset && utxo.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY
+                utxo.utxo.asset.asset == self.asset
+                    && utxo.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY
             })
             .fold(0u64, |sum, utxo| sum.saturating_add(utxo.utxo.amount));
         match exposed_if_spent {

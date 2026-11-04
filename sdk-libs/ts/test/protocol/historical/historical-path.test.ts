@@ -35,7 +35,7 @@ import {
   sealAuditorStream,
   sealMergeDisclosureFields,
 } from "../../../src/crypto/audit/audit.js";
-import { writeRingMergeDisclosure } from "../../../src/crypto/audit/merge-disclosure.js";
+import { writeRingMergeDisclosure } from "../../../src/protocol/historical/v3/merge-disclosure.js";
 import { ringBlindingSeed, ringOutputBlinding } from "../../../src/crypto/derivation/blinding.js";
 import { TRANSFER_STATEMENT_VERSION } from "../../../src/crypto/derivation/ring-domain.js";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";

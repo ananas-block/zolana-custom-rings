@@ -21,11 +21,13 @@ pub fn run(ctx: &Context, args: AddressArgs) -> Result<()> {
     let member = ShieldedKeypair::from_keypair(&keypair)?;
     let address = RingAddress::enrolled(&member, ctx.ring.program_id())?;
     // Stored before it prints, a sync reads every deposit tag a payer may hold.
-    let deposit_tag = ctx.anonymous_wallet_store(&member).update(|wallet| {
-        let minted = wallet.history().request_tag(&member)?;
-        wallet.update_history(minted.history)?;
-        Ok(minted.tag)
-    })?;
+    let deposit_tag = ctx
+        .anonymous_wallet_store(member.viewing_pubkey())
+        .update(|wallet| {
+            let minted = wallet.history().request_tag(&member)?;
+            wallet.update_history(minted.history)?;
+            Ok(minted.tag)
+        })?;
     println!("{}", args.request(address, Some(deposit_tag)));
     Ok(())
 }

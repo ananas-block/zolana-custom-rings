@@ -1,7 +1,12 @@
 /** A ring's history read in order, each event bound to its confirmed transaction, Rust `pages`. */
 import type { Address } from "@solana/kit";
 
-import type { IndexerReader, IndexerRpcConfig, PaginationToken } from "@heliuslabs/zolana/client";
+import {
+  ClientError,
+  type IndexerReader,
+  type IndexerRpcConfig,
+  type PaginationToken,
+} from "@heliuslabs/zolana/client";
 import { PAGE_LIMIT } from "@heliuslabs/zolana/internal";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
 import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
@@ -75,6 +80,32 @@ export function scanLimits(
   return Object.freeze({ pageSize, maxPages });
 }
 
+/** Retries at half on a page too large, the same token loses no row. */
+export class HalvingPageLimit {
+  #limit: number;
+
+  constructor(limit: number) {
+    this.#limit = limit;
+  }
+
+  get value(): number {
+    return this.#limit;
+  }
+
+  async read<T>(fetch: (limit: number) => Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await fetch(this.#limit);
+      } catch (error) {
+        const tooLarge =
+          error instanceof ClientError && error.code === "CLIENT_INDEXER_RESPONSE_TOO_LARGE";
+        if (!tooLarge || this.#limit === 1) throw error;
+        this.#limit = Math.floor(this.#limit / 2);
+      }
+    }
+  }
+}
+
 /** Rust `HistoryPosition`. */
 export interface RingHistoryReach {
   /** Set only when the page cap stopped the read. */
@@ -121,19 +152,23 @@ export async function readRingPages(
   const { pageSize, maxPages } = input.limits;
   let token = historyCursorToken(input.cursor, input.ringProgramId, "ring");
   const followed = new Set<PaginationToken>();
+  const pageLimit = new HalvingPageLimit(pageSize);
   for (let page = 0; page < maxPages; page++) {
-    const response = await input.client.getShieldedTransactionsByTags(
-      {
-        tags: [],
-        ringProgramId: input.ringProgramId,
-        limit: pageSize,
-        ...(token === undefined ? {} : { paginationToken: token }),
-        ...(input.afterSlot === undefined ? {} : { filters: { slot: { gt: input.afterSlot } } }),
-      },
-      input.config,
-      context,
+    const paginationToken = token === undefined ? {} : { paginationToken: token };
+    const response = await pageLimit.read((limit) =>
+      input.client.getShieldedTransactionsByTags(
+        {
+          tags: [],
+          ringProgramId: input.ringProgramId,
+          limit,
+          ...paginationToken,
+          ...(input.afterSlot === undefined ? {} : { filters: { slot: { gt: input.afterSlot } } }),
+        },
+        input.config,
+        context,
+      ),
     );
-    if (response.data.length > pageSize) throw new RingError("RING_HISTORY_PAGE_INVALID");
+    if (response.data.length > pageLimit.value) throw new RingError("RING_HISTORY_PAGE_INVALID");
     await visit(
       response.data
         .flatMap((item) => item.events)

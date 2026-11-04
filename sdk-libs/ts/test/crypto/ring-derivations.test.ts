@@ -34,7 +34,6 @@ describe("ring domains", () => {
       senderTagDomain: ascii("CRST"),
       blindingSeed: ascii("CRBS"),
       transferStatement: ascii("CRTX"),
-      addressRecord: ascii("CRAD"),
       policyTable: ascii("CRTB"),
       queueWrite: ascii("CRQW"),
       applyRecords: ascii("CRAP"),
@@ -45,6 +44,12 @@ describe("ring domains", () => {
       withdrawals: ascii("CRPW"),
       recordUpdate: ascii("CRRU"),
       walletGrant: ascii("CRWG"),
+      trackingLeaf: ascii("CRTK"),
+      trackingEntry: ascii("CRTQ"),
+      applyEnrollments: ascii("CRTA"),
+      listSalt: ascii("CRPS"),
+      listTag: ascii("CRPT"),
+      listPosition: ascii("CRPL"),
     });
     const values = [
       ...Object.values(RingDomain),

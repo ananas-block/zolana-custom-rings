@@ -271,6 +271,7 @@ fn dispatch(ctx: &mut Context, command: Command) -> Result<()> {
         Command::AuditorKey(args) => keys::run(&ctx.path(&args.key_file), args.create),
         Command::Audit(args) => audit::run(ctx, args),
         Command::Address(args) => address::run(ctx, args),
+        Command::Balance(args) => transact::run_balance(ctx, args),
         Command::ReplyClaims(args) => reply_claims::run(ctx, args),
         Command::New(_)
         | Command::Target { .. }
@@ -358,9 +359,8 @@ mod tests {
             assert_eq!(args.mint, Some(Mint(spr_transaction::SOL_MINT)));
         }
         assert_eq!(parse(&[]).expect("defaults").count, 24);
-        assert!(parse(&["--count", "24"]).is_ok());
-        assert!(parse(&["--count", "25"]).is_err());
-        assert!(parse(&["--count", "52"]).is_err());
+        assert!(parse(&["--count", "52"]).is_ok());
+        assert!(parse(&["--count", "53"]).is_err());
         assert!(parse(&["--count", "1"]).is_err());
     }
 

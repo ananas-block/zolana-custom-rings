@@ -37,13 +37,6 @@ pub(crate) enum InputRead {
     Real { evidence: Option<[u8; 32]> },
 }
 
-/// The envelope's real-input count and default bits, dummies sit last.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TransferStream {
-    pub real_inputs: u8,
-    pub default_bits: u64,
-}
-
 /// One nullifier as a frame publishes it, `hit` is the note index's answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Observation {
@@ -61,21 +54,6 @@ pub(crate) enum Transition {
     Write(SpendRow),
     /// A second event on one nullifier, the first state stays.
     Integrity(SpendRow),
-}
-
-impl TransferStream {
-    /// Only a position at or past the count is padding.
-    pub(crate) fn read(self, position: u16) -> InputRead {
-        if position >= u16::from(self.real_inputs) {
-            return InputRead::Padding;
-        }
-        let default_input = u32::from(position) < u64::BITS
-            && self.default_bits & (1u64 << u32::from(position)) != 0;
-        match default_input {
-            true => InputRead::External,
-            false => InputRead::Real { evidence: None },
-        }
-    }
 }
 
 impl Observation {
@@ -163,11 +141,6 @@ mod tests {
 
     use super::*;
 
-    const STREAM: TransferStream = TransferStream {
-        real_inputs: 3,
-        default_bits: 0b010,
-    };
-
     fn frame(byte: u8) -> CreatedIn {
         CreatedIn {
             slot: u64::from(byte),
@@ -191,15 +164,6 @@ mod tests {
             Transition::Write(row) => row.state,
             other => panic!("expected a write, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn a_transfer_position_reads_from_the_count_and_the_default_bits() {
-        assert_eq!(STREAM.read(0), InputRead::Real { evidence: None });
-        assert_eq!(STREAM.read(1), InputRead::External);
-        assert_eq!(STREAM.read(2), InputRead::Real { evidence: None });
-        assert_eq!(STREAM.read(3), InputRead::Padding);
-        assert_eq!(STREAM.read(u16::MAX), InputRead::Padding);
     }
 
     #[test]

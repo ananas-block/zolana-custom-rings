@@ -1,5 +1,3 @@
-//! Reads every confirmed ring merge into the ledger, from its sealed record or its tag 47 list.
-
 use std::{
     collections::HashSet,
     num::{NonZeroU32, NonZeroUsize},
@@ -36,7 +34,7 @@ use crate::{
 pub struct MergeAuditPage {
     pub context: Context,
     pub merges: Vec<ConfirmedMerge>,
-    /// Merge rows carrying neither disclosure, the historical reader owns them.
+    /// Merge rows carrying neither disclosure.
     pub historical: Vec<(u64, Signature, u16)>,
     pub next_cursor: Option<HistoryCursor>,
 }
@@ -213,7 +211,7 @@ fn rows(response: GetShieldedTransactionsByTagsResponse) -> Vec<ShieldedTransact
         .collect()
 }
 
-/// The merge a bound row settled, `None` on a frame with no disclosure this reader opens.
+/// `None` on a frame with no disclosure.
 pub fn confirmed_merge(
     transaction: &ShieldedTransaction,
     event_index: u16,
@@ -238,7 +236,6 @@ pub fn confirmed_merge(
     }))
 }
 
-/// A ring merge's published body, under either encoding its proof binds or leaves free.
 pub(crate) struct RingMergeBody {
     pub(crate) ring_data_hash: [u8; 32],
     pub(crate) encrypted: Vec<u8>,
@@ -450,7 +447,6 @@ mod tests {
         }
     }
 
-    /// The record, its seed and the commitment the record rebuilds.
     fn merged_note(nullifier_pk: [u8; 32], seed: [u8; 32]) -> (OpeningRecord, [u8; 32]) {
         let blinding = MergeSeed::from_bytes(seed)
             .unwrap()

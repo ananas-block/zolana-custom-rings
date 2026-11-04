@@ -18,6 +18,8 @@ mod cosign_limits;
 mod cosign_usage;
 #[path = "storage/database.rs"]
 mod database;
+#[path = "operations/enrollment_applier.rs"]
+mod enrollment_applier;
 #[path = "operations/enrolment.rs"]
 mod enrolment;
 mod error;
@@ -106,6 +108,7 @@ pub use cosign_limits::{
 };
 pub use cosign_usage::Reservation;
 pub use database::{Store, STORE_CONNECTIONS};
+pub use enrollment_applier::{EnrollmentApplier, EnrollmentApplierParts};
 pub use error::{GrantRefusal, RingRpcError};
 pub use escrow_merge::RingSdkMergeBuilder;
 pub use hub::{Clock, Hub, HubBuilder, NotReady, ServiceIdentity};
@@ -131,9 +134,9 @@ pub use relay_prover::{
 pub use relay_services::{RelayServices, RelayServicesInit};
 pub use relay_submit::CollectedSignature;
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
-pub use storage_chain::{LiveStorageChain, StorageChain};
+pub use storage_chain::{LiveStorageChain, ProvedEnrollments, StorageChain};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
     RingHistoryPage, TransactionPage, TransactionSource, Upstreams,
 };
-pub use utxos::UTXO_BACKFILL_INTERVAL;
+pub use utxos::{TrackingRoot, UTXO_BACKFILL_INTERVAL};

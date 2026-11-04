@@ -1,15 +1,9 @@
 //! The relay co-signs within its asset's window caps and refuses an outflow beyond them, a proof naming another co-signer, or a ring whose auditor key it does not hold, and keeps a reservation while a stored relay holds it.
 
-use custom_ring_interface::{
-    frame_digest, CreateFrameBufferIxData, CustomRingError, FrameBuffer, FrameBufferHeader,
-    FrameBufferWrite, SettleBufferedIxData, WriteFrameIxData, FRAME_BUFFER_HEADER_LEN,
-};
 use jsonrpsee::RpcModule;
 use sea_orm::{ConnectionTrait, Statement};
-use solana_instruction::{AccountMeta, Instruction};
-use solana_message::VersionedMessage;
+use solana_instruction::AccountMeta;
 use spr_keypair::{ShieldedKeypair, SigningKey};
-use zolana_ring_client::input_hash_evidence;
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayId, RelayProofInputs,
     RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest, GET_RELAY_QUOTE,
@@ -17,9 +11,8 @@ use zolana_ring_client::rpc::{
 };
 use zolana_ring_policy::{AssetLimits, MintPolicy};
 use zolana_ring_rpc::{
-    ChainOutcome, CoSignDecision, CoSignError, CoSignFlows, CoSignRefusal, CoSignRequest,
-    CoSignSettlement, DelegateSeal, ProvenRelay, RelayError, RelayParties, RelayParts,
-    RelayPayload, RelayProofRequest, RelayProver,
+    ChainOutcome, DelegateSeal, ProvenRelay, RelayError, RelayParties, RelayParts, RelayPayload,
+    RelayProofRequest, RelayProver,
 };
 
 use super::transfer::{Frame as TransferFrame, Publish, Rail};
@@ -37,7 +30,8 @@ const DEPOSIT_CAP: u64 = 1_000;
 struct FramedProver {
     inner: RecordingProver,
     auditor: X25519Pubkey,
-    note: [u8; 32],
+    /// The published nullifier of the note the frames spend.
+    nullifier: [u8; 32],
 }
 
 /// The sender's note the ring opened, a limit reads it through the auditor store.
@@ -97,23 +91,23 @@ impl FramedProver {
             amount => paid(sender_fields(amount), x25519_u(0x52)),
         };
         let outputs = [payment, change];
-        let transfer = ring_transfer(inputs.blinding_seed[0]);
-        let disclosure = transfer.signer_disclosure(
-            &outputs,
-            input_hash_evidence(&[Some(self.note)]).expect("evidence"),
-        );
+        let transfer = spending(inputs.blinding_seed[0], &[self.nullifier]);
+        let mut disclosure = transfer.disclosure(Rail::Delivered, &outputs);
+        disclosure.real_inputs = 1;
         let tx = transfer.publish(Publish {
             slots: transfer
-                .slots(Rail::Delivered, &outputs)
+                .slots(&outputs)
                 .into_iter()
                 .map(|slot| slot.output)
                 .collect(),
             disclosure: &disclosure,
             auditor: &self.auditor,
+            rail: Rail::Delivered,
         });
         transfer.frame(TransferFrame {
             tx: &tx,
             disclosure: &disclosure,
+            rail: Rail::Delivered,
         })
     }
 }
@@ -152,7 +146,6 @@ struct CappedRelay {
     co_signer: Address,
     quote: RelayQuote,
     rail: fn() -> RelayRail,
-    frame_buffers: Arc<Mutex<HashMap<Address, Account>>>,
 }
 
 impl CappedRelay {
@@ -164,19 +157,22 @@ impl CappedRelay {
     async fn naming(rail: fn() -> RelayRail, named: Option<Address>, limits: AssetLimits) -> Self {
         let fixture = Fixture::new();
         // The note a capped transfer spends, the co-signer reads its owner from the store.
-        let note_row = Indexed {
-            transfer: &ring_transfer(0x40),
-            outputs: &[paid(sender_fields(SENDER_CAP), x25519_u(0x54))],
-            auditor: &fixture.auditor.pubkey(),
-            signature: 0x40,
-            frames: &fixture.frames,
+        let sender = owner();
+        let (note_row, nullifier) = KeyedNote {
+            fixture: &fixture,
+            seed: 0x40,
+            note: sender_fields(SENDER_CAP),
+            key: &sender.nullifier_key,
         }
         .delivered();
-        let note = note_row.output_slots[0].output_context.hash;
         let mut source = fixture.source().with_transactions(vec![note_row]);
+        source.tracking.enroll(
+            &sender_fields(SENDER_CAP).owner_key,
+            &sender.nullifier_key,
+            &fixture.auditor.pubkey(),
+        );
         // The history ends at the note, the default cursor names its own page.
         source.next_cursor = None;
-        let frame_buffers = source.frame_buffers.clone();
         source.records.write_mint_policy(
             Member::asset(&SOL_MINT).expect("asset member"),
             MintPolicy {
@@ -204,7 +200,7 @@ impl CappedRelay {
                         ..RecordingProver::default()
                     },
                     auditor: fixture.auditor.pubkey(),
-                    note,
+                    nullifier,
                 }),
                 fee_payer: Keypair::new_from_array([31; 32]),
                 chain: chain.clone(),
@@ -236,7 +232,6 @@ impl CappedRelay {
             co_signer,
             quote,
             rail,
-            frame_buffers,
         }
     }
 
@@ -377,190 +372,6 @@ fn deposit_capped() -> AssetLimits {
         deposit_window_slots: 100,
         ..AssetLimits::EMPTY
     }
-}
-
-/// The sealed buffer a settlement of `frame` names, its writer the fee payer.
-fn sealed_buffer(frame: &[u8], rent_payer: Address, writer: Address) -> Account {
-    let header = FrameBufferHeader::new(
-        &CreateFrameBufferIxData {
-            nonce: 1,
-            length: u16::try_from(frame.len()).expect("length"),
-            digest: frame_digest(frame).expect("digest"),
-            expiry_unix_ts: u32::MAX,
-        },
-        writer,
-        rent_payer,
-    )
-    .expect("header");
-    let mut data = vec![0; FRAME_BUFFER_HEADER_LEN + frame.len()];
-    data[..FRAME_BUFFER_HEADER_LEN].copy_from_slice(bytemuck::bytes_of(&header));
-    FrameBufferWrite::of(&mut data)
-        .expect("buffer")
-        .apply(
-            &writer,
-            &WriteFrameIxData {
-                offset: 0,
-                seal: true,
-                bytes: frame,
-            },
-        )
-        .expect("write");
-    Account {
-        lamports: 1,
-        data,
-        owner: RING,
-        executable: false,
-        rent_epoch: 0,
-    }
-}
-
-/// `frame` settled through tag 61 over the accounts the inline transfer named.
-fn settling_message(frame: &[u8], inline: &VersionedMessage, buffer: Address) -> VersionedMessage {
-    let keys = inline.static_account_keys();
-    let instruction = inline
-        .instructions()
-        .iter()
-        .find(|instruction| keys[usize::from(instruction.program_id_index)] == RING)
-        .expect("the ring instruction");
-    let payer = keys[0];
-    let digest = frame_digest(frame).expect("digest");
-    let settle = SettleBufferedIxData {
-        digest: &digest,
-        buffer: buffer.as_array(),
-        inner_tag: frame[0],
-    };
-    let mut data = vec![custom_ring_interface::tag::SETTLE_BUFFERED];
-    data.extend(settle.encode());
-    let mut accounts = vec![
-        AccountMeta::new(buffer, false),
-        AccountMeta::new(payer, true),
-        AccountMeta::new_readonly(RING, false),
-    ];
-    accounts.extend(instruction.accounts.iter().map(|index| {
-        AccountMeta::new(
-            keys[usize::from(*index)],
-            inline.is_signer(usize::from(*index)),
-        )
-    }));
-    spr_client::compile_message(
-        &payer,
-        &[Instruction {
-            program_id: RING,
-            accounts,
-            data,
-        }],
-        solana_hash::Hash::new_from_array([7; 32]),
-        spr_client::ComputeBudgetConfig::new(1_000_000),
-    )
-    .expect("message")
-}
-
-/// The buffer path reads the same flows and limits as inline, and a rewrite never reaches a signature that settles.
-#[tokio::test]
-async fn a_co_signer_inspects_a_sealed_buffer_and_signs_only_its_digest() {
-    let recipient = ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[47; 32]))
-        .expect("recipient")
-        .shielded_address()
-        .expect("recipient address");
-    let relay = CappedRelay::new(anonymous_rail).await;
-    let mut inputs = proof_inputs(RING, anonymous_rail());
-    inputs.outputs[0].owner_address = Some(recipient);
-    inputs.blinding_seed = [1; 32];
-    let step: RelayStep = relay
-        .module
-        .call(
-            PREPARE_RELAY,
-            as_object(signed_request(relay.quote.clone(), &inputs)),
-        )
-        .await
-        .expect("inline transfer");
-    assert!(matches!(step, RelayStep::Submitted { .. }));
-    let [sent] = relay.chain.sent().try_into().expect("one sent transaction");
-    let inline = sent.message.clone();
-    // The inline reservation leaves the window, the buffered read has to fit by itself.
-    let co_signer = relay.hub.co_signer();
-    co_signer
-        .settle(CoSignSettlement::Failed(sent.signatures[1]))
-        .await
-        .expect("freed");
-    let keys = inline.static_account_keys();
-    let instruction = inline
-        .instructions()
-        .iter()
-        .find(|instruction| keys[usize::from(instruction.program_id_index)] == RING)
-        .expect("the ring instruction");
-    let frame_a = instruction.data.clone();
-    let mut frame_b = frame_a.clone();
-    *frame_b.last_mut().expect("frame") ^= 1;
-    let buffer = Address::new_from_array([0x55; 32]);
-    let payer = keys[0];
-    let message = settling_message(&frame_a, &inline, buffer);
-    let decide = |message: VersionedMessage| async {
-        co_signer
-            .decide(&CoSignRequest {
-                ring: RING,
-                message,
-                flows: CoSignFlows::Frame,
-            })
-            .await
-    };
-    // No buffer on chain.
-    assert!(matches!(
-        decide(message.clone()).await,
-        Err(RingRpcError::CoSign(CoSignError::FrameBuffer))
-    ));
-    // The chain holds B while the message's digest names A.
-    let set = |account| {
-        relay.frame_buffers.lock().unwrap().insert(buffer, account);
-    };
-    set(sealed_buffer(&frame_b, payer, payer));
-    assert!(matches!(
-        decide(message.clone()).await,
-        Err(RingRpcError::CoSign(CoSignError::FrameBuffer))
-    ));
-    // A sealed under its digest signs, and the flows are the inline frame's.
-    let sealed_a = sealed_buffer(&frame_a, payer, payer);
-    set(sealed_a.clone());
-    let signature = match decide(message.clone()).await.expect("sealed A") {
-        CoSignDecision::Signed(signature) => signature,
-        refused => panic!("{refused:?}"),
-    };
-    assert!(signature.verify(relay.co_signer.as_ref(), &message.serialize()));
-    // The buffer changes after the fetch, the digest the signature covers no longer matches it.
-    let settled_digest = frame_digest(&frame_a).expect("digest");
-    let settle = SettleBufferedIxData {
-        digest: &settled_digest,
-        buffer: buffer.as_array(),
-        inner_tag: frame_a[0],
-    };
-    let rewritten = sealed_buffer(&frame_b, payer, payer);
-    assert_eq!(
-        FrameBuffer::of(&rewritten.data)
-            .expect("buffer")
-            .check_settlement(&settle, &payer, 0),
-        Err(CustomRingError::FrameDigestMismatch),
-        "settlement refuses the rewrite the signature did not cover"
-    );
-    // The same window cap reads a second buffered transfer.
-    let second_message = settling_message(&frame_a, &inline, Address::new_from_array([0x56; 32]));
-    relay
-        .frame_buffers
-        .lock()
-        .unwrap()
-        .insert(Address::new_from_array([0x56; 32]), sealed_a);
-    assert_eq!(
-        decide(second_message).await.expect("decision"),
-        CoSignDecision::Refused(CoSignRefusal::OverLimit)
-    );
-    // A merge never reaches a co-signer through a buffer.
-    let mut merge = frame_a.clone();
-    merge[0] = custom_ring_interface::tag::MERGE;
-    let merge_message = settling_message(&merge, &inline, buffer);
-    set(sealed_buffer(&merge, payer, payer));
-    assert!(matches!(
-        decide(merge_message).await,
-        Err(RingRpcError::CoSign(CoSignError::MessageScope))
-    ));
 }
 
 #[tokio::test]
@@ -768,46 +579,6 @@ async fn a_refused_send_stores_failed_and_frees_its_reservation() {
 }
 
 #[tokio::test]
-async fn a_failed_reservation_release_is_retried_by_status() {
-    let relay = CappedRelay::new(|| RelayRail::Confidential).await;
-    relay.chain.refuse_next.store(true, Ordering::Relaxed);
-    let refused = relay.spending_cap(1);
-    let relay_id = refused.relay_id().expect("relay id");
-    relay.fault(StoreFault::ReservationReleaseRefused).await;
-    let interrupted = relay
-        .module
-        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&refused))
-        .await;
-    assert!(interrupted.is_err());
-
-    let connection = relay.store.connection();
-    let stored = connection
-        .query_one(Statement::from_string(
-            connection.get_database_backend(),
-            "SELECT status FROM relay_relays",
-        ))
-        .await
-        .expect("relay query")
-        .expect("stored relay");
-    assert_eq!(
-        stored.try_get::<String>("", "status").expect("status"),
-        "failed"
-    );
-    assert!(relay.chain.sent().is_empty());
-    let beyond = relay
-        .module
-        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
-        .await;
-    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
-
-    relay.heal().await;
-    let status = relay.status(relay_id.clone()).await;
-    assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
-    assert_eq!(relay.status(relay_id).await, status);
-    relay.second_cap_fits().await;
-}
-
-#[tokio::test]
 async fn an_on_chain_failure_reads_failed_and_frees_its_reservation() {
     let relay = CappedRelay::new(|| RelayRail::Confidential).await;
     *relay.chain.outcome.lock().expect("outcome") = Some(Some(ChainOutcome::Failed {
@@ -958,4 +729,44 @@ async fn a_derived_relay_refuses_a_ring_whose_auditor_key_it_does_not_hold() {
     assert_eq!(refusal(prepared), RelayError::RingNotServed.code());
     assert!(prover.requests.lock().expect("requests").is_empty());
     assert!(chain.sent().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_reservation_release_is_retried_by_status() {
+    let relay = CappedRelay::new(|| RelayRail::Confidential).await;
+    relay.chain.refuse_next.store(true, Ordering::Relaxed);
+    let refused = relay.spending_cap(1);
+    let relay_id = refused.relay_id().expect("relay id");
+    relay.fault(StoreFault::ReservationReleaseRefused).await;
+    let interrupted = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&refused))
+        .await;
+    assert!(interrupted.is_err());
+
+    let connection = relay.store.connection();
+    let stored = connection
+        .query_one(Statement::from_string(
+            connection.get_database_backend(),
+            "SELECT status FROM relay_relays",
+        ))
+        .await
+        .expect("relay query")
+        .expect("stored relay");
+    assert_eq!(
+        stored.try_get::<String>("", "status").expect("status"),
+        "failed"
+    );
+    assert!(relay.chain.sent().is_empty());
+    let beyond = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
+        .await;
+    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
+
+    relay.heal().await;
+    let status = relay.status(relay_id.clone()).await;
+    assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
+    assert_eq!(relay.status(relay_id).await, status);
+    relay.second_cap_fits().await;
 }

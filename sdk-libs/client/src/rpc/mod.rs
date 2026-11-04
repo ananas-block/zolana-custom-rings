@@ -319,9 +319,9 @@ pub struct AuditedMergeRecord {
     pub mint: Option<SerializablePubkey>,
     /// The record's, a tag 47 merge's sum of its inputs.
     pub amount: u64,
-    /// The real inputs of a tag 47 merge in slot order, a dummy of the list left out.
+    /// Tag 47 alone, in slot order with dummies left out.
     pub input_commitments: Vec<Hash>,
-    /// The nullifiers of a tag 57 merge its seed names no padding.
+    /// Tag 57 alone, with padding left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub real_nullifiers: Vec<Hash>,
 }
@@ -499,7 +499,6 @@ pub struct DecryptedOutput {
     /// Absent for a dummy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utxo: Option<DecryptedUtxo>,
-    /// The tag a ring output publishes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<Hash>,
 }
@@ -553,9 +552,8 @@ pub struct DecryptedKnownUtxo {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedInput {
     pub nullifier: Hash,
-    /// False on padding, the nullifier index names which note a true one spent.
+    /// False on padding.
     pub real: bool,
-    /// A default-ring note whose opening the frame carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_input: Option<DecryptedDefaultInput>,
 }

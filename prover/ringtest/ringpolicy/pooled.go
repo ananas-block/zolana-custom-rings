@@ -1,6 +1,7 @@
 package ringpolicy
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/consensys/gnark/frontend"
@@ -83,7 +84,7 @@ func FillPools(t testing.TB, policyWitness *policy.Policy, outputs []shared.Utxo
 		policyWitness.PublicAssetEntries[i] = own.add(asset, ringtest.AsBigInt(asset).Sign() != 0)
 	}
 	if len(curator.records) == 0 && !policyWitness.OwnOnly {
-		curator.add(senders[0], true)
+		curator.add(slices.Concat(senders, []frontend.Variable{0})[0], true)
 	}
 	policyWitness.OwnProof = own.fill(t, policyWitness.OwnRecords, policyWitness.OwnSubjects)
 	if !policyWitness.OwnOnly {

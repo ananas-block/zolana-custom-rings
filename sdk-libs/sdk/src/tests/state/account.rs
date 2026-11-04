@@ -8,7 +8,7 @@ async fn the_status_carries_the_pinned_policy() {
     let member = keypair(1);
     let client = Chain::ring(RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::ConfidentialEscrow)
+        ..RingSettings::new(RingMode::Confidential)
     })
     .with_registry(Registry::new(&[(&member, 1)]), &super::pipeline_rules())
     .client();

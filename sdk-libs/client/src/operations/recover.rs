@@ -68,7 +68,7 @@ pub struct RecoveredNotes {
     pub unsupported_deposits: Vec<[u8; 32]>,
     /// Verified merge mints the asset registry lacks, their notes stay unresolved.
     pub unknown_mints: BTreeSet<Address>,
-    /// Nullifiers of real inputs no note this member opened matches.
+    /// Nullifiers of real inputs no note the member opened matches.
     pub unseen_inputs: Vec<[u8; 32]>,
 }
 
@@ -171,7 +171,7 @@ struct Found {
     unknown_mints: BTreeSet<Address>,
     /// Openings a merge output resolves from, in history order.
     known: KnownUtxoIndex,
-    /// Real inputs in history order.
+    /// In history order.
     real_inputs: Vec<[u8; 32]>,
     /// Commitments of historical slots no held asset or key rebuilds.
     unopened_slots: Vec<[u8; 32]>,
@@ -301,7 +301,7 @@ impl<'a> MemberRecovery<'a> {
                 .map(|input| input.nullifier),
         );
         for error in &audited.payload_errors {
-            // Another member's unresolved historical slot leaves this recovery going on.
+            // Another member's unresolved historical slot does not stop the recovery.
             if !matches!(
                 error.kind,
                 OutputPayloadErrorKind::UnknownAsset | OutputPayloadErrorKind::EscrowPending

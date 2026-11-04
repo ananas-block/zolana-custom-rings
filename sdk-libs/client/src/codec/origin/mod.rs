@@ -46,15 +46,15 @@ pub struct RingOrigin {
     pub pool_accounts: Vec<Address>,
 }
 
-/// The auditor's half of a confirmed merge, bound to the forwarded SPP body.
+/// Bound to the forwarded SPP body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfirmedMergeDisclosure {
-    /// Tag 57, one sealed `OpeningRecord`.
+    /// Tag 57.
     Record {
         eph_pk: [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
         ciphertext: [u8; custom_ring_interface::OPENING_RECORD_LEN],
     },
-    /// Tag 47, the sealed commitment list.
+    /// Tag 47.
     Historical {
         eph_pk: [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
         ciphertext: [u8; custom_ring_interface::MERGE_KEY_CIPHERTEXT_LEN],
@@ -163,7 +163,6 @@ impl RingOrigin {
         self.ring_invoked && self.event.kind == ConfirmedEventKind::Transfer
     }
 
-    /// What the forwarding frame's tag fixes of the auditor message.
     pub fn audit_frame(&self, mode: RingMode) -> Result<AuditFrame, AuditError> {
         let frame = self
             .transact
@@ -378,7 +377,7 @@ fn confirmed_transact(
     .then(|| caller.data.clone())
 }
 
-/// The tag alone picks the reader, a body never moves a frame between them.
+/// The tag alone picks the reader.
 fn audit_frame_of(frame: &[u8], mode: RingMode) -> Result<AuditFrame, AuditError> {
     if is_legacy(frame) {
         return Err(AuditError::HistoricalFrame);
@@ -495,10 +494,12 @@ fn confirmed_deposits(
     else {
         return Ok(Vec::new());
     };
-    // Tag 31 ran before the tracking revision entered the prefix.
+    // Tag 31 ran before the tracking revision and the key capacity entered the prefix.
     let (prefix_len, historical) = match caller.data.first() {
         Some(&ring_tag::DEPOSIT) => (DepositPrefix::SIZE, false),
-        Some(&ring_tag::HISTORICAL_DEPOSIT) => (DepositPrefix::SIZE - size_of::<Revision>(), true),
+        Some(&ring_tag::HISTORICAL_DEPOSIT) => {
+            (DepositPrefix::SIZE - size_of::<Revision>() - 1, true)
+        }
         _ => return Ok(Vec::new()),
     };
     if caller.data.get(prefix_len..) != Some(source.data.as_slice()) {

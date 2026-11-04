@@ -4,9 +4,7 @@ use spr_interface::pda;
 use zolana_ring_keys::RingAddress;
 
 use crate::{
-    tests::support::{
-        history, keypair, owner_identity, ring, Chain, Registry, RingSettings, TREE_ID,
-    },
+    tests::support::{history, keypair, ring, Chain, RingSettings, TREE_ID},
     DepositAsset, DepositRecipient, RingDeposit, RingError,
 };
 
@@ -22,6 +20,7 @@ fn deposit<'a>(
         asset: DepositAsset::Sol,
         amount: 5,
         cosigner: None,
+        list_salt: None,
     }
 }
 
@@ -41,7 +40,7 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
         deposit(&payer, DepositRecipient::Confidential(address))
             .prepare(&anonymous)
             .await,
-        Err(RingError::Program(CustomRingError::AnonymousRingRefused))
+        Err(RingError::AnonymousDepositUntagged)
     ));
     assert!(matches!(
         deposit(&payer, hidden).prepare(&confidential).await,
@@ -58,31 +57,33 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
     );
 }
 
+/// A keyed note needs its owner's row, a zero key needs no row.
 #[tokio::test]
-async fn an_escrowed_ring_refuses_a_deposit_to_a_member_without_an_escrowed_key() {
-    let registered = keypair(1);
-    let stranger = keypair(2);
-    let payer = keypair(9);
-    let chain = Chain::ring(RingSettings {
-        has_policy: true,
-        ..RingSettings::new(RingMode::ConfidentialEscrow)
-    })
-    .with_registry(
-        Registry::new(&[(&registered, 1)]),
-        &crate::tests::pipeline_rules(),
-    );
-    let client = chain.client();
-    let prepared = deposit(
-        &payer,
-        DepositRecipient::Confidential(stranger.shielded_address().unwrap()),
-    )
-    .prepare(client.zolana())
-    .await
-    .unwrap();
-    let owner = owner_identity(&stranger);
+async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
+    use spr_interface::ZERO_NULLIFIER_PUBKEY;
+    let (stranger, payer) = (keypair(2), keypair(9));
+    let keyed = stranger.shielded_address().unwrap();
+    let zero = spr_keypair::ShieldedAddress {
+        nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+        ..keyed
+    };
+    let unenrolled = Chain::ring(RingSettings::new(RingMode::Confidential)).with_tracking(&[]);
+    let refused = deposit(&payer, DepositRecipient::Confidential(keyed))
+        .prepare(&unenrolled)
+        .await
+        .unwrap();
     assert!(matches!(
-        prepared.prove(&client).await,
-        Err(RingError::UnregisteredOutputKey { owner: refused }) if refused == owner
+        refused.prove_bound(&unenrolled.client()).await,
+        Err(RingError::RecipientNotEnrolled { slot_index: 0 })
+    ));
+    let enrolled = Chain::ring(RingSettings::new(RingMode::Confidential));
+    let at_zero = deposit(&payer, DepositRecipient::Confidential(zero))
+        .prepare(&enrolled)
+        .await
+        .unwrap();
+    assert!(matches!(
+        at_zero.prove_bound(&enrolled.client()).await,
+        Err(RingError::EnrolledRecipientAtZeroKey { slot_index: 0 })
     ));
 }
 
@@ -230,7 +231,7 @@ async fn a_retry_draws_a_new_note_and_a_frame_proves_once() {
     let payer = keypair(9);
     let chain = Chain::ring(RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::ConfidentialEscrow)
+        ..RingSettings::new(RingMode::Confidential)
     })
     .with_registry(
         crate::tests::support::Registry::new(&[]),
@@ -484,7 +485,21 @@ mod relay_message {
             }
             .prepare(&self.chain)
             .await?
-            .instruction(CustomRingProof::zeroed(), None)?;
+            .instruction(
+                CustomRingProof::zeroed(),
+                crate::deposit::DepositFrame {
+                    roots: crate::deposit::DepositRoots {
+                        tracking: crate::submission::BoundRoot::tracking(
+                            &*ring().require_policy(&self.chain).await?,
+                            &self.chain,
+                        )
+                        .await?,
+                        own: None,
+                        curator: None,
+                    },
+                    key_capacity: 1,
+                },
+            )?;
             let message = self.answer.message(&honest, inputs.depositor);
             *self.honest.lock().unwrap() = Some((honest, inputs));
             Ok(RelayStep::SignMessage {
@@ -677,4 +692,70 @@ mod relay_message {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
+    let member = keypair(1);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
+    let recipient = DepositRecipient::Confidential(member.shielded_address().unwrap());
+    let prepared = deposit(&payer, recipient).prepare(&chain).await.unwrap();
+    let records = prepared.disclosure.records(ring(), &chain).await.unwrap();
+    assert_eq!(records.key_capacity, 1);
+    let body = serde_json::to_value(prepared.disclosure.body(&records).unwrap()).unwrap();
+    let mut keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "amounts",
+            "assetEntries",
+            "assets",
+            "auditorPk",
+            "blindingSecrets",
+            "contextHash",
+            "count",
+            "curatorProof",
+            "curatorRecords",
+            "curatorRoot",
+            "curatorSubjects",
+            "ephSk",
+            "mintChunks",
+            "nullifierPks",
+            "outputEntries",
+            "ownProof",
+            "ownRecords",
+            "ownRoot",
+            "ownSubjects",
+            "ownerEntries",
+            "ownerKeys",
+            "ownerPkHashes",
+            "policyHash",
+            "policyLen",
+            "publicAmounts",
+            "publicAssetEntries",
+            "publicAssets",
+            "publicGross",
+            "publicInputHash",
+            "ringId",
+            "rowEntries",
+            "rules",
+            "salted",
+            "senderEntries",
+            "sources",
+            "trackingProof",
+            "trackingRecords",
+            "trackingRoot",
+            "trackingSubjects",
+            "withdrawalCount",
+            "withdrawalHash",
+            "withdrawals",
+        ]
+    );
 }

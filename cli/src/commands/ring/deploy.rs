@@ -471,11 +471,12 @@ mod tests {
         assert!(ensure_policy_compatible(program, Some(&audit_only)).is_ok());
         let rules = zolana_ring_policy::RuleTable::builder().build();
         registry
-            .set_policy(
-                [bytemuck::Zeroable::zeroed(); N_SOURCE_SLOTS],
-                rules.encode(),
-                0,
-            )
+            .set_policy(custom_ring_interface::PolicyUpdate {
+                sources: [bytemuck::Zeroable::zeroed(); N_SOURCE_SLOTS],
+                salted_lists: zolana_ring_policy::ListSet::EMPTY,
+                rules: rules.encode(),
+                slot: 0,
+            })
             .unwrap();
         let pinned = account(program, bytemuck::bytes_of(&*registry));
         assert!(ensure_policy_compatible(program, Some(&pinned)).is_ok());

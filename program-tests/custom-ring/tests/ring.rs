@@ -34,6 +34,9 @@ mod sanity;
 #[path = "ring/sanity_deposits.rs"]
 mod sanity_deposits;
 
+#[path = "ring/forester_stall.rs"]
+mod forester_stall;
+
 #[path = "ring/sanity_mixed_owners.rs"]
 mod sanity_mixed_owners;
 
@@ -249,6 +252,7 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
+            list_salt: None,
         };
         let next = deposit
             .viewing_history()?

@@ -4,15 +4,15 @@ import { describe, expect, it } from "vitest";
 
 import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 
-import { ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
+import { ringFrame, ringInstructionData } from "../../helpers/ring-frame-v3.js";
 import { RingError } from "../../../src/protocol/error.js";
 import {
   ringTransferStatement,
   signerBinding,
   transferStatementElements,
   type TransferBinding,
-} from "../../../src/protocol/proof/statement.js";
-import { RingTransactData, type RingOutput } from "../../../src/protocol/transaction/transact.js";
+} from "../../../src/protocol/historical/v3/statement.js";
+import { RingTransactData, type RingOutput } from "../../../src/protocol/historical/v3/frame.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { RECIPIENT_BODY_LEN } from "../../../src/protocol/codec/anonymous-delivery.js";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
@@ -21,7 +21,7 @@ import {
   mergeDisclosureFieldCount,
   readRingMergeDisclosure,
   writeRingMergeDisclosure,
-} from "../../../src/crypto/audit/merge-disclosure.js";
+} from "../../../src/protocol/historical/v3/merge-disclosure.js";
 
 const ZERO = new Uint8Array(32) as Bytes32;
 const VECTORS = new URL("../../../../../test-vectors/", import.meta.url);
@@ -57,9 +57,9 @@ const encoded = (frame: RingTransactData): Uint8Array => RingTransactData.encode
 
 describe("transfer frame", () => {
   it("uses the new tags and carries the published count after the input byte", () => {
-    expect(RingInstructionTag.transfer).toBe(45);
-    expect(RingInstructionTag.authorityTransfer).toBe(46);
-    expect(RingInstructionTag.merge).toBe(47);
+    expect(RingInstructionTag.historicalTransferV3).toBe(45);
+    expect(RingInstructionTag.historicalAuthorityTransferV3).toBe(46);
+    expect(RingInstructionTag.historicalMergeV3).toBe(47);
     const frame = ringFrame({ rail: "confidential", inputs: 2, outputs: 4 });
     expect(ringInstructionData(frame)[0]).toBe(45);
     expect(encoded(frame)[3]).toBe(4);

@@ -1,9 +1,6 @@
 //! The co-signer a ring operation carries, decided by the program's own rule.
 
-use custom_ring_interface::{
-    cosign::{CoSignDemand, CoSignRequirement},
-    CustomRingError,
-};
+use custom_ring_interface::{cosign::CoSignDemand, CustomRingError};
 use solana_address::Address;
 use solana_instruction::AccountMeta;
 use spr_client::AsyncRpc;
@@ -14,29 +11,21 @@ use crate::{CustomRing, CustomRingConfig, RingError};
 pub(crate) struct CoSignerChoice<'a> {
     pub ring: CustomRing,
     pub config: &'a CustomRingConfig,
-    pub demand: &'a CoSignDemand,
+    pub demand: CoSignDemand,
     /// The caller's co-signer, read only when the demand needs one.
     pub supplied: Option<Address>,
 }
 
 impl CoSignerChoice<'_> {
-    /// The supplied signer with its record unread, `None` when nothing is demanded.
-    pub fn unchecked(&self) -> Result<Option<(CoSignRequirement, Address)>, RingError> {
-        let Some(requirement) = self.demand.requirement(self.config.account())? else {
-            return Ok(None);
-        };
-        let signer = self.supplied.ok_or(CustomRingError::MissingCoSigner)?;
-        Ok(Some((requirement, signer)))
-    }
-
-    /// The supplied signer, its record covering the demand.
+    /// One record holds every demanded class, `None` when nothing is demanded.
     pub async fn resolve(
         self,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Option<Address>, RingError> {
-        let Some((requirement, signer)) = self.unchecked()? else {
+        let Some(requirement) = self.demand.requirement(self.config.account()) else {
             return Ok(None);
         };
+        let signer = self.supplied.ok_or(CustomRingError::MissingCoSigner)?;
         let record = self
             .ring
             .co_signer(rpc, &signer)

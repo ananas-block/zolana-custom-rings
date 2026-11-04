@@ -11,7 +11,7 @@ import {
   encryptMergeOutput,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { ShieldedKeypair, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
@@ -21,7 +21,7 @@ import {
   scanCreatedRingUtxos,
 } from "../../../src/operations/workflow/created-utxos.js";
 import { sealRingDepositOpenings } from "../../../src/proof/deposit-audit.js";
-import { sealRingMergeDisclosure } from "../../../src/crypto/audit/merge-disclosure.js";
+import { sealRingMergeDisclosure } from "../../../src/protocol/historical/v3/merge-disclosure.js";
 import {
   ConfirmedDeposit,
   type TransactionOrigin,
@@ -324,8 +324,16 @@ describe("createdRingUtxos", () => {
         proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
       };
       for (const confirmed of [
-        { kind: "merge", transaction: merge, disclosure },
-        { kind: "merge", transaction: merge },
+        { kind: "historicalMergeV3", transaction: merge, disclosure },
+        {
+          kind: "merge",
+          transaction: merge,
+          sealedRecord: {
+            ephemeralPublicKey: new Uint8Array(33) as Bytes33,
+            ciphertext: new Uint8Array(144),
+          },
+          authority: 0,
+        },
         {
           kind: "historicalMerge",
           transaction: merge,

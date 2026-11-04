@@ -1,23 +1,23 @@
-//! Deposits whose proof binds the SPP data and the record of any escrowed owner or screened asset.
+//! The proof binds the SPP data, the owner's tracking row and any screened record.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use custom_ring_interface::{
     cosign::CoSignDemand, domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets,
-    tag, CoSignScope, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
-    DepositPublicInput, DepositRegistry, DepositedAsset, InstructionTag, RingDepositAuditCapsule,
-    RingMode, RingPolicy,
+    tag, AuditRecord, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
+    DepositPublicInput, DepositRegistry, DepositSubjects, DepositedAsset, InstructionTag,
+    OpeningRecord, RecordKind, RingDepositAuditCapsule, RingMode,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{AsyncRpc, ClientError};
-use spr_hasher::primitives::right_align;
+use spr_hasher::primitives::{pack_be, right_align};
 use spr_indexer_api::SerializablePubkey;
 use spr_interface::{
     instruction::instruction_data::deposit::RingDepositIxDataRef, pda, state::SplAssetRegistry,
-    PROGRAM_ID_PUBKEY,
+    N_PUBLIC_SLOTS, PROGRAM_ID_PUBKEY,
 };
 use spr_keypair::{
     random_blinding, viewing_key::ViewTag, Curve, ShieldedAddress, X25519Keypair, X25519Pubkey,
@@ -26,23 +26,31 @@ use spr_program::instruction::{DepositAsset, RingAssetDeposit};
 use spr_transaction::{owner_utxo_hash, Data, Mint, Utxo, SOL_ASSET_ID, SOL_MINT};
 use zeroize::Zeroizing;
 use zolana_ring_client::{
-    rpc::{PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayIntent, RelayQuote},
-    seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, DepositOpening,
-    ViewingHistory,
+    records::RecordPoolRead,
+    rpc::{
+        PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayIntent, RelayQuote,
+        SubjectListSalt,
+    },
+    seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, ViewingHistory,
 };
 use zolana_ring_keys::RingAddress;
-use zolana_ring_policy::SourceMap;
+use zolana_ring_policy::{EncodedRuleTable, SourceMap};
 use zolana_ring_transaction::RingDepositPlaintext;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     co_signer::CoSignerChoice,
-    pipeline::{HiddenOwner, RingSender},
+    pipeline::{
+        pool_at_width, HiddenOwner, KnownSalts, OwnerQuery, RecordPlan, RingSender, SourceGates,
+    },
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
-    records::{EscrowOpening, EscrowRead, MemberRead},
+    records::{check_output_key, PoolRead, TrackingPoolRead, TrackingRead},
     relay_message::{ExpectedDeposit, ExpectedMessage},
-    request::{self, DepositRequest, MemberOpening, PolicyTable, RecordOpeningRequest},
+    request::{
+        self, DepositRequest, MintChunks, OwnerEntry, PolicyParams, PolicyTable, PoolEntry,
+        RecordPools, TrackingParams,
+    },
     submission::{check_transaction_size, send_budget, BoundPolicy, BoundRoot},
     CustomRing, CustomRingConfig, PinnedPolicy, PreparedRelay, RingError, RingSubmission,
     SettledSubmission,
@@ -72,6 +80,7 @@ struct TaggedRecipient {
     address: ShieldedAddress,
     view_tag: [u8; 32],
     history: Option<ViewingHistory>,
+    list_salt: Option<[u8; 32]>,
 }
 
 impl DepositRecipient<'_> {
@@ -81,6 +90,7 @@ impl DepositRecipient<'_> {
                 address,
                 view_tag: address.viewing_pubkey.u(),
                 history: None,
+                list_salt: None,
             },
             Self::Anonymous { keys, history } => {
                 let AdvancedTag { tag, history } = history.sender_tag(keys)?;
@@ -88,6 +98,7 @@ impl DepositRecipient<'_> {
                     address: keys.address()?,
                     view_tag: tag,
                     history: Some(history),
+                    list_salt: None,
                 }
             }
             Self::AnonymousPayment { to, deposit_tag } => {
@@ -102,6 +113,7 @@ impl DepositRecipient<'_> {
                     // The viewing key as a tag would link every deposit to one recipient.
                     view_tag: deposit_tag.ok_or(RingError::DepositBootstrapTag)?,
                     history: None,
+                    list_salt: Some(to.list_salt),
                 }
             }
         })
@@ -119,6 +131,8 @@ pub struct RingDeposit<'a> {
     pub amount: u64,
     /// Signs when a record covers deposits, the record must be its own.
     pub cosigner: Option<&'a (dyn Signer + Sync)>,
+    /// A salted list refuses an enrolled recipient with none.
+    pub list_salt: Option<[u8; 32]>,
 }
 
 pub struct RingDepositReceipt {
@@ -154,6 +168,7 @@ struct DepositReseal {
 struct NoteTerms {
     address: ShieldedAddress,
     owner: DisclosedOwner,
+    list_salt: [u8; 32],
     view_tag: [u8; 32],
     asset: DepositAsset,
     amount: u64,
@@ -161,7 +176,7 @@ struct NoteTerms {
 
 pub(crate) struct BoundDeposit {
     pub instruction: Instruction,
-    /// Empty off an escrow or policy ring.
+    /// The tracking root, a policy ring's own and curator roots beside it.
     pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
 }
@@ -180,35 +195,38 @@ struct DepositDisclosure {
     owner_utxo_hash: [u8; 32],
     owner_pk_hash: [u8; 32],
     nullifier_pk: [u8; 32],
+    /// Zero when unknown.
+    list_salt: [u8; 32],
     blinding_secret: Zeroizing<[u8; 32]>,
     encryption: DepositEncryption,
     auditor: X25519Pubkey,
-    /// The recipient's record must escrow the key the note uses.
-    key_escrow: bool,
-    has_policy: bool,
+    mint: [u8; 32],
     asset: DepositedAsset,
 }
 
 struct DepositRecords {
-    root: BoundRoot,
-    escrowed: Option<EscrowOpening>,
+    ring_id: [u8; 32],
+    tracking: BoundRoot,
+    tracking_pool: TrackingPoolRead,
+    key_capacity: u8,
+    owner_entry: OwnerEntry,
+    asset_entry: PoolEntry,
+    rules: EncodedRuleTable,
+    sources: SourceMap,
     policy: Option<DepositScreen>,
 }
 
 struct DepositScreen {
-    policy: Box<RingPolicy>,
-    sources: SourceMap,
+    root: BoundRoot,
+    pool: RecordPoolRead,
     policy_hash: [u8; 32],
-    asset: MemberOpening,
-    owner: MemberOpening,
     /// `None` without a curator source.
     curator: Option<CuratorScreen>,
 }
 
 struct CuratorScreen {
     root: BoundRoot,
-    asset: MemberOpening,
-    owner: MemberOpening,
+    pool: RecordPoolRead,
 }
 
 impl RingDeposit<'_> {
@@ -271,6 +289,7 @@ impl RingDeposit<'_> {
             tree: self.tree,
             depositor,
             recipient: note.address,
+            list_salt: note.list_salt,
             asset: note.deposit.asset,
             amount: note.deposit.amount,
             view_tag: note.deposit.view_tag,
@@ -295,7 +314,7 @@ impl RingDeposit<'_> {
         let anonymous = config.mode == RingMode::Anonymous;
         if anonymous == matches!(self.recipient, DepositRecipient::Confidential(_)) {
             return Err(match anonymous {
-                true => CustomRingError::AnonymousRingRefused.into(),
+                true => RingError::AnonymousDepositUntagged,
                 false => RingError::NotAnonymousRing,
             });
         }
@@ -303,9 +322,11 @@ impl RingDeposit<'_> {
             address,
             view_tag,
             history,
+            list_salt,
         } = self.recipient.tagged(self.ring)?;
         let note = NoteTerms {
             owner: disclosed_owner(config.mode, &address)?,
+            list_salt: list_salt.or(self.list_salt).unwrap_or_default(),
             address,
             view_tag,
             asset: self.asset,
@@ -381,10 +402,15 @@ impl NoteTerms {
             .encrypt(&self.address.viewing_pubkey)?,
         };
         let encryption = seal_deposits(
-            &[DepositOpening {
-                owner_hash,
-                blinding: Zeroizing::new(blinding),
-                owner_key: self.owner.key(),
+            &[OpeningRecord {
+                record: AuditRecord {
+                    kind: RecordKind::Ring,
+                    amount: self.amount,
+                    owner_key: self.owner.key(),
+                    mint: self.asset.mint().to_bytes(),
+                    nullifier_pk: self.address.nullifier_pubkey,
+                },
+                secret: blinding,
             }],
             auditor,
         )?;
@@ -398,6 +424,7 @@ impl NoteTerms {
         Ok(SealedNote {
             address: self.address,
             owner: self.owner,
+            list_salt: self.list_salt,
             blinding_secret,
             blinding,
             deposit,
@@ -439,9 +466,9 @@ impl PreparedRingDeposit {
                 owner: self.disclosure.owner,
                 owner_pk_hash: self.disclosure.owner_pk_hash,
                 nullifier_pk: self.disclosure.nullifier_pk,
+                list_salt: self.disclosure.list_salt,
                 auditor: self.disclosure.auditor,
-                key_escrow: self.disclosure.key_escrow,
-                has_policy: self.disclosure.has_policy,
+                mint: self.disclosure.mint,
                 asset: self.disclosure.asset,
             },
             spp,
@@ -480,7 +507,7 @@ impl PreparedRingDeposit {
     }
 
     pub fn co_sign_demand(&self) -> CoSignDemand {
-        deposit_demand()
+        CoSignDemand::DEPOSIT
     }
 
     pub fn viewing_history(&self) -> Option<&ViewingHistory> {
@@ -504,33 +531,34 @@ impl PreparedRingDeposit {
         }
         let disclosure = &self.disclosure;
         retry_projection_lag(|| async {
-            let records = match disclosure.key_escrow || disclosure.has_policy {
-                true => Some(disclosure.records(self.ring, client.zolana()).await?),
-                false => None,
+            let records = disclosure.records(self.ring, client.zolana()).await?;
+            let body = disclosure.body(&records)?;
+            let roots = records.roots();
+            let frame = DepositFrame {
+                roots,
+                key_capacity: records.key_capacity,
             };
-            let body = disclosure.body(records.as_ref())?;
-            self.check_size(records.as_ref().map(DepositRecords::roots))?;
-            let proof = RingRequest::new(RingCircuit::deposit(body.count as u8), &*body)?
+            self.check_size(frame)?;
+            let circuit = RingCircuit::Deposit {
+                capacity: frame.key_capacity,
+            };
+            let proof = RingRequest::new(circuit, &*body)?
                 .prove(client, body.public_input_hash)
                 .await?;
-            let roots = records.as_ref().map(DepositRecords::roots);
             Ok(BoundDeposit {
-                instruction: self.instruction(to_instruction_proof(proof)?, roots)?,
-                roots: roots.map_or_else(Vec::new, |roots| roots.bound().collect()),
-                policy: records
-                    .as_ref()
-                    .and_then(|records| records.policy.as_ref())
-                    .map(|policy| BoundPolicy {
-                        ring: self.ring,
-                        hash: policy.policy_hash,
-                    }),
+                instruction: self.instruction(to_instruction_proof(proof)?, frame)?,
+                roots: roots.bound().collect(),
+                policy: records.policy.as_ref().map(|policy| BoundPolicy {
+                    ring: self.ring,
+                    hash: policy.policy_hash,
+                }),
             })
         })
         .await
     }
 
     /// Sized as the proven instruction, the proof is of fixed width.
-    fn check_size(&self, roots: Option<DepositRoots>) -> Result<(), RingError> {
+    fn check_size(&self, frame: DepositFrame) -> Result<(), RingError> {
         let payer = self
             .spp
             .accounts
@@ -538,7 +566,7 @@ impl PreparedRingDeposit {
             .ok_or(CustomRingError::InvalidInstructionData)?;
         check_transaction_size(
             &payer.pubkey,
-            &self.instruction(bytemuck::Zeroable::zeroed(), roots)?,
+            &self.instruction(bytemuck::Zeroable::zeroed(), frame)?,
             send_budget(InstructionTag::Deposit, self.priority_fee),
         )
     }
@@ -547,23 +575,28 @@ impl PreparedRingDeposit {
     fn instruction(
         &self,
         proof: CustomRingProof,
-        roots: Option<DepositRoots>,
+        frame: DepositFrame,
     ) -> Result<Instruction, RingError> {
+        let DepositFrame {
+            roots,
+            key_capacity,
+        } = frame;
         let mut instruction = self.spp.clone();
         let prefix = DepositPrefix {
             tag: tag::DEPOSIT,
+            key_capacity,
             proof,
-            own_revision: roots.map_or_else(Default::default, |roots| roots.own.revision),
+            tracking_revision: roots.tracking.revision,
+            own_revision: roots.own.map_or_else(Default::default, |own| own.revision),
             curator_revision: roots
-                .and_then(|roots| roots.curator)
+                .curator
                 .map_or_else(Default::default, |curator| curator.revision),
         };
         instruction.data = [bytemuck::bytes_of(&prefix), &instruction.data].concat();
         let mut accounts = vec![AccountMeta::new_readonly(self.ring.policy_pda(), false)];
         accounts.extend(
             roots
-                .into_iter()
-                .flat_map(DepositRoots::bound)
+                .bound()
                 .map(|root| AccountMeta::new_readonly(root.registry, false)),
         );
         accounts.extend(
@@ -577,21 +610,33 @@ impl PreparedRingDeposit {
 }
 
 #[derive(Clone, Copy)]
-struct DepositRoots {
-    own: BoundRoot,
-    curator: Option<BoundRoot>,
+struct DepositFrame {
+    roots: DepositRoots,
+    key_capacity: u8,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct DepositRoots {
+    pub tracking: BoundRoot,
+    pub own: Option<BoundRoot>,
+    pub curator: Option<BoundRoot>,
 }
 
 impl DepositRoots {
+    /// The program's account order, `RingPolicy::root_registries`.
     fn bound(self) -> impl Iterator<Item = BoundRoot> {
-        core::iter::once(self.own).chain(self.curator)
+        self.own
+            .into_iter()
+            .chain(self.curator)
+            .chain([self.tracking])
     }
 }
 
 impl DepositRecords {
     fn roots(&self) -> DepositRoots {
         DepositRoots {
-            own: self.root,
+            tracking: self.tracking,
+            own: self.policy.as_ref().map(|policy| policy.root),
             curator: self.curator().map(|curator| curator.root),
         }
     }
@@ -621,6 +666,7 @@ struct SealedDeposit {
 struct SealedNote {
     address: ShieldedAddress,
     owner: DisclosedOwner,
+    list_salt: [u8; 32],
     blinding_secret: Zeroizing<[u8; 32]>,
     blinding: [u8; 32],
     deposit: RingAssetDeposit,
@@ -673,6 +719,7 @@ impl RelayedDeposit<'_> {
         let note = SealedNote {
             address,
             owner,
+            list_salt: inputs.list_salt,
             blinding_secret: inputs.blinding_secret.clone(),
             blinding,
             deposit: RingAssetDeposit {
@@ -747,6 +794,7 @@ impl DepositAssembly<'_> {
             terms: NoteTerms {
                 address: note.address,
                 owner: note.owner,
+                list_salt: note.list_salt,
                 view_tag: note.deposit.view_tag,
                 asset: note.deposit.asset,
                 amount: note.deposit.amount,
@@ -773,7 +821,7 @@ impl DepositAssembly<'_> {
         let cosigner = CoSignerChoice {
             ring,
             config,
-            demand: &deposit_demand(),
+            demand: CoSignDemand::DEPOSIT,
             supplied: co_signer,
         }
         .resolve(rpc)
@@ -802,11 +850,11 @@ impl DepositAssembly<'_> {
                 owner_utxo_hash: note.deposit.owner_utxo_hash,
                 owner_pk_hash: address.signing_pubkey.owner_proof_input_hash()?,
                 nullifier_pk: address.nullifier_pubkey,
+                list_salt: note.list_salt,
                 blinding_secret: note.blinding_secret,
                 encryption: note.encryption,
                 auditor: config.auditor_pubkey,
-                key_escrow: config.mode == RingMode::ConfidentialEscrow,
-                has_policy: config.account().has_policy(),
+                mint: note.deposit.asset.mint().to_bytes(),
                 asset,
             },
             depositor,
@@ -818,13 +866,6 @@ impl DepositAssembly<'_> {
     }
 }
 
-fn deposit_demand() -> CoSignDemand {
-    CoSignDemand {
-        approval_required: false,
-        classes: CoSignScope::DEPOSITS,
-    }
-}
-
 /// An anonymous ring spends only through the hidden Ed25519 proof.
 fn disclosed_owner(mode: RingMode, address: &ShieldedAddress) -> Result<DisclosedOwner, RingError> {
     let owner = &address.signing_pubkey;
@@ -833,9 +874,7 @@ fn disclosed_owner(mode: RingMode, address: &ShieldedAddress) -> Result<Disclose
             Err(RingError::AnonymousRecipient)
         }
         RingMode::Anonymous => Ok(DisclosedOwner::Anonymous(owner.as_ed25519()?)),
-        RingMode::Confidential | RingMode::ConfidentialEscrow => {
-            Ok(DisclosedOwner::Confidential(request::owner_key(owner)?))
-        }
+        RingMode::Confidential => Ok(DisclosedOwner::Confidential(request::owner_key(owner)?)),
     }
 }
 
@@ -846,74 +885,117 @@ impl DepositDisclosure {
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
     ) -> Result<DepositRecords, RingError> {
         let policy = ring.require_policy(rpc).await?;
-        let root = BoundRoot::own(&policy, rpc).await?;
-        let escrowed = match self.key_escrow {
-            true => Some(self.record(rpc, root).await?),
+        let tracking = BoundRoot::tracking(&policy, rpc).await?;
+        let owner = self.owner_pk_hash;
+        let members = core::slice::from_ref(&owner);
+        let narrow_pool = TrackingRead {
+            root: tracking,
+            members,
+            openings: 1,
+        }
+        .read(rpc)
+        .await?;
+        let row = narrow_pool.record(&owner);
+        check_output_key(row, &self.nullifier_pk, 0)?;
+        let pinned = match policy.written_policy_hash() {
+            Some(_) => Some(PinnedPolicy::of(&policy)?),
+            None => None,
+        };
+        let gates = pinned.as_ref().map_or_else(SourceGates::default, |pinned| {
+            SourceGates::of(&pinned.sources)
+        });
+        let mut plan = RecordPlan::new(gates);
+        let salted = match gates.any_salted() {
+            true => KnownSalts::new(vec![SubjectListSalt {
+                member: owner,
+                list_salt: self.list_salt,
+            }])
+            .salted_key(&owner, row)?,
             false => None,
         };
-        let screen = match policy.written_policy_hash() {
-            Some(_) => {
-                let pinned = PinnedPolicy::of(&policy)?;
-                let asset = self.member_opening(rpc, root, self.asset.asset).await?;
-                let owner = self.member_opening(rpc, root, self.owner_pk_hash).await?;
+        let (owner_entry, asset_entry) = match pinned {
+            Some(_) => (
+                plan.owner(OwnerQuery {
+                    member: owner,
+                    tracking: 0,
+                    salted,
+                }),
+                plan.asset(self.asset.asset),
+            ),
+            None => (OwnerEntry::default(), PoolEntry::default()),
+        };
+        let key_capacity = DepositSubjects {
+            slots: 1,
+            recipients: 1,
+            assets: 1,
+            salted_keys: usize::from(plan.has_salted_key()),
+        }
+        .key_capacity()
+        .ok_or(RingError::DepositUnkeyed)?;
+        let width = DepositSubjects::pool_width(key_capacity);
+        let screen = match &pinned {
+            Some(pinned) => {
+                let root = BoundRoot::own(&policy, rpc).await?;
+                let pool = PoolRead {
+                    root,
+                    members: plan.own.opened(),
+                    openings: width,
+                }
+                .read(rpc)
+                .await?;
                 let curator = match BoundRoot::curator(&policy, rpc).await? {
                     Some(root) => Some(CuratorScreen {
                         root,
-                        asset: self.member_opening(rpc, root, self.asset.asset).await?,
-                        owner: self.member_opening(rpc, root, self.owner_pk_hash).await?,
+                        pool: PoolRead {
+                            root,
+                            members: plan.curator.opened(),
+                            openings: width,
+                        }
+                        .read(rpc)
+                        .await?,
                     }),
                     None => None,
                 };
                 Some(DepositScreen {
-                    sources: pinned.sources,
+                    root,
+                    pool,
                     policy_hash: pinned.policy_hash,
-                    asset,
-                    owner,
                     curator,
-                    policy,
                 })
             }
             None => None,
         };
+        let tracking_pool = match key_capacity {
+            1 => narrow_pool,
+            capacity => {
+                TrackingRead {
+                    root: tracking,
+                    members,
+                    openings: usize::from(capacity),
+                }
+                .read(rpc)
+                .await?
+            }
+        };
         Ok(DepositRecords {
-            root,
-            escrowed,
+            ring_id: ring.ring_id()?,
+            tracking,
+            tracking_pool,
+            key_capacity,
+            owner_entry,
+            asset_entry,
+            rules: match screen {
+                Some(_) => policy.rules,
+                None => EncodedRuleTable::default(),
+            },
+            sources: pinned.map_or_else(SourceMap::default, |pinned| pinned.sources),
             policy: screen,
         })
     }
 
-    async fn member_opening(
-        &self,
-        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-        root: BoundRoot,
-        member: [u8; 32],
-    ) -> Result<MemberOpening, RingError> {
-        let read = MemberRead { root, member }.read(rpc).await?;
-        Ok(MemberOpening::from(&read.opening))
-    }
-
-    /// The recipient's record under `root`, it must escrow the deposited key.
-    async fn record(
-        &self,
-        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-        root: BoundRoot,
-    ) -> Result<EscrowOpening, RingError> {
-        EscrowRead {
-            root,
-            owner: self.owner_pk_hash,
-            nullifier_pk: self.nullifier_pk,
-        }
-        .read(rpc)
-        .await
-    }
-
-    fn body<'a>(
-        &self,
-        records: Option<&'a DepositRecords>,
-    ) -> Result<Box<DepositRequest<'a>>, RingError> {
-        let record = records.and_then(|records| records.escrowed.as_ref());
-        let policy = records.and_then(|records| records.policy.as_ref());
-        let curator = records.and_then(DepositRecords::curator);
+    fn body<'a>(&self, records: &'a DepositRecords) -> Result<Box<DepositRequest<'a>>, RingError> {
+        let policy = records.policy.as_ref();
+        let curator = records.curator();
         let public_input_hash = DepositPublicInput {
             context_hash: &self.context_hash,
             anonymous: self.owner.is_anonymous(),
@@ -922,44 +1004,71 @@ impl DepositDisclosure {
             assets: &[self.asset],
             auditor_pk: self.auditor.as_bytes(),
             eph_pk: self.encryption.ephemeral_pk.as_bytes(),
-            registry: records.map(|records| DepositRegistry {
-                own_root: &records.root.root,
+            tracking_root: &records.tracking.root,
+            registry: policy.map(|policy| DepositRegistry {
+                own_root: &policy.root.root,
                 curator_root: curator.map(|curator| &curator.root.root),
-                key_escrow: self.key_escrow,
-                policy_hash: policy.map(|policy| &policy.policy_hash),
+                policy_hash: Some(&policy.policy_hash),
             }),
         }
         .hash()?;
-        let first = |value: [u8; 32]| [value];
-        let mut members: [Option<RecordOpeningRequest>; 1] = Default::default();
-        members[0] = record.map(|record| record.opening.clone());
+        let capacity = usize::from(records.key_capacity);
+        let slotted = |value: [u8; 32]| {
+            let mut slots = vec![[0; 32]; capacity];
+            slots[0] = value;
+            slots
+        };
+        let width = DepositSubjects::pool_width(records.key_capacity);
+        let mut owner_entries = vec![OwnerEntry::default(); capacity];
+        owner_entries[0] = records.owner_entry.clone();
+        let mut asset_entries = vec![PoolEntry::default(); capacity];
+        asset_entries[0] = records.asset_entry.clone();
+        let mut mint_chunks = vec![MintChunks(pack_be::<32, 2>(&[0; 32])); capacity];
+        mint_chunks[0] = MintChunks(pack_be::<32, 2>(&self.mint));
         Ok(Box::new(DepositRequest {
             public_input_hash,
             context_hash: self.context_hash,
             count: 1,
             anonymous: self.owner.is_anonymous(),
-            owner_pk_hashes: first(self.owner_pk_hash),
-            owner_keys: first(self.owner.key()),
-            nullifier_pks: first(self.nullifier_pk),
-            blinding_secrets: Zeroizing::new(first(*self.blinding_secret)),
-            ct_hashes: first(record.map_or([0; 32], |record| record.ct_hash)),
-            members,
+            owner_pk_hashes: slotted(self.owner_pk_hash),
+            owner_keys: slotted(self.owner.key()),
+            nullifier_pks: slotted(self.nullifier_pk),
+            blinding_secrets: Zeroizing::new(slotted(*self.blinding_secret)),
             eph_sk: self.encryption.ephemeral_sk.clone(),
             auditor_pk: self.auditor,
-            key_escrow: record.is_some(),
-            member_registry_root: records.map_or([0; 32], |records| records.root.root),
-            curator_root: curator.map_or([0; 32], |curator| curator.root.root),
-            policy_hash: policy.map_or([0; 32], |policy| policy.policy_hash),
-            assets: first(self.asset.asset),
-            amounts: first(right_align(&self.asset.amount.to_be_bytes())),
-            table: policy.map(|policy| PolicyTable {
-                rules: &policy.policy.rules,
-                sources: &policy.sources,
-            }),
-            asset_records: [policy.map(|policy| policy.asset.clone())],
-            owner_records: [policy.map(|policy| policy.owner.clone())],
-            curator_asset_records: [curator.map(|curator| curator.asset.clone())],
-            curator_owner_records: [curator.map(|curator| curator.owner.clone())],
+            assets: slotted(self.asset.asset),
+            amounts: slotted(right_align(&self.asset.amount.to_be_bytes())),
+            mint_chunks,
+            tracking: TrackingParams {
+                tracking_root: records.tracking.root,
+                pool: records.tracking_pool.pool().clone().padded(capacity)?,
+                row_entries: Vec::new(),
+                output_entries: vec![0; capacity],
+            },
+            policy: PolicyParams {
+                withdrawal_count: 0,
+                withdrawal_hash: [0; 32],
+                withdrawals: Vec::new(),
+                policy_hash: policy.map_or([0; 32], |policy| policy.policy_hash),
+                ring_id: records.ring_id,
+                own_root: policy.map_or([0; 32], |policy| policy.root.root),
+                curator_root: curator.map_or([0; 32], |curator| curator.root.root),
+                public_assets: vec![[0; 32]; N_PUBLIC_SLOTS],
+                public_amounts: vec![[0; 32]; N_PUBLIC_SLOTS],
+                public_gross: vec![[0; 32]; N_PUBLIC_SLOTS],
+                table: PolicyTable {
+                    rules: &records.rules,
+                    sources: &records.sources,
+                },
+                pools: RecordPools {
+                    own: pool_at_width(policy.map(|policy| &policy.pool), width)?,
+                    curator: pool_at_width(curator.map(|curator| &curator.pool), width)?,
+                },
+                sender_entries: Vec::new(),
+                owner_entries,
+                asset_entries,
+                public_asset_entries: Vec::new(),
+            },
         }))
     }
 }

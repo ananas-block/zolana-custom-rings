@@ -99,7 +99,7 @@ impl<R: Rail> WalletRelay<'_, R> {
                 owner_signature,
                 token_account_setup,
             },
-            RingDelivery::Delivered { .. } => RelayIntent::Confidential {
+            RingDelivery::Delivered => RelayIntent::Confidential {
                 proof_inputs: encode(RelayRail::Confidential)?,
                 owner_signature,
                 token_account_setup,
@@ -146,6 +146,7 @@ impl Sealed<'_> {
             interface_transfer_accounts: staged.interface_transfer_accounts.clone(),
             blinding_seed: inputs.blinding_seed,
             output_tree_id: inputs.output_tree_id,
+            list_salts: staged.list_salts.clone(),
         }
     }
 }

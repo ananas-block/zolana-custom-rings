@@ -1,14 +1,18 @@
 use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Duration};
 
 use custom_ring_interface::RingMode;
+use custom_ring_interface::{REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
-use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_hasher::primitives::hash_bytes;
+use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
-use spr_transaction::{instructions::transact::canonical_shape, ShieldedTransaction};
+use spr_transaction::{
+    instructions::{merge::MergeSeed, transact::canonical_shape},
+    ShieldedTransaction,
+};
 use zolana_ring_client::{
     auditor_view_tag, confirmed_merge, historical_evidence,
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream, PageEnd},
@@ -28,8 +32,6 @@ use zolana_ring_client::{
     KnownUtxo, MergeDisclosed, MergeInput, MergeLedger, MergeRecordOutput, ReaderKey, RingOrigin,
     RowDisposition, SealedNullifierKey, TransactionAudit, UtxoOwner,
 };
-use zolana_ring_keys::RingMergeSeed;
-use custom_ring_interface::{REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN};
 use zolana_ring_indexer::{
     rpc::{RingRecordPathView, MAX_RING_MEMBER_PAGE_LIMIT},
     tracking::{GetTrackingRecordsRequest, RingIndexedTrackingRecordView},
@@ -38,6 +40,7 @@ use zolana_ring_member_registry::{OpeningCheck, TrackingOpening, TrackingPath, T
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::{
     historical::{assign_prefixed_inputs, InputPrefix, PrefixAssignment},
+    RingAssets,
 };
 
 use crate::{
@@ -65,8 +68,6 @@ const MAX_RETRIED_FRAMES: usize = 16;
 /// A retried slot holds few frames, the next pass reads on.
 const MAX_RETRY_PAGES: usize = 4;
 pub(crate) const ASSET_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-/// A delivered output of a mint no registration names misses on every read, the floor bounds the registry reads it causes.
-pub(crate) const ASSET_MISS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The attested limit is what the reader signed, absent for the default page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,10 +273,16 @@ impl<S: TransactionSource> AuditService<S> {
             .grant(&request.auth, &attestation, Some(wallet))
             .await?;
         grant.spend().await?;
+        let enrollment = self
+            .shared
+            .source
+            .tracking_enrollment(self.ring, wallet)
+            .await?;
         Ok(self
             .shared
             .store(self.ring)
             .wallet_status(WalletStatusQuery {
+                enrollment,
                 wallet,
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,
@@ -737,11 +744,15 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(owners)
     }
 
-    fn audit(&self, bound: BoundTransaction<'_>) -> Result<AuditedTransaction, AuditError> {
+    fn audit(
+        &self,
+        bound: BoundTransaction<'_>,
+        assets: &RingAssets,
+    ) -> Result<AuditedTransaction, AuditError> {
         let trees = bound.origin.event.input_tree_ids(bound.transaction);
-        TransactionAudit::new(bound.transaction, bound.origin.audit_stream(bound.mode)?)
+        TransactionAudit::new(bound.transaction, bound.origin.audit_frame(bound.mode)?)
             .with_input_trees(&trees)?
-            .run(&self.auditor)
+            .run(&self.auditor, assets)
     }
 
     /// A page read writes nothing, only the backfill's checkpoint feeds the index.
@@ -897,7 +908,8 @@ impl<S: TransactionSource> AuditService<S> {
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
         let store = self.shared.store(self.ring);
-        store.name_assets(&self.shared.due_assets().await);
+        let assets = self.shared.due_assets().await;
+        store.name_assets(&assets);
         let mut items = Vec::new();
         let mut skipped = Vec::new();
         let mut unfinished = None;
@@ -1035,11 +1047,14 @@ impl<S: TransactionSource> AuditService<S> {
                 continue;
             }
             let opened = bound.and_then(|()| {
-                self.audit(BoundTransaction {
-                    transaction: &tx,
-                    origin: &origin,
-                    mode,
-                })
+                self.audit(
+                    BoundTransaction {
+                        transaction: &tx,
+                        origin: &origin,
+                        mode,
+                    },
+                    &assets,
+                )
             });
             if let Ok(opened) = &opened {
                 work.open(created_in, opened.utxos());
@@ -1246,7 +1261,8 @@ fn tracked_owner(
         .and_then(|bytes| X25519Pubkey::from_bytes(bytes).ok())
         .ok_or_else(invalid)?;
     let owner = seal.owner.0;
-    let bound = Member::owner_tag(owner.as_array()).is_ok_and(|tag| *tag.as_bytes() == record.member)
+    let bound = Member::owner_tag(owner.as_array())
+        .is_ok_and(|tag| *tag.as_bytes() == record.member)
         && hash_bytes(&ciphertext).is_ok_and(|hash| hash == record.ct_hash);
     if !bound {
         return Err(invalid());
@@ -1315,7 +1331,7 @@ fn origin_is_bound(origin: &RingOrigin, tx: &ShieldedTransaction) -> bool {
 
 /// The record's fields rebuilt the commitment in the client reader, the seed gives the blinding.
 fn merge_record_note(merge: &ConfirmedMerge, record: &MergeRecordOutput) -> Option<CreatedUtxo> {
-    let blinding = RingMergeSeed::from_bytes(record.seed)
+    let blinding = MergeSeed::from_bytes(record.seed)
         .and_then(|seed| seed.output_blinding(&merge.first_nullifier))
         .ok()?;
     Some(CreatedUtxo {

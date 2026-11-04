@@ -214,7 +214,7 @@ impl MemberOpeningRead {
     }
 }
 
-/// Three siblings per level, leaf level first.
+/// Leaf level first.
 pub fn path_of<const H: usize>(view: &RingRecordPathView) -> Result<QuadPathOf<H>, AuditError> {
     let levels: [[_; QUAD_ARITY - 1]; H] = view
         .siblings

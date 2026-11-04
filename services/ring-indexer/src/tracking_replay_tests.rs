@@ -6,7 +6,7 @@ use custom_ring_interface::{
     },
     tracking::{
         tracking_chain_start, TrackingAuthorization, TrackingEntry, TrackingRegistry,
-        TRACKING_EMPTY_ROOT, TRACKING_GRACE_SLOTS,
+        TRACKING_EMPTY_ROOT,
     },
     CustomRingProof, STORAGE_PROGRAM_ID, VIEWING_PUBKEY_TAG,
 };
@@ -103,7 +103,6 @@ impl Ledger {
     fn hold_account(&self, viewing: u8, revision: u64) {
         let account_image = TrackingAuthorization {
             discriminator: TrackingAuthorization::DISCRIMINATOR,
-            bump: 1,
             registry: self.registry,
             owner: OWNER,
             nullifier_pk: field(1),
@@ -113,7 +112,6 @@ impl Ledger {
             ciphertext: [5; 32],
             revision: revision.to_le_bytes(),
             applied_revision: [0; 8],
-            last_enroll_slot: [0; 8],
         };
         self.chain.lock().unwrap().accounts.insert(
             self.authorization.to_string(),
@@ -167,7 +165,6 @@ impl Ledger {
     fn entry(&self, viewing: u8, revision: u64) -> TrackingEntry {
         TrackingAuthorization {
             discriminator: TrackingAuthorization::DISCRIMINATOR,
-            bump: 1,
             registry: self.registry,
             owner: OWNER,
             nullifier_pk: field(1),
@@ -177,7 +174,6 @@ impl Ledger {
             ciphertext: [5; 32],
             revision: revision.to_le_bytes(),
             applied_revision: [0; 8],
-            last_enroll_slot: [0; 8],
         }
         .entry()
         .unwrap()
@@ -261,7 +257,6 @@ async fn a_replayed_enrollment_takes_final_fields_from_the_account_and_its_key_f
         (field(1), field(2), field(4), [5; 32])
     );
     assert_eq!(held.authorization, ledger.authorization.to_bytes());
-    assert_eq!(ledger.state().await.account.reserved_leaves(), 2);
     ledger.stop().await;
 }
 
@@ -275,37 +270,17 @@ async fn a_rotation_moves_only_the_view_key_and_the_revision_in_block_order() {
         .await
         .unwrap();
     let first = ledger.enrollment().await.unwrap();
-    let slot = 2 + TRACKING_GRACE_SLOTS;
+    let slot = 3;
     ledger.land(slot, ledger.enroll(6, None)).await.unwrap();
     assert_eq!(
         ledger.enrollment().await.unwrap(),
         Enrollment {
             viewing_u: field(6),
             revision: 2,
-            last_enroll_slot: slot,
             ..first
         }
     );
-    assert_eq!(ledger.state().await.account.reserved_leaves(), 2);
     assert!(ledger.state().await.fault.is_none());
-    ledger.stop().await;
-}
-
-#[tokio::test]
-async fn a_rotation_inside_the_rate_limit_stops_the_projection() {
-    let mut ledger = Ledger::new().await;
-    ledger.hold_account(3, 1);
-    let proof = CustomRingProof::zeroed();
-    ledger
-        .land(2, ledger.enroll(3, Some(&proof)))
-        .await
-        .unwrap();
-    let first = ledger.enrollment().await.unwrap();
-    let slot = 1 + TRACKING_GRACE_SLOTS;
-    ledger.land(slot, ledger.enroll(6, None)).await.unwrap();
-    let fault = ledger.state().await.fault.unwrap();
-    assert!(fault.contains("rate limit"), "{fault}");
-    assert_eq!(ledger.enrollment().await, Some(first));
     ledger.stop().await;
 }
 
@@ -359,7 +334,7 @@ async fn an_authorization_of_another_owner_stops_the_projection() {
 }
 
 #[tokio::test]
-async fn a_rolled_back_enrollment_leaves_no_row_and_restores_the_reservation() {
+async fn a_rolled_back_enrollment_leaves_no_row() {
     let mut ledger = Ledger::new().await;
     ledger.hold_account(3, 1);
     let proof = CustomRingProof::zeroed();
@@ -371,7 +346,6 @@ async fn a_rolled_back_enrollment_leaves_no_row_and_restores_the_reservation() {
     storage::rollback(&tx, &mut ledger.cursor).await.unwrap();
     tx.commit().await.unwrap();
     assert_eq!(ledger.enrollment().await, None);
-    assert_eq!(ledger.state().await.account.reserved_leaves(), 1);
     let tx = ledger.indexer.db.begin().await.unwrap();
     storage::rollback(&tx, &mut ledger.cursor).await.unwrap();
     tx.commit().await.unwrap();
@@ -577,7 +551,7 @@ async fn an_apply_reads_the_newest_rotation_ordered_before_it_in_the_block() {
     let mut ledger = enrolled().await;
     let mut tree = TrackingTree::new().unwrap();
     let apply = ledger.apply(&mut tree, &[ledger.entry(6, 2)]).await;
-    let slot = 2 + TRACKING_GRACE_SLOTS;
+    let slot = 3;
     ledger
         .land_all(slot, vec![ledger.enroll(6, None), apply])
         .await
@@ -604,7 +578,7 @@ async fn a_rotation_after_an_apply_stays_pending_behind_the_leaf() {
     let mut ledger = enrolled().await;
     let mut tree = TrackingTree::new().unwrap();
     let apply = ledger.apply(&mut tree, &[ledger.entry(3, 1)]).await;
-    let slot = 2 + TRACKING_GRACE_SLOTS;
+    let slot = 3;
     ledger
         .land_all(slot, vec![apply, ledger.enroll(6, None)])
         .await
@@ -767,7 +741,7 @@ async fn a_program_owner_enrolls_through_its_own_cross_program_call() {
 }
 
 #[tokio::test]
-async fn a_failed_enrollment_leaves_no_row_and_reserves_no_leaf() {
+async fn a_failed_enrollment_leaves_no_row() {
     let mut ledger = Ledger::new().await;
     let proof = CustomRingProof::zeroed();
     let failed = TransactionInfo {
@@ -776,7 +750,6 @@ async fn a_failed_enrollment_leaves_no_row_and_reserves_no_leaf() {
     };
     ledger.land_transactions(2, vec![failed]).await.unwrap();
     assert_eq!(ledger.enrollment().await, None);
-    assert_eq!(ledger.state().await.account.reserved_leaves(), 1);
     ledger.stop().await;
 }
 
@@ -805,7 +778,7 @@ async fn the_shared_enrollment_vector_projects_to_its_entry_and_chain() {
         &ledger.store(),
         &TrackingState {
             registry: ledger.registry.to_bytes(),
-            account: Box::new(TrackingRegistry::new(1, &data)),
+            account: Box::new(TrackingRegistry::new(&data)),
             fault: None,
         },
     )
