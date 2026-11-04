@@ -101,7 +101,7 @@ func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
 	outputs, withdrawals := p.Outputs, len(p.Withdrawals)
 	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
 	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
-	distinct := p.Senders + outputs + withdrawals + outputs
+	distinct := p.Senders + outputs + withdrawals + outputs + p.SaltedKeys
 	limits := RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets)}
 	if !p.OwnOnly {
 		limits.Curator = distinct + withdrawalAssets

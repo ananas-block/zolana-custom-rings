@@ -84,10 +84,14 @@ type TrackingParams struct {
 	OutputEntries    []uint32               `json:"outputEntries"`
 }
 
-// TransferParams is what every transfer key reads, the rail's own values follow in its family's params.
 type TransferParams struct {
 	RequestHead
 	AuditParams
+	InProof           bool            `json:"inProof"`
+	Hidden            bool            `json:"hidden"`
+	Delegate          bool            `json:"delegate"`
+	Sender            Field           `json:"sender"`
+	PartyIdentities   []Field         `json:"partyIdentities"`
 	ApprovalMask      uint8           `json:"approvalMask"`
 	OutputCount       uint8           `json:"outputCount"`
 	Outputs           []OutputOpening `json:"outputs"`
@@ -102,22 +106,6 @@ type TransferParams struct {
 	AddressChain      Field           `json:"addressChain"`
 	TrackingParams
 	PolicyParams
-}
-
-type ConfidentialTransferParams struct {
-	TransferParams
-	InProof  bool `json:"inProof"`
-	Delegate bool `json:"delegate"`
-	// Sender is the in-proof owner, zero on the signer and authority rails.
-	Sender Field `json:"sender"`
-}
-
-type AnonymousTransferParams struct {
-	TransferParams
-	PublicOwners bool `json:"publicOwners"`
-	Delegate     bool `json:"delegate"`
-	// PartyIdentities are payer, five co-signers and exit destination, zero when absent.
-	PartyIdentities []Field `json:"partyIdentities"`
 }
 
 type Source struct {

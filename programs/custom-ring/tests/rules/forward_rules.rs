@@ -9,15 +9,13 @@ use custom_ring_interface::{
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
-use spr_interface::instruction::instruction_data::{
-    deposit::{DepositAssetKind, EncryptedRingDepositData, RingDepositEntry, RingDepositIxData},
+use spr_interface::instruction::instruction_data::deposit::{
+    DepositAssetKind, EncryptedRingDepositData, RingDepositEntry, RingDepositIxData,
 };
 
-use crate::{
-    common::{
-        auditor_pubkey, delegate_ring, policy_pda, reaches_verification, refused, ring_auth,
-        set_co_signer, CoSignerSlot, Ring, Sent, Setup, PROGRAM, SYSTEM,
-    },
+use crate::common::{
+    auditor_pubkey, delegate_ring, policy_pda, reaches_verification, refused, ring_auth,
+    set_co_signer, CoSignerSlot, Ring, Sent, Setup, PROGRAM, SYSTEM,
 };
 
 fn deposit_entry(slot_index: u8, eph_pk: &[u8; 33]) -> RingDepositEntry {

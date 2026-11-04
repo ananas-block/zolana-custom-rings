@@ -175,12 +175,6 @@ impl ListSet {
     }
 }
 
-/// Every list a rule can read has one polarity.
-const _: () = assert!(
-    ListSet::GRANT_LISTS.union(ListSet::DENY_LISTS).bits() == ListSet::POLICY_LISTS.bits()
-        && !ListSet::GRANT_LISTS.intersects(ListSet::DENY_LISTS)
-);
-
 /// Every bit of a `ListSet` names a list.
 const _: () = {
     assert!(MAX_SOURCES == u8::BITS as usize);

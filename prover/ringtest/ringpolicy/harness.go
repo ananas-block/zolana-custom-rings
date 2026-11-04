@@ -33,13 +33,13 @@ const sectionSenders = 4
 
 // SectionShape sizes a harness, Records zero takes the shape's limits.
 type SectionShape struct {
-	Outputs, Withdrawals int
-	OwnOnly              bool
-	Records              policy.RecordPoolShape
+	Outputs, Withdrawals, SaltedKeys int
+	OwnOnly                          bool
+	Records                          policy.RecordPoolShape
 }
 
 func NewSectionCircuit(shape SectionShape) (*SectionCircuit, error) {
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: sectionSenders, OwnOnly: shape.OwnOnly}.Inputs(), shape.Records, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: sectionSenders, SaltedKeys: shape.SaltedKeys, OwnOnly: shape.OwnOnly}.Inputs(), shape.Records, transaction.NPublicSlots)
 	if err != nil {
 		return nil, err
 	}

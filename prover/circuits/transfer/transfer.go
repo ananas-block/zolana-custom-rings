@@ -3,6 +3,7 @@ package transfer
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/consensys/gnark/frontend"
@@ -17,20 +18,51 @@ import (
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
-const (
-	// smallOwners keys the rows nearly every transfer needs, a row costs constraints on every proof of its key.
-	smallOwners = 4
-	// ownerAddresses mirrors the bound of TransferAddresses in program-libs/interface/src/proof/key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
-	ownerAddresses = 64 - 4 - 6
-)
+// Shape sizes a key, Inputs also bounds the signers it can bind.
+type Shape struct {
+	Inputs, Outputs, Withdrawals, Owners int
+	Entry                                bool
+}
 
-// ownerCapacities are the row counts a key of inputs input slots takes, ascending, mirrored by TransferShape::owners.
-func ownerCapacities(inputs int) []int {
-	small, full := min(smallOwners, inputs), min(inputs, ownerAddresses-inputs)
-	if full <= small {
-		return []int{small}
+// Shapes mirrors TRANSFER_SHAPES in program-libs/interface/src/proof/key_catalog.rs.
+var Shapes = [...]Shape{
+	{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4},
+	{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4},
+	{Inputs: 16, Outputs: 8, Withdrawals: 4, Owners: 4},
+	{Inputs: 5, Outputs: 16, Withdrawals: 8, Owners: 5},
+	{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24},
+	{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true},
+	{Inputs: 2, Outputs: 8, Withdrawals: 4, Owners: 2, Entry: true},
+}
+
+func (s Shape) String() string {
+	family := "transfer"
+	if s.Entry {
+		family = "transfer_entry"
 	}
-	return []int{small, full}
+	return fmt.Sprintf("custom_ring_%s_%d_in%d_w%d_s%d", family, s.Outputs, s.Inputs, s.Withdrawals, s.Owners)
+}
+
+// TransferCircuit serves every rail, a clear bit set is the signer rail.
+type TransferCircuit struct {
+	Shape Shape `gnark:"-"`
+	// Delegate is the authority rail.
+	InProof, Hidden, Delegate frontend.Variable
+	Sender                    frontend.Variable
+	// PartyIdentities are an anonymous frame's public parties, an absent party is zero.
+	PartyIdentities [shared.AnonymousParties]frontend.Variable
+	Sections
+}
+
+func NewTransferCircuit(shape Shape) (*TransferCircuit, error) {
+	if !slices.Contains(Shapes[:], shape) {
+		return nil, fmt.Errorf("unsupported transfer shape %+v, want one of %v", shape, Shapes)
+	}
+	wires, err := NewSections(shape)
+	if err != nil {
+		return nil, err
+	}
+	return &TransferCircuit{Shape: shape, Sections: wires}, nil
 }
 
 // Sections are the wires every transfer key reads, the rail fills the rest of its statement.
@@ -60,104 +92,133 @@ type Sections struct {
 	policy.Policy
 }
 
-type SectionsShape struct {
-	inputs, outputs, withdrawals, owners int
-	entry, data                          bool
+const (
+	// narrowWithdrawals is the leg capacity of the narrow keys, a transaction past their pools moves to the wide key.
+	narrowWithdrawals = 4
+	// ownerAddresses mirrors OWNER_ADDRESSES in key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
+	ownerAddresses = 64 - 4 - 6
+)
+
+func (s Shape) narrow() bool {
+	return s.Withdrawals <= narrowWithdrawals && !s.Entry
 }
 
-const narrowWithdrawals = 4
+// publicOwners is the distinct signers and legs one transaction can name, each signer also takes a nullifier PDA.
+func (s Shape) publicOwners() int {
+	return min(s.Owners, (ownerAddresses-s.Withdrawals)/2) + s.Withdrawals
+}
 
-// trackedWithdrawals holds no row on a narrow key off entry, a transaction past its rows moves to a wider sibling.
-func (s SectionsShape) trackedWithdrawals() int {
-	if s.withdrawals <= narrowWithdrawals && !s.entry {
+func (s Shape) trackedWithdrawals() int {
+	if s.narrow() {
 		return 0
 	}
-	return s.withdrawals
+	return s.publicOwners() - s.Owners
 }
 
-func (s SectionsShape) stream() audit.StreamShape {
-	return audit.StreamShape{InputClass: s.inputs, Outputs: s.outputs, Entry: s.entry, Data: s.data}
+// saltedKeys fits a public and a salted record per distinct owner in one pool.
+func (s Shape) saltedKeys() int {
+	if s.narrow() {
+		return 0
+	}
+	return 2*s.publicOwners() + s.Outputs - s.Owners - s.Withdrawals
 }
 
-func NewSections(shape SectionsShape) (Sections, error) {
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.outputs, Withdrawals: shape.withdrawals, Senders: shape.owners}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
+// Stream compiles the tails into every key, a clear has_data transmits none.
+func (s Shape) Stream() audit.StreamShape {
+	return audit.StreamShape{InputClass: s.Inputs, Outputs: s.Outputs, Entry: s.Entry, Data: true}
+}
+
+func (s Shape) entries() int {
+	if s.Entry {
+		return s.Inputs
+	}
+	return 0
+}
+
+func NewSections(shape Shape) (Sections, error) {
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners, SaltedKeys: shape.saltedKeys()}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
 		return Sections{}, err
 	}
-	tracking, err := policy.NewTracking(shape.owners, shape.outputs, shape.trackedWithdrawals())
+	tracking, err := policy.NewTracking(shape.Owners, shape.Outputs, shape.trackedWithdrawals())
 	if err != nil {
 		return Sections{}, err
-	}
-	entries := 0
-	if shape.entry {
-		entries = shape.inputs
 	}
 	return Sections{
-		Outputs:  make([]audit.OutputWires, shape.outputs),
-		Inputs:   make([]shared.UtxoWires, shape.inputs),
-		Entries:  make([]audit.EntryWires, entries),
-		Signers:  make([]frontend.Variable, shape.inputs),
-		Rows:     make([]frontend.Variable, shape.owners),
+		Outputs:  make([]audit.OutputWires, shape.Outputs),
+		Inputs:   make([]shared.UtxoWires, shape.Inputs),
+		Entries:  make([]audit.EntryWires, shape.entries()),
+		Signers:  make([]frontend.Variable, shape.Inputs),
+		Rows:     make([]frontend.Variable, shape.Owners),
 		Tracking: tracking,
 		Policy:   p,
 	}, nil
 }
 
-func (c *Sections) validate(shape SectionsShape) error {
-	entries := 0
-	if shape.entry {
-		entries = shape.inputs
-	}
+func (c *Sections) validate(shape Shape) error {
 	return errors.Join(
 		c.Validate(transaction.NPublicSlots),
-		shared.ValidateLength("transfer", "output", len(c.Outputs), shape.outputs),
-		shared.ValidateLength("transfer", "input", len(c.Inputs), shape.inputs),
-		shared.ValidateLength("transfer", "entry", len(c.Entries), entries),
-		shared.ValidateLength("transfer", "signer", len(c.Signers), shape.inputs),
-		shared.ValidateLength("transfer", "owner row", len(c.Rows), shape.owners),
-		shared.ValidateLength("transfer", "withdrawal", len(c.Withdrawals), shape.withdrawals),
-		c.ValidateTracking(shape.owners, shape.outputs, shape.trackedWithdrawals()),
+		shared.ValidateLength("transfer", "output", len(c.Outputs), shape.Outputs),
+		shared.ValidateLength("transfer", "input", len(c.Inputs), shape.Inputs),
+		shared.ValidateLength("transfer", "entry", len(c.Entries), shape.entries()),
+		shared.ValidateLength("transfer", "signer", len(c.Signers), shape.Inputs),
+		shared.ValidateLength("transfer", "owner row", len(c.Rows), shape.Owners),
+		shared.ValidateLength("transfer", "withdrawal", len(c.Withdrawals), shape.Withdrawals),
+		c.ValidateTracking(shape.Owners, shape.Outputs, shape.trackedWithdrawals()),
 	)
 }
 
-// rail is what one family's statement fixes about who authorizes the spend.
-type rail struct {
-	// bits are the statement's two rail bits, cells its sender or party identities.
-	bits  [2]frontend.Variable
-	cells []frontend.Variable
-	// delegate is the authority rail, the configured delegate signs in place of every owner.
-	delegate frontend.Variable
-	// private names an owner no signer account shows, hidden set when spending under it must stay private.
-	private func(api frontend.API, section InputSection, signers SignerSet) (owner, hidden frontend.Variable)
-}
-
-// prove runs every section once, each family differs by its rail alone.
-func (c *Sections) prove(api frontend.API, shape SectionsShape, r rail) {
+// Define runs every section once, the rail bits alone tell the rails apart.
+func (c *TransferCircuit) Define(api frontend.API) error {
+	if err := c.validate(c.Shape); err != nil {
+		return err
+	}
+	c.assertRail(api)
 	rc := rangecheck.New(api)
 	w := audit.AuditWires{FirstNullifier: c.FirstNullifier, RingProgramID: c.RingProgramID, TxViewingSk: c.TxViewingSk, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Salt: c.Salt, Layout: c.Layout}
-	stream := shape.stream()
+	stream := c.Shape.Stream()
 	layout := stream.DecodeLayout(api, c.Layout)
 	envelope := w.OpenEnvelope(api, rc)
 	opened := audit.OpenSlots(api, rc, w, envelope, stream, layout, c.Outputs, c.OutputCount)
 	section := OpenInputs(api, c.Inputs, c.InputCount)
-	section.AssertRingNotes(api, c.RingProgramID, shape.entry)
+	section.AssertRingNotes(api, c.RingProgramID, c.Shape.Entry)
 	signers := OpenSigners(api, c.Signers, c.SignerCount)
 	// The delegate signs for every owner, a published run would name a victim.
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: r.delegate, V: c.SignerCount})
-	owner, hidden := r.private(api, section, signers)
-	signers.AssertOwners(api, section, api.Sub(1, r.delegate), owner)
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: c.SignerCount})
+	hiddenOwner := c.hiddenOwner(api, section, signers)
+	signers.AssertOwners(api, section, api.Sub(1, c.Delegate), api.Add(hiddenOwner, c.Sender))
 	tracking := c.OpenTracking(api)
 	rows := OpenOwnerRows(api, c.Rows, c.RowEntries, tracking)
-	rows.AssertInputOwners(api, InputRail{Delegate: r.delegate, Hidden: hidden, HiddenOwner: owner}, section.Slots)
+	rows.AssertInputOwners(api, InputRail{Delegate: c.Delegate, Hidden: c.Hidden, HiddenOwner: hiddenOwner}, section.Slots)
 	AssertOutputOwners(api, tracking, opened.Slots, c.OutputEntries)
 	c.bindTransaction(api, gadget.NonZeroHashChain(api, section.Hashes), opened.Slots)
-	c.assertBypass(api, r.delegate)
+	c.assertBypass(api, c.Delegate)
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
-	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: r.delegate}.Gates(api, c.PolicyHash)
+	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	sealed := w.SealStream(api, rc, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers, r)))
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers)))
+	return nil
+}
+
+// assertRail holds the bits to one rail, only the in-proof rail names a public sender.
+func (c *TransferCircuit) assertRail(api frontend.API) {
+	api.AssertIsBoolean(c.InProof)
+	api.AssertIsBoolean(c.Hidden)
+	api.AssertIsBoolean(c.Delegate)
+	api.AssertIsBoolean(api.Add(c.InProof, c.Hidden, c.Delegate))
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, c.InProof), V: c.Sender})
+}
+
+// hiddenOwner reads input 0, zero on every rail with no owner to hide.
+func (c *TransferCircuit) hiddenOwner(api frontend.API, section InputSection, signers SignerSet) frontend.Variable {
+	owner := api.Mul(c.Hidden, section.Slots[0].OwnerPkHash)
+	// SPP's HiddenOwnerSigners needs a live hidden owner, one in the published run would name it.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Hidden, V: api.Sub(1, section.Slots[0].Utxo)})
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Hidden, V: api.IsZero(signers.missing(api, owner))})
+	shared.AssertAnonymousParties(api, owner, c.PartyIdentities[:])
+	return owner
 }
 
 // assertBypass holds the authority rail's statement off every policy registry, a curator's update then cannot fail a delegate's proof.
@@ -168,12 +229,12 @@ func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
 }
 
 // statement mirrors TransferStatement::elements in program-libs/interface/src/proof/statement.rs.
-func (c *Sections) statement(e audit.Envelope, w audit.AuditWires, s audit.Stream, opened audit.Opened, signers SignerSet, r rail) []frontend.Variable {
-	fields := slices.Concat(e.Head(w, s, shared.TransferStatementDomain), r.bits[:], []frontend.Variable{
-		c.ApprovalMask, s.NoSpend,
+func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audit.Stream, opened audit.Opened, signers SignerSet) []frontend.Variable {
+	fields := slices.Concat(e.Head(w, s, shared.TransferStatementDomain), []frontend.Variable{
+		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, s.NoSpend,
 		c.OutputCount, opened.OutputChain, s.RecordChain, s.TailChain,
-		c.InputCount, c.PrivateTxHash,
-	}, r.cells, []frontend.Variable{
+		c.InputCount, c.PrivateTxHash, c.Sender,
+	}, c.PartyIdentities[:], []frontend.Variable{
 		c.SignerCount, signers.Chain,
 		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot,
 	}, publicSlots(c.PublicAssets[:], c.PublicAmounts[:], c.PublicGross[:]), []frontend.Variable{c.WithdrawalHash})

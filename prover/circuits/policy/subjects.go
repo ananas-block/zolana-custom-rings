@@ -61,18 +61,19 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 	if !p.OwnOnly {
 		curator = openSubjectPool(api, openRecordPool(api, curated, p.CuratorRoot, p.CuratorRecords, p.CuratorProof, curatorColumns), p.CuratorSubjects)
 	}
-	resolve := func(entry PoolEntry, active, member frontend.Variable) (subjectView, pooledRecord) {
+	resolve := func(entry PoolEntry, active, curatedRead, member frontend.Variable) (subjectView, pooledRecord) {
 		record := pooledRecordAt(own.resolve(api, recordQuery{active: active, member: member, index: entry.Own}))
 		view := subjectView{onList: record.onList}
 		if !p.OwnOnly {
-			foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curated), member: member, index: entry.Curator[0]})
+			foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curatedRead), member: member, index: entry.Curator[0]})
 			view.onList = table.sources.lists(api, record.onList, [NSources]frontend.Variable(foreign))
 		}
 		return view, record
 	}
 	anySalted := api.Or(table.sources.saltedOwn, table.sources.saltedCurated)
+	ownerCurated := api.Mul(curated, table.sources.publicForeign)
 	resolveOwner := func(entry OwnerEntry, active, member frontend.Variable) subjectView {
-		view, _ := resolve(entry.PoolEntry, active, member)
+		view, _ := resolve(entry.PoolEntry, active, ownerCurated, member)
 		// A proven absent tracking row is the one skip, a present row forces its salt and so its key.
 		row := spend.Tracking.Row(api, api.Mul(active, anySalted), member, entry.Tracking)
 		enrolled := ringgadget.IsNonZero(api, row.NullifierPk)
@@ -98,7 +99,7 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 	for i, pay := range payments {
 		resolved.owners[i] = resolveOwner(p.OwnerEntries[i], api.Mul(pay.Active, g.Screened), pay.Owner)
 		var record pooledRecord
-		resolved.assets[i], record = resolve(p.AssetEntries[i], api.Mul(pay.Active, mintRead), pay.Asset)
+		resolved.assets[i], record = resolve(p.AssetEntries[i], api.Mul(pay.Active, mintRead), curated, pay.Asset)
 		resolved.mintPolicies[i] = record.mintPolicy
 	}
 	for k, index := range p.PublicAssetEntries {

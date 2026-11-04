@@ -10,9 +10,10 @@ use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
     shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN},
     viewing_key::ViewTag,
+    ShieldedKeypairTrait,
 };
 
-use crate::{RingKeyError, RingNullifierKey};
+use crate::{list_salt, RingKeyError};
 
 pub const RING_ADDRESS_VERSION: u8 = 4;
 
@@ -53,16 +54,17 @@ impl fmt::Debug for RingAddress {
 }
 
 impl RingAddress {
-    /// An enrolled wallet's address on the key's ring.
-    pub fn enrolled(
-        wallet: ShieldedAddress,
+    pub fn enrolled<H: ShieldedKeypairTrait + ?Sized>(
+        holder: &H,
         ring_program_id: Address,
-        key: &RingNullifierKey,
     ) -> Result<Self, RingKeyError> {
+        let recipient = holder.shielded_address()?;
+        let list_salt = list_salt(&holder.nullifier_key())?;
+        Self::check_list_salt(&recipient, &list_salt)?;
         Ok(Self {
-            recipient: key.address_of(wallet)?,
+            recipient,
             ring_program_id,
-            list_salt: key.list_salt()?,
+            list_salt,
         })
     }
 

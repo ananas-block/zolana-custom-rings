@@ -1,15 +1,10 @@
 //! Pins the version 4 audit vectors the Go circuits read.
 
 use custom_ring_interface::{
-    ciphertext_digest,
-    key_catalog::{
-        TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
-        ENTRY_TRANSFER_SHAPES,
-    },
-    sender_bundle_len, AuditEnvelope, AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout,
-    AuditorMessage, CustomRingError, DataTail, EntryInput, OpeningRecord, RecipientBody,
-    RecordKind, SenderBundle, AUDIT_RECORD_LEN, DATA_TAIL_LEN, ENTRY_INPUT_LEN, OPENING_RECORD_LEN,
-    RECIPIENT_BODY_LEN, STREAM_BLOCK_LEN,
+    ciphertext_digest, key_catalog::TRANSFER_SHAPES, sender_bundle_len, AuditEnvelope,
+    AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout, AuditorMessage, CustomRingError,
+    DataTail, EntryInput, OpeningRecord, RecipientBody, RecordKind, SenderBundle, AUDIT_RECORD_LEN,
+    DATA_TAIL_LEN, ENTRY_INPUT_LEN, OPENING_RECORD_LEN, RECIPIENT_BODY_LEN, STREAM_BLOCK_LEN,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -27,29 +22,16 @@ struct KeyCase {
 }
 
 fn key_cases() -> Vec<KeyCase> {
-    let family = |shapes: &[TransferShape], entry: bool| {
-        shapes
-            .iter()
-            .flat_map(|shape| {
-                [false, true].map(|has_data| KeyCase {
-                    key: AuditKey {
-                        class: usize::from(shape.inputs),
-                        entry,
-                    },
-                    outputs: usize::from(shape.outputs),
-                    has_data,
-                })
+    TRANSFER_SHAPES
+        .iter()
+        .flat_map(|shape| {
+            [false, true].map(|has_data| KeyCase {
+                key: shape.audit_key(),
+                outputs: usize::from(shape.outputs),
+                has_data,
             })
-            .collect::<Vec<_>>()
-    };
-    [
-        family(&CONFIDENTIAL_TRANSFER_SHAPES, false),
-        family(&ANONYMOUS_TRANSFER_SHAPES, false),
-        family(&ENTRY_TRANSFER_SHAPES, true),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
+        })
+        .collect()
 }
 
 impl KeyCase {

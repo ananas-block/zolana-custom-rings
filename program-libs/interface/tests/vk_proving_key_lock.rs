@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use custom_ring_interface::{
-    key_catalog::{RingCircuit, TransferSpend, RING_KEYS},
+    key_catalog::{RecordPools, RingCircuit, TransferSpend, RING_KEYS},
     verifying_key, RingRail, APPLY_BATCH, PROVING_KEY_SHA256S,
 };
 use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
@@ -54,7 +54,6 @@ fn every_catalog_key_is_locked_with_its_verifying_key() {
 fn selectable_circuits() -> BTreeSet<String> {
     let mut circuits = vec![RingCircuit::RegisterKey];
     circuits.extend((1..=APPLY_BATCH as u64).map(RingCircuit::apply_enrollments));
-    circuits.extend((1..=APPLY_BATCH as u64).filter_map(RingCircuit::apply_private_list));
     circuits.extend((1..=8).map(RingCircuit::deposit));
     for shape in SPP_SUPPORTED_SHAPES {
         let (n_in, n_out) = (shape.n_inputs(), shape.n_outputs());
@@ -66,9 +65,7 @@ fn selectable_circuits() -> BTreeSet<String> {
                 for spends_default_ring in [false, true] {
                     for legs in 0..=MAX_INTERFACE_TRANSFERS {
                         for owners in 0..=n_in {
-                            for (has_data, private_source) in
-                                [(false, false), (true, false), (false, true)]
-                            {
+                            for wide in [false, true] {
                                 circuits.extend(RingCircuit::transfer(TransferSpend {
                                     rail,
                                     inputs,
@@ -76,8 +73,8 @@ fn selectable_circuits() -> BTreeSet<String> {
                                     spends_default_ring,
                                     legs,
                                     owners,
-                                    has_data,
-                                    private_source,
+                                    pools: RecordPools::default(),
+                                    wide,
                                 }));
                             }
                         }

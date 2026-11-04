@@ -3,7 +3,6 @@
 
 mod memory;
 mod path;
-mod private_tree;
 mod record;
 mod record_pool;
 mod tracking;
@@ -14,7 +13,6 @@ use thiserror::Error;
 
 pub use memory::{MemberRegistryTree, MemoryTree};
 pub use path::{quad_node, NodePosition, QuadPath, QuadPathOf, TrackingPath, ZERO_SUBTREES};
-pub use private_tree::PrivateListTree;
 pub use record::{MemberRecord, RecordWriteProofInput};
 pub use record_pool::{Canopy, PoolSubject, RecordPool, RecordPoolOf, SharedPath, SharedProof};
 pub use tracking::{

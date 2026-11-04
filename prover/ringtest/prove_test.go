@@ -27,8 +27,8 @@ func TestAuditAndPolicySectionsProve(t *testing.T) {
 }
 
 func TestAnonymousTransferProves(t *testing.T) {
-	shape := transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	circuit, err := transfer.NewAnonymousTransferCircuit(shape)
+	shape := transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
+	circuit, err := transfer.NewTransferCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
