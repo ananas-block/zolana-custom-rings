@@ -24,6 +24,10 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
         tag::HISTORICAL_MERGE_V3,
         tag::LEGACY_TRANSACT,
         tag::LEGACY_DELEGATE_TRANSACT,
+        tag::WRITE_FRAME,
+        tag::CLOSE_FRAME_BUFFER,
+        tag::SETTLE_BUFFERED,
+        tag::FRAME_EVENT,
     ];
     let unique: std::collections::BTreeSet<_> = tags.into_iter().collect();
     assert_eq!(unique.len(), tags.len());

@@ -160,6 +160,13 @@ ring_errors! {
     InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
     TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a salted source's floor",
     SaltedSourceOtherTracking = 8504 => "a salted source pins no tracking registry or another one",
+    InvalidFrameBuffer = 8520 => "frame buffer account is invalid",
+    FrameLength = 8521 => "frame length is zero or exceeds one inner create",
+    UnauthorizedFrameWriter = 8522 => "the signer is not the frame buffer writer",
+    FrameDigestMismatch = 8523 => "the frame does not match the signed digest",
+    FrameWriteOutOfRange = 8524 => "the write falls outside the frame",
+    UnsupportedBufferedTag = 8525 => "the frame's tag does not settle from a buffer",
+    FramePayerNotWriter = 8526 => "the SPP payer of a settlement is not the buffer writer",
 }
 
 impl From<CustomRingError> for ProgramError {

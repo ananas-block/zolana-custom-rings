@@ -50,6 +50,33 @@ pub fn load_policy<'a>(
     load(program_id, account)
 }
 
+/// Owner only, `FrameBuffer::of` checks the discriminator.
+#[inline(always)]
+pub fn load_frame_buffer<'a>(
+    program_id: &Address,
+    account: &'a AccountView,
+) -> Result<Ref<'a, [u8]>, ProgramError> {
+    if !account.owned_by(program_id) {
+        return Err(CustomRingError::InvalidFrameBuffer.into());
+    }
+    account
+        .try_borrow()
+        .map_err(|_| CustomRingError::InvalidFrameBuffer.into())
+}
+
+#[inline(always)]
+pub fn load_frame_buffer_mut<'a>(
+    program_id: &Address,
+    account: &'a mut AccountView,
+) -> Result<RefMut<'a, [u8]>, ProgramError> {
+    if !account.owned_by(program_id) {
+        return Err(CustomRingError::InvalidFrameBuffer.into());
+    }
+    account
+        .try_borrow_mut()
+        .map_err(|_| CustomRingError::InvalidFrameBuffer.into())
+}
+
 #[inline(always)]
 pub fn load_policy_mut<'a>(
     program_id: &Address,

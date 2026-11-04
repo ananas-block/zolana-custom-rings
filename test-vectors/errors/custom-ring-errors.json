@@ -92,5 +92,12 @@
   "MissingRegistry": 8482,
   "InvalidTrackingRegistry": 8502,
   "TrackingRootBelowFloor": 8503,
-  "SaltedSourceOtherTracking": 8504
+  "SaltedSourceOtherTracking": 8504,
+  "InvalidFrameBuffer": 8520,
+  "FrameLength": 8521,
+  "UnauthorizedFrameWriter": 8522,
+  "FrameDigestMismatch": 8523,
+  "FrameWriteOutOfRange": 8524,
+  "UnsupportedBufferedTag": 8525,
+  "FramePayerNotWriter": 8526
 }
