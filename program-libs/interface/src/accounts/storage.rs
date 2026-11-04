@@ -114,6 +114,30 @@ pub enum StorageError {
     RegistryServesNoRing = 9020,
     #[error("viewing key is zero or not canonical")]
     NonCanonicalViewingKey = 9021,
+    #[error("tracking registry is invalid")]
+    InvalidTrackingRegistry = 9022,
+    #[error("tracking authorization is invalid")]
+    InvalidTrackingAuthorization = 9023,
+    #[error("the enrollment's revision is already applied")]
+    EnrollmentAlreadyApplied = 9024,
+    #[error("the enrolled nullifier key, list tag and ciphertext are final")]
+    EnrollmentKeyFinal = 9025,
+    #[error("the tracking tree is full")]
+    TrackingTreeFull = 9026,
+    #[error("the owner rotated within the rate limit")]
+    RotationTooSoon = 9027,
+    #[error("a zero nullifier key does not enroll")]
+    ZeroNullifierKey = 9028,
+    #[error("a first enrollment carries a proof and a rotation none")]
+    EnrollmentProofShape = 9029,
+    #[error("an apply names no enrollment")]
+    NoEnrollmentsNamed = 9030,
+    #[error("owner grant account is invalid")]
+    InvalidOwnerGrant = 9031,
+    #[error("reader key names no scheme")]
+    InvalidReaderKey = 9032,
+    #[error("auditor key is untagged, zero or not canonical")]
+    InvalidAuditorKey = 9033,
 }
 
 #[must_use]
@@ -205,30 +229,19 @@ impl StorageRegistry {
     /// Writes nothing on a refusal.
     pub fn update(&mut self, update: RootUpdate<'_>) -> Result<(), StorageError> {
         let RootUpdate { mode, slot, data } = update;
-        if data.revision != self.roots[0].revision {
-            return Err(StorageError::RevisionChanged);
-        }
-        let revision = data
-            .revision
-            .value()
-            .checked_add(1)
-            .ok_or(StorageError::RevisionOverflow)?;
-        match mode {
-            UpdateMode::Graced if slot < self.roots[ROOT_HISTORY - 1].expires_at() => {
-                return Err(StorageError::HistoryFull);
-            }
-            UpdateMode::Graced => {
-                // A saturated expiry never lapses.
-                self.roots[0].expires_at = slot.saturating_add(self.grace_slots()).to_le_bytes();
-                self.roots.rotate_right(1);
-            }
-            UpdateMode::Immediate => self.roots.fill(Root::zeroed()),
-        }
-        self.roots[0] = Root {
-            hash: data.apply.new_root,
-            revision: revision.into(),
-            expires_at: [0; 8],
+        let retirement = match mode {
+            UpdateMode::Graced => Retirement::Graced {
+                slot,
+                grace_slots: self.grace_slots(),
+            },
+            UpdateMode::Immediate => Retirement::Immediate,
         };
+        advance_roots(
+            &mut self.roots,
+            data.revision,
+            retirement,
+            data.apply.new_root,
+        )?;
         self.next_index = data.apply.new_next_index;
         Ok(())
     }
@@ -367,8 +380,50 @@ pub fn chain_start(registry: &Address, revision: Revision) -> Result<[u8; 32], S
     .map_err(|_| StorageError::HashingFailed)
 }
 
+/// How an update treats the roots it replaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Retirement {
+    /// The outgoing root stays served for `grace_slots`, an unexpired oldest root refuses the update.
+    Graced { slot: u64, grace_slots: u64 },
+    /// Every earlier root stops being served.
+    Immediate,
+}
+
+/// Writes nothing on a refusal, `revision` is the one the proof was made against.
+pub(crate) fn advance_roots(
+    roots: &mut [Root; ROOT_HISTORY],
+    revision: Revision,
+    retirement: Retirement,
+    new_root: [u8; 32],
+) -> Result<(), StorageError> {
+    if revision != roots[0].revision {
+        return Err(StorageError::RevisionChanged);
+    }
+    let next = revision
+        .value()
+        .checked_add(1)
+        .ok_or(StorageError::RevisionOverflow)?;
+    match retirement {
+        Retirement::Graced { slot, .. } if slot < roots[ROOT_HISTORY - 1].expires_at() => {
+            return Err(StorageError::HistoryFull);
+        }
+        Retirement::Graced { slot, grace_slots } => {
+            // A saturated expiry never lapses.
+            roots[0].expires_at = slot.saturating_add(grace_slots).to_le_bytes();
+            roots.rotate_right(1);
+        }
+        Retirement::Immediate => roots.fill(Root::zeroed()),
+    }
+    roots[0] = Root {
+        hash: new_root,
+        revision: next.into(),
+        expires_at: [0; 8],
+    };
+    Ok(())
+}
+
 /// The current root, or a retired one before its expiry.
-fn root_at(
+pub(crate) fn root_at(
     roots: &[Root; ROOT_HISTORY],
     revision: Revision,
     slot: u64,
