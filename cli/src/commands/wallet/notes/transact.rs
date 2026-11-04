@@ -212,7 +212,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
         RingMode::Anonymous => Recipient::Address(Box::new(RingAddress::enrolled(
             recipient.shielded_address()?,
             program,
-            &recipient.nullifier_key,
+            &RingNullifierKey::derive(&recipient, &program)?,
         )?)),
         RingMode::Confidential | RingMode::ConfidentialEscrow => {
             Recipient::Shielded(recipient.shielded_address()?)

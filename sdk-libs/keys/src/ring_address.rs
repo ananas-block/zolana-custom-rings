@@ -5,16 +5,14 @@ use std::{fmt, str::FromStr};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
-use custom_ring_interface::domain;
-use spr_hasher::primitives::{is_canonical_bn254_scalar_be, right_align};
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
     shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN},
     viewing_key::ViewTag,
-    NullifierKey,
 };
 
-use crate::RingKeyError;
+use crate::{RingKeyError, RingNullifierKey};
 
 pub const RING_ADDRESS_VERSION: u8 = 4;
 
@@ -55,16 +53,16 @@ impl fmt::Debug for RingAddress {
 }
 
 impl RingAddress {
-    /// An enrolled wallet's address, its salt derives from the nullifier key it enrolled.
+    /// An enrolled wallet's address on the key's ring.
     pub fn enrolled(
-        recipient: ShieldedAddress,
+        wallet: ShieldedAddress,
         ring_program_id: Address,
-        nullifier_key: &NullifierKey,
+        key: &RingNullifierKey,
     ) -> Result<Self, RingKeyError> {
         Ok(Self {
-            recipient,
+            recipient: key.address_of(wallet)?,
             ring_program_id,
-            list_salt: domain::list_salt(&right_align(&*nullifier_key.secret()))?,
+            list_salt: key.list_salt()?,
         })
     }
 

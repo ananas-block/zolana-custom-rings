@@ -86,3 +86,13 @@ pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], HasherError> {
 pub fn deposit_blinding(blinding_secret: &[u8; 32]) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[&field(DEPOSIT_BLINDING), blinding_secret])
 }
+
+/// `Poseidon(CRPS, nullifier_secret)`, a holder learns the private list position and never the secret.
+pub fn list_salt(nullifier_secret: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_SALT), nullifier_secret])
+}
+
+/// `Poseidon(CRPT, list_salt)`, the tracking leaf's commitment to the owner's one salt.
+pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_TAG), list_salt])
+}

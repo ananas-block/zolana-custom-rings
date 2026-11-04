@@ -1,4 +1,5 @@
 use custom_ring_interface::stream::{DeliveredSlot, SlotSecret, StreamError};
+use solana_address::Address;
 use spr_keypair::{
     shielded::{ShieldedAddress, ShieldedKeypair},
     viewing_key::{Salt, ViewTag},
@@ -10,7 +11,7 @@ use spr_transaction::{
 };
 use zeroize::Zeroizing;
 
-use crate::RingKeyError;
+use crate::{RingKeyError, RingNullifierKey};
 
 /// The public context of one delivered ring output slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,14 +90,23 @@ pub struct RotatingRingKeys {
 }
 
 impl RotatingRingKeys {
-    /// `retired` is the wallet's stored keys, the current one taken from `identity`.
-    pub fn new(identity: &ShieldedKeypair, retired: Vec<ViewingKey>) -> Result<Self, RingKeyError> {
-        let address = identity
-            .shielded_address()
-            .map_err(|_| RingKeyError::UnknownViewingKey)?;
-        let mut viewing = vec![identity.viewing_key.clone()];
+    pub fn new(
+        identity: &ShieldedKeypair,
+        ring_program_id: &Address,
+    ) -> Result<Self, RingKeyError> {
+        let ring_key = RingNullifierKey::derive(identity, ring_program_id)?;
+        Self::holding(
+            ring_key.address_of(identity.shielded_address()?)?,
+            vec![identity.viewing_key.clone()],
+            ring_key.nullifier_key().clone(),
+        )
+    }
+
+    /// The wallet's stored keys, a note sealed to any of them opens here.
+    pub fn with_retired(self, retired: Vec<ViewingKey>) -> Result<Self, RingKeyError> {
+        let mut viewing = self.viewing;
         viewing.extend(retired);
-        Self::holding(address, viewing, identity.nullifier_key.clone())
+        Self::holding(self.address, viewing, self.nullifier)
     }
 
     /// `next` becomes current and the earlier keys stay held.
@@ -452,7 +462,7 @@ mod tests {
     fn a_rotated_holder_answers_under_each_key_and_refuses_another() {
         let identity = keypair();
         let old = identity.viewing_key.pubkey();
-        let rotated = RotatingRingKeys::new(&identity, Vec::new())
+        let rotated = RotatingRingKeys::new(&identity, &Address::new_from_array([4; 32]))
             .unwrap()
             .rotate(ViewingKey::new())
             .unwrap();

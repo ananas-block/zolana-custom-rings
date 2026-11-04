@@ -57,10 +57,10 @@ pub enum RingDelivery {
     Anonymous(Box<AnonymousPlan>),
 }
 
-#[must_use]
 /// `transact_output` drops the record, every SPP output encodes before its record seals.
 pub(crate) const UNSEALED_RECORD: [u8; AUDIT_RECORD_LEN] = [0; AUDIT_RECORD_LEN];
 
+#[must_use]
 #[derive(Clone)]
 pub struct RingOutputRail {
     tx_viewing_key: ViewingKey,
