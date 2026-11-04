@@ -150,7 +150,7 @@ impl OwnerGrantWrite<'_> {
         let seeds = OwnerGrant::seeds(self.registry, self.owner, &self.ix.reader);
         let (address, bump) = Address::derive_program_address(&seeds, self.program_id)
             .ok_or(StorageError::InvalidOwnerGrant)?;
-        // The derivation names the owner, so only its signature reaches this account.
+        // The derivation names the owner, whose signature the processor checked.
         if account.address() != &address || !account.is_writable() {
             return Err(StorageError::InvalidOwnerGrant.into());
         }
