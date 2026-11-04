@@ -123,6 +123,7 @@ fn ring_slot(index: u32, owner_key: [u8; 32], amount: u64) -> AuditedOutput {
 
 fn audited(inputs: Vec<AuditedInput>, outputs: Vec<AuditedOutput>) -> AuditedTransaction {
     AuditedTransaction {
+        awaiting_key: Vec::new(),
         tx_signature: Signature::from([9; 64]),
         slot: 2,
         tx_viewing_pk: X25519Keypair::from_bytes(&[3; 32]).pubkey(),

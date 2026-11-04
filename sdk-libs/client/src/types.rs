@@ -27,10 +27,18 @@ pub struct AuditedTransaction {
     /// Published order, a slot that did not open sits in `payload_errors` instead.
     pub outputs: Vec<AuditedOutput>,
     pub payload_errors: Vec<OutputPayloadError>,
+    /// The `EscrowPending` slots of a key-escrow frame, the owner read before any commitment holds it.
+    pub awaiting_key: Vec<AwaitingKeyOutput>,
     /// `R`, spent notes among the published inputs.
     pub real_inputs: u8,
     /// One per published nullifier.
     pub inputs: Vec<AuditedInput>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AwaitingKeyOutput {
+    pub owner_key: [u8; 32],
+    pub commitment: [u8; 32],
 }
 
 /// One opened slot, its note rebuilt to the published commitment.

@@ -60,8 +60,6 @@ export interface RelayProofInputs {
   readonly sender: ShieldedAddress;
   readonly nullifierKey: NullifierKey;
   readonly txViewingKey: ViewingKey;
-  /** Opens the auditor message of `externalData` with the auditor public key alone. */
-  readonly auditEphemeralKey: Bytes32;
   readonly inputs: readonly ProofInputUtxo[];
   /** One per input slot, read on spends only. */
   readonly leafIndexes: readonly bigint[];
@@ -102,8 +100,7 @@ export function encodeRelayProofInputs(value: RelayProofInputs): Uint8Array {
       .bytes(addressBytes(value.ringProgramId), 32, "ringProgramId")
       .bytes(value.sender.toBytes(), undefined, "sender")
       .bytes(nullifierSecret, BLINDING_LENGTH, "nullifierSecret")
-      .bytes(txViewingSecret, 32, "txViewingSecret")
-      .bytes(value.auditEphemeralKey, 32, "auditEphemeralKey");
+      .bytes(txViewingSecret, 32, "txViewingSecret");
   } finally {
     nullifierSecret.fill(0);
     txViewingSecret.fill(0);
@@ -169,7 +166,6 @@ export async function decodeRelayProofInputs(
     reader.bytes(BLINDING_LENGTH, "nullifierSecret") as Bytes31,
   );
   const txViewingKey = ViewingKey.fromBytes(reader.hash("txViewingSecret"));
-  const auditEphemeralKey = reader.hash("auditEphemeralKey");
   if (!equalBytes(nullifierKey.publicKey(), sender.nullifierPublicKey))
     throw refused("nullifierKey");
   const leafIndexes: bigint[] = [];
@@ -198,7 +194,6 @@ export async function decodeRelayProofInputs(
     sender,
     nullifierKey,
     txViewingKey,
-    auditEphemeralKey,
     inputs,
     leafIndexes,
     outputs,

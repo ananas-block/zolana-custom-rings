@@ -1473,3 +1473,45 @@ fn a_version_3_frame_stays_on_the_historical_reader_under_its_tag() {
         Err(AuditError::HistoricalFrame)
     ));
 }
+
+/// The instruction group of the base commit's tag 47 and its disclosure.
+#[test]
+fn a_base_commit_merge_binds_its_disclosure() {
+    let vector: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../test-vectors/historical/old_merge.json"
+    ))
+    .unwrap();
+    let bytes = |value: &serde_json::Value| hex::decode(value.as_str().unwrap()).unwrap();
+    let address =
+        |value: &serde_json::Value| Address::new_from_array(bytes(value).try_into().unwrap());
+    let group = InstructionGroup {
+        outer: ParsedInstruction::new(
+            address(&vector["outer_program"]),
+            Vec::new(),
+            bytes(&vector["outer"]),
+            1,
+        ),
+        inner: vector["inner"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|inner| {
+                ParsedInstruction::new(
+                    address(&inner["program"]),
+                    Vec::new(),
+                    bytes(&inner["data"]),
+                    inner["height"].as_u64().unwrap() as _,
+                )
+            })
+            .collect(),
+    };
+    let origin = ring_event_origin_in(&[group], 0, address(&vector["ring"])).unwrap();
+    assert_eq!(
+        origin.merge_disclosure,
+        Some(ConfirmedMergeDisclosure::Historical {
+            eph_pk: [4; 33],
+            ciphertext: [5; 32],
+            fields: vec![[6; 32]; 13],
+        })
+    );
+}

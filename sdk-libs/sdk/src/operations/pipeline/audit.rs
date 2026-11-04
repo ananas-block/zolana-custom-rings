@@ -11,7 +11,6 @@ use spr_transaction::{
     instructions::transact::SppProofInputs, utxo::SppProofInputUtxo, Mint, SppProofOutputUtxo,
     TransactionError,
 };
-use zeroize::Zeroizing;
 use zolana_ring_client::AuditStreamSeal;
 use zolana_ring_transaction::RingOutputRail;
 
@@ -28,12 +27,10 @@ pub(crate) struct SealedAudit {
     pub records: Vec<[u8; AUDIT_RECORD_LEN]>,
     /// One per slot under `has_data`, else none.
     pub tails: Vec<[u8; DATA_TAIL_LEN]>,
-    eph_sk: Zeroizing<[u8; 32]>,
 }
 
 pub(crate) struct PresealedAudit {
     pub message: MessageData,
-    pub eph_sk: Zeroizing<[u8; 32]>,
 }
 
 pub(super) struct AuditSeal<'a> {
@@ -42,13 +39,6 @@ pub(super) struct AuditSeal<'a> {
     pub flags: AuditLayout,
     pub inputs: &'a SppProofInputs,
     pub auditor: &'a X25519Pubkey,
-}
-
-impl SealedAudit {
-    /// The secret opens the stream with the auditor public key alone.
-    pub(crate) fn ephemeral_secret(&self) -> &Zeroizing<[u8; 32]> {
-        &self.eph_sk
-    }
 }
 
 impl AuditSeal<'_> {
@@ -78,7 +68,6 @@ impl AuditSeal<'_> {
             envelope: sealed.envelope,
             records: sealed.records,
             tails: sealed.tails,
-            eph_sk: self.rail.tx_viewing_key().secret_bytes(),
         })
     }
 
@@ -201,7 +190,6 @@ impl PresealedAudit {
             envelope: message.envelope.to_vec(),
             records,
             tails,
-            eph_sk: self.eph_sk,
         })
     }
 }

@@ -17,6 +17,7 @@ mod relay_000001_relays;
 mod replay_000001_nonces;
 mod spent2_000001_finalized;
 mod spent3_000001_nullifiers;
+mod spent4_000001_awaiting_key;
 mod spent_000001_commitments;
 
 pub struct Migrator;
@@ -61,6 +62,7 @@ impl MigratorTrait for Migrator {
             Box::new(spent3_000001_nullifiers::Migration),
             Box::new(cosign5_000001_outflow::Migration),
             Box::new(relay2_000001_enrollments::Migration),
+            Box::new(spent4_000001_awaiting_key::Migration),
         ]
     }
 }

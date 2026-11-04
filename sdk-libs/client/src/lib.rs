@@ -59,7 +59,7 @@ pub mod viewing_history;
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, SenderClaim, SentCheck,
+    AnonymousRingUtxo, AnonymousScan, AuditorRecovery, AnonymousStream, AnonymousSync, SenderClaim, SentCheck,
     SentPayment,
 };
 pub use crate::anonymous_wallet::{
@@ -73,12 +73,14 @@ pub use crate::viewing_history::{
     VIEWING_HISTORY_VERSION,
 };
 pub use crate::{
-    confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},
+    confidential::{
+        open_ring_confidential, RingConfidentialNotes, RingConfidentialScan, RingFullScan,
+    },
     created::{
         CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
         DepositOwners,
     },
-    decrypt::{AuditFrame, FramedRow, HistoricalLayout, TransactionAudit},
+    decrypt::{AuditFrame, EscrowedKeys, FramedRow, HistoricalLayout, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,
     disclosure::{
@@ -117,7 +119,7 @@ pub use crate::{
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
         AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
-        CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
+        AwaitingKeyOutput, CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
         OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
 };

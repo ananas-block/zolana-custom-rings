@@ -1,0 +1,11 @@
+{
+  "close": "3c",
+  "description": "The buffered wire. Frame is the inline instruction data with its tag. WRITE_FRAME data is tag || u64le(nonce) || u16le(frame_len) || u16le(offset) || bytes, accounts writer (signer, writable), buffer (writable), and on the first write the system program, creating the buffer at [seed, writer, u64le(nonce)]. CLOSE_FRAME_BUFFER is the tag alone, accounts writer (signer), buffer (writable), rent recipient (writable). SETTLE_BUFFERED data is tag || sha256(frame), accounts buffer (writable), ring program, then the inline accounts of a TRANSFER, the only frame tag it takes, and its SPP payer is the writer. FRAME_EVENT is tag || frame, the inner instruction readers take the frame from, accepted when it is an inner instruction of a SETTLE_BUFFERED of the ring program in a successful transaction whose digest it matches. Produced by program-libs/interface/tests/frame_buffer.rs.",
+  "event": "3f370102030405",
+  "frame": "370102030405",
+  "header_len": 34,
+  "max_frame_len": 10206,
+  "seed": "6672616d655f627566666572",
+  "settle": "3da647a455f9c7aa95596bd6dbe3f2c7f8eda0748def669f81ad34c0eb4529e269",
+  "write": "3b07000000000000000600020002030405"
+}

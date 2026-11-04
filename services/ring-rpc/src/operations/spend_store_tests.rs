@@ -553,6 +553,40 @@ async fn restart(store: &Store, seal: &NoteSeal) -> AuditStore {
     book
 }
 
+#[tokio::test]
+async fn a_waiting_note_survives_a_restart_and_leaves_once_it_opens() {
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let (book, seal) = (AuditStore::default(), seal());
+    let owner = wallet(1);
+    let keys = Keys::with(owner, 7);
+    let created = note(owner, &secret(7), 0x10, 50);
+    commit_page(&store, &book, &seal, &keys, &|work| {
+        work.await_key(
+            frame(2),
+            [AwaitingKeyOutput {
+                owner_key: created.utxo.owner_key,
+                commitment: created.commitment,
+            }],
+        )
+    })
+    .await
+    .expect("commit");
+    let read = restart(&store, &seal).await;
+    assert_eq!(read.retry_frames(), Vec::new());
+    assert_eq!(read.read_book().awaiting_key.len(), 1);
+    commit_page(&store, &read, &seal, &keys, &|work| {
+        work.open(frame(2), [created])
+    })
+    .await
+    .expect("commit");
+    assert!(read.read_book().awaiting_key.is_empty());
+    assert!(restart(&store, &seal)
+        .await
+        .read_book()
+        .awaiting_key
+        .is_empty());
+}
+
 fn seal() -> NoteSeal {
     NoteSeal::derive(&spr_keypair::X25519Keypair::from_bytes(&[0x41; 32]), RING).expect("seal")
 }

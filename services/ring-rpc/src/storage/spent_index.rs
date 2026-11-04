@@ -16,7 +16,7 @@ use zolana_ring_client::{history::HistoryPosition, KnownUtxo, UtxoOwner};
 
 use crate::{
     spend_machine::{SpendRow, SpendState},
-    utxos::{CreatedIn, PageDelta, StoredUtxo},
+    utxos::{AwaitingKeyNote, CreatedIn, PageDelta, StoredUtxo},
 };
 
 const NOTE_SEAL_INFO: &[u8] = b"zolana/ring-rpc-note-seal/v1";
@@ -43,6 +43,7 @@ pub(crate) struct LoadedSpends {
     pub notes: Vec<([u8; 32], StoredUtxo)>,
     pub rows: Vec<SpendRow>,
     pub unread: Vec<CreatedIn>,
+    pub awaiting_key: Vec<([u8; 32], AwaitingKeyNote)>,
     pub faults: Vec<SpendRow>,
 }
 
@@ -274,7 +275,27 @@ impl PageCommit<'_> {
         let run =
             |sql: &str, values: Vec<Value>| Statement::from_sql_and_values(backend, sql, values);
         let ring_value = || Value::from(ring.as_ref().to_vec());
+        for (commitment, note) in delta.awaiting_key() {
+            let mut values = frame_values(&ring, &note.frame)?;
+            values.extend([
+                commitment.to_vec().into(),
+                seal.seal(commitment, &note.owner_key)?.into(),
+            ]);
+            transaction
+                .execute(run(
+                    "INSERT INTO spend_awaiting_key(ring,slot,tx_signature,event_index,commitment,sealed_owner) \
+                     VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(ring,commitment) DO NOTHING",
+                    values,
+                ))
+                .await?;
+        }
         for (commitment, note) in delta.notes() {
+            transaction
+                .execute(run(
+                    "DELETE FROM spend_awaiting_key WHERE ring=$1 AND commitment=$2",
+                    vec![ring_value(), commitment.to_vec().into()],
+                ))
+                .await?;
             let sealed = seal.seal(commitment, &note_body(note))?;
             transaction
                 .execute(run(
@@ -428,6 +449,23 @@ impl LoadSpends<'_> {
             .await?
         {
             loaded.unread.push(read_frame(&row)?);
+        }
+        for row in db
+            .query_all(query(
+                "SELECT commitment,slot,tx_signature,event_index,sealed_owner FROM spend_awaiting_key WHERE ring=$1",
+            ))
+            .await?
+        {
+            let commitment: [u8; 32] = read_bytes(&row, "commitment")?;
+            let owner_key = seal.open(&commitment, &row.try_get::<Vec<u8>>("", "sealed_owner")?)?;
+            loaded.awaiting_key.push((
+                commitment,
+                AwaitingKeyNote {
+                    owner_key: <[u8; 32]>::try_from(owner_key)
+                        .map_err(|_| DbErr::Custom("an awaiting owner has another length".into()))?,
+                    frame: read_frame(&row)?,
+                },
+            ));
         }
         for row in db
             .query_all(query(

@@ -662,8 +662,8 @@ mod tests {
         deposits: Vec<([u8; 32], Vec<u8>)>,
     ) -> spr_event_parser::InstructionGroup {
         let mut group = deposit_fixture::group(ring, true, deposits);
-        let revision = core::mem::size_of::<custom_ring_interface::storage::Revision>();
-        group.outer.data.drain(..revision);
+        let later_fields = core::mem::size_of::<custom_ring_interface::storage::Revision>() + 1;
+        group.outer.data.drain(..later_fields);
         group.outer.data[0] = custom_ring_interface::tag::HISTORICAL_DEPOSIT;
         group
     }
@@ -727,6 +727,56 @@ mod tests {
         .encode();
         let group = historical_group(ring, vec![(commitment, new)]);
         assert!(crate::ring_event_origin_in(&[group], 0, ring).is_err());
+    }
+
+    /// Bytes of the base commit's encoder, tag 31 and its shorter prefix.
+    #[test]
+    fn a_base_commit_crdep001_event_recovers() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../test-vectors/historical/crdep001.json"
+        ))
+        .unwrap();
+        let bytes = |value: &serde_json::Value| hex::decode(value.as_str().unwrap()).unwrap();
+        let address = |value: &serde_json::Value| {
+            solana_address::Address::new_from_array(bytes(value).try_into().unwrap())
+        };
+        let ring = address(&vector["ring"]);
+        let group = spr_event_parser::InstructionGroup {
+            outer: spr_event_parser::ParsedInstruction::new(
+                ring,
+                Vec::new(),
+                bytes(&vector["outer"]),
+                1,
+            ),
+            inner: vector["inner"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|inner| {
+                    spr_event_parser::ParsedInstruction::new(
+                        address(&inner["program"]),
+                        Vec::new(),
+                        bytes(&inner["data"]),
+                        inner["height"].as_u64().unwrap() as _,
+                    )
+                })
+                .collect(),
+        };
+        let auditor = X25519Keypair::from_bytes(&Zeroizing::new([0x41; 32]));
+        let origin = crate::ring_event_origin_in(&[group], 0, ring).unwrap();
+        for (index, capsule) in vector["capsules"].as_array().unwrap().iter().enumerate() {
+            let raw = bytes(&capsule["bytes"]);
+            let hash: [u8; 32] = bytes(&capsule["owner_utxo_hash"]).try_into().unwrap();
+            let parsed = DepositCapsule::parse(&raw).unwrap().unwrap();
+            assert!(parsed.is_historical());
+            let opened = open_deposit(&parsed, &auditor, &hash, &origin.deposits[index]).unwrap();
+            assert_eq!(hex::encode(opened.owner_key), vector["owner_keys"][index]);
+            assert_eq!(
+                hex::encode(opened.owner_hash),
+                vector["owner_hashes"][index]
+            );
+            assert_eq!(opened.note, None);
+        }
     }
 
     #[test]

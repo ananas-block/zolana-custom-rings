@@ -117,6 +117,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_base_commit_disclosure_opens() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../test-vectors/historical/merge_sealed.json"
+        ))
+        .unwrap();
+        let bytes = |value: &serde_json::Value| hex::decode(value.as_str().unwrap()).unwrap();
+        let fields = |value: &serde_json::Value| -> Vec<[u8; 32]> {
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|field| bytes(field).try_into().unwrap())
+                .collect()
+        };
+        let opened = open_merge_disclosure(
+            &X25519Keypair::from_bytes(&Zeroizing::new([0x51; 32])),
+            &X25519Pubkey::from_bytes(bytes(&vector["eph_pk"]).try_into().unwrap()).unwrap(),
+            &bytes(&vector["ciphertext"]).try_into().unwrap(),
+            [0x21; 16],
+            &fields(&vector["fields"]),
+        )
+        .unwrap();
+        assert_eq!(opened.input_commitments, fields(&vector["list"]));
+    }
+
+    #[test]
     fn a_list_seals_to_its_field_count_and_opens_in_slot_order() {
         let auditor = X25519Keypair::new();
         let salt = [5; 16];

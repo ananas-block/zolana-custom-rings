@@ -23,8 +23,8 @@ use zolana_ring_client::{
         InputParty, SpendCoverageFrame, SpendCoverageRow, WalletBalance, WalletEnrollment,
         WalletNote, WalletNoteStatus,
     },
-    AuditedMergeOutput, ConfirmedMerge, CreatedUtxo, DepositOwner, DepositOwners, KnownUtxo,
-    SealedNullifierKey, UtxoOwner,
+    AuditedMergeOutput, AwaitingKeyOutput, ConfirmedMerge, CreatedUtxo, DepositOwner,
+    DepositOwners, EscrowedKeys, KnownUtxo, SealedNullifierKey, UtxoOwner,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::{historical::InputPrefix, RingAssets};
@@ -49,6 +49,7 @@ pub(crate) struct AuditStore {
     assets: RwLock<Option<RingAssets>>,
     /// Owners whose key arrived, kept until a committed page derived their notes.
     late_owners: RwLock<BTreeSet<[u8; 32]>>,
+    key_arrived: RwLock<BTreeSet<CreatedIn>>,
     /// Set once the book holds the table's rows.
     loaded: AtomicBool,
     /// One backfill and tracked key refresh at a time.
@@ -65,6 +66,8 @@ struct SpendBook {
     owned: HashMap<[u8; 32], BTreeSet<[u8; 32]>>,
     rows: HashMap<[u8; 32], SpendRow>,
     unread: BTreeSet<CreatedIn>,
+    /// By commitment, leaves once the commitment accepts its owner's key.
+    awaiting_key: BTreeMap<[u8; 32], AwaitingKeyNote>,
     faults: Vec<SpendRow>,
     historical: HashMap<[u8; 32], SpentCommitment>,
     context: Context,
@@ -79,10 +82,18 @@ pub(crate) struct PageDelta {
     rows: BTreeMap<[u8; 32], SpendRow>,
     unread: BTreeSet<CreatedIn>,
     read: BTreeSet<CreatedIn>,
+    awaiting_key: BTreeMap<[u8; 32], AwaitingKeyNote>,
     faults: Vec<SpendRow>,
     historical: Vec<SpentCommitment>,
     checkpoint: Option<Checkpoint>,
     late_owners: Vec<[u8; 32]>,
+}
+
+/// A key-escrow slot no known key opens, the owner read off the frame and never proven.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AwaitingKeyNote {
+    pub owner_key: [u8; 32],
+    pub frame: CreatedIn,
 }
 
 /// A page's overlay on the book, a later row reads what an earlier row opened.
@@ -164,6 +175,7 @@ struct TrackedKeys {
 impl SpendBook {
     fn absorb(&mut self, delta: PageDelta) {
         for (commitment, note) in delta.notes {
+            self.awaiting_key.remove(&commitment);
             if note.ring_note {
                 if let Ok(member) = Member::owner_tag(&note.utxo.owner_key) {
                     self.owned
@@ -193,6 +205,7 @@ impl SpendBook {
             self.unread.remove(&frame);
         }
         self.unread.extend(delta.unread);
+        self.awaiting_key.extend(delta.awaiting_key);
         for fault in delta.faults {
             if !self.faults.contains(&fault) {
                 self.faults.push(fault);
@@ -237,6 +250,12 @@ impl SpendBook {
     }
 }
 
+impl EscrowedKeys for AuditStore {
+    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]> {
+        self.tracked(owner_key).map(|owner| owner.nullifier_pk)
+    }
+}
+
 impl PageDelta {
     pub(crate) fn notes(&self) -> impl Iterator<Item = (&[u8; 32], &StoredUtxo)> {
         self.notes.iter()
@@ -256,6 +275,10 @@ impl PageDelta {
 
     pub(crate) fn unread_frames(&self) -> impl Iterator<Item = &CreatedIn> {
         self.unread.iter()
+    }
+
+    pub(crate) fn awaiting_key(&self) -> impl Iterator<Item = (&[u8; 32], &AwaitingKeyNote)> {
+        self.awaiting_key.iter()
     }
 
     pub(crate) fn historical(&self) -> &[SpentCommitment] {
@@ -461,6 +484,22 @@ impl<'a> PageWork<'a> {
     }
 
     /// Retries with every other frame the backfill keeps.
+    pub(crate) fn await_key(
+        &mut self,
+        frame: CreatedIn,
+        outputs: impl IntoIterator<Item = AwaitingKeyOutput>,
+    ) {
+        for output in outputs {
+            self.delta.awaiting_key.insert(
+                output.commitment,
+                AwaitingKeyNote {
+                    owner_key: output.owner_key,
+                    frame,
+                },
+            );
+        }
+    }
+
     pub(crate) fn mark_unread(&mut self, frame: CreatedIn) {
         self.delta.read.remove(&frame);
         self.delta.unread.insert(frame);
@@ -563,6 +602,7 @@ impl AuditStore {
             notes,
             rows,
             unread,
+            awaiting_key,
             faults,
         } = loaded;
         let delta = PageDelta {
@@ -573,6 +613,7 @@ impl AuditStore {
             notes: notes.into_iter().collect(),
             rows: rows.into_iter().map(|row| (row.nullifier, row)).collect(),
             unread: unread.into_iter().collect(),
+            awaiting_key: awaiting_key.into_iter().collect(),
             faults,
             checkpoint: Some(checkpoint),
             ..PageDelta::default()
@@ -689,6 +730,12 @@ impl AuditStore {
             balances: balances.into_values().collect(),
             notes,
             cursor,
+            awaiting_key: book
+                .awaiting_key
+                .iter()
+                .filter(|(_, note)| note.owner_key == query.wallet.to_bytes())
+                .map(|(commitment, _)| Hash(*commitment))
+                .collect(),
         }
     }
 
@@ -726,8 +773,21 @@ impl AuditStore {
         }
     }
 
-    pub(crate) fn unread_frames(&self) -> Vec<CreatedIn> {
-        self.read_book().unread.iter().copied().collect()
+    /// Unreadable frames, then each frame once when a key it waited for arrives.
+    pub(crate) fn retry_frames(&self) -> Vec<CreatedIn> {
+        let arrived = self
+            .key_arrived
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let book = self.read_book();
+        book.unread.iter().chain(arrived.iter()).copied().collect()
+    }
+
+    pub(crate) fn retried(&self, frame: &CreatedIn) {
+        self.key_arrived
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(frame);
     }
 
     /// Reads wallet status, an unrelated unresolved spend hides no note, a published row always does.
@@ -794,6 +854,21 @@ impl AuditStore {
         owners: HashMap<[u8; 32], TrackedOwner>,
     ) {
         let mut tracked = self.tracked.write().unwrap_or_else(PoisonError::into_inner);
+        let arrived: BTreeSet<[u8; 32]> = owners
+            .values()
+            .filter(|owner| !tracked.keys.contains_key(&owner.owner_key))
+            .map(|owner| owner.owner_key)
+            .collect();
+        self.key_arrived
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(
+                self.read_book()
+                    .awaiting_key
+                    .values()
+                    .filter(|note| arrived.contains(&note.owner_key))
+                    .map(|note| note.frame),
+            );
         self.late_owners
             .write()
             .unwrap_or_else(PoisonError::into_inner)
