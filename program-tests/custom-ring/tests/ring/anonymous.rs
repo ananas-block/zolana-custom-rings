@@ -293,7 +293,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     input_amounts.sort_unstable();
     assert_eq!(input_amounts, [RING_DEPOSIT_B, RING_DEPOSIT_A]);
 
-    // 5. The recipient finds the payment by its proven tag, a body names no sender.
+    // 5. The recipient finds the payment by its tag hint, a body names no sender.
     let mut recipient_wallet = fresh_wallet(&env, recipient_keys, ring_program)?;
     recipient_wallet.sync(&env)?;
     assert_eq!(

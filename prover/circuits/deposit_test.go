@@ -298,7 +298,7 @@ func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 		}
 		cases = append(cases, v)
 	}
-	ringtest.PinVector(t, "deposit/deposit-v4.json", map[string]any{
+	ringtest.PinVector(t, "deposit/deposit.json", map[string]any{
 		"description": "Solved deposit witnesses. A record is kind || u64be(amount) || owner_key || mint || be32(nullifier_pk) || 7 zero bytes || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep1. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1.",
 		"cases":       cases,
 	})

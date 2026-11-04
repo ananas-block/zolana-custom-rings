@@ -52,8 +52,8 @@ import {
 import { ringDepositContextHash } from "../../../src/proof/deposit-audit.js";
 import { RingInstructionTag } from "../../../src/operations/management/admin.js";
 import {
-  ringRail as ringRailV4,
-  ringRailOf as ringRailOfV4,
+  ringRail,
+  ringRailOf,
 } from "../../../src/protocol/transaction/transact.js";
 
 function bytes<T extends Uint8Array>(value: string, length?: number): T {
@@ -429,18 +429,18 @@ describe("transfer key selection", () => {
 describe("ring rails", () => {
   const delegate = encodeBase58(new Uint8Array(32).fill(7));
 
-  it("picks the rail of a version 4 instruction under the mode and the delegate", () => {
+  it("picks the rail of an instruction under the mode and the delegate", () => {
     const { transfer, authorityTransfer, merge } = RingInstructionTag;
-    expect(ringRailV4(transfer, { mode: "confidential" })).toBe("confidential");
-    expect(ringRailV4(transfer, { mode: "anonymous" })).toBe("anonymous");
-    expect(ringRailV4(authorityTransfer, { mode: "confidential", delegate })).toBe("delegate");
-    expect(ringRailV4(authorityTransfer, { mode: "anonymous", delegate })).toBe(
+    expect(ringRail(transfer, { mode: "confidential" })).toBe("confidential");
+    expect(ringRail(transfer, { mode: "anonymous" })).toBe("anonymous");
+    expect(ringRail(authorityTransfer, { mode: "confidential", delegate })).toBe("delegate");
+    expect(ringRail(authorityTransfer, { mode: "anonymous", delegate })).toBe(
       "anonymousDelegate",
     );
-    expect(() => ringRailV4(authorityTransfer, { mode: "anonymous" })).toThrow(
+    expect(() => ringRail(authorityTransfer, { mode: "anonymous" })).toThrow(
       ringError("DelegateDisabled"),
     );
-    expect(() => ringRailOfV4(merge, "confidential")).toThrow(ringError("InvalidInstructionData"));
+    expect(() => ringRailOf(merge, "confidential")).toThrow(ringError("InvalidInstructionData"));
   });
 });
 

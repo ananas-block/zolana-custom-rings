@@ -2,9 +2,9 @@ import { getBase58Decoder, type Address, type Signature } from "@solana/kit";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import auditVector from "../../../../../test-vectors/audit/audit-stream-v4.json" with { type: "json" };
-import depositVector from "../../../../../test-vectors/deposit/deposit-v4.json" with { type: "json" };
-import mergeVector from "../../../../../test-vectors/merge/merge_v4.json" with { type: "json" };
+import auditVector from "../../../../../test-vectors/audit/audit-stream.json" with { type: "json" };
+import depositVector from "../../../../../test-vectors/deposit/deposit.json" with { type: "json" };
+import mergeVector from "../../../../../test-vectors/merge/merge.json" with { type: "json" };
 import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
 import {
   EncryptedScheme,
@@ -172,7 +172,7 @@ beforeAll(async () => {
   await initializePoseidon();
 });
 
-describe("the v4 transfer reader", () => {
+describe("the transfer reader", () => {
   it("rebuilds every slot of every vector from the stream with no registry", () => {
     expect(equalBytes(ringIdField(ring), field(auditVector.ring_id))).toBe(true);
     for (const entry of auditVector.cases) {
@@ -598,7 +598,7 @@ describe("the deposit reader", () => {
 
 });
 
-describe("the v4 origin", () => {
+describe("the origin", () => {
   it("parses SPP's delegate exit circuit", () => {
     const data = encodeRingTransactInstructionData({
       expiryUnixTs: 0n,
@@ -627,7 +627,7 @@ describe("the v4 origin", () => {
   it("binds a tag 57 merge to its forwarded data and refuses another record", async () => {
     const frame = hex(
       readFileSync(
-        new URL("../../../../../test-vectors/merge/merge_frame_v4.hex", import.meta.url),
+        new URL("../../../../../test-vectors/merge/merge_frame.hex", import.meta.url),
         "utf8",
       ).trim(),
     );

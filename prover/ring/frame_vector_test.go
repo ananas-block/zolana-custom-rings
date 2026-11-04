@@ -33,7 +33,7 @@ const (
 	frameAnonymousDelegate
 )
 
-// frameCases lists the rail of every line of settlement/frame_v4.hex, in Fixture::cases order.
+// frameCases lists the rail of every line of settlement/frame.hex, in Fixture::cases order.
 var frameCases = []frameRail{
 	frameConfidential, frameConfidential, frameConfidential, frameConfidential, frameConfidential, frameConfidential, frameConfidential,
 	frameAnonymous, frameAnonymous, frameAnonymous, frameDelegate, frameAnonymousDelegate, frameAnonymous, frameAnonymous, frameConfidential,
@@ -65,7 +65,7 @@ func (c *frameCursor) bits(count int) uint64 {
 
 // The Go lengths walk every frame the program parses to its last byte, a length off the program's would miss the end.
 func TestFrameVectorWalksEveryField(t *testing.T) {
-	lines := vectorLines(t, "../../test-vectors/settlement/frame_v4.hex")
+	lines := vectorLines(t, "../../test-vectors/settlement/frame.hex")
 	if len(lines) != len(frameCases) {
 		t.Fatalf("%d frames, %d cases", len(lines), len(frameCases))
 	}
@@ -194,7 +194,7 @@ func walkExtensions(c *frameCursor) {
 }
 
 func TestMergeFrameVectorWalksTheRecord(t *testing.T) {
-	lines := vectorLines(t, "../../test-vectors/merge/merge_frame_v4.hex")
+	lines := vectorLines(t, "../../test-vectors/merge/merge_frame.hex")
 	c := frameCursor{t: t, rest: lines[0]}
 	c.take(8 + 32 + 32 + frameProofLen + 33 + circuits.MergeRecordLen)
 	if len(c.rest) == 0 {

@@ -476,14 +476,14 @@ fn after_slot(history: &ViewingHistory) -> Option<u64> {
 }
 
 #[tokio::test]
-async fn a_payment_is_found_under_its_proven_tag_and_the_read_stores_its_final_context() {
+async fn a_payment_is_found_under_its_tag_hint_and_the_read_stores_its_final_context() {
     let indexer = Indexer::default();
     let mut alice = Wallet::new(1);
     let bob = Wallet::new(2);
     let paid = alice.pay(&indexer, &[pay(&bob.address(), 30)]);
     let scan = bob.sync(&indexer, &fresh(&bob)).await;
     assert_eq!(found(&scan), [output(&paid, 1)]);
-    assert_eq!(stream(&scan, output(&paid, 1)), AnonymousStream::ProvenTag);
+    assert_eq!(stream(&scan, output(&paid, 1)), AnonymousStream::TagHint);
     assert_eq!(after_slot(scan.history()), Some(paid.slot));
     assert_eq!(
         indexer.transaction_tag_reads.load(Ordering::Relaxed),
@@ -502,7 +502,7 @@ async fn change_is_found_by_the_bundle_tag_and_the_change_slot_publishes_zero() 
     assert_eq!(paid.output_slots[0].view_tag, [0; 32]);
     let scan = alice.sync(&indexer, &fresh(&alice)).await;
     assert_eq!(found(&scan), [output(&paid, 0)]);
-    assert_eq!(stream(&scan, output(&paid, 0)), AnonymousStream::ProvenTag);
+    assert_eq!(stream(&scan, output(&paid, 0)), AnonymousStream::TagHint);
     let reader = bob.sync(&indexer, &fresh(&bob)).await;
     assert_eq!(found(&reader), [output(&paid, 1)]);
 }
@@ -1095,12 +1095,12 @@ async fn a_sent_body_that_fails_to_open_leaves_no_row() {
     indexer.publish(paid.clone());
     let scan = alice.sync(&indexer, &fresh(&alice)).await;
     assert!(scan.sent.is_empty());
-    assert_eq!(stream(&scan, output(&paid, 0)), AnonymousStream::ProvenTag);
+    assert_eq!(stream(&scan, output(&paid, 0)), AnonymousStream::TagHint);
 }
 
 /// A sender can hold a correct tag over any bytes, those bodies open to nothing and the sync carries on.
 #[tokio::test]
-async fn sender_chosen_garbage_under_a_proven_tag_never_fails_the_sync() {
+async fn sender_chosen_garbage_under_a_tag_hint_never_fails_the_sync() {
     let indexer = Indexer::default();
     let mut alice = Wallet::new(1);
     let bob = Wallet::new(2);
