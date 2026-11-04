@@ -649,7 +649,7 @@ impl<S: TransactionSource> AuditService<S> {
         limit: NonZeroU32,
     ) -> Result<(), RingRpcError> {
         let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
-        for frame in store.retry_frames().into_iter().take(MAX_RETRIED_FRAMES) {
+        for frame in store.unread_frames().into_iter().take(MAX_RETRIED_FRAMES) {
             let mut position = frame
                 .slot
                 .checked_sub(1)
@@ -699,7 +699,6 @@ impl<S: TransactionSource> AuditService<S> {
                     break;
                 }
             }
-            store.retried(&frame);
         }
         Ok(())
     }
@@ -751,10 +750,8 @@ impl<S: TransactionSource> AuditService<S> {
         assets: &RingAssets,
     ) -> Result<AuditedTransaction, AuditError> {
         let trees = bound.origin.event.input_tree_ids(bound.transaction);
-        let store = self.shared.store(self.ring);
         TransactionAudit::new(bound.transaction, bound.origin.audit_frame(bound.mode)?)
             .with_input_trees(&trees)?
-            .with_escrowed_keys(store.as_ref())
             .run(&self.auditor, assets)
     }
 
@@ -1061,7 +1058,6 @@ impl<S: TransactionSource> AuditService<S> {
             });
             if let Ok(opened) = &opened {
                 work.open(created_in, opened.utxos());
-                work.await_key(created_in, opened.awaiting_key.iter().copied());
                 for (position, input) in opened.inputs.iter().enumerate() {
                     work.observe(Observation {
                         nullifier: input.nullifier,

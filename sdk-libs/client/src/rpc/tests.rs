@@ -277,7 +277,6 @@ fn page(
 
 fn delivered_audited() -> AuditedTransaction {
     AuditedTransaction {
-        awaiting_key: Vec::new(),
         tx_signature: Signature::from([1; 64]),
         slot: 42,
         tx_viewing_pk: ViewingKey::from_bytes(&[3; 32]).pubkey(),
@@ -370,7 +369,6 @@ fn a_real_input_reads_apart_from_a_dummy() {
 fn in_proof_page(real: AuditedInput, dummy: AuditedInput) -> GetDecryptedTransactionsResponse {
     let mut page = page(
         AuditedTransaction {
-            awaiting_key: Vec::new(),
             real_inputs: 1,
             inputs: vec![real, dummy],
             ..delivered_audited()
@@ -385,7 +383,6 @@ fn two_owner_transaction(wallet: Address) -> DecryptedTransaction {
     let mint = Some(Address::new_from_array([4; 32]));
     let mut transaction = page(
         AuditedTransaction {
-            awaiting_key: Vec::new(),
             outputs: vec![
                 output(
                     0,
@@ -492,7 +489,6 @@ fn a_wallet_with_no_spent_input_reads_only_its_own_outputs() {
 
 fn anonymous_audited() -> AuditedTransaction {
     AuditedTransaction {
-        awaiting_key: Vec::new(),
         tx_signature: Signature::from([1; 64]),
         slot: 42,
         tx_viewing_pk: ViewingKey::from_bytes(&[2; 32]).pubkey(),

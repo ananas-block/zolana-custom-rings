@@ -78,7 +78,7 @@ pub use crate::{
         CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
         DepositOwners,
     },
-    decrypt::{AuditFrame, EscrowedKeys, FramedRow, HistoricalLayout, TransactionAudit},
+    decrypt::{AuditFrame, FramedRow, HistoricalLayout, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,
     disclosure::{
@@ -117,7 +117,7 @@ pub use crate::{
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
         AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
-        AwaitingKeyOutput, CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
+        CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
         OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
 };
