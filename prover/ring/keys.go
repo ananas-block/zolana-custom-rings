@@ -15,6 +15,7 @@ type Family int
 
 const (
 	TransferConfidential Family = iota
+	TransferConfidentialEntry
 	TransferAnonymous
 	TransferAnonymousEntry
 	ApplyRecords
@@ -26,10 +27,13 @@ const (
 type Key struct {
 	Circuit common.CircuitType
 	Family  Family
-	// Inputs counts the input slots, queued writes or merged UTXOs the key sizes.
+	// Inputs counts the input slots or queued writes the key sizes.
 	Inputs      int
 	Outputs     int
 	Withdrawals int
+	// Owners counts a transfer key's owner rows, Data adds its tails.
+	Owners int
+	Data   bool
 }
 
 // Keys takes each shape from the package that sizes it.
@@ -41,39 +45,46 @@ func (k Key) KeyFile() string {
 
 func keys() []Key {
 	var keys []Key
-	add := func(family Family, inputs, outputs, withdrawals int) {
-		key := Key{Family: family, Inputs: inputs, Outputs: outputs, Withdrawals: withdrawals}
+	add := func(key Key) {
 		key.Circuit = key.circuitType()
 		keys = append(keys, key)
 	}
 	for _, shape := range transfer.ConfidentialShapes {
-		add(TransferConfidential, shape.Inputs, shape.Outputs, shape.Withdrawals)
+		add(Key{Family: TransferConfidential, Inputs: shape.Inputs, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Data: shape.Data})
+	}
+	for _, shape := range transfer.ConfidentialEntryShapes {
+		add(Key{Family: TransferConfidentialEntry, Inputs: shape.Inputs, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Data: shape.Data})
 	}
 	for _, shape := range transfer.AnonymousShapes {
-		add(TransferAnonymous, shape.InputClass, shape.Outputs, shape.Withdrawals)
+		add(Key{Family: TransferAnonymous, Inputs: shape.InputClass, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Data: shape.Data})
 	}
 	for _, shape := range transfer.EntryShapes {
-		add(TransferAnonymousEntry, shape.InputClass, shape.Outputs, shape.Withdrawals)
+		add(Key{Family: TransferAnonymousEntry, Inputs: shape.InputClass, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Data: shape.Data})
 	}
 	for _, writes := range registry.ApplyWidths {
-		add(ApplyRecords, writes, 0, 0)
+		add(Key{Family: ApplyRecords, Inputs: writes})
 	}
-	add(RegisterKey, 0, 0, 0)
+	add(Key{Family: RegisterKey})
 	for _, capacity := range circuits.DepositCapacities {
-		add(Deposit, capacity, 0, 0)
+		add(Key{Family: Deposit, Inputs: capacity})
 	}
-	for _, width := range circuits.MergeWidths {
-		add(Merge, width, 0, 0)
-	}
+	add(Key{Family: Merge})
 	return keys
 }
 
 func (k Key) confidentialShape() transfer.ConfidentialShape {
-	return transfer.ConfidentialShape{Inputs: k.Inputs, Outputs: k.Outputs, Withdrawals: k.Withdrawals}
+	return transfer.ConfidentialShape{Inputs: k.Inputs, Outputs: k.Outputs, Withdrawals: k.Withdrawals, Owners: k.Owners, Entry: k.Family == TransferConfidentialEntry, Data: k.Data}
 }
 
 func (k Key) anonymousShape() transfer.AnonymousShape {
-	return transfer.AnonymousShape{InputClass: k.Inputs, Outputs: k.Outputs, Withdrawals: k.Withdrawals, FullOpenings: k.Family == TransferAnonymousEntry}
+	return transfer.AnonymousShape{InputClass: k.Inputs, Outputs: k.Outputs, Withdrawals: k.Withdrawals, Owners: k.Owners, Entry: k.Family == TransferAnonymousEntry, Data: k.Data}
+}
+
+func (k Key) dataSuffix() string {
+	if k.Data {
+		return "-data"
+	}
+	return ""
 }
 
 func (k Key) circuitType() common.CircuitType {
@@ -82,11 +93,13 @@ func (k Key) circuitType() common.CircuitType {
 	}
 	switch k.Family {
 	case TransferConfidential:
-		return named("transfer-confidential-%d-in%d-w%d", k.Outputs, k.Inputs, k.Withdrawals)
+		return named("transfer-confidential-%d-in%d-w%d-s%d%s", k.Outputs, k.Inputs, k.Withdrawals, k.Owners, k.dataSuffix())
+	case TransferConfidentialEntry:
+		return named("transfer-confidential-entry-%d-in%d-w%d-s%d%s", k.Outputs, k.Inputs, k.Withdrawals, k.Owners, k.dataSuffix())
 	case TransferAnonymous:
-		return named("transfer-anonymous-%d-in%d-w%d", k.Outputs, k.Inputs, k.Withdrawals)
+		return named("transfer-anonymous-%d-in%d-w%d-s%d%s", k.Outputs, k.Inputs, k.Withdrawals, k.Owners, k.dataSuffix())
 	case TransferAnonymousEntry:
-		return named("transfer-anonymous-entry-%d-in%d-w%d", k.Outputs, k.Inputs, k.Withdrawals)
+		return named("transfer-anonymous-entry-%d-in%d-w%d-s%d%s", k.Outputs, k.Inputs, k.Withdrawals, k.Owners, k.dataSuffix())
 	case ApplyRecords:
 		return named("apply-records-%d", k.Inputs)
 	case RegisterKey:
@@ -94,7 +107,7 @@ func (k Key) circuitType() common.CircuitType {
 	case Deposit:
 		return named("deposit-%d", k.Inputs)
 	case Merge:
-		return named("merge-v3-%d", k.Inputs)
+		return named("merge-v4")
 	}
 	panic(fmt.Sprintf("ring: unknown ring family %d", k.Family))
 }

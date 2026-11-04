@@ -3,30 +3,17 @@ package ring
 import (
 	"encoding/json"
 	"os"
-	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
-	mergeshared "github.com/helius-labs/zolana/prover/server/circuits/spp_merge/shared"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
-func TestMergeCatalogShipsSppWidths(t *testing.T) {
-	for _, width := range circuits.MergeWidths {
-		if !slices.Contains(mergeshared.SupportedInputCounts, width) {
-			t.Fatalf("ring merge width %d, SPP merges %v", width, mergeshared.SupportedInputCounts)
-		}
-		key := keyOf(t, Key{Family: Merge, Inputs: width}.circuitType())
-		if common.KeyFileCircuit(key.KeyFile()) != key.Circuit {
-			t.Fatalf("%s does not round trip through its key file", key.Circuit)
-		}
-	}
-	for _, kind := range []common.CircuitType{"custom-ring-merge-v3-9", "custom-ring-merge-v3-52", "custom-ring-merge-anonymous-v2-8"} {
+func TestOldMergeKeysAreGone(t *testing.T) {
+	for _, kind := range []common.CircuitType{"custom-ring-merge-v3-8", "custom-ring-merge-v3-24", "custom-ring-merge-anonymous-v2-8"} {
 		if kind.IsExtension() {
 			t.Fatalf("%s is registered", kind)
 		}
@@ -34,56 +21,59 @@ func TestMergeCatalogShipsSppWidths(t *testing.T) {
 }
 
 // Rust and TypeScript pin the same file.
-const mergeVectorPath = "../../test-vectors/merge/merge_v2.json"
+const mergeVectorPath = "../../test-vectors/merge/merge_v4.json"
 
-const mergeVectorDescription = "Known-answer vector for the ring merge disclosure and statement, width 8, under key escrow. " +
-	"plaintext = be32(input_commitment) per slot in SPP slot order, 32 zero bytes at a dummy, zero padded to 31-byte chunks, chunk i a big-endian field. " +
-	"seed = Poseidon(0x4352_5f4d44, key_lo, key_hi, salt_field) with key_lo and key_hi PackBytesBE(disclosure_key) and salt_field the 16 salt bytes right aligned, " +
-	"fields[i] = (chunk[i] + Poseidon(seed, i)) mod r. envelope_ciphertext seals disclosure_key from eph to auditor under info CRING/mrg1 as the base Envelope does. " +
-	"elements = CRMG, private_tx_hash, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, " +
-	"hash_bytes(envelope_ciphertext), salt_field, hash_chain_4(fields), input_count, the three party identities, key_escrow, member_registry_root, " +
-	"public_input_hash = hash_chain(elements). input_count is the published nullifier count, a hidden dummy inside it is valid. " +
-	"Under key_escrow an owner off ZERO_NULLIFIER_PUBKEY has a record under member_registry_root that escrows Poseidon(nullifier_pk, ct_hash). " +
+const mergeVectorDescription = "Known-answer vector for the ring merge record and statement, one case per key mode. " +
+	"record = kind 1, 7 zero bytes, u64be(amount), owner_key, mint, be32(nullifier_pk), be32(seed), 144 bytes. " +
+	"ciphertext seals the record from eph to auditor under the audit stream schedule of label CRING/mrg2 at counter 2. " +
+	"output_blinding = Poseidon(TMOB, seed, first_nullifier). " +
+	"elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(ciphertext), payer, published_owner, tracking_root, " +
+	"public_input_hash = hash_chain(elements). published_owner is zero off ZERO_NULLIFIER_PUBKEY and the owner identity under it. " +
 	"request is the prover body. Produced by prover/ring/merge_test.go with WRITE_AUDIT_VECTORS=1."
 
+type mergeVectorCase struct {
+	Name            string       `json:"name"`
+	Record          Bytes        `json:"record"`
+	Ciphertext      Bytes        `json:"ciphertext"`
+	OutputBlinding  Field        `json:"output_blinding"`
+	Elements        []Field      `json:"elements"`
+	PublicInputHash Field        `json:"public_input_hash"`
+	Request         *MergeParams `json:"request"`
+}
+
 type mergeVector struct {
-	Description        string       `json:"description"`
-	Width              int          `json:"width"`
-	AuditorSk          Bytes        `json:"auditor_sk"`
-	AuditorPk          Bytes        `json:"auditor_pk"`
-	EphPk              Bytes        `json:"eph_pk"`
-	Salt               Bytes        `json:"salt"`
-	InputCount         uint8        `json:"input_count"`
-	InputCommitments   []Field      `json:"input_commitments"`
-	Plaintext          Bytes        `json:"plaintext"`
-	Fields             []Field      `json:"fields"`
-	EnvelopeCiphertext Bytes        `json:"envelope_ciphertext"`
-	Elements           []Field      `json:"elements"`
-	PublicInputHash    Field        `json:"public_input_hash"`
-	Request            *MergeParams `json:"request"`
+	Description string            `json:"description"`
+	AuditorSk   Bytes             `json:"auditor_sk"`
+	AuditorPk   Bytes             `json:"auditor_pk"`
+	EphPk       Bytes             `json:"eph_pk"`
+	Cases       []mergeVectorCase `json:"cases"`
+}
+
+func mergeCase(t *testing.T, name string, s *ringmerge.Statement) mergeVectorCase {
+	t.Helper()
+	return mergeVectorCase{
+		Name:            name,
+		Record:          s.Record,
+		Ciphertext:      s.Ciphertext(t),
+		OutputBlinding:  Field{s.OutputBlinding},
+		Elements:        fieldsOf(s.Elements(t)),
+		PublicInputHash: Field{ringtest.AsBigInt(s.Circuit.PublicInputHash)},
+		Request:         requestOf[MergeParams](t, mergeKey, s.Circuit),
+	}
 }
 
 func TestMergeVectorPinsHostAndCircuit(t *testing.T) {
-	s := ringmerge.BuildEscrowed(t, 8)
+	s, zero := ringmerge.Build(t), ringmerge.BuildZeroKey(t)
 	auditorSk := ringaudit.AuditorSk()
 	auditorU := s.Keys.AuditorPk()
 	auditorPk := ringprotocol.Tagged(auditorU[:])
 	ephPk := s.Keys.EphPk()
 	want := mergeVector{
-		Description:        mergeVectorDescription,
-		Width:              8,
-		AuditorSk:          auditorSk[:],
-		AuditorPk:          auditorPk[:],
-		EphPk:              ephPk[:],
-		Salt:               s.Salt[:],
-		InputCount:         uint8(ringtest.AsBigInt(s.Circuit.InputCount).Uint64()),
-		InputCommitments:   fieldsOf(s.InputHashes),
-		Plaintext:          s.Plaintext,
-		Fields:             fieldsOf(s.Fields),
-		EnvelopeCiphertext: s.Keys.EnvelopeCiphertext(t, s.DisclosureKey[:], shared.MergeEncInfo),
-		Elements:           fieldsOf(s.Elements(t)),
-		PublicInputHash:    Field{ringtest.AsBigInt(s.Circuit.PublicInputHash)},
-		Request:            requestOf[MergeParams](t, mergeKey, s.Circuit),
+		Description: mergeVectorDescription,
+		AuditorSk:   auditorSk[:],
+		AuditorPk:   auditorPk[:],
+		EphPk:       ephPk[:],
+		Cases:       []mergeVectorCase{mergeCase(t, "nonzero", s), mergeCase(t, "zero", zero)},
 	}
 	encoded, err := json.MarshalIndent(want, "", "  ")
 	if err != nil {
@@ -100,13 +90,15 @@ func TestMergeVectorPinsHostAndCircuit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(raw) != string(encoded) {
-		t.Fatal("the host mirror disagrees with test-vectors/merge/merge_v2.json, rewrite it with WRITE_AUDIT_VECTORS=1")
+		t.Fatal("the host mirror disagrees with test-vectors/merge/merge_v4.json, rewrite it with WRITE_AUDIT_VECTORS=1")
 	}
 	var pinned mergeVector
 	if err := json.Unmarshal(raw, &pinned); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := solvedWitness(t, mergeKey, mustMarshal(t, pinned.Request)); err != nil {
-		t.Fatal(err)
+	for _, vector := range pinned.Cases {
+		if _, err := solvedWitness(t, mergeKey, mustMarshal(t, vector.Request)); err != nil {
+			t.Fatal(vector.Name, err)
+		}
 	}
 }

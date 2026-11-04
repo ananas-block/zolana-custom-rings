@@ -30,7 +30,7 @@ const (
 	batchKey            common.CircuitType = "custom-ring-apply-records-16"
 	registerKey         common.CircuitType = "custom-ring-register-key"
 	depositKey          common.CircuitType = "custom-ring-deposit-8"
-	mergeKey            common.CircuitType = "custom-ring-merge-v3-8"
+	mergeKey            common.CircuitType = "custom-ring-merge-v4"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
@@ -71,7 +71,7 @@ func hostRequest(t testing.TB, k Key) any {
 	case Deposit:
 		return requestOf[DepositParams](t, k.Circuit, ringdeposit.BuildScreened(t, k.Inputs, ringdeposit.Allowlisted(ringpolicy.AssetA)).Narrow(t, k.Inputs).Circuit)
 	case Merge:
-		return requestOf[MergeParams](t, k.Circuit, ringmerge.BuildEscrowed(t, k.Inputs).Circuit)
+		return requestOf[MergeParams](t, k.Circuit, ringmerge.Build(t).Circuit)
 	}
 	t.Fatalf("no host request for ring family %d", k.Family)
 	return nil

@@ -173,15 +173,10 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	}
 }
 
-func TestMergeFrameVectorWalksTheDisclosure(t *testing.T) {
-	lines := vectorLines(t, "../../test-vectors/merge/merge_frame_v2.hex")
+func TestMergeFrameVectorWalksTheRecord(t *testing.T) {
+	lines := vectorLines(t, "../../test-vectors/merge/merge_frame_v4.hex")
 	c := frameCursor{t: t, rest: lines[0]}
-	c.take(8 + 32 + frameProofLen + 33 + 32)
-	fields := int(c.take(1)[0])
-	if fields != (32*circuits.MergeWidths[0]+30)/31 {
-		t.Fatalf("%d disclosure fields", fields)
-	}
-	c.take(32 * fields)
+	c.take(8 + 32 + 32 + frameProofLen + 33 + circuits.MergeRecordLen)
 	if len(c.rest) == 0 {
 		t.Fatal("the frame holds no SPP merge body")
 	}

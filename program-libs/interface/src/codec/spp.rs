@@ -283,12 +283,3 @@ pub const fn funder_account_position(transfer: &InterfaceTransfer) -> Option<usi
         InterfaceTransfer::SolWithdrawal { .. } | InterfaceTransfer::SplWithdrawal { .. } => None,
     }
 }
-
-pub fn merge_ring_instruction_data(output_ring_data_hash: &[u8; 32], merge: &[u8]) -> Vec<u8> {
-    [
-        &[spr_interface::instruction::tag::RING_MERGE_TRANSACT][..],
-        output_ring_data_hash,
-        merge,
-    ]
-    .concat()
-}
