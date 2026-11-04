@@ -47,7 +47,7 @@ func (s InputSection) AssertRingNotes(api frontend.API, ringID frontend.Variable
 type SignerSet struct {
 	Members []frontend.Variable
 	Count   ringgadget.Count
-	// Chain is zero at a count of zero, the value the in-proof, authority and entry rails bind.
+	// Chain is zero at a count of zero, the value the in-proof and authority rails bind.
 	Chain frontend.Variable
 }
 
@@ -58,13 +58,6 @@ func OpenSigners(api frontend.API, members []frontend.Variable, signerCount fron
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, count.Active[k]), V: member})
 	}
 	return SignerSet{Members: members, Count: count, Chain: api.Mul(api.Sub(1, count.OneHot[0]), gadget.HashChain4(api, members))}
-}
-
-func (s SignerSet) At(j int) frontend.Variable {
-	if j < len(s.Members) {
-		return s.Members[j]
-	}
-	return 0
 }
 
 // missing is zero exactly when owner is a counted member, a zero owner never matches padding.

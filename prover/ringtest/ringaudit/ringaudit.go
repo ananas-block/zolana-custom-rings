@@ -3,7 +3,6 @@ package ringaudit
 
 import (
 	"math/big"
-	"slices"
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
@@ -141,22 +140,16 @@ type Stream struct {
 	Ciphertext []byte
 }
 
-// SealAuditorStream mirrors audit.AuditWires.SealStream.
-func (k Keys) SealAuditorStream(t testing.TB, ranges audit.StreamRanges, evidence []byte, records [][]byte) Stream {
-	t.Helper()
-	plaintext := slices.Concat(k.txViewingSk[:], evidence)
-	plaintext = append(plaintext, make([]byte, ranges.RecordOffset(0)-len(plaintext))...)
-	for i, record := range records {
-		plaintext = append(append(plaintext, record...), make([]byte, ranges.RecordOffset(i+1)-len(plaintext)-len(record))...)
-	}
-	return Stream{Ranges: ranges, Ciphertext: k.StreamCiphertext(t, plaintext, shared.AuditEncInfo)}
-}
-
 func (s Stream) Envelope(count int) []byte {
 	return s.Ciphertext[:s.Ranges.EnvelopeLen(count)]
 }
 
-func (s Stream) Record(i, length int) []byte {
+func (s Stream) Record(i int) []byte {
 	offset := s.Ranges.RecordOffset(i)
-	return s.Ciphertext[offset : offset+length]
+	return s.Ciphertext[offset : offset+audit.RecordLen]
+}
+
+func (s Stream) Tail(i int) []byte {
+	offset := s.Ranges.TailOffset(i)
+	return s.Ciphertext[offset : offset+audit.TailLen]
 }

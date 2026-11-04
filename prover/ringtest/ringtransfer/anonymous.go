@@ -5,42 +5,38 @@ import (
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// Anonymous is one transfer of the anonymous family, Build derives every hash from it.
+type AnonymousRail int
+
+const (
+	HiddenSender AnonymousRail = iota
+	PublicOwners
+	AnonymousDelegate
+)
+
+// Anonymous is one transfer of the anonymous family.
 type Anonymous struct {
-	Shape            transfer.AnonymousShape
-	Policy           Policy
-	Exempt           bool
-	ApprovalRequired bool
-	Public           []PublicSlot
-	Withdrawals      []Withdrawal
-	AllDummies       bool
-	// CoOwners spend one more input each, the public run beside the hidden sender.
-	CoOwners      []*big.Int
-	Omitted       int
-	FrozenCoOwner bool
-	// Unenrolled leaves the sender's row without an address.
-	Unenrolled bool
+	World
+	Shape transfer.AnonymousShape
+	Rail  AnonymousRail
+	// Parties are the frame's public identities, the payer and a co-signer by default.
+	Parties []*big.Int
 }
 
 // BuiltAnonymous is an anonymous witness with the fixtures it was derived from.
 type BuiltAnonymous struct {
-	Circuit      *transfer.AnonymousTransferCircuit
-	Audit        ringaudit.AnonymousAudit
-	Own, Curator *ringregistry.Registry
-	World        Anonymous
+	Assembled
+	Circuit *transfer.AnonymousTransferCircuit
+	World   Anonymous
 }
 
 // Hidden is a policy ring transfer of shape on the anonymous rail.
 func Hidden(shape transfer.AnonymousShape) Anonymous {
-	return Anonymous{Shape: shape, Policy: Policy{Screened: true, Cap: 1_000_000, CosignAbove: 500_000, Threshold: 100}}
+	return Anonymous{Shape: shape, Rail: HiddenSender, World: World{Policy: Policy{Screened: true, Cap: 1_000_000, CosignAbove: 500_000, WithdrawalThreshold: 100_000}}, Parties: []*big.Int{big.NewInt(11), big.NewInt(12)}}
 }
 
 func (w Anonymous) Build(t testing.TB) BuiltAnonymous {
@@ -49,61 +45,31 @@ func (w Anonymous) Build(t testing.TB) BuiltAnonymous {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := ringaudit.NewAnonymousAudit(t, audit.AnonymousAuditShape{InputClass: w.Shape.InputClass, Outputs: w.Shape.Outputs, FullOpenings: w.Shape.FullOpenings})
-	if w.AllDummies {
-		a = a.AllDummies(t)
+	a := w.newAudit(t, audit.StreamShape{InputClass: w.Shape.InputClass, Outputs: w.Shape.Outputs, Entry: w.Shape.Entry, Data: w.Shape.Data})
+	var run []*big.Int
+	switch w.Rail {
+	case HiddenSender:
+		run = w.CoOwners
+	case PublicOwners:
+		run = append([]*big.Int{Sender(t)}, w.CoOwners...)
 	}
-	if w.Omitted > 0 {
-		a = a.Omit(t, w.Omitted)
+	c.PublicOwners, c.Delegate = ringtest.Bit(w.Rail == PublicOwners), ringtest.Bit(w.Rail == AnonymousDelegate)
+	for i := range c.PartyIdentities {
+		c.PartyIdentities[i] = 0
+		if i < len(w.Parties) {
+			c.PartyIdentities[i] = w.Parties[i]
+		}
 	}
-	for k, coOwner := range w.CoOwners {
-		a.Inputs[a.InputCount] = ringaudit.SpentUtxo(t, coOwner, a.SenderNullifierPk, a.RingProgramID, 1, 53+int64(k))
-		a.InputCount++
-	}
-	a.Signers = w.CoOwners
-	wires := a.Wires(a.Layout)
-	c.FirstNullifier, c.TxViewingSk, c.EphSk, c.AuditorPk, c.Salt, c.Layout = wires.FirstNullifier, wires.TxViewingSk, wires.EphSk, wires.AuditorPk, wires.Salt, wires.Layout
-	c.OutputCount = a.OutputCount()
-	for i, output := range a.Outputs {
-		c.Outputs[i] = output.Wires()
-	}
-	if w.Shape.FullOpenings {
-		ringtest.SetBytes(c.SenderKey, a.SenderKey[:])
-	}
-	c.InputCount = a.InputCount
-	for i, input := range a.Inputs {
-		c.Inputs[i] = input.Wires()
-	}
-	for i, party := range a.PartyIdentities {
-		c.PartyIdentities[i] = party
-	}
-	c.SignerCount = len(a.Signers)
-	copy(c.Signers, a.SignerWires())
-	c.SenderAddress = a.SenderAddressWires(t)
-	c.ReplyDigest = 0
-	c.Exempt, c.ApprovalRequired = bit(w.Exempt), bit(w.ApprovalRequired)
-	b := BuiltAnonymous{Circuit: c, Audit: a, World: w}
-	if w.Unenrolled {
-		delete(a.Rows, a.SenderPkHash(t).String())
-	}
-	senders := senderRows(len(c.SenderEntries), append([]*big.Int{a.SenderPkHash(t)}, w.CoOwners...)...)
-	b.Own, b.Curator = policyFixture{
-		Policy: w.Policy, Exempt: w.Exempt, Delivery: true, Outputs: a.Utxos(), Wires: b.OutputWires(), Public: w.Public, Withdrawals: w.Withdrawals,
-		Senders: senders, RingProgramID: a.RingProgramID, Addresses: a.Rows, FrozenCoOwner: w.FrozenCoOwner,
-	}.fill(t, &c.Policy)
-	c.PrivateTxBlinding = a.PrivateTxBlinding
-	c.PrivateTxHash = a.PrivateTxHash(t)
-	b.Rebind(t)
+	b := BuiltAnonymous{Circuit: c, World: w, Assembled: w.fill(t, &c.Sections, a, w.Rail == AnonymousDelegate, run)}
+	b.Rehash(t)
 	return b
 }
 
-// OutputWires are the slot wires the audit and the policy share.
-func (b BuiltAnonymous) OutputWires() []shared.UtxoWires {
-	wires := make([]shared.UtxoWires, len(b.Circuit.Outputs))
-	for o, output := range b.Circuit.Outputs {
-		wires[o] = output.Output
-	}
-	return wires
+// Rehash recomputes private_tx_hash from the fixture slots and inputs, then the public input.
+func (b BuiltAnonymous) Rehash(t testing.TB) {
+	t.Helper()
+	rehash(t, &b.Circuit.Sections, b.Audit)
+	b.Rebind(t)
 }
 
 // Rebind recomputes the public input after a statement value changes.
@@ -115,22 +81,18 @@ func (b BuiltAnonymous) Rebind(t testing.TB) {
 
 func (b BuiltAnonymous) Statement(t testing.TB) []*big.Int {
 	t.Helper()
-	return b.Values(t).AnonymousElements(t)
+	return b.Values(t).Elements(t)
 }
 
 // Values is what the program holds for the statement.
 func (b BuiltAnonymous) Values(t testing.TB) Statement {
 	t.Helper()
 	c := b.Circuit
-	s := policyStatement(&c.Policy)
-	s.PrivateTxHash = ringtest.AsBigInt(c.PrivateTxHash)
-	stream := b.Audit.Stream(t)
-	s.Head, s.Outputs, s.InputCount = b.Audit.AuditHead(t, b.Audit.Layout, stream.Envelope(b.Audit.InputCount)), b.Audit.StatementOutputs(t, stream), b.Audit.InputCount
-	s.Exempt, s.ApprovalRequired = ringtest.AsBigInt(c.Exempt).Sign() != 0, ringtest.AsBigInt(c.ApprovalRequired).Sign() != 0
+	s := values(t, &c.Sections, b.Assembled)
+	s.RailBits = [2]bool{ringtest.AsBigInt(c.PublicOwners).Sign() != 0, ringtest.AsBigInt(c.Delegate).Sign() != 0}
+	s.Cells = make([]*big.Int, len(c.PartyIdentities))
 	for i, party := range c.PartyIdentities {
-		s.PartyIdentities[i] = ringtest.AsBigInt(party)
+		s.Cells[i] = ringtest.AsBigInt(party)
 	}
-	tail := b.Audit.Tail(t)
-	s.SignerCount, s.SignerChain, s.BundleDigest, s.BundleTag, s.ReplyDigest = tail.SignerCount, tail.SignerChain, tail.BundleDigest, tail.BundleTag, ringtest.AsBigInt(c.ReplyDigest)
 	return s
 }
