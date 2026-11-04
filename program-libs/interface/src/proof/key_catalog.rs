@@ -140,8 +140,10 @@ impl RingCircuit {
     /// The one transfer key serving the spend, `None` when the catalog keys none.
     pub fn transfer(spend: TransferSpend) -> Option<Self> {
         let shapes = match (spend.rail, spend.spends_default_ring) {
-            (RingRail::Anonymous, false) => &ANONYMOUS_TRANSFER_SHAPES[..],
-            (RingRail::Anonymous, true) => &ENTRY_TRANSFER_SHAPES[..],
+            (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => {
+                &ANONYMOUS_TRANSFER_SHAPES[..]
+            }
+            (RingRail::Anonymous | RingRail::AnonymousDelegate, true) => &ENTRY_TRANSFER_SHAPES[..],
             (RingRail::Confidential | RingRail::Delegate, false) => {
                 &CONFIDENTIAL_TRANSFER_SHAPES[..]
             }
@@ -153,12 +155,12 @@ impl RingCircuit {
         }
         let withdrawals = shape.withdrawal_capacity(spend.legs)?;
         Some(match (spend.rail, spend.spends_default_ring) {
-            (RingRail::Anonymous, false) => Self::TransferAnonymous {
+            (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => Self::TransferAnonymous {
                 outputs: shape.outputs,
                 class: shape.inputs,
                 withdrawals,
             },
-            (RingRail::Anonymous, true) => Self::TransferAnonymousEntry {
+            (RingRail::Anonymous | RingRail::AnonymousDelegate, true) => Self::TransferAnonymousEntry {
                 outputs: shape.outputs,
                 class: shape.inputs,
                 withdrawals,
