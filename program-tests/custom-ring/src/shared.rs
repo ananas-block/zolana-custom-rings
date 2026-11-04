@@ -373,7 +373,6 @@ impl RegisterRing<'_> {
             payer: authority,
             authority,
             auditor_pubkey: self.auditor_pubkey,
-            list_scope: self.ring.ring_id()?,
             kind: self.tier.kind(),
             roles: RingRoleKeys::of(self.payer).roles(self.payer),
             policy: Some(InitialPolicy {

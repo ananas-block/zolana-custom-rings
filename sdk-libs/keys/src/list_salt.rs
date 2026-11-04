@@ -5,11 +5,11 @@ use zeroize::Zeroizing;
 
 use crate::RingKeyError;
 
-pub fn list_salt(key: &NullifierKey, list_scope: &[u8; 32]) -> Result<[u8; 32], RingKeyError> {
+pub fn list_salt(key: &NullifierKey, ring_id: &[u8; 32]) -> Result<[u8; 32], RingKeyError> {
     let secret = Zeroizing::new(right_align(&key.secret()));
-    Ok(domain::list_salt(&secret, list_scope).map_err(KeypairError::from)?)
+    Ok(domain::list_salt(&secret, ring_id).map_err(KeypairError::from)?)
 }
 
-pub fn list_tag(key: &NullifierKey, list_scope: &[u8; 32]) -> Result<[u8; 32], RingKeyError> {
-    Ok(domain::list_tag(&list_salt(key, list_scope)?).map_err(KeypairError::from)?)
+pub fn list_tag(key: &NullifierKey, ring_id: &[u8; 32]) -> Result<[u8; 32], RingKeyError> {
+    Ok(domain::list_tag(&list_salt(key, ring_id)?).map_err(KeypairError::from)?)
 }

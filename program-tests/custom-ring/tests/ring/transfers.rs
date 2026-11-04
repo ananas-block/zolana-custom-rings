@@ -34,7 +34,6 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
             payer: authority,
             authority,
             auditor_pubkey: auditor_pk,
-            list_scope: ring.ring_id()?,
             kind: custom_ring_sdk::RingKind::Policy,
             roles: RingRoleKeys::of(&env.payer).roles(&env.payer),
             policy: None,

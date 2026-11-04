@@ -652,8 +652,6 @@ pub(crate) struct KeyRegister {
     #[serde(with = "fe")]
     pub ring_id: [u8; 32],
     #[serde(with = "fe")]
-    pub list_scope: [u8; 32],
-    #[serde(with = "fe")]
     pub member: [u8; 32],
     #[serde(serialize_with = "fe::zeroizing")]
     pub nullifier_secret: Zeroizing<[u8; 32]>,

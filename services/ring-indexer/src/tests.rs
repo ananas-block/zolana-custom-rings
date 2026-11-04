@@ -348,7 +348,6 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
     storage::prune(&db, 1).await.unwrap();
     let tracking = TrackingStore::new(&db, [12; 32]);
     let creator = InitializeTrackingIxData {
-        list_scope: [0x0c; 32],
         ring_id: field(9),
         auditor_pubkey: [9; 33],
     };

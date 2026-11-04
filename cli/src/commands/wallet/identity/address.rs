@@ -19,7 +19,7 @@ pub fn run(ctx: &Context, args: AddressArgs) -> Result<()> {
         None => ctx.sender()?,
     };
     let member = ShieldedKeypair::from_keypair(&keypair)?;
-    let address = RingAddress::enrolled(&member, ctx.ring.program_id(), &ctx.list_scope()?)?;
+    let address = RingAddress::enrolled(&member, ctx.ring.program_id())?;
     // Stored before it prints, a sync reads every deposit tag a payer may hold.
     let deposit_tag = ctx
         .anonymous_wallet_store(member.viewing_pubkey())

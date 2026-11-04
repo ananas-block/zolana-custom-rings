@@ -382,7 +382,6 @@ describe("ring-statements.json", () => {
       member: field(register.member),
       nullifierPk: field(register.nullifier_pk),
       listTag: field(register.list_tag),
-      listScope: field(register.list_scope),
       auditorPubkey: bytes<Bytes33>(register.auditor_pubkey, 33),
       ephU: field(register.eph_u),
       ciphertext: field(register.ciphertext),

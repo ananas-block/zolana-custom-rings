@@ -42,8 +42,6 @@ pub struct TrackingRegistry {
     pub ring_id: [u8; 32],
     /// Immutable, enrollment proofs seal to it.
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
-    /// Immutable, enrollment proofs derive `list_tag` under it.
-    pub list_scope: [u8; 32],
     pub next_index: [u8; 4],
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
@@ -126,7 +124,6 @@ impl TrackingRegistry {
         registry.discriminator = Self::DISCRIMINATOR;
         registry.ring_id = ix.ring_id;
         registry.auditor_pubkey = ix.auditor_pubkey;
-        registry.list_scope = ix.list_scope;
         registry.next_index = 1u32.to_le_bytes();
         registry.roots[0].hash = TRACKING_EMPTY_ROOT;
         registry
@@ -360,9 +357,6 @@ impl InitializeTrackingIxData {
         if self.ring_id == [0; 32] || !is_canonical_bn254_scalar_be(&self.ring_id) {
             return Err(StorageError::InvalidTrackingRegistry);
         }
-        if self.list_scope == [0; 32] || !is_canonical_bn254_scalar_be(&self.list_scope) {
-            return Err(StorageError::InvalidTrackingRegistry);
-        }
         let (tag, key) = self.auditor_pubkey.split_at(1);
         let key: &[u8; 32] = key
             .try_into()
@@ -425,7 +419,7 @@ pub fn tracking_chain_start(
 
 // Byte fields only, the `Pod` image is the account data with no padding.
 const _: () = assert!(core::mem::align_of::<TrackingRegistry>() == 1);
-const _: () = assert!(TrackingRegistry::SIZE == 1638);
+const _: () = assert!(TrackingRegistry::SIZE == 1606);
 const _: () = assert!(core::mem::align_of::<TrackingAuthorization>() == 1);
 const _: () = assert!(TrackingAuthorization::SIZE == 241);
 const _: () = assert!(core::mem::align_of::<OwnerGrant>() == 1);

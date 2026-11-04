@@ -79,7 +79,7 @@ use crate::{
     co_signer::CoSignerChoice,
     heap::boxed,
     projection::retry_projection_lag,
-    submission::{check_transaction_size, live_tracking, send_budget, BoundPolicy, BoundState},
+    submission::{check_transaction_size, send_budget, BoundPolicy, BoundState},
     trees::{spend_trees, SpendTrees},
     CustomRing, CustomRingConfig, RingError,
 };
@@ -593,9 +593,6 @@ impl<'a> Sealed<'a> {
                 None
             }
         };
-        let list_scope = live_tracking(config.account().tracking, client.zolana())
-            .await?
-            .list_scope;
         let policy = PolicyRead {
             token_owner_hint: match &spend {
                 Spend::Anonymous(a) => a.token_owner,
@@ -611,7 +608,7 @@ impl<'a> Sealed<'a> {
             salts: &KnownSalts::new(list_salts).with_authority(
                 &authority,
                 sender_pk_hash,
-                &list_scope,
+                &ring_id,
             )?,
         }
         .read(client.zolana())

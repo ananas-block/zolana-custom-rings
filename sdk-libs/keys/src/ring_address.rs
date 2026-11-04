@@ -12,6 +12,7 @@ use spr_keypair::{
     viewing_key::ViewTag,
     ShieldedKeypairTrait,
 };
+use zolana_ring_policy::ring_id_field;
 
 use crate::{list_salt, RingKeyError};
 
@@ -57,10 +58,11 @@ impl RingAddress {
     pub fn enrolled<H: ShieldedKeypairTrait + ?Sized>(
         holder: &H,
         ring_program_id: Address,
-        list_scope: &[u8; 32],
     ) -> Result<Self, RingKeyError> {
         let recipient = holder.shielded_address()?;
-        let list_salt = list_salt(&holder.nullifier_key(), list_scope)?;
+        let ring_id =
+            ring_id_field(ring_program_id.as_array()).map_err(spr_keypair::KeypairError::from)?;
+        let list_salt = list_salt(&holder.nullifier_key(), &ring_id)?;
         Self::check_list_salt(&recipient, &list_salt)?;
         Ok(Self {
             recipient,

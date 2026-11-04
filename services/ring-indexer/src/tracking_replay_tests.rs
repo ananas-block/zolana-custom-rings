@@ -75,7 +75,6 @@ impl Ledger {
         let mut auditor_pubkey = [9; 33];
         auditor_pubkey[0] = VIEWING_PUBKEY_TAG;
         let data = InitializeTrackingIxData {
-            list_scope: [0x0c; 32],
             ring_id,
             auditor_pubkey,
         };
@@ -706,7 +705,6 @@ async fn a_registry_off_its_canonical_address_is_not_indexed() {
     let mut ledger = Ledger::new().await;
     let forged = Address::new_from_array([70; 32]);
     let data = InitializeTrackingIxData {
-        list_scope: [0x0c; 32],
         ring_id: field(9),
         auditor_pubkey: [9; 33],
     };
@@ -773,7 +771,6 @@ async fn the_shared_enrollment_vector_projects_to_its_entry_and_chain() {
     ledger.authorization = Address::new_from_array(vector_field(&vector, "authorization"));
     let owner = Address::new_from_array(vector_field(&vector, "owner"));
     let data = InitializeTrackingIxData {
-        list_scope: [0x0c; 32],
         ring_id: field(9),
         auditor_pubkey: [9; 33],
     };

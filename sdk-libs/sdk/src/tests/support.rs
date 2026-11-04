@@ -705,7 +705,6 @@ impl TrackingFixture {
 
     fn account(&self) -> Account {
         let mut registry = TrackingRegistry::new(&InitializeTrackingIxData {
-            list_scope: [0x0c; 32],
             ring_id: ring().ring_id().unwrap(),
             auditor_pubkey: *auditor().pubkey().as_bytes(),
         });

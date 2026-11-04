@@ -138,9 +138,9 @@ func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) fronten
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
 }
 
-// ListSalt is Poseidon(CRPS, nullifierSecret, listScope), one way, a holder learns the owner's private list position and never the secret.
-func ListSalt(api frontend.API, nullifierSecret, listScope frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{ListSaltDomain, nullifierSecret, listScope})
+// ListSalt is Poseidon(CRPS, nullifierSecret, ringID), a holder learns the owner's private list position in one ring and never the secret.
+func ListSalt(api frontend.API, nullifierSecret, ringID frontend.Variable) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{ListSaltDomain, nullifierSecret, ringID})
 }
 
 // ListTag is Poseidon(CRPT, listSalt), the tracking leaf's commitment to the owner's one salt.

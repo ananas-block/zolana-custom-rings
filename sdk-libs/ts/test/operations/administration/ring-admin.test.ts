@@ -68,8 +68,6 @@ const RULES: readonly Rule[] = [
   },
 ];
 
-const LIST_SCOPE = new Uint8Array(32).fill(0x0c) as Bytes32;
-
 describe("initialize and policy update", () => {
   it("creates the ring account and the pool registration in one instruction", async () => {
     const auditor = X25519Keypair.generate().publicKey();
@@ -94,7 +92,6 @@ describe("initialize and policy update", () => {
       payer: PAYER,
       authority: AUTHORITY,
       auditorPublicKey: auditor,
-      listScope: LIST_SCOPE,
       kind: "policy",
       roles: ROLES,
       policy: { records: RECORDS, table },
@@ -103,7 +100,6 @@ describe("initialize and policy update", () => {
       Uint8Array.of(
         53,
         ...auditor.toBytes(),
-        ...LIST_SCOPE,
         1,
         ...ROLE_BYTES,
         1,
@@ -122,11 +118,10 @@ describe("initialize and policy update", () => {
       payer: PAYER,
       authority: AUTHORITY,
       auditorPublicKey: auditor,
-      listScope: LIST_SCOPE,
       kind: "auditOnly",
       roles: ROLES,
     });
-    expect(auditOnly.data).toEqual(Uint8Array.of(53, ...auditor.toBytes(), ...LIST_SCOPE, 0, ...ROLE_BYTES, 0));
+    expect(auditOnly.data).toEqual(Uint8Array.of(53, ...auditor.toBytes(), 0, ...ROLE_BYTES, 0));
     expect(metas(auditOnly)).toEqual(head);
   });
 
@@ -158,13 +153,12 @@ describe("ring setup", () => {
       payer: PAYER,
       authority: AUTHORITY,
       auditorPublicKey: auditor,
-      listScope: LIST_SCOPE,
       kind,
       roles: ROLES,
     });
     expect(instruction.programAddress).toBe(RING);
     expect(instruction.data).toEqual(
-      Uint8Array.of(53, ...auditor.toBytes(), ...LIST_SCOPE, byte, ...ROLE_BYTES, 0),
+      Uint8Array.of(53, ...auditor.toBytes(), byte, ...ROLE_BYTES, 0),
     );
   });
 
@@ -178,7 +172,6 @@ describe("ring setup", () => {
         payer: PAYER,
         authority: AUTHORITY,
         auditorPublicKey: X25519Keypair.generate().publicKey(),
-        listScope: LIST_SCOPE,
         kind: "auditOnly",
         roles: { ...ROLES, ...change },
       }),
@@ -192,7 +185,6 @@ describe("ring setup", () => {
         payer: PAYER,
         authority: AUTHORITY,
         auditorPublicKey: X25519Keypair.generate().publicKey(),
-        listScope: LIST_SCOPE,
         kind: "registry" as RingKind,
         roles: ROLES,
       }),
@@ -206,7 +198,6 @@ describe("ring setup", () => {
         payer: PAYER,
         authority: AUTHORITY,
         auditorPublicKey: X25519PublicKey.fromBytes(Uint8Array.of(4, 1, ...new Uint8Array(31))),
-        listScope: LIST_SCOPE,
         kind: "auditOnly",
         roles: ROLES,
       }),
@@ -373,7 +364,6 @@ describe("policy writes", () => {
         payer: PAYER,
         authority: AUTHORITY,
         auditorPublicKey: X25519Keypair.generate().publicKey(),
-        listScope: LIST_SCOPE,
         kind: "policy",
         roles: ROLES,
         policy: { records: RECORDS, ...input },

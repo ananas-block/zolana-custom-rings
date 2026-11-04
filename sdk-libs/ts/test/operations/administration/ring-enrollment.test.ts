@@ -145,17 +145,17 @@ describe("tracking accounts", () => {
   });
 
   it("decodes a registry and refuses a next index past the tree", () => {
-    const data = new Uint8Array(1638);
+    const data = new Uint8Array(1606);
     data[0] = 3;
     data.set(field(0x21), 1);
     data[33] = 4;
-    new DataView(data.buffer).setUint32(98, 1, true);
-    data.set(TRACKING_EMPTY_ROOT, 102);
+    new DataView(data.buffer).setUint32(66, 1, true);
+    data.set(TRACKING_EMPTY_ROOT, 70);
     const decoded = decodeTrackingRegistry(data);
     expect(decoded.nextIndex).toBe(1);
     expect(decoded.roots[0]?.hash).toEqual(TRACKING_EMPTY_ROOT);
     expect(decoded.roots[1]).toBeUndefined();
-    new DataView(data.buffer).setUint32(98, 0, true);
+    new DataView(data.buffer).setUint32(66, 0, true);
     expect(() => decodeTrackingRegistry(data)).toThrow("RING_TRACKING_INVALID");
   });
 
@@ -342,18 +342,15 @@ describe("enrollment instructions", () => {
   });
 });
 
-const SCOPE = new Uint8Array(32).fill(0x0c) as Bytes32;
-
 describe("proveEnrollment", () => {
   const auditor = X25519Keypair.generate();
 
   function registryAccount(ringId: Bytes32): { data: Uint8Array } {
-    const data = new Uint8Array(1638);
+    const data = new Uint8Array(1606);
     data[0] = 3;
     data.set(ringId, 1);
     data.set(auditor.publicKey().toBytes(), 33);
-    data.set(SCOPE, 66);
-    new DataView(data.buffer).setUint32(98, 1, true);
+    new DataView(data.buffer).setUint32(66, 1, true);
     return { data };
   }
 
@@ -379,7 +376,7 @@ describe("proveEnrollment", () => {
     });
     expect(proof).toEqual(PROOF);
     expect(seal.nullifierPk).toEqual(holder.nullifierPublicKey());
-    expect(seal.listTag).toEqual(listTagOf(listSaltOf(holder.nullifierKey(), SCOPE)));
+    expect(seal.listTag).toEqual(listTagOf(listSaltOf(holder.nullifierKey(), ringId)));
     const [request] = seen;
     if (request === undefined) throw new Error("no proof asked");
     expect(request.ringId).toEqual(ringId);
@@ -390,7 +387,6 @@ describe("proveEnrollment", () => {
         member: request.member,
         nullifierPk: seal.nullifierPk,
         listTag: seal.listTag,
-        listScope: SCOPE,
         auditorPubkey: auditor.publicKey().toBytes() as Bytes33,
         ephU: seal.ephU,
         ciphertext: seal.ciphertext,
@@ -444,11 +440,11 @@ describe("list salt vector", () => {
   ) as { tracking: Record<string, string> };
 
   it("derives the list salt and tag the Go circuit proves", () => {
-    const { nullifier_secret: secret, list_scope: scope, list_salt: salt, secret_list_tag: tag } = vector.tracking;
-    if (secret === undefined || scope === undefined || salt === undefined || tag === undefined)
+    const { nullifier_secret: secret, salt_ring_id: ring, list_salt: salt, secret_list_tag: tag } = vector.tracking;
+    if (secret === undefined || ring === undefined || salt === undefined || tag === undefined)
       throw new Error("no vector");
     const key = NullifierKey.fromSecret(hexToBytes(secret).subarray(1) as never);
-    const derivedSalt = listSaltOf(key, hexToBytes(scope) as Bytes32);
+    const derivedSalt = listSaltOf(key, hexToBytes(ring) as Bytes32);
     expect(listSaltOf(key, new Uint8Array(32).fill(0x0d) as Bytes32)).not.toEqual(derivedSalt);
     expect(Buffer.from(derivedSalt).toString("hex")).toBe(salt);
     expect(Buffer.from(listTagOf(derivedSalt)).toString("hex")).toBe(tag);

@@ -342,7 +342,6 @@ fn tracking_ix() -> InitializeTrackingIxData {
     let mut auditor_pubkey = [9; TAGGED_X25519_KEY_LEN];
     auditor_pubkey[0] = VIEWING_PUBKEY_TAG;
     InitializeTrackingIxData {
-        list_scope: [0x0c; 32],
         ring_id: [1; 32],
         auditor_pubkey,
     }
@@ -355,7 +354,6 @@ fn a_tracking_registry_starts_at_the_sentinel_and_pins_ring_and_auditor() {
     let registry = TrackingRegistry::new(&ix);
     assert_eq!(registry.ring_id, ix.ring_id);
     assert_eq!(registry.auditor_pubkey, ix.auditor_pubkey);
-    assert_eq!(registry.list_scope, ix.list_scope);
     assert_eq!(registry.newest().hash, TRACKING_EMPTY_ROOT);
     assert_eq!(registry.newest().revision, Revision::from(0));
     assert_eq!(registry.next_index(), 1);
@@ -384,18 +382,11 @@ fn a_tracking_registry_starts_at_the_sentinel_and_pins_ring_and_auditor() {
     ] {
         assert_eq!(
             InitializeTrackingIxData {
-                list_scope: [0x0c; 32],
                 ring_id,
                 auditor_pubkey
             }
             .check(),
             Err(refusal)
-        );
-    }
-    for list_scope in [[0; 32], [0xff; 32]] {
-        assert_eq!(
-            InitializeTrackingIxData { list_scope, ..ix }.check(),
-            Err(StorageError::InvalidTrackingRegistry)
         );
     }
     let mut zero_key = ix;

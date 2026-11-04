@@ -38,10 +38,10 @@ function chain(leaf: TrackingRecord, kind: "present" | "absent"): RingRecipientC
   const siblings = zeroSiblings();
   let root = trackingRecordHash(leaf);
   for (const level of siblings) root = poseidon([root, ...level]) as Bytes32;
-  const data = new Uint8Array(1638);
+  const data = new Uint8Array(1606);
   data[0] = 3;
-  new DataView(data.buffer).setUint32(98, 1, true);
-  data.set(root, 102);
+  new DataView(data.buffer).setUint32(66, 1, true);
+  data.set(root, 70);
   const path = { index: 0, siblings };
   const opening: TrackingOpening =
     kind === "present" ? { kind, record: leaf, path } : { kind, low: leaf, path };
@@ -53,7 +53,7 @@ function chain(leaf: TrackingRecord, kind: "present" | "absent"): RingRecipientC
 
 async function addressed() {
   const wallet = holder();
-  const to = await RingAddress.enrolled(wallet, RING, new Uint8Array(32).fill(0x0c) as Bytes32);
+  const to = await RingAddress.enrolled(wallet, RING);
   const member = to.recipient.signingPublicKey.ownerProofInputHash();
   const row: TrackingRecord = {
     ...TRACKING_SENTINEL,

@@ -45,7 +45,6 @@ pub struct InitializeTrackingIxData {
     /// `ring_id_field` of the ring program.
     pub ring_id: [u8; 32],
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
-    pub list_scope: [u8; 32],
 }
 
 /// Tag 6 ahead of a first enrollment's proof, accounts `payer, owner, tracking_registry, authorization, system_program`.
@@ -221,7 +220,7 @@ fn storage_write_count(count: usize) -> Result<u8, StorageError> {
 const _: () = assert!(core::mem::align_of::<InitializeIxData>() == 1);
 const _: () = assert!(InitializeIxData::SIZE == 104);
 const _: () = assert!(core::mem::align_of::<InitializeTrackingIxData>() == 1);
-const _: () = assert!(InitializeTrackingIxData::SIZE == 97);
+const _: () = assert!(InitializeTrackingIxData::SIZE == 65);
 const _: () = assert!(core::mem::align_of::<EnrollIxData>() == 1);
 const _: () = assert!(EnrollIxData::SIZE == 160);
 const _: () = assert!(core::mem::align_of::<ApplyEnrollmentsIxData>() == 1);

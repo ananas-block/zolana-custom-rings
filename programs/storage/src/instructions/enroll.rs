@@ -48,7 +48,6 @@ pub fn process_enroll_ix(
     let registry = load_tracking_registry(program_id, registry_account)?;
     check_register_key(RegisterKeyCheck {
         ring_id: &registry.ring_id,
-        list_scope: &registry.list_scope,
         auditor_pubkey: &registry.auditor_pubkey,
         owner: owner_account.address(),
         ix,
@@ -67,7 +66,6 @@ pub fn process_enroll_ix(
 #[must_use]
 struct RegisterKeyCheck<'a> {
     ring_id: &'a [u8; 32],
-    list_scope: &'a [u8; 32],
     auditor_pubkey: &'a [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
     owner: &'a Address,
     ix: &'a EnrollIxData,
@@ -82,7 +80,6 @@ fn check_register_key(check: RegisterKeyCheck<'_>) -> Result<(), ProgramError> {
         member: &member,
         nullifier_pk: &check.ix.nullifier_pk,
         list_tag: &check.ix.list_tag,
-        list_scope: check.list_scope,
         auditor_pubkey: check.auditor_pubkey,
         eph_u: &check.ix.eph_u,
         ciphertext: &check.ix.ciphertext,
