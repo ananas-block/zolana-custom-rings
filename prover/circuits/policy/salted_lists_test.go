@@ -146,6 +146,11 @@ func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 		entry.ListSalt = big.NewInt(0x1234)
 		ringtest.RequireRefused(t, solveSalted(b), "policy.(*Policy).resolveSubjects")
 	})
+	t.Run("a salt from another scope fails the tag", func(t *testing.T) {
+		b := listed(t)
+		b.Circuit.OwnerEntries[0].ListSalt = ringpolicy.ListSaltIn(t, alice, big.NewInt(0x5c0f))
+		ringtest.RequireRefused(t, solveSalted(b), "policy.(*Policy).resolveSubjects")
+	})
 	t.Run("a zero salt fails the tag", func(t *testing.T) {
 		b := listed(t)
 		b.Circuit.OwnerEntries[0].ListSalt = 0

@@ -112,6 +112,7 @@ pub fn process_initialize_ix(
         bytemuck::bytes_of(&InitializeTrackingIxData {
             ring_id: ring_id_field(program_id.as_array()).map_err(CustomRingError::from)?,
             auditor_pubkey: ix.auditor_pubkey,
+            list_scope: ix.list_scope,
         }),
     ]
     .concat();

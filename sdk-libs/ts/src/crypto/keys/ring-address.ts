@@ -77,11 +77,12 @@ export class RingAddress {
   static async enrolled(
     holder: Pick<ShieldedKeypairLike, "shieldedAddress" | "nullifierKey">,
     ringProgramId: Address,
+    listScope: Bytes32,
   ): Promise<RingAddress> {
     const recipient = await holder.shieldedAddress();
     const key = await holder.nullifierKey();
     try {
-      return new RingAddress({ recipient, ringProgramId, listSalt: listSaltOf(key) });
+      return new RingAddress({ recipient, ringProgramId, listSalt: listSaltOf(key, listScope) });
     } finally {
       key.destroy();
     }

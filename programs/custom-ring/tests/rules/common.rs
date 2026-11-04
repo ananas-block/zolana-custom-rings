@@ -191,6 +191,7 @@ impl Ring {
             authority: authority.pubkey(),
             data: InitializeIxData {
                 auditor_pubkey: auditor_pubkey(),
+                list_scope: [0x0c; 32],
                 kind: setup.kind(),
                 roles: ring.roles.addresses(),
                 policy: (!matches!(setup, Setup::Bare | Setup::BareAnonymous))

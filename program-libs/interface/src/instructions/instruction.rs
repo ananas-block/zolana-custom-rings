@@ -119,6 +119,8 @@ impl RingKind {
 pub struct InitializeIxData {
     /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
+    /// Immutable in the ring's tracking registry, rings sharing a salted list name one scope.
+    pub list_scope: [u8; 32],
     pub kind: RingKind,
     pub roles: RingRoles,
     /// Required on a policy ring.

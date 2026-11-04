@@ -238,6 +238,8 @@ export interface RegisterKeyProofRequest {
   readonly publicInputHash: Bytes32;
   /** The tracking registry's. */
   readonly ringId: Bytes32;
+  /** The tracking registry's. */
+  readonly listScope: Bytes32;
   /** The owner identity of the signing member. */
   readonly member: Bytes32;
   /** A zero lead byte then the 31 secret bytes. */
@@ -371,6 +373,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
       return {
         ...head,
         ringId: field(request.ringId, "ringId"),
+        listScope: field(request.listScope, "listScope"),
         member: field(request.member, "member"),
         nullifierSecret: hexBytes(request.nullifierSecret, 32, "nullifierSecret"),
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),

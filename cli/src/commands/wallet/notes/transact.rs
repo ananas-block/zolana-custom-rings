@@ -217,9 +217,11 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     let held = RotatingRingKeys::new(&sender)?;
     let recipient = ShieldedKeypair::new_ed25519()?;
     let to = match config.mode {
-        RingMode::Anonymous => {
-            Recipient::Address(Box::new(RingAddress::enrolled(&recipient, program)?))
-        }
+        RingMode::Anonymous => Recipient::Address(Box::new(RingAddress::enrolled(
+            &recipient,
+            program,
+            &ctx.list_scope()?,
+        )?)),
         RingMode::Confidential => Recipient::Shielded(recipient.shielded_address()?),
     };
     let payments = PaymentPlan::new(&[to])
@@ -1001,7 +1003,10 @@ impl Deposit<'_> {
             asset: self.asset,
             amount: self.amount,
             cosigner: self.cosigner,
-            list_salt: Some(zolana_ring_keys::list_salt(&self.sender.nullifier_key)?),
+            list_salt: Some(zolana_ring_keys::list_salt(
+                &self.sender.nullifier_key,
+                &ctx.list_scope()?,
+            )?),
         };
         // Stored before it is sent, a sync reads every sender tag the deposit may take.
         if let (Some(history), Some(advanced)) = (history, deposit.viewing_history()?) {

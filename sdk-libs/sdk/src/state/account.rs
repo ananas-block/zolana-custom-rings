@@ -132,6 +132,13 @@ impl CustomRing {
         self.config(rpc).await?.ok_or(RingError::MissingRingConfig)
     }
 
+    pub async fn list_scope(self, rpc: &(impl AsyncRpc + ?Sized)) -> Result<[u8; 32], RingError> {
+        let tracking = self.require_config(rpc).await?.account().tracking;
+        Ok(crate::submission::live_tracking(tracking, rpc)
+            .await?
+            .list_scope)
+    }
+
     pub async fn policy(
         self,
         rpc: &(impl AsyncRpc + ?Sized),

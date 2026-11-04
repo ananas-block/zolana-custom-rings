@@ -124,11 +124,12 @@ describe("list_salt.json", () => {
     );
     const key = holder.nullifierKey();
     expect(bytesToHex(Uint8Array.of(0, ...key.secretBytes()))).toBe(vector["nullifier_secret"]);
-    const salt = listSaltOf(key);
+    const scope = hexToBytes(vector["list_scope"] ?? "") as Bytes32;
+    const salt = listSaltOf(key, scope);
     expect(bytesToHex(salt)).toBe(vector["list_salt"]);
     expect(bytesToHex(listTagOf(salt))).toBe(vector["list_tag"]);
     const program = getBase58Decoder().decode(new Uint8Array(32).fill(4)) as Address;
-    const addressed = await RingAddress.enrolled(holder, program);
+    const addressed = await RingAddress.enrolled(holder, program, scope);
     expect(addressed.recipient.toBytes()).toEqual(holder.shieldedAddress().toBytes());
     expect(addressed.listSalt).toEqual(salt);
     key.destroy();

@@ -249,6 +249,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
             payer: env.payer.pubkey(),
             authority: env.payer.pubkey(),
             auditor_pubkey: service.auditor_pubkey(),
+            list_scope: ring.ring_id()?,
             kind: custom_ring_sdk::RingKind::AuditOnly,
             roles,
             policy: None,

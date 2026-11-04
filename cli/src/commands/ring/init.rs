@@ -286,6 +286,7 @@ impl RingInitialization<'_> {
                 payer: target,
                 authority: self.deployer.pubkey(),
                 auditor_pubkey: self.auditor_pk,
+                list_scope: ctx.ring.ring_id()?,
                 kind: self.kind,
                 roles: self.roles,
                 policy: Some(InitialPolicy {
