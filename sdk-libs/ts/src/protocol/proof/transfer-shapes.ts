@@ -32,10 +32,11 @@ const NARROW_SHAPES: readonly TransferShape[] = Object.freeze([
   shape(8, 16, 4, 4, false, false),
   shape(16, 5, 8, 5, false, false),
 ]);
-/** Ascending outputs, the wide flag takes the first that holds the SPP width. */
+/** The wide flag takes the first row holding the frame, the last only past 24 inputs. */
 const WIDE_SHAPES: readonly TransferShape[] = Object.freeze([
   shape(8, 24, 32, 24, false, true),
   shape(16, 5, 8, 5, false, true),
+  shape(2, 49, 4, 12, false, true),
 ]);
 const ENTRY_SHAPES: readonly TransferShape[] = Object.freeze([
   shape(4, 8, 4, 8, true, true),
@@ -51,6 +52,8 @@ export const TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
 /** What names a frame's key, nothing else moves a record's counter, Rust `FrameKey`. */
 export interface FrameKey {
   readonly rail: RingRail;
+  /** `n`, the frame's nullifier count. */
+  readonly inputs: number;
   readonly outputs: number;
   readonly spendsDefaultRing: boolean;
   readonly wide: boolean;
@@ -58,7 +61,8 @@ export interface FrameKey {
 
 /** `undefined` when the catalog keys none, Rust `FrameKey::shape`. */
 export function frameKeyShape(key: FrameKey): TransferShape | undefined {
-  const holds = (entry: TransferShape): boolean => key.outputs <= entry.outputs;
+  const holds = (entry: TransferShape): boolean =>
+    key.outputs <= entry.outputs && key.inputs <= entry.inputs;
   // SPP's authority rail holds every input to the ring.
   if (key.spendsDefaultRing)
     return key.rail === "delegate" || key.rail === "anonymousDelegate"

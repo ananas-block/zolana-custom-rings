@@ -1,8 +1,8 @@
 //! The message a wallet signs for Ring RPC, checked against the request the wallet made.
 
 use custom_ring_interface::{
-    compute_unit_limit, stream::slot_tag, tag, DepositPrefix, InstructionTag, RingRail,
-    RingTransactData,
+    compute_unit_limit, frame_digest, settle_buffered_data, stream::slot_tag, tag, DepositPrefix,
+    FrameBuffer, InstructionTag, RingRail, RingTransactData,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -37,6 +37,8 @@ pub enum MessageMismatch {
     Recipients,
     #[error("the request asks for no signature")]
     Unrequested,
+    #[error("the message settles a buffer, read it from the chain before signing")]
+    SettlesBuffer,
     #[error("the signing key is not the key the request names")]
     Signer,
 }
@@ -140,15 +142,59 @@ impl ExpectedDelegate {
 
     /// A confidential slot alone shows a slot tag of its viewing key, a dummy publishes as a real recipient's would.
     pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
-        let envelope = Envelope {
+        let envelope = self.envelope(InstructionTag::AuthorityTransfer);
+        let instruction = envelope.open(message)?;
+        if instruction.data.first() == Some(&tag::SETTLE_BUFFERED) {
+            return Err(MessageMismatch::SettlesBuffer);
+        }
+        self.check_frame(&instruction.data, &instruction.accounts)?;
+        Ok(envelope.verified(message))
+    }
+
+    /// The account a settling message reads its frame from, `None` on an inline message.
+    pub fn settled_buffer(&self, message: &[u8]) -> Result<Option<Address>, MessageMismatch> {
+        let instruction = self
+            .envelope(InstructionTag::SettleBuffered)
+            .open(message)?;
+        match instruction.data.first() == Some(&tag::SETTLE_BUFFERED) {
+            true => Ok(instruction.accounts.first().map(|meta| meta.pubkey)),
+            false => Ok(None),
+        }
+    }
+
+    /// The digest binds the buffer's frame, every check of an inline message then reads it.
+    pub fn check_settled(
+        &self,
+        message: &[u8],
+        buffer: &[u8],
+    ) -> Result<VerifiedMessage, MessageMismatch> {
+        let envelope = self.envelope(InstructionTag::SettleBuffered);
+        let instruction = envelope.open(message)?;
+        let [_, _, inner @ ..] = instruction.accounts.as_slice() else {
+            return Err(MessageMismatch::Accounts);
+        };
+        let frame = FrameBuffer::of(buffer)
+            .map_err(|_| MessageMismatch::Data)?
+            .frame();
+        let digest = frame_digest(frame).map_err(|_| MessageMismatch::Data)?;
+        if instruction.data != settle_buffered_data(&digest) {
+            return Err(MessageMismatch::Data);
+        }
+        self.check_frame(frame, inner)?;
+        Ok(envelope.verified(message))
+    }
+
+    fn envelope(&self, tag: InstructionTag) -> Envelope {
+        Envelope {
             ring: self.ring,
             fee_payer: self.fee_payer,
             signer: self.delegate,
-            tag: InstructionTag::AuthorityTransfer,
-        };
-        let instruction = envelope.open(message)?;
-        let parsed = instruction
-            .data
+            tag,
+        }
+    }
+
+    fn check_frame(&self, frame: &[u8], accounts: &[AccountMeta]) -> Result<(), MessageMismatch> {
+        let parsed = frame
             .split_first()
             .filter(|(tag, _)| **tag == tag::AUTHORITY_TRANSFER)
             .and_then(|(_, data)| {
@@ -171,19 +217,17 @@ impl ExpectedDelegate {
                 return Err(MessageMismatch::Recipients);
             }
         }
-        let mut named = instruction
-            .accounts
-            .iter()
-            .filter(|meta| meta.pubkey == self.delegate);
+        let mut named = accounts.iter().filter(|meta| meta.pubkey == self.delegate);
         let signs_once = matches!(
             (named.next(), named.next()),
             (Some(meta), None) if meta.is_signer && !meta.is_writable
         );
-        let ring_account = instruction.accounts.get(..1).unwrap_or_default();
+        let ring_account = accounts.get(..1).unwrap_or_default();
+        let envelope = self.envelope(InstructionTag::AuthorityTransfer);
         if !signs_once || !envelope.reads_only(ring_account) {
             return Err(MessageMismatch::Accounts);
         }
-        Ok(envelope.verified(message))
+        Ok(())
     }
 }
 

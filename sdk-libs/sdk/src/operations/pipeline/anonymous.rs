@@ -42,6 +42,7 @@ pub struct AnonymousPayment {
     pub amount: u64,
     /// An unauthenticated claim to its recipient, [`Self::with_reply`] opts in.
     pub reply: Option<ReplyMetadata>,
+    pub data: NoteData,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +51,22 @@ pub struct RingPayment {
     pub amount: u64,
     /// An unauthenticated claim to its recipient, [`Self::with_reply`] opts in.
     pub reply: Option<ReplyMetadata>,
+    pub data: NoteData,
+}
+
+/// What a paid note commits beside its amount, the recipient's body carries it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NoteData {
+    pub ring_data_hash: Option<[u8; 32]>,
+    /// SPP holds a nonzero hash to an owner who signs, the hidden owner or a public signer.
+    pub application: Option<ApplicationData>,
+}
+
+/// SPP commits `hash` unchecked, a reader recomputes it from `bytes`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplicationData {
+    pub hash: [u8; 32],
+    pub bytes: Vec<u8>,
 }
 
 impl AnonymousPayment {
@@ -57,6 +74,34 @@ impl AnonymousPayment {
     pub fn with_reply(mut self, reply: ReplyMetadata) -> Self {
         self.reply = Some(reply);
         self
+    }
+
+    #[must_use = "use the updated payment"]
+    pub fn with_data(mut self, data: NoteData) -> Self {
+        self.data = data;
+        self
+    }
+
+    pub(super) fn add_to(
+        &self,
+        transaction: &mut ConfidentialTransaction,
+    ) -> Result<(), RingError> {
+        if self.to.recipient.signing_pubkey.is_zero() {
+            return Err(spr_transaction::TransactionError::ZeroRecipientOwner.into());
+        }
+        let mut output = SppProofOutputUtxo {
+            owner_address: Some(self.to.recipient),
+            asset: self.asset,
+            amount: self.amount,
+            ring_program_id: Some(self.to.ring_program_id),
+            ring_data_hash: self.data.ring_data_hash,
+            ..Default::default()
+        };
+        if let Some(application) = &self.data.application {
+            output = output.with_utxo_data(application.bytes.clone(), application.hash);
+        }
+        transaction.add_output_utxo(output)?;
+        Ok(())
     }
 }
 
@@ -73,6 +118,7 @@ impl RingPayment {
             to,
             amount,
             reply: None,
+            data: NoteData::default(),
         }
     }
 
@@ -82,11 +128,18 @@ impl RingPayment {
         self
     }
 
+    #[must_use = "use the updated payment"]
+    pub fn with_data(mut self, data: NoteData) -> Self {
+        self.data = data;
+        self
+    }
+
     /// The request's amount when it names one.
     pub fn to_request(request: &RingPaymentRequest, amount: u64) -> Self {
         Self {
             to: request.address.clone(),
             amount: request.amount.unwrap_or(amount),
+            data: NoteData::default(),
             reply: None,
         }
     }
@@ -175,12 +228,7 @@ impl<'a> RingTransfer<Anonymous<'a>> {
     /// Every ring output owner other than the sender is paid here, before the transaction is padded.
     pub fn with_payment(mut self, payment: AnonymousPayment) -> Result<Self, RingError> {
         check_payment_ring(&payment, self.ring)?;
-        self.rail.owner.transaction.transfer_with_ring(
-            &payment.to.recipient,
-            payment.asset,
-            payment.amount,
-            Some(payment.to.ring_program_id),
-        )?;
+        payment.add_to(&mut self.rail.owner.transaction)?;
         self.rail.payments.push(payment);
         Ok(self)
     }
@@ -299,6 +347,7 @@ impl<'a> AnonymousMove<'a> {
                     asset: self.asset,
                     amount: payment.amount,
                     reply: payment.reply.clone(),
+                    data: payment.data.clone(),
                 })
             })?
             .with_shape(shape)
@@ -394,8 +443,16 @@ impl Anonymous<'_> {
         let proof_inputs = rail.encrypt(transaction, &sender)?;
         check_anonymous_inputs(&proof_inputs, &sender)?;
         let owner_signers = public_co_owners(&proof_inputs, &sender)?;
+        // A signer owning no input authorizes its data output alone, it spends with no key.
+        let spends = |owner: &&Address| {
+            proof_inputs.input_utxos.iter().any(|input| {
+                !input.is_dummy()
+                    && input.utxo.owner.confidential_view_tag().ok() == Some(owner.to_bytes())
+            })
+        };
         let co_owners = owner_signers
             .iter()
+            .filter(spends)
             .map(|owner| {
                 let held = self
                     .co_owners

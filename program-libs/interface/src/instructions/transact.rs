@@ -182,12 +182,13 @@ impl RingRail {
         let (n_out, inputs) = (usize::from(header.n_out), usize::from(header.input_count));
         let key = FrameKey {
             rail: self,
+            inputs,
             outputs: n_out,
             spends_default_ring: header.flags.entry,
             wide: header.flags.wide_owners,
         }
         .shape()
-        .filter(|shape| supported && inputs <= usize::from(shape.inputs))
+        .filter(|_| supported)
         .ok_or(CustomRingError::RingShapeUnkeyed)?;
         if inputs == 0 || inputs > usize::from(header.n_in) {
             return Err(CustomRingError::RingTransactLength);

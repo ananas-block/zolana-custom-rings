@@ -86,17 +86,19 @@ const NARROW_SHAPES: [TransferShape; 4] = [
     narrow(8, 16, 4, 4),
     narrow(16, 5, 8, 5),
 ];
-/// Ascending outputs, the wide flag takes the first that holds the SPP width.
-const WIDE_SHAPES: [TransferShape; 2] = [wide(8, 24, 32, 24), wide(16, 5, 8, 5)];
+/// The wide flag takes the first row holding the frame, the last only past 24 inputs.
+const WIDE_SHAPES: [TransferShape; 3] =
+    [wide(8, 24, 32, 24), wide(16, 5, 8, 5), wide(2, 49, 4, 12)];
 const ENTRY_SHAPES: [TransferShape; 2] = [entry(4, 8, 8), entry(8, 2, 2)];
 
-pub const TRANSFER_SHAPES: [TransferShape; 8] = [
+pub const TRANSFER_SHAPES: [TransferShape; 9] = [
     NARROW_SHAPES[0],
     NARROW_SHAPES[1],
     NARROW_SHAPES[2],
     NARROW_SHAPES[3],
     WIDE_SHAPES[0],
     WIDE_SHAPES[1],
+    WIDE_SHAPES[2],
     ENTRY_SHAPES[0],
     ENTRY_SHAPES[1],
 ];
@@ -105,6 +107,8 @@ pub const TRANSFER_SHAPES: [TransferShape; 8] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameKey {
     pub rail: RingRail,
+    /// `n`, the frame's nullifier count.
+    pub inputs: usize,
     pub outputs: usize,
     pub spends_default_ring: bool,
     pub wide: bool,
@@ -112,7 +116,9 @@ pub struct FrameKey {
 
 impl FrameKey {
     pub fn shape(self) -> Option<TransferShape> {
-        let holds = |shape: &TransferShape| self.outputs <= usize::from(shape.outputs);
+        let holds = |shape: &TransferShape| {
+            self.outputs <= usize::from(shape.outputs) && self.inputs <= usize::from(shape.inputs)
+        };
         // SPP's authority rail holds every input to the ring.
         let delegate = matches!(self.rail, RingRail::Delegate | RingRail::AnonymousDelegate);
         if delegate && self.spends_default_ring {
@@ -241,6 +247,7 @@ impl TransferSpend {
     const fn frame_key(self) -> FrameKey {
         FrameKey {
             rail: self.rail,
+            inputs: self.inputs,
             outputs: self.outputs,
             spends_default_ring: self.spends_default_ring,
             wide: self.wide,
@@ -466,6 +473,54 @@ mod tests {
     }
 
     #[test]
+    fn the_published_inputs_route_a_two_output_wide_spend() {
+        let wide_spend = |inputs, legs, owners| {
+            RingCircuit::transfer(TransferSpend {
+                inputs,
+                legs,
+                owners,
+                ..spend(RingRail::Confidential, 2, false, true)
+            })
+        };
+        let forty_nine = Some(wide(2, 49, 4, 12).circuit());
+        assert_eq!(wide_spend(24, 0, 1), Some(wide(8, 24, 32, 24).circuit()));
+        assert_eq!(wide_spend(25, 0, 1), forty_nine);
+        assert_eq!(wide_spend(49, 4, 12), forty_nine);
+        assert_eq!(wide_spend(50, 0, 1), None);
+        assert_eq!(wide_spend(25, 5, 1), None);
+        assert_eq!(wide_spend(25, 0, 13), None);
+        assert_eq!(
+            forty_nine.and_then(RingCircuit::record_pools),
+            Some(RecordPools {
+                own: 41,
+                curator: 41,
+                tracking: 18
+            })
+        );
+    }
+
+    #[test]
+    fn a_narrow_spend_past_24_inputs_fits_the_wide_flag() {
+        let fitted = |inputs| {
+            TransferSpend {
+                inputs,
+                ..spend(RingRail::Confidential, 2, false, false)
+            }
+            .fitted()
+        };
+        assert!(!fitted(24).wide);
+        assert_eq!(
+            RingCircuit::transfer(fitted(24)),
+            Some(transfer(2, 24, 4, 4))
+        );
+        assert!(fitted(25).wide);
+        assert_eq!(
+            RingCircuit::transfer(fitted(25)),
+            Some(wide(2, 49, 4, 12).circuit())
+        );
+    }
+
+    #[test]
     fn a_spend_past_its_key_is_unkeyed() {
         let past = |inputs, legs, owners, wide| {
             RingCircuit::transfer(TransferSpend {
@@ -540,8 +595,8 @@ mod tests {
         assert_eq!(bound(24, 5, 4), 16);
         assert_eq!(bound(64, 5, 32), 0);
         for shape in TRANSFER_SHAPES {
-            let n_inputs = usize::from(shape.inputs);
-            assert!(usize::from(shape.owners) <= bound(n_inputs, 0, 0));
+            let owners = usize::from(shape.owners);
+            assert!(owners <= bound(owners, 0, 0));
         }
     }
 
