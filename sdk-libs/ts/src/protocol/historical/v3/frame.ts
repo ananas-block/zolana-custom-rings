@@ -1,5 +1,4 @@
 import {
-  isCanonicalField,
   isZero,
   writeTreeContext,
   Reader,
@@ -623,7 +622,7 @@ function readPolicy(
 
 /** No length prefix, `m` fixes the bundle. */
 function readSender(bytes: Reader, outputs: number): PublishedSenderBundle {
-  const tag = checkedViewTag(field32(bytes, "sender.tag"));
+  const tag = field32(bytes, "sender.tag");
   return Object.freeze({ tag, body: bytes.bytes(senderBundleLen(outputs), "sender.body") });
 }
 
@@ -673,7 +672,7 @@ function readOutput(bytes: Reader, layout: AuditStreamLayout, slot: number): Rin
   return Object.freeze({
     kind: "anonymous",
     hash,
-    tag: checkedViewTag(tag),
+    tag,
     body: bytes.bytes(RECIPIENT_BODY_LEN, "output.body"),
   });
 }
@@ -715,7 +714,6 @@ function writeCompact(data: RingTransactData): Uint8Array {
   if (data.rail === "delegate" && data.outputs.some((output) => output.kind === "exit"))
     throw invalid("FlagNotAllowed");
   data.outputs.forEach(checkOutputTag);
-  if (data.sender !== undefined) checkedViewTag(data.sender.tag);
   const replyLength = checkedReplyLength(data);
   const [shapeByte, inputByte] = headerBytes(header);
   const out = new Writer()
@@ -1174,12 +1172,6 @@ function shortRead(error: unknown, reason: string): unknown {
     : error;
 }
 
-/** The statement chain refuses a value off the field. */
-function checkedViewTag(tag: Bytes32): Bytes32 {
-  if (!isCanonicalField(tag)) throw invalid("ViewTagNotCanonical");
-  return tag;
-}
-
 function zeroTag(tag: Bytes32): Bytes32 {
   if (!isZero(tag)) throw invalid("ChangeTagNotZero");
   return tag;
@@ -1187,7 +1179,6 @@ function zeroTag(tag: Bytes32): Bytes32 {
 
 function checkOutputTag(output: RingOutput): void {
   if (output.kind === "change") zeroTag(output.tag);
-  else if (output.kind === "anonymous") checkedViewTag(output.tag);
 }
 
 function invalid(reason: string): RingError {

@@ -126,41 +126,16 @@ describe("transfer frame", () => {
     expect(encoded(full).length - encoded(short).length).toBe(32 + 32 + 104);
   });
 
-  it("refuses a nonzero tag on change and a tag at or above q on a recipient, a dummy and the bundle", () => {
+  it("refuses a nonzero tag on change", () => {
     const frame = ringFrame({ rail: "anonymous", inputs: 2, outputs: 4 });
     const [change, payment, ...rest] = frame.outputs;
     if (change?.kind !== "change" || payment?.kind !== "anonymous") throw new Error("no slots");
-    const aboveField = new Uint8Array(32).fill(0xff) as Bytes32;
     const nonzero = new Uint8Array(32).fill(1) as Bytes32;
     expect(
       refusal(() =>
         encoded({ ...frame, outputs: [{ ...change, tag: nonzero }, payment, ...rest] }),
       ),
     ).toBe("ChangeTagNotZero");
-    expect(
-      refusal(() =>
-        encoded({ ...frame, outputs: [change, { ...payment, tag: aboveField }, ...rest] }),
-      ),
-    ).toBe("ViewTagNotCanonical");
-    const { sender } = frame;
-    if (sender === undefined) throw new Error("no bundle");
-    expect(refusal(() => encoded({ ...frame, sender: { ...sender, tag: aboveField } }))).toBe(
-      "ViewTagNotCanonical",
-    );
-    const payload = new Uint8Array(32).fill(7) as Bytes32;
-    const bundle = new Uint8Array(32).fill(8) as Bytes32;
-    const bytes = encoded({
-      ...frame,
-      outputs: [change, { ...payment, tag: payload }, ...rest],
-      sender: { ...sender, tag: bundle },
-    });
-    const refusedWith = (tag: Bytes32): string => {
-      const copy = Uint8Array.from(bytes);
-      copy.set(aboveField, Buffer.from(bytes).indexOf(Buffer.from(tag)));
-      return refusal(() => RingTransactData.parse(copy, "anonymous"));
-    };
-    expect(refusedWith(payload)).toBe("ViewTagNotCanonical");
-    expect(refusedWith(bundle)).toBe("ViewTagNotCanonical");
   });
 
   it("refuses replies of two lengths and a reply shorter than its minimum", () => {
