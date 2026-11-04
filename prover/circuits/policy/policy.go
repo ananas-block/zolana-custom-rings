@@ -7,25 +7,22 @@ import (
 
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 type PolicyInputs struct {
 	OwnOnly bool `gnark:"-"`
-	// Senders counts the owners the key screens, Outputs the slots, the pool holds a row for each, Private the private rows.
-	Senders, Outputs, Private int `gnark:"-"`
-	WithdrawalCount           frontend.Variable
-	WithdrawalHash            frontend.Variable
-	Withdrawals               []WithdrawalWires
-	PolicyHash                frontend.Variable
-	RingProgramID             frontend.Variable
-	OwnRoot                   frontend.Variable
-	CuratorRoot               frontend.Variable
-	// PrivateRoot is the private list tree the source names, zero without one.
-	PrivateRoot  frontend.Variable
-	PublicAssets [transaction.NPublicSlots]frontend.Variable
+	// Senders counts the owners the key screens, Outputs the slots, the pool holds a row for each.
+	Senders, Outputs int `gnark:"-"`
+	WithdrawalCount  frontend.Variable
+	WithdrawalHash   frontend.Variable
+	Withdrawals      []WithdrawalWires
+	PolicyHash       frontend.Variable
+	RingProgramID    frontend.Variable
+	OwnRoot          frontend.Variable
+	CuratorRoot      frontend.Variable
+	PublicAssets     [transaction.NPublicSlots]frontend.Variable
 	// PublicAmounts are SPP's signed nets, the statement alone reads them.
 	PublicAmounts [transaction.NPublicSlots]frontend.Variable
 	// PublicGross are the gross withdrawals per slot, no deposit subtracted, read while Outflow is on.
@@ -41,23 +38,19 @@ type Policy struct {
 	CuratorProof       registry.SharedQuadProof
 	OwnSubjects        []PoolSubject
 	CuratorSubjects    []PoolSubject
-	SenderEntries      []PoolEntry
-	OwnerEntries       []PoolEntry
+	SenderEntries      []OwnerEntry
+	OwnerEntries       []OwnerEntry
 	AssetEntries       []PoolEntry
 	PublicAssetEntries []frontend.Variable
-	PrivateRows        []privatelist.Row
-	// PrivateOwners are the rows' subjects, PrivateTracking their tracking subjects.
-	PrivateOwners   []frontend.Variable
-	PrivateTracking []frontend.Variable
 }
 
 type InputsShape struct {
-	Outputs, Withdrawals, Senders, Private int
-	OwnOnly                                bool
+	Outputs, Withdrawals, Senders int
+	OwnOnly                       bool
 }
 
 func (s InputsShape) Inputs() PolicyInputs {
-	return PolicyInputs{OwnOnly: s.OwnOnly, Senders: s.Senders, Outputs: s.Outputs, Private: s.Private, Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
+	return PolicyInputs{OwnOnly: s.OwnOnly, Senders: s.Senders, Outputs: s.Outputs, Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
 }
 
 // NewPolicy sizes the record pools, capacity zero fields take the shape's limits.
@@ -74,20 +67,16 @@ func NewPolicy(inputs PolicyInputs, capacity RecordPoolShape, publicAssets int) 
 		CuratorRecords:     make([]registry.Record, capacity.Curator),
 		OwnSubjects:        make([]PoolSubject, capacity.OwnSubjects),
 		CuratorSubjects:    make([]PoolSubject, capacity.CuratorSubjects),
-		SenderEntries:      make([]PoolEntry, inputs.Senders),
-		OwnerEntries:       make([]PoolEntry, payments),
+		SenderEntries:      make([]OwnerEntry, inputs.Senders),
+		OwnerEntries:       make([]OwnerEntry, payments),
 		AssetEntries:       make([]PoolEntry, payments),
 		PublicAssetEntries: make([]frontend.Variable, publicAssets),
-		PrivateRows:        make([]privatelist.Row, inputs.Private),
-		PrivateOwners:      make([]frontend.Variable, inputs.Private),
-		PrivateTracking:    make([]frontend.Variable, inputs.Private),
 	}
-	private := inputs.Private > 0
 	for i := range p.SenderEntries {
-		p.SenderEntries[i] = newPoolEntry(inputs.OwnOnly, private)
+		p.SenderEntries[i] = newOwnerEntry(inputs.OwnOnly)
 	}
 	for i := range p.OwnerEntries {
-		p.OwnerEntries[i], p.AssetEntries[i] = newPoolEntry(inputs.OwnOnly, private), newPoolEntry(inputs.OwnOnly, false)
+		p.OwnerEntries[i], p.AssetEntries[i] = newOwnerEntry(inputs.OwnOnly), newPoolEntry(inputs.OwnOnly)
 	}
 	var err error
 	if p.OwnProof, err = registry.NewSharedQuadProof(capacity.Own); err != nil {
@@ -128,19 +117,15 @@ func (p *Policy) Validate(publicAssets int) error {
 			return err
 		}
 	}
-	private := p.Private > 0
 	for _, entry := range slices.Concat(p.SenderEntries, p.OwnerEntries) {
-		if err := entry.validate(p.OwnOnly, private); err != nil {
+		if err := entry.validate(p.OwnOnly); err != nil {
 			return err
 		}
 	}
 	for _, entry := range p.AssetEntries {
-		if err := entry.validate(p.OwnOnly, false); err != nil {
+		if err := entry.validate(p.OwnOnly); err != nil {
 			return err
 		}
-	}
-	if len(p.PrivateRows) != p.Private || len(p.PrivateOwners) != p.Private || len(p.PrivateTracking) != p.Private {
-		return fmt.Errorf("policy requires one owner and tracking reference per private row")
 	}
 	return nil
 }

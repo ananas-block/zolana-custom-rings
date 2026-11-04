@@ -269,7 +269,7 @@ impl Case {
         let lists_of = |member: &[u8; 32]| RecordLists {
             own: lookup(&self.own_records, member),
             curator: lookup(&self.curator_records, member),
-            private: 0,
+            salted: 0,
         };
         let outputs: Vec<OutputSubjects> = self
             .outputs
@@ -381,7 +381,7 @@ fn specs() -> Vec<Spec> {
         },
         Spec {
             name: "an_absent_rule_over_two_lists_admits_a_sender_on_one",
-            table: RuleTable::builder().rule(Rule::forbid_all(
+            table: RuleTable::builder().rule(Rule::forbid_only_on_all(
                 Subject::Sender,
                 ListSet::of(&[ListId::Block, ListId::Frozen]),
             )),
@@ -396,7 +396,7 @@ fn specs() -> Vec<Spec> {
         },
         Spec {
             name: "an_absent_rule_over_two_lists_refuses_a_sender_on_both",
-            table: RuleTable::builder().rule(Rule::forbid_all(
+            table: RuleTable::builder().rule(Rule::forbid_only_on_all(
                 Subject::Sender,
                 ListSet::of(&[ListId::Block, ListId::Frozen]),
             )),
@@ -411,7 +411,7 @@ fn specs() -> Vec<Spec> {
         },
         Spec {
             name: "an_absent_rule_over_two_lists_admits_a_sender_off_both",
-            table: RuleTable::builder().rule(Rule::forbid_all(
+            table: RuleTable::builder().rule(Rule::forbid_only_on_all(
                 Subject::Sender,
                 ListSet::of(&[ListId::Block, ListId::Frozen]),
             )),

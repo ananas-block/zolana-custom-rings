@@ -8,14 +8,12 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringdeposit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprivatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -33,16 +31,14 @@ const (
 	wideOwnersKey       common.CircuitType = "custom-ring-transfer-confidential-2-in24-w4-s24"
 	dataKey             common.CircuitType = "custom-ring-transfer-confidential-2-in24-w4-s4-data"
 	confEntryKey        common.CircuitType = "custom-ring-transfer-confidential-entry-2-in8-w4-s4"
-	privateKey          common.CircuitType = "custom-ring-transfer-confidential-2-in24-w4-s4-p10"
 	enrollKey           common.CircuitType = "custom-ring-apply-enrollments-2"
-	privateListKey      common.CircuitType = "custom-ring-apply-private-list-2"
 	registerKey         common.CircuitType = "custom-ring-register-key"
 	depositKey          common.CircuitType = "custom-ring-deposit-8"
 	mergeKey            common.CircuitType = "custom-ring-merge-v4"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{confidentialKey, wideConfidentialKey, wideOwnersKey, dataKey, confEntryKey, privateKey, anonymousKey, wideAnonymousKey, entryKey, applyKey, batchKey, enrollKey, privateListKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{confidentialKey, wideConfidentialKey, wideOwnersKey, dataKey, confEntryKey, anonymousKey, wideAnonymousKey, entryKey, applyKey, batchKey, enrollKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -77,8 +73,6 @@ func hostRequest(t testing.TB, k Key) any {
 		return applyRequest(t, k.Circuit, k.Inputs)
 	case ApplyEnrollments:
 		return enrollmentsRequest(t, k.Circuit, k.Inputs)
-	case ApplyPrivateList:
-		return privateListRequest(t, k.Circuit, k.Inputs)
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
 	case Deposit:
@@ -192,28 +186,6 @@ func enrollmentsRequest(t testing.TB, circuit common.CircuitType, capacity int) 
 		ringtest.AsBigInt(assignment.OldNextIndex), ringtest.AsBigInt(assignment.NewNextIndex), ringtest.AsBigInt(assignment.ChainStart), chain, big.NewInt(int64(capacity)),
 	})
 	return requestOf[ApplyEnrollmentsParams](t, circuit, assignment)
-}
-
-// privateListRequest blocks one owner per slot, each write restrictive.
-func privateListRequest(t testing.TB, circuit common.CircuitType, capacity int) *ApplyPrivateListParams {
-	t.Helper()
-	curator := ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
-	assignment, err := privatelist.NewApplyCircuit(capacity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assignment.OldRoot, assignment.ChainStart = curator.Tree.Root(), big.NewInt(0x5eed)
-	chain := big.NewInt(0x5eed)
-	for i := range assignment.Writes {
-		applied := curator.WriteUnenrolled(t, big.NewInt(0x100+int64(i)), privatelist.BlockBit, privatelist.BlockBit)
-		assignment.Writes[i] = applied.Wires
-		chain = ringtest.MustPoseidonHash(t, chain, applied.Published.EntryHash(t))
-	}
-	assignment.NewRoot, assignment.ChainEnd, assignment.Count = curator.Tree.Root(), chain, capacity
-	assignment.PublicInputHash = spptest.MustHashChain4(t, []*big.Int{
-		big.NewInt(shared.ApplyListDomain), ringtest.AsBigInt(assignment.OldRoot), ringtest.AsBigInt(assignment.NewRoot), ringtest.AsBigInt(assignment.ChainStart), chain, big.NewInt(int64(capacity)), big.NewInt(1),
-	})
-	return requestOf[ApplyPrivateListParams](t, circuit, assignment)
 }
 
 func flatPath(path ringregistry.Path) []Field {

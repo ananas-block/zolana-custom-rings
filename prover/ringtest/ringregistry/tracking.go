@@ -47,6 +47,11 @@ func ListTag(t testing.TB, listSalt *big.Int) *big.Int {
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ListTagDomain), listSalt)
 }
 
+func ListKey(t testing.TB, owner, listSalt *big.Int) *big.Int {
+	t.Helper()
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ListKeyDomain), owner, listSalt)
+}
+
 type TrackingPath struct {
 	Index    uint64
 	Siblings [registry.TrackingHeight][registry.Arity - 1]*big.Int

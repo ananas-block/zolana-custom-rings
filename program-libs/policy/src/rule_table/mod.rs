@@ -3,21 +3,18 @@ use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use thiserror::Error;
 use wincode::{SchemaRead, SchemaWrite};
 
-use crate::{field_u8, ListId, ListSet, Member, PrivateSource, PrivateSourceError};
+use crate::{field_u8, ListId, ListSet, Member};
 
 /// Rule slots compiled into the circuit, a new value rotates the proving key.
 pub const MAX_RULES: usize = 16;
 /// Source slots, one per list the enum can name.
 pub const MAX_SOURCES: usize = 8;
-/// Foreign registries one policy may read, a public curator beside a private source, a circuit width.
-pub const N_FOREIGN: usize = 2;
 /// Enters `policy_hash`, bump it with any change of the encoding below.
-pub const POLICY_TABLE_VERSION: u8 = 13;
+pub const POLICY_TABLE_VERSION: u8 = 14;
 /// `"CRTB"`, the first field of the table hash, `domain::POLICY_TABLE` of the interface.
 pub const POLICY_TABLE_DOMAIN: u32 = 0x4352_5442;
-pub const POLICY_TABLE_FIELDS: usize = (3 + 2 * MAX_SOURCES + PrivateSource::FIELDS + MAX_RULES)
-    .div_ceil(POLICY_TABLE_RATE)
-    * POLICY_TABLE_RATE;
+pub const POLICY_TABLE_FIELDS: usize =
+    (4 + 2 * MAX_SOURCES + MAX_RULES).div_ceil(POLICY_TABLE_RATE) * POLICY_TABLE_RATE;
 /// Fields absorbed per Poseidon call beside the accumulator, the 12-input syscall maximum.
 pub(crate) const POLICY_TABLE_RATE: usize = 11;
 
@@ -36,7 +33,7 @@ pub struct PolicySource {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SourceMap {
     slots: [PolicySource; MAX_SOURCES],
-    private: PrivateSource,
+    salted: ListSet,
 }
 
 /// A slot violates the positional layout.
@@ -48,8 +45,6 @@ pub enum SourceMapError {
     Duplicate,
     #[error("the curator slots name more than one registry")]
     SeveralCurators,
-    #[error(transparent)]
-    Private(#[from] PrivateSourceError),
 }
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -112,7 +107,7 @@ rule_errors! {
 
 impl SourceMap {
     pub fn new(entries: &[(ListId, [u8; 32])]) -> Result<Self, SourceMapError> {
-        let mut sources = Self::default();
+        let mut sources = Self::default().with_salted(ListSet::EMPTY);
         for (list_id, registry) in entries {
             let slot = &mut sources.slots[list_id.slot()];
             if slot.list_id != 0 {
@@ -138,13 +133,13 @@ impl SourceMap {
         }
         let map = Self {
             slots,
-            private: PrivateSource::default(),
+            salted: ListSet::PRIVATE_LISTS,
         };
         map.check_curators()?;
         Ok(map)
     }
 
-    /// Every curator slot names the one public registry the circuit opens beside a private source.
+    /// Every curator slot names the one registry the circuit opens beside the ring's own.
     fn check_curators(&self) -> Result<(), SourceMapError> {
         let mut curators = self
             .slots
@@ -158,20 +153,25 @@ impl SourceMap {
         Ok(())
     }
 
-    /// Owner rows read these lists from a private source, asset rows keep the public slots.
-    pub fn with_private(self, private: PrivateSource) -> Result<Self, SourceMapError> {
-        let private = PrivateSource::new(private.owner_lists, private.registry)?;
-        Ok(Self { private, ..self })
+    /// Owners read these lists at their salted keys, an asset keeps its public record.
+    #[must_use]
+    pub const fn with_salted(self, lists: ListSet) -> Self {
+        Self {
+            salted: lists.union(ListSet::PRIVATE_LISTS),
+            ..self
+        }
     }
 
-    pub const fn private(&self) -> &PrivateSource {
-        &self.private
-    }
-
-    /// An asset is never a private entry.
-    fn serves(&self, subject: Subject, list_id: ListId) -> bool {
-        self.registry(list_id).is_some()
-            || (!matches!(subject, Subject::Asset) && self.private.owner_lists.contains(list_id))
+    /// An unmapped bit would ask a prover for a salt no rule reads.
+    pub fn salted(&self) -> ListSet {
+        self.slots
+            .iter()
+            .filter(|slot| slot.list_id != 0)
+            .filter_map(|slot| ListId::try_from(slot.list_id).ok())
+            .filter(|list_id| self.salted.contains(*list_id))
+            .fold(ListSet::EMPTY, |set, list_id| {
+                set.union(ListSet::single(list_id))
+            })
     }
 
     /// The registry serving a list, zero for the ring's own, `None` when unmapped.
@@ -264,12 +264,12 @@ impl Rule {
         Self::any_of(subject, lists, ListSet::EMPTY)
     }
 
-    /// A live instance is refused only when present in every one of the lists.
-    pub const fn forbid_all(subject: Subject, lists: ListSet) -> Self {
+    /// An instance on only some lists passes, `RuleTableBuilder::forbid_each` refuses it.
+    pub const fn forbid_only_on_all(subject: Subject, lists: ListSet) -> Self {
         Self::any_of(subject, ListSet::EMPTY, lists)
     }
 
-    /// A presence in any of `present` or an absence from any of `absent` passes.
+    /// A presence in any of `present` or an absence from any one of `absent` passes.
     pub const fn any_of(subject: Subject, present: ListSet, absent: ListSet) -> Self {
         Self {
             subject,
@@ -555,6 +555,19 @@ impl RuleTableBuilder {
         self
     }
 
+    /// The form a public and a private block need.
+    #[must_use]
+    pub const fn forbid_each(mut self, subject: Subject, lists: ListSet) -> Self {
+        let mut i = 0;
+        while i < MAX_SOURCES {
+            if lists.contains(ListId::ALL[i]) {
+                self = self.rule(Rule::forbid(subject, ListId::ALL[i]));
+            }
+            i += 1;
+        }
+        self
+    }
+
     pub const fn try_build(mut self) -> Result<RuleTable, RuleTableError> {
         if self.rule_count > MAX_RULES {
             return Err(RuleTableError::TooManyRules);
@@ -673,7 +686,7 @@ impl EncodedRuleTable {
         let missing = table.rules().iter().find_map(|rule| {
             rule.referenced()
                 .iter()
-                .find(|list_id| !sources.serves(rule.subject, *list_id))
+                .find(|list_id| sources.registry(*list_id).is_none())
         });
         match missing {
             Some(list_id) => Err(PolicyTableError::MissingSource(list_id)),
@@ -695,8 +708,7 @@ impl EncodedRuleTable {
                     .iter()
                     .flat_map(|slot| [field_u8(slot.list_id), slot.registry]),
             )
-            .chain(sources.private().fields())
-            .chain([field_u8(self.rule_count)])
+            .chain([field_u8(sources.salted().bits()), field_u8(self.rule_count)])
             .chain(self.rules.iter().copied());
         let mut fields = [[0u8; 32]; POLICY_TABLE_FIELDS];
         for (field, value) in fields.iter_mut().zip(values) {

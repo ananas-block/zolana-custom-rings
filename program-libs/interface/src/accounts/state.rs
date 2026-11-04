@@ -5,8 +5,7 @@ use solana_address::Address;
 use spr_hasher::HasherError;
 use wincode::{SchemaRead, SchemaWrite};
 use zolana_ring_policy::{
-    registry_field, EncodedRuleTable, ListId, ListSet, PolicySource, PrivateSource, RuleTable,
-    SourceMap,
+    registry_field, EncodedRuleTable, ListId, ListSet, PolicySource, RuleTable, SourceMap,
 };
 
 use crate::{
@@ -592,7 +591,7 @@ impl RingPolicy {
         rules: EncodedRuleTable,
         slot: u64,
     ) -> Result<(), CustomRingError> {
-        let source_map = source_map(&sources)?.with_private(self.private_parts()?)?;
+        let source_map = source_map(&sources)?.with_salted(ListSet::from_bits(self.private_lists));
         rules.validate(&source_map)?;
         let policy_hash = rules.hash(&source_map)?;
         self.count_generation(slot)?;
@@ -640,18 +639,7 @@ impl RingPolicy {
 
     /// The map `policy_hash` was computed over.
     pub fn source_map(&self) -> Result<SourceMap, CustomRingError> {
-        Ok(source_map(&self.sources)?.with_private(self.private_parts()?)?)
-    }
-
-    fn private_parts(&self) -> Result<PrivateSource, CustomRingError> {
-        let registry = match self.private_source == Address::default() {
-            true => [0; 32],
-            false => registry_field(self.private_source.as_array())?,
-        };
-        Ok(PrivateSource::new(
-            ListSet::from_bits(self.private_lists),
-            registry,
-        )?)
+        Ok(source_map(&self.sources)?.with_salted(ListSet::from_bits(self.private_lists)))
     }
 
     pub fn rule_table(&self) -> Result<RuleTable, CustomRingError> {

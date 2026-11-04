@@ -51,6 +51,10 @@ type World struct {
 	Public       []PublicSlot
 	// Records sizes the record pools, a zero capacity takes the shape's maximum.
 	Records policy.RecordPoolShape
+	// Enrolled owners hold a tracking row with their fixture salt.
+	Enrolled []int64
+	// List bits at each owner's salted key, enrolled or not.
+	Salted, CuratorSalted map[int64]uint64
 }
 
 // OutputCapacities are the output counts of the transfer keys.
@@ -60,9 +64,11 @@ var OutputCapacities = []int{2, 4, 8, 16}
 type Table struct {
 	Lists   []uint64
 	Curator map[uint64]bool
-	Rules   []Rule
-	Inline  []InlineLimit
-	Limits  []OutflowLimit
+	// Mask of lists owners read at their salted keys.
+	Salted uint64
+	Rules  []Rule
+	Inline []InlineLimit
+	Limits []OutflowLimit
 }
 
 // Rule mirrors one Row of program-libs/policy/src/rule_table/mod.rs.

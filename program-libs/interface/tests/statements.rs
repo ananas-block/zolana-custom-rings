@@ -119,7 +119,6 @@ struct TransferCase {
     own_root: String,
     curator_root: String,
     tracking_root: String,
-    private_root: String,
     public_assets: Vec<String>,
     public_amounts: Vec<String>,
     public_gross: Vec<String>,
@@ -331,7 +330,6 @@ fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
         own_root: hex::encode(statement.roots.own_root),
         curator_root: hex::encode(statement.roots.curator_root),
         tracking_root: hex::encode(statement.roots.tracking_root),
-        private_root: hex::encode(statement.roots.private_root),
         public_assets: hexes(statement.public_assets),
         public_amounts: hexes(statement.public_amounts),
         public_gross: hexes(statement.public_gross),
@@ -371,7 +369,6 @@ fn compute_vectors() -> StatementVectors {
         own_root: values.fields[7],
         curator_root: values.fields[8],
         tracking_root: values.fields[9],
-        private_root: values.fields[10],
     };
     let thresholds_roots = TransferRoots {
         own_root: values.fields[7],
@@ -616,7 +613,7 @@ fn compute_vectors() -> StatementVectors {
                       HashChain4(hash_bytes(record_i)), tail_chain HashChain4(hash_bytes(tail_i)) or \
                       zero while has_data is clear, input_count, private_tx_hash, the sender or the \
                       seven party identities, signer_count, signer_chain, policy_hash, own_root, \
-                      curator_root, tracking_root, private_root, asset, net and gross per public \
+                      curator_root, tracking_root, asset, net and gross per public \
                       slot, withdrawal_hash, the element count and the version. No body, tag, \
                       bundle or reply digest and no slot class enters it. Every per-slot chain is \
                       zero filled to the capacity. signer_chain is HashChain4 over the deduplicated \
@@ -882,8 +879,8 @@ fn the_element_count_follows_the_family_alone() {
         class: 16,
         entry: false,
     };
-    // Head, rail bits, mask, no_spend, m, three chains, n, private_tx_hash, signer count and chain, five roots, nine public cells, withdrawals, length and version.
-    let shared_cells = AUDIT_HEAD_ELEMENTS + 2 + 2 + 4 + 2 + 2 + 5 + 9 + 1 + 2;
+    // Head, rail bits, mask, no_spend, m, three chains, n, private_tx_hash, signer count and chain, four roots, nine public cells, withdrawals, length and version.
+    let shared_cells = AUDIT_HEAD_ELEMENTS + 2 + 2 + 4 + 2 + 2 + 4 + 9 + 1 + 2;
     for capacity in [2usize, 4, 8] {
         for published in [1, capacity] {
             let statement = TransferStatement {
@@ -954,7 +951,6 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         own_root: values.fields[7],
         curator_root: zero,
         tracking_root: values.fields[9],
-        private_root: values.fields[10],
     };
     let statement = TransferStatement {
         head: values.head(AuditLayout::default(), stream(key, 3, &outputs)),
@@ -1002,7 +998,6 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         values.fields[7],
         zero,
         values.fields[9],
-        values.fields[10],
     ]);
     tail.extend([zero; 9]);
     tail.extend([
