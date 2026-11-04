@@ -115,6 +115,14 @@ pub struct ServeArgs {
         requires_all = ["store_url", "prover_url"]
     )]
     pub fee_payer_key_file: Option<PathBuf>,
+    /// Enrollments the fee payer funds over the store's life, zero relays none.
+    #[arg(
+        long,
+        env = "RING_RPC_ENROLLMENT_BUDGET",
+        default_value_t = 0,
+        requires = "fee_payer_key_file"
+    )]
+    pub enrollment_budget: u64,
     /// `postgres://` or `sqlite://` URL of the service store, also turns the record writer on.
     #[arg(
         long,

@@ -5,10 +5,8 @@ use std::{
 };
 
 use custom_ring_interface::{
-    storage::StorageRegistry,
-    storage_instruction::StorageUpdateIxData,
-    RecordWriteData,
-    QueueEntry, RingAccount, RingPolicy,
+    storage::StorageRegistry, storage_instruction::StorageUpdateIxData, QueueEntry,
+    RecordWriteData, RingAccount, RingPolicy, ROOT_HISTORY,
 };
 use custom_ring_sdk::{CustomRing, InitializeStorage, UpdateStorage};
 use log::warn;
@@ -21,15 +19,12 @@ use spr_indexer_api::Hash;
 use zolana_ring_client::{
     rpc::{
         GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest,
-        PendingEnrolment, RecordUpdateEntry, RecordUpdateId, RecordUpdateStatus,
-        SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, PENDING_ENROLMENTS_PAGE_LIMIT,
+        PendingEnrolment, RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest,
+        SubmitRecordUpdateResponse, PENDING_ENROLMENTS_PAGE_LIMIT,
     },
     StorageTip,
 };
-use zolana_ring_indexer::rpc::{
-    GetStorageApplyProofInputsRequest, StorageWriteView,
-};
-use zolana_ring_policy::Member;
+use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
 
 use crate::{
     config::ReaderGrantStore,
@@ -37,8 +32,7 @@ use crate::{
     error::{redacted, RingRpcError},
     landing::{Attempt, ChainOutcome, Landing},
     record_update::{
-        limits_within_bounds, ApplyInputsCheck,
-        BatchPlan, CheckedUpdate, EnrolmentApproval, ModeDecision,
+        limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate, EnrolmentApproval,
         QueuedCheck, QueuedState, RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
     },
     storage_chain::StorageChain,
@@ -353,30 +347,23 @@ impl RecordWriter {
             entries: &entries,
         }
         .check()?;
-        let tables = policies
-            .iter()
-            .filter(|(ring, _)| batch.iter().any(|update| update.ring == **ring))
-            .filter_map(|(_, policy)| policy.as_ref())
-            .map(RingPolicy::rule_table)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| RingRpcError::StorageUpdate(Box::new(error.into())))?;
-        let Some(mode) = (ModeDecision {
-            inputs: &checked.inputs,
-            registry: &state,
-            tables: &tables,
-            slot,
-        })
-        .decide() else {
+        let restrictive = checked
+            .inputs
+            .statement()
+            .map_err(|_| RingRpcError::StaleRecords)?
+            .restrictive;
+        // A graced update over an unexpired oldest root fails on chain.
+        if !restrictive && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
             return Ok(());
-        };
+        }
         let apply = self.chain.prove_apply(&checked.inputs).await?;
         // 4. The storage update is the transaction's one instruction.
         let instruction = UpdateStorage {
             authority: self.authority(),
             registry,
-            mode,
             data: StorageUpdateIxData {
                 revision: checked.revision,
+                restrictive,
                 writes,
                 apply: &apply,
             },

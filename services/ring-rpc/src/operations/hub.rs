@@ -21,7 +21,7 @@ use zolana_ring_client::{
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
-    audit::{AuditService, AuditServiceInit, ASSET_MISS_INTERVAL, ASSET_REFRESH_INTERVAL},
+    audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
     config::{GrantRowsSecret, ReaderGrantStore, RootSecret},
     cosign::{CoSignPolicy, CoSignerApproval, RefusingCoSigner},
@@ -131,6 +131,7 @@ pub struct HubBuilder<S> {
     grant_rows: Option<GrantRowsSecret>,
     co_signer: Option<Keypair>,
     co_signer_approval: CoSignerApproval,
+    enrollment_budget: u64,
     relay: Option<RelayParts>,
     merge: Option<MergeParts>,
 }
@@ -310,17 +311,9 @@ impl<S: TransactionSource> Shared<S> {
         self.assets.lock().await.registry.clone()
     }
 
-    /// Delivered bodies name no mint, a new mint arrives through the interval refresh or a read after a miss.
+    /// A failed read serves the cached registry.
     pub(crate) async fn due_assets(&self) -> RingAssets {
         match self.refresh_assets().await {
-            Ok(assets) => assets,
-            Err(_) => self.cached_assets().await,
-        }
-    }
-
-    /// The cache reads the registry again ahead of its interval, a failed read keeps it.
-    pub(crate) async fn assets_after_miss(&self) -> RingAssets {
-        match self.assets_read_within(ASSET_MISS_INTERVAL).await {
             Ok(assets) => assets,
             Err(_) => self.cached_assets().await,
         }
@@ -362,6 +355,7 @@ impl<S: TransactionSource> Hub<S> {
             grant_rows: None,
             co_signer: None,
             co_signer_approval: CoSignerApproval::default(),
+            enrollment_budget: 0,
             relay: None,
             merge: None,
         }
@@ -631,6 +625,13 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
+    /// Without it the relay funds no enrollment.
+    #[must_use = "use the updated builder"]
+    pub const fn with_enrollment_budget(mut self, budget: u64) -> Self {
+        self.enrollment_budget = budget;
+        self
+    }
+
     #[must_use = "use the updated builder"]
     pub fn with_relay(mut self, relay: RelayParts) -> Self {
         self.relay = Some(relay);
@@ -737,6 +738,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         let relay = self.relay.map(|parts| {
             Arc::new(
                 Relay::new(parts)
+                    .with_enrollment_budget(self.enrollment_budget)
                     .with_co_signer(co_signer.clone())
                     .with_rings(Arc::new(HubRings(shared.clone()))),
             )

@@ -123,7 +123,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let mut builder = Hub::builder(source, identity)
         .with_origins(origin_policy.build()?)
-        .with_reader_grants(args.reader_grants);
+        .with_reader_grants(args.reader_grants)
+        .with_enrollment_budget(args.enrollment_budget);
     if let Some(store) = store {
         builder = builder.with_store(store);
     }

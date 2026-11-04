@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use custom_ring_interface::{
     storage::StorageRegistry,
     tracking::{OwnerGrant, TrackingRegistry},
-    ReaderKeyBytes, RingAccount, RingMode, RingPolicy,
-    RingRoles,
+    ReaderKeyBytes, RingAccount, RingMode, RingPolicy, RingRoles,
 };
 use custom_ring_sdk::RingError;
 use solana_account::Account;
@@ -143,14 +142,6 @@ pub trait TransactionSource: Send + Sync {
         owner: Address,
         reader: ReaderKeyBytes,
     ) -> impl Future<Output = Result<bool, ClientError>> + Send;
-
-    /// The account a buffered settlement names, `None` when it does not exist.
-    fn frame_buffer(
-        &self,
-        _address: Address,
-    ) -> impl Future<Output = Result<Option<Account>, ClientError>> + Send {
-        async { Ok(None) }
-    }
 }
 
 /// Unverified, callers read openings through `VerifiedOpenings`.
@@ -396,10 +387,6 @@ impl ChainSource {
 impl TransactionSource for ChainSource {
     async fn tree_id(&self, tree: Address) -> Result<u16, RingError> {
         custom_ring_sdk::tree_id(&self.rpc, tree).await
-    }
-
-    async fn frame_buffer(&self, address: Address) -> Result<Option<Account>, ClientError> {
-        self.rpc.get_account(address).await
     }
 
     async fn merge_audit_page<'a>(

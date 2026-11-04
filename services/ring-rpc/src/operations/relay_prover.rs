@@ -104,7 +104,6 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
             mint: seal.mint,
             payments: seal.payments,
             assets: seal.assets,
-            co_signer: parties.co_signer,
         }
         .select(&self.client)
         .await
@@ -144,7 +143,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
         Ok(ProvenRelay {
             instruction: proven.instruction().map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(tag)),
-            co_signer: proven.co_signer,
+            co_signer: proven.co_signers.first().copied(),
             signers: proven
                 .owner_signers()
                 .iter()
@@ -198,7 +197,6 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             owner: Address::new_from_array(owner),
             nullifier_key: &merge.nullifier_key,
             inputs: merge.inputs.clone(),
-            co_signer: request.parties.co_signer,
         })
         .await
         .map_err(RelayError::proof)?;
@@ -207,7 +205,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                 .instruction(request.parties.fee_payer)
                 .map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
-            co_signer: proven.co_signer(),
+            co_signer: None,
             signers: Vec::new(),
         })
     }

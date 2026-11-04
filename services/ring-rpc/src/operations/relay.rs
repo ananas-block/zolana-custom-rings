@@ -9,7 +9,7 @@ use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
 use sea_orm::{
     sqlx::error::{Error as SqlxError, ErrorKind},
-    DatabaseConnection, DbErr, RuntimeErr, TransactionTrait,
+    ConnectionTrait, DatabaseConnection, DbErr, RuntimeErr, Statement, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 use solana_address::Address;
@@ -88,6 +88,8 @@ pub enum RelayError {
     DepositorIsFeePayer,
     #[error("the enrollment is no tag 6 of a ring's tracking registry under its own owner")]
     InvalidEnrollment,
+    #[error("the operator funds no further enrollment")]
+    EnrollmentBudget,
 }
 
 pub enum RelayPayload {
@@ -128,6 +130,8 @@ pub struct Relay {
     proofs: Semaphore,
     /// Every record write after the proofs, one relay state at a time.
     transitions: Mutex<()>,
+    /// Enrollments the fee payer funds over the store's life, none by default.
+    enrollment_budget: u64,
 }
 
 /// Every signature except the fee payer's is collected.
@@ -200,6 +204,7 @@ impl RelayError {
             Self::TokenAccountSetup(_) => -32200,
             Self::DepositorIsFeePayer => -32201,
             Self::InvalidEnrollment => -32202,
+            Self::EnrollmentBudget => -32203,
         }
     }
 
@@ -241,7 +246,15 @@ impl Relay {
             co_signer: Arc::new(RefusingCoSigner),
             proofs: Semaphore::new(MAX_CONCURRENT_PROOFS),
             transitions: Mutex::new(()),
+            enrollment_budget: 0,
         }
+    }
+
+    /// Each enrollment funds an account's rent the wallet never repays.
+    #[must_use = "use the updated relay"]
+    pub const fn with_enrollment_budget(mut self, budget: u64) -> Self {
+        self.enrollment_budget = budget;
+        self
     }
 
     #[must_use = "use the updated relay"]
@@ -288,6 +301,9 @@ impl Relay {
         self.rings.check(ring).await?;
         let payload = RelayPayload::decode(&request.intent).map_err(RelayError::from)?;
         if let RelayPayload::Enroll(enrollment) = &payload {
+            if self.enrollment_budget == 0 {
+                return Err(RelayError::EnrollmentBudget.into());
+            }
             if enrollment.tracking_registry != self.rings.tracking_registry(ring).await? {
                 return Err(RelayError::InvalidEnrollment.into());
             }
@@ -305,7 +321,10 @@ impl Relay {
         .check()?;
         let proven = match &payload {
             // The wallet proved its seal, the relay only pays.
-            RelayPayload::Enroll(enrollment) => enrollment_step(enrollment, parties.fee_payer),
+            RelayPayload::Enroll(enrollment) => {
+                self.spend_enrollment(&relay_id).await?;
+                enrollment_step(enrollment, parties.fee_payer)
+            }
             _ => {
                 let _proof = self
                     .proofs
@@ -328,6 +347,30 @@ impl Relay {
             proven,
         })
         .await
+    }
+
+    /// The count and the row commit together, concurrent prepares never pass the budget.
+    async fn spend_enrollment(&self, relay_id: &RelayId) -> Result<(), RingRpcError> {
+        let transaction = self.store.connection().begin().await?;
+        let backend = transaction.get_database_backend();
+        let inserted = transaction
+            .execute(Statement::from_sql_and_values(
+                backend,
+                "INSERT INTO relay_enrollments(relay_id) SELECT $1 \
+                 WHERE (SELECT COUNT(*) FROM relay_enrollments) < $2",
+                vec![
+                    relay_id.0 .0.to_vec().into(),
+                    i64::try_from(self.enrollment_budget)
+                        .unwrap_or(i64::MAX)
+                        .into(),
+                ],
+            ))
+            .await?;
+        transaction.commit().await?;
+        match inserted.rows_affected() {
+            0 => Err(RelayError::EnrollmentBudget.into()),
+            _ => Ok(()),
+        }
     }
 
     pub(crate) async fn stored(

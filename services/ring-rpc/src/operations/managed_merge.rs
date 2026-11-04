@@ -41,15 +41,12 @@ pub struct OwnerMerge<'a> {
     pub owner: Address,
     pub nullifier_key: &'a NullifierKey,
     pub inputs: Vec<WalletUtxo>,
-    /// Read only when a `CoSigner` record covers transfers.
-    pub co_signer: Option<Address>,
 }
 
 /// The fee payer the message names signs at relay.
 pub struct BuiltMerge {
     pub message: VersionedMessage,
     pub last_valid_block_height: u64,
-    pub co_signer: Option<Address>,
 }
 
 #[async_trait]
@@ -235,7 +232,6 @@ impl<S: TransactionSource> ManagedMerge<S> {
                 owner: wallet.owner,
                 nullifier_key: &nullifier_key,
                 inputs,
-                co_signer: None,
             })
             .await?;
         drop(nullifier_key);

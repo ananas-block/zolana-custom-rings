@@ -23,8 +23,8 @@ use zolana_ring_client::{
         InputParty, SpendCoverageFrame, SpendCoverageRow, WalletBalance, WalletNote,
         WalletNoteStatus,
     },
-    AuditedMergeOutput, ConfirmedMerge, CreatedUtxo, DepositOwner, DepositOwners, EscrowedKeys,
-    KnownUtxo, KnownUtxos, SealedNullifierKey, UtxoOwner,
+    AuditedMergeOutput, ConfirmedMerge, CreatedUtxo, DepositOwner, DepositOwners, KnownUtxo,
+    SealedNullifierKey, UtxoOwner,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::{historical::InputPrefix, RingAssets};
@@ -110,7 +110,7 @@ pub(crate) struct WalletStatusQuery {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TrackingRoot {
+pub struct TrackingRoot {
     pub registry: Address,
     pub root: [u8; 32],
     pub revision: u64,
@@ -641,10 +641,6 @@ impl AuditStore {
         self.read_book().rows.get(nullifier).map(|row| row.state)
     }
 
-    pub(crate) fn note(&self, commitment: &[u8; 32]) -> Option<StoredUtxo> {
-        self.read_book().notes.get(commitment).copied()
-    }
-
     pub(crate) fn wallet_status(&self, query: WalletStatusQuery) -> GetWalletStatusResponse {
         let member = Member::owner_tag(query.wallet.as_array()).ok();
         let book = self.read_book();
@@ -834,32 +830,34 @@ impl AuditStore {
             asset: note.utxo.asset,
             mint: note.utxo.mint,
             amount: note.utxo.amount,
-            inputs: merge.inputs.clone(),
+            inputs: merge.inputs().to_vec(),
+            real_nullifiers: Vec::new(),
+            seed: None,
         })
     }
 
     /// Fails closed, an input no row names to this wallet reads as another party's.
     pub(crate) fn input_party(&self, wallet: &Address, input: &DecryptedInput) -> InputParty {
+        if !input.real {
+            return InputParty::Padding;
+        }
+        if let Some(default_input) = &input.default_input {
+            return match default_input.utxo.owner_key.0 == *wallet {
+                true => InputParty::Own,
+                false => InputParty::Other,
+            };
+        }
         let book = self.read_book();
-        let owned_by = |commitment: &[u8; 32]| {
-            book.notes
-                .get(commitment)
-                .is_some_and(|note| note.utxo.owner_key == wallet.to_bytes())
-        };
         match book.rows.get(&input.nullifier.0).map(|row| row.state) {
-            Some(SpendState::Padding) => InputParty::Padding,
-            Some(SpendState::Resolved { note }) if owned_by(&note) => InputParty::Own,
-            Some(_) => InputParty::Other,
-            None if input.hash.is_none() && input.opening.is_none() && input.merged.is_none() => {
-                match input.unseen {
-                    true => InputParty::Other,
-                    false => InputParty::Padding,
-                }
+            Some(SpendState::Resolved { note })
+                if book
+                    .notes
+                    .get(&note)
+                    .is_some_and(|note| note.utxo.owner_key == wallet.to_bytes()) =>
+            {
+                InputParty::Own
             }
-            None => match &input.hash {
-                Some(hash) if owned_by(&hash.0) => InputParty::Own,
-                _ => InputParty::Other,
-            },
+            _ => InputParty::Other,
         }
     }
 }

@@ -136,4 +136,4 @@ pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
     RingHistoryPage, TransactionPage, TransactionSource, Upstreams,
 };
-pub use utxos::UTXO_BACKFILL_INTERVAL;
+pub use utxos::{TrackingRoot, UTXO_BACKFILL_INTERVAL};
