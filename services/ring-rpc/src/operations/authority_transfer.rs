@@ -225,7 +225,6 @@ mod tests {
     use spr_client::ComputeBudgetConfig;
     use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
     use spr_transaction::instructions::transact::ExternalData;
-    use zeroize::Zeroizing;
     use zolana_ring_client::rpc::{
         unix_now, AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation,
         AuthorityTransferRequest, ReadTarget, RelayProofInputs, RelayRail, SignedRequest,
@@ -305,7 +304,6 @@ mod tests {
                     Vec::new(),
                 ),
                 tx_viewing_key,
-                audit_ephemeral_key: Zeroizing::new([0; 32]),
                 inputs: Vec::new(),
                 outputs: Vec::new(),
                 interface_transfer_accounts: Vec::new(),

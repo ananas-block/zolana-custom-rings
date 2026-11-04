@@ -216,7 +216,6 @@ impl Relayed<'_> {
             spend,
             presealed: Some(PresealedAudit {
                 message: auditor_message,
-                eph_sk: relayed.audit_ephemeral_key.clone(),
             }),
             list_salts: relayed.list_salts.clone(),
         })

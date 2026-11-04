@@ -103,7 +103,6 @@ describe("relay proof inputs", () => {
       sender,
       nullifierKey: owner.nullifierKey(),
       txViewingKey,
-      auditEphemeralKey: filled(26) as Bytes32,
       inputs: [spend, ProofInputUtxo.dummy(filled(27) as Bytes32, 4)],
       leafIndexes: [17n, 0n],
       outputs: [
