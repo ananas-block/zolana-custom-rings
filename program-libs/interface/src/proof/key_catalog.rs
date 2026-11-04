@@ -42,13 +42,14 @@ pub enum RingCircuit {
     ApplyRecords {
         writes: u8,
     },
+    ApplyEnrollments {
+        writes: u8,
+    },
     RegisterKey,
     Deposit {
         capacity: u8,
     },
-    Merge {
-        width: u8,
-    },
+    Merge,
 }
 
 /// One transfer family at one output count, mirror `ConfidentialBases`, `AnonymousBases` and `EntryBases` in `prover/circuits/transfer`.
@@ -271,14 +272,24 @@ impl RingCircuit {
 
     pub const fn apply_records(pending: u64) -> Self {
         Self::ApplyRecords {
-            writes: match pending {
-                0..=1 => 1,
-                2 => 2,
-                3..=4 => 4,
-                5..=8 => 8,
-                _ => APPLY_BATCH as u8,
-            },
+            writes: apply_width(pending),
         }
+    }
+
+    pub const fn apply_enrollments(pending: u64) -> Self {
+        Self::ApplyEnrollments {
+            writes: apply_width(pending),
+        }
+    }
+}
+
+const fn apply_width(pending: u64) -> u8 {
+    match pending {
+        0..=1 => 1,
+        2 => 2,
+        3..=4 => 4,
+        5..=8 => 8,
+        _ => APPLY_BATCH as u8,
     }
 }
 

@@ -106,12 +106,6 @@ pub fn verifying_key(
         key_catalog::RingCircuit::Deposit { capacity: 8 } => {
             Some(&deposit_8_verifying_key::VERIFYINGKEY)
         }
-        key_catalog::RingCircuit::Merge { width: 8 } => {
-            Some(&merge_v3_8_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::Merge { width: 24 } => {
-            Some(&merge_v3_24_verifying_key::VERIFYINGKEY)
-        }
         _ => None,
     }
 }

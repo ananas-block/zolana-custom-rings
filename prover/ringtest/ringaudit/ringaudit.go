@@ -77,18 +77,6 @@ type Sealed struct {
 	CiphertextHash *big.Int
 }
 
-// Seal mirrors shared.Envelope.Seal, the merge envelope.
-func (k Keys) Seal(t testing.TB, plaintext []byte, info string) Sealed {
-	t.Helper()
-	return k.Sealed(t, k.EnvelopeCiphertext(t, plaintext, info))
-}
-
-func (k Keys) EnvelopeCiphertext(t testing.TB, plaintext []byte, info string) []byte {
-	t.Helper()
-	key, nonce := ringprotocol.KeySchedule(t, k.envelopeSecret(t), info)
-	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
-}
-
 func (k Keys) SealStream(t testing.TB, plaintext []byte, label string) Sealed {
 	t.Helper()
 	return k.Sealed(t, k.StreamCiphertext(t, plaintext, label))

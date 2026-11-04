@@ -27,7 +27,7 @@ const (
 type Key struct {
 	Circuit common.CircuitType
 	Family  Family
-	// Inputs counts the input slots, queued writes or merged UTXOs the key sizes.
+	// Inputs counts the input slots or queued writes the key sizes.
 	Inputs      int
 	Outputs     int
 	Withdrawals int
@@ -68,9 +68,7 @@ func keys() []Key {
 	for _, capacity := range circuits.DepositCapacities {
 		add(Key{Family: Deposit, Inputs: capacity})
 	}
-	for _, width := range circuits.MergeWidths {
-		add(Key{Family: Merge, Inputs: width})
-	}
+	add(Key{Family: Merge})
 	return keys
 }
 
@@ -109,7 +107,7 @@ func (k Key) circuitType() common.CircuitType {
 	case Deposit:
 		return named("deposit-%d", k.Inputs)
 	case Merge:
-		return named("merge-v3-%d", k.Inputs)
+		return named("merge-v4")
 	}
 	panic(fmt.Sprintf("ring: unknown ring family %d", k.Family))
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// The tree shape mirrors TRACKING_HEIGHT in program-libs/interface, enrollment is permissionless so the tree outgrows the policy registry.
+// The tree shape mirrors TRACKING_QUAD_HEIGHT in program-libs/interface/src/accounts/tracking.rs, enrollment is permissionless so the tree outgrows the policy registry.
 const (
 	TrackingHeight    = 13
 	TrackingIndexBits = 2 * TrackingHeight

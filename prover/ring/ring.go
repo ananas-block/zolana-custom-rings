@@ -39,7 +39,7 @@ func (k Key) extension() common.ExtensionCircuit {
 	case Deposit:
 		return bind[DepositParams](k, circuits.NewDepositCircuit, k.Inputs)
 	case Merge:
-		return bind[MergeParams](k, circuits.NewMergeCircuit, k.Inputs)
+		return bind[MergeParams](k, unsized[circuits.MergeCircuit], struct{}{})
 	}
 	panic(fmt.Sprintf("ring: no circuit for ring family %d", k.Family))
 }
