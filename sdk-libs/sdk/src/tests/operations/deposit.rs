@@ -56,6 +56,36 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
     );
 }
 
+/// A keyed note needs its owner's row, a zero key needs no row.
+#[tokio::test]
+async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
+    use spr_interface::ZERO_NULLIFIER_PUBKEY;
+    let (stranger, payer) = (keypair(2), keypair(9));
+    let keyed = stranger.shielded_address().unwrap();
+    let zero = spr_keypair::ShieldedAddress {
+        nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+        ..keyed
+    };
+    let unenrolled = Chain::ring(RingSettings::new(RingMode::Confidential)).with_tracking(&[]);
+    let refused = deposit(&payer, DepositRecipient::Confidential(keyed))
+        .prepare(&unenrolled)
+        .await
+        .unwrap();
+    assert!(matches!(
+        refused.prove_bound(&unenrolled.client()).await,
+        Err(RingError::RecipientNotEnrolled { slot_index: 0 })
+    ));
+    let enrolled = Chain::ring(RingSettings::new(RingMode::Confidential));
+    let at_zero = deposit(&payer, DepositRecipient::Confidential(zero))
+        .prepare(&enrolled)
+        .await
+        .unwrap();
+    assert!(matches!(
+        at_zero.prove_bound(&enrolled.client()).await,
+        Err(RingError::EnrolledRecipientAtZeroKey { slot_index: 0 })
+    ));
+}
+
 #[tokio::test]
 async fn a_deposit_names_the_co_signer_a_deposit_scope_demands() {
     let member = keypair(1);
