@@ -1229,6 +1229,7 @@ mod delegate_message {
 mod public_signers {
     //! The public owners of a relayed transfer, each rebuilds its own slots against the frame.
 
+    use custom_ring_interface::statement::SignerDataCounts;
     use custom_ring_interface::{
         cosign::ApprovalMask, tag, CoSignScope, InstructionTag, RingRail, RingTransactData,
     };
@@ -1943,6 +1944,250 @@ mod public_signers {
             rule,
         }
         .pending()
+    }
+
+    /// `frame` under the proved counts `packed` names.
+    async fn frame_counting(
+        client: &crate::RingClient<Chain, Chain>,
+        request: &PrepareRelayRequest,
+        packed: u64,
+    ) -> Instruction {
+        let mut assembled = assembled(client, request).await;
+        assembled.frame.parts.extensions.signer_data_counts =
+            (packed != 0).then(|| SignerDataCounts::new(packed).unwrap());
+        let frame = &assembled.frame;
+        frame
+            .accounts
+            .instruction(frame.ring, &assembled.config, &frame.parts)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_signers_terms_open_exactly_the_data_outputs_the_proof_counts() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let paying = transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 20, 0)])
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(data_payment(&payee))
+            .unwrap()
+            .with_payment(data_payment(&payee))
+            .unwrap()
+            .with_payment(pay(&payee, 1))
+            .unwrap();
+        let asked = sent(
+            paying
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let terms = asked
+            .pending
+            .transfer_terms(address(&payee))
+            .unwrap()
+            .clone();
+        let (data, ordinary): (Vec<SlotOpening>, Vec<SlotOpening>) = terms
+            .slots
+            .iter()
+            .cloned()
+            .partition(|opening| opening.data_hash.0 != [0; 32]);
+        let ([first, second], [ordinary]) = (data.as_slice(), ordinary.as_slice()) else {
+            panic!("two data outputs and one ordinary payment");
+        };
+        let built = frame_counting(&client, &asked.request, 2).await;
+        let message = relay_message(&FEE_PAYER, core::slice::from_ref(&built), UNITS).0;
+        let opening = |slots: &[&SlotOpening]| RelayTransferTerms {
+            slots: slots.iter().copied().cloned().collect(),
+            ..terms.clone()
+        };
+        let pending = |terms: &RelayTransferTerms| {
+            pending_for(&asked.relay_id, message.clone(), terms, &config)
+        };
+
+        signs(&pending(&terms), &payee).await;
+        // An ordinary payment stays out of the count either way.
+        signs(&pending(&opening(&[first, second])), &payee).await;
+
+        let omitted = opening(&[first]);
+        let duplicated = opening(&[first, first]);
+        let substituted = opening(&[first, ordinary]);
+        let only_ordinary = opening(&[ordinary]);
+        for short in [&omitted, &duplicated, &substituted, &only_ordinary] {
+            refused(&pending(short), &payee, MessageMismatch::DataOutputCount);
+        }
+
+        // An absent extension reads zero, a signer still refuses an output no proof counts.
+        let uncounted = frame_counting(&client, &asked.request, 0).await;
+        refused(
+            &pending_for(
+                &asked.relay_id,
+                relay_message(&FEE_PAYER, core::slice::from_ref(&uncounted), UNITS).0,
+                &terms,
+                &config,
+            ),
+            &payee,
+            MessageMismatch::DataOutputCount,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_signer_reads_the_count_at_its_own_run_entry() {
+        let (sender, lead, next) = (keypair(1), keypair(2), keypair(3));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &lead, &next]).client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let paying = transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 20, 0)])
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(data_payment(&lead))
+            .unwrap()
+            .with_payment(data_payment(&next))
+            .unwrap()
+            .with_payment(data_payment(&next))
+            .unwrap();
+        let asked = sent(
+            paying
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let lead_terms = asked
+            .pending
+            .transfer_terms(address(&lead))
+            .unwrap()
+            .clone();
+        let next_terms = asked
+            .pending
+            .transfer_terms(address(&next))
+            .unwrap()
+            .clone();
+        let bits = SignerDataCounts::ENTRY_BITS;
+        let message =
+            |built: &Instruction| relay_message(&FEE_PAYER, core::slice::from_ref(built), UNITS).0;
+
+        let honest = frame_counting(&client, &asked.request, 1 | 2 << bits).await;
+        let pending = |built: &Instruction, terms: &RelayTransferTerms| {
+            pending_for(&asked.relay_id, message(built), terms, &config)
+        };
+        signs(&pending(&honest, &lead_terms), &lead).await;
+        signs(&pending(&honest, &next_terms), &next).await;
+
+        // The lanes of the other order, each signer's own slots still open.
+        let swapped = frame_counting(&client, &asked.request, 2 | 1 << bits).await;
+        refused(
+            &pending(&swapped, &lead_terms),
+            &lead,
+            MessageMismatch::DataOutputCount,
+        );
+        refused(
+            &pending(&swapped, &next_terms),
+            &next,
+            MessageMismatch::DataOutputCount,
+        );
+
+        // A second copy of the PDA leaves no list the program would read.
+        let mut copied = honest.clone();
+        copied
+            .accounts
+            .push(solana_instruction::AccountMeta::new_readonly(
+                ring().ring_auth_pda(),
+                false,
+            ));
+        refused(
+            &pending(&copied, &lead_terms),
+            &lead,
+            MessageMismatch::Accounts,
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exact_opening_holds_the_keys_rows_under_a_nonzero_blinder() {
+        let (sender, payee, co_signer) = (keypair(1), keypair(2), keypair(6));
+        let client = chain(
+            RingMode::Confidential,
+            Some(address(&co_signer)),
+            &[&sender, &payee],
+        )
+        .client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let mut transaction = ConfidentialTransaction::new_with_ring(
+            vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
+            FEE_PAYER,
+            ring().program_id(),
+        )
+        .unwrap();
+        transaction
+            .transfer_with_ring(
+                &payee.shielded_address().unwrap(),
+                Mint::SOL,
+                4,
+                Some(ring().program_id()),
+            )
+            .unwrap();
+        let attempt = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction,
+        })
+        .with_co_signer(address(&co_signer))
+        .with_exact_approval()
+        .with_in_proof_owner(&sender.signing_key);
+        let asked = sent(
+            attempt
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let opening = asked.pending.approval_opening().unwrap().clone();
+        let built = frame(&client, &asked.request).await;
+        let message = relay_message(&FEE_PAYER, core::slice::from_ref(&built), UNITS).0;
+        let rule = |opening: ApprovalOpening| {
+            CoSignerRule::Exact(ExactApproval {
+                opening,
+                limits: vec![ApprovalLimit {
+                    mint: Mint::SOL.asset,
+                    peak: 4,
+                    outflow: 4,
+                }],
+                seen_blinders: Vec::new(),
+            })
+        };
+        let pending = |opening: ApprovalOpening| {
+            co_signer_pending(
+                &asked.relay_id,
+                message.clone(),
+                address(&co_signer),
+                rule(opening),
+                &config,
+            )
+        };
+
+        let mut short_public = opening.clone();
+        short_public.public.pop();
+        refused(
+            &pending(short_public),
+            &co_signer,
+            MessageMismatch::ApprovalOpeningLayout,
+        );
+        let mut long_outputs = opening.clone();
+        long_outputs.outputs.push(opening.outputs[0].clone());
+        refused(
+            &pending(long_outputs),
+            &co_signer,
+            MessageMismatch::ApprovalOpeningLayout,
+        );
+        let zero_blinder = ApprovalOpening {
+            blinder: spr_indexer_api::Hash([0; 32]),
+            ..opening.clone()
+        };
+        refused(
+            &pending(zero_blinder),
+            &co_signer,
+            MessageMismatch::ZeroApprovalBlinder,
+        );
+        signs(&pending(opening), &co_signer).await;
     }
 
     /// The TypeScript check reads the same frames, neither rule opens a slot.
