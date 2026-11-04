@@ -281,6 +281,15 @@ impl<S: TransactionSource> Shared<S> {
         {
             return Ok(ReadScope::new(query.wallet));
         }
+        if let Some(owner) = query.wallet {
+            if self
+                .source
+                .owner_grant_held(query.ring, owner, query.reader.to_bytes())
+                .await?
+            {
+                return Ok(ReadScope::new(query.wallet));
+            }
+        }
         let granted = match &self.grants {
             Grants::Tree => {
                 TreeGrants {

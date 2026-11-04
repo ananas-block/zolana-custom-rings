@@ -2,7 +2,9 @@ use std::{future::Future, num::NonZeroU32, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    storage::StorageRegistry, tracking::TrackingRegistry, RingAccount, RingMode, RingPolicy,
+    storage::StorageRegistry,
+    tracking::{OwnerGrant, ReaderKeyBytes, TrackingRegistry},
+    RingAccount, RingMode, RingPolicy,
     RingRoles,
 };
 use custom_ring_sdk::RingError;
@@ -133,6 +135,14 @@ pub trait TransactionSource: Send + Sync {
         &self,
         request: GetTrackingRecordsRequest,
     ) -> impl Future<Output = Result<GetTrackingRecordsResponse, RingIndexerError>> + Send;
+
+    /// Whether the owner's own `OwnerGrant` account names this reader, a PDA grants through CPI.
+    fn owner_grant_held(
+        &self,
+        ring: Address,
+        owner: Address,
+        reader: ReaderKeyBytes,
+    ) -> impl Future<Output = Result<bool, ClientError>> + Send;
 
     /// The account a buffered settlement names, `None` when it does not exist.
     fn frame_buffer(
@@ -599,6 +609,24 @@ impl TransactionSource for ChainSource {
         request: GetTrackingRecordsRequest,
     ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
         self.indexer.get_tracking_records(request).await
+    }
+
+    async fn owner_grant_held(
+        &self,
+        ring: Address,
+        owner: Address,
+        reader: ReaderKeyBytes,
+    ) -> Result<bool, ClientError> {
+        let Some(root) = self.tracking_root(ring).await? else {
+            return Ok(false);
+        };
+        let (address, _) = OwnerGrant::find_address(&root.registry, &owner, &reader);
+        Ok(self
+            .rpc
+            .get_account(address)
+            .await?
+            .and_then(|account| OwnerGrant::decode(&account.owner, &account.data))
+            .is_some_and(|grant| grant.is_active()))
     }
 
     async fn storage_member_openings(

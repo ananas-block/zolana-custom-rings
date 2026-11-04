@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{tracking::TrackingAuthorization, STORAGE_PROGRAM_ID};
+use custom_ring_interface::{
+    storage_instruction, tracking::TrackingAuthorization, STORAGE_PROGRAM_ID,
+};
 use custom_ring_sdk::RingError;
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
@@ -47,8 +49,6 @@ pub const RELAY_TRACK_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_CONCURRENT_PROOFS: usize = 4;
 const EXPIRED: &str = "the relay message expired before it landed";
 const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge/v1";
-/// Storage's `Enroll`, the relay forwards no other instruction of it.
-const ENROLL_TAG: u8 = 6;
 /// Modelled, the first enrollment verifies a proof in its instruction.
 const ENROLL_COMPUTE_UNITS: u32 = 400_000;
 
@@ -955,7 +955,7 @@ impl RelayPayload {
 /// The relay pays for no owner's account but the owner's own, and for no other storage instruction.
 fn check_enrollment(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Result<(), RelayError> {
     let refused = enrollment.owner == fee_payer
-        || enrollment.instruction_data.first() != Some(&ENROLL_TAG)
+        || enrollment.instruction_data.first() != Some(&storage_instruction::tag::ENROLL)
         || enrollment.instruction_data.len() > solana_message::v1::MAX_TRANSACTION_SIZE;
     match refused {
         true => Err(RelayError::InvalidEnrollment),
