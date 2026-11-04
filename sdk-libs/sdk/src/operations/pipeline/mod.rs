@@ -42,7 +42,8 @@ use spr_transaction::{
 };
 use zolana_ring_client::{rpc::SubjectListSalt, AsyncRingIndexer};
 use zolana_ring_keys::RingKeys;
-use zolana_ring_policy::Member;
+use zolana_ring_policy::{ApprovalTotals, Member};
+use zolana_ring_transaction::random_field_element;
 use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
 
 pub use self::{
@@ -80,7 +81,9 @@ use crate::{
     address_ceiling::{AddressCeiling, MergeCapacity},
     co_signer::CoSignerChoice,
     heap::boxed,
+    limits::Outflows,
     projection::retry_projection_lag,
+    relay_message::ApprovalOpening,
     submission::{check_transaction_size, send_budget, BoundPolicy, BoundState},
     trees::{spend_trees, SpendTrees},
     BufferedFrame, CustomRing, CustomRingConfig, RingError,
@@ -117,6 +120,15 @@ pub struct RingTransfer<R: Rail> {
     priority_fee: Option<u64>,
     buffered: bool,
     list_salts: Vec<SubjectListSalt>,
+    approval: ApprovalDisclosure,
+}
+
+/// A frame that discloses its totals carries a digest a named co-signer opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ApprovalDisclosure {
+    #[default]
+    None,
+    Totals,
 }
 
 #[must_use = "build or submit the proven transfer"]
@@ -131,6 +143,8 @@ pub struct ProvenRingTransfer {
     pub outputs: Vec<SppProofOutputUtxo>,
     pub co_signers: Vec<Address>,
     pub co_sign_demand: CoSignDemand,
+    /// For a co-signer that reads exact totals, never the transaction secret.
+    pub approval_opening: Option<ApprovalOpening>,
 }
 
 /// A transfer past its outputs' sealing, ready for its statements.
@@ -281,6 +295,13 @@ impl<R: Rail> RingTransfer<R> {
         self
     }
 
+    /// The frame carries a digest of its totals, the opening reads as `approval_opening`.
+    #[must_use = "use the updated transfer"]
+    pub const fn with_exact_approval(mut self) -> Self {
+        self.approval = ApprovalDisclosure::Totals;
+        self
+    }
+
     /// Past one transaction the frame settles from a buffer its payer writes.
     #[must_use = "use the updated transfer"]
     pub const fn with_buffered_settlement(mut self) -> Self {
@@ -352,6 +373,11 @@ impl<R: Rail> RingTransfer<R> {
         };
         check_ring_output_markers(&staged.proof_inputs)?;
         staged.list_salts.extend_from_slice(&self.list_salts);
+        let approval_blinder = match (self.rail.kind(), self.approval) {
+            (RailKind::Relayed(relayed), _) => relayed.approval_blinder(),
+            (RailKind::Delegated(_), _) | (_, ApprovalDisclosure::None) => None,
+            (_, ApprovalDisclosure::Totals) => Some(random_field_element()),
+        };
         boxed(|| {
             Pipeline {
                 ring: self.ring,
@@ -360,6 +386,7 @@ impl<R: Rail> RingTransfer<R> {
                 co_signers: self.co_signers.clone(),
                 priority_fee: self.priority_fee,
                 buffered: self.buffered,
+                approval_blinder,
             }
             .prepare(client)
         })
@@ -374,6 +401,7 @@ struct Pipeline<'a> {
     co_signers: Vec<Address>,
     priority_fee: Option<u64>,
     buffered: bool,
+    approval_blinder: Option<[u8; 32]>,
 }
 
 struct Frame {
@@ -393,6 +421,7 @@ struct Frame {
     parts: TransactParts,
     accounts: TransactAccounts,
     co_sign_demand: CoSignDemand,
+    approval_opening: Option<ApprovalOpening>,
 }
 
 struct Unwitnessed<'a> {
@@ -436,6 +465,7 @@ struct Preview {
     app_messages: Vec<OwnedAppMessage>,
     /// The key the spend selects fixes every stream counter.
     wide_owners: bool,
+    discloses_approval: bool,
 }
 
 impl Preview {
@@ -542,12 +572,14 @@ impl<'a> Pipeline<'a> {
                 })
                 .collect(),
             wide_owners: false,
+            discloses_approval: self.approval_blinder.is_some(),
         };
 
         Ok(Prepared {
             pipeline: Pipeline {
                 priority_fee: self.priority_fee,
                 buffered: self.buffered,
+                approval_blinder: self.approval_blinder,
                 ring: self.ring,
                 config: self.config,
                 co_signers: self.co_signers,
@@ -645,6 +677,7 @@ impl<'a> Prepared<'a> {
             co_signers,
             priority_fee,
             buffered,
+            approval_blinder,
         } = pipeline;
         let Staged {
             mut proof_inputs,
@@ -703,6 +736,7 @@ impl<'a> Prepared<'a> {
             pipeline: Pipeline {
                 priority_fee,
                 buffered,
+                approval_blinder,
                 ring,
                 config,
                 co_signers,
@@ -741,6 +775,7 @@ impl<'a> Sealed<'a> {
                     co_signers: supplied_co_signers,
                     priority_fee,
                     buffered,
+                    approval_blinder,
                 },
             sealed,
             trees,
@@ -828,6 +863,14 @@ impl<'a> Sealed<'a> {
         let mut parts = preview.parts(&proof_inputs, &rail, &sender)?;
         parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);
         parts.approval = policy.approval;
+        let approval_opening = match approval_blinder {
+            Some(blinder) => {
+                let totals = approval_totals_of(&proof_inputs, parts.n_out)?;
+                parts.extensions.approval_totals = Some(totals.commitment(&blinder)?);
+                Some(ApprovalOpening::of(&totals, &blinder))
+            }
+            None => None,
+        };
         parts.tracking_revision = policy.tracking.revision;
         parts.own_revision = policy.own.map(|own| own.revision);
         parts.policy = (policy.read == RootRead::Policy).then(|| PolicyProof {
@@ -884,6 +927,7 @@ impl<'a> Sealed<'a> {
                 parts,
                 accounts,
                 co_sign_demand: demand,
+                approval_opening,
             },
             config: ring_config,
             authority,
@@ -1061,6 +1105,7 @@ impl Assembled {
             mut parts,
             accounts,
             co_sign_demand,
+            approval_opening,
             ..
         } = self.frame;
         parts.proof = proof;
@@ -1092,6 +1137,7 @@ impl Assembled {
             outputs: proof_inputs.output_utxos,
             co_signers,
             co_sign_demand,
+            approval_opening,
         })
     }
 }
@@ -1210,7 +1256,8 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             ring_data_hash: external.ring_data_hash,
             messages: preview.app_messages.clone(),
             cache: None,
-            approval_totals: None,
+            // Sized here, `frame` writes the digest of the totals.
+            approval_totals: preview.discloses_approval.then_some([0; 32]),
         },
         interface_transfers: external
             .interface_transfers
@@ -1402,6 +1449,28 @@ pub(crate) fn public_leg(transfer: &SettlementTransfer) -> PublicLeg {
             SettlementTransfer::Sol { .. } => None,
         },
     }
+}
+
+/// The wallet and the relay read one layout, rows are the inputs' owners whatever their padding.
+pub(crate) fn approval_totals_of(
+    inputs: &SppProofInputs,
+    n_out: u8,
+) -> Result<ApprovalTotals, RingError> {
+    let public = public_slots(&inputs.external_data.interface_transfers)?;
+    let senders = inputs
+        .input_utxos
+        .iter()
+        .filter(|input| !input.is_dummy() && !input.is_address())
+        .map(|input| Ok(input.utxo.owner.owner_proof_input_hash()?))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    Outflows {
+        senders: &senders,
+        inputs: &inputs.input_utxos,
+        outputs: &inputs.output_utxos,
+        public_assets: &public.asset_fields()?,
+        public_gross: &public.gross(),
+    }
+    .approval_totals(usize::from(n_out))
 }
 
 pub(crate) fn public_slots(transfers: &[SettlementTransfer]) -> Result<PublicSlots, RingError> {

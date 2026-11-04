@@ -3,8 +3,8 @@
 use spr_interface::N_PUBLIC_SLOTS;
 use spr_transaction::{instructions::transact::SppProofOutputUtxo, utxo::SppProofInputUtxo};
 use zolana_ring_policy::{
-    owner_debits, DebitInput, DebitOutput, DebitTransfer, Member, MintPolicy, OwnerDebit,
-    PublicGross,
+    owner_debits, ApprovalTotals, DebitInput, DebitOutput, DebitTransfer, Member, MintPolicy,
+    OwnerDebit, PublicGross,
 };
 
 use crate::RingError;
@@ -68,8 +68,8 @@ impl Outflows<'_> {
             .collect()
     }
 
-    /// `outflow` per row and asset.
-    pub fn flows(&self) -> Result<Vec<OwnerDebit>, RingError> {
+    /// `read` sees the transfer every quantity of the circuit derives from.
+    fn read_transfer<T>(&self, read: impl FnOnce(&DebitTransfer<'_>) -> T) -> Result<T, RingError> {
         let inputs = self.debit_inputs()?;
         let outputs = self.debit_outputs()?;
         let public_gross: Vec<PublicGross> = self
@@ -88,13 +88,40 @@ impl Outflows<'_> {
             .chain(inputs.iter().map(|input| input.asset))
             .chain(public_gross.iter().map(|public| public.asset))
             .collect();
-        Ok(owner_debits(&DebitTransfer {
+        Ok(read(&DebitTransfer {
             senders: self.senders,
             assets: &assets,
             inputs: &inputs,
             outputs: &outputs,
             public_gross: &public_gross,
         }))
+    }
+
+    /// `outflow` per row and asset.
+    pub fn flows(&self) -> Result<Vec<OwnerDebit>, RingError> {
+        self.read_transfer(owner_debits)
+    }
+
+    /// One slot per output of the key and per public slot, the layout the circuit commits.
+    pub fn approval_totals(&self, capacity: usize) -> Result<ApprovalTotals, RingError> {
+        let slot_assets = (0..capacity)
+            .map(|slot| match self.outputs.get(slot) {
+                Some(output) if !output.is_dummy() => {
+                    Ok(Some(*Member::asset(&output.asset.asset)?.as_bytes()))
+                }
+                _ => Ok(None),
+            })
+            .collect::<Result<Vec<_>, RingError>>()?;
+        let public_slots: Vec<PublicGross> = self
+            .public_assets
+            .iter()
+            .zip(self.public_gross)
+            .map(|(asset, gross)| PublicGross {
+                asset: *asset,
+                gross: *gross,
+            })
+            .collect();
+        self.read_transfer(|transfer| ApprovalTotals::new(transfer, &slot_assets, &public_slots))
     }
 
     /// Refuses before proving what the circuit fails to solve.

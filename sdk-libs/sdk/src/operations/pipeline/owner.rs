@@ -11,8 +11,8 @@ use zolana_ring_transaction::RingOutputRail;
 
 use super::{
     anonymous::CoOwner, canonical_shape, pad_under_rail, public_owners::check_zero_key_inputs,
-    sealed, shape_keyed, transaction_key, CoOwnerKey, DeliveredRail, Rail, RailKind, RingSender,
-    RingTransfer, Spend, Staged, TransferAuthority,
+    sealed, shape_keyed, transaction_key, ApprovalDisclosure, CoOwnerKey, DeliveredRail, Rail,
+    RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -66,6 +66,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 co_owners: Vec::new(),
             },
             list_salts: Vec::new(),
+            approval: ApprovalDisclosure::None,
         }
     }
 

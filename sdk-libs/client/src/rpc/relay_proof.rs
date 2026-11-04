@@ -28,6 +28,8 @@ pub struct RelayProofInputs {
     pub sender: ShieldedAddress,
     pub nullifier_key: NullifierKey,
     pub co_owners: Vec<RelayCoOwner>,
+    /// Set on a frame that discloses its approval totals, drawn apart from `tx_viewing_key`.
+    pub approval_blinder: Option<[u8; 32]>,
     pub tx_viewing_key: ViewingKey,
     pub inputs: Vec<SppProofInputUtxo>,
     pub outputs: Vec<SppProofOutputUtxo>,
@@ -273,6 +275,7 @@ struct ProofInputsWire {
     wide_owners: bool,
     #[wincode(with = "containers::Vec<CoOwnerWire, FixIntLen<u8>>")]
     co_owners: Vec<CoOwnerWire>,
+    approval_blinder: Option<[u8; 32]>,
 }
 
 #[derive(SchemaWrite, SchemaRead)]
@@ -436,6 +439,7 @@ impl ProofInputsWire {
                     nullifier_secret: *co_owner.nullifier_key.secret(),
                 })
                 .collect(),
+            approval_blinder: inputs.approval_blinder,
         })
     }
 
@@ -466,6 +470,7 @@ impl ProofInputsWire {
                 .map(|input| input.input(&sender, &nullifier_key, &co_owners))
                 .collect::<Result<_, _>>()?,
             co_owners,
+            approval_blinder: self.approval_blinder,
             outputs: self
                 .outputs
                 .iter()

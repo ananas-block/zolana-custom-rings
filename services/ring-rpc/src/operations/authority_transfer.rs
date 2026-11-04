@@ -400,6 +400,7 @@ mod tests {
                 sender: seal.sources[0].address,
                 nullifier_key: seal.sources[0].nullifier_key.clone(),
                 co_owners: Vec::new(),
+                approval_blinder: None,
                 external_data: ExternalData::new(
                     *tx_viewing_key.pubkey().as_bytes(),
                     [0; 16],

@@ -15,8 +15,8 @@ use super::{
     anonymous::{SenderChange, WideFrames},
     canonical_shape, pad_under_rail, sealed,
     selection::{payment_total, widest, Candidate, Funding},
-    shape_keyed, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged,
-    TransferAuthority,
+    shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
+    RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{CustomRing, CustomRingConfig, RingError};
@@ -133,6 +133,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
                 tx_viewing_key: ViewingKey::new(),
             },
             list_salts: Vec::new(),
+            approval: ApprovalDisclosure::None,
         }
     }
 

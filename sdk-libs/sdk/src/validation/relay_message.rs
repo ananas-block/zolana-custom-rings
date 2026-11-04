@@ -1,5 +1,6 @@
 //! The message a wallet signs for Ring RPC, checked against the request the wallet made.
 
+use custom_ring_interface::cosign::ApprovalMask;
 use custom_ring_interface::{
     compute_unit_limit, frame_digest, settle_buffered_data, stream::slot_tag, tag, AuditRecord,
     DepositPrefix, FrameBuffer, InstructionTag, ParsedTransact, RecordKind, RingMode, RingRail,
@@ -24,6 +25,7 @@ use zolana_ring_client::{
     },
     AuditEnvelope, OpenedAudit,
 };
+use zolana_ring_policy::{ApprovalTotals, Member, OutputTotals, PublicTotals};
 
 use crate::{pipeline::delegate_rail, CustomRing, CustomRingConfig, PendingSignature, RingError};
 
@@ -49,6 +51,16 @@ pub enum MessageMismatch {
     Recipients,
     #[error("the message publishes a transaction key other than the one the request names")]
     TransactionKey,
+    #[error("the proven approval bits ask more than the co-signer accepts")]
+    ApprovalMaskUnaccepted,
+    #[error("the frame carries no approval digest and exact approval was asked")]
+    MissingApprovalDigest,
+    #[error("the opening does not rebuild the frame's approval digest")]
+    FalseApprovalOpening,
+    #[error("the opening's blinder served an earlier attempt")]
+    ReusedApprovalBlinder,
+    #[error("the totals pass a limit or name an asset with no limit")]
+    ApprovalOverLimit,
     #[error("the message spends a held note the terms do not name")]
     SpendsUnnamedNote,
     #[error("the request asks for no signature")]
@@ -64,9 +76,10 @@ pub enum MessageMismatch {
 pub(crate) enum ExpectedMessage {
     Deposit(ExpectedDeposit),
     Delegate(ExpectedDelegate),
-    /// The sealing wallet hands each owner its terms and signs nothing itself.
-    Sealed(Vec<RelayTransferTerms>),
+    /// The sealing wallet hands each signer what it reads and signs nothing itself.
+    Sealed(SealedTerms),
     PublicOwner(ExpectedPublicOwner),
+    CoSigner(ExpectedCoSigner),
     Enroll(ExpectedEnroll),
 }
 
@@ -113,6 +126,92 @@ pub struct TokenAccountCreate {
     pub owner: SerializablePubkey,
     pub mint: SerializablePubkey,
     pub token_program: SerializablePubkey,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SealedTerms {
+    pub owners: Vec<RelayTransferTerms>,
+    pub approval: Option<ApprovalOpening>,
+}
+
+/// The totals and blinder a frame's digest commits, no transaction secret and no slot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ApprovalOpening {
+    pub blinder: Hash,
+    pub outputs: Vec<OutputTotalsOpening>,
+    pub public: Vec<PublicTotalsOpening>,
+}
+
+/// Amounts are decimal text, a `u128` does not survive every JSON reader.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OutputTotalsOpening {
+    pub asset: Hash,
+    pub peak: String,
+    pub outflow: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PublicTotalsOpening {
+    pub asset: Hash,
+    pub peak: String,
+    pub outflow: String,
+    pub gross: String,
+}
+
+/// An outside co-signer reads the proven bits or the totals, never a slot.
+#[must_use]
+#[derive(Clone, Debug)]
+pub enum CoSignerRule {
+    /// The proven mask alone, no opening and no digest.
+    Threshold {
+        accepts: ApprovalMask,
+    },
+    Exact(ExactApproval),
+}
+
+#[must_use]
+#[derive(Clone, Debug)]
+pub struct ExactApproval {
+    pub opening: ApprovalOpening,
+    /// An asset the totals name with no limit here is refused.
+    pub limits: Vec<ApprovalLimit>,
+    /// The blinders of its earlier attempts, the only record of reuse the SDK has.
+    pub seen_blinders: Vec<Hash>,
+}
+
+/// `peak` bounds one owner's outflow, `outflow` the sum over owners.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApprovalLimit {
+    pub mint: Address,
+    pub peak: u128,
+    pub outflow: u128,
+}
+
+/// A co-signer the frame names, what it signs is the rule it holds.
+#[must_use]
+pub struct CoSignerApproval<'a> {
+    pub relay_id: RelayId,
+    pub message: Vec<u8>,
+    pub ring: Address,
+    pub fee_payer: Address,
+    pub signer: Address,
+    pub config: &'a CustomRingConfig,
+    /// The public creates a relay puts ahead of the ring instruction.
+    pub setup: Vec<TokenAccountCreate>,
+    pub rule: CoSignerRule,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ExpectedCoSigner {
+    ring: Address,
+    fee_payer: Address,
+    signer: Address,
+    rail: RingRail,
+    setup: Vec<Instruction>,
+    rule: CoSignerRule,
 }
 
 /// One public owner reading its terms against the notes its wallet holds.
@@ -191,6 +290,7 @@ impl ExpectedMessage {
             Self::Delegate(delegate) => delegate.check(message),
             Self::Sealed(_) => Err(MessageMismatch::Unrequested),
             Self::PublicOwner(owner) => check_inline(owner, message, signer),
+            Self::CoSigner(co_signer) => check_inline(co_signer, message, signer),
             Self::Enroll(enroll) => enroll.check(message),
         }
     }
@@ -204,6 +304,7 @@ impl ExpectedMessage {
             Self::Deposit(_) | Self::Sealed(_) | Self::Enroll(_) => Ok(None),
             Self::Delegate(delegate) => delegate.settled_buffer(message),
             Self::PublicOwner(owner) => settled_buffer(owner, message, signer),
+            Self::CoSigner(co_signer) => settled_buffer(co_signer, message, signer),
         }
     }
 
@@ -218,14 +319,22 @@ impl ExpectedMessage {
             Self::Delegate(delegate) => delegate.check_settled(message, buffer),
             Self::Sealed(_) => Err(MessageMismatch::Unrequested),
             Self::PublicOwner(owner) => check_settled(owner, message, buffer, signer),
+            Self::CoSigner(co_signer) => check_settled(co_signer, message, buffer, signer),
         }
     }
 
     pub fn terms_for(&self, signer: Address) -> Option<&RelayTransferTerms> {
         match self {
-            Self::Sealed(terms) => terms.iter().find(|terms| terms.signer.0 == signer),
+            Self::Sealed(sealed) => sealed.owners.iter().find(|terms| terms.signer.0 == signer),
             Self::PublicOwner(owner) => (owner.terms.signer.0 == signer).then_some(&owner.terms),
-            Self::Deposit(_) | Self::Delegate(_) | Self::Enroll(_) => None,
+            Self::Deposit(_) | Self::Delegate(_) | Self::Enroll(_) | Self::CoSigner(_) => None,
+        }
+    }
+
+    pub fn approval_opening(&self) -> Option<&ApprovalOpening> {
+        match self {
+            Self::Sealed(sealed) => sealed.approval.as_ref(),
+            _ => None,
         }
     }
 }
@@ -528,39 +637,45 @@ pub struct OwnerApproval<'a> {
 
 impl OwnerApproval<'_> {
     pub fn pending(self) -> PendingSignature {
-        PendingSignature::expecting_owner(
+        PendingSignature::expecting(
             self.relay_id,
             self.message,
-            ExpectedPublicOwner::new(
+            ExpectedMessage::PublicOwner(ExpectedPublicOwner::new(
                 self.terms,
                 self.config.mode,
                 self.known_notes.iter().map(|note| note.nullifier).collect(),
-            ),
+            )),
         )
+    }
+}
+
+fn setup_instructions(fee_payer: Address, setup: &[TokenAccountCreate]) -> Vec<Instruction> {
+    setup
+        .iter()
+        .map(|create| {
+            CreateAssociatedTokenAccount {
+                payer: fee_payer,
+                owner: create.owner.0,
+                mint: create.mint.0,
+                token_program: create.token_program.0,
+            }
+            .instruction()
+        })
+        .collect()
+}
+
+const fn transfer_rail(mode: RingMode) -> RingRail {
+    match mode {
+        RingMode::Anonymous => RingRail::Anonymous,
+        RingMode::Confidential => RingRail::Confidential,
     }
 }
 
 impl ExpectedPublicOwner {
     pub fn new(terms: RelayTransferTerms, mode: RingMode, known_nullifiers: Vec<[u8; 32]>) -> Self {
-        let setup = terms
-            .setup
-            .iter()
-            .map(|create| {
-                CreateAssociatedTokenAccount {
-                    payer: terms.fee_payer.0,
-                    owner: create.owner.0,
-                    mint: create.mint.0,
-                    token_program: create.token_program.0,
-                }
-                .instruction()
-            })
-            .collect();
         Self {
-            setup,
-            rail: match mode {
-                RingMode::Anonymous => RingRail::Anonymous,
-                RingMode::Confidential => RingRail::Confidential,
-            },
+            setup: setup_instructions(terms.fee_payer.0, &terms.setup),
+            rail: transfer_rail(mode),
             known_nullifiers,
             terms,
         }
@@ -650,6 +765,159 @@ impl ExpectedFrame for ExpectedPublicOwner {
             .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
             .ok_or(MessageMismatch::Data)?;
         self.check_moved(parsed.data())?;
+        check_signer(&self.envelope(signer, Self::TAG)?, accounts)
+    }
+}
+
+impl ApprovalOpening {
+    pub fn of(totals: &ApprovalTotals, blinder: &[u8; 32]) -> Self {
+        Self {
+            blinder: Hash(*blinder),
+            outputs: totals
+                .outputs
+                .iter()
+                .map(|slot| OutputTotalsOpening {
+                    asset: Hash(slot.asset),
+                    peak: slot.peak.to_string(),
+                    outflow: slot.outflow.to_string(),
+                })
+                .collect(),
+            public: totals
+                .public
+                .iter()
+                .map(|slot| PublicTotalsOpening {
+                    asset: Hash(slot.asset),
+                    peak: slot.peak.to_string(),
+                    outflow: slot.outflow.to_string(),
+                    gross: slot.gross.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    fn totals(&self) -> Option<ApprovalTotals> {
+        Some(ApprovalTotals {
+            outputs: self
+                .outputs
+                .iter()
+                .map(|slot| {
+                    Some(OutputTotals {
+                        asset: slot.asset.0,
+                        peak: slot.peak.parse().ok()?,
+                        outflow: slot.outflow.parse().ok()?,
+                    })
+                })
+                .collect::<Option<_>>()?,
+            public: self
+                .public
+                .iter()
+                .map(|slot| {
+                    Some(PublicTotals {
+                        asset: slot.asset.0,
+                        peak: slot.peak.parse().ok()?,
+                        outflow: slot.outflow.parse().ok()?,
+                        gross: slot.gross.parse().ok()?,
+                    })
+                })
+                .collect::<Option<_>>()?,
+        })
+    }
+}
+
+impl CoSignerApproval<'_> {
+    pub fn pending(self) -> PendingSignature {
+        PendingSignature::expecting(
+            self.relay_id,
+            self.message,
+            ExpectedMessage::CoSigner(ExpectedCoSigner {
+                ring: self.ring,
+                fee_payer: self.fee_payer,
+                signer: self.signer,
+                rail: transfer_rail(self.config.mode),
+                setup: setup_instructions(self.fee_payer, &self.setup),
+                rule: self.rule,
+            }),
+        )
+    }
+}
+
+impl ExactApproval {
+    /// The digest binds the totals, the limits then read them with no slot opened.
+    fn check(&self, digest: Option<&[u8; 32]>) -> Result<(), MessageMismatch> {
+        let digest = digest.ok_or(MessageMismatch::MissingApprovalDigest)?;
+        let blinder = &self.opening.blinder;
+        if self.seen_blinders.contains(blinder) {
+            return Err(MessageMismatch::ReusedApprovalBlinder);
+        }
+        let totals = self
+            .opening
+            .totals()
+            .ok_or(MessageMismatch::FalseApprovalOpening)?;
+        let opens = totals
+            .commitment(&blinder.0)
+            .is_ok_and(|commitment| commitment == *digest);
+        if !opens {
+            return Err(MessageMismatch::FalseApprovalOpening);
+        }
+        let named = totals
+            .outputs
+            .iter()
+            .map(|slot| slot.asset)
+            .chain(totals.public.iter().map(|slot| slot.asset))
+            .filter(|asset| *asset != [0; 32]);
+        for asset in named {
+            let limit = self
+                .limits
+                .iter()
+                .find(|limit| {
+                    Member::asset(&limit.mint).is_ok_and(|field| *field.as_bytes() == asset)
+                })
+                .ok_or(MessageMismatch::ApprovalOverLimit)?;
+            if totals.peak_of(&asset) > limit.peak || totals.outflow_of(&asset) > limit.outflow {
+                return Err(MessageMismatch::ApprovalOverLimit);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ExpectedFrame for ExpectedCoSigner {
+    const TAG: InstructionTag = InstructionTag::Transfer;
+
+    fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
+        if self.signer != signer {
+            return Err(MessageMismatch::Unrequested);
+        }
+        Ok(Envelope {
+            ring: CustomRing::new(self.ring),
+            program: self.ring,
+            units: compute_unit_limit(tag),
+            fee_payer: self.fee_payer,
+            signer,
+            setup: self.setup.clone(),
+        })
+    }
+
+    fn check_frame(
+        &self,
+        signer: Address,
+        frame: &[u8],
+        accounts: &[AccountMeta],
+    ) -> Result<(), MessageMismatch> {
+        let parsed = frame
+            .split_first()
+            .filter(|(tag, _)| **tag == tag::TRANSFER)
+            .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
+            .ok_or(MessageMismatch::Data)?;
+        let data = parsed.data();
+        match &self.rule {
+            CoSignerRule::Threshold { accepts } => {
+                if data.approval.bits() & !accepts.bits() != 0 {
+                    return Err(MessageMismatch::ApprovalMaskUnaccepted);
+                }
+            }
+            CoSignerRule::Exact(exact) => exact.check(data.extensions.approval_totals)?,
+        }
         check_signer(&self.envelope(signer, Self::TAG)?, accounts)
     }
 }

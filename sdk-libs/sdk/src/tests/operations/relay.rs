@@ -1229,7 +1229,9 @@ mod delegate_message {
 mod public_signers {
     //! The public owners of a relayed transfer, each rebuilds its own slots against the frame.
 
-    use custom_ring_interface::{tag, CoSignScope, InstructionTag, RingRail, RingTransactData};
+    use custom_ring_interface::{
+        cosign::ApprovalMask, tag, CoSignScope, InstructionTag, RingRail, RingTransactData,
+    };
     use solana_instruction::Instruction;
     use spr_keypair::ShieldedKeypair;
     use spr_transaction::WalletUtxo;
@@ -1237,8 +1239,9 @@ mod public_signers {
 
     use super::*;
     use crate::{
-        tests::support::relay_message, ApplicationData, CoOwner, CustomRingConfig, MessageMismatch,
-        NoteData, OwnerApproval, PendingSignature, PreparedRelay, RelaySent, RelayTransferTerms,
+        tests::support::relay_message, ApplicationData, ApprovalLimit, ApprovalOpening, CoOwner,
+        CoSignerApproval, CoSignerRule, CustomRingConfig, ExactApproval, MessageMismatch, NoteData,
+        OwnerApproval, PendingSignature, PreparedRelay, RelaySent, RelayTransferTerms,
         RingTransfer, SlotOpening,
     };
 
@@ -1819,9 +1822,9 @@ mod public_signers {
         ));
     }
 
-    /// The sender's slots stay closed to an outside co-signer, it waits on proved totals.
+    /// No sender slot is opened, and the plain wallet check names no terms for a co-signer.
     #[tokio::test]
-    async fn an_outside_co_signer_holds_no_terms() {
+    async fn an_outside_co_signer_holds_no_owner_terms() {
         let (sender, payee, co_signer) = (keypair(1), keypair(2), keypair(6));
         let client = chain(
             RingMode::Anonymous,
@@ -1842,7 +1845,426 @@ mod public_signers {
         )
         .await;
         assert!(asked.pending.transfer_terms(address(&co_signer)).is_none());
+        assert!(asked.pending.approval_opening().is_none());
         refused(&asked.pending, &co_signer, MessageMismatch::Unrequested);
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct LimitCase {
+        mint: SerializablePubkey,
+        peak: String,
+        outflow: String,
+    }
+
+    /// `opening` unset is the threshold rule, `accepts` then names its bits.
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct CoSignerCase {
+        name: String,
+        accepts: u8,
+        opening: Option<ApprovalOpening>,
+        limits: Vec<LimitCase>,
+        seen_blinders: Vec<spr_indexer_api::Hash>,
+        message: spr_indexer_api::Base64String,
+        verdict: String,
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct CoSignerMessages {
+        description: String,
+        ring: SerializablePubkey,
+        fee_payer: SerializablePubkey,
+        signer: SerializablePubkey,
+        cases: Vec<CoSignerCase>,
+    }
+
+    fn limit(mint: Mint, peak: u128, outflow: u128) -> LimitCase {
+        LimitCase {
+            mint: SerializablePubkey(mint.asset),
+            peak: peak.to_string(),
+            outflow: outflow.to_string(),
+        }
+    }
+
+    impl CoSignerCase {
+        fn rule(&self) -> CoSignerRule {
+            match &self.opening {
+                None => CoSignerRule::Threshold {
+                    accepts: ApprovalMask::new(self.accepts).unwrap(),
+                },
+                Some(opening) => CoSignerRule::Exact(ExactApproval {
+                    opening: opening.clone(),
+                    limits: self
+                        .limits
+                        .iter()
+                        .map(|limit| ApprovalLimit {
+                            mint: limit.mint.0,
+                            peak: limit.peak.parse().unwrap(),
+                            outflow: limit.outflow.parse().unwrap(),
+                        })
+                        .collect(),
+                    seen_blinders: self.seen_blinders.clone(),
+                }),
+            }
+        }
+    }
+
+    fn co_signer_pending(
+        relay_id: &RelayId,
+        message: Vec<u8>,
+        signer: Address,
+        rule: CoSignerRule,
+        config: &CustomRingConfig,
+    ) -> PendingSignature {
+        CoSignerApproval {
+            relay_id: relay_id.clone(),
+            message,
+            ring: ring().program_id(),
+            fee_payer: FEE_PAYER,
+            signer,
+            config,
+            setup: Vec::new(),
+            rule,
+        }
+        .pending()
+    }
+
+    /// The TypeScript check reads the same frames, neither rule opens a slot.
+    #[tokio::test]
+    async fn the_shared_co_signer_messages_keep_their_verdicts() {
+        let (sender, payee, co_signer) = (keypair(1), keypair(2), keypair(6));
+        let client = chain(
+            RingMode::Anonymous,
+            Some(address(&co_signer)),
+            &[&sender, &payee],
+        )
+        .client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let build = || {
+            transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 10, 0)])
+                .with_co_signer(address(&co_signer))
+                .with_anonymous_signer(&sender.signing_key)
+                .with_payment(pay(&payee, 4))
+                .unwrap()
+        };
+        let exact = build().with_exact_approval();
+        let disclosed = sent(exact.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let opening = disclosed.pending.approval_opening().unwrap().clone();
+        let digested = frame(&client, &disclosed.request).await;
+        let message = relay_message(&FEE_PAYER, core::slice::from_ref(&digested), UNITS).0;
+        let plain_transfer = build();
+        let plain = sent(
+            plain_transfer
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(plain.pending.approval_opening().is_none());
+        let plain_message =
+            relay_message(&FEE_PAYER, &[frame(&client, &plain.request).await], UNITS).0;
+
+        // The extension stays out of what SPP hashes.
+        let parsed = RingTransactData::parse(&digested.data[1..], RingRail::Anonymous).unwrap();
+        let mut stripped = parsed.into_data();
+        let with_digest = stripped.external_data_hash(config.account(), &[]).unwrap();
+        assert!(stripped.extensions.approval_totals.is_some());
+        stripped.extensions.approval_totals = None;
+        assert_eq!(
+            with_digest,
+            stripped.external_data_hash(config.account(), &[]).unwrap()
+        );
+
+        // A frame over a mask the co-signer does not accept.
+        let parsed = RingTransactData::parse(&digested.data[1..], RingRail::Anonymous).unwrap();
+        let mut masked = parsed.into_data();
+        masked.approval = ApprovalMask::OUTFLOW;
+        let masked_message = relay_message(
+            &FEE_PAYER,
+            &[Instruction {
+                data: [vec![tag::TRANSFER], masked.encode().unwrap()].concat(),
+                ..digested.clone()
+            }],
+            UNITS,
+        )
+        .0;
+
+        let mut false_opening = opening.clone();
+        false_opening.outputs[0].outflow = "1".to_owned();
+        let bounds = vec![limit(Mint::SOL, 4, 4)];
+        let exact_case =
+            |name: &str, opening: &ApprovalOpening, limits, seen, verdict: &str| CoSignerCase {
+                name: name.to_owned(),
+                accepts: 0,
+                opening: Some(opening.clone()),
+                limits,
+                seen_blinders: seen,
+                message: message.clone().into(),
+                verdict: verdict.to_owned(),
+            };
+        let threshold_case =
+            |name: &str, accepts: u8, message: &[u8], verdict: &str| CoSignerCase {
+                name: name.to_owned(),
+                accepts,
+                opening: None,
+                limits: Vec::new(),
+                seen_blinders: Vec::new(),
+                message: message.to_vec().into(),
+                verdict: verdict.to_owned(),
+            };
+        let fresh = CoSignerMessages {
+            description: "One relayed anonymous transfer an outside co-signer signs, read by \
+                          proven bits or by an opening of the frame's approval digest. Each \
+                          verdict names the MessageMismatch the Rust and TypeScript checks \
+                          return, no case opens a slot. Frames carry zeroed proofs."
+                .to_owned(),
+            ring: SerializablePubkey(ring().program_id()),
+            fee_payer: SerializablePubkey(FEE_PAYER),
+            signer: SerializablePubkey(address(&co_signer)),
+            cases: vec![
+                exact_case("exactHonest", &opening, bounds, Vec::new(), "Accepted"),
+                exact_case(
+                    "falseOpening",
+                    &false_opening,
+                    vec![limit(Mint::SOL, 4, 4)],
+                    Vec::new(),
+                    "FalseApprovalOpening",
+                ),
+                exact_case(
+                    "reusedBlinder",
+                    &opening,
+                    vec![limit(Mint::SOL, 4, 4)],
+                    vec![opening.blinder.clone()],
+                    "ReusedApprovalBlinder",
+                ),
+                exact_case(
+                    "peakOverLimit",
+                    &opening,
+                    vec![limit(Mint::SOL, 3, 4)],
+                    Vec::new(),
+                    "ApprovalOverLimit",
+                ),
+                exact_case(
+                    "outflowOverLimit",
+                    &opening,
+                    vec![limit(Mint::SOL, 4, 3)],
+                    Vec::new(),
+                    "ApprovalOverLimit",
+                ),
+                exact_case(
+                    "noLimit",
+                    &opening,
+                    Vec::new(),
+                    Vec::new(),
+                    "ApprovalOverLimit",
+                ),
+                CoSignerCase {
+                    message: plain_message.clone().into(),
+                    ..exact_case(
+                        "missingDigest",
+                        &opening,
+                        vec![limit(Mint::SOL, 4, 4)],
+                        Vec::new(),
+                        "MissingApprovalDigest",
+                    )
+                },
+                threshold_case("thresholdHonest", 0, &plain_message, "Accepted"),
+                threshold_case("thresholdWithDigest", 0, &message, "Accepted"),
+                threshold_case(
+                    "maskUnaccepted",
+                    0,
+                    &masked_message,
+                    "ApprovalMaskUnaccepted",
+                ),
+                threshold_case(
+                    "maskAccepted",
+                    ApprovalMask::OUTFLOW.bits(),
+                    &masked_message,
+                    "Accepted",
+                ),
+            ],
+        };
+        let vector = crate::tests::support::pinned_vector("relay_co_signer_messages.json", fresh);
+        for case in &vector.cases {
+            let pending = co_signer_pending(
+                &disclosed.relay_id,
+                case.message.0.clone(),
+                vector.signer.0,
+                case.rule(),
+                &config,
+            );
+            let checked = match pending.verify(vector.signer.0) {
+                Ok(verified) => Ok(verified),
+                Err(RingError::RelayMessage(mismatch)) => Err(mismatch),
+                Err(other) => panic!("{}: {other:?}", case.name),
+            };
+            assert_eq!(
+                crate::tests::support::verdict(checked),
+                case.verdict,
+                "{}",
+                case.name
+            );
+        }
+
+        let rule = vector.cases[0].rule();
+        let pending = co_signer_pending(
+            &disclosed.relay_id,
+            vector.cases[0].message.0.clone(),
+            vector.signer.0,
+            rule,
+            &config,
+        );
+        signs(&pending, &co_signer).await;
+        refused(&pending, &sender, MessageMismatch::Unrequested);
+    }
+
+    #[tokio::test]
+    async fn an_exact_co_signer_of_a_relayed_in_proof_transfer_signs_and_each_attempt_draws_afresh()
+    {
+        let (sender, payee, co_signer) = (keypair(1), keypair(2), keypair(6));
+        let client = chain(
+            RingMode::Confidential,
+            Some(address(&co_signer)),
+            &[&sender, &payee],
+        )
+        .client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let attempt = || {
+            let mut transaction = ConfidentialTransaction::new_with_ring(
+                vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
+                FEE_PAYER,
+                ring().program_id(),
+            )
+            .unwrap();
+            transaction
+                .transfer_with_ring(
+                    &payee.shielded_address().unwrap(),
+                    Mint::SOL,
+                    4,
+                    Some(ring().program_id()),
+                )
+                .unwrap();
+            CustomRingTransfer::new(CustomRingTransferInput {
+                ring: ring(),
+                sender: &sender,
+                nullifier_key: Some(&sender.nullifier_key),
+                transaction,
+            })
+            .with_co_signer(address(&co_signer))
+            .with_exact_approval()
+            .with_in_proof_owner(&sender.signing_key)
+        };
+        let first = attempt();
+        let asked = sent(first.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let opening = asked.pending.approval_opening().unwrap().clone();
+        let again = attempt();
+        let retried = sent(again.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        assert_ne!(
+            opening.blinder,
+            retried.pending.approval_opening().unwrap().blinder
+        );
+        let built = frame(&client, &asked.request).await;
+        let rule = CoSignerRule::Exact(ExactApproval {
+            opening: opening.clone(),
+            limits: vec![ApprovalLimit {
+                mint: Mint::SOL.asset,
+                peak: 4,
+                outflow: 4,
+            }],
+            seen_blinders: Vec::new(),
+        });
+        signs(
+            &co_signer_pending(
+                &asked.relay_id,
+                relay_message(&FEE_PAYER, &[built], UNITS).0,
+                address(&co_signer),
+                rule,
+                &config,
+            ),
+            &co_signer,
+        )
+        .await;
+    }
+
+    async fn request_json(
+        client: &crate::RingClient<Chain, Chain>,
+        transfer: crate::AnonymousTransfer<'_>,
+    ) -> (serde_json::Value, Option<ApprovalOpening>) {
+        let assembled = transfer.assemble(client).await.unwrap();
+        let request = assembled.request().unwrap();
+        (
+            serde_json::to_value(&*request.body).unwrap(),
+            assembled.frame.approval_opening.clone(),
+        )
+    }
+
+    /// `prover/ring/params.go` reads both fields, a plain frame sends neither.
+    #[tokio::test]
+    async fn the_prover_request_names_the_digest_only_when_the_frame_discloses() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let build = || {
+            transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 10, 0)])
+                .with_anonymous_signer(&sender.signing_key)
+                .with_payment(pay(&payee, 4))
+                .unwrap()
+        };
+        let (plain, none) = request_json(&client, build()).await;
+        assert!(none.is_none());
+        assert!(plain.get("approvalTotals").is_none());
+        assert!(plain.get("approvalBlinder").is_none());
+        let (disclosed, opening) = request_json(&client, build().with_exact_approval()).await;
+        let opening = opening.unwrap();
+        assert!(disclosed["approvalTotals"].is_string());
+        assert_eq!(
+            disclosed["approvalBlinder"].as_str().unwrap(),
+            format!("0x{}", hex::encode(opening.blinder.0))
+        );
+    }
+
+    /// Padding and repeats in the rows reach no total, the frame commits one layout.
+    #[tokio::test]
+    async fn the_totals_read_the_same_past_padded_rows() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let transaction = transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 10, 0)])
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(pay(&payee, 4))
+            .unwrap();
+        let asked = sent(
+            transaction
+                .with_exact_approval()
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let RelayIntent::Anonymous { proof_inputs, .. } = &asked.request.intent else {
+            panic!("the anonymous intent");
+        };
+        let inputs = RelayProofInputs::decode(proof_inputs.as_bytes()).unwrap();
+        let owner = sender.signing_pubkey().owner_proof_input_hash().unwrap();
+        let assets = [[0; 32]; spr_interface::N_PUBLIC_SLOTS];
+        let gross = [0; spr_interface::N_PUBLIC_SLOTS];
+        let totals = |senders: &[[u8; 32]]| {
+            crate::limits::Outflows {
+                senders,
+                inputs: &inputs.inputs,
+                outputs: &inputs.outputs,
+                public_assets: &assets,
+                public_gross: &gross,
+            }
+            .approval_totals(inputs.outputs.len())
+            .unwrap()
+        };
+        assert_eq!(
+            totals(&[owner]).commitment(&[7; 32]).unwrap(),
+            totals(&[owner, [0; 32], owner, [0; 32]])
+                .commitment(&[7; 32])
+                .unwrap()
+        );
     }
 }
 

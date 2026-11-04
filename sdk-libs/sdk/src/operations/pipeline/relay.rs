@@ -12,9 +12,12 @@ use zolana_ring_client::rpc::{
 };
 use zolana_ring_transaction::{published_outputs, RingDelivery};
 
-use super::{Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed};
+use super::{approval_totals_of, Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed};
 use crate::{
-    relay_message::{ExpectedMessage, RelayTransferTerms, SlotOpening, TokenAccountCreate},
+    relay_message::{
+        ApprovalOpening, ExpectedMessage, RelayTransferTerms, SealedTerms, SlotOpening,
+        TokenAccountCreate,
+    },
     PreparedRelay, RingError,
 };
 
@@ -97,6 +100,14 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .token_account_setup(payer, &token_account_setup)?,
         };
         let terms = sealed.transfer_terms(payer, &setup)?;
+        let approval = sealed
+            .pipeline
+            .approval_blinder
+            .map(|blinder| {
+                let totals = approval_totals_of(inputs, sealed.preview.n_out)?;
+                Ok::<_, RingError>(ApprovalOpening::of(&totals, &blinder))
+            })
+            .transpose()?;
         let encode = |rail| {
             sealed
                 .relay_proof_inputs(rail, nullifier_key)
@@ -131,7 +142,10 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .map(SerializablePubkey)
                 .collect(),
         })
-        .expecting(ExpectedMessage::Sealed(terms)))
+        .expecting(ExpectedMessage::Sealed(SealedTerms {
+            owners: terms,
+            approval,
+        })))
     }
 }
 
@@ -242,6 +256,7 @@ impl<P> Sealed<'_, P> {
             output_tree_id: inputs.output_tree_id,
             list_salts: staged.list_salts.clone(),
             wide_owners: self.preview.wide_owners,
+            approval_blinder: self.pipeline.approval_blinder,
         }
     }
 }

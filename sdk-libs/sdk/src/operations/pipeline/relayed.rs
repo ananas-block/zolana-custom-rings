@@ -14,8 +14,8 @@ use super::{
     audit::PresealedAudit,
     delegate::delegate_rail,
     public_owners::check_zero_key_inputs,
-    sealed, shape_keyed, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind, RingTransfer, Spend,
-    Staged, TransferAuthority,
+    sealed, shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
+    RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -55,6 +55,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
                 owner_signature: None,
             },
             list_salts: Vec::new(),
+            approval: ApprovalDisclosure::None,
         }
     }
 
@@ -67,6 +68,10 @@ impl<'a> RingTransfer<Relayed<'a>> {
 }
 
 impl Relayed<'_> {
+    pub(super) fn approval_blinder(&self) -> Option<[u8; 32]> {
+        self.proof_inputs.approval_blinder
+    }
+
     pub(super) async fn stage<R: AsyncRpc + ?Sized>(
         &self,
         ring: CustomRing,

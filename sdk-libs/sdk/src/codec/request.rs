@@ -486,6 +486,11 @@ pub(crate) struct TransferParams<'a> {
     #[serde(flatten)]
     pub audit: AuditParams,
     pub approval_mask: u8,
+    /// Both unset on a frame that discloses nothing.
+    #[serde(skip_serializing_if = "Option::is_none", with = "fe::option")]
+    pub approval_totals: Option<[u8; 32]>,
+    #[serde(skip_serializing_if = "Option::is_none", with = "fe::option")]
+    pub approval_blinder: Option<[u8; 32]>,
     /// `m`, the published slots.
     pub output_count: u8,
     pub outputs: Vec<OutputOpening>,

@@ -52,6 +52,13 @@ pub enum RingDelivery {
     Anonymous(Box<AnonymousPlan>),
 }
 
+/// 31 random bytes, below the field for every draw.
+pub fn random_field_element() -> [u8; 32] {
+    let mut element = [0; 32];
+    OsRng.fill_bytes(&mut element[1..]);
+    element
+}
+
 /// `transact_output` drops the record, every SPP output encodes before its record seals.
 pub(crate) const UNSEALED_RECORD: [u8; AUDIT_RECORD_LEN] = [0; AUDIT_RECORD_LEN];
 

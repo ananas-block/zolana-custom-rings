@@ -11,7 +11,7 @@ use zolana_ring_client::rpc::{
 };
 
 use crate::{
-    relay_message::{ExpectedDelegate, ExpectedMessage, ExpectedPublicOwner, RelayTransferTerms},
+    relay_message::{ApprovalOpening, ExpectedDelegate, ExpectedMessage, RelayTransferTerms},
     CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
 };
 
@@ -169,16 +169,21 @@ impl PendingSignature {
         self.expected.as_deref()?.terms_for(signer)
     }
 
-    pub(crate) fn expecting_owner(
+    pub(crate) fn expecting(
         relay_id: RelayId,
         message: Vec<u8>,
-        expected: ExpectedPublicOwner,
+        expected: ExpectedMessage,
     ) -> Self {
         Self {
             relay_id,
             message,
-            expected: Some(Box::new(ExpectedMessage::PublicOwner(expected))),
+            expected: Some(Box::new(expected)),
         }
+    }
+
+    /// For a named co-signer that reads exact totals, the terms of no slot.
+    pub fn approval_opening(&self) -> Option<&ApprovalOpening> {
+        self.expected.as_deref()?.approval_opening()
     }
 
     /// The expectation comes from the wallet's own request, never from Ring RPC's answer.

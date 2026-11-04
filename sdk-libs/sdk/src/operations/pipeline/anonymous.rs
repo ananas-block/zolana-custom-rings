@@ -213,6 +213,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 co_owners: Vec::new(),
             },
             list_salts: self.list_salts,
+            approval: self.approval,
         }
     }
 }
