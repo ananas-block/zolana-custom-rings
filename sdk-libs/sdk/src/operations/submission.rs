@@ -243,6 +243,7 @@ impl BoundState {
         }
         Ok([
             CustomRingError::RootNotServed,
+            CustomRingError::TrackingRootBelowFloor,
             CustomRingError::UnboundRegistry,
         ]
         .into_iter()
