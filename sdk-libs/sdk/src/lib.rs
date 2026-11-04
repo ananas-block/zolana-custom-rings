@@ -94,7 +94,7 @@ pub use crate::{
         AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, RecordUpdateService,
         RecordUpdateTarget, SaltedOwnerCheck, WalletRecordUpdate,
     },
-    register_key::{Enroll, EnrollInstruction, WriteOwnerGrant},
+    register_key::{Enroll, EnrollInstruction, EnrollRelay, WriteOwnerGrant},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     relay_message::{MessageMismatch, RelayTransferTerms, TokenAccountCreate, VerifiedMessage},
     select::{select_merge_where, select_spend_where},

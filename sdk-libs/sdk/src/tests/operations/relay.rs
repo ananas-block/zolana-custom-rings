@@ -24,6 +24,8 @@ use crate::{AnonymousPayment, CustomRingTransfer, CustomRingTransferInput, RingE
 struct StubRelay {
     prepared: Mutex<Vec<PrepareRelayRequest>>,
     asks_signature: bool,
+    /// What a relay that asks returns, a garbled message unset.
+    message: Vec<u8>,
     submitted: Mutex<Vec<SubmitRelayRequest>>,
 }
 
@@ -42,7 +44,10 @@ impl RingRelay for StubRelay {
         Ok(match self.asks_signature {
             true => RelayStep::SignMessage {
                 relay_id,
-                message: vec![1].into(),
+                message: match self.message.is_empty() {
+                    true => vec![1].into(),
+                    false => self.message.clone().into(),
+                },
             },
             false => RelayStep::Submitted { relay_id },
         })
@@ -1353,5 +1358,93 @@ mod public_signers {
         );
         signs(&pending, &co_signer).await;
         refused(&pending, &payee, MessageMismatch::Unrequested);
+    }
+}
+
+mod enroll_message {
+    //! The enrollment an owner with no SOL signs, read against what it proved.
+
+    use solana_instruction::Instruction;
+    use solana_signer::Signer;
+    use zolana_ring_client::rpc::{RelayEnrollInputs, ENROLL_COMPUTE_UNITS};
+
+    use super::*;
+    use crate::{
+        tests::support::relay_message, EnrollInstruction, EnrollRelay, MessageMismatch, RelaySent,
+    };
+
+    const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
+    const REGISTRY: Address = Address::new_from_array([0x55; 32]);
+
+    fn inputs(owner: Address) -> RelayEnrollInputs {
+        RelayEnrollInputs {
+            ring_program_id: ring().program_id(),
+            owner,
+            tracking_registry: REGISTRY,
+            instruction_data: vec![
+                custom_ring_interface::storage_instruction::tag::ENROLL,
+                1,
+                2,
+            ],
+        }
+    }
+
+    async fn signed(answer: Instruction) -> Result<RelayStatus, RingError> {
+        let owner = keypair(1);
+        let quote = RelayQuote {
+            fee_payer: SerializablePubkey(FEE_PAYER),
+            valid_until_slot: u64::MAX,
+        };
+        let relay = StubRelay {
+            asks_signature: true,
+            message: relay_message(&FEE_PAYER, &[answer], ENROLL_COMPUTE_UNITS).0,
+            ..StubRelay::default()
+        };
+        let prepared = EnrollRelay {
+            inputs: inputs(owner.pubkey()),
+            owner: &owner,
+        }
+        .prepare(quote)
+        .unwrap();
+        let RelaySent::SignMessage(pending) = prepared.send(&relay).await.unwrap() else {
+            panic!("the owner signs the enrollment");
+        };
+        pending.sign(&relay, &owner).await
+    }
+
+    #[tokio::test]
+    async fn the_enrollment_the_owner_proved_is_signed() {
+        let honest = inputs(keypair(1).pubkey()).instruction(FEE_PAYER);
+        assert!(matches!(
+            signed(honest.clone()).await,
+            Ok(RelayStatus::Sent { .. })
+        ));
+        let built = EnrollInstruction {
+            payer: FEE_PAYER,
+            owner: keypair(1).pubkey(),
+            tracking_registry: REGISTRY,
+            data: bytemuck::Zeroable::zeroed(),
+            proof: None,
+        }
+        .instruction();
+        assert_eq!(honest.accounts, built.accounts);
+        assert_eq!(honest.program_id, built.program_id);
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_swaps_an_account_or_a_byte_is_refused() {
+        let honest = inputs(keypair(1).pubkey()).instruction(FEE_PAYER);
+        let mut swapped = honest.clone();
+        swapped.accounts[2].pubkey = Address::new_from_array([0x56; 32]);
+        assert!(matches!(
+            signed(swapped).await,
+            Err(RingError::RelayMessage(MessageMismatch::Accounts))
+        ));
+        let mut rewritten = honest;
+        rewritten.data[1] ^= 1;
+        assert!(matches!(
+            signed(rewritten).await,
+            Err(RingError::RelayMessage(MessageMismatch::Data))
+        ));
     }
 }

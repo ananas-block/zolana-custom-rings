@@ -151,6 +151,34 @@ async fn a_merge_takes_every_input_one_transaction_carries() {
 /// Inputs a keyed merge carries in one v1 transaction, measured here.
 const WIDEST_MERGE: usize = 45;
 
+/// What `OwnerMergeProof` builds from the relay's wire, it holds no merge seed.
+#[test]
+fn the_relays_keyed_build_names_no_signer_on_a_zero_key_merge() {
+    use spr_interface::ZERO_NULLIFIER_PUBKEY;
+    let owner = keypair(1);
+    let utxos: Vec<_> = (0..2)
+        .map(|leaf| zero_key(ring_utxo(&owner, Mint::SOL, 5, leaf)))
+        .collect();
+    let viewing = spr_keypair::ViewingKey::new();
+    let keys = spr_transaction::LocalShieldedKeys::new(
+        spr_keypair::ShieldedAddress {
+            signing_pubkey: owner.signing_pubkey(),
+            nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+            viewing_pubkey: viewing.pubkey(),
+        },
+        vec![viewing],
+        spr_keypair::NullifierKey::from_secret([0; 31]),
+    )
+    .unwrap();
+    let built = CustomRingMerge::new(ring(), utxos, None)
+        .unwrap()
+        .encrypt(&keys);
+    match built {
+        Ok(prepared) => assert_eq!(prepared.signing_owner().unwrap(), None),
+        Err(refusal) => panic!("REFUSED {refusal:?}"),
+    }
+}
+
 #[test]
 fn a_zero_key_merge_names_a_zero_key_owner() {
     use spr_interface::ZERO_NULLIFIER_PUBKEY;

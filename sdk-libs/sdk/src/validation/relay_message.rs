@@ -3,7 +3,7 @@
 use custom_ring_interface::{
     compute_unit_limit, frame_digest, settle_buffered_data, stream::slot_tag, tag, AuditRecord,
     DepositPrefix, FrameBuffer, InstructionTag, ParsedTransact, RecordKind, RingMode, RingRail,
-    RingTransactData,
+    RingTransactData, STORAGE_PROGRAM_ID,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -17,7 +17,10 @@ use spr_keypair::{ShieldedAddress, X25519Pubkey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
 use thiserror::Error;
 use zolana_ring_client::{
-    rpc::{PrepareAuthorityTransferRequest, RelayQuote, TxViewingSecret},
+    rpc::{
+        PrepareAuthorityTransferRequest, RelayEnrollInputs, RelayQuote, TxViewingSecret,
+        ENROLL_COMPUTE_UNITS,
+    },
     AuditEnvelope, OpenedAudit,
 };
 
@@ -59,6 +62,14 @@ pub(crate) enum ExpectedMessage {
     Deposit(ExpectedDeposit),
     Delegate(ExpectedDelegate),
     Transfer(ExpectedTransfer),
+    Enroll(ExpectedEnroll),
+}
+
+/// The enrollment the owner proved and signed, the message differs from it in nothing.
+#[derive(Clone, Debug)]
+pub(crate) struct ExpectedEnroll {
+    pub fee_payer: Address,
+    pub inputs: RelayEnrollInputs,
 }
 
 /// What a public signer of a relayed transfer agrees to, byte for byte, the sealing wallet hands it over.
@@ -144,9 +155,10 @@ pub struct VerifiedMessage {
 
 struct Envelope {
     ring: CustomRing,
+    program: Address,
+    units: u32,
     fee_payer: Address,
     signer: Address,
-    tag: InstructionTag,
     /// Ahead of the ring instruction, exactly these.
     setup: Vec<Instruction>,
 }
@@ -161,6 +173,7 @@ impl ExpectedMessage {
             Self::Deposit(deposit) => deposit.check(message),
             Self::Delegate(delegate) => delegate.check(message),
             Self::Transfer(transfer) => check_inline(transfer, message, signer),
+            Self::Enroll(enroll) => enroll.check(message),
         }
     }
 
@@ -170,7 +183,7 @@ impl ExpectedMessage {
         signer: Address,
     ) -> Result<Option<Address>, MessageMismatch> {
         match self {
-            Self::Deposit(_) => Ok(None),
+            Self::Deposit(_) | Self::Enroll(_) => Ok(None),
             Self::Delegate(delegate) => delegate.settled_buffer(message),
             Self::Transfer(transfer) => settled_buffer(transfer, message, signer),
         }
@@ -183,7 +196,7 @@ impl ExpectedMessage {
         signer: Address,
     ) -> Result<VerifiedMessage, MessageMismatch> {
         match self {
-            Self::Deposit(_) => Err(MessageMismatch::Data),
+            Self::Deposit(_) | Self::Enroll(_) => Err(MessageMismatch::Data),
             Self::Delegate(delegate) => delegate.check_settled(message, buffer),
             Self::Transfer(transfer) => check_settled(transfer, message, buffer, signer),
         }
@@ -192,7 +205,7 @@ impl ExpectedMessage {
     pub fn transfer_terms(&self) -> Option<&RelayTransferTerms> {
         match self {
             Self::Transfer(transfer) => Some(&transfer.terms),
-            Self::Deposit(_) | Self::Delegate(_) => None,
+            Self::Deposit(_) | Self::Delegate(_) | Self::Enroll(_) => None,
         }
     }
 }
@@ -305,9 +318,10 @@ impl ExpectedDeposit {
     pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
         let envelope = Envelope {
             ring: self.ring,
+            program: self.ring.program_id(),
+            units: compute_unit_limit(InstructionTag::Deposit),
             fee_payer: self.fee_payer,
             signer: self.depositor,
-            tag: InstructionTag::Deposit,
             setup: Vec::new(),
         };
         let instruction = envelope.open(message)?;
@@ -326,6 +340,33 @@ impl ExpectedDeposit {
         let (prefix, spp_accounts) = instruction.accounts.split_at(ring_accounts);
         if spp_accounts != self.spp.accounts.as_slice() || !envelope.reads_only(prefix) {
             return Err(MessageMismatch::Accounts);
+        }
+        Ok(envelope.verified(message))
+    }
+}
+
+impl ExpectedEnroll {
+    /// A swapped registry or authorization reads the owner's key into another account.
+    pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
+        let envelope = Envelope {
+            ring: CustomRing::new(self.inputs.ring_program_id),
+            program: STORAGE_PROGRAM_ID,
+            units: ENROLL_COMPUTE_UNITS,
+            fee_payer: self.fee_payer,
+            signer: self.inputs.owner,
+            setup: Vec::new(),
+        };
+        let instruction = envelope.open(message)?;
+        let expected = self.inputs.instruction(self.fee_payer);
+        if instruction.accounts != expected.accounts {
+            return Err(MessageMismatch::Accounts);
+        }
+        let signed = RelayEnrollInputs {
+            instruction_data: instruction.data,
+            ..self.inputs.clone()
+        };
+        if signed.request_digest() != self.inputs.request_digest() {
+            return Err(MessageMismatch::Data);
         }
         Ok(envelope.verified(message))
     }
@@ -428,9 +469,10 @@ impl ExpectedFrame for ExpectedDelegate {
     fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
         Ok(Envelope {
             ring: self.ring,
+            program: self.ring.program_id(),
+            units: compute_unit_limit(tag),
             fee_payer: self.fee_payer,
             signer,
-            tag,
             setup: Vec::new(),
         })
     }
@@ -535,9 +577,10 @@ impl ExpectedFrame for ExpectedTransfer {
         }
         Ok(Envelope {
             ring: CustomRing::new(self.terms.ring.0),
+            program: self.terms.ring.0,
+            units: compute_unit_limit(tag),
             fee_payer: self.terms.fee_payer.0,
             signer,
-            tag,
             setup: self.setup.clone(),
         })
     }
@@ -610,7 +653,7 @@ impl Envelope {
         let config = message.config;
         let within_budget = config
             .compute_unit_limit
-            .is_some_and(|units| units <= compute_unit_limit(self.tag))
+            .is_some_and(|units| units <= self.units)
             && config
                 .loaded_accounts_data_size_limit
                 .is_some_and(|size| size <= MAX_LOADED_ACCOUNTS_DATA_SIZE)
@@ -647,7 +690,7 @@ impl Envelope {
                 return Err(MessageMismatch::Instructions);
             }
         }
-        if key(compiled.program_id_index)? != self.ring.program_id() {
+        if key(compiled.program_id_index)? != self.program {
             return Err(MessageMismatch::Program);
         }
         let accounts = compiled
@@ -662,7 +705,7 @@ impl Envelope {
             })
             .collect::<Result<_, MessageMismatch>>()?;
         Ok(Instruction {
-            program_id: self.ring.program_id(),
+            program_id: self.program,
             accounts,
             data: compiled.data.clone(),
         })
