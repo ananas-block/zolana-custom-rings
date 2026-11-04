@@ -57,7 +57,7 @@ use crate::{
     },
 };
 
-const WALLET_NOTE_PAGE_LIMIT: usize = 100;
+pub(crate) const WALLET_NOTE_PAGE_LIMIT: usize = 100;
 /// Frames one pass retries, the oldest first.
 const MAX_RETRIED_FRAMES: usize = 16;
 /// A retried slot holds few frames, the next pass reads on.

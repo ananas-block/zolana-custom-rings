@@ -3,12 +3,19 @@ use custom_ring_sdk::DelegatePayment;
 use jsonrpsee::types::ErrorObjectOwned;
 use thiserror::Error;
 use zolana_ring_client::rpc::{
-    AuthorityTransferAttestation, PrepareAuthorityTransferRequest, RelayStep,
+    AuthorityTransferAttestation, DelegateNotesAttestation, GetDelegateNotesRequest,
+    GetDelegateNotesResponse, PrepareAuthorityTransferRequest, RelayStep,
 };
 
 use crate::{
-    authorize::WalletCheck, error::RingRpcError, hub::Hub, relay_prover::DelegateSeal,
-    replay::ReplayCheck, upstream::TransactionSource, utxos::SpendableNotes,
+    audit::WALLET_NOTE_PAGE_LIMIT,
+    authorize::WalletCheck,
+    error::RingRpcError,
+    hub::Hub,
+    relay_prover::DelegateSeal,
+    replay::ReplayCheck,
+    upstream::TransactionSource,
+    utxos::{SpendableNotes, WalletStatusQuery},
 };
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -39,6 +46,69 @@ impl From<AuthorityTransferError> for ErrorObjectOwned {
 }
 
 impl<S: TransactionSource> Hub<S> {
+    /// The chain names the delegate, only its signature reads a victim's secret and openings.
+    pub async fn delegate_notes(
+        &self,
+        request: &GetDelegateNotesRequest,
+    ) -> Result<GetDelegateNotesResponse, RingRpcError> {
+        let (ring, delegate, owner) = (request.ring.0, request.delegate.0, request.owner.0);
+        let cursor = request
+            .cursor
+            .as_ref()
+            .map(|cursor| <[u8; 32]>::try_from(cursor.0.as_slice()))
+            .transpose()
+            .map_err(|_| RingRpcError::InvalidCursor)?;
+        let service = self.service(Some(ring))?;
+        let shared = self.shared();
+        let now = shared.clock.now()?;
+        // 1. The named key signed the read for the service and ring.
+        let nonce = WalletCheck {
+            wallet: delegate,
+            signature: &request.signature,
+            timestamp: request.timestamp,
+            nonce: &request.nonce,
+            attestation: &DelegateNotesAttestation {
+                target: service.read_target(),
+                delegate,
+                owner,
+                cursor: request.cursor.clone(),
+            },
+            now,
+        }
+        .decide()?;
+        // 2. The config names the key its delegate under the auditor key held here.
+        let config = shared
+            .source
+            .ring_config(ring)
+            .await?
+            .filter(|config| config.delegate == Some(delegate))
+            .ok_or(AuthorityTransferError::NotDelegate)?;
+        if config.auditor_pubkey != service.auditor_pubkey() {
+            return Err(AuthorityTransferError::EscrowUnserved.into());
+        }
+        shared
+            .replay
+            .accept(ReplayCheck {
+                ring,
+                nonce,
+                timestamp: request.timestamp,
+                now,
+            })
+            .await?;
+        // 3. The secret opens to the key the owner's record binds, it stays out of the store.
+        let nullifier_secret = service
+            .escrowed_nullifier_key(&owner.to_bytes())?
+            .map(|key| spr_hasher::primitives::right_align(&key.secret()).into());
+        Ok(GetDelegateNotesResponse {
+            nullifier_secret,
+            status: shared.store(ring).wallet_status(WalletStatusQuery {
+                wallet: owner,
+                after: cursor,
+                limit: WALLET_NOTE_PAGE_LIMIT,
+            }),
+        })
+    }
+
     /// A repeated request returns the stored relay step.
     pub async fn prepare_authority_transfer(
         &self,
@@ -320,6 +390,50 @@ mod tests {
             *prover.proven.lock().expect("proven"),
             [(delegate.pubkey(), *escrowed.secret())]
         );
+    }
+
+    fn notes_request(
+        fixture: &Fixture,
+        signer: &Keypair,
+        owner: Address,
+    ) -> GetDelegateNotesRequest {
+        SignedRequest::new(DelegateNotesAttestation {
+            target: ReadTarget {
+                cluster: GENESIS,
+                service: fixture.hub.service_pubkey(),
+                ring: RING,
+            },
+            delegate: signer.pubkey(),
+            owner,
+            cursor: None,
+        })
+        .at(unix_now().expect("clock"))
+        .sign(signer)
+        .expect("signed request")
+    }
+
+    #[tokio::test]
+    async fn the_delegate_reads_the_secret_and_openings_and_another_key_nothing() {
+        let delegate = Keypair::new_from_array([21; 32]);
+        let (fixture, _prover) = served(delegate.pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let read = fixture
+            .hub
+            .delegate_notes(&notes_request(&fixture, &delegate, wallet.pubkey()))
+            .await
+            .expect("delegate read");
+        assert_eq!(
+            read.nullifier_secret.expect("secret").0[1..],
+            *escrowed.secret()
+        );
+        let impostor = Keypair::new_from_array([22; 32]);
+        let refused = fixture
+            .hub
+            .delegate_notes(&notes_request(&fixture, &impostor, wallet.pubkey()))
+            .await
+            .expect_err("only the configured delegate reads");
+        assert_eq!(ErrorObjectOwned::from(refused).code(), -32220);
     }
 
     #[tokio::test]
