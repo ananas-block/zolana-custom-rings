@@ -8,13 +8,22 @@ import { initializePoseidon } from "@heliuslabs/zolana";
 import { generateKeyPairSigner } from "@solana/kit";
 import type { Address } from "@solana/kit";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ZERO_32 } from "@heliuslabs/zolana/internal";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { ZERO_32, addressBytes } from "@heliuslabs/zolana/internal";
 
 import {
   authorizationAddressHash,
+  checkedEnrollAddressInstruction,
   decodeAddressAuthorization,
   enrollAddressInstruction,
+  type EnrollAddress,
+  type EnrollmentReadClient,
 } from "../../../src/operations/management/enroll-address.js";
+import { memberOfTag } from "../../../src/protocol/membership/policy.js";
+import { escrowKeyHash } from "../../../src/protocol/membership/member-opening.js";
+import type { StorageOpeningsRequest } from "../../../src/rpc/ports.js";
+import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js";
+import { storageRegistryAccount } from "../../helpers/ring-accounts.js";
 import {
   decodeStorageWrites,
   encodeStorageWrites,
@@ -93,5 +102,102 @@ describe("enroll_address vector", () => {
         }),
       ),
     ).toBe(vector["entry_hash"]);
+  });
+});
+
+describe("checkedEnrollAddressInstruction", () => {
+  beforeAll(initializePoseidon);
+
+  const registry = address("registry");
+  const held = new Uint8Array(32).fill(7) as Bytes32;
+  const other = new Uint8Array(32).fill(8) as Bytes32;
+  const viewingU = new Uint8Array(32).fill(3) as Bytes32;
+
+  function chain(records: readonly FixtureRecord[]): EnrollmentReadClient {
+    const tree = recordTree(records);
+    const account = storageRegistryAccount([{ hash: tree.root, revision: 1n, expiresAt: 0n }]);
+    return {
+      getAccount: async (key: Address) => (key === registry ? account : undefined),
+      getStorageMemberOpenings: async (request: StorageOpeningsRequest) => ({
+        context: { slot: 1n, blockTime: 0n },
+        root: { root: tree.root, revision: 1n, nextIndex: tree.nextIndex },
+        openings: request.members.map((member: Bytes32) => tree.opening(member)),
+      }),
+    } as unknown as EnrollmentReadClient;
+  }
+
+  async function enrollment(nullifierPk: Bytes32): Promise<EnrollAddress> {
+    const owner = await generateKeyPairSigner();
+    return { payer: owner, owner, registry, nullifierPk, viewingU };
+  }
+
+  const memberOf = (input: EnrollAddress): Bytes32 =>
+    memberOfTag(addressBytes((input.owner as { address: Address }).address, "owner"));
+
+  it("builds the same instruction when no record exists", async () => {
+    const input = await enrollment(held);
+    const checked = await checkedEnrollAddressInstruction(input, chain([]));
+    expect(checked).toEqual(await enrollAddressInstruction(input));
+  });
+
+  it("builds for a record that holds no key yet and for the key an address already holds", async () => {
+    const input = await enrollment(held);
+    const member = memberOf(input);
+    await checkedEnrollAddressInstruction(input, chain([{ member, lists: 1n }]));
+    await checkedEnrollAddressInstruction(
+      input,
+      chain([
+        {
+          member,
+          lists: 0n,
+          address: { ringId: hex("ring_id"), nullifierPk: held, viewingU, addressRevision: 1n },
+        },
+      ]),
+    );
+  });
+
+  it("refuses a key other than the address holds before the owner signs", async () => {
+    const input = await enrollment(other);
+    await expect(
+      checkedEnrollAddressInstruction(
+        input,
+        chain([
+          {
+            member: memberOf(input),
+            lists: 0n,
+            address: { ringId: hex("ring_id"), nullifierPk: held, viewingU, addressRevision: 1n },
+          },
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: "RING_ENROLLMENT_KEY_MISMATCH" });
+  });
+
+  it("reads the escrow against the sealed key the record binds", async () => {
+    const ciphertext = new Uint8Array(32).fill(9) as Bytes32;
+    const escrowed = (input: EnrollAddress, withSealed: boolean): FixtureRecord => ({
+      member: memberOf(input),
+      lists: 0n,
+      escrowKey: escrowKeyHash({ nullifierPk: held, ciphertext }),
+      ...(withSealed
+        ? {
+            sealed: {
+              owner: address("owner"),
+              nullifierPk: held,
+              ephemeralPublicKey: X25519Keypair.generate().publicKey(),
+              ciphertext,
+            },
+          }
+        : {}),
+    });
+    const agrees = await enrollment(held);
+    await checkedEnrollAddressInstruction(agrees, chain([escrowed(agrees, true)]));
+    const differs = await enrollment(other);
+    await expect(
+      checkedEnrollAddressInstruction(differs, chain([escrowed(differs, true)])),
+    ).rejects.toMatchObject({ code: "RING_ENROLLMENT_KEY_MISMATCH" });
+    const withheld = await enrollment(held);
+    await expect(
+      checkedEnrollAddressInstruction(withheld, chain([escrowed(withheld, false)])),
+    ).rejects.toMatchObject({ code: "RING_ENROLLMENT_KEY_MISMATCH" });
   });
 });

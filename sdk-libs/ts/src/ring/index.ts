@@ -194,7 +194,12 @@ export {
 } from "../state/viewing-history.js";
 export type { AdvancedTag, EntryStream, RingPosition } from "../state/viewing-history.js";
 export { plainTagFrame, scanWorkerMatcher } from "../state/anonymous-scan.js";
-export type { PlainTagFrame, ScanWorkerReply, ScanWorkerRequest } from "../state/anonymous-scan.js";
+export type {
+  PlainTagFrame,
+  ScanWorkerReply,
+  ScanWorkerRequest,
+  ScanWorkerResponse,
+} from "../state/anonymous-scan.js";
 export { AnonymousWallet, ANONYMOUS_WALLET_VERSION } from "../state/anonymous-wallet.js";
 export type { PendingClaim } from "../state/anonymous-wallet.js";
 export { AnonymousSync, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
@@ -518,7 +523,9 @@ export {
   decodeAddressAuthorization,
   enrollAddressInstruction,
   type AddressAuthorization,
+  checkedEnrollAddressInstruction,
   type EnrollAddress,
+  type EnrollmentReadClient,
 } from "../operations/management/enroll-address.js";
 export { addressAuthorizationPda } from "../protocol/pda/index.js";
 export type { AuthorizedAddress } from "../protocol/membership/member-registry.js";

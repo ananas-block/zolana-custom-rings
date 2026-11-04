@@ -11,7 +11,8 @@ import {
   type Bytes16,
   type Bytes32,
 } from "@heliuslabs/zolana";
-import { DEFAULT_TREE_ID } from "@heliuslabs/zolana/interface";
+import { DEFAULT_TREE_ID, type Bytes33 } from "@heliuslabs/zolana/interface";
+import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { bytesKey } from "@heliuslabs/zolana/internal";
 import {
   AssetRegistry,
@@ -303,6 +304,67 @@ describe("syncRingWallet", () => {
     expect(wallet._state()).toEqual(before);
     expect(wallet._checkpointEntries("transactions")).toEqual([]);
     expect(client.getShieldedTransactionsByNullifiers).not.toHaveBeenCalled();
+  });
+
+  it("refuses the sync and moves nothing when the key holder fails on a delivered slot", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const wallet = new Wallet({ identity: recipient.shieldedAddress() });
+    const client = syncClient([delivered(recipient)]);
+    const failure = new Error("holder offline");
+    vi.spyOn(keys, "ringDeliverySecrets").mockRejectedValue(failure);
+    const before = wallet._state();
+
+    await expect(syncRingWallet({ wallet, keys, client })).rejects.toBe(failure);
+
+    expect(wallet._state()).toEqual(before);
+    expect(wallet.lastSynced).toBe(0n);
+    expect(wallet._checkpointEntries("transactions")).toEqual([]);
+  });
+
+  it("refuses a holder that answers no secret for a delivered slot", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    vi.spyOn(keys, "ringDeliverySecrets").mockResolvedValue([]);
+    await expect(opened(keys, [delivered(recipient)])).rejects.toMatchObject({
+      code: "WALLET_KEYS_BATCH_MISMATCH",
+    });
+  });
+
+  it("skips a body off its length and keeps the note beside it", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const good = delivered(recipient);
+    const [slot] = good.outputSlots;
+    if (slot === undefined) throw new Error("no slot");
+    const short = {
+      ...good,
+      txSignature: "2".repeat(64) as Signature,
+      outputSlots: [
+        {
+          ...slot,
+          payload: encodeRingOutput(RingScheme.ringConfidentialDelivered, new Uint8Array(5)),
+        },
+      ],
+    };
+    const notes = await opened(keys, [short, good]);
+    expect(notes.utxos.map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
+  });
+
+  it("asks the holder nothing for a published key or first nullifier no agreement accepts", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const asked = vi.spyOn(keys, "ringDeliverySecrets");
+    const good = delivered(recipient);
+    const smallOrder = X25519PublicKey.fromBytes(
+      new Uint8Array([4, ...new Uint8Array(32)]) as Bytes33,
+    );
+    const notes = await opened(keys, [
+      { ...good, txViewingPublicKey: smallOrder },
+      { ...good, nullifiers: [new Uint8Array(32).fill(0xff) as Bytes32] },
+    ]);
+    expect(notes).toEqual({ utxos: [], pending: 0 });
+    expect(asked).not.toHaveBeenCalled();
   });
 
   it("retains unread positions while a ring mint remains unresolved", async () => {

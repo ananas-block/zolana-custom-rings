@@ -3,6 +3,7 @@ import { initializePoseidon } from "@heliuslabs/zolana";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { ViewingKey, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
+import { RingError } from "../protocol/error.js";
 import {
   ViewingKeyHolder,
   type RingKeys,
@@ -26,6 +27,11 @@ export interface ScanWorkerRequest {
 /** Per frame one answer per probe, the slot secret on a match. */
 export type ScanWorkerReply = readonly (readonly (Bytes32 | undefined)[])[];
 
+/** A failure carries its error code alone, never a message or a stack. */
+export type ScanWorkerResponse =
+  | Readonly<{ ok: true; matches: ScanWorkerReply }>
+  | Readonly<{ ok: false; code: string }>;
+
 export function plainTagFrame(frame: RingTagFrame): PlainTagFrame {
   return {
     txViewingKey: frame.txViewingPublicKey.toBytes(),
@@ -35,13 +41,23 @@ export function plainTagFrame(frame: RingTagFrame): PlainTagFrame {
   };
 }
 
-/** A worker entry runs it on each message, the request's secret wiped once answered. */
-export async function answerScanRequest(request: ScanWorkerRequest): Promise<ScanWorkerReply> {
-  await initializePoseidon();
-  const key = ViewingKey.fromBytes(request.viewingSecret);
-  const viewingPublicKey = key.publicKey();
-  const holder = new ViewingKeyHolder([key]);
+/** Never rejects, a sync waiting on the worker gets an answer to every message. */
+export async function scanWorkerResponse(request: ScanWorkerRequest): Promise<ScanWorkerResponse> {
   try {
+    return Object.freeze({ ok: true, matches: await answerScanRequest(request) });
+  } catch (cause) {
+    return Object.freeze({ ok: false, code: failureCode(cause) });
+  }
+}
+
+/** Wipes the request's secret on every path. */
+export async function answerScanRequest(request: ScanWorkerRequest): Promise<ScanWorkerReply> {
+  let holder: ViewingKeyHolder | undefined;
+  try {
+    await initializePoseidon();
+    const key = ViewingKey.fromBytes(request.viewingSecret);
+    const viewingPublicKey = key.publicKey();
+    holder = new ViewingKeyHolder([key]);
     return await holder.ringTagMatches(
       request.frames.map((frame) => ({
         viewingPublicKey,
@@ -52,8 +68,8 @@ export async function answerScanRequest(request: ScanWorkerRequest): Promise<Sca
       })),
     );
   } finally {
-    holder.destroy();
-    request.viewingSecret.fill(0);
+    holder?.destroy();
+    request.viewingSecret?.fill(0);
   }
 }
 
@@ -62,12 +78,21 @@ export function scanWorkerMatcher(
   ask: (
     viewingPublicKey: X25519PublicKey,
     frames: readonly PlainTagFrame[],
-  ) => Promise<ScanWorkerReply>,
+  ) => Promise<ScanWorkerResponse>,
 ): Pick<RingKeys, "ringTagMatches"> {
   return {
     ringTagMatches: async (frames) => {
       const [first] = frames;
-      return first === undefined ? [] : ask(first.viewingPublicKey, frames.map(plainTagFrame));
+      if (first === undefined) return [];
+      const response = await ask(first.viewingPublicKey, frames.map(plainTagFrame));
+      if (!response.ok)
+        throw new RingError("RING_SCAN_WORKER_FAILED", { details: { code: response.code } });
+      return response.matches;
     },
   };
+}
+
+function failureCode(cause: unknown): string {
+  const code = (cause as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "UNKNOWN";
 }

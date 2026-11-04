@@ -36,16 +36,26 @@ export async function fetchBoundRoot(
   }>,
   context?: RequestContext,
 ): Promise<BoundRoot> {
+  const root = await fetchRegistryRoot(input, context);
+  return Object.freeze({ ...root, ringProgramId: input.ringProgramId });
+}
+
+/** No ring proof binds the root. */
+export async function fetchRegistryRoot(
+  input: Readonly<{ client: Pick<ChainReader, "getAccount">; registry: Address }>,
+  context?: RequestContext,
+): Promise<RegistryRoot> {
   const current = (await fetchStorageRegistry(input.client, input.registry, context)).roots[0];
   if (current === undefined)
     throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { registry: input.registry } });
   return Object.freeze({
-    ringProgramId: input.ringProgramId,
     registry: input.registry,
     revision: current.revision,
     root: current.hash,
   });
 }
+
+export type RegistryRoot = Omit<BoundRoot, "ringProgramId">;
 
 /** A member's present record under the ring's newest own root. */
 export interface RegisteredRecord {
@@ -124,7 +134,7 @@ export async function checkEscrowedRecipients(
 export function readMemberOpenings(
   input: Readonly<{
     client: Pick<RingRecordReader, "getStorageMemberOpenings">;
-    root: BoundRoot;
+    root: RegistryRoot;
     members: readonly Bytes32[];
   }>,
   context?: RequestContext,
@@ -224,7 +234,7 @@ export function readRegisteredRecord(
 }
 
 /** An indexer answer under a root or revision other than the bound one is refused. */
-function checkServedRoot(served: StorageRoot, bound: BoundRoot, reason: string): void {
+function checkServedRoot(served: StorageRoot, bound: RegistryRoot, reason: string): void {
   if (!equalBytes(served.root, bound.root) || served.revision !== bound.revision)
     throw new RingError("RING_ROOT_NOT_SERVED", {
       details: { reason, registry: bound.registry, revision: served.revision.toString() },

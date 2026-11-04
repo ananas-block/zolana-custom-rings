@@ -155,5 +155,7 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_STORAGE_WRITE_INVALID",
   "RING_RPC_REFUSED",
   "RING_PROVING_KEYS_MISSING",
+  "RING_SCAN_WORKER_FAILED",
+  "RING_ENROLLMENT_KEY_MISMATCH",
 ]
 `;

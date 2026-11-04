@@ -152,6 +152,8 @@ export const RING_ERROR_CODES = [
   "RING_STORAGE_WRITE_INVALID",
   "RING_RPC_REFUSED",
   "RING_PROVING_KEYS_MISSING",
+  "RING_SCAN_WORKER_FAILED",
+  "RING_ENROLLMENT_KEY_MISMATCH",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

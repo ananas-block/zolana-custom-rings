@@ -6,6 +6,7 @@ import {
   equalBytes,
   fetchSplAssetRegistrations,
   createIndexerRpcConfig,
+  isCanonicalField,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
@@ -24,8 +25,9 @@ import { openRingDelivery } from "../crypto/derivation/blinding.js";
 import { registeredMint, spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
-import { openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
-import { unseen } from "./batch.js";
+import { isSmallOrder } from "../crypto/keys/x25519.js";
+import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
+import { exactlyOne, unseen } from "./batch.js";
 import { RING_DELIVERY_UNRESOLVED, type RingDeliveredNote } from "../crypto/derivation/blinding.js";
 
 export interface RingNotes {
@@ -295,9 +297,16 @@ async function deliveredNote(
     .viewingPublicKeys()
     .find((key) => equalBytes(key.u(), site.slot.viewTag));
   const firstNullifier = site.tx.nullifiers[0];
-  if (viewingPublicKey === undefined || firstNullifier === undefined) return undefined;
-  const slotSecret = await opened(context, async () => {
-    const [secret] = await input.keys.ringDeliverySecrets(
+  // Malformed published bytes skip here, a holder failure refuses the sync.
+  if (
+    viewingPublicKey === undefined ||
+    firstNullifier === undefined ||
+    isSmallOrder(site.txViewingPublicKey) ||
+    !isCanonicalField(firstNullifier)
+  )
+    return undefined;
+  const slotSecret = exactlyOne(
+    await input.keys.ringDeliverySecrets(
       [
         {
           viewingPublicKey,
@@ -308,39 +317,32 @@ async function deliveredNote(
         },
       ],
       context,
-    );
-    return secret;
-  });
-  if (slotSecret === undefined) return undefined;
-  const owner = input.keys.address();
-  const note = openRingDelivery(
-    { ring: site.ring },
-    {
-      body,
-      slotSecret,
-      owner: {
-        signingPublicKey: owner.signingPublicKey,
-        nullifierPublicKey: owner.nullifierPublicKey,
-      },
-      commitment: site.slot.outputContext.hash,
-      treeId: outputTreeId(site.slot.outputContext),
-    },
-    input.assets,
+    ),
   );
-  if (note === undefined) return undefined;
-  return note === RING_DELIVERY_UNRESOLVED ? PENDING : Object.freeze({ ...note, slot: site.slot });
-}
-
-/** A body that fails to open is another key's or malformed, an abort still stops the sync. */
-async function opened<T>(
-  context: RequestContext | undefined,
-  open: () => Promise<T | undefined>,
-): Promise<T | undefined> {
+  const owner = input.keys.address();
   try {
-    return await open();
-  } catch (error) {
-    if (context?.signal?.aborted === true) throw error;
-    return undefined;
+    const note = decoded(() =>
+      openRingDelivery(
+        { ring: site.ring },
+        {
+          body,
+          slotSecret,
+          owner: {
+            signingPublicKey: owner.signingPublicKey,
+            nullifierPublicKey: owner.nullifierPublicKey,
+          },
+          commitment: site.slot.outputContext.hash,
+          treeId: outputTreeId(site.slot.outputContext),
+        },
+        input.assets,
+      ),
+    );
+    if (note === undefined) return undefined;
+    return note === RING_DELIVERY_UNRESOLVED
+      ? PENDING
+      : Object.freeze({ ...note, slot: site.slot });
+  } finally {
+    slotSecret.fill(0);
   }
 }
 

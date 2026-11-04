@@ -1,24 +1,33 @@
 /** A PDA owner signs enrollment through CPI with the same flag. */
 import type { Address, Instruction } from "@solana/kit";
 
+import type { ChainReader } from "@heliuslabs/zolana/client";
 import {
   SYSTEM_PROGRAM,
   Writer,
+  ZERO_32,
   addressBytes,
   encodeBase58,
+  equalBytes,
   Reader,
   instruction,
   meta,
   signerAddress,
   type SignerAccount,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 
 import { RingError } from "../../protocol/error.js";
-import { addressRecordHash, checkedViewingU } from "../../protocol/membership/member-opening.js";
+import {
+  addressRecordHash,
+  checkedViewingU,
+  type MemberOpeningRead,
+} from "../../protocol/membership/member-opening.js";
 import type { AuthorizedAddress } from "../../protocol/membership/member-registry.js";
 import { memberOfTag } from "../../protocol/membership/policy.js";
 import { addressAuthorizationPda, STORAGE_PROGRAM_ID } from "../../protocol/pda/index.js";
+import type { RingRecordReader } from "../../rpc/ports.js";
+import { fetchRegistryRoot, readMemberOpenings } from "../../rpc/registered-record.js";
 
 /** Rust `storage_instruction::tag::ENROLL_ADDRESS`. */
 export const ENROLL_ADDRESS_TAG = 5;
@@ -36,6 +45,23 @@ export interface EnrollAddress {
   readonly nullifierPk: Bytes32;
   readonly viewingU: Bytes32;
 }
+
+/** The first key is permanent and the program cannot read a leaf, a mismatch refuses before signing. */
+export async function checkedEnrollAddressInstruction(
+  input: EnrollAddress,
+  client: EnrollmentReadClient,
+  context?: RequestContext,
+): Promise<Instruction> {
+  const root = await fetchRegistryRoot({ client, registry: input.registry }, context);
+  const member = memberOfTag(addressBytes(signerAddress(input.owner), "owner"));
+  const [read] = await readMemberOpenings({ client, root, members: [member] }, context);
+  if (read === undefined) throw new RingError("RING_MEMBER_REGISTRY_INVALID");
+  checkEnrollmentKey(read, input.nullifierPk);
+  return enrollAddressInstruction(input);
+}
+
+export type EnrollmentReadClient = Pick<ChainReader, "getAccount"> &
+  Pick<RingRecordReader, "getStorageMemberOpenings">;
 
 export async function enrollAddressInstruction(input: EnrollAddress): Promise<Instruction> {
   const owner = signerAddress(input.owner);
@@ -55,6 +81,17 @@ export async function enrollAddressInstruction(input: EnrollAddress): Promise<In
     ],
     STORAGE_PROGRAM_ID,
   );
+}
+
+/** A record that withholds its escrow preimage refuses, its key is not known to agree. */
+function checkEnrollmentKey(read: MemberOpeningRead, nullifierPk: Bytes32): void {
+  const { opening } = read;
+  if (opening.kind !== "present") return;
+  const escrowAgrees =
+    equalBytes(opening.record.escrowKey, ZERO_32) || read.escrowed(nullifierPk) !== undefined;
+  const addressAgrees =
+    opening.address === undefined || equalBytes(opening.address.nullifierPk, nullifierPk);
+  if (!escrowAgrees || !addressAgrees) throw new RingError("RING_ENROLLMENT_KEY_MISMATCH");
 }
 
 /** The newest address an owner signed, an authority cannot roll it back. */
