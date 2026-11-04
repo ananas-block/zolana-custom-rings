@@ -328,7 +328,7 @@ impl RecordWriter {
             .collect();
         let entries = writes
             .iter()
-            .map(RecordWriteData::entry)
+            .map(RecordWriteData::storage_entry)
             .collect::<Result<Vec<QueueEntry>, _>>()
             .map_err(|_| DbErr::Custom("stored record update writes are invalid".to_owned()))?;
         let state = self
