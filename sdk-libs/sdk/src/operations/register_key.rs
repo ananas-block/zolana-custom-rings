@@ -6,12 +6,10 @@ use custom_ring_interface::{
 use spr_client::AsyncRpc;
 use spr_hasher::primitives::{right_align, solana_owner_identity};
 use spr_indexer_api::Hash;
-use spr_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_keypair::{NullifierKey, ShieldedAddress, X25519Pubkey};
 use zeroize::Zeroizing;
 use zolana_ring_client::AsyncRingIndexer;
 use zolana_ring_client::{rpc::EscrowRegistration, NullifierKeyEnvelope, SealedNullifierKey};
-
-use zolana_ring_keys::RingNullifierKey;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -72,16 +70,15 @@ pub struct SealedEscrow {
     pub nullifier_secret: Zeroizing<[u8; 32]>,
 }
 
-impl KeyEscrowAuthority for RingNullifierKey {
+impl KeyEscrowAuthority for NullifierKey {
     fn nullifier_pubkey(&self) -> Result<[u8; 32], RingError> {
-        Ok(self.nullifier_pubkey()?)
+        Ok(self.pubkey()?)
     }
 
     fn seal(&self, auditor: &X25519Pubkey) -> Result<SealedEscrow, RingError> {
-        let key = self.nullifier_key();
         Ok(SealedEscrow {
-            envelope: NullifierKeyEnvelope::new(key, auditor)?,
-            nullifier_secret: Zeroizing::new(right_align(&key.secret())),
+            envelope: NullifierKeyEnvelope::new(self, auditor)?,
+            nullifier_secret: Zeroizing::new(right_align(&self.secret())),
         })
     }
 }

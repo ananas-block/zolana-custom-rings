@@ -1,5 +1,5 @@
 use custom_ring_interface::{
-    storage::{StorageError, StorageRegistry},
+    storage::{Revision, StorageError, StorageRegistry},
     storage_instruction::{
         EnrollIxData, InitializeIxData, InitializeTrackingIxData, OwnerGrantIxData,
     },
@@ -85,7 +85,7 @@ impl TrackingRegistryInit<'_> {
         .create(account)?;
         account
             .try_borrow_mut()?
-            .copy_from_slice(bytemuck::bytes_of(&TrackingRegistry::new(bump, self.ix)));
+            .copy_from_slice(bytemuck::bytes_of(&TrackingRegistry::new(self.ix)));
         Ok(())
     }
 }
@@ -97,7 +97,6 @@ pub struct TrackingAuthorizationInit<'a> {
     pub payer: &'a AccountView,
     pub owner: &'a Address,
     pub registry: &'a Address,
-    pub slot: u64,
     pub ix: &'a EnrollIxData,
 }
 
@@ -121,8 +120,6 @@ impl TrackingAuthorizationInit<'_> {
         let first = FirstEnrollment {
             registry: *self.registry,
             owner: *self.owner,
-            bump,
-            slot: self.slot,
             ix: self.ix,
         }
         .account();
@@ -174,10 +171,6 @@ impl OwnerGrantWrite<'_> {
         .create(account)?;
         let grant = OwnerGrant {
             discriminator: OwnerGrant::DISCRIMINATOR,
-            bump,
-            registry: *self.registry,
-            owner: *self.owner,
-            reader: self.ix.reader,
             active: self.ix.active,
         };
         account
@@ -198,6 +191,21 @@ pub fn load_tracking_registry<'a>(
     }
     Ref::filter_map(account.try_borrow()?, TrackingRegistry::from_data)
         .map_err(|_| StorageError::InvalidTrackingRegistry.into())
+}
+
+/// The registry the source pins, a floor from another one guards no frame.
+#[inline(always)]
+pub fn load_pinned_tracking_revision(
+    program_id: &Address,
+    registry: &StorageRegistry,
+    account: &AccountView,
+) -> Result<Revision, ProgramError> {
+    if account.address() != &registry.tracking_registry {
+        return Err(StorageError::InvalidTrackingRegistry.into());
+    }
+    Ok(load_tracking_registry(program_id, account)?
+        .newest()
+        .revision)
 }
 
 #[inline(always)]

@@ -9,10 +9,11 @@ use solana_address::Address;
 use solana_clock::Clock;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
+use spr_interface::instruction::instruction_data::merge_ring::MergeRingAuthority;
 
 use crate::{
     common::{policy_pda, reaches_verification, refused, Ring, Sent, Setup, PROGRAM, SYSTEM},
-    forward_rules::{merge_data, merge_instruction_with},
+    merge_rules::{merge_data, merge_instruction},
     transact_rules::{spp_list, Fixture},
 };
 
@@ -518,9 +519,9 @@ fn an_anonymous_merge_holds_the_writer_to_the_payer() {
     let mut ring = Ring::new(Setup::Anonymous);
     let payer = ring.payer.insecure_clone();
     let hidden_sender = funded(&mut ring);
-    let mut data = merge_data(None, 8);
+    let mut data = merge_data(MergeRingAuthority::Ring);
     data.output_ring_data_hash = [0; 32];
-    let merge = merge_instruction_with(&ring, &data);
+    let merge = merge_instruction(&ring, &data, None);
     let frame = merge.data;
     let digest = frame_digest(&frame).unwrap();
 

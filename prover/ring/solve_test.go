@@ -137,11 +137,9 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWrite, batch.capacity),
 	}
 	chain := p.ChainStart.Int
-	restrictive := false
 	for i, e := range entries {
 		w := members.Apply(t, e)
 		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
-		restrictive = restrictive || e.Restrictive()
 		p.Writes[i] = &RecordWrite{
 			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), MintPolicy: fz(e.MintPolicy), WithdrawalThreshold: fz(e.WithdrawalThreshold), AssetLimits: limitFields(e.AssetLimits)},
 			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldMintPolicy: fz(w.OldMintPolicy), OldWithdrawalThreshold: fz(w.OldWithdrawalThreshold), OldAssetLimits: limitFields(w.OldAssetLimits),
@@ -153,7 +151,7 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 	p.NewRoot, p.NewNextIndex, p.ChainEnd = fb(members.Root()), uint32(members.NextIndex()), fb(chain)
 	p.PublicInputHash = fb(spptest.MustHashChain4(t, []*big.Int{
 		big.NewInt(shared.ApplyRecordsDomain), p.OldRoot.Int, p.NewRoot.Int, big.NewInt(int64(p.OldNextIndex)),
-		big.NewInt(int64(p.NewNextIndex)), p.ChainStart.Int, p.ChainEnd.Int, big.NewInt(int64(p.Count)), big.NewInt(ringtest.Bit(restrictive)),
+		big.NewInt(int64(p.NewNextIndex)), p.ChainStart.Int, p.ChainEnd.Int, big.NewInt(int64(p.Count)),
 	}))
 	return p
 }

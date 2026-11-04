@@ -2,14 +2,12 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignHeader},
-    funder_account_position, input_flag,
-    key_catalog::RingCircuit,
+    cosign::ApprovalMask, funder_account_position, input_flag, key_catalog::RingCircuit,
     sender_bundle_len, shape_flag, spl_withdrawal_count, tag, transact_flag, AnonymousProofData,
     CoSignScope, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
     PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData,
-    RootRead, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, CO_SIGN_BYTE,
-    RECIPIENT_BODY_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    RootRead, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
+    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -117,7 +115,7 @@ impl Fixture {
                 curator_revision: None,
             }),
             spl_withdrawal_owners: &[],
-            co_sign: Default::default(),
+            approval: ApprovalMask::default(),
             no_spend: false,
             public_owners: false,
             expiry_unix_ts: 1_800_000_000,
@@ -812,8 +810,7 @@ fn a_ring_without_a_policy_hash_reads_as_audit_only() {
 #[test]
 fn a_demanded_co_signer_signs_with_the_configured_key() {
     let fixture = Fixture::new();
-    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    data.co_sign.co_signers = 1;
+    let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     let co_signer = Keypair::new();
     let mut ring = Ring::new(Setup::AuditOnly);
     set_co_signer(&mut ring, &co_signer.pubkey(), 1);
@@ -869,8 +866,7 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
 /// A plain transfer from the payer, co-signed by `co_signer` under its own record.
 fn co_signed_transfer(ring: &mut Ring, co_signer: &Keypair) -> Sent {
     let fixture = Fixture::new();
-    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    data.co_sign.co_signers = 1;
+    let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
     let slot = CoSignerSlot::own(co_signer.pubkey()).signed();
     send(
@@ -917,7 +913,6 @@ fn a_co_signer_whose_scope_misses_the_demanded_class_is_refused() {
 fn withdraw(ring: &mut Ring, legs: &[u64], prefix: Vec<AccountMeta>, signers: &[&Keypair]) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    data.co_sign.co_signers = u8::try_from(prefix.len() / 2).unwrap();
     data.interface_transfers = legs
         .iter()
         .map(|amount| InterfaceTransfer::SolWithdrawal { amount: *amount })
@@ -961,7 +956,7 @@ fn a_configured_withdrawals_record_demands_its_co_signer() {
     ));
     refused(
         withdraw(&mut ring, &[60, 60], Vec::new(), &[]),
-        CustomRingError::MissingCoSigner,
+        CustomRingError::InvalidCoSignerRecord,
     );
 }
 
@@ -981,25 +976,22 @@ fn a_withdrawal_co_signed_by_its_own_owner_is_refused() {
     );
 }
 
-fn approved(ring: &mut Ring, mask: ApprovalMask, co_signers: &[&Keypair]) -> Sent {
+fn approved(ring: &mut Ring, mask: ApprovalMask, co_signer: Option<&Keypair>) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    data.co_sign = CoSignHeader {
-        approval: mask,
-        co_signers: u8::try_from(co_signers.len()).unwrap(),
-    };
+    data.approval = mask;
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
-    let prefix = co_signers
-        .iter()
-        .flat_map(|co_signer| CoSignerSlot::own(co_signer.pubkey()).signed())
-        .collect();
+    let prefix = co_signer.map_or(Vec::new(), |co_signer| {
+        CoSignerSlot::own(co_signer.pubkey()).signed()
+    });
+    let signers: Vec<&Keypair> = co_signer.into_iter().collect();
     send(
         ring,
         tag::TRANSFER,
         prefix,
         data.encode().unwrap(),
         spp,
-        co_signers,
+        &signers,
     )
 }
 
@@ -1011,14 +1003,14 @@ fn a_proven_bit_fails_closed_without_an_approver_of_its_class() {
     ] {
         let mut ring = Ring::new(Setup::AuditOnly);
         refused(
-            approved(&mut ring, bit, &[]),
-            CustomRingError::ApproverMissing,
+            approved(&mut ring, bit, None),
+            CustomRingError::InvalidCoSignerRecord,
         );
         let unrelated = Keypair::new();
         set_co_signer(&mut ring, &unrelated.pubkey(), other.bits());
         refused(
-            approved(&mut ring, bit, &[&unrelated]),
-            CustomRingError::ApproverMissing,
+            approved(&mut ring, bit, Some(&unrelated)),
+            CustomRingError::CoSignerOutOfScope,
         );
     }
 }
@@ -1026,17 +1018,13 @@ fn a_proven_bit_fails_closed_without_an_approver_of_its_class() {
 #[test]
 fn a_ring_with_no_record_settles_below_every_threshold_with_no_co_signer() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    reaches_verification(approved(&mut ring, ApprovalMask::default(), &[]));
-    let stranger = Keypair::new();
-    refused(
-        approved(&mut ring, ApprovalMask::default(), &[&stranger]),
-        CustomRingError::InvalidCoSignerRecord,
-    );
+    reaches_verification(approved(&mut ring, ApprovalMask::default(), None));
 }
 
+/// Withdrawing 5000 under `cosign_above` 100 and `withdrawal_threshold` 1000 sets both bits.
 #[test]
-fn each_class_needs_its_own_covering_record() {
-    let (outflow, withdrawal) = (Keypair::new(), Keypair::new());
+fn a_transaction_past_both_thresholds_needs_one_record_holding_both_classes() {
+    let (outflow, withdrawal, both_classes) = (Keypair::new(), Keypair::new(), Keypair::new());
     let mut ring = Ring::new(Setup::AuditOnly);
     set_co_signer(
         &mut ring,
@@ -1050,26 +1038,24 @@ fn each_class_needs_its_own_covering_record() {
     );
     let both =
         ApprovalMask::new(ApprovalMask::OUTFLOW.bits() | ApprovalMask::WITHDRAWAL.bits()).unwrap();
-    reaches_verification(approved(&mut ring, both, &[&outflow, &withdrawal]));
-    refused(
-        approved(&mut ring, both, &[&outflow]),
-        CustomRingError::MissingCoSigner,
-    );
-    refused(
-        approved(&mut ring, ApprovalMask::OUTFLOW, &[&outflow, &withdrawal]),
-        CustomRingError::CoSignerOutOfScope,
-    );
-    refused(
-        approved(&mut ring, both, &[&outflow, &outflow]),
-        CustomRingError::CoSignerOutOfScope,
-    );
-    let all = Keypair::new();
+    for split in [&outflow, &withdrawal] {
+        refused(
+            approved(&mut ring, both, Some(split)),
+            CustomRingError::CoSignerOutOfScope,
+        );
+    }
+    reaches_verification(approved(&mut ring, ApprovalMask::OUTFLOW, Some(&outflow)));
+    reaches_verification(approved(
+        &mut ring,
+        ApprovalMask::WITHDRAWAL,
+        Some(&withdrawal),
+    ));
     set_co_signer(
         &mut ring,
-        &all.pubkey(),
+        &both_classes.pubkey(),
         (CoSignScope::APPROVE_OUTFLOW | CoSignScope::APPROVE_WITHDRAWAL).bits(),
     );
-    reaches_verification(approved(&mut ring, both, &[&all]));
+    reaches_verification(approved(&mut ring, both, Some(&both_classes)));
 }
 
 #[test]
@@ -1086,7 +1072,6 @@ fn optional_classes_follow_the_economic_operation() {
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     data.no_spend = true;
     data.interface_transfers = vec![InterfaceTransfer::SolDeposit { amount: 5 }];
-    data.co_sign.co_signers = 1;
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     spp.extend([
         AccountMeta::new(Address::new_unique(), false),
@@ -1114,28 +1099,11 @@ fn optional_classes_follow_the_economic_operation() {
 }
 
 #[test]
-fn six_co_signers_are_refused() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    let mut bytes = data.encode().unwrap();
-    bytes[CO_SIGN_BYTE] = 6 << 2;
-    let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
-    refused(
-        send(&mut ring, tag::TRANSFER, Vec::new(), bytes, spp, &[]),
-        CustomRingError::TooManyCoSigners,
-    );
-}
-
-#[test]
 fn an_approval_co_signed_by_its_own_owner_is_refused() {
     let mut ring = Ring::new(Setup::LimitedPolicy);
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.co_sign = CoSignHeader {
-        approval: ApprovalMask::OUTFLOW,
-        co_signers: 1,
-    };
+    data.approval = ApprovalMask::OUTFLOW;
     let co_signed = |ring: &mut Ring, co_signer: &Keypair| {
         let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
         let prefix = CoSignerSlot::own(co_signer.pubkey()).signed();
@@ -1486,10 +1454,9 @@ fn a_delegate_ignores_every_co_signer_record_and_carries_none() {
     let mut ring = delegate_ring(&delegate);
     let co_signer = Keypair::new();
     set_co_signer(&mut ring, &co_signer.pubkey(), CoSignScope::ALL.bits());
-    let mut data = fixture.transfer(RingRail::Delegate, 2, 2, false);
+    let data = fixture.transfer(RingRail::Delegate, 2, 2, false);
     let bytes = data.encode().unwrap();
     reaches_verification(delegate_move(&mut ring, &delegate, &data, bytes));
-    data.co_sign.co_signers = 1;
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     let mut prefix = CoSignerSlot::own(co_signer.pubkey()).signed();
     prefix.push(AccountMeta::new_readonly(delegate.pubkey(), true));
@@ -1502,7 +1469,7 @@ fn a_delegate_ignores_every_co_signer_record_and_carries_none() {
             spp,
             &[&co_signer, &delegate],
         ),
-        CustomRingError::CoSignerOutOfScope,
+        CustomRingError::MissingRingAuth,
     );
 }
 

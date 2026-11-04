@@ -9,7 +9,7 @@ use std::{
 };
 
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignHeader, CoSignOperation},
+    cosign::{ApprovalMask, CoSignOperation},
     key_catalog::{FrameKey, TransferShape, TransferSpend},
     storage::Revision,
     AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PublicLeg, PublicSlots,
@@ -269,10 +269,7 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
         .fitted()
         .wide;
     if case.policy || case.thresholds {
-        data.co_sign = CoSignHeader {
-            approval: ApprovalMask::OUTFLOW,
-            co_signers: 5,
-        };
+        data.approval = ApprovalMask::OUTFLOW;
         data.own_revision = Some(Revision::from(7));
     }
     data.interface_transfers = (0..case.legs)
@@ -354,7 +351,7 @@ fn measure(compact: &[u8], rail: RingRail) -> Phases {
     let demand = CoSignOperation {
         spends_note: !data.no_spend,
         public_legs: slots.classes(),
-        approval: data.co_sign.approval,
+        approval: data.approval,
     }
     .demand();
     let legs = Arena::used();

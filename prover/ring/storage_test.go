@@ -69,12 +69,8 @@ func TestStorageFixtures(t *testing.T) {
 		for i, write := range request.Writes[:len(entries)] {
 			writes[i] = write.Entry
 		}
-		restrictive := false
-		for _, entry := range entries {
-			restrictive = restrictive || entry.Restrictive()
-		}
 		update := map[string]any{
-			"proof": prove(circuit, request), "root": request.NewRoot, "nextIndex": request.NewNextIndex, "writes": writes, "restrictive": restrictive,
+			"proof": prove(circuit, request), "root": request.NewRoot, "nextIndex": request.NewNextIndex, "writes": writes,
 		}
 		vectors["update"+big.NewInt(int64(revision)).String()] = update
 	}
