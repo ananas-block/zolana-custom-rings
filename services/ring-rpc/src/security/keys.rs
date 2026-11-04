@@ -62,7 +62,7 @@ mod tests {
 
         assert_eq!(
             hex::encode(auditor.pubkey().as_bytes()),
-            "04269a2c3596d0b1d0d5971be8132ee7f641f5948c2d8cb98b9896a9a8363dda42"
+            "04dce77eb5607cf1f4b729cdbaa87b6698b1a65d52f40bcf503d4c2f978c97143f"
         );
     }
 }

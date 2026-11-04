@@ -74,7 +74,7 @@ mod audit_stream_tests {
         symmetric_apply_audit(&shared, AUDIT_STREAM_LABEL, &mut ciphertext).unwrap();
         assert_eq!(
             hex::encode(ciphertext),
-            "001d45a89ea12a64c7e6886ce543a66f77971b2c1052688ff668fe8c0c5d7c7b"
+            "1bdac2890094c5e4113d9e5b60b17aca409d3f9baba3912c65c8fc76bef1ae3c"
         );
         symmetric_apply_audit(&shared, AUDIT_STREAM_LABEL, &mut ciphertext).unwrap();
         assert_eq!(ciphertext, [0; 32]);

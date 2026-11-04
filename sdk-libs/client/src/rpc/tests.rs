@@ -1023,6 +1023,23 @@ fn relay_proof_inputs() -> RelayProofInputs {
     }
 }
 
+/// `UPDATE_RING_VECTORS=1` rewrites the field.
+fn pinned(file: &str, pointer: &str, actual: &str, expected: &str) {
+    if std::env::var_os("UPDATE_RING_VECTORS").is_none() {
+        assert_eq!(actual, expected, "{pointer}");
+        return;
+    }
+    let path = format!(
+        "{}/../../test-vectors/rpc/{file}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut stored: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("vector")).expect("json");
+    *stored.pointer_mut(pointer).expect("field") = actual.into();
+    let pretty = serde_json::to_string_pretty(&stored).expect("json");
+    std::fs::write(path, pretty + "\n").expect("vector");
+}
+
 /// `UPDATE_RING_VECTORS=1` rewrites the payload.
 #[test]
 fn relay_proof_inputs_encode_to_the_shared_vector() {
@@ -1137,8 +1154,21 @@ fn relay_merge_inputs_encode_to_the_shared_vector() {
             slot_index: 0,
         }],
     };
-    assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
-    let read = RelayMergeInputs::decode(&vector.proof_inputs.0).expect("decode");
+    let encoded = inputs.encode().expect("encode");
+    let text = |bytes: &[u8]| {
+        serde_json::to_value(Base64String::from(bytes.to_vec()))
+            .expect("base64")
+            .as_str()
+            .expect("text")
+            .to_owned()
+    };
+    pinned(
+        "relay_merge_inputs.json",
+        "/proofInputs",
+        &text(&encoded),
+        &text(&vector.proof_inputs.0),
+    );
+    let read = RelayMergeInputs::decode(&encoded).expect("decode");
     assert_eq!(read.inputs[0].nullifier, spend.nullifier);
 }
 
@@ -1168,7 +1198,13 @@ fn a_signed_authority_transfer_matches_the_shared_vector() {
         },
     };
     let message = attestation.message(1_700_000_000, &[4; 32]);
-    assert_eq!(String::from_utf8(message).expect("utf8"), vector.message);
+    let file = "authority_transfer.json";
+    pinned(
+        file,
+        "/message",
+        &String::from_utf8(message).expect("utf8"),
+        &vector.message,
+    );
     let signed = SignedRequest {
         attestation,
         timestamp: Some(1_700_000_000),
@@ -1177,22 +1213,7 @@ fn a_signed_authority_transfer_matches_the_shared_vector() {
     .sign(&delegate, &spr_keypair::ViewingKey::from_bytes(&[6; 32]))
     .expect("sign");
     let wire = serde_json::to_string(&signed).expect("json");
-    if std::env::var_os("UPDATE_RING_VECTORS").is_some() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test-vectors/rpc/authority_transfer.json"
-        );
-        let mut stored: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(path).expect("vector")).expect("json");
-        stored["wire"] = serde_json::Value::String(wire.clone());
-        std::fs::write(
-            path,
-            serde_json::to_string_pretty(&stored).expect("json") + "\n",
-        )
-        .expect("vector");
-        return;
-    }
-    assert_eq!(wire, vector.wire);
+    pinned(file, "/wire", &wire, &vector.wire);
 }
 
 fn signed_enrolment() -> SubmitRecordUpdateRequest {
@@ -1285,9 +1306,12 @@ fn the_enrolment_requests_match_the_shared_vector() {
     let list_after = GetPendingEnrolmentsRequest::read(target(), authority.pubkey())
         .with_cursor(vector.refuse.update_id.clone());
     let message = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
-    assert_eq!(
-        message(list_after.attestation.message(1_700_000_000, &[4; 32])),
-        vector.list_after.message
+    let file = "enrolment_attestation.json";
+    pinned(
+        file,
+        "/listAfter/message",
+        &message(list_after.attestation.message(1_700_000_000, &[4; 32])),
+        &vector.list_after.message,
     );
     let list_after = SignedRequest {
         timestamp: Some(1_700_000_000),
@@ -1296,17 +1320,23 @@ fn the_enrolment_requests_match_the_shared_vector() {
     }
     .sign(&authority)
     .expect("sign the second page");
-    assert_eq!(
-        serde_json::to_string(&list_after).expect("json"),
-        vector.list_after.wire
+    pinned(
+        file,
+        "/listAfter/wire",
+        &serde_json::to_string(&list_after).expect("json"),
+        &vector.list_after.wire,
     );
-    assert_eq!(
-        message(list.message(1_700_000_000, &[4; 32])),
-        vector.list.message
+    pinned(
+        file,
+        "/list/message",
+        &message(list.message(1_700_000_000, &[4; 32])),
+        &vector.list.message,
     );
-    assert_eq!(
-        message(refuse.message(1_700_000_000, &[4; 32])),
-        vector.refuse.message
+    pinned(
+        file,
+        "/refuse/message",
+        &message(refuse.message(1_700_000_000, &[4; 32])),
+        &vector.refuse.message,
     );
     let list = SignedRequest {
         attestation: list,
@@ -1322,18 +1352,24 @@ fn the_enrolment_requests_match_the_shared_vector() {
     }
     .sign(&authority)
     .expect("sign refusal");
-    assert_eq!(
-        serde_json::to_string(&list).expect("json"),
-        vector.list.wire
+    pinned(
+        file,
+        "/list/wire",
+        &serde_json::to_string(&list).expect("json"),
+        &vector.list.wire,
     );
-    assert_eq!(
-        serde_json::to_string(&refuse).expect("json"),
-        vector.refuse.wire
+    pinned(
+        file,
+        "/refuse/wire",
+        &serde_json::to_string(&refuse).expect("json"),
+        &vector.refuse.wire,
     );
     let create_records = CreateRecordsRegistryRequest::create(target(), authority.pubkey());
-    assert_eq!(
-        message(create_records.attestation.message(1_700_000_000, &[4; 32])),
-        vector.create_records.message
+    pinned(
+        file,
+        "/createRecords/message",
+        &message(create_records.attestation.message(1_700_000_000, &[4; 32])),
+        &vector.create_records.message,
     );
     let create_records = SignedRequest {
         timestamp: Some(1_700_000_000),
@@ -1342,9 +1378,11 @@ fn the_enrolment_requests_match_the_shared_vector() {
     }
     .sign(&authority)
     .expect("sign the records request");
-    assert_eq!(
-        serde_json::to_string(&create_records).expect("json"),
-        vector.create_records.wire
+    pinned(
+        file,
+        "/createRecords/wire",
+        &serde_json::to_string(&create_records).expect("json"),
+        &vector.create_records.wire,
     );
 }
 
@@ -1381,6 +1419,7 @@ fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
     let authority = Keypair::new_from_array([8; 32]);
     let wallet = Keypair::new_from_array([7; 32]);
     let reader = ReaderKey::ed25519(Keypair::new_from_array([9; 32]).pubkey()).expect("reader");
+    let file = "reader_grant.json";
     let grants = [
         (
             &authority,
@@ -1388,6 +1427,7 @@ fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
             reader,
             ReaderGrantAction::Grant,
             &vector.ring_wide,
+            "/ringWide",
         ),
         (
             &wallet,
@@ -1395,10 +1435,11 @@ fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
             passkey_reader(),
             ReaderGrantAction::Revoke,
             &vector.wallet,
+            "/wallet",
         ),
     ];
     let text = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
-    for (signer, wallet, reader, action, expected) in grants {
+    for (signer, wallet, reader, action, expected, at) in grants {
         let attestation = ReaderGrantAttestation {
             target: target(),
             wallet,
@@ -1406,7 +1447,12 @@ fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
             action,
         };
         let message = attestation.message(1_700_000_000, &[4; 32]);
-        assert_eq!(text(message.clone()), expected.message);
+        pinned(
+            file,
+            &format!("{at}/message"),
+            &text(message.clone()),
+            &expected.message,
+        );
         let signed = SignedRequest {
             attestation,
             timestamp: Some(1_700_000_000),
@@ -1414,8 +1460,9 @@ fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
         }
         .sign(signer)
         .expect("sign");
-        assert_eq!(serde_json::to_string(&signed).expect("json"), expected.wire);
-        let read: SetReaderGrantRequest = serde_json::from_str(&expected.wire).expect("read");
+        let wire = serde_json::to_string(&signed).expect("json");
+        pinned(file, &format!("{at}/wire"), &wire, &expected.wire);
+        let read: SetReaderGrantRequest = serde_json::from_str(&wire).expect("read");
         assert!(read.signature.0.verify(signer.pubkey().as_ref(), &message));
     }
     let read = ReadAttestation {
@@ -1425,17 +1472,21 @@ fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
         limit: None,
         wallet: Some(wallet.pubkey()),
     };
-    assert_eq!(
-        text(read.message(1_700_000_000, &[4; 32])),
-        vector.wallet_read
+    pinned(
+        file,
+        "/walletRead",
+        &text(read.message(1_700_000_000, &[4; 32])),
+        &vector.wallet_read,
     );
     let utxos = AuditedUtxosAttestation {
         wallet: Some(wallet.pubkey()),
         ..AuditedUtxosAttestation::new(target(), &[Hash([5; 32])])
     };
-    assert_eq!(
-        text(utxos.message(1_700_000_000, &[4; 32])),
-        vector.wallet_utxos
+    pinned(
+        file,
+        "/walletUtxos",
+        &text(utxos.message(1_700_000_000, &[4; 32])),
+        &vector.wallet_utxos,
     );
 }
 
