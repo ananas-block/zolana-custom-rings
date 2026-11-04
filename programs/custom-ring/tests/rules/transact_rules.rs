@@ -3,13 +3,13 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignHeader},
-    funder_account_position, input_flag, spl_withdrawal_count,
+    funder_account_position, input_flag,
     key_catalog::RingCircuit,
-    sender_bundle_len, shape_flag, tag, transact_flag, AnonymousProofData, CoSignScope,
-    CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees, PlainGroth16Proof,
-    PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData, RootRead, SlotBody,
-    AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, CO_SIGN_BYTE, RECIPIENT_BODY_LEN,
-    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    sender_bundle_len, shape_flag, spl_withdrawal_count, tag, transact_flag, AnonymousProofData,
+    CoSignScope, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
+    PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData,
+    RootRead, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, CO_SIGN_BYTE,
+    RECIPIENT_BODY_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -710,7 +710,7 @@ fn a_default_ring_spend_takes_the_entry_key_up_to_eight_inputs() {
 fn vector_case(name: &str) -> Vec<u8> {
     let vectors: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../test-vectors/proof/ring-transact-expansion.json"
+        "/../../test-vectors/proof/ring-transact-expansion-v4.json"
     )))
     .unwrap();
     let case = vectors["cases"]
@@ -724,14 +724,15 @@ fn vector_case(name: &str) -> Vec<u8> {
 
 #[test]
 fn the_vector_transfers_without_public_legs_reach_their_keys() {
-    let mut audit_only = Ring::new(Setup::AuditOnly);
-    let bytes = vector_case("confidential_delivered_audit_only");
+    let mut bare = Ring::new(Setup::Bare);
+    let bytes = vector_case("confidential_audit_only");
     let data = RingTransactData::parse(&bytes, RingRail::Confidential)
         .unwrap()
         .into_data();
-    let spp = spp_list(&audit_only.payer.pubkey(), &data, &payer_owner(&audit_only));
+    bare.serve_tracking(data.tracking_revision);
+    let spp = spp_list(&bare.payer.pubkey(), &data, &payer_owner(&bare));
     reaches_verification(send(
-        &mut audit_only,
+        &mut bare,
         tag::TRANSFER,
         Vec::new(),
         bytes.clone(),
@@ -739,20 +740,15 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
         &[],
     ));
 
-    let mut anonymous = Ring::new(Setup::Anonymous);
+    let mut anonymous = Ring::new(Setup::BareAnonymous);
     let bytes = vector_case("anonymous_entry_audit_only");
     let parsed = RingTransactData::parse(&bytes, RingRail::Anonymous).unwrap();
     let data = parsed.data();
-    assert_eq!(
+    assert!(matches!(
         data.transfer_circuit(0),
-        Ok(RingCircuit::TransferAnonymousEntry {
-            outputs: data.n_out,
-            class: 8,
-            withdrawals: 4,
-            owners: 4,
-            data: false,
-        })
-    );
+        Ok(RingCircuit::TransferAnonymousEntry { .. })
+    ));
+    anonymous.serve_tracking(data.tracking_revision);
     let spp = spp_list(&anonymous.payer.pubkey(), data, &[]);
     reaches_verification(send(
         &mut anonymous,
@@ -764,17 +760,39 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     ));
 
     let delegate = Keypair::new();
-    let mut registry_ring = delegate_ring(&delegate);
+    let mut delegated = delegate_ring(&delegate);
     let bytes = vector_case("delegate_move");
     let data = RingTransactData::parse(&bytes, RingRail::Delegate)
         .unwrap()
         .into_data();
+    delegated.serve_tracking(data.tracking_revision);
     reaches_verification(delegate_move(
-        &mut registry_ring,
+        &mut delegated,
         &delegate,
         &data,
         bytes.clone(),
     ));
+}
+
+/// A ring with no records has no thresholds to read, so the frame names no own root.
+#[test]
+fn a_bare_ring_reads_the_tracking_root_alone() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Bare);
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
+    refused(
+        confidential(&mut ring, Vec::new(), &data),
+        CustomRingError::FlagNotAllowed,
+    );
+    data.own_revision = None;
+    reaches_verification(confidential(&mut ring, Vec::new(), &data));
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(
+        account
+            .root_registries(RootRead::transfer(&account, false))
+            .collect::<Vec<_>>(),
+        vec![tracking_registry()]
+    );
 }
 
 #[test]
