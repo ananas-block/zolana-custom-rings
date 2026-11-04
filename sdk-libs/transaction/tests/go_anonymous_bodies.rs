@@ -47,6 +47,7 @@ fn sealers_and_readers_agree_with_the_proven_ciphertexts() {
         blinding: array(&vector.body_blinding),
         amount: vector.body_amount,
         mint: array(&vector.body_mint),
+        ..RecipientBody::default()
     };
     let secret = SlotSecret::new(array(&vector.body_slot_secret)).unwrap();
     let sealed = seal_recipient_body(&body, &secret).unwrap();

@@ -1,10 +1,9 @@
 //! The ring output rails, read back as a recipient and the ring program read them.
 
 use custom_ring_interface::{
-    blinding::ring_blinding_seed, ring_recipient_output_body, sender_bundle_len,
-    stream::DeliveredSlot, stream::SlotSecret, DeliveredBody, RecipientBody, RingOutput,
-    SenderBundle, DELIVERED_BODY_LEN, ESCROWED_DELIVERED_BODY_LEN, MIN_REPLY_LEN,
-    RECIPIENT_BODY_LEN,
+    blinding::ring_blinding_seed, ring_body_output, sender_bundle_len, stream::DeliveredSlot,
+    stream::SlotSecret, RecipientBody, SenderBundle, SlotBody, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -16,9 +15,9 @@ use spr_transaction::{
     Data, Mint, Utxo, WalletUtxo,
 };
 use zolana_ring_transaction::{
-    open_delivered_body, open_recipient_body, open_reply, open_sender_bundle, random_tag_preimage,
-    seal_delivered_body, seal_recipient_body, seal_reply, AnonymousOutput, AnonymousPlan,
-    AnonymousSlot, OpenedBody, OutputBlindings, PublishedSlot, ReplyMetadata, RingAssets,
+    open_recipient_body, open_reply, open_sender_bundle, random_tag_preimage, seal_delivered_body,
+    seal_recipient_body, seal_reply, AnonymousOutput, AnonymousPlan, AnonymousSlot, DeliveredBody,
+    OpenedBody, OpenedNote, OutputBlindings, PublishedSlot, ReplyMetadata, RingAssets,
     RingDelivery, RingDeliveryOpening, RingOutputRail, RingRailError as E, RingUtxoOwner,
 };
 
@@ -28,6 +27,9 @@ const USDC: Mint = Mint {
     asset: Address::new_from_array([9; 32]),
     asset_id: 2,
 };
+const DATA_HASH: [u8; 32] = [1; 32];
+const RING_DATA_HASH: [u8; 32] = [2; 32];
+const APP_DATA: [u8; 3] = [7, 8, 9];
 
 fn keypair(seed: u8) -> ShieldedKeypair {
     ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
@@ -110,27 +112,6 @@ fn delivered_secret(
     .unwrap()
 }
 
-/// The UTXO a delivered body opens to under `secret`, `None` for another key's body.
-fn open(wire: RingOutput<'_>, owner: &ShieldedAddress, secret: &SlotSecret) -> Option<Utxo> {
-    let RingOutput::Delivered { body, .. } = wire else {
-        panic!("delivered slot expected")
-    };
-    let delivered = RingDeliveryOpening {
-        ring: RING,
-        body,
-        slot_secret: secret,
-        owner: RingUtxoOwner {
-            signing_pubkey: &owner.signing_pubkey,
-            nullifier_pubkey: &owner.nullifier_pubkey,
-        },
-        commitment: wire.hash(),
-        tree_id: TREE,
-    }
-    .open(&RingAssets::new([]).unwrap())
-    .unwrap()?;
-    delivered.mint.map(|mint| delivered.note.utxo(mint))
-}
-
 /// The recipient body at output `position`, opened by `reader`.
 fn decrypt(
     reader: &ViewingKey,
@@ -139,11 +120,8 @@ fn decrypt(
     slot: &PublishedSlot<'_>,
     position: u32,
 ) -> RecipientBody {
-    let RingOutput::Anonymous {
-        body: Some(body), ..
-    } = slot.wire
-    else {
-        panic!("anonymous recipient slot expected")
+    let SlotBody::Recipient(body) = slot.body else {
+        panic!("recipient slot expected")
     };
     open_recipient_body(body, &delivered_secret(reader, proof, rail, position)).unwrap()
 }
@@ -162,7 +140,7 @@ fn bundle(reader: &ViewingKey, rail: &RingOutputRail, proof: &SppProofInputs) ->
 /// The note a body opens to, panicking on a miss or an unknown mint.
 fn note(opened: Option<OpenedBody>) -> Utxo {
     match opened {
-        Some(OpenedBody::Note { utxo, .. }) => utxo,
+        Some(OpenedBody::Note(opened)) => opened.utxo,
         other => panic!("a note expected, got {other:?}"),
     }
 }
@@ -199,6 +177,62 @@ fn output_seed(rail: &RingOutputRail, proof: &SppProofInputs) -> [u8; 32] {
         .output_seed()
 }
 
+struct PaidFrame {
+    rail: RingOutputRail,
+    proof: SppProofInputs,
+    position: usize,
+}
+
+fn pay(sender: &ShieldedKeypair, output: SppProofOutputUtxo, delivery: RingDelivery) -> PaidFrame {
+    let owner = output.owner_address;
+    let (mut tx, tx_key) = ring_transfer(sender, false);
+    tx.add_output_utxo(output).unwrap();
+    let rail = RingOutputRail::new(tx_key, delivery);
+    let proof = rail.encrypt(tx, &address(sender)).unwrap();
+    let position = proof
+        .output_utxos
+        .iter()
+        .position(|output| output.owner_address == owner)
+        .unwrap();
+    PaidFrame {
+        rail,
+        proof,
+        position,
+    }
+}
+
+impl PaidFrame {
+    fn body(&self, sender: &ShieldedKeypair, reader: &ViewingKey) -> RecipientBody {
+        let published = self
+            .rail
+            .published_slots(&self.proof, &address(sender))
+            .unwrap();
+        decrypt(
+            reader,
+            &self.rail,
+            &self.proof,
+            &published[self.position],
+            self.position as u32,
+        )
+    }
+}
+
+fn both_rails(recipient: &ShieldedAddress) -> [RingDelivery; 2] {
+    [
+        RingDelivery::Delivered,
+        RingDelivery::Anonymous(Box::new(
+            AnonymousPlan::new().with_payment(payment(recipient)),
+        )),
+    ]
+}
+
+fn data_note(recipient: ShieldedAddress) -> SppProofOutputUtxo {
+    SppProofOutputUtxo::new(Mint::SOL, 3, recipient)
+        .unwrap()
+        .with_ring_data_hash(RING, RING_DATA_HASH)
+        .with_utxo_data(APP_DATA.to_vec(), DATA_HASH)
+}
+
 #[test]
 fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
     let sender = keypair(1);
@@ -206,10 +240,7 @@ fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
     let recipient = address(&receiver);
     let (mut tx, tx_key) = ring_transfer(&sender, false);
     tx.transfer_sol(&recipient, 3).unwrap();
-    let rail = RingOutputRail::new(
-        tx_key.clone(),
-        RingDelivery::Delivered { key_escrow: false },
-    );
+    let rail = RingOutputRail::new(tx_key.clone(), RingDelivery::Delivered);
     let proof = rail.encrypt(tx, &address(&sender)).unwrap();
     assert_eq!(proof.external_data.salt, rail.salt());
     assert_eq!(
@@ -217,7 +248,7 @@ fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
         ring_blinding_seed(&tx_key.secret_bytes(), &rail.salt()).unwrap()
     );
     assert_ne!(
-        RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow: false }).salt(),
+        RingOutputRail::new(tx_key, RingDelivery::Delivered).salt(),
         rail.salt(),
         "a resent attempt draws a fresh salt"
     );
@@ -229,16 +260,26 @@ fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
     assert_eq!(published.len(), proof.output_utxos.len());
     assert!(published
         .iter()
-        .all(|slot| matches!(slot.wire, RingOutput::Delivered { .. })));
-    let secret = delivered_secret(&receiver.viewing_key, &proof, &rail, 0);
-    let opened = open(published[0].wire, &recipient, &secret).unwrap();
+        .all(|slot| slot.anonymous.is_none() && matches!(slot.body, SlotBody::Recipient(_))));
+    let assets = RingAssets::new([]).unwrap();
+    let body = decrypt(&receiver.viewing_key, &rail, &proof, &published[0], 0);
+    let opened = note(
+        reader(&recipient, &assets, &proof, 0)
+            .open_body(&body)
+            .unwrap(),
+    );
     assert_eq!(
         (opened.amount, opened.blinding),
         (3, proof.output_utxos[0].blinding)
     );
     assert_eq!(proof.output_utxos[0].ring_data_hash, None);
-    let stranger = delivered_secret(&keypair(3).viewing_key, &proof, &rail, 0);
-    assert!(open(published[0].wire, &recipient, &stranger).is_none());
+    let stranger = decrypt(&keypair(3).viewing_key, &rail, &proof, &published[0], 0);
+    assert_eq!(
+        reader(&recipient, &assets, &proof, 0)
+            .open_body(&stranger)
+            .unwrap(),
+        None
+    );
 }
 
 /// The change leads under the sender tag with no data.
@@ -350,10 +391,7 @@ fn the_bundle_carries_the_spl_and_the_sol_change() {
         (USDC, Mint::SOL)
     );
     for change in &published[..2] {
-        assert!(matches!(
-            change.wire,
-            RingOutput::Anonymous { body: None, .. }
-        ));
+        assert_eq!(change.body, SlotBody::None);
     }
     let assets = RingAssets::new([USDC]).unwrap();
     let sent = bundle(&sender.viewing_key, &rail, &proof);
@@ -406,6 +444,7 @@ fn a_reader_tries_the_registered_key_then_the_zero_key() {
         blinding,
         amount: 9,
         mint: USDC.asset.to_bytes(),
+        ..RecipientBody::default()
     };
     let hash_under = |nullifier_pk: &[u8; 32]| {
         Utxo {
@@ -433,10 +472,101 @@ fn a_reader_tries_the_registered_key_then_the_zero_key() {
     for key in [owner.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY] {
         assert!(matches!(
             open(&hash_under(&key)),
-            Some(OpenedBody::Note { nullifier_pk, .. }) if nullifier_pk == key
+            Some(OpenedBody::Note(OpenedNote { nullifier_pk, .. })) if nullifier_pk == key
         ));
     }
     assert_eq!(open(&hash_under(&[0x11; 32])), None, "a third key misses");
+
+    let sender = keypair(1);
+    let receiver = keypair(2);
+    for delivery in both_rails(&owner) {
+        for key in [owner.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY, [0x11; 32]] {
+            let named = ShieldedAddress {
+                nullifier_pubkey: key,
+                ..owner
+            };
+            let frame = pay(
+                &sender,
+                SppProofOutputUtxo::new(Mint::SOL, 3, named)
+                    .unwrap()
+                    .with_ring_program_id(RING),
+                delivery.clone(),
+            );
+            let opened = reader(&owner, &assets, &frame.proof, frame.position)
+                .open_body(&frame.body(&sender, &receiver.viewing_key))
+                .unwrap();
+            let rebuilt = opened.map(|opened| match opened {
+                OpenedBody::Note(note) => note.nullifier_pk,
+                other => panic!("a note expected, got {other:?}"),
+            });
+            assert_eq!(rebuilt, (key != [0x11; 32]).then_some(key));
+        }
+    }
+}
+
+#[test]
+fn a_data_note_seals_on_both_rails_and_its_reader_rebuilds_the_commitment() {
+    let sender = keypair(1);
+    let receiver = keypair(2);
+    let recipient = address(&receiver);
+    let assets = RingAssets::new([]).unwrap();
+    for delivery in both_rails(&recipient) {
+        let frame = pay(&sender, data_note(recipient), delivery);
+        let body = frame.body(&sender, &receiver.viewing_key);
+        assert_eq!(body.ring_data_hash, Some(RING_DATA_HASH));
+        assert_eq!(body.data, [&DATA_HASH[..], &APP_DATA[..]].concat());
+        let opened = reader(&recipient, &assets, &frame.proof, frame.position)
+            .open_body(&body)
+            .unwrap();
+        let Some(OpenedBody::Note(opened)) = opened else {
+            panic!("a note expected, got {opened:?}")
+        };
+        let output = &frame.proof.output_utxos[frame.position];
+        assert_eq!(opened.data_hash, Some(DATA_HASH));
+        assert_eq!(opened.ring_data_hash, Some(RING_DATA_HASH));
+        assert_eq!(opened.nullifier_pk, recipient.nullifier_pubkey);
+        assert_eq!(opened.utxo.data, output.data);
+        assert_eq!(
+            (opened.utxo.amount, opened.utxo.blinding),
+            (3, output.blinding)
+        );
+    }
+}
+
+#[test]
+fn a_body_with_a_mutated_data_hash_opens_to_none() {
+    let sender = keypair(1);
+    let receiver = keypair(2);
+    let recipient = address(&receiver);
+    let assets = RingAssets::new([]).unwrap();
+    for delivery in both_rails(&recipient) {
+        let frame = pay(&sender, data_note(recipient), delivery);
+        let body = frame.body(&sender, &receiver.viewing_key);
+        let opens = |body: &RecipientBody| {
+            reader(&recipient, &assets, &frame.proof, frame.position)
+                .open_body(body)
+                .unwrap()
+        };
+        assert!(opens(&body).is_some());
+        let mut mutated = body.clone();
+        mutated.data[31] ^= 1;
+        assert_eq!(opens(&mutated), None);
+        let dropped = RecipientBody {
+            data: Vec::new(),
+            ..body.clone()
+        };
+        assert_eq!(opens(&dropped), None);
+        let short = RecipientBody {
+            data: DATA_HASH[..31].to_vec(),
+            ..body.clone()
+        };
+        assert_eq!(opens(&short), None);
+        let other_ring_data = RecipientBody {
+            ring_data_hash: Some([3; 32]),
+            ..body
+        };
+        assert_eq!(opens(&other_ring_data), None);
+    }
 }
 
 #[test]
@@ -466,11 +596,12 @@ fn a_rebuilt_body_of_an_unregistered_mint_names_the_mint() {
         blinding: [5; 32],
         amount: 9,
         mint: mint.to_bytes(),
+        ..RecipientBody::default()
     })
     .unwrap();
     assert!(matches!(
         opened,
-        Some(OpenedBody::UnknownMint { utxo, .. }) if utxo.asset.asset == mint && utxo.amount == 9
+        Some(OpenedBody::UnknownMint(OpenedNote { utxo, .. })) if utxo.asset.asset == mint && utxo.amount == 9
     ));
 }
 
@@ -495,9 +626,10 @@ fn a_dummy_publishes_the_tag_of_its_preimage_and_a_recipient_length_body() {
             panic!("dummy slot expected")
         };
         let tag = SlotSecret::new(preimage).unwrap().recipient_tag().unwrap();
+        assert_eq!(dummy.owner_tag, &tag);
         assert!(matches!(
-            dummy.wire,
-            RingOutput::Anonymous { tag: published, body: Some(_), .. } if *published == tag
+            dummy.body,
+            SlotBody::Recipient(body) if body.len() == RECIPIENT_BODY_LEN
         ));
     }
     let sent = bundle(&sender.viewing_key, &rail, &proof);
@@ -610,7 +742,7 @@ fn a_delivered_rail_omits_compact_padding_from_the_frame() {
     let sender = keypair(1);
     let recipient = address(&keypair(2));
     let (tx, tx_key) = ring_transfer(&sender, true);
-    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow: false });
+    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
     let mut tx = tx
         .with_blinding_seed(rail.blinding_seed().unwrap())
         .unwrap();
@@ -678,7 +810,7 @@ fn a_reply_frame_gives_every_body_one_length() {
     }
     assert!(published[0].reply.is_empty(), "change carries no reply");
     let data = proof.external_data.outputs[1].data.as_ref().unwrap();
-    let (_, reply) = ring_recipient_output_body(data).unwrap();
+    let (_, reply) = ring_body_output(data).unwrap();
     let secret = delivered_secret(&receiver.viewing_key, &proof, &rail, 1);
     let claim = open_reply(reply, &secret).unwrap().expect("a reply opens");
     assert_eq!(claim.claimed(), &reply_of(&address(&sender)));
@@ -749,27 +881,6 @@ fn a_bundle_of_another_length_than_the_frame_count_is_refused() {
 }
 
 #[test]
-fn an_anonymous_payment_refuses_ring_data_of_its_own() {
-    let sender = keypair(1);
-    let recipient = address(&keypair(2));
-    let (mut tx, tx_key) = ring_transfer(&sender, false);
-    tx.add_output_utxo(
-        SppProofOutputUtxo::new(Mint::SOL, 3, recipient)
-            .unwrap()
-            .with_ring_data_hash(RING, [1; 32]),
-    )
-    .unwrap();
-    let rail = anonymous(
-        tx_key,
-        AnonymousPlan::new().with_payment(payment(&recipient)),
-    );
-    assert!(matches!(
-        rail.encrypt(tx, &address(&sender)),
-        Err(E::DeliveredOutputData { slot_index: 1 })
-    ));
-}
-
-#[test]
 fn an_exit_to_the_hidden_sender_is_refused() {
     let sender = keypair(1);
     let (mut tx, tx_key) = ring_transfer(&sender, false);
@@ -795,7 +906,7 @@ fn an_exit_publishes_scheme_3_under_its_owner_tag() {
     let proof = rail.encrypt(tx, &address(&sender)).unwrap();
     let published = rail.published_slots(&proof, &address(&sender)).unwrap();
     assert_eq!(published[1].anonymous, Some(AnonymousSlot::Exit));
-    assert!(published[1].wire.is_exit());
+    assert!(matches!(published[1].body, SlotBody::Exit(_)));
     assert_eq!(
         proof.external_data.outputs[1].owner_tag,
         OwnerTag::Inline(exit.signing_pubkey.confidential_view_tag().unwrap())
@@ -805,6 +916,29 @@ fn an_exit_publishes_scheme_3_under_its_owner_tag() {
         sent.recipient_keys.iter().all(|key| *key == [0; 32]),
         "an exit's owner reads no shared tag and is never listed"
     );
+}
+
+#[test]
+fn an_exit_publishes_its_memo_on_both_rails() {
+    let sender = keypair(1);
+    let exit = address(&keypair(3));
+    for delivery in [
+        RingDelivery::Delivered,
+        RingDelivery::Anonymous(Box::new(AnonymousPlan::new())),
+    ] {
+        let output = SppProofOutputUtxo::new(Mint::SOL, 2, exit)
+            .unwrap()
+            .with_memo(vec![1]);
+        let frame = pay(&sender, output, delivery);
+        let published = frame
+            .rail
+            .published_slots(&frame.proof, &address(&sender))
+            .unwrap();
+        assert!(matches!(
+            published[frame.position].body,
+            SlotBody::Exit(payload) if payload.len() > CONFIDENTIAL_DATA_FREE_BODY_LEN
+        ));
+    }
 }
 
 #[test]
@@ -833,28 +967,6 @@ fn a_payment_planned_for_another_owner_is_refused() {
     ));
 }
 
-#[test]
-fn a_delivered_rail_refuses_output_data() {
-    let sender = keypair(1);
-    let recipient = address(&keypair(2));
-    for ring in [Some(RING), None] {
-        let (mut tx, tx_key) = ring_transfer(&sender, false);
-        let output = SppProofOutputUtxo::new(Mint::SOL, 3, recipient)
-            .unwrap()
-            .with_memo(vec![1]);
-        tx.add_output_utxo(match ring {
-            Some(ring) => output.with_ring_program_id(ring),
-            None => output,
-        })
-        .unwrap();
-        let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow: false });
-        assert!(matches!(
-            rail.encrypt(tx, &address(&sender)),
-            Err(E::DeliveredOutputData { slot_index: 0 })
-        ));
-    }
-}
-
 /// The commitment rebuilds under any keys a sender names, the recipient compares them with its own.
 #[test]
 fn a_recipient_refuses_a_body_that_names_other_keys() {
@@ -863,52 +975,64 @@ fn a_recipient_refuses_a_body_that_names_other_keys() {
     let recipient = address(&receiver);
     let (mut tx, tx_key) = ring_transfer(&sender, false);
     tx.transfer_sol(&recipient, 3).unwrap();
-    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow: false });
+    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
     let proof = rail.encrypt(tx, &address(&sender)).unwrap();
-    let published = rail.published_slots(&proof, &address(&sender)).unwrap();
     let secret = delivered_secret(&receiver.viewing_key, &proof, &rail, 0);
-    let RingOutput::Delivered { hash, u, body } = published[0].wire else {
-        panic!("delivered slot expected")
+    let assets = RingAssets::new([]).unwrap();
+    let opens = |forged: DeliveredBody| {
+        let body = seal_delivered_body(&forged, &secret).unwrap();
+        RingDeliveryOpening {
+            ring: RING,
+            body: &body,
+            slot_secret: &secret,
+            owner: RingUtxoOwner {
+                signing_pubkey: &recipient.signing_pubkey,
+                nullifier_pubkey: &recipient.nullifier_pubkey,
+            },
+            commitment: &proof.external_data.outputs[0].utxo_hash,
+            tree_id: TREE,
+        }
+        .open(&assets)
+        .unwrap()
+        .and_then(|delivered| delivered.mint)
+        .is_some()
     };
-    let sealed = open_delivered_body(body, &secret).unwrap();
-    let forged = |forged: DeliveredBody| seal_delivered_body(&forged, &secret).unwrap();
-    let opens = |body: &[u8]| {
-        let wire = RingOutput::Delivered { hash, u, body };
-        open(wire, &recipient, &secret).is_some()
+    let sealed = DeliveredBody {
+        blinding: proof.output_utxos[0].blinding,
+        amount: 3,
+        owner_key: recipient.signing_pubkey.confidential_view_tag().unwrap(),
+        nullifier_pk: Some(recipient.nullifier_pubkey),
     };
-    assert!(opens(&forged(sealed)));
-    assert!(!opens(&forged(DeliveredBody {
+    assert!(opens(sealed));
+    assert!(!opens(DeliveredBody {
         owner_key: [0x77; 32],
         ..sealed
-    })));
-    assert!(!opens(&forged(DeliveredBody {
+    }));
+    assert!(!opens(DeliveredBody {
         nullifier_pk: Some([0x77; 32]),
         ..sealed
-    })));
+    }));
 }
 
-/// A dummy publishes a random body of the length a real one has, the escrow flag fixes both.
 #[test]
-fn every_delivered_slot_takes_the_length_of_its_layout() {
+fn a_dataless_delivered_slot_takes_the_plain_body_length() {
     let sender = keypair(1);
     let recipient = address(&keypair(2));
-    for (key_escrow, len) in [
-        (false, DELIVERED_BODY_LEN),
-        (true, ESCROWED_DELIVERED_BODY_LEN),
-    ] {
-        let (tx, tx_key) = ring_transfer(&sender, false);
-        let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow });
-        let mut tx = tx
-            .with_blinding_seed(rail.blinding_seed().unwrap())
-            .unwrap();
-        tx.transfer_sol(&recipient, 3).unwrap();
-        tx.pad_utxos(Shape::IN1_OUT4, &address(&sender)).unwrap();
-        let proof = rail.encrypt(tx, &address(&sender)).unwrap();
-        let published = rail.published_slots(&proof, &address(&sender)).unwrap();
-        assert!(published.iter().any(|slot| slot.output.is_dummy()));
-        for slot in &published {
-            assert_eq!(slot.wire.ciphertext().len(), len);
-        }
+    let (tx, tx_key) = ring_transfer(&sender, false);
+    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
+    let mut tx = tx
+        .with_blinding_seed(rail.blinding_seed().unwrap())
+        .unwrap();
+    tx.transfer_sol(&recipient, 3).unwrap();
+    tx.pad_utxos(Shape::IN1_OUT4, &address(&sender)).unwrap();
+    let proof = rail.encrypt(tx, &address(&sender)).unwrap();
+    let published = rail.published_slots(&proof, &address(&sender)).unwrap();
+    assert!(published.iter().any(|slot| slot.output.is_dummy()));
+    for slot in &published {
+        assert!(matches!(
+            slot.body,
+            SlotBody::Recipient(body) if body.len() == RECIPIENT_BODY_LEN
+        ));
     }
 }
 
