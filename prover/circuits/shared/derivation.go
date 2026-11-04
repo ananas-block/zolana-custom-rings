@@ -43,8 +43,6 @@ const (
 	WithdrawalsDomain = 0x43525057
 	// TransferStatementDomain = "CRTX"
 	TransferStatementDomain = 0x43525458
-	// AuthorizedAddressDomain = "CRAD"
-	AuthorizedAddressDomain = 0x43524144
 	// RecipientTagDomain = "CRRT"
 	RecipientTagDomain = 0x43525254
 	// SenderTagDomain = "CRST"
