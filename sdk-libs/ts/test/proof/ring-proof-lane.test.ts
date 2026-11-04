@@ -49,6 +49,7 @@ import {
 import { ApprovalMask } from "../../src/protocol/transaction/transact.js";
 import { unopenedRecordPool } from "../../src/protocol/membership/member-opening.js";
 import { transferPoolCapacity } from "../../src/protocol/proof/transfer-shapes.js";
+import { ringStreamLayout } from "../../src/protocol/transaction/transact.js";
 import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import type { TrackingRecord } from "../../src/protocol/membership/tracking.js";
@@ -123,6 +124,22 @@ describe("selectTransferKey", () => {
     expect(refusal(() => select(25, 5)).code).toBe("RING_CATALOG_KEY_MISSING");
     expect(refusal(() => select(25, 0, 13)).code).toBe("RING_TOO_MANY_OWNERS");
     expect(refusal(() => select(50)).code).toBe("RING_CATALOG_KEY_MISSING");
+  });
+
+  it("seals a tail past the capacity of the key the spend selects", () => {
+    const layout = (wideOwners: boolean) =>
+      ringStreamLayout({
+        rail: "confidential",
+        nIn: 2,
+        nOut: 2,
+        inputs: 2,
+        outputs: 2,
+        entry: false,
+        hasData: true,
+        wideOwners,
+      });
+    expect(layout(false).capacity).toBe(2);
+    expect(layout(true).capacity).toBe(8);
   });
 
   it("refuses past the account bound with the counts", () => {

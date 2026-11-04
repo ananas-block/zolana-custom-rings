@@ -17,11 +17,11 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_interface::pda;
+use spr_interface::{pda, MAX_TRANSACT_INPUTS};
 use spr_keypair::{shielded::ShieldedAddress, PublicKey, ShieldedKeypair};
 use spr_transaction::{
     instructions::transact::{
-        canonical_shape, ConfidentialTransaction, Shape, MAX_SPEND_INPUTS, SPP_SUPPORTED_SHAPES,
+        canonical_shape, ConfidentialTransaction, Shape, SPP_SUPPORTED_SHAPES,
     },
     Data, ShieldedKeys, SpendableDecryptionResult, WalletUtxo, SOL_MINT,
 };
@@ -731,7 +731,7 @@ impl Payments {
         };
         let entry = match &self.payees {
             Payees::Confidential(_) => {
-                return select(&held(Spendable::WithDefaultRing), MAX_SPEND_INPUTS)
+                return select(&held(Spendable::WithDefaultRing), MAX_TRANSACT_INPUTS)
             }
             Payees::Anonymous { entry, .. } => *entry,
         };

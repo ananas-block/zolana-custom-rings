@@ -19,7 +19,7 @@ use zolana_ring_policy::{
 use super::{
     audit::is_default_ring,
     pool_subjects::{pool_at_width, KnownSalts, OwnerQuery, PoolSubjects, RecordPlan, SourceGates},
-    transfer_key,
+    transfer_key, TransferKey,
 };
 use crate::{
     limits::Outflows,
@@ -78,6 +78,8 @@ pub(super) struct PolicyRead<'a> {
     pub n_out: u8,
     pub public: &'a PublicSlots,
     pub salts: &'a KnownSalts,
+    /// The owner sealed under the wide key.
+    pub wide_floor: bool,
 }
 
 #[derive(Default)]
@@ -177,7 +179,7 @@ impl PolicyRead<'_> {
         }
         .plan(&mut plan)?;
         let unkeyed = || RingError::ShapeUnkeyed { rail: self.rail };
-        let key = transfer_key(TransferSpend {
+        let spend = TransferSpend {
             rail: self.rail,
             inputs: self.published_inputs,
             outputs: n_out,
@@ -186,8 +188,19 @@ impl PolicyRead<'_> {
             owners: live_rows.len(),
             pools: plan.pools(&tracked),
             wide: false,
-        })
-        .ok_or_else(unkeyed)?;
+        };
+        let key = transfer_key(spend).ok_or_else(unkeyed)?;
+        let key = match self.wide_floor && !key.wide {
+            true => TransferKey {
+                circuit: RingCircuit::transfer(TransferSpend {
+                    wide: true,
+                    ..spend
+                })
+                .ok_or_else(unkeyed)?,
+                wide: true,
+            },
+            false => key,
+        };
         let circuit = key.circuit;
         let RingCircuit::Transfer { outputs, .. } = circuit else {
             return Err(RingError::UncataloguedCircuit(circuit));

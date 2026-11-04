@@ -310,6 +310,7 @@ mod tests {
                 blinding_seed: [0; 32],
                 output_tree_id: 1,
                 list_salts: Vec::new(),
+                wide_owners: false,
             })
         }
     }

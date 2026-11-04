@@ -37,6 +37,8 @@ pub struct RelayProofInputs {
     pub output_tree_id: u16,
     /// Salts of owners the nullifier key does not derive.
     pub list_salts: Vec<SubjectListSalt>,
+    /// The owner sealed under the wide key, the relayer proves on it.
+    pub wide_owners: bool,
 }
 
 /// The leaf's `list_tag` refuses a wrong salt.
@@ -258,6 +260,7 @@ struct ProofInputsWire {
     output_tree_id: u16,
     #[wincode(with = "containers::Vec<SubjectListSalt, FixIntLen<u8>>")]
     list_salts: Vec<SubjectListSalt>,
+    wide_owners: bool,
 }
 
 impl Drop for ProofInputsWire {
@@ -400,6 +403,7 @@ impl ProofInputsWire {
             blinding_seed: inputs.blinding_seed,
             output_tree_id: inputs.output_tree_id,
             list_salts: inputs.list_salts.clone(),
+            wide_owners: inputs.wide_owners,
         })
     }
 
@@ -447,6 +451,7 @@ impl ProofInputsWire {
             blinding_seed: self.blinding_seed,
             output_tree_id: self.output_tree_id,
             list_salts: self.list_salts.clone(),
+            wide_owners: self.wide_owners,
         })
     }
 }

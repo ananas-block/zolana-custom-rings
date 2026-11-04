@@ -72,7 +72,7 @@ impl<R: Rail> WalletRelay<'_, R> {
                 fee_payer: quote.fee_payer.0,
             });
         }
-        let sealed = self.transfer.seal(client).await?;
+        let sealed = self.transfer.seal_unread(client).await?;
         let staged = &sealed.pipeline.staged;
         let inputs = &staged.proof_inputs;
         let nullifier_key = staged
@@ -126,7 +126,7 @@ impl RingTransfer<Delegated<'_>> {
         &self,
         client: &C,
     ) -> Result<RelayProofInputs, RingError> {
-        let sealed = self.seal(client).await?;
+        let sealed = self.seal_unread(client).await?;
         Ok(sealed.relay_proof_inputs(
             RelayRail::Delegate {
                 delegate: self.rail.delegate,
@@ -136,7 +136,7 @@ impl RingTransfer<Delegated<'_>> {
     }
 }
 
-impl Sealed<'_> {
+impl<P> Sealed<'_, P> {
     fn relay_proof_inputs(&self, rail: RelayRail, nullifier_key: NullifierKey) -> RelayProofInputs {
         let staged = &self.pipeline.staged;
         let inputs = &staged.proof_inputs;
@@ -153,6 +153,7 @@ impl Sealed<'_> {
             blinding_seed: inputs.blinding_seed,
             output_tree_id: inputs.output_tree_id,
             list_salts: staged.list_salts.clone(),
+            wide_owners: self.preview.wide_owners,
         }
     }
 }

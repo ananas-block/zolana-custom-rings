@@ -68,7 +68,7 @@ import { relayListSalts, type RingListSalt } from "../../proof/policy-proof.js";
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import {
   proveStagedTransfer,
-  sealStagedTransfer,
+  sealRelayedTransfer,
   type AnonymousSpendValues,
   type ProvenRingTransfer,
   type RailSpend,
@@ -251,7 +251,7 @@ export class CustomRingTransfer {
           details: { payer: prepared.payer, feePayer: quote.feePayer },
         });
       await approval?.approve({ prepared, coSigners: [] });
-      const sealed = sealStagedTransfer({
+      const sealed = sealRelayedTransfer({
         ringProgramId,
         config,
         staged: { ...staged, spend: { rail: "confidential", inProofOwner: owner } },
@@ -273,6 +273,7 @@ export class CustomRingTransfer {
           ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
           blindingSeed: proofInputs.blindingSeed,
           outputTreeId: proofInputs.outputTreeId,
+          wideOwners: sealed.wideOwners,
           assets: this.#input.assets,
           listSalts: relayListSalts(config, this.#input.listSalts ?? []),
         });
@@ -655,7 +656,7 @@ export class AnonymousTransfer {
           details: { payer: prepared.payer, feePayer: quote.feePayer },
         });
       await approval?.approve({ prepared, coSigners: [] });
-      const sealed = sealStagedTransfer({
+      const sealed = sealRelayedTransfer({
         ringProgramId,
         config,
         staged: { ...staged, spend: { rail: "anonymous" } },
@@ -683,6 +684,7 @@ export class AnonymousTransfer {
           ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
           blindingSeed: proofInputs.blindingSeed,
           outputTreeId: proofInputs.outputTreeId,
+          wideOwners: sealed.wideOwners,
           assets: this.#owner.assets,
           listSalts: relayListSalts(config, this.#owner.listSalts ?? []),
         });
