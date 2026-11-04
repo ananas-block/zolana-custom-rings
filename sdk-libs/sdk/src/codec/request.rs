@@ -11,7 +11,7 @@ use spr_transaction::{
 use zeroize::Zeroizing;
 use zolana_ring_member_registry::{
     MemberRecord, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput, SharedProof,
-    TrackingOpening, TrackingPool, TrackingRecord,
+    TrackingOpening, TrackingPool, TrackingRecord, TrackingWriteProofInput,
 };
 use zolana_ring_policy::{AssetLimits, EncodedRuleTable, SourceMap, MAX_SOURCES};
 
@@ -752,6 +752,78 @@ pub(crate) struct KeyRegister {
     pub eph_sk: Zeroizing<[u8; 32]>,
     #[serde(serialize_with = "coordinate")]
     pub auditor_pk: X25519Pubkey,
+}
+
+/// The witness of one applied tracking entry, mirror Go `TrackingWrite`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TrackingWrite {
+    #[serde(with = "fe")]
+    pub member: [u8; 32],
+    #[serde(with = "fe")]
+    pub nullifier_pk: [u8; 32],
+    #[serde(with = "fe")]
+    pub ct_hash: [u8; 32],
+    #[serde(with = "fe")]
+    pub view0: [u8; 32],
+    #[serde(with = "fe")]
+    pub view1: [u8; 32],
+    #[serde(with = "fe")]
+    pub revision: [u8; 32],
+    #[serde(with = "fe")]
+    pub list_tag: [u8; 32],
+    pub exists: bool,
+    pub old_record: TrackingLeafRequest,
+    pub index: u64,
+    #[serde(serialize_with = "fe::seq")]
+    pub path: Vec<[u8; 32]>,
+    pub low_record: TrackingLeafRequest,
+    pub low_index: u64,
+    #[serde(serialize_with = "fe::seq")]
+    pub low_path: Vec<[u8; 32]>,
+}
+
+impl From<&TrackingWriteProofInput> for TrackingWrite {
+    fn from(write: &TrackingWriteProofInput) -> Self {
+        let entry = &write.entry;
+        let [view0, view1] = pack_be(&entry.viewing_u);
+        Self {
+            member: entry.member,
+            nullifier_pk: entry.nullifier_pk,
+            ct_hash: entry.ct_hash,
+            view0,
+            view1,
+            revision: right_align(&entry.revision.to_be_bytes()),
+            list_tag: entry.list_tag,
+            exists: write.exists,
+            old_record: (&write.old).into(),
+            index: write.slot.index,
+            path: write.slot.siblings.as_flattened().to_vec(),
+            low_record: (&write.low).into(),
+            low_index: write.low_path.index,
+            low_path: write.low_path.siblings.as_flattened().to_vec(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApplyEnrollments {
+    #[serde(with = "fe")]
+    pub public_input_hash: [u8; 32],
+    #[serde(with = "fe")]
+    pub old_root: [u8; 32],
+    #[serde(with = "fe")]
+    pub new_root: [u8; 32],
+    pub old_next_index: u32,
+    pub new_next_index: u32,
+    #[serde(with = "fe")]
+    pub chain_start: [u8; 32],
+    #[serde(with = "fe")]
+    pub chain_end: [u8; 32],
+    pub count: u8,
+    /// The key's batch, writes past `count` assign zeros.
+    pub writes: Vec<Option<TrackingWrite>>,
 }
 
 /// Seals a ring's SPP merge output to its auditor, `tracking` is `None` under a zero key.

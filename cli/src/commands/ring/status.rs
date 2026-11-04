@@ -164,7 +164,6 @@ fn print_chain(ctx: &Context) -> Result<()> {
 fn mode(mode: RingMode) -> &'static str {
     match mode {
         RingMode::Confidential => "confidential",
-        RingMode::ConfidentialEscrow => "confidential, every output key escrowed",
         RingMode::Anonymous => "anonymous",
     }
 }

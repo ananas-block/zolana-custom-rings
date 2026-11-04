@@ -78,7 +78,7 @@ pub enum Command {
     /// Set or show the permanent delegate, or move a note as the delegate.
     #[command(subcommand)]
     Delegate(DelegateCommand),
-    /// Escrow the member's nullifier key in its record of the ring's storage registry.
+    /// Enroll the member's nullifier key in the ring's tracking registry.
     #[command(subcommand)]
     Key(KeyCommand),
     /// List the wallet enrolments that await the config authority, or approve one.
@@ -96,6 +96,8 @@ pub enum Command {
     Audit(AuditArgs),
     /// Mint a `zolana:` payment request for the member on an anonymous ring.
     Address(AddressArgs),
+    /// Print the sender's notes per mint, zero-key notes apart since spending one names the wallet.
+    Balance(BalanceArgs),
     /// List the replies on the member's notes, each an unauthenticated claim, or confirm one.
     ReplyClaims(ReplyClaimsArgs),
 }
@@ -234,10 +236,10 @@ pub enum EnrolmentCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum KeyCommand {
-    /// Seal the member's nullifier key to the ring auditor and register it, `transfer` does it on first use.
+    /// Seal the member's nullifier key to the ring auditor and enroll it, `transfer` does it on first use.
     Register,
-    /// Sign the sender's delivery address, its first nullifier key is permanent on the registry.
-    EnrollAddress,
+    /// Prove the queued enrollments into the tracking tree, anyone may.
+    Apply,
 }
 
 #[derive(Debug, Subcommand)]
@@ -421,6 +423,16 @@ pub struct TransferArgs {
     /// `in-proof` signs the spend inside the proof and the authority pays, on a confidential ring.
     #[arg(long, value_enum, default_value_t = OwnerRail::Signer)]
     pub owner_rail: OwnerRail,
+    /// The sender's wallet address, it signs in public and spends its zero-key notes too, the sender of each note learns the spend.
+    #[arg(long, value_name = "WALLET")]
+    pub spend_public: Option<Address>,
+}
+
+#[derive(Debug, Args)]
+pub struct BalanceArgs {
+    /// Registered mint, `sol` by default.
+    #[arg(long)]
+    pub mint: Option<Mint>,
 }
 
 #[derive(Debug, Args)]

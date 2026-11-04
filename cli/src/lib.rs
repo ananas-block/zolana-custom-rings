@@ -271,6 +271,7 @@ fn dispatch(ctx: &mut Context, command: Command) -> Result<()> {
         Command::AuditorKey(args) => keys::run(&ctx.path(&args.key_file), args.create),
         Command::Audit(args) => audit::run(ctx, args),
         Command::Address(args) => address::run(ctx, args),
+        Command::Balance(args) => transact::run_balance(ctx, args),
         Command::ReplyClaims(args) => reply_claims::run(ctx, args),
         Command::New(_)
         | Command::Target { .. }

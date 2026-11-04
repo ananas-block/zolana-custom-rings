@@ -4,13 +4,14 @@ use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::{
-    cosign::{CoSignDemand, CoSignRequirement},
-    AnonymousSpend, RingPolicy, RingRail,
+    cosign::{ApprovalMask, CoSignDemand, CoSignOperation, CoSignRequirement},
+    key_catalog::TransferShape,
+    RingPolicy, RingRail,
 };
 use custom_ring_sdk::{
     select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment, CoSignScope,
     CustomRingConfig, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
-    EntrySpend, EscrowedRecipients, ListRegistry, RingDeposit, RingDepositReceipt, RingMode,
+    EntrySpend, ListRegistry, PublicOwnerTransfer, RingDeposit, RingDepositReceipt, RingMode,
     RingPayment,
 };
 use solana_address::Address;
@@ -23,10 +24,13 @@ use spr_transaction::{
     instructions::transact::{
         canonical_shape, ConfidentialTransaction, Shape, MAX_SPEND_INPUTS, SPP_SUPPORTED_SHAPES,
     },
-    Data, SpendableDecryptionResult, WalletUtxo, SOL_MINT,
+    Data, ShieldedKeys, SpendableDecryptionResult, WalletUtxo, SOL_MINT,
 };
-use zolana_ring_client::{rpc::DecryptedOutputKind, AnonymousWallet, ReaderKey};
-use zolana_ring_keys::{ring_address::RING_PAYMENT_SCHEME, RingAddress, RingPaymentRequest};
+use zolana_ring_client::{mint_balances, rpc::DecryptedOutputKind, AnonymousWallet, ReaderKey};
+use zolana_ring_keys::{
+    ring_address::RING_PAYMENT_SCHEME, RingAddress, RingNullifierKey, RingPaymentRequest,
+    RotatingRingKeys,
+};
 use zolana_ring_policy::{ListId, Member, OutflowLimit};
 use zolana_ring_transaction::{ReplyMetadata, RingAssets};
 
@@ -38,13 +42,13 @@ use crate::{
     line,
     list::{ListChange, ListUpdate, Subject},
     macros::named_enum,
-    member::KeyEnrolment,
+    member::{registered, KeyEnrolment},
     merge::carries_no_data,
     policy, records,
     ui::{self, icon},
     wallet::WalletScan,
-    Context, CosignerArg, DepositArgs, Target, TransactArgs, TransferArgs, DEFAULT_TRANSACT_AMOUNT,
-    SENDER_KEYPAIR_FILE,
+    BalanceArgs, Context, CosignerArg, DepositArgs, Target, TransactArgs, TransferArgs,
+    DEFAULT_TRANSACT_AMOUNT, SENDER_KEYPAIR_FILE,
 };
 
 /// Covers the sender's registrations and fees.
@@ -138,7 +142,7 @@ struct Outflow {
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Requirement {
-    demanded: Option<CoSignRequirement>,
+    demanded: CoSignRequirement,
 }
 
 /// Applies only on a policy that reads the ring's own `Allow`.
@@ -158,10 +162,26 @@ struct AllowEnrolment<'a> {
     listing: AllowListing,
 }
 
+/// One identity on one ring, the identity alone signs.
+pub(crate) struct RingWallet {
+    pub keys: RotatingRingKeys,
+    pub nullifier: RingNullifierKey,
+}
+
+impl RingWallet {
+    pub(crate) fn new(identity: &ShieldedKeypair, ring: &Address) -> Result<Self> {
+        Ok(Self {
+            keys: RotatingRingKeys::new(identity, ring)?,
+            nullifier: RingNullifierKey::derive(identity, ring)?,
+        })
+    }
+}
+
 #[must_use]
 struct Deposit<'a> {
     payer: &'a Keypair,
     sender: &'a ShieldedKeypair,
+    held: &'a RingWallet,
     config: &'a CustomRingConfig,
     asset: DepositAsset,
     amount: u64,
@@ -174,9 +194,11 @@ struct Transfer<'a> {
     assets: &'a RingAssets,
     payer: &'a Keypair,
     sender: &'a ShieldedKeypair,
+    held: &'a RingWallet,
     payments: &'a Payments,
     cosigner: Option<&'a (dyn Signer + Sync)>,
     owner_rail: OwnerRail,
+    spend_public: Option<Address>,
 }
 
 enum Inputs<'a> {
@@ -207,6 +229,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     args.owner_rail.check(config.mode)?;
     let program = ctx.ring.program_id();
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
+    let held = RingWallet::new(&sender, &program)?;
     let recipient = ShieldedKeypair::new_ed25519()?;
     let to = match config.mode {
         RingMode::Anonymous => Recipient::Address(Box::new(RingAddress::enrolled(
@@ -214,8 +237,9 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
             program,
             &RingNullifierKey::derive(&recipient, &program)?,
         )?)),
-        RingMode::Confidential | RingMode::ConfidentialEscrow => {
-            Recipient::Shielded(recipient.shielded_address()?)
+        RingMode::Confidential => {
+            let key = RingNullifierKey::derive(&recipient, &program)?;
+            Recipient::Shielded(key.address_of(recipient.shielded_address()?)?)
         }
     };
     let payments = PaymentPlan::new(&[to])
@@ -234,9 +258,11 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
         assets: &assets,
         payer: ctx.member_payer(config.mode, sender.pubkey())?,
         sender: &sender,
+        held: &held,
         payments: &payments,
         cosigner: cosigner.sign(&config, demand)?,
         owner_rail: args.owner_rail,
+        spend_public: None,
     };
     payments.fits(&inputs)?;
     ctx.ring_rpc().check_serves(program)?;
@@ -247,12 +273,10 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     );
     let authority = ctx.funded_authority()?;
     let parties = [("sender", &sender), ("recipient", &recipient)];
-    if config.mode == RingMode::ConfidentialEscrow {
-        KeyEnrolment {
-            members: &[&sender, &recipient],
-        }
-        .ensure(ctx)?;
+    KeyEnrolment {
+        members: &[&sender, &recipient],
     }
+    .ensure(ctx)?;
     AllowEnrolment {
         authority,
         parties: &parties,
@@ -275,13 +299,36 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
 }
 
 /// Every recipient is checked against the ring's mode before anything is deposited.
+/// Zero-key funds stay apart, spending one names the wallet and shows its sender the spend.
+pub fn run_balance(ctx: &Context, args: BalanceArgs) -> Result<()> {
+    let config = ctx.ring_config()?;
+    let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
+    let held = RingWallet::new(&sender, &ctx.ring.program_id())?;
+    let mint = args.mint.map_or(SOL_MINT, |mint| mint.0);
+    let assets = assets::resolve(ctx.rpc(), mint)?.assets;
+    let notes = WalletScan {
+        keys: &held.keys,
+        assets: &assets,
+        config: &config,
+    }
+    .fetch_notes(ctx)?;
+    let all = notes.spendable.utxos().chain(&notes.exposed_if_spent);
+    for (mint, balance) in mint_balances(all, |_| false) {
+        line("mint", mint);
+        line("spendable", balance.spendable);
+        line("exposed if spent", balance.exposed_if_spent);
+    }
+    Ok(())
+}
+
 pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     let config = ctx.ring_config()?;
     args.owner_rail.check(config.mode)?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
+    let held = RingWallet::new(&sender, &ctx.ring.program_id())?;
     let payments = PaymentPlan::of(&args).resolve(config.mode, ctx.ring.program_id())?;
     let payments = match args.reply {
-        true => payments.with_reply(&sender)?,
+        true => payments.with_reply(&held.keys.address()?)?,
         false => payments,
     };
     let total = payments.total()?;
@@ -294,9 +341,11 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
         assets: &resolved.assets,
         payer: ctx.member_payer(config.mode, sender.pubkey())?,
         sender: &sender,
+        held: &held,
         payments: &payments,
         cosigner: cosigner.sign(&config, demand)?,
         owner_rail: args.owner_rail,
+        spend_public: args.spend_public,
     };
     let inputs = match args.funding {
         Funding::Deposit => {
@@ -324,8 +373,8 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     };
     payments.fits(&inputs)?;
     ctx.ring_rpc().check_serves(ctx.ring.program_id())?;
-    if config.mode == RingMode::ConfidentialEscrow {
-        payments.check_escrowed(ctx, &sender)?;
+    // A public spend needs no row, its zero-key change serves an unenrolled wallet.
+    if args.spend_public.is_none() {
         KeyEnrolment {
             members: &[&sender],
         }
@@ -361,6 +410,7 @@ pub fn run_deposit(ctx: &Context, args: DepositArgs) -> Result<()> {
     let cosigner = CoSigner::read(ctx, &args.cosigner)?;
     let deposit_cosigner = cosigner.sign(&config, Demand::Deposit)?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
+    let held = RingWallet::new(&sender, &ctx.ring.program_id())?;
     let payer = ctx.member_payer(config.mode, sender.pubkey())?;
     let asset = assets::resolve(ctx.rpc(), mint)?.deposit(
         ctx.rpc(),
@@ -368,17 +418,16 @@ pub fn run_deposit(ctx: &Context, args: DepositArgs) -> Result<()> {
         args.token_account,
         args.amount,
     )?;
-    if config.mode == RingMode::ConfidentialEscrow {
-        KeyEnrolment {
-            members: &[&sender],
-        }
-        .ensure(ctx)?;
+    KeyEnrolment {
+        members: &[&sender],
     }
+    .ensure(ctx)?;
     let drawn = deposit_lamports(asset, args.amount);
     ctx.fund(payer.pubkey(), drawn.saturating_add(PAYER_FEE_BUDGET))?;
     let receipt = Deposit {
         payer,
         sender: &sender,
+        held: &held,
         config: &config,
         asset,
         amount: args.amount,
@@ -558,10 +607,10 @@ impl<'a> PaymentPlan<'a> {
                     entry: self.entry,
                 }
             }
-            RingMode::Confidential | RingMode::ConfidentialEscrow if self.default_ring => {
+            RingMode::Confidential if self.default_ring => {
                 bail!("`--default-ring` pays out of an anonymous ring, ring {ring} is confidential")
             }
-            RingMode::Confidential | RingMode::ConfidentialEscrow => {
+            RingMode::Confidential => {
                 match self.entry {
                     EntrySpend::Refuse => {}
                     EntrySpend::Allow => bail!(
@@ -594,11 +643,10 @@ impl<'a> PaymentPlan<'a> {
 
 impl Payments {
     /// `--reply` alone attaches one, the recipient reads it as a claim it must confirm.
-    fn with_reply(mut self, sender: &ShieldedKeypair) -> Result<Self> {
+    fn with_reply(mut self, address: &ShieldedAddress) -> Result<Self> {
         let Payees::Anonymous { ring, .. } = &mut self.payees else {
             bail!("`--reply` names the sender to an anonymous recipient, ring is confidential");
         };
-        let address = sender.shielded_address()?;
         let reply = ReplyMetadata {
             viewing_key: address.viewing_pubkey,
             owner_key: address.signing_pubkey.as_ed25519()?,
@@ -658,21 +706,6 @@ impl Payments {
         Ok(Outflow {
             mint: self.mint,
             amount: sum(&self.to_others(owner)?)?,
-        })
-    }
-
-    /// Refused before any deposit unless every other recipient escrows its key.
-    fn check_escrowed(&self, ctx: &Context, sender: &ShieldedKeypair) -> Result<()> {
-        let recipients: Vec<ShieldedAddress> = (self.to_others(&sender.signing_pubkey())?)
-            .into_iter()
-            .map(|payment| *payment.to)
-            .collect();
-        let check = EscrowedRecipients {
-            ring: ctx.ring,
-            recipients: &recipients,
-        };
-        records::patiently("the escrowed keys of the recipients", || {
-            ctx.block(check.check(ctx.chain()))
         })
     }
 
@@ -859,35 +892,32 @@ impl CoSigner {
     /// Refused when the operation demands a co-signer the operator did not pass.
     fn sign_for(&self, requirement: Requirement) -> Result<Option<&(dyn Signer + Sync)>> {
         ensure!(
-            requirement.demanded.is_none() || self.keypair.is_some(),
+            requirement.demanded.is_satisfied() || self.keypair.is_some(),
             "the operation needs the co-signer's approval, pass --cosigner-keypair"
         );
         Ok(self
             .keypair
             .as_ref()
-            .filter(|_| requirement.demanded.is_some())
+            .filter(|_| !requirement.demanded.is_satisfied())
             .map(|keypair| keypair as &(dyn Signer + Sync)))
     }
 }
 
 impl Requirement {
     fn of(config: &RingPolicy, demand: Demand) -> Result<Self> {
-        let demanded = CoSignDemand {
-            approval_required: demand == Demand::Approval,
-            classes: demand.classes(),
+        let spend = |approval| CoSignOperation {
+            spends_note: true,
+            public_legs: CoSignScope::NONE,
+            approval,
+        };
+        let demanded = match demand {
+            Demand::Deposit => CoSignDemand::DEPOSIT,
+            Demand::Transfer => spend(ApprovalMask::default()).demand(),
+            Demand::Approval => spend(ApprovalMask::OUTFLOW).demand(),
         };
         Ok(Self {
             demanded: demanded.requirement(config)?,
         })
-    }
-}
-
-impl Demand {
-    const fn classes(self) -> CoSignScope {
-        match self {
-            Self::Deposit => CoSignScope::DEPOSITS,
-            Self::Transfer | Self::Approval => CoSignScope::TRANSFERS,
-        }
     }
 }
 
@@ -948,18 +978,18 @@ impl AllowEnrolment<'_> {
 
 impl Deposit<'_> {
     fn send(self, ctx: &Context) -> Result<RingDepositReceipt> {
-        let store = ctx.anonymous_wallet_store(self.sender);
+        let store = ctx.anonymous_wallet_store(self.sender.viewing_pubkey());
         let wallet = match self.config.mode {
             RingMode::Anonymous => Some(store.load()?),
-            RingMode::Confidential | RingMode::ConfidentialEscrow => None,
+            RingMode::Confidential => None,
         };
         let history = wallet.as_ref().map(AnonymousWallet::history);
         let recipient = match history {
             Some(history) => DepositRecipient::Anonymous {
-                keys: self.sender,
+                keys: &self.held.keys,
                 history,
             },
-            None => DepositRecipient::Confidential(self.sender.shielded_address()?),
+            None => DepositRecipient::Confidential(self.held.keys.address()?),
         };
         let deposit = RingDeposit {
             ring: ctx.ring,
@@ -991,8 +1021,21 @@ impl Inputs<'_> {
 
 impl Transfer<'_> {
     fn held_utxos(&self, ctx: &Context) -> Result<Vec<WalletUtxo>> {
+        let mut scanned = WalletScan {
+            keys: &self.held.keys,
+            assets: self.assets,
+            config: self.config,
+        }
+        .fetch_notes(ctx)?;
+        // Only a spend naming its wallet takes a zero-key note.
+        if self.spend_public.is_some() {
+            scanned
+                .spendable
+                .utxos_with_data
+                .extend(scanned.exposed_if_spent);
+        }
         self.payments
-            .select_held(&self.scan(ctx)?, ctx.ring.program_id())
+            .select_held(&scanned.spendable, ctx.ring.program_id())
     }
 
     /// Runs after the enrolments, their top-ups would otherwise leave the deposits short.
@@ -1015,6 +1058,7 @@ impl Transfer<'_> {
                         let receipt = Deposit {
                             payer: self.payer,
                             sender: self.sender,
+                            held: self.held,
                             config: self.config,
                             asset,
                             amount,
@@ -1067,7 +1111,7 @@ impl Transfer<'_> {
 
     fn scan(&self, ctx: &Context) -> Result<SpendableDecryptionResult> {
         WalletScan {
-            keys: self.sender,
+            keys: &self.held.keys,
             assets: self.assets,
             config: self.config,
         }
@@ -1103,8 +1147,8 @@ impl Transfer<'_> {
                 }
                 let mut transfer = CustomRingTransfer::new(CustomRingTransferInput {
                     ring: ctx.ring,
-                    sender: self.sender,
-                    nullifier_key: Some(&self.sender.nullifier_key),
+                    sender: &self.held.keys,
+                    nullifier_key: Some(self.held.nullifier.nullifier_key()),
                     transaction,
                 });
                 if let Some(shape) = shape {
@@ -1125,6 +1169,10 @@ impl Transfer<'_> {
                         transfer = transfer.with_in_proof_owner(&self.sender.signing_key);
                     }
                 }
+                if let Some(wallet) = self.spend_public {
+                    let transfer = self.named_wallet(ctx, transfer.spend_public(wallet))?;
+                    return ctx.submit(transfer, payer, self.cosigner.as_slice());
+                }
                 ctx.submit(transfer, payer, self.cosigner.as_slice())
             }
             Payees::Anonymous {
@@ -1133,20 +1181,57 @@ impl Transfer<'_> {
                 entry,
             } => {
                 let mint = self.assets.registry().mint(&self.payments.mint)?;
+                if let Some(wallet) = self.spend_public {
+                    let mut transaction = transaction(inputs.clone(), self.payer.pubkey())?;
+                    for payment in default_ring {
+                        transaction.transfer_with_ring(&payment.to, mint, payment.amount, None)?;
+                    }
+                    let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+                        ring: ctx.ring,
+                        sender: &self.held.keys,
+                        nullifier_key: Some(self.held.nullifier.nullifier_key()),
+                        transaction,
+                    })
+                    .spend_public(wallet);
+                    let mut transfer = self.named_wallet(ctx, transfer)?;
+                    for payment in payees {
+                        transfer = transfer.with_payment(AnonymousPayment {
+                            to: payment.to.clone(),
+                            asset: mint,
+                            amount: payment.amount,
+                            reply: payment.reply.clone(),
+                        })?;
+                    }
+                    let transfer = match shape {
+                        Some(shape) => transfer.with_shape(shape)?,
+                        None => transfer,
+                    };
+                    let transfer = match self.cosigner {
+                        Some(cosigner) => transfer.with_co_signer(cosigner.pubkey()),
+                        None => transfer,
+                    };
+                    let mut signers: Vec<&(dyn Signer + Sync)> = vec![self.sender];
+                    signers.extend(self.cosigner);
+                    return ctx.submit(transfer, self.payer, &signers);
+                }
                 // The hidden owner never signs in public, the payer funds its spend.
                 let transfer = match self.payments.sdk_selects() {
                     true => {
                         let select = AnonymousMove {
                             ring: ctx.ring,
-                            sender: self.sender,
-                            nullifier_key: &self.sender.nullifier_key,
+                            sender: &self.held.keys,
+                            nullifier_key: self.held.nullifier.nullifier_key(),
                             signer: &self.sender.signing_key,
                             payer: self.payer.pubkey(),
                             utxos: &inputs,
                             asset: mint,
                             payments: payees.clone(),
                             entry: *entry,
-                            co_signer: self.cosigner.map(|signer| signer.pubkey()),
+                            co_signers: self
+                                .cosigner
+                                .iter()
+                                .map(|signer| signer.pubkey())
+                                .collect(),
                         };
                         ctx.block(select.select(ctx.ring_client()))?
                     }
@@ -1162,8 +1247,8 @@ impl Transfer<'_> {
                         }
                         let mut transfer = CustomRingTransfer::new(CustomRingTransferInput {
                             ring: ctx.ring,
-                            sender: self.sender,
-                            nullifier_key: Some(&self.sender.nullifier_key),
+                            sender: &self.held.keys,
+                            nullifier_key: Some(self.held.nullifier.nullifier_key()),
                             transaction,
                         })
                         .with_anonymous_signer(&self.sender.signing_key);
@@ -1191,6 +1276,20 @@ impl Transfer<'_> {
     }
 }
 
+impl<'a> Transfer<'a> {
+    /// An unenrolled wallet's change takes the only key its tracking state allows.
+    fn named_wallet(
+        &self,
+        ctx: &Context,
+        transfer: PublicOwnerTransfer<'a>,
+    ) -> Result<PublicOwnerTransfer<'a>> {
+        Ok(match registered(ctx.ring, &ctx.zolana, self.sender)? {
+            true => transfer,
+            false => transfer.with_zero_key_change(),
+        })
+    }
+}
+
 impl Spendable {
     fn admits(self, utxo: &WalletUtxo, ring: Address) -> bool {
         let in_ring = utxo.utxo.ring_program_id == Some(ring);
@@ -1205,13 +1304,9 @@ impl Spendable {
     fn widest_anonymous(self, outputs: usize) -> Option<usize> {
         let keyed = |shape: Shape| match self {
             Self::RingOnly => shape_keyed(RingRail::Anonymous, shape),
-            Self::DefaultRingOnly => AnonymousSpend {
-                inputs: shape.n_inputs(),
-                outputs: shape.n_outputs(),
-                spends_default_ring: true,
-            }
-            .audit_key()
-            .is_some(),
+            Self::DefaultRingOnly => TransferShape::family(RingRail::Anonymous, true)
+                .and_then(|family| TransferShape::of(family, shape.n_outputs()))
+                .is_some_and(|keyed| shape.n_inputs() <= usize::from(keyed.inputs)),
             Self::WithDefaultRing => false,
         };
         // Ordinary padding publishes every input of the SPP shape, the shape itself must carry a key.
@@ -1310,16 +1405,12 @@ fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()
         .context("the ring rpc did not open the transfer")?;
     let heading = format!("auditor sees slot {} at {signature}", opened.slot);
     ui::heading(icon::AUDITOR, &heading);
-    if let Some(sender) = &opened.sender {
-        println!("  hidden sender {}", sender.owner_key.0);
-    }
     println!("  nullifiers {}", opened.nullifiers.len());
     for output in &opened.outputs {
         let kind = match output.kind {
             DecryptedOutputKind::Ring => "ring",
             DecryptedOutputKind::Exit => "exit",
             DecryptedOutputKind::Dummy => "dummy",
-            DecryptedOutputKind::EscrowPending => "escrow pending",
         };
         let Some(utxo) = &output.utxo else {
             println!("  slot {}  {kind}", output.slot_index);

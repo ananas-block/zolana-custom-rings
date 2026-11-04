@@ -49,7 +49,7 @@ pub use self::{
     },
     delegate::{
         DelegateMove, DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
-        Delegated,
+        DelegateWithdrawal, Delegated,
     },
     owner::{CustomRingTransfer, CustomRingTransferInput, Owner},
     public_owners::{PublicOwnerTransfer, PublicOwners},
@@ -425,6 +425,15 @@ impl<'a> Pipeline<'a> {
             u32::try_from(proof_inputs.external_data.expiry_unix_ts).unwrap_or(u32::MAX);
         proof_inputs.external_data.expiry_unix_ts = u64::from(expiry_unix_ts);
         check_distinct(&proof_inputs.input_utxos)?;
+        if ring_rail.is_delegate()
+            && proof_inputs
+                .external_data
+                .interface_transfers
+                .iter()
+                .any(|transfer| transfer.is_deposit())
+        {
+            return Err(CustomRingError::DelegatePublicLeg.into());
+        }
         if matches!(spend, Spend::InProofOwner(_)) {
             if let Some(index) = default_ring_input(&proof_inputs.input_utxos) {
                 return Err(RingError::InProofDefaultRingInput { index });

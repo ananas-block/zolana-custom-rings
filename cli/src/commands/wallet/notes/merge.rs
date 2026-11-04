@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use anyhow::{anyhow, ensure, Result};
 use custom_ring_sdk::select_merge_where;
 use custom_ring_sdk::{
-    CustomRingMerge, MergeProofInput, RingMergeOperation, RingMode, MAX_RING_MERGE_INPUTS,
+    CustomRingMerge, MergeProofInput, RingMergeOperation, MAX_RING_MERGE_INPUTS,
 };
 use solana_address::Address;
 use solana_signer::Signer;
@@ -14,13 +14,8 @@ use spr_keypair::ShieldedKeypair;
 use spr_transaction::{SpendableDecryptionResult, WalletUtxo, SOL_MINT};
 
 use crate::{
-    assets,
-    fund::MIN_AUTHORITY_BALANCE,
-    line,
-    member::KeyEnrolment,
-    transact::{CoSigner, Demand},
-    wallet::WalletScan,
-    Context, MergeArgs,
+    assets, fund::MIN_AUTHORITY_BALANCE, line, member::KeyEnrolment, transact::RingWallet,
+    wallet::WalletScan, Context, MergeArgs,
 };
 
 pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
@@ -28,11 +23,10 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
     let mint = args.mint.map_or(SOL_MINT, |mint| mint.0);
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
-    let cosigner = CoSigner::read(ctx, &args.cosigner)?;
-    let merge_cosigner = cosigner.sign(&config, Demand::Transfer)?;
+    let held = RingWallet::new(&sender, &ctx.ring.program_id())?;
     let scan = || {
         WalletScan {
-            keys: &sender,
+            keys: &held.keys,
             assets: &assets,
             config: &config,
         }
@@ -52,27 +46,24 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     let tree = pda::tree(tree_id);
     let prepared = CustomRingMerge::new(ctx.ring, selected, None)?
         .with_output_tree_id(tree_id)
-        .encrypt(&sender)?;
+        .encrypt(&held.keys)?;
     let (output_hash, merged_amount) = (prepared.output().hash(tree_id)?, prepared.output().amount);
     let merge = RingMergeOperation::new(
         prepared,
         MergeProofInput {
-            nullifier_key: sender.nullifier_key.clone(),
+            nullifier_key: held.nullifier.nullifier_key().clone(),
             input_tree: tree,
             output_tree: tree,
-            co_signer: merge_cosigner.map(|signer| signer.pubkey()),
         },
     );
     let payer = ctx.member_payer(config.mode, sender.pubkey())?;
     ctx.fund(payer.pubkey(), MIN_AUTHORITY_BALANCE)?;
-    // A key escrow merge proves the owner's escrowed key.
-    if config.mode == RingMode::ConfidentialEscrow {
-        KeyEnrolment {
-            members: &[&sender],
-        }
-        .ensure(ctx)?;
+    // A keyed merge proves the owner's tracking row.
+    KeyEnrolment {
+        members: &[&sender],
     }
-    let signature = ctx.submit(merge, payer, merge_cosigner.as_slice())?;
+    .ensure(ctx)?;
+    let signature = ctx.submit(merge, payer, &[])?;
     ctx.wait_for_indexed(signature)?;
     let merged = scan()?;
     ensure!(
