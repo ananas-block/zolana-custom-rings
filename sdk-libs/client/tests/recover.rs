@@ -290,7 +290,7 @@ impl Fixture {
         .unwrap();
         self.merges.lock().unwrap().push((
             transaction.tx_signature,
-            ConfirmedMergeDisclosure::Record {
+            ConfirmedMergeDisclosure {
                 eph_pk: *sealed.eph_pk.as_bytes(),
                 ciphertext: sealed.ciphertext,
             },

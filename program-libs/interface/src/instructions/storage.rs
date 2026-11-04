@@ -14,7 +14,6 @@ use crate::{
 pub mod tag {
     pub const INITIALIZE: u8 = 0;
     pub const UPDATE: u8 = 1;
-    // 2, 3 and 5 retired.
     /// No data, the authority and the new authority both sign.
     pub const UPDATE_AUTHORITY: u8 = 4;
     pub const ENROLL: u8 = 6;

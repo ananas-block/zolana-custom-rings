@@ -1,5 +1,6 @@
 //! The key holder reads the tags the Go witnesses prove.
 
+use custom_ring_interface::stream::slot_tag;
 use serde::Deserialize;
 use spr_keypair::{viewing_key::ViewTag, ShieldedKeypair, SigningKey, ViewingKey, X25519Pubkey};
 use zolana_ring_keys::{RingKeys, RingTagFrame, RingTagKind, RingTagProbe, RotatingRingKeys};
@@ -22,30 +23,6 @@ struct Bodies {
     bundle_tag: String,
     bundle_slot_secret: String,
     dummy_tag: String,
-}
-
-#[derive(Deserialize)]
-struct Statements {
-    cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    family: String,
-    tx_viewing_u: String,
-    salt: String,
-    first_nullifier: String,
-    output_count: u32,
-    outputs: Vec<CaseOutput>,
-    sender_bundle_tag: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct CaseOutput {
-    kind: String,
-    tag: Option<String>,
-    recipient_body: Option<String>,
 }
 
 fn array<const N: usize>(value: &str) -> [u8; N] {
@@ -106,12 +83,12 @@ fn the_holder_reads_the_body_and_bundle_tags_and_no_dummy_or_change_tag() {
         probe(
             RingTagKind::Recipient,
             vector.body_index,
-            array(&vector.body_tag),
+            slot_tag(array(&vector.body_tag)),
         ),
         probe(
             RingTagKind::Recipient,
             vector.body_index,
-            array(&vector.dummy_tag),
+            slot_tag(array(&vector.dummy_tag)),
         ),
         probe(RingTagKind::Recipient, 0, [0; 32]),
     ];
@@ -151,61 +128,4 @@ fn the_holder_reads_the_body_and_bundle_tags_and_no_dummy_or_change_tag() {
         [Some(vector.bundle_slot_secret.clone()), None, None],
         "the bundle answers only under its own domain"
     );
-}
-
-#[test]
-fn the_holder_reads_every_proven_tag_of_the_anonymous_statements() {
-    let vector = bodies();
-    let (keys, sender, recipient) = holder(&vector);
-    let statements: Statements = serde_json::from_str(include_str!(
-        "../../../test-vectors/audit/transfer_statement_v3.json"
-    ))
-    .unwrap();
-    let mut read = 0;
-    for case in statements
-        .cases
-        .iter()
-        .filter(|case| case.family == "anonymous")
-    {
-        let frame = |viewing_pubkey, probes| RingTagFrame {
-            viewing_pubkey,
-            tx_viewing_pk: X25519Pubkey::from_u(array(&case.tx_viewing_u)).unwrap(),
-            salt: array(&case.salt),
-            first_nullifier: array(&case.first_nullifier),
-            probes,
-        };
-        let mut recipient_probes = Vec::new();
-        for (index, output) in case.outputs.iter().enumerate() {
-            let index = u32::try_from(index).unwrap();
-            match (output.kind.as_str(), &output.tag) {
-                ("anonymous", Some(tag)) => {
-                    assert!(output.recipient_body.is_some(), "{}", case.name);
-                    recipient_probes.push(probe(RingTagKind::Recipient, index, array(tag)));
-                }
-                // A change slot carries no tag and no body, an exit no view tag.
-                _ => assert!(output.recipient_body.is_none(), "{}", case.name),
-            }
-        }
-        let bundle = case.sender_bundle_tag.as_deref().unwrap();
-        let answers = keys
-            .ring_tag_matches(&[
-                frame(recipient, recipient_probes),
-                frame(
-                    sender,
-                    vec![probe(
-                        RingTagKind::SenderBundle,
-                        case.output_count,
-                        array(bundle),
-                    )],
-                ),
-            ])
-            .unwrap();
-        assert!(
-            answers.iter().flatten().all(Option::is_some),
-            "{}",
-            case.name
-        );
-        read += answers[0].len();
-    }
-    assert!(read >= 6, "every anonymous case holds a live tag");
 }

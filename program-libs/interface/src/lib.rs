@@ -22,8 +22,6 @@ pub mod domain;
 pub mod error;
 #[path = "accounts/frame_buffer.rs"]
 pub mod frame_buffer;
-#[path = "instructions/historical_merge.rs"]
-pub mod historical_merge;
 #[path = "instructions/instruction.rs"]
 pub mod instruction;
 #[path = "proof/key_catalog.rs"]
@@ -76,7 +74,6 @@ pub use deposit_audit::*;
 pub use disclosure::*;
 pub use error::CustomRingError;
 pub use frame_buffer::*;
-pub use historical_merge::*;
 pub use instruction::*;
 pub use member_registry::*;
 pub use merge::*;

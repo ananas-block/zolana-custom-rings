@@ -280,12 +280,7 @@ impl<'a> DemoRing<'a> {
         Ok(self
             .env
             .client
-            .block_on(scan.audit(
-                &self.auditor,
-                client.indexer(),
-                client.rpc(),
-                &self.env.ring_assets()?,
-            ))?
+            .block_on(scan.audit(&self.auditor, client.indexer(), client.rpc()))?
             .transactions)
     }
 

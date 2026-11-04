@@ -62,7 +62,6 @@ pub enum RecordUpdateRefusal {
     UnknownEnrolment = -32244,
     #[error("enrolment valid until slot is past the enrolment window")]
     EnrolmentWindow = -32245,
-    // -32246 retired.
     #[error("records registry creation did not land")]
     RecordsNotCreated = -32260,
     #[error("signer no longer holds the ring policy role")]
