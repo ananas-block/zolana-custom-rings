@@ -5,7 +5,7 @@ use spr_hasher::{Hasher, Poseidon};
 
 use crate::RecordTreeError;
 
-/// The public sparse tree anyone rebuilds, it holds no salt and no list bits.
+/// Public, holds no salt and no list bits.
 #[derive(Clone, Debug)]
 pub struct PrivateListTree {
     nodes: BTreeMap<(usize, u128), [u8; 32]>,
@@ -38,7 +38,7 @@ impl PrivateListTree {
         self.node(PRIVATE_LIST_DEPTH, 0)
     }
 
-    /// Leaf level first, an unwritten position opens the empty leaf with these.
+    /// Leaf level first.
     pub fn siblings(&self, position: &ListPosition) -> [[u8; 32]; PRIVATE_LIST_DEPTH] {
         let route = position.route();
         core::array::from_fn(|level| self.node(level, (route >> level) ^ 1))
