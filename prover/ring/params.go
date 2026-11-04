@@ -49,71 +49,75 @@ type AuditParams struct {
 	Layout         uint8 `json:"layout"`
 }
 
-type DeliveredOutput struct {
-	Output       Opening `json:"output"`
-	RecipientKey Bytes   `json:"recipientKey"`
-	OwnerKey     Bytes   `json:"ownerKey"`
-	// Body is shared.EscrowBodyLen bytes under key escrow and shared.BodyLen otherwise.
-	Body Bytes `json:"body"`
+// OutputOpening is one output slot and the preimages its record names.
+type OutputOpening struct {
+	Output     Opening `json:"output"`
+	OwnerKey   Bytes   `json:"ownerKey"`
+	MintChunks []Field `json:"mintChunks"`
 }
 
-type AnonymousOutput struct {
-	Output          Opening `json:"output"`
-	OwnerKey        Bytes   `json:"ownerKey"`
-	RecipientKey    Bytes   `json:"recipientKey"`
-	AddressRevision uint64  `json:"addressRevision"`
-	MintChunks      []Field `json:"mintChunks"`
-	// Body is hashed as sent on a published dummy, unread on change, an exit and an omitted slot.
-	Body Bytes `json:"body"`
-	// Tag is zero on change, an exit and an omitted slot, TagPreimage opens a published dummy's tag.
-	Tag         Field `json:"tag"`
-	TagPreimage Field `json:"tagPreimage"`
+// EntryOpening names a default-ring input's preimages, zero off one.
+type EntryOpening struct {
+	OwnerKey   Bytes   `json:"ownerKey"`
+	MintChunks []Field `json:"mintChunks"`
+}
+
+// TrackingRecordParams is one opened tracking leaf.
+type TrackingRecordParams struct {
+	Member      Field `json:"member"`
+	Next        Field `json:"next"`
+	NullifierPk Field `json:"nullifierPk"`
+	CtHash      Field `json:"ctHash"`
+	View0       Field `json:"view0"`
+	View1       Field `json:"view1"`
+	Revision    Field `json:"revision"`
+	ListTag     Field `json:"listTag"`
+}
+
+// TrackingParams opens every owner row and live ring output under the frame's tracking root.
+type TrackingParams struct {
+	TrackingRoot     Field                  `json:"trackingRoot"`
+	TrackingRecords  []TrackingRecordParams `json:"trackingRecords"`
+	TrackingProof    SharedRegistryProof    `json:"trackingProof"`
+	TrackingSubjects []PooledSubject        `json:"trackingSubjects"`
+	RowEntries       []uint32               `json:"rowEntries"`
+	OutputEntries    []uint32               `json:"outputEntries"`
 }
 
 // TransferParams is what every transfer key reads, the rail's own values follow in its family's params.
 type TransferParams struct {
 	RequestHead
 	AuditParams
-	Exempt            bool  `json:"exempt"`
-	ApprovalRequired  bool  `json:"approvalRequired"`
-	OutputCount       uint8 `json:"outputCount"`
-	InputCount        uint8 `json:"inputCount"`
-	SignerCount       uint8 `json:"signerCount"`
-	PrivateTxHash     Field `json:"privateTxHash"`
-	PrivateTxBlinding Field `json:"privateTxBlinding"`
+	ApprovalMask      uint8           `json:"approvalMask"`
+	OutputCount       uint8           `json:"outputCount"`
+	Outputs           []OutputOpening `json:"outputs"`
+	InputCount        uint8           `json:"inputCount"`
+	Inputs            []Opening       `json:"inputs"`
+	Entries           []EntryOpening  `json:"entries,omitempty"`
+	SignerCount       uint8           `json:"signerCount"`
+	Signers           []Field         `json:"signers"`
+	Rows              []Field         `json:"rows"`
+	PrivateTxHash     Field           `json:"privateTxHash"`
+	PrivateTxBlinding Field           `json:"privateTxBlinding"`
+	PrivateRoot       Field           `json:"privateRoot"`
+	TrackingParams
 	PolicyParams
 }
 
 type ConfidentialTransferParams struct {
 	TransferParams
-	InProof  bool              `json:"inProof"`
-	Delegate bool              `json:"delegate"`
-	Outputs  []DeliveredOutput `json:"outputs"`
-	// Inputs fill the input class, the slots past the spent notes carry no UTXO.
-	Inputs []Opening `json:"inputs"`
-	// Sender is the in-proof owner, zero on the signer and authority rails, SenderPkHash the member an authority move spends.
-	Sender       Field `json:"sender"`
-	SenderPkHash Field `json:"senderPkHash"`
-	// Signers fill the input class, the owner run in its order and zero past SignerCount.
-	Signers []Field `json:"signers"`
+	InProof  bool `json:"inProof"`
+	Delegate bool `json:"delegate"`
+	// Sender is the in-proof owner, zero on the signer and authority rails.
+	Sender Field `json:"sender"`
 }
 
 type AnonymousTransferParams struct {
 	TransferParams
-	Outputs []AnonymousOutput `json:"outputs"`
-	// SenderKey is the hidden owner's key on an entry key and absent on a commitment key.
-	SenderKey Bytes `json:"senderKey,omitempty"`
-	// Inputs fill the input class, the slots past InputCount carry no UTXO.
-	Inputs          []Opening `json:"inputs"`
-	PartyIdentities []Field   `json:"partyIdentities"`
-	// Signers are the public co-owners in run order, zero past SignerCount, empty on an entry key.
-	Signers               []Field `json:"signers"`
-	SenderNullifierPk     Field   `json:"senderNullifierPk"`
-	SenderViewingKey      Bytes   `json:"senderViewingKey"`
-	SenderAddressRevision uint64  `json:"senderAddressRevision"`
-	SenderBundleTag       Field   `json:"senderBundleTag"`
-	// ReplyDigest is the digest the program computes over the reply region, zero without one.
-	ReplyDigest Field `json:"replyDigest"`
+	PublicOwners bool `json:"publicOwners"`
+	Delegate     bool `json:"delegate"`
+	// PartyIdentities are payer, five co-signers and exit destination, zero when absent.
+	PartyIdentities []Field `json:"partyIdentities"`
 }
 
 type Source struct {
@@ -132,11 +136,9 @@ type PolicyTable struct {
 type RecordOpening struct {
 	Next                Field   `json:"next"`
 	Lists               uint64  `json:"lists"`
-	EscrowKey           Field   `json:"escrowKey"`
 	MintPolicy          Field   `json:"mintPolicy"`
 	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
 	AssetLimits         []Field `json:"assetLimits"`
-	AddressHash         Field   `json:"addressHash"`
 	Index               uint64  `json:"index"`
 	Path                []Field `json:"path"`
 }
@@ -148,11 +150,9 @@ type MemberOpening struct {
 	LowMember              Field   `json:"lowMember"`
 	LowNext                Field   `json:"lowNext"`
 	LowLists               uint64  `json:"lowLists"`
-	LowEscrow              Field   `json:"lowEscrow"`
 	LowMintPolicy          Field   `json:"lowMintPolicy"`
 	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
 	LowAssetLimits         []Field `json:"lowAssetLimits"`
-	LowAddressHash         Field   `json:"lowAddressHash"`
 }
 
 type Withdrawal struct {
@@ -173,20 +173,15 @@ type PolicyInputsParams struct {
 	PublicAmounts   []Field      `json:"publicAmounts"`
 	PublicGross     []Field      `json:"publicGross"`
 	PolicyTable
-	// CtHashes are each output owner's escrowed key ciphertext hashes, zero without escrow.
-	CtHashes   []Field `json:"ctHashes"`
-	Recipients []Field `json:"recipients"`
 }
 
 type PooledRecord struct {
 	Member              Field   `json:"member"`
 	Next                Field   `json:"next"`
 	Lists               uint64  `json:"lists"`
-	EscrowKey           Field   `json:"escrowKey"`
 	MintPolicy          Field   `json:"mintPolicy"`
 	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
 	AssetLimits         []Field `json:"assetLimits"`
-	AddressHash         Field   `json:"addressHash"`
 }
 
 type PooledSubject struct {
@@ -228,11 +223,9 @@ type QueueEntry struct {
 	Member              Field   `json:"member"`
 	Mask                uint64  `json:"mask"`
 	Value               uint64  `json:"value"`
-	EscrowKey           Field   `json:"escrowKey"`
 	MintPolicy          Field   `json:"mintPolicy"`
 	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
 	AssetLimits         []Field `json:"assetLimits"`
-	AddressHash         Field   `json:"addressHash"`
 }
 
 type RecordWrite struct {
@@ -240,32 +233,21 @@ type RecordWrite struct {
 	Exists                 bool       `json:"exists"`
 	OldNext                Field      `json:"oldNext"`
 	OldLists               uint64     `json:"oldLists"`
-	OldEscrow              Field      `json:"oldEscrow"`
 	OldMintPolicy          Field      `json:"oldMintPolicy"`
 	OldWithdrawalThreshold Field      `json:"oldWithdrawalThreshold"`
 	OldAssetLimits         []Field    `json:"oldAssetLimits"`
-	OldAddressHash         Field      `json:"oldAddressHash"`
 	// Index and Path open the member's leaf or the leaf an insert takes.
 	Index                  uint64  `json:"index"`
 	Path                   []Field `json:"path"`
 	LowMember              Field   `json:"lowMember"`
 	LowNext                Field   `json:"lowNext"`
 	LowLists               uint64  `json:"lowLists"`
-	LowEscrow              Field   `json:"lowEscrow"`
 	LowMintPolicy          Field   `json:"lowMintPolicy"`
 	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
 	LowAssetLimits         []Field `json:"lowAssetLimits"`
-	LowAddressHash         Field   `json:"lowAddressHash"`
 	// LowIndex and LowPath open the low record.
 	LowIndex uint64  `json:"lowIndex"`
 	LowPath  []Field `json:"lowPath"`
-	// The address and escrow preimages of the written record, read while a write pairs them.
-	NullifierPk     Field  `json:"nullifierPk"`
-	AddressRing     Field  `json:"addressRing"`
-	View0           Field  `json:"view0"`
-	View1           Field  `json:"view1"`
-	AddressRevision uint64 `json:"addressRevision"`
-	EscrowCtHash    Field  `json:"escrowCtHash"`
 }
 
 type ApplyRecordsParams struct {
@@ -281,8 +263,40 @@ type ApplyRecordsParams struct {
 	Writes []*RecordWrite `json:"writes"`
 }
 
+// TrackingWrite is the witness of one applied entry.
+type TrackingWrite struct {
+	Member      Field                `json:"member"`
+	NullifierPk Field                `json:"nullifierPk"`
+	CtHash      Field                `json:"ctHash"`
+	View0       Field                `json:"view0"`
+	View1       Field                `json:"view1"`
+	Revision    Field                `json:"revision"`
+	ListTag     Field                `json:"listTag"`
+	Exists      bool                 `json:"exists"`
+	OldRecord   TrackingRecordParams `json:"oldRecord"`
+	Index       uint64               `json:"index"`
+	Path        []Field              `json:"path"`
+	LowRecord   TrackingRecordParams `json:"lowRecord"`
+	LowIndex    uint64               `json:"lowIndex"`
+	LowPath     []Field              `json:"lowPath"`
+}
+
+type ApplyEnrollmentsParams struct {
+	RequestHead
+	OldRoot      Field  `json:"oldRoot"`
+	NewRoot      Field  `json:"newRoot"`
+	OldNextIndex uint32 `json:"oldNextIndex"`
+	NewNextIndex uint32 `json:"newNextIndex"`
+	ChainStart   Field  `json:"chainStart"`
+	ChainEnd     Field  `json:"chainEnd"`
+	Count        uint8  `json:"count"`
+	// A nil write past Count assigns zeros.
+	Writes []*TrackingWrite `json:"writes"`
+}
+
 type RegisterKeyParams struct {
 	RequestHead
+	RingID          Field `json:"ringId"`
 	Member          Field `json:"member"`
 	NullifierSecret Bytes `json:"nullifierSecret"`
 	EphSk           Bytes `json:"ephSk"`

@@ -53,6 +53,11 @@ func (t *Tracking) ValidateTracking(rows, outputs int) error {
 	return t.TrackingProof.Validate(capacity)
 }
 
+// TrackingPoolSize is the records and subjects the key opens.
+func (t *Tracking) TrackingPoolSize() int {
+	return len(t.TrackingRecords)
+}
+
 // TrackingPool answers row and output queries, a member absent from the root reads zeros.
 type TrackingPool struct {
 	subjects subjectPool

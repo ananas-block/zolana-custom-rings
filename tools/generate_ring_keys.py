@@ -18,7 +18,7 @@ def variant(k):
             f'TransferConfidentialEntry {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
             f'TransferAnonymous {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
             f'TransferAnonymousEntry {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
-            f'ApplyRecords {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
+            f'ApplyRecords {{ writes: {i} }}', f'ApplyEnrollments {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
             'Merge'][k['Family']]
 
 def main():
