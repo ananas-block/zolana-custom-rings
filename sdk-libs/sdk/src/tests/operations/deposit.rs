@@ -20,6 +20,7 @@ fn deposit<'a>(
         asset: DepositAsset::Sol,
         amount: 5,
         cosigner: None,
+        list_salt: None,
     }
 }
 
@@ -486,14 +487,17 @@ mod relay_message {
             .await?
             .instruction(
                 CustomRingProof::zeroed(),
-                crate::deposit::DepositRoots {
-                    tracking: crate::submission::BoundRoot::tracking(
-                        &*ring().require_policy(&self.chain).await?,
-                        &self.chain,
-                    )
-                    .await?,
-                    own: None,
-                    curator: None,
+                crate::deposit::DepositFrame {
+                    roots: crate::deposit::DepositRoots {
+                        tracking: crate::submission::BoundRoot::tracking(
+                            &*ring().require_policy(&self.chain).await?,
+                            &self.chain,
+                        )
+                        .await?,
+                        own: None,
+                        curator: None,
+                    },
+                    key_capacity: 1,
                 },
             )?;
             let message = self.answer.message(&honest, inputs.depositor);
@@ -688,4 +692,70 @@ mod relay_message {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
+    let member = keypair(1);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
+    let recipient = DepositRecipient::Confidential(member.shielded_address().unwrap());
+    let prepared = deposit(&payer, recipient).prepare(&chain).await.unwrap();
+    let records = prepared.disclosure.records(ring(), &chain).await.unwrap();
+    assert_eq!(records.key_capacity, 1);
+    let body = serde_json::to_value(prepared.disclosure.body(&records).unwrap()).unwrap();
+    let mut keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "amounts",
+            "assetEntries",
+            "assets",
+            "auditorPk",
+            "blindingSecrets",
+            "contextHash",
+            "count",
+            "curatorProof",
+            "curatorRecords",
+            "curatorRoot",
+            "curatorSubjects",
+            "ephSk",
+            "mintChunks",
+            "nullifierPks",
+            "outputEntries",
+            "ownProof",
+            "ownRecords",
+            "ownRoot",
+            "ownSubjects",
+            "ownerEntries",
+            "ownerKeys",
+            "ownerPkHashes",
+            "policyHash",
+            "policyLen",
+            "publicAmounts",
+            "publicAssetEntries",
+            "publicAssets",
+            "publicGross",
+            "publicInputHash",
+            "ringId",
+            "rowEntries",
+            "rules",
+            "salted",
+            "senderEntries",
+            "sources",
+            "trackingProof",
+            "trackingRecords",
+            "trackingRoot",
+            "trackingSubjects",
+            "withdrawalCount",
+            "withdrawalHash",
+            "withdrawals",
+        ]
+    );
 }

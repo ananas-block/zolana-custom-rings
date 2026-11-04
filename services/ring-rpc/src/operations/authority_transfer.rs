@@ -309,6 +309,7 @@ mod tests {
                 interface_transfer_accounts: Vec::new(),
                 blinding_seed: [0; 32],
                 output_tree_id: 1,
+                list_salts: Vec::new(),
             })
         }
     }

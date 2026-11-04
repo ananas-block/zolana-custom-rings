@@ -12,6 +12,8 @@ pub struct RelayDepositInputs {
     pub tree: Address,
     pub depositor: Address,
     pub recipient: ShieldedAddress,
+    /// The recipient's, zero when unknown.
+    pub list_salt: [u8; 32],
     pub asset: DepositAsset,
     pub amount: u64,
     pub view_tag: [u8; 32],
@@ -28,6 +30,7 @@ struct DepositWire {
     tree: Address,
     depositor: Address,
     recipient: [u8; SHIELDED_ADDRESS_LEN],
+    list_salt: [u8; 32],
     asset: AssetWire,
     amount: u64,
     view_tag: [u8; 32],
@@ -61,6 +64,7 @@ impl RelayDepositInputs {
             tree: self.tree,
             depositor: self.depositor,
             recipient: self.recipient.to_bytes(),
+            list_salt: self.list_salt,
             asset: match self.asset {
                 DepositAsset::Sol => AssetWire::Sol,
                 DepositAsset::Spl(spl) => AssetWire::Spl {
@@ -85,6 +89,7 @@ impl RelayDepositInputs {
             tree: wire.tree,
             depositor: wire.depositor,
             recipient: ShieldedAddress::from_bytes(&wire.recipient)?,
+            list_salt: wire.list_salt,
             asset: match wire.asset {
                 AssetWire::Sol => DepositAsset::Sol,
                 AssetWire::Spl {

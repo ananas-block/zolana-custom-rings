@@ -1027,6 +1027,7 @@ fn relay_proof_inputs() -> RelayProofInputs {
         )],
         blinding_seed: [28; 32],
         output_tree_id: 4,
+        list_salts: Vec::new(),
     }
 }
 
@@ -1093,6 +1094,7 @@ fn relay_deposit_inputs_encode_to_the_shared_vector() {
         tree: Address::new_from_array([42; 32]),
         depositor: Address::new_from_array([41; 32]),
         recipient,
+        list_salt: [0; 32],
         asset: DepositAsset::Spl(DepositSplAccounts {
             mint: Address::new_from_array([48; 32]),
             user_token: Address::new_from_array([49; 32]),

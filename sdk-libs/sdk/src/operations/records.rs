@@ -123,27 +123,6 @@ impl PoolRead<'_> {
     }
 }
 
-pub(crate) struct MemberRead {
-    pub root: BoundRoot,
-    pub member: [u8; 32],
-}
-
-impl MemberRead {
-    pub async fn read(
-        self,
-        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-    ) -> Result<MemberOpeningRead, RingError> {
-        RecordReads {
-            root: self.root,
-            members: core::slice::from_ref(&self.member),
-        }
-        .read(rpc)
-        .await?
-        .pop()
-        .ok_or(RingError::InvalidRecordOpening)
-    }
-}
-
 /// `members` stay distinct, the canopy sized for `openings` paths.
 pub(crate) struct TrackingRead<'a> {
     pub root: BoundRoot,

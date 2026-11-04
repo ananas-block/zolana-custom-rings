@@ -5,14 +5,13 @@ use std::str::FromStr;
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation, CoSignRequirement},
-    key_catalog::FrameKey,
     RingPolicy, RingRail,
 };
 use custom_ring_sdk::{
-    select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment, CoSignScope,
-    CustomRingConfig, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
-    EntrySpend, ListRegistry, PublicOwnerTransfer, RingDeposit, RingDepositReceipt, RingMode,
-    RingPayment,
+    entry_shape_keyed, select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment,
+    CoSignScope, CustomRingConfig, CustomRingTransfer, CustomRingTransferInput, DepositAsset,
+    DepositRecipient, EntrySpend, ListRegistry, PublicOwnerTransfer, RingDeposit,
+    RingDepositReceipt, RingMode, RingPayment,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -103,6 +102,8 @@ struct Payments {
     mint: Address,
     payees: Payees,
     outputs: Option<usize>,
+    /// Only a `zolana:` address names a salt.
+    list_salts: Vec<(Member, [u8; 32])>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -555,6 +556,7 @@ impl<'a> PaymentPlan<'a> {
             ensure!(amount > 0, "a payment moves a nonzero amount");
             Ok(amount)
         };
+        let mut list_salts = Vec::new();
         let payees = match mode {
             RingMode::Anonymous => {
                 let (mut ring_payees, mut default_ring) = (Vec::new(), Vec::new());
@@ -604,8 +606,24 @@ impl<'a> PaymentPlan<'a> {
                                 to: *address,
                                 amount: amount(None)?,
                             }),
-                            Recipient::Ring(_) | Recipient::Address(_) => bail!(
-                                "a `zolana:` address pays an anonymous ring, ring {ring} is confidential"
+                            Recipient::Address(address) => {
+                                let address = in_ring(address, ring)?;
+                                list_salts.push((
+                                    Member::from_bytes(
+                                        address
+                                            .recipient
+                                            .signing_pubkey
+                                            .owner_proof_input_hash()?,
+                                    )?,
+                                    address.list_salt,
+                                ));
+                                Ok(Payment {
+                                    to: address.recipient,
+                                    amount: amount(None)?,
+                                })
+                            }
+                            Recipient::Ring(_) => bail!(
+                                "a `zolana:` request pays an anonymous ring, ring {ring} is confidential"
                             ),
                         })
                         .collect::<Result<_>>()?,
@@ -616,6 +634,7 @@ impl<'a> PaymentPlan<'a> {
             mint,
             payees,
             outputs: self.outputs,
+            list_salts,
         })
     }
 }
@@ -982,6 +1001,7 @@ impl Deposit<'_> {
             asset: self.asset,
             amount: self.amount,
             cosigner: self.cosigner,
+            list_salt: Some(zolana_ring_keys::list_salt(&self.sender.nullifier_key)?),
         };
         // Stored before it is sent, a sync reads every sender tag the deposit may take.
         if let (Some(history), Some(advanced)) = (history, deposit.viewing_history()?) {
@@ -1134,6 +1154,9 @@ impl Transfer<'_> {
                     nullifier_key: Some(&self.sender.nullifier_key),
                     transaction,
                 });
+                for (owner, list_salt) in &self.payments.list_salts {
+                    transfer = transfer.with_list_salt(*owner, *list_salt);
+                }
                 if let Some(shape) = shape {
                     transfer = transfer.with_shape(shape)?;
                 }
@@ -1283,14 +1306,7 @@ impl Spendable {
     fn widest_anonymous(self, outputs: usize) -> Option<usize> {
         let keyed = |shape: Shape| match self {
             Self::RingOnly => shape_keyed(RingRail::Anonymous, shape),
-            Self::DefaultRingOnly => FrameKey {
-                rail: RingRail::Anonymous,
-                outputs: shape.n_outputs(),
-                spends_default_ring: true,
-                wide: false,
-            }
-            .shape()
-            .is_some_and(|keyed| shape.n_inputs() <= usize::from(keyed.inputs)),
+            Self::DefaultRingOnly => entry_shape_keyed(shape),
             Self::WithDefaultRing => false,
         };
         // Ordinary padding publishes every input of the SPP shape, the shape itself must carry a key.
@@ -1419,6 +1435,7 @@ fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()
 
 #[cfg(test)]
 mod tests {
+    use custom_ring_interface::key_catalog::{RecordPools, TransferSpend};
     use spr_keypair::SigningKey;
 
     use super::*;
@@ -1593,6 +1610,29 @@ mod tests {
     }
 
     #[test]
+    fn a_confidential_payee_named_by_address_carries_its_list_salt() {
+        let member = keypair(1);
+        let address = |ring| {
+            Recipient::Address(Box::new(RingAddress {
+                recipient: member.shielded_address().unwrap(),
+                ring_program_id: ring,
+                list_salt: [7; 32],
+            }))
+        };
+        let payments = PaymentPlan::new(&[address(RING)])
+            .resolve(RingMode::Confidential, RING)
+            .unwrap();
+        let owner = member.signing_pubkey().owner_proof_input_hash().unwrap();
+        assert_eq!(
+            payments.list_salts,
+            [(Member::from_bytes(owner).unwrap(), [7; 32])]
+        );
+        let foreign = Address::new_from_array([5; 32]);
+        let refused = PaymentPlan::new(&[address(foreign)]).resolve(RingMode::Confidential, RING);
+        assert!(refusal(refused).contains("the address pays ring"));
+    }
+
+    #[test]
     fn each_recipient_must_fit_the_rings_mode() {
         let shielded = Recipient::Shielded(keypair(1).shielded_address().unwrap());
         let ring = request(2, RING);
@@ -1729,6 +1769,7 @@ mod tests {
         own.viewing_pubkey = spr_keypair::ViewingKey::new().pubkey();
         let other = keypair(2).shielded_address().unwrap();
         let payments = Payments {
+            list_salts: Vec::new(),
             mint: SOL_MINT,
             payees: Payees::Confidential(vec![
                 Payment { to: own, amount: 4 },
@@ -1752,6 +1793,7 @@ mod tests {
         };
         let to = keypair(1).shielded_address().unwrap();
         let confidential = |outputs| Payments {
+            list_salts: Vec::new(),
             mint: SOL_MINT,
             payees: Payees::Confidential(vec![Payment { to, amount: 6 }]),
             outputs,
@@ -1761,6 +1803,7 @@ mod tests {
         assert!(confidential(Some(17)).fits(&deposits).is_err());
         let to = ring_address(2, RING);
         let anonymous = |count| Payments {
+            list_salts: Vec::new(),
             mint: SOL_MINT,
             payees: Payees::Anonymous {
                 ring: vec![RingPayment::new(to.clone(), 1); count],
@@ -1779,6 +1822,7 @@ mod tests {
         let sender =
             ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[3; 32])).unwrap();
         let anonymous = Payments {
+            list_salts: Vec::new(),
             mint: SOL_MINT,
             payees: Payees::Anonymous {
                 ring: vec![RingPayment::new(ring_address(2, RING), 1)],
@@ -1803,6 +1847,7 @@ mod tests {
             [true]
         );
         let confidential = Payments {
+            list_salts: Vec::new(),
             mint: SOL_MINT,
             payees: Payees::Confidential(Vec::new()),
             outputs: None,
@@ -1843,6 +1888,7 @@ mod tests {
     impl AnonymousPlan {
         fn payments(self) -> Payments {
             Payments {
+                list_salts: Vec::new(),
                 mint: SOL_MINT,
                 payees: Payees::Anonymous {
                     ring: vec![RingPayment::new(ring_address(2, RING), self.amount)],
@@ -1917,6 +1963,7 @@ mod tests {
     fn a_confidential_ring_spends_ring_and_default_ring_notes_together() {
         let to = keypair(1).shielded_address().unwrap();
         let payments = Payments {
+            list_salts: Vec::new(),
             mint: SOL_MINT,
             payees: Payees::Confidential(vec![Payment { to, amount: 6 }]),
             outputs: None,
@@ -1928,16 +1975,18 @@ mod tests {
     #[test]
     fn an_anonymous_held_spend_stays_within_a_keyed_width() {
         let within = |spendable: Spendable, outputs: usize, spends_default_ring: bool| {
-            let key = FrameKey {
+            let widest = spendable.widest_anonymous(outputs).unwrap();
+            let key = custom_ring_sdk::transfer_key(TransferSpend {
                 rail: RingRail::Anonymous,
+                inputs: widest,
                 outputs,
                 spends_default_ring,
+                legs: 0,
+                owners: 0,
+                pools: RecordPools::default(),
                 wide: false,
-            }
-            .shape()
-            .unwrap();
-            let widest = spendable.widest_anonymous(outputs).unwrap();
-            assert!((1..=usize::from(key.inputs)).contains(&widest), "{outputs}");
+            });
+            assert!(key.is_some(), "{outputs}");
         };
         for outputs in [2, 4, 8, 16] {
             within(Spendable::RingOnly, outputs, false);

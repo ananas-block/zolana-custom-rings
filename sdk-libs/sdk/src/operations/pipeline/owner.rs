@@ -65,6 +65,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 token_account_setup: Vec::new(),
                 co_owners: Vec::new(),
             },
+            list_salts: Vec::new(),
         }
     }
 
@@ -212,6 +213,7 @@ impl Owner<'_> {
             interface_transfer_accounts: self.interface_transfer_accounts.clone(),
             spend,
             presealed: None,
+            list_salts: Vec::new(),
         })
     }
 

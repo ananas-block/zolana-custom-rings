@@ -75,11 +75,12 @@ pub use crate::{
         MERGE_DEFAULT_INPUT_COUNT,
     },
     pipeline::{
-        shape_keyed, Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, CoOwner,
-        CustomRingTransfer, CustomRingTransferInput, DelegateMove, DelegateOutput, DelegatePayment,
-        DelegateTransfer, DelegateTransferInput, DelegateWithdrawal, Delegated, EntrySpend, Owner,
-        ProvenRingTransfer, PublicOwnerTransfer, PublicOwners, Rail, RailKind, Relayed,
-        RelayedTransfer, RelayedTransferInput, RingPayment, RingSender, RingTransfer,
+        entry_shape_keyed, shape_keyed, transfer_key, Anonymous, AnonymousMove, AnonymousPayment,
+        AnonymousTransfer, CoOwner, CustomRingTransfer, CustomRingTransferInput, DelegateMove,
+        DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
+        DelegateWithdrawal, Delegated, EntrySpend, Owner, ProvenRingTransfer, PublicOwnerTransfer,
+        PublicOwners, Rail, RailKind, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment,
+        RingSender, RingTransfer, TransferKey,
     },
     records::{
         AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,

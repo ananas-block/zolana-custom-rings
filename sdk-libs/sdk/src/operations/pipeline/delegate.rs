@@ -113,6 +113,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
                 shape: None,
                 assets: None,
             },
+            list_salts: Vec::new(),
         }
     }
 
@@ -339,6 +340,7 @@ impl Delegated<'_> {
                 rail: ring_rail,
             },
             presealed: None,
+            list_salts: Vec::new(),
         })
     }
 }

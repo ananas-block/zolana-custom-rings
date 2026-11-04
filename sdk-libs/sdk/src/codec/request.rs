@@ -10,8 +10,8 @@ use spr_transaction::{
 };
 use zeroize::Zeroizing;
 use zolana_ring_member_registry::{
-    MemberRecord, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput, SharedProof,
-    TrackingOpening, TrackingPool, TrackingRecord, TrackingWriteProofInput,
+    MemberRecord, QuadPath, RecordPool, RecordWriteProofInput, SharedProof, TrackingOpening,
+    TrackingPool, TrackingRecord, TrackingWriteProofInput,
 };
 use zolana_ring_policy::{AssetLimits, EncodedRuleTable, SourceMap, MAX_SOURCES};
 
@@ -170,84 +170,24 @@ pub(crate) struct EntryOpening {
     pub mint_chunks: [[u8; 32]; 2],
 }
 
-/// A member's record, or the low record proving it absent, as one subject entry opens it.
-#[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MemberOpening {
-    pub present: bool,
-    #[serde(with = "fe")]
-    pub next: [u8; 32],
-    pub lists: u64,
-    #[serde(with = "fe")]
-    pub mint_policy: [u8; 32],
-    #[serde(with = "fe")]
-    pub withdrawal_threshold: [u8; 32],
-    #[serde(serialize_with = "fe::seq")]
-    pub asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-    pub index: u64,
-    #[serde(serialize_with = "path")]
-    pub path: QuadPath,
-    #[serde(with = "fe")]
-    pub low_member: [u8; 32],
-    #[serde(with = "fe")]
-    pub low_next: [u8; 32],
-    pub low_lists: u64,
-    #[serde(with = "fe")]
-    pub low_mint_policy: [u8; 32],
-    #[serde(with = "fe")]
-    pub low_withdrawal_threshold: [u8; 32],
-    #[serde(serialize_with = "fe::seq")]
-    pub low_asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-}
-
-impl From<&RecordOpening> for MemberOpening {
-    fn from(opening: &RecordOpening) -> Self {
-        match opening {
-            RecordOpening::Present { record, path } => Self {
-                present: true,
-                next: record.next,
-                lists: record.lists,
-                mint_policy: record.mint_policy.field(),
-                withdrawal_threshold: right_align(
-                    &record.mint_policy.withdrawal_threshold.to_be_bytes(),
-                ),
-                asset_limits: record.mint_policy.limits.fields(),
-                index: path.index,
-                path: *path,
-                low_member: [0; 32],
-                low_next: [0; 32],
-                low_lists: 0,
-                low_mint_policy: [0; 32],
-                low_withdrawal_threshold: [0; 32],
-                low_asset_limits: [[0; 32]; AssetLimits::FIELDS],
-            },
-            RecordOpening::Absent { low, path } => Self {
-                present: false,
-                next: [0; 32],
-                lists: 0,
-                mint_policy: [0; 32],
-                withdrawal_threshold: [0; 32],
-                asset_limits: [[0; 32]; AssetLimits::FIELDS],
-                index: path.index,
-                path: *path,
-                low_member: low.member,
-                low_next: low.next,
-                low_lists: low.lists,
-                low_mint_policy: low.mint_policy.field(),
-                low_withdrawal_threshold: right_align(
-                    &low.mint_policy.withdrawal_threshold.to_be_bytes(),
-                ),
-                low_asset_limits: low.mint_policy.limits.fields(),
-            },
-        }
-    }
-}
-
 /// One subject's index in each pool, the curator index 0 without a curator registry.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct PoolEntry {
     pub own: u32,
     pub curator: [u32; 1],
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OwnerEntry {
+    #[serde(flatten)]
+    pub entry: PoolEntry,
+    pub tracking: u32,
+    /// Zero with no tracking row.
+    #[serde(with = "fe")]
+    pub list_salt: [u8; 32],
+    pub own_salted: u32,
+    pub curator_salted: [u32; 1],
 }
 
 #[derive(Serialize)]
@@ -533,8 +473,8 @@ pub(crate) struct PolicyParams<'a> {
     #[serde(flatten)]
     pub pools: RecordPools,
     /// `S` entries in row order.
-    pub sender_entries: Vec<PoolEntry>,
-    pub owner_entries: Vec<PoolEntry>,
+    pub sender_entries: Vec<OwnerEntry>,
+    pub owner_entries: Vec<OwnerEntry>,
     pub asset_entries: Vec<PoolEntry>,
     pub public_asset_entries: Vec<u32>,
 }
@@ -834,7 +774,7 @@ pub(crate) struct MergeRequest {
     pub tracking: Option<TrackingOpeningRequest>,
 }
 
-/// The audited deposit's witness, one slot per deposited note.
+/// Mirror Go `DepositParams`, every slot list at the key's capacity.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DepositRequest<'a> {
@@ -846,40 +786,26 @@ pub(crate) struct DepositRequest<'a> {
     #[serde(skip_serializing_if = "core::ops::Not::not")]
     pub anonymous: bool,
     #[serde(serialize_with = "fe::seq")]
-    pub owner_pk_hashes: [[u8; 32]; 1],
+    pub owner_pk_hashes: Vec<[u8; 32]>,
     #[serde(serialize_with = "fe::seq")]
-    pub owner_keys: [[u8; 32]; 1],
+    pub owner_keys: Vec<[u8; 32]>,
     #[serde(serialize_with = "fe::seq")]
-    pub nullifier_pks: [[u8; 32]; 1],
+    pub nullifier_pks: Vec<[u8; 32]>,
     #[serde(serialize_with = "zeroizing_seq")]
-    pub blinding_secrets: Zeroizing<[[u8; 32]; 1]>,
+    pub blinding_secrets: Zeroizing<Vec<[u8; 32]>>,
     #[serde(serialize_with = "fe::zeroizing")]
     pub eph_sk: Zeroizing<[u8; 32]>,
     #[serde(serialize_with = "coordinate")]
     pub auditor_pk: X25519Pubkey,
-    #[serde(with = "fe")]
-    pub tracking_root: [u8; 32],
-    /// `None` at a padding slot.
-    pub tracking: [Option<TrackingOpeningRequest>; 1],
-    #[serde(with = "fe")]
-    pub own_root: [u8; 32],
-    #[serde(with = "fe")]
-    pub curator_root: [u8; 32],
-    #[serde(with = "fe")]
-    pub policy_hash: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
-    pub assets: [[u8; 32]; 1],
+    pub assets: Vec<[u8; 32]>,
     #[serde(serialize_with = "fe::seq")]
-    pub amounts: [[u8; 32]; 1],
-    pub mint_chunks: [MintChunks; 1],
-    /// `None` without a written policy, `asset_records` then opens nothing.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub table: Option<PolicyTable<'a>>,
-    pub asset_records: [Option<MemberOpening>; 1],
-    pub owner_records: [Option<MemberOpening>; 1],
-    /// `None` without a curator source.
-    pub curator_asset_records: [Option<MemberOpening>; 1],
-    pub curator_owner_records: [Option<MemberOpening>; 1],
+    pub amounts: Vec<[u8; 32]>,
+    pub mint_chunks: Vec<MintChunks>,
+    #[serde(flatten)]
+    pub tracking: TrackingParams,
+    #[serde(flatten)]
+    pub policy: PolicyParams<'a>,
 }
 
 /// The 31 and 1 byte chunks of one raw mint.
@@ -925,8 +851,8 @@ fn path<S: Serializer>(path: &QuadPath, serializer: S) -> Result<S::Ok, S::Error
     fe::seq(&flat, serializer)
 }
 
-fn zeroizing_seq<S: Serializer, const N: usize>(
-    values: &Zeroizing<[[u8; 32]; N]>,
+fn zeroizing_seq<S: Serializer>(
+    values: &Zeroizing<Vec<[u8; 32]>>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     fe::seq(values.as_slice(), serializer)

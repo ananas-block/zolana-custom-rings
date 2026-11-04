@@ -9,7 +9,10 @@ use spr_transaction::{utxo::SppProofInputUtxo, TransactionError};
 use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 
 use super::{
-    anonymous::{anonymous_plan, check_payment_ring, AnonymousPayment, HiddenOwner, SenderChange},
+    anonymous::{
+        anonymous_plan, check_payment_ring, payment_salts, AnonymousPayment, HiddenOwner,
+        SenderChange,
+    },
     canonical_shape,
     owner::Owner,
     pad_under_rail, sealed, transaction_key, Rail, RailKind, RingTransfer, Spend, Staged,
@@ -49,6 +52,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 zero_key_change: false,
                 payments: Vec::new(),
             },
+            list_salts: self.list_salts,
         }
     }
 }
@@ -139,6 +143,7 @@ impl PublicOwners<'_> {
             interface_transfer_accounts: self.owner.interface_transfer_accounts.clone(),
             spend: Spend::PublicOwners,
             presealed: None,
+            list_salts: payment_salts(&self.payments)?,
         })
     }
 }

@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     anonymous_exit::{AnonymousExitDestination, TokenAccountControl, TokenAccountState},
-    key_catalog::FrameKey,
+    key_catalog::{RecordPools, TransferSpend},
     CustomRingError, RingMode, RingRail,
 };
 use solana_account::Account;
@@ -16,6 +16,7 @@ use spr_transaction::{
     },
     Mint, WalletUtxo,
 };
+use zolana_ring_client::rpc::SubjectListSalt;
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_transaction::{AnonymousPlan, ReplyMetadata, RingDelivery, RingOutputRail};
 
@@ -26,8 +27,8 @@ use super::{
     public_owners::check_zero_key_inputs,
     sealed,
     selection::{payment_total, widest, Candidate, Funding},
-    spends_default_ring, transaction_key, CoOwnerKey, Rail, RailKind, RingSender, RingTransfer,
-    Spend, Staged, TransferAuthority,
+    spends_default_ring, transaction_key, transfer_key, CoOwnerKey, Rail, RailKind, RingSender,
+    RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{
     client::{RingClient, RingIndexerBackend},
@@ -149,6 +150,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 exit_token_owner: None,
                 co_owners: Vec::new(),
             },
+            list_salts: self.list_salts,
         }
     }
 }
@@ -409,6 +411,7 @@ impl Anonymous<'_> {
                 signer: OwnerAuthorization::SigningKey(self.signer),
             })),
             presealed: None,
+            list_salts: payment_salts(&self.payments)?,
         })
     }
 }
@@ -424,6 +427,24 @@ pub(super) fn check_payment_ring(
             ring: ring.program_id(),
         }),
     }
+}
+
+pub(super) fn payment_salts(
+    payments: &[AnonymousPayment],
+) -> Result<Vec<SubjectListSalt>, RingError> {
+    payments
+        .iter()
+        .map(|payment| {
+            Ok(SubjectListSalt {
+                member: payment
+                    .to
+                    .recipient
+                    .signing_pubkey
+                    .owner_proof_input_hash()?,
+                list_salt: payment.to.list_salt,
+            })
+        })
+        .collect()
 }
 
 /// The send call alone attaches a reply, no default path does.
@@ -486,14 +507,17 @@ fn check_audit_key(inputs: &SppProofInputs) -> Result<(), RingError> {
         .iter()
         .filter(|input| !input.is_compact())
         .count();
-    let keyed = FrameKey {
+    let keyed = transfer_key(TransferSpend {
         rail: RingRail::Anonymous,
+        inputs: published,
         outputs: inputs.output_utxos.len(),
         spends_default_ring: default_ring,
+        legs: 0,
+        owners: 0,
+        pools: RecordPools::default(),
         wide: false,
-    }
-    .shape()
-    .is_some_and(|shape| published <= usize::from(shape.inputs));
+    })
+    .is_some();
     match (keyed, default_ring) {
         (true, _) => Ok(()),
         (false, true) => Err(RingError::DefaultRingSpendTooWide { inputs: published }),

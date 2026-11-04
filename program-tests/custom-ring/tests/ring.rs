@@ -252,6 +252,7 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
+            list_salt: None,
         };
         let next = deposit
             .viewing_history()?

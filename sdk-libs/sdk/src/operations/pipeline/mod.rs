@@ -6,6 +6,7 @@ mod compact;
 mod delegate;
 mod owner;
 mod policy;
+mod pool_subjects;
 mod proof;
 mod public_owners;
 mod relay;
@@ -39,7 +40,9 @@ use spr_transaction::{
     utxo::SppProofInputUtxo,
     ShieldedKeys, TransactionError,
 };
+use zolana_ring_client::rpc::SubjectListSalt;
 use zolana_ring_keys::RingKeys;
+use zolana_ring_policy::Member;
 use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
 
 pub use self::{
@@ -56,7 +59,10 @@ pub use self::{
     relayed::{Relayed, RelayedTransfer, RelayedTransferInput},
 };
 
-pub(crate) use self::anonymous::HiddenOwner;
+pub(crate) use self::{
+    anonymous::HiddenOwner,
+    pool_subjects::{pool_at_width, KnownSalts, OwnerQuery, RecordPlan, SourceGates},
+};
 
 use self::{
     anonymous::AnonymousSpend,
@@ -107,6 +113,7 @@ pub struct RingTransfer<R: Rail> {
     rail: R,
     co_signer: Option<Address>,
     priority_fee: Option<u64>,
+    list_salts: Vec<SubjectListSalt>,
 }
 
 #[must_use = "build or submit the proven transfer"]
@@ -135,6 +142,8 @@ pub(crate) struct Staged<'a> {
     pub spend: Spend<'a>,
     /// Set when the wallet sealed the auditor message the owner signed over.
     pub presealed: Option<PresealedAudit>,
+    /// Salts the authority's keys do not derive.
+    pub list_salts: Vec<SubjectListSalt>,
 }
 
 pub(crate) enum Spend<'a> {
@@ -233,6 +242,16 @@ impl<R: Rail> RingTransfer<R> {
         self.ring
     }
 
+    /// A salted list refuses an enrolled owner with no salt.
+    #[must_use = "use the updated transfer"]
+    pub fn with_list_salt(mut self, owner: Member, list_salt: [u8; 32]) -> Self {
+        self.list_salts.push(SubjectListSalt {
+            member: *owner.as_bytes(),
+            list_salt,
+        });
+        self
+    }
+
     /// Read only when the ring demands a co-signer, its record must cover the demand.
     #[must_use = "use the updated transfer"]
     pub fn with_co_signer(mut self, signer: Address) -> Self {
@@ -287,7 +306,7 @@ impl<R: Rail> RingTransfer<R> {
     async fn seal<C: AsyncRpc + ?Sized>(&self, client: &C) -> Result<Sealed<'_>, RingError> {
         let config = self.ring.require_config(client).await?;
         self.ring.require_active(client).await?;
-        let staged = match self.rail.kind() {
+        let mut staged = match self.rail.kind() {
             RailKind::Owner(owner) => boxed(|| owner.stage(self.ring, client, &config)).await?,
             RailKind::Anonymous(rail) => boxed(|| rail.stage(self.ring, client, &config)).await?,
             RailKind::Delegated(delegated) => {
@@ -299,6 +318,7 @@ impl<R: Rail> RingTransfer<R> {
             RailKind::PublicOwners(public) => boxed(|| public.stage(self.ring, &config)).await?,
         };
         check_ring_output_markers(&staged.proof_inputs)?;
+        staged.list_salts.extend_from_slice(&self.list_salts);
         boxed(|| {
             Pipeline {
                 ring: self.ring,
@@ -415,6 +435,7 @@ impl<'a> Pipeline<'a> {
             interface_transfer_accounts,
             spend,
             presealed,
+            list_salts,
         } = self.staged;
         let config = &self.config;
         let program = self.ring.program_id();
@@ -516,6 +537,7 @@ impl<'a> Pipeline<'a> {
                     interface_transfer_accounts,
                     spend,
                     presealed: None,
+                    list_salts,
                 },
             },
             sealed,
@@ -554,6 +576,7 @@ impl<'a> Sealed<'a> {
             interface_transfer_accounts,
             spend,
             presealed: _,
+            list_salts,
         } = staged;
         let config = &ring_config;
         let ring_rail = preview.rail;
@@ -583,6 +606,7 @@ impl<'a> Sealed<'a> {
             spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
             n_out,
             public: &public,
+            salts: &KnownSalts::new(list_salts).with_authority(&authority, sender_pk_hash)?,
         }
         .read(client.zolana())
         .await?;
@@ -913,14 +937,34 @@ impl ProvenRingTransfer {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransferKey {
+    pub circuit: RingCircuit,
+    pub wide: bool,
+}
+
+/// `None` when the catalog keys no transfer of `spend`.
+pub fn transfer_key(spend: TransferSpend) -> Option<TransferKey> {
+    let spend = spend.fitted();
+    RingCircuit::transfer(spend).map(|circuit| TransferKey {
+        circuit,
+        wide: spend.wide,
+    })
+}
+
 /// Whether `rail` keys a transfer of `shape` publishing every input, none a default-ring UTXO.
 pub fn shape_keyed(rail: RingRail, shape: Shape) -> bool {
     keyed(rail, shape, false)
 }
 
+/// Whether an anonymous key serves a default-ring spend of `shape`.
+pub fn entry_shape_keyed(shape: Shape) -> bool {
+    keyed(RingRail::Anonymous, shape, true)
+}
+
 fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
     rail.supports(shape)
-        && RingCircuit::transfer(TransferSpend {
+        && transfer_key(TransferSpend {
             rail,
             inputs: shape.n_inputs(),
             outputs: shape.n_outputs(),

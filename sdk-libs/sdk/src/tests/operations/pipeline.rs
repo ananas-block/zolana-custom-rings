@@ -2348,7 +2348,7 @@ async fn ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs() {
                         if legs > 0 && rail == Measured::Delegate {
                             break;
                         }
-                        let served = custom_ring_interface::key_catalog::RingCircuit::transfer(
+                        let served = super::transfer_key(
                             custom_ring_interface::key_catalog::TransferSpend {
                                 rail: rail.ring_rail(),
                                 inputs: shape.n_inputs(),
@@ -2356,6 +2356,7 @@ async fn ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs() {
                                 spends_default_ring: rail.entry(),
                                 legs,
                                 owners: 0,
+                                pools: custom_ring_interface::key_catalog::RecordPools::default(),
                                 wide: false,
                             },
                         );
@@ -3314,4 +3315,25 @@ fn a_record_names_its_kind_owner_and_raw_mint() {
         ..exit
     };
     assert_eq!(audit::audit_record(&dummy).unwrap(), AuditRecord::default());
+}
+
+#[tokio::test]
+async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
+    use crate::tests::support::{keypair, Registry};
+    use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
+    let sender = keypair(1);
+    let address = sender.shielded_address().unwrap();
+    let rules = RuleTable::builder()
+        .rule(Rule::forbid(Subject::Sender, ListId::PrivateBlock))
+        .build();
+    let client = Chain::ring(RingSettings::new(RingMode::Confidential))
+        .with_registry(Registry::new(&[(&sender, 0)]), &rules)
+        .with_tracking(&[address])
+        .client();
+    let transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
+    assert!(matches!(
+        owner_transfer(&sender, transaction).frame(&client).await.err(),
+        Some(RingError::ListSaltMismatch { member })
+            if member == address.signing_pubkey.owner_proof_input_hash().unwrap()
+    ));
 }

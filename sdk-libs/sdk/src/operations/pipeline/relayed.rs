@@ -53,6 +53,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
                 fee_payer: input.fee_payer,
                 owner_signature: None,
             },
+            list_salts: Vec::new(),
         }
     }
 
@@ -217,6 +218,7 @@ impl Relayed<'_> {
                 message: auditor_message,
                 eph_sk: relayed.audit_ephemeral_key.clone(),
             }),
+            list_salts: relayed.list_salts.clone(),
         })
     }
 }

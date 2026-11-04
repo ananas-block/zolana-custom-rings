@@ -172,6 +172,10 @@ pub enum RingError {
     ShapeUnkeyed { rail: RingRail },
     #[error("the deposit needs more records than any deposit key holds")]
     DepositUnkeyed,
+    #[error("a salted list reads enrolled owner {member:?} and no list salt is known")]
+    ListSaltUnknown { member: [u8; 32] },
+    #[error("no known list salt of owner {member:?} opens its tracking leaf's list tag")]
+    ListSaltMismatch { member: [u8; 32] },
     #[error("the policy refuses the transfer, {0}")]
     PolicyRuleUnsatisfied(#[from] RuleRefusal),
     #[error("transfer references another ring {0}")]
