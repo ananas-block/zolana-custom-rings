@@ -146,7 +146,6 @@ impl Sealed<'_> {
             sender: staged.sender,
             nullifier_key,
             tx_viewing_key: staged.rail.tx_viewing_key().clone(),
-            audit_ephemeral_key: self.sealed.ephemeral_secret().clone(),
             inputs: inputs.input_utxos.clone(),
             outputs: inputs.output_utxos.clone(),
             external_data: inputs.external_data.clone(),
