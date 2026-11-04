@@ -1,4 +1,4 @@
-// Package privatelist proves owner lists whose entries stay private, a sparse Merkle tree keyed by a salted position.
+// Package privatelist proves private owner lists in a sparse Merkle tree keyed by a salted position.
 package privatelist
 
 import (
@@ -13,7 +13,7 @@ import (
 const (
 	// Depth mirrors PRIVATE_LIST_DEPTH in program-libs/interface/src/accounts/private_list.rs.
 	Depth = 96
-	// NLists is the leaf bitmap width, small enough for a salt holder to open a leaf by trial.
+	// Small enough for a salt holder to open a leaf by trial.
 	NLists = 8
 )
 
@@ -30,15 +30,6 @@ const (
 	// WritableLists mirrors ListSet::AUTHORITY_WRITES.
 	WritableLists = GrantLists | DenyLists | ReaderBit
 )
-
-// ListSalt is one way, a disclosed salt reveals no nullifier secret.
-func ListSalt(api frontend.API, nullifierSecret frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{shared.ListSaltDomain, nullifierSecret})
-}
-
-func ListTag(api frontend.API, listSalt frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{shared.ListTagDomain, listSalt})
-}
 
 func Position(api frontend.API, owner, listSalt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{shared.ListPositionDomain, owner, listSalt})

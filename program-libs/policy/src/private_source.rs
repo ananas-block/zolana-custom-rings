@@ -2,8 +2,7 @@ use thiserror::Error;
 
 use crate::{field_u8, ListSet};
 
-/// A ring's one private registry and the slots owner rows read from it, asset rows keep the
-/// public slot, mirror `prover/circuits/privatelist/source.go`.
+/// Asset rows keep the public slot, mirrors `prover/circuits/privatelist/source.go`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PrivateSource {
     pub owner_lists: ListSet,
@@ -33,7 +32,7 @@ impl PrivateSource {
         })
     }
 
-    /// Table hash order.
+    /// Order mirrors `Source.Fields`.
     pub fn fields(&self) -> [[u8; 32]; 2] {
         [field_u8(self.owner_lists.bits()), self.registry]
     }
