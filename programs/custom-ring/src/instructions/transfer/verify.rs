@@ -25,7 +25,6 @@ impl RingStatements<'_> {
         let withdrawal_hash =
             custom_ring_interface::policy_withdrawal_hash(&self.accounts.withdrawals)
                 .map_err(CustomRingError::from)?;
-        let recipients = data.recipients();
         let statement = self
             .transfer
             .transfer_statement(TransferBinding {
@@ -34,7 +33,6 @@ impl RingStatements<'_> {
                 sender: &self.accounts.sender,
                 signers: self.accounts.signers,
                 party_identities: &self.accounts.party_identities,
-                recipients: &recipients,
                 roots: &self.accounts.roots,
                 public_assets: &public_assets,
                 public_amounts: &public_amounts,
