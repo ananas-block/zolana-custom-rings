@@ -90,8 +90,10 @@ export interface FrameExtensions {
 
 /** Rust `ApprovalMask`. */
 export const ApprovalMask = Object.freeze({ outflow: 1, withdrawal: 2 } as const);
-/** Rust `ANONYMOUS_PARTIES`, the payer, the co-signer and the exit destination. */
-export const ANONYMOUS_PARTIES = 3;
+/** Each record covers a new class. */
+export const MAX_CO_SIGNERS = 5;
+/** Rust `ANONYMOUS_PARTIES`. */
+export const ANONYMOUS_PARTIES = 2 + MAX_CO_SIGNERS;
 
 /** The owner SPP's anonymous rail verifies and hides, the delivered audit publishes it. */
 export interface InProofOwner {

@@ -199,7 +199,7 @@ export interface TransferProofRequest extends TransferProofInputs {
   readonly delegate: boolean;
   /** The in-proof owner, zero on every other rail. */
   readonly sender: Bytes32;
-  /** Payer, co-signer and exit destination, zero when absent. */
+  /** Payer, each co-signer and exit destination, zero when absent. */
   readonly partyIdentities: readonly Bytes32[];
 }
 
@@ -322,14 +322,18 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
 
 /** The transfer key the request's list widths name, Rust `RingCircuit::Transfer`. */
 function transferCircuit(request: TransferProofRequest): TransferKeyCircuit {
-  return {
+  const narrow: TransferKeyCircuit = {
     family: "transfer",
     outputs: listLength(request.outputs),
     class: listLength(request.inputs),
     withdrawals: listLength(request.withdrawals),
     owners: listLength(request.rows),
     entry: flag(request.layout.entry),
+    wide: false,
   };
+  // Two keys differ by their pools alone.
+  const wide = listLength(request.ownPool.records) !== transferPoolCapacity(narrow).own;
+  return { ...narrow, wide };
 }
 
 export function ringRequestKey(request: RingProofRequest): ExpectedProvingKey {

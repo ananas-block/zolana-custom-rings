@@ -139,6 +139,7 @@ export {
 
 export {
   ANONYMOUS_PARTIES,
+  MAX_CO_SIGNERS,
   ApprovalMask,
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,

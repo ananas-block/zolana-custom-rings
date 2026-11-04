@@ -22,7 +22,7 @@ mod relay_fixture;
 #[path = "../../../sdk-libs/client/tests/common/transfer.rs"]
 pub mod transfer;
 
-use custom_ring_interface::tracking::TrackingEntry;
+use custom_ring_interface::{tracking::TrackingEntry, CoSignScope};
 use custom_ring_interface::{QueueEntry, RingMode, RING_TRANSACT_ACCOUNT_PREFIX_LEN};
 use spr_keypair::NullifierKey;
 use spr_keypair::{X25519Keypair, X25519Pubkey};
@@ -437,6 +437,7 @@ struct StaticSource {
     registry: Arc<Mutex<Address>>,
     records_down: Arc<AtomicBool>,
     tracking: Tracking,
+    co_signers: HashMap<Address, CoSignScope>,
 }
 
 /// The indexer page one cursor reads.
@@ -584,6 +585,14 @@ impl StaticSource {
 }
 
 impl TransactionSource for StaticSource {
+    async fn co_signer_scope(
+        &self,
+        _ring: Address,
+        signer: Address,
+    ) -> Result<Option<CoSignScope>, RingRpcError> {
+        Ok(self.co_signers.get(&signer).copied())
+    }
+
     async fn tracking_root(&self, _ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
         Ok(self.tracking.root())
     }
@@ -1118,6 +1127,7 @@ impl Fixture {
             registry: Arc::new(Mutex::new(RECORDS)),
             records_down: Arc::default(),
             tracking: Tracking::default(),
+            co_signers: HashMap::new(),
         };
         source.with_transactions(vec![
             self.audited.clone(),

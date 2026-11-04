@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use clap::ValueEnum;
+use custom_ring_interface::CoSignScope;
 use jsonrpsee::types::ErrorObjectOwned;
 use solana_address::Address;
 use solana_message::VersionedMessage;
@@ -96,13 +97,27 @@ pub enum CoSignSettlement {
     Failed(Signature),
 }
 
+impl ApproveClass {
+    const fn scope(self) -> CoSignScope {
+        match self {
+            Self::Outflow => CoSignScope::APPROVE_OUTFLOW,
+            Self::Withdrawal => CoSignScope::APPROVE_WITHDRAWAL,
+            Self::Transfers => CoSignScope::TRANSFERS,
+            Self::Deposits => CoSignScope::DEPOSITS,
+            Self::Withdrawals => CoSignScope::WITHDRAWALS,
+        }
+    }
+}
+
 impl CoSignerApproval {
     pub fn new(classes: impl IntoIterator<Item = ApproveClass>) -> Self {
         Self(classes.into_iter().collect())
     }
 
-    pub(crate) fn covers_any(&self, demand: &BTreeSet<ApproveClass>) -> bool {
-        !self.0.is_disjoint(demand)
+    pub(crate) fn scope(&self) -> CoSignScope {
+        self.0
+            .iter()
+            .fold(CoSignScope::NONE, |scope, class| scope | class.scope())
     }
 }
 
@@ -137,13 +152,6 @@ pub trait CoSignPolicy: Send + Sync {
 
     /// Keeps or frees the usage `decide` reserved for the transaction.
     async fn settle(&self, settlement: CoSignSettlement) -> Result<(), RingRpcError>;
-}
-
-impl dyn CoSignPolicy + '_ {
-    /// `None` unless the policy signs as the co-signer the proof names.
-    pub(crate) fn signer_named(&self, named: Address) -> Option<Address> {
-        self.signer().filter(|signer| *signer == named)
-    }
 }
 
 pub struct RefusingCoSigner;

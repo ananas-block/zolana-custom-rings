@@ -741,7 +741,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     let data = parsed.data();
     assert!(matches!(
         data.transfer_circuit(0),
-        Ok(RingCircuit::TransferAnonymousEntry { .. })
+        Ok(RingCircuit::Transfer { .. })
     ));
     anonymous.serve_tracking(data.tracking_revision);
     let spp = spp_list(&anonymous.payer.pubkey(), data, &[]);
@@ -976,22 +976,22 @@ fn a_withdrawal_co_signed_by_its_own_owner_is_refused() {
     );
 }
 
-fn approved(ring: &mut Ring, mask: ApprovalMask, co_signer: Option<&Keypair>) -> Sent {
+fn approved(ring: &mut Ring, mask: ApprovalMask, co_signers: &[&Keypair]) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     data.approval = mask;
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
-    let prefix = co_signer.map_or(Vec::new(), |co_signer| {
-        CoSignerSlot::own(co_signer.pubkey()).signed()
-    });
-    let signers: Vec<&Keypair> = co_signer.into_iter().collect();
+    let prefix = co_signers
+        .iter()
+        .flat_map(|co_signer| CoSignerSlot::own(co_signer.pubkey()).signed())
+        .collect();
     send(
         ring,
         tag::TRANSFER,
         prefix,
         data.encode().unwrap(),
         spp,
-        &signers,
+        co_signers,
     )
 }
 
@@ -1003,13 +1003,13 @@ fn a_proven_bit_fails_closed_without_an_approver_of_its_class() {
     ] {
         let mut ring = Ring::new(Setup::AuditOnly);
         refused(
-            approved(&mut ring, bit, None),
+            approved(&mut ring, bit, &[]),
             CustomRingError::InvalidCoSignerRecord,
         );
         let unrelated = Keypair::new();
         set_co_signer(&mut ring, &unrelated.pubkey(), other.bits());
         refused(
-            approved(&mut ring, bit, Some(&unrelated)),
+            approved(&mut ring, bit, &[&unrelated]),
             CustomRingError::CoSignerOutOfScope,
         );
     }
@@ -1018,12 +1018,12 @@ fn a_proven_bit_fails_closed_without_an_approver_of_its_class() {
 #[test]
 fn a_ring_with_no_record_settles_below_every_threshold_with_no_co_signer() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    reaches_verification(approved(&mut ring, ApprovalMask::default(), None));
+    reaches_verification(approved(&mut ring, ApprovalMask::default(), &[]));
 }
 
 /// Withdrawing 5000 under `cosign_above` 100 and `withdrawal_threshold` 1000 sets both bits.
 #[test]
-fn a_transaction_past_both_thresholds_needs_one_record_holding_both_classes() {
+fn separate_approvers_settle_a_transaction_past_both_thresholds() {
     let (outflow, withdrawal, both_classes) = (Keypair::new(), Keypair::new(), Keypair::new());
     let mut ring = Ring::new(Setup::AuditOnly);
     set_co_signer(
@@ -1038,24 +1038,26 @@ fn a_transaction_past_both_thresholds_needs_one_record_holding_both_classes() {
     );
     let both =
         ApprovalMask::new(ApprovalMask::OUTFLOW.bits() | ApprovalMask::WITHDRAWAL.bits()).unwrap();
-    for split in [&outflow, &withdrawal] {
-        refused(
-            approved(&mut ring, both, Some(split)),
-            CustomRingError::CoSignerOutOfScope,
-        );
-    }
-    reaches_verification(approved(&mut ring, ApprovalMask::OUTFLOW, Some(&outflow)));
-    reaches_verification(approved(
-        &mut ring,
-        ApprovalMask::WITHDRAWAL,
-        Some(&withdrawal),
-    ));
+    reaches_verification(approved(&mut ring, both, &[&outflow, &withdrawal]));
+    reaches_verification(approved(&mut ring, both, &[&withdrawal, &outflow]));
+    refused(
+        approved(&mut ring, both, &[&outflow]),
+        CustomRingError::InvalidCoSignerRecord,
+    );
+    refused(
+        approved(&mut ring, both, &[&outflow, &outflow]),
+        CustomRingError::CoSignerOutOfScope,
+    );
+    refused(
+        approved(&mut ring, ApprovalMask::OUTFLOW, &[&outflow, &withdrawal]),
+        CustomRingError::MissingRingAuth,
+    );
     set_co_signer(
         &mut ring,
         &both_classes.pubkey(),
         (CoSignScope::APPROVE_OUTFLOW | CoSignScope::APPROVE_WITHDRAWAL).bits(),
     );
-    reaches_verification(approved(&mut ring, both, Some(&both_classes)));
+    reaches_verification(approved(&mut ring, both, &[&both_classes]));
 }
 
 #[test]

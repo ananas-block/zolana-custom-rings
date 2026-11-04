@@ -44,7 +44,7 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn spend_public(self, wallet: Address) -> RingTransfer<PublicOwners<'a>> {
         RingTransfer {
             ring: self.ring,
-            co_signer: self.co_signer,
+            co_signers: self.co_signers,
             priority_fee: self.priority_fee,
             rail: PublicOwners {
                 owner: self.rail,

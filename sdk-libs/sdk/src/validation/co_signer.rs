@@ -12,26 +12,26 @@ pub(crate) struct CoSignerChoice<'a> {
     pub ring: CustomRing,
     pub config: &'a CustomRingConfig,
     pub demand: CoSignDemand,
-    /// The caller's co-signer, read only when the demand needs one.
-    pub supplied: Option<Address>,
+    pub supplied: Vec<Address>,
 }
 
 impl CoSignerChoice<'_> {
-    /// One record holds every demanded class, `None` when nothing is demanded.
-    pub async fn resolve(
-        self,
-        rpc: &(impl AsyncRpc + ?Sized),
-    ) -> Result<Option<Address>, RingError> {
-        let Some(requirement) = self.demand.requirement(self.config.account()) else {
-            return Ok(None);
-        };
-        let signer = self.supplied.ok_or(CustomRingError::MissingCoSigner)?;
-        let record = self
-            .ring
-            .co_signer(rpc, &signer)
-            .await?
-            .ok_or(CustomRingError::InvalidCoSignerRecord)?;
-        Ok(Some(requirement.check(record.account())?))
+    pub async fn resolve(self, rpc: &(impl AsyncRpc + ?Sized)) -> Result<Vec<Address>, RingError> {
+        let mut requirement = self.demand.requirement(self.config.account());
+        let mut supplied = self.supplied.into_iter();
+        let mut signers = Vec::new();
+        while let Some(current) = requirement {
+            let signer = supplied.next().ok_or(CustomRingError::MissingCoSigner)?;
+            let record = self
+                .ring
+                .co_signer(rpc, &signer)
+                .await?
+                .ok_or(CustomRingError::InvalidCoSignerRecord)?;
+            let cover = current.cover(record.account())?;
+            signers.push(cover.signer);
+            requirement = cover.rest;
+        }
+        Ok(signers)
     }
 }
 

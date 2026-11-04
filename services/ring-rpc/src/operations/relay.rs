@@ -274,10 +274,13 @@ impl Relay {
         self.fee_payer.pubkey()
     }
 
-    fn parties(&self) -> RelayParties {
+    fn parties(&self, named: &[spr_indexer_api::SerializablePubkey]) -> RelayParties {
         RelayParties {
             fee_payer: self.fee_payer(),
-            co_signer: self.co_signer.signer(),
+            co_signers: match named {
+                [] => self.co_signer.signer().into_iter().collect(),
+                named => named.iter().map(|signer| signer.0).collect(),
+            },
         }
     }
 
@@ -308,7 +311,7 @@ impl Relay {
                 return Err(RelayError::InvalidEnrollment.into());
             }
         }
-        let parties = self.parties();
+        let parties = self.parties(&request.co_signers);
         let Checked {
             owner_signature,
             setup,
@@ -333,7 +336,7 @@ impl Relay {
                 self.prover
                     .prove(RelayProofRequest {
                         ring,
-                        parties,
+                        parties: parties.clone(),
                         payload: &payload,
                         owner_signature,
                     })
@@ -345,6 +348,7 @@ impl Relay {
             payload,
             setup,
             proven,
+            parties,
         })
         .await
     }
@@ -392,18 +396,19 @@ impl Relay {
     ) -> Result<RelayStep, RingRpcError> {
         let ring = seal.ring;
         self.rings.check(ring).await?;
-        let parties = self.parties();
+        let parties = self.parties(&[]);
         let (payload, proven) = {
             let _proof = self
                 .proofs
                 .try_acquire()
                 .map_err(|_| RingRpcError::RelayProverBusy)?;
-            let payload = RelayPayload::Transfer(self.prover.seal_delegate(seal, parties).await?);
+            let payload =
+                RelayPayload::Transfer(self.prover.seal_delegate(seal, parties.clone()).await?);
             let proven = self
                 .prover
                 .prove(RelayProofRequest {
                     ring,
-                    parties,
+                    parties: parties.clone(),
                     payload: &payload,
                     owner_signature: None,
                 })
@@ -415,6 +420,7 @@ impl Relay {
             payload,
             setup: Vec::new(),
             proven,
+            parties,
         })
         .await
     }
@@ -426,6 +432,7 @@ impl Relay {
             payload,
             mut setup,
             proven,
+            parties,
         } = proven;
         let fee_payer = self.fee_payer();
         let LatestBlockhash {
@@ -437,6 +444,7 @@ impl Relay {
         let awaited = CoSignStep {
             payload: &payload,
             proven,
+            named: &parties.co_signers,
         }
         .plan(self.co_signer.as_ref())?;
         // The decoded secrets zeroize before the store and send awaits.
@@ -807,11 +815,14 @@ struct ProvenStep {
     payload: RelayPayload,
     setup: Vec<Instruction>,
     proven: ProvenRelay,
+    parties: RelayParties,
 }
 
 struct CoSignStep<'a> {
     payload: &'a RelayPayload,
     proven: ProvenRelay,
+    /// The prover names none outside it.
+    named: &'a [Address],
 }
 
 struct Awaited {
@@ -820,24 +831,39 @@ struct Awaited {
 }
 
 impl CoSignStep<'_> {
+    /// The service signs its own place in the run, each other approver signs the message.
     fn plan(self, co_signer: &dyn CoSignPolicy) -> Result<Awaited, RingRpcError> {
-        let Self { payload, proven } = self;
-        let Some(named) = proven.co_signer else {
-            return Ok(Awaited {
-                co_sign: None,
-                signers: proven.signers,
-            });
-        };
-        let signer = co_signer
-            .signer_named(named)
-            .ok_or(RelayError::CoSignRefused)?;
+        let Self {
+            payload,
+            proven,
+            named,
+        } = self;
+        if !proven
+            .co_signers
+            .iter()
+            .all(|signer| named.contains(signer))
+        {
+            return Err(RelayError::CoSignRefused.into());
+        }
+        let own = co_signer
+            .signer()
+            .filter(|signer| proven.co_signers.contains(signer));
+        let co_sign = own
+            .map(|signer| {
+                Ok::<_, RingRpcError>(PendingCoSign {
+                    signer,
+                    ring: payload.ring_program_id(),
+                    flows: payload.flows()?,
+                })
+            })
+            .transpose()?;
+        let others = proven
+            .co_signers
+            .into_iter()
+            .filter(|signer| Some(*signer) != own);
         Ok(Awaited {
-            co_sign: Some(PendingCoSign {
-                signer,
-                ring: payload.ring_program_id(),
-                flows: payload.flows()?,
-            }),
-            signers: proven.signers,
+            co_sign,
+            signers: proven.signers.into_iter().chain(others).collect(),
         })
     }
 }
@@ -1023,7 +1049,7 @@ fn enrollment_step(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Proven
             data: enrollment.instruction_data.clone(),
         },
         budget: ComputeBudgetConfig::new(ENROLL_COMPUTE_UNITS),
-        co_signer: None,
+        co_signers: Vec::new(),
         signers: vec![enrollment.owner],
     }
 }

@@ -843,6 +843,7 @@ fn a_relay_request_serializes_to_the_shared_vector() {
             owner_signature: Signature::from([7; 64]).into(),
             token_account_setup: Vec::new(),
         },
+        co_signers: Vec::new(),
     };
     assert_eq!(serde_json::to_string(&request).expect("json"), vector.wire);
     let read: PrepareRelayRequest = serde_json::from_str(&vector.wire).expect("read");

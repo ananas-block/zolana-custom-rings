@@ -274,7 +274,7 @@ mod tests {
                     data: vec![21],
                 },
                 budget: ComputeBudgetConfig::new(400_000),
-                co_signer: None,
+                co_signers: Vec::new(),
                 signers: vec![delegate],
             })
         }

@@ -1,7 +1,10 @@
 use custom_ring_interface::{
-    anonymous_exit_destination, cosign::CoSignRequirement, storage::StorageRegistry,
-    tracking::TrackingRegistry, CoSigner, CustomRingError, LiveRoots, RingAccount, RingPolicy,
-    RingRole, RootRead, SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
+    anonymous_exit_destination,
+    cosign::{CoSignCover, CoSignRequirement, MAX_CO_SIGNERS},
+    storage::StorageRegistry,
+    tracking::TrackingRegistry,
+    CoSigner, CustomRingError, LiveRoots, RingAccount, RingPolicy, RingRole, RootRead,
+    SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     account::{Ref, RefMut},
@@ -215,15 +218,61 @@ pub struct CoSignerSlot<'a> {
 }
 
 impl CoSignerSlot<'_> {
-    pub fn verify(self, requirement: CoSignRequirement) -> Result<Address, ProgramError> {
-        let expected = requirement.check(&*load::<CoSigner>(self.program_id, self.record)?)?;
+    pub fn verify(self, requirement: CoSignRequirement) -> Result<CoSignCover, ProgramError> {
+        let cover = requirement.cover(&*load::<CoSigner>(self.program_id, self.record)?)?;
         if !self.signer.is_signer() {
             return Err(CustomRingError::MissingCoSigner.into());
         }
-        if self.signer.address() != &expected {
+        if self.signer.address() != &cover.signer {
             return Err(CustomRingError::UnauthorizedCoSigner.into());
         }
-        Ok(expected)
+        Ok(cover)
+    }
+}
+
+/// The demand fixes how many `[record, signer]` pairs lead the slice.
+#[derive(Default)]
+pub struct CoSigners {
+    signers: [Address; MAX_CO_SIGNERS],
+    len: usize,
+}
+
+impl CoSigners {
+    pub fn verify(
+        program_id: &Address,
+        accounts: &[AccountView],
+        mut requirement: Option<CoSignRequirement>,
+    ) -> Result<Self, ProgramError> {
+        let mut co_signers = Self::default();
+        let mut pairs = accounts.as_chunks::<2>().0.iter();
+        for slot in &mut co_signers.signers {
+            let Some(current) = requirement else {
+                break;
+            };
+            let [record, signer] = pairs.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
+            let cover = CoSignerSlot {
+                program_id,
+                record,
+                signer,
+            }
+            .verify(current)?;
+            *slot = cover.signer;
+            co_signers.len += 1;
+            requirement = cover.rest;
+        }
+        Ok(co_signers)
+    }
+
+    pub const fn accounts(&self) -> usize {
+        2 * self.len
+    }
+
+    pub fn as_slice(&self) -> &[Address] {
+        &self.signers[..self.len]
+    }
+
+    pub fn contains(&self, address: &Address) -> bool {
+        self.as_slice().contains(address)
     }
 }
 

@@ -147,7 +147,7 @@ func ListKey(api frontend.API, owner, listSalt frontend.Variable) frontend.Varia
 }
 
 // AnonymousParties is mirrored by ANONYMOUS_PARTIES.
-const AnonymousParties = 3
+const AnonymousParties = 7
 
 // AssertAnonymousParties separates the hidden owner from the public identities
 // reconstructed by the verifier. Zero denotes an absent optional party.
