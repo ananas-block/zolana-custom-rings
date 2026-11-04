@@ -3,8 +3,8 @@
 use custom_ring_interface::RingMode;
 use solana_address::Address;
 use spr_interface::shape::Shape;
-use spr_keypair::PublicKey;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
+use spr_keypair::PublicKey;
 use spr_transaction::{utxo::SppProofInputUtxo, TransactionError};
 use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 
@@ -39,7 +39,7 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn spend_public(self, wallet: Address) -> RingTransfer<PublicOwners<'a>> {
         RingTransfer {
             ring: self.ring,
-            co_signer: self.co_signer,
+            co_signers: self.co_signers,
             priority_fee: self.priority_fee,
             rail: PublicOwners {
                 owner: self.rail,
@@ -97,7 +97,7 @@ impl PublicOwners<'_> {
             return Err(RingError::PublicSpendInProofOwner);
         }
         if config.mode != RingMode::Anonymous {
-            return self.owner.stage_signers(config);
+            return self.owner.stage_signers();
         }
         self.owner.check_settlement_accounts()?;
         let transaction = SenderChange {

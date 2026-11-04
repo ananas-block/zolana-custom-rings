@@ -10,7 +10,7 @@ use std::sync::{
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    encode_ring_recipient_output, encode_ring_sender_bundle_output,
+    encode_ring_body_output, encode_ring_sender_bundle_output,
     stream::{DeliveredSlot, SlotSecret},
     RecipientBody, RingDepositAuditCapsule, SenderBundle, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
 };
@@ -32,6 +32,7 @@ use spr_keypair::{
     random_salt, viewing_key::ViewTag, ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey,
     X25519Pubkey,
 };
+use spr_transaction::instructions::merge::MergeSeed;
 use spr_transaction::{
     instructions::{
         merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
@@ -44,12 +45,12 @@ use spr_transaction::{
 };
 use zolana_ring_client::{
     note_state, verify_ring_owned, AnonymousError, AnonymousScan, AnonymousStream, AnonymousSync,
-    AnonymousWallet, ListBits, NoteState, PresentRead, SentCheck, ViewingHistory, TAGS_PER_REQUEST,
-    TAG_GAP, VIEWING_HISTORY_VERSION,
+    AnonymousWallet, NoteState, SentCheck, ViewingHistory, TAGS_PER_REQUEST, TAG_GAP,
+    VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_keys::{
-    RingDeliveryRequest, RingKeyError, RingKeys, RingNullifierKey, RingTagFrame, RotatingRingKeys,
-    ViewTagRequest,
+    MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeyError, RingKeys,
+    RingNullifierKey, RingTagFrame, RotatingRingKeys, ViewTagRequest,
 };
 use zolana_ring_transaction::{
     historical::{
@@ -1141,6 +1142,7 @@ async fn sender_chosen_garbage_under_a_proven_tag_never_fails_the_sync() {
             blinding: [0xff; 32],
             amount: 5,
             mint: Mint::SOL.asset.to_bytes(),
+            ..RecipientBody::default()
         },
         &secret(&first_nullifier, 1),
     )
@@ -1163,6 +1165,7 @@ async fn sender_chosen_garbage_under_a_proven_tag_never_fails_the_sync() {
             blinding,
             amount: 5,
             mint: unregistered.asset.to_bytes(),
+            ..RecipientBody::default()
         },
         &secret(&first_nullifier, 2),
     )
@@ -1178,7 +1181,7 @@ async fn sender_chosen_garbage_under_a_proven_tag_never_fails_the_sync() {
     .hash(&bob.address().nullifier_pubkey, &[0; 32], &[0; 32], TREE)
     .unwrap();
     let bodies = [
-        (noise, [0x0c; 32]),
+        (noise.to_vec(), [0x0c; 32]),
         (named, [0x0c; 32]),
         (unknown_mint, unknown_mint_hash),
     ];
@@ -1199,7 +1202,7 @@ async fn sender_chosen_garbage_under_a_proven_tag_never_fails_the_sync() {
                     tree_id: TREE,
                     leaf_index: leaf + u64::from(slot),
                 },
-                payload: encode_ring_recipient_output(body, &[]).unwrap(),
+                payload: encode_ring_body_output(body, &[]).unwrap(),
             })
             .collect(),
         messages: vec![MessageData {
@@ -1295,6 +1298,7 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
             blinding,
             amount: 5,
             mint: unregistered.asset.to_bytes(),
+            ..RecipientBody::default()
         },
         &secret,
     )
@@ -1312,7 +1316,7 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
                 tree_id: TREE,
                 leaf_index: 0,
             },
-            payload: encode_ring_recipient_output(
+            payload: encode_ring_body_output(
                 &body,
                 &seal_reply(&reply, MIN_REPLY_LEN, &secret).unwrap(),
             )
@@ -1600,6 +1604,12 @@ impl ShieldedKeys for FlakyHolder {
     }
 }
 
+impl MergeSeedHolder for FlakyHolder {
+    fn merge_seeds(&self, requests: &[MergeSeedRequest]) -> Result<Vec<MergeSeed>, RingKeyError> {
+        self.keys.merge_seeds(requests)
+    }
+}
+
 impl RingKeys for FlakyHolder {
     fn ring_delivery_secrets(
         &self,
@@ -1784,6 +1794,7 @@ async fn recovery_opens_a_merge_whose_inputs_the_wallet_never_saw() {
                 salt: &salt,
                 ciphertext: &ciphertext,
                 prefix: &[[0; 32]],
+                binding: spr_event::MergeCiphertextBinding::Unverified,
             }),
         }],
         messages: Vec::new(),
@@ -1816,7 +1827,11 @@ fn a_ring_added_after_a_rotation_reaches_every_held_key() {
         .unwrap()
         .with_ring(RING, None);
     for key in [old, new] {
-        assert!(history.entry(&key).unwrap().ring_positions().contains_key(&RING));
+        assert!(history
+            .entry(&key)
+            .unwrap()
+            .ring_positions()
+            .contains_key(&RING));
     }
 }
 
@@ -1852,19 +1867,11 @@ async fn a_spent_zero_key_note_leaves_the_exposed_list() {
     assert!(owned.exposed_if_spent.is_empty());
     assert!(owned.spent_exposed.contains(&note.nullifier));
     assert_eq!(
-        note_state(&note, |nullifier| spent.spent_nullifiers.contains(nullifier)),
+        note_state(&note, |nullifier| spent
+            .spent_nullifiers
+            .contains(nullifier)),
         NoteState::Spent
     );
-}
-
-#[test]
-fn enrolling_past_a_salt_zero_grant_names_the_missing_write() {
-    let read = |salted, salt_zero| ListBits { salted, salt_zero }.present_read();
-    assert_eq!(read(None, true), PresentRead::Granted);
-    assert_eq!(read(None, false), PresentRead::NotListed);
-    assert_eq!(read(Some(true), false), PresentRead::Granted);
-    assert_eq!(read(Some(false), false), PresentRead::NotListed);
-    assert_eq!(read(Some(false), true), PresentRead::SaltedWriteMissing);
 }
 
 #[tokio::test]
@@ -1916,6 +1923,7 @@ async fn a_merge_of_the_wallets_notes_is_found_by_recovery_and_marks_them_spent(
                 salt: &salt,
                 ciphertext: &ciphertext,
                 prefix: &[[0; 32]],
+                binding: spr_event::MergeCiphertextBinding::Unverified,
             }),
         }],
         messages: Vec::new(),
@@ -2003,7 +2011,7 @@ async fn a_payment_without_a_reply_names_no_sender() {
     let paid = alice.pay(&indexer, &[pay(&bob.address(), 10)]);
     assert_eq!(
         paid.output_slots[1].payload.len(),
-        6 + RECIPIENT_BODY_LEN,
+        8 + RECIPIENT_BODY_LEN,
         "no reply bytes follow the body"
     );
     let scan = bob.sync(&indexer, &fresh(&bob)).await;
@@ -2121,11 +2129,11 @@ fn deposit_of(
         true => RingDepositAuditCapsule {
             slot_index: 0,
             eph_pk: &[2; 33],
-            ciphertext: &[0; 96],
+            ciphertext: &[0; custom_ring_interface::RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN],
             recipient_ciphertext: &encrypted.ciphertext,
         }
         .encode(),
-        false => b"CRDEP001".to_vec(),
+        false => b"CRDEP002".to_vec(),
     };
     let payload = encode_encrypted_ring_deposit_output(EncryptedRingDepositOutput {
         owner_utxo_hash: owner_utxo_hash(&owner.owner_hash().unwrap(), &blinding).unwrap(),
@@ -2164,4 +2172,226 @@ fn deposit_of(
         tx_viewing_pk: None,
         salt: None,
     }
+}
+
+fn publish_owner_merge(
+    indexer: &Indexer,
+    owner: &ShieldedAddress,
+    seed: &MergeSeed,
+    first: [u8; 32],
+) -> [u8; 32] {
+    let merged = Utxo {
+        owner: owner.signing_pubkey,
+        asset: Mint::SOL,
+        amount: 100,
+        blinding: seed.output_blinding(&first).unwrap(),
+        ring_program_id: Some(RING),
+        data: Default::default(),
+    };
+    let hash = merged
+        .hash(&ZERO_NULLIFIER_PUBKEY, &[0; 32], &[0; 32], TREE)
+        .unwrap();
+    let salt = [8; 16];
+    let ciphertext = MergeOutputPlaintext {
+        amount: 100,
+        mint: Mint::SOL.asset,
+    }
+    .encrypt(&seed.output_key(&first).unwrap(), &salt)
+    .unwrap();
+    indexer.publish(ShieldedTransaction {
+        slot: 1,
+        tx_signature: Signature::from([first[0]; 64]),
+        event_index: Some(0),
+        tx_viewing_pk: None,
+        salt: None,
+        output_slots: vec![OutputSlot {
+            view_tag: owner.signing_pubkey.owner_proof_input_hash().unwrap(),
+            output_context: OutputContext {
+                hash,
+                tree_id: TREE,
+                leaf_index: indexer.leaves(1),
+            },
+            payload: encode_merge_output_data(MergeOutputDataRef {
+                salt: &salt,
+                ciphertext: &ciphertext,
+                prefix: &[[0; 32]],
+                binding: spr_event::MergeCiphertextBinding::Proven,
+            }),
+        }],
+        messages: Vec::new(),
+        nullifiers: vec![first],
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
+    });
+    hash
+}
+
+fn own_seed(wallet: &Wallet, viewing_pubkey: X25519Pubkey, first: [u8; 32]) -> MergeSeed {
+    wallet
+        .keys
+        .merge_seeds(&[MergeSeedRequest {
+            viewing_pubkey,
+            ring_program_id: RING,
+            first_nullifier: first,
+        }])
+        .unwrap()
+        .remove(0)
+}
+
+#[tokio::test]
+async fn a_zero_key_merge_opens_with_its_input_history_deleted_and_reads_exposed() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let first = [0x11; 32];
+    let seed = own_seed(&bob, bob.keys.viewing_key.pubkey(), first);
+    let hash = publish_owner_merge(&indexer, &bob.address(), &seed, first);
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .full_scan(&indexer, &fresh(&bob), RING)
+        .await
+        .unwrap();
+    assert_eq!(found(&scan), [hash]);
+    assert_eq!(
+        scan.utxos[0].stream,
+        AnonymousStream::Merge {
+            first_nullifier: first
+        }
+    );
+    let note = &scan.decrypted().utxos[0];
+    assert_eq!(note.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY);
+    assert_eq!(note.utxo.amount, 100);
+    assert_eq!(
+        note_state(note, |_| false),
+        NoteState::ExposedIfSpent,
+        "a zero-key merge output spends only by naming its owner"
+    );
+    assert_eq!(note_state(note, |_| true), NoteState::Spent);
+}
+
+#[tokio::test]
+async fn another_wallets_owner_tag_opens_nothing_and_a_seed_of_another_key_opens_nothing() {
+    let indexer = Indexer::default();
+    let (bob, carol) = (Wallet::new(2), Wallet::new(3));
+    let first = [0x12; 32];
+    let carols = own_seed(&carol, carol.keys.viewing_key.pubkey(), first);
+    publish_owner_merge(&indexer, &carol.address(), &carols, first);
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .full_scan(&indexer, &fresh(&bob), RING)
+        .await
+        .unwrap();
+    assert!(found(&scan).is_empty());
+
+    // A keeper-chosen seed reads the same.
+    let second = [0x13; 32];
+    let foreign = own_seed(&carol, carol.keys.viewing_key.pubkey(), second);
+    publish_owner_merge(&indexer, &bob.address(), &foreign, second);
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .full_scan(&indexer, &fresh(&bob), RING)
+        .await
+        .unwrap();
+    assert!(found(&scan).is_empty());
+}
+
+#[tokio::test]
+async fn a_rotated_wallet_opens_a_zero_key_merge_under_its_retired_key() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let retired = bob.keys.viewing_key.pubkey();
+    let first = [0x14; 32];
+    let seed = own_seed(&bob, retired, first);
+    let hash = publish_owner_merge(&indexer, &bob.address(), &seed, first);
+    let next = ViewingKey::new();
+    let next_key = next.pubkey();
+    let rotated = RotatingRingKeys::new(&bob.keys, &RING)
+        .unwrap()
+        .rotate(next)
+        .unwrap();
+    let history = fresh(&bob).with_rotated_key(next_key, 1).unwrap();
+    let scan = AnonymousSync::new(&rotated, &assets())
+        .full_scan(&indexer, &history, RING)
+        .await
+        .unwrap();
+    assert_eq!(found(&scan), [hash]);
+}
+
+#[tokio::test]
+async fn an_extended_recipient_body_rebuilds_its_commitment_with_its_data() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let tx_key = ViewingKey::new();
+    let salt = random_salt();
+    let first_nullifier = field(9, 9);
+    let bob_view = bob.keys.viewing_pubkey();
+    let secret = DeliveredSlot {
+        agreement: &tx_key.ecdh(&bob_view).unwrap(),
+        tx_viewing_pk: tx_key.pubkey().as_bytes(),
+        recipient_viewing_pk: bob_view.as_bytes(),
+        salt: &salt,
+        output_index: 0,
+        first_nullifier: &first_nullifier,
+    }
+    .secret()
+    .unwrap();
+    let (blinding, data_hash, ring_data_hash) = (field(9, 7), field(9, 6), field(9, 5));
+    let note = Utxo {
+        owner: bob.address().signing_pubkey,
+        asset: Mint::SOL,
+        amount: 5,
+        blinding,
+        ring_program_id: Some(RING),
+        data: Data::default(),
+    };
+    let hash = note
+        .hash(
+            &bob.address().nullifier_pubkey,
+            &data_hash,
+            &ring_data_hash,
+            TREE,
+        )
+        .unwrap();
+    let body = seal_recipient_body(
+        &RecipientBody {
+            blinding,
+            amount: 5,
+            mint: Mint::SOL.asset.to_bytes(),
+            ring_data_hash: Some(ring_data_hash),
+            data: [&data_hash[..], b"memo"].concat(),
+        },
+        &secret,
+    )
+    .unwrap();
+    assert!(body.len() > RECIPIENT_BODY_LEN);
+    indexer.publish(ShieldedTransaction {
+        slot: 1,
+        tx_signature: Signature::from([0x78; 64]),
+        event_index: Some(0),
+        tx_viewing_pk: Some(tx_key.pubkey()),
+        salt: Some(salt),
+        output_slots: vec![OutputSlot {
+            view_tag: secret.recipient_tag().unwrap(),
+            output_context: OutputContext {
+                hash,
+                tree_id: TREE,
+                leaf_index: indexer.leaves(1),
+            },
+            payload: encode_ring_body_output(&body, &[]).unwrap(),
+        }],
+        messages: Vec::new(),
+        nullifiers: vec![first_nullifier],
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
+    });
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .full_scan(&indexer, &fresh(&bob), RING)
+        .await
+        .unwrap();
+    assert_eq!(found(&scan), [hash]);
+    let opened = &scan.decrypted().utxos[0];
+    assert_eq!(opened.data_hash, Some(data_hash));
+    assert_eq!(opened.ring_data_hash, Some(ring_data_hash));
+    assert_eq!(
+        opened.utxo.data.utxo_data().map(<[u8]>::to_vec),
+        Some(b"memo".to_vec())
+    );
 }

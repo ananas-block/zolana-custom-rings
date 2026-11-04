@@ -53,7 +53,7 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn new(input: CustomRingTransferInput<'a>) -> Self {
         Self {
             ring: input.ring,
-            co_signer: None,
+            co_signers: Vec::new(),
             priority_fee: None,
             rail: Owner {
                 sender: input.sender,
@@ -163,12 +163,15 @@ impl Owner<'_> {
         if config.mode == RingMode::Anonymous {
             return Err(RingError::MissingAnonymousSigner);
         }
-        check_zero_key_inputs(self.transaction.inputs(), &self.sender.address()?.signing_pubkey)?;
-        self.stage_signers(config)
+        check_zero_key_inputs(
+            self.transaction.inputs(),
+            &self.sender.address()?.signing_pubkey,
+        )?;
+        self.stage_signers()
     }
 
     /// The signer rail, zero-key notes admitted by the caller.
-    pub(super) fn stage_signers(&self, config: &CustomRingConfig) -> Result<Staged<'_>, RingError> {
+    pub(super) fn stage_signers(&self) -> Result<Staged<'_>, RingError> {
         let sender = self.sender.address()?;
         self.check_settlement_accounts()?;
         let shape = self.shape(&sender)?;
@@ -176,7 +179,6 @@ impl Owner<'_> {
         let delivery = DeliveredRail {
             outputs: shape.n_outputs(),
             rail: RingRail::Confidential,
-            mode: config.mode,
         }
         .delivery()?;
         let first_nullifier = *transaction.first_nullifier();
@@ -188,8 +190,15 @@ impl Owner<'_> {
                 if signer.pubkey() != sender.signing_pubkey {
                     return Err(RingError::InProofOwnerMismatch);
                 }
+                // Co-owners beside the in-proof owner sign in public, SPP allows the mix.
+                let in_proof = signer.pubkey().as_ed25519()?;
+                let co_owners = proof_inputs
+                    .owner_signer_pubkeys()?
+                    .into_iter()
+                    .filter(|owner| owner.to_bytes() != in_proof)
+                    .collect();
                 (
-                    Vec::new(),
+                    co_owners,
                     Spend::InProofOwner(OwnerAuthorization::SigningKey(signer)),
                 )
             }

@@ -1,13 +1,16 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    storage::Revision, tag, AnonymousProofData, CustomRingProof, FramedSenderBundle, InProofOwner,
-    InputTrees, PlainGroth16Proof, PolicyProof, PolicyRecipients, Replies, RingOutput, RingPolicy,
-    RingRail, RingTransactData, RootRead, MAX_SPP_CPI_ACCOUNTS, RECIPIENT_BODY_LEN,
+    cosign::CoSignHeader, storage::Revision, tag, AnonymousProofData, AppMessage, CustomRingProof,
+    FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof,
+    Replies, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead, SlotBody,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use spr_interface::instruction::{InterfaceTransfer, TransactProof};
+use spr_interface::instruction::{
+    instruction_data::transact::CacheAccess, InterfaceTransfer, TransactProof,
+};
 use spr_program::instruction::{
     RingAuthorityTransact, RingTransact, TransactInterfaceTransferAccounts,
 };
@@ -15,24 +18,37 @@ use spr_program::instruction::{
 use crate::{CustomRing, RingError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OwnedOutput {
-    Delivered {
-        hash: [u8; 32],
-        u: [u8; 32],
-        body: Vec<u8>,
-    },
-    Anonymous {
-        hash: [u8; 32],
-        tag: [u8; 32],
-        body: Option<[u8; RECIPIENT_BODY_LEN]>,
-        record: Vec<u8>,
-    },
-    Exit {
-        hash: [u8; 32],
-        owner_tag: [u8; 32],
-        payload: Vec<u8>,
-        record: Vec<u8>,
-    },
+pub(crate) enum OwnedBody {
+    None,
+    Recipient(Vec<u8>),
+    Exit(Vec<u8>),
+}
+
+impl OwnedBody {
+    fn of(body: SlotBody<'_>) -> Self {
+        match body {
+            SlotBody::None => Self::None,
+            SlotBody::Recipient(body) => Self::Recipient(body.to_vec()),
+            SlotBody::Exit(body) => Self::Exit(body.to_vec()),
+        }
+    }
+
+    fn view(&self) -> SlotBody<'_> {
+        match self {
+            Self::None => SlotBody::None,
+            Self::Recipient(body) => SlotBody::Recipient(body),
+            Self::Exit(body) => SlotBody::Exit(body),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedOutput {
+    pub hash: [u8; 32],
+    pub owner_tag: [u8; 32],
+    pub body: OwnedBody,
+    pub record: [u8; AUDIT_RECORD_LEN],
+    pub tail: Option<[u8; DATA_TAIL_LEN]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,91 +75,61 @@ impl OwnedSenderBundle {
 
 impl OwnedOutput {
     pub fn of(output: RingOutput<'_>) -> Self {
-        match output {
-            RingOutput::Delivered { hash, u, body } => Self::Delivered {
-                hash: *hash,
-                u: *u,
-                body: body.to_vec(),
-            },
-            RingOutput::Anonymous {
-                hash,
-                tag,
-                body,
-                record,
-            } => Self::Anonymous {
-                hash: *hash,
-                tag: *tag,
-                body: body.copied(),
-                record: record.to_vec(),
-            },
-            RingOutput::Exit {
-                hash,
-                owner_tag,
-                payload,
-                record,
-            } => Self::Exit {
-                hash: *hash,
-                owner_tag: *owner_tag,
-                payload: payload.to_vec(),
-                record: record.to_vec(),
-            },
+        Self {
+            hash: *output.hash,
+            owner_tag: *output.owner_tag,
+            body: OwnedBody::of(output.body),
+            record: *output.record,
+            tail: output.tail.copied(),
         }
+    }
+
+    pub fn is_exit(&self) -> bool {
+        matches!(self.body, OwnedBody::Exit(_))
     }
 
     pub fn view(&self) -> RingOutput<'_> {
-        match self {
-            Self::Delivered { hash, u, body } => RingOutput::Delivered { hash, u, body },
-            Self::Anonymous {
-                hash,
-                tag,
-                body,
-                record,
-            } => RingOutput::Anonymous {
-                hash,
-                tag,
-                body: body.as_ref(),
-                record,
-            },
-            Self::Exit {
-                hash,
-                owner_tag,
-                payload,
-                record,
-            } => RingOutput::Exit {
-                hash,
-                owner_tag,
-                payload,
-                record,
-            },
-        }
-    }
-
-    /// A delivered slot publishes its body in the slot and no record.
-    fn set_record(&mut self, bytes: &[u8]) {
-        if let Self::Anonymous { record, .. } | Self::Exit { record, .. } = self {
-            *record = bytes.to_vec();
+        RingOutput {
+            hash: &self.hash,
+            owner_tag: &self.owner_tag,
+            body: self.body.view(),
+            record: &self.record,
+            tail: self.tail.as_ref(),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OwnedPolicyProof {
-    pub spl_withdrawal_owners: Vec<[u8; 32]>,
-    pub curator_revision: Option<Revision>,
-    pub recipients: OwnedRecipients,
+pub(crate) struct OwnedAppMessage {
+    pub view_tag: [u8; 32],
+    pub data: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OwnedRecipients {
-    Hidden,
-    Framed(Vec<[u8; 32]>),
+/// [`FrameExtensions`] with every borrowed part owned.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OwnedExtensions {
+    pub data_hash: Option<[u8; 32]>,
+    pub ring_data_hash: Option<[u8; 32]>,
+    pub private_revision: Option<Revision>,
+    pub messages: Vec<OwnedAppMessage>,
+    pub cache: Option<CacheAccess>,
 }
 
-impl OwnedRecipients {
-    fn view(&self) -> PolicyRecipients<'_> {
-        match self {
-            Self::Hidden => PolicyRecipients::Hidden,
-            Self::Framed(recipients) => PolicyRecipients::Framed(recipients),
+impl OwnedExtensions {
+    fn view(&self) -> FrameExtensions<'_> {
+        FrameExtensions {
+            data_hash: self.data_hash.as_ref(),
+            ring_data_hash: self.ring_data_hash.as_ref(),
+            private_revision: self.private_revision,
+            messages: self
+                .messages
+                .iter()
+                .map(|message| AppMessage {
+                    view_tag: &message.view_tag,
+                    data: &message.data,
+                })
+                .collect(),
+            cache: self.cache,
         }
     }
 }
@@ -169,16 +155,21 @@ pub(crate) struct TransactParts {
     pub n_in: u8,
     pub n_out: u8,
     pub proof: CustomRingProof,
+    pub tracking_revision: Revision,
     pub own_revision: Option<Revision>,
-    pub policy: Option<OwnedPolicyProof>,
-    pub exempt: bool,
-    pub approval_required: bool,
+    pub policy: Option<PolicyProof>,
+    pub spl_withdrawal_owners: Vec<[u8; 32]>,
+    pub co_sign: CoSignHeader,
+    pub no_spend: bool,
+    pub public_owners: bool,
     pub expiry_unix_ts: u32,
     pub tx_viewing_u: [u8; 32],
     pub salt: [u8; 16],
+    pub extensions: OwnedExtensions,
     pub interface_transfers: Vec<InterfaceTransfer>,
-    pub key_escrow: bool,
-    pub full_openings: bool,
+    pub has_data: bool,
+    pub entry: bool,
+    pub wide_owners: bool,
     pub outputs: Vec<OwnedOutput>,
     /// `reply_len` and the region, set exactly under `REPLY_METADATA`.
     pub replies: Option<(u16, Vec<u8>)>,
@@ -194,12 +185,21 @@ pub(crate) struct TransactParts {
 }
 
 impl TransactParts {
-    /// The sealed stream joins the frame, each record beside its slot.
-    pub fn seal_audit(&mut self, eph_u: [u8; 32], envelope: Vec<u8>, records: &[Vec<u8>]) {
+    /// The sealed stream joins the frame, each record and tail beside its slot.
+    pub fn seal_audit(
+        &mut self,
+        eph_u: [u8; 32],
+        envelope: Vec<u8>,
+        records: &[[u8; AUDIT_RECORD_LEN]],
+        tails: &[[u8; DATA_TAIL_LEN]],
+    ) {
         self.eph_u = eph_u;
         self.envelope = envelope;
-        for (output, record) in self.outputs.iter_mut().zip(records) {
-            output.set_record(record);
+        for (slot, output) in self.outputs.iter_mut().enumerate() {
+            if let Some(record) = records.get(slot) {
+                output.record = *record;
+            }
+            output.tail = tails.get(slot).copied();
         }
     }
 
@@ -209,20 +209,21 @@ impl TransactParts {
             n_in: self.n_in,
             n_out: self.n_out,
             proof: &self.proof,
+            tracking_revision: self.tracking_revision,
             own_revision: self.own_revision,
-            policy: self.policy.as_ref().map(|policy| PolicyProof {
-                spl_withdrawal_owners: &policy.spl_withdrawal_owners,
-                curator_revision: policy.curator_revision,
-                recipients: policy.recipients.view(),
-            }),
-            exempt: self.exempt,
-            approval_required: self.approval_required,
+            policy: self.policy,
+            spl_withdrawal_owners: &self.spl_withdrawal_owners,
+            co_sign: self.co_sign,
+            no_spend: self.no_spend,
+            public_owners: self.public_owners,
             expiry_unix_ts: self.expiry_unix_ts,
             tx_viewing_u: &self.tx_viewing_u,
             salt: &self.salt,
+            extensions: self.extensions.view(),
             interface_transfers: self.interface_transfers.clone(),
-            key_escrow: self.key_escrow,
-            full_openings: self.full_openings,
+            has_data: self.has_data,
+            entry: self.entry,
+            wide_owners: self.wide_owners,
             outputs: self.outputs.iter().map(OwnedOutput::view).collect(),
             replies: self
                 .replies
@@ -258,7 +259,7 @@ pub(crate) struct TransactAccounts {
     /// Only the confidential rail names owner signers.
     pub owner_signers: Vec<Address>,
     pub interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
-    pub co_signer: Option<Address>,
+    pub co_signers: Vec<Address>,
     pub delegate: Option<Address>,
 }
 
@@ -273,13 +274,13 @@ impl TransactAccounts {
         let data = parts.data();
         let expanded = data.transact_ix_data(config, TransactProof::zeroed())?;
         let spp = match parts.rail {
-            RingRail::Delegate => {
+            RingRail::Delegate | RingRail::AnonymousDelegate => {
                 RingAuthorityTransact {
                     payer: self.payer,
                     input_trees: self.input_trees.clone(),
                     output_tree: self.output_tree,
                     ring_program_id: ring.program_id(),
-                    interface_transfer_accounts: Vec::new(),
+                    interface_transfer_accounts: self.interface_transfer_accounts.clone(),
                     data: expanded,
                 }
                 .instruction()
@@ -308,22 +309,22 @@ impl TransactAccounts {
         let mut accounts = vec![AccountMeta::new_readonly(ring.policy_pda(), false)];
         accounts.extend(
             config
-                .root_registries(RootRead::transfer(config, parts.exempt))
+                .root_registries(RootRead::transfer(config, parts.rail.is_delegate()))
                 .map(|registry| AccountMeta::new_readonly(registry, false)),
         );
         accounts.extend(
-            self.co_signer
-                .into_iter()
-                .flat_map(|co_signer| ring.co_signer_metas(co_signer)),
+            self.co_signers
+                .iter()
+                .flat_map(|co_signer| ring.co_signer_metas(*co_signer)),
         );
         accounts.extend(
             self.delegate
                 .map(|delegate| AccountMeta::new_readonly(delegate, true)),
         );
         accounts.extend(spp);
-        let mut bytes = vec![match parts.rail {
-            RingRail::Delegate => tag::AUTHORITY_TRANSFER,
-            RingRail::Confidential | RingRail::Anonymous => tag::TRANSFER,
+        let mut bytes = vec![match parts.rail.is_delegate() {
+            true => tag::AUTHORITY_TRANSFER,
+            false => tag::TRANSFER,
         }];
         bytes.extend(data.encode()?);
         Ok(Instruction {

@@ -1,169 +1,71 @@
-//! Escrows a member's nullifier key to the ring auditor, the proof covers the encryption alone.
+//! Enrolls a member's nullifier key on the ring's tracking registry, the first enrollment proves the sealed key.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit, CustomRingError, CustomRingProof, RegisterKeyStatement, RingMode,
+    key_catalog::RingCircuit,
+    storage_instruction::{tag, EnrollIxData, OwnerGrantIxData},
+    tracking::TrackingAuthorization,
+    CustomRingProof, ReaderKeyBytes, RegisterKeyStatement, SYSTEM_PROGRAM_ID,
 };
+use solana_address::Address;
+use solana_instruction::{AccountMeta, Instruction};
 use spr_client::AsyncRpc;
 use spr_hasher::primitives::{right_align, solana_owner_identity};
-use spr_indexer_api::Hash;
-use spr_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_keypair::ViewingKey;
 use zeroize::Zeroizing;
-use zolana_ring_client::AsyncRingIndexer;
-use zolana_ring_client::{rpc::EscrowRegistration, NullifierKeyEnvelope, SealedNullifierKey};
-
+use zolana_ring_client::NullifierKeyEnvelope;
 use zolana_ring_keys::RingNullifierKey;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     prover::{to_instruction_proof, RingRequest},
-    records::{OwnerRead, RecordReads},
     request::KeyRegister,
-    submission::BoundRoot,
-    CustomRing, CustomRingConfig, RingError,
+    storage::storage_ix,
+    CustomRing, RingError,
 };
 
+/// The owner signs, a wallet with its key and a PDA through its program's `invoke_signed`.
+#[must_use]
+pub struct Enroll<'a> {
+    pub ring: CustomRing,
+    pub payer: Address,
+    pub owner: Address,
+    pub nullifier_key: &'a RingNullifierKey,
+    pub viewing_key: &'a ViewingKey,
+}
+
+/// The owner's consent to a reader, the program signs it through CPI for a PDA.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EscrowedRecipients<'a> {
-    pub ring: CustomRing,
-    pub recipients: &'a [ShieldedAddress],
+pub struct WriteOwnerGrant {
+    pub payer: Address,
+    pub owner: Address,
+    pub tracking_registry: Address,
+    pub grant: Address,
+    pub reader: ReaderKeyBytes,
+    pub active: bool,
 }
 
-impl EscrowedRecipients<'_> {
-    /// Under key escrow the first recipient without an escrowed nullifier key is refused.
-    pub async fn check(
-        self,
-        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-    ) -> Result<(), RingError> {
-        if self.ring.require_config(rpc).await?.mode != RingMode::ConfidentialEscrow {
-            return Ok(());
-        }
-        let owners = self
-            .recipients
-            .iter()
-            .map(|recipient| recipient.signing_pubkey.owner_proof_input_hash())
-            .collect::<Result<Vec<_>, _>>()?;
-        let reads = RecordReads {
-            root: BoundRoot::newest(self.ring, rpc).await?,
-            members: &owners,
-        }
-        .read(rpc)
-        .await?;
-        for ((recipient, owner), read) in self.recipients.iter().zip(owners).zip(&reads) {
-            // A zero secret recipient owes no escrow.
-            if recipient.nullifier_pubkey != spr_interface::ZERO_NULLIFIER_PUBKEY {
-                OwnerRead { owner, read }.escrowed(&recipient.nullifier_pubkey)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Hands out the nullifier secret in `seal`, one call before the prover request is sent.
-pub trait KeyEscrowAuthority: Send + Sync {
-    fn nullifier_pubkey(&self) -> Result<[u8; 32], RingError>;
-
-    fn seal(&self, auditor: &X25519Pubkey) -> Result<SealedEscrow, RingError>;
-}
-
-/// Dropped once the prover request is sent.
-pub struct SealedEscrow {
-    pub envelope: NullifierKeyEnvelope,
-    pub nullifier_secret: Zeroizing<[u8; 32]>,
-}
-
-impl KeyEscrowAuthority for RingNullifierKey {
-    fn nullifier_pubkey(&self) -> Result<[u8; 32], RingError> {
-        Ok(self.nullifier_pubkey()?)
-    }
-
-    fn seal(&self, auditor: &X25519Pubkey) -> Result<SealedEscrow, RingError> {
-        let key = self.nullifier_key();
-        Ok(SealedEscrow {
-            envelope: NullifierKeyEnvelope::new(key, auditor)?,
-            nullifier_secret: Zeroizing::new(right_align(&key.secret())),
-        })
-    }
-}
-
-/// The writer refuses a second escrow key for one member.
-#[must_use]
-pub struct KeyRegistration<'a> {
-    pub ring: CustomRing,
-    /// Its signing key signs the update, its nullifier key is the one escrowed.
-    pub member: ShieldedAddress,
-    pub authority: &'a dyn KeyEscrowAuthority,
-}
-
-impl KeyRegistration<'_> {
+impl Enroll<'_> {
+    /// Tag 6 with the `RegisterKey` proof, the program refuses a second key for one owner.
     pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
-    ) -> Result<EscrowRegistration, RingError> {
+    ) -> Result<Instruction, RingError> {
         let config = self.ring.require_config(client.zolana()).await?;
-        let ProvenEscrow {
-            proof,
-            identity,
-            nullifier_pk,
-            sealed,
-        } = EscrowProof {
-            config: &config,
-            member: &self.member,
-            authority: self.authority,
-        }
-        .prove(client)
-        .await?;
-        Ok(EscrowRegistration {
-            member: Hash(identity),
-            nullifier_pk: Hash(nullifier_pk),
-            eph_pk: sealed.eph_pk.as_bytes().to_vec().into(),
-            ciphertext: sealed.ciphertext.to_vec().into(),
-            proof: bytemuck::bytes_of(&proof).to_vec().into(),
-        })
-    }
-}
-
-struct EscrowProof<'a> {
-    config: &'a CustomRingConfig,
-    member: &'a ShieldedAddress,
-    authority: &'a dyn KeyEscrowAuthority,
-}
-
-struct ProvenEscrow {
-    proof: CustomRingProof,
-    identity: [u8; 32],
-    nullifier_pk: [u8; 32],
-    sealed: SealedNullifierKey,
-}
-
-impl EscrowProof<'_> {
-    /// Refuses before any proof an anonymous ring or an authority holding another nullifier key.
-    fn nullifier_pk(&self) -> Result<[u8; 32], RingError> {
-        if self.config.mode == RingMode::Anonymous {
-            return Err(CustomRingError::AnonymousRingRefused.into());
-        }
-        let nullifier_pk = self.authority.nullifier_pubkey()?;
-        if nullifier_pk != self.member.nullifier_pubkey {
-            return Err(RingError::NullifierKeyMismatch);
-        }
-        Ok(nullifier_pk)
-    }
-
-    async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
-        &self,
-        client: &RingClient<R, I>,
-    ) -> Result<ProvenEscrow, RingError> {
-        let nullifier_pk = self.nullifier_pk()?;
-        let identity = solana_owner_identity(self.member.solana_address()?.as_array())?;
-        let auditor_pk = self.config.auditor_pubkey;
-        let SealedEscrow {
-            envelope,
-            nullifier_secret,
-        } = self.authority.seal(&auditor_pk)?;
+        let policy = config.account();
+        let ring_id = self.ring.ring_id()?;
+        let auditor_pk = config.auditor_pubkey;
+        let key = self.nullifier_key.nullifier_key();
+        let envelope = NullifierKeyEnvelope::new(key, &auditor_pk)?;
+        let nullifier_pk = self.nullifier_key.nullifier_pubkey()?;
+        let list_tag = self.nullifier_key.list_tag()?;
+        let member = solana_owner_identity(self.owner.as_array())?;
         let eph_u = envelope.sealed.eph_pk.u();
         let public_input_hash = RegisterKeyStatement {
-            member: &identity,
+            ring_id: &ring_id,
+            member: &member,
             nullifier_pk: &nullifier_pk,
+            list_tag: &list_tag,
             auditor_pubkey: auditor_pk.as_bytes(),
             eph_u: &eph_u,
             ciphertext: &envelope.sealed.ciphertext,
@@ -171,19 +73,80 @@ impl EscrowProof<'_> {
         .hash()?;
         let body = KeyRegister {
             public_input_hash,
-            member: identity,
-            nullifier_secret,
+            ring_id,
+            member,
+            nullifier_secret: Zeroizing::new(right_align(&key.secret())),
             eph_sk: envelope.ephemeral_sk.clone(),
             auditor_pk,
         };
         let proof = RingRequest::new(RingCircuit::RegisterKey, &body)?
             .prove(client, public_input_hash)
             .await?;
-        Ok(ProvenEscrow {
-            proof: to_instruction_proof(proof)?,
-            identity,
-            nullifier_pk,
-            sealed: envelope.sealed,
-        })
+        Ok(EnrollInstruction {
+            payer: self.payer,
+            owner: self.owner,
+            tracking_registry: policy.tracking,
+            data: EnrollIxData {
+                nullifier_pk,
+                list_tag,
+                viewing_u: self.viewing_key.pubkey().u(),
+                eph_u,
+                ciphertext: envelope.sealed.ciphertext,
+            },
+            proof: Some(to_instruction_proof(proof)?),
+        }
+        .instruction())
+    }
+}
+
+/// Tag 6, a first enrollment holds the proof and a rotation none.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnrollInstruction {
+    pub payer: Address,
+    pub owner: Address,
+    pub tracking_registry: Address,
+    pub data: EnrollIxData,
+    pub proof: Option<CustomRingProof>,
+}
+
+impl EnrollInstruction {
+    pub fn instruction(self) -> Instruction {
+        let (authorization, _) =
+            TrackingAuthorization::find_address(&self.tracking_registry, &self.owner);
+        let mut data = vec![tag::ENROLL];
+        data.extend_from_slice(bytemuck::bytes_of(&self.data));
+        if let Some(proof) = &self.proof {
+            data.extend_from_slice(bytemuck::bytes_of(proof));
+        }
+        storage_ix(
+            vec![
+                AccountMeta::new(self.payer, true),
+                AccountMeta::new_readonly(self.owner, true),
+                AccountMeta::new(self.tracking_registry, false),
+                AccountMeta::new(authorization, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            ],
+            data,
+        )
+    }
+}
+
+impl WriteOwnerGrant {
+    pub fn instruction(self) -> Instruction {
+        let data = OwnerGrantIxData {
+            reader: self.reader,
+            active: u8::from(self.active),
+        };
+        storage_ix(
+            vec![
+                AccountMeta::new(self.payer, true),
+                AccountMeta::new_readonly(self.owner, true),
+                AccountMeta::new_readonly(self.tracking_registry, false),
+                AccountMeta::new(self.grant, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            ],
+            [&[tag::OWNER_GRANT][..], bytemuck::bytes_of(&data)].concat(),
+        )
     }
 }

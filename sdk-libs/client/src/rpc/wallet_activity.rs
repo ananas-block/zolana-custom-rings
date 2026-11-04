@@ -76,27 +76,23 @@ impl WalletActivity {
             tx_signature,
             event_index,
             outputs,
-            sender,
             inputs,
             spenders,
             withdrawals,
             ..
         } = transaction;
         let names = |key: SerializablePubkey| key.0 == wallet;
-        let anonymous = sender.is_some_and(|sender| names(sender.owner_key));
-        let view = match anonymous || spenders.into_iter().any(names) {
+        let parties: Vec<_> = inputs.iter().map(&party).collect();
+        let spent_own = parties.contains(&InputParty::Own);
+        let view = match spent_own || spenders.into_iter().any(names) {
             true => {
-                let parties: Vec<_> = inputs.iter().map(&party).collect();
                 let sole_owner = !parties.contains(&InputParty::Other);
                 WalletView::Sender {
                     inputs: inputs
                         .into_iter()
                         .zip(parties)
                         .filter(|(_, party)| *party == InputParty::Own)
-                        .map(|(input, _)| DecryptedInput {
-                            unseen: false,
-                            ..input
-                        })
+                        .map(|(input, _)| input)
                         .collect(),
                     outputs: outputs
                         .into_iter()

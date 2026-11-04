@@ -17,7 +17,7 @@ use zolana_ring_transaction::{
     RingUtxoOwner,
 };
 
-use crate::{exactly_one_each, is_zero_key, AnonymousError};
+use crate::{anonymous::recipient_payload, exactly_one_each, is_zero_key, AnonymousError};
 
 /// One delivered ring output and the slot secret its recipient agreed for it.
 #[derive(Clone)]
@@ -164,7 +164,7 @@ pub fn resolve_pending<K: ShieldedKeys + ?Sized>(
     Ok(resolved)
 }
 
-/// Every scheme 10 slot published under one of the wallet's viewing keys, its owner tag.
+/// Scheme 10 or 13 slots under the wallet's viewing keys.
 pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
     shielded_keys: &K,
     transactions: &'a [ShieldedTransaction],
@@ -190,7 +190,7 @@ pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
             let Some(&viewing_pubkey) = held.get(&slot.view_tag) else {
                 continue;
             };
-            if delivered_body(slot).is_none() {
+            if delivered_body(slot).is_none() && recipient_payload(&slot.payload).is_none() {
                 continue;
             }
             let output_index =

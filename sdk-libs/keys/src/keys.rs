@@ -162,7 +162,7 @@ impl ShieldedKeys for RotatingRingKeys {
 }
 
 /// Finds the secret a request names, every derivation below stays inside the holder.
-trait HeldKeys {
+pub(crate) trait HeldKeys {
     fn held(&self, pubkey: &X25519Pubkey) -> Result<&ViewingKey, RingKeyError>;
 }
 

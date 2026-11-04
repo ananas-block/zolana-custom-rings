@@ -17,8 +17,7 @@ use zolana_ring_client::{rpc::RecordUpdateError, AnonymousError, RingIndexerErro
 use zolana_ring_keys::RingKeyError;
 use zolana_ring_member_registry::RecordTreeError;
 use zolana_ring_policy::{
-    ListId, Member, MemberError, PolicyTableError, RuleRefusal, RuleTableError, SourceMapError,
-    Writer,
+    ListId, MemberError, PolicyTableError, RuleRefusal, RuleTableError, SourceMapError, Writer,
 };
 use zolana_ring_transaction::RingRailError;
 
@@ -94,8 +93,6 @@ pub enum RingError {
     RingPaused,
     #[error("the ring has no delegate")]
     MissingDelegate,
-    #[error("the delegate moves notes on escrowed policy rings only")]
-    DelegateRequiresEscrow,
     #[error("asset registry is required")]
     MissingAssetRegistry,
     #[error("the compiled table differs from the stored rows")]
@@ -114,8 +111,6 @@ pub enum RingError {
     RecordUpdate(#[from] RecordUpdateError),
     #[error("the record update needs the signature of {expected}")]
     RecordUpdateSigner { expected: Address },
-    #[error("the escrow registration names another member")]
-    EscrowMemberMismatch,
     #[error("an enrolment awaits no list or a list outside allow, reader and approval")]
     EnrolmentLists,
     #[error("ring rpc answered another update id")]
@@ -157,8 +152,6 @@ pub enum RingError {
     PublicSpendWalletMismatch { named: Address, sender: Address },
     #[error("a public spend signs the transaction, it cannot prove its owner in the proof")]
     PublicSpendInProofOwner,
-    #[error("owner {owner:?} enrolled and its salt zero grant no longer reads, the curator must write its salted position")]
-    SaltedGrantMissing { owner: [u8; 32] },
     #[error("a deposit frame proves once, a retry draws a new blinding secret")]
     DepositFrameReused,
     #[error("a deposit to another member needs its request's tag, the viewing key is no tag")]
@@ -187,16 +180,16 @@ pub enum RingError {
     DuplicateInput { nullifier: [u8; 32] },
     #[error("the transfer spends one owner's notes, input {index} has another owner")]
     MixedOwners { index: usize },
-    #[error("a transfer of several owners holds no deposit of an asset it spends")]
-    MixedOwnerDeposit,
-    #[error("the anonymous sender holds no enrolled address, enroll before the first transfer")]
-    SenderNotEnrolled,
-    #[error("the anonymous sender's enrolled address is not the wallet's")]
-    SenderAddressMismatch,
-    #[error("the recipient at output {slot_index} holds no enrolled address")]
+    #[error("input {index} spends under a key its owner's tracking row does not hold")]
+    InputKeyNotEnrolled { index: usize },
+    #[error("the owner at output {slot_index} holds no tracking row, only the zero key pays it")]
     RecipientNotEnrolled { slot_index: usize },
-    #[error("output {slot_index} pays another address than its owner enrolled")]
-    RecipientAddressMismatch { slot_index: usize },
+    #[error("the owner at output {slot_index} is enrolled, the zero key does not pay it")]
+    EnrolledRecipientAtZeroKey { slot_index: usize },
+    #[error("output {slot_index} names another key than its owner's tracking row")]
+    RecipientKeyMismatch { slot_index: usize },
+    #[error("the transfer has {owners} owner signers, its accounts leave room for {limit}")]
+    TooManyOwnerSigners { owners: usize, limit: usize },
     #[error("an anonymous transfer leads with its hidden owner's note, a frame of only public owners takes the confidential family")]
     HiddenOwnerMissing,
     #[error("the owner {owner} spends an input with no nullifier key in the transfer")]
@@ -217,17 +210,19 @@ pub enum RingError {
     DepositAboveOutflow { asset: [u8; 32] },
     #[error("the compact transfer expands to external data the SPP proof does not bind")]
     ExternalDataMismatch,
-    #[error("a ring merge of {width} slots does not fit a v1 transaction beside its disclosure")]
+    #[error("a ring merge of {width} slots is no width SPP keys")]
     MergeTooWide { width: usize },
+    #[error("a zero-key merge names its owner as a shielded address under the zero key")]
+    MergeOwnerKey,
+    #[error("a deposit to an anonymous ring names its recipient under a tag")]
+    AnonymousDepositUntagged,
     #[error("the ring is not anonymous, its owners sign in public")]
     NotAnonymousRing,
     #[error("an anonymous ring spends only through the hidden owner's proof")]
     MissingAnonymousSigner,
     #[error("a default-ring spend of {inputs} inputs fits no entry key, split the transfer")]
     DefaultRingSpendTooWide { inputs: usize },
-    #[error("a default-ring spend opens every input in full, input {index} carries data")]
-    EntryInputData { index: usize },
-    #[error("a default-ring spend takes no ring UTXO, input {index} is one")]
+    #[error("a hidden owner spending a default-ring note takes no ring note of its own, input {index} is one, use the public-owner rail")]
     EntryRingInput { index: usize },
     #[error("the hidden signer does not match the sender")]
     AnonymousSignerMismatch,
@@ -276,12 +271,8 @@ pub enum RingError {
     NullifierKeyMismatch,
     #[error("the enrollment key disagrees with the member's record, the first key is permanent")]
     EnrollmentKeyMismatch,
-    #[error("the owner holds no address enrollment on the registry")]
-    AddressNotEnrolled,
     #[error("the member record is not included under the requested root")]
     InvalidRecordOpening,
-    #[error("{owner:?} enrolled no matching nullifier key")]
-    UnregisteredOutputKey { owner: Member },
     #[error("the ring key set has no verifying key for {0:?}")]
     MissingVerifyingKey(RingCircuit),
     #[error("no ring key serves {0:?}")]

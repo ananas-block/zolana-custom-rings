@@ -10,7 +10,8 @@ use spr_transaction::{
 };
 use zeroize::Zeroizing;
 use zolana_ring_member_registry::{
-    MemberRecord, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput,
+    MemberRecord, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput, SharedProof,
+    TrackingOpening, TrackingPool, TrackingRecord,
 };
 use zolana_ring_policy::{AssetLimits, EncodedRuleTable, SourceMap, MAX_SOURCES};
 
@@ -149,39 +150,25 @@ pub(crate) struct AuditParams {
     pub layout: u8,
 }
 
+/// One output slot and the preimages its record names.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DeliveredOutput {
-    pub output: Opening,
-    #[serde(with = "fe")]
-    pub recipient_key: [u8; 32],
-    #[serde(with = "fe")]
-    pub owner_key: [u8; 32],
-    #[serde(with = "fe")]
-    pub body: Vec<u8>,
-}
-
-/// The owner key and recipient key are bytes, never fields.
-#[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AnonymousOutput {
+pub(crate) struct OutputOpening {
     pub output: Opening,
     #[serde(with = "fe")]
     pub owner_key: [u8; 32],
-    #[serde(with = "fe")]
-    pub recipient_key: [u8; 32],
-    pub address_revision: u64,
     #[serde(serialize_with = "fe::seq")]
     pub mint_chunks: [[u8; 32]; 2],
-    /// Zero on change, exit and an omitted slot, the published bytes on a recipient or dummy.
+}
+
+/// A default-ring input's preimages, zero off one.
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EntryOpening {
     #[serde(with = "fe")]
-    pub body: Vec<u8>,
-    /// Zero on change, exit and an omitted slot.
-    #[serde(with = "fe")]
-    pub tag: [u8; 32],
-    /// A published dummy's tag preimage, zero on every other slot.
-    #[serde(with = "fe")]
-    pub tag_preimage: [u8; 32],
+    pub owner_key: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub mint_chunks: [[u8; 32]; 2],
 }
 
 /// A member's record, or the low record proving it absent, as one subject entry opens it.
@@ -193,15 +180,11 @@ pub(crate) struct MemberOpening {
     pub next: [u8; 32],
     pub lists: u64,
     #[serde(with = "fe")]
-    pub escrow_key: [u8; 32],
-    #[serde(with = "fe")]
     pub mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-    #[serde(with = "fe")]
-    pub address_hash: [u8; 32],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -211,15 +194,11 @@ pub(crate) struct MemberOpening {
     pub low_next: [u8; 32],
     pub low_lists: u64,
     #[serde(with = "fe")]
-    pub low_escrow: [u8; 32],
-    #[serde(with = "fe")]
     pub low_mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub low_withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub low_asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-    #[serde(with = "fe")]
-    pub low_address_hash: [u8; 32],
 }
 
 impl From<&RecordOpening> for MemberOpening {
@@ -229,45 +208,37 @@ impl From<&RecordOpening> for MemberOpening {
                 present: true,
                 next: record.next,
                 lists: record.lists,
-                escrow_key: record.escrow_key,
                 mint_policy: record.mint_policy.field(),
                 withdrawal_threshold: right_align(
                     &record.mint_policy.withdrawal_threshold.to_be_bytes(),
                 ),
                 asset_limits: record.mint_policy.limits.fields(),
-                address_hash: record.address_hash,
                 index: path.index,
                 path: *path,
                 low_member: [0; 32],
                 low_next: [0; 32],
                 low_lists: 0,
-                low_escrow: [0; 32],
                 low_mint_policy: [0; 32],
                 low_withdrawal_threshold: [0; 32],
                 low_asset_limits: [[0; 32]; AssetLimits::FIELDS],
-                low_address_hash: [0; 32],
             },
             RecordOpening::Absent { low, path } => Self {
                 present: false,
                 next: [0; 32],
                 lists: 0,
-                escrow_key: [0; 32],
                 mint_policy: [0; 32],
                 withdrawal_threshold: [0; 32],
                 asset_limits: [[0; 32]; AssetLimits::FIELDS],
-                address_hash: [0; 32],
                 index: path.index,
                 path: *path,
                 low_member: low.member,
                 low_next: low.next,
                 low_lists: low.lists,
-                low_escrow: low.escrow_key,
                 low_mint_policy: low.mint_policy.field(),
                 low_withdrawal_threshold: right_align(
                     &low.mint_policy.withdrawal_threshold.to_be_bytes(),
                 ),
                 low_asset_limits: low.mint_policy.limits.fields(),
-                low_address_hash: low.address_hash,
             },
         }
     }
@@ -278,6 +249,54 @@ impl From<&RecordOpening> for MemberOpening {
 pub(crate) struct PoolEntry {
     pub own: u32,
     pub curator: [u32; 1],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubjectRequest {
+    #[serde(with = "fe")]
+    member: [u8; 32],
+    record_index: u32,
+}
+
+#[derive(Serialize)]
+struct PathRequest<'a> {
+    index: u64,
+    #[serde(serialize_with = "levels")]
+    siblings: &'a [[[u8; 32]; QUAD_ARITY - 1]],
+}
+
+#[derive(Serialize)]
+struct ProofRequest<'a> {
+    #[serde(serialize_with = "fe::seq")]
+    canopy: &'a [[u8; 32]],
+    paths: Vec<PathRequest<'a>>,
+}
+
+impl<'a> From<&'a SharedProof> for ProofRequest<'a> {
+    fn from(proof: &'a SharedProof) -> Self {
+        Self {
+            canopy: &proof.canopy,
+            paths: proof
+                .paths
+                .iter()
+                .map(|path| PathRequest {
+                    index: path.index,
+                    siblings: &path.siblings,
+                })
+                .collect(),
+        }
+    }
+}
+
+fn subject_requests(subjects: &[zolana_ring_member_registry::PoolSubject]) -> Vec<SubjectRequest> {
+    subjects
+        .iter()
+        .map(|subject| SubjectRequest {
+            member: subject.member,
+            record_index: subject.record_index,
+        })
+        .collect()
 }
 
 /// Both pools at the key's widths, an unopened pool where the key binds no root.
@@ -297,44 +316,21 @@ impl Serialize for RecordPools {
             next: [u8; 32],
             lists: u64,
             #[serde(with = "fe")]
-            escrow_key: [u8; 32],
-            #[serde(with = "fe")]
             mint_policy: [u8; 32],
             #[serde(with = "fe")]
             withdrawal_threshold: [u8; 32],
             #[serde(serialize_with = "fe::seq")]
             asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-            #[serde(with = "fe")]
-            address_hash: [u8; 32],
-        }
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Subject {
-            #[serde(with = "fe")]
-            member: [u8; 32],
-            record_index: u32,
-        }
-        #[derive(Serialize)]
-        struct Path<'a> {
-            index: u64,
-            #[serde(serialize_with = "levels")]
-            siblings: &'a [[[u8; 32]; QUAD_ARITY - 1]],
-        }
-        #[derive(Serialize)]
-        struct Proof<'a> {
-            #[serde(serialize_with = "fe::seq")]
-            canopy: &'a [[u8; 32]],
-            paths: Vec<Path<'a>>,
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Pools<'a> {
             own_records: Vec<Record>,
             curator_records: Vec<Record>,
-            own_proof: Proof<'a>,
-            curator_proof: Proof<'a>,
-            own_subjects: Vec<Subject>,
-            curator_subjects: Vec<Subject>,
+            own_proof: ProofRequest<'a>,
+            curator_proof: ProofRequest<'a>,
+            own_subjects: Vec<SubjectRequest>,
+            curator_subjects: Vec<SubjectRequest>,
         }
         let records = |pool: &RecordPool| {
             pool.records
@@ -343,48 +339,136 @@ impl Serialize for RecordPools {
                     member: record.member,
                     next: record.next,
                     lists: record.lists,
-                    escrow_key: record.escrow_key,
                     mint_policy: record.mint_policy.field(),
                     withdrawal_threshold: right_align(
                         &record.mint_policy.withdrawal_threshold.to_be_bytes(),
                     ),
                     asset_limits: record.mint_policy.limits.fields(),
-                    address_hash: record.address_hash,
-                })
-                .collect()
-        };
-        fn proof(pool: &RecordPool) -> Proof<'_> {
-            Proof {
-                canopy: &pool.proof.canopy,
-                paths: pool
-                    .proof
-                    .paths
-                    .iter()
-                    .map(|path| Path {
-                        index: path.index,
-                        siblings: &path.siblings,
-                    })
-                    .collect(),
-            }
-        }
-        let subjects = |pool: &RecordPool| {
-            pool.subjects
-                .iter()
-                .map(|subject| Subject {
-                    member: subject.member,
-                    record_index: subject.record_index,
                 })
                 .collect()
         };
         Pools {
             own_records: records(&self.own),
             curator_records: records(&self.curator),
-            own_proof: proof(&self.own),
-            curator_proof: proof(&self.curator),
-            own_subjects: subjects(&self.own),
-            curator_subjects: subjects(&self.curator),
+            own_proof: (&self.own.proof).into(),
+            curator_proof: (&self.curator.proof).into(),
+            own_subjects: subject_requests(&self.own.subjects),
+            curator_subjects: subject_requests(&self.curator.subjects),
         }
         .serialize(serializer)
+    }
+}
+
+/// One tracking leaf as the circuits read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TrackingLeafRequest {
+    #[serde(with = "fe")]
+    pub member: [u8; 32],
+    #[serde(with = "fe")]
+    pub next: [u8; 32],
+    #[serde(with = "fe")]
+    pub nullifier_pk: [u8; 32],
+    #[serde(with = "fe")]
+    pub ct_hash: [u8; 32],
+    #[serde(with = "fe")]
+    pub view0: [u8; 32],
+    #[serde(with = "fe")]
+    pub view1: [u8; 32],
+    #[serde(with = "fe")]
+    pub revision: [u8; 32],
+    #[serde(with = "fe")]
+    pub list_tag: [u8; 32],
+}
+
+impl From<&TrackingRecord> for TrackingLeafRequest {
+    fn from(record: &TrackingRecord) -> Self {
+        let [view0, view1] = pack_be(&record.viewing_u);
+        Self {
+            member: record.member,
+            next: record.next,
+            nullifier_pk: record.nullifier_pk,
+            ct_hash: record.ct_hash,
+            view0,
+            view1,
+            revision: right_align(&record.revision.to_be_bytes()),
+            list_tag: record.list_tag,
+        }
+    }
+}
+
+/// Every owner row and live ring output under the frame's tracking root.
+pub(crate) struct TrackingParams {
+    pub tracking_root: [u8; 32],
+    pub pool: TrackingPool,
+    pub row_entries: Vec<u32>,
+    pub output_entries: Vec<u32>,
+}
+
+impl Serialize for TrackingParams {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Tracking<'a> {
+            #[serde(with = "fe")]
+            tracking_root: [u8; 32],
+            tracking_records: Vec<TrackingLeafRequest>,
+            tracking_proof: ProofRequest<'a>,
+            tracking_subjects: Vec<SubjectRequest>,
+            row_entries: &'a [u32],
+            output_entries: &'a [u32],
+        }
+        Tracking {
+            tracking_root: self.tracking_root,
+            tracking_records: self.pool.records.iter().map(Into::into).collect(),
+            tracking_proof: (&self.pool.proof).into(),
+            tracking_subjects: subject_requests(&self.pool.subjects),
+            row_entries: &self.row_entries,
+            output_entries: &self.output_entries,
+        }
+        .serialize(serializer)
+    }
+}
+
+/// A row's opening under a tracking root, the record a deposit or merge binds.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TrackingOpeningRequest {
+    pub present: bool,
+    pub record: TrackingLeafRequest,
+    pub path: TrackingPathRequest,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct TrackingPathRequest {
+    pub index: u64,
+    pub siblings: Vec<[[u8; 32]; QUAD_ARITY - 1]>,
+}
+
+impl Serialize for TrackingPathRequest {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        PathRequest {
+            index: self.index,
+            siblings: &self.siblings,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl From<&TrackingOpening> for TrackingOpeningRequest {
+    fn from(opening: &TrackingOpening) -> Self {
+        let (present, record, path) = match opening {
+            TrackingOpening::Present { record, path } => (true, record, path),
+            TrackingOpening::Absent { low, path } => (false, low, path),
+        };
+        Self {
+            present,
+            record: record.into(),
+            path: TrackingPathRequest {
+                index: path.index,
+                siblings: path.siblings.to_vec(),
+            },
+        }
     }
 }
 
@@ -404,19 +488,33 @@ impl Serialize for PolicyTable<'_> {
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
+        struct Private {
+            #[serde(with = "fe")]
+            owner_lists: [u8; 32],
+            #[serde(with = "fe")]
+            registry: [u8; 32],
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
         struct Table<'a> {
             sources: [Source; MAX_SOURCES],
+            source: Private,
             policy_len: u8,
             #[serde(serialize_with = "fe::seq")]
             rules: &'a [[u8; 32]],
         }
         let rules = self.rules;
         let slots = self.sources.slots();
+        let [owner_lists, registry] = self.sources.private().fields();
         Table {
             sources: core::array::from_fn(|i| Source {
                 list_id: slots[i].list_id,
                 registry: slots[i].registry,
             }),
+            source: Private {
+                owner_lists,
+                registry,
+            },
             policy_len: rules.rule_count,
             rules: &rules.rules,
         }
@@ -440,6 +538,8 @@ pub(crate) struct PolicyParams<'a> {
     pub own_root: [u8; 32],
     #[serde(with = "fe")]
     pub curator_root: [u8; 32],
+    #[serde(with = "fe")]
+    pub private_root: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub public_assets: Vec<[u8; 32]>,
     #[serde(serialize_with = "fe::seq")]
@@ -448,14 +548,9 @@ pub(crate) struct PolicyParams<'a> {
     pub public_gross: Vec<[u8; 32]>,
     #[serde(flatten)]
     pub table: PolicyTable<'a>,
-    /// One per output slot, zero without key escrow.
-    #[serde(serialize_with = "fe::seq")]
-    pub ct_hashes: Vec<[u8; 32]>,
-    #[serde(serialize_with = "fe::seq")]
-    pub recipients: &'a [[u8; 32]],
     #[serde(flatten)]
     pub pools: RecordPools,
-    /// `Q` entries, the key's screened owners in subject order.
+    /// `S` entries in row order.
     pub sender_entries: Vec<PoolEntry>,
     pub owner_entries: Vec<PoolEntry>,
     pub asset_entries: Vec<PoolEntry>,
@@ -470,18 +565,34 @@ pub(crate) struct TransferParams<'a> {
     pub public_input_hash: [u8; 32],
     #[serde(flatten)]
     pub audit: AuditParams,
-    pub exempt: bool,
-    pub approval_required: bool,
+    pub approval_mask: u8,
     /// `m`, the published slots.
     pub output_count: u8,
+    pub outputs: Vec<OutputOpening>,
     /// `n`, the frame's nullifier count.
     pub input_count: u8,
+    /// The input class, the slots past the spent notes carry no UTXO.
+    pub inputs: Vec<Opening>,
+    /// An entry key's default-ring preimages, none off one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<EntryOpening>,
     /// The deduplicated owner run.
     pub signer_count: u8,
+    /// The input class, the owner run in its order and zero past `signer_count`.
+    #[serde(serialize_with = "fe::seq")]
+    pub signers: Vec<[u8; 32]>,
+    /// The key's `S` rows, ascending with zero rows last.
+    #[serde(serialize_with = "fe::seq")]
+    pub rows: Vec<[u8; 32]>,
     #[serde(with = "fe")]
     pub private_tx_hash: [u8; 32],
     #[serde(with = "fe")]
     pub private_tx_blinding: [u8; 32],
+    /// SPP's chain of address slot nullifiers, zero without one.
+    #[serde(with = "fe")]
+    pub address_chain: [u8; 32],
+    #[serde(flatten)]
+    pub tracking: TrackingParams,
     #[serde(flatten)]
     pub policy: PolicyParams<'a>,
 }
@@ -493,18 +604,9 @@ pub(crate) struct ConfidentialTransfer<'a> {
     pub transfer: TransferParams<'a>,
     pub in_proof: bool,
     pub delegate: bool,
-    pub outputs: Vec<DeliveredOutput>,
-    /// The input class, the slots past the spent notes carry no UTXO.
-    pub inputs: Vec<Opening>,
     /// The in-proof owner, zero on the signer and authority rails.
     #[serde(with = "fe")]
     pub sender: [u8; 32],
-    /// The member an authority move spends.
-    #[serde(with = "fe")]
-    pub sender_pk_hash: [u8; 32],
-    /// The input class, the owner run in its order and zero past `signer_count`.
-    #[serde(serialize_with = "fe::seq")]
-    pub signers: Vec<[u8; 32]>,
 }
 
 #[derive(Serialize)]
@@ -512,27 +614,11 @@ pub(crate) struct ConfidentialTransfer<'a> {
 pub(crate) struct AnonymousTransfer<'a> {
     #[serde(flatten)]
     pub transfer: TransferParams<'a>,
-    pub outputs: Vec<AnonymousOutput>,
-    /// The hidden owner's key on an entry key, absent on a commitment key.
-    #[serde(with = "option_field", skip_serializing_if = "Option::is_none")]
-    pub sender_key: Option<[u8; 32]>,
-    /// The input class, slots past `input_count` zero.
-    pub inputs: Vec<Opening>,
+    pub public_owners: bool,
+    pub delegate: bool,
+    /// Payer, five co-signers and exit destination, zero when absent.
     #[serde(serialize_with = "fe::seq")]
-    pub party_identities: [[u8; 32]; 3],
-    /// The public co-owners, zero past `signer_count`, empty on an entry key.
-    #[serde(serialize_with = "fe::seq")]
-    pub signers: Vec<[u8; 32]>,
-    #[serde(with = "fe")]
-    pub sender_nullifier_pk: [u8; 32],
-    #[serde(with = "fe")]
-    pub sender_viewing_key: [u8; 32],
-    pub sender_address_revision: u64,
-    #[serde(with = "fe")]
-    pub sender_bundle_tag: [u8; 32],
-    /// The digest the program computes over the reply region, zero without one.
-    #[serde(with = "fe")]
-    pub reply_digest: [u8; 32],
+    pub party_identities: Vec<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -544,15 +630,11 @@ pub(crate) struct RecordWrite {
     pub old_next: [u8; 32],
     pub old_lists: u64,
     #[serde(with = "fe")]
-    pub old_escrow: [u8; 32],
-    #[serde(with = "fe")]
     pub old_mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub old_withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub old_asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-    #[serde(with = "fe")]
-    pub old_address_hash: [u8; 32],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -562,30 +644,14 @@ pub(crate) struct RecordWrite {
     pub low_next: [u8; 32],
     pub low_lists: u64,
     #[serde(with = "fe")]
-    pub low_escrow: [u8; 32],
-    #[serde(with = "fe")]
     pub low_mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub low_withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub low_asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-    #[serde(with = "fe")]
-    pub low_address_hash: [u8; 32],
     pub low_index: u64,
     #[serde(serialize_with = "path")]
     pub low_path: QuadPath,
-    /// Zero unless the write binds the pair.
-    #[serde(with = "fe")]
-    pub nullifier_pk: [u8; 32],
-    #[serde(with = "fe")]
-    pub address_ring: [u8; 32],
-    #[serde(with = "fe")]
-    pub view0: [u8; 32],
-    #[serde(with = "fe")]
-    pub view1: [u8; 32],
-    pub address_revision: u64,
-    #[serde(with = "fe")]
-    pub escrow_ct_hash: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -596,15 +662,11 @@ pub(crate) struct QueueEntryRequest {
     pub mask: u64,
     pub value: u64,
     #[serde(with = "fe")]
-    pub escrow_key: [u8; 32],
-    #[serde(with = "fe")]
     pub mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-    #[serde(with = "fe")]
-    pub address_hash: [u8; 32],
 }
 
 impl From<&QueueEntry> for QueueEntryRequest {
@@ -614,11 +676,9 @@ impl From<&QueueEntry> for QueueEntryRequest {
             member: entry.member,
             mask: entry.mask,
             value: entry.value,
-            escrow_key: entry.escrow_key,
             mint_policy: entry.mint_policy_field(),
             withdrawal_threshold: right_align(&policy.withdrawal_threshold.to_be_bytes()),
             asset_limits: policy.limits.fields(),
-            address_hash: entry.address_hash,
         }
     }
 }
@@ -629,53 +689,30 @@ impl From<&RecordWriteProofInput> for RecordWrite {
             member: low_member,
             next: low_next,
             lists: low_lists,
-            escrow_key: low_escrow,
             mint_policy: low_mint_policy,
-            address_hash: low_address_hash,
         } = write.low;
-        let (nullifier_pk, address_ring, [view0, view1], address_revision, escrow_ct_hash) =
-            match &write.pair {
-                Some(pair) => (
-                    pair.address.nullifier_pk,
-                    pair.address.ring_id,
-                    pack_be(&pair.address.viewing_u),
-                    pair.address.address_revision,
-                    pair.escrow_ciphertext_hash,
-                ),
-                None => ([0; 32], [0; 32], [[0; 32]; 2], 0, [0; 32]),
-            };
         Self {
             entry: (&write.entry).into(),
             exists: write.exists,
             old_next: write.old_next,
             old_lists: write.old_lists,
-            old_escrow: write.old_escrow,
             old_mint_policy: write.old_mint_policy.field(),
             old_withdrawal_threshold: right_align(
                 &write.old_mint_policy.withdrawal_threshold.to_be_bytes(),
             ),
             old_asset_limits: write.old_mint_policy.limits.fields(),
-            old_address_hash: write.old_address_hash,
             index: write.slot.index,
             path: write.slot,
             low_member,
             low_next,
             low_lists,
-            low_escrow,
             low_mint_policy: low_mint_policy.field(),
             low_withdrawal_threshold: right_align(
                 &low_mint_policy.withdrawal_threshold.to_be_bytes(),
             ),
             low_asset_limits: low_mint_policy.limits.fields(),
-            low_address_hash,
             low_index: write.low_path.index,
             low_path: write.low_path,
-            nullifier_pk,
-            address_ring,
-            view0,
-            view1,
-            address_revision,
-            escrow_ct_hash,
         }
     }
 }
@@ -706,6 +743,8 @@ pub(crate) struct KeyRegister {
     #[serde(with = "fe")]
     pub public_input_hash: [u8; 32],
     #[serde(with = "fe")]
+    pub ring_id: [u8; 32],
+    #[serde(with = "fe")]
     pub member: [u8; 32],
     #[serde(serialize_with = "fe::zeroizing")]
     pub nullifier_secret: Zeroizing<[u8; 32]>,
@@ -715,49 +754,12 @@ pub(crate) struct KeyRegister {
     pub auditor_pk: X25519Pubkey,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MergeSlot {
-    #[serde(with = "fe")]
-    pub domain: [u8; 32],
-    #[serde(with = "fe")]
-    pub tree_id: [u8; 32],
-    #[serde(with = "fe")]
-    pub amount: [u8; 32],
-    #[serde(with = "fe")]
-    pub blinding: [u8; 32],
-    #[serde(with = "fe")]
-    pub ring_data_hash: [u8; 32],
-}
-
-impl core::fmt::Debug for MergeSlot {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let Self {
-            domain,
-            tree_id,
-            amount,
-            blinding: _,
-            ring_data_hash,
-        } = self;
-        f.debug_struct("MergeSlot")
-            .field("domain", domain)
-            .field("tree_id", tree_id)
-            .field("amount", amount)
-            .field("blinding", &REDACTED)
-            .field("ring_data_hash", ring_data_hash)
-            .finish()
-    }
-}
-
+/// Seals a ring's SPP merge output to its auditor, `tracking` is `None` under a zero key.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MergeRequest {
-    #[serde(serialize_with = "fe::seq")]
-    pub party_identities: [[u8; 32]; 3],
     #[serde(with = "fe")]
     pub public_input_hash: [u8; 32],
-    #[serde(with = "fe")]
-    pub private_tx_hash: [u8; 32],
     #[serde(with = "fe")]
     pub output_utxo_hash: [u8; 32],
     #[serde(with = "fe")]
@@ -766,74 +768,31 @@ pub(crate) struct MergeRequest {
     pub ring_program_id: [u8; 32],
     #[serde(serialize_with = "coordinate")]
     pub auditor_pk: X25519Pubkey,
-    /// The SPP output ciphertext salt right aligned.
     #[serde(with = "fe")]
-    pub salt: [u8; 32],
+    pub payer: [u8; 32],
+    #[serde(with = "fe")]
+    pub tracking_root: [u8; 32],
     #[serde(serialize_with = "fe::zeroizing")]
     pub eph_sk: Zeroizing<[u8; 32]>,
-    #[serde(serialize_with = "fe::zeroizing")]
-    pub disclosure_key: Zeroizing<[u8; 32]>,
     #[serde(with = "fe")]
     pub owner_key: [u8; 32],
-    #[serde(serialize_with = "fe::zeroizing")]
-    pub nullifier_secret: Zeroizing<[u8; 32]>,
-    /// `hash_bytes(mint)`.
+    #[serde(with = "fe")]
+    pub owner_pk_hash: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub mint_chunks: [[u8; 32]; 2],
     #[serde(with = "fe")]
     pub asset: [u8; 32],
-    /// `merge.nullifiers.len()`, a published slot may be a hidden dummy.
-    pub input_count: u8,
-    pub inputs: Vec<MergeSlot>,
+    #[serde(with = "fe")]
+    pub amount: [u8; 32],
+    #[serde(with = "fe")]
+    pub nullifier_pk: [u8; 32],
+    #[serde(serialize_with = "fe::zeroizing")]
+    pub seed: Zeroizing<[u8; 32]>,
     #[serde(with = "fe")]
     pub output_tree_id: [u8; 32],
     #[serde(with = "fe")]
     pub output_ring_data_hash: [u8; 32],
-    pub key_escrow: bool,
-    #[serde(with = "fe")]
-    pub member_registry_root: [u8; 32],
-    #[serde(with = "fe")]
-    pub ct_hash: [u8; 32],
-    /// `Some` on a key escrow ring alone.
-    pub member: Option<RecordOpeningRequest>,
-}
-
-/// A present record as the deposit circuit opens it.
-#[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RecordOpeningRequest {
-    #[serde(with = "fe")]
-    pub next: [u8; 32],
-    pub lists: u64,
-    #[serde(with = "fe")]
-    pub escrow_key: [u8; 32],
-    #[serde(with = "fe")]
-    pub mint_policy: [u8; 32],
-    #[serde(with = "fe")]
-    pub withdrawal_threshold: [u8; 32],
-    #[serde(serialize_with = "fe::seq")]
-    pub asset_limits: [[u8; 32]; AssetLimits::FIELDS],
-    #[serde(with = "fe")]
-    pub address_hash: [u8; 32],
-    pub index: u64,
-    #[serde(serialize_with = "path")]
-    pub path: QuadPath,
-}
-
-impl RecordOpeningRequest {
-    pub fn present(record: &MemberRecord, path: &QuadPath) -> Self {
-        Self {
-            next: record.next,
-            lists: record.lists,
-            escrow_key: record.escrow_key,
-            mint_policy: record.mint_policy.field(),
-            withdrawal_threshold: right_align(
-                &record.mint_policy.withdrawal_threshold.to_be_bytes(),
-            ),
-            asset_limits: record.mint_policy.limits.fields(),
-            address_hash: record.address_hash,
-            index: path.index,
-            path: *path,
-        }
-    }
+    pub tracking: Option<TrackingOpeningRequest>,
 }
 
 /// The audited deposit's witness, one slot per deposited note.
@@ -855,16 +814,16 @@ pub(crate) struct DepositRequest<'a> {
     pub nullifier_pks: [[u8; 32]; 1],
     #[serde(serialize_with = "zeroizing_seq")]
     pub blinding_secrets: Zeroizing<[[u8; 32]; 1]>,
-    #[serde(serialize_with = "fe::seq")]
-    pub ct_hashes: [[u8; 32]; 1],
-    pub members: [Option<RecordOpeningRequest>; 1],
     #[serde(serialize_with = "fe::zeroizing")]
     pub eph_sk: Zeroizing<[u8; 32]>,
     #[serde(serialize_with = "coordinate")]
     pub auditor_pk: X25519Pubkey,
-    pub key_escrow: bool,
     #[serde(with = "fe")]
-    pub member_registry_root: [u8; 32],
+    pub tracking_root: [u8; 32],
+    /// `None` at a padding slot.
+    pub tracking: [Option<TrackingOpeningRequest>; 1],
+    #[serde(with = "fe")]
+    pub own_root: [u8; 32],
     #[serde(with = "fe")]
     pub curator_root: [u8; 32],
     #[serde(with = "fe")]
@@ -873,6 +832,7 @@ pub(crate) struct DepositRequest<'a> {
     pub assets: [[u8; 32]; 1],
     #[serde(serialize_with = "fe::seq")]
     pub amounts: [[u8; 32]; 1],
+    pub mint_chunks: [MintChunks; 1],
     /// `None` without a written policy, `asset_records` then opens nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<PolicyTable<'a>>,
@@ -881,6 +841,16 @@ pub(crate) struct DepositRequest<'a> {
     /// `None` without a curator source.
     pub curator_asset_records: [Option<MemberOpening>; 1],
     pub curator_owner_records: [Option<MemberOpening>; 1],
+}
+
+/// The 31 and 1 byte chunks of one raw mint.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MintChunks(pub [[u8; 32]; 2]);
+
+impl Serialize for MintChunks {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        fe::seq(&self.0, serializer)
+    }
 }
 
 /// The Solana key an owner identity hashes, the disclosure names it.
@@ -921,22 +891,6 @@ fn zeroizing_seq<S: Serializer, const N: usize>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     fe::seq(values.as_slice(), serializer)
-}
-
-mod option_field {
-    use serde::Serializer;
-
-    use crate::prover::fe;
-
-    pub(crate) fn serialize<S: Serializer>(
-        value: &Option<[u8; 32]>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        match value {
-            Some(value) => fe::bytes(value, serializer),
-            None => serializer.serialize_none(),
-        }
-    }
 }
 
 #[derive(Serialize)]

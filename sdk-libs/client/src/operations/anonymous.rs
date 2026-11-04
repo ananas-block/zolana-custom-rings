@@ -3,25 +3,27 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use custom_ring_interface::{
-    ring_recipient_output_body, ring_sender_bundle_output_body, stream::SlotSecret,
-    SENDER_BUNDLE_HEAD_LEN,
+    ring_body_output, ring_recipient_output_body, ring_sender_bundle_output_body,
+    stream::SlotSecret, SENDER_BUNDLE_HEAD_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{viewing_key::ViewTag, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey};
 use spr_transaction::{
+    instructions::merge::{MergeOutputPlaintext, MergeSeed},
     DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, Mint, ShieldedKeys,
-    ShieldedTransaction, TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
+    ShieldedTransaction, TransactionError, TransactionKeyRequest, WalletUtxo,
 };
 use zolana_ring_keys::{
-    RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind, RingTagProbe, ViewTagRequest,
-    ViewTagStream,
+    MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind,
+    RingTagProbe, ViewTagRequest, ViewTagStream,
 };
 use zolana_ring_transaction::{
     historical::{HistoricalBody, HistoricalReader, HistoricalSite},
     is_contributory, open_recipient_body, open_reply, open_sender_bundle, AnonymousOutput,
-    OpenedBody, ReplyClaim, RingAssets,
+    OpenedBody, OpenedNote, ReplyClaim, RingAssets,
 };
 
 use crate::history::{HistoryPosition, PageEnd};
@@ -31,6 +33,7 @@ use crate::{
     delivered::{self, RingDeliveryContext},
     deposit::{DepositOpener, DepositSlot, OpenedDeposit},
     deposit_payload, exactly_one, exactly_one_each,
+    merge_audit::RingMergeBody,
     tags::{IndexerReads, TagWindow},
     viewing_history::{GapScan, StreamCounter, ViewingHistory, ViewingKeyEntry},
     AnonymousError,
@@ -166,7 +169,7 @@ enum ScanFrom {
     Start,
 }
 
-impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
+impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a, K> {
     pub fn new(keys: &'a K, assets: &'a RingAssets) -> Self {
         Self {
             keys,
@@ -288,6 +291,13 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
     }
 }
 
+/// Scheme 11 only on a frame before statement version 4.
+pub(crate) fn recipient_payload(payload: &[u8]) -> Option<(&[u8], &[u8])> {
+    ring_body_output(payload).or_else(|| {
+        ring_recipient_output_body(payload).map(|(body, reply)| (body.as_slice(), reply))
+    })
+}
+
 fn sites_of(tx: &ShieldedTransaction) -> impl Iterator<Item = Site> {
     let outputs = (0..tx.output_slots.len()).map(Site::Output);
     outputs.chain((0..tx.messages.len()).map(Site::Message))
@@ -404,7 +414,7 @@ impl<'t> Body<'t> {
     fn of(tx: &'t ShieldedTransaction, site: Site, found: AnonymousStream) -> Option<Self> {
         let slot_index = match site {
             Site::Output(position) => {
-                ring_recipient_output_body(&tx.output_slots[position].payload)?;
+                recipient_payload(&tx.output_slots[position].payload)?;
                 position
             }
             Site::Message(message) => {
@@ -423,7 +433,9 @@ impl<'t> Body<'t> {
     }
 }
 
-impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_, I, K> {
+impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized>
+    Scan<'_, '_, '_, I, K>
+{
     fn held_entries(&self) -> Vec<usize> {
         let held = self.sync.keys.viewing_public_keys();
         self.history
@@ -491,6 +503,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                     Trial::EverySite => self.try_every_site(*index, &rows)?,
                 }
                 self.open_historical(*index, &rows)?;
+                self.open_owner_merges(*index, &rows)?;
             }
             if trial == Trial::EverySite {
                 merges.extend(RingMerges::among(rows).0);
@@ -674,18 +687,68 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                 }
                 .notes(tx, site, &plaintext);
                 for note in notes {
+                    let opened = OpenedNote {
+                        utxo: note.utxo,
+                        nullifier_pk: note.nullifier_pk,
+                        data_hash: None,
+                        ring_data_hash: None,
+                    };
                     match note.registered {
                         true => self.accept(
                             index,
                             tx,
                             AnonymousStream::Historical,
                             note.position,
-                            note.utxo,
-                            note.nullifier_pk,
+                            opened,
                         )?,
-                        false => self.hold_back(tx, note.position, note.utxo, note.nullifier_pk)?,
+                        false => self.hold_back(tx, note.position, opened)?,
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Only the seed a held key derives opens a zero-key merge.
+    fn open_owner_merges(
+        &mut self,
+        index: usize,
+        rows: &[ShieldedTransaction],
+    ) -> Result<(), AnonymousError> {
+        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        let owner = self.address.signing_pubkey;
+        let owner_tag = owner.owner_proof_input_hash()?;
+        for tx in rows {
+            let Some(merge) = OwnerMerge::of(tx, &owner_tag) else {
+                continue;
+            };
+            if self.is_found(&tx.output_slots[0].output_context.hash) {
+                continue;
+            }
+            let seed = exactly_one(self.sync.keys.merge_seeds(&[MergeSeedRequest {
+                viewing_pubkey,
+                ring_program_id: merge.ring,
+                first_nullifier: merge.first_nullifier,
+            }])?)?;
+            let Some(mint) = merge.open(tx, &seed, owner)? else {
+                continue;
+            };
+            let found = AnonymousStream::Merge {
+                first_nullifier: merge.first_nullifier,
+            };
+            match self.sync.assets.registry().mint(&mint.utxo.asset.asset) {
+                Ok(registered) => {
+                    let note = OpenedNote {
+                        utxo: spr_transaction::Utxo {
+                            asset: registered,
+                            ..mint.utxo
+                        },
+                        ..mint
+                    };
+                    self.accept(index, tx, found, 0, note)?;
+                }
+                Err(TransactionError::UnknownMint(_)) => self.hold_back(tx, 0, mint)?,
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(())
@@ -836,7 +899,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         secret: &SlotSecret,
     ) -> Result<(), AnonymousError> {
         let slot = &body.tx.output_slots[position];
-        let Some((ciphertext, reply)) = ring_recipient_output_body(&slot.payload) else {
+        let Some((ciphertext, reply)) = recipient_payload(&slot.payload) else {
             return Ok(());
         };
         let Ok(plain) = open_recipient_body(ciphertext, secret) else {
@@ -846,11 +909,11 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
             .output_at(body, &self.address, position)
             .open_body(&plain);
         match opened {
-            Ok(Some(OpenedBody::Note { utxo, nullifier_pk })) => {
-                self.accept(index, body.tx, body.found, position, utxo, nullifier_pk)?;
+            Ok(Some(OpenedBody::Note(note))) => {
+                self.accept(index, body.tx, body.found, position, note)?;
             }
-            Ok(Some(OpenedBody::UnknownMint { utxo, nullifier_pk })) => {
-                self.hold_back(body.tx, position, utxo, nullifier_pk)?;
+            Ok(Some(OpenedBody::UnknownMint(note))) => {
+                self.hold_back(body.tx, position, note)?;
             }
             Ok(None) | Err(_) => return Ok(()),
         }
@@ -887,12 +950,11 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                 .output_at(body, &self.address, position as usize)
                 .open_change(&bundle, &first_nullifier, position)
             {
-                Ok(Some(OpenedBody::Note { utxo, nullifier_pk })) => {
-                    let position = position as usize;
-                    self.accept(index, body.tx, body.found, position, utxo, nullifier_pk)?
+                Ok(Some(OpenedBody::Note(note))) => {
+                    self.accept(index, body.tx, body.found, position as usize, note)?
                 }
-                Ok(Some(OpenedBody::UnknownMint { utxo, nullifier_pk })) => {
-                    self.hold_back(body.tx, position as usize, utxo, nullifier_pk)?;
+                Ok(Some(OpenedBody::UnknownMint(note))) => {
+                    self.hold_back(body.tx, position as usize, note)?;
                 }
                 Ok(None) | Err(_) => {}
             }
@@ -934,7 +996,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         tx_viewing_key: &ViewingKey,
     ) -> Option<SentPayment> {
         let slot = &body.tx.output_slots[position];
-        let (ciphertext, _) = ring_recipient_output_body(&slot.payload)?;
+        let (ciphertext, _) = recipient_payload(&slot.payload)?;
         let slot_index = u32::try_from(position).ok()?;
         let agreement = zeroize::Zeroizing::new(tx_viewing_key.ecdh(recipient).ok()?);
         let secret = custom_ring_interface::stream::DeliveredSlot {
@@ -960,8 +1022,8 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                     .ok()
                     .flatten()?
                 {
-                    OpenedBody::Note { utxo, .. } => Some((address.signing_pubkey, utxo.asset)),
-                    OpenedBody::UnknownMint { .. } => None,
+                    OpenedBody::Note(note) => Some((address.signing_pubkey, note.utxo.asset)),
+                    OpenedBody::UnknownMint(_) => None,
                 }
             });
         let (owner_pubkey, check) = match verified {
@@ -1002,14 +1064,13 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         tx: &ShieldedTransaction,
         stream: AnonymousStream,
         position: usize,
-        utxo: Utxo,
-        nullifier_pubkey: [u8; 32],
+        note: OpenedNote,
     ) -> Result<(), AnonymousError> {
         if self.is_found(&tx.output_slots[position].output_context.hash) {
             return Ok(());
         }
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        let utxo = published_note(tx, position, utxo, nullifier_pubkey)?;
+        let utxo = published_note(tx, position, note)?;
         self.keep(utxo, viewing_pubkey, stream);
         Ok(())
     }
@@ -1019,10 +1080,9 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         &mut self,
         tx: &ShieldedTransaction,
         position: usize,
-        utxo: Utxo,
-        nullifier_pubkey: [u8; 32],
+        note: OpenedNote,
     ) -> Result<(), AnonymousError> {
-        let utxo = published_note(tx, position, utxo, nullifier_pubkey)?;
+        let utxo = published_note(tx, position, note)?;
         self.hold_back_note(utxo);
         Ok(())
     }
@@ -1199,21 +1259,75 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
     }
 }
 
-fn published_note(
+/// Nothing of it is authentic until its commitment rebuilds.
+struct OwnerMerge {
+    ring: Address,
+    first_nullifier: [u8; 32],
+    body: RingMergeBody,
+}
+
+impl OwnerMerge {
+    fn of(tx: &ShieldedTransaction, owner_tag: &[u8; 32]) -> Option<Self> {
+        let [slot] = tx.output_slots.as_slice() else {
+            return None;
+        };
+        if slot.view_tag != *owner_tag {
+            return None;
+        }
+        Some(Self {
+            ring: tx.ring_program_id?,
+            first_nullifier: *tx.nullifiers.first()?,
+            body: RingMergeBody::of(slot)?,
+        })
+    }
+
+    /// `None` under another wallet's seed.
+    fn open(
+        &self,
+        tx: &ShieldedTransaction,
+        seed: &MergeSeed,
+        owner: PublicKey,
+    ) -> Result<Option<OpenedNote>, AnonymousError> {
+        let key = seed.output_key(&self.first_nullifier)?;
+        let Ok(plaintext) = MergeOutputPlaintext::decrypt(&self.body.encrypted, &key) else {
+            return Ok(None);
+        };
+        let utxo = plaintext.into_utxo(
+            owner,
+            Mint::new(plaintext.mint, 0),
+            seed.output_blinding(&self.first_nullifier)?,
+            Some(self.ring),
+        );
+        let context = &tx.output_slots[0].output_context;
+        let hash = utxo.hash(
+            &ZERO_NULLIFIER_PUBKEY,
+            &[0; 32],
+            &self.body.ring_data_hash,
+            context.tree_id,
+        )?;
+        Ok((hash == context.hash).then_some(OpenedNote {
+            utxo,
+            nullifier_pk: ZERO_NULLIFIER_PUBKEY,
+            data_hash: None,
+            ring_data_hash: Some(self.body.ring_data_hash),
+        }))
+    }
+}
+
+pub(crate) fn published_note(
     tx: &ShieldedTransaction,
     position: usize,
-    utxo: Utxo,
-    nullifier_pubkey: [u8; 32],
+    note: OpenedNote,
 ) -> Result<WalletUtxo, AnonymousError> {
     let context = &tx.output_slots[position].output_context;
     Ok(WalletUtxo {
-        utxo,
-        nullifier_pubkey,
+        utxo: note.utxo,
+        nullifier_pubkey: note.nullifier_pk,
         utxo_hash: context.hash,
         nullifier: [0; 32],
         tx_viewing_key: None,
-        data_hash: None,
-        ring_data_hash: None,
+        data_hash: note.data_hash,
+        ring_data_hash: note.ring_data_hash,
         tree_id: context.tree_id,
         leaf_index: context.leaf_index,
         latest_tree_id: None,

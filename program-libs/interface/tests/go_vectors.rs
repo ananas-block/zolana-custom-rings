@@ -114,7 +114,6 @@ impl TransferCase {
 
 /// Every position rebuilds from the preimages, through the final hash.
 #[test]
-#[ignore = "transfer-rails writes audit/transfer_statement_v4.json from its solved witnesses"]
 fn transfer_statements_reach_the_go_public_inputs() {
     #[derive(Deserialize)]
     struct Vector {
@@ -326,13 +325,20 @@ fn record_pools_match_the_compiled_keys() {
         key: String,
         own: usize,
         curator: usize,
+        tracking: usize,
     }
     #[derive(Deserialize)]
     struct Vector {
         keys: Vec<Key>,
     }
     let vector: Vector = vector("policy/pool_capacity.json");
-    assert_eq!(vector.keys.len(), 15);
+    assert!(RING_KEYS
+        .iter()
+        .filter(|ring_key| ring_key.circuit.record_pools().is_some())
+        .all(|ring_key| vector
+            .keys
+            .iter()
+            .any(|key| key.key.replace('_', "-") == ring_key.name)));
     for key in vector.keys {
         let name = key.key.replace('_', "-");
         let ring_key = RING_KEYS
@@ -340,6 +346,10 @@ fn record_pools_match_the_compiled_keys() {
             .find(|ring_key| ring_key.name == name)
             .unwrap_or_else(|| panic!("{name} is no catalog key"));
         let pools = ring_key.circuit.record_pools().unwrap();
-        assert_eq!((pools.own, pools.curator), (key.own, key.curator), "{name}");
+        assert_eq!(
+            (pools.own, pools.curator, pools.tracking),
+            (key.own, key.curator, key.tracking),
+            "{name}"
+        );
     }
 }

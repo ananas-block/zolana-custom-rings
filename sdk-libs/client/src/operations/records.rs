@@ -1,40 +1,26 @@
 //! Member record views as record tree types, every opening checked against its root.
 
-use custom_ring_interface::{
-    storage::StorageRegistry, EscrowKey, QueueEntry, QUAD_ARITY, QUAD_HEIGHT,
-    REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
-};
+use custom_ring_interface::{storage::StorageRegistry, QueueEntry, QUAD_ARITY};
 use solana_address::Address;
-use spr_hasher::{primitives::hash_bytes, HasherError};
 use spr_indexer_api::Hash;
-use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsResponse, GetStorageMemberOpeningsRequest,
     GetStorageMemberOpeningsResponse, GetStorageMemberRecordsResponse,
-    GetStorageRecordPoolResponse, RingAuthorizedAddressView, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
+    GetStorageRecordPoolResponse, RingMemberOpening, RingMemberRecordView, RingRecordPathView,
+    RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::{
-    AddressEscrowPair, ApplyProofInputs, AuthorizedAddress, Canopy, MemberRecord, OpeningCheck,
-    PoolSubject, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput, SharedPath,
-    SharedProof,
+    ApplyProofInputs, Canopy, MemberRecord, OpeningCheck, PoolSubject, QuadPath, QuadPathOf,
+    RecordOpening, RecordPool, RecordWriteProofInput, SharedPath, SharedProof,
 };
 use zolana_ring_policy::ListId;
 
-use crate::{AuditError, SealedNullifierKey};
+use crate::AuditError;
 
 /// A member's record, or the low record bracketing its absence, read under one root.
 #[derive(Clone, PartialEq, Eq)]
 pub struct MemberOpeningRead {
     pub opening: RecordOpening,
-    /// The nullifier secret a registered member sealed to the auditor.
-    pub sealed: Option<SealedNullifierKey>,
-    /// The escrow write's owner, its owner identity is the member.
-    pub owner_pubkey: Option<Address>,
-    /// The key the escrow key binds beside the sealed secret.
-    pub nullifier_pk: Option<[u8; 32]>,
-    /// The preimage of the record's `address_hash`, `None` before enrollment.
-    pub address: Option<AuthorizedAddress>,
 }
 
 /// A registry's newest root, every record page is read under it.
@@ -45,28 +31,10 @@ pub struct StorageTip {
     pub revision: u64,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct EscrowedRecord<'a> {
-    pub record: &'a MemberRecord,
-    pub path: &'a QuadPath,
-    pub sealed: &'a SealedNullifierKey,
-}
-
-impl EscrowedRecord<'_> {
-    /// What the escrow key binds beside the nullifier key.
-    pub fn ct_hash(&self) -> Result<[u8; 32], HasherError> {
-        ct_hash(self.sealed)
-    }
-}
-
 /// Every record of a pool read under one root, each subject's own or the low record bracketing it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RecordPoolRead {
     pool: RecordPool,
-    /// `sealed[i]` is the key `pool.records[i]` sealed to the auditor.
-    sealed: Vec<Option<SealedNullifierKey>>,
-    /// `addresses[i]` is the preimage of `pool.records[i].address_hash`.
-    addresses: Vec<Option<AuthorizedAddress>>,
 }
 
 /// One pool read of distinct `members` under `root`, its canopy sized for `openings` paths.
@@ -122,21 +90,7 @@ impl RecordPoolCheck<'_> {
                 .collect(),
         };
         pool.verify(self.root).map_err(invalid)?;
-        let sealed = response
-            .records
-            .iter()
-            .map(|row| sealed_key(&row.record))
-            .collect::<Result<_, _>>()?;
-        let addresses = response
-            .records
-            .iter()
-            .map(|row| authorized_address(&row.record))
-            .collect::<Result<_, _>>()?;
-        Ok(RecordPoolRead {
-            pool,
-            sealed,
-            addresses,
-        })
+        Ok(RecordPoolRead { pool })
     }
 }
 
@@ -150,32 +104,6 @@ impl RecordPoolRead {
         self.position(member)
             .and_then(|index| self.pool.records.get(index))
             .filter(|record| record.member == *member)
-    }
-
-    /// The member's enrolled address, `None` for an absent or unenrolled member.
-    pub fn address(&self, member: &[u8; 32]) -> Option<&AuthorizedAddress> {
-        self.record(member)?;
-        self.addresses.get(self.position(member)?)?.as_ref()
-    }
-
-    /// The ciphertext hash the member's escrow key binds beside `nullifier_pk`, `None` when it binds none.
-    pub fn escrowed_ct_hash(
-        &self,
-        member: &[u8; 32],
-        nullifier_pk: &[u8; 32],
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        let Some(index) = self.position(member) else {
-            return Ok(None);
-        };
-        let (Some(record), Some(Some(sealed))) =
-            (self.pool.records.get(index), self.sealed.get(index))
-        else {
-            return Ok(None);
-        };
-        match record.member == *member && escrow_binds(record, sealed, nullifier_pk)? {
-            true => Ok(Some(ct_hash(sealed)?)),
-            false => Ok(None),
-        }
     }
 
     fn position(&self, member: &[u8; 32]) -> Option<usize> {
@@ -269,19 +197,7 @@ impl MemberOpeningRead {
         }
         .verify()
         .map_err(|_| AuditError::InvalidMemberRegistry)?;
-        // An absent member's opening carries the low record, its keys belong to another member.
-        let registered = view.present.then_some(&view.record);
-        Ok(Self {
-            opening,
-            sealed: registered.map(sealed_key).transpose()?.flatten(),
-            owner_pubkey: registered
-                .and_then(|record| record.owner_pubkey.as_ref())
-                .map(|owner| owner.0),
-            nullifier_pk: registered
-                .and_then(|record| record.nullifier_pk.as_ref())
-                .map(|key| key.0),
-            address: registered.map(authorized_address).transpose()?.flatten(),
-        })
+        Ok(Self { opening })
     }
 
     /// The member's record, `None` for an absent member.
@@ -296,55 +212,25 @@ impl MemberOpeningRead {
         self.record()
             .is_some_and(|record| record.lists & list.record_bit() != 0)
     }
-
-    /// `None` unless the record's escrow key binds `nullifier_pk` to the sealed secret.
-    pub fn escrowed(
-        &self,
-        nullifier_pk: &[u8; 32],
-    ) -> Result<Option<EscrowedRecord<'_>>, AuditError> {
-        let (RecordOpening::Present { record, path }, Some(sealed)) = (&self.opening, &self.sealed)
-        else {
-            return Ok(None);
-        };
-        let binds = escrow_binds(record, sealed, nullifier_pk)?;
-        Ok(binds.then_some(EscrowedRecord {
-            record,
-            path,
-            sealed,
-        }))
-    }
 }
 
-fn escrow_binds(
-    record: &MemberRecord,
-    sealed: &SealedNullifierKey,
-    nullifier_pk: &[u8; 32],
-) -> Result<bool, AuditError> {
-    let escrow_key = EscrowKey {
-        nullifier_pk,
-        ciphertext: &sealed.ciphertext,
-    }
-    .hash()?;
-    Ok(escrow_key == record.escrow_key)
-}
-
-fn ct_hash(sealed: &SealedNullifierKey) -> Result<[u8; 32], HasherError> {
-    hash_bytes(&sealed.ciphertext)
-}
-
-/// Ten levels of three siblings, leaf level first.
-pub fn quad_path(view: &RingRecordPathView) -> Result<QuadPath, AuditError> {
-    let levels: [[_; QUAD_ARITY - 1]; QUAD_HEIGHT] = view
+/// Leaf level first.
+pub fn path_of<const H: usize>(view: &RingRecordPathView) -> Result<QuadPathOf<H>, AuditError> {
+    let levels: [[_; QUAD_ARITY - 1]; H] = view
         .siblings
         .iter()
         .map(|level| level.clone().map(|sibling| sibling.0))
         .collect::<Vec<_>>()
         .try_into()
         .map_err(|_| AuditError::InvalidMemberRegistry)?;
-    Ok(QuadPath {
+    Ok(QuadPathOf {
         index: view.index,
         siblings: levels,
     })
+}
+
+pub fn quad_path(view: &RingRecordPathView) -> Result<QuadPath, AuditError> {
+    path_of(view)
 }
 
 pub fn member_record(view: &RingMemberRecordView) -> MemberRecord {
@@ -352,29 +238,7 @@ pub fn member_record(view: &RingMemberRecordView) -> MemberRecord {
         member: view.member.0,
         next: view.next.0,
         lists: view.lists,
-        escrow_key: view.escrow_key.0,
         mint_policy: view.mint_policy,
-        address_hash: view.address_hash.0,
-    }
-}
-
-/// The wire preimage is unauthenticated until it hashes to the proven `address_hash`.
-fn authorized_address(
-    view: &RingMemberRecordView,
-) -> Result<Option<AuthorizedAddress>, AuditError> {
-    let address = view.address.as_ref().map(address_of);
-    member_record(view)
-        .check_address(address.as_ref())
-        .map_err(|_| AuditError::InvalidMemberRegistry)?;
-    Ok(address)
-}
-
-fn address_of(view: &RingAuthorizedAddressView) -> AuthorizedAddress {
-    AuthorizedAddress {
-        ring_id: view.ring_id.0,
-        nullifier_pk: view.nullifier_pk.0,
-        viewing_u: view.viewing_u.0,
-        address_revision: view.address_revision,
     }
 }
 
@@ -397,47 +261,20 @@ fn record_writes(views: &[RingRecordWriteView]) -> Result<Vec<RecordWriteProofIn
     views.iter().map(record_write).collect()
 }
 
-/// The sealed nullifier secret a record view carries, refused when only half of it is present.
-pub(crate) fn sealed_key(
-    view: &RingMemberRecordView,
-) -> Result<Option<SealedNullifierKey>, AuditError> {
-    let (eph_pk, ciphertext) = match (&view.eph_pk, &view.ciphertext) {
-        (Some(eph_pk), Some(ciphertext)) => (eph_pk, ciphertext),
-        (None, None) => return Ok(None),
-        _ => return Err(AuditError::InvalidMemberRegistry),
-    };
-    Ok(Some(SealedNullifierKey {
-        eph_pk: X25519Pubkey::from_bytes(
-            <[u8; TAGGED_X25519_KEY_LEN]>::try_from(eph_pk.0.as_slice())
-                .map_err(|_| AuditError::InvalidMemberRegistry)?,
-        )?,
-        ciphertext: <[u8; REGISTER_KEY_CIPHERTEXT_LEN]>::try_from(ciphertext.0.as_slice())
-            .map_err(|_| AuditError::InvalidMemberRegistry)?,
-    }))
-}
-
 fn record_write(view: &RingRecordWriteView) -> Result<RecordWriteProofInput, AuditError> {
     Ok(RecordWriteProofInput {
         entry: QueueEntry {
             member: view.member.0,
             mask: view.mask,
             value: view.value,
-            escrow_key: view.escrow_key.0,
             mint_policy: view.mint_policy,
-            address_hash: view.address_hash.0,
         },
         exists: view.exists,
         old_next: view.old_next.0,
         old_lists: view.old_lists,
-        old_escrow: view.old_escrow.0,
         old_mint_policy: view.old_mint_policy,
-        old_address_hash: view.old_address_hash.0,
         slot: quad_path(&view.slot)?,
         low: member_record(&view.low),
         low_path: quad_path(&view.low_path)?,
-        pair: view.pair.as_ref().map(|pair| AddressEscrowPair {
-            address: address_of(&pair.address),
-            escrow_ciphertext_hash: pair.escrow_ciphertext_hash.0,
-        }),
     })
 }

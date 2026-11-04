@@ -4,9 +4,10 @@ use spr_transaction::OutputContext;
 
 use super::*;
 use crate::{
-    AuditedInputOpening, AuditedSender, EscrowPendingOutput, MergeInput, MergedInput,
-    OutputPayloadError,
-    OutputPayloadErrorKind::{self, Commitment, Disclosure, Frame, RecipientKey, UnknownAsset},
+    AuditedDefaultInput, InputOpening, OutputPayloadError,
+    OutputPayloadErrorKind::{
+        self, Commitment, Disclosure, EscrowPending, Frame, RecipientKey, UnknownAsset,
+    },
 };
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -284,7 +285,7 @@ fn delivered_audited() -> AuditedTransaction {
                 0,
                 OutputOpening::Ring {
                     utxo: utxo(0x10, Some(Address::new_from_array([4; 32]))),
-                    owner_tag: RingOwnerTag::Recipient([6; 32]),
+                    owner_tag: RingOwnerTag([6; 32]),
                 },
             ),
             output(1, OutputOpening::Exit(utxo(0x20, None))),
@@ -294,9 +295,8 @@ fn delivered_audited() -> AuditedTransaction {
             slot_index: 3,
             kind: Commitment,
         }],
-        sender: None,
+        real_inputs: 0,
         inputs: Vec::new(),
-        unresolved: Vec::new(),
     }
 }
 
@@ -315,26 +315,16 @@ fn a_decrypted_page_keeps_its_wire_json() {
 
 /// The TypeScript decoder reads the same page.
 #[test]
-fn an_unseen_input_keeps_its_hash_and_stays_apart_from_a_dummy() {
-    let hash = [0x2a; 32];
-    let unseen = AuditedInput {
+fn a_real_input_reads_apart_from_a_dummy() {
+    let real = AuditedInput {
         nullifier: [12; 32],
-        hash,
-        opening: InputOpening::UnseenHash { hash },
+        opening: InputOpening::Real,
     };
     let dummy = AuditedInput {
         nullifier: [11; 32],
-        hash: [0; 32],
         opening: InputOpening::Dummy,
     };
-    let mut page = page(
-        AuditedTransaction {
-            inputs: vec![unseen.clone(), dummy],
-            ..delivered_audited()
-        },
-        vec![[12; 32], [11; 32]],
-    );
-    page.value.items[0].spenders = vec![[13; 32].into()];
+    let page = in_proof_page(real.clone(), dummy);
     let json = serde_json::to_string(&page).expect("json");
     assert_eq!(
         json,
@@ -342,32 +332,28 @@ fn an_unseen_input_keeps_its_hash_and_stays_apart_from_a_dummy() {
     );
     let parsed: GetDecryptedTransactionsResponse = serde_json::from_str(&json).expect("parses");
     assert_eq!(parsed, page);
-    let [read_unseen, read_dummy] = parsed.value.items[0].inputs.as_slice() else {
+    let [read_real, read_dummy] = parsed.value.items[0].inputs.as_slice() else {
         panic!("two inputs")
     };
-    assert_eq!(read_unseen.hash, Some(hash.into()));
-    assert!(read_unseen.unseen);
-    assert_eq!(read_unseen.opening, None);
-    assert_eq!(read_dummy.hash, None);
-    assert!(!read_dummy.unseen);
+    assert!(read_real.real);
+    assert_eq!(read_real.default_input, None);
+    assert!(!read_dummy.real);
     assert_ne!(
-        DecryptedInput::from(unseen.clone()),
+        DecryptedInput::from(real.clone()),
         DecryptedInput::from(AuditedInput {
-            hash: [0; 32],
             opening: InputOpening::Dummy,
-            ..unseen
+            ..real
         })
     );
-    // A tagged enum buffers its fields, the hash must survive that too.
     let [transaction] = page.value.items.as_slice() else {
         panic!("one transaction")
     };
     let activity = WalletActivity::of(
         Address::new_from_array([13; 32]),
         transaction.clone(),
-        |input| match input.unseen {
-            true => InputParty::Other,
-            false => InputParty::Own,
+        |input| match input.real {
+            true => InputParty::Own,
+            false => InputParty::Padding,
         },
     )
     .expect("a spender");
@@ -377,10 +363,20 @@ fn an_unseen_input_keeps_its_hash_and_stays_apart_from_a_dummy() {
     let WalletView::Sender { inputs, .. } = read.view else {
         panic!("the spender's view")
     };
-    assert!(
-        inputs.iter().all(|input| !input.unseen),
-        "an unseen marker never reaches a wallet"
+    assert_eq!(inputs.len(), 1, "padding never reaches a wallet");
+}
+
+fn in_proof_page(real: AuditedInput, dummy: AuditedInput) -> GetDecryptedTransactionsResponse {
+    let mut page = page(
+        AuditedTransaction {
+            real_inputs: 1,
+            inputs: vec![real, dummy],
+            ..delivered_audited()
+        },
+        vec![[12; 32], [11; 32]],
     );
+    page.value.items[0].spenders = vec![[13; 32].into()];
+    page
 }
 
 fn two_owner_transaction(wallet: Address) -> DecryptedTransaction {
@@ -392,14 +388,14 @@ fn two_owner_transaction(wallet: Address) -> DecryptedTransaction {
                     0,
                     OutputOpening::Ring {
                         utxo: utxo(0x10, mint),
-                        owner_tag: RingOwnerTag::View([9; 32]),
+                        owner_tag: RingOwnerTag([9; 32]),
                     },
                 ),
                 output(
                     1,
                     OutputOpening::Ring {
                         utxo: utxo(0x50, mint),
-                        owner_tag: RingOwnerTag::View([8; 32]),
+                        owner_tag: RingOwnerTag([8; 32]),
                     },
                 ),
             ],
@@ -407,7 +403,6 @@ fn two_owner_transaction(wallet: Address) -> DecryptedTransaction {
                 slot_index: 2,
                 kind: OutputPayloadErrorKind::Commitment,
             }],
-            sender: None,
             inputs: Vec::new(),
             ..delivered_audited()
         },
@@ -417,15 +412,13 @@ fn two_owner_transaction(wallet: Address) -> DecryptedTransaction {
     .items
     .remove(0);
     transaction.spenders = vec![wallet.to_bytes().into()];
-    let input = |seed: u8, unseen: bool| DecryptedInput {
-        unseen,
-        ..DecryptedInput::from(AuditedInput {
+    let input = |seed: u8| {
+        DecryptedInput::from(AuditedInput {
             nullifier: [seed; 32],
-            hash: [seed; 32],
-            opening: InputOpening::UnseenHash { hash: [seed; 32] },
+            opening: InputOpening::Real,
         })
     };
-    transaction.inputs = vec![input(1, false), input(2, false), input(3, true)];
+    transaction.inputs = vec![input(1), input(2), input(3)];
     transaction
 }
 
@@ -475,157 +468,26 @@ fn a_wallet_owning_every_input_keeps_all_outputs_without_a_marker() {
         sender_slots(activity.view),
         (vec![Hash::from([1; 32]), Hash::from([2; 32])], vec![0, 1])
     );
-    let unseen_own = WalletActivity::of(owner, two_owner_transaction(owner), |_| InputParty::Own)
-        .expect("a spender");
-    let WalletView::Sender { inputs, .. } = unseen_own.view else {
-        panic!("the spender's view")
-    };
-    assert!(inputs.iter().all(|input| !input.unseen));
 }
 
-/// The TypeScript decoder reads the same page.
 #[test]
-fn an_unseen_first_note_keeps_its_hash_and_names_no_sender() {
-    let input = |nullifier, hash| AuditedInput {
-        nullifier,
-        hash,
-        opening: InputOpening::UnseenHash { hash },
-    };
-    let audited = AuditedTransaction {
-        outputs: vec![output(
-            0,
-            OutputOpening::Ring {
-                utxo: utxo(0x10, Some(Address::new_from_array([4; 32]))),
-                owner_tag: RingOwnerTag::View([9; 32]),
-            },
-        )],
-        payload_errors: Vec::new(),
-        sender: None,
-        inputs: vec![input([12; 32], [0x2b; 32]), input([11; 32], [0x2a; 32])],
-        ..delivered_audited()
-    };
-    let page = page(audited, vec![[12; 32], [11; 32]]);
-    let json = serde_json::to_string(&page).expect("json");
-    assert_eq!(
-        json,
-        include_str!("decrypted_unseen_hash_page.json").trim_end()
-    );
-    let parsed: GetDecryptedTransactionsResponse = serde_json::from_str(&json).expect("parses");
-    assert_eq!(parsed, page);
-    let [transaction] = parsed.value.items.as_slice() else {
-        panic!("one transaction")
-    };
-    assert_eq!(transaction.inputs[0].hash, Some([0x2b; 32].into()));
-    assert!(transaction.inputs[0].unseen);
-    assert_eq!(transaction.inputs[0].opening, None);
-    // No key binds the unseen note to a sender, only the output's owner reads the transfer.
-    let of = |wallet: [u8; 32]| {
-        WalletActivity::of(Address::new_from_array(wallet), transaction.clone(), |_| {
-            InputParty::Own
-        })
+fn a_wallet_with_no_spent_input_reads_only_its_own_outputs() {
+    let transaction = two_owner_transaction(Address::new_from_array([0x77; 32]));
+    let read = |wallet: u8| {
+        WalletActivity::of(
+            Address::new_from_array([wallet; 32]),
+            transaction.clone(),
+            |_| InputParty::Other,
+        )
     };
     assert!(matches!(
-        of([0x10; 32]).expect("the output's owner").view,
+        read(0x10).expect("the output's owner").view,
         WalletView::Recipient { .. }
     ));
-    assert_eq!(of([0x50; 32]), None);
-}
-
-/// A merge output carries its inherited fields and no blinding, a wallet cannot spend from it.
-#[test]
-fn a_merged_input_reads_as_an_audit_record_and_never_as_an_opening() {
-    let commitment = [0xa0; 32];
-    let input = DecryptedInput::from(AuditedInput {
-        nullifier: [7; 32],
-        hash: commitment,
-        opening: InputOpening::Merged(MergedInput {
-            commitment,
-            input: MergeInput {
-                owner_key: [0x50; 32],
-                owner: UtxoOwner::Keyed {
-                    nullifier_pk: [0x51; 32],
-                },
-                asset: [0x60; 32],
-                mint: None,
-                amount: 90,
-            },
-        }),
-    });
-    assert_eq!(input.hash, Some(commitment.into()));
-    assert_eq!(input.opening, None);
-    assert!(!input.unseen);
-    assert_eq!(input.merged.expect("merged").amount, 90);
-}
-
-/// The TypeScript decoder reads the same page.
-#[test]
-fn an_escrow_pending_slot_keeps_its_fields_and_reaches_its_owner() {
-    let pending = |seed: u8, slot| {
-        OutputOpening::EscrowPending(EscrowPendingOutput {
-            owner_key: [seed; 32],
-            amount: u64::from(seed),
-            blinding: [seed + 1; 32],
-            slot,
-        })
-    };
-    let audited = AuditedTransaction {
-        outputs: vec![
-            output(
-                0,
-                pending(
-                    0x20,
-                    EscrowPendingSlot::Ring {
-                        recipient_u: [0x21; 32],
-                    },
-                ),
-            ),
-            output(
-                1,
-                pending(
-                    0x30,
-                    EscrowPendingSlot::Exit {
-                        asset: [0x31; 32],
-                        mint: Some(Address::new_from_array([4; 32])),
-                    },
-                ),
-            ),
-            output(2, OutputOpening::Dummy),
-        ],
-        payload_errors: Vec::new(),
-        ..delivered_audited()
-    };
-    let page = page(audited, vec![[12; 32]]);
-    let json = serde_json::to_string(&page).expect("json");
-    assert_eq!(
-        json,
-        include_str!("decrypted_escrow_pending_page.json").trim_end()
-    );
-    let parsed: GetDecryptedTransactionsResponse = serde_json::from_str(&json).expect("parses");
-    assert_eq!(parsed, page);
-    let [transaction] = parsed.value.items.as_slice() else {
-        panic!("one transaction")
-    };
-    assert_eq!(transaction.outputs[0].utxo, None);
-    assert_eq!(transaction.outputs[0].recipient_u, Some([0x21; 32].into()));
-    let owner = Address::new_from_array([0x30; 32]);
-    let WalletView::Recipient { outputs, .. } =
-        WalletActivity::of(owner, transaction.clone(), |_| InputParty::Other)
-            .expect("the slot's owner")
-            .view
-    else {
-        panic!("the recipient's view")
-    };
-    assert_eq!(outputs, [transaction.outputs[1].clone()]);
+    assert_eq!(read(0x60), None);
 }
 
 fn anonymous_audited() -> AuditedTransaction {
-    let opening = |seed: u8, ring| AuditedInputOpening {
-        asset: [seed; 32],
-        mint: Some(Address::new_from_array([4; 32])),
-        amount: u64::from(seed),
-        blinding: [seed + 1; 32],
-        ring,
-    };
     AuditedTransaction {
         tx_signature: Signature::from([1; 64]),
         slot: 42,
@@ -639,73 +501,45 @@ fn anonymous_audited() -> AuditedTransaction {
                         ring_data_hash: [0; 32],
                         ..utxo(0x10, Some(Address::new_from_array([4; 32])))
                     },
-                    owner_tag: RingOwnerTag::View([0x31; 32]),
+                    owner_tag: RingOwnerTag([0x31; 32]),
                 },
             ),
             output(1, OutputOpening::Exit(utxo(0x20, None))),
             output(2, OutputOpening::Dummy),
         ],
         payload_errors: Vec::new(),
-        sender: Some(AuditedSender {
-            owner_key: [0x50; 32],
-            nullifier_pk: Some([0x51; 32]),
-        }),
+        real_inputs: 3,
         inputs: vec![
             AuditedInput {
                 nullifier: [12; 32],
-                hash: [0x62; 32],
-                opening: InputOpening::Opened(opening(
-                    0x60,
-                    Some(InputRing::Ring {
-                        commitment: [0x62; 32],
-                    }),
-                )),
+                opening: InputOpening::Real,
             },
             AuditedInput {
                 nullifier: [11; 32],
-                hash: [0x74; 32],
-                opening: InputOpening::Opened(opening(
-                    0x70,
-                    Some(InputRing::Unresolved {
-                        ring: [0x72; 32],
-                        default: [0x73; 32],
-                    }),
-                )),
+                opening: InputOpening::External(Box::new(AuditedDefaultInput {
+                    utxo: utxo(0x60, Some(Address::new_from_array([4; 32]))),
+                    commitment: Some([0x62; 32]),
+                })),
             },
             AuditedInput {
                 nullifier: [10; 32],
-                hash: [0x82; 32],
-                opening: InputOpening::Opened(opening(
-                    0x80,
-                    Some(InputRing::Default {
-                        commitment: [0x82; 32],
-                    }),
-                )),
+                opening: InputOpening::External(Box::new(AuditedDefaultInput {
+                    utxo: utxo(0x70, None),
+                    commitment: None,
+                })),
             },
             AuditedInput {
                 nullifier: [9; 32],
-                hash: [0x92; 32],
-                opening: InputOpening::Opened(opening(0x90, None)),
-            },
-            AuditedInput {
-                nullifier: [8; 32],
-                hash: [0; 32],
                 opening: InputOpening::Dummy,
             },
-            AuditedInput {
-                nullifier: [7; 32],
-                hash: [0xa0; 32],
-                opening: InputOpening::UnseenHash { hash: [0xa0; 32] },
-            },
         ],
-        unresolved: Vec::new(),
     }
 }
 
 fn anonymous_page() -> GetDecryptedTransactionsResponse {
     page(
         anonymous_audited(),
-        vec![[12; 32], [11; 32], [10; 32], [9; 32], [8; 32], [7; 32]],
+        vec![[12; 32], [11; 32], [10; 32], [9; 32]],
     )
 }
 
@@ -739,11 +573,16 @@ fn a_wallet_activity_page_keeps_its_wire_json() {
         )
         .expect("a party")
     };
-    // 0x50 is the anonymous sender, 0x10 owns output 0 alone.
+    let recipient = WalletActivity::of(
+        Address::new_from_array([0x10; 32]),
+        transaction.clone(),
+        |_| InputParty::Other,
+    )
+    .expect("the output's owner");
     let activity = GetWalletActivityResponse {
         context: page.context,
         value: WalletActivityPage {
-            items: vec![view(0x50), view(0x10)],
+            items: vec![view(0x50), recipient],
             cursor: page.value.cursor.clone(),
         },
     };
@@ -769,9 +608,17 @@ fn payload_errors_keep_the_encoding_of_the_shared_vector() {
     .expect("vector");
     // A new kind fails to compile here, `kinds` and the vector must then name it.
     let named = |kind: OutputPayloadErrorKind| match kind {
-        Frame | Disclosure | RecipientKey | Commitment | UnknownAsset => kind,
+        Frame | Disclosure | RecipientKey | Commitment | UnknownAsset | EscrowPending => kind,
     };
-    let kinds = [Frame, Disclosure, RecipientKey, Commitment, UnknownAsset].map(named);
+    let kinds = [
+        Frame,
+        Disclosure,
+        RecipientKey,
+        Commitment,
+        UnknownAsset,
+        EscrowPending,
+    ]
+    .map(named);
     assert_eq!(serde_json::to_value(kinds).unwrap(), vector.kinds);
     let slots = [(2, Commitment), (5, RecipientKey)]
         .map(|(slot_index, kind)| DecryptedPayloadError { slot_index, kind });
@@ -1582,25 +1429,12 @@ fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
     );
 }
 
-/// The TypeScript codec writes and reads the same bytes.
-#[test]
-fn the_storage_writes_of_a_wallet_update_match_the_shared_vector() {
-    use custom_ring_interface::{
-        storage_instruction::StorageWriteData, CustomRingError, RecordWriteData,
-    };
+fn wallet_update_writes() -> Vec<custom_ring_interface::RecordWriteData> {
     use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy};
-    #[derive(Deserialize)]
-    struct Vector {
-        writes: String,
-    }
-    let vector: Vector = serde_json::from_str(include_str!(
-        "../../../../test-vectors/registry/storage_writes.json"
-    ))
-    .expect("vector");
     let wallet = Keypair::new_from_array([7; 32]);
     let identity = Member::owner_tag(wallet.pubkey().as_array()).expect("wallet");
     let bit = ListId::RingViewing.record_bit();
-    let entries = [
+    [
         RecordUpdateEntry::Write(zolana_ring_indexer::rpc::RingListWriteView {
             mint_policy: Some(MintPolicy {
                 threshold: 1,
@@ -1627,32 +1461,110 @@ fn the_storage_writes_of_a_wallet_update_match_the_shared_vector() {
             reader: Hash(*passkey_reader().member().expect("member").as_bytes()),
             access: ReaderAccess::Granted,
         }),
-        RecordUpdateEntry::Escrow(EscrowRegistration {
-            member: Hash(*identity.as_bytes()),
-            nullifier_pk: Hash([0x11; 32]),
-            eph_pk: [&[4][..], &[5; 32]].concat().into(),
-            ciphertext: vec![0x22; 32].into(),
-            proof: vec![0; 192].into(),
-        }),
-    ];
-    let writes: Vec<StorageWriteData> = entries
-        .iter()
-        .map(|entry| entry.write(&wallet.pubkey()))
-        .collect::<Result<_, _>>()
-        .expect("writes");
+    ]
+    .iter()
+    .map(|entry| entry.write().expect("write"))
+    .collect()
+}
+
+/// The TypeScript codec writes and reads the same bytes.
+#[test]
+fn the_storage_writes_of_a_wallet_update_match_the_shared_vector() {
+    use custom_ring_interface::{CustomRingError, RecordWriteData};
+    #[derive(Deserialize)]
+    struct Vector {
+        writes: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/registry/storage_writes.json"
+    ))
+    .expect("vector");
+    let writes = wallet_update_writes();
+    let bytes: &[u8] = bytemuck::cast_slice(&writes);
+    assert_eq!(hex::encode(bytes), vector.writes);
+    let decoded = hex::decode(&vector.writes).expect("hex");
     assert_eq!(
-        hex::encode(StorageWriteData::encode_all(&writes)),
-        vector.writes
+        bytemuck::try_cast_slice::<u8, RecordWriteData>(&decoded).expect("whole writes"),
+        writes
     );
-    let bytes = hex::decode(&vector.writes).expect("hex");
-    assert_eq!(StorageWriteData::parse_all(&bytes), Ok(writes));
-    let tag = 1 + core::mem::offset_of!(RecordWriteData, mint_policy);
-    for refused in [2, 0] {
-        let mut tampered = bytes.clone();
+    assert!(writes.iter().all(|write| write.storage_entry().is_ok()));
+    let tag = core::mem::offset_of!(RecordWriteData, mint_policy);
+    for refused in [2, 7] {
+        let mut tampered = decoded.clone();
         tampered[tag] = refused;
+        let write: &RecordWriteData = bytemuck::from_bytes(&tampered[..RecordWriteData::SIZE]);
         assert_eq!(
-            StorageWriteData::parse_all(&tampered),
+            write.storage_entry(),
             Err(CustomRingError::InvalidInstructionData)
         );
     }
+}
+
+#[test]
+#[ignore = "rewrites test-vectors/registry/storage_writes.json"]
+fn write_storage_writes_vector() {
+    let writes = wallet_update_writes();
+    let vector = serde_json::json!({
+        "description": "The RecordWriteData bytes of two record update entries of the wallet of seed 0x07, each member || mask || value || mint_policy_write in little endian. The first sets the ring-viewing list on the wallet's own record and replaces its mint settings with the amounts 1 to 12 in field order. The second grants the passkey reader on the wallet grant record and keeps the mint settings. A mint_policy_write leading byte off 0 and 1 is refused.",
+        "writes": hex::encode(bytemuck::cast_slice::<_, u8>(&writes)),
+    });
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-vectors/registry/storage_writes.json"
+    );
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&vector).expect("json") + "\n",
+    )
+    .expect("vector");
+}
+
+#[test]
+#[ignore = "rewrites the decrypted page fixtures"]
+fn write_decrypted_page_vectors() {
+    let mut delivered = page(delivered_audited(), vec![[12; 32]]);
+    delivered.value.items[0].spenders = vec![[13; 32].into()];
+    let in_proof = in_proof_page(
+        AuditedInput {
+            nullifier: [12; 32],
+            opening: InputOpening::Real,
+        },
+        AuditedInput {
+            nullifier: [11; 32],
+            opening: InputOpening::Dummy,
+        },
+    );
+    let anonymous = anonymous_page();
+    let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/src/rpc/");
+    for (name, page) in [
+        ("decrypted_page.json", &delivered),
+        ("decrypted_in_proof_page.json", &in_proof),
+        ("decrypted_anonymous_page.json", &anonymous),
+    ] {
+        let json = serde_json::to_string(page).expect("json") + "\n";
+        std::fs::write(format!("{directory}{name}"), json).expect("vector");
+    }
+    let [transaction] = anonymous.value.items.as_slice() else {
+        panic!("one transaction")
+    };
+    let of = |wallet: u8, party: InputParty| {
+        WalletActivity::of(
+            Address::new_from_array([wallet; 32]),
+            transaction.clone(),
+            |_| party,
+        )
+        .expect("a party")
+    };
+    let activity = GetWalletActivityResponse {
+        context: anonymous.context,
+        value: WalletActivityPage {
+            items: vec![of(0x50, InputParty::Own), of(0x10, InputParty::Other)],
+            cursor: anonymous.value.cursor.clone(),
+        },
+    };
+    std::fs::write(
+        format!("{directory}wallet_activity_page.json"),
+        serde_json::to_string(&activity).expect("json") + "\n",
+    )
+    .expect("vector");
 }

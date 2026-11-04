@@ -14,6 +14,8 @@ use crate::{encryption::opening_ring_stream, AuditError};
 const FIELD_LEN: usize = 32;
 const ENVELOPE_KEY_LEN: usize = 32;
 const TAGGED_KEY_LEN: usize = 33;
+/// Version 2 input flag of the full opening rail.
+const FULL_OPENINGS: u8 = 1 << 7;
 
 /// What a version 2 envelope names of its spent notes, `None` entries are dummies.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,12 +93,10 @@ fn evidence_shape(transact: &[u8], mode: RingMode) -> Option<EvidenceShape> {
     let rail = RingRail::of(InstructionTag::try_from(tag_byte).ok()?, mode).ok()?;
     let in_proof = flags & transact_flag::OWNER_IN_PROOF != 0;
     Some(match rail {
-        RingRail::Anonymous if input_flags & input_flag::FULL_OPENINGS != 0 => {
-            EvidenceShape::Unnamed
-        }
+        RingRail::Anonymous if input_flags & FULL_OPENINGS != 0 => EvidenceShape::Unnamed,
         RingRail::Anonymous if in_proof => EvidenceShape::Prefixes,
         RingRail::Anonymous => EvidenceShape::Commitments,
-        RingRail::Delegate => EvidenceShape::Prefixes,
+        RingRail::Delegate | RingRail::AnonymousDelegate => EvidenceShape::Prefixes,
         RingRail::Confidential if in_proof => EvidenceShape::Prefixes,
         RingRail::Confidential => EvidenceShape::Unnamed,
     })
@@ -162,7 +162,7 @@ mod tests {
             Some(EvidenceShape::Commitments)
         ));
         assert!(matches!(
-            shape(transfer, 0, input_flag::FULL_OPENINGS, RingMode::Anonymous),
+            shape(transfer, 0, FULL_OPENINGS, RingMode::Anonymous),
             Some(EvidenceShape::Unnamed)
         ));
         assert!(matches!(

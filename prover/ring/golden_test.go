@@ -87,13 +87,13 @@ func goldenFiles(t testing.TB) []string {
 func goldenPath(name string) string {
 	var family string
 	switch {
-	case strings.HasPrefix(name, "custom-ring-transfer-anonymous-entry-"):
+	case strings.HasPrefix(name, "custom-ring-transfer-anonymous-entry-"), strings.HasPrefix(name, "custom-ring-transfer-confidential-entry-"):
 		family = "transfer/entry"
 	case strings.HasPrefix(name, "custom-ring-transfer-anonymous-"):
 		family = "transfer/anonymous"
 	case strings.HasPrefix(name, "custom-ring-transfer-confidential-"):
 		family = "transfer/confidential"
-	case strings.HasPrefix(name, "custom-ring-apply-records-"), name == "custom-ring-register-key":
+	case strings.HasPrefix(name, "custom-ring-apply-"), name == "custom-ring-register-key":
 		family = "records"
 	case strings.HasPrefix(name, "custom-ring-deposit-"):
 		family = "deposit"

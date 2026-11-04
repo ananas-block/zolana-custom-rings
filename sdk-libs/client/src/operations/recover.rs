@@ -1,16 +1,14 @@
 //! Rebuilds a source member's unspent ring notes from what the auditor sees.
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashSet},
     num::{NonZeroU32, NonZeroUsize},
 };
 
 use custom_ring_interface::RingMode;
 use solana_address::Address;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
-use spr_event::{
-    split_merge_output_body, EncryptedRingDepositOutput, OutputDataEncoding, MERGE_OUTPUT_SCHEME,
-};
+use spr_event::EncryptedRingDepositOutput;
 use spr_event_parser::decode_encrypted_ring_deposit_output_data;
 use spr_keypair::{NullifierKey, ShieldedAddress, X25519Keypair};
 use spr_transaction::{
@@ -26,9 +24,10 @@ use crate::{
     created::{CreatedUtxos, DepositSlot},
     decrypt::TransactionAudit,
     known::KnownUtxoIndex,
+    merge_audit::RingMergeBody,
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
     scan::{RingHistory, ScanPage, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
-    types::{OutputOpening, OutputPayloadErrorKind},
+    types::{InputOpening, OutputOpening, OutputPayloadErrorKind},
     AuditError, KnownUtxo, UtxoOwner,
 };
 
@@ -69,7 +68,7 @@ pub struct RecoveredNotes {
     pub unsupported_deposits: Vec<[u8; 32]>,
     /// Verified merge mints the asset registry lacks, their notes stay unresolved.
     pub unknown_mints: BTreeSet<Address>,
-    /// Nullifiers of anonymous inputs no note matches, a complete history leaves none.
+    /// Nullifiers of real inputs no note the member opened matches.
     pub unseen_inputs: Vec<[u8; 32]>,
 }
 
@@ -170,11 +169,12 @@ struct Found {
     unresolved: Vec<([u8; 32], [u8; 32])>,
     seen: HashSet<[u8; 32]>,
     unknown_mints: BTreeSet<Address>,
-    /// Every note an anonymous transfer may name by hash or prefix, in history order.
+    /// Openings a merge output resolves from, in history order.
     known: KnownUtxoIndex,
-    unseen_inputs: Vec<([u8; 32], [u8; 32])>,
-    /// Commitments of delivered slots no held asset rebuilds.
-    unknown_assets: Vec<[u8; 32]>,
+    /// In history order.
+    real_inputs: Vec<[u8; 32]>,
+    /// Commitments of historical slots no held asset or key rebuilds.
+    unopened_slots: Vec<[u8; 32]>,
 }
 
 impl Found {
@@ -244,13 +244,12 @@ impl<'a> MemberRecovery<'a> {
             found: &mut found,
         }
         .recover(&self.source)?;
+        let opened_nullifiers = found.nullifiers();
         let unseen_inputs = found
-            .unseen_inputs
+            .real_inputs
             .iter()
-            .filter(|(hash, _)| {
-                found.known.get(hash).is_none() && found.known.merge_output(hash).is_none()
-            })
-            .map(|(_, nullifier)| *nullifier)
+            .filter(|nullifier| !opened_nullifiers.contains(*nullifier))
+            .copied()
             .collect();
         let mut unopened: Vec<_> = found
             .unresolved
@@ -258,7 +257,7 @@ impl<'a> MemberRecovery<'a> {
             .filter(|(_, nullifier)| !spent.contains(nullifier))
             .map(|(commitment, _)| commitment)
             .collect();
-        unopened.extend(found.unknown_assets);
+        unopened.extend(found.unopened_slots);
         unopened.extend(
             merges
                 .iter()
@@ -286,36 +285,33 @@ impl<'a> MemberRecovery<'a> {
         assets: &RingAssets,
         found: &mut Found,
     ) -> Result<(), AuditError> {
-        let layout = origin.audit_stream(self.recovery.mode)?;
-        let source_key = HashMap::from([(
-            self.source.address.signing_pubkey.confidential_view_tag()?,
-            self.source.address.nullifier_pubkey,
-        )]);
-        let audited = TransactionAudit::new(transaction, layout)
-            .with_escrowed_keys(&source_key)
-            .with_known_utxos(&found.known)
-            .run(self.recovery.auditor, assets)?;
+        let frame = origin.audit_frame(self.recovery.mode)?;
+        let audited =
+            TransactionAudit::new(transaction, frame).run(self.recovery.auditor, assets)?;
         found.known.extend(
             audited
                 .utxos()
                 .map(|created| (created.commitment, created.utxo)),
         );
-        found.unseen_inputs.extend(
+        found.real_inputs.extend(
             audited
                 .inputs
                 .iter()
-                .filter(|input| input.opening.is_unseen())
-                .map(|input| (input.hash, input.nullifier)),
+                .filter(|input| input.opening == InputOpening::Real)
+                .map(|input| input.nullifier),
         );
         for error in &audited.payload_errors {
-            // A mint the registry lacks reads here, another member's recovery goes on.
-            if error.kind != OutputPayloadErrorKind::UnknownAsset {
+            // Another member's unresolved historical slot does not stop the recovery.
+            if !matches!(
+                error.kind,
+                OutputPayloadErrorKind::UnknownAsset | OutputPayloadErrorKind::EscrowPending
+            ) {
                 return Err(AuditError::UnopenedOutput {
                     slot: error.slot_index,
                     kind: error.kind,
                 });
             }
-            found.unknown_assets.extend(
+            found.unopened_slots.extend(
                 transaction
                     .output_slots
                     .get(error.slot_index as usize)
@@ -695,17 +691,15 @@ fn merge_successor(
     let Some(slot) = transaction.output_slots.first() else {
         return Ok(None);
     };
-    let Some(OutputDataEncoding::Encrypted(blob)) = slot.output_data() else {
-        return Ok(None);
-    };
-    let Some((&MERGE_OUTPUT_SCHEME, body)) = blob.split_first() else {
-        return Ok(None);
-    };
-    let Some((Some(&ring_data_hash), encrypted)) = split_merge_output_body(body) else {
+    let Some(RingMergeBody {
+        ring_data_hash,
+        encrypted,
+    }) = RingMergeBody::of(slot)
+    else {
         return Ok(None);
     };
     let key = merge_output_key(source.nullifier_key, first_nullifier)?;
-    let Ok(plaintext) = MergeOutputPlaintext::decrypt(encrypted, &key) else {
+    let Ok(plaintext) = MergeOutputPlaintext::decrypt(&encrypted, &key) else {
         return Ok(None);
     };
     let utxo = plaintext.into_utxo(

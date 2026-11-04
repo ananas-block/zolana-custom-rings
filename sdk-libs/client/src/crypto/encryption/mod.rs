@@ -2,12 +2,12 @@
 
 use custom_ring_interface::{
     domain::{self, DEPOSIT_AUDIT_LABEL, REGISTER_KEY_LABEL},
-    RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS, REGISTER_KEY_CIPHERTEXT_LEN,
-    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET, STREAM_BLOCK_LEN,
-    STREAM_FIRST_COUNTER,
+    OpeningRecord, RecordKind, RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS,
+    OPENING_RECORD_LEN, REGISTER_KEY_CIPHERTEXT_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    STREAM_BLOCK_LEN, STREAM_FIRST_COUNTER,
 };
 use spr_hasher::{
-    primitives::{pack_be, right_align},
+    primitives::{is_canonical_bn254_scalar_be, pack_be, right_align, solana_owner_identity},
     Hasher, Poseidon,
 };
 use spr_keypair::{symmetric_apply, NullifierKey, X25519Keypair, X25519Pubkey};
@@ -18,8 +18,14 @@ use crate::AuditError;
 
 type Result<T> = core::result::Result<T, AuditError>;
 
+mod deposit_capsule;
 mod merge_disclosure;
-pub use merge_disclosure::{open_merge_disclosure, MergeDisclosureEncryption, MergeOpening};
+mod merge_record;
+pub use deposit_capsule::{DepositCapsule, HistoricalDepositCapsule};
+#[cfg(test)]
+pub(crate) use merge_disclosure::tests::MergeDisclosureEncryption;
+pub use merge_disclosure::{open_merge_disclosure, MergeOpening};
+pub use merge_record::{open_merge_record, MergeRecordSeal, SealedMergeOpening};
 
 /// The auditor key's u-coordinate, the tag the auditor scans for.
 pub fn auditor_view_tag(pk: &X25519Pubkey) -> [u8; 32] {
@@ -182,6 +188,22 @@ pub struct DepositOpening {
     pub blinding: Zeroizing<[u8; 32]>,
     /// The proof binds its Solana owner identity into `owner_hash`.
     pub owner_key: [u8; 32],
+    /// `None` under `CRDEP001`.
+    pub note: Option<DepositedNote>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepositedNote {
+    pub nullifier_pk: [u8; 32],
+    pub mint: [u8; 32],
+    pub amount: u64,
+}
+
+impl DepositOpening {
+    pub(crate) fn agrees_with(&self, mint: &[u8; 32], amount: u64) -> bool {
+        self.note
+            .is_none_or(|note| note.mint == *mint && note.amount == amount)
+    }
 }
 
 /// Batch ciphertexts and the ephemeral secret the disclosure proof witnesses.
@@ -193,44 +215,42 @@ pub struct DepositEncryption {
 
 const DEPOSIT_STREAM_LEN: usize = RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN * MAX_RING_DEPOSIT_AUDIT_SLOTS;
 const DEPOSIT_SCHEDULE: StreamSchedule = StreamSchedule::Ring(DEPOSIT_AUDIT_LABEL);
-/// AES blocks per slot, slot i starts at `2 + 6i`.
+/// Slot `i` starts at counter `2 + 9i`.
 const DEPOSIT_SLOT_BLOCKS: u32 = (RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN / STREAM_BLOCK_LEN) as u32;
 const _: () = assert!(RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN.is_multiple_of(STREAM_BLOCK_LEN));
 
-/// Seals deposit openings to the ring's pinned auditor key.
+/// Each record's secret is its blinding.
 pub fn seal_deposits(
-    openings: &[DepositOpening],
+    records: &[OpeningRecord],
     auditor_pk: &X25519Pubkey,
 ) -> Result<DepositEncryption> {
-    seal_deposits_with(openings, auditor_pk, X25519Keypair::new())
+    seal_deposits_with(records, auditor_pk, X25519Keypair::new())
 }
 
 fn seal_deposits_with(
-    openings: &[DepositOpening],
+    records: &[OpeningRecord],
     auditor_pk: &X25519Pubkey,
     ephemeral: X25519Keypair,
 ) -> Result<DepositEncryption> {
-    if openings.is_empty() || openings.len() > MAX_RING_DEPOSIT_AUDIT_SLOTS {
-        return Err(AuditError::DepositCount(openings.len()));
+    if records.is_empty() || records.len() > MAX_RING_DEPOSIT_AUDIT_SLOTS {
+        return Err(AuditError::DepositCount(records.len()));
     }
     let mut plaintext = Zeroizing::new([0u8; DEPOSIT_STREAM_LEN]);
     let (slots, _) = plaintext.as_chunks_mut::<RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN>();
-    for (slot, opening) in slots.iter_mut().zip(openings) {
-        slot[..32].copy_from_slice(&opening.owner_hash);
-        slot[32..RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET].copy_from_slice(opening.blinding.as_slice());
-        slot[RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET..].copy_from_slice(&opening.owner_key);
+    for (slot, record) in slots.iter_mut().zip(records) {
+        *slot = record.encode();
     }
     seal_stream(&ephemeral, auditor_pk, DEPOSIT_SCHEDULE, &mut *plaintext)?;
     Ok(DepositEncryption {
         ephemeral_sk: ephemeral.secret_bytes(),
         ephemeral_pk: ephemeral.pubkey(),
-        ciphertexts: plaintext.as_chunks().0[..openings.len()].to_vec(),
+        ciphertexts: plaintext.as_chunks().0[..records.len()].to_vec(),
     })
 }
 
 /// Opens a capsule only after binding every ciphertext byte to its confirmed deposit proof.
 pub fn open_deposit(
-    capsule: &RingDepositAuditCapsule<'_>,
+    capsule: &DepositCapsule<'_>,
     auditor: &X25519Keypair,
     owner_utxo_hash: &[u8; 32],
     confirmed: &crate::ConfirmedDeposit,
@@ -238,11 +258,21 @@ pub fn open_deposit(
     if !confirmed.matches(*capsule, owner_utxo_hash) {
         return Err(AuditError::DepositOpeningMismatch);
     }
-    let slot = usize::from(capsule.slot_index);
-    if slot >= MAX_RING_DEPOSIT_AUDIT_SLOTS {
-        return Err(AuditError::DepositSlot(slot));
+    let opening = match capsule {
+        DepositCapsule::Record(capsule) => open_record(capsule, auditor)?,
+        DepositCapsule::Historical(capsule) => capsule.open(auditor)?,
+    };
+    if Poseidon::hashv(&[&opening.owner_hash, opening.blinding.as_slice()])? != *owner_utxo_hash {
+        return Err(AuditError::DepositOpeningMismatch);
     }
-    let mut plaintext = Zeroizing::new([0u8; RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN]);
+    Ok(opening)
+}
+
+fn open_record(
+    capsule: &RingDepositAuditCapsule<'_>,
+    auditor: &X25519Keypair,
+) -> Result<DepositOpening> {
+    let mut plaintext = Zeroizing::new([0u8; OPENING_RECORD_LEN]);
     plaintext.copy_from_slice(capsule.ciphertext);
     opening_ring_stream(
         auditor,
@@ -250,31 +280,35 @@ pub fn open_deposit(
         DEPOSIT_AUDIT_LABEL,
     )?
     .apply_at(
-        STREAM_FIRST_COUNTER + slot as u32 * DEPOSIT_SLOT_BLOCKS,
+        STREAM_FIRST_COUNTER + u32::from(capsule.slot_index) * DEPOSIT_SLOT_BLOCKS,
         &mut *plaintext,
     );
-    let mut opening = DepositOpening {
-        owner_hash: [0; 32],
-        blinding: Zeroizing::new([0; 32]),
-        owner_key: [0; 32],
-    };
-    opening.owner_hash.copy_from_slice(&plaintext[..32]);
-    opening
-        .blinding
-        .copy_from_slice(&plaintext[32..RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET]);
-    opening
-        .owner_key
-        .copy_from_slice(&plaintext[RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET..]);
-    if Poseidon::hashv(&[&opening.owner_hash, opening.blinding.as_slice()])? != *owner_utxo_hash {
+    let mismatch = |_| AuditError::DepositOpeningMismatch;
+    let OpeningRecord { record, secret } = OpeningRecord::decode(&*plaintext).map_err(mismatch)?;
+    if record.kind != RecordKind::Ring
+        || !is_canonical_bn254_scalar_be(&record.nullifier_pk)
+        || !is_canonical_bn254_scalar_be(&secret)
+    {
         return Err(AuditError::DepositOpeningMismatch);
     }
-    Ok(opening)
+    let owner_hash = Poseidon::hashv(&[
+        &solana_owner_identity(&record.owner_key)?,
+        &record.nullifier_pk,
+    ])?;
+    Ok(DepositOpening {
+        owner_hash,
+        blinding: Zeroizing::new(secret),
+        owner_key: record.owner_key,
+        note: Some(DepositedNote {
+            nullifier_pk: record.nullifier_pk,
+            mint: record.mint,
+            amount: record.amount,
+        }),
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use custom_ring_interface::EscrowKey;
-
     use super::*;
     mod deposit_fixture {
         include!(concat!(
@@ -370,10 +404,9 @@ mod tests {
     const NULLIFIER_PK: &str = "2d1faf6cf358763421511eb637adf7b6609443d38edc4ed2b042dfbf834b03f5";
     const EPH_PK: &str = "043632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63";
     const CIPHERTEXT: &str = "44409b9e390ec45df98e391d4a86c1e57b52cbd8d60eb9f7426442ed822616ba";
-    const KEY_HASH: &str = "218eb37ea6d2bc62b2f9231a6ed3eca5ba4225f0844ff06ac3bd7ad2b04adf40";
 
     #[test]
-    fn the_sealed_key_and_its_escrow_key_match_the_pinned_vector() {
+    fn the_sealed_key_matches_the_pinned_vector() {
         let auditor = X25519Keypair::from_bytes(&bytes(AUDITOR_SK));
         let nullifier_key = NullifierKey::from_secret(bytes(NULLIFIER_SECRET));
         let ephemeral = X25519Keypair::from_bytes(&bytes(EPHEMERAL_SK));
@@ -391,99 +424,135 @@ mod tests {
                 .as_slice(),
             &bytes::<31>(NULLIFIER_SECRET)
         );
-        let key = EscrowKey {
-            nullifier_pk: &envelope.nullifier_pk,
-            ciphertext: &envelope.sealed.ciphertext,
-        }
-        .hash()
-        .expect("key hash");
-        assert_eq!(key, bytes(KEY_HASH));
+    }
+
+    fn hex_field(value: &serde_json::Value) -> [u8; 32] {
+        let digits = value.as_str().unwrap().trim_start_matches("0x");
+        bytes(&format!("{digits:0>64}"))
     }
 
     #[test]
-    fn deposit_encryption_and_public_hash_match_the_typescript_vector() {
-        let auditor = X25519Keypair::from_bytes(&[0x11; 32]);
-        let ephemeral = X25519Keypair::from_bytes(&[0x22; 32]);
-        let word = |value| {
-            let mut bytes = [0; 32];
-            bytes[31] = value;
-            bytes
-        };
-        let openings = [
-            DepositOpening {
-                owner_hash: word(1),
-                blinding: Zeroizing::new(word(3)),
-                owner_key: [0; 32],
-            },
-            DepositOpening {
-                owner_hash: word(2),
-                blinding: Zeroizing::new(word(4)),
-                owner_key: [0; 32],
-            },
-        ];
-        let sealed = seal_deposits_with(&openings, &auditor.pubkey(), ephemeral).unwrap();
-        assert_eq!(
-            hex::encode(auditor.pubkey().as_bytes()),
-            "047b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13"
-        );
-        assert_eq!(
-            hex::encode(sealed.ephemeral_pk.as_bytes()),
-            "040faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20"
-        );
-        assert_eq!(hex::encode(sealed.ciphertexts[0]), "7c627b99edcff18b2b6fe60179d67177438d96028e3ce11b1127bcc2fcba09616101c03b4d2680e3c7dcfbff9ca085c35f0a2380d32722957c97fea865b7c22b04bf2e6dadfc1d7ec3eb2a84d575072dd3a1daa43b6210509729fd689b6b0c9c");
-        assert_eq!(hex::encode(sealed.ciphertexts[1]), "0ab1daccc85338c624b6f5ed909948624625743dd052e665156ed1715cf4bc5de622ff05ac03507cd2ff799bd36a36897252128077d625ca40aad22fd7342ea929bfa570861f565df8dbe6bbcaf59a94ba952f1f7310c45abf68318049a5180b");
-        let context_hash = custom_ring_interface::DepositContext {
-            program_id: &[0x33; 32],
-            tree: &[0x44; 32],
-            spp_data: &[18, 1, 0, 2],
-        }
-        .hash()
+    fn the_seal_reaches_the_public_hash_of_the_go_request() {
+        let request: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../prover/ring/testdata/deposit/custom-ring-deposit-2.json"
+        ))
         .unwrap();
-        assert_eq!(
-            hex::encode(context_hash),
-            "2cc6b9a5a2cb550702b5387ade744abee5e6eeb7c266415e59502e6f8acce56b"
-        );
-        let owners = openings.each_ref().map(|opening| {
-            spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap()
-        });
-        let public_hash = custom_ring_interface::DepositPublicInput {
-            context_hash: &context_hash,
-            anonymous: false,
+        let count = request["count"].as_u64().unwrap() as usize;
+        let list = |name: &str| -> Vec<[u8; 32]> {
+            request[name]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(hex_field)
+                .collect()
+        };
+        let amounts = list("amounts");
+        let amount = |slot: usize| {
+            let (_, low) = amounts[slot].split_last_chunk::<8>().unwrap();
+            u64::from_be_bytes(*low)
+        };
+        let secrets = list("blindingSecrets");
+        let blindings: Vec<_> = secrets[..count]
+            .iter()
+            .map(|secret| domain::deposit_blinding(secret).unwrap())
+            .collect();
+        let mints: Vec<[u8; 32]> = request["mintChunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chunks| {
+                let (head, tail) = (hex_field(&chunks[0]), hex_field(&chunks[1]));
+                let mut mint = [0; 32];
+                mint[..31].copy_from_slice(&head[1..]);
+                mint[31] = tail[31];
+                mint
+            })
+            .collect();
+        let (owner_keys, nullifier_pks) = (list("ownerKeys"), list("nullifierPks"));
+        let records: Vec<_> = (0..count)
+            .map(|slot| OpeningRecord {
+                record: custom_ring_interface::AuditRecord {
+                    kind: RecordKind::Ring,
+                    amount: amount(slot),
+                    owner_key: owner_keys[slot],
+                    mint: mints[slot],
+                    nullifier_pk: nullifier_pks[slot],
+                },
+                secret: blindings[slot],
+            })
+            .collect();
+        let auditor_pk = X25519Pubkey::from_bytes(custom_ring_interface::tagged_x25519(
+            &hex_field(&request["auditorPk"]),
+        ))
+        .unwrap();
+        let ephemeral = X25519Keypair::from_bytes(&hex_field(&request["ephSk"]));
+        let sealed = seal_deposits_with(&records, &auditor_pk, ephemeral).unwrap();
+        let owner_hashes = list("ownerPkHashes");
+        let owners: Vec<_> = (0..count)
+            .map(|slot| {
+                let owner = Poseidon::hashv(&[&owner_hashes[slot], &nullifier_pks[slot]]).unwrap();
+                Poseidon::hashv(&[&owner, &blindings[slot]]).unwrap()
+            })
+            .collect();
+        let assets: Vec<_> = (0..count)
+            .map(|slot| custom_ring_interface::DepositedAsset {
+                asset: list("assets")[slot],
+                amount: amount(slot),
+            })
+            .collect();
+        let hash = custom_ring_interface::DepositPublicInput {
+            context_hash: &hex_field(&request["contextHash"]),
+            anonymous: request["anonymous"].as_u64().unwrap_or(0) != 0,
             owner_utxo_hashes: &owners,
             ciphertexts: &sealed.ciphertexts,
-            assets: &[
-                custom_ring_interface::DepositedAsset {
-                    asset: word(5),
-                    amount: 7,
-                },
-                custom_ring_interface::DepositedAsset {
-                    asset: word(6),
-                    amount: 8,
-                },
-            ],
-            auditor_pk: auditor.pubkey().as_bytes(),
+            assets: &assets,
+            auditor_pk: auditor_pk.as_bytes(),
             eph_pk: sealed.ephemeral_pk.as_bytes(),
-            registry: None,
+            tracking_root: &hex_field(&request["trackingRoot"]),
+            registry: Some(custom_ring_interface::DepositRegistry {
+                own_root: &hex_field(&request["ownRoot"]),
+                curator_root: Some(&hex_field(&request["curatorRoot"])),
+                policy_hash: Some(&hex_field(&request["policyHash"])),
+            }),
         }
         .hash()
         .unwrap();
-        assert_eq!(
-            hex::encode(public_hash),
-            "0da1732e6a3d2bb9db9e4fdb3a4d4979aa74be80e96a5f1916016e9b58167d04"
-        );
+        assert_eq!(hash, hex_field(&request["publicInputHash"]));
+    }
+
+    fn deposit_record(index: u8) -> OpeningRecord {
+        let mut nullifier_pk = [index + 3; 32];
+        nullifier_pk[0] = 0;
+        let mut blinding = [index + 1; 32];
+        blinding[0] = 0;
+        OpeningRecord {
+            record: custom_ring_interface::AuditRecord {
+                kind: RecordKind::Ring,
+                amount: u64::from(index) + 7,
+                owner_key: [index + 2; 32],
+                mint: [index + 4; 32],
+                nullifier_pk,
+            },
+            secret: blinding,
+        }
+    }
+
+    fn record_commitment(record: &OpeningRecord) -> [u8; 32] {
+        let owner = Poseidon::hashv(&[
+            &solana_owner_identity(&record.record.owner_key).unwrap(),
+            &record.record.nullifier_pk,
+        ])
+        .unwrap();
+        spr_transaction::owner_utxo_hash(&owner, &record.secret).unwrap()
     }
 
     #[test]
     fn every_slot_uses_its_batch_stream_offset() {
         let auditor = X25519Keypair::new();
-        let openings: Vec<_> = (0..MAX_RING_DEPOSIT_AUDIT_SLOTS)
-            .map(|index| DepositOpening {
-                owner_hash: [index as u8; 32],
-                blinding: Zeroizing::new([index as u8 + 1; 32]),
-                owner_key: [index as u8 + 2; 32],
-            })
+        let records: Vec<_> = (0..MAX_RING_DEPOSIT_AUDIT_SLOTS)
+            .map(|index| deposit_record(index as u8))
             .collect();
-        let sealed = seal_deposits(&openings, &auditor.pubkey()).unwrap();
+        let sealed = seal_deposits(&records, &auditor.pubkey()).unwrap();
         for (index, ciphertext) in sealed.ciphertexts.iter().enumerate() {
             let capsule = RingDepositAuditCapsule {
                 slot_index: index as u8,
@@ -491,11 +560,7 @@ mod tests {
                 ciphertext,
                 recipient_ciphertext: &[],
             };
-            let owner = spr_transaction::owner_utxo_hash(
-                &openings[index].owner_hash,
-                &openings[index].blinding,
-            )
-            .unwrap();
+            let owner = record_commitment(&records[index]);
             let ring = solana_address::Address::new_from_array([9; 32]);
             let deposits = (0..=index)
                 .map(|slot| {
@@ -509,21 +574,131 @@ mod tests {
             let group = deposit_fixture::group(ring, true, deposits);
             let origin = crate::ring_event_origin_in(&[group], 0, ring).unwrap();
             let binding = &origin.deposits[index];
-            let opened = open_deposit(&capsule, &auditor, &owner, binding).unwrap();
+            let wrapped = DepositCapsule::Record(capsule);
+            let opened = open_deposit(&wrapped, &auditor, &owner, binding).unwrap();
             let mut corrupted = *capsule.ciphertext;
-            corrupted[RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET] ^= 1;
-            let altered = RingDepositAuditCapsule {
+            corrupted[16] ^= 1;
+            let altered = DepositCapsule::Record(RingDepositAuditCapsule {
                 ciphertext: &corrupted,
                 ..capsule
-            };
+            });
             assert!(matches!(
                 open_deposit(&altered, &auditor, &owner, binding),
                 Err(AuditError::DepositOpeningMismatch)
             ));
-            assert_eq!(opened.owner_hash, openings[index].owner_hash);
-            assert_eq!(*opened.blinding, *openings[index].blinding);
-            assert_eq!(opened.owner_key, openings[index].owner_key);
+            assert_eq!(opened.owner_key, records[index].record.owner_key);
+            assert_eq!(*opened.blinding, records[index].secret);
+            let note = opened.note.unwrap();
+            assert_eq!(note.mint, records[index].record.mint);
+            assert_eq!(note.amount, records[index].record.amount);
+            assert_eq!(note.nullifier_pk, records[index].record.nullifier_pk);
         }
+    }
+
+    /// One stream with slot `i` at counter `2 + 6i`.
+    fn historical_capsule_bytes(
+        auditor: &X25519Pubkey,
+        slot_index: u8,
+        opening: &[u8; 96],
+    ) -> Vec<u8> {
+        let ephemeral = X25519Keypair::new();
+        let mut ciphertext = *opening;
+        sealing_ring_stream(&ephemeral, auditor, DEPOSIT_AUDIT_LABEL)
+            .unwrap()
+            .apply_at(
+                STREAM_FIRST_COUNTER + u32::from(slot_index) * 6,
+                &mut ciphertext,
+            );
+        HistoricalDepositCapsule {
+            slot_index,
+            eph_pk: ephemeral.pubkey().as_bytes(),
+            ciphertext: &ciphertext,
+            recipient_ciphertext: &[7, 8],
+        }
+        .encode()
+    }
+
+    fn historical_opening(owner_key: [u8; 32]) -> ([u8; 96], [u8; 32], [u8; 32]) {
+        let owner_hash = [0x11; 32].map(|byte: u8| byte & 0x0f);
+        let blinding = [0x22; 32].map(|byte: u8| byte & 0x0f);
+        let mut opening = [0u8; 96];
+        opening[..32].copy_from_slice(&owner_hash);
+        opening[32..64].copy_from_slice(&blinding);
+        opening[64..].copy_from_slice(&owner_key);
+        let commitment = spr_transaction::owner_utxo_hash(&owner_hash, &blinding).unwrap();
+        (opening, owner_hash, commitment)
+    }
+
+    fn historical_group(
+        ring: solana_address::Address,
+        deposits: Vec<([u8; 32], Vec<u8>)>,
+    ) -> spr_event_parser::InstructionGroup {
+        let mut group = deposit_fixture::group(ring, true, deposits);
+        let revision = core::mem::size_of::<custom_ring_interface::storage::Revision>();
+        group.outer.data.drain(..revision);
+        group.outer.data[0] = custom_ring_interface::tag::HISTORICAL_DEPOSIT;
+        group
+    }
+
+    #[test]
+    fn a_crdep001_capsule_opens_under_its_own_slot_counter() {
+        let auditor = X25519Keypair::new();
+        let (opening, owner_hash, commitment) = historical_opening([0x33; 32]);
+        let ring = solana_address::Address::new_from_array([9; 32]);
+        let first = historical_capsule_bytes(&auditor.pubkey(), 0, &[0; 96]);
+        let bytes = historical_capsule_bytes(&auditor.pubkey(), 1, &opening);
+        let group = historical_group(ring, vec![([1; 32], first), (commitment, bytes.clone())]);
+        let origin = crate::ring_event_origin_in(&[group], 0, ring).unwrap();
+        let capsule = DepositCapsule::parse(&bytes).unwrap().unwrap();
+        assert!(capsule.is_historical());
+        assert_eq!(capsule.recipient_ciphertext(), [7, 8]);
+        let opened = open_deposit(&capsule, &auditor, &commitment, &origin.deposits[1]).unwrap();
+        assert_eq!(opened.owner_hash, owner_hash);
+        assert_eq!(opened.owner_key, [0x33; 32]);
+        assert_eq!(opened.note, None);
+    }
+
+    #[test]
+    fn a_crdep001_capsule_with_a_changed_byte_or_out_of_range_slot_is_refused() {
+        let auditor = X25519Keypair::new();
+        let (opening, _, commitment) = historical_opening([0x33; 32]);
+        let ring = solana_address::Address::new_from_array([9; 32]);
+        let bytes = historical_capsule_bytes(&auditor.pubkey(), 0, &opening);
+        let mut corrupted = bytes.clone();
+        corrupted[8 + 1 + 33] ^= 1;
+        let group = historical_group(ring, vec![(commitment, corrupted.clone())]);
+        let origin = crate::ring_event_origin_in(&[group], 0, ring).unwrap();
+        let capsule = DepositCapsule::parse(&corrupted).unwrap().unwrap();
+        assert!(matches!(
+            open_deposit(&capsule, &auditor, &commitment, &origin.deposits[0]),
+            Err(AuditError::DepositOpeningMismatch)
+        ));
+        let mut far = bytes;
+        far[8] = MAX_RING_DEPOSIT_AUDIT_SLOTS as u8;
+        assert_eq!(
+            DepositCapsule::parse(&far),
+            Err(custom_ring_interface::RingDepositAuditError::InvalidSlot)
+        );
+    }
+
+    #[test]
+    fn a_capsule_under_the_other_tag_binds_nothing() {
+        let auditor = X25519Keypair::new();
+        let (opening, _, commitment) = historical_opening([0x33; 32]);
+        let ring = solana_address::Address::new_from_array([9; 32]);
+        let old = historical_capsule_bytes(&auditor.pubkey(), 0, &opening);
+        let group = deposit_fixture::group(ring, true, vec![(commitment, old)]);
+        assert!(crate::ring_event_origin_in(&[group], 0, ring).is_err());
+        let sealed = seal_deposits(&[deposit_record(0)], &auditor.pubkey()).unwrap();
+        let new = RingDepositAuditCapsule {
+            slot_index: 0,
+            eph_pk: sealed.ephemeral_pk.as_bytes(),
+            ciphertext: &sealed.ciphertexts[0],
+            recipient_ciphertext: &[],
+        }
+        .encode();
+        let group = historical_group(ring, vec![(commitment, new)]);
+        assert!(crate::ring_event_origin_in(&[group], 0, ring).is_err());
     }
 
     #[test]
@@ -533,15 +708,9 @@ mod tests {
             seal_deposits(&[], &auditor),
             Err(AuditError::DepositCount(0))
         ));
-        let openings: Vec<_> = (0..=MAX_RING_DEPOSIT_AUDIT_SLOTS)
-            .map(|_| DepositOpening {
-                owner_hash: [0; 32],
-                blinding: Zeroizing::new([0; 32]),
-                owner_key: [0; 32],
-            })
-            .collect();
+        let records = [OpeningRecord::default(); MAX_RING_DEPOSIT_AUDIT_SLOTS + 1];
         assert!(matches!(
-            seal_deposits(&openings, &auditor),
+            seal_deposits(&records, &auditor),
             Err(AuditError::DepositCount(9))
         ));
     }

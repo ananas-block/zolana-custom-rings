@@ -3085,7 +3085,8 @@ async fn automatic_selection_skips_a_zero_key_note_and_names_the_exposure() {
             ..
         })
     ));
-    let merged = crate::select_merge_where(&utxos, Mint::SOL.asset, 8, &Default::default(), |_| true);
+    let merged =
+        crate::select_merge_where(&utxos, Mint::SOL.asset, 8, &Default::default(), |_| true);
     assert!(matches!(
         merged,
         Err(spr_transaction::TransactionError::NothingToMerge { .. })
@@ -3114,7 +3115,8 @@ async fn only_a_named_public_spend_takes_the_wallets_zero_key_note() {
     assert_eq!(staged.owner_signers, [wallet]);
 
     let other = Address::new_from_array([9; 32]);
-    let misnamed = owner_transfer(&sender, ring_transaction(vec![note.clone()])).spend_public(other);
+    let misnamed =
+        owner_transfer(&sender, ring_transaction(vec![note.clone()])).spend_public(other);
     assert!(matches!(
         misnamed.rail.stage(ring(), &config).await,
         Err(RingError::PublicSpendWalletMismatch { named, .. }) if named == other
@@ -3145,7 +3147,11 @@ async fn a_public_co_owners_zero_key_note_stands_beside_a_hidden_sender() {
         ring_utxo(&sender, Mint::SOL, 10, 0),
         zero_key(ring_utxo(&co_owner, Mint::SOL, 10, 1)),
     ];
-    let owner = co_owner.shielded_address().unwrap().solana_address().unwrap();
+    let owner = co_owner
+        .shielded_address()
+        .unwrap()
+        .solana_address()
+        .unwrap();
     let transfer = owner_transfer(&sender, ring_transaction(notes))
         .with_anonymous_signer(&sender.signing_key)
         .with_co_owner(CoOwner {

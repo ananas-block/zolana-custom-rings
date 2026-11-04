@@ -40,7 +40,7 @@ const LABEL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 pub struct RingAddress {
     pub recipient: ShieldedAddress,
     pub ring_program_id: Address,
-    /// Read on a private list row, a resolver checks it against the tracking leaf's `list_tag`.
+    /// A published address reveals its private list key and status to every reader.
     pub list_salt: [u8; 32],
 }
 

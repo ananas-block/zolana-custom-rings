@@ -231,7 +231,10 @@ impl CustomRingConfig {
                 .map_err(|_| invalid())?,
             has_policy: account.has_policy(),
             mode: account.mode()?,
-            co_signer_classes: account.co_signers.covered(),
+            co_signer_classes: {
+                let covered = account.co_signers.covered();
+                (!covered.is_empty()).then_some(covered)
+            },
             delegate: account.delegate().copied(),
             created_slot: account.created_slot(),
             account,
