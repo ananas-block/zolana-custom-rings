@@ -126,6 +126,7 @@ pub(crate) struct TrackedOwner {
     pub owner_key: [u8; 32],
     pub nullifier_pk: [u8; 32],
     pub owner_hash: [u8; 32],
+    pub list_tag: [u8; 32],
     pub sealed: SealedNullifierKey,
 }
 

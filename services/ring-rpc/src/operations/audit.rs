@@ -213,6 +213,28 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(Some(key))
     }
 
+    /// An indexer's ephemeral key is unbound, only the tag binds the opened salt.
+    pub(crate) async fn tracked_list_salt(
+        &self,
+        owner_key: &[u8; 32],
+    ) -> Result<Option<[u8; 32]>, RingRpcError> {
+        let store = self.shared.store(self.ring);
+        self.refresh_tracked(&store).await?;
+        let Some(tracked) = store.tracked(owner_key) else {
+            return Ok(None);
+        };
+        let salt = tracked
+            .sealed
+            .open_list_salt(&self.auditor)
+            .map_err(|_| RingRpcError::TrackedKey)?;
+        if custom_ring_interface::domain::list_tag(&salt).map_err(|_| RingRpcError::TrackedKey)?
+            != tracked.list_tag
+        {
+            return Err(RingRpcError::TrackedKey);
+        }
+        Ok(Some(salt))
+    }
+
     /// `None` until the config exists, the config then fixes the key forever.
     pub async fn configured_auditor(&self) -> Result<Option<X25519Pubkey>, RingRpcError> {
         let config = self.shared.source.ring_config(self.ring).await?;
@@ -1192,6 +1214,7 @@ fn tracked_owner(
             &PublicKey::from_ed25519(owner.as_array()),
             &record.nullifier_pk,
         )?,
+        list_tag: record.list_tag,
         sealed: SealedNullifierKey { eph_pk, ciphertext },
     })
 }

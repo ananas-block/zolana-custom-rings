@@ -356,6 +356,10 @@ pub(crate) mod tests {
     }
 
     impl TransactionSource for EscrowRingSource {
+        async fn salted_list_writers(&self, _ring: Address) -> Result<Vec<Address>, ClientError> {
+            Ok(vec![list_writer().pubkey()])
+        }
+
         async fn transactions_by_tag(
             &self,
             _request: TransactionPage,
@@ -569,6 +573,17 @@ pub(crate) mod tests {
         RingAssets::new([Mint::new(MINT, 7)]).expect("assets")
     }
 
+    pub(crate) fn list_writer() -> Keypair {
+        Keypair::new_from_array([23; 32])
+    }
+
+    /// A zero lead byte as `RegisterKey` proves.
+    pub(crate) const LIST_SALT: [u8; 32] = {
+        let mut salt = [9; 32];
+        salt[0] = 0;
+        salt
+    };
+
     pub(crate) struct Fixture {
         pub(crate) hub: Arc<Hub<EscrowRingSource>>,
         builder: Arc<RecordingBuilder>,
@@ -656,7 +671,8 @@ pub(crate) mod tests {
                     &nullifier_pk,
                 )
                 .expect("owner hash"),
-                sealed: NullifierKeyEnvelope::new(&key, &[0x09; 32], &auditor)
+                list_tag: custom_ring_interface::domain::list_tag(&LIST_SALT).expect("tag"),
+                sealed: NullifierKeyEnvelope::new(&key, &LIST_SALT, &auditor)
                     .expect("envelope")
                     .sealed,
             };

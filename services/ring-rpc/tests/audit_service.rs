@@ -1317,7 +1317,9 @@ impl Tracking {
     /// The owner's key, sealed to `auditor` and applied to a new root.
     fn enroll(&self, owner: &[u8; 32], key: &NullifierKey, auditor: &X25519Pubkey) {
         let member = *Member::owner_tag(owner).expect("member").as_bytes();
-        let sealed = NullifierKeyEnvelope::new(key, &[0x09; 32], auditor)
+        let mut list_salt = [9; 32];
+        list_salt[0] = 0;
+        let sealed = NullifierKeyEnvelope::new(key, &list_salt, auditor)
             .expect("envelope")
             .sealed;
         let mut held = self.0.lock().unwrap();

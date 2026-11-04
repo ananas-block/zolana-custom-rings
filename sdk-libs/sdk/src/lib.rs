@@ -91,8 +91,8 @@ pub use crate::{
         RelayedTransferInput, RingPayment, RingSender, RingTransfer, TransferKey, WideFrames,
     },
     records::{
-        AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,
-        SaltedOwnerCheck, WalletRecordUpdate,
+        AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, RecordUpdateService,
+        RecordUpdateTarget, SaltedOwnerCheck, WalletRecordUpdate,
     },
     register_key::{Enroll, EnrollInstruction, WriteOwnerGrant},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},

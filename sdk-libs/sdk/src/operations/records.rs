@@ -1,6 +1,7 @@
 //! Registry records, read under a root or signed as record updates.
 
 use async_trait::async_trait;
+use custom_ring_interface::domain;
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_api::ZolanaApi;
@@ -236,6 +237,35 @@ impl SaltedOwnerCheck<'_> {
         }
         .resolve(rpc)
         .await?)
+    }
+}
+
+/// An entry under a salt the owner's tag does not open is one no proof reads.
+#[must_use]
+#[derive(Clone, Copy, Debug)]
+pub struct OwnerSaltCheck<'a> {
+    pub ring: CustomRing,
+    pub owner: &'a Address,
+    pub list_salt: &'a [u8; 32],
+}
+
+impl OwnerSaltCheck<'_> {
+    pub async fn run(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<(), RingError> {
+        let member = *Member::owner_tag(self.owner.as_array())?.as_bytes();
+        let policy = self.ring.require_policy(rpc).await?;
+        let root = BoundRoot::tracking(&policy, rpc).await?;
+        match (TrackingMemberRead { root, member }).read(rpc).await? {
+            TrackingOpening::Present { record, .. }
+                if domain::list_tag(self.list_salt)? == record.list_tag =>
+            {
+                Ok(())
+            }
+            TrackingOpening::Present { .. } => Err(RingError::ListSaltMismatch { member }),
+            TrackingOpening::Absent { .. } => Err(RingError::ListSaltUnknown { member }),
+        }
     }
 }
 
