@@ -715,6 +715,28 @@ fn a_refused_private_update_leaves_the_floor_and_each_kind_takes_its_own_update(
     assert_eq!(public.check_tracking_revision(0.into()), Ok(()));
 }
 
+#[test]
+fn a_write_counter_only_increases() {
+    let mut source = private_registry();
+    assert_eq!(
+        source.advance_write_counter(0),
+        Err(StorageError::WriteCounterNotIncreasing)
+    );
+    source.advance_write_counter(5).unwrap();
+    for repeated_or_lower in [5, 4] {
+        assert_eq!(
+            source.advance_write_counter(repeated_or_lower),
+            Err(StorageError::WriteCounterNotIncreasing)
+        );
+    }
+    assert_eq!(source.last_write_counter(), 5);
+    source.advance_write_counter(u64::MAX).unwrap();
+    assert_eq!(
+        source.advance_write_counter(u64::MAX),
+        Err(StorageError::WriteCounterNotIncreasing)
+    );
+}
+
 fn enrollment_vector() -> Value {
     let registry = key(0x31);
     let owner = key(0x32);

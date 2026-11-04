@@ -173,6 +173,7 @@ fn storage_error_codes_are_stable() {
         (Error::InvalidAuditorKey, 9033),
         (Error::TrackingRootBelowFloor, 9034),
         (Error::SourceKindMismatch, 9035),
+        (Error::WriteCounterNotIncreasing, 9036),
     ];
     for (error, code) in pins {
         assert_eq!(error as u32, code, "{error:?}");
