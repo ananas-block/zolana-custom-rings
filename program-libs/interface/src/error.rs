@@ -136,8 +136,6 @@ ring_errors! {
     OutputCountOutOfRange = 8257 => "the published output count is zero or above the key's capacity",
     InvalidChangeBits = 8258 => "change bits overlap an exit or are no prefix of two slots",
     ReplyLength = 8259 => "reply metadata is shorter than its keys or misses one reply per body-bearing slot",
-    AddressWriteNeedsAuthorization = 8264 => "an address write reads its hash from an authorization",
-    AddressRevisionMismatch = 8265 => "the address write names another revision than the authorization",
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
     ViewTagNotCanonical = 8267 => "a recipient, dummy or sender bundle view tag is at or above the field modulus",
     ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
