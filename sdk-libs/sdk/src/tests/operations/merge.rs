@@ -6,8 +6,8 @@ use spr_transaction::Mint;
 
 use super::support::{keypair, ring, ring_utxo, zero_key, Chain, RingSettings, TREE_ID};
 use crate::{
-    CustomRingMerge, MergeProofInput, PreparedCustomRingMerge, RingError, RingMergeOperation,
-    RingSubmission,
+    CustomRingMerge, FittedMerge, MergeProofInput, PreparedCustomRingMerge, RingError,
+    RingMergeOperation, RingSubmission,
 };
 
 struct Merge<'a> {
@@ -98,83 +98,62 @@ async fn a_confidential_merge_its_owner_pays_is_refused_before_proving() {
     );
 }
 
+/// Compact padding publishes nothing, the widest circuit carries what the bytes and accounts allow.
 #[tokio::test]
-async fn the_widest_merge_fits_a_transaction() {
-    use custom_ring_interface::{compute_unit_limit, InstructionTag};
+async fn a_merge_takes_every_input_one_transaction_carries() {
     use solana_address::Address;
-    use spr_client::ComputeBudgetConfig;
     let owner = keypair(1);
-    let utxos = (0..crate::MAX_RING_MERGE_INPUTS as u64)
-        .map(|leaf| ring_utxo(&owner, Mint::SOL, 5, leaf))
-        .collect();
-    let merge = RingMergeOperation::new(
-        CustomRingMerge::new(ring(), utxos, None)
-            .unwrap()
-            .encrypt(&owner)
-            .unwrap(),
-        MergeProofInput {
-            nullifier_key: owner.nullifier_key.clone(),
-            input_tree: pda::tree(TREE_ID),
-            output_tree: pda::tree(TREE_ID),
-        },
-    );
-    let config = ring()
-        .require_config(&Chain::ring(RingSettings::new(RingMode::Confidential)))
-        .await
-        .unwrap();
-    let payer = Address::new_from_array([7; 32]);
-    crate::submission::check_transaction_size(
-        &payer,
-        &merge
-            .prepared
-            .preview_instruction(&merge.input, payer, &config)
-            .unwrap(),
-        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
-    )
-    .unwrap();
-}
-
-/// SPP keys a wider merge, its record and the ring's accounts leave it past the ceiling.
-#[tokio::test]
-async fn the_next_merge_width_past_the_ring_widest_does_not_fit() {
-    use custom_ring_interface::{compute_unit_limit, InstructionTag};
-    use spr_client::ComputeBudgetConfig;
-    use spr_interface::instruction::instruction_data::merge_transact::MERGE_SUPPORTED_INPUT_COUNTS;
-    use spr_transaction::instructions::merge::MergeTransaction;
-    let owner = keypair(1);
-    let width = MERGE_SUPPORTED_INPUT_COUNTS[2];
-    let utxos = (0..width as u64)
-        .map(|leaf| ring_utxo(&owner, Mint::SOL, 5, leaf))
-        .collect();
-    let prepared = PreparedCustomRingMerge {
-        ring: ring(),
-        inner: MergeTransaction::new_ring_v2(utxos, ring().program_id(), None)
-            .unwrap()
-            .encrypt(&owner)
-            .unwrap(),
-        priority_fee: None,
-    };
-    let config = ring()
-        .require_config(&Chain::ring(RingSettings::new(RingMode::Confidential)))
-        .await
-        .unwrap();
-    let payer = solana_address::Address::new_from_array([7; 32]);
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
     let input = MergeProofInput {
         nullifier_key: owner.nullifier_key.clone(),
         input_tree: pda::tree(TREE_ID),
         output_tree: pda::tree(TREE_ID),
     };
+    let payer = Address::new_from_array([7; 32]);
+    let notes = |count: u64| -> Vec<_> {
+        (0..count)
+            .map(|leaf| ring_utxo(&owner, Mint::SOL, 5, leaf))
+            .collect()
+    };
+    let fitted = |inputs| FittedMerge {
+        ring: ring(),
+        inputs,
+        output_tree_id: TREE_ID,
+        keys: &owner,
+        proof_input: &input,
+        payer,
+    };
+    let carried = fitted(notes(crate::MAX_RING_MERGE_INPUTS as u64))
+        .prepare(&chain)
+        .await
+        .unwrap();
+    let published = carried
+        .inputs()
+        .iter()
+        .filter(|input| !input.is_compact())
+        .count();
+    assert_eq!(published, WIDEST_MERGE);
+
+    let config = ring().require_config(&chain).await.unwrap();
+    let one_more = CustomRingMerge::new(ring(), notes(published as u64 + 1), None)
+        .unwrap()
+        .with_output_tree_id(TREE_ID)
+        .encrypt(&owner)
+        .unwrap();
     assert!(matches!(
         crate::submission::check_transaction_size(
             &payer,
-            &prepared
+            &one_more
                 .preview_instruction(&input, payer, &config)
                 .unwrap(),
-            ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
+            crate::submission::send_budget(custom_ring_interface::InstructionTag::Merge, None),
         ),
         Err(RingError::TransactionTooLarge { .. })
     ));
 }
+
+/// Inputs a keyed merge carries in one v1 transaction, measured here.
+const WIDEST_MERGE: usize = 45;
 
 #[test]
 fn a_zero_key_merge_names_a_zero_key_owner() {

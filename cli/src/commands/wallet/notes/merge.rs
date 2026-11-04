@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{anyhow, ensure, Result};
 use custom_ring_sdk::select_merge_where;
-use custom_ring_sdk::{
-    CustomRingMerge, MergeProofInput, RingMergeOperation, MAX_RING_MERGE_INPUTS,
-};
+use custom_ring_sdk::{FittedMerge, MergeProofInput, RingMergeOperation, MAX_RING_MERGE_INPUTS};
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_interface::pda;
@@ -43,21 +41,32 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     }
     let count = (args.count as usize).min(MAX_RING_MERGE_INPUTS);
     let selected = select(&spendable, ctx.ring.program_id(), mint, count)?;
-    let (input_count, tree_id) = (selected.len(), selected[0].tree_id);
+    let tree_id = selected[0].tree_id;
     let tree = pda::tree(tree_id);
-    let prepared = CustomRingMerge::new(ctx.ring, selected, None)?
-        .with_output_tree_id(tree_id)
-        .encrypt(&held)?;
-    let (output_hash, merged_amount) = (prepared.output().hash(tree_id)?, prepared.output().amount);
-    let merge = RingMergeOperation::new(
-        prepared,
-        MergeProofInput {
-            nullifier_key: sender.nullifier_key.clone(),
-            input_tree: tree,
-            output_tree: tree,
-        },
-    );
+    let proof_input = MergeProofInput {
+        nullifier_key: sender.nullifier_key.clone(),
+        input_tree: tree,
+        output_tree: tree,
+    };
     let payer = ctx.member_payer(config.mode, sender.pubkey())?;
+    let prepared = ctx.zolana.block_on(
+        FittedMerge {
+            ring: ctx.ring,
+            inputs: selected,
+            output_tree_id: tree_id,
+            keys: &held,
+            proof_input: &proof_input,
+            payer: payer.pubkey(),
+        }
+        .prepare(ctx.zolana.as_async()),
+    )?;
+    let input_count = prepared
+        .inputs()
+        .iter()
+        .filter(|input| !input.is_compact())
+        .count();
+    let (output_hash, merged_amount) = (prepared.output().hash(tree_id)?, prepared.output().amount);
+    let merge = RingMergeOperation::new(prepared, proof_input);
     ctx.fund(payer.pubkey(), MIN_AUTHORITY_BALANCE)?;
     // A keyed merge proves the owner's tracking row.
     KeyEnrolment {

@@ -70,7 +70,7 @@ pub use crate::{
     },
     error::RingError,
     merge::{
-        CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, MergeRelay,
+        CustomRingMerge, CustomRingMergeInstruction, FittedMerge, MergeProofInput, MergeRelay,
         PreparedCustomRingMerge, ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
         MERGE_DEFAULT_INPUT_COUNT,
     },

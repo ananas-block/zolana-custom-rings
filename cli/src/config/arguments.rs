@@ -459,7 +459,7 @@ pub struct MergeArgs {
     /// Mint to merge, `sol` by default.
     #[arg(long)]
     pub mint: Option<Mint>,
-    /// Maximum number of notes to merge, from 2 through 50.
+    /// Maximum number of notes to merge, the transaction size may carry fewer.
     #[arg(
         long,
         default_value_t = MERGE_DEFAULT_INPUT_COUNT as u64,

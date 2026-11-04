@@ -46,8 +46,8 @@ use crate::{
 };
 
 pub use spr_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
-/// The widest SPP width a ring merge fits in one v1 transaction.
-pub const MAX_RING_MERGE_INPUTS: usize = MERGE_SUPPORTED_INPUT_COUNTS[1];
+/// The widest SPP circuit, [`FittedMerge`] finds what one transaction carries.
+pub const MAX_RING_MERGE_INPUTS: usize = MERGE_SUPPORTED_INPUT_COUNTS[2];
 
 #[must_use]
 #[derive(Clone)]
@@ -57,18 +57,53 @@ pub struct CustomRingMerge {
     first_nullifier: [u8; 32],
 }
 
+/// The longest prefix of `inputs` whose keyed merge fits one transaction, compact padding publishes nothing.
+#[must_use]
+pub struct FittedMerge<'a, K: ?Sized> {
+    pub ring: CustomRing,
+    pub inputs: Vec<WalletUtxo>,
+    pub output_tree_id: u16,
+    pub keys: &'a K,
+    pub proof_input: &'a MergeProofInput,
+    pub payer: Address,
+}
+
+impl<K: ShieldedKeys + ?Sized> FittedMerge<'_, K> {
+    /// The size refusal of the shortest mergeable prefix when none fits.
+    pub async fn prepare(
+        self,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<PreparedCustomRingMerge, RingError> {
+        let config = self.ring.require_config(rpc).await?;
+        let budget = send_budget(InstructionTag::Merge, None);
+        let mut count = self.inputs.len();
+        loop {
+            let prepared = CustomRingMerge::new(self.ring, self.inputs[..count].to_vec(), None)?
+                .with_output_tree_id(self.output_tree_id)
+                .encrypt(self.keys)?;
+            let instruction =
+                prepared.preview_instruction(self.proof_input, self.payer, &config)?;
+            match check_transaction_size(&self.payer, &instruction, budget) {
+                Ok(()) => return Ok(prepared),
+                Err(RingError::TransactionTooLarge { .. } | RingError::TooManyAddresses { .. })
+                    if count > MIN_MERGE_INPUTS =>
+                {
+                    count -= 1
+                }
+                Err(refusal) => return Err(refusal),
+            }
+        }
+    }
+}
+
+const MIN_MERGE_INPUTS: usize = 2;
+
 impl CustomRingMerge {
     pub fn new(
         ring: CustomRing,
         inputs: Vec<WalletUtxo>,
         output_ring_data_hash: Option<[u8; 32]>,
     ) -> Result<Self, TransactionError> {
-        if inputs.len() > MAX_RING_MERGE_INPUTS {
-            return Err(TransactionError::TooManyInputs {
-                got: inputs.len(),
-                max: MAX_RING_MERGE_INPUTS,
-            });
-        }
         let first_nullifier = inputs.first().ok_or(TransactionError::NoInputs)?.nullifier;
         let inner =
             MergeTransaction::new_ring_v2(inputs, ring.program_id(), output_ring_data_hash)?;
