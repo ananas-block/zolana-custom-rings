@@ -100,9 +100,11 @@ impl<S: TransactionSource> Hub<S> {
         let nullifier_secret = service
             .tracked_nullifier_key(&owner.to_bytes())?
             .map(|key| spr_hasher::primitives::right_align(&key.secret()).into());
+        let enrollment = shared.source.tracking_enrollment(ring, owner).await?;
         Ok(GetDelegateNotesResponse {
             nullifier_secret,
             status: shared.store(ring).wallet_status(WalletStatusQuery {
+                enrollment,
                 wallet: owner,
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,

@@ -273,10 +273,16 @@ impl<S: TransactionSource> AuditService<S> {
             .grant(&request.auth, &attestation, Some(wallet))
             .await?;
         grant.spend().await?;
+        let enrollment = self
+            .shared
+            .source
+            .tracking_enrollment(self.ring, wallet)
+            .await?;
         Ok(self
             .shared
             .store(self.ring)
             .wallet_status(WalletStatusQuery {
+                enrollment,
                 wallet,
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,

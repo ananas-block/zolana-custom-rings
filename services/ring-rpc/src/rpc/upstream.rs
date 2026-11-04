@@ -3,7 +3,7 @@ use std::{future::Future, num::NonZeroU32, time::Duration};
 use async_trait::async_trait;
 use custom_ring_interface::{
     storage::StorageRegistry,
-    tracking::{OwnerGrant, TrackingRegistry},
+    tracking::{OwnerGrant, TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY},
     ReaderKeyBytes, RingAccount, RingMode, RingPolicy, RingRoles,
 };
 use custom_ring_sdk::RingError;
@@ -41,7 +41,9 @@ use zolana_ring_indexer::rpc::{
 use zolana_ring_indexer::tracking::{GetTrackingRecordsRequest, GetTrackingRecordsResponse};
 use zolana_ring_transaction::RingAssets;
 
-use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
+use zolana_ring_client::rpc::{
+    DepositRecord, RingChainStatus, RingDepositsResponse, WalletEnrollment,
+};
 
 use crate::{
     audit::Page,
@@ -139,6 +141,15 @@ pub trait TransactionSource: Send + Sync {
         async { Err(ClientError::Rpc("no tracking records".to_owned()).into()) }
     }
 
+    /// The owner's tracking account under the ring's pinned registry.
+    fn tracking_enrollment(
+        &self,
+        _ring: Address,
+        _owner: Address,
+    ) -> impl Future<Output = Result<WalletEnrollment, ClientError>> + Send {
+        async { Ok(WalletEnrollment::NotEnrolled) }
+    }
+
     /// Whether the owner's own `OwnerGrant` account names this reader, a PDA grants through CPI.
     fn owner_grant_held(
         &self,
@@ -188,6 +199,21 @@ impl<S: OpeningFetch + ?Sized> VerifiedOpenings for S {
         let response = self.fetch_openings(tip.openings_request(members)).await?;
         tip.verify_openings(&response, members)
             .map_err(|_| RingRpcError::InvalidIndexerResponse)
+    }
+}
+
+/// A first enrollment names a new leaf, a full tree can never apply it, a rotation still can.
+fn enrollment_of(
+    authorization: Option<&TrackingAuthorization>,
+    tree_full: bool,
+) -> WalletEnrollment {
+    match authorization {
+        None => WalletEnrollment::NotEnrolled,
+        Some(held) if !held.is_pending() => WalletEnrollment::Applied,
+        Some(held) if held.applied_revision() == 0 && tree_full => {
+            WalletEnrollment::PendingPastCapacity
+        }
+        Some(_) => WalletEnrollment::Pending,
     }
 }
 
@@ -604,6 +630,33 @@ impl TransactionSource for ChainSource {
         self.indexer.get_tracking_records(request).await
     }
 
+    async fn tracking_enrollment(
+        &self,
+        ring: Address,
+        owner: Address,
+    ) -> Result<WalletEnrollment, ClientError> {
+        let Some(root) = self.tracking_root(ring).await? else {
+            return Ok(WalletEnrollment::NotEnrolled);
+        };
+        let (address, _) = TrackingAuthorization::find_address(&root.registry, &owner);
+        let authorization = self
+            .rpc
+            .get_account(address)
+            .await?
+            .and_then(|account| TrackingAuthorization::decode(&account.owner, &account.data));
+        let registry = self
+            .rpc
+            .get_account(root.registry)
+            .await?
+            .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data));
+        Ok(enrollment_of(
+            authorization.as_ref(),
+            registry
+                .as_ref()
+                .is_some_and(|registry| u64::from(registry.next_index()) >= TRACKING_CAPACITY),
+        ))
+    }
+
     async fn owner_grant_held(
         &self,
         ring: Address,
@@ -770,6 +823,29 @@ impl CanonicalAccount<'_> {
             mode: config.mode().map_err(|_| invalid())?,
             delegate: config.delegate().copied(),
         })
+    }
+}
+
+#[cfg(test)]
+mod enrollment_tests {
+    use bytemuck::Zeroable;
+
+    use super::*;
+
+    #[test]
+    fn a_full_tree_names_a_first_enrollment_and_leaves_a_rotation_pending() {
+        let mut held = TrackingAuthorization::zeroed();
+        assert_eq!(enrollment_of(None, true), WalletEnrollment::NotEnrolled);
+        held.revision = 1u64.to_le_bytes();
+        assert_eq!(enrollment_of(Some(&held), false), WalletEnrollment::Pending);
+        assert_eq!(
+            enrollment_of(Some(&held), true),
+            WalletEnrollment::PendingPastCapacity
+        );
+        held.applied_revision = 1u64.to_le_bytes();
+        assert_eq!(enrollment_of(Some(&held), true), WalletEnrollment::Applied);
+        held.revision = 2u64.to_le_bytes();
+        assert_eq!(enrollment_of(Some(&held), true), WalletEnrollment::Pending);
     }
 }
 

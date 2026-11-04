@@ -120,6 +120,7 @@ fn through(store: &AuditStore, keys: &Keys, slot: u64) {
 
 fn status_of(store: &AuditStore, owner: Address) -> GetWalletStatusResponse {
     store.wallet_status(WalletStatusQuery {
+        enrollment: WalletEnrollment::NotEnrolled,
         wallet: owner,
         after: None,
         limit: 100,

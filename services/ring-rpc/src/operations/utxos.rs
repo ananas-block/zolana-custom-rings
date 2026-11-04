@@ -20,8 +20,8 @@ use zolana_ring_client::{
     history::HistoryPosition,
     rpc::{
         AuditedUtxoView, DecryptedInput, GetSpendCoverageResponse, GetWalletStatusResponse,
-        InputParty, SpendCoverageFrame, SpendCoverageRow, WalletBalance, WalletNote,
-        WalletNoteStatus,
+        InputParty, SpendCoverageFrame, SpendCoverageRow, WalletBalance, WalletEnrollment,
+        WalletNote, WalletNoteStatus,
     },
     AuditedMergeOutput, ConfirmedMerge, CreatedUtxo, DepositOwner, DepositOwners, KnownUtxo,
     SealedNullifierKey, UtxoOwner,
@@ -104,6 +104,7 @@ pub(crate) struct CreatedIn {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WalletStatusQuery {
+    pub enrollment: WalletEnrollment,
     pub wallet: Address,
     pub after: Option<[u8; 32]>,
     pub limit: usize,
@@ -684,6 +685,7 @@ impl AuditStore {
         }
         GetWalletStatusResponse {
             history_through: through,
+            enrollment: query.enrollment,
             balances: balances.into_values().collect(),
             notes,
             cursor,

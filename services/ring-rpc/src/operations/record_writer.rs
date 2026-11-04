@@ -12,6 +12,7 @@ use custom_ring_sdk::{CustomRing, InitializeStorage, UpdateStorage};
 use log::warn;
 use sea_orm::DbErr;
 use solana_address::Address;
+use solana_instruction::AccountMeta;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
@@ -347,29 +348,30 @@ impl RecordWriter {
             entries: &entries,
         }
         .check()?;
-        let restrictive = checked
-            .inputs
-            .statement()
-            .map_err(|_| RingRpcError::StaleRecords)?
-            .restrictive;
-        // A graced update over an unexpired oldest root fails on chain.
-        if !restrictive && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
-            return Ok(());
-        }
         let apply = self.chain.prove_apply(&checked.inputs).await?;
         // 4. The storage update is the transaction's one instruction.
-        let instruction = UpdateStorage {
+        let data = StorageUpdateIxData {
+            revision: checked.revision,
+            writes,
+            apply: &apply,
+        };
+        // The program rotates a write no rule can read with grace, over a full history it fails.
+        if !data.reaches_policy() && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
+            return Ok(());
+        }
+        let floor_account = state
+            .reads_tracking(&data)
+            .then_some(state.tracking_registry);
+        let mut instruction = UpdateStorage {
             authority: self.authority(),
             registry,
-            data: StorageUpdateIxData {
-                revision: checked.revision,
-                restrictive,
-                writes,
-                apply: &apply,
-            },
+            data,
         }
         .instruction()
         .map_err(|error| RingRpcError::StorageUpdate(error.into()))?;
+        instruction
+            .accounts
+            .extend(floor_account.map(|tracking| AccountMeta::new_readonly(tracking, false)));
         let latest = self.chain.latest_blockhash().await?;
         let message = compile_message(
             &self.authority(),
