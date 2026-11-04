@@ -9,7 +9,6 @@ use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_keypair::ShieldedKeypair;
 use zolana_ring_client::RingIndexer;
-use zolana_ring_keys::RingNullifierKey;
 use zolana_ring_policy::Member;
 
 use crate::{line, records, Context, KeyCommand, Zolana};
@@ -119,12 +118,11 @@ impl KeyEnrolment<'_> {
 }
 
 fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {
-    let ring_key = RingNullifierKey::derive(member, &ctx.ring.program_id())?;
     let registration = ctx.block(
         KeyRegistration {
             ring: ctx.ring,
-            member: ring_key.address_of(member.shielded_address()?)?,
-            authority: &ring_key,
+            member: member.shielded_address()?,
+            authority: &member.nullifier_key,
         }
         .prove(ctx.ring_client()),
     )?;

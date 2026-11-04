@@ -89,12 +89,6 @@ instruction_tags! {
     Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
     // Tags 55 to 58 are reserved for the transfer, merge and deposit renumbering.
-    WriteFrame = WRITE_FRAME: 59 => ACCOUNT_UNITS,
-    CloseFrameBuffer = CLOSE_FRAME_BUFFER: 60 => ACCOUNT_UNITS,
-    SettleBuffered = SETTLE_BUFFERED: 61 => PROOF_UNITS,
-    CreateFrameBuffer = CREATE_FRAME_BUFFER: 62 => ACCOUNT_UNITS,
-    /// Readers accept it only inside tag 61.
-    FrameEvent = FRAME_EVENT: 63 => ACCOUNT_UNITS,
 }
 
 /// Fixed for the ring's life.
@@ -176,11 +170,13 @@ impl CustomRingProof {
 
 const _: () = assert!(CustomRingProof::SIZE == 192);
 
-/// `tag || proof || tracking_revision || own_revision || curator_revision`, then the SPP deposit instruction unchanged.
+/// `tag || key_capacity || proof || tracking_revision || own_revision || curator_revision`, then the SPP deposit instruction unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct DepositPrefix {
     pub tag: u8,
+    /// Every deposit key proves one statement, a key below the count cannot solve it.
+    pub key_capacity: u8,
     pub proof: CustomRingProof,
     pub tracking_revision: Revision,
     /// Zero off a policy ring.
@@ -224,6 +220,8 @@ pub struct PolicyBindingIxData {
 pub struct PolicySourceIxData {
     pub list_id: u8,
     pub source: u8,
+    /// Owner rows read the list under salted keys.
+    pub salted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
@@ -236,9 +234,6 @@ pub enum UpdatePolicyIxData {
     /// One trailing records registry under any authority.
     #[wincode(tag = 2)]
     Records,
-    /// [`ListSet`](zolana_ring_policy::ListSet) bits and one trailing private registry, zero bits and no registry clear it.
-    #[wincode(tag = 3)]
-    PrivateSource { owner_lists: u8 },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
@@ -433,7 +428,7 @@ mod tests {
             write(allow, allow),
             Err(CustomRingError::ListBitNotWritable)
         );
-        for unwritable in [ListId::Escrow, ListId::Recovery] {
+        for unwritable in [ListId::PrivateAllow, ListId::PrivateBlock] {
             assert_eq!(
                 write(unwritable.record_bit(), 0),
                 Err(CustomRingError::ListBitNotWritable)
@@ -464,10 +459,6 @@ mod tests {
         assert!(write(ListId::Block.record_bit()).is_ok());
         assert_eq!(
             write(ListId::RingViewing.record_bit()),
-            Err(CustomRingError::ListBitNotWritable)
-        );
-        assert_eq!(
-            write(ListId::Escrow.record_bit()),
             Err(CustomRingError::ListBitNotWritable)
         );
     }

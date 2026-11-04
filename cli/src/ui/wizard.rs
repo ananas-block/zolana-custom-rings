@@ -37,9 +37,10 @@ pub struct Answers {
     pub policy: Option<PolicySpec>,
 }
 
-const POLICY_OPTIONS: [&str; 10] = [
+const POLICY_OPTIONS: [&str; 11] = [
     "participant allowlist",
     "recipient blocklist",
+    "recipient public and private blocklist",
     "sender freeze",
     "asset allowlist",
     "blocklist with approval exception",
@@ -235,6 +236,9 @@ impl Wizard<'_> {
             let rules = match POLICY_OPTIONS[picked] {
                 "participant allowlist" => Some(participant_allowlist()),
                 "recipient blocklist" => Some(vec![forbid(SubjectName::OutputOwner, "block")]),
+                "recipient public and private blocklist" => {
+                    Some(forbid_each(SubjectName::OutputOwner, &["block", "private-block"]))
+                }
                 "sender freeze" => Some(vec![forbid(SubjectName::Sender, "frozen")]),
                 "asset allowlist" => Some(vec![self.asset_rule(target, false)?]),
                 "blocklist with approval exception" => Some(vec![simple_rule(
@@ -490,6 +494,11 @@ fn require(subject: SubjectName, list: &str) -> RuleSpec {
 
 fn forbid(subject: SubjectName, list: &str) -> RuleSpec {
     simple_rule(subject, SourceSpec::Forbid(named_list(list)))
+}
+
+/// One rule per list, one rule over both admits an owner off either.
+fn forbid_each(subject: SubjectName, lists: &[&str]) -> Vec<RuleSpec> {
+    lists.iter().map(|list| forbid(subject, list)).collect()
 }
 
 fn participant_allowlist() -> Vec<RuleSpec> {

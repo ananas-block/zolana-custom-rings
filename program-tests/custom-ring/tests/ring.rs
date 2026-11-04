@@ -34,6 +34,9 @@ mod sanity;
 #[path = "ring/sanity_deposits.rs"]
 mod sanity_deposits;
 
+#[path = "ring/forester_stall.rs"]
+mod forester_stall;
+
 #[path = "ring/sanity_mixed_owners.rs"]
 mod sanity_mixed_owners;
 
@@ -138,7 +141,7 @@ use zolana_ring_client::{
     rpc::{write_auditor_key, CreateAuditorKeyRequest, RecordUpdateEntry},
     AuditedTransaction, OutputOpening, RingRecovery, RingScan, SourceMember, ViewingHistory,
 };
-use zolana_ring_keys::{RingAddress, RingNullifierKey, RingPaymentRequest};
+use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
     ChainSource, Hub, RingRpcError, RootSecret, ServiceIdentity, TransactionSource, Unauthorized,
@@ -395,12 +398,11 @@ fn register_keys(env: &TestEnv, ring: CustomRing, members: &[&ShieldedKeypair]) 
     let writes = members
         .iter()
         .map(|member| {
-            let ring_key = RingNullifierKey::derive(*member, &ring.program_id())?;
             let registration = env.run(
                 KeyRegistration {
                     ring,
-                    member: ring_key.address_of(member.shielded_address()?)?,
-                    authority: &ring_key,
+                    member: member.shielded_address()?,
+                    authority: &member.nullifier_key,
                 }
                 .prove(env.client.ring_client()),
             )?;
@@ -861,11 +863,7 @@ impl PaymentLanding<'_> {
 
 /// The wallet's spec identity on `ring`, its own viewing key the recipient key.
 fn ring_address(owner: &ShieldedKeypair, ring: Address) -> Result<RingAddress> {
-    Ok(RingAddress::enrolled(
-        owner.shielded_address()?,
-        ring,
-        &zolana_ring_keys::RingNullifierKey::derive(owner, &ring)?,
-    )?)
+    Ok(RingAddress::enrolled(owner, ring)?)
 }
 
 fn unspent_utxo(wallet: &Wallet, amount: u64) -> Result<Utxo> {

@@ -11,8 +11,8 @@ use custom_ring_interface::{
         TrackingRegistry, TrackingRootUpdate, TRACKING_CAPACITY, TRACKING_EMPTY_ROOT,
         TRACKING_GRACE_SLOTS,
     },
-    ApplyRecordsIxData, CustomRingError, CustomRingProof, NewRing, RecordWriteData, RingAccount,
-    RingMode, RingPolicy, RingRole, RingRoles, SourceSlot, WriteRecordsIxData,
+    ApplyRecordsIxData, CustomRingError, CustomRingProof, NewRing, PolicyUpdate, RecordWriteData,
+    RingAccount, RingMode, RingPolicy, RingRole, RingRoles, SourceSlot, WriteRecordsIxData,
     MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS, READER_KEY_ED25519, ROOT_HISTORY,
     STORAGE_PROGRAM_ID, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
@@ -22,7 +22,7 @@ use spr_hasher::{
     primitives::{hash_bytes, pack_be, right_align, solana_owner_identity},
     Hasher, Poseidon,
 };
-use zolana_ring_policy::{ListId, MintPolicy, Rule, RuleTable, Subject};
+use zolana_ring_policy::{ListId, ListSet, MintPolicy, Rule, RuleTable, Subject};
 
 const PROGRAM: Address = Address::new_from_array([7; 32]);
 const ENROLL_VECTOR: &str = concat!(
@@ -114,19 +114,25 @@ fn a_policy_write_validates_and_repins_the_table() {
         .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
         .build()
         .encode();
+    let update = |sources, rules, slot| PolicyUpdate {
+        sources,
+        salted_lists: ListSet::EMPTY,
+        rules,
+        slot,
+    };
     assert_eq!(
-        policy.set_policy(sources, table, 3),
+        policy.set_policy(update(sources, table, 3)),
         Err(CustomRingError::InvalidSource)
     );
     sources[ListId::Allow.slot()].list_id = ListId::Allow as u8;
-    policy.set_policy(sources, table, 3).unwrap();
+    policy.set_policy(update(sources, table, 3)).unwrap();
     let hash = *policy.policy_hash().unwrap();
     assert_eq!(hash, table.hash(&policy.source_map().unwrap()).unwrap());
     assert_eq!((policy.generation(), policy.generation_slot()), (1, 3));
     let mut padded = table;
     padded.rules[1][0] = 1;
     assert_eq!(
-        policy.set_policy(sources, padded, 4),
+        policy.set_policy(update(sources, padded, 4)),
         Err(CustomRingError::InvalidPolicyRules)
     );
     assert_eq!(policy.policy_hash(), Ok(&hash));

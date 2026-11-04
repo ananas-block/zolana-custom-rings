@@ -15,9 +15,8 @@ import (
 )
 
 var (
-	confidentialShape = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	anonymousShape    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	entryShape        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, Owners: 4, Entry: true}
+	transferShape = transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
+	entryShape    = transfer.Shape{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true}
 )
 
 // A request of every rail decodes strictly and solves on its key.
@@ -27,18 +26,18 @@ func TestTransferRequestsDecodeAndSolve(t *testing.T) {
 		rail ringtransfer.Rail
 	}{{"signer", ringtransfer.Signer}, {"in-proof", ringtransfer.InProof}, {"delegate", ringtransfer.Delegate}} {
 		t.Run(tc.name, func(t *testing.T) {
-			w := ringtransfer.Signed(confidentialShape)
+			w := ringtransfer.Signed(transferShape)
 			w.Rail = tc.rail
-			requireRequestSolved(t, confidentialKey, requestOf[ConfidentialTransferParams](t, confidentialKey, w.Build(t).Circuit))
+			requireRequestSolved(t, transferKey, requestOf[TransferParams](t, transferKey, w.Build(t).Circuit))
 		})
 	}
 	for _, tc := range []struct {
 		name  string
 		key   common.CircuitType
-		shape transfer.AnonymousShape
-	}{{"commitment", anonymousKey, anonymousShape}, {"entry", entryKey, entryShape}} {
+		shape transfer.Shape
+	}{{"hidden", transferKey, transferShape}, {"entry", entryKey, entryShape}} {
 		t.Run(tc.name, func(t *testing.T) {
-			requireRequestSolved(t, tc.key, requestOf[AnonymousTransferParams](t, tc.key, ringtransfer.Hidden(tc.shape).Build(t).Circuit))
+			requireRequestSolved(t, tc.key, requestOf[TransferParams](t, tc.key, ringtransfer.Hidden(tc.shape).Build(t).Circuit))
 		})
 	}
 }
@@ -52,7 +51,7 @@ func requireRequestSolved(t *testing.T, key common.CircuitType, params any) {
 
 func transferPayload(t testing.TB) []byte {
 	t.Helper()
-	return mustMarshal(t, requestOf[ConfidentialTransferParams](t, confidentialKey, ringtransfer.Signed(confidentialShape).Build(t).Circuit))
+	return mustMarshal(t, requestOf[TransferParams](t, transferKey, ringtransfer.Signed(transferShape).Build(t).Circuit))
 }
 
 func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
@@ -93,7 +92,7 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 		{"short canopy", func(m map[string]any) { proof(m)["canopy"] = proof(m)["canopy"].([]any)[1:] }, "expected"},
 		{"short path", func(m map[string]any) { path(m)["siblings"] = path(m)["siblings"].([]any)[1:] }, "expected"},
 		{"short sibling row", func(m map[string]any) { rows := path(m)["siblings"].([]any); rows[0] = rows[0].([]any)[1:] }, "expected"},
-		{"wrong circuit label", func(m map[string]any) { m["circuitType"] = anonymousKey }, "request on"},
+		{"wrong circuit label", func(m map[string]any) { m["circuitType"] = transfer4Key }, "request on"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var raw map[string]any
@@ -101,16 +100,16 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 				t.Fatal(err)
 			}
 			tc.mutate(raw)
-			if _, err := decode(confidentialKey, mustMarshal(t, raw)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := decode(transferKey, mustMarshal(t, raw)); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("want %q, got %v", tc.want, err)
 			}
 		})
 	}
-	if _, err := decode(confidentialKey, append(payload, []byte("{}")...)); err == nil {
+	if _, err := decode(transferKey, append(payload, []byte("{}")...)); err == nil {
 		t.Fatal("trailing payload accepted")
 	}
-	duplicate := append([]byte(`{"circuitType":"`+string(confidentialKey)+`",`), payload[1:]...)
-	if _, err := decode(confidentialKey, duplicate); err == nil || !strings.Contains(err.Error(), "repeated field") {
+	duplicate := append([]byte(`{"circuitType":"`+string(transferKey)+`",`), payload[1:]...)
+	if _, err := decode(transferKey, duplicate); err == nil || !strings.Contains(err.Error(), "repeated field") {
 		t.Fatalf("duplicate header accepted %v", err)
 	}
 }

@@ -18,12 +18,14 @@ var fieldMax = new(big.Int).Sub(poseidon.Modulus, big.NewInt(1))
 
 // Record list bits mirror ListId::record_bit in program-libs/policy/src/list.rs.
 const (
-	AllowBit    = 1 << 0
-	BlockBit    = 1 << 1
-	FrozenBit   = 1 << 2
-	ReaderBit   = 1 << 5
-	ApprovalBit = 1 << 6
-	EscrowBit   = 1 << 7
+	AllowBit  = 1 << 0
+	BlockBit  = 1 << 1
+	FrozenBit = 1 << 2
+	// PrivateBlockBit and PrivateAllowBit are always salted.
+	PrivateBlockBit = 1 << 4
+	ReaderBit       = 1 << 5
+	ApprovalBit     = 1 << 6
+	PrivateAllowBit = 1 << 7
 )
 
 // Record mirrors registry.Record.

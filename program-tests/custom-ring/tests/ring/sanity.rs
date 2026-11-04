@@ -209,7 +209,7 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
     let assets = env.ring_assets()?;
     let history = ViewingHistory::new(recipient.viewing_pubkey(), 0).with_ring(ring_program, None);
     let mut wallet = AnonymousWallet::new(history);
-    let original_keys = RotatingRingKeys::new(recipient, &ring_program)?;
+    let original_keys = RotatingRingKeys::new(recipient)?;
     let mut rotated = recipient.clone();
     rotated.viewing_key = ViewingKey::new();
     let original_address = env
@@ -280,8 +280,8 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
     }
     let stored = wallet.to_json();
     let mut restarted = AnonymousWallet::from_json(&stored)?;
-    let restarted_keys = RotatingRingKeys::new(&rotated, &ring_program)?
-        .with_retired(vec![recipient.viewing_key.clone()])?;
+    let restarted_keys =
+        RotatingRingKeys::new(&rotated)?.with_retired(vec![recipient.viewing_key.clone()])?;
     let scan = env.client.block_on(async {
         AnonymousSync::new(&restarted_keys, &assets)
             .fetch(env.client.as_async().indexer(), restarted.history())

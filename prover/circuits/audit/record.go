@@ -36,15 +36,14 @@ type RecordOpening struct {
 	MintChunks                                          [2]frontend.Variable
 }
 
-// Encode mirrors AuditRecord::encode in program-libs/interface/src/proof/audit_stream.rs.
+// Encode mirrors AuditRecord::encode in program-libs/interface/src/proof/audit_stream.rs, padded to RecordStride.
 func (r RecordOpening) Encode(api frontend.API, rc frontend.Rangechecker) []frontend.Variable {
 	mint := assertMint(api, r.Live, r.Asset, r.MintChunks)
 	// SolanaOwnerIdentity bounds every owner key byte, the reader rebuilds the owner from the key.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: r.Live, A: r.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, r.OwnerKey)})
 	// FieldToBytesBEWith holds the one be32 below q, UintBytesBE fails a live amount at or above 2^64.
 	nullifierPk := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(r.Live, r.NullifierPk))
-	head := append([]frontend.Variable{r.Kind}, shared.Zeros(recordHeadLen-1)...)
-	return slices.Concat(head, ringgadget.UintBytesBE(api, api.Mul(r.Live, r.Amount), amountLen), masked(api, r.Live, r.OwnerKey[:]), masked(api, r.Live, mint), nullifierPk[:])
+	return slices.Concat([]frontend.Variable{r.Kind}, ringgadget.UintBytesBE(api, api.Mul(r.Live, r.Amount), amountLen), masked(api, r.Live, r.OwnerKey[:]), masked(api, r.Live, mint), nullifierPk[:], shared.Zeros(RecordStride-RecordLen))
 }
 
 func (o OutputWires) record(api frontend.API, rc frontend.Rangechecker, slot shared.Output) []frontend.Variable {

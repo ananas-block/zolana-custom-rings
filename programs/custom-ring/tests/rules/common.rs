@@ -298,10 +298,6 @@ impl Ring {
         self.svm.send_transaction(transaction).map_err(Box::new)
     }
 
-    pub fn svm(&mut self) -> &mut LiteSVM {
-        &mut self.svm
-    }
-
     pub fn read<T: Pod>(&self, address: &Address) -> T {
         let account = self.svm.get_account(address).expect("account exists");
         *bytemuck::from_bytes(&account.data)

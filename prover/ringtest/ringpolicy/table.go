@@ -8,7 +8,6 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -16,8 +15,8 @@ import (
 // Rows are a table's used rows, Wires pads each list with zero rows to its capacity.
 type Rows struct {
 	Sources []policy.SourceWires
-	// Source is the private source, its zero value is none.
-	Source                            privatelist.Source
+	// Bit i puts list i+1 at owners' salted keys.
+	Salted                            uint64
 	Rules, InlineAssets, InlineLimits []frontend.Variable
 	Limits                            []MintLimit
 }
@@ -44,10 +43,7 @@ func (r Rows) Wires() policy.Table {
 	for i := range table.Sources {
 		table.Sources[i] = pad(r.Sources, i, policy.SourceWires{ListID: 0, Registry: 0})
 	}
-	table.Source = privatelist.Source{OwnerLists: 0, Registry: 0}
-	if r.Source.Registry != nil {
-		table.Source = r.Source
-	}
+	table.Salted = new(big.Int).SetUint64(r.Salted)
 	table.PolicyLen = len(r.Rules)
 	for i := range table.Rules {
 		table.Rules[i] = pad(r.Rules, i, 0)
@@ -71,7 +67,7 @@ func (table Table) rows() Rows {
 		}
 		sources[slot] = policy.SourceWires{ListID: slot + 1, Registry: registry}
 	}
-	r := Rows{Sources: sources}
+	r := Rows{Sources: sources, Salted: table.Salted}
 	for _, rule := range table.Rules {
 		r.Rules = append(r.Rules, rule.Packed())
 	}

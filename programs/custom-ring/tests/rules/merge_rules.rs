@@ -27,7 +27,7 @@ const RINGS: [Setup; 3] = [Setup::AuditOnly, Setup::Policy, Setup::Anonymous];
 /// The ring account and the tracking registry lead the forwarded list.
 const MERGE_SPP: usize = 2;
 
-fn merge_data(authority: MergeRingAuthority) -> CustomRingMergeIxData {
+pub(crate) fn merge_data(authority: MergeRingAuthority) -> CustomRingMergeIxData {
     CustomRingMergeIxData {
         tracking_revision: 0.into(),
         output_ring_data_hash: [8; 32],
@@ -58,7 +58,7 @@ fn merge_data(authority: MergeRingAuthority) -> CustomRingMergeIxData {
 }
 
 /// `owner` fills the SPP slot `OwnerSigned` reads.
-fn merge_instruction(
+pub(crate) fn merge_instruction(
     ring: &Ring,
     data: &CustomRingMergeIxData,
     owner: Option<&Keypair>,
