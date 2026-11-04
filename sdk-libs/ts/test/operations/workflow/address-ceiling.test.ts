@@ -7,6 +7,7 @@ import {
 import { encodeBase58 } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
+import { AccountRole } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
@@ -258,6 +259,29 @@ describe("TransactionFit, the refusals of Rust `TransactionFit`", () => {
     await expect(TransactionFit.of(instruction, payer, BUDGET)).rejects.toMatchObject({
       code: "RING_FIT_ADDRESSES",
       details: { addresses: LIMIT + 2, limit: LIMIT },
+    });
+  });
+
+  it("refuses the address a setup instruction adds past the ceiling", async () => {
+    const accounts = Array.from({ length: LIMIT - 3 }, (_, seed) => ({
+      address: address(5000 + seed),
+      role: AccountRole.READONLY,
+    }));
+    const instruction = { programAddress: address(2), accounts } as unknown as Instruction;
+    const setup = (extra: number): Instruction =>
+      ({
+        programAddress: address(3),
+        accounts: Array.from({ length: extra }, (_, seed) => ({
+          address: address(8000 + seed),
+          role: AccountRole.READONLY,
+        })),
+      }) as unknown as Instruction;
+    const fit = (extra: number) =>
+      TransactionFit.of(instruction, { ...payer, setupInstructions: [setup(extra)] }, BUDGET);
+    expect((await fit(0)).addresses).toBe(LIMIT);
+    await expect(fit(1)).rejects.toMatchObject({
+      code: "RING_FIT_ADDRESSES",
+      details: { addresses: LIMIT + 1, limit: LIMIT },
     });
   });
 
