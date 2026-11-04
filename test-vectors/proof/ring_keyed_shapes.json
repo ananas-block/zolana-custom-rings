@@ -33,12 +33,20 @@
       4
     ],
     [
+      3,
+      8
+    ],
+    [
       4,
       2
     ],
     [
       4,
       4
+    ],
+    [
+      4,
+      8
     ],
     [
       5,
@@ -177,6 +185,10 @@
     [
       8,
       8
+    ],
+    [
+      8,
+      16
     ],
     [
       12,
@@ -329,6 +341,10 @@
       8
     ],
     [
+      8,
+      16
+    ],
+    [
       12,
       2
     ],
@@ -439,6 +455,14 @@
     },
     {
       "entry": false,
+      "inputs": 8,
+      "outputs": 16,
+      "owners": 8,
+      "wide": true,
+      "withdrawals": 8
+    },
+    {
+      "entry": false,
       "inputs": 49,
       "outputs": 2,
       "owners": 12,
@@ -458,6 +482,14 @@
       "inputs": 2,
       "outputs": 8,
       "owners": 2,
+      "wide": true,
+      "withdrawals": 4
+    },
+    {
+      "entry": true,
+      "inputs": 4,
+      "outputs": 8,
+      "owners": 4,
       "wide": true,
       "withdrawals": 4
     },
