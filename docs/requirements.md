@@ -42,7 +42,7 @@
    1. Restrict sending or receiving funds to approved owners.
    
       **Technical requirements:**
-   2. Do not reveal allowlist members’ identities to public observers.
+   2. Allowlist entries may be public or private. Private entries must not reveal members’ identities to public observers.
    3. Using the allowlist must not reveal the identities of the owners sending or receiving funds to public observers.
    
       **Cases:**
@@ -61,7 +61,7 @@
    1. Prevent selected owners from sending or receiving funds.
    
       **Technical requirements:**
-   2. Do not reveal blocklist members’ identities to public observers.
+   2. Blocklist and freeze-list entries may be public or private. Private entries must not reveal members’ identities to public observers.
    3. Using the blocklist must not reveal the identities of the owners sending or receiving funds to public observers.
    4. Blocking and freezing can use separate lists.
    
