@@ -9,6 +9,43 @@ use solana_address::Address;
 use spr_interface::{MAX_INPUT_TREES, ZERO_NULLIFIER_PUBKEY};
 use spr_transaction::{instructions::merge::MAX_MERGE_INPUTS, TransactionError, WalletUtxo};
 
+/// The nullifier key classes a selection may spend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpendableKeys {
+    /// A wallet's own spend, a zero-key note publishes its owner so only a named public spend takes one.
+    Keyed,
+    /// A delegate moves both classes under one authority, the proof takes each note's secret by its nullifier.
+    Any,
+}
+
+impl SpendableKeys {
+    fn admits(self, utxo: &WalletUtxo) -> bool {
+        self == Self::Any || utxo.nullifier_pubkey != ZERO_NULLIFIER_PUBKEY
+    }
+}
+
+/// The largest UTXOs of an asset until they cover `amount`, at most `max_inputs`.
+#[must_use = "select the UTXOs"]
+pub(crate) struct SpendSelection<'a> {
+    pub utxos: &'a [WalletUtxo],
+    pub asset: Address,
+    pub amount: u64,
+    pub max_inputs: usize,
+    pub keys: SpendableKeys,
+}
+
+impl SpendSelection<'_> {
+    pub fn select_where(
+        self,
+        keep: impl Fn(&WalletUtxo) -> bool,
+    ) -> Result<Vec<WalletUtxo>, TransactionError> {
+        let admitted = candidates(self.utxos, self.asset, |utxo| {
+            self.keys.admits(utxo) && keep(utxo)
+        });
+        select(admitted, self.asset, self.amount, self.max_inputs)
+    }
+}
+
 /// The largest keyed UTXOs `keep` admits until they cover `amount`, at most `max_inputs`.
 pub fn select_spend_where<'a>(
     utxos: impl IntoIterator<Item = &'a WalletUtxo>,
@@ -17,7 +54,10 @@ pub fn select_spend_where<'a>(
     max_inputs: usize,
     keep: impl Fn(&WalletUtxo) -> bool,
 ) -> Result<Vec<WalletUtxo>, TransactionError> {
-    select(candidates(utxos, asset, keep), asset, amount, max_inputs)
+    let admitted = candidates(utxos, asset, |utxo| {
+        SpendableKeys::Keyed.admits(utxo) && keep(utxo)
+    });
+    select(admitted, asset, amount, max_inputs)
 }
 
 /// The smallest keyed UTXOs `keep` admits on the tree holding most of them, at most `max_inputs` up to [`MAX_MERGE_INPUTS`].
@@ -29,7 +69,10 @@ pub fn select_merge_where<'a>(
     keep: impl Fn(&WalletUtxo) -> bool,
 ) -> Result<Vec<WalletUtxo>, TransactionError> {
     let mut trees: BTreeMap<u16, Vec<&WalletUtxo>> = BTreeMap::new();
-    for utxo in candidates(utxos, asset, keep)
+    let admitted = candidates(utxos, asset, |utxo| {
+        SpendableKeys::Keyed.admits(utxo) && keep(utxo)
+    });
+    for utxo in admitted
         .into_iter()
         .filter(|utxo| !excluded.contains(&utxo.nullifier))
     {
@@ -56,12 +99,7 @@ fn candidates<'a>(
 ) -> Vec<&'a WalletUtxo> {
     utxos
         .into_iter()
-        .filter(|utxo| {
-            utxo.utxo.asset.asset == asset
-                && utxo.utxo.amount > 0
-                && utxo.nullifier_pubkey != ZERO_NULLIFIER_PUBKEY
-                && keep(utxo)
-        })
+        .filter(|utxo| utxo.utxo.asset.asset == asset && utxo.utxo.amount > 0 && keep(utxo))
         .collect()
 }
 

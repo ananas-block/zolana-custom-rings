@@ -8,7 +8,7 @@ import { RingInstructionTag } from "./instruction-tag.js";
 export const FRAME_BUFFER_PDA_SEED = new TextEncoder().encode("frame_buffer");
 export const FRAME_BUFFER_HEADER_LEN = 34;
 /** The runtime's ceiling on an inner create and on CPI instruction data. */
-const MAX_CPI_DATA_LEN = 10 * 1024;
+export const MAX_CPI_DATA_LEN = 10 * 1024;
 export const MAX_FRAME_LEN = MAX_CPI_DATA_LEN - FRAME_BUFFER_HEADER_LEN;
 
 const FRAME_BUFFER_DISCRIMINATOR = 16;

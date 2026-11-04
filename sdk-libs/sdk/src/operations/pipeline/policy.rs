@@ -12,8 +12,8 @@ use spr_interface::{N_PUBLIC_SLOTS, ZERO_NULLIFIER_PUBKEY};
 use spr_transaction::instructions::transact::SppProofInputs;
 use zolana_ring_client::{records::RecordPoolRead, AsyncRingIndexer};
 use zolana_ring_policy::{
-    ApprovalInputs, EncodedRuleTable, Member, MintPolicy, OutputSubjects, PublicGross, SourceMap,
-    TransferSubjects,
+    ApprovalInputs, EncodedRuleTable, Member, MintPolicy, OutputSubjects, PaymentSubjects,
+    PublicGross, RecordLists, SourceMap,
 };
 
 use super::{
@@ -63,6 +63,8 @@ pub(super) struct PolicyInputs {
     sender_entries: Vec<OwnerEntry>,
     owner_entries: Vec<OwnerEntry>,
     asset_entries: Vec<PoolEntry>,
+    /// One per input slot of the key, past every payment in the request.
+    input_asset_entries: Vec<PoolEntry>,
     public_asset_entries: Vec<u32>,
     pub approval: ApprovalMask,
 }
@@ -90,6 +92,7 @@ struct PlannedEntries {
     withdrawal_owners: Vec<OwnerEntry>,
     withdrawal_assets: Vec<PoolEntry>,
     public_assets: Vec<u32>,
+    input_assets: Vec<PoolEntry>,
 }
 
 impl PlannedEntries {
@@ -164,6 +167,7 @@ impl PolicyRead<'_> {
             false => None,
         };
         let live_assets = self.output_assets()?;
+        let input_assets = self.input_assets()?;
         let public_assets = self.public.asset_fields()?;
         let mut plan = RecordPlan::new(gates);
         let mut planned = EntryPlan {
@@ -171,6 +175,7 @@ impl PolicyRead<'_> {
             rows: &live_rows,
             owners: &live_owners,
             assets: &live_assets,
+            input_assets: &input_assets,
             withdrawals: &withdrawals,
             public_assets: &public_assets,
             tracked: &tracked,
@@ -202,7 +207,12 @@ impl PolicyRead<'_> {
             false => key,
         };
         let circuit = key.circuit;
-        let RingCircuit::Transfer { outputs, .. } = circuit else {
+        let RingCircuit::Transfer {
+            outputs,
+            inputs: input_slots,
+            ..
+        } = circuit
+        else {
             return Err(RingError::UncataloguedCircuit(circuit));
         };
         let slots = usize::from(outputs);
@@ -226,6 +236,8 @@ impl PolicyRead<'_> {
         let mut sender_entries = core::mem::take(&mut planned.senders);
         sender_entries.resize(capacity, OwnerEntry::default());
         let public_asset_entries = core::mem::take(&mut planned.public_assets);
+        let mut input_asset_entries = core::mem::take(&mut planned.input_assets);
+        input_asset_entries.resize(usize::from(input_slots), PoolEntry::default());
         let (owner_entries, asset_entries) = planned.slotted(slots);
         let mut inputs = PolicyInputs {
             circuit,
@@ -250,6 +262,7 @@ impl PolicyRead<'_> {
             sender_entries,
             owner_entries,
             asset_entries,
+            input_asset_entries,
             public_asset_entries,
             approval: ApprovalMask::default(),
         };
@@ -325,6 +338,19 @@ impl PolicyRead<'_> {
             .collect()
     }
 
+    /// One per published slot, the slots the circuit's input section opens. An address slot and padding read no asset.
+    fn input_assets(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
+        self.inputs
+            .input_utxos
+            .iter()
+            .filter(|input| !input.is_compact())
+            .map(|input| match input.is_dummy() || input.is_address() {
+                true => Ok(None),
+                false => Ok(Some(*Member::asset(&input.utxo.asset.asset)?.as_bytes())),
+            })
+            .collect()
+    }
+
     /// A keyed ring note spends under its owner's enrolled key, a zero key waives the equality alone.
     fn check_input_keys(&self, pool: &TrackingPoolRead) -> Result<(), RingError> {
         for (index, input) in self.inputs.input_utxos.iter().enumerate() {
@@ -358,11 +384,11 @@ impl PolicyRead<'_> {
             let row = pool.record(member);
             check_output_key(row, &address.nullifier_pubkey, slot_index)?;
             // A spending owner holds every key it ever enrolled.
-            let spends = self
-                .inputs
-                .input_utxos
-                .iter()
-                .any(|input| !input.is_dummy() && input.utxo.owner == address.signing_pubkey);
+            let spends = self.inputs.input_utxos.iter().any(|input| {
+                !input.is_dummy()
+                    && !input.is_address()
+                    && input.utxo.owner == address.signing_pubkey
+            });
             if !spends {
                 check_recipient_viewing_key(row, &address.viewing_pubkey.u(), slot_index)?;
             }
@@ -376,6 +402,8 @@ struct EntryPlan<'a> {
     rows: &'a [[u8; 32]],
     owners: &'a [Option<[u8; 32]>],
     assets: &'a [Option<[u8; 32]>],
+    /// By published input slot.
+    input_assets: &'a [Option<[u8; 32]>],
     withdrawals: &'a [PolicyWithdrawal],
     public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
     tracked: &'a PoolSubjects,
@@ -443,6 +471,17 @@ impl EntryPlan<'_> {
             .map(|asset| match *asset == [0; 32] {
                 true => 0,
                 false => plan.public_asset(*asset),
+            })
+            .collect();
+        // A zero value input can name an asset no payment moves, only its own subject row screens
+        // that note. The rows join the spend's pools, so key selection counts them. Thresholds read
+        // no input asset, so an own read off a policy opens none and the circuit gates the slot off.
+        planned.input_assets = self
+            .input_assets
+            .iter()
+            .map(|asset| match asset.filter(|_| screened) {
+                Some(asset) => plan.asset(asset),
+                None => PoolEntry::default(),
             })
             .collect();
         Ok(planned)
@@ -551,17 +590,23 @@ impl ScreenedRecords<'_> {
                     .map(|w| subject(false, w.owner, w.asset, w.amount)),
             );
             let ring_inputs = outflows.ring_inputs()?;
-            // Every row passes the sender rules, a co-owner who receives nothing is screened.
-            for sender in inputs.rows.iter().filter(|sender| **sender != [0; 32]) {
-                pinned.table.admit(
-                    &pinned.sources,
-                    &TransferSubjects {
-                        sender: lists(*sender),
-                        ring_inputs: &ring_inputs,
-                        outputs: &transfer_subjects,
-                    },
-                )?;
-            }
+            // The circuit screens the rows and the payments apart, in that order. A public-funded
+            // transfer with no live row still owes the payment rules, and a stand-in row would put
+            // a deposit under the sender rules. A co-owner who receives nothing is screened too.
+            let senders: Vec<RecordLists> = inputs
+                .rows
+                .iter()
+                .filter(|sender| **sender != [0; 32])
+                .map(|sender| lists(*sender))
+                .collect();
+            pinned.table.evaluate_senders(&pinned.sources, &senders)?;
+            pinned.table.evaluate_payments(
+                &pinned.sources,
+                PaymentSubjects {
+                    ring_inputs: &ring_inputs,
+                    outputs: &transfer_subjects,
+                },
+            )?;
             inputs.rules = policy.rules;
             inputs.sources = pinned.sources;
             inputs.policy_hash = pinned.policy_hash;
@@ -652,6 +697,7 @@ impl PolicyInputs {
         let mut asset_entries = self.asset_entries.clone();
         owner_entries.resize(outputs + capacity, OwnerEntry::default());
         asset_entries.resize(outputs + capacity, PoolEntry::default());
+        asset_entries.extend_from_slice(&self.input_asset_entries);
         Ok(PolicyParams {
             withdrawal_count: self.withdrawals.len() as u8,
             withdrawal_hash: self.withdrawal_hash()?,

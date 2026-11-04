@@ -19,7 +19,10 @@ use super::{
     RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::client::{RingClient, RingIndexerBackend};
-use crate::{CustomRing, CustomRingConfig, RingError};
+use crate::{
+    select::{SpendSelection, SpendableKeys},
+    CustomRing, CustomRingConfig, RingError,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DelegateOutput {
@@ -188,7 +191,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
 }
 
 impl<'a> DelegateMove<'a> {
-    /// The fewest UTXOs of one tree funding the payments whose move fits one transaction.
+    /// The fewest UTXOs of one tree funding the payments whose move fits one transaction, keyed and zero-key notes alike.
     pub async fn select<P: AsyncRpc, I: RingIndexerBackend>(
         self,
         client: &RingClient<P, I>,
@@ -223,18 +226,25 @@ impl<'a> DelegateMove<'a> {
                 max_inputs,
             })
             .collect::<Vec<_>>();
+        let funded_on = |funding: &Funding<'_>, tree: u16| {
+            SpendSelection {
+                utxos: funding.utxos,
+                asset: funding.asset,
+                amount: funding.amount,
+                max_inputs: funding.max_inputs,
+                keys: SpendableKeys::Any,
+            }
+            .select_where(|utxo| utxo.tree_id == tree)
+            .ok()
+        };
         let trees: BTreeSet<u16> = utxos.iter().map(|utxo| utxo.tree_id).collect();
         let mut ranked: Vec<_> = trees
-            .into_iter()
-            .filter_map(|tree| {
+            .iter()
+            .filter_map(|&tree| {
                 let funded = fundings
                     .iter()
                     .map(|funding| {
-                        let mut candidates =
-                            funding.candidates(|utxo| utxo.tree_id == tree).into_iter();
-                        candidates
-                            .next()
-                            .map(|candidate| (funding.asset, funding.amount, candidate.utxos))
+                        funded_on(funding, tree).map(|utxos| (funding.asset, funding.amount, utxos))
                     })
                     .collect::<Option<Vec<_>>>()?;
                 let notes = funded
@@ -272,7 +282,7 @@ impl<'a> DelegateMove<'a> {
         // With no tree funding them all, the first short mint names the refusal.
         let funding = fundings
             .iter()
-            .find(|funding| funding.candidates(|_| true).is_empty())
+            .find(|funding| trees.iter().all(|&tree| funded_on(funding, tree).is_none()))
             .or_else(|| fundings.first())
             .ok_or(TransactionError::ZeroSpendAmount)?;
         funding.first_fit(attempts, client).await
@@ -315,7 +325,7 @@ impl<'a> DelegateMove<'a> {
     }
 
     fn spends(&self, source: &DelegateSource<'_>, utxo: &WalletUtxo) -> bool {
-        utxo.utxo.owner == source.address.signing_pubkey
+        same_owner(&utxo.utxo.owner, &source.address.signing_pubkey)
             && utxo.utxo.ring_program_id == Some(self.ring.program_id())
     }
 
@@ -324,7 +334,7 @@ impl<'a> DelegateMove<'a> {
         let owner_of = |utxo: &WalletUtxo| {
             self.sources
                 .iter()
-                .find(|source| source.address.signing_pubkey == utxo.utxo.owner)
+                .find(|source| same_owner(&source.address.signing_pubkey, &utxo.utxo.owner))
                 .copied()
                 .ok_or(TransactionError::NoInputs)
         };
@@ -389,6 +399,15 @@ struct SpentMint {
     change: u64,
 }
 
+/// The circuit's owner identity hashes the 32 key bytes alone, a compare of tagged keys would split
+/// one owner whose note and address carry different Ed25519 or PDA tags.
+fn same_owner(left: &PublicKey, right: &PublicKey) -> bool {
+    match (left.confidential_view_tag(), right.confidential_view_tag()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 /// An anonymous ring keeps the victim and recipients hidden.
 pub(crate) const fn delegate_rail(mode: RingMode) -> RingRail {
     match mode {
@@ -414,13 +433,13 @@ impl Delegated<'_> {
         if self.source_key.pubkey()? != self.source.nullifier_pubkey {
             return Err(RingError::NullifierKeyMismatch);
         }
-        let named = self
-            .co_sources
-            .iter()
-            .map(|co_source| Ok(PublicKey::from_ed25519(co_source.owner.as_array())))
-            .collect::<Result<Vec<_>, RingError>>()?;
         if let Some(index) = self.inputs.iter().position(|input| {
-            input.utxo.owner != self.source.signing_pubkey && !named.contains(&input.utxo.owner)
+            let named = input.utxo.owner.confidential_view_tag().is_ok_and(|owner| {
+                self.co_sources
+                    .iter()
+                    .any(|co_source| co_source.owner.to_bytes() == owner)
+            });
+            !same_owner(&input.utxo.owner, &self.source.signing_pubkey) && !named
         }) {
             return Err(RingError::MixedOwners { index });
         }

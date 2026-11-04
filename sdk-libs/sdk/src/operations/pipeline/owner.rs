@@ -1,6 +1,6 @@
 //! The confidential rail.
 
-use custom_ring_interface::{CustomRingError, RingMode, RingRail};
+use custom_ring_interface::{RingMode, RingRail};
 use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
 use spr_interface::shape::Shape;
 use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
@@ -10,7 +10,9 @@ use zolana_ring_client::rpc::TokenAccountSetup;
 use zolana_ring_transaction::RingOutputRail;
 
 use super::{
-    anonymous::CoOwner, canonical_shape, pad_under_rail, public_owners::check_zero_key_inputs,
+    anonymous::{CoOwner, HiddenOwner},
+    canonical_shape, pad_under_rail,
+    public_owners::check_zero_key_inputs,
     sealed, shape_keyed, transaction_key, ApprovalDisclosure, CoOwnerKey, DeliveredRail, Rail,
     RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
 };
@@ -136,24 +138,23 @@ impl Owner<'_> {
         Ok(())
     }
 
-    /// The anonymous rail takes no SPP signer but the payer.
-    pub(super) fn check_payer_funds_deposits(&self) -> Result<(), RingError> {
-        let payer = self.transaction.payer();
+    /// A funder signs its public leg and owns no spent note, so it joins neither the owner run nor
+    /// the policy's approvers. Its signature names its key in public, a hidden owner funding a leg
+    /// links itself. No party cell of the statement holds a funder, so no proof refuses a hidden one.
+    pub(super) fn check_deposit_funders(&self, hidden: HiddenOwner) -> Result<(), RingError> {
         let transfers = self.transaction.interface_transfers()?;
-        let mut funders = transfers
-            .iter()
-            .zip(&self.interface_transfer_accounts)
-            .filter_map(|(transfer, accounts)| match accounts {
-                TransactInterfaceTransferAccounts::Sol(sol) => {
-                    transfer.is_deposit().then_some(sol.recipient)
-                }
-                TransactInterfaceTransferAccounts::SplDeposit(spl) => Some(spl.token_authority),
-                TransactInterfaceTransferAccounts::SplWithdrawal(_) => None,
-            });
-        match funders.any(|funder| funder != payer) {
-            true => Err(CustomRingError::InvalidAnonymousSigner.into()),
-            false => Ok(()),
-        }
+        hidden.check_signers(
+            transfers
+                .iter()
+                .zip(&self.interface_transfer_accounts)
+                .filter_map(|(transfer, accounts)| match accounts {
+                    TransactInterfaceTransferAccounts::Sol(sol) => {
+                        transfer.is_deposit().then_some(sol.recipient)
+                    }
+                    TransactInterfaceTransferAccounts::SplDeposit(spl) => Some(spl.token_authority),
+                    TransactInterfaceTransferAccounts::SplWithdrawal(_) => None,
+                }),
+        )
     }
 
     pub(super) async fn stage<R: AsyncRpc + ?Sized>(

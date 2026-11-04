@@ -23,6 +23,12 @@ export function checkTransactionFits(options: Omit<TransactionCompilerOptions, "
 /** Rust `v1::MAX_ADDRESSES`. */
 export const MAX_TRANSACTION_ADDRESSES = 64;
 
+/** Rust `v1::MAX_SIGNATURES`. */
+export const MAX_TRANSACTION_SIGNATURES = 12;
+
+/** Rust `v1::MAX_INSTRUCTIONS`. */
+export const MAX_TRANSACTION_INSTRUCTIONS = 64;
+
 /** Rust `TransactionSize`. */
 export interface TransactionSize {
   readonly bytes: number;
@@ -65,6 +71,23 @@ export function transactionSize(
     bytes: compiledBytes({ ...options, instructions: kept }) + leftOut,
     addresses: unique.size,
   });
+}
+
+/** The compiler's header count, a key two roles share or only setup adds signs once. */
+export function transactionSignatures(
+  options: Pick<
+    Omit<TransactionCompilerOptions, "lifetime">,
+    "feePayer" | "instructions" | "setupInstructions"
+  >,
+): number {
+  const all = [...(options.setupInstructions ?? []), ...options.instructions];
+  return new Set([
+    options.feePayer,
+    ...all
+      .flatMap((instruction) => instruction.accounts ?? [])
+      .filter((account) => isSignerRole(account.role))
+      .map((account) => account.address),
+  ]).size;
 }
 
 function compiledBytes(options: Omit<TransactionCompilerOptions, "lifetime">): number {

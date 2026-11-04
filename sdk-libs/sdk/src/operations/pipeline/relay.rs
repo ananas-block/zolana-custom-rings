@@ -221,7 +221,9 @@ impl<P> Sealed<'_, P> {
                     nullifiers: inputs
                         .input_utxos
                         .iter()
-                        .filter(|input| !input.is_dummy() && input.utxo.owner == key)
+                        .filter(|input| {
+                            !input.is_dummy() && !input.is_address() && input.utxo.owner == key
+                        })
                         .map(|input| Hash(input.nullifier()))
                         .collect(),
                     setup: setup.clone(),

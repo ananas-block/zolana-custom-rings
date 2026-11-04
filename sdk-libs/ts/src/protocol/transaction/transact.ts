@@ -438,6 +438,11 @@ export const RingTransactData = Object.freeze({
     return out;
   },
 
+  /** The tag and expansion's length, Rust `spp_instruction_data_under`, every proof field is fixed width. */
+  sppDataLength(data: RingTransactData, config: RingTransactConfig): number {
+    return 1 + encodeRingTransactInstructionData(transactIxData(data, config, ZERO_PROOF)).length;
+  },
+
   /** The external data hash the SPP proof binds, computable before either proof exists. */
   externalDataHash(
     data: RingTransactData,
