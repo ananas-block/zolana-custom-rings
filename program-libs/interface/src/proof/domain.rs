@@ -27,10 +27,6 @@ pub const TRACKING_LEAF: u32 = 0x4352_544b;
 pub const TRACKING_ENTRY: u32 = 0x4352_5451;
 /// `"CRTA"`
 pub const APPLY_ENROLLMENTS: u32 = 0x4352_5441;
-/// `"CRPS"`
-pub const LIST_SALT: u32 = 0x4352_5053;
-/// `"CRPT"`
-pub const LIST_TAG: u32 = 0x4352_5054;
 /// `"CRDB"`
 pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
 /// `"CRDP"`
