@@ -1087,7 +1087,7 @@ async fn a_sent_body_that_fails_to_open_leaves_no_row() {
     let mut alice = Wallet::new(1);
     let bob = Wallet::new(2).address();
     let mut paid = alice.seal(&indexer, &[pay(&bob, 30)]);
-    // One byte short of a scheme 11 body, behind the encoding tag, the length and the scheme.
+    // A scheme 13 body cut short, behind the encoding tag, the length and the scheme.
     let short_body = RECIPIENT_BODY_LEN - 1;
     let payload = &mut paid.output_slots[1].payload;
     payload.truncate(6 + short_body);
@@ -1861,13 +1861,14 @@ fn a_wallet_document_round_trips_and_refuses_another_version() {
         "\"version\":6",
         1,
     );
-    let bare = r#"{"version":6,"viewingHistory":[]}"#;
-    for refused in [other.as_str(), bare] {
-        assert!(matches!(
-            AnonymousWallet::from_json(refused),
-            Err(AnonymousError::ViewingHistoryVersion { version: 6 })
-        ));
-    }
+    assert!(matches!(
+        AnonymousWallet::from_json(&other),
+        Err(AnonymousError::ViewingHistoryVersion { version: 6 })
+    ));
+    assert!(matches!(
+        AnonymousWallet::from_json(r#"{"version":6,"viewingHistory":[]}"#),
+        Err(AnonymousError::WalletDocument(_))
+    ));
 }
 
 #[test]

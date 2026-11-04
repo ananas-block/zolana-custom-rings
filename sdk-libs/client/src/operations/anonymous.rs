@@ -3,8 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use custom_ring_interface::{
-    ring_body_output, ring_recipient_output_body, ring_sender_bundle_output_body,
-    stream::SlotSecret, SENDER_BUNDLE_HEAD_LEN,
+    ring_body_output, ring_sender_bundle_output_body, stream::SlotSecret, SENDER_BUNDLE_HEAD_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -298,13 +297,6 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
     }
 }
 
-/// Scheme 11 only on a frame before statement version 4.
-pub(crate) fn recipient_payload(payload: &[u8]) -> Option<(&[u8], &[u8])> {
-    ring_body_output(payload).or_else(|| {
-        ring_recipient_output_body(payload).map(|(body, reply)| (body.as_slice(), reply))
-    })
-}
-
 fn sites_of(tx: &ShieldedTransaction) -> impl Iterator<Item = Site> {
     let outputs = (0..tx.output_slots.len()).map(Site::Output);
     outputs.chain((0..tx.messages.len()).map(Site::Message))
@@ -389,7 +381,7 @@ enum Site {
     Message(usize),
 }
 
-/// A scheme 11 or 12 payload the entry's key may open.
+/// A scheme 13 or 12 payload the entry's key may open.
 struct Body<'t> {
     tx: &'t ShieldedTransaction,
     site: Site,
@@ -422,7 +414,7 @@ impl<'t> Body<'t> {
     fn of(tx: &'t ShieldedTransaction, site: Site, found: AnonymousStream) -> Option<Self> {
         let slot_index = match site {
             Site::Output(position) => {
-                recipient_payload(&tx.output_slots[position].payload)?;
+                ring_body_output(&tx.output_slots[position].payload)?;
                 position
             }
             Site::Message(message) => {
@@ -596,7 +588,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         self.unopened.extend(
             rows.iter()
                 .flat_map(|tx| &tx.output_slots)
-                .filter(|slot| recipient_payload(&slot.payload).is_some())
+                .filter(|slot| ring_body_output(&slot.payload).is_some())
                 .map(|slot| slot.output_context.hash),
         );
         let bodies: Vec<Body<'_>> = rows
@@ -859,7 +851,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         secret: &SlotSecret,
     ) -> Result<(), AnonymousError> {
         let slot = &body.tx.output_slots[position];
-        let Some((ciphertext, reply)) = recipient_payload(&slot.payload) else {
+        let Some((ciphertext, reply)) = ring_body_output(&slot.payload) else {
             return Ok(());
         };
         let Ok(plain) = open_recipient_body(ciphertext, secret) else {
@@ -956,7 +948,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         tx_viewing_key: &ViewingKey,
     ) -> Option<SentPayment> {
         let slot = &body.tx.output_slots[position];
-        let (ciphertext, _) = recipient_payload(&slot.payload)?;
+        let (ciphertext, _) = ring_body_output(&slot.payload)?;
         let slot_index = u32::try_from(position).ok()?;
         let agreement = zeroize::Zeroizing::new(tx_viewing_key.ecdh(recipient).ok()?);
         let secret = custom_ring_interface::stream::DeliveredSlot {

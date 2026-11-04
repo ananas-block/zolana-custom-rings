@@ -139,7 +139,7 @@ impl Ledger {
         }
     }
 
-    /// A payment from `sealed.sender` to `sealed.owner`, its scheme 11 body at output 0.
+    /// A payment from `sealed.sender` to `sealed.owner`, its scheme 13 body at output 0.
     fn payment(&mut self, sealed: Sealed<'_>) -> [u8; 32] {
         let owner = sealed.owner.shielded_address().unwrap();
         let tx = sealed

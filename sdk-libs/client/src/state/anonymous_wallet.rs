@@ -14,7 +14,7 @@ use zolana_ring_transaction::RingAssets;
 
 use crate::{
     is_zero_key, mint_balances, note_state, AnonymousError, AnonymousScan, MintBalance, NoteState,
-    ViewingHistory, VIEWING_HISTORY_VERSION,
+    ViewingHistory,
 };
 
 pub const ANONYMOUS_WALLET_VERSION: u32 = 1;
@@ -253,19 +253,8 @@ impl AnonymousWallet {
             .expect("a struct of strings, integers and vectors serializes")
     }
 
-    /// A bare version 7 history migrates with no notes and no progress, a bare later one holds progress its notes are missing from.
     pub fn from_json(text: &str) -> Result<Self, AnonymousError> {
-        let value: Value = serde_json::from_str(text).map_err(unparsed)?;
-        if value.get("walletVersion").is_none() {
-            if value.get("version").and_then(Value::as_u64) == Some(VIEWING_HISTORY_VERSION.into())
-            {
-                return Err(AnonymousError::WalletDocument(
-                    "a history holds scan progress with no notes".into(),
-                ));
-            }
-            return ViewingHistory::from_json_value(value).map(Self::new);
-        }
-        let wallet: WalletJson = serde_json::from_value(value).map_err(unparsed)?;
+        let wallet: WalletJson = serde_json::from_str(text).map_err(unparsed)?;
         if wallet.wallet_version != ANONYMOUS_WALLET_VERSION {
             return Err(AnonymousError::WalletDocument(format!(
                 "version {} is unknown",

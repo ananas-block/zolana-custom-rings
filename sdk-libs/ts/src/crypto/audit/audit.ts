@@ -270,16 +270,12 @@ export function openAuditorRegions(
 export function openTransactionViewingSecret(
   auditor: X25519Keypair,
   message: Pick<AuditorMessage, "ephemeralPublicKey" | "envelope">,
-  /** Absent on a frame before the salted stream. */
-  salt?: Bytes16,
+  salt: Bytes16,
 ): Bytes32 {
   const bytes = message.envelope.subarray(0, ENVELOPE_KEY_LEN);
   if (bytes.length !== ENVELOPE_KEY_LEN)
     throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "envelope" });
-  const schedule =
-    salt === undefined
-      ? auditorSchedule(auditor, message.ephemeralPublicKey)
-      : saltedAuditorSchedule(auditor, message.ephemeralPublicKey, salt);
+  const schedule = saltedAuditorSchedule(auditor, message.ephemeralPublicKey, salt);
   try {
     return schedule.apply(STREAM_FIRST_COUNTER, bytes) as Bytes32;
   } finally {

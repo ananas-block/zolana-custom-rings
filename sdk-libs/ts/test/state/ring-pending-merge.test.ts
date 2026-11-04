@@ -114,7 +114,7 @@ describe("pending merge notes", () => {
       expect(initial.spentNullifiers.map(hex)).toEqual([hex(seed.nullifier)]);
       await wallet.absorb(initial);
 
-      const restored = AnonymousWallet.fromJson(wallet.toJson(), { identity: owner.address });
+      const restored = AnonymousWallet.fromJson(wallet.toJson());
       const second = publishMerge({ indexer, owner, spent: first, slot: 3n });
       const next = await read(restored, [...restored.notes(), ...restored.pendingOpenings()]);
       expect(next.utxos).toEqual([]);
@@ -125,7 +125,7 @@ describe("pending merge notes", () => {
       await restored.absorb(next);
       expect(restored.notes()).toEqual([]);
 
-      const persisted = AnonymousWallet.fromJson(restored.toJson(), { identity: owner.address });
+      const persisted = AnonymousWallet.fromJson(restored.toJson());
       expect(persisted.pendingOpenings().map((note) => note.spent)).toEqual([true, false]);
       const reads = indexer.ringReads.length;
       persisted.wallet.ensureAsset(9n, mint);

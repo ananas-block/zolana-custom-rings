@@ -2,12 +2,11 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { bytesKey } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import { X25519PublicKey, type ShieldedAddress, type ViewTag } from "@heliuslabs/zolana/keypair";
+import { X25519PublicKey, type ViewTag } from "@heliuslabs/zolana/keypair";
 import {
   deserializeWallet,
   serializeWallet,
   Wallet,
-  type AssetRegistry,
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
@@ -214,22 +213,8 @@ export class AnonymousWallet {
     );
   }
 
-  /** A bare version 7 history migrates with no notes and no positions, any other bare history is refused. */
-  static fromJson(
-    text: string,
-    fresh: Readonly<{ identity: ShieldedAddress; registry?: AssetRegistry }>,
-  ): AnonymousWallet {
+  static fromJson(text: string): AnonymousWallet {
     const stored = document(parseExact(text));
-    if (stored["walletVersion"] === undefined) {
-      if (stored["version"] !== 7n) throw invalid("a bare history is no wallet document");
-      return AnonymousWallet.create(
-        new Wallet({
-          identity: fresh.identity,
-          ...(fresh.registry === undefined ? {} : { registry: fresh.registry }),
-        }),
-        ViewingHistory._fromValue(stored),
-      );
-    }
     if (stored["walletVersion"] !== BigInt(ANONYMOUS_WALLET_VERSION))
       throw invalid(`version ${String(stored["walletVersion"])} is unknown`);
     const { history, wallet, pending, claims } = stored;

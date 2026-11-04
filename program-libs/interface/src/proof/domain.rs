@@ -50,7 +50,6 @@ pub const TRANSFER_STATEMENT: u32 = 0x4352_5458;
 pub const TRANSFER_STATEMENT_VERSION: u8 = 4;
 
 pub const AUDIT_STREAM_LABEL: &[u8; 10] = b"CRING/adt1";
-pub const DELIVERED_BODY_LABEL: &[u8; 10] = b"CRING/bdy1";
 pub const RECIPIENT_BODY_LABEL: &[u8; 10] = b"CRING/rcp1";
 pub const REPLY_LABEL: &[u8; 10] = b"CRING/rpl1";
 pub const SENDER_BUNDLE_LABEL: &[u8; 10] = b"CRING/snd1";

@@ -606,36 +606,13 @@ describe("viewing history", () => {
     expect(VIEWING_HISTORY_VERSION).toBe(8);
   });
 
-  it("migrates version 7, keeping counters and known senders, dropping recipients and pair counters", () => {
-    const viewingPublicKey = key();
-    const sender = key();
-    const recipient = key();
-    const pair = '"next":4,"scanned":2,"pending":[]';
-    const stored =
-      `{"version":7,"viewingHistory":[{"viewingPubkey":"${hex2(viewingPublicKey)}","createdAt":3,` +
-      `"tx":{"next":9,"scanned":7,"pending":[1,5]},"request":{"next":2,"scanned":2,"pending":[]},` +
-      `"knownSenders":[{"pubkey":"${hex2(sender)}",${pair}}],` +
-      `"knownRecipients":[{"pubkey":"${hex2(recipient)}",${pair}}]}]}`;
-    const history = ViewingHistory.fromJson(stored);
-    const entry = history.current();
-    expect([entry.txCount, entry.tx.scanned, entry.tx.pending]).toEqual([9n, 7n, [1n, 5n]]);
-    expect(entry.requestCount).toBe(2n);
-    expect(entry.knownSenders().map(hex2)).toEqual([hex2(sender)]);
-    expect(entry.ringPositions()).toEqual([]);
-    expect(history.toJson()).not.toContain(hex2(recipient));
-    expect(JSON.parse(history.toJson())).toMatchObject({ version: 8 });
-    expect(() => ViewingHistory.fromJson(stored.replace(hex2(recipient), "zz"))).toThrow(
-      "RING_VIEWING_HISTORY_INVALID",
-    );
-  });
-
   it("refuses another version, a stale rotation, a malformed counter and a repeated ring", () => {
     const history = ViewingHistory.create(key(), 0n);
     const stored = JSON.parse(history.toJson()) as { version: number };
-    expect(() => ViewingHistory.fromJson(JSON.stringify({ ...stored, version: 6 }))).toThrow(
+    expect(() => ViewingHistory.fromJson(JSON.stringify({ ...stored, version: 7 }))).toThrow(
       expect.objectContaining({
         code: "RING_VIEWING_HISTORY_VERSION",
-        details: { version: "6" },
+        details: { version: "7" },
       }),
     );
     const rotated = history.withRotatedKey(key(), 5n);

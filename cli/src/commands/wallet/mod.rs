@@ -191,7 +191,7 @@ impl ScanAt<'_> {
             })
         };
         let mut notes = ring_notes(assets)?;
-        if !notes.pending.is_empty() {
+        if !notes.owned.unknown_mints.is_empty() {
             notes = ring_notes(&(self.chain_assets)()?)?;
         }
         let mut exposed_if_spent = notes.exposed_if_spent.clone();
@@ -391,7 +391,7 @@ mod tests {
         let refused = member.store.load().unwrap_err();
         assert!(matches!(
             refused.downcast_ref::<AnonymousError>(),
-            Some(AnonymousError::ViewingHistoryVersion { version: 4 })
+            Some(AnonymousError::WalletDocument(_))
         ));
     }
 
