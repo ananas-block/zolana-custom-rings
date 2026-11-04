@@ -13,8 +13,10 @@ use custom_ring_interface::{
     mint_policy_write,
     storage::{chain_start, Revision, StorageRegistry},
     storage_instruction::StorageWriteData,
-    tagged_x25519, CustomRingError, QueueEntry, RecordWriteData, WriteRecordsIxData, APPLY_BATCH,
-    QUAD_ARITY, REGISTER_KEY_CIPHERTEXT_LEN, STORAGE_PROGRAM_ID,
+    tagged_x25519,
+    tracking::TrackingRegistry,
+    CustomRingError, QueueEntry, RecordWriteData, WriteRecordsIxData, APPLY_BATCH, QUAD_ARITY,
+    REGISTER_KEY_CIPHERTEXT_LEN, STORAGE_PROGRAM_ID,
 };
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction};
 use solana_address::Address;
@@ -41,21 +43,41 @@ use crate::{
     member_registry::{LoadedRegistry, RecordRead, TreeRead},
     rpc::SolanaRpc,
     storage::{
-        self, RegistryStore, RingCursor, StorageRoot, StorageState, StorageStore, StoredRecord,
-        TreeVersion,
+        self, ProjectedAccount, ProjectedStore, RegistryState, RegistryStore, RingCursor,
+        StorageRoot, StorageState, StorageStore, StoredRecord, TreeVersion,
     },
 };
+
+mod tracking;
+
+pub(crate) use tracking::pending_enrollments;
 
 /// The longest a stalled tip misses a chain move.
 pub(crate) const CONFIRMATION_AGE: Duration = Duration::from_millis(DEFAULT_MS_PER_SLOT);
 
 pub(crate) trait ChainSource {
     /// Fails unless `tip` is canonical and the registry account is no older.
-    fn storage_confirmation(
+    fn confirmation<A: CachedAccount>(
         &self,
         tip: &BlockMetadata,
         registry: &[u8; 32],
-    ) -> impl Future<Output = Result<Confirmation<StorageRegistry>, RingApiError>> + Send;
+    ) -> impl Future<Output = Result<Confirmation<A>, RingApiError>> + Send;
+}
+
+pub(crate) trait CachedAccount: ProjectedAccount + 'static {
+    fn cache(chain: &CachedChain) -> &ReadCache<Self>;
+}
+
+impl CachedAccount for StorageRegistry {
+    fn cache(chain: &CachedChain) -> &ReadCache<Self> {
+        &chain.storage
+    }
+}
+
+impl CachedAccount for TrackingRegistry {
+    fn cache(chain: &CachedChain) -> &ReadCache<Self> {
+        &chain.tracking
+    }
 }
 
 pub(crate) struct Confirmation<T> {
@@ -67,9 +89,10 @@ pub(crate) struct Confirmation<T> {
 pub(crate) struct CachedChain {
     rpc: Arc<SolanaRpc>,
     storage: ReadCache<StorageRegistry>,
+    tracking: ReadCache<TrackingRegistry>,
 }
 
-struct ReadCache<T> {
+pub(crate) struct ReadCache<T> {
     reads: Mutex<HashMap<[u8; 32], Arc<CacheEntry<T>>>>,
 }
 
@@ -95,6 +118,7 @@ impl CachedChain {
         Self {
             rpc,
             storage: ReadCache::default(),
+            tracking: ReadCache::default(),
         }
     }
 }
@@ -135,22 +159,22 @@ impl<T> ReadCache<T> {
 }
 
 impl ChainSource for CachedChain {
-    async fn storage_confirmation(
+    async fn confirmation<A: CachedAccount>(
         &self,
         tip: &BlockMetadata,
         registry: &[u8; 32],
-    ) -> Result<Confirmation<StorageRegistry>, RingApiError> {
-        let fetch = self.rpc.storage_confirmation(tip, registry);
-        self.storage.read(*registry, tip, fetch).await
+    ) -> Result<Confirmation<A>, RingApiError> {
+        let fetch = self.rpc.confirmation(tip, registry);
+        A::cache(self).read(*registry, tip, fetch).await
     }
 }
 
 impl ChainSource for SolanaRpc {
-    async fn storage_confirmation(
+    async fn confirmation<A: CachedAccount>(
         &self,
         tip: &BlockMetadata,
         registry: &[u8; 32],
-    ) -> Result<Confirmation<StorageRegistry>, RingApiError> {
+    ) -> Result<Confirmation<A>, RingApiError> {
         let context = canonical_context(self, tip).await.map_err(out_of_sync)?;
         let read = self
             .get_multiple_accounts_from_slot(&[Address::new_from_array(*registry)], tip.slot)
@@ -160,8 +184,8 @@ impl ChainSource for SolanaRpc {
             .into_iter()
             .flatten()
             .find(|account| account.owner == STORAGE_PROGRAM_ID)
-            .and_then(|account| StorageRegistry::from_data(&account.data).copied())
-            .ok_or_else(|| out_of_sync("storage registry is not an initialized account"))?;
+            .and_then(|account| A::from_image(&account.data).copied())
+            .ok_or_else(|| out_of_sync("the registry is not an initialized account"))?;
         Ok(Confirmation {
             context,
             chain: Arc::new(chain),
@@ -175,7 +199,7 @@ pub(crate) async fn storage_member_openings(
     request: GetStorageMemberOpeningsRequest,
 ) -> Result<GetStorageMemberOpeningsResponse, RingApiError> {
     check_members(&request.members)?;
-    let read = Snapshot::storage(db, &request.registry)
+    let read = Snapshot::<StorageState>::registry(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
@@ -184,10 +208,7 @@ pub(crate) async fn storage_member_openings(
         .await?
         .openings(&read.root.root, &request.members)?;
     let root = read.root;
-    let context = read
-        .snapshot
-        .confirm(chain, StorageServed::Root(&root))
-        .await?;
+    let context = read.snapshot.confirm(chain, Served::Root(&root)).await?;
     Ok(GetStorageMemberOpeningsResponse {
         context,
         root: storage_root_view(&root),
@@ -204,7 +225,7 @@ pub(crate) async fn storage_member_records(
     if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
         return Err(validation("invalid storage page limit"));
     }
-    let read = Snapshot::storage(db, &request.registry)
+    let read = Snapshot::<StorageState>::registry(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
@@ -224,10 +245,7 @@ pub(crate) async fn storage_member_records(
     }
     .read()
     .await?;
-    let context = read
-        .snapshot
-        .confirm(chain, StorageServed::Root(&root))
-        .await?;
+    let context = read.snapshot.confirm(chain, Served::Root(&root)).await?;
     Ok(GetStorageMemberRecordsResponse {
         context,
         root: storage_root_view(&root),
@@ -247,7 +265,7 @@ pub(crate) async fn storage_record_pool(
         return Err(validation("invalid record pool openings"));
     }
     let canopy = Canopy::covering(request.openings as usize).map_err(validation)?;
-    let read = Snapshot::storage(db, &request.registry)
+    let read = Snapshot::<StorageState>::registry(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
@@ -257,10 +275,7 @@ pub(crate) async fn storage_record_pool(
         canopy,
     )?;
     let root = read.root;
-    let context = read
-        .snapshot
-        .confirm(chain, StorageServed::Root(&root))
-        .await?;
+    let context = read.snapshot.confirm(chain, Served::Root(&root)).await?;
     Ok(GetStorageRecordPoolResponse {
         context,
         root: storage_root_view(&root),
@@ -285,8 +300,8 @@ pub(crate) async fn storage_apply_proof_inputs(
         .map(storage_entry)
         .collect::<Result<Vec<_>, _>>()
         .map_err(validation)?;
-    let snapshot = Snapshot::storage(db, &request.registry).await?;
-    let root = StorageRoot::current(&snapshot.state.account);
+    let snapshot = Snapshot::<StorageState>::registry(db, &request.registry).await?;
+    let root = StorageRoot::current(&*snapshot.state.account);
     let chain_start = chain_start(&request.registry.0, root.revision.into()).map_err(internal)?;
     let LoadedRegistry { tree, stored } = TreeRead::batch(root.tree(), &entries)
         .load(snapshot.store().tree())
@@ -305,9 +320,7 @@ pub(crate) async fn storage_apply_proof_inputs(
     }
     .fill(&mut inputs.writes, &request.writes)
     .await?;
-    let context = snapshot
-        .confirm(chain, StorageServed::Current(&root))
-        .await?;
+    let context = snapshot.confirm(chain, Served::Current(&root)).await?;
     Ok(GetStorageApplyProofInputsResponse {
         context,
         revision: root.revision,
@@ -455,8 +468,8 @@ struct Released<S> {
     state: S,
 }
 
-struct StorageRootRead {
-    snapshot: Snapshot<StorageState>,
+struct RootRead<A> {
+    snapshot: Snapshot<RegistryState<A>>,
     root: StorageRoot,
 }
 
@@ -539,39 +552,37 @@ impl<C: ConnectionTrait> LeafPage<'_, C> {
     }
 }
 
-impl Snapshot<StorageState> {
+impl<A: CachedAccount> Snapshot<RegistryState<A>> {
     /// Fails before any RPC while the projection catches up or holds the registry quarantined.
-    async fn storage(
+    async fn registry(
         db: &DatabaseConnection,
         registry: &SerializablePubkey,
     ) -> Result<Self, RingApiError> {
         let Snapshot { tx, tip, .. } = Snapshot::begin(db).await?;
-        let state = StorageStore::new(&tx, registry.0.to_bytes())
+        let state = ProjectedStore::<_, A>::new(&tx, registry.0.to_bytes())
             .state()
             .await
             .map_err(internal)?
             .ok_or_else(|| out_of_sync("initialization has not been indexed"))?;
         if let Some(fault) = &state.fault {
-            return Err(out_of_sync(format!(
-                "storage registry quarantined, {fault}"
-            )));
+            return Err(out_of_sync(format!("registry quarantined, {fault}")));
         }
         Ok(Self { tx, state, tip })
     }
 
-    fn store(&self) -> StorageStore<'_, DatabaseTransaction> {
-        StorageStore::new(&self.tx, self.state.registry)
+    fn store(&self) -> ProjectedStore<'_, DatabaseTransaction, A> {
+        ProjectedStore::new(&self.tx, self.state.registry)
     }
 
     /// The newest revision the registry verifies `root` under at the tip.
-    async fn at_root(self, root: &[u8; 32]) -> Result<StorageRootRead, RingApiError> {
+    async fn at_root(self, root: &[u8; 32]) -> Result<RootRead<A>, RingApiError> {
         let slot = self.tip.as_ref().map_or(0, |tip| tip.slot);
-        let account = &self.state.account;
+        let account = &*self.state.account;
         let revision = account
-            .roots
+            .roots()
             .iter()
             .map(|held| held.revision)
-            .filter(|revision| account.root(*revision, slot) == Ok(*root))
+            .filter(|revision| account.root_at(*revision, slot) == Ok(*root))
             .max_by_key(|revision| revision.value())
             .ok_or(RingApiError::RootChanged)?;
         let root = self
@@ -581,7 +592,7 @@ impl Snapshot<StorageState> {
             .map_err(internal)?
             .filter(|stored| stored.root == *root)
             .ok_or_else(|| internal("a history root is missing from the projection"))?;
-        Ok(StorageRootRead {
+        Ok(RootRead {
             snapshot: self,
             root,
         })
@@ -590,18 +601,18 @@ impl Snapshot<StorageState> {
     async fn confirm(
         self,
         chain: &impl ChainSource,
-        served: StorageServed<'_>,
+        served: Served<'_>,
     ) -> Result<ApiContext, RingApiError> {
         let Released { tip, state } = self.release().await?;
-        let confirmation = chain.storage_confirmation(&tip, &state.registry).await?;
-        if !served.agrees(&confirmation.chain, tip.slot) {
+        let confirmation = chain.confirmation::<A>(&tip, &state.registry).await?;
+        if !served.agrees(&*confirmation.chain, tip.slot) {
             return Err(RingApiError::RootChanged);
         }
         Ok(confirmation.context)
     }
 }
 
-impl StorageRootRead {
+impl RootRead<StorageRegistry> {
     async fn load(
         &self,
         members: &[Hash],
@@ -619,17 +630,20 @@ impl StorageRootRead {
     }
 }
 
-enum StorageServed<'r> {
+enum Served<'r> {
     Root(&'r StorageRoot),
     /// Apply proof inputs hold while the current root stays.
     Current(&'r StorageRoot),
+    /// Pending state names no root.
+    Tip,
 }
 
-impl StorageServed<'_> {
-    fn agrees(&self, chain: &StorageRegistry, slot: u64) -> bool {
+impl Served<'_> {
+    fn agrees<A: ProjectedAccount>(&self, chain: &A, slot: u64) -> bool {
         match self {
-            Self::Root(root) => chain.root(Revision::from(root.revision), slot) == Ok(root.root),
+            Self::Root(root) => chain.root_at(Revision::from(root.revision), slot) == Ok(root.root),
             Self::Current(root) => StorageRoot::current(chain) == **root,
+            Self::Tip => true,
         }
     }
 }

@@ -94,7 +94,7 @@ async fn member_page_reports_a_missing_leaf_instead_of_skipping_it() {
     let store = StorageStore::new(&db, state.registry);
     store.save_state(&state).await.unwrap();
     store
-        .save_root(&StorageRoot::current(&state.account))
+        .save_root(&StorageRoot::current(&*state.account))
         .await
         .unwrap();
     cursor.resume(&db).await.unwrap();
@@ -305,6 +305,37 @@ async fn the_address_migration_clears_old_leaves_and_rewinds_to_the_start() {
             .unwrap();
         assert_eq!(rows.try_get::<i64>("", "rows").unwrap(), 0, "{table}");
     }
+    Migrator::down(&db, Some(1)).await.unwrap();
+    Migrator::up(&db, None).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_tracking_migration_clears_policy_rows_and_rewinds_to_the_start() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    Migrator::up(&db, Some(7)).await.unwrap();
+    let mut cursor = RingCursor::new(9);
+    cursor.tip = Some(BlockMetadata {
+        slot: 40,
+        ..Default::default()
+    });
+    cursor.scanned_slot = 40;
+    cursor.resume(&db).await.unwrap();
+    db.execute_unprepared("INSERT INTO storage_registries(registry,state) VALUES(x'0b','{}')")
+        .await
+        .unwrap();
+    Migrator::up(&db, None).await.unwrap();
+    let rewound = storage::cursor(&db).await.unwrap().unwrap();
+    assert_eq!((rewound.start_slot, rewound.scanned_slot), (9, 9));
+    assert!(rewound.tip.is_none() && !rewound.is_ready());
+    let rows = db
+        .query_one(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS rows FROM storage_registries",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rows.try_get::<i64>("", "rows").unwrap(), 0);
     Migrator::down(&db, Some(1)).await.unwrap();
     Migrator::up(&db, None).await.unwrap();
 }

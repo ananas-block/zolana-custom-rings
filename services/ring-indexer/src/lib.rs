@@ -20,6 +20,8 @@ mod server;
 mod storage;
 #[path = "ingest/storage_registry.rs"]
 mod storage_registry;
+#[path = "ingest/tracking_registry.rs"]
+mod tracking_registry;
 
 use std::{
     net::{IpAddr, SocketAddr},

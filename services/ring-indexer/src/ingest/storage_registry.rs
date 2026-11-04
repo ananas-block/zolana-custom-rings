@@ -129,7 +129,7 @@ pub(crate) async fn create<C: ConnectionTrait>(
 ) -> anyhow::Result<()> {
     plant_tree(store.tree()).await?;
     store
-        .save_root(&StorageRoot::current(&state.account))
+        .save_root(&StorageRoot::current(&*state.account))
         .await?;
     store.save_state(state).await
 }
