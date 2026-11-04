@@ -97,6 +97,7 @@ impl Fixture {
             interface_transfers: Vec::new(),
             has_data: false,
             entry: false,
+            wide_owners: false,
             outputs: Vec::new(),
             replies: None,
             sender: None,

@@ -1,5 +1,4 @@
-//! Regions of the ring auditor stream and the byte layout of every plaintext it carries, mirror
-//! `prover/circuits/audit`.
+//! Mirror of `prover/circuits/audit`.
 
 use crate::{bytes::Bytes, error::CustomRingError, TAGGED_X25519_KEY_LEN};
 
@@ -11,15 +10,11 @@ pub const ENVELOPE_KEY_LEN: usize = 32;
 pub const REAL_INPUT_COUNT_LEN: usize = 1;
 /// Keys with entry capacity alone, bit `i` set when input `i` is a default-ring note.
 pub const DEFAULT_INPUT_BITS_LEN: usize = 8;
-/// `kind || reserved || u64be(amount) || owner_key || mint || be32(nullifier_pk)`.
 pub const AUDIT_RECORD_LEN: usize = 112;
-/// `be32(data_hash) || be32(ring_data_hash)`.
 pub const DATA_TAIL_LEN: usize = 64;
-/// `owner_key || be32(nullifier_pk) || u64be(amount) || mint || be32(blinding) || be32(data_hash) || be32(ring_data_hash)`.
 pub const ENTRY_INPUT_LEN: usize = 200;
 /// `record || secret`, the deposit's blinding or the merge's seed.
 pub const OPENING_RECORD_LEN: usize = AUDIT_RECORD_LEN + FIELD_LEN;
-/// `be32(blinding) || u64be(amount) || mint`.
 pub const RECIPIENT_BODY_LEN: usize = 72;
 /// `mint0 || u64be(amount0) || u64be(amount1) || output_seed`.
 pub const SENDER_BUNDLE_HEAD_LEN: usize = 80;
@@ -39,12 +34,10 @@ const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == RECIPIENT_BODY_LEN);
 const _: () = assert!(2 * AMOUNT_LEN + 2 * FIELD_LEN == SENDER_BUNDLE_HEAD_LEN);
 const _: () = assert!(3 * FIELD_LEN + 1 == MIN_REPLY_LEN);
 
-/// One key's envelope, every rail of a key shares one circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditKey {
     /// The widest published input count.
     pub class: usize,
-    /// Default bits and one evidence entry per published input.
     pub entry: bool,
 }
 
@@ -109,12 +102,10 @@ pub struct AuditStreamLayout {
     pub outputs: usize,
     /// `N`, the key's output capacity, records and tails span every slot of it.
     pub capacity: usize,
-    /// The statement's bit, one tail per published slot.
     pub has_data: bool,
 }
 
 impl AuditStreamLayout {
-    /// Refuses an input count off the key and an output count off the capacity.
     pub fn checked(self) -> Result<Self, CustomRingError> {
         let outputs_fit = self.outputs >= 1 && self.outputs <= self.capacity;
         match self.inputs >= 1 && self.inputs <= self.key.class() && outputs_fit {
@@ -141,7 +132,6 @@ impl AuditStreamLayout {
         }
     }
 
-    /// Slot `slot`'s record range, transmitting nothing past the outputs.
     pub const fn record(self, slot: usize) -> StreamRegion {
         StreamRegion {
             start_counter: self.first_record_counter() + (slot * RECORD_BLOCKS) as u32,
@@ -150,7 +140,6 @@ impl AuditStreamLayout {
         }
     }
 
-    /// Slot `slot`'s tail range, transmitting nothing past the outputs or while `has_data` is clear.
     pub const fn tail(self, slot: usize) -> StreamRegion {
         StreamRegion {
             start_counter: self.first_tail_counter() + (slot * TAIL_BLOCKS) as u32,
@@ -184,7 +173,6 @@ impl AuditStreamLayout {
         }
     }
 
-    /// `0x04 || eph_u || envelope_ct || record_ct... || tail_ct...`.
     pub const fn message_len(self) -> usize {
         TAGGED_X25519_KEY_LEN + self.envelope().len + self.records_len() + self.tails_len()
     }
@@ -235,7 +223,6 @@ impl AuditRecord {
         out
     }
 
-    /// Refuses a kind off the three, a set reserved byte and a dummy that carries a value.
     pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
         read_all(plaintext, |bytes| {
             let kind = match bytes.byte()? {
@@ -263,7 +250,6 @@ impl AuditRecord {
     }
 }
 
-/// A deposit or merge record, `secret` is the deposit's blinding or the merge's seed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OpeningRecord {
     pub record: AuditRecord,
@@ -313,7 +299,7 @@ impl DataTail {
     }
 }
 
-/// One default-ring input's opening, zero fields on any other slot, never a secret.
+/// One default-ring input's opening, zero fields on any other slot, never its nullifier secret.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EntryInput {
     pub owner_key: [u8; 32],
@@ -352,17 +338,14 @@ impl EntryInput {
 /// The envelope past its sealed key and count.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuditEvidence {
-    /// A key with no entry capacity.
     None,
     Entry {
-        /// Bit `i` set when input `i` is a live default-ring note.
         default_input_bits: u64,
         /// One per published input.
         inputs: Vec<EntryInput>,
     },
 }
 
-/// The envelope plaintext `tx_viewing_sk || R || default_input_bits || entries`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditEnvelope {
     pub tx_viewing_secret: [u8; ENVELOPE_KEY_LEN],
@@ -424,12 +407,10 @@ pub struct RecipientBody {
     pub mint: [u8; 32],
     /// The commitment covers it, a nonzero value travels with the note.
     pub ring_data_hash: Option<[u8; 32]>,
-    /// The application data under the note's `data_hash`.
     pub data: Vec<u8>,
 }
 
 impl RecipientBody {
-    /// A plain note is exactly the head, an extended one follows it with one presence byte.
     pub fn encode(&self) -> Vec<u8> {
         let extended = self.ring_data_hash.is_some() || !self.data.is_empty();
         let mut out = Vec::with_capacity(RECIPIENT_BODY_LEN + 1 + FIELD_LEN + self.data.len());
@@ -474,7 +455,7 @@ pub struct SenderBundle {
     pub mint: [u8; 32],
     /// Slot 0's amount when slot 0 is change, else zero.
     pub amount: u64,
-    /// Slot 1's amount in SOL when slot 1 is change, else zero.
+    /// Slot 1's lamports when slot 1 is change, else zero.
     pub sol_amount: u64,
     pub output_seed: [u8; 32],
     /// One per published slot, zero on change, exit and dummy.

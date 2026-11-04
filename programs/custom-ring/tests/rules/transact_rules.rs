@@ -3,12 +3,13 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignHeader},
-    funder_account_position, input_flag, key_catalog::RingCircuit, sender_bundle_len, shape_flag,
-    tag, transact_flag, AnonymousProofData, CoSignScope, CustomRingError, RingRole, CO_SIGN_BYTE,
-    CustomRingProof, FramedSenderBundle, InputTrees, PlainGroth16Proof, PolicyProof, RingOutput,
-    RingPolicy, RingRail, RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN,
-    CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    RECIPIENT_BODY_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    funder_account_position, input_flag, spl_withdrawal_count,
+    key_catalog::RingCircuit,
+    sender_bundle_len, shape_flag, tag, transact_flag, AnonymousProofData, CoSignScope,
+    CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees, PlainGroth16Proof,
+    PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData, RootRead, SlotBody,
+    AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, CO_SIGN_BYTE, RECIPIENT_BODY_LEN,
+    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -48,6 +49,7 @@ pub struct Fixture {
     envelope: Vec<u8>,
     tags: [[u8; 32]; 16],
     salt: [u8; 16],
+    spl_owners: [[u8; 32]; 8],
 }
 
 impl Fixture {
@@ -76,7 +78,18 @@ impl Fixture {
             envelope: (0..2048u32).map(|byte| byte as u8 ^ 0x93).collect(),
             tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
             salt: [0x5c; 16],
+            spl_owners: [[0x73; 32]; 8],
         }
+    }
+
+    /// `transfers` as the frame's legs, one framed owner per SPL withdrawal.
+    pub fn settle_legs<'a>(
+        &'a self,
+        data: &mut RingTransactData<'a>,
+        transfers: Vec<InterfaceTransfer>,
+    ) {
+        data.spl_withdrawal_owners = &self.spl_owners[..spl_withdrawal_count(&transfers)];
+        data.interface_transfers = transfers;
     }
 
     /// Identity points decompress and fail the pairing.
@@ -93,7 +106,7 @@ impl Fixture {
         n_out: u8,
         policy: bool,
     ) -> RingTransactData<'_> {
-        let bears_bundle = rail == RingRail::Anonymous;
+        let hidden_sender = rail == RingRail::Anonymous;
         let mut data = RingTransactData {
             rail,
             n_in,
@@ -118,14 +131,14 @@ impl Fixture {
             wide_owners: false,
             outputs: Vec::new(),
             replies: None,
-            sender: bears_bundle.then(|| FramedSenderBundle {
+            sender: rail.anonymous_frame().then(|| FramedSenderBundle {
                 tag: &self.tags[15],
                 body: &self.bundle[..sender_bundle_len(usize::from(n_out))],
             }),
             eph_u: &self.keys[1],
             envelope: &[],
             private_tx_hash: &self.fields[0],
-            anonymous: bears_bundle.then(|| AnonymousProofData {
+            anonymous: hidden_sender.then(|| AnonymousProofData {
                 commitment: &self.keys[3],
                 commitment_pok: &self.keys[4],
                 default_owner_tag: None,
@@ -520,12 +533,12 @@ fn a_compact_transfer_reaches_the_key_of_its_capacity() {
 #[test]
 fn reply_metadata_reaches_the_key_on_the_anonymous_rail_and_no_other() {
     let fixture = Fixture::new();
-    let replies = [0x71; 194];
+    let replies = [0x71; 291];
     let mut ring = Ring::new(Setup::Anonymous);
     let mut data = fixture.transfer(RingRail::Anonymous, 2, 4, false);
     data.replies = Some(custom_ring_interface::Replies {
         len: 97,
-        region: &replies[..291 - 97],
+        region: &replies,
     });
     data.outputs.truncate(3);
     data.sender = data.sender.map(|sender| FramedSenderBundle {
@@ -982,7 +995,7 @@ fn a_proven_bit_fails_closed_without_an_approver_of_its_class() {
         (ApprovalMask::OUTFLOW, CoSignScope::APPROVE_WITHDRAWAL),
         (ApprovalMask::WITHDRAWAL, CoSignScope::APPROVE_OUTFLOW),
     ] {
-        let mut ring = Ring::new(Setup::Policy);
+        let mut ring = Ring::new(Setup::AuditOnly);
         refused(
             approved(&mut ring, bit, &[]),
             CustomRingError::ApproverMissing,
@@ -1021,8 +1034,8 @@ fn each_class_needs_its_own_covering_record() {
         &withdrawal.pubkey(),
         CoSignScope::APPROVE_WITHDRAWAL.bits(),
     );
-    let both = ApprovalMask::new(ApprovalMask::OUTFLOW.bits() | ApprovalMask::WITHDRAWAL.bits())
-        .unwrap();
+    let both =
+        ApprovalMask::new(ApprovalMask::OUTFLOW.bits() | ApprovalMask::WITHDRAWAL.bits()).unwrap();
     reaches_verification(approved(&mut ring, both, &[&outflow, &withdrawal]));
     refused(
         approved(&mut ring, both, &[&outflow]),
@@ -1049,7 +1062,11 @@ fn each_class_needs_its_own_covering_record() {
 fn optional_classes_follow_the_economic_operation() {
     let (transfers, co_signer) = (Keypair::new(), Keypair::new());
     let mut ring = Ring::new(Setup::AuditOnly);
-    set_co_signer(&mut ring, &transfers.pubkey(), CoSignScope::TRANSFERS.bits());
+    set_co_signer(
+        &mut ring,
+        &transfers.pubkey(),
+        CoSignScope::TRANSFERS.bits(),
+    );
     set_co_signer(&mut ring, &co_signer.pubkey(), CoSignScope::DEPOSITS.bits());
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
@@ -1058,8 +1075,8 @@ fn optional_classes_follow_the_economic_operation() {
     data.co_sign.co_signers = 1;
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     spp.extend([
-        AccountMeta::new(ring.payer.pubkey(), true),
         AccountMeta::new(Address::new_unique(), false),
+        AccountMeta::new(ring.payer.pubkey(), true),
     ]);
     reaches_verification(send(
         &mut ring,
@@ -1133,7 +1150,7 @@ fn an_approval_co_signed_by_its_own_owner_is_refused() {
 fn settle(ring: &mut Ring, transfers: Vec<InterfaceTransfer>, funder: &AccountMeta) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    data.interface_transfers = transfers;
+    fixture.settle_legs(&mut data, transfers);
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
     for transfer in &data.interface_transfers {
         let mut group: Vec<AccountMeta> = (0..transfer.settlement_account_count())
@@ -1222,7 +1239,7 @@ fn public_legs_fit_the_account_list_and_the_leg_cap() {
         amount: 9,
         spl_interface_bump: 255,
     };
-    data.interface_transfers = vec![spl; 4];
+    fixture.settle_legs(&mut data, vec![spl; 4]);
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     refused(
         send(
@@ -1236,7 +1253,10 @@ fn public_legs_fit_the_account_list_and_the_leg_cap() {
         CustomRingError::InvalidSettlementAccounts,
     );
     let legs = MAX_INTERFACE_TRANSFERS + 1;
-    data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 1 }; legs];
+    fixture.settle_legs(
+        &mut data,
+        vec![InterfaceTransfer::SolWithdrawal { amount: 1 }; legs],
+    );
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     let settlement = AccountMeta::new(Address::new_unique(), false);
     spp.extend(std::iter::repeat_n(settlement, 2 * legs));
@@ -1554,7 +1574,7 @@ fn anonymous_exit(
 ) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
-    data.interface_transfers = legs.to_vec();
+    fixture.settle_legs(&mut data, legs.to_vec());
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     spp.extend(settlements);
     send(

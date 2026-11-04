@@ -1,6 +1,7 @@
-//! Pins `test-vectors/audit/ring-disclosure-ranges-v4.json` for the Go circuits and the TS SDK.
+//! Pins the version 4 audit vectors the Go circuits read.
 
 use custom_ring_interface::{
+    ciphertext_digest,
     key_catalog::{
         TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
         ENTRY_TRANSFER_SHAPES,
@@ -10,7 +11,9 @@ use custom_ring_interface::{
     RecordKind, SenderBundle, AUDIT_RECORD_LEN, DATA_TAIL_LEN, ENTRY_INPUT_LEN, OPENING_RECORD_LEN,
     RECIPIENT_BODY_LEN, STREAM_BLOCK_LEN,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
+use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::hash_bytes};
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -123,10 +126,8 @@ const fn block_bytes(blocks: usize) -> usize {
 fn the_contract_counts_each_key() {
     let key = |class, entry| AuditKey { class, entry };
     for (key, envelope_blocks) in [
-        // 32 + 1 bytes.
         (key(5, false), 3),
         (key(24, false), 3),
-        // 32 + 1 + 8 + 200 * 2 and 32 + 1 + 8 + 200 * 8 bytes.
         (key(2, true), 28),
         (key(8, true), 103),
     ] {
@@ -233,7 +234,6 @@ fn a_compact_frame_keeps_every_counter_and_drops_the_suffix() {
     }
 }
 
-/// A dataless frame pays no tail byte and reads no tail counter.
 #[test]
 fn a_clear_has_data_transmits_no_tail() {
     let plain = AuditStreamLayout {
@@ -292,7 +292,7 @@ fn a_record_off_its_form_is_refused() {
     refused(|record| record[0] = 3);
     refused(|record| record[1] = 1);
     refused(|record| record[7] = 1);
-    // A dummy's plaintext is all zero, one byte proves the skip.
+    // A kind 0 record holding a value is refused.
     refused(|record| record[0] = 0);
     let encoded = record().encode();
     assert!(AuditRecord::decode(&encoded[..AUDIT_RECORD_LEN - 1]).is_err());
@@ -334,9 +334,20 @@ fn envelopes_read_back_at_their_layout_length() {
         ring_data_hash: [0x46; 32],
     };
     let cases = [
-        (AuditKey { class: 8, entry: false }, 3, AuditEvidence::None, 33),
         (
-            AuditKey { class: 8, entry: true },
+            AuditKey {
+                class: 8,
+                entry: false,
+            },
+            3,
+            AuditEvidence::None,
+            33,
+        ),
+        (
+            AuditKey {
+                class: 8,
+                entry: true,
+            },
             2,
             AuditEvidence::Entry {
                 default_input_bits: 0b01,
@@ -445,7 +456,10 @@ fn the_recipient_body_extends_past_its_plain_head() {
         data: vec![9; 32],
         ..plain.clone()
     };
-    assert_eq!(RecipientBody::decode(&application.encode()), Ok(application));
+    assert_eq!(
+        RecipientBody::decode(&application.encode()),
+        Ok(application)
+    );
 
     let both = RecipientBody {
         ring_data_hash: Some([3; 32]),
@@ -474,4 +488,121 @@ fn the_sender_bundle_follows_the_output_count() {
     assert_eq!(encoded[40..48], 6u64.to_be_bytes());
     assert_eq!(SenderBundle::decode(&encoded, 3).as_ref(), Ok(&bundle));
     assert!(SenderBundle::decode(&encoded, 2).is_err());
+}
+
+#[derive(Deserialize)]
+struct StreamVector {
+    tx_viewing_sk: String,
+    cases: Vec<StreamCase>,
+}
+
+#[derive(Deserialize)]
+struct StreamCase {
+    name: String,
+    layout: u8,
+    input_class: usize,
+    outputs: usize,
+    output_count: usize,
+    input_count: usize,
+    envelope_plaintext: String,
+    envelope_ciphertext: String,
+    records: Vec<String>,
+    record_ciphertexts: Vec<String>,
+    tails: Option<Vec<String>>,
+    tail_ciphertexts: Option<Vec<String>>,
+    envelope_digest: String,
+    record_chain: String,
+    tail_chain: String,
+}
+
+fn unhex(value: &str) -> Vec<u8> {
+    hex::decode(value).unwrap()
+}
+
+fn region_chain<const N: usize>(ciphertexts: &[String], capacity: usize) -> [u8; 32] {
+    let mut hashes = vec![[0; 32]; capacity];
+    for (hash, ciphertext) in hashes.iter_mut().zip(ciphertexts) {
+        let bytes: [u8; N] = unhex(ciphertext).try_into().unwrap();
+        *hash = hash_bytes(&bytes).unwrap();
+    }
+    create_hash_chain_4_from_slice(&hashes).unwrap()
+}
+
+#[test]
+fn the_solved_go_stream_reads_back_under_the_rust_layout() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-vectors/audit/audit-stream-v4.json"
+    );
+    let vector: StreamVector =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(vector.cases.len(), 4);
+    for case in &vector.cases {
+        let layout = AuditStreamLayout {
+            key: AuditKey {
+                class: case.input_class,
+                entry: case.layout & 2 != 0,
+            },
+            inputs: case.input_count,
+            outputs: case.output_count,
+            capacity: case.outputs,
+            has_data: case.layout & 1 != 0,
+        }
+        .checked()
+        .unwrap();
+        let plaintext = unhex(&case.envelope_plaintext);
+        assert_eq!(plaintext.len(), layout.envelope().len, "{}", case.name);
+        let envelope = AuditEnvelope::decode(&plaintext, layout).unwrap();
+        assert_eq!(
+            hex::encode(envelope.tx_viewing_secret),
+            vector.tx_viewing_sk
+        );
+        assert_eq!(envelope.encode(), plaintext, "{}", case.name);
+        let ciphertext = unhex(&case.envelope_ciphertext);
+        assert_eq!(ciphertext.len(), layout.envelope().len, "{}", case.name);
+        assert_eq!(
+            hex::encode(ciphertext_digest(&ciphertext).unwrap()),
+            case.envelope_digest,
+            "{}",
+            case.name
+        );
+        assert_eq!(case.records.len(), case.output_count, "{}", case.name);
+        for record in &case.records {
+            let bytes = unhex(record);
+            assert_eq!(
+                AuditRecord::decode(&bytes).unwrap().encode()[..],
+                bytes,
+                "{}",
+                case.name
+            );
+        }
+        assert_eq!(
+            hex::encode(region_chain::<AUDIT_RECORD_LEN>(
+                &case.record_ciphertexts,
+                case.outputs
+            )),
+            case.record_chain,
+            "{}",
+            case.name
+        );
+        match (&case.tails, &case.tail_ciphertexts) {
+            (Some(tails), Some(ciphertexts)) => {
+                assert!(layout.has_data, "{}", case.name);
+                for tail in tails {
+                    let bytes = unhex(tail);
+                    assert_eq!(DataTail::decode(&bytes).unwrap().encode()[..], bytes);
+                }
+                assert_eq!(
+                    hex::encode(region_chain::<DATA_TAIL_LEN>(ciphertexts, case.outputs)),
+                    case.tail_chain,
+                    "{}",
+                    case.name
+                );
+            }
+            _ => {
+                assert!(!layout.has_data, "{}", case.name);
+                assert_eq!(case.tail_chain, hex::encode([0u8; 32]), "{}", case.name);
+            }
+        }
+    }
 }
