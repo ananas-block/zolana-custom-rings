@@ -10,7 +10,7 @@ use spr_transaction::{
 use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
 
 use super::{
-    anonymous::SenderChange,
+    anonymous::{SenderChange, WideFrames},
     canonical_shape, pad_under_rail, sealed,
     selection::{payment_total, widest, Funding},
     shape_keyed, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged, TransferAuthority,
@@ -54,6 +54,7 @@ pub struct DelegateMove<'a> {
     /// The change returns to the source.
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
+    pub wide_frames: WideFrames,
 }
 
 /// The delegate moves a member's notes with the recovered key, the member does not sign.
@@ -180,7 +181,12 @@ impl<'a> DelegateMove<'a> {
             .into_iter()
             .map(|candidate| {
                 let shape = candidate.shape(payments, keyed).ok_or_else(unkeyed)?;
-                self.transfer(candidate.utxos).with_shape(shape)
+                self.transfer(candidate.utxos)
+                    .with_shape(shape)
+                    .map(|transfer| match self.wide_frames {
+                        WideFrames::Buffer => transfer.with_buffered_settlement(),
+                        WideFrames::Refuse => transfer,
+                    })
             })
             .collect();
         funding.first_fit(attempts, client).await

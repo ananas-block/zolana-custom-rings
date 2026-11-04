@@ -547,7 +547,10 @@ impl Relay {
         signer: Option<Address>,
         relay_id: &RelayId,
     ) -> Result<(), RingRpcError> {
-        if proven.instruction.data.first() != Some(&ring_tag::TRANSFER) {
+        if !matches!(
+            proven.instruction.data.first(),
+            Some(&(ring_tag::TRANSFER | ring_tag::AUTHORITY_TRANSFER))
+        ) {
             return Ok(());
         }
         let writer = self.fee_payer();

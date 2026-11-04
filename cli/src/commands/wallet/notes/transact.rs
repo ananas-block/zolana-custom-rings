@@ -1209,6 +1209,7 @@ impl Transfer<'_> {
                             asset: mint,
                             amount: payment.amount,
                             reply: payment.reply.clone(),
+                            data: payment.data.clone(),
                         })?;
                     }
                     let transfer = match shape {
@@ -1265,6 +1266,7 @@ impl Transfer<'_> {
                                 asset: mint,
                                 amount: payment.amount,
                                 reply: payment.reply.clone(),
+                                data: payment.data.clone(),
                             })?;
                         }
                         let transfer = match shape {

@@ -80,6 +80,7 @@ fn payment(to: &RingAddress, amount: u64) -> AnonymousPayment {
         asset: Mint::SOL,
         amount,
         reply: None,
+        data: crate::NoteData::default(),
     }
 }
 
@@ -532,7 +533,7 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
     let client = enrolled(&[&sender, &keypair(2)]).client();
-    let utxos: Vec<WalletUtxo> = (0..36)
+    let utxos: Vec<WalletUtxo> = (0..60)
         .map(|leaf| ring_utxo(&sender, Mint::SOL, 1, leaf))
         .collect();
     let owner = MoveSender {
@@ -540,17 +541,17 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
         payer: payer(),
     };
     let pay = |amount| owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), amount)]);
-    let widest = pay(24).select(&client).await.unwrap();
+    let widest = pay(40).select(&client).await.unwrap();
     let assembled = widest.assemble(&client).await.unwrap();
     assert_eq!(
         assembled.frame.proof_inputs.check_shape().unwrap(),
-        spr_client::Shape::IN24_OUT2
+        spr_client::Shape::IN40_OUT2
     );
     assert!(matches!(
-        pay(25).select(&client).await,
+        pay(41).select(&client).await,
         Err(RingError::Unfunded {
-            amount: 25,
-            max_inputs: 24,
+            amount: 41,
+            max_inputs: 49,
             ..
         })
     ));
@@ -856,7 +857,7 @@ fn an_unkeyed_shape_names_its_rail_in_words() {
             rail: RingRail::Delegate
         }
         .to_string(),
-        "the transfer needs a shape no delegate key serves"
+        "the catalog has no delegate key for the transfer"
     );
 }
 
@@ -937,6 +938,7 @@ impl<'a> MoveFixture<'a> {
                 })
                 .collect(),
             assets: self.assets,
+            wide_frames: WideFrames::Refuse,
         }
     }
 }
@@ -2491,13 +2493,9 @@ async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_
 fn a_shape_past_a_confidential_class_is_unkeyed() {
     use crate::shape_keyed;
     use spr_client::Shape;
-    for (widest, unkeyed) in [
-        (Shape::new(24, 2), Shape::IN32_OUT2),
-        (Shape::IN5_OUT16, Shape::IN8_OUT16),
-    ] {
-        assert!(shape_keyed(RingRail::Confidential, widest));
-        assert!(!shape_keyed(RingRail::Confidential, unkeyed));
-    }
+    assert!(shape_keyed(RingRail::Confidential, Shape::IN49_OUT2));
+    assert!(shape_keyed(RingRail::Confidential, Shape::IN5_OUT16));
+    assert!(!shape_keyed(RingRail::Confidential, Shape::IN8_OUT16));
 }
 
 /// The limits the byte model names, each frame measured below and at its ceiling.
@@ -3410,4 +3408,87 @@ async fn a_salted_owner_passes_under_its_rows_tag_alone() {
         read(&unenrolled).await,
         Err(RingError::Resolve(ResolveError::NotEnrolled))
     ));
+}
+
+/// SPP holds a data hash to a signing owner, a ring data hash to nobody.
+#[tokio::test]
+async fn a_hidden_sender_pays_a_note_carrying_data() {
+    use crate::{tests::support::keypair, ApplicationData, NoteData};
+
+    let sender = keypair(1);
+    let reader = keypair(2);
+    let recipient = ring_address(&reader);
+    let chain = enrolled(&[&sender, &reader]);
+    let pay = |data: NoteData| {
+        owner_transfer(
+            &sender,
+            ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]),
+        )
+        .with_anonymous_signer(&sender.signing_key)
+        .with_payment(payment(&recipient, 4).with_data(data))
+        .unwrap()
+    };
+
+    let hashed = pay(NoteData {
+        ring_data_hash: Some([3; 32]),
+        application: None,
+    });
+    let staged = stage_anonymous(&hashed, &chain).await.unwrap();
+    assert!(staged.owner_signers.is_empty());
+    let paid = |staged: &Staged<'_>| {
+        staged
+            .proof_inputs
+            .output_utxos
+            .iter()
+            .find(|output| output.owner_address == Some(recipient.recipient))
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(paid(&staged).ring_data_hash, Some([3; 32]));
+
+    let signed = pay(NoteData {
+        ring_data_hash: None,
+        application: Some(ApplicationData {
+            hash: [4; 32],
+            bytes: b"app".to_vec(),
+        }),
+    });
+    let staged = stage_anonymous(&signed, &chain).await.unwrap();
+    assert_eq!(paid(&staged).data_hash, Some([4; 32]));
+    let position = staged
+        .proof_inputs
+        .output_utxos
+        .iter()
+        .position(|output| output.owner_address == Some(recipient.recipient))
+        .unwrap();
+    assert_eq!(
+        payment_at(&staged, &reader, position).data,
+        [&[4; 32][..], b"app"].concat()
+    );
+    let assembled = signed
+        .assemble(&enrolled(&[&sender, &reader]).client())
+        .await
+        .unwrap();
+    let frame = &assembled.frame;
+    let instruction = frame
+        .accounts
+        .instruction(frame.ring, &assembled.config, &frame.parts)
+        .unwrap();
+    let parsed = RingTransactData::parse(&instruction.data[1..], RingRail::Anonymous).unwrap();
+    assert!(parsed.data().has_data);
+    let owner = recipient
+        .recipient
+        .signing_pubkey
+        .confidential_view_tag()
+        .unwrap();
+    assert_eq!(staged.owner_signers, [Address::new_from_array(owner)]);
+
+    let unbound = pay(NoteData {
+        ring_data_hash: None,
+        application: Some(ApplicationData {
+            hash: [0; 32],
+            bytes: b"app".to_vec(),
+        }),
+    });
+    assert!(stage_anonymous(&unbound, &chain).await.is_err());
 }

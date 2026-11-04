@@ -2,7 +2,7 @@
 
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::tracking::TrackingAuthorization;
-use custom_ring_sdk::{DelegateMove, DelegatePayment};
+use custom_ring_sdk::{DelegateMove, DelegatePayment, WideFrames};
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc};
 use spr_keypair::X25519Pubkey;
@@ -93,6 +93,7 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
                 })
                 .collect(),
             assets: assets.registry(),
+            wide_frames: WideFrames::Buffer,
         }
         .select(ctx.ring_client()),
     )?;

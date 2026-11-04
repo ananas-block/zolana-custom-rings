@@ -510,12 +510,18 @@ async fn a_merge_relays_with_one_wallet_call() {
 /// The relay writes and pays, the one message a co-signer signs carries the digest alone.
 #[tokio::test]
 async fn a_frame_past_one_transaction_relays_through_a_buffer_the_relay_writes() {
+    use custom_ring_interface::tag as ring_tag;
+    relays_through_a_buffer(ring_tag::TRANSFER).await;
+    relays_through_a_buffer(ring_tag::AUTHORITY_TRANSFER).await;
+}
+
+async fn relays_through_a_buffer(frame_tag: u8) {
     use custom_ring_interface::{
         frame_digest, settle_buffered_data, tag as ring_tag, WriteFrameIxData,
     };
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
     let mut frame = vec![9; 6000];
-    frame[0] = ring_tag::TRANSFER;
+    frame[0] = frame_tag;
     *fixture.prover.frame.lock().expect("frame") = Some(frame.clone());
     let quote = fixture.quote(RelayOperation::Anonymous).await;
     let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
