@@ -24,7 +24,7 @@ func TestOldMergeKeysAreGone(t *testing.T) {
 const mergeVectorPath = "../../test-vectors/merge/merge_v4.json"
 
 const mergeVectorDescription = "Known-answer vector for the ring merge record and statement, one case per key mode. " +
-	"record = kind 1, 7 zero bytes, u64be(amount), owner_key, mint, be32(nullifier_pk), be32(seed), 144 bytes. " +
+	"record = kind 1, u64be(amount), owner_key, mint, be32(nullifier_pk), 7 zero bytes, be32(seed), 144 bytes. " +
 	"ciphertext seals the record from eph to auditor under the audit stream schedule of label CRING/mrg2 at counter 2. " +
 	"output_blinding = Poseidon(TMOB, seed, first_nullifier). " +
 	"elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(ciphertext), payer, published_owner, tracking_root, " +

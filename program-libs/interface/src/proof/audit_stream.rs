@@ -10,24 +10,25 @@ pub const ENVELOPE_KEY_LEN: usize = 32;
 pub const REAL_INPUT_COUNT_LEN: usize = 1;
 /// Keys with entry capacity alone, bit `i` set when input `i` is a default-ring note.
 pub const DEFAULT_INPUT_BITS_LEN: usize = 8;
-pub const AUDIT_RECORD_LEN: usize = 112;
+pub const AUDIT_RECORD_LEN: usize = 105;
 pub const DATA_TAIL_LEN: usize = 64;
 pub const ENTRY_INPUT_LEN: usize = 200;
-/// `record || secret`, the deposit's blinding or the merge's seed.
-pub const OPENING_RECORD_LEN: usize = AUDIT_RECORD_LEN + FIELD_LEN;
+/// The secret is the deposit's blinding or the merge's seed.
+pub const OPENING_RECORD_LEN: usize = RECORD_STRIDE + FIELD_LEN;
 pub const RECIPIENT_BODY_LEN: usize = 72;
 /// `mint0 || u64be(amount0) || u64be(amount1) || output_seed`.
 pub const SENDER_BUNDLE_HEAD_LEN: usize = 80;
 /// `viewing_u || owner_key || nullifier_pk`, one byte for the wincode of no data.
 pub const MIN_REPLY_LEN: usize = 97;
-pub const RECORD_BLOCKS: usize = AUDIT_RECORD_LEN / STREAM_BLOCK_LEN;
+pub const RECORD_BLOCKS: usize = AUDIT_RECORD_LEN.div_ceil(STREAM_BLOCK_LEN);
+/// The padding past a record keeps slot `i` at its counter, a transfer frame omits it.
+pub const RECORD_STRIDE: usize = RECORD_BLOCKS * STREAM_BLOCK_LEN;
 pub const TAIL_BLOCKS: usize = DATA_TAIL_LEN / STREAM_BLOCK_LEN;
-const RECORD_RESERVED_LEN: usize = 7;
 const FIELD_LEN: usize = 32;
 const AMOUNT_LEN: usize = 8;
 
-const _: () = assert!(1 + RECORD_RESERVED_LEN + AMOUNT_LEN + 3 * FIELD_LEN == AUDIT_RECORD_LEN);
-const _: () = assert!(AUDIT_RECORD_LEN.is_multiple_of(STREAM_BLOCK_LEN));
+const _: () = assert!(1 + AMOUNT_LEN + 3 * FIELD_LEN == AUDIT_RECORD_LEN);
+const _: () = assert!(OPENING_RECORD_LEN.is_multiple_of(STREAM_BLOCK_LEN));
 const _: () = assert!(DATA_TAIL_LEN.is_multiple_of(STREAM_BLOCK_LEN));
 const _: () = assert!(AMOUNT_LEN + 6 * FIELD_LEN == ENTRY_INPUT_LEN);
 const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == RECIPIENT_BODY_LEN);
@@ -216,10 +217,10 @@ impl AuditRecord {
     pub fn encode(&self) -> [u8; AUDIT_RECORD_LEN] {
         let mut out = [0; AUDIT_RECORD_LEN];
         out[0] = self.kind as u8;
-        out[8..16].copy_from_slice(&self.amount.to_be_bytes());
-        out[16..48].copy_from_slice(&self.owner_key);
-        out[48..80].copy_from_slice(&self.mint);
-        out[80..].copy_from_slice(&self.nullifier_pk);
+        out[1..9].copy_from_slice(&self.amount.to_be_bytes());
+        out[9..41].copy_from_slice(&self.owner_key);
+        out[41..73].copy_from_slice(&self.mint);
+        out[73..].copy_from_slice(&self.nullifier_pk);
         out
     }
 
@@ -231,10 +232,6 @@ impl AuditRecord {
                 2 => RecordKind::Exit,
                 _ => return Err(CustomRingError::RingTransactLength),
             };
-            let reserved: &[u8; RECORD_RESERVED_LEN] = bytes.array()?;
-            if reserved.iter().any(|byte| *byte != 0) {
-                return Err(CustomRingError::RingTransactLength);
-            }
             let record = Self {
                 kind,
                 amount: read_amount(bytes)?,
@@ -260,14 +257,19 @@ impl OpeningRecord {
     pub fn encode(&self) -> [u8; OPENING_RECORD_LEN] {
         let mut out = [0; OPENING_RECORD_LEN];
         out[..AUDIT_RECORD_LEN].copy_from_slice(&self.record.encode());
-        out[AUDIT_RECORD_LEN..].copy_from_slice(&self.secret);
+        out[RECORD_STRIDE..].copy_from_slice(&self.secret);
         out
     }
 
     pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
         read_all(plaintext, |bytes| {
+            let record = AuditRecord::decode(bytes.take(AUDIT_RECORD_LEN)?)?;
+            let padding = bytes.take(RECORD_STRIDE - AUDIT_RECORD_LEN)?;
+            if padding.iter().any(|byte| *byte != 0) {
+                return Err(CustomRingError::RingTransactLength);
+            }
             Ok(Self {
-                record: AuditRecord::decode(bytes.take(AUDIT_RECORD_LEN)?)?,
+                record,
                 secret: *bytes.array()?,
             })
         })

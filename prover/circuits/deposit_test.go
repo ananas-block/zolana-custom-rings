@@ -166,7 +166,7 @@ func TestDepositAbsenceReadsTheFrameRoot(t *testing.T) {
 
 // The frame's bytes differ from the sealed record at one field, the statement over them names bytes the proof never sealed.
 func TestEveryDepositRecordFieldIsSealed(t *testing.T) {
-	for name, offset := range map[string]int{"kind": 0, "reserved": 3, "amount": 15, "owner key": 16, "mint": 48, "nullifier key": 111, "blinding": 143} {
+	for name, offset := range map[string]int{"kind": 0, "padding": 108, "amount": 8, "owner key": 9, "mint": 41, "nullifier key": 104, "blinding": 143} {
 		t.Run(name, func(t *testing.T) {
 			d := ringdeposit.Spec{Count: 2}.Build(t)
 			d.Plaintext[circuits.DepositRecordLen+offset] ^= 1
@@ -299,7 +299,7 @@ func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 		cases = append(cases, v)
 	}
 	ringtest.PinVector(t, "deposit/deposit-v4.json", map[string]any{
-		"description": "Solved deposit witnesses. A record is kind || reserved || u64be(amount) || owner_key || mint || be32(nullifier_pk) || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep1. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description": "Solved deposit witnesses. A record is kind || u64be(amount) || owner_key || mint || be32(nullifier_pk) || 7 zero bytes || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep1. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1.",
 		"cases":       cases,
 	})
 }

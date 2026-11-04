@@ -250,7 +250,7 @@ func (n Note) plaintext(t testing.TB) []byte {
 	record := ringaudit.Slot{Utxo: ringaudit.Utxo{Domain: protocol.UtxoDomain, NullifierPk: n.NullifierPk, Amount: n.Amount, RingProgramID: big.NewInt(1)}, OwnerKey: n.OwnerKey, Mint: n.Mint}.Record(t)
 	blinding := spptest.MustFieldBytes(t, n.Blinding)
 	copy(plain, record)
-	copy(plain[audit.RecordLen:], blinding[:])
+	copy(plain[audit.RecordStride:], blinding[:])
 	return plain
 }
 
@@ -317,11 +317,11 @@ func (d *Deposit) OpenAt(t testing.TB, ciphertext []byte, slot int) Opened {
 	plain := d.Keys.StreamCiphertext(t, ciphertext, shared.DepositEncInfo)[slot*circuits.DepositRecordLen:]
 	return Opened{
 		Kind:        plain[0],
-		Amount:      binary.BigEndian.Uint64(plain[8:16]),
-		OwnerKey:    [32]byte(plain[16:48]),
-		Mint:        [32]byte(plain[48:80]),
-		NullifierPk: new(big.Int).SetBytes(plain[80:112]),
-		Blinding:    new(big.Int).SetBytes(plain[112:144]),
+		Amount:      binary.BigEndian.Uint64(plain[1:9]),
+		OwnerKey:    [32]byte(plain[9:41]),
+		Mint:        [32]byte(plain[41:73]),
+		NullifierPk: new(big.Int).SetBytes(plain[73:audit.RecordLen]),
+		Blinding:    new(big.Int).SetBytes(plain[audit.RecordStride:circuits.DepositRecordLen]),
 	}
 }
 

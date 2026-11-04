@@ -112,7 +112,7 @@ fn compute_vectors() -> ExpansionVectors {
                       without has_data. Under reply metadata a u16 reply_len and reply_len bytes \
                       per body-bearing slot follow the slots. The anonymous frame's scheme 12 \
                       bundle follows as a 32-byte tag and 80 + 32 m bytes, then eph_u, the envelope, \
-                      m records of 112 bytes and under has_data m tails of 64 bytes, the lengths \
+                      m records of 105 bytes and under has_data m tails of 64 bytes, the lengths \
                       those of ring-disclosure-ranges-v4.json. The auditor message is 0x04 || eph_u \
                       || envelope || records || tails. Recipient bodies forward as scheme 13, \
                       u16le(body_len) || body || reply. Produced by \
