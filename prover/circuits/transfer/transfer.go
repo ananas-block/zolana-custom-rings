@@ -3,6 +3,7 @@ package transfer
 
 import (
 	"github.com/consensys/gnark/frontend"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
@@ -36,6 +37,13 @@ type screenedPolicy struct {
 	policy.Policy
 }
 
+// bypassPolicy holds the authority rail's statement off every policy registry, a curator's update then cannot fail a delegate's proof.
+func (p *screenedPolicy) bypassPolicy(api frontend.API, delegate frontend.Variable) {
+	for _, value := range []frontend.Variable{p.PolicyHash, p.OwnRoot, p.CuratorRoot} {
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: delegate, V: value})
+	}
+}
+
 func (p *screenedPolicy) gates(api frontend.API, rail policy.Rail) policy.Gates {
 	// Exempt switches assertExemption and the own pool lookups the thresholds read.
 	api.AssertIsBoolean(p.Exempt)
@@ -50,8 +58,21 @@ func (p *screenedPolicy) screen(api frontend.API, rc frontend.Rangechecker, g po
 	return screening
 }
 
-// screenedOwners is the sender rows of the confidential and commitment keys, a policy refuses more distinct owners.
-const screenedOwners = 4
+const (
+	// smallOwners keys the rows nearly every transfer needs, a row costs constraints on every proof of its key.
+	smallOwners = 4
+	// ownerAddresses mirrors the bound of TransferAddresses in program-libs/interface/src/proof/key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
+	ownerAddresses = 64 - 4 - 6
+)
+
+// ownerCapacities are the row counts a key of inputs input slots takes, ascending, mirrored by TransferShape::owners.
+func ownerCapacities(inputs int) []int {
+	small, full := min(smallOwners, inputs), min(inputs, ownerAddresses-inputs)
+	if full <= small {
+		return []int{small}
+	}
+	return []int{small, full}
+}
 
 // transactionBinding is SPP's private transaction hash and its blinding, the proof reopens the hash over the slots the audit opened.
 type transactionBinding struct {

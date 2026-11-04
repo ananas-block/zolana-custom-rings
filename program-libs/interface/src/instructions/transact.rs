@@ -1123,13 +1123,18 @@ impl<'a> RingTransactData<'a> {
         Ok(bound)
     }
 
-    pub fn transfer_circuit(&self, legs: usize) -> Result<RingCircuit, CustomRingError> {
+    pub fn transfer_circuit(
+        &self,
+        legs: usize,
+        owners: usize,
+    ) -> Result<RingCircuit, CustomRingError> {
         RingCircuit::transfer(TransferSpend {
             rail: self.rail,
             inputs: self.nullifiers.len(),
             outputs: usize::from(self.n_out),
             spends_default_ring: self.full_openings,
             legs,
+            owners,
         })
         .ok_or(CustomRingError::RingShapeUnkeyed)
     }

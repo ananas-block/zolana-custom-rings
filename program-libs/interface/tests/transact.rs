@@ -382,8 +382,8 @@ fn a_compact_frame_omits_the_suffix_and_keeps_the_capacity() {
     let full = fixture.confidential_delivered().encode().unwrap();
     assert!(compact.len() < full.len());
     assert_eq!(
-        data.transfer_circuit(0),
-        fixture.confidential_delivered().transfer_circuit(0)
+        data.transfer_circuit(0, 0),
+        fixture.confidential_delivered().transfer_circuit(0, 0)
     );
     let spp = data.expand(&config()).unwrap();
     assert_eq!(spp.outputs.len(), 5);
@@ -1212,15 +1212,16 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
     assert_eq!(proof.default_owner_tag, None);
     assert_eq!(proof.bsb22_commitment.commitment, fixture.bytes[20]);
     assert_eq!(
-        data.transfer_circuit(1),
+        data.transfer_circuit(1, 0),
         Ok(RingCircuit::TransferConfidential {
             outputs: 4,
             inputs: 24,
             withdrawals: 4
+            owners: 4,
         })
     );
     assert_eq!(
-        data.transfer_circuit(33),
+        data.transfer_circuit(33, 0),
         Err(CustomRingError::RingShapeUnkeyed)
     );
 }

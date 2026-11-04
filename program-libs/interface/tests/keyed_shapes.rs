@@ -36,6 +36,7 @@ fn served(rail: RingRail, spends_default_ring: bool) -> Value {
                     outputs: shape.n_outputs(),
                     spends_default_ring,
                     legs: 0,
+                    owners: 0,
                 })
                 .is_some()
         })

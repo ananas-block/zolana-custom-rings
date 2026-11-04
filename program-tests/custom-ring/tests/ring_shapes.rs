@@ -874,7 +874,7 @@ impl ShapeRing<'_> {
         let instruction = proven.instruction()?;
         let parsed = ParsedTransact::new(frame(&instruction, rail)?)?;
         let data = parsed.data();
-        let circuit = data.transfer_circuit(keyed_legs(data))?;
+        let circuit = data.transfer_circuit(keyed_legs(data), 0)?;
         let tag = instruction
             .data
             .first()

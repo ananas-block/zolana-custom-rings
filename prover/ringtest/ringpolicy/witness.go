@@ -66,7 +66,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		if assets[key].IsInt64() {
 			threshold.SetUint64(w.Own[assets[key].Int64()].WithdrawalThreshold)
 		}
-		own.Apply(t, ringregistry.Entry{Member: assets[key], Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0), MintPolicy: update, WithdrawalThreshold: threshold})
+		own.Apply(t, ringregistry.Entry{Member: assets[key], Mask: big.NewInt(0), Value: big.NewInt(0), MintPolicy: update, WithdrawalThreshold: threshold})
 	}
 
 	p.Table = rows.Wires()
@@ -208,12 +208,8 @@ func registry(t testing.TB, records map[int64]Record) *ringregistry.Registry {
 	slices.Sort(ids)
 	for _, id := range ids {
 		record := records[id]
-		escrow := big.NewInt(0)
-		if record.Registered {
-			escrow = ringregistry.EscrowKey(t, nullifierPk(id), ctHash(id))
-		}
 		lists := new(big.Int).SetUint64(record.Lists)
-		entry := ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists, EscrowKey: escrow, AddressHash: record.Address}
+		entry := ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists}
 		if record.WithdrawalThreshold != 0 {
 			// Bit 192 writes the mint policy, the threshold rides on that write.
 			entry.MintPolicy, entry.WithdrawalThreshold = new(big.Int).Lsh(big.NewInt(1), 192), new(big.Int).SetUint64(record.WithdrawalThreshold)

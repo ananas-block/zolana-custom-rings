@@ -5,8 +5,7 @@ use std::collections::BTreeSet;
 use custom_ring_interface::{
     cosign::CoSignDemand,
     key_catalog::{
-        RecordPools as PoolWidths, RingCircuit, TransferSpend, SCREENED_ENTRY_OWNERS,
-        SCREENED_OWNERS,
+        RecordPools as PoolWidths, RingCircuit, TransferSpend,
     },
     member_registry::AuthorizedAddress,
     CustomRingError, PolicyWithdrawal, PublicSlots, RingMode, RingRail, TransferRoots,
@@ -124,6 +123,7 @@ impl PolicyRead<'_> {
             outputs: n_out,
             spends_default_ring: self.spends_default_ring,
             legs: withdrawals.len(),
+            owners: self.owner_identities()?.len(),
         })
         .ok_or(RingError::ShapeUnkeyed { rail: self.rail })?;
         let widths = circuit
@@ -141,7 +141,7 @@ impl PolicyRead<'_> {
             curator: None,
             own_pool: None,
             curator_pool: None,
-            sender_entries: vec![PoolEntry::default(); self.screened_owners()],
+            sender_entries: vec![PoolEntry::default(); circuit.owners().map_or(0, usize::from)],
             sender_address: None,
             slot_addresses: Vec::new(),
             owner_entries: Vec::new(),
@@ -161,30 +161,27 @@ impl PolicyRead<'_> {
         Ok(inputs)
     }
 
-    const fn screened_owners(&self) -> usize {
-        match self.spends_default_ring {
-            true => SCREENED_ENTRY_OWNERS,
-            false => SCREENED_OWNERS,
-        }
-    }
-
-    /// The deterministic sender subjects of the rail, never a witness.
-    fn senders(&self) -> Result<Vec<[u8; 32]>, RingError> {
+    /// The rail's input owners, unsorted.
+    fn owner_identities(&self) -> Result<Vec<[u8; 32]>, RingError> {
         let identities = self
             .owner_signers
             .iter()
             .map(|owner| Ok(solana_owner_identity(owner.as_array())?))
             .collect::<Result<Vec<_>, RingError>>()?;
-        let q = self.screened_owners();
-        let mut senders = match self.rail {
+        Ok(match self.rail {
             RingRail::Confidential if !self.in_proof => identities,
             RingRail::Confidential | RingRail::Delegate => vec![self.sender],
             RingRail::Anonymous => core::iter::once(self.sender).chain(identities).collect(),
-        };
-        if senders.len() > q {
+        })
+    }
+
+    /// The deterministic sender subjects of the rail, never a witness.
+    fn senders(&self, rows: usize) -> Result<Vec<[u8; 32]>, RingError> {
+        let mut senders = self.owner_identities()?;
+        if senders.len() > rows {
             return Err(CustomRingError::OwnerSignerCount.into());
         }
-        senders.resize(q, [0; 32]);
+        senders.resize(rows, [0; 32]);
         Ok(senders)
     }
 
@@ -318,7 +315,7 @@ impl PolicyRead<'_> {
                 None => 0,
             }],
         };
-        let senders = self.senders()?;
+        let senders = self.senders(inputs.sender_entries.len())?;
         inputs.sender_entries = senders
             .iter()
             .map(|sender| entry(subjects.index((*sender != [0; 32]).then_some(*sender))))

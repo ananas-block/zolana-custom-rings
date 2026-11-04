@@ -883,6 +883,7 @@ fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
             outputs: shape.n_outputs(),
             spends_default_ring,
             legs: 0,
+            owners: 0,
         })
         .is_some()
 }

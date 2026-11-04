@@ -152,9 +152,12 @@ func ListTag(api frontend.API, listSalt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{ListTagDomain, listSalt})
 }
 
+// AnonymousParties counts payer, five co-signers and exit destination, mirrored by ANONYMOUS_PARTIES.
+const AnonymousParties = 7
+
 // AssertAnonymousParties separates the hidden owner from the public identities
 // reconstructed by the verifier. Zero denotes an absent optional party.
-func AssertAnonymousParties(api frontend.API, owner frontend.Variable, parties [3]frontend.Variable) {
+func AssertAnonymousParties(api frontend.API, owner frontend.Variable, parties []frontend.Variable) {
 	for _, party := range parties {
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: party, V: api.IsZero(api.Sub(owner, party))})
 	}

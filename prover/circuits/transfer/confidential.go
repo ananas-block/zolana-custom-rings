@@ -16,24 +16,53 @@ import (
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
-// ConfidentialShape sizes a key, Inputs the slots every rail opens and the signers it can bind.
+// ConfidentialShape sizes a key, Inputs the slots every rail opens and the signers it can bind, Owners the rows, FullOpenings a spend of default-ring notes.
 type ConfidentialShape struct {
-	Inputs, Outputs, Withdrawals int
+	Inputs, Outputs, Withdrawals, Owners int
+	FullOpenings                         bool
 }
 
-// ConfidentialShapes are the confidential keys, mirrored by CONFIDENTIAL_TRANSFER_SHAPES in program-libs/interface/src/proof/key_catalog.rs.
-var ConfidentialShapes = [...]ConfidentialShape{
-	{Inputs: 24, Outputs: 2, Withdrawals: 4},
-	{Inputs: 24, Outputs: 2, Withdrawals: 32},
-	{Inputs: 24, Outputs: 4, Withdrawals: 4},
-	{Inputs: 24, Outputs: 4, Withdrawals: 32},
-	{Inputs: 16, Outputs: 8, Withdrawals: 4},
-	{Inputs: 16, Outputs: 8, Withdrawals: 32},
-	{Inputs: 5, Outputs: 16, Withdrawals: 8},
+// ConfidentialBases and EntryBases mirror CONFIDENTIAL_TRANSFER_SHAPES and ENTRY_TRANSFER_SHAPES in program-libs/interface/src/proof/key_catalog.rs, each takes every owner capacity.
+var (
+	ConfidentialBases = [...]ConfidentialShape{
+		{Inputs: 24, Outputs: 2, Withdrawals: 4},
+		{Inputs: 24, Outputs: 2, Withdrawals: 32},
+		{Inputs: 24, Outputs: 4, Withdrawals: 4},
+		{Inputs: 24, Outputs: 4, Withdrawals: 32},
+		{Inputs: 16, Outputs: 8, Withdrawals: 4},
+		{Inputs: 16, Outputs: 8, Withdrawals: 32},
+		{Inputs: 5, Outputs: 16, Withdrawals: 8},
+	}
+	ConfidentialShapes = confidentialKeys(ConfidentialBases[:], false)
+	// ConfidentialEntryShapes spend a default-ring note on the signer rails.
+	ConfidentialEntryShapes = confidentialKeys(entryBases(), true)
+)
+
+func confidentialKeys(bases []ConfidentialShape, entry bool) []ConfidentialShape {
+	var keys []ConfidentialShape
+	for _, base := range bases {
+		for _, owners := range ownerCapacities(base.Inputs) {
+			base.Owners, base.FullOpenings = owners, entry
+			keys = append(keys, base)
+		}
+	}
+	return keys
+}
+
+func entryBases() []ConfidentialShape {
+	bases := make([]ConfidentialShape, len(EntryBases))
+	for i, base := range EntryBases {
+		bases[i] = ConfidentialShape{Inputs: base.InputClass, Outputs: base.Outputs, Withdrawals: base.Withdrawals}
+	}
+	return bases
 }
 
 func (s ConfidentialShape) String() string {
-	return fmt.Sprintf("custom_ring_transfer_confidential_%d_in%d_w%d", s.Outputs, s.Inputs, s.Withdrawals)
+	family := "confidential"
+	if s.FullOpenings {
+		family = "confidential_entry"
+	}
+	return fmt.Sprintf("custom_ring_transfer_%s_%d_in%d_w%d_s%d", family, s.Outputs, s.Inputs, s.Withdrawals, s.Owners)
 }
 
 type ConfidentialTransferCircuit struct {
@@ -48,26 +77,32 @@ type ConfidentialTransferCircuit struct {
 	Inputs            []shared.UtxoWires
 	transactionBinding
 	// Sender is the in-proof owner, zero on the signer and authority rails.
-	Sender frontend.Variable
-	// SenderPkHash is the member an authority move spends.
-	SenderPkHash frontend.Variable
-	SignerCount  frontend.Variable
+	Sender      frontend.Variable
+	SignerCount frontend.Variable
 	// Signers is the program's owner signer run, zero past SignerCount.
 	Signers []frontend.Variable
+	// Rows are the distinct live input owners, ascending with zero rows last.
+	Rows []frontend.Variable
+	policy.Tracking
 	screenedPolicy
 }
 
 func NewConfidentialTransferCircuit(shape ConfidentialShape) (*ConfidentialTransferCircuit, error) {
-	keyed := ConfidentialShape{Inputs: shape.Inputs, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals}
-	if !slices.Contains(ConfidentialShapes[:], keyed) {
-		return nil, fmt.Errorf("transfer: unsupported confidential shape %+v, want one of %v", keyed, ConfidentialShapes)
+	if !slices.Contains(ConfidentialShapes, shape) && !slices.Contains(ConfidentialEntryShapes, shape) {
+		return nil, fmt.Errorf("transfer: unsupported confidential shape %+v, want one of %v or %v", shape, ConfidentialShapes, ConfidentialEntryShapes)
 	}
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: screenedOwners}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
+	if err != nil {
+		return nil, err
+	}
+	tracking, err := policy.NewTracking(shape.Owners, shape.Outputs)
 	if err != nil {
 		return nil, err
 	}
 	return &ConfidentialTransferCircuit{
 		Shape:          shape,
+		Rows:           make([]frontend.Variable, shape.Owners),
+		Tracking:       tracking,
 		Outputs:        make([]audit.DeliveryWires, shape.Outputs),
 		Inputs:         make([]shared.UtxoWires, shape.Inputs),
 		Signers:        make([]frontend.Variable, shape.Inputs),
@@ -83,6 +118,8 @@ func (c *ConfidentialTransferCircuit) Define(api frontend.API) error {
 		shared.ValidateLength("transfer", "signer", len(c.Signers), c.Shape.Inputs),
 		shared.ValidateLength("transfer", "escrow hash", len(c.CtHashes), c.Shape.Outputs),
 		shared.ValidateLength("transfer", "withdrawal", len(c.Withdrawals), c.Shape.Withdrawals),
+		shared.ValidateLength("transfer", "owner row", len(c.Rows), c.Shape.Owners),
+		c.ValidateTracking(c.Shape.Owners, c.Shape.Outputs),
 	); err != nil {
 		return err
 	}
@@ -94,11 +131,16 @@ func (c *ConfidentialTransferCircuit) Define(api frontend.API) error {
 	keyEscrow := c.decodeLayout(api)
 	opened := audit.OpenSlots(api, rc, w, envelope, c.Outputs, c.OutputCount)
 	g := c.gates(api, policy.Rail{KeyEscrow: keyEscrow, Delegate: c.Delegate, Published: 1, Delivery: 0})
-	spend := c.spendInputs(api, g.Screened)
+	c.bypassPolicy(api, c.Delegate)
+	spend := c.spendInputs(api)
+	tracking := c.OpenTracking(api)
+	rows := OpenOwnerRows(api, c.Rows, c.RowEntries, tracking)
+	rows.AssertInputOwners(api, InputRail{Delegate: c.Delegate, Hidden: 0, HiddenOwner: 0}, spend.section.Slots)
+	AssertOutputOwners(api, tracking, opened.Slots, c.OutputEntries)
 	c.bindTransaction(api, gadget.NonZeroHashChain(api, spend.section.Hashes), opened.Slots)
 	stream := w.SealStream(api, audit.ConfidentialRanges(c.Shape.Inputs, c.Shape.Outputs), audit.InputEvidence(api, rc, spend.section.Hashes, spend.section.Count), opened.ExitRecords())
 	delivered := w.Deliver(api, envelope, keyEscrow, c.Outputs, opened, stream)
-	c.screen(api, rc, g, policy.Spend{Senders: spend.senders, Inputs: spend.section.Slots}, opened.Slots)
+	c.screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: spend.section.Slots}, opened.Slots)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, stream, opened, delivered, spend.signers)))
 	return nil
 }
@@ -120,31 +162,16 @@ func (c *ConfidentialTransferCircuit) decodeLayout(api frontend.API) frontend.Va
 type confidentialSpend struct {
 	section InputSection
 	signers SignerSet
-	senders []frontend.Variable
 }
 
-// spendInputs holds every live input to the rail's owner predicate, a mismatch would let a rail spend a note its authorization never covered.
-func (c *ConfidentialTransferCircuit) spendInputs(api frontend.API, screened frontend.Variable) confidentialSpend {
+// spendInputs holds every live input to a signer or the in-proof owner, the delegate proves no owner authorization.
+func (c *ConfidentialTransferCircuit) spendInputs(api frontend.API) confidentialSpend {
 	section := OpenInputs(api, c.Inputs, c.InputCount)
-	section.AssertRingNotes(api, c.RingProgramID)
+	section.AssertRingNotes(api, c.RingProgramID, c.Shape.FullOpenings)
 	signers := OpenSigners(api, c.Signers, c.SignerCount)
-	ownerRail := api.Add(c.InProof, c.Delegate)
-	signerRail := api.Sub(1, ownerRail)
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: ownerRail, V: c.SignerCount})
-	// Under a policy the set holds an owner to screen, a public-funded transfer included.
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(screened, signerRail), V: signers.Count.OneHot[0]})
-	signers.AssertAtMost(api, screened, screenedOwners)
-	railOwner := api.Select(c.Delegate, c.SenderPkHash, c.Sender)
-	section.AssertOwnedBy(api, ownerRail, railOwner)
-	for _, slot := range section.Slots {
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(signerRail, slot.Utxo), V: signers.missing(api, slot.OwnerPkHash)})
-	}
-	senders := make([]frontend.Variable, screenedOwners)
-	senders[0] = api.Select(ownerRail, railOwner, signers.At(0))
-	for j := 1; j < screenedOwners; j++ {
-		senders[j] = signers.At(j)
-	}
-	return confidentialSpend{section: section, signers: signers, senders: senders}
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: c.SignerCount})
+	signers.AssertOwners(api, section, api.Sub(1, c.Delegate), c.Sender)
+	return confidentialSpend{section: section, signers: signers}
 }
 
 // statement is the confidential transfer preimage, mirrored by TransferStatement::elements under TransferFamily::Confidential in program-libs/interface/src/proof/statement.rs.
@@ -156,7 +183,7 @@ func (c *ConfidentialTransferCircuit) statement(e audit.Envelope, w audit.AuditW
 		c.InputCount, opened.ExitsBitmap, c.PrivateTxHash,
 		c.Sender,
 		c.SignerCount, signers.Chain,
-		c.PolicyHash, c.OwnRoot, c.CuratorRoot,
+		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot,
 	}, c.Recipients, publicSlots(c.PublicAssets[:], c.PublicAmounts[:], c.PublicGross[:]))
 	return closeStatement(append(fields, c.WithdrawalHash))
 }

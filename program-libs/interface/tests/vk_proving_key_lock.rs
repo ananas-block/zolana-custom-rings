@@ -69,6 +69,7 @@ fn selectable_circuits() -> BTreeSet<String> {
                             outputs: n_out,
                             spends_default_ring,
                             legs,
+                            owners: 0,
                         }));
                     }
                 }

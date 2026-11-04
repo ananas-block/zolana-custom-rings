@@ -87,7 +87,7 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	}
 	// 1. One owner from the key and the secret's nullifier key, one asset, input_count in 1 to the width.
 	ownerPkHash := gadget.SolanaOwnerIdentity(api, c.OwnerKey)
-	shared.AssertAnonymousParties(api, ownerPkHash, c.PartyIdentities)
+	shared.AssertAnonymousParties(api, ownerPkHash, c.PartyIdentities[:])
 	// A merge has no public withdrawal.
 	api.AssertIsEqual(c.PartyIdentities[2], 0)
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{c.NullifierSecret})

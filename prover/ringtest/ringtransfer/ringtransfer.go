@@ -96,12 +96,8 @@ func (f policyFixture) registries(t testing.TB) (own, curator *ringregistry.Regi
 			return
 		}
 		seen[identity.String()] = true
-		escrowKey := zero
-		if f.Escrow && nullifierPk != nil {
-			escrowKey = ringregistry.EscrowKey(t, nullifierPk, ctHash(identity))
-		}
 		bits := new(big.Int).SetUint64(lists)
-		own.Apply(t, ringregistry.Entry{Member: identity, Mask: bits, Value: bits, EscrowKey: escrowKey, MintPolicy: zero, WithdrawalThreshold: zero, AddressHash: f.Addresses[identity.String()]})
+		own.Apply(t, ringregistry.Entry{Member: identity, Mask: bits, Value: bits, MintPolicy: zero, WithdrawalThreshold: zero})
 	}
 	for j, sender := range f.Senders {
 		identity := ringtest.AsBigInt(sender)
@@ -127,7 +123,7 @@ func (f policyFixture) registries(t testing.TB) (own, curator *ringregistry.Regi
 	mintPolicy := new(big.Int).Lsh(big.NewInt(1), 192)
 	mintPolicy.Or(mintPolicy, new(big.Int).Lsh(new(big.Int).SetUint64(p.Cap), 64))
 	mintPolicy.Or(mintPolicy, new(big.Int).SetUint64(p.CosignAbove))
-	own.Apply(t, ringregistry.Entry{Member: Asset(t), Mask: zero, Value: zero, EscrowKey: zero, MintPolicy: mintPolicy, WithdrawalThreshold: new(big.Int).SetUint64(p.Threshold)})
+	own.Apply(t, ringregistry.Entry{Member: Asset(t), Mask: zero, Value: zero, MintPolicy: mintPolicy, WithdrawalThreshold: new(big.Int).SetUint64(p.Threshold)})
 	return own, curator
 }
 
