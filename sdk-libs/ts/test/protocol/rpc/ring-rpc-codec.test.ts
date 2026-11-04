@@ -211,7 +211,7 @@ describe("prepareAuthorityTransfer", () => {
       ringProgramId: filled(7, 32) as Address,
     };
     const transfer = {
-      source: address(5),
+      sources: [address(5)],
       mint: filled(3, 32) as Address,
       payments: [{ recipient: address(9), amount: 250n }],
     };

@@ -2,7 +2,9 @@
 
 ## 0.1.0-alpha — unreleased
 
-- `PendingRelaySignature.verify` takes the signer, `transferTerms` returns the `RelayTransferTerms` `prepareRelay` sealed, and `forTransferTerms` lets each named public signer check the frame slot by slot before it signs. `encodeRelayTransferTerms` and `decodeRelayTransferTerms` carry the terms as JSON.
+- `AuthorityTransfer` takes `sources` in place of `source`, `RingDelegateRecoveredParams` takes `sources` as a list of `DelegateSource`, change returns to the owner of the last note spent and a source named twice refuses with `repeatedSource`. `DelegateTransfer.withCoSource` and `withTxViewingKey` name other owners' keys and the signed key.
+- `prepareEnrollRelay` and `prepareEnrollmentRelay` let an owner with no SOL enroll through Ring RPC, `verify` refuses a changed account with `Accounts` and a changed byte with `Data`.
+- `PendingRelaySignature.verify` takes the signer. `transferTerms(signer)` returns one public owner's `RelayTransferTerms`, its `SlotOpening`s and nullifiers, and `OwnerApproval` lets that owner rebuild its slots against the notes it holds before it signs, a frame spending a held note the terms do not name refuses with `SpendsUnnamedNote`. The sealing wallet's own `verify` refuses with `Unrequested`. `encodeRelayTransferTerms` and `decodeRelayTransferTerms` carry the terms as JSON. An outside co-signer holds no terms and refuses with `Unrequested`.
 - `RelayProofInputs` requires `coOwners`, a spend of a held co-owner crosses the wire with its key, and the `delegate` rail takes an optional `plan`.
 - `prepareRelay` forwards `coSigners`.
 - A confidential scan also reads the slot tag of each held viewing key, a delivered payment published under it reaches the wallet.

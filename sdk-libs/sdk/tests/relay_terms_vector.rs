@@ -1,44 +1,44 @@
 //! The TS terms test checks the same vector.
 
-use custom_ring_sdk::{RelayTransferTerms, TokenAccountCreate};
+use custom_ring_sdk::{RelayTransferTerms, SlotOpening, TokenAccountCreate};
 use serde_json::{json, Value};
 use solana_address::Address;
+use spr_indexer_api::{Hash, SerializablePubkey};
 
 const VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../test-vectors/rpc/relay_transfer_terms.json"
 );
 
-fn address(byte: u8) -> spr_indexer_api::SerializablePubkey {
+fn address(byte: u8) -> SerializablePubkey {
     Address::new_from_array([byte; 32]).into()
-}
-
-fn bytes(byte: u8, length: usize) -> spr_indexer_api::Base64String {
-    vec![byte; length].into()
 }
 
 fn compute_vector() -> Value {
     let terms = RelayTransferTerms {
         ring: address(1),
         fee_payer: address(2),
-        // The clamped secret of the 0x06 viewing key, the authority transfer vector's.
-        tx_viewing_key: serde_json::from_value(json!(
-            "AAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBkY="
-        ))
-        .unwrap(),
-        signers: vec![address(3), address(4)],
-        records: vec![bytes(5, 133), bytes(6, 133)],
-        tails: vec![bytes(7, 48), bytes(8, 48)],
-        nullifiers: vec![bytes(9, 32)],
-        legs: vec![bytes(10, 41)],
+        signer: address(3),
+        slots: vec![SlotOpening {
+            slot: 7,
+            owner: address(3),
+            nullifier_pk: Hash([4; 32]),
+            mint: address(5),
+            amount: u64::MAX,
+            blinding: Hash([6; 32]),
+            tree_id: 8,
+            data_hash: Hash([9; 32]),
+            ring_data_hash: Hash([10; 32]),
+        }],
+        nullifiers: vec![Hash([11; 32])],
         setup: vec![TokenAccountCreate {
-            owner: address(11),
-            mint: address(12),
-            token_program: address(13),
+            owner: address(12),
+            mint: address(13),
+            token_program: address(14),
         }],
     };
     json!({
-        "description": "One RelayTransferTerms the sealing wallet hands a public signer. The field bytes repeat one value each and carry no meaning, the viewing key is the clamped secret of the 0x06 key. wire is the exact JSON text Rust and TypeScript write and read.",
+        "description": "One public owner's RelayTransferTerms, each field repeating one byte value. The amount is u64 max and stays exact. wire is the exact JSON text Rust and TypeScript write and read.",
         "wire": serde_json::to_string(&terms).unwrap(),
     })
 }

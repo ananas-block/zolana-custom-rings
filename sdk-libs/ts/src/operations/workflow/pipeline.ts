@@ -14,6 +14,7 @@ import {
   meta,
   solanaOwnerIdentity,
   treeAddress,
+  ZERO_32,
 } from "@heliuslabs/zolana/internal";
 import { type RingProver } from "../../rpc/ports.js";
 import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/zolana/client";
@@ -26,13 +27,8 @@ import type {
 } from "@heliuslabs/zolana/interface";
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
 import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
-import type { ShieldedAddress, ViewingKey } from "@heliuslabs/zolana/keypair";
-import { encodeAuditRecord, encodeDataTail } from "../../protocol/codec/audit-stream.js";
-import {
-  interfaceTransferBytes,
-  type RelayTransferTerms,
-  type TokenAccountCreate,
-} from "../../rpc/relay-message.js";
+import { ShieldedPublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { RelayTransferTerms, TokenAccountCreate } from "../../rpc/relay-message.js";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
@@ -47,8 +43,6 @@ import {
   sealAudit,
   sealedAuditMessage,
   type SealedAudit,
-  outputRecord,
-  outputTail,
 } from "../../proof/audit-proof.js";
 import { type RingPolicy } from "../../protocol/codec/ring-codecs.js";
 import {
@@ -284,29 +278,42 @@ export function sealedTransferTerms(
     feePayer: Address;
     sealed: SealedTransfer;
     ownerSigners: readonly Address[];
-    coSigners: readonly Address[];
-    txViewingKey: ViewingKey;
     setup: readonly TokenAccountCreate[];
   }>,
-): RelayTransferTerms {
-  const { sealed } = input;
-  const outputs = sealed.published.map((slot) => slot.output);
-  return Object.freeze({
-    ring: input.ringProgramId,
-    feePayer: input.feePayer,
-    txViewingKey: input.txViewingKey.secretBytes(),
-    signers: Object.freeze([...input.ownerSigners, ...input.coSigners]),
-    records: Object.freeze(outputs.map((output) => encodeAuditRecord(outputRecord(output)))),
-    tails: Object.freeze(
-      framesData(outputs) ? outputs.map((output) => encodeDataTail(outputTail(output))) : [],
-    ),
-    nullifiers: Object.freeze(sealed.inputs.map((spent) => spent.nullifier())),
-    legs: Object.freeze(
-      sealed.proofInputs.externalData.interfaceTransfers.map((leg) =>
-        interfaceTransferBytes(interfaceTransferOf(leg)),
+): readonly RelayTransferTerms[] {
+  const { sealed, ringProgramId } = input;
+  const { proofInputs } = sealed;
+  return input.ownerSigners.map((signer) => {
+    const key = ShieldedPublicKey.fromEd25519(addressBytes(signer) as Bytes32);
+    const slots = sealed.published.flatMap(({ output }, slot) => {
+      const owner = output.ownerAddress;
+      if (owner === undefined || output.isDummy() || !owner.signingPublicKey.equals(key)) return [];
+      return [
+        Object.freeze({
+          slot,
+          owner: signer,
+          nullifierPk: owner.nullifierPublicKey,
+          mint: output.asset,
+          amount: output.amount,
+          blinding: output.blinding,
+          treeId: proofInputs.outputTreeId,
+          dataHash: output.dataHash ?? ZERO_32,
+          ringDataHash: output.ringDataHash ?? ZERO_32,
+        }),
+      ];
+    });
+    return Object.freeze({
+      ring: ringProgramId,
+      feePayer: input.feePayer,
+      signer,
+      slots: Object.freeze(slots),
+      nullifiers: Object.freeze(
+        proofInputs.inputUtxos
+          .filter((spent) => !spent.isDummy() && spent.utxo.owner.equals(key))
+          .map((spent) => spent.nullifier()),
       ),
-    ),
-    setup: input.setup,
+      setup: input.setup,
+    });
   });
 }
 

@@ -5,8 +5,7 @@ import {
   address,
   decompileTransactionMessage,
   getBase58Decoder,
-  getBase64Decoder,
-  getBase64Encoder,
+  getBase58Encoder,
   getCompiledTransactionMessageDecoder,
   getCompiledTransactionMessageEncoder,
   type Instruction,
@@ -19,19 +18,25 @@ import {
 import { getCreateAssociatedTokenAccountInstructionAsync } from "@heliuslabs/zolana/instructions";
 import type {
   Bytes32,
-  InterfaceTransfer,
   RequestContext,
   RingAssetDeposit,
   Signature,
 } from "@heliuslabs/zolana/interface";
 import { slotTag } from "../crypto/derivation/ring-stream.js";
 import {
+  addressBytes,
+  encodeBase58,
   equalBytes,
   isCanonicalField,
+  U64_MAX,
   LOADED_ACCOUNTS_DATA_SIZE_LIMIT,
-  Writer,
 } from "@heliuslabs/zolana/internal";
-import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import {
+  ShieldedPublicKey,
+  type ShieldedAddress,
+  type X25519PublicKey,
+} from "@heliuslabs/zolana/keypair";
+import { Utxo, type WalletUtxo } from "@heliuslabs/zolana/transaction";
 
 import { ringComputeUnitLimit } from "../operations/management/admin.js";
 import {
@@ -40,7 +45,13 @@ import {
   settleBufferedData,
 } from "../protocol/transaction/frame-buffer.js";
 import { RingError } from "../protocol/error.js";
-import { ringPolicyAddress } from "../protocol/pda/index.js";
+import { ringPolicyAddress, STORAGE_PROGRAM_ID } from "../protocol/pda/index.js";
+import {
+  ENROLL_COMPUTE_UNITS,
+  enrollRequestDigest,
+  relayEnrollInstruction,
+  type RelayEnrollInputs,
+} from "../protocol/ring-rpc/relay-enroll-inputs.js";
 import type {
   PrepareAuthorityTransferRequest,
   RelayQuote,
@@ -58,13 +69,7 @@ import {
   type RingRail,
 } from "../protocol/transaction/transact.js";
 import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
-import {
-  encodeAuditRecord,
-  encodeDataTail,
-  RecordKind,
-  type AuditRecord,
-} from "../protocol/codec/audit-stream.js";
-import { writeInterfaceTransfer } from "../protocol/codec/codecs.js";
+import { RecordKind, type AuditRecord } from "../protocol/codec/audit-stream.js";
 import {
   canonicalViewingKey,
   openSealedDisclosure,
@@ -73,8 +78,8 @@ import {
 import { x25519FromU } from "../crypto/keys/x25519.js";
 
 const base58 = getBase58Decoder();
-const base64Text = getBase64Decoder();
-const base64Bytes = getBase64Encoder();
+/** The engine floor holds `JSON.rawJSON`, the TS lib does not type it. */
+const rawJson = (JSON as unknown as { rawJSON(text: string): unknown }).rawJSON;
 const VERIFIED = Symbol("verified relay message");
 const MAX_SIGNATURES = 12;
 const MAX_INSTRUCTIONS = 64;
@@ -91,6 +96,7 @@ export type RelayMessageMismatch =
   | "Accounts"
   | "Recipients"
   | "TransactionKey"
+  | "SpendsUnnamedNote"
   | "SettlesBuffer"
   | "Unrequested"
   | "Signer";
@@ -130,27 +136,34 @@ export interface ExpectedDelegate {
   readonly rail: RingRail;
   readonly auditor: X25519PublicKey;
   readonly txViewingKey: Bytes32;
-  readonly source: ExpectedOwner;
+  /** Change returns to an input's owner. */
+  readonly sources: readonly ExpectedOwner[];
   readonly mint: Address;
   readonly payments: readonly ExpectedPayment[];
 }
 
-/** Rust `RelayTransferTerms`, a public signer refuses a frame differing by a byte. */
+/** Holds no transaction key, no other slot opens to the signer. */
 export interface RelayTransferTerms {
   readonly ring: Address;
   readonly feePayer: Address;
-  readonly txViewingKey: Bytes32;
-  /** Every public owner and co-signer the frame names, no other key signs. */
-  readonly signers: readonly Address[];
-  /** One `AuditRecord` encoding per published slot. */
-  readonly records: readonly Uint8Array[];
-  /** One `DataTail` encoding per published slot, empty on a frame with no data. */
-  readonly tails: readonly Uint8Array[];
-  readonly nullifiers: readonly Uint8Array[];
-  /** One wincode `InterfaceTransfer` per leg. */
-  readonly legs: readonly Uint8Array[];
+  readonly signer: Address;
+  readonly slots: readonly SlotOpening[];
+  /** The signer's notes the transfer spends. */
+  readonly nullifiers: readonly Bytes32[];
   /** The token accounts the fee payer creates ahead of the ring instruction. */
   readonly setup: readonly TokenAccountCreate[];
+}
+
+export interface SlotOpening {
+  readonly slot: number;
+  readonly owner: Address;
+  readonly nullifierPk: Bytes32;
+  readonly mint: Address;
+  readonly amount: bigint;
+  readonly blinding: Bytes32;
+  readonly treeId: number;
+  readonly dataHash: Bytes32;
+  readonly ringDataHash: Bytes32;
 }
 
 export interface TokenAccountCreate {
@@ -159,17 +172,36 @@ export interface TokenAccountCreate {
   readonly tokenProgram: Address;
 }
 
-export interface ExpectedTransfer {
-  readonly kind: "transfer";
+export interface ExpectedPublicOwner {
+  readonly kind: "publicOwner";
   readonly terms: RelayTransferTerms;
   readonly policy: Address;
-  /** From the ring account, a frame read under the wrong rail or auditor proves nothing. */
-  readonly rail: RingRail;
-  readonly auditor: X25519PublicKey;
   readonly setup: readonly Instruction[];
+  /** From the ring account, a frame read under the wrong rail proves nothing. */
+  readonly rail: RingRail;
+  readonly knownNullifiers: readonly Bytes32[];
 }
 
-export type ExpectedRelayMessage = ExpectedDeposit | ExpectedDelegate | ExpectedTransfer;
+/** The sealing wallet hands each owner its terms and signs nothing itself. */
+export interface ExpectedSealed {
+  readonly kind: "sealed";
+  readonly terms: readonly RelayTransferTerms[];
+}
+
+export interface ExpectedEnroll {
+  readonly kind: "enroll";
+  readonly feePayer: Address;
+  readonly policy: Address;
+  readonly inputs: RelayEnrollInputs;
+  readonly accounts: readonly AccountMeta[];
+}
+
+export type ExpectedRelayMessage =
+  | ExpectedDeposit
+  | ExpectedDelegate
+  | ExpectedSealed
+  | ExpectedPublicOwner
+  | ExpectedEnroll;
 
 /** Rust `VerifiedMessage`, only a check builds one. */
 export class VerifiedRelayMessage {
@@ -188,7 +220,8 @@ export class VerifiedRelayMessage {
     if (signer.address !== this.signer) throw mismatch("Signer");
     const transaction = {
       messageBytes: this.#bytes as unknown as TransactionMessageBytes,
-      signatures: {},
+      // A kit keypair signs only an address the transaction lists.
+      signatures: { [signer.address]: null },
     } as unknown as Parameters<TransactionPartialSigner["signTransactions"]>[0][number];
     const [signatures] = await signer.signTransactions(
       [transaction],
@@ -243,7 +276,7 @@ export async function expectedDelegate(
     rail: ringRailOf(RingInstructionTag.authorityTransfer, config.mode),
     auditor: config.auditorPublicKey,
     txViewingKey: request.txViewingKey,
-    source: expectedOwner(transfer.source),
+    sources: Object.freeze(transfer.sources.map(expectedOwner)),
     mint: transfer.mint,
     payments: Object.freeze(
       transfer.payments.map((payment) =>
@@ -261,76 +294,114 @@ function expectedOwner(address: ShieldedAddress): ExpectedOwner {
   });
 }
 
-const TERMS_FIELDS = [
-  "ring",
-  "feePayer",
-  "txViewingKey",
-  "signers",
-  "records",
-  "tails",
-  "nullifiers",
-  "legs",
-  "setup",
-];
-
-/** Rust's serde JSON byte for byte. */
+/** Rust's serde JSON byte for byte, an amount past the safe integers stays exact. */
 export function encodeRelayTransferTerms(terms: RelayTransferTerms): string {
-  const text = (bytes: Uint8Array): string => base64Text.decode(bytes);
   return JSON.stringify({
     ring: terms.ring,
     feePayer: terms.feePayer,
-    txViewingKey: text(terms.txViewingKey),
-    signers: terms.signers,
-    records: terms.records.map(text),
-    tails: terms.tails.map(text),
-    nullifiers: terms.nullifiers.map(text),
-    legs: terms.legs.map(text),
+    signer: terms.signer,
+    slots: terms.slots.map((opening) => ({
+      slot: opening.slot,
+      owner: opening.owner,
+      nullifierPk: encodeBase58(opening.nullifierPk),
+      mint: opening.mint,
+      amount: rawJson(opening.amount.toString()),
+      blinding: encodeBase58(opening.blinding),
+      treeId: opening.treeId,
+      dataHash: encodeBase58(opening.dataHash),
+      ringDataHash: encodeBase58(opening.ringDataHash),
+    })),
+    nullifiers: terms.nullifiers.map(encodeBase58),
     setup: terms.setup,
   });
 }
 
 export function decodeRelayTransferTerms(json: string): RelayTransferTerms {
   return withMismatch("Undecodable", () => {
-    const wire = JSON.parse(json) as Record<string, unknown>;
-    if (Object.keys(wire).some((name) => !TERMS_FIELDS.includes(name)))
-      throw mismatch("Undecodable");
-    const bytes = (value: unknown): Uint8Array => {
-      const decoded = new Uint8Array(base64Bytes.encode(value as string));
-      if (base64Text.decode(decoded) !== value) throw mismatch("Undecodable");
-      return decoded;
-    };
-    const list = (name: string): readonly unknown[] => wire[name] as readonly unknown[];
-    const txViewingKey = bytes(wire["txViewingKey"]);
-    if (txViewingKey.length !== 32) throw mismatch("Undecodable");
+    const wire = JSON.parse(json, (key: string, value: unknown, context?: { source?: string }) => {
+      if (typeof value !== "number") return value;
+      // Serde refuses `7.0` and `-0` for an integer.
+      if (!/^(0|[1-9][0-9]*)$/.test(context?.source ?? "")) throw mismatch("Undecodable");
+      return key === "amount" ? BigInt(context?.source ?? "") : value;
+    }) as unknown;
+    const row = fields(wire, ["ring", "feePayer", "signer", "slots", "nullifiers", "setup"]);
     return Object.freeze({
-      ring: address(wire["ring"] as string),
-      feePayer: address(wire["feePayer"] as string),
-      txViewingKey: txViewingKey as Bytes32,
-      signers: list("signers").map((signer) => address(signer as string)),
-      records: list("records").map(bytes),
-      tails: list("tails").map(bytes),
-      nullifiers: list("nullifiers").map(bytes),
-      legs: list("legs").map(bytes),
-      setup: list("setup").map((entry) => {
-        const { owner, mint, tokenProgram, ...unknown } = entry as Record<string, string>;
-        if (Object.keys(unknown).length !== 0) throw mismatch("Undecodable");
+      ring: address(row["ring"] as string),
+      feePayer: address(row["feePayer"] as string),
+      signer: address(row["signer"] as string),
+      slots: (row["slots"] as readonly unknown[]).map(decodeSlotOpening),
+      nullifiers: (row["nullifiers"] as readonly unknown[]).map(hash32),
+      setup: (row["setup"] as readonly unknown[]).map((entry) => {
+        const create = fields(entry, ["owner", "mint", "tokenProgram"]);
         return Object.freeze({
-          owner: address(owner as string),
-          mint: address(mint as string),
-          tokenProgram: address(tokenProgram as string),
+          owner: address(create["owner"] as string),
+          mint: address(create["mint"] as string),
+          tokenProgram: address(create["tokenProgram"] as string),
         });
       }),
     });
   });
 }
 
-export async function expectedTransfer(
-  terms: RelayTransferTerms,
-  config: DelegateRingConfig,
-): Promise<ExpectedTransfer> {
-  withMismatch("TransactionKey", () =>
-    canonicalViewingKey(terms.txViewingKey.slice() as Bytes32),
-  ).destroy();
+function decodeSlotOpening(value: unknown): SlotOpening {
+  const row = fields(value, [
+    "slot",
+    "owner",
+    "nullifierPk",
+    "mint",
+    "amount",
+    "blinding",
+    "treeId",
+    "dataHash",
+    "ringDataHash",
+  ]);
+  return Object.freeze({
+    slot: integer(row["slot"], 0xffff_ffff),
+    owner: address(row["owner"] as string),
+    nullifierPk: hash32(row["nullifierPk"]),
+    mint: address(row["mint"] as string),
+    amount: u64Amount(row["amount"]),
+    blinding: hash32(row["blinding"]),
+    treeId: integer(row["treeId"], 0xffff),
+    dataHash: hash32(row["dataHash"]),
+    ringDataHash: hash32(row["ringDataHash"]),
+  });
+}
+
+/** Rust `deny_unknown_fields` with every field required. */
+function fields(value: unknown, names: readonly string[]): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null) throw mismatch("Undecodable");
+  const present = Object.keys(value);
+  if (present.length !== names.length || !names.every((name) => present.includes(name)))
+    throw mismatch("Undecodable");
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function hash32(value: unknown): Bytes32 {
+  const bytes = new Uint8Array(getBase58Encoder().encode(value as string));
+  if (bytes.length !== 32) throw mismatch("Undecodable");
+  return bytes as Bytes32;
+}
+
+function integer(value: unknown, limit: number): number {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > limit)
+    throw mismatch("Undecodable");
+  return value as number;
+}
+
+function u64Amount(value: unknown): bigint {
+  if (typeof value !== "bigint" || value < 0n || value > U64_MAX) throw mismatch("Undecodable");
+  return value;
+}
+
+export async function expectedPublicOwner(
+  input: Readonly<{
+    terms: RelayTransferTerms;
+    config: DelegateRingConfig;
+    knownNotes: readonly Pick<WalletUtxo, "nullifier">[];
+  }>,
+): Promise<ExpectedPublicOwner> {
+  const { terms, config } = input;
   const [policy, setup] = await Promise.all([
     ringPolicyAddress(terms.ring),
     Promise.all(
@@ -345,12 +416,12 @@ export async function expectedTransfer(
     ),
   ]);
   return Object.freeze({
-    kind: "transfer",
+    kind: "publicOwner",
     terms,
     policy,
-    rail: ringRailOf(RingInstructionTag.transfer, config.mode),
-    auditor: config.auditorPublicKey,
     setup: Object.freeze(setup),
+    rail: ringRailOf(RingInstructionTag.transfer, config.mode),
+    knownNullifiers: Object.freeze(input.knownNotes.map((note) => note.nullifier)),
   });
 }
 
@@ -360,6 +431,8 @@ export function checkRelayMessage(
   signer: Address,
 ): VerifiedRelayMessage {
   if (expected.kind === "deposit") return checkDepositMessage(expected, message);
+  if (expected.kind === "enroll") return checkEnrollMessage(expected, message);
+  if (expected.kind === "sealed") throw mismatch("Unrequested");
   const envelope = frameEnvelope(expected, signer, frameTag(expected));
   const { data, accounts } = open(envelope, message);
   if (data[0] === RingInstructionTag.settleBuffered) throw mismatch("SettlesBuffer");
@@ -373,9 +446,11 @@ export function checkDepositMessage(
   message: Uint8Array,
 ): VerifiedRelayMessage {
   const envelope: Envelope = {
-    ...expected,
+    program: expected.ring,
+    policy: expected.policy,
+    units: ringComputeUnitLimit(RingInstructionTag.deposit),
+    feePayer: expected.feePayer,
     signer: expected.depositor,
-    tag: RingInstructionTag.deposit,
     setup: [],
   };
   const instruction = open(envelope, message);
@@ -395,13 +470,47 @@ export function checkDepositMessage(
   return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
 }
 
+export async function expectedEnroll(
+  inputs: RelayEnrollInputs,
+  feePayer: Address,
+): Promise<ExpectedEnroll> {
+  const [policy, proved] = await Promise.all([
+    ringPolicyAddress(inputs.ringProgramId),
+    relayEnrollInstruction(inputs, feePayer),
+  ]);
+  return Object.freeze({
+    kind: "enroll",
+    feePayer,
+    policy,
+    inputs,
+    accounts: proved.accounts ?? [],
+  });
+}
+
+function checkEnrollMessage(expected: ExpectedEnroll, message: Uint8Array): VerifiedRelayMessage {
+  const envelope: Envelope = {
+    program: STORAGE_PROGRAM_ID,
+    policy: expected.policy,
+    units: ENROLL_COMPUTE_UNITS,
+    feePayer: expected.feePayer,
+    signer: expected.inputs.owner,
+    setup: [],
+  };
+  const { data, accounts } = open(envelope, message);
+  if (!sameAccounts(accounts, expected.accounts)) throw mismatch("Accounts");
+  const signed = enrollRequestDigest({ ...expected.inputs, instructionData: data });
+  if (!equalBytes(signed, enrollRequestDigest(expected.inputs))) throw mismatch("Data");
+  return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
+}
+
 /** The account a settling message reads its frame from, `undefined` on an inline message. */
 export function settledBufferOf(
   expected: ExpectedRelayMessage,
   message: Uint8Array,
   signer: Address,
 ): Address | undefined {
-  if (expected.kind === "deposit") return undefined;
+  if (expected.kind === "deposit" || expected.kind === "enroll" || expected.kind === "sealed")
+    return undefined;
   const { data, accounts } = open(
     frameEnvelope(expected, signer, RingInstructionTag.settleBuffered),
     message,
@@ -416,7 +525,8 @@ export function checkSettledMessage(
   buffer: Uint8Array,
   signer: Address,
 ): VerifiedRelayMessage {
-  if (expected.kind === "deposit") throw mismatch("Data");
+  if (expected.kind === "sealed") throw mismatch("Unrequested");
+  if (expected.kind === "deposit" || expected.kind === "enroll") throw mismatch("Data");
   const envelope = frameEnvelope(expected, signer, RingInstructionTag.settleBuffered);
   const { data, accounts } = open(envelope, message);
   if (accounts.length < 2) throw mismatch("Accounts");
@@ -427,39 +537,40 @@ export function checkSettledMessage(
   return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
 }
 
-function frameTag(expected: ExpectedDelegate | ExpectedTransfer): RingInstructionTag {
+function frameTag(expected: ExpectedDelegate | ExpectedPublicOwner): RingInstructionTag {
   return expected.kind === "delegate"
     ? RingInstructionTag.authorityTransfer
     : RingInstructionTag.transfer;
 }
 
 function frameEnvelope(
-  expected: ExpectedDelegate | ExpectedTransfer,
+  expected: ExpectedDelegate | ExpectedPublicOwner,
   signer: Address,
   tag: RingInstructionTag,
 ): Envelope {
   if (expected.kind === "delegate")
     return {
-      ring: expected.ring,
+      program: expected.ring,
       policy: expected.policy,
+      units: ringComputeUnitLimit(tag),
       feePayer: expected.feePayer,
       signer: expected.delegate,
-      tag,
       setup: [],
     };
-  if (!expected.terms.signers.includes(signer)) throw mismatch("Unrequested");
+  const { terms, policy, setup } = expected;
+  if (terms.signer !== signer) throw mismatch("Unrequested");
   return {
-    ring: expected.terms.ring,
-    policy: expected.policy,
-    feePayer: expected.terms.feePayer,
+    program: terms.ring,
+    policy,
+    units: ringComputeUnitLimit(tag),
+    feePayer: terms.feePayer,
     signer,
-    tag,
-    setup: expected.setup,
+    setup,
   };
 }
 
 function checkFrame(
-  expected: ExpectedDelegate | ExpectedTransfer,
+  expected: ExpectedDelegate | ExpectedPublicOwner,
   signer: Address,
   data: Uint8Array,
   accounts: readonly AccountMeta[],
@@ -468,7 +579,7 @@ function checkFrame(
   if (data[0] !== tag) throw mismatch("Data");
   const frame = withMismatch("Data", () => RingTransactData.parse(data.subarray(1), expected.rail));
   if (expected.kind === "delegate") checkMoved(expected, frame);
-  else checkTerms(expected, frame);
+  else checkOpenings(expected, frame);
   const envelope = frameEnvelope(expected, signer, tag);
   const named = accounts.filter((meta) => meta.address === envelope.signer);
   const signsOnce =
@@ -498,7 +609,7 @@ function checkMoved(expected: ExpectedDelegate, frame: RingTransactData): void {
         owns(payment.owner, record),
     );
     if (paid < 0) {
-      if (!owns(expected.source, record)) throw mismatch("Recipients");
+      if (!expected.sources.some((source) => owns(source, record))) throw mismatch("Recipients");
       return;
     }
     const payment = unpaid[paid];
@@ -533,9 +644,6 @@ function openStream(
   frame: RingTransactData,
 ): RingDisclosure {
   return withMismatch("Data", () => {
-    const tails = frame.outputs.flatMap((output) =>
-      output.tail === undefined ? [] : [output.tail],
-    );
     const opened = openSealedDisclosure(txViewingKey, auditor, {
       layout: RingTransactData.streamLayout(frame),
       salt: frame.salt,
@@ -543,7 +651,6 @@ function openStream(
         ephemeralPublicKey: x25519FromU(frame.txViewingU),
         envelope: frame.envelope,
         records: frame.outputs.map((output) => output.record),
-        ...(frame.hasData ? { tails } : {}),
       },
     });
     const { envelope } = opened;
@@ -564,39 +671,48 @@ function openStream(
   });
 }
 
-function checkTerms(expected: ExpectedTransfer, frame: RingTransactData): void {
-  const { terms } = expected;
-  checkTransactionKey(terms.txViewingKey, frame);
-  const { records, tails } = openStream(terms.txViewingKey, expected.auditor, frame);
-  if (frame.outputs.length !== terms.records.length) throw mismatch("Recipients");
-  records.forEach((record, slot) => {
-    const named = terms.records[slot];
-    if (named === undefined || !equalBytes(encodeAuditRecord(record), named))
+function checkOpenings(expected: ExpectedPublicOwner, frame: RingTransactData): void {
+  const { terms, knownNullifiers } = expected;
+  if (terms.slots.length === 0 && terms.nullifiers.length === 0) throw mismatch("Unrequested");
+  for (const opening of terms.slots) {
+    const published = frame.outputs[opening.slot];
+    if (
+      published === undefined ||
+      opening.owner !== terms.signer ||
+      !equalBytes(
+        withMismatch("Recipients", () => openingHash(opening, terms.ring)),
+        published.hash,
+      )
+    )
       throw mismatch("Recipients");
-    const tail = tails?.[slot];
-    if (tail === undefined) return;
-    const namedTail = terms.tails[slot];
-    if (namedTail === undefined || !equalBytes(encodeDataTail(tail), namedTail))
-      throw mismatch("Data");
-  });
-  const sameBytes = (found: readonly Uint8Array[], named: readonly Uint8Array[]): boolean =>
-    found.length === named.length &&
-    found.every((bytes, index) => {
-      const other = named[index];
-      return other !== undefined && equalBytes(bytes, other);
-    });
+  }
+  const among = (list: readonly Uint8Array[], nullifier: Uint8Array): boolean =>
+    list.some((held) => equalBytes(held, nullifier));
+  // A named note the wallet cannot place means no list stood behind the check.
   if (
-    frame.hasData === (terms.tails.length === 0) ||
-    !sameBytes(frame.nullifiers, terms.nullifiers) ||
-    !sameBytes(frame.interfaceTransfers.map(interfaceTransferBytes), terms.legs)
+    !terms.nullifiers.every(
+      (named) => among(frame.nullifiers, named) && among(knownNullifiers, named),
+    )
   )
     throw mismatch("Data");
+  if (
+    frame.nullifiers.some(
+      (spent) => among(knownNullifiers, spent) && !among(terms.nullifiers, spent),
+    )
+  )
+    throw mismatch("SpendsUnnamedNote");
 }
 
-export function interfaceTransferBytes(transfer: InterfaceTransfer): Uint8Array {
-  const writer = new Writer();
-  writeInterfaceTransfer(writer, transfer);
-  return writer.finish();
+export function openingHash(opening: SlotOpening, ring: Address): Bytes32 {
+  return new Utxo({
+    owner: ShieldedPublicKey.fromEd25519(addressBytes(opening.owner) as Bytes32),
+    asset: opening.mint,
+    amount: opening.amount,
+    blinding: opening.blinding,
+    ringProgramId: ring,
+  })
+    .proofInput(opening.nullifierPk, opening.treeId, opening.dataHash, opening.ringDataHash)
+    .hash();
 }
 
 export function mismatch(reason: RelayMessageMismatch): RingError {
@@ -604,11 +720,11 @@ export function mismatch(reason: RelayMessageMismatch): RingError {
 }
 
 interface Envelope {
-  readonly ring: Address;
+  readonly program: Address;
   readonly policy: Address;
+  readonly units: number;
   readonly feePayer: Address;
   readonly signer: Address;
-  readonly tag: RingInstructionTag;
   /** Ahead of the ring instruction, exactly these. */
   readonly setup: readonly Instruction[];
 }
@@ -649,7 +765,7 @@ function open(envelope: Envelope, bytes: Uint8Array): RingInstruction {
   const config = message.config ?? {};
   const withinBudget =
     config.computeUnitLimit !== undefined &&
-    config.computeUnitLimit <= ringComputeUnitLimit(envelope.tag) &&
+    config.computeUnitLimit <= envelope.units &&
     config.loadedAccountsDataSizeLimit !== undefined &&
     config.loadedAccountsDataSizeLimit <= LOADED_ACCOUNTS_DATA_SIZE_LIMIT &&
     config.heapSize === undefined;
@@ -671,7 +787,7 @@ function open(envelope: Envelope, bytes: Uint8Array): RingInstruction {
     );
   });
   if (!sameSetup) throw mismatch("Instructions");
-  if (instruction.programAddress !== envelope.ring) throw mismatch("Program");
+  if (instruction.programAddress !== envelope.program) throw mismatch("Program");
   return {
     data: new Uint8Array(instruction.data ?? []),
     accounts: instruction.accounts ?? [],

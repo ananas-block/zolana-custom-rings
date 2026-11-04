@@ -252,7 +252,9 @@ export type {
   RingRelayInput,
 } from "../operations/payments/transfer-rails.js";
 export {
+  OwnerApproval,
   PendingRelaySignature,
+  type OwnerApprovalInput,
   PreparedAuthorityTransfer,
   PreparedRelay,
   relayId,
@@ -264,6 +266,7 @@ export {
   decodeRelayTransferTerms,
   encodeRelayTransferTerms,
   type RelayTransferTerms,
+  type SlotOpening,
   type TokenAccountCreate,
 } from "../rpc/relay-message.js";
 export type { RelayMessageMismatch } from "../rpc/relay-message.js";
@@ -337,6 +340,7 @@ export {
   createRingDelegateSubmission,
 } from "../operations/management/delegate.js";
 export type {
+  DelegateSource,
   RingDelegateRecoveredClient,
   RingDelegateRecoveredParams,
   RingDelegateTransferClient,
@@ -565,6 +569,10 @@ export {
   type EnrollmentSeal,
   type WriteOwnerGrant,
 } from "../operations/management/enrollment.js";
+export {
+  prepareEnrollRelay,
+  prepareEnrollmentRelay,
+} from "../operations/management/enroll-relay.js";
 export {
   TRACKING_CAPACITY,
   TRACKING_EMPTY_ROOT,

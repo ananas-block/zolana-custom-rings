@@ -1,5 +1,6 @@
 /** The Ring RPC relay a wallet sends its transfer through, Rust `relay`. */
 import type { ChainReader } from "@heliuslabs/zolana/client";
+import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
 import {
   type Address,
   getBase58Decoder,
@@ -26,7 +27,7 @@ import type {
 import {
   checkRelayMessage,
   checkSettledMessage,
-  expectedTransfer,
+  expectedPublicOwner,
   type RelayTransferTerms,
   type DelegateRingConfig,
   settledBufferOf,
@@ -156,19 +157,13 @@ export class PendingRelaySignature {
     Object.freeze(this);
   }
 
-  /** A public signer other than the sealing wallet, `terms` is what it agreed to. */
-  static async forTransferTerms(
-    relayId: Hash,
-    message: Uint8Array,
-    terms: RelayTransferTerms,
-    config: DelegateRingConfig,
-  ): Promise<PendingRelaySignature> {
-    return new PendingRelaySignature(relayId, message, await expectedTransfer(terms, config));
-  }
-
-  /** What the sealing wallet hands each public signer. */
-  transferTerms(): RelayTransferTerms | undefined {
-    return this.#expected?.kind === "transfer" ? this.#expected.terms : undefined;
+  /** What the wallet sealed for one public owner, an outside co-signer holds none. */
+  transferTerms(signer: Address): RelayTransferTerms | undefined {
+    if (this.#expected?.kind === "sealed")
+      return this.#expected.terms.find((terms) => terms.signer === signer);
+    return this.#expected?.kind === "publicOwner" && this.#expected.terms.signer === signer
+      ? this.#expected.terms
+      : undefined;
   }
 
   /** Rust `PendingSignature::verify`, the expectation comes from the wallet's own request. */
@@ -217,4 +212,32 @@ export class PendingRelaySignature {
       context,
     );
   }
+}
+
+/** The notes are required, the owner's signature is the only gate on them. */
+export class OwnerApproval {
+  readonly #input: OwnerApprovalInput;
+
+  constructor(input: OwnerApprovalInput) {
+    this.#input = input;
+    Object.freeze(this);
+  }
+
+  async pending(): Promise<PendingRelaySignature> {
+    const { relayId, message, terms, config, knownNotes } = this.#input;
+    return new PendingRelaySignature(
+      relayId,
+      message,
+      await expectedPublicOwner({ terms, config, knownNotes }),
+    );
+  }
+}
+
+export interface OwnerApprovalInput {
+  readonly relayId: Hash;
+  readonly message: Uint8Array;
+  readonly terms: RelayTransferTerms;
+  readonly config: DelegateRingConfig;
+  /** Every note the wallet holds, the nullifiers are the wallet's own derivation. */
+  readonly knownNotes: readonly Pick<WalletUtxo, "nullifier">[];
 }

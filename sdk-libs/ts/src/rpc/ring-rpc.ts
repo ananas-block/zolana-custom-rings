@@ -324,7 +324,7 @@ export function authorityTransferAttestation(
       AUTHORITY_TRANSFER_DOMAIN,
       ...targetLines(input.target),
       `delegate: ${input.delegate}`,
-      `source: ${shieldedAddressText(input.transfer.source)}`,
+      ...input.transfer.sources.map((source) => `source: ${shieldedAddressText(source)}`),
       `mint: ${input.transfer.mint}`,
       ...input.transfer.payments.map(
         (payment) => `payment: ${shieldedAddressText(payment.recipient)} ${payment.amount}`,

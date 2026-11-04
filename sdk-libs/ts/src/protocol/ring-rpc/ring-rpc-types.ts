@@ -235,9 +235,9 @@ export interface AuthorityPayment {
   readonly amount: bigint;
 }
 
-/** Rust `AuthorityTransfer`, the change returns to `source`. */
+/** Rust `AuthorityTransfer`, change returns to an input's owner. */
 export interface AuthorityTransfer {
-  readonly source: ShieldedAddress;
+  readonly sources: readonly ShieldedAddress[];
   readonly mint: Address;
   readonly payments: readonly AuthorityPayment[];
 }

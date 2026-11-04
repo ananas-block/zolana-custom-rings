@@ -6,6 +6,7 @@ import {
   equalBytes,
   ownerSignerAddresses,
   prepareRingAuthorityTransfer,
+  addressBytes,
 } from "@heliuslabs/zolana/internal";
 import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
 import type {
@@ -23,7 +24,7 @@ import type {
 } from "@heliuslabs/zolana/interface";
 import { associatedTokenAddress } from "@heliuslabs/zolana/internal";
 import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
-import { expectedTransfer, type TokenAccountCreate } from "../../rpc/relay-message.js";
+import type { TokenAccountCreate } from "../../rpc/relay-message.js";
 import { ShieldedPublicKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 import type {
   AssetRegistry,
@@ -86,6 +87,7 @@ import {
   checkCoOwnerKeys,
   checkZeroKeyInputs,
   ringSpendAuthority,
+  standIn,
   type CoOwner,
 } from "./ring-spend.js";
 
@@ -279,7 +281,7 @@ export class CustomRingTransfer {
           wideOwners: sealed.wideOwners,
           assets: this.#input.assets,
           listSalts: relayListSalts(config, this.#input.listSalts ?? []),
-          coOwners: relayCoOwners(staged.ownerSigners, this.#coOwners),
+          coOwners: this.#coOwners,
         });
         const coSigners = this.#input.coSigners ?? [];
         const terms = sealedTransferTerms({
@@ -287,8 +289,6 @@ export class CustomRingTransfer {
           feePayer: quote.feePayer,
           sealed,
           ownerSigners: staged.ownerSigners,
-          coSigners,
-          txViewingKey: staged.rail.txViewingKey,
           setup: await tokenAccountCreates(input.tokenAccountSetup, staged.withdrawal),
         });
         return new PreparedRelay(
@@ -305,7 +305,7 @@ export class CustomRingTransfer {
                 : { tokenAccountSetup: input.tokenAccountSetup }),
             },
           },
-          await expectedTransfer(terms, config),
+          Object.freeze({ kind: "sealed", terms }),
         );
       } finally {
         payload?.fill(0);
@@ -705,7 +705,7 @@ export class AnonymousTransfer {
           wideOwners: sealed.wideOwners,
           assets: this.#owner.assets,
           listSalts: relayListSalts(config, this.#owner.listSalts ?? []),
-          coOwners: relayCoOwners(staged.ownerSigners, this.#coOwners),
+          coOwners: spendingCoOwners(staged.ownerSigners, proofInputs.inputUtxos, this.#coOwners),
         });
         const coSigners = this.#owner.coSigners ?? [];
         const terms = sealedTransferTerms({
@@ -713,8 +713,6 @@ export class AnonymousTransfer {
           feePayer: quote.feePayer,
           sealed,
           ownerSigners: staged.ownerSigners,
-          coSigners,
-          txViewingKey: staged.rail.txViewingKey,
           setup: await tokenAccountCreates(input.tokenAccountSetup, staged.withdrawal),
         });
         return Object.freeze({
@@ -732,7 +730,7 @@ export class AnonymousTransfer {
                   : { tokenAccountSetup: input.tokenAccountSetup }),
               },
             },
-            await expectedTransfer(terms, config),
+            Object.freeze({ kind: "sealed", terms }),
           ),
         });
       } finally {
@@ -1077,6 +1075,10 @@ export interface DelegateTransferInput {
   /** Completes the source's inputs with the key the delegate recovered. */
   readonly sourceProofs: ProofAuthority;
   readonly inputs: readonly ProofInputUtxo[];
+  /** Owners of the inputs `source` does not own. */
+  readonly coSources?: readonly CoOwner[];
+  /** The key the signed request names, fresh unless named. */
+  readonly txViewingKey?: Bytes32;
   readonly outputs: readonly DelegateOutput[];
   readonly withdrawal?: DelegateWithdrawal;
   readonly assets: AssetRegistry;
@@ -1101,6 +1103,17 @@ export class DelegateTransfer {
 
   withBufferedSettlement(): DelegateTransfer {
     return new DelegateTransfer({ ...this.#input, bufferedSettlement: true });
+  }
+
+  withTxViewingKey(txViewingKey: Bytes32): DelegateTransfer {
+    return new DelegateTransfer({ ...this.#input, txViewingKey });
+  }
+
+  withCoSource(coSource: CoOwner): DelegateTransfer {
+    return new DelegateTransfer({
+      ...this.#input,
+      coSources: [...(this.#input.coSources ?? []), Object.freeze({ ...coSource })],
+    });
   }
 
   prove(client: DelegateTransferClient, context?: RequestContext): Promise<ProvenRingTransfer> {
@@ -1129,8 +1142,17 @@ export class DelegateTransfer {
     if (config.delegate !== input.delegate)
       throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "unauthorized" } });
     const railKind = ringRail(RingInstructionTag.authorityTransfer, config);
-    // SPP's builder holds every input to one owner, a move of several victims repeats per owner.
-    if (input.inputs.some((spent) => !spent.utxo.owner.equals(input.source.signingPublicKey)))
+    const coSources = input.coSources ?? [];
+    const named = coSources.map((coSource) =>
+      ShieldedPublicKey.fromEd25519(addressBytes(coSource.owner) as Bytes32),
+    );
+    if (
+      input.inputs.some(
+        (spent) =>
+          !spent.utxo.owner.equals(input.source.signingPublicKey) &&
+          !named.some((owner) => spent.utxo.owner.equals(owner)),
+      )
+    )
       throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
     const first = input.inputs[0];
     if (first === undefined)
@@ -1141,9 +1163,11 @@ export class DelegateTransfer {
     });
     checkWithdrawalAccounts(prepared, input.withdrawal?.accounts);
     const hasExit = input.outputs.some((output) => output.exit === true);
-    // The member never signs, a fresh transaction key seals the move to the auditor.
+    // The member never signs, the transaction key seals the move to the auditor.
     const rail = new RingOutputRail(
-      ViewingKey.generate(),
+      input.txViewingKey === undefined
+        ? ViewingKey.generate()
+        : ViewingKey.fromBytes(input.txViewingKey.slice() as Bytes32),
       prepared.firstNullifier,
       isAnonymousFrame(railKind)
         ? { kind: "anonymous", plan: delegatePlan(input.outputs) }
@@ -1156,6 +1180,7 @@ export class DelegateTransfer {
         assets: input.assets,
         instructionDiscriminator: InstructionTag.ringAuthorityTransact,
       });
+      checkCoOwnerKeys(proofInputs, input.source, coSources);
       return await proveStagedTransfer(
         {
           client,
@@ -1183,7 +1208,19 @@ export class DelegateTransfer {
                 (hasExit
                   ? client.proveRingAuthorityExitTransact
                   : client.proveRingAuthorityTransact
-                ).call(client, inputs, ringProgramId, input.sourceProofs, proveContext, client),
+                ).call(
+                  client,
+                  inputs,
+                  ringProgramId,
+                  ringSpendAuthority({
+                    keys: input.sourceProofs,
+                    coOwners: coSources,
+                    proofInputs: inputs,
+                    sender: input.source,
+                  }),
+                  proveContext,
+                  client,
+                ),
             },
           },
           ...approvedStage(approval, prepared),
@@ -1215,13 +1252,15 @@ function prepareDelegateTransfer(
   const { withdrawal } = input;
   const planned = {
     owner: input.source,
-    inputs: input.inputs,
+    inputs: input.inputs.map((spent) => standIn(spent, input.source)),
     payer: input.payer,
     ringProgramId: input.ringProgramId,
     outputTreeId,
   };
+  const spendingReal = (prepared: PreparedTransfer): PreparedTransfer =>
+    Object.freeze({ ...prepared, inputs: Object.freeze([...input.inputs]) });
   if (withdrawal === undefined)
-    return prepareRingAuthorityTransfer({ ...planned, outputs: input.outputs });
+    return spendingReal(prepareRingAuthorityTransfer({ ...planned, outputs: input.outputs }));
   const prepared = prepareRingAuthorityTransfer({
     ...planned,
     outputs: [
@@ -1230,7 +1269,7 @@ function prepareDelegateTransfer(
     ],
   });
   const leg = prepared.outputs.length - 1;
-  return Object.freeze({
+  return spendingReal({
     ...prepared,
     interfaceTransfers: Object.freeze([settlementLeg(withdrawal)]),
     outputs: Object.freeze(prepared.outputs.slice(0, leg)),
@@ -1269,6 +1308,20 @@ function suppliedCoSigners(
   return coSigners === undefined ? {} : { coSigners };
 }
 
+/** A held co-owner spending nothing keeps its secret from Ring RPC. */
+function spendingCoOwners(
+  ownerSigners: readonly Address[],
+  inputs: readonly ProofInputUtxo[],
+  coOwners: readonly CoOwner[],
+): readonly CoOwner[] {
+  return ownerSigners.flatMap((owner) => {
+    const key = ShieldedPublicKey.fromEd25519(addressBytes(owner) as Bytes32);
+    const held = coOwners.find((coOwner) => coOwner.owner === owner);
+    const spends = inputs.some((spent) => !spent.isDummy() && spent.utxo.owner.equals(key));
+    return held !== undefined && spends ? [held] : [];
+  });
+}
+
 /** Rust `RelayProofInputs::token_account_setup`, each account the withdrawal pays. */
 async function tokenAccountCreates(
   setup: readonly TokenAccountSetup[] | undefined,
@@ -1289,14 +1342,6 @@ async function tokenAccountCreates(
       return Object.freeze({ owner: entry.owner, mint: entry.mint, tokenProgram });
     }),
   );
-}
-
-/** A signer whose key the seal holds spends beside the sender, any other owns no input. */
-function relayCoOwners(
-  ownerSigners: readonly Address[],
-  coOwners: readonly CoOwner[],
-): readonly CoOwner[] {
-  return coOwners.filter((coOwner) => ownerSigners.includes(coOwner.owner));
 }
 
 /** The approval a pipeline runs, bound to the prepared transfer the rail proves. */

@@ -1,6 +1,18 @@
 /** Rust `RelayEnrollInputs` in wincode. */
-import { addressBytes, concatBytes, sha256, Writer } from "@heliuslabs/zolana/internal";
+import {
+  addressBytes,
+  concatBytes,
+  instruction,
+  meta,
+  sha256,
+  SYSTEM_PROGRAM,
+  Writer,
+  type SignerAccount,
+} from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
+import type { AccountMeta, Instruction } from "@solana/kit";
+
+import { STORAGE_PROGRAM_ID, trackingAuthorizationPda } from "../pda/index.js";
 
 export interface RelayEnrollInputs {
   readonly ringProgramId: Address;
@@ -9,6 +21,9 @@ export interface RelayEnrollInputs {
   /** Tag 6 first, the program holds every field to the owner's signature and proof. */
   readonly instructionData: Uint8Array;
 }
+
+/** The ceiling a relayed enrollment asks and its owner checks. */
+export const ENROLL_COMPUTE_UNITS = 400_000;
 
 const ENROLL_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-enroll/v1");
 
@@ -33,4 +48,32 @@ export function enrollRequestDigest(value: RelayEnrollInputs): Bytes32 {
       value.instructionData,
     ),
   ) as Bytes32;
+}
+
+export async function enrollAccounts(
+  input: Readonly<{ payer: SignerAccount; owner: SignerAccount; trackingRegistry: Address }>,
+  owner: Address,
+): Promise<readonly AccountMeta[]> {
+  const [authorization] = await trackingAuthorizationPda(input.trackingRegistry, owner);
+  return [
+    meta(input.payer, true, true),
+    meta(input.owner, true, false),
+    meta(input.trackingRegistry, false, true),
+    meta(authorization, false, true),
+    meta(SYSTEM_PROGRAM, false, false),
+  ];
+}
+
+export async function relayEnrollInstruction(
+  value: RelayEnrollInputs,
+  feePayer: Address,
+): Promise<Instruction> {
+  return instruction(
+    value.instructionData,
+    await enrollAccounts(
+      { payer: feePayer, owner: value.owner, trackingRegistry: value.trackingRegistry },
+      value.owner,
+    ),
+    STORAGE_PROGRAM_ID,
+  );
 }

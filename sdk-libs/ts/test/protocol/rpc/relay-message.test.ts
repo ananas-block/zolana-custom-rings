@@ -89,7 +89,7 @@ interface DelegateRequest {
     readonly delegate: Address;
     readonly txViewingKey: string;
     readonly transfer: {
-      readonly source: string;
+      readonly sources: readonly string[];
       readonly mint: Address;
       readonly payments: readonly { readonly recipient: string; readonly amount: number }[];
     };
@@ -141,7 +141,7 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
       delegate: prepare.delegate,
       txViewingKey: new Uint8Array(base64.encode(prepare.txViewingKey)),
       transfer: {
-        source: shielded(prepare.transfer.source),
+        sources: prepare.transfer.sources.map(shielded),
         mint: prepare.transfer.mint,
         payments: prepare.transfer.payments.map((payment) => ({
           recipient: shielded(payment.recipient),
