@@ -88,6 +88,8 @@ export interface FrameExtensions {
   readonly messages?: readonly AppMessage[];
   /** The cached selector, refused on the authority rails. */
   readonly cache?: CacheAccess;
+  /** Present only for a co-signer that reads exact totals, the opening stays off chain. */
+  readonly approvalTotals?: Bytes32;
 }
 
 /** Rust `ApprovalMask`. */
@@ -485,8 +487,9 @@ const ExtensionFlag = Object.freeze({
   ringDataHash: 1 << 1,
   messages: 1 << 2,
   cache: 1 << 3,
+  approvalTotals: 1 << 4,
 });
-const KNOWN_EXTENSIONS = 0b1111;
+const KNOWN_EXTENSIONS = 0b1_1111;
 
 /** The flags of the frame header, Rust `FrameFlags`. */
 interface FrameFlags {
@@ -751,11 +754,15 @@ function readExtensions(bytes: Reader): FrameExtensions {
       })
     : undefined;
   const cache = has(flags, ExtensionFlag.cache) ? readCacheAccess(bytes) : undefined;
+  const approvalTotals = has(flags, ExtensionFlag.approvalTotals)
+    ? field32(bytes, "approvalTotals")
+    : undefined;
   return Object.freeze({
     ...(dataHash === undefined ? {} : { dataHash }),
     ...(ringDataHash === undefined ? {} : { ringDataHash }),
     ...(messages === undefined ? {} : { messages: Object.freeze(messages) }),
     ...(cache === undefined ? {} : { cache }),
+    ...(approvalTotals === undefined ? {} : { approvalTotals }),
   });
 }
 
@@ -774,7 +781,8 @@ function extensionsEmpty(extensions: FrameExtensions): boolean {
     extensions.dataHash === undefined &&
     extensions.ringDataHash === undefined &&
     (extensions.messages === undefined || extensions.messages.length === 0) &&
-    extensions.cache === undefined
+    extensions.cache === undefined &&
+    extensions.approvalTotals === undefined
   );
 }
 
@@ -785,6 +793,7 @@ function writeExtensions(out: Writer, extensions: FrameExtensions): void {
     [extensions.ringDataHash !== undefined, ExtensionFlag.ringDataHash],
     [messages.length > 0, ExtensionFlag.messages],
     [extensions.cache !== undefined, ExtensionFlag.cache],
+    [extensions.approvalTotals !== undefined, ExtensionFlag.approvalTotals],
   ];
   out.u8(
     bits.reduce((flags, [set, bit]) => (set ? flags | bit : flags), 0),
@@ -803,6 +812,8 @@ function writeExtensions(out: Writer, extensions: FrameExtensions): void {
     }
   }
   if (extensions.cache !== undefined) writeCacheAccess(out, extensions.cache);
+  if (extensions.approvalTotals !== undefined)
+    out.bytes(extensions.approvalTotals, 32, "approvalTotals");
 }
 
 function writeCacheAccess(out: Writer, cache: CacheAccess): void {

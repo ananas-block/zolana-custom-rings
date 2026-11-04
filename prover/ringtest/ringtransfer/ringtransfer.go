@@ -327,7 +327,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 		}
 	}
 	c.Rows = rows(a, delegate, len(c.Rows))
-	c.ApprovalMask = w.ApprovalMask
+	c.ApprovalMask, c.ApprovalTotals, c.ApprovalBlinder = w.ApprovalMask, 0, 0
 	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Tracking: w.tracking(t, a), delegate: delegate}
 	assembled.Own, assembled.Curator = w.registries(t, a, c.Rows)
 	w.reopen(t, c, assembled)
@@ -418,7 +418,7 @@ func values(t testing.TB, c *transfer.Sections, a Assembled) Statement {
 	stream := a.Audit.Stream(t)
 	s := Statement{
 		Head: a.Audit.Head(t, stream), Outputs: a.Audit.StatementOutputs(t, stream), InputCount: a.Audit.InputCount,
-		ApprovalMask: ringtest.AsBigInt(c.ApprovalMask), NoSpend: a.Audit.RealInputs() == 0,
+		ApprovalMask: ringtest.AsBigInt(c.ApprovalMask), ApprovalTotals: ringtest.AsBigInt(c.ApprovalTotals), NoSpend: a.Audit.RealInputs() == 0,
 		PrivateTxHash: ringtest.AsBigInt(c.PrivateTxHash),
 		SignerCount:   len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
 		PolicyHash: ringtest.AsBigInt(c.PolicyHash), OwnRoot: ringtest.AsBigInt(c.OwnRoot), CuratorRoot: ringtest.AsBigInt(c.CuratorRoot),

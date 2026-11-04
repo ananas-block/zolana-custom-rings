@@ -96,6 +96,10 @@ type Sections struct {
 	policy.Tracking
 	// ApprovalMask is the proven approval bits, the program demands their co-signers.
 	ApprovalMask frontend.Variable
+	// ApprovalTotals is zero unless the frame discloses the totals to a co-signer.
+	ApprovalTotals frontend.Variable
+	// ApprovalBlinder is fresh per transaction and enters no statement.
+	ApprovalBlinder frontend.Variable
 	policy.Policy
 }
 
@@ -196,6 +200,7 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
+	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
 	sealed := w.SealStream(api, rc, envelope, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers)))
 	return nil
@@ -230,7 +235,7 @@ func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
 // statement mirrors TransferStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audit.Stream, opened audit.Opened, signers SignerSet) []frontend.Variable {
 	fields := slices.Concat(e.Head(w, s, shared.TransferStatementDomain), []frontend.Variable{
-		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, s.NoSpend,
+		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, c.ApprovalTotals, s.NoSpend,
 		c.OutputCount, opened.OutputChain, s.RecordChain, s.TailChain,
 		c.InputCount, c.PrivateTxHash, c.Sender,
 	}, c.PartyIdentities[:], []frontend.Variable{

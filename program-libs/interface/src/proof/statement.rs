@@ -178,6 +178,8 @@ pub struct TransferStatement<'a> {
     pub head: AuditHead<'a>,
     pub family: TransferFamily<'a>,
     pub approval_mask: ApprovalMask,
+    /// Zero unless the frame discloses totals to a co-signer.
+    pub approval_totals: &'a [u8; 32],
     /// `R` is zero, the frame takes public funds alone.
     pub no_spend: bool,
     /// The `m` published slots.
@@ -208,7 +210,7 @@ pub struct TransferRoots {
 }
 
 /// Everything but the party cells, the public slots and the close.
-const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 2 + 4 + 2 + 1 + 2 + 4 + 1;
+const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 3 + 4 + 2 + 1 + 2 + 4 + 1;
 
 impl TransferFamily<'_> {
     /// `in_proof`, `hidden`, `delegate`, a clear set is the signer rail.
@@ -256,6 +258,7 @@ impl TransferStatement<'_> {
         elements.extend(self.family.rail_bits().map(bit));
         elements.extend([
             right_align(&[self.approval_mask.bits()]),
+            *self.approval_totals,
             bit(self.no_spend),
             count(self.outputs.len()),
             output_chain(self.outputs, capacity)?,

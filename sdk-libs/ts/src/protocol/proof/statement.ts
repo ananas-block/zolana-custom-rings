@@ -83,6 +83,8 @@ export interface TransferStatement {
   readonly head: AuditHead;
   readonly family: TransferFamily;
   readonly approvalMask: number;
+  /** Zero unless the frame discloses totals to a co-signer. */
+  readonly approvalTotals: Bytes32;
   /** `R` is zero, the frame takes public funds alone. */
   readonly noSpend: boolean;
   /** The `m` published slots. */
@@ -167,6 +169,7 @@ export function transferStatementElements(statement: TransferStatement): readonl
     ...auditHeadElements(statement.head),
     ...railBits,
     rightAlign(Uint8Array.of(statement.approvalMask)),
+    statement.approvalTotals,
     bit(statement.noSpend),
     u32Field(outputs.length, "output count"),
     filledChain(
@@ -253,6 +256,7 @@ export function ringTransferStatement(
     }),
     family,
     approvalMask: data.approval,
+    approvalTotals: data.extensions.approvalTotals ?? new Uint8Array(32),
     noSpend: data.noSpend,
     outputs: data.outputs,
     capacity: RingTransactData.streamLayout(data).capacity,

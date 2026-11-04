@@ -111,6 +111,7 @@ pub(crate) struct OwnedExtensions {
     pub ring_data_hash: Option<[u8; 32]>,
     pub messages: Vec<OwnedAppMessage>,
     pub cache: Option<CacheAccess>,
+    pub approval_totals: Option<[u8; 32]>,
 }
 
 impl OwnedExtensions {
@@ -127,6 +128,7 @@ impl OwnedExtensions {
                 })
                 .collect(),
             cache: self.cache,
+            approval_totals: self.approval_totals.as_ref(),
         }
     }
 }

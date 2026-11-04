@@ -127,6 +127,7 @@ describe("transfer_statement.json", () => {
               delegate: vector.delegate,
             },
       approvalMask: vector.approval_mask,
+      approvalTotals: field(vector.approval_totals),
       noSpend: vector.no_spend,
       outputs: vector.outputs.map((output) => ({
         hash: field(output.hash),

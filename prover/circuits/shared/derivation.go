@@ -32,6 +32,8 @@ const (
 	DepositStatementDomain = 0x43524450
 	// MergeStatementDomain = "CRMG"
 	MergeStatementDomain = 0x43524d47
+	// ApprovalTotalsDomain = "CRAO"
+	ApprovalTotalsDomain = 0x4352414f
 	// DepositBlindingDomain = "CRDB"
 	DepositBlindingDomain = 0x43524442
 	// WithdrawalsDomain = "CRPW"

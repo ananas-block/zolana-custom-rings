@@ -34,6 +34,7 @@ type transferStatementVector struct {
 	PublicOwners    bool                    `json:"public_owners"`
 	Delegate        bool                    `json:"delegate"`
 	ApprovalMask    uint64                  `json:"approval_mask"`
+	ApprovalTotals  string                  `json:"approval_totals"`
 	NoSpend         bool                    `json:"no_spend"`
 	FirstNullifier  string                  `json:"first_nullifier"`
 	RingID          string                  `json:"ring_id"`
@@ -77,7 +78,7 @@ func hexes(values []*big.Int) []string {
 func vectorOf(t *testing.T, name, family string, s ringtransfer.Statement, run []*big.Int, slots int, p *policy.Policy, elements []*big.Int) transferStatementVector {
 	t.Helper()
 	v := transferStatementVector{
-		Name: name, Family: family, ApprovalMask: s.ApprovalMask.Uint64(), NoSpend: s.NoSpend,
+		Name: name, Family: family, ApprovalMask: s.ApprovalMask.Uint64(), ApprovalTotals: ringtest.FieldHex(s.ApprovalTotals), NoSpend: s.NoSpend,
 		FirstNullifier: ringtest.FieldHex(s.Head.FirstNullifier), RingID: ringtest.FieldHex(s.Head.RingProgramID),
 		TxViewingU: hex.EncodeToString(s.Head.TxViewingU[:]), AuditorPubkey: hex.EncodeToString(s.Head.AuditorPubkey[:]), EphU: hex.EncodeToString(s.Head.EphU[:]),
 		Envelope: hex.EncodeToString(s.Head.Envelope), Salt: hex.EncodeToString(s.Head.Salt[:]), Layout: s.Head.Layout,
@@ -106,7 +107,7 @@ func vectorOf(t *testing.T, name, family string, s ringtransfer.Statement, run [
 }
 
 // fixedStatementElements mirrors TRANSFER_FIXED_ELEMENTS, the sender cells, the public slots and the close add to it.
-const fixedStatementElements = 12 + 3 + 2 + 4 + 2 + 2 + 4 + 1
+const fixedStatementElements = 12 + 3 + 3 + 4 + 2 + 2 + 4 + 1
 
 func confidentialCase(t *testing.T, name string, w ringtransfer.Confidential) transferStatementVector {
 	t.Helper()

@@ -782,6 +782,25 @@ fn a_data_frame_carries_each_length_and_each_tail() {
 }
 
 #[test]
+fn approval_totals_cost_a_digest_and_at_most_the_extension_flags() {
+    let fixture = Fixture::new();
+    for (mut data, delta) in [
+        (fixture.confidential_thresholds(), 33),
+        (fixture.confidential_extensions(), 32),
+    ] {
+        let before = data.encode().unwrap().len();
+        data.extensions.approval_totals = Some(&fixture.fields[73]);
+        let encoded = data.encode().unwrap();
+        assert_eq!(encoded.len() - before, delta);
+        let parsed = RingTransactData::parse(&encoded, RingRail::Confidential).unwrap();
+        assert_eq!(
+            parsed.into_data().extensions.approval_totals,
+            Some(&fixture.fields[73])
+        );
+    }
+}
+
+#[test]
 fn the_extensions_reach_the_forwarded_data() {
     let fixture = Fixture::new();
     let data = fixture.confidential_extensions();
