@@ -94,7 +94,7 @@ impl CustomRing {
         self.pda(&[RING_AUTH_PDA_SEED]).0
     }
 
-    /// The ring PDA signs its creation, the address is its and the ring id's.
+    /// Seeded by the ring PDA and the ring id.
     pub fn tracking_registry(self) -> Result<Address, RingError> {
         Ok(TrackingRegistry::find_address(&self.ring_auth_pda(), &self.ring_id()?).0)
     }

@@ -170,16 +170,13 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 
 // walkExtensions mirrors FrameExtensions::read.
 func walkExtensions(c *frameCursor) {
-	const dataHash, ringDataHash, privateSource, messages, cache = 1, 2, 4, 8, 16
+	const dataHash, ringDataHash, messages, cache = 1, 2, 4, 8
 	flags := c.take(1)[0]
 	if flags&dataHash != 0 {
 		c.take(32)
 	}
 	if flags&ringDataHash != 0 {
 		c.take(32)
-	}
-	if flags&privateSource != 0 {
-		c.take(8)
 	}
 	if flags&messages != 0 {
 		for range int(c.take(1)[0]) {
