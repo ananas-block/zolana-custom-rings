@@ -7,6 +7,8 @@ import {
 import { describe, expect, it } from "vitest";
 
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { assetField } from "@heliuslabs/zolana/transaction";
+import { initializePoseidon } from "@heliuslabs/zolana";
 
 import {
   RingReadRequest,
@@ -15,6 +17,8 @@ import {
   type RingReadSigner,
   type RingReadTarget,
 } from "../../src/rpc/ring-rpc.js";
+
+await initializePoseidon();
 
 function filled(byte: number, length = 32): Uint8Array {
   return new Uint8Array(length).fill(byte);
@@ -59,35 +63,30 @@ async function reader(): Promise<RingReadSigner> {
 }
 
 describe("audited merge records", () => {
+  const mint = addressOf(9);
   const opened = {
     slot: 12,
     txSignature: signatureOf(1),
     eventIndex: 0,
     outputCommitment: base58Of(1),
     ownerKey: base58Of(8),
-    asset: base58Of(5),
+    asset: getAddressDecoder().decode(assetField(mint)),
+    mint,
     amount: 21,
-    inputCommitments: [base58Of(6), base58Of(7)],
-  };
-  const unresolved = {
-    slot: 13,
-    txSignature: signatureOf(2),
-    eventIndex: 1,
-    outputCommitment: base58Of(2),
-    inputCommitments: [base58Of(3)],
+    realNullifiers: [base58Of(6), base58Of(7)],
   };
 
-  async function merges(opened: readonly Wire[], unresolved: readonly Wire[] = []) {
+  async function merges(opened: readonly Wire[]) {
     const { rpc } = answering({
       context: { slot: 14, blockTime: 1 },
-      value: { opened, unresolved, cursor: null },
+      value: { opened, cursor: null },
     });
     const read = await RingReadRequest.auditedMerges(TARGET).sign(await reader());
     return rpc.readSignedMerges(read);
   }
 
-  it("reads an inherited record and a held merge", async () => {
-    await expect(merges([opened], [unresolved])).resolves.toEqual({
+  it("reads an inherited record", async () => {
+    await expect(merges([opened])).resolves.toEqual({
       slot: 14n,
       blockTime: 1n,
       opened: [
@@ -97,19 +96,10 @@ describe("audited merge records", () => {
           eventIndex: 0,
           outputCommitment: filled(1),
           ownerKey: filled(8),
-          asset: filled(5),
+          asset: assetField(mint),
+          mint,
           amount: 21n,
-          inputCommitments: [filled(6), filled(7)],
-          realNullifiers: [],
-        },
-      ],
-      unresolved: [
-        {
-          slot: 13n,
-          signature: signatureOf(2),
-          eventIndex: 1,
-          outputCommitment: filled(2),
-          inputCommitments: [filled(3)],
+          realNullifiers: [filled(6), filled(7)],
         },
       ],
     });
@@ -118,7 +108,7 @@ describe("audited merge records", () => {
   it.each<readonly [string, Wire, string]>([
     ["a blinding", { ...opened, blinding: base58Of(3) }, "result.value.opened[0].shape"],
     ["a mint off its asset", { ...opened, mint: addressOf(8) }, "result.value.opened[0].mint"],
-    ["no inputs", { ...opened, inputCommitments: [] }, "result.value.opened[0].inputCommitments"],
+    ["a retired input list", { ...opened, inputCommitments: [] }, "result.value.opened[0].shape"],
   ])("refuses a record with %s", async (_name, record, path) => {
     await expect(merges([record])).rejects.toMatchObject({ details: { path } });
   });

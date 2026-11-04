@@ -113,13 +113,7 @@ export interface AuditedRingOutput {
 }
 
 /** Rust `OutputPayloadErrorKind`, why a published slot did not open. */
-export type OutputPayloadErrorKind =
-  | "frame"
-  | "disclosure"
-  | "recipientKey"
-  | "commitment"
-  /** No registered asset rebuilds the commitment. */
-  | "unknownAsset";
+export type OutputPayloadErrorKind = "frame" | "disclosure" | "recipientKey" | "commitment";
 
 export interface OutputPayloadError {
   readonly slotIndex: number;
@@ -541,7 +535,6 @@ export function knownUtxoOwnerHash(utxo: Pick<KnownUtxo, "ownerKey" | "owner">):
 export function hasUnknownAssets(transaction: AuditedRingTransaction): boolean {
   return (
     auditedUtxos(transaction).some(({ utxo }) => utxo.mint === undefined) ||
-    transaction.payloadErrors.some(({ kind }) => kind === "unknownAsset") ||
     transaction.inputs.some(
       (input) => input.opening.kind === "opened" && input.opening.mint === undefined,
     )

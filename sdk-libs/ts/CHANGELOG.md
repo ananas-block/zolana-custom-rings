@@ -2,6 +2,9 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `getAuditedMerges` drops `unresolved` and `UnresolvedRingMerge`, an audited merge drops `inputCommitments` and always names its `mint` → read `realNullifiers` and stop handling an absent mint.
+- `unpackDisclosure` and the `unknownAsset` kind of `OutputPayloadErrorKind` and `RING_PAYLOAD_ERROR_KINDS` are gone, and `recoverRingMemberNotes` no longer lists such a slot in `unopened` → remove branches on `unknownAsset`.
+- `@heliuslabs/zolana-custom-rings/advanced` adds `writeFrameData`, `closeFrameBufferData`, `settleBufferedData`, `frameDigest`, `WriteFrame`, `FRAME_BUFFER_PDA_SEED`, `FRAME_BUFFER_HEADER_LEN` and `MAX_FRAME_LEN` to write a frame to a buffer account, close the buffer and settle the frame by its digest, `settledFrame` to read the frame of a successful settlement or refuse with `RING_FRAME_EVENT_INVALID`, and `RingInstructionTag` adds tags 59 to 61 and 63 and `RingProgramError` adds codes 8520 to 8526.
 - `@heliuslabs/zolana-custom-rings` no longer reads instruction tags 3, 20, 25, 31 and 43 to 47, schemes 10 and 11 or CRDEP001 capsules, takes a ring slot tag of 8 bytes and a whole tag only on an exit, a deposit and a sender bundle, and drops the `historical*` kinds of `ConfirmedRingTransaction`, the `historical` field of `auditRingMerges`, the `historical` stream, `escrowPending`, `ConfirmedDeposit.version`, `OpenedDeposit.version`, `RING_MERGE_TOO_WIDE` and every export over them such as `auditRingTransactionV3` → remove branches on those kinds and fields, and read a ring only from frames of this release.
 - `buildRingMergeTransaction` merges the longest prefix of the selected notes one transaction carries, down to two notes, as Rust `FittedMerge` does.
 - `decideAddressCeiling` counts a compiled transaction's addresses from `spentInputOf` inputs against the 64 address ceiling, as Rust `AddressCeiling`, and past it names the merges that bring it under or refuses with `RING_ADDRESS_CEILING`.
@@ -124,7 +127,6 @@ Changed
 
 Fixed
 
-- `auditRingTransaction` dropped a zero-amount delivered output no registered asset rebuilt, now it reports the slot in `payloadErrors` as `unknownAsset`.
 - `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, now that commitment stays in `unopened` and the recovery goes on, and a row left unread fails it with `RING_RECOVERY_INCOMPLETE` naming the transaction once the read is done.
 - `RpcTransactionOrigin` read a response for another signature as `RING_ORIGIN_DECODE`, now it fails with `RING_ORIGIN_UNAVAILABLE`, and `auditRingMerges` reports a merge read twice as `RING_RPC`, both stop the scan.
 - `decodeDisclosure` refused a live anonymous record naming a zero nullifier key, now only an all zero record reads as a dummy and the live record opens.

@@ -550,7 +550,7 @@ describe("anonymous delivery slots", () => {
   }
 
   it("omits a compact suffix on the anonymous rail and keeps every published slot's blinding", async () => {
-    const { fixture, sender, recipients, anonymous } = await paying([400n, 300n], {
+    const { fixture, recipients, anonymous } = await paying([400n, 300n], {
       compact: true,
     });
     const { data, call } = await expanded(

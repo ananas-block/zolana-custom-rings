@@ -1,10 +1,7 @@
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { getBase58Decoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import ledgerVector from "../../../../test-vectors/audit/merge_ledger.json" with { type: "json" };
-
-import { BN254_SCALAR_ORDER, bigIntToBytes, isZero } from "@heliuslabs/zolana/internal";
+import { BN254_SCALAR_ORDER, bigIntToBytes } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import type { Bytes32, Signature } from "@heliuslabs/zolana/interface";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
@@ -15,7 +12,6 @@ import {
   type ConfirmedMerge,
   type KnownMergeInput,
   type MergeInput,
-  type MergeTransition,
 } from "../../src/state/merge-ledger.js";
 
 await initializePoseidon();
@@ -26,53 +22,6 @@ const ASSET = filled(7);
 const MINT: Address = SOL_MINT;
 const ZERO = filled(0);
 const NOTHING: KnownMergeInput = () => undefined;
-
-interface LedgerMerge {
-  readonly slot: number;
-  readonly txSignature: string;
-  readonly eventIndex: number;
-  readonly list: readonly string[];
-  readonly outputCommitment: string;
-  readonly treeId: number;
-  readonly leafIndex: number;
-  readonly firstNullifier: string;
-}
-
-interface LedgerStep {
-  readonly opens: readonly Readonly<{ commitment: string; amount: number }>[];
-  readonly merge: LedgerMerge | null;
-  readonly spent: readonly string[];
-  readonly resolved: readonly Readonly<{
-    commitment: string;
-    ownerKey: string;
-    asset: string;
-    amount: number;
-  }>[];
-  readonly unresolved: readonly string[];
-}
-
-interface LedgerCase {
-  readonly name: string;
-  readonly steps: readonly LedgerStep[];
-}
-
-function field(hex: string): Bytes32 {
-  return hexToBytes(hex) as Bytes32;
-}
-
-function confirmedMerge(merge: LedgerMerge): ConfirmedMerge {
-  return {
-    slot: BigInt(merge.slot),
-    signature: merge.txSignature as Signature,
-    eventIndex: merge.eventIndex,
-    outputCommitment: field(merge.outputCommitment),
-    treeId: merge.treeId,
-    leafIndex: BigInt(merge.leafIndex),
-    firstNullifier: field(merge.firstNullifier),
-    ringDataHash: new Uint8Array(32) as Bytes32,
-    inputs: merge.list.map(field).filter((entry) => !isZero(entry)),
-  };
-}
 
 function filled(byte: number): Bytes32 {
   return new Uint8Array(32).fill(byte) as Bytes32;
@@ -270,53 +219,5 @@ describe("MergeLedger", () => {
     const { mint: _mint, ...unnamed } = note(1n);
     const known: KnownMergeInput = (commitment) => (commitment[0] === 10 ? unnamed : note(1n));
     expect(ledger.apply(merge(1, [10, 11], 20), known).resolved[0]?.mint).toBe(MINT);
-  });
-
-  describe("the shared vector", () => {
-    const pinned = ledgerVector.note;
-    const inherited = {
-      ownerKey: field(pinned.ownerKey),
-      owner: { kind: "keyed", nullifierPk: field(pinned.nullifierPk) },
-      asset: field(pinned.asset),
-      mint: pinned.mint as Address,
-    } satisfies Omit<MergeInput, "amount">;
-
-    it.each(ledgerVector.cases as readonly LedgerCase[])("$name", ({ steps }) => {
-      const ledger = new MergeLedger();
-      const opened = new Map<string, bigint>();
-      const known: KnownMergeInput = (commitment) => {
-        const amount = opened.get(bytesToHex(commitment));
-        return amount === undefined ? undefined : { ...inherited, amount };
-      };
-      for (const step of steps) {
-        for (const { commitment, amount } of step.opens) opened.set(commitment, BigInt(amount));
-        if (step.merge === null) {
-          expect(step.spent).toEqual([]);
-          expectResolved(ledger.resolve(known), step.resolved);
-        } else {
-          const transition = ledger.apply(confirmedMerge(step.merge), known);
-          expect(transition.spent.map((input) => bytesToHex(input))).toEqual(step.spent);
-          expectResolved(transition.resolved, step.resolved);
-        }
-        expect(ledger.unresolved().map((merge) => bytesToHex(merge.outputCommitment))).toEqual(
-          step.unresolved,
-        );
-      }
-    });
-
-    function expectResolved(
-      resolved: MergeTransition["resolved"],
-      pinnedOutputs: LedgerStep["resolved"],
-    ): void {
-      expect(
-        resolved.map((output) => ({
-          commitment: bytesToHex(output.commitment),
-          ownerKey: bytesToHex(output.ownerKey),
-          asset: bytesToHex(output.asset),
-          amount: Number(output.amount),
-        })),
-      ).toEqual(pinnedOutputs);
-      for (const output of resolved) expect(output).toMatchObject(inherited);
-    }
   });
 });

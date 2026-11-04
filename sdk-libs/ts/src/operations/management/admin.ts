@@ -61,6 +61,7 @@ export function ringComputeUnitLimit(tag: RingInstructionTag): number {
     case RingInstructionTag.merge:
     case RingInstructionTag.authorityTransfer:
     case RingInstructionTag.deposit:
+    case RingInstructionTag.settleBuffered:
       return PROOF_UNITS;
     default:
       return ACCOUNT_UNITS;

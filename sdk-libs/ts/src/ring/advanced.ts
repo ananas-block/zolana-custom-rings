@@ -10,7 +10,6 @@ export {
   parseAuditorMessage,
   sealSaltedAuditorStream,
   symmetricAuditApply,
-  unpackDisclosure,
 } from "../crypto/audit/audit.js";
 export type {
   AuditorEnvelope,
@@ -288,3 +287,14 @@ export {
   type AssetLimits,
   type MintPolicy,
 } from "../protocol/membership/mint-policy.js";
+export {
+  closeFrameBufferData,
+  FRAME_BUFFER_HEADER_LEN,
+  FRAME_BUFFER_PDA_SEED,
+  frameDigest,
+  MAX_FRAME_LEN,
+  settleBufferedData,
+  settledFrame,
+  writeFrameData,
+  type WriteFrame,
+} from "../protocol/transaction/frame-buffer.js";

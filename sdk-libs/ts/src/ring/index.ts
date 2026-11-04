@@ -480,7 +480,6 @@ export type { RingEnrolmentAction, RingReaderGrant } from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   AuditedRingMerge,
-  UnresolvedRingMerge,
   DecryptedRingInput,
   DecryptedRingDefaultInput,
   DecryptedOutputContext,

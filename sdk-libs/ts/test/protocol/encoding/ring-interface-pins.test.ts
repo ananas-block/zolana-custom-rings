@@ -57,7 +57,7 @@ describe("ring interface pins", () => {
     const spp = new Map<string, number>(Object.entries(InstructionTag));
     const rows = [
       ...source.matchAll(/^ {4}([A-Za-z0-9]+) = [A-Z0-9_]+: ([\w:]+) => ([\w *+]+),$/gmu),
-    ].filter(([, variant = ""]) => !/^(Historical|Legacy)/u.test(variant));
+    ];
     const budgetOf = (expression: string) =>
       expression
         .split("+")
