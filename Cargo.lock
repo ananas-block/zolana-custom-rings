@@ -1603,6 +1603,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "bincode 2.0.1",
  "bytemuck",
  "custom-ring-cli",
@@ -1612,6 +1613,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-instruction",
  "solana-keypair",
@@ -1620,6 +1622,7 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "solana-system-interface 3.2.0",
+ "solana-transaction-status-client-types",
  "spr-api",
  "spr-client",
  "spr-hasher",

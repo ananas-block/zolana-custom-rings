@@ -50,7 +50,10 @@ spr-tree = { workspace = true }
 spr-user-registry-interface = { workspace = true, features = ["solana"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 bytemuck = { workspace = true }
+solana-account = { workspace = true }
+solana-transaction-status-client-types = { workspace = true }
 spr-api = { workspace = true, features = ["reqwest"] }
 spr-indexer-api = { workspace = true }
 zolana-ring-member-registry = { workspace = true }

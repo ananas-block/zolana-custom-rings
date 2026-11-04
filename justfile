@@ -158,17 +158,18 @@ test-custom-ring-rules: (_custom-ring-suite "policy_rules")
 test-custom-ring-repin: (_custom-ring-suite "policy_repin")
 
 # One real key proven in a scratch export of HEAD.
-one-key-validation:
+one-key-validation key="custom-ring-transfer-2-in24-w4-s4" test="one_key" spp_key="":
     #!/usr/bin/env bash
     set -euo pipefail
     git diff --quiet HEAD -- . ':(exclude)zolana' || { echo "Commit the tree, the run exports HEAD" >&2; exit 1; }
     git -C zolana diff --quiet HEAD || { echo "Commit zolana, the run exports its HEAD" >&2; exit 1; }
     run="{{justfile_directory()}}/target/one-key/$(git rev-parse --short=12 HEAD)-$(git -C zolana rev-parse --short=12 HEAD)"
     tree="$run/tree" keys="$run/keys"
-    key=custom-ring-transfer-2-in24-w4-s4
+    key='{{key}}'
     file="${key//-/_}.key"
     module="${file#custom_ring_}"
     module="${module%.key}_verifying_key.rs"
+    lock=prover/ring/proving-keys.lock
     if [[ ! -d "$tree" ]]; then
         rm -rf "$tree.partial"
         mkdir -p "$tree.partial/zolana"
@@ -177,23 +178,27 @@ one-key-validation:
         # The build script resolves each root through git.
         git init -q "$tree.partial"
         git init -q "$tree.partial/zolana"
+        jq '.keys = {}' "$tree.partial/$lock" > "$tree.partial/$lock.empty"
+        mv "$tree.partial/$lock.empty" "$tree.partial/$lock"
         mv "$tree.partial" "$tree"
     fi
     mkdir -p "$keys/.setup"
     cd "$tree"
     if [[ ! -s "$keys/$file" ]]; then
-        (cd prover && go run ./cmd/prover "setup-$key" --output "$keys/.setup/$file" --vk-out "$keys/vk.bin")
+        (cd prover && go run ./cmd/prover "setup-$key" --output "$keys/.setup/$file" --vk-out "$keys/$key.vk.bin")
         mv "$keys/.setup/$file" "$keys/$file"
     fi
-    cargo run -q --manifest-path zolana/Cargo.toml -p xtask -- bsb22-vk "$keys/vk.bin" "$keys/$file" \
+    cargo run -q --manifest-path zolana/Cargo.toml -p xtask -- bsb22-vk "$keys/$key.vk.bin" "$keys/$file" \
         "$tree/program-libs/interface/src/verifying_keys/transfer" "$module"
-    lock=prover/ring/proving-keys.lock
     jq --arg name "$file" --arg sha256 "$(shasum -a 256 "$keys/$file" | awk '{ print $1 }')" \
         --argjson size "$(wc -c < "$keys/$file")" \
-        '.keys = { ($name): { sha256: $sha256, size: $size, source: "release" } }' "$lock" > "$keys/lock"
+        '.keys[$name] = { sha256: $sha256, size: $size, source: "release" }' "$lock" > "$keys/lock"
     cp "$keys/lock" "$lock"
     python3 tools/generate_ring_keys.py --allow-missing
-    env -u RING_INDEXER_BIN ZOLANA_SPP_KEYS_DIR="$keys" {{just_executable()}} test-custom-ring-validator 'test(one_key)' --features proofs
+    {{just_executable()}} build-ring-heap-report
+    env -u RING_INDEXER_BIN ZOLANA_SPP_KEYS_DIR="$keys" RING_EXTRA_SPP_KEY='{{spp_key}}' \
+        CUSTOM_RING_PROGRAM_SO="$tree/target/deploy/ring_heap_report.so" \
+        {{just_executable()}} test-custom-ring-validator 'test({{test}})' --features proofs
 
 _custom-ring-suite test: fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool
     #!/usr/bin/env bash
@@ -251,7 +256,7 @@ fetch-custom-ring-keys:
     done
     spp_lock="zolana/prover/server/prover/provingkeys/proving-keys.lock"
     spp_url="${ZOLANA_PROVING_KEYS_URL:-https://d3gbdb0egjwcw9.cloudfront.net}/$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["prefix"])' "$spp_lock")"
-    for name in transfer_ring_1_2.key transfer_ring_2_2.key; do
+    for name in transfer_ring_1_2.key transfer_ring_2_2.key ${RING_EXTRA_SPP_KEY:-}; do
         fetch "$spp_lock" "$name" "$spp_url/$name"
     done
 
