@@ -2597,33 +2597,33 @@ async fn every_frame_boundary_takes_its_modelled_bytes() {
         ..relayed(Measured::ConfidentialPolicy, Shape::new(16, 8))
     };
     for (measure, bytes) in [
-        (with_reply(Measured::AnonymousEntry, 2), 4265),
-        (with_reply(Measured::Anonymous, 5), 4316),
+        (with_reply(Measured::AnonymousEntry, 2), 4228),
+        (with_reply(Measured::Anonymous, 5), 3983),
         (
             relayed(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            4118,
+            3754,
         ),
         (
             relayed(Measured::InProofOwnerPolicy, Shape::new(16, 8)),
-            4117,
+            3753,
         ),
-        (compact_fifteen, 4021),
-        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4098),
+        (compact_fifteen, 3689),
+        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4776),
         (
             relayed(Measured::InProofOwnerEscrow, Shape::IN5_OUT16),
-            4139,
+            4776,
         ),
         (
             Measure::pinned(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4044,
+            4681,
         ),
         (
             relayed(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4140,
+            4777,
         ),
-        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4001),
-        (key_escrow_co_signed, 4096),
-        (loaded_commitment, 4084),
+        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4711),
+        (key_escrow_co_signed, 3536),
+        (loaded_commitment, 3281),
     ] {
         assert_eq!(
             measure.bytes().await,
@@ -2673,10 +2673,10 @@ async fn co_signers_and_sol_legs_keep_their_slopes() {
 async fn spl_legs_take_their_accounts_and_the_policy_owner_field() {
     use spr_client::Shape;
     for (rail, first, later) in [
-        (Measured::Confidential, 175, 47),
+        (Measured::Confidential, 207, 79),
         (Measured::ConfidentialPolicy, 207, 79),
         (Measured::ConfidentialEscrow, 207, 79),
-        (Measured::Anonymous, 175, 15),
+        (Measured::Anonymous, 207, 47),
         (Measured::AnonymousPolicy, 207, 47),
     ] {
         let at = |legs| Measure {
@@ -2698,23 +2698,23 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
     for (measure, bytes) in [
         (
             Measure::pinned(Measured::Confidential, Shape::new(2, 2)),
-            1359 + 38,
+            1446 + 38,
         ),
         (
             Measure::pinned(Measured::Anonymous, Shape::new(2, 2)),
-            1712 + 38,
+            1613 + 38,
         ),
         (
             Measure::pinned(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            4022 + 39,
+            3658 + 39,
         ),
         (
             Measure::relayed(Measured::ConfidentialPolicy, Shape::new(24, 4)),
-            4094 + 40,
+            3406 + 40,
         ),
         (
             Measure::relayed(Measured::InProofOwnerPolicy, Shape::new(24, 4)),
-            4093 + 40,
+            3405 + 40,
         ),
     ] {
         let second_tree = Measure {
@@ -2736,9 +2736,9 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
 async fn omitted_slots_save_their_bytes_on_each_family() {
     use spr_client::Shape;
     for (rail, saved) in [
-        (Measured::Confidential, 168),
-        (Measured::ConfidentialPolicy, 200),
-        (Measured::Anonymous, 272),
+        (Measured::Confidential, 217),
+        (Measured::ConfidentialPolicy, 217),
+        (Measured::Anonymous, 249),
     ] {
         let at = |published| Measure {
             published: Some(published),
