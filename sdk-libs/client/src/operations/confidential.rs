@@ -179,7 +179,7 @@ pub fn open_ring_confidential<K: ShieldedKeys + RingKeys + ?Sized>(
     RingConfidentialScan::new(keys, assets).open(transactions)
 }
 
-/// Scheme 13 under the slot's secret, `None` off that scheme or on a body that rebuilds nothing.
+/// `None` off scheme 13 or on a body that rebuilds nothing.
 fn open_recipient_candidate(
     address: &ShieldedAddress,
     assets: &RingAssets,

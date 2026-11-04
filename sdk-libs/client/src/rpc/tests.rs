@@ -470,7 +470,6 @@ fn a_wallet_owning_every_input_keeps_all_outputs_without_a_marker() {
     );
 }
 
-/// No nullifier the wallet holds names it a sender, a read of an output alone is a recipient's.
 #[test]
 fn a_wallet_with_no_spent_input_reads_only_its_own_outputs() {
     let transaction = two_owner_transaction(Address::new_from_array([0x77; 32]));

@@ -1,4 +1,4 @@
-//! A deposit's audit capsule by its magic, `CRDEP001` read and never written.
+//! `CRDEP001` is read and never written.
 
 use custom_ring_interface::{
     domain::DEPOSIT_AUDIT_LABEL, RingDepositAuditCapsule, RingDepositAuditError,
@@ -103,7 +103,7 @@ impl<'a> HistoricalDepositCapsule<'a> {
         .concat()
     }
 
-    /// Slot `i` at counter `2 + 6i`, the caller checks the hash the opening rebuilds.
+    /// The caller checks the hash the opening rebuilds.
     pub(super) fn open(&self, auditor: &X25519Keypair) -> Result<DepositOpening> {
         let mut plaintext = Zeroizing::new(*self.ciphertext);
         opening_ring_stream(

@@ -1114,7 +1114,6 @@ fn merge_proof() -> custom_ring_interface::CustomRingProof {
     }
 }
 
-/// A tag 57 request over the fixture's SPP merge and the SPP data it forwards.
 fn v2_merge_group() -> (
     InstructionGroup,
     custom_ring_interface::CustomRingMergeIxData,
@@ -1171,7 +1170,7 @@ fn a_record_merge_binds_the_record_its_ring_forwarded() {
     assert_eq!(rewritten.merge_disclosure, None);
 }
 
-/// `own_revision || hash || proof || eph_pk || ct || count || fields || body`, the frozen tag 47 layout.
+/// `own_revision || hash || proof || eph_pk || ct || count || fields || body`.
 fn tag_47_frame(
     request: &custom_ring_interface::CustomRingMergeIxData,
     fields: &[[u8; 32]],
@@ -1418,7 +1417,6 @@ fn an_in_proof_withdrawal_reads_under_the_confidential_rail() {
     ));
 }
 
-/// The vector lines hold the body behind the tag.
 fn tagged_frames(committed: &str, tag_byte: u8) -> Vec<Vec<u8>> {
     committed
         .lines()
@@ -1426,7 +1424,6 @@ fn tagged_frames(committed: &str, tag_byte: u8) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// The tag alone picks the reader, a body never moves a frame between them.
 #[test]
 fn a_statement_version_4_frame_never_reaches_the_historical_reader() {
     let current = include_str!("../../../../../test-vectors/settlement/frame_v4.hex");

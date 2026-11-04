@@ -52,7 +52,7 @@ pub enum OutputOpening {
     Dummy,
 }
 
-/// The published tag of a ring slot, its proof leaves it free.
+/// Left free by the proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingOwnerTag(pub [u8; 32]);
 
@@ -113,12 +113,11 @@ pub struct AuditedInput {
     pub opening: InputOpening,
 }
 
-/// What the proven count and default bits say of one published nullifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputOpening {
     /// At or past `R`.
     Dummy,
-    /// A spent note, the nullifier index names which, never padding or unspent.
+    /// A spent note, never padding or unspent.
     Real,
     /// A default-ring note whose opening the frame carries.
     External(Box<AuditedDefaultInput>),
@@ -162,14 +161,13 @@ pub enum OutputPayloadErrorKind {
     RecipientKey,
     /// The rebuilt opening hashes to another commitment.
     Commitment,
-    /// No held asset rebuilds a version 3 delivered body, a registry refresh may name it.
+    /// No held asset rebuilds a version 3 delivered body.
     UnknownAsset,
-    /// A version 3 key escrow slot, the reader holds no key to rebuild it.
+    /// The reader holds no key to rebuild a version 3 key escrow slot.
     EscrowPending,
 }
 
 impl AuditedTransaction {
-    /// The ring and exit notes its outputs opened.
     pub fn utxos(&self) -> impl Iterator<Item = CreatedUtxo> + '_ {
         self.outputs.iter().filter_map(AuditedOutput::created)
     }

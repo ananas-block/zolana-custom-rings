@@ -56,7 +56,7 @@ use transfer::{
 const SOL: Address = Address::new_from_array([0; 32]);
 const MINT: Address = Address::new_from_array([0x0a; 32]);
 
-/// Names no mint, a record frame reads none.
+/// A record frame reads no mint.
 fn no_assets() -> RingAssets {
     RingAssets::new([]).unwrap()
 }
@@ -177,7 +177,7 @@ fn every_slot_opens_to_its_published_commitment_with_an_empty_mint_registry() {
     }
 }
 
-/// The record names the key, a reader tries no candidate.
+/// A reader tries no candidate key.
 #[test]
 fn zero_key_and_enrolled_outputs_in_one_frame_are_each_identified() {
     let enrolled = utxo(0xb1, MINT, 11);
@@ -228,7 +228,7 @@ fn a_data_bearing_note_rebuilds_from_its_tail() {
     let opened = audited.outputs[0].opening.utxo().unwrap();
     assert_eq!(opened.data_hash, field(0x71));
     assert_eq!(opened.ring_data_hash, field(0x72));
-    // The commitment holds both hashes, a clear tail rebuilds nothing.
+    // The commitment holds both hashes.
     let mut cleared = built.disclosure.clone();
     cleared.tails[0] = Default::default();
     let forged = transfer.publish(Publish {
@@ -243,7 +243,6 @@ fn a_data_bearing_note_rebuilds_from_its_tail() {
     );
 }
 
-/// Republishes the frame with each record field changed, the rebuild names the slot.
 #[test]
 fn each_record_field_changed_fails_the_rebuild() {
     let transfer = Transfer::fixture();
@@ -342,7 +341,7 @@ fn inputs_read_real_up_to_the_proven_count_and_padding_past_it() {
     );
 }
 
-/// A default bit names the note the frame opens, a set bit past `R` stays padding.
+/// A set bit past `R` stays padding.
 #[test]
 fn an_entry_input_opens_under_its_default_bit_and_rebuilds_its_commitment() {
     let mut transfer = Transfer::fixture();
@@ -416,7 +415,6 @@ fn an_exit_opens_with_its_published_owner_tag() {
     );
 }
 
-/// A note the auditor opened enters a ledger through its created form.
 #[test]
 fn an_opened_note_reads_as_its_known_form() {
     let note = utxo(0xb4, MINT, 21);
@@ -559,7 +557,6 @@ const MERGE_SEED: [u8; 32] = {
     seed
 };
 
-/// The tag 57 merge whose output is `spend`'s owner, mint and amount under the seed's blinding.
 fn merged(transfer: &Transfer, spend: &Spend) -> Confirmed {
     let first_nullifier = field(0x74);
     let blinding = MergeSeed::from_bytes(MERGE_SEED)
@@ -629,7 +626,6 @@ impl Confirmed {
     }
 }
 
-/// A proofless deposit without nullifiers, a merge with them, its one output `hash`.
 fn created_transaction(
     transfer: &Transfer,
     hash: [u8; 32],
@@ -1113,7 +1109,6 @@ async fn scan_walks_every_page_and_keeps_only_ring_transactions_tagged_for_the_a
     assert_eq!(audited[0].tx_viewing_pk, transfer(1).tx_key.pubkey());
 }
 
-/// A payment to a member, then the member's anonymous spend.
 fn paid_and_spent() -> (Built, Built) {
     let payee = utxo(0xb8, MINT, 80);
     let paid_transfer = transfer(0x2a);

@@ -2174,7 +2174,6 @@ fn deposit_of(
     }
 }
 
-/// A zero-key merge under `owner`'s tag, sealed under `seed`, its one output `amount` of SOL.
 fn publish_owner_merge(
     indexer: &Indexer,
     owner: &ShieldedAddress,
@@ -2240,7 +2239,6 @@ fn own_seed(wallet: &Wallet, viewing_pubkey: X25519Pubkey, first: [u8; 32]) -> M
         .remove(0)
 }
 
-/// No input was ever opened, the owner tag and the viewing key alone find the note.
 #[tokio::test]
 async fn a_zero_key_merge_opens_with_its_input_history_deleted_and_reads_exposed() {
     let indexer = Indexer::default();
@@ -2283,7 +2281,7 @@ async fn another_wallets_owner_tag_opens_nothing_and_a_seed_of_another_key_opens
         .unwrap();
     assert!(found(&scan).is_empty());
 
-    // Bob's own tag over a merge sealed under Carol's seed, a keeper-chosen seed reads the same.
+    // A keeper-chosen seed reads the same.
     let second = [0x13; 32];
     let foreign = own_seed(&carol, carol.keys.viewing_key.pubkey(), second);
     publish_owner_merge(&indexer, &bob.address(), &foreign, second);
@@ -2294,7 +2292,6 @@ async fn another_wallets_owner_tag_opens_nothing_and_a_seed_of_another_key_opens
     assert!(found(&scan).is_empty());
 }
 
-/// A retired viewing key still derives the seed the owner merged under.
 #[tokio::test]
 async fn a_rotated_wallet_opens_a_zero_key_merge_under_its_retired_key() {
     let indexer = Indexer::default();
@@ -2317,7 +2314,6 @@ async fn a_rotated_wallet_opens_a_zero_key_merge_under_its_retired_key() {
     assert_eq!(found(&scan), [hash]);
 }
 
-/// One scheme 13 body with its presence byte, a nonzero ring data hash and application data.
 #[tokio::test]
 async fn an_extended_recipient_body_rebuilds_its_commitment_with_its_data() {
     let indexer = Indexer::default();

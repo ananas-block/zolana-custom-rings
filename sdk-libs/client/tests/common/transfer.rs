@@ -114,7 +114,7 @@ impl UtxoFields {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Output {
-    /// `tag` is the published view tag, a `None` publishes `recipient_u`.
+    /// A `None` `tag` publishes `recipient_u`.
     Ring {
         utxo: UtxoFields,
         recipient_u: [u8; 32],
@@ -387,7 +387,7 @@ impl Transfer {
         }
     }
 
-    /// The record of every slot under the key of `rail`, `R` every published input.
+    /// `R` is every published input.
     pub fn disclosure(&self, rail: Rail, outputs: &[Output]) -> Disclosure {
         let family = match rail {
             Rail::Delivered => &CONFIDENTIAL_TRANSFER_SHAPES[..],
@@ -401,7 +401,6 @@ impl Transfer {
         })
     }
 
-    /// Input `i` a default-ring note when bit `i` of the evidence is set.
     pub fn entry_disclosure(
         &self,
         outputs: &[Output],
@@ -419,7 +418,6 @@ impl Transfer {
         })
     }
 
-    /// The same records under the key's data tails.
     pub fn with_data(mut disclosure: Disclosure, outputs: &[Output]) -> Disclosure {
         disclosure.layout.has_data = true;
         disclosure.tails = outputs.iter().map(Output::tail).collect();
@@ -618,7 +616,6 @@ pub fn known_utxo(utxo: &UtxoFields, placement: Placement) -> KnownUtxo {
     }
 }
 
-/// One default-ring input's opening, every field its commitment binds.
 pub fn entry_input(utxo: &UtxoFields, blinding: [u8; 32]) -> EntryInput {
     EntryInput {
         owner_key: utxo.owner_key,

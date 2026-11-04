@@ -1,4 +1,4 @@
-//! The commitment list a tag 47 merge sealed to its auditor, read and never written.
+//! Tag 47 commitment lists, read and never written.
 
 use custom_ring_interface::{
     merge_disclosure_field_count, merge_disclosure_len, unpack_disclosure, MERGE_DISCLOSURE_INFO,
@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 use super::{open_stream, Result, StreamSchedule};
 use crate::{AuditError, DisclosurePad};
 
-/// The widths a tag 47 merge ran at, frozen with its frame.
+/// Frozen with the tag 47 frame.
 const HISTORICAL_MERGE_WIDTHS: [usize; 2] = [8, 24];
 
 /// ASCII "CR_MD", the Go `MergeDisclosureDomain`, a merge pad never repeats an output pad.
@@ -77,7 +77,6 @@ pub(crate) mod tests {
     use super::*;
     use crate::encryption::seal_stream;
 
-    /// A frame's seal in the tag 47 layout, the reader's positive case.
     pub(crate) struct MergeDisclosureEncryption {
         pub(crate) eph_pk: X25519Pubkey,
         pub(crate) ciphertext: [u8; MERGE_KEY_CIPHERTEXT_LEN],

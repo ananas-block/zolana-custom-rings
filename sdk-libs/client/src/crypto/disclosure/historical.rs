@@ -14,7 +14,7 @@ use crate::{encryption::opening_ring_stream, AuditError};
 const FIELD_LEN: usize = 32;
 const ENVELOPE_KEY_LEN: usize = 32;
 const TAGGED_KEY_LEN: usize = 33;
-/// The input flag a version 2 frame set on its full opening rail.
+/// Version 2 input flag of the full opening rail.
 const FULL_OPENINGS: u8 = 1 << 7;
 
 /// What a version 2 envelope names of its spent notes, `None` entries are dummies.

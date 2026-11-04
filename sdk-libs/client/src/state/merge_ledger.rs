@@ -31,16 +31,15 @@ pub struct ConfirmedMerge {
     pub disclosed: MergeDisclosed,
 }
 
-/// What a merge's frame tells its auditor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeDisclosed {
-    /// Tag 47, the real inputs, a zero entry of the disclosed list is a dummy.
+    /// Tag 47, a zero entry of the disclosed list left out as a dummy.
     Inputs(Vec<[u8; 32]>),
-    /// Tag 57, the output itself and no input.
+    /// Tag 57.
     Record(MergeRecordOutput),
 }
 
-/// A rebuilt tag 57 record, its seed opens the output and classifies the padding.
+/// A rebuilt tag 57 record.
 #[derive(Clone, PartialEq, Eq)]
 pub struct MergeRecordOutput {
     pub owner_key: [u8; 32],
@@ -94,7 +93,7 @@ pub struct AuditedMergeOutput {
     pub inputs: Vec<[u8; 32]>,
     /// Tag 57 alone.
     pub real_nullifiers: Vec<[u8; 32]>,
-    /// Tag 57 alone, a tag 47 output derives its blinding from the nullifier secret.
+    /// Tag 57 alone.
     pub seed: Option<[u8; 32]>,
 }
 
@@ -269,7 +268,7 @@ impl ConfirmedMerge {
             .collect()
     }
 
-    /// The commitments a tag 47 merge disclosed, a record names none.
+    /// Empty on a record.
     pub fn inputs(&self) -> &[[u8; 32]] {
         match &self.disclosed {
             MergeDisclosed::Inputs(inputs) => inputs,
