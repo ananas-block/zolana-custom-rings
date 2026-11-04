@@ -43,11 +43,7 @@ import {
   type AuditStreamLayout,
 } from "../codec/ring-disclosure-layout.js";
 import { MIN_REPLY_LEN, RECIPIENT_BODY_LEN, senderBundleLen } from "../codec/anonymous-delivery.js";
-import {
-  ringTransferCircuit,
-  transferShapes,
-  type TransferKeyCircuit,
-} from "../proof/transfer-shapes.js";
+import { frameKeyShape } from "../proof/transfer-shapes.js";
 
 import { RingInstructionTag } from "./instruction-tag.js";
 import type { RingMode } from "../codec/ring-codecs.js";
@@ -87,24 +83,15 @@ export interface FrameExtensions {
   readonly dataHash?: Bytes32;
   /** The transaction's ring digest, distinct from a note's `ring_data_hash`. */
   readonly ringDataHash?: Bytes32;
-  readonly privateRevision?: bigint;
   readonly messages?: readonly AppMessage[];
   /** The cached selector, refused on the authority rails. */
   readonly cache?: CacheAccess;
 }
 
-/** The proven approval mask and the co-signers the transaction carries, Rust `CoSignHeader`. */
-export interface CoSignHeader {
-  readonly approval: number;
-  readonly coSigners: number;
-}
-
 /** Rust `ApprovalMask`. */
 export const ApprovalMask = Object.freeze({ outflow: 1, withdrawal: 2 } as const);
-/** One record per class at most, a further record covers nothing. */
-export const MAX_CO_SIGNERS = 5;
-/** Rust `ANONYMOUS_PARTIES`, the payer, each co-signer and the exit destination. */
-export const ANONYMOUS_PARTIES = 2 + MAX_CO_SIGNERS;
+/** Rust `ANONYMOUS_PARTIES`, the payer, the co-signer and the exit destination. */
+export const ANONYMOUS_PARTIES = 3;
 
 /** The owner SPP's anonymous rail verifies and hides, the delivered audit publishes it. */
 export interface InProofOwner {
@@ -180,7 +167,8 @@ export interface RingTransactData {
   readonly policy?: PolicyProof;
   /** Token owners checked on chain in SPL withdrawal order, present with `ownRevision`. */
   readonly splWithdrawalOwners: readonly Bytes32[];
-  readonly coSign: CoSignHeader;
+  /** `ApprovalMask` bits the statement proves. */
+  readonly approval: number;
   /** The sealed `R` is zero. */
   readonly noSpend: boolean;
   /** The anonymous rail with every live owner a published signer, SPP's confidential rail settles it. */
@@ -367,25 +355,6 @@ export const RingTransactData = Object.freeze({
     return circuitId(data);
   },
 
-  /** The transfer key serving the frame with `legs` public withdrawals, Rust `transfer_circuit`. */
-  transferCircuit(data: RingTransactData, legs: number): TransferKeyCircuit {
-    const shapes = transferShapes(data.rail, data.entry);
-    const found = shapes?.find((entry) => entry.outputs === data.nOut);
-    const rows = found?.owners[data.wideOwners ? 1 : 0];
-    if (rows === undefined) throw invalid("RingShapeUnkeyed");
-    const circuit = ringTransferCircuit({
-      rail: data.rail,
-      inputs: data.nullifiers.length,
-      outputs: data.nOut,
-      spendsDefaultRing: data.entry,
-      legs,
-      owners: rows,
-      hasData: data.hasData,
-    });
-    if (circuit === undefined) throw invalid("RingShapeUnkeyed");
-    return circuit;
-  },
-
   firstNullifier(data: Pick<RingTransactData, "nullifiers">): Bytes32 {
     const first = data.nullifiers[0];
     if (first === undefined) throw invalid("RingTransactLength");
@@ -489,18 +458,15 @@ const InputFlag = Object.freeze({ hasData: 1 << 6, entry: 1 << 7 });
 const WIDE_OWNERS = 1 << 7;
 /** The shape index or the input count, bits 6 and 7 carry the flags. */
 const HEADER_LOW = 0b0011_1111;
-const CO_SIGN_MASK_BITS = 2;
-const CO_SIGN_COUNT_BITS = 3;
 
 /** The extension section's first byte, Rust `extension_flag`. */
 const ExtensionFlag = Object.freeze({
   dataHash: 1 << 0,
   ringDataHash: 1 << 1,
-  privateSource: 1 << 2,
-  messages: 1 << 3,
-  cache: 1 << 4,
+  messages: 1 << 2,
+  cache: 1 << 3,
 });
-const KNOWN_EXTENSIONS = 0b1_1111;
+const KNOWN_EXTENSIONS = 0b1111;
 
 /** The flags of the frame header, Rust `FrameFlags`. */
 interface FrameFlags {
@@ -548,14 +514,18 @@ function sppRail(rail: RingRail, publicOwners: boolean): RingRail {
   return rail === "anonymous" && publicOwners ? "confidential" : rail;
 }
 
-/** The audit key the header names before the outputs are read, Rust `RingRail::audit_key`. */
+/** The stream layout of the key the header names, before the outputs are read, Rust `RingRail::key_shape`. */
 function streamOf(rail: RingRail, header: FrameHeader): AuditStreamLayout {
   const { nIn, nOut, inputCount: inputs, outputCount: outputs, flags } = header;
   const supported = railShapes(sppRail(rail, flags.publicOwners)).some(
     (shape) => shape.inputs === nIn && shape.outputs === nOut,
   );
-  const shapes = transferShapes(isAnonymousFrame(rail) ? "anonymous" : "confidential", flags.entry);
-  const shape = shapes?.find((entry) => entry.outputs === nOut);
+  const shape = frameKeyShape({
+    rail,
+    outputs: nOut,
+    spendsDefaultRing: flags.entry,
+    wide: flags.wideOwners,
+  });
   if (shape === undefined || !supported || inputs > shape.inputs) throw invalid("RingShapeUnkeyed");
   if (inputs === 0 || inputs > nIn) throw invalid("RingTransactLength");
   if (outputs < 1 || outputs > nOut) throw invalid("OutputCountOutOfRange");
@@ -564,7 +534,7 @@ function streamOf(rail: RingRail, header: FrameHeader): AuditStreamLayout {
       key: Object.freeze({ class: shape.inputs, entry: flags.entry }),
       inputs,
       outputs,
-      capacity: nOut,
+      capacity: shape.outputs,
       hasData: flags.hasData,
     }),
   );
@@ -576,7 +546,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
   const header = readHeader(bytes, rail);
   const { nIn, nOut, inputCount, outputCount } = header;
   const stream = streamOf(rail, header);
-  const coSign = readCoSign(bytes.u8("coSign"));
+  const approval = checkedApproval(bytes.u8("approval"));
   const proof = bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "proof");
   const trackingRevision = bytes.u64("trackingRevision");
   const ownRevision = has(flags, Flag.ownRoot) ? bytes.u64("ownRevision") : undefined;
@@ -659,7 +629,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
     ...(ownRevision === undefined ? {} : { ownRevision }),
     ...(policy === undefined ? {} : { policy }),
     splWithdrawalOwners: Object.freeze(splWithdrawalOwners),
-    coSign,
+    approval,
     noSpend: has(flags, Flag.noSpend),
     publicOwners: header.flags.publicOwners,
     expiryUnixTs,
@@ -725,27 +695,14 @@ function readAnonymous(bytes: Reader, tagged: boolean): AnonymousProofData {
   });
 }
 
-/** Rust `CoSignHeader::from_byte`, the mask below the count. */
-function readCoSign(byte: number): CoSignHeader {
-  if (byte >> (CO_SIGN_MASK_BITS + CO_SIGN_COUNT_BITS) !== 0) throw invalid("FlagNotAllowed");
-  const coSigners = byte >> CO_SIGN_MASK_BITS;
-  if (coSigners > MAX_CO_SIGNERS) throw invalid("TooManyCoSigners");
-  const approval = byte & ((1 << CO_SIGN_MASK_BITS) - 1);
-  if (approval > (ApprovalMask.outflow | ApprovalMask.withdrawal)) throw invalid("FlagNotAllowed");
-  return Object.freeze({ approval, coSigners });
-}
-
-function coSignByte(header: CoSignHeader): number {
-  const { approval, coSigners } = header;
+function checkedApproval(approval: number): number {
   if (
     !Number.isInteger(approval) ||
     approval < 0 ||
     approval > (ApprovalMask.outflow | ApprovalMask.withdrawal)
   )
     throw invalid("FlagNotAllowed");
-  if (!Number.isInteger(coSigners) || coSigners < 0 || coSigners > MAX_CO_SIGNERS)
-    throw invalid("TooManyCoSigners");
-  return approval | (coSigners << CO_SIGN_MASK_BITS);
+  return approval;
 }
 
 const NO_EXTENSIONS: FrameExtensions = Object.freeze({});
@@ -760,9 +717,6 @@ function readExtensions(bytes: Reader): FrameExtensions {
   const ringDataHash = has(flags, ExtensionFlag.ringDataHash)
     ? field32(bytes, "ringDataHash")
     : undefined;
-  const privateRevision = has(flags, ExtensionFlag.privateSource)
-    ? bytes.u64("privateRevision")
-    : undefined;
   const messages = has(flags, ExtensionFlag.messages)
     ? Array.from({ length: bytes.u8("messages.length") }, (): AppMessage => {
         const viewTag = field32(bytes, "message.viewTag");
@@ -774,7 +728,6 @@ function readExtensions(bytes: Reader): FrameExtensions {
   return Object.freeze({
     ...(dataHash === undefined ? {} : { dataHash }),
     ...(ringDataHash === undefined ? {} : { ringDataHash }),
-    ...(privateRevision === undefined ? {} : { privateRevision }),
     ...(messages === undefined ? {} : { messages: Object.freeze(messages) }),
     ...(cache === undefined ? {} : { cache }),
   });
@@ -794,7 +747,6 @@ function extensionsEmpty(extensions: FrameExtensions): boolean {
   return (
     extensions.dataHash === undefined &&
     extensions.ringDataHash === undefined &&
-    extensions.privateRevision === undefined &&
     (extensions.messages === undefined || extensions.messages.length === 0) &&
     extensions.cache === undefined
   );
@@ -805,7 +757,6 @@ function writeExtensions(out: Writer, extensions: FrameExtensions): void {
   const bits: readonly (readonly [boolean, number])[] = [
     [extensions.dataHash !== undefined, ExtensionFlag.dataHash],
     [extensions.ringDataHash !== undefined, ExtensionFlag.ringDataHash],
-    [extensions.privateRevision !== undefined, ExtensionFlag.privateSource],
     [messages.length > 0, ExtensionFlag.messages],
     [extensions.cache !== undefined, ExtensionFlag.cache],
   ];
@@ -815,8 +766,6 @@ function writeExtensions(out: Writer, extensions: FrameExtensions): void {
   );
   if (extensions.dataHash !== undefined) out.bytes(extensions.dataHash, 32, "dataHash");
   if (extensions.ringDataHash !== undefined) out.bytes(extensions.ringDataHash, 32, "ringDataHash");
-  if (extensions.privateRevision !== undefined)
-    out.u64(extensions.privateRevision, "privateRevision");
   if (messages.length > 0) {
     out.u8(messages.length, "messages.length");
     for (const message of messages) {
@@ -882,7 +831,7 @@ function writeCompact(data: RingTransactData): Uint8Array {
     .u8(shapeByte, "shapeByte")
     .u8(inputByte, "inputByte")
     .u8(outputByte, "outputByte")
-    .u8(coSignByte(data.coSign), "coSign")
+    .u8(checkedApproval(data.approval), "approval")
     .bytes(data.proof, CUSTOM_RING_PROOF_LENGTH, "proof")
     .u64(data.trackingRevision, "trackingRevision");
   if (data.ownRevision !== undefined) out.u64(data.ownRevision, "ownRevision");

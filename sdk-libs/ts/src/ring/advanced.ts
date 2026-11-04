@@ -140,7 +140,6 @@ export {
 export {
   ANONYMOUS_PARTIES,
   ApprovalMask,
-  MAX_CO_SIGNERS,
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
   bodilessBitmap,
@@ -164,7 +163,6 @@ export {
 export type {
   AnonymousProofData,
   AppMessage,
-  CoSignHeader,
   FrameExtensions,
   InProofOwner,
   InputTrees,

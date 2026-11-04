@@ -38,6 +38,8 @@ export async function ringDepositInstruction(
     tree: Address;
     depositor: SignerAccount;
     deposits: readonly RingAssetDeposit[];
+    /** The deposit key's slots, every key proves one statement. */
+    keyCapacity: number;
     proof: Uint8Array;
     /** Read only, right after the ring account, tracking last. */
     registries: readonly Address[];
@@ -56,6 +58,7 @@ export async function ringDepositInstruction(
     input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
   const prefix = new Writer()
+    .u8(input.keyCapacity, "keyCapacity")
     .bytes(input.proof, CUSTOM_RING_PROOF_LENGTH, "deposit proof")
     .u64(input.trackingRevision, "trackingRevision")
     .u64(input.ownRevision ?? 0n, "ownRevision")

@@ -76,7 +76,6 @@ export interface TransferRoots {
   readonly ownRoot: Bytes32;
   readonly curatorRoot: Bytes32;
   readonly trackingRoot: Bytes32;
-  readonly privateRoot: Bytes32;
 }
 
 /** One ring transfer's proof, Rust `TransferStatement`. */
@@ -151,13 +150,18 @@ export function transferStatementElements(statement: TransferStatement): readonl
     throw new RingError("RING_INVALID_LENGTH", {
       details: { name: "outputs", expected: capacity, actual: outputs.length },
     });
+  // `in_proof`, `hidden`, `delegate`, a clear set is the signer rail.
   const railBits =
     family.kind === "confidential"
-      ? [bit(family.inProof), bit(family.delegate)]
-      : [bit(family.publicOwners), bit(family.delegate)];
-  const senderCells =
+      ? [bit(family.inProof), bit(false), bit(family.delegate)]
+      : [bit(false), bit(!family.publicOwners && !family.delegate), bit(family.delegate)];
+  const sender =
     family.kind === "confidential"
-      ? [checkedBytes<Bytes32>(family.sender, 32, "sender")]
+      ? checkedBytes<Bytes32>(family.sender, 32, "sender")
+      : ZERO_FIELD;
+  const parties =
+    family.kind === "confidential"
+      ? Array.from({ length: ANONYMOUS_PARTIES }, () => ZERO_FIELD)
       : checkedParties(family.partyIdentities);
   const elements: Bytes32[] = [
     ...auditHeadElements(statement.head),
@@ -173,14 +177,14 @@ export function transferStatementElements(statement: TransferStatement): readonl
     tailChain(outputs, capacity),
     u32Field(statement.inputCount, "input count"),
     checkedBytes<Bytes32>(statement.privateTxHash, 32, "private tx hash"),
-    ...senderCells,
+    sender,
+    ...parties,
     u32Field(statement.signers.count, "signer count"),
     checkedBytes<Bytes32>(statement.signers.chain, 32, "signer chain"),
     checkedBytes<Bytes32>(statement.roots.policyHash, 32, "policy hash"),
     checkedBytes<Bytes32>(statement.roots.ownRoot, 32, "own root"),
     checkedBytes<Bytes32>(statement.roots.curatorRoot, 32, "curator root"),
     checkedBytes<Bytes32>(statement.roots.trackingRoot, 32, "tracking root"),
-    checkedBytes<Bytes32>(statement.roots.privateRoot, 32, "private root"),
     ...publicAssets.flatMap((asset, slot) => [
       checkedBytes<Bytes32>(asset, 32, "public asset"),
       checkedBytes<Bytes32>(publicAmounts[slot] as Bytes32, 32, "public amount"),
@@ -248,10 +252,10 @@ export function ringTransferStatement(
       layout: RingTransactData.auditLayout(data),
     }),
     family,
-    approvalMask: data.coSign.approval,
+    approvalMask: data.approval,
     noSpend: data.noSpend,
     outputs: data.outputs,
-    capacity: data.nOut,
+    capacity: RingTransactData.streamLayout(data).capacity,
     inputCount: data.nullifiers.length,
     privateTxHash: data.privateTxHash,
     signers: binding.signers,

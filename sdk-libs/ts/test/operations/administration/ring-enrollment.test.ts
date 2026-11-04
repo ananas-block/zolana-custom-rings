@@ -31,7 +31,6 @@ import {
   decodeTrackingRegistry,
   isEnrollmentPending,
   TRACKING_EMPTY_ROOT,
-  TRACKING_GRACE_SLOTS,
   TRACKING_QUAD_HEIGHT,
   TRACKING_SENTINEL,
   trackingRecordHash,
@@ -62,49 +61,42 @@ const SEAL: EnrollmentSeal = Object.freeze({
 
 function stored(fields: Partial<TrackingAuthorization> = {}): TrackingAuthorization {
   return {
-    bump: 255,
     registry: REGISTRY,
     owner: OWNER,
     ...SEAL,
     viewingU: field(0x15),
     revision: 1n,
     appliedRevision: 1n,
-    lastEnrollSlot: 100n,
     ...fields,
   };
 }
 
 const unenrolled = {
   getAccount: async () => undefined,
-  getSlot: async () => 0n,
 } as never;
 
 function authorizationBytes(): Uint8Array {
-  const data = new Uint8Array(250);
+  const data = new Uint8Array(241);
   data[0] = 4;
-  data[1] = 254;
-  data.set(addressBytes(REGISTRY, "registry"), 2);
-  data.set(addressBytes(OWNER, "owner"), 34);
-  data.set(SEAL.nullifierPk, 66);
-  data.set(SEAL.listTag, 98);
-  data.set(field(0x15), 130);
-  data.set(SEAL.ephU, 162);
-  data.set(SEAL.ciphertext, 194);
+  data.set(addressBytes(REGISTRY, "registry"), 1);
+  data.set(addressBytes(OWNER, "owner"), 33);
+  data.set(SEAL.nullifierPk, 65);
+  data.set(SEAL.listTag, 97);
+  data.set(field(0x15), 129);
+  data.set(SEAL.ephU, 161);
+  data.set(SEAL.ciphertext, 193);
   const view = new DataView(data.buffer);
-  view.setBigUint64(226, 3n, true);
-  view.setBigUint64(234, 2n, true);
-  view.setBigUint64(242, 900n, true);
+  view.setBigUint64(225, 3n, true);
+  view.setBigUint64(233, 2n, true);
   return data;
 }
 
 beforeAll(initializePoseidon);
 
 describe("checkEnrollment", () => {
-  it("passes a first enrollment and a rotation at the limit", () => {
-    expect(() => checkEnrollment({ seal: SEAL, stored: undefined, slot: 0n })).not.toThrow();
-    expect(() =>
-      checkEnrollment({ seal: SEAL, stored: stored(), slot: 100n + TRACKING_GRACE_SLOTS }),
-    ).not.toThrow();
+  it("passes a first enrollment and a rotation of the viewing key", () => {
+    expect(() => checkEnrollment({ seal: SEAL, stored: undefined })).not.toThrow();
+    expect(() => checkEnrollment({ seal: SEAL, stored: stored() })).not.toThrow();
   });
 
   it("refuses the zero key before the owner signs", () => {
@@ -112,7 +104,6 @@ describe("checkEnrollment", () => {
       checkEnrollment({
         seal: { ...SEAL, nullifierPk: ZERO_NULLIFIER_PK as Bytes32 },
         stored: undefined,
-        slot: 0n,
       }),
     ).toThrow("RING_ENROLLMENT_ZERO_KEY");
   });
@@ -124,34 +115,20 @@ describe("checkEnrollment", () => {
         checkEnrollment({
           seal: { ...SEAL, [name]: field(0x77) },
           stored: stored(),
-          slot: 1_000_000n,
         }),
       ).toThrow("RING_ENROLLMENT_KEY_MISMATCH");
     },
   );
-
-  it("names the slot a rotation inside the limit may run at", () => {
-    expect(() =>
-      checkEnrollment({ seal: SEAL, stored: stored(), slot: 100n + TRACKING_GRACE_SLOTS - 1n }),
-    ).toThrow(
-      expect.objectContaining({
-        code: "RING_ENROLLMENT_ROTATION_TOO_SOON",
-        details: { allowedAtSlot: (100n + TRACKING_GRACE_SLOTS).toString() },
-      }),
-    );
-  });
 });
 
 describe("tracking accounts", () => {
   it("decodes an authorization at its field offsets and reports it pending", () => {
     const decoded = decodeTrackingAuthorization(authorizationBytes());
     expect(decoded).toMatchObject({
-      bump: 254,
       registry: REGISTRY,
       owner: OWNER,
       revision: 3n,
       appliedRevision: 2n,
-      lastEnrollSlot: 900n,
     });
     expect(decoded.nullifierPk).toEqual(SEAL.nullifierPk);
     expect(decoded.ciphertext).toEqual(SEAL.ciphertext);
@@ -168,33 +145,26 @@ describe("tracking accounts", () => {
   });
 
   it("decodes a registry and refuses a next index past the tree", () => {
-    const data = new Uint8Array(1611);
+    const data = new Uint8Array(1606);
     data[0] = 3;
-    data[1] = 255;
-    data.set(field(0x21), 2);
-    data[34] = 4;
-    new DataView(data.buffer).setUint32(67, 1, true);
-    new DataView(data.buffer).setUint32(71, 2, true);
-    data.set(TRACKING_EMPTY_ROOT, 75);
+    data.set(field(0x21), 1);
+    data[33] = 4;
+    new DataView(data.buffer).setUint32(66, 1, true);
+    data.set(TRACKING_EMPTY_ROOT, 70);
     const decoded = decodeTrackingRegistry(data);
     expect(decoded.nextIndex).toBe(1);
-    expect(decoded.reservedLeaves).toBe(2);
     expect(decoded.roots[0]?.hash).toEqual(TRACKING_EMPTY_ROOT);
     expect(decoded.roots[1]).toBeUndefined();
-    new DataView(data.buffer).setUint32(67, 0, true);
+    new DataView(data.buffer).setUint32(66, 0, true);
     expect(() => decodeTrackingRegistry(data)).toThrow("RING_TRACKING_INVALID");
   });
 
   it("decodes an owner grant, only one means active", () => {
-    const data = new Uint8Array(101);
+    const data = new Uint8Array(2);
     data[0] = 5;
-    data[1] = 200;
-    data.set(addressBytes(REGISTRY, "registry"), 2);
-    data.set(addressBytes(OWNER, "owner"), 34);
-    data[66] = 1;
-    data[100] = 1;
+    data[1] = 1;
     expect(decodeOwnerGrant(data).active).toBe(true);
-    data[100] = 0;
+    data[1] = 0;
     expect(decodeOwnerGrant(data).active).toBe(false);
   });
 });
@@ -298,22 +268,18 @@ describe("enrollment instructions", () => {
   it("checks the stored authorization of the signing owner before it builds", async () => {
     const owner = await generateKeyPairSigner();
     const [authorization] = await trackingAuthorizationPda(REGISTRY, owner.address);
-    const enrolled = (slot: bigint) => ({
+    const enrolled = {
       getAccount: async (key: Address) =>
         key === authorization ? { data: authorizationBytes() } : undefined,
-      getSlot: async () => slot,
-    });
-    const enroll = (seal: EnrollmentSeal, slot: bigint) =>
+    } as never;
+    const enroll = (seal: EnrollmentSeal) =>
       enrollInstruction(
         { payer: owner, owner, trackingRegistry: REGISTRY, seal, viewingU: field(0x15) },
-        enrolled(slot) as never,
+        enrolled,
       );
-    await expect(enroll(SEAL, 900n + TRACKING_GRACE_SLOTS)).resolves.toBeDefined();
-    await expect(
-      enroll({ ...SEAL, ciphertext: field(0x16) }, 900n + TRACKING_GRACE_SLOTS),
-    ).rejects.toMatchObject({ code: "RING_ENROLLMENT_KEY_MISMATCH" });
-    await expect(enroll(SEAL, 900n + TRACKING_GRACE_SLOTS - 1n)).rejects.toMatchObject({
-      code: "RING_ENROLLMENT_ROTATION_TOO_SOON",
+    await expect(enroll(SEAL)).resolves.toBeDefined();
+    await expect(enroll({ ...SEAL, ciphertext: field(0x16) })).rejects.toMatchObject({
+      code: "RING_ENROLLMENT_KEY_MISMATCH",
     });
     await expect(
       enrollInstruction(
@@ -380,11 +346,11 @@ describe("proveEnrollment", () => {
   const auditor = X25519Keypair.generate();
 
   function registryAccount(ringId: Bytes32): { data: Uint8Array } {
-    const data = new Uint8Array(1611);
+    const data = new Uint8Array(1606);
     data[0] = 3;
-    data.set(ringId, 2);
-    data.set(auditor.publicKey().toBytes(), 34);
-    new DataView(data.buffer).setUint32(67, 1, true);
+    data.set(ringId, 1);
+    data.set(auditor.publicKey().toBytes(), 33);
+    new DataView(data.buffer).setUint32(66, 1, true);
     return { data };
   }
 

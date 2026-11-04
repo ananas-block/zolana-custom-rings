@@ -7,6 +7,7 @@ import {
   bigIntBytes,
   equalBytes,
   hashChain,
+  hashChain4,
   poseidon,
   readOutputData,
   solanaOwnerIdentity,
@@ -293,7 +294,7 @@ export function ringDepositPublicInputHash(
     )
       throw new RingError("RING_BUILD_DEPOSIT", { details: { reason: "deposit capsule" } });
   });
-  return hashChain(
+  return hashChain4(
     depositStatementElements({
       contextHash: input.contextHash,
       anonymous: input.anonymous,

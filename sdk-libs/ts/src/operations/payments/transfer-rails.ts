@@ -64,6 +64,7 @@ import {
   type FrameExtensions,
 } from "../../protocol/transaction/transact.js";
 import { RingError } from "../../protocol/error.js";
+import type { RingListSalt } from "../../proof/policy-proof.js";
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import {
   proveStagedTransfer,
@@ -92,9 +93,7 @@ const base64 = getBase64Decoder();
 export interface RingTransferApproval {
   readonly transaction: RingTransactionFrame;
   /** Runs once the transfer fits its transaction, before any proof. */
-  approve(
-    transfer: Readonly<{ prepared: PreparedTransfer; coSigners: readonly Address[] }>,
-  ): Promise<void>;
+  approve(transfer: Readonly<{ prepared: PreparedTransfer; coSigner?: Address }>): Promise<void>;
 }
 
 export type CustomRingTransferClient = RingProvingClient &
@@ -117,8 +116,10 @@ export interface CustomRingTransferInput {
   /** Prepared by the rail, every output it already holds keeps its slot. */
   readonly transfer: ConfidentialTransfer;
   readonly assets: AssetRegistry;
-  /** Read only when the operation demands one, each record must cover a demanded class. */
-  readonly coSigners?: readonly Address[];
+  /** Read only when the operation demands one, its record holds every demanded class. */
+  readonly coSigner?: Address;
+  /** Every enrolled owner a salted list reads, the sender and the recipients alike. */
+  readonly listSalts?: readonly RingListSalt[];
   /** SPP's optional fields the frame carries through. */
   readonly extensions?: FrameExtensions;
 }
@@ -236,7 +237,7 @@ export class CustomRingTransfer {
         throw new RingError("RING_RELAY_PAYER_MISMATCH", {
           details: { payer: prepared.payer, feePayer: quote.feePayer },
         });
-      await approval?.approve({ prepared, coSigners: [] });
+      await approval?.approve({ prepared });
       const sealed = sealStagedTransfer({
         ringProgramId,
         config,
@@ -297,7 +298,8 @@ export class CustomRingTransfer {
           ringProgramId,
           config,
           staged: { ...staged, spend: this.#spend(client, owner) },
-          ...suppliedCoSigners(this.#input.coSigners),
+          ...suppliedCoSigner(this.#input.coSigner),
+          listSalts: this.#input.listSalts ?? [],
           ...approvedStage(approval, prepared),
         },
         context,
@@ -586,7 +588,8 @@ export class AnonymousTransfer {
           ringProgramId,
           config,
           staged: { ...staged, spend },
-          ...suppliedCoSigners(this.#owner.coSigners),
+          ...suppliedCoSigner(this.#owner.coSigner),
+          listSalts: this.#owner.listSalts ?? [],
           ...approvedStage(approval, prepared),
         },
         context,
@@ -629,7 +632,7 @@ export class AnonymousTransfer {
         throw new RingError("RING_RELAY_PAYER_MISMATCH", {
           details: { payer: prepared.payer, feePayer: quote.feePayer },
         });
-      await approval?.approve({ prepared, coSigners: [] });
+      await approval?.approve({ prepared });
       const sealed = sealStagedTransfer({
         ringProgramId,
         config,
@@ -751,11 +754,14 @@ export class AnonymousTransfer {
         ...(this.#owner.extensions === undefined ? {} : { extensions: this.#owner.extensions }),
         anonymous: {
           ...(exitTokenOwner === undefined ? {} : { tokenOwner: exitTokenOwner }),
-          partyIdentities: (coSigners: readonly Address[]) => {
-            checkHiddenParties(owner, [prepared.payer, ...coSigners]);
+          partyIdentities: (coSigner: Address | undefined) => {
+            checkHiddenParties(owner, [
+              prepared.payer,
+              ...(coSigner === undefined ? [] : [coSigner]),
+            ]);
             return anonymousPartyIdentities({
               payer: prepared.payer,
-              coSigners,
+              ...(coSigner === undefined ? {} : { coSigner }),
               ...(destination === undefined ? {} : { exitDestination: destination }),
             });
           },
@@ -917,8 +923,11 @@ export class PublicOwnerTransfer {
             publicOwners: true,
             prove,
             anonymous: {
-              partyIdentities: (coSigners) =>
-                anonymousPartyIdentities({ payer: prepared.payer, coSigners }),
+              partyIdentities: (coSigner) =>
+                anonymousPartyIdentities({
+                  payer: prepared.payer,
+                  ...(coSigner === undefined ? {} : { coSigner }),
+                }),
             },
           }
         : { rail: "confidential", prove };
@@ -936,7 +945,8 @@ export class PublicOwnerTransfer {
             ...(this.#owner.extensions === undefined ? {} : { extensions: this.#owner.extensions }),
             spend,
           },
-          ...suppliedCoSigners(this.#owner.coSigners),
+          ...suppliedCoSigner(this.#owner.coSigner),
+          listSalts: this.#owner.listSalts ?? [],
           ...approvedStage(approval, prepared),
         },
         context,
@@ -1092,8 +1102,11 @@ export class DelegateTransfer {
               ...(isAnonymousFrame(railKind)
                 ? {
                     anonymous: {
-                      partyIdentities: (coSigners: readonly Address[]) =>
-                        anonymousPartyIdentities({ payer: prepared.payer, coSigners }),
+                      partyIdentities: (coSigner: Address | undefined) =>
+                        anonymousPartyIdentities({
+                          payer: prepared.payer,
+                          ...(coSigner === undefined ? {} : { coSigner }),
+                        }),
                     },
                   }
                 : {}),
@@ -1181,10 +1194,8 @@ function settlementLeg(withdrawal: DelegateWithdrawal): SettlementTransfer {
       };
 }
 
-function suppliedCoSigners(
-  coSigners: readonly Address[] | undefined,
-): Pick<StagedTransferInput, "coSigners"> {
-  return coSigners === undefined ? {} : { coSigners };
+function suppliedCoSigner(coSigner: Address | undefined): Pick<StagedTransferInput, "coSigner"> {
+  return coSigner === undefined ? {} : { coSigner };
 }
 
 /** The approval a pipeline runs, bound to the prepared transfer the rail proves. */
@@ -1195,7 +1206,8 @@ function approvedStage(
   if (approval === undefined) return {};
   return {
     transaction: approval.transaction,
-    approve: (coSigners) => approval.approve({ prepared, coSigners }),
+    approve: (coSigner) =>
+      approval.approve({ prepared, ...(coSigner === undefined ? {} : { coSigner }) }),
   };
 }
 

@@ -13,18 +13,20 @@ export const ENVELOPE_KEY_LEN = 32;
 export const REAL_INPUT_COUNT_LEN = 1;
 /** Keys with entry capacity alone, bit `i` set when input `i` is a default-ring note. */
 export const DEFAULT_INPUT_BITS_LEN = 8;
-/** `kind ‖ reserved ‖ u64be(amount) ‖ owner_key ‖ mint ‖ be32(nullifier_pk)`. */
-export const AUDIT_RECORD_LEN = 112;
+/** `kind ‖ u64be(amount) ‖ owner_key ‖ mint ‖ be32(nullifier_pk)`. */
+export const AUDIT_RECORD_LEN = 105;
 /** `be32(data_hash) ‖ be32(ring_data_hash)`. */
 export const DATA_TAIL_LEN = 64;
 /** `owner_key ‖ be32(nullifier_pk) ‖ u64be(amount) ‖ mint ‖ be32(blinding) ‖ be32(data_hash) ‖ be32(ring_data_hash)`. */
 export const ENTRY_INPUT_LEN = 200;
-/** `record ‖ secret`, the deposit's blinding or the merge's seed. */
-export const OPENING_RECORD_LEN = AUDIT_RECORD_LEN + 32;
 /** `0x04 ‖ eph_u` ahead of the auditor ciphertexts. */
 export const TAGGED_KEY_LEN = 33;
 
-export const RECORD_BLOCKS = AUDIT_RECORD_LEN / STREAM_BLOCK_LEN;
+export const RECORD_BLOCKS = Math.ceil(AUDIT_RECORD_LEN / STREAM_BLOCK_LEN);
+/** The padding past a record keeps slot `i` at its counter, a transfer frame omits it. */
+export const RECORD_STRIDE = RECORD_BLOCKS * STREAM_BLOCK_LEN;
+/** The secret is the deposit's blinding or the merge's seed. */
+export const OPENING_RECORD_LEN = RECORD_STRIDE + 32;
 export const TAIL_BLOCKS = DATA_TAIL_LEN / STREAM_BLOCK_LEN;
 
 /** Rust `pack_be_chunks`, the fields `length` bytes pack into. */

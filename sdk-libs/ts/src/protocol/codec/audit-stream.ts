@@ -18,6 +18,7 @@ import {
   ENTRY_INPUT_LEN,
   ENVELOPE_KEY_LEN,
   OPENING_RECORD_LEN,
+  RECORD_STRIDE,
   envelopeRegion,
   type AuditStreamLayout,
 } from "./ring-disclosure-layout.js";
@@ -25,7 +26,6 @@ import { RingError } from "../error.js";
 
 const FIELD_LEN = 32;
 const AMOUNT_LEN = 8;
-const RECORD_RESERVED_LEN = 7;
 const ZERO = new Uint8Array(FIELD_LEN) as Bytes32;
 const ZERO_MINT = encodeBase58(ZERO);
 const NO_EVIDENCE: AuditEvidence = Object.freeze({ kind: "none" });
@@ -108,43 +108,44 @@ export const EMPTY_ENTRY_INPUT: EntryInput = Object.freeze({
 export function encodeAuditRecord(record: AuditRecord): Uint8Array {
   const out = new Uint8Array(AUDIT_RECORD_LEN);
   out[0] = record.kind;
-  out.set(u64be(checkedCounter(record.amount, "amount")), 8);
-  out.set(checkedBytes<Bytes32>(record.ownerKey, FIELD_LEN, "owner key"), 16);
-  out.set(addressBytes(record.mint, "mint"), 48);
-  out.set(checkedBytes<Bytes32>(record.nullifierPk, FIELD_LEN, "nullifier pk"), 80);
+  out.set(u64be(checkedCounter(record.amount, "amount")), 1);
+  out.set(checkedBytes<Bytes32>(record.ownerKey, FIELD_LEN, "owner key"), 9);
+  out.set(addressBytes(record.mint, "mint"), 41);
+  out.set(checkedBytes<Bytes32>(record.nullifierPk, FIELD_LEN, "nullifier pk"), 73);
   return out;
 }
 
-/** Refuses a kind off the three, a set reserved byte and a dummy that carries a value. */
+/** Refuses a kind off the three and a dummy that carries a value. */
 export function decodeAuditRecord(plaintext: Uint8Array): AuditRecord {
   if (plaintext.length !== AUDIT_RECORD_LEN) throw refused();
   const kind = plaintext[0];
   if (kind !== RecordKind.dummy && kind !== RecordKind.ring && kind !== RecordKind.exit)
     throw refused();
-  if (plaintext.subarray(1, 1 + RECORD_RESERVED_LEN).some((byte) => byte !== 0)) throw refused();
-  const body = plaintext.subarray(1 + RECORD_RESERVED_LEN);
+  const body = plaintext.subarray(1);
   if (kind === RecordKind.dummy && body.some((byte) => byte !== 0)) throw refused();
   return Object.freeze({
     kind,
-    amount: bytesToBigInt(plaintext.subarray(8, 16)),
-    ownerKey: plaintext.slice(16, 48) as Bytes32,
-    mint: encodeBase58(plaintext.subarray(48, 80)),
-    nullifierPk: plaintext.slice(80, 112) as Bytes32,
+    amount: bytesToBigInt(plaintext.subarray(1, 9)),
+    ownerKey: plaintext.slice(9, 41) as Bytes32,
+    mint: encodeBase58(plaintext.subarray(41, 73)),
+    nullifierPk: plaintext.slice(73, 105) as Bytes32,
   });
 }
 
 export function encodeOpeningRecord(opening: OpeningRecord): Uint8Array {
-  return concatBytes(
-    encodeAuditRecord(opening.record),
-    checkedBytes<Bytes32>(opening.secret, FIELD_LEN, "secret"),
-  );
+  const out = new Uint8Array(OPENING_RECORD_LEN);
+  out.set(encodeAuditRecord(opening.record));
+  out.set(checkedBytes<Bytes32>(opening.secret, FIELD_LEN, "secret"), RECORD_STRIDE);
+  return out;
 }
 
 export function decodeOpeningRecord(plaintext: Uint8Array): OpeningRecord {
   if (plaintext.length !== OPENING_RECORD_LEN) throw refused();
+  if (plaintext.subarray(AUDIT_RECORD_LEN, RECORD_STRIDE).some((byte) => byte !== 0))
+    throw refused();
   return Object.freeze({
     record: decodeAuditRecord(plaintext.subarray(0, AUDIT_RECORD_LEN)),
-    secret: plaintext.slice(AUDIT_RECORD_LEN) as Bytes32,
+    secret: plaintext.slice(RECORD_STRIDE) as Bytes32,
   });
 }
 

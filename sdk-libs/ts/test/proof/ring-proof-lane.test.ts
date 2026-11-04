@@ -5,15 +5,15 @@ import { describe, expect, it } from "vitest";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { hashChain } from "@heliuslabs/zolana/internal";
+import { bytesKey, hashChain4 } from "@heliuslabs/zolana/internal";
 import type { Address } from "@solana/kit";
 
 import {
-  coverRequirement,
+  checkCoSigner,
   demandRequirement,
   operationDemand,
   publicLegClasses,
-  resolveRingCoSigners,
+  resolveRingCoSigner,
 } from "../../src/proof/cosign.js";
 import {
   defaultInputBits,
@@ -23,6 +23,8 @@ import {
 } from "../../src/proof/audit-proof.js";
 import { depositStatementElements } from "../../src/proof/deposit-audit.js";
 import { checkInputKeys, checkOutputKeys } from "../../src/proof/policy-proof.js";
+import { enrolledSalt } from "../../src/proof/policy-proof.js";
+import { listTagOf } from "../../src/crypto/keys/list-salt.js";
 import { selectTransferKey } from "../../src/proof/transfer-proof.js";
 import {
   RING_COSIGN_APPROVE_OUTFLOW,
@@ -37,7 +39,10 @@ import {
   ringCircuitType,
   ringProvingKey,
 } from "../../src/protocol/proof/proving-keys.js";
-import { ownerSignerCapacity } from "../../src/protocol/proof/transfer-shapes.js";
+import {
+  depositKeyCapacity,
+  ownerSignerCapacity,
+} from "../../src/protocol/proof/transfer-shapes.js";
 import { ApprovalMask } from "../../src/protocol/transaction/transact.js";
 import { unopenedRecordPool } from "../../src/protocol/membership/member-opening.js";
 import { transferPoolCapacity } from "../../src/protocol/proof/transfer-shapes.js";
@@ -46,7 +51,7 @@ import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transac
 import type { TrackingRecord } from "../../src/protocol/membership/tracking.js";
 import {
   ringProofRequestBody,
-  type ConfidentialTransferProofRequest,
+  type TransferProofRequest,
   type MergeProofRequest,
 } from "../../src/rpc/prover/ring.js";
 
@@ -72,7 +77,8 @@ const SPEND = {
   spendsDefaultRing: false,
   legs: 0,
   owners: 2,
-  hasData: false,
+  pools: { own: 0, curator: 0, tracking: 0 },
+  wide: false,
 } as const;
 const ADDRESSES = { nInputs: 2, coSigners: 0, legs: 0 };
 
@@ -91,15 +97,15 @@ describe("selectTransferKey", () => {
   });
 
   it("refuses past the account bound with the counts", () => {
-    const addresses = { nInputs: 24, coSigners: 5, legs: 2 };
+    const addresses = { nInputs: 24, coSigners: 1, legs: 2 };
     const capacity = ownerSignerCapacity(addresses);
-    expect(capacity).toBe(64 - 4 - 6 - 24 - 10 - 2);
+    expect(capacity).toBe(64 - 4 - 6 - 24 - 2 - 2);
     selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity });
     const refused = refusal(() =>
       selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity + 1 }),
     );
     expect(refused.code).toBe("RING_TRANSFER_PAST_ACCOUNT_BOUND");
-    expect(refused.details).toMatchObject({ ownerSigners: capacity + 1, capacity, coSigners: 5 });
+    expect(refused.details).toMatchObject({ ownerSigners: capacity + 1, capacity, coSigners: 1 });
   });
 
   it("names rows past the widest and an unkeyed shape", () => {
@@ -115,12 +121,43 @@ describe("selectTransferKey", () => {
     expect(
       refusal(() =>
         selectTransferKey({
-          spend: { ...SPEND, outputs: 3 },
+          spend: { ...SPEND, outputs: 17 },
           addresses: ADDRESSES,
           ownerSigners: 0,
         }),
       ).details,
     ).toMatchObject({ reason: "RingShapeUnkeyed" });
+  });
+});
+
+describe("enrolledSalt", () => {
+  const owner = new Uint8Array(32).fill(1) as Bytes32;
+  const salt = new Uint8Array(32).fill(2) as Bytes32;
+  const salts = new Map([[bytesKey(owner), salt]]);
+
+  it("takes no salt with no row and the row's salt under its tag", () => {
+    expect(enrolledSalt(owner, undefined, new Map())).toBeUndefined();
+    expect(enrolledSalt(owner, { ...row0(), listTag: listTagOf(salt) }, salts)).toEqual(salt);
+  });
+
+  it("refuses a row with no salt and a salt off the row's tag", () => {
+    expect(refusal(() => enrolledSalt(owner, row0(), new Map())).code).toBe(
+      "RING_LIST_SALT_MISSING",
+    );
+    expect(refusal(() => enrolledSalt(owner, row0(), salts)).code).toBe("RING_ADDRESS_MISMATCH");
+  });
+});
+
+describe("depositKeyCapacity", () => {
+  const subjects = { slots: 1, recipients: 1, assets: 1, saltedKeys: 0 };
+
+  it("takes the narrowest key holding every subject", () => {
+    expect(depositKeyCapacity(subjects)).toBe(1);
+    expect(depositKeyCapacity({ ...subjects, saltedKeys: 1 })).toBe(2);
+  });
+
+  it("refuses a deposit past every key", () => {
+    expect(depositKeyCapacity({ ...subjects, slots: 9 })).toBeUndefined();
   });
 });
 
@@ -155,33 +192,25 @@ describe("co-sign", () => {
   const ONE: Address = "11111111111111111111111111111111" as Address;
 
   it("demands nothing of a ring with no record below its thresholds", () => {
-    expect(demandRequirement(demand(true, 0, false), {}).uncovered).toBe(0);
+    expect(demandRequirement(demand(true, 0, false), {})).toBeUndefined();
   });
 
   it("drops transfers under no_spend and adds deposits for a deposit leg", () => {
     const ring = { coSignerClasses: RING_COSIGN_TRANSFERS | RING_COSIGN_DEPOSITS };
-    expect(demandRequirement(demand(false, 0, true), ring).uncovered).toBe(RING_COSIGN_DEPOSITS);
-    expect(demandRequirement(demand(true, 0), ring).uncovered).toBe(RING_COSIGN_TRANSFERS);
+    expect(demandRequirement(demand(false, 0, true), ring)?.classes).toBe(RING_COSIGN_DEPOSITS);
+    expect(demandRequirement(demand(true, 0), ring)?.classes).toBe(RING_COSIGN_TRANSFERS);
   });
 
-  it("fails an approval closed, an approver of the other class does not count", () => {
-    expect(
-      refusal(() =>
-        demandRequirement(demand(true, ApprovalMask.outflow), {
-          coSignerClasses: RING_COSIGN_APPROVE_WITHDRAWAL | RING_COSIGN_TRANSFERS,
-        }),
-      ).code,
-    ).toBe("RING_APPROVER_MISSING");
-  });
-
-  it("covers each class apart and refuses an unrelated or repeated record", () => {
-    const start = demandRequirement(demand(false, ApprovalMask.outflow | ApprovalMask.withdrawal), {
-      coSignerClasses: RING_COSIGN_APPROVE_OUTFLOW | RING_COSIGN_APPROVE_WITHDRAWAL,
+  it("needs one record holding every demanded class", () => {
+    const both = ApprovalMask.outflow | ApprovalMask.withdrawal;
+    const requirement = demandRequirement(demand(false, both), {});
+    if (requirement === undefined) throw new Error("an approval class never drops out");
+    checkCoSigner(requirement, {
+      scope: RING_COSIGN_APPROVE_OUTFLOW | RING_COSIGN_APPROVE_WITHDRAWAL,
+      signer: ONE,
     });
-    const rest = coverRequirement(start, { scope: RING_COSIGN_APPROVE_OUTFLOW, signer: ONE });
-    expect(rest.uncovered).toBe(RING_COSIGN_APPROVE_WITHDRAWAL);
     expect(
-      refusal(() => coverRequirement(rest, { scope: RING_COSIGN_APPROVE_OUTFLOW, signer: ONE }))
+      refusal(() => checkCoSigner(requirement, { scope: RING_COSIGN_APPROVE_OUTFLOW, signer: ONE }))
         .code,
     ).toBe("RING_COSIGNER_OUT_OF_SCOPE");
   });
@@ -195,11 +224,11 @@ describe("co-sign", () => {
       demand: demand(true, 0),
     };
     await expect(
-      resolveRingCoSigners({ ...base, supplied: [ONE], ownerSigners: [ONE] }),
+      resolveRingCoSigner({ ...base, supplied: ONE, ownerSigners: [ONE] }),
     ).rejects.toMatchObject({ code: "RING_COSIGNER_REQUIRED" });
-    await expect(
-      resolveRingCoSigners({ ...base, supplied: [], ownerSigners: [] }),
-    ).rejects.toMatchObject({ code: "RING_COSIGNER_REQUIRED" });
+    await expect(resolveRingCoSigner({ ...base, ownerSigners: [] })).rejects.toMatchObject({
+      code: "RING_COSIGNER_REQUIRED",
+    });
   });
 });
 
@@ -243,7 +272,7 @@ describe("deposit-v4.json", () => {
       },
     });
     expect(elements.map((element) => bytesToHex(element))).toEqual(entry.elements);
-    expect(bytesToHex(hashChain(elements))).toBe(entry.public_input_hash);
+    expect(bytesToHex(hashChain4(elements))).toBe(entry.public_input_hash);
   });
 });
 
@@ -449,12 +478,12 @@ describe("prover/ring/params.go", () => {
 
   it("takes every required key and adds only the wire the circuit's Table reads", () => {
     const circuit = {
-      family: "transferConfidential",
+      family: "transfer",
       outputs: 2,
       class: 24,
       withdrawals: 4,
       owners: 4,
-      data: false,
+      entry: false,
     } as const;
     const capacity = transferPoolCapacity(circuit);
     const zero = fill(0);
@@ -471,18 +500,19 @@ describe("prover/ring/params.go", () => {
         "ringDataHash",
         "ringProgramId",
       ].map((key) => [key, zero]),
-    ) as unknown as ConfidentialTransferProofRequest["inputs"][number];
+    ) as unknown as TransferProofRequest["inputs"][number];
     const repeat = <T>(length: number, value: T): readonly T[] => Array<T>(length).fill(value);
     const entry = { own: 0, curator: 0 };
+    const ownerEntry = { ...entry, tracking: 0, listSalt: zero, ownSalted: 0, curatorSalted: 0 };
     const pool = unopenedRecordPool(capacity.tracking);
-    const request: ConfidentialTransferProofRequest = {
-      kind: "transferConfidential",
+    const request: TransferProofRequest = {
+      kind: "transfer",
       publicInputHash: zero,
       firstNullifier: zero,
       txViewingSk: zero,
       ephSk: zero,
       auditorPk: zero,
-      salt: new Uint8Array(16) as ConfidentialTransferProofRequest["salt"],
+      salt: new Uint8Array(16) as TransferProofRequest["salt"],
       layout: { hasData: false, entry: false },
       approvalMask: 0,
       outputCount: 2,
@@ -515,26 +545,27 @@ describe("prover/ring/params.go", () => {
       ringId: zero,
       ownRoot: zero,
       curatorRoot: zero,
-      privateRoot: zero,
       publicAssets: repeat(3, zero),
       publicAmounts: repeat(3, zero),
       publicGross: repeat(3, zero),
       sources: repeat(8, { listId: 0, registry: zero }),
-      source: { ownerLists: 0, registry: zero },
+      salted: 0,
       policyLen: 0,
       rules: repeat(16, zero),
       ownPool: unopenedRecordPool(capacity.own),
       curatorPool: unopenedRecordPool(capacity.curator),
-      senderEntries: repeat(4, entry),
-      ownerEntries: repeat(6, entry),
+      senderEntries: repeat(4, ownerEntry),
+      ownerEntries: repeat(6, ownerEntry),
       assetEntries: repeat(6, entry),
       publicAssetEntries: repeat(3, 0),
       inProof: false,
+      hidden: false,
       delegate: false,
       sender: zero,
+      partyIdentities: repeat(3, zero),
     };
     const keys = Object.keys(ringProofRequestBody(request));
-    const go = tags("ConfidentialTransferParams");
+    const go = tags("TransferParams");
     expect(go.required.filter((key) => !keys.includes(key))).toEqual([]);
     expect(keys.filter((key) => !go.required.includes(key) && !go.optional.includes(key))).toEqual(
       [],

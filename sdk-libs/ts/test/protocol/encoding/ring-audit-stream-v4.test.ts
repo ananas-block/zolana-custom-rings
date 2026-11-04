@@ -262,22 +262,19 @@ describe("the v4 stream codecs", () => {
 
   it("lays the record out at its contract bytes", () => {
     const bytes = encodeAuditRecord(record);
-    expect(bytes).toHaveLength(112);
+    expect(bytes).toHaveLength(105);
     expect(bytes[0]).toBe(1);
-    expect(bytes.subarray(1, 8).every((byte) => byte === 0)).toBe(true);
-    expect(bytes[15]).toBe(7);
+    expect(bytes[8]).toBe(7);
     expect(decodeAuditRecord(bytes)).toEqual(record);
   });
 
-  it("refuses a kind off the three, a set reserved byte and a dummy with a value", () => {
+  it("refuses a kind off the three and a dummy with a value", () => {
     const bytes = encodeAuditRecord(record);
     const kind = bytes.slice();
     kind[0] = 3;
-    const reserved = bytes.slice();
-    reserved[3] = 1;
     const dummy = bytes.slice();
     dummy[0] = 0;
-    for (const refused of [kind, reserved, dummy, bytes.subarray(1)])
+    for (const refused of [kind, dummy, bytes.subarray(1)])
       expect(() => decodeAuditRecord(refused)).toThrow(RingError);
   });
 
@@ -286,6 +283,9 @@ describe("the v4 stream codecs", () => {
     const opening = encodeOpeningRecord({ record, secret });
     expect(opening).toHaveLength(144);
     expect(decodeOpeningRecord(opening)).toEqual({ record, secret });
+    const padded = opening.slice();
+    padded[105] = 1;
+    expect(() => decodeOpeningRecord(padded)).toThrow(RingError);
     expect(() => decodeOpeningRecord(opening.subarray(1))).toThrow(RingError);
     const tail = { dataHash: secret, ringDataHash: secret };
     expect(decodeDataTail(encodeDataTail(tail))).toEqual(tail);

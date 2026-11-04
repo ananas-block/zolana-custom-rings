@@ -43,7 +43,8 @@ import {
 } from "../../protocol/transaction/intent.js";
 import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 import { ringSpendTransfer } from "./ring-spend.js";
-import { transferShapes } from "../../protocol/proof/transfer-shapes.js";
+import type { RingListSalt } from "../../proof/policy-proof.js";
+import { frameKeyShape } from "../../protocol/proof/transfer-shapes.js";
 import type { ReplyMetadata } from "../../protocol/codec/anonymous-delivery.js";
 import { RingAddress, RingPaymentRequest } from "../../crypto/keys/ring-address.js";
 
@@ -106,8 +107,10 @@ export interface RingSpendParams {
   readonly amount: bigint;
   /** Receives every private output, defaults to `client.tree`. */
   readonly outputTree?: Address;
-  /** Each signs when the operation demands one, its record must cover a demanded class. */
-  readonly cosigners?: readonly SignerAccount[];
+  /** Signs when the operation demands one, its record holds every demanded class. */
+  readonly cosigner?: SignerAccount;
+  /** The sender's and any other enrolled owner's salt a salted list reads, a paid `RingAddress` adds its own. */
+  readonly listSalts?: readonly RingListSalt[];
   readonly priorityFeeLamports?: bigint;
 }
 
@@ -636,9 +639,7 @@ async function buildRingSpend<R>(
               ? "confidential"
               : "anonymous",
         ownerInProof: rail.inProofOwner !== undefined,
-        ...(params.cosigners === undefined
-          ? {}
-          : { coSigners: params.cosigners.map((cosigner) => signerAddress(cosigner)) }),
+        ...(params.cosigner === undefined ? {} : { coSigner: signerAddress(params.cosigner) }),
       },
       context,
     );
@@ -790,7 +791,7 @@ async function stageRingSpend<R>(
     route: keyof typeof MODE_REFUSALS | "public";
     /** Ring notes only, a default-ring input would publish the owner SPP hides. */
     ownerInProof: boolean;
-    coSigners?: readonly Address[];
+    coSigner?: Address;
   }>,
   context: RequestContext | undefined,
 ): Promise<StagedSpend> {
@@ -864,7 +865,8 @@ async function stageRingSpend<R>(
     keys: params.keys,
     transfer,
     assets: params.wallet.registry,
-    ...(input.coSigners === undefined ? {} : { coSigners: input.coSigners }),
+    ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
+    listSalts: spendListSalts(params),
   });
   return Object.freeze({
     selected,
@@ -920,6 +922,27 @@ function selectAnonymousInputs(
   }
 }
 
+function spendListSalts(params: SpendBase): readonly RingListSalt[] {
+  const recipient = "recipient" in params ? params.recipient : undefined;
+  const address =
+    recipient instanceof RingPaymentRequest
+      ? recipient.address
+      : recipient instanceof RingAddress
+        ? recipient
+        : undefined;
+  return [
+    ...(params.listSalts ?? []),
+    ...(address === undefined
+      ? []
+      : [
+          {
+            owner: address.recipient.signingPublicKey.ownerProofInputHash(),
+            salt: address.listSalt,
+          },
+        ]),
+  ];
+}
+
 function unfunded(cause: unknown): boolean {
   return (
     cause instanceof RingError &&
@@ -931,9 +954,12 @@ function unfunded(cause: unknown): boolean {
 
 /** Padded inputs are published, the widest two-output shape an anonymous key serves bounds a spend. */
 function anonymousInputCap(selection: "ring" | "entry"): number {
-  const keyed = transferShapes("anonymous", selection === "entry")?.find(
-    (shape) => shape.outputs === SPEND_OUTPUTS,
-  );
+  const keyed = frameKeyShape({
+    rail: "anonymous",
+    outputs: SPEND_OUTPUTS,
+    spendsDefaultRing: selection === "entry",
+    wide: true,
+  });
   return Math.min(keyed?.inputs ?? 0, MAX_TRANSACT_INPUTS);
 }
 

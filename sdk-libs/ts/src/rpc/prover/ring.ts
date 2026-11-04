@@ -12,7 +12,6 @@ import { InterfaceError } from "@heliuslabs/zolana/interface";
 import {
   bigIntBytes,
   bytesField,
-  ZERO_32,
   type ExpectedProvingKey,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
@@ -29,7 +28,6 @@ import {
   type PoolSubject,
   type QuadPath,
   type QueueEntry,
-  type RecordOpening,
   type RecordPool,
   type RecordWriteProofInput,
 } from "../../protocol/membership/member-registry.js";
@@ -46,11 +44,11 @@ import {
   type RingKeyCircuit,
 } from "../../protocol/proof/proving-keys.js";
 import {
+  depositPoolWidth,
   transferPoolCapacity,
   type PolicyPoolCapacity,
   type TransferKeyCircuit,
 } from "../../protocol/proof/transfer-shapes.js";
-import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-capsule.js";
 import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
 import { ANONYMOUS_PARTIES } from "../../protocol/transaction/transact.js";
 import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "./types.js";
@@ -102,16 +100,11 @@ export interface PolicySourceProofInput {
   readonly registry: Bytes32;
 }
 
-/** Circuit `privatelist.Source`, zero without a private source. */
-export interface PrivateSourceProofInput {
-  readonly ownerLists: number;
-  readonly registry: Bytes32;
-}
-
-/** Go `PolicyTable`, every row past its count zero, `source` the wire circuit `Table.Source` reads. */
+/** Go `PolicyTable`, every row past its count zero. */
 export interface PolicyTableProofInputs {
   readonly sources: readonly PolicySourceProofInput[];
-  readonly source: PrivateSourceProofInput;
+  /** Bit `i` puts list `i + 1` at owners' salted keys. */
+  readonly salted: number;
   readonly policyLen: number;
   readonly rules: readonly Bytes32[];
 }
@@ -120,24 +113,14 @@ export interface PolicyTableProofInputs {
 export interface PolicySubjectEntry {
   readonly own: number;
   readonly curator: number;
-  /** Set on an owner row of a key with private rows. */
-  readonly private?: number;
 }
 
-/** Go `PrivateOpening`, one position of a private row. */
-export interface PrivateOpeningProofInput {
-  readonly written: boolean;
-  readonly lists: bigint;
-  readonly leafSalt: Bytes32;
-  readonly siblings: readonly Bytes32[];
-}
-
-/** Go `PrivateRow`, a clear `live` pads. */
-export interface PrivateRowProofInput {
-  readonly live: boolean;
+/** Go `PooledOwnerEntry`, a zero salt with no tracking row. */
+export interface PolicyOwnerEntry extends PolicySubjectEntry {
+  readonly tracking: number;
   readonly listSalt: Bytes32;
-  readonly salted: PrivateOpeningProofInput;
-  readonly zero: PrivateOpeningProofInput;
+  readonly ownSalted: number;
+  readonly curatorSalted: number;
 }
 
 /** Go `PolicyParams`, one owner and one asset entry per output and withdrawal slot, both pools at the key's widths. */
@@ -149,7 +132,6 @@ export interface PolicyProofInputs extends PolicyTableProofInputs {
   readonly ringId: Bytes32;
   readonly ownRoot: Bytes32;
   readonly curatorRoot: Bytes32;
-  readonly privateRoot: Bytes32;
   readonly publicAssets: readonly Bytes32[];
   readonly publicAmounts: readonly Bytes32[];
   /** Gross withdrawals per slot as right aligned u128. */
@@ -157,14 +139,10 @@ export interface PolicyProofInputs extends PolicyTableProofInputs {
   readonly ownPool: RecordPool;
   readonly curatorPool: RecordPool;
   /** The pool rows of the key's owner rows. */
-  readonly senderEntries: readonly PolicySubjectEntry[];
-  readonly ownerEntries: readonly PolicySubjectEntry[];
+  readonly senderEntries: readonly PolicyOwnerEntry[];
+  readonly ownerEntries: readonly PolicyOwnerEntry[];
   readonly assetEntries: readonly PolicySubjectEntry[];
   readonly publicAssetEntries: readonly number[];
-  /** One per subject on a key with private rows, absent otherwise. */
-  readonly privateRows?: readonly PrivateRowProofInput[];
-  readonly privateOwners?: readonly Bytes32[];
-  readonly privateTracking?: readonly number[];
 }
 
 /** Go `TrackingRecordParams` rows, their shared proof and the subjects they open. */
@@ -213,21 +191,15 @@ export interface TransferProofInputs
   readonly addressChain: Bytes32;
 }
 
-/** Go `ConfidentialTransferParams`. */
-export interface ConfidentialTransferProofRequest extends TransferProofInputs {
-  readonly kind: "transferConfidential";
+/** Go `TransferParams`, the statement's rail bits pick the rail. */
+export interface TransferProofRequest extends TransferProofInputs {
+  readonly kind: "transfer";
   readonly inProof: boolean;
+  readonly hidden: boolean;
   readonly delegate: boolean;
-  /** The in-proof owner, zero on the signer and authority rails. */
+  /** The in-proof owner, zero on every other rail. */
   readonly sender: Bytes32;
-}
-
-/** Go `AnonymousTransferParams`. */
-export interface AnonymousTransferProofRequest extends TransferProofInputs {
-  readonly kind: "transferAnonymous";
-  readonly publicOwners: boolean;
-  readonly delegate: boolean;
-  /** Payer, five co-signers and exit destination, zero when absent. */
+  /** Payer, co-signer and exit destination, zero when absent. */
   readonly partyIdentities: readonly Bytes32[];
 }
 
@@ -274,10 +246,12 @@ export interface RegisterKeyProofRequest {
   readonly auditorPk: Bytes32;
 }
 
-/** Go `DepositParams`, every slot list at the deposit capacity. */
-export interface DepositProofRequest {
+/** Go `DepositParams`, every slot list at the capacity its prefix names. */
+export interface DepositProofRequest extends TrackingProofInputs, PolicyProofInputs {
   readonly kind: "deposit";
   readonly publicInputHash: Bytes32;
+  /** The key, `key_capacity` in the instruction. */
+  readonly capacity: number;
   readonly contextHash: Bytes32;
   readonly count: number;
   readonly anonymous: boolean;
@@ -287,24 +261,11 @@ export interface DepositProofRequest {
   readonly blindingSecrets: readonly Bytes32[];
   readonly ephSk: Bytes32;
   readonly auditorPk: Bytes32;
-  readonly trackingRoot: Bytes32;
-  /** Undefined at a padding slot. */
-  readonly tracking: readonly (TrackingOpening | undefined)[];
-  readonly ownRoot: Bytes32;
-  readonly curatorRoot: Bytes32;
-  readonly policyHash: Bytes32;
   /** SPP's asset field of each deposit's group. */
   readonly assets: readonly Bytes32[];
   readonly amounts: readonly Bytes32[];
   /** Two chunks per slot, zero at a padding slot. */
   readonly mintChunks: readonly (readonly Bytes32[])[];
-  /** Absent without a written policy, the records then open nothing. */
-  readonly table?: PolicyTableProofInputs;
-  readonly assetRecords: readonly (RecordOpening | undefined)[];
-  readonly ownerRecords: readonly (RecordOpening | undefined)[];
-  /** Undefined entries without a curator source. */
-  readonly curatorAssetRecords: readonly (RecordOpening | undefined)[];
-  readonly curatorOwnerRecords: readonly (RecordOpening | undefined)[];
 }
 
 /** Go `MergeParams`, seals a ring's SPP merge output to its auditor. */
@@ -332,8 +293,7 @@ export interface MergeProofRequest {
 }
 
 export type RingProofRequest =
-  | ConfidentialTransferProofRequest
-  | AnonymousTransferProofRequest
+  | TransferProofRequest
   | ApplyRecordsProofRequest
   | ApplyEnrollmentsProofRequest
   | RegisterKeyProofRequest
@@ -343,8 +303,7 @@ export type RingProofRequest =
 /** The key a request proves under, its list widths pick the shape. */
 export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
   switch (request.kind) {
-    case "transferConfidential":
-    case "transferAnonymous":
+    case "transfer":
       return transferCircuit(request);
     case "applyRecords":
       return { family: "applyRecords", writes: applyCapacity(listLength(request.writes)) };
@@ -353,7 +312,7 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
     case "registerKey":
       return { family: "registerKey" };
     case "deposit":
-      return { family: "deposit", capacity: depositCapacity(request.count) };
+      return { family: "deposit", capacity: request.capacity };
     case "merge":
       return { family: "merge" };
     default:
@@ -361,26 +320,15 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
   }
 }
 
-/** The transfer key the request's list widths name, Rust `RingCircuit::Transfer*`. */
-function transferCircuit(
-  request: ConfidentialTransferProofRequest | AnonymousTransferProofRequest,
-): TransferKeyCircuit {
-  const entry = flag(request.layout.entry);
-  const family =
-    request.kind === "transferConfidential"
-      ? entry
-        ? "transferConfidentialEntry"
-        : "transferConfidential"
-      : entry
-        ? "transferAnonymousEntry"
-        : "transferAnonymous";
+/** The transfer key the request's list widths name, Rust `RingCircuit::Transfer`. */
+function transferCircuit(request: TransferProofRequest): TransferKeyCircuit {
   return {
-    family,
+    family: "transfer",
     outputs: listLength(request.outputs),
     class: listLength(request.inputs),
     withdrawals: listLength(request.withdrawals),
     owners: listLength(request.rows),
-    data: flag(request.layout.hasData),
+    entry: flag(request.layout.entry),
   };
 }
 
@@ -395,22 +343,8 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
     publicInputHash: field(request.publicInputHash, "publicInputHash"),
   };
   switch (request.kind) {
-    case "transferConfidential":
-      return {
-        ...head,
-        ...transferJson(request),
-        inProof: flag(request.inProof),
-        delegate: flag(request.delegate),
-        sender: field(request.sender, "sender"),
-      };
-    case "transferAnonymous":
-      return {
-        ...head,
-        ...transferJson(request),
-        publicOwners: flag(request.publicOwners),
-        delegate: flag(request.delegate),
-        partyIdentities: fields(request.partyIdentities, ANONYMOUS_PARTIES, "partyIdentities"),
-      };
+    case "transfer":
+      return { ...head, ...transferJson(request) };
     case "applyRecords": {
       const capacity = applyCapacity(request.writes.length);
       return {
@@ -443,18 +377,21 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
       };
     case "deposit": {
-      const capacity = depositCapacity(request.count);
-      const records = (
-        openings: readonly (RecordOpening | undefined)[],
-        name: string,
-      ): readonly (Json | null)[] =>
-        sized(openings, capacity, name).map((opening, i) =>
-          memberOpeningJson(opening, `${name}[${i}]`),
-        );
+      const { capacity } = request;
+      const shape: PolicySectionShape = {
+        rows: 0,
+        outputs: capacity,
+        withdrawals: 0,
+        pools: {
+          own: depositPoolWidth(capacity),
+          curator: depositPoolWidth(capacity),
+          tracking: capacity,
+        },
+      };
       return {
         ...head,
         contextHash: field(request.contextHash, "contextHash"),
-        count: integer(request.count, "count", 1, RING_DEPOSIT_AUDIT_SLOTS),
+        count: integer(request.count, "count", 1, capacity),
         ...(flag(request.anonymous) ? { anonymous: true } : {}),
         ownerPkHashes: fields(request.ownerPkHashes, capacity, "ownerPkHashes"),
         ownerKeys: sized(request.ownerKeys, capacity, "ownerKeys").map((key, i) =>
@@ -464,23 +401,13 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         blindingSecrets: fields(request.blindingSecrets, capacity, "blindingSecrets"),
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
-        trackingRoot: field(request.trackingRoot, "trackingRoot"),
-        tracking: sized(request.tracking, capacity, "tracking").map((opening, i) =>
-          trackingOpeningJson(opening, `tracking[${i}]`),
-        ),
-        ownRoot: field(request.ownRoot, "ownRoot"),
-        curatorRoot: field(request.curatorRoot, "curatorRoot"),
-        policyHash: field(request.policyHash, "policyHash"),
         assets: fields(request.assets, capacity, "assets"),
         amounts: fields(request.amounts, capacity, "amounts"),
         mintChunks: sized(request.mintChunks, capacity, "mintChunks").map((chunks, i) =>
           fields(chunks, MINT_CHUNKS, `mintChunks[${i}]`),
         ),
-        ...(request.table === undefined ? {} : { table: tableJson(request.table) }),
-        assetRecords: records(request.assetRecords, "assetRecords"),
-        ownerRecords: records(request.ownerRecords, "ownerRecords"),
-        curatorAssetRecords: records(request.curatorAssetRecords, "curatorAssetRecords"),
-        curatorOwnerRecords: records(request.curatorOwnerRecords, "curatorOwnerRecords"),
+        ...trackingJson(request, shape),
+        ...policyJson(request, shape),
       };
     }
     case "merge":
@@ -536,13 +463,29 @@ function proofInput<T>(read: () => T): T {
   }
 }
 
-function transferJson(
-  request: ConfidentialTransferProofRequest | AnonymousTransferProofRequest,
-): Json {
+type PolicySectionShape = Readonly<{
+  rows: number;
+  outputs: number;
+  withdrawals: number;
+  pools: PolicyPoolCapacity;
+}>;
+
+function transferJson(request: TransferProofRequest): Json {
   const circuit = transferCircuit(request);
   const slots = request.inputs.length;
+  const shape: PolicySectionShape = {
+    rows: circuit.owners,
+    outputs: circuit.outputs,
+    withdrawals: circuit.withdrawals,
+    pools: transferPoolCapacity(circuit),
+  };
   return {
     ...envelopeJson(request),
+    inProof: flag(request.inProof),
+    hidden: flag(request.hidden),
+    delegate: flag(request.delegate),
+    sender: field(request.sender, "sender"),
+    partyIdentities: fields(request.partyIdentities, ANONYMOUS_PARTIES, "partyIdentities"),
     approvalMask: integer(request.approvalMask, "approvalMask", 0, APPROVAL_MASK_MAX),
     outputCount: integer(request.outputCount, "outputCount", 1, request.outputs.length),
     outputs: request.outputs.map((output, i) => outputJson(output, `outputs[${i}]`)),
@@ -561,8 +504,8 @@ function transferJson(
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
     privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
     addressChain: field(request.addressChain, "addressChain"),
-    ...trackingJson(request, circuit),
-    ...policyJson(request, circuit),
+    ...trackingJson(request, shape),
+    ...policyJson(request, shape),
   };
 }
 
@@ -608,8 +551,8 @@ function entryOpeningJson(entry: EntryOpeningProofInput, name: string): Json {
   };
 }
 
-function trackingJson(tracking: TrackingProofInputs, circuit: TransferKeyCircuit): Json {
-  const capacity = transferPoolCapacity(circuit).tracking;
+function trackingJson(tracking: TrackingProofInputs, shape: PolicySectionShape): Json {
+  const capacity = shape.pools.tracking;
   const { trackingPool: pool } = tracking;
   const levels = canopyLevels(capacity);
   const entry = (index: number, name: string): number => integer(index, name, 0, capacity - 1);
@@ -630,10 +573,10 @@ function trackingJson(tracking: TrackingProofInputs, circuit: TransferKeyCircuit
       ),
     },
     trackingSubjects: subjectsJson(pool.subjects, capacity, "trackingSubjects"),
-    rowEntries: sized(tracking.rowEntries, circuit.owners, "rowEntries").map((index, i) =>
+    rowEntries: sized(tracking.rowEntries, shape.rows, "rowEntries").map((index, i) =>
       entry(index, `rowEntries[${i}]`),
     ),
-    outputEntries: sized(tracking.outputEntries, circuit.outputs, "outputEntries").map((index, i) =>
+    outputEntries: sized(tracking.outputEntries, shape.outputs, "outputEntries").map((index, i) =>
       entry(index, `outputEntries[${i}]`),
     ),
   };
@@ -692,9 +635,9 @@ function subjectsJson(
   }));
 }
 
-function policyJson(policy: PolicyProofInputs, circuit: TransferKeyCircuit): Json {
-  const slots = circuit.outputs + circuit.withdrawals;
-  const capacity = transferPoolCapacity(circuit);
+function policyJson(policy: PolicyProofInputs, shape: PolicySectionShape): Json {
+  const slots = shape.outputs + shape.withdrawals;
+  const capacity = shape.pools;
   const own = poolJson(policy.ownPool, capacity.own, "ownPool");
   const curator = poolJson(policy.curatorPool, capacity.curator, "curatorPool");
   return {
@@ -705,7 +648,7 @@ function policyJson(policy: PolicyProofInputs, circuit: TransferKeyCircuit): Jso
       policy.withdrawals.length,
     ),
     withdrawalHash: field(policy.withdrawalHash, "withdrawalHash"),
-    withdrawals: sized(policy.withdrawals, circuit.withdrawals, "withdrawals").map((w) => ({
+    withdrawals: sized(policy.withdrawals, shape.withdrawals, "withdrawals").map((w) => ({
       owner: field(w.owner, "withdrawal.owner"),
       asset: field(w.asset, "withdrawal.asset"),
       amount: withdrawalAmount(w.amount),
@@ -714,7 +657,6 @@ function policyJson(policy: PolicyProofInputs, circuit: TransferKeyCircuit): Jso
     ringId: field(policy.ringId, "ringId"),
     ownRoot: field(policy.ownRoot, "ownRoot"),
     curatorRoot: field(policy.curatorRoot, "curatorRoot"),
-    privateRoot: field(policy.privateRoot, "privateRoot"),
     publicAssets: fields(policy.publicAssets, N_PUBLIC_SLOTS, "publicAssets"),
     publicAmounts: fields(policy.publicAmounts, N_PUBLIC_SLOTS, "publicAmounts"),
     publicGross: fields(policy.publicGross, N_PUBLIC_SLOTS, "publicGross"),
@@ -725,44 +667,17 @@ function policyJson(policy: PolicyProofInputs, circuit: TransferKeyCircuit): Jso
     curatorProof: curator.proof,
     ownSubjects: own.subjects,
     curatorSubjects: curator.subjects,
-    senderEntries: sized(policy.senderEntries, circuit.owners, "senderEntries").map((entry, i) =>
-      entryJson(entry, capacity, `senderEntries[${i}]`),
+    senderEntries: sized(policy.senderEntries, shape.rows, "senderEntries").map((entry, i) =>
+      ownerEntryJson(entry, capacity, `senderEntries[${i}]`),
     ),
     ownerEntries: sized(policy.ownerEntries, slots, "ownerEntries").map((entry, i) =>
-      entryJson(entry, capacity, `ownerEntries[${i}]`),
+      ownerEntryJson(entry, capacity, `ownerEntries[${i}]`),
     ),
     assetEntries: sized(policy.assetEntries, slots, "assetEntries").map((entry, i) =>
       entryJson(entry, capacity, `assetEntries[${i}]`),
     ),
     publicAssetEntries: sized(policy.publicAssetEntries, N_PUBLIC_SLOTS, "publicAssetEntries").map(
       (index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1),
-    ),
-    ...privateRowsJson(policy),
-  };
-}
-
-/** Omitted on a key with no private rows, the decoder takes them as empty. */
-function privateRowsJson(policy: PolicyProofInputs): Json {
-  const { privateRows, privateOwners, privateTracking } = policy;
-  if (privateRows === undefined || privateOwners === undefined || privateTracking === undefined)
-    return {};
-  const count = privateRows.length;
-  const opening = (open: PrivateOpeningProofInput, name: string): Json => ({
-    written: flag(open.written),
-    lists: u64(open.lists, `${name}.lists`),
-    leafSalt: field(open.leafSalt, `${name}.leafSalt`),
-    siblings: fields(open.siblings, open.siblings.length, `${name}.siblings`),
-  });
-  return {
-    privateRows: privateRows.map((row, i) => ({
-      live: flag(row.live),
-      listSalt: field(row.listSalt, `privateRows[${i}].listSalt`),
-      salted: opening(row.salted, `privateRows[${i}].salted`),
-      zero: opening(row.zero, `privateRows[${i}].zero`),
-    })),
-    privateOwners: fields(privateOwners, count, "privateOwners"),
-    privateTracking: sized(privateTracking, count, "privateTracking").map((index, i) =>
-      integer(index, `privateTracking[${i}]`, 0, U32_MAX),
     ),
   };
 }
@@ -773,15 +688,7 @@ function tableJson(table: PolicyTableProofInputs): Json {
       listId: integer(source.listId, `sources[${i}].listId`, 0, U8_MAX),
       registry: field(source.registry, `sources[${i}].registry`),
     })),
-    source: {
-      ownerLists: field(
-        bigIntBytes(
-          BigInt(integer(table.source.ownerLists, "source.ownerLists", 0, U8_MAX)),
-        ) as Bytes32,
-        "source.ownerLists",
-      ),
-      registry: field(table.source.registry, "source.registry"),
-    },
+    salted: integer(table.salted, "salted", 0, U8_MAX),
     policyLen: integer(table.policyLen, "policyLen", 0, RING_RULE_SLOTS),
     rules: fields(table.rules, RING_RULE_SLOTS, "rules"),
   };
@@ -815,30 +722,16 @@ function entryJson(entry: PolicySubjectEntry, capacity: PolicyPoolCapacity, name
   return {
     own: integer(entry.own, `${name}.own`, 0, capacity.own - 1),
     curator: [integer(entry.curator, `${name}.curator`, 0, capacity.curator - 1)],
-    ...(entry.private === undefined
-      ? {}
-      : { private: [integer(entry.private, `${name}.private`, 0, U32_MAX)] }),
   };
 }
 
-/** Go `MemberOpening`, the side the opening does not use is zero. */
-function memberOpeningJson(opening: RecordOpening | undefined, name: string): Json | null {
-  if (opening === undefined) return null;
-  if (opening.kind !== "present" && opening.kind !== "absent")
-    throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
-  const present = opening.kind === "present";
-  const record = present ? opening.record : undefined;
-  const low = present ? undefined : opening.low;
+function ownerEntryJson(entry: PolicyOwnerEntry, capacity: PolicyPoolCapacity, name: string): Json {
   return {
-    present,
-    next: field(record?.next ?? ZERO_32, `${name}.next`),
-    lists: u64(record?.lists ?? 0n, `${name}.lists`),
-    ...mintPolicyJson(record?.mintPolicy ?? EMPTY_MINT_POLICY, name, ""),
-    ...quadPathJson(opening.path, name, "index", "path"),
-    lowMember: field(low?.member ?? ZERO_32, `${name}.lowMember`),
-    lowNext: field(low?.next ?? ZERO_32, `${name}.lowNext`),
-    lowLists: u64(low?.lists ?? 0n, `${name}.lowLists`),
-    ...mintPolicyJson(low?.mintPolicy ?? EMPTY_MINT_POLICY, name, "low"),
+    ...entryJson(entry, capacity, name),
+    tracking: integer(entry.tracking, `${name}.tracking`, 0, capacity.tracking - 1),
+    listSalt: field(entry.listSalt, `${name}.listSalt`),
+    ownSalted: integer(entry.ownSalted, `${name}.ownSalted`, 0, capacity.own - 1),
+    curatorSalted: [integer(entry.curatorSalted, `${name}.curatorSalted`, 0, capacity.curator - 1)],
   };
 }
 
@@ -1027,10 +920,6 @@ function flag(value: boolean): boolean {
 
 function byteWidth(maximum: number): number {
   return maximum <= U8_MAX ? 1 : maximum <= U32_MAX ? 4 : 8;
-}
-
-function depositCapacity(count: number): number {
-  return [1, 2, 4, RING_DEPOSIT_AUDIT_SLOTS].find((n) => count <= n) ?? count;
 }
 
 /** The circuit bounds this canonical field to u64; JSON numbers cannot carry that full range. */

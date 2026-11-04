@@ -36,23 +36,19 @@ export const TRACKING_EMPTY_ROOT = hexToBytes(
 const REGISTRY_DISCRIMINATOR = 3;
 const AUTHORIZATION_DISCRIMINATOR = 4;
 const OWNER_GRANT_DISCRIMINATOR = 5;
-const REGISTRY_SIZE = 1611;
-const AUTHORIZATION_SIZE = 250;
-const OWNER_GRANT_SIZE = 101;
+const REGISTRY_SIZE = 1606;
+const AUTHORIZATION_SIZE = 241;
+const OWNER_GRANT_SIZE = 2;
 
 export interface TrackingRegistry {
-  readonly bump: number;
   readonly ringId: Bytes32;
   readonly auditorPubkey: Bytes33;
   readonly nextIndex: number;
-  /** Leaves promised to created authorizations, the sentinel included. */
-  readonly reservedLeaves: number;
   /** Newest first. */
   readonly roots: readonly (StorageRegistryRoot | undefined)[];
 }
 
 export interface TrackingAuthorization {
-  readonly bump: number;
   readonly registry: Address;
   readonly owner: Address;
   readonly nullifierPk: Bytes32;
@@ -62,14 +58,10 @@ export interface TrackingAuthorization {
   readonly ciphertext: Bytes32;
   readonly revision: bigint;
   readonly appliedRevision: bigint;
-  readonly lastEnrollSlot: bigint;
 }
 
+/** The address names the registry, the owner and the reader. */
 export interface OwnerGrant {
-  readonly bump: number;
-  readonly registry: Address;
-  readonly owner: Address;
-  readonly reader: Uint8Array;
   readonly active: boolean;
 }
 
@@ -104,11 +96,9 @@ export const TRACKING_SENTINEL: TrackingRecord = Object.freeze({
 
 export function decodeTrackingRegistry(data: Uint8Array): TrackingRegistry {
   const reader = account(data, REGISTRY_DISCRIMINATOR, REGISTRY_SIZE, "RING_TRACKING_INVALID");
-  const bump = reader.u8("bump");
   const ringId = reader.bytes(32, "ringId") as Bytes32;
   const auditorPubkey = reader.bytes(33, "auditorPubkey") as Bytes33;
   const nextIndex = reader.u32("nextIndex");
-  const reservedLeaves = reader.u32("reservedLeaves");
   const roots = Array.from({ length: ROOT_HISTORY }, () => {
     const hash = reader.bytes(32, "root.hash") as Bytes32;
     const revision = reader.u64("root.revision");
@@ -119,11 +109,9 @@ export function decodeTrackingRegistry(data: Uint8Array): TrackingRegistry {
   if (nextIndex < 1 || BigInt(nextIndex) > TRACKING_CAPACITY)
     throw new RingError("RING_TRACKING_INVALID", { details: { nextIndex } });
   return Object.freeze({
-    bump,
     ringId,
     auditorPubkey,
     nextIndex,
-    reservedLeaves,
     roots: Object.freeze(roots),
   });
 }
@@ -136,7 +124,6 @@ export function decodeTrackingAuthorization(data: Uint8Array): TrackingAuthoriza
     "RING_TRACKING_INVALID",
   );
   const authorization = Object.freeze({
-    bump: reader.u8("bump"),
     registry: encodeBase58(reader.bytes(32, "registry")),
     owner: encodeBase58(reader.bytes(32, "owner")),
     nullifierPk: reader.bytes(32, "nullifierPk") as Bytes32,
@@ -146,7 +133,6 @@ export function decodeTrackingAuthorization(data: Uint8Array): TrackingAuthoriza
     ciphertext: reader.bytes(32, "ciphertext") as Bytes32,
     revision: reader.u64("revision"),
     appliedRevision: reader.u64("appliedRevision"),
-    lastEnrollSlot: reader.u64("lastEnrollSlot"),
   });
   reader.done();
   return authorization;
@@ -160,10 +146,6 @@ export function decodeOwnerGrant(data: Uint8Array): OwnerGrant {
     "RING_TRACKING_INVALID",
   );
   const grant = Object.freeze({
-    bump: reader.u8("bump"),
-    registry: encodeBase58(reader.bytes(32, "registry")),
-    owner: encodeBase58(reader.bytes(32, "owner")),
-    reader: reader.bytes(34, "reader"),
     active: reader.u8("active") === 1,
   });
   reader.done();

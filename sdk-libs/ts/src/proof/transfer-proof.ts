@@ -4,18 +4,14 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import type { ProofInputUtxo, SppProofInputs } from "@heliuslabs/zolana/transaction";
 
-import type {
-  AnonymousTransferProofRequest,
-  ConfidentialTransferProofRequest,
-} from "../rpc/prover/ring.js";
+import type { TransferProofRequest } from "../rpc/prover/ring.js";
 import type { RingOutputRail } from "../operations/payments/output-rail.js";
 import {
-  familyShapes,
+  fittedSpend,
+  frameKeyShape,
   ownerSignerCapacity,
   ringTransferCircuit,
   signerSlots,
-  transferInputClass,
-  transferShapes,
   type TransferAddresses,
   type TransferKeyCircuit,
   type TransferSpend,
@@ -52,19 +48,15 @@ export function selectTransferKey(
     throw new RingError("RING_TRANSFER_PAST_ACCOUNT_BOUND", {
       details: { ownerSigners, capacity, ...addresses },
     });
-  const circuit = ringTransferCircuit(spend);
-  if (circuit === undefined) throw unkeyed(spend);
-  const narrowest = familyShapes(circuit.family).find((shape) => shape.outputs === circuit.outputs)
-    ?.owners[0];
-  return Object.freeze({ circuit, wideOwners: circuit.owners !== narrowest });
+  const fitted = fittedSpend(spend);
+  const circuit = ringTransferCircuit(fitted);
+  if (circuit === undefined) throw unkeyed(fitted);
+  return Object.freeze({ circuit, wideOwners: fitted.wide });
 }
 
 /** A subject past every keyed row names the rows, any other miss names the shape. */
 function unkeyed(spend: TransferSpend): RingError {
-  const shape = transferShapes(spend.rail, spend.spendsDefaultRing)?.find(
-    (entry) => entry.outputs === spend.outputs,
-  );
-  const maximum = shape?.owners.at(-1);
+  const maximum = frameKeyShape(spend)?.owners;
   if (maximum !== undefined && spend.owners > maximum)
     return new RingError("RING_TOO_MANY_OWNERS", {
       details: { owners: spend.owners, maximum },
@@ -80,7 +72,7 @@ function unkeyed(spend: TransferSpend): RingError {
   });
 }
 
-export type TransferProofRequest = ConfidentialTransferProofRequest | AnonymousTransferProofRequest;
+export type { TransferProofRequest };
 
 /** The request of the key the frame selects, every section over the same slots. */
 export function transferProofRequest(
@@ -102,7 +94,7 @@ export function transferProofRequest(
     sender: Bytes32;
     inProof: boolean;
     publicOwners: boolean;
-    /** Payer, five co-signers and exit destination, zero when absent, unread off the anonymous frame. */
+    /** Payer, co-signer and exit destination, zero when absent, unread off the anonymous frame. */
     partyIdentities: readonly Bytes32[];
     /** SPP's owner signer run by owner identity, in-proof and authority bind none. */
     signers: readonly Bytes32[];
@@ -110,9 +102,11 @@ export function transferProofRequest(
 ): TransferProofRequest {
   const { policy, proofInputs, inputs, signers } = input;
   const { circuit } = policy;
-  const inputClass = transferInputClass(circuit);
+  const inputClass = circuit.class;
   const entry = input.sealed.audit.entry;
-  const transfer = {
+  const anonymousFrame = input.ringRail === "anonymous" || input.ringRail === "anonymousDelegate";
+  return Object.freeze({
+    kind: "transfer",
     publicInputHash: input.publicInputHash,
     ...auditEnvelope({
       rail: input.rail,
@@ -138,26 +132,18 @@ export function transferProofRequest(
     addressChain: ZERO_32,
     ...policy.tracking,
     ...policyParams(policy, input.proving),
-  };
-  if (circuit.family === "transferConfidential" || circuit.family === "transferConfidentialEntry")
-    return Object.freeze({
-      kind: "transferConfidential",
-      ...transfer,
-      inProof: input.inProof,
-      delegate: input.ringRail === "delegate",
-      sender: input.sender,
-    });
-  return Object.freeze({
-    kind: "transferAnonymous",
-    ...transfer,
-    publicOwners: input.publicOwners,
-    delegate: input.ringRail === "anonymousDelegate",
-    partyIdentities: [
-      ...input.partyIdentities,
-      ...Array.from(
-        { length: Math.max(0, ANONYMOUS_PARTIES - input.partyIdentities.length) },
-        () => ZERO_32,
-      ),
-    ],
+    inProof: input.inProof,
+    hidden: input.ringRail === "anonymous" && !input.publicOwners,
+    delegate: input.ringRail === "delegate" || input.ringRail === "anonymousDelegate",
+    sender: input.sender,
+    partyIdentities: anonymousFrame
+      ? [
+          ...input.partyIdentities,
+          ...Array.from(
+            { length: Math.max(0, ANONYMOUS_PARTIES - input.partyIdentities.length) },
+            () => ZERO_32,
+          ),
+        ]
+      : Array.from({ length: ANONYMOUS_PARTIES }, () => ZERO_32),
   });
 }

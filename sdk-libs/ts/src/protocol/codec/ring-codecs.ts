@@ -83,9 +83,8 @@ export interface StorageRegistry {
   readonly ringId: Bytes32;
   /** Immutable, the zero address on a public source. */
   readonly trackingRegistry: Address;
-  /** The paired registry's revision at the last restrictive update, frames name no older tracking root. */
+  /** The pinned registry's newest revision at the last zero grace update, frames name no older tracking root. */
   readonly trackingFloor: bigint;
-  readonly lastWriteCounter: bigint;
   /** Newest first, `undefined` where the history holds no root. */
   readonly roots: readonly (StorageRegistryRoot | undefined)[];
 }
@@ -107,10 +106,8 @@ export interface RingPolicy {
   readonly records: Address;
   /** Every read compares it, a forged registry would prove any wallet absent. */
   readonly tracking: Address;
-  /** The zero address without a private source. */
-  readonly privateSource: Address;
-  /** `ListSet` bits owner rows read from `privateSource`. */
-  readonly privateLists: number;
+  /** `ListSet` bits owners read at salted keys, the private lists always. */
+  readonly saltedLists: number;
   /** Zero on an audit-only ring. */
   readonly policyHash: Bytes32;
   /** Rust `RingPolicy::has_policy`, a written `policyHash`. */
@@ -130,17 +127,12 @@ export const GRACE_SLOTS = 750n;
 const RING_MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];
 export const RING_CO_SIGNER_DISCRIMINATOR = 14;
 export const RING_CO_SIGNER_SIZE = 35;
-const RING_COSIGN_CLASSES = [
-  RING_COSIGN_TRANSFERS,
-  RING_COSIGN_DEPOSITS,
-  RING_COSIGN_WITHDRAWALS,
-  RING_COSIGN_APPROVE_OUTFLOW,
-  RING_COSIGN_APPROVE_WITHDRAWAL,
-];
+/** Rust `CoSignerCounts::CLASSES`. */
+const RING_COSIGN_CLASSES = [RING_COSIGN_TRANSFERS, RING_COSIGN_DEPOSITS, RING_COSIGN_WITHDRAWALS];
 export const RING_POLICY_DISCRIMINATOR = 15;
-export const RING_POLICY_SIZE = 1127;
+export const RING_POLICY_SIZE = 1093;
 export const STORAGE_REGISTRY_DISCRIMINATOR = 1;
-export const STORAGE_REGISTRY_SIZE = 1661;
+export const STORAGE_REGISTRY_SIZE = 1653;
 
 /** Mirrors Rust `CoSigner::valid`, a nonzero signer under a valid scope. */
 export function decodeRingCoSigner(data: Uint8Array): RingCoSigner & Readonly<{ bump: number }> {
@@ -179,8 +171,7 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
   const createdSlot = reader.u64("createdSlot");
   const records = encodeBase58(reader.bytes(32, "records"));
   const tracking = encodeBase58(reader.bytes(32, "tracking"));
-  const privateSource = encodeBase58(reader.bytes(32, "privateSource"));
-  const privateLists = reader.u8("privateLists");
+  const saltedLists = reader.u8("saltedLists");
   const policy = readPolicyFields(reader, "RING_POLICY_INVALID");
   reader.done();
   const classes = RING_COSIGN_CLASSES.reduce(
@@ -198,8 +189,7 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
     createdSlot,
     records,
     tracking,
-    privateSource,
-    privateLists,
+    saltedLists,
     ...policy,
     hasPolicy: !equalBytes(policy.policyHash, ZERO_32),
   });
@@ -215,13 +205,7 @@ export function ringRootRegistries(policy: RingPolicy, reader: RootReader): read
   const read = rootRead(policy, reader);
   if (read === "none") return Object.freeze([]);
   const curator = read === "policy" ? registryCurator(policy) : undefined;
-  const privateSource =
-    read === "policy" && !isZeroAddress(policy.privateSource) ? policy.privateSource : undefined;
-  return Object.freeze([
-    policy.records,
-    ...(curator === undefined ? [] : [curator]),
-    ...(privateSource === undefined ? [] : [privateSource]),
-  ]);
+  return Object.freeze([policy.records, ...(curator === undefined ? [] : [curator])]);
 }
 
 /** Mirrors Rust `StorageRegistry::from_data`, a nonzero next index within the tree capacity. */
@@ -237,7 +221,6 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
   const ringId = reader.bytes(32, "ringId") as Bytes32;
   const trackingRegistry = encodeBase58(reader.bytes(32, "trackingRegistry"));
   const trackingFloor = reader.u64("trackingFloor");
-  const lastWriteCounter = reader.u64("lastWriteCounter");
   const roots = Array.from({ length: ROOT_HISTORY }, () => {
     const hash = reader.bytes(32, "root.hash") as Bytes32;
     const revision = reader.u64("root.revision");
@@ -254,12 +237,11 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
     ringId,
     trackingRegistry,
     trackingFloor,
-    lastWriteCounter,
     roots: Object.freeze(roots),
   });
 }
 
-/** Rust `StorageRegistry::is_private`, owner rows may read it. */
+/** Rust `StorageRegistry::is_private`, a salted list may read it. */
 export function isPrivateSource(registry: Pick<StorageRegistry, "trackingRegistry">): boolean {
   return !isZeroAddress(registry.trackingRegistry);
 }

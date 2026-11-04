@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
 import ranges from "../../../../../test-vectors/audit/ring-disclosure-ranges.json" with { type: "json" };
 import statements from "../../../../../test-vectors/proof/ring-statements.json" with { type: "json" };
+import poolCapacity from "../../../../../test-vectors/policy/pool_capacity.json" with { type: "json" };
 import expansion from "../../../../../test-vectors/proof/ring-transact-expansion.json" with { type: "json" };
 import { ZERO_32, solanaOwnerIdentity, encodeBase58 } from "@heliuslabs/zolana/internal";
 import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
@@ -29,7 +30,13 @@ import {
   type AuditLayout,
   type AuditStreamLayout,
 } from "../../../src/protocol/historical/v3/layout.js";
-import { ringTransferCircuit } from "../../../src/protocol/proof/transfer-shapes.js";
+import {
+  fittedSpend,
+  ringTransferCircuit,
+  transferCircuitType,
+  transferKeys,
+  transferPoolCapacity,
+} from "../../../src/protocol/proof/transfer-shapes.js";
 import { decodeDisclosure } from "../../../src/protocol/historical/v3/disclosure.js";
 import {
   MIN_REPLY_LEN,
@@ -314,7 +321,6 @@ describe("ring-statements.json", () => {
       ownRoot: field(vector.own_root),
       curatorRoot: field(vector.curator_root),
       trackingRoot: field(vector.tracking_root),
-      privateRoot: field(vector.private_root),
     },
     publicAssets: vector.public_assets.map(field),
     publicAmounts: vector.public_amounts.map(field),
@@ -657,12 +663,30 @@ describe("transfer key selection", () => {
     spendsDefaultRing: false,
     legs: 0,
     owners: 1,
-    hasData: false,
+    pools: { own: 0, curator: 0, tracking: 0 },
+    wide: false,
   } as const;
 
-  it("selects a key of the rail's family", () => {
-    expect(ringTransferCircuit(spend)?.family).toBe("transferConfidential");
-    expect(ringTransferCircuit({ ...spend, rail: "anonymous" })?.family).toBe("transferAnonymous");
+  it("selects one key on every rail", () => {
+    expect(ringTransferCircuit(spend)).toEqual(
+      ringTransferCircuit({ ...spend, rail: "anonymous" }),
+    );
+    expect(ringTransferCircuit(spend)?.owners).toBe(4);
+  });
+
+  it("names the wide key once a spend leaves the narrow pools", () => {
+    const pools = { own: 16, curator: 0, tracking: 0 };
+    expect(fittedSpend({ ...spend, pools: { own: 15, curator: 0, tracking: 0 } }).wide).toBe(false);
+    expect(ringTransferCircuit(fittedSpend({ ...spend, pools }))?.owners).toBe(24);
+  });
+
+  it("holds the pools of pool_capacity.json", () => {
+    expect(poolCapacity.keys).toEqual(
+      transferKeys().map((circuit) => ({
+        key: transferCircuitType(circuit).replaceAll("-", "_"),
+        ...transferPoolCapacity(circuit),
+      })),
+    );
   });
 
   it("refuses a delegate rail spending a default-ring note", () => {

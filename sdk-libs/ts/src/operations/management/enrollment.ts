@@ -1,7 +1,7 @@
 /** A nonzero key enrolls in the ring's tracking registry, Rust `zolana_custom_ring_sdk::storage`. */
 import type { Address, Instruction } from "@solana/kit";
 
-import type { ChainReader, SlotReader } from "@heliuslabs/zolana/client";
+import type { ChainReader } from "@heliuslabs/zolana/client";
 import {
   SYSTEM_PROGRAM,
   Writer,
@@ -25,7 +25,6 @@ import { memberOfTag } from "../../protocol/membership/policy.js";
 import {
   decodeTrackingAuthorization,
   decodeTrackingRegistry,
-  TRACKING_GRACE_SLOTS,
   type TrackingAuthorization,
 } from "../../protocol/membership/tracking.js";
 import {
@@ -63,16 +62,15 @@ export interface Enroll {
 /** An enrolled key is final. */
 export async function enrollInstruction(
   input: Enroll,
-  client: EnrollmentClient,
+  client: EnrollmentReadClient,
   context?: RequestContext,
 ): Promise<Instruction> {
   const owner = signerAddress(input.owner);
   const { seal, trackingRegistry } = input;
-  const [stored, slot] = await Promise.all([
-    enrollmentState({ trackingRegistry, owner }, client, context),
-    client.getSlot(context),
-  ]);
-  checkEnrollment({ seal, stored, slot });
+  checkEnrollment({
+    seal,
+    stored: await enrollmentState({ trackingRegistry, owner }, client, context),
+  });
   const [authorization] = await trackingAuthorizationPda(trackingRegistry, owner);
   const writer = new Writer()
     .u8(ENROLL_TAG, "tag")
@@ -98,8 +96,6 @@ export async function enrollInstruction(
 
 export type EnrollmentReadClient = Pick<ChainReader, "getAccount">;
 
-export type EnrollmentClient = EnrollmentReadClient & SlotReader;
-
 /** `undefined` before the owner's first enrollment. */
 export async function enrollmentState(
   input: Readonly<{ trackingRegistry: Address; owner: Address }>,
@@ -115,10 +111,9 @@ export function checkEnrollment(
   input: Readonly<{
     seal: EnrollmentSeal;
     stored: TrackingAuthorization | undefined;
-    slot: bigint;
   }>,
 ): void {
-  const { seal, stored, slot } = input;
+  const { seal, stored } = input;
   if (equalBytes(seal.nullifierPk, ZERO_NULLIFIER_PK))
     throw new RingError("RING_ENROLLMENT_ZERO_KEY");
   if (stored === undefined) return;
@@ -129,11 +124,6 @@ export function checkEnrollment(
     !equalBytes(stored.ciphertext, seal.ciphertext)
   )
     throw new RingError("RING_ENROLLMENT_KEY_MISMATCH");
-  const allowedAt = stored.lastEnrollSlot + TRACKING_GRACE_SLOTS;
-  if (slot < allowedAt)
-    throw new RingError("RING_ENROLLMENT_ROTATION_TOO_SOON", {
-      details: { allowedAtSlot: allowedAt.toString() },
-    });
 }
 
 /** Seals the nullifier key to the registry's auditor and proves it. */

@@ -36,11 +36,10 @@ export const ListId = Object.freeze({
   block: 2,
   frozen: 3,
   ringViewing: 4,
-  /** Unused, holds slot 5 of the circuit's `NSources`. */
-  recovery: 5,
+  privateBlock: 5,
   reader: 6,
   approval: 7,
-  escrow: 8,
+  privateAllow: 8,
 } as const);
 export type ListId = (typeof ListId)[keyof typeof ListId];
 
@@ -52,8 +51,13 @@ export const POLICY_LISTS: readonly ListId[] = Object.freeze([
   ListId.allow,
   ListId.block,
   ListId.frozen,
+  ListId.privateBlock,
   ListId.approval,
+  ListId.privateAllow,
 ]);
+
+/** Rust `ListSet::PRIVATE_LISTS`, an owner reads them at a salted key on every ring. */
+const PRIVATE_LIST_BITS = (1 << (ListId.privateBlock - 1)) | (1 << (ListId.privateAllow - 1));
 
 export function listIdFromByte(byte: number): ListId | undefined {
   return LIST_IDS.find((id) => id === byte);
@@ -118,24 +122,27 @@ export interface PolicySource {
   readonly registry: Bytes32;
 }
 
-/** Mirrors Rust `PrivateSource`, owner rows read `ownerLists` from `registry`, asset rows keep the public slot. */
-export interface PrivateSource {
-  /** `ListSet` bits. */
-  readonly ownerLists: number;
-  /** Zero without a private source. */
-  readonly registry: Bytes32;
-}
-
 /** Mirrors Rust `SourceMap`. */
 export interface SourceMap {
   readonly slots: readonly PolicySource[];
-  readonly private: PrivateSource;
+  /** `ListSet` bits owners read at salted keys, the private lists always. */
+  readonly salted: number;
 }
 
-/** A bare slot list names no private source. */
+/** A bare slot list salts the private lists alone. */
 export type PolicySources = readonly PolicySource[] | SourceMap;
 
-export const NO_PRIVATE_SOURCE: PrivateSource = Object.freeze({ ownerLists: 0, registry: ZERO_32 });
+/** Go `sourceView`. */
+export interface SourceView {
+  /** Bits a curator serves. */
+  readonly foreign: number;
+  /** Rust `SourceMap::salted`, an empty slot keeps no bit. */
+  readonly salted: number;
+  readonly saltedOwn: boolean;
+  readonly saltedCurated: boolean;
+  /** Clear, an owner takes no curator row under its public key. */
+  readonly publicForeign: boolean;
+}
 
 /** Rules and their list sources; per-mint amounts live in authenticated asset records. */
 export interface RuleTable {
@@ -328,8 +335,8 @@ export interface RecordLists {
   readonly own: bigint;
   /** Read only for a list a curator serves. */
   readonly curator: bigint;
-  /** Read only for an owner row's list a private source serves. */
-  readonly private?: bigint;
+  /** Read only for an owner's salted list, zero with no tracking row. */
+  readonly salted?: bigint;
 }
 
 /** Rust `OutputSubjects`. */
@@ -370,20 +377,16 @@ export function admitTransfer(
   sources: PolicySources,
   transfer: TransferSubjects,
 ): RuleRefusal | undefined {
-  const map = sourceMapOf(sources);
-  const foreign = map.slots.reduce(
-    (bits, slot, index) =>
-      equalBytes(slot.registry, ZERO_32) ? bits : bits | (1n << BigInt(index)),
-    0n,
-  );
-  const privateBits = BigInt(map.private.ownerLists);
+  const view = policySourceView(sources);
+  const foreign = BigInt(view.foreign);
+  const salted = BigInt(view.salted);
   const { outputs } = transfer;
   const scope = new GuardScope({ ringInputs: transfer.ringInputs, payments: outputs });
   for (const [index, rule] of table.rules.entries()) {
     const listed = (subject: TransferSubject, records: RecordLists): RuleRefusal | undefined => {
-      const owned = subject.kind === "asset" ? 0n : privateBits;
+      const owned = subject.kind === "asset" ? 0n : salted;
       const onPublic = (records.own & ~foreign) | (records.curator & foreign);
-      const on = (onPublic & ~owned) | ((records.private ?? 0n) & owned);
+      const on = (onPublic & ~owned) | ((records.salted ?? 0n) & owned);
       return holds(rule, on) ? undefined : { kind: "lists", rule: index, subject };
     };
     if (rule.subject === "sender") {
@@ -445,24 +448,26 @@ export function policySourceOwners(sources: readonly RingSourceSlot[]): readonly
   );
 }
 
-/** Mirrors Rust `PrivateSource::new`, lists and registry set together, the registry field as a slot's. */
-export function policyPrivateSource(
-  input: Readonly<{ privateLists: number; privateSource: Address }>,
-): PrivateSource {
-  const named = !equalBytes(addressBytes(input.privateSource), ZERO_32);
-  if ((input.privateLists !== 0) !== named) throw sourceInvalid("UnpairedRegistry", {});
-  if (!listSet(input.privateLists).every((listId) => POLICY_LISTS.includes(listId)))
-    throw sourceInvalid("ListNotPolicyReadable", {});
-  return named
-    ? Object.freeze({
-        ownerLists: input.privateLists,
-        registry: hashBytes(addressBytes(input.privateSource)) as Bytes32,
-      })
-    : NO_PRIVATE_SOURCE;
+function sourceMapOf(sources: PolicySources): SourceMap {
+  return "slots" in sources ? sources : { slots: sources, salted: 0 };
 }
 
-function sourceMapOf(sources: PolicySources): SourceMap {
-  return "slots" in sources ? sources : { slots: sources, private: NO_PRIVATE_SOURCE };
+export function policySourceView(sources: PolicySources): SourceView {
+  const map = sourceMapOf(sources);
+  const bits = (keep: (slot: PolicySource) => boolean): number =>
+    map.slots.reduce(
+      (set, slot) => (slot.listId !== 0 && keep(slot) ? set | (1 << (slot.listId - 1)) : set),
+      0,
+    );
+  const salted = bits(() => true) & (map.salted | PRIVATE_LIST_BITS);
+  const foreign = bits((slot) => !equalBytes(slot.registry, ZERO_32));
+  return Object.freeze({
+    foreign,
+    salted,
+    saltedOwn: (salted & ~foreign) !== 0,
+    saltedCurated: (salted & foreign) !== 0,
+    publicForeign: (foreign & ~salted) !== 0,
+  });
 }
 
 function checkedSourceOwners(owners: readonly PolicySource[]): readonly PolicySource[] {
@@ -488,7 +493,7 @@ function sourceInvalid(reason: string, details: Readonly<Record<string, unknown>
 }
 
 /** Rust `POLICY_TABLE_VERSION`, the second field of the table hash. */
-export const POLICY_TABLE_VERSION = 13;
+export const POLICY_TABLE_VERSION = 14;
 /** Fields absorbed per Poseidon call beside the accumulator, the 12-input syscall maximum. */
 const POLICY_TABLE_RATE = 11;
 
@@ -500,16 +505,11 @@ export function policyTableProofInputs(
   const table = buildRuleTable(input);
   const map = sourceMapOf(sources);
   const owners = checkedSourceOwners(map.slots);
-  // An asset is never a private entry, Rust `SourceMap::serves`.
-  const serves = (rule: Rule, listId: ListId): boolean =>
-    owners[listId - 1]?.listId === listId ||
-    (rule.subject !== "asset" && (map.private.ownerLists & listBit(listId)) !== 0);
-  for (const rule of table.rules)
-    for (const listId of referencedLists([rule]))
-      if (!serves(rule, listId)) throw sourceInvalid("MissingSource", { listId });
+  for (const listId of referencedLists(table.rules))
+    if (owners[listId - 1]?.listId !== listId) throw sourceInvalid("MissingSource", { listId });
   return Object.freeze({
     sources: owners,
-    source: map.private,
+    salted: policySourceView(map).salted,
     policyLen: table.rules.length,
     rules: Array.from({ length: RING_RULE_SLOTS }, (_, index) => {
       const rule = table.rules[index];
@@ -525,8 +525,7 @@ export function policyTableFields(table: RuleTable, sources: PolicySources): rea
     domainField(RingDomain.policyTable),
     fieldU8(POLICY_TABLE_VERSION),
     ...slots.sources.flatMap((owner) => [fieldU8(owner.listId), owner.registry]),
-    fieldU8(slots.source.ownerLists),
-    slots.source.registry,
+    fieldU8(slots.salted),
     fieldU8(slots.policyLen),
     ...slots.rules,
   ];
@@ -548,7 +547,7 @@ export function policyTableHash(table: RuleTable, sources: PolicySources): Bytes
 export interface PinnedPolicy {
   readonly table: RuleTable;
   readonly sources: readonly PolicySource[];
-  readonly privateSource: PrivateSource;
+  readonly salted: number;
   readonly policyHash: Bytes32;
   /** The one curator registry a source names. */
   readonly curator?: Address;
@@ -557,25 +556,14 @@ export interface PinnedPolicy {
 /** Mirrors Rust `PinnedPolicy::of`, `RING_POLICY_HASH_MISMATCH` unless the stored table reproduces the hash. */
 export function pinnedPolicy(
   registry: Pick<RingPolicy, "policyHash" | "sources" | "rules" | "generation"> &
-    Partial<Pick<RingPolicy, "privateLists" | "privateSource">>,
+    Partial<Pick<RingPolicy, "saltedLists">>,
 ): PinnedPolicy {
   if (equalBytes(registry.policyHash, ZERO_32))
     throw new RingError("RING_POLICY_NOT_SET", { details: { generation: registry.generation } });
   const sources = policySourceOwners(registry.sources);
-  const privateSource =
-    registry.privateSource === undefined || registry.privateLists === undefined
-      ? NO_PRIVATE_SOURCE
-      : policyPrivateSource({
-          privateLists: registry.privateLists,
-          privateSource: registry.privateSource,
-        });
+  const salted = registry.saltedLists ?? 0;
   const table = decodeRuleTable(registry.rules);
-  if (
-    !equalBytes(
-      policyTableHash(table, { slots: sources, private: privateSource }),
-      registry.policyHash,
-    )
-  )
+  if (!equalBytes(policyTableHash(table, { slots: sources, salted }), registry.policyHash))
     throw new RingError("RING_POLICY_HASH_MISMATCH", {
       details: { generation: registry.generation },
     });
@@ -583,7 +571,7 @@ export function pinnedPolicy(
   return Object.freeze({
     table,
     sources,
-    privateSource,
+    salted,
     policyHash: registry.policyHash,
     ...(curator === undefined ? {} : { curator }),
   });
@@ -625,21 +613,20 @@ function checkedMember(bytes: Bytes32): Member {
   return bytes as Member;
 }
 
-export type ListWriter = "authority" | "member" | "reserved";
+export type ListWriter = "authority" | "member";
 
 /** Mirrors Rust `ListId::writer`. */
 export function listWriter(listId: ListId): ListWriter {
   switch (checkedListId(listId)) {
-    case ListId.recovery:
-      return "reserved";
     case ListId.ringViewing:
-    case ListId.escrow:
       return "member";
     case ListId.allow:
     case ListId.block:
     case ListId.frozen:
+    case ListId.privateBlock:
     case ListId.reader:
     case ListId.approval:
+    case ListId.privateAllow:
       return "authority";
   }
 }

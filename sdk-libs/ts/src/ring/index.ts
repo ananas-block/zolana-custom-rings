@@ -551,7 +551,6 @@ export {
   OWNER_GRANT_TAG,
   applyEnrollmentsInstruction,
   enrollInstruction,
-  type EnrollmentClient,
   enrollmentState,
   ownerGrantInstruction,
   proveEnrollment,
@@ -582,6 +581,7 @@ export {
 } from "../protocol/membership/tracking.js";
 export { privateListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
+export type { RingListSalt } from "../proof/policy-proof.js";
 export type { RingPublicSpend } from "../operations/payments/transfer.js";
 export type { RingMergeSealer } from "../crypto/audit/merge-disclosure.js";
 export { openZeroKeyMerges, type OpenedZeroKeyMerge } from "../state/zero-key-merge.js";

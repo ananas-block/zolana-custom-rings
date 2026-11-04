@@ -25,7 +25,7 @@ const field = (text: string): Bytes32 => hexToBytes(text) as Bytes32;
 interface TableCase {
   readonly name: string;
   readonly sources: readonly Readonly<{ list_id: number; registry: string }>[];
-  readonly private_source: Readonly<{ owner_lists: number; registry: string }>;
+  readonly salted: number;
   readonly rules: readonly string[];
   readonly fields: readonly string[];
   readonly policy_hash: string;
@@ -51,10 +51,7 @@ describe("ring-policy-table.json", () => {
         listId: slot.list_id,
         registry: field(slot.registry),
       })),
-      private: {
-        ownerLists: vector.private_source.owner_lists,
-        registry: field(vector.private_source.registry),
-      },
+      salted: vector.salted,
     };
     expect(policyTableFields(table, sources).map((row) => bytesToHex(row))).toEqual(vector.fields);
     expect(bytesToHex(policyTableHash(table, sources))).toBe(vector.policy_hash);

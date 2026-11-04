@@ -41,7 +41,6 @@ import {
   type RuleTable,
 } from "../../protocol/membership/policy.js";
 import { checkTransactionFits } from "../workflow/compile.js";
-import { listBits } from "./record-writes.js";
 
 export { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
 
@@ -280,16 +279,14 @@ export interface RingInitialPolicy extends RingPolicyTableInput {
 
 export type RingPolicyUpdate =
   | (Readonly<{ kind: "rules" }> & RingPolicyTableInput)
-  | Readonly<{ kind: "source"; listId: ListId; source: RingPolicySourceOwner }>
-  | Readonly<{ kind: "records"; records: Address }>
-  /** Owner rows read `ownerLists` from `registry`, no lists and no registry clear it. */
-  | Readonly<{ kind: "privateSource"; ownerLists: readonly ListId[]; registry?: Address }>;
+  /** `salted` reads the list at owners' salted keys. */
+  | Readonly<{ kind: "source"; listId: ListId; source: RingPolicySourceOwner; salted?: boolean }>
+  | Readonly<{ kind: "records"; records: Address }>;
 
 const POLICY_UPDATE_VARIANT = Object.freeze({
   rules: 0,
   source: 1,
   records: 2,
-  privateSource: 3,
 } as const);
 
 /** Rust `UpdatePolicy`, the policy role signs. */
@@ -321,18 +318,12 @@ function policyUpdateBody(writer: Writer, update: RingPolicyUpdate): readonly Ad
       return writePolicyTable(writer, update);
     case "source": {
       writer.u8(checkedListId(update.listId), "listId");
-      if (update.source.kind === "own") {
-        writer.u8(0, "source");
-        return [];
-      }
-      writer.u8(1, "source");
-      return [update.source.registry];
+      const own = update.source.kind === "own";
+      writer.u8(own ? 0 : 1, "source").u8(update.salted === true ? 1 : 0, "salted");
+      return update.source.kind === "own" ? [] : [update.source.registry];
     }
     case "records":
       return [update.records];
-    case "privateSource":
-      writer.u8(Number(listBits(update.ownerLists)), "ownerLists");
-      return update.registry === undefined ? [] : [update.registry];
   }
 }
 

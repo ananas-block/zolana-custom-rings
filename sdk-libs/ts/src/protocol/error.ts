@@ -154,8 +154,8 @@ export const RING_ERROR_CODES = [
   "RING_PROVING_KEYS_MISSING",
   "RING_SCAN_WORKER_FAILED",
   "RING_ENROLLMENT_KEY_MISMATCH",
+  "RING_LIST_SALT_MISSING",
   "RING_ENROLLMENT_ZERO_KEY",
-  "RING_ENROLLMENT_ROTATION_TOO_SOON",
   "RING_ENROLLMENT_NONE_NAMED",
   "RING_TRACKING_INVALID",
   "RING_RECIPIENT_ENROLLED",
@@ -167,7 +167,6 @@ export const RING_ERROR_CODES = [
   "RING_DEPOSIT_FRAME_REUSED",
   "RING_DEPOSIT_BOOTSTRAP_TAG",
   "RING_TRANSFER_PAST_ACCOUNT_BOUND",
-  "RING_APPROVER_MISSING",
   "RING_COSIGNER_OUT_OF_SCOPE",
   "RING_DELEGATE_DEPOSIT_LEG",
   "RING_MERGE_OWNER_MISMATCH",
@@ -283,12 +282,9 @@ export const RingProgramError = Object.freeze({
   unboundRegistry: 8480,
   rootNotServed: 8481,
   missingRegistry: 8482,
-  approverMissing: 8500,
-  tooManyCoSigners: 8501,
   invalidTrackingRegistry: 8502,
   trackingRootBelowFloor: 8503,
-  privateSourceOtherTracking: 8504,
-  publicRegistryAsPrivateSource: 8505,
+  saltedSourceOtherTracking: 8504,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;
@@ -317,8 +313,6 @@ export const StorageProgramError = Object.freeze({
   invalidTrackingAuthorization: 9023,
   enrollmentAlreadyApplied: 9024,
   enrollmentKeyFinal: 9025,
-  trackingTreeFull: 9026,
-  rotationTooSoon: 9027,
   zeroNullifierKey: 9028,
   enrollmentProofShape: 9029,
   noEnrollmentsNamed: 9030,
@@ -326,8 +320,6 @@ export const StorageProgramError = Object.freeze({
   invalidReaderKey: 9032,
   invalidAuditorKey: 9033,
   trackingRootBelowFloor: 9034,
-  sourceKindMismatch: 9035,
-  writeCounterNotIncreasing: 9036,
 } as const);
 
 export class RingError extends Error {
