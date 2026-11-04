@@ -97,7 +97,12 @@ import {
   interfaceTransferOf,
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
-import { decideAddressCeiling } from "./address-ceiling.js";
+import {
+  decideAddressCeiling,
+  TransactionFit,
+  type FitBudget,
+  type FitSigners,
+} from "./address-ceiling.js";
 import { checkTransferFits } from "./compile.js";
 import { BufferedFrame } from "../payments/buffered-frame.js";
 import { ringRegistrySlots, transferRootRead } from "./ring-reads.js";
@@ -232,6 +237,21 @@ interface AssembledTransfer {
 export interface RingTransactionFrame {
   readonly priorityFeeLamports?: bigint;
   readonly setupInstructions?: readonly Instruction[];
+}
+
+/** The fit's view of a frame, one split for the preproof check and the attempt. */
+export function fitSigners(payer: Address, frame: RingTransactionFrame | undefined): FitSigners {
+  return frame?.setupInstructions === undefined
+    ? { payer }
+    : { payer, setupInstructions: frame.setupInstructions };
+}
+
+export function fitBudget(
+  frame: RingTransactionFrame | undefined,
+): Pick<FitBudget, "priorityFeeLamports"> {
+  return frame?.priorityFeeLamports === undefined
+    ? {}
+    : { priorityFeeLamports: frame.priorityFeeLamports };
 }
 
 export type StagedTransferInput = Readonly<{
@@ -461,14 +481,14 @@ async function assembleStagedTransfer<T>(
   const delegate = isDelegateRail(ringRail);
   const selected = await selectStagedKey(input, context);
   const { demandInput, demand, keySpend, addresses, circuit, wideOwners } = selected;
-  const { sealed, layout, published, inputs, senderBundle, shape, proofInputs } =
-    sealStagedTransfer({ ...input, wideOwners });
+  const { sealed, published, inputs, senderBundle, shape, proofInputs } = sealStagedTransfer({
+    ...input,
+    wideOwners,
+  });
   const auditor = config.auditorPublicKey;
   try {
     const transfers = proofInputs.externalData.interfaceTransfers;
     const slots = publicSlots(transfers);
-    const entry = layout.key.entry;
-    const listSalts = input.listSalts ?? [];
     const policy = await readPolicy(
       {
         ...demandInput,
@@ -587,13 +607,18 @@ async function assembleStagedTransfer<T>(
         inputs: [],
         mergeCapacity: { keyed: 0, zeroKey: 0 },
       });
-    else
+    else {
       checkTransferFits(shape, {
         ...input.transaction,
         feePayer: proofInputs.payer,
         instructions: [inline],
         computeUnitLimit,
       });
+      TransactionFit.inline(inline, fitSigners(proofInputs.payer, input.transaction), {
+        ...fitBudget(input.transaction),
+        computeUnitLimit,
+      });
+    }
     return await use(
       Object.freeze({
         sealed,
@@ -994,7 +1019,7 @@ function boundRoots(policy: PolicyInputs): readonly BoundRoot[] {
   );
 }
 
-function transactTag(rail: RingRail): RingInstructionTag {
+export function transactTag(rail: RingRail): RingInstructionTag {
   return isDelegateRail(rail) ? RingInstructionTag.authorityTransfer : RingInstructionTag.transfer;
 }
 

@@ -6,12 +6,7 @@ import { readFileSync } from "node:fs";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { Reader, ZERO_32, ZERO_NULLIFIER_PK, addressBytes } from "@heliuslabs/zolana/internal";
 import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
-import {
-  NullifierKey,
-  ShieldedKeypair,
-  SigningKey,
-  X25519Keypair,
-} from "@heliuslabs/zolana/keypair";
+import { ShieldedKeypair, SigningKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { listTagOf } from "../../../src/crypto/keys/list-salt.js";
