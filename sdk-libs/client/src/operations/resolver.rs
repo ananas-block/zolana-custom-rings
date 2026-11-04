@@ -209,11 +209,7 @@ mod tests {
     fn view_path(path: &TrackingPath) -> RingRecordPathView {
         RingRecordPathView {
             index: path.index,
-            siblings: path
-                .siblings
-                .iter()
-                .map(|level| level.map(Hash))
-                .collect(),
+            siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
         }
     }
 

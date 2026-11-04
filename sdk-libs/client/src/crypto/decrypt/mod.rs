@@ -183,12 +183,17 @@ impl<'a> TransactionAudit<'a> {
             let slot = Slot { index, output };
             let position = index as usize;
             let truncated = || AuditError::AuditorMessageLength(data.len());
-            let record = opened.record(position, message.record(position).ok_or_else(truncated)?)?;
+            let record =
+                opened.record(position, message.record(position).ok_or_else(truncated)?)?;
             let tail = match layout.has_data {
                 true => opened.tail(position, message.tail(position).ok_or_else(truncated)?)?,
                 false => DataTail::default(),
             };
-            audited.place(index, output.output_context.clone(), transfer.slot(slot, record, tail)?);
+            audited.place(
+                index,
+                output.output_context.clone(),
+                transfer.slot(slot, record, tail)?,
+            );
         }
         audited.inputs = transfer.inputs(SpentInputs {
             real_inputs: opened.real_inputs,
@@ -278,7 +283,12 @@ impl Transfer {
     }
 
     /// Rebuilt from the record, the blinding and the slot alone, the registry is never read.
-    fn slot(&self, slot: Slot<'_>, record: AuditRecord, tail: DataTail) -> Result<SlotOpening, AuditError> {
+    fn slot(
+        &self,
+        slot: Slot<'_>,
+        record: AuditRecord,
+        tail: DataTail,
+    ) -> Result<SlotOpening, AuditError> {
         let ring = match record.kind {
             RecordKind::Dummy => return self.verify_dummy(slot),
             RecordKind::Ring => Some(self.ring),
@@ -360,7 +370,7 @@ impl Transfer {
                     } if index < 64 && default_input_bits >> index & 1 == 1 => {
                         let entry = inputs.get(index).ok_or(AuditError::DisclosureLayout)?;
                         let tree = trees.and_then(|trees| trees.get(index).copied().flatten());
-                        InputOpening::External(self.default_input(entry, tree)?)
+                        InputOpening::External(Box::new(self.default_input(entry, tree)?))
                     }
                     AuditEvidence::None | AuditEvidence::Entry { .. } => InputOpening::Real,
                 };
@@ -424,3 +434,6 @@ impl AuditedTransaction {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

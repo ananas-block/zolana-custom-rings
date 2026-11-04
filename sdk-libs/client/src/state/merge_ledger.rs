@@ -4,10 +4,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use solana_address::Address;
 use solana_signature::Signature;
-use spr_keypair::NullifierKey;
 use spr_hasher::primitives::hash_bytes;
-use spr_transaction::instructions::merge::merge_output_blinding;
-use zolana_ring_keys::RingMergeSeed;
+use spr_keypair::NullifierKey;
+use spr_transaction::instructions::merge::{merge_output_blinding, MergeSeed};
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
@@ -241,7 +240,7 @@ impl AuditedMergeOutput {
             amount: self.amount,
             blinding: match self.seed {
                 Some(seed) => {
-                    RingMergeSeed::from_bytes(seed)?.output_blinding(&self.first_nullifier)?
+                    MergeSeed::from_bytes(seed)?.output_blinding(&self.first_nullifier)?
                 }
                 None => merge_output_blinding(nullifier_key, &self.first_nullifier)?,
             },

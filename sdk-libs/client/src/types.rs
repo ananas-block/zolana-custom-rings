@@ -121,7 +121,7 @@ pub enum InputOpening {
     /// A spent note, the nullifier index names which, never padding or unspent.
     Real,
     /// A default-ring note whose opening the frame carries.
-    External(AuditedDefaultInput),
+    External(Box<AuditedDefaultInput>),
 }
 
 impl InputOpening {
@@ -131,7 +131,7 @@ impl InputOpening {
 
     pub fn default_input(&self) -> Option<&AuditedDefaultInput> {
         match self {
-            Self::External(input) => Some(input),
+            Self::External(input) => Some(input.as_ref()),
             Self::Dummy | Self::Real => None,
         }
     }
@@ -192,7 +192,6 @@ impl AuditedTransaction {
                 .iter()
                 .any(|error| error.kind == OutputPayloadErrorKind::UnknownAsset)
     }
-
 }
 
 impl AuditedOutput {

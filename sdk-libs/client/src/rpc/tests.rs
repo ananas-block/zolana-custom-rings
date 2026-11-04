@@ -475,9 +475,11 @@ fn a_wallet_owning_every_input_keeps_all_outputs_without_a_marker() {
 fn a_wallet_with_no_spent_input_reads_only_its_own_outputs() {
     let transaction = two_owner_transaction(Address::new_from_array([0x77; 32]));
     let read = |wallet: u8| {
-        WalletActivity::of(Address::new_from_array([wallet; 32]), transaction.clone(), |_| {
-            InputParty::Other
-        })
+        WalletActivity::of(
+            Address::new_from_array([wallet; 32]),
+            transaction.clone(),
+            |_| InputParty::Other,
+        )
     };
     assert!(matches!(
         read(0x10).expect("the output's owner").view,
@@ -515,17 +517,17 @@ fn anonymous_audited() -> AuditedTransaction {
             },
             AuditedInput {
                 nullifier: [11; 32],
-                opening: InputOpening::External(AuditedDefaultInput {
+                opening: InputOpening::External(Box::new(AuditedDefaultInput {
                     utxo: utxo(0x60, Some(Address::new_from_array([4; 32]))),
                     commitment: Some([0x62; 32]),
-                }),
+                })),
             },
             AuditedInput {
                 nullifier: [10; 32],
-                opening: InputOpening::External(AuditedDefaultInput {
+                opening: InputOpening::External(Box::new(AuditedDefaultInput {
                     utxo: utxo(0x70, None),
                     commitment: None,
-                }),
+                })),
             },
             AuditedInput {
                 nullifier: [9; 32],

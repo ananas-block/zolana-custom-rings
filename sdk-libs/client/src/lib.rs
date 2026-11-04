@@ -21,12 +21,12 @@ mod disclosure;
 #[path = "crypto/encryption/mod.rs"]
 mod encryption;
 mod error;
+#[path = "state/exposed_notes.rs"]
+mod exposed_notes;
 #[path = "rpc/history.rs"]
 pub mod history;
 #[path = "rpc/indexer.rs"]
 mod indexer;
-#[path = "state/exposed_notes.rs"]
-mod exposed_notes;
 #[path = "state/known_utxo_index.rs"]
 mod known;
 #[path = "state/list_grant.rs"]

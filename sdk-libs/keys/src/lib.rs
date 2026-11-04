@@ -12,7 +12,7 @@ pub use keys::{
     RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind, RingTagProbe, RotatingRingKeys,
     ViewTagRequest, ViewTagStream,
 };
-pub use merge_seed::{MergeSeedHolder, MergeSeedRequest, RingMergeSeed};
+pub use merge_seed::{MergeSeedHolder, MergeSeedRequest};
 pub use ring_address::{RingAddress, RingPaymentRequest};
 pub use ring_nullifier_key::RingNullifierKey;
 pub use stream_cipher::{symmetric_apply_audit, RingStream};

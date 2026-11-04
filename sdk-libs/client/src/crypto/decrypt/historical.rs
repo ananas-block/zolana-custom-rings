@@ -45,11 +45,11 @@ const OUTPUTS_AT: usize = 4;
 /// The shape index or the input count, the bits above carry flags.
 const LOW_BITS: u8 = 0b0011_1111;
 const SHAPE_RESERVED: u8 = 1 << 7;
-const KEY_ESCROW: u8 = 1 << 6;
+pub(super) const KEY_ESCROW: u8 = 1 << 6;
 const FULL_OPENINGS: u8 = 1 << 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum V3Key {
+pub(super) enum V3Key {
     Confidential { class: usize },
     Commitment { class: usize },
     Entry { class: usize },
@@ -68,7 +68,7 @@ impl V3Key {
         !matches!(self, Self::Confidential { .. })
     }
 
-    const fn record_blocks(self) -> usize {
+    pub(super) const fn record_blocks(self) -> usize {
         match self.is_anonymous() {
             true => ANONYMOUS_RECORD_LEN.div_ceil(STREAM_BLOCK_LEN),
             false => EXIT_RECORD_LEN.div_ceil(STREAM_BLOCK_LEN),
@@ -83,8 +83,9 @@ impl V3Key {
     }
 
     /// Records start past the evidence of the key's widest input count.
-    const fn first_record_counter(self) -> u32 {
-        let envelope = (ENVELOPE_KEY_LEN + self.evidence_len(self.class())).div_ceil(STREAM_BLOCK_LEN);
+    pub(super) const fn first_record_counter(self) -> u32 {
+        let envelope =
+            (ENVELOPE_KEY_LEN + self.evidence_len(self.class())).div_ceil(STREAM_BLOCK_LEN);
         STREAM_FIRST_COUNTER + envelope as u32
     }
 }
@@ -92,7 +93,7 @@ impl V3Key {
 /// What a tag 45 or 46 frame's head fixes of its auditor message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HistoricalLayout {
-    key: V3Key,
+    pub(super) key: V3Key,
     pub(super) key_escrow: bool,
     pub(super) inputs: usize,
     pub(super) outputs: usize,
@@ -102,8 +103,8 @@ impl HistoricalLayout {
     /// `frame` is `tag || data`, a shape off every version 3 key is refused.
     pub fn parse(frame: &[u8], mode: RingMode) -> Result<Self, AuditError> {
         let invalid = || AuditError::DisclosureLayout;
-        let tag = InstructionTag::try_from(*frame.first().ok_or_else(invalid)?)
-            .map_err(|_| invalid())?;
+        let tag =
+            InstructionTag::try_from(*frame.first().ok_or_else(invalid)?).map_err(|_| invalid())?;
         let rail = RingRail::of(tag, mode).map_err(|_| invalid())?;
         let byte = |at: usize| frame.get(at).copied().ok_or_else(invalid);
         let shape_byte = byte(SHAPE_AT)?;
@@ -345,15 +346,21 @@ pub(super) fn audit(
         .filter(|(key, _)| key[0] == VIEWING_PUBKEY_TAG)
         .ok_or_else(wrong_length)?;
     let envelope_len = ENVELOPE_KEY_LEN + layout.key.evidence_len(layout.inputs);
-    let (envelope, mut records) = rest.split_at_checked(envelope_len).ok_or_else(wrong_length)?;
-    let stream = opening_ring_stream(auditor, &X25519Pubkey::from_bytes(*eph_pk)?, AUDIT_STREAM_LABEL)?;
+    let (envelope, mut records) = rest
+        .split_at_checked(envelope_len)
+        .ok_or_else(wrong_length)?;
+    let stream = opening_ring_stream(
+        auditor,
+        &X25519Pubkey::from_bytes(*eph_pk)?,
+        AUDIT_STREAM_LABEL,
+    )?;
     let mut plaintext = Zeroizing::new(envelope.to_vec());
     stream.apply_at(STREAM_FIRST_COUNTER, &mut plaintext);
     let (secret, evidence) = plaintext
         .split_first_chunk::<ENVELOPE_KEY_LEN>()
         .ok_or_else(wrong_length)?;
-    let tx_key = ViewingKey::from_canonical_bytes(secret)
-        .map_err(|_| AuditError::NonCanonicalViewingKey)?;
+    let tx_key =
+        ViewingKey::from_canonical_bytes(secret).map_err(|_| AuditError::NonCanonicalViewingKey)?;
     let evidence = Evidence::decode(evidence, layout)?;
     if tx_key.pubkey() != tx_viewing_pk {
         return Err(AuditError::TxViewingKeyMismatch);
@@ -481,10 +488,12 @@ impl V3Slots<'_> {
             return Ok(Err(OutputPayloadErrorKind::Frame));
         };
         let recipient_u = slot.owner_tag();
-        let agreement = X25519Pubkey::from_u(recipient_u).ok().and_then(|recipient| {
-            let agreement = Zeroizing::new(self.tx_key.ecdh(&recipient).ok()?);
-            Some((recipient, agreement))
-        });
+        let agreement = X25519Pubkey::from_u(recipient_u)
+            .ok()
+            .and_then(|recipient| {
+                let agreement = Zeroizing::new(self.tx_key.ecdh(&recipient).ok()?);
+                Some((recipient, agreement))
+            });
         let Some((recipient, agreement)) = agreement else {
             return Ok(Err(OutputPayloadErrorKind::RecipientKey));
         };
@@ -583,7 +592,7 @@ impl V3Slots<'_> {
         };
         let commitment = tree.map(|tree| utxo.commitment(tree, None)).transpose()?;
         Ok(match commitment == Some(opening.hash) {
-            true => InputOpening::External(AuditedDefaultInput { utxo, commitment }),
+            true => InputOpening::External(Box::new(AuditedDefaultInput { utxo, commitment })),
             false => InputOpening::Real,
         })
     }

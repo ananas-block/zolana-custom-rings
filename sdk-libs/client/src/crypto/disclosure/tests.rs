@@ -201,7 +201,10 @@ fn a_tail_opens_only_at_the_counter_of_its_slot() {
     .unwrap();
     let opened = opened_envelope(&sealed, &auditor, data_layout()).unwrap();
     assert_eq!(opened.tail(0, &sealed.tails[0]).unwrap(), tail);
-    assert_eq!(opened.tail(1, &sealed.tails[1]).unwrap(), DataTail::default());
+    assert_eq!(
+        opened.tail(1, &sealed.tails[1]).unwrap(),
+        DataTail::default()
+    );
     assert_ne!(opened.tail(1, &sealed.tails[0]).unwrap(), tail);
 }
 
@@ -225,7 +228,10 @@ fn the_entry_evidence_and_records_round_their_own_regions() {
         opened.record(0, &sealed.records[0]).unwrap(),
         AuditRecord::default()
     );
-    assert_eq!(opened.record(1, &sealed.records[1]).unwrap(), ring_record(0x27));
+    assert_eq!(
+        opened.record(1, &sealed.records[1]).unwrap(),
+        ring_record(0x27)
+    );
 }
 
 #[test]
@@ -246,7 +252,12 @@ fn a_seal_off_its_layout_is_refused() {
     let two = vec![AuditRecord::default(); 2];
     let tail = DataTail::default();
     let cases = [
-        (plain_layout(), AuditEvidence::None, vec![AuditRecord::default()], vec![]),
+        (
+            plain_layout(),
+            AuditEvidence::None,
+            vec![AuditRecord::default()],
+            vec![],
+        ),
         (plain_layout(), entry_evidence(), two.clone(), vec![]),
         (plain_layout(), AuditEvidence::None, two.clone(), vec![tail]),
         (data_layout(), AuditEvidence::None, two.clone(), vec![tail]),

@@ -59,7 +59,7 @@ pub fn open_merge_record(
 #[cfg(test)]
 mod tests {
     use serde_json::Value;
-    use zolana_ring_keys::RingMergeSeed;
+    use spr_transaction::instructions::merge::MergeSeed;
 
     use super::*;
 
@@ -88,7 +88,7 @@ mod tests {
                 .unwrap();
             assert_eq!(sealed.ciphertext, ciphertext);
             assert_eq!(sealed.eph_pk, eph_pk);
-            let blinding = RingMergeSeed::from_bytes(opened.secret)
+            let blinding = MergeSeed::from_bytes(opened.secret)
                 .unwrap()
                 .output_blinding(&array(&case["request"]["firstNullifier"]))
                 .unwrap();
@@ -105,8 +105,7 @@ mod tests {
         let mut ciphertext: [u8; OPENING_RECORD_LEN] = array(&case["ciphertext"]);
         let record = hex_bytes(&case["record"]);
         let read = |auditor: &X25519Keypair, ciphertext: &[u8; OPENING_RECORD_LEN]| {
-            open_merge_record(auditor, &eph_pk, ciphertext)
-                .map(|opened| opened.encode().to_vec())
+            open_merge_record(auditor, &eph_pk, ciphertext).map(|opened| opened.encode().to_vec())
         };
         assert!(read(&X25519Keypair::new(), &ciphertext).unwrap_or_default() != record);
         ciphertext[100] ^= 1;

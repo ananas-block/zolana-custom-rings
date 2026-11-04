@@ -1,8 +1,8 @@
 //! Reads the committed auditor streams, version 4 from solved witnesses and version 3 frozen.
 
 use custom_ring_interface::{
-    encode_confidential_output, tag, tagged_x25519, AuditKey, AuditStreamLayout,
-    AuditorMessage, RingMode, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    encode_confidential_output, tag, tagged_x25519, AuditKey, AuditStreamLayout, AuditorMessage,
+    RingMode, CONFIDENTIAL_DATA_FREE_BODY_LEN,
 };
 use serde_json::Value;
 use solana_address::Address;
@@ -48,7 +48,10 @@ fn auditor() -> X25519Keypair {
 #[test]
 fn every_version_4_stream_rebuilds_its_published_hashes_with_no_mint_registry() {
     let vector: Value = serde_json::from_str(STREAM_V4).unwrap();
-    assert_eq!(hash_bytes(RING.as_array()).unwrap(), array::<32>(&vector["ring_id"]));
+    assert_eq!(
+        hash_bytes(RING.as_array()).unwrap(),
+        array::<32>(&vector["ring_id"])
+    );
     let tx_key = ViewingKey::from_canonical_bytes(&array(&vector["tx_viewing_sk"])).unwrap();
     let eph = X25519Keypair::from_bytes(&array(&vector["eph_sk"]));
     let first_nullifier = array::<32>(&vector["first_nullifier"]);
@@ -81,7 +84,10 @@ fn every_version_4_stream_rebuilds_its_published_hashes_with_no_mint_registry() 
                 payload: Vec::new(),
             })
             .collect();
-        let (records, tails) = (list(&case["record_ciphertexts"]), list(&case["tail_ciphertexts"]));
+        let (records, tails) = (
+            list(&case["record_ciphertexts"]),
+            list(&case["tail_ciphertexts"]),
+        );
         let envelope = bytes(&case["envelope_ciphertext"]);
         let parts = core::iter::once(envelope.as_slice())
             .chain(records.iter().map(Vec::as_slice))
@@ -110,7 +116,11 @@ fn every_version_4_stream_rebuilds_its_published_hashes_with_no_mint_registry() 
         let audited = TransactionAudit::new(&tx, layout)
             .run(&auditor(), &no_assets)
             .unwrap();
-        assert!(audited.payload_errors.is_empty(), "{name}: {:?}", audited.payload_errors);
+        assert!(
+            audited.payload_errors.is_empty(),
+            "{name}: {:?}",
+            audited.payload_errors
+        );
         assert_eq!(audited.outputs.len(), hashes.len(), "{name}");
         let plaintext = bytes(&case["envelope_plaintext"]);
         assert_eq!(audited.real_inputs, plaintext[32], "{name}");
@@ -191,7 +201,10 @@ fn every_version_3_delivered_stream_opens_or_names_its_missing_key() {
         let inputs = case["input_count"].as_u64().unwrap() as usize;
         let assets = held_assets(slots);
         let tx_key = ViewingKey::from_canonical_bytes(&array(&case["tx_viewing_sk"])).unwrap();
-        assert_eq!(tagged_x25519(&array(&case["tx_viewing_u"])), *tx_key.pubkey().as_bytes());
+        assert_eq!(
+            tagged_x25519(&array(&case["tx_viewing_u"])),
+            *tx_key.pubkey().as_bytes()
+        );
         let tx = ShieldedTransaction {
             slot: 1,
             tx_signature: Signature::default(),
@@ -255,7 +268,10 @@ fn every_version_3_delivered_stream_opens_or_names_its_missing_key() {
                     let utxo = opened.expect(name).opening.utxo().expect("a note");
                     assert_eq!(utxo.amount.to_string(), slot["amount"].to_string());
                     assert_eq!(utxo.owner_key, array::<32>(&slot["owner_key"]));
-                    assert_eq!(kind == "exit", matches!(opened.unwrap().opening, OutputOpening::Exit(_)));
+                    assert_eq!(
+                        kind == "exit",
+                        matches!(opened.unwrap().opening, OutputOpening::Exit(_))
+                    );
                 }
             }
         }
@@ -315,7 +331,10 @@ fn every_version_3_anonymous_stream_opens_and_its_hash_evidence_reads_as_spent_n
                 view_tag: auditor().pubkey().u(),
                 data: bytes(&case["message"]),
             }],
-            nullifiers: inputs.iter().map(|input| array(&input["nullifier"])).collect(),
+            nullifiers: inputs
+                .iter()
+                .map(|input| array(&input["nullifier"]))
+                .collect(),
             proofless: false,
             ring_config: None,
             ring_program_id: Some(Address::new_from_array(array(&case["ring_program_id"]))),
@@ -382,7 +401,9 @@ fn a_version_3_head_off_every_key_or_a_row_off_its_head_is_refused() {
     assert!(TransactionAudit::new(&tx, AuditFrame::Historical(layout))
         .run(&auditor(), &RingAssets::new([]).unwrap())
         .is_err());
-    assert!(HistoricalLayout::parse(&[tag::HISTORICAL_TRANSFER_V3], RingMode::Confidential).is_err());
+    assert!(
+        HistoricalLayout::parse(&[tag::HISTORICAL_TRANSFER_V3], RingMode::Confidential).is_err()
+    );
     let mut reserved = head;
     reserved[2] |= 1 << 7;
     assert!(HistoricalLayout::parse(&reserved, RingMode::Confidential).is_err());

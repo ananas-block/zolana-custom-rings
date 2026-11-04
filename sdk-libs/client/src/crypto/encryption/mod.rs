@@ -287,8 +287,7 @@ fn open_record(
         &mut *plaintext,
     );
     let mismatch = |_| AuditError::DepositOpeningMismatch;
-    let OpeningRecord { record, secret } =
-        OpeningRecord::decode(&*plaintext).map_err(mismatch)?;
+    let OpeningRecord { record, secret } = OpeningRecord::decode(&*plaintext).map_err(mismatch)?;
     if record.kind != RecordKind::Ring
         || !is_canonical_bn254_scalar_be(&record.nullifier_pk)
         || !is_canonical_bn254_scalar_be(&secret)
@@ -486,11 +485,10 @@ mod tests {
                 secret: blindings[slot],
             })
             .collect();
-        let auditor_pk =
-            X25519Pubkey::from_bytes(custom_ring_interface::tagged_x25519(&hex_field(
-                &request["auditorPk"],
-            )))
-            .unwrap();
+        let auditor_pk = X25519Pubkey::from_bytes(custom_ring_interface::tagged_x25519(
+            &hex_field(&request["auditorPk"]),
+        ))
+        .unwrap();
         let ephemeral = X25519Keypair::from_bytes(&hex_field(&request["ephSk"]));
         let sealed = seal_deposits_with(&records, &auditor_pk, ephemeral).unwrap();
         let owner_hashes = list("ownerPkHashes");
@@ -612,7 +610,10 @@ mod tests {
         let mut ciphertext = *opening;
         sealing_ring_stream(&ephemeral, auditor, DEPOSIT_AUDIT_LABEL)
             .unwrap()
-            .apply_at(STREAM_FIRST_COUNTER + u32::from(slot_index) * 6, &mut ciphertext);
+            .apply_at(
+                STREAM_FIRST_COUNTER + u32::from(slot_index) * 6,
+                &mut ciphertext,
+            );
         HistoricalDepositCapsule {
             slot_index,
             eph_pk: ephemeral.pubkey().as_bytes(),

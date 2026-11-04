@@ -7576,6 +7576,7 @@ dependencies = [
  "spr-keypair",
  "thiserror 2.0.20",
  "wincode",
+ "zeroize",
 ]
 
 [[package]]
@@ -9178,7 +9179,6 @@ dependencies = [
  "ctr",
  "custom-ring-interface",
  "hex",
- "hkdf",
  "percent-encoding",
  "serde",
  "serde_json",
@@ -9283,6 +9283,7 @@ dependencies = [
  "zeroize",
  "zolana-ring-client",
  "zolana-ring-indexer",
+ "zolana-ring-keys",
  "zolana-ring-member-registry",
  "zolana-ring-policy",
  "zolana-ring-transaction",

@@ -4,8 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use custom_ring_interface::{
     ring_body_output, ring_recipient_output_body, ring_sender_bundle_output_body,
-    stream::SlotSecret,
-    SENDER_BUNDLE_HEAD_LEN,
+    stream::SlotSecret, SENDER_BUNDLE_HEAD_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -13,13 +12,13 @@ use spr_client::{AsyncRpc, IndexerRpcConfig};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{viewing_key::ViewTag, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey};
 use spr_transaction::{
-    instructions::merge::MergeOutputPlaintext,
+    instructions::merge::{MergeOutputPlaintext, MergeSeed},
     DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, Mint, ShieldedKeys,
     ShieldedTransaction, TransactionError, TransactionKeyRequest, WalletUtxo,
 };
 use zolana_ring_keys::{
-    MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeys, RingMergeSeed, RingTagFrame,
-    RingTagKind, RingTagProbe, ViewTagRequest, ViewTagStream,
+    MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind,
+    RingTagProbe, ViewTagRequest, ViewTagStream,
 };
 use zolana_ring_transaction::{
     historical::{HistoricalBody, HistoricalReader, HistoricalSite},
@@ -293,7 +292,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
 }
 
 /// One form on every rail, scheme 11 on a frame before statement version 4.
-fn recipient_payload(payload: &[u8]) -> Option<(&[u8], &[u8])> {
+pub(crate) fn recipient_payload(payload: &[u8]) -> Option<(&[u8], &[u8])> {
     ring_body_output(payload).or_else(|| {
         ring_recipient_output_body(payload).map(|(body, reply)| (body.as_slice(), reply))
     })
@@ -1286,7 +1285,7 @@ impl OwnerMerge {
     fn open(
         &self,
         tx: &ShieldedTransaction,
-        seed: &RingMergeSeed,
+        seed: &MergeSeed,
         owner: PublicKey,
     ) -> Result<Option<OpenedNote>, AnonymousError> {
         let key = seed.output_key(&self.first_nullifier)?;
@@ -1315,7 +1314,7 @@ impl OwnerMerge {
     }
 }
 
-fn published_note(
+pub(crate) fn published_note(
     tx: &ShieldedTransaction,
     position: usize,
     note: OpenedNote,

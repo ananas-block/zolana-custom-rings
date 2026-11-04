@@ -3,16 +3,20 @@
 use std::collections::HashSet;
 
 use spr_client::{AsyncRpc, IndexerRpcConfig};
-use spr_keypair::KeypairError;
+use spr_keypair::{KeypairError, ShieldedAddress};
 use spr_transaction::{
     verify_owned, DecryptionResult, OwnedUtxos, ShieldedKeys, ShieldedTransaction,
     TransactionError, WalletUtxo,
 };
 use zolana_ring_keys::RingKeys;
-use zolana_ring_transaction::RingAssets;
+use zolana_ring_transaction::{open_recipient_body, AnonymousOutput, OpenedBody, RingAssets};
 
 use crate::{
-    delivered::{confidential_delivered, open_delivered, PendingUtxo},
+    anonymous::{published_note, recipient_payload},
+    delivered::{
+        assign_nullifiers, confidential_delivered, open_delivered, PendingUtxo,
+        RingDeliveredCandidate, RingDeliveryContext,
+    },
     deposit::{DepositOpener, OpenedDeposit},
     deposit_payload,
     exposed_notes::{verify_ring_owned, RingOwnedUtxos},
@@ -113,11 +117,8 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> RingConfidentialScan<'a, K> {
         transactions: &[ShieldedTransaction],
     ) -> Result<RingConfidentialNotes, AnonymousError> {
         let address = self.keys.address()?;
-        let delivered = open_delivered(
-            &address,
-            self.assets,
-            &confidential_delivered(self.keys, transactions)?,
-        )?;
+        let candidates = confidential_delivered(self.keys, transactions)?;
+        let delivered = open_delivered(&address, self.assets, &candidates)?;
         let mut decrypted = DecryptionResult {
             utxos: delivered.found,
             spent_nullifiers: transactions
@@ -126,6 +127,22 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> RingConfidentialScan<'a, K> {
                 .collect(),
             ..DecryptionResult::default()
         };
+        let mut body_notes = Vec::new();
+        for candidate in &candidates {
+            match open_recipient_candidate(&address, self.assets, candidate)? {
+                Some(OpenedBody::Note(note)) => body_notes.push(published_note(
+                    candidate.tx,
+                    candidate.slot_index as usize,
+                    note,
+                )?),
+                Some(OpenedBody::UnknownMint(note)) => {
+                    decrypted.unknown_mints.insert(note.utxo.asset.asset);
+                }
+                None => {}
+            }
+        }
+        assign_nullifiers(self.keys, &mut body_notes)?;
+        decrypted.utxos.extend(body_notes);
         let opener = DepositOpener {
             keys: self.keys,
             address: &address,
@@ -160,6 +177,36 @@ pub fn open_ring_confidential<K: ShieldedKeys + RingKeys + ?Sized>(
     transactions: &[ShieldedTransaction],
 ) -> Result<RingConfidentialNotes, AnonymousError> {
     RingConfidentialScan::new(keys, assets).open(transactions)
+}
+
+/// Scheme 13 under the slot's secret, `None` off that scheme or on a body that rebuilds nothing.
+fn open_recipient_candidate(
+    address: &ShieldedAddress,
+    assets: &RingAssets,
+    candidate: &RingDeliveredCandidate<'_>,
+) -> Result<Option<OpenedBody>, AnonymousError> {
+    let tx = candidate.tx;
+    let Some(slot) = tx.output_slots.get(candidate.slot_index as usize) else {
+        return Ok(None);
+    };
+    let (Some((ciphertext, _)), Some(context)) = (
+        recipient_payload(&slot.payload),
+        RingDeliveryContext::of(tx),
+    ) else {
+        return Ok(None);
+    };
+    let Ok(body) = open_recipient_body(ciphertext, &candidate.slot_secret) else {
+        return Ok(None);
+    };
+    Ok(AnonymousOutput {
+        ring: context.ring,
+        owner: address,
+        utxo_hash: &slot.output_context.hash,
+        tree_id: slot.output_context.tree_id,
+        assets,
+    }
+    .open_body(&body)
+    .unwrap_or(None))
 }
 
 pub(crate) struct RingMerges(pub Vec<ShieldedTransaction>);

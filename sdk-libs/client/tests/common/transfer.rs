@@ -510,11 +510,7 @@ impl Transfer {
                 .iter()
                 .enumerate()
                 .map(|(slot, output)| {
-                    wire(
-                        output,
-                        message.record(slot).unwrap(),
-                        message.tail(slot),
-                    )
+                    wire(output, message.record(slot).unwrap(), message.tail(slot))
                 })
                 .collect(),
             replies: None,

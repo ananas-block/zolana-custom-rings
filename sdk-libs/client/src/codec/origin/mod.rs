@@ -242,11 +242,7 @@ impl ConfirmedDeposit {
         self.slot_index
     }
 
-    pub(crate) fn matches(
-        &self,
-        capsule: DepositCapsule<'_>,
-        owner_utxo_hash: &[u8; 32],
-    ) -> bool {
+    pub(crate) fn matches(&self, capsule: DepositCapsule<'_>, owner_utxo_hash: &[u8; 32]) -> bool {
         self.slot_index == capsule.slot_index()
             && &self.owner_utxo_hash == owner_utxo_hash
             && self.capsule_hash == <[u8; 32]>::from(Sha256::digest(capsule.encode()))
@@ -447,7 +443,7 @@ fn confirmed_merge_disclosure(
         (tag::RING_MERGE_V2, ring_tag::MERGE) => {
             let request = CustomRingMergeIxDataRef::from_bytes(request).ok()?;
             let forwarded = request.forwarded(&request.spp_merge_body().ok()?);
-            (forwarded == source.data).then(|| ConfirmedMergeDisclosure::Record {
+            (forwarded == source.data).then_some(ConfirmedMergeDisclosure::Record {
                 eph_pk: *request.eph_pk,
                 ciphertext: *request.ciphertext,
             })

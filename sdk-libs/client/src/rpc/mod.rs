@@ -53,8 +53,8 @@ pub use wallet_status::*;
 
 use crate::{
     AuditError, AuditedInput, AuditedMergeOutput, AuditedOutput, AuditedTransaction, AuditedUtxo,
-    ConfirmedMerge, KnownUtxo, OutputOpening, OutputPayloadErrorKind, ReaderKey,
-    ReaderKeyError, RingOwnerTag, RingWithdrawal, UtxoOwner,
+    ConfirmedMerge, KnownUtxo, OutputOpening, OutputPayloadErrorKind, ReaderKey, ReaderKeyError,
+    RingOwnerTag, RingWithdrawal, UtxoOwner,
 };
 
 pub const HEALTH: &str = "health";
@@ -898,10 +898,13 @@ impl From<AuditedInput> for DecryptedInput {
         Self {
             nullifier: input.nullifier.into(),
             real: input.opening.is_real(),
-            default_input: input.opening.default_input().map(|input| DecryptedDefaultInput {
-                utxo: input.utxo.into(),
-                commitment: input.commitment.map(Into::into),
-            }),
+            default_input: input
+                .opening
+                .default_input()
+                .map(|input| DecryptedDefaultInput {
+                    utxo: input.utxo.into(),
+                    commitment: input.commitment.map(Into::into),
+                }),
         }
     }
 }

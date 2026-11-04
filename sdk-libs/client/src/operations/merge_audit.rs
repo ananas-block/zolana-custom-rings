@@ -5,6 +5,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use custom_ring_interface::{OpeningRecord, RecordKind};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
@@ -19,9 +20,7 @@ use spr_hasher::primitives::{hash_bytes, is_canonical_bn254_scalar_be};
 use spr_indexer_api::Context;
 use spr_interface::instruction::instruction_data::merge_transact::merge_circuit_width;
 use spr_keypair::{X25519Keypair, X25519Pubkey};
-use spr_transaction::OutputSlot;
-use custom_ring_interface::{OpeningRecord, RecordKind};
-use zolana_ring_keys::RingMergeSeed;
+use spr_transaction::{instructions::merge::MergeSeed, OutputSlot};
 
 use crate::{
     encryption::{open_merge_disclosure, open_merge_record},
@@ -346,7 +345,7 @@ impl MergeOutput {
         if record.kind != RecordKind::Ring || !is_canonical_bn254_scalar_be(&record.nullifier_pk) {
             return Err(AuditError::DisclosureField);
         }
-        let seed = RingMergeSeed::from_bytes(secret).map_err(|_| AuditError::DisclosureField)?;
+        let seed = MergeSeed::from_bytes(secret).map_err(|_| AuditError::DisclosureField)?;
         let rebuilt = KnownUtxo {
             owner_key: record.owner_key,
             owner: UtxoOwner::Keyed {
@@ -364,7 +363,7 @@ impl MergeOutput {
             return Err(AuditError::MergeDisclosureMismatch);
         }
         let mut real_nullifiers = Vec::with_capacity(nullifiers.len());
-        for (slot_index, nullifier) in (0u32..).zip(nullifiers) {
+        for (slot_index, nullifier) in (0u8..).zip(nullifiers) {
             if *nullifier != seed.dummy_nullifier(&self.first_nullifier, slot_index)? {
                 real_nullifiers.push(*nullifier);
             }
@@ -453,7 +452,7 @@ mod tests {
 
     /// The record, its seed and the commitment the record rebuilds.
     fn merged_note(nullifier_pk: [u8; 32], seed: [u8; 32]) -> (OpeningRecord, [u8; 32]) {
-        let blinding = RingMergeSeed::from_bytes(seed)
+        let blinding = MergeSeed::from_bytes(seed)
             .unwrap()
             .output_blinding(&FIRST)
             .unwrap();
@@ -529,7 +528,7 @@ mod tests {
         let seed = [0x13; 32].map(|byte: u8| byte & 0x1f);
         for nullifier_pk in [[0x07; 32], ZERO_NULLIFIER_PUBKEY] {
             let (record, commitment) = merged_note(nullifier_pk, seed);
-            let derived = RingMergeSeed::from_bytes(seed).unwrap();
+            let derived = MergeSeed::from_bytes(seed).unwrap();
             let nullifiers = vec![
                 FIRST,
                 [6; 32],
@@ -564,9 +563,8 @@ mod tests {
         let auditor = X25519Keypair::new();
         let (record, commitment) = merged_note([0x07; 32], [0x13; 32].map(|byte: u8| byte & 0x1f));
         let row = merge_row(commitment, vec![FIRST; 8], MergeCiphertextBinding::Proven);
-        let opens = |spoiled: OpeningRecord| {
-            confirmed_merge(&row, 0, &sealed(&auditor, spoiled), &auditor)
-        };
+        let opens =
+            |spoiled: OpeningRecord| confirmed_merge(&row, 0, &sealed(&auditor, spoiled), &auditor);
         assert!(opens(record).is_ok());
         type Spoil = fn(&mut OpeningRecord);
         let spoils: [Spoil; 5] = [
@@ -626,7 +624,9 @@ mod tests {
             });
             let output = MergeOutput::of(&transaction).unwrap();
             assert_eq!(
-                output.disclose(&auditor, &disclosure, &transaction).unwrap(),
+                output
+                    .disclose(&auditor, &disclosure, &transaction)
+                    .unwrap(),
                 real
             );
         }

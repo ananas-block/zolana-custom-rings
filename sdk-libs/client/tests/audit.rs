@@ -34,6 +34,7 @@ use spr_event::{
 use spr_hasher::primitives::hash_bytes;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::instructions::merge::MergeSeed;
 use spr_transaction::{owner_utxo_hash, OutputContext, OutputSlot};
 use zolana_ring_client::{
     auditor_view_tag, confirmed_merge,
@@ -44,7 +45,6 @@ use zolana_ring_client::{
     MergeRecordSeal, OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOrigin,
     RingOwnerTag, RingScan, TransactionAudit, TransactionOrigin, UtxoOwner,
 };
-use zolana_ring_keys::RingMergeSeed;
 use zolana_ring_transaction::RingAssets;
 
 use history_page::{position, EventsPage};
@@ -378,7 +378,11 @@ fn an_entry_input_opens_under_its_default_bit_and_rebuilds_its_commitment() {
     );
     let untreed = audit(&built.transaction, built.layout).unwrap();
     assert_eq!(
-        untreed.inputs[1].opening.default_input().unwrap().commitment,
+        untreed.inputs[1]
+            .opening
+            .default_input()
+            .unwrap()
+            .commitment,
         None
     );
 }
@@ -536,12 +540,8 @@ fn deposited(transfer: &Transfer, spend: &Spend) -> Confirmed {
             ciphertext: capsule,
         },
     });
-    let transaction = created_transaction(
-        transfer,
-        spend.commitment(transfer),
-        payload,
-        Vec::new(),
-    );
+    let transaction =
+        created_transaction(transfer, spend.commitment(transfer), payload, Vec::new());
     Confirmed {
         origin: RingOrigin {
             deposits: ring_event_origin_in(&[group], 0, transfer.ring)
@@ -562,7 +562,7 @@ const MERGE_SEED: [u8; 32] = {
 /// The tag 57 merge whose output is `spend`'s owner, mint and amount under the seed's blinding.
 fn merged(transfer: &Transfer, spend: &Spend) -> Confirmed {
     let first_nullifier = field(0x74);
-    let blinding = RingMergeSeed::from_bytes(MERGE_SEED)
+    let blinding = MergeSeed::from_bytes(MERGE_SEED)
         .unwrap()
         .output_blinding(&first_nullifier)
         .unwrap();
@@ -840,7 +840,6 @@ async fn the_created_utxo_scan_opens_every_deposit_and_the_merge_audit_reads_eve
     ));
 }
 
-
 #[test]
 fn the_envelope_must_seal_the_published_transaction_key() {
     let built = build(&Transfer::fixture(), Rail::Delivered, delivered_outputs());
@@ -909,7 +908,6 @@ fn a_message_off_the_layout_is_refused() {
         Err(AuditError::DisclosureLayout)
     ));
 }
-
 
 #[test]
 fn the_layout_comes_from_the_ring_frame() {
@@ -1403,7 +1401,6 @@ fn a_sender_bundle_under_the_auditor_tag_leaves_the_transfer_open() {
     assert_eq!(audit(&transaction, built.layout).unwrap(), expected);
 }
 
-
 fn anonymous_scan() -> RingScan {
     RingScan::new(ring(), auditor().pubkey()).with_mode(RingMode::Anonymous)
 }
@@ -1470,7 +1467,6 @@ async fn a_scan_lists_a_row_its_audit_refuses_and_opens_the_next() {
     };
     assert_eq!(opened.tx_signature, Signature::from([6; 64]));
 }
-
 
 #[tokio::test]
 async fn a_lost_auditor_message_stays_fatal_in_a_local_scan() {
@@ -1540,4 +1536,3 @@ async fn the_merge_audit_refuses_a_disclosure_it_cannot_open() {
         .await
         .is_err());
 }
-

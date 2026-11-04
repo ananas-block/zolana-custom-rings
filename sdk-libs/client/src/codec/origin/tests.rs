@@ -1115,7 +1115,10 @@ fn merge_proof() -> custom_ring_interface::CustomRingProof {
 }
 
 /// A tag 57 request over the fixture's SPP merge and the SPP data it forwards.
-fn v2_merge_group() -> (InstructionGroup, custom_ring_interface::CustomRingMergeIxData) {
+fn v2_merge_group() -> (
+    InstructionGroup,
+    custom_ring_interface::CustomRingMergeIxData,
+) {
     use custom_ring_interface::{CustomRingMergeIxData, SealedMergeRecord};
     use spr_interface::instruction::instruction_data::merge_ring::{
         MergeRingAuthority, MergeRingIxData, MergeRingV2IxData,
@@ -1174,7 +1177,10 @@ fn tag_47_frame(
     fields: &[[u8; 32]],
 ) -> Vec<u8> {
     let v4 = request.serialize().unwrap();
-    let body_at = 8 + 32 + 1 + core::mem::size_of::<custom_ring_interface::CustomRingProof>()
+    let body_at = 8
+        + 32
+        + 1
+        + core::mem::size_of::<custom_ring_interface::CustomRingProof>()
         + 33
         + custom_ring_interface::OPENING_RECORD_LEN;
     [
