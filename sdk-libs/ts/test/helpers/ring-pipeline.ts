@@ -583,7 +583,7 @@ export async function checkAccounts(
     data: RingTransactData;
     /** The live registries before the tracking registry, `ringRegistrySlots` order. */
     registries?: readonly Address[];
-    /** After the registries, the co-signer, delegate and anchor tree in order. */
+    /** After the registries, the co-signers, delegate and anchor tree in order. */
     prefix: readonly AccountEntry[];
     payer: Address;
     ownerSigners?: readonly Address[];
