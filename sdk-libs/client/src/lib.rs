@@ -29,8 +29,6 @@ pub mod history;
 mod indexer;
 #[path = "state/known_utxo_index.rs"]
 mod known;
-#[path = "state/list_grant.rs"]
-mod list_grant;
 #[path = "operations/merge_audit.rs"]
 mod merge_audit;
 #[path = "state/merge_ledger.rs"]
@@ -100,7 +98,6 @@ pub use crate::{
     },
     indexer::{AsyncRingIndexer, RingIndexer, RingIndexerError},
     known::KnownUtxoIndex,
-    list_grant::{ListBits, PresentRead},
     merge_audit::{confirmed_merge, MergeAudit, MergeAuditPage},
     merge_ledger::{
         AuditedMergeOutput, ConfirmedMerge, MergeDisclosed, MergeId, MergeInput, MergeLedger,

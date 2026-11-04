@@ -45,8 +45,8 @@ use spr_transaction::{
 };
 use zolana_ring_client::{
     note_state, verify_ring_owned, AnonymousError, AnonymousScan, AnonymousStream, AnonymousSync,
-    AnonymousWallet, ListBits, NoteState, PresentRead, SentCheck, ViewingHistory, TAGS_PER_REQUEST,
-    TAG_GAP, VIEWING_HISTORY_VERSION,
+    AnonymousWallet, NoteState, SentCheck, ViewingHistory, TAGS_PER_REQUEST, TAG_GAP,
+    VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_keys::{
     MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeyError, RingKeys,
@@ -1872,16 +1872,6 @@ async fn a_spent_zero_key_note_leaves_the_exposed_list() {
             .contains(nullifier)),
         NoteState::Spent
     );
-}
-
-#[test]
-fn enrolling_past_a_salt_zero_grant_names_the_missing_write() {
-    let read = |salted, salt_zero| ListBits { salted, salt_zero }.present_read();
-    assert_eq!(read(None, true), PresentRead::Granted);
-    assert_eq!(read(None, false), PresentRead::NotListed);
-    assert_eq!(read(Some(true), false), PresentRead::Granted);
-    assert_eq!(read(Some(false), false), PresentRead::NotListed);
-    assert_eq!(read(Some(false), true), PresentRead::SaltedWriteMissing);
 }
 
 #[tokio::test]
