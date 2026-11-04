@@ -1,6 +1,7 @@
 package circuits_test
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringdeposit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -240,6 +242,67 @@ func TestDepositReaderRebuildsEachNoteFromItsRecord(t *testing.T) {
 			t.Fatal("a record read at another slot opened a commitment")
 		}
 	}
+}
+
+// Solved witnesses the Rust statement and record readers reach, a mismatch names a statement the keys refuse.
+func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
+	type vectorCase struct {
+		Name            string   `json:"name"`
+		ContextHash     string   `json:"context_hash"`
+		Anonymous       bool     `json:"anonymous"`
+		Records         []string `json:"records"`
+		Ciphertexts     []string `json:"ciphertexts"`
+		OwnerUtxoHashes []string `json:"owner_utxo_hashes"`
+		Assets          []string `json:"assets"`
+		Amounts         []uint64 `json:"amounts"`
+		AuditorPubkey   string   `json:"auditor_pubkey"`
+		EphPk           string   `json:"eph_pk"`
+		TrackingRoot    string   `json:"tracking_root"`
+		OwnRoot         string   `json:"own_root"`
+		CuratorRoot     string   `json:"curator_root"`
+		PolicyHash      string   `json:"policy_hash"`
+		Elements        []string `json:"elements"`
+		PublicInputHash string   `json:"public_input_hash"`
+	}
+	cases := make([]vectorCase, 0, 3)
+	for _, tc := range []struct {
+		name string
+		spec ringdeposit.Spec
+	}{
+		{"confidential", ringdeposit.Spec{Count: 2}},
+		{"anonymous_mixed_keys", ringdeposit.Spec{Count: 3, Mode: ringdeposit.ModeAnonymous, ZeroKeys: []int{1}}},
+		{"screened_curator", ringdeposit.Spec{Count: 1, Policy: ringdeposit.CuratorAllowlisted(ringdeposit.MintA)}},
+	} {
+		d := tc.spec.Build(t)
+		if err := solveDeposit(d.Circuit); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		c, ciphertext := d.Circuit, d.Ciphertext(t)
+		auditor, eph := d.Keys.AuditorPk(), d.Keys.EphPk()
+		tagged := ringprotocol.Tagged(auditor[:])
+		v := vectorCase{
+			Name: tc.name, ContextHash: ringtest.FieldHex(ringtest.AsBigInt(c.ContextHash)), Anonymous: tc.spec.Mode == ringdeposit.ModeAnonymous,
+			AuditorPubkey: hex.EncodeToString(tagged[:]), EphPk: hex.EncodeToString(eph[:]),
+			TrackingRoot: ringtest.FieldHex(ringtest.AsBigInt(c.TrackingRoot)), OwnRoot: ringtest.FieldHex(ringtest.AsBigInt(c.OwnRoot)), CuratorRoot: ringtest.FieldHex(ringtest.AsBigInt(c.CuratorRoot)), PolicyHash: ringtest.FieldHex(ringtest.AsBigInt(c.PolicyHash)),
+			PublicInputHash: ringtest.FieldHex(ringtest.AsBigInt(c.PublicInputHash)),
+		}
+		for i, note := range d.Notes {
+			start, end := i*circuits.DepositRecordLen, (i+1)*circuits.DepositRecordLen
+			v.Records = append(v.Records, hex.EncodeToString(d.Plaintext[start:end]))
+			v.Ciphertexts = append(v.Ciphertexts, hex.EncodeToString(ciphertext[start:end]))
+			v.OwnerUtxoHashes = append(v.OwnerUtxoHashes, ringtest.FieldHex(note.Commitment(t)))
+			v.Assets = append(v.Assets, ringtest.FieldHex(ringtest.AsBigInt(c.Assets[i])))
+			v.Amounts = append(v.Amounts, note.Amount)
+		}
+		for _, element := range d.Elements(t) {
+			v.Elements = append(v.Elements, ringtest.FieldHex(element))
+		}
+		cases = append(cases, v)
+	}
+	ringtest.PinVector(t, "deposit/deposit-v4.json", map[string]any{
+		"description": "Solved deposit witnesses. A record is kind || reserved || u64be(amount) || owner_key || mint || be32(nullifier_pk) || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep1. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1.",
+		"cases":       cases,
+	})
 }
 
 // A policy requiring the allow list admits a listed asset and refuses one off it.

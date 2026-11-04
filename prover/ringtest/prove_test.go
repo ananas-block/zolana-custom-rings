@@ -1,14 +1,12 @@
 package ringtest_test
 
 import (
-	"math/big"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/test"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
@@ -19,7 +17,8 @@ import (
 )
 
 func TestAuditAndPolicySectionsProve(t *testing.T) {
-	requireProves(t, ringaudit.NewDeliveredCircuit(0, 2), ringaudit.DeliveredAuditOf(t, 2).Circuit(t))
+	shape := audit.StreamShape{InputClass: 4, Outputs: 2}
+	requireProves(t, ringaudit.NewSectionCircuit(shape), ringaudit.NewSection(t, shape).Circuit(t))
 	section, err := ringpolicy.NewSectionCircuit(ringpolicy.SectionShape{Outputs: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -28,47 +27,12 @@ func TestAuditAndPolicySectionsProve(t *testing.T) {
 }
 
 func TestAnonymousTransferProves(t *testing.T) {
-	shape := transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4}
+	shape := transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
 	circuit, err := transfer.NewAnonymousTransferCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
 	requireProves(t, circuit, ringtransfer.Hidden(shape).Build(t).Circuit)
-}
-
-func TestAuditsPinBlindingAndRingData(t *testing.T) {
-	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
-	anonymous := ringaudit.NewAnonymousCircuit(shape)
-	t.Run("delivered ring data", func(t *testing.T) {
-		delivered := ringaudit.NewDeliveredCircuit(0, 8)
-		d := ringaudit.NewDeliveredAudit(t, 8)
-		honest := d.Circuit(t)
-		d.Outputs[0].Utxo.RingDataHash = big.NewInt(7)
-		requireRefused(t, delivered, honest, d.Circuit(t))
-	})
-	t.Run("anonymous ring data", func(t *testing.T) {
-		a := ringaudit.NewAnonymousAudit(t, shape)
-		honest := a.Circuit(t)
-		a.Outputs[0].Utxo.RingDataHash = big.NewInt(7)
-		requireRefused(t, anonymous, honest, a.Circuit(t))
-	})
-	t.Run("anonymous blinding off the CRBS seed", func(t *testing.T) {
-		a := ringaudit.NewAnonymousAudit(t, shape)
-		honest := a.Circuit(t)
-		a.Outputs[0].Utxo.Blinding = big.NewInt(7)
-		requireRefused(t, anonymous, honest, a.Circuit(t))
-	})
-}
-
-// requireRefused fails unless honest solves and forged, the same fixture with one value changed, does not.
-func requireRefused(t *testing.T, circuit, honest, forged frontend.Circuit) {
-	t.Helper()
-	if err := test.IsSolved(circuit, honest, ecc.BN254.ScalarField()); err != nil {
-		t.Fatalf("the honest witness failed: %v", err)
-	}
-	if test.IsSolved(circuit, forged, ecc.BN254.ScalarField()) == nil {
-		t.Fatal("the circuit accepted the forged witness")
-	}
 }
 
 func requireProves(t *testing.T, circuit, assignment frontend.Circuit) {

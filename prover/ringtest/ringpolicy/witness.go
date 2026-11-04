@@ -74,7 +74,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	if !w.Unscreened {
 		p.PolicyHash = TableHash(t, p.Table)
 	}
-	p.RingProgramID, p.OwnRoot, p.CuratorRoot = ringID, own.Root(), 0
+	p.RingProgramID, p.OwnRoot, p.CuratorRoot, p.PrivateRoot = ringID, own.Root(), 0, 0
 	if slices.ContainsFunc(rows.Sources, func(s policy.SourceWires) bool { return ringtest.AsBigInt(s.Registry).Sign() != 0 }) {
 		p.CuratorRoot = curator.Root()
 	}
