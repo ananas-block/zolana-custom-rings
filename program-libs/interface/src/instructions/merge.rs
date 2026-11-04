@@ -10,64 +10,22 @@ use spr_interface::instruction::{
 use wincode::{SchemaRead, SchemaWrite};
 
 use crate::{
-    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof, TAGGED_X25519_KEY_LEN,
+    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof, OPENING_RECORD_LEN,
+    TAGGED_X25519_KEY_LEN,
 };
 
-/// `kind 1 | reserved 7 | amount 8 | owner_key 32 | mint 32 | nullifier_pk 32 | seed 32`, 9 AES blocks.
-pub const MERGE_RECORD_LEN: usize = 144;
 pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 12;
 /// The owner's slot in an SPP `merge_ring_v2` account list under `OwnerSigned`, past `ring_config`, payer and the two programs.
 pub const RING_MERGE_OWNER_INDEX: usize = 6;
 /// `expiry_unix_ts u64 || proof.a` open the SPP merge body ahead of `proof.b`.
 const MERGE_B_OFFSET: usize = core::mem::size_of::<u64>() + 32;
-const MERGE_RECORD_KIND_RING: u8 = 1;
 
-/// What the auditor reads, the published output hash accepts it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MergeRecord {
-    pub amount: u64,
-    pub owner_key: [u8; 32],
-    pub mint: [u8; 32],
-    pub nullifier_pk: [u8; 32],
-    /// The nullifier secret off the zero key, the private merge seed under it.
-    pub seed: [u8; 32],
-}
-
-impl MergeRecord {
-    pub fn to_bytes(&self) -> [u8; MERGE_RECORD_LEN] {
-        let mut record = [0; MERGE_RECORD_LEN];
-        record[0] = MERGE_RECORD_KIND_RING;
-        record[8..16].copy_from_slice(&self.amount.to_be_bytes());
-        record[16..48].copy_from_slice(&self.owner_key);
-        record[48..80].copy_from_slice(&self.mint);
-        record[80..112].copy_from_slice(&self.nullifier_pk);
-        record[112..].copy_from_slice(&self.seed);
-        record
-    }
-
-    /// A kind or reserved byte the circuit never proves is `InvalidMergeRecord`.
-    pub fn from_bytes(record: &[u8; MERGE_RECORD_LEN]) -> Result<Self, CustomRingError> {
-        let mut bytes = Bytes::new(record, CustomRingError::InvalidMergeRecord);
-        let [kind, reserved @ ..] = bytes.array::<8>()?;
-        if *kind != MERGE_RECORD_KIND_RING || reserved != &[0; 7] {
-            return Err(CustomRingError::InvalidMergeRecord);
-        }
-        Ok(Self {
-            amount: u64::from_be_bytes(*bytes.array()?),
-            owner_key: *bytes.array()?,
-            mint: *bytes.array()?,
-            nullifier_pk: *bytes.array()?,
-            seed: *bytes.array()?,
-        })
-    }
-}
-
-/// The record sealed to the auditor and proven over the SPP merge it precedes.
+/// An `OpeningRecord` of kind `Ring` under the merge seed, sealed to the auditor over the SPP merge it precedes.
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct SealedMergeRecord {
     pub proof: CustomRingProof,
     pub eph_pk: [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: [u8; MERGE_RECORD_LEN],
+    pub ciphertext: [u8; OPENING_RECORD_LEN],
 }
 
 /// Tag 57, the SPP merge body with `proof.b` compressed.
@@ -119,7 +77,7 @@ pub struct CustomRingMergeIxDataRef<'a> {
     pub authority: MergeRingAuthority,
     pub proof: &'a CustomRingProof,
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: &'a [u8; MERGE_RECORD_LEN],
+    pub ciphertext: &'a [u8; OPENING_RECORD_LEN],
     body: SppMergeBody<'a>,
 }
 
@@ -197,7 +155,7 @@ pub struct MergePublicInput<'a> {
     pub ring_id: &'a [u8; 32],
     pub auditor_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: &'a [u8; MERGE_RECORD_LEN],
+    pub ciphertext: &'a [u8; OPENING_RECORD_LEN],
     /// The payer's Solana owner identity.
     pub payer: &'a [u8; 32],
     /// The signing owner's identity under `OwnerSigned`, zero under `Ring`.
@@ -234,36 +192,6 @@ impl MergePublicInput<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const fn record() -> MergeRecord {
-        MergeRecord {
-            amount: 0x0102_0304_0506_0708,
-            owner_key: [0xa1; 32],
-            mint: [0xa2; 32],
-            nullifier_pk: [0xa3; 32],
-            seed: [0xa4; 32],
-        }
-    }
-
-    #[test]
-    fn the_record_is_kind_reserved_amount_then_four_words() {
-        let bytes = record().to_bytes();
-        assert_eq!(bytes[..8], [1, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(bytes[8..16], [1, 2, 3, 4, 5, 6, 7, 8]);
-        assert_eq!(MergeRecord::from_bytes(&bytes).unwrap(), record());
-    }
-
-    #[test]
-    fn a_record_the_circuit_never_proves_is_refused() {
-        for (index, value) in [(0, 0), (0, 2), (1, 1), (7, 1)] {
-            let mut bytes = record().to_bytes();
-            bytes[index] = value;
-            assert_eq!(
-                MergeRecord::from_bytes(&bytes),
-                Err(CustomRingError::InvalidMergeRecord)
-            );
-        }
-    }
 
     #[test]
     fn an_unknown_authority_byte_is_refused() {

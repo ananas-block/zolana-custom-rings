@@ -15,6 +15,7 @@ import (
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
@@ -29,14 +30,8 @@ import (
 // 3. A nullifier key off ZeroNullifierPk has its row under TrackingRoot and its owner stays hidden, ZeroNullifierPk reads no row and publishes its owner.
 // 4. No list, guard, cap or co-signer rule is proven, a merge keeps one owner's value in one asset.
 
-const (
-	// MergeRecordLen mirrors MERGE_RECORD_LEN in program-libs/interface/src/instructions/merge.rs.
-	MergeRecordLen = 144
-	// mergeRecordKindRing mirrors MergeRecordKind::Ring.
-	mergeRecordKindRing = 1
-	mergeRecordReserved = 7
-	mergeAmountBytes    = 8
-)
+// MergeRecordLen mirrors OPENING_RECORD_LEN in program-libs/interface/src/proof/audit_stream.rs.
+const MergeRecordLen = audit.RecordLen + 32
 
 // MergeCircuit binds a ring's SPP merge output to a record only its auditor opens.
 type MergeCircuit struct {
@@ -49,9 +44,12 @@ type MergeCircuit struct {
 	Payer          frontend.Variable
 	TrackingRoot   frontend.Variable
 
-	EphSk       [32]frontend.Variable
+	EphSk [32]frontend.Variable
+	// The record's encoding binds OwnerPkHash to OwnerKey and Asset to MintChunks.
 	OwnerKey    [32]frontend.Variable
-	Mint        [32]frontend.Variable
+	OwnerPkHash frontend.Variable
+	MintChunks  [2]frontend.Variable
+	Asset       frontend.Variable
 	Amount      frontend.Variable
 	NullifierPk frontend.Variable
 	// The nullifier secret off ZeroNullifierPk, the private merge seed under it, SPP's proof holds it to the key.
@@ -62,39 +60,36 @@ type MergeCircuit struct {
 }
 
 func (c *MergeCircuit) Define(api frontend.API) error {
-	// 1. The cipher bounds the key and mint bytes, the owner identity and the asset read them unchecked.
-	ownerPkHash := gadget.SolanaOwnerIdentityBounded(api, c.OwnerKey)
-	asset := gadget.HashChain(api, shared.PackBounded(api, c.Mint[:]))
 	zeroKey := api.IsZero(api.Sub(c.NullifierPk, shared.ZeroNullifierPk))
 	hidden := api.Sub(1, zeroKey)
-	// 2. A hidden owner cannot pay, the payer is public.
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: hidden, V: api.IsZero(api.Sub(ownerPkHash, c.Payer))})
-	// 3. A hidden owner's key is its row's, a zero key reads no row and its owner signs in SPP.
-	row := c.Tracking.Resolve(api, hidden, c.TrackingRoot, ownerPkHash)
+	// 1. A hidden owner cannot pay, the payer is public.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: hidden, V: api.IsZero(api.Sub(c.OwnerPkHash, c.Payer))})
+	// 2. A hidden owner's key is its row's, a zero key reads no row and its owner signs in SPP.
+	row := c.Tracking.Resolve(api, hidden, c.TrackingRoot, c.OwnerPkHash)
 	api.AssertIsEqual(row.Present, hidden)
 	api.AssertIsEqual(row.NullifierPk, api.Mul(hidden, c.NullifierPk))
 
-	// 4. The output is the SPP merge output, the auditor rebuilds this hash from the record.
+	// 3. The output is the SPP merge output, the auditor rebuilds this hash from the record.
 	api.AssertIsEqual(c.OutputUtxoHash, transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
-		Domain: mergeshared.UtxoDomain, Owner: gadget.PoseidonHash(api, []frontend.Variable{ownerPkHash, c.NullifierPk}),
-		Asset: asset, Amount: c.Amount, Blinding: mergeshared.MergeOutputBlinding(api, c.Seed, c.FirstNullifier),
+		Domain: mergeshared.UtxoDomain, Owner: gadget.PoseidonHash(api, []frontend.Variable{c.OwnerPkHash, c.NullifierPk}),
+		Asset: c.Asset, Amount: c.Amount, Blinding: mergeshared.MergeOutputBlinding(api, c.Seed, c.FirstNullifier),
 		DataHash: 0, RingDataHash: c.OutputRingDataHash, RingProgramID: c.RingProgramID,
 	}, c.OutputTreeID))
 
-	// 5. The canonical encodings keep one plaintext per record, the 64-bit amount fails above its bytes.
+	// 4. One encoding per record, a transfer's record followed by the seed.
 	rc := rangecheck.New(api)
-	nullifierPkBytes, seedBytes := ringgadget.FieldToBytesBEWith(api, rc, c.NullifierPk), ringgadget.FieldToBytesBEWith(api, rc, c.Seed)
-	plaintext := slices.Concat(
-		[]frontend.Variable{mergeRecordKindRing}, shared.Zeros(mergeRecordReserved), ringgadget.UintBytesBE(api, c.Amount, mergeAmountBytes),
-		c.OwnerKey[:], c.Mint[:], nullifierPkBytes[:], seedBytes[:],
-	)
+	seedBytes := ringgadget.FieldToBytesBEWith(api, rc, c.Seed)
+	plaintext := slices.Concat(audit.RecordOpening{
+		Live: 1, Kind: audit.KindRing, Amount: c.Amount, OwnerPkHash: c.OwnerPkHash, NullifierPk: c.NullifierPk, Asset: c.Asset,
+		OwnerKey: c.OwnerKey, MintChunks: c.MintChunks,
+	}.Encode(api, rc), seedBytes[:])
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.MergeEncInfo}.SealStream(api)
 
-	// 6. The statement names the SPP merge, the ring, the record and the owner SPP makes sign.
+	// 5. The statement names the SPP merge, the ring, the record and the owner SPP makes sign.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, slices.Concat(
 		[]frontend.Variable{shared.MergeStatementDomain, c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID},
 		sealed.StatementFields(api),
-		[]frontend.Variable{c.Payer, api.Mul(zeroKey, ownerPkHash), c.TrackingRoot},
+		[]frontend.Variable{c.Payer, api.Mul(zeroKey, c.OwnerPkHash), c.TrackingRoot},
 	)))
 	return nil
 }

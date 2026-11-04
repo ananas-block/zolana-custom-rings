@@ -35,7 +35,9 @@ func TestMergeRefusals(t *testing.T) {
 	}{
 		{"another amount", func(s *ringmerge.Statement) { s.Circuit.Amount = big.NewInt(13) }},
 		{"another owner key", func(s *ringmerge.Statement) { s.Circuit.OwnerKey[0] = 0 }},
-		{"another mint", func(s *ringmerge.Statement) { s.Circuit.Mint[0] = 0 }},
+		{"another mint", func(s *ringmerge.Statement) { s.Circuit.MintChunks[1] = 0 }},
+		{"another asset", func(s *ringmerge.Statement) { s.Circuit.Asset = 1 }},
+		{"another owner identity", func(s *ringmerge.Statement) { s.Circuit.OwnerPkHash = 1 }},
 		{"another seed", func(s *ringmerge.Statement) { s.Circuit.Seed = big.NewInt(20) }},
 		{"the zero seed", func(s *ringmerge.Statement) { s.Circuit.Seed = big.NewInt(0) }},
 		{"another nullifier key", func(s *ringmerge.Statement) { s.Circuit.NullifierPk = big.NewInt(5) }},
@@ -61,20 +63,13 @@ func TestMergeRefusals(t *testing.T) {
 	}
 }
 
-// A byte outside 0..255 packing to the same mint would open another record, the cipher's table refuses the encoding.
-func TestMergeRecordBytesStayBytes(t *testing.T) {
-	for name, field := range map[string]func(*circuits.MergeCircuit) *[32]frontend.Variable{
-		"mint":      func(c *circuits.MergeCircuit) *[32]frontend.Variable { return &c.Mint },
-		"owner key": func(c *circuits.MergeCircuit) *[32]frontend.Variable { return &c.OwnerKey },
-	} {
-		t.Run(name, func(t *testing.T) {
-			s := ringmerge.Build(t)
-			bytes := field(s.Circuit)
-			bytes[0], bytes[1] = ringtest.AsBigInt(bytes[0]).Int64()-1, ringtest.AsBigInt(bytes[1]).Int64()+256
-			if solved(t, s) == nil {
-				t.Fatal("a record byte above 255 settled")
-			}
-		})
+// A byte outside 0..255 packing to the same identity would open another record.
+func TestMergeOwnerKeyBytesStayBytes(t *testing.T) {
+	s := ringmerge.Build(t)
+	key := &s.Circuit.OwnerKey
+	key[0], key[1] = ringtest.AsBigInt(key[0]).Int64()-1, ringtest.AsBigInt(key[1]).Int64()+256
+	if solved(t, s) == nil {
+		t.Fatal("a record byte above 255 settled")
 	}
 }
 

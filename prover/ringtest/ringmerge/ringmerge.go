@@ -6,6 +6,8 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/consensys/gnark/frontend"
+
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
@@ -107,7 +109,8 @@ func build(t testing.TB, seed, nullifierPk *big.Int) *Statement {
 	ringtest.SetBytes(c.EphSk[:], eph[:])
 	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
 	ringtest.SetBytes(c.OwnerKey[:], s.OwnerKey[:])
-	ringtest.SetBytes(c.Mint[:], s.Mint[:])
+	c.OwnerPkHash, c.Asset = s.OwnerPkHash, ringtest.AssetField(t, s.Mint)
+	c.MintChunks = [2]frontend.Variable{new(big.Int).SetBytes(s.Mint[:31]), new(big.Int).SetBytes(s.Mint[31:])}
 	c.Amount, c.NullifierPk, c.Seed = s.Amount, nullifierPk, seed
 	c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID, c.Payer = s.OutputHash, FirstNullifier, RingProgramID, Payer
 	c.OutputTreeID, c.OutputRingDataHash = OutputTreeID, RingData
