@@ -164,24 +164,26 @@ impl PendingSignature {
         &self.message
     }
 
-    /// What the wallet sealed, for each other named signer of the relay.
-    pub fn transfer_terms(&self) -> Option<&RelayTransferTerms> {
-        self.expected.as_deref()?.transfer_terms()
+    /// What the wallet sealed for one public owner, an outside co-signer holds none.
+    pub fn transfer_terms(&self, signer: Address) -> Option<&RelayTransferTerms> {
+        self.expected.as_deref()?.terms_for(signer)
     }
 
-    /// A public signer other than the sealing wallet, `terms` is what it agreed to.
+    /// A public owner other than the sealing wallet, `terms` opens its slots alone.
     pub fn for_transfer_terms(
         relay_id: RelayId,
         message: Vec<u8>,
         terms: RelayTransferTerms,
         config: &CustomRingConfig,
-    ) -> Result<Self, RingError> {
-        let expected = ExpectedTransfer::new(terms, config)?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             relay_id,
             message,
-            expected: Some(Box::new(ExpectedMessage::Transfer(expected))),
-        })
+            expected: Some(Box::new(ExpectedMessage::Transfer(ExpectedTransfer::new(
+                vec![terms],
+                config,
+            )))),
+        }
     }
 
     /// The expectation comes from the wallet's own request, never from Ring RPC's answer.
