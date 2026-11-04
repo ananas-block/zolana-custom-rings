@@ -101,7 +101,7 @@ impl CustomRingMerge {
         })
     }
 
-    /// The owner signs the merge in public, no selection reaches this path on its own.
+    /// The owner signs the merge in public, nothing selects a zero-key merge.
     pub fn encrypt_zero_key<H: MergeSeedHolder + ?Sized>(
         self,
         holder: &H,
