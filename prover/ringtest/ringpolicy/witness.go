@@ -271,4 +271,3 @@ func pad[T any](rows []T, i int, zero T) T {
 }
 
 func nullifierPk(member int64) *big.Int { return big.NewInt(member + 500_000) }
-

@@ -22,8 +22,7 @@ type batch struct {
 	circuit *registry.ApplyRecordsCircuit
 	writes  []ringregistry.Write
 	// chain[k] is the chain value after k entries, chain[0] the start.
-	chain []*big.Int
-	// restrictive is the bit the host twin computes from the applied entries.
+	chain       []*big.Int
 	restrictive bool
 }
 

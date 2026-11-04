@@ -269,6 +269,7 @@ impl Case {
         let lists_of = |member: &[u8; 32]| RecordLists {
             own: lookup(&self.own_records, member),
             curator: lookup(&self.curator_records, member),
+            private: 0,
         };
         let outputs: Vec<OutputSubjects> = self
             .outputs

@@ -8,6 +8,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
@@ -22,7 +23,7 @@ const (
 // Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table/mod.rs.
 const (
 	// PolicyTableVersion enters the table hash, every layout change bumps it.
-	PolicyTableVersion = 12
+	PolicyTableVersion = 13
 	PolicyTableFields  = 44
 	// PolicyTableRate fields join the accumulator per Poseidon call, twelve inputs is the syscall maximum.
 	PolicyTableRate = 11
@@ -46,7 +47,9 @@ const (
 )
 
 type Table struct {
-	Sources   [NSources]SourceWires
+	Sources [NSources]SourceWires
+	// Source is the private source owner rows read beside the public slots.
+	Source    privatelist.Source
 	PolicyLen frontend.Variable
 	// Each rule is its 32-byte row read as one field.
 	Rules [NRules]frontend.Variable
@@ -115,6 +118,7 @@ func (t Table) Fields() []frontend.Variable {
 	for _, source := range t.Sources {
 		fields = append(fields, source.ListID, source.Registry)
 	}
+	fields = append(fields, t.Source.Fields()...)
 	fields = append(fields, t.PolicyLen)
 	fields = append(fields, t.Rules[:]...)
 	for len(fields) < PolicyTableFields {
