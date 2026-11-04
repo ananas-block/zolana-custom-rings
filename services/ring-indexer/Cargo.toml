@@ -47,5 +47,6 @@ spr-rpc-http = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+hex = { workspace = true }
 hyper-util = { workspace = true }
 zolana-ring-member-registry = { workspace = true }

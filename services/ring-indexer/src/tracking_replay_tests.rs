@@ -32,6 +32,7 @@ use crate::{
     indexer::Indexer,
     storage::{self, Enrollment, RingCursor, TrackingState, TrackingStore},
     tests::{database, field},
+    tracking_registry,
 };
 
 const OWNER: Address = Address::new_from_array([51; 32]);
@@ -224,7 +225,11 @@ impl Ledger {
     }
 
     async fn enrollment(&self) -> Option<Enrollment> {
-        self.store().enrollment(&OWNER.to_bytes()).await.unwrap()
+        self.enrollment_of(OWNER).await
+    }
+
+    async fn enrollment_of(&self, owner: Address) -> Option<Enrollment> {
+        self.store().enrollment(&owner.to_bytes()).await.unwrap()
     }
 
     async fn stop(self) {
@@ -772,5 +777,71 @@ async fn a_failed_enrollment_leaves_no_row_and_reserves_no_leaf() {
     ledger.land_transactions(2, vec![failed]).await.unwrap();
     assert_eq!(ledger.enrollment().await, None);
     assert_eq!(ledger.state().await.account.reserved_leaves(), 1);
+    ledger.stop().await;
+}
+
+const ENROLL_VECTOR: &str = include_str!("../../../test-vectors/registry/tracking_enroll.json");
+
+fn vector_field(vector: &serde_json::Value, name: &str) -> [u8; 32] {
+    hex::decode(vector[name].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap()
+}
+
+/// The shared vector's enrollment reaches its chain through the block path and the account.
+#[tokio::test]
+async fn the_shared_enrollment_vector_projects_to_its_entry_and_chain() {
+    let vector: serde_json::Value = serde_json::from_str(ENROLL_VECTOR).unwrap();
+    let mut ledger = Ledger::new().await;
+    ledger.registry = Address::new_from_array(vector_field(&vector, "registry"));
+    ledger.authorization = Address::new_from_array(vector_field(&vector, "authorization"));
+    let owner = Address::new_from_array(vector_field(&vector, "owner"));
+    let data = InitializeTrackingIxData {
+        ring_id: field(9),
+        auditor_pubkey: [9; 33],
+    };
+    tracking_registry::create(
+        &ledger.store(),
+        &TrackingState {
+            registry: ledger.registry.to_bytes(),
+            account: Box::new(TrackingRegistry::new(1, &data)),
+            fault: None,
+        },
+    )
+    .await
+    .unwrap();
+    let image = hex::decode(vector["account"].as_str().unwrap()).unwrap();
+    ledger.chain.lock().unwrap().accounts.insert(
+        ledger.authorization.to_string(),
+        account(STORAGE_PROGRAM_ID, &image),
+    );
+    let enroll_data = hex::decode(vector["enroll_data"].as_str().unwrap()).unwrap();
+    let proof = CustomRingProof::zeroed();
+    let enroll = instruction(
+        vec![owner, owner, ledger.registry, ledger.authorization],
+        [&[tag::ENROLL][..], &enroll_data, bytemuck::bytes_of(&proof)].concat(),
+    );
+    ledger.land(2, enroll).await.unwrap();
+    assert_eq!(ledger.state().await.fault, None);
+    let held = ledger.enrollment_of(owner).await.unwrap();
+    assert_eq!(held.member, vector_field(&vector, "member"));
+    assert_eq!(held.ct_hash, vector_field(&vector, "ct_hash"));
+    ledger.serve(2).await;
+    let inputs = api::tracking_apply_proof_inputs(
+        ledger.indexer.db.as_ref(),
+        ledger.indexer.rpc.as_ref(),
+        GetTrackingApplyProofInputsRequest {
+            registry: ledger.registry.into(),
+            owners: vec![owner.into()],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        inputs.chain_start,
+        Hash(vector_field(&vector, "chain_start"))
+    );
+    assert_eq!(inputs.chain_end, Hash(vector_field(&vector, "chain_end")));
     ledger.stop().await;
 }

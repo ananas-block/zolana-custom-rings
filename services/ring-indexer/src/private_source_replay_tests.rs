@@ -115,7 +115,7 @@ async fn a_reader_rebuilds_a_private_source_from_its_published_writes_alone() {
         source,
         created,
     } = pair();
-    let writes = vec![list_write(1, 0), list_write(2, 0)];
+    let writes = vec![list_write(1, 1), list_write(2, 2)];
     let published = writes
         .iter()
         .map(PrivateListWriteData::published)
@@ -219,7 +219,7 @@ async fn a_private_update_naming_another_tracking_registry_stops_the_projection(
             foreign,
             0,
             false,
-            vec![list_write(1, 0)],
+            vec![list_write(1, 1)],
             field(9),
         )
     })
@@ -236,11 +236,28 @@ async fn a_private_update_at_another_revision_stops_the_projection() {
             pair.tracking,
             5,
             false,
-            vec![list_write(1, 0)],
+            vec![list_write(1, 1)],
             field(9),
         )
     })
     .await
     .unwrap();
     assert!(fault.contains("update refused"), "{fault}");
+}
+
+#[tokio::test]
+async fn a_private_write_counter_that_does_not_increase_stops_the_projection() {
+    let fault = fault_after(|pair| {
+        private_update(
+            pair.source,
+            pair.tracking,
+            0,
+            false,
+            vec![list_write(1, 5), list_write(2, 5)],
+            field(9),
+        )
+    })
+    .await
+    .unwrap();
+    assert!(fault.contains("does not increase"), "{fault}");
 }

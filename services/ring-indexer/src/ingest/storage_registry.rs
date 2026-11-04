@@ -237,6 +237,11 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
                 tracking_revision: tracking.account.newest().revision,
             })
             .map_err(|error| fault(format!("update refused ({error})")))?;
+        for write in &data.writes {
+            rotated
+                .advance_write_counter(write.published().write_counter)
+                .map_err(|error| fault(format!("update refused ({error})")))?;
+        }
         self.store
             .save_list_writes(&data.writes, rotated.newest().revision.value())
             .await?;

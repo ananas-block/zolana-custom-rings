@@ -4425,6 +4425,7 @@ dependencies = [
  "clap",
  "custom-ring-interface",
  "futures",
+ "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
