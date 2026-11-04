@@ -218,7 +218,7 @@ func TestDepositReaderRebuildsEachNoteFromItsRecord(t *testing.T) {
 		if opened.Kind != audit.KindRing {
 			t.Fatalf("slot %d reads kind %d", slot, opened.Kind)
 		}
-		if opened.Commitment(t).Cmp(note.Commitment(t)) != 0 {
+		if !opened.Opens(t, note.Commitment(t)) {
 			t.Fatalf("slot %d commitment differs", slot)
 		}
 		if ringtest.AssetField(t, opened.Mint).Cmp(ringtest.AsBigInt(d.Circuit.Assets[slot])) != 0 {
@@ -235,8 +235,10 @@ func TestDepositReaderRebuildsEachNoteFromItsRecord(t *testing.T) {
 	// A record moved to another slot decrypts under that slot's counters to noise.
 	moved := slices.Clone(ciphertext)
 	copy(moved[circuits.DepositRecordLen:], ciphertext[:circuits.DepositRecordLen])
-	if d.OpenAt(t, moved, 1).Commitment(t).Cmp(d.Notes[1].Commitment(t)) == 0 {
-		t.Fatal("a record read at another slot opened its commitment")
+	for _, note := range d.Notes[:2] {
+		if d.OpenAt(t, moved, 1).Opens(t, note.Commitment(t)) {
+			t.Fatal("a record read at another slot opened a commitment")
+		}
 	}
 }
 

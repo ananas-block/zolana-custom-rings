@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
@@ -276,10 +277,14 @@ func (d *Deposit) OpenAt(t testing.TB, ciphertext []byte, slot int) Opened {
 	}
 }
 
-// Commitment rebuilds the published owner part from the record alone.
-func (o Opened) Commitment(t testing.TB) *big.Int {
+// Opens rebuilds the published owner part from the record alone, a value at or above q is no field element the proof sealed.
+func (o Opened) Opens(t testing.TB, commitment *big.Int) bool {
 	t.Helper()
-	return Note{OwnerKey: o.OwnerKey, NullifierPk: o.NullifierPk, Blinding: o.Blinding}.Commitment(t)
+	q := ecc.BN254.ScalarField()
+	if o.NullifierPk.Cmp(q) >= 0 || o.Blinding.Cmp(q) >= 0 {
+		return false
+	}
+	return Note{OwnerKey: o.OwnerKey, NullifierPk: o.NullifierPk, Blinding: o.Blinding}.Commitment(t).Cmp(commitment) == 0
 }
 
 // Narrow keeps the fixed statement while witnessing only the compiled prefix.
