@@ -4,12 +4,8 @@ use custom_ring_interface::{
     domain::AUDIT_STREAM_LABEL, AuditEvidence, AuditRecord, AuditStreamLayout, DataTail,
     StreamRegion, AUDIT_RECORD_LEN, DATA_TAIL_LEN, STREAM_FIRST_COUNTER,
 };
-use spr_hasher::{
-    primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
-    Hasher, Poseidon,
-};
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
-use spr_transaction::field::{field_add, field_sub};
 use zeroize::{Zeroize, Zeroizing};
 use zolana_ring_keys::RingStream;
 
@@ -17,10 +13,6 @@ use crate::{
     encryption::{opening_salted_stream, sealing_salted_stream},
     AuditError,
 };
-
-mod historical;
-
-pub use historical::{historical_evidence, HistoricalEvidence};
 
 /// Everything one transfer seals to its auditor under its own viewing key.
 pub struct AuditStreamSeal<'a> {
@@ -186,53 +178,6 @@ fn check_evidence(evidence: &AuditEvidence) -> Result<(), AuditError> {
             canonical(input.data_hash)?;
             canonical(input.ring_data_hash).map(drop)
         }),
-    }
-}
-
-/// `pad_j = Poseidon(seed, j)`, a known pad reveals no other.
-pub struct DisclosurePad {
-    seed: Zeroizing<[u8; 32]>,
-}
-
-impl DisclosurePad {
-    /// `seed = Poseidon(domain, pack_be(key), salt)`, the domain keeps a merge pad apart.
-    pub(crate) fn keyed(
-        domain: &[u8; 32],
-        key: &[u8; 32],
-        salt: &[u8; 16],
-    ) -> Result<Self, AuditError> {
-        let [key0, key1] = pack_be(key);
-        Ok(Self {
-            seed: Zeroizing::new(Poseidon::hashv(&[
-                domain,
-                &key0,
-                &key1,
-                &right_align(salt),
-            ])?),
-        })
-    }
-
-    /// `C_j = P_j + pad_j mod q`.
-    pub fn encrypt(&self, plaintext: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, AuditError> {
-        self.apply(plaintext, field_add)
-    }
-
-    pub fn decrypt(&self, published: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, AuditError> {
-        self.apply(published, field_sub)
-    }
-
-    fn apply(
-        &self,
-        fields: &[[u8; 32]],
-        combine: fn(&[u8; 32], &[u8; 32]) -> [u8; 32],
-    ) -> Result<Vec<[u8; 32]>, AuditError> {
-        (0u64..)
-            .zip(fields)
-            .map(|(index, field)| {
-                let pad = Poseidon::hashv(&[&*self.seed, &right_align(&index.to_be_bytes())])?;
-                Ok(combine(&canonical(*field)?, &pad))
-            })
-            .collect()
     }
 }
 

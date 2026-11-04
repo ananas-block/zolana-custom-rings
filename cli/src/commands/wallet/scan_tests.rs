@@ -122,7 +122,7 @@ impl Ledger {
             slot: 1,
             tx_signature: Signature::from([0xd0; 64]),
             output_slot: OutputSlot {
-                view_tag: address.viewing_pubkey.u(),
+                view_tag: custom_ring_interface::stream::slot_tag(address.viewing_pubkey.u()),
                 output_context: OutputContext {
                     hash,
                     tree_id: TREE,
@@ -160,7 +160,7 @@ impl Ledger {
         )
         .unwrap();
         let payload = encode_ring_body_output(&ciphertext, &[]).unwrap();
-        let tag = secret.recipient_tag().unwrap();
+        let tag = custom_ring_interface::stream::slot_tag(secret.recipient_tag().unwrap());
         self.publish(&sealed, &owner, blinding, payload, tag, Vec::new())
     }
 

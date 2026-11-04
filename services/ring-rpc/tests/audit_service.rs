@@ -59,7 +59,7 @@ use spr_client::{
 };
 use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_keypair::ViewingKey;
-use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
+use spr_transaction::{ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
     auditor_view_tag,
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream},
@@ -614,7 +614,6 @@ impl TransactionSource for StaticSource {
                 slot: 99,
             },
             merges: Vec::new(),
-            historical: Vec::new(),
             next_cursor: None,
         })
     }

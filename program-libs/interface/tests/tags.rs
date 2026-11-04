@@ -15,15 +15,6 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
         tag::SET_DELEGATE,
         tag::AUTHORITY_TRANSFER,
         tag::DEPOSIT,
-        tag::HISTORICAL_TRANSFER,
-        tag::HISTORICAL_TRANSFER_V3,
-        tag::HISTORICAL_AUTHORITY_TRANSFER,
-        tag::HISTORICAL_AUTHORITY_TRANSFER_V3,
-        tag::HISTORICAL_DEPOSIT,
-        tag::HISTORICAL_MERGE,
-        tag::HISTORICAL_MERGE_V3,
-        tag::LEGACY_TRANSACT,
-        tag::LEGACY_DELEGATE_TRANSACT,
         tag::WRITE_FRAME,
         tag::CLOSE_FRAME_BUFFER,
         tag::SETTLE_BUFFERED,
@@ -33,9 +24,8 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
     assert_eq!(unique.len(), tags.len());
 }
 
-/// A statement version is hashed and unreadable, the tag alone tells a frame apart.
 #[test]
-fn every_frame_generation_has_its_own_tag() {
+fn frame_tags_stay_pinned() {
     assert_eq!(
         (
             tag::TRANSFER,
@@ -45,27 +35,18 @@ fn every_frame_generation_has_its_own_tag() {
         ),
         (55, 56, 57, 58)
     );
-    assert_eq!(
-        (tag::HISTORICAL_TRANSFER, tag::HISTORICAL_AUTHORITY_TRANSFER),
-        (43, 44)
-    );
-    assert_eq!(tag::HISTORICAL_MERGE_V3, 47);
-    assert_eq!(
-        tag::HISTORICAL_MERGE,
-        spr_interface::instruction::tag::RING_MERGE_TRANSACT
-    );
 }
 
 #[test]
-fn retired_tags_name_no_instruction() {
-    for retired in [
+fn unassigned_tags_name_no_instruction() {
+    for unassigned in [
         1, 2, 4, 5, 7, 8, 9, 10, 12, 18, 22, 23, 26, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39,
-        40, 41, 42, 48,
+        40, 41, 42, 48, 3, 25, 31, 43, 44, 45, 46, 47,
     ] {
         assert_eq!(
-            InstructionTag::try_from(retired),
+            InstructionTag::try_from(unassigned),
             Err(CustomRingError::InvalidInstructionData),
-            "{retired}"
+            "{unassigned}"
         );
     }
 }

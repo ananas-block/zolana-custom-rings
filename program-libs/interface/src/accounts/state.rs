@@ -102,7 +102,6 @@ macro_rules! ring_accounts {
 }
 
 // Discriminator zero marks an uninitialized account.
-// Discriminators 1 to 13 are retired, never reuse them.
 ring_accounts! {
     RingPolicy = RING_POLICY: 15, RING_POLICY_PDA_SEED: b"policy",
         InvalidRingPolicy, RingPolicyAlreadyExists, InvalidRingPolicy,
@@ -194,7 +193,6 @@ impl RingRoles {
     }
 }
 
-/// Byte 1 is retired, never reuse it.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RingMode {

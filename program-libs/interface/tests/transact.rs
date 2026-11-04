@@ -723,10 +723,10 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
             Err(CustomRingError::DelegateDisabled)
         );
     }
-    let mut retired = ring(RingMode::Confidential, None);
-    retired.mode = 1;
+    let mut unknown = ring(RingMode::Confidential, None);
+    unknown.mode = 1;
     assert_eq!(
-        RingRail::new(Transfer, &retired),
+        RingRail::new(Transfer, &unknown),
         Err(CustomRingError::InvalidRingMode)
     );
 }

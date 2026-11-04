@@ -9,7 +9,7 @@ use custom_ring_interface::{
     tracking::TrackingRegistry,
     MEMBER_REGISTRY_EMPTY_ROOT,
 };
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement, TransactionTrait};
+use sea_orm::{Database, DatabaseConnection, TransactionTrait};
 use sea_orm_migration::MigratorTrait;
 use solana_address::Address;
 use solana_signature::Signature;
@@ -263,54 +263,6 @@ async fn storage_shaped_instructions_of_other_programs_cost_no_queries() {
         costs.push(statements.load(Ordering::Relaxed) - before);
     }
     assert_eq!(costs[0], costs[1]);
-}
-
-#[tokio::test]
-async fn the_record_tree_migration_rewinds_a_key_registry_index_to_its_start() {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-    Migrator::up(&db, Some(1)).await.unwrap();
-    let mut cursor = RingCursor::new(9);
-    cursor.tip = Some(BlockMetadata {
-        slot: 40,
-        ..Default::default()
-    });
-    cursor.scanned_slot = 40;
-    cursor.resume(&db).await.unwrap();
-    Migrator::up(&db, None).await.unwrap();
-    let rewound = storage::cursor(&db).await.unwrap().unwrap();
-    assert_eq!((rewound.start_slot, rewound.scanned_slot), (9, 9));
-    assert!(rewound.tip.is_none() && !rewound.is_ready());
-}
-
-#[tokio::test]
-async fn the_tracking_migration_clears_policy_rows_and_rewinds_to_the_start() {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-    Migrator::up(&db, Some(7)).await.unwrap();
-    let mut cursor = RingCursor::new(9);
-    cursor.tip = Some(BlockMetadata {
-        slot: 40,
-        ..Default::default()
-    });
-    cursor.scanned_slot = 40;
-    cursor.resume(&db).await.unwrap();
-    db.execute_unprepared("INSERT INTO storage_registries(registry,state) VALUES(x'0b','{}')")
-        .await
-        .unwrap();
-    Migrator::up(&db, None).await.unwrap();
-    let rewound = storage::cursor(&db).await.unwrap().unwrap();
-    assert_eq!((rewound.start_slot, rewound.scanned_slot), (9, 9));
-    assert!(rewound.tip.is_none() && !rewound.is_ready());
-    let rows = db
-        .query_one(Statement::from_string(
-            db.get_database_backend(),
-            "SELECT COUNT(*) AS rows FROM storage_registries",
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(rows.try_get::<i64>("", "rows").unwrap(), 0);
-    Migrator::down(&db, Some(1)).await.unwrap();
-    Migrator::up(&db, None).await.unwrap();
 }
 
 #[test]

@@ -49,42 +49,16 @@ const POLICY_UNITS: u32 = 150_000;
 const PROOF_UNITS: u32 = 1_400_000;
 
 instruction_tags! {
-    // Tags 1 and 2 are retired, never reuse them.
-    /// Historical v1 frame, decoding only after the v2 upgrade.
-    LegacyTransact = LEGACY_TRANSACT: 3 => PROOF_UNITS,
-    /// Decoding only, the program refuses it.
-    HistoricalTransfer = HISTORICAL_TRANSFER: 43 => PROOF_UNITS,
-    /// Decoding only, the program refuses it.
-    HistoricalTransferV3 = HISTORICAL_TRANSFER_V3: 45 => PROOF_UNITS,
     Transfer = TRANSFER: 55 => PROOF_UNITS,
-    // Tag 18 is retired, never reuse it.
-    /// Decoding only, the program refuses it.
-    HistoricalMerge = HISTORICAL_MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
-    /// Decoding only, the program refuses it.
-    HistoricalMergeV3 = HISTORICAL_MERGE_V3: 47 => PROOF_UNITS,
     Merge = MERGE: 57 => PROOF_UNITS,
-    // Tags 4 and 5 are retired, never reuse them.
     UpdateAuthority = UPDATE_AUTHORITY: 6 => ACCOUNT_UNITS,
-    // Tags 7 to 10 and 12 are retired, never reuse them.
     SetPaused = SET_PAUSED: 11 => ACCOUNT_UNITS,
     /// Ring-local tags must not collide with the forwarded SPP deposit and merge tags.
     SetCoSigner = SET_CO_SIGNER: 27 => ACCOUNT_UNITS,
     ClearCoSigner = CLEAR_CO_SIGNER: 21 => ACCOUNT_UNITS,
-    // Tags 22, 23 and 26 are retired, never reuse them.
     SetDelegate = SET_DELEGATE: 24 => ACCOUNT_UNITS,
-    /// Tag 3 data over the SPP authority rail, signed by the delegate.
-    LegacyDelegateTransact = LEGACY_DELEGATE_TRANSACT: 25 => PROOF_UNITS,
-    /// Decoding only, the program refuses it.
-    HistoricalAuthorityTransfer = HISTORICAL_AUTHORITY_TRANSFER: 44 => PROOF_UNITS,
-    /// Decoding only, the program refuses it.
-    HistoricalAuthorityTransferV3 = HISTORICAL_AUTHORITY_TRANSFER_V3: 46 => PROOF_UNITS,
     AuthorityTransfer = AUTHORITY_TRANSFER: 56 => PROOF_UNITS,
-    // Tags 28 to 30 are retired, never reuse them.
-    /// Decoding only, the program refuses it.
-    HistoricalDeposit = HISTORICAL_DEPOSIT: 31 => PROOF_UNITS,
     Deposit = DEPOSIT: 58 => PROOF_UNITS,
-    // Tags 32 to 42 are retired, never reuse them.
-    // Tag 48 is retired, never reuse it.
     /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.
     Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,

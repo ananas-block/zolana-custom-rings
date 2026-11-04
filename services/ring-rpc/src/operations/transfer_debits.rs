@@ -130,7 +130,7 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
         .row()
         .map_err(|_| unavailable())?;
         let audited = TransactionAudit::new(&row, parsed.audit_stream())
-            .run(service.auditor_keypair(), &assets)
+            .run(service.auditor_keypair())
             .map_err(|_| unavailable())?;
         let public = public_flows(&parsed, spp)?;
         let window = settlement_accounts(

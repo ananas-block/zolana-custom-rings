@@ -37,8 +37,6 @@ pub enum AuditError {
     DisclosureField,
     #[error("disclosure does not fit its layout")]
     DisclosureLayout,
-    #[error("disclosure padding is not zero")]
-    DisclosurePadding,
     #[error("{trees} input trees do not match {inputs} published inputs")]
     InputTreeCount { trees: usize, inputs: usize },
     #[error("audited notes answer {got} of {want} requested hashes")]
@@ -47,8 +45,6 @@ pub enum AuditError {
     AuditedUtxoOwner,
     #[error("audited note does not rebuild UTXO hash {utxo_hash:?}")]
     AuditedUtxoMismatch { utxo_hash: [u8; 32] },
-    #[error("the transfer carries a frame only the historical reader decodes")]
-    HistoricalFrame,
     #[error("the transfer names no ring Transact frame its audit layout is bound to")]
     MissingRingTransact,
     #[error("output slot {slot} does not open, {kind:?}")]
@@ -198,7 +194,7 @@ impl AuditError {
             | Self::SettlementAccounts
             | Self::InvalidEventIndex(_)
             | Self::InvalidConfirmedEvent(_) => AuditFailureKind::OriginDecode,
-            Self::InvalidTransactData(_) | Self::HistoricalFrame => AuditFailureKind::TransactData,
+            Self::InvalidTransactData(_) => AuditFailureKind::TransactData,
             Self::ConfirmedEventMismatch => AuditFailureKind::EventMismatch,
             Self::TxViewingKeyMismatch => AuditFailureKind::ViewingKeyMismatch,
             Self::NonCanonicalViewingKey => AuditFailureKind::NonCanonicalViewingKey,
@@ -210,7 +206,6 @@ impl AuditError {
             | Self::MissingRingProgram
             | Self::DisclosureField
             | Self::DisclosureLayout
-            | Self::DisclosurePadding
             | Self::InputTreeCount { .. }
             | Self::AuditedUtxosCount { .. }
             | Self::AuditedUtxoOwner

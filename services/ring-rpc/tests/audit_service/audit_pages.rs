@@ -315,7 +315,6 @@ async fn rpc_wire_uses_camel_case_and_rejects_another_local_ring() {
         .await
         .expect("merge read");
     assert!(merges.value.opened.is_empty());
-    assert!(merges.value.unresolved.is_empty());
     let item = as_object(&page.value.items[0]);
     assert_eq!(
         item.get("withdrawals"),

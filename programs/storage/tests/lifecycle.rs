@@ -480,12 +480,12 @@ fn authority_rotates_and_the_old_authority_is_refused() {
 }
 
 #[test]
-fn the_retired_tags_are_refused() {
+fn unknown_tags_are_refused() {
     let mut store = Store::new();
     store.initialize(GRACE);
-    for retired in [2, 3, 5, 10] {
+    for unknown in [2, 3, 5, 10] {
         let mut instruction = store.zero_proof_update(0, ListId::Block);
-        instruction.data[0] = retired;
+        instruction.data[0] = unknown;
         assert_eq!(
             store.send_as_authority(instruction),
             refusal(StorageError::InvalidInstructionData)

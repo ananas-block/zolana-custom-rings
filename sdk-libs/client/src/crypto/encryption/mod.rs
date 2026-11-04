@@ -10,7 +10,7 @@ use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align, solana_owner_identity},
     Hasher, Poseidon,
 };
-use spr_keypair::{symmetric_apply, NullifierKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
 use zeroize::Zeroizing;
 use zolana_ring_keys::{symmetric_apply_audit, RingStream};
 
@@ -18,13 +18,7 @@ use crate::AuditError;
 
 type Result<T> = core::result::Result<T, AuditError>;
 
-mod deposit_capsule;
-mod merge_disclosure;
 mod merge_record;
-pub use deposit_capsule::{DepositCapsule, HistoricalDepositCapsule};
-#[cfg(test)]
-pub(crate) use merge_disclosure::tests::MergeDisclosureEncryption;
-pub use merge_disclosure::{open_merge_disclosure, MergeOpening};
 pub use merge_record::{open_merge_record, MergeRecordSeal, SealedMergeOpening};
 
 /// The auditor key's u-coordinate, the tag the auditor scans for.
@@ -32,11 +26,10 @@ pub fn auditor_view_tag(pk: &X25519Pubkey) -> [u8; 32] {
     pk.u()
 }
 
-/// The key schedule of a sealed stream, `Labelled` is zolana's `TMS*` and serves merge alone.
+/// The key schedule of a sealed stream.
 #[derive(Clone, Copy)]
 pub(crate) enum StreamSchedule {
     Ring(&'static [u8; 10]),
-    Labelled(&'static [u8; 10]),
 }
 
 /// Binds the X25519 output to both keys that produced it, in the order `seal.go` hashes.
@@ -146,7 +139,6 @@ fn opening_secret(
 fn apply_stream(secret: &[u8; 32], schedule: StreamSchedule, data: &mut [u8]) -> Result<()> {
     match schedule {
         StreamSchedule::Ring(label) => symmetric_apply_audit(secret, label, data)?,
-        StreamSchedule::Labelled(label) => symmetric_apply(secret, label, data)?,
     }
     Ok(())
 }
@@ -216,8 +208,7 @@ pub struct DepositOpening {
     pub blinding: Zeroizing<[u8; 32]>,
     /// The proof binds its Solana owner identity into `owner_hash`.
     pub owner_key: [u8; 32],
-    /// `None` under `CRDEP001`.
-    pub note: Option<DepositedNote>,
+    pub note: DepositedNote,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,8 +220,7 @@ pub struct DepositedNote {
 
 impl DepositOpening {
     pub(crate) fn agrees_with(&self, mint: &[u8; 32], amount: u64) -> bool {
-        self.note
-            .is_none_or(|note| note.mint == *mint && note.amount == amount)
+        self.note.mint == *mint && self.note.amount == amount
     }
 }
 
@@ -278,7 +268,7 @@ fn seal_deposits_with(
 
 /// Opens a capsule only after binding every ciphertext byte to its confirmed deposit proof.
 pub fn open_deposit(
-    capsule: &DepositCapsule<'_>,
+    capsule: &RingDepositAuditCapsule<'_>,
     auditor: &X25519Keypair,
     owner_utxo_hash: &[u8; 32],
     confirmed: &crate::ConfirmedDeposit,
@@ -286,10 +276,7 @@ pub fn open_deposit(
     if !confirmed.matches(*capsule, owner_utxo_hash) {
         return Err(AuditError::DepositOpeningMismatch);
     }
-    let opening = match capsule {
-        DepositCapsule::Record(capsule) => open_record(capsule, auditor)?,
-        DepositCapsule::Historical(capsule) => capsule.open(auditor)?,
-    };
+    let opening = open_record(capsule, auditor)?;
     if Poseidon::hashv(&[&opening.owner_hash, opening.blinding.as_slice()])? != *owner_utxo_hash {
         return Err(AuditError::DepositOpeningMismatch);
     }
@@ -327,11 +314,11 @@ fn open_record(
         owner_hash,
         blinding: Zeroizing::new(secret),
         owner_key: record.owner_key,
-        note: Some(DepositedNote {
+        note: DepositedNote {
             nullifier_pk: record.nullifier_pk,
             mint: record.mint,
             amount: record.amount,
-        }),
+        },
     })
 }
 
@@ -602,180 +589,24 @@ mod tests {
             let group = deposit_fixture::group(ring, true, deposits);
             let origin = crate::ring_event_origin_in(&[group], 0, ring).unwrap();
             let binding = &origin.deposits[index];
-            let wrapped = DepositCapsule::Record(capsule);
+            let wrapped = capsule;
             let opened = open_deposit(&wrapped, &auditor, &owner, binding).unwrap();
             let mut corrupted = *capsule.ciphertext;
             corrupted[16] ^= 1;
-            let altered = DepositCapsule::Record(RingDepositAuditCapsule {
+            let altered = RingDepositAuditCapsule {
                 ciphertext: &corrupted,
                 ..capsule
-            });
+            };
             assert!(matches!(
                 open_deposit(&altered, &auditor, &owner, binding),
                 Err(AuditError::DepositOpeningMismatch)
             ));
             assert_eq!(opened.owner_key, records[index].record.owner_key);
             assert_eq!(*opened.blinding, records[index].secret);
-            let note = opened.note.unwrap();
+            let note = opened.note;
             assert_eq!(note.mint, records[index].record.mint);
             assert_eq!(note.amount, records[index].record.amount);
             assert_eq!(note.nullifier_pk, records[index].record.nullifier_pk);
-        }
-    }
-
-    /// One stream with slot `i` at counter `2 + 6i`.
-    fn historical_capsule_bytes(
-        auditor: &X25519Pubkey,
-        slot_index: u8,
-        opening: &[u8; 96],
-    ) -> Vec<u8> {
-        let ephemeral = X25519Keypair::new();
-        let mut ciphertext = *opening;
-        sealing_ring_stream(&ephemeral, auditor, DEPOSIT_AUDIT_LABEL)
-            .unwrap()
-            .apply_at(
-                STREAM_FIRST_COUNTER + u32::from(slot_index) * 6,
-                &mut ciphertext,
-            );
-        HistoricalDepositCapsule {
-            slot_index,
-            eph_pk: ephemeral.pubkey().as_bytes(),
-            ciphertext: &ciphertext,
-            recipient_ciphertext: &[7, 8],
-        }
-        .encode()
-    }
-
-    fn historical_opening(owner_key: [u8; 32]) -> ([u8; 96], [u8; 32], [u8; 32]) {
-        let owner_hash = [0x11; 32].map(|byte: u8| byte & 0x0f);
-        let blinding = [0x22; 32].map(|byte: u8| byte & 0x0f);
-        let mut opening = [0u8; 96];
-        opening[..32].copy_from_slice(&owner_hash);
-        opening[32..64].copy_from_slice(&blinding);
-        opening[64..].copy_from_slice(&owner_key);
-        let commitment = spr_transaction::owner_utxo_hash(&owner_hash, &blinding).unwrap();
-        (opening, owner_hash, commitment)
-    }
-
-    fn historical_group(
-        ring: solana_address::Address,
-        deposits: Vec<([u8; 32], Vec<u8>)>,
-    ) -> spr_event_parser::InstructionGroup {
-        let mut group = deposit_fixture::group(ring, true, deposits);
-        let later_fields = core::mem::size_of::<custom_ring_interface::storage::Revision>() + 1;
-        group.outer.data.drain(..later_fields);
-        group.outer.data[0] = custom_ring_interface::tag::HISTORICAL_DEPOSIT;
-        group
-    }
-
-    #[test]
-    fn a_crdep001_capsule_opens_under_its_own_slot_counter() {
-        let auditor = X25519Keypair::new();
-        let (opening, owner_hash, commitment) = historical_opening([0x33; 32]);
-        let ring = solana_address::Address::new_from_array([9; 32]);
-        let first = historical_capsule_bytes(&auditor.pubkey(), 0, &[0; 96]);
-        let bytes = historical_capsule_bytes(&auditor.pubkey(), 1, &opening);
-        let group = historical_group(ring, vec![([1; 32], first), (commitment, bytes.clone())]);
-        let origin = crate::ring_event_origin_in(&[group], 0, ring).unwrap();
-        let capsule = DepositCapsule::parse(&bytes).unwrap().unwrap();
-        assert!(capsule.is_historical());
-        assert_eq!(capsule.recipient_ciphertext(), [7, 8]);
-        let opened = open_deposit(&capsule, &auditor, &commitment, &origin.deposits[1]).unwrap();
-        assert_eq!(opened.owner_hash, owner_hash);
-        assert_eq!(opened.owner_key, [0x33; 32]);
-        assert_eq!(opened.note, None);
-    }
-
-    #[test]
-    fn a_crdep001_capsule_with_a_changed_byte_or_out_of_range_slot_is_refused() {
-        let auditor = X25519Keypair::new();
-        let (opening, _, commitment) = historical_opening([0x33; 32]);
-        let ring = solana_address::Address::new_from_array([9; 32]);
-        let bytes = historical_capsule_bytes(&auditor.pubkey(), 0, &opening);
-        let mut corrupted = bytes.clone();
-        corrupted[8 + 1 + 33] ^= 1;
-        let group = historical_group(ring, vec![(commitment, corrupted.clone())]);
-        let origin = crate::ring_event_origin_in(&[group], 0, ring).unwrap();
-        let capsule = DepositCapsule::parse(&corrupted).unwrap().unwrap();
-        assert!(matches!(
-            open_deposit(&capsule, &auditor, &commitment, &origin.deposits[0]),
-            Err(AuditError::DepositOpeningMismatch)
-        ));
-        let mut far = bytes;
-        far[8] = MAX_RING_DEPOSIT_AUDIT_SLOTS as u8;
-        assert_eq!(
-            DepositCapsule::parse(&far),
-            Err(custom_ring_interface::RingDepositAuditError::InvalidSlot)
-        );
-    }
-
-    #[test]
-    fn a_capsule_under_the_other_tag_binds_nothing() {
-        let auditor = X25519Keypair::new();
-        let (opening, _, commitment) = historical_opening([0x33; 32]);
-        let ring = solana_address::Address::new_from_array([9; 32]);
-        let old = historical_capsule_bytes(&auditor.pubkey(), 0, &opening);
-        let group = deposit_fixture::group(ring, true, vec![(commitment, old)]);
-        assert!(crate::ring_event_origin_in(&[group], 0, ring).is_err());
-        let sealed = seal_deposits(&[deposit_record(0)], &auditor.pubkey()).unwrap();
-        let new = RingDepositAuditCapsule {
-            slot_index: 0,
-            eph_pk: sealed.ephemeral_pk.as_bytes(),
-            ciphertext: &sealed.ciphertexts[0],
-            recipient_ciphertext: &[],
-        }
-        .encode();
-        let group = historical_group(ring, vec![(commitment, new)]);
-        assert!(crate::ring_event_origin_in(&[group], 0, ring).is_err());
-    }
-
-    /// Bytes of the base commit's encoder, tag 31 and its shorter prefix.
-    #[test]
-    fn a_base_commit_crdep001_event_recovers() {
-        let vector: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../test-vectors/historical/crdep001.json"
-        ))
-        .unwrap();
-        let bytes = |value: &serde_json::Value| hex::decode(value.as_str().unwrap()).unwrap();
-        let address = |value: &serde_json::Value| {
-            solana_address::Address::new_from_array(bytes(value).try_into().unwrap())
-        };
-        let ring = address(&vector["ring"]);
-        let group = spr_event_parser::InstructionGroup {
-            outer: spr_event_parser::ParsedInstruction::new(
-                ring,
-                Vec::new(),
-                bytes(&vector["outer"]),
-                1,
-            ),
-            inner: vector["inner"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|inner| {
-                    spr_event_parser::ParsedInstruction::new(
-                        address(&inner["program"]),
-                        Vec::new(),
-                        bytes(&inner["data"]),
-                        inner["height"].as_u64().unwrap() as _,
-                    )
-                })
-                .collect(),
-        };
-        let auditor = X25519Keypair::from_bytes(&Zeroizing::new([0x41; 32]));
-        let origin = crate::ring_event_origin_in(&[group], 0, ring).unwrap();
-        for (index, capsule) in vector["capsules"].as_array().unwrap().iter().enumerate() {
-            let raw = bytes(&capsule["bytes"]);
-            let hash: [u8; 32] = bytes(&capsule["owner_utxo_hash"]).try_into().unwrap();
-            let parsed = DepositCapsule::parse(&raw).unwrap().unwrap();
-            assert!(parsed.is_historical());
-            let opened = open_deposit(&parsed, &auditor, &hash, &origin.deposits[index]).unwrap();
-            assert_eq!(hex::encode(opened.owner_key), vector["owner_keys"][index]);
-            assert_eq!(
-                hex::encode(opened.owner_hash),
-                vector["owner_hashes"][index]
-            );
-            assert_eq!(opened.note, None);
         }
     }
 
