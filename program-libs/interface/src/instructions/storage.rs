@@ -171,7 +171,9 @@ impl<'a> StorageUpdateIxData<'a> {
             revision: Revision(*revision),
             restrictive,
             writes: writes
-                .chunks_exact(RecordWriteData::SIZE)
+                .as_chunks::<{ RecordWriteData::SIZE }>()
+                .0
+                .iter()
                 .map(|write| bytemuck::pod_read_unaligned(write))
                 .collect(),
             apply: ApplyRecordsIxData::parse(apply)

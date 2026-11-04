@@ -77,8 +77,6 @@
   "CoSignerRecordAlreadyExists": 8261,
   "CoSignerOutOfScope": 8262,
   "CoSignerCountOutOfRange": 8263,
-  "AddressWriteNeedsAuthorization": 8264,
-  "AddressRevisionMismatch": 8265,
   "RecordsRegistryOtherRing": 8266,
   "ViewTagNotCanonical": 8267,
   "ChangeTagNotZero": 8268,

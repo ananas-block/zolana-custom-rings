@@ -43,8 +43,9 @@ pub fn process_apply_enrollments_ix(
         chain_start,
         |chain, account| -> Result<[u8; 32], ProgramError> {
             // A duplicate account reads its own apply and refuses.
-            let entry = load_owned_tracking_authorization_mut(program_id, &registry_address, account)?
-                .apply()?;
+            let entry =
+                load_owned_tracking_authorization_mut(program_id, &registry_address, account)?
+                    .apply()?;
             entry
                 .chained(&chain)
                 .map_err(|_| StorageError::HashingFailed.into())

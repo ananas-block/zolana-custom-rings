@@ -1,6 +1,8 @@
 use custom_ring_interface::{
     storage::{StorageError, StorageRegistry},
-    storage_instruction::{EnrollIxData, InitializeIxData, InitializeTrackingIxData, OwnerGrantIxData},
+    storage_instruction::{
+        EnrollIxData, InitializeIxData, InitializeTrackingIxData, OwnerGrantIxData,
+    },
     tracking::{FirstEnrollment, OwnerGrant, TrackingAuthorization, TrackingRegistry},
 };
 use pinocchio::{
@@ -156,8 +158,9 @@ impl OwnerGrantWrite<'_> {
             if !account.owned_by(self.program_id) {
                 return Err(StorageError::InvalidOwnerGrant.into());
             }
-            let mut grant = RefMut::filter_map(account.try_borrow_mut()?, OwnerGrant::from_data_mut)
-                .map_err(|_| StorageError::InvalidOwnerGrant)?;
+            let mut grant =
+                RefMut::filter_map(account.try_borrow_mut()?, OwnerGrant::from_data_mut)
+                    .map_err(|_| StorageError::InvalidOwnerGrant)?;
             grant.active = self.ix.active;
             return Ok(());
         }
@@ -281,7 +284,8 @@ impl CanonicalPda<'_> {
     #[inline(always)]
     fn create(self, account: &mut AccountView) -> ProgramResult {
         let bump = [self.bump];
-        let mut signer_seeds: [Seed; MAX_SIGNER_SEEDS] = core::array::from_fn(|_| Seed::from(&bump));
+        let mut signer_seeds: [Seed; MAX_SIGNER_SEEDS] =
+            core::array::from_fn(|_| Seed::from(&bump));
         for (slot, seed) in signer_seeds.iter_mut().zip(self.seeds) {
             *slot = Seed::from(*seed);
         }
