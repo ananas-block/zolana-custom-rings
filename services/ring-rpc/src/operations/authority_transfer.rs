@@ -1,6 +1,7 @@
-use custom_ring_interface::RingMode;
 use custom_ring_sdk::DelegatePayment;
 use jsonrpsee::types::ErrorObjectOwned;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
+use spr_keypair::NullifierKey;
 use thiserror::Error;
 use zolana_ring_client::rpc::{
     AuthorityTransferAttestation, DelegateNotesAttestation, GetDelegateNotesRequest,
@@ -23,9 +24,9 @@ use crate::{
 pub enum AuthorityTransferError {
     #[error("the signer is not the ring delegate")]
     NotDelegate = -32220,
-    #[error("the ring escrows no key to the service")]
+    #[error("the ring seals its keys to another auditor")]
     EscrowUnserved = -32221,
-    #[error("the source wallet escrows no nullifier key")]
+    #[error("the source wallet has no enrolled nullifier key")]
     SourceUnescrowed = -32222,
     #[error("the source address names another nullifier key")]
     SourceKey = -32223,
@@ -97,7 +98,7 @@ impl<S: TransactionSource> Hub<S> {
             .await?;
         // 3. The secret opens to the key the owner's record binds, it stays out of the store.
         let nullifier_secret = service
-            .escrowed_nullifier_key(&owner.to_bytes())?
+            .tracked_nullifier_key(&owner.to_bytes())?
             .map(|key| spr_hasher::primitives::right_align(&key.secret()).into());
         Ok(GetDelegateNotesResponse {
             nullifier_secret,
@@ -147,9 +148,7 @@ impl<S: TransactionSource> Hub<S> {
         let config = config
             .filter(|config| config.delegate == Some(delegate))
             .ok_or(AuthorityTransferError::NotDelegate)?;
-        if config.mode != RingMode::ConfidentialEscrow
-            || config.auditor_pubkey != service.auditor_pubkey()
-        {
+        if config.auditor_pubkey != service.auditor_pubkey() {
             return Err(AuthorityTransferError::EscrowUnserved.into());
         }
         shared
@@ -167,9 +166,13 @@ impl<S: TransactionSource> Hub<S> {
             .solana_address()
             .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
             .to_bytes();
-        let nullifier_key = service
-            .escrowed_nullifier_key(&owner_key)?
-            .ok_or(AuthorityTransferError::SourceUnescrowed)?;
+        // A zero key note moves under the public secret, the delegate proves no owner signature.
+        let nullifier_key = match source.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY {
+            true => NullifierKey::from_secret([0; 31]),
+            false => service
+                .tracked_nullifier_key(&owner_key)?
+                .ok_or(AuthorityTransferError::SourceUnescrowed)?,
+        };
         if nullifier_key.pubkey()? != source.nullifier_pubkey {
             return Err(AuthorityTransferError::SourceKey.into());
         }

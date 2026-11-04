@@ -7,7 +7,9 @@ use solana_keypair::Keypair;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_ring_policy::{Member, MintPolicy};
+use zolana_ring_policy::{
+    ApprovalInputs, ApprovalMask, Member, MintPolicy, OwnerDebit, PublicGross,
+};
 
 use crate::{
     cosign::{
@@ -53,6 +55,8 @@ pub struct TransferRead {
     pub flows: Vec<OwnerFlow>,
     /// Clear on a frame of public legs alone.
     pub spends_note: bool,
+    /// The frame's proven mask, `None` on a frame that carries none.
+    pub approval_bits: Option<u8>,
 }
 
 /// Reads each asset record under the newest root of the ring's records registry.
@@ -291,40 +295,77 @@ impl<S: TransactionSource + 'static> AssetLimitSource for RecordLimits<S> {
 
 #[derive(Clone, Copy)]
 enum Operation {
-    /// Whether the frame spends a note.
-    Transfer(bool),
+    Transfer {
+        spends_note: bool,
+        approval_bits: Option<u8>,
+    },
     /// A deposit's public leg, or a merge's nothing.
     Published,
 }
 
+/// The shared formula over the flows a reservation holds, the mint stands for its asset.
+fn approval_mask(flows: &[OwnerFlow], checks: &[AssetCheck]) -> ApprovalMask {
+    let debits: Vec<OwnerDebit> = flows
+        .iter()
+        .map(|flow| OwnerDebit {
+            owner: *flow.owner.as_bytes(),
+            asset: flow.flow.asset.to_bytes(),
+            debit: flow.flow.outflow.into(),
+            kept: 0,
+            charge: 0,
+            outflow: flow.flow.outflow.into(),
+        })
+        .collect();
+    let public_gross: Vec<PublicGross> = flows
+        .iter()
+        .map(|flow| PublicGross {
+            asset: flow.flow.asset.to_bytes(),
+            gross: flow.flow.withdrawn.into(),
+        })
+        .collect();
+    ApprovalInputs {
+        flows: &debits,
+        public_gross: &public_gross,
+    }
+    .mask(|asset| {
+        checks
+            .iter()
+            .find(|check| check.asset.as_array() == asset)
+            .map_or(MintPolicy::EMPTY, |check| check.policy)
+    })
+}
+
 impl Operation {
-    /// The classes the ring's rule demands of this operation, thresholds read as the proof does.
-    fn demand(self, flows: &[OwnerFlow], checks: &[AssetCheck]) -> BTreeSet<ApproveClass> {
-        let policy = |asset: Address| {
-            checks
-                .iter()
-                .find(|check| check.asset == asset)
-                .map_or(MintPolicy::EMPTY, |check| check.policy)
-        };
+    /// A frame's proven bits meet the thresholds this service reads, or it signs nothing.
+    fn frame_holds(self, mask: ApprovalMask) -> bool {
+        match self {
+            Self::Transfer {
+                approval_bits: Some(bits),
+                ..
+            } => bits == mask.bits(),
+            Self::Transfer { .. } | Self::Published => true,
+        }
+    }
+
+    /// The classes the ring's rule demands of this operation.
+    fn demand(self, flows: &[OwnerFlow], mask: ApprovalMask) -> BTreeSet<ApproveClass> {
         let mut demand = BTreeSet::new();
-        for flow in flows {
-            let (asset, moved) = (flow.flow.asset, flow.flow);
-            let policy = policy(asset);
+        for moved in flows.iter().map(|flow| flow.flow) {
             if moved.deposited != 0 {
                 demand.insert(ApproveClass::Deposits);
             }
             if moved.withdrawn != 0 {
                 demand.insert(ApproveClass::Withdrawals);
             }
-            if policy.cosign_above != 0 && moved.outflow > policy.cosign_above {
-                demand.insert(ApproveClass::Outflow);
-            }
-            if policy.withdrawal_threshold != 0 && moved.withdrawn > policy.withdrawal_threshold {
-                demand.insert(ApproveClass::Withdrawal);
-            }
+        }
+        if mask.contains(ApprovalMask::OUTFLOW) {
+            demand.insert(ApproveClass::Outflow);
+        }
+        if mask.contains(ApprovalMask::WITHDRAWAL) {
+            demand.insert(ApproveClass::Withdrawal);
         }
         let spends_note = match self {
-            Self::Transfer(spends_note) => spends_note,
+            Self::Transfer { spends_note, .. } => spends_note,
             Self::Published => !demand.contains(&ApproveClass::Deposits),
         };
         if spends_note {
@@ -666,6 +707,7 @@ mod tests {
         FrameRead::Transfer(TransferRead {
             flows,
             spends_note: true,
+            approval_bits: None,
         })
     }
 
@@ -751,6 +793,7 @@ mod tests {
                     },
                 }],
                 spends_note: false,
+                approval_bits: None,
             })
         };
         let outflow = CoSignerApproval::new([ApproveClass::Outflow]);

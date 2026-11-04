@@ -15,11 +15,15 @@ use spr_interface::{
     },
     pda, PROGRAM_ID_PUBKEY,
 };
+use spr_hasher::primitives::hash_bytes;
+use spr_interface::SOL_ASSET_FIELD;
 use spr_transaction::SOL_MINT;
 use zolana_ring_client::{
-    AuditedInput, AuditedTransaction, FramedRow, InputOpening, OutputOpening, TransactionAudit,
+    AuditedTransaction, FramedRow, InputOpening, OutputOpening, TransactionAudit,
 };
-use zolana_ring_policy::{owner_debits, DebitInput, DebitOutput, DebitTransfer, Member};
+use zolana_ring_policy::{
+    owner_debits, DebitInput, DebitOutput, DebitTransfer, Member, PublicGross,
+};
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
@@ -28,7 +32,7 @@ use crate::{
     error::RingRpcError,
     hub::Shared,
     upstream::TransactionSource,
-    utxos::{AuditStore, StoredUtxo},
+    utxos::AuditStore,
 };
 
 /// The output tree's position in SPP's transact account list.
@@ -63,6 +67,8 @@ struct RingFrame<'m> {
 /// One asset's public legs, a deposit joins the volume and a withdrawal stays gross.
 struct PublicFlow {
     mint: Address,
+    /// The field the statement's gross and every note of the mint hash under.
+    asset: [u8; 32],
     deposited: u64,
     withdrawn: u64,
 }
@@ -157,9 +163,7 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
         .row()
         .map_err(|_| unavailable())?;
         let audited = TransactionAudit::new(&row, parsed.audit_stream())
-            .with_known_utxos(&*store)
-            .with_escrowed_keys(&*store)
-            .run(service.auditor_keypair(), &assets)
+            .run(service.auditor_keypair())
             .map_err(|_| unavailable())?;
         let public = public_flows(&parsed, spp)?;
         let window = settlement_accounts(
@@ -183,7 +187,7 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
             assets: &assets,
             ring: self.ring,
         }
-        .read()
+        .read(parsed.data().co_sign.approval.bits())
         .map(FrameRead::Transfer)
     }
 }
@@ -321,6 +325,7 @@ fn deposit_read(
     Ok(TransferRead {
         flows,
         spends_note: false,
+        approval_bits: None,
     })
 }
 
@@ -337,16 +342,18 @@ fn public_flows(
         .iter()
         .zip(settlement_mints(&data.interface_transfers, window))
     {
-        let mint = mint
-            .map_err(|_| unavailable())?
-            .copied()
-            .unwrap_or(SOL_MINT);
+        let named = mint.map_err(|_| unavailable())?.copied();
+        let mint = named.unwrap_or(SOL_MINT);
+        let asset = named.map_or(Ok(SOL_ASSET_FIELD), |mint| {
+            hash_bytes(mint.as_array()).map_err(|_| unavailable())
+        })?;
         let position = flows.iter().position(|flow| flow.mint == mint);
         let flow = match position {
             Some(position) => &mut flows[position],
             None => {
                 flows.push(PublicFlow {
                     mint,
+                    asset,
                     deposited: 0,
                     withdrawn: 0,
                 });
@@ -387,18 +394,27 @@ impl OwnerFlows<'_> {
             .map(|input| input.owner)
             .chain(self.owner_signers.iter().copied())
             .collect();
+        let public_gross: Vec<PublicGross> = self
+            .public
+            .iter()
+            .map(|public| PublicGross {
+                asset: public.asset,
+                gross: public.withdrawn.into(),
+            })
+            .collect();
         let assets: Vec<[u8; 32]> = self
             .outputs
             .iter()
             .map(|output| output.asset)
             .chain(self.inputs.iter().map(|input| input.asset))
+            .chain(public_gross.iter().map(|public| public.asset))
             .collect();
         let mut flows = owner_debits(&DebitTransfer {
             senders: &senders,
             assets: &assets,
             inputs: self.inputs,
             outputs: self.outputs,
-            public_gross: &[],
+            public_gross: &public_gross,
         })
         .iter()
         .map(|debit| {
@@ -406,7 +422,7 @@ impl OwnerFlows<'_> {
                 owner: member(debit.owner)?,
                 flow: AssetFlow {
                     asset: mint_of(&debit.asset)?,
-                    outflow: u64::try_from(debit.debit).map_err(|_| unavailable())?,
+                    outflow: u64::try_from(debit.outflow).map_err(|_| unavailable())?,
                     deposited: 0,
                     withdrawn: 0,
                 },
@@ -453,7 +469,7 @@ struct FrameFlows<'a> {
 }
 
 impl FrameFlows<'_> {
-    fn read(&self) -> Result<TransferRead, RingRpcError> {
+    fn read(&self, approval_bits: u8) -> Result<TransferRead, RingRpcError> {
         let inputs = self.inputs()?;
         Ok(TransferRead {
             flows: OwnerFlows {
@@ -466,6 +482,7 @@ impl FrameFlows<'_> {
             }
             .rows(|asset| self.mint_of(asset))?,
             spends_note: !inputs.is_empty(),
+            approval_bits: Some(approval_bits),
         })
     }
 
@@ -476,13 +493,16 @@ impl FrameFlows<'_> {
             match &input.opening {
                 InputOpening::Dummy => {}
                 // The frame's proven entry evidence, a default-ring note holds no index row.
-                InputOpening::Opened(opening) => inputs.push(DebitInput {
-                    owner: identity(&self.opened_owner(input)?)?,
-                    asset: opening.asset,
-                    amount: opening.amount,
+                InputOpening::External(external) => inputs.push(DebitInput {
+                    owner: identity(&external.utxo.owner_key)?,
+                    asset: external.utxo.asset,
+                    amount: external.utxo.amount,
                 }),
-                InputOpening::Merged(_) | InputOpening::UnseenHash { .. } => {
-                    let note = self.indexed_note(input).ok_or_else(unavailable)?;
+                InputOpening::Real => {
+                    let (_, note) = self
+                        .store
+                        .note_of_nullifier(&input.nullifier)
+                        .ok_or_else(unavailable)?;
                     inputs.push(DebitInput {
                         owner: identity(&note.utxo.owner_key)?,
                         asset: note.utxo.asset,
@@ -494,32 +514,15 @@ impl FrameFlows<'_> {
         Ok(inputs)
     }
 
-    /// The nullifier first, a hash-bearing frame's evidence when the owner's secret is unread.
-    fn indexed_note(&self, input: &AuditedInput) -> Option<StoredUtxo> {
-        self.store
-            .note_of_nullifier(&input.nullifier)
-            .map(|(_, note)| note)
-            .or_else(|| self.store.note(&input.hash))
-    }
-
-    /// An entry opening holds no stored note, the envelope's sender owns it.
-    fn opened_owner(&self, input: &AuditedInput) -> Result<[u8; 32], RingRpcError> {
-        self.indexed_note(input)
-            .map(|note| note.utxo.owner_key)
-            .or(self.audited.sender.map(|sender| sender.owner_key))
-            .ok_or_else(unavailable)
-    }
-
-    /// A slot still waiting on a key or a mint could return funds, the debit stays unknown.
+    /// A slot that failed to open could return funds, the outflow stays unknown.
     fn outputs(&self) -> Result<Vec<DebitOutput>, RingRpcError> {
-        if !self.audited.payload_errors.is_empty() || !self.audited.unresolved.is_empty() {
+        if !self.audited.payload_errors.is_empty() {
             return Err(unavailable());
         }
         let mut outputs = Vec::new();
         for output in &self.audited.outputs {
             let (ring, utxo) = match &output.opening {
                 OutputOpening::Dummy => continue,
-                OutputOpening::EscrowPending(_) => return Err(unavailable()),
                 OutputOpening::Ring { utxo, .. } => (true, utxo),
                 OutputOpening::Exit(utxo) => (false, utxo),
             };

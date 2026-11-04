@@ -1,4 +1,4 @@
-use custom_ring_interface::storage_instruction::StorageWriteData;
+use custom_ring_interface::RecordWriteData;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr, QueryResult, Statement, TransactionTrait, Value,
 };
@@ -101,7 +101,7 @@ impl<'a> UpdateQueue<'a> {
             bytes(new.request.registry.0.as_array()),
             bytes(new.request.update.ring.0.as_array()),
             request.into(),
-            StorageWriteData::encode_all(&new.update.writes).into(),
+            bytemuck::cast_slice::<RecordWriteData, u8>(&new.update.writes).to_vec().into(),
             bytes(new.update.signer.address().as_array()),
             role(new.update.signer).into(),
             integer(new.queued_slot)?,
@@ -170,7 +170,7 @@ impl<'a> UpdateQueue<'a> {
         &self,
         registry: Address,
         members: &[[u8; 32]],
-    ) -> Result<Vec<StorageWriteData>, DbErr> {
+    ) -> Result<Vec<RecordWriteData>, DbErr> {
         let sql = format!(
             "SELECT writes FROM records_updates WHERE registry=$1 AND (status IN ($2,$3) \
              OR (status=$4 AND member IN ({})))",
@@ -213,7 +213,7 @@ impl<'a> UpdateQueue<'a> {
         let sql = "SELECT id, ring, writes, signer, role, queued_slot, valid_until_slot, joined \
                    FROM records_updates WHERE registry=$1 AND status=$2 ORDER BY seq";
         let values = vec![bytes(registry.as_array()), QUEUED.into()];
-        let mut joined: Vec<([u8; 32], Vec<StorageWriteData>, u64)> = Vec::new();
+        let mut joined: Vec<([u8; 32], Vec<RecordWriteData>, u64)> = Vec::new();
         let mut queued = Vec::new();
         for row in self.query_all(sql, values).await? {
             let valid_until_slot = unsigned(&row, "valid_until_slot")?;
@@ -520,8 +520,9 @@ fn column_bytes(row: &QueryResult, column: &str) -> Result<[u8; 32], DbErr> {
         .map_err(|_| corrupt(column))
 }
 
-fn stored_writes(row: &QueryResult) -> Result<Vec<StorageWriteData>, DbErr> {
-    StorageWriteData::parse_all(&row.try_get::<Vec<u8>>("", "writes")?)
+fn stored_writes(row: &QueryResult) -> Result<Vec<RecordWriteData>, DbErr> {
+    bytemuck::try_cast_slice::<u8, RecordWriteData>(&row.try_get::<Vec<u8>>("", "writes")?)
+        .map(<[RecordWriteData]>::to_vec)
         .map_err(|_| corrupt("writes"))
 }
 

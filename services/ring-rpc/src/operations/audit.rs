@@ -5,13 +5,13 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_indexer_api::{Base64String, Hash, Limit};
+use spr_hasher::primitives::hash_bytes;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{instructions::transact::canonical_shape, ShieldedTransaction};
 use zolana_ring_client::{
     auditor_view_tag, confirmed_merge, historical_evidence,
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream, PageEnd},
-    records::{MemberOpeningRead, StorageTip},
     rpc::{
         cursor_in_bounds, limit_in_bounds, utxo_hashes_in_bounds, Attestation, AuditedMergesPage,
         AuditedUtxosAttestation, AuditedUtxosPage, AuditorKeyStatement, AuthorityAuth,
@@ -24,17 +24,20 @@ use zolana_ring_client::{
         WalletStatusAttestation, AUDIT_PAGE_LIMIT,
     },
     AuditError, AuditedInput, AuditedMergeOutput, AuditedTransaction, ConfirmedEventKind,
-    ConfirmedMerge, CreatedUtxo, CreatedUtxos, DepositNote, EscrowedKeys, HistoricalEvidence,
-    InputOpening, InputRing, KnownUtxos, MergeInput, MergeLedger, ReaderKey, RingOrigin,
-    RowDisposition, TransactionAudit, UtxoOwner,
+    ConfirmedMerge, CreatedUtxo, CreatedUtxos, DepositNote, HistoricalEvidence, InputOpening,
+    KnownUtxo, MergeDisclosed, MergeInput, MergeLedger, MergeRecordOutput, ReaderKey, RingOrigin,
+    RowDisposition, SealedNullifierKey, TransactionAudit, UtxoOwner,
 };
-use zolana_ring_indexer::rpc::{
-    GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
+use zolana_ring_keys::RingMergeSeed;
+use custom_ring_interface::{REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN};
+use zolana_ring_indexer::{
+    rpc::{RingRecordPathView, MAX_RING_MEMBER_PAGE_LIMIT},
+    tracking::{GetTrackingRecordsRequest, RingIndexedTrackingRecordView},
 };
+use zolana_ring_member_registry::{OpeningCheck, TrackingOpening, TrackingPath, TrackingRecord};
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::{
     historical::{assign_prefixed_inputs, InputPrefix, PrefixAssignment},
-    RingAssets,
 };
 
 use crate::{
@@ -48,11 +51,10 @@ use crate::{
     spend_machine::{InputRead, Observation},
     spent_index::{LoadSpends, NoteSeal, PageCommit, SpentCommitment, SpentIndex, SpentSource},
     upstream::{
-        MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage, TransactionPage,
-        TransactionSource,
+        MergeAuditRequest, RingConfiguration, RingHistoryPage, TransactionPage, TransactionSource,
     },
     utxos::{
-        AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, PageDelta, PageWork, WalletStatusQuery,
+        AuditStore, CreatedIn, PageDelta, PageWork, TrackedOwner, TrackingRoot, WalletStatusQuery,
         MAX_BACKFILL_PAGES,
     },
 };
@@ -123,8 +125,6 @@ pub struct AuditRead<'a> {
 struct BoundTransaction<'a> {
     transaction: &'a spr_client::ShieldedTransaction,
     origin: &'a RingOrigin,
-    known: &'a dyn KnownUtxos,
-    keys: &'a dyn EscrowedKeys,
     mode: RingMode,
 }
 
@@ -200,20 +200,20 @@ impl<S: TransactionSource> AuditService<S> {
         self.view_tag
     }
 
-    /// Opened from the verified escrow record, never kept past one merge.
-    pub(crate) fn escrowed_nullifier_key(
+    /// Opened from the verified tracking seal, never kept past one use.
+    pub(crate) fn tracked_nullifier_key(
         &self,
         owner_key: &[u8; 32],
     ) -> Result<Option<NullifierKey>, RingRpcError> {
-        let Some(escrowed) = self.shared.store(self.ring).escrowed(owner_key) else {
+        let Some(tracked) = self.shared.store(self.ring).tracked(owner_key) else {
             return Ok(None);
         };
-        let key = escrowed
+        let key = tracked
             .sealed
             .open(&self.auditor)
-            .map_err(|_| RingRpcError::EscrowedKey)?;
-        if key.pubkey()? != escrowed.nullifier_pk {
-            return Err(RingRpcError::EscrowedKey);
+            .map_err(|_| RingRpcError::TrackedKey)?;
+        if key.pubkey()? != tracked.nullifier_pk {
+            return Err(RingRpcError::TrackedKey);
         }
         Ok(Some(key))
     }
@@ -577,7 +577,7 @@ impl<S: TransactionSource> AuditService<S> {
 
     /// An unreadable secret reads as absent, the note stays `Unknown` until it opens.
     fn open_tracked_key(&self, owner_key: &[u8; 32]) -> Option<NullifierKey> {
-        self.escrowed_nullifier_key(owner_key)
+        self.tracked_nullifier_key(owner_key)
             .inspect_err(|error| {
                 log::warn!("a tracked key failed to open because {}", redacted(error));
             })
@@ -607,7 +607,7 @@ impl<S: TransactionSource> AuditService<S> {
                 .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
             self.validate_indexer_response(&response)?;
             // Read after the page, the root every transfer on it proves under is already on chain.
-            if let Err(error) = self.refresh_escrow(store).await {
+            if let Err(error) = self.refresh_tracked(store).await {
                 log::warn!(
                     "tracked key refresh of ring {} failed because {}",
                     self.ring,
@@ -670,7 +670,7 @@ impl<S: TransactionSource> AuditService<S> {
                             && tx.event_index == Some(frame.event_index)
                     });
                 if held {
-                    if let Err(error) = self.refresh_escrow(store).await {
+                    if let Err(error) = self.refresh_tracked(store).await {
                         log::warn!(
                             "tracked key refresh of ring {} failed because {}",
                             self.ring,
@@ -696,72 +696,52 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
-    /// Every escrowed key under the records registry's newest root, read again once that root moves.
-    async fn refresh_escrow(&self, store: &AuditStore) -> Result<(), RingRpcError> {
-        let RecordsTip::Newest(tip) = self.shared.source.records_root(self.ring).await? else {
+    /// Every seal under the tracking registry's newest root, read again once that root moves.
+    async fn refresh_tracked(&self, store: &AuditStore) -> Result<(), RingRpcError> {
+        let Some(root) = self.shared.source.tracking_root(self.ring).await? else {
             return Ok(());
         };
-        let root = EscrowRoot {
-            registry: tip.registry,
-            root: tip.root,
-            revision: tip.revision,
-        };
         let settled = store
-            .escrow_root()
+            .tracking_root()
             .is_some_and(|current| current.settles(&root));
         if !settled {
-            store.replace_escrow(root, self.rescan_records(tip).await?);
+            store.replace_tracked(root, self.rescan_tracking(root).await?);
         }
         Ok(())
     }
 
-    /// Every record from leaf 1, each verified under the registry's newest root.
-    async fn rescan_records(
+    /// Every leaf from 1, each verified under the root read above.
+    async fn rescan_tracking(
         &self,
-        tip: StorageTip,
-    ) -> Result<HashMap<[u8; 32], EscrowedOwner>, RingRpcError> {
+        root: TrackingRoot,
+    ) -> Result<HashMap<[u8; 32], TrackedOwner>, RingRpcError> {
         let mut owners = HashMap::new();
         let mut start_index = Some(1);
         while let Some(start) = start_index {
             let page = self
                 .shared
                 .source
-                .storage_member_records(GetStorageMemberRecordsRequest {
-                    registry: tip.registry.into(),
-                    expected_root: Hash(tip.root),
+                .tracking_records(GetTrackingRecordsRequest {
+                    registry: root.registry.into(),
+                    expected_root: Hash(root.root),
                     start_index: start,
                     limit: MAX_RING_MEMBER_PAGE_LIMIT,
                 })
                 .await?;
-            start_index = tip
-                .next_page(&page, start)
-                .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+            start_index = page.next_leaf_index;
             for row in &page.records {
-                let opening = RingMemberOpening {
-                    present: true,
-                    record: row.record.clone(),
-                    path: row.path.clone(),
-                };
-                let member = row.record.member.0;
-                if let Some(owner) = escrowed_owner(&opening, &tip.root, &member)? {
-                    owners.insert(member, owner);
-                }
+                let owner = tracked_owner(row, &root.root)?;
+                owners.insert(owner.owner_key, owner);
             }
         }
         Ok(owners)
     }
 
-    fn audit(
-        &self,
-        bound: BoundTransaction<'_>,
-        assets: &RingAssets,
-    ) -> Result<AuditedTransaction, AuditError> {
+    fn audit(&self, bound: BoundTransaction<'_>) -> Result<AuditedTransaction, AuditError> {
         let trees = bound.origin.event.input_tree_ids(bound.transaction);
         TransactionAudit::new(bound.transaction, bound.origin.audit_stream(bound.mode)?)
             .with_input_trees(&trees)?
-            .with_known_utxos(bound.known)
-            .with_escrowed_keys(bound.keys)
-            .run(&self.auditor, assets)
+            .run(&self.auditor)
     }
 
     /// A page read writes nothing, only the backfill's checkpoint feeds the index.
@@ -863,7 +843,7 @@ impl<S: TransactionSource> AuditService<S> {
         work.mark_read(created_in);
     }
 
-    /// The record names the output, its nullifiers mark the inputs through the machine.
+    /// The record opens the output, its nullifiers mark the inputs through the machine.
     fn read_merge(&self, row: MergeRow<'_, '_>) {
         let MergeRow {
             tx,
@@ -871,16 +851,34 @@ impl<S: TransactionSource> AuditService<S> {
             created_in,
             work,
         } = row;
-        let inputs = merge.inputs.clone();
-        observe_all(work, tx, created_in, |position| {
-            match inputs.get(usize::from(position)) {
-                Some(commitment) => InputRead::Real {
-                    evidence: Some(*commitment),
-                },
-                None => InputRead::Padding,
+        let note = match &merge.disclosed {
+            MergeDisclosed::Record(record) => {
+                observe_all(work, tx, created_in, |position| {
+                    match tx
+                        .nullifiers
+                        .get(usize::from(position))
+                        .is_some_and(|nullifier| record.real_nullifiers.contains(nullifier))
+                    {
+                        true => InputRead::Real { evidence: None },
+                        false => InputRead::Padding,
+                    }
+                });
+                merge_record_note(&merge, record)
             }
-        });
-        match merge_output_note(self.ring, merge, work) {
+            // A tag 47 frame names its inputs by hash, its output needs every one opened.
+            MergeDisclosed::Inputs(inputs) => {
+                observe_all(work, tx, created_in, |position| {
+                    match inputs.get(usize::from(position)) {
+                        Some(commitment) => InputRead::Real {
+                            evidence: Some(*commitment),
+                        },
+                        None => InputRead::Padding,
+                    }
+                });
+                merge_output_note(self.ring, merge.clone(), work)
+            }
+        };
+        match note {
             Some(note) => {
                 work.open(created_in, [note]);
                 work.mark_read(created_in);
@@ -899,8 +897,7 @@ impl<S: TransactionSource> AuditService<S> {
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
         let store = self.shared.store(self.ring);
-        let mut assets = self.shared.due_assets().await;
-        store.name_assets(&assets);
+        store.name_assets(&self.shared.due_assets().await);
         let mut items = Vec::new();
         let mut skipped = Vec::new();
         let mut unfinished = None;
@@ -1015,20 +1012,11 @@ impl<S: TransactionSource> AuditService<S> {
                             evidence: None,
                         });
                         work.open(created_in, created.utxos);
-                        match mode {
-                            // Only an escrow ring's retry names an unowned deposit.
-                            RingMode::ConfidentialEscrow if !created.unowned.is_empty() => {
-                                work.mark_unread(created_in);
-                            }
-                            RingMode::ConfidentialEscrow => work.mark_read(created_in),
-                            RingMode::Confidential | RingMode::Anonymous => {
-                                work.open(
-                                    created_in,
-                                    created.unowned.iter().map(DepositNote::deposited),
-                                );
-                                work.mark_read(created_in);
-                            }
-                        }
+                        work.open(
+                            created_in,
+                            created.unowned.iter().map(DepositNote::deposited),
+                        );
+                        work.mark_read(created_in);
                     }
                     Err(error) => {
                         log::warn!(
@@ -1046,33 +1034,13 @@ impl<S: TransactionSource> AuditService<S> {
                 }
                 continue;
             }
-            let mut opened = bound.and_then(|()| {
-                self.audit(
-                    BoundTransaction {
-                        transaction: &tx,
-                        origin: &origin,
-                        known: &*work,
-                        keys: &*store,
-                        mode,
-                    },
-                    &assets,
-                )
+            let opened = bound.and_then(|()| {
+                self.audit(BoundTransaction {
+                    transaction: &tx,
+                    origin: &origin,
+                    mode,
+                })
             });
-            // A mint registered inside the refresh interval misses the cache.
-            if opened
-                .as_ref()
-                .is_ok_and(AuditedTransaction::has_unknown_assets)
-            {
-                let fresh = self.shared.assets_after_miss().await;
-                if fresh != assets {
-                    assets = fresh;
-                    store.name_assets(&assets);
-                    opened = opened.and_then(|mut opened| {
-                        opened.resolve(&*store, &assets)?;
-                        Ok(opened)
-                    });
-                }
-            }
             if let Ok(opened) = &opened {
                 work.open(created_in, opened.utxos());
                 for (position, input) in opened.inputs.iter().enumerate() {
@@ -1084,11 +1052,7 @@ impl<S: TransactionSource> AuditService<S> {
                         hit: None,
                     });
                 }
-                match opened.unresolved.is_empty() {
-                    true => work.mark_read(created_in),
-                    // A slot awaits its key, the frame reads again with it.
-                    false => work.mark_unread(created_in),
-                }
+                work.mark_read(created_in);
             }
             let result = opened.and_then(|opened| Ok((opened, origin.spenders(mode)?)));
             match result {
@@ -1234,35 +1198,68 @@ impl<S: TransactionSource> AuthorizedUtxos<'_, S> {
     }
 }
 
-/// The escrowed key of a record verified under `root`, `None` while its member holds none.
-fn escrowed_owner(
-    opening: &RingMemberOpening,
+fn tracking_path(view: &RingRecordPathView) -> Option<TrackingPath> {
+    Some(TrackingPath {
+        index: view.index,
+        siblings: view
+            .siblings
+            .iter()
+            .map(|level| level.clone().map(|sibling| sibling.0))
+            .collect::<Vec<_>>()
+            .try_into()
+            .ok()?,
+    })
+}
+
+/// Verified under `root`, a seal whose owner, key or ciphertext hash differs from the leaf refuses the page.
+fn tracked_owner(
+    row: &RingIndexedTrackingRecordView,
     root: &[u8; 32],
-    member: &[u8; 32],
-) -> Result<Option<EscrowedOwner>, RingRpcError> {
-    let invalid = |_| RingRpcError::InvalidIndexerResponse;
-    let read = MemberOpeningRead::verify(opening, root, member).map_err(invalid)?;
-    let Some(owner) = read.owner_pubkey else {
-        return Ok(None);
+) -> Result<TrackedOwner, RingRpcError> {
+    let invalid = || RingRpcError::InvalidIndexerResponse;
+    let view = &row.record;
+    let record = TrackingRecord {
+        member: view.member.0,
+        next: view.next.0,
+        nullifier_pk: view.nullifier_pk.0,
+        ct_hash: view.ct_hash.0,
+        viewing_u: view.viewing_u.0,
+        revision: view.revision,
+        list_tag: view.list_tag.0,
     };
-    let Some(nullifier_pk) = read.nullifier_pk else {
-        return Ok(None);
+    let opening = TrackingOpening::Present {
+        record,
+        path: tracking_path(&row.path).ok_or_else(invalid)?,
     };
-    let Some(sealed) = read.sealed else {
-        return Ok(None);
-    };
-    // The record binds the owner key through its member identity.
-    let bound = Member::owner_tag(owner.as_array()).is_ok_and(|tag| tag.as_bytes() == member);
-    let escrowed = read.escrowed(&nullifier_pk).map_err(invalid)?;
-    if escrowed.is_none() || !bound {
-        return Err(RingRpcError::InvalidIndexerResponse);
+    OpeningCheck {
+        opening: &opening,
+        root,
+        member: &record.member,
     }
-    Ok(Some(EscrowedOwner {
+    .verify()
+    .map_err(|_| invalid())?;
+    let seal = view.seal.as_ref().ok_or_else(invalid)?;
+    let ciphertext = <[u8; REGISTER_KEY_CIPHERTEXT_LEN]>::try_from(seal.ciphertext.0.as_slice())
+        .map_err(|_| invalid())?;
+    let eph_pk = <[u8; TAGGED_X25519_KEY_LEN]>::try_from(seal.eph_pk.0.as_slice())
+        .ok()
+        .and_then(|bytes| X25519Pubkey::from_bytes(bytes).ok())
+        .ok_or_else(invalid)?;
+    let owner = seal.owner.0;
+    let bound = Member::owner_tag(owner.as_array()).is_ok_and(|tag| *tag.as_bytes() == record.member)
+        && hash_bytes(&ciphertext).is_ok_and(|hash| hash == record.ct_hash);
+    if !bound {
+        return Err(invalid());
+    }
+    Ok(TrackedOwner {
         owner_key: owner.to_bytes(),
-        nullifier_pk,
-        owner_hash: owner_hash(&PublicKey::from_ed25519(owner.as_array()), &nullifier_pk)?,
-        sealed,
-    }))
+        nullifier_pk: record.nullifier_pk,
+        owner_hash: owner_hash(
+            &PublicKey::from_ed25519(owner.as_array()),
+            &record.nullifier_pk,
+        )?,
+        sealed: SealedNullifierKey { eph_pk, ciphertext },
+    })
 }
 
 /// A confirmed row of a frame the v3 path never decodes.
@@ -1299,20 +1296,12 @@ fn observe_all(
     }
 }
 
-/// A hash-bearing frame names its input, a default-ring opening is no note of this ring.
+/// The proven count and default bits decide, the index names which note a real input spent.
 fn audited_input_read(input: &AuditedInput) -> InputRead {
     match &input.opening {
         InputOpening::Dummy => InputRead::Padding,
-        InputOpening::Opened(opening)
-            if matches!(opening.ring, Some(InputRing::Default { .. })) =>
-        {
-            InputRead::External
-        }
-        InputOpening::Opened(_) | InputOpening::Merged(_) | InputOpening::UnseenHash { .. } => {
-            InputRead::Real {
-                evidence: Some(input.hash),
-            }
-        }
+        InputOpening::External(_) => InputRead::External,
+        InputOpening::Real => InputRead::Real { evidence: None },
     }
 }
 
@@ -1324,7 +1313,33 @@ fn origin_is_bound(origin: &RingOrigin, tx: &ShieldedTransaction) -> bool {
         .is_ok()
 }
 
-/// The output of a merge with every input opened, its blinding derives from the owner's secret.
+/// The record's fields rebuilt the commitment in the client reader, the seed gives the blinding.
+fn merge_record_note(merge: &ConfirmedMerge, record: &MergeRecordOutput) -> Option<CreatedUtxo> {
+    let blinding = RingMergeSeed::from_bytes(record.seed)
+        .and_then(|seed| seed.output_blinding(&merge.first_nullifier))
+        .ok()?;
+    Some(CreatedUtxo {
+        commitment: merge.output_commitment,
+        slot_index: 0,
+        leaf_index: merge.leaf_index,
+        utxo: KnownUtxo {
+            owner_key: record.owner_key,
+            owner: UtxoOwner::Keyed {
+                nullifier_pk: record.nullifier_pk,
+            },
+            asset: hash_bytes(record.mint.as_array()).ok()?,
+            mint: Some(record.mint),
+            amount: record.amount,
+            blinding,
+            data_hash: [0; 32],
+            ring_data_hash: merge.ring_data_hash,
+            tree_id: merge.tree_id,
+        },
+        ring_note: true,
+    })
+}
+
+/// A tag 47 output with every input opened, its blinding derives from the owner's secret.
 fn merge_output_note(
     ring: Address,
     merge: ConfirmedMerge,

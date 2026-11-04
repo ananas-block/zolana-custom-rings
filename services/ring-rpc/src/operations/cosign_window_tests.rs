@@ -76,6 +76,7 @@ impl AssetLimitSource for Clocked {
         Ok(FrameRead::Transfer(TransferRead {
             flows: self.frame.clone(),
             spends_note: true,
+            approval_bits: None,
         }))
     }
 }

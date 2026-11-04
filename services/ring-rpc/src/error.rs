@@ -80,8 +80,8 @@ pub enum RingRpcError {
     MergeSettingsUnavailable,
     #[error("stored merge settings are signed at the same time or later")]
     StaleMergeSettings,
-    #[error("escrowed nullifier key does not open to its registered key")]
-    EscrowedKey,
+    #[error("tracked nullifier key does not open to its enrolled key")]
+    TrackedKey,
     #[error("merge build failed because {0}")]
     MergeBuild(Box<custom_ring_sdk::RingError>),
 }
@@ -234,7 +234,7 @@ impl From<RingRpcError> for ErrorObjectOwned {
             }
             CoSign(inner) => return (*inner).into(),
             AuthorityTransfer(refusal) => return (*refusal).into(),
-            EscrowedKey => {
+            TrackedKey => {
                 error!("escrowed nullifier key does not open");
                 (ErrorCode::InternalError, "escrowed key is unusable")
             }
@@ -289,11 +289,8 @@ mod tests {
             UnknownRing,
             RegistryNotServed,
             Unauthorized,
-            EscrowProof,
             UnknownUpdate,
             WrongCluster,
-            EscrowOnAnonymousRing,
-            EscrowRegistered,
             BatchFailed,
             ReaderGrantsInDatabase,
             EnrolmentLists,
@@ -316,11 +313,8 @@ mod tests {
                 UnknownRing => -32145,
                 RegistryNotServed => -32146,
                 Unauthorized => -32147,
-                EscrowProof => -32148,
                 UnknownUpdate => -32149,
                 WrongCluster => -32190,
-                EscrowOnAnonymousRing => -32191,
-                EscrowRegistered => -32192,
                 BatchFailed => -32193,
                 ReaderGrantsInDatabase => -32230,
                 EnrolmentLists => -32240,
@@ -333,8 +327,6 @@ mod tests {
                 AuthorityLapsed => -32275,
                 InvalidLimits => -32276,
                 LimitsWithoutRecord => -32277,
-                AddressNotAuthorized => -32278,
-                AddressEscrowMismatch => -32279,
             };
             assert_eq!(refusal.code(), code);
         }
