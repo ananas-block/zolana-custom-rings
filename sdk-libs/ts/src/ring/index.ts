@@ -604,9 +604,15 @@ export type { TransactionSize } from "../operations/workflow/compile.js";
 export {
   decideAddressCeiling,
   spentInputOf,
+  TransactionFit,
   type CeilingDecision,
+  type Fit,
+  type FitBudget,
+  type FitSigners,
+  type FitTransport,
   type MergeCapacity,
   type MergeGroup,
+  type SetupEffect,
   type SpentInput,
 } from "../operations/workflow/address-ceiling.js";
 export type { RingListSalt } from "../proof/policy-proof.js";

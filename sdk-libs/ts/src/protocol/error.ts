@@ -176,6 +176,12 @@ export const RING_ERROR_CODES = [
   "RING_BUFFERED_TAG",
   "RING_NOTE_DATA_UNBOUND",
   "RING_BUFFERED_NONCE",
+  "RING_FIT_SIGNATURES",
+  "RING_FIT_INSTRUCTIONS",
+  "RING_FIT_BYTES",
+  "RING_FIT_ADDRESSES",
+  "RING_FIT_CPI_BYTES",
+  "RING_FIT_UNPARSED_FRAME",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
