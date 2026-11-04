@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     member_registry::{AuthorizedAddress, EscrowKey},
-    queue_chain, ApplyRecordsStatement, QueueEntry, MEMBER_REGISTRY_CAPACITY, QUAD_ARITY,
-    QUAD_HEIGHT,
+    queue_chain, restrictive_write, ApplyRecordsStatement, QueueEntry, MEMBER_REGISTRY_CAPACITY,
+    QUAD_ARITY, QUAD_HEIGHT,
 };
 
 use crate::{
@@ -150,6 +150,13 @@ impl ApplyProofInputs {
             chain_start: self.chain_start,
             chain_end: self.chain_end,
             count: self.writes.len() as u64,
+            restrictive: self.writes.iter().any(|write| {
+                restrictive_write(
+                    write.entry.mask,
+                    write.entry.value,
+                    write.entry.mint_policy.is_some(),
+                )
+            }),
         })
     }
 }

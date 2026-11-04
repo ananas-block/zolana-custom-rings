@@ -27,6 +27,10 @@ pub const TRACKING_LEAF: u32 = 0x4352_544b;
 pub const TRACKING_ENTRY: u32 = 0x4352_5451;
 /// `"CRTA"`
 pub const APPLY_ENROLLMENTS: u32 = 0x4352_5441;
+/// `"CRPS"`
+pub const LIST_SALT: u32 = 0x4352_5053;
+/// `"CRPT"`
+pub const LIST_TAG: u32 = 0x4352_5054;
 /// `"CRDB"`
 pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
 /// `"CRDP"`
@@ -55,6 +59,16 @@ pub const DEPOSIT_AUDIT_LABEL: &[u8; 10] = b"CRING/dep1";
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
+}
+
+/// `Poseidon(CRPS, nullifier_secret)`, a holder reads the owner's private list position and never the secret.
+pub fn list_salt(nullifier_secret: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_SALT), nullifier_secret])
+}
+
+/// `Poseidon(CRPT, list_salt)`, final in the tracking leaf.
+pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_TAG), list_salt])
 }
 
 /// `Poseidon(CRDB, blinding_secret)`.

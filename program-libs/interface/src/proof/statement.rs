@@ -6,6 +6,7 @@ use spr_hasher::{
     Hasher, HasherError, Poseidon,
 };
 use spr_interface::N_PUBLIC_SLOTS;
+use zolana_ring_policy::ListId;
 
 use crate::{
     anonymous_exit::ANONYMOUS_PARTIES,
@@ -348,6 +349,14 @@ impl TransferStatement<'_> {
     }
 }
 
+/// A write clears a grant list, sets a deny list or replaces mint settings, mirror
+/// `registry.Restrictive`.
+pub const fn restrictive_write(mask: u64, value: u64, replaces_mint_policy: bool) -> bool {
+    const GRANT: u64 = ListId::Allow.record_bit() | ListId::Approval.record_bit();
+    const DENY: u64 = ListId::Block.record_bit() | ListId::Frozen.record_bit();
+    replaces_mint_policy || mask & GRANT & !value != 0 || value & DENY != 0
+}
+
 /// An application of `count` queued writes, mirror `prover/circuits/registry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplyRecordsStatement {
@@ -360,13 +369,49 @@ pub struct ApplyRecordsStatement {
     /// `chain(tail - 1)`.
     pub chain_end: [u8; 32],
     pub count: u64,
+    /// The proof computes it, a wrong bit fails the statement.
+    pub restrictive: bool,
 }
 
 impl ApplyRecordsStatement {
-    /// `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`.
-    pub fn elements(&self) -> [[u8; 32]; 8] {
+    /// `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count, restrictive]`.
+    pub fn elements(&self) -> [[u8; 32]; 9] {
         [
             domain::field(domain::APPLY_RECORDS),
+            self.old_root,
+            self.new_root,
+            right_align(&self.old_next_index.to_be_bytes()),
+            right_align(&self.new_next_index.to_be_bytes()),
+            self.chain_start,
+            self.chain_end,
+            right_align(&self.count.to_be_bytes()),
+            bit(self.restrictive),
+        ]
+    }
+
+    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
+        create_hash_chain_4_from_slice(&self.elements())
+    }
+}
+
+/// An application of `count` entries to the tracking tree, mirror
+/// `prover/circuits/registry/apply_enrollments.go`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApplyEnrollmentsStatement {
+    pub old_root: [u8; 32],
+    pub new_root: [u8; 32],
+    pub old_next_index: u32,
+    pub new_next_index: u32,
+    pub chain_start: [u8; 32],
+    pub chain_end: [u8; 32],
+    pub count: u64,
+}
+
+impl ApplyEnrollmentsStatement {
+    /// `[CRTA, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`.
+    pub fn elements(&self) -> [[u8; 32]; 8] {
+        [
+            domain::field(domain::APPLY_ENROLLMENTS),
             self.old_root,
             self.new_root,
             right_align(&self.old_next_index.to_be_bytes()),
@@ -382,27 +427,32 @@ impl ApplyRecordsStatement {
     }
 }
 
-/// The auditor envelope of a registered nullifier key, mirror
+/// The auditor envelope of an enrolled nullifier key, mirror
 /// `prover/circuits/registry/register_key.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegisterKeyStatement<'a> {
+    /// The tracking registry's, a proof for another ring fails.
+    pub ring_id: &'a [u8; 32],
     /// The owner identity of the signing member.
     pub member: &'a [u8; 32],
     pub nullifier_pk: &'a [u8; 32],
+    pub list_tag: &'a [u8; 32],
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_u: &'a [u8; 32],
     pub ciphertext: &'a [u8; REGISTER_KEY_CIPHERTEXT_LEN],
 }
 
 impl RegisterKeyStatement<'_> {
-    /// `[CRRG, member, nullifier_pk, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`.
-    pub fn elements(&self) -> Result<[[u8; 32]; 8], HasherError> {
+    /// `[CRRG, ring_id, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`.
+    pub fn elements(&self) -> Result<[[u8; 32]; 10], HasherError> {
         let [aud0, aud1] = pack_be(self.auditor_pubkey);
         let [eph0, eph1] = pack_be(&tagged_x25519(self.eph_u));
         Ok([
             domain::field(domain::REGISTER_KEY),
+            *self.ring_id,
             *self.member,
             *self.nullifier_pk,
+            *self.list_tag,
             aud0,
             aud1,
             eph0,
