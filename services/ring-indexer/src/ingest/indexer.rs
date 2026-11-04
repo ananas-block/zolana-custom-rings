@@ -19,8 +19,12 @@ use thiserror::Error;
 use crate::{
     block::{BlockInfo, BlockMetadata, Instruction, TransactionInfo},
     rpc::{RpcError, SolanaRpc},
-    storage::{self, BlockJournal, BlockUndo, RingCursor, StorageState, StorageStore, StorageUndo},
+    storage::{
+        self, BlockJournal, BlockUndo, RingCursor, StorageState, StorageStore, StorageUndo,
+        TrackingStore, TrackingUndo,
+    },
     storage_registry::{self, StorageCall, StorageProjection},
+    tracking_registry::{self, TrackingCall, TrackingInstruction, TrackingProjection},
 };
 
 const MAX_RETRY_DELAY_SECS: u64 = 15;
@@ -229,7 +233,13 @@ impl Indexer {
         block: &BlockInfo,
         cursor: &mut RingCursor,
     ) -> Result<()> {
-        let undo = BlockWork { tx, block }.run().await?;
+        let undo = BlockWork {
+            tx,
+            block,
+            rpc: &self.rpc,
+        }
+        .run()
+        .await?;
         storage::save_journal(
             tx,
             &BlockJournal {
@@ -318,6 +328,7 @@ pub(crate) fn from_storage(error: anyhow::Error) -> ApplyError {
 struct BlockWork<'a> {
     tx: &'a DatabaseTransaction,
     block: &'a BlockInfo,
+    rpc: &'a SolanaRpc,
 }
 
 impl BlockWork<'_> {
@@ -326,8 +337,12 @@ impl BlockWork<'_> {
         let block = self.block;
         for transaction in block.transactions.iter().filter(|tx| tx.error.is_none()) {
             for instruction in instructions(transaction) {
-                if instruction.program_id == STORAGE_PROGRAM_ID {
-                    self.project_storage(instruction, &mut undo.storage).await?;
+                if instruction.program_id != STORAGE_PROGRAM_ID {
+                    continue;
+                }
+                match tracking_registry::decode(instruction) {
+                    Some(decoded) => self.project_tracking(decoded, &mut undo.tracking).await?,
+                    None => self.project_storage(instruction, &mut undo.storage).await?,
                 }
             }
         }
@@ -380,6 +395,49 @@ impl BlockWork<'_> {
             Err(error) => Err(error),
         };
         keep(savepoint, saved).await
+    }
+}
+
+impl BlockWork<'_> {
+    async fn project_tracking(
+        &self,
+        decoded: TrackingInstruction<'_>,
+        undo: &mut Vec<TrackingUndo>,
+    ) -> Result<()> {
+        let store = TrackingStore::new(self.tx, decoded.registry.to_bytes());
+        let Some(mut state) = store.state().await? else {
+            if let Ok(TrackingCall::Initialize(init)) = &decoded.call {
+                if let Some(created) = init.state(decoded.registry) {
+                    tracking_registry::create(&store, &created).await?;
+                    undo.push(store.undo(None));
+                }
+            }
+            return Ok(());
+        };
+        if state.fault.is_some() {
+            return Ok(());
+        }
+        let before = state.clone();
+        let outcome = match decoded.call {
+            Ok(call) => {
+                let savepoint = self.tx.begin().await?;
+                let store = TrackingStore::new(&savepoint, state.registry);
+                let projection = TrackingProjection {
+                    store: &store,
+                    state: &mut state,
+                    slot: self.block.metadata.slot,
+                    rpc: self.rpc,
+                };
+                let saved = match projection.project(call).await {
+                    Ok(()) => store.save_state(&state).await.map_err(ApplyError::Retry),
+                    Err(error) => Err(error),
+                };
+                keep(savepoint, saved).await
+            }
+            Err(error) => Err(fault(error.to_string())),
+        };
+        undo.push(settle(&store, before, outcome).await?);
+        Ok(())
     }
 }
 
