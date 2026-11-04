@@ -333,7 +333,6 @@ impl RegistryWrite<'_> {
     }
 }
 
-/// `None` before its first enrollment.
 pub fn owner_enrollment(
     env: &TestEnv,
     ring: CustomRing,
@@ -399,7 +398,7 @@ impl ApplyOwnerEnrollments<'_> {
     }
 }
 
-/// A first enrollment or a viewing key rotation, applied on return.
+/// Applied on return.
 pub struct EnrollOwners<'a> {
     pub ring: CustomRing,
     pub owners: &'a [&'a ShieldedKeypair],

@@ -62,7 +62,6 @@ fn proof_paths<'a>(
         .collect()
 }
 
-/// One owner's tracking row at every slot of the key's pool.
 fn tracking_pool(
     response: &GetTrackingRecordPoolResponse,
     member: &[u8; 32],

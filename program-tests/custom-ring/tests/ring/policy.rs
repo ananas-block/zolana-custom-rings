@@ -215,7 +215,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .send(&env.client)?;
     let member = &env.sender.keypair;
-    // 1. A keyed note needs its owner's tracking row, the auditor opens the key from it.
+    // 1. A keyed note needs its owner's tracking row.
     EnrollOwners {
         ring,
         owners: &[member],
@@ -273,7 +273,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .send(&env)?;
 
-    // 3. The auditor opens the key from the owner's enrollment, one row beside the sentinel.
+    // 3. The auditor opens the key from the owner's enrollment.
     let enrolled =
         owner_enrollment(&env, ring, member.pubkey())?.context("the member's enrollment")?;
     let nullifier_key = SealedNullifierKey {
@@ -373,7 +373,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         other => bail!("expected RecipientKeyMismatch, got {other}"),
     }
 
-    // 5. A deposit binds the recipient's row, one to an owner without a row is refused before proving.
+    // 5. A deposit to an owner without a row is refused before proving.
     match env.run(deposit(unregistered).send(env.client.ring_client())) {
         Err(RingError::RecipientNotEnrolled { slot_index: 0 }) => {}
         Err(other) => return Err(anyhow!("expected RecipientNotEnrolled, got {other}")),

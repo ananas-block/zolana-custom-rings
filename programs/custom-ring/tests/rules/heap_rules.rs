@@ -76,7 +76,7 @@ impl Wide {
     }
 }
 
-/// The header's flag names this key.
+/// The header's flag names the wide key.
 fn wide_key(shape: &TransferShape) -> bool {
     let wide = FrameKey {
         rail: RingRail::Confidential,

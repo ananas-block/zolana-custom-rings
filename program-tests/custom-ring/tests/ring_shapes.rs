@@ -967,7 +967,7 @@ impl ShapeRing<'_> {
                     .prove(client),
             ),
             Spend::Rail(RingRail::AnonymousDelegate) => {
-                bail!("no column of this sweep spends the anonymous authority rail")
+                bail!("no sweep column spends the anonymous authority rail")
             }
             Spend::Rail(RingRail::Anonymous) => {
                 let recipients = payments

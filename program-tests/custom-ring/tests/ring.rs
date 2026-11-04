@@ -332,7 +332,6 @@ const FROZEN_SENDERS: RuleTable = RuleTable::builder()
     .rule(Rule::forbid(Subject::Sender, ListId::Frozen))
     .build();
 
-/// The tracking row serves the delegate each member's key.
 struct EnrolledDelegate<'a> {
     ring: CustomRing,
     delegate: &'a Keypair,
@@ -772,7 +771,6 @@ impl AuditLookup<'_> {
     }
 }
 
-/// Opens each owner's key from its enrollment.
 struct AuditedSpends<'a> {
     ring: CustomRing,
     auditor: &'a X25519Keypair,

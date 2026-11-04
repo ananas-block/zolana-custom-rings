@@ -1,5 +1,4 @@
-//! A SOL withdrawal within the asset record's threshold settles under an empty approval mask with
-//! no co-signer, one past it keeps the co-signer, and no frame altered after proving settles.
+//! A SOL withdrawal within the asset record's threshold needs no co-signer.
 
 use super::*;
 use custom_ring_interface::{cosign::ApprovalMask, storage::Revision, RootRead};
@@ -156,7 +155,7 @@ impl<'a> ExemptRing<'a> {
         Ok(env.run(transfer.prove(env.client.ring_client())))
     }
 
-    /// The empty mask follows the indexer, a record write lands ahead of the index serving it.
+    /// A record write lands ahead of the index the empty mask reads.
     fn prove_exempt(&self, note: &WalletUtxo, amount: u64) -> Result<ProvenRingTransfer> {
         let withdrawal = Withdrawal {
             amount,
@@ -202,7 +201,6 @@ impl<'a> ExemptRing<'a> {
             .count())
     }
 
-    /// `proven` under the empty mask it never proved, the co-signer slot gone.
     fn forged_exemption(&self, proven: &ProvenRingTransfer) -> Result<Instruction> {
         let mut instruction = self.altered(proven, |data| {
             data.approval = ApprovalMask::default();
@@ -214,7 +212,6 @@ impl<'a> ExemptRing<'a> {
         Ok(instruction)
     }
 
-    /// `proven` with the withdrawal bit it never proved and that co-signer signing.
     fn cleared_exemption(&self, proven: &ProvenRingTransfer) -> Result<Instruction> {
         let mut instruction = self.altered(proven, |data| {
             data.approval = ApprovalMask::WITHDRAWAL;
@@ -294,7 +291,7 @@ impl<'a> ExemptRing<'a> {
         Ok(())
     }
 
-    /// The proof binds the mask, the revision and every leg, each altered after proving fails the pairing.
+    /// The proof binds the mask, the revision and every leg.
     fn within_threshold(&self) -> Result<()> {
         let note = self.note()?;
         let proven = self.prove_exempt(&note, THRESHOLD)?;
@@ -341,7 +338,6 @@ impl<'a> ExemptRing<'a> {
         self.landed(&proven, &[], &withdrawal)
     }
 
-    /// One lamport past the threshold keeps the co-signer, a forged empty mask fails the pairing.
     fn past_threshold(&self) -> Result<()> {
         let note = self.note()?;
         let mut withdrawal = Withdrawal {
