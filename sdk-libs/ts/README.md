@@ -105,9 +105,9 @@ To refuse owners on a public list and on a private list, write one deny rule per
 list. One rule over both admits a publicly blocked owner with no private entry.
 
 A `RingAddress` carries the owner's `listSalt`, and the salt is final. A wallet
-holds one salt on every Ring because it holds one nullifier secret. Every reader
-of a published address can compute the owner's private list key on every Ring
-and read its list status there, so publish an address only where that disclosure
+holds one salt per Ring, derived from its nullifier secret and the ring id. Every
+reader of a published address can compute the owner's private list key on that
+Ring and read its list status there, so publish an address only where that disclosure
 is acceptable.
 
 On a ring reading a salted list, a relayed transfer or deposit gives Ring RPC the

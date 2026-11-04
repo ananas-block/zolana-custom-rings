@@ -36,15 +36,13 @@ export const TRACKING_EMPTY_ROOT = hexToBytes(
 const REGISTRY_DISCRIMINATOR = 3;
 const AUTHORIZATION_DISCRIMINATOR = 4;
 const OWNER_GRANT_DISCRIMINATOR = 5;
-const REGISTRY_SIZE = 1638;
+const REGISTRY_SIZE = 1606;
 const AUTHORIZATION_SIZE = 241;
 const OWNER_GRANT_SIZE = 2;
 
 export interface TrackingRegistry {
   readonly ringId: Bytes32;
   readonly auditorPubkey: Bytes33;
-  /** Immutable, enrollment proofs derive a list tag under it. */
-  readonly listScope: Bytes32;
   readonly nextIndex: number;
   /** Newest first. */
   readonly roots: readonly (StorageRegistryRoot | undefined)[];
@@ -100,7 +98,6 @@ export function decodeTrackingRegistry(data: Uint8Array): TrackingRegistry {
   const reader = account(data, REGISTRY_DISCRIMINATOR, REGISTRY_SIZE, "RING_TRACKING_INVALID");
   const ringId = reader.bytes(32, "ringId") as Bytes32;
   const auditorPubkey = reader.bytes(33, "auditorPubkey") as Bytes33;
-  const listScope = reader.bytes(32, "listScope") as Bytes32;
   const nextIndex = reader.u32("nextIndex");
   const roots = Array.from({ length: ROOT_HISTORY }, () => {
     const hash = reader.bytes(32, "root.hash") as Bytes32;
@@ -114,7 +111,6 @@ export function decodeTrackingRegistry(data: Uint8Array): TrackingRegistry {
   return Object.freeze({
     ringId,
     auditorPubkey,
-    listScope,
     nextIndex,
     roots: Object.freeze(roots),
   });

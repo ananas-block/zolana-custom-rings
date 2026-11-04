@@ -31,8 +31,6 @@ pub struct Initialize<'a> {
     pub payer: Address,
     pub authority: Address,
     pub auditor_pubkey: X25519Pubkey,
-    /// Immutable, rings sharing a salted list name one scope.
-    pub list_scope: [u8; 32],
     pub kind: RingKind,
     pub roles: RingRoles,
     /// Required on a policy ring, an audit-only ring takes it for its withdrawal exemptions.
@@ -149,7 +147,6 @@ impl Initialize<'_> {
             tag::INITIALIZE,
             &InitializeIxData {
                 auditor_pubkey: *self.auditor_pubkey.as_bytes(),
-                list_scope: self.list_scope,
                 kind: self.kind,
                 roles: self.roles,
                 policy,

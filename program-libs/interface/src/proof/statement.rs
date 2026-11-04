@@ -369,16 +369,14 @@ pub struct RegisterKeyStatement<'a> {
     pub member: &'a [u8; 32],
     pub nullifier_pk: &'a [u8; 32],
     pub list_tag: &'a [u8; 32],
-    /// The tracking registry's, a tag from another scope fails.
-    pub list_scope: &'a [u8; 32],
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_u: &'a [u8; 32],
     pub ciphertext: &'a [u8; REGISTER_KEY_CIPHERTEXT_LEN],
 }
 
 impl RegisterKeyStatement<'_> {
-    /// `[CRRG, ring_id, member, nullifier_pk, list_tag, list_scope, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`.
-    pub fn elements(&self) -> Result<[[u8; 32]; 11], HasherError> {
+    /// `[CRRG, ring_id, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`.
+    pub fn elements(&self) -> Result<[[u8; 32]; 10], HasherError> {
         let [aud0, aud1] = pack_be(self.auditor_pubkey);
         let [eph0, eph1] = pack_be(&tagged_x25519(self.eph_u));
         Ok([
@@ -387,7 +385,6 @@ impl RegisterKeyStatement<'_> {
             *self.member,
             *self.nullifier_pk,
             *self.list_tag,
-            *self.list_scope,
             aud0,
             aud1,
             eph0,

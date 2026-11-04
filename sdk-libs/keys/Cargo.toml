@@ -11,6 +11,7 @@ aes = { workspace = true }
 bs58 = { workspace = true }
 ctr = { workspace = true }
 custom-ring-interface = { workspace = true }
+zolana-ring-policy = { workspace = true }
 hex = { workspace = true }
 percent-encoding = { workspace = true }
 sha2 = { workspace = true }

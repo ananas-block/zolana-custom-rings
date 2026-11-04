@@ -69,7 +69,6 @@ fn upgrade_initialize(ring: &mut Ring, data: InitializeIxData) -> Sent {
 fn policy_config(ring: &Ring) -> InitializeIxData {
     InitializeIxData {
         auditor_pubkey: auditor_pubkey(),
-        list_scope: [0x0c; 32],
         kind: RingKind::Policy,
         roles: ring.roles.addresses(),
         policy: Some(PolicyBindingIxData {
@@ -81,7 +80,6 @@ fn policy_config(ring: &Ring) -> InitializeIxData {
 fn audit_only_config(ring: &Ring) -> InitializeIxData {
     InitializeIxData {
         auditor_pubkey: auditor_pubkey(),
-        list_scope: [0x0c; 32],
         kind: RingKind::AuditOnly,
         roles: ring.roles.addresses(),
         policy: None,

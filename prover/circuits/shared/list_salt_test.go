@@ -17,14 +17,14 @@ func TestListSaltAndTagVector(t *testing.T) {
 	if !ok {
 		t.Fatal("the secret is hex")
 	}
-	scope := big.NewInt(0x5c0e)
-	salt := ringtest.MustPoseidonHash(t, asciiTag("CRPS"), secret, scope)
+	ringID := big.NewInt(0x5c0e)
+	salt := ringtest.MustPoseidonHash(t, asciiTag("CRPS"), secret, ringID)
 	tag := ringtest.MustPoseidonHash(t, asciiTag("CRPT"), salt)
 	ringtest.PinVector(t, "registry/list_salt.json", map[string]string{
-		"description":      "list_salt = Poseidon(CRPS, nullifier_secret, list_scope) and list_tag = Poseidon(CRPT, list_salt), under the nullifier secret of the wallet with signing secret [7; 32]. Produced by prover/circuits/shared/list_salt_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description":      "list_salt = Poseidon(CRPS, nullifier_secret, ring_id) and list_tag = Poseidon(CRPT, list_salt), under the nullifier secret of the wallet with signing secret [7; 32]. Produced by prover/circuits/shared/list_salt_test.go with WRITE_AUDIT_VECTORS=1.",
 		"signing_secret":   "0707070707070707070707070707070707070707070707070707070707070707",
 		"nullifier_secret": ringtest.FieldHex(secret),
-		"list_scope":       ringtest.FieldHex(scope),
+		"ring_id":          ringtest.FieldHex(ringID),
 		"list_salt":        ringtest.FieldHex(salt),
 		"list_tag":         ringtest.FieldHex(tag),
 	})

@@ -16,7 +16,6 @@ type keyStatementCircuit struct {
 	Member          frontend.Variable
 	NullifierPk     frontend.Variable
 	ListTag         frontend.Variable
-	ListScope       frontend.Variable
 	AuditorPubkey   [33]frontend.Variable
 	EphU            [32]frontend.Variable
 	Ciphertext      [32]frontend.Variable
@@ -28,7 +27,7 @@ func (c *keyStatementCircuit) Define(api frontend.API) error {
 		Eph:        gadget.PackBytesBE(api, append([]frontend.Variable{4}, c.EphU[:]...)),
 		Ciphertext: c.Ciphertext[:],
 	}
-	statement := (&RegisterKeyCircuit{RingID: c.RingID, ListScope: c.ListScope, Member: c.Member}).statement(api, c.NullifierPk, c.ListTag, sealed)
+	statement := (&RegisterKeyCircuit{RingID: c.RingID, Member: c.Member}).statement(api, c.NullifierPk, c.ListTag, sealed)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
 }
@@ -41,7 +40,6 @@ func TestRegisterKeyStatementMatchesRustVector(t *testing.T) {
 			Member          string `json:"member"`
 			NullifierPk     string `json:"nullifier_pk"`
 			ListTag         string `json:"list_tag"`
-			ListScope       string `json:"list_scope"`
 			AuditorPubkey   string `json:"auditor_pubkey"`
 			EphU            string `json:"eph_u"`
 			Ciphertext      string `json:"ciphertext"`
@@ -56,7 +54,6 @@ func TestRegisterKeyStatementMatchesRustVector(t *testing.T) {
 		Member:          ringtest.VectorField(t, v.Member),
 		NullifierPk:     ringtest.VectorField(t, v.NullifierPk),
 		ListTag:         ringtest.VectorField(t, v.ListTag),
-		ListScope:       ringtest.VectorField(t, v.ListScope),
 	}
 	copy(witness.AuditorPubkey[:], ringtest.VectorWires(t, v.AuditorPubkey, 33))
 	copy(witness.EphU[:], ringtest.VectorWires(t, v.EphU, 32))

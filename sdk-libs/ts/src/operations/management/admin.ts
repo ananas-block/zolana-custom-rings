@@ -1,4 +1,3 @@
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import type { AccountMeta, Address, Instruction } from "@solana/kit";
 
 import {
@@ -97,8 +96,6 @@ export async function initializeRingInstruction(
     payer: SignerAccount;
     authority: SignerAccount;
     auditorPublicKey: X25519PublicKey;
-    /** Immutable, rings sharing a salted list name one scope. */
-    listScope: Bytes32;
     kind: RingKind;
     roles: RingRoles;
     /** Required on a policy ring, an audit-only ring takes it for its withdrawal exemptions. */
@@ -118,7 +115,6 @@ export async function initializeRingInstruction(
   const writer = new Writer()
     .u8(RingInstructionTag.initialize, "tag")
     .bytes(input.auditorPublicKey.toBytes(), 33, "auditorPubkey")
-    .bytes(input.listScope, 32, "listScope")
     .u8(ringKindByte(input.kind), "kind");
   for (const role of RING_ROLES) writer.bytes(addressBytes(input.roles[role], role), 32, role);
   const accounts: AccountMeta[] = [

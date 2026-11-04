@@ -5,12 +5,12 @@ import type { NullifierKey } from "@heliuslabs/zolana/keypair";
 
 import { domainField, RingDomain } from "../derivation/ring-domain.js";
 
-/** `Poseidon(CRPS, nullifier_secret, list_scope)`, the scope the ring's tracking registry pins. */
-export function listSaltOf(key: NullifierKey, listScope: Bytes32): Bytes32 {
+/** `Poseidon(CRPS, nullifier_secret, ring_id)`, valid in one ring. */
+export function listSaltOf(key: NullifierKey, ringId: Bytes32): Bytes32 {
   const secret = key.secretBytes();
   const aligned = rightAlign(secret);
   try {
-    return poseidon([domainField(RingDomain.listSalt), aligned, listScope]) as Bytes32;
+    return poseidon([domainField(RingDomain.listSalt), aligned, ringId]) as Bytes32;
   } finally {
     secret.fill(0);
     aligned.fill(0);

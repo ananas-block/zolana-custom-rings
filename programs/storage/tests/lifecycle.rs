@@ -149,7 +149,6 @@ impl Store {
 
     fn initialize_tracking(&mut self) {
         let data = InitializeTrackingIxData {
-            list_scope: [0x0c; 32],
             ring_id: RING_ID,
             auditor_pubkey: auditor(),
         };
@@ -585,7 +584,6 @@ fn a_tracking_registry_pins_ring_and_auditor_at_its_canonical_address() {
     assert_eq!(registry.auditor_pubkey, auditor());
     assert_eq!(registry.newest().hash, TRACKING_EMPTY_ROOT);
     let data = InitializeTrackingIxData {
-        list_scope: [0x0c; 32],
         ring_id: RING_ID,
         auditor_pubkey: auditor(),
     };
@@ -600,7 +598,6 @@ fn a_tracking_registry_pins_ring_and_auditor_at_its_canonical_address() {
         refusal(StorageError::MissingSignature)
     );
     let other = InitializeTrackingIxData {
-        list_scope: [0x0c; 32],
         ring_id: [8; 32],
         ..data
     };
@@ -611,7 +608,6 @@ fn a_tracking_registry_pins_ring_and_auditor_at_its_canonical_address() {
         refusal(StorageError::InvalidTrackingRegistry)
     );
     let untagged = InitializeTrackingIxData {
-        list_scope: [0x0c; 32],
         ring_id: [8; 32],
         auditor_pubkey: [9; TAGGED_X25519_KEY_LEN],
     };

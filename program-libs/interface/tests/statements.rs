@@ -64,7 +64,7 @@ struct TrackingCase {
     entry_hash: String,
     chain_from_zero: String,
     nullifier_secret: String,
-    list_scope: String,
+    salt_ring_id: String,
     list_salt: String,
     secret_list_tag: String,
 }
@@ -138,7 +138,6 @@ struct RegisterKeyCase {
     member: String,
     nullifier_pk: String,
     list_tag: String,
-    list_scope: String,
     auditor_pubkey: String,
     eph_u: String,
     ciphertext: String,
@@ -536,16 +535,14 @@ fn compute_vectors() -> StatementVectors {
         list_tag: values.fields[16],
     };
     let nullifier_secret = right_aligned(0x07);
-    let list_scope = right_aligned(0x0e);
-    let list_salt = domain::list_salt(&nullifier_secret, &list_scope).unwrap();
     let ring_id = values.fields[17];
+    let list_salt = domain::list_salt(&nullifier_secret, &ring_id).unwrap();
     let list_tag = values.fields[16];
     let register = RegisterKeyStatement {
         ring_id: &ring_id,
         member: &owner_signer,
         nullifier_pk: &values.fields[13],
         list_tag: &list_tag,
-        list_scope: &list_scope,
         auditor_pubkey: &values.auditor_pubkey,
         eph_u: &values.keys[9],
         ciphertext: &values.keys[10],
@@ -647,7 +644,7 @@ fn compute_vectors() -> StatementVectors {
             entry_hash: hex::encode(tracking_entry.hash().unwrap()),
             chain_from_zero: hex::encode(tracking_entry.chained(&[0; 32]).unwrap()),
             nullifier_secret: hex::encode(nullifier_secret),
-            list_scope: hex::encode(list_scope),
+            salt_ring_id: hex::encode(ring_id),
             list_salt: hex::encode(list_salt),
             secret_list_tag: hex::encode(domain::list_tag(&list_salt).unwrap()),
         },
@@ -656,7 +653,6 @@ fn compute_vectors() -> StatementVectors {
             member: hex::encode(register.member),
             nullifier_pk: hex::encode(register.nullifier_pk),
             list_tag: hex::encode(register.list_tag),
-            list_scope: hex::encode(register.list_scope),
             auditor_pubkey: hex::encode(register.auditor_pubkey),
             eph_u: hex::encode(register.eph_u),
             ciphertext: hex::encode(register.ciphertext),

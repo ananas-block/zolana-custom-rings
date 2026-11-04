@@ -72,12 +72,9 @@ pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
 }
 
-/// `Poseidon(CRPS, nullifier_secret, list_scope)`, a holder reads the owner's private list position and never the secret.
-pub fn list_salt(
-    nullifier_secret: &[u8; 32],
-    list_scope: &[u8; 32],
-) -> Result<[u8; 32], HasherError> {
-    Poseidon::hashv(&[&field(LIST_SALT), nullifier_secret, list_scope])
+/// `Poseidon(CRPS, nullifier_secret, ring_id)`, a holder reads the owner's private list position in one ring and never the secret.
+pub fn list_salt(nullifier_secret: &[u8; 32], ring_id: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_SALT), nullifier_secret, ring_id])
 }
 
 /// `Poseidon(CRPT, list_salt)`, final in the tracking leaf.

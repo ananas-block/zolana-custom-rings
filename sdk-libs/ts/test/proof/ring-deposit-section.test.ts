@@ -57,10 +57,10 @@ function trackingChain(leaf: TrackingRecord) {
     folded.push(poseidon([folded[level] as Bytes32, zero, zero, zero]) as Bytes32);
   }
   const root = folded[TRACKING_QUAD_HEIGHT] as Bytes32;
-  const data = new Uint8Array(1638);
+  const data = new Uint8Array(1606);
   data[0] = 3;
-  new DataView(data.buffer).setUint32(98, 1, true);
-  data.set(root, 102);
+  new DataView(data.buffer).setUint32(66, 1, true);
+  data.set(root, 70);
   const pool = (openings: number) => {
     const levels = canopyLevels(openings);
     const height = TRACKING_QUAD_HEIGHT - levels;

@@ -123,7 +123,6 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with
             payer: payer(),
             authority: authority(),
             auditor_pubkey,
-            list_scope: [0x0c; 32],
             kind,
             roles: roles(),
             policy,
@@ -140,7 +139,6 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with
         parse::<InitializeIxData>(body),
         InitializeIxData {
             auditor_pubkey: *auditor_pubkey.as_bytes(),
-            list_scope: [0x0c; 32],
             kind: RingKind::Anonymous,
             roles: roles(),
             policy: None,

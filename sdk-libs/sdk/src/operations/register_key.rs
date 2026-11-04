@@ -59,8 +59,7 @@ impl Enroll<'_> {
         let envelope = NullifierKeyEnvelope::new(key, &auditor_pk)?;
         let nullifier_pk = key.pubkey()?;
         let secret = Zeroizing::new(right_align(&key.secret()));
-        let list_scope = self.ring.list_scope(client.zolana()).await?;
-        let list_tag = list_tag(key, &list_scope)?;
+        let list_tag = list_tag(key, &ring_id)?;
         let member = solana_owner_identity(self.owner.as_array())?;
         let eph_u = envelope.sealed.eph_pk.u();
         let public_input_hash = RegisterKeyStatement {
@@ -68,7 +67,6 @@ impl Enroll<'_> {
             member: &member,
             nullifier_pk: &nullifier_pk,
             list_tag: &list_tag,
-            list_scope: &list_scope,
             auditor_pubkey: auditor_pk.as_bytes(),
             eph_u: &eph_u,
             ciphertext: &envelope.sealed.ciphertext,
@@ -77,7 +75,6 @@ impl Enroll<'_> {
         let body = KeyRegister {
             public_input_hash,
             ring_id,
-            list_scope,
             member,
             nullifier_secret: secret,
             eph_sk: envelope.ephemeral_sk.clone(),

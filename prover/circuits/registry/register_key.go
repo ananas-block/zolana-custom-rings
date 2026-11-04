@@ -15,14 +15,13 @@ import (
 
 // Properties:
 // 1. The nullifier key is Poseidon of the nonzero 31-byte nullifier secret the envelope seals to AuditorPk, so the auditor recovers the secret behind the enrolled key.
-// 2. The list tag is Poseidon(CRPT, Poseidon(CRPS, secret, list scope)) over the same secret and the registry's scope.
-// 3. The statement binds the ring, the member, the key, the list tag, the list scope, both tagged envelope keys and the ciphertext hash, the program computes the member and reads the ring, the list scope and the auditor key from the tracking registry.
+// 2. The list tag is Poseidon(CRPT, Poseidon(CRPS, secret, ring)) over the same secret and the statement's ring.
+// 3. The statement binds the ring, the member, the key, the list tag, both tagged envelope keys and the ciphertext hash, the program computes the member and reads the ring and the auditor key from the tracking registry.
 
 type RegisterKeyCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 
 	RingID          frontend.Variable
-	ListScope       frontend.Variable
 	Member          frontend.Variable
 	NullifierSecret [32]frontend.Variable
 	EphSk           [32]frontend.Variable
@@ -37,7 +36,7 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	api.AssertIsDifferent(secret, 0)
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{secret})
 	// 2. A list tag from another secret would move the owner's private list position.
-	listTag := shared.ListTag(api, shared.ListSalt(api, secret, c.ListScope))
+	listTag := shared.ListTag(api, shared.ListSalt(api, secret, c.RingID))
 	// The envelope seals the same 32 bytes to the auditor under CRING/nfk1, its cipher bounds every ciphertext byte.
 	sealed := shared.Envelope{Plaintext: c.NullifierSecret[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.SealStream(api)
 	// 3. The statement names the envelope the program reads from the instruction.
@@ -47,5 +46,5 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 
 // statement mirrors RegisterKeyStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *RegisterKeyCircuit) statement(api frontend.API, nullifierPk, listTag frontend.Variable, sealed shared.Sealed) []frontend.Variable {
-	return append([]frontend.Variable{shared.RegisterKeyDomain, c.RingID, c.Member, nullifierPk, listTag, c.ListScope}, sealed.StatementFields(api)...)
+	return append([]frontend.Variable{shared.RegisterKeyDomain, c.RingID, c.Member, nullifierPk, listTag}, sealed.StatementFields(api)...)
 }

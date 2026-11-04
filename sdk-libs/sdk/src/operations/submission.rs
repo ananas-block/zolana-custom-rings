@@ -212,7 +212,7 @@ pub async fn live_registry(
         .ok_or(RingError::NotStorageRegistry { registry })
 }
 
-pub(crate) async fn live_tracking(
+async fn live_tracking(
     registry: Address,
     rpc: &(impl AsyncRpc + ?Sized),
 ) -> Result<TrackingRegistry, RingError> {

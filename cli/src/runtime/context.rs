@@ -131,10 +131,6 @@ impl Context {
             .context("the ring has no config, run `zolana-ring init` first")
     }
 
-    pub fn list_scope(&self) -> Result<[u8; 32]> {
-        Ok(self.block(self.ring.list_scope(self.chain()))?)
-    }
-
     /// The config authority, read once.
     pub fn authority(&self) -> Result<&Keypair> {
         if let Some(authority) = self.authority.get() {

@@ -12,17 +12,14 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 )
 
-var ListScope = big.NewInt(0x5c0e)
-
-// ListSaltIn keeps one secret per owner across scopes.
-func ListSaltIn(t testing.TB, owner, listScope *big.Int) *big.Int {
+func ListSaltIn(t testing.TB, owner, ringID *big.Int) *big.Int {
 	t.Helper()
-	return ringregistry.ListSalt(t, new(big.Int).Add(owner, big.NewInt(4)), listScope)
+	return ringregistry.ListSalt(t, new(big.Int).Add(owner, big.NewInt(4)), ringID)
 }
 
 func ListSaltOf(t testing.TB, owner *big.Int) *big.Int {
 	t.Helper()
-	return ListSaltIn(t, owner, ListScope)
+	return ListSaltIn(t, owner, big.NewInt(ringID))
 }
 
 // Enroll applies owner's leaf, the fields no owner predicate reads derive from it.

@@ -160,7 +160,6 @@ fn forged_tracking() -> Vec<u8> {
     let registry = TrackingRegistry::new(
         254,
         &InitializeTrackingIxData {
-            list_scope: [0x0c; 32],
             ring_id: ring_id_field(PROGRAM.as_array()).unwrap(),
             auditor_pubkey: auditor_pubkey(),
         },
