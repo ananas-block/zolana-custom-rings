@@ -1250,6 +1250,7 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
             withdrawals: 4,
             owners: 4,
             entry: false,
+            wide: false,
         }
     );
     let built = serde_json::to_value(
@@ -1305,6 +1306,7 @@ async fn the_in_proof_owner_request_publishes_the_sender_of_every_spent_note() {
             withdrawals: 4,
             owners: 4,
             entry: false,
+            wide: false,
         }
     );
     let built = serde_json::to_value(
@@ -2423,7 +2425,7 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
     let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES
         .into_iter()
-        .filter(|shape| !shape.entry && shape.withdrawals != 32);
+        .filter(|shape| !shape.entry && !shape.wide);
     for family in narrow {
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {

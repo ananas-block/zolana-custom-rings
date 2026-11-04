@@ -31,6 +31,7 @@ type Key struct {
 	Withdrawals int
 	Owners      int
 	Entry       bool
+	Wide        bool
 }
 
 // Keys takes each shape from the package that sizes it.
@@ -47,7 +48,7 @@ func keys() []Key {
 		keys = append(keys, key)
 	}
 	for _, shape := range transfer.Shapes {
-		add(Key{Family: Transfer, Inputs: shape.Inputs, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Entry: shape.Entry})
+		add(Key{Family: Transfer, Inputs: shape.Inputs, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Entry: shape.Entry, Wide: shape.Wide})
 	}
 	for _, writes := range registry.ApplyWidths {
 		add(Key{Family: ApplyRecords, Inputs: writes})
@@ -64,7 +65,7 @@ func keys() []Key {
 }
 
 func (k Key) transferShape() transfer.Shape {
-	return transfer.Shape{Inputs: k.Inputs, Outputs: k.Outputs, Withdrawals: k.Withdrawals, Owners: k.Owners, Entry: k.Entry}
+	return transfer.Shape{Inputs: k.Inputs, Outputs: k.Outputs, Withdrawals: k.Withdrawals, Owners: k.Owners, Entry: k.Entry, Wide: k.Wide}
 }
 
 func (k Key) circuitType() common.CircuitType {
@@ -74,8 +75,11 @@ func (k Key) circuitType() common.CircuitType {
 	switch k.Family {
 	case Transfer:
 		family := "transfer"
-		if k.Entry {
+		switch {
+		case k.Entry:
 			family = "transfer-entry"
+		case k.Wide:
+			family = "transfer-wide"
 		}
 		return named("%s-%d-in%d-w%d-s%d", family, k.Outputs, k.Inputs, k.Withdrawals, k.Owners)
 	case ApplyRecords:

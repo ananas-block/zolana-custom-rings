@@ -16,6 +16,8 @@ pub enum RingCircuit {
         owners: u8,
         /// One evidence slot per input, the key also spends default-ring notes.
         entry: bool,
+        /// A salted and a public record per owner fit.
+        wide: bool,
     },
     ApplyRecords {
         writes: u8,
@@ -38,6 +40,7 @@ pub struct TransferShape {
     pub withdrawals: u8,
     pub owners: u8,
     pub entry: bool,
+    pub wide: bool,
 }
 
 const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
@@ -47,11 +50,21 @@ const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> Transfe
         withdrawals,
         owners,
         entry: false,
+        wide: false,
     }
 }
 
-/// Mirror `narrowWithdrawals`.
-const NARROW_WITHDRAWALS: u8 = 4;
+const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
+    TransferShape {
+        outputs,
+        inputs,
+        withdrawals,
+        owners,
+        entry: false,
+        wide: true,
+    }
+}
+
 /// Mirror `ownerAddresses`.
 const OWNER_ADDRESSES: usize = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - RING_ADDRESSES;
 
@@ -62,6 +75,7 @@ const fn entry(outputs: u8, inputs: u8, owners: u8) -> TransferShape {
         withdrawals: 4,
         owners,
         entry: true,
+        wide: true,
     }
 }
 
@@ -72,15 +86,17 @@ const NARROW_SHAPES: [TransferShape; 4] = [
     narrow(8, 16, 4, 4),
     narrow(16, 5, 8, 5),
 ];
-const WIDE_SHAPE: TransferShape = narrow(8, 24, 32, 24);
+/// Ascending outputs, the wide flag takes the first that holds the SPP width.
+const WIDE_SHAPES: [TransferShape; 2] = [wide(8, 24, 32, 24), wide(16, 5, 8, 5)];
 const ENTRY_SHAPES: [TransferShape; 2] = [entry(4, 8, 8), entry(8, 2, 2)];
 
-pub const TRANSFER_SHAPES: [TransferShape; 7] = [
+pub const TRANSFER_SHAPES: [TransferShape; 8] = [
     NARROW_SHAPES[0],
     NARROW_SHAPES[1],
     NARROW_SHAPES[2],
     NARROW_SHAPES[3],
-    WIDE_SHAPE,
+    WIDE_SHAPES[0],
+    WIDE_SHAPES[1],
     ENTRY_SHAPES[0],
     ENTRY_SHAPES[1],
 ];
@@ -104,7 +120,7 @@ impl FrameKey {
         }
         match (self.spends_default_ring, self.wide) {
             (true, _) => ENTRY_SHAPES.into_iter().find(holds),
-            (false, true) => Some(WIDE_SHAPE).filter(holds),
+            (false, true) => WIDE_SHAPES.into_iter().find(holds),
             (false, false) => NARROW_SHAPES.into_iter().find(holds),
         }
     }
@@ -121,10 +137,6 @@ impl TransferShape {
                 .is_some_and(|pools| spend.pools.within(pools))
     }
 
-    const fn narrow_pools(self) -> bool {
-        self.withdrawals <= NARROW_WITHDRAWALS && !self.entry
-    }
-
     /// Mirror `publicOwners`.
     const fn public_owners(self) -> usize {
         let fit = (OWNER_ADDRESSES - self.withdrawals as usize) / 2;
@@ -134,21 +146,21 @@ impl TransferShape {
 
     /// Mirror `trackedWithdrawals`.
     const fn tracked_withdrawals(self) -> usize {
-        if self.narrow_pools() {
-            0
-        } else {
+        if self.wide {
             self.public_owners() - self.owners as usize
+        } else {
+            0
         }
     }
 
     /// Mirror `saltedKeys`.
     const fn salted_keys(self) -> usize {
-        if self.narrow_pools() {
-            0
-        } else {
+        if self.wide {
             2 * self.public_owners() + self.outputs as usize
                 - self.owners as usize
                 - self.withdrawals as usize
+        } else {
+            0
         }
     }
 
@@ -166,6 +178,7 @@ impl TransferShape {
             withdrawals: self.withdrawals,
             owners: self.owners,
             entry: self.entry,
+            wide: self.wide,
         }
     }
 }
@@ -320,6 +333,7 @@ impl RingCircuit {
             withdrawals,
             owners,
             entry,
+            wide,
         } = self
         else {
             return None;
@@ -330,6 +344,7 @@ impl RingCircuit {
             withdrawals,
             owners,
             entry,
+            wide,
         };
         let (outputs, withdrawals, owners) = (
             usize::from(outputs),
@@ -441,12 +456,13 @@ mod tests {
     }
 
     #[test]
-    fn the_wide_flag_names_the_one_wide_key() {
-        let wide =
+    fn the_wide_flag_names_the_wide_key_of_the_width() {
+        let key =
             |outputs| RingCircuit::transfer(spend(RingRail::Confidential, outputs, false, true));
-        assert_eq!(wide(2), Some(transfer(8, 24, 32, 24)));
-        assert_eq!(wide(8), Some(transfer(8, 24, 32, 24)));
-        assert_eq!(wide(16), None);
+        assert_eq!(key(2), Some(wide(8, 24, 32, 24).circuit()));
+        assert_eq!(key(8), Some(wide(8, 24, 32, 24).circuit()));
+        assert_eq!(key(16), Some(wide(16, 5, 8, 5).circuit()));
+        assert_eq!(key(17), None);
     }
 
     #[test]
@@ -464,7 +480,7 @@ mod tests {
         assert_eq!(past(25, 0, 1, false), None);
         assert_eq!(past(1, 5, 1, false), None);
         assert_eq!(past(1, 0, 5, false), None);
-        assert_eq!(past(1, 5, 5, true), Some(transfer(8, 24, 32, 24)));
+        assert_eq!(past(1, 5, 5, true), Some(wide(8, 24, 32, 24).circuit()));
         assert_eq!(past(1, 33, 1, true), None);
         assert_eq!(past(1, 0, 25, true), None);
     }
@@ -536,8 +552,9 @@ mod tests {
             (pools.own, pools.curator, pools.tracking)
         };
         assert_eq!(pools(transfer(2, 24, 4, 4)), (15, 15, 6));
-        assert_eq!(pools(transfer(8, 24, 32, 24)), (113, 113, 51));
-        assert_eq!(pools(transfer(16, 5, 8, 5)), (77, 77, 29));
+        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (113, 113, 51));
+        assert_eq!(pools(transfer(16, 5, 8, 5)), (48, 48, 21));
+        assert_eq!(pools(wide(16, 5, 8, 5).circuit()), (77, 77, 29));
         assert_eq!(pools(entry(4, 8, 8).circuit()), (39, 39, 16));
         assert_eq!(pools(entry(8, 2, 2).circuit()), (39, 39, 14));
     }
@@ -557,12 +574,12 @@ mod tests {
             tracking: 7,
             ..RecordPools::default()
         };
-        assert_eq!(fitted(2, tracked), Some(transfer(8, 24, 32, 24)));
+        assert_eq!(fitted(2, tracked), Some(wide(8, 24, 32, 24).circuit()));
         let own = RecordPools {
             own: 16,
             ..RecordPools::default()
         };
-        assert_eq!(fitted(2, own), Some(transfer(8, 24, 32, 24)));
+        assert_eq!(fitted(2, own), Some(wide(8, 24, 32, 24).circuit()));
         assert_eq!(
             fitted(2, RecordPools::default()),
             Some(transfer(2, 24, 4, 4))
@@ -572,5 +589,18 @@ mod tests {
             ..RecordPools::default()
         };
         assert_eq!(fitted(16, past_sixteen), None);
+        // 29 owners and one asset, each owner a public and a salted record.
+        let salted = RecordPools {
+            own: 2 * 29 + 1,
+            curator: 2 * 29 + 1,
+            tracking: 29,
+        };
+        assert_eq!(fitted(16, salted), Some(wide(16, 5, 8, 5).circuit()));
+        let public = RecordPools {
+            own: 29 + 1,
+            curator: 29 + 1,
+            tracking: 21,
+        };
+        assert_eq!(fitted(16, public), Some(transfer(16, 5, 8, 5)));
     }
 }
