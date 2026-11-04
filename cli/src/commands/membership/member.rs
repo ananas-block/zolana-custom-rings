@@ -7,7 +7,6 @@ use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_keypair::ShieldedKeypair;
 use zolana_ring_client::RingIndexer;
-use zolana_ring_keys::RingNullifierKey;
 
 use crate::{line, Context, KeyCommand, Zolana};
 
@@ -76,14 +75,13 @@ fn apply(ctx: &Context) -> Result<()> {
 }
 
 fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {
-    let ring_key = RingNullifierKey::derive(member, &ctx.ring.program_id())?;
     let payer = ctx.funded_authority()?;
     let instruction = ctx.block(
         Enroll {
             ring: ctx.ring,
             payer: payer.pubkey(),
             owner: member.pubkey(),
-            nullifier_key: ring_key.nullifier_key(),
+            nullifier_key: &member.nullifier_key,
             viewing_key: &member.viewing_key,
         }
         .prove(ctx.ring_client()),

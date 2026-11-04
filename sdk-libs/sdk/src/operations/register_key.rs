@@ -1,7 +1,6 @@
 //! Enrolls a member's nullifier key on the ring's tracking registry, the first enrollment proves the sealed key.
 
 use custom_ring_interface::{
-    domain,
     key_catalog::RingCircuit,
     storage_instruction::{tag, EnrollIxData, OwnerGrantIxData},
     tracking::TrackingAuthorization,
@@ -14,6 +13,7 @@ use spr_hasher::primitives::{right_align, solana_owner_identity};
 use spr_keypair::{NullifierKey, ViewingKey};
 use zeroize::Zeroizing;
 use zolana_ring_client::NullifierKeyEnvelope;
+use zolana_ring_keys::list_tag;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -59,7 +59,7 @@ impl Enroll<'_> {
         let envelope = NullifierKeyEnvelope::new(key, &auditor_pk)?;
         let nullifier_pk = key.pubkey()?;
         let secret = Zeroizing::new(right_align(&key.secret()));
-        let list_tag = domain::list_tag(&domain::list_salt(&secret)?)?;
+        let list_tag = list_tag(key)?;
         let member = solana_owner_identity(self.owner.as_array())?;
         let eph_u = envelope.sealed.eph_pk.u();
         let public_input_hash = RegisterKeyStatement {

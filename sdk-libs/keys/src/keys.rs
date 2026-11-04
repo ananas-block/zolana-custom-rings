@@ -1,5 +1,4 @@
 use custom_ring_interface::stream::{DeliveredSlot, SlotSecret, StreamError};
-use solana_address::Address;
 use spr_keypair::{
     shielded::{ShieldedAddress, ShieldedKeypair},
     viewing_key::{Salt, ViewTag},
@@ -11,7 +10,7 @@ use spr_transaction::{
 };
 use zeroize::Zeroizing;
 
-use crate::{RingKeyError, RingNullifierKey};
+use crate::RingKeyError;
 
 /// The public context of one delivered ring output slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,15 +89,11 @@ pub struct RotatingRingKeys {
 }
 
 impl RotatingRingKeys {
-    pub fn new(
-        identity: &ShieldedKeypair,
-        ring_program_id: &Address,
-    ) -> Result<Self, RingKeyError> {
-        let ring_key = RingNullifierKey::derive(identity, ring_program_id)?;
+    pub fn new(identity: &ShieldedKeypair) -> Result<Self, RingKeyError> {
         Self::holding(
-            ring_key.address_of(identity.shielded_address()?)?,
+            identity.shielded_address()?,
             vec![identity.viewing_key.clone()],
-            ring_key.nullifier_key().clone(),
+            identity.nullifier_key.clone(),
         )
     }
 
@@ -462,7 +457,7 @@ mod tests {
     fn a_rotated_holder_answers_under_each_key_and_refuses_another() {
         let identity = keypair();
         let old = identity.viewing_key.pubkey();
-        let rotated = RotatingRingKeys::new(&identity, &Address::new_from_array([4; 32]))
+        let rotated = RotatingRingKeys::new(&identity)
             .unwrap()
             .rotate(ViewingKey::new())
             .unwrap();

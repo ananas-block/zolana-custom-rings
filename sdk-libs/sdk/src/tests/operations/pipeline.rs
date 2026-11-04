@@ -893,17 +893,11 @@ async fn a_delegate_move_pads_to_any_ring_authority_shape_it_is_given() {
     let automatic = transfer();
     let staged = automatic.rail.stage(ring(), &chain, &config).await.unwrap();
     assert_eq!(staged.proof_inputs.check_shape().unwrap(), Shape::IN2_OUT2);
-    assert!(matches!(
-        staged.rail.delivery(),
-        RingDelivery::Delivered
-    ));
+    assert!(matches!(staged.rail.delivery(), RingDelivery::Delivered));
     let shaped = transfer().with_shape(Shape::IN4_OUT4).unwrap();
     let staged = shaped.rail.stage(ring(), &chain, &config).await.unwrap();
     assert_eq!(staged.proof_inputs.check_shape().unwrap(), Shape::IN4_OUT4);
-    assert!(matches!(
-        staged.rail.delivery(),
-        RingDelivery::Delivered
-    ));
+    assert!(matches!(staged.rail.delivery(), RingDelivery::Delivered));
 }
 
 struct MoveFixture<'a> {

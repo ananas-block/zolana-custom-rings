@@ -19,7 +19,7 @@ pub fn run(ctx: &Context, args: ReplyClaimsArgs) -> Result<()> {
     };
     let member = ShieldedKeypair::from_keypair(&keypair)?;
     let store = ctx.anonymous_wallet_store(member.viewing_pubkey());
-    let keys = RotatingRingKeys::new(&member, &ctx.ring.program_id())?;
+    let keys = RotatingRingKeys::new(&member)?;
     let assets = crate::assets::ring_assets(ctx.rpc())?;
     WalletScan {
         keys: &keys,

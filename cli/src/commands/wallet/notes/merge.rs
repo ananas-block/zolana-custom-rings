@@ -12,10 +12,11 @@ use solana_signer::Signer;
 use spr_interface::pda;
 use spr_keypair::ShieldedKeypair;
 use spr_transaction::{SpendableDecryptionResult, WalletUtxo, SOL_MINT};
+use zolana_ring_keys::RotatingRingKeys;
 
 use crate::{
-    assets, fund::MIN_AUTHORITY_BALANCE, line, member::KeyEnrolment, transact::RingWallet,
-    wallet::WalletScan, Context, MergeArgs,
+    assets, fund::MIN_AUTHORITY_BALANCE, line, member::KeyEnrolment, wallet::WalletScan, Context,
+    MergeArgs,
 };
 
 pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
@@ -23,10 +24,10 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
     let mint = args.mint.map_or(SOL_MINT, |mint| mint.0);
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
-    let held = RingWallet::new(&sender, &ctx.ring.program_id())?;
+    let held = RotatingRingKeys::new(&sender)?;
     let scan = || {
         WalletScan {
-            keys: &held.keys,
+            keys: &held,
             assets: &assets,
             config: &config,
         }
@@ -46,12 +47,12 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     let tree = pda::tree(tree_id);
     let prepared = CustomRingMerge::new(ctx.ring, selected, None)?
         .with_output_tree_id(tree_id)
-        .encrypt(&held.keys)?;
+        .encrypt(&held)?;
     let (output_hash, merged_amount) = (prepared.output().hash(tree_id)?, prepared.output().amount);
     let merge = RingMergeOperation::new(
         prepared,
         MergeProofInput {
-            nullifier_key: held.nullifier.nullifier_key().clone(),
+            nullifier_key: sender.nullifier_key.clone(),
             input_tree: tree,
             output_tree: tree,
         },

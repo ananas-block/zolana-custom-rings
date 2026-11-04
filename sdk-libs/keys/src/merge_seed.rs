@@ -75,10 +75,7 @@ mod tests {
         let first_key = owner.viewing_key.pubkey();
         let next = ViewingKey::new();
         let next_key = next.pubkey();
-        let rotated = RotatingRingKeys::new(&owner, &RING)
-            .unwrap()
-            .rotate(next)
-            .unwrap();
+        let rotated = RotatingRingKeys::new(&owner).unwrap().rotate(next).unwrap();
         assert_eq!(seed(&rotated, first_key), seed(&owner, first_key));
         assert_ne!(seed(&rotated, next_key), seed(&rotated, first_key));
         let refused = rotated.merge_seeds(&[MergeSeedRequest {
