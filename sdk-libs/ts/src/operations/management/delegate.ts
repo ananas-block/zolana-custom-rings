@@ -8,7 +8,6 @@ import type {
   WalletKeys,
 } from "@heliuslabs/zolana/client";
 import {
-  compileUnsignedTransaction,
   reserveEntries,
   reservedUtxoKeys,
   unreserved,
@@ -36,9 +35,7 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { RingInstructionTag, ringComputeUnitLimit } from "./admin.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
-import { boundState } from "../workflow/pipeline.js";
 import {
   DelegateTransfer,
   type DelegateOutput,
@@ -51,6 +48,7 @@ import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../work
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
+  provenRingAttempt,
   type RingSubmissionAttempt,
   type RingSubmissionBuildState,
 } from "../workflow/submission.js";
@@ -336,24 +334,17 @@ async function buildDelegateTransaction(
       },
     };
     const proven = await transfer.proveApproved(move.client, approval, context);
-    const [instruction, lifetime] = await Promise.all([
-      proven.instruction(),
-      move.client.getLatestBlockhash(context),
-    ]);
-    const transaction = compileUnsignedTransaction({
-      ...approval.transaction,
-      feePayer: move.feePayer,
-      lifetime,
-      instructions: [instruction],
-      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.authorityTransfer),
-    });
-    return Object.freeze({
-      transaction,
-      lastValidBlockHeight: lifetime.lastValidBlockHeight,
-      intentHash: planned,
-      ringInstructionIndex: 0,
-      ...boundState(proven),
-    });
+    return await provenRingAttempt(
+      {
+        proven,
+        feePayer: move.feePayer,
+        chain: move.client,
+        transaction: approval.transaction,
+        intentHash: planned,
+        buffered: retry.lifetime === "submission",
+      },
+      context,
+    );
   } catch (cause) {
     if (reservation !== undefined) wallet._releaseReservation(reservation.id);
     throw wrapRingError("RING_BUILD_TRANSFER", cause);

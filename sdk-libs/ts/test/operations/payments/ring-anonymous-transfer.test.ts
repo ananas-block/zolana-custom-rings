@@ -1,3 +1,4 @@
+import { openingTotals } from "../../../src/protocol/membership/approval-totals.js";
 import { encodeBase58 } from "@heliuslabs/zolana/internal";
 import type { NoteData } from "../../../src/operations/payments/anonymous.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
@@ -315,6 +316,39 @@ function replySlots(data: RingTransactData): readonly Uint8Array[] {
 import { ringSpendTransfer } from "../../../src/operations/payments/ring-spend.js";
 
 describe("anonymous ring payment", () => {
+  it("carries a fresh digest its opening rebuilds in the frame and the request", async () => {
+    const fixture = await anonymousRing();
+    const sender = anonymousSender();
+    const to = await addressOf(fixture, ShieldedKeypair.generate());
+    const prove = () =>
+      rail({ fixture, sender, transfer: spend(fixture, sender) })
+        .withExactApproval()
+        .withPayment({ to, asset: SOL_MINT, amount: 400n, reply: null })
+        .prove(fixture.client);
+    const proven = await prove();
+    const { approvalOpening: opening } = proven;
+    if (opening === undefined) throw new Error("no opening");
+    const totals = openingTotals(opening);
+    if (totals === undefined) throw new Error("no totals");
+    const digest = totals.commitment(opening.blinder);
+    expect(proven.data.extensions.approvalTotals).toEqual(digest);
+    const request = checkTransferProof(fixture, proven.data);
+    expect(request.approvalTotals).toEqual(digest);
+    expect(request.approvalBlinder).toEqual(opening.blinder);
+    expect((await prove()).approvalOpening?.blinder).not.toEqual(opening.blinder);
+  });
+
+  it("carries no digest and no opening unless asked", async () => {
+    const fixture = await anonymousRing();
+    const sender = anonymousSender();
+    const to = await addressOf(fixture, ShieldedKeypair.generate());
+    const proven = await rail({ fixture, sender, transfer: spend(fixture, sender) })
+      .withPayment({ to, asset: SOL_MINT, amount: 400n, reply: null })
+      .prove(fixture.client);
+    expect(proven.approvalOpening).toBeUndefined();
+    expect(proven.data.extensions.approvalTotals).toBeUndefined();
+  });
+
   it("publishes a zero tag on change, the slot secret tags on the payment and the bundle, the recipient opens its body and the auditor every hash", async () => {
     const fixture = await anonymousRing();
     const sender = anonymousSender();

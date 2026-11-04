@@ -19,7 +19,11 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { type RingProver } from "../../rpc/ports.js";
 import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/zolana/client";
-import { ringTransactAccounts, type Shape } from "@heliuslabs/zolana/interface";
+import {
+  ringTransactAccounts,
+  TransactCacheAccounts,
+  type Shape,
+} from "@heliuslabs/zolana/interface";
 import type {
   Address,
   Bytes32,
@@ -28,7 +32,7 @@ import type {
 } from "@heliuslabs/zolana/interface";
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
 import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
-import { ShieldedPublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import type { RelayTransferTerms, TokenAccountCreate } from "../../rpc/relay-message.js";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
@@ -66,7 +70,12 @@ import {
   type PolicyReadClient,
   type RingListSalt,
 } from "../../proof/policy-proof.js";
-import { selectTransferKey, transferProofRequest } from "../../proof/transfer-proof.js";
+import {
+  selectTransferKey,
+  transferProofRequest,
+  type TransferApproval,
+} from "../../proof/transfer-proof.js";
+import type { ApprovalOpening } from "../../protocol/membership/approval-totals.js";
 import { sealedWide, unreadSubjectPools } from "../../protocol/proof/transfer-shapes.js";
 import { memberOfAsset, pinnedPolicy, policySourceView } from "../../protocol/membership/policy.js";
 import { policyWithdrawalHash } from "../../proof/withdrawals.js";
@@ -149,6 +158,8 @@ export interface StagedTransfer {
   readonly withdrawal?: TransactWithdrawal;
   /** Empty unless the caller sets them. */
   readonly extensions?: FrameExtensions;
+  /** The digest `extensions` carries and what opens it, Rust `Frame::approval_opening`. */
+  readonly approval?: TransferApproval;
   readonly spend: RailSpend;
 }
 
@@ -165,6 +176,8 @@ export interface RingTransactAccounts {
   readonly registries: readonly Address[];
   readonly coSigners: readonly Address[];
   readonly delegate?: Address;
+  /** A cached input reads through it, last in SPP's list. */
+  readonly cache?: TransactCacheAccounts;
 }
 
 /** Every value a transfer's proofs bind that the chain can move before it lands, Rust `BoundState`. */
@@ -188,6 +201,8 @@ export class ProvenRingTransfer {
   readonly roots: readonly BoundRoot[];
   readonly trackingRoot: BoundRoot;
   readonly policy?: BoundPolicy;
+  /** What opens the frame's digest, handed to a co-signer under `CoSignerRule` exact. */
+  readonly approvalOpening?: ApprovalOpening;
 
   /** @internal */
   constructor(fields: Omit<ProvenRingTransfer, "instruction" | "buffered">) {
@@ -199,6 +214,7 @@ export class ProvenRingTransfer {
     this.roots = fields.roots;
     this.trackingRoot = fields.trackingRoot;
     if (fields.policy !== undefined) this.policy = fields.policy;
+    if (fields.approvalOpening !== undefined) this.approvalOpening = fields.approvalOpening;
     Object.freeze(this);
   }
 
@@ -305,10 +321,12 @@ export function sealedTransferTerms(
   const { sealed, ringProgramId } = input;
   const { proofInputs } = sealed;
   return input.ownerSigners.map((signer) => {
-    const key = ShieldedPublicKey.fromEd25519(addressBytes(signer) as Bytes32);
+    // A Solana address names a wallet or a PDA alike, a key rebuilt as Ed25519 never equals a PDA owner.
+    const ownedBy = (owner: ShieldedPublicKey): boolean =>
+      equalBytes(owner.confidentialViewTag(), addressBytes(signer));
     const slots = sealed.published.flatMap(({ output }, slot) => {
       const owner = output.ownerAddress;
-      if (owner === undefined || output.isDummy() || !owner.signingPublicKey.equals(key)) return [];
+      if (owner === undefined || output.isDummy() || !ownedBy(owner.signingPublicKey)) return [];
       return [
         Object.freeze({
           slot,
@@ -330,7 +348,7 @@ export function sealedTransferTerms(
       slots: Object.freeze(slots),
       nullifiers: Object.freeze(
         proofInputs.inputUtxos
-          .filter((spent) => !spent.isDummy() && spent.utxo.owner.equals(key))
+          .filter((spent) => !spent.isDummy() && ownedBy(spent.utxo.owner))
           .map((spent) => spent.nullifier()),
       ),
       setup: input.setup,
@@ -437,8 +455,7 @@ function unreadWide(
 }
 
 function readsSaltedList(config: RingPolicy): boolean {
-  const { sources, salted } = pinnedPolicy(config);
-  return policySourceView({ slots: sources, salted }).salted !== 0;
+  return policySourceView(pinnedPolicy(config).sources).salted !== 0;
 }
 
 /** A relayed owner's seal, the caller wipes `sealed.ephemeralSecret`. */
@@ -589,6 +606,9 @@ async function assembleStagedTransfer<T>(
       registries: ringRegistrySlots(config, transferRootRead(config, delegate)),
       coSigners,
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
+      ...(proofInputs.cacheAccounts.read === undefined
+        ? {}
+        : { cache: TransactCacheAccounts.read(proofInputs.cacheAccounts.read) }),
     });
     const ringId = ringIdField(ringProgramId);
     const preview = previewData({
@@ -706,6 +726,7 @@ async function proveAssembled(
     publicOwners: spend.publicOwners === true,
     partyIdentities: assembled.partyIdentities,
     signers: assembled.signers,
+    ...(staged.approval === undefined ? {} : { approval: staged.approval }),
   });
   let proofs: readonly [ProvenRingTransact | ProvenAnonymousRingTransact, Uint8Array];
   try {
@@ -736,6 +757,7 @@ async function proveAssembled(
     ...(screened(policy)
       ? { policy: Object.freeze({ ringProgramId, policyHash: policy.policyHash }) }
       : {}),
+    ...(staged.approval === undefined ? {} : { approvalOpening: staged.approval.opening }),
   });
 }
 
@@ -761,6 +783,7 @@ export async function ringTransactInstruction(
       ? { ownerSigners: accounts.ownerSigners }
       : {}),
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
+    ...(accounts.cache === undefined ? {} : { cache: accounts.cache }),
   });
   if (sppAccounts.length > MAX_SPP_CPI_ACCOUNTS)
     throw new RingError("RING_TOO_MANY_SETTLEMENT_ACCOUNTS", {
@@ -809,6 +832,7 @@ function withAuditorMessage(
     }),
     blindingSeed: proofInputs.blindingSeed,
     outputTreeId: proofInputs.outputTreeId,
+    cacheAccounts: proofInputs.cacheAccounts,
   });
 }
 
