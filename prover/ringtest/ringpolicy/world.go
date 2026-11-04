@@ -37,11 +37,12 @@ type World struct {
 	WithdrawalCapacity int
 	OwnOnly            bool
 	Withdrawals        []Slot
-	// Anonymous publishes no recipient, Unscreened writes no policy hash, Delegate bounds no outflow.
-	Anonymous, Unscreened, Delegate, Exempt, KeyEscrow, ApprovalRequired bool
-	Delivery                                                             bool
-	Sender                                                               int64
-	CoOwners                                                             []int64
+	// Anonymous publishes no recipient, Unscreened writes no policy hash, NoOwnRegistry holds no thresholds, Delegate bypasses every policy.
+	Unscreened, NoOwnRegistry, Delegate bool
+	// Approval is the mask the proof must reach.
+	Approval uint64
+	Sender   int64
+	CoOwners []int64
 	// Nil derives one Sender input per asset the balance needs.
 	Inputs       []Slot
 	Table        Table
@@ -79,14 +80,11 @@ type OutflowLimit struct {
 	Cap, CosignAbove uint64
 }
 
-// Record is one member's registry record, a registered member escrows Poseidon(nullifierPk, ctHash) of its outputs.
+// Record is one member's registry record.
 type Record struct {
 	Lists      uint64
-	Registered bool
-	// WithdrawalThreshold is an asset record's exemption bound, zero leaves it unwritten.
+	// WithdrawalThreshold is an asset record's approval bound, zero leaves it unwritten.
 	WithdrawalThreshold uint64
-	// Address is the bound address hash, zero before enrollment.
-	Address *big.Int
 }
 
 // Slot is one output or input, a zero owner leaves it a dummy unless Unowned holds.
@@ -109,7 +107,6 @@ type PublicSlot struct {
 func Confidential() World {
 	return World{
 		Outputs:   2,
-		KeyEscrow: true,
 		Sender:    Sender,
 		Table: Table{
 			Lists:  []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.FrozenBit},
@@ -124,7 +121,7 @@ func Confidential() World {
 
 func Anonymous() World {
 	w := Confidential()
-	w.Anonymous, w.KeyEscrow = true, false
+	
 	return w
 }
 
@@ -171,7 +168,7 @@ func Delegate(outputs int) World {
 }
 
 func Escrowed(lists uint64) Record {
-	return Record{Lists: lists, Registered: true}
+	return Record{Lists: lists}
 }
 
 // Require admits a subject on any of lists, as Rule::require_any does.

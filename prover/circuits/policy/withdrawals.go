@@ -28,7 +28,7 @@ func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecke
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: v})
 		}
 		fields = append(fields, w.Owner, w.Asset, w.Amount)
-		payments[i] = Payment{Owner: w.Owner, Asset: w.Asset, Amount: w.Amount, Active: active}
+		payments[i] = Payment{Owner: w.Owner, Asset: w.Asset, Amount: w.Amount, Active: active, Ring: 0}
 	}
 	api.AssertIsEqual(p.WithdrawalHash, paddedWithdrawalHash(api, fields, count.OneHot))
 	return payments

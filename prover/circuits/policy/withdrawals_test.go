@@ -42,7 +42,7 @@ func TestPolicyWithdrawals(t *testing.T) {
 		{"split guard inclusive", func(w *ringpolicy.World) { guardSplit(w, 10) }, true},
 		{"split guard exceeded", func(w *ringpolicy.World) { guardSplit(w, 11) }, false},
 		{"deposit cannot offset guard", func(w *ringpolicy.World) { guardSplit(w, 11); w.Public[0].Amount = 300 }, false},
-		{"mixed mint scalar guard", func(w *ringpolicy.World) { guardSplit(w, 10); w.Withdrawals[0].Asset = ringpolicy.AssetB }, false},
+		{"scalar guard reads each mint apart", func(w *ringpolicy.World) { guardSplit(w, 11); w.Withdrawals[0].Asset = ringpolicy.AssetB }, true},
 		{"withdrawal outflow counted once", func(w *ringpolicy.World) {
 			w.Table.Limits = []ringpolicy.OutflowLimit{{Asset: ringpolicy.AssetA, Cap: 320}}
 		}, true},

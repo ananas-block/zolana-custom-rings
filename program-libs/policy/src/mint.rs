@@ -1,8 +1,7 @@
 use crate::AssetLimits;
 
 /// Per-mint settings stored in the ring's authenticated asset record.
-/// Zero disables recipient/withdrawal exemptions, the outflow cap, or the
-/// outflow co-sign requirement, respectively.
+/// A zero guard threshold exempts only a zero guard, every other zero is no bound.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -13,7 +12,7 @@ pub struct MintPolicy {
     pub threshold: u64,
     pub cap: u64,
     pub cosign_above: u64,
-    /// Public withdrawal totals at or below this amount need no withdrawal-scoped co-signature.
+    /// A public gross above it sets the `WITHDRAWAL` approval bit.
     pub withdrawal_threshold: u64,
     /// Ring RPC checks them only on operations it co-signs.
     pub limits: AssetLimits,

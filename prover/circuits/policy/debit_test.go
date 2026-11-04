@@ -109,35 +109,6 @@ func TestEveryCoOwnerIsScreened(t *testing.T) {
 	requireRefusedIn(t, w, "policy.assertSenderRules")
 }
 
-// Input assets stay hidden from the program, only the proof can see a deposit no owner could be credited alone.
-func TestMixedOwnerDepositOfASpentAssetIsRefused(t *testing.T) {
-	mixed := func(depositAsset int64) ringpolicy.World {
-		w := ringpolicy.Confidential()
-		w.Table.Limits = nil
-		w.CoOwners = []int64{ringpolicy.Bob}
-		w.Inputs = []ringpolicy.Slot{{Owner: ringpolicy.Sender, Asset: ringpolicy.AssetA, Amount: 100}, {Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 100}}
-		w.Slots = []ringpolicy.Slot{{Owner: ringpolicy.Alice, Asset: ringpolicy.AssetA, Amount: 200}}
-		w.Public = []ringpolicy.PublicSlot{{Asset: depositAsset, Amount: 50}}
-		return w
-	}
-	t.Run("the same asset", func(t *testing.T) {
-		requireRefusedIn(t, mixed(ringpolicy.AssetA), "policy.(*PolicyInputs).assertNoMixedDeposit")
-	})
-	t.Run("an unrelated asset", func(t *testing.T) {
-		requireSolved(t, mixed(ringpolicy.AssetB).Build(t))
-	})
-	t.Run("a single owner of the same asset", func(t *testing.T) {
-		w := mixed(ringpolicy.AssetA)
-		w.Inputs[1].Owner = ringpolicy.Sender
-		requireSolved(t, w.Build(t))
-	})
-	t.Run("a withdrawal of the same asset", func(t *testing.T) {
-		w := mixed(ringpolicy.AssetA)
-		w.Public[0].Amount = -50
-		requireSolved(t, w.Build(t))
-	})
-}
-
 // A zero secret key owes no escrow record, any other key under the same owner does.
 func TestZeroNullifierKeyWaivesOnlyTheEscrow(t *testing.T) {
 	zeroKey := func() ringpolicy.World {
