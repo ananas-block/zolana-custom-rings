@@ -163,6 +163,7 @@ ring_errors! {
     InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
     TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a private source's floor",
     PrivateSourceOtherTracking = 8504 => "a private source pairs with another tracking registry",
+    PublicRegistryAsPrivateSource = 8505 => "the private source names a registry with no tracking pair",
 }
 
 impl From<CustomRingError> for ProgramError {

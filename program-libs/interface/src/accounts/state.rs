@@ -5,7 +5,7 @@ use solana_address::Address;
 use spr_hasher::HasherError;
 use wincode::{SchemaRead, SchemaWrite};
 use zolana_ring_policy::{
-    registry_field, EncodedRuleTable, ListId, PolicySource, RuleTable, SourceMap,
+    registry_field, EncodedRuleTable, ListId, ListSet, PolicySource, RuleTable, SourceMap,
 };
 
 use crate::{
@@ -383,6 +383,7 @@ pub struct LiveRoots<'a> {
     pub curator: Option<&'a StorageRegistry>,
     /// Bound by address to the ring's pin.
     pub tracking: &'a TrackingRegistry,
+    pub private_source: Option<&'a StorageRegistry>,
     pub slot: u64,
 }
 
@@ -399,7 +400,10 @@ impl LiveRoots<'_> {
 
     /// A root below a private source's floor stays served, so a subject could still prove itself unenrolled and read salt 0.
     pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
-        for source in self.own.into_iter().chain(self.curator) {
+        for source in [self.own, self.curator, self.private_source]
+            .into_iter()
+            .flatten()
+        {
             source
                 .check_tracking_revision(revision)
                 .map_err(|_| CustomRingError::TrackingRootBelowFloor)?;
@@ -407,6 +411,11 @@ impl LiveRoots<'_> {
         self.tracking
             .root(revision, self.slot)
             .map_err(|_| CustomRingError::RootNotServed)
+    }
+
+    pub fn private_source(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
+        self.served(self.private_source, revision)?
+            .ok_or(CustomRingError::MissingRegistry)
     }
 
     /// Without the records, `None` at revision zero and `unread` otherwise.
@@ -473,6 +482,10 @@ pub struct RingPolicy {
     pub records: Address,
     /// Every read compares it, a forged registry would prove any wallet absent.
     pub tracking: Address,
+    /// Zero without a private source, its `tracking_registry` equals `tracking`.
+    pub private_source: Address,
+    /// [`ListSet`] bits owner rows read from `private_source`, asset rows keep the public slot.
+    pub private_lists: u8,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
     /// Non-empty exactly for the lists `rules` references.
@@ -493,6 +506,14 @@ pub struct CoSigner {
     /// [`CoSignScope`] bits.
     pub scope: u8,
     pub bump: u8,
+}
+
+/// The lists owner rows read privately, and the loaded registry serving them.
+#[must_use]
+#[derive(Debug, Copy, Clone)]
+pub struct PrivateSourceWrite<'a> {
+    pub owner_lists: ListSet,
+    pub source: Option<(Address, &'a StorageRegistry)>,
 }
 
 #[must_use]
@@ -586,9 +607,9 @@ impl RingPolicy {
         Ok(())
     }
 
-    /// `InvalidSource` for the curator.
+    /// `InvalidSource` for the curator or the private source.
     pub fn rebind_records(&mut self, records: Address, slot: u64) -> Result<(), CustomRingError> {
-        if self.curator() == Some(records) {
+        if self.curator() == Some(records) || self.private_source == records {
             return Err(CustomRingError::InvalidSource);
         }
         self.count_generation(slot)?;
@@ -632,11 +653,12 @@ impl RingPolicy {
         Ok(self.rules.validate(&self.source_map()?)?)
     }
 
-    /// The registries `read` passes after the ring account, own, curator, then the pinned tracking registry.
+    /// The registries `read` passes after the ring account, own, curator, private source, then the pinned tracking registry.
     pub fn root_registries(&self, read: RootRead) -> impl Iterator<Item = Address> {
         self.own_registry(read)
             .into_iter()
             .chain(self.curator_registry(read))
+            .chain(self.private_registry(read))
             .chain([self.tracking])
     }
 
@@ -648,6 +670,35 @@ impl RingPolicy {
         }
     }
 
+    /// Names the private source or clears it with no registry and no lists, each `source` read from a loaded registry.
+    pub fn set_private_source(
+        &mut self,
+        write: PrivateSourceWrite<'_>,
+        slot: u64,
+    ) -> Result<(), CustomRingError> {
+        if !write.owner_lists.is_subset(ListSet::POLICY_LISTS) {
+            return Err(CustomRingError::ListNotPolicyReadable);
+        }
+        let address = match write.source {
+            None if write.owner_lists.is_empty() => Address::default(),
+            Some((address, source)) if !write.owner_lists.is_empty() => {
+                if !source.is_private() {
+                    return Err(CustomRingError::PublicRegistryAsPrivateSource);
+                }
+                self.check_source_pair(source)?;
+                if address == self.records || Some(address) == self.curator() {
+                    return Err(CustomRingError::InvalidSource);
+                }
+                address
+            }
+            _ => return Err(CustomRingError::InvalidSource),
+        };
+        self.count_generation(slot)?;
+        self.private_source = address;
+        self.private_lists = write.owner_lists.bits();
+        Ok(())
+    }
+
     /// The own registry `read` passes after the ring account.
     pub fn own_registry(&self, read: RootRead) -> Option<Address> {
         (read != RootRead::None).then_some(self.records)
@@ -656,6 +707,12 @@ impl RingPolicy {
     /// The curator registry `read` passes after the own registry.
     pub fn curator_registry(&self, read: RootRead) -> Option<Address> {
         (read == RootRead::Policy).then(|| self.curator()).flatten()
+    }
+
+    /// The private source `read` passes after the curator.
+    pub fn private_registry(&self, read: RootRead) -> Option<Address> {
+        (read == RootRead::Policy && self.private_source != Address::default())
+            .then_some(self.private_source)
     }
 }
 
@@ -675,7 +732,7 @@ fn source_map(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, Custo
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 1094);
+const _: () = assert!(RingPolicy::SIZE == 1127);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 8);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 136);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 168);

@@ -4,9 +4,11 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::{Revision, Root, StorageRegistry},
     tracking::TrackingRegistry,
-    CustomRingError, LiveRoots, NewRing, RingMode, RingPolicy, RingRoles,
+    CustomRingError, LiveRoots, NewRing, PrivateSourceWrite, RingMode, RingPolicy, RingRoles,
+    RootRead,
 };
 use solana_address::Address;
+use zolana_ring_policy::{ListId, ListSet};
 
 fn key(byte: u8) -> Address {
     Address::new_from_array([byte; 32])
@@ -58,6 +60,7 @@ fn read(
         own: Some(own),
         curator: None,
         tracking,
+        private_source: None,
         slot: 1,
     }
     .tracking(Revision::from(revision))
@@ -91,6 +94,7 @@ fn a_floor_above_the_named_root_refuses_a_curator_source_too() {
         own: None,
         curator: Some(&private),
         tracking: &tracking,
+        private_source: None,
         slot: 1,
     };
     assert_eq!(

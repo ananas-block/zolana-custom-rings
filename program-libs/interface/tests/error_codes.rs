@@ -119,6 +119,7 @@ pinned_codes! {
     InvalidTrackingRegistry = 8502,
     TrackingRootBelowFloor = 8503,
     PrivateSourceOtherTracking = 8504,
+    PublicRegistryAsPrivateSource = 8505,
 }
 
 #[test]
