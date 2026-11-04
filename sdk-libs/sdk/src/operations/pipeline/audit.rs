@@ -117,7 +117,7 @@ pub(super) fn real_input_count(inputs: &[SppProofInputUtxo]) -> Result<u8, RingE
 }
 
 pub(super) fn is_default_ring(input: &SppProofInputUtxo) -> bool {
-    !input.is_dummy() && input.utxo.ring_program_id.is_none()
+    !input.is_dummy() && !input.is_address() && input.utxo.ring_program_id.is_none()
 }
 
 /// Never the note's nullifier secret, the auditor rebuilds the commitment alone.

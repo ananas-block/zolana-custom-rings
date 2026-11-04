@@ -415,7 +415,7 @@ impl Anonymous<'_> {
         let payer = self.owner.transaction.payer();
         owner.check_signers([payer])?;
         self.owner.check_settlement_accounts()?;
-        self.owner.check_payer_funds_deposits()?;
+        self.owner.check_deposit_funders(owner)?;
         let transfers = self.owner.transaction.interface_transfers()?;
         let exits = AnonymousExits {
             transfers: &transfers,
@@ -444,10 +444,11 @@ impl Anonymous<'_> {
         let proof_inputs = rail.encrypt(transaction, &sender)?;
         check_anonymous_inputs(&proof_inputs, &sender)?;
         let owner_signers = public_co_owners(&proof_inputs, &sender)?;
-        // A signer owning no input authorizes its data output alone, it spends with no key.
+        // A signer owning no input authorizes its data output alone, it spends with no key, and an address slot spends nothing.
         let spends = |owner: &&Address| {
             proof_inputs.input_utxos.iter().any(|input| {
                 !input.is_dummy()
+                    && !input.is_address()
                     && input.utxo.owner.confidential_view_tag().ok() == Some(owner.to_bytes())
             })
         };
@@ -538,10 +539,14 @@ pub(super) fn check_anonymous_inputs(
     if !hidden_leads {
         return Err(RingError::HiddenOwnerMissing);
     }
+    // A cached selector moves SPP's list, its cache accounts follow the settlement groups, and the
+    // ring frame neither carries the selector nor reads the owner run past those accounts. A cached
+    // slot here could reach no settlement. An address slot needs none of it, the statement binds its
+    // chain through the private transaction hash and SPP alone reads the slot.
     if inputs
         .input_utxos
         .iter()
-        .any(|input| input.cache_slot.is_some() || input.is_address())
+        .any(|input| input.cache_slot.is_some())
         || inputs
             .output_utxos
             .iter()
@@ -595,14 +600,12 @@ fn check_audit_key(inputs: &SppProofInputs) -> Result<(), RingError> {
     }
 }
 
-/// SPP publishes a hidden owner spending its default-ring note.
+/// SPP publishes a hidden owner spending its default-ring note, an address slot carries no ring and spends none.
 fn check_entry_inputs(inputs: &SppProofInputs, sender: &ShieldedAddress) -> Result<(), RingError> {
     let live = || {
-        inputs
-            .input_utxos
-            .iter()
-            .enumerate()
-            .filter(|(_, input)| !input.is_dummy() && input.utxo.owner == sender.signing_pubkey)
+        inputs.input_utxos.iter().enumerate().filter(|(_, input)| {
+            !input.is_dummy() && !input.is_address() && input.utxo.owner == sender.signing_pubkey
+        })
     };
     let holds_default = live().any(|(_, input)| input.utxo.ring_program_id.is_none());
     match live().find(|(_, input)| holds_default && input.utxo.ring_program_id.is_some()) {

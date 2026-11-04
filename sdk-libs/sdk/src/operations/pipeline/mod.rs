@@ -1345,9 +1345,7 @@ fn spends_default_ring(inputs: &[SppProofInputUtxo]) -> bool {
 
 /// SPP's anonymous rail publishes the hidden owner of a default-ring input.
 fn default_ring_input(inputs: &[SppProofInputUtxo]) -> Option<usize> {
-    inputs
-        .iter()
-        .position(|input| !input.is_dummy() && input.utxo.ring_program_id.is_none())
+    inputs.iter().position(audit::is_default_ring)
 }
 
 struct DeliveredRail {

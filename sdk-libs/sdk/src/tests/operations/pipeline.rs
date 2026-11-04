@@ -12,7 +12,7 @@ use spr_interface::{
     instruction::instruction_data::transact::OwnerTag, pda, SPL_TOKEN_ACCOUNT_INITIALIZED,
     SPL_TOKEN_PROGRAM_ID, ZERO_NULLIFIER_PUBKEY,
 };
-use spr_keypair::ShieldedKeypair;
+use spr_keypair::{PublicKey, ShieldedAddress, ShieldedKeypair};
 use spr_program::instruction::{TransactSolTransferAccounts, TransactSplWithdrawalAccounts};
 use spr_transaction::{
     instructions::transact::ConfidentialTransaction, AssetRegistry, Mint, WalletUtxo,
@@ -702,13 +702,15 @@ async fn an_anonymous_spend_of_ring_and_default_ring_utxos_is_refused_before_pro
     ));
 }
 
+/// An address slot spends nothing, it leaves the frame off the entry key and names no zero-key spend.
 #[tokio::test]
-async fn an_anonymous_transfer_reserving_an_address_is_refused_before_signing() {
+async fn an_anonymous_transfer_reserves_an_address_and_a_cached_slot_stays_refused() {
     let sender = &crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
-    for note in [
-        ring_utxo(sender, Mint::SOL, 10, 0),
-        default_ring_utxo(sender, 10, 0),
+    let chain = Chain::ring(anonymous());
+    for (note, entry) in [
+        (ring_utxo(sender, Mint::SOL, 10, 0), false),
+        (default_ring_utxo(sender, 10, 0), true),
     ] {
         let address =
             SppProofInputUtxo::new_address(sender.signing_pubkey(), [7; 32], TREE_ID).unwrap();
@@ -718,16 +720,29 @@ async fn an_anonymous_transfer_reserving_an_address_is_refused_before_signing() 
             crate::tests::support::payer(),
         )
         .unwrap();
-        // A ring-less change would exit to the sender and fail first.
         let transfer = owner_transfer(sender, transaction)
             .with_anonymous_signer(&sender.signing_key)
             .with_payment(payment(&paid, 10))
             .unwrap();
-        assert!(matches!(
-            stage_anonymous(&transfer, &Chain::ring(anonymous())).await,
-            Err(RingError::InvalidAnonymousSlot)
-        ));
+        let staged = stage_anonymous(&transfer, &chain).await.unwrap();
+        assert_eq!(spends_default_ring(&staged.proof_inputs.input_utxos), entry);
+        assert!(staged.owner_signers.is_empty());
     }
+
+    let transfer = owner_transfer(
+        sender,
+        ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
+    )
+    .with_anonymous_signer(&sender.signing_key)
+    .with_payment(payment(&paid, 10))
+    .unwrap();
+    let staged = stage_anonymous(&transfer, &chain).await.unwrap();
+    let mut cached = staged.proof_inputs.clone();
+    cached.input_utxos[0] = cached.input_utxos[0].clone().with_cache_slot(0).unwrap();
+    assert!(matches!(
+        anonymous::check_anonymous_inputs(&cached, &sender.shielded_address().unwrap()),
+        Err(RingError::InvalidAnonymousSlot)
+    ));
 }
 
 /// The fee payer is a public signer, the hidden owner may not pay its move.
@@ -2899,8 +2914,9 @@ async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_prov
     assert!(buffered.measure(&client).await.is_ok());
 }
 
+/// A funder stands apart from the owner run, the hidden owner alone may not fund a leg.
 #[tokio::test]
-async fn an_anonymous_deposit_leg_another_key_funds_is_refused_before_proving() {
+async fn an_anonymous_deposit_leg_takes_a_separate_funder_but_never_the_hidden_owner() {
     let sender = &crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
     let stage = |funder: Address| {
@@ -2920,9 +2936,13 @@ async fn an_anonymous_deposit_leg_another_key_funds_is_refused_before_proving() 
             .await
             .is_ok()
     );
+    let separate = stage(Address::new_from_array([0x66; 32]));
+    let staged = stage_anonymous(&separate, &chain).await.unwrap();
+    assert!(staged.owner_signers.is_empty());
+    let hidden = sender.shielded_address().unwrap().solana_address().unwrap();
     assert!(matches!(
-        stage_anonymous(&stage(Address::new_from_array([0x66; 32])), &chain).await,
-        Err(RingError::Program(CustomRingError::InvalidAnonymousSigner))
+        stage_anonymous(&stage(hidden), &chain).await,
+        Err(RingError::AnonymousPublicSignerLinksOwner)
     ));
 }
 
@@ -3574,4 +3594,371 @@ async fn a_hidden_sender_pays_a_note_carrying_data() {
         }),
     });
     assert!(stage_anonymous(&unbound, &chain).await.is_err());
+}
+
+/// A program's keys, its address names the PDA and every derivation stays with the holder.
+struct ProgramOwner {
+    address: ShieldedAddress,
+    keys: ShieldedKeypair,
+}
+
+impl ProgramOwner {
+    fn of(pda: Address, keys: ShieldedKeypair) -> Self {
+        Self {
+            address: ShieldedAddress {
+                signing_pubkey: PublicKey::from_pda(&pda),
+                ..keys.shielded_address().unwrap()
+            },
+            keys,
+        }
+    }
+
+    /// A keyed note of the PDA, its commitment hashes the 32 key bytes.
+    fn note(&self, leaf: u64) -> WalletUtxo {
+        let mut note = ring_utxo(&self.keys, Mint::SOL, 10, leaf);
+        note.utxo.owner = self.address.signing_pubkey;
+        note.utxo_hash = note
+            .utxo
+            .hash(&note.nullifier_pubkey, &[0; 32], &[0; 32], note.tree_id)
+            .unwrap();
+        note.nullifier = self
+            .keys
+            .nullifier_key
+            .nullifier(&note.utxo_hash, &note.utxo.blinding)
+            .unwrap();
+        note
+    }
+}
+
+impl spr_transaction::ShieldedKeys for ProgramOwner {
+    fn address(&self) -> Result<ShieldedAddress, TransactionError> {
+        Ok(self.address)
+    }
+
+    fn viewing_public_keys(&self) -> Vec<spr_keypair::X25519Pubkey> {
+        self.keys.viewing_public_keys()
+    }
+
+    fn decrypt(
+        &self,
+        requests: &[spr_transaction::DecryptRequest<'_>],
+    ) -> Result<Vec<Vec<u8>>, TransactionError> {
+        self.keys.decrypt(requests)
+    }
+
+    fn derive(
+        &self,
+        requests: &[spr_transaction::DeriveRequest],
+    ) -> Result<Vec<[u8; 32]>, TransactionError> {
+        self.keys.derive(requests)
+    }
+
+    fn transaction_keys(
+        &self,
+        requests: &[spr_transaction::TransactionKeyRequest],
+    ) -> Result<Vec<spr_keypair::ViewingKey>, TransactionError> {
+        self.keys.transaction_keys(requests)
+    }
+}
+
+impl zolana_ring_keys::RingKeys for ProgramOwner {
+    fn ring_delivery_secrets(
+        &self,
+        requests: &[zolana_ring_keys::RingDeliveryRequest],
+    ) -> Result<Vec<[u8; 32]>, zolana_ring_keys::RingKeyError> {
+        self.keys.ring_delivery_secrets(requests)
+    }
+
+    fn ring_tag_matches(
+        &self,
+        frames: &[zolana_ring_keys::RingTagFrame],
+    ) -> Result<
+        Vec<Vec<Option<custom_ring_interface::stream::SlotSecret>>>,
+        zolana_ring_keys::RingKeyError,
+    > {
+        self.keys.ring_tag_matches(frames)
+    }
+
+    fn view_tags(
+        &self,
+        requests: &[zolana_ring_keys::ViewTagRequest],
+    ) -> Result<Vec<spr_keypair::viewing_key::ViewTag>, zolana_ring_keys::RingKeyError> {
+        self.keys.view_tags(requests)
+    }
+}
+
+fn pda(byte: u8) -> Address {
+    Address::new_from_array([byte; 32])
+}
+
+#[tokio::test]
+async fn a_program_owner_spends_public_under_either_key_class_on_both_modes() {
+    use crate::tests::support::{keypair, zero_key};
+    for mode in [RingMode::Confidential, RingMode::Anonymous] {
+        let owner = ProgramOwner::of(pda(0x51), keypair(1));
+        let keyed = owner.note(0);
+        for note in [keyed.clone(), zero_key(keyed)] {
+            let chain = Chain::ring(RingSettings::new(mode));
+            let config = ring().require_config(&chain).await.unwrap();
+            let public = |wallet: Address| {
+                CustomRingTransfer::new(CustomRingTransferInput {
+                    ring: ring(),
+                    sender: &owner,
+                    nullifier_key: Some(&owner.keys.nullifier_key),
+                    transaction: ring_transaction(vec![note.clone()]),
+                })
+                .spend_public(wallet)
+            };
+            let transfer = public(pda(0x51));
+            let staged = transfer.rail.stage(ring(), &config).await.unwrap();
+            assert!(matches!(staged.spend, Spend::PublicOwners), "{mode:?}");
+            assert_eq!(staged.owner_signers, [pda(0x51)], "{mode:?}");
+            let misnamed = public(pda(0x52));
+            assert!(matches!(
+                misnamed.rail.stage(ring(), &config).await,
+                Err(RingError::PublicSpendWalletMismatch { named, .. }) if named == pda(0x52)
+            ));
+        }
+    }
+}
+
+/// A primary owner beside a PDA co-source, both orders, two PDAs, and a note of no named owner.
+#[tokio::test]
+async fn a_delegate_moves_wallet_and_pda_notes_and_refuses_an_unnamed_owner() {
+    use crate::tests::support::keypair;
+    let delegate = Address::new_from_array([0x44; 32]);
+    let assets = AssetRegistry::default();
+    let wallet = keypair(1);
+    let first = ProgramOwner::of(pda(0x51), keypair(2));
+    let second = ProgramOwner::of(pda(0x52), keypair(3));
+    let wallet_address = wallet.shielded_address().unwrap();
+    let wallet_owner = wallet_address.solana_address().unwrap();
+    for mode in [RingMode::Confidential, RingMode::Anonymous] {
+        let chain = Chain::ring(RingSettings {
+            has_policy: true,
+            delegate: Some(delegate),
+            ..RingSettings::new(mode)
+        });
+        let config = ring().require_config(&chain).await.unwrap();
+        let moving = |source: ShieldedAddress,
+                      key: &'_ spr_keypair::NullifierKey,
+                      inputs: Vec<WalletUtxo>| {
+            DelegateTransfer::new(DelegateTransferInput {
+                ring: ring(),
+                delegate,
+                payer: crate::tests::support::payer(),
+                source,
+                source_nullifier_key: key,
+                inputs,
+                outputs: vec![DelegateOutput {
+                    recipient: source,
+                    asset: Mint::SOL.asset,
+                    amount: 2,
+                }],
+            })
+            .with_assets(&assets)
+        };
+        let wallet_note = ring_utxo(&wallet, Mint::SOL, 10, 0);
+        let wallet_lead = moving(
+            wallet_address,
+            &wallet.nullifier_key,
+            vec![wallet_note.clone(), first.note(1)],
+        )
+        .with_co_source(CoOwner {
+            owner: pda(0x51),
+            nullifier_key: &first.keys.nullifier_key,
+        });
+        let pda_lead = moving(
+            first.address,
+            &first.keys.nullifier_key,
+            vec![first.note(1), wallet_note.clone()],
+        )
+        .with_co_source(CoOwner {
+            owner: wallet_owner,
+            nullifier_key: &wallet.nullifier_key,
+        });
+        let two_pdas = moving(
+            first.address,
+            &first.keys.nullifier_key,
+            vec![first.note(1), second.note(2)],
+        )
+        .with_co_source(CoOwner {
+            owner: pda(0x52),
+            nullifier_key: &second.keys.nullifier_key,
+        });
+        for transfer in [&wallet_lead, &pda_lead, &two_pdas] {
+            let staged = transfer.rail.stage(ring(), &chain, &config).await.unwrap();
+            assert!(staged.owner_signers.is_empty(), "{mode:?}");
+            assert_eq!(staged.authority.co_owners.len(), 1, "{mode:?}");
+        }
+        let unnamed = moving(
+            first.address,
+            &first.keys.nullifier_key,
+            vec![first.note(1), second.note(2)],
+        );
+        assert!(matches!(
+            unnamed.rail.stage(ring(), &chain, &config).await,
+            Err(RingError::MixedOwners { index: 1 })
+        ));
+    }
+}
+
+/// A zero-key balance funds a delegate move, a wallet's own selection still skips it.
+#[tokio::test]
+async fn a_delegate_move_selects_a_zero_key_balance_alone() {
+    use crate::tests::support::{keypair, zero_key};
+    let member = keypair(1);
+    let notes = vec![zero_key(ring_utxo(&member, Mint::SOL, 10, 0))];
+    let assets = AssetRegistry::default();
+    let delegate = Address::new_from_array([0x44; 32]);
+    let client = Chain::ring(RingSettings {
+        has_policy: true,
+        delegate: Some(delegate),
+        ..RingSettings::new(RingMode::Confidential)
+    })
+    .client();
+    let address = member.shielded_address().unwrap();
+    let transfer = DelegateMove {
+        ring: ring(),
+        delegate,
+        payer: crate::tests::support::payer(),
+        sources: vec![crate::DelegateSource {
+            address,
+            nullifier_key: &member.nullifier_key,
+            utxos: &notes,
+        }],
+        payments: vec![DelegatePayment {
+            recipient: address,
+            mint: Mint::SOL.asset,
+            amount: 4,
+        }],
+        assets: &assets,
+        wide_frames: WideFrames::Refuse,
+        tx_viewing_key: spr_keypair::ViewingKey::new(),
+    }
+    .select(&client)
+    .await
+    .unwrap();
+    let config = ring().require_config(client.zolana()).await.unwrap();
+    let staged = transfer
+        .rail
+        .stage(ring(), client.zolana(), &config)
+        .await
+        .unwrap();
+    assert_eq!(
+        staged.proof_inputs.input_utxos[0].nullifier(),
+        notes[0].nullifier
+    );
+    assert!(matches!(
+        crate::select_spend_where(&notes, Mint::SOL.asset, 4, 8, |_| true),
+        Err(TransactionError::NoSpendableBalance { .. })
+    ));
+}
+
+/// A public-funded transfer has no sender row, its payment still meets the rules before proving.
+#[tokio::test]
+async fn a_recipient_the_rules_refuse_fails_before_proving_with_no_sender_row() {
+    use crate::tests::support::{keypair, payer, Registry};
+    use zolana_ring_policy::{RuleRefusal, TransferSubject};
+    let funder = keypair(1);
+    let recipient = keypair(2);
+    let paying = |recipient: &ShieldedKeypair| {
+        let mut transaction = ring_transaction(Vec::new());
+        transaction.deposit_sol(5, payer()).unwrap();
+        transaction
+            .transfer_with_ring(
+                &recipient.shielded_address().unwrap(),
+                Mint::SOL,
+                5,
+                Some(ring().program_id()),
+            )
+            .unwrap();
+        owner_transfer(&funder, transaction).with_interface_transfer_accounts(vec![
+            TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts {
+                recipient: payer(),
+            }),
+        ])
+    };
+    let settings = RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    };
+    let listed = Chain::ring(settings)
+        .with_registry(
+            Registry::new(&[(&funder, 1), (&recipient, 1)]),
+            &crate::tests::pipeline_rules(),
+        )
+        .client();
+    assert!(!matches!(
+        paying(&recipient).assemble(&listed).await,
+        Err(RingError::PolicyRuleUnsatisfied(_))
+    ));
+    let delisted = Chain::ring(settings)
+        .with_registry(
+            Registry::new(&[(&funder, 1), (&recipient, 0)]),
+            &crate::tests::pipeline_rules(),
+        )
+        .client();
+    assert!(matches!(
+        paying(&recipient).assemble(&delisted).await,
+        Err(RingError::PolicyRuleUnsatisfied(RuleRefusal::Lists {
+            rule: 1,
+            subject: TransferSubject::Owner(_),
+        }))
+    ));
+}
+
+/// Each live input owns the slot its index names, past every payment and padded to the key.
+#[tokio::test]
+async fn a_policy_transfer_places_each_input_asset_past_every_payment() {
+    use crate::tests::support::{keypair, Registry};
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let settings = RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    };
+    let client = Chain::ring(settings)
+        .with_registry(
+            Registry::new(&[(&sender, 1), (&recipient, 1)]),
+            &crate::tests::pipeline_rules(),
+        )
+        .client();
+    let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
+    transaction
+        .transfer_with_ring(
+            &recipient.shielded_address().unwrap(),
+            Mint::SOL,
+            3,
+            Some(ring().program_id()),
+        )
+        .unwrap();
+    let assembled = owner_transfer(&sender, transaction)
+        .assemble(&client)
+        .await
+        .unwrap();
+    let frame = &assembled.frame;
+    let RingCircuit::Transfer {
+        outputs,
+        inputs,
+        withdrawals,
+        ..
+    } = frame.policy.circuit()
+    else {
+        panic!("a transfer key");
+    };
+    let zero = [[0; 32]; N_PUBLIC_SLOTS];
+    let params = frame
+        .policy
+        .params(&super::policy::PolicyProving {
+            ring_id: [0; 32],
+            public_assets: &zero,
+            public_amounts: &zero,
+            public_gross: &zero,
+        })
+        .unwrap();
+    let payments = usize::from(outputs) + usize::from(withdrawals);
+    assert_eq!(params.asset_entries.len(), payments + usize::from(inputs));
+    // The funding note's asset is the payment's, the two share one subject row.
+    assert_eq!(params.asset_entries[payments], params.asset_entries[0]);
 }
