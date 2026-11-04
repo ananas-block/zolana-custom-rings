@@ -87,6 +87,10 @@
       4
     ],
     [
+      1,
+      16
+    ],
+    [
       2,
       8
     ],
@@ -99,6 +103,10 @@
       4
     ],
     [
+      2,
+      16
+    ],
+    [
       3,
       8
     ],
@@ -123,6 +131,10 @@
       4
     ],
     [
+      4,
+      16
+    ],
+    [
       5,
       8
     ],
@@ -135,12 +147,24 @@
       4
     ],
     [
+      5,
+      16
+    ],
+    [
+      6,
+      8
+    ],
+    [
       8,
       2
     ],
     [
       8,
       4
+    ],
+    [
+      8,
+      8
     ],
     [
       12,
@@ -151,16 +175,28 @@
       4
     ],
     [
+      12,
+      8
+    ],
+    [
       16,
       2
     ],
     [
       16,
       4
+    ],
+    [
+      16,
+      8
     ],
     [
       24,
       2
+    ],
+    [
+      24,
+      4
     ]
   ],
   "confidential_ring": [
@@ -297,7 +333,7 @@
       4
     ]
   ],
-  "description": "Per ring rail, the SPP shapes a transfer key serves when every shape input is spent, each list in the cost order of SPP_SUPPORTED_SHAPES. confidential_ring is the signer and in-proof rails, anonymous_ring the anonymous rail over ring notes, anonymous_entry_ring the anonymous rail spending a default-ring note, ring_authority the RingAuthority rail. transfer_shapes lists every transfer key family, its input class and the withdrawal leg capacities keyed at each output count, mirrored by prover/circuits/transfer. Produced by program-libs/interface/tests/keyed_shapes.rs.",
+  "description": "Per ring rail, the SPP shapes a transfer key serves when every shape input is spent, each list in the cost order of SPP_SUPPORTED_SHAPES. confidential_ring is the signer and in-proof rails, anonymous_ring the anonymous rail over ring notes, anonymous_entry_ring the anonymous rail spending a default-ring note, ring_authority the RingAuthority rail. transfer_shapes lists every transfer key, mirrored by prover/circuits/transfer. Produced by program-libs/interface/tests/keyed_shapes.rs.",
   "ring_authority": [
     [
       2,
@@ -308,87 +344,55 @@
       4
     ]
   ],
-  "transfer_shapes": {
-    "anonymous": [
-      {
-        "inputs": 24,
-        "outputs": 2,
-        "withdrawals": [
-          4,
-          32
-        ]
-      },
-      {
-        "inputs": 16,
-        "outputs": 4,
-        "withdrawals": [
-          4,
-          32
-        ]
-      },
-      {
-        "inputs": 5,
-        "outputs": 8,
-        "withdrawals": [
-          24
-        ]
-      }
-    ],
-    "confidential": [
-      {
-        "inputs": 24,
-        "outputs": 2,
-        "withdrawals": [
-          4,
-          32
-        ]
-      },
-      {
-        "inputs": 24,
-        "outputs": 4,
-        "withdrawals": [
-          4,
-          32
-        ]
-      },
-      {
-        "inputs": 16,
-        "outputs": 8,
-        "withdrawals": [
-          4,
-          32
-        ]
-      },
-      {
-        "inputs": 5,
-        "outputs": 16,
-        "withdrawals": [
-          8
-        ]
-      }
-    ],
-    "entry": [
-      {
-        "inputs": 8,
-        "outputs": 2,
-        "withdrawals": [
-          4
-        ]
-      },
-      {
-        "inputs": 8,
-        "outputs": 4,
-        "withdrawals": [
-          4
-        ]
-      },
-      {
-        "inputs": 2,
-        "outputs": 8,
-        "withdrawals": [
-          4
-        ]
-      }
-    ]
-  }
+  "transfer_shapes": [
+    {
+      "entry": false,
+      "inputs": 24,
+      "outputs": 2,
+      "owners": 4,
+      "withdrawals": 4
+    },
+    {
+      "entry": false,
+      "inputs": 24,
+      "outputs": 4,
+      "owners": 4,
+      "withdrawals": 4
+    },
+    {
+      "entry": false,
+      "inputs": 16,
+      "outputs": 8,
+      "owners": 4,
+      "withdrawals": 4
+    },
+    {
+      "entry": false,
+      "inputs": 5,
+      "outputs": 16,
+      "owners": 5,
+      "withdrawals": 8
+    },
+    {
+      "entry": false,
+      "inputs": 24,
+      "outputs": 8,
+      "owners": 24,
+      "withdrawals": 32
+    },
+    {
+      "entry": true,
+      "inputs": 8,
+      "outputs": 4,
+      "owners": 8,
+      "withdrawals": 4
+    },
+    {
+      "entry": true,
+      "inputs": 2,
+      "outputs": 8,
+      "owners": 2,
+      "withdrawals": 4
+    }
+  ]
 }

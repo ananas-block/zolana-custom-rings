@@ -112,7 +112,7 @@ fn compute_vectors() -> ExpansionVectors {
                       without has_data. Under reply metadata a u16 reply_len and reply_len bytes \
                       per body-bearing slot follow the slots. The anonymous frame's scheme 12 \
                       bundle follows as a 32-byte tag and 80 + 32 m bytes, then eph_u, the envelope, \
-                      m records of 112 bytes and under has_data m tails of 64 bytes, the lengths \
+                      m records of 105 bytes and under has_data m tails of 64 bytes, the lengths \
                       those of ring-disclosure-ranges-v4.json. The auditor message is 0x04 || eph_u \
                       || envelope || records || tails. Recipient bodies forward as scheme 13, \
                       u16le(body_len) || body || reply. Produced by \
@@ -567,6 +567,7 @@ fn counts_outside_the_keyed_shapes_are_refused() {
     );
     let mut wide = fixture.anonymous().encode().unwrap();
     wide[1] = shape_index(2, 16) | (wide[1] & !0b0011_1111);
+    wide[OUTPUT_COUNT_BYTE] |= output_flag::WIDE_OWNERS;
     assert_eq!(
         RingTransactData::parse(&wide, RingRail::Anonymous),
         Err(CustomRingError::RingShapeUnkeyed)
@@ -1053,14 +1054,14 @@ fn every_rail_reads_its_audit_stream() {
         (fixture.confidential_data(), key(24, false), 2, 2, true),
         (fixture.delegate(), key(24, false), 2, 2, false),
         (fixture.anonymous_delegate(), key(24, false), 2, 2, false),
-        (fixture.anonymous(), key(16, false), 3, 4, false),
+        (fixture.anonymous(), key(24, false), 3, 4, false),
         (fixture.anonymous_entry(), key(8, true), 2, 2, false),
     ] {
         let expected = AuditStreamLayout {
             key,
             inputs,
             outputs,
-            capacity: outputs,
+            capacity: if key.entry { 4 } else { outputs },
             has_data,
         };
         assert_eq!(data.audit_stream(), Ok(expected), "{key:?}");
@@ -1169,13 +1170,12 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
     assert_eq!(proof.bsb22_commitment.commitment, fixture.bytes[20]);
     assert_eq!(
         data.transfer_circuit(1),
-        Ok(RingCircuit::TransferConfidential {
+        Ok(RingCircuit::Transfer {
             outputs: 4,
             inputs: 24,
             withdrawals: 4,
             owners: 4,
-            data: false,
-            private: 0,
+            entry: false,
         })
     );
     assert_eq!(

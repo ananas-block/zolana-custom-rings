@@ -120,7 +120,7 @@ func (w ownersWorld) build(t testing.TB) *ownersCircuit {
 			}
 		}
 	}
-	ringpolicy.FillTracking(t, &c.Tracking, tree, c.Members, outputOwners, nil)
+	ringpolicy.FillTracking(t, &c.Tracking, tree, c.Members, outputOwners, nil, nil)
 	c.Delegate, c.Hidden, c.HiddenOwner = ringtest.Bit(w.delegate), ringtest.Bit(w.hidden), 0
 	if w.hiddenOwner != nil {
 		c.HiddenOwner = w.hiddenOwner

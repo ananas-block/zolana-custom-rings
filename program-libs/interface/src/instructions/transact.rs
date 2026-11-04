@@ -24,17 +24,14 @@ use wincode::{containers, len::FixIntLen, Serialize};
 use crate::{
     anonymous_exit::ANONYMOUS_PARTIES,
     audit_stream::{
-        sender_bundle_len, AuditKey, AuditStreamLayout, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
-        MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
+        sender_bundle_len, AuditStreamLayout, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MIN_REPLY_LEN,
+        RECIPIENT_BODY_LEN,
     },
     bytes::Bytes,
     cosign::ApprovalMask,
     disclosure::AuditLayout,
     error::CustomRingError,
-    key_catalog::{
-        RingCircuit, TransferShape, TransferSpend, ANONYMOUS_TRANSFER_SHAPES,
-        CONFIDENTIAL_TRANSFER_SHAPES, ENTRY_TRANSFER_SHAPES,
-    },
+    key_catalog::{FrameKey, RecordPools, RingCircuit, TransferShape, TransferSpend},
     output::{
         encode_confidential_output, encode_ring_body_output, encode_ring_sender_bundle_output,
         CONFIDENTIAL_DATA_FREE_BODY_LEN,
@@ -195,8 +192,8 @@ impl RingRail {
         }
     }
 
-    /// The audit key the header names, before the outputs are read.
-    fn audit_key(self, header: &FrameHeader) -> Result<AuditKey, CustomRingError> {
+    /// The key the header names, before the outputs are read.
+    fn key_shape(self, header: &FrameHeader) -> Result<TransferShape, CustomRingError> {
         let supported = self
             .spp_rail(header.flags.public_owners)
             .supports(Shape::new(
@@ -204,18 +201,15 @@ impl RingRail {
                 usize::from(header.n_out),
             ));
         let (n_out, inputs) = (usize::from(header.n_out), usize::from(header.input_count));
-        let shapes = match (header.flags.entry, self.anonymous_frame()) {
-            (true, _) => &ENTRY_TRANSFER_SHAPES[..],
-            (false, true) => &ANONYMOUS_TRANSFER_SHAPES[..],
-            (false, false) => &CONFIDENTIAL_TRANSFER_SHAPES[..],
-        };
-        let key = TransferShape::of(shapes, n_out)
-            .filter(|shape| supported && inputs <= usize::from(shape.inputs))
-            .map(|shape| AuditKey {
-                class: usize::from(shape.inputs),
-                entry: header.flags.entry,
-            })
-            .ok_or(CustomRingError::RingShapeUnkeyed)?;
+        let key = FrameKey {
+            rail: self,
+            outputs: n_out,
+            spends_default_ring: header.flags.entry,
+            wide: header.flags.wide_owners,
+        }
+        .shape()
+        .filter(|shape| supported && inputs <= usize::from(shape.inputs))
+        .ok_or(CustomRingError::RingShapeUnkeyed)?;
         if inputs == 0 || inputs > usize::from(header.n_in) {
             return Err(CustomRingError::RingTransactLength);
         }
@@ -704,7 +698,7 @@ impl<'a> RingTransactData<'a> {
         flags.check(rail)?;
         let header = FrameHeader::read(&mut bytes, rail)?;
         let input_count = header.input_count;
-        let key = rail.audit_key(&header)?;
+        let shape = rail.key_shape(&header)?;
         let output_count = usize::from(header.output_count);
         let approval = ApprovalMask::new(bytes.byte()?).ok_or(CustomRingError::FlagNotAllowed)?;
         let proof = bytes.pod()?;
@@ -741,10 +735,10 @@ impl<'a> RingTransactData<'a> {
             return Err(CustomRingError::InvalidChangeBits);
         }
         let stream = AuditStreamLayout {
-            key,
+            key: shape.audit_key(),
             inputs: usize::from(input_count),
             outputs: output_count,
-            capacity: usize::from(header.n_out),
+            capacity: usize::from(shape.outputs),
             has_data: header.flags.has_data,
         };
         let mut outputs = Vec::with_capacity(output_count);
@@ -880,11 +874,16 @@ impl<'a> RingTransactData<'a> {
 
     /// The bytes `parse` reads back, refusing what it refuses.
     pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
+        self.encode_under(self.rail.key_shape(&FrameHeader::of(self)?)?)
+    }
+
+    /// For catalog sizing, `parse` refuses a `shape` off the catalog.
+    pub fn encode_under(&self, shape: TransferShape) -> Result<Vec<u8>, CustomRingError> {
         let flags = self.flags();
         flags.check(self.rail)?;
         let header = FrameHeader::of(self)?;
         check_extensions(&self.extensions, self.rail)?;
-        let stream = self.audit_stream()?;
+        let stream = self.stream_under(shape);
         let anonymous_frame = self.rail.anonymous_frame();
         let hidden_owner_proof = self.rail == RingRail::Anonymous && !self.public_owners;
         let output_count = usize::from(header.output_count);
@@ -1115,21 +1114,16 @@ impl<'a> RingTransactData<'a> {
     }
 
     pub fn transfer_circuit(&self, legs: usize) -> Result<RingCircuit, CustomRingError> {
-        let shapes = TransferShape::family(self.rail, self.entry);
-        let rows = shapes
-            .and_then(|shapes| TransferShape::of(shapes, usize::from(self.n_out)))
-            .map(|shape| shape.owners[usize::from(self.wide_owners)])
-            .filter(|rows| *rows != 0)
-            .ok_or(CustomRingError::RingShapeUnkeyed)?;
+        // The proof holds the live owners to the key's rows, the frame names only the key.
         RingCircuit::transfer(TransferSpend {
             rail: self.rail,
             inputs: self.nullifiers.len(),
             outputs: usize::from(self.n_out),
             spends_default_ring: self.entry,
             legs,
-            owners: usize::from(rows),
-            has_data: self.has_data,
-            private_source: false,
+            owners: 0,
+            pools: RecordPools::default(),
+            wide: self.wide_owners,
         })
         .ok_or(CustomRingError::RingShapeUnkeyed)
     }
@@ -1205,14 +1199,18 @@ impl<'a> RingTransactData<'a> {
 
     /// Every ciphertext length of the transfer, refusing a frame no key serves.
     pub fn audit_stream(&self) -> Result<AuditStreamLayout, CustomRingError> {
-        let key = self.rail.audit_key(&FrameHeader::of(self)?)?;
-        Ok(AuditStreamLayout {
-            key,
+        let shape = self.rail.key_shape(&FrameHeader::of(self)?)?;
+        Ok(self.stream_under(shape))
+    }
+
+    pub fn stream_under(&self, shape: TransferShape) -> AuditStreamLayout {
+        AuditStreamLayout {
+            key: shape.audit_key(),
             inputs: self.nullifiers.len(),
             outputs: self.outputs.len(),
-            capacity: usize::from(self.n_out),
+            capacity: usize::from(shape.outputs),
             has_data: self.has_data,
-        })
+        }
     }
 
     fn recipient_body_count(&self) -> usize {

@@ -1,13 +1,13 @@
 {
-  "description": "Known-answer vector for the ring merge record and statement, one case per key mode. record = kind 1, 7 zero bytes, u64be(amount), owner_key, mint, be32(nullifier_pk), be32(seed), 144 bytes. ciphertext seals the record from eph to auditor under the audit stream schedule of label CRING/mrg2 at counter 2. output_blinding = Poseidon(TMOB, seed, first_nullifier). elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(ciphertext), payer, published_owner, tracking_root, public_input_hash = hash_chain(elements). published_owner is zero off ZERO_NULLIFIER_PUBKEY and the owner identity under it. request is the prover body. Produced by prover/ring/merge_test.go with WRITE_AUDIT_VECTORS=1.",
+  "description": "Known-answer vector for the ring merge record and statement, one case per key mode. record = kind 1, u64be(amount), owner_key, mint, be32(nullifier_pk), 7 zero bytes, be32(seed), 144 bytes. ciphertext seals the record from eph to auditor under the audit stream schedule of label CRING/mrg2 at counter 2. output_blinding = Poseidon(TMOB, seed, first_nullifier). elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(ciphertext), payer, published_owner, tracking_root, public_input_hash = hash_chain(elements). published_owner is zero off ZERO_NULLIFIER_PUBKEY and the owner identity under it. request is the prover body. Produced by prover/ring/merge_test.go with WRITE_AUDIT_VECTORS=1.",
   "auditor_sk": "0x01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c",
   "auditor_pk": "0x04708c2645c705baaf44f2ab947574174f9280df58be6fc2f6f2e8881b78a3115a",
   "eph_pk": "0x048ea960e4e1b72cdec9a6e7d86ae28cd04edb4b5c07266d3c32d9133c8ebaa966",
   "cases": [
     {
       "name": "nonzero",
-      "record": "0x0100000000000000000000000000000ca0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf1a87c4a79842bccba95c572c2ebf630f1c8fc1c7713d38fa19eece6c2dd399590000000000000000000000000000000000000000000000000000000000000013",
-      "ciphertext": "0x7fee3d83498ba0da3ac6b27707281a32202528e1fdc8517d3024c7d6ad6a2351b32ad708c5d6422adecc47d871f0d9e3a457606c382ace41a767d916f04f5107537991999e52b29d469790c019955c39d0299fa0bdb4f942fd287b05064d20669bc0fc79537477d6491ebe2ab187d65881444c9b82b066ebe69b54e740c277d294ad3ff47cdc5014b3d93be885aaea94",
+      "record": "0x01000000000000000ca0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf1a87c4a79842bccba95c572c2ebf630f1c8fc1c7713d38fa19eece6c2dd39959000000000000000000000000000000000000000000000000000000000000000000000000000013",
+      "ciphertext": "0x7fee3d83498ba0da366613d5a48cbf98272c23e8f2c15a74373ddccfb2733848b423dc01cadf4923d9b53ca10e89a29aa35e6b653723c548a07ec20fef564a1e54709a90915bb9944154cddf62d0c05a0107075009d8faea5b68a3e8ef837e517d56d3704e649cb509f070469c544f0181444c9b82b066ebe69b54e740c277d294ad3ff47cdc5014b3d93be885aaea94",
       "output_blinding": "0x0152cf2f2cc1359537826953793533933e347cfacd1a337ee9b02769705bd1af",
       "elements": [
         "0x0000000000000000000000000000000000000000000000000000000043524d47",
@@ -18,15 +18,15 @@
         "0x000000000000000000000000000000000000000000000000000000000000115a",
         "0x00048ea960e4e1b72cdec9a6e7d86ae28cd04edb4b5c07266d3c32d9133c8eba",
         "0x000000000000000000000000000000000000000000000000000000000000a966",
-        "0x1d122490ccbfe4a33a1556dfeebf14bc967759646da4a78804181858f5328326",
+        "0x1014764a1c83fd5bd550d1316df22c598859339aae66f63a04efb85c7282ea6b",
         "0x000000000000000000000000000000000000000000000000000000000000000b",
         "0x0000000000000000000000000000000000000000000000000000000000000000",
         "0x2e6322248634f0cbedb04f8fd384c03980947e9ebfcc221037e17de366cc56b0"
       ],
-      "public_input_hash": "0x0ab26cee7d9c312a408b5c8b33300a66ac9877d63ace4b2b63a07a17f8a3738e",
+      "public_input_hash": "0x04cb844c7ebd67df3edbe1d7e38b2b266319b8da0dd68ead8f8130e0428ceb52",
       "request": {
         "circuitType": "custom-ring-merge-v4",
-        "publicInputHash": "0x0ab26cee7d9c312a408b5c8b33300a66ac9877d63ace4b2b63a07a17f8a3738e",
+        "publicInputHash": "0x04cb844c7ebd67df3edbe1d7e38b2b266319b8da0dd68ead8f8130e0428ceb52",
         "outputUtxoHash": "0x0cceb13e6999b0683e3cce639c864b34a56450a50236b575999afa3d37b695ed",
         "firstNullifier": "0x0000000000000000000000000000000000000000000000000000000000001f1f",
         "ringProgramId": "0x0000000000000000000000000000000000000000000000000000000000005a0e",
@@ -133,8 +133,8 @@
     },
     {
       "name": "zero",
-      "record": "0x0100000000000000000000000000000ca0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c0000000000000000000000000000000000000000000000000000000000005eed",
-      "ciphertext": "0x7fee3d83498ba0da3ac6b27707281a32202528e1fdc8517d3024c7d6ad6a2351b32ad708c5d6422adecc47d871f0d9e3a457606c382ace41a767d916f04f5107537991999e52b29d469790c019955c39e0a7f2fab633d54b3fe5c3d29abbdc6e6fb897acc0fddb266a1d54575731ae1d81444c9b82b066ebe69b54e740c277d294ad3ff47cdc5014b3d93be885aab46a",
+      "record": "0x01000000000000000ca0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c000000000000000000000000000000000000000000000000000000000000000000000000005eed",
+      "ciphertext": "0x7fee3d83498ba0da366613d5a48cbf98272c23e8f2c15a74373ddccfb2733848b423dc01cadf4923d9b53ca10e89a29aa35e6b653723c548a07ec20fef564a1e54709a90915bb994416443b238db477608c5cae8de440c16539cdb833a10f7fd8d75d09a33822acd4cf070469c544f0181444c9b82b066ebe69b54e740c277d294ad3ff47cdc5014b3d93be885aab46a",
       "output_blinding": "0x1274a427abaf4c08596c0e9f5ab1255f6e4bbf2a01a1e2b785fe75a74ed0839e",
       "elements": [
         "0x0000000000000000000000000000000000000000000000000000000043524d47",
@@ -145,15 +145,15 @@
         "0x000000000000000000000000000000000000000000000000000000000000115a",
         "0x00048ea960e4e1b72cdec9a6e7d86ae28cd04edb4b5c07266d3c32d9133c8eba",
         "0x000000000000000000000000000000000000000000000000000000000000a966",
-        "0x1f9e6e0d6d8a5bb9a6951cc3b0b170f50eaf0aa3891b573985c894fc7880cfe0",
+        "0x0565c025cc26345b65ed99c1f5a845eb299a6f83ec84d510412039b77f018251",
         "0x000000000000000000000000000000000000000000000000000000000000000b",
         "0x1607397956b8140836d961eede8613bb033eeff2ed88ee423f06d9a68732da54",
         "0x0000000000000000000000000000000000000000000000000000000000000000"
       ],
-      "public_input_hash": "0x074b9502ca83ecd77257470968a09fa1c4c91cea0e0e42a87ef7e9393d436ecc",
+      "public_input_hash": "0x1f22552449045f208bec7bebdc9bc10660a9776a8e57aac0cc90e4ff2440eda5",
       "request": {
         "circuitType": "custom-ring-merge-v4",
-        "publicInputHash": "0x074b9502ca83ecd77257470968a09fa1c4c91cea0e0e42a87ef7e9393d436ecc",
+        "publicInputHash": "0x1f22552449045f208bec7bebdc9bc10660a9776a8e57aac0cc90e4ff2440eda5",
         "outputUtxoHash": "0x0a51206279b98a1884642375f9cc784c435066fd46b91fe11817960cab1cb8b4",
         "firstNullifier": "0x0000000000000000000000000000000000000000000000000000000000001f1f",
         "ringProgramId": "0x0000000000000000000000000000000000000000000000000000000000005a0e",

@@ -30,10 +30,10 @@ func (s Slot) Wires() audit.OutputWires {
 	return w
 }
 
-// Record mirrors audit.RecordOpening.Encode, all zero on a dummy.
+// Record mirrors audit.RecordOpening.Encode with its padding, all zero on a dummy.
 func (s Slot) Record(t testing.TB) []byte {
 	t.Helper()
-	record := make([]byte, audit.RecordLen)
+	record := make([]byte, audit.RecordStride)
 	if !s.Utxo.isUtxo() {
 		return record
 	}
@@ -41,11 +41,11 @@ func (s Slot) Record(t testing.TB) []byte {
 	if s.Utxo.isExit() {
 		record[0] = audit.KindExit
 	}
-	binary.BigEndian.PutUint64(record[8:16], s.Utxo.Amount)
-	copy(record[16:48], s.OwnerKey[:])
-	copy(record[48:80], s.Mint[:])
+	binary.BigEndian.PutUint64(record[1:9], s.Utxo.Amount)
+	copy(record[9:41], s.OwnerKey[:])
+	copy(record[41:73], s.Mint[:])
 	nullifierPk := spptest.MustFieldBytes(t, s.Utxo.NullifierPk)
-	copy(record[80:112], nullifierPk[:])
+	copy(record[73:audit.RecordLen], nullifierPk[:])
 	return record
 }
 

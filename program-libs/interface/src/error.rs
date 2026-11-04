@@ -1,9 +1,7 @@
 use solana_program_error::ProgramError;
 use spr_hasher::HasherError;
 use thiserror::Error;
-use zolana_ring_policy::{
-    AssetLimitsError, PolicyTableError, PrivateSourceError, RuleTableError, SourceMapError,
-};
+use zolana_ring_policy::{AssetLimitsError, PolicyTableError, RuleTableError, SourceMapError};
 
 macro_rules! ring_errors {
     ($($variant:ident = $code:literal => $message:literal,)*) => {
@@ -163,23 +161,6 @@ ring_errors! {
     InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
     TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a salted source's floor",
     SaltedSourceOtherTracking = 8504 => "a salted source pins no tracking registry or another one",
-    InvalidFrameBuffer = 8520 => "frame buffer account is invalid",
-    FrameBufferExists = 8521 => "frame buffer already exists",
-    FrameBufferAddress = 8522 => "frame buffer is not at its writer and nonce address",
-    FrameLength = 8523 => "frame length is zero or exceeds one account create",
-    UnauthorizedFrameWriter = 8524 => "the signer is not the frame buffer writer",
-    FrameBufferSealed = 8525 => "a sealed frame buffer takes no write",
-    FrameBufferNotSealed = 8526 => "the frame buffer is not sealed",
-    FrameDigestMismatch = 8527 => "the frame does not match the digest",
-    FrameBufferExpired = 8528 => "the frame buffer reached its expiry",
-    UnauthorizedFrameCloser = 8529 => "only the writer closes a frame buffer before expiry",
-    FrameRentPayer = 8530 => "the rent account is not the buffer's rent payer",
-    FrameBufferMismatch = 8531 => "the buffer account is not the buffer the settlement names",
-    UnsupportedBufferedTag = 8532 => "the tag does not settle from a buffer",
-    FrameTagMismatch = 8533 => "the frame opens with another tag than the settlement names",
-    FrameWriteOutOfRange = 8534 => "the write falls outside the frame",
-    InvalidFrameEvent = 8535 => "the frame event needs the ring PDA as signer inside a settlement",
-    FramePartyNotPayer = 8536 => "an anonymous settlement needs the payer as writer and rent payer",
 }
 
 impl From<CustomRingError> for ProgramError {
@@ -223,12 +204,6 @@ impl From<crate::PublicSlotError> for CustomRingError {
             crate::PublicSlotError::AmountOverflow { .. } => Self::PublicAmountOverflow,
             crate::PublicSlotError::ZeroNet { .. } => Self::ZeroNetPublicAmount,
         }
-    }
-}
-
-impl From<PrivateSourceError> for CustomRingError {
-    fn from(_: PrivateSourceError) -> Self {
-        Self::InvalidSource
     }
 }
 

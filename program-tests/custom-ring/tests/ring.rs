@@ -34,6 +34,9 @@ mod sanity;
 #[path = "ring/sanity_deposits.rs"]
 mod sanity_deposits;
 
+#[path = "ring/forester_stall.rs"]
+mod forester_stall;
+
 #[path = "ring/sanity_mixed_owners.rs"]
 mod sanity_mixed_owners;
 
