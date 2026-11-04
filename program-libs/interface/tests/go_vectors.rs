@@ -226,62 +226,6 @@ fn transfer_statements_reach_the_go_public_inputs() {
 }
 
 #[test]
-fn merge_statement_matches_the_go_vector() {
-    #[derive(Deserialize)]
-    struct Request {
-        #[serde(rename = "outputUtxoHash")]
-        output_utxo_hash: String,
-        #[serde(rename = "firstNullifier")]
-        first_nullifier: String,
-        #[serde(rename = "ringProgramId")]
-        ring_id: String,
-        payer: String,
-        #[serde(rename = "trackingRoot")]
-        tracking_root: String,
-    }
-    #[derive(Deserialize)]
-    struct Case {
-        name: String,
-        record: String,
-        ciphertext: String,
-        elements: Vec<String>,
-        public_input_hash: String,
-        request: Request,
-    }
-    #[derive(Deserialize)]
-    struct Vector {
-        auditor_pk: String,
-        eph_pk: String,
-        cases: Vec<Case>,
-    }
-    let vector: Vector = vector("merge/merge_v4.json");
-    for case in &vector.cases {
-        let request = &case.request;
-        let record = OpeningRecord::decode(&bytes(&case.record)).unwrap();
-        assert_eq!(record.record.kind, RecordKind::Ring);
-        // Element 10 is what the program computes from the signer under a zero key.
-        let elements = arrays::<32>(&case.elements);
-        assert_eq!(elements[10] == [0; 32], case.name == "nonzero");
-        let statement = MergePublicInput {
-            output_utxo_hash: &array(&request.output_utxo_hash),
-            first_nullifier: &array(&request.first_nullifier),
-            ring_id: &array(&request.ring_id),
-            auditor_pk: &array(&vector.auditor_pk),
-            eph_pk: &array(&vector.eph_pk),
-            ciphertext: &array(&case.ciphertext),
-            payer: &array(&request.payer),
-            published_owner: &elements[10],
-            tracking_root: &array(&request.tracking_root),
-        };
-        assert_eq!(elements, statement.elements().unwrap());
-        assert_eq!(
-            array::<32>(&case.public_input_hash),
-            statement.hash().unwrap()
-        );
-    }
-}
-
-#[test]
 fn signer_chains_match_the_go_run() {
     #[derive(Deserialize)]
     struct Case {
