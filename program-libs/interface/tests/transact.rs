@@ -583,7 +583,8 @@ fn counts_outside_the_keyed_shapes_are_refused() {
         Err(CustomRingError::RingTransactLength)
     );
     let mut wide = fixture.anonymous().encode().unwrap();
-    wide[1] = shape_index(2, 16) | (wide[1] & !0b0011_1111);
+    wide[1] = shape_index(8, 16) | (wide[1] & !0b0011_1111);
+    wide[2] = wide[2] & !0b0011_1111 | 6;
     wide[OUTPUT_COUNT_BYTE] |= output_flag::WIDE_OWNERS;
     assert_eq!(
         RingTransactData::parse(&wide, RingRail::Anonymous),
@@ -1198,6 +1199,7 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
             withdrawals: 4,
             owners: 4,
             entry: false,
+            wide: false,
         })
     );
     assert_eq!(

@@ -562,6 +562,7 @@ impl MergeRelay {
             intent: RelayIntent::Merge {
                 proof_inputs: ProofInputBytes::new(proof_inputs),
             },
+            co_signers: Vec::new(),
         }))
     }
 }

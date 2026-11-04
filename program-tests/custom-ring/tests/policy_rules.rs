@@ -55,6 +55,7 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
         tier: Tier::policy(&RELEASED),
     }
     .send(&env.client)?;
+    custom_ring_test_validator::policy::enroll_actors(&env, ring)?;
     let pinned = policy_registry(ring, &env)?;
     assert_eq!(
         pinned.rule_table()?,
@@ -68,6 +69,12 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
     let sender_member = owner_member(sender)?;
     let blocked = ShieldedKeypair::new_ed25519()?;
     env.fund(blocked.pubkey(), ACTOR_AIRDROP)?;
+    custom_ring_test_validator::policy::EnrollOwners {
+        ring,
+        owners: &[&blocked],
+        env: &env,
+    }
+    .send()?;
     let blocked_member = owner_member(&blocked)?;
     let egress = Egress {
         ring,
@@ -171,7 +178,7 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
         .iter()
         .filter_map(|output| match &output.opening {
             OutputOpening::Ring { utxo, .. } => Some((output.slot_index, utxo.owner_key)),
-            OutputOpening::Exit(_) | OutputOpening::Dummy | OutputOpening::EscrowPending(_) => None,
+            OutputOpening::Exit(_) | OutputOpening::Dummy => None,
         })
         .collect();
     assert_eq!(owners.len(), 2, "change and recipient stay in the ring");

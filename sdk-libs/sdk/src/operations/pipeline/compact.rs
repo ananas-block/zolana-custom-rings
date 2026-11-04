@@ -252,7 +252,7 @@ pub(crate) struct TransactAccounts {
     /// Only the confidential rail names owner signers.
     pub owner_signers: Vec<Address>,
     pub interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
-    pub co_signer: Option<Address>,
+    pub co_signers: Vec<Address>,
     pub delegate: Option<Address>,
 }
 
@@ -306,9 +306,9 @@ impl TransactAccounts {
                 .map(|registry| AccountMeta::new_readonly(registry, false)),
         );
         accounts.extend(
-            self.co_signer
-                .into_iter()
-                .flat_map(|co_signer| ring.co_signer_metas(co_signer)),
+            self.co_signers
+                .iter()
+                .flat_map(|co_signer| ring.co_signer_metas(*co_signer)),
         );
         accounts.extend(
             self.delegate

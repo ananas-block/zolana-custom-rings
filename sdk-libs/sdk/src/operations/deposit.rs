@@ -304,6 +304,7 @@ impl RingDeposit<'_> {
             intent: RelayIntent::Deposit {
                 proof_inputs: ProofInputBytes::new(proof_inputs),
             },
+            co_signers: Vec::new(),
         })
         .expecting(ExpectedMessage::Deposit(expected)))
     }
@@ -822,10 +823,12 @@ impl DepositAssembly<'_> {
             ring,
             config,
             demand: CoSignDemand::DEPOSIT,
-            supplied: co_signer,
+            supplied: co_signer.into_iter().collect(),
         }
         .resolve(rpc)
-        .await?;
+        .await?
+        .into_iter()
+        .next();
         let address = note.address;
         Ok(PreparedRingDeposit {
             priority_fee: None,

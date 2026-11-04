@@ -26,6 +26,7 @@ import {
 } from "@heliuslabs/zolana/keypair";
 
 import { checkedCounter, RingKeyError } from "../error.js";
+import { ringIdField } from "../derivation/ring-stream.js";
 import { listSaltOf } from "./list-salt.js";
 
 const addressDecoder = getAddressDecoder();
@@ -81,7 +82,7 @@ export class RingAddress {
     const recipient = await holder.shieldedAddress();
     const key = await holder.nullifierKey();
     try {
-      return new RingAddress({ recipient, ringProgramId, listSalt: listSaltOf(key) });
+      return new RingAddress({ recipient, ringProgramId, listSalt: listSaltOf(key, ringIdField(ringProgramId)) });
     } finally {
       key.destroy();
     }

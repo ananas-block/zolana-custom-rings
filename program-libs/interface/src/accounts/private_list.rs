@@ -44,8 +44,8 @@ impl ListSalt {
     pub const UNENROLLED: Self = Self([0; 32]);
 
     /// One way, a disclosed salt reveals no nullifier secret.
-    pub fn derive(nullifier_secret: &[u8; 32]) -> Result<Self, HasherError> {
-        domain::list_salt(nullifier_secret).map(Self)
+    pub fn derive(nullifier_secret: &[u8; 32], ring_id: &[u8; 32]) -> Result<Self, HasherError> {
+        domain::list_salt(nullifier_secret, ring_id).map(Self)
     }
 
     pub fn tag(&self) -> Result<ListTag, HasherError> {

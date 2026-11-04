@@ -16,7 +16,7 @@ fn shapes() -> Value {
     TRANSFER_SHAPES
         .iter()
         .map(|shape| {
-            json!({"outputs": shape.outputs, "inputs": shape.inputs, "withdrawals": shape.withdrawals, "owners": shape.owners, "entry": shape.entry})
+            json!({"outputs": shape.outputs, "inputs": shape.inputs, "withdrawals": shape.withdrawals, "owners": shape.owners, "entry": shape.entry, "wide": shape.wide})
         })
         .collect()
 }

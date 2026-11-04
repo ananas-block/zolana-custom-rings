@@ -138,9 +138,9 @@ func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) fronten
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
 }
 
-// ListSalt is Poseidon(CRPS, nullifierSecret), one way, a holder learns the owner's private list position and never the secret.
-func ListSalt(api frontend.API, nullifierSecret frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{ListSaltDomain, nullifierSecret})
+// ListSalt is Poseidon(CRPS, nullifierSecret, ringID), a holder learns the owner's private list position in one ring and never the secret.
+func ListSalt(api frontend.API, nullifierSecret, ringID frontend.Variable) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{ListSaltDomain, nullifierSecret, ringID})
 }
 
 // ListTag is Poseidon(CRPT, listSalt), the tracking leaf's commitment to the owner's one salt.
@@ -154,7 +154,7 @@ func ListKey(api frontend.API, owner, listSalt frontend.Variable) frontend.Varia
 }
 
 // AnonymousParties is mirrored by ANONYMOUS_PARTIES.
-const AnonymousParties = 3
+const AnonymousParties = 7
 
 // AssertAnonymousParties separates the hidden owner from the public identities
 // reconstructed by the verifier. Zero denotes an absent optional party.

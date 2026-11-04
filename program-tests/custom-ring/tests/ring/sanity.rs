@@ -1,8 +1,8 @@
 use super::*;
-use custom_ring_interface::{
-    mint_policy_write, storage_instruction::StorageWriteData, RecordWriteData, WriteRecordsIxData,
+use custom_ring_interface::{mint_policy_write, RecordWriteData, WriteRecordsIxData};
+use custom_ring_test_validator::{
+    policy::ApplyOwnerEnrollments, shared::STORAGE_CPI_OWNER_PROGRAM,
 };
-use custom_ring_test_validator::shared::STORAGE_CPI_OWNER_PROGRAM;
 use zolana_ring_policy::{ListChange, ListSet};
 
 #[test]
@@ -20,7 +20,7 @@ fn every_apply_capacity_settles_and_refuses_an_altered_root() -> Result<()> {
         let writes = (0..count)
             .map(|_| {
                 let owner = ShieldedKeypair::new_ed25519()?;
-                Ok(StorageWriteData::Record(RecordWriteData {
+                Ok(RecordWriteData {
                     member: *owner_member(&owner)?.as_bytes(),
                     lists: WriteRecordsIxData::new(
                         ListChange {
@@ -30,7 +30,7 @@ fn every_apply_capacity_settles_and_refuses_an_altered_root() -> Result<()> {
                         .check()?,
                     ),
                     mint_policy: mint_policy_write(None),
-                }))
+                })
             })
             .collect::<Result<Vec<_>>>()?;
         StorageRecords {
@@ -44,12 +44,11 @@ fn every_apply_capacity_settles_and_refuses_an_altered_root() -> Result<()> {
 }
 
 #[test]
-fn a_pda_enrolls_and_applies_its_address_on_the_validator() -> Result<()> {
-    use custom_ring_interface::{
-        storage::AddressAuthorization, storage_instruction::AddressWriteData, STORAGE_PROGRAM_ID,
-    };
-    use custom_ring_sdk::{address_enrollment, EnrollAddress, InitializeStorage};
+fn a_pda_enrolls_and_applies_its_key_on_the_validator() -> Result<()> {
+    use custom_ring_interface::STORAGE_PROGRAM_ID;
+    use custom_ring_sdk::Enroll;
     use solana_instruction::AccountMeta;
+    use spr_keypair::{NullifierKey, ViewingKey};
     let env = setup()?;
     let ring = CustomRing::new(custom_ring_program_id()?);
     RegisterRing {
@@ -59,44 +58,40 @@ fn a_pda_enrolls_and_applies_its_address_on_the_validator() -> Result<()> {
         tier: Tier::policy(&EMPTY),
     }
     .send(&env.client)?;
-    let registry = InitializeStorage::records(ring, env.payer.pubkey()).registry();
     let owner = Address::find_program_address(&[b"owner"], &STORAGE_CPI_OWNER_PROGRAM).0;
-    let viewing_u = X25519Keypair::new().pubkey().u();
-    let mut instruction = EnrollAddress {
-        payer: env.payer.pubkey(),
-        owner,
-        registry,
-        nullifier_pk: ZERO_NULLIFIER_PUBKEY,
-        viewing_u,
-    }
-    .instruction();
+    let viewing_key = ViewingKey::new();
+    let mut instruction = env.run(
+        Enroll {
+            ring,
+            payer: env.payer.pubkey(),
+            owner,
+            nullifier_key: &NullifierKey::from_secret([7; 31]),
+            viewing_key: &viewing_key,
+        }
+        .prove(env.client.ring_client()),
+    )?;
     instruction.program_id = STORAGE_CPI_OWNER_PROGRAM;
     instruction.accounts[1].is_signer = false;
     instruction
         .accounts
         .push(AccountMeta::new_readonly(STORAGE_PROGRAM_ID, false));
     send(env.client.rpc(), &env.payer, &[instruction])?;
-    let enrolled = env.run(address_enrollment(env.client.as_async(), registry, owner))?;
-    ensure!(enrolled.viewing_u.0 == viewing_u && enrolled.address_revision == 1);
-    StorageRecords {
+    let enrolled = owner_enrollment(&env, ring, owner)?.context("the PDA's enrollment")?;
+    ensure!(enrolled.viewing_u == viewing_key.pubkey().u() && enrolled.revision() == 1);
+    ApplyOwnerEnrollments {
         ring,
-        writes: vec![StorageWriteData::Address(AddressWriteData {
-            owner,
-            address_revision: enrolled.address_revision.to_le_bytes(),
-        })],
+        owners: &[owner],
         env: &env,
     }
     .send()?;
-    let account: AddressAuthorization = fetch_state(
-        env.client.rpc(),
-        &AddressAuthorization::find_address(&registry, &owner).0,
-    )?;
-    ensure!(account.applied_revision() == 1);
+    let applied = owner_enrollment(&env, ring, owner)?.context("the PDA's enrollment")?;
+    ensure!(applied.applied_revision() == 1);
     Ok(())
 }
 
 #[test]
-fn zero_key_payments_settle_for_registered_and_unregistered_owners() -> Result<()> {
+fn a_zero_key_payment_settles_for_an_unregistered_owner_and_refuses_a_registered_one() -> Result<()>
+{
     let env = setup()?;
     let ring_program = custom_ring_program_id()?;
     let ring = CustomRing::new(ring_program);
@@ -110,19 +105,16 @@ fn zero_key_payments_settle_for_registered_and_unregistered_owners() -> Result<(
     .send(&env.client)?;
     let sender = &env.sender.keypair;
     let delegate = env.funded_keypair()?;
-    EscrowedDelegate {
+    EnrolledDelegate {
         ring,
         delegate: &delegate,
         members: &[sender],
     }
     .set(&env)?;
-    for recipient in [
-        sender.shielded_address()?,
-        env.recipient.keypair.shielded_address()?,
-    ] {
+    let at_zero = |owner: &ShieldedKeypair| -> Result<_> {
         let recipient = ShieldedAddress {
             nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
-            ..recipient
+            ..owner.shielded_address()?
         };
         let input = RingNotes {
             ring,
@@ -143,29 +135,41 @@ fn zero_key_payments_settle_for_registered_and_unregistered_owners() -> Result<(
             ConfidentialTransaction::new_with_ring(vec![input], sender.pubkey(), ring_program)?
                 .with_output_tree_id(env.tree_id(env.tree)?)?;
         prepared.transfer_sol(&recipient, 1)?;
-        let receipt = OwnerTransfer {
-            ring,
-            sender,
-            prepared,
-            interface_transfer_accounts: Vec::new(),
-            auditor_tag: auditor_view_tag(&auditor.pubkey()),
-            cosigner: None,
-        }
-        .send(&env)?;
-        let audited = AuditLookup {
-            ring: ring_program,
-            scan: RingScan::new(ring_program, auditor.pubkey())
-                .with_mode(RingMode::ConfidentialEscrow),
-            auditor: &auditor,
-            signature: receipt.signature,
-        }
-        .run(&env)?;
-        ensure!(audited
-            .outputs
-            .iter()
-            .filter_map(|output| output.opening.utxo())
-            .any(|output| output.amount == 1 && output.nullifier_pk == ZERO_NULLIFIER_PUBKEY));
+        Ok(prepared)
+    };
+    let refused = CustomRingTransfer::new(CustomRingTransferInput {
+        ring,
+        sender,
+        nullifier_key: Some(&sender.nullifier_key),
+        transaction: at_zero(sender)?,
+    });
+    assert!(
+        matches!(
+            env.run(refused.prove(env.client.ring_client())),
+            Err(RingError::EnrolledRecipientAtZeroKey { .. })
+        ),
+        "a registered owner takes its enrolled key"
+    );
+    let receipt = OwnerTransfer {
+        ring,
+        sender,
+        prepared: at_zero(&env.recipient.keypair)?,
+        interface_transfer_accounts: Vec::new(),
+        auditor_tag: auditor_view_tag(&auditor.pubkey()),
+        cosigner: None,
     }
+    .send(&env)?;
+    let audited = AuditLookup {
+        scan: RingScan::new(ring_program, auditor.pubkey()).with_mode(RingMode::Confidential),
+        auditor: &auditor,
+        signature: receipt.signature,
+    }
+    .run(&env)?;
+    ensure!(audited
+        .outputs
+        .iter()
+        .filter_map(|output| output.opening.utxo())
+        .any(|output| output.amount == 1 && output.nullifier_pk == ZERO_NULLIFIER_PUBKEY));
     Ok(())
 }
 
@@ -187,7 +191,7 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
     .send(&env.client)?;
     let sender = &env.sender.keypair;
     let recipient = &env.recipient.keypair;
-    EnrollAddresses {
+    EnrollOwners {
         ring,
         owners: &[sender, recipient],
         env: &env,
@@ -212,10 +216,8 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
     let original_keys = RotatingRingKeys::new(recipient)?;
     let mut rotated = recipient.clone();
     rotated.viewing_key = ViewingKey::new();
-    let original_address = env
-        .member_record(ring, owner_member(recipient)?)?
-        .address
-        .context("recipient address before rotation")?;
+    let original_address = owner_enrollment(&env, ring, recipient.pubkey())?
+        .context("recipient enrollment before rotation")?;
     assert_ne!(rotated.viewing_pubkey(), recipient.viewing_pubkey());
     assert_eq!(rotated.pubkey(), recipient.pubkey());
     assert_eq!(
@@ -224,28 +226,17 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
     );
     for (index, (input, destination)) in inputs.into_iter().zip([recipient, &rotated]).enumerate() {
         if index == 1 {
-            EnrollAddresses {
+            EnrollOwners {
                 ring,
                 owners: &[&rotated],
                 env: &env,
             }
             .send()?;
-            let updated = wait_for("the rotated recipient address", || {
-                Ok(match env.member_record(ring, owner_member(recipient)?) {
-                    Ok(read) => match read.address {
-                        Some(address) if address.viewing_u == rotated.viewing_pubkey().u() => {
-                            Probe::Ready(address)
-                        }
-                        _ => Probe::NotYet,
-                    },
-                    Err(error) => Probe::Retry(error),
-                })
-            })?;
+            let updated = owner_enrollment(&env, ring, recipient.pubkey())?
+                .context("the rotated recipient enrollment")?;
+            assert_eq!(updated.viewing_u, rotated.viewing_pubkey().u());
             assert_eq!(updated.nullifier_pk, original_address.nullifier_pk);
-            assert_eq!(
-                updated.address_revision,
-                original_address.address_revision + 1
-            );
+            assert_eq!(updated.revision(), original_address.revision() + 1);
             let history = wallet
                 .history()
                 .clone()
@@ -324,6 +315,7 @@ fn compact_output_suffix_settles_under_a_larger_key() -> Result<()> {
         tier: Tier::AuditOnly,
     }
     .send(&env.client)?;
+    enroll_actors(&env, ring)?;
     let sender = &env.sender.keypair;
     let note = RingNotes {
         ring,

@@ -4,6 +4,7 @@ use custom_ring_interface::{
     ring_deposit_assets, settlement_mints, tag, DepositPrefix, InstructionTag, ParsedTransact,
     RingRail, RingTransactData, RING_DEPOSIT_RING_CONFIG_INDEX, RING_TRANSACT_RING_CONFIG_INDEX,
 };
+use custom_ring_sdk::CustomRing;
 use solana_address::Address;
 use solana_message::VersionedMessage;
 use spr_hasher::primitives::hash_bytes;
@@ -72,7 +73,11 @@ const fn scope() -> RingRpcError {
 impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
     pub async fn flows(self) -> Result<FrameRead, RingRpcError> {
         let frame = RingFrame::of(self.message, self.ring)?;
-        self.read(frame).await
+        let co_signers = frame.co_signers(self.ring);
+        Ok(match self.read(frame).await? {
+            FrameRead::Transfer(read) => FrameRead::Transfer(TransferRead { co_signers, ..read }),
+            FrameRead::Delegate => FrameRead::Delegate,
+        })
     }
 
     async fn read(&self, frame: RingFrame<'_>) -> Result<FrameRead, RingRpcError> {
@@ -180,6 +185,16 @@ impl<'m> RingFrame<'m> {
         })
     }
 
+    /// `[record, signer]` pairs in account order.
+    fn co_signers(&self, ring: Address) -> Vec<Address> {
+        let ring = CustomRing::new(ring);
+        self.accounts
+            .windows(2)
+            .filter(|pair| pair[0] == ring.co_signer_pda(&pair[1]))
+            .map(|pair| pair[1])
+            .collect()
+    }
+
     /// The ring's signed config opens SPP's list past the ring's own accounts.
     fn spp_accounts(&self, ring: Address) -> Result<&[Address], RingRpcError> {
         let ring_auth = pda::ring_auth(&ring).0;
@@ -245,6 +260,7 @@ fn deposit_read(
         flows,
         spends_note: false,
         approval_bits: None,
+        co_signers: Vec::new(),
     })
 }
 
@@ -402,6 +418,7 @@ impl FrameFlows<'_> {
             .rows(|asset| self.mint_of(asset))?,
             spends_note: !inputs.is_empty(),
             approval_bits: Some(approval_bits),
+            co_signers: Vec::new(),
         })
     }
 

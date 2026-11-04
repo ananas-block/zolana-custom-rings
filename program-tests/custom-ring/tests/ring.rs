@@ -74,15 +74,15 @@ use custom_ring_interface::{
 use custom_ring_sdk::{
     compute_unit_limit, AnonymousTransfer, CoSignScope, CustomRing, CustomRingMerge,
     CustomRingTransfer, CustomRingTransferInput, DelegateOutput, DelegateTransfer,
-    DelegateTransferInput, DepositRecipient, InstructionTag, KeyRegistration, MergeProofInput,
-    ProvenRingTransfer, RingClient, RingDeposit, RingDepositReceipt, RingError, RingMergeOperation,
-    RingOperation, RingRegistration,
+    DelegateTransferInput, DepositRecipient, InstructionTag, MergeProofInput, ProvenRingTransfer,
+    RingClient, RingDeposit, RingDepositReceipt, RingError, RingMergeOperation, RingOperation,
+    RingRegistration,
 };
 use custom_ring_test_validator::{
     cli::{merged, RingProject, RingToml},
     policy::{
-        owner_member, policy_registry, EnrollAddresses, RegistryWrite, RingNotes, StorageRecords,
-        EMPTY, LIMIT_CAP, LIMIT_COSIGN_ABOVE,
+        enroll_actors, owner_enrollment, owner_member, policy_registry, EnrollOwners,
+        RegistryWrite, RingNotes, StorageRecords, EMPTY, LIMIT_CAP, LIMIT_COSIGN_ABOVE,
     },
     ring_rpc::RingRpcSpec,
     ring_wallet::RingWallet,
@@ -113,7 +113,7 @@ use spr_interface::{
     },
     SHIELDED_POOL_PROGRAM_ID, ZERO_NULLIFIER_PUBKEY,
 };
-use spr_keypair::{random_blinding, ShieldedAddress, ShieldedKeypair, X25519Keypair};
+use spr_keypair::{random_blinding, ShieldedAddress, ShieldedKeypair, X25519Keypair, X25519Pubkey};
 use spr_program::instruction::{
     AssetDeposit, Deposit as SppDeposit, DepositAsset, DepositSplAccounts,
     TransactInterfaceTransferAccounts, TransactSplWithdrawalAccounts, UpdateRingConfig,
@@ -138,8 +138,9 @@ use spr_tree::TreeAccount;
 use spr_user_registry_interface::user_registry_program_id;
 use zolana_ring_client::{
     auditor_view_tag,
-    rpc::{write_auditor_key, CreateAuditorKeyRequest, RecordUpdateEntry},
-    AuditedTransaction, OutputOpening, RingRecovery, RingScan, SourceMember, ViewingHistory,
+    rpc::{write_auditor_key, CreateAuditorKeyRequest},
+    AuditedTransaction, InputOpening, KnownUtxo, OutputOpening, RingRecovery, RingScan,
+    SealedNullifierKey, SourceMember, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
@@ -238,6 +239,12 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         "{empty_text}"
     );
     let sender = project.demo_sender()?;
+    EnrollOwners {
+        ring,
+        owners: &[&sender],
+        env: &env,
+    }
+    .send()?;
     let mut history = ViewingHistory::new(sender.viewing_pubkey(), 0);
 
     for &amount in amounts {
@@ -325,16 +332,20 @@ const FROZEN_SENDERS: RuleTable = RuleTable::builder()
     .rule(Rule::forbid(Subject::Sender, ListId::Frozen))
     .build();
 
-/// Registers every member in the pinned registry before the delegate turns key escrow on.
-struct EscrowedDelegate<'a> {
+struct EnrolledDelegate<'a> {
     ring: CustomRing,
     delegate: &'a Keypair,
     members: &'a [&'a ShieldedKeypair],
 }
 
-impl EscrowedDelegate<'_> {
+impl EnrolledDelegate<'_> {
     fn set(self, env: &TestEnv) -> Result<()> {
-        register_keys(env, self.ring, self.members)?;
+        EnrollOwners {
+            ring: self.ring,
+            owners: self.members,
+            env,
+        }
+        .send()?;
         DelegateAppointment {
             ring: self.ring,
             delegate: self.delegate,
@@ -392,26 +403,6 @@ fn land<'a>(
         signers,
     }
     .settle(&env.client)
-}
-
-/// Every member's escrow write in one update.
-fn register_keys(env: &TestEnv, ring: CustomRing, members: &[&ShieldedKeypair]) -> Result<()> {
-    let writes = members
-        .iter()
-        .map(|member| {
-            let registration = env.run(
-                KeyRegistration {
-                    ring,
-                    member: member.shielded_address()?,
-                    authority: &member.nullifier_key,
-                }
-                .prove(env.client.ring_client()),
-            )?;
-            Ok(RecordUpdateEntry::Escrow(registration).write(&member.pubkey())?)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    StorageRecords { ring, writes, env }.send()?;
-    Ok(())
 }
 
 fn frame(instruction: &Instruction, rail: RingRail) -> Result<RingTransactData<'_>> {
@@ -522,7 +513,7 @@ fn opened(audited: &AuditedTransaction) -> Vec<Opened> {
             let (utxo, exit) = match &output.opening {
                 OutputOpening::Ring { utxo, .. } => (utxo, false),
                 OutputOpening::Exit(utxo) => (utxo, true),
-                OutputOpening::Dummy | OutputOpening::EscrowPending(_) => return None,
+                OutputOpening::Dummy => return None,
             };
             Some(Opened {
                 slot_index: output.slot_index,
@@ -636,7 +627,7 @@ impl OwnerTransfer<'_> {
         };
         let proven = env.run(transfer.prove(env.client.ring_client()))?;
         assert_eq!(
-            proven.co_signer,
+            proven.co_signers.first().copied(),
             self.cosigner.map(|cosigner| cosigner.pubkey()),
             "the proven transfer carries the demanded co-signer"
         );
@@ -757,7 +748,6 @@ impl AsyncHopParity<'_> {
 }
 
 struct AuditLookup<'a> {
-    ring: Address,
     scan: RingScan,
     auditor: &'a X25519Keypair,
     signature: Signature,
@@ -767,35 +757,72 @@ impl AuditLookup<'_> {
     fn run(self, env: &TestEnv) -> Result<AuditedTransaction> {
         custom_ring_cli::wait_for_indexed_transaction(&env.client, self.signature)?;
         let client = env.client.as_async();
+        env.client
+            .block_on(self.scan.audit(
+                self.auditor,
+                client.indexer(),
+                client.rpc(),
+                &env.ring_assets()?,
+            ))?
+            .transactions
+            .into_iter()
+            .find(|tx| tx.tx_signature == self.signature)
+            .ok_or_else(|| anyhow!("transaction {} audited", self.signature))
+    }
+}
+
+struct AuditedSpends<'a> {
+    ring: CustomRing,
+    auditor: &'a X25519Keypair,
+    owners: &'a [Address],
+    audited: &'a AuditedTransaction,
+}
+
+impl AuditedSpends<'_> {
+    /// A nullifier of none of `owners` fails.
+    fn notes(self, env: &TestEnv) -> Result<Vec<KnownUtxo>> {
+        let client = env.client.as_async();
         let created = env.client.block_on(
-            zolana_ring_client::CreatedUtxoScan::new(self.ring, self.auditor)
+            zolana_ring_client::CreatedUtxoScan::new(self.ring.program_id(), self.auditor)
                 .run(client.indexer(), client.rpc()),
         )?;
         ensure!(
             created.next_cursor.is_none(),
             "created-note history is incomplete"
         );
-        env.client
-            .block_on(
-                self.scan
-                    .with_known_utxos(
-                        created
-                            .utxos
-                            .into_iter()
-                            .map(|note| (note.commitment, note.utxo))
-                            .collect(),
-                    )
-                    .audit(
-                        self.auditor,
-                        client.indexer(),
-                        client.rpc(),
-                        &env.ring_assets()?,
-                    ),
-            )?
-            .transactions
-            .into_iter()
-            .find(|tx| tx.tx_signature == self.signature)
-            .ok_or_else(|| anyhow!("transaction {} audited", self.signature))
+        let keys = self
+            .owners
+            .iter()
+            .map(|owner| {
+                let enrolled = owner_enrollment(env, self.ring, *owner)?
+                    .context("the owner holds an enrollment")?;
+                Ok(SealedNullifierKey {
+                    eph_pk: X25519Pubkey::from_u(enrolled.eph_u)?,
+                    ciphertext: enrolled.ciphertext,
+                }
+                .open(self.auditor)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut spent = HashMap::new();
+        for note in &created.utxos {
+            for key in &keys {
+                spent.insert(
+                    key.nullifier(&note.commitment, &note.utxo.blinding)?,
+                    note.utxo,
+                );
+            }
+        }
+        self.audited
+            .inputs
+            .iter()
+            .filter(|input| matches!(input.opening, InputOpening::Real))
+            .map(|input| {
+                spent
+                    .get(&input.nullifier)
+                    .copied()
+                    .context("the auditor names every spent input")
+            })
+            .collect()
     }
 }
 

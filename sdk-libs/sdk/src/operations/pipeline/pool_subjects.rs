@@ -143,11 +143,12 @@ impl KnownSalts {
         mut self,
         authority: &TransferAuthority,
         sender: [u8; 32],
+        ring_id: &[u8; 32],
     ) -> Result<Self, RingError> {
         let derive = |member: [u8; 32], key: &NullifierKey| -> Result<_, RingError> {
             Ok(SubjectListSalt {
                 member,
-                list_salt: list_salt(key)?,
+                list_salt: list_salt(key, ring_id)?,
             })
         };
         self.0.extend(

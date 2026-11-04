@@ -376,7 +376,7 @@ describe("proveEnrollment", () => {
     });
     expect(proof).toEqual(PROOF);
     expect(seal.nullifierPk).toEqual(holder.nullifierPublicKey());
-    expect(seal.listTag).toEqual(listTagOf(listSaltOf(holder.nullifierKey())));
+    expect(seal.listTag).toEqual(listTagOf(listSaltOf(holder.nullifierKey(), ringId)));
     const [request] = seen;
     if (request === undefined) throw new Error("no proof asked");
     expect(request.ringId).toEqual(ringId);
@@ -440,11 +440,12 @@ describe("list salt vector", () => {
   ) as { tracking: Record<string, string> };
 
   it("derives the list salt and tag the Go circuit proves", () => {
-    const { nullifier_secret: secret, list_salt: salt, secret_list_tag: tag } = vector.tracking;
-    if (secret === undefined || salt === undefined || tag === undefined)
+    const { nullifier_secret: secret, salt_ring_id: ring, list_salt: salt, secret_list_tag: tag } = vector.tracking;
+    if (secret === undefined || ring === undefined || salt === undefined || tag === undefined)
       throw new Error("no vector");
     const key = NullifierKey.fromSecret(hexToBytes(secret).subarray(1) as never);
-    const derivedSalt = listSaltOf(key);
+    const derivedSalt = listSaltOf(key, hexToBytes(ring) as Bytes32);
+    expect(listSaltOf(key, new Uint8Array(32).fill(0x0d) as Bytes32)).not.toEqual(derivedSalt);
     expect(Buffer.from(derivedSalt).toString("hex")).toBe(salt);
     expect(Buffer.from(listTagOf(derivedSalt)).toString("hex")).toBe(tag);
   });

@@ -251,6 +251,7 @@ fn enrollment_under(
                 inputs.encode().expect("encode"),
             )),
         },
+        co_signers: Vec::new(),
     }
 }
 
@@ -397,6 +398,7 @@ async fn a_merge_relays_with_one_wallet_call() {
         intent: RelayIntent::Merge {
             proof_inputs: ProofInputBytes::new(merge.encode().expect("encode")),
         },
+        co_signers: Vec::new(),
     };
 
     let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;

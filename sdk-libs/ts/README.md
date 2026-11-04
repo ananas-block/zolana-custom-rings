@@ -88,7 +88,7 @@ it chooses. `createRingTransferSubmission`, `createRingExitSubmission`,
 `send` takes the transport of `createKitRingSubmissionTransport`. A rejected
 proof whose root left its registry proves again under the live root. A spend
 with `inProofOwner` signs inside the proof, spends ring notes only, and only
-the fee payer and a demanded co-signer sign the transaction. Without it each
+the fee payer and each demanded co-signer sign the transaction. Without it each
 input owner signs. A withdrawal creates its recipient's missing associated
 token account in the same transaction. On an anonymous Ring a spend
 takes `anonymous`, the hidden owner's signer and an explicit `reply`. The fee
@@ -105,9 +105,9 @@ To refuse owners on a public list and on a private list, write one deny rule per
 list. One rule over both admits a publicly blocked owner with no private entry.
 
 A `RingAddress` carries the owner's `listSalt`, and the salt is final. A wallet
-holds one salt on every Ring because it holds one nullifier secret. Every reader
-of a published address can compute the owner's private list key on every Ring
-and read its list status there, so publish an address only where that disclosure
+holds one salt per Ring, derived from its nullifier secret and the ring id. Every
+reader of a published address can compute the owner's private list key on that
+Ring and read its list status there, so publish an address only where that disclosure
 is acceptable.
 
 On a ring reading a salted list, a relayed transfer or deposit gives Ring RPC the

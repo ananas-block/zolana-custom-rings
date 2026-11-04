@@ -2,10 +2,10 @@
 
 use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
 use custom_ring_interface::{
-    CustomRingMergeIxData, CustomRingMergeIxDataRef, InitializeIxData, PolicyBindingIxData,
-    PolicySourceIxData, RingRole, RingRoles, SealedMergeRecord, SetCoSignerRecordIxData,
-    SetPausedIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData, OPENING_RECORD_LEN,
-    RING_MERGE_OWNER_INDEX,
+    tracking::TrackingRegistry, CustomRingMergeIxData, CustomRingMergeIxDataRef, InitializeIxData,
+    PolicyBindingIxData, PolicySourceIxData, RingRole, RingRoles, SealedMergeRecord,
+    SetCoSignerRecordIxData, SetPausedIxData, SourceSpec, UpdateAuthorityIxData,
+    UpdatePolicyIxData, OPENING_RECORD_LEN, RING_MERGE_OWNER_INDEX, STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::{
     tag, ClearCoSigner, CoSignScope, CustomRing, CustomRingMergeInstruction, InitialPolicy,
@@ -106,6 +106,8 @@ fn parse<'a, T: SchemaRead<'a, DefaultConfig, Dst = T>>(body: &'a [u8]) -> T {
 #[test]
 fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with_a_policy() {
     let auditor_pubkey = X25519Keypair::from_bytes(&[5; 32]).pubkey();
+    let tracking_registry =
+        TrackingRegistry::find_address(&ring_auth(), &ring().ring_id().unwrap()).0;
     let accounts = vec![
         AccountMeta::new(payer(), true),
         AccountMeta::new_readonly(authority(), true),
@@ -116,6 +118,8 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with
         AccountMeta::new_readonly(pda::protocol_config(), false),
         AccountMeta::new(ring_auth(), false),
         AccountMeta::new_readonly(pda::shielded_pool_program_id(), false),
+        AccountMeta::new(tracking_registry, false),
+        AccountMeta::new_readonly(STORAGE_PROGRAM_ID, false),
     ];
     let initialize = |kind, policy| {
         Initialize {

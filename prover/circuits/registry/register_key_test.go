@@ -42,7 +42,7 @@ type keyFields struct {
 
 func listTagOf(t *testing.T, secret []byte) *big.Int {
 	t.Helper()
-	return ringregistry.ListTag(t, ringregistry.ListSalt(t, new(big.Int).SetBytes(secret)))
+	return ringregistry.ListTag(t, ringregistry.ListSalt(t, new(big.Int).SetBytes(secret), keyRing))
 }
 
 // keyStatement is the CRRG statement of an honest witness, the honest solve holds it to the circuit's order.
@@ -96,6 +96,10 @@ func TestRegisterKeyRefusals(t *testing.T) {
 		{"a list tag from another secret", func(t *testing.T, c *registry.RegisterKeyCircuit) {
 			other := ringtest.Scalar(0x09)
 			c.PublicInputHash = keyStatement(t, keyFields{keyRing, keyMember, nullifierPk(t), listTagOf(t, other[1:])}, sealedHonest(t))
+		}, statement},
+		{"a list tag from another ring", func(t *testing.T, c *registry.RegisterKeyCircuit) {
+			other := ringregistry.ListTag(t, ringregistry.ListSalt(t, new(big.Int).SetBytes(secret[1:]), big.NewInt(0x5a10)))
+			c.PublicInputHash = keyStatement(t, keyFields{keyRing, keyMember, nullifierPk(t), other}, sealedHonest(t))
 		}, statement},
 		{"another member's statement", func(t *testing.T, c *registry.RegisterKeyCircuit) {
 			c.PublicInputHash = keyStatement(t, keyFields{keyRing, big.NewInt(0x0b), nullifierPk(t), listTagOf(t, secret[1:])}, sealedHonest(t))

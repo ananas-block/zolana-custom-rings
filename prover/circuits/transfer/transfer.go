@@ -22,6 +22,8 @@ import (
 type Shape struct {
 	Inputs, Outputs, Withdrawals, Owners int
 	Entry                                bool
+	// Wide fits a salted and a public record per owner.
+	Wide bool
 }
 
 // Shapes mirrors TRANSFER_SHAPES in program-libs/interface/src/proof/key_catalog.rs.
@@ -30,15 +32,19 @@ var Shapes = [...]Shape{
 	{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4},
 	{Inputs: 16, Outputs: 8, Withdrawals: 4, Owners: 4},
 	{Inputs: 5, Outputs: 16, Withdrawals: 8, Owners: 5},
-	{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24},
-	{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true},
-	{Inputs: 2, Outputs: 8, Withdrawals: 4, Owners: 2, Entry: true},
+	{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24, Wide: true},
+	{Inputs: 5, Outputs: 16, Withdrawals: 8, Owners: 5, Wide: true},
+	{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true, Wide: true},
+	{Inputs: 2, Outputs: 8, Withdrawals: 4, Owners: 2, Entry: true, Wide: true},
 }
 
 func (s Shape) String() string {
 	family := "transfer"
-	if s.Entry {
+	switch {
+	case s.Entry:
 		family = "transfer_entry"
+	case s.Wide:
+		family = "transfer_wide"
 	}
 	return fmt.Sprintf("custom_ring_%s_%d_in%d_w%d_s%d", family, s.Outputs, s.Inputs, s.Withdrawals, s.Owners)
 }
@@ -91,16 +97,8 @@ type Sections struct {
 	policy.Policy
 }
 
-const (
-	// narrowWithdrawals is the leg capacity of the narrow keys, a transaction past their pools moves to the wide key.
-	narrowWithdrawals = 4
-	// ownerAddresses mirrors OWNER_ADDRESSES in key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
-	ownerAddresses = 64 - 4 - 6
-)
-
-func (s Shape) narrow() bool {
-	return s.Withdrawals <= narrowWithdrawals && !s.Entry
-}
+// ownerAddresses mirrors OWNER_ADDRESSES in key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
+const ownerAddresses = 64 - 4 - 6
 
 // publicOwners is the distinct signers and legs one transaction can name, each signer also takes a nullifier PDA.
 func (s Shape) publicOwners() int {
@@ -108,7 +106,7 @@ func (s Shape) publicOwners() int {
 }
 
 func (s Shape) trackedWithdrawals() int {
-	if s.narrow() {
+	if !s.Wide {
 		return 0
 	}
 	return s.publicOwners() - s.Owners
@@ -116,7 +114,7 @@ func (s Shape) trackedWithdrawals() int {
 
 // saltedKeys fits a public and a salted record per distinct owner in one pool.
 func (s Shape) saltedKeys() int {
-	if s.narrow() {
+	if !s.Wide {
 		return 0
 	}
 	return 2*s.publicOwners() + s.Outputs - s.Owners - s.Withdrawals

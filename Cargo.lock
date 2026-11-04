@@ -1622,6 +1622,7 @@ dependencies = [
  "solana-system-interface 3.2.0",
  "spr-client",
  "spr-hasher",
+ "spr-indexer-api",
  "spr-interface",
  "spr-keypair",
  "spr-program",
@@ -1637,6 +1638,7 @@ dependencies = [
  "zolana-ring-client",
  "zolana-ring-indexer",
  "zolana-ring-keys",
+ "zolana-ring-member-registry",
  "zolana-ring-policy",
  "zolana-ring-rpc",
  "zolana-ring-transaction",
@@ -9202,6 +9204,7 @@ dependencies = [
  "spr-transaction",
  "thiserror 2.0.20",
  "zeroize",
+ "zolana-ring-policy",
 ]
 
 [[package]]

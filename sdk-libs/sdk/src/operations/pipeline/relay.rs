@@ -109,6 +109,13 @@ impl<R: Rail> WalletRelay<'_, R> {
             ring: SerializablePubkey(self.transfer.ring.program_id()),
             quote,
             intent,
+            co_signers: self
+                .transfer
+                .co_signers
+                .iter()
+                .copied()
+                .map(SerializablePubkey)
+                .collect(),
         }))
     }
 }

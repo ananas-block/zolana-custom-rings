@@ -12,10 +12,14 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 )
 
-// ListSaltOf is the fixture owner's list salt, one per owner.
+func ListSaltIn(t testing.TB, owner, ringID *big.Int) *big.Int {
+	t.Helper()
+	return ringregistry.ListSalt(t, new(big.Int).Add(owner, big.NewInt(4)), ringID)
+}
+
 func ListSaltOf(t testing.TB, owner *big.Int) *big.Int {
 	t.Helper()
-	return ringregistry.ListSalt(t, new(big.Int).Add(owner, big.NewInt(4)))
+	return ListSaltIn(t, owner, big.NewInt(ringID))
 }
 
 // Enroll applies owner's leaf, the fields no owner predicate reads derive from it.

@@ -1245,6 +1245,7 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
             withdrawals: 4,
             owners: 4,
             entry: false,
+            wide: false,
         }
     );
     let built = serde_json::to_value(
@@ -1300,6 +1301,7 @@ async fn the_in_proof_owner_request_publishes_the_sender_of_every_spent_note() {
             withdrawals: 4,
             owners: 4,
             entry: false,
+            wide: false,
         }
     );
     let built = serde_json::to_value(
@@ -2418,7 +2420,7 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
     let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES
         .into_iter()
-        .filter(|shape| !shape.entry && shape.withdrawals != 32);
+        .filter(|shape| !shape.entry && !shape.wide);
     for family in narrow {
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {
@@ -3070,7 +3072,7 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
 
 /// A record of one class covers nothing.
 #[tokio::test]
-async fn the_one_co_signer_record_holds_every_demanded_class() {
+async fn a_second_co_signer_covers_what_the_first_record_leaves() {
     use crate::co_signer::CoSignerChoice;
     use custom_ring_interface::{
         cosign::{ApprovalMask, CoSignOperation},
@@ -3095,18 +3097,18 @@ async fn the_one_co_signer_record_holds_every_demanded_class() {
             ring: ring(),
             config: &config,
             demand,
-            supplied: Some(signer),
+            supplied: vec![signer],
         }
         .resolve(&chain)
         .await
     };
     assert_eq!(
         resolve(chain(CoSignScope::APPROVALS)).await.unwrap(),
-        Some(signer)
+        vec![signer]
     );
     assert!(matches!(
         resolve(chain(CoSignScope::APPROVE_OUTFLOW)).await,
-        Err(RingError::Program(CustomRingError::CoSignerOutOfScope))
+        Err(RingError::Program(CustomRingError::MissingCoSigner))
     ));
 }
 
@@ -3159,7 +3161,7 @@ async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
     let past_threshold = withdrawing(101).with_co_signer(approver);
     let above = past_threshold.frame(&configured).await.ok().unwrap().frame;
     assert_eq!(above.parts.approval, ApprovalMask::WITHDRAWAL);
-    assert_eq!(above.accounts.co_signer, Some(approver));
+    assert_eq!(above.accounts.co_signers, vec![approver]);
 }
 
 fn delegate_transfer<'a>(
