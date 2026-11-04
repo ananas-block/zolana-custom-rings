@@ -47,7 +47,7 @@
    
       **Cases:**
    
-         Apply the configured sender and recipient allowlisting to each case, regardless of which instruction handles it.
+   Apply the configured sender and recipient allowlisting to each case, regardless of which instruction handles it.
    4. **Transfer within the ring:** Check spent UTXO owners and receiving UTXO owners.
    5. **Deposit:** Check receiving ring UTXO owners.
    6. **Withdrawal:** Check spent UTXO owners and public withdrawal recipients.
@@ -67,7 +67,7 @@
    
       **Cases:**
    
-         Apply the configured sender and recipient restrictions to each case.
+   Apply the configured sender and recipient restrictions to each case.
    5. **Transfer within the ring:** Check spent UTXO owners and receiving UTXO owners.
    6. **Deposit:** Check receiving ring UTXO owners.
    7. **Withdrawal:** Check spent UTXO owners and public withdrawal recipients.
