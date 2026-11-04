@@ -199,7 +199,7 @@ export interface TransferProofRequest extends TransferProofInputs {
   readonly delegate: boolean;
   /** The in-proof owner, zero on every other rail. */
   readonly sender: Bytes32;
-  /** Payer, co-signer and exit destination, zero when absent. */
+  /** Payer, each co-signer and exit destination, zero when absent. */
   readonly partyIdentities: readonly Bytes32[];
 }
 
