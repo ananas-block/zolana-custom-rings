@@ -1,7 +1,11 @@
 //! A wallet relays a sealed transfer, deposit or merge, Ring RPC proves, pays and sends it.
 
+#[path = "relay_service/attempts.rs"]
+mod attempts;
 #[path = "common/relay.rs"]
 mod relay_fixture;
+#[path = "common/wide_frame.rs"]
+mod wide_frame;
 
 use std::sync::{atomic::Ordering, Arc};
 
@@ -31,6 +35,8 @@ use zolana_ring_rpc::{
     relay_module, Relay, RelayBudget, RelayError, RelayParts, RingRpcError, ServedRings, Store,
     ABANDONED_AFTER_SLOTS,
 };
+
+use wide_frame::wide_frame;
 
 use relay_fixture::{
     anonymous_rail, deposit_request, proof_inputs, signed_request, signers_verify, RecordingChain,
@@ -428,16 +434,9 @@ async fn an_unsigned_enrollment_consumes_nothing_and_a_retry_is_charged_once() {
     );
     assert_eq!(fixture.outstanding().await, 0);
 
-    let signed = enrollment(&owner, vec![6, 1], quote.clone());
+    let signed = enrollment(&owner, vec![6, 1], quote);
     assert!(fixture.prepare(&signed).await.is_ok());
-    // A fresh quote is a new relay of the same enrollment.
-    let fresh = RelayQuote {
-        valid_until_slot: quote.valid_until_slot - 1,
-        ..quote
-    };
-    let retried = fixture
-        .prepare(&enrollment(&owner, vec![6, 1], fresh))
-        .await;
+    let retried = fixture.prepare(&signed).await;
     assert!(retried.is_ok(), "{retried:?}");
     assert_eq!(fixture.outstanding().await, ENROLLMENT_LAMPORTS as i64);
 }
@@ -553,8 +552,7 @@ async fn relays_through_a_buffer(frame_tag: u8) {
         frame_digest, settle_buffered_data, tag as ring_tag, WriteFrameIxData,
     };
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    let mut frame = vec![9; 6000];
-    frame[0] = frame_tag;
+    let frame = wide_frame(frame_tag);
     *fixture.prover.frame.lock().expect("frame") = Some(frame.clone());
     let quote = fixture.quote(RelayOperation::Anonymous).await;
     let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
@@ -611,19 +609,13 @@ async fn a_frame_past_the_cpi_limit_is_refused_before_any_write() {
 
 const FRAME_BUDGET: u64 = 1_000_000;
 
-fn wide_frame() -> Vec<u8> {
-    let mut frame = vec![9; 6000];
-    frame[0] = custom_ring_interface::tag::TRANSFER;
-    frame
-}
-
 #[tokio::test]
 async fn a_frame_over_budget_is_refused_before_any_write_and_budget_off_by_default() {
     for fixture in [
         Fixture::new().await,
         Fixture::with_budget(RENT_LAMPORTS).await,
     ] {
-        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame());
+        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
         let quote = fixture.quote(RelayOperation::Anonymous).await;
         let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
         let refused = fixture.prepare(&request).await;
@@ -637,7 +629,7 @@ async fn a_frame_over_budget_is_refused_before_any_write_and_budget_off_by_defau
 #[tokio::test]
 async fn a_retried_frame_resumes_its_upload_and_is_charged_once() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame());
+    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     fixture.chain.refuse_at.store(1, Ordering::Relaxed);
     let quote = fixture.quote(RelayOperation::Anonymous).await;
     let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
@@ -659,7 +651,7 @@ async fn a_retried_frame_resumes_its_upload_and_is_charged_once() {
         .collect();
     assert_eq!(offsets.len(), writes.len(), "no write went out twice");
 
-    // The rent returned with the settlement, the fees stay, the refused send among them.
+    // The rent returned with the settlement, the landed fees stay, a refused send paid nothing.
     let RelayStep::Submitted { relay_id } = step else {
         unreachable!();
     };
@@ -667,7 +659,6 @@ async fn a_retried_frame_resumes_its_upload_and_is_charged_once() {
         .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
         .await;
     let signatures = writes.len() as i64
-        + 1
         + i64::from(
             sent.last()
                 .expect("settlement")
@@ -685,7 +676,7 @@ async fn a_crash_between_reserve_and_upload_is_swept_after_a_restart() {
     use custom_ring_interface::tag as ring_tag;
     for buffer_landed in [false, true] {
         let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame());
+        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
         fixture
             .chain
             .refuse_at
@@ -725,8 +716,8 @@ async fn a_crash_between_reserve_and_upload_is_swept_after_a_restart() {
             .store(SLOT + ABANDONED_AFTER_SLOTS + 1, Ordering::Relaxed);
         restarted.sweep_abandoned().await.expect("past the window");
         assert_eq!(fixture.outstanding().await, 0);
-        // The rent returned, the charged sends stay, the close beside a landed write and a refused one.
-        let signatures = if buffer_landed { 3 } else { 1 };
+        // The rent returned, the landed write and the close stay, a refused send paid nothing.
+        let signatures = if buffer_landed { 2 } else { 0 };
         assert_eq!(fixture.committed().await, signatures * 5_000);
         let sent = fixture.sent();
         match buffer_landed {
@@ -835,7 +826,7 @@ fn delegate_inputs(delegate: Address) -> RelayProofInputs {
 #[tokio::test]
 async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame());
+    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     let delegate = ring_delegate();
     let quote = fixture.quote(RelayOperation::Delegate).await;
     let request = delegate_request(quote, &delegate_inputs(delegate.pubkey()), &delegate);
@@ -862,7 +853,7 @@ async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() 
 #[tokio::test]
 async fn an_unsigned_or_foreign_delegate_request_consumes_nothing() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame());
+    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     let delegate = ring_delegate();
     let stranger = Keypair::new_from_array([52; 32]);
     let quote = fixture.quote(RelayOperation::Delegate).await;
