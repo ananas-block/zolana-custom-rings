@@ -18,7 +18,7 @@ def variant(k):
             f'TransferAnonymous {{ outputs: {o}, class: {i}, withdrawals: {w} }}',
             f'TransferAnonymousEntry {{ outputs: {o}, class: {i}, withdrawals: {w} }}',
             f'ApplyRecords {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
-            f'Merge {{ width: {i} }}'][k['Family']]
+            'Merge'][k['Family']]
 
 def main():
     parser = argparse.ArgumentParser()

@@ -56,6 +56,7 @@ pub const REPLY_LABEL: &[u8; 10] = b"CRING/rpl1";
 pub const SENDER_BUNDLE_LABEL: &[u8; 10] = b"CRING/snd1";
 pub const REGISTER_KEY_LABEL: &[u8; 10] = b"CRING/nfk1";
 pub const DEPOSIT_AUDIT_LABEL: &[u8; 10] = b"CRING/dep1";
+pub const MERGE_RECORD_LABEL: &[u8; 10] = b"CRING/mrg2";
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())

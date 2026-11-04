@@ -35,9 +35,7 @@ pub enum RingCircuit {
     Deposit {
         capacity: u8,
     },
-    Merge {
-        width: u8,
-    },
+    Merge,
 }
 
 /// One transfer family at one output count, mirror `ConfidentialShapes`, `AnonymousShapes` and `EntryShapes` in `prover/circuits/transfer`.

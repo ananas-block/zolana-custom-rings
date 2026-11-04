@@ -161,6 +161,7 @@ ring_errors! {
     ApproverMissing = 8500 => "a proven approval bit has no configured approver for its class",
     TooManyCoSigners = 8501 => "the frame carries more co-signers than the five classes need",
     InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
+    InvalidMergeRecord = 8520 => "the opened merge record holds a kind or reserved byte the circuit never proves",
 }
 
 impl From<CustomRingError> for ProgramError {

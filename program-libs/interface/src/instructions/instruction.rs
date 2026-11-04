@@ -60,7 +60,9 @@ instruction_tags! {
     // Tag 18 is retired, never reuse it.
     /// Decoding only, the program refuses it.
     HistoricalMerge = HISTORICAL_MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
-    Merge = MERGE: 47 => PROOF_UNITS,
+    /// Decoding only, the program refuses it.
+    HistoricalMergeV3 = HISTORICAL_MERGE_V3: 47 => PROOF_UNITS,
+    Merge = MERGE: 57 => PROOF_UNITS,
     // Tags 4 and 5 are retired, never reuse them.
     UpdateAuthority = UPDATE_AUTHORITY: 6 => ACCOUNT_UNITS,
     // Tags 7 to 10 and 12 are retired, never reuse them.
