@@ -1,11 +1,10 @@
-//! The in-proof owner rail refuses any owner signer, a relayer alone pays and signs.
+//! The in-proof owner rail, a relayer pays and the owner signs inside the proof.
 
-use custom_ring_interface::{tag, CustomRingError, DELIVERED_AUDIT_CAPACITIES};
-use solana_instruction::AccountMeta;
+use custom_ring_interface::{tag, DELIVERED_AUDIT_CAPACITIES};
 use solana_keypair::Signer;
 
 use crate::{
-    common::{reaches_verification, refused, Ring, Setup},
+    common::{reaches_verification, Ring, Setup},
     transact_rules::{send, spp_list, Fixture},
 };
 
@@ -59,25 +58,4 @@ fn every_delivered_capacity_reaches_its_sender_key() {
             &[],
         ));
     }
-}
-
-#[test]
-fn an_owner_signer_beside_the_in_proof_owner_is_refused() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::Policy);
-    let data = fixture.in_proof_owner(&OWNER, 2, 2, true);
-    // The signer's inputs would spend under the policy sender the proof names.
-    let signer = [AccountMeta::new_readonly(ring.payer.pubkey(), true)];
-    let spp = spp_list(&ring.payer.pubkey(), &data, &signer);
-    refused(
-        send(
-            &mut ring,
-            tag::TRANSFER,
-            Vec::new(),
-            data.encode().unwrap(),
-            spp,
-            &[],
-        ),
-        CustomRingError::OwnerSignerOnInProofRail,
-    );
 }

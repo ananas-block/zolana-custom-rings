@@ -74,7 +74,7 @@ pub fn merge_instruction_with(ring: &Ring, data: &CustomRingMergeIxData) -> Inst
     spp[RING_MERGE_RING_CONFIG_INDEX] = AccountMeta::new(ring_auth(), false);
     spp.push(AccountMeta::new(ring.payer.pubkey(), true));
     let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
-    accounts.extend(ring.registries(RootRead::merge(&ring.read(&policy_pda())).unwrap()));
+    accounts.extend(ring.registries(RootRead::merge()));
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
@@ -86,13 +86,6 @@ pub fn merge_instruction_with(ring: &Ring, data: &CustomRingMergeIxData) -> Inst
 fn merge(ring: &mut Ring, registry: Option<u64>) -> Sent {
     let instruction = merge_instruction(ring, registry);
     ring.send(instruction, &[])
-}
-
-#[test]
-fn an_escrow_merge_revision_its_registry_does_not_serve_is_refused() {
-    let mut ring = delegate_ring(&Keypair::new());
-    refused(merge(&mut ring, Some(1)), CustomRingError::RootNotServed);
-    reaches_verification(merge(&mut ring, Some(0)));
 }
 
 #[test]
@@ -177,6 +170,7 @@ pub fn deposit_instruction(
     let prefix = DepositPrefix {
         tag: tag::DEPOSIT,
         proof: Zeroable::zeroed(),
+        tracking_revision: Default::default(),
         own_revision: registry.unwrap_or_default().into(),
         curator_revision: Default::default(),
     };
@@ -197,7 +191,7 @@ pub fn deposit_instruction(
         AccountMeta::new(Address::new_unique(), false),
     ]);
     let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
-    accounts.extend(ring.registries(RootRead::deposit(&ring.read(&policy_pda())).unwrap()));
+    accounts.extend(ring.registries(RootRead::deposit(&ring.read(&policy_pda()))));
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
