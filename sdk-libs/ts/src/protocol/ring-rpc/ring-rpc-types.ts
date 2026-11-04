@@ -1,3 +1,4 @@
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import type { Address, Signature } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
@@ -245,6 +246,8 @@ export interface PrepareAuthorityTransferRequest {
   readonly ring: Address;
   readonly delegate: Address;
   readonly transfer: AuthorityTransfer;
+  /** The delegate picks it, the frame's proof binds each record to it. */
+  readonly txViewingKey: Bytes32;
   readonly timestamp: bigint;
   readonly nonce: Base64String;
   readonly signature: Signature;

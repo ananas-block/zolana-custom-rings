@@ -6,7 +6,6 @@ import type { RequestContext } from "@heliuslabs/zolana/interface";
 import { concatBytes, indexerScalars, sha256 } from "@heliuslabs/zolana/internal";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 
-import type { RingMode } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
 import {
   encodePrepareAuthorityTransferRequest,
@@ -22,6 +21,7 @@ import type {
 import {
   checkRelayMessage,
   checkSettledDelegateMessage,
+  type DelegateRingConfig,
   settledBufferOf,
   type ExpectedRelayMessage,
   expectedDelegate,
@@ -85,13 +85,17 @@ export class PreparedRelay {
 export class PreparedAuthorityTransfer {
   readonly request: PrepareAuthorityTransferRequest;
   readonly quote: RelayQuote;
-  /** The ring's mode names the frame the message parses under. */
-  readonly mode: RingMode;
+  /** The auditor key and the rail come from the ring account. */
+  readonly config: DelegateRingConfig;
 
-  constructor(request: PrepareAuthorityTransferRequest, quote: RelayQuote, mode: RingMode) {
+  constructor(
+    request: PrepareAuthorityTransferRequest,
+    quote: RelayQuote,
+    config: DelegateRingConfig,
+  ) {
     this.request = request;
     this.quote = quote;
-    this.mode = mode;
+    this.config = config;
     Object.freeze(this);
   }
 
@@ -101,7 +105,7 @@ export class PreparedAuthorityTransfer {
   }
 
   async send(relay: RingAuthorityRelayClient, context?: RequestContext): Promise<RelaySent> {
-    const expected = await expectedDelegate(this.request, this.quote, this.mode);
+    const expected = await expectedDelegate(this.request, this.quote, this.config);
     const step = await relay.prepareAuthorityTransfer(this.request, context);
     return accepted({ step, relayId: this.relayId(), expected });
   }

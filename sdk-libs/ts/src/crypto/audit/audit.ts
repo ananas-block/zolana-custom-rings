@@ -235,6 +235,24 @@ export function saltedAuditorSchedule(
 }
 
 /** The caller destroys the schedule. */
+export function sealedAuditorSchedule(
+  txViewingSecret: Bytes32,
+  auditorPublicKey: X25519PublicKey,
+  salt: Bytes16,
+): AuditSchedule {
+  const key = X25519Keypair.fromBytes(txViewingSecret);
+  const shared = envelopeSecret(key, auditorPublicKey, key.publicKey(), auditorPublicKey);
+  const salted = saltedSecret(shared, salt);
+  try {
+    return AuditSchedule.derive(salted, AUDIT_ENC_INFO);
+  } finally {
+    shared.fill(0);
+    salted.fill(0);
+    key.destroy();
+  }
+}
+
+/** The caller destroys the schedule. */
 function auditorSchedule(
   auditor: X25519Keypair,
   ephemeralPublicKey: X25519PublicKey,
