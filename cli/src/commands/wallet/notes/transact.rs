@@ -11,7 +11,7 @@ use custom_ring_sdk::{
     entry_shape_keyed, select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment,
     CoSignScope, CustomRingConfig, CustomRingTransfer, CustomRingTransferInput, DepositAsset,
     DepositRecipient, EntrySpend, ListRegistry, PublicOwnerTransfer, RingDeposit,
-    RingDepositReceipt, RingMode, RingPayment,
+    RingDepositReceipt, RingMode, RingPayment, WideFrames,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -1236,6 +1236,8 @@ impl Transfer<'_> {
                             asset: mint,
                             payments: payees.clone(),
                             entry: *entry,
+                            // The submission writes a buffer for a frame past one transaction.
+                            wide_frames: WideFrames::Buffer,
                             co_signer: self.cosigner.map(|signer| signer.pubkey()),
                         };
                         ctx.block(select.select(ctx.ring_client()))?
