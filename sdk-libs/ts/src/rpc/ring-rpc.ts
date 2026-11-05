@@ -2272,7 +2272,6 @@ function decodeInput(value: Record<string, unknown>, path: string): DecryptedRin
   });
 }
 
-/** Rust `OutputPayloadErrorKind` as the ring rpc serializes it. */
 function decodeAuditedMerge(value: unknown, path: string): AuditedRingMerge {
   const wire = exactRecord(value, AUDITED_MERGE_FIELDS, AUDITED_MERGE_REQUIRED_FIELDS, path);
   const asset = canonicalHash(wire["asset"], `${path}.asset`);
@@ -2316,10 +2315,9 @@ function mergeRow(
   };
 }
 
+/** Rust `OutputPayloadErrorKind` as the ring rpc serializes it. */
 export const RING_PAYLOAD_ERROR_KINDS: readonly OutputPayloadErrorKind[] = Object.freeze([
-  "frame",
   "disclosure",
-  "recipientKey",
   "commitment",
 ]);
 

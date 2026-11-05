@@ -1317,7 +1317,7 @@ describe("ring read request", () => {
       new URL("../../../../../test-vectors/rpc/ring_rpc_payload_errors.json", import.meta.url),
       "utf8",
     ),
-  ) as { kinds: unknown; foreign_body_and_low_order_key: { slotIndex: number; kind: string }[] };
+  ) as { kinds: unknown; commitment_and_disclosure: { slotIndex: number; kind: string }[] };
 
   /** A delivered transfer of six slots, the vector's slots failed and every other a dummy. */
   const erroredItem = (payloadErrors: readonly unknown[]) =>
@@ -1332,8 +1332,8 @@ describe("ring read request", () => {
 
   it("reads every payload error kind the shared vector names", async () => {
     expect(RUST_PAYLOAD_ERRORS.kinds).toEqual(RING_PAYLOAD_ERROR_KINDS);
-    const item = await readItem(erroredItem(RUST_PAYLOAD_ERRORS.foreign_body_and_low_order_key));
-    expect(item.payloadErrors).toEqual(RUST_PAYLOAD_ERRORS.foreign_body_and_low_order_key);
+    const item = await readItem(erroredItem(RUST_PAYLOAD_ERRORS.commitment_and_disclosure));
+    expect(item.payloadErrors).toEqual(RUST_PAYLOAD_ERRORS.commitment_and_disclosure);
   });
 
   it.each<readonly [string, readonly unknown[]]>([
@@ -1341,20 +1341,20 @@ describe("ring read request", () => {
       "an unknown kind",
       [
         { slotIndex: 2, kind: "decrypt" },
-        { slotIndex: 5, kind: "recipientKey" },
+        { slotIndex: 5, kind: "commitment" },
       ],
     ],
     [
       "a slot past the published ones",
       [
-        { slotIndex: 2, kind: "frame" },
-        { slotIndex: 6, kind: "frame" },
+        { slotIndex: 2, kind: "disclosure" },
+        { slotIndex: 6, kind: "disclosure" },
       ],
     ],
     [
       "one slot twice",
       [
-        { slotIndex: 2, kind: "frame" },
+        { slotIndex: 2, kind: "disclosure" },
         { slotIndex: 2, kind: "commitment" },
       ],
     ],

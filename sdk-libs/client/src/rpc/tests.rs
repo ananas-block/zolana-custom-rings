@@ -5,7 +5,7 @@ use spr_transaction::OutputContext;
 use super::*;
 use crate::{
     AuditedDefaultInput, InputOpening, OutputPayloadError,
-    OutputPayloadErrorKind::{self, Commitment, Disclosure, Frame, RecipientKey},
+    OutputPayloadErrorKind::{self, Commitment, Disclosure},
 };
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -592,30 +592,35 @@ fn a_wallet_activity_page_keeps_its_wire_json() {
     );
 }
 
-/// The TypeScript decoder reads the same vector.
+/// The TypeScript decoder reads the same vector, `UPDATE_RING_VECTORS=1` rewrites it.
 #[test]
 fn payload_errors_keep_the_encoding_of_the_shared_vector() {
-    #[derive(Deserialize)]
-    struct Vector {
-        kinds: serde_json::Value,
-        foreign_body_and_low_order_key: serde_json::Value,
+    // A new kind fails to compile here, `kinds` and the vector must then name it.
+    let named = |kind: OutputPayloadErrorKind| match kind {
+        Disclosure | Commitment => kind,
+    };
+    let kinds = [Disclosure, Commitment].map(named);
+    let slots = [(2, Commitment), (5, Disclosure)]
+        .map(|(slot_index, kind)| DecryptedPayloadError { slot_index, kind });
+    let written = serde_json::json!({
+        "description": "Payload errors of a DecryptedTransaction as the ring rpc serializes them. kinds names every OutputPayloadErrorKind. commitment_and_disclosure holds the errors of one transfer whose slot 2 record opens to another commitment and whose slot 5 record holds a value outside the field. Written by the sdk-libs/client rpc tests and decoded by the TypeScript RingRpc tests.",
+        "kinds": kinds,
+        "commitment_and_disclosure": slots,
+    });
+    if std::env::var_os("UPDATE_RING_VECTORS").is_some() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-vectors/rpc/ring_rpc_payload_errors.json"
+        );
+        let pretty = serde_json::to_string_pretty(&written).expect("json");
+        std::fs::write(path, pretty + "\n").expect("vector");
+        return;
     }
-    let vector: Vector = serde_json::from_str(include_str!(
+    let stored: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../test-vectors/rpc/ring_rpc_payload_errors.json"
     ))
     .expect("vector");
-    // A new kind fails to compile here, `kinds` and the vector must then name it.
-    let named = |kind: OutputPayloadErrorKind| match kind {
-        Frame | Disclosure | RecipientKey | Commitment => kind,
-    };
-    let kinds = [Frame, Disclosure, RecipientKey, Commitment].map(named);
-    assert_eq!(serde_json::to_value(kinds).unwrap(), vector.kinds);
-    let slots = [(2, Commitment), (5, RecipientKey)]
-        .map(|(slot_index, kind)| DecryptedPayloadError { slot_index, kind });
-    assert_eq!(
-        serde_json::to_value(slots).unwrap(),
-        vector.foreign_body_and_low_order_key
-    );
+    assert_eq!(written, stored);
 }
 
 #[test]

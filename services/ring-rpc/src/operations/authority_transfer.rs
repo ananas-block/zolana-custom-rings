@@ -28,7 +28,7 @@ pub enum AuthorityTransferError {
     #[error("the signer is not the ring delegate")]
     NotDelegate = -32220,
     #[error("the ring seals its keys to another auditor")]
-    EscrowUnserved = -32221,
+    ForeignAuditor = -32221,
     #[error("the source wallet has no enrolled nullifier key")]
     SourceUnescrowed = -32222,
     #[error("the source address names another nullifier key")]
@@ -92,7 +92,7 @@ impl<S: TransactionSource> Hub<S> {
             .filter(|config| config.delegate == Some(delegate))
             .ok_or(AuthorityTransferError::NotDelegate)?;
         if config.auditor_pubkey != service.auditor_pubkey() {
-            return Err(AuthorityTransferError::EscrowUnserved.into());
+            return Err(AuthorityTransferError::ForeignAuditor.into());
         }
         shared
             .replay
@@ -158,7 +158,7 @@ impl<S: TransactionSource> Hub<S> {
             return Err(AuthorityTransferError::NotListWriter.into());
         }
         if config.auditor_pubkey != service.auditor_pubkey() {
-            return Err(AuthorityTransferError::EscrowUnserved.into());
+            return Err(AuthorityTransferError::ForeignAuditor.into());
         }
         shared
             .replay
@@ -220,7 +220,7 @@ impl<S: TransactionSource> Hub<S> {
             .filter(|config| config.delegate == Some(delegate))
             .ok_or(AuthorityTransferError::NotDelegate)?;
         if config.auditor_pubkey != service.auditor_pubkey() {
-            return Err(AuthorityTransferError::EscrowUnserved.into());
+            return Err(AuthorityTransferError::ForeignAuditor.into());
         }
         if !relay.holds(&relay_id).await? {
             shared

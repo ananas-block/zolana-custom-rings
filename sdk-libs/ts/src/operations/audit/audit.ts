@@ -113,7 +113,7 @@ export interface AuditedRingOutput {
 }
 
 /** Rust `OutputPayloadErrorKind`, why a published slot did not open. */
-export type OutputPayloadErrorKind = "frame" | "disclosure" | "recipientKey" | "commitment";
+export type OutputPayloadErrorKind = "disclosure" | "commitment";
 
 export interface OutputPayloadError {
   readonly slotIndex: number;

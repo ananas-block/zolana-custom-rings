@@ -152,12 +152,8 @@ pub struct OutputPayloadError {
 #[cfg_attr(feature = "rpc", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "rpc", serde(rename_all = "camelCase"))]
 pub enum OutputPayloadErrorKind {
-    /// No body of the layout's scheme and length.
-    Frame,
     /// The slot's record holds a value outside the field.
     Disclosure,
-    /// The recipient key admits no X25519 agreement.
-    RecipientKey,
     /// The rebuilt opening hashes to another commitment.
     Commitment,
 }
