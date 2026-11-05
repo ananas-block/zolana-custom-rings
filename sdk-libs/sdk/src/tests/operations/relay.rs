@@ -384,9 +384,8 @@ async fn relay_and_submission_pick_one_key_at_full_load() {
     for (notes, outputs, legs, wide) in [
         (24, 2, 4, false),
         (24, 4, 4, false),
-        (16, 8, 4, false),
-        (5, 16, 8, false),
-        (8, 16, 8, true),
+        (2, 8, 4, false),
+        (2, 8, 5, true),
     ] {
         let load = FullLoad::new(notes, outputs, legs);
         let client = Chain::ring(RingSettings {
@@ -412,7 +411,7 @@ async fn a_salted_read_raises_the_flag_on_a_frame_of_one_stream() {
     use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
 
     let salt = [7; 32];
-    let load = FullLoad::new(5, 16, 8);
+    let load = FullLoad::new(5, 8, 4);
     let rules = RuleTable::builder()
         .rule(Rule::forbid(Subject::Sender, ListId::PrivateBlock))
         .build();
@@ -493,7 +492,7 @@ async fn an_unread_entry_takes_its_capacity_from_its_outputs() {
     use crate::tests::support::{payer, wallet, TREE_ID};
     use spr_transaction::{Data, Utxo};
 
-    for (notes, outputs) in [(8, 4), (2, 8), (4, 8)] {
+    for (notes, outputs) in [(6, 4), (2, 8), (4, 8)] {
         // The hidden owner's change takes the first output.
         let load = FullLoad::new(notes, outputs - 1, 0);
         let client = Chain::ring(RingSettings {
@@ -711,11 +710,11 @@ async fn a_relayed_spend_proves_on_the_key_its_owner_sealed() {
     let (wide, circuit, _) = relayed(2, None).await;
     assert_eq!((wide, shape(circuit)), (false, (2, 24, false)));
     let (wide, circuit, _) = relayed(25, None).await;
-    assert_eq!((wide, shape(circuit)), (true, (2, 49, true)));
+    assert_eq!((wide, shape(circuit)), (true, (2, 40, true)));
     let (wide, circuit, _) = relayed(2, Some([3; 32])).await;
     assert_eq!((wide, shape(circuit)), (false, (2, 24, false)));
     let (wide, circuit, built) = relayed(25, Some([3; 32])).await;
-    assert_eq!((wide, shape(circuit)), (true, (2, 49, true)));
+    assert_eq!((wide, shape(circuit)), (true, (2, 40, true)));
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/custom-ring-transfer-relayed-wide-data.json");

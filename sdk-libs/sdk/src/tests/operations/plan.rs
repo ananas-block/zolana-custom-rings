@@ -23,10 +23,10 @@ struct Case {
 
 const CASES: [Case; 5] = [
     Case {
-        name: "one stream at sixteen outputs",
+        name: "one stream at eight outputs",
         rail: RingRail::Confidential,
-        inputs: 5,
-        outputs: 16,
+        inputs: 16,
+        outputs: 8,
         spends_default_ring: false,
         has_data: true,
         approval: false,
@@ -59,7 +59,7 @@ const CASES: [Case; 5] = [
         approval: true,
     },
     Case {
-        name: "an entry envelope of another class",
+        name: "an entry envelope of one class",
         rail: RingRail::Anonymous,
         inputs: 2,
         outputs: 2,
@@ -191,7 +191,7 @@ fn a_read_keeps_a_seal_of_one_stream_and_refuses_another() {
     let outcomes: Vec<_> = pinned.iter().map(|case| case["outcome"].clone()).collect();
     assert_eq!(
         outcomes,
-        ["reuse", "reseal", "reuse", "reseal", "reseal"].map(Value::from)
+        ["reuse", "reseal", "reuse", "reseal", "reuse"].map(Value::from)
     );
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/transfer-plan-rekey.json");

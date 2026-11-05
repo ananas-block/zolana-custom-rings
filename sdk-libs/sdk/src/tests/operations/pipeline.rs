@@ -545,9 +545,8 @@ fn default_ring_utxo(owner: &ShieldedKeypair, amount: u64, leaf: u64) -> WalletU
     )
 }
 
-/// Ordinary padding publishes the shape's inputs, a shape past one transaction refuses before any proof.
 #[tokio::test]
-async fn an_anonymous_move_past_one_transaction_refuses_before_proving() {
+async fn an_anonymous_move_stops_at_the_widest_inline_class() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
@@ -560,15 +559,12 @@ async fn an_anonymous_move_past_one_transaction_refuses_before_proving() {
         payer: payer(),
     };
     let pay = |amount| owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), amount)]);
+    assert!(pay(40).select(&client).await.is_ok());
     assert!(matches!(
         pay(41).select(&client).await,
-        Err(RingError::TransferTooWide { inputs: 48, .. })
-    ));
-    assert!(matches!(
-        pay(50).select(&client).await,
         Err(RingError::Unfunded {
-            amount: 50,
-            max_inputs: 49,
+            amount: 41,
+            max_inputs: 40,
             ..
         })
     ));
@@ -2686,9 +2682,9 @@ fn a_shape_past_a_confidential_class_is_unkeyed() {
     use crate::shape_keyed;
     use custom_ring_interface::key_catalog::{RecordPools, TransferSpend};
     use spr_client::Shape;
-    assert!(shape_keyed(RingRail::Confidential, Shape::IN49_OUT2));
-    assert!(shape_keyed(RingRail::Confidential, Shape::IN8_OUT16));
-    for (inputs, outputs) in [(50, 2), (25, 4), (25, 8), (9, 16)] {
+    assert!(shape_keyed(RingRail::Confidential, Shape::IN40_OUT2));
+    assert!(shape_keyed(RingRail::Confidential, Shape::IN16_OUT8));
+    for (inputs, outputs) in [(41, 2), (25, 4), (25, 8), (1, 16)] {
         let spend = TransferSpend {
             rail: RingRail::Confidential,
             inputs,
@@ -2726,30 +2722,16 @@ async fn every_frame_limit_of_the_byte_model_holds() {
     assert_eq!(pin(in_proof_policy).await, 3405);
 
     // An outsider payer adds its signature and key.
-    let owner_paid = Measure::pinned(Measured::Confidential, Shape::IN5_OUT16);
-    assert_eq!(pin(owner_paid).await, 4681);
+    let owner_paid = Measure::pinned(Measured::Confidential, Shape::IN16_OUT8);
     assert_eq!(
         pin(Measure {
             payer: Payer::Outsider,
             ..owner_paid
         })
-        .await,
-        4777
+        .await
+            - pin(owner_paid).await,
+        96
     );
-
-    // Past 8 outputs a frame fits only through compact padding.
-    let plain = |inputs, published| Measure {
-        published: Some(published),
-        ..Measure::pinned(Measured::ConfidentialPolicy, Shape::new(inputs, 16))
-    };
-    assert!(pin(plain(1, 14)).await <= ceiling);
-    assert!(pin(plain(1, 15)).await > ceiling);
-    let outsider = |inputs, published| Measure {
-        payer: Payer::Outsider,
-        ..plain(inputs, published)
-    };
-    assert!(pin(outsider(4, 13)).await <= ceiling);
-    assert!(pin(outsider(4, 14)).await > ceiling);
 
     // The extras keep their slopes.
     let base = Measure::pinned(Measured::ConfidentialPolicy, Shape::new(2, 2));
@@ -2772,7 +2754,11 @@ async fn every_frame_limit_of_the_byte_model_holds() {
         base_bytes + 8,
         "a priority fee"
     );
-    let wider = Measure::pinned(Measured::ConfidentialPolicy, Shape::new(2, 8));
+    // Three published slots leave room for the SPL change in a four output frame.
+    let wider = Measure {
+        published: Some(3),
+        ..Measure::pinned(Measured::ConfidentialPolicy, Shape::new(2, 4))
+    };
     let spl = pin(Measure {
         legs: 1,
         spl_legs: true,
@@ -2816,20 +2802,6 @@ async fn every_frame_boundary_takes_its_modelled_bytes() {
             3753,
         ),
         (compact_fifteen, 3689),
-        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4776),
-        (
-            relayed(Measured::InProofOwnerEscrow, Shape::IN5_OUT16),
-            4776,
-        ),
-        (
-            Measure::pinned(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4681,
-        ),
-        (
-            relayed(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4777,
-        ),
-        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4711),
         (key_escrow_co_signed, 3536),
         (loaded_commitment, 3281),
     ] {
@@ -2987,12 +2959,15 @@ async fn change_slots_and_replies_move_the_anonymous_frame_by_their_bytes() {
 async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_proving() {
     use crate::tests::support::{keypair, payer, Registry};
     let sender = keypair(1);
-    let shape = spr_client::Shape::IN5_OUT16;
+    let shape = spr_client::Shape::IN16_OUT8;
     let recipients: Vec<ShieldedKeypair> = (0..shape.n_outputs() - 1)
         .map(|index| keypair(10 + index as u8))
         .collect();
+    // Withdrawal legs push the widest eight output class past one transaction.
+    let leg_owners: Vec<ShieldedKeypair> = (0..12).map(|index| keypair(40 + index)).collect();
     let owners: Vec<(&ShieldedKeypair, u64)> = core::iter::once(&sender)
         .chain(&recipients)
+        .chain(&leg_owners)
         .map(|owner| (owner, 1))
         .collect();
     let client = Chain::ring(RingSettings {
@@ -3016,7 +2991,16 @@ async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_prov
             )
             .unwrap();
     }
+    let accounts = leg_owners
+        .iter()
+        .map(|owner| {
+            let recipient = owner.shielded_address().unwrap().solana_address().unwrap();
+            transaction.withdraw_sol(1, recipient).unwrap();
+            TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts { recipient })
+        })
+        .collect();
     let transfer = owner_transfer(&sender, transaction)
+        .with_interface_transfer_accounts(accounts)
         .with_in_proof_owner(&sender.signing_key)
         .with_co_signer(MEASURED_CO_SIGNER.0);
     let refused = transfer.measure(&client).await;

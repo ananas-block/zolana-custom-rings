@@ -149,11 +149,9 @@ fn a_salted_row_past_a_narrow_pool_takes_the_wide_key() {
     assert!(transfer_key(spend(usize::MAX)).is_none());
 }
 
-/// Twelve rows with the in-proof owner, eight outputs and thirty two legs, every subject enrolled
-/// under a public curated list, a salted own list and a salted curated list, each input spending one
-/// of eight output assets beside three withdrawal assets.
+/// One row, eight outputs and thirty one legs, the widest inline record read.
 #[test]
-fn the_widest_in_proof_spend_fills_the_wide_pools_exactly() {
+fn the_widest_inline_record_read_fills_the_wide_record_pools_exactly() {
     let gates = SourceGates::of(
         &SourceMap::new(&[
             (ListId::Block, CURATOR),
@@ -169,7 +167,7 @@ fn the_widest_in_proof_spend_fills_the_wide_pools_exactly() {
         member[31] = 0x10 + index as u8;
         member
     };
-    for owner in (0..12 + 8 + 32).map(member) {
+    for owner in (0..1 + 8 + 31).map(member) {
         let key = Member::salted(&Member::from_bytes(owner).unwrap(), &SALT).unwrap();
         plan.owner(OwnerQuery {
             member: owner,
@@ -185,34 +183,36 @@ fn the_widest_in_proof_spend_fills_the_wide_pools_exactly() {
     for slot in 0..8 {
         plan.asset(asset(slot));
     }
-    for leg in 0..32 {
+    for leg in 0..31 {
         plan.asset(withdrawn(leg));
     }
     for slot in 0..N_PUBLIC_SLOTS {
         plan.public_asset(withdrawn(slot));
     }
-    for input in 0..12 {
-        plan.asset(asset(input % 8));
-    }
+    plan.asset(asset(0));
     let spend = TransferSpend {
         rail: RingRail::Confidential,
-        inputs: 12,
+        inputs: 1,
         outputs: 8,
         spends_default_ring: false,
-        legs: 32,
-        owners: 12,
+        legs: 31,
+        owners: 1,
         pools: plan.pools(&tracking),
         wide: false,
     };
     let keyed = transfer_key(spend).unwrap();
     assert!(keyed.wide);
-    assert_eq!(keyed.circuit.record_pools(), Some(spend.pools));
+    let capacity = keyed.circuit.record_pools().unwrap();
+    assert_eq!(
+        (spend.pools.own, spend.pools.curator),
+        (capacity.own, capacity.curator)
+    );
     assert_eq!(
         spend.pools,
         RecordPools {
-            own: 115,
-            curator: 115,
-            tracking: 52
+            own: 91,
+            curator: 91,
+            tracking: 40
         }
     );
 }
