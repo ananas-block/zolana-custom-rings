@@ -266,9 +266,9 @@ impl RelayError {
             Self::LiveAttempt => -32208,
             Self::DepositorSignature => -32209,
             Self::BudgetUnset => -32210,
-            Self::AlreadyEnrolled => -32211,
-            Self::RegisterKeyProof => -32212,
-            Self::EnrollmentRefused { .. } => -32213,
+            Self::AlreadyEnrolled => -32213,
+            Self::RegisterKeyProof => -32214,
+            Self::EnrollmentRefused { .. } => -32215,
         }
     }
 
@@ -2206,6 +2206,21 @@ pub(crate) mod wide_frame;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enrollment_refusal_codes_are_stable() {
+        let refused = RelayError::EnrollmentRefused {
+            reason: String::new(),
+        };
+        assert_eq!(
+            [
+                RelayError::AlreadyEnrolled.code(),
+                RelayError::RegisterKeyProof.code(),
+                refused.code(),
+            ],
+            [-32213, -32214, -32215]
+        );
+    }
 
     #[test]
     fn an_in_doubt_commit_keeps_the_reservation_with_no_stored_relay() {
