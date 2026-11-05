@@ -16,12 +16,12 @@ import (
 
 const goldenDigests = "testdata/witness.sha256"
 
-// rustGoldens are written by the Rust SDK, in its own key order.
+// rustGoldens holds the Rust SDK's requests, each named by its circuit type and in its own key order.
 const rustGoldens = "../../sdk-libs/sdk/tests/fixtures"
 
 // UPDATE_RING_GOLDENS=1 rewrites the digests, never the fixtures.
 func TestGoldenRequestsAssignTheRecordedWitness(t *testing.T) {
-	rust, err := filepath.Glob(filepath.Join(rustGoldens, "*.json"))
+	rust, err := filepath.Glob(filepath.Join(rustGoldens, "custom-ring-*.json"))
 	if err != nil || len(rust) == 0 {
 		t.Fatalf("no Rust fixtures: %v", err)
 	}

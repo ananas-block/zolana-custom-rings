@@ -76,10 +76,10 @@ type recordVector struct {
 type ruleParts struct {
 	Subject     string `json:"subject"`
 	Mode        string `json:"mode"`
-	Mask        uint8  `json:"mask"`
+	Mask        uint16 `json:"mask"`
 	Guard       string `json:"guard"`
 	Threshold   uint64 `json:"threshold"`
-	Alternative uint8  `json:"alternative"`
+	Alternative uint16 `json:"alternative"`
 }
 
 var (
