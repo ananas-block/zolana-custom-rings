@@ -50,7 +50,7 @@ import { isZeroKeyNote as isExposedNote, zeroKeyNullifier } from "./exposed-note
 import { openZeroKeyMerges, type OpenedZeroKeyMerge } from "./zero-key-merge.js";
 import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { registeredMint } from "../operations/workflow/recover.js";
-import { isRingMergeRow, openRingMerges } from "./ring-sync.js";
+import { openRingMerges } from "./ring-sync.js";
 import type { RingKeys, RingTagFrame } from "./ring-keys.js";
 import { RingError } from "../protocol/error.js";
 import {
@@ -255,7 +255,6 @@ export class AnonymousSync {
     await scan.entries();
     await scan.rings();
     await scan.merges();
-    await scan.zeroKeyMerges();
     return scan.result();
   }
 
@@ -268,7 +267,6 @@ export class AnonymousSync {
   ): Promise<AnonymousScan> {
     const scan = this.#scan(client, history, context);
     await scan.recover(ring);
-    await scan.zeroKeyMerges();
     return scan.result();
   }
 
@@ -437,9 +435,10 @@ class Scan {
   readonly #context: RequestContext | undefined;
   readonly #address: ShieldedAddress;
   readonly #ledger: NoteLedger;
+  /** Held notes stay out of the ledger, a merge output among them is not found again. */
+  readonly #heldHashes: ReadonlySet<string>;
   readonly #originalHistory: ViewingHistory;
   readonly #pageLimit = new HalvingPageLimit(TAGS_PER_REQUEST);
-  readonly #ringRows: IndexedShieldedTransaction[] = [];
   #history: ViewingHistory;
 
   constructor(
@@ -453,6 +452,7 @@ class Scan {
     this.#context = context;
     this.#address = sync.keys.address();
     this.#ledger = new NoteLedger(sync.keys, sync.held);
+    this.#heldHashes = new Set(sync.held.map(({ outputContext }) => bytesKey(outputContext.hash)));
     this.#originalHistory = history;
     this.#history = history;
   }
@@ -525,39 +525,27 @@ class Scan {
     const keys = this.#history.entries
       .filter((held) => this.#holds(held))
       .map((entry) => entry.viewingPublicKey);
-    const merges = new LocalMerges();
-    await this.#readRing({ ring, afterSlot: null, keys, trial: "everySite", merges });
-    // Every merge was read, a note outside the frontier opens it as well.
-    let unread: readonly IndexedShieldedTransaction[] = merges.rows();
-    await openMerges({ ...this.#mergeReads(), historyUnread: true }, () => {
-      const rows = unread;
-      unread = [];
-      return Promise.resolve(rows);
-    });
+    await this.#readRing({ ring, afterSlot: null, keys, trial: "everySite" });
   }
 
   /** The spends of every found or held ring note, round after round, open the ring merges among them. */
   merges(): Promise<void> {
-    return openMerges(this.#mergeReads(), (frontier) =>
-      this.#paged(frontier, (nullifiers, token, limit) =>
-        this.#client
-          .getShieldedTransactionsByNullifiers(
-            { nullifiers, ...token, limit },
-            this.#sync.config,
-            this.#context,
-          )
-          .then((page) => ({ ...page, items: page.data.flatMap((item) => item.events) })),
+    return openMerges(
+      this.#mergeReads(),
+      (frontier) =>
+        this.#paged(frontier, (nullifiers, token, limit) =>
+          this.#client
+            .getShieldedTransactionsByNullifiers(
+              { nullifiers, ...token, limit },
+              this.#sync.config,
+              this.#context,
+            )
+            .then((page) => ({ ...page, items: page.data.flatMap((item) => item.events) })),
+        ),
+      this.#sync.held.flatMap((utxo) =>
+        utxo.utxo.ringProgramId === undefined ? [] : [utxo.nullifier],
       ),
     );
-  }
-
-  /** Tagged by the owner's identity, read from every ring row a scan passed. */
-  async zeroKeyMerges(): Promise<void> {
-    const opened = await openZeroKeyMerges(
-      { keys: this.#sync.keys, owner: this.#address, rows: this.#ringRows },
-      this.#context,
-    );
-    this.#ledger.keepZeroKeyMerges(opened, this.#sync.assets);
   }
 
   async result(): Promise<AnonymousScan> {
@@ -583,13 +571,13 @@ class Scan {
     return this.#sync.keys.viewingPublicKeys().some((key) => key.equals(entry.viewingPublicKey));
   }
 
-  #mergeReads() {
+  #mergeReads(): MergeReads {
     return {
       keys: this.#sync.keys,
       owner: this.#address,
       assets: this.#sync.assets,
       ledger: this.#ledger,
-      held: this.#sync.held,
+      held: this.#heldHashes,
       context: this.#context,
     };
   }
@@ -601,11 +589,9 @@ class Scan {
       afterSlot: bigint | null;
       keys: readonly X25519PublicKey[];
       trial: "tagHints" | "everySite";
-      merges?: LocalMerges;
     }>,
   ): Promise<void> {
     const { ring, afterSlot, keys, trial } = read;
-    const seen = new Set<string>();
     const reach = await readRingPages(
       {
         client: this.#client,
@@ -615,13 +601,21 @@ class Scan {
         ...(this.#sync.config === undefined ? {} : { config: this.#sync.config }),
       },
       async (rows) => {
-        const fresh = rows.filter((tx) => unseen(seen, txKey(tx)));
-        this.#ledger.noteSpends(fresh);
-        this.#ringRows.push(...fresh);
-        read.merges?.add(fresh);
+        // 1. Each page opens before the next arrives, the scan keeps no ring row past its page.
+        this.#ledger.noteSpends(rows);
         for (const viewingPublicKey of keys)
-          if (trial === "tagHints") await this.#testTags(viewingPublicKey, fresh);
-          else await this.#tryEverySite(viewingPublicKey, fresh);
+          if (trial === "tagHints") await this.#testTags(viewingPublicKey, rows);
+          else await this.#tryEverySite(viewingPublicKey, rows);
+        // 2. A recovery reads every merge in its pages, a tag sync finds ring merges by nullifier.
+        if (trial === "everySite") await keepRingMerges(this.#mergeReads(), rows);
+        // 3. A zero-key merge tags its owner's identity and opens under the viewing key alone.
+        this.#ledger.keepZeroKeyMerges(
+          await openZeroKeyMerges(
+            { keys: this.#sync.keys, owner: this.#address, rows },
+            this.#context,
+          ),
+          this.#sync.assets,
+        );
       },
       this.#context,
     );
@@ -810,78 +804,67 @@ class Scan {
   }
 }
 
-/** The merge rows of a recovery's pages, a merge spends its owner's notes. */
-class LocalMerges {
-  readonly #byNullifier = new Map<string, IndexedShieldedTransaction[]>();
-
-  add(rows: readonly IndexedShieldedTransaction[]): void {
-    for (const tx of rows.filter(isRingMergeRow))
-      for (const nullifier of tx.nullifiers) {
-        const key = bytesKey(nullifier);
-        this.#byNullifier.set(key, [...(this.#byNullifier.get(key) ?? []), tx]);
-      }
-  }
-
-  rows(): readonly IndexedShieldedTransaction[] {
-    return [...new Set([...this.#byNullifier.values()].flat())];
-  }
+interface MergeReads {
+  readonly keys: ShieldedKeys;
+  readonly owner: ShieldedAddress;
+  readonly assets: AssetRegistry;
+  readonly ledger: NoteLedger;
+  /** Output hash keys of the held notes. */
+  readonly held: ReadonlySet<string>;
+  readonly context: RequestContext | undefined;
 }
 
 /** The merges spending the found and held ring notes, round after round. */
 async function openMerges(
-  input: Readonly<{
-    keys: ShieldedKeys;
-    owner: ShieldedAddress;
-    assets: AssetRegistry;
-    ledger: NoteLedger;
-    held: readonly WalletUtxo[];
-    context: RequestContext | undefined;
-    historyUnread?: boolean;
-  }>,
+  input: MergeReads,
   spendsOf: (frontier: readonly Bytes32[]) => Promise<readonly IndexedShieldedTransaction[]>,
+  heldRing: readonly Bytes32[],
 ): Promise<void> {
-  const { ledger, held, owner, context } = input;
-  let historyUnread = input.historyUnread === true;
   const queried = new Set<string>();
-  const heldRing = held
-    .filter((utxo) => utxo.utxo.ringProgramId !== undefined)
-    .map((utxo) => utxo.nullifier);
-  const isHeld = (hash: Bytes32): boolean =>
-    ledger.isFound(hash) || held.some((entry) => equalBytes(entry.outputContext.hash, hash));
   for (;;) {
-    await ledger.assignNullifiers(context);
-    const frontier = [...ledger.ringNullifiers(), ...heldRing].filter((nullifier) =>
+    await input.ledger.assignNullifiers(input.context);
+    const frontier = [...input.ledger.ringNullifiers(), ...heldRing].filter((nullifier) =>
       unseen(queried, bytesKey(nullifier)),
     );
-    if (frontier.length === 0 && !historyUnread) return;
-    historyUnread = false;
+    if (frontier.length === 0) return;
     const spends = await spendsOf(frontier);
-    ledger.noteSpends(spends);
-    const { merges, utxos } = await openRingMerges(
-      { keys: input.keys, owner, assets: input.assets, spends },
-      context,
-    );
-    for (const merge of merges) {
-      const firstNullifier = merge.nullifiers[0];
-      if (firstNullifier === undefined) continue;
-      for (const [position, slot] of merge.outputSlots.entries()) {
-        const hash = slot.outputContext.hash;
-        const utxo = utxos.find((entry) => equalBytes(entry.outputContext.hash, hash));
-        if (utxo === undefined || isHeld(hash)) continue;
-        const pending = registeredMint(input.assets, utxo.utxo.asset) === undefined;
-        if (pending) ledger.unknownMint(utxo.utxo.asset);
-        ledger.keep(
-          {
-            utxo: utxo.utxo,
-            pending,
-            outputContext: utxo.outputContext,
-            nullifierPublicKey: owner.nullifierPublicKey,
-            order: publication(merge, position),
-          },
-          owner.viewingPublicKey,
-          Object.freeze({ kind: "merge", firstNullifier }),
-        );
-      }
+    input.ledger.noteSpends(spends);
+    await keepRingMerges(input, spends);
+  }
+}
+
+/** Keeps each merge output of `rows` the owner's keys open and no held or found note holds. */
+async function keepRingMerges(
+  input: MergeReads,
+  rows: readonly IndexedShieldedTransaction[],
+): Promise<void> {
+  const { ledger, owner, context } = input;
+  const { merges, utxos } = await openRingMerges(
+    { keys: input.keys, owner, assets: input.assets, spends: rows },
+    context,
+  );
+  const opened = new Map(utxos.map((utxo) => [bytesKey(utxo.outputContext.hash), utxo]));
+  for (const merge of merges) {
+    const firstNullifier = merge.nullifiers[0];
+    if (firstNullifier === undefined) continue;
+    for (const [position, slot] of merge.outputSlots.entries()) {
+      const hash = slot.outputContext.hash;
+      const key = bytesKey(hash);
+      const utxo = opened.get(key);
+      if (utxo === undefined || input.held.has(key) || ledger.isFound(hash)) continue;
+      const pending = registeredMint(input.assets, utxo.utxo.asset) === undefined;
+      if (pending) ledger.unknownMint(utxo.utxo.asset);
+      ledger.keep(
+        {
+          utxo: utxo.utxo,
+          pending,
+          outputContext: utxo.outputContext,
+          nullifierPublicKey: owner.nullifierPublicKey,
+          order: publication(merge, position),
+        },
+        owner.viewingPublicKey,
+        Object.freeze({ kind: "merge", firstNullifier }),
+      );
     }
   }
 }
@@ -932,16 +915,21 @@ async function openDepositNote(
   );
 }
 
-/** The notes one sync or recovery keeps, each once, under the stream that found it. */
-class NoteLedger {
+/** @internal The notes one sync or recovery keeps, each once, under the stream that found it. */
+export class NoteLedger {
   readonly #keys: ShieldedKeys;
   /** Only a spend of these or of a found note leaves the ledger, a ring's other spends are not the wallet's. */
   readonly #held: readonly WalletUtxo[];
   #found: Found[] = [];
   readonly #decrypted: Decrypted[] = [];
   readonly #pending: Decrypted[] = [];
+  /** Output hash keys of every kept note, one lookup per candidate. */
+  readonly #known = new Set<string>();
   readonly #streams: AnonymousRingUtxo[] = [];
-  readonly #spends = new Set<string>();
+  /** Kept apart from `#streams`, a recovery opens merges page by page yet lists them after every body. */
+  readonly #mergeStreams: AnonymousRingUtxo[] = [];
+  /** Each beside its key's index, the list stays ordered by held key. */
+  readonly #zeroKeyStreams: (readonly [number, AnonymousRingUtxo])[] = [];
   readonly #spent = new Map<string, Bytes32>();
   readonly #senderClaims: SenderClaim[] = [];
   readonly #sent: SentPayment[] = [];
@@ -976,8 +964,9 @@ class NoteLedger {
   }
 
   keep(note: Found, viewingPublicKey: X25519PublicKey, stream: AnonymousStream): void {
+    this.#known.add(bytesKey(note.outputContext.hash));
     this.#found.push(note);
-    this.#streams.push(
+    (stream.kind === "merge" ? this.#mergeStreams : this.#streams).push(
       Object.freeze({
         utxoHash: note.outputContext.hash,
         viewingPublicKey,
@@ -992,41 +981,38 @@ class NoteLedger {
   }
 
   keepZeroKeyMerges(opened: readonly OpenedZeroKeyMerge[], assets: AssetRegistry): void {
+    const held = this.#keys.viewingPublicKeys();
     for (const { utxo, row, position, viewingPublicKey } of opened) {
       const hash = utxo.outputContext.hash;
       if (this.isFound(hash)) continue;
       const firstNullifier = row.nullifiers[0];
       if (firstNullifier === undefined) continue;
+      this.#known.add(bytesKey(hash));
       const pending = registeredMint(assets, utxo.utxo.asset) === undefined;
       if (pending) this.unknownMint(utxo.utxo.asset);
       (pending ? this.#pending : this.#decrypted).push({
         utxo,
         order: publication(row, position),
       });
-      this.#streams.push(
+      this.#zeroKeyStreams.push([
+        held.findIndex((key) => key.equals(viewingPublicKey)),
         Object.freeze({
           utxoHash: hash,
           viewingPublicKey,
           nullifierPublicKey: ZERO_NULLIFIER_PK as Bytes32,
           stream: Object.freeze({ kind: "merge" as const, firstNullifier }),
         }),
-      );
+      ]);
     }
   }
 
   isFound(hash: Bytes32): boolean {
-    const same = (context: WalletUtxo["outputContext"]) => equalBytes(context.hash, hash);
-    return (
-      this.#found.some(({ outputContext }) => same(outputContext)) ||
-      [...this.#decrypted, ...this.#pending].some(({ utxo }) => same(utxo.outputContext))
-    );
+    return this.#known.has(bytesKey(hash));
   }
 
   noteSpends(transactions: readonly IndexedShieldedTransaction[]): void {
-    for (const tx of transactions) {
-      if (!unseen(this.#spends, txKey(tx))) continue;
+    for (const tx of transactions)
       for (const nullifier of tx.nullifiers) this.#spent.set(bytesKey(nullifier), nullifier);
-    }
   }
 
   /** Derives the nullifiers of the found notes in publication order. */
@@ -1076,7 +1062,13 @@ class NoteLedger {
           ({ utxo: { nullifier } }) => (this.#spent.has(bytesKey(nullifier)) ? [nullifier] : []),
         ),
       ),
-      found: Object.freeze([...this.#streams]),
+      found: Object.freeze([
+        ...this.#streams,
+        ...this.#mergeStreams,
+        ...this.#zeroKeyStreams
+          .toSorted(([left], [right]) => left - right)
+          .map(([, stream]) => stream),
+      ]),
       senderClaims: Object.freeze([...this.#senderClaims]),
       sent: Object.freeze([...this.#sent]),
       unknownMints: Object.freeze([...this.#unknownMints]),
@@ -1395,10 +1387,6 @@ function isZeroKeyNote(note: Found): boolean {
 
 function foundIn(stream: EntryStream, index: bigint): AnonymousStream {
   return Object.freeze({ kind: stream === "tx" ? "sender" : "request", index });
-}
-
-function txKey(tx: IndexedShieldedTransaction): string {
-  return `${tx.txSignature}:${String(tx.eventIndex)}`;
 }
 
 /** `undefined` without a ring, a contributory key, a salt or a canonical first nullifier. */
