@@ -6,7 +6,7 @@ use spr_client::ClientError;
 use spr_transaction::TransactionError;
 use thiserror::Error;
 use zolana_ring_client::{
-    rpc::{KeyFileError, AUDITED_UTXOS_LIMIT},
+    rpc::{KeyFileError, AUDITED_UTXOS_LIMIT, WALLET_SNAPSHOT_CHANGED},
     AuditError, RingIndexerError, RingRpcError as RingRefusal,
 };
 use zolana_ring_policy::MemberError;
@@ -28,6 +28,8 @@ pub enum RingRpcError {
     InvalidUtxoRequest,
     #[error("the cursor is no position of the read")]
     InvalidCursor,
+    #[error("wallet state changed, discard prior pages and restart without a cursor")]
+    WalletSnapshotChanged,
     #[error("request is unauthorized because {0}")]
     Unauthorized(#[from] Unauthorized),
     #[error("key derivation failed because {0}")]
@@ -159,6 +161,13 @@ impl From<RingRpcError> for ErrorObjectOwned {
                 return ErrorObjectOwned::owned(
                     ErrorCode::InvalidRequest.code(),
                     message,
+                    None::<()>,
+                );
+            }
+            WalletSnapshotChanged => {
+                return ErrorObjectOwned::owned(
+                    WALLET_SNAPSHOT_CHANGED,
+                    failure.to_string(),
                     None::<()>,
                 );
             }

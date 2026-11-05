@@ -122,6 +122,35 @@ describe("getWalletStatus", () => {
     expect(params["ringProgramId"]).toBe(TARGET.ringProgramId);
   });
 
+  it("keeps the restart refusal when a wallet snapshot changes", async () => {
+    const rpc = new RingRpc("http://ring.example", {
+      allowInsecureHttp: true,
+      fetch: (async () =>
+        new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            error: {
+              code: -32172,
+              message: "wallet state changed, discard prior pages and restart without a cursor",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        )) as typeof globalThis.fetch,
+    });
+    await expect(
+      rpc.getWalletStatus({
+        target: TARGET,
+        signer: reader,
+        wallet: WALLET,
+        cursor: new Uint8Array(129).fill(1),
+      }),
+    ).rejects.toMatchObject({
+      code: "RING_RPC_REFUSED",
+      details: { refusal: "walletSnapshotChanged", rpcCode: -32172 },
+    });
+  });
+
   it("refuses a status it does not know, never reading it as unspent", async () => {
     const { rpc } = capture({ ...page, notes: [noteWire("resolved")] });
     await expect(

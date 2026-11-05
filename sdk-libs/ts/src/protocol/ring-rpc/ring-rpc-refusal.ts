@@ -32,6 +32,7 @@ export const RingRpcRefusal = Object.freeze({
   messageScope: -32164,
   mergeSettingsUnavailable: -32170,
   staleMergeSettings: -32171,
+  walletSnapshotChanged: -32172,
   wrongCluster: -32190,
   // -32193, -32243 and -32275 never reach clients as codes, only as refused status text.
   tokenAccountSetup: -32200,
