@@ -17,13 +17,13 @@
 use std::{collections::HashMap, future::Future, num::NonZeroU32};
 
 use borsh::BorshDeserialize;
-use custom_ring_interface::{domain, AuditCredential, CREDENTIAL_PDA_SEED};
+use custom_ring_interface::{AuditCredential, CREDENTIAL_PDA_SEED};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{ClientError, GetShieldedTransactionsByTagsResponse};
 use spr_event::OutputDataEncoding;
 use spr_interface::instruction::{TransactOutput, TransactProof, TreeContext};
-use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{hash::owner_hash, PublicKey, X25519Keypair};
 use spr_program::program::{PdaOwner, SppTransactCpi, UniqueDataUtxo};
 use spr_transaction::{OutputSlot, ShieldedTransaction};
 use thiserror::Error;
@@ -183,6 +183,7 @@ impl CredentialPda {
         self.pda.to_bytes()
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn ring_id(&self) -> [u8; 32] {
         self.ring_id
     }
@@ -454,6 +455,8 @@ fn checked_page(
 /// Finalized Enroll events for tests outside the crate.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixture {
+    use custom_ring_interface::domain;
+    use spr_keypair::{NullifierKey, X25519Pubkey};
     use spr_transaction::OutputContext;
     use zolana_ring_client::NullifierKeyEnvelope;
 

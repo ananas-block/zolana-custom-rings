@@ -6,6 +6,7 @@ use std::{
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spr_indexer_api::{Context, PaginationToken, TransactionEvents};
+use spr_keypair::{NullifierKey, X25519Pubkey};
 
 use super::{fixture::Enrollment, *};
 use crate::{
