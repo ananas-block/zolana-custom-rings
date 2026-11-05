@@ -9169,6 +9169,7 @@ dependencies = [
  "spr-interface",
  "spr-keypair",
  "spr-transaction",
+ "spr-user-registry-interface",
  "thiserror 2.0.20",
  "tokio",
  "wincode",

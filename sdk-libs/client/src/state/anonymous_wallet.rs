@@ -1,4 +1,7 @@
 //! One document holds a wallet's scan progress and everything it covers, one write stores both.
+//!
+//! Both wallet modes commit here. An anonymous sync and a confidential sync each read from the stored history, and
+//! [`AnonymousWallet::absorb`] stores the whole read or refuses it. A crash between a read and its absorb loses only the read, the next sync repeats it.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -14,7 +17,7 @@ use zolana_ring_transaction::RingAssets;
 
 use crate::{
     is_zero_key, mint_balances, note_state, AnonymousError, AnonymousScan, MintBalance, NoteState,
-    ViewingHistory,
+    SenderClaim, ViewingHistory,
 };
 
 /// Notes stay listed once spent, their nullifiers mark them.
@@ -25,6 +28,75 @@ pub struct AnonymousWallet {
     spent_nullifiers: BTreeSet<[u8; 32]>,
     pending: Vec<PendingNote>,
     claims: Vec<PendingClaim>,
+    /// Spent by a merge whose output named an unregistered mint, each confidential sync reads the spend again.
+    merge_retries: BTreeSet<[u8; 32]>,
+}
+
+/// One sync, stored whole by [`AnonymousWallet::absorb`] or not at all.
+pub struct ScanCommit {
+    pub(crate) starting_history: ViewingHistory,
+    pub(crate) history: ViewingHistory,
+    pub(crate) decrypted: DecryptionResult,
+    pub(crate) pending: Vec<PendingNote>,
+    pub(crate) claims: Vec<PendingClaim>,
+    /// Stored retries whose spend the sync read again, a lagging indexer keeps the rest stored.
+    pub(crate) retried: BTreeSet<[u8; 32]>,
+    /// Spends whose merge still names an unregistered mint.
+    pub(crate) unresolved: BTreeSet<[u8; 32]>,
+}
+
+impl ScanCommit {
+    pub fn history(&self) -> &ViewingHistory {
+        &self.history
+    }
+
+    /// `unknown_mints` names each unregistered mint the sync met, of a pending note or of a merge left to retry.
+    pub fn decrypted(&self) -> &DecryptionResult {
+        &self.decrypted
+    }
+
+    pub fn pending_notes(&self) -> &[PendingNote] {
+        &self.pending
+    }
+}
+
+pub trait LedgerScan: sealed::Sealed {}
+
+impl LedgerScan for AnonymousScan {}
+
+impl LedgerScan for ScanCommit {}
+
+mod sealed {
+    use super::{AnonymousScan, BTreeSet, PendingClaim, ScanCommit, ViewingHistory};
+
+    pub trait Sealed {
+        /// `None` unless the scan read from `stored`.
+        fn commit_on(self, stored: &ViewingHistory) -> Option<ScanCommit>;
+    }
+
+    impl Sealed for AnonymousScan {
+        fn commit_on(self, stored: &ViewingHistory) -> Option<ScanCommit> {
+            if !self.starts_from(stored) {
+                return None;
+            }
+            let (history, decrypted, pending, claims) = self.into_stored();
+            Some(ScanCommit {
+                starting_history: stored.clone(),
+                history,
+                decrypted,
+                pending,
+                claims: claims.iter().map(PendingClaim::of).collect(),
+                retried: BTreeSet::new(),
+                unresolved: BTreeSet::new(),
+            })
+        }
+    }
+
+    impl Sealed for ScanCommit {
+        fn commit_on(self, stored: &ViewingHistory) -> Option<ScanCommit> {
+            (self.starting_history == *stored).then_some(self)
+        }
+    }
 }
 
 /// Rebuilt under a mint the registry does not name, only [`AnonymousWallet::resolve_pending`] makes it spendable.
@@ -49,6 +121,10 @@ impl PendingNote {
         self.0.utxo_hash
     }
 
+    pub(crate) fn nullifier(&self) -> [u8; 32] {
+        self.0.nullifier
+    }
+
     fn into_registered(self, asset: Mint) -> WalletUtxo {
         let mut note = self.0;
         note.utxo.asset = asset;
@@ -63,6 +139,18 @@ pub struct PendingClaim {
     pub claimed_viewing_key: X25519Pubkey,
     pub claimed_owner_key: [u8; 32],
     pub claimed_nullifier_pk: [u8; 32],
+}
+
+impl PendingClaim {
+    fn of(claim: &SenderClaim) -> Self {
+        let reply = claim.claim.claimed();
+        Self {
+            utxo_hash: claim.utxo_hash,
+            claimed_viewing_key: reply.viewing_key,
+            claimed_owner_key: reply.owner_key,
+            claimed_nullifier_pk: reply.nullifier_pk,
+        }
+    }
 }
 
 impl fmt::Debug for PendingClaim {
@@ -81,6 +169,7 @@ struct WalletJson {
     spent_nullifiers: Vec<String>,
     pending_notes: Vec<PendingNote>,
     claims: Vec<ClaimJson>,
+    merge_retries: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -100,6 +189,7 @@ impl AnonymousWallet {
             spent_nullifiers: BTreeSet::new(),
             pending: Vec::new(),
             claims: Vec::new(),
+            merge_retries: BTreeSet::new(),
         }
     }
 
@@ -109,6 +199,14 @@ impl AnonymousWallet {
 
     pub fn notes(&self) -> &[WalletUtxo] {
         &self.notes
+    }
+
+    pub(crate) fn is_spent(&self, nullifier: &[u8; 32]) -> bool {
+        self.spent_nullifiers.contains(nullifier)
+    }
+
+    pub(crate) fn merge_retries(&self) -> &BTreeSet<[u8; 32]> {
+        &self.merge_retries
     }
 
     pub fn note_state(&self, note: &WalletUtxo) -> NoteState {
@@ -168,14 +266,13 @@ impl AnonymousWallet {
     }
 
     /// Rejects a scan if the wallet history changed.
-    pub fn absorb(&mut self, scan: AnonymousScan) -> Result<(), AnonymousError> {
-        if !scan.starts_from(&self.history) {
-            return Err(AnonymousError::ScanHistoryChanged);
-        }
-        let (history, decrypted, pending, claims) = scan.into_stored();
+    pub fn absorb(&mut self, scan: impl LedgerScan) -> Result<(), AnonymousError> {
+        let scan = scan
+            .commit_on(&self.history)
+            .ok_or(AnonymousError::ScanHistoryChanged)?;
         let mut held: HashSet<[u8; 32]> = self.notes.iter().map(|note| note.utxo_hash).collect();
         self.notes.extend(
-            decrypted
+            scan.decrypted
                 .utxos
                 .into_iter()
                 .filter(|note| held.insert(note.utxo_hash)),
@@ -184,28 +281,23 @@ impl AnonymousWallet {
             .retain(|note| !held.contains(&note.utxo_hash()));
         held.extend(self.pending.iter().map(PendingNote::utxo_hash));
         self.pending.extend(
-            pending
+            scan.pending
                 .into_iter()
                 .filter(|note| held.insert(note.utxo_hash())),
         );
-        self.spent_nullifiers.extend(decrypted.spent_nullifiers);
+        self.spent_nullifiers
+            .extend(scan.decrypted.spent_nullifiers);
         let mut claimed: HashSet<[u8; 32]> =
             self.claims.iter().map(|claim| claim.utxo_hash).collect();
         self.claims.extend(
-            claims
-                .iter()
-                .filter(|claim| claimed.insert(claim.utxo_hash))
-                .map(|claim| {
-                    let reply = claim.claim.claimed();
-                    PendingClaim {
-                        utxo_hash: claim.utxo_hash,
-                        claimed_viewing_key: reply.viewing_key,
-                        claimed_owner_key: reply.owner_key,
-                        claimed_nullifier_pk: reply.nullifier_pk,
-                    }
-                }),
+            scan.claims
+                .into_iter()
+                .filter(|claim| claimed.insert(claim.utxo_hash)),
         );
-        self.history = history;
+        self.merge_retries
+            .retain(|nullifier| !scan.retried.contains(nullifier));
+        self.merge_retries.extend(scan.unresolved);
+        self.history = scan.history;
         Ok(())
     }
 
@@ -244,6 +336,7 @@ impl AnonymousWallet {
                     claimed_nullifier_pk: hex::encode(claim.claimed_nullifier_pk),
                 })
                 .collect(),
+            merge_retries: self.merge_retries.iter().map(hex::encode).collect(),
         };
         serde_json::to_string(&wallet)
             .expect("a struct of strings, integers and vectors serializes")
@@ -273,12 +366,18 @@ impl AnonymousWallet {
                 })
             })
             .collect::<Result<_, AnonymousError>>()?;
+        let merge_retries = wallet
+            .merge_retries
+            .iter()
+            .map(|text| field(text))
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             history: ViewingHistory::from_json_value(wallet.history)?,
             notes: wallet.notes,
             spent_nullifiers,
             pending: wallet.pending_notes,
             claims,
+            merge_retries,
         })
     }
 }

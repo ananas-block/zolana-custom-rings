@@ -221,6 +221,21 @@ pub(crate) struct BoundPolicy {
     pub hash: [u8; 32],
 }
 
+/// Ring refusals a fresh proof fixes, rows parsed verbatim by the TS parity test.
+const REPROOF: [(CustomRingError, Reproof); 4] = [
+    (CustomRingError::RootNotServed, Reproof::Fixes),
+    (CustomRingError::TrackingRootBelowFloor, Reproof::Fixes),
+    (CustomRingError::UnboundRegistry, Reproof::Fixes),
+    (CustomRingError::ProofVerificationFailed, Reproof::IfMoved),
+];
+
+enum Reproof {
+    /// The program refused a root or registry the chain since replaced or raised.
+    Fixes,
+    /// Counts only once a value the proof binds moved on chain.
+    IfMoved,
+}
+
 /// Every value a proof binds that the chain can move before it lands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BoundState {
@@ -238,16 +253,15 @@ impl BoundState {
         let Some(code) = ring_error(error) else {
             return Ok(matches!(error, TransactionError::BlockhashNotFound));
         };
-        if code == CustomRingError::ProofVerificationFailed as u32 {
-            return self.moved(client).await;
+        match REPROOF
+            .iter()
+            .find(|(stale, _)| code == *stale as u32)
+            .map(|(_, reproof)| reproof)
+        {
+            Some(Reproof::Fixes) => Ok(true),
+            Some(Reproof::IfMoved) => self.moved(client).await,
+            None => Ok(false),
         }
-        Ok([
-            CustomRingError::RootNotServed,
-            CustomRingError::TrackingRootBelowFloor,
-            CustomRingError::UnboundRegistry,
-        ]
-        .into_iter()
-        .any(|stale| code == stale as u32))
     }
 
     async fn moved(&self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {

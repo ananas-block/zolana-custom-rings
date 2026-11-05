@@ -27,6 +27,7 @@ pub struct RelayProofInputs {
     /// Owns every real input no co-owner owns.
     pub sender: ShieldedAddress,
     pub nullifier_key: NullifierKey,
+    /// Encoding sends only the co-owners a spend names.
     pub co_owners: Vec<RelayCoOwner>,
     /// Set on a frame that discloses its approval totals, drawn apart from `tx_viewing_key`.
     pub approval_blinder: Option<[u8; 32]>,
@@ -408,21 +409,46 @@ impl ProofInputsWire {
     fn of(inputs: &RelayProofInputs) -> Result<Self, RelayProofInputsError> {
         check_nullifier_key(&inputs.sender, &inputs.nullifier_key)?;
         let external = &inputs.external_data;
+        // 1. Each spend matches its owner by address and nullifier key, the co-owner secrets below follow the match.
+        let spends: Vec<InputWire> = inputs
+            .inputs
+            .iter()
+            .enumerate()
+            .map(|(index, input)| {
+                InputWire::of(input, &inputs.sender, &inputs.co_owners)
+                    .ok_or(RelayProofInputsError::Input { index })
+            })
+            .collect::<Result<_, _>>()?;
+        // 2. The relayer gets no nullifier secret of a co-owner no spend names, a spend matches the first held key per owner.
+        let named = |owner: Address| {
+            spends.iter().any(
+                |wire| matches!(wire, InputWire::Spend(spend) if spend.co_owner == Some(owner)),
+            )
+        };
+        let co_owners = inputs
+            .co_owners
+            .iter()
+            .enumerate()
+            .filter(|(index, held)| {
+                named(held.owner)
+                    && inputs
+                        .co_owners
+                        .iter()
+                        .position(|first| first.owner == held.owner)
+                        == Some(*index)
+            })
+            .map(|(_, held)| CoOwnerWire {
+                owner: held.owner,
+                nullifier_secret: *held.nullifier_key.secret(),
+            })
+            .collect();
         Ok(Self {
             rail: RailWire::of(&inputs.rail),
             ring_program_id: inputs.ring_program_id,
             sender: inputs.sender.to_bytes(),
             nullifier_secret: *inputs.nullifier_key.secret(),
             tx_viewing_secret: *inputs.tx_viewing_key.secret_bytes(),
-            inputs: inputs
-                .inputs
-                .iter()
-                .enumerate()
-                .map(|(index, input)| {
-                    InputWire::of(input, &inputs.sender, &inputs.co_owners)
-                        .ok_or(RelayProofInputsError::Input { index })
-                })
-                .collect::<Result<_, _>>()?,
+            inputs: spends,
             outputs: inputs
                 .outputs
                 .iter()
@@ -448,14 +474,7 @@ impl ProofInputsWire {
             output_tree_id: inputs.output_tree_id,
             list_salts: inputs.list_salts.clone(),
             wide_owners: inputs.wide_owners,
-            co_owners: inputs
-                .co_owners
-                .iter()
-                .map(|co_owner| CoOwnerWire {
-                    owner: co_owner.owner,
-                    nullifier_secret: *co_owner.nullifier_key.secret(),
-                })
-                .collect(),
+            co_owners,
             approval_blinder: inputs.approval_blinder,
         })
     }

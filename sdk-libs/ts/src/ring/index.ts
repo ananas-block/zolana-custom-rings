@@ -210,7 +210,7 @@ export type {
 } from "../state/anonymous-sync.js";
 export type { PlannedPayment } from "../operations/payments/output-rail.js";
 export { openRingNotes, syncRingWallet } from "../state/ring-sync.js";
-export type { RingNotes, RingSyncClient } from "../state/ring-sync.js";
+export type { RingNotes, RingSyncClient, RingSyncInput } from "../state/ring-sync.js";
 export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../state/ring-keys.js";
 export type {
   RingDeliveryRequest,
@@ -381,6 +381,8 @@ export type {
   RingMergeTransactionParams,
 } from "../operations/payments/merge.js";
 export type { RingMergeClient } from "../rpc/ports.js";
+export { RingBufferLedger } from "../operations/workflow/buffer-ledger.js";
+export type { RingBufferTransaction } from "../operations/workflow/buffer-ledger.js";
 export {
   RingTransactionSubmission,
   closeAbandonedFrameBuffers,
@@ -416,7 +418,6 @@ export type {
   AuditedSender,
   AuditedUtxo,
   CreatedRingUtxo,
-  EscrowedKeys,
   InputOpening,
   InputRing,
   KnownNote,
@@ -452,14 +453,6 @@ export type {
   RingMergeAuditPage,
   RingMergeAuditReader,
 } from "../operations/audit/audit-merge.js";
-export { MergeLedger } from "../state/merge-ledger.js";
-export type {
-  AuditedMergeOutput,
-  ConfirmedMerge,
-  KnownMergeInput,
-  MergeInput,
-  MergeTransition,
-} from "../state/merge-ledger.js";
 export {
   MergeRingAuthority,
   decodeRingMergeRequest,
@@ -660,6 +653,11 @@ export {
   type RingRecipientClient,
   type TrackingRoot,
 } from "../rpc/tracking-resolver.js";
+export {
+  resolveViewingKey,
+  type ResolvedViewingKey,
+  type ViewingKeyClient,
+} from "../rpc/viewing-key-resolver.js";
 export type {
   PendingEnrollment,
   PendingEnrollments,

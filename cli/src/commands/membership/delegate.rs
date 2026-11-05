@@ -1,13 +1,14 @@
 //! `delegate move`, the permanent delegate spends a member's ring notes.
 
-use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_interface::tracking::TrackingAuthorization;
-use custom_ring_sdk::{DelegateMove, DelegatePayment, DelegateSource, WideFrames};
+use anyhow::{anyhow, ensure, Context as _, Result};
+use custom_ring_sdk::{
+    DelegateMove, DelegatePayment, DelegateSource, DelegateSourceError, ResolvedSource,
+    TrackingEnrollment, WideFrames,
+};
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc};
-use spr_keypair::X25519Pubkey;
 use spr_transaction::SOL_MINT;
-use zolana_ring_client::{RingRecovery, SealedNullifierKey, SourceMember};
+use zolana_ring_client::{RingRecovery, SourceMember};
 
 use crate::{
     assets,
@@ -37,31 +38,32 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
     .check()?;
     // The auditor key decrypts recovery material, only the delegate signs.
     let auditor = ring_auditor_key(ctx, &args.auditor_key)?;
-    let owner = source.solana_address()?;
-    let (authorization, _) =
-        TrackingAuthorization::find_address(&config.account().tracking, &owner);
-    let enrolled = ctx
-        .rpc()
-        .get_account(authorization)?
-        .and_then(|account| TrackingAuthorization::decode(&account.owner, &account.data));
-    let Some(enrolled) = enrolled else {
-        bail!("member {source} has no enrolled key, it runs `zolana-ring key register` first");
+    let chain = ctx.chain();
+    let enrollment = TrackingEnrollment {
+        rpc: chain.rpc(),
+        tracking_registry: config.account().tracking,
+        auditor: &auditor,
     };
-    let nullifier_key = SealedNullifierKey {
-        eph_pk: X25519Pubkey::from_u(enrolled.eph_u)?,
-        ciphertext: enrolled.ciphertext,
-    }
-    .open(&auditor)?;
+    let resolved = ctx
+        .block(async { anyhow::Ok(ResolvedSource::resolve(source, &enrollment).await) })?
+        .map_err(|error| match error {
+            DelegateSourceError::Unenrolled => {
+                anyhow!(
+                    "member {source} has no enrolled key, it runs `zolana-ring key register` first"
+                )
+            }
+            error => anyhow::Error::from(error).context(format!("delegate source {source}")),
+        })?;
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
     let recovery = RingRecovery::new(ctx.ring.program_id(), &auditor)
         .with_mode(config.mode)
         .with_indexer_config(IndexerRpcConfig::at_slot(ctx.rpc().get_slot()?))
         .for_member(SourceMember {
             address: &source,
-            nullifier_key: &nullifier_key,
+            nullifier_key: resolved.nullifier_key(),
         });
-    let chain = ctx.chain();
     let recovered = ctx.block(recovery.run(chain.indexer(), chain.rpc(), &assets))?;
+    resolved.check_notes(&recovered.utxos)?;
     if !recovered.unopened.is_empty() {
         line("unopened notes", recovered.unopened.len());
     }
@@ -82,7 +84,7 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
             payer: authority.pubkey(),
             sources: vec![DelegateSource {
                 address: source,
-                nullifier_key: &nullifier_key,
+                nullifier_key: resolved.nullifier_key(),
                 utxos: &recovered.utxos,
             }],
             payments: args

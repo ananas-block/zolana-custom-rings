@@ -1,9 +1,9 @@
-use custom_ring_sdk::DelegatePayment;
+use async_trait::async_trait;
+use custom_ring_sdk::{DelegatePayment, DelegateSourceError, ResolvedSource, SourceEnrollment};
 use jsonrpsee::types::ErrorObjectOwned;
 use solana_address::Address;
 use spr_indexer_api::Hash;
-use spr_interface::ZERO_NULLIFIER_PUBKEY;
-use spr_keypair::NullifierKey;
+use spr_keypair::{NullifierKey, ShieldedAddress};
 use thiserror::Error;
 use zolana_ring_client::rpc::{
     AuthorityTransferAttestation, DelegateNotesAttestation, GetDelegateNotesRequest,
@@ -12,7 +12,7 @@ use zolana_ring_client::rpc::{
 };
 
 use crate::{
-    audit::WALLET_NOTE_PAGE_LIMIT,
+    audit::{AuditService, WALLET_NOTE_PAGE_LIMIT},
     authorize::WalletCheck,
     error::RingRpcError,
     hub::Hub,
@@ -39,6 +39,8 @@ pub enum AuthorityTransferError {
     TxViewingKey = -32225,
     #[error("the signer writes no salted list of the ring")]
     NotListWriter = -32226,
+    #[error("a stored note of the source belongs to another owner or key")]
+    SourceNote = -32227,
 }
 
 impl AuthorityTransferError {
@@ -50,6 +52,40 @@ impl AuthorityTransferError {
 impl From<AuthorityTransferError> for ErrorObjectOwned {
     fn from(error: AuthorityTransferError) -> Self {
         Self::owned(error.code(), error.to_string(), None::<()>)
+    }
+}
+
+impl From<DelegateSourceError> for RingRpcError {
+    fn from(error: DelegateSourceError) -> Self {
+        match error {
+            DelegateSourceError::Unenrolled => AuthorityTransferError::SourceUnescrowed.into(),
+            DelegateSourceError::KeyMismatch => AuthorityTransferError::SourceKey.into(),
+            DelegateSourceError::ForeignNote { .. } => AuthorityTransferError::SourceNote.into(),
+            DelegateSourceError::SealMismatch => Self::TrackedKey,
+            DelegateSourceError::Keypair(error) => error.into(),
+            DelegateSourceError::Client(error) => error.into(),
+            DelegateSourceError::Seal(error) => error.into(),
+        }
+    }
+}
+
+struct TrackedEnrollment<'a, S> {
+    service: &'a AuditService<S>,
+}
+
+#[async_trait]
+impl<S: TransactionSource> SourceEnrollment for TrackedEnrollment<'_, S> {
+    type Error = RingRpcError;
+
+    async fn escrowed_key(
+        &self,
+        source: &ShieldedAddress,
+    ) -> Result<Option<NullifierKey>, RingRpcError> {
+        let owner_key = source
+            .solana_address()
+            .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
+            .to_bytes();
+        self.service.tracked_nullifier_key(&owner_key)
     }
 }
 
@@ -233,7 +269,7 @@ impl<S: TransactionSource> Hub<S> {
                 })
                 .await?;
         }
-        // 3. Each escrowed secret opens to its source's key and stays in memory, the source's notes follow.
+        // 3. Each source key is the public zero key or its escrowed key, and only its own notes follow.
         let assets = shared.due_assets().await;
         let mut mints: Vec<Address> = Vec::new();
         for payment in &transfer.payments {
@@ -241,6 +277,7 @@ impl<S: TransactionSource> Hub<S> {
                 mints.push(payment.mint.0);
             }
         }
+        let enrollment = TrackedEnrollment { service: &service };
         let mut sources = Vec::with_capacity(transfer.sources.len());
         for source in &transfer.sources {
             let source = source.0;
@@ -248,28 +285,20 @@ impl<S: TransactionSource> Hub<S> {
                 .solana_address()
                 .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
                 .to_bytes();
-            // A zero key note moves under the public secret, the delegate proves no owner signature.
-            let nullifier_key = match source.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY {
-                true => NullifierKey::from_secret([0; 31]),
-                false => service
-                    .tracked_nullifier_key(&owner_key)?
-                    .ok_or(AuthorityTransferError::SourceUnescrowed)?,
-            };
-            if nullifier_key.pubkey()? != source.nullifier_pubkey {
-                return Err(AuthorityTransferError::SourceKey.into());
-            }
+            let resolved = ResolvedSource::resolve(source, &enrollment).await?;
             let mut notes = Vec::new();
             for mint in &mints {
                 notes.extend(shared.store(ring).spendable(SpendableNotes {
                     ring,
                     owner_key,
                     mint: assets.registry().mint(mint)?,
-                    nullifier_key: &nullifier_key,
+                    nullifier_key: resolved.nullifier_key(),
                 })?);
             }
+            resolved.check_notes(&notes)?;
             sources.push(SealedSource {
                 address: source,
-                nullifier_key,
+                nullifier_key: resolved.into_nullifier_key(),
                 notes,
             });
         }

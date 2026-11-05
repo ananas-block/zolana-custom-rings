@@ -154,7 +154,8 @@ export class PendingRelaySignature {
   /** @internal */
   constructor(relayId: Hash, message: Uint8Array, expected?: ExpectedRelayMessage) {
     this.relayId = relayId;
-    this.#message = message;
+    // `signOnChain` reads the buffer the message names across an await, a caller write must not change the message.
+    this.#message = message.slice();
     this.#expected = expected;
     Object.freeze(this);
   }

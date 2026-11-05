@@ -820,6 +820,62 @@ async fn own_notes_of_one_batch_take_consecutive_sender_tags() {
     assert_eq!(prepared.viewing_history().unwrap().current().tx_count(), 2);
 }
 
+/// A deposit proves no signature, a PDA recipient sits beside a wallet and no public signer may name either.
+#[tokio::test]
+async fn an_anonymous_batch_funds_a_pda_beside_a_wallet() {
+    use solana_signer::Signer;
+    use spr_keypair::{PublicKey, ShieldedAddress};
+    let (member, holder, payer) = (keypair(2), keypair(3), keypair(9));
+    let program_owner = Address::new_from_array([0x51; 32]);
+    let wallet = member.shielded_address().unwrap();
+    let program_address = ShieldedAddress {
+        signing_pubkey: PublicKey::from_pda(&program_owner),
+        ..holder.shielded_address().unwrap()
+    };
+    let chain = Chain::ring(RingSettings::new(RingMode::Anonymous))
+        .with_tracking(&[wallet, program_address]);
+    let to = |recipient| RingAddress {
+        recipient,
+        ring_program_id: ring().program_id(),
+        list_salt: [7; 32],
+    };
+    let (to_wallet, to_program) = (to(wallet), to(program_address));
+    let paid = |to, requester: &spr_keypair::ShieldedKeypair| crate::DepositOutput {
+        recipient: DepositRecipient::AnonymousPayment {
+            to,
+            deposit_tag: Some(requester.get_recipient_request_view_tag(0).unwrap()),
+        },
+        asset: DepositAsset::Sol,
+        amount: 5,
+        list_salt: None,
+    };
+    let prepared = crate::RingDepositBatch {
+        ring: ring(),
+        payer: &payer,
+        tree: pda::tree(TREE_ID),
+        outputs: vec![paid(&to_wallet, &member), paid(&to_program, &holder)],
+        cosigner: None,
+    }
+    .prepare(&chain)
+    .await
+    .unwrap();
+    assert_eq!(prepared.utxos()[1].owner, program_address.signing_pubkey);
+    let slot = &prepared.disclosure.slots[1];
+    assert_eq!(slot.owner.key(), program_owner.to_bytes());
+    assert_eq!(
+        slot.owner_pk_hash,
+        spr_hasher::primitives::solana_owner_identity(program_owner.as_array()).unwrap()
+    );
+    prepared.disclosure.records(ring(), &chain).await.unwrap();
+    assert!(prepared.check_public_signers([payer.pubkey()]).is_ok());
+    for named in [program_owner, wallet.solana_address().unwrap()] {
+        assert!(matches!(
+            prepared.check_public_signers([payer.pubkey(), named]),
+            Err(RingError::AnonymousPublicSignerLinksOwner)
+        ));
+    }
+}
+
 mod capacities {
     use bytemuck::Zeroable;
     use custom_ring_interface::{

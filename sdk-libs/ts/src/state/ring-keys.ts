@@ -3,6 +3,7 @@ import type { Bytes16, Bytes32, RequestContext } from "@heliuslabs/zolana";
 import type { Address } from "@solana/kit";
 import { addressBytes, bytesKey, equalBytes, isCanonicalField } from "@heliuslabs/zolana/internal";
 import {
+  KeypairError,
   NullifierKey,
   ViewingKey,
   X25519PublicKey,
@@ -127,6 +128,7 @@ export class LocalRingKeys implements RingKeys {
   readonly #tags: ViewingKeyHolder;
   /** The identity key, `list_tag` is final so a rotation keeps the salt. */
   readonly #listRoot: ViewingKey;
+  #destroyed = false;
 
   private constructor(
     keys: LocalShieldedKeys,
@@ -172,29 +174,39 @@ export class LocalRingKeys implements RingKeys {
     return this.#keys.viewingPublicKeys();
   }
 
-  decrypt(requests: Parameters<ShieldedKeys["decrypt"]>[0]): ReturnType<ShieldedKeys["decrypt"]> {
+  async decrypt(
+    requests: Parameters<ShieldedKeys["decrypt"]>[0],
+  ): ReturnType<ShieldedKeys["decrypt"]> {
+    this.#checkUsable();
     return this.#keys.decrypt(requests);
   }
 
-  derive(requests: Parameters<ShieldedKeys["derive"]>[0]): ReturnType<ShieldedKeys["derive"]> {
+  async derive(
+    requests: Parameters<ShieldedKeys["derive"]>[0],
+  ): ReturnType<ShieldedKeys["derive"]> {
+    this.#checkUsable();
     return this.#keys.derive(requests);
   }
 
-  transactionKeys(
+  async transactionKeys(
     requests: Parameters<ShieldedKeys["transactionKeys"]>[0],
   ): ReturnType<ShieldedKeys["transactionKeys"]> {
+    this.#checkUsable();
     return this.#keys.transactionKeys(requests);
   }
 
   async ringDeliverySecrets(requests: readonly RingDeliveryRequest[]): Promise<readonly Bytes32[]> {
+    this.#checkUsable();
     return this.#tags.deliverySecrets(requests);
   }
 
   async listSalt(ringProgramId: Address): Promise<Bytes32> {
+    this.#checkUsable();
     return listSaltOf(this.#listRoot, ringProgramId);
   }
 
   async mergeSeeds(requests: readonly MergeSeedRequest[]): Promise<readonly Bytes32[]> {
+    this.#checkUsable();
     return requests.map((request) => {
       // A real nullifier is canonical, the list salt's label is not.
       if (!isCanonicalField(request.firstNullifier))
@@ -208,13 +220,15 @@ export class LocalRingKeys implements RingKeys {
     });
   }
 
-  ringTagMatches(
+  async ringTagMatches(
     frames: readonly RingTagFrame[],
   ): Promise<readonly (readonly (Bytes32 | undefined)[])[]> {
+    this.#checkUsable();
     return this.#tags.ringTagMatches(frames);
   }
 
   async viewTags(requests: readonly ViewTagRequest[]): Promise<readonly ViewTag[]> {
+    this.#checkUsable();
     return requests.map((request) => {
       const key = this.#tags.held(request.viewingPublicKey);
       return request.stream.kind === "sender"
@@ -225,12 +239,22 @@ export class LocalRingKeys implements RingKeys {
 
   /** The CRDS secret under the recipient key, the agreement never leaves the holder. */
   ringDeliverySecret(request: RingDeliveryRequest): Bytes32 {
+    this.#checkUsable();
     return exactlySecret(this.#tags.deliverySecrets([request]));
   }
 
+  /** Zeroes each held key buffer, a copy the JS engine made stays out of its reach. */
   destroy(): void {
+    this.#destroyed = true;
     this.#keys.destroy();
     this.#tags.destroy();
+    this.#listRoot.destroy();
+  }
+
+  // An empty request touches no key, the flag refuses it all the same.
+  #checkUsable(): void {
+    if (this.#destroyed)
+      throw new KeypairError("KEYPAIR_INVALID_SECRET_KEY", { reason: "destroyed" });
   }
 }
 

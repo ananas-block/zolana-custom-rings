@@ -38,6 +38,8 @@ pub struct ViewingKeyEntry {
     known_senders: HashSet<X25519Pubkey>,
     /// `after_slot` per ring, `None` reads from the first indexed block.
     ring_positions: BTreeMap<Address, Option<u64>>,
+    /// `after_slot` of the confidential slot tag read, `None` reads from the first indexed block.
+    tag_position: Option<u64>,
 }
 
 /// Every retained viewing key, oldest first, the last one current.
@@ -148,6 +150,7 @@ impl ViewingKeyEntry {
             request: StreamCounter::default(),
             known_senders: HashSet::new(),
             ring_positions: BTreeMap::new(),
+            tag_position: None,
         }
     }
 
@@ -175,6 +178,10 @@ impl ViewingKeyEntry {
         &self.ring_positions
     }
 
+    pub fn tag_position(&self) -> Option<u64> {
+        self.tag_position
+    }
+
     pub(crate) fn tx_stream_mut(&mut self) -> &mut StreamCounter {
         &mut self.tx
     }
@@ -186,6 +193,11 @@ impl ViewingKeyEntry {
     /// Only a terminal page's `context.slot` reaches here.
     pub(crate) fn set_ring_position(&mut self, ring: Address, after_slot: u64) {
         self.ring_positions.insert(ring, Some(after_slot));
+    }
+
+    /// Only a terminal page's `context.slot` reaches here.
+    pub(crate) fn set_tag_position(&mut self, after_slot: u64) {
+        self.tag_position = Some(after_slot);
     }
 
     /// A reply is a claim, the wallet confirms a sender here and nothing else does.
@@ -200,6 +212,7 @@ impl ViewingKeyEntry {
     fn progress_matches(&self, stored: &Self) -> bool {
         self.tx.same_progress(&stored.tx)
             && self.request.same_progress(&stored.request)
+            && self.tag_position == stored.tag_position
             && stored
                 .ring_positions
                 .iter()
@@ -364,6 +377,7 @@ impl ViewingHistory {
             stored.entry(&entry.viewing_pubkey).is_some()
                 || (entry.tx.scanned == 0
                     && entry.request.scanned == 0
+                    && entry.tag_position.is_none()
                     && entry.ring_positions.values().all(Option::is_none))
         })
     }
@@ -393,6 +407,7 @@ struct EntryJson {
     request: CounterJson,
     known_senders: Vec<String>,
     ring_positions: Vec<RingPositionJson>,
+    tag_position: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -474,6 +489,7 @@ impl ViewingHistory {
                                 after_slot: *after_slot,
                             })
                             .collect(),
+                        tag_position: entry.tag_position,
                     }
                 })
                 .collect(),
@@ -523,6 +539,7 @@ fn entry_of(stored: EntryJson) -> Result<ViewingKeyEntry, AnonymousError> {
         request: stored.request.try_into()?,
         known_senders: senders(&stored.known_senders)?,
         ring_positions,
+        tag_position: stored.tag_position,
     })
 }
 
