@@ -23,19 +23,21 @@ function filled(value: number): Bytes32 {
   return new Uint8Array(32).fill(value) as Bytes32;
 }
 
-type Note = readonly [tree: number, amount: bigint];
+type Note = readonly [tree: number, amount: bigint, asset?: Address];
+
+const MINT = address("Mint111111111111111111111111111111111111111");
 
 function walletOf(notes: readonly Note[], ringProgramId?: Address): Wallet {
   const keypair = ShieldedKeypair.fromKeypair(SigningKey.fromEd25519Bytes(filled(42)));
   const wallet = new Wallet({
     identity: keypair.shieldedAddress(),
-    registry: new AssetRegistry([]),
+    registry: new AssetRegistry([[2n, MINT]]),
   });
   wallet._replace({
-    utxos: notes.map(([tree, amount], index) => ({
+    utxos: notes.map(([tree, amount, asset = SOL_MINT], index) => ({
       utxo: new Utxo({
         owner: keypair.signingPublicKey(),
-        asset: SOL_MINT,
+        asset,
         amount,
         blinding: filled((index % 250) + 1),
         data: new Data(),
@@ -225,6 +227,32 @@ describe("selectAcrossTrees", () => {
     expect(selected).toHaveLength(21);
     expect(new Set(selected.map((entry) => entry.outputContext.tree))).toEqual(
       new Set([treeAddress(1), treeAddress(2)]),
+    );
+  });
+
+  it("names the mint no tree set reaches", () => {
+    const select = () =>
+      selectAcrossTrees({
+        wallet: walletOf([
+          [1, 10n],
+          [2, 5n, MINT],
+        ]),
+        covers: [
+          { asset: SOL_MINT, amount: 10n },
+          { asset: MINT, amount: 100n },
+        ],
+        policy: {
+          eligible: () => true,
+          ordering: "largestFirst",
+          maxInputs: 4,
+          errors: ringSelectionErrors,
+        },
+      });
+    expect(select).toThrow(
+      expect.objectContaining({
+        code: "RING_INSUFFICIENT_BALANCE",
+        details: expect.objectContaining({ asset: MINT }),
+      }),
     );
   });
 

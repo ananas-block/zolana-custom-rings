@@ -29,8 +29,7 @@ export const PAIR_POOL_TREES = 8;
 
 /**
  * Every mint from one tree, two trees only when no tree alone fits, then the fewest UTXOs,
- * then change. `feasible` admits a selection a keyed shape holds, with only infeasible
- * selections the best returns and the caller's shape check names the refusal.
+ * then change.
  */
 export function selectAcrossTrees(
   input: Readonly<{
@@ -39,6 +38,7 @@ export function selectAcrossTrees(
     policy: Omit<SpendPolicy, "tree">;
     /** At most `MAX_INPUT_TREES`, below it where the rail's builder takes fewer. */
     maxTrees?: number;
+    /** Only infeasible selections leave the refusal to the caller's shape check. */
     feasible?: (entries: readonly WalletUtxo[]) => boolean;
   }>,
 ): readonly WalletUtxo[] {
@@ -60,9 +60,9 @@ export function selectAcrossTrees(
   const notesOf = (trees: readonly Address[], asset: Address) =>
     trees.flatMap((tree) => (byTree.get(tree) ?? []).filter((entry) => entry.utxo.asset === asset));
   // Each mint in turn takes what the earlier mints leave of the input budget.
-  const attempt = (trees: readonly Address[]) => {
+  const attempt = (trees: readonly Address[], wanted: readonly Cover[] = covers) => {
     const entries: WalletUtxo[] = [];
-    for (const [funded, cover] of covers.entries()) {
+    for (const [funded, cover] of wanted.entries()) {
       try {
         entries.push(
           ...selectUtxos({
@@ -117,11 +117,16 @@ export function selectAcrossTrees(
     if (best === undefined || precedes(rank, best.rank)) best = { rank, entries };
   }
   if (best !== undefined) return best.entries;
-  // 3. Each mint's furthest set names the refusal, the first mint short everywhere leads.
+  // 3. A mint no set reaches names the refusal alone, at its furthest set.
   const short = covers.findIndex(
     (cover, at) => !reaches[at]!.reachesAnywhere(cover.amount, maxTrees),
   );
-  for (const reach of short === -1 ? reaches : [reaches[short]!, ...reaches]) {
+  if (short !== -1) {
+    const outcome = attempt(reaches[short]!.furthest(maxTrees) ?? [], [covers[short]!]);
+    if (outcome.kind === "short") throw outcome.error;
+  }
+  // Every mint reaches alone, the furthest set run or a mint's furthest set names the refusal.
+  for (const reach of reaches) {
     if (furthest !== undefined) break;
     const set = reach.furthest(maxTrees);
     if (set !== undefined) consider(set);
@@ -155,7 +160,7 @@ export class TreeReach {
     }
   }
 
-  /** The most a largest first pick of at most `budget` notes takes from `set`, exact for one mint. */
+  /** The most a largest first pick of at most `budget` notes takes from `set`. */
   of(set: readonly Address[]): bigint {
     const largest = (tree: Address, count: number) => {
       const sums = this.#prefixes.get(tree) ?? [0n];
@@ -206,12 +211,7 @@ export function rankedTrees(
   return { trees: [...new Set([...pool, ...ranked.flat()])], pool };
 }
 
-/**
- * @internal Singles, pool pairs, then every other pair, the first stage with a feasible set ends
- * the search, Rust `TreeSearch`. Over T trees the worst case is T singles and T(T-1)/2 pairs per
- * mint reach check, a selection runs only on a set every mint reaches, and every infeasible set
- * returns after a complete search.
- */
+/** @internal Singles, pool pairs, then the other pairs, a stage with a feasible set ends the search, Rust `TreeSearch`. */
 export function treeSearch<T>(
   input: Readonly<{
     trees: readonly Address[];
@@ -237,6 +237,7 @@ export function treeSearch<T>(
   const stages = [
     () => trees.map((tree) => [tree]),
     () => (input.maxTrees >= 2 ? pairs(pool) : []),
+    // Complete over every pair of T trees, a reach check prunes each pair before any selection.
     () =>
       input.maxTrees >= 2
         ? pairs(trees).filter((pair) => !pair.every((tree) => inPool.has(tree)))

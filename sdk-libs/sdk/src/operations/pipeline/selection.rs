@@ -96,7 +96,7 @@ impl Reach {
         Self { budget, prefixes }
     }
 
-    /// The most a largest first pick of at most `budget` notes takes from `set`, exact for one mint.
+    /// The most a largest first pick of at most `budget` notes takes from `set`.
     pub fn of(&self, set: &[u16]) -> u128 {
         let largest = |tree: &u16, count: usize| {
             self.prefixes
@@ -157,19 +157,7 @@ pub(super) enum Trial<T> {
     Infeasible(T),
 }
 
-impl<T> Trial<T> {
-    pub fn new(found: T, feasible: bool) -> Self {
-        if feasible {
-            Self::Feasible(found)
-        } else {
-            Self::Infeasible(found)
-        }
-    }
-}
-
-/// Singles, pool pairs, then every other pair, the first stage with a feasible set ends the search.
-/// Over T trees the worst case is T singles and T(T-1)/2 pairs per mint reach check, a selection
-/// runs only on a set every mint reaches, and every infeasible set returns after a complete search.
+/// Singles, pool pairs, then the other pairs, a stage with a feasible set ends the search.
 #[must_use = "run the search"]
 pub(super) struct TreeSearch<'t, R, F> {
     pub trees: &'t RankedTrees,
@@ -193,6 +181,7 @@ impl<R: Fn(&[u16]) -> bool, F> TreeSearch<'_, R, F> {
         if !preferred.is_empty() {
             return preferred;
         }
+        // Complete over every pair of T trees, a reach check prunes each pair before any selection.
         let rest = self.stage(
             pairs(trees).filter(|pair| !pair.iter().all(|tree| pool.contains(tree))),
             &mut infeasible,
@@ -250,20 +239,12 @@ fn pairs(trees: &[u16]) -> impl Iterator<Item = [u16; 2]> + '_ {
 
 impl<'u> Funding<'u> {
     /// The fewest UTXOs on one tree, two trees only when no tree alone fits, then the least change.
-    pub fn candidates(
-        &self,
-        keep: impl Fn(&WalletUtxo) -> bool,
-        feasible: impl Fn(&Candidate) -> bool,
-    ) -> Vec<Candidate> {
-        self.covers(&self.by_tree(keep), &feasible)
+    pub fn candidates(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Vec<Candidate> {
+        self.covers(&self.by_tree(keep))
     }
 
     /// Exact funding per tree ahead of [`Self::candidates`], the change of a default-ring spend enters the ring.
-    pub fn exact_first(
-        &self,
-        keep: impl Fn(&WalletUtxo) -> bool,
-        feasible: impl Fn(&Candidate) -> bool,
-    ) -> Vec<Candidate> {
+    pub fn exact_first(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Vec<Candidate> {
         let by_tree = self.by_tree(keep);
         let mut ranked: Vec<Candidate> = by_tree
             .values()
@@ -280,11 +261,10 @@ impl<'u> Funding<'u> {
                 utxos,
                 change: false,
             })
-            .filter(&feasible)
             .collect();
         ranked.sort_by_key(|candidate| candidate.utxos.len());
         let covers: Vec<Candidate> = self
-            .covers(&by_tree, &feasible)
+            .covers(&by_tree)
             .into_iter()
             .filter(|cover| !ranked.contains(cover))
             .collect();
@@ -330,11 +310,7 @@ impl<'u> Funding<'u> {
     }
 
     /// One per funding tree set from [`TreeSearch`], ranked by UTXO count, total, then tree ids.
-    fn covers(
-        &self,
-        by_tree: &BTreeMap<u16, Vec<&'u WalletUtxo>>,
-        feasible: &impl Fn(&Candidate) -> bool,
-    ) -> Vec<Candidate> {
+    fn covers(&self, by_tree: &BTreeMap<u16, Vec<&'u WalletUtxo>>) -> Vec<Candidate> {
         let reach = Reach::new(by_tree.values().flatten().copied(), self.max_inputs);
         let mut funded = TreeSearch {
             trees: &RankedTrees::new(std::slice::from_ref(&reach)),
@@ -358,11 +334,11 @@ impl<'u> Funding<'u> {
                     utxos,
                     change: total > u128::from(self.amount),
                 };
-                let fits = feasible(&candidate);
-                Some(Trial::new(
-                    ((candidate.utxos.len(), total, set.to_vec()), candidate),
-                    fits,
-                ))
+                // `max_inputs` is a keyed width, every funded set has its shape.
+                Some(Trial::Feasible((
+                    (candidate.utxos.len(), total, set.to_vec()),
+                    candidate,
+                )))
             },
         }
         .run();

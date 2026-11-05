@@ -295,14 +295,11 @@ impl<'a> DelegateMove<'a> {
                     change: false,
                 }
                 .shape(payments + change, keyed);
-                Some(Trial::new(
-                    (
-                        (notes, totals.iter().sum::<u128>(), set.to_vec()),
-                        funded,
-                        shape,
-                    ),
-                    shape.is_some(),
-                ))
+                let found = (notes, totals.iter().sum::<u128>(), set.to_vec());
+                Some(match shape {
+                    Some(_) => Trial::Feasible((found, funded, shape)),
+                    None => Trial::Infeasible((found, funded, shape)),
+                })
             },
         }
         .run();

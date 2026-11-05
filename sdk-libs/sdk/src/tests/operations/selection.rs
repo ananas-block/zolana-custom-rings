@@ -32,7 +32,7 @@ fn funding(utxos: &[WalletUtxo], amount: u64, max_inputs: usize) -> Funding<'_> 
 }
 
 fn first_choice(utxos: &[WalletUtxo], amount: u64, max_inputs: usize) -> Vec<(u16, u64)> {
-    let candidates = funding(utxos, amount, max_inputs).candidates(|_| true, |_| true);
+    let candidates = funding(utxos, amount, max_inputs).candidates(|_| true);
     let mut picked: Vec<_> = candidates
         .first()
         .map(|candidate| &candidate.utxos[..])
@@ -100,20 +100,6 @@ fn a_pair_no_reach_covers_runs_no_selection() {
 }
 
 #[test]
-fn an_infeasible_tree_moves_the_search_on_to_a_pair() {
-    let utxos = notes([(0, 101), (1, 50), (2, 50)]);
-    let exact = |candidate: &super::Candidate| !candidate.change;
-    let candidates = funding(&utxos, 100, 4).candidates(|_| true, exact);
-    let trees: Vec<u16> = candidates[0]
-        .utxos
-        .iter()
-        .map(|utxo| utxo.tree_id)
-        .collect();
-    assert_eq!(trees.len(), 2);
-    assert!(!trees.contains(&0));
-}
-
-#[test]
 fn pays_ten_from_six_on_each_of_two_trees() {
     let utxos = notes([(0, 6), (1, 6), (2, 1)]);
     assert_eq!(first_choice(&utxos, 10, 5), [(0, 6), (1, 6)]);
@@ -123,9 +109,7 @@ fn pays_ten_from_six_on_each_of_two_trees() {
 fn a_tree_of_another_asset_stays_out_of_the_search() {
     let mut utxos = notes([(0, 6), (1, 6)]);
     utxos[1].utxo.asset = Mint::new(Address::new_from_array([9; 32]), 2);
-    assert!(funding(&utxos, 10, 5)
-        .candidates(|_| true, |_| true)
-        .is_empty());
+    assert!(funding(&utxos, 10, 5).candidates(|_| true).is_empty());
 }
 
 #[test]
