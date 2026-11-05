@@ -108,7 +108,7 @@ func vectorOf(t *testing.T, name, family string, s ringtransfer.Statement, run [
 	return v
 }
 
-// fixedStatementElements mirrors TRANSFER_FIXED_ELEMENTS, the sender cells, the public slots and the close add to it.
+// fixedStatementElements is TRANSFER_FIXED_ELEMENTS less the sender, the sender and party cells, the public slots and the close add to it.
 const fixedStatementElements = 10 + 3 + 4 + 4 + 2 + 2 + 4 + 1
 
 func confidentialCase(t *testing.T, name string, w ringtransfer.Confidential) transferStatementVector {

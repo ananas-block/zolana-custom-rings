@@ -23,7 +23,7 @@
 //  6. On an entry key each default-ring input opens in full, with its bit set, and every other entry is zero.
 //
 // Read after audit/audit.go, audit/layout.go, shared/utxo.go.
-// Read before audit/signer_data.go, transfer/transfer.go, deposit.go, merge.go.
+// Read before transfer/input.go, audit/signer_data.go, deposit.go, merge.go.
 
 package audit
 

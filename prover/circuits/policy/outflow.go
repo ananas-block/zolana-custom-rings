@@ -80,7 +80,7 @@ type flowSource struct {
 	held, returned []frontend.Variable
 	exits          []frontend.Variable
 	publicAssets   []frontend.Variable
-	// Statement-bound, the legs are empty without an own registry and on the authority rail.
+	// Statement-bound, zero while the section is off.
 	gross []frontend.Variable
 }
 
@@ -121,7 +121,7 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 	totals := make([]frontend.Variable, 0, 3*len(outputs)+4*len(resolved.publicAssets))
 	for o, out := range outputs {
 		slot := bound(limitedAsset{asset: out.Asset, active: out.Utxo, policy: resolved.mintPolicies[o]}, source.flowsOf(api, cmp, out.Asset))
-		// A dummy keeps its asset and may share a live one, zeros keep its slot from reading as live.
+		// An unpublished slot's asset stays free and may share a live one, zeros keep its slot from reading as live.
 		totals = append(totals, api.Mul(out.Utxo, out.Asset), api.Mul(out.Utxo, slot.peak), api.Mul(out.Utxo, slot.outflow))
 	}
 	// 4. Every public asset meets its bound over the debits. SPP's balance leaves an asset with neither a live output nor a public slot holding zero, so steps 3 and 4 cover every asset that moves.

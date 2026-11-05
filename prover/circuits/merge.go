@@ -1,3 +1,5 @@
+// Proves that a ring's SPP merge output opens to the ring's auditor.
+//
 // SPP's merge proof ties every input to one owner, one asset and the sum, and it seals nothing to an
 // auditor. The ring proof adds one opening record of the output sealed to the ring's auditor key, and
 // it opens no input, so one key serves every merge width. Without it the auditor holds no proven
@@ -41,7 +43,7 @@ import (
 
 const MergeRecordLen = audit.OpeningRecordLen
 
-// MergeCircuit binds a ring's SPP merge output to a record only its auditor opens, SPP's proof ties every input to that owner, asset and sum.
+// MergeCircuit binds a ring's SPP merge output to a record sealed to its auditor, SPP's proof ties every input to that owner, asset and sum.
 type MergeCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 

@@ -48,7 +48,7 @@ func OpenInputs(api frontend.API, inputs []shared.UtxoWires, inputCount frontend
 	return section
 }
 
-// AssertRingNotes holds every live input to this ring, a key with entry capacity also spends a default-ring note.
+// AssertRingNotes holds every live input to the bound ring, a key with entry capacity also spends a default-ring note.
 func (s InputSection) AssertRingNotes(api frontend.API, ringID frontend.Variable, entry bool) {
 	for _, slot := range s.Slots {
 		// Off an entry key the condition reads every note, so a default-ring note fails its zero ring id. The auditor stream of such a key has no evidence to open one.

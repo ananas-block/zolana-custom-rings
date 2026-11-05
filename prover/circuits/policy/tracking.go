@@ -38,13 +38,13 @@ type Tracking struct {
 	OutputEntries []frontend.Variable
 }
 
-// TrackingView reads zeros for an absent member, enrollment refuses a zero key so the key alone tells presence.
+// TrackingView reads zeros for an absent member, an enrolled key hashes a nonzero secret so the key alone tells presence.
 type TrackingView struct {
 	NullifierPk, ListTag frontend.Variable
 }
 
 // TrackingPool answers row and output queries, a member absent from the root reads zeros.
-// It shares only the pool's authentication with the policy registries, its leaf is TrackingRecord's, its root TrackingRoot and its absence a zero key.
+// It shares only the pool's authentication with the policy registries, its leaf is TrackingRecord's, its root TrackingRoot and its absence zero columns.
 type TrackingPool struct {
 	subjects subjectPool
 }
@@ -67,7 +67,7 @@ func NewTracking(rows, outputs, withdrawals int) (Tracking, error) {
 	}, nil
 }
 
-// Validate refuses a pool sized off the key before any wire is read.
+// ValidateTracking refuses a pool sized off the key before any wire is read.
 func (t *Tracking) ValidateTracking(rows, outputs, withdrawals int) error {
 	capacity := rows + outputs + withdrawals
 	if len(t.RowEntries) != rows || len(t.OutputEntries) != outputs {

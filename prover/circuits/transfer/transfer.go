@@ -113,7 +113,7 @@ type Sections struct {
 	Signers []frontend.Variable
 	// SignerDataCounts is the statement's packed count per run entry, zero unless a run entry owns a data-bearing output.
 	SignerDataCounts frontend.Variable
-	// Rows hold every live input owner, ascending with zero rows last off the authority rail. They stay private, the constraints alone fix them. A row with no input holds nothing and only adds its own sender rules.
+	// Rows hold every live input owner, a delegate's zero key note aside, ascending with zero rows last off the authority rail. They stay private, the constraints alone hold them. A row with no input holds nothing and only adds its own sender rules.
 	Rows []frontend.Variable
 	policy.Tracking
 	// ApprovalMask is the proven approval bits, the program demands their co-signers.
@@ -183,7 +183,7 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// 3. The inputs open with dummies last, a live input belongs to the bound ring or on an entry key to the default ring.
 	section := OpenInputs(api, c.Inputs, c.InputCount)
 	section.AssertRingNotes(api, c.RingProgramID, c.Shape.Entry)
-	// 4. The signer run opens under the chain the program rebuilds, and every live input's owner is in it, hidden or the in-proof sender.
+	// 4. The signer run opens under the chain the program rebuilds, and off the delegate rail every live input's owner is in it, hidden or the in-proof sender.
 	signers := OpenSigners(api, c.Signers, c.SignerCount)
 	// The delegate signs for every owner, a published run would name a victim.
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: c.SignerCount})
@@ -200,7 +200,7 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// 7. private_tx_hash reopens over these slots, an opening other than SPP's fails here, and a delegate's statement stays off every policy registry.
 	c.bindTransaction(api, gadget.NonZeroHashChain(api, section.Hashes), opened.Slots)
 	c.assertBypass(api, c.Delegate)
-	// 8. The policy screens the bound slots. The rows hold every live owner by step 5, so no owner's funds escape the sender rules or the attribution.
+	// 8. The policy screens the bound slots. The rows hold every live input owner by step 5, so no owner's funds escape the sender rules or the attribution.
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
@@ -259,7 +259,7 @@ func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audi
 	return closeStatement(fields)
 }
 
-// closeStatement binds the nonzero element count last, a statement of another length hashes apart.
+// closeStatement ends on the element count, itself included, HashChain4 pads zeros and a nonzero last element hashes another length apart.
 func closeStatement(fields []frontend.Variable) []frontend.Variable {
 	return append(fields, len(fields)+1)
 }

@@ -70,7 +70,7 @@ type World struct {
 	Outputs map[int]func(*ringaudit.Slot)
 	// Unenrolled owners hold no tracking row.
 	Unenrolled []*big.Int
-	// Enrolled owners hold this row in place of their note's key.
+	// Enrolled maps an owner to the row key it holds in place of its note's key.
 	Enrolled map[string]*big.Int
 	// A nil slice leaves the policy reading no salted list.
 	SaltedBlock []*big.Int
