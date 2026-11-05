@@ -40,10 +40,10 @@ describe("the sibling keys", () => {
   it("serves eight inputs at sixteen outputs and four at an eight output entry", () => {
     const sixteen = ringTransferCircuit(fittedSpend(loaded(row(16, 8, false))));
     expect(sixteen).toMatchObject({ outputs: 16, class: 8, withdrawals: 8, owners: 8, wide: true });
-    expect(transferPoolCapacity(sixteen!)).toEqual({ own: 91, curator: 91, tracking: 32 });
+    expect(transferPoolCapacity(sixteen!)).toEqual({ own: 83, curator: 83, tracking: 32 });
     const entry = ringTransferCircuit(fittedSpend(loaded(row(8, 4, true))));
     expect(entry).toMatchObject({ outputs: 8, class: 4, withdrawals: 4, owners: 4, entry: true });
-    expect(transferPoolCapacity(entry!)).toEqual({ own: 47, curator: 47, tracking: 16 });
+    expect(transferPoolCapacity(entry!)).toEqual({ own: 43, curator: 43, tracking: 16 });
     expect(transferKeys()).toHaveLength(12);
   });
 
@@ -88,7 +88,8 @@ describe("sealedWide", () => {
         shape,
         unreadSubjectPools({
           owners: shape.owners + shape.outputs + shape.withdrawals,
-          assets: shape.inputs + shape.outputs + 3,
+          // Inputs repeating the payments' assets open no record.
+          assets: shape.outputs + 3,
         }),
       );
       expect(fittedSpend(spend).wide).toBe(false);

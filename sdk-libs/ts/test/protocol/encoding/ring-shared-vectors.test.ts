@@ -408,6 +408,18 @@ describe("transfer key selection", () => {
     expect(ringTransferCircuit(fittedSpend({ ...spend, pools }))?.owners).toBe(24);
   });
 
+  it("moves a spend past the narrow rows by its unmatched input assets", () => {
+    // Two owners, the payment's asset and the unmatched assets, 15 rows on the narrow key.
+    const opened = (unmatched: number) => {
+      const own = 2 + 1 + unmatched;
+      return ringTransferCircuit(
+        fittedSpend({ ...spend, pools: { own, curator: own, tracking: 0 } }),
+      );
+    };
+    expect(opened(12)).toMatchObject({ outputs: 2, class: 24, wide: false });
+    expect(opened(13)).toMatchObject({ outputs: 8, class: 24, wide: true });
+  });
+
   it("holds the pools of pool_capacity.json", () => {
     expect(poolCapacity.keys).toEqual(
       transferKeys().map((circuit) => ({

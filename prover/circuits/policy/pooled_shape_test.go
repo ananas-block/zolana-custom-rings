@@ -43,8 +43,8 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 	}
 }
 
-// Each input slot widens both registries' pools by one row, the owner references stay per payment.
-func TestInputSlotsWidenBothPools(t *testing.T) {
+// An input slot adds an asset reference and no row, the pools stay at the payments' width.
+func TestInputSlotsTakeAReferenceAndNoRow(t *testing.T) {
 	shape := InputsShape{Outputs: 2, Withdrawals: 1, Senders: 4}
 	base, err := NewPolicy(shape.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
@@ -58,9 +58,8 @@ func TestInputSlotsWidenBothPools(t *testing.T) {
 	if err = spent.Validate(transaction.NPublicSlots); err != nil {
 		t.Fatal(err)
 	}
-	widened, pools := spent.RecordPools(), base.RecordPools()
-	if widened != (RecordPoolShape{Own: pools.Own + 3, Curator: pools.Curator + 3, OwnSubjects: pools.OwnSubjects + 3, CuratorSubjects: pools.CuratorSubjects + 3}) {
-		t.Fatalf("pools %+v over %+v", widened, pools)
+	if spent.RecordPools() != base.RecordPools() {
+		t.Fatalf("pools %+v over %+v", spent.RecordPools(), base.RecordPools())
 	}
 	if len(spent.AssetEntries) != len(base.AssetEntries)+3 || len(spent.OwnerEntries) != len(base.OwnerEntries) {
 		t.Fatalf("references %d and %d", len(spent.AssetEntries), len(spent.OwnerEntries))

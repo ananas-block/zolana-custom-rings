@@ -432,16 +432,16 @@ impl RingCircuit {
             entry,
             wide,
         };
-        let (outputs, withdrawals, owners, inputs) = (
+        let (outputs, withdrawals, owners) = (
             usize::from(outputs),
             usize::from(withdrawals),
             usize::from(owners),
-            usize::from(inputs),
         );
         // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
         let withdrawal_assets = withdrawals.min(N_PUBLIC_SLOTS);
-        // A zero value input can name any asset, every input slot takes its own row.
-        let distinct = owners + 2 * outputs + withdrawals + shape.salted_keys() + inputs;
+        // An input slot takes no row, its asset reads a payment's record or a free one and a spend
+        // past the rows selects the wide key.
+        let distinct = owners + 2 * outputs + withdrawals + shape.salted_keys();
         Some(RecordPools {
             own: distinct + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: distinct + withdrawal_assets,
@@ -573,8 +573,8 @@ mod tests {
         assert_eq!(
             forty_nine.and_then(RingCircuit::record_pools),
             Some(RecordPools {
-                own: 90,
-                curator: 90,
+                own: 41,
+                curator: 41,
                 tracking: 18
             })
         );
@@ -627,8 +627,8 @@ mod tests {
         assert_eq!(
             wide_entry.and_then(RingCircuit::record_pools),
             Some(RecordPools {
-                own: 119,
-                curator: 119,
+                own: 95,
+                curator: 95,
                 tracking: 45
             })
         );
@@ -723,14 +723,14 @@ mod tests {
             let pools = circuit.record_pools().unwrap();
             (pools.own, pools.curator, pools.tracking)
         };
-        assert_eq!(pools(transfer(2, 24, 4, 4)), (39, 39, 6));
-        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (137, 137, 51));
-        assert_eq!(pools(transfer(16, 5, 8, 5)), (53, 53, 21));
-        assert_eq!(pools(wide(16, 5, 8, 5).circuit()), (82, 82, 29));
-        assert_eq!(pools(entry(4, 8, 4, 8).circuit()), (47, 47, 16));
-        assert_eq!(pools(entry(8, 2, 4, 2).circuit()), (41, 41, 14));
-        assert_eq!(pools(wide(16, 8, 8, 8).circuit()), (91, 91, 32));
-        assert_eq!(pools(entry(8, 4, 4, 4).circuit()), (47, 47, 16));
+        assert_eq!(pools(transfer(2, 24, 4, 4)), (15, 15, 6));
+        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (113, 113, 51));
+        assert_eq!(pools(transfer(16, 5, 8, 5)), (48, 48, 21));
+        assert_eq!(pools(wide(16, 5, 8, 5).circuit()), (77, 77, 29));
+        assert_eq!(pools(entry(4, 8, 4, 8).circuit()), (39, 39, 16));
+        assert_eq!(pools(entry(8, 2, 4, 2).circuit()), (39, 39, 14));
+        assert_eq!(pools(wide(16, 8, 8, 8).circuit()), (83, 83, 32));
+        assert_eq!(pools(entry(8, 4, 4, 4).circuit()), (43, 43, 16));
     }
 
     #[test]
@@ -749,17 +749,19 @@ mod tests {
             ..RecordPools::default()
         };
         assert_eq!(fitted(2, tracked), Some(wide(8, 24, 32, 24).circuit()));
-        let own = RecordPools {
-            own: 40,
+        // Two owners, the payment's asset and 13 unmatched input assets hold the 15 narrow rows.
+        let distinct_assets = |unmatched: usize| RecordPools {
+            own: 2 + 1 + unmatched,
             ..RecordPools::default()
         };
-        assert_eq!(fitted(2, own), Some(wide(8, 24, 32, 24).circuit()));
+        assert_eq!(fitted(2, distinct_assets(12)), Some(transfer(2, 24, 4, 4)));
+        assert_eq!(fitted(2, distinct_assets(13)), Some(wide(8, 24, 32, 24).circuit()));
         assert_eq!(
             fitted(2, RecordPools::default()),
             Some(transfer(2, 24, 4, 4))
         );
         let past_sixteen = RecordPools {
-            own: 83,
+            own: 78,
             ..RecordPools::default()
         };
         assert_eq!(fitted(16, past_sixteen), None);
@@ -870,7 +872,8 @@ mod tests {
         for shape in ENTRY_SHAPES {
             let bound = UnreadSubjects {
                 owners: usize::from(shape.owners + shape.outputs + shape.withdrawals),
-                assets: usize::from(shape.inputs + shape.outputs) + N_PUBLIC_SLOTS,
+                // Inputs repeating the payments' assets open no record.
+                assets: usize::from(shape.outputs) + N_PUBLIC_SLOTS,
             }
             .pools();
             let spend = loaded(shape, bound);
