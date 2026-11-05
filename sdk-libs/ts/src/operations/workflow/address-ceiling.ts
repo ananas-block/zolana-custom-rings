@@ -9,11 +9,14 @@ import {
 import {
   equalBytes,
   isZero,
+  meta,
   nullifierPdaAddress,
+  treeAddress,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
 import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import type { ProofInputUtxo } from "@heliuslabs/zolana/transaction";
+import type { AccountMeta } from "@solana/kit";
 
 import { RingError } from "../../protocol/error.js";
 import { MAX_CPI_DATA_LEN, MAX_FRAME_LEN } from "../../protocol/transaction/frame-buffer.js";
@@ -36,6 +39,9 @@ import {
 const ZERO_POLICY: RingTransactConfig = Object.freeze({
   auditorPubkey: new Uint8Array(33) as Bytes33,
 });
+
+/** zolana `ADDRESS_TREE_ID`, the TS package exports none. */
+const ADDRESS_TREE_ID = 0;
 
 /** The message around the operation, setup compiles ahead of it in one transaction. */
 export interface FitSigners {
@@ -69,6 +75,34 @@ export interface Fit {
   /** The data SPP receives on the transfer tags, absent on any other tag. */
   readonly cpiBytes?: number;
   readonly setup: SetupEffect;
+}
+
+/** Named after the policy registries, the compiled fit alone bounds their accounts. */
+export class CredentialTrees {
+  /** Distinct and ascending, the frame's state root table. */
+  readonly state: readonly number[];
+
+  private constructor(state: readonly number[]) {
+    this.state = Object.freeze(state);
+    Object.freeze(this);
+  }
+
+  /** One tree id per opening, `capacity` is the key's `K`. */
+  static of(openings: Iterable<number>, capacity: number): CredentialTrees {
+    const state = [...new Set(openings)].sort((left, right) => left - right);
+    if (state.length === 0 || state.length > capacity)
+      throw new RingError("RING_FIT_CREDENTIAL_CAPACITY", {
+        details: { trees: state.length, capacity },
+      });
+    return new CredentialTrees(state);
+  }
+
+  /** The address tree an absent owner opens a gap in, then each state tree. */
+  metas(): readonly AccountMeta[] {
+    return [ADDRESS_TREE_ID, ...this.state].map((treeId) =>
+      meta(treeAddress(treeId), false, false),
+    );
+  }
 }
 
 /** One real input of the transaction, as SPP merge groups it. */

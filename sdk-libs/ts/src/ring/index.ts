@@ -621,6 +621,7 @@ export {
 } from "../protocol/ring-rpc/relay-enroll-inputs.js";
 export type { TransactionSize } from "../operations/workflow/compile.js";
 export {
+  CredentialTrees,
   decideAddressCeiling,
   spentInputOf,
   TransactionFit,

@@ -908,6 +908,7 @@ impl<'a> Sealed<'a> {
             read_cache: proof_inputs.cache_accounts.read,
             co_signers,
             delegate,
+            credential_trees: None,
         };
         let mut parts = preview.parts(&proof_inputs, &rail, &sender)?;
         parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);

@@ -4103,3 +4103,70 @@ async fn a_zero_value_input_of_a_delisted_asset_fails_before_proving() {
         }))
     ));
 }
+
+/// The key's credential capacity admits each tree set below, only the compiled accounts refuse.
+#[tokio::test]
+async fn credential_trees_follow_the_registries_and_refuse_past_the_address_ceiling_before_proving()
+{
+    use crate::CredentialTrees;
+    let sender = &crate::tests::support::keypair(1);
+    let recipient = &crate::tests::support::keypair(2);
+    let transfer = owner_transfer(
+        sender,
+        ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
+    )
+    .with_anonymous_signer(&sender.signing_key)
+    .with_payment(payment(&ring_address(recipient), 4))
+    .unwrap();
+    let mut unwitnessed = transfer
+        .frame(&enrolled(&[sender, recipient]).client())
+        .await
+        .unwrap();
+    let bare = unwitnessed.instruction().unwrap();
+    let payer = unwitnessed.frame.proof_inputs.payer;
+    let addresses = |instruction: &Instruction| {
+        spr_client::transaction_size(
+            &payer,
+            core::slice::from_ref(instruction),
+            spr_client::ComputeBudgetConfig::new(0),
+        )
+        .unwrap()
+        .addresses
+    };
+    let read = |trees: core::ops::Range<u16>, unwitnessed: &mut Unwitnessed<'_>| {
+        let capacity = trees.len() + 1;
+        unwitnessed.frame.accounts.credential_trees =
+            Some(CredentialTrees::new(trees, capacity).unwrap());
+    };
+
+    // 1. The address tree is tree 0 and holds the frame's notes, so only the state trees add addresses, right after the registries.
+    read(100..102, &mut unwitnessed);
+    let named = unwitnessed.instruction().unwrap();
+    let registries = 1 + unwitnessed
+        .config
+        .account()
+        .root_registries(RootRead::transfer(unwitnessed.config.account(), false))
+        .count();
+    let trees: Vec<_> = CredentialTrees::new(100..102, 2).unwrap().metas().collect();
+    assert_eq!(named.accounts[..registries], bare.accounts[..registries]);
+    assert_eq!(named.accounts[registries..registries + 3], trees[..]);
+    assert_eq!(
+        named.accounts[registries + 3..],
+        bare.accounts[registries..]
+    );
+    assert_eq!(addresses(&named), addresses(&bare) + 2);
+
+    // 2. The largest set fits at the ceiling and one more tree refuses.
+    let fitting = (usize::from(solana_message::v1::MAX_ADDRESSES) - addresses(&bare)) as u16;
+    read(100..100 + fitting, &mut unwitnessed);
+    assert_eq!(addresses(&unwitnessed.instruction().unwrap()), 64);
+    unwitnessed.check_size().unwrap();
+    read(100..101 + fitting, &mut unwitnessed);
+    assert!(matches!(
+        unwitnessed.check_size(),
+        Err(RingError::TooManyAddresses {
+            addresses: 65,
+            limit: 64
+        })
+    ));
+}
