@@ -57,6 +57,7 @@ spr-event-parser = { workspace = true }
 spr-instruction = { workspace = true, optional = true }
 spr-program = { workspace = true, features = ["compression"] }
 spr-interface = { workspace = true }
+spr-program = { workspace = true, features = ["compression"] }
 spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
 spr-keypair = { workspace = true }

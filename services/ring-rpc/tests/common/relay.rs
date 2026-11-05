@@ -125,6 +125,7 @@ pub struct RecordingChain {
     pub accounts: Mutex<Vec<Address>>,
     /// Live accounts that hold data, an enrolled owner's tracking authorization.
     pub filled: Mutex<Vec<Address>>,
+    pub simulation_refusal: Mutex<Option<String>>,
 }
 
 impl Default for RecordingChain {
@@ -139,6 +140,7 @@ impl Default for RecordingChain {
             slot: AtomicU64::new(SLOT),
             accounts: Mutex::default(),
             filled: Mutex::default(),
+            simulation_refusal: Mutex::default(),
         }
     }
 }
@@ -151,6 +153,18 @@ impl RecordingChain {
 
 #[async_trait]
 impl ChainSubmit for RecordingChain {
+    async fn simulate(
+        &self,
+        _message: &solana_message::VersionedMessage,
+    ) -> Result<zolana_ring_rpc::Simulation, RingRpcError> {
+        Ok(
+            match self.simulation_refusal.lock().expect("refusal").clone() {
+                Some(reason) => zolana_ring_rpc::Simulation::Refused { reason },
+                None => zolana_ring_rpc::Simulation::Passed,
+            },
+        )
+    }
+
     async fn slot(&self) -> Result<u64, RingRpcError> {
         Ok(self.slot.load(Ordering::Relaxed))
     }

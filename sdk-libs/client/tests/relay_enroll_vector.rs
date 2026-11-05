@@ -33,14 +33,14 @@ fn compute_vector() -> Value {
     let inputs = RelayEnrollInputs {
         ring_program_id: Address::new_from_array([1; 32]),
         owner: Address::new_from_array([2; 32]),
-        tracking_registry: Address::new_from_array([3; 32]),
-        instruction_data: vec![6, 7, 8],
+        output_tree: Address::new_from_array([3; 32]),
+        instruction_data: vec![65, 7, 8],
     };
     json!({
-        "description": "One RelayEnrollInputs with its ring program id of bytes 0x01, owner of 0x02, tracking registry of 0x03 and instruction data 06 07 08, encoded in wincode, with the digest its owner signs. enroll_wire, delegate_wire, deposit_wire and merge_wire are prepareRelay requests carrying proofInputs 03 04 05 and a signature of 64 bytes of 0x07, deposit_request_digest and merge_request_digest are what the depositor and the owner sign over those proofInputs. Produced by sdk-libs/client/tests/relay_enroll_vector.rs.",
+        "description": "One RelayEnrollInputs with its ring program id of bytes 0x01, owner of 0x02, output tree of 0x03 and instruction data 41 07 08, encoded in wincode, with the digest its owner signs. enroll_wire, delegate_wire, deposit_wire and merge_wire are prepareRelay requests carrying proofInputs 03 04 05 and a signature of 64 bytes of 0x07, deposit_request_digest and merge_request_digest are what the depositor and the owner sign over those proofInputs. Produced by sdk-libs/client/tests/relay_enroll_vector.rs.",
         "ring_program_id": hex::encode([1; 32]),
         "owner": hex::encode([2; 32]),
-        "tracking_registry": hex::encode([3; 32]),
+        "output_tree": hex::encode([3; 32]),
         "instruction_data": hex::encode(&inputs.instruction_data),
         "encoded": hex::encode(inputs.encode().unwrap()),
         "request_digest": hex::encode(inputs.request_digest()),

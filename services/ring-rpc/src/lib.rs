@@ -115,7 +115,7 @@ pub use error::{GrantRefusal, RingRpcError};
 pub use escrow_merge::RingSdkMergeBuilder;
 pub use hub::{Clock, Hub, HubBuilder, NotReady, ServiceIdentity};
 pub use keys::{KeySource, GRANT_ROW_KEY_INFO};
-pub use landing::{ChainOutcome, ChainSubmit, LatestBlockhash, SolanaChain};
+pub use landing::{ChainOutcome, ChainSubmit, LatestBlockhash, Simulation, SolanaChain};
 pub use managed_merge::{
     BuiltMerge, ManagedMerge, ManagedMergeInit, MergeBuilder, MergeTarget, OwnerMerge,
     MANAGED_MERGE_INTERVAL,

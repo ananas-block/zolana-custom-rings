@@ -101,6 +101,12 @@ pub enum RelayProofInputsError {
     Keypair(#[from] KeypairError),
     #[error(transparent)]
     Transaction(#[from] TransactionError),
+    #[error(transparent)]
+    Hasher(#[from] spr_hasher::HasherError),
+    #[error(transparent)]
+    CredentialAddress(#[from] spr_program::program::CompressedAccountError),
+    #[error(transparent)]
+    Storage(#[from] custom_ring_interface::storage::StorageError),
 }
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]

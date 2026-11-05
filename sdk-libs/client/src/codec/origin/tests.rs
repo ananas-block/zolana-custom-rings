@@ -795,6 +795,36 @@ fn ring_transfer_outer_tags_preserve_confirmed_ring_origin() {
     }
 }
 
+#[test]
+fn a_transact_under_the_ring_enroll_reads_as_an_enrollment() {
+    let origin = |caller: Address, caller_tag: u8| {
+        let mut outer = instruction(caller, 1);
+        outer.data = vec![caller_tag];
+        let mut source = instruction(POOL, 2);
+        source.data = ring_transact_bytes(Vec::new());
+        source.data[0] = tag::TRANSACT;
+        let mut event = instruction(POOL, 3);
+        event.data = bs58::decode(event_data()).into_vec().unwrap();
+        let groups = [InstructionGroup {
+            outer,
+            inner: vec![source, event],
+        }];
+        ring_event_origin_in(&groups, 0, RING).unwrap()
+    };
+    let enrolled = origin(RING, custom_ring_interface::tag::ENROLL);
+    assert_eq!(enrolled.event.kind(), ConfirmedEventKind::Enrollment);
+    assert!(enrolled.ring_invoked && !enrolled.requires_audit());
+    for (caller, caller_tag) in [
+        (RING, custom_ring_interface::tag::TRANSFER),
+        (OTHER, custom_ring_interface::tag::ENROLL),
+    ] {
+        assert_eq!(
+            origin(caller, caller_tag).event.kind(),
+            ConfirmedEventKind::Transfer
+        );
+    }
+}
+
 fn confirmed_transfer_fixture() -> (InstructionGroup, ShieldedTransaction) {
     use spr_event::{encode_event_instruction, EventKind, InputTreeSequence, TransactEvent};
     use spr_transaction::{OutputContext, OutputSlot};

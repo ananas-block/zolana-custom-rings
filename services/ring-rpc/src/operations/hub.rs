@@ -249,15 +249,6 @@ impl<S: TransactionSource + 'static> ServedRings for HubRings<S> {
         }
     }
 
-    async fn tracking_registry(&self, ring: Address) -> Result<Address, RingRpcError> {
-        self.0
-            .source
-            .tracking_root(ring)
-            .await?
-            .map(|root| root.registry)
-            .ok_or_else(|| RelayError::RingNotServed.into())
-    }
-
     async fn delegate(&self, ring: Address) -> Result<Option<Address>, RingRpcError> {
         Ok(self
             .0

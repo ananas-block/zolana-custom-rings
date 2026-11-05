@@ -546,4 +546,12 @@ describe("ring rpc refusals", () => {
     expect(ringRpcRefusalName(-32227)).toBe("sourceNote");
     expect(ringRpcRefusalName(-32228)).toBeUndefined();
   });
+
+  it("names -32213 to -32215 as the relayed enrollment refusals", () => {
+    expect([-32213, -32214, -32215].map(ringRpcRefusalName)).toEqual([
+      "alreadyEnrolled",
+      "registerKeyProof",
+      "enrollmentRefused",
+    ]);
+  });
 });

@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use solana_address::Address;
 use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_hash::Hash;
+use solana_message::VersionedMessage;
+use solana_rpc_client_api::config::RpcSimulateTransactionConfig;
 use solana_signature::Signature;
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
@@ -28,6 +30,16 @@ pub trait ChainSubmit: Send + Sync {
 
     /// `None` until success or failure is finalized.
     async fn outcome(&self, signature: Signature) -> Result<Option<ChainOutcome>, RingRpcError>;
+
+    /// Signatures stay unchecked, every program and proof check runs.
+    async fn simulate(&self, message: &VersionedMessage) -> Result<Simulation, RingRpcError>;
+}
+
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Simulation {
+    Passed,
+    Refused { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +179,35 @@ impl ChainSubmit for SolanaChain {
         };
         Ok(finalized_outcome(status))
     }
+
+    async fn simulate(&self, message: &VersionedMessage) -> Result<Simulation, RingRpcError> {
+        let transaction = VersionedTransaction {
+            signatures: vec![
+                Signature::default();
+                usize::from(message.header().num_required_signatures)
+            ],
+            message: message.clone(),
+        };
+        let config = RpcSimulateTransactionConfig {
+            sig_verify: false,
+            replace_recent_blockhash: true,
+            commitment: Some(CommitmentConfig::confirmed()),
+            ..RpcSimulateTransactionConfig::default()
+        };
+        let simulated = self
+            .rpc
+            .client()
+            .simulate_transaction_with_config(&transaction, config)
+            .await
+            .map_err(|error| ClientError::Rpc(format!("simulate_transaction: {error}")))?
+            .value;
+        Ok(match simulated.err {
+            None => Simulation::Passed,
+            Some(error) => Simulation::Refused {
+                reason: error.to_string(),
+            },
+        })
+    }
 }
 
 fn finalized_outcome(status: TransactionStatus) -> Option<ChainOutcome> {
@@ -194,6 +235,13 @@ mod tests {
 
     #[async_trait]
     impl ChainSubmit for ScriptedLanding {
+        async fn simulate(
+            &self,
+            _message: &solana_message::VersionedMessage,
+        ) -> Result<Simulation, RingRpcError> {
+            Ok(Simulation::Passed)
+        }
+
         async fn account_data(
             &self,
             _address: solana_address::Address,

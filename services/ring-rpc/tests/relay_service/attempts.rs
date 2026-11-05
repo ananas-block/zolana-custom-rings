@@ -56,7 +56,7 @@ async fn a_fresh_quote_while_the_old_message_can_land_refuses_and_the_old_stays_
     let owner = Keypair::new_from_array([42; 32]);
     let quote = fixture.quote(RelayOperation::Enroll).await;
     let step = fixture
-        .prepare(&enrollment(&owner, vec![6, 1], quote.clone()))
+        .prepare(&enrollment(&owner, enroll_data(1), quote.clone()))
         .await
         .expect("the first relay");
     let RelayStep::SignMessage { relay_id, message } = step else {
@@ -64,7 +64,7 @@ async fn a_fresh_quote_while_the_old_message_can_land_refuses_and_the_old_stays_
     };
 
     let retried = fixture
-        .prepare(&enrollment(&owner, vec![6, 1], fresh(&quote)))
+        .prepare(&enrollment(&owner, enroll_data(1), fresh(&quote)))
         .await;
 
     assert!(
@@ -129,13 +129,13 @@ async fn a_fresh_quote_past_proven_expiry_replaces_the_attempt_and_charges_once(
     let owner = Keypair::new_from_array([42; 32]);
     let quote = fixture.quote(RelayOperation::Enroll).await;
     let first = fixture
-        .prepare(&enrollment(&owner, vec![6, 1], quote.clone()))
+        .prepare(&enrollment(&owner, enroll_data(1), quote.clone()))
         .await
         .expect("the first relay");
     past_blockhash(&fixture);
 
     let second = fixture
-        .prepare(&enrollment(&owner, vec![6, 1], fresh(&quote)))
+        .prepare(&enrollment(&owner, enroll_data(1), fresh(&quote)))
         .await
         .expect("the old message can no longer land");
 
@@ -379,7 +379,7 @@ async fn a_failed_settlement_charges_its_fee_once_and_frees_the_key() {
     let owner = Keypair::new_from_array([42; 32]);
     let quote = fixture.quote(RelayOperation::Enroll).await;
     let step = fixture
-        .prepare(&enrollment(&owner, vec![6, 1], quote))
+        .prepare(&enrollment(&owner, enroll_data(1), quote))
         .await
         .expect("the relay");
     let RelayStep::SignMessage { relay_id, message } = step else {
@@ -418,7 +418,7 @@ async fn a_sent_enrollment_that_never_lands_is_reconciled_at_expiry_and_charges_
     let owner = Keypair::new_from_array([42; 32]);
     let quote = fixture.quote(RelayOperation::Enroll).await;
     let step = fixture
-        .prepare(&enrollment(&owner, vec![6, 1], quote.clone()))
+        .prepare(&enrollment(&owner, enroll_data(1), quote.clone()))
         .await
         .expect("the relay");
     let RelayStep::SignMessage { relay_id, message } = step else {
@@ -438,7 +438,7 @@ async fn a_sent_enrollment_that_never_lands_is_reconciled_at_expiry_and_charges_
     assert!(matches!(sent, RelayStatus::Sent { .. }), "{sent:?}");
 
     let retried = fixture
-        .prepare(&enrollment(&owner, vec![6, 1], fresh(&quote)))
+        .prepare(&enrollment(&owner, enroll_data(1), fresh(&quote)))
         .await;
     assert!(
         refused_with(&retried, RelayError::LiveAttempt),

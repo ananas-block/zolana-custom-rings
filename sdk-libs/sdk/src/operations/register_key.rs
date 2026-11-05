@@ -9,23 +9,18 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use solana_signer::Signer;
 use spr_client::AsyncRpc;
 use spr_hasher::primitives::{right_align, solana_owner_identity};
 use spr_keypair::{NullifierKey, ViewingKey};
 use zeroize::Zeroizing;
-use zolana_ring_client::{
-    rpc::{PrepareRelayRequest, ProofInputBytes, RelayEnrollInputs, RelayIntent, RelayQuote},
-    NullifierKeyEnvelope,
-};
+use zolana_ring_client::NullifierKeyEnvelope;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     prover::{to_instruction_proof, RingRequest},
-    relay_message::{ExpectedEnroll, ExpectedMessage},
     request::KeyRegister,
     storage::storage_ix,
-    CustomRing, MessageMismatch, PreparedRelay, RingError,
+    CustomRing, RingError,
 };
 
 /// The owner signs, a wallet with its key and a PDA through its program's `invoke_signed`.
@@ -53,33 +48,6 @@ pub struct WriteOwnerGrant {
 }
 
 impl Enroll<'_> {
-    /// `payer` is the quoted fee payer.
-    pub async fn prepare_relay<R: AsyncRpc, I: RingIndexerBackend>(
-        &self,
-        client: &RingClient<R, I>,
-        quote: RelayQuote,
-        owner: &dyn Signer,
-    ) -> Result<PreparedRelay, RingError> {
-        if self.payer != quote.fee_payer.0 {
-            return Err(RingError::RelayPayerMismatch {
-                payer: self.payer,
-                fee_payer: quote.fee_payer.0,
-            });
-        }
-        let instruction = self.prove(client).await?;
-        let config = self.ring.require_config(client.zolana()).await?;
-        EnrollRelay {
-            inputs: RelayEnrollInputs {
-                ring_program_id: self.ring.program_id(),
-                owner: self.owner,
-                tracking_registry: config.account().tracking,
-                instruction_data: instruction.data,
-            },
-            owner,
-        }
-        .prepare(quote)
-    }
-
     /// The program refuses a second key for one owner.
     pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
         &self,
@@ -132,40 +100,6 @@ impl Enroll<'_> {
             proof: Some(to_instruction_proof(proof)?),
         }
         .instruction())
-    }
-}
-
-/// An owner with no SOL, the relay pays and the owner signs the digest here and the message after.
-#[must_use]
-pub struct EnrollRelay<'a> {
-    pub inputs: RelayEnrollInputs,
-    pub owner: &'a dyn Signer,
-}
-
-impl EnrollRelay<'_> {
-    /// A PDA holds no key to sign here, its program enrolls through CPI.
-    pub fn prepare(self, quote: RelayQuote) -> Result<PreparedRelay, RingError> {
-        if self.owner.try_pubkey()? != self.inputs.owner {
-            return Err(MessageMismatch::Signer.into());
-        }
-        let owner_signature = self
-            .owner
-            .try_sign_message(&self.inputs.request_digest())?
-            .into();
-        let expected = ExpectedEnroll {
-            fee_payer: quote.fee_payer.0,
-            inputs: self.inputs.clone(),
-        };
-        Ok(PreparedRelay::new(PrepareRelayRequest {
-            ring: self.inputs.ring_program_id.into(),
-            quote,
-            intent: RelayIntent::Enroll {
-                proof_inputs: ProofInputBytes::new(Zeroizing::new(self.inputs.encode()?)),
-                owner_signature,
-            },
-            co_signers: Vec::new(),
-        })
-        .expecting(ExpectedMessage::Enroll(expected)))
     }
 }
 

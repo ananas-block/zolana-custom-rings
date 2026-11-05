@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use custom_ring_interface::{
-    compute_unit_limit,
-    storage_instruction::EnrollRequest,
-    tracking::{TrackingAuthorization, TrackingRegistry},
-    InstructionTag, RegisterKeyCheck,
+    compute_unit_limit, tag, EnrollRequest, Enrollment, InstructionTag, RegisterKeyCheck,
+    TAGGED_X25519_KEY_LEN,
 };
 use custom_ring_sdk::{
     AllowedNullifiers, CustomRing, DelegateMove, DelegatePayment, DelegateSource, RelayedDeposit,
@@ -15,8 +13,10 @@ use spr_client::{AsyncRpc, ComputeBudgetConfig};
 use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
 use spr_transaction::{AssetRegistry, WalletUtxo};
 use zolana_ring_client::rpc::{
-    RelayDepositInputs, RelayEnrollInputs, RelayMergeInputs, RelayProofInputs, RelayRail,
+    CredentialAccounts, RelayDepositInputs, RelayEnrollInputs, RelayMergeInputs, RelayProofInputs,
+    RelayRail,
 };
+use zolana_ring_policy::ring_id_field;
 
 use crate::{
     error::RingRpcError,
@@ -80,43 +80,44 @@ pub trait RelayProver: Send + Sync {
         parties: RelayParties,
     ) -> Result<RelayProofInputs, RingRpcError>;
 
-    /// Refuses a proof the program would refuse, ahead of any charge, the relay pays the account's rent.
+    /// Refuses a RegisterKey proof the program would refuse and a reserved address, ahead of any charge.
     async fn check_enrollment(&self, enrollment: &RelayEnrollInputs) -> Result<(), RingRpcError>;
 }
 
-/// What the storage program reads of a relayed enrollment ahead of creating its account.
+/// The RegisterKey check the ring program runs, over the credential it rebuilds.
 #[must_use]
 struct EnrollmentProof<'a> {
     enrollment: &'a RelayEnrollInputs,
-    registry: &'a TrackingRegistry,
-    /// The owner's authorization account holds data, a rotation proves nothing.
-    enrolled: bool,
+    /// Read from the ring account, never from the request.
+    auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
 }
 
 impl EnrollmentProof<'_> {
     fn check(self) -> Result<(), RelayError> {
-        let data = self
-            .enrollment
-            .instruction_data
-            .get(1..)
-            .ok_or(RelayError::InvalidEnrollment)?;
-        let EnrollRequest { ix, proof } =
-            EnrollRequest::parse(data).map_err(|_| RelayError::InvalidEnrollment)?;
-        ix.check().map_err(|_| RelayError::InvalidEnrollment)?;
-        match (self.enrolled, proof) {
-            (true, None) => Ok(()),
-            (false, Some(proof)) => RegisterKeyCheck {
-                ring_id: &self.registry.ring_id,
-                auditor_pubkey: &self.registry.auditor_pubkey,
-                owner: &self.enrollment.owner,
-                ix,
-                proof,
-            }
-            .verify()
-            .map_err(|_| RelayError::InvalidEnrollment),
-            (true, Some(_)) | (false, None) => Err(RelayError::InvalidEnrollment),
+        let Some((&tag::ENROLL, data)) = self.enrollment.instruction_data.split_first() else {
+            return Err(RelayError::InvalidEnrollment);
+        };
+        let request = EnrollRequest::parse(data).map_err(refused)?;
+        // The program's constructor binds the ring, the signing owner and the ring's auditor key.
+        let credential = Enrollment {
+            ring_id: &ring_id_field(self.enrollment.ring_program_id.as_array()).map_err(refused)?,
+            auditor_pubkey: self.auditor_pubkey,
+            owner: &self.enrollment.owner,
+            ix: request.ix,
         }
+        .credential()
+        .map_err(refused)?;
+        RegisterKeyCheck {
+            credential: &credential,
+            proof: request.register_key,
+        }
+        .verify()
+        .map_err(|_| RelayError::RegisterKeyProof)
     }
+}
+
+fn refused<E>(_: E) -> RelayError {
+    RelayError::InvalidEnrollment
 }
 
 pub struct SdkRelayProver<R, I> {
@@ -175,21 +176,18 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
 
     async fn check_enrollment(&self, enrollment: &RelayEnrollInputs) -> Result<(), RingRpcError> {
         let rpc = self.client.zolana();
-        let registry = rpc
-            .get_account(enrollment.tracking_registry)
-            .await?
-            .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data))
-            .ok_or(RelayError::InvalidEnrollment)?;
-        let (authorization, _) =
-            TrackingAuthorization::find_address(&enrollment.tracking_registry, &enrollment.owner);
-        let enrolled = rpc
-            .get_account(authorization)
-            .await?
-            .is_some_and(|account| !account.data.is_empty());
+        let credential = CredentialAccounts::derive(&enrollment.ring_program_id, &enrollment.owner)
+            .map_err(RelayError::from)?;
+        if rpc.get_account(credential.nullifier_pda).await?.is_some() {
+            return Err(RelayError::AlreadyEnrolled.into());
+        }
+        let config = CustomRing::new(enrollment.ring_program_id)
+            .require_config(rpc)
+            .await
+            .map_err(RelayError::proof)?;
         Ok(EnrollmentProof {
             enrollment,
-            registry: &registry,
-            enrolled,
+            auditor_pubkey: config.auditor_pubkey.as_bytes(),
         }
         .check()?)
     }
@@ -305,58 +303,64 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
 #[cfg(test)]
 mod tests {
     use bytemuck::Zeroable;
-    use custom_ring_interface::{storage_instruction::EnrollIxData, CustomRingProof};
+    use custom_ring_interface::{CustomRingProof, EnrollIxData};
     use solana_address::Address;
+    use spr_interface::instruction::TransactProof;
 
     use super::*;
 
-    /// Passes the program's field checks, a canonical key and nonzero scalars.
+    /// Passes the program's field checks, a nonzero canonical key.
     fn fields() -> EnrollIxData {
         let mut ix = EnrollIxData::zeroed();
-        ix.viewing_u[31] = 9;
         ix.nullifier_pk[31] = 1;
         ix
     }
 
-    fn checked(data: Vec<u8>, enrolled: bool) -> Result<(), RelayError> {
+    fn data(ix: &EnrollIxData) -> Vec<u8> {
+        let request = EnrollRequest {
+            ix,
+            register_key: &CustomRingProof::zeroed(),
+            transact: TransactProof::zeroed(),
+            address_root_index: 0,
+        };
+        [&[tag::ENROLL][..], &request.encode().unwrap()].concat()
+    }
+
+    fn checked(instruction_data: Vec<u8>) -> Result<(), RelayError> {
         EnrollmentProof {
             enrollment: &RelayEnrollInputs {
                 ring_program_id: Address::new_from_array([1; 32]),
                 owner: Address::new_from_array([2; 32]),
-                tracking_registry: Address::new_from_array([3; 32]),
-                instruction_data: data,
+                output_tree: Address::new_from_array([3; 32]),
+                instruction_data,
             },
-            registry: &TrackingRegistry::zeroed(),
-            enrolled,
+            auditor_pubkey: &[4; TAGGED_X25519_KEY_LEN],
         }
         .check()
     }
 
-    fn data(ix: &EnrollIxData, proof: Option<&CustomRingProof>) -> Vec<u8> {
-        let mut data = vec![6];
-        data.extend_from_slice(bytemuck::bytes_of(ix));
-        if let Some(proof) = proof {
-            data.extend_from_slice(bytemuck::bytes_of(proof));
-        }
-        data
-    }
-
     #[test]
-    fn only_a_rotation_goes_without_a_proof_and_garbage_refuses() {
-        let (ix, zero_proof) = (fields(), CustomRingProof::zeroed());
-        assert!(checked(data(&ix, None), true).is_ok());
-        for (bytes, enrolled) in [
-            (data(&ix, None), false),
-            (data(&ix, Some(&zero_proof)), false),
-            (data(&ix, Some(&zero_proof)), true),
-            (data(&EnrollIxData::zeroed(), None), true),
-            (vec![6, 1, 2, 3], true),
-            (Vec::new(), true),
+    fn an_unproven_or_malformed_enrollment_refuses() {
+        assert!(matches!(
+            checked(data(&fields())),
+            Err(RelayError::RegisterKeyProof)
+        ));
+        let mut storage_tag = data(&fields());
+        storage_tag[0] = 6;
+        let mut trailing = data(&fields());
+        trailing.push(0);
+        let zero_key = EnrollIxData {
+            nullifier_pk: spr_interface::ZERO_NULLIFIER_PUBKEY,
+            ..fields()
+        };
+        for bytes in [
+            data(&zero_key),
+            storage_tag,
+            trailing,
+            vec![tag::ENROLL, 1, 2, 3],
+            Vec::new(),
         ] {
-            assert!(matches!(
-                checked(bytes, enrolled),
-                Err(RelayError::InvalidEnrollment)
-            ));
+            assert!(matches!(checked(bytes), Err(RelayError::InvalidEnrollment)));
         }
     }
 }
