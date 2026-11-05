@@ -1,5 +1,4 @@
 import { type RingMemberOpening, type RingRecordReader, type StorageRoot } from "./ports.js";
-import { type PresentRecordOpening } from "./prover/types.js";
 import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer/indexer-limits.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";
 import { equalBytes, waitForProjection } from "@heliuslabs/zolana/internal";
@@ -7,11 +6,7 @@ import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interf
 
 import { fetchRingPolicy, fetchStorageRegistry } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
-import {
-  MemberOpeningRead,
-  ownerEscrowed,
-  verifyRecordPool,
-} from "../protocol/membership/member-opening.js";
+import { MemberOpeningRead, verifyRecordPool } from "../protocol/membership/member-opening.js";
 import type { RecordPool } from "../protocol/membership/member-registry.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
 
@@ -55,14 +50,6 @@ export async function fetchRegistryRoot(
 }
 
 export type RegistryRoot = Omit<BoundRoot, "ringProgramId">;
-
-/** A member's present record under the ring's newest own root. */
-export interface RegisteredRecord {
-  readonly root: BoundRoot;
-  readonly record: PresentRecordOpening;
-  /** `hash_bytes` of the sealed key ciphertext. */
-  readonly ctHash: Bytes32;
-}
 
 /** Members' records under the ring's newest own root, in member order, Rust `MemberRecords::read`. */
 export async function readMemberRecords(
@@ -166,44 +153,6 @@ export async function readRecordPool(
     }),
     reads,
   });
-}
-
-/** The indexer's opening checked against the ring's newest own root. */
-export function readRegisteredRecord(
-  input: Readonly<{
-    client: RingRecordReadClient;
-    ringProgramId: Address;
-    member: Bytes32;
-    /** The nullifier key the owner must have enrolled. */
-    escrowed: Bytes32;
-  }>,
-  context?: RequestContext,
-): Promise<RegisteredRecord> {
-  return waitForProjection(
-    async (attempt) => {
-      const policy = await fetchRingPolicy(input.client, input.ringProgramId, attempt);
-      const root = await fetchBoundRoot(
-        { client: input.client, ringProgramId: input.ringProgramId, registry: policy.records },
-        attempt,
-      );
-      const [read] = await readMemberOpenings(
-        { client: input.client, root, members: [input.member] },
-        attempt,
-      );
-      const escrowed = ownerEscrowed(input.member, read, input.escrowed);
-      return Object.freeze({
-        root,
-        record: Object.freeze({
-          kind: "present" as const,
-          record: escrowed.record,
-          path: escrowed.path,
-        }),
-        ctHash: escrowed.ctHash,
-      });
-    },
-    MEMBER_REGISTRY_PROJECTION_ERRORS,
-    context,
-  );
 }
 
 /** An indexer answer under a root or revision other than the bound one is refused. */

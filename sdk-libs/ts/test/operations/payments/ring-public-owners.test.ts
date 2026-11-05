@@ -17,6 +17,7 @@ import {
   CustomRingTransfer,
   type PublicOwnerTransferClient,
 } from "../../../src/operations/payments/transfer-rails.js";
+import { PublicOwnerTransfer } from "../../../src/index.js";
 import { RingTransactData } from "../../../src/protocol/transaction/transact.js";
 import { ringFrame } from "../../helpers/ring-frame.js";
 
@@ -58,6 +59,11 @@ const noClient = {} as PublicOwnerTransferClient;
 
 describe("public owner rail", () => {
   beforeAll(initializePoseidon);
+
+  it("hands a wallet the rail the package entry exports", () => {
+    const owner = ShieldedKeypair.generate();
+    expect(rail(owner).spendPublic(walletOf(owner))).toBeInstanceOf(PublicOwnerTransfer);
+  });
 
   it("refuses a named wallet other than the sender", async () => {
     const owner = ShieldedKeypair.generate();

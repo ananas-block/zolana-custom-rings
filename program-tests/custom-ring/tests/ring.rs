@@ -452,7 +452,7 @@ fn frame(instruction: &Instruction, rail: RingRail) -> Result<RingTransactData<'
     Ok(RingTransactData::parse(body, rail)?.into_data())
 }
 
-/// SPP's anonymous rail hides `owner`, the delivered audit publishes it.
+/// SPP's anonymous rail hides `owner`, the transfer statement publishes it.
 fn assert_anonymous_spp_rail(instruction: &Instruction, owner: &[u8; 32]) -> Result<()> {
     let data = frame(instruction, RingRail::Confidential)?;
     ensure!(

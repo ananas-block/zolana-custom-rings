@@ -17,7 +17,6 @@ import {
   copy,
   equalBytes,
   poseidon,
-  bytesKey,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import {
@@ -146,12 +145,6 @@ export function verifyRecordOpening(
   return opening.kind === "present" ? opening.record : undefined;
 }
 
-export interface EscrowedRecord {
-  readonly record: MemberRecord;
-  readonly path: QuadPath;
-  readonly ctHash: Bytes32;
-}
-
 /** A member's record, or the low record bracketing its absence, read under one root, Rust `MemberOpeningRead`. */
 export class MemberOpeningRead {
   readonly opening: RingMemberOpening;
@@ -175,15 +168,6 @@ export class MemberOpeningRead {
   listed(list: ListId): boolean {
     return ((this.record()?.lists ?? 0n) & recordBit(list)) !== 0n;
   }
-}
-
-/** Refuses every owner, an enrolled key's seal sits in its tracking row. */
-export function ownerEscrowed(
-  owner: Bytes32,
-  _read: MemberOpeningRead | undefined,
-  _nullifierPk: Bytes32,
-): EscrowedRecord {
-  throw new RingError("RING_UNREGISTERED_OUTPUT_KEY", { details: { owner: bytesKey(owner) } });
 }
 
 /** Every member's read under `root`, each pool path folding through the canopy into `root`. */
