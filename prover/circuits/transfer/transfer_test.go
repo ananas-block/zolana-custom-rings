@@ -39,9 +39,9 @@ func requireSolved(t *testing.T, circuit frontend.Circuit) {
 	}
 }
 
-func refused(t *testing.T, circuit frontend.Circuit, frame string) {
+func refused(t *testing.T, circuit frontend.Circuit, frames ...string) {
 	t.Helper()
-	ringtest.RequireRefused(t, test.IsSolved(circuit, circuit, ecc.BN254.ScalarField()), frame)
+	ringtest.RequireRefused(t, test.IsSolved(circuit, circuit, ecc.BN254.ScalarField()), frames...)
 }
 
 func onRail(shape transfer.Shape, rail ringtransfer.Rail) ringtransfer.Confidential {
