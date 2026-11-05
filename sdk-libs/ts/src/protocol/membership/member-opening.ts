@@ -177,7 +177,7 @@ export class MemberOpeningRead {
   }
 }
 
-/** Refuses every owner, the seal moved to the tracking row. */
+/** Refuses every owner, an enrolled key's seal sits in its tracking row. */
 export function ownerEscrowed(
   owner: Bytes32,
   _read: MemberOpeningRead | undefined,

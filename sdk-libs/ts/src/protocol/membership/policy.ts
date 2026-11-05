@@ -531,7 +531,7 @@ function ruleTableInvalid(reason: string): RingError {
   return new RingError("RING_RULE_TABLE_INVALID", { details: { reason } });
 }
 
-/** Mirrors Rust `SourceMap::from_namespaces`. */
+/** Mirrors Rust `SourceMap::from_slots`. */
 export function policySourceOwners(sources: readonly RingSourceSlot[]): readonly PolicySource[] {
   return checkedSourceOwners(
     sources.map((slot) =>

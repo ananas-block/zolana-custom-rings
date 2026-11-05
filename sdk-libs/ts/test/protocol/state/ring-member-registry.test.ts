@@ -45,7 +45,7 @@ import type {
 import { recordTree } from "../../helpers/member-registry.js";
 import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
 
-// sdk-libs/client/src/crypto/encryption/mod.rs `the_sealed_key_and_its_escrow_key_match_the_pinned_vector`.
+// sdk-libs/client/src/crypto/encryption/mod.rs `the_sealed_key_matches_the_pinned_vector`.
 const AUDITOR_SK = hex("01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c");
 const EPHEMERAL_SK = hex("011013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f0e");
 const NULLIFIER_SECRET = hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");

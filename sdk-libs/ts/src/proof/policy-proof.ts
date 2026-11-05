@@ -770,7 +770,7 @@ export async function readDepositSection(
   });
 }
 
-/** Contract Output 4, a zero key waives only the key equality, a delegate moves it with no row and a hidden owner refuses it. */
+/** A zero key waives only the key equality, a delegate moves it with no row and a hidden owner refuses it. */
 export function checkInputKeys(
   input: Readonly<{
     inputs: readonly ProofInputUtxo[];
@@ -805,7 +805,7 @@ export function checkInputKeys(
   }
 }
 
-/** Contract Output 3, a nonzero key needs its row, a zero key needs none under the frame's root. */
+/** A nonzero key needs its row, a zero key needs none under the frame's root. */
 export function checkOutputKeys(
   input: Readonly<{
     outputs: readonly (ProofOutputUtxo | undefined)[];

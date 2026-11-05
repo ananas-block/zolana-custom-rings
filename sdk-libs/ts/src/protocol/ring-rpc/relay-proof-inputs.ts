@@ -72,7 +72,7 @@ export type RelayLegAccounts =
 export interface RelayProofInputs {
   readonly rail: RelayRail;
   readonly ringProgramId: Address;
-  /** Owns every real input. */
+  /** Owns every real input `coOwners` does not. */
   readonly sender: ShieldedAddress;
   readonly nullifierKey: NullifierKey;
   readonly txViewingKey: ViewingKey;

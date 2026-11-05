@@ -127,7 +127,7 @@ export class RingProgramBinary {
   }
 }
 
-/** Mirrors Rust `ProgramDataInfo`. */
+/** Mirrors Rust `ProgramData`. */
 export interface RingProgramData {
   readonly lastDeploySlot: bigint;
   /** Absent once the program is immutable. */
@@ -137,7 +137,7 @@ export interface RingProgramData {
   deployedHash(length: number): Bytes32 | undefined;
 }
 
-/** Mirrors Rust `read_program_data` over the `ProgramData` account bytes. */
+/** Mirrors Rust `program_data` over the `ProgramData` account bytes. */
 export function decodeRingProgramData(data: Uint8Array): RingProgramData {
   if (data.length < PROGRAM_DATA_METADATA_SIZE) throw programDataInvalid();
   const reader = new Reader(data.subarray(0, PROGRAM_DATA_METADATA_SIZE));

@@ -153,7 +153,7 @@ async function prove(
   );
 }
 
-/** An escrowed key record for each owner, the registry ring binds every output key. */
+/** An empty record for each owner. */
 function escrowed(owners: readonly ShieldedKeypair[]): FixtureRecord[] {
   return owners.map((owner) => ({
     member: memberOfIdentity(owner.shieldedAddress().signingPublicKey.ownerProofInputHash()),

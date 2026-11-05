@@ -898,7 +898,7 @@ async function approveSpend(
 /** A spend pays its recipient or exit and returns change. */
 const SPEND_OUTPUTS = 2;
 
-/** The prover refuses a spend mixing ring and default-ring UTXOs, ring UTXOs alone fund it first. */
+/** The hidden owner rail refuses a mix of ring and default-ring UTXOs, ring UTXOs alone fund it first. */
 function selectAnonymousInputs(
   pool: Omit<Parameters<typeof selectRingInputs>[0], "inputs" | "maxInputs">,
   selection: "ring" | "ring-or-default" | "default",

@@ -884,7 +884,7 @@ function checkMoved(expected: ExpectedDelegate, frame: RingTransactData): void {
       return;
     }
     const payment = unpaid[paid];
-    // Rust `swap_remove`, the order decides which equal payment a later record takes.
+    // Rust `swap_remove`, the order decides the equal payment a later record takes.
     unpaid[paid] = unpaid[unpaid.length - 1] as ExpectedPayment;
     unpaid.pop();
     // A wrong hint strands the note with no scan reaching it.

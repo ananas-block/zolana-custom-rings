@@ -1154,7 +1154,7 @@ export interface DelegateTransferInput {
   readonly bufferedSettlement?: boolean;
 }
 
-/** The delegate moves one member's notes with the member's key, the member does not sign, Rust `RingTransfer<Delegated>`. */
+/** The delegate moves members' notes with their keys, no member signs, Rust `RingTransfer<Delegated>`. */
 export class DelegateTransfer {
   readonly #input: DelegateTransferInput;
 

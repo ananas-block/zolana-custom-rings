@@ -1,4 +1,4 @@
-/** Rust `zolana_ring_indexer_api::tracking`. */
+/** Rust `zolana_ring_indexer::tracking`. */
 import { indexerCodec, indexerScalars, type MethodDescriptor } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
 

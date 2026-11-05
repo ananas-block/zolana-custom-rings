@@ -94,7 +94,7 @@ export async function initializeRingInstruction(
     auditorPublicKey: X25519PublicKey;
     kind: RingKind;
     roles: RingRoles;
-    /** Required on a policy ring, an audit-only ring takes it for its withdrawal exemptions. */
+    /** Required on a policy ring, any other ring may bind records alone for its thresholds. */
     policy?: RingInitialPolicy;
   }>,
 ): Promise<Instruction> {
@@ -236,7 +236,7 @@ export async function clearRingCoSignerInstruction(
   ]);
 }
 
-/** Rust `CustomRing::set_delegate`, the admin and the delegate sign, permanent and it turns key escrow on. */
+/** Rust `SetDelegate`, the admin and the delegate sign, the delegate is permanent. */
 export async function setRingDelegateInstruction(
   input: Readonly<{
     ringProgramId: Address;

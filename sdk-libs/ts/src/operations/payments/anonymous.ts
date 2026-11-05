@@ -30,7 +30,7 @@ import { spendsDefaultRing } from "../workflow/pipeline.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
 import type { ReplyMetadata } from "../../protocol/codec/anonymous-delivery.js";
 
-/** The hidden owner's Ed25519 key, the signature lives inside the proof so the key may live in a wallet. Rust `AnonymousSpendSigner`. */
+/** The hidden owner's Ed25519 key, the signature lives inside the proof so the key may live in a wallet. */
 export interface AnonymousSpendSigner {
   publicKey(): ShieldedPublicKey;
   /** RFC 8032 Ed25519 over the transfer's 32-byte `messageHash`. */

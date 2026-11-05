@@ -1,4 +1,4 @@
-/** A nonzero key enrolls in the ring's tracking registry, Rust `zolana_custom_ring_sdk::storage`. */
+/** A nonzero key enrolls in the ring's tracking registry, Rust `custom_ring_sdk::storage`. */
 import type { Address, Instruction } from "@solana/kit";
 
 import type { ChainReader } from "@heliuslabs/zolana/client";

@@ -103,7 +103,7 @@ export interface SentPayment {
   readonly check: SentCheck;
 }
 
-/** An unauthenticated sender claim, `confirmReplyClaim` alone learns from it. */
+/** An unauthenticated sender claim, `AnonymousWallet.confirmClaim` alone learns from it. */
 export interface ReplyClaim {
   readonly utxoHash: Bytes32;
   readonly reply: ReplyMetadata;
