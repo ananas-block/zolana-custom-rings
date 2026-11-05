@@ -90,6 +90,7 @@ ring_errors! {
     OutputBodyLength = 8253 => "a ring output body exceeds its length prefix",
     OutputCountOutOfRange = 8257 => "the published output count is zero or above the key's capacity",
     BodilessExit = 8258 => "a bodiless slot is also an exit",
+    TooManyApplicationMessages = 8269 => "application messages exceed what SPP takes beside the auditor message and the sender bundle",
     ReplyLength = 8259 => "reply metadata is shorter than its keys or misses one reply per body-bearing slot",
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
     ListNotPolicyReadable = 8255 => "a policy rule reads a list outside the policy lists",

@@ -221,12 +221,6 @@ impl SppExpansion<'_, '_> {
         let sender_segments = sender_payload
             .zip(sender_header.as_ref())
             .map(|(payload, header)| payload.segments(header));
-        let application_segments = frame
-            .extensions
-            .messages
-            .iter()
-            .map(|message| [message.data])
-            .collect::<Vec<_>>();
         // 3. The auditor payload binds the tagged viewing key, envelope, all output records, then data tails in slot order.
         let tx_viewing_pk = tagged_x25519(frame.tx_viewing_u);
         let mut auditor_segments =
@@ -244,10 +238,10 @@ impl SppExpansion<'_, '_> {
                 data: SegmentedBytes::new(segments).map_err(invalid)?,
             });
         }
-        for (message, segments) in frame.extensions.messages.iter().zip(&application_segments) {
+        for message in &frame.extensions.messages {
             messages.push(OutputDataRef {
                 view_tag: message.view_tag,
-                data: SegmentedBytes::new(segments).map_err(invalid)?,
+                data: SegmentedBytes::new(core::slice::from_ref(&message.data)).map_err(invalid)?,
             });
         }
         messages.push(OutputDataRef {

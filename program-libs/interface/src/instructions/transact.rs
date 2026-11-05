@@ -42,6 +42,7 @@ use spr_hasher::{
 };
 use spr_interface::{
     N_PUBLIC_SLOTS,
+    error::ShieldedPoolError,
     instruction::{
         CircuitId, InterfaceTransfer, TreeContext,
         instruction_data::{
@@ -680,7 +681,7 @@ impl<'a> RingTransactData<'a> {
         let salt = bytes.array()?;
         let extensions = match flags.has(transact_flag::EXTENSIONS) {
             false => FrameExtensions::default(),
-            true => FrameExtensions::read(&mut bytes)?,
+            true => FrameExtensions::read(&mut bytes, rail)?,
         };
         check_extensions(&extensions, rail)?;
         let interface_transfers = bytes.interface_transfers()?;
@@ -992,7 +993,7 @@ impl<'a> RingTransactData<'a> {
                 return Err(CustomRingError::InvalidInstructionData);
             }
         }
-        // 4. Bodies and application messages fit their length prefixes, SPP bounds public legs and refuses zero amounts.
+        // 4. Bodies and application messages fit their length prefixes, public legs keep SPP's count and nonzero amount rules under ring errors.
         // No check here proves a ciphertext opening, validates a root or verifies either proof.
         if self
             .outputs
@@ -1001,7 +1002,6 @@ impl<'a> RingTransactData<'a> {
         {
             return Err(CustomRingError::OutputBodyLength);
         }
-        count_byte(self.extensions.messages.len())?;
         if self
             .extensions
             .messages
@@ -1010,7 +1010,7 @@ impl<'a> RingTransactData<'a> {
         {
             return Err(CustomRingError::OutputBodyLength);
         }
-        validate_interface_transfers(&self.interface_transfers).map_err(invalid)?;
+        check_public_legs(&self.interface_transfers)?;
         Ok(authorization)
     }
 
@@ -1298,7 +1298,7 @@ impl<'a> FrameExtensions<'a> {
         *self == Self::default()
     }
 
-    fn read(bytes: &mut Bytes<'a>) -> Result<Self, CustomRingError> {
+    fn read(bytes: &mut Bytes<'a>, rail: RingRail) -> Result<Self, CustomRingError> {
         let flags = bytes.byte()?;
         if flags & !extension_flag::KNOWN != 0 {
             return Err(CustomRingError::FlagNotAllowed);
@@ -1313,17 +1313,19 @@ impl<'a> FrameExtensions<'a> {
         let messages = match has(extension_flag::MESSAGES) {
             false => Vec::new(),
             true => {
-                let count = bytes.byte()?;
-                (0..count)
-                    .map(|_| {
-                        let view_tag = bytes.array()?;
-                        let len = bytes.u16()?;
-                        Ok(AppMessage {
-                            view_tag,
-                            data: bytes.take(usize::from(len))?,
-                        })
-                    })
-                    .collect::<Result<_, CustomRingError>>()?
+                let count = usize::from(bytes.byte()?);
+                check_message_count(count, rail)?;
+                // The bump allocator keeps every growth step, so the list takes its exact size once.
+                let mut messages = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let view_tag = bytes.array()?;
+                    let len = bytes.u16()?;
+                    messages.push(AppMessage {
+                        view_tag,
+                        data: bytes.take(usize::from(len))?,
+                    });
+                }
+                messages
             }
         };
         let cache = has(extension_flag::CACHE)
@@ -1518,6 +1520,30 @@ impl TransactFlags {
     }
 }
 
+/// SPP's `messages` vector has a `u8` length.
+pub const MAX_SPP_MESSAGES: usize = u8::MAX as usize;
+
+/// SPP also receives the auditor message and an anonymous frame's sender bundle as messages.
+pub const fn max_application_messages(rail: RingRail) -> usize {
+    MAX_SPP_MESSAGES - 1 - rail.anonymous_frame() as usize
+}
+
+/// Runs ahead of the message list's allocation, the SPP encoder never meets an excess.
+fn check_message_count(count: usize, rail: RingRail) -> Result<(), CustomRingError> {
+    match count <= max_application_messages(rail) {
+        true => Ok(()),
+        false => Err(CustomRingError::TooManyApplicationMessages),
+    }
+}
+
+fn check_public_legs(transfers: &[InterfaceTransfer]) -> Result<(), CustomRingError> {
+    validate_interface_transfers(transfers).map_err(|error| match error {
+        ShieldedPoolError::TooManyInterfaceTransfers => CustomRingError::TooManyPublicLegs,
+        ShieldedPoolError::ZeroInterfaceTransferAmount => CustomRingError::ZeroPublicLegAmount,
+        _ => CustomRingError::InvalidInstructionData,
+    })
+}
+
 /// The delegate's cached selector has no SPP rail, its entry would spend default-ring notes.
 fn check_extensions(
     extensions: &FrameExtensions<'_>,
@@ -1526,6 +1552,7 @@ fn check_extensions(
     if rail.is_delegate() && extensions.cache.is_some() {
         return Err(CustomRingError::FlagNotAllowed);
     }
+    check_message_count(extensions.messages.len(), rail)?;
     // Zero travels as the clear bit, one encoding per statement value.
     match extensions.signer_data_counts == Some(SignerDataCounts::default()) {
         true => Err(CustomRingError::InvalidSignerDataCounts),
