@@ -8,12 +8,15 @@ use zolana_ring_client::{rpc::WalletNoteStatus, CreatedUtxo, KnownUtxo, UtxoOwne
 use super::*;
 use crate::{
     database::Store,
+    hub::Clock,
+    projection_lease::LeaseClaim,
     spend_machine::{InputRead, Observation},
-    spent_index::{LoadSpends, NoteSeal, PageCommit},
+    spent_index::{LoadSpends, NoteSeal, ProjectionWriter},
 };
 
 const RING: Address = Address::new_from_array([8; 32]);
 const ASSET: [u8; 32] = [4; 32];
+const NOW: u64 = 1_000;
 
 /// A real Ed25519 point, `Address::is_on_curve` holds.
 fn wallet(seed: u8) -> Address {
@@ -486,13 +489,23 @@ async fn commit_page(
     let mut work = PageWork::new(book, &opener);
     page(&mut work);
     let delta = work.finish();
-    PageCommit {
+    let lease = LeaseClaim {
+        db: store.connection(),
+        ring: RING,
+        holder: store.lease_holder(),
+        now: NOW,
+    }
+    .claim()
+    .await?
+    .expect("one replica holds the lease");
+    ProjectionWriter {
         db: store.connection(),
         ring: RING,
         seal,
-        delta: &delta,
+        lease,
+        clock: Clock::Fixed(NOW),
     }
-    .commit()
+    .commit_page(&delta)
     .await?;
     book.commit(delta);
     Ok(())
@@ -508,7 +521,8 @@ async fn restart(store: &Store, seal: &NoteSeal) -> AuditStore {
         }
         .load()
         .await
-        .expect("load"),
+        .expect("load")
+        .spends,
     );
     book
 }

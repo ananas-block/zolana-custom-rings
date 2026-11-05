@@ -551,8 +551,8 @@ mod tests {
         origins::OriginPolicy,
         record_update::RecordUpdateRefusal,
         upstream::{
-            DepositHistory, MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage,
-            TransactionPage,
+            DepositHistory, MergeAuditRequest, RecordsTip, RingConfiguration, RingFrame,
+            RingHistoryPage, TransactionPage,
         },
     };
 
@@ -573,6 +573,13 @@ mod tests {
             &self,
             _request: TransactionPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+            Err(ClientError::Rpc("unused source".to_owned()))
+        }
+
+        async fn ring_frame(
+            &self,
+            _frame: RingFrame,
+        ) -> Result<Vec<spr_transaction::ShieldedTransaction>, ClientError> {
             Err(ClientError::Rpc("unused source".to_owned()))
         }
 

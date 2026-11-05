@@ -36,6 +36,8 @@ use zolana_ring_client::{
     ORIGIN_TRANSACTION_CONFIG,
 };
 
+use crate::upstream::RingFrame;
+
 const SIGNATURE_PAGE_SIZE: usize = 1_000;
 /// Index size falls with a longer run, a page refetches up to a few runs past its limit.
 const RUN_LEN: usize = 100;
@@ -250,32 +252,41 @@ impl FinalizedPage {
         entry: SignatureEntry,
         source: &S,
     ) -> Result<Vec<ShieldedTransaction>, ClientError> {
-        if !entry.succeeded {
-            return Ok(Vec::new());
-        }
-        let mut canonical = source
-            .origins(OriginRead {
-                ring: self.ring,
-                signature: entry.signature,
-            })
-            .await
-            .map_err(history_error)?;
-        if canonical.slot != entry.slot {
-            return Err(invalid_history());
-        }
-        canonical.origins.retain(|_, origin| origin.ring_invoked);
-        if canonical.origins.is_empty() {
-            return Ok(Vec::new());
-        }
-        let indexed = source.indexed(entry.signature).await?;
-        BoundEvents {
-            ring: self.ring,
-            entry,
-            canonical,
-            indexed: indexed.transactions,
-        }
-        .read()
+        bound_events(self.ring, entry, source).await
     }
+}
+
+/// The events of one finalized signature of `ring`, each bound to its confirmed origin.
+async fn bound_events<S: FinalizedSource>(
+    ring: Address,
+    entry: SignatureEntry,
+    source: &S,
+) -> Result<Vec<ShieldedTransaction>, ClientError> {
+    if !entry.succeeded {
+        return Ok(Vec::new());
+    }
+    let mut canonical = source
+        .origins(OriginRead {
+            ring,
+            signature: entry.signature,
+        })
+        .await
+        .map_err(history_error)?;
+    if canonical.slot != entry.slot {
+        return Err(invalid_history());
+    }
+    canonical.origins.retain(|_, origin| origin.ring_invoked);
+    if canonical.origins.is_empty() {
+        return Ok(Vec::new());
+    }
+    let indexed = source.indexed(entry.signature).await?;
+    BoundEvents {
+        ring,
+        entry,
+        canonical,
+        indexed: indexed.transactions,
+    }
+    .read()
 }
 
 impl HistorySelection {
@@ -656,6 +667,19 @@ impl BoundEvents {
 impl FinalizedUpstreams<'_> {
     pub(crate) async fn origins(&self, read: OriginRead) -> Result<CanonicalOrigins, AuditError> {
         <Self as FinalizedSource>::origins(self, read).await
+    }
+
+    /// A finalized read of one signature, its confirmed slot must equal the frame's.
+    pub(crate) async fn frame(
+        &self,
+        frame: RingFrame,
+    ) -> Result<Vec<ShieldedTransaction>, ClientError> {
+        let entry = SignatureEntry {
+            signature: frame.signature,
+            slot: frame.slot,
+            succeeded: true,
+        };
+        bound_events(frame.ring, entry, self).await
     }
 }
 

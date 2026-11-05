@@ -33,7 +33,9 @@ use crate::{
     credentials::{CredentialRefusal, HeldCredential, HeldCredentials},
     database::Store,
     error::RingRpcError,
+    frame_repairs::RepairBook,
     owner_notes::OwnerNotesRead,
+    projection_lease::ProjectionLease,
     spend_machine::{NoteRead, Observation, SpendRow, SpendState, Transition},
     spent_index::{Checkpoint, LoadedSpends, NoteSeal},
 };
@@ -75,8 +77,11 @@ pub(crate) enum OwnerIndex {
 pub(crate) struct Backfill {
     /// `None` until the durable tables load.
     pub history: Option<HistoryPosition>,
-    /// In memory, a restart scans every credential from the first finalized slot.
+    /// Durable on the lease holder, a restart resumes the scan where its last page committed.
     pub credentials: HistoryPosition,
+    pub repairs: RepairBook,
+    /// The lease the last claim returned, `None` while another replica writes the ring.
+    pub writer: Option<ProjectionLease>,
 }
 
 #[derive(Default)]
@@ -971,13 +976,25 @@ impl AuditStore {
     /// A store with a database reads wallets from its tables, the page writes them first.
     async fn commit_fixture(&self, delta: PageDelta) {
         if let OwnerIndex::Database { store, ring, seal } = &self.index {
-            crate::spent_index::PageCommit {
+            let clock = crate::hub::Clock::System;
+            let lease = crate::projection_lease::LeaseClaim {
+                db: store.connection(),
+                ring: *ring,
+                holder: store.lease_holder(),
+                now: clock.now().expect("clock"),
+            }
+            .claim()
+            .await
+            .expect("claim")
+            .expect("the fixture replica holds the lease");
+            crate::spent_index::ProjectionWriter {
                 db: store.connection(),
                 ring: *ring,
                 seal,
-                delta: &delta,
+                lease,
+                clock,
             }
-            .commit()
+            .commit_page(&delta)
             .await
             .expect("fixture page");
         }

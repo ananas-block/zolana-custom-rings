@@ -1,10 +1,15 @@
-use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    num::NonZeroU32,
+    sync::Arc,
+    time::Duration,
+};
 
 use custom_ring_interface::RingMode;
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
-use spr_indexer_api::{Base64String, Hash, Limit};
+use spr_indexer_api::{Base64String, Hash, Limit, TransactionEvents};
 use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{instructions::transact::canonical_shape, ShieldedTransaction};
 use zolana_ring_client::{
@@ -30,25 +35,26 @@ use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
     credentials::{CredentialScan, HeldCredential, OwnerCredential, ScanEnd},
     error::{redacted, GrantRefusal, RingRpcError},
+    frame_repairs::RepairBook,
     grant_rows::{GrantPair, GrantRow},
     grants::{GrantQuery, Grants, ReadScope},
     hub::Shared,
     limits::ReaderPermit,
+    projection_lease::{LeaseClaim, ProjectionLease},
     record_writer::SaltedOwner,
     replay::ReplayCheck,
     spend_machine::{InputRead, Observation},
-    spent_index::{LoadSpends, NoteSeal, PageCommit},
+    spent_index::{LoadSpends, LoadedProjection, NoteSeal, ProjectionWriter},
     upstream::{
-        MergeAuditRequest, RingConfiguration, RingHistoryPage, TransactionPage, TransactionSource,
+        MergeAuditRequest, RingConfiguration, RingFrame, RingHistoryPage, TransactionPage,
+        TransactionSource,
     },
-    utxos::{AuditStore, CreatedIn, PageDelta, PageWork, WalletStatusQuery, MAX_BACKFILL_PAGES},
+    utxos::{
+        AuditStore, Backfill, CreatedIn, PageDelta, PageWork, WalletStatusQuery, MAX_BACKFILL_PAGES,
+    },
 };
 
 pub(crate) const WALLET_NOTE_PAGE_LIMIT: usize = 100;
-/// Frames one pass retries, the oldest first.
-const MAX_RETRIED_FRAMES: usize = 16;
-/// A retried slot holds few frames, the next pass reads on.
-const MAX_RETRY_PAGES: usize = 4;
 pub(crate) const ASSET_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The attested limit is what the reader signed, absent for the default page.
@@ -109,6 +115,14 @@ struct BoundTransaction<'a> {
     transaction: &'a spr_client::ShieldedTransaction,
     origin: &'a RingOrigin,
     mode: RingMode,
+}
+
+enum Projection<'a> {
+    /// No database, the mirror is the whole projection.
+    Memory,
+    Writer(ProjectionWriter<'a>),
+    /// Another replica holds the lease, the local one reloaded its commits.
+    Follower,
 }
 
 struct AuditedRows {
@@ -229,9 +243,12 @@ impl<S: TransactionSource> AuditService<S> {
     ) -> Result<OwnerCredential, RingRpcError> {
         let store = self.shared.store(self.ring);
         // 1. The refresh holds the backfill lock, no other scan moves the position meanwhile.
+        //    The holder commits each page, another replica scans into memory until its next reload.
         let scanned = {
             let mut backfill = store.backfill.lock().await;
-            self.refresh_credentials(&store, &mut backfill.credentials)
+            let seal = self.note_seal()?;
+            let durable = self.writer(backfill.writer, &seal);
+            self.refresh_credentials(&store, &mut backfill.credentials, durable.as_ref())
                 .await?
         };
         // 2. A held credential answers whatever the scan end, a missing one only after a complete scan.
@@ -567,37 +584,111 @@ impl<S: TransactionSource> AuditService<S> {
         if config.auditor_pubkey != self.auditor.pubkey() {
             return Err(Unauthorized::AuditorKeyMismatch.into());
         }
-        self.read_history(&store, config.mode).await
+        let mut guard = store.backfill.lock().await;
+        let backfill = &mut *guard;
+        let seal = self.note_seal()?;
+        match self.projection(&store, backfill, &seal).await? {
+            Projection::Memory => self.read_history(&store, backfill, None, config.mode).await,
+            Projection::Writer(writer) => {
+                self.read_history(&store, backfill, Some(&writer), config.mode)
+                    .await
+            }
+            Projection::Follower => Ok(()),
+        }
     }
 
-    /// Reads the durable tables once per store, a restart resumes where the last commit stopped.
+    /// Claims the lease under the backfill lock. A follower reloads the holder's commits on every
+    /// pass and a new holder reloads once, a renewing holder's mirror already equals its commits.
+    async fn projection<'a>(
+        &'a self,
+        store: &AuditStore,
+        backfill: &mut Backfill,
+        seal: &'a NoteSeal,
+    ) -> Result<Projection<'a>, RingRpcError> {
+        let Some(database) = self.shared.database.as_ref() else {
+            return Ok(Projection::Memory);
+        };
+        let lease = LeaseClaim {
+            db: database.connection(),
+            ring: self.ring,
+            holder: database.lease_holder(),
+            now: self.shared.clock.now()?,
+        }
+        .claim()
+        .await?;
+        if lease.is_none() || lease != backfill.writer || backfill.history.is_none() {
+            self.reload(store, backfill, seal).await?;
+        }
+        backfill.writer = lease;
+        Ok(match self.writer(lease, seal) {
+            Some(writer) => Projection::Writer(writer),
+            None => Projection::Follower,
+        })
+    }
+
+    /// `None` without a database or a held lease.
+    fn writer<'a>(
+        &'a self,
+        lease: Option<ProjectionLease>,
+        seal: &'a NoteSeal,
+    ) -> Option<ProjectionWriter<'a>> {
+        let database = self.shared.database.as_ref()?;
+        lease.map(|lease| ProjectionWriter {
+            db: database.connection(),
+            ring: self.ring,
+            seal,
+            lease,
+            clock: self.shared.clock,
+        })
+    }
+
+    /// Moves the mirror and every backfill position to one snapshot of the durable tables.
     ///
-    /// A failed or cancelled read leaves the position `None`, the retry reads the tables before
-    /// any page commits behind the durable checkpoint.
-    async fn load_tables<'a>(
+    /// A failed or cancelled read changes nothing, the next pass reloads before any page commits.
+    async fn reload(
         &self,
         store: &AuditStore,
-        loaded: &'a mut Option<HistoryPosition>,
-    ) -> Result<&'a mut HistoryPosition, RingRpcError> {
+        backfill: &mut Backfill,
+        seal: &NoteSeal,
+    ) -> Result<(), RingRpcError> {
         let Some(database) = self.shared.database.as_ref() else {
-            return Ok(loaded.get_or_insert_default());
+            return Ok(());
         };
-        match loaded {
-            Some(position) => Ok(position),
-            None => {
-                let seal = self.note_seal()?;
-                let tables = LoadSpends {
-                    db: database.connection(),
-                    ring: self.ring,
-                    seal: &seal,
-                }
-                .load()
-                .await?;
-                let position = tables.checkpoint.position;
-                store.seed(tables);
-                Ok(loaded.insert(position))
-            }
+        let LoadedProjection {
+            spends,
+            repairs,
+            credentials,
+            credential_position,
+        } = LoadSpends {
+            db: database.connection(),
+            ring: self.ring,
+            seal,
         }
+        .load()
+        .await?;
+        // 1. Seeding keeps every unread frame, a frame the holder read since leaves by a read mark.
+        let unread: BTreeSet<CreatedIn> = spends.unread.iter().copied().collect();
+        let read: Vec<CreatedIn> = store
+            .unread_frames()
+            .into_iter()
+            .filter(|frame| !unread.contains(frame))
+            .collect();
+        let position = spends.checkpoint.position;
+        store.seed(spends);
+        if !read.is_empty() {
+            let opener = |_: &[u8; 32]| -> Option<NullifierKey> { None };
+            let mut work = PageWork::new(store, &opener);
+            for frame in read {
+                work.mark_read(frame);
+            }
+            store.commit(work.finish());
+        }
+        // 2. A held credential equals its row, a differing row refuses the reload.
+        store.admit_credentials(credentials)?;
+        backfill.history = Some(position);
+        backfill.credentials = credential_position;
+        backfill.repairs = repairs.into_iter().collect();
+        Ok(())
     }
 
     fn note_seal(&self) -> Result<NoteSeal, RingRpcError> {
@@ -605,17 +696,14 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     /// The transaction commits before the mirror moves, a crash replays the page idempotently.
-    async fn commit_page(&self, store: &AuditStore, delta: PageDelta) -> Result<(), RingRpcError> {
-        if let Some(database) = self.shared.database.as_ref() {
-            let seal = self.note_seal()?;
-            PageCommit {
-                db: database.connection(),
-                ring: self.ring,
-                seal: &seal,
-                delta: &delta,
-            }
-            .commit()
-            .await?;
+    async fn commit_page(
+        &self,
+        store: &AuditStore,
+        durable: Option<&ProjectionWriter<'_>>,
+        delta: PageDelta,
+    ) -> Result<(), RingRpcError> {
+        if let Some(writer) = durable {
+            writer.commit_page(&delta).await?;
         }
         store.commit(delta);
         Ok(())
@@ -632,15 +720,25 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     /// Moves the position only past a page whose every row applied, a retry reads it again.
-    async fn read_history(&self, store: &AuditStore, mode: RingMode) -> Result<(), RingRpcError> {
+    async fn read_history(
+        &self,
+        store: &AuditStore,
+        backfill: &mut Backfill,
+        durable: Option<&ProjectionWriter<'_>>,
+        mode: RingMode,
+    ) -> Result<(), RingRpcError> {
         let source = &self.shared.source;
         let limit = Page::new(None, None)?.limit();
-        let mut guard = store.backfill.lock().await;
-        let backfill = &mut *guard;
-        let position = self.load_tables(store, &mut backfill.history).await?;
-        // Read before the retries, a frame unread for want of a key opens once its credential is held.
-        self.refresh_or_warn(store, &mut backfill.credentials).await;
-        self.retry_unread(store, mode, limit).await?;
+        let Backfill {
+            history,
+            credentials,
+            repairs,
+            ..
+        } = backfill;
+        let position = history.get_or_insert_default();
+        // Read before the repairs, a frame unread for want of a key opens once its credential is held.
+        self.refresh_or_warn(store, credentials, durable).await;
+        self.repair_frames(store, repairs, durable, mode).await;
         let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
         for _ in 0..MAX_BACKFILL_PAGES {
             let response = source
@@ -656,7 +754,7 @@ impl<S: TransactionSource> AuditService<S> {
                 .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
             self.validate_indexer_response(&response)?;
             // Read after the page, an enrollment finalized before a note on it is held unless the refresh stops early.
-            self.refresh_or_warn(store, &mut backfill.credentials).await;
+            self.refresh_or_warn(store, credentials, durable).await;
             let mut work = PageWork::new(store, &opener);
             work.late_keys();
             let rows = self.audit_rows(response, mode, &mut work, None).await?;
@@ -668,7 +766,7 @@ impl<S: TransactionSource> AuditService<S> {
                 PageEnd::More => None,
             };
             work.checkpoint(next, terminal);
-            self.commit_page(store, work.finish()).await?;
+            self.commit_page(store, durable, work.finish()).await?;
             *position = next;
             if terminal.is_some() {
                 return Ok(());
@@ -677,64 +775,108 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
-    /// Reads each unreadable frame again at its own slot, the position stays where it is.
-    async fn retry_unread(
+    /// Reads each due unread frame by its signature, the history position stays where it is.
+    ///
+    /// A failure backs only its own frame off, the next due frame still runs, and nothing here
+    /// stops the forward read.
+    async fn repair_frames(
         &self,
         store: &AuditStore,
+        repairs: &mut RepairBook,
+        durable: Option<&ProjectionWriter<'_>>,
         mode: RingMode,
-        limit: NonZeroU32,
-    ) -> Result<(), RingRpcError> {
-        let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
-        for frame in store.unread_frames().into_iter().take(MAX_RETRIED_FRAMES) {
-            let mut position = frame
-                .slot
-                .checked_sub(1)
-                .map_or_else(HistoryPosition::default, HistoryPosition::after_slot);
-            for _ in 0..MAX_RETRY_PAGES {
-                let response = self
-                    .shared
-                    .source
-                    .ring_history(RingHistoryPage {
-                        ring: self.ring,
-                        position,
-                        limit,
-                    })
-                    .await?;
-                let end = position
-                    .advance(&response, limit.get())
-                    .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
-                self.validate_indexer_response(&response)?;
-                let held = response
-                    .data
-                    .iter()
-                    .flat_map(|item| &item.events)
-                    .any(|tx| {
-                        tx.tx_signature == frame.tx_signature
-                            && tx.event_index == Some(frame.event_index)
-                    });
-                if held {
-                    let mut work = PageWork::new(store, &opener);
-                    work.late_keys();
-                    let rows = self
-                        .audit_rows(response, mode, &mut work, Some(frame))
-                        .await?;
-                    if let Some(error) = rows.unfinished {
-                        return Err(error.into());
+    ) {
+        let now = match self.shared.clock.now() {
+            Ok(now) => now,
+            Err(error) => {
+                log::warn!(
+                    "frame repair of ring {} has no clock because {}",
+                    self.ring,
+                    redacted(&error)
+                );
+                return;
+            }
+        };
+        let mut failed = Vec::new();
+        for frame in repairs.due(store.unread_frames(), now) {
+            match self.repair_frame(store, durable, mode, frame).await {
+                Ok(true) => repairs.forget(&frame),
+                outcome => {
+                    if let Err(error) = outcome {
+                        log::warn!(
+                            "repair of ring {} frame {}:{} failed because {}",
+                            self.ring,
+                            frame.tx_signature,
+                            frame.event_index,
+                            redacted(&error)
+                        );
                     }
-                    self.commit_page(store, work.finish()).await?;
-                    break;
-                }
-                if matches!(end, PageEnd::Terminal(_)) {
-                    break;
+                    failed.push((frame, repairs.failed(frame, now)));
                 }
             }
         }
-        Ok(())
+        if let Some(writer) = durable.filter(|_| !failed.is_empty()) {
+            if let Err(error) = writer.record_attempts(&failed).await {
+                log::warn!(
+                    "repair attempts of ring {} did not commit because {}",
+                    self.ring,
+                    redacted(&RingRpcError::from(error))
+                );
+            }
+        }
+    }
+
+    /// `true` once the committed page marked the frame read.
+    async fn repair_frame(
+        &self,
+        store: &AuditStore,
+        durable: Option<&ProjectionWriter<'_>>,
+        mode: RingMode,
+        frame: CreatedIn,
+    ) -> Result<bool, RingRpcError> {
+        let events = self
+            .shared
+            .source
+            .ring_frame(RingFrame {
+                ring: self.ring,
+                signature: frame.tx_signature,
+                slot: frame.slot,
+            })
+            .await?;
+        let response = GetShieldedTransactionsByTagsResponse {
+            context: store.context(),
+            output_tree_id: None,
+            data: vec![TransactionEvents {
+                slot: frame.slot,
+                signature: frame.tx_signature,
+                events,
+            }],
+            pagination_token: None,
+        };
+        self.validate_indexer_response(&response)?;
+        let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
+        let mut work = PageWork::new(store, &opener);
+        work.late_keys();
+        let rows = self
+            .audit_rows(response, mode, &mut work, Some(frame))
+            .await?;
+        if let Some(error) = rows.unfinished {
+            return Err(error.into());
+        }
+        let delta = work.finish();
+        let read = delta.read_frames().any(|read| *read == frame);
+        self.commit_page(store, durable, delta).await?;
+        Ok(read)
     }
 
     /// A failed refresh keeps every admitted page, the next pass resumes at its position.
-    async fn refresh_or_warn(&self, store: &AuditStore, position: &mut HistoryPosition) {
-        if let Err(error) = self.refresh_credentials(store, position).await {
+    async fn refresh_or_warn(
+        &self,
+        store: &AuditStore,
+        position: &mut HistoryPosition,
+        durable: Option<&ProjectionWriter<'_>>,
+    ) {
+        if let Err(error) = self.refresh_credentials(store, position, durable).await {
             log::warn!(
                 "credential refresh of ring {} failed because {}",
                 self.ring,
@@ -748,12 +890,14 @@ impl<S: TransactionSource> AuditService<S> {
         &self,
         store: &AuditStore,
         position: &mut HistoryPosition,
+        durable: Option<&ProjectionWriter<'_>>,
     ) -> Result<ScanEnd, RingRpcError> {
         CredentialScan {
             ring: self.ring,
             auditor: &self.auditor,
             source: &self.shared.source,
             store,
+            durable,
         }
         .run(position)
         .await
