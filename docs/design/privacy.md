@@ -31,10 +31,10 @@ The confidential mode and the anonymous mode differ at the sender and the recipi
 
 ## Every mode
 
-- Enrollment is public. An `Enroll` names the owner as a signer and publishes its credential with the nullifier key and the list tag. Anyone sees that a wallet enrolled on a ring.
-- A wallet's viewing key sits in its zolana user record, one per wallet across every ring. A leaked viewing secret opens the bodies sealed to that key on every ring. A wallet that needs ring isolation uses another identity per ring.
-- A transfer or deposit publishes the credential owner, the tree 0 address root and its table of credential state trees. A hidden owner's merge publishes the credential owner and one state root. Each shows which trees hold the credentials it reads, and that each predates its root. None names an owner or a credential.
-- A private write raises the source's absence floor to the sequence of the address root it proves under. The floor shows that the written owner was enrolled by that root.
+- Enrollment is public. An `Enroll` names the owner as a signer and stores its nullifier key, list tag and viewing key in an account. Anyone sees that a wallet enrolled on a ring.
+- A tracking row holds the owner's viewing key for one ring. A leaked viewing secret opens the bodies sealed to that key on every ring whose row holds it. A rotation on one ring moves that ring alone to a new key.
+- A transfer, deposit or nonzero-key merge publishes the tracking revision it reads. The revision shows that each row the proof opens existed at that revision, and names no owner.
+- A private write raises the source's tracking floor to the revision its rows open under. The floor shows that the written owner was enrolled by that revision.
 - A public record write names its member. A rule table is public, so observers see which lists a ring screens and who is on the public ones.
 - A deposit publishes the funder, the asset and each amount.
 - A merge links its input notes to one owner. A zero-key merge also publishes that owner.
