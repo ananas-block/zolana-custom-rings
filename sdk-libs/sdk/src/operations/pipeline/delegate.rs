@@ -14,7 +14,7 @@ use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
 use super::{
     anonymous::SenderChange,
     canonical_shape, pad_under_rail, sealed,
-    selection::{payment_total, widest, Candidate, Funding},
+    selection::{payment_total, spanned_trees, tree_sets, widest, Candidate, Funding},
     shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
     RingTransfer, Spend, Staged, TransferAuthority,
 };
@@ -190,7 +190,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
 }
 
 impl<'a> DelegateMove<'a> {
-    /// The fewest UTXOs of one tree funding the payments whose move fits one transaction, keyed and zero-key notes alike.
+    /// The fewest UTXOs over the fewest input trees funding the payments whose move fits one transaction, keyed and zero-key notes alike.
     pub async fn select<P: AsyncRpc, I: RingIndexerBackend>(
         self,
         client: &RingClient<P, I>,
@@ -225,7 +225,7 @@ impl<'a> DelegateMove<'a> {
                 max_inputs,
             })
             .collect::<Vec<_>>();
-        let funded_on = |funding: &Funding<'_>, tree: u16| {
+        let funded_on = |funding: &Funding<'_>, trees: &[u16]| {
             SpendSelection {
                 utxos: funding.utxos,
                 asset: funding.asset,
@@ -233,19 +233,23 @@ impl<'a> DelegateMove<'a> {
                 max_inputs: funding.max_inputs,
                 keys: SpendableKeys::Any,
             }
-            .select_where(|utxo| utxo.tree_id == tree)
+            .select_where(|utxo| trees.contains(&utxo.tree_id))
             .ok()
         };
-        let trees: BTreeSet<u16> = utxos.iter().map(|utxo| utxo.tree_id).collect();
-        let mut ranked: Vec<_> = trees
+        let spendable_sets = tree_sets(&utxos);
+        let mut ranked: Vec<_> = spendable_sets
             .iter()
-            .filter_map(|&tree| {
+            .filter_map(|trees| {
                 let funded = fundings
                     .iter()
                     .map(|funding| {
-                        funded_on(funding, tree).map(|utxos| (funding.asset, funding.amount, utxos))
+                        funded_on(funding, trees)
+                            .map(|utxos| (funding.asset, funding.amount, utxos))
                     })
                     .collect::<Option<Vec<_>>>()?;
+                if spanned_trees(funded.iter().flat_map(|(_, _, utxos)| utxos)) < trees.len() {
+                    return None;
+                }
                 let notes = funded
                     .iter()
                     .map(|(_, _, utxos)| utxos.len())
@@ -255,7 +259,7 @@ impl<'a> DelegateMove<'a> {
                     .flat_map(|(_, _, utxos)| utxos)
                     .map(|utxo| u128::from(utxo.utxo.amount))
                     .sum();
-                Some(((notes, total, tree), funded))
+                Some(((trees.len(), notes, total, trees), funded))
             })
             .collect();
         ranked.sort_unstable_by_key(|(order, _)| *order);
@@ -273,10 +277,14 @@ impl<'a> DelegateMove<'a> {
                 self.transfer(spent)?.with_shape(shape)
             })
             .collect();
-        // With no tree funding them all, the first short mint names the refusal.
+        // With no tree set funding them all, the first short mint names the refusal.
         let funding = fundings
             .iter()
-            .find(|funding| trees.iter().all(|&tree| funded_on(funding, tree).is_none()))
+            .find(|funding| {
+                spendable_sets
+                    .iter()
+                    .all(|trees| funded_on(funding, trees).is_none())
+            })
             .or_else(|| fundings.first())
             .ok_or(TransactionError::ZeroSpendAmount)?;
         funding.first_fit(attempts, client).await

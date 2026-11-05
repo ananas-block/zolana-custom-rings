@@ -6,6 +6,7 @@ import {
   addressBytes,
   compileUnsignedTransaction,
   encodeBase58,
+  treeAddress,
 } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
@@ -345,6 +346,57 @@ describe("delegate sources", () => {
       notes: assets.map((asset, at) => noteOf(fixture, owner, leaf + at, asset)),
     });
 
+    it("funds every mint of a move from one shared tree, the client's or another", async () => {
+      const [member, payee] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
+      const { fixture, delegate } = await moveRing("confidential", [member, payee]);
+      const second = treeAddress(fixture.client.treeId + 1);
+      const first = await fixture.client.getAccount(fixture.client.tree);
+      if (first === undefined) throw new Error("the client's tree is published");
+      const data = first.data.slice();
+      new DataView(data.buffer).setUint16(2, fixture.client.treeId + 1, true);
+      const client = clientOf(fixture);
+      const on = (note: WalletUtxo, tree: Address): WalletUtxo => ({
+        ...note,
+        outputContext: { ...note.outputContext, tree },
+      });
+      const move = (notes: readonly WalletUtxo[]) =>
+        buildRingDelegateRecoveredTransaction({
+          client: {
+            ...client,
+            getAccount: async (address: Address) =>
+              address === second ? { ...first, data } : client.getAccount(address),
+          },
+          ringProgramId: fixture.ringProgramId,
+          delegate: delegate as never,
+          feePayer: fixture.authority,
+          outputs: [
+            { recipient: payee.shieldedAddress(), asset: SOL_MINT, amount: 5n },
+            { recipient: payee.shieldedAddress(), asset: USDC, amount: 5n },
+          ],
+          sources: [
+            { address: member.shieldedAddress(), nullifierKey: member.nullifierKey(), notes },
+          ],
+          txViewingKey: TX_VIEWING_KEY,
+        });
+      // The client's tree holds SOL alone, the second tree holds both mints.
+      await move([
+        noteOf(fixture, member, 0),
+        on(noteOf(fixture, member, 1), second),
+        on(noteOf(fixture, member, 2, USDC), second),
+      ]);
+      const spent = fixture.sppCalls
+        .at(-1)
+        ?.proofInputs.inputUtxos.filter((input) => !input.isDummy());
+      expect(spent?.map((input) => input.treeId)).toEqual([
+        fixture.client.treeId + 1,
+        fixture.client.treeId + 1,
+      ]);
+      // A move only two trees fund together is refused.
+      await expect(
+        move([noteOf(fixture, member, 0), on(noteOf(fixture, member, 1, USDC), second)]),
+      ).rejects.toMatchObject({ causeCode: "RING_INSUFFICIENT_BALANCE" });
+    });
+
     it("spends several owners' notes and pays the change to the last note's owner", async () => {
       const [member, other, payee] = [
         ShieldedKeypair.generate(),
@@ -450,7 +502,7 @@ describe("delegate sources", () => {
       },
     );
 
-    it("refuses one owner's change on two SPL mints on the anonymous rail alone", async () => {
+    it("returns one owner's change on two SPL mints on both rails", async () => {
       const [member, payee] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
       const build = async (mode: RingMode) => {
         const { fixture, delegate } = await moveRing(mode, [member, payee]);
@@ -468,10 +520,7 @@ describe("delegate sources", () => {
         });
       };
       await expect(build("confidential")).resolves.toBeDefined();
-      await expect(build("anonymous")).rejects.toMatchObject({
-        code: "RING_BUILD_TRANSFER",
-        causeCode: "RING_ANONYMOUS_CHANGE_COUNT",
-      });
+      await expect(build("anonymous")).resolves.toBeDefined();
     });
 
     it("refuses a source named twice and no source", async () => {

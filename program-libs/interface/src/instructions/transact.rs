@@ -63,8 +63,8 @@ use crate::{
     RingMode, RingPolicy, RootRead, TAGGED_X25519_KEY_LEN,
     anonymous_exit::ANONYMOUS_PARTIES,
     audit_stream::{
-        AUDIT_RECORD_LEN, AuditStreamLayout, DATA_TAIL_LEN, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
-        sender_bundle_len,
+        AUDIT_RECORD_LEN, AuditStreamLayout, BundleLayout, DATA_TAIL_LEN, MIN_REPLY_LEN,
+        RECIPIENT_BODY_LEN,
     },
     bytes::Bytes,
     cosign::ApprovalMask,
@@ -743,11 +743,17 @@ impl<'a> RingTransactData<'a> {
                 Some(Replies::new(len, bytes.take(usize::from(len) * bodies)?)?.checked(bodies)?)
             }
         };
-        // 7. The bundle's length follows `m`, the frame spends no byte on it.
+        // 7. The bundle's length follows `m` and the bodiless count, the frame spends no byte on it.
         let sender = match rail.anonymous_frame() {
             true => Some(FramedSenderBundle {
                 tag: bytes.array()?,
-                body: bytes.take(sender_bundle_len(output_count))?,
+                body: bytes.take(
+                    BundleLayout {
+                        outputs: output_count,
+                        change: bodiless.count_ones() as usize,
+                    }
+                    .byte_len(),
+                )?,
             }),
             false => None,
         };
@@ -956,7 +962,6 @@ impl<'a> RingTransactData<'a> {
         // Replies contain one complete chunk per recipient body, nonexit tags retain their canonical leading zeros.
         stream.checked()?;
         let anonymous_frame = self.rail.anonymous_frame();
-        let output_count = usize::from(header.output_count);
         let owners_expected = match flags.reads_own_root() {
             true => crate::spl_withdrawal_count(&self.interface_transfers),
             false => 0,
@@ -966,7 +971,7 @@ impl<'a> RingTransactData<'a> {
             || self.sender.is_some() != anonymous_frame
             || self
                 .sender
-                .is_some_and(|sender| sender.body.len() != sender_bundle_len(output_count))
+                .is_some_and(|sender| sender.body.len() != self.bundle_layout().byte_len())
             || self.envelope.len() != stream.envelope().len
             || !self.outputs.iter().all(|output| {
                 output.tail.is_some() == self.has_data
@@ -1244,6 +1249,17 @@ impl<'a> RingTransactData<'a> {
             outputs: self.outputs.len(),
             capacity: usize::from(shape.outputs),
             has_data: self.has_data,
+        }
+    }
+
+    pub fn bundle_layout(&self) -> BundleLayout {
+        BundleLayout {
+            outputs: self.outputs.len(),
+            change: self
+                .outputs
+                .iter()
+                .filter(|output| output.body == SlotBody::None)
+                .count(),
         }
     }
 

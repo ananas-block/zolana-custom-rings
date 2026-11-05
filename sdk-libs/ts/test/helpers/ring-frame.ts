@@ -94,7 +94,7 @@ export function ringFrame(
     wideOwners: input.wideOwners ?? false,
     outputs: Array.from({ length: outputs }, (_, index) => slot(index)),
     ...(anonymous
-      ? { sender: { tag: field(1), body: new Uint8Array(senderBundleLen(outputs)) } }
+      ? { sender: { tag: field(1), body: new Uint8Array(senderBundleLen({ outputs, change: 1 })) } }
       : {}),
     envelope: new Uint8Array(envelopeRegion(layout).length).fill(3),
     privateTxHash: field(4),

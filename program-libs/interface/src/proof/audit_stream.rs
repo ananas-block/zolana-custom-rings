@@ -32,8 +32,8 @@ pub const ENTRY_INPUT_LEN: usize = 200;
 /// The secret is the deposit's blinding or the merge's seed.
 pub const OPENING_RECORD_LEN: usize = RECORD_STRIDE + FIELD_LEN;
 pub const RECIPIENT_BODY_LEN: usize = 72;
-/// `mint0 || u64be(amount0) || u64be(amount1) || output_seed`.
-pub const SENDER_BUNDLE_HEAD_LEN: usize = 80;
+/// `mint || u64be(amount)`, one per bodiless slot of the bundle.
+pub const CHANGE_CELL_LEN: usize = FIELD_LEN + AMOUNT_LEN;
 /// `viewing_u || owner_key || nullifier_pk`, one byte for the wincode of no data.
 pub const MIN_REPLY_LEN: usize = 97;
 pub const RECORD_BLOCKS: usize = AUDIT_RECORD_LEN.div_ceil(STREAM_BLOCK_LEN);
@@ -48,7 +48,6 @@ const _: () = assert!(OPENING_RECORD_LEN.is_multiple_of(STREAM_BLOCK_LEN));
 const _: () = assert!(DATA_TAIL_LEN.is_multiple_of(STREAM_BLOCK_LEN));
 const _: () = assert!(AMOUNT_LEN + 6 * FIELD_LEN == ENTRY_INPUT_LEN);
 const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == RECIPIENT_BODY_LEN);
-const _: () = assert!(2 * AMOUNT_LEN + 2 * FIELD_LEN == SENDER_BUNDLE_HEAD_LEN);
 const _: () = assert!(3 * FIELD_LEN + 1 == MIN_REPLY_LEN);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,9 +209,23 @@ impl AuditStreamLayout {
     }
 }
 
-/// `m` fixes the bundle, never a slot count a reader inferred.
-pub const fn sender_bundle_len(outputs: usize) -> usize {
-    SENDER_BUNDLE_HEAD_LEN + FIELD_LEN * outputs
+/// The frame publishes both counts, the bundle spends no byte on them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BundleLayout {
+    /// The frame's `m`.
+    pub outputs: usize,
+    /// The frame's bodiless slots, at most `outputs`.
+    pub change: usize,
+}
+
+impl BundleLayout {
+    pub const fn byte_len(self) -> usize {
+        FIELD_LEN + CHANGE_CELL_LEN * self.change + FIELD_LEN * self.recipient_keys()
+    }
+
+    const fn recipient_keys(self) -> usize {
+        self.outputs.saturating_sub(self.change)
+    }
 }
 
 /// A record's first byte, the circuit derives it from the slot's domain and ring id.
@@ -643,43 +656,62 @@ impl RecipientBody {
 }
 
 /// The cells the sender rebuilds change and recipients from, outside the proof.
+///
+/// `output_seed || change cells || recipient keys`, cell k rebuilds bodiless slot k, key k names body-bearing slot k.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SenderBundle {
-    /// Slot 0's mint when slot 0 is change, else zero.
-    pub mint: [u8; 32],
-    /// Slot 0's amount when slot 0 is change, else zero.
-    pub amount: u64,
-    /// Slot 1's lamports when slot 1 is change, else zero.
-    pub sol_amount: u64,
     pub output_seed: [u8; 32],
-    /// One per published slot, zero on change, exit and dummy.
+    pub change: Vec<ChangeCell>,
+    /// Zero on exit and dummy.
     pub recipient_keys: Vec<[u8; 32]>,
+}
+
+/// A bodiless slot's mint and amount, its blinding derives from the bundle's seed at the slot index.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChangeCell {
+    pub mint: [u8; 32],
+    pub amount: u64,
 }
 
 impl SenderBundle {
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(sender_bundle_len(self.recipient_keys.len()));
-        out.extend_from_slice(&self.mint);
-        out.extend_from_slice(&self.amount.to_be_bytes());
-        out.extend_from_slice(&self.sol_amount.to_be_bytes());
+        let mut out = Vec::with_capacity(self.layout().byte_len());
         out.extend_from_slice(&self.output_seed);
+        for cell in &self.change {
+            out.extend_from_slice(&cell.mint);
+            out.extend_from_slice(&cell.amount.to_be_bytes());
+        }
         self.recipient_keys
             .iter()
             .for_each(|key| out.extend_from_slice(key));
         out
     }
 
-    /// `outputs` is the frame's `m`.
-    pub fn decode(plaintext: &[u8], outputs: usize) -> Result<Self, CustomRingError> {
+    pub fn decode(plaintext: &[u8], layout: BundleLayout) -> Result<Self, CustomRingError> {
+        if layout.change > layout.outputs {
+            return Err(CustomRingError::RingTransactLength);
+        }
         read_all(plaintext, |bytes| {
             Ok(Self {
-                mint: *bytes.array()?,
-                amount: read_amount(bytes)?,
-                sol_amount: read_amount(bytes)?,
                 output_seed: *bytes.array()?,
-                recipient_keys: bytes.fields(outputs)?.to_vec(),
+                change: (0..layout.change)
+                    .map(|_| {
+                        Ok(ChangeCell {
+                            mint: *bytes.array()?,
+                            amount: read_amount(bytes)?,
+                        })
+                    })
+                    .collect::<Result<_, CustomRingError>>()?,
+                recipient_keys: bytes.fields(layout.recipient_keys())?.to_vec(),
             })
         })
+    }
+
+    pub fn layout(&self) -> BundleLayout {
+        BundleLayout {
+            outputs: self.change.len() + self.recipient_keys.len(),
+            change: self.change.len(),
+        }
     }
 }
 

@@ -6,7 +6,6 @@ import {
   reserveEntries,
   reservedUtxoKeys,
   unreserved,
-  selectUtxos,
   resolveWithdrawalSettlement,
   withdrawalSetupInstructions,
   signerAddress,
@@ -64,7 +63,12 @@ import {
 import type { RelayQuote, TokenAccountSetup } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import type { PreparedRelay } from "../../rpc/relay.js";
 import { isZeroKeyNote } from "../../state/exposed-notes.js";
-import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
+import {
+  ringIntentMismatch,
+  ringProofInputs,
+  ringSelectionErrors,
+  selectAcrossTrees,
+} from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
@@ -336,7 +340,7 @@ export function prepareRingWithdrawalRelay<R extends RingRelayRail>(
   );
 }
 
-/** UTXOs on `tree` the mode admits, largest first, at most `maxInputs`. */
+/** UTXOs the mode admits over the fewest input trees, largest first, at most `maxInputs`. */
 export function selectRingInputs(
   input: Readonly<{
     wallet: Wallet;
@@ -344,7 +348,6 @@ export function selectRingInputs(
     asset: Address;
     amount: bigint;
     inputs: "ring" | "ring-or-default" | "default" | "entry";
-    tree: Address;
     maxInputs: number;
     /** A spend naming the wallet may take its zero-key notes. */
     spendExposed?: boolean;
@@ -392,37 +395,48 @@ export function selectRingInputs(
       (inputs !== "entry" || carriesNoData([entry.dataHash]))
     );
   };
-  // The change of default notes enters the ring, an exact cover keeps it out.
+  // The change of default notes enters the ring, an exact cover on one tree keeps it out.
   const exact =
     inputs === "default" || inputs === "entry"
-      ? exactCover({
+      ? exactCoverOnOneTree({
           candidates: wallet
             .utxos()
-            .filter(
-              (entry) =>
-                !entry.spent &&
-                entry.utxo.asset === asset &&
-                entry.outputContext.tree === input.tree &&
-                eligible(entry),
-            ),
+            .filter((entry) => !entry.spent && entry.utxo.asset === asset && eligible(entry)),
           amount,
           maxInputs: input.maxInputs,
         })
       : undefined;
   if (exact !== undefined) return exact;
-  return selectUtxos({
+  return selectAcrossTrees({
     wallet,
-    asset,
-    target: { kind: "cover", amount },
+    covers: [{ asset, amount }],
     policy: {
       eligible,
       ordering: "largestFirst",
       allowWideBalance: true,
       maxInputs: input.maxInputs,
-      tree: { kind: "fixed", tree: input.tree },
       errors,
     },
-  }).entries;
+  });
+}
+
+/** Rust `Selection::exact_first`, the fewest notes meeting `amount` exactly on any one tree. */
+function exactCoverOnOneTree(
+  input: Readonly<{ candidates: readonly WalletUtxo[]; amount: bigint; maxInputs: number }>,
+): readonly WalletUtxo[] | undefined {
+  const trees = [...new Set(input.candidates.map((entry) => entry.outputContext.tree))];
+  return trees
+    .map((tree) =>
+      exactCover({
+        ...input,
+        candidates: input.candidates.filter((entry) => entry.outputContext.tree === tree),
+      }),
+    )
+    .filter((cover) => cover !== undefined)
+    .reduce<readonly WalletUtxo[] | undefined>(
+      (fewest, cover) => (fewest === undefined || cover.length < fewest.length ? cover : fewest),
+      undefined,
+    );
 }
 
 /** One largest first pass over the notes no larger than the remainder, a full subset sum search is out of scope. */
@@ -857,7 +871,6 @@ async function stageRingSpend<R>(
     ringProgramId: params.ringProgramId,
     asset,
     amount: params.amount,
-    tree: params.client.tree,
   };
   const selected =
     retry.entries ??
@@ -882,7 +895,7 @@ async function stageRingSpend<R>(
   retry.entries = selected;
   const transfer = ringSpendTransfer({
     owner,
-    inputs: selected.map((entry) => ringProofInput(entry, owner, params.client)),
+    inputs: await ringProofInputs(selected, () => owner, params.client, context),
     feePayer: input.feePayer,
   }).withOutputTreeId(outputTree.treeId);
   let anonymousPayment: AnonymousPayment | undefined;

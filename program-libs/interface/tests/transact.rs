@@ -16,9 +16,8 @@ use custom_ring_interface::{
 };
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
-    ring_sender_bundle_output_body, sender_bundle_len, CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    MIN_REPLY_LEN, OUTPUT_COUNT_BYTE, RECIPIENT_BODY_LEN, RING_BODY_SCHEME_TAG,
-    RING_SENDER_BUNDLE_SCHEME_TAG,
+    ring_sender_bundle_output_body, BundleLayout, CONFIDENTIAL_DATA_FREE_BODY_LEN, MIN_REPLY_LEN,
+    OUTPUT_COUNT_BYTE, RECIPIENT_BODY_LEN, RING_BODY_SCHEME_TAG, RING_SENDER_BUNDLE_SCHEME_TAG,
 };
 use serde::{Deserialize, Serialize};
 use spr_event::{
@@ -116,7 +115,8 @@ fn compute_vectors() -> ExpansionVectors {
                       hash, its tag of 8 bytes or 32 on an exit and its body, 72 bytes for a recipient body and 83 for an exit \
                       without has_data. Under reply metadata a u16 reply_len and reply_len bytes \
                       per body-bearing slot follow the slots. The anonymous frame's sender bundle \
-                      follows as a 32-byte tag and 80 + 32 m bytes, then the envelope, \
+                      follows as a 32-byte tag and 32 + 40 c + 32 (m - c) bytes for c bodiless \
+                      slots, then the envelope, \
                       m records of 105 bytes and under has_data m tails of 64 bytes, the lengths \
                       those of ring-disclosure-ranges.json. The auditor message is 0x04 || tx_viewing_u \
                       || envelope || records || tails. Recipient bodies forward as ring body, \
@@ -457,10 +457,22 @@ fn a_bodiless_slot_forwards_no_data_at_any_index() {
     );
     assert_eq!(
         parsed.sender.unwrap().body.len(),
-        sender_bundle_len(parsed.outputs.len())
+        BundleLayout {
+            outputs: parsed.outputs.len(),
+            change: 1
+        }
+        .byte_len()
     );
     let mut later = fixture.anonymous();
     later.outputs[3].body = SlotBody::None;
+    later.sender = Some(FramedSenderBundle {
+        tag: &fixture.tags[0],
+        body: &fixture.sender_body[..BundleLayout {
+            outputs: 4,
+            change: 2,
+        }
+        .byte_len()],
+    });
     let compact = later.encode().unwrap();
     assert_eq!(
         RingTransactData::parse(&compact, RingRail::Anonymous)
@@ -960,7 +972,11 @@ fn the_external_data_hash_binds_every_delivery_byte() {
     let tag = bundle.sender.unwrap().tag;
     bundle.sender = Some(FramedSenderBundle {
         tag,
-        body: &fixture.envelope[..sender_bundle_len(4)],
+        body: &fixture.envelope[..BundleLayout {
+            outputs: 4,
+            change: 1,
+        }
+        .byte_len()],
     });
     assert_ne!(hash(&bundle), hash(&honest), "bundle body");
     let replied = fixture.anonymous_replies(MIN_REPLY_LEN as u16);
@@ -1127,10 +1143,27 @@ fn a_mixed_anonymous_output_set_round_trips_and_frames_each_body() {
 }
 
 #[test]
-fn the_sender_bundle_length_follows_the_output_count() {
+fn the_sender_bundle_length_follows_the_output_and_bodiless_counts() {
     let fixture = Fixture::new();
     let mut data = fixture.anonymous();
-    for len in [0, sender_bundle_len(3), sender_bundle_len(5)] {
+    for len in [
+        0,
+        BundleLayout {
+            outputs: 3,
+            change: 1,
+        }
+        .byte_len(),
+        BundleLayout {
+            outputs: 5,
+            change: 1,
+        }
+        .byte_len(),
+        BundleLayout {
+            outputs: 4,
+            change: 2,
+        }
+        .byte_len(),
+    ] {
         data.sender = Some(FramedSenderBundle {
             tag: &fixture.tags[0],
             body: &fixture.sender_body[..len],

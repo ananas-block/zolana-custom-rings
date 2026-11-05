@@ -16,8 +16,8 @@ import (
 const (
 	// RecipientBodyLen mirrors RECIPIENT_BODY_LEN, be32(blinding) ‖ u64be(amount) ‖ mint.
 	RecipientBodyLen = 72
-	// SenderBundleHeadLen mirrors SENDER_BUNDLE_HEAD_LEN, mint0 ‖ u64be(amount0) ‖ u64be(amount1) ‖ output_seed.
-	SenderBundleHeadLen = 80
+	// ChangeCellLen mirrors CHANGE_CELL_LEN, mint ‖ u64be(amount).
+	ChangeCellLen = 40
 	// recipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
 	recipientBodyEncInfo = "CRING/rcp"
 	// senderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
@@ -38,18 +38,31 @@ func (b RecipientBody) Seal(t testing.TB, slotSecret *big.Int) [RecipientBodyLen
 	return [RecipientBodyLen]byte(CTREncrypt(t, key, nonce, slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.Mint[:])))
 }
 
-// SenderBundle is the sender bundle plaintext, one key per published slot.
+// ChangeCell rebuilds one bodiless slot.
+type ChangeCell struct {
+	Mint   [32]byte
+	Amount uint64
+}
+
+// SenderBundle is the sender bundle plaintext, one cell per bodiless slot and one key per other slot.
 type SenderBundle struct {
-	Mint              [32]byte
-	Amount, SolAmount uint64
-	OutputSeed        *big.Int
-	RecipientKeys     [][32]byte
+	OutputSeed    *big.Int
+	Change        []ChangeCell
+	RecipientKeys [][32]byte
+}
+
+// SenderBundleLen mirrors BundleLayout::byte_len.
+func SenderBundleLen(outputs, change int) int {
+	return 32 + ChangeCellLen*change + 32*(outputs-change)
 }
 
 func (b SenderBundle) Seal(t testing.TB, slotSecret *big.Int) []byte {
 	t.Helper()
 	seed := spptest.MustFieldBytes(t, b.OutputSeed)
-	plaintext := slices.Concat(b.Mint[:], binary.BigEndian.AppendUint64(nil, b.Amount), binary.BigEndian.AppendUint64(nil, b.SolAmount), seed[:])
+	plaintext := seed[:]
+	for _, cell := range b.Change {
+		plaintext = slices.Concat(plaintext, cell.Mint[:], binary.BigEndian.AppendUint64(nil, cell.Amount))
+	}
 	for _, key := range b.RecipientKeys {
 		plaintext = append(plaintext, key[:]...)
 	}

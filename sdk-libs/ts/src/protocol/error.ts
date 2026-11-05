@@ -117,6 +117,7 @@ export const RING_ERROR_CODES = [
   "RING_ANONYMOUS_PROVER_MISSING",
   "RING_ANONYMOUS_CHANGE",
   "RING_SENDER_EXIT",
+  // Reserved, nothing raises it and the snapshot keeps later codes in place.
   "RING_ANONYMOUS_CHANGE_COUNT",
   "RING_SENDER_BUNDLE_FRAMING",
   "RING_VIEWING_HISTORY_INVALID",

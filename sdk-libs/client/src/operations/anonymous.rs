@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use custom_ring_interface::{
-    ring_body_output, ring_sender_bundle_output_body, stream::SlotSecret, SENDER_BUNDLE_HEAD_LEN,
+    ring_body_output, ring_sender_bundle_output_body, stream::SlotSecret, BundleLayout,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -21,7 +21,7 @@ use zolana_ring_keys::{
 };
 use zolana_ring_transaction::{
     is_contributory, open_recipient_body, open_reply, open_sender_bundle, AnonymousOutput,
-    OpenedBody, OpenedNote, ReplyClaim, RingAssets,
+    OpenedBody, OpenedNote, OutputBlindings, ReplyClaim, RingAssets,
 };
 
 use crate::history::{HistoryPosition, PageEnd};
@@ -410,7 +410,7 @@ impl<'t> Body<'t> {
         }
     }
 
-    /// `None` on a site of another scheme, a bundle's length names `m` and must fit the row.
+    /// `None` on a site of another scheme, a bundle's length must match the row's published counts.
     fn of(tx: &'t ShieldedTransaction, site: Site, found: AnonymousStream) -> Option<Self> {
         let slot_index = match site {
             Site::Output(position) => {
@@ -419,8 +419,8 @@ impl<'t> Body<'t> {
             }
             Site::Message(message) => {
                 let bundle = ring_sender_bundle_output_body(&tx.messages[message].data)?;
-                let keys = bundle.len().checked_sub(SENDER_BUNDLE_HEAD_LEN)?;
-                (keys % 32 == 0 && keys / 32 == tx.output_slots.len()).then_some(keys / 32)?
+                let layout = BundleSlots::of(tx).layout();
+                (bundle.len() == layout.byte_len()).then_some(layout.outputs)?
             }
         };
         Some(Self {
@@ -430,6 +430,27 @@ impl<'t> Body<'t> {
             context: RingDeliveryContext::of(tx)?,
             found,
         })
+    }
+}
+
+/// A row's slots in the bundle's order, the k-th bodiless slot takes the k-th change cell.
+struct BundleSlots {
+    bodiless: Vec<usize>,
+    bearing: Vec<usize>,
+}
+
+impl BundleSlots {
+    fn of(tx: &ShieldedTransaction) -> Self {
+        let (bodiless, bearing) = (0..tx.output_slots.len())
+            .partition(|&position| tx.output_slots[position].payload.is_empty());
+        Self { bodiless, bearing }
+    }
+
+    fn layout(&self) -> BundleLayout {
+        BundleLayout {
+            outputs: self.bodiless.len() + self.bearing.len(),
+            change: self.bodiless.len(),
+        }
     }
 }
 
@@ -876,44 +897,56 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         else {
             return Ok(());
         };
-        let Ok(bundle) = open_sender_bundle(ciphertext, secret, body.slot_index as usize) else {
+        let slots = BundleSlots::of(body.tx);
+        let Ok(bundle) = open_sender_bundle(ciphertext, secret, slots.layout()) else {
             return Ok(());
         };
-        let first_nullifier = body.context.first_nullifier;
-        for position in (0u32..2).take(body.tx.output_slots.len()) {
-            match self
-                .output_at(body, &self.address, position as usize)
-                .open_change(&bundle, &first_nullifier, position)
-            {
-                Ok(Some(OpenedBody::Note(note))) => {
-                    self.accept(index, body.tx, body.found, position as usize, note)?
+        let blindings =
+            OutputBlindings::published(&body.context.first_nullifier, &bundle.output_seed);
+        for (cell, &position) in bundle.change.iter().zip(&slots.bodiless) {
+            let opened = u32::try_from(position)
+                .ok()
+                .and_then(|index| blindings.at(index).ok())
+                .and_then(|blinding| {
+                    self.output_at(body, &self.address, position)
+                        .open_change(cell, blinding)
+                        .ok()
+                        .flatten()
+                });
+            match opened {
+                Some(OpenedBody::Note(note)) => {
+                    self.accept(index, body.tx, body.found, position, note)?
                 }
-                Ok(Some(OpenedBody::UnknownMint(note))) => {
-                    self.hold_back(body.tx, position as usize, note)?;
-                }
-                Ok(None) | Err(_) => {}
+                Some(OpenedBody::UnknownMint(note)) => self.hold_back(body.tx, position, note)?,
+                None => {}
             }
         }
         // Only the wallet's own transaction key proves the listed payments its own.
         let Some(tx_viewing_key) = own else {
             return Ok(());
         };
-        self.record_sent(body, &bundle.recipient_keys, tx_viewing_key);
+        let listed: Vec<_> = slots
+            .bearing
+            .iter()
+            .copied()
+            .zip(bundle.recipient_keys)
+            .collect();
+        self.record_sent(body, &listed, tx_viewing_key);
         Ok(())
     }
 
-    /// Each cell names one slot, a zero cell reads change, exit or dummy.
+    /// Each key beside its slot, a zero key reads exit or dummy.
     fn record_sent(
         &mut self,
         body: &Body<'_>,
-        recipient_keys: &[[u8; 32]],
+        listed: &[(usize, [u8; 32])],
         tx_viewing_key: &ViewingKey,
     ) {
-        for (position, key) in recipient_keys.iter().enumerate() {
-            let Ok(recipient) = X25519Pubkey::from_u(*key) else {
+        for &(position, key) in listed {
+            let Ok(recipient) = X25519Pubkey::from_u(key) else {
                 continue;
             };
-            if *key == [0; 32] || !is_contributory(&recipient) {
+            if key == [0; 32] || !is_contributory(&recipient) {
                 continue;
             }
             if let Some(sent) = self.sent_payment(body, position, &recipient, tx_viewing_key) {

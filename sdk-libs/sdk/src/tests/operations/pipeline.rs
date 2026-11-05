@@ -1,8 +1,8 @@
 //! A child of `pipeline`, every rail stages and assembles through its private items.
 
 use custom_ring_interface::{
-    ring_body_output, ring_sender_bundle_output_body, CustomRingError, RecipientBody, RingMode,
-    RingRail, RingTransactData, SenderBundle,
+    ring_body_output, ring_sender_bundle_output_body, BundleLayout, ChangeCell, CustomRingError,
+    RecipientBody, RingMode, RingRail, RingTransactData, SenderBundle,
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
@@ -327,11 +327,18 @@ fn bundle(staged: &Staged<'_>, sender: &ShieldedKeypair) -> SenderBundle {
     let external = &staged.proof_inputs.external_data;
     let message = &external.messages[0];
     let body = ring_sender_bundle_output_body(&message.data).expect("a sender bundle");
-    let published = external.outputs.len();
-    open_sender_bundle(body, &slot_secret(staged, sender, published), published).unwrap()
+    let layout = BundleLayout {
+        outputs: external.outputs.len(),
+        change: external
+            .outputs
+            .iter()
+            .filter(|output| output.data.is_none())
+            .count(),
+    };
+    open_sender_bundle(body, &slot_secret(staged, sender, layout.outputs), layout).unwrap()
 }
 
-/// Change leads with no body, SPL before SOL.
+/// Change leads with no body, one bundle cell per change output.
 #[tokio::test]
 async fn an_anonymous_transfer_publishes_each_payment_and_the_sender_bundle() {
     use crate::tests::support::keypair;
@@ -384,13 +391,21 @@ async fn an_anonymous_transfer_publishes_each_payment_and_the_sender_bundle() {
     }
     let sent = bundle(&staged, sender);
     assert_eq!(
-        (sent.mint, sent.amount, sent.sol_amount),
-        (usdc.asset.to_bytes(), 7, 8)
+        sent.change,
+        [
+            ChangeCell {
+                mint: usdc.asset.to_bytes(),
+                amount: 7
+            },
+            ChangeCell {
+                mint: Mint::SOL.asset.to_bytes(),
+                amount: 8
+            }
+        ]
     );
-    assert_eq!(sent.recipient_keys.len(), outputs.len());
-    assert_eq!(sent.recipient_keys[0], [0; 32], "a change cell reads zero");
-    assert_eq!(sent.recipient_keys[2], bootstrap.viewing_pubkey().u());
-    assert_eq!(sent.recipient_keys[3], requester.viewing_pubkey().u());
+    assert_eq!(sent.recipient_keys.len(), slots.len() - 2);
+    assert_eq!(sent.recipient_keys[0], bootstrap.viewing_pubkey().u());
+    assert_eq!(sent.recipient_keys[1], requester.viewing_pubkey().u());
     let paid = payment_at(&staged, &bootstrap, 2);
     assert_eq!((paid.mint, paid.amount), (usdc.asset.to_bytes(), 3));
 }
@@ -416,7 +431,13 @@ async fn a_transfer_returning_nothing_leads_with_a_zero_sol_change() {
         (Some(sender.shielded_address().unwrap()), Mint::SOL, 0)
     );
     let sent = bundle(&staged, sender);
-    assert_eq!(sent.amount, 0);
+    assert_eq!(
+        sent.change,
+        [ChangeCell {
+            mint: Mint::SOL.asset.to_bytes(),
+            amount: 0
+        }]
+    );
     assert_eq!(
         sent.recipient_keys
             .iter()
@@ -690,6 +711,52 @@ async fn an_anonymous_entry_prefers_an_exact_funding_over_change() {
     };
     assert_eq!(spent(25).await, vec![10, 15]);
     assert_eq!(spent(30).await, vec![40]);
+}
+
+/// Six on each of two trees pay ten together, a tree holding the amount alone wins over the pair.
+#[tokio::test]
+async fn an_anonymous_move_funds_from_two_trees_only_when_one_falls_short() {
+    use crate::tests::support::{keypair, payer, wallet};
+    let sender = keypair(1);
+    let paid = ring_address(&keypair(2));
+    let client = enrolled(&[&sender, &keypair(2)])
+        .with_tree(1)
+        .with_tree(2)
+        .client();
+    let on_tree = |tree: u16, amount: u64, leaf: u64| {
+        wallet(
+            ring_utxo(&sender, Mint::SOL, amount, leaf).utxo,
+            &sender.nullifier_key,
+            tree,
+            leaf,
+        )
+    };
+    let owner = MoveSender {
+        sender: &sender,
+        payer: payer(),
+    };
+    let split = vec![on_tree(1, 6, 0), on_tree(2, 6, 1)];
+    let one_suffices = vec![on_tree(1, 6, 0), on_tree(2, 6, 1), on_tree(2, 4, 2)];
+    for (utxos, expected) in [(&split, [1, 2]), (&one_suffices, [2, 2])] {
+        let assembled = owner
+            .anonymous_move(utxos, vec![RingPayment::new(paid.clone(), 10)])
+            .select(&client)
+            .await
+            .unwrap()
+            .assemble(&client)
+            .await
+            .unwrap();
+        let mut trees: Vec<u16> = assembled
+            .frame
+            .proof_inputs
+            .input_utxos
+            .iter()
+            .filter(|input| !input.is_dummy())
+            .map(|input| input.tree_id)
+            .collect();
+        trees.sort_unstable();
+        assert_eq!(trees, expected);
+    }
 }
 
 /// Only a mix of ring and default-ring UTXOs funds the move, the prover refuses one.

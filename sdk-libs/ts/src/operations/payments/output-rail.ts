@@ -1,7 +1,6 @@
 /** The ring output rails, mirrors Rust `zolana-ring-transaction` over the ring program's expansion. */
 import {
   concatBytes,
-  encodeBase58,
   encryptConfidential,
   equalBytes,
   isZero,
@@ -63,8 +62,6 @@ import {
 
 /** The dummy preimages a plan draws ahead. */
 const MAX_OUTPUTS = Math.max(...SPP_SUPPORTED_SHAPES.map((shape) => shape.outputs));
-/** The zero address, a bundle's slot 0 mint without change. */
-const ZERO_MINT = encodeBase58(new Uint8Array(32));
 
 /** How the ring outputs of one transfer reach their recipients, Rust `RingDelivery`. */
 export type RingDelivery =
@@ -183,13 +180,12 @@ export function anonymousTag(
   }
 }
 
-/** Moves the sender's change to the front, SPL before SOL, Rust `lead_change` before its reblinding. */
+/** Moves the sender's change to the front, Rust `lead_change` before its reblinding. */
 export function leadChange(
   outputs: readonly ProofOutputUtxo[],
   sender: ShieldedAddress,
 ): readonly ProofOutputUtxo[] {
-  const rank = (output: ProofOutputUtxo): number =>
-    !isChange(output, sender) ? 2 : output.asset === SOL_MINT ? 1 : 0;
+  const rank = (output: ProofOutputUtxo): number => (isChange(output, sender) ? 0 : 1);
   return Object.freeze(
     outputs
       .map((output, index) => ({ output, index }))
@@ -565,23 +561,25 @@ export class RingOutputRail {
   /** Sealed to the sender at index `m`, opens under a retained or reproducible viewing key and published values alone. */
   #senderBundle(seal: AnonymousSeal): Uint8Array {
     const { outputs, sender } = seal;
-    const change = outputs.slice(0, leadingChange(outputs, sender));
-    const [first, second, ...extra] = change;
-    // The bundle holds a cell of any mint at slot 0 and a SOL cell at slot 1.
-    if (extra.length > 0 || (second !== undefined && second.asset !== SOL_MINT))
-      throw new RingError("RING_ANONYMOUS_CHANGE_COUNT");
+    // A change slot publishes no body, so the frame's bodiless count is the bundle's cell count.
+    const change = seal.slots.flatMap((slot, slotIndex) => {
+      const output = outputs[slotIndex];
+      return slot.kind === "change" && output !== undefined
+        ? [Object.freeze({ mint: output.asset, amount: output.amount })]
+        : [];
+    });
     const blindings = new OutputBlindings(this.#firstNullifier, this.blindingSeed());
     const outputSeed = blindings.outputSeed();
     blindings.destroy();
     const secret = this.slotSecret(sender.viewingPublicKey, outputs.length);
     try {
       return sealSenderBundle(secret, {
-        mint: first?.asset ?? ZERO_MINT,
-        amount: first?.amount ?? 0n,
-        solAmount: second?.amount ?? 0n,
         outputSeed,
-        recipientKeys: seal.slots.map((slot) =>
-          slot.kind === "payment" ? slot.payment.recipient.u() : ZERO_32,
+        change,
+        recipientKeys: seal.slots.flatMap((slot) =>
+          slot.kind === "change"
+            ? []
+            : [slot.kind === "payment" ? slot.payment.recipient.u() : ZERO_32],
         ),
       });
     } finally {

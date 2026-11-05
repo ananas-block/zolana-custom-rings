@@ -36,6 +36,7 @@ import {
   openRecipientBody,
   openReply,
   openSenderBundle,
+  senderBundleLen,
   sealRecipientBody,
   sealReply,
   sealSenderBundle,
@@ -130,11 +131,14 @@ describe("anonymous_bodies.json", () => {
     amount: BigInt(bodies.body_amount),
     mint: encodeBase58(field(bodies.body_mint)),
   };
+  // Slot 0 is the frame's one bodiless slot, the keys name the slots past it.
+  const layout = { outputs: bodies.output_count, change: 1 };
+  const recipientKey = bodies.recipient_keys[bodies.body_index - layout.change] ?? "";
   const bundle = {
-    mint: encodeBase58(field(bodies.change_mint)),
-    amount: BigInt(bodies.change_amount),
-    solAmount: 0n,
     outputSeed: field(bodies.output_seed),
+    change: [
+      { mint: encodeBase58(field(bodies.change_mint)), amount: BigInt(bodies.change_amount) },
+    ],
     recipientKeys: bodies.recipient_keys.map((key) => (key === "" ? ZERO_32 : field(key))),
   };
 
@@ -153,8 +157,7 @@ describe("anonymous_bodies.json", () => {
         }),
       );
     };
-    const recipient = bodies.recipient_keys[bodies.body_index] ?? "";
-    expect(secret(recipient, bodies.body_index)).toBe(bodies.body_slot_secret);
+    expect(secret(recipientKey, bodies.body_index)).toBe(bodies.body_slot_secret);
     expect(secret(bodies.sender_viewing_key, bodies.output_count)).toBe(bodies.bundle_slot_secret);
     txViewing.destroy();
   });
@@ -171,7 +174,7 @@ describe("anonymous_bodies.json", () => {
         outputIndex,
         firstNullifier: field(bodies.first_nullifier),
       });
-    const recipient = x25519FromU(field(bodies.recipient_keys[bodies.body_index] ?? ""));
+    const recipient = x25519FromU(field(recipientKey));
     const unreached = (): Bytes32 => {
       throw new Error("no slot secret on this slot");
     };
@@ -200,9 +203,9 @@ describe("anonymous_bodies.json", () => {
 
   it("seals and opens the sender bundle and hashes its digest", () => {
     const secret = field(bodies.bundle_slot_secret);
-    const sealed = bytes(bodies.bundle, 80 + 32 * bodies.output_count);
+    const sealed = bytes(bodies.bundle, senderBundleLen(layout));
     expect(hex(sealSenderBundle(secret, bundle))).toBe(bodies.bundle);
-    expect(openSenderBundle(secret, sealed, bodies.output_count)).toEqual(bundle);
+    expect(openSenderBundle(secret, sealed, layout)).toEqual(bundle);
     expect(hex(ciphertextDigest(sealed))).toBe(bodies.bundle_digest);
   });
 

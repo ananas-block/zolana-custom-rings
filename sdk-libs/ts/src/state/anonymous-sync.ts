@@ -19,7 +19,6 @@ import {
   type ViewTag,
 } from "@heliuslabs/zolana/keypair";
 import {
-  SOL_MINT,
   transactOutputBlinding,
   type AssetRegistry,
   type DepositPayloadDecoder,
@@ -37,9 +36,10 @@ import {
   openReply,
   openSenderBundle,
   senderBundleLen,
+  type BundleLayout,
+  type ChangeCell,
   type RecipientBody,
   type ReplyClaim,
-  type SenderBundle,
 } from "../protocol/codec/anonymous-delivery.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import { ringBodyOutput, senderBundleOutputBody } from "../protocol/transaction/output.js";
@@ -1114,20 +1114,28 @@ class BodyRead {
 
   /** Each change slot the bundle rebuilds from the seed and retained chain history with no auditor read, then the payments only the sender's own key proves. */
   senderBundle(body: Body, secret: Bytes32, txViewingKey: ViewingKey | undefined): void {
-    const bundle = decoded(() =>
-      openSenderBundle(secret, body.ciphertext, body.tx.outputSlots.length),
-    );
+    const slots = bundleSlots(body.tx);
+    const bundle = decoded(() => openSenderBundle(secret, body.ciphertext, slots.layout));
     if (bundle === undefined) return;
     try {
-      for (const position of changePositions(body.tx)) {
-        const opening = decoded(() => changeOpening(bundle, body.context.firstNullifier, position));
+      for (const [index, position] of slots.bodiless.entries()) {
+        const cell = bundle.change[index];
+        const opening =
+          cell === undefined
+            ? undefined
+            : decoded(() =>
+                changeOpening(
+                  cell,
+                  transactOutputBlinding(body.context.firstNullifier, bundle.outputSeed, position),
+                ),
+              );
         this.#note(body, position, opening, undefined);
       }
     } finally {
       bundle.outputSeed.fill(0);
     }
     if (txViewingKey === undefined) return;
-    for (const [position, recipient] of listedRecipients(bundle)) {
+    for (const [position, recipient] of listedRecipients(bundle.recipientKeys, slots.bearing)) {
       const sent = this.#sentPayment(body, position, recipient, txViewingKey);
       if (sent !== undefined) this.sent.push(sent);
     }
@@ -1302,35 +1310,31 @@ function rebuild(
   );
 }
 
-/** Slot 0 holds the bundle's mint, slot 1 only SOL. */
-function changeOpening(
-  bundle: SenderBundle,
-  firstNullifier: Bytes32,
-  position: number,
-): RecipientBody {
-  const cell =
-    position === 0
-      ? { mint: bundle.mint, amount: bundle.amount }
-      : { mint: SOL_MINT, amount: bundle.solAmount };
-  return Object.freeze({
-    ...cell,
-    blinding: transactOutputBlinding(firstNullifier, bundle.outputSeed, position),
-  });
+function changeOpening(cell: ChangeCell, blinding: Bytes32): RecipientBody {
+  return Object.freeze({ mint: cell.mint, amount: cell.amount, blinding });
 }
 
-/** A slot with no payload is change, any other pattern than a prefix of at most two reads as none. */
-function changePositions(tx: IndexedShieldedTransaction): readonly number[] {
-  const bare = tx.outputSlots.map((slot) => slot.payload.length === 0);
-  const firstPaid = bare.indexOf(false);
-  const count = firstPaid < 0 ? bare.length : firstPaid;
-  if (count > MAX_CHANGE_SLOTS || bare.slice(count).includes(true)) return [];
-  return Array.from({ length: count }, (_, position) => position);
+/** A row's slots in the bundle's order, the k-th bodiless slot takes the k-th change cell. */
+function bundleSlots(tx: IndexedShieldedTransaction): {
+  readonly bodiless: readonly number[];
+  readonly bearing: readonly number[];
+  readonly layout: BundleLayout;
+} {
+  const bodiless: number[] = [];
+  const bearing: number[] = [];
+  for (const [position, slot] of tx.outputSlots.entries())
+    (slot.payload.length === 0 ? bodiless : bearing).push(position);
+  return { bodiless, bearing, layout: { outputs: tx.outputSlots.length, change: bodiless.length } };
 }
 
-/** Zero cells and keys no ECDH accepts left out, each key beside its slot. */
-function listedRecipients(bundle: SenderBundle): readonly (readonly [number, X25519PublicKey])[] {
-  return bundle.recipientKeys.flatMap((key, position) => {
-    if (isZero(key)) return [];
+/** Zero keys and keys no ECDH accepts left out, each key beside its slot. */
+function listedRecipients(
+  keys: readonly Bytes32[],
+  bearing: readonly number[],
+): readonly (readonly [number, X25519PublicKey])[] {
+  return keys.flatMap((key, index) => {
+    const position = bearing[index];
+    if (position === undefined || isZero(key)) return [];
     const recipient = decoded(() => x25519FromU(key));
     return recipient === undefined || isSmallOrder(recipient)
       ? []
@@ -1363,7 +1367,7 @@ function bodyAt(
   const message = tx.messages[site.message];
   const bundle = message === undefined ? undefined : senderBundleOutputBody(message.data);
   // Compact slots never reach the event, a bundle of any other `m` opens under another secret.
-  return bundle?.length === senderBundleLen(tx.outputSlots.length)
+  return bundle?.length === senderBundleLen(bundleSlots(tx).layout)
     ? { tx, site, ciphertext: bundle, reply: new Uint8Array(), context, found }
     : undefined;
 }
@@ -1383,7 +1387,6 @@ const FULL_SCAN: AnonymousStream = Object.freeze({ kind: "fullScan" });
 const TAG_HINT: AnonymousStream = Object.freeze({ kind: "tagHint" });
 /** A capped read never moves a position, a scan runs to its terminal page. */
 const SCAN_TO_TERMINAL = scanLimits({ maxPages: Number.MAX_SAFE_INTEGER });
-const MAX_CHANGE_SLOTS = 2;
 const base58 = getBase58Encoder();
 
 function isZeroKeyNote(note: Found): boolean {

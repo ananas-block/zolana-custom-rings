@@ -31,11 +31,11 @@ pub enum RingRailError {
     AnonymousChange { slot_index: usize },
     #[error("exit {slot_index} pays the hidden sender, its owner tag would publish the sender")]
     RingSenderExit { slot_index: usize },
-    #[error("the anonymous change is a prefix of two outputs at most, the second one SOL")]
-    AnonymousChangeCount,
     #[error("the anonymous sender bundle is not the transfer's first message")]
     SenderBundleFraming,
-    #[error("a sender bundle of {len} bytes does not match the frame's output count")]
+    #[error(
+        "a sender bundle of {len} bytes does not match the frame's output and bodiless counts"
+    )]
     SenderBundleLength { len: usize },
     #[error("reply length {reply_len} is below the reply's encoding or the minimum")]
     ReplyMetadataLength { reply_len: usize },

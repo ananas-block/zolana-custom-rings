@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math/bits"
 	"os"
 	"strings"
 	"testing"
@@ -146,7 +147,7 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 		c.take(int(binary.LittleEndian.Uint16(c.take(2))) * bodies)
 	}
 	if anonymousFrame {
-		c.take(32 + ringprotocol.SenderBundleHeadLen + 32*m)
+		c.take(32 + ringprotocol.SenderBundleLen(m, bits.OnesCount64(bodiless)))
 	}
 	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0}.Ranges()
 	c.take(stream.EnvelopeLen(n))

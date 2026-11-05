@@ -5,7 +5,8 @@ use serde::Deserialize;
 use spr_keypair::{viewing_key::ViewTag, ShieldedKeypair, SigningKey, ViewingKey, X25519Pubkey};
 use zolana_ring_keys::{RingKeys, RingTagFrame, RingTagKind, RingTagProbe, RotatingRingKeys};
 
-const RECIPIENT_SLOT: usize = 1;
+/// The payment's key leads the bundle's keys, slot 0 is the bodiless change.
+const RECIPIENT_KEY: usize = 0;
 
 #[derive(Deserialize)]
 struct Bodies {
@@ -45,7 +46,7 @@ fn holder(vector: &Bodies) -> (RotatingRingKeys, X25519Pubkey, X25519Pubkey) {
     assert_eq!(sender_key.u(), array::<32>(&vector.sender_viewing_key));
     assert_eq!(
         recipient_key.u(),
-        array::<32>(&vector.recipient_keys[RECIPIENT_SLOT])
+        array::<32>(&vector.recipient_keys[RECIPIENT_KEY])
     );
     let mut identity =
         ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[7; 32])).unwrap();

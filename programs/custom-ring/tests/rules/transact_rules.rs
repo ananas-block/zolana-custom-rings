@@ -5,7 +5,7 @@ use custom_ring_interface::{
     cosign::ApprovalMask,
     funder_account_position, input_flag,
     key_catalog::{FrameKey, RingCircuit},
-    sender_bundle_len, shape_flag, spl_withdrawal_count, tag, transact_flag, AnonymousProofData,
+    shape_flag, spl_withdrawal_count, tag, transact_flag, AnonymousProofData, BundleLayout,
     CoSignScope, CredentialRead, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
     PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData,
     RootRead, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
@@ -44,7 +44,7 @@ pub struct Fixture {
     keys: [[u8; 32]; 16],
     records: [[u8; AUDIT_RECORD_LEN]; 16],
     bodies: [[u8; RECIPIENT_BODY_LEN]; 16],
-    /// Cut to the frame's `m`.
+    /// Cut to the frame's output and bodiless counts.
     bundle: Vec<u8>,
     /// Cut to the stream layout's envelope length.
     envelope: Vec<u8>,
@@ -75,7 +75,14 @@ impl Fixture {
             keys: core::array::from_fn(|i| [0x40 + i as u8; 32]),
             records: core::array::from_fn(|i| [0x80 + i as u8; AUDIT_RECORD_LEN]),
             bodies: core::array::from_fn(|i| [0x90 + i as u8; RECIPIENT_BODY_LEN]),
-            bundle: vec![0x3c; sender_bundle_len(16)],
+            bundle: vec![
+                0x3c;
+                BundleLayout {
+                    outputs: 16,
+                    change: 16
+                }
+                .byte_len()
+            ],
             envelope: (0..5000u32).map(|byte| byte as u8 ^ 0x93).collect(),
             tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
             salt: [0x5c; 16],
@@ -141,7 +148,7 @@ impl Fixture {
             replies: None,
             sender: rail.anonymous_frame().then(|| FramedSenderBundle {
                 tag: &self.tags[15],
-                body: &self.bundle[..sender_bundle_len(usize::from(n_out))],
+                body: &[],
             }),
             envelope: &[],
             private_tx_hash: &self.fields[0],
@@ -168,6 +175,7 @@ impl Fixture {
             })
             .collect();
         self.fit_stream(&mut data);
+        self.fit_bundle(&mut data);
         data
     }
 
@@ -198,6 +206,13 @@ impl Fixture {
 
     pub fn fit_stream<'a>(&'a self, data: &mut RingTransactData<'a>) {
         data.envelope = &self.envelope[..data.audit_stream().unwrap().envelope().len];
+    }
+
+    pub fn fit_bundle<'a>(&'a self, data: &mut RingTransactData<'a>) {
+        let len = data.bundle_layout().byte_len();
+        if let Some(sender) = &mut data.sender {
+            sender.body = &self.bundle[..len];
+        }
     }
 }
 
@@ -516,10 +531,7 @@ fn a_compact_transfer_reaches_the_key_of_its_capacity() {
     let mut anonymous_ring = Ring::new(Setup::Anonymous);
     let mut hidden = fixture.transfer(RingRail::Anonymous, 2, 4, false);
     hidden.outputs.truncate(2);
-    hidden.sender = hidden.sender.map(|sender| FramedSenderBundle {
-        body: &sender.body[..sender_bundle_len(2)],
-        ..sender
-    });
+    fixture.fit_bundle(&mut hidden);
     fixture.fit_stream(&mut hidden);
     let spp = spp_list(&anonymous_ring.payer.pubkey(), &hidden, &[]);
     reaches_verification(send(
@@ -541,10 +553,7 @@ fn reply_metadata_reaches_the_key_on_the_anonymous_rail_and_no_other() {
     let mut data = fixture.transfer(RingRail::Anonymous, 2, 4, false);
     data.replies = Some(custom_ring_interface::Replies::new(97, &replies).unwrap());
     data.outputs.truncate(3);
-    data.sender = data.sender.map(|sender| FramedSenderBundle {
-        body: &sender.body[..sender_bundle_len(3)],
-        ..sender
-    });
+    fixture.fit_bundle(&mut data);
     fixture.fit_stream(&mut data);
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     reaches_verification(send(

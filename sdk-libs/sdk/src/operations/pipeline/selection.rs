@@ -1,10 +1,10 @@
-//! The fewest UTXOs of one tree whose framed transfer fits one transaction.
+//! The fewest UTXOs over the fewest input trees whose framed transfer fits one transaction.
 
 use std::collections::BTreeSet;
 
 use solana_address::Address;
 use spr_client::{AsyncRpc, Shape, SPP_SUPPORTED_SHAPES};
-use spr_interface::ZERO_NULLIFIER_PUBKEY;
+use spr_interface::{MAX_INPUT_TREES, ZERO_NULLIFIER_PUBKEY};
 use spr_transaction::{TransactionError, WalletUtxo};
 
 use super::{Rail, RingTransfer};
@@ -49,27 +49,65 @@ pub(super) fn widest(payments: usize, keyed: impl Fn(Shape) -> bool) -> Option<u
         .max()
 }
 
+/// Every set of up to [`MAX_INPUT_TREES`] trees the UTXOs sit on, ascending within a set.
+pub(super) fn tree_sets(utxos: &[WalletUtxo]) -> Vec<Vec<u16>> {
+    let trees: Vec<u16> = utxos
+        .iter()
+        .map(|utxo| utxo.tree_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut sets = Vec::new();
+    let mut frontier: Vec<Vec<u16>> = vec![Vec::new()];
+    for _ in 0..MAX_INPUT_TREES {
+        // A set grows only by a later tree, no set repeats in another order.
+        frontier = frontier
+            .iter()
+            .flat_map(|set| {
+                trees
+                    .iter()
+                    .filter(|tree| set.last().is_none_or(|last| *tree > last))
+                    .map(|tree| [set.as_slice(), &[*tree]].concat())
+            })
+            .collect();
+        sets.extend(frontier.iter().cloned());
+    }
+    sets
+}
+
+/// The trees `utxos` span, a selection over a wider set that spans fewer repeats a narrower one.
+pub(super) fn spanned_trees<'u>(utxos: impl IntoIterator<Item = &'u WalletUtxo>) -> usize {
+    utxos
+        .into_iter()
+        .map(|utxo| utxo.tree_id)
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
 impl Funding<'_> {
-    /// One per tree, the fewest UTXOs first, then the least change.
+    /// One per tree set, one tree before two, then the fewest UTXOs, then the least change.
     pub fn candidates(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Vec<Candidate> {
-        let trees: BTreeSet<u16> = self.utxos.iter().map(|utxo| utxo.tree_id).collect();
-        let mut ranked: Vec<_> = trees
+        let mut ranked: Vec<_> = tree_sets(self.utxos)
             .into_iter()
-            .filter_map(|tree| {
+            .filter_map(|trees| {
                 let utxos = select_spend_where(
                     self.utxos,
                     self.asset,
                     self.amount,
                     self.max_inputs,
-                    |utxo| utxo.tree_id == tree && keep(utxo),
+                    |utxo| trees.contains(&utxo.tree_id) && keep(utxo),
                 )
-                .ok()?;
+                .ok()
+                .filter(|utxos| spanned_trees(utxos) == trees.len())?;
                 let total: u128 = utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum();
                 let change = total > u128::from(self.amount);
-                Some(((utxos.len(), total, tree), Candidate { utxos, change }))
+                Some((
+                    (trees.len(), utxos.len(), total, trees),
+                    Candidate { utxos, change },
+                ))
             })
             .collect();
-        ranked.sort_unstable_by_key(|(order, _)| *order);
+        ranked.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         ranked.into_iter().map(|(_, candidate)| candidate).collect()
     }
 

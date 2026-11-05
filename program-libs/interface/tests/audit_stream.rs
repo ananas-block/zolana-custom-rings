@@ -1,8 +1,8 @@
 //! Pins the audit vectors the Go circuits read.
 
 use custom_ring_interface::{
-    ciphertext_digest, key_catalog::TRANSFER_SHAPES, sender_bundle_len, AuditEnvelope,
-    AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout, AuditorMessage, CustomRingError,
+    ciphertext_digest, key_catalog::TRANSFER_SHAPES, AuditEnvelope, AuditEvidence, AuditKey,
+    AuditRecord, AuditStreamLayout, AuditorMessage, BundleLayout, ChangeCell, CustomRingError,
     DataTail, EntryInput, OpeningRecord, RecipientBody, RecordKind, SenderBundle, AUDIT_RECORD_LEN,
     DATA_TAIL_LEN, ENTRY_INPUT_LEN, OPENING_RECORD_LEN, RECIPIENT_BODY_LEN, RECORD_STRIDE,
     STREAM_BLOCK_LEN,
@@ -460,21 +460,41 @@ fn the_recipient_body_extends_past_its_plain_head() {
 }
 
 #[test]
-fn the_sender_bundle_follows_the_output_count() {
+fn the_sender_bundle_follows_the_output_and_change_counts() {
     let bundle = SenderBundle {
-        mint: [3; 32],
-        amount: 5,
-        sol_amount: 6,
         output_seed: [4; 32],
-        recipient_keys: vec![[0; 32], [7; 32], [8; 32]],
+        change: vec![
+            ChangeCell {
+                mint: [3; 32],
+                amount: 5,
+            },
+            ChangeCell {
+                mint: [3; 32],
+                amount: 6,
+            },
+        ],
+        recipient_keys: vec![[7; 32], [8; 32]],
     };
     let encoded = bundle.encode();
-    assert_eq!(encoded.len(), sender_bundle_len(3));
+    assert_eq!(
+        encoded.len(),
+        BundleLayout {
+            outputs: 4,
+            change: 2
+        }
+        .byte_len()
+    );
     assert_eq!(encoded.capacity(), encoded.len());
-    assert_eq!(encoded[32..40], 5u64.to_be_bytes());
-    assert_eq!(encoded[40..48], 6u64.to_be_bytes());
-    assert_eq!(SenderBundle::decode(&encoded, 3).as_ref(), Ok(&bundle));
-    assert!(SenderBundle::decode(&encoded, 2).is_err());
+    assert_eq!(encoded[64..72], 5u64.to_be_bytes());
+    assert_eq!(encoded[104..112], 6u64.to_be_bytes());
+    let layout = |outputs, change| BundleLayout { outputs, change };
+    assert_eq!(bundle.layout(), layout(4, 2));
+    assert_eq!(
+        SenderBundle::decode(&encoded, layout(4, 2)).as_ref(),
+        Ok(&bundle)
+    );
+    assert!(SenderBundle::decode(&encoded, layout(4, 1)).is_err());
+    assert!(SenderBundle::decode(&encoded, layout(1, 2)).is_err());
 }
 
 #[derive(Deserialize)]

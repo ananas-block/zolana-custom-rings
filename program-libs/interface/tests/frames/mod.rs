@@ -1,11 +1,11 @@
 //! Frames of every rail, shared by the codec and the heap budget tests.
 
 use custom_ring_interface::{
-    cosign::ApprovalMask, sender_bundle_len, storage::Revision, stream::slot_tag,
-    AnonymousProofData, AppMessage, CredentialRead, CustomRingProof, FrameExtensions,
-    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies,
-    RingOutput, RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN,
-    CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN, RECIPIENT_BODY_LEN,
+    cosign::ApprovalMask, storage::Revision, stream::slot_tag, AnonymousProofData, AppMessage,
+    BundleLayout, CredentialRead, CustomRingProof, FrameExtensions, FramedSenderBundle,
+    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingRail,
+    RingTransactData, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN,
+    RECIPIENT_BODY_LEN,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -64,7 +64,11 @@ impl Fixture {
             tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
             recipient_body: core::array::from_fn(|byte| byte as u8 ^ 0x5a),
             extended_body: core::array::from_fn(|byte| byte as u8 ^ 0x3c),
-            sender_body: (0..sender_bundle_len(16) as u16)
+            sender_body: (0..BundleLayout {
+                outputs: 16,
+                change: 16,
+            }
+            .byte_len() as u16)
                 .map(|byte| byte as u8 ^ 0x2d)
                 .collect(),
             replies: (0..2048u32).map(|byte| byte as u8 ^ 0x17).collect(),
@@ -330,11 +334,11 @@ impl Fixture {
         }
     }
 
-    /// `outputs` is the frame's `m`.
+    /// `outputs` is the frame's `m`, slot 0 its one bodiless slot as [`Self::tagged`] builds it.
     pub fn sender(&self, outputs: usize) -> Option<FramedSenderBundle<'_>> {
         Some(FramedSenderBundle {
             tag: &self.tags[0],
-            body: &self.sender_body[..sender_bundle_len(outputs)],
+            body: &self.sender_body[..BundleLayout { outputs, change: 1 }.byte_len()],
         })
     }
 

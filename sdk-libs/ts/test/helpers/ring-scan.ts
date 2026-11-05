@@ -1,4 +1,4 @@
-import { getBase58Decoder, type Signature } from "@solana/kit";
+import { getBase58Decoder, type Address, type Signature } from "@solana/kit";
 
 import {
   ClientError,
@@ -50,7 +50,8 @@ import { TREE, TREE_ID, randomAddress, walletKeys } from "./ring-pipeline.js";
 
 export const RING = randomAddress();
 export const PAYER = randomAddress();
-export const ASSETS = new AssetRegistry();
+export const SCAN_USDC = randomAddress();
+export const ASSETS = new AssetRegistry([[2n, SCAN_USDC]]);
 
 const CONTEXT_FLOOR = 1n << 40n;
 const ZERO = new Uint8Array(32) as Bytes32;
@@ -204,18 +205,27 @@ export class ScanWallet {
     this.keypair = keypair(seed);
     this.keys = walletKeys(this.keypair);
     this.#funding = Array.from({ length: 8 }, (_, index) =>
-      ProofInputUtxo.fromKeypair(
-        new Utxo({
-          owner: this.keypair.signingPublicKey(),
-          asset: SOL_MINT,
-          amount: 100n,
-          blinding: field(seed, index),
-          ringProgramId: RING,
-        }),
-        this.keypair,
-        {},
-        TREE_ID,
-      ),
+      this.#note(SOL_MINT, 100n, field(seed, index)),
+    );
+  }
+
+  /** The next transfer spends a note of `asset` and pays every payment in it. */
+  fundFirst(asset: Address, amount: bigint): void {
+    this.#funding.unshift(this.#note(asset, amount, field(0xf0, this.#funding.length)));
+  }
+
+  #note(asset: Address, amount: bigint, blinding: Bytes32): ProofInputUtxo {
+    return ProofInputUtxo.fromKeypair(
+      new Utxo({
+        owner: this.keypair.signingPublicKey(),
+        asset,
+        amount,
+        blinding,
+        ringProgramId: RING,
+      }),
+      this.keypair,
+      {},
+      TREE_ID,
     );
   }
 
@@ -265,7 +275,7 @@ export class ScanWallet {
     )
       .withRingProgramId(RING)
       .withOutputTreeId(TREE_ID);
-    for (const pay of payments) transfer.sendToRing(pay.to, SOL_MINT, pay.amount, RING);
+    for (const pay of payments) transfer.sendToRing(pay.to, input.utxo.asset, pay.amount, RING);
     const prepared = transfer.prepare();
     const rail = new RingOutputRail(
       this.keypair.transactionViewingKey(prepared.firstNullifier),

@@ -144,7 +144,6 @@ describe("selectRingInputs", () => {
         asset: SOL_MINT,
         amount: 0n,
         inputs: "ring",
-        tree: TREE,
         maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_ZERO_AMOUNT");
@@ -162,7 +161,6 @@ describe("selectRingInputs", () => {
         asset: SOL_MINT,
         amount: 15n,
         inputs: "ring",
-        tree: TREE,
         maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_INSUFFICIENT_BALANCE");
@@ -172,7 +170,6 @@ describe("selectRingInputs", () => {
       asset: SOL_MINT,
       amount: 15n,
       inputs: "ring-or-default",
-      tree: TREE,
       maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(2);
@@ -189,7 +186,6 @@ describe("selectRingInputs", () => {
       asset: SOL_MINT,
       amount: 25n,
       inputs: "default",
-      tree: TREE,
       maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(1);
@@ -201,7 +197,6 @@ describe("selectRingInputs", () => {
         asset: SOL_MINT,
         amount: 30n,
         inputs: "default",
-        tree: TREE,
         maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_INSUFFICIENT_BALANCE");
@@ -223,7 +218,6 @@ describe("selectRingInputs", () => {
         asset: SOL_MINT,
         amount: 25n,
         inputs,
-        tree: TREE,
         maxInputs: INPUT_CAP,
       }).map((entry) => [entry.utxo.amount, entry.utxo.ringProgramId]);
     expect(amounts("default")).toEqual([
@@ -234,30 +228,54 @@ describe("selectRingInputs", () => {
     expect(amounts("ring")).toEqual([[40n, RING]]);
   });
 
-  it("never offers a UTXO outside the requested tree", () => {
+  it("pays ten from six on each of two trees", () => {
+    const second = treeAddress(1);
     const wallet = ringUtxoWallet(spendingKeypair(), [
-      [50n, RING, RECIPIENT],
-      [20n, RING],
+      [6n, RING],
+      [6n, RING, second],
     ]);
     const selected = selectRingInputs({
-      wallet: wallet,
+      wallet,
       ringProgramId: RING,
       asset: SOL_MINT,
-      amount: 20n,
+      amount: 10n,
       inputs: "ring",
-      tree: TREE,
       maxInputs: INPUT_CAP,
     });
-    expect(selected).toHaveLength(1);
-    expect(selected[0]?.utxo.amount).toBe(20n);
+    expect(selected.map((entry) => entry.outputContext.tree).sort()).toEqual([TREE, second].sort());
+  });
+
+  it("keeps a spend on one tree when that tree alone covers it", () => {
+    const second = treeAddress(1);
+    const wallet = ringUtxoWallet(spendingKeypair(), [
+      [6n, RING],
+      [6n, RING, second],
+      [4n, RING, second],
+    ]);
+    const selected = selectRingInputs({
+      wallet,
+      ringProgramId: RING,
+      asset: SOL_MINT,
+      amount: 10n,
+      inputs: "ring",
+      maxInputs: INPUT_CAP,
+    });
+    expect(selected.map((entry) => entry.outputContext.tree)).toEqual([second, second]);
+  });
+
+  it("refuses a spend only three trees cover", () => {
+    const wallet = ringUtxoWallet(spendingKeypair(), [
+      [4n, RING],
+      [4n, RING, treeAddress(1)],
+      [4n, RING, treeAddress(2)],
+    ]);
     expect(() =>
       selectRingInputs({
-        wallet: wallet,
+        wallet,
         ringProgramId: RING,
         asset: SOL_MINT,
-        amount: 30n,
+        amount: 10n,
         inputs: "ring",
-        tree: TREE,
         maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_INSUFFICIENT_BALANCE");
@@ -274,7 +292,6 @@ describe("selectRingInputs", () => {
       asset: SOL_MINT,
       amount: 100n,
       inputs: "ring",
-      tree: TREE,
       maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(1);
@@ -293,7 +310,6 @@ describe("selectRingInputs", () => {
         asset: SOL_MINT,
         amount: 30n,
         inputs: "ring",
-        tree: TREE,
         maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_TOO_MANY_INPUTS");
@@ -310,7 +326,6 @@ describe("selectRingInputs", () => {
       asset: SOL_MINT,
       amount: 20n,
       inputs: "ring-or-default",
-      tree: TREE,
       maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(1);
@@ -322,7 +337,6 @@ describe("selectRingInputs", () => {
         asset: SOL_MINT,
         amount: 30n,
         inputs: "ring-or-default",
-        tree: TREE,
         maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_INSUFFICIENT_BALANCE");
@@ -343,7 +357,6 @@ describe("ring approval summary", () => {
     });
     return ringTransferClient({
       ...chain.reader(),
-      tree: TREE,
       getAccount: async (address: Address) =>
         address === ring
           ? { owner: RING, lamports: 1n, data: ringPolicyData({ bump, mode }) }
@@ -388,6 +401,44 @@ describe("ring approval summary", () => {
       code: "RING_BUILD_ENTRY",
       causeCode: "RING_INTENT_MISMATCH",
     });
+  });
+
+  it("proves a ring transfer of ten from six on each of two trees", async () => {
+    const keypair = spendingKeypair();
+    const second = treeAddress(1);
+    const recipient = ShieldedKeypair.generate().shieldedAddress();
+    const client = await approvalClient([keypair.shieldedAddress(), recipient]);
+    const first = await client.getAccount(TREE);
+    if (first === undefined) throw new Error("tree 0 published");
+    const data = first.data.slice();
+    new DataView(data.buffer).setUint16(2, 1, true);
+    let proved: readonly number[] | undefined;
+    await expect(
+      buildRingTransferTransaction({
+        client: {
+          ...client,
+          getAccount: async (address: Address) =>
+            address === second ? { ...first, data } : client.getAccount(address),
+          proveRingTransact: async (inputs) => {
+            proved = inputs.inputTreeIds();
+            throw new Error("stopped at the prover");
+          },
+          proveRing: async () => {
+            throw new Error("stopped at the prover");
+          },
+        },
+        ringProgramId: RING,
+        wallet: ringUtxoWallet(keypair, [
+          [6n, RING],
+          [6n, RING, second],
+        ]),
+        keys: localKeys(keypair),
+        feePayer: keypair.shieldedAddress().solanaAddress(),
+        recipient,
+        amount: 10n,
+      }),
+    ).rejects.toMatchObject({ cause: { message: "stopped at the prover" } });
+    expect(proved).toEqual([0, 1]);
   });
 
   async function capturedSummary(
@@ -465,30 +516,27 @@ describe("ring approval summary", () => {
     expect(requests).toEqual([]);
   });
 
-  it("refuses an SPL entry with change on the anonymous rail, the bundle's second cell is SOL", async () => {
+  it("takes an SPL entry with two SPL returns to approval on the anonymous rail", async () => {
     const keypair = spendingKeypair();
     const mint = address("Mint111111111111111111111111111111111111111");
     const { approve, requests } = recordingApproval();
-    await expect(
-      prepareRingEntryRelay({
-        client: await approvalClient([keypair.shieldedAddress()], "anonymous"),
-        ringProgramId: RING,
-        wallet: fundedWallet(keypair, [40n], { asset: mint }),
-        keys: localKeys(keypair),
-        approve,
-        asset: mint,
-        amount: 25n,
-        anonymous: {
-          quote: { feePayer: PAYER, validUntilSlot: 1n },
-          nullifierKey: keypair.nullifierKey(),
-          signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "RING_BUILD_ENTRY",
-      causeCode: "RING_ANONYMOUS_CHANGE_COUNT",
-    });
-    expect(requests).toEqual([]);
+    await prepareRingEntryRelay({
+      client: await approvalClient([keypair.shieldedAddress()], "anonymous"),
+      ringProgramId: RING,
+      wallet: fundedWallet(keypair, [40n], { asset: mint }),
+      keys: localKeys(keypair),
+      approve,
+      asset: mint,
+      amount: 25n,
+      anonymous: {
+        quote: { feePayer: PAYER, validUntilSlot: 1n },
+        nullifierKey: keypair.nullifierKey(),
+        signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
+      },
+    }).catch((cause: unknown) => cause);
+    expect(requests.map((request) => request.intent)).toMatchObject([
+      { kind: "ringEntry", amount: 40n },
+    ]);
   });
 
   it("funds an anonymous ring's entry from at most 24 default notes, the widest entry key", async () => {

@@ -18,7 +18,6 @@ import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { isZeroKeyNote, mintBalances, noteState } from "../../src/state/exposed-notes.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
 import { ASSETS, RING, ScanIndexer, ScanWallet } from "../helpers/ring-scan.js";
-import { TREE } from "../helpers/ring-pipeline.js";
 
 beforeAll(initializePoseidon);
 
@@ -53,7 +52,6 @@ const select = (wallet: Wallet, amount: bigint, spendExposed?: boolean) =>
     asset: SOL_MINT,
     amount,
     inputs: "ring",
-    tree: TREE,
     maxInputs: 8,
     ...(spendExposed === undefined ? {} : { spendExposed }),
   });
