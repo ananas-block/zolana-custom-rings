@@ -1,4 +1,4 @@
-/** The auditor stream of a transfer, sealed and opened over its canonical records, Rust `SealStream` and `OpenSlots`. */
+/** The auditor stream of a transfer, sealed and opened over its canonical records, Rust `AuditStreamSeal` and `AuditEnvelope`. */
 import { clampViewingSecret, concatBytes } from "@heliuslabs/zolana/internal";
 import {
   ViewingKey,

@@ -229,7 +229,7 @@ export interface TransferAddresses {
   readonly legs: number;
 }
 
-/** Contract Output 5, the owner signers that fit, a co-signer takes its record too. */
+/** The owner signers that fit, a co-signer takes its record too. */
 export function ownerSignerCapacity(addresses: TransferAddresses): number {
   const taken =
     SPP_ADDRESSES + RING_ADDRESSES + addresses.nInputs + 2 * addresses.coSigners + addresses.legs;

@@ -385,7 +385,7 @@ export function ringWithdrawalsOf(
 }
 
 /**
- * Mirrors Rust `ConfirmedInstructionGroups::from_confirmed_transaction` over a
+ * Mirrors Rust `ConfirmedInstructionGroups::try_from` over a
  * `getTransaction` JSON result.
  */
 export function confirmedInstructionGroups(
@@ -883,7 +883,7 @@ function boundFrame(
   };
 }
 
-/** Mirrors Rust `settlement_width`, the accounts `append_interface_transfer_accounts` adds. */
+/** Mirrors Rust `InterfaceTransfer::settlement_account_count`, the accounts `append_interface_transfer_accounts` adds. */
 function settlementWidth(transfer: InterfaceTransfer): number {
   return transfer.kind === "splDeposit" || transfer.kind === "splWithdrawal" ? 5 : 2;
 }

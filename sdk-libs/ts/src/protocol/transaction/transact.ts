@@ -102,7 +102,7 @@ export const MAX_CO_SIGNERS = 5;
 /** Rust `ANONYMOUS_PARTIES`. */
 export const ANONYMOUS_PARTIES = 2 + MAX_CO_SIGNERS;
 
-/** The owner SPP's anonymous rail verifies and hides, the delivered audit publishes it. */
+/** The owner SPP's anonymous rail verifies and hides, the transfer statement publishes it. */
 export interface InProofOwner {
   readonly owner: Bytes32;
   readonly commitment: Bytes32;

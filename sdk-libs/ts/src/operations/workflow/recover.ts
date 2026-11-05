@@ -192,7 +192,7 @@ class Found {
     readonly nullifier?: Bytes32;
   }[] = [];
   readonly unknownMints = new Set<Address>();
-  /** Every deposit and merge UTXO of an anonymous ring, its transfer disclosures name them by hash or prefix. */
+  /** Every deposit and merge UTXO of an anonymous ring, its transfer disclosures name them by hash. */
   readonly created = new KnownUtxoIndex();
   readonly #seen = new Set<string>();
 

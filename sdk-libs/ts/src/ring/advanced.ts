@@ -209,7 +209,6 @@ export {
   replayRecordWrites,
   verifyRecordOpening,
 } from "../protocol/membership/member-opening.js";
-export { readRegisteredRecord, type RegisteredRecord } from "../rpc/registered-record.js";
 export { historyCursor, historyCursorToken, type HistoryStream } from "../rpc/history.js";
 export { recoverMergeOpening, type MergeAuditorOpening } from "../operations/audit/audit-merge.js";
 

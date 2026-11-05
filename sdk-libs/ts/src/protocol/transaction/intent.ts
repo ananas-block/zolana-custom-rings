@@ -1,4 +1,4 @@
-/** The ring intents beside the pinned SPP intents, Rust `TransactionIntent::RingAnonymousTransfer`. */
+/** The ring intents beside the pinned SPP intents. */
 import { sha256 } from "@noble/hashes/sha2.js";
 
 import type { Address, Bytes32 } from "@heliuslabs/zolana";

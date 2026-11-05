@@ -120,19 +120,17 @@ export interface OutputPayloadError {
   readonly kind: OutputPayloadErrorKind;
 }
 
-/** Rust `AuditedSender`, the owner of every UTXO an anonymous transfer spends. */
+/** The owner of input 0 on an anonymous frame or under entry evidence. */
 export interface AuditedSender {
   readonly ownerKey: Bytes32;
   /** Spent UTXO 0's key, absent when that UTXO is a deposit. */
   readonly nullifierPk?: Bytes32;
 }
 
-/** Rust `InputRing`, SPP spends a UTXO of the ring or of the default ring and the disclosure names neither. */
+/** The ring or the default ring a spent UTXO belongs to, by its full commitment. */
 export type InputRing =
   | Readonly<{ kind: "ring"; commitment: Bytes32 }>
-  | Readonly<{ kind: "default"; commitment: Bytes32 }>
-  /** No known commitment told the candidates apart. */
-  | Readonly<{ kind: "unresolved"; ring: Bytes32; default: Bytes32 }>;
+  | Readonly<{ kind: "default"; commitment: Bytes32 }>;
 
 export interface AuditedInputOpening {
   readonly asset: Bytes32;
@@ -179,7 +177,7 @@ export interface AuditedRingTransaction {
   readonly payloadErrors: readonly OutputPayloadError[];
   /** One per published slot, a payload error names its slot here. */
   readonly outputCommitments: readonly Bytes32[];
-  /** The hidden sender of an anonymous transfer, absent while `hash_0` names a note the auditor lacks. */
+  /** The owner of input 0, absent off an anonymous or entry frame and while input 0 names a note the auditor lacks. */
   readonly sender?: AuditedSender;
   /** One per published nullifier. */
   readonly inputs: readonly AuditedInput[];
@@ -211,7 +209,7 @@ export interface KnownNote {
   readonly utxo: KnownUtxo;
 }
 
-/** Rust `KnownUtxos`, UTXOs the auditor opened before. */
+/** UTXOs the auditor opened before. */
 export interface KnownUtxos {
   utxo(commitment: Bytes32): KnownUtxo | undefined;
   /** A real input resolves by its nullifier alone. */

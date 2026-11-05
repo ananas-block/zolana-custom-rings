@@ -305,7 +305,7 @@ impl<S: TransactionSource> AuditService<S> {
             }))
     }
 
-    /// The one read that names an unresolved spend, a reader grant reaches it never.
+    /// The one read that names an unresolved spend, a reader grant never reaches it.
     pub async fn spend_coverage(
         &self,
         request: &GetSpendCoverageRequest,
@@ -955,7 +955,7 @@ impl<S: TransactionSource> AuditService<S> {
                 continue;
             }
             if !origin.requires_audit() {
-                // A later commitment layout spends a deposited or merged UTXO by hash or prefix.
+                // A deposit carries no stream, its capsule opens the notes a later spend's nullifier resolves.
                 let created = bound.and_then(|()| {
                     CreatedUtxos {
                         transaction: &tx,
@@ -1244,7 +1244,7 @@ fn observe_all(
     }
 }
 
-/// The proven count and default bits decide, the index names which note a real input spent.
+/// The proven count and default bits decide, the index names the note a real input spent.
 fn audited_input_read(input: &AuditedInput) -> InputRead {
     match &input.opening {
         InputOpening::Dummy => InputRead::Padding,

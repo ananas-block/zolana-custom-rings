@@ -253,7 +253,7 @@ function recordPool(records: unknown, proof: unknown, subjects: unknown): Record
   };
 }
 
-/** `key_escrow << 1 | full_openings << 3`. */
+/** `has_data | entry << 1`. */
 function layout(value: unknown): AuditLayout {
   const flags = count(value);
   return {

@@ -35,7 +35,7 @@ export const REPLY_ENC_INFO = new TextEncoder().encode("CRING/rpl");
 export const SENDER_BUNDLE_ENC_INFO = new TextEncoder().encode("CRING/snd");
 export const MERGE_RECORD_ENC_INFO = new TextEncoder().encode("CRING/mrg");
 
-/** `"CR_S"`, Rust `DOM_SEP_CR_SHARED`. */
+/** `"CR_S"`, Rust `AUDIT_SHARED_SECRET`. */
 const DOM_SEP_CR_SHARED = 0x4352_5f53;
 const STREAM_LABEL_BYTES = 9;
 const U32_MAX = 0xffff_ffff;

@@ -369,7 +369,7 @@ impl Fixture {
         (held, transaction)
     }
 
-    /// A commitment-key anonymous transfer of `spent`, its change back to the member.
+    /// An anonymous transfer of `spent`, its change back to the member.
     fn anonymous_spend(
         &self,
         spent: &[&WalletUtxo],
@@ -1288,7 +1288,7 @@ async fn unproved_recipient_metadata_cannot_block_plain_utxo_recovery_or_merge()
     assert!(MergeTransaction::new_with_ring(recovered.utxos, RING, None).is_ok());
 }
 
-/// The first spent deposit opens by its hash and the second by its prefix, an unseen second stops recovery.
+/// A spend of two deposits leaves the change, an unseen second deposit reads as an unseen input and stops nothing.
 #[tokio::test]
 async fn an_anonymous_spend_of_deposits_under_the_commitment_key_leaves_the_change() {
     let fixture = Fixture::anonymous();

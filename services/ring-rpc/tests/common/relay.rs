@@ -119,7 +119,7 @@ pub struct RecordingChain {
     pub refuse_next: AtomicBool,
     /// Answers every outcome lookup, `None` reads as a sent transaction landing.
     pub outcome: Mutex<Option<Option<ChainOutcome>>>,
-    /// The send at this count of landed transactions is refused.
+    /// The send at the held count of landed transactions is refused.
     pub refuse_at: AtomicU64,
     pub slot: AtomicU64,
     pub accounts: Mutex<Vec<Address>>,

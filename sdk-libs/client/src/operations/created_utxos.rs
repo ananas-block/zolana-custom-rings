@@ -1,4 +1,4 @@
-//! Ring notes of deposits, a spend names them by hash.
+//! Ring notes of deposits, a spend resolves them by nullifier.
 
 use std::{
     collections::HashMap,

@@ -254,7 +254,7 @@ export function entryOpenings(
   );
 }
 
-/** Contract Output 4, distinct live input owners ascending as field integers, zero rows last, a delegate rail's zero-key note needs no row. */
+/** Distinct live input owners ascending as field integers, zero rows last, a delegate rail's zero-key note needs no row. */
 export function ownerRows(
   input: Readonly<{
     inputs: readonly ProofInputUtxo[];

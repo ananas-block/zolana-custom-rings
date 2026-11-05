@@ -491,7 +491,7 @@ fn lists_within(mask: u64, lists: ListSet) -> bool {
     mask & !lists.record_bits() == 0
 }
 
-/// A wallet writes its member lists, its escrow and its grants.
+/// A wallet writes its member lists and its grants.
 fn wallet_write(entry: &RecordUpdateEntry, wallet: &Member) -> bool {
     let own = |member: &Hash| member.0 == *wallet.as_bytes();
     match entry {

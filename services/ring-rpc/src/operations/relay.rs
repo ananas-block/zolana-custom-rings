@@ -943,8 +943,8 @@ impl Relay {
     }
 
     /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
-    /// The allowance is exact, a retry costs only when the chain took and failed a send, and a send past
-    /// the allowance refuses instead of spending the rent the row must return.
+    /// The allowance covers one clean run with a signature to spare, a retry costs only when the chain took
+    /// and failed a send, and a send past the allowance refuses instead of spending the rent the row must return.
     async fn frame_cost(
         &self,
         proven: &ProvenRelay,
@@ -965,7 +965,7 @@ impl Relay {
                 .unwrap_or(u64::MAX)
                 .saturating_mul(LAMPORTS_PER_SIGNATURE)
         };
-        // One signature for the close, the fee payer's beside the settlement's own.
+        // One signature for the close and one to spare, the settlement's metas already name the fee payer.
         let closing_fees = fees_of(settle_signers + 2);
         let fee_allowance = fees_of(writes).saturating_add(closing_fees);
         Ok(FrameCost {
@@ -1875,7 +1875,7 @@ fn message_fee(message: &VersionedMessage) -> u64 {
     u64::from(message.header().num_required_signatures).saturating_mul(LAMPORTS_PER_SIGNATURE)
 }
 
-/// The instruction's signers beside the fee payer, or the payer alone among them.
+/// One signature per signer meta and one more, a fee payer the instruction names counts twice.
 fn message_fee_of(instruction: &Instruction) -> u64 {
     let signers = instruction
         .accounts

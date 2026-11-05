@@ -35,7 +35,7 @@ pub struct RefuseEnrolmentRequest {
     pub auth: ConfigAuthorityAuth,
 }
 
-/// Signed by the config authority, or by the upgrade authority while no config exists.
+/// Signed by the policy authority, or by the upgrade authority before `Initialize`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateRecordsRegistryRequest {

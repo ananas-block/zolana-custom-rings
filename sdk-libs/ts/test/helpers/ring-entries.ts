@@ -15,7 +15,7 @@ export interface HistoryRoot {
   readonly index: number;
 }
 
-/** Mirrors the Rust `ProofRpc` fake, every leaf answered under the root at its position. */
+/** Every leaf answered under the root at its position. */
 export function entryProofReads(
   options: Readonly<{
     tree: Address;
