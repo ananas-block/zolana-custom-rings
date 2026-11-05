@@ -113,7 +113,6 @@ pub(crate) struct AppliedBatch<'a, L: WritableLeaf<H>, const H: usize> {
     pub chain_start: [u8; 32],
     pub entries: &'a [L::Entry],
     pub new_root: [u8; 32],
-    /// A tracking tree passes `u32`, the policy tree widens into it.
     pub new_next_index: u64,
     pub revision: u64,
 }

@@ -234,7 +234,7 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, TrackingRegistry> {
         Ok(())
     }
 
-    /// Each named owner's first enrollment in block order.
+    /// Each named owner's entry in the order the apply names it.
     async fn applied_entries(
         &self,
         authorizations: &[Address],

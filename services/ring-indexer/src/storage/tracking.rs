@@ -5,9 +5,7 @@ use solana_address::Address;
 
 use super::{bytes, field, int, uint, TrackingStore};
 
-/// The owner's authorization, final after its first `Enroll` except for the apply mark.
-///
-/// A rotation moves only the viewing key, and a sender reads that key from the account, so the store keeps none.
+/// The owner's authorization with no viewing key, final after its first `Enroll` except for the apply mark.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Enrollment {
     pub owner: [u8; 32],
