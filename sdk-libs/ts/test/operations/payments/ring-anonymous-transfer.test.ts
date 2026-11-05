@@ -1728,7 +1728,7 @@ describe("anonymous ring relay", () => {
       withdraw: true,
     });
     const sent = await payload(await wide.relay);
-    expect([sent.inputs.length, sent.withdrawals.length]).toEqual([24, 1]);
+    expect([sent.inputs.length, sent.interfaceTransferAccounts.length]).toEqual([24, 1]);
     expect(wide.requests).toHaveLength(1);
   });
 
