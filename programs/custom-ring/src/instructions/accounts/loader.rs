@@ -15,7 +15,7 @@
 //! A private source binds the ring identity. Its floor requires an address root that contains every owner with a private entry.
 //! Positive credential reads use immutable state inclusion and publish no account specific to an owner.
 //!
-//! Read after `instructions/runtime/instruction_runtime.rs`. Read before `instructions/settlement/frame_buffer.rs`, `program-libs/interface/src/accounts/state.rs`.
+//! Read after `instructions/runtime/instruction_runtime.rs`. Read before `program-libs/interface/src/accounts/state.rs`.
 
 #[path = "credential.rs"]
 mod credential;
@@ -79,33 +79,6 @@ pub fn load_policy_mut<'a>(
     account: &'a mut AccountView,
 ) -> Result<RefMut<'a, RingPolicy>, ProgramError> {
     load_mut(program_id, account)
-}
-
-/// Owner only, `FrameBuffer::of` checks the discriminator.
-#[inline(always)]
-pub fn load_frame_buffer<'a>(
-    program_id: &Address,
-    account: &'a AccountView,
-) -> Result<Ref<'a, [u8]>, ProgramError> {
-    if !account.owned_by(program_id) {
-        return Err(CustomRingError::InvalidFrameBuffer.into());
-    }
-    account
-        .try_borrow()
-        .map_err(|_| CustomRingError::InvalidFrameBuffer.into())
-}
-
-#[inline(always)]
-pub fn load_frame_buffer_mut<'a>(
-    program_id: &Address,
-    account: &'a mut AccountView,
-) -> Result<RefMut<'a, [u8]>, ProgramError> {
-    if !account.owned_by(program_id) {
-        return Err(CustomRingError::InvalidFrameBuffer.into());
-    }
-    account
-        .try_borrow_mut()
-        .map_err(|_| CustomRingError::InvalidFrameBuffer.into())
 }
 
 /// The ring account whose `role` the signer holds, the processor checks the signature.

@@ -10,7 +10,6 @@ use custom_ring_interface::{
     },
     ParsedTransact, TRANSFER_OUTPUT_CAPACITIES,
 };
-use custom_ring_sdk::BufferedFrame;
 use custom_ring_test_validator::{
     policy::{EnrollOwners, RingNotes},
     shared::restart_prover,
@@ -189,8 +188,6 @@ struct KeyCase {
     /// Live notes, the shape's other inputs stay dummies.
     notes: usize,
     legs: usize,
-    /// Past one transaction the frame settles from a buffer.
-    buffered: bool,
 }
 
 impl KeyCase {
@@ -200,14 +197,6 @@ impl KeyCase {
             shape,
             notes,
             legs,
-            buffered: true,
-        }
-    }
-
-    const fn inline(self) -> Self {
-        Self {
-            buffered: false,
-            ..self
         }
     }
 
@@ -217,19 +206,18 @@ impl KeyCase {
 }
 
 const CONFIDENTIAL_KEY_CASES: &[KeyCase] = &[
-    KeyCase::of(narrow(2, 24, 4, 4), Shape::IN1_OUT2, 1, 0).inline(),
-    KeyCase::of(narrow(4, 24, 4, 4), Shape::IN1_OUT4, 1, 0).inline(),
-    KeyCase::of(narrow(8, 16, 4, 4), Shape::IN1_OUT8, 1, 0).inline(),
+    KeyCase::of(narrow(2, 24, 4, 4), Shape::IN1_OUT2, 1, 0),
+    KeyCase::of(narrow(4, 24, 4, 4), Shape::IN1_OUT4, 1, 0),
+    KeyCase::of(narrow(8, 16, 4, 4), Shape::IN1_OUT8, 1, 0),
     KeyCase::of(narrow(16, 5, 8, 5), Shape::IN1_OUT16, 1, 0),
     KeyCase::of(wide(16, 8, 8, 8), Shape::IN8_OUT16, 1, 0),
-    KeyCase::of(wide(2, 49, 4, 12), Shape::IN32_OUT2, 1, 0).inline(),
+    KeyCase::of(wide(2, 49, 4, 12), Shape::IN32_OUT2, 1, 0),
 ];
-const WIDE_LEG_KEY_CASES: &[KeyCase] =
-    &[KeyCase::of(wide(8, 24, 32, 24), Shape::IN1_OUT8, 1, 5).inline()];
+const WIDE_LEG_KEY_CASES: &[KeyCase] = &[KeyCase::of(wide(8, 24, 32, 24), Shape::IN1_OUT8, 1, 5)];
 const ENTRY_KEY_CASES: &[KeyCase] = &[
-    KeyCase::of(entry(4, 8, 4, 8), Shape::IN1_OUT4, 1, 0).inline(),
-    KeyCase::of(entry(8, 2, 4, 2), Shape::IN1_OUT8, 1, 0).inline(),
-    KeyCase::of(entry(8, 4, 4, 4), Shape::IN3_OUT8, 3, 0).inline(),
+    KeyCase::of(entry(4, 8, 4, 8), Shape::IN1_OUT4, 1, 0),
+    KeyCase::of(entry(8, 2, 4, 2), Shape::IN1_OUT8, 1, 0),
+    KeyCase::of(entry(8, 4, 4, 4), Shape::IN3_OUT8, 3, 0),
     // Nine inputs pass every smaller entry key, twelve is the next published width.
     KeyCase::of(entry(2, 24, 32, 12), Shape::IN12_OUT2, 12, 0),
 ];
@@ -512,7 +500,6 @@ struct ShapeTransfer {
     inputs: Vec<WalletUtxo>,
     spend: Spend,
     legs: Vec<Leg>,
-    buffered: bool,
 }
 
 /// One public withdrawal of `LEG_AMOUNT`.
@@ -674,7 +661,6 @@ impl ShapeRing<'_> {
                 inputs: self.utxos(1, coverage)?,
                 spend: Spend::Rail(self.column.rail()),
                 legs: Vec::new(),
-                buffered: false,
             };
             match self.settle(transfer, coverage)? {
                 Settlement::Settled => settled.push(shape),
@@ -718,7 +704,6 @@ impl ShapeRing<'_> {
                 inputs,
                 spend: Spend::Rail(self.column.rail()),
                 legs: self.case_legs(case.legs)?,
-                buffered: case.buffered,
             };
             self.gate.expect(case.key)?;
             let settled = self.settled(transfer, coverage);
@@ -771,16 +756,18 @@ impl ShapeRing<'_> {
         Ok(())
     }
 
-    fn sixteen_output_transfer(&self, coverage: &mut Coverage) -> Result<()> {
-        restart_prover()?;
+    /// Sixteen record slots pass one transaction, the fit refuses before proving.
+    fn sixteen_outputs_refused(&self, coverage: &mut Coverage) -> Result<()> {
         let transfer = ShapeTransfer {
             shape: Shape::IN1_OUT16,
             inputs: self.utxos(1, coverage)?,
             spend: Spend::Rail(RingRail::Confidential),
             legs: Vec::new(),
-            buffered: true,
         };
-        self.settled(transfer, coverage)
+        match self.settle(transfer, coverage)? {
+            Settlement::TooLarge => Ok(()),
+            Settlement::Settled => Err(anyhow!("{:?} settled sixteen outputs", self.column)),
+        }
     }
 
     fn wide_withdrawals(&self, coverage: &mut Coverage) -> Result<()> {
@@ -801,7 +788,6 @@ impl ShapeRing<'_> {
                     RingRail::Anonymous => vec![Leg::Sol(destinations[0]); legs],
                     _ => destinations[..legs].iter().copied().map(Leg::Sol).collect(),
                 },
-                buffered: false,
             };
             self.settled(transfer, coverage)?;
         }
@@ -830,7 +816,6 @@ impl ShapeRing<'_> {
                         token_account: token_accounts[index.min(token_accounts.len() - 1)],
                     })
                     .collect(),
-                buffered: false,
             };
             if let Settlement::Settled = self.settle(transfer, coverage)? {
                 println!("RING_SPL_LEGS {:?} legs={legs}", self.column);
@@ -878,7 +863,6 @@ impl ShapeRing<'_> {
                             inputs: notes.clone(),
                             spend,
                             legs: targets.legs(kind, legs),
-                            buffered: false,
                         };
                         if let Settlement::Settled = self.settle(transfer, coverage)? {
                             settled = Some(legs);
@@ -919,8 +903,6 @@ impl ShapeRing<'_> {
                 inputs: self.utxos(1, coverage)?,
                 spend: Spend::InProofOwner,
                 legs: Vec::new(),
-                // Sixteen record slots pass one transaction on every tier.
-                buffered: outputs == 16,
             };
             self.settled(transfer, coverage)?;
         }
@@ -1094,7 +1076,6 @@ impl ShapeRing<'_> {
         let rpc = env.client.rpc();
         let spend = transfer.spend;
         let rail = spend.rail();
-        let buffered = transfer.buffered;
         let label = format!(
             "{:?} {spend:?} {}x{} inputs={} legs={}{}",
             self.column,
@@ -1107,7 +1088,9 @@ impl ShapeRing<'_> {
                 Some(Leg::Sol(_)) | None => "",
             }
         );
-        let pinned = (transfer.legs.is_empty() && !buffered)
+        let pinned = transfer
+            .legs
+            .is_empty()
             .then(|| {
                 let spends_default_ring = transfer
                     .inputs
@@ -1184,16 +1167,6 @@ impl ShapeRing<'_> {
                 ..data.clone()
             },
         )?;
-        // A refused buffer stays open, the frame's fresh salt names a buffer of its own.
-        let (altered, landing) = match buffered {
-            true => {
-                let settled = proven.buffered(frame_nonce(data.salt)?)?;
-                let refused = BufferedFrame::new(&altered, payer.pubkey(), frame_nonce(&salt)?)?;
-                self.upload(&refused, payer)?;
-                (refused.settle(), Some(settled))
-            }
-            false => (altered, None),
-        };
         let rejection = send_expecting_rejection(rpc, payer, altered)?;
         Rejection::custom(CustomRingError::ProofVerificationFailed as u32)
             .at(0)
@@ -1202,17 +1175,10 @@ impl ShapeRing<'_> {
         for leg in paid.keys() {
             assert_eq!(balance(leg)?, before[leg]);
         }
-        let landed = match &landing {
-            Some(frame) => {
-                self.upload(frame, payer)?;
-                frame.settle()
-            }
-            None => instruction.clone(),
-        };
-        let signature = match land(env, landed.clone(), payer, &[]) {
+        let signature = match land(env, instruction.clone(), payer, &[]) {
             Ok(signature) => signature,
             Err(error) => {
-                let logs = self.simulated_logs(&landed, payer)?;
+                let logs = self.simulated_logs(&instruction, payer)?;
                 return Err(error.context(format!("{label} logs {logs:#?}")));
             }
         };
@@ -1225,10 +1191,7 @@ impl ShapeRing<'_> {
             rpc,
             &signature,
             &label,
-            match buffered {
-                true => u64::from(compute_unit_limit(InstructionTag::SettleBuffered)),
-                false => CUSTOM_RING_TRANSACT_CU_LIMIT,
-            },
+            CUSTOM_RING_TRANSACT_CU_LIMIT,
         )?;
         let audited = AuditLookup {
             scan: RingScan::new(self.ring.program_id(), self.auditor.pubkey()).with_mode(self.mode),
@@ -1238,19 +1201,12 @@ impl ShapeRing<'_> {
         .run(env)?;
         assert_eq!(opened(&audited), ring_openings(&proven.outputs)?, "{label}");
         println!(
-            "RING_SETTLEMENT {label} buffered={buffered} frame={} bytes={} addresses={} cu={units}",
+            "RING_SETTLEMENT {label} frame={} bytes={} addresses={} cu={units}",
             instruction.data.len(),
             size.bytes,
             size.addresses
         );
         Ok(Settlement::Settled)
-    }
-
-    fn upload(&self, frame: &BufferedFrame, payer: &(dyn Signer + Sync)) -> Result<()> {
-        for write in frame.writes()? {
-            land(self.env, write, payer, &[])?;
-        }
-        Ok(())
     }
 
     /// Anonymous payments go to fresh recipients, each a bootstrap payment.
@@ -1264,7 +1220,6 @@ impl ShapeRing<'_> {
             inputs,
             spend,
             legs,
-            buffered,
         } = transfer;
         let total: u64 = inputs.iter().map(|input| input.utxo.amount).sum();
         let withdrawn = LEG_AMOUNT * legs.len() as u64;
@@ -1309,10 +1264,6 @@ impl ShapeRing<'_> {
                 transaction,
             })
             .with_interface_transfer_accounts(settlements);
-            let transfer = match buffered {
-                true => transfer.with_buffered_settlement(),
-                false => transfer,
-            };
             self.with_list_salts(transfer)
         };
         let confidential = |spend: Spend| -> Result<_> {
@@ -1449,11 +1400,6 @@ impl ShapeRing<'_> {
     }
 }
 
-/// A buffer of its own per frame, the frame's salt never repeats.
-fn frame_nonce(salt: &[u8; 16]) -> Result<u64> {
-    Ok(u64::from_le_bytes(salt[..8].try_into()?))
-}
-
 /// The anonymous rail leaves to one target, the confidential rail pays distinct owners.
 fn distinct_targets(rail: RingRail, widest: usize) -> usize {
     match rail {
@@ -1490,7 +1436,6 @@ fn anonymous_widest_eight_output_transfer_settles() -> Result<()> {
                 inputs: ring.utxos(5, coverage)?,
                 spend: Spend::Rail(RingRail::Anonymous),
                 legs: Vec::new(),
-                buffered: false,
             },
             coverage,
         )
@@ -1623,7 +1568,7 @@ fn sweep(column: Column) -> Result<()> {
         ring.catalog_keys(coverage)?;
         match column {
             Column::Anonymous | Column::Salted => {}
-            Column::Delegate => ring.sixteen_output_transfer(coverage)?,
+            Column::Delegate => ring.sixteen_outputs_refused(coverage)?,
             Column::Confidential => ring.in_proof_owners(coverage)?,
             Column::ConfidentialPolicy => {
                 ring.in_proof_owners(coverage)?;
@@ -1719,7 +1664,6 @@ fn sanity_in_proof_and_delegate_modes() -> Result<()> {
                     inputs: ring.utxos(1, coverage)?,
                     spend,
                     legs: Vec::new(),
-                    buffered: false,
                 },
                 coverage,
             )?;
@@ -1738,7 +1682,6 @@ fn sanity_wide_withdrawal_heap_sentinel() -> Result<()> {
                 inputs: ring.utxos(1, coverage)?,
                 spend: Spend::Rail(RingRail::Anonymous),
                 legs: vec![Leg::Sol(destination); 32],
-                buffered: false,
             },
             coverage,
         )

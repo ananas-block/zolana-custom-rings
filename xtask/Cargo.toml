@@ -10,7 +10,6 @@ publish = false
 anyhow = { workspace = true }
 bytemuck = { workspace = true }
 custom-ring-interface = { workspace = true }
-custom-ring-sdk = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
 solana-address = { workspace = true }

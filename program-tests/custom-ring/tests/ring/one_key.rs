@@ -16,7 +16,7 @@ use custom_ring_interface::{
     storage::{Revision, Root, StorageRegistry},
     verifying_key, AuditCredential, CredentialRootSelection, CredentialRoots, CredentialStateRoot,
     CredentialTreeRead, RingProof, SignerSet, TransferBinding, TransferRoots, ANONYMOUS_PARTIES,
-    MAX_CPI_DATA_LEN, MAX_FRAME_LEN, PROVING_KEY_SHA256S, TAGGED_X25519_KEY_LEN,
+    MAX_CPI_DATA_LEN, PROVING_KEY_SHA256S, TAGGED_X25519_KEY_LEN,
 };
 use custom_ring_test_validator::policy::RELEASED;
 use serde_json::Value;
@@ -890,11 +890,8 @@ impl FrameReport<'_> {
         let parsed = RingTransactData::parse(body, self.rail)?;
         let cpi = parsed.data().spp_instruction_data(self.policy)?.len();
         let frame = self.frame.len();
-        ensure!(frame <= MAX_FRAME_LEN, "{label} frame takes {frame} bytes");
         ensure!(cpi <= MAX_CPI_DATA_LEN, "{label} SPP CPI takes {cpi} bytes");
-        println!(
-            "{label}: frame {frame} bytes of {MAX_FRAME_LEN}, SPP CPI data {cpi} bytes of {MAX_CPI_DATA_LEN}"
-        );
+        println!("{label}: frame {frame} bytes, SPP CPI data {cpi} bytes of {MAX_CPI_DATA_LEN}");
         Ok(())
     }
 }

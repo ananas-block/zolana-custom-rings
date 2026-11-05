@@ -127,7 +127,6 @@ An in-proof owner on ring transfers lets Ring RPC pay for and send a confidentia
 5. **Audit credential:** one per ring and owner, an SPP data note that the ring's credential PDA owns. Holds the ring id, the owner identity, the nullifier key, the list tag, the auditor key and the ephemeral key. Its ciphertext seals the nullifier secret and the list salt to the auditor. Its address in SPP tree 0 derives from the ring and the owner alone. No instruction spends or replaces it. [Records and roots](design/records-and-roots.md#audit-credentials)
 6. **User record:** zolana's per-wallet account in its user registry, shared by every ring. Holds the wallet's nullifier key and current viewing key. `UPDATE_KEYS` rotates the viewing key and never the nullifier key.
 7. **Owner grant:** one per ring program, owner and reader, owned by the Storage program. Holds whether a program owner grants that reader access to its activity.
-8. **Frame buffer:** one per writer and nonce, owned by the ring program. Holds the writer and one transfer frame until `SettleBuffered` or `CloseFrameBuffer` closes it.
 
 A transfer or deposit passes the ring account. It adds the records registry when it reads the policy or the thresholds, and the curator registry when the policy uses a curator source. It then passes SPP tree 0 and each SPP state tree that holds a credential the proof opens. It passes at least one state tree even when every opening proves absence. It adds a co-signer account for each co-signer the demanded classes need. The program checks each registry against the address the ring account binds, checks each tree account against SPP, and reads every root live. Differs from the PR 15 draft: the config and the policy are one account, and no roots are synced into it. A storage tree is a root history over an indexed tree, not account compression. [Records and roots](design/records-and-roots.md)
 
@@ -196,10 +195,9 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 | 30 | **Sender bundle** | Ciphertext | One per anonymous transfer, encrypted to the sender's viewing key. It holds the change cells, the output seed and each recipient's viewing key. No proof constrains it. |
 | 31 | **Reply metadata** | Ciphertext | An optional unauthenticated claim about the sender, one fixed length per frame. |
 | 32 | **Published slot** | Output position | An output position below the frame's count `m`. A compact frame omits every later position. |
-| 33 | **Buffered frame** | Transfer form | A transfer frame past one transaction, written to a frame buffer and settled by its digest. |
-| 34 | **Tree 0** | SPP tree | The SPP tree whose nullifier tree holds every credential address. Its root history fixes the address checkpoint. |
-| 35 | **Absence floor** | Registry field | The lowest tree 0 append sequence at which a frame reading a salted list through the registry can prove an owner unenrolled. A salted owner write raises it. |
-| 36 | **Input map** | Envelope field | The sealed note count `R` and address bitmap `A` that class each published input as a note, an address or a dummy. |
+| 33 | **Tree 0** | SPP tree | The SPP tree whose nullifier tree holds every credential address. Its root history fixes the address checkpoint. |
+| 34 | **Absence floor** | Registry field | The lowest tree 0 append sequence at which a frame reading a salted list through the registry can prove an owner unenrolled. A salted owner write raises it. |
+| 35 | **Input map** | Envelope field | The sealed note count `R` and address bitmap `A` that class each published input as a note, an address or a dummy. |
 
 ## Flows
 
@@ -299,7 +297,7 @@ A unified flow for anonymous and confidential transfers, exits and withdrawals. 
 
 A recipient wallet finds an anonymous note by scanning ring history, see [wallet scanning](design/audit-and-recovery.md#wallet-scanning). Without Ring RPC the **Wallet** does step 2 itself and pays from a fee payer it chooses. A demanded co-signer still signs. On the anonymous rail that payer and any co-signer must differ from the hidden owner, and the ring program accepts any such payer.
 
-A frame publishes `m` output slots up to the key's capacity, and omits the rest as a suffix. A ring output publishes no owner identity, and an exit's owner is public. A frame past one transaction's 4,096 bytes settles buffered. The writer loads it with `WriteFrame`, and the settling transaction carries only its digest in `SettleBuffered`. A buffer moves bytes alone, so the SDKs refuse a frame past the 64-address ceiling or the 10 KiB CPI data ceiling. The key catalog in `program-libs/interface/src/proof/key_catalog.rs` fixes each key's input class. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
+A frame publishes `m` output slots up to the key's capacity, and omits the rest as a suffix. A ring output publishes no owner identity, and an exit's owner is public. Every transfer settles in one transaction. The SDKs refuse before proving a frame whose transaction passes 4,096 bytes or 64 addresses, or whose SPP CPI data passes 10 KiB. The key catalog in `program-libs/interface/src/proof/key_catalog.rs` fixes each key's input class. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
 
 ## 5. User merge
 
@@ -398,11 +396,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 9. `Transfer`: verifies the one ring proof before SPP CPI. Its statement carries the audit, the credential roots and the policy section under the ring's written policy hash. It also carries `approval_mask` under the thresholds of the ring's own records. The payer signs. On the signer rail each input owner also signs. On the in-proof rail the owner the frame names signs inside the SPP proof, and each other owner of the run signs the transaction. The proof holds every input to one of them. On the anonymous rail each public co-owner signs. Each co-signer the demanded classes need and each deposit leg's funder also sign.
 10. `AuthorityTransfer`: as `Transfer` on the authority rail, on a confidential or an anonymous ring. It reads no policy root, sets no approval bit, demands no co-signer and takes no deposit leg. The delegate and the payer sign.
 11. `Merge`: verifies the ring merge proof before SPP CPI. Its statement carries the output hash, the first nullifier, the ring id, the auditor and ephemeral keys and the sealed record. It also carries the payer, the published owner and the credential owner with one state root. The payer signs, and under the zero key the published owner. No co-signer signs.
-12. `WriteFrame`: writes bytes at an offset of a frame buffer. The first write creates the buffer at the writer's PDA for a nonce, sized for the frame, with the writer paying its rent. Unwritten bytes stay zero. The writer signs, and only the writer writes a buffer.
-13. `CloseFrameBuffer`: closes an unsettled buffer to a rent recipient. The writer signs.
-14. `SettleBuffered`: settles the buffered frame as `Transfer` or `AuthorityTransfer` does, from the frame's first byte. Its data is the frame's SHA-256 digest alone. Every signer of the message therefore commits to every frame byte, and a byte changed after signing fails. The SPP payer must be the writer. Settlement closes the buffer and returns its rent to the writer.
-15. `FrameEvent`: an instruction `SettleBuffered` calls on its own program, with `tag || frame` as data. A reader recovers the frame from the settling transaction after the buffer closes. It checks nothing and changes no state, and a reader accepts it only inside a successful `SettleBuffered` whose digest it matches.
-16. `Enroll`: creates the owner's audit credential with a `RegisterKey` proof the program verifies and an SPP proof of the credential note. The owner and the payer sign.
+12. `Enroll`: creates the owner's audit credential with a `RegisterKey` proof the program verifies and an SPP proof of the credential note. The owner and the payer sign.
 
 ### Storage Program
 
@@ -430,7 +424,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 15. The confidential in-proof rail proves on SPP's anonymous rail, and admits signing co-owners beside the in-proof owner, as SPP does. The transfer proof holds every input to the in-proof owner or an owner of the signed run. It follows the maintainer's suggestion and keeps no new SPP circuit.
 16. Both confidential owner rails stay. The program admits an entry key on every rail but the delegate's. The SDKs refuse a default-ring input on the in-proof rail, and a hidden owner's ring notes beside its own default-ring note.
 17. This repository never refactors zolana circuits. They are audited, and a source change reopens the audit.
-18. The transfer statement holds no recipient key, body or tag, and a frame past one transaction settles buffered. Recipient delivery stays outside every proof, and the audit stays provable on every transfer.
+18. The transfer statement holds no recipient key, body or tag. Recipient delivery stays outside every proof, and the audit stays provable on every transfer.
 19. The deposit proof also opens the curator root. Curator asset lists then admit deposits.
 20. The SDKs refuse a merge whose payer is the owner, on every ring. The merge circuit already refuses it, and the SDKs fail before proving.
 21. Every ring merge proves one opening record of its output and the seed, sealed to the auditor. SPP's proof ties every input to that owner, asset and sum, so the ring proof opens no input and one ring key serves every width.

@@ -7,9 +7,8 @@ use std::{collections::BTreeSet, fmt::Write};
 use anyhow::{Context, Result};
 use custom_ring_interface::{
     cosign::ApprovalMask,
-    frame_digest,
     key_catalog::{RecordPools, TransferSpend},
-    sender_bundle_len, settle_buffered_data, spl_withdrawal_count,
+    sender_bundle_len, spl_withdrawal_count,
     statement::SignerDataCounts,
     storage::Revision,
     stream::slot_tag,
@@ -17,11 +16,10 @@ use custom_ring_interface::{
     CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
     PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
     RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_FRAME_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS,
-    MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
+    OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
     TAGGED_X25519_KEY_LEN,
 };
-use custom_ring_sdk::{BufferedFrame, FitError};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_message::v1::{MAX_ADDRESSES, MAX_SIGNATURES, MAX_TRANSACTION_SIZE};
@@ -58,7 +56,6 @@ const CURATOR: Address = address(0xa5);
 const DELEGATE: Address = address(0xa8);
 const COSIGNER_RECORD: Address = address(0xac);
 const COSIGNER: Address = address(0xad);
-const BUFFER: Address = address(0xae);
 const TOKEN_PROGRAM: Address = address(0xab);
 
 const fn address(seed: u8) -> Address {
@@ -319,7 +316,7 @@ enum TransferFit {
 impl TransferFit {
     fn limit(&self) -> String {
         match self {
-            Self::Measured(measured) => measured.outcome().limit().to_owned(),
+            Self::Measured(measured) => measured.limits().join(", "),
             Self::Unkeyed => "catalog key".to_owned(),
         }
     }
@@ -332,36 +329,22 @@ enum CredentialFit {
 
 struct Measured {
     fit: Fit,
-    buffered: Fit,
-    /// `WriteFrame` transactions of the SDK's buffered path, none past the buffer create ceiling.
-    writes: Option<usize>,
     frame_len: usize,
     spp_cpi_len: usize,
     credentials: CredentialFit,
 }
 
 impl Measured {
-    const fn fits_inline(&self) -> bool {
-        self.fit.fits()
-            && self.spp_cpi_len <= MAX_CPI_DATA_LEN
-            && !matches!(self.credentials, CredentialFit::Excess { .. })
-    }
-
-    fn buffered_limits(&self) -> Vec<String> {
+    /// Credential capacity and runtime ceilings both constrain a selected key.
+    fn limits(&self) -> Vec<String> {
         let mut limits = Vec::new();
         if let CredentialFit::Excess { selected, capacity } = self.credentials {
             limits.push(format!(
                 "credential trees {selected} exceed key capacity {capacity}"
             ));
         }
-        if !self.buffered.fits() {
-            limits.push(self.buffered.over());
-        }
-        if self.frame_len > MAX_FRAME_LEN {
-            limits.push(format!(
-                "buffer create {} B",
-                self.frame_len - MAX_FRAME_LEN
-            ));
+        if !self.fit.fits() {
+            limits.push(self.fit.over());
         }
         if self.spp_cpi_len > MAX_CPI_DATA_LEN {
             limits.push(format!("SPP CPI {} B", self.spp_cpi_len - MAX_CPI_DATA_LEN));
@@ -369,39 +352,15 @@ impl Measured {
         limits
     }
 
-    /// Credential capacity and runtime ceilings both constrain a selected key.
-    fn outcome(&self) -> Outcome {
-        let limits = self.buffered_limits();
-        if self.fits_inline() {
-            Outcome::Inline
-        } else if limits.is_empty() {
-            Outcome::Buffered
-        } else {
-            Outcome::No(limits.join(", "))
-        }
+    fn fits(&self) -> bool {
+        self.limits().is_empty()
     }
 }
 
-enum Outcome {
-    Inline,
-    Buffered,
-    No(String),
-}
-
-impl Outcome {
-    const fn fits(&self) -> &'static str {
-        match self {
-            Self::Inline => "inline",
-            Self::Buffered => "buffered",
-            Self::No(_) => "no",
-        }
-    }
-
-    fn limit(&self) -> &str {
-        match self {
-            Self::Inline | Self::Buffered => "",
-            Self::No(limit) => limit,
-        }
+const fn fits_column(fits: bool) -> &'static str {
+    match fits {
+        true => "yes",
+        false => "no",
     }
 }
 
@@ -694,32 +653,14 @@ impl Transfer {
             false => tag::TRANSFER,
         };
         let frame_bytes = [&[ring_tag][..], &encoded].concat();
-        let settle = settle_buffered_data(&frame_digest(&frame_bytes)?);
-        let mut settling = vec![
-            AccountMeta::new(BUFFER, false),
-            AccountMeta::new_readonly(RING_PROGRAM, false),
-        ];
-        settling.extend_from_slice(&metas);
         let frame_len = frame_bytes.len();
-        let inline = Instruction {
+        let instruction = Instruction {
             program_id: RING_PROGRAM,
             accounts: metas,
             data: frame_bytes,
         };
-        let writes = match BufferedFrame::new(&inline, payer, 0) {
-            Ok(buffered) => Some(buffered.writes()?.len()),
-            Err(FitError::FrameTooLarge { .. }) => None,
-            Err(error) => return Err(error.into()),
-        };
-        let settling = Instruction {
-            program_id: RING_PROGRAM,
-            accounts: settling,
-            data: settle,
-        };
         Ok(TransferFit::Measured(Measured {
-            fit: Fit::of(&inline, &payer, load.priority_fee)?,
-            buffered: Fit::of(&settling, &payer, load.priority_fee)?,
-            writes,
+            fit: Fit::of(&instruction, &payer, load.priority_fee)?,
             frame_len,
             spp_cpi_len,
             credentials,
@@ -763,29 +704,13 @@ impl Transfer {
     }
 
     /// The most owner signers the ceilings admit, the catalog's rows bound a key apart.
-    fn widest_owner_run(&self) -> Result<Option<usize>> {
-        let mut widest = None;
-        for owners in self.frame.required_owners()..=self.shape.n_inputs() {
-            let attempt = Self { owners, ..*self };
-            let TransferFit::Measured(measured) = attempt.measure()? else {
-                break;
-            };
-            if !measured.fits_inline() {
-                break;
-            }
-            widest = Some(owners);
-        }
-        Ok(widest)
-    }
-
-    /// The most owner signers any path clears.
     fn widest_settled_run(&self) -> Result<Option<(usize, Measured)>> {
         let mut widest = None;
         for owners in self.frame.required_owners()..=self.shape.n_inputs() {
             let TransferFit::Measured(measured) = (Self { owners, ..*self }).measure()? else {
                 break;
             };
-            if matches!(measured.outcome(), Outcome::No(_)) {
+            if !measured.fits() {
                 break;
             }
             widest = Some((owners, measured));
@@ -989,13 +914,6 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
     Fit::of(&instruction, &PAYER, full)
 }
 
-fn unbuffered_fit(fit: Fit) -> &'static str {
-    match fit.fits() {
-        true => "inline",
-        false => "no",
-    }
-}
-
 pub fn run() -> Result<()> {
     print!("{}", table()?);
     Ok(())
@@ -1007,19 +925,16 @@ fn table() -> Result<String> {
         table,
         "Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings {MAX_TRANSACTION_SIZE} B, {MAX_ADDRESSES} accounts, {MAX_SIGNATURES} signatures."
     )?;
-    writeln!(table, "min: one credential state tree, no co-signer, no leg, no fee, the payer an owner where it may be. full: own and curator roots, two credential state trees, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. Shared loads start credential state trees at tree zero and reuse the first SPP input tree as the address tree. Both full+4credential loads carry four credential state trees and two SPP input trees. The disjoint load uses separate address, credential state and SPP input trees. Full deposits use one credential state tree per slot. Ring-authority merges read one credential state tree. Owner-signed merges read none. The inline owner run is the inline ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
-    writeln!(table, "fits: the path that clears the transaction and CPI ceilings and the selected key credential capacity. limit: what stops a row with no path, rail for a shape the rail has no SPP key for, else the excess in credential trees, accounts, signatures, bytes, buffer create or CPI data at that row's load. A missing catalog key has no encoded measurement.")?;
-    writeln!(table, "| shape | rail | load | catalog key | inline bytes | inline accounts | signatures | inline owner run | inline over | frame | SPP CPI | buffered bytes | buffered accounts | fits | limit |")?;
-    writeln!(
-        table,
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
-    )?;
+    writeln!(table, "min: one credential state tree, no co-signer, no leg, no fee, the payer an owner where it may be. full: own and curator roots, two credential state trees, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. Shared loads start credential state trees at tree zero and reuse the first SPP input tree as the address tree. Both full+4credential loads carry four credential state trees and two SPP input trees. The disjoint load uses separate address, credential state and SPP input trees. Full deposits use one credential state tree per slot. Ring-authority merges read one credential state tree. Owner-signed merges read none. The owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
+    writeln!(table, "Every row is one transaction. fits: the row clears the transaction and CPI ceilings and the selected key credential capacity. limit: what refuses a row, rail for a shape the rail has no SPP key for, else the excess in credential trees, accounts, signatures, bytes or CPI data at that row's load. A missing catalog key has no encoded measurement.")?;
+    writeln!(table, "| shape | rail | load | catalog key | bytes | accounts | signatures | owner run | frame | SPP CPI | fits | limit |")?;
+    writeln!(table, "|---|---|---|---|---|---|---|---|---|---|---|---|")?;
     for shape in SPP_SUPPORTED_SHAPES {
         for frame in FrameRail::ALL {
             if !frame.rail().supports(shape) {
                 writeln!(
                     table,
-                    "| {}x{} | {} | - | - | - | - | - | - | - | - | - | - | - | no | rail |",
+                    "| {}x{} | {} | - | - | - | - | - | - | - | - | no | rail |",
                     shape.n_inputs(),
                     shape.n_outputs(),
                     frame.name(),
@@ -1037,7 +952,7 @@ fn table() -> Result<String> {
                 let TransferFit::Measured(measured) = transfer.measure()? else {
                     writeln!(
                         table,
-                        "| {}x{} | {} | {} | none | - | - | - | - | - | - | - | - | - | no | catalog key |",
+                        "| {}x{} | {} | {} | none | - | - | - | - | - | - | no | catalog key |",
                         shape.n_inputs(),
                         shape.n_outputs(),
                         frame.name(),
@@ -1047,15 +962,14 @@ fn table() -> Result<String> {
                 };
                 let widest = match frame.has_owner_run() && load.name == FULL.name {
                     true => transfer
-                        .widest_owner_run()?
-                        .map_or("none".to_owned(), |owners| owners.to_string()),
+                        .widest_settled_run()?
+                        .map_or("none".to_owned(), |(owners, _)| owners.to_string()),
                     false => "-".to_owned(),
                 };
                 let fit = measured.fit;
-                let outcome = measured.outcome();
                 writeln!(
                     table,
-                    "| {}x{} | {} | {} | yes | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    "| {}x{} | {} | {} | yes | {} | {} | {} | {} | {} | {} | {} | {} |",
                     shape.n_inputs(),
                     shape.n_outputs(),
                     frame.name(),
@@ -1064,13 +978,10 @@ fn table() -> Result<String> {
                     fit.addresses,
                     fit.signatures,
                     widest,
-                    fit.over(),
                     measured.frame_len,
                     measured.spp_cpi_len,
-                    measured.buffered.bytes,
-                    measured.buffered.addresses,
-                    outcome.fits(),
-                    outcome.limit(),
+                    fits_column(measured.fits()),
+                    measured.limits().join(", "),
                 )?;
             }
         }
@@ -1083,12 +994,11 @@ fn table() -> Result<String> {
             let fit = merge_fit(width, authority)?;
             writeln!(
                 table,
-                "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | {} | - | - | - | - | {} | {} |",
+                "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | - | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
-                fit.over(),
-                unbuffered_fit(fit),
+                fits_column(fit.fits()),
                 fit.over(),
             )?;
         }
@@ -1098,25 +1008,24 @@ fn table() -> Result<String> {
             let fit = deposit_fit(width, full)?;
             writeln!(
                 table,
-                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | {} | - | - | - | - | {} | {} |",
+                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | - | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
-                fit.over(),
-                unbuffered_fit(fit),
+                fits_column(fit.fits()),
                 fit.over(),
             )?;
         }
     }
     entry_capacities(&mut table)?;
-    buffered_maxima(&mut table)?;
+    maxima(&mut table)?;
     Ok(table)
 }
 
 /// Widest owner runs at sampled leg counts, 12 to 24 input entries.
 fn entry_capacities(table: &mut String) -> Result<()> {
     writeln!(table)?;
-    writeln!(table, "Entry capacities at two outputs. Each row is the widest owner run any path clears at that leg count, rows = run + a hidden sender. A confidential leg names its own destination, a hidden sender's legs name one. over: what stops the next owner.")?;
+    writeln!(table, "Entry capacities at two outputs. Each row is the widest owner run one transaction clears at that leg count, rows = run + a hidden sender. A confidential leg names its own destination, a hidden sender's legs name one. over: what stops the next owner.")?;
     writeln!(table, "| shape | rail | load | legs | leg kind | owner run | rows | accounts | signatures | frame | SPP CPI | fits | over |")?;
     writeln!(
         table,
@@ -1161,10 +1070,6 @@ fn entry_capacities(table: &mut String) -> Result<()> {
                         .measure()?
                         .limit(),
                     };
-                    let path = match measured.fits_inline() {
-                        true => measured.fit,
-                        false => measured.buffered,
-                    };
                     writeln!(
                         table,
                         "| {}x{} | {} | {} | {legs} | {name} | {owners} | {} | {} | {} | {} | {} | {} | {over} |",
@@ -1173,11 +1078,11 @@ fn entry_capacities(table: &mut String) -> Result<()> {
                         frame.name(),
                         load.name,
                         owners + usize::from(frame.hidden_sender()),
-                        path.addresses,
-                        path.signatures,
+                        measured.fit.addresses,
+                        measured.fit.signatures,
                         measured.frame_len,
                         measured.spp_cpi_len,
-                        measured.outcome().fits(),
+                        fits_column(measured.fits()),
                     )?;
                 }
             }
@@ -1260,11 +1165,7 @@ enum Widening {
 impl Transfer {
     fn settles(&self) -> Option<Measured> {
         match self.measure() {
-            Ok(TransferFit::Measured(measured))
-                if !matches!(measured.outcome(), Outcome::No(_)) =>
-            {
-                Some(measured)
-            }
+            Ok(TransferFit::Measured(measured)) if measured.fits() => Some(measured),
             _ => None,
         }
     }
@@ -1306,11 +1207,14 @@ impl Transfer {
     }
 }
 
-fn buffered_maxima(table: &mut String) -> Result<()> {
+fn maxima(table: &mut String) -> Result<()> {
     writeln!(table)?;
-    writeln!(table, "Buffered maxima. Load max is full with data tails, every extension but the cache, two SPP input trees and four disjoint credential state trees, replies on anonymous frames. Each row widens one axis from that load to the largest value any path settles. reply: the reply length. messages: empty application messages. message bytes: one application message. writes: WriteFrame transactions the SDK sends before a buffered settle. over: what refuses one more step. Heap is not measured here.")?;
-    writeln!(table, "| shape | rail | axis | widest | frame | SPP CPI | buffered bytes | buffered accounts | signatures | writes | fits | over |")?;
-    writeln!(table, "|---|---|---|---|---|---|---|---|---|---|---|---|")?;
+    writeln!(table, "Maxima. Load max is full with data tails, every extension but the cache, two SPP input trees and four disjoint credential state trees, replies on anonymous frames. Each row widens one axis from that load to the largest value one transaction clears. reply: the reply length. messages: empty application messages. message bytes: one application message. over: what refuses one more step. Heap is not measured here.")?;
+    writeln!(
+        table,
+        "| shape | rail | axis | widest | frame | SPP CPI | bytes | accounts | signatures | over |"
+    )?;
+    writeln!(table, "|---|---|---|---|---|---|---|---|---|---|")?;
     for shape in SPP_SUPPORTED_SHAPES {
         for frame in FrameRail::ALL {
             if !frame.rail().supports(shape) {
@@ -1337,7 +1241,7 @@ fn buffered_maxima(table: &mut String) -> Result<()> {
                 )?;
                 match base.widest(axis) {
                     Widening::Refused(refusal) => {
-                        writeln!(table, "none | - | - | - | - | - | - | no | {refusal} |")?
+                        writeln!(table, "none | - | - | - | - | - | {refusal} |")?
                     }
                     Widening::Settled {
                         value,
@@ -1345,17 +1249,12 @@ fn buffered_maxima(table: &mut String) -> Result<()> {
                         over,
                     } => writeln!(
                         table,
-                        "{value} | {} | {} | {} | {} | {} | {} | {} | {over} |",
+                        "{value} | {} | {} | {} | {} | {} | {over} |",
                         measured.frame_len,
                         measured.spp_cpi_len,
-                        measured.buffered.bytes,
-                        measured.buffered.addresses,
+                        measured.fit.bytes,
+                        measured.fit.addresses,
                         measured.fit.signatures,
-                        measured
-                            .writes
-                            .filter(|_| !measured.fits_inline())
-                            .map_or("-".to_owned(), |writes| writes.to_string()),
-                        measured.outcome().fits(),
                     )?,
                 }
             }
@@ -1419,7 +1318,6 @@ mod tests {
             panic!("disjoint fixture has no catalog key");
         };
         assert_eq!(disjoint.fit.addresses, shared.fit.addresses + 3);
-        assert_eq!(disjoint.buffered.addresses, shared.buffered.addresses + 3);
 
         let excess = Transfer {
             load: Load {
@@ -1434,8 +1332,7 @@ mod tests {
             panic!("excess fixture has no catalog key");
         };
         assert!(matches!(excess.credentials, CredentialFit::Excess { .. }));
-        assert!(matches!(excess.outcome(), Outcome::No(_)));
-        assert!(!excess.fits_inline());
+        assert!(!excess.fits());
 
         let unkeyed = Transfer {
             frame: FrameRail::SignerEntry,
@@ -1451,7 +1348,7 @@ mod tests {
     /// Eleven co-owners sign the run and the in-proof owner signs inside SPP's proof, eight outputs and
     /// thirty two withdrawals to distinct destinations, under an own salted list with no curator.
     #[test]
-    fn the_widest_in_proof_spend_settles_buffered_at_the_address_ceiling() {
+    fn the_widest_in_proof_spend_is_refused_at_the_transaction_ceiling() {
         use super::*;
 
         let transfer = Transfer {
@@ -1471,19 +1368,9 @@ mod tests {
             panic!("the spend has no catalog key");
         };
         assert!(matches!(measured.credentials, CredentialFit::Supported));
-        assert!(matches!(measured.outcome(), Outcome::Buffered));
-        assert_eq!(measured.buffered.addresses, usize::from(MAX_ADDRESSES));
-        assert_eq!(measured.buffered.signatures, 11);
-        println!(
-            "inline {} B {} accounts, buffered {} B {} accounts {} signatures, frame {} B, SPP CPI {} B, writes {:?}",
-            measured.fit.bytes,
-            measured.fit.addresses,
-            measured.buffered.bytes,
-            measured.buffered.addresses,
-            measured.buffered.signatures,
-            measured.frame_len,
-            measured.spp_cpi_len,
-            measured.writes,
+        assert_eq!(
+            measured.limits(),
+            [format!("{} B", measured.fit.bytes - MAX_TRANSACTION_SIZE)]
         );
     }
 

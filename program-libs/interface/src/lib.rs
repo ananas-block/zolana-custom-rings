@@ -16,7 +16,6 @@
 //! 6. `proof/audit_stream.rs`, `proof/disclosure.rs`, `codec/output.rs`, `codec/stream.rs`. What the auditor and a recipient read of each slot.
 //! 7. `proof/key_catalog.rs`, `proof/ring_keys.rs`, `proof/verification.rs`. The key serving each frame.
 //! 8. `instructions/deposit.rs`, `instructions/deposit_audit.rs`, `instructions/merge.rs`, `instructions/withdrawals.rs`, `instructions/anonymous_exit.rs`, `instructions/cosign.rs`. The other paths.
-//! 9. `accounts/frame_buffer.rs`. A frame too large for one transaction.
 //!
 //! Beside the crate, `program-libs/policy/src/rule_table/mod.rs` holds the rule table,
 //! `program-libs/member-registry/src/lib.rs` the trees, `programs/storage/src/lib.rs` the program
@@ -50,8 +49,6 @@ pub mod domain;
 #[path = "instructions/enrollment.rs"]
 pub mod enrollment;
 pub mod error;
-#[path = "accounts/frame_buffer.rs"]
-pub mod frame_buffer;
 #[path = "instructions/instruction.rs"]
 pub mod instruction;
 #[path = "proof/key_catalog.rs"]
@@ -108,7 +105,6 @@ pub use deposit_audit::*;
 pub use disclosure::*;
 pub use enrollment::{EnrollIxData, EnrollRequest};
 pub use error::CustomRingError;
-pub use frame_buffer::*;
 pub use instruction::*;
 pub use member_registry::*;
 pub use merge::*;

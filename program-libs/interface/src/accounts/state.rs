@@ -127,9 +127,6 @@ ring_accounts! {
         |record: &CoSigner| record.scope().is_some() && record.signer != Address::default();
 }
 
-/// A variable length account, outside the table.
-pub const FRAME_BUFFER: u8 = 16;
-
 macro_rules! le_getters {
     ($($ty:ident { $($field:ident: $int:ty),* })*) => {$(
         impl $ty {

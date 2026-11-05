@@ -284,7 +284,7 @@ fn cases() -> Vec<Widest> {
     cases
 }
 
-fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransactData<'a> {
+fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> Option<RingTransactData<'a>> {
     let anonymous = case.rail == RingRail::Anonymous;
     let mut data = fixture.base(case.rail, case.inputs as u8, case.outputs as u8);
     data.entry = case.entry;
@@ -370,15 +370,18 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
             };
         }
         data = fixture.with_audit_stream(data);
-        MaximumPayload {
+        let filled = MaximumPayload {
             data: &mut data,
             policy: &config(),
             message: &pool.message,
             view_tag: &fixture.bytes[30],
         }
         .fill(case.payload);
+        if !filled {
+            return None;
+        }
     }
-    fixture.with_audit_stream(data)
+    Some(fixture.with_audit_stream(data))
 }
 
 struct Phases {
@@ -422,7 +425,7 @@ fn measure(compact: &[u8], rail: RingRail) -> Phases {
 }
 
 #[test]
-fn host_codec_allocations_cover_inline_and_buffered_maximum_frames() {
+fn host_codec_allocations_cover_frames_up_to_the_transaction_ceiling() {
     let fixture = Fixture::new();
     let pool = Pool {
         owners: vec![[0x70; 32]; spr_interface::MAX_INTERFACE_TRANSFERS],
@@ -432,7 +435,7 @@ fn host_codec_allocations_cover_inline_and_buffered_maximum_frames() {
     let committed = fixture.cases();
     let widest: Vec<(String, RingTransactData<'_>)> = cases()
         .into_iter()
-        .map(|case| (case.name(), frame(&fixture, &pool, case)))
+        .filter_map(|case| Some((case.name(), frame(&fixture, &pool, case)?)))
         .collect();
     for (name, data) in committed
         .iter()

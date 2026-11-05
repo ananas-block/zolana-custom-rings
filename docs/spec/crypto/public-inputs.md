@@ -4,7 +4,7 @@ Every ring proof has one public input. It is the fold of a statement its verifie
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
-| Transfer | `HashChain4` | `50 + 2K` | `Transfer`, `AuthorityTransfer`, `SettleBuffered` |
+| Transfer | `HashChain4` | `50 + 2K` | `Transfer`, `AuthorityTransfer` |
 | Apply records | `HashChain4` | `12 + 2W` | Storage `Update` |
 | Register key | `HashChain4` | 10 | ring `Enroll` |
 | Deposit | `HashChain4` | `45 + 2K` | `Deposit` |
@@ -95,8 +95,6 @@ The chains over the slots, each zero past `m`:
 `withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`, in settlement order. A SOL leg's owner is `solana_owner_identity(recipient)`, and an SPL leg's owner is the identity of the token account's owner. The program reads both from the live settlement accounts. The list is empty on a ring without own records and on the delegate rails.
 
 No zolana ciphertext enters the statement, an exit's scheme 3 body included. The circuit holds every spent UTXO to its rail's owner predicate and reopens SPP's `private_tx_hash` over the same inputs and outputs with no address input. `private_tx_blinding` stays private.
-
-`SettleBuffered` verifies the same statement over the frame its buffer holds.
 
 ## Apply records
 

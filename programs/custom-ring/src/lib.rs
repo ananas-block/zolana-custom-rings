@@ -44,10 +44,9 @@
 //! 3. `instructions/transfer/verify.rs`, the source of each statement element.
 //! 4. `instructions/runtime/instruction_runtime.rs`, the placement check behind every `ring_auth` signature.
 //! 5. `instructions/accounts/loader.rs`, root reads with grace and floor, and co-signer records.
-//! 6. `instructions/settlement/frame_buffer.rs`, a frame settled by digest with its self-CPI event.
-//! 7. `instructions/settlement/forward.rs` then `instructions/settlement/deposit_audit.rs`, the deposit.
-//! 8. `instructions/settlement/merge.rs`, the merge.
-//! 9. `instructions/configuration`, the setup, the delegate, the roles and the policy writes.
+//! 6. `instructions/settlement/forward.rs` then `instructions/settlement/deposit_audit.rs`, the deposit.
+//! 7. `instructions/settlement/merge.rs`, the merge.
+//! 8. `instructions/configuration`, the setup, the delegate, the roles and the policy writes.
 //!
 //! The statements live in `program-libs/interface/src/proof/statement.rs`, their circuits in
 //! `prover/circuits/transfer/transfer.go`, `prover/circuits/deposit.go` and `prover/circuits/merge.go`.
@@ -93,12 +92,5 @@ pub fn process_instruction(
         InstructionTag::SetCoSigner => process_set_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::ClearCoSigner => process_clear_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::SetDelegate => process_set_delegate_ix(program_id, accounts, ix_data),
-        InstructionTag::WriteFrame => process_write_frame_ix(program_id, accounts, ix_data),
-        InstructionTag::CloseFrameBuffer => {
-            process_close_frame_buffer_ix(program_id, accounts, ix_data)
-        }
-        InstructionTag::SettleBuffered => process_settle_buffered_ix(program_id, accounts, ix_data),
-        // No check and no state, a reader accepts it only under the digest of its `SettleBuffered`.
-        InstructionTag::FrameEvent => Ok(()),
     }
 }
