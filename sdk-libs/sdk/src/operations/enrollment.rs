@@ -179,22 +179,11 @@ impl Enroll<'_> {
             if enrolled.nullifier_pk != self.nullifier_key.pubkey()? {
                 return Err(RingError::AlreadyEnrolled { owner: self.owner });
             }
-            let ix = EnrollIxData {
-                nullifier_pk: enrolled.nullifier_pk,
-                list_tag: enrolled.list_tag,
-                viewing_u,
-                eph_u: enrolled.eph_u,
-                ciphertext: enrolled.ciphertext,
-            };
             return Ok(EnrollInstruction {
                 payer: self.payer,
                 owner: self.owner,
                 tracking_registry,
-                request: EnrollRequest {
-                    ix: &ix,
-                    proof: None,
-                }
-                .encode(),
+                request: rotation_request(&enrolled, viewing_u),
             });
         }
         // 2. RegisterKey proves the ciphertext opens to the nullifier secret and list salt under
@@ -318,6 +307,22 @@ impl EnrollInstruction {
             None => Ok(attempt),
         }
     }
+}
+
+/// The authorization's final key, tag and seal under a new viewing key, unproven.
+pub(crate) fn rotation_request(enrolled: &TrackingAuthorization, viewing_u: [u8; 32]) -> Vec<u8> {
+    let ix = EnrollIxData {
+        nullifier_pk: enrolled.nullifier_pk,
+        list_tag: enrolled.list_tag,
+        viewing_u,
+        eph_u: enrolled.eph_u,
+        ciphertext: enrolled.ciphertext,
+    };
+    EnrollRequest {
+        ix: &ix,
+        proof: None,
+    }
+    .encode()
 }
 
 impl EnrollRelay<'_> {
