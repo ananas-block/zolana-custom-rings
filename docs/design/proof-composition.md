@@ -174,7 +174,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 ### Roots come from the ring's registries
 
 - The program reads each root live at the frame's revision, from the account the ring binds, through `RootRead`.
-- The program refuses a records registry of another ring at `Initialize`, and a salted source of another ring when a frame reads it.
+- The program refuses a records registry of another ring at `Initialize`. It refuses a salted source of another ring at `Initialize` and `UpdatePolicy`, before it stores the policy, and again when a frame reads it.
 - The tests are `programs/custom-ring/tests/rules/storage_root_rules.rs` and `programs/custom-ring/tests/rules/operator_rules.rs`.
 
 ### An enrollment binds its owner and its seal
