@@ -131,7 +131,7 @@ impl MemberArgs {
                         );
                         ensure!(
                             address.list_salt != [0; 32],
-                            "a ring address with no salt has no tracking row and no private record"
+                            "a ring address with no salt has no credential and no private record"
                         );
                         (
                             address.recipient.signing_pubkey.as_ed25519()?,
@@ -243,7 +243,7 @@ impl EntryArgs {
             let list_salt = ctx
                 .ring_rpc()
                 .list_salt(ctx.ring_rpc_target()?, *owner, ctx.authority()?)?
-                .with_context(|| format!("{owner} has no tracking row and no private record"))?;
+                .with_context(|| format!("{owner} has no credential and no private record"))?;
             ctx.zolana
                 .block_on(
                     OwnerSaltCheck {

@@ -1,14 +1,19 @@
 //! `delegate move`, the permanent delegate spends a member's ring notes.
 
 use anyhow::{anyhow, ensure, Context as _, Result};
+use async_trait::async_trait;
 use custom_ring_sdk::{
     DelegateMove, DelegatePayment, DelegateSource, DelegateSourceError, ResolvedSource,
-    TrackingEnrollment, WideFrames,
+    SourceEnrollment, WideFrames,
 };
+use solana_address::Address;
 use solana_signer::Signer;
-use spr_client::{IndexerRpcConfig, Rpc};
+use spr_client::{AsyncRpc, IndexerRpcConfig, Rpc};
+use spr_keypair::{NullifierKey, ShieldedAddress, X25519Keypair};
 use spr_transaction::SOL_MINT;
-use zolana_ring_client::{RingRecovery, SourceMember};
+use zolana_ring_client::{
+    CredentialError, CredentialLookup, CredentialResolver, RingRecovery, SourceMember,
+};
 
 use crate::{
     assets,
@@ -39,20 +44,21 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
     // The auditor key decrypts recovery material, only the delegate signs.
     let auditor = ring_auditor_key(ctx, &args.auditor_key)?;
     let chain = ctx.chain();
-    let enrollment = TrackingEnrollment {
+    let enrollment = CredentialEnrollment {
+        ring: ctx.ring.program_id(),
+        photon: chain.indexer(),
         rpc: chain.rpc(),
-        tracking_registry: config.account().tracking,
         auditor: &auditor,
     };
     let resolved = ctx
         .block(async { anyhow::Ok(ResolvedSource::resolve(source, &enrollment).await) })?
-        .map_err(|error| match error {
-            DelegateSourceError::Unenrolled => {
+        .map_err(|error| match error.downcast_ref::<DelegateSourceError>() {
+            Some(DelegateSourceError::Unenrolled) => {
                 anyhow!(
                     "member {source} has no enrolled key, it runs `zolana-ring key register` first"
                 )
             }
-            error => anyhow::Error::from(error).context(format!("delegate source {source}")),
+            _ => error.context(format!("delegate source {source}")),
         })?;
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
     let recovery = RingRecovery::new(ctx.ring.program_id(), &auditor)
@@ -113,4 +119,31 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
     line("mint", mint);
     line("move", moved);
     Ok(())
+}
+
+/// The source's credential, opened with the auditor key.
+struct CredentialEnrollment<'a, P, R> {
+    ring: Address,
+    photon: &'a P,
+    rpc: &'a R,
+    auditor: &'a X25519Keypair,
+}
+
+#[async_trait]
+impl<P: AsyncRpc, R: AsyncRpc> SourceEnrollment for CredentialEnrollment<'_, P, R> {
+    type Error = anyhow::Error;
+
+    /// An unknown lookup refuses, only an absence proof reads as unenrolled.
+    async fn escrowed_key(&self, source: &ShieldedAddress) -> Result<Option<NullifierKey>> {
+        let lookup = CredentialResolver::new(self.ring, source.solana_address()?)
+            .resolve(self.photon, self.rpc)
+            .await?;
+        Ok(match lookup {
+            CredentialLookup::Present(present) => Some(present.nullifier_key(self.auditor)?),
+            CredentialLookup::Absent(_) => None,
+            CredentialLookup::Unknown(reason) => {
+                return Err(CredentialError::Unknown(reason).into())
+            }
+        })
+    }
 }

@@ -1440,6 +1440,7 @@ name = "custom-ring-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytemuck",
  "clap",
  "console",
