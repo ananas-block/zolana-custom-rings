@@ -4,7 +4,7 @@ use serde::Deserialize;
 use solana_address::Address;
 use spr_transaction::{Mint, WalletUtxo};
 
-use super::{staged_tree_search, Funding, PAIR_POOL_TREES};
+use super::{Funding, RankedTrees, Reach, TreeSearch, Trial, PAIR_POOL_TREES};
 use crate::tests::support::{keypair, ring_utxo, wallet};
 
 fn notes(held: impl IntoIterator<Item = (u16, u64)>) -> Vec<WalletUtxo> {
@@ -31,8 +31,12 @@ fn funding(utxos: &[WalletUtxo], amount: u64, max_inputs: usize) -> Funding<'_> 
     }
 }
 
-fn picked(utxos: &[WalletUtxo]) -> Vec<(u16, u64)> {
-    let mut picked: Vec<_> = utxos
+fn first_choice(utxos: &[WalletUtxo], amount: u64, max_inputs: usize) -> Vec<(u16, u64)> {
+    let candidates = funding(utxos, amount, max_inputs).candidates(|_| true, |_| true);
+    let mut picked: Vec<_> = candidates
+        .first()
+        .map(|candidate| &candidate.utxos[..])
+        .unwrap_or_default()
         .iter()
         .map(|utxo| (utxo.tree_id, utxo.utxo.amount))
         .collect();
@@ -40,52 +44,101 @@ fn picked(utxos: &[WalletUtxo]) -> Vec<(u16, u64)> {
     picked
 }
 
+/// Every set the search funds, `funds` deciding feasibility and none pruned by reach.
+fn tried_sets(trees: &[u16], pool: usize, funds: impl Fn(&[u16]) -> bool) -> Vec<Vec<u16>> {
+    let tried = RefCell::new(Vec::new());
+    let _: Vec<()> = TreeSearch {
+        trees: &RankedTrees {
+            trees: trees.to_vec(),
+            pool,
+        },
+        reaches: |_: &[u16]| true,
+        fund: |set: &[u16]| {
+            tried.borrow_mut().push(set.to_vec());
+            funds(set).then_some(Trial::Feasible(()))
+        },
+    }
+    .run();
+    tried.into_inner()
+}
+
 #[test]
 fn one_tree_funding_tries_no_pair() {
-    let tried = RefCell::new(Vec::new());
-    let funded = staged_tree_search(&[1, 2, 3], &[1, 2, 3], |set| {
-        tried.borrow_mut().push(set.to_vec());
-        (set == [2]).then_some(())
-    });
-    assert_eq!(funded.len(), 1);
-    assert_eq!(tried.into_inner(), [vec![1], vec![2], vec![3]]);
+    let tried = tried_sets(&[1, 2, 3], 3, |set| set == [2]);
+    assert_eq!(tried, [vec![1], vec![2], vec![3]]);
+}
+
+#[test]
+fn a_many_tree_wallet_tries_every_pair_only_when_the_pool_fails() {
+    let trees: Vec<u16> = (0..20).collect();
+    let pool_pairs = PAIR_POOL_TREES * (PAIR_POOL_TREES - 1) / 2;
+    let in_pool = tried_sets(&trees, PAIR_POOL_TREES, |set| set == [0, 1]);
+    assert_eq!(in_pool.len(), trees.len() + pool_pairs);
+    let complete = tried_sets(&trees, PAIR_POOL_TREES, |_| false);
+    assert_eq!(
+        complete.len(),
+        trees.len() + trees.len() * (trees.len() - 1) / 2
+    );
+}
+
+#[test]
+fn a_pair_no_reach_covers_runs_no_selection() {
+    let utxos = notes((0..20).map(|tree| (tree, 1)));
+    let reach = Reach::new(&utxos, 5);
+    let selections = RefCell::new(0usize);
+    let found: Vec<()> = TreeSearch {
+        trees: &RankedTrees::new(std::slice::from_ref(&reach)),
+        reaches: |set: &[u16]| reach.of(set) >= 3,
+        fund: |_: &[u16]| {
+            *selections.borrow_mut() += 1;
+            None
+        },
+    }
+    .run();
+    assert!(found.is_empty());
+    assert_eq!(selections.into_inner(), 0);
+}
+
+#[test]
+fn an_infeasible_tree_moves_the_search_on_to_a_pair() {
+    let utxos = notes([(0, 101), (1, 50), (2, 50)]);
+    let exact = |candidate: &super::Candidate| !candidate.change;
+    let candidates = funding(&utxos, 100, 4).candidates(|_| true, exact);
+    let trees: Vec<u16> = candidates[0]
+        .utxos
+        .iter()
+        .map(|utxo| utxo.tree_id)
+        .collect();
+    assert_eq!(trees.len(), 2);
+    assert!(!trees.contains(&0));
 }
 
 #[test]
 fn pays_ten_from_six_on_each_of_two_trees() {
     let utxos = notes([(0, 6), (1, 6), (2, 1)]);
-    let candidates = funding(&utxos, 10, 5).candidates(|_| true);
-    assert_eq!(picked(&candidates[0].utxos), [(0, 6), (1, 6)]);
+    assert_eq!(first_choice(&utxos, 10, 5), [(0, 6), (1, 6)]);
 }
 
 #[test]
 fn a_tree_of_another_asset_stays_out_of_the_search() {
     let mut utxos = notes([(0, 6), (1, 6)]);
     utxos[1].utxo.asset = Mint::new(Address::new_from_array([9; 32]), 2);
-    assert!(funding(&utxos, 10, 5).candidates(|_| true).is_empty());
+    assert!(funding(&utxos, 10, 5)
+        .candidates(|_| true, |_| true)
+        .is_empty());
 }
 
 #[test]
-fn a_many_tree_wallet_pairs_only_within_the_pool() {
-    let trees = 20;
-    let tried = RefCell::new(0usize);
-    let ids: Vec<u16> = (0..trees).collect();
-    let funded = staged_tree_search(&ids, &ids[..PAIR_POOL_TREES], |_| {
-        *tried.borrow_mut() += 1;
-        None::<()>
-    });
-    assert!(funded.is_empty());
-    let pairs = PAIR_POOL_TREES * (PAIR_POOL_TREES - 1) / 2;
-    assert_eq!(tried.into_inner(), usize::from(trees) + pairs);
-
-    // Equal reach ranks by tree id, every pair sits within the first pool trees.
-    let utxos = notes(ids.iter().map(|tree| (*tree, 1)));
-    let candidates = funding(&utxos, 2, 5).candidates(|_| true);
-    assert_eq!(candidates.len(), pairs);
-    assert!(candidates
-        .iter()
-        .flat_map(|candidate| &candidate.utxos)
-        .all(|utxo| usize::from(utxo.tree_id) < PAIR_POOL_TREES));
+fn pair_selection_respects_the_shared_input_budget() {
+    let utxos = notes(
+        (0..8)
+            .flat_map(|tree| [(tree, 40), (tree, 40)])
+            .chain([(8, 60)]),
+    );
+    let picked = first_choice(&utxos, 100, 2);
+    assert_eq!(picked.len(), 2);
+    assert_eq!(picked.iter().map(|(_, amount)| amount).sum::<u64>(), 100);
+    assert!(picked.iter().any(|(tree, _)| *tree == 8));
 }
 
 #[derive(Deserialize)]
@@ -118,32 +171,16 @@ fn matches_the_shared_tree_selection_vector() {
     .unwrap();
     for case in vectors.cases {
         let utxos = notes(case.notes.iter().map(|note| (note.tree, note.amount)));
-        let candidates = funding(&utxos, case.amount, case.max_inputs).candidates(|_| true);
         let expected: Vec<_> = case
             .selected
             .iter()
             .map(|note| (note.tree, note.amount))
             .collect();
-        assert_eq!(picked(&candidates[0].utxos), expected, "{}", case.name);
+        assert_eq!(
+            first_choice(&utxos, case.amount, case.max_inputs),
+            expected,
+            "{}",
+            case.name
+        );
     }
-}
-
-#[test]
-fn pair_selection_respects_the_shared_input_budget() {
-    let utxos = notes(
-        (0..8)
-            .flat_map(|tree| [(tree, 40), (tree, 40)])
-            .chain([(8, 60)]),
-    );
-    let candidates = funding(&utxos, 100, 2).candidates(|_| true);
-    assert_eq!(candidates[0].utxos.len(), 2);
-    assert_eq!(
-        candidates[0]
-            .utxos
-            .iter()
-            .map(|note| note.utxo.amount)
-            .sum::<u64>(),
-        100
-    );
-    assert!(candidates[0].utxos.iter().any(|note| note.tree_id == 8));
 }

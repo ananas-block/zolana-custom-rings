@@ -119,11 +119,8 @@ impl Reach {
     /// Whether any tree or pair reaches `amount`.
     pub fn reaches_anywhere(&self, amount: u64) -> bool {
         let trees: Vec<u16> = self.prefixes.keys().copied().collect();
-        trees
-            .iter()
-            .map(|tree| vec![*tree])
-            .chain(pairs(&trees).map(Vec::from))
-            .any(|set| self.of(&set) >= u128::from(amount))
+        let reaches = |set: &[u16]| self.of(set) >= u128::from(amount);
+        trees.iter().any(|tree| reaches(&[*tree])) || pairs(&trees).any(|pair| reaches(&pair))
     }
 
     /// The trees holding the mint, the greatest reach first, an equal reach by lower tree id.
@@ -142,19 +139,14 @@ pub(super) struct RankedTrees {
 
 impl RankedTrees {
     pub fn new(reaches: &[Reach]) -> Self {
-        let mut trees: Vec<u16> = Vec::new();
-        let mut add = |tree: u16| {
-            if !trees.contains(&tree) {
-                trees.push(tree);
-            }
-        };
         let ranked: Vec<Vec<u16>> = reaches.iter().map(Reach::ranked).collect();
-        ranked
-            .iter()
-            .flat_map(|trees| trees.iter().take(PAIR_POOL_TREES))
-            .for_each(|tree| add(*tree));
-        let pool = trees.len();
-        ranked.iter().flatten().for_each(|tree| add(*tree));
+        let preferred = || {
+            ranked
+                .iter()
+                .flat_map(|trees| trees.iter().take(PAIR_POOL_TREES))
+        };
+        let pool = distinct(preferred()).len();
+        let trees = distinct(preferred().chain(ranked.iter().flatten()));
         Self { trees, pool }
     }
 }
@@ -233,6 +225,16 @@ impl<R: Fn(&[u16]) -> bool, F> TreeSearch<'_, R, F> {
         }
         feasible
     }
+}
+
+fn distinct<'t>(trees: impl IntoIterator<Item = &'t u16>) -> Vec<u16> {
+    let mut distinct = Vec::new();
+    for tree in trees {
+        if !distinct.contains(tree) {
+            distinct.push(*tree);
+        }
+    }
+    distinct
 }
 
 /// Every pair of `trees`, ascending within a pair.

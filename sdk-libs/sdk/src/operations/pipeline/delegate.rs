@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BTreeSet};
+use std::collections::BTreeSet;
 
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;

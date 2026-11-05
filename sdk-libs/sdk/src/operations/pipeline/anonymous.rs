@@ -299,8 +299,9 @@ impl<'a> AnonymousMove<'a> {
             amount,
             max_inputs,
         };
+        let this = &self;
         let fits =
-            |key: AnonymousKey| move |candidate: &Candidate| self.shape(key, candidate).is_some();
+            |key: AnonymousKey| move |candidate: &Candidate| this.shape(key, candidate).is_some();
         let ring_only = funding.candidates(
             |utxo| utxo.utxo.owner == owner && utxo.utxo.ring_program_id == ring,
             fits(AnonymousKey::Commitment),

@@ -4245,3 +4245,137 @@ async fn delegate_selection_shares_the_input_budget_across_assets() {
     assert_eq!(shape.n_inputs(), 2);
     assert_eq!(tree, 2);
 }
+
+/// The real trees a proof spends from, ascending.
+fn spent_trees(frame: &Frame) -> Vec<u16> {
+    let mut trees: Vec<u16> = frame
+        .proof_inputs
+        .input_utxos
+        .iter()
+        .filter(|input| !input.is_dummy())
+        .map(|input| input.tree_id)
+        .collect();
+    trees.sort_unstable();
+    trees
+}
+
+/// One member's notes, `(tree, amount)` each, moved by the delegate as `amounts` payments.
+async fn delegate_spent_trees(
+    held: &[(u16, u64)],
+    amounts: &[u64],
+) -> (spr_client::Shape, Vec<u16>) {
+    use crate::tests::support::{keypair, wallet};
+    let member = keypair(1);
+    let recipient = keypair(2);
+    let delegate = Address::new_from_array([0x44; 32]);
+    let chain = held.iter().map(|(tree, _)| *tree).fold(
+        move_chain([&member, &recipient], delegate),
+        Chain::with_tree,
+    );
+    let client = chain.client();
+    let utxos: Vec<WalletUtxo> = held
+        .iter()
+        .zip(0..)
+        .map(|((tree, amount), leaf)| {
+            wallet(
+                ring_utxo(&member, Mint::SOL, *amount, leaf).utxo,
+                &member.nullifier_key,
+                *tree,
+                leaf,
+            )
+        })
+        .collect();
+    let assembled = DelegateMove {
+        ring: ring(),
+        delegate,
+        payer: delegate,
+        sources: vec![crate::DelegateSource {
+            address: member.shielded_address().unwrap(),
+            nullifier_key: &member.nullifier_key,
+            utxos: &utxos,
+        }],
+        payments: amounts
+            .iter()
+            .map(|amount| DelegatePayment {
+                recipient: recipient.shielded_address().unwrap(),
+                mint: Mint::SOL.asset,
+                amount: *amount,
+            })
+            .collect(),
+        assets: &AssetRegistry::default(),
+        tx_viewing_key: spr_keypair::ViewingKey::new(),
+    }
+    .select(&client)
+    .await
+    .unwrap()
+    .assemble(&client)
+    .await
+    .unwrap();
+    (
+        assembled.frame.proof_inputs.check_shape().unwrap(),
+        spent_trees(&assembled.frame),
+    )
+}
+
+/// Eight trees outreach trees 9 and 10 alone, only the pair past them funds the move.
+#[tokio::test]
+async fn a_delegate_move_funds_from_a_pair_past_the_preferred_trees() {
+    let small = (1..=8).flat_map(|tree| [(tree, 20), (tree, 20), (tree, 20), (tree, 5)]);
+    let held: Vec<(u16, u64)> = small.chain([(9, 60), (10, 60)]).collect();
+    let (_, trees) = delegate_spent_trees(&held, &[120]).await;
+    assert_eq!(trees, [9, 10]);
+}
+
+/// Tree 1 funds four payments but its change needs a fifth output, the exact pair fits.
+#[tokio::test]
+async fn a_delegate_move_skips_a_tree_whose_change_no_shape_holds() {
+    let (shape, trees) =
+        delegate_spent_trees(&[(1, 101), (2, 50), (3, 50)], &[25, 25, 25, 25]).await;
+    assert_eq!(trees, [2, 3]);
+    assert_eq!(shape.n_outputs(), 4);
+}
+
+/// The sender change slot narrows two payments to the 4-output keys before selection.
+#[tokio::test]
+async fn an_anonymous_move_counts_the_sender_change_before_selection() {
+    use crate::tests::support::{keypair, payer, wallet};
+    let sender = keypair(1);
+    let paid = ring_address(&keypair(2));
+    let client = enrolled(&[&sender, &keypair(2)])
+        .with_tree(1)
+        .with_tree(2)
+        .client();
+    let utxos: Vec<WalletUtxo> = std::iter::repeat_n((1, 1), 25)
+        .chain([(2, 5)])
+        .zip(0..)
+        .map(|((tree, amount), leaf)| {
+            wallet(
+                ring_utxo(&sender, Mint::SOL, amount, leaf).utxo,
+                &sender.nullifier_key,
+                tree,
+                leaf,
+            )
+        })
+        .collect();
+    let assembled = MoveSender {
+        sender: &sender,
+        payer: payer(),
+    }
+    .anonymous_move(
+        &utxos,
+        vec![
+            RingPayment::new(paid.clone(), 12),
+            RingPayment::new(paid, 13),
+        ],
+    )
+    .select(&client)
+    .await
+    .unwrap()
+    .assemble(&client)
+    .await
+    .unwrap();
+    let trees = spent_trees(&assembled.frame);
+    assert_eq!(trees.len(), 21);
+    assert_eq!(trees.first(), Some(&1));
+    assert_eq!(trees.last(), Some(&2));
+}
