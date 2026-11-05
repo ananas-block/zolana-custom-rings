@@ -3,7 +3,6 @@
   "Unauthorized": 9001,
   "RevisionChanged": 9002,
   "RootExpired": 9003,
-  "HistoryFull": 9004,
   "InvalidInstructionData": 9005,
   "BatchTooLarge": 9006,
   "InvalidWrite": 9007,

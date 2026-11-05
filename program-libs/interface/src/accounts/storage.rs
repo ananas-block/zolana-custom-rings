@@ -294,8 +294,6 @@ pub enum StorageError {
     RevisionChanged = 9002,
     #[error("root expired or absent")]
     RootExpired = 9003,
-    #[error("root history is full")]
-    HistoryFull = 9004,
     #[error("instruction data is invalid")]
     InvalidInstructionData = 9005,
     #[error("update carries more writes than one apply proof takes")]

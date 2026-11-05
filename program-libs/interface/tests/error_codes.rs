@@ -150,7 +150,6 @@ fn storage_error_codes_are_stable() {
         (Error::Unauthorized, 9001),
         (Error::RevisionChanged, 9002),
         (Error::RootExpired, 9003),
-        (Error::HistoryFull, 9004),
         (Error::InvalidInstructionData, 9005),
         (Error::BatchTooLarge, 9006),
         (Error::InvalidWrite, 9007),
