@@ -11,11 +11,7 @@
  */
 import type { Address, Instruction } from "@solana/kit";
 
-import type {
-  BlockhashProvider,
-  ChainReader,
-  Prover,
-} from "@heliuslabs/zolana/client";
+import type { BlockhashProvider, ChainReader, Prover } from "@heliuslabs/zolana/client";
 import {
   SYSTEM_PROGRAM,
   Writer,
@@ -33,12 +29,7 @@ import {
   ZERO_NULLIFIER_PK,
   type SignerAccount,
 } from "@heliuslabs/zolana/internal";
-import {
-  type Bytes32,
-  type Bytes33,
-  type Bytes64,
-  type RequestContext,
-} from "@heliuslabs/zolana/interface";
+import { type Bytes32, type Bytes33, type RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ShieldedKeypairLike } from "@heliuslabs/zolana/keypair";
 import type { Wallet } from "@heliuslabs/zolana/transaction";
 

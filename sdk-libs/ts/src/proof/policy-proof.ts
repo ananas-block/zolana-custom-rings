@@ -600,7 +600,9 @@ async function readOwnerCredentials(
         : 0n,
       rows: input.rows,
       outputs: [
-        ...ringOutputs.map((output) => output?.ownerAddress?.signingPublicKey.ownerProofInputHash()),
+        ...ringOutputs.map((output) =>
+          output?.ownerAddress?.signingPublicKey.ownerProofInputHash(),
+        ),
         ...Array.from({ length: circuit.outputs - ringOutputs.length }, () => undefined),
       ],
     },
@@ -639,7 +641,9 @@ async function saltedAbsenceFloor(
     ...(view.saltedCurated && pinned.curator !== undefined ? [pinned.curator] : []),
   ];
   const floors = await Promise.all(
-    sources.map(async (source) => (await fetchStorageRegistry(client, source, context)).absenceFloor),
+    sources.map(
+      async (source) => (await fetchStorageRegistry(client, source, context)).absenceFloor,
+    ),
   );
   return floors.reduce((max, floor) => (floor > max ? floor : max), 0n);
 }

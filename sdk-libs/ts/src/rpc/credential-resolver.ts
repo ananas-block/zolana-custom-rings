@@ -164,7 +164,10 @@ export async function resolveCredential(
   );
   if (lookup?.kind !== "present") return lookup as CredentialLookup;
   // A credential naming another key or tag is refused before a caller proves under it.
-  if (query.nullifierPk !== undefined && !equalBytes(query.nullifierPk, lookup.credential.nullifierPk))
+  if (
+    query.nullifierPk !== undefined &&
+    !equalBytes(query.nullifierPk, lookup.credential.nullifierPk)
+  )
     throw new RingError("RING_CREDENTIAL_NULLIFIER_KEY_MISMATCH");
   if (query.listTag !== undefined && !equalBytes(query.listTag, lookup.credential.listTag))
     throw new RingError("RING_CREDENTIAL_LIST_TAG_MISMATCH");
@@ -362,7 +365,10 @@ async function present(
 ): Promise<ReadonlyMap<number, CredentialLookup>> {
   // 1. Requiring the newest enrollment slot keeps a lagging indexer from answering without a leaf.
   const tree = treeAddress(treeId);
-  const slot = leaves.reduce((max, leaf) => (leaf.enrollment.slot > max ? leaf.enrollment.slot : max), 0n);
+  const slot = leaves.reduce(
+    (max, leaf) => (leaf.enrollment.slot > max ? leaf.enrollment.slot : max),
+    0n,
+  );
   const { proofs } = await client.getMerkleProofs(
     tree,
     leaves.map((leaf) => leaf.leaf),
@@ -375,10 +381,13 @@ async function present(
   // 2. Every proof of the tree folds to one root, the statement holds one root per tree.
   const split =
     first !== undefined &&
-    proofs.some((proof) => proof.rootIndex !== first.rootIndex || !equalBytes(proof.root, first.root));
+    proofs.some(
+      (proof) => proof.rootIndex !== first.rootIndex || !equalBytes(proof.root, first.root),
+    );
   const lookups = new Map<number, CredentialLookup>();
   if (first === undefined || split) {
-    for (const leaf of leaves) lookups.set(leaf.at, unknown(split ? "splitRoot" : "stateProofMissing"));
+    for (const leaf of leaves)
+      lookups.set(leaf.at, unknown(split ? "splitRoot" : "stateProofMissing"));
     return lookups;
   }
   // 3. The root must be in the history SPP accepts roots from. A paused or full tree keeps its

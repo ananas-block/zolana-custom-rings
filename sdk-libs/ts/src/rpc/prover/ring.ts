@@ -28,10 +28,7 @@ import {
   type RecordPool,
   type RecordWriteProofInput,
 } from "../../protocol/membership/member-registry.js";
-import type {
-  CredentialRoots,
-  CredentialStateRoot,
-} from "../../protocol/codec/credential-read.js";
+import type { CredentialRoots, CredentialStateRoot } from "../../protocol/codec/credential-read.js";
 import {
   applyKeyWidth,
   ringCircuitType,
@@ -371,7 +368,12 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ...applyHeadJson(request),
         count: request.writes.length,
         writes: paddedWrites(request.writes, capacity, writeJson),
-        credentialWrites: integer(request.credentialWrites, "credentialWrites", 0, (1 << capacity) - 1),
+        credentialWrites: integer(
+          request.credentialWrites,
+          "credentialWrites",
+          0,
+          (1 << capacity) - 1,
+        ),
         privateRingId: field(request.privateRingId, "privateRingId"),
         credentialOwner: field(roots.ownerHash, "credentialOwner"),
         addressRoot: field(roots.addressRoot, "addressRoot"),

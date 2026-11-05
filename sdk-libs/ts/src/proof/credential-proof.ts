@@ -228,7 +228,12 @@ export async function credentialRootsHeld(
 /** The leaf columns the circuit rehashes into the credential's UTXO hash. */
 export function credentialLeaf(
   credential: AuditCredential,
-  opening: Readonly<{ blinding: Bytes32; treeSlot: number; leafIndex: bigint; path: readonly Bytes32[] }>,
+  opening: Readonly<{
+    blinding: Bytes32;
+    treeSlot: number;
+    leafIndex: bigint;
+    path: readonly Bytes32[];
+  }>,
 ): CredentialLeafProofInput {
   return Object.freeze({
     member: credential.member,
@@ -300,7 +305,9 @@ function absentOpening(
 function newestAddressRoot(data: Uint8Array): AddressRoot {
   const root = rootSequence(data, decodeTreeHeadRoots(data).nullifierRootIndex);
   if (root === undefined)
-    throw new RingError("RING_CREDENTIAL_INVALID", { details: { reason: "addressRootNotAccepted" } });
+    throw new RingError("RING_CREDENTIAL_INVALID", {
+      details: { reason: "addressRootNotAccepted" },
+    });
   return root;
 }
 

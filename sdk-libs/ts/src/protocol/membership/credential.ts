@@ -98,7 +98,9 @@ export function credentialElements(
     checkedBytes<Bytes32>(credential.member, 32, "member"),
     checkedBytes<Bytes32>(credential.nullifierPk, 32, "nullifier pk"),
     checkedBytes<Bytes32>(credential.listTag, 32, "list tag"),
-    ...(packBytesBe(checkedBytes<Bytes33>(credential.auditorPubkey, 33, "auditor pubkey")) as Bytes32[]),
+    ...(packBytesBe(
+      checkedBytes<Bytes33>(credential.auditorPubkey, 33, "auditor pubkey"),
+    ) as Bytes32[]),
     ...(packBytesBe(taggedX25519(credential.ephU)) as Bytes32[]),
     hashBytes(checkedBytes<Bytes64>(credential.ciphertext, 64, "ciphertext")) as Bytes32,
   ];

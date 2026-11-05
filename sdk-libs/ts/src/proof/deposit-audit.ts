@@ -227,7 +227,8 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     count < 1 ||
     count > RING_DEPOSIT_AUDIT_SLOTS ||
     count > input.credentials.capacity ||
-    ringCredentialCapacity({ family: "deposit", capacity: input.credentials.capacity }) === undefined ||
+    ringCredentialCapacity({ family: "deposit", capacity: input.credentials.capacity }) ===
+      undefined ||
     input.ciphertexts.length !== count ||
     input.assets.length !== count ||
     input.ciphertexts.some((ciphertext) => ciphertext.length !== RING_DEPOSIT_OPENING_LENGTH)
