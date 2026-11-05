@@ -13,7 +13,7 @@ Every published slot of a transfer whose proof verifies opens for the auditor fr
 
 ## Discovery
 
-Each published slot carries an owner tag. A non-exit slot's tag is an unproved hint: no proof constrains it, and SPP's external data hash binds only its bytes. A frame carries the low 8 bytes of a non-exit tag, and the program restores the 24 leading zero bytes before SPP reads it.
+Each published slot carries an owner tag. A non-exit slot's tag is an unproved hint. No proof constrains it, and SPP's external data hash binds only its bytes. A frame carries the low 8 bytes of a non-exit tag, and the program restores the 24 leading zero bytes before SPP reads it.
 
 | Slot | Tag |
 |---|---|
@@ -37,7 +37,7 @@ The auditor message is SPP's last message, under the auditor's `u` as its view t
 
 `tx_viewing_u` is SPP's `tx_viewing_pk` without its tag. Each record ciphertext has 105 bytes. The tails are present exactly when `has_data` is set, 64 bytes each.
 
-`n` is the published input count, the frame's nullifier count. It is never the key capacity and never a private live count. The key's input class and entry flag, its output capacity `N`, `m`, `n`, `has_data`, the exit and bodiless bitmaps, each body length under `has_data` and `reply_len` fix every length. The program refuses a frame of any other length.
+`n` is the published input count, the frame's nullifier count. It is never the key capacity and never a private live count. The entry flag, `n`, `m` and `has_data` fix the auditor message's length. The frame's flags, shape and counts fix every other length, and the program refuses trailing bytes.
 
 ## Stream regions
 
@@ -59,12 +59,12 @@ tx_viewing_sk || u8(R) || u64be(default_input_bits) || entry_input * n  entry ke
 entry_input = owner_key || fe32(nullifier_pk) || u64be(amount) || mint || fe32(blinding) || fe32(data_hash) || fe32(ring_data_hash)
 ```
 
-`R` counts the spent notes among the published inputs. Dummies come last in SPP's order, so a nullifier at position `k < R` is a spend and one at `k >= R` is padding. Bit `k` of `default_input_bits` is set exactly when input `k` is a default-ring note. `entry_input_k` opens that note in 200 bytes and is all zero on every other input. `mint` is the 32-byte mint address, and the proof holds the input's asset to it.
+`R` counts the spent notes among the published inputs. Spent notes come first in SPP's order. A nullifier at position `k < R` is a spend, and one at `k >= R` belongs to a dummy or an address. Bit `k` of `default_input_bits` is set exactly when input `k` is a default-ring note. `entry_input_k` opens that note in 200 bytes and is all zero on every other input. `mint` is the 32-byte mint address, and the proof holds the input's asset to it.
 
 ## Spent notes
 
 - A key without entry capacity refuses a default-ring input, since no evidence would open it.
-- The auditor recomputes SPP's nullifier of a note from the opening it already read and the owner's secret from enrollment, or zero under the zero nullifier key, then matches SPP's published list. A match links the spend.
+- The auditor recomputes SPP's nullifier of a note from the opening it already read and the owner's secret from enrollment. Under the zero nullifier key the secret is zero. The auditor then matches SPP's published list. A match links the spend.
 - No constraint binds a nullifier to an opening. A real nullifier with no match stays unresolved and never reads as padding.
 - An entry input discloses its owner key, nullifier key, amount, mint, blinding and both data hashes, and no nullifier secret. Each input carries its own owner and key, so one frame spends default-ring notes of several owners.
 
@@ -104,7 +104,7 @@ A frame opts in with `REPLY_METADATA`, on an anonymous frame only. The reply fol
 viewing_u || owner_key || nullifier_pk || wincode(Data), zero padded to reply_len
 ```
 
-`reply_len` is one length per frame, at least 97. Every body-bearing slot carries one, and a slot with no reply or a dummy carries random bytes of that length. SPP's external data hash binds the bytes, and no proof reads their meaning. A reply is an unauthenticated claim about the sender. A reader never turns it into a verified sender identity.
+`reply_len` is one length per frame, at least 97. Every slot with a recipient body carries one, and a slot with no reply or a dummy carries random bytes of that length. SPP's external data hash binds the bytes, and no proof reads their meaning. A reply is an unauthenticated claim about the sender. A reader never turns it into a verified sender identity.
 
 ## Sender bundle
 
@@ -114,14 +114,14 @@ Scheme 9 is the first SPP message of an anonymous frame, under `CRING/snd` and t
 mint0 || u64be(amount0) || u64be(amount1) || output_seed || recipient_u * m
 ```
 
-The bundle has `80 + 32 m` bytes. `mint0` and `amount0` are slot 0's when slot 0 is change, else zero. `amount1` is slot 1's when slot 1 is change, else zero, and that slot's asset is native SOL. `recipient_u_i` is the viewing key the sender sealed slot `i`'s body to, and zero on change, exit and dummy. The reader rebuilds change at slots 0 and 1 from these cells, its own address and `TXOB(n0, output_seed, i)`, and accepts a slot only when its commitment rebuilds.
+The bundle has `80 + 32 m` bytes. `mint0` and `amount0` are slot 0's when slot 0 is change, else zero. `amount1` is slot 1's when slot 1 is change, else zero, and that slot's asset is native SOL. `recipient_u_i` is the viewing key the sender sealed slot `i`'s body to, and zero on change, exit and dummy. The reader rebuilds change at slots 0 and 1 from these cells, its own address and `TXOB(n0, output_seed, i)`. It accepts a slot only when its commitment rebuilds.
 
 ## Opening a transfer
 
 1. The auditor computes `X25519(auditor_sk, tx_viewing_u)`, the salted [stream secret](envelope.md#shared-secret) and the stream, then recovers `tx_viewing_sk`, `R` and any entry evidence from the envelope.
 2. It derives `seed_out = TXOS(n0, CRBS(tx_viewing_sk, salt))` and each blinding `TXOB(n0, seed_out, i)`. No frame field carries `seed_out`.
 3. It decrypts the record of slot `i` at its counter, and its tail under `has_data`.
-4. It rebuilds slot `i`'s commitment from the record, the tail, the blinding, the ring id on kind `1` or zero on kind `2`, and the frame's tree id, and accepts it only when it equals the published hash at `i`. A kind `0` slot rebuilds as SPP's dummy hash under its blinding. A record moved to another slot rebuilds nothing.
+4. It rebuilds slot `i`'s commitment from the record, the tail, the blinding and the frame's tree id. The ring id enters on kind `1`, and zero on kind `2`. It accepts the slot only when that commitment equals the published hash at `i`. A kind `0` slot rebuilds as SPP's dummy hash under its blinding. A record moved to another slot rebuilds nothing.
 5. It links each nullifier below `R` that is not a default-ring input, see [spent notes](#spent-notes).
 
 ## Layout
