@@ -336,7 +336,7 @@ pub enum StorageError {
     InvalidOwnerGrant = 9031,
     #[error("reader key names no scheme")]
     InvalidReaderKey = 9032,
-    #[error("auditor key is untagged, zero or not canonical")]
+    #[error("auditor key is untagged, not canonical or of low order")]
     InvalidAuditorKey = 9033,
 }
 

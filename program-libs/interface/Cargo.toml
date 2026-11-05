@@ -41,3 +41,4 @@ spr-keypair = { workspace = true }
 spr-instruction = { workspace = true }
 spr-transaction = { workspace = true }
 hex = { workspace = true }
+x25519-dalek = { workspace = true }

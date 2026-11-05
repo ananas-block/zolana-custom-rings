@@ -10,7 +10,7 @@
 //!
 //! 1. `docs/spec.md`, `docs/design/proof-composition.md`. What a ring enforces, and the side enforcing each guarantee.
 //! 2. `accounts/state.rs`. The ring account, its pinned table, and the registries a frame may read.
-//! 3. `accounts/member_registry.rs`, `accounts/storage.rs`, `accounts/tracking.rs`. The policy and tracking trees, the root history, zero grace and the floor.
+//! 3. `accounts/member_registry.rs`, `accounts/storage.rs`, `accounts/tracking.rs`, `proof/auditor_key.rs`. The policy and tracking trees, the root history, zero grace, the floor and the auditor key check.
 //! 4. `instructions/transact.rs`. The frame, each section named against SPP's `TransactIxData`.
 //! 5. `proof/statement.rs`, `proof/domain.rs`. The statement in element order, with its Go twins.
 //! 6. `proof/audit_stream.rs`, `proof/disclosure.rs`, `codec/output.rs`, `codec/stream.rs`. What the auditor and a recipient read of each slot.
@@ -27,6 +27,8 @@
 pub mod anonymous_exit;
 #[path = "proof/audit_stream.rs"]
 pub mod audit_stream;
+#[path = "proof/auditor_key.rs"]
+mod auditor_key;
 #[path = "proof/blinding.rs"]
 pub mod blinding;
 #[path = "codec/bytes.rs"]
@@ -91,6 +93,7 @@ pub fn proving_key_hashes() -> impl Iterator<Item = (&'static str, [u8; 32])> {
 
 pub use anonymous_exit::*;
 pub use audit_stream::*;
+pub use auditor_key::is_auditor_key;
 pub use deposit::*;
 pub use deposit_audit::*;
 pub use disclosure::*;

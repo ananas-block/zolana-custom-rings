@@ -7,6 +7,7 @@ use custom_ring_interface::{
         tag, ApplyEnrollmentsIxData, EnrollIxData, EnrollRequest, InitializeIxData,
         InitializeTrackingIxData, OwnerGrantIxData, StorageUpdateIxData,
     },
+    tagged_x25519,
     tracking::{
         FirstEnrollment, OwnerGrant, TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY,
         TRACKING_EMPTY_ROOT, ZERO_NULLIFIER_PUBKEY,
@@ -613,6 +614,16 @@ fn a_tracking_registry_pins_ring_and_auditor_at_its_canonical_address() {
     };
     assert_eq!(
         store.send_as_authority(store.initialize_tracking_instruction(&untagged)),
+        refusal(StorageError::InvalidAuditorKey)
+    );
+    let mut low_order_u = [0; 32];
+    low_order_u[0] = 1;
+    let low_order = InitializeTrackingIxData {
+        ring_id: [8; 32],
+        auditor_pubkey: tagged_x25519(&low_order_u),
+    };
+    assert_eq!(
+        store.send_as_authority(store.initialize_tracking_instruction(&low_order)),
         refusal(StorageError::InvalidAuditorKey)
     );
 }

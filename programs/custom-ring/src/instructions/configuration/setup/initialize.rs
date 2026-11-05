@@ -16,6 +16,7 @@
 //! Read after `instructions/accounts/loader.rs`, `state.rs`. Read before `instructions/verification/policy_binding.rs`.
 
 use custom_ring_interface::{
+    is_auditor_key,
     storage_instruction::{tag as storage_tag, InitializeTrackingIxData},
     CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, PolicyUpdate, RingKind,
     RingMode, RingPolicy, STORAGE_PROGRAM_ID,
@@ -35,7 +36,7 @@ use crate::{
         loader::{load_records_registry, validate_spp_program, UpgradeAuthorityCheck},
         policy_binding::TableBinding,
     },
-    state::{is_x25519_key, Init},
+    state::Init,
 };
 
 /// Only the active loader-v3 upgrade authority initializes the ring, it holds no role it does not name.
@@ -71,7 +72,7 @@ pub fn process_initialize_ix(
     .verify()?;
     validate_spp_program(core::slice::from_ref(spp_program))?;
     // 2. A canonical auditor key of large order keeps every envelope agreement contributory.
-    if !is_x25519_key(&ix.auditor_pubkey) {
+    if !is_auditor_key(&ix.auditor_pubkey) {
         return Err(CustomRingError::InvalidAuditorPubkey.into());
     }
     // 3. The canonical PDA holds the kind for the ring's life and four distinct nonzero role keys.

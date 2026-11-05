@@ -33,13 +33,14 @@ pub use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use zolana_ring_policy::registry_field;
 
 use crate::{
+    auditor_key::is_auditor_key,
     domain,
     member_registry::GRACE_SLOTS,
     state::ROOT_HISTORY,
     storage::{advance_roots, root_at, Retirement, Revision, Root, StorageError},
     storage_instruction::{EnrollIxData, InitializeTrackingIxData, OwnerGrantIxData},
     ReaderKeyBytes, READER_KEY_ED25519, READER_KEY_P256, REGISTER_KEY_CIPHERTEXT_LEN,
-    STORAGE_PROGRAM_ID, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
+    STORAGE_PROGRAM_ID, TAGGED_X25519_KEY_LEN,
 };
 
 /// Taller than a policy tree, anyone can pay to fill it and no tree replaces a full one.
@@ -377,16 +378,12 @@ impl TrackingEntry {
 }
 
 impl InitializeTrackingIxData {
-    /// An untagged, zero or non-canonical key would lock enrollment for good.
+    /// A key no proof can seal to would lock enrollment for good.
     pub fn check(&self) -> Result<(), StorageError> {
         if self.ring_id == [0; 32] || !is_canonical_bn254_scalar_be(&self.ring_id) {
             return Err(StorageError::InvalidTrackingRegistry);
         }
-        let (tag, key) = self.auditor_pubkey.split_at(1);
-        let key: &[u8; 32] = key
-            .try_into()
-            .map_err(|_| StorageError::InvalidAuditorKey)?;
-        if tag[0] != VIEWING_PUBKEY_TAG || *key == [0; 32] || !is_canonical_x25519_public_key(key) {
+        if !is_auditor_key(&self.auditor_pubkey) {
             return Err(StorageError::InvalidAuditorKey);
         }
         Ok(())
