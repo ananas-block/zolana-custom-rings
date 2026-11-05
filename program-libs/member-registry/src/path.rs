@@ -1,5 +1,5 @@
 //! The 4-ary path rule, path digit `(index >> 2l) & 3` at level `l` from the leaves
-//! up, mirror `prover/server/circuits/records`.
+//! up, mirror `prover/circuits/registry`.
 //!
 //! Each level folds four children, and the three siblings keep their ascending child order around the
 //! path's node. The circuit's one index decomposition places both the old and the new leaf of an update.

@@ -165,7 +165,7 @@ pub struct Rule {
     pub guard: Guard,
 }
 
-/// Byte positions are the circuit packed-field weights (Go `ruleShift`), reordering breaks proof verification.
+/// Byte positions are the circuit packed-field weights (Go `ruleParts`), reordering breaks proof verification.
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct Row {

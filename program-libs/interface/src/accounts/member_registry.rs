@@ -90,7 +90,7 @@ impl QueueEntry {
     }
 }
 
-/// `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain(-1) = 0`.
+/// `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain_start` of the registry and revision.
 pub fn queue_chain(previous: &[u8; 32], entry: &QueueEntry) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[previous, &entry.hash()?])
 }

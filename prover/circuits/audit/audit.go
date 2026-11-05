@@ -88,10 +88,7 @@ type Envelope struct {
 func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Envelope {
 	// 1. The salt is 16 bytes, one field below 2^128 the program rebuilds from the instruction.
 	salt := gadget.BytesToFieldWith(api, rc, w.Salt[:])
-	// 2. The auditor reads the recovered bytes as they are, an unclamped alias would key another stream.
-	// X25519 clamps before it multiplies, so an alias names one tx_u with another CRBS seed, and the
-	// reader refuses any encoding but the clamped one. A proof past the clamp could seal a stream
-	// its auditor refuses to read.
+	// 2. An unclamped alias keeps tx_u and the stream key under another CRBS seed, and the reader refuses it.
 	AssertClamped(api, w.TxViewingSk)
 	// 3. tx_u is the key of tx_viewing_sk, the generator bounds every secret byte the packings read.
 	txPk := shared.PackedKey(api, x25519.ScalarMulGenerator(api, w.TxViewingSk))

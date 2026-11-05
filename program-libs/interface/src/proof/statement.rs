@@ -383,9 +383,9 @@ pub struct ApplyRecordsStatement {
     pub new_root: [u8; 32],
     pub old_next_index: u32,
     pub new_next_index: u32,
-    /// `chain(head - 1)`.
+    /// `chain_start` of the registry and revision.
     pub chain_start: [u8; 32],
-    /// `chain(tail - 1)`.
+    /// The chain past the last write.
     pub chain_end: [u8; 32],
     pub count: u64,
 }
