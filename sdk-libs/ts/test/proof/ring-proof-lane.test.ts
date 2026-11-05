@@ -444,6 +444,7 @@ const note = (
   ({
     isCompact: () => false,
     isDummy: () => input.dummy === true,
+    isAddress: () => false,
     nullifierPublicKey: input.key ?? fill(9),
     utxo: {
       owner: {
@@ -682,7 +683,7 @@ describe("prover/ring/params.go", () => {
       curatorPool: unopenedRecordPool(capacity.curator),
       senderEntries: repeat(4, ownerEntry),
       ownerEntries: repeat(6, ownerEntry),
-      assetEntries: repeat(6, entry),
+      assetEntries: repeat(6 + 24, entry),
       publicAssetEntries: repeat(3, 0),
       inProof: false,
       hidden: false,

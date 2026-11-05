@@ -720,8 +720,10 @@ const ENTRY = await anonymousRequest({ entry: true });
 describe("ring prover requests of the rails", () => {
   it("sends the keys of the Go params in declaration order", () => {
     const keys = goKeys("TransferParams");
-    expect(Object.keys(ringProofRequestBody(ENTRY))).toEqual(keys);
-    const off = keys.filter((key) => key !== "entries");
+    expect(Object.keys(ringProofRequestBody({ ...ENTRY, signerDataCounts: 1n }))).toEqual(keys);
+    const uncounted = keys.filter((key) => key !== "signerDataCounts");
+    expect(Object.keys(ringProofRequestBody(ENTRY))).toEqual(uncounted);
+    const off = uncounted.filter((key) => key !== "entries");
     expect(Object.keys(ringProofRequestBody(CONFIDENTIAL))).toEqual(off);
     expect(Object.keys(ringProofRequestBody(ANONYMOUS))).toEqual(off);
     const keysOfSlot = (request: RingProofRequest) =>

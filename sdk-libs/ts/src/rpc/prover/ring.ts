@@ -518,11 +518,11 @@ function transferJson(request: TransferProofRequest): Json {
         }
       : {}),
     signerCount: integer(request.signerCount, "signerCount", 0, slots),
+    signers: fields(request.signers, slots, "signers"),
     // Go reads a `uint64` number, 60 bits pass no double exact.
     ...(request.signerDataCounts === undefined || request.signerDataCounts === 0n
       ? {}
       : { signerDataCounts: rawJson(request.signerDataCounts.toString()) }),
-    signers: fields(request.signers, slots, "signers"),
     rows: fields(request.rows, circuit.owners, "rows"),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
     privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
