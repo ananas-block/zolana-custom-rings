@@ -55,7 +55,7 @@ import {
   createdDepositUtxo,
   openConfirmedDeposit,
 } from "../../../src/operations/workflow/created-utxos.js";
-import { RecordKind } from "../../../src/protocol/codec/audit-stream.js";
+import { decodeAuditEnvelope, RecordKind } from "../../../src/protocol/codec/audit-stream.js";
 import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
 import {
   decodeRingDepositOutput,
@@ -136,7 +136,13 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
     ringProgramId: ring,
     txViewingPublicKey: txViewingKey,
     salt: SALT,
-    nullifiers: [field(auditVector.first_nullifier), SECOND_NULLIFIER].slice(0, entry.input_count),
+    // Only the first nullifier seeds the stream, the rest fill the published count.
+    nullifiers: [
+      field(auditVector.first_nullifier),
+      ...Array.from({ length: entry.input_count - 1 }, (_, slot) =>
+        slot === 0 ? SECOND_NULLIFIER : field(`${"00".repeat(31)}${(0x78 + slot).toString(16)}`),
+      ),
+    ],
     messages: [{ viewTag: auditor().publicKey().u(), data: message }],
     outputSlots: entry.output_hashes.map((hash, index) => ({
       viewTag: new Uint8Array(32).fill(index + 1) as Bytes32,
@@ -154,7 +160,8 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
     transaction,
     layout,
     rail: "confidential",
-    noSpend: false,
+    // The statement's `no_spend` bit, an address input alone sends no note.
+    noSpend: decodeAuditEnvelope(hex(entry.envelope_plaintext), layout).realInputs === 0,
     inputTreeIds: transaction.nullifiers.map(() => TREE_ID),
     ...rest,
   });
