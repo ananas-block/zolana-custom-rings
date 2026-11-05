@@ -670,7 +670,6 @@ async function buildRingSpend<R>(
         chain: params.client,
         transaction: approval.transaction,
         intentHash: staged.planned,
-        buffered: retry.lifetime === "submission",
       },
       context,
     );
@@ -866,8 +865,6 @@ async function stageRingSpend<R>(
     assets: params.wallet.registry,
     ...(input.coSigners === undefined ? {} : { coSigners: input.coSigners }),
     listSalts: spendListSalts(params),
-    // A plain build returns one transaction and a relay writes its own buffer.
-    ...(retry.lifetime === "submission" ? { bufferedSettlement: true } : {}),
   });
   return Object.freeze({
     selected,

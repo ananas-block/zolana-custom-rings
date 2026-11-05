@@ -12,10 +12,5 @@ export const RingInstructionTag = Object.freeze({
   deposit: 58,
   initialize: 53,
   updatePolicy: 54,
-  writeFrame: 59,
-  closeFrameBuffer: 60,
-  settleBuffered: 61,
-  /** Readers accept it only inside `settleBuffered`. */
-  frameEvent: 63,
 } as const);
 export type RingInstructionTag = (typeof RingInstructionTag)[keyof typeof RingInstructionTag];

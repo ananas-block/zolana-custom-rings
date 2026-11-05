@@ -43,11 +43,6 @@ import {
 import { ProofInputUtxo, Utxo, type WalletUtxo } from "@heliuslabs/zolana/transaction";
 
 import { ringComputeUnitLimit } from "../operations/management/admin.js";
-import {
-  bufferedFrame,
-  frameDigest,
-  settleBufferedData,
-} from "../protocol/transaction/frame-buffer.js";
 import { RingError } from "../protocol/error.js";
 import {
   openingTotals,
@@ -121,7 +116,6 @@ export type RelayMessageMismatch =
   | "FunderLegs"
   | "SpendsUnnamedNote"
   | "SpendsUnrequestedNote"
-  | "SettlesBuffer"
   | "Unrequested"
   | "Signer";
 
@@ -357,7 +351,6 @@ export type ExpectedRelayMessage =
   | ExpectedCoSigner
   | ExpectedEnroll;
 
-/** A frame a signer reads inline or, past one transaction, from the buffer its digest names. */
 type ExpectedFrame = ExpectedDelegate | ExpectedPublicOwner | ExpectedFunder | ExpectedCoSigner;
 
 /** Rust `VerifiedMessage`, only a check builds one, over the private copy that check read. */
@@ -752,7 +745,6 @@ export function checkRelayMessage(
   if (expected.kind === "sealed") throw mismatch("Unrequested");
   const envelope = frameEnvelope(expected, signer, frameTag(expected));
   const { data, accounts } = open(envelope, snapshot);
-  if (data[0] === RingInstructionTag.settleBuffered) throw mismatch("SettlesBuffer");
   checkFrame(expected, signer, data, accounts);
   return new VerifiedRelayMessage(VERIFIED, envelope.signer, snapshot);
 }
@@ -822,41 +814,6 @@ function checkEnrollSnapshot(expected: ExpectedEnroll, message: Uint8Array): Ver
   const signed = enrollRequestDigest({ ...expected.inputs, instructionData: data });
   if (!equalBytes(signed, enrollRequestDigest(expected.inputs))) throw mismatch("Data");
   return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
-}
-
-/** The account a settling message reads its frame from, `undefined` on an inline message. */
-export function settledBufferOf(
-  expected: ExpectedRelayMessage,
-  message: Uint8Array,
-  signer: Address,
-): Address | undefined {
-  if (expected.kind === "deposit" || expected.kind === "enroll" || expected.kind === "sealed")
-    return undefined;
-  const { data, accounts } = open(
-    frameEnvelope(expected, signer, RingInstructionTag.settleBuffered),
-    message,
-  );
-  return data[0] === RingInstructionTag.settleBuffered ? accounts[0]?.address : undefined;
-}
-
-/** The digest binds the buffer's frame, every check of an inline message then reads it. */
-export function checkSettledMessage(
-  expected: ExpectedRelayMessage,
-  message: Uint8Array,
-  buffer: Uint8Array,
-  signer: Address,
-): VerifiedRelayMessage {
-  if (expected.kind === "sealed") throw mismatch("Unrequested");
-  if (expected.kind === "deposit" || expected.kind === "enroll") throw mismatch("Data");
-  const snapshot = message.slice();
-  const envelope = frameEnvelope(expected, signer, RingInstructionTag.settleBuffered);
-  const { data, accounts } = open(envelope, snapshot);
-  if (accounts.length < 2) throw mismatch("Accounts");
-  const frame = bufferedFrame(buffer);
-  if (frame === undefined || !equalBytes(data, settleBufferedData(frameDigest(frame))))
-    throw mismatch("Data");
-  checkFrame(expected, signer, frame, accounts.slice(2));
-  return new VerifiedRelayMessage(VERIFIED, envelope.signer, snapshot);
 }
 
 function frameTag(expected: ExpectedFrame): RingInstructionTag {

@@ -384,18 +384,13 @@ export type {
   RingMergeTransactionParams,
 } from "../operations/payments/merge.js";
 export type { RingMergeClient } from "../rpc/ports.js";
-export { RingBufferLedger } from "../operations/workflow/buffer-ledger.js";
-export type { RingBufferTransaction } from "../operations/workflow/buffer-ledger.js";
 export {
   RingTransactionSubmission,
-  closeAbandonedFrameBuffers,
   createKitRingSubmissionTransport,
   reconcileRingSubmissions,
 } from "../operations/workflow/submission.js";
 export type {
   ReservationHold,
-  RingBufferReclaim,
-  RingFrameUpload,
   RingSubmissionAttempt,
   RingSubmissionBuild,
   RingSubmissionResult,
@@ -611,7 +606,6 @@ export {
 } from "../operations/management/viewing-rotation.js";
 export { privateListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
-export { BufferedFrame } from "../operations/payments/buffered-frame.js";
 export {
   credentialAccounts,
   encodeRelayEnrollInputs,
@@ -629,7 +623,6 @@ export {
   type Fit,
   type FitBudget,
   type FitSigners,
-  type FitTransport,
   type MergeCapacity,
   type MergeGroup,
   type SetupEffect,

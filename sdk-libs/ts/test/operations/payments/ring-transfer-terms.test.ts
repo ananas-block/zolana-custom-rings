@@ -26,7 +26,6 @@ import {
   signingKeySpendSigner,
   type AnonymousPayment,
 } from "../../../src/operations/payments/anonymous.js";
-import { BufferedFrame } from "../../../src/operations/payments/buffered-frame.js";
 import { ringSpendTransfer } from "../../../src/operations/payments/ring-spend.js";
 import {
   CustomRingTransfer,
@@ -288,9 +287,9 @@ describe("relay transfer terms", () => {
     expect(refusal(() => sealed.verify(sender.shieldedAddress().solanaAddress()))).toBe(
       "Unrequested",
     );
-    await expect(
-      sealed.signOnChain(relayClient(), { getAccount: vi.fn() } as never, fakeSigner(payeeAddress)),
-    ).rejects.toMatchObject({ details: { mismatch: "Unrequested" } });
+    await expect(sealed.sign(relayClient(), fakeSigner(payeeAddress))).rejects.toMatchObject({
+      details: { mismatch: "Unrequested" },
+    });
   });
 
   it("lets a data recipient sign its own slot more than once", async () => {
@@ -580,33 +579,6 @@ describe("relay transfer terms", () => {
       setup: [{ ...setup, owner: randomAddress() }],
     });
     expect(refusal(() => other.verify(payeeAddress))).toBe("Instructions");
-  });
-
-  it("reads a settling frame from its buffer before the owner signs", async () => {
-    const { terms, payeeAddress, instruction, fixture, pending } = await paid();
-    const buffered = await BufferedFrame.forWriter(instruction, fixture.authority);
-    const held = await pending(
-      terms,
-      messageOf(fixture.authority, [buffered.settle()], RingInstructionTag.settleBuffered),
-    );
-    expect(refusal(() => held.verify(payeeAddress))).toBe("SettlesBuffer");
-
-    const relay = relayClient();
-    const account = Uint8Array.of(
-      16,
-      ...new Uint8Array(32),
-      RingInstructionTag.frameEvent,
-      ...Uint8Array.from(instruction.data ?? []),
-    );
-    const getAccount = vi.fn(async () => ({ data: account }));
-    await held.signOnChain(relay, { getAccount } as never, fakeSigner(payeeAddress));
-    expect(getAccount).toHaveBeenCalledWith(buffered.buffer, undefined);
-    expect(relay.submitRelay).toHaveBeenCalledOnce();
-
-    account[account.length - 1] = (account[account.length - 1] ?? 0) ^ 1;
-    await expect(
-      held.signOnChain(relayClient(), { getAccount } as never, fakeSigner(payeeAddress)),
-    ).rejects.toMatchObject({ details: { mismatch: "Data" } });
   });
 
   it("writes and reads the terms as the Rust vector does", () => {

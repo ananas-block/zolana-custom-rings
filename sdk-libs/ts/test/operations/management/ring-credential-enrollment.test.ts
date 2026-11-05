@@ -42,7 +42,6 @@ import {
 } from "../../../src/operations/management/enrollment.js";
 import { RingDomain } from "../../../src/crypto/derivation/ring-domain.js";
 import { prepareEnrollmentRelay } from "../../../src/operations/management/enroll-relay.js";
-import { RingBufferLedger } from "../../../src/operations/workflow/buffer-ledger.js";
 import { reconcileRingSubmissions } from "../../../src/operations/workflow/submission.js";
 import {
   ADDRESS_TREE_ID,
@@ -518,13 +517,6 @@ describe("enrollment submission", () => {
         stored = snapshot;
       }),
     };
-    let ledger: string | undefined;
-    const buffers = await RingBufferLedger.load({
-      load: async () => ledger,
-      save: async (document) => {
-        ledger = document;
-      },
-    });
     const blockhashes = vi.fn(async () => BLOCKHASH);
     const submission = await enrollmentSubmission({
       prepared,
@@ -544,7 +536,6 @@ describe("enrollment submission", () => {
       wallet,
       store,
       cipher,
-      buffers,
       transport,
       submission,
       blockhashes,

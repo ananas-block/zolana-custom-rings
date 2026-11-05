@@ -26,7 +26,6 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { buildRingTransferTransaction } from "../../../src/operations/payments/transfer.js";
-import { RingBufferLedger } from "../../../src/operations/workflow/buffer-ledger.js";
 import {
   RingTransactionSubmission,
   reconcileRingSubmissions,
@@ -221,14 +220,7 @@ async function persistedFixture(count = 1) {
     send: vi.fn(async () => undefined),
     status: vi.fn(async () => ({ kind: "unknown" as const })),
   };
-  let ledger: string | undefined;
-  const buffers = await RingBufferLedger.load({
-    load: async () => ledger,
-    save: async (document) => {
-      ledger = document;
-    },
-  });
-  return { ...f, store, cipher, submission, transport, buffers };
+  return { ...f, store, cipher, submission, transport };
 }
 
 it("saves the signed checkpoint before broadcast and restores held notes after restart", async () => {
@@ -314,6 +306,30 @@ it("settles a restored expiry without building or broadcasting another payment",
   expect(results).toMatchObject([{ kind: "failed", attempts: 1 }]);
   expect(wallet.pendingSubmissions()).toEqual([]);
   expect(() => reserveEntries(wallet, wallet.utxos())).not.toThrow();
+  expect(f.transport.send).toHaveBeenCalledTimes(1);
+});
+
+it("fails without a rebuild once reconcile settled the record", async () => {
+  const f = await persistedFixture();
+  expect((await f.submission.sendPersisted(f)).kind).toBe("unknown");
+  const expired = { status: async () => ({ kind: "expired" as const }) };
+  await reconcileRingSubmissions({ ...f, transport: expired });
+  f.transport.status.mockResolvedValue({ kind: "expired" } as never);
+  expect(await f.submission.sendPersisted(f)).toMatchObject({ kind: "failed", attempts: 1 });
+  expect(f.transport.send).toHaveBeenCalledTimes(1);
+  expect((await loadPersistedWallet(f))?.pendingSubmissions()).toEqual([]);
+});
+
+it("refuses to write back a record reconcile settled", async () => {
+  const f = await persistedFixture();
+  expect((await f.submission.send(f.transport)).kind).toBe("unknown");
+  const expired = { status: async () => ({ kind: "expired" as const }) };
+  await reconcileRingSubmissions({ ...f, transport: expired });
+  await expect(f.submission.send(f.transport)).rejects.toMatchObject({
+    code: "RING_SUBMISSION_PENDING",
+    details: { reason: "reconciled" },
+  });
+  expect(f.wallet.pendingSubmissions()).toEqual([]);
   expect(f.transport.send).toHaveBeenCalledTimes(1);
 });
 

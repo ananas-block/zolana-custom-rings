@@ -29,7 +29,6 @@ export interface PlannedTransfer {
   readonly circuit: TransferKeyCircuit;
   readonly wideOwners: boolean;
   readonly layout: AuditStreamLayout;
-  readonly settlement: "inline" | "buffered";
 }
 
 /** What a planner adds to a key, every value public before any record read. */
@@ -38,7 +37,6 @@ export interface PlanFrame {
   readonly subjects: TransferSpend;
   /** The stream layout of a frame under the header's wide flag. */
   layoutUnder(wideOwners: boolean): AuditStreamLayout;
-  readonly settlement: PlannedTransfer["settlement"];
 }
 
 /** The narrowest key holding the counts and `pools`, empty pools ahead of every record read. */
@@ -56,6 +54,5 @@ function keyedPlan(frame: PlanFrame, spend: TransferSpend): PlannedTransfer {
     circuit: transferKeyCircuit(spend),
     wideOwners: spend.wide,
     layout: frame.layoutUnder(spend.wide),
-    settlement: frame.settlement,
   });
 }

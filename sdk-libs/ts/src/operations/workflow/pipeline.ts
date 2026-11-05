@@ -112,14 +112,12 @@ import {
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
 import {
-  decideAddressCeiling,
   TransactionFit,
   type CredentialTrees,
   type FitBudget,
   type FitSigners,
 } from "./address-ceiling.js";
 import { checkTransferFits } from "./compile.js";
-import { BufferedFrame } from "../payments/buffered-frame.js";
 import { ringRegistrySlots, transferRootRead } from "./ring-reads.js";
 import { boundCredentialRoots, type BoundCredentialRoot } from "../../proof/credential-proof.js";
 import {
@@ -221,7 +219,7 @@ export class ProvenRingTransfer {
   readonly approvalOpening?: ApprovalOpening;
 
   /** @internal */
-  constructor(fields: Omit<ProvenRingTransfer, "instruction" | "buffered">) {
+  constructor(fields: Omit<ProvenRingTransfer, "instruction">) {
     this.ringProgramId = fields.ringProgramId;
     this.data = fields.data;
     this.accounts = fields.accounts;
@@ -236,11 +234,6 @@ export class ProvenRingTransfer {
 
   instruction(): Promise<Instruction> {
     return ringTransactInstruction(this.ringProgramId, this.accounts, this.data);
-  }
-
-  /** `nonce` names the buffer, the payer writes it and pays the settlement. */
-  async buffered(nonce: bigint): Promise<BufferedFrame> {
-    return BufferedFrame.of(await this.instruction(), this.accounts.payer, nonce);
   }
 }
 
@@ -297,8 +290,6 @@ export type StagedTransferInput = Readonly<{
   /** An enrolled subject on a ring reading a salted list needs its salt here. */
   listSalts?: readonly RingListSalt[];
   transaction?: RingTransactionFrame;
-  /** Past one transaction the frame settles from a buffer its payer writes. */
-  bufferedSettlement?: boolean;
   approve?: (coSigners: readonly Address[]) => Promise<void>;
 }>;
 
@@ -410,7 +401,6 @@ function stagedPlanFrame(
     config: RingPolicy;
     staged: Pick<StagedTransfer, "proofInputs"> &
       Readonly<{ spend: Pick<RailSpend, "rail" | "publicOwners"> }>;
-    bufferedSettlement?: boolean;
   }>,
 ): PlanFrame {
   const { config, staged } = input;
@@ -445,7 +435,6 @@ function stagedPlanFrame(
         publicOwners: spend.publicOwners === true,
         wideOwners,
       }),
-    settlement: input.bufferedSettlement === true ? "buffered" : "inline",
   });
 }
 
@@ -662,27 +651,16 @@ async function assembleStagedTransfer<T>(
       throw new RingError("RING_EXTERNAL_DATA_MISMATCH");
     const inline = await ringTransactInstruction(ringProgramId, accounts, preview);
     const computeUnitLimit = ringComputeUnitLimit(transactTag(ringRail));
-    if (plan.settlement === "buffered")
-      await decideAddressCeiling({
-        ...input.transaction,
-        payer: proofInputs.payer,
-        instruction: inline,
-        computeUnitLimit,
-        inputs: [],
-        mergeCapacity: { keyed: 0, zeroKey: 0 },
-      });
-    else {
-      checkTransferFits(shape, {
-        ...input.transaction,
-        feePayer: proofInputs.payer,
-        instructions: [inline],
-        computeUnitLimit,
-      });
-      TransactionFit.inline(inline, fitSigners(proofInputs.payer, input.transaction), {
-        ...fitBudget(input.transaction),
-        computeUnitLimit,
-      });
-    }
+    checkTransferFits(shape, {
+      ...input.transaction,
+      feePayer: proofInputs.payer,
+      instructions: [inline],
+      computeUnitLimit,
+    });
+    TransactionFit.of(inline, fitSigners(proofInputs.payer, input.transaction), {
+      ...fitBudget(input.transaction),
+      computeUnitLimit,
+    });
     return await use(
       Object.freeze({
         sealed,
