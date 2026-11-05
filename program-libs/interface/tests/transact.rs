@@ -9,10 +9,9 @@ use ring_policy::config;
 use custom_ring_interface::{
     cosign::ApprovalMask, input_flag, key_catalog::RingCircuit, output_flag, shape_flag,
     stream::slot_tag, transact_flag, AuditKey, AuditStreamLayout, AuditorMessage,
-    ConfidentialSender, CredentialRoots, CustomRingError, FramedSenderBundle, ParsedTransact,
-    PlainGroth16Proof, Replies, RingPolicy, RingRail, RingTransactData, Settlement,
-    SignerDataCounts, SignerSet, SlotBody, TransferBinding, TransferFamily, TransferRoots,
-    ANONYMOUS_PARTIES, APPROVAL_BYTE,
+    ConfidentialSender, CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof,
+    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerDataCounts, SignerSet,
+    SlotBody, TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
 };
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
@@ -104,10 +103,8 @@ fn compute_vectors() -> ExpansionVectors {
                       metadata and extension flags. Byte 1 indexes SPP_SUPPORTED_SHAPES below the \
                       default owner tag (bit 6) and public owners (bit 7). Byte 2 is the input \
                       count below has_data (bit 6) and entry (bit 7), byte 3 is m, byte 4 the \
-                      approval mask below the co-signer count. The ring proof is followed by the \
-                      credential address root index as u16le, the state root count as u8 and \
-                      that many state root indexes as u16le. At least one state root is required. \
-                      The own revision follows under the own root flag, the curator \
+                      approval mask below the co-signer count. The ring proof and the tracking \
+                      revision follow, the own revision under the own root flag, the curator \
                       revision under the curator flag, the expiry as a u32, the viewing key, the \
                       salt and the extensions under their flag. The interface transfers follow, \
                       the SPL withdrawal owners under the own root flag, exit_bits and bodiless_bits \
@@ -1391,18 +1388,7 @@ fn binding<'a>(
 fn the_transfer_statement_reads_the_frame_and_names_its_family() {
     let fixture = Fixture::new();
     let config = config();
-    let roots_for = |data: &RingTransactData<'_>| TransferRoots {
-        policy_hash: [0; 32],
-        own_root: [0; 32],
-        curator_root: [0; 32],
-        credentials: CredentialRoots::empty(
-            data.transfer_circuit(0)
-                .unwrap()
-                .credential_capacity()
-                .unwrap(),
-        )
-        .unwrap(),
-    };
+    let roots_for = |_: &RingTransactData<'_>| TransferRoots::default();
     let parties = [[0; 32]; ANONYMOUS_PARTIES];
     let parsed = ParsedTransact::new(fixture.anonymous()).unwrap();
     let data = parsed.data();

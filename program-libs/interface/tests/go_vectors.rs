@@ -1,12 +1,10 @@
 //! Reads the vectors `prover/circuits` writes from its solved witnesses, a mismatch names a statement the keys refuse.
 
-mod vector_credentials;
-
 use custom_ring_interface::{
-    ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, AuditHead, AuditLayout, ConfidentialSender, DATA_TAIL_LEN,
-    MergePublicInput, OpeningRecord, RecordKind, RingOutput, SignerDataCounts, SignerSet, SlotBody,
-    TransferFamily, TransferRoots, TransferStatement, cosign::ApprovalMask, domain,
-    key_catalog::RING_KEYS,
+    cosign::ApprovalMask, domain, key_catalog::RING_KEYS, AuditHead, AuditLayout,
+    ConfidentialSender, MergePublicInput, OpeningRecord, RecordKind, RingOutput, SignerDataCounts,
+    SignerSet, SlotBody, TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN,
 };
 use serde::Deserialize;
 use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
@@ -87,7 +85,7 @@ struct TransferCase {
     policy_hash: String,
     own_root: String,
     curator_root: String,
-    credential_fields: Vec<String>,
+    tracking_root: String,
     public_assets: Vec<String>,
     public_amounts: Vec<String>,
     public_gross: Vec<String>,
@@ -120,7 +118,6 @@ impl TransferCase {
 fn transfer_statements_reach_the_go_public_inputs() {
     #[derive(Deserialize)]
     struct Vector {
-        ring_program: String,
         cases: Vec<TransferCase>,
     }
     let vector: Vector = vector("audit/transfer_statement.json");
@@ -181,11 +178,7 @@ fn transfer_statements_reach_the_go_public_inputs() {
             policy_hash: array(&case.policy_hash),
             own_root: array(&case.own_root),
             curator_root: array(&case.curator_root),
-            credentials: vector_credentials::CredentialFields {
-                ring_program: &array(&vector.ring_program),
-                fields: &arrays::<32>(&case.credential_fields),
-            }
-            .roots(),
+            tracking_root: array(&case.tracking_root),
         };
         let statement = TransferStatement {
             head: AuditHead {
@@ -244,16 +237,8 @@ fn merge_statement_matches_the_go_vector() {
         #[serde(rename = "ringProgramId")]
         ring_id: String,
         payer: String,
-        #[serde(rename = "credentialOwner")]
-        credential_owner: String,
-        #[serde(rename = "stateRoot")]
-        state_root: StateRoot,
-    }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct StateRoot {
-        tree_id: u16,
-        root: String,
+        #[serde(rename = "trackingRoot")]
+        tracking_root: String,
     }
     #[derive(Deserialize)]
     struct Case {
@@ -266,7 +251,6 @@ fn merge_statement_matches_the_go_vector() {
     }
     #[derive(Deserialize)]
     struct Vector {
-        ring_program: String,
         auditor_pk: String,
         eph_pk: String,
         cases: Vec<Case>,
@@ -279,16 +263,6 @@ fn merge_statement_matches_the_go_vector() {
         // Element 10 is what the program computes from the signer under a zero key.
         let elements = arrays::<32>(&case.elements);
         assert_eq!(elements[10] == [0; 32], case.name == "nonzero");
-        let credentials = vector_credentials::CredentialFields {
-            ring_program: &array(&vector.ring_program),
-            fields: &[
-                array(&request.credential_owner),
-                [0; 32],
-                right_align(&request.state_root.tree_id.to_be_bytes()),
-                array(&request.state_root.root),
-            ],
-        }
-        .roots();
         let statement = MergePublicInput {
             output_utxo_hash: &array(&request.output_utxo_hash),
             first_nullifier: &array(&request.first_nullifier),
@@ -298,7 +272,7 @@ fn merge_statement_matches_the_go_vector() {
             ciphertext: &array(&case.ciphertext),
             payer: &array(&request.payer),
             published_owner: &elements[10],
-            credentials: &credentials,
+            tracking_root: &array(&request.tracking_root),
         };
         assert_eq!(elements, statement.elements().unwrap());
         assert_eq!(
@@ -353,22 +327,20 @@ fn record_pools_match_the_compiled_keys() {
         key: String,
         own: usize,
         curator: usize,
-        credentials: usize,
+        tracking: usize,
     }
     #[derive(Deserialize)]
     struct Vector {
         keys: Vec<Key>,
     }
     let vector: Vector = vector("policy/pool_capacity.json");
-    assert!(
-        RING_KEYS
+    assert!(RING_KEYS
+        .iter()
+        .filter(|ring_key| ring_key.circuit.record_pools().is_some())
+        .all(|ring_key| vector
+            .keys
             .iter()
-            .filter(|ring_key| ring_key.circuit.record_pools().is_some())
-            .all(|ring_key| vector
-                .keys
-                .iter()
-                .any(|key| key.key.replace('_', "-") == ring_key.name))
-    );
+            .any(|key| key.key.replace('_', "-") == ring_key.name)));
     for key in vector.keys {
         let name = key.key.replace('_', "-");
         let ring_key = RING_KEYS
@@ -377,12 +349,8 @@ fn record_pools_match_the_compiled_keys() {
             .unwrap_or_else(|| panic!("{name} is no catalog key"));
         let pools = ring_key.circuit.record_pools().unwrap();
         assert_eq!(
-            (
-                pools.own,
-                pools.curator,
-                ring_key.circuit.credential_capacity().unwrap()
-            ),
-            (key.own, key.curator, key.credentials),
+            (pools.own, pools.curator, pools.tracking),
+            (key.own, key.curator, key.tracking),
             "{name}"
         );
     }

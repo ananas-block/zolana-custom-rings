@@ -6,7 +6,7 @@ use custom_ring_interface::{
     funder_account_position, input_flag,
     key_catalog::{FrameKey, RingCircuit},
     shape_flag, spl_withdrawal_count, tag, transact_flag, AnonymousProofData, BundleLayout,
-    CoSignScope, CredentialRead, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
+    CoSignScope, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
     PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData,
     RootRead, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
     RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
@@ -23,9 +23,9 @@ use spr_interface::{
 use wincode::{containers, len::FixIntLen, Serialize};
 
 use crate::common::{
-    credential_accounts, delegate_ring, off_curve_g2, on_curve_g2, policy_pda,
-    reaches_verification, refused, ring_auth, set_co_signer, set_delegate, transact, CoSignerSlot,
-    Ring, Sent, Setup, PROGRAM, RECORDS, SYSTEM,
+    delegate_ring, off_curve_g2, on_curve_g2, policy_pda, reaches_verification, refused, ring_auth,
+    set_co_signer, set_delegate, tracking_registry, transact, CoSignerSlot, Ring, Sent, Setup,
+    PROGRAM, RECORDS, SYSTEM,
 };
 
 pub const SPP: Address = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
@@ -119,7 +119,7 @@ impl Fixture {
             n_in,
             n_out,
             proof: &self.proofs[0],
-            credential_read: CredentialRead::new(0, &[0]).unwrap(),
+            tracking_revision: Default::default(),
             own_revision: (!rail.is_delegate()).then(Default::default),
             policy: policy.then_some(PolicyProof {
                 curator_revision: None,
@@ -291,8 +291,10 @@ fn a_transfer_passing_every_check_names_exactly_one_ring_account() {
         let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
         let accounts = [
             vec![AccountMeta::new_readonly(policy_pda(), false)],
-            vec![AccountMeta::new_readonly(RECORDS, false)],
-            credential_accounts(),
+            vec![
+                AccountMeta::new_readonly(RECORDS, false),
+                AccountMeta::new_readonly(tracking_registry(), false),
+            ],
             spp,
         ]
         .concat();
@@ -737,7 +739,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     let data = RingTransactData::parse(&bytes, RingRail::Confidential)
         .unwrap()
         .into_data();
-    bare.serve_credentials(&data.credential_read);
+    bare.serve_tracking(data.tracking_revision);
     let spp = spp_list(&bare.payer.pubkey(), &data, &payer_owner(&bare));
     reaches_verification(send(
         &mut bare,
@@ -756,7 +758,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
         data.transfer_circuit(0),
         Ok(RingCircuit::Transfer { entry: true, .. })
     ));
-    anonymous.serve_credentials(&data.credential_read);
+    anonymous.serve_tracking(data.tracking_revision);
     let spp = spp_list(&anonymous.payer.pubkey(), data, &[]);
     reaches_verification(send(
         &mut anonymous,
@@ -773,7 +775,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     let data = RingTransactData::parse(&bytes, RingRail::Delegate)
         .unwrap()
         .into_data();
-    delegated.serve_credentials(&data.credential_read);
+    delegated.serve_tracking(data.tracking_revision);
     reaches_verification(delegate_move(
         &mut delegated,
         &delegate,
@@ -784,7 +786,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
 
 /// No records means no thresholds, the frame names no own root.
 #[test]
-fn a_bare_ring_reads_credentials_without_policy_roots() {
+fn a_bare_ring_reads_the_tracking_root_alone() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Bare);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
@@ -799,7 +801,7 @@ fn a_bare_ring_reads_credentials_without_policy_roots() {
         account
             .root_registries(RootRead::transfer(&account, false))
             .collect::<Vec<_>>(),
-        Vec::<Address>::new()
+        vec![tracking_registry()]
     );
 }
 
@@ -1483,7 +1485,7 @@ fn only_the_configured_delegate_moves_withdraws_and_takes_no_deposit() {
 
 /// A curator's restrictive update cannot fail a proof made before it.
 #[test]
-fn a_delegate_reads_no_policy_root_and_requires_credential_roots() {
+fn a_delegate_reads_no_policy_root_and_keeps_the_tracking_root() {
     let fixture = Fixture::new();
     let delegate = Keypair::new();
     let mut ring = delegate_ring(&delegate);
@@ -1492,7 +1494,7 @@ fn a_delegate_reads_no_policy_root_and_requires_credential_roots() {
     let bytes = data.encode().unwrap();
     reaches_verification(delegate_move(&mut ring, &delegate, &data, bytes.clone()));
     let mut stale = data.clone();
-    stale.credential_read = CredentialRead::new(0, &[u16::MAX]).unwrap();
+    stale.tracking_revision = 9u64.into();
     let stale_bytes = stale.encode().unwrap();
     refused(
         delegate_move(&mut ring, &delegate, &stale, stale_bytes),

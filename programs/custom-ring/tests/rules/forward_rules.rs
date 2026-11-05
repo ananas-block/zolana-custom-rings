@@ -71,7 +71,7 @@ pub fn deposit_instruction(
         tag: tag::DEPOSIT,
         key_capacity: u8::try_from(key_capacity).unwrap(),
         proof: Zeroable::zeroed(),
-        credential_read: custom_ring_interface::CredentialRead::new(0, &[0]).unwrap(),
+        tracking_revision: Default::default(),
         own_revision: registry.unwrap_or_default().into(),
         curator_revision: Default::default(),
     };
@@ -132,7 +132,8 @@ fn an_audited_deposit_without_a_bound_root_reaches_its_proof() {
     reaches_verification(audited_deposit(&mut ring, None));
 }
 
-const DEPOSIT_SPP: usize = 3;
+/// The deposit's forwarded list starts after the ring account and the pinned tracking registry.
+const DEPOSIT_SPP: usize = 2;
 /// `DepositPrefix::key_capacity` follows the tag.
 const KEY_CAPACITY_BYTE: usize = 1;
 

@@ -86,6 +86,7 @@ fn selectable_circuits() -> BTreeSet<String> {
         circuits
             .extend((1..=APPLY_BATCH as u64).map(|count| RingCircuit::apply_records(count, mode)));
     }
+    circuits.extend((1..=APPLY_BATCH as u64).map(RingCircuit::apply_enrollments));
     circuits.push(RingCircuit::Merge);
     circuits
         .iter()

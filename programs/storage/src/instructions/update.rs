@@ -11,41 +11,26 @@
 //! Guarantees:
 //! 1. The new root and next index follow from the current ones by exactly the instruction's writes, in order.
 //! 2. A batch the proof marks restrictive retires every earlier root in the instruction, any other batch keeps the outgoing root for the registry's grace.
-//! 3. Every salted owner write proves credential state and address inclusion under the pinned ring namespace.
-//! 4. The classified writes pick the key family, a batch with a salted owner write never verifies under a public key.
-//! 5. Proof acceptance precedes atomic publication of the new policy root and monotonic absence floor.
+//! 3. Every private owner write proves its owner's row under the pinned tracking registry's root at the named revision.
+//! 4. The classified writes pick the key family, a batch with a private owner write never verifies under a public key.
+//! 5. Proof acceptance precedes the new policy root and the raised tracking floor, both land in one instruction.
 //!
 //! Relies on:
 //! 1. `RecordWriteData::storage_entry` keeps each value inside its mask and each mask inside the accepted list bits.
 //! 2. `ApplyRecordsCircuit` keeps list bits outside each mask, moves mint settings only under the entry's flag, keeps the records sorted and sets the restrictive bit exactly when a write tightens a policy field or changes an asset limit.
 
 use custom_ring_interface::{
-    key_catalog::apply_width,
-    storage::{chain_start, RootUpdate, StorageError, StorageRegistry},
+    storage::{chain_start, RootUpdate, StorageError},
     storage_instruction::StorageUpdateIxData,
-    verifying_key, write_chain, ApplyRecordsStatement, CredentialRootSelection, CredentialTreeRead,
-    CustomRingError, PrivateWrites, RingProof,
+    verifying_key, write_chain, ApplyRecordsStatement, PrivateWrites, RingProof,
 };
 use pinocchio::{
     error::ProgramError,
     sysvars::{clock::Clock, Sysvar},
     AccountView, Address, ProgramResult,
 };
-use zolana_ring_policy::ring_id_field;
 
-use crate::loader::{check_authority, check_signer, load_registry_mut};
-
-struct PrivateWriteRoots<'a, 'data> {
-    registry: &'a StorageRegistry,
-    ix: &'a StorageUpdateIxData<'data>,
-    credential_writes: u16,
-    capacity: usize,
-}
-
-struct CheckedWriteRoots {
-    private: PrivateWrites,
-    absence_checkpoint: u64,
-}
+use crate::loader::{check_authority, check_signer, load_registry_mut, PinnedTrackingRoot};
 
 pub fn process_update_ix(
     program_id: &Address,
@@ -53,32 +38,43 @@ pub fn process_update_ix(
     data: &[u8],
 ) -> ProgramResult {
     let ix = StorageUpdateIxData::parse(data)?;
-    let [authority_account, registry_account, credential_accounts @ ..] = accounts else {
+    let [authority_account, registry_account, tracking_accounts @ ..] = accounts else {
         return Err(StorageError::MissingAccounts.into());
     };
     // 1. The authority and current revision fix the registry state and the start of the write chain.
     check_signer(authority_account)?;
     let chain_start = chain_start(registry_account.address(), ix.revision)?;
-    let mut registry = load_registry_mut(program_id, registry_account)?;
+    let registry = load_registry_mut(program_id, registry_account)?;
     check_authority(&registry, authority_account)?;
     if registry.newest().revision != ix.revision {
         return Err(StorageError::RevisionChanged.into());
     }
-    let count = ix.writes.len() as u64;
-    // 2. The host derives credential selection from private masks and authenticated asset preimages.
-    // Parsing already refused a checkpoint that disagrees with it, so the bitmap alone names the key family.
-    let credential_writes = ix.credential_writes()?;
-    // Account roots and the verified ring preimage bind a private proof to the canonical credential owner.
-    let checked = PrivateWriteRoots {
-        registry: &registry,
-        ix: &ix,
-        credential_writes,
-        capacity: usize::from(apply_width(count)),
-    }
-    .load(credential_accounts)?;
-    let (private, absence_checkpoint) = checked
-        .map(|checked| (checked.private, checked.absence_checkpoint))
-        .unzip();
+    let slot = Clock::get()?.slot;
+    // 2. The bitmap derives from private masks and authenticated asset preimages, and parsing paired it
+    // with the tracking revision. The pinned registry serves the root the selected rows open under.
+    let private = match (
+        ix.private_writes()?,
+        ix.tracking_revision,
+        tracking_accounts,
+    ) {
+        (0, None, []) => None,
+        (private_writes, Some(revision), [tracking]) if private_writes != 0 => {
+            if !registry.is_private() {
+                return Err(StorageError::PrivateWriteWithoutTracking.into());
+            }
+            Some(PrivateWrites {
+                private_writes,
+                tracking_root: PinnedTrackingRoot {
+                    program_id,
+                    registry: &registry,
+                    revision,
+                    slot,
+                }
+                .load(tracking)?,
+            })
+        }
+        _ => return Err(StorageError::InvalidTrackingRegistry.into()),
+    };
     // 3. The chain binds every write in instruction order, including writes with unchanged leaves.
     let chain_end = ix.entries().try_fold(
         chain_start,
@@ -94,11 +90,11 @@ pub fn process_update_ix(
         new_next_index: ix.apply.new_next_index(),
         chain_start,
         chain_end,
-        count,
+        count: ix.writes.len() as u64,
         restrictive: ix.apply.restrictive(),
         private,
     };
-    // 4. One proof under the mode's key binds the policy transition and every required credential and address inclusion.
+    // 4. One proof under the mode's key binds the policy transition and every selected tracking row.
     RingProof {
         proof: &ix.apply.proof,
         statement: statement.hash().map_err(|_| StorageError::HashingFailed)?,
@@ -106,97 +102,8 @@ pub fn process_update_ix(
     }
     .verify()
     .map_err(|_| StorageError::ProofVerificationFailed)?;
-    // 5. The policy root and maximum absence checkpoint become visible together after verification.
-    registry.update(RootUpdate {
-        slot: Clock::get()?.slot,
-        data: &ix,
-        absence_checkpoint,
-    })?;
+    // 5. The policy root and the tracking floor move together after verification.
+    let mut registry = registry;
+    registry.update(RootUpdate { slot, data: &ix })?;
     Ok(())
-}
-
-impl PrivateWriteRoots<'_, '_> {
-    fn load(self, accounts: &mut [AccountView]) -> Result<Option<CheckedWriteRoots>, ProgramError> {
-        // 1. A public batch has no credential accounts and binds no credential section.
-        if self.credential_writes == 0 {
-            self.ix
-                .credential_read
-                .check_empty()
-                .map_err(|_| StorageError::InvalidCredentialRead)?;
-            if !accounts.is_empty() || self.ix.private_write.is_some() {
-                return Err(StorageError::InvalidCredentialRead.into());
-            }
-            return Ok(None);
-        }
-        // 2. The ring program preimage authenticates the credential signing PDA before roots enter the statement.
-        if !self.registry.is_private() {
-            return Err(StorageError::PrivateWriteWithoutRing.into());
-        }
-        let expected = self
-            .ix
-            .private_write
-            .as_ref()
-            .ok_or(StorageError::InvalidPrivateRing)?;
-        let ring_program = &expected.ring_program;
-        if ring_id_field(ring_program.as_array()).map_err(|_| StorageError::HashingFailed)?
-            != self.registry.private_ring_id
-        {
-            return Err(StorageError::InvalidPrivateRing.into());
-        }
-        self.ix
-            .credential_read
-            .check_capacity(self.capacity)
-            .map_err(|_| StorageError::InvalidCredentialRead)?;
-        let (address_tree, state_trees) = accounts
-            .split_first_mut()
-            .ok_or(StorageError::MissingAccounts)?;
-        let indexes = self.ix.credential_read.state_root_indexes();
-        if state_trees.len() != indexes.len() {
-            return Err(StorageError::InvalidCredentialRead.into());
-        }
-        // 3. Accepted tree roots establish the proof checkpoint and the state trees holding immutable credentials.
-        let checkpoint = read_credential_tree(address_tree, |tree| {
-            tree.checkpoint(self.ix.credential_read.address_root_index())
-        })?;
-        // The instruction sequence must equal the authenticated root sequence for deterministic replay of the floor.
-        if expected.sequence != checkpoint.sequence() {
-            return Err(StorageError::InvalidCredentialRead.into());
-        }
-        let state_roots = state_trees
-            .iter_mut()
-            .zip(indexes)
-            .map(|(tree, index)| read_credential_tree(tree, |read| read.state_root(*index)))
-            .collect::<Result<Vec<_>, _>>()?;
-        let credentials = CredentialRootSelection {
-            ring_program,
-            address_checkpoint: checkpoint,
-            state_roots: &state_roots,
-            capacity: self.capacity,
-        }
-        .roots()
-        .map_err(|_| StorageError::InvalidCredentialRead)?;
-        Ok(Some(CheckedWriteRoots {
-            private: PrivateWrites {
-                credential_writes: self.credential_writes,
-                private_ring_id: self.registry.private_ring_id,
-                credentials,
-            },
-            absence_checkpoint: checkpoint.sequence(),
-        }))
-    }
-}
-
-fn read_credential_tree<R>(
-    account: &mut AccountView,
-    read: impl FnOnce(CredentialTreeRead<'_>) -> Result<R, CustomRingError>,
-) -> Result<R, ProgramError> {
-    let address = *account.address();
-    let owner = *account.owner();
-    let mut data = account.try_borrow_mut()?;
-    read(CredentialTreeRead {
-        address: &address,
-        owner: &owner,
-        data: &mut data,
-    })
-    .map_err(Into::into)
 }

@@ -5,13 +5,13 @@
 //! statement from the account, so a prover picks no role key, auditor key, policy hash or registry.
 //!
 //! Read after `docs/spec.md`, `docs/design/records-and-roots.md`. Read before
-//! `program-libs/interface/src/accounts/storage.rs`, `program-libs/interface/src/proof/credential_read.rs`,
+//! `program-libs/interface/src/accounts/storage.rs`, `program-libs/interface/src/accounts/tracking.rs`,
 //! `program-libs/interface/src/instructions/transact.rs`, `programs/custom-ring/src/instructions/accounts/loader.rs`.
 //!
 //! Invariants
 //! 1. `policy_hash` hashes `rules` and `sources`, and `set_policy` is the one write and validates the whole table first. The circuit holds its table to the hash, so a table the program refused never reaches a proof.
-//! 2. A nonzero `records` names the own policy registry, the loader authenticates its address and ring identity.
-//! 3. `RootRead` selects policy registries, credential state roots come from retained SPP history and private absence requires the maximum salted source floor.
+//! 2. A nonzero `records` names a registry of the ring's own `ring_id`, and `tracking` the registry `Initialize` created, and it never moves. `RegistrySlots::load` compares each account it reads to these addresses.
+//! 3. `RootRead` fixes the registries a frame reads. Every transfer and deposit and a hidden owner's merge read the tracking root, a delegate transfer and a merge read no policy root, so a policy update fails neither in flight.
 //! 4. `LiveRoots` reads each root at the frame's revision and slot. The frame names a revision and never a root.
 
 use core::ops::BitOr;
@@ -21,14 +21,14 @@ use solana_address::Address;
 use spr_hasher::HasherError;
 use wincode::{SchemaRead, SchemaWrite};
 use zolana_ring_policy::{
-    EncodedRuleTable, ListId, ListSet, PolicySource, RuleTable, SourceMap, registry_field,
-    ring_id_field,
+    registry_field, EncodedRuleTable, ListId, ListSet, PolicySource, RuleTable, SourceMap,
 };
 
 use crate::{
-    TAGGED_X25519_KEY_LEN,
     error::CustomRingError,
     storage::{Revision, StorageRegistry},
+    tracking::TrackingRegistry,
+    TAGGED_X25519_KEY_LEN,
 };
 
 /// Roots a transfer proof may bind, applications in between leave it provable.
@@ -159,6 +159,8 @@ pub struct RingPolicy {
     pub created_slot: [u8; 8],
     /// The own `StorageRegistry`, zero means no thresholds.
     pub records: Address,
+    /// Every read compares it, a forged registry would prove any wallet absent.
+    pub tracking: Address,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
     /// Non-empty exactly for the lists `rules` references.
@@ -198,6 +200,7 @@ pub struct NewRing {
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     pub created_slot: u64,
     pub records: Address,
+    pub tracking: Address,
 }
 
 impl NewRing {
@@ -211,6 +214,7 @@ impl NewRing {
         ring.auditor_pubkey = self.auditor_pubkey;
         ring.created_slot = self.created_slot.to_le_bytes();
         ring.records = self.records;
+        ring.tracking = self.tracking;
         ring
     }
 }
@@ -326,11 +330,12 @@ impl RingPolicy {
         Ok(self.rules.validate(&self.source_map()?)?)
     }
 
-    /// Policy registry order after the ring account.
+    /// Account order after the ring account.
     pub fn root_registries(&self, read: RootRead) -> impl Iterator<Item = Address> {
         self.own_registry(read)
             .into_iter()
             .chain(self.curator_registry(read))
+            .chain([self.tracking])
     }
 
     pub fn salted_registries(&self) -> Vec<Address> {
@@ -340,11 +345,30 @@ impl RingPolicy {
             .collect()
     }
 
-    /// Only salted reads inherit the source's authenticated address sequence floor.
-    pub fn absence_floor(&self, address: &Address, source: &StorageRegistry) -> u64 {
+    /// A salted list needs a floor against the ring's tracking registry.
+    pub fn check_source_pair(
+        &self,
+        address: &Address,
+        source: &StorageRegistry,
+    ) -> Result<(), CustomRingError> {
+        // An unpaired source serving a private list takes no floor, and a blocked enrolled owner
+        // then proves itself unenrolled under an old tracking root. A public read holds no such
+        // risk, one curator serves many rings and pins at most one of their registries.
+        match source.tracking_registry == self.tracking || !self.reads_salted(address) {
+            true => Ok(()),
+            false => Err(CustomRingError::SaltedSourceOtherTracking),
+        }
+    }
+
+    /// The floor a frame's tracking root answers to through `source`, zero with no salted read.
+    ///
+    /// The one exception to tracking grace, a stale root could prove a blocked owner unenrolled.
+    /// A source's floor counts revisions of the registry it pins, so a public curator's floor
+    /// says nothing of the ring's registry and comparing them would refuse a live root.
+    pub fn tracking_floor(&self, address: &Address, source: &StorageRegistry) -> Revision {
         match self.reads_salted(address) {
-            true => source.absence_floor(),
-            false => 0,
+            true => source.tracking_floor,
+            false => Revision::default(),
         }
     }
 
@@ -353,21 +377,6 @@ impl RingPolicy {
         self.salted()
             .iter()
             .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address)
-    }
-
-    /// `SaltedSourceOtherRing` when a salted list reads `address` and `source` is not paired with `program_id`.
-    pub fn check_salted_source(
-        &self,
-        program_id: &Address,
-        address: &Address,
-        source: &StorageRegistry,
-    ) -> Result<(), CustomRingError> {
-        if self.reads_salted(address)
-            && source.private_ring_id != ring_id_field(program_id.as_array())?
-        {
-            return Err(CustomRingError::SaltedSourceOtherRing);
-        }
-        Ok(())
     }
 
     pub fn own_registry(&self, read: RootRead) -> Option<Address> {
@@ -415,7 +424,7 @@ pub enum ListRegistry {
     Curator(Address),
 }
 
-/// Policy roots only, credential roots have a separate SPP account selection.
+/// Policy roots only, every read also takes the pinned tracking registry.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RootRead {
     None,
@@ -447,11 +456,15 @@ impl RootRead {
     }
 }
 
-/// Policy roots served at `slot`, a revoked root fails at once.
+/// The roots the passed registries serve at `slot`, a revoked root fails at once.
 #[derive(Debug, Copy, Clone)]
 pub struct LiveRoots<'a> {
     pub own: Option<&'a StorageRegistry>,
     pub curator: Option<&'a StorageRegistry>,
+    /// Bound by address to the ring's pin.
+    pub tracking: &'a TrackingRegistry,
+    /// `RingPolicy::tracking_floor` of the sources passed, zero with no salted read.
+    pub tracking_floor: Revision,
     pub slot: u64,
 }
 
@@ -464,6 +477,16 @@ impl LiveRoots<'_> {
     pub fn curator(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
         self.served(self.curator, revision)?
             .ok_or(CustomRingError::MissingRegistry)
+    }
+
+    /// Refused below a salted source's floor, the one exception to tracking grace.
+    pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
+        if revision.value() < self.tracking_floor.value() {
+            return Err(CustomRingError::TrackingRootBelowFloor);
+        }
+        self.tracking
+            .root(revision, self.slot)
+            .map_err(|_| CustomRingError::RootNotServed)
     }
 
     /// Without the records, `None` at revision zero and `unread` otherwise.
@@ -711,9 +734,10 @@ fn source_map_of(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, Cu
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 1093);
+const _: () = assert!(RingPolicy::SIZE == 1125);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, records) == 207);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, tracking) == 239);
 const _: () = assert!(CoSigner::SIZE == 35);

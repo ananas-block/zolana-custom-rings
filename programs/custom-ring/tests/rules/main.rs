@@ -3,7 +3,6 @@
 mod anonymous_rules;
 mod binary_rules;
 mod common;
-mod enroll_rules;
 mod forward_rules;
 mod heap_rules;
 mod in_proof_owner_rules;

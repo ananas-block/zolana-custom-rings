@@ -1,9 +1,10 @@
 //! Pins `test-vectors/registry/empty_root.json` for Go, TS and the indexer.
 
-use custom_ring_interface::MEMBER_REGISTRY_EMPTY_ROOT;
+use custom_ring_interface::{tracking::TRACKING_EMPTY_ROOT, MEMBER_REGISTRY_EMPTY_ROOT};
 use serde_json::{json, Value};
 use zolana_ring_member_registry::{
-    quad_node, MemberRecord, MemberRegistryTree, RecordTree, ZERO_SUBTREES,
+    quad_node, MemberRecord, MemberRegistryTree, RecordTree, TrackingRecord, TrackingTree,
+    ZERO_SUBTREES,
 };
 
 const VECTOR: &str = concat!(
@@ -13,8 +14,9 @@ const VECTOR: &str = concat!(
 
 fn vector() -> Value {
     let policy = MemberRecord::SENTINEL;
+    let tracking = TrackingRecord::SENTINEL;
     json!({
-        "description": "The sentinel leaf and the root of the tree holding only it, for the policy registry. Produced by program-libs/member-registry/tests/empty_root_vector.rs.",
+        "description": "The sentinel leaf and the root of the tree holding only it, for the policy registry and the tracking registry. Produced by program-libs/member-registry/tests/empty_root_vector.rs.",
         "sentinel": {
             "member": hex::encode(policy.member),
             "next": hex::encode(policy.next),
@@ -25,6 +27,12 @@ fn vector() -> Value {
             "leaf_hash": hex::encode(policy.hash().unwrap()),
         },
         "empty_root": hex::encode(MEMBER_REGISTRY_EMPTY_ROOT),
+        "tracking_sentinel": {
+            "member": hex::encode(tracking.member),
+            "next": hex::encode(tracking.next),
+            "leaf_hash": hex::encode(tracking.hash().unwrap()),
+        },
+        "tracking_empty_root": hex::encode(TRACKING_EMPTY_ROOT),
         "zero_subtrees": ZERO_SUBTREES.iter().map(hex::encode).collect::<Vec<_>>(),
     })
 }
@@ -38,6 +46,10 @@ fn zero_subtrees_chain_and_the_trees_start_at_their_roots() {
     assert_eq!(
         MemberRegistryTree::new().unwrap().root().unwrap(),
         MEMBER_REGISTRY_EMPTY_ROOT
+    );
+    assert_eq!(
+        TrackingTree::new().unwrap().root().unwrap(),
+        TRACKING_EMPTY_ROOT
     );
 }
 

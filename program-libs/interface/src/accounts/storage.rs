@@ -7,12 +7,12 @@
 //! for a proof in flight.
 //!
 //! Read after `docs/design/records-and-roots.md`, `program-libs/interface/src/accounts/member_registry.rs`.
-//! Read before `programs/storage/src/instructions/update.rs`.
+//! Read before `program-libs/interface/src/accounts/tracking.rs`, `programs/storage/src/instructions/update.rs`.
 //!
 //! Invariants:
 //! 1. An update whose apply proof sets the restrictive bit retires every earlier root in the same instruction, and a proof in flight under one of them fails and proves again. The bit is set when a write clears a grant bit, sets a deny bit, masks a private list, tightens a mint setting or changes an asset limit, and the statement binds it.
 //! 2. Any other update keeps the outgoing root for `grace_slots` and over a full history evicts the oldest kept root, so routine writes never stall. Every served root then reads each policy field no more permissive than the newest root, and rules are monotone in those fields, so a kept root admits no transfer the newest refuses.
-//! 3. Every salted owner write proves credential state and address inclusion, then raises `absence_floor` to the accepted address sequence in the same instruction. A salted read accepts no address root below the source floor, preventing absence for an owner with a private entry.
+//! 3. Every private owner write proves the owner's row under the pinned tracking registry's root at the named revision, then raises `tracking_floor` to that revision in the same instruction. `LiveRoots::tracking` refuses a frame reading a salted list through the source under a lower revision. Without the floor an enrolled owner whose salted entry was just written names a tracking root from before its enrollment, proves its row absent and skips the salted read. Rows never leave the tree, so every root at or above the floor holds the row.
 //! 4. A revision counts up by one per update and names at most one root.
 
 use bytemuck::{Pod, Zeroable};
@@ -61,10 +61,10 @@ pub struct StorageRegistry {
     pub next_index: [u8; 4],
     /// Immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-    /// Immutable, salted source mappings require the same ring identity.
-    pub private_ring_id: [u8; 32],
-    /// Little endian address sequence, salted reads require a root at or above the floor.
-    pub absence_floor: [u8; 8],
+    /// Immutable, a ring maps a private list only to a source pinned to its own registry.
+    pub tracking_registry: Address,
+    /// The highest tracking revision a private write proved a row under, frames name no older tracking root.
+    pub tracking_floor: Revision,
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
 }
@@ -73,8 +73,6 @@ pub struct StorageRegistry {
 pub struct RootUpdate<'a> {
     pub slot: u64,
     pub data: &'a StorageUpdateIxData<'a>,
-    /// Authenticated sequence of the address root bound by the private write proof.
-    pub absence_checkpoint: Option<u64>,
 }
 
 impl From<u64> for Revision {
@@ -117,7 +115,7 @@ impl StorageRegistry {
         registry.authority = authority;
         registry.grace_slots = ix.grace_slots;
         registry.ring_id = ix.ring_id;
-        registry.private_ring_id = ix.private_ring_id;
+        registry.tracking_registry = ix.tracking_registry;
         registry.next_index = 1u32.to_le_bytes();
         registry.roots[0].hash = MEMBER_REGISTRY_EMPTY_ROOT;
         registry
@@ -159,31 +157,17 @@ impl StorageRegistry {
 
     /// A salted list may read it.
     pub fn is_private(&self) -> bool {
-        self.private_ring_id != [0; 32]
-    }
-
-    pub const fn absence_floor(&self) -> u64 {
-        u64::from_le_bytes(self.absence_floor)
+        self.tracking_registry != Address::default()
     }
 
     /// Writes nothing on a refusal.
     pub fn update(&mut self, update: RootUpdate<'_>) -> Result<(), StorageError> {
-        let RootUpdate {
-            slot,
-            data,
-            absence_checkpoint,
-        } = update;
-        // 1. Every credential write requires its authenticated checkpoint and an immutable ring binding.
-        let floor = if data.credential_writes()? != 0 {
-            if !self.is_private() {
-                return Err(StorageError::PrivateWriteWithoutRing);
-            }
-            Some(absence_checkpoint.ok_or(StorageError::InvalidCredentialRead)?)
-        } else {
-            if absence_checkpoint.is_some() {
-                return Err(StorageError::InvalidCredentialRead);
-            }
-            None
+        let RootUpdate { slot, data } = update;
+        // 1. A private owner write needs a pinned tracking registry and raises the floor to its proven revision.
+        // Parsing already paired the revision with a nonzero private bitmap.
+        let floor = match data.tracking_revision {
+            Some(_) if !self.is_private() => return Err(StorageError::PrivateWriteWithoutTracking),
+            floor => floor,
         };
         // 2. The proven restrictive bit picks the retirement, the grace reaches only a batch that tightens nothing.
         let retirement = match data.apply.restrictive() {
@@ -200,8 +184,8 @@ impl StorageRegistry {
             retirement,
             data.apply.new_root,
         )?;
-        if let Some(floor) = floor {
-            self.absence_floor = self.absence_floor().max(floor).to_le_bytes();
+        if let Some(floor) = floor.filter(|floor| floor.value() > self.tracking_floor.value()) {
+            self.tracking_floor = floor;
         }
         self.next_index = data.apply.new_next_index;
         Ok(())
@@ -318,8 +302,22 @@ pub enum StorageError {
     RevisionOverflow = 9015,
     #[error("no apply key serves the write count")]
     UnsupportedBatch = 9016,
+    #[error("viewing key is zero or not canonical")]
+    NonCanonicalViewingKey = 9021,
+    #[error("tracking registry is invalid")]
+    InvalidTrackingRegistry = 9022,
+    #[error("tracking authorization is invalid")]
+    InvalidTrackingAuthorization = 9023,
+    #[error("the enrollment's revision is already applied")]
+    EnrollmentAlreadyApplied = 9024,
+    #[error("the enrolled nullifier key, list tag and ciphertext are final")]
+    EnrollmentKeyFinal = 9025,
     #[error("a zero nullifier key does not enroll")]
     ZeroNullifierKey = 9028,
+    #[error("a first enrollment carries a proof and a rotation none")]
+    EnrollmentProofShape = 9029,
+    #[error("an apply names no enrollment")]
+    NoEnrollmentsNamed = 9030,
     #[error("owner grant account is invalid")]
     InvalidOwnerGrant = 9031,
     #[error("reader key names no scheme")]
@@ -328,12 +326,10 @@ pub enum StorageError {
     InvalidAuditorKey = 9033,
     #[error("asset write preimage is invalid")]
     InvalidAssetWrite = 9034,
-    #[error("private write requires a bound ring")]
-    PrivateWriteWithoutRing = 9035,
-    #[error("credential root selection is invalid")]
-    InvalidCredentialRead = 9036,
-    #[error("ring program does not match the private ring")]
-    InvalidPrivateRing = 9037,
+    #[error("private write on a registry with no tracking pin")]
+    PrivateWriteWithoutTracking = 9035,
+    #[error("the tracking tree holds no further leaf")]
+    TrackingTreeFull = 9036,
 }
 
 impl From<StorageError> for ProgramError {

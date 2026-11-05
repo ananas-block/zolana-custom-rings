@@ -15,7 +15,7 @@
 //! 2. Bytes 1 to 3, `FrameHeader`, SPP's shape index, the nullifier count `n` and the published slot count `m`, flags in their top bits. SPP's selector and vector lengths follow from them.
 //! 3. Byte 4, the approval mask. A statement element, SPP never sees it.
 //! 4. The ring proof. SPP never sees it.
-//! 5. The credential root indexes, then own and curator revisions under their flags. SPP never receives these selections.
+//! 5. The revisions, tracking, then own and curator under their flags. SPP never sees them. Each names a root the program reads from the bound registry.
 //! 6. `expiry_unix_ts`, `tx_viewing_u` and `salt`. SPP's fields, the expiry in four bytes and the key without its 0x04 tag.
 //! 7. [`FrameExtensions`] under `EXTENSIONS`. SPP's `data_hash`, `ring_data_hash`, application messages and cached selector, then `approval_totals` and `signer_data_counts`, statement elements SPP never sees.
 //! 8. `interface_transfers`, SPP's public legs as sent, then under `OWN_ROOT` the SPL withdrawal token owners the program checks for the policy's withdrawal hash.
@@ -36,15 +36,13 @@ mod expansion;
 
 use solana_address::Address;
 use spr_hasher::{
-    HasherError,
     hash_chain::create_hash_chain_4,
     primitives::{right_align, solana_owner_identity},
+    HasherError,
 };
 use spr_interface::{
-    N_PUBLIC_SLOTS,
     error::ShieldedPoolError,
     instruction::{
-        CircuitId, InterfaceTransfer, TreeContext,
         instruction_data::{
             transact::{
                 AnonymousRingEddsaProofData, Bsb22Commitment, CacheAccess, CacheWrite,
@@ -53,17 +51,17 @@ use spr_interface::{
             validate_interface_transfers,
         },
         tag::{RING_AUTHORITY_TRANSACT, RING_TRANSACT},
+        CircuitId, InterfaceTransfer, TreeContext,
     },
-    shape::{SPP_SUPPORTED_SHAPES, Shape},
+    shape::{Shape, SPP_SUPPORTED_SHAPES},
+    N_PUBLIC_SLOTS,
 };
-use wincode::{Serialize, containers, len::FixIntLen};
+use wincode::{containers, len::FixIntLen, Serialize};
 
 use crate::{
-    CredentialRead, CredentialRoots, CustomRingProof, InstructionTag, LiveRoots, PlainGroth16Proof,
-    RingMode, RingPolicy, RootRead, TAGGED_X25519_KEY_LEN,
     anonymous_exit::ANONYMOUS_PARTIES,
     audit_stream::{
-        AUDIT_RECORD_LEN, AuditStreamLayout, BundleLayout, DATA_TAIL_LEN, MIN_REPLY_LEN,
+        AuditStreamLayout, BundleLayout, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MIN_REPLY_LEN,
         RECIPIENT_BODY_LEN,
     },
     bytes::Bytes,
@@ -77,7 +75,9 @@ use crate::{
         TransferStatement,
     },
     storage::Revision,
-    stream::{SLOT_TAG_LEN, framed_slot_tag, slot_tag, unframed_slot_tag},
+    stream::{framed_slot_tag, slot_tag, unframed_slot_tag, SLOT_TAG_LEN},
+    CustomRingProof, InstructionTag, LiveRoots, PlainGroth16Proof, RingMode, RingPolicy, RootRead,
+    TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
@@ -253,7 +253,7 @@ pub struct RingTransactData<'a> {
     pub n_out: u8,
     /// The ring's, verified ahead of the SPP call.
     pub proof: &'a CustomRingProof,
-    pub credential_read: CredentialRead,
+    pub tracking_revision: Revision,
     /// Present exactly on a ring with own records, off the delegate rails.
     pub own_revision: Option<Revision>,
     /// Present exactly on a policy ring, off the delegate rails.
@@ -622,12 +622,6 @@ impl<'a> ParsedTransact<'a> {
     }
 }
 
-pub struct TransferRootRead<'a, 'state> {
-    pub ring: &'a RingPolicy,
-    pub policy: &'a LiveRoots<'state>,
-    pub credentials: CredentialRoots,
-}
-
 /// What the program supplies beside the data for the transfer statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferBinding<'a> {
@@ -661,7 +655,7 @@ impl<'a> RingTransactData<'a> {
         // 2. The ring's own fields, ahead of everything SPP reads. A revision names a root, `roots` reads it.
         let approval = ApprovalMask::new(bytes.byte()?).ok_or(CustomRingError::FlagNotAllowed)?;
         let proof = bytes.pod()?;
-        let credential_read = CredentialRead::read(&mut bytes)?;
+        let tracking_revision = *bytes.pod()?;
         let own_revision = flags
             .reads_own_root()
             .then(|| bytes.pod().copied())
@@ -811,7 +805,7 @@ impl<'a> RingTransactData<'a> {
             n_in: header.n_in,
             n_out: header.n_out,
             proof,
-            credential_read,
+            tracking_revision,
             own_revision,
             policy,
             spl_withdrawal_owners,
@@ -861,7 +855,7 @@ impl<'a> RingTransactData<'a> {
         out.extend(header.bytes()?);
         out.push(self.approval.bits());
         out.extend_from_slice(bytemuck::bytes_of(self.proof));
-        self.credential_read.encode_into(&mut out);
+        out.extend_from_slice(&self.tracking_revision.0);
         if let Some(revision) = self.own_revision {
             out.extend_from_slice(&revision.0);
         }
@@ -952,8 +946,6 @@ impl<'a> RingTransactData<'a> {
     ) -> Result<CheckedAuthorization<'a>, CustomRingError> {
         // 1. Proof fields, policy sections and extensions must belong to the selected authorization rail.
         let authorization = CheckedAuthorization::new(self)?;
-        self.credential_read
-            .check_capacity(crate::credential_read::MAX_CREDENTIAL_READS)?;
         let flags = self.flags();
         flags.check(self.rail)?;
         let header = FrameHeader::of(self)?;
@@ -1065,7 +1057,7 @@ impl<'a> RingTransactData<'a> {
         Ok(1 + 3
             + 1
             + core::mem::size_of::<CustomRingProof>()
-            + self.credential_read.encoded_len()
+            + revision
             + self.own_revision.map_or(0, |_| revision)
             + policy
             + FIELD * self.spl_withdrawal_owners.len()
@@ -1090,14 +1082,11 @@ impl<'a> RingTransactData<'a> {
     }
 
     /// Refuses a frame whose sections disagree with what the rail reads of the ring.
-    pub fn roots(&self, read: TransferRootRead<'_, '_>) -> Result<TransferRoots, CustomRingError> {
-        let TransferRootRead {
-            ring,
-            policy: roots,
-            credentials,
-        } = read;
-        self.credential_read
-            .check_capacity(credentials.capacity())?;
+    pub fn roots(
+        &self,
+        ring: &RingPolicy,
+        roots: &LiveRoots<'_>,
+    ) -> Result<TransferRoots, CustomRingError> {
         // 1. The frame carries a section exactly where the rail reads that root, no bit the prover sets opens or skips a read.
         let read = RootRead::transfer(ring, self.rail.is_delegate());
         let policy = match (self.policy, read == RootRead::Policy) {
@@ -1121,12 +1110,10 @@ impl<'a> RingTransactData<'a> {
         if !self.approval.is_empty() && self.rail.is_delegate() {
             return Err(CustomRingError::UnexpectedApproval);
         }
-        // 3. Policy roots come from their bound registries at the named revisions, retired roots fail before proof verification.
+        // 3. Each root comes from its bound registry at the named revision, a retired root fails here ahead of the proof.
         let mut bound = TransferRoots {
-            policy_hash: [0; 32],
-            own_root: [0; 32],
-            curator_root: [0; 32],
-            credentials,
+            tracking_root: roots.tracking(self.tracking_revision)?,
+            ..TransferRoots::default()
         };
         if policy.is_some() {
             bound.policy_hash = *ring.policy_hash()?;
