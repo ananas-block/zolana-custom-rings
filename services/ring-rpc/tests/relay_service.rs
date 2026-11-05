@@ -4,6 +4,8 @@
 mod attempts;
 #[path = "common/relay.rs"]
 mod relay_fixture;
+#[path = "common/store.rs"]
+mod store_fixture;
 #[path = "common/wide_frame.rs"]
 mod wide_frame;
 
@@ -32,8 +34,8 @@ use zolana_ring_client::rpc::{
     GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
 };
 use zolana_ring_rpc::{
-    relay_module, Relay, RelayBudget, RelayError, RelayParts, RingRpcError, ServedRings, Store,
-    ABANDONED_AFTER_SLOTS,
+    relay_module, Migrator, Relay, RelayBudget, RelayError, RelayParts, RingRpcError, ServedRings,
+    Store, ABANDONED_AFTER_SLOTS, STORE_CONNECTIONS,
 };
 
 use wide_frame::wide_frame;
@@ -88,7 +90,7 @@ impl Fixture {
         let chain = Arc::new(RecordingChain::default());
         let fee_payer = Keypair::new_from_array([31; 32]);
         let fee_payer_address = fee_payer.pubkey();
-        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let store = store_fixture::test_store().await;
         let relay = Relay::new(RelayParts {
             store: store.clone(),
             prover: prover.clone(),
@@ -117,7 +119,8 @@ impl Fixture {
         connection
             .query_one(Statement::from_string(
                 connection.get_database_backend(),
-                "SELECT COALESCE(SUM(lamports), 0) AS total FROM relay_reservations".to_owned(),
+                "SELECT CAST(COALESCE(SUM(lamports), 0) AS BIGINT) AS total FROM relay_reservations"
+                    .to_owned(),
             ))
             .await
             .expect("sum")
@@ -146,7 +149,8 @@ impl Fixture {
         connection
             .query_one(Statement::from_sql_and_values(
                 connection.get_database_backend(),
-                "SELECT COALESCE(SUM(committed), 0) AS total FROM relay_reserved WHERE scope=$1",
+                "SELECT CAST(COALESCE(SUM(committed), 0) AS BIGINT) AS total FROM relay_reserved \
+                 WHERE scope=$1",
                 vec![vec![0u8; 32].into()],
             ))
             .await
