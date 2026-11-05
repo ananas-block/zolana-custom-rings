@@ -277,8 +277,8 @@ fn a_gross_past_u64_survives_a_net_within_it() {
 #[test]
 fn the_widest_accepted_legs_fold_a_gross_past_u64_to_a_net_within_it() {
     let mut legs = [sol(u64::MAX, true); spr_interface::MAX_INTERFACE_TRANSFERS];
-    for pair in legs.chunks_exact_mut(2) {
-        pair[0] = sol(u64::MAX, false);
+    for [withdrawal, _] in legs.as_chunks_mut::<2>().0 {
+        *withdrawal = sol(u64::MAX, false);
     }
     legs[legs.len() - 1] = sol(u64::MAX - 1, true);
     let slots = fold(legs).unwrap();
