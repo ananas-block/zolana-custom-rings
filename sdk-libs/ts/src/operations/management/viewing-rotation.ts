@@ -60,8 +60,11 @@ export async function updateViewingKey(
   if (!equalBytes(input.history.current().viewingPublicKey.u(), viewingU))
     throw new RingError("RING_VIEWING_HISTORY_NOT_CURRENT");
   // 2. A rotation repeats the final seal of the first enrollment, the program
-  // refuses any other and raises the revision.
+  // refuses any other and raises the revision. A holder of another nullifier
+  // key would publish a viewing key the enrolled row does not belong to.
   const stored = await storedAuthorization(input, context);
+  if (!equalBytes(stored.nullifierPk, input.keys.address().nullifierPublicKey))
+    throw new RingError("RING_ENROLLMENT_KEY_MISMATCH");
   if (equalBytes(stored.viewingU, viewingU)) return undefined;
   return enrollInstruction(
     {

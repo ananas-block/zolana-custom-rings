@@ -377,9 +377,10 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
       const capacity = applyCapacity(request.writes.length);
       return {
         ...head,
-        ...applyHeadJson(request),
-        oldNextIndex: integer(request.oldNextIndex, "oldNextIndex", 0, U32_MAX),
-        newNextIndex: integer(request.newNextIndex, "newNextIndex", 0, U32_MAX),
+        ...applyHeadJson(request, [
+          integer(request.oldNextIndex, "oldNextIndex", 0, U32_MAX),
+          integer(request.newNextIndex, "newNextIndex", 0, U32_MAX),
+        ]),
         count: request.writes.length,
         writes: paddedWrites(request.writes, capacity, writeJson),
         ...(request.private === undefined ? {} : privateApplyJson(request.private, capacity)),
@@ -389,9 +390,10 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
       const capacity = applyCapacity(request.writes.length);
       return {
         ...head,
-        ...applyHeadJson(request),
-        oldNextIndex: trackingNextIndex(request.oldNextIndex, "oldNextIndex"),
-        newNextIndex: trackingNextIndex(request.newNextIndex, "newNextIndex"),
+        ...applyHeadJson(request, [
+          trackingNextIndex(request.oldNextIndex, "oldNextIndex"),
+          trackingNextIndex(request.newNextIndex, "newNextIndex"),
+        ]),
         count: request.writes.length,
         writes: paddedWrites(request.writes, capacity, trackingWriteJson),
       };
@@ -821,13 +823,16 @@ function privateApplyJson(input: PrivateApplyProofInput, capacity: number): Json
   };
 }
 
-/** The roots and chain of an apply, each family encodes its own next index width. */
+/** Go field order, each family checks its own next index width. */
 function applyHeadJson(
   request: Readonly<{ oldRoot: Bytes32; newRoot: Bytes32; chainStart: Bytes32; chainEnd: Bytes32 }>,
+  [oldNextIndex, newNextIndex]: readonly [number, number],
 ): Json {
   return {
     oldRoot: field(request.oldRoot, "oldRoot"),
     newRoot: field(request.newRoot, "newRoot"),
+    oldNextIndex,
+    newNextIndex,
     chainStart: field(request.chainStart, "chainStart"),
     chainEnd: field(request.chainEnd, "chainEnd"),
   };

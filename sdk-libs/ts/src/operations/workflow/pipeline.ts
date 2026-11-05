@@ -111,11 +111,7 @@ import {
   interfaceTransferOf,
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
-import {
-  TransactionFit,
-  type FitBudget,
-  type FitSigners,
-} from "./address-ceiling.js";
+import { TransactionFit, type FitBudget, type FitSigners } from "./address-ceiling.js";
 import { checkTransferFits } from "./compile.js";
 import { ringRegistrySlots, transferRootRead } from "./ring-reads.js";
 import {
