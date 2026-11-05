@@ -1,11 +1,13 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use custom_ring_sdk::{
     AllowedNullifiers, DelegatePayment, DelegateSourceError, ResolvedSource, SourceEnrollment,
 };
 use jsonrpsee::types::ErrorObjectOwned;
-use solana_address::Address;
 use spr_indexer_api::Hash;
 use spr_keypair::{NullifierKey, ShieldedAddress};
+use spr_transaction::{Mint, WalletUtxo};
 use thiserror::Error;
 use zolana_ring_client::rpc::{
     AuthorityTransferAttestation, DelegateNotesAttestation, GetDelegateNotesRequest,
@@ -292,12 +294,14 @@ impl<S: TransactionSource> Hub<S> {
         // 3. Each source key is the public zero key or its escrowed key, and only its own notes follow.
         // The same openings fill the allowed set the sealed inputs answer to.
         let assets = shared.due_assets().await;
-        let mut mints: Vec<Address> = Vec::new();
+        let mut mints: Vec<Mint> = Vec::new();
         for payment in &transfer.payments {
-            if !mints.contains(&payment.mint.0) {
-                mints.push(payment.mint.0);
+            let mint = assets.registry().mint(&payment.mint.0)?;
+            if !mints.contains(&mint) {
+                mints.push(mint);
             }
         }
+        let unheld = HashSet::new();
         let enrollment = ScannedEnrollment { service: &service };
         let mut allowed = AllowedNullifiers::default();
         let mut sources = Vec::with_capacity(transfer.sources.len());
@@ -308,20 +312,20 @@ impl<S: TransactionSource> Hub<S> {
                 .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
                 .to_bytes();
             let resolved = ResolvedSource::resolve(source, &enrollment).await?;
-            let mut notes = Vec::new();
-            for mint in &mints {
-                notes.extend(
-                    shared
-                        .store(ring)
-                        .spendable(SpendableNotes {
-                            ring,
-                            owner_key,
-                            mint: assets.registry().mint(mint)?,
-                            nullifier_key: resolved.nullifier_key(),
-                        })
-                        .await?,
-                );
-            }
+            let mut by_mint = shared
+                .store(ring)
+                .spendable_by_mint(SpendableNotes {
+                    ring,
+                    owner_key,
+                    nullifier_key: resolved.nullifier_key(),
+                    mints: &mints,
+                    held: &unheld,
+                })
+                .await?;
+            let notes: Vec<WalletUtxo> = mints
+                .iter()
+                .flat_map(|mint| by_mint.remove(&mint.asset).unwrap_or_default())
+                .collect();
             allowed.admit(&resolved, &notes)?;
             sources.push(SealedSource {
                 address: source,
@@ -359,6 +363,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
+    use solana_address::Address;
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;
     use solana_message::VersionedMessage;

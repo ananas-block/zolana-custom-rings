@@ -1,11 +1,16 @@
-use std::{collections::HashSet, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    num::NonZeroU32,
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
-use custom_ring_sdk::{select_merge_where, MAX_RING_MERGE_INPUTS};
+use custom_ring_sdk::{select_merge_where, MERGE_DEFAULT_INPUT_COUNT};
 use solana_address::Address;
 use solana_message::VersionedMessage;
 use spr_keypair::NullifierKey;
-use spr_transaction::WalletUtxo;
+use spr_transaction::{Mint, WalletUtxo};
 use zolana_ring_client::rpc::{
     MergeSettings, MergeSettingsAttestation, RelayId, SetMergeSettingsRequest,
     SetMergeSettingsResponse,
@@ -19,7 +24,7 @@ use crate::{
     hub::Hub,
     keyed_tasks::{KeyedTasks, MAX_CONCURRENT_KEYED_TASKS},
     merge_inputs::HeldInput,
-    merge_settings::{MergeSettingsBook, SignedMergeSettings, WalletMergeSettings},
+    merge_settings::{MergeSettingsBook, SignedMergeSettings},
     relay::{HeldMerge, Relay},
     relays::RelayPhase,
     replay::ReplayCheck,
@@ -68,6 +73,12 @@ pub struct ManagedMerge<S> {
     relay: Arc<Relay>,
 }
 
+/// Every mint one owner settled on the ring.
+struct OwnerSettings {
+    owner: Address,
+    settings: Vec<MergeSettings>,
+}
+
 struct RingPass<S> {
     service: AuditService<S>,
     assets: RingAssets,
@@ -83,7 +94,9 @@ impl MergeTarget {
         })
     }
 
-    /// The smallest notes of the fullest tree, at most as many as the target needs.
+    /// The smallest notes of the fullest tree, at most as many as the target needs. The width
+    /// stops at `MERGE_DEFAULT_INPUT_COUNT`, a keyed merge of it fits one transaction, a wider
+    /// one fails every pass.
     pub fn plan(&self, notes: &[WalletUtxo]) -> Option<Vec<WalletUtxo>> {
         let asset = notes.first()?.utxo.asset.asset;
         let total: u128 = notes.iter().map(|note| u128::from(note.utxo.amount)).sum();
@@ -101,7 +114,7 @@ impl MergeTarget {
         select_merge_where(
             notes,
             asset,
-            inputs.min(MAX_RING_MERGE_INPUTS),
+            inputs.min(MERGE_DEFAULT_INPUT_COUNT),
             &HashSet::new(),
             |_| true,
         )
@@ -190,14 +203,22 @@ impl<S: TransactionSource> ManagedMerge<S> {
             assets: shared.due_assets().await,
             held: self.held_inputs(ring).await?,
         };
-        let mut sent = Vec::new();
+        let mut owners: BTreeMap<Address, Vec<MergeSettings>> = BTreeMap::new();
         for wallet in book.active(ring).await? {
-            match self.merge_wallet(&pass, wallet).await {
-                Ok(Some(relay_id)) => sent.push(relay_id),
-                Ok(None) => {}
+            owners
+                .entry(wallet.owner)
+                .or_default()
+                .push(wallet.settings);
+        }
+        let mut sent = Vec::new();
+        for (owner, settings) in owners {
+            match self
+                .merge_owner(&pass, OwnerSettings { owner, settings })
+                .await
+            {
+                Ok(merged) => sent.extend(merged),
                 Err(error) => log::warn!(
-                    "managed merge of {} on ring {ring} failed because {}",
-                    wallet.owner,
+                    "managed merge of {owner} on ring {ring} failed because {}",
                     redacted(&error)
                 ),
             }
@@ -229,63 +250,88 @@ impl<S: TransactionSource> ManagedMerge<S> {
         Ok(held.iter().map(|input| input.nullifier).collect())
     }
 
-    async fn merge_wallet(
+    /// One secret open and one walk of the owner's notes serve every mint it settled.
+    async fn merge_owner(
         &self,
         pass: &RingPass<S>,
-        wallet: WalletMergeSettings,
-    ) -> Result<Option<RelayId>, RingRpcError> {
-        let Some(target) = MergeTarget::of(&wallet.settings) else {
-            return Ok(None);
-        };
+        OwnerSettings { owner, settings }: OwnerSettings,
+    ) -> Result<Vec<RelayId>, RingRpcError> {
         let ring = pass.service.ring();
-        let owner_key = wallet.owner.to_bytes();
-        // 1. The secret opens to the nullifier key the registry record binds.
+        // 1. A mint the registry does not know skips its own setting, the owner's other mints merge.
+        let mut targets: Vec<(Mint, MergeTarget)> = Vec::new();
+        for settings in &settings {
+            let Some(target) = MergeTarget::of(settings) else {
+                continue;
+            };
+            match pass.assets.registry().mint(&settings.mint.0) {
+                Ok(mint) => targets.push((mint, target)),
+                Err(error) => log::warn!(
+                    "managed merge of {owner} in {} on ring {ring} failed because {}",
+                    settings.mint.0,
+                    redacted(&RingRpcError::from(error))
+                ),
+            }
+        }
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
+        let owner_key = owner.to_bytes();
+        // 2. The secret opens to the nullifier key the registry record binds.
         let Some(nullifier_key) = pass.service.held_nullifier_key(&owner_key).await? else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
-        let notes = self
+        // 3. Each candidate is unspent and held by no merge in the store.
+        let mints: Vec<Mint> = targets.iter().map(|(mint, _)| *mint).collect();
+        let mut by_mint = self
             .hub
             .shared()
             .store(ring)
-            .spendable(SpendableNotes {
+            .spendable_by_mint(SpendableNotes {
                 ring,
                 owner_key,
-                mint: pass.assets.registry().mint(&wallet.settings.mint.0)?,
                 nullifier_key: &nullifier_key,
+                mints: &mints,
+                held: &pass.held,
             })
             .await?;
-        // 2. Each candidate is unspent and held by no merge in the store.
-        let notes: Vec<WalletUtxo> = notes
-            .into_iter()
-            .filter(|note| !pass.held.contains(&note.nullifier))
-            .collect();
-        let Some(inputs) = target.plan(&notes) else {
-            return Ok(None);
-        };
-        // 3. The secret leaves memory once the merge is proven.
-        let nullifiers: Vec<[u8; 32]> = inputs.iter().map(|input| input.nullifier).collect();
-        let built = self
-            .builder
-            .build(OwnerMerge {
+        let mut sent = Vec::new();
+        for (mint, target) in targets {
+            let notes = by_mint.remove(&mint.asset).unwrap_or_default();
+            let Some(inputs) = target.plan(&notes) else {
+                continue;
+            };
+            let merge = OwnerMerge {
                 ring,
-                owner: wallet.owner,
+                owner,
                 nullifier_key: &nullifier_key,
                 inputs,
-            })
-            .await?;
-        drop(nullifier_key);
-        // 4. A merge demands no co-signer, the inputs stay held until the relay fails or the ring history spends them.
-        let relay_id = self
-            .relay
+            };
+            match self.send(merge).await {
+                Ok(relay_id) => sent.push(relay_id),
+                Err(error) => log::warn!(
+                    "managed merge of {owner} in {} on ring {ring} failed because {}",
+                    mint.asset,
+                    redacted(&error)
+                ),
+            }
+        }
+        Ok(sent)
+    }
+
+    /// A merge demands no co-signer, the inputs stay held until the relay fails or the ring
+    /// history spends them.
+    async fn send(&self, merge: OwnerMerge<'_>) -> Result<RelayId, RingRpcError> {
+        let ring = merge.ring;
+        let nullifiers: Vec<[u8; 32]> = merge.inputs.iter().map(|input| input.nullifier).collect();
+        let built = self.builder.build(merge).await?;
+        self.relay
             .send_merge(HeldMerge {
                 ring,
                 message: built.message,
                 last_valid_block_height: built.last_valid_block_height,
-                co_signature: None,
                 nullifiers,
             })
-            .await?;
-        Ok(Some(relay_id))
+            .await
     }
 }
 
@@ -370,6 +416,7 @@ pub(crate) mod tests {
         database::Store,
         hub::ServiceIdentity,
         landing::{ChainOutcome, ChainSubmit, LatestBlockhash},
+        owner_notes::OPENED_ROWS,
         relay::RelayParts,
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
         tracking::{
@@ -386,6 +433,7 @@ pub(crate) mod tests {
     pub(crate) const RING: Address = Address::new_from_array([8; 32]);
     pub(crate) const GENESIS: [u8; 32] = [3; 32];
     pub(crate) const MINT: Address = Address::new_from_array([6; 32]);
+    const SECOND_MINT: Address = Address::new_from_array([0x16; 32]);
     pub(crate) fn fee_payer() -> Keypair {
         Keypair::new_from_array([5; 32])
     }
@@ -644,7 +692,7 @@ pub(crate) mod tests {
     }
 
     fn assets() -> RingAssets {
-        RingAssets::new([Mint::new(MINT, 7)]).expect("assets")
+        RingAssets::new([Mint::new(MINT, 7), Mint::new(SECOND_MINT, 8)]).expect("assets")
     }
 
     pub(crate) fn list_writer() -> Keypair {
@@ -657,6 +705,13 @@ pub(crate) mod tests {
         salt[0] = 0;
         salt
     };
+
+    /// `count` notes of 10 in `mint` under `key`.
+    struct Holding<'a> {
+        key: &'a NullifierKey,
+        mint: Mint,
+        count: u8,
+    }
 
     pub(crate) struct Fixture {
         pub(crate) hub: Arc<Hub<EscrowRingSource>>,
@@ -760,24 +815,39 @@ pub(crate) mod tests {
                     .await
                     .expect("held enrollment");
                 store.admit_enrollments(admission);
-                self.record_notes(wallet, &key, *notes).await;
+                self.record_notes(
+                    wallet,
+                    Holding {
+                        key: &key,
+                        mint: Mint::new(MINT, 7),
+                        count: *notes,
+                    },
+                )
+                .await;
                 keys.push(key);
             }
             keys
         }
 
-        async fn record_notes(&self, wallet: &Keypair, key: &NullifierKey, notes: u8) {
+        async fn record_notes(&self, wallet: &Keypair, holding: Holding<'_>) {
+            let Holding { key, mint, count } = holding;
             let store = self.hub.shared().store(RING);
             let owner_key = wallet.pubkey().to_bytes();
             let nullifier_pk = key.pubkey().expect("nullifier pk");
             let asset = *assets().fields().next().expect("field");
+            // A leading byte below the field modulus keeps every index a field element.
+            let blinding = |index: u8| {
+                let mut blinding = [1; 32];
+                blinding[31] = index;
+                blinding
+            };
             // The delegate path rebuilds each opening's hash, a stand in commitment would fail it.
             let commitment = |index: u8| {
                 Utxo {
                     owner: spr_keypair::PublicKey::from_ed25519(&owner_key),
-                    asset: Mint::new(MINT, 7),
+                    asset: mint,
                     amount: 10,
-                    blinding: [index; 32],
+                    blinding: blinding(index),
                     ring_program_id: Some(RING),
                     data: Data::default(),
                 }
@@ -791,7 +861,7 @@ pub(crate) mod tests {
                         tx_signature: Signature::from([7; 64]),
                         event_index: 0,
                     },
-                    (0..notes).map(|index| CreatedUtxo {
+                    (0..count).map(|index| CreatedUtxo {
                         commitment: commitment(index),
                         slot_index: u32::from(index),
                         leaf_index: u64::from(index),
@@ -799,20 +869,25 @@ pub(crate) mod tests {
                             owner_key,
                             owner: UtxoOwner::Keyed { nullifier_pk },
                             asset: asset.0,
-                            mint: Some(MINT),
+                            mint: Some(mint.asset),
                             amount: 10,
-                            blinding: [index; 32],
+                            blinding: blinding(index),
                             data_hash: [0; 32],
                             ring_data_hash: [0; 32],
                             tree_id: 1,
                         },
                         ring_note: true,
                     }),
+                    key,
                 )
                 .await;
         }
 
         async fn settle(&self, wallet: &Keypair, target_note_count: u32) {
+            self.settle_mint(wallet, MINT, target_note_count).await;
+        }
+
+        async fn settle_mint(&self, wallet: &Keypair, mint: Address, target_note_count: u32) {
             let target = ReadTarget {
                 cluster: GENESIS,
                 service: self.hub.service_pubkey(),
@@ -822,7 +897,7 @@ pub(crate) mod tests {
                 target,
                 owner: wallet.pubkey(),
                 settings: MergeSettings {
-                    mint: MINT.into(),
+                    mint: mint.into(),
                     target_note_count,
                     min_average_amount: 0,
                 },
@@ -985,5 +1060,72 @@ pub(crate) mod tests {
             .expect("held inputs")
             .is_empty());
         assert!(after.held().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_owner_with_two_mint_settings_opens_each_row_once() {
+        let fixture = Fixture::new().await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let key = fixture.escrow_notes(&wallet, 3).await;
+        fixture
+            .record_notes(
+                &wallet,
+                Holding {
+                    key: &key,
+                    mint: Mint::new(SECOND_MINT, 8),
+                    count: 3,
+                },
+            )
+            .await;
+        fixture.settle(&wallet, 1).await;
+        fixture.settle_mint(&wallet, SECOND_MINT, 1).await;
+
+        OPENED_ROWS.with(|opened| opened.set(0));
+        assert_eq!(fixture.merge_due().await.len(), 2);
+        assert_eq!(OPENED_ROWS.with(std::cell::Cell::get), 6);
+        assert_eq!(
+            *fixture.builder.owners.lock().expect("owners"),
+            vec![(wallet.pubkey(), 3), (wallet.pubkey(), 3)]
+        );
+    }
+
+    /// The SDK pins what one keyed merge transaction carries, the plan stays inside it.
+    #[tokio::test]
+    async fn a_sixty_note_tree_merges_the_default_width_and_lands() {
+        let fixture = Fixture::new().await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        fixture.escrow_notes(&wallet, 60).await;
+        fixture.settle(&wallet, 1).await;
+
+        assert_eq!(fixture.merge_due().await.len(), 1);
+        assert_eq!(
+            *fixture.builder.owners.lock().expect("owners"),
+            vec![(wallet.pubkey(), MERGE_DEFAULT_INPUT_COUNT)]
+        );
+        assert_eq!(fixture.held().await.len(), MERGE_DEFAULT_INPUT_COUNT);
+        *fixture.chain.outcome.lock().expect("outcome") = Some(ChainOutcome::Confirmed { slot: 5 });
+        fixture.track().await;
+        assert!(fixture
+            .held()
+            .await
+            .iter()
+            .all(|input| input.phase == RelayPhase::Confirmed));
+    }
+
+    #[tokio::test]
+    async fn an_unknown_mint_setting_skips_itself_and_the_valid_mint_merges() {
+        let fixture = Fixture::new().await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        fixture.escrow_notes(&wallet, 3).await;
+        fixture
+            .settle_mint(&wallet, Address::new_from_array([0x26; 32]), 1)
+            .await;
+        fixture.settle(&wallet, 1).await;
+
+        assert_eq!(fixture.merge_due().await.len(), 1);
+        assert_eq!(
+            *fixture.builder.owners.lock().expect("owners"),
+            vec![(wallet.pubkey(), 3)]
+        );
     }
 }

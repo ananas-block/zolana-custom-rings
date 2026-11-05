@@ -259,12 +259,15 @@ impl WalletStatusQuery {
     }
 }
 
+/// One owner's notes under one key, for every mint in `mints`.
 #[must_use]
 pub(crate) struct SpendableNotes<'a> {
     pub ring: Address,
     pub owner_key: [u8; 32],
-    pub mint: Mint,
     pub nullifier_key: &'a NullifierKey,
+    pub mints: &'a [Mint],
+    /// Nullifiers a pending merge holds.
+    pub held: &'a HashSet<[u8; 32]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -724,10 +727,15 @@ impl AuditStore {
         }
     }
 
-    /// Every live note of the owner, storage read in bounded batches inside one snapshot.
-    async fn owner_notes(&self, owner_key: &[u8; 32]) -> Result<Vec<IndexedNote>, RingRpcError> {
+    /// Visits every live note of the owner once, storage read in bounded batches inside one
+    /// snapshot.
+    async fn each_owner_note(
+        &self,
+        owner_key: &[u8; 32],
+        mut visit: impl FnMut(&IndexedNote),
+    ) -> Result<(), RingRpcError> {
         let Ok(member) = Member::owner_tag(owner_key) else {
-            return Ok(Vec::new());
+            return Ok(());
         };
         let range = OwnerRange {
             member: *member.as_bytes(),
@@ -735,27 +743,31 @@ impl AuditStore {
             limit: OWNER_ROW_BATCH,
         };
         match &self.backing {
-            Backing::Memory => Ok(self
-                .read_book()
-                .owner_page(OwnerRange {
+            Backing::Memory => {
+                let every = OwnerRange {
                     limit: usize::MAX,
                     ..range
-                })
-                .notes),
+                };
+                self.read_book()
+                    .owner_page(every)
+                    .notes
+                    .iter()
+                    .for_each(visit);
+                Ok(())
+            }
             Backing::Database {
                 store, ring, seal, ..
             } => {
                 let snapshot = read_snapshot(store.connection()).await?;
-                let mut notes = Vec::new();
                 OwnerNotesPage {
                     ring: *ring,
                     seal,
                     range,
                 }
-                .for_each(&snapshot, |indexed| notes.push(indexed))
+                .for_each(&snapshot, |indexed| visit(&indexed))
                 .await?;
                 snapshot.commit().await?;
-                Ok(notes)
+                Ok(())
             }
             Backing::Unavailable => Err(RingRpcError::StateUnavailable),
         }
@@ -917,33 +929,69 @@ impl AuditStore {
         self.read_book().unread.iter().copied().collect()
     }
 
-    /// Reads the owner's index, an unrelated unresolved spend hides no note, a published row always does.
-    pub(crate) async fn spendable(
+    /// One walk of the owner's index opens each row once. A row leaves when its spend is known,
+    /// another key or a data hash names it, its mint is not asked for, or a merge holds it. An
+    /// unrelated unresolved spend hides no note, a published row always does.
+    pub(crate) async fn spendable_by_mint(
         &self,
         notes: SpendableNotes<'_>,
-    ) -> Result<Vec<WalletUtxo>, RingRpcError> {
+    ) -> Result<HashMap<Address, Vec<WalletUtxo>>, RingRpcError> {
+        let nullifier_pubkey = notes.nullifier_key.pubkey()?;
         let owner = UtxoOwner::Keyed {
-            nullifier_pk: notes.nullifier_key.pubkey()?,
+            nullifier_pk: nullifier_pubkey,
         };
-        let candidates = self
-            .owner_notes(&notes.owner_key)
-            .await?
-            .iter()
-            .filter(|indexed| {
-                let utxo = &indexed.note.utxo;
-                utxo.owner_key == notes.owner_key
-                    && utxo.owner == owner
-                    && utxo.mint == Some(notes.mint.asset)
-                    && utxo.data_hash == [0; 32]
-            })
-            .map(|indexed| indexed.note.wallet_utxo(&indexed.commitment, &notes))
-            .collect::<Result<Vec<_>, _>>()?;
-        let nullifiers: Vec<[u8; 32]> = candidates.iter().map(|note| note.nullifier).collect();
-        let spent = self.spend_rows(&nullifiers).await?;
-        Ok(candidates
-            .into_iter()
-            .filter(|note| !spent.contains_key(&note.nullifier))
-            .collect())
+        let mints: HashMap<Address, Mint> =
+            notes.mints.iter().map(|mint| (mint.asset, *mint)).collect();
+        let mut by_mint: HashMap<Address, Vec<WalletUtxo>> = HashMap::new();
+        // 1. The stored nullifier stands, the owner check binds it to this key's public half.
+        self.each_owner_note(&notes.owner_key, |indexed| {
+            let stored = &indexed.note;
+            let utxo = &stored.utxo;
+            let (Some(nullifier), Some(mint)) = (
+                stored.nullifier,
+                utxo.mint.and_then(|mint| mints.get(&mint)),
+            ) else {
+                return;
+            };
+            if indexed.spent_at.is_some()
+                || utxo.owner_key != notes.owner_key
+                || utxo.owner != owner
+                || utxo.data_hash != [0; 32]
+                || notes.held.contains(&nullifier)
+            {
+                return;
+            }
+            by_mint.entry(mint.asset).or_default().push(WalletUtxo {
+                utxo: Utxo {
+                    owner: PublicKey::from_ed25519(&utxo.owner_key),
+                    asset: *mint,
+                    amount: utxo.amount,
+                    blinding: utxo.blinding,
+                    ring_program_id: Some(notes.ring),
+                    data: Data::default(),
+                },
+                nullifier_pubkey,
+                utxo_hash: indexed.commitment,
+                nullifier,
+                tx_viewing_key: None,
+                data_hash: None,
+                ring_data_hash: (utxo.ring_data_hash != [0; 32]).then_some(utxo.ring_data_hash),
+                tree_id: utxo.tree_id,
+                leaf_index: stored.leaf_index,
+                latest_tree_id: None,
+                slot: stored.created_in.slot,
+                tx_signature: stored.created_in.tx_signature,
+                slot_index: stored.slot_index,
+            });
+        })
+        .await?;
+        // 2. A spend the owner index has not taken yet still hides its note.
+        for bucket in by_mint.values_mut() {
+            let nullifiers: Vec<[u8; 32]> = bucket.iter().map(|note| note.nullifier).collect();
+            let spent = self.spend_rows(&nullifiers).await?;
+            bucket.retain(|note| !spent.contains_key(&note.nullifier));
+        }
+        Ok(by_mint)
     }
 
     /// The cache answers first, storage answers each key the cache may have evicted.
@@ -1189,36 +1237,6 @@ impl StoredUtxo {
             slot_index: self.slot_index,
         }
     }
-
-    fn wallet_utxo(
-        &self,
-        commitment: &[u8; 32],
-        notes: &SpendableNotes<'_>,
-    ) -> Result<WalletUtxo, RingRpcError> {
-        let utxo = &self.utxo;
-        Ok(WalletUtxo {
-            utxo: Utxo {
-                owner: PublicKey::from_ed25519(&utxo.owner_key),
-                asset: notes.mint,
-                amount: utxo.amount,
-                blinding: utxo.blinding,
-                ring_program_id: Some(notes.ring),
-                data: Data::default(),
-            },
-            nullifier_pubkey: notes.nullifier_key.pubkey()?,
-            utxo_hash: *commitment,
-            nullifier: notes.nullifier_key.nullifier(commitment, &utxo.blinding)?,
-            tx_viewing_key: None,
-            data_hash: None,
-            ring_data_hash: (utxo.ring_data_hash != [0; 32]).then_some(utxo.ring_data_hash),
-            tree_id: utxo.tree_id,
-            leaf_index: self.leaf_index,
-            latest_tree_id: None,
-            slot: self.created_in.slot,
-            tx_signature: self.created_in.tx_signature,
-            slot_index: self.slot_index,
-        })
-    }
 }
 
 /// The cache alone, a capsule whose owner it misses resolves from storage after decryption.
@@ -1273,13 +1291,14 @@ pub(crate) struct StoreDump {
 
 #[cfg(test)]
 impl AuditStore {
-    /// Notes opened with no secret.
+    /// Notes whose held enrollment opens to `key`, their nullifiers derive as the page opens them.
     pub(crate) async fn record(
         &self,
         created_in: CreatedIn,
         utxos: impl IntoIterator<Item = zolana_ring_client::CreatedUtxo>,
+        key: &NullifierKey,
     ) {
-        let opener = |_: &HeldEnrollment| None;
+        let opener = |_: &HeldEnrollment| Some(key.clone());
         let mut work = PageWork::new(self, &opener);
         work.open(created_in, utxos);
         let delta = work.finish().await.expect("fixture page");
