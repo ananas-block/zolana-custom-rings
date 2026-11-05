@@ -106,6 +106,7 @@ import {
   type SubmitRelayRequest,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 import { ringRpcRefusalName } from "../protocol/ring-rpc/ring-rpc-refusal.js";
+import { InputClass, InputMap } from "../protocol/codec/audit-stream.js";
 
 type Hash = indexerTypes.Hash;
 
@@ -1039,8 +1040,8 @@ export interface DecryptedRingDefaultInput {
 /** Nullifier index names the spent note. */
 export interface DecryptedRingInput {
   readonly nullifier: Bytes32;
-  /** False on padding. */
-  readonly real: boolean;
+  /** Rust `DecryptedInputClass`, an address spends no note. */
+  readonly class: InputClass;
   readonly defaultInput?: DecryptedRingDefaultInput;
 }
 
@@ -1830,7 +1831,7 @@ export class RingRpc {
     );
   }
 
-  /** `undefined` while the owner has no tracking row. */
+  /** `undefined` while the owner holds no credential. */
   async getListSalt(
     request: GetListSaltRequest,
     context?: RequestContext,
@@ -2051,6 +2052,7 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
   if (typeof realInputs !== "number" || !Number.isInteger(realInputs) || realInputs < 0)
     throw invalid("realInputs");
   if (realInputs > nullifiers.length) throw invalid("realInputs");
+  if (inputs.length !== 0 && !canonicalClasses(inputs, realInputs)) throw invalid("inputs");
   return Object.freeze({
     slot: integer(wire["slot"], "slot"),
     signature: signature(wire["txSignature"], "txSignature"),
@@ -2340,18 +2342,33 @@ function canonicalHash(input: unknown, path: string): Bytes32 {
   return bytes;
 }
 
+/** Notes and addresses before the dummy suffix, the notes counting `R`. */
+function canonicalClasses(inputs: readonly DecryptedRingInput[], realInputs: number): boolean {
+  try {
+    return (
+      InputMap.fromClasses(
+        inputs.map((input) => input.class),
+        inputs.length,
+      ).noteCount === realInputs
+    );
+  } catch {
+    return false;
+  }
+}
+
 function decodeInput(value: Record<string, unknown>, path: string): DecryptedRingInput {
   const wire = exactRecord(value, INPUT_FIELDS, INPUT_REQUIRED_FIELDS, path);
-  const real = wire["real"];
-  if (typeof real !== "boolean") throw invalid(`${path}.real`);
+  const inputClass = wire["class"];
+  if (!INPUT_CLASSES.has(inputClass as InputClass)) throw invalid(`${path}.class`);
   const nullifier = hash(wire["nullifier"], `${path}.nullifier`);
-  if (absent(wire["defaultInput"])) return Object.freeze({ nullifier, real });
-  // A default-ring note is a spent note, padding opens nothing.
-  if (!real) throw invalid(`${path}.defaultInput`);
+  if (absent(wire["defaultInput"]))
+    return Object.freeze({ nullifier, class: inputClass as InputClass });
+  // A default-ring note is a spent note, an address or padding opens nothing.
+  if (inputClass !== InputClass.note) throw invalid(`${path}.defaultInput`);
   const defaultInput = record(wire["defaultInput"], `${path}.defaultInput`);
   return Object.freeze({
     nullifier,
-    real,
+    class: InputClass.note,
     defaultInput: Object.freeze({
       utxo: decodeDecryptedUtxo(
         record(defaultInput["utxo"], `${path}.defaultInput.utxo`),
@@ -2600,7 +2617,8 @@ const SIGNED_UTXOS_REQUIRED_FIELDS = new Set([
 ]);
 const SIGNED_UTXOS_FIELDS = new Set([...SIGNED_UTXOS_REQUIRED_FIELDS, "wallet"]);
 const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJSON"]);
-const INPUT_REQUIRED_FIELDS = new Set(["nullifier", "real"]);
+const INPUT_REQUIRED_FIELDS = new Set(["nullifier", "class"]);
+const INPUT_CLASSES: ReadonlySet<InputClass> = new Set(Object.values(InputClass));
 const INPUT_FIELDS = new Set([...INPUT_REQUIRED_FIELDS, "defaultInput"]);
 const LIST_SALT_FIELDS = new Set(["listSalt"]);
 const NO_FIELDS = new Set<string>();

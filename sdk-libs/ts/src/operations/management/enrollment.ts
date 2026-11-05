@@ -4,19 +4,14 @@
  * The ring program's `Enroll` creates one immutable credential per ring and owner. It carries a
  * RegisterKey proof that seals the owner's nullifier key and list salt to the ring's auditor, and
  * the SPP proof of the credential output and its address reservation. The owner authorizes, a
- * separate payer only funds. The storage tracking builders serve rings that read the tracking
- * registry.
+ * separate payer only funds. Storage `OwnerGrant` records a PDA owner's reader consent.
  *
  * Read after `protocol/membership/credential.ts` and `operations/management/credential-write.ts`.
  * Read before `operations/management/enroll-relay.ts`.
  */
-import type { AccountMeta, Address, Instruction } from "@solana/kit";
+import type { Address, Instruction } from "@solana/kit";
 
-import type {
-  BlockhashProvider,
-  ChainReader,
-  Prover,
-} from "@heliuslabs/zolana/client";
+import type { BlockhashProvider, ChainReader, Prover } from "@heliuslabs/zolana/client";
 import {
   SYSTEM_PROGRAM,
   Writer,
@@ -34,12 +29,7 @@ import {
   ZERO_NULLIFIER_PK,
   type SignerAccount,
 } from "@heliuslabs/zolana/internal";
-import {
-  type Bytes32,
-  type Bytes33,
-  type Bytes64,
-  type RequestContext,
-} from "@heliuslabs/zolana/interface";
+import { type Bytes32, type Bytes33, type RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ShieldedKeypairLike } from "@heliuslabs/zolana/keypair";
 import type { Wallet } from "@heliuslabs/zolana/transaction";
 
@@ -53,18 +43,8 @@ import {
   registerKeyHash,
   type AuditCredential,
 } from "../../protocol/membership/credential.js";
-import { checkedViewingU } from "../../protocol/membership/member-opening.js";
 import { memberOfTag } from "../../protocol/membership/policy.js";
-import {
-  decodeTrackingAuthorization,
-  decodeTrackingRegistry,
-  type TrackingAuthorization,
-} from "../../protocol/membership/tracking.js";
-import {
-  ownerGrantPda,
-  STORAGE_PROGRAM_ID,
-  trackingAuthorizationPda,
-} from "../../protocol/pda/index.js";
+import { ownerGrantPda, STORAGE_PROGRAM_ID } from "../../protocol/pda/index.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import { credentialAccounts, enrollAccounts } from "../../protocol/ring-rpc/relay-enroll-inputs.js";
 import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
@@ -74,186 +54,62 @@ import { ringComputeUnitLimit } from "./admin.js";
 import {
   resolveCredential,
   type CredentialClient,
-  type ResolvedCredential,
+  type CredentialLookup,
 } from "../../rpc/credential-resolver.js";
 import { proveCredentialWrite, type ProvenCredentialWrite } from "./credential-write.js";
 import { readerKeyBytes, type ReaderKey } from "./reader-access.js";
 import { sealNullifierKey } from "./register-key.js";
 
-export const ENROLL_TAG = 6;
-export const APPLY_ENROLLMENTS_TAG = 7;
 export const OWNER_GRANT_TAG = 8;
 
-/** The final fields a first enrollment proves and a rotation repeats. */
-export interface EnrollmentSeal {
-  readonly nullifierPk: Bytes32;
-  readonly listTag: Bytes32;
-  readonly ephU: Bytes32;
-  readonly ciphertext: Bytes64;
-}
-
-export interface Enroll {
-  readonly payer: SignerAccount;
-  readonly owner: SignerAccount;
-  readonly trackingRegistry: Address;
-  readonly seal: EnrollmentSeal;
-  readonly viewingU: Bytes32;
-  /** The `RegisterKey` proof on a first enrollment, none on a rotation. */
-  readonly proof?: Uint8Array;
-}
-
-/** An enrolled key is final. */
-export async function enrollInstruction(
-  input: Enroll,
-  client: EnrollmentReadClient,
-  context?: RequestContext,
-): Promise<Instruction> {
-  const owner = signerAddress(input.owner);
-  const { seal, trackingRegistry } = input;
-  checkEnrollment({
-    seal,
-    stored: await enrollmentState({ trackingRegistry, owner }, client, context),
-  });
-  const writer = new Writer()
-    .u8(ENROLL_TAG, "tag")
-    .bytes(seal.nullifierPk, 32, "nullifierPk")
-    .bytes(seal.listTag, 32, "listTag")
-    .bytes(checkedViewingU(input.viewingU), 32, "viewingU")
-    .bytes(seal.ephU, 32, "ephU")
-    .bytes(seal.ciphertext, 64, "ciphertext");
-  if (input.proof !== undefined)
-    writer.bytes(checkedCustomRingProof(input.proof), input.proof.length, "proof");
-  return instruction(
-    writer.finish(),
-    await trackingEnrollAccounts(input, owner),
-    STORAGE_PROGRAM_ID,
-  );
-}
-
 export type EnrollmentReadClient = Pick<ChainReader, "getAccount">;
-
-/** `undefined` before the owner's first enrollment. */
-export async function enrollmentState(
-  input: Readonly<{ trackingRegistry: Address; owner: Address }>,
-  client: EnrollmentReadClient,
-  context?: RequestContext,
-): Promise<TrackingAuthorization | undefined> {
-  const [address] = await trackingAuthorizationPda(input.trackingRegistry, input.owner);
-  const account = await client.getAccount(address, context);
-  return account === undefined ? undefined : decodeTrackingAuthorization(account.data);
-}
-
-export function checkEnrollment(
-  input: Readonly<{
-    seal: EnrollmentSeal;
-    stored: TrackingAuthorization | undefined;
-  }>,
-): void {
-  const { seal, stored } = input;
-  if (equalBytes(seal.nullifierPk, ZERO_NULLIFIER_PK))
-    throw new RingError("RING_ENROLLMENT_ZERO_KEY");
-  if (stored === undefined) return;
-  if (
-    !equalBytes(stored.nullifierPk, seal.nullifierPk) ||
-    !equalBytes(stored.listTag, seal.listTag) ||
-    !equalBytes(stored.ephU, seal.ephU) ||
-    !equalBytes(stored.ciphertext, seal.ciphertext)
-  )
-    throw new RingError("RING_ENROLLMENT_KEY_MISMATCH");
-}
-
-/** Seals the nullifier key to the registry's auditor and proves it. */
-export async function proveEnrollment(
-  input: Readonly<{
-    holder: Pick<ShieldedKeypairLike, "nullifierKey">;
-    owner: Address;
-    trackingRegistry: Address;
-    /** `RingKeys.listSalt` of the ring. */
-    listSalt: Bytes32;
-    client: EnrollmentReadClient;
-    prover: RingProver;
-  }>,
-  context?: RequestContext,
-): Promise<Readonly<{ seal: EnrollmentSeal; proof: Uint8Array }>> {
-  const account = await input.client.getAccount(input.trackingRegistry, context);
-  if (account === undefined)
-    throw new RingError("RING_TRACKING_INVALID", { details: { reason: "registry" } });
-  const registry = decodeTrackingRegistry(account.data);
-  const { credential, registerKey } = await proveSealedKey(
-    {
-      ...input,
-      ringId: registry.ringId,
-      member: memberOfTag(addressBytes(input.owner, "owner")),
-      auditorPubkey: registry.auditorPubkey as Bytes33,
-    },
-    context,
-  );
-  return Object.freeze({ seal: sealOf(credential), proof: registerKey });
-}
-
-export interface ApplyEnrollments {
-  readonly trackingRegistry: Address;
-  /** The revision the proof was made against. */
-  readonly revision: bigint;
-  readonly proof: Uint8Array;
-  readonly newRoot: Bytes32;
-  readonly newNextIndex: number;
-  /** Chain order, the program computes each entry from the named account. */
-  readonly owners: readonly Address[];
-}
-
-/** Permissionless. */
-export async function applyEnrollmentsInstruction(input: ApplyEnrollments): Promise<Instruction> {
-  if (input.owners.length === 0) throw new RingError("RING_ENROLLMENT_NONE_NAMED");
-  const authorizations = await Promise.all(
-    input.owners.map(
-      async (owner) => (await trackingAuthorizationPda(input.trackingRegistry, owner))[0],
-    ),
-  );
-  const { proof } = input;
-  return instruction(
-    new Writer()
-      .u8(APPLY_ENROLLMENTS_TAG, "tag")
-      .u64(input.revision, "revision")
-      .bytes(checkedCustomRingProof(proof), proof.length, "proof")
-      .bytes(input.newRoot, 32, "newRoot")
-      .u32(input.newNextIndex, "newNextIndex")
-      .finish(),
-    [
-      meta(input.trackingRegistry, false, true),
-      ...authorizations.map((authorization) => meta(authorization, false, true)),
-    ],
-    STORAGE_PROGRAM_ID,
-  );
-}
 
 export interface WriteOwnerGrant {
   readonly payer: SignerAccount;
   /** Program owners sign through CPI. */
   readonly owner: SignerAccount;
-  readonly trackingRegistry: Address;
+  /** The grant reads in this ring's namespace alone. */
+  readonly ringProgramId: Address;
   readonly reader: ReaderKey;
   readonly active: boolean;
 }
 
+/** Storage tag 8, `ring_program ‖ reader ‖ active`. */
 export async function ownerGrantInstruction(input: WriteOwnerGrant): Promise<Instruction> {
   const reader = readerKeyBytes(input.reader);
-  const [grant] = await ownerGrantPda(input.trackingRegistry, signerAddress(input.owner), reader);
+  const [grant] = await ownerGrantPda(input.ringProgramId, signerAddress(input.owner), reader);
   return instruction(
     new Writer()
       .u8(OWNER_GRANT_TAG, "tag")
+      .bytes(addressBytes(input.ringProgramId, "ringProgramId"), 32, "ringProgramId")
       .bytes(reader, reader.length, "reader")
       .u8(input.active ? 1 : 0, "active")
       .finish(),
     [
       meta(input.payer, true, true),
       meta(input.owner, true, false),
-      meta(input.trackingRegistry, false, false),
       meta(grant, false, true),
       meta(SYSTEM_PROGRAM, false, false),
     ],
     STORAGE_PROGRAM_ID,
   );
+}
+
+const OWNER_GRANT_DISCRIMINATOR = 5;
+const OWNER_GRANT_SIZE = 2;
+
+/** The address names the ring program, the owner and the reader. */
+export interface OwnerGrant {
+  readonly active: boolean;
+}
+
+/** Rust `OwnerGrant::from_data`, only `active == 1` grants. */
+export function decodeOwnerGrant(data: Uint8Array): OwnerGrant {
+  if (data.length !== OWNER_GRANT_SIZE || data[0] !== OWNER_GRANT_DISCRIMINATOR)
+    throw new RingError("RING_OWNER_GRANT_INVALID", {
+      details: { length: data.length, discriminator: data[0] },
+    });
+  return Object.freeze({ active: data[1] === 1 });
 }
 
 /** The program rebuilds the credential, a field differing from its own fails RegisterKey. */
@@ -383,12 +239,7 @@ export async function prepareEnrollment(
   // 1. A queued or applied credential refuses before any proof, a credential is never replaced.
   // Unknown is no absence, the owner retries once Photon serves the snapshot.
   const resolved = await resolveCredential(
-    {
-      client,
-      ring: ringProgramId,
-      member: memberOfTag(addressBytes(signerAddress(owner), "owner")),
-      absenceFloor: 0n,
-    },
+    { client, ring: ringProgramId, owner: signerAddress(owner) },
     context,
   );
   if (resolved.kind === "present")
@@ -478,11 +329,11 @@ export async function enrollmentSubmission(
 
 /** The program never replaces a credential, a stored one other than `expected` refuses. */
 export function checkEnrolledCredential(
-  resolved: ResolvedCredential,
+  resolved: CredentialLookup,
   expected: AuditCredential,
 ): void {
   if (resolved.kind !== "present") return;
-  if (!equalBytes(encodeAuditCredential(resolved.leaf.credential), encodeAuditCredential(expected)))
+  if (!equalBytes(encodeAuditCredential(resolved.credential), encodeAuditCredential(expected)))
     throw new RingError("RING_ENROLLMENT_CREDENTIAL_MISMATCH", {
       details: { reason: "stored" },
     });
@@ -537,27 +388,4 @@ async function proveSealedKey(
     envelope.ephemeralSecret.fill(0);
     nullifierKey.destroy();
   }
-}
-
-function sealOf(credential: AuditCredential): EnrollmentSeal {
-  const { nullifierPk, listTag, ephU, ciphertext } = credential;
-  return Object.freeze({ nullifierPk, listTag, ephU, ciphertext });
-}
-
-async function trackingEnrollAccounts(
-  input: Readonly<{
-    payer: SignerAccount;
-    owner: SignerAccount;
-    trackingRegistry: Address;
-  }>,
-  owner: Address,
-): Promise<readonly AccountMeta[]> {
-  const [authorization] = await trackingAuthorizationPda(input.trackingRegistry, owner);
-  return [
-    meta(input.payer, true, true),
-    meta(input.owner, true, false),
-    meta(input.trackingRegistry, false, true),
-    meta(authorization, false, true),
-    meta(SYSTEM_PROGRAM, false, false),
-  ];
 }

@@ -10,11 +10,10 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { rawJson } from "../../protocol/codec/raw-json.js";
 
-import { InterfaceError } from "@heliuslabs/zolana/interface";
+import { InterfaceError, NULLIFIER_TREE_HEIGHT, STATE_HEIGHT } from "@heliuslabs/zolana/interface";
 import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { ClientError } from "@heliuslabs/zolana/client";
-import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import {
   APPLY_BATCH,
   MEMBER_REGISTRY_CAPACITY,
@@ -29,14 +28,9 @@ import {
   type RecordPool,
   type RecordWriteProofInput,
 } from "../../protocol/membership/member-registry.js";
+import type { CredentialRoots, CredentialStateRoot } from "../../protocol/codec/credential-read.js";
 import {
-  TRACKING_CAPACITY,
-  TRACKING_QUAD_HEIGHT,
-  type TrackingEntry,
-  type TrackingOpening,
-  type TrackingRecord,
-} from "../../protocol/membership/tracking.js";
-import {
+  applyKeyWidth,
   ringCircuitType,
   ringProvingKey,
   type RingKeyCircuit,
@@ -112,9 +106,10 @@ export interface PolicySubjectEntry {
   readonly curator: number;
 }
 
-/** Go `PooledOwnerEntry`, a zero salt with no tracking row. */
+/** Go `PooledOwnerEntry`, an absent credential takes a zero salt. */
 export interface PolicyOwnerEntry extends PolicySubjectEntry {
-  readonly tracking: number;
+  /** Index of the owner's credential opening, 0 off a live owner. */
+  readonly credential: number;
   readonly listSalt: Bytes32;
   readonly ownSalted: number;
   readonly curatorSalted: number;
@@ -142,28 +137,46 @@ export interface PolicyProofInputs extends PolicyTableProofInputs {
   readonly publicAssetEntries: readonly number[];
 }
 
-/** Go `TrackingRecordParams` rows, their shared proof and the subjects they open. */
-export interface TrackingPoolProofInput {
-  readonly records: readonly TrackingRecord[];
-  readonly canopy: readonly Bytes32[];
-  /** `paths[i]` opens `records[i]` up to the canopy, leaf level first. */
-  readonly paths: readonly QuadPath[];
-  readonly subjects: readonly PoolSubject[];
+/** Go `CredentialLeafParams`, every column but `member` zero on an absent opening. */
+export interface CredentialLeafProofInput {
+  readonly member: Bytes32;
+  readonly nullifierPk: Bytes32;
+  readonly listTag: Bytes32;
+  /** `pack_be` of the tagged auditor key. */
+  readonly aud: readonly [Bytes32, Bytes32];
+  /** `pack_be` of the tagged ephemeral key. */
+  readonly eph: readonly [Bytes32, Bytes32];
+  readonly ctHash: Bytes32;
+  readonly blinding: Bytes32;
+  /** Index into the statement's state root table. */
+  readonly treeSlot: number;
+  readonly stateIndex: bigint;
+  readonly statePath: readonly Bytes32[];
 }
 
-/** Go `TrackingParams`, every owner row and live ring output under the frame's tracking root. */
-export interface TrackingProofInputs {
-  readonly trackingRoot: Bytes32;
-  readonly trackingPool: TrackingPoolProofInput;
-  /** Index `trackingPool.subjects`, 0 on a zero row. */
+/** Go `CredentialOpeningParams`, a present leaf or an address gap, padding is all zero. */
+export interface CredentialOpeningProofInput extends CredentialLeafProofInput {
+  readonly present: boolean;
+  readonly lowValue: Bytes32;
+  readonly lowNext: Bytes32;
+  readonly lowIndex: bigint;
+  readonly lowPath: readonly Bytes32[];
+}
+
+/** Go `CredentialParams`, `K` openings under the statement's credential table. */
+export interface CredentialProofInputs {
+  /** Owner, address root and the padded state table the statement binds. */
+  readonly credentialRoots: CredentialRoots;
+  readonly credentialOpenings: readonly CredentialOpeningProofInput[];
+  /** Index `credentialOpenings`, 0 on a zero row. */
   readonly rowEntries: readonly number[];
-  /** Index `trackingPool.subjects`, 0 off a live ring output. */
+  /** Index `credentialOpenings`, 0 off a live ring output. */
   readonly outputEntries: readonly number[];
 }
 
 /** Go `TransferParams`, what every transfer key reads. */
 export interface TransferProofInputs
-  extends AuditEnvelopeProofInputs, PolicyProofInputs, TrackingProofInputs {
+  extends AuditEnvelopeProofInputs, PolicyProofInputs, CredentialProofInputs {
   readonly publicInputHash: Bytes32;
   /** The statement's proven bits. */
   readonly approvalMask: number;
@@ -176,6 +189,10 @@ export interface TransferProofInputs
   readonly outputs: readonly OutputOpeningProofInput[];
   /** The published nullifier count, the input slots past it carry no UTXO. */
   readonly inputCount: number;
+  /** `HashChain4([inputCount, ...inputNullifiers])`, the statement element past `inputCount`. */
+  readonly inputNullifierChain: Bytes32;
+  /** The published nullifiers zero filled to the key's input class. */
+  readonly inputNullifiers: readonly Bytes32[];
   /** At the key's input class. */
   readonly inputs: readonly RingSlotOpening[];
   /** One per input class slot on an entry key, empty otherwise. */
@@ -188,10 +205,8 @@ export interface TransferProofInputs
   /** The distinct live input owners ascending, zero rows last, at the key's owner rows. */
   readonly rows: readonly Bytes32[];
   readonly privateTxHash: Bytes32;
-  /** SPP's blinding of the hash, the proof reopens it with no address input. */
+  /** SPP's blinding of the hash. */
   readonly privateTxBlinding: Bytes32;
-  /** SPP's chain of address slot nullifiers, zero without one. */
-  readonly addressChain: Bytes32;
 }
 
 /** Go `TransferParams`, the statement's rail bits pick the rail. */
@@ -206,40 +221,34 @@ export interface TransferProofRequest extends TransferProofInputs {
   readonly partyIdentities: readonly Bytes32[];
 }
 
+/** Go `CredentialWriteParams`, a private owner write's credential and its address leaf. */
+export interface CredentialWriteProofInput {
+  readonly member: Bytes32;
+  readonly listSalt: Bytes32;
+  readonly leaf: CredentialLeafProofInput;
+  readonly addressNext: Bytes32;
+  readonly addressIndex: bigint;
+  readonly addressPath: readonly Bytes32[];
+}
+
 /** Go `ApplyRecordsParams`, one write takes the 1-write key, more the batch key. */
 export interface ApplyRecordsProofRequest extends ApplyProofInputs {
   readonly kind: "applyRecords";
   readonly publicInputHash: Bytes32;
-}
-
-/** Go `TrackingWrite`, the witness of one applied entry. */
-export interface TrackingWriteProofInput {
-  readonly entry: TrackingEntry;
-  readonly exists: boolean;
-  readonly oldRecord: TrackingRecord;
-  readonly slot: QuadPath;
-  readonly lowRecord: TrackingRecord;
-  readonly lowPath: QuadPath;
-}
-
-/** Go `ApplyEnrollmentsParams`. */
-export interface ApplyEnrollmentsProofRequest {
-  readonly kind: "applyEnrollments";
-  readonly publicInputHash: Bytes32;
-  readonly oldRoot: Bytes32;
-  readonly newRoot: Bytes32;
-  readonly oldNextIndex: number;
-  readonly newNextIndex: number;
-  readonly chainStart: Bytes32;
-  readonly chainEnd: Bytes32;
-  readonly writes: readonly TrackingWriteProofInput[];
+  /** Bit `i` marks write `i` private, zero on a public update. */
+  readonly credentialWrites: number;
+  readonly privateRingId: Bytes32;
+  /** At the apply key's width, `CredentialRoots.empty` on a public update. */
+  readonly credentialRoots: CredentialRoots;
+  /** One per marked write, `undefined` elsewhere. */
+  readonly credentials: readonly (CredentialWriteProofInput | undefined)[];
 }
 
 /** Go `RegisterKeyParams`. */
 export interface RegisterKeyProofRequest {
   readonly kind: "registerKey";
   readonly publicInputHash: Bytes32;
-  /** The tracking registry's. */
+  /** `ringIdField` of the ring program `Enroll` runs in. */
   readonly ringId: Bytes32;
   /** The owner identity of the signing member. */
   readonly member: Bytes32;
@@ -252,7 +261,7 @@ export interface RegisterKeyProofRequest {
 }
 
 /** Go `DepositParams`, every slot list at the capacity its prefix names. */
-export interface DepositProofRequest extends TrackingProofInputs, PolicyProofInputs {
+export interface DepositProofRequest extends CredentialProofInputs, PolicyProofInputs {
   readonly kind: "deposit";
   readonly publicInputHash: Bytes32;
   /** The key, `key_capacity` in the instruction. */
@@ -281,7 +290,8 @@ export interface MergeProofRequest {
   readonly ringProgramId: Bytes32;
   readonly auditorPk: Bytes32;
   readonly payer: Bytes32;
-  readonly trackingRoot: Bytes32;
+  /** State only, `CredentialRoots.empty(1)` under a zero key. */
+  readonly credentialRoots: CredentialRoots;
   readonly ephSk: Bytes32;
   readonly ownerKey: Bytes32;
   readonly ownerPkHash: Bytes32;
@@ -293,13 +303,12 @@ export interface MergeProofRequest {
   readonly outputTreeId: Bytes32;
   readonly outputRingDataHash: Bytes32;
   /** Undefined under a zero key. */
-  readonly tracking?: TrackingOpening;
+  readonly credential?: CredentialLeafProofInput;
 }
 
 export type RingProofRequest =
   | TransferProofRequest
   | ApplyRecordsProofRequest
-  | ApplyEnrollmentsProofRequest
   | RegisterKeyProofRequest
   | DepositProofRequest
   | MergeProofRequest;
@@ -311,8 +320,6 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
       return transferCircuit(request);
     case "applyRecords":
       return { family: "applyRecords", writes: applyCapacity(listLength(request.writes)) };
-    case "applyEnrollments":
-      return { family: "applyEnrollments", writes: applyCapacity(listLength(request.writes)) };
     case "registerKey":
       return { family: "registerKey" };
     case "deposit":
@@ -355,20 +362,28 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
       return { ...head, ...transferJson(request) };
     case "applyRecords": {
       const capacity = applyCapacity(request.writes.length);
+      const roots = sizedRoots(request.credentialRoots, capacity, "credentialRoots");
       return {
         ...head,
         ...applyHeadJson(request),
         count: request.writes.length,
         writes: paddedWrites(request.writes, capacity, writeJson),
-      };
-    }
-    case "applyEnrollments": {
-      const capacity = applyCapacity(request.writes.length);
-      return {
-        ...head,
-        ...applyHeadJson(request),
-        count: request.writes.length,
-        writes: paddedWrites(request.writes, capacity, trackingWriteJson),
+        credentialWrites: integer(
+          request.credentialWrites,
+          "credentialWrites",
+          0,
+          (1 << capacity) - 1,
+        ),
+        privateRingId: field(request.privateRingId, "privateRingId"),
+        credentialOwner: field(roots.ownerHash, "credentialOwner"),
+        addressRoot: field(roots.addressRoot, "addressRoot"),
+        stateRoots: stateRootsJson(roots.stateRoots, "stateRoots"),
+        credentials: paddedWrites(
+          request.credentials,
+          capacity,
+          (write, name) => credentialWriteJson(write, name, capacity),
+          "credentials",
+        ),
       };
     }
     case "registerKey":
@@ -392,7 +407,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         pools: {
           own: depositPoolWidth(capacity),
           curator: depositPoolWidth(capacity),
-          tracking: capacity,
+          credentials: capacity,
         },
       };
       return {
@@ -412,11 +427,13 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         mintChunks: sized(request.mintChunks, capacity, "mintChunks").map((chunks, i) =>
           fields(chunks, MINT_CHUNKS, `mintChunks[${i}]`),
         ),
-        ...trackingJson(request, shape),
+        ...credentialJson(request, shape),
         ...policyJson(request, shape),
       };
     }
-    case "merge":
+    case "merge": {
+      const roots = sizedRoots(request.credentialRoots, 1, "credentialRoots");
+      const [stateRoot] = roots.stateRoots as readonly [CredentialStateRoot];
       return {
         ...head,
         outputUtxoHash: field(request.outputUtxoHash, "outputUtxoHash"),
@@ -424,7 +441,8 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ringProgramId: field(request.ringProgramId, "ringProgramId"),
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
         payer: field(request.payer, "payer"),
-        trackingRoot: field(request.trackingRoot, "trackingRoot"),
+        credentialOwner: field(roots.ownerHash, "credentialOwner"),
+        stateRoot: stateRootJson(stateRoot, "stateRoot"),
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),
         ownerKey: hexBytes(request.ownerKey, 32, "ownerKey"),
         ownerPkHash: field(request.ownerPkHash, "ownerPkHash"),
@@ -435,8 +453,12 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         seed: field(request.seed, "seed"),
         outputTreeId: field(request.outputTreeId, "outputTreeId"),
         outputRingDataHash: field(request.outputRingDataHash, "outputRingDataHash"),
-        tracking: trackingOpeningJson(request.tracking, "tracking"),
+        credential:
+          request.credential === undefined
+            ? null
+            : credentialLeafJson(request.credential, "credential"),
       };
+    }
   }
 }
 
@@ -447,11 +469,11 @@ const U32_MAX = 0xffff_ffff;
 /** Go `[2]Field`, the two `hash_bytes_32` halves of a mint. */
 const MINT_CHUNKS = 2;
 const MAX_LEAF_INDEX = Number(MEMBER_REGISTRY_CAPACITY) - 1;
-const MAX_TRACKING_INDEX = Number(TRACKING_CAPACITY) - 1;
+const U16_MAX = 0xffff;
 
-/** One write takes the 1-write key, 2 to `APPLY_BATCH` the batch key, any other count none. */
+/** A count no apply key holds keeps its own width and fails the catalog lookup. */
 function applyCapacity(count: number): number {
-  return [1, 2, 4, 8, APPLY_BATCH].find((n) => count <= n) ?? count;
+  return count >= 1 && count <= APPLY_BATCH ? applyKeyWidth(count) : count;
 }
 
 /** A list width no key serves fails here, before any encoding. */
@@ -507,6 +529,8 @@ function transferJson(request: TransferProofRequest): Json {
     outputCount: integer(request.outputCount, "outputCount", 1, request.outputs.length),
     outputs: request.outputs.map((output, i) => outputJson(output, `outputs[${i}]`)),
     inputCount: integer(request.inputCount, "inputCount", 1, slots),
+    inputNullifierChain: field(request.inputNullifierChain, "inputNullifierChain"),
+    inputNullifiers: fields(request.inputNullifiers, slots, "inputNullifiers"),
     inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
     ...(flag(request.layout.entry)
       ? {
@@ -524,8 +548,7 @@ function transferJson(request: TransferProofRequest): Json {
     rows: fields(request.rows, circuit.owners, "rows"),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
     privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
-    addressChain: field(request.addressChain, "addressChain"),
-    ...trackingJson(request, shape),
+    ...credentialJson(request, shape),
     ...policyJson(request, shape),
   };
 }
@@ -571,66 +594,90 @@ function entryOpeningJson(entry: EntryOpeningProofInput, name: string): Json {
   };
 }
 
-function trackingJson(tracking: TrackingProofInputs, shape: PolicySectionShape): Json {
-  const capacity = shape.pools.tracking;
-  const { trackingPool: pool } = tracking;
-  const levels = canopyLevels(capacity);
+/** Go `CredentialParams`, `K` roots and openings, one entry per owner row and output. */
+function credentialJson(credentials: CredentialProofInputs, shape: PolicySectionShape): Json {
+  const capacity = shape.pools.credentials;
+  const roots = sizedRoots(credentials.credentialRoots, capacity, "credentialRoots");
   const entry = (index: number, name: string): number => integer(index, name, 0, capacity - 1);
   return {
-    trackingRoot: field(tracking.trackingRoot, "trackingRoot"),
-    trackingRecords: sized(pool.records, capacity, "trackingRecords").map((record, i) =>
-      trackingRecordJson(record, `trackingRecords[${i}]`),
+    credentialOwner: field(roots.ownerHash, "credentialOwner"),
+    addressRoot: field(roots.addressRoot, "addressRoot"),
+    stateRoots: stateRootsJson(roots.stateRoots, "stateRoots"),
+    credentialOpenings: sized(credentials.credentialOpenings, capacity, "credentialOpenings").map(
+      (opening, i) => credentialOpeningJson(opening, capacity, `credentialOpenings[${i}]`),
     ),
-    trackingProof: {
-      canopy: fields(pool.canopy, QUAD_ARITY ** levels, "trackingProof.canopy"),
-      paths: sized(pool.paths, capacity, "trackingProof.paths").map((path, i) =>
-        sharedPathJson(
-          path,
-          TRACKING_QUAD_HEIGHT - levels,
-          MAX_TRACKING_INDEX,
-          `trackingProof.paths[${i}]`,
-        ),
-      ),
-    },
-    trackingSubjects: subjectsJson(pool.subjects, capacity, "trackingSubjects"),
-    rowEntries: sized(tracking.rowEntries, shape.rows, "rowEntries").map((index, i) =>
+    rowEntries: sized(credentials.rowEntries, shape.rows, "rowEntries").map((index, i) =>
       entry(index, `rowEntries[${i}]`),
     ),
-    outputEntries: sized(tracking.outputEntries, shape.outputs, "outputEntries").map((index, i) =>
-      entry(index, `outputEntries[${i}]`),
+    outputEntries: sized(credentials.outputEntries, shape.outputs, "outputEntries").map(
+      (index, i) => entry(index, `outputEntries[${i}]`),
     ),
   };
 }
 
-/** Go `TrackingRecordParams` and `TrackingLeaf`, one wire shape. */
-function trackingRecordJson(record: TrackingRecord, name: string): Json {
+/** The statement's table at the key's `K`, a table of another width states another key. */
+function sizedRoots(roots: CredentialRoots, capacity: number, name: string): CredentialRoots {
+  sized(roots.stateRoots, capacity, `${name}.stateRoots`);
+  return roots;
+}
+
+function stateRootsJson(roots: readonly CredentialStateRoot[], name: string): readonly Json[] {
+  return roots.map((root, i) => stateRootJson(root, `${name}[${i}]`));
+}
+
+/** Go `CredentialStateRoot`. */
+function stateRootJson(root: CredentialStateRoot, name: string): Json {
   return {
-    member: field(record.member, `${name}.member`),
-    next: field(record.next, `${name}.next`),
-    ...trackingFieldsJson(record, name),
+    treeId: integer(root.treeId, `${name}.treeId`, 0, U16_MAX),
+    root: field(root.root, `${name}.root`),
   };
 }
 
-function trackingFieldsJson(entry: TrackingEntry, name: string): Json {
-  const [view0, view1] = packBytesBe(checkedLength(entry.viewingU, 32, `${name}.viewingU`));
+/** Go `CredentialOpeningParams`, the leaf fields embedded between `present` and the gap. */
+function credentialOpeningJson(
+  opening: CredentialOpeningProofInput,
+  capacity: number,
+  name: string,
+): Json {
   return {
-    nullifierPk: field(entry.nullifierPk, `${name}.nullifierPk`),
-    ctHash: field(entry.ctHash, `${name}.ctHash`),
-    view0: field(view0 as Bytes32, `${name}.view0`),
-    view1: field(view1 as Bytes32, `${name}.view1`),
-    revision: field(bigIntBytes(entry.revision, 32) as Bytes32, `${name}.revision`),
-    listTag: field(entry.listTag, `${name}.listTag`),
+    present: flag(opening.present),
+    ...credentialLeafJson(opening, name, capacity),
+    lowValue: field(opening.lowValue, `${name}.lowValue`),
+    lowNext: field(opening.lowNext, `${name}.lowNext`),
+    lowIndex: u64(opening.lowIndex, `${name}.lowIndex`),
+    lowPath: fields(opening.lowPath, NULLIFIER_TREE_HEIGHT, `${name}.lowPath`),
   };
 }
 
-/** Go `TrackingOpening`, a padding slot and a zero key send null. */
-function trackingOpeningJson(opening: TrackingOpening | undefined, name: string): Json | null {
-  if (opening === undefined) return null;
-  const present = opening.kind === "present";
+/** Go `CredentialLeafParams`, `treeSlot` below the table width. */
+function credentialLeafJson(leaf: CredentialLeafProofInput, name: string, capacity = 1): Json {
   return {
-    present,
-    record: trackingRecordJson(present ? opening.record : opening.low, `${name}.record`),
-    path: sharedPathJson(opening.path, TRACKING_QUAD_HEIGHT, MAX_TRACKING_INDEX, `${name}.path`),
+    member: field(leaf.member, `${name}.member`),
+    nullifierPk: field(leaf.nullifierPk, `${name}.nullifierPk`),
+    listTag: field(leaf.listTag, `${name}.listTag`),
+    aud: fields(leaf.aud, 2, `${name}.aud`),
+    eph: fields(leaf.eph, 2, `${name}.eph`),
+    ctHash: field(leaf.ctHash, `${name}.ctHash`),
+    blinding: field(leaf.blinding, `${name}.blinding`),
+    treeSlot: integer(leaf.treeSlot, `${name}.treeSlot`, 0, capacity - 1),
+    stateIndex: u64(leaf.stateIndex, `${name}.stateIndex`),
+    statePath: fields(leaf.statePath, STATE_HEIGHT, `${name}.statePath`),
+  };
+}
+
+/** Go `CredentialWriteParams`. */
+function credentialWriteJson(
+  write: CredentialWriteProofInput,
+  name: string,
+  capacity: number,
+): Json {
+  return {
+    member: field(write.member, `${name}.member`),
+    listSalt: field(write.listSalt, `${name}.listSalt`),
+    leaf: credentialLeafJson(write.leaf, `${name}.leaf`, capacity),
+    addressNext: field(write.addressNext, `${name}.addressNext`),
+    addressIndex: u64(write.addressIndex, `${name}.addressIndex`),
+    addressPath: fields(write.addressPath, NULLIFIER_TREE_HEIGHT, `${name}.addressPath`),
   };
 }
 
@@ -750,7 +797,7 @@ function entryJson(entry: PolicySubjectEntry, capacity: PolicyPoolCapacity, name
 function ownerEntryJson(entry: PolicyOwnerEntry, capacity: PolicyPoolCapacity, name: string): Json {
   return {
     ...entryJson(entry, capacity, name),
-    tracking: integer(entry.tracking, `${name}.tracking`, 0, capacity.tracking - 1),
+    credential: integer(entry.credential, `${name}.credential`, 0, capacity.credentials - 1),
     listSalt: field(entry.listSalt, `${name}.listSalt`),
     ownSalted: integer(entry.ownSalted, `${name}.ownSalted`, 0, capacity.own - 1),
     curatorSalted: [integer(entry.curatorSalted, `${name}.curatorSalted`, 0, capacity.curator - 1)],
@@ -801,13 +848,18 @@ function applyHeadJson(
 
 /** A slot past the count assigns zeros. */
 function paddedWrites<T>(
-  writes: readonly T[],
+  writes: readonly (T | undefined)[],
   capacity: number,
   encode: (write: T, name: string) => Json,
+  list = "writes",
 ): readonly (Json | null)[] {
+  if (writes.length > capacity)
+    throw new ClientError("CLIENT_INVALID_LENGTH", {
+      details: { field: list, expected: capacity, actual: writes.length },
+    });
   return Array.from({ length: capacity }, (_, i) => {
     const write = writes[i];
-    return write === undefined ? null : encode(write, `writes[${i}]`);
+    return write === undefined ? null : encode(write, `${list}[${i}]`);
   });
 }
 
@@ -824,29 +876,6 @@ function writeJson(write: RecordWriteProofInput, name: string): Json {
     lowLists: u64(write.low.lists, `${name}.lowLists`),
     ...mintPolicyJson(write.low.mintPolicy, name, "low"),
     ...quadPathJson(write.lowPath, name, "lowIndex", "lowPath"),
-  };
-}
-
-function trackingWriteJson(write: TrackingWriteProofInput, name: string): Json {
-  return {
-    member: field(write.entry.member, `${name}.member`),
-    ...trackingFieldsJson(write.entry, name),
-    exists: flag(write.exists),
-    oldRecord: trackingRecordJson(write.oldRecord, `${name}.oldRecord`),
-    ...trackingPathJson(write.slot, name, "index", "path"),
-    lowRecord: trackingRecordJson(write.lowRecord, `${name}.lowRecord`),
-    ...trackingPathJson(write.lowPath, name, "lowIndex", "lowPath"),
-  };
-}
-
-/** The flat siblings `newQuadPath` chunks, leaf level first. */
-function trackingPathJson(path: QuadPath, name: string, index: string, siblings: string): Json {
-  const levels = sized(path.siblings, TRACKING_QUAD_HEIGHT, `${name}.${siblings}`);
-  return {
-    [index]: integer(path.index, `${name}.${index}`, 0, MAX_TRACKING_INDEX),
-    [siblings]: levels.flatMap((level, l) =>
-      fields(level, QUAD_ARITY - 1, `${name}.${siblings}[${l}]`),
-    ),
   };
 }
 

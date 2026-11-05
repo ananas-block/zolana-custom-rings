@@ -9,7 +9,6 @@ import {
 } from "@solana/kit";
 
 import {
-  hashBytes,
   meta,
   ringAuthAddress,
   signerAddress,
@@ -82,35 +81,9 @@ export function ringRecordsAddress(
   );
 }
 
-/** The ring's tracking registry, created through CPI with its ring auth PDA as creator. */
-export async function trackingRegistryPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
-  const ringAuth = await ringAuthAddress(ringProgramId);
-  const addresses = getAddressEncoder();
-  return getProgramDerivedAddress({
-    programAddress: STORAGE_PROGRAM_ID,
-    seeds: [
-      encoder.encode("tracking_registry"),
-      addresses.encode(ringAuth),
-      hashBytes(new Uint8Array(addresses.encode(ringProgramId))),
-    ],
-  });
-}
-
-/** One enrollment per owner per tracking registry. */
-export function trackingAuthorizationPda(
-  registry: Address,
-  owner: Address,
-): Promise<ProgramDerivedAddress> {
-  const addresses = getAddressEncoder();
-  return getProgramDerivedAddress({
-    programAddress: STORAGE_PROGRAM_ID,
-    seeds: [encoder.encode("tracking"), addresses.encode(registry), addresses.encode(owner)],
-  });
-}
-
-/** One account per owner per reader, the key splits because a seed holds 32 bytes. */
+/** One account per ring, owner and reader, the key splits because a seed holds 32 bytes. */
 export function ownerGrantPda(
-  registry: Address,
+  ringProgramId: Address,
   owner: Address,
   reader: Uint8Array,
 ): Promise<ProgramDerivedAddress> {
@@ -119,7 +92,7 @@ export function ownerGrantPda(
     programAddress: STORAGE_PROGRAM_ID,
     seeds: [
       encoder.encode("owner_grant"),
-      addresses.encode(registry),
+      addresses.encode(ringProgramId),
       addresses.encode(owner),
       reader.subarray(0, 2),
       reader.subarray(2),

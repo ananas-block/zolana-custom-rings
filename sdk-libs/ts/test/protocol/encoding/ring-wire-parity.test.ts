@@ -12,10 +12,8 @@ import approvalFrames from "../../../../../test-vectors/proof/approval_totals_fr
 import expansion from "../../../../../test-vectors/proof/ring-transact-expansion.json" with { type: "json" };
 import keyed from "../../../../../test-vectors/proof/ring_keyed_shapes.json" with { type: "json" };
 import statements from "../../../../../test-vectors/audit/transfer_statement.json" with { type: "json" };
-import tracking from "../../../../../test-vectors/registry/tracking-records.json" with { type: "json" };
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
 import {
-  applyEnrollmentsStatementHash,
   signerBinding,
   transferStatementElements,
   transferStatementHash,
@@ -26,13 +24,7 @@ import {
   fittedSpend,
   ringTransferCircuit,
 } from "../../../src/protocol/proof/transfer-shapes.js";
-import {
-  trackingEntryChained,
-  trackingEntryHash,
-  trackingRecordHash,
-  type TrackingEntry,
-  type TrackingRecord,
-} from "../../../src/protocol/membership/tracking.js";
+import { vectorCredentialRoots } from "../../helpers/credential-chain.js";
 import {
   RingTransactData,
   railShapes,
@@ -188,13 +180,16 @@ describe("transfer_statement.json", () => {
       })),
       capacity: vector.output_capacity,
       inputCount: vector.input_count,
+      inputNullifierChain: field(
+        (vector as unknown as { input_nullifier_chain: string }).input_nullifier_chain,
+      ),
       privateTxHash: field(vector.private_tx_hash),
       signers: signerBinding(vector.signers.map(field), vector.signer_slots),
       roots: {
         policyHash: field(vector.policy_hash),
         ownRoot: field(vector.own_root),
         curatorRoot: field(vector.curator_root),
-        trackingRoot: field(vector.tracking_root),
+        credentials: vectorCredentialRoots(vector.credential_fields),
       },
       publicAssets: vector.public_assets.map(field),
       publicAmounts: vector.public_amounts.map(field),
@@ -222,7 +217,7 @@ describe("ring_keyed_shapes.json", () => {
             spendsDefaultRing,
             legs: 0,
             owners: 0,
-            pools: { own: 0, curator: 0, tracking: 0 },
+            pools: { own: 0, curator: 0, credentials: 0 },
             wide: false,
           }),
         ) !== undefined,
@@ -239,51 +234,5 @@ describe("ring_keyed_shapes.json", () => {
     expect(served("anonymous", false)).toEqual(keyed.anonymous_ring);
     expect(served("anonymous", true)).toEqual(keyed.anonymous_entry_ring);
     expect(served("delegate", false)).toEqual(keyed.ring_authority);
-  });
-});
-
-describe("tracking-records.json", () => {
-  const entryOf = (row: (typeof tracking.applications)[number]["writes"][number]["entry"]) =>
-    ({
-      member: field(row.member),
-      nullifierPk: field(row.nullifier_pk),
-      ctHash: field(row.ct_hash),
-      viewingU: field(row.viewing_u),
-      revision: BigInt(row.revision),
-      listTag: field(row.list_tag),
-    }) satisfies TrackingEntry;
-  const recordOf = (row: (typeof tracking.applications)[number]["writes"][number]["old"]) =>
-    ({
-      member: field(row.member),
-      next: field(row.next),
-      nullifierPk: field(row.nullifier_pk),
-      ctHash: field(row.ct_hash),
-      viewingU: field(row.viewing_u),
-      revision: BigInt(row.revision),
-      listTag: field(row.list_tag),
-    }) satisfies TrackingRecord;
-
-  it.each(tracking.applications)("$name hashes, chains and states as Rust does", (application) => {
-    let chain = field(application.chain_start);
-    for (const write of application.writes) {
-      expect(hex(trackingEntryHash(entryOf(write.entry)))).toBe(write.entry.entry_hash);
-      expect(hex(trackingRecordHash(recordOf(write.old)))).toBe(write.old.leaf_hash);
-      expect(hex(trackingRecordHash(recordOf(write.low)))).toBe(write.low.leaf_hash);
-      chain = trackingEntryChained(chain, entryOf(write.entry));
-    }
-    expect(hex(chain)).toBe(application.chain_end);
-    expect(
-      hex(
-        applyEnrollmentsStatementHash({
-          oldRoot: field(application.old_root),
-          newRoot: field(application.new_root),
-          oldNextIndex: application.old_next_index,
-          newNextIndex: application.new_next_index,
-          chainStart: field(application.chain_start),
-          chainEnd: field(application.chain_end),
-          count: BigInt(application.count),
-        }),
-      ),
-    ).toBe(application.statement_hash);
   });
 });

@@ -18,13 +18,16 @@ export type {
   StreamPosition,
 } from "../crypto/audit/audit.js";
 export {
+  ADDRESS_INPUT_BITS_LEN,
   AUDIT_RECORD_LEN,
   DATA_TAIL_LEN,
   DEFAULT_INPUT_BITS_LEN,
   TRANSFER_OUTPUT_CAPACITIES,
   DISCLOSURE_CHUNK_BYTES,
   ENTRY_INPUT_LEN,
+  ENVELOPE_HEAD_LEN,
   ENVELOPE_KEY_LEN,
+  MAX_INPUT_CLASS,
   OPENING_RECORD_LEN,
   REAL_INPUT_COUNT_LEN,
   RECORD_BLOCKS,
@@ -57,6 +60,8 @@ export {
   DUMMY_RECORD,
   EMPTY_ENTRY_INPUT,
   EMPTY_TAIL,
+  InputClass,
+  InputMap,
   RecordKind,
   decodeAuditEnvelope,
   decodeAuditRecord,
@@ -66,6 +71,7 @@ export {
   encodeAuditRecord,
   encodeDataTail,
   encodeOpeningRecord,
+  envelopeInputMap,
   isEmptyEntryInput,
 } from "../protocol/codec/audit-stream.js";
 export type {
@@ -74,6 +80,7 @@ export type {
   AuditRecord,
   DataTail,
   EntryInput,
+  InputClassification,
   OpeningRecord,
 } from "../protocol/codec/audit-stream.js";
 export {
@@ -174,18 +181,22 @@ export {
   applyRecordsStatementHash,
   ciphertextDigest,
   recordChain,
-  registerKeyStatementElements,
-  registerKeyStatementHash,
   ringTransferStatement,
   signerBinding,
   tailChain,
   transferStatementElements,
   transferStatementHash,
 } from "../protocol/proof/statement.js";
+export { credentialElements, registerKeyHash } from "../protocol/membership/credential.js";
+export {
+  CredentialRead,
+  CredentialRoots,
+  MAX_CREDENTIAL_READS,
+  type CredentialStateRoot,
+} from "../protocol/codec/credential-read.js";
 export type {
   ApplyRecordsStatement,
   AuditHead,
-  RegisterKeyStatement,
   SignerBinding,
   TransferBinding,
   TransferFamily,

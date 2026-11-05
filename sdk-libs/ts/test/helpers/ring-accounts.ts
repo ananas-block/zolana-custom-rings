@@ -82,34 +82,12 @@ export async function ringCoSignerAccount(
 }
 
 /** Rust `StorageRegistry` owned by the storage program, `roots` newest first. */
-/** Rust `TrackingRegistry`, the newest root in slot 0. */
-export function trackingRegistryAccount(
-  input: Readonly<{
-    root: Bytes32;
-    revision: bigint;
-    nextIndex: number;
-    auditorPubkey: Uint8Array;
-  }>,
-): RpcAccount {
-  const writer = new Writer()
-    .u8(3, "discriminator")
-    .bytes(new Uint8Array(32), 32, "ringId")
-    .bytes(input.auditorPubkey, 33, "auditorPubkey")
-    .u32(input.nextIndex, "nextIndex");
-  for (let slot = 0; slot < ROOT_HISTORY; slot += 1)
-    writer
-      .bytes(slot === 0 ? input.root : new Uint8Array(32), 32, "hash")
-      .u64(slot === 0 ? input.revision : 0n, "revision")
-      .u64(0n, "expiresAt");
-  return ownedAccount(STORAGE_PROGRAM_ID, writer.finish());
-}
-
 export function storageRegistryAccount(
   roots: readonly StorageRegistryRoot[],
   authority: Address = ZERO_ADDRESS,
   source: Readonly<{
-    trackingRegistry?: Address;
-    trackingFloor?: bigint;
+    privateRingId?: Bytes32;
+    absenceFloor?: bigint;
   }> = {},
 ): RpcAccount {
   const writer = new Writer()
@@ -118,8 +96,8 @@ export function storageRegistryAccount(
     .u64(0n, "graceSlots")
     .u32(1, "nextIndex")
     .bytes(new Uint8Array(32), 32, "ringId")
-    .bytes(addressBytes(source.trackingRegistry ?? ZERO_ADDRESS))
-    .u64(source.trackingFloor ?? 0n, "trackingFloor");
+    .bytes(source.privateRingId ?? new Uint8Array(32), 32, "privateRingId")
+    .u64(source.absenceFloor ?? 0n, "absenceFloor");
   for (let slot = 0; slot < ROOT_HISTORY; slot += 1) {
     const root = roots[slot];
     writer
@@ -145,7 +123,6 @@ export function ringPolicyData(
   input: Readonly<{
     bump: number;
     records?: Address;
-    tracking?: Address;
     roles?: Partial<RingRoles>;
     auditorPublicKey?: Uint8Array;
     mode?: RingMode;
@@ -173,8 +150,7 @@ export function ringPolicyData(
     .bytes(addressBytes(input.delegate ?? ZERO_ADDRESS))
     .bytes(input.auditorPublicKey ?? FIXTURE_AUDITOR, 33, "auditorPublicKey")
     .u64(input.createdSlot ?? 0n, "createdSlot")
-    .bytes(addressBytes(input.records ?? ZERO_ADDRESS))
-    .bytes(addressBytes(input.tracking ?? ZERO_ADDRESS));
+    .bytes(addressBytes(input.records ?? ZERO_ADDRESS));
   writePolicyFields(writer, input);
   return writer.finish();
 }

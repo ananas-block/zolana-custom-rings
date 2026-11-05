@@ -28,6 +28,7 @@ interface RekeyCase {
   readonly outputs: number;
   readonly spendsDefaultRing: boolean;
   readonly hasData: boolean;
+  /** The Rust fixture names the credential capacity `tracking`, Rust `RecordPools::tracking`. */
   readonly readPools: Readonly<{ own: number; curator: number; tracking: number }>;
   readonly sealed: RustCircuit;
   readonly read: RustCircuit;
@@ -77,7 +78,8 @@ describe("a planned transfer", () => {
     it(`takes the Rust keys of ${rekey.name}`, () => {
       const frame = frameOf(rekey);
       expect(rustCircuit(planTransfer(frame, NO_RECORD_POOLS).circuit)).toEqual(rekey.sealed);
-      const read = planTransfer(frame, rekey.readPools);
+      const { tracking: credentials, ...pools } = rekey.readPools;
+      const read = planTransfer(frame, { ...pools, credentials });
       expect(rustCircuit(read.circuit)).toEqual(rekey.read);
       // Every fixture read takes the wide row, so a wide reseal takes the read's key.
       expect(planTransferAt(frame, "wide").circuit).toEqual(read.circuit);

@@ -1260,9 +1260,9 @@ describe("ring read request", () => {
     const [sent, received] = page.items;
     if (sent?.view.role !== "sender") throw new Error("a sender view");
     expect(sent.view.inputs).toHaveLength(4);
-    expect(sent.view.inputs.every((input) => input.real || input.defaultInput === undefined)).toBe(
-      true,
-    );
+    expect(
+      sent.view.inputs.every((input) => input.class === "note" || input.defaultInput === undefined),
+    ).toBe(true);
     expect(sent.view.outputs.map((output) => output.slotIndex)).toEqual([0, 1, 2]);
     expect(received?.view).toEqual({
       role: "recipient",
@@ -1276,6 +1276,14 @@ describe("ring read request", () => {
     expect(item.realInputs).toBe(3);
     expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
     expect(item.inputs.filter((input) => input.defaultInput !== undefined)).toHaveLength(2);
+  });
+
+  it("reads an address input apart from the notes it precedes", async () => {
+    const wire = anonymousItem();
+    (wire["inputs"] as Record<string, unknown>[])[0]!["class"] = "address";
+    wire["realInputs"] = 2;
+    const item = await readItem(wire);
+    expect(item.inputs.map((input) => input.class)).toEqual(["address", "note", "note", "dummy"]);
   });
 
   it.each<readonly [string, (item: Record<string, unknown>) => void, string]>([
@@ -1293,10 +1301,25 @@ describe("ring read request", () => {
           .slice(-1)
           .concat((item["inputs"] as Record<string, unknown>[]).slice(1, 2));
         if (padding === undefined || opened === undefined) throw new Error("no inputs");
-        padding["real"] = false;
+        padding["class"] = "dummy";
         padding["defaultInput"] = opened["defaultInput"];
       },
       "inputs[3].defaultInput",
+    ],
+    [
+      "an address that opens a default note",
+      (item) => ((item["inputs"] as Record<string, unknown>[])[1]!["class"] = "address"),
+      "inputs[1].defaultInput",
+    ],
+    [
+      "an address counted in the real count",
+      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["class"] = "address"),
+      "inputs",
+    ],
+    [
+      "a note past a dummy",
+      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["class"] = "dummy"),
+      "inputs",
     ],
     ["a ring output with no tag", (item) => delete outputAt(item, 0)["tag"], "outputs[0].kind"],
     ["an exit with a tag", (item) => (outputAt(item, 1)["tag"] = addressOf(9)), "outputs[1].kind"],

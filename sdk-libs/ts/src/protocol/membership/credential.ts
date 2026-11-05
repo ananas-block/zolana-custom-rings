@@ -12,8 +12,10 @@
 import { getProgramDerivedAddress, type Address } from "@solana/kit";
 
 import {
+  checkedBytes,
   concatBytes,
   decodeTreeId,
+  hashBytes,
   equalBytes,
   hashChain4,
   isZero,
@@ -44,7 +46,8 @@ import { ProofInputUtxo, SOL_MINT, Utxo, type TreeId } from "@heliuslabs/zolana/
 
 import { domainField, RingDomain } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
-import { registerKeyStatementElements } from "../proof/statement.js";
+import { taggedX25519 } from "../transaction/transact.js";
+import { packBytesBe } from "../../crypto/derivation/hasher.js";
 
 export const CREDENTIAL_PDA_SEED = new TextEncoder().encode("credential");
 export const AUDIT_CREDENTIAL_SIZE = 257;
@@ -81,24 +84,26 @@ export interface AddressRoot {
   readonly sequence: bigint;
 }
 
-export interface CredentialRead {
-  readonly addressRootIndex: number;
-  readonly stateRootIndexes: readonly number[];
-}
-
-/** A public only update reads no credential and passes no credential account. */
-export const EMPTY_CREDENTIAL_READ: CredentialRead = Object.freeze({
-  addressRootIndex: 0,
-  stateRootIndexes: Object.freeze([]),
-});
-
-/** CRRG and CRCR share every field position, only the first element selects proof or state. */
+/**
+ * `[domain, ring_id, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`.
+ * CRRG and CRCR share every field position, only the first element selects proof or state.
+ */
 export function credentialElements(
   credential: AuditCredential,
   domain: typeof RingDomain.registerKey | typeof RingDomain.credentialState,
 ): readonly Bytes32[] {
-  const [, ...fields] = registerKeyStatementElements(credential);
-  return [domainField(domain), ...fields];
+  return [
+    domainField(domain),
+    checkedBytes<Bytes32>(credential.ringId, 32, "ring id"),
+    checkedBytes<Bytes32>(credential.member, 32, "member"),
+    checkedBytes<Bytes32>(credential.nullifierPk, 32, "nullifier pk"),
+    checkedBytes<Bytes32>(credential.listTag, 32, "list tag"),
+    ...(packBytesBe(
+      checkedBytes<Bytes33>(credential.auditorPubkey, 33, "auditor pubkey"),
+    ) as Bytes32[]),
+    ...(packBytesBe(taggedX25519(credential.ephU)) as Bytes32[]),
+    hashBytes(checkedBytes<Bytes64>(credential.ciphertext, 64, "ciphertext")) as Bytes32,
+  ];
 }
 
 /** The RegisterKey public input, the statement hash `Enroll` verifies. */
@@ -263,24 +268,6 @@ export function stateRootAt(tree: Uint8Array, rootIndex: number): Bytes32 | unde
   const start = UTXO_ROOT_HISTORY_OFFSET + rootIndex * 32;
   const root = tree.slice(start, start + 32) as Bytes32;
   return isZero(root) ? undefined : root;
-}
-
-/** `address_root_index u16 LE || D u8 || D x u16 LE`, the empty read writes zero for all three. */
-export function encodeCredentialRead(read: CredentialRead): Uint8Array {
-  const { addressRootIndex, stateRootIndexes } = read;
-  if (stateRootIndexes.length > 0xff) throw invalid("stateRootCount");
-  if (stateRootIndexes.length === 0 && addressRootIndex !== 0) throw invalid("emptyRead");
-  const bytes = new Uint8Array(3 + 2 * stateRootIndexes.length);
-  const view = new DataView(bytes.buffer);
-  view.setUint16(0, u16(addressRootIndex), true);
-  bytes[2] = stateRootIndexes.length;
-  stateRootIndexes.forEach((index, at) => view.setUint16(3 + 2 * at, u16(index), true));
-  return bytes;
-}
-
-function u16(value: number): number {
-  if (!Number.isInteger(value) || value < 0 || value > 0xffff) throw invalid("rootIndex");
-  return value;
 }
 
 function invalid(reason: string): RingError {
