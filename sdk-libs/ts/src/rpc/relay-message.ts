@@ -302,7 +302,7 @@ export type ExpectedRelayMessage =
 /** A frame a signer reads inline or, past one transaction, from the buffer its digest names. */
 type ExpectedFrame = ExpectedDelegate | ExpectedPublicOwner | ExpectedFunder | ExpectedCoSigner;
 
-/** Rust `VerifiedMessage`, only a check builds one. */
+/** Rust `VerifiedMessage`, only a check builds one, over the private copy that check read. */
 export class VerifiedRelayMessage {
   readonly signer: Address;
   readonly #bytes: Uint8Array;
@@ -676,18 +676,26 @@ export function checkRelayMessage(
   message: Uint8Array,
   signer: Address,
 ): VerifiedRelayMessage {
-  if (expected.kind === "deposit") return checkDepositMessage(expected, message);
-  if (expected.kind === "enroll") return checkEnrollMessage(expected, message);
+  const snapshot = message.slice();
+  if (expected.kind === "deposit") return checkDepositSnapshot(expected, snapshot);
+  if (expected.kind === "enroll") return checkEnrollSnapshot(expected, snapshot);
   if (expected.kind === "sealed") throw mismatch("Unrequested");
   const envelope = frameEnvelope(expected, signer, frameTag(expected));
-  const { data, accounts } = open(envelope, message);
+  const { data, accounts } = open(envelope, snapshot);
   if (data[0] === RingInstructionTag.settleBuffered) throw mismatch("SettlesBuffer");
   checkFrame(expected, signer, data, accounts);
-  return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
+  return new VerifiedRelayMessage(VERIFIED, envelope.signer, snapshot);
 }
 
 /** Rust `ExpectedDeposit::check`, every SPP byte and account is the depositor's. */
 export function checkDepositMessage(
+  expected: ExpectedDeposit,
+  message: Uint8Array,
+): VerifiedRelayMessage {
+  return checkDepositSnapshot(expected, message.slice());
+}
+
+function checkDepositSnapshot(
   expected: ExpectedDeposit,
   message: Uint8Array,
 ): VerifiedRelayMessage {
@@ -733,7 +741,7 @@ export async function expectedEnroll(
   });
 }
 
-function checkEnrollMessage(expected: ExpectedEnroll, message: Uint8Array): VerifiedRelayMessage {
+function checkEnrollSnapshot(expected: ExpectedEnroll, message: Uint8Array): VerifiedRelayMessage {
   const envelope: Envelope = {
     program: STORAGE_PROGRAM_ID,
     policy: expected.policy,
@@ -773,14 +781,15 @@ export function checkSettledMessage(
 ): VerifiedRelayMessage {
   if (expected.kind === "sealed") throw mismatch("Unrequested");
   if (expected.kind === "deposit" || expected.kind === "enroll") throw mismatch("Data");
+  const snapshot = message.slice();
   const envelope = frameEnvelope(expected, signer, RingInstructionTag.settleBuffered);
-  const { data, accounts } = open(envelope, message);
+  const { data, accounts } = open(envelope, snapshot);
   if (accounts.length < 2) throw mismatch("Accounts");
   const frame = bufferedFrame(buffer);
   if (frame === undefined || !equalBytes(data, settleBufferedData(frameDigest(frame))))
     throw mismatch("Data");
   checkFrame(expected, signer, frame, accounts.slice(2));
-  return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
+  return new VerifiedRelayMessage(VERIFIED, envelope.signer, snapshot);
 }
 
 function frameTag(expected: ExpectedFrame): RingInstructionTag {
