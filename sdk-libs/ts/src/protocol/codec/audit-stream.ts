@@ -1,4 +1,8 @@
-/** Every plaintext of the ring auditor stream, Rust `custom_ring_interface::audit_stream`. */
+/**
+ * Every plaintext of the ring auditor stream and its input map, Rust
+ * `custom_ring_interface::audit_stream`.
+ * Read after `ring-disclosure-layout.ts`. Read before `proof/audit-proof.ts` and the audit readers.
+ */
 import {
   addressBytes,
   bytesToBigInt,
@@ -12,13 +16,17 @@ import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
 
 import { checkedCounter } from "../../crypto/error.js";
 import {
+  ADDRESS_INPUT_BITS_LEN,
   AUDIT_RECORD_LEN,
   DATA_TAIL_LEN,
   DEFAULT_INPUT_BITS_LEN,
   ENTRY_INPUT_LEN,
+  ENVELOPE_HEAD_LEN,
   ENVELOPE_KEY_LEN,
+  MAX_INPUT_CLASS,
   OPENING_RECORD_LEN,
   RECORD_STRIDE,
+  checkedStreamLayout,
   envelopeRegion,
   type AuditStreamLayout,
 } from "./ring-disclosure-layout.js";
@@ -77,12 +85,145 @@ export type AuditEvidence =
       inputs: readonly EntryInput[];
     }>;
 
-/** `tx_viewing_sk ‖ R ‖ default_input_bits ‖ entries`, Rust `AuditEnvelope`. */
+/** `tx_viewing_sk ‖ R ‖ A ‖ default_input_bits ‖ entries`, Rust `AuditEnvelope`. */
 export interface AuditEnvelope {
   readonly txViewingSecret: Bytes32;
-  /** `R`, nullifiers at or past it are padding. */
+  /** `R`, the spent notes, addresses excluded. */
   readonly realInputs: number;
+  /** `A`, bit `i` set when published input `i` is an address. */
+  readonly addressInputBits: bigint;
   readonly evidence: AuditEvidence;
+}
+
+/** One input slot, Rust `InputClass`. */
+export const InputClass = Object.freeze({
+  note: "note",
+  address: "address",
+  dummy: "dummy",
+} as const);
+export type InputClass = (typeof InputClass)[keyof typeof InputClass];
+
+/** Rust `InputClassification`, unchecked until `InputMap.check`. */
+export interface InputClassification {
+  /** `n`, the published nullifiers. */
+  readonly publishedInputs: number;
+  /** `C`, the key's input class. */
+  readonly capacity: number;
+  /** `R`. */
+  readonly noteCount: number;
+  /** `A` in absolute published input order. */
+  readonly addressInputBits: bigint;
+}
+
+/** Rust `InputMap`, notes and addresses interleave below `L = R + popcount(A)`, dummies from `L`. */
+export class InputMap {
+  readonly #classification: InputClassification;
+  /** `L`. */
+  readonly nonDummyCount: number;
+
+  private constructor(classification: InputClassification, nonDummyCount: number) {
+    this.#classification = Object.freeze({ ...classification });
+    this.nonDummyCount = nonDummyCount;
+  }
+
+  /** Refuses counts past the capacity, a capacity past the bitmap and an address bit at or past `L`. */
+  static check(classification: InputClassification): InputMap {
+    const { publishedInputs, capacity, noteCount, addressInputBits } = classification;
+    // 1. Range every count first, a bigint shift accepts any count and would hide one past the bitmap.
+    if (
+      !Number.isInteger(publishedInputs) ||
+      !Number.isInteger(capacity) ||
+      !Number.isInteger(noteCount) ||
+      typeof addressInputBits !== "bigint" ||
+      publishedInputs < 1 ||
+      publishedInputs > capacity ||
+      capacity > MAX_INPUT_CLASS ||
+      noteCount < 0 ||
+      noteCount > 0xff ||
+      addressInputBits < 0n ||
+      addressInputBits >> BigInt(MAX_INPUT_CLASS) !== 0n
+    )
+      throw refused();
+    // 2. `L` counts notes and addresses alike, an address bit at or past it would sit in padding.
+    const nonDummyCount = noteCount + popcount(addressInputBits);
+    if (nonDummyCount > publishedInputs || addressInputBits >> BigInt(nonDummyCount) !== 0n)
+      throw refused();
+    return new InputMap(classification, nonDummyCount);
+  }
+
+  /** `classes` spans the capacity, a note or address past a dummy or past `n` is refused. */
+  static fromClasses(classes: readonly InputClass[], publishedInputs: number): InputMap {
+    if (classes.length > MAX_INPUT_CLASS) throw refused();
+    let noteCount = 0;
+    let addressInputBits = 0n;
+    let padding = false;
+    classes.forEach((inputClass, slot) => {
+      if ((padding || slot >= publishedInputs) && inputClass !== InputClass.dummy) throw refused();
+      if (inputClass === InputClass.note) noteCount += 1;
+      else if (inputClass === InputClass.address) addressInputBits |= 1n << BigInt(slot);
+      else padding = true;
+    });
+    return InputMap.check({
+      publishedInputs,
+      capacity: classes.length,
+      noteCount,
+      addressInputBits,
+    });
+  }
+
+  get noteCount(): number {
+    return this.#classification.noteCount;
+  }
+
+  get addressInputBits(): bigint {
+    return this.#classification.addressInputBits;
+  }
+
+  get publishedInputs(): number {
+    return this.#classification.publishedInputs;
+  }
+
+  get capacity(): number {
+    return this.#classification.capacity;
+  }
+
+  /** `undefined` at or past the capacity. */
+  slot(slot: number): InputClass | undefined {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= this.capacity) return undefined;
+    if (slot >= this.nonDummyCount) return InputClass.dummy;
+    return ((this.addressInputBits >> BigInt(slot)) & 1n) === 1n
+      ? InputClass.address
+      : InputClass.note;
+  }
+
+  classes(): readonly InputClass[] {
+    return Object.freeze(
+      Array.from({ length: this.capacity }, (_, slot) => this.slot(slot) as InputClass),
+    );
+  }
+
+  /** Default bits name note positions alone, never an address or a dummy. */
+  validateDefaultInputBits(bits: bigint): void {
+    if (
+      typeof bits !== "bigint" ||
+      (bits & this.addressInputBits) !== 0n ||
+      bits >> BigInt(this.nonDummyCount) !== 0n
+    )
+      throw refused();
+  }
+}
+
+/** The envelope's map under `layout`, Rust `AuditEnvelope::input_map`. */
+export function envelopeInputMap(
+  envelope: Pick<AuditEnvelope, "realInputs" | "addressInputBits">,
+  layout: Pick<AuditStreamLayout, "inputs" | "key">,
+): InputMap {
+  return InputMap.check({
+    publishedInputs: layout.inputs,
+    capacity: layout.key.class,
+    noteCount: envelope.realInputs,
+    addressInputBits: envelope.addressInputBits,
+  });
 }
 
 export const DUMMY_RECORD: AuditRecord = Object.freeze({
@@ -165,11 +306,12 @@ export function decodeDataTail(plaintext: Uint8Array): DataTail {
 }
 
 export function encodeAuditEnvelope(envelope: AuditEnvelope): Uint8Array {
-  const { evidence, realInputs } = envelope;
+  const { evidence, realInputs, addressInputBits } = envelope;
   if (!Number.isInteger(realInputs) || realInputs < 0 || realInputs > 0xff) throw refused();
   const head = concatBytes(
     checkedBytes<Bytes32>(envelope.txViewingSecret, ENVELOPE_KEY_LEN, "tx viewing secret"),
     Uint8Array.of(realInputs),
+    u64be(checkedCounter(addressInputBits, "address input bits")),
   );
   if (evidence.kind === "none") return head;
   return concatBytes(
@@ -179,34 +321,47 @@ export function encodeAuditEnvelope(envelope: AuditEnvelope): Uint8Array {
   );
 }
 
-/** Refuses any length other than `layout`'s. */
+/** Refuses any length other than `layout`'s, counts off the input map, a default bit off a note and a nonzero opening off a default bit. */
 export function decodeAuditEnvelope(
   plaintext: Uint8Array,
   layout: AuditStreamLayout,
 ): AuditEnvelope {
+  checkedStreamLayout(layout);
   if (plaintext.length !== envelopeRegion(layout).length) throw refused();
+  // 1. The head sits at fixed offsets on every key.
   const txViewingSecret = plaintext.slice(0, ENVELOPE_KEY_LEN) as Bytes32;
   const realInputs = plaintext[ENVELOPE_KEY_LEN] ?? 0;
-  if (!layout.key.entry)
-    return Object.freeze({ txViewingSecret, realInputs, evidence: NO_EVIDENCE });
-  const bitsAt = ENVELOPE_KEY_LEN + 1;
-  const entriesAt = bitsAt + DEFAULT_INPUT_BITS_LEN;
+  const bitsAt = ENVELOPE_HEAD_LEN - ADDRESS_INPUT_BITS_LEN;
+  const addressInputBits = bytesToBigInt(plaintext.subarray(bitsAt, ENVELOPE_HEAD_LEN));
+  // 2. `R` and `A` must form a canonical map before any evidence reads a position.
+  const head = { txViewingSecret, realInputs, addressInputBits };
+  const inputs = envelopeInputMap(head, layout);
+  if (!layout.key.entry) return Object.freeze({ ...head, evidence: NO_EVIDENCE });
+  // 3. Entry evidence opens default-ring notes alone, every other published position stays zero.
+  const entriesAt = ENVELOPE_HEAD_LEN + DEFAULT_INPUT_BITS_LEN;
+  const defaultInputBits = bytesToBigInt(plaintext.subarray(ENVELOPE_HEAD_LEN, entriesAt));
+  inputs.validateDefaultInputBits(defaultInputBits);
+  const openings = Array.from({ length: layout.inputs }, (_, slot) =>
+    decodeEntryInput(
+      plaintext.subarray(
+        entriesAt + slot * ENTRY_INPUT_LEN,
+        entriesAt + (slot + 1) * ENTRY_INPUT_LEN,
+      ),
+    ),
+  );
+  if (
+    openings.some(
+      (opening, slot) =>
+        ((defaultInputBits >> BigInt(slot)) & 1n) === 0n && !isEmptyEntryInput(opening),
+    )
+  )
+    throw refused();
   return Object.freeze({
-    txViewingSecret,
-    realInputs,
+    ...head,
     evidence: Object.freeze({
       kind: "entry",
-      defaultInputBits: bytesToBigInt(plaintext.subarray(bitsAt, entriesAt)),
-      inputs: Object.freeze(
-        Array.from({ length: layout.inputs }, (_, input) =>
-          decodeEntryInput(
-            plaintext.subarray(
-              entriesAt + input * ENTRY_INPUT_LEN,
-              entriesAt + (input + 1) * ENTRY_INPUT_LEN,
-            ),
-          ),
-        ),
-      ),
+      defaultInputBits,
+      inputs: Object.freeze(openings),
     }),
   });
 }
@@ -240,6 +395,12 @@ function decodeEntryInput(bytes: Uint8Array): EntryInput {
     dataHash: field(mintAt + 2 * FIELD_LEN),
     ringDataHash: field(mintAt + 3 * FIELD_LEN),
   });
+}
+
+function popcount(bits: bigint): number {
+  let count = 0;
+  for (let rest = bits; rest !== 0n; rest >>= 1n) count += Number(rest & 1n);
+  return count;
 }
 
 function refused(): RingError {

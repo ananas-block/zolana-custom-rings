@@ -220,6 +220,7 @@ function sealedTransfer(
         envelope: {
           txViewingSecret: TX_SECRET,
           realInputs: nullifiers.length,
+          addressInputBits: 0n,
           evidence: { kind: "none" },
         },
         records,

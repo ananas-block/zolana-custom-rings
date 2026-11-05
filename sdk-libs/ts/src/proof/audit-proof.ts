@@ -1,4 +1,9 @@
-/** The audit section of a ring transfer, the auditor stream and its opened slots. */
+/**
+ * The audit section of a ring transfer, the auditor stream and its opened slots. Each published
+ * input classifies once through `inputClassOf`, the envelope counts, entry bits and owner rows read
+ * that class alone.
+ * Read after `protocol/codec/audit-stream.ts`. Read before `proof/transfer-proof.ts`.
+ */
 import { RING_INPUT_PADDING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
 import {
   bigIntBytes,
@@ -22,13 +27,19 @@ import {
   DUMMY_RECORD,
   EMPTY_ENTRY_INPUT,
   EMPTY_TAIL,
+  InputClass,
+  InputMap,
   RecordKind,
   type AuditEnvelope,
   type AuditRecord,
   type DataTail,
   type EntryInput,
 } from "../protocol/codec/audit-stream.js";
-import type { AuditLayout, AuditStreamLayout } from "../protocol/codec/ring-disclosure-layout.js";
+import {
+  checkedStreamLayout,
+  type AuditLayout,
+  type AuditStreamLayout,
+} from "../protocol/codec/ring-disclosure-layout.js";
 import { compareField } from "../protocol/membership/owner-debits.js";
 import { RingError } from "../protocol/error.js";
 import { auditorMessageData } from "../crypto/audit/audit.js";
@@ -42,7 +53,7 @@ export interface SealedAudit {
   readonly audit: AuditLayout;
   readonly layout: AuditStreamLayout;
   readonly ephemeralPublicKey: X25519PublicKey;
-  /** `tx_viewing_sk ‖ R ‖ evidence` under the auditor stream. */
+  /** `tx_viewing_sk ‖ R ‖ A ‖ evidence` under the auditor stream. */
   readonly envelope: Uint8Array;
   /** One per published slot. */
   readonly records: readonly Uint8Array[];
@@ -58,7 +69,7 @@ export function sealAudit(
     rail: RingOutputRail;
     layout: AuditStreamLayout;
     published: readonly PublishedSlot[];
-    /** The spent notes in SPP order, compact padding left out. */
+    /** The published inputs in SPP order, compact padding left out. */
     inputs: readonly ProofInputUtxo[];
     auditor: X25519PublicKey;
   }>,
@@ -104,23 +115,27 @@ export function auditDisclosure(
 ): RingDisclosure {
   const { layout, outputs, inputs } = input;
   return Object.freeze({
-    envelope: auditEnvelopeOf(input.txViewingSecret, inputs, layout.key.entry),
+    envelope: auditEnvelopeOf(input.txViewingSecret, inputs, layout),
     records: Object.freeze(outputs.map(outputRecord)),
     ...(layout.hasData ? { tails: Object.freeze(outputs.map(outputTail)) } : {}),
   });
 }
 
-/** `R ‖ default_input_bits ‖ entries` past the sealed key. */
+/** `R ‖ A ‖ default_input_bits ‖ entries` past the sealed key. */
 function auditEnvelopeOf(
   txViewingSecret: Bytes32,
   inputs: readonly ProofInputUtxo[],
-  entry: boolean,
+  layout: AuditStreamLayout,
 ): AuditEnvelope {
-  const realInputs = realInputCount(inputs);
-  if (!entry) return { txViewingSecret, realInputs, evidence: { kind: "none" } };
-  return {
+  const map = inputMapOf(inputs, layout);
+  const head = {
     txViewingSecret,
-    realInputs,
+    realInputs: map.noteCount,
+    addressInputBits: map.addressInputBits,
+  };
+  if (!layout.key.entry) return { ...head, evidence: { kind: "none" } };
+  return {
+    ...head,
     evidence: {
       kind: "entry",
       defaultInputBits: defaultInputBits(inputs),
@@ -129,25 +144,43 @@ function auditEnvelopeOf(
   };
 }
 
-/** `R`, a live note past a dummy would escape the spend index. */
-export function realInputCount(inputs: readonly ProofInputUtxo[]): number {
-  const live = inputs.filter(isLive).length;
-  if (inputs.slice(0, live).some((input) => !isLive(input)))
-    throw new RingError("RING_TRANSACT_DATA_INVALID", { details: { reason: "DummiesLast" } });
-  return live;
+/** One published input's class, Rust `InputClass`, compact padding a dummy. */
+export function inputClassOf(input: ProofInputUtxo): InputClass {
+  if (input.isAddress()) return InputClass.address;
+  return input.isDummy() ? InputClass.dummy : InputClass.note;
 }
 
-/** Bit `i` set for a live default-ring input. */
+export function isDefaultRingNote(input: ProofInputUtxo): boolean {
+  return inputClassOf(input) === InputClass.note && input.utxo.ringProgramId === undefined;
+}
+
+/** The map of the published inputs, dummies filling the key's class, refused unless `n` matches. */
+export function inputMapOf(inputs: readonly ProofInputUtxo[], layout: AuditStreamLayout): InputMap {
+  const { key } = checkedStreamLayout(layout);
+  if (inputs.length !== layout.inputs)
+    throw new RingError("RING_TRANSACT_DATA_INVALID", {
+      details: { reason: "RingTransactLength" },
+    });
+  return InputMap.fromClasses(
+    [
+      ...inputs.map(inputClassOf),
+      ...Array<InputClass>(key.class - inputs.length).fill(InputClass.dummy),
+    ],
+    layout.inputs,
+  );
+}
+
+/** Bit `i` set for a default-ring note. */
 export function defaultInputBits(inputs: readonly ProofInputUtxo[]): bigint {
   return inputs.reduce(
-    (bits, input, index) => (isDefaultRing(input) ? bits | (1n << BigInt(index)) : bits),
+    (bits, input, index) => (isDefaultRingNote(input) ? bits | (1n << BigInt(index)) : bits),
     0n,
   );
 }
 
-/** Zero fields off a live default-ring input, never a secret. */
+/** Zero fields off a default-ring note, never a secret. */
 export function entryInput(input: ProofInputUtxo): EntryInput {
-  if (!isDefaultRing(input)) return EMPTY_ENTRY_INPUT;
+  if (!isDefaultRingNote(input)) return EMPTY_ENTRY_INPUT;
   const { utxo } = input;
   return Object.freeze({
     ownerKey: utxo.owner.confidentialViewTag() as Bytes32,
@@ -236,7 +269,7 @@ export function inputOpenings(
   ]);
 }
 
-/** Go `EntryOpening` per input slot on an entry key, zero off a default-ring input. */
+/** Go `EntryOpening` per input slot on an entry key, zero off a default-ring note. */
 export function entryOpenings(
   inputs: readonly ProofInputUtxo[],
   inputClass: number,
@@ -244,7 +277,7 @@ export function entryOpenings(
   return Object.freeze(
     Array.from({ length: inputClass }, (_, slot) => {
       const input = inputs[slot];
-      return input === undefined || !isDefaultRing(input)
+      return input === undefined || !isDefaultRingNote(input)
         ? zeroEntryOpening()
         : {
             ownerKey: input.utxo.owner.confidentialViewTag() as Bytes32,
@@ -254,7 +287,7 @@ export function entryOpenings(
   );
 }
 
-/** Distinct live input owners ascending as field integers, zero rows last, a delegate rail's zero-key note needs no row. */
+/** Distinct note owners ascending as field integers, zero rows last, a delegate rail's zero-key note needs no row. */
 export function ownerRows(
   input: Readonly<{
     inputs: readonly ProofInputUtxo[];
@@ -265,7 +298,7 @@ export function ownerRows(
 ): readonly Bytes32[] {
   const owners = new Map<string, Bytes32>();
   for (const spent of input.inputs) {
-    if (!isLive(spent) || spent.isAddress()) continue;
+    if (inputClassOf(spent) !== InputClass.note) continue;
     if (input.delegate && equalBytes(spent.nullifierPublicKey, ZERO_NULLIFIER_PK)) continue;
     const owner = spent.utxo.owner.ownerProofInputHash();
     if (!isZero(owner)) owners.set(bytesKey(owner), owner);
@@ -278,14 +311,6 @@ export function ownerRows(
       details: { owners: rows.length, maximum: slots },
     });
   return Object.freeze([...rows, ...Array<Bytes32>(slots - rows.length).fill(ZERO_32)]);
-}
-
-function isLive(input: ProofInputUtxo): boolean {
-  return !input.isCompact() && !input.isDummy();
-}
-
-function isDefaultRing(input: ProofInputUtxo): boolean {
-  return isLive(input) && input.utxo.ringProgramId === undefined;
 }
 
 function zeroSlotOpening(): RingSlotOpening {

@@ -176,6 +176,10 @@ export interface TransferProofInputs
   readonly outputs: readonly OutputOpeningProofInput[];
   /** The published nullifier count, the input slots past it carry no UTXO. */
   readonly inputCount: number;
+  /** `HashChain4([inputCount, ...inputNullifiers])`, the statement element past `inputCount`. */
+  readonly inputNullifierChain: Bytes32;
+  /** The published nullifiers zero filled to the key's input class. */
+  readonly inputNullifiers: readonly Bytes32[];
   /** At the key's input class. */
   readonly inputs: readonly RingSlotOpening[];
   /** One per input class slot on an entry key, empty otherwise. */
@@ -188,10 +192,8 @@ export interface TransferProofInputs
   /** The distinct live input owners ascending, zero rows last, at the key's owner rows. */
   readonly rows: readonly Bytes32[];
   readonly privateTxHash: Bytes32;
-  /** SPP's blinding of the hash, the proof reopens it with no address input. */
+  /** SPP's blinding of the hash. */
   readonly privateTxBlinding: Bytes32;
-  /** SPP's chain of address slot nullifiers, zero without one. */
-  readonly addressChain: Bytes32;
 }
 
 /** Go `TransferParams`, the statement's rail bits pick the rail. */
@@ -507,6 +509,8 @@ function transferJson(request: TransferProofRequest): Json {
     outputCount: integer(request.outputCount, "outputCount", 1, request.outputs.length),
     outputs: request.outputs.map((output, i) => outputJson(output, `outputs[${i}]`)),
     inputCount: integer(request.inputCount, "inputCount", 1, slots),
+    inputNullifierChain: field(request.inputNullifierChain, "inputNullifierChain"),
+    inputNullifiers: fields(request.inputNullifiers, slots, "inputNullifiers"),
     inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
     ...(flag(request.layout.entry)
       ? {
@@ -524,7 +528,6 @@ function transferJson(request: TransferProofRequest): Json {
     rows: fields(request.rows, circuit.owners, "rows"),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
     privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
-    addressChain: field(request.addressChain, "addressChain"),
     ...trackingJson(request, shape),
     ...policyJson(request, shape),
   };

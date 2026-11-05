@@ -43,8 +43,9 @@ import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
 import {
+  inputMapOf,
+  isDefaultRingNote,
   ownerRows,
-  realInputCount,
   sealAudit,
   sealedAuditMessage,
   type SealedAudit,
@@ -564,7 +565,7 @@ async function assembleStagedTransfer<T>(
       },
       context,
     );
-    const noSpend = realInputCount(inputs) === 0;
+    const noSpend = inputMapOf(inputs, layout).noteCount === 0;
     const coSignDemand = delegate
       ? NO_DEMAND
       : operationDemand({
@@ -1041,9 +1042,7 @@ function provenData(
 }
 
 export function spendsDefaultRing(proofInputs: SppProofInputs): boolean {
-  return proofInputs.inputUtxos.some(
-    (spent) => !spent.isCompact() && !spent.isDummy() && spent.utxo.ringProgramId === undefined,
-  );
+  return proofInputs.inputUtxos.some(isDefaultRingNote);
 }
 
 /** A deposit leg would bring an unlisted asset in, a delegate withdraws alone. */

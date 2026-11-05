@@ -18,9 +18,14 @@ import {
 import {
   defaultInputBits,
   entryInput,
+  inputClassOf,
+  inputMapOf,
+  isDefaultRingNote,
   ownerRows,
-  realInputCount,
 } from "../../src/proof/audit-proof.js";
+import { checkHiddenOwnerSpends } from "../../src/operations/payments/anonymous.js";
+import { InputClass } from "../../src/protocol/codec/audit-stream.js";
+import type { AuditStreamLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { depositStatementElements } from "../../src/proof/deposit-audit.js";
 import { checkInputKeys, checkOutputKeys } from "../../src/proof/policy-proof.js";
 import { enrolledSalt } from "../../src/proof/policy-proof.js";
@@ -437,12 +442,18 @@ describe("merge.json", () => {
 
 const fill = (byte: number): Bytes32 => new Uint8Array(32).fill(byte) as Bytes32;
 const note = (
-  input: Readonly<{ owner?: Bytes32; key?: Bytes32; ring?: Address; dummy?: boolean }>,
+  input: Readonly<{
+    owner?: Bytes32;
+    key?: Bytes32;
+    ring?: Address;
+    dummy?: boolean;
+    address?: boolean;
+  }>,
 ): ProofInputUtxo =>
   ({
     isCompact: () => false,
     isDummy: () => input.dummy === true,
-    isAddress: () => false,
+    isAddress: () => input.address === true,
     nullifierPublicKey: input.key ?? fill(9),
     utxo: {
       owner: {
@@ -458,24 +469,83 @@ const note = (
 const RING = "11111111111111111111111111111111" as Address;
 
 describe("input evidence", () => {
-  it("counts live notes with dummies last and refuses a live note past a dummy", () => {
-    expect(realInputCount([note({ ring: RING }), note({ dummy: true })])).toBe(1);
-    expect(
-      refusal(() => realInputCount([note({ dummy: true }), note({ ring: RING })])).details,
-    ).toMatchObject({ reason: "DummiesLast" });
+  const layout = (inputs: number): AuditStreamLayout => ({
+    key: { class: 4, entry: true },
+    inputs,
+    outputs: 1,
+    capacity: 2,
+    hasData: false,
+  });
+  const address = note({ address: true });
+
+  it("counts notes alone with addresses interleaved before the dummy suffix", () => {
+    const inputs = [note({ ring: RING }), address, note({}), note({ dummy: true })];
+    expect(inputs.map(inputClassOf)).toEqual([
+      InputClass.note,
+      InputClass.address,
+      InputClass.note,
+      InputClass.dummy,
+    ]);
+    const map = inputMapOf(inputs, layout(4));
+    expect([map.noteCount, map.addressInputBits, map.nonDummyCount]).toEqual([2, 2n, 3]);
+    const addresses = inputMapOf([address, address], layout(2));
+    expect([addresses.noteCount, addresses.addressInputBits]).toEqual([0, 3n]);
   });
 
-  it("sets a default bit and an entry on a live default input alone", () => {
-    const inputs = [note({ ring: RING }), note({}), note({ dummy: true })];
+  it("refuses a note or an address past a dummy and a count off the layout", () => {
+    for (const inputs of [
+      [note({ dummy: true }), note({ ring: RING })],
+      [note({ ring: RING }), note({ dummy: true }), address],
+    ])
+      expect(refusal(() => inputMapOf(inputs, layout(inputs.length))).details).toMatchObject({
+        reason: "RingTransactLength",
+      });
+    expect(refusal(() => inputMapOf([note({})], layout(2))).details).toMatchObject({
+      reason: "RingTransactLength",
+    });
+  });
+
+  it("sets a default bit and an entry on a default-ring note alone, never on an address", () => {
+    const inputs = [note({ ring: RING }), note({}), address, note({ dummy: true })];
     expect(defaultInputBits(inputs)).toBe(2n);
+    expect(inputs.map(isDefaultRingNote)).toEqual([false, true, false, false]);
     expect(entryInput(inputs[0] as ProofInputUtxo).amount).toBe(0n);
     expect(entryInput(inputs[1] as ProofInputUtxo).amount).toBe(5n);
+    expect(entryInput(address).amount).toBe(0n);
+    expect(inputMapOf(inputs, layout(4)).validateDefaultInputBits(defaultInputBits(inputs))).toBe(
+      undefined,
+    );
+  });
+
+  it("refuses a hidden owner whose input 0 is an address", () => {
+    const owner = fill(1);
+    const proofInputs = (inputUtxos: readonly ProofInputUtxo[]) =>
+      ({ inputUtxos }) as unknown as Parameters<typeof checkHiddenOwnerSpends>[0];
+    const held = (input: ProofInputUtxo): ProofInputUtxo =>
+      ({
+        ...input,
+        isCompact: input.isCompact,
+        isDummy: input.isDummy,
+        isAddress: input.isAddress,
+        utxo: { ...input.utxo, owner: { equals: (key: unknown) => key === owner } },
+      }) as unknown as ProofInputUtxo;
+    const sender = { signingPublicKey: owner } as unknown as Parameters<
+      typeof checkHiddenOwnerSpends
+    >[1];
+    expect(() =>
+      checkHiddenOwnerSpends(proofInputs([held(note({})), held(address)]), sender),
+    ).not.toThrow();
+    expect(
+      refusal(() => checkHiddenOwnerSpends(proofInputs([held(address), held(note({}))]), sender))
+        .code,
+    ).toBe("RING_NO_HIDDEN_OWNER");
   });
 
   it("orders rows as field integers, zero rows last, a delegate's zero key taking none", () => {
     const [low, high] = [fill(1), fill(2)];
     const inputs = [
       note({ owner: high, ring: RING }),
+      note({ owner: fill(3), address: true }),
       note({ owner: low, ring: RING }),
       note({ owner: high, ring: RING }),
       note({ dummy: true }),
@@ -643,6 +713,8 @@ describe("prover/ring/params.go", () => {
       outputCount: 2,
       outputs: repeat(2, { output: opening, ownerKey: zero, mintChunks: [zero, zero] }),
       inputCount: 1,
+      inputNullifierChain: zero,
+      inputNullifiers: repeat(24, zero),
       inputs: repeat(24, opening),
       entries: [],
       signerCount: 0,
@@ -650,7 +722,6 @@ describe("prover/ring/params.go", () => {
       rows: repeat(4, zero),
       privateTxHash: zero,
       privateTxBlinding: zero,
-      addressChain: zero,
       trackingRoot: zero,
       trackingPool: {
         records: repeat(capacity.tracking, row0()),

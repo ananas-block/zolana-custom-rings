@@ -236,6 +236,7 @@ describe("the stream vector", () => {
       envelope: {
         txViewingSecret: hex(vector.tx_viewing_sk) as Bytes32,
         realInputs: 1,
+        addressInputBits: 0n,
         evidence: { kind: "none" },
       },
       records: [record, record],

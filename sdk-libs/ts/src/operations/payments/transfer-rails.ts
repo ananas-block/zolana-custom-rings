@@ -74,6 +74,7 @@ import {
 import { RingError } from "../../protocol/error.js";
 import { relayListSalts, type RingListSalt } from "../../proof/policy-proof.js";
 import { ownerDataCounts, transferApprovalOf } from "../../proof/transfer-proof.js";
+import { isDefaultRingNote } from "../../proof/audit-proof.js";
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import {
   proveStagedTransfer,
@@ -489,11 +490,9 @@ async function preparedOwnerSignature(
   };
 }
 
-/** SPP's anonymous rail publishes the owner of a default-ring input, Rust `RingError::InProofDefaultRingInput`. */
+/** SPP's anonymous rail publishes the owner of a default-ring note, Rust `RingError::InProofDefaultRingInput`. */
 function checkRingNotes(proofInputs: SppProofInputs): void {
-  const index = proofInputs.inputUtxos.findIndex(
-    (spent) => !spent.isCompact() && !spent.isDummy() && spent.utxo.ringProgramId === undefined,
-  );
+  const index = proofInputs.inputUtxos.findIndex(isDefaultRingNote);
   if (index >= 0) throw new RingError("RING_IN_PROOF_DEFAULT_RING_INPUT", { details: { index } });
 }
 

@@ -188,6 +188,9 @@ describe("transfer_statement.json", () => {
       })),
       capacity: vector.output_capacity,
       inputCount: vector.input_count,
+      inputNullifierChain: field(
+        (vector as unknown as { input_nullifier_chain: string }).input_nullifier_chain,
+      ),
       privateTxHash: field(vector.private_tx_hash),
       signers: signerBinding(vector.signers.map(field), vector.signer_slots),
       roots: {

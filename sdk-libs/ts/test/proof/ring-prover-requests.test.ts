@@ -22,7 +22,7 @@ import {
   type TransferProofRequest,
 } from "../../src/rpc/prover/ring.js";
 import { ZERO_32, encodeBase58, isZero } from "@heliuslabs/zolana/internal";
-import { UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
+import { DUMMY_DOMAIN, UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import {
   NullifierKey,
@@ -457,6 +457,8 @@ function request(item: Json): RingProofRequest {
       outputCount: count(item["outputCount"]),
       outputs: list(item["outputs"]).map(outputOpening),
       inputCount: count(item["inputCount"]),
+      inputNullifierChain: field(item["inputNullifierChain"]),
+      inputNullifiers: fields(item["inputNullifiers"]),
       inputs: list(item["inputs"]).map(opening),
       entries: item["entries"] === undefined ? [] : list(item["entries"]).map(entryOpening),
       signerCount: count(item["signerCount"]),
@@ -467,7 +469,6 @@ function request(item: Json): RingProofRequest {
       rows: fields(item["rows"]),
       privateTxHash: field(item["privateTxHash"]),
       privateTxBlinding: field(item["privateTxBlinding"]),
-      addressChain: field(item["addressChain"]),
       ...trackingSection(item),
       ...policy(item),
     };
@@ -969,6 +970,13 @@ function checkTransferStatement(typed: TransferProofRequest): void {
     envelope: encodeAuditEnvelope({
       txViewingSecret: typed.txViewingSk,
       realInputs: live.length,
+      addressInputBits: inputs.reduce(
+        (bits, input, slot) =>
+          isUtxo(input) || amountOf(input.domain) === BigInt(DUMMY_DOMAIN)
+            ? bits
+            : bits | (1n << BigInt(slot)),
+        0n,
+      ),
       evidence,
     }),
     records: records.map((entry, slot) => ({
@@ -1021,6 +1029,7 @@ function checkTransferStatement(typed: TransferProofRequest): void {
     })),
     capacity: typed.outputs.length,
     inputCount: typed.inputCount,
+    inputNullifierChain: typed.inputNullifierChain,
     privateTxHash: typed.privateTxHash,
     signers: signerBinding(typed.signers.slice(0, typed.signerCount), typed.inputs.length),
     roots: {
