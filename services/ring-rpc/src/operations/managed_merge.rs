@@ -240,7 +240,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
         let ring = pass.service.ring();
         let owner_key = wallet.owner.to_bytes();
         // 1. The secret opens to the nullifier key the registry record binds.
-        let Some(nullifier_key) = pass.service.held_nullifier_key(&owner_key)? else {
+        let Some(nullifier_key) = pass.service.held_nullifier_key(&owner_key).await? else {
             return Ok(None);
         };
         let notes = self
@@ -751,9 +751,11 @@ pub(crate) mod tests {
             for (wallet, notes) in wallets {
                 let key = NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]);
                 let held = self.enroll(wallet, &key);
-                store
-                    .admit_enrollments(vec![held])
+                let admission = store
+                    .enrollment_admission(vec![held])
+                    .await
                     .expect("held enrollment");
+                store.admit_enrollments(admission);
                 self.record_notes(wallet, &key, *notes).await;
                 keys.push(key);
             }

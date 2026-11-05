@@ -41,7 +41,7 @@ async fn claim(store: &Store, now: u64) -> Option<ProjectionLease> {
 /// A page through `slot`, spending `nullifier` when one is named.
 async fn page(slot: u64, nullifier: Option<[u8; 32]>) -> PageDelta {
     let book = AuditStore::default();
-    let opener = |_: &[u8; 32]| -> Option<NullifierKey> { None };
+    let opener = |_: &HeldEnrollment| -> Option<NullifierKey> { None };
     let mut work = PageWork::new(&book, &opener);
     if let Some(nullifier) = nullifier {
         work.observe(Observation {

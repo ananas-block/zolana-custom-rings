@@ -35,11 +35,12 @@ use crate::{
     hub::Shared,
     limits::ReaderPermit,
     projection_lease::{LeaseClaim, ProjectionLease},
+    projection_reads::EnrollmentKey,
     record_writer::SaltedOwner,
     replay::ReplayCheck,
     spend_machine::{InputRead, Observation},
     spent_index::{LoadSpends, LoadedProjection, NoteSeal, ProjectionWriter},
-    tracking::{HeldEnrollment, OwnerEnrollment, ScanEnd, TrackingScan},
+    tracking::{HeldEnrollment, OwnerEnrollment, ScanEnd, TrackingCursor, TrackingScan},
     upstream::{
         MergeAuditRequest, RingConfiguration, RingFrame, RingHistoryPage, TransactionPage,
         TransactionSource,
@@ -192,13 +193,17 @@ impl<S: TransactionSource> AuditService<S> {
         self.view_tag
     }
 
-    /// The store's enrollment alone, no scan runs.
-    pub(crate) fn held_nullifier_key(
+    /// The stored enrollment alone, no scan runs.
+    pub(crate) async fn held_nullifier_key(
         &self,
         owner_key: &[u8; 32],
     ) -> Result<Option<NullifierKey>, RingRpcError> {
         let member = Member::owner_tag(owner_key)?;
-        let held = self.shared.store(self.ring).enrollment(member.as_bytes());
+        let held = self
+            .shared
+            .store(self.ring)
+            .enrollment(EnrollmentKey::Member, member.as_bytes())
+            .await?;
         Ok(held
             .map(|held| held.secrets(&self.auditor))
             .transpose()?
@@ -210,8 +215,7 @@ impl<S: TransactionSource> AuditService<S> {
         owner_key: &[u8; 32],
     ) -> Result<OwnerEnrollment, RingRpcError> {
         let member = Member::owner_tag(owner_key)?;
-        self.scanned(|store| store.enrollment(member.as_bytes()))
-            .await
+        self.scanned(EnrollmentKey::Member, member.as_bytes()).await
     }
 
     /// The owner whose list key `written_key` is, with the salt its enrollment seals.
@@ -220,7 +224,7 @@ impl<S: TransactionSource> AuditService<S> {
         written_key: &[u8; 32],
     ) -> Result<Option<SaltedOwner>, RingRpcError> {
         let held = self
-            .scanned(|store| store.enrollment_by_list_key(written_key))
+            .scanned(EnrollmentKey::ListKey, written_key)
             .await?
             .known()?;
         held.map(|held| {
@@ -234,7 +238,8 @@ impl<S: TransactionSource> AuditService<S> {
 
     async fn scanned(
         &self,
-        lookup: impl Fn(&AuditStore) -> Option<HeldEnrollment>,
+        key: EnrollmentKey,
+        value: &[u8; 32],
     ) -> Result<OwnerEnrollment, RingRpcError> {
         let store = self.shared.store(self.ring);
         // 1. The refresh holds the backfill lock, no other scan moves the cursor meanwhile.
@@ -247,7 +252,7 @@ impl<S: TransactionSource> AuditService<S> {
                 .await?
         };
         // 2. A held enrollment answers whatever the scan end, a missing one only after a complete scan.
-        Ok(match (lookup(&store), scanned) {
+        Ok(match (store.enrollment(key, value).await?, scanned) {
             (Some(held), _) => OwnerEnrollment::Held(Box::new(held)),
             (None, ScanEnd::Complete) => OwnerEnrollment::Absent,
             (None, ScanEnd::Partial) => OwnerEnrollment::Unknown,
@@ -673,8 +678,8 @@ impl<S: TransactionSource> AuditService<S> {
         // 1. The snapshot's unread frames replace the mirror's, a frame the holder read since leaves.
         let position = spends.checkpoint.position;
         store.refresh(spends, revision);
-        // 2. A held enrollment equals its row, a differing row refuses the reload.
-        store.admit_enrollments(enrollments)?;
+        // 2. Stored enrollments warm the cache, a row never changes once it committed.
+        store.cache_enrollments(enrollments);
         backfill.history = Some(position);
         backfill.tracking_cursor = tracking_cursor;
         backfill.repairs = repairs.into_iter().collect();
@@ -704,13 +709,13 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     /// An unreadable secret reads as absent, the note stays `Unknown` until it opens.
-    fn open_held_key(&self, owner_key: &[u8; 32]) -> Option<NullifierKey> {
-        self.held_nullifier_key(owner_key)
+    fn open_enrollment(&self, held: &HeldEnrollment) -> Option<NullifierKey> {
+        held.secrets(&self.auditor)
             .inspect_err(|error| {
-                log::warn!("a held key failed to open because {}", redacted(error));
+                log::warn!("a held key failed to open because {error}");
             })
             .ok()
-            .flatten()
+            .map(|secrets| secrets.nullifier_key)
     }
 
     /// Moves the position only past a page whose every row applied, a retry reads it again.
@@ -733,7 +738,7 @@ impl<S: TransactionSource> AuditService<S> {
         // Read before the repairs, a frame unread for want of a key opens once its enrollment is held.
         self.refresh_or_warn(store, tracking_cursor, durable).await;
         self.repair_frames(store, repairs, durable, mode).await;
-        let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
+        let opener = |held: &HeldEnrollment| self.open_enrollment(held);
         for _ in 0..MAX_BACKFILL_PAGES {
             let response = source
                 .ring_history(RingHistoryPage {
@@ -849,7 +854,7 @@ impl<S: TransactionSource> AuditService<S> {
             pagination_token: None,
         };
         self.validate_indexer_response(&response)?;
-        let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
+        let opener = |held: &HeldEnrollment| self.open_enrollment(held);
         let mut work = PageWork::new(store, &opener);
         work.late_keys();
         let rows = self
@@ -868,7 +873,7 @@ impl<S: TransactionSource> AuditService<S> {
     async fn refresh_or_warn(
         &self,
         store: &AuditStore,
-        cursor: &mut u64,
+        cursor: &mut TrackingCursor,
         durable: Option<&ProjectionWriter<'_>>,
     ) {
         if let Err(error) = self.refresh_enrollments(store, cursor, durable).await {
@@ -884,7 +889,7 @@ impl<S: TransactionSource> AuditService<S> {
     async fn refresh_enrollments(
         &self,
         store: &AuditStore,
-        cursor: &mut u64,
+        cursor: &mut TrackingCursor,
         durable: Option<&ProjectionWriter<'_>>,
     ) -> Result<ScanEnd, RingRpcError> {
         TrackingScan {
@@ -934,7 +939,7 @@ impl<S: TransactionSource> AuditService<S> {
         let context = response.context;
         let cursor = query.next_cursor(&position).map(Into::into);
         let store = self.shared.store(self.ring);
-        let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
+        let opener = |held: &HeldEnrollment| self.open_enrollment(held);
         let mut work = PageWork::new(&store, &opener);
         let rows = self.audit_rows(response, mode, &mut work, None).await?;
         Ok(GetDecryptedTransactionsResponse {
@@ -1110,7 +1115,8 @@ impl<S: TransactionSource> AuditService<S> {
                     .open_for(&self.auditor, &*store)
                 });
                 match created {
-                    Ok(created) => {
+                    Ok(mut created) => {
+                        store.resolve_deposits(&mut created).await?;
                         observe_all(work, &tx, created_in, |_| InputRead::Real);
                         work.open(created_in, created.utxos);
                         work.open(

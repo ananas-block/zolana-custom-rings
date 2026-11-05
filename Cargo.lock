@@ -4460,16 +4460,20 @@ dependencies = [
  "solana-signature",
  "solana-transaction",
  "solana-transaction-status-client-types",
+ "spr-client",
  "spr-indexer-api",
+ "spr-keypair",
  "spr-rpc-http",
  "thiserror 2.0.20",
  "tokio",
  "tower",
  "tower-http 0.7.1",
  "tracing-subscriber",
+ "zolana-ring-client",
  "zolana-ring-indexer",
  "zolana-ring-member-registry",
  "zolana-ring-policy",
+ "zolana-ring-rpc",
 ]
 
 [[package]]

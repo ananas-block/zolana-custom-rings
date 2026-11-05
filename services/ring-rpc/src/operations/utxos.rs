@@ -28,7 +28,8 @@ use zolana_ring_client::{
         GetWalletStatusResponse, InputParty, SpendCoverageFrame, SpendCoverageRow, WalletBalance,
         WalletEnrollment, WalletNote, WalletNoteStatus,
     },
-    AuditedMergeOutput, ConfirmedMerge, DepositOwner, DepositOwners, KnownUtxo, UtxoOwner,
+    AuditedMergeOutput, ConfirmedMerge, CreatedNotes, DepositOwner, DepositOwners, KnownUtxo,
+    UtxoOwner,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
@@ -40,10 +41,10 @@ use crate::{
     frame_repairs::RepairBook,
     owner_notes::OwnerNotesRead,
     projection_lease::ProjectionLease,
-    projection_reads::ProjectionReads,
+    projection_reads::{EnrollmentKey, ProjectionReads},
     spend_machine::{NoteRead, SpendRow, SpendState},
     spent_index::{state_name, Checkpoint, HistoryScope, LoadedSpends, NoteSeal},
-    tracking::{HeldEnrollment, HeldEnrollments, TrackingRefusal},
+    tracking::{EnrollmentAdmission, HeldEnrollment, HeldEnrollments, TrackingCursor},
 };
 
 #[path = "page_work.rs"]
@@ -93,7 +94,7 @@ pub(crate) struct Backfill {
     /// `None` until the durable tables load.
     pub history: Option<HistoryPosition>,
     /// The tracking leaf the next scan reads first, durable on the lease holder.
-    pub tracking_cursor: u64,
+    pub tracking_cursor: TrackingCursor,
     pub repairs: RepairBook,
     /// The lease the last claim returned, `None` while another replica writes the ring.
     pub writer: Option<ProjectionLease>,
@@ -413,12 +414,18 @@ impl PageDelta {
 
 impl AuditStore {
     pub(crate) fn new(backing: Backing) -> Self {
-        let book = match &backing {
-            Backing::Database { capacity, .. } => SpendBook::bounded(*capacity),
-            Backing::Memory | Backing::Unavailable => SpendBook::default(),
+        let (book, enrollments) = match &backing {
+            Backing::Database { capacity, .. } => (
+                SpendBook::bounded(*capacity),
+                HeldEnrollments::bounded(*capacity),
+            ),
+            Backing::Memory | Backing::Unavailable => {
+                (SpendBook::default(), HeldEnrollments::default())
+            }
         };
         Self {
             book: RwLock::new(book),
+            enrollments: RwLock::new(enrollments),
             backing,
             ..Self::default()
         }
@@ -558,25 +565,13 @@ impl AuditStore {
         Ok(found)
     }
 
-    /// Splits keys into cache hits and keys only storage can answer.
     fn cached<V>(
         &self,
         keys: &[[u8; 32]],
         lookup: impl Fn(&SpendBook, &[u8; 32]) -> Cached<V>,
     ) -> (HashMap<[u8; 32], V>, Vec<[u8; 32]>) {
         let book = self.read_book();
-        let mut found = HashMap::new();
-        let mut unknown = Vec::new();
-        for key in keys {
-            match lookup(&book, key) {
-                Cached::Hit(value) => {
-                    found.insert(*key, value);
-                }
-                Cached::Absent => {}
-                Cached::Unknown => unknown.push(*key),
-            }
-        }
-        (found, unknown)
+        split_cached(keys, |key| lookup(&book, key))
     }
 
     #[cfg(test)]
@@ -698,37 +693,97 @@ impl AuditStore {
             .collect())
     }
 
-    pub(crate) fn enrollment(&self, member: &[u8; 32]) -> Option<HeldEnrollment> {
-        self.enrollments
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .by_member(member)
-            .copied()
+    /// The cache answers first, storage answers each key the cache may have evicted.
+    pub(crate) async fn enrollments(
+        &self,
+        key: EnrollmentKey,
+        values: &[[u8; 32]],
+    ) -> Result<HashMap<[u8; 32], HeldEnrollment>, RingRpcError> {
+        let (mut found, unknown) = {
+            let cache = self.read_enrollments();
+            split_cached(values, |value| match key {
+                EnrollmentKey::Member => cache.by_member(value),
+                EnrollmentKey::OwnerHash => cache.by_owner_hash(value),
+                EnrollmentKey::ListKey => cache.by_list_key(value),
+            })
+        };
+        if let Some(reads) = self.reads()?.filter(|_| !unknown.is_empty()) {
+            found.extend(
+                reads
+                    .enrollments(key, &unknown)
+                    .await?
+                    .into_iter()
+                    .map(|held| (key.of(&held), held)),
+            );
+        }
+        Ok(found)
     }
 
-    pub(crate) fn enrollment_by_list_key(&self, list_key: &[u8; 32]) -> Option<HeldEnrollment> {
-        self.enrollments
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .by_list_key(list_key)
-            .copied()
+    pub(crate) async fn enrollment(
+        &self,
+        key: EnrollmentKey,
+        value: &[u8; 32],
+    ) -> Result<Option<HeldEnrollment>, RingRpcError> {
+        Ok(self.enrollments(key, &[*value]).await?.remove(value))
     }
 
-    /// A refused page holds nothing, a new owner's notes derive on the next page.
-    pub(crate) fn admit_enrollments(
+    /// Checks a scanned page against every stored row it names, before anything commits.
+    pub(crate) async fn enrollment_admission(
         &self,
         found: Vec<HeldEnrollment>,
-    ) -> Result<(), TrackingRefusal> {
+    ) -> Result<EnrollmentAdmission, RingRpcError> {
+        let members: Vec<[u8; 32]> = found.iter().map(HeldEnrollment::member).collect();
+        let held = self.enrollments(EnrollmentKey::Member, &members).await?;
+        Ok(HeldEnrollments::admission(found, &held)?)
+    }
+
+    /// Runs after the page commits, a new owner's notes derive on the next page.
+    pub(crate) fn admit_enrollments(&self, admission: EnrollmentAdmission) {
         let owners = self
             .enrollments
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .admit(found)?;
+            .insert(admission.rows().iter().copied());
         self.late_owners
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(owners);
+    }
+
+    /// Moves each capsule the cache could not name to its stored owner, the rest stay unowned.
+    pub(crate) async fn resolve_deposits(
+        &self,
+        created: &mut CreatedNotes,
+    ) -> Result<(), RingRpcError> {
+        let hashes: Vec<[u8; 32]> = created.unowned.iter().map(|note| note.owner_hash).collect();
+        if hashes.is_empty() {
+            return Ok(());
+        }
+        let held = self.enrollments(EnrollmentKey::OwnerHash, &hashes).await?;
+        let owners = StoredOwners(&held);
+        let mut unowned = Vec::new();
+        for note in std::mem::take(&mut created.unowned) {
+            match note.created(&owners) {
+                Some(utxo) => created.utxos.push(utxo),
+                None => unowned.push(note),
+            }
+        }
+        created.unowned = unowned;
         Ok(())
+    }
+
+    /// Rows a reload read from storage, their notes derived when the row first committed.
+    pub(crate) fn cache_enrollments(&self, rows: Vec<HeldEnrollment>) {
+        self.enrollments
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(rows);
+    }
+
+    fn read_enrollments(&self) -> std::sync::RwLockReadGuard<'_, HeldEnrollments> {
+        self.enrollments
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn context(&self) -> Context {
@@ -896,18 +951,42 @@ impl StoredUtxo {
     }
 }
 
+/// The cache alone, a capsule whose owner it misses resolves from storage after decryption.
 impl DepositOwners for AuditStore {
     fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
-        let enrollments = self
-            .enrollments
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        let held = enrollments.by_owner_hash(owner_hash)?;
-        Some(DepositOwner {
-            owner_key: held.owner_key,
-            nullifier_pk: held.nullifier_pk,
-        })
+        match self.read_enrollments().by_owner_hash(owner_hash) {
+            Cached::Hit(held) => Some(held.deposit_owner()),
+            Cached::Absent | Cached::Unknown => None,
+        }
     }
+}
+
+/// Enrollments by owner hash, as storage answered them.
+struct StoredOwners<'a>(&'a HashMap<[u8; 32], HeldEnrollment>);
+
+impl DepositOwners for StoredOwners<'_> {
+    fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
+        self.0.get(owner_hash).map(HeldEnrollment::deposit_owner)
+    }
+}
+
+/// Splits keys into cache hits and keys only storage can answer.
+fn split_cached<V>(
+    keys: &[[u8; 32]],
+    lookup: impl Fn(&[u8; 32]) -> Cached<V>,
+) -> (HashMap<[u8; 32], V>, Vec<[u8; 32]>) {
+    let mut found = HashMap::new();
+    let mut unknown = Vec::new();
+    for key in keys {
+        match lookup(key) {
+            Cached::Hit(value) => {
+                found.insert(*key, value);
+            }
+            Cached::Absent => {}
+            Cached::Unknown => unknown.push(*key),
+        }
+    }
+    (found, unknown)
 }
 
 /// Decoded state in a fixed order, sealed rows differ in their nonces alone.
@@ -930,7 +1009,7 @@ impl AuditStore {
         created_in: CreatedIn,
         utxos: impl IntoIterator<Item = zolana_ring_client::CreatedUtxo>,
     ) {
-        let opener = |_: &[u8; 32]| None;
+        let opener = |_: &HeldEnrollment| None;
         let mut work = PageWork::new(self, &opener);
         work.open(created_in, utxos);
         let delta = work.finish().await.expect("fixture page");
@@ -973,7 +1052,7 @@ impl AuditStore {
     /// Published rows with no frame the test reads.
     pub(crate) async fn spend(&self, nullifiers: impl IntoIterator<Item = [u8; 32]>) {
         use crate::spend_machine::{InputRead, Observation};
-        let opener = |_: &[u8; 32]| None;
+        let opener = |_: &HeldEnrollment| None;
         let mut work = PageWork::new(self, &opener);
         for nullifier in nullifiers {
             work.observe(Observation {
@@ -992,6 +1071,10 @@ impl AuditStore {
         }
         let delta = work.finish().await.expect("fixture page");
         self.commit_fixture(delta).await;
+    }
+
+    pub(crate) fn cached_enrollments(&self) -> [usize; 3] {
+        self.read_enrollments().len()
     }
 
     /// Entries the cache holds of notes, the note index and spend rows.

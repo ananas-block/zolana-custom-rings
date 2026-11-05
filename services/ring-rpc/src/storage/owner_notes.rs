@@ -29,6 +29,8 @@ enum TagDomain {
     Owner = 0,
     Note = 1,
     Nullifier = 2,
+    OwnerHash = 3,
+    ListKey = 4,
 }
 
 /// HKDF expand under the ring salt is the PRF, the tags of another ring or auditor never match.
@@ -45,6 +47,16 @@ impl IndexTags {
     /// Finds a note row by its nullifier, the row names neither the nullifier nor its spend.
     pub(crate) fn nullifier_tag(&self, nullifier: &[u8; 32]) -> Result<[u8; 32], DbErr> {
         self.tag(TagDomain::Nullifier, nullifier)
+    }
+
+    /// Finds an enrollment by the owner hash a deposit capsule names.
+    pub(crate) fn owner_hash_tag(&self, owner_hash: &[u8; 32]) -> Result<[u8; 32], DbErr> {
+        self.tag(TagDomain::OwnerHash, owner_hash)
+    }
+
+    /// Finds an enrollment by the list key a salted write names.
+    pub(crate) fn list_key_tag(&self, list_key: &[u8; 32]) -> Result<[u8; 32], DbErr> {
+        self.tag(TagDomain::ListKey, list_key)
     }
 
     fn tag(&self, domain: TagDomain, value: &[u8; 32]) -> Result<[u8; 32], DbErr> {

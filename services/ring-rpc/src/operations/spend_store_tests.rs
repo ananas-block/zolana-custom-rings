@@ -12,6 +12,7 @@ use crate::{
     projection_lease::LeaseClaim,
     spend_machine::{InputRead, Observation},
     spent_index::{HistoryScope, LoadSpends, NoteSeal, ProjectionWriter},
+    tracking::TrackingCursor,
 };
 
 const RING: Address = Address::new_from_array([8; 32]);
@@ -83,17 +84,39 @@ impl Keys {
             .insert(owner.to_bytes(), [seed; 31]);
     }
 
-    fn open(&self, owner: &[u8; 32]) -> Option<NullifierKey> {
+    fn open(&self, held: &HeldEnrollment) -> Option<NullifierKey> {
         self.0
             .lock()
             .expect("keys")
-            .get(owner)
+            .get(&held.owner_key)
             .map(|secret| NullifierKey::from_secret(*secret))
+    }
+
+    /// Every granted owner's row, committed beside a database so an evicted row still reads.
+    async fn enroll(&self, store: &AuditStore, writer: Option<&ProjectionWriter<'_>>) {
+        let rows: Vec<HeldEnrollment> = self
+            .0
+            .lock()
+            .expect("keys")
+            .iter()
+            .map(|(owner, secret)| {
+                HeldEnrollment::unsealed(*owner, &NullifierKey::from_secret(*secret))
+            })
+            .collect();
+        let admission = store.enrollment_admission(rows).await.expect("admission");
+        if let Some(writer) = writer {
+            writer
+                .commit_enrollments(admission.rows(), TrackingCursor::default())
+                .await
+                .expect("enrollments");
+        }
+        store.admit_enrollments(admission);
     }
 }
 
 fn apply(store: &AuditStore, keys: &Keys, page: impl FnOnce(&mut PageWork<'_>)) {
-    let opener = |owner: &[u8; 32]| keys.open(owner);
+    block_on(keys.enroll(store, None));
+    let opener = |held: &HeldEnrollment| keys.open(held);
     let mut work = PageWork::new(store, &opener);
     page(&mut work);
     store.commit(block_on(work.finish()).expect("page"));
@@ -490,10 +513,6 @@ async fn commit_page(
     keys: &Keys,
     page: &dyn Fn(&mut PageWork<'_>),
 ) -> Result<(), sea_orm::DbErr> {
-    let opener = |owner: &[u8; 32]| keys.open(owner);
-    let mut work = PageWork::new(book, &opener);
-    page(&mut work);
-    let delta = work.finish().await.expect("page");
     let lease = LeaseClaim {
         db: store.connection(),
         ring: RING,
@@ -503,15 +522,19 @@ async fn commit_page(
     .claim()
     .await?
     .expect("one replica holds the lease");
-    let revision = ProjectionWriter {
+    let writer = ProjectionWriter {
         db: store.connection(),
         ring: RING,
         seal,
         lease,
         clock: Clock::Fixed(NOW),
-    }
-    .commit_page(&delta)
-    .await?;
+    };
+    keys.enroll(book, Some(&writer)).await;
+    let opener = |held: &HeldEnrollment| keys.open(held);
+    let mut work = PageWork::new(book, &opener);
+    page(&mut work);
+    let delta = work.finish().await.expect("page");
+    let revision = writer.commit_page(&delta).await?;
     book.commit(delta.at_revision(revision));
     Ok(())
 }

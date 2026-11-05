@@ -50,3 +50,7 @@ base64 = { workspace = true }
 hex = { workspace = true }
 hyper-util = { workspace = true }
 zolana-ring-member-registry = { workspace = true }
+zolana-ring-client = { workspace = true }
+zolana-ring-rpc = { workspace = true, features = ["test-fixtures"] }
+spr-client = { workspace = true }
+spr-keypair = { workspace = true }
