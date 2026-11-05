@@ -85,8 +85,9 @@ pub use crate::{
         DepositOwners,
     },
     credential::{
-        AbsentCredential, AddressRoot, CredentialError, CredentialLookup, CredentialOpening,
-        CredentialReads, CredentialResolver, CredentialSnapshot, PresentCredential,
+        open_credential, AbsentCredential, AddressActivation, AddressInclusion, AddressInclusions,
+        AddressRoot, CredentialError, CredentialLookup, CredentialOpening, CredentialReads,
+        CredentialResolver, CredentialSecrets, CredentialSnapshot, PresentCredential,
         RecipientKeyResolver, RecipientKeys, StateRoot, TreeRoot, UnknownCredential,
     },
     decrypt::{FramedRow, TransactionAudit},

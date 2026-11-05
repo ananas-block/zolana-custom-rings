@@ -9,10 +9,11 @@ use zolana_ring_client::{
     rpc::{public_key_path, write_auditor_key, KeyMode},
 };
 use zolana_ring_rpc::{
-    run_server, write_grant_rows_secret, write_keypair, write_root_secret, ChainSource, Cli,
-    CoSignerApproval, Command, Hub, KeyKind, KeySource, KeygenArgs, LiveStorageChain, OriginPolicy,
-    RelayBudget, RelayServicesInit, ServeArgs, ServeKeys, ServerOptions, ServiceIdentity, Store,
-    TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL, STORE_CONNECTIONS,
+    live_ring_client, run_server, write_grant_rows_secret, write_keypair, write_root_secret,
+    ChainSource, Cli, CoSignerApproval, Command, Hub, KeyKind, KeySource, KeygenArgs,
+    LiveStorageChain, OriginPolicy, RelayBudget, RelayServicesInit, ServeArgs, ServeKeys,
+    ServerOptions, ServiceIdentity, Store, TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL,
+    STORE_CONNECTIONS,
 };
 
 #[tokio::main]
@@ -187,8 +188,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             args.bind, args.port
         ),
     }
-    if let Ok(writer) = hub.record_writer() {
+    if let (Ok(writer), Some(prover_url)) = (hub.record_writer(), &args.prover_url) {
         info!("storage authority {}", writer.authority());
+        hub.serve_credential_writes(live_ring_client(upstreams, prover_url))?;
     }
     hub.spawn_workers();
     let handle = run_server(hub, options).await?;

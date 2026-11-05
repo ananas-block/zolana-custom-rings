@@ -565,22 +565,18 @@ async fn a_stored_relay_whose_update_reply_was_lost_keeps_its_reservation() {
     assert!(interrupted.is_err());
     relay.heal().await;
 
-    let tracker = tokio::spawn(
-        relay
-            .hub
-            .relay()
-            .expect("relay")
-            .clone()
-            .run(Duration::from_millis(1)),
+    // A whole pass, a tracker cut inside a store write would close the in-memory store.
+    relay
+        .hub
+        .relay()
+        .expect("relay")
+        .track()
+        .await
+        .expect("a tracking pass");
+    assert!(
+        !relay.chain.sent().is_empty(),
+        "the tracker resends the stored relay"
     );
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while relay.chain.sent().is_empty() {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("the tracker resends the stored relay");
-    tracker.abort();
 
     let status = relay.status(relay_id).await;
     assert!(
@@ -610,22 +606,18 @@ async fn a_refused_send_whose_final_write_failed_keeps_its_reservation_through_a
     relay.heal().await;
 
     // The record still reads `Sent`, the tracker resends it and the resend lands.
-    let tracker = tokio::spawn(
-        relay
-            .hub
-            .relay()
-            .expect("relay")
-            .clone()
-            .run(Duration::from_millis(1)),
+    // A whole pass, a tracker cut inside a store write would close the in-memory store.
+    relay
+        .hub
+        .relay()
+        .expect("relay")
+        .track()
+        .await
+        .expect("a tracking pass");
+    assert!(
+        !relay.chain.sent().is_empty(),
+        "the tracker resends the stored relay"
     );
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while relay.chain.sent().is_empty() {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("the tracker resends the stored relay");
-    tracker.abort();
     let status: RelayStatus = relay
         .module
         .call(

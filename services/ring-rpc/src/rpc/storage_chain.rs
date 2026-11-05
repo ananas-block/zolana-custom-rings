@@ -64,18 +64,24 @@ pub struct LiveStorageChain {
 impl LiveStorageChain {
     /// The prover serves the ring apply proofs.
     pub fn connect(upstreams: Upstreams<'_>, prover_url: &str) -> Result<Self, RingRpcError> {
-        let source = ChainSource::connect(upstreams)?;
-        let zolana = AsyncZolanaClient::new(
-            AsyncSolanaRpc::new(upstreams.rpc_url),
-            AsyncZolanaIndexer::new(upstreams.indexer_url),
-            AsyncProverClient::new(prover_url.to_owned()),
-        );
         Ok(Self {
-            source,
-            client: RingClient::new(zolana, AsyncProverClient::new(prover_url.to_owned())),
+            source: ChainSource::connect(upstreams)?,
+            client: live_ring_client(upstreams, prover_url),
             submit: SolanaChain::new(upstreams.rpc_url),
         })
     }
+}
+
+pub fn live_ring_client(
+    upstreams: Upstreams<'_>,
+    prover_url: &str,
+) -> RingClient<AsyncSolanaRpc, AsyncZolanaIndexer> {
+    let zolana = AsyncZolanaClient::new(
+        AsyncSolanaRpc::new(upstreams.rpc_url),
+        AsyncZolanaIndexer::new(upstreams.indexer_url),
+        AsyncProverClient::new(prover_url.to_owned()),
+    );
+    RingClient::new(zolana, AsyncProverClient::new(prover_url.to_owned()))
 }
 
 #[async_trait]

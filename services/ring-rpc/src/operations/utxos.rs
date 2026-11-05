@@ -614,6 +614,14 @@ impl AuditStore {
             .copied()
     }
 
+    pub(crate) fn credential_by_list_key(&self, list_key: &[u8; 32]) -> Option<HeldCredential> {
+        self.credentials
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .by_list_key(list_key)
+            .copied()
+    }
+
     /// A refused page holds nothing, a new owner's notes derive on the next page.
     pub(crate) fn admit_credentials(
         &self,

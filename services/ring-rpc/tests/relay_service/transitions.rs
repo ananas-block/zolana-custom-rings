@@ -400,15 +400,7 @@ async fn a_restarted_service_resends_the_stored_attempt() {
         budget: 0,
     }
     .start(&fixture);
-    let tracker = tokio::spawn(after.clone().run(Duration::from_millis(1)));
-    tokio::time::timeout(PROGRESS, async {
-        while fixture.sent().is_empty() {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("the tracker resends the stored attempt");
-    tracker.abort();
+    after.track().await.expect("a tracking pass");
 
     let [sent] = fixture.sent().try_into().expect("one sent transaction");
     assert_eq!(signature, sent.signatures[0].into());

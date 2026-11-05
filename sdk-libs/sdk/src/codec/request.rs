@@ -368,6 +368,22 @@ pub(crate) struct CredentialParams {
     pub output_entries: Vec<u32>,
 }
 
+/// Mirror Go `CredentialWriteParams`, one salted owner write's credential and applied address.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CredentialWriteRequest {
+    #[serde(with = "fe")]
+    pub member: [u8; 32],
+    #[serde(with = "fe")]
+    pub list_salt: [u8; 32],
+    pub leaf: CredentialLeafRequest,
+    #[serde(with = "fe")]
+    pub address_next: [u8; 32],
+    pub address_index: u64,
+    #[serde(serialize_with = "fe::seq")]
+    pub address_path: Vec<[u8; 32]>,
+}
+
 pub(crate) struct PolicyTable<'a> {
     pub rules: &'a EncodedRuleTable,
     pub sources: &'a SourceMap,
@@ -620,8 +636,8 @@ pub(crate) struct ApplyRecords {
     #[serde(with = "fe")]
     pub address_root: [u8; 32],
     pub state_roots: Vec<StateRootRequest>,
-    /// One null per batch write, a public batch opens no credential.
-    pub credentials: Vec<()>,
+    /// One per batch write, null where the write opens no credential.
+    pub credentials: Vec<Option<CredentialWriteRequest>>,
 }
 
 #[derive(Serialize)]

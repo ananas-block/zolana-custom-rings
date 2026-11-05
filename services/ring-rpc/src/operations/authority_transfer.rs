@@ -161,9 +161,11 @@ impl<S: TransactionSource> Hub<S> {
         let credential = service.scanned_credential(&owner.to_bytes()).await?;
         let nullifier_secret = credential
             .held()
-            .map(|held| held.nullifier_key(service.auditor_keypair()))
+            .map(|held| held.secrets(service.auditor_keypair()))
             .transpose()?
-            .map(|key| spr_hasher::primitives::right_align(&key.secret()).into());
+            .map(|secrets| {
+                spr_hasher::primitives::right_align(&secrets.nullifier_key.secret()).into()
+            });
         Ok(GetDelegateNotesResponse {
             nullifier_secret,
             status: shared.store(ring).wallet_status(WalletStatusQuery {
@@ -757,6 +759,34 @@ mod tests {
             .await
             .expect("a complete scan without the credential reads nothing");
         assert_eq!(none.list_salt, None);
+    }
+
+    #[tokio::test]
+    async fn a_list_key_names_its_enrolled_owner_and_another_key_none() {
+        let (fixture, _prover) = served(Keypair::new_from_array([21; 32]).pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        fixture.enroll(&wallet, &NullifierKey::from_secret([11; 31]), 1);
+        let service = fixture.hub.service(Some(RING)).expect("service");
+        let member =
+            zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array()).expect("member");
+        let list_key = |salt| {
+            *zolana_ring_policy::Member::salted(&member, salt)
+                .expect("list key")
+                .as_bytes()
+        };
+
+        let owner = service
+            .salted_owner(&list_key(&LIST_SALT))
+            .await
+            .expect("complete scan")
+            .expect("enrolled owner");
+        let other = service
+            .salted_owner(&list_key(&[0; 32]))
+            .await
+            .expect("complete scan");
+
+        assert_eq!((owner.owner, owner.list_salt), (wallet.pubkey(), LIST_SALT));
+        assert!(other.is_none());
     }
 
     /// The sealed outputs never reach the check, another member's note fails before any proof.
