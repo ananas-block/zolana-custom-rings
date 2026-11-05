@@ -6,7 +6,7 @@ The custom ring surface of `@heliuslabs/zolana` 0.4.0-alpha moves into `@heliusl
 
 Breaking
 
-- `buildRingMergeTransaction` with `mergeZeroKey` and `DelegateTransfer` with an `exit` output fail before any proof, with `RING_ZERO_KEY_MERGE_UNAVAILABLE` and `RING_EXIT_PROOF_UNAVAILABLE` as the code or the cause code → leave zero-key notes unmerged and pay delegate moves inside the ring until a release proves both.
+- `DelegateTransfer` with an `exit` output fails before any proof with `RING_EXIT_PROOF_UNAVAILABLE` as the code or the cause code → pay delegate moves inside the ring or out through a public `withdrawal` until a release proves the exit.
 - The pinned peer is `@heliuslabs/spr` 0.9.0-alpha, the package `@heliuslabs/zolana` became → install `@heliuslabs/spr` in place of `@heliuslabs/zolana`, import core names from its entry points and pass `createCustomRingClient` an `SprClientConfig` without `provingKeys`.
 - `@heliuslabs/zolana/ring` and the ring, auditor and key registry exports of the `@heliuslabs/zolana` entry points move here → import them from `@heliuslabs/zolana-custom-rings` or its `client`, `keypair` and `advanced` entry points.
 - Ring instructions, accounts, proofs and frames change format, `RingProgramError` drops `staleKeyRegistryRoot` and `RingErrorCode` drops the codes of the removed key registry, list entry, spend record and velocity paths → deploy this release's ring program, Storage program, prover, keys and Ring RPC together and re-register each ring under its newly derived auditor key.

@@ -1084,6 +1084,43 @@ describe("delegate rail", () => {
     expect(opened?.utxo.amount).toBe(100n);
   });
 
+  it("withdraws a member's note publicly on the authority rail", async () => {
+    const source = ShieldedKeypair.generate();
+    const recipient = ShieldedKeypair.generate();
+    const { fixture, delegate } = await delegateRing([source, recipient]);
+    const destination = randomAddress();
+    const proven = await DelegateTransfer.new({
+      ringProgramId: fixture.ringProgramId,
+      delegate,
+      payer: fixture.authority,
+      source: source.shieldedAddress(),
+      sourceProofs: walletKeys(source),
+      inputs: [noteInput(source, 10_000n, fixture.ringProgramId)],
+      outputs: [{ recipient: recipient.shieldedAddress(), asset: SOL_MINT, amount: 100n }],
+      withdrawal: {
+        asset: SOL_MINT,
+        amount: 200n,
+        target: WithdrawalTarget.sol({ recipient: destination }),
+        accounts: TransactWithdrawal.sol({ recipient: destination }),
+      },
+      assets,
+    }).prove(fixture.client);
+    const { instruction, data, call } = await expanded(fixture, proven, "delegate");
+
+    expect(call.data.circuit.kind).toBe("ringAuthority");
+    expect(data.interfaceTransfers).toEqual([{ kind: "solWithdrawal", amount: 200n }]);
+    await checkAccounts(instruction, {
+      fixture,
+      data,
+      prefix: [signer(delegate)],
+      payer: fixture.authority,
+      settlement: [
+        { address: SOL_INTERFACE, role: AccountRole.WRITABLE },
+        { address: destination, role: AccountRole.WRITABLE },
+      ],
+    });
+  });
+
   it("refuses a delegate exit before any read until the exit keys are pinned", async () => {
     const source = ShieldedKeypair.generate();
     const outside = ShieldedKeypair.generate();

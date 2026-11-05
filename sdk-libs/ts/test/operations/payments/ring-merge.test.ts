@@ -23,6 +23,7 @@ import type {
 } from "@heliuslabs/spr/client";
 import {
   bigintToBytes,
+  bytesToBigInt,
   assembleMergeWithProofs,
   prepareProverMerge,
   compressG2,
@@ -637,31 +638,7 @@ describe("ring merge", () => {
     expect(discard).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses a zero-key merge before approval and any proof until the pin proves one", async () => {
-    const wallet = zeroKeyWallet(owner, [3n, 5n]);
-    const proveMerge = vi.fn<MergeAssembler["proveMerge"]>();
-    const approve = vi.fn(approveUnattended);
-    const params = await ringMergeParams({
-      proveMerge,
-      wallet,
-      keys: walletKeys(owner),
-      proofDataSource: "client",
-      enrolled: "none",
-    });
-    await expect(
-      buildRingMergeTransaction({ ...params, mergeZeroKey: true, approve }),
-    ).rejects.toMatchObject({
-      code: "RING_BUILD_MERGE",
-      causeCode: "RING_ZERO_KEY_MERGE_UNAVAILABLE",
-    });
-    expect(approve).not.toHaveBeenCalled();
-    expect(proveMerge).not.toHaveBeenCalled();
-    expect(params.client.proveRing).not.toHaveBeenCalled();
-    expect(wallet._reservationEntries()).toHaveLength(0);
-  });
-
-  // `RING_ZERO_KEY_MERGE_UNAVAILABLE` refuses every zero-key merge on the pinned prover request.
-  it.skip("trims a zero-key merge to its narrower width, Rust `WIDEST_ZERO_KEY_MERGE`", async () => {
+  it("trims a zero-key merge to its narrower width, Rust `WIDEST_ZERO_KEY_MERGE`", async () => {
     const owner = ShieldedKeypair.generate();
     const wallet = zeroKeyWallet(
       owner,
@@ -689,9 +666,22 @@ describe("ring merge", () => {
     expect(reservation?.utxoHashes).toHaveLength(WIDEST_ZERO_KEY_MERGE);
   });
 
-  it.skip("publishes the owner of a zero-key merge under a zero root and reads no row", async () => {
+  it("publishes the owner of a zero-key merge under a zero root and reads no row", async () => {
     const wallet = zeroKeyWallet(owner, [3n, 5n]);
-    const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared }) => {
+    const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared, keys }) => {
+      const { payload } = prepareProverMerge(prepared, treeAddress(7)).inputs;
+      expect(payload.mergeSeed ?? 0n).not.toBe(0n);
+      expect(payload.publishedOwner).toBe(
+        bytesToBigInt(owner.signingPublicKey().ownerProofInputHash()),
+      );
+      // Without the zero secret the owner's key refuses before the stub service.
+      await expect(
+        keys.proveMerge({
+          ...payload,
+          treeSlots: [],
+          publicInputHash: payload.privateTxHash,
+        } as never),
+      ).rejects.toThrow("unused proof service");
       const data = provenMerge(prepared);
       return { data, outputHash: data.outputUtxoHash };
     });
@@ -1074,8 +1064,7 @@ describe("anonymous ring merge", () => {
 });
 
 describe("PDA owner merge", () => {
-  // `RING_ZERO_KEY_MERGE_UNAVAILABLE` refuses every zero-key merge on the pinned prover request.
-  it.skip("merges a PDA's zero-key notes, the PDA signs as the published owner", async () => {
+  it("merges a PDA's zero-key notes, the PDA signs as the published owner", async () => {
     const holder = await pdaOwner();
     const pda = holder.shieldedAddress().solanaAddress();
     const wallet = zeroKeyWallet(holder, [3n, 5n]);

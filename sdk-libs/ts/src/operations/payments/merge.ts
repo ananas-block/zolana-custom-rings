@@ -1,9 +1,17 @@
 import { getBase58Decoder, getBase64Decoder, type Instruction } from "@solana/kit";
 
-import type { ProofDataSourceContext, TreeContext, WalletKeys } from "@heliuslabs/spr/client";
+import type {
+  Field,
+  IndexedProofAuthority,
+  ProofAuthority,
+  ProofDataSourceContext,
+  TreeContext,
+  WalletKeys,
+} from "@heliuslabs/spr/client";
 import type { LatestBlockhash } from "@heliuslabs/spr/internal";
 import {
   addressBytes,
+  asField,
   bigIntBytes,
   prepareProverMerge,
   compressG2,
@@ -412,7 +420,7 @@ async function buildRingMerge(
       count: entries.length,
       minimum: MIN_MERGE_INPUTS,
       prepare: prepareCount,
-      discard: () => {},
+      discard: wipeSeed,
       fits: async (candidate) =>
         fitsOneTransaction(
           transactionSize({
@@ -428,8 +436,6 @@ async function buildRingMerge(
         ),
     });
     try {
-      // The pinned prover request fixes the merge seed and published owner at zero.
-      if (seed !== undefined) throw new RingError("RING_ZERO_KEY_MERGE_UNAVAILABLE");
       // The minimum passes untested, a width past the limits refuses here.
       await compile(
         sizingData(prepared, params.client.tree),
@@ -472,7 +478,11 @@ async function buildRingMerge(
       await approveMerge({ approve: params.approve, owner, feePayer: params.feePayer, intent });
       const { data } = await withProofDataRetry(
         params.client.proofDataSource,
-        (attempt) => params.client.proveMerge({ prepared, keys: params.keys }, attempt),
+        (attempt) =>
+          params.client.proveMerge(
+            { prepared, keys: seed === undefined ? params.keys : zeroKeyAuthority(params.keys) },
+            attempt,
+          ),
         context,
       );
       if (!equalBytes(data.outputUtxoHash, expectedHash)) throw ringIntentMismatch("output");
@@ -501,6 +511,7 @@ async function buildRingMerge(
       };
     } finally {
       seed?.fill(0);
+      wipeSeed(prepared);
     }
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
@@ -623,7 +634,34 @@ function zeroKeyMerge(
     outputKey,
     ring: { programId: input.ringProgramId },
     outputTreeId: input.outputTreeId,
+    mergeSeed: input.seed,
   }).prepare();
+}
+
+function wipeSeed(merge: PreparedMerge): void {
+  merge.mergeSeed?.fill(0);
+}
+
+/** The owner's key refuses a merge under the zero key, whose secret is zero. */
+function zeroKeyAuthority(keys: ProofAuthority): ProofAuthority {
+  const zeroSecret = <T extends { userNullifierSecret?: Field }>(inputs: T): T => ({
+    ...inputs,
+    userNullifierSecret: asField(0n),
+  });
+  const authority: ProofAuthority & Partial<IndexedProofAuthority> = {
+    prove: (inputs, context) => keys.prove(inputs, context),
+    proveMerge: (inputs, context) => keys.proveMerge(zeroSecret(inputs), context),
+  };
+  const indexed = (keys as Partial<IndexedProofAuthority>).proveIndexed?.bind(keys);
+  if (indexed !== undefined)
+    authority.proveIndexed = (request, context) =>
+      indexed(
+        request.circuit === "merge"
+          ? { ...request, payload: zeroSecret(request.payload) }
+          : request,
+        context,
+      );
+  return Object.freeze(authority);
 }
 
 /** The statement binds the proved SPP merge `spp`. */
