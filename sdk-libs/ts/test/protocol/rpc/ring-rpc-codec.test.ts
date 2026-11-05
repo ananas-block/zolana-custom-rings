@@ -547,6 +547,10 @@ describe("ring rpc refusals", () => {
     expect(ringRpcRefusalName(-32228)).toBeUndefined();
   });
 
+  it("names -32216 as a relayed message past one transaction", () => {
+    expect(ringRpcRefusalName(-32216)).toBe("oversized");
+  });
+
   it("names -32213 to -32215 as the relayed enrollment refusals", () => {
     expect([-32213, -32214, -32215].map(ringRpcRefusalName)).toEqual([
       "alreadyEnrolled",
