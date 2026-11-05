@@ -64,6 +64,8 @@ pub enum AuditError {
     DepositOpeningMismatch,
     #[error("recovered nullifier key does not match the source member identity")]
     NullifierKeyMismatch,
+    #[error("recovery progress belongs to another member")]
+    RecoveryProgressMismatch,
     #[error("member registry root or paged record opening is invalid")]
     InvalidMemberRegistry,
     #[error("ring history exceeds the scan bound, spent notes cannot be excluded")]
@@ -216,6 +218,7 @@ impl AuditError {
             | Self::DepositSlot(_)
             | Self::DepositOpeningMismatch
             | Self::NullifierKeyMismatch
+            | Self::RecoveryProgressMismatch
             | Self::MergeDisclosureMismatch
             | Self::MergeAuditWorkBudget
             | Self::RingRail(_)

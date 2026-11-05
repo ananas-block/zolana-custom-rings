@@ -22,7 +22,7 @@ use zolana_ring_transaction::RingAssets;
 
 use crate::{
     confirmed_merge,
-    created::{CreatedUtxos, DepositSlot},
+    created::DepositSlot,
     decrypt::TransactionAudit,
     history::HistoryCursor,
     merge_audit::RingMergeBody,
@@ -66,6 +66,8 @@ pub enum RecoveryStep {
 #[derive(Clone)]
 pub struct RecoveryProgress {
     cursor: HistoryCursor,
+    /// The source's owner hash, the ring stays bound through `cursor`.
+    member: [u8; 32],
     state: Box<RecoveryState>,
 }
 
@@ -308,8 +310,15 @@ impl<'a> MemberRecovery<'a> {
             indexer_config,
             ..
         } = self.recovery;
+        let member = owner_hash(
+            &self.source.address.signing_pubkey,
+            &self.source.address.nullifier_pubkey,
+        )?;
         let (mut cursor, mut state) = match self.progress.take() {
-            Some(RecoveryProgress { cursor, state }) => (Some(cursor), state),
+            Some(progress) if progress.member != member => {
+                return Err(AuditError::RecoveryProgressMismatch)
+            }
+            Some(RecoveryProgress { cursor, state, .. }) => (Some(cursor), state),
             None => (None, Box::default()),
         };
         let mut pages_read = 0;
@@ -343,6 +352,7 @@ impl<'a> MemberRecovery<'a> {
             if pages_read == max_pages.get() {
                 return Ok(RecoveryStep::Paused(RecoveryProgress {
                     cursor: next,
+                    member,
                     state,
                 }));
             }
@@ -368,15 +378,6 @@ impl<'a> MemberRecovery<'a> {
         // 1. A merge record opens its own row's output alone, a batch ledger loses no opening.
         let mut ledger = MergeLedger::default();
         for (transaction, confirmed) in rows {
-            if recovery.mode == RingMode::Anonymous {
-                // An anonymous deposit the auditor cannot open refuses the recovery.
-                CreatedUtxos {
-                    transaction,
-                    origin: confirmed,
-                    ring: recovery.ring_program_id,
-                }
-                .open(recovery.auditor)?;
-            }
             if confirmed.event.kind() == ConfirmedEventKind::Merge {
                 let event_index = transaction
                     .event_index

@@ -1211,6 +1211,29 @@ async fn a_resumed_recovery_reads_no_row_before_its_cursor() {
 }
 
 #[tokio::test]
+async fn another_member_cannot_resume_a_progress() {
+    let fixture = Fixture::new();
+    let (_, transactions) = paged_history(&fixture);
+    let history = History {
+        transactions,
+        ..Default::default()
+    };
+    let progress = paused(fixture.step(paged(&fixture, 2), &history).await.unwrap());
+    let stranger = ShieldedKeypair::new_ed25519().unwrap();
+    let address = stranger.shielded_address().unwrap();
+    let foreign = RingRecovery::new(RING, &fixture.auditor)
+        .for_member(SourceMember {
+            address: &address,
+            nullifier_key: &stranger.nullifier_key,
+        })
+        .with_progress(progress);
+    assert!(matches!(
+        fixture.step(foreign, &history).await,
+        Err(AuditError::RecoveryProgressMismatch)
+    ));
+}
+
+#[tokio::test]
 async fn audited_deposit_recovery_preserves_committed_data_hashes() {
     let fixture = Fixture::new();
     let output = SppProofOutputUtxo {
