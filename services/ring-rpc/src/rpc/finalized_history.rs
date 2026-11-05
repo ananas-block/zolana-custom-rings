@@ -375,8 +375,8 @@ impl Walk {
     ) -> Result<(), ClientError> {
         let mut before = None;
         let mut slot = None;
-        // Refuses a repeat within one slot, a succeeded repeat across slots fails its origin slot check.
-        let mut in_slot = HashSet::new();
+        // Dropped with the walk, the snapshot keeps no signature set.
+        let mut seen = HashSet::new();
         loop {
             let page = source
                 .signatures(SignatureRead {
@@ -391,16 +391,10 @@ impl Walk {
             }
             let ended = page.len() < SIGNATURE_PAGE_SIZE;
             for entry in page {
-                if slot.is_some_and(|slot| entry.slot > slot) {
+                if slot.is_some_and(|slot| entry.slot > slot) || !seen.insert(entry.signature) {
                     return Err(invalid_history());
                 }
-                if slot != Some(entry.slot) {
-                    in_slot.clear();
-                    slot = Some(entry.slot);
-                }
-                if !in_slot.insert(entry.signature) {
-                    return Err(invalid_history());
-                }
+                slot = Some(entry.slot);
                 before = Some(entry.signature);
                 if self.floor.is_some_and(|floor| entry.slot <= floor) {
                     return Ok(());
@@ -1132,6 +1126,28 @@ mod tests {
                 .collect();
             assert_eq!(rows, expected, "cursor {cursor}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_failed_signature_repeated_in_another_slot_is_refused() {
+        let mut failed = entry(1);
+        failed.succeeded = false;
+        let source = Source::new(&[failed, entry(2)]);
+        let mut repeat = failed;
+        repeat.slot = 3;
+        source.signatures.lock().unwrap().insert(0, repeat);
+        source.through.store(3, Ordering::SeqCst);
+        assert!(FinalizedHistory::default()
+            .read(request(HistoryPosition::default()), &source)
+            .await
+            .is_err());
+        source.signatures.lock().unwrap().remove(0);
+        let page = FinalizedHistory::default()
+            .read(sized(HistoryPosition::default(), 2), &source)
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), 2);
+        assert!(page.pagination_token.is_none());
     }
 
     #[tokio::test]
