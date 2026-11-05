@@ -2,10 +2,10 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask, statement::SignerDataCounts, storage::Revision, tag, AnonymousProofData,
-    AppMessage, CustomRingError, CustomRingProof, FrameExtensions, FramedSenderBundle,
-    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy,
-    RingRail, RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
-    MAX_SPP_CPI_ACCOUNTS,
+    AppMessage, CredentialRead, CustomRingError, CustomRingProof, FrameExtensions,
+    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies,
+    RingOutput, RingPolicy, RingRail, RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN,
+    DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -158,7 +158,7 @@ pub(crate) struct TransactParts {
     pub n_in: u8,
     pub n_out: u8,
     pub proof: CustomRingProof,
-    pub tracking_revision: Revision,
+    pub credential_read: CredentialRead,
     pub own_revision: Option<Revision>,
     pub policy: Option<PolicyProof>,
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
@@ -210,7 +210,7 @@ impl TransactParts {
             n_in: self.n_in,
             n_out: self.n_out,
             proof: &self.proof,
-            tracking_revision: self.tracking_revision,
+            credential_read: self.credential_read.clone(),
             own_revision: self.own_revision,
             policy: self.policy,
             spl_withdrawal_owners: &self.spl_withdrawal_owners,
@@ -264,7 +264,7 @@ pub(crate) struct TransactAccounts {
     pub read_cache: Option<Address>,
     pub co_signers: Vec<Address>,
     pub delegate: Option<Address>,
-    /// `None` when the frame reads the tracking registry.
+    /// `None` before the credential read, the trees the frame's indexes name after it.
     pub credential_trees: Option<CredentialTrees>,
 }
 

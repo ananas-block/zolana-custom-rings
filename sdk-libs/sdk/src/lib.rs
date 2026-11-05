@@ -13,6 +13,8 @@ mod buffered;
 mod client;
 #[path = "validation/co_signer.rs"]
 mod co_signer;
+#[path = "operations/credentials.rs"]
+mod credentials;
 #[path = "operations/delegate_source.rs"]
 mod delegate_source;
 #[path = "operations/deposit.rs"]
@@ -34,8 +36,6 @@ mod projection;
 mod prover;
 #[path = "operations/records.rs"]
 mod records;
-#[path = "operations/register_key.rs"]
-mod register_key;
 #[path = "rpc/relay.rs"]
 mod relay;
 #[path = "validation/relay_message.rs"]
@@ -79,13 +79,14 @@ pub use crate::{
     buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
     delegate_source::{
-        AllowedNullifiers, DelegateSourceError, ResolvedSource, SourceEnrollment,
-        TrackingEnrollment,
+        AllowedNullifiers, CredentialEnrollment, DelegateSourceError, ResolvedSource,
+        SourceEnrollment,
     },
     deposit::{
         fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RelayedDeposit,
         RingDeposit, RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
     },
+    enrollment::{Enroll, EnrollInstruction, EnrollRelay, WriteOwnerGrant},
     error::RingError,
     merge::{
         CustomRingMerge, CustomRingMergeInstruction, FittedMerge, MergeProofInput, MergeRelay,
@@ -105,7 +106,6 @@ pub use crate::{
         AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, RecordUpdateService,
         RecordUpdateTarget, SaltedOwnerCheck, WalletRecordUpdate,
     },
-    register_key::{Enroll, EnrollInstruction, WriteOwnerGrant},
     relay::{
         PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent,
         RequestedAuthorityTransfer, RingRelay,
@@ -116,10 +116,7 @@ pub use crate::{
         RelayFunderTerms, RelayTransferTerms, SlotOpening, TokenAccountCreate, VerifiedMessage,
     },
     select::{select_merge_where, select_spend_where},
-    storage::{
-        tracking_apply_inputs, ApplyEnrollments, EnrollPending, InitializeStorage,
-        StorageApplyProof, UpdateStorage, UpdateStorageAuthority,
-    },
+    storage::{InitializeStorage, StorageApplyProof, UpdateStorage, UpdateStorageAuthority},
     submission::{
         live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,
     },

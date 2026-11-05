@@ -1,8 +1,8 @@
 //! The ring prover's request bodies, field for field the Go `prover/ring` params.
 
-use custom_ring_interface::{RecordWrite, QUAD_ARITY};
+use custom_ring_interface::{CredentialStateRoot, RecordWrite, QUAD_ARITY};
 use serde::{Serialize, Serializer};
-use spr_hasher::primitives::{pack_be, right_align};
+use spr_hasher::primitives::right_align;
 use spr_keypair::{PublicKey, X25519Pubkey};
 use spr_transaction::{
     instructions::transact::SppProofOutputUtxo,
@@ -10,8 +10,7 @@ use spr_transaction::{
 };
 use zeroize::Zeroizing;
 use zolana_ring_member_registry::{
-    MemberRecord, QuadPath, RecordPool, RecordWriteProofInput, SharedProof, TrackingOpening,
-    TrackingPool, TrackingRecord, TrackingWriteProofInput,
+    MemberRecord, QuadPath, RecordPool, RecordWriteProofInput, SharedProof,
 };
 use zolana_ring_policy::{AssetLimits, EncodedRuleTable, SourceMap, MAX_SOURCES};
 use zolana_ring_transaction::ClassifiedInput;
@@ -181,8 +180,9 @@ pub(crate) struct PoolEntry {
 pub(crate) struct OwnerEntry {
     #[serde(flatten)]
     pub entry: PoolEntry,
-    pub tracking: u32,
-    /// Zero with no tracking row.
+    /// The owner's opening in the credential pool.
+    pub credential: u32,
+    /// Zero for an absent credential.
     #[serde(with = "fe")]
     pub list_salt: [u8; 32],
     pub own_salted: u32,
@@ -297,114 +297,75 @@ impl Serialize for RecordPools {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// Mirror Go `CredentialLeafParams`, the ring id comes from the request.
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct TrackingLeafRequest {
+pub(crate) struct CredentialLeafRequest {
     #[serde(with = "fe")]
     pub member: [u8; 32],
     #[serde(with = "fe")]
-    pub next: [u8; 32],
-    #[serde(with = "fe")]
     pub nullifier_pk: [u8; 32],
+    #[serde(with = "fe")]
+    pub list_tag: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub aud: [[u8; 32]; 2],
+    #[serde(serialize_with = "fe::seq")]
+    pub eph: [[u8; 32]; 2],
     #[serde(with = "fe")]
     pub ct_hash: [u8; 32],
     #[serde(with = "fe")]
-    pub view0: [u8; 32],
-    #[serde(with = "fe")]
-    pub view1: [u8; 32],
-    #[serde(with = "fe")]
-    pub revision: [u8; 32],
-    #[serde(with = "fe")]
-    pub list_tag: [u8; 32],
+    pub blinding: [u8; 32],
+    pub tree_slot: u8,
+    pub state_index: u64,
+    #[serde(serialize_with = "fe::seq")]
+    pub state_path: Vec<[u8; 32]>,
 }
 
-impl From<&TrackingRecord> for TrackingLeafRequest {
-    fn from(record: &TrackingRecord) -> Self {
-        let [view0, view1] = pack_be(&record.viewing_u);
+/// Mirror Go `CredentialOpeningParams`, an absent member fills the gap and only the leaf's member.
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CredentialOpeningRequest {
+    pub present: bool,
+    #[serde(flatten)]
+    pub leaf: CredentialLeafRequest,
+    #[serde(with = "fe")]
+    pub low_value: [u8; 32],
+    #[serde(with = "fe")]
+    pub low_next: [u8; 32],
+    pub low_index: u64,
+    #[serde(serialize_with = "fe::seq")]
+    pub low_path: Vec<[u8; 32]>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StateRootRequest {
+    pub tree_id: u16,
+    #[serde(with = "fe")]
+    pub root: [u8; 32],
+}
+
+impl From<&CredentialStateRoot> for StateRootRequest {
+    fn from(root: &CredentialStateRoot) -> Self {
         Self {
-            member: record.member,
-            next: record.next,
-            nullifier_pk: record.nullifier_pk,
-            ct_hash: record.ct_hash,
-            view0,
-            view1,
-            revision: right_align(&record.revision.to_be_bytes()),
-            list_tag: record.list_tag,
+            tree_id: root.tree_id,
+            root: root.root,
         }
     }
 }
 
-pub(crate) struct TrackingParams {
-    pub tracking_root: [u8; 32],
-    pub pool: TrackingPool,
-    pub row_entries: Vec<u32>,
-    pub output_entries: Vec<u32>,
-}
-
-impl Serialize for TrackingParams {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Tracking<'a> {
-            #[serde(with = "fe")]
-            tracking_root: [u8; 32],
-            tracking_records: Vec<TrackingLeafRequest>,
-            tracking_proof: ProofRequest<'a>,
-            tracking_subjects: Vec<SubjectRequest>,
-            row_entries: &'a [u32],
-            output_entries: &'a [u32],
-        }
-        Tracking {
-            tracking_root: self.tracking_root,
-            tracking_records: self.pool.records.iter().map(Into::into).collect(),
-            tracking_proof: (&self.pool.proof).into(),
-            tracking_subjects: subject_requests(&self.pool.subjects),
-            row_entries: &self.row_entries,
-            output_entries: &self.output_entries,
-        }
-        .serialize(serializer)
-    }
-}
-
+/// Mirror Go `CredentialParams`, the roots and openings at the key's credential capacity.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct TrackingOpeningRequest {
-    pub present: bool,
-    pub record: TrackingLeafRequest,
-    pub path: TrackingPathRequest,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct TrackingPathRequest {
-    pub index: u64,
-    pub siblings: Vec<[[u8; 32]; QUAD_ARITY - 1]>,
-}
-
-impl Serialize for TrackingPathRequest {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        PathRequest {
-            index: self.index,
-            siblings: &self.siblings,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl From<&TrackingOpening> for TrackingOpeningRequest {
-    fn from(opening: &TrackingOpening) -> Self {
-        let (present, record, path) = match opening {
-            TrackingOpening::Present { record, path } => (true, record, path),
-            TrackingOpening::Absent { low, path } => (false, low, path),
-        };
-        Self {
-            present,
-            record: record.into(),
-            path: TrackingPathRequest {
-                index: path.index,
-                siblings: path.siblings.to_vec(),
-            },
-        }
-    }
+pub(crate) struct CredentialParams {
+    #[serde(with = "fe")]
+    pub credential_owner: [u8; 32],
+    #[serde(with = "fe")]
+    pub address_root: [u8; 32],
+    pub state_roots: Vec<StateRootRequest>,
+    pub credential_openings: Vec<CredentialOpeningRequest>,
+    pub row_entries: Vec<u32>,
+    pub output_entries: Vec<u32>,
 }
 
 pub(crate) struct PolicyTable<'a> {
@@ -532,7 +493,7 @@ pub(crate) struct TransferParams<'a> {
     #[serde(serialize_with = "fe::seq")]
     pub party_identities: Vec<[u8; 32]>,
     #[serde(flatten)]
-    pub tracking: TrackingParams,
+    pub credentials: CredentialParams,
     #[serde(flatten)]
     pub policy: PolicyParams<'a>,
 }
@@ -651,6 +612,16 @@ pub(crate) struct ApplyRecords {
     pub count: u8,
     /// The key's batch, writes past `count` assign zeros.
     pub writes: Vec<Option<RecordWriteProofInputRequest>>,
+    pub credential_writes: u64,
+    #[serde(with = "fe")]
+    pub private_ring_id: [u8; 32],
+    #[serde(with = "fe")]
+    pub credential_owner: [u8; 32],
+    #[serde(with = "fe")]
+    pub address_root: [u8; 32],
+    pub state_roots: Vec<StateRootRequest>,
+    /// One null per batch write, a public batch opens no credential.
+    pub credentials: Vec<()>,
 }
 
 #[derive(Serialize)]
@@ -672,79 +643,7 @@ pub(crate) struct KeyRegister {
     pub auditor_pk: X25519Pubkey,
 }
 
-/// Mirror Go `TrackingWrite`.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct TrackingWrite {
-    #[serde(with = "fe")]
-    pub member: [u8; 32],
-    #[serde(with = "fe")]
-    pub nullifier_pk: [u8; 32],
-    #[serde(with = "fe")]
-    pub ct_hash: [u8; 32],
-    #[serde(with = "fe")]
-    pub view0: [u8; 32],
-    #[serde(with = "fe")]
-    pub view1: [u8; 32],
-    #[serde(with = "fe")]
-    pub revision: [u8; 32],
-    #[serde(with = "fe")]
-    pub list_tag: [u8; 32],
-    pub exists: bool,
-    pub old_record: TrackingLeafRequest,
-    pub index: u64,
-    #[serde(serialize_with = "fe::seq")]
-    pub path: Vec<[u8; 32]>,
-    pub low_record: TrackingLeafRequest,
-    pub low_index: u64,
-    #[serde(serialize_with = "fe::seq")]
-    pub low_path: Vec<[u8; 32]>,
-}
-
-impl From<&TrackingWriteProofInput> for TrackingWrite {
-    fn from(write: &TrackingWriteProofInput) -> Self {
-        let entry = &write.entry;
-        let [view0, view1] = pack_be(&entry.viewing_u);
-        Self {
-            member: entry.member,
-            nullifier_pk: entry.nullifier_pk,
-            ct_hash: entry.ct_hash,
-            view0,
-            view1,
-            revision: right_align(&entry.revision.to_be_bytes()),
-            list_tag: entry.list_tag,
-            exists: write.exists,
-            old_record: (&write.old).into(),
-            index: write.slot.index,
-            path: write.slot.siblings.as_flattened().to_vec(),
-            low_record: (&write.low).into(),
-            low_index: write.low_path.index,
-            low_path: write.low_path.siblings.as_flattened().to_vec(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ApplyEnrollments {
-    #[serde(with = "fe")]
-    pub public_input_hash: [u8; 32],
-    #[serde(with = "fe")]
-    pub old_root: [u8; 32],
-    #[serde(with = "fe")]
-    pub new_root: [u8; 32],
-    pub old_next_index: u32,
-    pub new_next_index: u32,
-    #[serde(with = "fe")]
-    pub chain_start: [u8; 32],
-    #[serde(with = "fe")]
-    pub chain_end: [u8; 32],
-    pub count: u8,
-    /// The key's batch, writes past `count` assign zeros.
-    pub writes: Vec<Option<TrackingWrite>>,
-}
-
-/// `tracking` is `None` under a zero key.
+/// `credential` is `None` under a zero key.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MergeRequest {
@@ -761,7 +660,8 @@ pub(crate) struct MergeRequest {
     #[serde(with = "fe")]
     pub payer: [u8; 32],
     #[serde(with = "fe")]
-    pub tracking_root: [u8; 32],
+    pub credential_owner: [u8; 32],
+    pub state_root: StateRootRequest,
     #[serde(serialize_with = "fe::zeroizing")]
     pub eph_sk: Zeroizing<[u8; 32]>,
     #[serde(with = "fe")]
@@ -782,7 +682,7 @@ pub(crate) struct MergeRequest {
     pub output_tree_id: [u8; 32],
     #[serde(with = "fe")]
     pub output_ring_data_hash: [u8; 32],
-    pub tracking: Option<TrackingOpeningRequest>,
+    pub credential: Option<CredentialLeafRequest>,
 }
 
 /// Mirror Go `DepositParams`, every slot list at the key's capacity.
@@ -812,7 +712,7 @@ pub(crate) struct DepositRequest<'a> {
     pub amounts: Vec<[u8; 32]>,
     pub mint_chunks: Vec<MintChunks>,
     #[serde(flatten)]
-    pub tracking: TrackingParams,
+    pub credentials: CredentialParams,
     #[serde(flatten)]
     pub policy: PolicyParams<'a>,
 }

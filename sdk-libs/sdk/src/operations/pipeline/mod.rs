@@ -21,10 +21,11 @@ mod tests;
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
     key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend},
-    AnonymousParties, CheckedAuthorization, CustomRingError, CustomRingProof, FramedSenderBundle,
-    InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof,
-    PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts,
-    SignerSet, TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, TRANSFER_OUTPUT_CAPACITIES,
+    AnonymousParties, CheckedAuthorization, CredentialRead, CustomRingError, CustomRingProof,
+    FramedSenderBundle, InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof,
+    PolicyProof, PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement,
+    SignerDataCounts, SignerSet, TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN,
+    TRANSFER_OUTPUT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -639,7 +640,7 @@ impl<'a> Pipeline<'a> {
 }
 
 impl<'a> Prepared<'a> {
-    async fn read_policy<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
+    async fn read_policy<R: AsyncRpc + AsyncRingIndexer>(
         &self,
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
@@ -655,6 +656,7 @@ impl<'a> Prepared<'a> {
             .map(|presealed| planner.plan_at(presealed.row))
             .transpose()?;
         PolicyRead {
+            ring: self.pipeline.ring,
             token_owner_hint: match &staged.spend {
                 Spend::Anonymous(a) => a.token_owner,
                 _ => None,
@@ -904,7 +906,7 @@ impl<'a> Sealed<'a> {
             read_cache: proof_inputs.cache_accounts.read,
             co_signers,
             delegate,
-            credential_trees: None,
+            credential_trees: Some(policy.credential_trees()?),
         };
         let mut parts = preview.parts(&proof_inputs, &rail, &sender, policy.plan.key)?;
         parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);
@@ -917,7 +919,7 @@ impl<'a> Sealed<'a> {
             }
             None => None,
         };
-        parts.tracking_revision = policy.tracking.revision;
+        parts.credential_read = policy.credentials.read()?;
         parts.own_revision = policy.own.map(|own| own.revision);
         parts.policy = (policy.read == RootRead::Policy).then(|| PolicyProof {
             curator_revision: policy.curator.map(|curator| curator.revision),
@@ -1100,7 +1102,7 @@ impl Unwitnessed<'_> {
                 sender: &sender,
                 signers,
                 party_identities: &party_identities,
-                roots: &frame.policy.roots(),
+                roots: &frame.policy.roots()?,
                 public_assets: &frame.public_assets,
                 public_amounts: &frame.public_amount_fields,
                 public_gross: &frame.public_gross,
@@ -1113,12 +1115,12 @@ impl Unwitnessed<'_> {
                 .own
                 .into_iter()
                 .chain(frame.policy.curator)
-                .chain([frame.policy.tracking])
                 .collect(),
             policy: frame.policy.screened().then_some(BoundPolicy {
                 ring,
                 hash: frame.policy.policy_hash,
             }),
+            credentials: Some(frame.policy.credentials.bound()),
         };
         Ok(Assembled {
             frame,
@@ -1295,7 +1297,8 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
         n_in: preview.n_in,
         n_out: preview.n_out,
         proof: zeroed_proof(),
-        tracking_revision: Default::default(),
+        // One state tree, the common read, sizes the frame until the pool is read.
+        credential_read: CredentialRead::new_state(0),
         own_revision: None,
         policy: None,
         spl_withdrawal_owners: Vec::new(),

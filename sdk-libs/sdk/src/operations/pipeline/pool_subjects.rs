@@ -1,9 +1,10 @@
 //! Mirror `resolveSubjects` in `prover/circuits/policy/subjects.go`.
 
+use custom_ring_interface::AuditCredential;
 use custom_ring_interface::{domain, key_catalog::RecordPools};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use zolana_ring_client::{records::RecordPoolRead, rpc::SubjectListSalt};
-use zolana_ring_member_registry::{RecordPool, TrackingRecord};
+use zolana_ring_member_registry::RecordPool;
 use zolana_ring_policy::{Member, RecordLists, SourceMap};
 
 use crate::{
@@ -47,6 +48,11 @@ impl PoolSubjects {
 
     pub fn len(&self) -> usize {
         self.members.len()
+    }
+
+    /// The distinct members, none when the pool is empty.
+    pub fn members(&self) -> &[[u8; 32]] {
+        &self.members
     }
 
     /// Index 0 outside the pool, read only for an opened member.
@@ -135,13 +141,15 @@ impl KnownSalts {
         Self(salts)
     }
 
-    /// `None` only with no tracking row.
+    /// `None` only for an absent credential.
     pub fn salted_key(
         &self,
         member: &[u8; 32],
-        row: Option<&TrackingRecord>,
+        credential: Option<&AuditCredential>,
     ) -> Result<Option<SaltedKey>, RingError> {
-        let Some(row) = row.filter(|row| row.nullifier_pk != ZERO_NULLIFIER_PUBKEY) else {
+        let Some(credential) =
+            credential.filter(|credential| credential.nullifier_pk != ZERO_NULLIFIER_PUBKEY)
+        else {
             return Ok(None);
         };
         let mut known = self
@@ -154,7 +162,7 @@ impl KnownSalts {
         }
         let list_salt = known
             .map(|salt| salt.list_salt)
-            .find(|salt| domain::list_tag(salt).is_ok_and(|tag| tag == row.list_tag))
+            .find(|salt| domain::list_tag(salt).is_ok_and(|tag| tag == credential.list_tag))
             .ok_or(RingError::ListSaltMismatch { member: *member })?;
         let key = Member::salted(&Member::from_bytes(*member)?, &list_salt)?;
         Ok(Some(SaltedKey {
@@ -167,8 +175,8 @@ impl KnownSalts {
 pub(crate) struct OwnerQuery {
     pub member: [u8; 32],
     /// Read only on a table with a salted list.
-    pub tracking: u32,
-    /// `None` with no tracking row.
+    pub credential: u32,
+    /// `None` for an absent credential.
     pub salted: Option<SaltedKey>,
 }
 
@@ -191,7 +199,7 @@ impl RecordPlan {
     pub fn owner(&mut self, query: OwnerQuery) -> OwnerEntry {
         let OwnerQuery {
             member,
-            tracking,
+            credential,
             salted,
         } = query;
         let gates = self.gates;
@@ -205,7 +213,7 @@ impl RecordPlan {
         }
         OwnerEntry {
             entry,
-            tracking,
+            credential,
             list_salt: salted.map_or([0; 32], |salted| salted.list_salt),
             own_salted: self.own.index(salted_key.filter(|_| gates.salted_own())),
             curator_salted: [self
@@ -228,11 +236,11 @@ impl RecordPlan {
         self.own.index(Some(asset))
     }
 
-    pub fn pools(&self, tracking: &PoolSubjects) -> RecordPools {
+    pub fn pools(&self, credentials: &PoolSubjects) -> RecordPools {
         RecordPools {
             own: self.own.len(),
             curator: self.curator.len(),
-            tracking: tracking.len(),
+            tracking: credentials.len(),
         }
     }
 
