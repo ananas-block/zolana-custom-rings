@@ -44,8 +44,8 @@ use crate::{
         HeldEnrollment, OwnerEnrollment, ScanEnd, TrackingCursor, TrackingScan, TrackingSource,
     },
     upstream::{
-        MergeAuditRequest, RingConfiguration, RingFrame, RingHistoryPage, TransactionPage,
-        TransactionSource,
+        Finality, MergeAuditRequest, RingConfiguration, RingFrame, RingHistoryPage,
+        TransactionPage, TransactionSource,
     },
     utxos::{
         AuditStore, Backfill, CreatedIn, PageDelta, PageWork, WalletStatusQuery, MAX_BACKFILL_PAGES,
@@ -259,7 +259,13 @@ impl<S: TransactionSource> AuditService<S> {
                     self.refresh_enrollments(&store, &mut backfill.tracking_cursor, Some(&writer))
                         .await?
                 }
-                Projection::Follower => match self.shared.source.root(self.ring).await? {
+                // The cursor counts finalized leaves, so it compares against the finalized root.
+                Projection::Follower => match self
+                    .shared
+                    .source
+                    .root(self.ring, Finality::Finalized)
+                    .await?
+                {
                     Some(root) if backfill.tracking_cursor.next_leaf() < root.next_index => {
                         ScanEnd::Partial
                     }

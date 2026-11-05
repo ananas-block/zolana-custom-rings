@@ -377,8 +377,8 @@ pub(crate) mod tests {
             HeldEnrollment,
         },
         upstream::{
-            DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
-            RingFrame, RingHistoryPage, TrackingRoot, TransactionPage,
+            DepositHistory, DepositPage, Finality, MergeAuditRequest, RecordsTip,
+            RingConfiguration, RingFrame, RingHistoryPage, TrackingRoot, TransactionPage,
         },
         utxos::CreatedIn,
     };
@@ -413,7 +413,11 @@ pub(crate) mod tests {
             unused()
         }
 
-        async fn tracking_root(&self, _ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+        async fn tracking_root(
+            &self,
+            _ring: Address,
+            _finality: Finality,
+        ) -> Result<Option<TrackingRoot>, ClientError> {
             Ok(self.tracking.root())
         }
 

@@ -601,6 +601,7 @@ impl TransactionSource for StaticSource {
     async fn tracking_root(
         &self,
         _ring: Address,
+        _finality: zolana_ring_rpc::Finality,
     ) -> Result<Option<zolana_ring_rpc::TrackingRoot>, ClientError> {
         Ok(self.tracking.0.root())
     }

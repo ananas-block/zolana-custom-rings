@@ -771,6 +771,7 @@ impl zolana_ring_rpc::TrackingSource for Endpoint<'_> {
     async fn root(
         &self,
         _ring: Address,
+        _finality: zolana_ring_rpc::Finality,
     ) -> Result<Option<zolana_ring_rpc::TrackingRoot>, spr_client::ClientError> {
         let newest = self.0.state().await.account.newest();
         Ok(Some(zolana_ring_rpc::TrackingRoot {
