@@ -2,6 +2,7 @@ package ringregistry_test
 
 import (
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -208,7 +209,91 @@ func TestCredentialAbsenceRequiresStrictAddressGap(t *testing.T) {
 				t.Fatal(err)
 			}
 			c.AddressRoot = root
-			requireCredentialRefused(t, c, "registry.AddressGap.AssertAbsent")
+			requireCredentialRefused(t, c, "registry.AddressGap.orderedLeaf")
+		})
+	}
+}
+
+func singleOpeningFixture(t testing.TB, member int64) *credentialPoolCircuit {
+	t.Helper()
+	tree := credentialFixture(t)
+	credentials, err := policy.NewCredentials(1, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials.CredentialOwner, credentials.AddressRoot, credentials.StateRoots = tree.Owner, tree.AddressRoot(), tree.StateRoots(1)
+	credentials.Openings[0] = policy.CredentialOpening(tree.Opening(t, big.NewInt(member)))
+	credentials.RowEntries[0] = 0
+	leaf := credentials.Openings[0].Leaf
+	return &credentialPoolCircuit{Credentials: credentials, RingID: tree.RingID, Member: member, Entry: 0, ExpectedKey: leaf.NullifierPk, ExpectedTag: leaf.ListTag}
+}
+
+// foldAbove hashes node at index zero up levels with zero siblings.
+func foldAbove(t testing.TB, node frontend.Variable, levels int) *big.Int {
+	t.Helper()
+	zeros := make([]*big.Int, levels)
+	for i := range zeros {
+		zeros[i] = new(big.Int)
+	}
+	root, err := protocol.MerkleRoot(ringtest.AsBigInt(node), zeros, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// gapStateNode is the node an absence fold reaches at state height.
+func gapStateNode(t testing.TB, gap registry.AddressGap) *big.Int {
+	t.Helper()
+	leaf := ringtest.MustPoseidonHash(t, ringtest.AsBigInt(gap.Low), ringtest.AsBigInt(gap.Next))
+	node, err := protocol.MerkleRoot(leaf, ringtest.ToBigInts(gap.Path[:protocol.StateTreeHeight]), ringtest.AsBigInt(gap.Index).Uint64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
+func TestCredentialOpeningBindsModeToTree(t *testing.T) {
+	t.Run("present", func(t *testing.T) { requireCredentialSolved(t, singleOpeningFixture(t, 101)) })
+	t.Run("absent", func(t *testing.T) { requireCredentialSolved(t, singleOpeningFixture(t, 103)) })
+	for _, tc := range []struct {
+		name   string
+		member int64
+		mutate func(*credentialPoolCircuit)
+	}{
+		{"present leaf at state height under the address root", 101, func(c *credentialPoolCircuit) {
+			c.AddressRoot, c.StateRoots[0][1] = c.StateRoots[0][1], 1
+		}},
+		{"present leaf at address height under the address root", 101, func(c *credentialPoolCircuit) {
+			c.AddressRoot, c.StateRoots[0][1] = foldAbove(t, c.StateRoots[0][1], protocol.NullifierTreeHeight-protocol.StateTreeHeight), 1
+		}},
+		{"gap leaf at state height under a state root", 103, func(c *credentialPoolCircuit) {
+			c.StateRoots[0][1], c.AddressRoot = gapStateNode(t, c.Openings[0].Gap), 1
+		}},
+		{"gap leaf at address height under a state root", 103, func(c *credentialPoolCircuit) {
+			c.StateRoots[0][1], c.AddressRoot = c.AddressRoot, 1
+		}},
+		{"absent member marked present", 103, func(c *credentialPoolCircuit) { c.Openings[0].Present = 1 }},
+		{"present member marked absent", 101, func(c *credentialPoolCircuit) { c.Openings[0].Present = 0 }},
+		{"present index above state height", 101, func(c *credentialPoolCircuit) {
+			c.Openings[0].Leaf.StateIndex = new(big.Int).Add(ringtest.AsBigInt(c.Openings[0].Leaf.StateIndex), new(big.Int).Lsh(big.NewInt(1), protocol.StateTreeHeight))
+		}},
+		{"present sibling above state height", 101, func(c *credentialPoolCircuit) { c.Openings[0].Gap.Path[protocol.StateTreeHeight] = 1 }},
+		{"absent sibling in the state path", 103, func(c *credentialPoolCircuit) {
+			opening := &c.Openings[0]
+			level := slices.IndexFunc(opening.Gap.Path[:protocol.StateTreeHeight], func(sibling frontend.Variable) bool {
+				return ringtest.AsBigInt(sibling).Sign() != 0
+			})
+			if level < 0 {
+				t.Fatal("absence fixture has no nonzero sibling below state height")
+			}
+			opening.Leaf.StatePath[level], opening.Gap.Path[level] = opening.Gap.Path[level], 0
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := singleOpeningFixture(t, tc.member)
+			tc.mutate(c)
+			requireCredentialRefused(t, c, "registry.CredentialOpening.Open")
 		})
 	}
 }
