@@ -82,8 +82,8 @@ impl PoolSubjects {
 /// Mirror `readSources` in `prover/circuits/policy/table.go`.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct SourceGates {
-    foreign: u8,
-    salted: u8,
+    foreign: u16,
+    salted: u16,
 }
 
 impl SourceGates {

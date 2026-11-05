@@ -810,7 +810,7 @@ fn a_public_update_carrying_a_private_owner_write_is_refused_before_any_key() {
     store.seed_tree(0);
     store.seed_tree(1);
     let before = store.svm.get_account(&registry).unwrap();
-    for list in [ListId::PrivateBlock, ListId::PrivateAllow] {
+    for list in ListSet::PRIVATE_LISTS.iter() {
         let mut instruction = store.zero_proof_update_of(registry, 0, ListId::Block);
         set_first_write_lists(&mut instruction, list.record_bit());
         assert_eq!(

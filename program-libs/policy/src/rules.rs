@@ -14,8 +14,8 @@ use core::fmt;
 use thiserror::Error;
 
 use crate::{
-    DebitInput, DebitOutput, Guard, GuardScope, ListSet, Rule, RuleSource, RuleTable, SourceMap,
-    Subject,
+    DebitInput, DebitOutput, Guard, GuardScope, ListId, ListSet, Rule, RuleSource, RuleTable,
+    SourceMap, Subject,
 };
 
 /// A member's record `lists` in each registry, zero for an absent member.
@@ -225,7 +225,7 @@ impl RecordLists {
     fn on(self, foreign: ListSet, salted: ListSet) -> ListSet {
         let (foreign, salted) = (foreign.record_bits(), salted.record_bits());
         let public = (self.own & !foreign) | (self.curator & foreign);
-        ListSet::from_bits(((public & !salted) | (self.salted & salted)) as u8)
+        ListSet::named_in((public & !salted) | (self.salted & salted))
     }
 }
 
@@ -291,19 +291,22 @@ fn holds(rule: &Rule, on: ListSet) -> bool {
 }
 
 fn foreign_lists(sources: &SourceMap) -> ListSet {
-    let bits = sources
-        .slots()
-        .iter()
-        .enumerate()
-        .filter(|(_, slot)| slot.registry != [0; 32])
-        .fold(0u8, |bits, (slot, _)| bits | 1 << slot);
-    ListSet::from_bits(bits)
+    ListId::ALL
+        .into_iter()
+        .filter(|list_id| {
+            sources
+                .registry(*list_id)
+                .is_some_and(|registry| *registry != [0; 32])
+        })
+        .fold(ListSet::EMPTY, |set, list_id| {
+            set.union(ListSet::single(list_id))
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DebitInput, ListId, MintPolicy, RuleTableBuilder};
+    use crate::{DebitInput, ListId, MintPolicy, RuleTableBuilder, RuleTableError};
 
     const OWNER: [u8; 32] = [1; 32];
     const ASSET: [u8; 32] = [2; 32];
@@ -395,6 +398,55 @@ mod tests {
         assert!(admit(owner, public_only).is_ok());
         assert!(admit(asset, salted_only).is_ok());
         assert!(admit(asset, public_only).is_err());
+    }
+
+    #[test]
+    fn a_private_block_holds_both_ways_and_a_private_freeze_holds_the_sender_alone() {
+        let sources = SourceMap::new(&[
+            (ListId::PrivateBlock, [0; 32]),
+            (ListId::PrivateFrozen, [0; 32]),
+        ])
+        .unwrap();
+        let table = RuleTable::builder()
+            .forbid_each(
+                Subject::Sender,
+                ListSet::of(&[ListId::PrivateBlock, ListId::PrivateFrozen]),
+            )
+            .rule(Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock))
+            .build();
+        assert_eq!(table.encode().validate(&sources), Ok(table));
+        let salted = |list_id: ListId| RecordLists {
+            salted: list_id.record_bit(),
+            ..RecordLists::default()
+        };
+        let (alice, bob) = (salted(ListId::PrivateBlock), salted(ListId::PrivateFrozen));
+        let paid = |lists| {
+            let outputs = [payment(lists)];
+            table.evaluate_payments(
+                &sources,
+                PaymentSubjects {
+                    ring_inputs: &[],
+                    outputs: &outputs,
+                },
+            )
+        };
+        assert!(table.evaluate_senders(&sources, &[bob]).is_err());
+        assert!(paid(bob).is_ok());
+        assert!(table.evaluate_senders(&sources, &[alice]).is_err());
+        assert!(paid(alice).is_err());
+        // A freeze stays a deny list, read by absence and alone in its rule.
+        let refused = |rule| RuleTable::builder().rule(rule).build().validate();
+        assert_eq!(
+            refused(Rule::require(Subject::Sender, ListId::PrivateFrozen)),
+            Err(RuleTableError::InvertedPolarity)
+        );
+        assert_eq!(
+            refused(Rule::forbid_only_on_all(
+                Subject::Sender,
+                ListSet::of(&[ListId::PrivateBlock, ListId::PrivateFrozen])
+            )),
+            Err(RuleTableError::MultiListAbsence)
+        );
     }
 
     #[test]

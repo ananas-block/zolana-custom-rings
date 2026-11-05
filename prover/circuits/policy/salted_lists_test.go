@@ -129,6 +129,37 @@ func TestSaltedSenderAndWithdrawalOwnersAreRead(t *testing.T) {
 	})
 }
 
+// A private block refuses Alice both ways, a private freeze refuses Bob as a sender and admits him as a payee.
+func TestPrivateBlockAndPrivateFreezeInOneRing(t *testing.T) {
+	privateFrozen := uint64(ringregistry.PrivateFrozenBit)
+	world := func(sender int64, payee int64) ringpolicy.World {
+		w := saltedWorld(
+			ringpolicy.Forbid(policy.SubjectSender, privateBlock),
+			ringpolicy.Forbid(policy.SubjectOutputOwner, privateBlock),
+			ringpolicy.Forbid(policy.SubjectSender, privateFrozen),
+		)
+		w.Table.Lists = append(w.Table.Lists, privateFrozen)
+		w.Table.Salted |= privateFrozen
+		w.Enrolled = []int64{ringpolicy.Sender, ringpolicy.Alice, ringpolicy.Bob}
+		w.Salted[ringpolicy.Alice], w.Salted[ringpolicy.Bob] = privateBlock, privateFrozen
+		w.Sender = sender
+		w.Slots = []ringpolicy.Slot{{Owner: payee, Asset: ringpolicy.AssetA, Amount: 500}}
+		return w
+	}
+	t.Run("bob receives", func(t *testing.T) {
+		requireSolved(t, world(ringpolicy.Sender, ringpolicy.Bob).Build(t))
+	})
+	t.Run("bob sends", func(t *testing.T) {
+		ringtest.RequireRefused(t, solveSalted(world(ringpolicy.Bob, ringpolicy.Sender).Build(t)), "policy.assertSenderRules")
+	})
+	t.Run("alice receives", func(t *testing.T) {
+		ringtest.RequireRefused(t, solveSalted(world(ringpolicy.Sender, ringpolicy.Alice).Build(t)), "policy.assertPaymentRules")
+	})
+	t.Run("alice sends", func(t *testing.T) {
+		ringtest.RequireRefused(t, solveSalted(world(ringpolicy.Alice, ringpolicy.Sender).Build(t)), "policy.assertSenderRules")
+	})
+}
+
 // A present credential forces the salt, the key and the salted read, each honest world below listed.
 func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 	listed := func(t *testing.T) ringpolicy.Witness {

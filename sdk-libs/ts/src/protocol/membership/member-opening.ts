@@ -35,7 +35,7 @@ import {
 
 import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
-import { ListId, recordBit } from "./policy.js";
+import { ListId, PRIVATE_LIST_BITS, recordBit } from "./policy.js";
 import type { ApplyRecordsStatement } from "../proof/statement.js";
 import { applyKeyWidth } from "../proof/proving-keys.js";
 
@@ -284,8 +284,7 @@ export function replayRecordWrites(
  * private list. A private write proves its owner's credential, the SDK builds none yet.
  */
 export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsStatement {
-  const privateBits = recordBit(ListId.privateAllow) | recordBit(ListId.privateBlock);
-  if (inputs.writes.some((write) => (write.entry.mask & privateBits) !== 0n))
+  if (inputs.writes.some((write) => (write.entry.mask & BigInt(PRIVATE_LIST_BITS)) !== 0n))
     throw new RingError("RING_STORAGE_WRITE_INVALID", {
       details: { reason: "InvalidCredentialRead" },
     });

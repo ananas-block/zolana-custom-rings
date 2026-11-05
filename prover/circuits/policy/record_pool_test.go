@@ -302,11 +302,11 @@ func (c *sourceListsCircuit) Define(api frontend.API) error {
 
 func TestSourceListsSplitsOneWay(t *testing.T) {
 	field := ecc.BN254.ScalarField()
-	honest := &sourceListsCircuit{Lists: new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), registry.ListBits-1), big.NewInt(5)), Bits: [NSources]frontend.Variable{1, 0, 1, 0, 0, 0, 0, 0}}
+	honest := &sourceListsCircuit{Lists: new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), registry.ListBits-1), big.NewInt(5)), Bits: [NSources]frontend.Variable{1, 0, 1, 0, 0, 0, 0, 0, 0}}
 	if err := test.IsSolved(honest, honest, field); err != nil {
 		t.Fatal(err)
 	}
-	past := &sourceListsCircuit{Lists: new(big.Int).Lsh(big.NewInt(1), registry.ListBits), Bits: [NSources]frontend.Variable{0, 0, 0, 0, 0, 0, 0, 0}}
+	past := &sourceListsCircuit{Lists: new(big.Int).Lsh(big.NewInt(1), registry.ListBits), Bits: [NSources]frontend.Variable{0, 0, 0, 0, 0, 0, 0, 0, 0}}
 	if test.IsSolved(past, past, field) == nil {
 		t.Fatal("lists past their width accepted")
 	}
@@ -315,7 +315,7 @@ func TestSourceListsSplitsOneWay(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Any other low part leaves the rest off a multiple of the bit width.
-	forged := &sourceListsCircuit{Lists: 5, Bits: [NSources]frontend.Variable{0, 1, 1, 0, 0, 0, 0, 0}}
+	forged := &sourceListsCircuit{Lists: 5, Bits: [NSources]frontend.Variable{0, 1, 1, 0, 0, 0, 0, 0, 0}}
 	witness, err := frontend.NewWitness(forged, field)
 	if err != nil {
 		t.Fatal(err)

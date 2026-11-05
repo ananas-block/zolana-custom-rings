@@ -10,7 +10,7 @@
 // Properties:
 // 1. While screened, the table is the preimage of policy_hash under the CRTB domain, in EncodedRuleTable::fields order.
 // 2. The first PolicyLen rows are active, a count past NRules has no solution.
-// 3. Each row decodes to one set of parts below 2^104, every part a bound width, and no part aliases another.
+// 3. Each row decodes to one set of parts below 2^120, every part a bound width, and no part aliases another.
 // 4. Each list slot reads foreign or own from its Registry and salted or public from Salted.
 // 5. A rule's admission is linear in the subject's list bits and never wraps to zero.
 
@@ -32,7 +32,7 @@ import (
 // Table capacities, mirrored by program-libs/policy/src/rule_table/mod.rs.
 const (
 	NRules   = 16
-	NSources = 8
+	NSources = 9
 )
 
 // Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table/mod.rs.
@@ -100,7 +100,7 @@ type ruleFields struct {
 }
 
 // ruleParts mirrors Row in program-libs/policy/src/rule_table/mod.rs, read from the low byte of the big-endian field.
-var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 8}, {24, 8}, {32, 64}, {96, 8}}
+var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 16}, {32, 8}, {40, 64}, {104, 16}}
 
 // decodeWhen binds the table to policy_hash while screened, an unscreened table binds nothing the rules read.
 func (t Table) decodeWhen(api frontend.API, rc frontend.Rangechecker, screened, policyHash frontend.Variable) tableView {
@@ -188,11 +188,11 @@ func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Vari
 		panic(err)
 	}
 	subject, mode, mask, guard, threshold, alternative := parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
-	// 2. Subject, mode, guard and threshold stay inside their widths, the recomposition stays below 2^104.
+	// 2. Subject, mode, guard and threshold stay inside their widths, the recomposition stays below 2^120.
 	for _, i := range []int{0, 1, 3, 4} {
 		rc.Check(parts[i], int(ruleParts[i].width))
 	}
-	// 3. Both list masks split into one bit per source slot, bit i marks list i+1.
+	// 3. Both list masks split into one bit per source slot, bit i marks list i+1, the split bounds each mask below 2^NSources.
 	listBits, altBits := api.ToBinary(mask, NSources), api.ToBinary(alternative, NSources)
 	recomposed := frontend.Variable(0)
 	for i, part := range ruleParts {

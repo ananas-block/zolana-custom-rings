@@ -40,6 +40,16 @@ func TestPrivateWriteBatchBindsClassification(t *testing.T) {
 	}
 }
 
+// Each private list takes the credential path, a substituted salt fails the binding.
+func TestEveryPrivateListBindsItsSalt(t *testing.T) {
+	for _, mask := range []int64{ringregistry.PrivateBlockBit, ringregistry.PrivateAllowBit, ringregistry.PrivateFrozenBit} {
+		requireCredentialSolved(t, ringregistry.PrivateBatch(t, 2, mask))
+		c := ringregistry.PrivateBatch(t, 2, mask)
+		c.Credentials[0].ListSalt = 0x1234
+		requireCredentialRefused(t, c, "registry.CredentialWrite.Assert")
+	}
+}
+
 func TestPrivateWriteClassificationRejectsPublicMask(t *testing.T) {
 	requireCredentialRefused(t, ringregistry.PrivateBatch(t, 2, ringregistry.AllowBit), "registry.(*PrivateApplyRecordsCircuit).Define")
 }

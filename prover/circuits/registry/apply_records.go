@@ -51,6 +51,9 @@ const ApplyBatch = 16
 // ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/proof/key_catalog.rs.
 var ApplyWidths = []int{1, 2, 4, 8, ApplyBatch}
 
+// privateListBits mirrors ListSet::PRIVATE_LISTS in program-libs/policy/src/list.rs.
+var privateListBits = [...]int{4, 7, 8}
+
 // RecordWrite's MintPolicy packs the settings below bit 192 and marks a replacement at bit 192, mirrored by RecordWrite::mint_policy_field in program-libs/interface/src/accounts/member_registry.rs.
 type RecordWrite struct {
 	Member              frontend.Variable
@@ -149,7 +152,10 @@ func (c *PrivateApplyRecordsCircuit) Define(api frontend.API) error {
 	// 2. A selected write must carry a private mask, then proves its owner's credential and address.
 	// The program derives the bitmap, the circuit only refuses a bit on a write it cannot cover.
 	c.transition(api, func(i int, active frontend.Variable, maskBits []frontend.Variable) {
-		privateMask := api.Or(maskBits[4], maskBits[7])
+		privateMask := frontend.Variable(0)
+		for _, bit := range privateListBits {
+			privateMask = api.Or(privateMask, maskBits[bit])
+		}
 		assertCredentialEqualWhen(api, credentialBits[i], api.Mul(active, privateMask), 1)
 		c.Credentials[i].Assert(api, credentialBits[i], c.Writes[i].Entry.Member, c.AddressRoot, roots)
 	})

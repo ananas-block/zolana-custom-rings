@@ -51,14 +51,17 @@ function row(
 ): Bytes32 {
   const bytes = new Uint8Array(32);
   bytes[0] = input.reserved ?? 0;
-  bytes[19] = input.alternative ?? 0;
+  const alternative = input.alternative ?? 0;
+  bytes[17] = alternative >> 8;
+  bytes[18] = alternative & 0xff;
   let threshold = input.threshold ?? 0n;
-  for (let index = 27; index >= 20; index -= 1) {
+  for (let index = 26; index >= 19; index -= 1) {
     bytes[index] = Number(threshold & 0xffn);
     threshold >>= 8n;
   }
-  bytes[28] = input.guardTag ?? 0;
-  bytes[29] = input.mask;
+  bytes[27] = input.guardTag ?? 0;
+  bytes[28] = input.mask >> 8;
+  bytes[29] = input.mask & 0xff;
   bytes[30] = input.mode;
   bytes[31] = input.subject;
   return bytes as Bytes32;
@@ -139,7 +142,7 @@ describe("rule rows", () => {
 
   it("orders a set in slot order", () => {
     expect(listSet(0b1000_0101)).toEqual([ListId.allow, ListId.frozen, ListId.privateAllow]);
-    expect(LIST_IDS).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(LIST_IDS).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   it("refuses every row Rust refuses", () => {
@@ -166,6 +169,8 @@ describe("rule rows", () => {
       ["SenderGuard", { subject: SENDER, mode: PRESENT, mask: allow, guardTag: 1, threshold: 5n }],
       ["ZeroThreshold", { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, guardTag: 1 }],
       ["PerAssetGuardNotOwner", { subject: ASSET, mode: PRESENT, mask: 1, guardTag: 2 }],
+      ["UnknownList", { subject: SENDER, mode: ABSENT, mask: 1 << 9 }],
+      ["UnknownList", { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, alternative: 1 << 9 }],
     ];
     for (const [expected, input] of cases) {
       expect(reason(() => decodeRule(row(input)))).toBe(expected);
@@ -294,6 +299,7 @@ describe("rule encoding", () => {
     const cases: readonly [Rule, Parameters<typeof row>[0]][] = [
       [require("outputOwner", ListId.allow), { subject: OUTPUT_OWNER, mode: PRESENT, mask: 0b01 }],
       [forbid("sender", ListId.frozen), { subject: SENDER, mode: ABSENT, mask: 0b100 }],
+      [forbid("sender", ListId.privateFrozen), { subject: SENDER, mode: ABSENT, mask: 1 << 8 }],
       [
         above(require("outputOwner", ListId.approval), 2000n),
         { subject: OUTPUT_OWNER, mode: PRESENT, mask: 0b0100_0000, guardTag: 1, threshold: 2000n },
@@ -450,7 +456,7 @@ describe("policy hash", () => {
       }),
     );
     expect(() => policySourceOwners(stored.slice(1))).toThrow(
-      expect.objectContaining({ details: { reason: "SlotCount", slots: 7 } }),
+      expect.objectContaining({ details: { reason: "SlotCount", slots: 8 } }),
     );
     expect(() =>
       policyTableHash(buildRuleTable({ rules: [] }), [
@@ -502,6 +508,7 @@ describe("list authorization", () => {
       "authority",
       "authority",
       "member",
+      "authority",
       "authority",
       "authority",
       "authority",
