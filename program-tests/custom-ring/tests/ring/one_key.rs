@@ -318,14 +318,9 @@ struct CapturingHttp {
 
 impl HttpClient for CapturingHttp {
     fn send<'a>(&'a self, request: HttpRequest) -> HttpFuture<'a> {
-        let ring_body = serde_json::from_slice::<Value>(&request.body)
-            .ok()
-            .filter(|body| {
-                body["circuitType"]
-                    .as_str()
-                    .is_some_and(|circuit| circuit.starts_with("custom-ring-"))
-            });
-        if let (Some(ring_body), Ok(mut held)) = (ring_body, self.body.0.lock()) {
+        if let (Some(ring_body), Ok(mut held)) =
+            (ring_prover_request(&request.body), self.body.0.lock())
+        {
             *held = Some(ring_body);
         }
         HttpClient::send(&self.http, request)

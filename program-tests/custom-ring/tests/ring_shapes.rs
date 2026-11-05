@@ -1,17 +1,22 @@
 //! Every transfer shape of the five basic rails settles or is refused before proving as too large.
-//! Registry sources and withdrawal/batch capacities have separate circuit and verifier tests.
+//! Every catalog key lands one real proof at the least load selecting it, its full capacity apart.
+
+use std::sync::{Arc, Mutex};
 
 use super::*;
 use custom_ring_interface::{
-    key_catalog::{FrameKey, RingCircuit, TransferShape, RING_KEYS, TRANSFER_SHAPES},
+    key_catalog::{FrameKey, RingCircuit, RingKey, TransferShape, RING_KEYS, TRANSFER_SHAPES},
     ParsedTransact, DELIVERED_AUDIT_CAPACITIES,
 };
+use custom_ring_sdk::BufferedFrame;
 use custom_ring_test_validator::{
     policy::{EnrollOwners, RingNotes},
     shared::restart_prover,
 };
+use spr_api::{ApiError, HttpClient, HttpFuture, HttpRequest};
 use spr_client::{Shape, SPP_SUPPORTED_SHAPES};
 use spr_test_utils::wallet::create_associated_token_account;
+use zolana_ring_keys::ListSaltHolder;
 
 /// Merge widths whose full nullifier list fits one v1 transaction.
 const MERGE_WIDTHS: [usize; 2] = [8, 24];
@@ -19,6 +24,16 @@ const UTXO_AMOUNT: u64 = 1_000_000;
 /// Rent-exempt before the first leg lands on it.
 const DESTINATION_FUNDING: u64 = 1_000_000;
 const LEG_AMOUNT: u64 = 1_000;
+/// A salted read opens a second record per owner and a tracking row per output and destination.
+const SALTED: RuleTable = RuleTable::builder()
+    .rule(Rule::forbid(Subject::Sender, ListId::PrivateBlock))
+    .build();
+/// One apply proof per batch, width one is the configured actors' own.
+const ENROLLMENT_BATCHES: [usize; 4] = [16, 8, 4, 2];
+const RECORD_BATCHES: [usize; 5] = [1, 2, 4, 8, 16];
+/// With the sender and the legs' destinations these pass the narrow row's tracking pool.
+const SALTED_RECIPIENTS: usize = 15;
+const TRANSFER_KEY_PREFIX: &str = "custom-ring-transfer-";
 
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -42,6 +57,8 @@ enum Column {
     Anonymous,
     AnonymousPolicy,
     Delegate,
+    /// A ring reading a salted list, the one pressure past a narrow row's pools.
+    Salted,
 }
 
 impl Column {
@@ -51,12 +68,13 @@ impl Column {
             Self::ConfidentialPolicy | Self::Delegate => Tier::policy(&EMPTY),
             Self::Anonymous => Tier::AnonymousAuditOnly,
             Self::AnonymousPolicy => Tier::anonymous_policy(&EMPTY),
+            Self::Salted => Tier::policy(&SALTED),
         }
     }
 
     fn rail(self) -> RingRail {
         match self {
-            Self::Confidential | Self::ConfidentialPolicy => RingRail::Confidential,
+            Self::Confidential | Self::ConfidentialPolicy | Self::Salted => RingRail::Confidential,
             Self::Anonymous | Self::AnonymousPolicy => RingRail::Anonymous,
             Self::Delegate => RingRail::Delegate,
         }
@@ -67,18 +85,44 @@ impl Column {
         match self {
             Self::Anonymous => &[Shape::IN24_OUT2, Shape::IN16_OUT4, Shape::IN5_OUT8],
             Self::AnonymousPolicy => &[Shape::IN24_OUT2, Shape::IN16_OUT4],
-            Self::Confidential => &[
-                Shape::IN32_OUT2,
-                Shape::IN24_OUT4,
-                Shape::IN16_OUT8,
-                Shape::IN5_OUT16,
-            ],
-            Self::ConfidentialPolicy | Self::Delegate => &[],
+            Self::Confidential => &[Shape::IN32_OUT2, Shape::IN24_OUT4, Shape::IN16_OUT8],
+            Self::ConfidentialPolicy | Self::Delegate | Self::Salted => &[],
         }
     }
 
     fn keyed(self, shape: Shape) -> bool {
-        custom_ring_sdk::shape_keyed(self.rail(), shape)
+        self != Self::Salted && custom_ring_sdk::shape_keyed(self.rail(), shape)
+    }
+
+    /// One proof per key the column owns, each at the least load selecting it.
+    const fn key_cases(self) -> &'static [KeyCase] {
+        match self {
+            Self::Confidential => CONFIDENTIAL_KEY_CASES,
+            Self::ConfidentialPolicy | Self::AnonymousPolicy => WIDE_LEG_KEY_CASES,
+            Self::Anonymous => ENTRY_KEY_CASES,
+            Self::Salted => SALTED_KEY_CASES,
+            Self::Delegate => &[],
+        }
+    }
+
+    /// Every note slot and leg the key publishes, on the frames `ring-frame-fit.md` fits. Owner rows
+    /// stay at one, a key's owner capacity is the run its transaction signs.
+    const fn full_capacity(self) -> &'static [KeyCase] {
+        match self {
+            Self::ConfidentialPolicy => CONFIDENTIAL_POLICY_CAPACITY,
+            Self::Confidential => CONFIDENTIAL_CAPACITY,
+            Self::AnonymousPolicy => ANONYMOUS_POLICY_CAPACITY,
+            Self::Salted => SALTED_CAPACITY,
+            Self::Anonymous | Self::Delegate => &[],
+        }
+    }
+
+    /// A salted read of an enrolled recipient takes a pool row the one slot key lacks.
+    const fn deposit_key(self) -> RingCircuit {
+        match self {
+            Self::Salted => RingCircuit::Deposit { capacity: 2 },
+            _ => RingCircuit::Deposit { capacity: 1 },
+        }
     }
 
     fn measured(self, spend: Spend, spends_default_ring: bool) -> Measured {
@@ -92,15 +136,189 @@ impl Column {
             },
             Spend::Rail(RingRail::Confidential) => match self {
                 Self::Delegate => Measured::ConfidentialEscrow,
-                Self::ConfidentialPolicy => Measured::ConfidentialPolicy,
+                Self::ConfidentialPolicy | Self::Salted => Measured::ConfidentialPolicy,
                 _ => Measured::Confidential,
             },
             Spend::InProofOwner => match self {
                 Self::Delegate => Measured::InProofOwnerEscrow,
-                Self::ConfidentialPolicy => Measured::InProofOwnerPolicy,
+                Self::ConfidentialPolicy | Self::Salted => Measured::InProofOwnerPolicy,
                 _ => Measured::InProofOwner,
             },
         }
+    }
+}
+
+const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
+    RingCircuit::Transfer {
+        outputs,
+        inputs,
+        withdrawals,
+        owners,
+        entry: false,
+        wide: false,
+    }
+}
+
+const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
+    RingCircuit::Transfer {
+        outputs,
+        inputs,
+        withdrawals,
+        owners,
+        entry: false,
+        wide: true,
+    }
+}
+
+const fn entry(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
+    RingCircuit::Transfer {
+        outputs,
+        inputs,
+        withdrawals,
+        owners,
+        entry: true,
+        wide: true,
+    }
+}
+
+/// `key` is what production selection must name for the spend, the gate refuses another.
+#[derive(Clone, Copy, Debug)]
+struct KeyCase {
+    key: RingCircuit,
+    shape: Shape,
+    /// Live notes, the shape's other inputs stay dummies.
+    notes: usize,
+    legs: usize,
+    /// Past one transaction the frame settles from a buffer.
+    buffered: bool,
+}
+
+impl KeyCase {
+    const fn of(key: RingCircuit, shape: Shape, notes: usize, legs: usize) -> Self {
+        Self {
+            key,
+            shape,
+            notes,
+            legs,
+            buffered: true,
+        }
+    }
+
+    const fn inline(self) -> Self {
+        Self {
+            buffered: false,
+            ..self
+        }
+    }
+
+    const fn spends_default_ring(self) -> bool {
+        matches!(self.key, RingCircuit::Transfer { entry: true, .. })
+    }
+}
+
+const CONFIDENTIAL_KEY_CASES: &[KeyCase] = &[
+    KeyCase::of(narrow(2, 24, 4, 4), Shape::IN1_OUT2, 1, 0).inline(),
+    KeyCase::of(narrow(4, 24, 4, 4), Shape::IN1_OUT4, 1, 0).inline(),
+    KeyCase::of(narrow(8, 16, 4, 4), Shape::IN1_OUT8, 1, 0).inline(),
+    KeyCase::of(narrow(16, 5, 8, 5), Shape::IN1_OUT16, 1, 0),
+    KeyCase::of(wide(16, 8, 8, 8), Shape::IN8_OUT16, 1, 0),
+    KeyCase::of(wide(2, 49, 4, 12), Shape::IN32_OUT2, 1, 0).inline(),
+];
+const WIDE_LEG_KEY_CASES: &[KeyCase] =
+    &[KeyCase::of(wide(8, 24, 32, 24), Shape::IN1_OUT8, 1, 5).inline()];
+const ENTRY_KEY_CASES: &[KeyCase] = &[
+    KeyCase::of(entry(4, 8, 4, 8), Shape::IN1_OUT4, 1, 0).inline(),
+    KeyCase::of(entry(8, 2, 4, 2), Shape::IN1_OUT8, 1, 0).inline(),
+    KeyCase::of(entry(8, 4, 4, 4), Shape::IN3_OUT8, 3, 0).inline(),
+    // Nine inputs pass every smaller entry key, twelve is the next published width.
+    KeyCase::of(entry(2, 24, 32, 12), Shape::IN12_OUT2, 12, 0),
+];
+const SALTED_KEY_CASES: &[KeyCase] = &[KeyCase::of(wide(16, 5, 8, 5), Shape::IN1_OUT16, 1, 8)];
+
+const CONFIDENTIAL_POLICY_CAPACITY: &[KeyCase] = &[
+    KeyCase::of(narrow(2, 24, 4, 4), Shape::IN24_OUT2, 24, 4),
+    KeyCase::of(narrow(4, 24, 4, 4), Shape::IN24_OUT4, 24, 4),
+    KeyCase::of(narrow(8, 16, 4, 4), Shape::IN16_OUT8, 16, 4),
+    KeyCase::of(narrow(16, 5, 8, 5), Shape::IN5_OUT16, 5, 8),
+    KeyCase::of(wide(16, 8, 8, 8), Shape::IN8_OUT16, 8, 8),
+];
+/// An audit only ring opens no record and takes the fewest accounts.
+const CONFIDENTIAL_CAPACITY: &[KeyCase] =
+    &[KeyCase::of(wide(2, 49, 4, 12), Shape::IN49_OUT2, 49, 4)];
+/// Every leg of a hidden sender names one destination, 16 is the widest input at 8 outputs.
+const ANONYMOUS_POLICY_CAPACITY: &[KeyCase] = &[
+    KeyCase::of(wide(8, 24, 32, 24), Shape::IN16_OUT8, 16, 32),
+    KeyCase::of(entry(4, 8, 4, 8), Shape::IN8_OUT4, 8, 4),
+    KeyCase::of(entry(8, 2, 4, 2), Shape::IN2_OUT8, 2, 4),
+    KeyCase::of(entry(8, 4, 4, 4), Shape::IN4_OUT8, 4, 4),
+    KeyCase::of(entry(2, 24, 32, 12), Shape::IN24_OUT2, 24, 32),
+];
+const SALTED_CAPACITY: &[KeyCase] = &[KeyCase::of(wide(16, 5, 8, 5), Shape::IN5_OUT16, 5, 8)];
+
+/// Every prover call of a column passes here, the selection under test is the SDK's own.
+#[derive(Clone, Debug, Default)]
+struct KeyGate {
+    http: reqwest::Client,
+    expected: Arc<Mutex<Option<RingKey>>>,
+    proved: Arc<Mutex<Vec<String>>>,
+}
+
+impl KeyGate {
+    fn expect(&self, circuit: RingCircuit) -> Result<()> {
+        let key = RING_KEYS
+            .iter()
+            .find(|key| key.circuit == circuit)
+            .with_context(|| format!("{circuit:?} is outside the catalog"))?;
+        *self.expected.lock().map_err(|_| anyhow!("key gate lock"))? = Some(*key);
+        Ok(())
+    }
+
+    fn release(&self) -> Result<()> {
+        *self.expected.lock().map_err(|_| anyhow!("key gate lock"))? = None;
+        Ok(())
+    }
+
+    fn expected(&self) -> Result<Option<RingCircuit>> {
+        let expected = self.expected.lock().map_err(|_| anyhow!("key gate lock"))?;
+        Ok(expected.map(|key| key.circuit))
+    }
+
+    /// Refuses a transfer proof of another key, a case's deposit and apply proofs pass.
+    fn admit(&self, circuit: &str) -> Result<(), String> {
+        if circuit.starts_with(TRANSFER_KEY_PREFIX) {
+            let expected = self.expected.lock().map_err(|error| error.to_string())?;
+            if let Some(key) = expected.filter(|key| key.name != circuit) {
+                return Err(format!(
+                    "selection named {circuit}, the case names {}",
+                    key.name
+                ));
+            }
+        }
+        self.proved
+            .lock()
+            .map_err(|error| error.to_string())?
+            .push(circuit.to_owned());
+        Ok(())
+    }
+
+    fn proved(&self, circuit: RingCircuit) -> Result<bool> {
+        let key = RING_KEYS
+            .iter()
+            .find(|key| key.circuit == circuit)
+            .with_context(|| format!("{circuit:?} is outside the catalog"))?;
+        let proved = self.proved.lock().map_err(|_| anyhow!("key gate lock"))?;
+        Ok(proved.iter().any(|name| name == key.name))
+    }
+}
+
+impl HttpClient for KeyGate {
+    fn send<'a>(&'a self, request: HttpRequest) -> HttpFuture<'a> {
+        let circuit = ring_prover_request(&request.body)
+            .and_then(|body| body["circuitType"].as_str().map(str::to_owned));
+        if let Some(refusal) = circuit.and_then(|circuit| self.admit(&circuit).err()) {
+            return Box::pin(async move { Err(ApiError::HttpClient(refusal.into())) });
+        }
+        HttpClient::send(&self.http, request)
     }
 }
 
@@ -116,7 +334,7 @@ impl KeyFamily {
     fn shapes(self) -> impl Iterator<Item = TransferShape> {
         TRANSFER_SHAPES
             .into_iter()
-            .filter(move |shape| self.keys(*shape) && swept(*shape))
+            .filter(move |shape| self.keys(*shape) && widens_legs(*shape))
     }
 
     const fn column(self) -> Column {
@@ -143,8 +361,9 @@ fn wide_key(shape: TransferShape) -> bool {
     shape.wide && !shape.entry
 }
 
-/// Only a salted pool selects a wide key holding no more legs than its narrow key.
-fn swept(shape: TransferShape) -> bool {
+/// The leg sweeps skip a wide key holding no more legs than its narrow key, its inputs or a salted
+/// pool select it and `Column::key_cases` proves it.
+fn widens_legs(shape: TransferShape) -> bool {
     !wide_key(shape)
         || narrow_key(shape.outputs).is_some_and(|narrow| narrow.withdrawals < shape.withdrawals)
 }
@@ -185,7 +404,7 @@ fn shape_of(circuit: RingCircuit) -> Option<TransferShape> {
 fn the_wide_key() -> Result<TransferShape> {
     TRANSFER_SHAPES
         .into_iter()
-        .find(|shape| wide_key(*shape) && swept(*shape))
+        .find(|shape| wide_key(*shape) && widens_legs(*shape))
         .context("the catalog holds a wide key")
 }
 
@@ -217,31 +436,46 @@ impl Coverage {
         assert!(missing.is_empty(), "no landed operation proved {missing:?}");
     }
 
-    fn assert_transfer_keys(&self, column: Column) {
+    fn assert_column_keys(&self, column: Column) {
         self.assert_keys(|circuit| key_owner(circuit) == Some(column));
         assert!(self
             .circuits
             .iter()
             .all(|circuit| RING_KEYS.iter().any(|key| key.circuit == *circuit)));
     }
+
+    /// Recorded only once the prover saw the key, the operation's own count selected it.
+    fn cover_proved(&mut self, gate: &KeyGate, circuit: RingCircuit) -> Result<()> {
+        ensure!(gate.proved(circuit)?, "no proof ran under {circuit:?}");
+        self.cover(circuit);
+        Ok(())
+    }
 }
 
-/// The one sweep that proves the key, every transfer key has one.
+/// The one column proving a key, `None` where no wallet operation selects it.
 fn key_owner(circuit: RingCircuit) -> Option<Column> {
-    if let Some(shape) = shape_of(circuit) {
-        return match (shape.entry, wide_key(shape), swept(shape)) {
-            (true, ..) => Some(Column::Anonymous),
-            (false, false, _) => Some(Column::Confidential),
-            (false, true, true) => Some(Column::ConfidentialPolicy),
-            (false, true, false) => None,
-        };
-    }
     Some(match circuit {
-        RingCircuit::Merge => Column::Anonymous,
-        RingCircuit::Deposit { capacity: 1 }
+        RingCircuit::Transfer { entry: true, .. } | RingCircuit::Merge => Column::Anonymous,
+        RingCircuit::Transfer {
+            wide: true,
+            outputs: 16,
+            inputs: 5,
+            ..
+        }
+        | RingCircuit::Deposit { capacity: 2 } => Column::Salted,
+        RingCircuit::ApplyEnrollments { writes: 2.. } => Column::Salted,
+        RingCircuit::Transfer {
+            wide: true,
+            outputs: 8,
+            ..
+        }
+        | RingCircuit::ApplyRecords { .. } => Column::ConfidentialPolicy,
+        RingCircuit::Transfer { .. }
         | RingCircuit::RegisterKey
-        | RingCircuit::ApplyEnrollments { writes: 1 } => Column::Confidential,
-        _ => return None,
+        | RingCircuit::Deposit { capacity: 1 }
+        | RingCircuit::ApplyEnrollments { .. } => Column::Confidential,
+        // A wallet deposit fills one slot, its pools reach no wider key.
+        RingCircuit::Deposit { .. } => return None,
     })
 }
 
@@ -254,6 +488,11 @@ fn keyed_legs(data: &RingTransactData<'_>) -> usize {
 
 fn funded_destinations(env: &TestEnv, count: usize) -> Result<Vec<Address>> {
     let destinations: Vec<Address> = (0..count).map(|_| Keypair::new().pubkey()).collect();
+    fund_destinations(env, &destinations)?;
+    Ok(destinations)
+}
+
+fn fund_destinations(env: &TestEnv, destinations: &[Address]) -> Result<()> {
     for batch in destinations.chunks(16) {
         let transfers: Vec<Instruction> = batch
             .iter()
@@ -267,7 +506,7 @@ fn funded_destinations(env: &TestEnv, count: usize) -> Result<Vec<Address>> {
             .collect();
         send(env.client.rpc(), &env.payer, &transfers)?;
     }
-    Ok(destinations)
+    Ok(())
 }
 
 struct ShapeTransfer {
@@ -275,6 +514,7 @@ struct ShapeTransfer {
     inputs: Vec<WalletUtxo>,
     spend: Spend,
     legs: Vec<Leg>,
+    buffered: bool,
 }
 
 /// One public withdrawal of `LEG_AMOUNT`.
@@ -346,6 +586,7 @@ struct ColumnSetup<'a> {
     env: &'a TestEnv,
     column: Column,
     program: Address,
+    gate: &'a KeyGate,
 }
 
 struct ShapeRing<'a> {
@@ -356,6 +597,9 @@ struct ShapeRing<'a> {
     /// Signs and pays every move of the delegate rail.
     delegate: Keypair,
     mode: RingMode,
+    gate: &'a KeyGate,
+    /// Enrolled past the actors on a salted ring, each its own tracking row.
+    enrolled: Vec<ShieldedKeypair>,
 }
 
 impl<'a> ColumnSetup<'a> {
@@ -390,6 +634,10 @@ impl<'a> ColumnSetup<'a> {
             .send(env)?;
             env.enable_authority_rail(ring)?;
         }
+        let enrolled = match self.column {
+            Column::Salted => Self::enroll_batches(env, ring, self.gate, coverage)?,
+            _ => Vec::new(),
+        };
         let config = env.run(ring.require_config(env.client.as_async()))?;
         Ok(ShapeRing {
             env,
@@ -398,7 +646,33 @@ impl<'a> ColumnSetup<'a> {
             auditor,
             delegate,
             mode: config.mode,
+            gate: self.gate,
+            enrolled,
         })
+    }
+
+    /// Each batch selects the apply key of its width.
+    fn enroll_batches(
+        env: &'a TestEnv,
+        ring: CustomRing,
+        gate: &KeyGate,
+        coverage: &mut Coverage,
+    ) -> Result<Vec<ShieldedKeypair>> {
+        let mut enrolled = Vec::new();
+        for width in ENROLLMENT_BATCHES {
+            let batch = (0..width)
+                .map(|_| Ok(ShieldedKeypair::new_ed25519()?))
+                .collect::<Result<Vec<_>>>()?;
+            EnrollOwners {
+                ring,
+                owners: &batch.iter().collect::<Vec<_>>(),
+                env,
+            }
+            .send_in_one_batch()?;
+            coverage.cover_proved(gate, RingCircuit::apply_enrollments(u64::try_from(width)?))?;
+            enrolled.extend(batch);
+        }
+        Ok(enrolled)
     }
 }
 
@@ -415,6 +689,7 @@ impl ShapeRing<'_> {
                 inputs: self.utxos(1, coverage)?,
                 spend: Spend::Rail(self.column.rail()),
                 legs: Vec::new(),
+                buffered: false,
             };
             match self.settle(transfer, coverage)? {
                 Settlement::Settled => settled.push(shape),
@@ -437,25 +712,73 @@ impl ShapeRing<'_> {
         Ok(())
     }
 
-    /// A spend of a default-ring note opens every input under the entry keys.
-    fn entries(&self, coverage: &mut Coverage) -> Result<()> {
-        let env = self.env;
-        for shape in KeyFamily::AnonymousEntry.shapes() {
+    /// One real proof per key the column owns, the gate holds selection to each case's key.
+    fn catalog_keys(&self, coverage: &mut Coverage) -> Result<()> {
+        self.run_cases(self.column.key_cases(), coverage)?;
+        if self.column == Column::ConfidentialPolicy {
+            self.record_keys(coverage)?;
+        }
+        Ok(())
+    }
+
+    fn run_cases(&self, cases: &[KeyCase], coverage: &mut Coverage) -> Result<()> {
+        for case in cases {
             restart_prover()?;
-            let utxo = DefaultRingDeposit {
-                depositor: &env.sender.keypair,
-                tree: env.tree,
-                asset: DepositAsset::Sol,
-                amount: UTXO_AMOUNT,
-            }
-            .send(env.client.rpc(), env.client.indexer(), &env.assets)?;
-            let transfer = ShapeTransfer {
-                shape: Shape::new(1, shape.outputs.into()),
-                inputs: vec![utxo.input_utxo(env)?],
-                spend: Spend::Rail(RingRail::Anonymous),
-                legs: Vec::new(),
+            let inputs = match case.spends_default_ring() {
+                true => self.default_ring_notes(LegKind::Sol, case.notes)?,
+                false => self.utxos(case.notes, coverage)?,
             };
-            self.settled(transfer, coverage)?;
+            let transfer = ShapeTransfer {
+                shape: case.shape,
+                inputs,
+                spend: Spend::Rail(self.column.rail()),
+                legs: self.case_legs(case.legs)?,
+                buffered: case.buffered,
+            };
+            self.gate.expect(case.key)?;
+            let settled = self.settled(transfer, coverage);
+            self.gate.release()?;
+            settled?;
+        }
+        Ok(())
+    }
+
+    /// On a salted ring every destination holds a tracking row, the reads past the narrow row need it.
+    fn case_legs(&self, legs: usize) -> Result<Vec<Leg>> {
+        if legs == 0 {
+            return Ok(Vec::new());
+        }
+        if self.column == Column::Salted {
+            let destinations = self.salted_destinations(legs)?;
+            fund_destinations(self.env, &destinations)?;
+            return Ok(destinations.into_iter().map(Leg::Sol).collect());
+        }
+        let destinations =
+            funded_destinations(self.env, distinct_targets(self.column.rail(), legs))?;
+        Ok((0..legs)
+            .map(|leg| Leg::Sol(destinations[leg.min(destinations.len() - 1)]))
+            .collect())
+    }
+
+    fn salted_destinations(&self, legs: usize) -> Result<Vec<Address>> {
+        self.enrolled[SALTED_RECIPIENTS..]
+            .iter()
+            .take(legs)
+            .map(|owner| Ok(owner.shielded_address()?.solana_address()?))
+            .collect()
+    }
+
+    /// Each batch's write count selects the apply key of its width.
+    fn record_keys(&self, coverage: &mut Coverage) -> Result<()> {
+        for width in RECORD_BATCHES {
+            restart_prover()?;
+            StorageRecords {
+                ring: self.ring,
+                writes: allow_writes(width)?,
+                env: self.env,
+            }
+            .send()?;
+            coverage.cover_proved(self.gate, RingCircuit::apply_records(u64::try_from(width)?))?;
         }
         Ok(())
     }
@@ -467,6 +790,7 @@ impl ShapeRing<'_> {
             inputs: self.utxos(1, coverage)?,
             spend: Spend::Rail(RingRail::Confidential),
             legs: Vec::new(),
+            buffered: true,
         };
         self.settled(transfer, coverage)
     }
@@ -489,6 +813,7 @@ impl ShapeRing<'_> {
                     RingRail::Anonymous => vec![Leg::Sol(destinations[0]); legs],
                     _ => destinations[..legs].iter().copied().map(Leg::Sol).collect(),
                 },
+                buffered: false,
             };
             self.settled(transfer, coverage)?;
         }
@@ -517,6 +842,7 @@ impl ShapeRing<'_> {
                         token_account: token_accounts[index.min(token_accounts.len() - 1)],
                     })
                     .collect(),
+                buffered: false,
             };
             if let Settlement::Settled = self.settle(transfer, coverage)? {
                 println!("RING_SPL_LEGS {:?} legs={legs}", self.column);
@@ -564,6 +890,7 @@ impl ShapeRing<'_> {
                             inputs: notes.clone(),
                             spend,
                             legs: targets.legs(kind, legs),
+                            buffered: false,
                         };
                         if let Settlement::Settled = self.settle(transfer, coverage)? {
                             settled = Some(legs);
@@ -590,7 +917,7 @@ impl ShapeRing<'_> {
         }
         coverage.assert_keys(|circuit| {
             family.column() == self.column
-                && shape_of(circuit).is_some_and(|shape| family.keys(shape) && swept(shape))
+                && shape_of(circuit).is_some_and(|shape| family.keys(shape) && widens_legs(shape))
         });
         Ok(())
     }
@@ -599,19 +926,15 @@ impl ShapeRing<'_> {
     fn in_proof_owners(&self, coverage: &mut Coverage) -> Result<()> {
         for outputs in DELIVERED_AUDIT_CAPACITIES {
             restart_prover()?;
-            let shape = Shape::new(1, outputs);
             let transfer = ShapeTransfer {
-                shape,
+                shape: Shape::new(1, outputs),
                 inputs: self.utxos(1, coverage)?,
                 spend: Spend::InProofOwner,
                 legs: Vec::new(),
+                // Sixteen record slots pass one transaction on every tier.
+                buffered: outputs == 16,
             };
-            // The policy bodies push only the sixteen output transfer past the size ceiling.
-            if self.column == Column::ConfidentialPolicy && shape == Shape::IN1_OUT16 {
-                self.settle(transfer, coverage)?;
-            } else {
-                self.settled(transfer, coverage)?;
-            }
+            self.settled(transfer, coverage)?;
         }
         Ok(())
     }
@@ -762,7 +1085,7 @@ impl ShapeRing<'_> {
             }
             RingRail::Confidential | RingRail::Delegate => utxos.deposit_from(&env.payer)?,
         };
-        coverage.cover(RingCircuit::deposit(1));
+        coverage.cover_proved(self.gate, self.column.deposit_key())?;
         deposited
             .into_iter()
             .map(|utxo| indexed_note(utxo, &env.sender.keypair, env, env.tree))
@@ -783,6 +1106,7 @@ impl ShapeRing<'_> {
         let rpc = env.client.rpc();
         let spend = transfer.spend;
         let rail = spend.rail();
+        let buffered = transfer.buffered;
         let label = format!(
             "{:?} {spend:?} {}x{} inputs={} legs={}{}",
             self.column,
@@ -795,9 +1119,7 @@ impl ShapeRing<'_> {
                 Some(Leg::Sol(_)) | None => "",
             }
         );
-        let pinned = transfer
-            .legs
-            .is_empty()
+        let pinned = (transfer.legs.is_empty() && !buffered)
             .then(|| {
                 let spends_default_ring = transfer
                     .inputs
@@ -840,6 +1162,12 @@ impl ShapeRing<'_> {
         let parsed = ParsedTransact::new(frame(&instruction, rail)?)?;
         let data = parsed.data();
         let circuit = data.transfer_circuit(keyed_legs(data))?;
+        if let Some(expected) = self.gate.expected()? {
+            ensure!(
+                circuit == expected,
+                "{label} frames {circuit:?}, its case names {expected:?}"
+            );
+        }
         let tag = instruction
             .data
             .first()
@@ -868,6 +1196,16 @@ impl ShapeRing<'_> {
                 ..data.clone()
             },
         )?;
+        // A refused buffer stays open, the frame's fresh salt names a buffer of its own.
+        let (altered, landing) = match buffered {
+            true => {
+                let settled = proven.buffered(frame_nonce(data.salt)?)?;
+                let refused = BufferedFrame::new(&altered, payer.pubkey(), frame_nonce(&salt)?)?;
+                self.upload(&refused, payer)?;
+                (refused.settle(), Some(settled))
+            }
+            false => (altered, None),
+        };
         let rejection = send_expecting_rejection(rpc, payer, altered)?;
         Rejection::custom(CustomRingError::ProofVerificationFailed as u32)
             .at(0)
@@ -876,10 +1214,17 @@ impl ShapeRing<'_> {
         for leg in paid.keys() {
             assert_eq!(balance(leg)?, before[leg]);
         }
-        let signature = match land(env, instruction.clone(), payer, &[]) {
+        let landed = match &landing {
+            Some(frame) => {
+                self.upload(frame, payer)?;
+                frame.settle()
+            }
+            None => instruction.clone(),
+        };
+        let signature = match land(env, landed.clone(), payer, &[]) {
             Ok(signature) => signature,
             Err(error) => {
-                let logs = self.simulated_logs(&instruction, payer)?;
+                let logs = self.simulated_logs(&landed, payer)?;
                 return Err(error.context(format!("{label} logs {logs:#?}")));
             }
         };
@@ -892,7 +1237,10 @@ impl ShapeRing<'_> {
             rpc,
             &signature,
             &label,
-            CUSTOM_RING_TRANSACT_CU_LIMIT,
+            match buffered {
+                true => u64::from(compute_unit_limit(InstructionTag::SettleBuffered)),
+                false => CUSTOM_RING_TRANSACT_CU_LIMIT,
+            },
         )?;
         let audited = AuditLookup {
             scan: RingScan::new(self.ring.program_id(), self.auditor.pubkey()).with_mode(self.mode),
@@ -902,10 +1250,19 @@ impl ShapeRing<'_> {
         .run(env)?;
         assert_eq!(opened(&audited), ring_openings(&proven.outputs)?, "{label}");
         println!(
-            "RING_SETTLEMENT {label} bytes={} addresses={} cu={units}",
-            size.bytes, size.addresses
+            "RING_SETTLEMENT {label} buffered={buffered} frame={} bytes={} addresses={} cu={units}",
+            instruction.data.len(),
+            size.bytes,
+            size.addresses
         );
         Ok(Settlement::Settled)
+    }
+
+    fn upload(&self, frame: &BufferedFrame, payer: &(dyn Signer + Sync)) -> Result<()> {
+        for write in frame.writes()? {
+            land(self.env, write, payer, &[])?;
+        }
+        Ok(())
     }
 
     /// Anonymous payments go to fresh recipients, each a bootstrap payment.
@@ -919,6 +1276,7 @@ impl ShapeRing<'_> {
             inputs,
             spend,
             legs,
+            buffered,
         } = transfer;
         let total: u64 = inputs.iter().map(|input| input.utxo.amount).sum();
         let withdrawn = LEG_AMOUNT * legs.len() as u64;
@@ -955,26 +1313,36 @@ impl ShapeRing<'_> {
                 .collect::<Result<Vec<_>>>()?;
             Ok((transaction, settlements))
         };
-        let owner_transfer = |(transaction, settlements)| {
-            CustomRingTransfer::new(CustomRingTransferInput {
+        let owner_transfer = |(transaction, settlements)| -> Result<_> {
+            let transfer = CustomRingTransfer::new(CustomRingTransferInput {
                 ring: self.ring,
                 sender,
                 nullifier_key: Some(&sender.nullifier_key),
                 transaction,
             })
-            .with_interface_transfer_accounts(settlements)
+            .with_interface_transfer_accounts(settlements);
+            let transfer = match buffered {
+                true => transfer.with_buffered_settlement(),
+                false => transfer,
+            };
+            self.with_list_salts(transfer)
         };
         let confidential = |spend: Spend| -> Result<_> {
             let recipient = env.recipient.keypair.shielded_address()?;
             let (mut transaction, settlements) = transaction(self.payer(spend).pubkey())?;
-            for _ in payments.clone() {
+            for payment in payments.clone() {
+                // A salted ring's payees are distinct, each opens its own tracking row.
+                let recipient = match self.enrolled.get(payment - 1) {
+                    Some(owner) => owner.shielded_address()?,
+                    None => recipient,
+                };
                 if asset == SOL_MINT {
                     transaction.transfer_sol(&recipient, amount)?;
                 } else {
                     transaction.transfer(&recipient, asset, amount)?;
                 }
             }
-            Ok(owner_transfer((transaction, settlements)))
+            owner_transfer((transaction, settlements))
         };
         let proven = match spend {
             Spend::Rail(RingRail::Confidential) => {
@@ -999,7 +1367,7 @@ impl ShapeRing<'_> {
                     env,
                 }
                 .send()?;
-                let mut anonymous = owner_transfer(transaction(env.payer.pubkey())?)
+                let mut anonymous = owner_transfer(transaction(env.payer.pubkey())?)?
                     .with_anonymous_signer(&sender.signing_key);
                 for recipient in &recipients {
                     anonymous = anonymous.with_payment(custom_ring_sdk::AnonymousPayment {
@@ -1045,6 +1413,28 @@ impl ShapeRing<'_> {
         }
     }
 
+    /// A salted list refuses an enrolled owner with no salt, the salts name every owner the read opens.
+    fn with_list_salts<'t>(
+        &self,
+        transfer: CustomRingTransfer<'t>,
+    ) -> Result<CustomRingTransfer<'t>> {
+        if self.column != Column::Salted {
+            return Ok(transfer);
+        }
+        let program = self.ring.program_id();
+        std::iter::once(&self.env.sender.keypair)
+            .chain(&self.enrolled)
+            .try_fold(transfer, |transfer, owner| {
+                let member = Member::from_bytes(
+                    owner
+                        .shielded_address()?
+                        .signing_pubkey
+                        .owner_proof_input_hash()?,
+                )?;
+                Ok(transfer.with_list_salt(member, owner.list_salt(&program)?))
+            })
+    }
+
     /// A refused settlement reports its program logs, the landing alone names the error.
     fn simulated_logs(&self, instruction: &Instruction, payer: &dyn Signer) -> Result<Vec<String>> {
         let rpc = self.env.client.rpc();
@@ -1069,6 +1459,11 @@ impl ShapeRing<'_> {
             Spend::Rail(RingRail::Delegate | RingRail::AnonymousDelegate) => &self.delegate,
         }
     }
+}
+
+/// A buffer of its own per frame, the frame's salt never repeats.
+fn frame_nonce(salt: &[u8; 16]) -> Result<u64> {
+    Ok(u64::from_le_bytes(salt[..8].try_into()?))
 }
 
 /// The anonymous rail leaves to one target, the confidential rail pays distinct owners.
@@ -1100,23 +1495,35 @@ fn ring_openings(outputs: &[SppProofOutputUtxo]) -> Result<Vec<Opened>> {
 
 #[test]
 fn anonymous_widest_eight_output_transfer_settles() -> Result<()> {
-    let env = setup()?;
-    let mut coverage = Coverage::default();
-    let ring = ColumnSetup {
-        env: &env,
-        column: Column::Anonymous,
-        program: custom_ring_program_id()?,
-    }
-    .configure(&mut coverage)?;
-    ring.settled(
-        ShapeTransfer {
-            shape: Shape::IN5_OUT8,
-            inputs: ring.utxos(5, &mut coverage)?,
-            spend: Spend::Rail(RingRail::Anonymous),
-            legs: Vec::new(),
-        },
-        &mut coverage,
-    )
+    configured(Column::Anonymous, |ring, coverage| {
+        ring.settled(
+            ShapeTransfer {
+                shape: Shape::IN5_OUT8,
+                inputs: ring.utxos(5, coverage)?,
+                spend: Spend::Rail(RingRail::Anonymous),
+                legs: Vec::new(),
+                buffered: false,
+            },
+            coverage,
+        )
+    })
+}
+
+/// A key missing here has no fixture to select it, the catalog must name a column or a reason.
+#[test]
+fn no_wallet_operation_selects_only_the_multi_slot_deposits() {
+    let unreachable: Vec<RingCircuit> = RING_KEYS
+        .iter()
+        .map(|key| key.circuit)
+        .filter(|circuit| key_owner(*circuit).is_none())
+        .collect();
+    assert_eq!(
+        unreachable,
+        [
+            RingCircuit::Deposit { capacity: 4 },
+            RingCircuit::Deposit { capacity: 8 },
+        ]
+    );
 }
 
 #[test]
@@ -1178,12 +1585,15 @@ fn configured(
     column: Column,
     run: impl FnOnce(&ShapeRing<'_>, &mut Coverage) -> Result<()>,
 ) -> Result<()> {
-    let env = setup()?;
+    let mut env = setup()?;
+    let gate = KeyGate::default();
+    env.client = env.client_with(|| AsyncProverClient::with_client(prover_url(), gate.clone()));
     let mut coverage = Coverage::default();
     let ring = ColumnSetup {
         env: &env,
         column,
         program: custom_ring_program_id()?,
+        gate: &gate,
     }
     .configure(&mut coverage)?;
     run(&ring, &mut coverage)
@@ -1214,38 +1624,65 @@ fn sweep_delegate() -> Result<()> {
     sweep(Column::Delegate)
 }
 
+#[test]
+fn sweep_salted() -> Result<()> {
+    sweep(Column::Salted)
+}
+
 fn sweep(column: Column) -> Result<()> {
-    let env = setup()?;
-    let mut coverage = Coverage::default();
-    let ring = ColumnSetup {
-        env: &env,
-        column,
-        program: custom_ring_program_id()?,
-    }
-    .configure(&mut coverage)?;
-    ring.sweep(&mut coverage)?;
-    match column {
-        Column::Anonymous => ring.entries(&mut coverage)?,
-        Column::Delegate => ring.sixteen_output_transfer(&mut coverage)?,
-        Column::Confidential => ring.in_proof_owners(&mut coverage)?,
-        Column::ConfidentialPolicy => {
-            ring.in_proof_owners(&mut coverage)?;
-            ring.wide_withdrawals(&mut coverage)?;
-            ring.spl_withdrawals(&mut coverage)?;
+    configured(column, |ring, coverage| {
+        ring.sweep(coverage)?;
+        ring.catalog_keys(coverage)?;
+        match column {
+            Column::Anonymous | Column::Salted => {}
+            Column::Delegate => ring.sixteen_output_transfer(coverage)?,
+            Column::Confidential => ring.in_proof_owners(coverage)?,
+            Column::ConfidentialPolicy => {
+                ring.in_proof_owners(coverage)?;
+                ring.wide_withdrawals(coverage)?;
+                ring.spl_withdrawals(coverage)?;
+            }
+            Column::AnonymousPolicy => {
+                ring.wide_withdrawals(coverage)?;
+                ring.spl_withdrawals(coverage)?;
+            }
         }
-        Column::AnonymousPolicy => {
-            ring.wide_withdrawals(&mut coverage)?;
-            ring.spl_withdrawals(&mut coverage)?;
+        if matches!(
+            column,
+            Column::Anonymous | Column::Confidential | Column::Delegate
+        ) {
+            ring.merges(coverage)?;
         }
-    }
-    if matches!(
-        column,
-        Column::Anonymous | Column::Confidential | Column::Delegate
-    ) {
-        ring.merges(&mut coverage)?;
-    }
-    coverage.assert_transfer_keys(column);
-    Ok(())
+        coverage.assert_column_keys(column);
+        Ok(())
+    })
+}
+
+#[test]
+fn sweep_full_capacity_confidential() -> Result<()> {
+    full_capacity(Column::Confidential)
+}
+
+#[test]
+fn sweep_full_capacity_confidential_policy() -> Result<()> {
+    full_capacity(Column::ConfidentialPolicy)
+}
+
+#[test]
+fn sweep_full_capacity_anonymous_policy() -> Result<()> {
+    full_capacity(Column::AnonymousPolicy)
+}
+
+#[test]
+fn sweep_full_capacity_salted() -> Result<()> {
+    full_capacity(Column::Salted)
+}
+
+/// Apart from the one proof per key, every row must settle at the key its load selects.
+fn full_capacity(column: Column) -> Result<()> {
+    configured(column, |ring, coverage| {
+        ring.run_cases(column.full_capacity(), coverage)
+    })
 }
 
 #[test]
@@ -1268,43 +1705,18 @@ fn sanity_anonymous_wide_keys() -> Result<()> {
     sanity_keys(Column::AnonymousPolicy)
 }
 
+#[test]
+fn sanity_salted_keys() -> Result<()> {
+    sanity_keys(Column::Salted)
+}
+
 fn sanity_keys(column: Column) -> Result<()> {
     configured(column, |ring, coverage| {
-        let wide = matches!(column, Column::ConfidentialPolicy | Column::AnonymousPolicy);
-        let destinations = funded_destinations(ring.env, 5)?;
-        for shape in KeyFamily::Anonymous.shapes() {
-            if wide != wide_key(shape) {
-                continue;
-            }
-            let legs = match wide {
-                true => past_narrow_legs(shape)?,
-                false => 0,
-            };
-            ring.settled(
-                ShapeTransfer {
-                    shape: Shape::new(1, shape.outputs.into()),
-                    inputs: ring.utxos(1, coverage)?,
-                    spend: Spend::Rail(column.rail()),
-                    legs: (0..legs)
-                        .map(|index| {
-                            Leg::Sol(
-                                destinations[if column.rail() == RingRail::Anonymous {
-                                    0
-                                } else {
-                                    index.min(4)
-                                }],
-                            )
-                        })
-                        .collect(),
-                },
-                coverage,
-            )?;
-        }
+        ring.catalog_keys(coverage)?;
         if column == Column::Anonymous {
-            ring.entries(coverage)?;
             ring.merges(coverage)?;
         }
-        coverage.assert_transfer_keys(column);
+        coverage.assert_column_keys(column);
         Ok(())
     })
 }
@@ -1319,6 +1731,7 @@ fn sanity_in_proof_and_delegate_modes() -> Result<()> {
                     inputs: ring.utxos(1, coverage)?,
                     spend,
                     legs: Vec::new(),
+                    buffered: false,
                 },
                 coverage,
             )?;
@@ -1337,6 +1750,7 @@ fn sanity_wide_withdrawal_heap_sentinel() -> Result<()> {
                 inputs: ring.utxos(1, coverage)?,
                 spend: Spend::Rail(RingRail::Anonymous),
                 legs: vec![Leg::Sol(destination); 32],
+                buffered: false,
             },
             coverage,
         )

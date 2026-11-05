@@ -169,7 +169,8 @@ impl RingNotes<'_> {
             asset: self.asset,
             amount: self.amount,
             cosigner: None,
-            list_salt: None,
+            // The salt the owner enrolled under, a salted list refuses an enrolled recipient with none.
+            list_salt: self.owner.list_salt(&self.ring.program_id()).ok(),
         }
     }
 
@@ -405,6 +406,47 @@ pub struct EnrollOwners<'a> {
 
 impl EnrollOwners<'_> {
     pub fn send(self) -> Result<()> {
+        self.enroll()?;
+        let owners: Vec<Address> = self.owners.iter().map(|owner| owner.pubkey()).collect();
+        ApplyOwnerEnrollments {
+            ring: self.ring,
+            owners: &owners,
+            env: self.env,
+        }
+        .send()
+    }
+
+    /// One apply of the whole batch, a partial read of the pending queue would select a narrower key.
+    pub fn send_in_one_batch(self) -> Result<()> {
+        let env = self.env;
+        self.enroll()?;
+        let registry = env
+            .run(self.ring.require_policy(env.client.as_async()))?
+            .tracking;
+        wait_for("the whole pending batch", || {
+            let pending =
+                env.client
+                    .indexer()
+                    .get_pending_enrollments(GetPendingEnrollmentsRequest {
+                        registry: registry.into(),
+                        after: None,
+                        limit: u64::try_from(self.owners.len())?,
+                    })?;
+            Ok(match pending.enrollments.len() == self.owners.len() {
+                true => Probe::Ready(()),
+                false => Probe::NotYet,
+            })
+        })?;
+        let owners: Vec<Address> = self.owners.iter().map(|owner| owner.pubkey()).collect();
+        ApplyOwnerEnrollments {
+            ring: self.ring,
+            owners: &owners,
+            env,
+        }
+        .send()
+    }
+
+    fn enroll(&self) -> Result<()> {
         let env = self.env;
         let payer = env.payer.pubkey();
         let tracking_registry = env
@@ -445,13 +487,7 @@ impl EnrollOwners<'_> {
             }
             .send(&[instruction])?;
         }
-        let owners: Vec<Address> = self.owners.iter().map(|owner| owner.pubkey()).collect();
-        ApplyOwnerEnrollments {
-            ring: self.ring,
-            owners: &owners,
-            env,
-        }
-        .send()
+        Ok(())
     }
 }
 

@@ -1,9 +1,7 @@
 use super::*;
-use custom_ring_interface::{mint_policy_write, RecordWriteData, WriteRecordsIxData};
 use custom_ring_test_validator::{
     policy::ApplyOwnerEnrollments, shared::STORAGE_CPI_OWNER_PROGRAM,
 };
-use zolana_ring_policy::{ListChange, ListSet};
 
 #[test]
 fn every_apply_capacity_settles_and_refuses_an_altered_root() -> Result<()> {
@@ -17,25 +15,9 @@ fn every_apply_capacity_settles_and_refuses_an_altered_root() -> Result<()> {
     }
     .send(&env.client)?;
     for count in [1, 2, 4, 8, 16] {
-        let writes = (0..count)
-            .map(|_| {
-                let owner = ShieldedKeypair::new_ed25519()?;
-                Ok(RecordWriteData {
-                    member: *owner_member(&owner)?.as_bytes(),
-                    lists: WriteRecordsIxData::new(
-                        ListChange {
-                            set: ListSet::single(ListId::Allow),
-                            clear: ListSet::EMPTY,
-                        }
-                        .check()?,
-                    ),
-                    mint_policy: mint_policy_write(None),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
         StorageRecords {
             ring,
-            writes,
+            writes: allow_writes(count)?,
             env: &env,
         }
         .send()?;

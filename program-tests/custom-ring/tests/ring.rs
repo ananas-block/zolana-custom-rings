@@ -42,23 +42,23 @@ mod sanity_mixed_owners;
 
 #[path = "ring/anonymous.rs"]
 mod anonymous;
+#[cfg(feature = "proofs")]
+#[path = "ring/buffered_validation.rs"]
+mod buffered_validation;
 #[path = "ring/exemptions.rs"]
 mod exemptions;
+#[cfg(feature = "proofs")]
+#[path = "ring/full_load_validation.rs"]
+mod full_load_validation;
 #[path = "ring/lifecycle.rs"]
 mod lifecycle;
 #[path = "ring/merge.rs"]
 mod merge;
-#[cfg(feature = "proofs")]
-#[path = "ring/buffered_validation.rs"]
-mod buffered_validation;
-#[cfg(feature = "proofs")]
-#[path = "ring/full_load_validation.rs"]
-mod full_load_validation;
+#[path = "ring/migration.rs"]
+mod migration;
 #[cfg(feature = "proofs")]
 #[path = "ring/one_key.rs"]
 mod one_key;
-#[path = "ring/migration.rs"]
-mod migration;
 #[path = "ring/policy.rs"]
 mod policy;
 #[path = "ring/relay.rs"]
@@ -411,6 +411,37 @@ fn land<'a>(
         signers,
     }
     .settle(&env.client)
+}
+
+/// Each write takes a fresh member's first record, `count` selects the apply key.
+fn allow_writes(count: usize) -> Result<Vec<custom_ring_interface::RecordWriteData>> {
+    (0..count)
+        .map(|_| {
+            let owner = ShieldedKeypair::new_ed25519()?;
+            Ok(custom_ring_interface::RecordWriteData {
+                member: *owner_member(&owner)?.as_bytes(),
+                lists: custom_ring_interface::WriteRecordsIxData::new(
+                    zolana_ring_policy::ListChange {
+                        set: zolana_ring_policy::ListSet::single(ListId::Allow),
+                        clear: zolana_ring_policy::ListSet::EMPTY,
+                    }
+                    .check()?,
+                ),
+                mint_policy: custom_ring_interface::mint_policy_write(None),
+            })
+        })
+        .collect()
+}
+
+/// A ring proof request, `None` on SPP's proofs and the prover's polls.
+fn ring_prover_request(body: &[u8]) -> Option<serde_json::Value> {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .filter(|body| {
+            body["circuitType"]
+                .as_str()
+                .is_some_and(|circuit| circuit.starts_with("custom-ring-"))
+        })
 }
 
 fn frame(instruction: &Instruction, rail: RingRail) -> Result<RingTransactData<'_>> {
