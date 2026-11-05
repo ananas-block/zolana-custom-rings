@@ -1,3 +1,5 @@
+// Refusals of a malformed pool shape, before any wire is read.
+
 package policy
 
 import (

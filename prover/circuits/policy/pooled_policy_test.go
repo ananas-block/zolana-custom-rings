@@ -1,3 +1,5 @@
+// Refusals of the pooled policy, a subject reference naming another member and a pool past its capacity.
+
 package policy_test
 
 import (

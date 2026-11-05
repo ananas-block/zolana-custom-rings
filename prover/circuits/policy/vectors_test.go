@@ -1,3 +1,5 @@
+// Pins the table hash and rule decoding to their Rust twins over shared vectors.
+
 package policy_test
 
 import (

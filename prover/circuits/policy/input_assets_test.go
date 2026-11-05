@@ -1,3 +1,5 @@
+// Refusals of the input asset rules, a zero value delisted input and an input asset subject the root does not hold.
+
 package policy_test
 
 import (
