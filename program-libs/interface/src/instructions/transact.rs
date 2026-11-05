@@ -1,5 +1,35 @@
 //! The compact `Transfer` and `AuthorityTransfer` data, read in place and expanded into
 //! the SPP `TransactIxData` the SPP proof's external data hash covers.
+//!
+//! An SPP reader knows `TransactIxData`. A frame carries the same transaction, adds the ring proof and
+//! leaves out what the shape and the ring account fix. `transact_ix_data` rebuilds SPP's exact fields,
+//! so SPP verifies its own proof and external data hash with no knowledge of the frame. The ring
+//! statement and the CPI data read one parse, a statement over bytes other than the settled ones would
+//! prove nothing about them.
+//!
+//! Read after `docs/design/owner-rails.md`, `program-libs/interface/src/accounts/state.rs`. Read before
+//! `program-libs/interface/src/proof/statement.rs`, `programs/custom-ring/src/instructions/transfer/processor.rs`.
+//!
+//! The sections in wire order, each with what it is to SPP.
+//! 1. Byte 0, [`transact_flag`], one bit per optional section. SPP never sees it.
+//! 2. Bytes 1 to 3, `FrameHeader`, SPP's shape index, the nullifier count `n` and the published slot count `m`, flags in their top bits. SPP's selector and vector lengths follow from them.
+//! 3. Byte 4, the approval mask. A statement element, SPP never sees it.
+//! 4. The ring proof. SPP never sees it.
+//! 5. The revisions, tracking, then own and curator under their flags. SPP never sees them. Each names a root the program reads from the bound registry.
+//! 6. `expiry_unix_ts`, `tx_viewing_u` and `salt`. SPP's fields, the expiry in four bytes and the key without its 0x04 tag.
+//! 7. [`FrameExtensions`] under `EXTENSIONS`. SPP's `data_hash`, `ring_data_hash`, application messages and cached selector, then `approval_totals` and `signer_data_counts`, statement elements SPP never sees.
+//! 8. `interface_transfers`, SPP's public legs as sent, then under `OWN_ROOT` the SPL withdrawal token owners the program checks for the policy's withdrawal hash.
+//! 9. Two bitmaps over `m`, exits and bodiless slots.
+//! 10. One [`RingOutput`] per slot, SPP's `utxo_hash`, `owner_tag` and `data`. An exit carries the full tag and SPP's scheme 3 body, any other slot a short tag and the ring's scheme 10 body. A bodiless slot takes `data: None`.
+//! 11. [`Replies`] under `REPLY_METADATA`, appended to each scheme 10 body inside SPP's `data`.
+//! 12. [`FramedSenderBundle`] on an anonymous frame, SPP's first message under scheme 9.
+//! 13. The envelope, the records, and the tails under `has_data`. Together the auditor message, SPP's last message, with the auditor's `u` as its view tag.
+//! 14. `private_tx_hash`. SPP's, the ring proof reopens it over the slots it opened.
+//! 15. [`AnonymousProofData`] or [`InProofOwner`]. The BSB22 commitment and default owner tag of SPP's anonymous selector, and the in proof owner's key for the statement.
+//! 16. `spp_proof`. SPP's, with `b` compressed, and the expansion decompresses it.
+//! 17. The nullifiers and input trees. SPP's `inputs` and `tree_contexts`.
+//!
+//! What binds what. SPP's external data hash covers `TransactIxData` through `messages` and the settlement accounts, so every section from 6 to 13 it receives but the cached selector, and it binds bytes alone. The ring statement covers the output hashes, the auditor message, the salt, the viewing key and nullifier 0. SPP's proof holds an exit's tag to its owner. No proof constrains a non-exit slot's tag, a recipient body, the sender bundle or a reply.
 
 use solana_address::Address;
 use spr_hasher::{primitives::solana_owner_identity, HasherError};
@@ -209,6 +239,66 @@ impl core::fmt::Display for RingRail {
     }
 }
 
+/// The data of `Transfer` and `AuthorityTransfer`, every count ahead of the sections it sizes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RingTransactData<'a> {
+    pub rail: RingRail,
+    /// SPP shape inputs.
+    pub n_in: u8,
+    /// SPP shape outputs, the key's `N`.
+    pub n_out: u8,
+    /// The ring's, verified ahead of the SPP call.
+    pub proof: &'a CustomRingProof,
+    /// Every rail reads it, the output predicate needs a served root.
+    pub tracking_revision: Revision,
+    /// Present exactly on a ring with own records, off the delegate rails.
+    pub own_revision: Option<Revision>,
+    /// Present exactly on a policy ring, off the delegate rails.
+    pub policy: Option<PolicyProof>,
+    /// Token owners checked on chain in SPL withdrawal order, present with `own_revision`.
+    pub spl_withdrawal_owners: &'a [[u8; 32]],
+    /// The proof computes the mask, the program demands a co-signer per set bit.
+    pub approval: ApprovalMask,
+    /// The statement's `R == 0`, the frame spends no note.
+    pub no_spend: bool,
+    /// The anonymous rail with every live owner a published signer, SPP's confidential rail settles it.
+    pub public_owners: bool,
+    /// SPP's expiry, the expansion widens it.
+    pub expiry_unix_ts: u32,
+    /// SPP's `tx_viewing_pk` without its tag, the proof holds every published blinding to the secret the envelope seals.
+    pub tx_viewing_u: &'a [u8; 32],
+    /// Random per attempt, a resend under the same first nullifier reuses no keystream.
+    pub salt: &'a [u8; 16],
+    pub extensions: FrameExtensions<'a>,
+    /// SPP's public legs, forwarded as sent.
+    pub interface_transfers: Vec<InterfaceTransfer>,
+    /// Slots may carry data hashes, the proof opens them in the tails and holds them to zero otherwise.
+    pub has_data: bool,
+    /// The key with entry capacity, the one that also spends a default-ring note.
+    pub entry: bool,
+    /// The key with its full owner rows, a hidden owner count needs the frame to name the key.
+    pub wide_owners: bool,
+    /// The `m` published slots, slot `i` keeps its index in every derivation.
+    pub outputs: Vec<RingOutput<'a>>,
+    /// Set exactly under `REPLY_METADATA`.
+    pub replies: Option<Replies<'a>>,
+    /// Present exactly on the anonymous rail.
+    pub sender: Option<FramedSenderBundle<'a>>,
+    /// `envelope_ct`, the transmitted length is the stream layout's.
+    pub envelope: &'a [u8],
+    /// SPP's, the proof reopens it over the slots it opened and ties both proofs to one transaction.
+    pub private_tx_hash: &'a [u8; 32],
+    /// Present exactly on the anonymous rail with a hidden sender.
+    pub anonymous: Option<AnonymousProofData<'a>>,
+    /// Set exactly on the in-proof owner rail, SPP's anonymous rail of a confidential ring.
+    pub in_proof_owner: Option<InProofOwner<'a>>,
+    /// SPP's with `b` compressed, `expand` decompresses it for SPP's verifier.
+    pub spp_proof: &'a PlainGroth16Proof,
+    /// One per spent input slot SPP publishes.
+    pub nullifiers: &'a [[u8; 32]],
+    pub input_trees: InputTrees,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyProof {
     /// Set exactly when a source names a curator registry.
@@ -236,160 +326,6 @@ pub struct FrameExtensions<'a> {
     pub approval_totals: Option<&'a [u8; 32]>,
     /// Present exactly while a count is nonzero, an absent one reads zero in the statement.
     pub signer_data_counts: Option<SignerDataCounts>,
-}
-
-impl<'a> FrameExtensions<'a> {
-    fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-
-    fn read(bytes: &mut Bytes<'a>) -> Result<Self, CustomRingError> {
-        let flags = bytes.byte()?;
-        if flags & !extension_flag::KNOWN != 0 {
-            return Err(CustomRingError::FlagNotAllowed);
-        }
-        let has = |bit: u8| flags & bit != 0;
-        let data_hash = has(extension_flag::DATA_HASH)
-            .then(|| bytes.array())
-            .transpose()?;
-        let ring_data_hash = has(extension_flag::RING_DATA_HASH)
-            .then(|| bytes.array())
-            .transpose()?;
-        let messages = match has(extension_flag::MESSAGES) {
-            false => Vec::new(),
-            true => {
-                let count = bytes.byte()?;
-                (0..count)
-                    .map(|_| {
-                        let view_tag = bytes.array()?;
-                        let len = bytes.u16()?;
-                        Ok(AppMessage {
-                            view_tag,
-                            data: bytes.take(usize::from(len))?,
-                        })
-                    })
-                    .collect::<Result<_, CustomRingError>>()?
-            }
-        };
-        let cache = has(extension_flag::CACHE)
-            .then(|| read_cache_access(bytes))
-            .transpose()?;
-        let approval_totals = has(extension_flag::APPROVAL_TOTALS)
-            .then(|| bytes.array())
-            .transpose()?;
-        let signer_data_counts = has(extension_flag::SIGNER_DATA_COUNTS)
-            .then(|| SignerDataCounts::new(u64::from_le_bytes(*bytes.array()?)))
-            .transpose()?;
-        Ok(Self {
-            data_hash,
-            ring_data_hash,
-            messages,
-            cache,
-            approval_totals,
-            signer_data_counts,
-        })
-    }
-
-    fn write(&self, out: &mut Vec<u8>) -> Result<(), CustomRingError> {
-        let flag = |set: bool, bit: u8| if set { bit } else { 0 };
-        out.push(
-            flag(self.data_hash.is_some(), extension_flag::DATA_HASH)
-                | flag(
-                    self.ring_data_hash.is_some(),
-                    extension_flag::RING_DATA_HASH,
-                )
-                | flag(!self.messages.is_empty(), extension_flag::MESSAGES)
-                | flag(self.cache.is_some(), extension_flag::CACHE)
-                | flag(
-                    self.approval_totals.is_some(),
-                    extension_flag::APPROVAL_TOTALS,
-                )
-                | flag(
-                    self.signer_data_counts.is_some(),
-                    extension_flag::SIGNER_DATA_COUNTS,
-                ),
-        );
-        if let Some(hash) = self.data_hash {
-            out.extend_from_slice(hash);
-        }
-        if let Some(hash) = self.ring_data_hash {
-            out.extend_from_slice(hash);
-        }
-        if !self.messages.is_empty() {
-            out.push(count_byte(self.messages.len())?);
-            for message in &self.messages {
-                let len = u16::try_from(message.data.len())
-                    .map_err(|_| CustomRingError::OutputBodyLength)?;
-                out.extend_from_slice(message.view_tag);
-                out.extend_from_slice(&len.to_le_bytes());
-                out.extend_from_slice(message.data);
-            }
-        }
-        if let Some(cache) = &self.cache {
-            write_cache_access(cache, out);
-        }
-        if let Some(totals) = self.approval_totals {
-            out.extend_from_slice(totals);
-        }
-        if let Some(counts) = self.signer_data_counts {
-            out.extend_from_slice(&counts.packed().to_le_bytes());
-        }
-        Ok(())
-    }
-
-    fn frame_len(&self) -> usize {
-        const FIELD: usize = 32;
-        1 + self.data_hash.map_or(0, |_| FIELD)
-            + self.ring_data_hash.map_or(0, |_| FIELD)
-            + self.approval_totals.map_or(0, |_| FIELD)
-            + self
-                .signer_data_counts
-                .map_or(0, |_| core::mem::size_of::<u64>())
-            + match self.messages.is_empty() {
-                true => 0,
-                false => {
-                    1 + self
-                        .messages
-                        .iter()
-                        .map(|message| FIELD + 2 + message.data.len())
-                        .sum::<usize>()
-                }
-            }
-            + self.cache.map_or(0, |_| CACHE_ACCESS_LEN)
-    }
-}
-
-pub mod extension_flag {
-    pub const DATA_HASH: u8 = 1 << 0;
-    pub const RING_DATA_HASH: u8 = 1 << 1;
-    pub const MESSAGES: u8 = 1 << 2;
-    pub const CACHE: u8 = 1 << 3;
-    pub const APPROVAL_TOTALS: u8 = 1 << 4;
-    pub const SIGNER_DATA_COUNTS: u8 = 1 << 5;
-    pub const KNOWN: u8 =
-        DATA_HASH | RING_DATA_HASH | MESSAGES | CACHE | APPROVAL_TOTALS | SIGNER_DATA_COUNTS;
-}
-
-const CACHE_ACCESS_LEN: usize = 8 + 2 * MAX_CACHE_WRITES;
-
-fn read_cache_access(bytes: &mut Bytes<'_>) -> Result<CacheAccess, CustomRingError> {
-    let read_bitmap = u64::from_le_bytes(*bytes.array()?);
-    let mut write_slots = CacheAccess::NO_WRITES;
-    for write in &mut write_slots {
-        let [output, slot] = *bytes.array()?;
-        *write = CacheWrite { output, slot };
-    }
-    Ok(CacheAccess {
-        read_bitmap,
-        write_slots,
-    })
-}
-
-fn write_cache_access(cache: &CacheAccess, out: &mut Vec<u8>) {
-    out.extend_from_slice(&cache.read_bitmap.to_le_bytes());
-    for write in &cache.write_slots {
-        out.extend_from_slice(&[write.output, write.slot]);
-    }
 }
 
 /// The owner SPP's anonymous rail verifies and hides, the delivered audit publishes it.
@@ -639,66 +575,18 @@ pub struct TransferBinding<'a> {
     pub withdrawal_hash: &'a [u8; 32],
 }
 
-/// The data of `Transfer` and `AuthorityTransfer`, every count ahead of the sections it sizes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RingTransactData<'a> {
-    pub rail: RingRail,
-    /// SPP shape inputs.
-    pub n_in: u8,
-    /// SPP shape outputs, the key's `N`.
-    pub n_out: u8,
-    pub proof: &'a CustomRingProof,
-    /// Every rail reads it, the output predicate needs a served root.
-    pub tracking_revision: Revision,
-    /// Present exactly on a ring with own records, off the delegate rails.
-    pub own_revision: Option<Revision>,
-    /// Present exactly on a policy ring, off the delegate rails.
-    pub policy: Option<PolicyProof>,
-    /// Token owners checked on chain in SPL withdrawal order, present with `own_revision`.
-    pub spl_withdrawal_owners: &'a [[u8; 32]],
-    pub approval: ApprovalMask,
-    pub no_spend: bool,
-    /// The anonymous rail with every live owner a published signer, SPP's confidential rail settles it.
-    pub public_owners: bool,
-    pub expiry_unix_ts: u32,
-    pub tx_viewing_u: &'a [u8; 32],
-    /// Random per attempt, a resend under the same first nullifier reuses no keystream.
-    pub salt: &'a [u8; 16],
-    pub extensions: FrameExtensions<'a>,
-    pub interface_transfers: Vec<InterfaceTransfer>,
-    pub has_data: bool,
-    pub entry: bool,
-    /// The key with its full owner rows, a hidden owner count needs the frame to name the key.
-    pub wide_owners: bool,
-    /// The `m` published slots, slot `i` keeps its index in every derivation.
-    pub outputs: Vec<RingOutput<'a>>,
-    /// Set exactly under `REPLY_METADATA`.
-    pub replies: Option<Replies<'a>>,
-    /// Present exactly on the anonymous rail.
-    pub sender: Option<FramedSenderBundle<'a>>,
-    /// `envelope_ct`, the transmitted length is the stream layout's.
-    pub envelope: &'a [u8],
-    pub private_tx_hash: &'a [u8; 32],
-    /// Present exactly on the anonymous rail with a hidden sender.
-    pub anonymous: Option<AnonymousProofData<'a>>,
-    /// Set exactly on the in-proof owner rail, SPP's anonymous rail of a confidential ring.
-    pub in_proof_owner: Option<InProofOwner<'a>>,
-    pub spp_proof: &'a PlainGroth16Proof,
-    /// One per spent input slot SPP publishes.
-    pub nullifiers: &'a [[u8; 32]],
-    pub input_trees: InputTrees,
-}
-
 impl<'a> RingTransactData<'a> {
     /// Every length fixed by the flags, the shape and the counts, trailing bytes refused.
     pub fn parse(data: &'a [u8], rail: RingRail) -> Result<ParsedTransact<'a>, CustomRingError> {
         let mut bytes = Bytes::new(data, CustomRingError::RingTransactLength);
+        // 1. The flags and the header admit the rail's sections and name the key, every later length follows from them.
         let flags = TransactFlags(bytes.byte()?);
         flags.check(rail)?;
         let header = FrameHeader::read(&mut bytes, rail)?;
         let input_count = header.input_count;
         let shape = rail.key_shape(&header)?;
         let output_count = usize::from(header.output_count);
+        // 2. The ring's own fields, ahead of everything SPP reads. A revision names a root, `roots` reads it.
         let approval = ApprovalMask::new(bytes.byte()?).ok_or(CustomRingError::FlagNotAllowed)?;
         let proof = bytes.pod()?;
         let tracking_revision = *bytes.pod()?;
@@ -715,6 +603,7 @@ impl<'a> RingTransactData<'a> {
                     .transpose()?,
             }),
         };
+        // 3. SPP's head and public legs pass as sent, `check_extensions` refuses a field off the rail.
         let expiry_unix_ts = bytes.u32()?;
         let tx_viewing_u = bytes.array()?;
         let salt = bytes.array()?;
@@ -728,6 +617,7 @@ impl<'a> RingTransactData<'a> {
             true => bytes.fields(crate::spl_withdrawal_count(&interface_transfers))?,
             false => &[],
         };
+        // 4. An exit with no body would leave its default-ring owner nothing to read.
         let exits = bytes.bitmap(output_count)?;
         let bodiless = bytes.bitmap(output_count)?;
         if exits & bodiless != 0 {
@@ -740,6 +630,8 @@ impl<'a> RingTransactData<'a> {
             capacity: usize::from(shape.outputs),
             has_data: header.flags.has_data,
         };
+        // 5. Each slot's fields for SPP. A non-exit tag travels short and regains its leading zeros, and a
+        // body length travels only under `has_data`, every other body has its plain length.
         let mut outputs = Vec::with_capacity(output_count);
         for slot in 0..output_count {
             let (exit, carries_body) = ((exits >> slot) & 1 == 1, (bodiless >> slot) & 1 == 0);
@@ -771,6 +663,7 @@ impl<'a> RingTransactData<'a> {
                 tail: None,
             });
         }
+        // 6. One reply length per frame, a hidden dummy then matches a recipient.
         let replies = match flags.has(transact_flag::REPLY_METADATA) {
             false => None,
             true => {
@@ -788,6 +681,7 @@ impl<'a> RingTransactData<'a> {
                 )
             }
         };
+        // 7. The bundle's length follows `m`, the frame spends no byte on it.
         let sender = match rail.anonymous_frame() {
             true => Some(FramedSenderBundle {
                 tag: bytes.array()?,
@@ -795,6 +689,7 @@ impl<'a> RingTransactData<'a> {
             }),
             false => None,
         };
+        // 8. The auditor message, each record replacing the placeholder its slot took in step 5.
         let envelope = bytes.take(stream.envelope().len)?;
         for output in &mut outputs {
             output.record = bytes.array()?;
@@ -804,6 +699,7 @@ impl<'a> RingTransactData<'a> {
                 output.tail = Some(bytes.array()?);
             }
         }
+        // 9. SPP's proof data, nullifiers and trees. A byte past them refuses.
         let private_tx_hash = bytes.array()?;
         let anonymous = (rail == RingRail::Anonymous && !header.flags.public_owners)
             .then(|| {
@@ -1088,6 +984,7 @@ impl<'a> RingTransactData<'a> {
         ring: &RingPolicy,
         roots: &LiveRoots<'_>,
     ) -> Result<TransferRoots, CustomRingError> {
+        // 1. The frame carries a section exactly where the rail reads that root, no bit the prover sets opens or skips a read.
         let read = RootRead::transfer(ring, self.rail.is_delegate());
         let policy = match (self.policy, read == RootRead::Policy) {
             (None, false) => None,
@@ -1106,9 +1003,11 @@ impl<'a> RingTransactData<'a> {
         if self.own_revision.is_some() != (read != RootRead::None) {
             return Err(CustomRingError::FlagNotAllowed);
         }
+        // 2. The delegate's proof clears the mask, a set bit has no proof behind it.
         if !self.approval.is_empty() && self.rail.is_delegate() {
             return Err(CustomRingError::UnexpectedApproval);
         }
+        // 3. Each root comes from its bound registry at the named revision, a retired root fails here ahead of the proof.
         let mut bound = TransferRoots {
             tracking_root: roots.tracking(self.tracking_revision)?,
             ..TransferRoots::default()
@@ -1164,6 +1063,7 @@ impl<'a> RingTransactData<'a> {
 
     /// The SPP selector of the data's shape and rail.
     pub fn circuit(&self) -> CircuitId {
+        // 1. An in-proof owner settles on SPP's anonymous rail though its ring is confidential, a public-owner frame on the confidential rail though its ring is anonymous.
         let circuit = match &self.in_proof_owner {
             Some(owner) => RingRail::Anonymous.circuit(self.n_in, self.n_out, owner.proof_data()),
             None => {
@@ -1181,6 +1081,7 @@ impl<'a> RingTransactData<'a> {
                     .circuit(self.n_in, self.n_out, proof_data)
             }
         };
+        // 2. Cached access and a delegate's exit each pick SPP's variant of that rail.
         match (circuit, self.extensions.cache) {
             (CircuitId::ConfidentialRingEddsa(n_in, n_out, slots), Some(access)) => {
                 CircuitId::ConfidentialRingEddsaCached(n_in, n_out, slots, access)
@@ -1329,6 +1230,7 @@ impl<'a> RingTransactData<'a> {
         ring: &RingPolicy,
         proof: TransactProof,
     ) -> Result<TransactIxData, CustomRingError> {
+        // The auditor's `u` without its tag, the program takes it from the account and a frame names no reader.
         let view_tag: [u8; 32] = core::array::from_fn(|i| ring.auditor_pubkey[i + 1]);
         Ok(TransactIxData {
             expiry_unix_ts: u64::from(self.expiry_unix_ts),
@@ -1403,6 +1305,161 @@ impl<'a> RingTransactData<'a> {
                 .filter(|(set, _)| *set)
                 .fold(0, |flags, (_, bit)| flags | bit),
         )
+    }
+}
+
+impl<'a> FrameExtensions<'a> {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn read(bytes: &mut Bytes<'a>) -> Result<Self, CustomRingError> {
+        let flags = bytes.byte()?;
+        if flags & !extension_flag::KNOWN != 0 {
+            return Err(CustomRingError::FlagNotAllowed);
+        }
+        let has = |bit: u8| flags & bit != 0;
+        let data_hash = has(extension_flag::DATA_HASH)
+            .then(|| bytes.array())
+            .transpose()?;
+        let ring_data_hash = has(extension_flag::RING_DATA_HASH)
+            .then(|| bytes.array())
+            .transpose()?;
+        let messages = match has(extension_flag::MESSAGES) {
+            false => Vec::new(),
+            true => {
+                let count = bytes.byte()?;
+                (0..count)
+                    .map(|_| {
+                        let view_tag = bytes.array()?;
+                        let len = bytes.u16()?;
+                        Ok(AppMessage {
+                            view_tag,
+                            data: bytes.take(usize::from(len))?,
+                        })
+                    })
+                    .collect::<Result<_, CustomRingError>>()?
+            }
+        };
+        let cache = has(extension_flag::CACHE)
+            .then(|| read_cache_access(bytes))
+            .transpose()?;
+        let approval_totals = has(extension_flag::APPROVAL_TOTALS)
+            .then(|| bytes.array())
+            .transpose()?;
+        let signer_data_counts = has(extension_flag::SIGNER_DATA_COUNTS)
+            .then(|| SignerDataCounts::new(u64::from_le_bytes(*bytes.array()?)))
+            .transpose()?;
+        Ok(Self {
+            data_hash,
+            ring_data_hash,
+            messages,
+            cache,
+            approval_totals,
+            signer_data_counts,
+        })
+    }
+
+    fn write(&self, out: &mut Vec<u8>) -> Result<(), CustomRingError> {
+        let flag = |set: bool, bit: u8| if set { bit } else { 0 };
+        out.push(
+            flag(self.data_hash.is_some(), extension_flag::DATA_HASH)
+                | flag(
+                    self.ring_data_hash.is_some(),
+                    extension_flag::RING_DATA_HASH,
+                )
+                | flag(!self.messages.is_empty(), extension_flag::MESSAGES)
+                | flag(self.cache.is_some(), extension_flag::CACHE)
+                | flag(
+                    self.approval_totals.is_some(),
+                    extension_flag::APPROVAL_TOTALS,
+                )
+                | flag(
+                    self.signer_data_counts.is_some(),
+                    extension_flag::SIGNER_DATA_COUNTS,
+                ),
+        );
+        if let Some(hash) = self.data_hash {
+            out.extend_from_slice(hash);
+        }
+        if let Some(hash) = self.ring_data_hash {
+            out.extend_from_slice(hash);
+        }
+        if !self.messages.is_empty() {
+            out.push(count_byte(self.messages.len())?);
+            for message in &self.messages {
+                let len = u16::try_from(message.data.len())
+                    .map_err(|_| CustomRingError::OutputBodyLength)?;
+                out.extend_from_slice(message.view_tag);
+                out.extend_from_slice(&len.to_le_bytes());
+                out.extend_from_slice(message.data);
+            }
+        }
+        if let Some(cache) = &self.cache {
+            write_cache_access(cache, out);
+        }
+        if let Some(totals) = self.approval_totals {
+            out.extend_from_slice(totals);
+        }
+        if let Some(counts) = self.signer_data_counts {
+            out.extend_from_slice(&counts.packed().to_le_bytes());
+        }
+        Ok(())
+    }
+
+    fn frame_len(&self) -> usize {
+        const FIELD: usize = 32;
+        1 + self.data_hash.map_or(0, |_| FIELD)
+            + self.ring_data_hash.map_or(0, |_| FIELD)
+            + self.approval_totals.map_or(0, |_| FIELD)
+            + self
+                .signer_data_counts
+                .map_or(0, |_| core::mem::size_of::<u64>())
+            + match self.messages.is_empty() {
+                true => 0,
+                false => {
+                    1 + self
+                        .messages
+                        .iter()
+                        .map(|message| FIELD + 2 + message.data.len())
+                        .sum::<usize>()
+                }
+            }
+            + self.cache.map_or(0, |_| CACHE_ACCESS_LEN)
+    }
+}
+
+/// The byte leading [`FrameExtensions`], one bit per optional field in wire order.
+pub mod extension_flag {
+    pub const DATA_HASH: u8 = 1 << 0;
+    pub const RING_DATA_HASH: u8 = 1 << 1;
+    pub const MESSAGES: u8 = 1 << 2;
+    pub const CACHE: u8 = 1 << 3;
+    pub const APPROVAL_TOTALS: u8 = 1 << 4;
+    pub const SIGNER_DATA_COUNTS: u8 = 1 << 5;
+    pub const KNOWN: u8 =
+        DATA_HASH | RING_DATA_HASH | MESSAGES | CACHE | APPROVAL_TOTALS | SIGNER_DATA_COUNTS;
+}
+
+const CACHE_ACCESS_LEN: usize = 8 + 2 * MAX_CACHE_WRITES;
+
+fn read_cache_access(bytes: &mut Bytes<'_>) -> Result<CacheAccess, CustomRingError> {
+    let read_bitmap = u64::from_le_bytes(*bytes.array()?);
+    let mut write_slots = CacheAccess::NO_WRITES;
+    for write in &mut write_slots {
+        let [output, slot] = *bytes.array()?;
+        *write = CacheWrite { output, slot };
+    }
+    Ok(CacheAccess {
+        read_bitmap,
+        write_slots,
+    })
+}
+
+fn write_cache_access(cache: &CacheAccess, out: &mut Vec<u8>) {
+    out.extend_from_slice(&cache.read_bitmap.to_le_bytes());
+    for write in &cache.write_slots {
+        out.extend_from_slice(&[write.output, write.slot]);
     }
 }
 

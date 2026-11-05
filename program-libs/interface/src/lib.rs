@@ -1,5 +1,27 @@
 //! Account layouts, instruction data, errors and statements of the custom ring
 //! program, shared by the program, the SDKs and the services.
+//!
+//! # Reading guide
+//!
+//! For a reader who knows SPP and has not seen a ring. SPP verifies one proof and settles notes. A ring
+//! adds a second proof over the same transaction. The ring program rebuilds that proof's statement from
+//! its accounts and the frame, then forwards SPP's own data under the ring PDA's signature. Paths sit
+//! under `program-libs/interface/src/` unless they say otherwise.
+//!
+//! 1. `docs/spec.md`, `docs/design/proof-composition.md`. What a ring enforces, and the side enforcing each guarantee.
+//! 2. `accounts/state.rs`. The ring account, its pinned table, and the registries a frame may read.
+//! 3. `accounts/member_registry.rs`, `accounts/storage.rs`, `accounts/tracking.rs`. The policy and tracking trees, the root history, zero grace and the floor.
+//! 4. `instructions/transact.rs`. The frame, each section named against SPP's `TransactIxData`.
+//! 5. `proof/statement.rs`, `proof/domain.rs`. The statement in element order, with its Go twins.
+//! 6. `proof/audit_stream.rs`, `proof/disclosure.rs`, `codec/output.rs`, `codec/stream.rs`. What the auditor and a recipient read of each slot.
+//! 7. `proof/key_catalog.rs`, `proof/ring_keys.rs`, `proof/verification.rs`. The key serving each frame.
+//! 8. `instructions/deposit.rs`, `instructions/deposit_audit.rs`, `instructions/merge.rs`, `instructions/withdrawals.rs`, `instructions/anonymous_exit.rs`, `instructions/cosign.rs`. The other paths.
+//! 9. `accounts/frame_buffer.rs`. A frame too large for one transaction.
+//!
+//! Beside the crate, `program-libs/policy/src/rule_table/mod.rs` holds the rule table,
+//! `program-libs/member-registry/src/lib.rs` the trees, `programs/storage/src/lib.rs` the program
+//! that keeps their roots, `programs/custom-ring/src/instructions/transfer/processor.rs` the transfer's
+//! entry point and `prover/circuits/transfer/transfer.go` its circuit.
 
 #[path = "instructions/anonymous_exit.rs"]
 pub mod anonymous_exit;
