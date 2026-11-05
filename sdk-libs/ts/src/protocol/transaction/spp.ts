@@ -30,13 +30,6 @@ export const RING_AUTHORITY_SHAPES: readonly Shape[] = Object.freeze(
 /** The widest spend a ring authority transaction takes. */
 export const RING_AUTHORITY_MAX_INPUTS = Math.max(...RING_AUTHORITY_WIDTHS);
 
-/** Rust `Shape::is_ring_authority`. */
-export function isRingAuthorityShape(shape: Shape): boolean {
-  return RING_AUTHORITY_SHAPES.some(
-    (candidate) => candidate.inputs === shape.inputs && candidate.outputs === shape.outputs,
-  );
-}
-
 /** SPP's public slots in first-use order, Rust `PublicSlots::fold`, zero past the used slots. */
 export interface PublicSlots {
   /** `hash_bytes` of each mint, SOL under the zero address. */

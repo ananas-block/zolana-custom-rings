@@ -139,8 +139,6 @@ export {
   ApprovalMask,
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
-  bodilessBitmap,
-  exitsBitmap,
   isAnonymousFrame,
   isDelegateRail,
   landedRingRail,

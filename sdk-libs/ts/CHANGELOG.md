@@ -2,6 +2,7 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `exitsBitmap`, `bodilessBitmap`, `AnonymousSync.withDepositPayload`, `P256ReaderKey.toUncompressed`, `RingTransactData.inProofSender`, `KnownUtxoIndex.applyMerge` and `LocalRingKeys.ringDeliverySecret` are gone → read the frame through `RingTransactData.parse` and pass secrets through `ringDeliverySecrets`.
 - `createRingTransferSubmission`, `createRingExitSubmission`, `createRingEntrySubmission` and `createRingWithdrawalSubmission` now settle a transfer past one transaction from a buffer, a `send` result of `unknown` can name a write or a close, `RingSubmissionAttempt` gains `upload`, and a kit transport signs each transaction only with the held signers it names.
 - `closeAbandonedFrameBuffers` returns the rent of the buffers a writer left on a ring once the wallet holds no pending submission, refuses earlier with `RING_SUBMISSION_PENDING`, and a refused close throws `RING_FRAME_BUFFER_CLOSE`.
 - `TransactionFit`, `Fit`, `FitSigners`, `FitBudget`, `FitTransport` and `SetupEffect` report a transaction's signatures, bytes, addresses, SPP CPI bytes and what its setup adds, and every direct transfer refuses before proving with `RING_FIT_SIGNATURES`, `RING_FIT_INSTRUCTIONS`, `RING_FIT_BYTES`, `RING_FIT_ADDRESSES`, `RING_FIT_CPI_BYTES` or `RING_FIT_UNPARSED_FRAME`.

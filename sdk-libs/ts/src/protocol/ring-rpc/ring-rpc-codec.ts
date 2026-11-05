@@ -13,7 +13,6 @@ import type {
   ConfigAuthorityAuth,
   CreateRecordsRegistryRequest,
   GetPendingEnrolmentsRequest,
-  MergeSettings,
   PendingEnrolment,
   PendingEnrolmentsPage,
   GetListSaltRequest,
@@ -29,7 +28,6 @@ import type {
   RelayStatus,
   RelayStep,
   ReaderGrantAction,
-  SetMergeSettingsRequest,
   SetReaderGrantRequest,
   SubmitRecordUpdateRequest,
   SubmitRelayRequest,
@@ -298,44 +296,6 @@ export function decodeRecordUpdateStatus(value: unknown): RecordUpdateStatus {
         status,
       );
   }
-}
-
-/** Rust `SetMergeSettingsRequest`. */
-export function encodeSetMergeSettingsRequest(value: SetMergeSettingsRequest): WireObject {
-  return {
-    ring: checkedAddress(value.ring, "ring"),
-    owner: checkedAddress(value.owner, "owner"),
-    settings: encodeMergeSettings(value.settings),
-    timestamp: toU64(value.timestamp, "timestamp"),
-    nonce: checkedBase64(value.nonce, "nonce"),
-    signature: checkedSignature(value.signature, "signature"),
-  };
-}
-
-/** Rust `MergeSettings`. */
-export function encodeMergeSettings(value: MergeSettings): WireObject {
-  return {
-    mint: checkedAddress(value.mint, "settings.mint"),
-    targetNoteCount: toWireInteger(
-      BigInt(value.targetNoteCount),
-      "settings.targetNoteCount",
-      0n,
-      0xffff_ffffn,
-    ),
-    minAverageAmount: toU64(value.minAverageAmount, "settings.minAverageAmount"),
-  };
-}
-
-/** Rust `SetMergeSettingsResponse`. */
-export function decodeMergeSettings(value: unknown): MergeSettings {
-  const row = object(value, "$", ["mint", "targetNoteCount", "minAverageAmount"]);
-  return {
-    mint: checkedAddress(row["mint"], "mint"),
-    targetNoteCount: Number(
-      wireInteger(row["targetNoteCount"], "targetNoteCount", 0n, 0xffff_ffffn),
-    ),
-    minAverageAmount: u64(row["minAverageAmount"], "minAverageAmount"),
-  };
 }
 
 /** Rust `GetPendingEnrolmentsRequest`. */

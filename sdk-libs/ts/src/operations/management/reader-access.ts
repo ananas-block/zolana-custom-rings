@@ -47,10 +47,6 @@ export class P256ReaderKey {
     return copyBytes(this.#bytes) as Bytes33;
   }
 
-  toUncompressed(): Uint8Array {
-    return p256.Point.fromBytes(this.#bytes).toBytes(false);
-  }
-
   /** Compares canonical compressed passkey encodings. */
   equals(other: P256ReaderKey): boolean {
     const left = this.#bytes;
