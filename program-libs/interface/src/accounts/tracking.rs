@@ -1,4 +1,4 @@
-//! The tracking registry, one sorted tree per ring naming each enrolled owner's nullifier key, viewing key and list tag.
+//! The tracking registry, one sorted tree per ring naming each enrolled owner's nullifier key, ciphertext hash and list tag.
 //!
 //! An SPP sender names any nullifier key on an output, and SPP never sees the secret behind it. A
 //! ring's auditor must compute each nullifier, so each owner enrolls once with a proof that seals the
@@ -14,7 +14,7 @@
 //! `prover/circuits/registry/tracking.go`, `prover/circuits/policy/tracking.go`.
 //!
 //! Invariants:
-//! 1. An authorization's nullifier key, list tag, ephemeral key and ciphertext never move after creation, `rotate` refuses a change. A row holds only these and the owner, so a row never changes once inserted and an owner holds one row.
+//! 1. An authorization's nullifier key, list tag, ephemeral key and ciphertext never move after creation, `rotate` refuses a change. A row holds the owner, the nullifier key, the list tag and the ciphertext hash, so only its successor link moves after insert and an owner holds one row.
 //! 2. Enrollment refuses `ZERO_NULLIFIER_PUBKEY` and proves every key a Poseidon output, so a present row's key is nonzero, and the policy circuit reads presence from the literal zero an absent query returns.
 //! 3. A pending authorization grants nothing, because every check reads the root. Only a first enrollment is pending, and each applies once.
 //! 4. The viewing key lives only on the authorization. A rotation writes that account alone, so it moves no root and leaves no tracking work. A sender authenticates the key from the account, no proof reads it.
@@ -80,7 +80,7 @@ pub struct TrackingAuthorization {
     pub nullifier_pk: [u8; 32],
     /// `Poseidon(CRPT, list_salt)`, a policy proof opens the owner's salted key through it.
     pub list_tag: [u8; 32],
-    /// Moves at each rotation, the leaf hash binds it and no transfer proof reads it.
+    /// Moves at each rotation, no leaf or proof reads it.
     pub viewing_u: [u8; 32],
     pub eph_u: [u8; 32],
     /// The nullifier secret and the list salt sealed to the registry's auditor key.

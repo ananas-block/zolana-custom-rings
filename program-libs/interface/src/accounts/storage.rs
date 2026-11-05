@@ -318,7 +318,7 @@ pub enum StorageError {
     InvalidTrackingRegistry = 9022,
     #[error("tracking authorization is invalid")]
     InvalidTrackingAuthorization = 9023,
-    #[error("the enrollment's revision is already applied")]
+    #[error("the enrollment is already applied")]
     EnrollmentAlreadyApplied = 9024,
     #[error("the enrolled nullifier key, list tag and ciphertext are final")]
     EnrollmentKeyFinal = 9025,

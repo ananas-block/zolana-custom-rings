@@ -30,11 +30,11 @@ A public update names no tracking revision and passes no tracking registry, and 
 
 A ring creates one tracking registry at `[b"tracking_registry", creator, ring_id]`, pinning its ring id and auditor key. Neither the seeds nor the ring id authenticate it. Anyone can create one naming any ring, and only the address a ring pins in its policy counts.
 
-`Enroll` needs the owner's signature, a program signing its PDA through CPI, and any payer may fund it. A first enrollment verifies a `RegisterKey` proof in the same instruction and creates the owner's `TrackingAuthorization`. `Enroll` only reads the registry, so enrollment traffic takes no write lock on it. The program supplies the member, the ring id and the auditor key to the statement. A later `Enroll` carries no proof and moves only the viewing key and the revision. The nullifier key, list tag and ciphertext are final.
+`Enroll` needs the owner's signature, a program signing its PDA through CPI, and any payer may fund it. A first enrollment verifies a `RegisterKey` proof in the same instruction and creates the owner's `TrackingAuthorization`. `Enroll` only reads the registry, so enrollment traffic takes no write lock on it. The program supplies the member, the ring id and the auditor key to the statement. A later `Enroll` carries no proof and moves only the viewing key. The nullifier key, list tag and ciphertext are final.
 
 `ApplyEnrollments` is permissionless. The applier names up to `APPLY_BATCH` authorization accounts in any order, and the program computes each entry from account state, so an applier chooses only which accounts and in what order. A stale proof fails and the accounts stay pending for the next applier. Nothing grants anything while pending, because every check reads the root.
 
-Tracking roots keep `TRACKING_GRACE_SLOTS`. Over a full history an apply evicts the oldest kept root, and a proof in flight under it proves again. A rotation stales a proof that names the rotated account, so an applier leaves out an account that changed recently.
+Every retired tracking root serves its full `TRACKING_GRACE_SLOTS`. An apply that would evict an unexpired root refuses with `RootHistoryRetained`, and its accounts stay pending until the oldest root expires. A rotation leaves the account's entry unchanged, so it stales no apply proof.
 
 The tracking tree is 16 levels of four, taller than a policy tree, because anyone can pay to fill it and no tree replaces a full one. Its next index is a u64 and an apply past `TRACKING_CAPACITY` refuses. A first enrollment past capacity stays pending and grants nothing, and no other entry waits for it, since an applier names its accounts. Rotations of enrolled owners need no free leaf.
 
