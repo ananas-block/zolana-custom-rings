@@ -1,5 +1,6 @@
 import {
   address,
+  blockhash,
   generateKeyPairSigner,
   signTransactionWithSigners,
   type Address,
@@ -11,9 +12,10 @@ import type {
   RequestContext,
   Transaction,
 } from "@heliuslabs/zolana/interface";
+import { ClientError } from "@heliuslabs/zolana/client";
 import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
 import { AssetRegistry, Wallet } from "@heliuslabs/zolana/transaction";
-import { walletSnapshotCipher } from "@heliuslabs/zolana/wallet";
+import { loadPersistedWallet, walletSnapshotCipher } from "@heliuslabs/zolana/wallet";
 import { describe, expect, it, vi } from "vitest";
 
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
@@ -122,6 +124,66 @@ async function fixture(outcomes: readonly (RingSubmissionStatus | undefined)[] =
       bufferHeld = false;
     },
   };
+}
+
+/** The writer's buffer beside a stranger's buffer and the ring's own account. */
+async function reclaimOf(
+  f: Readonly<{
+    frame: BufferedFrame;
+    payer: { address: Address };
+    transport: RingSubmissionTransport;
+  }>,
+) {
+  const buffer = (writer: Address) => {
+    const data = new Uint8Array(FRAME_BUFFER_HEADER_LEN + 8);
+    data[0] = 16;
+    data.set(addressBytes(writer), 1);
+    return data;
+  };
+  const stranger = await generateKeyPairSigner();
+  const accounts = [
+    { address: f.frame.buffer, account: { data: buffer(f.payer.address) } },
+    { address: stranger.address, account: { data: buffer(stranger.address) } },
+    { address: RING, account: { data: new Uint8Array(64) } },
+  ];
+  return {
+    ringProgramId: RING,
+    writer: f.payer.address,
+    chain: {
+      getProgramAccounts: vi.fn(async () => accounts as never),
+      getLatestBlockhash: async () => BLOCKHASH,
+    },
+    transport: f.transport,
+  };
+}
+
+/** A wallet store that keeps the last sealed snapshot. */
+function persistedStore(f: Readonly<{ wallet: Wallet; owner: ShieldedKeypair }>) {
+  let stored: string | undefined;
+  const store = {
+    load: async () => stored,
+    save: vi.fn(async (snapshot: string) => {
+      stored = snapshot;
+    }),
+  };
+  return { wallet: f.wallet, store, cipher: walletSnapshotCipher(f.owner) };
+}
+
+/** A cluster at `height` that never saw the signature it is asked about. */
+function unseenAt(height: bigint): Pick<RingSubmissionTransport, "status"> {
+  return {
+    status: async (pending) =>
+      height > pending.lastValidBlockHeight ? { kind: "expired" } : { kind: "unknown" },
+  };
+}
+
+/** Every write signs under a lifetime ending at 200, every later transaction at 300. */
+function laterLifetimes(f: Awaited<ReturnType<typeof fixture>>): void {
+  const writes = f.frame.writes().length;
+  f.chain.getLatestBlockhash.mockImplementation(async () => ({
+    ...BLOCKHASH,
+    lastValidBlockHeight: f.sent.length < writes ? 200n : 300n,
+  }));
 }
 
 describe("a buffered ring submission", () => {
@@ -266,28 +328,7 @@ describe("a buffered record after a restart", () => {
       store: { save: vi.fn(async () => undefined) },
       cipher: walletSnapshotCipher(f.owner),
     };
-    const buffer = (writer: Address) => {
-      const data = new Uint8Array(FRAME_BUFFER_HEADER_LEN + 8);
-      data[0] = 16;
-      data.set(addressBytes(writer), 1);
-      return data;
-    };
-    const stranger = await generateKeyPairSigner();
-    const accounts = [
-      { address: f.frame.buffer, account: { data: buffer(f.payer.address) } },
-      { address: stranger.address, account: { data: buffer(stranger.address) } },
-      { address: RING, account: { data: new Uint8Array(64) } },
-    ];
-    const reclaim = {
-      ringProgramId: RING,
-      writer: f.payer.address,
-      chain: {
-        getProgramAccounts: vi.fn(async () => accounts as never),
-        getLatestBlockhash: async () => BLOCKHASH,
-      },
-      transport: f.transport,
-    };
-    return { ...f, persistence, reclaim };
+    return { ...f, persistence, reclaim: await reclaimOf(f) };
   }
 
   it("settles the record by its signature and sends nothing", async () => {
@@ -337,5 +378,174 @@ describe("a buffered record after a restart", () => {
       code: "RING_FRAME_BUFFER_CLOSE",
       details: { transactionId: expect.any(String) },
     });
+  });
+});
+
+describe("a buffered submission's durable record", () => {
+  it("holds a restored upload until its live write can no longer land", async () => {
+    const f = await fixture();
+    laterLifetimes(f);
+    const persistence = persistedStore(f);
+    // The first write's broadcast errors after it may have left, its outcome is unknown.
+    f.send.mockImplementationOnce(async (transaction) => {
+      f.sent.push(transaction);
+      throw new Error("lost response");
+    });
+    f.status.mockResolvedValueOnce({ kind: "unknown" });
+    const result = await f.submission.sendPersisted({ ...persistence, transport: f.transport });
+    expect(result.kind).toBe("unknown");
+    expect(f.sent).toHaveLength(1);
+    const restored = await loadPersistedWallet(persistence);
+    if (restored === undefined) throw new Error("missing wallet");
+    expect(restored.pendingSubmissions()).toMatchObject([{ lastValidBlockHeight: 200n }]);
+    const reclaim = await reclaimOf(f);
+    // Past the settlement's own height 100, short of the write's.
+    await reconcileRingSubmissions({ ...persistence, wallet: restored, transport: unseenAt(150n) });
+    expect(restored.pendingSubmissions()).toHaveLength(1);
+    await expect(
+      closeAbandonedFrameBuffers({ ...reclaim, wallet: restored }),
+    ).rejects.toMatchObject({ code: "RING_SUBMISSION_PENDING" });
+    await reconcileRingSubmissions({ ...persistence, wallet: restored, transport: unseenAt(201n) });
+    expect(restored.pendingSubmissions()).toEqual([]);
+    expect(await closeAbandonedFrameBuffers({ ...reclaim, wallet: restored })).toHaveLength(1);
+  });
+
+  it("holds a restored close until the close can no longer land", async () => {
+    const writes = (await fixture()).frame.writes().length;
+    const f = await fixture([
+      ...Array.from({ length: writes }, () => undefined),
+      { kind: "expired" },
+    ]);
+    laterLifetimes(f);
+    for (let index = 0; index < writes; index += 1) f.status.mockResolvedValueOnce(CONFIRMED);
+    f.status.mockResolvedValueOnce({ kind: "unknown" });
+    const persistence = persistedStore(f);
+    const closing = await f.submission.sendPersisted({ ...persistence, transport: f.transport });
+    expect(closing.kind).toBe("unknown");
+    expect(f.carried(writes + 1, f.frame.close())).toBe(true);
+    const restored = await loadPersistedWallet(persistence);
+    if (restored === undefined) throw new Error("missing wallet");
+    expect(restored.pendingSubmissions()).toMatchObject([{ lastValidBlockHeight: 300n }]);
+    await reconcileRingSubmissions({ ...persistence, wallet: restored, transport: unseenAt(250n) });
+    expect(restored.pendingSubmissions()).toHaveLength(1);
+    const settled = await reconcileRingSubmissions({
+      ...persistence,
+      wallet: restored,
+      transport: unseenAt(301n),
+    });
+    expect(settled).toMatchObject([{ kind: "failed" }]);
+    expect(restored.pendingSubmissions()).toEqual([]);
+  });
+
+  it("never broadcasts a write whose lifetime failed to save, and saves it on the next call", async () => {
+    const f = await fixture();
+    laterLifetimes(f);
+    const persistence = persistedStore(f);
+    persistence.store.save
+      .mockImplementationOnce(async () => undefined)
+      .mockRejectedValueOnce(new Error("disk unavailable"));
+    await expect(
+      f.submission.sendPersisted({ ...persistence, transport: f.transport }),
+    ).rejects.toMatchObject({ code: "WALLET_PERSIST" });
+    expect(f.sent).toHaveLength(0);
+    expect(f.wallet.pendingSubmissions()).toHaveLength(1);
+    expect(() => f.submission.cancel()).toThrow("RING_SUBMISSION_PENDING");
+    const result = await f.submission.sendPersisted({ ...persistence, transport: f.transport });
+    expect(result.kind).toBe("confirmed");
+    expect(f.sent).toHaveLength(f.frame.writes().length + 1);
+    expect((await loadPersistedWallet(persistence))?.pendingSubmissions()).toMatchObject([
+      { lastValidBlockHeight: 200n },
+    ]);
+  });
+
+  it("keeps an aborted write held, reads it on the next call and never sends it twice", async () => {
+    const f = await fixture();
+    laterLifetimes(f);
+    const persistence = persistedStore(f);
+    f.send.mockImplementationOnce(async (transaction) => {
+      f.sent.push(transaction);
+      throw new ClientError("CLIENT_ABORTED");
+    });
+    await expect(
+      f.submission.sendPersisted({ ...persistence, transport: f.transport }),
+    ).rejects.toMatchObject({ code: "CLIENT_ABORTED" });
+    expect(() => f.submission.cancel()).toThrow("RING_SUBMISSION_PENDING");
+    expect((await loadPersistedWallet(persistence))?.pendingSubmissions()).toMatchObject([
+      { lastValidBlockHeight: 200n },
+    ]);
+    expect(f.release).not.toHaveBeenCalled();
+    const result = await f.submission.sendPersisted({ ...persistence, transport: f.transport });
+    expect(result.kind).toBe("confirmed");
+    expect(f.sent).toHaveLength(f.frame.writes().length + 1);
+    expect(f.sign).toHaveBeenCalledTimes(f.frame.writes().length + 1);
+  });
+
+  it("signs another close after a refused one and settles the record once it confirms", async () => {
+    const f = await fixture([
+      { kind: "failed", instructionIndex: 0, customCode: 1 },
+      { kind: "failed", instructionIndex: 0, customCode: 2 },
+    ]);
+    // Each signing reads another blockhash, a re-signed close differs from the refused one.
+    f.chain.getLatestBlockhash.mockImplementation(async () => ({
+      blockhash: blockhash(`${"1".repeat(31)}${String(f.sent.length + 2)}`),
+      lastValidBlockHeight: 200n,
+    }));
+    await expect(f.submission.send(f.transport)).rejects.toMatchObject({
+      code: "RING_FRAME_BUFFER_CLOSE",
+    });
+    expect(f.wallet.pendingSubmissions()).toHaveLength(1);
+    const result = await f.submission.send(f.transport);
+    expect(result).toMatchObject({ kind: "failed", customCode: 1, attempts: 1 });
+    expect(f.sent).toHaveLength(3);
+    expect(f.sign).toHaveBeenCalledTimes(4);
+    expect(f.carried(2, f.frame.close())).toBe(true);
+    expect(f.sent[2]?.signatures).not.toEqual(f.sent[1]?.signatures);
+    expect(f.wallet.pendingSubmissions()).toHaveLength(0);
+    expect(f.release).toHaveBeenCalledTimes(1);
+    expect(f.build).toHaveBeenCalledTimes(1);
+  });
+
+  it("never writes back a record reconcile settled, the snapshot still loads", async () => {
+    const f = await fixture([
+      { kind: "failed", instructionIndex: 0, customCode: 1 },
+      { kind: "failed", instructionIndex: 0, customCode: 2 },
+    ]);
+    const persistence = persistedStore(f);
+    await expect(
+      f.submission.sendPersisted({ ...persistence, transport: f.transport }),
+    ).rejects.toMatchObject({ code: "RING_FRAME_BUFFER_CLOSE" });
+    await reconcileRingSubmissions({ ...persistence, transport: unseenAt(301n) });
+    expect(f.wallet.pendingSubmissions()).toEqual([]);
+    const sentBefore = f.sent.length;
+    await expect(
+      f.submission.sendPersisted({ ...persistence, transport: f.transport }),
+    ).rejects.toMatchObject({ code: "RING_SUBMISSION_PENDING", details: { reason: "reconciled" } });
+    expect(f.sent).toHaveLength(sentBefore);
+    expect(f.wallet.pendingSubmissions()).toEqual([]);
+    expect((await loadPersistedWallet(persistence))?.pendingSubmissions()).toEqual([]);
+    await expect(f.submission.send(f.transport)).rejects.toMatchObject({
+      code: "RING_SUBMISSION_PENDING",
+    });
+  });
+
+  it("refuses a second send while a write is on its way", async () => {
+    const f = await fixture();
+    let deliver: () => void = () => {};
+    const delivered = new Promise<void>((resolve) => {
+      deliver = resolve;
+    });
+    f.send.mockImplementationOnce(async (transaction) => {
+      f.sent.push(transaction);
+      await delivered;
+      return undefined;
+    });
+    const first = f.submission.send(f.transport);
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    await expect(f.submission.send(f.transport)).rejects.toMatchObject({
+      code: "RING_SUBMISSION_PENDING",
+    });
+    deliver();
+    expect((await first).kind).toBe("confirmed");
+    expect(f.sent).toHaveLength(f.frame.writes().length + 1);
   });
 });
