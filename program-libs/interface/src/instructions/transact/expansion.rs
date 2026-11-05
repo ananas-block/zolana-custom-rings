@@ -9,12 +9,11 @@ use spr_interface::instruction::{
     TransactProof,
 };
 
-use super::{RingOutput, RingTransactData, Settlement, SlotBody, invalid};
+use super::{invalid, RingOutput, RingTransactData, Settlement, SlotBody};
 use crate::{
-    AuditorMessage, RingPolicy,
     error::CustomRingError,
-    output::{OutputPayload, encode_ring_sender_bundle_output},
-    tagged_x25519,
+    output::{encode_ring_sender_bundle_output, OutputPayload},
+    tagged_x25519, AuditorMessage, RingPolicy,
 };
 
 struct SppExpansion<'frame, 'data> {

@@ -3,9 +3,9 @@
 //!
 //! Read after `program-libs/interface/src/proof/disclosure.rs`. Read before `program-libs/interface/src/codec/stream.rs`.
 
-use spr_event::{CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, OutputDataEncoding};
+use spr_event::{OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG};
 
-use crate::{CustomRingError, audit_stream::RECIPIENT_BODY_LEN};
+use crate::{audit_stream::RECIPIENT_BODY_LEN, CustomRingError};
 
 pub const RING_SENDER_BUNDLE_SCHEME_TAG: u8 = 9;
 /// `u16le(body_len) || body || reply`, one form on every rail, the reply absent without reply metadata.

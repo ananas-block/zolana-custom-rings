@@ -2,13 +2,13 @@ mod frames;
 mod ring_policy;
 
 use custom_ring_interface::{
-    AppMessage, ParsedTransact, RingPolicy, RingTransactData, Settlement, SlotBody,
-    encode_confidential_output,
+    encode_confidential_output, AppMessage, ParsedTransact, RingPolicy, RingTransactData,
+    Settlement, SlotBody,
 };
 use frames::Fixture;
 use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
 use spr_interface::instruction::{
-    ExternalDataPreimage, TransactIxDataRef, TransactProof, instruction_data::transact::CacheAccess,
+    instruction_data::transact::CacheAccess, ExternalDataPreimage, TransactIxDataRef, TransactProof,
 };
 
 #[test]
@@ -80,14 +80,12 @@ fn borrowed_message_length_has_the_same_u16_boundary_as_the_owned_codec() {
     assert_owned_parity(&data, &ring);
 
     data.extensions.messages[0].data = &bytes;
-    assert!(
-        data.transact_ix_data(&ring, TransactProof::zeroed())
-            .is_err()
-    );
-    assert!(
-        data.spp_instruction_data_under(&ring, TransactProof::zeroed())
-            .is_err()
-    );
+    assert!(data
+        .transact_ix_data(&ring, TransactProof::zeroed())
+        .is_err());
+    assert!(data
+        .spp_instruction_data_under(&ring, TransactProof::zeroed())
+        .is_err());
     assert!(data.external_data_hash(&ring, &[]).is_err());
 }
 
@@ -103,16 +101,14 @@ fn borrowed_output_length_includes_the_encrypted_output_prefix() {
     assert_owned_parity(&data, &ring);
 
     data.outputs[1].body = SlotBody::Exit(&bytes);
-    assert!(
-        data.transact_ix_data(&ring, TransactProof::zeroed())
-            .unwrap()
-            .serialize()
-            .is_err()
-    );
-    assert!(
-        data.spp_instruction_data_under(&ring, TransactProof::zeroed())
-            .is_err()
-    );
+    assert!(data
+        .transact_ix_data(&ring, TransactProof::zeroed())
+        .unwrap()
+        .serialize()
+        .is_err());
+    assert!(data
+        .spp_instruction_data_under(&ring, TransactProof::zeroed())
+        .is_err());
     assert!(data.external_data_hash(&ring, &[]).is_err());
 }
 
