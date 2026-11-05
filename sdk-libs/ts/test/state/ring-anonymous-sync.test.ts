@@ -538,7 +538,7 @@ describe("viewing history", () => {
     const counter = '{"next":0,"scanned":0,"pending":[]}';
     expect(history.toJson()).toBe(
       `{"viewingHistory":[{"viewingPubkey":"${hex2(viewingPublicKey)}","createdAt":3,` +
-        `"tx":${counter},"request":${counter},"knownSenders":["${sorted[0]}","${sorted[1]}"],` +
+        `"tx":${counter},"knownSenders":["${sorted[0]}","${sorted[1]}"],` +
         `"ringPositions":[{"ring":"${ringA}","afterSlot":null},{"ring":"${ringB}","afterSlot":8}],"tagPosition":null}]}`,
     );
     expect(ViewingHistory.fromJson(history.toJson()).toJson()).toBe(history.toJson());
@@ -557,7 +557,7 @@ describe("viewing history", () => {
       scanned: PENDING_RETENTION + 2n,
       pending: [2n, 3n],
     });
-    const withCounter = history.withEntry(0, history.current().withCounter("tx", counter));
+    const withCounter = history.withEntry(0, history.current().withTxCounter(counter));
     expect(ViewingHistory.fromJson(withCounter.toJson()).toJson()).toBe(withCounter.toJson());
     const parsed = JSON.parse(withCounter.toJson()) as {
       viewingHistory: { tx: { pending: number[] } }[];

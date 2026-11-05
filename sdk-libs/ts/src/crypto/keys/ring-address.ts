@@ -1,7 +1,6 @@
 /** Mirrors Rust `zolana_ring_keys::ring_address`, pinned by `test-vectors/wallet/ring_address.json`. */
 import { equalBytes } from "@noble/ciphers/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import {
   address,
   getAddressDecoder,
@@ -22,7 +21,6 @@ import {
   ShieldedAddress,
   type Bytes32,
   type ShieldedKeypairLike,
-  type ViewTag,
 } from "@heliuslabs/zolana/keypair";
 
 import { checkedCounter, RingKeyError } from "../error.js";
@@ -130,25 +128,20 @@ function checksum(body: Uint8Array): Uint8Array {
 
 export type RingPaymentRequestFields = Readonly<{
   address: RingAddress;
-  /** The recipient's `recipientRequestViewTag`, read by a deposit alone. */
-  depositTag?: ViewTag | undefined;
   amount?: bigint | undefined;
   mint?: Address | undefined;
   label?: string | undefined;
 }>;
 
-/** `zolana:<address>?deposit_tag=&amount=&mint=&label=`, the query part is unauthenticated. */
+/** `zolana:<address>?amount=&mint=&label=`, the query part is unauthenticated. */
 export class RingPaymentRequest {
   readonly address: RingAddress;
-  readonly depositTag: ViewTag | undefined;
   readonly amount: bigint | undefined;
   readonly mint: Address | undefined;
   readonly label: string | undefined;
 
   constructor(fields: RingPaymentRequestFields) {
     this.address = fields.address;
-    this.depositTag =
-      fields.depositTag === undefined ? undefined : checkedDepositTag(fields.depositTag);
     this.amount = fields.amount === undefined ? undefined : checkedCounter(fields.amount, "amount");
     this.mint = fields.mint;
     this.label = fields.label;
@@ -157,7 +150,6 @@ export class RingPaymentRequest {
 
   toString(): string {
     const query: string[] = [];
-    if (this.depositTag !== undefined) query.push(`deposit_tag=${bytesToHex(this.depositTag)}`);
     if (this.amount !== undefined) query.push(`amount=${this.amount}`);
     if (this.mint !== undefined) query.push(`mint=${this.mint}`);
     if (this.label !== undefined) query.push(`label=${encodeLabel(this.label)}`);
@@ -175,7 +167,6 @@ export class RingPaymentRequest {
     const encoded = separator === -1 ? rest : rest.slice(0, separator);
     const query = separator === -1 ? [] : rest.slice(separator + 1).split("&");
     const address = RingAddress.fromBase58(encoded);
-    let depositTag: ViewTag | undefined;
     let amount: bigint | undefined;
     let mint: Address | undefined;
     let label: string | undefined;
@@ -184,9 +175,6 @@ export class RingPaymentRequest {
       const key = equals === -1 ? part : part.slice(0, equals);
       const value = equals === -1 ? "" : part.slice(equals + 1);
       switch (key) {
-        case "deposit_tag":
-          depositTag = replaceOnce(depositTag, parseDepositTag(value));
-          break;
         case "amount":
           amount = replaceOnce(amount, parseAmount(value));
           break;
@@ -200,25 +188,13 @@ export class RingPaymentRequest {
           throw new RingKeyError("KEYPAIR_UNKNOWN_RING_PAYMENT_KEY", { name: key });
       }
     }
-    return new RingPaymentRequest({ address, depositTag, amount, mint, label });
+    return new RingPaymentRequest({ address, amount, mint, label });
   }
 }
 
 function replaceOnce<T>(slot: T | undefined, value: T): T {
   if (slot !== undefined) throw new RingKeyError("KEYPAIR_DUPLICATE_RING_PAYMENT_KEY");
   return value;
-}
-
-/** Lowercase hex with a leading zero byte, the one form a derived request tag takes. */
-function parseDepositTag(value: string): ViewTag {
-  if (!/^00[0-9a-f]{62}$/.test(value)) throw new RingKeyError("KEYPAIR_INVALID_RING_PAYMENT_TAG");
-  return hexToBytes(value) as ViewTag;
-}
-
-function checkedDepositTag(tag: ViewTag): ViewTag {
-  if (!(tag instanceof Uint8Array) || tag.length !== 32 || tag[0] !== 0)
-    throw new RingKeyError("KEYPAIR_INVALID_RING_PAYMENT_TAG");
-  return Uint8Array.from(tag) as ViewTag;
 }
 
 function parseAmount(value: string): bigint {

@@ -61,7 +61,6 @@ export class ViewingKeyEntry {
   readonly viewingPublicKey: X25519PublicKey;
   readonly createdAt: bigint;
   readonly tx: StreamCounter;
-  readonly request: StreamCounter;
   /** Confirmed reply claims, keyed by the viewing key a sender's replies name. */
   readonly #knownSenders: ReadonlyMap<string, X25519PublicKey>;
   /** `null` reads the ring from its start. */
@@ -73,7 +72,6 @@ export class ViewingKeyEntry {
     this.viewingPublicKey = fields.viewingPublicKey;
     this.createdAt = fields.createdAt;
     this.tx = fields.tx;
-    this.request = fields.request;
     this.#knownSenders = new Map(fields.knownSenders);
     this.#ringPositions = new Map(fields.ringPositions);
     this.tagPosition = fields.tagPosition;
@@ -85,7 +83,6 @@ export class ViewingKeyEntry {
       viewingPublicKey,
       createdAt: checkedI64(createdAt, "createdAt"),
       tx: StreamCounter.EMPTY,
-      request: StreamCounter.EMPTY,
       knownSenders: new Map(),
       ringPositions: new Map(),
       tagPosition: null,
@@ -94,10 +91,6 @@ export class ViewingKeyEntry {
 
   get txCount(): bigint {
     return this.tx.next;
-  }
-
-  get requestCount(): bigint {
-    return this.request.next;
   }
 
   knownSenders(): readonly X25519PublicKey[] {
@@ -113,8 +106,8 @@ export class ViewingKeyEntry {
     return this.#ringPositions.get(ring);
   }
 
-  withCounter(stream: EntryStream, counter: StreamCounter): ViewingKeyEntry {
-    return new ViewingKeyEntry({ ...this.#fields(), [stream]: counter });
+  withTxCounter(counter: StreamCounter): ViewingKeyEntry {
+    return new ViewingKeyEntry({ ...this.#fields(), tx: counter });
   }
 
   /** A known sender keeps the entry as it is. */
@@ -133,7 +126,6 @@ export class ViewingKeyEntry {
       viewingPublicKey: X25519PublicKey;
       createdAt: bigint;
       tx: StreamCounter;
-      request: StreamCounter;
       knownSenders: readonly X25519PublicKey[];
       ringPositions: readonly RingPosition[];
       tagPosition: bigint | null;
@@ -151,7 +143,6 @@ export class ViewingKeyEntry {
       viewingPublicKey: fields.viewingPublicKey,
       createdAt: checkedI64(fields.createdAt, "createdAt"),
       tx: fields.tx,
-      request: fields.request,
       knownSenders,
       ringPositions,
       tagPosition: fields.tagPosition,
@@ -173,12 +164,10 @@ export class ViewingKeyEntry {
 
   /** @internal A lower `next` would issue a tag again. */
   _progressMatches(stored: ViewingKeyEntry): boolean {
-    const counters = (["tx", "request"] as const).every(
-      (stream) =>
-        this[stream].next >= stored[stream].next &&
-        this[stream].scanned === stored[stream].scanned &&
-        this[stream].pending.join() === stored[stream].pending.join(),
-    );
+    const counters =
+      this.tx.next >= stored.tx.next &&
+      this.tx.scanned === stored.tx.scanned &&
+      this.tx.pending.join() === stored.tx.pending.join();
     const keptEvery = stored
       .ringPositions()
       .every(({ ring, afterSlot }) => this.ringPosition(ring) === afterSlot);
@@ -193,7 +182,6 @@ export class ViewingKeyEntry {
     return new ViewingKeyEntry({
       ...this.#fields(),
       tx: read.tx._scannedUnder(this.tx.next),
-      request: read.request._scannedUnder(this.request.next),
       ringPositions: new Map([...this.#ringPositions, ...read.#ringPositions]),
     });
   }
@@ -203,15 +191,12 @@ export class ViewingKeyEntry {
       viewingPublicKey: this.viewingPublicKey,
       createdAt: this.createdAt,
       tx: this.tx,
-      request: this.request,
       knownSenders: this.#knownSenders,
       ringPositions: this.#ringPositions,
       tagPosition: this.tagPosition,
     };
   }
 }
-
-export type EntryStream = "tx" | "request";
 
 /** One ring a key reads, `afterSlot` the terminal page's `context.slot` of its last read. */
 export type RingPosition = Readonly<{ ring: Address; afterSlot: bigint | null }>;
@@ -333,7 +318,6 @@ export class ViewingHistory {
         (entry) =>
           stored.entry(entry.viewingPublicKey) !== undefined ||
           (entry.tx.scanned === 0n &&
-            entry.request.scanned === 0n &&
             entry.ringPositions().every(({ afterSlot }) => afterSlot === null) &&
             entry.tagPosition === null),
       )
@@ -352,12 +336,7 @@ export class ViewingHistory {
 
   /** The next sender tag of the current key, the tag of a deposit to the wallet's own note. */
   async senderTag(keys: RingKeys, context?: RequestContext): Promise<AdvancedTag<ViewTag>> {
-    return this.#ownTag(keys, "tx", context);
-  }
-
-  /** A fresh `recipientRequestViewTag` for a deposit request. */
-  async requestTag(keys: RingKeys, context?: RequestContext): Promise<AdvancedTag<ViewTag>> {
-    return this.#ownTag(keys, "request", context);
+    return this.#ownTag(keys, context);
   }
 
   /** Its positions and counters decide what a sync skips, store it as key material. */
@@ -371,7 +350,7 @@ export class ViewingHistory {
         .map(({ ring, afterSlot }) => `{"ring":"${ring}","afterSlot":${afterSlot ?? "null"}}`);
       return (
         `{"viewingPubkey":"${keyOf(entry.viewingPublicKey)}","createdAt":${entry.createdAt},` +
-        `"tx":${counter(entry.tx)},"request":${counter(entry.request)},` +
+        `"tx":${counter(entry.tx)},` +
         `"knownSenders":[${senders.map((sender) => `"${sender}"`).join(",")}],` +
         `"ringPositions":[${positions.join(",")}],` +
         `"tagPosition":${entry.tagPosition ?? "null"}}`
@@ -403,22 +382,18 @@ export class ViewingHistory {
     return new ViewingHistory(entries);
   }
 
-  async #ownTag(
-    keys: RingKeys,
-    stream: EntryStream,
-    context?: RequestContext,
-  ): Promise<AdvancedTag<ViewTag>> {
+  async #ownTag(keys: RingKeys, context?: RequestContext): Promise<AdvancedTag<ViewTag>> {
     const current = this.current();
-    const { index, counter } = current[stream].takeNext();
+    const { index, counter } = current.tx.takeNext();
     const tag = exactlyOne(
       await keys.viewTags(
-        [{ viewingPublicKey: current.viewingPublicKey, stream: viewTagStream(stream, index) }],
+        [{ viewingPublicKey: current.viewingPublicKey, stream: senderStream(index) }],
         context,
       ),
     );
     return Object.freeze({
       tag,
-      history: this.withEntry(this.entries.length - 1, current.withCounter(stream, counter)),
+      history: this.withEntry(this.entries.length - 1, current.withTxCounter(counter)),
     });
   }
 
@@ -435,16 +410,13 @@ interface EntryFields {
   readonly viewingPublicKey: X25519PublicKey;
   readonly createdAt: bigint;
   readonly tx: StreamCounter;
-  readonly request: StreamCounter;
   readonly knownSenders: ReadonlyMap<string, X25519PublicKey>;
   readonly ringPositions: ReadonlyMap<Address, bigint | null>;
   readonly tagPosition: bigint | null;
 }
 
-export function viewTagStream(stream: EntryStream, index: bigint): ViewTagStream {
-  return stream === "tx"
-    ? { kind: "sender", txCount: index }
-    : { kind: "request", requestCount: index };
+export function senderStream(txCount: bigint): ViewTagStream {
+  return { kind: "sender", txCount };
 }
 
 const I64_MIN = -(1n << 63n);
@@ -456,7 +428,6 @@ function storedEntry(value: unknown): ViewingKeyEntry {
     "viewingPubkey",
     "createdAt",
     "tx",
-    "request",
     "knownSenders",
     "ringPositions",
     "tagPosition",
@@ -465,7 +436,6 @@ function storedEntry(value: unknown): ViewingKeyEntry {
     viewingPublicKey: pubkey(stored["viewingPubkey"], "viewingPubkey"),
     createdAt: integer(stored["createdAt"], "createdAt"),
     tx: storedCounter(stored["tx"], "tx"),
-    request: storedCounter(stored["request"], "request"),
     knownSenders: list(stored["knownSenders"], "knownSenders").map((key) =>
       pubkey(key, "knownSenders"),
     ),

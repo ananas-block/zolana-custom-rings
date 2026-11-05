@@ -1785,24 +1785,19 @@ describe("anonymous ring relay", () => {
     expect((await publishedTags(first))[1]).not.toBe((await publishedTags(second))[1]);
   });
 
-  it("ignores a request's deposit tag on a transfer and refuses one the payment contradicts before approval", async () => {
+  it("pays a request and refuses one the payment contradicts before approval", async () => {
     const { fixture, params, requests, relay } = await anonymousSpend({
       notes: 4,
       amount: 5n,
     });
     await relay;
     const bob = ShieldedKeypair.generate();
-    const bobViewing = bob.viewingKey();
-    const depositTag = bobViewing.recipientRequestViewTag(0n);
-    bobViewing.destroy();
     const request = new RingPaymentRequest({
       address: await addressOf(fixture, bob),
-      depositTag,
       amount: 5n,
       mint: SOL_MINT,
     });
-    const paid = await prepareRingTransferRelay({ ...params, recipient: request });
-    expect((await publishedTags(paid))[1]).not.toBe(hex(depositTag));
+    await prepareRingTransferRelay({ ...params, recipient: request });
     const approvals = requests.length;
     const contradicted = [
       [{ amount: 4n }, "amount"],

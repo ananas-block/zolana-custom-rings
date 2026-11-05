@@ -37,9 +37,7 @@ export interface RingDeliveryRequest {
 }
 
 /** One own-key view tag of an anonymous ring under a wallet viewing key, Rust `ViewTagStream`. */
-export type ViewTagStream =
-  | Readonly<{ kind: "sender"; txCount: bigint }>
-  | Readonly<{ kind: "request"; requestCount: bigint }>;
+export type ViewTagStream = Readonly<{ kind: "sender"; txCount: bigint }>;
 
 export interface ViewTagRequest {
   readonly viewingPublicKey: X25519PublicKey;
@@ -252,9 +250,7 @@ export class LocalRingKeys implements RingKeys {
     this.#checkUsable();
     return requests.map((request) => {
       const key = this.#tags.held(request.viewingPublicKey);
-      return request.stream.kind === "sender"
-        ? key.senderViewTag(request.stream.txCount)
-        : key.recipientRequestViewTag(request.stream.requestCount);
+      return key.senderViewTag(request.stream.txCount);
     });
   }
 
