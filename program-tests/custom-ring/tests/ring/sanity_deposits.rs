@@ -4,10 +4,12 @@ use custom_ring_interface::{
     audit_stream::{AuditRecord, OpeningRecord, RecordKind},
     domain::deposit_blinding,
     key_catalog::RingCircuit,
-    ring_deposit_assets, DepositContext, DepositPrefix, DepositPublicInput, DepositSubjects,
-    RingDepositAuditCapsule, PROVING_KEY_SHA256S,
+    ring_deposit_assets,
+    tracking::TrackingRegistry,
+    DepositContext, DepositPrefix, DepositPublicInput, DepositSubjects, RingDepositAuditCapsule,
+    PROVING_KEY_SHA256S,
 };
-use custom_ring_sdk::{secret_json_body, CredentialPoolRead};
+use custom_ring_sdk::secret_json_body;
 use solana_instruction::AccountMeta;
 use spr_client::{
     prover::{verify_proof_statement, ExpectedProvingKey, ProveRequest},
@@ -19,7 +21,8 @@ use spr_interface::N_PUBLIC_SLOTS;
 use spr_program::instruction::{RingAssetDeposit, RingDeposit as SppRingDeposit};
 use spr_transaction::owner_utxo_hash;
 use zeroize::Zeroizing;
-use zolana_ring_client::seal_deposits;
+use zolana_ring_client::{seal_deposits, RingIndexer};
+use zolana_ring_indexer::tracking::{GetTrackingRecordPoolRequest, GetTrackingRecordPoolResponse};
 use zolana_ring_member_registry::RecordPool;
 use zolana_ring_policy::{EncodedRuleTable, SourceMap};
 use zolana_ring_transaction::RingDepositPlaintext;
@@ -57,6 +60,50 @@ fn proof_paths<'a>(
             })
         })
         .collect()
+}
+
+fn tracking_pool(
+    response: &GetTrackingRecordPoolResponse,
+    member: &[u8; 32],
+    capacity: usize,
+) -> Result<serde_json::Value> {
+    let row = response
+        .records
+        .first()
+        .context("the owner's tracking row")?;
+    let record = &row.record;
+    let [view0, view1] = pack_be::<32, 2>(&record.viewing_u.0);
+    let siblings: Vec<[[u8; 32]; 3]> = row
+        .path
+        .siblings
+        .iter()
+        .map(|level| level.clone().map(|sibling| sibling.0))
+        .collect();
+    Ok(serde_json::json!({
+        "trackingRoot": field(response.root.root.0),
+        "trackingRecords": vec![serde_json::json!({
+            "member": field(record.member.0),
+            "next": field(record.next.0),
+            "nullifierPk": field(record.nullifier_pk.0),
+            "ctHash": field(record.ct_hash.0),
+            "view0": field(view0),
+            "view1": field(view1),
+            "revision": field(right_align(&record.revision.to_be_bytes())),
+            "listTag": field(record.list_tag.0),
+        }); capacity],
+        "trackingProof": {
+            "canopy": response.canopy.iter().map(|node| field(node.0)).collect::<Vec<_>>(),
+            "paths": proof_paths(
+                std::iter::repeat_n((row.path.index, siblings.as_slice()), capacity),
+            ),
+        },
+        "trackingSubjects": vec![serde_json::json!({
+            "member": field(member),
+            "recordIndex": 0,
+        }); capacity],
+        "rowEntries": [],
+        "outputEntries": vec![0; capacity],
+    }))
 }
 
 /// A pool no gate reads.
@@ -187,27 +234,27 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
             .iter()
             .map(|deposit| deposit.owner_utxo_hash)
             .collect();
-        let client = env.client.as_async();
-        let credentials = env.run(
-            CredentialPoolRead {
-                ring,
-                members: &[owner_identity],
-            }
-            .read(client),
-        )?;
-        credentials
-            .credential(&owner_identity)
-            .context("deposit owner has no credential")?;
-        let roots = credentials.roots(capacity)?;
+        let registry = policy_registry(ring, &env)?.tracking;
+        let tracking: TrackingRegistry = fetch_state(rpc, &registry)?;
+        let tracking_root = tracking.newest();
+        let pool_read =
+            env.client
+                .indexer()
+                .get_tracking_record_pool(GetTrackingRecordPoolRequest {
+                    registry: registry.into(),
+                    members: vec![spr_indexer_api::Hash(owner_identity)],
+                    expected_root: spr_indexer_api::Hash(tracking_root.hash),
+                    openings: capacity as u64,
+                })?;
         let statement = DepositPublicInput {
             context_hash: &context,
+            key_capacity: u8::try_from(capacity)?,
             owner_utxo_hashes: &commitments,
             ciphertexts: &encryption.ciphertexts,
             assets: &assets,
             auditor_pk: auditor.pubkey().as_bytes(),
             eph_pk: encryption.ephemeral_pk.as_bytes(),
-            ring_id: &ring.ring_id()?,
-            credentials: &roots,
+            tracking_root: &tracking_root.hash,
             registry: None,
         }
         .hash()?;
@@ -260,7 +307,7 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
             "ownerEntries": vec![serde_json::json!({
                 "own": 0,
                 "curator": [0],
-                "credential": 0,
+                "tracking": 0,
                 "listSalt": field([0; 32]),
                 "ownSalted": 0,
                 "curatorSalted": [0],
@@ -270,8 +317,7 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
         });
         let fields = body.as_object_mut().context("a request object")?;
         for section in [
-            credentials
-                .proof_inputs(capacity, Vec::new(), vec![0; capacity])?
+            tracking_pool(&pool_read, &owner_identity, capacity)?
                 .as_object()
                 .cloned()
                 .context("a request section")?,
@@ -304,18 +350,18 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
                 commitment: commitment.commitment,
                 commitment_pok: commitment.commitment_pok,
             },
-            credential_read: credentials.read()?,
+            tracking_revision: tracking_root.revision,
             own_revision: Default::default(),
             curator_revision: Default::default(),
         };
-        let prefix_bytes = prefix.encode()?;
-        let trees = credentials.trees(capacity)?;
         let wrap = |mut instruction: Instruction| {
-            instruction.data = [prefix_bytes.as_slice(), &instruction.data].concat();
+            instruction.data = [bytemuck::bytes_of(&prefix), &instruction.data].concat();
             instruction.accounts.splice(
                 0..0,
-                std::iter::once(AccountMeta::new_readonly(ring.policy_pda(), false))
-                    .chain(trees.metas()),
+                [
+                    AccountMeta::new_readonly(ring.policy_pda(), false),
+                    AccountMeta::new_readonly(registry, false),
+                ],
             );
             instruction
         };

@@ -10,12 +10,11 @@ use base64::Engine;
 use bytemuck::Pod;
 use custom_ring_cli::{Zolana, ZolanaServices};
 use custom_ring_interface::{
-    credential::CredentialAuthority,
     key_catalog::{RingCircuit, RING_KEYS},
     policy_withdrawal_hash,
     storage::{Revision, Root, StorageRegistry},
-    verifying_key, AuditCredential, CredentialRootSelection, CredentialRoots, CredentialStateRoot,
-    CredentialTreeRead, RingProof, SignerSet, TransferBinding, TransferRoots, ANONYMOUS_PARTIES,
+    tracking::TrackingRegistry,
+    verifying_key, RingProof, SignerSet, TransferBinding, TransferRoots, ANONYMOUS_PARTIES,
     MAX_CPI_DATA_LEN, PROVING_KEY_SHA256S, TAGGED_X25519_KEY_LEN,
 };
 use custom_ring_test_validator::policy::RELEASED;
@@ -25,32 +24,29 @@ use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatu
 use spr_api::{HttpClient, HttpFuture, HttpRequest};
 use spr_client::{
     prover::{ExpectedProvingKey, ProveRequest},
-    rpc::{
-        GetNonInclusionProofsResponse, GetShieldedTransactionsByNullifiersResponse, HistoryFilters,
-        IndexerRpcConfig, PaginationToken, STATE_TREE_HEIGHT,
-    },
+    rpc::{GetNonInclusionProofsResponse, IndexerRpcConfig, STATE_TREE_HEIGHT},
     ClientError, ConfirmedInstructionGroups, GetMerkleProofsResponse, MerkleContext, MerkleProof,
     Proof, ProofDataSource, WitnessReader,
 };
 use spr_hasher::{Hasher, HasherError, Poseidon};
 use spr_indexer_api::Hash;
-use spr_interface::{
-    instruction::{TransactProof, TreeContext},
-    N_PUBLIC_SLOTS,
-};
+use spr_interface::N_PUBLIC_SLOTS;
 use spr_keypair::NullifierKey;
-use spr_program::{
-    program::{SppTransactCpi, UniqueDataUtxo},
-    ADDRESS_TREE_ID,
-};
 use zeroize::Zeroizing;
 use zolana_ring_client::{RingIndexer, RingIndexerError};
-use zolana_ring_indexer::rpc::{
-    GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
-    RingMemberRecordView, RingRecordPathView, StorageRootView,
+use zolana_ring_indexer::{
+    rpc::{
+        GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
+        RingMemberRecordView, RingRecordPathView, StorageRootView,
+    },
+    tracking::{
+        GetTrackingRecordPoolRequest, GetTrackingRecordPoolResponse, RingIndexedTrackingRecordView,
+        RingTrackingRecordView,
+    },
 };
 use zolana_ring_member_registry::{
-    Canopy, MemberRecord, MemberRegistryTree, RecordPoolOf, RecordTree, SharedPath,
+    Canopy, MemberRecord, MemberRegistryTree, RecordPoolOf, RecordTree, SharedPath, TrackingRecord,
+    TrackingTree,
 };
 
 const KEY: RingCircuit = RingCircuit::Transfer {
@@ -67,11 +63,11 @@ const DISCOVERY_DEPOSIT: u64 = 1_000_000;
 const STATE_TREE_TYPE: u16 = 1;
 /// The default heap frame, no ring transaction requests a larger one.
 const HEAP_LIMIT: u64 = 32 * 1024;
-const CREDENTIAL_SECTION: [&str; 6] = [
-    "credentialOwner",
-    "addressRoot",
-    "stateRoots",
-    "credentialOpenings",
+const TRACKING_SECTION: [&str; 6] = [
+    "trackingRoot",
+    "trackingRecords",
+    "trackingProof",
+    "trackingSubjects",
     "rowEntries",
     "outputEntries",
 ];
@@ -145,30 +141,7 @@ pub(super) struct SeededIndexer {
     pub(super) own: MemberRegistryTree,
     /// A curator registry read beside the ring's own.
     pub(super) curator: Option<(Address, MemberRegistryTree)>,
-    pub(super) credentials: SeededCredentials,
-}
-
-impl SeededIndexer {
-    pub(super) fn context(&self) -> spr_indexer_api::Context {
-        spr_indexer_api::Context {
-            block_time: 0,
-            slot: self.notes.slot.max(self.credentials.state.slot),
-        }
-    }
-
-    pub(super) fn proof(
-        &self,
-        tree: Address,
-        leaf: [u8; 32],
-    ) -> Result<Option<MerkleProof>, HasherError> {
-        if tree != self.credentials.tree {
-            return Ok(None);
-        }
-        if let Some(proof) = self.credentials.state.proof(tree, leaf)? {
-            return Ok(Some(proof));
-        }
-        self.notes.proof(tree, leaf)
-    }
+    pub(super) tracking: TrackingTree,
 }
 
 pub(super) fn context(notes: &SeededNotes) -> spr_indexer_api::Context {
@@ -215,60 +188,23 @@ impl Rpc for SeededIndexer {
         leaves: Vec<[u8; 32]>,
         _config: Option<IndexerRpcConfig>,
     ) -> Result<GetMerkleProofsResponse, ClientError> {
+        let notes = &self.notes;
         let proofs = leaves
             .into_iter()
             .map(|leaf| {
-                self.proof(tree_account, leaf)
+                notes
+                    .proof(tree_account, leaf)
                     .map_err(|error| ClientError::Rpc(error.to_string()))?
                     .ok_or_else(|| ClientError::Rpc("a leaf no seed holds".to_owned()))
             })
             .collect::<Result<_, _>>()?;
         Ok(GetMerkleProofsResponse {
-            context: self.context(),
+            context: spr_client::Context {
+                block_time: 0,
+                slot: notes.slot,
+            },
             proofs,
         })
-    }
-
-    fn get_shielded_transactions_by_nullifiers(
-        &self,
-        nullifiers: Vec<[u8; 32]>,
-        pagination_token: Option<PaginationToken>,
-        limit: Option<u32>,
-        filters: HistoryFilters,
-        config: Option<IndexerRpcConfig>,
-    ) -> Result<GetShieldedTransactionsByNullifiersResponse, ClientError> {
-        if let Some(page) = self.credentials.history(&nullifiers) {
-            if pagination_token.is_some() {
-                return Err(ClientError::Rpc("seeded history has one page".to_owned()));
-            }
-            return Ok(GetShieldedTransactionsByNullifiersResponse {
-                context: page.context,
-                output_tree_id: page.output_tree_id,
-                data: page
-                    .data
-                    .into_iter()
-                    .map(|group| {
-                        Ok(spr_indexer_api::TransactionEvents {
-                            slot: group.slot,
-                            signature: group.signature.0,
-                            events: group
-                                .events
-                                .into_iter()
-                                .map(spr_client::indexer::decode_shielded_transaction)
-                                .collect::<Result<_, _>>()?,
-                        })
-                    })
-                    .collect::<Result<_, ClientError>>()?,
-                pagination_token: None,
-            });
-        }
-        self.indexer.get_shielded_transactions_by_nullifiers(
-            nullifiers,
-            pagination_token,
-            limit,
-            filters,
-            config,
-        )
     }
 
     fn get_non_inclusion_proofs(
@@ -313,6 +249,44 @@ impl RingIndexer for SeededIndexer {
                         next: Hash(record.next),
                         lists: record.lists,
                         mint_policy: record.mint_policy,
+                    },
+                    path: path_view(path),
+                })
+                .collect(),
+            canopy: canopy_view(&pool),
+            subjects: subject_indexes(&pool),
+        })
+    }
+
+    fn get_tracking_record_pool(
+        &self,
+        request: GetTrackingRecordPoolRequest,
+    ) -> Result<GetTrackingRecordPoolResponse, RingIndexerError> {
+        let members = member_bytes(&request.members);
+        let pool = self
+            .tracking
+            .record_pool(
+                &members,
+                Canopy::covering_tracking(request.openings as usize).unwrap(),
+            )
+            .unwrap();
+        Ok(GetTrackingRecordPoolResponse {
+            context: context(&self.notes),
+            root: root_view(self.tracking.root().unwrap(), self.tracking.records().len()),
+            records: pool
+                .records
+                .iter()
+                .zip(&pool.proof.paths)
+                .map(|(record, path)| RingIndexedTrackingRecordView {
+                    record: RingTrackingRecordView {
+                        member: Hash(record.member),
+                        next: Hash(record.next),
+                        nullifier_pk: Hash(record.nullifier_pk),
+                        ct_hash: Hash(record.ct_hash),
+                        viewing_u: Hash(record.viewing_u),
+                        revision: record.revision,
+                        list_tag: Hash(record.list_tag),
+                        seal: None,
                     },
                     path: path_view(path),
                 })
@@ -372,7 +346,6 @@ pub(super) struct SeededChain<'a> {
     pub(super) env: &'a TestEnv,
     pub(super) notes: SeededNotes,
     pub(super) rows: &'a [ShieldedAddress],
-    pub(super) credentials: SeededCredentials,
     pub(super) body: &'a RingBody,
 }
 
@@ -395,7 +368,7 @@ impl SeededChain<'_> {
                 notes: self.notes,
                 own: own_tree(self.rows, &[])?,
                 curator: None,
-                credentials: self.credentials,
+                tracking: tracking_tree(self.rows)?,
             },
             prover: prover(),
             ring_prover: prover(),
@@ -416,7 +389,7 @@ struct LinkedRows {
 
 fn linked(mut members: Vec<[u8; 32]>) -> LinkedRows {
     members.sort_unstable();
-    let closing = MemberRecord::SENTINEL.next;
+    let closing = TrackingRecord::SENTINEL.next;
     LinkedRows {
         first: members.first().copied().unwrap_or(closing),
         rows: members
@@ -456,169 +429,30 @@ pub(super) fn own_tree(rows: &[ShieldedAddress], extra: &[[u8; 32]]) -> Result<M
     Ok(MemberRegistryTree::from_records(records)?)
 }
 
-#[derive(Clone)]
-pub(super) struct SeededCredentials {
-    tree: Address,
-    tree_id: u16,
-    data: Vec<u8>,
-    state: SeededNotes,
-    enrollments: Vec<spr_indexer_api::ShieldedTransaction>,
-}
-
-pub(super) struct CredentialFixture<'a> {
-    pub(super) env: &'a TestEnv,
-    pub(super) ring: CustomRing,
-    pub(super) auditor: [u8; TAGGED_X25519_KEY_LEN],
-    pub(super) rows: &'a [RingAddress],
-}
-
-impl CredentialFixture<'_> {
-    pub(super) fn build(self) -> Result<SeededCredentials> {
-        let mut data = tree_data(self.env)?;
-        let mut tree = tree_layout(self.env.tree, &mut data)?;
-        let tree_id = tree.tree_id();
-        let state = tree.utxo_tree();
-        let first_leaf = state.next_index();
-        let frontier = state.subtrees.to_vec();
-        let slot = self.env.client.rpc().get_slot()?;
-        let authority = CredentialAuthority::derive(&self.ring.program_id())?;
-        let mut leaves = Vec::with_capacity(self.rows.len());
-        let mut enrollments = Vec::with_capacity(self.rows.len());
-        for (index, row) in self.rows.iter().enumerate() {
-            let credential = AuditCredential {
-                ring_id: self.ring.ring_id()?,
-                member: address_member(&row.recipient)?,
-                nullifier_pk: row.recipient.nullifier_pubkey,
-                list_tag: custom_ring_interface::domain::list_tag(&row.list_salt)?,
-                auditor_pubkey: self.auditor,
-                eph_u: [5; 32],
-                ciphertext: [6; custom_ring_interface::REGISTER_KEY_CIPHERTEXT_LEN],
-            };
-            let mut account = UniqueDataUtxo::new_init(
-                authority.owner(),
-                credential.seed()?,
-                TreeContext {
-                    utxo_tree_root_index: 0,
-                    nullifier_tree_root_index: 0,
-                },
-            )?;
-            *account = credential;
-            let address = *account.address();
-            let transaction = SppTransactCpi::new(TransactProof {
-                a: [0; 32],
-                b: [0; 128],
-                c: [0; 32],
-            })
-            .with_unique_data_utxo(account)?
-            .into_ix_data(tree_id)?;
-            let output = transaction
-                .outputs
-                .into_iter()
-                .next()
-                .context("credential output")?;
-            leaves.push(output.utxo_hash);
-            enrollments.push(spr_indexer_api::ShieldedTransaction {
-                slot,
-                tx_signature: Signature::from([u8::try_from(index + 1)?; 64]).into(),
-                event_index: Some(0),
-                tx_viewing_pk: None,
-                salt: None,
-                output_slots: vec![spr_indexer_api::RingsOutputSlot {
-                    view_tag: Hash([0; 32]),
-                    output_context: spr_indexer_api::RingsOutputContext {
-                        hash: Hash(output.utxo_hash),
-                        tree: self.env.tree.into(),
-                        tree_id,
-                        leaf_index: first_leaf + index as u64,
-                    },
-                    payload: output.data.context("credential plaintext")?.into(),
-                }],
-                messages: Vec::new(),
-                nullifiers: vec![Hash(address)],
-                proofless: false,
-                ring_config: None,
-                ring_program_id: None,
-            });
+pub(super) fn tracking_tree(rows: &[ShieldedAddress]) -> Result<TrackingTree> {
+    let addresses = rows
+        .iter()
+        .map(|address| Ok((address_member(address)?, address)))
+        .collect::<Result<std::collections::HashMap<_, _>>>()?;
+    let linked = linked(addresses.keys().copied().collect());
+    let records = std::iter::once(TrackingRecord {
+        next: linked.first,
+        ..TrackingRecord::SENTINEL
+    })
+    .chain(linked.rows.iter().map(|row| {
+        let address = addresses[&row.member];
+        TrackingRecord {
+            member: row.member,
+            next: row.next,
+            nullifier_pk: address.nullifier_pubkey,
+            ct_hash: [0x05; 32],
+            viewing_u: address.viewing_pubkey.u(),
+            revision: REVISION,
+            list_tag: [0x06; 32],
         }
-        state
-            .append_batch(leaves.iter(), slot)
-            .map_err(|error| anyhow!("credential seed {error:?}"))?;
-        let state = SeededNotes {
-            leaves,
-            first_leaf,
-            frontier,
-            root: state.root(),
-            root_index: state.current_root_index(),
-            slot,
-        };
-        state.check_roots()?;
-        Ok(SeededCredentials {
-            tree: self.env.tree,
-            tree_id,
-            data,
-            state,
-            enrollments,
-        })
-    }
-}
-
-impl SeededCredentials {
-    pub(super) fn install(&self, env: &TestEnv) -> Result<()> {
-        env.set_account_data(self.tree, &self.data)
-    }
-
-    pub(super) fn history(
-        &self,
-        nullifiers: &[[u8; 32]],
-    ) -> Option<spr_indexer_api::GetShieldedTransactionsByNullifiersResponse> {
-        let data: Vec<_> = self
-            .enrollments
-            .iter()
-            .filter(|event| {
-                event
-                    .nullifiers
-                    .iter()
-                    .any(|value| nullifiers.contains(&value.0))
-            })
-            .map(|event| spr_indexer_api::TransactionEvents {
-                slot: event.slot,
-                signature: event.tx_signature,
-                events: vec![event.clone()],
-            })
-            .collect();
-        (!data.is_empty()).then(
-            || spr_indexer_api::GetShieldedTransactionsByNullifiersResponse {
-                context: context(&self.state),
-                output_tree_id: Some(self.tree_id),
-                data,
-                pagination_token: None,
-            },
-        )
-    }
-
-    fn roots(&self, env: &TestEnv, ring: CustomRing) -> Result<CredentialRoots> {
-        let address = spr_interface::pda::tree(ADDRESS_TREE_ID);
-        let mut account = fetch_account(env.client.rpc(), &address)?;
-        let root_index = tree_layout(address, &mut account.data)?
-            .nullifier_tree()
-            .get_root_index();
-        let checkpoint = CredentialTreeRead {
-            address: &address,
-            owner: &account.owner,
-            data: &mut account.data,
-        }
-        .checkpoint(u16::try_from(root_index)?)?;
-        Ok(CredentialRootSelection {
-            ring_program: &ring.program_id(),
-            address_checkpoint: checkpoint,
-            state_roots: &[CredentialStateRoot {
-                tree_id: self.tree_id,
-                root: self.state.root,
-            }],
-            capacity: KEY.credential_capacity().context("credential capacity")?,
-        }
-        .roots()?)
-    }
+    }))
+    .collect();
+    Ok(TrackingTree::from_records(records)?)
 }
 
 pub(super) fn newest_root(hash: [u8; 32]) -> Root {
@@ -737,11 +571,7 @@ struct Binding {
 }
 
 impl Binding {
-    fn statement(
-        &self,
-        instruction: &Instruction,
-        credentials: &CredentialRoots,
-    ) -> Result<[u8; 32]> {
+    fn statement(&self, instruction: &Instruction, tracking_root: [u8; 32]) -> Result<[u8; 32]> {
         let (_, body) = instruction
             .data
             .split_first()
@@ -761,7 +591,7 @@ impl Binding {
                 policy_hash: self.policy_hash,
                 own_root: self.own_root,
                 curator_root: [0; 32],
-                credentials: credentials.clone(),
+                tracking_root,
             },
             public_assets: &zero,
             public_amounts: &zero,
@@ -1016,12 +846,22 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
     let honest_rows = [sender.shielded_address()?, recipient_address];
     let wrong_rows = [sender.shielded_address()?, wrong_address];
     let policy = policy_registry(ring, &env)?;
+    let honest_root = tracking_tree(&honest_rows)?.root()?;
+    let wrong_root = tracking_tree(&wrong_rows)?.root()?;
     let own_root = own_tree(&honest_rows, &[])?.root()?;
     AccountEdit {
         env: &env,
         address: policy.records,
     }
     .apply(|registry: &mut StorageRegistry| registry.roots[0] = newest_root(own_root))?;
+    let write_tracking = |root: [u8; 32]| {
+        AccountEdit {
+            env: &env,
+            address: policy.tracking,
+        }
+        .apply(|registry: &mut TrackingRegistry| registry.roots[0] = newest_root(root))
+    };
+    write_tracking(honest_root)?;
     let Seeded {
         wallets: notes,
         notes: seeded,
@@ -1032,34 +872,13 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
         amounts: &[RING_DEPOSIT_A, RING_DEPOSIT_B],
     }
     .write()?;
-    let honest_addresses = [
-        ring_address(sender, ring.program_id())?,
-        ring_address(recipient, ring.program_id())?,
-    ];
-    let mut wrong_addresses = honest_addresses.clone();
-    wrong_addresses[1].recipient = wrong_address;
-    let seed = |rows| {
-        CredentialFixture {
-            env: &env,
-            ring,
-            auditor: policy.auditor_pubkey,
-            rows,
-        }
-        .build()
-    };
-    let honest_credentials = seed(&honest_addresses)?;
-    let wrong_credentials = seed(&wrong_addresses)?;
-    honest_credentials.install(&env)?;
-    let honest_roots = honest_credentials.roots(&env, ring)?;
-    let wrong_roots = wrong_credentials.roots(&env, ring)?;
-    println!("seeded own registry, immutable SPP credentials and two unbacked ring notes");
+    println!("seeded: own and tracking roots, two ring notes");
 
     let body = RingBody::default();
     let chain = SeededChain {
         env: &env,
         notes: seeded.clone(),
         rows: &honest_rows,
-        credentials: honest_credentials.clone(),
         body: &body,
     }
     .connect()?;
@@ -1067,7 +886,6 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
         env: &env,
         notes: seeded,
         rows: &wrong_rows,
-        credentials: wrong_credentials.clone(),
         body: &body,
     }
     .connect()?;
@@ -1109,7 +927,7 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
         "another key proved the transfer"
     );
     let instruction = proven.instruction()?;
-    let statement = binding.statement(&instruction, &honest_roots)?;
+    let statement = binding.statement(&instruction, honest_root)?;
     ensure!(
         honest_body["publicInputHash"] == field(&statement),
         "the request's statement differs from the one the program rebuilds"
@@ -1147,19 +965,19 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
     println!("altered statement: refused at the ring pairing, ProofVerificationFailed");
 
     let mut wrong_record = honest_body.clone();
-    wrong_record["publicInputHash"] = field(&binding.statement(&altered, &honest_roots)?);
+    wrong_record["publicInputHash"] = field(&binding.statement(&altered, honest_root)?);
     replay.refuses("wrong auditor record", wrong_record)?;
 
-    wrong_credentials.install(&env)?;
+    write_tracking(wrong_root)?;
     let unmatched = payment(recipient_address).prove(&wrong_chain)?;
     ensure!(
         matches!(unmatched, Err(RingError::RecipientKeyMismatch { .. })),
         "the client took a recipient key its row does not name"
     );
-    println!("wrong credential key: refused by the client, RecipientKeyMismatch");
+    println!("wrong tracking key: refused by the client, RecipientKeyMismatch");
     let forged = payment(wrong_address).prove(&wrong_chain)??;
     let wrong_body = body.take()?;
-    honest_credentials.install(&env)?;
+    write_tracking(honest_root)?;
     Rejection::custom(CustomRingError::ProofVerificationFailed as u32)
         .at(0)
         .assert_client(&send_expecting_rejection(
@@ -1168,15 +986,13 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
             forged.instruction()?,
         )?);
     assert_account_unchanged(rpc, &env.tree, &tree_before)?;
-    println!(
-        "wrong credential key: real proof refused at the ring pairing, ProofVerificationFailed"
-    );
+    println!("wrong tracking key: real proof refused at the ring pairing, ProofVerificationFailed");
     let mut crossed = honest_body.clone();
-    for section in CREDENTIAL_SECTION {
+    for section in TRACKING_SECTION {
         crossed[section] = wrong_body[section].clone();
     }
-    crossed["publicInputHash"] = field(&binding.statement(&instruction, &wrong_roots)?);
-    replay.refuses("wrong credential key", crossed)?;
+    crossed["publicInputHash"] = field(&binding.statement(&instruction, wrong_root)?);
+    replay.refuses("wrong tracking key", crossed)?;
 
     let signature = land(&env, instruction.clone(), sender, &[])?;
     Landed {

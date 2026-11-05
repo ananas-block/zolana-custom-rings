@@ -148,8 +148,8 @@ const PRIVATE_BLOCK_ONLY: RuleTable = RuleTable::builder()
     .rule(Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock))
     .build();
 
-/// A private list read through another ring's records pairs with that ring's credentials, a
-/// subscriber's absence floor would count the wrong ring's writes.
+/// A private list read through another ring's records pins that ring's tracking registry, a
+/// subscriber's floor would count the wrong registry's revisions.
 #[test]
 fn a_private_list_on_another_rings_records_is_refused() -> Result<()> {
     let rings = CuratedRings::setup()?;
@@ -184,7 +184,7 @@ fn a_private_list_on_another_rings_records_is_refused() -> Result<()> {
         .instruction()?],
     }
     .send(env.client.rpc())?;
-    Rejection::custom(CustomRingError::SaltedSourceOtherRing as u32)
+    Rejection::custom(CustomRingError::SaltedSourceOtherTracking as u32)
         .at(0)
         .assert_client(&rejection);
     assert_eq!(

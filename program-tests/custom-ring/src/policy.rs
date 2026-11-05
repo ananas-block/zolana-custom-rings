@@ -12,26 +12,27 @@ use custom_ring_interface::{
     mint_policy_write,
     storage::{Revision, StorageRegistry},
     storage_instruction::StorageUpdateIxData,
-    AuditCredential, CredentialRead, RecordWriteData, RingPolicy, WriteRecordsIxData,
+    tracking::TrackingAuthorization,
+    RecordWriteData, RingPolicy, WriteRecordsIxData,
 };
 use custom_ring_sdk::{
     CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
-    Enroll, InitializeStorage, ProvenRingTransfer, RingDeposit, RingDepositReceipt, RingError,
-    StorageApplyProof, UpdateStorage,
+    Enroll, EnrollPending, InitializeStorage, ProvenRingTransfer, RingDeposit, RingDepositReceipt,
+    RingError, StorageApplyProof, UpdateStorage,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient};
+use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient, Rpc};
 use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use spr_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
-use zolana_ring_client::{
-    records::storage_apply_proof_inputs, CredentialLookup, CredentialResolver, RingIndexer,
-    ViewingHistory,
+use zolana_ring_client::{records::storage_apply_proof_inputs, RingIndexer, ViewingHistory};
+use zolana_ring_indexer::{
+    rpc::{GetStorageApplyProofInputsRequest, StorageWriteView},
+    tracking::GetPendingEnrollmentsRequest,
 };
-use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
 use zolana_ring_keys::ListSaltHolder;
 use zolana_ring_policy::{
     ListChange, ListId, ListSet, Member, MintPolicy, Rule, RuleTable, Subject,
@@ -285,7 +286,7 @@ pub fn wait_for_list(
             _ if Instant::now() > deadline => {
                 return Err(anyhow!(
                     "{list_id:?} of {member:?} not indexed as {present}"
-                ));
+                ))
             }
             _ => sleep(Duration::from_millis(500)),
         }
@@ -335,50 +336,68 @@ pub fn owner_enrollment(
     env: &TestEnv,
     ring: CustomRing,
     owner: Address,
-) -> Result<Option<AuditCredential>> {
-    let client = env.client.as_async();
-    match env.client.block_on(async {
-        CredentialResolver::new(ring.program_id(), owner)
-            .resolve(client, client)
-            .await
-            .map_err(RingError::from)
-    })? {
-        CredentialLookup::Present(present) => Ok(Some(present.credential)),
-        CredentialLookup::Absent(_) => Ok(None),
-        CredentialLookup::Unknown(reason) => {
-            Err(anyhow!("credential lookup is unknown {reason:?}"))
-        }
-    }
+) -> Result<Option<TrackingAuthorization>> {
+    let tracking = env
+        .run(ring.require_policy(env.client.as_async()))?
+        .tracking;
+    let (authorization, _) = TrackingAuthorization::find_address(&tracking, &owner);
+    env.client
+        .rpc()
+        .get_account(authorization)?
+        .map(|account| {
+            TrackingAuthorization::decode(&account.owner, &account.data)
+                .ok_or_else(|| anyhow!("{authorization} holds no tracking authorization"))
+        })
+        .transpose()
 }
 
-pub struct WaitForCredentials<'a> {
+/// The indexer serves the rows on return.
+pub struct ApplyOwnerEnrollments<'a> {
     pub ring: CustomRing,
     pub owners: &'a [Address],
     pub env: &'a TestEnv,
 }
 
-impl WaitForCredentials<'_> {
-    pub fn wait(self) -> Result<()> {
-        wait_for("credential state inclusion", || {
+impl ApplyOwnerEnrollments<'_> {
+    pub fn send(self) -> Result<()> {
+        let env = self.env;
+        let registry = env
+            .run(self.ring.require_policy(env.client.as_async()))?
+            .tracking;
+        wait_for("the applied enrollments", || {
+            let mut applied = true;
             for owner in self.owners {
-                let client = self.env.client.as_async();
-                match self.env.client.block_on(async {
-                    CredentialResolver::new(self.ring.program_id(), *owner)
-                        .resolve(client, client)
-                        .await
-                        .map_err(RingError::from)
-                })? {
-                    CredentialLookup::Present(_) => {}
-                    CredentialLookup::Absent(_) | CredentialLookup::Unknown(_) => {
-                        return Ok(Probe::NotYet);
-                    }
-                }
+                applied &= owner_enrollment(env, self.ring, *owner)?
+                    .is_some_and(|enrollment| !enrollment.is_pending());
             }
-            Ok(Probe::Ready(()))
+            if applied {
+                let pending =
+                    env.client
+                        .indexer()
+                        .get_pending_enrollments(GetPendingEnrollmentsRequest {
+                            registry: registry.into(),
+                            after: None,
+                            limit: 1,
+                        })?;
+                return Ok(match pending.enrollments.is_empty() {
+                    true => Probe::Ready(()),
+                    false => Probe::NotYet,
+                });
+            }
+            match env.run(EnrollPending { ring: self.ring }.prove(env.client.ring_client())) {
+                Ok(Some(instruction)) => {
+                    send(env.client.rpc(), &env.payer, &[instruction])?;
+                    Ok(Probe::NotYet)
+                }
+                Ok(None) => Ok(Probe::NotYet),
+                Err(error) if error.is_projection_lag() => Ok(Probe::Retry(error.into())),
+                Err(error) => Err(error.into()),
+            }
         })
     }
 }
 
+/// Applied on return.
 pub struct EnrollOwners<'a> {
     pub ring: CustomRing,
     pub owners: &'a [&'a ShieldedKeypair],
@@ -387,47 +406,76 @@ pub struct EnrollOwners<'a> {
 
 impl EnrollOwners<'_> {
     pub fn send(self) -> Result<()> {
+        self.enroll()?;
+        let owners: Vec<Address> = self.owners.iter().map(|owner| owner.pubkey()).collect();
+        ApplyOwnerEnrollments {
+            ring: self.ring,
+            owners: &owners,
+            env: self.env,
+        }
+        .send()
+    }
+
+    /// One apply of the whole batch, a partial read of the pending queue would select a narrower key.
+    pub fn send_in_one_batch(self) -> Result<()> {
         let env = self.env;
+        self.enroll()?;
+        let registry = env
+            .run(self.ring.require_policy(env.client.as_async()))?
+            .tracking;
+        wait_for("the whole pending batch", || {
+            let pending =
+                env.client
+                    .indexer()
+                    .get_pending_enrollments(GetPendingEnrollmentsRequest {
+                        registry: registry.into(),
+                        after: None,
+                        limit: u64::try_from(self.owners.len())?,
+                    })?;
+            Ok(match pending.enrollments.len() == self.owners.len() {
+                true => Probe::Ready(()),
+                false => Probe::NotYet,
+            })
+        })?;
+        let owners: Vec<Address> = self.owners.iter().map(|owner| owner.pubkey()).collect();
+        ApplyOwnerEnrollments {
+            ring: self.ring,
+            owners: &owners,
+            env,
+        }
+        .send()
+    }
+
+    fn enroll(&self) -> Result<()> {
+        let env = self.env;
+        let payer = env.payer.pubkey();
         for owner in self.owners {
-            if let Some(credential) = owner_enrollment(env, self.ring, owner.pubkey())? {
-                anyhow::ensure!(credential.nullifier_pk == owner.nullifier_key.pubkey()?);
-                anyhow::ensure!(
-                    credential.list_tag
-                        == custom_ring_interface::domain::list_tag(
-                            &owner.list_salt(&self.ring.program_id())?
-                        )?
-                );
-                continue;
-            }
-            let enrollment = env.run(
-                Enroll {
-                    ring: self.ring,
-                    owner: owner.pubkey(),
-                    payer: env.payer.pubkey(),
-                    output_tree: env.tree,
-                    nullifier_key: &owner.nullifier_key,
-                    list_salt: owner.list_salt(&self.ring.program_id())?,
-                    viewing_pubkey: owner.viewing_pubkey(),
-                }
-                .prove(env.client.ring_client()),
-            )?;
+            // A present row takes a rotation with no proof, `Enroll::prove` reads it.
+            let instruction = env
+                .run(
+                    Enroll {
+                        ring: self.ring,
+                        payer,
+                        owner: owner.pubkey(),
+                        nullifier_key: &owner.nullifier_key,
+                        viewing_pubkey: owner.viewing_pubkey(),
+                        list_salt: owner.list_salt(&self.ring.program_id())?,
+                    }
+                    .prove(env.client.ring_client()),
+                )?
+                .instruction();
             SendAs {
                 rpc: env.client.rpc(),
                 payer: &env.payer,
                 holder: *owner,
             }
-            .send(&enrollment.instruction.instructions()?)?;
+            .send(&[instruction])?;
         }
-        let owners: Vec<_> = self.owners.iter().map(|owner| owner.pubkey()).collect();
-        WaitForCredentials {
-            ring: self.ring,
-            owners: &owners,
-            env,
-        }
-        .wait()
+        Ok(())
     }
 }
 
+/// A keyed note needs its owner's tracking row on every ring.
 pub fn enroll_actors(env: &TestEnv, ring: CustomRing) -> Result<()> {
     EnrollOwners {
         ring,
@@ -509,15 +557,14 @@ impl StorageRecords<'_> {
         let update = UpdateStorage {
             authority,
             registry,
+            tracking_registry: state.tracking_registry,
             data: StorageUpdateIxData {
                 revision: Revision::from(response.revision),
                 writes: self.writes,
                 asset_writes: Vec::new(),
-                credential_read: CredentialRead::empty(),
-                private_write: None,
+                tracking_revision: None,
                 apply: &apply,
             },
-            credential_trees: None,
         };
         let instruction = update.clone().instruction()?;
         let mut altered_apply = apply;

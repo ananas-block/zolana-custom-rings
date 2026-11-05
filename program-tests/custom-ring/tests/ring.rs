@@ -141,9 +141,8 @@ use spr_user_registry_interface::user_registry_program_id;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{write_auditor_key, CreateAuditorKeyRequest},
-    AuditedTransaction, CredentialError, InputOpening, KnownUtxo, OutputOpening,
-    RecipientKeyResolver, RecipientKeys, RecoveryStep, RingRecovery, RingScan, SealedNullifierKey,
-    SourceMember, ViewingHistory,
+    AuditedTransaction, InputOpening, KnownUtxo, OutputOpening, RecoveryStep, RingRecovery,
+    RingScan, SealedNullifierKey, SourceMember, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
@@ -826,11 +825,11 @@ impl AuditedSpends<'_> {
             .owners
             .iter()
             .map(|owner| {
-                let credential = owner_enrollment(env, self.ring, *owner)?
-                    .context("the owner holds an audit credential")?;
+                let enrolled = owner_enrollment(env, self.ring, *owner)?
+                    .context("the owner holds an enrollment")?;
                 Ok(SealedNullifierKey {
-                    eph_pk: X25519Pubkey::from_u(credential.eph_u)?,
-                    ciphertext: credential.ciphertext,
+                    eph_pk: X25519Pubkey::from_u(enrolled.eph_u)?,
+                    ciphertext: enrolled.ciphertext,
                 }
                 .open(self.auditor)?)
             })

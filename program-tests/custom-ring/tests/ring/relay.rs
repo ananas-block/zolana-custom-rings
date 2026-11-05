@@ -2,8 +2,8 @@
 
 use anyhow::bail;
 use custom_ring_sdk::{
-    AllowedNullifiers, CredentialEnrollment, MergeRelay, RelaySent, RequestedAuthorityTransfer,
-    ResolvedSource,
+    AllowedNullifiers, MergeRelay, RelaySent, RequestedAuthorityTransfer, ResolvedSource,
+    TrackingEnrollment,
 };
 use custom_ring_test_validator::{
     policy::{DEPOSIT, TRANSFER_AMOUNT},
@@ -173,19 +173,19 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
     env.enable_authority_rail(relayed.ring)?;
     let deposited = relayed.notes(member, 1).deposit()?;
     let ring_rpc = relayed.serve()?;
-    // The delegate admits exactly the member's notes it opened under the credential's sealed key.
+    // The delegate admits exactly the member's notes it opened under the tracking row's sealed key.
     let notes = deposited
         .into_iter()
         .map(|utxo| indexed_note(utxo, member, env, env.tree))
         .collect::<Result<Vec<_>>>()?;
+    let tracking_registry = policy_registry(relayed.ring, env)?.tracking;
     let client = env.client.as_async();
     let source = env.run(async {
         ResolvedSource::resolve(
             member_address,
-            &CredentialEnrollment {
-                photon: client,
+            &TrackingEnrollment {
                 rpc: client,
-                ring: relayed.ring.program_id(),
+                tracking_registry,
                 auditor: &relayed.auditor,
             },
         )

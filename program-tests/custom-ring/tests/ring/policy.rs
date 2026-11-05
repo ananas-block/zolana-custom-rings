@@ -215,7 +215,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .send(&env.client)?;
     let member = &env.sender.keypair;
-    // A keyed note needs its owner's credential.
+    // A keyed note needs its owner's tracking row.
     EnrollOwners {
         ring,
         owners: &[member],
@@ -285,11 +285,13 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .open(&auditor)?;
     assert_eq!(nullifier_key.pubkey()?, member_address.nullifier_pubkey);
+    let tracking: custom_ring_interface::tracking::TrackingRegistry =
+        fetch_state(env.client.rpc(), &policy_registry(ring, &env)?.tracking)?;
     assert_eq!(
-        enrolled.member,
-        custom_ring_interface::credential::owner_member(&member.pubkey())?
+        tracking.next_index(),
+        2,
+        "one enrolled member plus sentinel"
     );
-    assert_eq!(enrolled.ring_id, ring.ring_id()?);
 
     let delegate = Keypair::new();
     DelegateAppointment {
@@ -334,7 +336,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         Ok(transfer)
     };
 
-    // A keyed output needs its owner's credential under the same key, refused before any prover round.
+    // A keyed output needs its owner's row and key, refused before any prover round.
     let unreachable = env.client_with(|| {
         AsyncProverClient::new("http://127.0.0.1:1".to_owned())
             .with_proof_data_source(ProofDataSource::Client)
@@ -356,6 +358,15 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     match refused(&unregistered)? {
         RingError::RecipientNotEnrolled { slot_index } => assert_eq!(slot_index, recipient_slot),
         other => bail!("expected RecipientNotEnrolled, got {other}"),
+    }
+    match refused(&ShieldedAddress {
+        nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+        ..member_address
+    })? {
+        RingError::EnrolledRecipientAtZeroKey { slot_index } => {
+            assert_eq!(slot_index, recipient_slot)
+        }
+        other => bail!("expected EnrolledRecipientAtZeroKey, got {other}"),
     }
     let mismatched = ShieldedAddress {
         nullifier_pubkey: unregistered.nullifier_pubkey,

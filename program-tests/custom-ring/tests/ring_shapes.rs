@@ -25,12 +25,14 @@ const UTXO_AMOUNT: u64 = 1_000_000;
 /// Rent-exempt before the first leg lands on it.
 const DESTINATION_FUNDING: u64 = 1_000_000;
 const LEG_AMOUNT: u64 = 1_000;
-/// A salted read opens a second record per owner and a credential per output and destination.
+/// A salted read opens a second record per owner and a tracking row per output and destination.
 const SALTED: RuleTable = RuleTable::builder()
     .rule(Rule::forbid(Subject::Sender, ListId::PrivateBlock))
     .build();
+/// One apply proof per batch, width one is the configured actors' own.
+const ENROLLMENT_BATCHES: [usize; 4] = [16, 8, 4, 2];
 const RECORD_BATCHES: [usize; 5] = [1, 2, 4, 8, 16];
-/// With the sender and the legs' destinations these pass the narrow row's credential pool.
+/// With the sender and the legs' destinations these pass the narrow row's tracking pool.
 const SALTED_RECIPIENTS: usize = 15;
 const TRANSFER_KEY_PREFIX: &str = "custom-ring-transfer-";
 
@@ -451,6 +453,7 @@ fn key_owner(circuit: RingCircuit) -> Option<Column> {
             ..
         }
         | RingCircuit::Deposit { capacity: 2 } => Column::Salted,
+        RingCircuit::ApplyEnrollments { writes: 2.. } => Column::Salted,
         RingCircuit::Transfer {
             wide: true,
             outputs: 8,
@@ -459,7 +462,8 @@ fn key_owner(circuit: RingCircuit) -> Option<Column> {
         | RingCircuit::ApplyRecords { .. } => Column::ConfidentialPolicy,
         RingCircuit::Transfer { .. }
         | RingCircuit::RegisterKey
-        | RingCircuit::Deposit { capacity: 1 } => Column::Confidential,
+        | RingCircuit::Deposit { capacity: 1 }
+        | RingCircuit::ApplyEnrollments { .. } => Column::Confidential,
         // A wallet deposit fills one slot, its pools reach no wider key.
         RingCircuit::Deposit { .. } => return None,
     })
@@ -583,7 +587,7 @@ struct ShapeRing<'a> {
     delegate: Keypair,
     mode: RingMode,
     gate: &'a KeyGate,
-    /// Enrolled past the actors on a salted ring, each its own credential.
+    /// Enrolled past the actors on a salted ring, each its own tracking row.
     enrolled: Vec<ShieldedKeypair>,
 }
 
@@ -600,6 +604,7 @@ impl<'a> ColumnSetup<'a> {
         }
         .send(&env.client)?;
         let delegate = env.funded_keypair()?;
+        // One at a time, each apply proves the one write key.
         for owner in [&env.sender.keypair, &env.recipient.keypair] {
             EnrollOwners {
                 ring,
@@ -609,6 +614,7 @@ impl<'a> ColumnSetup<'a> {
             .send()?;
         }
         coverage.cover(RingCircuit::RegisterKey);
+        coverage.cover(RingCircuit::apply_enrollments(1));
         if self.column == Column::Delegate {
             DelegateAppointment {
                 ring,
@@ -618,7 +624,7 @@ impl<'a> ColumnSetup<'a> {
             env.enable_authority_rail(ring)?;
         }
         let enrolled = match self.column {
-            Column::Salted => Self::enroll_destinations(env, ring)?,
+            Column::Salted => Self::enroll_batches(env, ring, self.gate, coverage)?,
             _ => Vec::new(),
         };
         let config = env.run(ring.require_config(env.client.as_async()))?;
@@ -634,16 +640,27 @@ impl<'a> ColumnSetup<'a> {
         })
     }
 
-    fn enroll_destinations(env: &'a TestEnv, ring: CustomRing) -> Result<Vec<ShieldedKeypair>> {
-        let enrolled = (0..2 * SALTED_RECIPIENTS)
-            .map(|_| Ok(ShieldedKeypair::new_ed25519()?))
-            .collect::<Result<Vec<_>>>()?;
-        EnrollOwners {
-            ring,
-            owners: &enrolled.iter().collect::<Vec<_>>(),
-            env,
+    /// Each batch selects the apply key of its width.
+    fn enroll_batches(
+        env: &'a TestEnv,
+        ring: CustomRing,
+        gate: &KeyGate,
+        coverage: &mut Coverage,
+    ) -> Result<Vec<ShieldedKeypair>> {
+        let mut enrolled = Vec::new();
+        for width in ENROLLMENT_BATCHES {
+            let batch = (0..width)
+                .map(|_| Ok(ShieldedKeypair::new_ed25519()?))
+                .collect::<Result<Vec<_>>>()?;
+            EnrollOwners {
+                ring,
+                owners: &batch.iter().collect::<Vec<_>>(),
+                env,
+            }
+            .send_in_one_batch()?;
+            coverage.cover_proved(gate, RingCircuit::apply_enrollments(u64::try_from(width)?))?;
+            enrolled.extend(batch);
         }
-        .send()?;
         Ok(enrolled)
     }
 }
@@ -713,7 +730,7 @@ impl ShapeRing<'_> {
         Ok(())
     }
 
-    /// On a salted ring every destination holds a credential, the reads past the narrow row need it.
+    /// On a salted ring every destination holds a tracking row, the reads past the narrow row need it.
     fn case_legs(&self, legs: usize) -> Result<Vec<Leg>> {
         if legs == 0 {
             return Ok(Vec::new());
@@ -1270,7 +1287,7 @@ impl ShapeRing<'_> {
             let recipient = env.recipient.keypair.shielded_address()?;
             let (mut transaction, settlements) = transaction(self.payer(spend).pubkey())?;
             for payment in payments.clone() {
-                // A salted ring's payees are distinct, each opens its own credential.
+                // A salted ring's payees are distinct, each opens its own tracking row.
                 let recipient = match self.enrolled.get(payment - 1) {
                     Some(owner) => owner.shielded_address()?,
                     None => recipient,
