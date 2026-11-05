@@ -346,7 +346,9 @@ export function decodeMergeSettings(value: unknown): MergeSettings {
 }
 
 /** Rust `GetPendingListApprovalsRequest`. */
-export function encodeGetPendingListApprovalsRequest(value: GetPendingListApprovalsRequest): WireObject {
+export function encodeGetPendingListApprovalsRequest(
+  value: GetPendingListApprovalsRequest,
+): WireObject {
   return {
     ring: checkedAddress(value.ring, "ring"),
     ...(value.cursor === undefined ? {} : { cursor: checkedHash(value.cursor, "cursor") }),
