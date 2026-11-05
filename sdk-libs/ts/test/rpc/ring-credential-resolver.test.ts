@@ -1,15 +1,19 @@
-import { address, type Address } from "@solana/kit";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { address, getAddressEncoder, getProgramDerivedAddress, type Address } from "@solana/kit";
+import { describe, expect, it } from "vitest";
 
-import type { NonInclusionProof } from "@heliuslabs/zolana/client";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import type { MerkleProof, NonInclusionProof, RpcAccount } from "@heliuslabs/zolana/client";
 import {
   bigIntBytes,
   concatBytes,
+  encodeBase58,
   hashChain4,
   nullifierPdaAddress,
   poseidon,
+  solanaOwnerIdentity,
+  SYSTEM_PROGRAM,
   treeAddress,
+  ZERO_32,
+  ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
 import {
   NULLIFIER_ROOT_HISTORY_CURSOR_OFFSET,
@@ -19,6 +23,7 @@ import {
   STATE_HEIGHT,
   StateDiscriminator,
   TREE_ACCOUNT_SIZE,
+  USER_REGISTRY_PROGRAM_ID,
   UTXO_ROOT_HISTORY_CAPACITY,
   UTXO_ROOT_HISTORY_CAPACITY_OFFSET,
   UTXO_ROOT_HISTORY_CURSOR_OFFSET,
@@ -29,15 +34,24 @@ import {
   type Bytes33,
   type Bytes64,
 } from "@heliuslabs/zolana/interface";
+import {
+  ShieldedAddress,
+  ShieldedKeypair,
+  SigningKey,
+  ViewingKey,
+  type X25519PublicKey,
+} from "@heliuslabs/zolana/keypair";
+import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
 
 import { RingDomain } from "../../src/crypto/derivation/ring-domain.js";
 import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
+import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
+import { RingAddress } from "../../src/crypto/keys/ring-address.js";
 import {
   ADDRESS_TREE_ID,
   EMPTY_CREDENTIAL_READ,
   NULLIFIER_SEQUENCE_OFFSET,
   credentialAddress,
-  credentialBlinding,
   credentialElements,
   credentialPda,
   credentialSeed,
@@ -51,35 +65,50 @@ import {
 import { FIELD_MAX } from "../../src/protocol/membership/member-opening.js";
 import { registerKeyStatementHash } from "../../src/protocol/proof/statement.js";
 import {
+  checkAbsenceFloor,
   resolveCredential,
+  resolveRecipientKeys,
   type CredentialClient,
-  type ResolvedCredential,
+  type CredentialLookup,
+  type CredentialQuery,
 } from "../../src/rpc/credential-resolver.js";
 import { stateTreeAt } from "../helpers/state-tree.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
-const SYSTEM = address("11111111111111111111111111111111");
-const field = (value: number) => bigIntBytes(BigInt(value)) as Bytes32;
-const ADDRESS_TREE = treeAddress(ADDRESS_TREE_ID);
-const STATE_TREE_ID = 3;
-const STATE_TREE = treeAddress(STATE_TREE_ID);
+const TREE_ID = 3;
 const LEAF_INDEX = 5n;
-const SEQUENCE = 40n;
-const MEMBER = field(7);
+const ENROLLMENT_SLOT = 9n;
+const ADDRESS_ROOT_SEQUENCE = 6n;
+const field = (value: number) => bigIntBytes(BigInt(value)) as Bytes32;
 
-// Hashing waits for the Poseidon setup hook.
-let credential: AuditCredential;
-beforeAll(() => {
-  credential = Object.freeze({
+const holder = () =>
+  ShieldedKeypair.fromKeypair(SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(7) as Bytes32));
+
+function owner(): Address {
+  return encodeBase58(holder().shieldedAddress().signingPublicKey.confidentialViewTag());
+}
+
+function listSalt(): Bytes32 {
+  return listSaltOf(holder().viewingKey(), RING);
+}
+
+function credential(): AuditCredential {
+  return Object.freeze({
     ringId: ringIdField(RING),
-    member: MEMBER,
-    nullifierPk: field(11),
-    listTag: field(12),
+    member: solanaOwnerIdentity(getAddressEncoder().encode(owner()) as Uint8Array) as Bytes32,
+    nullifierPk: holder().nullifierPublicKey(),
+    listTag: listTagOf(listSalt()),
     auditorPubkey: concatBytes(Uint8Array.of(4), field(14)) as Bytes33,
     ephU: field(13),
     ciphertext: new Uint8Array(64).fill(0x21) as Bytes64,
   });
-});
+}
+
+async function identity() {
+  const pda = await credentialPda(RING);
+  const served = credential();
+  return { pda, address: credentialAddress(pda, credentialSeed(served.ringId, served.member)) };
+}
 
 interface Tree {
   readonly treeId: number;
@@ -89,14 +118,13 @@ interface Tree {
   readonly nullifierRoots: ReadonlyMap<number, Bytes32>;
   readonly cursor: bigint;
   readonly sequence: bigint;
-  readonly paused?: boolean;
 }
 
-function treeAccount(tree: Tree): Uint8Array {
+function treeAccount(tree: Tree): RpcAccount {
   const data = new Uint8Array(TREE_ACCOUNT_SIZE);
   const view = new DataView(data.buffer);
   data[0] = StateDiscriminator.treeAccount;
-  data[1] = tree.paused === true ? 2 : 1;
+  data[1] = 1;
   view.setUint16(2, tree.treeId, true);
   view.setUint16(UTXO_ROOT_HISTORY_CURSOR_OFFSET, tree.stateRoots.length - 1, true);
   view.setUint16(UTXO_ROOT_HISTORY_LEN_OFFSET, tree.stateRoots.length, true);
@@ -107,285 +135,363 @@ function treeAccount(tree: Tree): Uint8Array {
   view.setBigUint64(NULLIFIER_ROOT_HISTORY_CURSOR_OFFSET, tree.cursor, true);
   for (const [slot, root] of tree.nullifierRoots)
     data.set(root, NULLIFIER_ROOT_HISTORY_OFFSET + 32 * slot);
-  return data;
+  return { owner: SHIELDED_POOL_PROGRAM_ID, data, lamports: 1n };
 }
 
-function nullifierRoot(leaf: Bytes32, index: bigint, path: readonly Bytes32[]): Bytes32 {
-  let node = leaf;
-  path.forEach((sibling, level) => {
-    node = poseidon(
-      ((index >> BigInt(level)) & 1n) === 1n ? [sibling, node] : [node, sibling],
-    ) as Bytes32;
-  });
-  return node;
+function fold(leaf: Bytes32, index: bigint, path: readonly Bytes32[]): Bytes32 {
+  return path.reduce<Bytes32>(
+    (node, sibling, level) =>
+      poseidon(
+        ((index >> BigInt(level)) & 1n) === 1n ? [sibling, node] : [node, sibling],
+      ) as Bytes32,
+    leaf,
+  );
 }
 
-interface World {
-  /** `true` serves the creation as `Enroll` wrote it, a function serves what it returns. */
-  readonly creation?: true | ((created: IndexedShieldedTransaction) => IndexedShieldedTransaction);
-  readonly merkleRootIndex?: number;
-  readonly queue?: Address;
-  readonly gap?: Partial<NonInclusionProof>;
-  readonly gapRootIndex?: number;
-  readonly stateTreeId?: number;
-  readonly paused?: boolean;
-}
+class Ledger {
+  readonly accounts = new Map<Address, RpcAccount>();
+  enrollments: IndexedShieldedTransaction[] = [];
+  continuation: string | null = null;
+  stateProofs: MerkleProof[] = [];
+  gaps: NonInclusionProof[] = [];
 
-/** One ring member, its credential leaf and its address gap, served as `world` names. */
-async function chain(world: World) {
-  const pda = await credentialPda(RING);
-  const credentialAt = credentialAddress(pda, credentialSeed(ringIdField(RING), MEMBER));
-  const queue = await nullifierPdaAddress(ADDRESS_TREE, credentialAt);
-  const treeId = world.stateTreeId ?? STATE_TREE_ID;
-  const tree = treeAddress(treeId);
-  const utxoHash = credentialUtxoHash({ pda, address: credentialAt, credential, treeId });
-  const state = stateTreeAt(new Map([[Number(LEAF_INDEX), utxoHash]]));
-  const low = field(1);
-  const next = FIELD_MAX;
-  const gapPath = Array.from({ length: NULLIFIER_TREE_HEIGHT }, (_, level) => field(100 + level));
-  const gapRoot = nullifierRoot(poseidon([low, next]) as Bytes32, 9n, gapPath);
-  // Slot 3 holds the newest nullifier root, slot 2 the root one apply before it.
-  const nullifierRoots = new Map([
-    [2, field(77)],
-    [3, gapRoot],
-  ]);
-  const stateRoots = [field(55), state.root];
-  const accounts = new Map<Address, { owner: Address; data: Uint8Array; lamports: bigint }>();
-  const addressTreeState: Tree = {
-    treeId: ADDRESS_TREE_ID,
-    stateRoots: treeId === ADDRESS_TREE_ID ? stateRoots : [field(56)],
-    nullifierRoots,
-    cursor: 4n,
-    sequence: SEQUENCE,
-    paused: world.paused ?? false,
-  };
-  accounts.set(ADDRESS_TREE, {
-    owner: SHIELDED_POOL_PROGRAM_ID,
-    data: treeAccount(addressTreeState),
-    lamports: 1n,
-  });
-  if (treeId !== ADDRESS_TREE_ID)
-    accounts.set(tree, {
-      owner: SHIELDED_POOL_PROGRAM_ID,
-      data: treeAccount({
-        treeId,
-        stateRoots,
+  /** The credential leaf sits at `LEAF_INDEX` of `TREE_ID`, its root in history slot 1. */
+  static async enrolled(served: AuditCredential): Promise<Ledger> {
+    const ledger = new Ledger();
+    const { pda, address } = await identity();
+    const leaf = credentialUtxoHash({ pda, address, credential: served, treeId: TREE_ID });
+    const state = stateTreeAt(new Map([[Number(LEAF_INDEX), leaf]]));
+    const tree = treeAddress(TREE_ID);
+    ledger.accounts.set(
+      tree,
+      treeAccount({
+        treeId: TREE_ID,
+        stateRoots: [field(55), state.root],
         nullifierRoots: new Map([[0, field(57)]]),
         cursor: 1n,
         sequence: 0n,
-        paused: world.paused ?? false,
       }),
-      lamports: 1n,
-    });
-  if (world.queue !== undefined)
-    accounts.set(queue, { owner: world.queue, data: new Uint8Array(8), lamports: 1n });
-  const payload = concatBytes(
-    Uint8Array.of(0, 33, 1, 0, 0),
-    credentialAt,
-    encodeAuditCredential(credential),
-  );
-  const creation: IndexedShieldedTransaction = {
-    slot: 9n,
-    txSignature: "sig" as IndexedShieldedTransaction["txSignature"],
-    outputSlots: [
-      {
-        viewTag: field(0),
-        outputContext: { hash: utxoHash, tree, treeId, leafIndex: LEAF_INDEX },
-        payload,
-      },
-    ],
-    messages: [],
-    nullifiers: [credentialAt, field(3)],
-    proofless: false,
-  };
-  const getNonInclusionProofs = vi.fn(async () => ({
-    context: { slot: 1n, blockTime: 0n },
-    proofs: [
-      {
-        leaf: credentialAt,
-        merkleContext: { treeType: 0, tree: ADDRESS_TREE },
-        path: gapPath,
-        lowElement: low,
-        lowElementIndex: 9n,
-        highElement: next,
-        highElementIndex: 10n,
-        root: gapRoot,
-        rootSeq: SEQUENCE,
-        rootIndex: world.gapRootIndex ?? 3,
-        ...world.gap,
-      },
-    ],
-  }));
-  const client = {
-    getMultipleAccounts: async (addresses: readonly Address[]) =>
-      addresses.map((key) => accounts.get(key)),
-    getShieldedTransactionsByNullifiers: async () => ({
-      context: { slot: 1n, blockTime: 0n },
-      data:
-        world.creation === undefined
-          ? []
-          : [
-              {
-                slot: 9n,
-                signature: creation.txSignature,
-                events: [world.creation === true ? creation : world.creation(creation)],
-              },
-            ],
-      paginationToken: null,
-    }),
-    getMerkleProofs: async () => ({
-      context: { slot: 1n, blockTime: 0n },
-      proofs: [
+    );
+    ledger.enrollments.push({
+      slot: ENROLLMENT_SLOT,
+      txSignature: "enroll" as IndexedShieldedTransaction["txSignature"],
+      outputSlots: [
         {
-          leaf: utxoHash,
-          merkleContext: { treeType: 0, tree },
-          path: state.path(Number(LEAF_INDEX)),
-          leafIndex: LEAF_INDEX,
-          root: state.root,
-          rootSeq: 1n,
-          rootIndex: world.merkleRootIndex ?? 1,
+          viewTag: ZERO_32,
+          outputContext: { hash: leaf, tree, treeId: TREE_ID, leafIndex: LEAF_INDEX },
+          payload: concatBytes(
+            Uint8Array.of(0, 33, 1, 0, 0),
+            address,
+            encodeAuditCredential(served),
+          ),
         },
       ],
-    }),
-    getNonInclusionProofs,
-  } as unknown as CredentialClient;
-  return { client, creation, credentialAt, utxoHash, state, gapRoot, getNonInclusionProofs, low };
+      messages: [],
+      nullifiers: [address, field(3)],
+      proofless: false,
+    });
+    ledger.stateProofs.push({
+      leaf,
+      merkleContext: { treeType: 0, tree },
+      path: state.path(Number(LEAF_INDEX)),
+      leafIndex: LEAF_INDEX,
+      root: state.root,
+      rootSeq: 1n,
+      rootIndex: 1,
+    });
+    return ledger;
+  }
+
+  /** Tree 0 holds the gap root in slot 0, one apply behind the latest root. */
+  static async absent(): Promise<Ledger> {
+    const ledger = new Ledger();
+    const { address } = await identity();
+    const low = field(1);
+    const path = Array.from({ length: NULLIFIER_TREE_HEIGHT }, (_, level) => field(100 + level));
+    const root = fold(poseidon([low, FIELD_MAX]) as Bytes32, 9n, path);
+    ledger.accounts.set(
+      treeAddress(ADDRESS_TREE_ID),
+      treeAccount({
+        treeId: ADDRESS_TREE_ID,
+        stateRoots: [field(56)],
+        nullifierRoots: new Map([
+          [0, root],
+          [1, field(9)],
+        ]),
+        cursor: 2n,
+        sequence: ADDRESS_ROOT_SEQUENCE + 1n,
+      }),
+    );
+    ledger.gaps.push({
+      leaf: address,
+      merkleContext: { treeType: 0, tree: treeAddress(ADDRESS_TREE_ID) },
+      path,
+      lowElement: low,
+      lowElementIndex: 9n,
+      highElement: FIELD_MAX,
+      highElementIndex: 10n,
+      root,
+      rootSeq: ADDRESS_ROOT_SEQUENCE,
+      rootIndex: 0,
+    });
+    return ledger;
+  }
+
+  async queue(queueOwner: Address = SHIELDED_POOL_PROGRAM_ID, data = new Uint8Array(8)) {
+    const { address } = await identity();
+    const queue = await nullifierPdaAddress(treeAddress(ADDRESS_TREE_ID), address);
+    this.accounts.set(queue, { owner: queueOwner, data, lamports: 1n });
+  }
+
+  async register(nullifierPk: Bytes32, viewing: X25519PublicKey) {
+    const encoder = getAddressEncoder();
+    const [pda, bump] = await getProgramDerivedAddress({
+      programAddress: USER_REGISTRY_PROGRAM_ID,
+      seeds: [new TextEncoder().encode("zolana/registry/v0"), encoder.encode(owner())],
+    });
+    const data = new Uint8Array(100);
+    data[0] = 1;
+    data.set(encoder.encode(owner()), 1);
+    data[33] = bump;
+    data.set(nullifierPk, 34);
+    data.set(viewing.toBytes(), 66);
+    this.accounts.set(pda, { owner: USER_REGISTRY_PROGRAM_ID, data, lamports: 1n });
+  }
+
+  client(): CredentialClient {
+    const context = { slot: 1n, blockTime: 0n };
+    return {
+      getAccount: async (key) => this.accounts.get(key),
+      getMultipleAccounts: async (keys) => keys.map((key) => this.accounts.get(key)),
+      getShieldedTransactionsByNullifiers: async () => ({
+        context,
+        data: this.enrollments.map((event) => ({
+          slot: event.slot,
+          signature: event.txSignature,
+          events: [event],
+        })),
+        paginationToken: this.continuation,
+      }),
+      getMerkleProofs: async () => ({ context, proofs: this.stateProofs }),
+      getNonInclusionProofs: async () => ({ context, proofs: this.gaps }),
+    } as CredentialClient;
+  }
+
+  resolve(query: Partial<Omit<CredentialQuery, "client">> = {}): Promise<CredentialLookup> {
+    return resolveCredential({ client: this.client(), ring: RING, owner: owner(), ...query });
+  }
 }
 
-function withPayloadBit(
-  created: IndexedShieldedTransaction,
-  at: number,
-): IndexedShieldedTransaction {
-  const [slot] = created.outputSlots;
-  if (slot === undefined) throw new Error("slot");
-  const payload = slot.payload.slice();
-  const index = at < 0 ? payload.length + at : at;
-  payload[index] = (payload[index] ?? 0) ^ 1;
-  return { ...created, outputSlots: [{ ...slot, payload }] };
+async function registeredAddress(): Promise<RingAddress> {
+  return RingAddress.enrolled(holder(), RING, listSalt());
 }
 
-function resolve(
-  client: CredentialClient,
-  extra: Partial<Parameters<typeof resolveCredential>[0]> = {},
-) {
-  return resolveCredential({ client, ring: RING, member: MEMBER, absenceFloor: 0n, ...extra });
+function zeroKeyAddress(): RingAddress {
+  const shielded = holder().shieldedAddress();
+  return new RingAddress({
+    recipient: ShieldedAddress.fromPublicKeys(
+      shielded.signingPublicKey,
+      ZERO_NULLIFIER_PK as Bytes32,
+      shielded.viewingPublicKey,
+    ),
+    ringProgramId: RING,
+    listSalt: ZERO_32,
+  });
 }
 
-function kind(resolved: ResolvedCredential, expected: ResolvedCredential["kind"]) {
-  expect(resolved.kind).toBe(expected);
-  return resolved;
+function invalid(reason: string) {
+  return expect.objectContaining({
+    code: "RING_CREDENTIAL_INVALID",
+    details: expect.objectContaining({ reason }),
+  });
 }
 
 describe("resolveCredential", () => {
-  it("opens a settled credential whose address still waits in the queue", async () => {
-    const { client, utxoHash, state, credentialAt } = await chain({
-      queue: SHIELDED_POOL_PROGRAM_ID,
-      creation: true,
+  it("opens a present credential under its tree root, also when the tree is paused", async () => {
+    const served = credential();
+    const ledger = await Ledger.enrolled(served);
+    const opened = await ledger.resolve({
+      nullifierPk: served.nullifierPk,
+      listTag: served.listTag,
     });
-    const resolved = kind(
-      await resolve(client, { nullifierPk: field(11), listTag: field(12) }),
-      "present",
-    );
-    if (resolved.kind !== "present") return;
-    expect(resolved.leaf).toMatchObject({
-      credential,
-      tree: STATE_TREE,
-      treeId: STATE_TREE_ID,
-      utxoHash,
-      blinding: credentialBlinding(credentialAt),
+    const [proof] = ledger.stateProofs;
+    expect(opened).toMatchObject({
+      kind: "present",
+      credential: served,
+      address: (await identity()).address,
+      treeId: TREE_ID,
       leafIndex: LEAF_INDEX,
-      root: state.root,
-      rootIndex: 1,
+      root: { rootIndex: proof?.rootIndex, root: proof?.root },
+      enrollment: "enroll",
     });
+    const paused = ledger.accounts.get(treeAddress(TREE_ID));
+    if (paused !== undefined) paused.data[1] = 2;
+    expect(await ledger.resolve()).toEqual(opened);
   });
 
-  it("opens a credential in tree 0 and in a paused tree", async () => {
-    for (const world of [{ stateTreeId: ADDRESS_TREE_ID }, { paused: true }]) {
-      const { client } = await chain({ ...world, creation: true });
-      kind(await resolve(client), "present");
-    }
+  it("finds an owner without enrollment absent at its root sequence", async () => {
+    const opened = await (await Ledger.absent()).resolve();
+    if (opened.kind !== "absent") throw new Error(opened.kind);
+    expect(opened.address).toEqual((await identity()).address);
+    expect(opened.root).toMatchObject({ rootIndex: 0, sequence: ADDRESS_ROOT_SEQUENCE });
+    checkAbsenceFloor(opened, ADDRESS_ROOT_SEQUENCE);
+    expect(() => checkAbsenceFloor(opened, ADDRESS_ROOT_SEQUENCE + 1n)).toThrow(
+      expect.objectContaining({
+        code: "RING_ABSENCE_ROOT_BELOW_FLOOR",
+        details: { sequence: "6", floor: "7" },
+      }),
+    );
   });
 
-  it("reads a root Photon proved but the snapshot does not hold as unknown", async () => {
-    const { client } = await chain({ creation: true, merkleRootIndex: 0 });
-    expect(await resolve(client)).toMatchObject({ kind: "unknown", reason: "rootNotHeld" });
+  it("reads a queued address the indexer has not served as unknown, not donated lamports", async () => {
+    const queued = await Ledger.absent();
+    await queued.queue();
+    expect(await queued.resolve()).toEqual({ kind: "unknown", reason: "queued" });
+    const donated = await Ledger.absent();
+    await donated.queue(SYSTEM_PROGRAM, new Uint8Array());
+    expect((await donated.resolve()).kind).toBe("absent");
   });
 
-  it("refuses a credential holding another nullifier key or list tag", async () => {
-    const { client } = await chain({ creation: true });
-    for (const [name, wrong] of [
-      ["nullifierPk", { nullifierPk: field(99) }],
-      ["listTag", { listTag: field(99) }],
-    ] as const)
-      await expect(resolve(client, wrong)).rejects.toMatchObject({
-        code: "RING_ADDRESS_MISMATCH",
-        details: { field: name },
+  it("refuses a root outside the history or a path off the root", async () => {
+    const staleState = await Ledger.enrolled(credential());
+    staleState.stateProofs = staleState.stateProofs.map((proof) => ({ ...proof, rootIndex: 0 }));
+    await expect(staleState.resolve()).rejects.toEqual(invalid("stateRootNotAccepted"));
+
+    const forgedPath = await Ledger.enrolled(credential());
+    forgedPath.stateProofs = forgedPath.stateProofs.map((proof) => ({
+      ...proof,
+      path: proof.path.map((node, level) => (level === 4 ? field(1) : node)),
+    }));
+    await expect(forgedPath.resolve()).rejects.toEqual(invalid("invalidStateProof"));
+
+    const staleAddress = await Ledger.absent();
+    staleAddress.gaps = staleAddress.gaps.map((gap) => ({ ...gap, rootIndex: 1 }));
+    await expect(staleAddress.resolve()).rejects.toEqual(invalid("addressRootNotAccepted"));
+
+    const coveringGap = await Ledger.absent();
+    const { address } = await identity();
+    coveringGap.gaps = coveringGap.gaps.map((gap) => ({ ...gap, lowElement: address }));
+    await expect(coveringGap.resolve()).rejects.toEqual(invalid("invalidAbsenceProof"));
+  });
+
+  it("refuses a credential of another ring, owner, key or tag", async () => {
+    const ledger = await Ledger.enrolled(credential());
+    await expect(ledger.resolve({ nullifierPk: field(1) })).rejects.toMatchObject({
+      code: "RING_CREDENTIAL_NULLIFIER_KEY_MISMATCH",
+    });
+    await expect(ledger.resolve({ listTag: field(1) })).rejects.toMatchObject({
+      code: "RING_CREDENTIAL_LIST_TAG_MISMATCH",
+    });
+    for (const served of [
+      { ...credential(), ringId: field(1) },
+      { ...credential(), member: field(1) },
+    ])
+      await expect((await Ledger.enrolled(served)).resolve()).rejects.toMatchObject({
+        code: "RING_CREDENTIAL_MISMATCH",
       });
   });
 
-  it("refuses a served credential whose hash differs from the published output", async () => {
-    const { client } = await chain({ creation: (created) => withPayloadBit(created, -1) });
-    await expect(resolve(client)).rejects.toMatchObject({
-      code: "RING_CREDENTIAL_INVALID",
-      details: { reason: "outputHash" },
+  it("refuses an enrollment output whose credential does not rebuild the published leaf", async () => {
+    const ledger = await Ledger.enrolled(credential());
+    ledger.enrollments = ledger.enrollments.map((enrollment) => ({
+      ...enrollment,
+      outputSlots: enrollment.outputSlots.map((slot) => {
+        const payload = slot.payload.slice();
+        payload[payload.length - 1] = (payload[payload.length - 1] ?? 0) ^ 1;
+        return { ...slot, payload };
+      }),
+    }));
+    await expect(ledger.resolve()).rejects.toEqual(invalid("malformedEnrollment"));
+  });
+
+  it("refuses an account answer short of the queue PDA", async () => {
+    const ledger = await Ledger.absent();
+    await ledger.queue();
+    const client = ledger.client();
+    const short: CredentialClient = {
+      ...client,
+      getMultipleAccounts: async (keys) => (await client.getMultipleAccounts(keys)).slice(0, 1),
+    };
+    await expect(
+      resolveCredential({ client: short, ring: RING, owner: owner() }),
+    ).rejects.toMatchObject({ code: "RING_RPC", details: { reason: "accountCount", count: 1 } });
+  });
+
+  it("keeps partial indexer answers unknown or refused", async () => {
+    const withoutProof = await Ledger.enrolled(credential());
+    withoutProof.stateProofs = [];
+    expect(await withoutProof.resolve()).toEqual({ kind: "unknown", reason: "stateProofMissing" });
+
+    const withoutGap = await Ledger.absent();
+    withoutGap.gaps = [];
+    expect(await withoutGap.resolve()).toEqual({ kind: "unknown", reason: "absenceProofMissing" });
+
+    const continued = await Ledger.absent();
+    continued.continuation = "next";
+    expect(await continued.resolve()).toEqual({ kind: "unknown", reason: "partialPage" });
+
+    const twice = await Ledger.enrolled(credential());
+    twice.enrollments = [...twice.enrollments, ...twice.enrollments];
+    await expect(twice.resolve()).rejects.toEqual(
+      expect.objectContaining({ details: { reason: "enrollmentCount", count: 2 } }),
+    );
+  });
+});
+
+describe("resolveRecipientKeys", () => {
+  it("takes the registered key and the record bound to it", async () => {
+    const served = credential();
+    const to = await registeredAddress();
+    const ledger = await Ledger.enrolled(served);
+    const keys = await resolveRecipientKeys({ client: ledger.client(), to });
+    expect(keys).toMatchObject({ kind: "registered", nullifierPk: served.nullifierPk });
+    expect(keys.viewingPublicKey.toBytes()).toEqual(to.recipient.viewingPublicKey.toBytes());
+
+    const rotated = ViewingKey.generate().publicKey();
+    await ledger.register(served.nullifierPk, rotated);
+    const recorded = await resolveRecipientKeys({ client: ledger.client(), to });
+    expect(recorded.viewingPublicKey.toBytes()).toEqual(rotated.toBytes());
+
+    await ledger.register(field(1), rotated);
+    await expect(resolveRecipientKeys({ client: ledger.client(), to })).rejects.toMatchObject({
+      code: "RING_NULLIFIER_KEY_MISMATCH",
     });
+
+    await expect(
+      resolveRecipientKeys({ client: (await Ledger.absent()).client(), to }),
+    ).rejects.toMatchObject({ code: "RING_RECIPIENT_NOT_ENROLLED" });
   });
 
-  it("refuses a creation naming another member or not spending the address first", async () => {
-    // Byte 69 opens the member, after the frame header, the address and the ring id.
-    for (const [reason, served] of [
-      ["creationOutput", (created: IndexedShieldedTransaction) => withPayloadBit(created, 69)],
-      [
-        "creation",
-        (created: IndexedShieldedTransaction) => ({
-          ...created,
-          nullifiers: [...created.nullifiers].reverse(),
-        }),
-      ],
-    ] as const) {
-      const { client } = await chain({ creation: served });
-      await expect(resolve(client)).rejects.toMatchObject({
-        code: "RING_CREDENTIAL_INVALID",
-        details: { reason },
-      });
-    }
-  });
+  it("needs an absent owner or an opt in for the zero key", async () => {
+    const to = zeroKeyAddress();
+    const keys = await resolveRecipientKeys({ client: (await Ledger.absent()).client(), to });
+    expect(keys).toMatchObject({ kind: "zeroKey", nullifierPk: ZERO_NULLIFIER_PK });
 
-  it("proves absence under the newest root at the floor and refuses one sequence below", async () => {
-    const { client, gapRoot } = await chain({});
-    const resolved = await resolve(client, { absenceFloor: SEQUENCE });
-    expect(resolved).toMatchObject({
-      kind: "absent",
-      gap: { lowIndex: 9n, checkpoint: { root: gapRoot, rootIndex: 3, sequence: SEQUENCE } },
+    const queued = await Ledger.absent();
+    await queued.queue();
+    await expect(resolveRecipientKeys({ client: queued.client(), to })).rejects.toMatchObject({
+      code: "RING_CREDENTIAL_UNKNOWN",
+      details: { reason: "queued" },
     });
-    await expect(resolve(client, { absenceFloor: SEQUENCE + 1n })).rejects.toMatchObject({
-      code: "RING_ABSENCE_ROOT_BELOW_FLOOR",
+
+    const served = credential();
+    const enrolled = await Ledger.enrolled(served);
+    await expect(resolveRecipientKeys({ client: enrolled.client(), to })).rejects.toMatchObject({
+      code: "RING_RECIPIENT_ENROLLED",
     });
-  });
+    await expect(
+      resolveRecipientKeys({ client: enrolled.client(), to, zeroKeyToEnrolled: true }),
+    ).rejects.toMatchObject({ code: "RING_VIEWING_KEY_UNVERIFIED" });
 
-  it("reads a queued reservation Photon has not served as unknown, never absent", async () => {
-    const { client, getNonInclusionProofs } = await chain({ queue: SHIELDED_POOL_PROGRAM_ID });
-    expect(await resolve(client)).toMatchObject({ kind: "unknown", reason: "queued" });
-    expect(getNonInclusionProofs).not.toHaveBeenCalled();
-  });
-
-  it("takes lamports donated to the queue PDA as no reservation", async () => {
-    const { client } = await chain({ queue: SYSTEM });
-    kind(await resolve(client), "absent");
-  });
-
-  it("reads a gap under an older root as unknown", async () => {
-    const { client } = await chain({ gapRootIndex: 2, gap: { root: field(77) } });
-    expect(await resolve(client)).toMatchObject({ kind: "unknown", reason: "rootNotHeld" });
-  });
-
-  it("refuses a gap that does not bracket the address", async () => {
-    const { credentialAt } = await chain({});
-    const { client } = await chain({ gap: { lowElement: credentialAt } });
-    await expect(resolve(client)).rejects.toMatchObject({
-      code: "RING_CREDENTIAL_INVALID",
-      details: { reason: "addressGap" },
+    const viewing = ViewingKey.generate().publicKey();
+    await enrolled.register(served.nullifierPk, viewing);
+    const opted = await resolveRecipientKeys({
+      client: enrolled.client(),
+      to,
+      zeroKeyToEnrolled: true,
     });
+    expect(opted).toMatchObject({ kind: "zeroKeyToEnrolled", nullifierPk: ZERO_NULLIFIER_PK });
+    expect(opted.viewingPublicKey.toBytes()).toEqual(viewing.toBytes());
   });
 });
 
@@ -396,42 +502,44 @@ describe("rootSequence", () => {
     [98, field(28)],
     [99, field(29)],
   ]);
-  const at = (cursor: bigint, sequence: bigint, treeId = ADDRESS_TREE_ID) =>
-    treeAccount({ treeId, stateRoots: [field(1)], nullifierRoots: roots, cursor, sequence });
+  const at = (cursor: bigint, sequence: bigint) =>
+    treeAccount({
+      treeId: ADDRESS_TREE_ID,
+      stateRoots: [field(1)],
+      nullifierRoots: roots,
+      cursor,
+      sequence,
+    }).data;
 
   it("counts each slot behind the newest root as one sequence behind, across the wrap", () => {
-    expect(rootSequence(at(2n, 500n), 1)).toMatchObject({ root: field(21), sequence: 500n });
-    expect(rootSequence(at(2n, 500n), 0).sequence).toBe(499n);
-    expect(rootSequence(at(2n, 500n), 99).sequence).toBe(498n);
-    expect(rootSequence(at(0n, 500n), 98).sequence).toBe(499n);
+    expect(rootSequence(at(2n, 500n), 1)).toEqual({
+      rootIndex: 1,
+      root: field(21),
+      sequence: 500n,
+    });
+    expect(rootSequence(at(2n, 500n), 0)?.sequence).toBe(499n);
+    expect(rootSequence(at(2n, 500n), 99)?.sequence).toBe(498n);
+    expect(rootSequence(at(0n, 500n), 98)?.sequence).toBe(499n);
   });
 
-  it("refuses an empty slot, a distance past the count and a tree other than tree 0", () => {
-    for (const [reason, run] of [
-      ["emptyRoot", () => rootSequence(at(2n, 500n), 50)],
-      ["rootSequence", () => rootSequence(at(2n, 1n), 99)],
-      ["rootIndex", () => rootSequence(at(2n, 500n), 100)],
-      ["addressTree", () => rootSequence(at(2n, 500n, 4), 1)],
-    ] as const)
-      expect(run).toThrow(
-        expect.objectContaining({ code: "RING_CREDENTIAL_INVALID", details: { reason } }),
-      );
+  it("holds no root at an empty slot, a distance past the count or an index past the history", () => {
+    expect(rootSequence(at(2n, 500n), 50)).toBeUndefined();
+    expect(rootSequence(at(2n, 1n), 99)).toBeUndefined();
+    expect(rootSequence(at(2n, 500n), 100)).toBeUndefined();
   });
 });
 
 describe("credential hashes and reads", () => {
   it("keeps the RegisterKey hash and moves only the domain for the state hash", () => {
-    expect(hashChain4(credentialElements(credential, RingDomain.registerKey))).toEqual(
-      registerKeyStatementHash(credential),
+    const served = credential();
+    expect(hashChain4(credentialElements(served, RingDomain.registerKey))).toEqual(
+      registerKeyStatementHash(served),
     );
-    const [stateDomain, ...stateFields] = credentialElements(
-      credential,
-      RingDomain.credentialState,
-    );
-    const [, ...keyFields] = credentialElements(credential, RingDomain.registerKey);
+    const [stateDomain, ...stateFields] = credentialElements(served, RingDomain.credentialState);
+    const [, ...keyFields] = credentialElements(served, RingDomain.registerKey);
     expect(stateFields).toEqual(keyFields);
     expect(stateDomain).toEqual(field(RingDomain.credentialState));
-    expect(credentialStateHash(credential)).not.toEqual(registerKeyStatementHash(credential));
+    expect(credentialStateHash(served)).not.toEqual(registerKeyStatementHash(served));
   });
 
   it("encodes the empty read as three zero bytes and refuses a root index with no state read", () => {
@@ -440,10 +548,7 @@ describe("credential hashes and reads", () => {
       encodeCredentialRead({ addressRootIndex: 0x0102, stateRootIndexes: [7, 0x0304] }),
     ).toEqual(Uint8Array.of(2, 1, 2, 7, 0, 4, 3));
     expect(() => encodeCredentialRead({ addressRootIndex: 1, stateRootIndexes: [] })).toThrow(
-      expect.objectContaining({
-        code: "RING_CREDENTIAL_INVALID",
-        details: { reason: "emptyRead" },
-      }),
+      invalid("emptyRead"),
     );
   });
 });

@@ -14,6 +14,7 @@ import { getProgramDerivedAddress, type Address } from "@solana/kit";
 import {
   concatBytes,
   decodeTreeId,
+  equalBytes,
   hashChain4,
   isZero,
   poseidon,
@@ -26,6 +27,9 @@ import {
   NULLIFIER_ROOT_HISTORY_CURSOR_OFFSET,
   NULLIFIER_ROOT_HISTORY_OFFSET,
   NULLIFIER_TREE_ROOT_HISTORY_CAPACITY,
+  UTXO_ROOT_HISTORY_LEN_OFFSET,
+  UTXO_ROOT_HISTORY_OFFSET,
+  decodeTreeHeadRoots,
   type Bytes32,
   type Bytes33,
   type Bytes64,
@@ -43,14 +47,18 @@ import { RingError } from "../error.js";
 import { registerKeyStatementElements } from "../proof/statement.js";
 
 export const CREDENTIAL_PDA_SEED = new TextEncoder().encode("credential");
-/** Rust `spr_instruction::ADDRESS_TREE_ID`, the only tree credential addresses enter. */
-export const ADDRESS_TREE_ID: TreeId = 0;
 export const AUDIT_CREDENTIAL_SIZE = 257;
 
-/** `sequence_number` opens Rust `TreeAccountLayout::nullifier`, pinned by its layout test. */
+// Mirrors of Rust items `@heliuslabs/zolana` does not export.
+/** Rust `spr_program::ADDRESS_TREE_ID`. */
+export const ADDRESS_TREE_ID: TreeId = 0;
+/** Rust `offset_of!(TreeAccountLayout, nullifier)`, where `sequence_number` opens the layout. */
 export const NULLIFIER_SEQUENCE_OFFSET = 17_152;
+/** Rust `spr_program::program::ACCOUNT_BLINDING_SEED`. */
 const ACCOUNT_BLINDING_SEED = rightAlign(Uint8Array.of(1)) as Bytes32;
-const UNIQUE_DATA_HASH_DOMAIN = 0x554e_4951; // "UNIQ"
+/** Rust `spr_program::hasher::UNIQUE_DATA_HASH_DOMAIN`, "UNIQ". */
+const UNIQUE_DATA_HASH_DOMAIN = 0x554e_4951;
+/** Rust `OutputDataEncoding::PLAINTEXT_TAG`. */
 const PLAINTEXT_TAG = 0;
 
 /** Borsh order, the nullifier secret and list salt occur only inside `ciphertext`. */
@@ -66,9 +74,9 @@ export interface AuditCredential {
   readonly ciphertext: Bytes64;
 }
 
-export interface AddressCheckpoint {
-  readonly root: Bytes32;
+export interface AddressRoot {
   readonly rootIndex: number;
+  readonly root: Bytes32;
   /** Tree 0 append count when `root` was written. */
   readonly sequence: bigint;
 }
@@ -182,45 +190,57 @@ export function decodeAuditCredential(data: Uint8Array): AuditCredential {
   return credential;
 }
 
-/** `Plaintext(address || Borsh(credential))`, the output data `Enroll` publishes. */
-export function decodeCredentialOutput(
+/** `undefined` unless `payload` is `Plaintext(address || Borsh(credential))` for `address`. */
+export function credentialOutput(
   payload: Uint8Array,
-): Readonly<{ address: Bytes32; credential: AuditCredential }> {
+  address: Bytes32,
+): AuditCredential | undefined {
   const body = 32 + AUDIT_CREDENTIAL_SIZE;
-  if (payload.length !== 5 + body || payload[0] !== PLAINTEXT_TAG) throw invalid("outputFrame");
+  if (payload.length !== 5 + body || payload[0] !== PLAINTEXT_TAG) return undefined;
   if (new DataView(payload.buffer, payload.byteOffset + 1, 4).getUint32(0, true) !== body)
-    throw invalid("outputFrame");
-  return Object.freeze({
-    address: payload.slice(5, 37) as Bytes32,
-    credential: decodeAuditCredential(payload.slice(37)),
-  });
+    return undefined;
+  if (!equalBytes(payload.subarray(5, 37), address)) return undefined;
+  return decodeAuditCredential(payload.slice(37));
 }
 
 /**
- * The append count of the tree 0 nullifier root at `rootIndex`. Init writes sequence 0 to
- * slot 0 and each apply adds one root and one count, so a slot's distance behind the newest
- * root is its distance behind `sequence_number`.
+ * The nullifier root at `rootIndex` of a tree account and its append count, Rust `root_sequence`.
+ * Init writes sequence 0 to slot 0 and each apply adds one root and one count, so a slot's
+ * distance behind the newest root is its distance behind `sequence_number`. `undefined` when
+ * the history holds no root there.
  */
-export function rootSequence(tree: Uint8Array, rootIndex: number): AddressCheckpoint {
-  // 1. Another tree carries roots no credential address entered.
-  if (decodeTreeId(tree) !== ADDRESS_TREE_ID) throw invalid("addressTree");
+export function rootSequence(tree: Uint8Array, rootIndex: number): AddressRoot | undefined {
+  decodeTreeId(tree);
   const capacity = BigInt(NULLIFIER_TREE_ROOT_HISTORY_CAPACITY);
   if (!Number.isInteger(rootIndex) || rootIndex < 0 || BigInt(rootIndex) >= capacity)
-    throw invalid("rootIndex");
+    return undefined;
   const view = new DataView(tree.buffer, tree.byteOffset, tree.byteLength);
   const sequenceNumber = view.getBigUint64(NULLIFIER_SEQUENCE_OFFSET, true);
   const cursor = view.getBigUint64(NULLIFIER_ROOT_HISTORY_CURSOR_OFFSET, true);
-  if (cursor >= capacity) throw invalid("rootCursor");
-  // 2. An unwritten slot is zero and names no root the program accepts.
+  if (cursor >= capacity) return undefined;
+  // 1. An unwritten slot is zero and names no root the program accepts.
   const start = NULLIFIER_ROOT_HISTORY_OFFSET + rootIndex * 32;
   const root = tree.slice(start, start + 32) as Bytes32;
-  if (isZero(root)) throw invalid("emptyRoot");
-  // 3. The cursor points past the newest root. A distance past the append count names a
+  if (isZero(root)) return undefined;
+  // 2. The cursor points past the newest root. A distance past the append count names a
   // slot the history never held at that position.
   const newest = (cursor + capacity - 1n) % capacity;
   const distance = (newest + capacity - BigInt(rootIndex)) % capacity;
-  if (distance > sequenceNumber) throw invalid("rootSequence");
-  return Object.freeze({ root, rootIndex, sequence: sequenceNumber - distance });
+  if (distance > sequenceNumber) return undefined;
+  return Object.freeze({ rootIndex, root, sequence: sequenceNumber - distance });
+}
+
+/** The state root at `rootIndex`, Rust `TreeAccount::get_utxo_tree_root`. */
+export function stateRootAt(tree: Uint8Array, rootIndex: number): Bytes32 | undefined {
+  decodeTreeHeadRoots(tree);
+  const written = new DataView(tree.buffer, tree.byteOffset, tree.byteLength).getUint16(
+    UTXO_ROOT_HISTORY_LEN_OFFSET,
+    true,
+  );
+  if (!Number.isInteger(rootIndex) || rootIndex < 0 || rootIndex >= written) return undefined;
+  const start = UTXO_ROOT_HISTORY_OFFSET + rootIndex * 32;
+  const root = tree.slice(start, start + 32) as Bytes32;
+  return isZero(root) ? undefined : root;
 }
 
 /** `address_root_index u16 LE || D u8 || D x u16 LE`, the empty read writes zero for all three. */
