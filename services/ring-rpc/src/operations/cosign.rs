@@ -85,7 +85,7 @@ pub enum CoSignError {
     LimitsUnavailable = -32163,
     #[error("the message holds anything but one ring transfer the co-signer can read")]
     MessageScope = -32164,
-    #[error("the co-signer approves no class this operation demands")]
+    #[error("the co-signer approves no class the operation demands")]
     NotApproved = -32165,
     #[error("the co-sign request names an asset with no record")]
     UnrecordedAsset = -32296,

@@ -126,7 +126,7 @@ pub struct CreateAuditorKeyRequest {
     pub auth: AuthorityAuth,
 }
 
-/// Signed by the ring's Loader v3 upgrade authority or its config authority.
+/// Signed by the ring's Loader v3 upgrade authority or its policy authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthorityAuth {

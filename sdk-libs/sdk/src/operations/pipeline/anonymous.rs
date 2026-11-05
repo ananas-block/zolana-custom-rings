@@ -607,7 +607,7 @@ pub(super) fn public_co_owners(
         .collect())
 }
 
-/// A default-ring spend past the entry class must split, any other spend needs a commitment key.
+/// A default-ring spend past the entry class must split, any other spend needs a keyed shape.
 fn check_audit_key(inputs: &SppProofInputs) -> Result<(), RingError> {
     let default_ring = spends_default_ring(&inputs.input_utxos);
     let published = inputs

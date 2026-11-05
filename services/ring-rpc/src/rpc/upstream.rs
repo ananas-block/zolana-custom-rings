@@ -176,7 +176,7 @@ pub trait TransactionSource: Send + Sync {
         async { Ok(WalletEnrollment::NotEnrolled) }
     }
 
-    /// Whether the owner's own `OwnerGrant` account names this reader, a PDA grants through CPI.
+    /// Whether the owner's own `OwnerGrant` account names `reader`, a PDA grants through CPI.
     fn owner_grant_held(
         &self,
         _ring: Address,

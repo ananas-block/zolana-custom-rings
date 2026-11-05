@@ -19,7 +19,7 @@ pub enum ReaderGrantAction {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SetReaderGrantRequest {
     pub ring: SerializablePubkey,
-    /// Absent for a ring-wide grant, the ring config authority signs it.
+    /// Absent for a ring-wide grant, the policy authority signs it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallet: Option<SerializablePubkey>,
     /// Canonical tagged reader key bytes.
@@ -27,7 +27,7 @@ pub struct SetReaderGrantRequest {
     pub action: ReaderGrantAction,
     pub timestamp: u64,
     pub nonce: Base64String,
-    /// Raw Ed25519 of `wallet` or the config authority over the `ReaderGrantAttestation` message.
+    /// Raw Ed25519 of `wallet` or the policy authority over the `ReaderGrantAttestation` message.
     pub signature: SerializableSignature,
 }
 
@@ -67,7 +67,7 @@ impl Attestation for ReaderGrantAttestation {
 }
 
 impl ReaderGrantRequest {
-    /// `signer` must be the attestation's wallet, or the ring config authority for a ring-wide grant.
+    /// `signer` must be the attestation's wallet, or the policy authority for a ring-wide grant.
     pub fn sign<S: Signer + ?Sized>(
         self,
         signer: &S,

@@ -360,7 +360,7 @@ pub struct WalletRecordUpdate {
     member: Member,
 }
 
-/// Signed by the config authority, a write may name any record.
+/// Signed by the policy authority, a write may name any record.
 #[must_use]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthorityRecordUpdate {
@@ -423,7 +423,7 @@ impl WalletRecordUpdate {
         Ok(self)
     }
 
-    /// The writer holds the update until a config authority update sets every list of `lists` on the member.
+    /// The writer holds the update until a policy authority update sets every list of `lists` on the member.
     pub fn awaiting_authority(mut self, lists: ListSet) -> Result<Self, RingError> {
         if lists.is_empty() || !lists.is_subset(ENROLMENT_LISTS) {
             return Err(RingError::EnrolmentLists);
@@ -469,7 +469,7 @@ impl AuthorityRecordUpdate {
         self
     }
 
-    /// The writer refuses a signer other than the config authority.
+    /// The writer refuses a signer other than the policy authority.
     pub fn sign<S: Signer + ?Sized>(
         self,
         authority: &S,

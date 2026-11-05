@@ -1,4 +1,4 @@
-//! Mirrors `custom_rings/circuits/base`, streams keyed by `Poseidon(CR_S, dh, eph_pk, auditor_pk)`.
+//! Mirrors `prover/circuits/shared/envelope.go`, streams keyed by `Poseidon(CR_S, dh, eph_pk, auditor_pk)`.
 
 use custom_ring_interface::{
     domain::{self, DEPOSIT_AUDIT_LABEL, REGISTER_KEY_LABEL},
@@ -32,7 +32,7 @@ pub(crate) enum StreamSchedule {
     Ring(&'static [u8; 9]),
 }
 
-/// Binds the X25519 output to both keys that produced it, in the order `seal.go` hashes.
+/// Binds the X25519 output to both keys that produced it, in the order `envelope.go` hashes.
 pub(crate) fn shared_secret(
     dh: &[u8; 32],
     ephemeral: &X25519Pubkey,
@@ -447,7 +447,7 @@ mod tests {
         }
     }
 
-    /// The `go_vectors.rs` auditor scalar, the TypeScript mirror pins the same values.
+    /// The `disclosure_vectors.rs` auditor scalar, the TypeScript mirror pins the same values.
     const AUDITOR_SK: &str = "01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c";
     const EPHEMERAL_SK: &str = "011013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f0e";
     const NULLIFIER_SECRET: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";

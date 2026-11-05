@@ -521,7 +521,7 @@ impl PreparedRingDeposit {
         self.viewing_history.as_ref()
     }
 
-    /// A second proof of this frame is refused, a retry starts from [`Self::fresh_attempt`].
+    /// A second proof of the frame is refused, a retry starts from [`Self::fresh_attempt`].
     pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
@@ -578,7 +578,7 @@ impl PreparedRingDeposit {
         )
     }
 
-    /// `[config, registries?, co-signer?]`, then SPP's deposit list.
+    /// `[policy, registries, co-signer?]`, then SPP's deposit list.
     fn instruction(
         &self,
         proof: CustomRingProof,
@@ -691,7 +691,7 @@ struct DepositAssembly<'a> {
     co_signer: Option<Address>,
     note: SealedNote,
     viewing_history: Option<ViewingHistory>,
-    /// Whether this process drew the note's blinding secret.
+    /// Whether the running process drew the note's blinding secret.
     reseal: bool,
 }
 

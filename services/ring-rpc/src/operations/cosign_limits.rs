@@ -345,7 +345,7 @@ enum Operation {
         spends_note: bool,
         approval_bits: Option<u8>,
     },
-    /// A deposit's public leg, or a merge's nothing.
+    /// A deposit's public leg, or nothing on a merge.
     Published,
 }
 
@@ -382,7 +382,7 @@ fn approval_mask(flows: &[OwnerFlow], checks: &[AssetCheck]) -> ApprovalMask {
 }
 
 impl Operation {
-    /// A frame's proven bits meet the thresholds this service reads, or it signs nothing.
+    /// A frame's proven bits meet the thresholds the service reads, or it signs nothing.
     fn frame_holds(self, mask: ApprovalMask) -> bool {
         match self {
             Self::Transfer {
@@ -393,7 +393,7 @@ impl Operation {
         }
     }
 
-    /// The classes the ring's rule demands of this operation.
+    /// The classes the ring's rule demands of the operation.
     fn demand(self, flows: &[OwnerFlow], mask: ApprovalMask) -> CoSignScope {
         let moved = |legs: fn(&AssetFlow) -> u64| flows.iter().any(|flow| legs(&flow.flow) != 0);
         let when = |held: bool, scope| if held { scope } else { CoSignScope::NONE };

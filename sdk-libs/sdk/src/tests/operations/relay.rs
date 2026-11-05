@@ -3302,7 +3302,7 @@ mod request_fixtures {
         tests::support::{wallet, TREE_ID},
     };
 
-    /// `UPDATE_PROVER_JSON=1` writes the file, `TestRustFixtures` solves what it holds.
+    /// `UPDATE_PROVER_JSON=1` writes the file, `TestGoldenRequestsAssignTheRecordedWitness` solves what it holds.
     fn pinned(
         name: &str,
         assembled: &crate::pipeline::Assembled,
