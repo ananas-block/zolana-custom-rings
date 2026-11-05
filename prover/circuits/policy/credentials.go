@@ -84,7 +84,7 @@ func (c *Credentials) StatementFields() []frontend.Variable {
 
 func (c *Credentials) OpenCredentials(api frontend.API, ringID frontend.Variable) CredentialPool {
 	// 1. Every opening uses the same statement ring, owner and accepted root table.
-	roots := registry.CredentialRoots{RingID: ringID, Owner: c.CredentialOwner, StateRoots: c.StateRoots}
+	roots := registry.CredentialRoots{RingID: ringID, Owner: c.CredentialOwner, StateRoots: c.StateRoots}.Check(api)
 	pool := CredentialPool{subjects: subjectPool{pooledTable{active: 1, table: lookup.New(api, 3)}}}
 	for i, opening := range c.Openings {
 		// 2. A live opening selects exactly one authenticated branch, while padding selects neither.

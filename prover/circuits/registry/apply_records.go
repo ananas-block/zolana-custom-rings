@@ -120,7 +120,7 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 	count := ringgadget.SelectCount(api, c.Count, 1, c.NumWrites)
 	// 2. The authenticated bitmap selects private owner writes inside the active prefix.
 	credentialBits := c.credentialBits(api)
-	roots := CredentialRoots{RingID: c.PrivateRingID, Owner: c.CredentialOwner, StateRoots: c.StateRoots}
+	roots := CredentialRoots{RingID: c.PrivateRingID, Owner: c.CredentialOwner, StateRoots: c.StateRoots}.Check(api)
 	state := registryState{root: c.OldRoot, next: c.OldNextIndex, chain: c.ChainStart}
 	for i, w := range c.Writes {
 		maskBits := api.ToBinary(w.Entry.Mask, ListBits)

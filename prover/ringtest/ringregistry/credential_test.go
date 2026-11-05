@@ -25,7 +25,7 @@ type inclusionCircuit struct {
 }
 
 func (c *inclusionCircuit) Define(api frontend.API) error {
-	c.Leaf.AssertInclusion(api, c.Active, c.Roots)
+	c.Leaf.AssertInclusion(api, c.Active, c.Roots.Check(api))
 	return nil
 }
 
@@ -90,7 +90,6 @@ func TestCredentialStateInclusionBindsPayload(t *testing.T) {
 		{"wrong state path", func(c *inclusionCircuit) { c.Leaf.StatePath[0] = 149 }},
 		{"wrong state root", func(c *inclusionCircuit) { c.Roots.StateRoots[0][1] = 151 }},
 		{"wrong tree id", func(c *inclusionCircuit) { c.Roots.StateRoots[0][0] = 5 }},
-		{"tree id outside width", func(c *inclusionCircuit) { c.Roots.StateRoots[0][0] = 1 << 16 }},
 		{"state index outside width", func(c *inclusionCircuit) { c.Leaf.StateIndex = uint64(1) << protocol.StateTreeHeight }},
 		{"state slot outside table", func(c *inclusionCircuit) { c.Leaf.TreeSlot = len(c.Roots.StateRoots) }},
 	} {
@@ -100,6 +99,34 @@ func TestCredentialStateInclusionBindsPayload(t *testing.T) {
 			requireCredentialRefused(t, c, "registry.CredentialLeaf.AssertInclusion")
 		})
 	}
+}
+
+// Every table entry is range checked once, a tree id no opening selects included.
+func TestCredentialRootTableBindsTreeIDs(t *testing.T) {
+	for name, entry := range map[string]int{"selected entry": 0, "unselected entry": 1} {
+		t.Run(name, func(t *testing.T) {
+			c := inclusionFixture(t)
+			c.Roots.StateRoots[entry][0] = 1 << 16
+			requireCredentialRefused(t, c, "registry.CredentialRoots.Check")
+		})
+	}
+	t.Run("pool entry no opening selects", func(t *testing.T) {
+		c := poolFixture(t)
+		c.StateRoots[2][0] = 1 << 16
+		requireCredentialRefused(t, c, "registry.CredentialRoots.Check")
+	})
+	t.Run("opening names a tree id outside the table", func(t *testing.T) {
+		c := poolFixture(t)
+		for i := range c.StateRoots {
+			c.StateRoots[i][0] = 5
+		}
+		requireCredentialRefused(t, c, "registry.CredentialOpening.Open")
+	})
+	t.Run("opening names a slot past the table", func(t *testing.T) {
+		c := poolFixture(t)
+		c.Openings[0].Leaf.TreeSlot = len(c.StateRoots)
+		requireCredentialRefused(t, c, "registry.CredentialOpening.Open")
+	})
 }
 
 func TestCredentialRejectsZeroNullifierKeys(t *testing.T) {

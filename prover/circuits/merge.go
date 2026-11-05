@@ -81,7 +81,7 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(c.Credential.Member, api.Mul(hidden, c.OwnerPkHash))
 	c.Credential.AssertInclusion(api, hidden, registry.CredentialRoots{
 		RingID: c.RingProgramID, Owner: c.CredentialOwner, StateRoots: [][2]frontend.Variable{c.StateRoot},
-	})
+	}.Check(api))
 	api.AssertIsEqual(c.Credential.NullifierPk, api.Mul(hidden, c.NullifierPk))
 
 	// 3. The output is the SPP merge output, the program reads OutputUtxoHash from the SPP body it forwards and the auditor rebuilds it from the record.
