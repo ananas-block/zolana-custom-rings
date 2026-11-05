@@ -31,7 +31,7 @@ Breaking
   through the ring capsule, and `syncWallet` no longer does → sync ring
   wallets with `syncRingWallet` and drop `depositPayloadDecoder` from the
   `syncWallet` config.
-- A relayed transfer seals under the row its public counts select, and Ring RPC refuses it when a salted or asset record read selects a key whose stream differs → prepare the relay again with the `sealRow` the refusal names and sign the new message.
+- A relayed transfer seals under the row its public counts select, and Ring RPC refuses it with `RingRpcRefusal.resealNarrow` or `resealWide` when a salted or asset record read selects a key whose stream differs → prepare the relay again with that `sealRow` and sign the new message.
 - `RingRpc` now posts each JSON-RPC method beneath its base URL and accepts
   `RingRpcOptions.apiKey` or the URL's `api-key`, while `RingRpc.url` omits the key;
   service clients reject malformed or conflicting credentials during construction
@@ -45,7 +45,7 @@ Added
 - `BufferedFrame` and `withBufferedSettlement` settle a frame past one transaction from a buffer its payer writes, `closeAbandonedFrameBuffers` returns the rent of an abandoned buffer, and `TransactionFit` and `decideAddressCeiling` report and refuse a transaction before any proof.
 - `CoSignerApproval` with `CoSignerRule` and `ApprovalOpening` lets an outside co-signer read the proven bits or exact totals under `withExactApproval`, `OwnerApproval` with `RelayTransferTerms` lets a public owner check its own slots, and `FunderApproval` with `RelayFunderTerms` lets a public funder check its deposit legs.
 - `RingRpc.getWalletStatus`, `RingRpc.getWalletActivity` and `RingRpc.getSpendCoverage` read a wallet's notes, its history and a ring's unresolved spends, and `ringFullScan` and `RingAuditPage.skipped` read a whole ring with no tag read and list each row that does not open.
-- `RingRelaySpend.sealRow` and `RingRelayInput.sealRow` seal a relayed transfer under a named `SealRow`, and `RING_RESEAL_REQUIRED` names the refusal of a seal whose stream a later record read moves.
+- `RingRelaySpend.sealRow` and `RingRelayInput.sealRow` seal a relayed transfer under a named `SealRow`, and `RingRpcRefusal.resealNarrow` and `resealWide` name `-32211` and `-32212`.
 
 Fixed
 
