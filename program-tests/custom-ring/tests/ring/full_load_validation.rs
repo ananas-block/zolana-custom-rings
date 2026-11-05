@@ -639,6 +639,7 @@ impl RelayLeg<'_> {
                             mint: SOL_MINT,
                             peak: u128::from(SPENT_TOTAL),
                             outflow: u128::from(SPENT_TOTAL),
+                            gross: u128::from(LEGS as u64 * LEG),
                         }],
                         seen_blinders: Vec::new(),
                     })
