@@ -5,7 +5,6 @@ export {
   auditSharedSecret,
   auditorMessageData,
   auditorViewTag,
-  openAuditorRegions,
   packDisclosure,
   unpackDisclosure,
   parseAuditorMessage,
@@ -275,6 +274,7 @@ export type {
   MergeSettings,
   SetMergeSettingsRequest,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
+export { RingMergeSettingsRequest, mergeSettingsAttestation } from "../rpc/ring-rpc.js";
 export {
   decodeStorageApplyProofInputs,
   encodeStorageApplyProofInputsRequest,

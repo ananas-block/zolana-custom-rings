@@ -310,7 +310,8 @@ async function buildRingMerge(
       resolveRingOutputTree(params.client, params.outputTree, context),
     ]);
     // A hidden owner stays off the payer, a zero-key owner publishes itself.
-    if (!zeroKey) checkHiddenParties(owner.signingPublicKey.ed25519(), [params.feePayer]);
+    const ownerKey = owner.signingPublicKey.confidentialViewTag() as Bytes32;
+    if (!zeroKey) checkHiddenParties(ownerKey, [params.feePayer]);
     const asset = params.asset ?? SOL_MINT;
     if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);
     const entries =
@@ -616,7 +617,8 @@ function mergeDisclosureRequest(
     auditorPk: input.auditorU,
     payer: solanaOwnerIdentity(addressBytes(input.payer)) as Bytes32,
     trackingRoot: input.trackingRoot,
-    ownerKey: prepared.signingPublicKey.ed25519(),
+    // The merge proves no owner signature, a PDA owner key is valid.
+    ownerKey: prepared.signingPublicKey.confidentialViewTag() as Bytes32,
     ownerPkHash: input.ownerPkHash,
     mint,
     mintChunks: mergeMintChunks(mint).map((chunk) => bigIntBytes(chunk) as Bytes32),
