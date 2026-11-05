@@ -1,7 +1,7 @@
 //! The widest frames of every transfer key reach the pairing within Pinocchio's heap, the validator sweep settles each key's widest policy legs.
 
 use custom_ring_interface::{
-    key_catalog::{TransferShape, TRANSFER_SHAPES},
+    key_catalog::{FrameKey, TransferShape, TRANSFER_SHAPES},
     tag, CustomRingError, RingPolicy, RingRail, RingTransactData, RootRead,
 };
 use solana_address::Address;
@@ -149,7 +149,15 @@ fn cases() -> Vec<Wide> {
                 exempt: false,
                 entry: shape.entry,
                 in_proof: false,
-                wide: shape.wide && !shape.entry,
+                wide: FrameKey {
+                    rail: RingRail::Anonymous,
+                    inputs: usize::from(shape.inputs),
+                    outputs: usize::from(shape.outputs),
+                    spends_default_ring: shape.entry,
+                    wide: false,
+                }
+                .shape()
+                    != Some(*shape),
             },
             shape,
         );
