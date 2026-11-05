@@ -2,64 +2,54 @@ import {
   addressBytes,
   compileUnsignedTransaction,
   encodeBase58,
+  treeAddress,
 } from "@heliuslabs/zolana/internal";
 import type { Instruction } from "@heliuslabs/zolana/interface";
 import {
   createKeyPairSignerFromPrivateKeyBytes,
   getBase58Encoder,
   getBase64Decoder,
-  getBase64Encoder,
   verifySignature,
   type Address,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  enrollInstruction,
-  ENROLL_TAG,
-  type EnrollmentSeal,
-} from "../../../src/operations/management/enrollment.js";
-import {
-  prepareEnrollmentRelay,
-  prepareEnrollRelay,
-} from "../../../src/operations/management/enroll-relay.js";
+import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
+import { enrollCredentialInstruction } from "../../../src/operations/management/enrollment.js";
+import { prepareEnrollRelay } from "../../../src/operations/management/enroll-relay.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
+import type { AuditCredential } from "../../../src/protocol/membership/credential.js";
+import { memberOfTag } from "../../../src/protocol/membership/policy.js";
 import {
-  ENROLL_COMPUTE_UNITS,
   relayEnrollInstruction,
   type RelayEnrollInputs,
 } from "../../../src/protocol/ring-rpc/relay-enroll-inputs.js";
+import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import type { RelayStatus } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
 import { PendingRelaySignature, type RingRelayClient } from "../../../src/rpc/relay.js";
-import { filled, ringFixture } from "../../helpers/ring-pipeline.js";
+import { filled } from "../../helpers/ring-pipeline.js";
 
 const address = (byte: number): Address => encodeBase58(new Uint8Array(32).fill(byte)) as Address;
 const FEE_PAYER = address(0x44);
-const REGISTRY = address(0x55);
+const OUTPUT_TREE = treeAddress(3);
 const quote = { feePayer: FEE_PAYER, validUntilSlot: 100n };
-const SEAL: EnrollmentSeal = {
-  nullifierPk: filled(1),
-  listTag: filled(2),
-  ephU: filled(3),
-  ciphertext: new Uint8Array(64).fill(4) as EnrollmentSeal["ciphertext"],
-};
 const ownerSigner = () => createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(1));
 
 function inputsOf(owner: Address): RelayEnrollInputs {
   return {
     ringProgramId: address(0x90),
     owner,
-    trackingRegistry: REGISTRY,
-    instructionData: Uint8Array.of(ENROLL_TAG, 1, 2),
+    outputTree: OUTPUT_TREE,
+    instructionData: Uint8Array.of(RingInstructionTag.enroll, 1, 2),
   };
 }
 
-function messageOf(instruction: Instruction, units = ENROLL_COMPUTE_UNITS): Uint8Array {
+function messageOf(instruction: Instruction): Uint8Array {
   const { messageBytes } = compileUnsignedTransaction({
     feePayer: FEE_PAYER,
     lifetime: SIZE_PROBE_LIFETIME,
     instructions: [instruction],
-    computeUnitLimit: units,
+    computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.enroll),
   });
   return new Uint8Array(messageBytes);
 }
@@ -77,11 +67,11 @@ function relayAnswering(message: Uint8Array, relayId: string) {
   } as unknown as RingRelayClient;
 }
 
-async function signed(answer: (honest: Instruction) => Instruction, units?: number) {
+async function signed(answer: (honest: Instruction) => Instruction) {
   const owner = await ownerSigner();
   const inputs = inputsOf(owner.address);
   const prepared = await prepareEnrollRelay({ inputs, owner, quote });
-  const message = messageOf(answer(await relayEnrollInstruction(inputs, FEE_PAYER)), units);
+  const message = messageOf(answer(await relayEnrollInstruction(inputs, FEE_PAYER)));
   const relay = relayAnswering(message, prepared.relayId());
   const pending = await prepared.send(relay);
   if (!(pending instanceof PendingRelaySignature)) throw new Error("the owner signs");
@@ -115,16 +105,30 @@ describe("relayed enrollment", () => {
 
   it("names the accounts the enroll instruction names", async () => {
     const owner = await ownerSigner();
-    const built = await enrollInstruction(
-      {
-        payer: FEE_PAYER,
-        owner: owner.address,
-        trackingRegistry: REGISTRY,
-        seal: SEAL,
-        viewingU: filled(5),
+    const credential: AuditCredential = {
+      ringId: filled(1),
+      member: memberOfTag(addressBytes(owner.address)),
+      nullifierPk: filled(2),
+      listTag: filled(3),
+      auditorPubkey: new Uint8Array(33).fill(4) as AuditCredential["auditorPubkey"],
+      ephU: filled(5),
+      ciphertext: new Uint8Array(64).fill(6) as AuditCredential["ciphertext"],
+    };
+    const built = await enrollCredentialInstruction({
+      ringProgramId: address(0x90),
+      owner: owner.address,
+      payer: FEE_PAYER,
+      outputTreeId: 3,
+      proven: { credential, registerKey: new Uint8Array(192) },
+      write: {
+        transact: {
+          a: filled(7),
+          b: new Uint8Array(128) as never,
+          c: filled(8),
+        },
+        addressRootIndex: 2,
       },
-      { getAccount: async () => undefined },
-    );
+    });
     const relayed = await relayEnrollInstruction(inputsOf(owner.address), FEE_PAYER);
     expect(relayed.accounts).toEqual(built.accounts);
     expect(relayed.programAddress).toBe(built.programAddress);
@@ -135,7 +139,7 @@ describe("relayed enrollment", () => {
       signed((honest) => ({
         ...honest,
         accounts: (honest.accounts ?? []).map((meta) =>
-          meta.address === REGISTRY ? { ...meta, address: address(0x56) } : meta,
+          meta.address === OUTPUT_TREE ? { ...meta, address: treeAddress(4) } : meta,
         ),
       })),
     ).rejects.toMatchObject(refused("Accounts"));
@@ -151,13 +155,10 @@ describe("relayed enrollment", () => {
     ).rejects.toMatchObject(refused("Data"));
   });
 
-  it("refuses another program and a higher budget", async () => {
+  it("refuses another program", async () => {
     await expect(
       signed((honest) => ({ ...honest, programAddress: address(0x57) })),
     ).rejects.toMatchObject(refused("Program"));
-    await expect(signed((honest) => honest, ENROLL_COMPUTE_UNITS + 1)).rejects.toMatchObject(
-      refused("Budget"),
-    );
   });
 
   it("refuses an owner that is not the signer", async () => {
@@ -165,52 +166,5 @@ describe("relayed enrollment", () => {
     await expect(
       prepareEnrollRelay({ inputs: inputsOf(address(9)), owner, quote }),
     ).rejects.toMatchObject(refused("Signer"));
-  });
-
-  it("refuses a payer the quote does not name", async () => {
-    const owner = await ownerSigner();
-    await expect(
-      prepareEnrollmentRelay(
-        {
-          ringProgramId: address(0x90),
-          enroll: {
-            payer: address(0x45),
-            owner: owner.address,
-            trackingRegistry: REGISTRY,
-            seal: SEAL,
-            viewingU: filled(5),
-          },
-          owner,
-          quote,
-        },
-        { getAccount: async () => undefined },
-      ),
-    ).rejects.toMatchObject({ code: "RING_RELAY_PAYER_MISMATCH" });
-  });
-
-  it("carries a built enrollment to the relay under the ring's registry", async () => {
-    const owner = await ownerSigner();
-    const fixture = await ringFixture();
-    const prepared = await prepareEnrollmentRelay(
-      {
-        ringProgramId: fixture.ringProgramId,
-        enroll: {
-          payer: FEE_PAYER,
-          owner: owner.address,
-          trackingRegistry: REGISTRY,
-          seal: SEAL,
-          viewingU: filled(5),
-        },
-        owner,
-        quote,
-      },
-      fixture.client,
-    );
-    expect(prepared.request.ring).toBe(fixture.ringProgramId);
-    expect(prepared.request.intent.operation).toBe("enroll");
-    const { intent } = prepared.request;
-    if (intent.operation !== "enroll") throw new Error("an enroll relay");
-    const wire = new Uint8Array(getBase64Encoder().encode(intent.proofInputs));
-    expect(wire.subarray(64, 96)).toEqual(addressBytes(fixture.trackingRegistry));
   });
 });

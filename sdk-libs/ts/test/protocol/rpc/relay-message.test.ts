@@ -116,7 +116,7 @@ interface DelegateRequest {
 interface EnrollRequest {
   readonly ringProgramId: Address;
   readonly owner: Address;
-  readonly trackingRegistry: Address;
+  readonly outputTree: Address;
   readonly instructionData: string;
   readonly feePayer: Address;
 }

@@ -56,9 +56,8 @@ import {
 } from "../protocol/membership/approval-totals.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
 import { signerDataCountAt } from "../protocol/membership/signer-data-counts.js";
-import { ringAuthAddress, ringPolicyAddress, STORAGE_PROGRAM_ID } from "../protocol/pda/index.js";
+import { ringAuthAddress, ringPolicyAddress } from "../protocol/pda/index.js";
 import {
-  ENROLL_COMPUTE_UNITS,
   enrollRequestDigest,
   relayEnrollInstruction,
   type RelayEnrollInputs,
@@ -743,9 +742,9 @@ export async function expectedEnroll(
 
 function checkEnrollSnapshot(expected: ExpectedEnroll, message: Uint8Array): VerifiedRelayMessage {
   const envelope: Envelope = {
-    program: STORAGE_PROGRAM_ID,
+    program: expected.inputs.ringProgramId,
     policy: expected.policy,
-    units: ENROLL_COMPUTE_UNITS,
+    units: ringComputeUnitLimit(RingInstructionTag.enroll),
     feePayer: expected.feePayer,
     signer: expected.inputs.owner,
     setup: [],
