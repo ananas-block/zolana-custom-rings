@@ -83,6 +83,7 @@ pinned_codes! {
     OutputBodyLength = 8253,
     OutputCountOutOfRange = 8257,
     BodilessExit = 8258,
+    TooManyApplicationMessages = 8269,
     ReplyLength = 8259,
     RecordsRegistryOtherRing = 8266,
     ListNotPolicyReadable = 8255,
