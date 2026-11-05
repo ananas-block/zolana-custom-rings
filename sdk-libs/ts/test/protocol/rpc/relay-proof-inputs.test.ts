@@ -313,6 +313,20 @@ describe("relay proof inputs", () => {
     expect(encoded).toEqual(new Uint8Array(getBase64Encoder().encode(vector.proofInputs)));
   });
 
+  it("reads and writes the Rust deposit rail vector byte for byte", async () => {
+    const vector = JSON.parse(
+      readFileSync(
+        new URL("../../../../../test-vectors/rpc/relay_deposit_proof_inputs.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { proofInputs: string };
+    const wire = new Uint8Array(getBase64Encoder().encode(vector.proofInputs));
+    const read = await decodeRelayProofInputs(wire, new AssetRegistry());
+    expect(read.rail).toMatchObject({ kind: "deposit", plan: expect.anything() });
+    expect(read.inputs.every((spent) => spent.isDummy())).toBe(true);
+    expect(encodeRelayProofInputs(read)).toEqual(wire);
+  });
+
   it("writes the deposit rail as tag 3, its plan exactly on an anonymous ring", async () => {
     const { proofInputs } = anonymousPayload();
     const { plan } = proofInputs.rail as Extract<RelayRail, { kind: "anonymous" }>;

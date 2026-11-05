@@ -296,12 +296,9 @@ describe("atomic progress", () => {
     const tags = await Promise.all([
       wallet.takeSenderTag(bob.keys),
       wallet.takeSenderTag(bob.keys),
-      wallet.takeRequestTag(bob.keys),
-      wallet.takeRequestTag(bob.keys),
     ]);
-    expect(new Set(tags.map(hex)).size).toBe(4);
+    expect(new Set(tags.map(hex)).size).toBe(2);
     expect(wallet.history().current().txCount).toBe(2n);
-    expect(wallet.history().current().requestCount).toBe(2n);
     const failing = {
       ...bob.keys,
       viewTags: () => Promise.reject(new Error("holder offline")),
@@ -377,7 +374,7 @@ describe("atomic progress", () => {
       .history()
       .withEntry(
         wallet.history().entries.length - 1,
-        entry.withCounter("tx", StreamCounter.restore({ next: 4n, scanned: 4n, pending: [] })),
+        entry.withTxCounter(StreamCounter.restore({ next: 4n, scanned: 4n, pending: [] })),
       );
     expect(() => wallet.updateHistory(watermark)).toThrow("RING_SCAN_PROGRESS_MOVED");
   });

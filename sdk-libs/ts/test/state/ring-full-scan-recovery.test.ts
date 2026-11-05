@@ -75,7 +75,7 @@ describe("full scan recovery", () => {
       throw new Error("tag reads unavailable");
     });
     const byNullifier = vi.fn(indexer.client().getShieldedTransactionsByNullifiers);
-    const history = (await ViewingHistory.create(bob.viewingKey, 0n).requestTag(bob.keys)).history;
+    const history = (await ViewingHistory.create(bob.viewingKey, 0n).senderTag(bob.keys)).history;
     const recovered = await AnonymousSync.create(bob.keys, ASSETS).fullScan(
       {
         ...indexer.client(),
@@ -95,7 +95,7 @@ describe("full scan recovery", () => {
     ).toBe(true);
     expect(recovered.spentNullifiers).toEqual([]);
     expect(recovered.status).toBe("Complete");
-    expect(recovered.history.current().request).toEqual(history.current().request);
+    expect(recovered.history.current().tx).toEqual(history.current().tx);
     expect(found(recovered)).toEqual([hex(output(wrong, 1))]);
     expect(recovered.found[0]?.stream).toEqual({ kind: "fullScan" });
     expect((await recover(alice, indexer)).utxos.map((note) => note.utxo.amount)).toEqual([70n]);

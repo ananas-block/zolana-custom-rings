@@ -19,7 +19,7 @@ import {
   type RecoveryCoverage,
   type RecoveryWallet,
 } from "./recovery-session.js";
-import { parseExact, viewTagStream, ViewingHistory, type EntryStream } from "./viewing-history.js";
+import { parseExact, senderStream, ViewingHistory } from "./viewing-history.js";
 
 /** A reply read from a note, what a sender wrote about itself and nothing the proof binds. */
 export interface PendingClaim {
@@ -265,30 +265,21 @@ export class AnonymousWallet {
 
   /** The current key's next sender tag, concurrent callers never share one. */
   takeSenderTag(keys: RingKeys, context?: RequestContext): Promise<ViewTag> {
-    return this.#takeTag(keys, "tx", context);
+    return this.#takeTag(keys, context);
   }
 
-  /** A fresh `recipientRequestViewTag`, concurrent callers never share one. */
-  takeRequestTag(keys: RingKeys, context?: RequestContext): Promise<ViewTag> {
-    return this.#takeTag(keys, "request", context);
-  }
-
-  /** A holder failure burns the index, the gap scan passes it. */
-  async #takeTag(
-    keys: RingKeys,
-    stream: EntryStream,
-    context: RequestContext | undefined,
-  ): Promise<ViewTag> {
+  /** A holder failure burns the index. */
+  async #takeTag(keys: RingKeys, context: RequestContext | undefined): Promise<ViewTag> {
     const current = this.#history.current();
-    const { index, counter } = current[stream].takeNext();
+    const { index, counter } = current.tx.takeNext();
     this.#history = this.#history.withEntry(
       this.#history.entries.length - 1,
-      current.withCounter(stream, counter),
+      current.withTxCounter(counter),
     );
     this.#revision += 1n;
     return exactlyOne(
       await keys.viewTags(
-        [{ viewingPublicKey: current.viewingPublicKey, stream: viewTagStream(stream, index) }],
+        [{ viewingPublicKey: current.viewingPublicKey, stream: senderStream(index) }],
         context,
       ),
     );

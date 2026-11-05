@@ -296,7 +296,6 @@ export const RingProgramError = Object.freeze({
   ringPolicyAlreadyExists: 8301,
   invalidStorageRegistry: 8302,
   invalidAssetLimits: 8390,
-  unexpectedCuratorRevision: 8470,
   zeroRoleKey: 8471,
   duplicateRoleKey: 8472,
   unboundRegistry: 8480,

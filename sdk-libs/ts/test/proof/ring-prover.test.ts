@@ -59,7 +59,7 @@ describe("ring prover contracts", () => {
 
   it("refuses a ring proof from another ring key", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () =>
-      Response.json(proofFor({ circuitType: "custom-ring-deposit-8" })),
+      Response.json(proofFor({ circuitType: "custom-ring-merge" })),
     );
     await expect(ringProver(fetch).proveRing(registerKey)).rejects.toMatchObject({
       code: "CLIENT_PROVING_KEY_MISMATCH",

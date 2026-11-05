@@ -160,7 +160,7 @@ export {
   ViewingHistory,
   ViewingKeyEntry,
 } from "../state/viewing-history.js";
-export type { AdvancedTag, EntryStream, RingPosition } from "../state/viewing-history.js";
+export type { AdvancedTag, RingPosition } from "../state/viewing-history.js";
 export { plainTagFrame, scanWorkerMatcher } from "../state/anonymous-scan.js";
 export type {
   PlainTagFrame,
