@@ -1646,10 +1646,9 @@ describe("merge settings", () => {
 describe("storage apply proof inputs", () => {
   it("writes each write under the Rust `StorageWriteView` keys", () => {
     const registry = "11111111111111111111111111111112" as Address;
-    const member = new Uint8Array(32).fill(1) as Bytes32;
     const request = encodeStorageApplyProofInputsRequest({
       registry,
-      writes: [{ member, mask: 1n, value: 1n, mintPolicy: null }],
+      writes: [{ member: registry as never, mask: 1n, value: 1n, mintPolicy: null }],
     });
     expect(request["registry"]).toBe(registry);
     expect(Object.keys((request["writes"] as readonly object[])[0] ?? {})).toEqual([
