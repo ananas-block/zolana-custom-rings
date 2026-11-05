@@ -1,3 +1,5 @@
+// Exposes package internals to the black box tests.
+
 package policy
 
 import (

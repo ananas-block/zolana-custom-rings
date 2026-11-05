@@ -1,3 +1,5 @@
+// Refusals of the per owner cap, read from live slots alone, with owners kept apart and every co-owner screened.
+
 package policy_test
 
 import (

@@ -1,10 +1,27 @@
+// Holds every sender, payment and spent asset to the table's rules, over the list bits subjects.go resolved.
+//
+// SPP moves any note its signer authorizes. A ring's rule names a subject, a sender, an output owner or an
+// asset, and a set of lists that admit it, optionally only above an amount guard. Senders and inputs are
+// private and a payment's owner and amount may be too, so the program cannot apply a rule.
+//
+// A guard reads totals and never one slot, per owner and asset for an owner rule and per asset for an asset
+// rule. Splitting one payment across slots stays inside the same total. Change returned to its sender nets
+// out, a sender paying itself receives nothing. Funds entering from the default ring stay a receipt, and an
+// exit or a withdrawal stays gross. The totals mirror GuardScope in program-libs/policy/src/quantities.rs.
+//
+// Read after policy/subjects.go, policy/table.go, policy/withdrawals.go. Read before policy/comparator.go,
+// policy/outflow.go.
+//
+// Properties:
+// 1. Every live row meets every sender rule, a sender rule takes no guard.
+// 2. Every live payment's nonzero owner meets every owner rule, and its asset every asset rule, unless the rule's guard exempts its total.
+// 3. A scalar guard exempts a total at most the rule's threshold, a per asset guard an owner's total at most the mint's threshold, and an unguarded rule exempts nothing.
+// 4. Every live input's asset meets every unguarded asset rule, a zero value input included.
+// 5. A rule admits a subject on one of its present lists or off one of its absent lists.
+
 package policy
 
 import (
-	"errors"
-	"math/big"
-
-	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
@@ -36,18 +53,6 @@ func screenedRules(api frontend.API, screened frontend.Variable, table tableView
 // assertSenderRules holds every screened sender to every sender rule, with or without a spent input or an output.
 func assertSenderRules(api frontend.API, active []frontend.Variable, table tableView, resolved subjects) {
 	assertSubjectsAdmitted(api, active, table, resolved.senders, resolved.liveSenders, func(rule ruleFields) frontend.Variable { return rule.onSender })
-}
-
-// assertInputAssetRules holds every live input's asset to every unconditional asset rule, a ring note and a default ring note alike.
-//
-// A payment screens the asset it moves, and SPP's balance keeps a funded input's asset among the output and public assets. A zero value input can name any asset with nothing paid in it, the one spend the payment section never reads, and it would move a delisted note past the rules.
-//
-// A guarded rule stays out. Its obligation reads the payment totals, an input adds nothing to them, and a total of zero sits within every threshold. A guarded rule can then refuse only at a payment of the asset, and the payment section already holds that one.
-func assertInputAssetRules(api frontend.API, active []frontend.Variable, table tableView, resolved subjects) {
-	assertSubjectsAdmitted(api, active, table, resolved.inputAssets, resolved.liveInputs, func(rule ruleFields) frontend.Variable {
-		// The guard tags exclude each other, the difference reads GuardAlways.
-		return api.Mul(rule.onAsset, api.Sub(1, api.Add(rule.scalarGuard, rule.assetGuard)))
-	})
 }
 
 // assertSubjectsAdmitted holds every live subject to the active rules selects sets, a key with no such subject carries no gate.
@@ -84,12 +89,12 @@ type paymentScreen struct {
 }
 
 func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, payments []Payment, inputs []shared.Output) paymentScreen {
-	// A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
+	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(payments))
 	for o, pay := range payments {
 		liveOwner[o] = api.Mul(pay.Active, ringgadget.IsNonZero(api, pay.Owner))
 	}
-	// A mint without a threshold reads zero, a positive guard then needs the lists.
+	// 2. A mint without a threshold reads zero, a positive guard then needs the lists.
 	guards := paymentGuards(api, cmp, payments, inputs)
 	assetExempt := make([]frontend.Variable, len(payments))
 	for o := range payments {
@@ -100,10 +105,12 @@ func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, payme
 
 func (s paymentScreen) assert(api frontend.API, rule ruleFields, onPayment frontend.Variable) {
 	for o := range s.payments {
+		// An asset rule reads every live payment, an owner rule only a nonzero owner.
 		enabled := api.Mul(onPayment, api.Select(rule.onAsset, s.payments[o].Active, s.liveOwner[o]))
 		refused := rule.refuses(api, subjectLists(api, rule.onAsset, s.resolved.assets[o], s.resolved.owners[o]))
 		total := api.Select(rule.onAsset, s.guards[o].asset, s.guards[o].owner)
 		scalar := api.Mul(rule.scalarGuard, s.cmp.atMost(api, total, rule.threshold))
+		// An unguarded rule clears both tags and exempts nothing.
 		exempt := api.Or(scalar, api.Mul(rule.assetGuard, s.assetExempt[o]))
 		// A subject the lists refuse needs its amounts within the rule's guard.
 		transaction.AssertWhen(api, api.Mul(enabled, refused), exempt)
@@ -113,7 +120,7 @@ func (s paymentScreen) assert(api frontend.API, rule ruleFields, onPayment front
 // paymentGuards gives each payment receipt + exit + paid of its owner and asset, and the sum of that over its asset's distinct owners.
 func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs []shared.Output) []paymentGuard {
 	n := len(payments)
-	// Ring amounts net against same-ring inputs, an exit or a withdrawal stays gross.
+	// 1. Ring amounts net against same-ring inputs, an exit or a withdrawal stays gross.
 	ringAmounts, grossAmounts := make([]frontend.Variable, n), make([]frontend.Variable, n)
 	received, passing, repeats := make([]frontend.Variable, n), make([]frontend.Variable, n), make([]frontend.Variable, n)
 	sameAsset := make([][]frontend.Variable, n)
@@ -125,7 +132,7 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 		sameAsset[p] = make([]frontend.Variable, n)
 		sameAsset[p][p] = 1
 	}
-	// Each pair folds once, repeats counts the earlier live payments of one owner and asset.
+	// 2. Each pair folds once, repeats counts the earlier live payments of one owner and asset.
 	for p := range payments {
 		for q := range payments[:p] {
 			sameAsset[p][q] = IsSame(api, payments[p].Asset, payments[q].Asset)
@@ -138,7 +145,7 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 			repeats[p] = api.Add(repeats[p], api.Mul(samePair, payments[q].Active))
 		}
 	}
-	// A default-ring input reads no Ring flag, entry funding stays a receipt.
+	// 3. A default-ring input reads no Ring flag, entry funding stays a receipt.
 	guards := make([]paymentGuard, n)
 	for p, pay := range payments {
 		spent := frontend.Variable(0)
@@ -148,7 +155,7 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 		}
 		guards[p].owner = api.Add(cmp.saturatingSub(api, received[p], spent), passing[p])
 	}
-	// Only the first payment of an owner and asset counts toward the asset's sum.
+	// 4. Only the first payment of an owner and asset counts toward the asset's sum. Every payment of the pair holds the same owner guard, a second count would inflate the asset's total.
 	for p := range payments {
 		guards[p].asset = 0
 		for q, pay := range payments {
@@ -157,6 +164,18 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 		}
 	}
 	return guards
+}
+
+// assertInputAssetRules holds every live input's asset to every unconditional asset rule, a ring note and a default ring note alike.
+//
+// A payment screens the asset it moves, and SPP's balance keeps a funded input's asset among the output and public assets. A zero value input can name any asset with nothing paid in it, the one spend the payment section never reads, and it would move a delisted note past the rules.
+//
+// A guarded rule stays out. Its obligation reads the payment totals, an input adds nothing to them, and a total of zero sits within every threshold. A guarded rule can then refuse only at a payment of the asset, and the payment section already holds that one.
+func assertInputAssetRules(api frontend.API, active []frontend.Variable, table tableView, resolved subjects) {
+	assertSubjectsAdmitted(api, active, table, resolved.inputAssets, resolved.liveInputs, func(rule ruleFields) frontend.Variable {
+		// The guard tags exclude each other, the difference reads GuardAlways.
+		return api.Mul(rule.onAsset, api.Sub(1, api.Add(rule.scalarGuard, rule.assetGuard)))
+	})
 }
 
 // refuses is set when no list admits the subject, neither a present list it is on nor an absent list it is off.
@@ -179,60 +198,4 @@ func subjectLists(api frontend.API, onAsset frontend.Variable, asset, owner subj
 		onList[i] = api.Select(onAsset, asset.onList[i], owner.onList[i])
 	}
 	return onList
-}
-
-type comparator struct {
-	rc frontend.Rangechecker
-	// width bounds every difference the key compares, fixed when the key compiles.
-	width int
-}
-
-func newComparator(rc frontend.Rangechecker) comparator {
-	return comparator{rc: rc, width: debitBits}
-}
-
-// atMost returns total <= threshold, the caller bounds their difference below 2^width in magnitude.
-func (c comparator) atMost(api frontend.API, total, threshold frontend.Variable) frontend.Variable {
-	offset := new(big.Int).Lsh(big.NewInt(1), uint(c.width))
-	delta := api.Add(api.Sub(threshold, total), offset)
-	// The hint proposes the low width bits and the top bit of delta, untrusted until the checks below bind them.
-	parts, err := api.Compiler().NewHint(comparisonHint, 2, delta, c.width)
-	if err != nil {
-		panic(err)
-	}
-	low, top := parts[0], parts[1]
-	// low below 2^width leaves one split per delta.
-	c.rc.Check(low, c.width)
-	// top is a bit, the split then covers delta below 2^(width+1) only.
-	api.AssertIsBoolean(top)
-	// delta lies in (0, 2^(width+1)), its split is unique and top is set exactly when total <= threshold.
-	api.AssertIsEqual(delta, api.Add(low, api.Mul(top, offset)))
-	return top
-}
-
-// The callers of min, above and saturatingSub bound the difference as atMost needs.
-func (c comparator) min(api frontend.API, a, b frontend.Variable) frontend.Variable {
-	return api.Select(c.atMost(api, a, b), a, b)
-}
-
-func (c comparator) above(api frontend.API, total, threshold frontend.Variable) frontend.Variable {
-	return api.Sub(1, c.atMost(api, total, threshold))
-}
-
-func (c comparator) saturatingSub(api frontend.API, a, b frontend.Variable) frontend.Variable {
-	return api.Select(c.atMost(api, a, b), 0, api.Sub(a, b))
-}
-
-func init() { solver.RegisterHint(comparisonHint) }
-
-// comparisonHint splits delta at the width, atMost range checks and recomposes both parts.
-func comparisonHint(_ *big.Int, inputs, outputs []*big.Int) error {
-	if len(inputs) != 2 || len(outputs) != 2 || !inputs[1].IsUint64() {
-		return errors.New("comparison: want delta, width and two outputs")
-	}
-	width := uint(inputs[1].Uint64())
-	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), width), big.NewInt(1))
-	outputs[0].And(inputs[0], mask)
-	outputs[1].Rsh(inputs[0], width)
-	return nil
 }

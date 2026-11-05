@@ -1,3 +1,23 @@
+// Gives every subject of a transfer its list bits, and derives the gates that switch the sections on.
+//
+// SPP reads no list. A rule needs to know whether a private owner or asset sits on a list, and the answer
+// must come from a registry root the program read live, never from the prover. Each subject
+// turns into list bits by way of the record pools, so the rule sections trust a view and read no proof.
+// It also resolves the private lists. A public record names its member on chain, a private list holds an
+// owner under a salted key the chain cannot tie to the owner.
+//
+// Read after policy/table.go, policy/record_pool.go, policy/tracking.go. Read before policy/rules.go,
+// policy/outflow.go.
+//
+// Properties:
+// 1. The gates follow from statement values alone, no prover bit clears a section. Screened is a nonzero policy_hash off the authority rail. On a transfer Outflow is a nonzero own root, on a deposit it stays clear.
+// 2. Each read goes through a pool under the bound root of its source, own or curator per list, present or proven absent.
+// 3. An enrolled owner reads each private list at the one key its tracking row fixes.
+// 4. An owner proven absent under the tracking root reads off every private list.
+// 5. A padded row, a dummy, an unused payment and an unused public slot close their gates and read zeros.
+// 6. A live input's asset reads its lists under Screened alone and decodes no mint policy.
+// 7. A mint policy reads from the own record alone, an asset with no record reads no limit.
+
 package policy
 
 import (
@@ -54,7 +74,7 @@ func (r Rail) Gates(api frontend.API, policyHash frontend.Variable) Gates {
 	}
 }
 
-// resolveSubjects opens one record per subject the gates activate, an inactive query reads zeros and a pool activates as the OR of its queries.
+// resolveSubjects opens one record per subject the gates activate, an inactive query reads zeros, the gates activate a pool and an active query needs an active pool.
 func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, spend Spend, payments []Payment) subjects {
 	senders := spend.Senders
 	// 1. Each pool authenticates its records under its own root and answers a query by member, present or proven absent. Every read below goes through the pools, no prover list bit reaches a rule.
@@ -68,6 +88,10 @@ func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, spe
 		return subjectView{onList: table.sources.lists(api, record.onList, [NSources]frontend.Variable(foreign))}, record
 	}
 	// 2. An owner also reads its salted key, the tracking row forces the salt once the owner has enrolled.
+	//
+	// A private list holds an owner at ListKey(owner, salt). A free salt would pick an empty key, and a blocked owner would prove itself off its list. The row's ListTag commits to the one salt enrollment fixed, registry/register_key.go seals that salt to the auditor, a list writer needs it to name the key, and a rotation keeps the tag.
+	//
+	// The tracking floor closes the skip for an owner whose enrollment applied before the list write. An owner absent under the tracking root has no salt to read under, so it reads off every private list, an allow list refuses it and a block list admits it. An old root could prove a blocked owner unenrolled, and no constraint here can see the root's age. The program refuses a tracking root below a salted source's floor in LiveRoots::tracking, program-libs/interface/src/accounts/state.rs, and refuses a salted source pinned to another tracking registry in RingPolicy::check_source_pair. A write ahead of a pending enrollment sets the floor below the revision that holds the owner, so a root at the floor still proves the owner absent. The writer applies the enrollment first and no constraint or check here holds it to that.
 	anySalted := api.Or(table.sources.saltedOwn, table.sources.saltedCurated)
 	ownerCurated := api.Mul(curated, table.sources.publicForeign)
 	resolveOwner := func(entry OwnerEntry, active, member frontend.Variable) subjectView {

@@ -1,15 +1,55 @@
 // Package transfer proves a ring transfer's audit, policy and owner predicates in one proof.
 //
-// The statement proves the following on the rail its bits select.
+// An auditor of a ring transfer starts here. SPP's proof authorizes the spend, derives the
+// nullifiers, conserves each asset and range checks each amount. SPP reads no list, no cap and no
+// auditor key, and a ring note's owner, asset and amount stay behind its commitment, so the ring program
+// cannot evaluate a ring rule itself. The ring proof opens the commitments SPP publishes and spends, and proves the ring's
+// predicates over those openings. The program verifies it, then calls SPP on the same frame, in
+// programs/custom-ring/src/instructions/transfer/processor.rs.
+//
+// Read after zolana/prover/server/circuits/spp_transaction/shared/transaction.go, the statement
+// the ring extends. Read before, in the order Define calls them, shared/utxo.go, audit/audit.go,
+// transfer/input.go, policy/record_pool.go, policy/tracking.go, transfer/owners.go,
+// audit/signer_data.go, policy/policy.go. Then prover/ring/ring.go, outside Define.
+//
+// Two values tie the proofs together. Both proofs reopen private_tx_hash, so the notes read here are
+// the notes SPP moves. The program hashes output_chain from the frame it forwards, so every
+// published slot, a dummy's included, is one the ring proof opened.
+//
+// One circuit serves every rail, and the statement's bits select the rail.
+//   - All bits clear is the signer rail. Every input owner signs as a Solana account in the run.
+//   - InProof names Sender in the statement, that owner signs inside SPP's circuit.
+//   - Hidden keeps input 0's owner out of the statement, that owner signs inside SPP's circuit.
+//   - Delegate is the ring's permanent delegate. It signs for every owner, the run stays empty and
+//     no policy section binds.
+//
+// The hardest arguments live at the code they govern.
+//   - Outflow, charge, peak and the telescoping floor are in policy/outflow.go.
+//   - The bound behind every amount comparison is in policy/comparator.go.
+//   - The record pool, absence proofs and deduplication are in policy/record_pool.go.
+//   - Salted reads and the tracking floor are in policy/subjects.go.
+//   - Input asset subjects are in policy/subjects.go and policy/rules.go.
+//   - Owner rows and the zero key rule are in transfer/owners.go.
+//   - Approval totals are in policy/screen.go, signer data counts in audit/signer_data.go.
+//
+// Properties, the statement proves the following on the rail its bits select.
 //  1. Every published output and spent input opens to the commitment SPP publishes or spends, through
 //     the output chain and private_tx_hash, the same wires serve every section below.
-//  2. The auditor stream seals those openings under the ring's auditor key, per package audit.
+//  2. The auditor stream seals each live output's opening, each default-ring input's opening and the
+//     count of spent notes under the ring's auditor key, per package audit. A ring input opens through
+//     the record that created it.
 //  3. Every live input is a note of the bound ring, or of the default ring on an entry key. Its owner
 //     is in the published signer run, the hidden owner or the in-proof sender, the delegate rail excepted.
-//  4. A live ring slot's nonzero key is its owner's row key under the tracking root, a zero key on an
+//  4. A hidden owner is live, stays out of the run and differs from every public party.
+//  5. A live ring slot's nonzero key is its owner's row key under the tracking root, a zero key on an
 //     output leaves its owner absent.
-//  5. Each entry of the signer run counts its data-bearing outputs, per audit.SignerDataCounts.
-//  6. The policy's rules, limits and approval bits hold under the bound roots, off the delegate rail.
+//  6. Each entry of the signer run counts its data-bearing outputs, per audit.SignerDataCounts.
+//  7. The policy's rules, limits and approval bits hold under the bound roots, off the delegate rail.
+//
+// The statement relies on the program for what no circuit can see. The program hashes the run from
+// the signed owner accounts, reads each root live at the frame's revision, refuses a tracking root
+// below a salted source's floor, folds the gross from the settled legs and reads the legs from their
+// accounts.
 //
 // It proves nothing about a recipient's body or tag, SPP's external data hash binds those bytes alone.
 package transfer
@@ -30,17 +70,6 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
-
-func (s Shape) String() string {
-	family := "transfer"
-	switch {
-	case s.Entry:
-		family = "transfer_entry"
-	case s.Wide:
-		family = "transfer_wide"
-	}
-	return fmt.Sprintf("custom_ring_%s_%d_in%d_w%d_s%d", family, s.Outputs, s.Inputs, s.Withdrawals, s.Owners)
-}
 
 // TransferCircuit serves every rail, a clear bit set is the signer rail.
 type TransferCircuit struct {
@@ -84,51 +113,24 @@ type Sections struct {
 	Signers []frontend.Variable
 	// SignerDataCounts is the statement's packed count per run entry, zero unless a run entry owns a data-bearing output.
 	SignerDataCounts frontend.Variable
-	// Rows are the distinct live input owners, ascending with zero rows last.
+	// Rows hold every live input owner, ascending with zero rows last off the authority rail. They stay private, the constraints alone fix them. A row with no input holds nothing and only adds its own sender rules.
 	Rows []frontend.Variable
 	policy.Tracking
 	// ApprovalMask is the proven approval bits, the program demands their co-signers.
 	ApprovalMask frontend.Variable
 	// ApprovalTotals is zero unless the frame discloses the totals to a co-signer.
 	ApprovalTotals frontend.Variable
-	// ApprovalBlinder is fresh per transaction and enters no statement.
+	// ApprovalBlinder enters no statement. The wallet draws it fresh per transaction, no constraint holds its freshness.
 	ApprovalBlinder frontend.Variable
 	policy.Policy
 }
 
-// ownerAddresses mirrors OWNER_ADDRESSES in key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
-const ownerAddresses = 64 - 4 - 6
-
-// publicOwners is the distinct signers and legs one transaction can name, each signer also takes a nullifier PDA.
-func (s Shape) publicOwners() int {
-	return min(s.Owners, (ownerAddresses-s.Withdrawals)/2) + s.Withdrawals
-}
-
-func (s Shape) trackedWithdrawals() int {
-	if !s.Wide {
-		return 0
-	}
-	return s.publicOwners() - s.Owners
-}
-
-// saltedKeys fits a public and a salted record per distinct owner in one pool.
-func (s Shape) saltedKeys() int {
-	if !s.Wide {
-		return 0
-	}
-	return 2*s.publicOwners() + s.Outputs - s.Owners - s.Withdrawals
-}
-
-// Stream compiles the tails into every key, a clear has_data transmits none.
-func (s Shape) Stream() audit.StreamShape {
-	return audit.StreamShape{InputClass: s.Inputs, Outputs: s.Outputs, Entry: s.Entry, Data: true}
-}
-
-func (s Shape) entries() int {
-	if s.Entry {
-		return s.Inputs
-	}
-	return 0
+// transactionBinding is SPP's private transaction hash and its blinding, the proof reopens the hash over the slots the audit opened.
+type transactionBinding struct {
+	PrivateTxHash     frontend.Variable
+	PrivateTxBlinding frontend.Variable
+	// AddressChain is SPP's chain of address slot nullifiers, zero without one, SPP alone reads the slots.
+	AddressChain frontend.Variable
 }
 
 func NewSections(shape Shape) (Sections, error) {
@@ -186,8 +188,9 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// The delegate signs for every owner, a published run would name a victim.
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: c.SignerCount})
 	hiddenOwner := c.hiddenOwner(api, section, signers)
+	// At most one term is nonzero, assertRail excludes the bits and zeroes Sender off InProof.
 	signers.AssertOwners(api, section, api.Sub(1, c.Delegate), api.Add(hiddenOwner, c.Sender))
-	// 5. Owner rows and output keys read the tracking root.
+	// 5. Owner rows and output keys read the tracking root. The auditor derives a nullifier from the secret sealed behind an enrolled key or from the public zero secret, so after the step no ring note carries a key the auditor cannot read.
 	tracking := c.OpenTracking(api)
 	rows := OpenOwnerRows(api, c.Rows, c.RowEntries, tracking)
 	rows.AssertInputOwners(api, InputRail{Delegate: c.Delegate, Hidden: c.Hidden, HiddenOwner: hiddenOwner}, section.Slots)
@@ -197,13 +200,14 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// 7. private_tx_hash reopens over these slots, an opening other than SPP's fails here, and a delegate's statement stays off every policy registry.
 	c.bindTransaction(api, gadget.NonZeroHashChain(api, section.Hashes), opened.Slots)
 	c.assertBypass(api, c.Delegate)
-	// 8. The policy screens the bound slots.
+	// 8. The policy screens the bound slots. The rows hold every live owner by step 5, so no owner's funds escape the sender rules or the attribution.
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
+	// The mask is equal and never at least. A short mask would drop a demanded co-signer, the program acts on these bits and derives no threshold.
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
-	// 9. The stream seals what the earlier steps opened, the statement binds its digest, chains and every public value.
+	// 9. The stream seals the outputs, the entry evidence and the spent count, the statement binds its digest, chains and every public value.
 	sealed := w.SealStream(api, rc, envelope, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers)))
 	return nil
@@ -228,6 +232,12 @@ func (c *TransferCircuit) hiddenOwner(api frontend.API, section InputSection, si
 	return owner
 }
 
+// bindTransaction holds PrivateTxHash to Poseidon(input chain, output chain, address chain, blinding), a note called an address would leave the input chain SPP hashed.
+func (b transactionBinding) bindTransaction(api frontend.API, inputChain frontend.Variable, outputs []shared.Output) {
+	outputChain := gadget.NonZeroHashChain(api, shared.UtxoHashes(api, outputs))
+	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, b.AddressChain, b.PrivateTxBlinding}))
+}
+
 // assertBypass holds the authority rail's statement off every policy registry, a curator's update then cannot fail a delegate's proof.
 func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
 	for _, value := range []frontend.Variable{c.PolicyHash, c.OwnRoot, c.CuratorRoot} {
@@ -236,6 +246,7 @@ func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
 }
 
 // statement mirrors TransferStatement::elements in program-libs/interface/src/proof/statement.rs.
+// The program rebuilds every element from the frame and live accounts, a wire outside the list stays private and only a constraint fixes it.
 func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audit.Stream, opened audit.Opened, signers SignerSet) []frontend.Variable {
 	fields := slices.Concat(e.Head(w, s, shared.TransferStatementDomain), []frontend.Variable{
 		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, c.ApprovalTotals, c.SignerDataCounts, s.NoSpend,
@@ -246,20 +257,6 @@ func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audi
 		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot,
 	}, publicSlots(c.PublicAssets[:], c.PublicAmounts[:], c.PublicGross[:]), []frontend.Variable{c.WithdrawalHash})
 	return closeStatement(fields)
-}
-
-// transactionBinding is SPP's private transaction hash and its blinding, the proof reopens the hash over the slots the audit opened.
-type transactionBinding struct {
-	PrivateTxHash     frontend.Variable
-	PrivateTxBlinding frontend.Variable
-	// AddressChain is SPP's chain of address slot nullifiers, zero without one, SPP alone reads the slots.
-	AddressChain frontend.Variable
-}
-
-// bindTransaction holds PrivateTxHash to Poseidon(input chain, output chain, address chain, blinding), a note called an address would leave the input chain SPP hashed.
-func (b transactionBinding) bindTransaction(api frontend.API, inputChain frontend.Variable, outputs []shared.Output) {
-	outputChain := gadget.NonZeroHashChain(api, shared.UtxoHashes(api, outputs))
-	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, b.AddressChain, b.PrivateTxBlinding}))
 }
 
 // closeStatement binds the nonzero element count last, a statement of another length hashes apart.

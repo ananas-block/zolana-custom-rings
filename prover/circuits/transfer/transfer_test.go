@@ -1,3 +1,5 @@
+// Solves every key on the signer and hidden rails, and refuses the composed statement's input and output predicates, the delegate bypass and every bound element.
+
 package transfer_test
 
 import (
@@ -8,6 +10,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/test"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
@@ -781,4 +784,19 @@ func TestApprovalTotalsReachTheStatement(t *testing.T) {
 	fields[1] = new(big.Int).Sub(fields[1], big.NewInt(1))
 	disclose(forged, fields)
 	refused(t, forged.Circuit, "policy.Screening.AssertApprovalTotals")
+}
+
+// comparator.go's width rests on the bound, a sum of 64 u64 amounts stays below 2^70.
+func TestKeysHoldTheAmountBound(t *testing.T) {
+	const bound = 64
+	for _, shape := range transfer.Shapes {
+		if shape.Inputs >= bound || shape.Outputs+shape.Withdrawals >= bound {
+			t.Fatalf("%s passes the amount bound", shape)
+		}
+	}
+	for _, capacity := range circuits.DepositCapacities {
+		if capacity >= bound {
+			t.Fatalf("deposit capacity %d passes the amount bound", capacity)
+		}
+	}
 }

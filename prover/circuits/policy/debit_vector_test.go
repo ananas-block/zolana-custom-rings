@@ -1,3 +1,5 @@
+// Pins the circuit's debit to its Rust twin over a shared vector.
+
 package policy_test
 
 import (

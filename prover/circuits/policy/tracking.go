@@ -1,3 +1,21 @@
+// Opens a ring's enrollment tree for the owner predicates and the salted reads.
+//
+// SPP has no enrollment. A ring's tracking tree maps an owner to the nullifier key whose secret the auditor holds
+// and to the list tag fixing the owner's salt. A row reads present or proven absent through the pool
+// gadget the policy registries use, and both answers carry weight. The zero key rule in
+// transfer/owners.go and the salted read in policy/subjects.go each treat an absent owner apart from an
+// enrolled one.
+//
+// Read after policy/record_pool.go, registry/tracking.go. Read before transfer/owners.go, policy/subjects.go.
+//
+// Properties:
+// 1. Every record row is a leaf under TrackingRoot on every rail, the gate of a policy pool does not apply.
+// 2. A row query reads the member's key and list tag, or zeros with a leaf link proving the member absent.
+// 3. A nonzero key alone tells presence, registry/register_key.go refuses to enroll the zero secret and the key is a hash of the secret.
+//
+// The circuit cannot see the root's age. The program serves a root within its grace and refuses one below
+// a salted source's floor, in LiveRoots::tracking in program-libs/interface/src/accounts/state.rs.
+
 package policy
 
 import (
@@ -24,6 +42,14 @@ type Tracking struct {
 type TrackingView struct {
 	NullifierPk, ListTag frontend.Variable
 }
+
+// TrackingPool answers row and output queries, a member absent from the root reads zeros.
+// It shares only the pool's authentication with the policy registries, its leaf is TrackingRecord's, its root TrackingRoot and its absence a zero key.
+type TrackingPool struct {
+	subjects subjectPool
+}
+
+const trackingColumns = 2
 
 // NewTracking also sizes for the key's withdrawal owners, a salted list reads each owner's row.
 func NewTracking(rows, outputs, withdrawals int) (Tracking, error) {
@@ -58,15 +84,8 @@ func (t *Tracking) TrackingPoolSize() int {
 	return len(t.TrackingRecords)
 }
 
-// TrackingPool answers row and output queries, a member absent from the root reads zeros.
-// It shares only the pool's authentication with the policy registries, its leaf is TrackingRecord's, its root TrackingRoot and its absence a zero key.
-type TrackingPool struct {
-	subjects subjectPool
-}
-
-const trackingColumns = 2
-
 func (t *Tracking) OpenTracking(api frontend.API) TrackingPool {
+	// The pool's gate is the constant one, a frame cannot skip the tree its owner predicates read.
 	records := newRecordPool(api, 1, trackingColumns)
 	leaves := make([]frontend.Variable, len(t.TrackingRecords))
 	for i, record := range t.TrackingRecords {

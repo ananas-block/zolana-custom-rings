@@ -1,3 +1,5 @@
+// The guard totals and the withdrawal hash at sparse payments, a dummy or a leg past the count adds nothing.
+
 package policy_test
 
 import (

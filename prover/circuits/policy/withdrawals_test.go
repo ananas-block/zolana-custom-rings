@@ -1,3 +1,5 @@
+// Refusals of the withdrawal legs, a leg off the bound hash and padding that is not zero, at every capacity.
+
 package policy_test
 
 import (

@@ -1,3 +1,5 @@
+// Refusals of the signer data counts on each rail, and the encoding's fit to every key.
+
 package transfer_test
 
 import (

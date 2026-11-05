@@ -1,3 +1,16 @@
+// Screens a ring deposit through the rule sections a transfer runs.
+//
+// A deposit enters through SPP's public slots, spends no note and has no ring sender. The rules still
+// bind what it creates, a blocked recipient or a delisted asset would otherwise enter the ring through
+// public funds.
+//
+// Read after policy/rules.go, policy/tracking.go. Read before deposit.go.
+//
+// Properties:
+// 1. While policy_hash is nonzero, every live recipient and deposited asset meets the rules under the bound roots.
+// 2. Every deposit reads as a receipt, no input nets it, and its amount enters the guard totals.
+// 3. Outflow stays clear, a deposit reads no cap and carries no approval bit.
+
 package policy
 
 import (

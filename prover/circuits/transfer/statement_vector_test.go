@@ -1,3 +1,5 @@
+// Pins the statement, the signer chain and the pool capacities to their Rust twins over shared vectors.
+
 package transfer_test
 
 import (

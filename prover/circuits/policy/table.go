@@ -1,3 +1,19 @@
+// Decodes the rule table policy_hash commits to.
+//
+// SPP has no rules. A ring's table is 16 rows of subject, mode, list masks and guard, plus one source per
+// list. The program validates a table at write time and stores it with its hash. The statement binds the
+// hash alone, so the proof carries the table as private wires and every rule section reads the decoded
+// view. A table other than the hashed one would let a prover pick its own rules.
+//
+// Read after policy/screen.go. Read before policy/subjects.go, policy/rules.go.
+//
+// Properties:
+// 1. While screened, the table is the preimage of policy_hash under the CRTB domain, in EncodedRuleTable::fields order.
+// 2. The first PolicyLen rows are active, a count past NRules has no solution.
+// 3. Each row decodes to one set of parts below 2^104, every part a bound width, and no part aliases another.
+// 4. Each list slot reads foreign or own from its Registry and salted or public from Salted.
+// 5. A rule's admission is linear in the subject's list bits and never wraps to zero.
+
 package policy
 
 import (
@@ -53,6 +69,7 @@ type Table struct {
 }
 
 // SourceWires slot i sources list i+1, a zero Registry names the ring's own registry.
+// ListID enters the hash alone, SourceMap::from_slots in program-libs/policy/src/rule_table/mod.rs holds it to its position.
 type SourceWires struct {
 	ListID   frontend.Variable
 	Registry frontend.Variable
@@ -99,11 +116,12 @@ func (t Table) decodeWhen(api frontend.API, rc frontend.Rangechecker, screened, 
 
 // view decodes the table, the caller binds it to policy_hash.
 func (t Table) view(api frontend.API, rc frontend.Rangechecker) tableView {
-	// Each count selects its active rows, a count past its capacity selects none and fails.
+	// 1. Each count selects its active rows, a count past its capacity selects none and fails.
 	d := tableView{
 		ruleActive: ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
 		sources:    t.readSources(api),
 	}
+	// 2. Every row decodes, an inactive one too. A row's activity is a gate the rule sections read.
 	for i, packed := range t.Rules {
 		d.rules[i] = decodeRule(api, rc, packed)
 	}
@@ -169,23 +187,23 @@ func (s sourceView) owner(api frontend.API, public, salted [NSources]frontend.Va
 }
 
 func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Variable) ruleFields {
-	// The hint proposes the parts, untrusted until the range checks and the recomposition bind them.
+	// 1. The hint proposes the parts, untrusted until the range checks and the recomposition bind them.
 	parts, err := api.Compiler().NewHint(rulePartsHint, len(ruleParts), packed)
 	if err != nil {
 		panic(err)
 	}
 	subject, mode, mask, guard, threshold, alternative := parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
-	// Subject, mode, guard and threshold stay inside their widths, the recomposition stays below 2^104.
+	// 2. Subject, mode, guard and threshold stay inside their widths, the recomposition stays below 2^104.
 	for _, i := range []int{0, 1, 3, 4} {
 		rc.Check(parts[i], int(ruleParts[i].width))
 	}
-	// Both list masks split into one bit per source slot, bit i marks list i+1.
+	// 3. Both list masks split into one bit per source slot, bit i marks list i+1.
 	listBits, altBits := api.ToBinary(mask, NSources), api.ToBinary(alternative, NSources)
 	recomposed := frontend.Variable(0)
 	for i, part := range ruleParts {
 		recomposed = api.Add(recomposed, api.Mul(parts[i], new(big.Int).Lsh(big.NewInt(1), part.shift)))
 	}
-	// The bounded parts recompose to the hashed row over the integers, no part can alias another.
+	// 4. The bounded parts recompose to the hashed row over the integers, no part can alias another.
 	api.AssertIsEqual(recomposed, packed)
 	is := func(value frontend.Variable, want int) frontend.Variable { return api.IsZero(api.Sub(value, want)) }
 	rule := ruleFields{
@@ -199,7 +217,8 @@ func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Vari
 		listBits:    listBits,
 		altBits:     altBits,
 	}
-	// A list of a present mask admits a subject on it, a list of an absent or the alternative mask a subject off it.
+	// 5. A list of a present mask admits a subject on it, a list of an absent or the alternative mask a subject off it.
+	// A subject's admission is admitBase plus admitWeight per list it is on. A list then adds inPresent to a subject on it and inAbsent to a subject off it, one sum per rule and no select per list.
 	present := is(mode, ModePresent)
 	for i := range rule.admitWeight {
 		inPresent := api.Mul(present, listBits[i])
