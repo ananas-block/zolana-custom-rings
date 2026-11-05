@@ -7,8 +7,7 @@ use zolana_ring_client::NullifierKeyEnvelope;
 
 use super::{AllowedNullifiers, CredentialEnrollment, DelegateSourceError, ResolvedSource};
 use crate::tests::support::{
-    auditor, credential_of, keypair, program, ring, ring_utxo, wallet, Chain, FIXTURE_LIST_TAG,
-    TREE_ID,
+    auditor, credential_of, keypair, program, ring, ring_utxo, wallet, Chain, TREE_ID,
 };
 
 fn enrollment<'a>(
@@ -28,14 +27,20 @@ fn unenrolled() -> Chain {
     Chain::default().with_tree(TREE_ID).with_enrolled(&[])
 }
 
-/// `source`'s credential sealing `key` to the ring auditor.
+/// `source`'s credential sealing `key` and a list salt to the ring auditor.
 fn enrolled(source: &ShieldedAddress, key: &NullifierKey) -> Chain {
-    let envelope = NullifierKeyEnvelope::new(key, &[0; 32], &auditor().pubkey()).unwrap();
+    // A salt is a field element, its top byte is zero.
+    let mut list_salt = [5; 32];
+    list_salt[0] = 0;
+    let envelope = NullifierKeyEnvelope::new(key, &list_salt, &auditor().pubkey()).unwrap();
     let credential = custom_ring_interface::AuditCredential {
         nullifier_pk: envelope.nullifier_pk,
         eph_u: envelope.sealed.eph_pk.u(),
         ciphertext: envelope.sealed.ciphertext,
-        ..credential_of(source, FIXTURE_LIST_TAG)
+        ..credential_of(
+            source,
+            custom_ring_interface::domain::list_tag(&list_salt).unwrap(),
+        )
     };
     Chain::default()
         .with_tree(TREE_ID)
