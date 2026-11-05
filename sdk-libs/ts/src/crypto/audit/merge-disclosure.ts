@@ -35,7 +35,7 @@ import {
   STREAM_FIRST_COUNTER,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 import { decompressG2 } from "../../protocol/codec/codecs.js";
-import { CredentialRead, CredentialRoots } from "../../protocol/codec/credential-read.js";
+import { CredentialRead, type CredentialRoots } from "../../protocol/codec/credential-read.js";
 import { RingError } from "../../protocol/error.js";
 import { taggedX25519 } from "../../protocol/transaction/transact.js";
 import type { RingProver } from "../../rpc/ports.js";
@@ -143,7 +143,7 @@ export function completeRingMerge(
         publishedOwner: equalBytes(request.nullifierPk, ZERO_NULLIFIER_PK)
           ? request.ownerPkHash
           : ZERO_32,
-        credentials: mergeCredentialRoots(request),
+        credentials: request.credentialRoots,
       }),
       ephSk: ephemeralSecret,
       seed,
@@ -240,15 +240,6 @@ export function openMergeRecord(
     plaintext.fill(0);
     schedule.destroy();
   }
-}
-
-/** A zero credential owner reads no credential, the `ownerSigned` table. */
-export function mergeCredentialRoots(
-  request: Pick<MergeProofRequest, "credentialOwner" | "stateRoot">,
-): CredentialRoots {
-  return isZero(request.credentialOwner)
-    ? CredentialRoots.empty(1)
-    : CredentialRoots.stateOnly(request.credentialOwner, request.stateRoot);
 }
 
 /**

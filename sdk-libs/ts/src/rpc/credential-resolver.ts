@@ -114,7 +114,9 @@ export type UnknownCredential =
   /** The indexer serves neither an enrollment nor an address gap. */
   | "absenceProofMissing"
   /** The indexer ended an empty answer with a continuation. */
-  | "partialPage";
+  | "partialPage"
+  /** One answer folded leaves of one tree to different roots. */
+  | "splitRoot";
 
 export type CredentialLookup =
   | PresentCredential
@@ -156,28 +158,73 @@ export async function resolveCredential(
   query: CredentialQuery,
   context?: RequestContext,
 ): Promise<CredentialLookup> {
-  const identity = await credentialIdentity(query.ring, query.owner);
-  // The address is the nullifier of the enrollment's address slot, so the one transaction
+  const [lookup] = await resolveCredentials(
+    { client: query.client, ring: query.ring, owners: [query.owner] },
+    context,
+  );
+  if (lookup?.kind !== "present") return lookup as CredentialLookup;
+  // A credential naming another key or tag is refused before a caller proves under it.
+  if (query.nullifierPk !== undefined && !equalBytes(query.nullifierPk, lookup.credential.nullifierPk))
+    throw new RingError("RING_CREDENTIAL_NULLIFIER_KEY_MISMATCH");
+  if (query.listTag !== undefined && !equalBytes(query.listTag, lookup.credential.listTag))
+    throw new RingError("RING_CREDENTIAL_LIST_TAG_MISMATCH");
+  return lookup;
+}
+
+/**
+ * One lookup per owner in one snapshot a single proof can bind. Every present credential of a
+ * tree folds to one state root and every absence to one address root, the statement holds one
+ * root per tree and one address root.
+ */
+export async function resolveCredentials(
+  query: Readonly<{ client: CredentialClient; ring: Address; owners: readonly Address[] }>,
+  context?: RequestContext,
+): Promise<readonly CredentialLookup[]> {
+  const { client } = query;
+  const identities = await Promise.all(
+    query.owners.map((owner) => credentialIdentity(query.ring, owner)),
+  );
+  if (identities.length === 0) return Object.freeze([]);
+  // 1. The address is the nullifier of the enrollment's address slot, so the one transaction
   // publishing it as a nullifier is the enrollment. An empty answer proves nothing yet.
-  const page = await query.client.getShieldedTransactionsByNullifiers(
-    { nullifiers: [identity.address] },
+  const page = await client.getShieldedTransactionsByNullifiers(
+    { nullifiers: identities.map((identity) => identity.address) },
     undefined,
     context,
   );
-  const enrollments = page.data
-    .flatMap((group) => group.events)
-    .filter((event) =>
+  const events = page.data.flatMap((group) => group.events);
+  const lookups: CredentialLookup[] = [];
+  const enrolled: EnrolledLeaf[] = [];
+  const absentAt: number[] = [];
+  identities.forEach((identity, at) => {
+    const found = events.filter((event) =>
       event.nullifiers.some((nullifier) => equalBytes(nullifier, identity.address)),
     );
-  const [enrollment] = enrollments;
-  if (enrollments.length > 1) throw invalid("enrollmentCount", { count: enrollments.length });
-  if (enrollment !== undefined) return present(query, identity, enrollment, context);
-  if (page.paginationToken !== null) return unknown("partialPage");
-  return absent(query.client, identity, context);
+    const [enrollment] = found;
+    if (found.length > 1) throw invalid("enrollmentCount", { count: found.length });
+    if (enrollment !== undefined) enrolled.push(enrolledLeaf(identity, enrollment, at));
+    else if (page.paginationToken !== null) lookups[at] = unknown("partialPage");
+    else absentAt.push(at);
+  });
+  // 2. One proof call per tree keeps every credential of that tree under one root.
+  const trees = new Map<TreeId, EnrolledLeaf[]>();
+  for (const leaf of enrolled) trees.set(leaf.treeId, [...(trees.get(leaf.treeId) ?? []), leaf]);
+  for (const [treeId, leaves] of trees)
+    for (const [at, lookup] of await present(client, treeId, leaves, context)) lookups[at] = lookup;
+  // 3. One gap call and one account snapshot for every absent owner.
+  const gaps = await absent(
+    client,
+    absentAt.map((at) => identities[at] as CredentialIdentity),
+    context,
+  );
+  absentAt.forEach((at, position) => {
+    lookups[at] = gaps[position] as CredentialLookup;
+  });
+  return Object.freeze(lookups);
 }
 
 /** A salted read accepts only an address root at or above every source floor it reads through. */
-export function checkAbsenceFloor(absence: AbsentCredential, floor: bigint): void {
+export function checkAbsenceFloor(absence: Pick<AbsentCredential, "root">, floor: bigint): void {
   if (absence.root.sequence < floor)
     throw new RingError("RING_ABSENCE_ROOT_BELOW_FLOOR", {
       details: { sequence: absence.root.sequence, floor },
@@ -260,28 +307,34 @@ async function credentialIdentity(ring: Address, owner: Address): Promise<Creden
   return Object.freeze({ ringId, member, pda, address });
 }
 
-async function present(
-  query: CredentialQuery,
+/** An enrollment's rebuilt leaf before any proof read, `at` its owner's position. */
+interface EnrolledLeaf {
+  readonly at: number;
+  readonly identity: CredentialIdentity;
+  readonly credential: AuditCredential;
+  readonly treeId: TreeId;
+  readonly blinding: Bytes32;
+  readonly leaf: Bytes32;
+  readonly leafIndex: bigint;
+  readonly enrollment: IndexedShieldedTransaction;
+}
+
+/** The plaintext is untrusted until its rebuilt leaf folds to an on chain root. */
+function enrolledLeaf(
   identity: CredentialIdentity,
   enrollment: IndexedShieldedTransaction,
-  context: RequestContext | undefined,
-): Promise<CredentialLookup> {
-  // 1. The plaintext is untrusted until its rebuilt leaf folds to an on chain root, but a
-  // credential naming another ring, owner, key or tag is refused before any proof read.
+  at: number,
+): EnrolledLeaf {
+  // 1. A credential naming another ring or owner is refused before any proof read.
   const { credential, output } = enrolledCredential(identity, enrollment);
   if (
     !equalBytes(credential.ringId, identity.ringId) ||
     !equalBytes(credential.member, identity.member)
   )
     throw new RingError("RING_CREDENTIAL_MISMATCH");
-  if (query.nullifierPk !== undefined && !equalBytes(query.nullifierPk, credential.nullifierPk))
-    throw new RingError("RING_CREDENTIAL_NULLIFIER_KEY_MISMATCH");
-  if (query.listTag !== undefined && !equalBytes(query.listTag, credential.listTag))
-    throw new RingError("RING_CREDENTIAL_LIST_TAG_MISMATCH");
   // 2. `Enroll` writes the credential as its only output, so the blinding derives from the
   // address alone, and the leaf commits to the credential PDA and the tree it landed in.
   const treeId = outputTreeId(output.outputContext);
-  const blinding = credentialBlinding(identity.address);
   const leaf = credentialUtxoHash({
     pda: identity.pda,
     address: identity.address,
@@ -289,100 +342,141 @@ async function present(
     treeId,
   });
   if (!equalBytes(leaf, output.outputContext.hash)) throw invalid("malformedEnrollment");
-  // 3. Requiring the enrollment slot keeps a lagging indexer from answering without the leaf.
+  return Object.freeze({
+    at,
+    identity,
+    credential,
+    treeId,
+    blinding: credentialBlinding(identity.address),
+    leaf,
+    leafIndex: output.outputContext.leafIndex,
+    enrollment,
+  });
+}
+
+async function present(
+  client: CredentialClient,
+  treeId: TreeId,
+  leaves: readonly EnrolledLeaf[],
+  context: RequestContext | undefined,
+): Promise<ReadonlyMap<number, CredentialLookup>> {
+  // 1. Requiring the newest enrollment slot keeps a lagging indexer from answering without a leaf.
   const tree = treeAddress(treeId);
-  const { proofs } = await query.client.getMerkleProofs(
+  const slot = leaves.reduce((max, leaf) => (leaf.enrollment.slot > max ? leaf.enrollment.slot : max), 0n);
+  const { proofs } = await client.getMerkleProofs(
     tree,
-    [leaf],
-    atSlot(enrollment.slot),
+    leaves.map((leaf) => leaf.leaf),
+    atSlot(slot),
     context,
   );
-  const [proof] = proofs;
-  if (proof === undefined) return unknown("stateProofMissing");
-  if (
-    proofs.length !== 1 ||
-    !equalBytes(proof.leaf, leaf) ||
-    proof.merkleContext.tree !== tree ||
-    proof.leafIndex !== output.outputContext.leafIndex
-  )
-    throw invalid("malformedProof");
-  const path = fixedPath(proof.path, proof.leafIndex, STATE_HEIGHT);
-  if (!equalBytes(foldPath(leaf, proof.leafIndex, path), proof.root))
-    throw invalid("invalidStateProof");
-  // 4. The root must be in the history SPP accepts roots from. A paused or full tree keeps its
+  if (proofs.length > leaves.length) throw invalid("malformedProof");
+  const answered = leaves.map((leaf) => proofs.find((proof) => equalBytes(proof.leaf, leaf.leaf)));
+  const [first] = proofs;
+  // 2. Every proof of the tree folds to one root, the statement holds one root per tree.
+  const split =
+    first !== undefined &&
+    proofs.some((proof) => proof.rootIndex !== first.rootIndex || !equalBytes(proof.root, first.root));
+  const lookups = new Map<number, CredentialLookup>();
+  if (first === undefined || split) {
+    for (const leaf of leaves) lookups.set(leaf.at, unknown(split ? "splitRoot" : "stateProofMissing"));
+    return lookups;
+  }
+  // 3. The root must be in the history SPP accepts roots from. A paused or full tree keeps its
   // history, so its credentials stay readable.
-  const data = sppTree(tree, await query.client.getAccount(tree, context));
+  const data = sppTree(tree, await client.getAccount(tree, context));
   if (decodeTreeId(data) !== treeId) throw invalid("invalidTree", { tree });
-  const held = stateRootAt(data, proof.rootIndex);
-  if (held === undefined || !equalBytes(held, proof.root)) throw invalid("stateRootNotAccepted");
-  return Object.freeze({
-    kind: "present",
-    credential,
-    address: identity.address,
-    blinding,
-    treeId,
-    leafIndex: proof.leafIndex,
-    path,
-    root: Object.freeze({ rootIndex: proof.rootIndex, root: proof.root }),
-    enrollment: enrollment.txSignature,
+  const held = stateRootAt(data, first.rootIndex);
+  if (held === undefined || !equalBytes(held, first.root)) throw invalid("stateRootNotAccepted");
+  leaves.forEach((leaf, index) => {
+    const proof = answered[index];
+    if (proof === undefined) {
+      lookups.set(leaf.at, unknown("stateProofMissing"));
+      return;
+    }
+    if (proof.merkleContext.tree !== tree || proof.leafIndex !== leaf.leafIndex)
+      throw invalid("malformedProof");
+    const path = fixedPath(proof.path, proof.leafIndex, STATE_HEIGHT);
+    if (!equalBytes(foldPath(leaf.leaf, proof.leafIndex, path), proof.root))
+      throw invalid("invalidStateProof");
+    lookups.set(
+      leaf.at,
+      Object.freeze({
+        kind: "present",
+        credential: leaf.credential,
+        address: leaf.identity.address,
+        blinding: leaf.blinding,
+        treeId,
+        leafIndex: proof.leafIndex,
+        path,
+        root: Object.freeze({ rootIndex: proof.rootIndex, root: proof.root }),
+        enrollment: leaf.enrollment.txSignature,
+      }),
+    );
   });
+  return lookups;
 }
 
 async function absent(
   client: CredentialClient,
-  identity: CredentialIdentity,
+  identities: readonly CredentialIdentity[],
   context: RequestContext | undefined,
-): Promise<CredentialLookup> {
+): Promise<readonly CredentialLookup[]> {
+  if (identities.length === 0) return [];
   const tree = treeAddress(ADDRESS_TREE_ID);
-  const queue = await nullifierPdaAddress(tree, identity.address);
-  // 1. The gap is checked before the snapshot, the snapshot then decides the roots it may use.
-  const { proofs } = await client.getNonInclusionProofs(
-    tree,
-    [identity.address],
-    undefined,
-    context,
-  );
-  const [gap] = proofs;
-  if (gap === undefined) return unknown("absenceProofMissing");
+  const addresses = identities.map((identity) => identity.address);
+  const queues = await Promise.all(addresses.map((address) => nullifierPdaAddress(tree, address)));
+  // 1. The gaps are checked before the snapshot, the snapshot then decides the roots they may use.
+  const { proofs } = await client.getNonInclusionProofs(tree, addresses, undefined, context);
+  if (proofs.length > addresses.length) throw invalid("malformedProof");
+  const gaps = addresses.map((address) => proofs.find((gap) => equalBytes(gap.leaf, address)));
+  const [first] = proofs;
   if (
-    proofs.length !== 1 ||
-    !equalBytes(gap.leaf, identity.address) ||
-    gap.merkleContext.tree !== tree
+    first !== undefined &&
+    proofs.some((gap) => gap.rootIndex !== first.rootIndex || !equalBytes(gap.root, first.root))
   )
-    throw invalid("malformedProof");
-  const path = fixedPath(gap.path, gap.lowElementIndex, NULLIFIER_TREE_HEIGHT);
-  const brackets =
-    compareField(gap.lowElement, identity.address) < 0 &&
-    compareField(identity.address, gap.highElement) < 0;
-  const lowLeaf = poseidon([gap.lowElement, gap.highElement]) as Bytes32;
-  if (!brackets || !equalBytes(foldPath(lowLeaf, gap.lowElementIndex, path), gap.root))
-    throw invalid("invalidAbsenceProof");
+    return identities.map(() => unknown("splitRoot"));
+  const paths = gaps.map((gap, index) => {
+    if (gap === undefined) return undefined;
+    const address = addresses[index] as Bytes32;
+    if (gap.merkleContext.tree !== tree) throw invalid("malformedProof");
+    const path = fixedPath(gap.path, gap.lowElementIndex, NULLIFIER_TREE_HEIGHT);
+    const brackets =
+      compareField(gap.lowElement, address) < 0 && compareField(address, gap.highElement) < 0;
+    const lowLeaf = poseidon([gap.lowElement, gap.highElement]) as Bytes32;
+    if (!brackets || !equalBytes(foldPath(lowLeaf, gap.lowElementIndex, path), gap.root))
+      throw invalid("invalidAbsenceProof");
+    return path;
+  });
   // 2. An address enters the queue before any root holds it. Its queue PDA closes only after
   // every root in the history holds the address, so an empty PDA and a gap under a root of
   // the same snapshot cover both the queue and the tree.
-  const answers = await client.getMultipleAccounts([tree, queue], context);
+  const answers = await client.getMultipleAccounts([tree, ...queues], context);
   // A short answer would read as an empty queue PDA.
-  if (answers.length !== 2)
+  if (answers.length !== 1 + queues.length)
     throw new RingError("RING_RPC", { details: { reason: "accountCount", count: answers.length } });
-  const [treeAccount, queueAccount] = answers;
-  if (
-    queueAccount !== undefined &&
-    (queueAccount.owner !== SYSTEM_PROGRAM || queueAccount.data.length > 0)
-  )
-    return unknown("queued");
+  const [treeAccount, ...queueAccounts] = answers;
   const data = sppTree(tree, treeAccount);
   if (decodeTreeId(data) !== ADDRESS_TREE_ID) throw invalid("invalidTree", { tree });
-  const root = rootSequence(data, gap.rootIndex);
-  if (root === undefined || !equalBytes(root.root, gap.root))
+  const root = first === undefined ? undefined : rootSequence(data, first.rootIndex);
+  if (first !== undefined && (root === undefined || !equalBytes(root.root, first.root)))
     throw invalid("addressRootNotAccepted");
-  return Object.freeze({
-    kind: "absent",
-    address: identity.address,
-    low: gap.lowElement,
-    next: gap.highElement,
-    lowIndex: gap.lowElementIndex,
-    path,
-    root,
+  return identities.map((identity, index): CredentialLookup => {
+    const queue = queueAccounts[index];
+    if (queue !== undefined && (queue.owner !== SYSTEM_PROGRAM || queue.data.length > 0))
+      return unknown("queued");
+    const gap = gaps[index];
+    const path = paths[index];
+    if (gap === undefined || path === undefined || root === undefined)
+      return unknown("absenceProofMissing");
+    return Object.freeze({
+      kind: "absent",
+      address: identity.address,
+      low: gap.lowElement,
+      next: gap.highElement,
+      lowIndex: gap.lowElementIndex,
+      path,
+      root,
+    });
   });
 }
 

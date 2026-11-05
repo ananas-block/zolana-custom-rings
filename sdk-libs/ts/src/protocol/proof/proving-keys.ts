@@ -26,6 +26,14 @@ export type RingKeyCircuit =
 /** Go `registry.ApplyWidths`. */
 const APPLY_WIDTHS: readonly number[] = Object.freeze([1, 2, 4, 8, APPLY_BATCH]);
 
+/** Rust `RingCircuit::apply_records`, the narrowest apply key holding `count` writes. */
+export function applyKeyWidth(count: number): number {
+  const width = APPLY_WIDTHS.find((writes) => count <= writes);
+  if (count < 1 || width === undefined)
+    throw new RingError("RING_STORAGE_WRITE_INVALID", { details: { reason: "UnsupportedBatch" } });
+  return width;
+}
+
 /** Rust `RING_KEYS`, every ring key in its order, `name` the circuit type the prover serves. */
 export const RING_KEYS: readonly Readonly<{
   circuit: RingKeyCircuit;

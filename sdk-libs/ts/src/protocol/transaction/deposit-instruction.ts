@@ -56,7 +56,7 @@ export async function ringDepositInstruction(
     /** Its state reads fit the deposit key's `K`. */
     credentialRead: CredentialRead;
     /** Tree 0, then each state tree the read names, in table order. */
-    credentialTrees: readonly Address[];
+    credentialTrees: readonly AccountMeta[];
     /** Policy rings only. */
     ownRevision?: bigint;
     /** Rings with a curator source only. */
@@ -70,12 +70,13 @@ export async function ringDepositInstruction(
     ringPolicyAddress(input.ringProgramId),
     input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
-  const prefix = new Writer()
+  // Rust `DepositPrefix::check`, the deposit key's `K` is its capacity.
+  input.credentialRead.checkCapacity(input.keyCapacity);
+  const head = new Writer()
     .u8(input.keyCapacity, "keyCapacity")
     .bytes(input.proof, CUSTOM_RING_PROOF_LENGTH, "deposit proof");
-  input.credentialRead.checkCapacity(input.keyCapacity);
-  input.credentialRead
-    .write(prefix)
+  const prefix = input.credentialRead
+    .write(head)
     .u64(input.ownRevision ?? 0n, "ownRevision")
     .u64(input.curatorRevision ?? 0n, "curatorRevision")
     .finish();
@@ -84,7 +85,7 @@ export async function ringDepositInstruction(
     [
       meta(ring, false, false),
       ...input.registries.map((registry) => meta(registry, false, false)),
-      ...input.credentialTrees.map((tree) => meta(tree, false, false)),
+      ...input.credentialTrees,
       ...cosigner,
       ...spp.accounts,
     ],
