@@ -246,14 +246,12 @@ describe("depositKeyCapacity", () => {
 });
 
 describe("the key table", () => {
-  it("serves one merge key and refuses an unpinned key by name", () => {
+  it("serves one merge key under its pinned name", () => {
     expect(
       RING_KEYS.filter((key) => key.circuit.family === "merge").map((key) => key.name),
     ).toEqual(["custom-ring-merge"]);
     expect(ringCircuitType({ family: "deposit", capacity: 4 })).toBe("custom-ring-deposit-4");
-    const refused = refusal(() => ringProvingKey({ family: "merge" }));
-    expect(refused.code).toBe("RING_PROVING_KEYS_MISSING");
-    expect(refused.details).toMatchObject({ keyNames: "custom_ring_merge.key" });
+    expect(ringProvingKey({ family: "merge" }).name).toBe("custom_ring_merge.key");
   });
 
   it("keys the authority exit at two shapes", () => {
