@@ -57,9 +57,9 @@ export const RING_KEYS: readonly Readonly<{
   ),
 );
 
-/** Rust `RingCircuit::credential_capacity`, `K`, `undefined` for a shape no key serves and RegisterKey. */
-export function credentialCapacity(circuit: RingKeyCircuit): number | undefined {
-  if (!RING_KEYS.some((entry) => sameRingCircuit(entry.circuit, circuit))) return undefined;
+/** Rust `RingCircuit::credential_capacity`, the state roots a credential read may name, `undefined` off the catalog and for RegisterKey. */
+export function ringCredentialCapacity(circuit: RingKeyCircuit): number | undefined {
+  if (!RING_KEYS.some((key) => sameRingCircuit(key.circuit, circuit))) return undefined;
   switch (circuit.family) {
     case "transfer":
       return transferPoolCapacity(circuit).credentials;

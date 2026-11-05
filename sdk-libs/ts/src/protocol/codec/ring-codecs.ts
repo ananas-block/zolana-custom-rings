@@ -81,9 +81,9 @@ export interface StorageRegistry {
   readonly nextIndex: number;
   /** Immutable, zero serves as a curator only. */
   readonly ringId: Bytes32;
-  /** Immutable, zero on a public source, a salted read requires the reading ring's id. */
+  /** Immutable, zero on a public source, salted source mappings require the same ring identity. */
   readonly privateRingId: Bytes32;
-  /** Tree 0 address sequence, a salted read takes no address root below it. */
+  /** Address sequence, a salted read accepts no address root below it. */
   readonly absenceFloor: bigint;
   /** Newest first, `undefined` where the history holds no root. */
   readonly roots: readonly (StorageRegistryRoot | undefined)[];

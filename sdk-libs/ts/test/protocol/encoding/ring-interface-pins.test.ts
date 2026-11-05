@@ -12,7 +12,10 @@ import {
   RingInstructionTag,
   ringComputeUnitLimit,
 } from "../../../src/operations/management/admin.js";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import {
+  decodeRingPolicy,
+  decodeStorageRegistry,
   GRACE_SLOTS,
   RING_CO_SIGNER_DISCRIMINATOR,
   RING_CO_SIGNER_SIZE,
@@ -23,6 +26,11 @@ import {
   STORAGE_REGISTRY_SIZE,
 } from "../../../src/protocol/codec/ring-codecs.js";
 import { MAX_SPP_CPI_ACCOUNTS } from "../../../src/protocol/transaction/spp.js";
+import {
+  ringPolicyData,
+  storageRegistryAccount,
+  ZERO_ADDRESS,
+} from "../../helpers/ring-accounts.js";
 
 function rust(file: string): string {
   return readFileSync(
@@ -119,6 +127,32 @@ describe("ring interface pins", () => {
     );
     expect(Number(/assert!\(StorageRegistry::SIZE == (\d+)\)/u.exec(source)?.[1])).toBe(
       STORAGE_REGISTRY_SIZE,
+    );
+  });
+
+  it("decodes the storage registry fields in Rust's order", () => {
+    const body = rust("accounts/storage.rs")
+      .split("pub struct StorageRegistry {")[1]
+      ?.split("}")[0];
+    const fields = [...(body ?? "").matchAll(/^ {4}pub ([a-z_]+):/gmu)].map(([, field = ""]) =>
+      camel(field),
+    );
+    const privateRingId = new Uint8Array(32).fill(7) as Bytes32;
+    const registry = decodeStorageRegistry(
+      storageRegistryAccount([], ZERO_ADDRESS, { privateRingId, absenceFloor: 9n }).data,
+    );
+    expect(["discriminator", ...Object.keys(registry)]).toEqual(fields);
+    expect([registry.privateRingId, registry.absenceFloor]).toEqual([privateRingId, 9n]);
+  });
+
+  it("reads the ring account without the tracking pin and refuses the old size", () => {
+    const data = ringPolicyData({ bump: 1 });
+    expect(data).toHaveLength(RING_POLICY_SIZE);
+    expect(decodeRingPolicy(data)).not.toHaveProperty("tracking");
+    const old = new Uint8Array(RING_POLICY_SIZE + 32);
+    old.set(data);
+    expect(() => decodeRingPolicy(old)).toThrow(
+      expect.objectContaining({ code: "RING_POLICY_INVALID" }),
     );
   });
 

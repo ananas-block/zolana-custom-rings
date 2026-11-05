@@ -180,7 +180,7 @@ export function depositKeyCapacity(
 
 /** Addresses SPP takes beside its nullifier PDAs. */
 const SPP_ADDRESSES = 4;
-/** The fixed reservation, credential tree accounts count apart. */
+/** The fixed reservation excludes variable credential tree accounts. */
 const RING_ADDRESSES = 6;
 /** Rust `MAX_TRANSACTION_ADDRESSES`, the v1 ceiling. */
 export const MAX_TRANSACTION_ADDRESSES = 64;
