@@ -10,6 +10,7 @@ import {
   type RingMode,
   type RootReader,
 } from "../../../src/protocol/codec/ring-codecs.js";
+import { LIST_IDS } from "../../../src/protocol/membership/policy.js";
 import {
   ringPolicyData,
   storageRegistryAccount,
@@ -29,7 +30,7 @@ function ring(input: Readonly<{ mode?: RingMode; policy?: boolean; curator?: boo
       ...(input.policy === true
         ? {
             policyHash: POLICY_HASH,
-            sources: Array.from({ length: 8 }, (_, slot) =>
+            sources: Array.from({ length: LIST_IDS.length }, (_, slot) =>
               slot === 0
                 ? { listId: 1, registry: input.curator === true ? CURATOR : ZERO_ADDRESS }
                 : { listId: 0, registry: ZERO_ADDRESS },

@@ -51,6 +51,7 @@ import {
   ownerSignerCapacity,
 } from "../../src/protocol/proof/transfer-shapes.js";
 import { ApprovalMask } from "../../src/protocol/transaction/transact.js";
+import { RING_SOURCE_SLOTS } from "../../src/rpc/prover/types.js";
 import { unopenedRecordPool } from "../../src/protocol/membership/member-opening.js";
 import { transferPoolCapacity } from "../../src/protocol/proof/transfer-shapes.js";
 import { ringStreamLayout } from "../../src/protocol/transaction/transact.js";
@@ -741,7 +742,7 @@ describe("prover/ring/params.go", () => {
       publicAssets: repeat(3, zero),
       publicAmounts: repeat(3, zero),
       publicGross: repeat(3, zero),
-      sources: repeat(8, { listId: 0, registry: zero }),
+      sources: repeat(RING_SOURCE_SLOTS, { listId: 0, registry: zero }),
       salted: 0,
       policyLen: 0,
       rules: repeat(16, zero),
