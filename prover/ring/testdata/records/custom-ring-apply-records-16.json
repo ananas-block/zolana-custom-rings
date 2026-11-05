@@ -1,6 +1,6 @@
 {
   "circuitType": "custom-ring-apply-records-16",
-  "publicInputHash": "0x2ab788a1de7b17c36b4cdff19f87da3427261ad7b32e9626789ea059b5185ff6",
+  "publicInputHash": "0x27575cbd5a3d03a2124700f26b8673a5c572c0eba6a2764db23d536d0ccacff3",
   "oldRoot": "0x053b2136ce0e6cffb89cb76c7a81b6d7e1bd424159ff4579f284a7e5f198956d",
   "newRoot": "0x1d5abcc36eb5b23fe11dd962aa20273f51c3d684f9e6c493f07a2405cc2f7bb9",
   "oldNextIndex": 1,

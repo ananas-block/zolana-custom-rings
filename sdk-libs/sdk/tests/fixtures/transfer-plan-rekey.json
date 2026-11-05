@@ -1,30 +1,30 @@
 [
   {
-    "name": "one stream at sixteen outputs",
+    "name": "one stream at eight outputs",
     "rail": "confidential",
-    "inputs": 5,
-    "outputs": 16,
+    "inputs": 16,
+    "outputs": 8,
     "spendsDefaultRing": false,
     "hasData": true,
     "approval": false,
     "readPools": {
       "own": 0,
       "curator": 0,
-      "credentials": 22
+      "tracking": 13
     },
     "sealed": {
-      "outputs": 16,
-      "inputs": 5,
-      "withdrawals": 8,
-      "owners": 5,
+      "outputs": 8,
+      "inputs": 16,
+      "withdrawals": 4,
+      "owners": 4,
       "entry": false,
       "wide": false
     },
     "read": {
-      "outputs": 16,
-      "inputs": 5,
-      "withdrawals": 8,
-      "owners": 5,
+      "outputs": 8,
+      "inputs": 24,
+      "withdrawals": 32,
+      "owners": 13,
       "entry": false,
       "wide": true
     },
@@ -41,7 +41,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "credentials": 7
+      "tracking": 7
     },
     "sealed": {
       "outputs": 2,
@@ -55,7 +55,7 @@
       "outputs": 8,
       "inputs": 24,
       "withdrawals": 32,
-      "owners": 24,
+      "owners": 13,
       "entry": false,
       "wide": true
     },
@@ -72,7 +72,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "credentials": 7
+      "tracking": 7
     },
     "sealed": {
       "outputs": 2,
@@ -86,7 +86,7 @@
       "outputs": 8,
       "inputs": 24,
       "withdrawals": 32,
-      "owners": 24,
+      "owners": 13,
       "entry": false,
       "wide": true
     },
@@ -103,7 +103,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "credentials": 7
+      "tracking": 7
     },
     "sealed": {
       "outputs": 2,
@@ -117,14 +117,14 @@
       "outputs": 8,
       "inputs": 24,
       "withdrawals": 32,
-      "owners": 24,
+      "owners": 13,
       "entry": false,
       "wide": true
     },
     "outcome": "reseal"
   },
   {
-    "name": "an entry envelope of another class",
+    "name": "an entry envelope of one class",
     "rail": "anonymous",
     "inputs": 2,
     "outputs": 2,
@@ -134,7 +134,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "credentials": 17
+      "tracking": 15
     },
     "sealed": {
       "outputs": 4,
@@ -145,13 +145,13 @@
       "wide": true
     },
     "read": {
-      "outputs": 2,
-      "inputs": 24,
+      "outputs": 8,
+      "inputs": 8,
       "withdrawals": 32,
-      "owners": 12,
+      "owners": 8,
       "entry": true,
       "wide": true
     },
-    "outcome": "reseal"
+    "outcome": "reuse"
   }
 ]

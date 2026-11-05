@@ -31,7 +31,7 @@
           "debit": 100,
           "kept": 9900,
           "charge": 0,
-          "outflow": 100
+          "charged_outflow": 100
         }
       ],
       "guards": [
@@ -84,7 +84,7 @@
           "debit": 5000,
           "kept": 0,
           "charge": 0,
-          "outflow": 5000
+          "charged_outflow": 5000
         }
       ],
       "guards": [
@@ -132,7 +132,7 @@
           "debit": 400,
           "kept": 600,
           "charge": 0,
-          "outflow": 400
+          "charged_outflow": 400
         }
       ],
       "guards": [
@@ -193,7 +193,7 @@
           "debit": 500,
           "kept": 0,
           "charge": 0,
-          "outflow": 500
+          "charged_outflow": 500
         }
       ],
       "guards": [
@@ -241,7 +241,7 @@
           "debit": 0,
           "kept": 1000,
           "charge": 1000,
-          "outflow": 1000
+          "charged_outflow": 1000
         }
       ],
       "guards": [
@@ -302,7 +302,7 @@
           "debit": 0,
           "kept": 1000,
           "charge": 999,
-          "outflow": 999
+          "charged_outflow": 999
         }
       ],
       "guards": [
@@ -367,7 +367,7 @@
           "debit": 0,
           "kept": 100,
           "charge": 50,
-          "outflow": 50
+          "charged_outflow": 50
         },
         {
           "owner": 1003,
@@ -375,7 +375,7 @@
           "debit": 0,
           "kept": 100,
           "charge": 50,
-          "outflow": 50
+          "charged_outflow": 50
         }
       ],
       "guards": [
@@ -445,7 +445,7 @@
           "debit": 0,
           "kept": 2,
           "charge": 1,
-          "outflow": 1
+          "charged_outflow": 1
         },
         {
           "owner": 1003,
@@ -453,7 +453,7 @@
           "debit": 0,
           "kept": 1,
           "charge": 1,
-          "outflow": 1
+          "charged_outflow": 1
         }
       ],
       "guards": [
@@ -535,7 +535,7 @@
           "debit": 0,
           "kept": 1,
           "charge": 1,
-          "outflow": 1
+          "charged_outflow": 1
         },
         {
           "owner": 1003,
@@ -543,7 +543,7 @@
           "debit": 0,
           "kept": 1,
           "charge": 1,
-          "outflow": 1
+          "charged_outflow": 1
         }
       ],
       "guards": [
@@ -607,7 +607,7 @@
           "debit": 1000,
           "kept": 0,
           "charge": 0,
-          "outflow": 1000
+          "charged_outflow": 1000
         }
       ],
       "guards": [
@@ -660,7 +660,7 @@
           "debit": 0,
           "kept": 1000,
           "charge": 1000,
-          "outflow": 1000
+          "charged_outflow": 1000
         }
       ],
       "guards": [
@@ -780,7 +780,7 @@
           "debit": 100,
           "kept": 0,
           "charge": 0,
-          "outflow": 100
+          "charged_outflow": 100
         },
         {
           "owner": 1003,
@@ -788,7 +788,7 @@
           "debit": 100,
           "kept": 0,
           "charge": 0,
-          "outflow": 100
+          "charged_outflow": 100
         }
       ],
       "guards": [
@@ -844,7 +844,7 @@
           "debit": 0,
           "kept": 1000,
           "charge": 999,
-          "outflow": 999
+          "charged_outflow": 999
         }
       ],
       "guards": [
@@ -905,7 +905,7 @@
           "debit": 0,
           "kept": 1000,
           "charge": 1000,
-          "outflow": 1000
+          "charged_outflow": 1000
         }
       ],
       "guards": [
@@ -969,7 +969,7 @@
           "debit": 1000,
           "kept": 0,
           "charge": 0,
-          "outflow": 1000
+          "charged_outflow": 1000
         }
       ],
       "guards": [
@@ -1033,7 +1033,7 @@
           "debit": 1000,
           "kept": 0,
           "charge": 0,
-          "outflow": 1000
+          "charged_outflow": 1000
         }
       ],
       "guards": [

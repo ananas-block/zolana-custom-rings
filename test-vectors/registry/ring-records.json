@@ -49,7 +49,7 @@
       "chain_start": "1b9445b6e6ded29f84d1c5659125b916c8593be08a6873de181bcd06114c0973",
       "chain_end": "07179ae03dd37801e923422a6e04b1807f19cea140facda0452bceef6c0c44d2",
       "count": 3,
-      "statement_hash": "0f489cd18bfdc54da8357f6a2f12841829c1cc53e03f54c9b59a0ce6ec73a9a3",
+      "statement_hash": "28c3821e5a6e602abbb2a3cf8bf01c9325fdfdec8b23d119635f5088f9ba18e3",
       "width": 4,
       "proof_inputs": [
         {
@@ -954,7 +954,7 @@
       "chain_start": "0c4165d222aaec073be36090f4be3c94e715858924b7b23e41617d9d6074e528",
       "chain_end": "01fecf3c0ba5e09db052bc5731e8985862e25cdfb447a3186c38901daeb2c311",
       "count": 16,
-      "statement_hash": "22741b4ac0e67228f864b3299b2c4ae9a0aa05e7aa7963aaf3ee35cb4b7a9ab9",
+      "statement_hash": "22a307b518be425593d0a88ba6a5d9ffc458e9db1c092605ab7cca0cb160e025",
       "width": 16,
       "proof_inputs": [
         {
