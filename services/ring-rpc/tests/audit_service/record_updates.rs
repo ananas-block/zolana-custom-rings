@@ -53,6 +53,11 @@ fn wallet() -> Keypair {
     Keypair::new_from_array([47; 32])
 }
 
+enum ProofChange {
+    Slot(u64),
+    PolicyAuthority(Address),
+}
+
 struct StubChain {
     slot: AtomicU64,
     height: AtomicU64,
@@ -63,6 +68,19 @@ struct StubChain {
     /// Answered ahead of `outcome`, one lookup each.
     lookups: Mutex<VecDeque<Option<ChainOutcome>>>,
     records: super::Records,
+    proof_change: Mutex<Option<ProofChange>>,
+}
+
+impl StubChain {
+    fn rotate_policy_authority(&self, authority: Address) {
+        self.config.lock().unwrap().roles.policy = authority;
+        let mut accounts = self.accounts.lock().unwrap();
+        let account = accounts
+            .get_mut(&CustomRing::new(RING).policy_pda())
+            .expect("policy");
+        let policy: &mut RingPolicy = bytemuck::from_bytes_mut(&mut account.data);
+        policy.roles.policy = authority;
+    }
 }
 
 #[async_trait::async_trait]
@@ -200,6 +218,13 @@ impl StorageChain for StubChain {
         inputs: &ApplyProofInputs,
         _registry: &StorageRegistry,
     ) -> Result<ApplyRecordsIxData, RingRpcError> {
+        match self.proof_change.lock().unwrap().take() {
+            Some(ProofChange::Slot(slot)) => self.slot.store(slot, Ordering::Relaxed),
+            Some(ProofChange::PolicyAuthority(authority)) => {
+                self.rotate_policy_authority(authority);
+            }
+            None => {}
+        }
         Ok(ApplyRecordsIxData {
             new_root: inputs.new_root,
             ..ApplyRecordsIxData::zeroed()
@@ -272,6 +297,7 @@ impl RecordsSetup<'_> {
             outcome: Mutex::new(None),
             lookups: Mutex::default(),
             records: super::Records::listing(&[]),
+            proof_change: Mutex::default(),
         });
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let hub = Hub::builder(self.source, identity(GENESIS))
@@ -347,8 +373,7 @@ impl Records {
 
     /// The ring account and its decoded config name `key` the policy authority.
     fn rotate_policy_authority(&self, key: Address) {
-        self.chain.config.lock().unwrap().roles.policy = key;
-        self.policy(|policy| policy.roles.policy = key);
+        self.chain.rotate_policy_authority(key);
     }
 
     fn policy(&self, write: impl FnOnce(&mut RingPolicy)) {
@@ -636,6 +661,94 @@ async fn an_authority_write_queued_before_a_policy_rotation_is_refused_and_a_wal
         records.status(&pending).await,
         RecordUpdateStatus::PendingListApproval
     );
+}
+
+#[tokio::test]
+async fn a_member_that_expires_during_proving_refuses_the_batch_and_preserves_other_updates() {
+    let records = Records::new().await;
+    let live_member = [0x0c; 32];
+    let live = records
+        .submit(signed(
+            &authority(),
+            vec![list_write(live_member, ListId::Allow)],
+        ))
+        .await
+        .expect("queued");
+    let expired = records
+        .submit(signed_until(
+            &authority(),
+            vec![list_write([0x0d; 32], ListId::Allow)],
+            NOW + 1,
+        ))
+        .await
+        .expect("queued");
+    *records.chain.proof_change.lock().unwrap() = Some(ProofChange::Slot(NOW + 2));
+
+    records.writer.flush().await.expect("flush");
+
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    assert_eq!(records.status(&live).await, RecordUpdateStatus::Queued);
+    assert_eq!(
+        records.status(&expired).await,
+        RecordUpdateStatus::Refused {
+            reason: RecordUpdateRefusal::Expired.to_string()
+        }
+    );
+    assert_eq!(records.flushed().await.members, [live_member]);
+}
+
+#[tokio::test]
+async fn a_policy_rotation_during_proving_refuses_the_approval_and_preserves_wallet_updates() {
+    let records = Records::new().await;
+    records.serves_own(ListId::Allow);
+    let applicant = Keypair::new();
+    let applicant_member = *Member::owner_tag(applicant.pubkey().as_array())
+        .expect("member")
+        .as_bytes();
+    let pending = records
+        .submit(viewing_update_pending_approval(&applicant, ListId::Allow))
+        .await
+        .expect("awaiting");
+    let approval = records
+        .submit(signed(
+            &authority(),
+            vec![list_write(applicant_member, ListId::Allow)],
+        ))
+        .await
+        .expect("queued");
+    let wallet = Keypair::new();
+    let wallet_member = *Member::owner_tag(wallet.pubkey().as_array())
+        .expect("member")
+        .as_bytes();
+    let live = records
+        .submit(signed(
+            &wallet,
+            vec![list_write(wallet_member, ListId::RingViewing)],
+        ))
+        .await
+        .expect("queued");
+    *records.chain.proof_change.lock().unwrap() =
+        Some(ProofChange::PolicyAuthority(Keypair::new().pubkey()));
+
+    records.writer.flush().await.expect("flush");
+
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    assert_eq!(
+        records.status(&approval).await,
+        RecordUpdateStatus::Refused {
+            reason: RecordUpdateRefusal::AuthorityLapsed.to_string()
+        }
+    );
+    assert_eq!(
+        records.status(&pending).await,
+        RecordUpdateStatus::PendingListApproval
+    );
+    assert_eq!(records.status(&live).await, RecordUpdateStatus::Queued);
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    assert_eq!(records.flushed().await.members, [wallet_member]);
 }
 
 #[tokio::test]

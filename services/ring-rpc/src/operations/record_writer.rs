@@ -365,22 +365,14 @@ impl RecordWriter {
         let slot = self.chain.slot().await?;
         queue.expire_pending_approvals(registry, slot).await?;
         let queued = queue.queued(registry).await?;
-        let mut policies = HashMap::new();
-        for update in &queued {
-            if let Entry::Vacant(ring) = policies.entry(update.ring) {
-                ring.insert(self.ring_policy(update.ring).await?);
-            }
-        }
+        let policies = self.queued_authorities(queued.iter()).await?;
         let mut live = Vec::new();
         let mut deferred = false;
         for update in queued {
             let check = QueuedCheck {
                 update: &update,
                 slot,
-                policy_authority: policies
-                    .get(&update.ring)
-                    .and_then(Option::as_ref)
-                    .map(|policy| policy.roles.policy),
+                policy_authority: policies.get(&update.ring).copied().flatten(),
             };
             match check.check() {
                 Ok(QueuedState::Live) => live.push(update),
@@ -462,6 +454,28 @@ impl RecordWriter {
             latest.blockhash,
             ComputeBudgetConfig::new(UPDATE_COMPUTE_UNITS),
         )?;
+        let policies = self.queued_authorities(batch.iter().copied()).await?;
+        let slot = self.chain.slot().await?;
+        let mut rejected = false;
+        for update in batch {
+            match (QueuedCheck {
+                update,
+                slot,
+                policy_authority: policies.get(&update.ring).copied().flatten(),
+            })
+            .check()
+            {
+                Ok(QueuedState::Live) => {}
+                Ok(QueuedState::Deferred) => rejected = true,
+                Err(refusal) => {
+                    self.queue().refuse(&update.id, refusal).await?;
+                    rejected = true;
+                }
+            }
+        }
+        if rejected {
+            return Ok(());
+        }
         let transaction = sign_transaction(message, &[&self.authority])?;
         // 4. The batch is durable before it is sent, a restart settles it by its signature.
         self.queue()
@@ -477,6 +491,23 @@ impl RecordWriter {
             .await?;
         self.chain.send(&transaction).await?;
         Ok(())
+    }
+
+    async fn queued_authorities<'a>(
+        &self,
+        updates: impl Iterator<Item = &'a QueuedUpdate>,
+    ) -> Result<HashMap<Address, Option<Address>>, RingRpcError> {
+        let mut authorities = HashMap::new();
+        for update in updates {
+            if let Entry::Vacant(ring) = authorities.entry(update.ring) {
+                ring.insert(
+                    self.ring_policy(update.ring)
+                        .await?
+                        .map(|policy| policy.roles.policy),
+                );
+            }
+        }
+        Ok(authorities)
     }
 
     async fn prove_batch(
