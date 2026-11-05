@@ -163,7 +163,7 @@ pub enum RecipientKeys {
 #[derive(Debug, Error)]
 pub enum CredentialError {
     #[error(transparent)]
-    Rpc(#[from] ClientError),
+    Rpc(Box<ClientError>),
     #[error(transparent)]
     Hasher(#[from] HasherError),
     #[error(transparent)]
@@ -179,11 +179,11 @@ pub enum CredentialError {
     #[error(transparent)]
     RingKey(#[from] RingKeyError),
     #[error(transparent)]
-    ViewingKey(#[from] ViewingKeyError),
+    ViewingKey(Box<ViewingKeyError>),
     #[error(transparent)]
     Ring(#[from] CustomRingError),
     #[error(transparent)]
-    Seal(#[from] AuditError),
+    Seal(Box<AuditError>),
     #[error("the indexer answered {0} enrollments for one credential address")]
     EnrollmentCount(usize),
     #[error("the enrollment output does not rebuild the credential leaf")]
@@ -221,6 +221,23 @@ pub enum CredentialError {
     #[error("the credential seal opens to another key than the credential holds")]
     SealMismatch,
 }
+
+/// Boxed so a caller's error enum stays small.
+macro_rules! boxed_from {
+    ($($variant:ident($source:ty)),*) => {$(
+        impl From<$source> for CredentialError {
+            fn from(error: $source) -> Self {
+                Self::$variant(Box::new(error))
+            }
+        }
+    )*};
+}
+
+boxed_from!(
+    Rpc(ClientError),
+    ViewingKey(ViewingKeyError),
+    Seal(AuditError)
+);
 
 #[must_use]
 pub struct CredentialResolver {
@@ -1550,10 +1567,9 @@ mod tests {
             .await;
         assert!(
             matches!(
-                result,
-                Err(CredentialError::ViewingKey(
-                    ViewingKeyError::NullifierKeyMismatch
-                ))
+                &result,
+                Err(CredentialError::ViewingKey(error))
+                    if matches!(**error, ViewingKeyError::NullifierKeyMismatch)
             ),
             "{result:?}"
         );
