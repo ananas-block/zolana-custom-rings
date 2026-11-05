@@ -70,7 +70,7 @@ impl TableBinding<'_> {
     }
 }
 
-/// A curator source names a registry of any authority other than the ring's records.
+/// Any authority's registry, the program checks its owner and layout alone.
 pub(crate) fn curator_source(curator: &AccountView) -> Result<Address, ProgramError> {
     load_storage_registry(curator)?;
     Ok(*curator.address())

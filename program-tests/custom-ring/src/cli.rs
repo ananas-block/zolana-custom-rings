@@ -24,7 +24,7 @@ const RING_CLI: &str = concat!(
     "/../../target/debug/zolana-ring"
 );
 
-/// The harness payer deploys, `config_authority` holds the config.
+/// The harness payer deploys, `config_authority` holds the policy role.
 pub struct RingProject {
     pub config_authority: Keypair,
     dir: PathBuf,
@@ -125,7 +125,7 @@ impl RingProject {
         Ok(())
     }
 
-    /// Re-pins under the config authority.
+    /// Re-pins under the policy authority.
     pub fn policy_set(&self, block: &str) -> Result<String> {
         let path = self.dir.join("ring.toml");
         let text = std::fs::read_to_string(&path)?;

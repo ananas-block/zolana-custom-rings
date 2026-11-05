@@ -58,7 +58,7 @@ fn an_anonymous_policy_transfer_takes_public_co_owners_in_the_run() {
     ));
 }
 
-/// Only the proof judges a tag.
+/// The program judges no tag, SPP's external data hash binds its bytes.
 #[test]
 fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
     let fixture = Fixture::new();

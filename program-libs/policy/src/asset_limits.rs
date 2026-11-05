@@ -1,3 +1,7 @@
+//! The windowed caps a mint's record holds, Ring RPC checks them on the operations it co-signs.
+//!
+//! Read after `program-libs/policy/src/mint.rs`. Read before `program-libs/policy/src/quantities.rs`.
+
 use thiserror::Error;
 
 /// Big endian u64 amounts in field order.

@@ -1,4 +1,4 @@
-//! The config authority re-pins the table of a live ring on localnet +
+//! The policy authority re-pins the table of a live ring on localnet +
 //! photon + prover, and a curated Block list binds beside the subscriber's own
 //! Approval list.
 
@@ -54,7 +54,7 @@ forbid = "block"
 "#;
 
 #[test]
-fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
+fn the_policy_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     let rings = CuratedRings::setup()?;
     let env = &rings.env;
     let rpc = env.client.rpc();
@@ -156,7 +156,7 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     })?;
     egress.to(&clean, &utxos[0]).land()?;
 
-    // 6. Only the config authority re-pins.
+    // 6. Only the policy authority re-pins.
     let stranger = env.funded_keypair()?;
     let rejection = ExpectRejection {
         payer: &stranger,
@@ -285,7 +285,7 @@ fn block(literal: &str, rings: &CuratedRings) -> String {
     literal.replace("$CURATOR", &rings.curator.program_id().to_string())
 }
 
-/// After `init` the project's config authority holds the config.
+/// After `init` the project's `config_authority` key holds the policy role.
 fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<Subscriber> {
     let auditor = X25519Keypair::new();
     let ring_rpc = RingRpcSpec {

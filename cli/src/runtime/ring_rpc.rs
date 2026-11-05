@@ -237,7 +237,7 @@ impl RingRpcClient {
         })
     }
 
-    /// Every page signed by the config authority, oldest first.
+    /// Every page signed by the policy authority, oldest first.
     pub fn pending_enrolments(
         &self,
         target: ReadTarget,

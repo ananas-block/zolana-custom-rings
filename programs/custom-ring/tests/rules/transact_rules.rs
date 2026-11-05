@@ -533,7 +533,7 @@ fn a_compact_transfer_reaches_the_key_of_its_capacity() {
     ));
 }
 
-/// Ring body and the reply are bound by the statement alone, SPP stores both.
+/// SPP's external data hash binds the ring body and the reply, SPP stores both.
 #[test]
 fn reply_metadata_reaches_the_key_on_the_anonymous_rail_and_no_other() {
     let fixture = Fixture::new();

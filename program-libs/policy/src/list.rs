@@ -1,3 +1,10 @@
+//! The eight lists, their writers and the polarity a rule reads each by, one bit each in a member record.
+//!
+//! A bit position is a circuit constant. The writer split and `RuleTable::validate` keep a list its
+//! members write out of every rule, so an owner admits itself to nothing.
+//!
+//! Read after `program-libs/policy/src/lib.rs`. Read before `program-libs/policy/src/member.rs`, `program-libs/policy/src/rule_table/mod.rs`.
+
 use thiserror::Error;
 
 use crate::MAX_SOURCES;

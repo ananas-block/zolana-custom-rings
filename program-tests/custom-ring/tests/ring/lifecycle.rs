@@ -178,8 +178,8 @@ fn localnet_bring_up_is_live() -> Result<()> {
     Ok(())
 }
 
-/// The ring rpc reads the Loader v3 upgrade authority and the config authority
-/// from the chain, so this runs against the deployed program, not a mock.
+/// The ring rpc reads the Loader v3 upgrade authority and the policy authority
+/// from the chain, the test runs against the deployed program.
 #[test]
 fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     let env = setup()?;
@@ -259,7 +259,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
         ComputeBudgetConfig::for_instruction_count(1),
     )?;
     authorize(&request(&config_authority, genesis_hash)?)
-        .map_err(|e| anyhow!("config authority {e:?}"))?;
+        .map_err(|e| anyhow!("policy authority {e:?}"))?;
     for refused in [&env.payer, &stranger] {
         expect_refusal(
             authorize(&request(refused, genesis_hash)?),
@@ -269,7 +269,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     Ok(())
 }
 
-/// The operator cli against the deployed program, the config authority holds the
+/// The operator cli against the deployed program, the `config_authority` key holds the
 /// policy role and the rerun sees the ring through a hosted-looking ring rpc.
 #[test]
 fn cli_init_names_the_roles_and_reruns_from_the_chain() -> Result<()> {
@@ -286,7 +286,7 @@ fn cli_init_names_the_roles_and_reruns_from_the_chain() -> Result<()> {
     let init = || project.run(&["init"]);
 
     // 1. A local ring rpc lets the key file through, the deployer creates the
-    //    ring naming the config authority as its policy authority.
+    //    ring naming the `config_authority` key as its policy authority.
     project.write_config(RingToml {
         env: &env,
         ring_rpc: &ring_rpc.url,

@@ -362,7 +362,7 @@ impl EnrolledDelegate<'_> {
     }
 }
 
-/// The delegate signs its appointment beside the config authority.
+/// The delegate signs its appointment beside the admin.
 struct DelegateAppointment<'a> {
     ring: CustomRing,
     delegate: &'a Keypair,
@@ -452,7 +452,7 @@ fn frame(instruction: &Instruction, rail: RingRail) -> Result<RingTransactData<'
     Ok(RingTransactData::parse(body, rail)?.into_data())
 }
 
-/// SPP's anonymous rail hides `owner`, the transfer statement publishes it.
+/// SPP's anonymous rail hides `owner`, the frame names it.
 fn assert_anonymous_spp_rail(instruction: &Instruction, owner: &[u8; 32]) -> Result<()> {
     let data = frame(instruction, RingRail::Confidential)?;
     ensure!(

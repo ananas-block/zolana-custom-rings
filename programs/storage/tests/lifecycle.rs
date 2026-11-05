@@ -384,7 +384,7 @@ fn deploy_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy").into())
 }
 
-/// Forwards `instruction` through the CPI owner, which signs its PDA.
+/// Forwards `instruction` through the CPI owner, the owner signs its PDA.
 fn through_cpi_owner(mut instruction: Instruction) -> Instruction {
     instruction.program_id = CPI_OWNER_PROGRAM;
     instruction.accounts[1].is_signer = false;

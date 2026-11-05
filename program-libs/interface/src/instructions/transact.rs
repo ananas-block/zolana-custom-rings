@@ -102,7 +102,7 @@ pub enum RingRail {
 pub enum RailSigner {
     /// The confidential rail's owner signer run.
     Owners,
-    /// The anonymous rail, the payer, the owner run and the co-signers sign.
+    /// The anonymous rail, the payer, the owner run, the co-signers and the funders sign.
     Payer,
     Delegate {
         delegate: Address,
@@ -282,7 +282,7 @@ pub struct RingTransactData<'a> {
     pub outputs: Vec<RingOutput<'a>>,
     /// Set exactly under `REPLY_METADATA`.
     pub replies: Option<Replies<'a>>,
-    /// Present exactly on the anonymous rail.
+    /// Present exactly on an anonymous frame.
     pub sender: Option<FramedSenderBundle<'a>>,
     /// `envelope_ct`, the transmitted length is the stream layout's.
     pub envelope: &'a [u8],
@@ -328,7 +328,7 @@ pub struct FrameExtensions<'a> {
     pub signer_data_counts: Option<SignerDataCounts>,
 }
 
-/// The owner SPP's anonymous rail verifies and hides, the transfer statement publishes it.
+/// The owner SPP's anonymous rail verifies and hides, the frame names its key and the statement binds its identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InProofOwner<'a> {
     pub owner: &'a [u8; 32],
@@ -564,7 +564,7 @@ pub struct TransferBinding<'a> {
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     /// The in-proof owner identity, otherwise zero.
     pub sender: &'a [u8; 32],
-    /// Default on the in-proof and authority rails.
+    /// Default on the authority rails and on an empty run.
     pub signers: SignerSet,
     /// Zero outside the anonymous family.
     pub party_identities: &'a [[u8; 32]; ANONYMOUS_PARTIES],

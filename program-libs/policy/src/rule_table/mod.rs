@@ -135,7 +135,7 @@ pub enum Subject {
     Asset = 4,
 }
 
-/// Present demands a live Active entry, Absent forbids one.
+/// Present demands the list's bit, Absent forbids it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Mode {
@@ -182,7 +182,7 @@ struct Row {
 const _: () = assert!(core::mem::size_of::<Row>() == 32);
 
 impl Rule {
-    /// Every live instance of the subject needs a live Active entry.
+    /// Every live instance of the subject needs the list's bit.
     pub const fn require(subject: Subject, list_id: ListId) -> Self {
         Self::any_of(subject, ListSet::single(list_id), ListSet::EMPTY)
     }
@@ -213,7 +213,7 @@ impl Rule {
         }
     }
 
-    /// The rule passes below the threshold without a membership check.
+    /// The rule passes at or below the threshold without a membership check.
     #[must_use]
     pub const fn above(self, amount: u64) -> Self {
         Self {

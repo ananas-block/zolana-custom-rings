@@ -1,3 +1,11 @@
+//! The audit capsule a ring deposit prepends to the recipient's bytes inside each SPP output.
+//!
+//! SPP stores the ciphertext without parsing. The program reads each capsule to bind its record in
+//! the statement, and a reader strips it to reach the recipient's bytes.
+//!
+//! Read after `program-libs/interface/src/instructions/deposit.rs`. Read before
+//! `programs/custom-ring/src/instructions/settlement/deposit_audit.rs`.
+
 use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
 

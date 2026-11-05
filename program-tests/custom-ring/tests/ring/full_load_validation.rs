@@ -803,7 +803,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         upstream: env.indexer_url.clone(),
         http: reqwest::Client::new(),
     })?;
-    // The production prover reads its witnesses from this indexer.
+    // The production prover reads its witnesses from the seeded indexer.
     std::env::set_var("ZOLANA_INDEXER_URL", &indexer.url);
     restart_prover()?;
     env.indexer_url.clone_from(&indexer.url);

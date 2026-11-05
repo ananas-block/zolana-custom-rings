@@ -1,3 +1,11 @@
+//! The storage program's tags, instruction data and write classification.
+//!
+//! `StorageUpdateIxData::reaches_policy` reads the writes and no authority flag. A flag would let an
+//! authority keep a revoked root served by how it labels a write.
+//!
+//! Read after `program-libs/interface/src/accounts/storage.rs`, `program-libs/interface/src/accounts/tracking.rs`.
+//! Read before `programs/storage/src/instructions/update.rs`.
+
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use zolana_ring_policy::ListSet;

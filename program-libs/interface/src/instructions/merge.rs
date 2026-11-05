@@ -1,3 +1,12 @@
+//! The `Merge` data and its statement.
+//!
+//! A frame carries SPP's merge body with `proof.b` compressed, and the program forwards it decompressed.
+//! SPP publishes no auditor message for a merge, so the sealed record travels in the ring instruction
+//! alone and only the statement binds it.
+//!
+//! Read after `program-libs/interface/src/proof/statement.rs`. Read before
+//! `programs/custom-ring/src/instructions/settlement/merge.rs`, `prover/circuits/merge.go`.
+
 use spr_hasher::{
     hash_chain::create_hash_chain_from_slice,
     primitives::{hash_bytes, pack_be},

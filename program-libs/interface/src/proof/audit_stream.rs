@@ -1,4 +1,12 @@
 //! Mirror of `prover/circuits/audit`.
+//!
+//! SPP publishes these bytes and opens none of them. The proof holds the auditor's stream to each
+//! slot's note, so every length and counter here must match the circuit, a record read at another
+//! counter decrypts to noise. A key fixes the counters by its capacity, and a frame transmits its
+//! published slots alone.
+//!
+//! Read after `program-libs/interface/src/proof/domain.rs`. Read before `program-libs/interface/src/proof/disclosure.rs`,
+//! `prover/circuits/audit/audit.go`.
 
 use crate::{bytes::Bytes, error::CustomRingError, TAGGED_X25519_KEY_LEN};
 
