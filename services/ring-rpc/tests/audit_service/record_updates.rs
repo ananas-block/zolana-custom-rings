@@ -787,7 +787,7 @@ async fn an_unread_ring_account_holds_its_updates_until_a_later_pass() {
 }
 
 #[tokio::test]
-async fn an_update_signed_for_the_cli_window_outlives_the_longest_graced_wait() {
+async fn an_unexpired_full_history_holds_no_graced_batch_past_its_window() {
     let records = Records::new().await;
     let wallet = wallet();
     let member = *Member::owner_tag(wallet.pubkey().as_array())
@@ -801,13 +801,12 @@ async fn an_update_signed_for_the_cli_window_outlives_the_longest_graced_wait() 
         ))
         .await
         .expect("queued");
-    // The aged batch waits a full grace period for the oldest kept root.
-    let sendable = NOW + BATCH_WINDOW_SLOTS + GRACE_SLOTS;
+    let sendable = NOW + BATCH_WINDOW_SLOTS;
     {
         let mut accounts = records.chain.accounts.lock().unwrap();
         let account = accounts.get_mut(&REGISTRY).expect("registry");
         let registry: &mut StorageRegistry = bytemuck::from_bytes_mut(&mut account.data);
-        registry.roots[ROOT_HISTORY - 1].expires_at = sendable.to_le_bytes();
+        registry.roots[ROOT_HISTORY - 1].expires_at = (sendable + GRACE_SLOTS).to_le_bytes();
     }
     records.chain.slot.store(sendable - 1, Ordering::Relaxed);
     records.writer.flush().await.expect("flush");
