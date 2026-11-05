@@ -674,7 +674,7 @@ describe("ring merge", () => {
       expect(payload.publishedOwner).toBe(
         bytesToBigInt(owner.signingPublicKey().ownerProofInputHash()),
       );
-      // Without the zero secret the owner's key refuses before the stub service.
+      expect(payload.userNullifierSecret).toBe(0n);
       await expect(
         keys.proveMerge({
           ...payload,

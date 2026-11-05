@@ -1,17 +1,9 @@
 import { getBase58Decoder, getBase64Decoder, type Instruction } from "@solana/kit";
 
-import type {
-  Field,
-  IndexedProofAuthority,
-  ProofAuthority,
-  ProofDataSourceContext,
-  TreeContext,
-  WalletKeys,
-} from "@heliuslabs/spr/client";
+import type { ProofDataSourceContext, TreeContext, WalletKeys } from "@heliuslabs/spr/client";
 import type { LatestBlockhash } from "@heliuslabs/spr/internal";
 import {
   addressBytes,
-  asField,
   bigIntBytes,
   prepareProverMerge,
   compressG2,
@@ -478,11 +470,7 @@ async function buildRingMerge(
       await approveMerge({ approve: params.approve, owner, feePayer: params.feePayer, intent });
       const { data } = await withProofDataRetry(
         params.client.proofDataSource,
-        (attempt) =>
-          params.client.proveMerge(
-            { prepared, keys: seed === undefined ? params.keys : zeroKeyAuthority(params.keys) },
-            attempt,
-          ),
+        (attempt) => params.client.proveMerge({ prepared, keys: params.keys }, attempt),
         context,
       );
       if (!equalBytes(data.outputUtxoHash, expectedHash)) throw ringIntentMismatch("output");
@@ -640,28 +628,6 @@ function zeroKeyMerge(
 
 function wipeSeed(merge: PreparedMerge): void {
   merge.mergeSeed?.fill(0);
-}
-
-/** The owner's key refuses a merge under the zero key, whose secret is zero. */
-function zeroKeyAuthority(keys: ProofAuthority): ProofAuthority {
-  const zeroSecret = <T extends { userNullifierSecret?: Field }>(inputs: T): T => ({
-    ...inputs,
-    userNullifierSecret: asField(0n),
-  });
-  const authority: ProofAuthority & Partial<IndexedProofAuthority> = {
-    prove: (inputs, context) => keys.prove(inputs, context),
-    proveMerge: (inputs, context) => keys.proveMerge(zeroSecret(inputs), context),
-  };
-  const indexed = (keys as Partial<IndexedProofAuthority>).proveIndexed?.bind(keys);
-  if (indexed !== undefined)
-    authority.proveIndexed = (request, context) =>
-      indexed(
-        request.circuit === "merge"
-          ? { ...request, payload: zeroSecret(request.payload) }
-          : request,
-        context,
-      );
-  return Object.freeze(authority);
 }
 
 /** The statement binds the proved SPP merge `spp`. */
