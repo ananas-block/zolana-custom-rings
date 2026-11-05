@@ -61,13 +61,12 @@ pub(super) fn spanned_trees<'u>(utxos: impl IntoIterator<Item = &'u WalletUtxo>)
         .len()
 }
 
-/// The most trees a pair search draws from, the best by reach.
+/// Preferred trees, a failed pool falls back to the remaining pairs.
 pub(super) const PAIR_POOL_TREES: usize = 8;
 
 // The staged search tries singles then pairs, a third input tree would need a third stage.
 const _: () = assert!(MAX_INPUT_TREES == 2);
 
-/// Each tree alone, then only when none funds, each pair within `pool`.
 pub(super) fn staged_tree_search<T>(
     trees: &[u16],
     pool: &[u16],
@@ -77,14 +76,40 @@ pub(super) fn staged_tree_search<T>(
     if !singles.is_empty() {
         return singles;
     }
-    pool.iter()
+    let preferred: Vec<T> = pool
+        .iter()
         .enumerate()
         .flat_map(|(at, first)| pool[at + 1..].iter().map(move |second| [*first, *second]))
         .filter_map(|mut pair| {
             pair.sort_unstable();
             fund(&pair)
         })
+        .collect();
+    if !preferred.is_empty() || pool.is_empty() {
+        return preferred;
+    }
+    trees
+        .iter()
+        .enumerate()
+        .flat_map(|(at, first)| trees[at + 1..].iter().map(move |second| [*first, *second]))
+        .filter(|pair| !pair.iter().all(|tree| pool.contains(tree)))
+        .find_map(|mut pair| {
+            pair.sort_unstable();
+            fund(&pair)
+        })
+        .into_iter()
         .collect()
+}
+
+#[derive(Clone, Copy)]
+struct TreePrefix {
+    tree: u16,
+    amount: u128,
+}
+
+struct PairCover {
+    trees: [u16; 2],
+    amount: u128,
 }
 
 impl<'u> Funding<'u> {
@@ -176,9 +201,17 @@ impl<'u> Funding<'u> {
             )
         });
         let trees: Vec<u16> = ranked.into_iter().map(|(tree, _)| *tree).collect();
-        let pool = &trees[..trees.len().min(PAIR_POOL_TREES)];
+        let mut pool = Vec::new();
+        if let Some(pair) = self.pair_cover(by_tree) {
+            pool.extend(trees.iter().take(PAIR_POOL_TREES).copied());
+            for tree in pair.trees {
+                if !pool.contains(&tree) {
+                    pool.push(tree);
+                }
+            }
+        }
         // 2. A pair runs only when no tree alone funds, its picks always span both trees.
-        let mut funded = staged_tree_search(&trees, pool, |set| {
+        let mut funded = staged_tree_search(&trees, &pool, |set| {
             let utxos = select_spend_where(
                 set.iter()
                     .filter_map(|tree| by_tree.get(tree))
@@ -199,6 +232,38 @@ impl<'u> Funding<'u> {
         });
         funded.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         funded.into_iter().map(|(_, candidate)| candidate).collect()
+    }
+
+    fn pair_cover(&self, by_tree: &BTreeMap<u16, Vec<&WalletUtxo>>) -> Option<PairCover> {
+        let mut leaders: Vec<Vec<TreePrefix>> = vec![Vec::new(); self.max_inputs];
+        for (&tree, notes) in by_tree {
+            let mut amounts: Vec<_> = notes.iter().map(|note| note.utxo.amount).collect();
+            amounts.sort_unstable_by_key(|amount| Reverse(*amount));
+            let mut amount = 0;
+            for (budget, best) in leaders.iter_mut().enumerate().skip(1) {
+                amount += u128::from(amounts.get(budget - 1).copied().unwrap_or_default());
+                best.push(TreePrefix { tree, amount });
+                best.sort_unstable_by_key(|prefix| (Reverse(prefix.amount), prefix.tree));
+                best.truncate(2);
+            }
+        }
+        leaders
+            .iter()
+            .enumerate()
+            .skip(1)
+            .flat_map(|(budget, left)| {
+                let right = &leaders[self.max_inputs - budget];
+                left.iter().flat_map(move |left| {
+                    right.iter().filter_map(move |right| {
+                        (left.tree != right.tree).then_some(PairCover {
+                            trees: [left.tree, right.tree],
+                            amount: left.amount + right.amount,
+                        })
+                    })
+                })
+            })
+            .filter(|pair| pair.amount >= u128::from(self.amount))
+            .max_by_key(|pair| pair.amount)
     }
 
     /// Names the zero-key funds only a public spend reaches.

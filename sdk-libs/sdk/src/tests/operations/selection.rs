@@ -66,7 +66,7 @@ fn a_tree_of_another_asset_stays_out_of_the_search() {
 }
 
 #[test]
-fn a_many_tree_wallet_pairs_only_within_the_pool() {
+fn a_many_tree_wallet_falls_back_after_the_preferred_pool() {
     let trees = 20;
     let tried = RefCell::new(0usize);
     let ids: Vec<u16> = (0..trees).collect();
@@ -76,7 +76,10 @@ fn a_many_tree_wallet_pairs_only_within_the_pool() {
     });
     assert!(funded.is_empty());
     let pairs = PAIR_POOL_TREES * (PAIR_POOL_TREES - 1) / 2;
-    assert_eq!(tried.into_inner(), usize::from(trees) + pairs);
+    assert_eq!(
+        tried.into_inner(),
+        usize::from(trees) + usize::from(trees * (trees - 1) / 2)
+    );
 
     // Equal reach ranks by tree id, every pair sits within the first pool trees.
     let utxos = notes(ids.iter().map(|tree| (*tree, 1)));
@@ -126,4 +129,24 @@ fn matches_the_shared_tree_selection_vector() {
             .collect();
         assert_eq!(picked(&candidates[0].utxos), expected, "{}", case.name);
     }
+}
+
+#[test]
+fn pair_selection_respects_the_shared_input_budget() {
+    let utxos = notes(
+        (0..8)
+            .flat_map(|tree| [(tree, 40), (tree, 40)])
+            .chain([(8, 60)]),
+    );
+    let candidates = funding(&utxos, 100, 2).candidates(|_| true);
+    assert_eq!(candidates[0].utxos.len(), 2);
+    assert_eq!(
+        candidates[0]
+            .utxos
+            .iter()
+            .map(|note| note.utxo.amount)
+            .sum::<u64>(),
+        100
+    );
+    assert!(candidates[0].utxos.iter().any(|note| note.tree_id == 8));
 }

@@ -40,6 +40,8 @@ import { zeroKeyNullifier } from "../../state/exposed-notes.js";
 
 export type RingRecoveryClient = RingAuditReader;
 
+export const RECOVERY_INPUT_SAMPLE_LIMIT = 64;
+
 /** Mirrors Rust `MemberRecovery`, a source member's notes from the auditor's view and its nullifier key. */
 export interface RingRecoveryParams {
   readonly client: RingRecoveryClient;
@@ -100,8 +102,9 @@ export interface RecoveredRingNotes {
   readonly unsupportedDeposits: readonly Bytes32[];
   /** Verified mints missing from the asset registry, their notes stay in `unopened`. */
   readonly unknownMints: readonly Address[];
-  /** Nullifiers of ring note inputs no note the member opened matches, Rust `unseen_inputs`. */
+  /** First unmatched nullifiers, limited by `RECOVERY_INPUT_SAMPLE_LIMIT`. */
   readonly unseenInputs: readonly Bytes32[];
+  readonly unseenInputCount: bigint;
 }
 
 /** Applies each closed slot as its page lands and pauses at the page cap. */
@@ -152,6 +155,7 @@ export async function recoverRingMemberNotes(
       unsupportedDeposits: Object.freeze([...state.unsupportedDeposits]),
       unknownMints: Object.freeze([...state.unknownMints]),
       unseenInputs: Object.freeze([...state.unseenInputs]),
+      unseenInputCount: state.unseenInputCount,
     }),
   });
 }
@@ -182,6 +186,7 @@ interface RecoveryState {
   readonly unknownMints: ReadonlySet<Address>;
   readonly unsupportedDeposits: readonly Bytes32[];
   readonly unseenInputs: readonly Bytes32[];
+  readonly unseenInputCount: bigint;
   /** The indexer orders one slot by signature, a later row of the slot can create the note an earlier row spends. */
   readonly openSlot: readonly ConfirmedRingTransaction[];
 }
@@ -193,6 +198,7 @@ const EMPTY_STATE: RecoveryState = Object.freeze({
   unknownMints: new Set<Address>(),
   unsupportedDeposits: Object.freeze([]),
   unseenInputs: Object.freeze([]),
+  unseenInputCount: 0n,
   openSlot: Object.freeze([]),
 });
 
@@ -334,6 +340,7 @@ class BatchNotes {
       ...this.unresolved,
     ];
     const held = new Set(notes.map(({ nullifier }) => bytesKey(nullifier)));
+    const unseen = this.realInputs.filter((nullifier) => !held.has(bytesKey(nullifier)));
     return Object.freeze({
       candidates: carried(before.candidates, this.candidates, live),
       unresolved: carried(before.unresolved, this.unresolved, live),
@@ -342,8 +349,9 @@ class BatchNotes {
       unsupportedDeposits: carried(before.unsupportedDeposits, this.unsupportedDeposits),
       unseenInputs: carried(
         before.unseenInputs,
-        this.realInputs.filter((nullifier) => !held.has(bytesKey(nullifier))),
+        unseen.slice(0, RECOVERY_INPUT_SAMPLE_LIMIT - before.unseenInputs.length),
       ),
+      unseenInputCount: before.unseenInputCount + BigInt(unseen.length),
       openSlot: Object.freeze([...openSlot]),
     });
   }

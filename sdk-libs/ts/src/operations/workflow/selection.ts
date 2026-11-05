@@ -24,7 +24,7 @@ export interface Cover {
   readonly amount: bigint;
 }
 
-/** The most trees a pair search draws from per mint, Rust `PAIR_POOL_TREES`. */
+/** Preferred trees, a failed pool falls back to the remaining pairs. */
 export const PAIR_POOL_TREES = 8;
 
 /** Every mint from one tree, two trees only when no tree alone funds, then the fewest UTXOs, then change. */
@@ -102,6 +102,11 @@ export function selectAcrossTrees(
         .map(({ tree }) => tree);
     }),
   );
+  if (covers.length === 1) {
+    const pair = pairCover(byTree, covers[0]!, policy.maxInputs);
+    if (pair === undefined) pool.clear();
+    else for (const tree of pair) pool.add(tree);
+  }
   let furthest: { rank: readonly bigint[]; error: unknown } | undefined;
   // 3. A pair runs only when no tree alone funds, its picks always span both trees.
   const consider = (set: readonly Address[]) => {
@@ -131,7 +136,47 @@ export function selectAcrossTrees(
   throw furthest?.error;
 }
 
-/** @internal Each tree alone, then only when none funds, each pair within `pool` in its order. */
+function pairCover(
+  byTree: ReadonlyMap<Address, readonly WalletUtxo[]>,
+  cover: Cover,
+  maxInputs: number,
+): readonly Address[] | undefined {
+  const leaders: { tree: Address; amount: bigint }[][] = Array.from(
+    { length: maxInputs },
+    () => [],
+  );
+  for (const [tree, notes] of byTree) {
+    const amounts = notes
+      .filter((note) => note.utxo.asset === cover.asset)
+      .map((note) => note.utxo.amount)
+      .sort(descending);
+    let amount = 0n;
+    for (let budget = 1; budget < maxInputs; budget++) {
+      amount += amounts[budget - 1] ?? 0n;
+      const best = leaders[budget]!;
+      best.push({ tree, amount });
+      best.sort((left, right) => descending(left.amount, right.amount));
+      best.splice(2);
+    }
+  }
+  let best: { trees: readonly Address[]; amount: bigint } | undefined;
+  for (let budget = 1; budget < maxInputs; budget++) {
+    for (const left of leaders[budget]!) {
+      for (const right of leaders[maxInputs - budget]!) {
+        const amount = left.amount + right.amount;
+        if (
+          left.tree !== right.tree &&
+          amount >= cover.amount &&
+          (best === undefined || amount > best.amount)
+        ) {
+          best = { trees: [left.tree, right.tree], amount };
+        }
+      }
+    }
+  }
+  return best?.trees;
+}
+
 export function stagedTreeSearch<T>(
   trees: readonly Address[],
   pool: readonly Address[],
@@ -139,9 +184,21 @@ export function stagedTreeSearch<T>(
 ): readonly T[] {
   const singles = trees.flatMap((tree) => found(fund([tree])));
   if (singles.length > 0) return singles;
-  return pool.flatMap((first, at) =>
+  const preferred = pool.flatMap((first, at) =>
     pool.slice(at + 1).flatMap((second) => found(fund([first, second]))),
   );
+  if (preferred.length > 0 || pool.length === 0) return preferred;
+  const selected = new Set(pool);
+  for (let first = 0; first < trees.length; first++) {
+    for (let second = first + 1; second < trees.length; second++) {
+      const left = trees[first]!;
+      const right = trees[second]!;
+      if (selected.has(left) && selected.has(right)) continue;
+      const candidate = fund([left, right]);
+      if (candidate !== undefined) return [candidate];
+    }
+  }
+  return [];
 }
 
 /** Proof inputs at each note's own tree, a second tree's id read once from its account. */

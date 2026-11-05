@@ -147,7 +147,7 @@ describe("resolveRingRecipient", () => {
       expect(resolved.kind).toBe("zeroKey");
     });
 
-    it("refuses an enrolled owner", async () => {
+    it("resolves an enrolled owner with an explicit zero key", async () => {
       const { row, wallet } = await addressed();
       await expect(
         resolveRingRecipient({
@@ -155,7 +155,7 @@ describe("resolveRingRecipient", () => {
           trackingRegistry: REGISTRY,
           to: zeroAddressed(wallet),
         }),
-      ).rejects.toMatchObject({ code: "RING_RECIPIENT_ENROLLED" });
+      ).resolves.toMatchObject({ kind: "zeroKey" });
     });
   });
 

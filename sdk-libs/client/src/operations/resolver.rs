@@ -49,8 +49,6 @@ pub enum ResolveError {
     NullifierKeyMismatch,
     #[error("the owner holds no tracking row under the root, a pending enrollment grants nothing")]
     NotEnrolled,
-    #[error("the owner holds a tracking row, the address names the zero key")]
-    EnrolledOwnerAtZeroKey,
 }
 
 /// `registry` is the one the ring's policy names.
@@ -107,14 +105,13 @@ impl RecipientResolver<'_> {
         let nullifier_pk = address.recipient.nullifier_pubkey;
         let zero_key = nullifier_pk == ZERO_NULLIFIER_PUBKEY;
         match (row, zero_key) {
-            (None, true) => Ok(ResolvedRecipient {
+            (_, true) => Ok(ResolvedRecipient {
                 nullifier_pk,
                 viewing_pubkey: address.recipient.viewing_pubkey,
                 revision: 0,
                 list_tag: [0; 32],
             }),
             (None, false) => Err(ResolveError::NotEnrolled),
-            (Some(_), true) => Err(ResolveError::EnrolledOwnerAtZeroKey),
             (Some(row), false) => {
                 if row.nullifier_pk != nullifier_pk {
                     return Err(ResolveError::NullifierKeyMismatch);
@@ -319,13 +316,13 @@ mod tests {
     }
 
     #[test]
-    fn a_row_under_a_zero_key_address_is_refused() {
+    fn an_enrolled_owner_resolves_an_explicit_zero_key() {
         let owner = wallet(3);
         let leaf = entry(&owner, ViewingKey::new().pubkey());
-        assert!(matches!(
-            Fixture::with(&[leaf]).resolve(&zero_key(&owner), &owner),
-            Err(ResolveError::EnrolledOwnerAtZeroKey)
-        ));
+        let resolved = Fixture::with(&[leaf])
+            .resolve(&zero_key(&owner), &owner)
+            .expect("recipient");
+        assert_eq!(resolved.nullifier_pk, ZERO_NULLIFIER_PUBKEY);
     }
 
     #[test]

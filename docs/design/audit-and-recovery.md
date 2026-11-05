@@ -91,3 +91,5 @@ The sender's SDK resolves a nonzero-key recipient through its tracking row under
 - `getSpendCoverage` is the one read that names an unresolved spend, and it serves the ring authority alone.
 - `getDelegateNotes` hands the owner's openings and nullifier secret to the ring's configured delegate alone. No other read returns a nullifier secret.
 - A co-signer reads debits from the frame and the note index. A real input with no note index hit is refused with `LimitsUnavailable`.
+
+Member recovery returns a bounded sample of unmatched input nullifiers and their total count. The sample does not establish complete spend coverage.

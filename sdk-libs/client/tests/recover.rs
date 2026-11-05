@@ -1152,6 +1152,7 @@ fn assert_same(left: RecoveredNotes, right: RecoveredNotes) {
     assert_eq!(left.unsupported_deposits, right.unsupported_deposits);
     assert_eq!(left.unknown_mints, right.unknown_mints);
     assert_eq!(left.unseen_inputs, right.unseen_inputs);
+    assert_eq!(left.unseen_input_count, right.unseen_input_count);
 }
 
 #[tokio::test]
@@ -1558,6 +1559,32 @@ async fn an_anonymous_spend_of_deposits_under_the_commitment_key_leaves_the_chan
     let gap = fixture.run(fixture.recovery(), &unseen).await.unwrap();
     assert_eq!(gap.utxos, [change]);
     assert_eq!(gap.unseen_inputs, [unseen_nullifier]);
+    assert_eq!(gap.unseen_input_count, 1);
+}
+
+#[tokio::test]
+async fn unmatched_inputs_keep_a_bounded_sample_and_a_complete_count() {
+    let fixture = Fixture::anonymous();
+    let mut transactions = Vec::new();
+    let mut nullifiers = Vec::new();
+    for slot in 0..70 {
+        let (input, _) = fixture.deposit(fixture.output(4), 2);
+        let (_, mut transaction) = fixture.anonymous_spend(&[&input], 3, 3);
+        transaction.slot = slot;
+        nullifiers.push(input.nullifier);
+        transactions.push(transaction);
+    }
+    let history = History {
+        transactions,
+        ..Default::default()
+    };
+    let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
+    assert_eq!(recovered.unseen_inputs.len(), 64);
+    assert_eq!(recovered.unseen_input_count, 70);
+    assert!(recovered
+        .unseen_inputs
+        .iter()
+        .all(|input| nullifiers.contains(input)));
 }
 
 #[tokio::test]

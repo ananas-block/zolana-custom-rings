@@ -32,10 +32,10 @@ export type ResolvedRecipient =
       revision: bigint;
       listTag: Bytes32;
     }>
-  /** Named under the zero key, a row's absence under the frame's root admits it. */
+  /** Explicit zero key, the transfer checks salted payee restrictions. */
   | Readonly<{ kind: "zeroKey"; root: TrackingRoot }>;
 
-/** Refuses what the output rule refuses. */
+/** Resolves keys independently of transfer policy. */
 export async function resolveRingRecipient(
   input: Readonly<{ client: RingRecipientClient; trackingRegistry: Address; to: RingAddress }>,
   context?: RequestContext,
@@ -56,7 +56,6 @@ export async function resolveRingRecipient(
   const row = verifyTrackingOpening(opening, root.root, member);
   const named = to.recipient.nullifierPublicKey;
   if (equalBytes(named, ZERO_NULLIFIER_PK)) {
-    if (row !== undefined) throw new RingError("RING_RECIPIENT_ENROLLED");
     return Object.freeze({ kind: "zeroKey", root });
   }
   if (row === undefined) throw new RingError("RING_RECIPIENT_NOT_ENROLLED");
