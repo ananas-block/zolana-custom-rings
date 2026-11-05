@@ -33,7 +33,7 @@ const (
 	recordEncode  = "audit.RecordOpening.Encode"
 	subjectRead   = "policy.subjectPool.read"
 	absentRead    = "policy.recordPool.read"
-	treeRoot      = "registry.CredentialLeaf.AssertInclusion"
+	treeRoot      = "registry.CredentialOpening.Open"
 	depositScreen = "policy.(*Policy).ScreenDeposit"
 	paymentRule   = "policy.paymentScreen.assert"
 )
@@ -159,7 +159,7 @@ func TestDepositAbsenceReadsTheFrameRoot(t *testing.T) {
 	d := ringdeposit.Spec{Count: 2, ZeroKeys: []int{1}, Policy: ringdeposit.SaltedBlock()}.Build(t)
 	d.Circuit.AddressRoot = 1
 	d.Rebind(t)
-	ringtest.RequireRefused(t, solveDeposit(d.Circuit), "gadget.AssertEqualWhen", "registry.AddressGap.AssertAbsent")
+	ringtest.RequireRefused(t, solveDeposit(d.Circuit), "gadget.AssertEqualWhen", "registry.CredentialOpening.Open")
 }
 
 // A witness off the record's opening refuses inside the encoder merges share.
