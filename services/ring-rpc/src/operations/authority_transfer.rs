@@ -85,7 +85,7 @@ impl<S: TransactionSource> SourceEnrollment for TrackedEnrollment<'_, S> {
             .solana_address()
             .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
             .to_bytes();
-        self.service.tracked_nullifier_key(&owner_key)
+        self.service.held_nullifier_key(&owner_key)
     }
 }
 
@@ -141,7 +141,7 @@ impl<S: TransactionSource> Hub<S> {
             .await?;
         // 3. The secret opens to the key the owner's record binds, it stays out of the store.
         let nullifier_secret = service
-            .tracked_nullifier_key(&owner.to_bytes())?
+            .held_nullifier_key(&owner.to_bytes())?
             .map(|key| spr_hasher::primitives::right_align(&key.secret()).into());
         let enrollment = shared.source.tracking_enrollment(ring, owner).await?;
         Ok(GetDelegateNotesResponse {
@@ -207,7 +207,7 @@ impl<S: TransactionSource> Hub<S> {
             .await?;
         Ok(GetListSaltResponse {
             list_salt: service
-                .tracked_list_salt(&owner.to_bytes())
+                .credential_list_salt(&owner.to_bytes())
                 .await?
                 .map(Hash),
         })
@@ -699,10 +699,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_list_writer_reads_the_salt_and_another_key_nothing() {
+    async fn a_list_writer_reads_the_credential_salt_and_another_key_nothing() {
         let (fixture, _prover) = served(Keypair::new_from_array([21; 32]).pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        fixture.escrow_notes(&wallet, 1);
+        fixture.enroll(&wallet, &NullifierKey::from_secret([11; 31]), 1);
         let writer = list_writer();
         let read = fixture
             .hub
@@ -717,12 +717,14 @@ mod tests {
             .await
             .expect_err("only a writer reads");
         assert_eq!(ErrorObjectOwned::from(refused).code(), -32226);
-        let unenrolled = Keypair::new_from_array([12; 32]);
+        // An owner held only by a tracking row has no credential, the salt reads nothing.
+        let tracked = Keypair::new_from_array([12; 32]);
+        fixture.escrow_notes(&tracked, 1);
         let none = fixture
             .hub
-            .list_salt(&salt_request(&fixture, &writer, unenrolled.pubkey()))
+            .list_salt(&salt_request(&fixture, &writer, tracked.pubkey()))
             .await
-            .expect("no row reads nothing");
+            .expect("a complete scan without the credential reads nothing");
         assert_eq!(none.list_salt, None);
     }
 

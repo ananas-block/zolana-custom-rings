@@ -16,6 +16,9 @@ use solana_rpc_client::{
     rpc_client::GetConfirmedSignaturesForAddress2Config,
 };
 use solana_signature::Signature;
+use solana_transaction_status_client_types::{
+    option_serializer::OptionSerializer, EncodedTransaction, UiMessage,
+};
 use spr_api::ZolanaApi;
 use spr_client::{
     rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
@@ -32,7 +35,7 @@ use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
 use zolana_ring_client::{
     history::HistoryPosition, program_data, ring_deposits_in, AsyncRingIndexer, AuditError,
     ConfirmedEventKind, MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError,
-    RingOrigin, StorageTip, TransactionOrigin,
+    RingOrigin, StorageTip, TransactionOrigin, ORIGIN_TRANSACTION_CONFIG,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
@@ -165,6 +168,14 @@ pub trait TransactionSource: Send + Sync {
         _request: GetTrackingRecordsRequest,
     ) -> impl Future<Output = Result<GetTrackingRecordsResponse, RingIndexerError>> + Send {
         async { Err(ClientError::Rpc("no tracking records".to_owned()).into()) }
+    }
+
+    /// Every account key of a finalized transaction.
+    fn transaction_accounts(
+        &self,
+        _signature: Signature,
+    ) -> impl Future<Output = Result<Vec<Address>, ClientError>> + Send {
+        async { Ok(Vec::new()) }
     }
 
     /// The owner's tracking account under the ring's pinned registry.
@@ -690,6 +701,48 @@ impl TransactionSource for ChainSource {
         request: GetTrackingRecordsRequest,
     ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
         self.indexer.get_tracking_records(request).await
+    }
+
+    /// A v1 message carries every key, a loaded address list is refused.
+    async fn transaction_accounts(
+        &self,
+        signature: Signature,
+    ) -> Result<Vec<Address>, ClientError> {
+        let mut config = ORIGIN_TRANSACTION_CONFIG;
+        config.commitment = Some(CommitmentConfig::finalized());
+        let transaction = self
+            .rpc
+            .client()
+            .get_transaction_with_config(&signature, config)
+            .await
+            .map_err(|error| ClientError::Rpc(error.to_string()))?
+            .transaction;
+        let EncodedTransaction::Json(encoded) = transaction.transaction else {
+            return Err(ClientError::Rpc(
+                "transaction is not JSON encoded".to_owned(),
+            ));
+        };
+        let UiMessage::Raw(message) = encoded.message else {
+            return Err(ClientError::Rpc(
+                "transaction message is not raw".to_owned(),
+            ));
+        };
+        let loaded = transaction.meta.map(|meta| meta.loaded_addresses);
+        if matches!(loaded, Some(OptionSerializer::Some(loaded)) if !loaded.writable.is_empty() || !loaded.readonly.is_empty())
+        {
+            return Err(ClientError::Rpc(
+                "a v1 transaction names loaded addresses".to_owned(),
+            ));
+        }
+        message
+            .account_keys
+            .iter()
+            .map(|key| {
+                key.parse().map_err(|_| {
+                    ClientError::Rpc("transaction account key is malformed".to_owned())
+                })
+            })
+            .collect()
     }
 
     async fn tracking_enrollment(

@@ -16,6 +16,10 @@ mod cosign;
 mod cosign_limits;
 #[path = "storage/cosign_usage.rs"]
 mod cosign_usage;
+#[path = "operations/credential_write.rs"]
+mod credential_write;
+#[path = "operations/credentials.rs"]
+mod credentials;
 #[path = "storage/database.rs"]
 mod database;
 #[path = "operations/enrollment_applier.rs"]
@@ -109,6 +113,12 @@ pub use cosign_limits::{
     TransferRead, WindowUsage,
 };
 pub use cosign_usage::Reservation;
+pub use credential_write::{
+    ActivationWait, AddressLeaf, AddressSnapshot, CredentialEvidence, CredentialStateRoot,
+    CredentialWriteBatch, CredentialWriteInput, CredentialWritePlan, CredentialWriteRefusal,
+    SaltedOwnerWrite, StateOpening, ADDRESS_TREE_HEIGHT, MAX_CREDENTIAL_WRITES,
+};
+pub use credentials::{CredentialLeaf, CredentialRefusal, HeldCredential};
 pub use database::{Store, STORE_CONNECTIONS};
 pub use enrollment_applier::{EnrollmentApplier, EnrollmentApplierParts};
 pub use error::{GrantRefusal, RingRpcError};

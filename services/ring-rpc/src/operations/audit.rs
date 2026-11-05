@@ -39,6 +39,7 @@ use zolana_ring_policy::Member;
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
+    credentials::{CredentialRefusal, CredentialScan, ScanEnd},
     error::{redacted, GrantRefusal, RingRpcError},
     grant_rows::{GrantPair, GrantRow},
     grants::{GrantQuery, Grants, ReadScope},
@@ -195,12 +196,17 @@ impl<S: TransactionSource> AuditService<S> {
         self.view_tag
     }
 
-    /// Opened from the verified tracking seal, never kept past one use.
-    pub(crate) fn tracked_nullifier_key(
+    /// Opened from the owner's credential, or its tracking seal without one, never kept past one use.
+    pub(crate) fn held_nullifier_key(
         &self,
         owner_key: &[u8; 32],
     ) -> Result<Option<NullifierKey>, RingRpcError> {
-        let Some(tracked) = self.shared.store(self.ring).tracked(owner_key) else {
+        let store = self.shared.store(self.ring);
+        let member = Member::owner_tag(owner_key)?;
+        if let Some(held) = store.credential(member.as_bytes()) {
+            return Ok(Some(held.nullifier_key(&self.auditor)?));
+        }
+        let Some(tracked) = store.tracked(owner_key) else {
             return Ok(None);
         };
         let key = tracked
@@ -213,26 +219,25 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(Some(key))
     }
 
-    /// An indexer's ephemeral key is unbound, only the tag binds the opened salt.
-    pub(crate) async fn tracked_list_salt(
+    /// `None` only after a scan reached its terminal page without the owner's credential.
+    pub(crate) async fn credential_list_salt(
         &self,
         owner_key: &[u8; 32],
     ) -> Result<Option<[u8; 32]>, RingRpcError> {
         let store = self.shared.store(self.ring);
-        self.refresh_tracked(&store).await?;
-        let Some(tracked) = store.tracked(owner_key) else {
-            return Ok(None);
+        let member = Member::owner_tag(owner_key)?;
+        // 1. The refresh holds the backfill lock, no other scan moves the position meanwhile.
+        let scanned = {
+            let mut backfill = store.backfill.lock().await;
+            self.refresh_credentials(&store, &mut backfill.credentials)
+                .await?
         };
-        let salt = tracked
-            .sealed
-            .open_list_salt(&self.auditor)
-            .map_err(|_| RingRpcError::TrackedKey)?;
-        if custom_ring_interface::domain::list_tag(&salt).map_err(|_| RingRpcError::TrackedKey)?
-            != tracked.list_tag
-        {
-            return Err(RingRpcError::TrackedKey);
+        // 2. A held credential answers whatever the scan end, a missing one only after a complete scan.
+        match (store.credential(member.as_bytes()), scanned) {
+            (Some(held), _) => Ok(Some(held.list_salt(&self.auditor)?)),
+            (None, ScanEnd::Complete) => Ok(None),
+            (None, ScanEnd::Partial) => Err(CredentialRefusal::Incomplete.into()),
         }
-        Ok(Some(salt))
     }
 
     /// `None` until the config exists, the config then fixes the key forever.
@@ -598,7 +603,7 @@ impl<S: TransactionSource> AuditService<S> {
 
     /// An unreadable secret reads as absent, the note stays `Unknown` until it opens.
     fn open_tracked_key(&self, owner_key: &[u8; 32]) -> Option<NullifierKey> {
-        self.tracked_nullifier_key(owner_key)
+        self.held_nullifier_key(owner_key)
             .inspect_err(|error| {
                 log::warn!("a tracked key failed to open because {}", redacted(error));
             })
@@ -610,8 +615,9 @@ impl<S: TransactionSource> AuditService<S> {
     async fn read_history(&self, store: &AuditStore, mode: RingMode) -> Result<(), RingRpcError> {
         let source = &self.shared.source;
         let limit = Page::new(None, None)?.limit();
-        let mut backfill = store.backfill.lock().await;
-        let position = self.load_tables(store, &mut backfill).await?;
+        let mut guard = store.backfill.lock().await;
+        let backfill = &mut *guard;
+        let position = self.load_tables(store, &mut backfill.history).await?;
         self.retry_unread(store, mode, limit).await?;
         let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
         for _ in 0..MAX_BACKFILL_PAGES {
@@ -631,6 +637,17 @@ impl<S: TransactionSource> AuditService<S> {
             if let Err(error) = self.refresh_tracked(store).await {
                 log::warn!(
                     "tracked key refresh of ring {} failed because {}",
+                    self.ring,
+                    redacted(&error)
+                );
+            }
+            // Read after the page, an enrollment finalized before a note on it is held unless the refresh stops early.
+            if let Err(error) = self
+                .refresh_credentials(store, &mut backfill.credentials)
+                .await
+            {
+                log::warn!(
+                    "credential refresh of ring {} failed because {}",
                     self.ring,
                     redacted(&error)
                 );
@@ -715,6 +732,22 @@ impl<S: TransactionSource> AuditService<S> {
             }
         }
         Ok(())
+    }
+
+    /// The caller holds the backfill lock that owns `position`.
+    async fn refresh_credentials(
+        &self,
+        store: &AuditStore,
+        position: &mut HistoryPosition,
+    ) -> Result<ScanEnd, RingRpcError> {
+        CredentialScan {
+            ring: self.ring,
+            auditor: &self.auditor,
+            source: &self.shared.source,
+            store,
+        }
+        .run(position)
+        .await
     }
 
     /// Every seal under the tracking registry's newest root, read again once that root moves.

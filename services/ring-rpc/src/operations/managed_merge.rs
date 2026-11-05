@@ -206,7 +206,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
         let ring = pass.service.ring();
         let owner_key = wallet.owner.to_bytes();
         // 1. The secret opens to the nullifier key the registry record binds.
-        let Some(nullifier_key) = pass.service.tracked_nullifier_key(&owner_key)? else {
+        let Some(nullifier_key) = pass.service.held_nullifier_key(&owner_key)? else {
             return Ok(None);
         };
         let notes = self.hub.shared().store(ring).spendable(SpendableNotes {
@@ -324,8 +324,12 @@ pub(crate) mod tests {
         GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
     };
 
+    use spr_indexer_api::{Context, TransactionEvents};
+    use spr_transaction::ShieldedTransaction;
+
     use super::*;
     use crate::{
+        credentials::{fixture::Enrollment, CredentialPda},
         database::Store,
         hub::ServiceIdentity,
         landing::{ChainOutcome, ChainSubmit, LatestBlockhash},
@@ -349,6 +353,8 @@ pub(crate) mod tests {
     pub(crate) struct EscrowRingSource {
         config: RingConfiguration,
         pub(crate) origins: Mutex<HashMap<Signature, RingOrigin>>,
+        /// Enroll events under the credential tag, each with its owner account.
+        pub(crate) enrollments: Mutex<Vec<(ShieldedTransaction, Address)>>,
     }
 
     fn unused<T>() -> Result<T, ClientError> {
@@ -360,11 +366,48 @@ pub(crate) mod tests {
             Ok(vec![list_writer().pubkey()])
         }
 
+        /// One terminal page of the enrollments after the position.
         async fn transactions_by_tag(
             &self,
-            _request: TransactionPage,
+            request: TransactionPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-            unused()
+            if request.tag != CredentialPda::of(&RING).expect("pda").view_tag() {
+                return unused();
+            }
+            let filters = request.position.filters();
+            let data = self
+                .enrollments
+                .lock()
+                .expect("enrollments")
+                .iter()
+                .filter(|(event, _)| filters.slot.contains(event.slot))
+                .map(|(event, _)| TransactionEvents {
+                    slot: event.slot,
+                    signature: event.tx_signature,
+                    events: vec![event.clone()],
+                })
+                .collect();
+            Ok(GetShieldedTransactionsByTagsResponse {
+                context: Context {
+                    slot: 1_000,
+                    block_time: 0,
+                },
+                output_tree_id: None,
+                data,
+                pagination_token: None,
+            })
+        }
+
+        async fn transaction_accounts(
+            &self,
+            signature: Signature,
+        ) -> Result<Vec<Address>, ClientError> {
+            let enrollments = self.enrollments.lock().expect("enrollments");
+            Ok(enrollments
+                .iter()
+                .filter(|(event, _)| event.tx_signature == signature)
+                .map(|(_, owner)| *owner)
+                .collect())
         }
 
         async fn ring_history(
@@ -629,6 +672,7 @@ pub(crate) mod tests {
                     delegate,
                 },
                 origins: Mutex::default(),
+                enrollments: Mutex::default(),
             };
             let store = match &relay {
                 Some(relay) => relay.store.clone(),
@@ -658,6 +702,32 @@ pub(crate) mod tests {
                 builder: Arc::default(),
                 chain: Arc::default(),
             }
+        }
+
+        /// A finalized Enroll of `wallet` at `slot`, sealed to the served auditor.
+        pub(crate) fn enroll(&self, wallet: &Keypair, key: &NullifierKey, slot: u8) {
+            let auditor = self
+                .hub
+                .service(Some(RING))
+                .expect("service")
+                .auditor_pubkey();
+            let enrollment = Enrollment {
+                ring: RING,
+                owner: wallet.pubkey(),
+                key,
+                list_salt: LIST_SALT,
+                auditor: &auditor,
+                signature: Signature::from([slot; 64]),
+                slot: u64::from(slot),
+            };
+            let event = enrollment.event_of(&enrollment.credential());
+            self.hub
+                .shared()
+                .source
+                .enrollments
+                .lock()
+                .expect("enrollments")
+                .push((event, wallet.pubkey()));
         }
 
         pub(crate) fn escrow_notes(&self, wallet: &Keypair, notes: u8) -> NullifierKey {

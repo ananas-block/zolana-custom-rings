@@ -7444,11 +7444,15 @@ dependencies = [
 name = "spr-program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
+ "pinocchio 0.11.2",
  "solana-address 2.6.1",
  "spr-hasher",
  "spr-instruction",
  "spr-interface",
+ "spr-tree",
  "spr-zk-dsl",
+ "thiserror 2.0.20",
  "wincode",
 ]
 
@@ -9299,8 +9303,10 @@ dependencies = [
  "spr-instruction",
  "spr-interface",
  "spr-keypair",
+ "spr-program",
  "spr-rpc-http",
  "spr-transaction",
+ "spr-tree",
  "thiserror 2.0.20",
  "tokio",
  "tower",
