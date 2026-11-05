@@ -175,7 +175,7 @@ func TestPooledPolicySharesAbsentPredecessor(t *testing.T) {
 	world := poolWorld(ringpolicy.SectionShape{Outputs: 2}, true, false)
 	world.Own, world.Curator = map[int64]ringpolicy.Record{}, map[int64]ringpolicy.Record{}
 	world.Table.Rules = []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectSender, ringregistry.FrozenBit), ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit), ringpolicy.Forbid(policy.SubjectAsset, ringregistry.BlockBit)}
-	world.Records = policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 5}
+	world.Records = policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 8}
 	witness := world.Build(t)
 	c, err := ringpolicy.NewSectionCircuit(ringpolicy.SectionShape{Outputs: 2, Records: world.Records})
 	if err != nil {
