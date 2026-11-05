@@ -57,7 +57,7 @@ const RING_RPC: Tool = Tool::new(
     "rerun `zolana-ring localnet`, it downloads the ring rpc of the release",
 );
 /// `serve` below passes no fee payer, the operator turns the relay on.
-const RELAY_OFF: &str = "off, relay enrollment needs ring-rpc serve with --fee-payer-key-file, --store-url, --prover-url, --relay-budget-lamports and --relay-signer-budget-lamports, see services/ring-rpc/README.md";
+const RELAY_OFF: &str = "off, relay enrollment, buffered frames and token account creates need ring-rpc serve with --fee-payer-key-file, --store-url, --prover-url, --relay-budget-lamports and --relay-signer-budget-lamports, see services/ring-rpc/README.md";
 const READY_TIMEOUT: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_secs(2);
 

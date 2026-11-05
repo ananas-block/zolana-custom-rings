@@ -35,6 +35,7 @@ Breaking
 
 Added
 
+- `RingRpcRefusal.budgetUnset` names `-32210`, a Ring RPC whose operator set no relay budget refuses a relayed enrollment, a buffered frame and a token account create with it.
 - `prepareRingTransferRelay`, `prepareRingExitRelay`, `prepareRingEntryRelay`, `prepareRingWithdrawalRelay`, `prepareRingMergeRelay` and `prepareEnrollRelay` send an operation through the Ring RPC relay, and `createRingTransferSubmission`, `createRingExitSubmission`, `createRingEntrySubmission`, `createRingWithdrawalSubmission` and `createRingDepositSubmission` prove and send one with no relay.
 - `BufferedFrame` and `withBufferedSettlement` settle a frame past one transaction from a buffer its payer writes, `closeAbandonedFrameBuffers` returns the rent of an abandoned buffer, and `TransactionFit` and `decideAddressCeiling` report and refuse a transaction before any proof.
 - `CoSignerApproval` with `CoSignerRule` and `ApprovalOpening` lets an outside co-signer read the proven bits or exact totals under `withExactApproval`, `OwnerApproval` with `RelayTransferTerms` lets a public owner check its own slots, and `FunderApproval` with `RelayFunderTerms` lets a public funder check its deposit legs.

@@ -171,7 +171,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     });
     info!("service pubkey {}", hub.service_pubkey());
     match hub.relay() {
-        None => warn!("relay off, relay enrollment needs --fee-payer-key-file and a relay budget"),
+        None => warn!("relay off, relay enrollment, buffered frames and token account creates need --fee-payer-key-file and a relay budget"),
         Some(relay) => {
             info!("relay fee payer {}", relay.fee_payer());
             match relay_budget.is_set() {
@@ -180,7 +180,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     relay_budget.total_lamports, relay_budget.signer_lamports
                 ),
                 false => warn!(
-                    "relay enrollment off, set --relay-budget-lamports and --relay-signer-budget-lamports and fund the fee payer to turn it on"
+                    "relay enrollment, buffered frames and token account creates off, set --relay-budget-lamports and --relay-signer-budget-lamports and fund the fee payer to turn them on"
                 ),
             }
         }

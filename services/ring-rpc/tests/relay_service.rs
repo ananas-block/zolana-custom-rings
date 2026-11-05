@@ -388,7 +388,8 @@ fn enrollment_under(request: EnrollmentRequest<'_>) -> PrepareRelayRequest {
 }
 
 /// Rent and one signature for each of the payer and the owner.
-const ENROLLMENT_LAMPORTS: u64 = RENT_LAMPORTS + 2 * 5_000;
+const ENROLLMENT_LAMPORTS: u64 = RENT_LAMPORTS + ENROLLMENT_FEES;
+const ENROLLMENT_FEES: u64 = 2 * 5_000;
 
 /// A wallet with no SOL enrolls, the relay pays and the owner's signature authorizes.
 #[tokio::test]
@@ -542,6 +543,55 @@ async fn an_enrollment_holds_its_reservation_until_it_settles() {
         .prepare(&enrollment(&owner, vec![6, 2], quote))
         .await;
     assert!(next.is_ok(), "the share returned, got {next:?}");
+}
+
+/// An enrolled owner's rotation creates no account, the budget pays its fees alone.
+#[tokio::test]
+async fn a_settled_rotation_spends_only_its_fees_from_the_budget() {
+    let fixture = Fixture::with_budget(ENROLLMENT_LAMPORTS).await;
+    let owner = Keypair::new_from_array([42; 32]);
+    let (authorization, _) = custom_ring_interface::tracking::TrackingAuthorization::find_address(
+        &TRACKING_REGISTRY,
+        &owner.pubkey(),
+    );
+    fixture
+        .chain
+        .filled
+        .lock()
+        .expect("filled")
+        .push(authorization);
+    let remaining = |committed: i64| ENROLLMENT_LAMPORTS as i64 - committed;
+    let before = remaining(fixture.committed().await);
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    let step = fixture
+        .prepare(&enrollment(&owner, vec![6, 1], quote))
+        .await
+        .expect("the rotation");
+    let RelayStep::SignMessage { relay_id, message } = step else {
+        panic!("the owner signs its rotation, got {step:?}");
+    };
+    assert_eq!(fixture.outstanding().await, ENROLLMENT_FEES as i64);
+
+    let status: RelayStatus = fixture
+        .call(
+            SUBMIT_RELAY,
+            SubmitRelayRequest {
+                relay_id,
+                signer: owner.pubkey().into(),
+                signature: owner.sign_message(&message.0).into(),
+            },
+        )
+        .await;
+
+    assert!(
+        matches!(status, RelayStatus::Confirmed { .. }),
+        "{status:?}"
+    );
+    assert_eq!(fixture.outstanding().await, 0);
+    assert_eq!(
+        remaining(fixture.committed().await),
+        before - ENROLLMENT_FEES as i64
+    );
 }
 
 /// The signer's share and the total each refuse at funding.

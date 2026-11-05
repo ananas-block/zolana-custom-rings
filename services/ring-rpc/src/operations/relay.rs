@@ -675,7 +675,10 @@ impl Relay {
             mut instructions,
             rent: setup_rent,
         } = self.missing_setup(&setup).await?;
-        let landing_rent = setup_rent.saturating_add(self.created_rent(&payload).await?);
+        let landing_rent = match self.created_rent(&payload).await? {
+            Some(created) => Some(setup_rent.saturating_add(created)),
+            None => (setup_rent > 0).then_some(setup_rent),
+        };
         self.reserve_and_upload(RelaySpend {
             proven: &mut proven,
             lease,
@@ -843,7 +846,7 @@ impl Relay {
         } = spend;
         // 1. The transport is decided, a frame the relay cannot carry costs nothing.
         let Some(frame) = self.wide_frame(proven, setup)? else {
-            if landing_rent > 0 {
+            if let Some(landing_rent) = landing_rent {
                 let fee = message_fee_of(&proven.instruction, self.fee_payer());
                 self.fund(Fund {
                     lease: lease.ok_or(RelayError::OwnerSignature)?,
@@ -864,6 +867,7 @@ impl Relay {
         // 2. The row funds under the lease, the stored proof and buffer identity commit with the charge. A
         // crash from here on leaves a row that names the buffer to close.
         let cost = self.frame_cost(proven, &frame, writes.len()).await?;
+        let landing_rent = landing_rent.unwrap_or(0);
         let held = self
             .fund(Fund {
                 lease,
@@ -928,16 +932,28 @@ impl Relay {
         Ok(MissingSetup { instructions, rent })
     }
 
-    /// A rotation creates no account but reserves the rent of a first enrollment, the total keeps it.
-    async fn created_rent(&self, payload: &RelayPayload) -> Result<u64, RingRpcError> {
-        match payload {
-            RelayPayload::Enroll(_) => {
+    /// Every enrollment holds its fee, only a first enrollment reserves the tracking authorization rent.
+    /// No storage instruction closes the account, a rotation found enrolled lands with no create.
+    async fn created_rent(&self, payload: &RelayPayload) -> Result<Option<u64>, RingRpcError> {
+        let RelayPayload::Enroll(enrollment) = payload else {
+            return Ok(None);
+        };
+        let (authorization, _) =
+            TrackingAuthorization::find_address(&enrollment.tracking_registry, &enrollment.owner);
+        // The same read as the proof check, an account with no data still takes the create.
+        let enrolled = self
+            .chain
+            .account_data(authorization)
+            .await?
+            .is_some_and(|data| !data.is_empty());
+        Ok(Some(match enrolled {
+            true => 0,
+            false => {
                 self.chain
                     .rent_exempt_lamports(TrackingAuthorization::SIZE)
-                    .await
+                    .await?
             }
-            RelayPayload::Transfer(_) | RelayPayload::Deposit(_) | RelayPayload::Merge(_) => Ok(0),
-        }
+        }))
     }
 
     /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
@@ -1539,7 +1555,8 @@ struct RelaySpend<'a> {
     proven: &'a mut ProvenRelay,
     lease: Option<Lease>,
     setup: &'a [Instruction],
-    landing_rent: u64,
+    /// `None` holds nothing for an inline message, `Some(0)` still holds its fee.
+    landing_rent: Option<u64>,
 }
 
 struct StagedAttempt<'a> {
