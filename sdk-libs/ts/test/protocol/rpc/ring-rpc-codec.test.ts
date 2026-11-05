@@ -21,6 +21,8 @@ import {
   encodeRefuseEnrolmentRequest,
   encodeSetReaderGrantRequest,
 } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
+import { depositRequestDigest } from "../../../src/protocol/ring-rpc/relay-deposit-inputs.js";
+import { mergeRequestDigest } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
 import { P256ReaderKey } from "../../../src/operations/management/reader-access.js";
 import {
   RingAuthorityTransferRequest,
@@ -112,13 +114,35 @@ describe("relay_enroll_inputs.json", () => {
         ),
       ),
     ).toBe(vector["delegate_wire"]);
+    expect(
+      JSON.stringify(
+        encodePrepareRelayRequest(
+          request({ operation: "deposit", proofInputs, depositorSignature: signature }),
+        ),
+      ),
+    ).toBe(vector["deposit_wire"]);
+    expect(
+      JSON.stringify(
+        encodePrepareRelayRequest(
+          request({ operation: "merge", proofInputs, ownerSignature: signature }),
+        ),
+      ),
+    ).toBe(vector["merge_wire"]);
   });
 
-  it("refuses an enroll or delegate intent with no signature", () => {
+  it("hashes the digests a depositor and an owner sign as Rust", () => {
+    const encoded = Uint8Array.of(3, 4, 5);
+    expect(hex(depositRequestDigest(encoded))).toBe(vector["deposit_request_digest"]);
+    expect(hex(mergeRequestDigest(encoded))).toBe(vector["merge_request_digest"]);
+  });
+
+  it("refuses an intent with no signature", () => {
     const missing = undefined as unknown as Signature;
     for (const intent of [
       { operation: "enroll", proofInputs, ownerSignature: missing },
       { operation: "delegate", proofInputs, delegateSignature: missing },
+      { operation: "deposit", proofInputs, depositorSignature: missing },
+      { operation: "merge", proofInputs, ownerSignature: missing },
     ] as const)
       expect(() => encodePrepareRelayRequest(request(intent))).toThrow();
   });

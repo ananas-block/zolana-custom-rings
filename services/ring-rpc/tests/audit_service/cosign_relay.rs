@@ -6,9 +6,9 @@ use sea_orm::{ConnectionTrait, Statement};
 use solana_instruction::AccountMeta;
 use spr_keypair::{ShieldedKeypair, SigningKey};
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayId, RelayProofInputs,
-    RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest, GET_RELAY_QUOTE,
-    GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayEnrollInputs, RelayId,
+    RelayProofInputs, RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest,
+    GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
 };
 use zolana_ring_policy::{AssetLimits, MintPolicy};
 use zolana_ring_rpc::{
@@ -135,6 +135,10 @@ impl RelayProver for FramedProver {
         parties: RelayParties,
     ) -> Result<RelayProofInputs, RingRpcError> {
         self.inner.seal_delegate(seal, parties).await
+    }
+
+    async fn check_enrollment(&self, enrollment: &RelayEnrollInputs) -> Result<(), RingRpcError> {
+        self.inner.check_enrollment(enrollment).await
     }
 }
 
@@ -315,12 +319,7 @@ impl CappedRelay {
             .module
             .call(
                 PREPARE_RELAY,
-                as_object(deposit_request(
-                    self.quote.clone(),
-                    RING,
-                    depositor.pubkey(),
-                    amount,
-                )),
+                as_object(deposit_request(self.quote.clone(), RING, depositor, amount)),
             )
             .await
             .expect("prepared deposit");

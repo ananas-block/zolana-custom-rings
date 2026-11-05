@@ -298,11 +298,17 @@ impl RingDeposit<'_> {
             audit_ephemeral_key: note.encryption.ephemeral_sk.clone(),
         }
         .encode()?;
+        let proof_inputs = ProofInputBytes::new(proof_inputs);
+        let depositor_signature = self
+            .payer
+            .try_sign_message(&proof_inputs.deposit_request_digest())?
+            .into();
         Ok(PreparedRelay::new(PrepareRelayRequest {
             ring: SerializablePubkey(self.ring.program_id()),
             quote,
             intent: RelayIntent::Deposit {
-                proof_inputs: ProofInputBytes::new(proof_inputs),
+                proof_inputs,
+                depositor_signature,
             },
             co_signers: Vec::new(),
         })

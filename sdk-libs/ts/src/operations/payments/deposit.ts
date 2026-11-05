@@ -1,4 +1,9 @@
-import { getBase64Decoder, type Instruction } from "@solana/kit";
+import {
+  getBase58Decoder,
+  getBase64Decoder,
+  type Instruction,
+  type MessagePartialSigner,
+} from "@solana/kit";
 
 import { type RingProver } from "../../rpc/ports.js";
 import { encodeRingDepositPlaintext } from "../../protocol/codec/ring-deposit-plaintext.js";
@@ -19,6 +24,7 @@ import type {
   Bytes32,
   RequestContext,
   RingAssetDeposit,
+  Signature,
   Transaction,
 } from "@heliuslabs/zolana/interface";
 import {
@@ -72,10 +78,14 @@ import { type RingKeys } from "../../state/ring-keys.js";
 import { RingAddress, type RingPaymentRequest } from "../../crypto/keys/ring-address.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
 import type { ViewingHistory } from "../../state/viewing-history.js";
-import { encodeRelayDepositInputs } from "../../protocol/ring-rpc/relay-deposit-inputs.js";
+import {
+  depositRequestDigest,
+  encodeRelayDepositInputs,
+} from "../../protocol/ring-rpc/relay-deposit-inputs.js";
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
-import { expectedDeposit } from "../../rpc/relay-message.js";
+import { expectedDeposit, mismatch } from "../../rpc/relay-message.js";
+import { signMessage } from "../../rpc/ring-rpc.js";
 import { ringIntentMismatch } from "../workflow/selection.js";
 import { depositRootRead, ringRegistrySlots } from "../workflow/ring-reads.js";
 import { RingTransactionSubmission, type RingSubmissionAttempt } from "../workflow/submission.js";
@@ -124,6 +134,8 @@ export interface RingDepositParams {
 
 /** Rust `RingDeposit::prepare_relay`. */
 export interface RingDepositRelayParams extends DepositSealingParams {
+  /** The depositor's key, Ring RPC proves nothing for an unsigned request. */
+  readonly depositorSigner: MessagePartialSigner;
   readonly quote: RelayQuote;
   readonly approve?: ApprovalHandler;
 }
@@ -280,6 +292,8 @@ export class PreparedRingDeposit {
     let prepared: PreparedRingDeposit | undefined;
     let payload: Uint8Array | undefined;
     try {
+      if (params.depositorSigner.address !== signerAddress(params.depositor))
+        throw mismatch("Signer");
       const sealing = await depositSealing(params, context);
       checkDepositSigners(sealing, [params.quote.feePayer, params.depositor]);
       prepared = await PreparedRingDeposit.#seal({
@@ -310,6 +324,9 @@ export class PreparedRingDeposit {
         blindingSecret: prepared.#blindingSecret,
         auditEphemeralKey: prepared.#ephemeralSecret,
       });
+      const depositorSignature = getBase58Decoder().decode(
+        await signMessage(params.depositorSigner, depositRequestDigest(payload)),
+      ) as Signature;
       const expected = await expectedDeposit({
         ringProgramId: prepared.#ringProgramId,
         feePayer: params.quote.feePayer,
@@ -325,6 +342,7 @@ export class PreparedRingDeposit {
             intent: {
               operation: "deposit",
               proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+              depositorSignature,
             },
           },
           expected,

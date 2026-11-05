@@ -46,6 +46,7 @@ export const RingRpcRefusal = Object.freeze({
   delegateSignature: -32206,
   allowance: -32207,
   liveAttempt: -32208,
+  depositorSignature: -32209,
   notDelegate: -32220,
   escrowUnserved: -32221,
   sourceUnescrowed: -32222,
