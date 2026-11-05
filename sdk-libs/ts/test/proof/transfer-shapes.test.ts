@@ -38,19 +38,32 @@ function row(outputs: number, inputs: number, entry: boolean): TransferShape {
   return first;
 }
 
-describe("the sibling keys", () => {
-  it("serves eight inputs at sixteen outputs and four at an eight output entry", () => {
-    const sixteen = ringTransferCircuit(fittedSpend(loaded(row(16, 8, false))));
-    expect(sixteen).toMatchObject({ outputs: 16, class: 8, withdrawals: 8, owners: 8, wide: true });
-    expect(transferPoolCapacity(sixteen!)).toEqual({ own: 83, curator: 83, tracking: 32 });
-    const entry = ringTransferCircuit(fittedSpend(loaded(row(8, 4, true))));
-    expect(entry).toMatchObject({ outputs: 8, class: 4, withdrawals: 4, owners: 4, entry: true });
-    expect(transferPoolCapacity(entry!)).toEqual({ own: 43, curator: 43, tracking: 16 });
-    expect(transferKeys()).toHaveLength(12);
+describe("the entry keys", () => {
+  it("serves five inputs at an eight output entry and eight on the wide entry key", () => {
+    const five = ringTransferCircuit(fittedSpend(loaded(row(8, 5, true))));
+    expect(five).toMatchObject({
+      outputs: 8,
+      class: 5,
+      withdrawals: 4,
+      owners: 4,
+      entry: true,
+    });
+    expect(transferPoolCapacity(five!)).toEqual({ own: 41, curator: 41, tracking: 15 });
+    const wide = ringTransferCircuit(fittedSpend(loaded(row(8, 8, true))));
+    expect(wide).toMatchObject({
+      outputs: 8,
+      class: 8,
+      withdrawals: 32,
+      owners: 8,
+      entry: true,
+      wide: true,
+    });
+    expect(transferPoolCapacity(wide!)).toEqual({ own: 83, curator: 83, tracking: 38 });
+    expect(transferKeys()).toHaveLength(9);
   });
 
-  it("refuses a spend past the sibling", () => {
-    const past = { ...loaded(row(16, 8, false)), inputs: 9 };
+  it("refuses an entry past the wide entry key", () => {
+    const past = { ...loaded(row(8, 8, true)), inputs: 9 };
     expect(ringTransferCircuit(fittedSpend(past))).toBeUndefined();
   });
 });

@@ -680,7 +680,7 @@ describe("policy ring", () => {
     throw new Error("proved past the size check");
   };
 
-  it("refuses an in-proof owner shape past one transaction on a co-signed policy ring before any proof", async () => {
+  it("refuses an unkeyed in-proof owner shape on a co-signed policy ring before any proof", async () => {
     for (const [inputs, outputs] of [[5, 16]] as const) {
       const signing = SigningKey.generate();
       const sender = ShieldedKeypair.fromKeypair(signing);
@@ -711,7 +711,7 @@ describe("policy ring", () => {
             ...fixture.client,
             proveAnonymousRingTransact: unreachableProver,
           }),
-      ).rejects.toThrow(ringError("RING_TRANSFER_TOO_WIDE", { inputs, outputs }));
+      ).rejects.toThrow(ringError("RING_CATALOG_KEY_MISSING"));
       expect(fixture.ringRequests).toHaveLength(0);
       expect(fixture.sppCalls).toHaveLength(0);
     }
