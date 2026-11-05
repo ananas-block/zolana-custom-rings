@@ -61,9 +61,15 @@ pub fn deposit_instruction(
     registry: Option<u64>,
     deposit: &RingDepositIxData,
 ) -> Instruction {
+    // The deposit statement needs K at least the deposit count, the keyed capacities are powers of two.
+    let key_capacity = deposit
+        .deposits
+        .len()
+        .clamp(1, MAX_RING_DEPOSIT_AUDIT_SLOTS)
+        .next_power_of_two();
     let prefix = DepositPrefix {
         tag: tag::DEPOSIT,
-        key_capacity: 1,
+        key_capacity: u8::try_from(key_capacity).unwrap(),
         proof: Zeroable::zeroed(),
         credential_read: custom_ring_interface::CredentialRead::new(0, &[0]).unwrap(),
         own_revision: registry.unwrap_or_default().into(),

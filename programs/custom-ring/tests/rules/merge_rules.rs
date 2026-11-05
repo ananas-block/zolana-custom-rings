@@ -115,10 +115,8 @@ fn a_nonzero_merge_binds_a_retained_credential_state_root_on_every_ring() {
         let mut data = merge_data(MergeRingAuthority::Ring);
         data.credential_read = CredentialRead::new_state(u16::MAX);
         let stale = merge_instruction(&ring, &data, None);
-        refused(
-            ring.send(stale, &[]),
-            CustomRingError::InvalidCredentialRoots,
-        );
+        // The tree authenticates first, an index its history does not serve is a stale read the SDK reproves.
+        refused(ring.send(stale, &[]), CustomRingError::RootNotServed);
         let served = ring_merge(&ring);
         reaches_verification(ring.send(served, &[]));
     }
