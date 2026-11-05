@@ -5,7 +5,6 @@ use std::collections::{HashMap, HashSet};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_hasher::primitives::hash_bytes;
-use spr_keypair::NullifierKey;
 use spr_transaction::instructions::merge::MergeSeed;
 
 use crate::{
@@ -111,12 +110,9 @@ impl MergeLedger {
 }
 
 impl AuditedMergeOutput {
-    pub fn opening(
-        &self,
-        ring: Address,
-        nullifier_key: &NullifierKey,
-    ) -> Result<Option<KnownUtxo>, AuditError> {
-        let inherited = KnownUtxo {
+    /// The record's opening, `None` unless it rebuilds the published commitment.
+    pub fn opening(&self, ring: Address) -> Result<Option<KnownUtxo>, AuditError> {
+        let opening = KnownUtxo {
             owner_key: self.owner_key,
             owner: self.owner,
             asset: self.asset,
@@ -127,15 +123,7 @@ impl AuditedMergeOutput {
             ring_data_hash: self.ring_data_hash,
             tree_id: self.tree_id,
         };
-        let opening = KnownUtxo {
-            owner: UtxoOwner::Keyed {
-                nullifier_pk: nullifier_key.pubkey()?,
-            },
-            ..inherited
-        };
-        Ok((opening.owner_hash()? == inherited.owner_hash()?
-            && opening.commitment(Some(ring))? == self.commitment)
-            .then_some(opening))
+        Ok((opening.commitment(Some(ring))? == self.commitment).then_some(opening))
     }
 }
 

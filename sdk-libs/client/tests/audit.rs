@@ -693,12 +693,10 @@ fn a_deposited_note_opens_and_a_merge_record_resolves_alone_in_the_ledger() {
     );
     assert_eq!(output.seed, MERGE_SEED);
     let opened = output
-        .opening(
-            transfer.ring,
-            &spr_keypair::NullifierKey::from_secret([0; 31]),
-        )
-        .unwrap();
-    assert_eq!(opened, None, "another owner's key opens nothing");
+        .opening(transfer.ring)
+        .unwrap()
+        .expect("the record rebuilds its commitment");
+    assert_eq!(opened.amount, spent[1].utxo.amount);
 }
 
 fn page_after(pages: &[Vec<ShieldedTransaction>], token: Option<PaginationToken>) -> usize {
