@@ -185,5 +185,7 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_FIT_UNPARSED_FRAME",
   "RING_FRAME_BUFFER_CLOSE",
   "RING_HELD_KEY_NOT_IN_HISTORY",
+  "RING_VIEWING_HISTORY_NOT_CURRENT",
+  "RING_VIEWING_KEY_NOT_PUBLISHED",
 ]
 `;

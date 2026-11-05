@@ -592,6 +592,13 @@ export {
   prepareEnrollmentRelay,
 } from "../operations/management/enroll-relay.js";
 export {
+  confirmViewingKey,
+  rotateViewingKey,
+  updateViewingKey,
+  type ViewingKeyUpdateClient,
+  type ViewingRotation,
+} from "../operations/management/viewing-rotation.js";
+export {
   TRACKING_CAPACITY,
   TRACKING_EMPTY_ROOT,
   TRACKING_GRACE_SLOTS,

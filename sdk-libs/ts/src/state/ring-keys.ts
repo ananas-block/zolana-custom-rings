@@ -5,9 +5,9 @@ import { addressBytes, bytesKey, equalBytes, isCanonicalField } from "@heliuslab
 import {
   KeypairError,
   NullifierKey,
+  ShieldedAddress,
   ViewingKey,
   X25519PublicKey,
-  type ShieldedAddress,
   type ShieldedKeypair,
   type ViewTag,
 } from "@heliuslabs/zolana/keypair";
@@ -128,16 +128,19 @@ export class LocalRingKeys implements RingKeys {
   readonly #tags: ViewingKeyHolder;
   /** The identity key, `list_tag` is final so a rotation keeps the salt. */
   readonly #listRoot: ViewingKey;
+  readonly #nullifier: NullifierKey;
   #destroyed = false;
 
   private constructor(
     keys: LocalShieldedKeys,
     viewing: readonly ViewingKey[],
     listRoot: ViewingKey,
+    nullifier: NullifierKey,
   ) {
     this.#keys = keys;
     this.#tags = new ViewingKeyHolder(viewing);
     this.#listRoot = listRoot;
+    this.#nullifier = nullifier;
   }
 
   /** Copies the keypair's roles, the keypair stays the caller's. */
@@ -146,6 +149,7 @@ export class LocalRingKeys implements RingKeys {
       LocalShieldedKeys.fromKeypair(keypair),
       [keypair.viewingKey()],
       keypair.viewingKey(),
+      keypair.nullifierKey(),
     );
   }
 
@@ -163,7 +167,24 @@ export class LocalRingKeys implements RingKeys {
       LocalShieldedKeys.fromKeys(input),
       input.viewingKeys.map((key) => key.clone()),
       input.listRoot.clone(),
+      input.nullifierKey.clone(),
     );
+  }
+
+  /** `next` becomes current and every earlier key stays held, the receiver and `next` stay the caller's. */
+  rotate(next: ViewingKey): LocalRingKeys {
+    this.#checkUsable();
+    const address = this.address();
+    return LocalRingKeys.fromKeys({
+      address: ShieldedAddress.fromPublicKeys(
+        address.signingPublicKey,
+        address.nullifierPublicKey,
+        next.publicKey(),
+      ),
+      viewingKeys: [next, ...this.viewingPublicKeys().map((key) => this.#tags.held(key))],
+      listRoot: this.#listRoot,
+      nullifierKey: this.#nullifier,
+    });
   }
 
   address(): ShieldedAddress {
@@ -249,6 +270,7 @@ export class LocalRingKeys implements RingKeys {
     this.#keys.destroy();
     this.#tags.destroy();
     this.#listRoot.destroy();
+    this.#nullifier.destroy();
   }
 
   // An empty request touches no key, the flag refuses it all the same.
