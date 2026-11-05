@@ -1137,6 +1137,142 @@
       "missing_allocated_mapping": "Permanent source consistency error.",
       "server_cost": "Filtered program account reads can scan the server index. The client lookup budget does not bound server work.",
       "resume": "Persist the exact page query, cursor and next candidate offset across budget pauses."
+    },
+    "rust_recovery": {
+      "owner": "recovery-rust",
+      "full_scan": "AnonymousSync::new(keys, assets).with_full_scan(ring).fetch_wallet(indexer, wallet)",
+      "page_budget": "with_page_budget(pages) -> Result<Self>",
+      "asset_source": "with_asset_rpc(&dyn AsyncRpc)",
+      "scan_status": "AnonymousScan::status() -> RecoveryStatus",
+      "scan_target": "AnonymousScan::target_slot() -> Option<u64>",
+      "states": [
+        "Paused",
+        "Complete"
+      ],
+      "wallet_status": "recovery_status()",
+      "funding_inventory": "funding_notes()",
+      "funding_check": "require_complete() -> Result<(), AnonymousError>",
+      "unchecked_state": "NoteState::PendingSpendCheck",
+      "legacy_scans": "History only fetch and full_scan remain partial capable. Absorption refuses a legacy scan while a durable session is active.",
+      "incomplete_error": "AnonymousError::SyncIncomplete"
+    },
+    "spend_coverage": {
+      "owner": "projection-bounds",
+      "method": "getSpendCoverage",
+      "request_cursor_field": "cursor",
+      "response_cursor_field": "cursor",
+      "cursor_type": "optional Base64String, omitted when absent",
+      "attestation_domain": "zolana/ring-rpc-spend-coverage",
+      "appended_signed_line": "cursor: <base64 or empty>",
+      "cursor_version": 1,
+      "cursor_bytes": 240,
+      "cursor_layout": [
+        {
+          "name": "version",
+          "bytes": 1
+        },
+        {
+          "name": "unresolved_state",
+          "bytes": 1
+        },
+        {
+          "name": "unread_state",
+          "bytes": 1
+        },
+        {
+          "name": "fault_state",
+          "bytes": 1
+        },
+        {
+          "name": "ring",
+          "bytes": 32
+        },
+        {
+          "name": "unresolved_nullifier",
+          "bytes": 32
+        },
+        {
+          "name": "unread_slot",
+          "bytes": 8,
+          "encoding": "little endian"
+        },
+        {
+          "name": "unread_signature",
+          "bytes": 64
+        },
+        {
+          "name": "unread_event",
+          "bytes": 2,
+          "encoding": "little endian"
+        },
+        {
+          "name": "fault_nullifier",
+          "bytes": 32
+        },
+        {
+          "name": "fault_signature",
+          "bytes": 64
+        },
+        {
+          "name": "fault_event",
+          "bytes": 2,
+          "encoding": "little endian"
+        }
+      ],
+      "cursor_states": {
+        "Start": 0,
+        "After": 1,
+        "Done": 2
+      },
+      "cursor_refusals": [
+        "unknown version",
+        "unknown state",
+        "wrong ring",
+        "wrong byte length"
+      ],
+      "streams": {
+        "unresolvedReal": {
+          "order": [
+            "nullifier"
+          ]
+        },
+        "unreadable": {
+          "order": [
+            "slot",
+            "signature",
+            "event"
+          ]
+        },
+        "integrityFaults": {
+          "order": [
+            "nullifier",
+            "signature",
+            "event"
+          ]
+        }
+      },
+      "page_limit_constant": "AUDIT_PAGE_LIMIT",
+      "max_rows_per_array": 100,
+      "max_storage_rows_per_stream": 101,
+      "continuation": "Strict keyset continuation preserves independent stream positions. A completed stream remains empty.",
+      "completion": "The response omits cursor only when all streams reach Done.",
+      "authorization": "Each page checks the current ring authority and signed cursor.",
+      "consistency": "One database snapshot per page. Later pages read live diagnostic state.",
+      "stored_cursor_state": false,
+      "cursor_ttl": null
+    },
+    "managed_merge_selection": {
+      "owner": "projection-bounds",
+      "first_pass": "Collect scalar asset totals, entry counts and eligible counts per tree.",
+      "second_pass": "Retain the smallest nonzero keyed entries on the selected tree, up to the selected width for each asset.",
+      "entry_retention": "No candidate entries remain for an unselected tree.",
+      "asset_reads": "No repeated owner scan for each selected asset.",
+      "max_owner_passes": 2,
+      "entrypoint": "AuditStore::merge_plans(SpendableNotes, &HashMap<Address, MergeTarget>)",
+      "read_scope": "One database read snapshot or one memory read guard covers both passes and batched spend checks.",
+      "tree_choice": "Select the fullest tree, with the lowest tree identifier on ties.",
+      "width": "Apply MergeTarget to all eligible source counts and amounts, capped by MERGE_DEFAULT_INPUT_COUNT.",
+      "memory_bound": "O(distinct asset and tree counters + selected assets * MERGE_DEFAULT_INPUT_COUNT + OWNER_ROW_BATCH)"
     }
   }
 }
