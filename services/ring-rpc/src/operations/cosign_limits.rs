@@ -1198,6 +1198,11 @@ mod tests {
             .settle(CoSignSettlement::Failed(first_hold))
             .await
             .expect("late failure");
+        assert_eq!(
+            store_rows(&store).await,
+            2,
+            "no approver's row settles alone"
+        );
         assert_over_limit(&second, &request(2, 41)).await;
         signed(&second, &request(2, 40)).await;
     }

@@ -340,8 +340,10 @@ const FAULT_TRIGGER: &str = "relay_store_fault";
 enum StoreFault {
     /// A NOT NULL refusal proves the update never committed.
     UpdateRefused,
-    /// `RAISE(FAIL)` keeps the inserted row and still returns an error.
-    InsertReplyLost,
+    /// The attempt's transaction rolls the insert back.
+    InsertFailed,
+    /// `RAISE(FAIL)` keeps the updated row and still returns an error.
+    UpdateReplyLost,
     ReservationReleaseRefused,
 }
 
@@ -352,9 +354,13 @@ impl StoreFault {
                 "BEFORE UPDATE ON relay_relays",
                 "INSERT INTO relay_relays(status) VALUES(NULL)",
             ),
-            Self::InsertReplyLost => (
+            Self::InsertFailed => (
                 "AFTER INSERT ON relay_relays",
-                "SELECT RAISE(FAIL, 'the insert reply was lost')",
+                "SELECT RAISE(FAIL, 'the insert failed')",
+            ),
+            Self::UpdateReplyLost => (
+                "AFTER UPDATE ON relay_relays",
+                "SELECT RAISE(FAIL, 'the update reply was lost')",
             ),
             Self::ReservationReleaseRefused => (
                 "BEFORE DELETE ON cosign_usage",
@@ -518,14 +524,44 @@ async fn a_transfer_that_landed_before_a_lost_send_reply_keeps_its_reservation()
 }
 
 #[tokio::test]
-async fn a_stored_relay_whose_insert_reply_was_lost_keeps_its_reservation() {
+async fn a_failed_insert_stores_nothing_and_frees_its_reservation() {
     let relay = CappedRelay::new(|| RelayRail::Confidential).await;
-    let landed = relay.spending_cap(1);
-    let relay_id = landed.relay_id().expect("relay id");
-    relay.fault(StoreFault::InsertReplyLost).await;
+    let failed = relay.spending_cap(1);
+    let relay_id = failed.relay_id().expect("relay id");
+    relay.fault(StoreFault::InsertFailed).await;
     let interrupted = relay
         .module
-        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&landed))
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&failed))
+        .await;
+    assert!(interrupted.is_err());
+    relay.heal().await;
+
+    assert!(relay.chain.sent().is_empty());
+    let unknown = relay
+        .module
+        .call::<_, RelayStatus>(
+            GET_RELAY_STATUS,
+            as_object(GetRelayStatusRequest { relay_id }),
+        )
+        .await;
+    assert_eq!(refusal(unknown), RelayError::UnknownRelay.code());
+    relay.second_cap_fits().await;
+}
+
+#[tokio::test]
+async fn a_stored_relay_whose_update_reply_was_lost_keeps_its_reservation() {
+    let relay = CappedRelay::naming(anonymous_rail, None, deposit_capped()).await;
+    let (first, second) = (
+        Keypair::new_from_array([51; 32]),
+        Keypair::new_from_array([52; 32]),
+    );
+    let first_signed = relay.deposit(&first, 700).await;
+    let second_signed = relay.deposit(&second, 700).await;
+    let relay_id = first_signed.relay_id.clone();
+    relay.fault(StoreFault::UpdateReplyLost).await;
+    let interrupted = relay
+        .module
+        .call::<_, RelayStatus>(SUBMIT_RELAY, as_object(first_signed))
         .await;
     assert!(interrupted.is_err());
     relay.heal().await;
@@ -547,22 +583,15 @@ async fn a_stored_relay_whose_insert_reply_was_lost_keeps_its_reservation() {
     .expect("the tracker resends the stored relay");
     tracker.abort();
 
-    let status: RelayStatus = relay
-        .module
-        .call(
-            GET_RELAY_STATUS,
-            as_object(GetRelayStatusRequest { relay_id }),
-        )
-        .await
-        .expect("status");
+    let status = relay.status(relay_id).await;
     assert!(
         matches!(status, RelayStatus::Confirmed { .. }),
         "{status:?}"
     );
-    // A freed reservation would let a second full cap through.
+    // A freed reservation would let the second deposit past the cap.
     let beyond = relay
         .module
-        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
+        .call::<_, RelayStatus>(SUBMIT_RELAY, as_object(second_signed))
         .await;
     assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
 }
