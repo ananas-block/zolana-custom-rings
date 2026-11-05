@@ -23,9 +23,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-func depositElements(c *circuits.DepositCircuit) int {
-	return 4 + 2*circuits.MaxDeposits + 4 + len(c.Credentials.StatementFields()) + 3 + 2*circuits.MaxDeposits
-}
+const depositElements = 3 + 2*circuits.MaxDeposits + 4 + 4 + 2*circuits.MaxDeposits
 
 const (
 	depositDefine = "circuits.(*DepositCircuit).Define"
@@ -33,7 +31,7 @@ const (
 	recordEncode  = "audit.RecordOpening.Encode"
 	subjectRead   = "policy.subjectPool.read"
 	absentRead    = "policy.recordPool.read"
-	treeRoot      = "registry.CredentialOpening.Open"
+	treeRoot      = "registry.SharedQuadProof.AssertLeavesWhen"
 	depositScreen = "policy.(*Policy).ScreenDeposit"
 	paymentRule   = "policy.paymentScreen.assert"
 )
@@ -95,21 +93,23 @@ func TestDepositSlotRefusals(t *testing.T) {
 		}, []string{"gadget.AssertEqualWhen", outputKey}},
 		{"a nonzero key with no row", ringdeposit.Spec{Count: 2, ZeroKeys: []int{0}}, func(d *ringdeposit.Deposit) {
 			d.Circuit.NullifierPks[0] = spptest.MustNullifierPk(t, big.NewInt(0x77))
-			d.RefillCredentials(t)
 		}, []string{"gadget.AssertEqualWhen", outputKey}},
 		{"a literal zero key with no row", ringdeposit.Spec{Count: 2, ZeroKeys: []int{0}}, func(d *ringdeposit.Deposit) {
 			d.Circuit.NullifierPks[0] = 0
-			d.RefillCredentials(t)
 		}, []string{"gadget.AssertZeroWhen", outputKey}},
-		{"another credential member with the same state path", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
-			entry := ringtest.AsBigInt(d.Circuit.OutputEntries[1]).Int64()
-			d.Circuit.Openings[entry].Leaf.Member = big.NewInt(0x7712)
-		}, []string{"gadget.AssertEqualWhen", treeRoot}},
+		{"a zero key on an enrolled owner", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
+			d.Circuit.NullifierPks[1] = new(big.Int).Set(shared.ZeroNullifierPk)
+		}, []string{"gadget.AssertEqualWhen", outputKey}},
+		{"a zero key claiming absence over the owner's own leaf", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
+			d.Circuit.NullifierPks[1] = new(big.Int).Set(shared.ZeroNullifierPk)
+			subject := ringtest.AsBigInt(d.Circuit.OutputEntries[1]).Int64()
+			d.Circuit.TrackingSubjects[subject].RecordIndex = ringtest.AsBigInt(d.Circuit.TrackingSubjects[ringtest.AsBigInt(d.Circuit.OutputEntries[0]).Int64()].RecordIndex)
+		}, []string{"ringgadget.AssertOrderedWhen", absentRead}},
 		{"another owner's row", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
 			d.Circuit.OutputEntries[0] = d.Circuit.OutputEntries[1]
 		}, []string{"gadget.AssertEqualWhen", subjectRead}},
-		{"another ring's credential root", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
-			d.Circuit.StateRoots = ringregistry.NewCredentials(t, big.NewInt(0x5a0f)).StateRoots(d.Circuit.CredentialPoolSize())
+		{"another ring's tracking root", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
+			d.Circuit.TrackingRoot = ringregistry.NewTracking(t).Root()
 			d.Rebind(t)
 		}, []string{"gadget.AssertEqualWhen", treeRoot}},
 	}
@@ -140,26 +140,28 @@ func requireStatementRefused(t *testing.T, d *ringdeposit.Deposit) {
 	}
 }
 
-// An enrolled owner can receive a zero-key output without a credential query.
-func TestDepositZeroKeySurvivesEnrollment(t *testing.T) {
-	d := ringdeposit.Spec{Count: 2, ZeroKeys: []int{1}}.Build(t)
-	owner := ringtest.AsBigInt(d.Circuit.OwnerPkHashes[1])
-	ringpolicy.Enroll(t, d.Credentials, owner, spptest.MustNullifierPk(t, big.NewInt(0x77)))
-	if err := solveDeposit(d.Circuit); err != nil {
-		t.Fatal(err)
+// A sender names zero for a wallet that enrolled after the frame's root, the window the output rule accepts.
+func TestDepositZeroKeyHoldsAtTheRootTheFrameNames(t *testing.T) {
+	spec := ringdeposit.Spec{Count: 2, ZeroKeys: []int{1}}
+	stale := spec.Build(t)
+	owner := ringtest.AsBigInt(stale.Circuit.OwnerPkHashes[1])
+	ringpolicy.Enroll(t, stale.Tracking, owner, spptest.MustNullifierPk(t, big.NewInt(0x77)))
+	if err := solveDeposit(stale.Circuit); err != nil {
+		t.Fatalf("a zero key under the root before enrollment: %v", err)
 	}
-	d.RefillCredentials(t)
-	if err := solveDeposit(d.Circuit); err != nil {
-		t.Fatal(err)
-	}
+	// The row is present under the current root and no opening of it reads absent.
+	stale.RefillTracking(t)
+	ringtest.RequireRefused(t, solveDeposit(stale.Circuit), "gadget.AssertEqualWhen", outputKey)
 }
 
-// A salted payee read authenticates absence under the statement address root.
+// A low record of the tree before enrollment proves no absence under the root after it.
 func TestDepositAbsenceReadsTheFrameRoot(t *testing.T) {
-	d := ringdeposit.Spec{Count: 2, ZeroKeys: []int{1}, Policy: ringdeposit.SaltedBlock()}.Build(t)
-	d.Circuit.AddressRoot = 1
+	d := ringdeposit.Spec{Count: 2, ZeroKeys: []int{1}}.Build(t)
+	owner := ringtest.AsBigInt(d.Circuit.OwnerPkHashes[1])
+	ringpolicy.Enroll(t, d.Tracking, owner, spptest.MustNullifierPk(t, big.NewInt(0x77)))
+	d.Circuit.TrackingRoot = d.Tracking.Root()
 	d.Rebind(t)
-	ringtest.RequireRefused(t, solveDeposit(d.Circuit), "gadget.AssertEqualWhen", "registry.CredentialOpening.Open")
+	ringtest.RequireRefused(t, solveDeposit(d.Circuit), "gadget.AssertEqualWhen", treeRoot)
 }
 
 // A witness off the record's opening refuses inside the encoder merges share.
@@ -204,10 +206,10 @@ func TestEveryDepositRecordFieldIsSealed(t *testing.T) {
 // Every element the program computes moves the public input, a witness under the old values refuses at the closing binding.
 func TestDepositStatementBindsEveryElement(t *testing.T) {
 	d := ringdeposit.Spec{Count: 1}.Build(t)
-	d.Narrow(t, 1)
 	elements := d.Elements(t)
-	if len(elements) != depositElements(d.Circuit) {
-		t.Fatalf("%d elements, want %d", len(elements), depositElements(d.Circuit))
+	d.Narrow(t, 1)
+	if len(elements) != depositElements {
+		t.Fatalf("%d elements, want %d", len(elements), depositElements)
 	}
 	for i := range elements {
 		moved := slices.Clone(elements)
@@ -217,23 +219,39 @@ func TestDepositStatementBindsEveryElement(t *testing.T) {
 	}
 }
 
-// The statement length includes the credential table for the selected capacity.
-func TestDepositStatementRejectsAnotherHashRound(t *testing.T) {
+// HashChain4 pads zeros, every capacity holds one length and refuses a chain one round shorter.
+func TestDepositZeroTailStaysInjectiveAtTheOneLength(t *testing.T) {
 	for _, capacity := range circuits.DepositCapacities {
 		for _, count := range []int{1, capacity} {
 			d := ringdeposit.Build(t, count).Narrow(t, capacity)
 			elements := d.Elements(t)
-			if len(elements) != depositElements(d.Circuit) {
+			if len(elements) != depositElements {
 				t.Fatalf("capacity %d count %d holds %d elements", capacity, count, len(elements))
 			}
-			for _, moved := range [][]*big.Int{
-				elements[:len(elements)-4],
-				append(slices.Clone(elements), new(big.Int), new(big.Int), new(big.Int), new(big.Int)),
-			} {
-				d.Circuit.PublicInputHash = spptest.MustHashChain4(t, moved)
-				requireStatementRefused(t, d)
+			if tail := elements[len(elements)-1]; (count < circuits.MaxDeposits) != (tail.Sign() == 0) {
+				t.Fatalf("count %d ends the chain on %v", count, tail)
 			}
+			d.Circuit.PublicInputHash = spptest.MustHashChain4(t, elements[:len(elements)-3])
+			requireStatementRefused(t, d)
 		}
+	}
+	chain := ringdeposit.Build(t, 1).Elements(t)
+	reference := spptest.MustHashChain4(t, chain)
+	for _, dropped := range []int{1, 2} {
+		if spptest.MustHashChain4(t, chain[:len(chain)-dropped]).Cmp(reference) != 0 {
+			t.Fatal("the zero tail no longer pads")
+		}
+	}
+	if spptest.MustHashChain4(t, chain[:len(chain)-3]).Cmp(reference) == 0 {
+		t.Fatal("a dropped round moves the hash")
+	}
+	if spptest.MustHashChain4(t, append(slices.Clone(chain), new(big.Int))).Cmp(reference) == 0 {
+		t.Fatal("an appended zero opens a new round")
+	}
+	moved := slices.Clone(chain)
+	moved[len(moved)-1] = big.NewInt(1)
+	if spptest.MustHashChain4(t, moved).Cmp(reference) == 0 {
+		t.Fatal("the tail moves the hash at the one length")
 	}
 }
 
@@ -276,22 +294,21 @@ func TestDepositReaderRebuildsEachNoteFromItsRecord(t *testing.T) {
 // Solved witnesses the Rust statement and record readers reach, a mismatch names a statement the keys refuse.
 func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 	type vectorCase struct {
-		Name             string   `json:"name"`
-		ContextHash      string   `json:"context_hash"`
-		Records          []string `json:"records"`
-		Ciphertexts      []string `json:"ciphertexts"`
-		OwnerUtxoHashes  []string `json:"owner_utxo_hashes"`
-		Assets           []string `json:"assets"`
-		Amounts          []uint64 `json:"amounts"`
-		AuditorPubkey    string   `json:"auditor_pubkey"`
-		EphPk            string   `json:"eph_pk"`
-		RingID           string   `json:"ring_id"`
-		CredentialFields []string `json:"credential_fields"`
-		OwnRoot          string   `json:"own_root"`
-		CuratorRoot      string   `json:"curator_root"`
-		PolicyHash       string   `json:"policy_hash"`
-		Elements         []string `json:"elements"`
-		PublicInputHash  string   `json:"public_input_hash"`
+		Name            string   `json:"name"`
+		ContextHash     string   `json:"context_hash"`
+		Records         []string `json:"records"`
+		Ciphertexts     []string `json:"ciphertexts"`
+		OwnerUtxoHashes []string `json:"owner_utxo_hashes"`
+		Assets          []string `json:"assets"`
+		Amounts         []uint64 `json:"amounts"`
+		AuditorPubkey   string   `json:"auditor_pubkey"`
+		EphPk           string   `json:"eph_pk"`
+		TrackingRoot    string   `json:"tracking_root"`
+		OwnRoot         string   `json:"own_root"`
+		CuratorRoot     string   `json:"curator_root"`
+		PolicyHash      string   `json:"policy_hash"`
+		Elements        []string `json:"elements"`
+		PublicInputHash string   `json:"public_input_hash"`
 	}
 	cases := make([]vectorCase, 0, 3)
 	for _, tc := range []struct {
@@ -312,11 +329,8 @@ func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 		v := vectorCase{
 			Name: tc.name, ContextHash: ringtest.FieldHex(ringtest.AsBigInt(c.ContextHash)),
 			AuditorPubkey: hex.EncodeToString(tagged[:]), EphPk: hex.EncodeToString(eph[:]),
-			RingID: ringtest.FieldHex(ringtest.AsBigInt(c.RingProgramID)), OwnRoot: ringtest.FieldHex(ringtest.AsBigInt(c.OwnRoot)), CuratorRoot: ringtest.FieldHex(ringtest.AsBigInt(c.CuratorRoot)), PolicyHash: ringtest.FieldHex(ringtest.AsBigInt(c.PolicyHash)),
+			TrackingRoot: ringtest.FieldHex(ringtest.AsBigInt(c.TrackingRoot)), OwnRoot: ringtest.FieldHex(ringtest.AsBigInt(c.OwnRoot)), CuratorRoot: ringtest.FieldHex(ringtest.AsBigInt(c.CuratorRoot)), PolicyHash: ringtest.FieldHex(ringtest.AsBigInt(c.PolicyHash)),
 			PublicInputHash: ringtest.FieldHex(ringtest.AsBigInt(c.PublicInputHash)),
-		}
-		for _, field := range c.Credentials.StatementFields() {
-			v.CredentialFields = append(v.CredentialFields, ringtest.FieldHex(ringtest.AsBigInt(field)))
 		}
 		for i, note := range d.Notes {
 			start, end := i*circuits.DepositRecordLen, (i+1)*circuits.DepositRecordLen
@@ -331,11 +345,9 @@ func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 		}
 		cases = append(cases, v)
 	}
-	ringProgram := ringregistry.CredentialProgram()
 	ringtest.PinVector(t, "deposit/deposit.json", map[string]any{
-		"ring_program": hex.EncodeToString(ringProgram[:]),
-		"description":  "Solved deposit witnesses. A record is kind || u64be(amount) || owner_key || mint || be32(nullifier_pk) || 7 zero bytes || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1.",
-		"cases":        cases,
+		"description": "Solved deposit witnesses. A record is kind || u64be(amount) || owner_key || mint || be32(nullifier_pk) || 7 zero bytes || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1.",
+		"cases":       cases,
 	})
 }
 
@@ -420,7 +432,7 @@ func TestDepositReadsTheSaltedList(t *testing.T) {
 	}
 	blocked := ringdeposit.BuildScreened(t, 2, ringdeposit.SaltedBlock(1))
 	ringtest.RequireRefused(t, solveDeposit(blocked.Circuit), paymentRule, depositScreen)
-	// A wrong salt misses the blocked record, the credential list tag refuses it.
+	// A wrong salt misses the blocked record, the tracking row's list tag refuses it.
 	forged := ringdeposit.BuildScreened(t, 2, ringdeposit.SaltedBlock(1))
 	forged.Circuit.OwnerEntries[1].ListSalt = 7
 	ringtest.RequireRefused(t, solveDeposit(forged.Circuit), "gadget.AssertEqualWhen", "policy.(*Policy).resolveSubjects")
@@ -428,22 +440,6 @@ func TestDepositReadsTheSaltedList(t *testing.T) {
 	zero := ringdeposit.Spec{Count: 2, ZeroKeys: []int{1}, Policy: ringdeposit.SaltedBlock()}.Build(t)
 	if err := solveDeposit(zero.Circuit); err != nil {
 		t.Fatalf("an unenrolled recipient refused: %v", err)
-	}
-}
-
-func TestDepositZeroKeyRetainsSaltedPayeeScreening(t *testing.T) {
-	for _, blocked := range []bool{false, true} {
-		rules := ringdeposit.SaltedBlock()
-		if blocked {
-			rules = ringdeposit.SaltedBlock(1)
-		}
-		d := ringdeposit.Spec{Count: 2, Recipients: 1, ZeroKeys: []int{1}, Policy: rules}.Build(t)
-		err := solveDeposit(d.Circuit)
-		if blocked {
-			ringtest.RequireRefused(t, err, paymentRule, depositScreen)
-		} else if err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 
@@ -497,14 +493,13 @@ func depositCircuit(t *testing.T, capacity int) *circuits.DepositCircuit {
 	return c
 }
 
-func TestDepositCapacitiesBindRootTablesAndBoundCounts(t *testing.T) {
+func TestDepositCapacitiesPreserveStatementsAndBoundCounts(t *testing.T) {
 	for _, capacity := range circuits.DepositCapacities {
 		for _, count := range []int{1, capacity} {
 			small := ringdeposit.Build(t, count).Narrow(t, capacity)
 			full := ringdeposit.Build(t, count)
-			same := ringtest.AsBigInt(small.Circuit.PublicInputHash).Cmp(ringtest.AsBigInt(full.Circuit.PublicInputHash)) == 0
-			if same != (capacity == full.Circuit.Capacity) {
-				t.Fatal("statement does not bind the credential table capacity")
+			if ringtest.AsBigInt(small.Circuit.PublicInputHash).Cmp(ringtest.AsBigInt(full.Circuit.PublicInputHash)) != 0 {
+				t.Fatal("capacity changed deposit statement")
 			}
 			if err := solveDeposit(small.Circuit); err != nil {
 				t.Fatalf("capacity %d count %d: %v", capacity, count, err)

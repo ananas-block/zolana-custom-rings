@@ -1,15 +1,14 @@
 // Proves that the auditor can recover the secret behind the nullifier key an owner
 // enrolls and the salt behind its list tag. SPP spends a note under Poseidon(secret)
-// and the enrollment envelope gives that secret to the auditor. A ring owes its
-// auditor the owner's spends, each nullifier derives from that secret, and owes
-// its private lists one fixed record
-// key per owner, that key derives from the salt. The ring's `Enroll` verifies the proof
-// and creates the immutable SPP credential from the same verified fields atomically.
-// Without it an owner could enroll a key whose nullifiers no auditor can compute,
-// or a salt a private block never reaches.
+// and the secret never leaves the owner. A ring owes its auditor the owner's spends,
+// each nullifier derives from that secret, and owes its private lists one fixed record
+// key per owner, that key derives from the salt. Storage `Enroll` verifies the proof
+// in the same instruction on the owner's first enrollment, the one proof that seals
+// those two values. Without it an owner could enroll a key whose nullifiers no auditor
+// can compute, or a salt a private block never reaches.
 //
-// Read after shared/derivation.go, shared/envelope.go. Read before registry/credential.go,
-// registry/credential_write.go, policy/subjects.go, prover/ring/ring.go.
+// Read after shared/derivation.go, shared/envelope.go. Read before registry/tracking.go,
+// registry/apply_enrollments.go, policy/subjects.go, prover/ring/ring.go.
 
 package registry
 
@@ -47,16 +46,12 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(c.NullifierSecret[0], 0)
 	secret := shared.PackBounded(api, c.NullifierSecret[1:])[0]
 	// Poseidon(0) is the zero key, never enrolled.
-	// Secret zero remains public, and an auditor can derive the nullifier from the proven note opening without enrollment.
-	// A zero-key output still reads its owner credential when a salted payee check is active.
+	// A transfer or deposit output under that key carries no secret and proves its owner absent from the named tracking root, a merge output reads no row, see ZeroNullifierPk in shared/derivation.go.
 	api.AssertIsDifferent(secret, 0)
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{secret})
 	// 2. A salt the envelope does not hold would leave the owner off the auditor's list writes.
 	// The tag commits to the owner's one salt. policy/subjects.go forces a present row's salt to open the tag, and so forces the key ListKey(owner, salt) a private entry sits under, with no choice left to the prover.
-	// A changed salt would select another private record. Enroll reserves one address for the ring and member and creates no replacement path.
-	// The immutable state hash binds the sealed key, salt tag and exact envelope. Viewing-key rotation stays outside the credential.
-	// Every private owner write proves both credential state inclusion and address inclusion before the program raises the absence floor.
-	// A salted read at or above that floor cannot prove the written owner absent, even while unrelated enrollments remain queued.
+	// A tag cannot move for that reason. A new salt would name a key with no entry, and a privately blocked owner would read as unlisted. `Enroll` verifies the proof only at the first enrollment, a later `Enroll` carries no proof and TrackingAuthorization::rotate refuses a changed key, tag, ephemeral key or ciphertext, and ApplyEnrollmentsCircuit holds the leaf's key, tag and ciphertext hash. No instruction closes the account and no write removes the leaf, a present row stays present under every later root.
 	api.AssertIsEqual(c.ListSalt[0], 0)
 	salt := shared.PackBounded(api, c.ListSalt[1:])[0]
 	// A zero salt would let anyone who knows the owner compute ListKey(owner, 0). The circuit refuses only zero, the wallet's derivation supplies the entropy.
@@ -66,17 +61,12 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	// The key and the tag hash the same wires the cipher seals, the auditor reads the values behind them. The cipher's byte tables also bound the plaintext bytes both packings above rely on.
 	sealed := shared.Envelope{Plaintext: slices.Concat(c.NullifierSecret[:], c.ListSalt[:]), EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.SealStream(api)
 	// 3. The statement binds the ring, member and auditor key the program supplies, and the instruction's envelope.
-	// RingID and Member enter only the statement. Enroll derives the ring id from its program id and the member from the owner signer.
-	// The authenticated RingPolicy supplies the auditor key, and the verified fields also construct the SPP output.
+	// RingID and Member enter only the statement. The program computes the member from the signer and reads the ring and the auditor key from the tracking registry, a proof made for another ring, owner or auditor fails verification.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(api, nullifierPk, listTag, sealed)))
 	return nil
 }
 
-// The CRRG element order matches AuditCredential.elements in program-libs/interface/src/accounts/credential.rs.
+// statement mirrors RegisterKeyStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *RegisterKeyCircuit) statement(api frontend.API, nullifierPk, listTag frontend.Variable, sealed shared.Sealed) []frontend.Variable {
-	return (Credential{
-		RingID: c.RingID, Member: c.Member, NullifierPk: nullifierPk, ListTag: listTag,
-		Aud: [2]frontend.Variable(sealed.Auditor), Eph: [2]frontend.Variable(sealed.Eph),
-		CtHash: gadget.HashBoundedBytes(api, sealed.Ciphertext),
-	}).Elements(shared.RegisterKeyDomain)
+	return append([]frontend.Variable{shared.RegisterKeyDomain, c.RingID, c.Member, nullifierPk, listTag}, sealed.StatementFields(api)...)
 }

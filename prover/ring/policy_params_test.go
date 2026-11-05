@@ -82,13 +82,13 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 		{"curator index outside pool", func(m map[string]any) { entry(m)["curator"] = []any{len(m["curatorSubjects"].([]any))} }, "subject index"},
 		{"public asset index outside pool", func(m map[string]any) { m["publicAssetEntries"].([]any)[0] = len(m["ownSubjects"].([]any)) }, "subject index"},
 		{"path index outside tree", func(m map[string]any) { path(m)["index"] = registry.Capacity }, "path index"},
-		{"credential state slot outside table", func(m map[string]any) {
-			m["credentialOpenings"].([]any)[0].(map[string]any)["treeSlot"] = len(m["stateRoots"].([]any))
-		}, "credential tree"},
-		{"credential state index outside tree", func(m map[string]any) {
-			m["credentialOpenings"].([]any)[0].(map[string]any)["stateIndex"] = uint64(1) << 32
-		}, "credential path index"},
-		{"row entry outside pool", func(m map[string]any) { m["rowEntries"].([]any)[0] = len(m["credentialOpenings"].([]any)) }, "credential"},
+		{"tracking record outside pool", func(m map[string]any) {
+			m["trackingSubjects"].([]any)[0].(map[string]any)["recordIndex"] = len(m["trackingRecords"].([]any))
+		}, "tracking record"},
+		{"tracking path outside tree", func(m map[string]any) {
+			m["trackingProof"].(map[string]any)["paths"].([]any)[0].(map[string]any)["index"] = registry.TrackingCapacity
+		}, "tracking path"},
+		{"row entry outside pool", func(m map[string]any) { m["rowEntries"].([]any)[0] = len(m["trackingSubjects"].([]any)) }, "tracking subject"},
 		{"short canopy", func(m map[string]any) { proof(m)["canopy"] = proof(m)["canopy"].([]any)[1:] }, "expected"},
 		{"short path", func(m map[string]any) { path(m)["siblings"] = path(m)["siblings"].([]any)[1:] }, "expected"},
 		{"short sibling row", func(m map[string]any) { rows := path(m)["siblings"].([]any); rows[0] = rows[0].([]any)[1:] }, "expected"},

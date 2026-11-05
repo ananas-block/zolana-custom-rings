@@ -16,6 +16,7 @@ type Family int
 const (
 	Transfer Family = iota
 	ApplyRecords
+	ApplyEnrollments
 	RegisterKey
 	Deposit
 	Merge
@@ -31,8 +32,7 @@ type Key struct {
 	Owners      int
 	Entry       bool
 	Wide        bool
-	// Private names the apply key with one credential slot per write.
-	Private bool
+	Private     bool
 }
 
 // Keys takes each shape from the package that sizes it.
@@ -55,6 +55,9 @@ func keys() []Key {
 		for _, writes := range registry.ApplyWidths {
 			add(Key{Family: ApplyRecords, Inputs: writes, Private: private})
 		}
+	}
+	for _, writes := range registry.ApplyWidths {
+		add(Key{Family: ApplyEnrollments, Inputs: writes})
 	}
 	add(Key{Family: RegisterKey})
 	for _, capacity := range circuits.DepositCapacities {
@@ -87,6 +90,8 @@ func (k Key) circuitType() common.CircuitType {
 			return named("apply-records-private-%d", k.Inputs)
 		}
 		return named("apply-records-%d", k.Inputs)
+	case ApplyEnrollments:
+		return named("apply-enrollments-%d", k.Inputs)
 	case RegisterKey:
 		return named("register-key")
 	case Deposit:

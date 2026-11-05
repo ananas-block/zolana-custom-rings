@@ -61,93 +61,91 @@ func TestRegisterKeyStatementMatchesRustVector(t *testing.T) {
 	ringtest.RequirePublicInputBound(t, &keyStatementCircuit{}, witness)
 }
 
-type recordsStatementCircuit struct {
+type applyStatementFields struct {
 	PublicInputHash                                                    frontend.Variable `gnark:",public"`
 	OldRoot, NewRoot, OldNextIndex, NewNextIndex, ChainStart, ChainEnd frontend.Variable
-	Count, Restrictive                                                 frontend.Variable
-	CredentialWrites, PrivateRingID, CredentialOwner, AddressRoot      frontend.Variable
-	StateRoots                                                         [][2]frontend.Variable
+	Count                                                              frontend.Variable
 }
 
-func (c *recordsStatementCircuit) Define(api frontend.API) error {
-	statement := (&PrivateApplyRecordsCircuit{
-		ApplyRecordsCircuit: ApplyRecordsCircuit{
-			OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex,
-			ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count,
-		},
-		CredentialWrites: c.CredentialWrites, PrivateRingID: c.PrivateRingID,
-		CredentialOwner: c.CredentialOwner, AddressRoot: c.AddressRoot, StateRoots: c.StateRoots,
-	}).statement(c.Restrictive)
+func (f applyStatementFields) records() ApplyRecordsCircuit {
+	return ApplyRecordsCircuit{
+		OldRoot: f.OldRoot, NewRoot: f.NewRoot, OldNextIndex: f.OldNextIndex, NewNextIndex: f.NewNextIndex,
+		ChainStart: f.ChainStart, ChainEnd: f.ChainEnd, Count: f.Count,
+	}
+}
+
+type publicRecordsStatementCircuit struct {
+	applyStatementFields
+	Restrictive frontend.Variable
+}
+
+func (c *publicRecordsStatementCircuit) Define(api frontend.API) error {
+	records := c.records()
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, records.statement(c.Restrictive)))
+	return nil
+}
+
+type privateRecordsStatementCircuit struct {
+	applyStatementFields
+	Restrictive, PrivateWrites, TrackingRoot frontend.Variable
+}
+
+func (c *privateRecordsStatementCircuit) Define(api frontend.API) error {
+	statement := (&PrivateApplyRecordsCircuit{ApplyRecordsCircuit: c.records(), PrivateWrites: c.PrivateWrites, TrackingRoot: c.TrackingRoot}).statement(c.Restrictive)
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
+	return nil
+}
+
+type enrollmentsStatementCircuit struct {
+	applyStatementFields
+}
+
+func (c *enrollmentsStatementCircuit) Define(api frontend.API) error {
+	statement := (&ApplyEnrollmentsCircuit{OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex, ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count}).statement()
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
 }
 
 type applyStatementVector struct {
-	OldRoot          string   `json:"old_root"`
-	NewRoot          string   `json:"new_root"`
-	OldNextIndex     uint32   `json:"old_next_index"`
-	NewNextIndex     uint32   `json:"new_next_index"`
-	ChainStart       string   `json:"chain_start"`
-	ChainEnd         string   `json:"chain_end"`
-	Count            uint64   `json:"count"`
-	Restrictive      bool     `json:"restrictive"`
-	CredentialWrites uint16   `json:"credential_writes"`
-	PrivateRingID    string   `json:"private_ring_id"`
-	CredentialFields []string `json:"credential_fields"`
-	PublicInputHash  string   `json:"public_input_hash"`
+	OldRoot         string  `json:"old_root"`
+	NewRoot         string  `json:"new_root"`
+	OldNextIndex    uint32  `json:"old_next_index"`
+	NewNextIndex    uint32  `json:"new_next_index"`
+	ChainStart      string  `json:"chain_start"`
+	ChainEnd        string  `json:"chain_end"`
+	Count           uint64  `json:"count"`
+	Restrictive     bool    `json:"restrictive"`
+	PrivateWrites   uint16  `json:"private_writes"`
+	TrackingRoot    *string `json:"tracking_root"`
+	PublicInputHash string  `json:"public_input_hash"`
 }
 
-func TestApplyRecordsStatementMatchesRustVector(t *testing.T) {
-	var vectors struct {
-		ApplyRecords applyStatementVector `json:"apply_records"`
-	}
-	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
-	v := vectors.ApplyRecords
-	if len(v.CredentialFields) < 4 || len(v.CredentialFields)%2 != 0 {
-		t.Fatalf("invalid credential statement length %d", len(v.CredentialFields))
-	}
-	witness := &recordsStatementCircuit{
+func (v applyStatementVector) fields(t *testing.T) applyStatementFields {
+	t.Helper()
+	return applyStatementFields{
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash),
 		OldRoot:         ringtest.VectorField(t, v.OldRoot), NewRoot: ringtest.VectorField(t, v.NewRoot),
 		OldNextIndex: v.OldNextIndex, NewNextIndex: v.NewNextIndex,
-		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count, Restrictive: ringtest.Bit(v.Restrictive),
-		CredentialWrites: uint64(v.CredentialWrites), PrivateRingID: ringtest.VectorField(t, v.PrivateRingID),
-		CredentialOwner: ringtest.VectorField(t, v.CredentialFields[0]), AddressRoot: ringtest.VectorField(t, v.CredentialFields[1]),
-		StateRoots: make([][2]frontend.Variable, (len(v.CredentialFields)-2)/2),
+		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count,
 	}
-	for i := range witness.StateRoots {
-		witness.StateRoots[i] = [2]frontend.Variable{ringtest.VectorField(t, v.CredentialFields[2+2*i]), ringtest.VectorField(t, v.CredentialFields[3+2*i])}
-	}
-	shape := &recordsStatementCircuit{StateRoots: make([][2]frontend.Variable, len(witness.StateRoots))}
-	ringtest.RequirePublicInputBound(t, shape, witness)
 }
 
-type publicRecordsStatementCircuit struct {
-	PublicInputHash                                                    frontend.Variable `gnark:",public"`
-	OldRoot, NewRoot, OldNextIndex, NewNextIndex, ChainStart, ChainEnd frontend.Variable
-	Count, Restrictive                                                 frontend.Variable
-}
-
-func (c *publicRecordsStatementCircuit) Define(api frontend.API) error {
-	statement := (&ApplyRecordsCircuit{
-		OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex,
-		ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count,
-	}).statement(c.Restrictive)
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
-	return nil
-}
-
-func TestPublicApplyRecordsStatementMatchesRustVector(t *testing.T) {
+func TestApplyStatementsMatchRustVector(t *testing.T) {
 	var vectors struct {
-		ApplyRecords applyStatementVector `json:"apply_records_public"`
+		ApplyRecords       applyStatementVector `json:"apply_records"`
+		ApplyRecordsPublic applyStatementVector `json:"apply_records_public"`
+		ApplyEnrollments   applyStatementVector `json:"apply_enrollments"`
 	}
 	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
-	v := vectors.ApplyRecords
-	witness := &publicRecordsStatementCircuit{
-		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash),
-		OldRoot:         ringtest.VectorField(t, v.OldRoot), NewRoot: ringtest.VectorField(t, v.NewRoot),
-		OldNextIndex: v.OldNextIndex, NewNextIndex: v.NewNextIndex,
-		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count, Restrictive: ringtest.Bit(v.Restrictive),
+	private := vectors.ApplyRecords
+	if private.TrackingRoot == nil {
+		t.Fatal("the private apply vector names no tracking root")
 	}
-	ringtest.RequirePublicInputBound(t, &publicRecordsStatementCircuit{}, witness)
+	ringtest.RequirePublicInputBound(t, &privateRecordsStatementCircuit{}, &privateRecordsStatementCircuit{
+		applyStatementFields: private.fields(t), Restrictive: ringtest.Bit(private.Restrictive),
+		PrivateWrites: uint64(private.PrivateWrites), TrackingRoot: ringtest.VectorField(t, *private.TrackingRoot),
+	})
+	public := vectors.ApplyRecordsPublic
+	ringtest.RequirePublicInputBound(t, &publicRecordsStatementCircuit{}, &publicRecordsStatementCircuit{applyStatementFields: public.fields(t), Restrictive: ringtest.Bit(public.Restrictive)})
+	ringtest.RequirePublicInputBound(t, &enrollmentsStatementCircuit{}, &enrollmentsStatementCircuit{applyStatementFields: vectors.ApplyEnrollments.fields(t)})
 }

@@ -91,10 +91,7 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	if m < 1 || m > 16 {
 		t.Fatalf("output count %d", m)
 	}
-	c.take(frameProofLen)
-	// Mirrors CredentialRead::read.
-	c.take(2)
-	c.take(2 * int(c.take(1)[0]))
+	c.take(frameProofLen + 8)
 	if flags&ownRoot != 0 {
 		c.take(8)
 	}

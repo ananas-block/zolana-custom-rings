@@ -7,9 +7,9 @@
 // itself unlisted.
 //
 // One transition serves two key families. A public key compiles the transition alone.
-// A private key adds a credential proof per write slot and binds the credential
-// checkpoint, and the program selects it only when a write needs one. A public key
-// therefore pays no credential constraint, and a private owner write never verifies
+// A private key adds one tracking row opening per write slot and binds the tracking
+// root, and the program selects it only when a write needs one. A public key
+// therefore pays no tracking constraint, and a private owner write never verifies
 // under it because the program refuses that pairing before it reads the proof.
 //
 // Both families prove whether a batch tightens any field a policy reads. Storage keeps
@@ -18,7 +18,7 @@
 // rule is monotone in them, so a kept root admits no transfer the newest refuses.
 //
 // Read after registry/registry.go, ringgadget/canonical.go, ringgadget/count.go,
-// shared/width.go, registry/credential_write.go. Read before policy/record_pool.go,
+// shared/width.go, registry/tracking.go. Read before policy/record_pool.go,
 // prover/ring/ring.go.
 
 package registry
@@ -43,13 +43,13 @@ import (
 // 4. A present member keeps its leaf, its member and its link, a record a write empties stays in the list and reads as empty.
 // 5. An absent member is proven absent under the running root and inserted after its low record at exactly the next index below Capacity, and a write that would leave its record empty inserts nothing.
 // 6. Every write keeps the links one sorted run from the sentinel to q-1 with every member at a link's end.
-// 7. Under a private key every selected private owner write proves its credential and address under the bound checkpoint.
-// 8. The statement binds both roots, both next indexes, both chain ends, the count and the restrictive bit, a private key also the credential bitmap and its root table.
+// 7. Under a private key every selected write carries a private mask and opens its owner's enrolled tracking row under the bound tracking root, and the row's tag fixes the write's salted key.
+// 8. The statement binds both roots, both next indexes, both chain ends, the count and the restrictive bit, a private key also the private write bitmap and the tracking root.
 // 9. The restrictive bit is set exactly when an active write clears a grant bit, sets a deny bit, masks a private list, lowers the guard threshold, tightens a cap, cosign or withdrawal bound, or changes an asset limit.
 //
 // The program holds what the circuit takes as given. RuleTable::validate reads grant lists only by presence and deny lists only by absence. chain_start in program-libs/interface/src/accounts/storage.rs names one registry at one revision in ChainStart, and list_and_mint_entry in program-libs/interface/src/instructions/instruction.rs refuses a member outside [1, q-2], a Value outside its Mask and invalid limits.
-// The program derives CredentialWrites from private mask bits after it verifies each asset exemption through Member::asset, and a nonzero bitmap alone selects a private key.
-// It derives CredentialOwner from the ring program preimage authenticated by PrivateRingID and raises the checkpoint floor atomically with the root update.
+// The program derives PrivateWrites from private mask bits after it verifies each asset exemption through Member::asset, and a nonzero bitmap alone selects a private key.
+// It reads TrackingRoot at the named revision of the tracking registry the policy registry pins, and raises tracking_floor to that revision atomically with the root update.
 
 // ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/accounts/member_registry.rs.
 const ApplyBatch = 16
@@ -105,16 +105,18 @@ type ApplyRecordsCircuit struct {
 	Writes       []RecordWriteProofInput
 }
 
-// PrivateApplyRecordsCircuit is the private key, the same transition with one credential slot per write.
 type PrivateApplyRecordsCircuit struct {
 	ApplyRecordsCircuit
 
-	CredentialWrites frontend.Variable
-	PrivateRingID    frontend.Variable
-	CredentialOwner  frontend.Variable
-	AddressRoot      frontend.Variable
-	StateRoots       [][2]frontend.Variable
-	Credentials      []CredentialWrite
+	PrivateWrites frontend.Variable
+	TrackingRoot  frontend.Variable
+	Owners        []PrivateOwner
+}
+
+type PrivateOwner struct {
+	ListSalt frontend.Variable
+	Record   TrackingRecord
+	Path     TrackingPath
 }
 
 type registryState struct {
@@ -134,10 +136,7 @@ func NewPrivateApplyRecordsCircuit(writes int) (*PrivateApplyRecordsCircuit, err
 	if err != nil {
 		return nil, err
 	}
-	return &PrivateApplyRecordsCircuit{
-		ApplyRecordsCircuit: *core,
-		StateRoots:          make([][2]frontend.Variable, writes), Credentials: make([]CredentialWrite, writes),
-	}, nil
+	return &PrivateApplyRecordsCircuit{ApplyRecordsCircuit: *core, Owners: make([]PrivateOwner, writes)}, nil
 }
 
 func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
@@ -152,22 +151,20 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 func (c *PrivateApplyRecordsCircuit) Define(api frontend.API) error {
 	if err := errors.Join(
 		c.validate(),
-		shared.ValidateLength("registry", "state root", len(c.StateRoots), c.NumWrites),
-		shared.ValidateLength("registry", "credential", len(c.Credentials), c.NumWrites),
+		shared.ValidateLength("registry", "private owner", len(c.Owners), c.NumWrites),
 	); err != nil {
 		return err
 	}
-	// 1. The authenticated bitmap selects private owner writes inside the active prefix.
-	credentialBits := c.credentialBits(api)
-	roots := CredentialRoots{RingID: c.PrivateRingID, Owner: c.CredentialOwner, StateRoots: c.StateRoots}.Check(api)
-	// 2. A selected write must carry a private mask, then proves its owner's credential and address.
-	// The program derives the bitmap, the circuit only refuses a bit on a write it cannot cover.
+	// 1. The program's bitmap selects private owner writes inside the active prefix.
+	privateBits := c.privateBits(api)
+	// 2. A selected write must carry a private mask, then opens its owner's row under the tracking root.
+	// The program derives the bitmap, the circuit refuses only a bit on an inactive write or a write with no private mask.
 	restrictive := c.transition(api, func(i int, active frontend.Variable, maskBits []frontend.Variable) {
 		privateMask := anyBit(api, maskBits, privateListBits)
-		assertCredentialEqualWhen(api, credentialBits[i], api.Mul(active, privateMask), 1)
-		c.Credentials[i].Assert(api, credentialBits[i], c.Writes[i].Entry.Member, c.AddressRoot, roots)
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: privateBits[i], A: api.Mul(active, privateMask), B: 1})
+		c.Owners[i].Assert(api, privateBits[i], c.Writes[i].Entry.Member, c.TrackingRoot)
 	})
-	// 3. The checkpoint and root table extend the public statement.
+	// 3. The bitmap and the tracking root extend the public statement.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(restrictive)))
 	return nil
 }
@@ -333,11 +330,34 @@ func (c *ApplyRecordsCircuit) statement(restrictive frontend.Variable) []fronten
 	}
 }
 
+// privateBits refuses an empty bitmap, the program selects a private key only for a nonzero one.
+func (c *PrivateApplyRecordsCircuit) privateBits(api frontend.API) []frontend.Variable {
+	api.AssertIsDifferent(c.PrivateWrites, 0)
+	api.AssertIsDifferent(c.TrackingRoot, 0)
+	return api.ToBinary(c.PrivateWrites, c.NumWrites)
+}
+
+// Assert opens the owner's row under root while active is set, an unset active forces a zero owner and salt.
+//
+// A private entry sits at ListKey(owner, salt). The row's tag fixes the salt, so the write names the
+// one key every salted read of the owner computes. The program raises tracking_floor to the revision of
+// root, every root from it on holds the row, and no later read proves the owner absent to skip the entry.
+func (o PrivateOwner) Assert(api frontend.API, active, key, root frontend.Variable) {
+	api.AssertIsBoolean(active)
+	// 1. The write's key is the owner's salted key, and the row's tag opens to the same salt.
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: shared.ListKey(api, o.Record.Member, o.ListSalt), B: key})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: shared.ListTag(api, o.ListSalt), B: o.Record.ListTag})
+	// 2. The opened leaf is an enrolled row, the sentinel holds the zero key and the empty leaf has no preimage.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: active, V: api.IsZero(o.Record.NullifierPk)})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: o.Path.Root(api, o.Record.Hash(api)), B: root})
+	// 3. An unselected slot carries no private owner or salt.
+	inactive := api.Sub(1, active)
+	for _, value := range []frontend.Variable{o.ListSalt, o.Record.Member} {
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: inactive, V: value})
+	}
+}
+
 // statement appends the private section of ApplyRecordsStatement::elements.
 func (c *PrivateApplyRecordsCircuit) statement(restrictive frontend.Variable) []frontend.Variable {
-	fields := append(c.ApplyRecordsCircuit.statement(restrictive), c.CredentialWrites, c.PrivateRingID, c.CredentialOwner, c.AddressRoot)
-	for _, root := range c.StateRoots {
-		fields = append(fields, root[:]...)
-	}
-	return fields
+	return append(c.ApplyRecordsCircuit.statement(restrictive), c.PrivateWrites, c.TrackingRoot)
 }

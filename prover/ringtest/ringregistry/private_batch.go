@@ -9,49 +9,43 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// OwnerWrite is one enrolled owner of ring 71 whose address tree 0 applied.
 type OwnerWrite struct {
-	Credentials *Credentials
-	Write       registry.CredentialWrite
-	// Key is ListKey(member, salt), the member a private write names.
-	Key         *big.Int
-	AddressRoot *big.Int
+	Tracking *Tracking
+	Owner    registry.PrivateOwner
+	Key      *big.Int
 }
 
-// SaltedCredentials holds member 101 enrolled under salt.
-func SaltedCredentials(t testing.TB, salt *big.Int) *Credentials {
+// SaltedTracking holds member 101 enrolled under salt.
+func SaltedTracking(t testing.TB, salt *big.Int) *Tracking {
 	t.Helper()
-	credentials := NewCredentials(t, big.NewInt(71))
-	credentials.Insert(t, CredentialEntry{
-		Member: big.NewInt(101), NullifierPk: spptest.MustNullifierPk(t, big.NewInt(7)),
-		ListTag: ListTag(t, salt), CtHash: big.NewInt(17),
-		Aud: [2]*big.Int{big.NewInt(19), big.NewInt(23)}, Eph: [2]*big.Int{big.NewInt(29), big.NewInt(31)},
+	tracking := NewTracking(t)
+	view0, view1 := PackedView(big.NewInt(0xa1a2))
+	tracking.Apply(t, TrackingEntry{
+		Member: big.NewInt(101), NullifierPk: spptest.MustNullifierPk(t, big.NewInt(7)), CtHash: big.NewInt(17),
+		View0: view0, View1: view1, Revision: big.NewInt(1), ListTag: ListTag(t, salt),
 	})
-	return credentials
+	return tracking
 }
 
 func NewOwnerWrite(t testing.TB, salt *big.Int) OwnerWrite {
 	t.Helper()
-	credentials := SaltedCredentials(t, salt)
+	tracking := SaltedTracking(t, salt)
 	member := big.NewInt(101)
-	addresses := spptest.MustNewNullifierTree(t)
-	index := addresses.NextIndex()
-	proof, err := addresses.InsertWithWitness(CredentialAddress(t, credentials.Owner, credentials.RingID, member), protocol.NullifierTreeHeight)
-	if err != nil {
-		t.Fatal(err)
+	opening := tracking.Opening(member)
+	if !opening.Present {
+		t.Fatal("ringregistry: the salted owner is not enrolled")
 	}
-	write := registry.CredentialWrite{
-		Member: member, ListSalt: salt, Leaf: credentials.Opening(t, member).Leaf,
-		Address: registry.AddressLeaf{Next: proof.NextValue, Index: index},
-	}
-	for i, sibling := range proof.NewElementProof {
-		write.Address.Path[i] = sibling
-	}
-	return OwnerWrite{Credentials: credentials, Write: write, Key: ListKey(t, member, salt), AddressRoot: addresses.Root()}
+	owner := registry.PrivateOwner{ListSalt: salt, Record: opening.Record.Wires(), Path: opening.Path.Wires()}
+	return OwnerWrite{Tracking: tracking, Owner: owner, Key: ListKey(t, member, salt)}
+}
+
+// ZeroPrivateOwner is the all zero slot an unselected write carries.
+func ZeroPrivateOwner() registry.PrivateOwner {
+	zero := ZeroTrackingWrite()
+	return registry.PrivateOwner{ListSalt: 0, Record: zero.Old.Wires(), Path: zero.Slot.Wires()}
 }
 
 // PrivateBatch writes mask on the salted owner key at slot 0 of a private key of capacity writes, the other slots stay inactive.
@@ -64,14 +58,12 @@ func PrivateBatch(t testing.TB, capacity int, mask int64) *registry.PrivateApply
 	}
 	members := New(t)
 	c.OldRoot, c.OldNextIndex, c.ChainStart = members.Root(), members.NextIndex(), 17
-	c.Count, c.CredentialWrites = 1, 1
-	c.PrivateRingID, c.CredentialOwner, c.AddressRoot = owner.Credentials.RingID, owner.Credentials.Owner, owner.AddressRoot
-	copy(c.StateRoots, owner.Credentials.StateRoots(capacity))
+	c.Count, c.PrivateWrites, c.TrackingRoot = 1, 1, owner.Tracking.Root()
 	entry := Entry{Member: owner.Key, Mask: big.NewInt(mask), Value: big.NewInt(mask)}
-	c.Writes[0], c.Credentials[0] = members.Apply(t, entry).Wires(), owner.Write
+	c.Writes[0], c.Owners[0] = members.Apply(t, entry).Wires(), owner.Owner
 	for i := 1; i < capacity; i++ {
 		c.Writes[i] = members.Apply(t, Entry{Member: big.NewInt(2), Mask: new(big.Int), Value: new(big.Int)}).Wires()
-		c.Credentials[i] = ZeroCredentialWrite()
+		c.Owners[i] = ZeroPrivateOwner()
 	}
 	c.NewRoot, c.NewNextIndex = members.Root(), members.NextIndex()
 	c.ChainEnd = ringtest.MustPoseidonHash(t, ringtest.AsBigInt(c.ChainStart), entry.Hash(t))
@@ -84,10 +76,7 @@ func BindPrivateBatch(t testing.TB, c *registry.PrivateApplyRecordsCircuit) {
 	t.Helper()
 	fields := []frontend.Variable{
 		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,
-		Restrictive(c.Writes, int(ringtest.AsBigInt(c.Count).Int64())), c.CredentialWrites, c.PrivateRingID, c.CredentialOwner, c.AddressRoot,
-	}
-	for _, root := range c.StateRoots {
-		fields = append(fields, root[:]...)
+		Restrictive(c.Writes, int(ringtest.AsBigInt(c.Count).Int64())), c.PrivateWrites, c.TrackingRoot,
 	}
 	c.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(fields))
 }

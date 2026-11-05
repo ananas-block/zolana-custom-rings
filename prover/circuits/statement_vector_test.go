@@ -5,7 +5,6 @@ import (
 
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
@@ -16,10 +15,7 @@ type depositStatementCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	ContextHash     frontend.Variable
 	Count           frontend.Variable
-	RingID          frontend.Variable
-	CredentialOwner frontend.Variable
-	AddressRoot     frontend.Variable
-	StateRoots      [][2]frontend.Variable
+	TrackingRoot    frontend.Variable
 	OwnRoot         frontend.Variable
 	CuratorRoot     frontend.Variable
 	PolicyHash      frontend.Variable
@@ -33,12 +29,10 @@ type depositStatementCircuit struct {
 
 func (c *depositStatementCircuit) Define(api frontend.API) error {
 	circuit := &DepositCircuit{
-		ContextHash: c.ContextHash, Count: c.Count, OwnRoot: c.OwnRoot,
-		Credentials: policy.Credentials{CredentialOwner: c.CredentialOwner, AddressRoot: c.AddressRoot, StateRoots: c.StateRoots[:]},
-		PolicyHash:  c.PolicyHash, Assets: c.Assets[:], Amounts: c.Amounts[:],
+		ContextHash: c.ContextHash, Count: c.Count, TrackingRoot: c.TrackingRoot, OwnRoot: c.OwnRoot,
+		PolicyHash: c.PolicyHash, Assets: c.Assets[:], Amounts: c.Amounts[:],
 	}
 	circuit.CuratorRoot = c.CuratorRoot
-	circuit.RingProgramID = c.RingID
 	sealed := shared.Sealed{
 		Auditor:    gadget.PackBytesBE(api, c.AuditorPubkey[:]),
 		Eph:        gadget.PackBytesBE(api, c.EphPk[:]),
@@ -53,19 +47,18 @@ func (c *depositStatementCircuit) Define(api frontend.API) error {
 func TestDepositStatementMatchesRustVector(t *testing.T) {
 	var vectors struct {
 		Deposit struct {
-			ContextHash      string   `json:"context_hash"`
-			OwnerUtxoHashes  []string `json:"owner_utxo_hashes"`
-			Ciphertexts      []string `json:"ciphertexts"`
-			AuditorPubkey    string   `json:"auditor_pubkey"`
-			EphPk            string   `json:"eph_pk"`
-			Assets           []string `json:"assets"`
-			Amounts          []uint64 `json:"amounts"`
-			RingID           string   `json:"ring_id"`
-			CredentialFields []string `json:"credential_fields"`
-			OwnRoot          *string  `json:"member_registry_root"`
-			CuratorRoot      *string  `json:"curator_root"`
-			PolicyHash       *string  `json:"policy_hash"`
-			PublicInputHash  string   `json:"public_input_hash"`
+			ContextHash     string   `json:"context_hash"`
+			OwnerUtxoHashes []string `json:"owner_utxo_hashes"`
+			Ciphertexts     []string `json:"ciphertexts"`
+			AuditorPubkey   string   `json:"auditor_pubkey"`
+			EphPk           string   `json:"eph_pk"`
+			Assets          []string `json:"assets"`
+			Amounts         []uint64 `json:"amounts"`
+			TrackingRoot    string   `json:"tracking_root"`
+			OwnRoot         *string  `json:"member_registry_root"`
+			CuratorRoot     *string  `json:"curator_root"`
+			PolicyHash      *string  `json:"policy_hash"`
+			PublicInputHash string   `json:"public_input_hash"`
 		} `json:"deposit"`
 	}
 	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
@@ -75,16 +68,7 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 	}
 	witness := &depositStatementCircuit{
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash), ContextHash: ringtest.VectorField(t, v.ContextHash),
-		Count: len(v.OwnerUtxoHashes), RingID: ringtest.VectorField(t, v.RingID), OwnRoot: 0, CuratorRoot: 0, PolicyHash: 0,
-	}
-	if len(v.CredentialFields) < 4 || len(v.CredentialFields)%2 != 0 {
-		t.Fatalf("invalid credential statement length %d", len(v.CredentialFields))
-	}
-	witness.StateRoots = make([][2]frontend.Variable, (len(v.CredentialFields)-2)/2)
-	witness.CredentialOwner = ringtest.VectorField(t, v.CredentialFields[0])
-	witness.AddressRoot = ringtest.VectorField(t, v.CredentialFields[1])
-	for i := range witness.StateRoots {
-		witness.StateRoots[i] = [2]frontend.Variable{ringtest.VectorField(t, v.CredentialFields[2+2*i]), ringtest.VectorField(t, v.CredentialFields[3+2*i])}
+		Count: len(v.OwnerUtxoHashes), TrackingRoot: ringtest.VectorField(t, v.TrackingRoot), OwnRoot: 0, CuratorRoot: 0, PolicyHash: 0,
 	}
 	if v.OwnRoot != nil {
 		witness.OwnRoot = ringtest.VectorField(t, *v.OwnRoot)
@@ -110,6 +94,5 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 	}
 	copy(witness.AuditorPubkey[:], ringtest.VectorWires(t, v.AuditorPubkey, 33))
 	copy(witness.EphPk[:], ringtest.VectorWires(t, v.EphPk, 33))
-	shape := &depositStatementCircuit{StateRoots: make([][2]frontend.Variable, len(witness.StateRoots))}
-	ringtest.RequirePublicInputBound(t, shape, witness)
+	ringtest.RequirePublicInputBound(t, &depositStatementCircuit{}, witness)
 }
