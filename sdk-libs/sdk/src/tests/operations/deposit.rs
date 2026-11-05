@@ -737,6 +737,7 @@ async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
     assert_eq!(
         keys,
         [
+            "addressRoot",
             "amounts",
             "assetEntries",
             "assets",
@@ -744,6 +745,8 @@ async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
             "blindingSecrets",
             "contextHash",
             "count",
+            "credentialOpenings",
+            "credentialOwner",
             "curatorProof",
             "curatorRecords",
             "curatorRoot",
@@ -772,10 +775,7 @@ async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
             "salted",
             "senderEntries",
             "sources",
-            "trackingProof",
-            "trackingRecords",
-            "trackingRoot",
-            "trackingSubjects",
+            "stateRoots",
             "withdrawalCount",
             "withdrawalHash",
             "withdrawals",
@@ -830,7 +830,7 @@ async fn an_anonymous_batch_funds_a_pda_beside_a_wallet() {
         ..holder.shielded_address().unwrap()
     };
     let chain = Chain::ring(RingSettings::new(RingMode::Anonymous))
-        .with_tracking(&[wallet, program_address]);
+        .with_credentials(&[wallet, program_address]);
     let to = |recipient| RingAddress {
         recipient,
         ring_program_id: ring().program_id(),
@@ -926,7 +926,7 @@ mod capacities {
             ..RingSettings::new(RingMode::Confidential)
         })
         .with_registry(Registry::new(&[]), &rules)
-        .with_tracking_tag(&addresses, domain::list_tag(&SALT).unwrap())
+        .with_credential_tag(&addresses, domain::list_tag(&SALT).unwrap())
         .with(
             pda::spl_asset_registry(&MINT),
             account(
