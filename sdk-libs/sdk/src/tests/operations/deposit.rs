@@ -52,7 +52,7 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
     ));
     let prepared = deposit(&payer, hidden).prepare(&anonymous).await.unwrap();
     assert_eq!(
-        (prepared.utxo().owner, prepared.utxo().amount),
+        (prepared.utxos()[0].owner, prepared.utxos()[0].amount),
         (member.signing_pubkey(), 5)
     );
 }
@@ -84,6 +84,29 @@ async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
     assert!(matches!(
         at_zero.prove_bound(&enrolled.client()).await,
         Err(RingError::EnrolledRecipientAtZeroKey { slot_index: 0 })
+    ));
+}
+
+/// A note sealed to a viewing key the recipient's row no longer names stays unread.
+#[tokio::test]
+async fn a_deposit_refuses_a_viewing_key_its_recipients_row_replaced() {
+    let (member, payer) = (keypair(2), keypair(9));
+    let enrolled = member.shielded_address().unwrap();
+    let rotated = spr_keypair::ShieldedAddress {
+        viewing_pubkey: keypair(3).shielded_address().unwrap().viewing_pubkey,
+        ..enrolled
+    };
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential)).with_tracking(&[enrolled]);
+    let stale = deposit(&payer, DepositRecipient::Confidential(rotated))
+        .prepare(&chain)
+        .await
+        .unwrap();
+    assert!(matches!(
+        stale.prove_bound(&chain.clone().client()).await,
+        Err(RingError::RecipientViewingKeyStale {
+            slot_index: 0,
+            row_revision: 1
+        })
     ));
 }
 
@@ -139,7 +162,10 @@ async fn a_co_signer_outside_the_deposit_scope_does_not_sign() {
             ..deposit(&payer, recipient)
         };
         let prepared = named.prepare(&chain).await.unwrap();
-        assert_eq!(named.signers(&prepared).len(), 1 + usize::from(signs));
+        assert_eq!(
+            named.batch().signers(&prepared).len(),
+            1 + usize::from(signs)
+        );
     }
 }
 
@@ -246,8 +272,8 @@ async fn a_retry_draws_a_new_note_and_a_frame_proves_once() {
     .await
     .unwrap();
     let retried = prepared.fresh_attempt().unwrap();
-    assert_ne!(retried.utxo().blinding, prepared.utxo().blinding);
-    assert_eq!(retried.utxo().amount, prepared.utxo().amount);
+    assert_ne!(retried.utxos()[0].blinding, prepared.utxos()[0].blinding);
+    assert_eq!(retried.utxos()[0].amount, prepared.utxos()[0].amount);
     assert_ne!(retried.spp.data, prepared.spp.data);
     assert_ne!(
         retried.disclosure.context_hash,
@@ -758,4 +784,218 @@ async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
             "withdrawals",
         ]
     );
+}
+
+#[tokio::test]
+async fn own_notes_of_one_batch_take_consecutive_sender_tags() {
+    let member = keypair(1);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
+    let history = history(&member);
+    let own = crate::DepositOutput {
+        recipient: DepositRecipient::Anonymous {
+            keys: &member,
+            history: &history,
+        },
+        asset: DepositAsset::Sol,
+        amount: 5,
+        list_salt: None,
+    };
+    let prepared = crate::RingDepositBatch {
+        ring: ring(),
+        payer: &payer,
+        tree: pda::tree(TREE_ID),
+        outputs: vec![own, own],
+        cosigner: None,
+    }
+    .prepare(&chain)
+    .await
+    .unwrap();
+    for tx_count in [0, 1] {
+        assert!(publishes(
+            &prepared,
+            &member.get_sender_view_tag(tx_count).unwrap()
+        ));
+    }
+    assert_eq!(prepared.viewing_history().unwrap().current().tx_count(), 2);
+}
+
+mod capacities {
+    use bytemuck::Zeroable;
+    use custom_ring_interface::{
+        domain, CustomRingProof, DepositPrefix, DepositSubjects, RingDepositAuditCapsule,
+    };
+    use spr_interface::{
+        instruction::instruction_data::deposit::RingDepositIxDataRef,
+        state::{discriminator::SPL_ASSET_REGISTRY, SplAssetRegistry},
+        PROGRAM_ID_PUBKEY,
+    };
+    use spr_keypair::ShieldedKeypair;
+    use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
+
+    use super::*;
+    use crate::{
+        deposit::DepositFrame,
+        tests::support::{account, Registry},
+        DepositOutput, DepositSplAccounts, RingDepositBatch,
+    };
+
+    const SALT: [u8; 32] = [7; 32];
+    const MINT: Address = Address::new_from_array([0x3c; 32]);
+
+    fn output(owner: &ShieldedKeypair, asset: DepositAsset) -> DepositOutput<'static> {
+        DepositOutput {
+            recipient: DepositRecipient::Confidential(owner.shielded_address().unwrap()),
+            asset,
+            amount: 5,
+            list_salt: Some(SALT),
+        }
+    }
+
+    fn spl() -> DepositAsset {
+        DepositAsset::Spl(DepositSplAccounts {
+            mint: MINT,
+            user_token: Address::new_from_array([0x3d; 32]),
+            token_program: pda::spl_token_program_id(),
+        })
+    }
+
+    fn policy_ring(list: ListId, enrolled: &[&ShieldedKeypair]) -> Chain {
+        let rules = RuleTable::builder()
+            .rule(Rule::forbid(Subject::OutputOwner, list))
+            .build();
+        let addresses: Vec<_> = enrolled
+            .iter()
+            .map(|owner| owner.shielded_address().unwrap())
+            .collect();
+        Chain::ring(RingSettings {
+            has_policy: true,
+            ..RingSettings::new(RingMode::Confidential)
+        })
+        .with_registry(Registry::new(&[]), &rules)
+        .with_tracking_tag(&addresses, domain::list_tag(&SALT).unwrap())
+        .with(
+            pda::spl_asset_registry(&MINT),
+            account(
+                PROGRAM_ID_PUBKEY,
+                &SplAssetRegistry {
+                    discriminator: SPL_ASSET_REGISTRY,
+                    reserved: [0; 7],
+                    mint: MINT,
+                    asset_id: 2,
+                },
+            ),
+        )
+    }
+
+    /// The key the records select, after the witness and the frame the program parses agree on it.
+    async fn key(chain: &Chain, outputs: Vec<DepositOutput<'_>>) -> u8 {
+        let payer = keypair(9);
+        let count = outputs.len();
+        let prepared = RingDepositBatch {
+            ring: ring(),
+            payer: &payer,
+            tree: pda::tree(TREE_ID),
+            outputs,
+            cosigner: None,
+        }
+        .prepare(chain)
+        .await
+        .unwrap();
+        let records = prepared.disclosure.records(ring(), chain).await.unwrap();
+        let key = records.key_capacity;
+        let capacity = usize::from(key);
+        // 1. The witness fills the key's slots and pools, padding past the notes.
+        let body = serde_json::to_value(prepared.disclosure.body(&records).unwrap()).unwrap();
+        let length = |field: &str| body[field].as_array().unwrap().len();
+        assert_eq!(body["count"], count);
+        for field in ["ownerPkHashes", "assets", "outputEntries", "ownerEntries"] {
+            assert_eq!(length(field), capacity, "{field}");
+        }
+        assert_eq!(length("ownRecords"), DepositSubjects::pool_width(key));
+        assert_eq!(length("trackingRecords"), capacity);
+        // 2. The frame names the key and fits a transaction, each capsule at its slot under one ephemeral key.
+        let frame = DepositFrame {
+            roots: records.roots(),
+            key_capacity: key,
+        };
+        prepared.check_size(frame).unwrap();
+        let instruction = prepared
+            .instruction(CustomRingProof::zeroed(), frame)
+            .unwrap();
+        let (prefix, spp) = instruction.data.split_at(DepositPrefix::SIZE);
+        assert_eq!(DepositPrefix::parse(prefix).unwrap().key_capacity, key);
+        let deposit = RingDepositIxDataRef::from_bytes(&spp[1..]).unwrap();
+        assert_eq!(deposit.deposits.len(), count);
+        let capsules: Vec<_> = deposit
+            .deposits
+            .iter()
+            .map(|entry| {
+                RingDepositAuditCapsule::parse(entry.encrypted.ciphertext)
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect();
+        for (slot, capsule) in capsules.iter().enumerate() {
+            assert_eq!(usize::from(capsule.slot_index), slot);
+            assert_eq!(capsule.eph_pk, capsules[0].eph_pk);
+        }
+        assert_eq!(prepared.utxos().len(), count);
+        key
+    }
+
+    #[tokio::test]
+    async fn two_recipients_of_two_assets_take_key_two() {
+        let (first, second) = (keypair(1), keypair(2));
+        let chain = policy_ring(ListId::Block, &[&first, &second]);
+        let outputs = vec![output(&first, DepositAsset::Sol), output(&second, spl())];
+        assert_eq!(key(&chain, outputs).await, 2);
+    }
+
+    /// Two recipients, two assets and two salted keys need six records, key 2 holds four.
+    #[tokio::test]
+    async fn two_salted_recipients_of_two_assets_take_key_four() {
+        let (first, second) = (keypair(1), keypair(2));
+        let chain = policy_ring(ListId::PrivateBlock, &[&first, &second]);
+        let outputs = vec![output(&first, DepositAsset::Sol), output(&second, spl())];
+        assert_eq!(key(&chain, outputs).await, 4);
+    }
+
+    /// Four salted recipients need nine records past key 4's eight, five notes exceed its slots.
+    #[tokio::test]
+    async fn nine_records_or_five_notes_take_key_eight() {
+        let owners: Vec<_> = (1..=5).map(keypair).collect();
+        let enrolled: Vec<_> = owners.iter().collect();
+        let salted = policy_ring(ListId::PrivateBlock, &enrolled);
+        let four = owners[..4]
+            .iter()
+            .map(|owner| output(owner, DepositAsset::Sol))
+            .collect();
+        assert_eq!(key(&salted, four).await, 8);
+        let plain = policy_ring(ListId::Block, &enrolled);
+        let five = owners
+            .iter()
+            .map(|owner| output(owner, DepositAsset::Sol))
+            .collect();
+        assert_eq!(key(&plain, five).await, 8);
+    }
+
+    /// No key holds nine slots, the batch is refused before a secret is drawn.
+    #[tokio::test]
+    async fn a_batch_past_the_widest_key_is_refused() {
+        let payer = keypair(9);
+        let recipient = keypair(1);
+        let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
+        let batch = RingDepositBatch {
+            ring: ring(),
+            payer: &payer,
+            tree: pda::tree(TREE_ID),
+            outputs: vec![output(&recipient, DepositAsset::Sol); 9],
+            cosigner: None,
+        };
+        assert!(matches!(
+            batch.prepare(&chain).await,
+            Err(RingError::DepositUnkeyed)
+        ));
+    }
 }

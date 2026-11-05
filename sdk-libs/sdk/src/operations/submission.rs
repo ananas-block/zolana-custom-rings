@@ -423,10 +423,10 @@ impl<'a> RingSubmission<'a> {
         self.attempts
     }
 
-    /// The note of the deposit's latest attempt, the one a confirmation settled.
-    pub fn deposit_utxo(&self) -> Option<&spr_transaction::Utxo> {
+    /// The notes of the deposit's latest attempt, the ones a confirmation settled, in slot order.
+    pub fn deposit_utxos(&self) -> Option<&[spr_transaction::Utxo]> {
         match &self.operation {
-            RingOperation::Deposit(deposit) => Some(deposit.utxo()),
+            RingOperation::Deposit(deposit) => Some(deposit.utxos()),
             _ => None,
         }
     }
