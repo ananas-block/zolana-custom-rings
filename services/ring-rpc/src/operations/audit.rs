@@ -244,21 +244,27 @@ impl<S: TransactionSource> AuditService<S> {
         value: &[u8; 32],
     ) -> Result<OwnerEnrollment, RingRpcError> {
         let store = self.shared.store(self.ring);
+        // 1. The read claims a free lease. A follower answers from the holder's commits alone and
+        //    never scans into its mirror, so a restart finds no enrollment it never committed.
         let scanned = {
-            let mut backfill = store.backfill.lock().await;
+            let mut guard = store.backfill.lock().await;
+            let backfill = &mut *guard;
             let seal = self.note_seal()?;
-            let durable = self.writer(backfill.writer, &seal);
-            if self.shared.database.is_some() && durable.is_none() {
-                self.reload(&store, &mut backfill, &seal).await?;
-                match self.shared.source.root(self.ring).await? {
+            match self.projection(&store, backfill, &seal).await? {
+                Projection::Memory => {
+                    self.refresh_enrollments(&store, &mut backfill.tracking_cursor, None)
+                        .await?
+                }
+                Projection::Writer(writer) => {
+                    self.refresh_enrollments(&store, &mut backfill.tracking_cursor, Some(&writer))
+                        .await?
+                }
+                Projection::Follower => match self.shared.source.root(self.ring).await? {
                     Some(root) if backfill.tracking_cursor.next_leaf() < root.next_index => {
                         ScanEnd::Partial
                     }
                     _ => ScanEnd::Complete,
-                }
-            } else {
-                self.refresh_enrollments(&store, &mut backfill.tracking_cursor, durable.as_ref())
-                    .await?
+                },
             }
         };
         // 2. A held enrollment answers whatever the scan end, a missing one only after a complete scan.
