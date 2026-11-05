@@ -125,6 +125,8 @@ export class ViewingKeyEntry {
   readonly #knownSenders: ReadonlyMap<string, X25519PublicKey>;
   /** `null` reads the ring from its start. */
   readonly #ringPositions: ReadonlyMap<Address, bigint | null>;
+  /** The confidential sync's slot and owner tag reads are complete through it, `null` reads from the start. */
+  readonly tagPosition: bigint | null;
 
   private constructor(fields: EntryFields) {
     this.viewingPublicKey = fields.viewingPublicKey;
@@ -133,6 +135,7 @@ export class ViewingKeyEntry {
     this.request = fields.request;
     this.#knownSenders = new Map(fields.knownSenders);
     this.#ringPositions = new Map(fields.ringPositions);
+    this.tagPosition = fields.tagPosition;
     Object.freeze(this);
   }
 
@@ -144,6 +147,7 @@ export class ViewingKeyEntry {
       request: StreamCounter.EMPTY,
       knownSenders: new Map(),
       ringPositions: new Map(),
+      tagPosition: null,
     });
   }
 
@@ -191,6 +195,7 @@ export class ViewingKeyEntry {
       request: StreamCounter;
       knownSenders: readonly X25519PublicKey[];
       ringPositions: readonly RingPosition[];
+      tagPosition: bigint | null;
     }>,
   ): ViewingKeyEntry {
     if (fields.knownSenders.some(isSmallOrder))
@@ -208,6 +213,7 @@ export class ViewingKeyEntry {
       request: fields.request,
       knownSenders,
       ringPositions,
+      tagPosition: fields.tagPosition,
     });
   }
 
@@ -217,6 +223,11 @@ export class ViewingKeyEntry {
       ...this.#fields(),
       ringPositions: new Map([...this.#ringPositions, [ring, afterSlot]]),
     });
+  }
+
+  /** @internal */
+  _withTagPosition(afterSlot: bigint): ViewingKeyEntry {
+    return new ViewingKeyEntry({ ...this.#fields(), tagPosition: afterSlot });
   }
 
   /** @internal A lower `next` would issue a tag again. */
@@ -233,7 +244,7 @@ export class ViewingKeyEntry {
     const addedUnread = this.ringPositions().every(
       ({ ring, afterSlot }) => stored.ringPosition(ring) !== undefined || afterSlot === null,
     );
-    return counters && keptEvery && addedUnread;
+    return counters && keptEvery && addedUnread && this.tagPosition === stored.tagPosition;
   }
 
   /** @internal `read` is the same key after a scan, a ring added since keeps its unread position. */
@@ -254,6 +265,7 @@ export class ViewingKeyEntry {
       request: this.request,
       knownSenders: this.#knownSenders,
       ringPositions: this.#ringPositions,
+      tagPosition: this.tagPosition,
     };
   }
 }
@@ -358,6 +370,17 @@ export class ViewingHistory {
     return this.withEntry(index, entry._withRingPosition(ring, checkpoint));
   }
 
+  /** @internal Each named key's confidential tag reads are complete through `afterSlot`. */
+  _withTagPosition(keys: readonly X25519PublicKey[], afterSlot: bigint): ViewingHistory {
+    return new ViewingHistory(
+      this.entries.map((entry) =>
+        keys.some((key) => key.equals(entry.viewingPublicKey))
+          ? entry._withTagPosition(afterSlot)
+          : entry,
+      ),
+    );
+  }
+
   /** @internal Every stored key's progress unmoved, an added key starts with none. */
   _progressMatches(stored: ViewingHistory): boolean {
     return (
@@ -370,7 +393,8 @@ export class ViewingHistory {
           stored.entry(entry.viewingPublicKey) !== undefined ||
           (entry.tx.scanned === 0n &&
             entry.request.scanned === 0n &&
-            entry.ringPositions().every(({ afterSlot }) => afterSlot === null)),
+            entry.ringPositions().every(({ afterSlot }) => afterSlot === null) &&
+            entry.tagPosition === null),
       )
     );
   }
@@ -408,7 +432,8 @@ export class ViewingHistory {
         `{"viewingPubkey":"${keyOf(entry.viewingPublicKey)}","createdAt":${entry.createdAt},` +
         `"tx":${counter(entry.tx)},"request":${counter(entry.request)},` +
         `"knownSenders":[${senders.map((sender) => `"${sender}"`).join(",")}],` +
-        `"ringPositions":[${positions.join(",")}]}`
+        `"ringPositions":[${positions.join(",")}],` +
+        `"tagPosition":${entry.tagPosition ?? "null"}}`
       );
     });
     return `{"viewingHistory":[${entries.join(",")}]}`;
@@ -472,6 +497,7 @@ interface EntryFields {
   readonly request: StreamCounter;
   readonly knownSenders: ReadonlyMap<string, X25519PublicKey>;
   readonly ringPositions: ReadonlyMap<Address, bigint | null>;
+  readonly tagPosition: bigint | null;
 }
 
 export function viewTagStream(stream: EntryStream, index: bigint): ViewTagStream {
@@ -492,6 +518,7 @@ function storedEntry(value: unknown): ViewingKeyEntry {
     "request",
     "knownSenders",
     "ringPositions",
+    "tagPosition",
   ]);
   return ViewingKeyEntry.restore({
     viewingPublicKey: pubkey(stored["viewingPubkey"], "viewingPubkey"),
@@ -502,6 +529,7 @@ function storedEntry(value: unknown): ViewingKeyEntry {
       pubkey(key, "knownSenders"),
     ),
     ringPositions: list(stored["ringPositions"], "ringPositions").map(storedPosition),
+    tagPosition: stored["tagPosition"] === null ? null : u64(stored["tagPosition"], "tagPosition"),
   });
 }
 
