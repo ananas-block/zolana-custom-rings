@@ -1,3 +1,4 @@
+import { rootSequence, stateRootAt } from "../../../src/protocol/membership/credential.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
 import {
@@ -94,10 +95,10 @@ import {
   walletKeys,
   CURATOR_REVISION,
   OWN_REVISION,
-  TRACKING_REVISION,
   hex,
   type Fixture,
   type RingFixtureOptions,
+  TREE,
 } from "../../helpers/ring-pipeline.js";
 
 import {
@@ -510,7 +511,9 @@ describe("policy ring", () => {
     expect(data.approval).toBe(ApprovalMask.outflow);
     expect(data.ownRevision).toBe(OWN_REVISION);
     expect(data.policy?.curatorRevision).toBe(CURATOR_REVISION);
-    expect(data.trackingRevision).toBe(TRACKING_REVISION);
+    // Tree 0 holds the address root and the one state root, both in history slot 0.
+    expect(data.credentialRead.addressRootIndex).toBe(0);
+    expect(data.credentialRead.stateRootIndexes).toEqual([0]);
     const ringPolicy = await policyOf(fixture);
     expect(proven.policy).toEqual({
       ringProgramId: fixture.ringProgramId,
@@ -779,13 +782,17 @@ describe("policy ring", () => {
     expect(fixture.sppCalls).toHaveLength(0);
   });
 
-  it("binds the tracking root on every ring and refuses an output owner with no row", async () => {
+  it("binds the credential roots on every ring and refuses an output owner with no credential", async () => {
     const sender = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
     const fixture = await ringFixture({ table: EMPTY_TABLE });
     const proven = await prove(fixture, sender, transferTo(fixture, sender, [recipient]));
     const { data } = await expanded(fixture, proven, "confidential");
-    expect(checkTransferProof(fixture, data).trackingRoot).toEqual(fixture.trackingTree.root);
+    const roots = checkTransferProof(fixture, data).credentialRoots;
+    const tree = fixture.accounts.get(TREE);
+    if (tree === undefined) throw new Error("no tree 0");
+    expect(roots.addressRoot).toEqual(rootSequence(tree.data, 0)?.root);
+    expect(roots.stateRoots[0]).toEqual({ treeId: 0, root: stateRootAt(tree.data, 0) });
     expect(data.policy?.curatorRevision).toBeUndefined();
 
     const unregistered = await ringFixture({ table: EMPTY_TABLE });
@@ -1212,9 +1219,9 @@ describe("delegate move builder", () => {
           if (address === ring) reads.ring += 1;
           return fixture.client.getAccount(address);
         },
-        getTrackingRecordPool: async (request) => {
+        getShieldedTransactionsByNullifiers: async (request, config, context) => {
           reads.openings += 1;
-          return fixture.client.getTrackingRecordPool(request);
+          return fixture.client.getShieldedTransactionsByNullifiers(request, config, context);
         },
         getLatestBlockhash: async () => BLOCKHASH,
         ...kitReads({
