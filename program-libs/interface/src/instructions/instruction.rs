@@ -71,7 +71,7 @@ instruction_tags! {
     SetDelegate = SET_DELEGATE: 64 => ACCOUNT_UNITS,
     AuthorityTransfer = AUTHORITY_TRANSFER: 56 => PROOF_UNITS,
     Deposit = DEPOSIT: 58 => PROOF_UNITS,
-    /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.
+    /// Signed by the upgrade authority, one budget for the ring account, its policy and the SPP configuration CPI.
     Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
     WriteFrame = WRITE_FRAME: 59 => ACCOUNT_UNITS,

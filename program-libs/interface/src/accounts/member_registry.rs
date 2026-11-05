@@ -22,7 +22,7 @@ pub const QUAD_HEIGHT: usize = 10;
 pub const MEMBER_REGISTRY_CAPACITY: u64 = 1 << (2 * QUAD_HEIGHT);
 /// Writes the larger apply key proves.
 pub const APPLY_BATCH: usize = 16;
-/// Slots an SDK-created records registry and a tracking registry keep an outgoing root readable.
+/// Default slot allowance for a retired policy record root.
 pub const GRACE_SLOTS: u64 = 750;
 
 /// `q - 1`, the sentinel's next, every member sorts strictly below it.

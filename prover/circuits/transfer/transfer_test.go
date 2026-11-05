@@ -269,7 +269,7 @@ func TestDelegateInputOwners(t *testing.T) {
 			})
 		})
 	}
-	t.Run("a note off its tracking key", func(t *testing.T) {
+	t.Run("a note off its credential key", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.Delegate)
 		w.Inputs = []ringaudit.Input{keyed(t, owner, 51), keyed(t, other, 52)}
 		w.Enrolled = map[string]*big.Int{other.String(): big.NewInt(0x78)}
@@ -353,17 +353,31 @@ func TestOutputPredicateOnEveryRail(t *testing.T) {
 		}}
 		return w
 	}
-	for name, mutate := range map[string]func(ringtransfer.World) ringtransfer.World{"a nonzero key with no row": unenrolled, "a zero key under a row": zeroToEnrolled} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(ringtransfer.World) ringtransfer.World
+		refuse bool
+	}{
+		{"a nonzero key with no credential", unenrolled, true},
+		{"a zero key for an enrolled owner", zeroToEnrolled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(c *transfer.TransferCircuit) {
+				if tc.refuse {
+					refused(t, c, frame)
+				} else {
+					requireSolved(t, c)
+				}
+			}
 			for _, rail := range []ringtransfer.Rail{ringtransfer.Signer, ringtransfer.InProof, ringtransfer.Delegate} {
 				w := onRail(confidential2, rail)
-				w.World = mutate(w.World)
-				refused(t, w.Build(t).Circuit, frame)
+				w.World = tc.mutate(w.World)
+				check(w.Build(t).Circuit)
 			}
 			for _, rail := range []ringtransfer.AnonymousRail{ringtransfer.HiddenSender, ringtransfer.PublicOwners, ringtransfer.AnonymousDelegate} {
 				w := onAnonymous(anonymous2, rail)
-				w.World = mutate(w.World)
-				refused(t, w.Build(t).Circuit, frame)
+				w.World = tc.mutate(w.World)
+				check(w.Build(t).Circuit)
 			}
 		})
 	}
@@ -732,7 +746,7 @@ func TestStatementBindsEveryElement(t *testing.T) {
 	}
 }
 
-// A key with no tracking rows for its legs always has the wide key to move to.
+// A key with no credential rows for its legs always has the wide key to move to.
 func TestNarrowKeysFitTheWideKey(t *testing.T) {
 	var wide transfer.Shape
 	for _, shape := range transfer.Shapes {

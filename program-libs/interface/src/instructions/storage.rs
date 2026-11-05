@@ -12,12 +12,12 @@ use solana_address::Address;
 use zolana_ring_policy::{ListSet, Member};
 
 use crate::{
+    ApplyRecordsIxData, CredentialRead, ReaderKeyBytes, RecordWriteData,
     error::CustomRingError,
     instruction::{list_and_mint_entry, write_count},
     key_catalog::RingCircuit,
     member_registry::RecordWrite,
     storage::{RegistryId, Revision, StorageError},
-    ApplyRecordsIxData, CredentialRead, ReaderKeyBytes, RecordWriteData,
 };
 
 pub mod tag {
@@ -64,13 +64,19 @@ pub struct RecordWriteClassification<'a, I> {
     pub asset_writes: &'a [AssetWrite],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateWriteCheckpoint {
+    pub ring_program: Address,
+    pub sequence: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageUpdateIxData<'a> {
     pub revision: Revision,
     pub writes: Vec<RecordWriteData>,
     pub asset_writes: Vec<AssetWrite>,
     pub credential_read: CredentialRead,
-    pub ring_program: Option<Address>,
+    pub private_write: Option<PrivateWriteCheckpoint>,
     pub apply: &'a ApplyRecordsIxData,
 }
 
@@ -153,27 +159,37 @@ impl<'a> StorageUpdateIxData<'a> {
             .ok_or(StorageError::InvalidInstructionData)?;
         let credential_read =
             CredentialRead::decode(&mut rest).map_err(|_| StorageError::InvalidCredentialRead)?;
-        let ring_program = if credential_read.state_root_indexes().is_empty() {
+        let private_write = if credential_read.state_root_indexes().is_empty() {
             None
         } else {
             let (program, remaining) = rest
                 .split_first_chunk::<32>()
                 .ok_or(StorageError::InvalidInstructionData)?;
+            let (sequence, remaining) = remaining
+                .split_first_chunk::<8>()
+                .ok_or(StorageError::InvalidInstructionData)?;
             rest = remaining;
-            Some(Address::new_from_array(*program))
+            Some(PrivateWriteCheckpoint {
+                ring_program: Address::new_from_array(*program),
+                sequence: u64::from_le_bytes(*sequence),
+            })
         };
         let ix = Self {
             revision: Revision(*revision),
             writes: writes
-                .chunks_exact(core::mem::size_of::<RecordWriteData>())
-                .map(bytemuck::pod_read_unaligned)
+                .as_chunks::<{ core::mem::size_of::<RecordWriteData>() }>()
+                .0
+                .iter()
+                .map(|bytes| bytemuck::pod_read_unaligned(bytes))
                 .collect(),
             asset_writes: assets
-                .chunks_exact(core::mem::size_of::<AssetWrite>())
-                .map(bytemuck::pod_read_unaligned)
+                .as_chunks::<{ core::mem::size_of::<AssetWrite>() }>()
+                .0
+                .iter()
+                .map(|bytes| bytemuck::pod_read_unaligned(bytes))
                 .collect(),
             credential_read,
-            ring_program,
+            private_write,
             apply: ApplyRecordsIxData::parse(rest)
                 .map_err(|_| StorageError::InvalidInstructionData)?,
         };
@@ -194,8 +210,9 @@ impl<'a> StorageUpdateIxData<'a> {
         data.push(asset_count);
         data.extend_from_slice(bytemuck::cast_slice(&self.asset_writes));
         self.credential_read.encode_into(&mut data);
-        if let Some(program) = self.ring_program {
-            data.extend_from_slice(program.as_array());
+        if let Some(checkpoint) = self.private_write {
+            data.extend_from_slice(checkpoint.ring_program.as_array());
+            data.extend_from_slice(&checkpoint.sequence.to_le_bytes());
         }
         data.extend_from_slice(bytemuck::bytes_of(self.apply));
         Ok(data)
@@ -214,7 +231,7 @@ impl<'a> StorageUpdateIxData<'a> {
             self.credential_read
                 .check_empty()
                 .map_err(|_| StorageError::InvalidCredentialRead)?;
-            if self.ring_program.is_some() {
+            if self.private_write.is_some() {
                 return Err(StorageError::InvalidCredentialRead);
             }
         } else {
@@ -226,7 +243,7 @@ impl<'a> StorageUpdateIxData<'a> {
             self.credential_read
                 .check_capacity(usize::from(writes))
                 .map_err(|_| StorageError::InvalidCredentialRead)?;
-            if self.ring_program.is_none() {
+            if self.private_write.is_none() {
                 return Err(StorageError::InvalidCredentialRead);
             }
         }

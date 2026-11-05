@@ -5,6 +5,11 @@
 //! counter decrypts to noise. A key fixes the counters by its capacity, and a frame transmits its
 //! published slots alone.
 //!
+//! The encrypted head holds the viewing secret in bytes 0 through 31 and note count `R` at byte 32.
+//! The big endian address bitmap `A` occupies bytes 33 through 40. Bit `i` names absolute input slot `i`.
+//! An entry head adds the big endian default bitmap in bytes 41 through 48, openings start at byte 49.
+//! The key capacity fixes the reserved envelope blocks, the published count fixes the transmitted opening count.
+//!
 //! Read after `program-libs/interface/src/proof/domain.rs`. Read before `program-libs/interface/src/proof/disclosure.rs`,
 //! `prover/circuits/audit/audit.go`.
 
@@ -369,6 +374,8 @@ pub struct InputClassification {
     pub address_input_bits: u64,
 }
 
+/// Checks classification bounds and order, not nullifiers or proof validity.
+/// The hidden owner rail separately requires slot zero to be a note.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InputMap {
     classification: InputClassification,
@@ -377,8 +384,12 @@ pub struct InputMap {
 
 impl InputClassification {
     pub fn check(self) -> Result<InputMap, CustomRingError> {
+        // 1. Each live slot is a note or address, their counts fix the prefix length L = R + popcount(A).
         let non_dummy_count =
             usize::from(self.note_count) + self.address_input_bits.count_ones() as usize;
+        // 2. Require 1 <= n <= C <= 64 for published count n and key capacity C.
+        // L <= n and every address bit must fall below L.
+        // Clear bits below L then name exactly R notes, slots L..C are dummies.
         if self.published_inputs == 0
             || self.published_inputs > self.capacity
             || self.capacity > u64::BITS as usize
@@ -403,12 +414,14 @@ impl InputMap {
         classes: &[InputClass],
         published_inputs: usize,
     ) -> Result<Self, CustomRingError> {
+        // 1. Capacity bounds every absolute bit position before any shift.
         if classes.len() > u64::BITS as usize {
             return Err(CustomRingError::RingTransactLength);
         }
         let mut note_count = 0;
         let mut address_input_bits = 0;
         let mut padding = false;
+        // 2. Notes and addresses can interleave, a dummy or the published boundary starts the dummy suffix.
         for (slot, class) in classes.iter().enumerate() {
             if (padding || slot >= published_inputs) && *class != InputClass::Dummy {
                 return Err(CustomRingError::RingTransactLength);
@@ -419,6 +432,7 @@ impl InputMap {
                 InputClass::Dummy => padding = true,
             }
         }
+        // 3. The bitmap and note count must reproduce the same bounded live prefix.
         InputClassification {
             published_inputs,
             capacity: classes.len(),
@@ -460,6 +474,7 @@ impl InputMap {
         (0..self.capacity()).map(move |slot| self.class_at(slot))
     }
 
+    /// Default openings select absolute note positions, never an address or a dummy.
     pub fn validate_default_input_bits(self, bits: u64) -> Result<(), CustomRingError> {
         if bits & self.address_input_bits() != 0
             || bits.checked_shr(self.non_dummy_count as u32).unwrap_or(0) != 0
@@ -480,7 +495,7 @@ impl InputMap {
     }
 }
 
-/// The envelope past its sealed key and count.
+/// Entry evidence follows the sealed viewing key, note count and address bitmap.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuditEvidence {
     None,
@@ -510,6 +525,7 @@ impl AuditEnvelope {
         .check()
     }
 
+    /// Writes the raw fields, use `input_map` or `decode` to check classification bounds.
     pub fn encode(&self) -> Vec<u8> {
         let evidence_len = match &self.evidence {
             AuditEvidence::None => 0,
@@ -532,13 +548,15 @@ impl AuditEnvelope {
         out
     }
 
-    /// Refuses any length other than `layout`'s.
+    /// Refuses lengths and classification outside `layout`, ciphertext authentication remains with the caller.
     pub fn decode(plaintext: &[u8], layout: AuditStreamLayout) -> Result<Self, CustomRingError> {
+        // 1. The selected layout bounds both counts, read_all refuses bytes after its final opening.
         layout.checked()?;
         read_all(plaintext, |bytes| {
             let tx_viewing_secret = *bytes.array()?;
             let real_inputs = bytes.byte()?;
             let address_input_bits = u64::from_be_bytes(*bytes.array()?);
+            // 2. Entry openings retain absolute published positions, absent capacity slots carry no bytes.
             let evidence = match layout.key.entry {
                 false => AuditEvidence::None,
                 true => AuditEvidence::Entry {
@@ -554,6 +572,7 @@ impl AuditEnvelope {
                 address_input_bits,
                 evidence,
             };
+            // 3. R and A define one live prefix, entry bits select only its notes.
             let inputs = envelope.input_map(layout)?;
             if let AuditEvidence::Entry {
                 default_input_bits,
@@ -561,6 +580,8 @@ impl AuditEnvelope {
             } = &envelope.evidence
             {
                 inputs.validate_default_input_bits(*default_input_bits)?;
+                // 4. Unselected openings must be zero, matching the circuit's multiplication by the default note selector.
+                // Selected values remain unverified here, the ring proof binds them to the input commitments.
                 for (slot, opening) in openings.iter().enumerate() {
                     if default_input_bits & (1 << slot) == 0 && *opening != EntryInput::default() {
                         return Err(CustomRingError::RingTransactLength);

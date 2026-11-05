@@ -215,7 +215,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .send(&env.client)?;
     let member = &env.sender.keypair;
-    // A keyed note needs its owner's tracking row.
+    // A keyed note needs its owner's credential.
     EnrollOwners {
         ring,
         owners: &[member],
@@ -282,13 +282,11 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .open(&auditor)?;
     assert_eq!(nullifier_key.pubkey()?, member_address.nullifier_pubkey);
-    let tracking: custom_ring_interface::tracking::TrackingRegistry =
-        fetch_state(env.client.rpc(), &policy_registry(ring, &env)?.tracking)?;
     assert_eq!(
-        tracking.next_index(),
-        2,
-        "one enrolled member plus sentinel"
+        enrolled.member,
+        custom_ring_interface::credential::owner_member(&member.pubkey())?
     );
+    assert_eq!(enrolled.ring_id, ring.ring_id()?);
 
     let delegate = Keypair::new();
     DelegateAppointment {

@@ -14,13 +14,11 @@ use solana_address::Address;
 use spr_client::{AsyncRpc, ClientError};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
-    KeypairError, NullifierKey, ShieldedAddress, X25519Keypair, X25519Pubkey, SHIELDED_ADDRESS_LEN,
+    KeypairError, NullifierKey, ShieldedAddress, X25519Keypair, SHIELDED_ADDRESS_LEN,
 };
 use spr_transaction::{TransactionError, WalletUtxo};
 use thiserror::Error;
-use zolana_ring_client::{
-    AuditError, CredentialError, CredentialLookup, CredentialResolver, SealedNullifierKey,
-};
+use zolana_ring_client::{CredentialError, CredentialLookup, CredentialResolver};
 
 use crate::pipeline::same_owner;
 
@@ -30,8 +28,6 @@ pub enum DelegateSourceError {
     Unenrolled,
     #[error("the enrolled key derives another nullifier key than the source address names")]
     KeyMismatch,
-    #[error("the credential seal opens to another key than the credential holds")]
-    SealMismatch,
     #[error("note {index} belongs to another owner or key than the source")]
     ForeignNote { index: usize },
     #[error("note {index} does not rebuild the hash or nullifier it carries")]
@@ -46,8 +42,6 @@ pub enum DelegateSourceError {
     Transaction(#[from] TransactionError),
     #[error(transparent)]
     Client(#[from] ClientError),
-    #[error(transparent)]
-    Seal(#[from] AuditError),
     #[error(transparent)]
     Credential(#[from] CredentialError),
 }
@@ -81,27 +75,15 @@ impl<P: AsyncRpc, R: AsyncRpc> SourceEnrollment for CredentialEnrollment<'_, P, 
         source: &ShieldedAddress,
     ) -> Result<Option<NullifierKey>, DelegateSourceError> {
         let owner = source.solana_address()?;
-        let credential = match CredentialResolver::new(self.ring, owner)
+        match CredentialResolver::new(self.ring, owner)
             .resolve(self.photon, self.rpc)
             .await?
         {
-            CredentialLookup::Present(present) => present.credential,
-            CredentialLookup::Absent(_) => return Ok(None),
+            CredentialLookup::Present(present) => Ok(Some(present.nullifier_key(self.auditor)?)),
+            CredentialLookup::Absent(_) => Ok(None),
             // A queued or partly served enrollment is no evidence of a missing one.
-            CredentialLookup::Unknown(unknown) => {
-                return Err(CredentialError::Unknown(unknown).into())
-            }
-        };
-        let key = SealedNullifierKey {
-            eph_pk: X25519Pubkey::from_u(credential.eph_u)?,
-            ciphertext: credential.ciphertext,
+            CredentialLookup::Unknown(unknown) => Err(CredentialError::Unknown(unknown).into()),
         }
-        .open(self.auditor)?;
-        // The seal's pad alone does not bind the opened key to the credential.
-        if key.pubkey()? != credential.nullifier_pk {
-            return Err(DelegateSourceError::SealMismatch);
-        }
-        Ok(Some(key))
     }
 }
 

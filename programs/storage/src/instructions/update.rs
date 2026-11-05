@@ -125,7 +125,7 @@ impl PrivateWriteRoots<'_, '_> {
                 .credential_read
                 .check_empty()
                 .map_err(|_| StorageError::InvalidCredentialRead)?;
-            if !accounts.is_empty() || self.ix.ring_program.is_some() {
+            if !accounts.is_empty() || self.ix.private_write.is_some() {
                 return Err(StorageError::InvalidCredentialRead.into());
             }
             return Ok(CheckedWriteRoots {
@@ -138,11 +138,12 @@ impl PrivateWriteRoots<'_, '_> {
         if !self.registry.is_private() {
             return Err(StorageError::PrivateWriteWithoutRing.into());
         }
-        let ring_program = self
+        let expected = self
             .ix
-            .ring_program
+            .private_write
             .as_ref()
             .ok_or(StorageError::InvalidPrivateRing)?;
+        let ring_program = &expected.ring_program;
         if ring_id_field(ring_program.as_array()).map_err(|_| StorageError::HashingFailed)?
             != self.registry.private_ring_id
         {
@@ -163,6 +164,10 @@ impl PrivateWriteRoots<'_, '_> {
         let checkpoint = read_credential_tree(address_tree, |tree| {
             tree.checkpoint(self.ix.credential_read.address_root_index())
         })?;
+        // The instruction sequence must equal the authenticated root sequence for deterministic replay of the floor.
+        if expected.sequence != checkpoint.sequence() {
+            return Err(StorageError::InvalidCredentialRead.into());
+        }
         let state_roots = state_trees
             .iter_mut()
             .zip(indexes)

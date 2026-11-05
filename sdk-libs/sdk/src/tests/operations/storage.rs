@@ -14,6 +14,7 @@ const REGISTRY: Address = Address::new_from_array([4; 32]);
 
 fn write_of(list: ListId) -> RecordWriteData {
     let mut write = RecordWriteData::zeroed();
+    write.member = [1; 32];
     write.lists.mask = list.record_bit().to_le_bytes();
     write
 }
@@ -28,7 +29,7 @@ fn update(list: ListId) -> Result<Instruction, RingError> {
             writes: vec![write_of(list)],
             asset_writes: Vec::new(),
             credential_read: CredentialRead::empty(),
-            ring_program: None,
+            private_write: None,
             apply: &apply,
         },
     }

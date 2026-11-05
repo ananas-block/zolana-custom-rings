@@ -11,14 +11,13 @@ use custom_ring_cli::{wait_for, Probe, Zolana};
 use custom_ring_interface::{
     mint_policy_write,
     storage::{Revision, StorageRegistry},
-    storage_instruction::{EnrollIxData, StorageUpdateIxData},
-    tracking::TrackingAuthorization,
-    RecordWriteData, RingPolicy, WriteRecordsIxData,
+    storage_instruction::StorageUpdateIxData,
+    AuditCredential, CredentialRead, RecordWriteData, RingPolicy, WriteRecordsIxData,
 };
 use custom_ring_sdk::{
     CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
-    Enroll, EnrollInstruction, EnrollPending, InitializeStorage, ProvenRingTransfer, RingDeposit,
-    RingDepositReceipt, RingError, StorageApplyProof, UpdateStorage,
+    Enroll, InitializeStorage, ProvenRingTransfer, RingDeposit, RingDepositReceipt, RingError,
+    StorageApplyProof, UpdateStorage,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -28,11 +27,11 @@ use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient, Rpc};
 use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use spr_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
-use zolana_ring_client::{records::storage_apply_proof_inputs, RingIndexer, ViewingHistory};
-use zolana_ring_indexer::{
-    rpc::{GetStorageApplyProofInputsRequest, StorageWriteView},
-    tracking::GetPendingEnrollmentsRequest,
+use zolana_ring_client::{
+    records::storage_apply_proof_inputs, CredentialLookup, CredentialResolver, RingIndexer,
+    ViewingHistory,
 };
+use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
 use zolana_ring_keys::ListSaltHolder;
 use zolana_ring_policy::{
     ListChange, ListId, ListSet, Member, MintPolicy, Rule, RuleTable, Subject,
@@ -286,7 +285,7 @@ pub fn wait_for_list(
             _ if Instant::now() > deadline => {
                 return Err(anyhow!(
                     "{list_id:?} of {member:?} not indexed as {present}"
-                ))
+                ));
             }
             _ => sleep(Duration::from_millis(500)),
         }
@@ -336,68 +335,44 @@ pub fn owner_enrollment(
     env: &TestEnv,
     ring: CustomRing,
     owner: Address,
-) -> Result<Option<TrackingAuthorization>> {
-    let tracking = env
-        .run(ring.require_policy(env.client.as_async()))?
-        .tracking;
-    let (authorization, _) = TrackingAuthorization::find_address(&tracking, &owner);
-    env.client
-        .rpc()
-        .get_account(authorization)?
-        .map(|account| {
-            TrackingAuthorization::decode(&account.owner, &account.data)
-                .ok_or_else(|| anyhow!("{authorization} holds no tracking authorization"))
-        })
-        .transpose()
+) -> Result<Option<AuditCredential>> {
+    match env.client.block_on(
+        CredentialResolver::new(ring.program_id(), owner)
+            .resolve(env.client.as_async(), env.client.as_async()),
+    )? {
+        CredentialLookup::Present(present) => Ok(Some(present.credential)),
+        CredentialLookup::Absent(_) => Ok(None),
+        CredentialLookup::Unknown(reason) => {
+            Err(anyhow!("credential lookup is unknown {reason:?}"))
+        }
+    }
 }
 
-/// The indexer serves the rows on return.
-pub struct ApplyOwnerEnrollments<'a> {
+pub struct WaitForCredentials<'a> {
     pub ring: CustomRing,
     pub owners: &'a [Address],
     pub env: &'a TestEnv,
 }
 
-impl ApplyOwnerEnrollments<'_> {
-    pub fn send(self) -> Result<()> {
-        let env = self.env;
-        let registry = env
-            .run(self.ring.require_policy(env.client.as_async()))?
-            .tracking;
-        wait_for("the applied enrollments", || {
-            let mut applied = true;
+impl WaitForCredentials<'_> {
+    pub fn wait(self) -> Result<()> {
+        wait_for("credential state inclusion", || {
             for owner in self.owners {
-                applied &= owner_enrollment(env, self.ring, *owner)?
-                    .is_some_and(|enrollment| !enrollment.is_pending());
-            }
-            if applied {
-                let pending =
-                    env.client
-                        .indexer()
-                        .get_pending_enrollments(GetPendingEnrollmentsRequest {
-                            registry: registry.into(),
-                            after: None,
-                            limit: 1,
-                        })?;
-                return Ok(match pending.enrollments.is_empty() {
-                    true => Probe::Ready(()),
-                    false => Probe::NotYet,
-                });
-            }
-            match env.run(EnrollPending { ring: self.ring }.prove(env.client.ring_client())) {
-                Ok(Some(instruction)) => {
-                    send(env.client.rpc(), &env.payer, &[instruction])?;
-                    Ok(Probe::NotYet)
+                match self.env.client.block_on(
+                    CredentialResolver::new(self.ring.program_id(), *owner)
+                        .resolve(self.env.client.as_async(), self.env.client.as_async()),
+                )? {
+                    CredentialLookup::Present(_) => {}
+                    CredentialLookup::Absent(_) | CredentialLookup::Unknown(_) => {
+                        return Ok(Probe::NotYet);
+                    }
                 }
-                Ok(None) => Ok(Probe::NotYet),
-                Err(error) if error.is_projection_lag() => Ok(Probe::Retry(error.into())),
-                Err(error) => Err(error.into()),
             }
+            Ok(Probe::Ready(()))
         })
     }
 }
 
-/// Applied on return.
 pub struct EnrollOwners<'a> {
     pub ring: CustomRing,
     pub owners: &'a [&'a ShieldedKeypair],
@@ -406,92 +381,47 @@ pub struct EnrollOwners<'a> {
 
 impl EnrollOwners<'_> {
     pub fn send(self) -> Result<()> {
-        self.enroll()?;
-        let owners: Vec<Address> = self.owners.iter().map(|owner| owner.pubkey()).collect();
-        ApplyOwnerEnrollments {
-            ring: self.ring,
-            owners: &owners,
-            env: self.env,
-        }
-        .send()
-    }
-
-    /// One apply of the whole batch, a partial read of the pending queue would select a narrower key.
-    pub fn send_in_one_batch(self) -> Result<()> {
         let env = self.env;
-        self.enroll()?;
-        let registry = env
-            .run(self.ring.require_policy(env.client.as_async()))?
-            .tracking;
-        wait_for("the whole pending batch", || {
-            let pending =
-                env.client
-                    .indexer()
-                    .get_pending_enrollments(GetPendingEnrollmentsRequest {
-                        registry: registry.into(),
-                        after: None,
-                        limit: u64::try_from(self.owners.len())?,
-                    })?;
-            Ok(match pending.enrollments.len() == self.owners.len() {
-                true => Probe::Ready(()),
-                false => Probe::NotYet,
-            })
-        })?;
-        let owners: Vec<Address> = self.owners.iter().map(|owner| owner.pubkey()).collect();
-        ApplyOwnerEnrollments {
-            ring: self.ring,
-            owners: &owners,
-            env,
-        }
-        .send()
-    }
-
-    fn enroll(&self) -> Result<()> {
-        let env = self.env;
-        let payer = env.payer.pubkey();
-        let tracking_registry = env
-            .run(self.ring.require_policy(env.client.as_async()))?
-            .tracking;
         for owner in self.owners {
-            let instruction = match owner_enrollment(env, self.ring, owner.pubkey())? {
-                Some(enrolled) => EnrollInstruction {
-                    payer,
+            if let Some(credential) = owner_enrollment(env, self.ring, owner.pubkey())? {
+                anyhow::ensure!(credential.nullifier_pk == owner.nullifier_key.pubkey()?);
+                anyhow::ensure!(
+                    credential.list_tag
+                        == custom_ring_interface::domain::list_tag(
+                            &owner.list_salt(&self.ring.program_id())?
+                        )?
+                );
+                continue;
+            }
+            let enrollment = env.run(
+                Enroll {
+                    ring: self.ring,
                     owner: owner.pubkey(),
-                    tracking_registry,
-                    data: EnrollIxData {
-                        nullifier_pk: enrolled.nullifier_pk,
-                        list_tag: enrolled.list_tag,
-                        viewing_u: owner.viewing_pubkey().u(),
-                        eph_u: enrolled.eph_u,
-                        ciphertext: enrolled.ciphertext,
-                    },
-                    proof: None,
+                    payer: env.payer.pubkey(),
+                    output_tree: env.tree,
+                    nullifier_key: &owner.nullifier_key,
+                    list_salt: owner.list_salt(&self.ring.program_id())?,
+                    viewing_pubkey: owner.viewing_pubkey(),
                 }
-                .instruction(),
-                None => env.run(
-                    Enroll {
-                        ring: self.ring,
-                        payer,
-                        owner: owner.pubkey(),
-                        nullifier_key: &owner.nullifier_key,
-                        viewing_key: &owner.viewing_key,
-                        list_salt: owner.list_salt(&self.ring.program_id())?,
-                    }
-                    .prove(env.client.ring_client()),
-                )?,
-            };
+                .prove(env.client.ring_client()),
+            )?;
             SendAs {
                 rpc: env.client.rpc(),
                 payer: &env.payer,
                 holder: *owner,
             }
-            .send(&[instruction])?;
+            .send(&enrollment.instruction.instructions()?)?;
         }
-        Ok(())
+        let owners: Vec<_> = self.owners.iter().map(|owner| owner.pubkey()).collect();
+        WaitForCredentials {
+            ring: self.ring,
+            owners: &owners,
+            env,
+        }
+        .wait()
     }
 }
 
-/// A keyed note needs its owner's tracking row on every ring.
 pub fn enroll_actors(env: &TestEnv, ring: CustomRing) -> Result<()> {
     EnrollOwners {
         ring,
@@ -558,19 +488,27 @@ impl StorageRecords<'_> {
             }
         })?;
         let inputs = storage_apply_proof_inputs(&response)?;
-        let apply =
-            env.run(StorageApplyProof { inputs: &inputs }.prove(env.client.ring_client()))?;
         let account =
             spr_test_utils::test_validator_asserts::fetch_account(env.client.rpc(), &registry)?;
         let state = StorageRegistry::decode(&account.owner, &account.data)
             .ok_or_else(|| anyhow::anyhow!("the ring's records are not a storage registry"))?;
+        let apply = env.run(
+            StorageApplyProof {
+                inputs: &inputs,
+                registry: &state,
+                asset_writes: &[],
+            }
+            .prove(env.client.ring_client()),
+        )?;
         let update = UpdateStorage {
             authority,
             registry,
-            state: &state,
             data: StorageUpdateIxData {
                 revision: Revision::from(response.revision),
                 writes: self.writes,
+                asset_writes: Vec::new(),
+                credential_read: CredentialRead::empty(),
+                private_write: None,
                 apply: &apply,
             },
         };

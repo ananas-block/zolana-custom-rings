@@ -345,10 +345,13 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
     }
     if case.replies {
         let bodies = case.outputs - 2;
-        data.replies = Some(Replies {
-            len: MIN_REPLY_LEN as u16,
-            region: &fixture.replies[..MIN_REPLY_LEN * bodies],
-        });
+        data.replies = Some(
+            Replies::new(
+                MIN_REPLY_LEN as u16,
+                &fixture.replies[..MIN_REPLY_LEN * bodies],
+            )
+            .unwrap(),
+        );
     }
     if case.in_proof {
         data.in_proof_owner = Some(InProofOwner {

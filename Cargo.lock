@@ -7818,6 +7818,8 @@ dependencies = [
  "solana-keypair",
  "solana-transaction-error",
  "spr-client",
+ "spr-interface",
+ "spr-tree",
  "zolana-ring-policy",
 ]
 

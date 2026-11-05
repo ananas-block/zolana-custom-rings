@@ -89,10 +89,9 @@ impl CredentialPoolRead<'_> {
             data: &mut data,
         }
         .checkpoint(snapshot.address_root.root_index)?;
-        if *checkpoint.root() != snapshot.address_root.root {
-            return Err(RingError::CredentialRootMoved);
-        }
-        if checkpoint.sequence() != snapshot.address_root.sequence {
+        if *checkpoint.root() != snapshot.address_root.root
+            || checkpoint.sequence() != snapshot.address_root.sequence
+        {
             return Err(RingError::CredentialRootMoved);
         }
         let state_roots = snapshot

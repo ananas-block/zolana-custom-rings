@@ -61,59 +61,60 @@ func TestRegisterKeyStatementMatchesRustVector(t *testing.T) {
 	ringtest.RequirePublicInputBound(t, &keyStatementCircuit{}, witness)
 }
 
-type applyStatementFields struct {
+type recordsStatementCircuit struct {
 	PublicInputHash                                                    frontend.Variable `gnark:",public"`
 	OldRoot, NewRoot, OldNextIndex, NewNextIndex, ChainStart, ChainEnd frontend.Variable
 	Count                                                              frontend.Variable
-}
-
-type recordsStatementCircuit struct {
-	applyStatementFields
+	CredentialWrites, PrivateRingID, CredentialOwner, AddressRoot      frontend.Variable
+	StateRoots                                                         [][2]frontend.Variable
 }
 
 func (c *recordsStatementCircuit) Define(api frontend.API) error {
-	statement := (&ApplyRecordsCircuit{OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex, ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count}).statement()
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
-	return nil
-}
-
-type enrollmentsStatementCircuit struct {
-	applyStatementFields
-}
-
-func (c *enrollmentsStatementCircuit) Define(api frontend.API) error {
-	statement := (&ApplyEnrollmentsCircuit{OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex, ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count}).statement()
+	statement := (&ApplyRecordsCircuit{
+		OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex,
+		ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count,
+		CredentialWrites: c.CredentialWrites, PrivateRingID: c.PrivateRingID,
+		CredentialOwner: c.CredentialOwner, AddressRoot: c.AddressRoot, StateRoots: c.StateRoots,
+	}).statement()
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
 }
 
 type applyStatementVector struct {
-	OldRoot         string `json:"old_root"`
-	NewRoot         string `json:"new_root"`
-	OldNextIndex    uint32 `json:"old_next_index"`
-	NewNextIndex    uint32 `json:"new_next_index"`
-	ChainStart      string `json:"chain_start"`
-	ChainEnd        string `json:"chain_end"`
-	Count           uint64 `json:"count"`
-	PublicInputHash string `json:"public_input_hash"`
+	OldRoot          string   `json:"old_root"`
+	NewRoot          string   `json:"new_root"`
+	OldNextIndex     uint32   `json:"old_next_index"`
+	NewNextIndex     uint32   `json:"new_next_index"`
+	ChainStart       string   `json:"chain_start"`
+	ChainEnd         string   `json:"chain_end"`
+	Count            uint64   `json:"count"`
+	CredentialWrites uint16   `json:"credential_writes"`
+	PrivateRingID    string   `json:"private_ring_id"`
+	CredentialFields []string `json:"credential_fields"`
+	PublicInputHash  string   `json:"public_input_hash"`
 }
 
-func (v applyStatementVector) fields(t *testing.T) applyStatementFields {
-	t.Helper()
-	return applyStatementFields{
+func TestApplyRecordsStatementMatchesRustVector(t *testing.T) {
+	var vectors struct {
+		ApplyRecords applyStatementVector `json:"apply_records"`
+	}
+	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
+	v := vectors.ApplyRecords
+	if len(v.CredentialFields) < 4 || len(v.CredentialFields)%2 != 0 {
+		t.Fatalf("invalid credential statement length %d", len(v.CredentialFields))
+	}
+	witness := &recordsStatementCircuit{
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash),
 		OldRoot:         ringtest.VectorField(t, v.OldRoot), NewRoot: ringtest.VectorField(t, v.NewRoot),
 		OldNextIndex: v.OldNextIndex, NewNextIndex: v.NewNextIndex,
 		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count,
+		CredentialWrites: uint64(v.CredentialWrites), PrivateRingID: ringtest.VectorField(t, v.PrivateRingID),
+		CredentialOwner: ringtest.VectorField(t, v.CredentialFields[0]), AddressRoot: ringtest.VectorField(t, v.CredentialFields[1]),
+		StateRoots: make([][2]frontend.Variable, (len(v.CredentialFields)-2)/2),
 	}
-}
-
-func TestApplyStatementsMatchRustVector(t *testing.T) {
-	var vectors struct {
-		ApplyRecords     applyStatementVector `json:"apply_records"`
-		ApplyEnrollments applyStatementVector `json:"apply_enrollments"`
+	for i := range witness.StateRoots {
+		witness.StateRoots[i] = [2]frontend.Variable{ringtest.VectorField(t, v.CredentialFields[2+2*i]), ringtest.VectorField(t, v.CredentialFields[3+2*i])}
 	}
-	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
-	ringtest.RequirePublicInputBound(t, &recordsStatementCircuit{}, &recordsStatementCircuit{applyStatementFields: vectors.ApplyRecords.fields(t)})
-	ringtest.RequirePublicInputBound(t, &enrollmentsStatementCircuit{}, &enrollmentsStatementCircuit{applyStatementFields: vectors.ApplyEnrollments.fields(t)})
+	shape := &recordsStatementCircuit{StateRoots: make([][2]frontend.Variable, len(witness.StateRoots))}
+	ringtest.RequirePublicInputBound(t, shape, witness)
 }

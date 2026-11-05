@@ -23,7 +23,7 @@ use spr_interface::{
     ZERO_NULLIFIER_PUBKEY,
 };
 use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress};
-use spr_program::{instruction::MergeRingV2, ADDRESS_TREE_ID};
+use spr_program::instruction::MergeRingV2;
 use spr_transaction::{
     error::TransactionError,
     instructions::merge::{MergeProofInputs, MergeRail, MergeTransaction},
@@ -539,8 +539,8 @@ impl MergeSite<'_> {
             input_tree: self.input.input_tree,
             output_tree: self.input.output_tree,
             payer: self.payer,
-            // A hidden owner's tree is one more account, tree 0 stands in until the read.
-            credential_tree: layout.owner.is_none().then(|| pda::tree(ADDRESS_TREE_ID)),
+            // The hidden owner's tree is read after the fit, a tree id no merge names sizes it as new.
+            credential_tree: layout.owner.is_none().then(|| pda::tree(u16::MAX)),
             owner: layout.owner,
             data: CustomRingMergeIxData {
                 credential_read: match layout.owner {

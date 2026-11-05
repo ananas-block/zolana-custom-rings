@@ -12,6 +12,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -30,43 +31,44 @@ type withdrawalVector struct {
 
 // transferStatementVector holds every preimage go_vectors.rs reads, one per chain and digest position.
 type transferStatementVector struct {
-	Name             string                  `json:"name"`
-	Family           string                  `json:"family"`
-	InProof          bool                    `json:"in_proof"`
-	PublicOwners     bool                    `json:"public_owners"`
-	Delegate         bool                    `json:"delegate"`
-	ApprovalMask     uint64                  `json:"approval_mask"`
-	ApprovalTotals   string                  `json:"approval_totals"`
-	SignerDataCounts uint64                  `json:"signer_data_counts"`
-	NoSpend          bool                    `json:"no_spend"`
-	FirstNullifier   string                  `json:"first_nullifier"`
-	RingID           string                  `json:"ring_id"`
-	TxViewingU       string                  `json:"tx_viewing_u"`
-	AuditorPubkey    string                  `json:"auditor_pubkey"`
-	Envelope         string                  `json:"envelope"`
-	Salt             string                  `json:"salt"`
-	Layout           int64                   `json:"layout"`
-	OutputCapacity   int                     `json:"output_capacity"`
-	Outputs          []statementOutputVector `json:"outputs"`
-	InputCount       int                     `json:"input_count"`
-	PrivateTxHash    string                  `json:"private_tx_hash"`
-	Sender           *string                 `json:"sender"`
-	PartyIdentities  []string                `json:"party_identities"`
-	SignerSlots      int                     `json:"signer_slots"`
-	Signers          []string                `json:"signers"`
-	SignerCount      int                     `json:"signer_count"`
-	SignerChain      string                  `json:"signer_chain"`
-	PolicyHash       string                  `json:"policy_hash"`
-	OwnRoot          string                  `json:"own_root"`
-	CuratorRoot      string                  `json:"curator_root"`
-	TrackingRoot     string                  `json:"tracking_root"`
-	PublicAssets     []string                `json:"public_assets"`
-	PublicAmounts    []string                `json:"public_amounts"`
-	PublicGross      []string                `json:"public_gross"`
-	Withdrawals      []withdrawalVector      `json:"withdrawals"`
-	WithdrawalHash   string                  `json:"withdrawal_hash"`
-	Elements         []string                `json:"elements"`
-	PublicInputHash  string                  `json:"public_input_hash"`
+	Name                string                  `json:"name"`
+	Family              string                  `json:"family"`
+	InProof             bool                    `json:"in_proof"`
+	PublicOwners        bool                    `json:"public_owners"`
+	Delegate            bool                    `json:"delegate"`
+	ApprovalMask        uint64                  `json:"approval_mask"`
+	ApprovalTotals      string                  `json:"approval_totals"`
+	SignerDataCounts    uint64                  `json:"signer_data_counts"`
+	NoSpend             bool                    `json:"no_spend"`
+	FirstNullifier      string                  `json:"first_nullifier"`
+	RingID              string                  `json:"ring_id"`
+	TxViewingU          string                  `json:"tx_viewing_u"`
+	AuditorPubkey       string                  `json:"auditor_pubkey"`
+	Envelope            string                  `json:"envelope"`
+	Salt                string                  `json:"salt"`
+	Layout              int64                   `json:"layout"`
+	OutputCapacity      int                     `json:"output_capacity"`
+	Outputs             []statementOutputVector `json:"outputs"`
+	InputCount          int                     `json:"input_count"`
+	PrivateTxHash       string                  `json:"private_tx_hash"`
+	Sender              *string                 `json:"sender"`
+	PartyIdentities     []string                `json:"party_identities"`
+	SignerSlots         int                     `json:"signer_slots"`
+	Signers             []string                `json:"signers"`
+	SignerCount         int                     `json:"signer_count"`
+	SignerChain         string                  `json:"signer_chain"`
+	PolicyHash          string                  `json:"policy_hash"`
+	OwnRoot             string                  `json:"own_root"`
+	CuratorRoot         string                  `json:"curator_root"`
+	InputNullifierChain string                  `json:"input_nullifier_chain"`
+	CredentialFields    []string                `json:"credential_fields"`
+	PublicAssets        []string                `json:"public_assets"`
+	PublicAmounts       []string                `json:"public_amounts"`
+	PublicGross         []string                `json:"public_gross"`
+	Withdrawals         []withdrawalVector      `json:"withdrawals"`
+	WithdrawalHash      string                  `json:"withdrawal_hash"`
+	Elements            []string                `json:"elements"`
+	PublicInputHash     string                  `json:"public_input_hash"`
 }
 
 func hexes(values []*big.Int) []string {
@@ -87,7 +89,7 @@ func vectorOf(t *testing.T, name, family string, s ringtransfer.Statement, run [
 		OutputCapacity: len(s.Outputs), InputCount: s.InputCount, PrivateTxHash: ringtest.FieldHex(s.PrivateTxHash),
 		SignerSlots: slots, Signers: append([]string{}, hexes(run)...), SignerCount: s.SignerCount, SignerChain: ringtest.FieldHex(s.SignerChain),
 		PolicyHash: ringtest.FieldHex(s.PolicyHash), OwnRoot: ringtest.FieldHex(s.OwnRoot), CuratorRoot: ringtest.FieldHex(s.CuratorRoot),
-		TrackingRoot: ringtest.FieldHex(s.TrackingRoot),
+		InputNullifierChain: ringtest.FieldHex(s.InputNullifierChain), CredentialFields: hexes(s.CredentialFields),
 		PublicAssets: hexes(s.PublicAssets[:]), PublicAmounts: hexes(s.PublicNets[:]), PublicGross: hexes(s.PublicGross[:]),
 		WithdrawalHash: ringtest.FieldHex(s.WithdrawalHash), Elements: hexes(elements), PublicInputHash: ringtest.FieldHex(spptest.MustHashChain4(t, elements)),
 		Withdrawals: []withdrawalVector{},
@@ -108,14 +110,14 @@ func vectorOf(t *testing.T, name, family string, s ringtransfer.Statement, run [
 	return v
 }
 
-// fixedStatementElements is TRANSFER_FIXED_ELEMENTS less the sender, the sender and party cells, the public slots and the close add to it.
+// Credential fields, sender cells and public slots extend the fixed statement prefix.
 const fixedStatementElements = 10 + 3 + 4 + 4 + 2 + 2 + 4 + 1
 
 func confidentialCase(t *testing.T, name string, w ringtransfer.Confidential) transferStatementVector {
 	t.Helper()
 	b := w.Build(t)
 	values, elements := b.Values(t), b.Statement(t)
-	if want := fixedStatementElements + 1 + shared.AnonymousParties + 9 + 1; len(elements) != want {
+	if want := fixedStatementElements + len(values.CredentialFields) + 1 + shared.AnonymousParties + 9 + 1; len(elements) != want {
 		t.Fatalf("%s holds %d elements, the statement fixes %d", name, len(elements), want)
 	}
 	v := vectorOf(t, name, "confidential", values, b.Run, w.Shape.Inputs, &b.Circuit.Policy, elements)
@@ -130,7 +132,7 @@ func anonymousCase(t *testing.T, name string, w ringtransfer.Anonymous) transfer
 	t.Helper()
 	b := w.Build(t)
 	values, elements := b.Values(t), b.Statement(t)
-	if want := fixedStatementElements + 1 + shared.AnonymousParties + 9 + 1; len(elements) != want {
+	if want := fixedStatementElements + len(values.CredentialFields) + 1 + shared.AnonymousParties + 9 + 1; len(elements) != want {
 		t.Fatalf("%s holds %d elements, the statement fixes %d", name, len(elements), want)
 	}
 	v := vectorOf(t, name, "anonymous", values, b.Run, w.Shape.Inputs, &b.Circuit.Policy, elements)
@@ -165,8 +167,10 @@ func TestTransferStatementVector(t *testing.T) {
 	withdrawing.Withdrawals, withdrawing.Public = legs, public
 	anonData := ringtransfer.Hidden(anonData2)
 	anonData.HasData = true
+	ringProgram := ringregistry.CredentialProgram()
 	ringtest.PinVector(t, "audit/transfer_statement.json", map[string]any{
-		"description": "Honest statements of the Go transfer fixtures, each solves its key, with every preimage of a chain or digest position. Every rail: head(10), in_proof, hidden, delegate, approval_mask, approval_totals, signer_data_counts, no_spend, output_count, output_chain, record_chain, tail_chain, input_count, private_tx_hash, sender, parties, signer_count, signer_chain, policy_hash, own_root, curator_root, tracking_root, (asset, net, gross) * 3, withdrawal_hash, length. outputs lists the published slots, chains zero fill to output_capacity, tail_chain is zero while no slot carries a tail. signer_chain is HashChain4(signers, zeros up to signer_slots), zero on an empty run. withdrawal_hash is HashChain4(CRPW, count, owner, asset, amount per leg). envelope_digest is Poseidon(u32 len, HashChain4(pack_left31(bytes))). public_input_hash = HashChain4(elements). Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
+		"ring_program": hex.EncodeToString(ringProgram[:]),
+		"description":  "Honest statements of the Go transfer fixtures, each solves its key, with every preimage of a chain or digest position. Every rail: head(10), in_proof, hidden, delegate, approval_mask, approval_totals, signer_data_counts, no_spend, output_count, output_chain, record_chain, tail_chain, input_count, input_nullifier_chain, private_tx_hash, sender, parties, signer_count, signer_chain, policy_hash, own_root, curator_root, credential_owner, address_root, (tree_id, state_root) * K, (asset, net, gross) * 3, withdrawal_hash, length. outputs lists the published slots, chains zero fill to output_capacity, tail_chain is zero while no slot carries a tail. signer_chain is HashChain4(signers, zeros up to signer_slots), zero on an empty run. withdrawal_hash is HashChain4(CRPW, count, owner, asset, amount per leg). envelope_digest is Poseidon(u32 len, HashChain4(pack_left31(bytes))). public_input_hash = HashChain4(elements). Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
 		"cases": []transferStatementVector{
 			confidentialCase(t, "signer", ringtransfer.Signed(confidential2)),
 			confidentialCase(t, "signer_two_owners", coOwned),
@@ -215,10 +219,10 @@ func TestSignerSetVector(t *testing.T) {
 }
 
 type poolCapacity struct {
-	Key      string `json:"key"`
-	Own      int    `json:"own"`
-	Curator  int    `json:"curator"`
-	Tracking int    `json:"tracking"`
+	Key         string `json:"key"`
+	Own         int    `json:"own"`
+	Curator     int    `json:"curator"`
+	Credentials int    `json:"credentials"`
 }
 
 // The pools a key compiles are the formula Rust's RingCircuit::record_pools keeps.
@@ -229,10 +233,10 @@ func TestPoolCapacityVector(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		keys = append(keys, poolCapacity{shape.String(), c.RecordPools().Own, c.RecordPools().Curator, c.TrackingPoolSize()})
+		keys = append(keys, poolCapacity{shape.String(), c.RecordPools().Own, c.RecordPools().Curator, c.CredentialPoolSize()})
 	}
 	ringtest.PinVector(t, "policy/pool_capacity.json", map[string]any{
-		"description": "The pools each transfer key compiles. distinct = S + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), tracking = S + N + W with W the withdrawal owner rows a key holds. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description": "The pools each transfer key compiles. distinct = S + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), credentials = S + N + W with W the withdrawal owner rows a key holds. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
 		"keys":        keys,
 	})
 }

@@ -26,5 +26,9 @@
   "NoEnrollmentsNamed": 9030,
   "InvalidOwnerGrant": 9031,
   "InvalidReaderKey": 9032,
-  "InvalidAuditorKey": 9033
+  "InvalidAuditorKey": 9033,
+  "InvalidAssetWrite": 9034,
+  "InvalidCredentialRead": 9036,
+  "InvalidPrivateRing": 9037,
+  "PrivateWriteWithoutRing": 9035
 }

@@ -14,7 +14,7 @@ import (
 type SectionCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	policy.Policy
-	policy.Tracking
+	policy.Credentials
 	Outputs []shared.UtxoWires
 	// Inputs and Senders are what a transfer key's input section fixes.
 	Inputs  []shared.UtxoWires
@@ -45,11 +45,11 @@ func NewSectionCircuit(shape SectionShape) (*SectionCircuit, error) {
 	if err != nil {
 		return nil, err
 	}
-	tracking, err := policy.NewTracking(sectionSenders, shape.Outputs, shape.Withdrawals)
+	credentials, err := policy.NewCredentials(sectionSenders, shape.Outputs, shape.Withdrawals)
 	if err != nil {
 		return nil, err
 	}
-	return &SectionCircuit{Policy: p, Tracking: tracking, Outputs: make([]shared.UtxoWires, shape.Outputs), Inputs: make([]shared.UtxoWires, inputs), Senders: make([]frontend.Variable, sectionSenders)}, nil
+	return &SectionCircuit{Policy: p, Credentials: credentials, Outputs: make([]shared.UtxoWires, shape.Outputs), Inputs: make([]shared.UtxoWires, inputs), Senders: make([]frontend.Variable, sectionSenders)}, nil
 }
 
 func (c *SectionCircuit) Define(api frontend.API) error {
@@ -59,7 +59,7 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 	if err := shared.ValidateLength("policy", "output", len(c.Outputs), c.Policy.Outputs); err != nil {
 		return err
 	}
-	if err := c.ValidateTracking(sectionSenders, c.Policy.Outputs, len(c.Withdrawals)); err != nil {
+	if err := c.ValidateCredentials(sectionSenders, c.Policy.Outputs, len(c.Withdrawals)); err != nil {
 		return err
 	}
 	rc := rangecheck.New(api)
@@ -73,7 +73,7 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 		inputs[i] = w.Open(api)
 	}
 	g := policy.Rail{ThresholdsActive: c.ThresholdsActive, Delegate: c.Delegate}.Gates(api, c.PolicyHash)
-	screening := c.Screen(api, rc, g, policy.Spend{Senders: c.Senders, Inputs: inputs, Tracking: c.OpenTracking(api)}, outputs)
+	screening := c.Screen(api, rc, g, policy.Spend{Senders: c.Senders, Inputs: inputs, Credentials: c.OpenCredentials(api, c.RingProgramID)}, outputs)
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.Statement()))
@@ -82,7 +82,8 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 
 // Statement binds every value the section reads from the program, in the harness's own order.
 func (c *SectionCircuit) Statement() []frontend.Variable {
-	fields := []frontend.Variable{c.ThresholdsActive, c.Delegate, c.ApprovalMask, c.ApprovalTotals, c.PrivateTxHash, c.PolicyHash, c.RingProgramID, c.OwnRoot, c.CuratorRoot, c.TrackingRoot}
+	fields := []frontend.Variable{c.ThresholdsActive, c.Delegate, c.ApprovalMask, c.ApprovalTotals, c.PrivateTxHash, c.PolicyHash, c.RingProgramID, c.OwnRoot, c.CuratorRoot}
+	fields = append(fields, c.Credentials.StatementFields()...)
 	fields = append(fields, c.Senders...)
 	for k := range c.PublicAssets {
 		fields = append(fields, c.PublicAssets[k], c.PublicAmounts[k], c.PublicGross[k])

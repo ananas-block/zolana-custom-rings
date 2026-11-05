@@ -117,6 +117,14 @@ pinned_codes! {
     FramePayerNotWriter = 8526,
     InvalidSignerDataCounts = 8527,
     TooManyAnonymousParties = 8528,
+    InvalidCredentialPda = 8529,
+    InvalidEnrollmentAccounts = 8530,
+    InvalidAddressTree = 8531,
+    InvalidCredentialRead = 8532,
+    InvalidCredentialRoots = 8533,
+    InvalidAddressCheckpoint = 8534,
+    AbsenceRootBelowFloor = 8535,
+    SaltedSourceOtherRing = 8536,
 }
 
 #[test]
@@ -167,6 +175,10 @@ fn storage_error_codes_are_stable() {
         (Error::InvalidOwnerGrant, 9031),
         (Error::InvalidReaderKey, 9032),
         (Error::InvalidAuditorKey, 9033),
+        (Error::InvalidAssetWrite, 9034),
+        (Error::PrivateWriteWithoutRing, 9035),
+        (Error::InvalidCredentialRead, 9036),
+        (Error::InvalidPrivateRing, 9037),
     ];
     for (error, code) in pins {
         assert_eq!(error as u32, code, "{error:?}");

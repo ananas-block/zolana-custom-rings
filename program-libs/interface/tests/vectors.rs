@@ -7,12 +7,12 @@ use custom_ring_interface::{
     domain,
     stream::{DeliveredSlot, SlotSecret},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use spr_hasher::primitives::solana_owner_identity;
 use spr_instruction::derivation::{
-    derive_output_blinding_seed, derive_private_tx_blinding, derive_transact_output_blinding,
     DOMAIN_PRIVATE_TX_BLINDING_V1, DOMAIN_TRANSACT_OUTPUT_BLINDING_SEED_V1,
-    DOMAIN_TRANSACT_OUTPUT_BLINDING_V1,
+    DOMAIN_TRANSACT_OUTPUT_BLINDING_V1, derive_output_blinding_seed, derive_private_tx_blinding,
+    derive_transact_output_blinding,
 };
 use spr_keypair::X25519Keypair;
 
@@ -30,16 +30,15 @@ fn ring_derivation_vectors() {
 
 #[test]
 fn domains_are_their_ascii_tags() {
-    let table: [(u32, &[u8; 4]); 19] = [
+    let table: [(u32, &[u8; 4]); 18] = [
         (domain::TRANSFER_STATEMENT, b"CRTX"),
         (domain::DELIVERED_SLOT_SECRET, b"CRDS"),
         (domain::BLINDING_SEED, b"CRBS"),
         (domain::AUDIT_SHARED_SECRET, b"CR_S"),
         (domain::POLICY_TABLE, b"CRTB"),
         (domain::RECORD_WRITE, b"CRQW"),
-        (domain::TRACKING_LEAF, b"CRTK"),
-        (domain::TRACKING_ENTRY, b"CRTQ"),
-        (domain::APPLY_ENROLLMENTS, b"CRTA"),
+        (domain::CREDENTIAL_STATE, b"CRCR"),
+        (domain::CREDENTIAL_SEED, b"CRCA"),
         (domain::RECIPIENT_TAG, b"CRRT"),
         (domain::SENDER_TAG, b"CRST"),
         (domain::APPLY_RECORDS, b"CRAP"),

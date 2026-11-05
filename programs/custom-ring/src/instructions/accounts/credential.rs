@@ -10,7 +10,7 @@ use custom_ring_interface::{
     CredentialRead, CredentialRootSelection, CredentialRoots, CredentialStateRoot,
     CredentialTreeRead, CustomRingError,
 };
-use pinocchio::{error::ProgramError, AccountView, Address};
+use pinocchio::{AccountView, Address, error::ProgramError};
 
 #[must_use]
 pub struct CredentialAccounts<'a> {
@@ -78,7 +78,7 @@ fn read_tree<T>(
     let address = *account.address();
     let owner = *account.owner();
     // The cloned handle shares runtime borrow tracking, and the byte loader permits paused trees.
-    let mut account = account.clone();
+    let mut account = *account;
     let mut data = account.try_borrow_mut()?;
     Ok(read(CredentialTreeRead {
         address: &address,

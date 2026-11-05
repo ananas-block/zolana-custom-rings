@@ -19,11 +19,13 @@
 //  2. Every other record is all zero.
 //  3. A live tail holds the slot's data hash and ring data hash, a clear has_data holds both to zero.
 //  4. An opening record is a record followed by the secret that rebuilds its blinding.
-//  5. R is the count of spent notes, and a key with no entry capacity refuses a default-ring input.
-//  6. On an entry key each default-ring input opens in full, with its bit set, and every other entry is zero.
+//  5. R counts only notes, and address bits retain the absolute positions of the constrained input domains.
+//  6. A key with no entry capacity refuses a default ring note.
+//  7. Each default ring note opens at its input position on an entry key, with its default bit set.
+//     Address and dummy positions have zero default bits and zero entry openings.
 //
-// Read after audit/audit.go, audit/layout.go, shared/utxo.go.
-// Read before transfer/input.go, audit/signer_data.go, deposit.go, merge.go.
+// Read after audit/audit.go, audit/layout.go, shared/utxo.go, transfer/input.go.
+// Read before audit/signer_data.go, deposit.go, merge.go.
 
 package audit
 
@@ -135,7 +137,18 @@ type EntryWires struct {
 	MintChunks [2]frontend.Variable
 }
 
-// Note count and address bits bind note positions before the dummy suffix.
+// SPP publishes nullifiers without input class labels. Notes and addresses can interleave before
+// the dummy suffix. R plus the number of set address bits locates that suffix. Below it, clear address
+// bits identify notes. Each bit names an absolute position in the published nullifier list.
+//
+// OpenInputs constrains the domain selectors and the dummy suffix. The transfer binds its nullifier
+// list to the public list digest and derives the address chain from the same selectors.
+// private_tx_hash binds the note and address chains to SPP. SealStream encrypts the map with the
+// viewing key and entry evidence, and its envelope digest binds the transmitted ciphertext.
+//
+// The auditor links a spent ring note by reconstructing its nullifier from an earlier opening and
+// the owner's escrowed secret. No check here reconstructs that nullifier. An unknown note position
+// stays unresolved. A default ring note can lack an earlier ring record, so entry evidence opens it in full.
 type SpentInputs struct {
 	Slots []shared.Output
 	// The published n, R may sit below it.
@@ -154,6 +167,8 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 	if len(s.Slots) != ranges.InputClass {
 		panic("audit: the input section differs from the key's class")
 	}
+	// 1. R and the address map read the domain selectors already bound by the input section.
+	// Absolute positions preserve the link to SPP when notes and addresses interleave.
 	realInputs := frontend.Variable(0)
 	addresses := make([]frontend.Variable, len(s.Slots))
 	defaults := make([]frontend.Variable, len(s.Slots))
@@ -166,8 +181,8 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 		ringgadget.UintBytesBE(api, realInputs, RealInputCountLen),
 		ringgadget.UintBytesBE(api, weightedBits(api, addresses), AddressInputBitsLen),
 	)
+	// 2. A default ring note can lack an earlier ring record, so the entry key must supply its opening.
 	if !ranges.Entry {
-		// A key with no entry capacity carries no evidence, a default-ring spend under it would stay unreadable.
 		for _, slot := range s.Slots {
 			api.AssertIsEqual(slot.Exit, 0)
 		}
@@ -176,6 +191,8 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 	if len(s.Entries) != len(s.Slots) {
 		panic("audit: an entry key needs one evidence wire per input")
 	}
+	// 3. Exit is a note selector, so default bits cannot select addresses or dummies.
+	// Each opening keeps its input position and is zero unless the same default bit is set.
 	head = slices.Concat(head, ringgadget.UintBytesBE(api, weightedBits(api, defaults), DefaultInputBitsLen))
 	entries := make([][]frontend.Variable, len(s.Slots))
 	for i, slot := range s.Slots {

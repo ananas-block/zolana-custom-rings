@@ -1,12 +1,12 @@
 //! The one check on an auditor key, run by every instruction that stores one.
 //!
-//! A ring pins the key for its life and its tracking registry seals enrollment to it. The X25519
+//! A ring pins the key for its life and RegisterKey seals enrollment to it. The X25519
 //! gadget clamps the ephemeral scalar and refuses a zero agreement, and a clamped scalar agrees zero
 //! with every low-order key. No proof can seal to such a key, a ring under it could neither enroll
 //! an owner nor settle a transfer.
 //!
-//! Read after `program-libs/interface/src/accounts/tracking.rs`. Read before
-//! `programs/custom-ring/src/instructions/configuration/setup/initialize.rs`, `programs/storage/src/instructions/initialize_tracking.rs`.
+//! Read after `program-libs/interface/src/accounts/credential.rs`. Read before
+//! `programs/custom-ring/src/instructions/configuration/setup/initialize.rs`, `programs/custom-ring/src/instructions/enrollment/enroll.rs`.
 
 use spr_hasher::primitives::is_canonical_x25519_public_key;
 

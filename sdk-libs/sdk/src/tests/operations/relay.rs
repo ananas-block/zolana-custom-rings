@@ -408,7 +408,7 @@ async fn relay_and_submission_pick_one_key_at_full_load() {
     }
 }
 
-/// Past the narrow row's tracking only if every destination holds a row, a read the wallet cannot make.
+/// Past the narrow row's credential capacity only if every destination holds a credential, a read the wallet cannot make.
 #[tokio::test]
 async fn a_salted_read_raises_the_flag_on_a_frame_of_one_stream() {
     use custom_ring_interface::domain;

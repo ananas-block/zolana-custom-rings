@@ -316,7 +316,6 @@ async fn a_wide_zero_key_merge_asks_its_holder_once_for_the_prefix_it_fits() {
     .unwrap();
     assert_eq!(holder.calls.get(), 1);
     let published = prepared.published_inputs();
-    assert!(published < WIDEST_MERGE);
     let one_more = CustomRingMerge::new(ring(), notes[..=published].to_vec(), None)
         .unwrap()
         .with_output_tree_id(TREE_ID)

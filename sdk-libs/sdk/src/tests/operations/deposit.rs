@@ -673,6 +673,31 @@ mod relay_message {
         hex::decode(text).unwrap().try_into().unwrap()
     }
 
+    /// Tree 0 compiles writable because SPP writes it, the credential tree has no such write.
+    #[tokio::test]
+    async fn a_ring_prefix_account_writable_outside_the_spp_list_is_refused() {
+        let relay = DepositRelay::new(Answer::Honest);
+        relayed_signature(&relay, &keypair(9)).await.unwrap();
+        let (honest, inputs) = relay.honest.lock().unwrap().take().unwrap();
+        let owner_utxo_hash = spr_transaction::owner_utxo_hash(
+            &inputs.recipient.owner_hash().unwrap(),
+            &custom_ring_interface::domain::deposit_blinding(&inputs.blinding_secret).unwrap(),
+        )
+        .unwrap();
+        let expected = DepositRequest::of(&inputs, owner_utxo_hash).expected();
+        let honest_message = Answer::Honest.message(&honest, inputs.depositor);
+        assert_eq!(verdict(expected.check(&honest_message.0)), "Accepted");
+        let credential_tree = pda::tree(crate::tests::support::CREDENTIAL_TREE_ID);
+        let mut widened = honest;
+        widened
+            .accounts
+            .iter_mut()
+            .filter(|meta| meta.pubkey == credential_tree)
+            .for_each(|meta| meta.is_writable = true);
+        let message = relay_message(&FEE_PAYER, &[widened], UNITS);
+        assert_eq!(verdict(expected.check(&message.0)), "Accounts");
+    }
+
     /// The TypeScript check reads the same file and reaches the same verdicts.
     #[tokio::test]
     async fn the_shared_deposit_messages_keep_their_verdicts() {

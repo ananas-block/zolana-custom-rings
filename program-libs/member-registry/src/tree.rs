@@ -238,7 +238,10 @@ pub trait RecordTree<L: IndexedLeaf = MemberRecord, const H: usize = QUAD_HEIGHT
         })
     }
 
-    /// Requires isolated staging storage, discarded on failure.
+    /// Consumes owned staging storage and returns it only after the complete batch succeeds.
+    /// An error drops the staging store, including any partial writes.
+    /// Store implementations must isolate writes from accepted state until success.
+    /// Persistent storage requires a separate transaction for atomic publication.
     fn apply(
         mut self,
         chain_start: [u8; 32],
@@ -335,15 +338,22 @@ impl<L: WritableLeaf<H>, const H: usize, S: RecordStore<L, H> + ?Sized> Growing<
         chain_start: [u8; 32],
         entries: &[L::Entry],
     ) -> Result<ApplyProofInputs<L::WriteProof>, S::Error> {
+        // 1. Every entry must pass its independent checks before the first write.
+        // Record state and storage failures can still reject a later step.
         entries.iter().try_for_each(L::check_entry)?;
+        // 2. The original root and next index anchor the proof before any staged mutation.
         let old_root = self.filled().node(NodePosition::root(H))?;
         let old_next_index = self.next_index;
+        // 3. Proof steps and the entry chain follow the same batch order.
+        // Each opening uses the running root, and the chain includes entries that leave the root unchanged.
         let mut chain_end = chain_start;
         let mut writes = Vec::with_capacity(entries.len());
         for entry in entries {
             writes.push(self.apply(entry)?);
             chain_end = L::chained(&chain_end, entry).map_err(RecordTreeError::from)?;
         }
+        // 4. The final root completes the proof before `RecordTree::apply` can return the owned store.
+        // Any error propagates to that consuming boundary and discards the staged state.
         Ok(ApplyProofInputs {
             old_root,
             new_root: self.filled().node(NodePosition::root(H))?,

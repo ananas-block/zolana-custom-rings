@@ -1940,7 +1940,7 @@ fn ceiling_entry(reply_len: usize) -> Measure {
 }
 
 /// Sets [`ceiling_entry`] at the transaction ceiling exactly.
-const CEILING_REPLY_LEN: usize = 2306;
+const CEILING_REPLY_LEN: usize = 2300;
 
 include!("size_pins.rs");
 
@@ -2658,19 +2658,19 @@ async fn every_frame_limit_of_the_byte_model_holds() {
         payer: Payer::Outsider,
         ..Measure::pinned(Measured::InProofOwnerPolicy, Shape::new(24, 4))
     };
-    assert_eq!(pin(signer_policy).await, 3406);
-    assert_eq!(pin(in_proof_policy).await, 3405);
+    assert_eq!(pin(signer_policy).await, 3412);
+    assert_eq!(pin(in_proof_policy).await, 3411);
 
     // An outsider payer adds its signature and key.
     let owner_paid = Measure::pinned(Measured::Confidential, Shape::IN5_OUT16);
-    assert_eq!(pin(owner_paid).await, 4681);
+    assert_eq!(pin(owner_paid).await, 4687);
     assert_eq!(
         pin(Measure {
             payer: Payer::Outsider,
             ..owner_paid
         })
         .await,
-        4777
+        4783
     );
 
     // Past 8 outputs a frame fits only through compact padding.
@@ -2741,33 +2741,33 @@ async fn every_frame_boundary_takes_its_modelled_bytes() {
         ..relayed(Measured::ConfidentialPolicy, Shape::new(16, 8))
     };
     for (measure, bytes) in [
-        (with_reply(Measured::AnonymousEntry, 2), 4228),
-        (with_reply(Measured::Anonymous, 5), 3983),
+        (with_reply(Measured::AnonymousEntry, 2), 4234),
+        (with_reply(Measured::Anonymous, 5), 3989),
         (
             relayed(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            3754,
+            3760,
         ),
         (
             relayed(Measured::InProofOwnerPolicy, Shape::new(16, 8)),
-            3753,
+            3759,
         ),
-        (compact_fifteen, 3689),
-        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4776),
+        (compact_fifteen, 3695),
+        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4782),
         (
             relayed(Measured::InProofOwnerEscrow, Shape::IN5_OUT16),
-            4776,
+            4782,
         ),
         (
             Measure::pinned(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4681,
+            4687,
         ),
         (
             relayed(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4777,
+            4783,
         ),
-        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4711),
-        (key_escrow_co_signed, 3536),
-        (loaded_commitment, 3281),
+        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4717),
+        (key_escrow_co_signed, 3542),
+        (loaded_commitment, 3287),
     ] {
         assert_eq!(
             measure.bytes().await,
@@ -2842,23 +2842,23 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
     for (measure, bytes) in [
         (
             Measure::pinned(Measured::Confidential, Shape::new(2, 2)),
-            1446 + 38,
+            1452 + 38,
         ),
         (
             Measure::pinned(Measured::Anonymous, Shape::new(2, 2)),
-            1613 + 38,
+            1619 + 38,
         ),
         (
             Measure::pinned(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            3658 + 39,
+            3664 + 39,
         ),
         (
             Measure::relayed(Measured::ConfidentialPolicy, Shape::new(24, 4)),
-            3406 + 40,
+            3412 + 40,
         ),
         (
             Measure::relayed(Measured::InProofOwnerPolicy, Shape::new(24, 4)),
-            3405 + 40,
+            3411 + 40,
         ),
     ] {
         let second_tree = Measure {
@@ -3164,8 +3164,9 @@ fn a_transaction_past_the_account_bound_is_refused_before_proving() {
         n_inputs: 24,
         co_signers: 2,
         legs: 4,
+        credential_accounts: 1,
     };
-    // 64 addresses less 4 for SPP, 6 for the ring, 24 nullifier PDAs, 2 co-signers with their records and 4 legs.
+    // 64 addresses less 4 for SPP, 5 for the ring, 24 nullifier PDAs, 2 co-signers with their records, 4 legs and 1 credential tree.
     assert!(check_owner_capacity(&capacity(22)).is_ok());
     assert!(matches!(
         check_owner_capacity(&capacity(23)),
@@ -4116,6 +4117,7 @@ async fn credential_trees_follow_the_registries_and_refuse_past_the_address_ceil
         .frame(&enrolled(&[sender, recipient]).client())
         .await
         .unwrap();
+    unwitnessed.frame.accounts.credential_trees = None;
     let bare = unwitnessed.instruction().unwrap();
     let payer = unwitnessed.frame.proof_inputs.payer;
     let addresses = |instruction: &Instruction| {

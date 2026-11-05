@@ -1,14 +1,13 @@
 //! Pins `test-vectors/proof/ring-statements.json` for the Go circuits and the TS SDK.
 
-use custom_ring_interface::tracking::{TrackingEntry, TRACKING_EMPTY_ROOT};
+mod vector_credentials;
 use custom_ring_interface::{
     ciphertext_digest, cosign::ApprovalMask, domain, record_chain, tail_chain,
-    ApplyEnrollmentsStatement, ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout,
-    AuditStreamLayout, ConfidentialSender, CustomRingError, DepositContext, DepositPublicInput,
-    DepositRegistry, DepositedAsset, RegisterKeyStatement, RingOutput, SignerDataCounts, SignerSet,
-    SlotBody, TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES,
-    AUDIT_HEAD_ELEMENTS, AUDIT_RECORD_LEN, DATA_TAIL_LEN, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
-    OPENING_RECORD_LEN, RECIPIENT_BODY_LEN,
+    ApplyRecordsStatement, AuditCredential, AuditHead, AuditKey, AuditLayout, AuditStreamLayout,
+    ConfidentialSender, CredentialRoots, CustomRingError, DepositContext, DepositPublicInput,
+    DepositRegistry, DepositedAsset, RingOutput, SignerDataCounts, SignerSet, SlotBody,
+    TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES, AUDIT_HEAD_ELEMENTS,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN, OPENING_RECORD_LEN, RECIPIENT_BODY_LEN,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -21,6 +20,8 @@ use spr_hasher::{
 use spr_interface::instruction::InterfaceTransfer;
 use zolana_ring_policy::{Member, OutflowLimit};
 
+const RING_PROGRAM: [u8; 32] = [0x77; 32];
+
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../test-vectors/proof/ring-statements.json"
@@ -31,40 +32,11 @@ const WITHDRAWAL_1200: &str = "30644e72e131a029b85045b68181585d2833e84879b970914
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct StatementVectors {
     description: String,
+    ring_program: String,
     transfer: Vec<TransferCase>,
     apply_records: ApplyCase,
-    apply_enrollments: ApplyEnrollmentsCase,
-    tracking: TrackingCase,
     register_key: RegisterKeyCase,
     deposit: DepositCase,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct ApplyEnrollmentsCase {
-    old_root: String,
-    new_root: String,
-    old_next_index: u32,
-    new_next_index: u32,
-    chain_start: String,
-    chain_end: String,
-    count: u64,
-    elements: Vec<String>,
-    public_input_hash: String,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct TrackingCase {
-    empty_root: String,
-    member: String,
-    nullifier_pk: String,
-    ct_hash: String,
-    viewing_u: String,
-    revision: u64,
-    list_tag: String,
-    entry_hash: String,
-    chain_from_zero: String,
-    list_salt: String,
-    secret_list_tag: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -100,6 +72,7 @@ struct TransferCase {
     record_chain: String,
     tail_chain: String,
     input_count: usize,
+    input_nullifier_chain: String,
     private_tx_hash: String,
     sender: Option<String>,
     party_identities: Option<Vec<String>>,
@@ -108,7 +81,7 @@ struct TransferCase {
     policy_hash: String,
     own_root: String,
     curator_root: String,
-    tracking_root: String,
+    credential_fields: Vec<String>,
     public_assets: Vec<String>,
     public_amounts: Vec<String>,
     public_gross: Vec<String>,
@@ -126,6 +99,9 @@ struct ApplyCase {
     chain_start: String,
     chain_end: String,
     count: u64,
+    credential_writes: u16,
+    private_ring_id: String,
+    credential_fields: Vec<String>,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -149,18 +125,35 @@ struct DepositCase {
     tree: String,
     spp_data: String,
     context_hash: String,
+    ring_id: String,
     owner_utxo_hashes: Vec<String>,
     ciphertexts: Vec<String>,
     auditor_pubkey: String,
     eph_pk: String,
     assets: Vec<String>,
     amounts: Vec<u64>,
-    tracking_root: String,
+    credential_fields: Vec<String>,
     member_registry_root: Option<String>,
     curator_root: Option<String>,
     policy_hash: Option<String>,
     elements: Vec<String>,
     public_input_hash: String,
+}
+
+fn credential_fixture(capacity: usize) -> CredentialRoots {
+    let mut fields = vec![
+        custom_ring_interface::credential::credential_owner(&Address::new_from_array(RING_PROGRAM))
+            .unwrap(),
+        [0x11; 32],
+    ];
+    for _ in 0..capacity {
+        fields.extend([right_align(&3u16.to_be_bytes()), [0x12; 32]]);
+    }
+    vector_credentials::CredentialFields {
+        ring_program: &RING_PROGRAM,
+        fields: &fields,
+    }
+    .roots()
 }
 
 fn field(seed: u8) -> [u8; 32] {
@@ -308,6 +301,7 @@ fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
         ),
         tail_chain: hex::encode(tail_chain(statement.outputs, statement.output_capacity).unwrap()),
         input_count: statement.input_count,
+        input_nullifier_chain: hex::encode(statement.input_nullifier_chain),
         private_tx_hash: hex::encode(statement.private_tx_hash),
         sender,
         party_identities: parties,
@@ -316,7 +310,7 @@ fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
         policy_hash: hex::encode(statement.roots.policy_hash),
         own_root: hex::encode(statement.roots.own_root),
         curator_root: hex::encode(statement.roots.curator_root),
-        tracking_root: hex::encode(statement.roots.tracking_root),
+        credential_fields: hexes(&statement.roots.credentials.elements().collect::<Vec<_>>()),
         public_assets: hexes(statement.public_assets),
         public_amounts: hexes(statement.public_amounts),
         public_gross: hexes(statement.public_gross),
@@ -355,16 +349,19 @@ fn compute_vectors() -> StatementVectors {
         policy_hash: values.fields[6],
         own_root: values.fields[7],
         curator_root: values.fields[8],
-        tracking_root: values.fields[9],
+        credentials: credential_fixture(2),
     };
     let thresholds_roots = TransferRoots {
         own_root: values.fields[7],
-        tracking_root: values.fields[9],
-        ..TransferRoots::default()
+        credentials: credential_fixture(2),
+        policy_hash: [0; 32],
+        curator_root: [0; 32],
     };
-    let tracking_roots = TransferRoots {
-        tracking_root: values.fields[9],
-        ..TransferRoots::default()
+    let credential_roots = TransferRoots {
+        credentials: credential_fixture(2),
+        own_root: [0; 32],
+        policy_hash: [0; 32],
+        curator_root: [0; 32],
     };
     let signer_policy = TransferStatement {
         head: values.head(no_flags, stream(wide_key, 2, &eight)),
@@ -378,6 +375,7 @@ fn compute_vectors() -> StatementVectors {
         outputs: &eight,
         output_capacity: 8,
         input_count: 2,
+        input_nullifier_chain: values.fields[4],
         private_tx_hash: &values.fields[3],
         signers: SignerSet::new([[0x42; 32], [0x43; 32], [0x42; 32]].iter(), 16).unwrap(),
         roots: &policy_roots,
@@ -394,7 +392,7 @@ fn compute_vectors() -> StatementVectors {
     let signer_no_spend = TransferStatement {
         approval_mask: ApprovalMask::default(),
         no_spend: true,
-        roots: &tracking_roots,
+        roots: &credential_roots,
         signers: SignerSet::default(),
         ..signer_policy
     };
@@ -428,7 +426,7 @@ fn compute_vectors() -> StatementVectors {
         outputs: &two,
         output_capacity: 2,
         signers: SignerSet::default(),
-        roots: &tracking_roots,
+        roots: &credential_roots,
         public_assets: &no_slots,
         public_amounts: &no_slots,
         public_gross: &no_slots,
@@ -449,6 +447,7 @@ fn compute_vectors() -> StatementVectors {
         outputs: &four,
         output_capacity: 4,
         input_count: 3,
+        input_nullifier_chain: values.fields[5],
         signers: SignerSet::new([[0x44; 32]].iter(), 16).unwrap(),
         ..signer_policy
     };
@@ -467,7 +466,7 @@ fn compute_vectors() -> StatementVectors {
             delegate: true,
         },
         signers: SignerSet::default(),
-        roots: &tracking_roots,
+        roots: &credential_roots,
         public_assets: &no_slots,
         public_amounts: &no_slots,
         public_gross: &no_slots,
@@ -485,7 +484,7 @@ fn compute_vectors() -> StatementVectors {
             },
             stream(entry_key, 3, &four),
         ),
-        roots: &tracking_roots,
+        roots: &credential_roots,
         signers: SignerSet::default(),
         ..anonymous_policy_transfer
     };
@@ -515,36 +514,21 @@ fn compute_vectors() -> StatementVectors {
         chain_start: values.fields[11],
         chain_end: values.fields[12],
         count: 16,
-    };
-    let apply_enrollments = ApplyEnrollmentsStatement {
-        old_root: values.fields[11],
-        new_root: values.fields[12],
-        old_next_index: 7,
-        new_next_index: 9,
-        chain_start: values.fields[9],
-        chain_end: values.fields[10],
-        count: 2,
-    };
-    let tracking_entry = TrackingEntry {
-        member: values.fields[14],
-        nullifier_pk: values.fields[13],
-        ct_hash: values.fields[15],
-        viewing_u: values.keys[9],
-        revision: 3,
-        list_tag: values.fields[16],
+        credential_writes: 1,
+        private_ring_id: values.ring_id,
+        credentials: credential_fixture(16),
     };
     let ring_id = values.fields[17];
-    let list_salt = right_aligned(0x07);
     let list_tag = values.fields[16];
     let register_ciphertext = [0x44; 64];
-    let register = RegisterKeyStatement {
-        ring_id: &ring_id,
-        member: &owner_signer,
-        nullifier_pk: &values.fields[13],
-        list_tag: &list_tag,
-        auditor_pubkey: &values.auditor_pubkey,
-        eph_u: &values.keys[9],
-        ciphertext: &register_ciphertext,
+    let register = AuditCredential {
+        ring_id,
+        member: owner_signer,
+        nullifier_pk: values.fields[13],
+        list_tag,
+        auditor_pubkey: values.auditor_pubkey,
+        eph_u: values.keys[9],
+        ciphertext: register_ciphertext,
     };
     let program_id = [0x77; 32];
     let tree = [0x55; 32];
@@ -569,14 +553,16 @@ fn compute_vectors() -> StatementVectors {
             amount: 2_000,
         },
     ];
+    let credentials = credential_fixture(2);
     let deposit = DepositPublicInput {
         context_hash: &context_hash,
+        ring_id: &values.ring_id,
         owner_utxo_hashes: &owners,
         ciphertexts: &ciphertexts,
         assets: &deposited,
         auditor_pk: &values.auditor_pubkey,
         eph_pk: &eph_pk,
-        tracking_root: &values.fields[21],
+        credentials: &credentials,
         registry: Some(DepositRegistry {
             own_root: &values.fields[16],
             curator_root: Some(&values.fields[20]),
@@ -584,30 +570,8 @@ fn compute_vectors() -> StatementVectors {
         }),
     };
     StatementVectors {
-        description: "Every ring statement and its public input HashChain4(elements). The transfer \
-                      head is [CRTX, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), \
-                      digest(envelope), salt, layout] with the frame's \
-                      random salt and layout = has_data | entry << 1. \
-                      digest(ct) = Poseidon(u32 len(ct), HashChain4(pack_left31(ct))). Each \
-                      envelope has the length of its stream layout. The deposit statement is HashChain4(elements) \
-                      over CRDP, the context hash of the program id, tree and SPP data, the \
-                      count, each owner hash with its capsule ciphertext hash \
-                      zero padded to 8 slots, both tagged keys packed, the tracking root, the \
-                      registry root, the curator root, the policy hash, each asset hash with its amount zero \
-                      padded to 8 slots. The transfer statements are HashChain4 over the \
-                      audit head under CRTX, in_proof, hidden, delegate, \
-                      approval_mask, no_spend, output_count, output_chain, record_chain \
-                      HashChain4(hash_bytes(record_i)), tail_chain HashChain4(hash_bytes(tail_i)) or \
-                      zero while has_data is clear, input_count, private_tx_hash, the sender, the \
-                      party identities, signer_count, signer_chain, policy_hash, own_root, \
-                      curator_root, tracking_root, asset, net and gross per public \
-                      slot, withdrawal_hash and the element count. No body, tag, \
-                      bundle or reply digest and no slot class enters it. Every per-slot chain is \
-                      zero filled to the capacity. signer_chain is HashChain4 over the deduplicated \
-                      owner identities zero filled to the key's S, and zero when signer_count is \
-                      zero on every rail. Produced by \
-                      program-libs/interface/tests/statements.rs."
-            .to_string(),
+        description: "Ring statement fields and their HashChain4 digest. Credential fields contain the owner, address root and padded tree identity and state root pairs.".to_owned(),
+        ring_program: hex::encode(RING_PROGRAM),
         transfer: transfers.iter().map(transfer_case).collect(),
         apply_records: ApplyCase {
             old_root: hex::encode(apply.old_root),
@@ -617,32 +581,11 @@ fn compute_vectors() -> StatementVectors {
             chain_start: hex::encode(apply.chain_start),
             chain_end: hex::encode(apply.chain_end),
             count: apply.count,
+            credential_writes: apply.credential_writes,
+            private_ring_id: hex::encode(apply.private_ring_id),
+            credential_fields: hexes(&apply.credentials.elements().collect::<Vec<_>>()),
             elements: hexes(&apply.elements()),
             public_input_hash: hex::encode(apply.hash().unwrap()),
-        },
-        apply_enrollments: ApplyEnrollmentsCase {
-            old_root: hex::encode(apply_enrollments.old_root),
-            new_root: hex::encode(apply_enrollments.new_root),
-            old_next_index: apply_enrollments.old_next_index,
-            new_next_index: apply_enrollments.new_next_index,
-            chain_start: hex::encode(apply_enrollments.chain_start),
-            chain_end: hex::encode(apply_enrollments.chain_end),
-            count: apply_enrollments.count,
-            elements: hexes(&apply_enrollments.elements()),
-            public_input_hash: hex::encode(apply_enrollments.hash().unwrap()),
-        },
-        tracking: TrackingCase {
-            empty_root: hex::encode(TRACKING_EMPTY_ROOT),
-            member: hex::encode(tracking_entry.member),
-            nullifier_pk: hex::encode(tracking_entry.nullifier_pk),
-            ct_hash: hex::encode(tracking_entry.ct_hash),
-            viewing_u: hex::encode(tracking_entry.viewing_u),
-            revision: tracking_entry.revision,
-            list_tag: hex::encode(tracking_entry.list_tag),
-            entry_hash: hex::encode(tracking_entry.hash().unwrap()),
-            chain_from_zero: hex::encode(tracking_entry.chained(&[0; 32]).unwrap()),
-            list_salt: hex::encode(list_salt),
-            secret_list_tag: hex::encode(domain::list_tag(&list_salt).unwrap()),
         },
         register_key: RegisterKeyCase {
             ring_id: hex::encode(register.ring_id),
@@ -652,21 +595,22 @@ fn compute_vectors() -> StatementVectors {
             auditor_pubkey: hex::encode(register.auditor_pubkey),
             eph_u: hex::encode(register.eph_u),
             ciphertext: hex::encode(register.ciphertext),
-            elements: hexes(&register.elements().unwrap()),
-            public_input_hash: hex::encode(register.hash().unwrap()),
+            elements: hexes(&register.elements(domain::REGISTER_KEY).unwrap()),
+            public_input_hash: hex::encode(register.register_key_hash().unwrap()),
         },
         deposit: DepositCase {
             program_id: hex::encode(program_id),
             tree: hex::encode(tree),
             spp_data: hex::encode(&spp_data),
             context_hash: hex::encode(context_hash),
+            ring_id: hex::encode(deposit.ring_id),
             owner_utxo_hashes: hexes(&owners),
             ciphertexts: ciphertexts.iter().map(hex::encode).collect(),
             auditor_pubkey: hex::encode(deposit.auditor_pk),
             eph_pk: hex::encode(deposit.eph_pk),
             assets: deposited.iter().map(|value| hex::encode(value.asset)).collect(),
             amounts: deposited.iter().map(|value| value.amount).collect(),
-            tracking_root: hex::encode(deposit.tracking_root),
+            credential_fields: hexes(&deposit.credentials.elements().collect::<Vec<_>>()),
             member_registry_root: deposit
                 .registry
                 .map(|registry| hex::encode(registry.own_root)),
@@ -698,10 +642,10 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert!(transfer.iter().all(|len| *len == 48));
+    assert!(transfer.iter().all(|len| *len == 47 + ANONYMOUS_PARTIES));
     assert_eq!(
         committed.deposit.elements.len(),
-        DEPOSIT_PUBLIC_INPUT_ELEMENTS
+        43 + committed.deposit.credential_fields.len()
     );
 }
 
@@ -710,6 +654,30 @@ fn ring_statements_vector() {
 fn write_ring_statements_vector() {
     let json = serde_json::to_string_pretty(&compute_vectors()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");
+}
+
+#[test]
+#[ignore = "writes test-vectors/registry/credential-owners.json"]
+fn write_credential_owner_vector() {
+    let cases: Vec<_> = [RING_PROGRAM, [0x90; 32]]
+        .into_iter()
+        .map(|program| {
+            let owner = custom_ring_interface::credential::credential_owner(
+                &Address::new_from_array(program),
+            )
+            .unwrap();
+            serde_json::json!({
+                "ring_program": hex::encode(program),
+                "credential_owner": hex::encode(owner),
+            })
+        })
+        .collect();
+    let vector = serde_json::json!({"cases": cases});
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-vectors/registry/credential-owners.json"
+    );
+    std::fs::write(path, serde_json::to_string_pretty(&vector).unwrap() + "\n").unwrap();
 }
 
 #[test]
@@ -802,14 +770,18 @@ fn the_element_count_follows_the_family_alone() {
     let zero = [0u8; 32];
     let slots = [zero; 3];
     let parties = [zero; ANONYMOUS_PARTIES];
-    let roots = TransferRoots::default();
+    let roots = TransferRoots {
+        policy_hash: [0; 32],
+        own_root: [0; 32],
+        curator_root: [0; 32],
+        credentials: credential_fixture(2),
+    };
     let outputs = values.outputs(8, false);
     let key = AuditKey {
         class: 16,
         entry: false,
     };
-    // Head, rail bits, mask, totals digest, signer data counts, no_spend, m, three chains, n, private_tx_hash, sender, parties, signer count and chain, four roots, nine public cells, withdrawals and length.
-    let cells = AUDIT_HEAD_ELEMENTS + 3 + 4 + 4 + 2 + 1 + ANONYMOUS_PARTIES + 2 + 4 + 9 + 1 + 1;
+    let cells = AUDIT_HEAD_ELEMENTS + 3 + 4 + 4 + 3 + 1 + ANONYMOUS_PARTIES + 2 + 3 + 6 + 9 + 1 + 1;
     for capacity in [2usize, 4, 8] {
         for published in [1, capacity] {
             let statement = TransferStatement {
@@ -827,6 +799,7 @@ fn the_element_count_follows_the_family_alone() {
                 outputs: &outputs[..published],
                 output_capacity: capacity,
                 input_count: 1,
+                input_nullifier_chain: values.fields[4],
                 private_tx_hash: &zero,
                 signers: SignerSet::default(),
                 roots: &roots,
@@ -879,7 +852,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         policy_hash: values.fields[6],
         own_root: values.fields[7],
         curator_root: zero,
-        tracking_root: values.fields[9],
+        credentials: credential_fixture(2),
     };
     let statement = TransferStatement {
         head: values.head(AuditLayout::default(), stream(key, 3, &outputs)),
@@ -895,6 +868,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         outputs: &outputs,
         output_capacity: 4,
         input_count: 3,
+        input_nullifier_chain: values.fields[5],
         private_tx_hash: &values.fields[3],
         signers,
         roots: &roots,
@@ -922,6 +896,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         record_chain(&outputs, 4).unwrap(),
         zero,
         right_aligned(3),
+        values.fields[5],
         values.fields[3],
         zero,
     ];
@@ -932,8 +907,8 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         values.fields[6],
         values.fields[7],
         zero,
-        values.fields[9],
     ]);
+    tail.extend(roots.credentials.elements());
     tail.extend([zero; 9]);
     tail.extend([
         values.fields[8],
@@ -951,7 +926,12 @@ fn delivery_bytes_stay_outside_the_statement() {
     let parties = [[0u8; 32]; ANONYMOUS_PARTIES];
     let zero = [0u8; 32];
     let slots = [zero; 3];
-    let roots = TransferRoots::default();
+    let roots = TransferRoots {
+        policy_hash: [0; 32],
+        own_root: [0; 32],
+        curator_root: [0; 32],
+        credentials: credential_fixture(2),
+    };
     let statement = TransferStatement {
         head: values.head(
             AuditLayout::default(),
@@ -976,6 +956,7 @@ fn delivery_bytes_stay_outside_the_statement() {
         outputs: &outputs,
         output_capacity: 4,
         input_count: 3,
+        input_nullifier_chain: values.fields[5],
         private_tx_hash: &zero,
         signers: SignerSet::default(),
         roots: &roots,

@@ -2,11 +2,8 @@
 
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
-    storage_instruction::InitializeTrackingIxData,
-    tag,
-    tracking::TrackingRegistry,
-    CustomRingError, PolicyTableIxData, RingPolicy, RingRail, RingRole, RingTransactData,
-    SourceSpec, UpdatePolicyIxData, STORAGE_PROGRAM_ID,
+    tag, CredentialRead, CustomRingError, PolicyTableIxData, RingPolicy, RingRail, RingRole,
+    RingTransactData, SourceSpec, UpdatePolicyIxData, STORAGE_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::AccountMeta;
@@ -15,9 +12,9 @@ use zolana_ring_policy::{ring_id_field, ListId, ListSet};
 
 use crate::{
     common::{
-        allow_list_table, auditor_pubkey, list_table, policy_pda, reaches_verification, refused,
-        retired, root, rules_write, tracking_registry, transact, Ring, Sent, Setup, UpdatePolicyIx,
-        PROGRAM, RECORDS,
+        address_tree, allow_list_table, credential_accounts, credential_tree, credential_tree_data,
+        list_table, policy_pda, reaches_verification, refused, retired, root, rules_write,
+        transact, Ring, Sent, Setup, UpdatePolicyIx, PROGRAM, RECORDS,
     },
     transact_rules::{spp_list, Fixture},
 };
@@ -31,9 +28,9 @@ fn transfer_reading(ring: &mut Ring, registries: &[Address], data: &RingTransact
         vec![AccountMeta::new_readonly(policy_pda(), false)],
         registries
             .iter()
-            .chain(&[tracking_registry()])
             .map(|registry| AccountMeta::new_readonly(*registry, false))
             .collect(),
+        credential_accounts(),
         spp_list(&ring.payer.pubkey(), data, &owner),
     ]
     .concat();
@@ -156,33 +153,21 @@ fn update_policy_rebinds_the_records_to_a_registry_of_any_authority() {
     reaches_verification(transfer_reading(&mut ring, &[records], &data));
 }
 
-/// Valid but for its address.
-fn forged_tracking() -> Vec<u8> {
-    let registry = TrackingRegistry::new(&InitializeTrackingIxData {
-        ring_id: ring_id_field(PROGRAM.as_array()).unwrap(),
-        auditor_pubkey: auditor_pubkey(),
-    });
-    bytemuck::bytes_of(&registry).to_vec()
-}
-
 #[test]
-fn a_forged_tracking_registry_with_a_matching_ring_id_and_an_empty_root_fails_at_load() {
+fn a_credential_tree_with_copied_data_at_another_address_is_refused() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
     let forged = Address::new_from_array([0x5e; 32]);
-    ring.store(forged, STORAGE_PROGRAM_ID, forged_tracking());
-    let pinned: TrackingRegistry = ring.read(&tracking_registry());
-    let copy: TrackingRegistry = ring.read(&forged);
-    assert_eq!(copy.ring_id, pinned.ring_id);
-    assert_eq!(copy.roots[0].hash, pinned.roots[0].hash);
+    ring.store(forged, crate::transact_rules::SPP, credential_tree_data(1));
     let data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     let owner = [AccountMeta::new_readonly(ring.payer.pubkey(), true)];
-    let reading = |tracking: Address, ring: &mut Ring| {
+    let reading = |state_tree: Address, ring: &mut Ring| {
         let accounts = [
             vec![
                 AccountMeta::new_readonly(policy_pda(), false),
                 AccountMeta::new_readonly(RECORDS, false),
-                AccountMeta::new_readonly(tracking, false),
+                AccountMeta::new_readonly(address_tree(), false),
+                AccountMeta::new_readonly(state_tree, false),
             ],
             spp_list(&ring.payer.pubkey(), &data, &owner),
         ]
@@ -192,8 +177,11 @@ fn a_forged_tracking_registry_with_a_matching_ring_id_and_an_empty_root_fails_at
             &[],
         )
     };
-    refused(reading(forged, &mut ring), CustomRingError::UnboundRegistry);
-    reaches_verification(reading(tracking_registry(), &mut ring));
+    refused(
+        reading(forged, &mut ring),
+        CustomRingError::InvalidCredentialRoots,
+    );
+    reaches_verification(reading(credential_tree(), &mut ring));
 }
 
 fn read_private_allow_list(ring: &mut Ring, pair: Address, floor: u64) {
@@ -212,8 +200,12 @@ fn pin_records(ring: &mut Ring, pair: Address, floor: u64) {
 
 fn pin_registry(ring: &mut Ring, address: Address, pair: Address, floor: u64) {
     let mut records: StorageRegistry = ring.read(&address);
-    records.tracking_registry = pair;
-    records.tracking_floor = Revision::from(floor);
+    records.private_ring_id = if pair == Address::default() {
+        [0; 32]
+    } else {
+        ring_id_field(pair.as_array()).unwrap()
+    };
+    records.absence_floor = floor.to_le_bytes();
     ring.store(
         address,
         STORAGE_PROGRAM_ID,
@@ -221,19 +213,51 @@ fn pin_registry(ring: &mut Ring, address: Address, pair: Address, floor: u64) {
     );
 }
 
-fn store_tracking_history(ring: &mut Ring) {
-    let mut tracking: TrackingRegistry = ring.read(&tracking_registry());
-    tracking.roots[0] = root(3, [0x09; 32]);
-    tracking.roots[1] = retired(2, [0x08; 32], u64::MAX);
+fn address_history_data() -> Vec<u8> {
+    let address = address_tree();
+    let mut data = credential_tree_data(spr_program::ADDRESS_TREE_ID);
+    let mut tree = spr_tree::TreeAccount::from_bytes(&mut data, address.to_bytes()).unwrap();
+    let history = tree.nullifier_tree();
+    history.sequence_number = 3;
+    history.root_history.current_index = 2;
+    history.root_history.roots[0] = [8; 32];
+    history.root_history.roots[1] = [9; 32];
+    data
+}
+
+fn store_address_history(ring: &mut Ring) {
     ring.store(
-        tracking_registry(),
-        STORAGE_PROGRAM_ID,
-        bytemuck::bytes_of(&tracking).to_vec(),
+        address_tree(),
+        crate::transact_rules::SPP,
+        address_history_data(),
     );
 }
 
 #[test]
-fn a_salted_list_reads_its_own_source_under_the_tracking_pin() {
+fn address_history_refuses_a_checkpoint_below_the_floor_while_queue_work_is_pending() {
+    let address = address_tree();
+    let mut data = address_history_data();
+    let mut tree = spr_tree::TreeAccount::from_bytes(&mut data, address.to_bytes()).unwrap();
+    tree.nullifier_tree().queue_next_index += 1;
+    for (index, sequence) in [(0, 2), (1, 3)] {
+        let checkpoint = custom_ring_interface::CredentialTreeRead {
+            address: &address,
+            owner: &crate::transact_rules::SPP,
+            data: &mut data,
+        }
+        .checkpoint(index)
+        .unwrap();
+        assert_eq!(checkpoint.sequence(), sequence);
+        assert!(checkpoint.above(sequence).is_ok());
+        assert_eq!(
+            checkpoint.above(sequence + 1),
+            Err(CustomRingError::AbsenceRootBelowFloor)
+        );
+    }
+}
+
+#[test]
+fn a_salted_list_reads_its_own_source_under_the_ring_pin() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
     let data = fixture.transfer(RingRail::Confidential, 2, 2, true);
@@ -244,37 +268,37 @@ fn a_salted_list_reads_its_own_source_under_the_tracking_pin() {
         pin_records(&mut ring, unpaired, 0);
         refused(
             transfer_reading(&mut ring, &[RECORDS], &data),
-            CustomRingError::SaltedSourceOtherTracking,
+            CustomRingError::SaltedSourceOtherRing,
         );
     }
-    pin_records(&mut ring, tracking_registry(), 0);
+    pin_records(&mut ring, PROGRAM, 0);
     reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
 }
 
 #[test]
-fn an_unpaired_private_source_cannot_name_an_old_tracking_root() {
+fn an_unpaired_private_source_cannot_name_an_old_address_root() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    store_tracking_history(&mut ring);
+    store_address_history(&mut ring);
     read_private_allow_list(&mut ring, Address::default(), 0);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.tracking_revision = Revision::from(2);
+    data.credential_read = CredentialRead::new(0, &[0]).unwrap();
     refused(
         transfer_reading(&mut ring, &[RECORDS], &data),
-        CustomRingError::SaltedSourceOtherTracking,
+        CustomRingError::SaltedSourceOtherRing,
     );
-    pin_records(&mut ring, tracking_registry(), 3);
+    pin_records(&mut ring, PROGRAM, 3);
     refused(
         transfer_reading(&mut ring, &[RECORDS], &data),
-        CustomRingError::TrackingRootBelowFloor,
+        CustomRingError::AbsenceRootBelowFloor,
     );
 }
 
 #[test]
-fn a_curated_public_ring_reads_a_curator_pinned_to_its_own_tracking_registry() {
+fn a_public_list_ignores_its_curators_private_ring_and_floor() {
     let fixture = Fixture::new();
     let mut ring = subscriber_ring();
-    store_tracking_history(&mut ring);
+    store_address_history(&mut ring);
     pin_registry(
         &mut ring,
         CURATOR,
@@ -283,12 +307,12 @@ fn a_curated_public_ring_reads_a_curator_pinned_to_its_own_tracking_registry() {
     );
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     data.policy.as_mut().unwrap().curator_revision = Some(Revision::from(4));
-    data.tracking_revision = Revision::from(2);
+    data.credential_read = CredentialRead::new(0, &[0]).unwrap();
     reaches_verification(transfer_reading(&mut ring, &[RECORDS, CURATOR], &data));
 }
 
 #[test]
-fn a_private_list_mapped_to_a_curator_on_another_tracking_registry_is_refused() {
+fn a_private_list_mapped_to_a_curator_on_another_ring_is_refused() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.holder(RingRole::Policy);
@@ -315,9 +339,9 @@ fn a_private_list_mapped_to_a_curator_on_another_tracking_registry_is_refused() 
     data.policy.as_mut().unwrap().curator_revision = Some(Revision::from(4));
     refused(
         transfer_reading(&mut ring, &[RECORDS, CURATOR], &data),
-        CustomRingError::SaltedSourceOtherTracking,
+        CustomRingError::SaltedSourceOtherRing,
     );
-    pin_registry(&mut ring, CURATOR, tracking_registry(), 0);
+    pin_registry(&mut ring, CURATOR, PROGRAM, 0);
     reaches_verification(transfer_reading(&mut ring, &[RECORDS, CURATOR], &data));
 }
 
@@ -325,28 +349,28 @@ fn a_private_list_mapped_to_a_curator_on_another_tracking_registry_is_refused() 
 fn a_ring_with_no_salted_list_answers_to_no_floor_of_its_pinned_records() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    store_tracking_history(&mut ring);
-    pin_records(&mut ring, tracking_registry(), 3);
+    store_address_history(&mut ring);
+    pin_records(&mut ring, PROGRAM, 3);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.tracking_revision = Revision::from(2);
+    data.credential_read = CredentialRead::new(0, &[0]).unwrap();
     reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
 }
 
 #[test]
-fn a_tracking_root_below_the_salted_floor_is_refused_at_load() {
+fn an_address_root_below_the_salted_floor_is_refused_at_load() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    store_tracking_history(&mut ring);
-    read_private_allow_list(&mut ring, tracking_registry(), 3);
+    store_address_history(&mut ring);
+    read_private_allow_list(&mut ring, PROGRAM, 3);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.tracking_revision = Revision::from(2);
+    data.credential_read = CredentialRead::new(0, &[0]).unwrap();
     refused(
         transfer_reading(&mut ring, &[RECORDS], &data),
-        CustomRingError::TrackingRootBelowFloor,
+        CustomRingError::AbsenceRootBelowFloor,
     );
-    data.tracking_revision = Revision::from(3);
+    data.credential_read = CredentialRead::new(1, &[0]).unwrap();
     reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
-    pin_records(&mut ring, tracking_registry(), 2);
-    data.tracking_revision = Revision::from(2);
+    pin_records(&mut ring, PROGRAM, 2);
+    data.credential_read = CredentialRead::new(0, &[0]).unwrap();
     reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
 }

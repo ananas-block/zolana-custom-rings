@@ -35,21 +35,29 @@ func inputComposition(t testing.TB, domains []int, count int) *inputCompositionC
 		Nullifiers: make([]frontend.Variable, len(domains)),
 		Count:      count,
 	}
-	addresses := make([]*big.Int, len(domains))
 	for i, domain := range domains {
 		c.Inputs[i] = dummySlot()
 		c.Inputs[i].Domain = domain
-		c.Nullifiers[i], addresses[i] = 0, new(big.Int)
+		c.Nullifiers[i] = 0
 		if i < count {
 			c.Nullifiers[i] = 101 + i
 		}
-		if domain == transaction.AddressDomain {
+	}
+	c.rebindAddresses(t)
+	c.rebindNullifiers(t)
+	return c
+}
+
+func (c *inputCompositionCircuit) rebindAddresses(t testing.TB) {
+	t.Helper()
+	addresses := make([]*big.Int, len(c.Inputs))
+	for i, input := range c.Inputs {
+		addresses[i] = new(big.Int)
+		if ringtest.AsBigInt(input.Domain).Int64() == transaction.AddressDomain {
 			addresses[i] = ringtest.AsBigInt(c.Nullifiers[i])
 		}
 	}
 	c.AddressChain = spptest.MustNonZeroHashChain(t, addresses)
-	c.rebindNullifiers(t)
-	return c
 }
 
 func (c *inputCompositionCircuit) rebindNullifiers(t testing.TB) {
@@ -96,6 +104,7 @@ func TestInputCompositionRefusesChangedBindings(t *testing.T) {
 		}},
 		{"zero address nullifier", func(c *inputCompositionCircuit) {
 			c.Nullifiers[1] = 0
+			c.rebindAddresses(t)
 			c.rebindNullifiers(t)
 		}},
 		{"zero note nullifier", func(c *inputCompositionCircuit) {
@@ -130,7 +139,9 @@ func TestInputCompositionUsesTheLastBitmapSlot(t *testing.T) {
 	domains[len(domains)-1] = transaction.AddressDomain
 	c := inputComposition(t, domains, len(domains))
 	requireSolved(t, c)
+	c = inputComposition(t, domains, len(domains))
 	c.Nullifiers[len(c.Nullifiers)-1] = 0
+	c.rebindAddresses(t)
 	c.rebindNullifiers(t)
-	refused(t, c)
+	refused(t, c, "transfer.OpenInputs")
 }

@@ -11,7 +11,7 @@
 //!
 //! 1. Auditor recovery. The ring proof shows the auditor opens each instruction's sealed records, SPP reads none of them.
 //! 2. Policy. A transfer or deposit on a policy ring proves the rules under the hash and roots the ring pins.
-//! 3. Tracking. Owner keys resolve against the rows of the one tracking registry the ring pins.
+//! 3. Tracking. Immutable audit credentials in SPP state trees bind owner identities and nullifier keys.
 //! 4. Co-signers. The operation and the proven approval bits demand signed records, outside SPP's account list.
 //! 5. Hidden senders. The proof holds the hidden owner apart from the payer, the co-signers, the funders, the exit key and the owner run.
 //! 6. Delegate. One permanent key moves notes without owner signatures and outside every policy rule.

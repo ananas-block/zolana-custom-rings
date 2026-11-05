@@ -5,14 +5,13 @@ use std::{convert::Infallible, net::Ipv4Addr, sync::Arc};
 use super::{
     buffered_validation::{finalized_transaction, KEY as FULL_LOAD_KEY},
     one_key::{
-        context, newest_root, own_tree, tracking_tree, AccountEdit, FrameReport, Landed, NoteSeed,
+        newest_root, own_tree, AccountEdit, CredentialFixture, FrameReport, Landed, NoteSeed,
         Seeded, SeededIndexer, SettledState,
     },
     *,
 };
 use custom_ring_interface::{
-    cosign::ApprovalMask, storage::StorageRegistry, tag, tracking::TrackingRegistry,
-    PolicyWithdrawal, FRAME_BUFFER_HEADER_LEN,
+    cosign::ApprovalMask, storage::StorageRegistry, tag, PolicyWithdrawal, FRAME_BUFFER_HEADER_LEN,
 };
 use custom_ring_sdk::{
     ApplicationData, ApprovalLimit, CoSignerApproval, CoSignerRule, CustomRingConfig,
@@ -48,14 +47,11 @@ use zolana_ring_client::{
     rpc::{GetRelayStatusRequest, RelayId, RelayOperation, RelayStatus},
     RingIndexer,
 };
-use zolana_ring_indexer::{
-    rpc::{method::GetStorageRecordPool, GetStorageRecordPoolRequest},
-    tracking::{method::GetTrackingRecordPool, GetTrackingRecordPoolRequest},
-};
+use zolana_ring_indexer::rpc::{method::GetStorageRecordPool, GetStorageRecordPoolRequest};
 use zolana_ring_member_registry::RecordTree;
 
 const STORAGE_POOL: &str = GetStorageRecordPool::NAME;
-const TRACKING_POOL: &str = GetTrackingRecordPool::NAME;
+const CREDENTIAL_HISTORY: &str = spr_indexer_api::GET_SHIELDED_TRANSACTIONS_BY_NULLIFIERS;
 const NOTE: u64 = 1_000_000_000;
 const SPENT_NOTES: usize = 5;
 const SPENT_TOTAL: u64 = SPENT_NOTES as u64 * NOTE;
@@ -103,11 +99,15 @@ impl SeededService {
                     self.seeded.get_storage_record_pool(request)?,
                 )?)
             }
-            Some(TRACKING_POOL) => {
-                let request: GetTrackingRecordPoolRequest = serde_json::from_value(params)?;
-                Some(serde_json::to_value(
-                    self.seeded.get_tracking_record_pool(request)?,
-                )?)
+            Some(CREDENTIAL_HISTORY) => {
+                let request: spr_indexer_api::GetRingsByNullifiersRequest =
+                    serde_json::from_value(params)?;
+                let nullifiers: Vec<_> = request.nullifiers.iter().map(|value| value.0).collect();
+                self.seeded
+                    .credentials
+                    .history(&nullifiers)
+                    .map(serde_json::to_value)
+                    .transpose()?
             }
             _ => None,
         })
@@ -121,10 +121,10 @@ impl SeededService {
         let held = request
             .leaves
             .iter()
-            .map(|leaf| self.seeded.notes.proof(tree, leaf.0))
+            .map(|leaf| self.seeded.proof(tree, leaf.0))
             .collect::<Result<Option<Vec<_>>, _>>()?;
         Ok(held.map(|proofs| GetMerkleProofsResponse {
-            context: context(&self.seeded.notes),
+            context: self.seeded.context(),
             proofs: proofs
                 .into_iter()
                 .map(|proof| MerkleProof {
@@ -771,12 +771,6 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         AccountEdit { env: &env, address }
             .apply(|registry: &mut StorageRegistry| registry.roots[0] = newest_root(root))?;
     }
-    let tracking_root = tracking_tree(&rows)?.root()?;
-    AccountEdit {
-        env: &env,
-        address: policy.tracking,
-    }
-    .apply(|registry: &mut TrackingRegistry| registry.roots[0] = newest_root(tracking_root))?;
     let Seeded {
         wallets: notes,
         notes: seeded,
@@ -787,8 +781,20 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         amounts: &[NOTE; FIXTURES * SPENT_NOTES],
     }
     .write()?;
+    let credential_rows = std::iter::once(&sender)
+        .chain(&recipients)
+        .map(|keys| ring_address(keys, ring.program_id()))
+        .collect::<Result<Vec<_>>>()?;
+    let credentials = CredentialFixture {
+        env: &env,
+        ring,
+        auditor: policy.auditor_pubkey,
+        rows: &credential_rows,
+    }
+    .build()?;
+    credentials.install(&env)?;
     println!(
-        "seeded: own, curator and tracking roots, {} unbacked ring notes, a funded SOL interface, throwaway key setup",
+        "seeded own and curator registries, immutable SPP credentials, {} unbacked ring notes and a funded SOL interface",
         notes.len()
     );
 
@@ -798,7 +804,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
             notes: seeded,
             own: own_tree(&rows, &[withdrawal_owner])?,
             curator: Some((curator_records, curator_tree)),
-            tracking: tracking_tree(&rows)?,
+            credentials,
         },
         upstream: env.indexer_url.clone(),
         http: reqwest::Client::new(),

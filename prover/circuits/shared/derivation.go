@@ -44,12 +44,6 @@ const (
 	WithdrawalsDomain = 0x43525057
 	// TransferStatementDomain = "CRTX"
 	TransferStatementDomain = 0x43525458
-	// TrackingLeafDomain = "CRTK"
-	TrackingLeafDomain = 0x4352544b
-	// TrackingEntryDomain = "CRTQ"
-	TrackingEntryDomain = 0x43525451
-	// ApplyEnrollmentsDomain = "CRTA"
-	ApplyEnrollmentsDomain = 0x43525441
 	// ListTagDomain = "CRPT"
 	ListTagDomain = 0x43525054
 	// ListKeyDomain = "CRPL"
@@ -74,7 +68,9 @@ const (
 	MergeEncInfo = "CRING/mrg"
 )
 
-// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a transfer or deposit output under it proves its owner absent from the tracking root, a merge output reads no row.
+// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs.
+// Its public secret keeps the note auditable without a credential and prevents a hidden owner from spending it privately.
+// A zero-key output needs no credential opening unless a salted payee read is active.
 var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c", 16)
 
 // SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.
@@ -90,7 +86,7 @@ func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) fronten
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
 }
 
-// ListTag is Poseidon(CRPT, listSalt), the tracking leaf's commitment to the owner's one salt.
+// ListTag is Poseidon(CRPT, listSalt), the permanent credential's commitment to the owner's one salt.
 func ListTag(api frontend.API, listSalt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{ListTagDomain, listSalt})
 }

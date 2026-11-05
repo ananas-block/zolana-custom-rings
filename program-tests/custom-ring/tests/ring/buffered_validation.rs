@@ -4,8 +4,9 @@ use std::time::Instant;
 
 use super::{
     one_key::{
-        newest_root, nullifier_accounts, own_tree, tracking_tree, with_altered_record, AccountEdit,
-        FrameReport, Landed, NoteSeed, RingBody, Seeded, SeededChain, SettledState,
+        newest_root, nullifier_accounts, own_tree, with_altered_record, AccountEdit,
+        CredentialFixture, FrameReport, Landed, NoteSeed, RingBody, Seeded, SeededChain,
+        SettledState,
     },
     *,
 };
@@ -13,7 +14,6 @@ use custom_ring_cli::Zolana;
 use custom_ring_interface::{
     key_catalog::{RingCircuit, RING_KEYS},
     storage::StorageRegistry,
-    tracking::TrackingRegistry,
     FRAME_BUFFER_HEADER_LEN,
 };
 use custom_ring_sdk::BufferedFrame;
@@ -234,17 +234,11 @@ fn buffered_validation_settles_the_oversized_frame_and_refuses_changes_and_a_res
     let rows = [sender.shielded_address()?, recipient.shielded_address()?];
     let policy = policy_registry(ring, &env)?;
     let own_root = own_tree(&rows, &[])?.root()?;
-    let tracking_root = tracking_tree(&rows)?.root()?;
     AccountEdit {
         env: &env,
         address: policy.records,
     }
     .apply(|registry: &mut StorageRegistry| registry.roots[0] = newest_root(own_root))?;
-    AccountEdit {
-        env: &env,
-        address: policy.tracking,
-    }
-    .apply(|registry: &mut TrackingRegistry| registry.roots[0] = newest_root(tracking_root))?;
     let Seeded {
         wallets: notes,
         notes: seeded,
@@ -255,13 +249,26 @@ fn buffered_validation_settles_the_oversized_frame_and_refuses_changes_and_a_res
         amounts: &[RING_DEPOSIT_A, RING_DEPOSIT_B],
     }
     .write()?;
-    println!("seeded: own and tracking roots, two unbacked ring notes, throwaway key setup");
+    let credential_rows = [
+        ring_address(sender, ring_program)?,
+        ring_address(recipient, ring_program)?,
+    ];
+    let credentials = CredentialFixture {
+        env: &env,
+        ring,
+        auditor: policy.auditor_pubkey,
+        rows: &credential_rows,
+    }
+    .build()?;
+    credentials.install(&env)?;
+    println!("seeded own registry, immutable SPP credentials and two unbacked ring notes");
 
     let body = RingBody::default();
     let chain = SeededChain {
         env: &env,
         notes: seeded,
         rows: &rows,
+        credentials,
         body: &body,
     }
     .connect()?;
