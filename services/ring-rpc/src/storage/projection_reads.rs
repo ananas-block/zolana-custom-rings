@@ -9,11 +9,24 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, Value};
 use solana_address::Address;
 
 use crate::{
-    spend_machine::SpendRow,
-    spend_machine::SpendState,
-    spent_index::{read_note, read_spend_row, state_name, NoteSeal, NOTE_COLUMNS, ROW_COLUMNS},
+    spend_machine::{SpendRow, SpendState},
+    spent_index::{
+        read_enrollment, read_note, read_spend_row, state_name, NoteSeal, ENROLLMENT_COLUMNS,
+        NOTE_COLUMNS, ROW_COLUMNS,
+    },
+    tracking::HeldEnrollment,
     utxos::StoredUtxo,
 };
+
+/// The key an enrollment lookup names, each read through its own column.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EnrollmentKey {
+    Member,
+    /// Tagged on disk, the column names no owner hash.
+    OwnerHash,
+    /// Tagged on disk, the column names no list key.
+    ListKey,
+}
 
 /// Keys bound into one statement, under every backend's parameter ceiling.
 const KEYS_PER_READ: usize = 256;
@@ -115,6 +128,46 @@ impl ProjectionReads<'_> {
             .collect()
     }
 
+    /// A row found by a tag counts only when its sealed body names the asked key.
+    pub(crate) async fn enrollments(
+        &self,
+        key: EnrollmentKey,
+        values: &[[u8; 32]],
+    ) -> Result<Vec<HeldEnrollment>, DbErr> {
+        let tags = &self.seal.tags;
+        let column = match key {
+            EnrollmentKey::Member => "member",
+            EnrollmentKey::OwnerHash => "owner_hash_tag",
+            EnrollmentKey::ListKey => "list_key_tag",
+        };
+        let mut found = Vec::new();
+        for chunk in values.chunks(KEYS_PER_READ) {
+            let stored = chunk
+                .iter()
+                .map(|value| match key {
+                    EnrollmentKey::Member => Ok(*value),
+                    EnrollmentKey::OwnerHash => tags.owner_hash_tag(value),
+                    EnrollmentKey::ListKey => tags.list_key_tag(value),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for row in self
+                .keyed(
+                    &format!("SELECT {ENROLLMENT_COLUMNS} FROM held_enrollments"),
+                    column,
+                    &stored,
+                )
+                .await?
+            {
+                let held = read_enrollment(&row, self.seal)?;
+                if !chunk.contains(&key.of(&held)) {
+                    return Err(DbErr::Custom("enrollment row names another key".into()));
+                }
+                found.push(held);
+            }
+        }
+        Ok(found)
+    }
+
     pub(crate) async fn unresolved(&self) -> Result<Vec<SpendRow>, DbErr> {
         self.db
             .query_all(self.statement(
@@ -157,5 +210,15 @@ impl ProjectionReads<'_> {
         let mut bound = vec![Value::from(self.ring.as_ref().to_vec())];
         bound.extend(values);
         Statement::from_sql_and_values(self.db.get_database_backend(), sql, bound)
+    }
+}
+
+impl EnrollmentKey {
+    pub(crate) const fn of(self, held: &HeldEnrollment) -> [u8; 32] {
+        match self {
+            Self::Member => held.member,
+            Self::OwnerHash => held.owner_hash,
+            Self::ListKey => held.list_key,
+        }
     }
 }

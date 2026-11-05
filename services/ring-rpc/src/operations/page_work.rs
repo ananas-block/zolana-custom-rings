@@ -23,9 +23,14 @@ use super::{AuditStore, CreatedIn, IndexedNote, OwnerChange, PageDelta, StoredUt
 use crate::{
     bounded_map::Cached,
     error::RingRpcError,
+    projection_reads::EnrollmentKey,
     spend_machine::{InputRead, Observation, SpendRow, Transition},
     spent_index::Checkpoint,
+    tracking::HeldEnrollment,
 };
+
+/// Opens the nullifier key an owner's enrollment seals, `None` when it does not open.
+pub(crate) type KeyOpener<'a> = dyn Fn(&HeldEnrollment) -> Option<NullifierKey> + Sync + 'a;
 
 /// Each round loads every key the last replay missed, a later round meets only keys an earlier
 /// load revealed.
@@ -36,7 +41,7 @@ const MAX_LOAD_ROUNDS: usize = 4;
 pub(crate) struct PageWork<'a> {
     store: &'a AuditStore,
     steps: Vec<PageStep>,
-    opener: &'a (dyn Fn(&[u8; 32]) -> Option<NullifierKey> + Sync),
+    opener: &'a KeyOpener<'a>,
 }
 
 enum PageStep {
@@ -61,7 +66,7 @@ struct Replay<'a> {
     delta: PageDelta,
     /// Read to derive and dropped with the page, never persisted.
     keys: HashMap<[u8; 32], Option<NullifierKey>>,
-    opener: &'a (dyn Fn(&[u8; 32]) -> Option<NullifierKey> + Sync),
+    opener: &'a KeyOpener<'a>,
     missed: Missed,
 }
 
@@ -72,6 +77,7 @@ struct Loaded {
     by_nullifier: HashMap<[u8; 32], Option<[u8; 32]>>,
     rows: HashMap<[u8; 32], Option<SpendRow>>,
     owners: HashMap<[u8; 32], Vec<[u8; 32]>>,
+    enrollments: HashMap<[u8; 32], Option<HeldEnrollment>>,
 }
 
 #[derive(Default)]
@@ -80,13 +86,11 @@ struct Missed {
     by_nullifier: BTreeSet<[u8; 32]>,
     rows: BTreeSet<[u8; 32]>,
     owners: BTreeSet<[u8; 32]>,
+    enrollments: BTreeSet<[u8; 32]>,
 }
 
 impl<'a> PageWork<'a> {
-    pub(crate) fn new(
-        store: &'a AuditStore,
-        opener: &'a (dyn Fn(&[u8; 32]) -> Option<NullifierKey> + Sync),
-    ) -> Self {
+    pub(crate) fn new(store: &'a AuditStore, opener: &'a KeyOpener<'a>) -> Self {
         Self {
             store,
             steps: Vec::new(),
@@ -398,7 +402,17 @@ impl Replay<'_> {
         }
     }
 
-    /// The zero key's secret is public, every other opens from the owner's credential.
+    /// The owner's stored enrollment, a cache miss records the member.
+    fn enrollment(&mut self, owner_key: &[u8; 32]) -> Option<HeldEnrollment> {
+        let member = *Member::owner_tag(owner_key).ok()?.as_bytes();
+        if let Some(held) = self.loaded.enrollments.get(&member) {
+            return *held;
+        }
+        let cached = self.store.read_enrollments().by_member(&member);
+        self.answer(cached, |missed| missed.enrollments.insert(member))
+    }
+
+    /// The zero key's secret is public, every other opens from the owner's enrollment.
     fn key_of(&mut self, utxo: &KnownUtxo) -> Option<&NullifierKey> {
         let nullifier_pk = utxo.owner.nullifier_pk()?;
         if nullifier_pk == ZERO_NULLIFIER_PUBKEY {
@@ -408,11 +422,14 @@ impl Replay<'_> {
                 .or_insert_with(|| Some(NullifierKey::from_secret([0; 31])))
                 .as_ref();
         }
-        let opener = self.opener;
-        let key = self
-            .keys
-            .entry(utxo.owner_key)
-            .or_insert_with(|| opener(&utxo.owner_key));
+        if !self.keys.contains_key(&utxo.owner_key) {
+            let opener = self.opener;
+            let opened = self
+                .enrollment(&utxo.owner_key)
+                .and_then(|held| opener(&held));
+            self.keys.insert(utxo.owner_key, opened);
+        }
+        let key = self.keys.get(&utxo.owner_key)?;
         key.as_ref().filter(|key| {
             key.pubkey()
                 .is_ok_and(|registered| registered == nullifier_pk)
@@ -438,6 +455,7 @@ impl Loaded {
             by_nullifier,
             rows,
             owners,
+            enrollments,
         } = missed;
         let notes: Vec<[u8; 32]> = notes.into_iter().collect();
         let mut found = store.notes(&notes).await?;
@@ -469,6 +487,11 @@ impl Loaded {
             }
             self.owners.insert(member, commitments);
         }
+        let members: Vec<[u8; 32]> = enrollments.into_iter().collect();
+        let mut found = store.enrollments(EnrollmentKey::Member, &members).await?;
+        for member in members {
+            self.enrollments.insert(member, found.remove(&member));
+        }
         Ok(())
     }
 }
@@ -479,5 +502,6 @@ impl Missed {
             && self.by_nullifier.is_empty()
             && self.rows.is_empty()
             && self.owners.is_empty()
+            && self.enrollments.is_empty()
     }
 }

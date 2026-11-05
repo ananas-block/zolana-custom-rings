@@ -26,7 +26,7 @@ use crate::{
     owner_notes::{IndexTags, OwnerNoteWrites},
     projection_lease::ProjectionLease,
     spend_machine::{SpendRow, SpendState},
-    tracking::HeldEnrollment,
+    tracking::{HeldEnrollment, TrackingCursor},
     utxos::{CreatedIn, PageDelta, StoredUtxo},
 };
 
@@ -55,7 +55,7 @@ pub(crate) struct LoadedProjection {
     pub spends: LoadedSpends,
     pub repairs: Vec<(CreatedIn, RepairAttempt)>,
     pub enrollments: Vec<HeldEnrollment>,
-    pub tracking_cursor: u64,
+    pub tracking_cursor: TrackingCursor,
     /// The snapshot's revision, every row the load read was written at or below it.
     pub revision: i64,
 }
@@ -520,7 +520,7 @@ impl ProjectionWriter<'_> {
     pub(crate) async fn commit_enrollments(
         &self,
         held: &[HeldEnrollment],
-        cursor: u64,
+        cursor: TrackingCursor,
     ) -> Result<(), DbErr> {
         let (transaction, revision) = self.begin().await?;
         let backend = transaction.get_database_backend();
@@ -530,19 +530,29 @@ impl ProjectionWriter<'_> {
             transaction
                 .execute(Statement::from_sql_and_values(
                     backend,
-                    "INSERT INTO held_enrollments(ring,member,sealed,revision) \
-                     VALUES($1,$2,$3,$4) ON CONFLICT(ring,member) DO NOTHING",
+                    "INSERT INTO held_enrollments(ring,member,sealed,owner_hash_tag,list_key_tag, \
+                     revision) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(ring,member) DO NOTHING",
                     vec![
                         self.ring_value(),
                         member.to_vec().into(),
                         sealed.into(),
+                        self.seal
+                            .tags
+                            .owner_hash_tag(&enrollment.owner_hash)?
+                            .to_vec()
+                            .into(),
+                        self.seal
+                            .tags
+                            .list_key_tag(&enrollment.list_key)?
+                            .to_vec()
+                            .into(),
                         revision.into(),
                     ],
                 ))
                 .await?;
         }
-        let cursor =
-            i64::try_from(cursor).map_err(|_| DbErr::Custom("tracking cursor past i64".into()))?;
+        let cursor = i64::try_from(cursor.next_leaf())
+            .map_err(|_| DbErr::Custom("tracking cursor past i64".into()))?;
         transaction
             .execute(Statement::from_sql_and_values(
                 backend,
@@ -692,19 +702,16 @@ impl LoadSpends<'_> {
                 },
             };
         }
-        for row in snapshot
-            .query_all(changed(
-                "SELECT member,sealed FROM held_enrollments WHERE ring=$1 AND revision>$2",
-            ))
-            .await?
-        {
-            let member: [u8; 32] = read_bytes(&row, "member")?;
-            let body = seal.open(&member, &row.try_get::<Vec<u8>>("", "sealed")?)?;
-            let held = enrollment_from_body(&body)?;
-            if held.member() != member {
-                return Err(DbErr::Custom("enrollment row names another member".into()));
+        // 2. A cold cache reads no enrollment, a lookup that misses reads its one row.
+        if *scope != HistoryScope::Cold {
+            for row in snapshot
+                .query_all(changed(&format!(
+                    "SELECT {ENROLLMENT_COLUMNS} FROM held_enrollments WHERE ring=$1 AND revision>$2"
+                )))
+                .await?
+            {
+                loaded.enrollments.push(read_enrollment(&row, seal)?);
             }
-            loaded.enrollments.push(held);
         }
         if let Some(row) = snapshot
             .query_one(query(
@@ -713,13 +720,27 @@ impl LoadSpends<'_> {
             .await?
         {
             loaded.tracking_cursor = u64::try_from(row.try_get::<i64>("", "next_leaf")?)
-                .map_err(|_| DbErr::Custom("negative tracking cursor".into()))?;
+                .ok()
+                .and_then(TrackingCursor::stored)
+                .ok_or_else(|| DbErr::Custom("tracking cursor names the sentinel".into()))?;
         }
         Ok(loaded)
     }
 }
 
 pub(crate) const NOTE_COLUMNS: &str = "commitment,sealed";
+pub(crate) const ENROLLMENT_COLUMNS: &str = "member,sealed";
+
+/// One enrollment row selected with `ENROLLMENT_COLUMNS`, its body bound to its member.
+pub(crate) fn read_enrollment(row: &QueryResult, seal: &NoteSeal) -> Result<HeldEnrollment, DbErr> {
+    let member: [u8; 32] = read_bytes(row, "member")?;
+    let body = seal.open(&member, &row.try_get::<Vec<u8>>("", "sealed")?)?;
+    let held = enrollment_from_body(&body)?;
+    if held.member() != member {
+        return Err(DbErr::Custom("enrollment row names another member".into()));
+    }
+    Ok(held)
+}
 pub(crate) const ROW_COLUMNS: &str =
     "nullifier,slot,tx_signature,event_index,position,state,sealed_note";
 

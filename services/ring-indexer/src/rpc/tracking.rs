@@ -76,7 +76,7 @@ pub(crate) async fn tracking_records(
         .at_root(&request.expected_root.0)
         .await?;
     let root = read.root;
-    if request.start_index == 0 || request.start_index > root.next_index {
+    if !request.starts_within(root.next_index) {
         return Err(validation("invalid tracking page start"));
     }
     let leaves: Range<u64> = request.start_index

@@ -26,15 +26,17 @@ use spr_hasher::primitives::hash_bytes;
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
 use thiserror::Error;
 use zolana_ring_client::{
-    records::path_of, resolver::tracking_record, RingIndexerError, SealedNullifierKey,
+    records::path_of, resolver::tracking_record, DepositOwner, RingIndexerError, SealedNullifierKey,
 };
 use zolana_ring_indexer::tracking::{
     GetTrackingRecordsRequest, GetTrackingRecordsResponse, RingIndexedTrackingRecordView,
+    FIRST_TRACKING_LEAF,
 };
 use zolana_ring_member_registry::{OpeningCheck, TrackingOpening, TrackingRecord};
 use zolana_ring_policy::{Member, MemberError};
 
 use crate::{
+    bounded_map::{BoundedMap, Cached},
     error::RingRpcError,
     spent_index::ProjectionWriter,
     upstream::{TrackingRoot, TransactionSource},
@@ -89,15 +91,28 @@ pub(crate) enum OwnerEnrollment {
     Unknown,
 }
 
-/// Mutated only by a scan, the scan runs under the backfill lock.
+/// Every enrollment without a database, a bounded cache of the stored rows beside one.
+///
+/// On the lease holder a scan caches rows only after its page commits, so each is a stored row.
 #[derive(Default)]
 pub(crate) struct HeldEnrollments {
-    by_member: HashMap<[u8; 32], HeldEnrollment>,
+    by_member: BoundedMap<[u8; 32], HeldEnrollment>,
     /// Owner hash to member, the deposit capsule names the owner by its hash.
-    members: HashMap<[u8; 32], [u8; 32]>,
+    members: BoundedMap<[u8; 32], [u8; 32]>,
     /// List key to member, a salted write names the owner by its list key.
-    list_keys: HashMap<[u8; 32], [u8; 32]>,
+    list_keys: BoundedMap<[u8; 32], [u8; 32]>,
 }
+
+/// The rows of one page no held enrollment contradicts, admitted once the page commits.
+#[must_use]
+#[derive(Debug, Default)]
+pub(crate) struct EnrollmentAdmission {
+    fresh: Vec<HeldEnrollment>,
+}
+
+/// The leaf a scan reads next, never the sentinel, so every request meets the indexer's start rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TrackingCursor(u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScanEnd {
@@ -108,7 +123,7 @@ pub(crate) enum ScanEnd {
 }
 
 /// The registry root and unverified pages, `TrackingScan` checks every page against the root.
-pub(crate) trait TrackingSource: Sync {
+pub trait TrackingSource: Sync {
     fn root(
         &self,
         ring: Address,
@@ -151,6 +166,13 @@ impl HeldEnrollment {
         self.member
     }
 
+    pub(crate) const fn deposit_owner(&self) -> DepositOwner {
+        DepositOwner {
+            owner_key: self.owner_key,
+            nullifier_pk: self.nullifier_pk,
+        }
+    }
+
     /// The fields the first enrollment fixed, a rotation moves none of them.
     fn key_fields(&self) -> impl PartialEq + '_ {
         (
@@ -177,6 +199,42 @@ impl HeldEnrollment {
     }
 }
 
+#[cfg(test)]
+impl HeldEnrollment {
+    /// An owner's row whose seal no auditor opens, for tests that hand out keys directly.
+    pub(crate) fn unsealed(owner_key: [u8; 32], key: &NullifierKey) -> Self {
+        let nullifier_pk = key.pubkey().expect("nullifier pk");
+        Self {
+            owner_key,
+            owner_hash: owner_hash(&PublicKey::from_ed25519(&owner_key), &nullifier_pk)
+                .expect("owner hash"),
+            member: *Member::owner_tag(&owner_key).expect("member").as_bytes(),
+            nullifier_pk,
+            list_tag: [0; 32],
+            eph_u: [0; 32],
+            ciphertext: [0; REGISTER_KEY_CIPHERTEXT_LEN],
+            list_key: owner_key,
+        }
+    }
+}
+
+impl Default for TrackingCursor {
+    fn default() -> Self {
+        Self(FIRST_TRACKING_LEAF)
+    }
+}
+
+impl TrackingCursor {
+    /// `None` below the first enrolled leaf, no commit writes such a cursor.
+    pub(crate) fn stored(next_leaf: u64) -> Option<Self> {
+        (next_leaf >= FIRST_TRACKING_LEAF).then_some(Self(next_leaf))
+    }
+
+    pub(crate) const fn next_leaf(self) -> u64 {
+        self.0
+    }
+}
+
 impl OwnerEnrollment {
     /// Refuses an unknown owner, an unscanned enrollment never reads as absent.
     pub fn known(self) -> Result<Option<HeldEnrollment>, TrackingRefusal> {
@@ -196,58 +254,101 @@ impl OwnerEnrollment {
 }
 
 impl HeldEnrollments {
-    pub fn by_member(&self, member: &[u8; 32]) -> Option<&HeldEnrollment> {
-        self.by_member.get(member)
+    pub fn bounded(capacity: usize) -> Self {
+        Self {
+            by_member: BoundedMap::bounded(capacity),
+            members: BoundedMap::bounded(capacity),
+            list_keys: BoundedMap::bounded(capacity),
+        }
     }
 
-    pub fn by_owner_hash(&self, owner_hash: &[u8; 32]) -> Option<&HeldEnrollment> {
-        self.by_member.get(self.members.get(owner_hash)?)
+    pub fn by_member(&self, member: &[u8; 32]) -> Cached<HeldEnrollment> {
+        self.by_member.cached(member)
     }
 
-    pub fn by_list_key(&self, list_key: &[u8; 32]) -> Option<&HeldEnrollment> {
-        self.by_member.get(self.list_keys.get(list_key)?)
+    pub fn by_owner_hash(&self, owner_hash: &[u8; 32]) -> Cached<HeldEnrollment> {
+        self.through(self.members.cached(owner_hash))
     }
 
-    /// All or nothing, returns the owner keys held for the first time.
-    pub fn admit(&mut self, found: Vec<HeldEnrollment>) -> Result<Vec<[u8; 32]>, TrackingRefusal> {
-        // 1. The program never changes a row's key fields, a differing one refuses the page.
+    pub fn by_list_key(&self, list_key: &[u8; 32]) -> Cached<HeldEnrollment> {
+        self.through(self.list_keys.cached(list_key))
+    }
+
+    /// An index entry whose row the cache evicted reads as unknown, never as absent.
+    fn through(&self, member: Cached<[u8; 32]>) -> Cached<HeldEnrollment> {
+        match member {
+            Cached::Hit(member) => match self.by_member.cached(&member) {
+                Cached::Hit(held) => Cached::Hit(held),
+                Cached::Absent | Cached::Unknown => Cached::Unknown,
+            },
+            Cached::Absent => Cached::Absent,
+            Cached::Unknown => Cached::Unknown,
+        }
+    }
+
+    /// All or nothing against `held`, the stored row of every member the page names.
+    pub fn admission(
+        found: Vec<HeldEnrollment>,
+        held: &HashMap<[u8; 32], HeldEnrollment>,
+    ) -> Result<EnrollmentAdmission, TrackingRefusal> {
+        // The program never changes a row's key fields, a differing one refuses the page.
         let mut fresh: HashMap<[u8; 32], HeldEnrollment> = HashMap::new();
-        for held in found {
-            let known = self
-                .by_member
-                .get(&held.member)
-                .or_else(|| fresh.get(&held.member));
-            match known {
-                Some(known) if known.key_fields() != held.key_fields() => {
+        for row in found {
+            match held.get(&row.member).or_else(|| fresh.get(&row.member)) {
+                Some(known) if known.key_fields() != row.key_fields() => {
                     return Err(TrackingRefusal::Conflict)
                 }
                 Some(_) => {}
                 None => {
-                    fresh.insert(held.member, held);
+                    fresh.insert(row.member, row);
                 }
             }
         }
-        // 2. Nothing is written before every row of the page passed step 1.
-        let mut owners = Vec::with_capacity(fresh.len());
-        for (member, held) in fresh {
-            self.members.insert(held.owner_hash, member);
-            self.list_keys.insert(held.list_key, member);
-            self.by_member.insert(member, held);
-            owners.push(held.owner_key);
-        }
-        Ok(owners)
+        Ok(EnrollmentAdmission {
+            fresh: fresh.into_values().collect(),
+        })
+    }
+
+    /// Stored rows only, returns the owner keys held for the first time.
+    pub fn insert(&mut self, rows: impl IntoIterator<Item = HeldEnrollment>) -> Vec<[u8; 32]> {
+        rows.into_iter()
+            .map(|held| {
+                self.members.insert(held.owner_hash, held.member);
+                self.list_keys.insert(held.list_key, held.member);
+                self.by_member.insert(held.member, held);
+                held.owner_key
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+impl HeldEnrollments {
+    /// Entries the cache holds by member, owner hash and list key.
+    pub(crate) fn len(&self) -> [usize; 3] {
+        [
+            self.by_member.len(),
+            self.members.len(),
+            self.list_keys.len(),
+        ]
+    }
+}
+
+impl EnrollmentAdmission {
+    pub fn rows(&self) -> &[HeldEnrollment] {
+        &self.fresh
     }
 }
 
 impl<S: TrackingSource> TrackingScan<'_, S> {
     /// Reads from leaf `cursor` under the registry's newest root until its next index or the cap.
-    pub async fn run(self, cursor: &mut u64) -> Result<ScanEnd, RingRpcError> {
+    pub async fn run(self, cursor: &mut TrackingCursor) -> Result<ScanEnd, RingRpcError> {
         // 1. One root for the whole pass, a later apply appends leaves the next pass reads.
         let Some(root) = self.source.root(self.ring).await? else {
             return Ok(ScanEnd::Complete);
         };
         for _ in 0..MAX_TRACKING_PAGES {
-            if *cursor >= root.next_index {
+            if cursor.0 >= root.next_index {
                 return Ok(ScanEnd::Complete);
             }
             let response = self
@@ -255,7 +356,7 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
                 .records(GetTrackingRecordsRequest {
                     registry: root.registry.into(),
                     expected_root: root.root.into(),
-                    start_index: *cursor,
+                    start_index: cursor.0,
                     limit: TRACKING_PAGE_ROWS,
                 })
                 .await?;
@@ -265,24 +366,25 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
                 return Err(TrackingRefusal::PageShape.into());
             }
             let next = checked_page(&response.records, *cursor, &root)?;
-            if response.next_leaf_index != (next < root.next_index).then_some(next) {
+            if response.next_leaf_index != (next.0 < root.next_index).then_some(next.0) {
                 return Err(TrackingRefusal::PageShape.into());
             }
             // 3. Every row opens under the root and its seal opens before any row is held.
             let found = response
                 .records
                 .iter()
-                .filter(|view| view.path.index != 0)
                 .map(|view| self.held(view, &root))
                 .collect::<Result<Vec<_>, _>>()?;
             // 4. The page applies whole and commits with the cursor past it, a restart resumes there.
-            self.store.admit_enrollments(found.clone())?;
+            //    The check reads every stored row the page names, an evicted member still conflicts.
+            let admission = self.store.enrollment_admission(found).await?;
             if let Some(writer) = self.durable {
-                writer.commit_enrollments(&found, next).await?;
+                writer.commit_enrollments(admission.rows(), next).await?;
             }
+            self.store.admit_enrollments(admission);
             *cursor = next;
         }
-        Ok(match *cursor >= root.next_index {
+        Ok(match cursor.0 >= root.next_index {
             true => ScanEnd::Complete,
             false => ScanEnd::Partial,
         })
@@ -358,32 +460,28 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
     }
 }
 
-/// The leaf index past the page, refusing a gap, a repeat, a sealed sentinel or a short continued page.
+/// The cursor past the page, refusing a gap, a repeat or a short continued page.
+///
+/// The page starts at the cursor and the cursor never names the sentinel, so no row is leaf 0.
 fn checked_page(
     records: &[RingIndexedTrackingRecordView],
-    cursor: u64,
+    cursor: TrackingCursor,
     root: &TrackingRoot,
-) -> Result<u64, TrackingRefusal> {
+) -> Result<TrackingCursor, TrackingRefusal> {
     let consecutive = records
         .iter()
-        .zip(cursor..)
+        .zip(cursor.0..)
         .all(|(view, index)| view.path.index == index);
-    let sentinel = records
-        .iter()
-        .any(|view| view.path.index == 0 && view.record.seal.is_some());
     let len = u64::try_from(records.len()).map_err(|_| TrackingRefusal::PageShape)?;
-    let next = cursor.checked_add(len).ok_or(TrackingRefusal::PageShape)?;
+    let next = cursor
+        .0
+        .checked_add(len)
+        .ok_or(TrackingRefusal::PageShape)?;
     let short = len < TRACKING_PAGE_ROWS && next != root.next_index;
-    if !consecutive
-        || sentinel
-        || len == 0
-        || len > TRACKING_PAGE_ROWS
-        || short
-        || next > root.next_index
-    {
+    if !consecutive || len == 0 || len > TRACKING_PAGE_ROWS || short || next > root.next_index {
         return Err(TrackingRefusal::PageShape);
     }
-    Ok(next)
+    Ok(TrackingCursor(next))
 }
 
 fn open_seal(
@@ -433,8 +531,42 @@ pub mod fixture {
     use zolana_ring_member_registry::{RecordTree, TrackingTree};
 
     use super::*;
+    use crate::projection_reads::EnrollmentKey;
 
     pub const TRACKING: Address = Address::new_from_array([0x7a; 32]);
+
+    /// A fresh auditor's scan of `source` to its root's next index, the row it holds per owner.
+    pub async fn fresh_scan(
+        ring: Address,
+        auditor: &X25519Keypair,
+        source: &impl TrackingSource,
+        owners: &[Address],
+    ) -> Result<Vec<Option<HeldEnrollment>>, RingRpcError> {
+        let store = AuditStore::default();
+        let mut cursor = TrackingCursor::default();
+        let end = TrackingScan {
+            ring,
+            auditor,
+            source,
+            store: &store,
+            durable: None,
+        }
+        .run(&mut cursor)
+        .await?;
+        if end != ScanEnd::Complete {
+            return Err(TrackingRefusal::Incomplete.into());
+        }
+        let mut held = Vec::with_capacity(owners.len());
+        for owner in owners {
+            let member = Member::owner_tag(owner.as_array())?;
+            held.push(
+                store
+                    .enrollment(EnrollmentKey::Member, member.as_bytes())
+                    .await?,
+            );
+        }
+        Ok(held)
+    }
 
     /// Empty until the first enrollment applies.
     #[derive(Clone, Default)]
@@ -547,6 +679,10 @@ pub mod fixture {
             let guard = self.0.lock().expect("ledger");
             let ledger = guard.as_ref().expect("a tracking tree");
             let next_index = ledger.tree.records().len() as u64;
+            assert!(
+                request.starts_within(next_index),
+                "the ring indexer refuses this start"
+            );
             let end = request
                 .start_index
                 .saturating_add(request.limit)

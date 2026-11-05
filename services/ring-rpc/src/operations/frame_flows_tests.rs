@@ -8,7 +8,10 @@ use zolana_ring_client::{
 };
 
 use super::*;
-use crate::utxos::{block_on, CreatedIn, PageWork};
+use crate::{
+    tracking::HeldEnrollment,
+    utxos::{block_on, CreatedIn, PageWork},
+};
 
 const ALICE: [u8; 32] = [0xa1; 32];
 const BOB: [u8; 32] = [0xb2; 32];
@@ -71,7 +74,13 @@ fn frame() -> CreatedIn {
 
 fn store_with(notes: &[CreatedUtxo]) -> AuditStore {
     let store = AuditStore::default();
-    let opener = |owner: &[u8; 32]| Some(key_of(owner));
+    let rows = notes
+        .iter()
+        .map(|note| HeldEnrollment::unsealed(note.utxo.owner_key, &key_of(&note.utxo.owner_key)))
+        .collect();
+    let admission = block_on(store.enrollment_admission(rows)).expect("admission");
+    store.admit_enrollments(admission);
+    let opener = |held: &HeldEnrollment| Some(key_of(&held.owner_key));
     let mut work = PageWork::new(&store, &opener);
     work.open(frame(), notes.iter().copied());
     store.commit(block_on(work.finish()).expect("page"));

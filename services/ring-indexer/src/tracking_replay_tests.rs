@@ -19,7 +19,7 @@ use zolana_ring_indexer::{
     tracking::{
         GetPendingEnrollmentsRequest, GetTrackingApplyProofInputsRequest,
         GetTrackingOpeningsRequest, GetTrackingRecordPoolRequest, GetTrackingRecordsRequest,
-        RingTrackingRecordView,
+        GetTrackingRecordsResponse, RingTrackingRecordView,
     },
     tree::{OpeningCheck, QuadPathOf, RecordOpening, RecordTree, TrackingRecord},
 };
@@ -180,6 +180,16 @@ impl Ledger {
 
     /// The apply an honest applier proves at the projected revision.
     async fn apply(&self, tree: &mut TrackingTree, entries: &[TrackingEntry]) -> Instruction {
+        self.apply_for(tree, entries, &[self.authorization]).await
+    }
+
+    /// The apply of `entries`, each authorization in entry order.
+    async fn apply_for(
+        &self,
+        tree: &mut TrackingTree,
+        entries: &[TrackingEntry],
+        authorizations: &[Address],
+    ) -> Instruction {
         let revision: Revision = self.state().await.account.newest().revision;
         let chain_start = tracking_chain_start(&self.registry, revision).unwrap();
         let applied = tree.clone().apply(chain_start, entries).unwrap();
@@ -192,7 +202,7 @@ impl Ledger {
             new_next_index: inputs.new_next_index.to_le_bytes(),
         };
         instruction(
-            vec![self.registry, self.authorization],
+            [&[self.registry][..], authorizations].concat(),
             [&[tag::APPLY_ENROLLMENTS][..], bytemuck::bytes_of(&data)].concat(),
         )
     }
@@ -753,5 +763,117 @@ async fn a_failed_enrollment_leaves_no_row() {
     };
     ledger.land_transactions(2, vec![failed]).await.unwrap();
     assert_eq!(ledger.enrollment().await, None);
+    ledger.stop().await;
+}
+
+/// Serves the scan straight from the indexer's own `getTrackingRecords` handler.
+struct Endpoint<'a>(&'a Ledger);
+
+impl zolana_ring_rpc::TrackingSource for Endpoint<'_> {
+    async fn root(
+        &self,
+        _ring: Address,
+    ) -> Result<Option<zolana_ring_rpc::TrackingRoot>, spr_client::ClientError> {
+        let newest = self.0.state().await.account.newest();
+        Ok(Some(zolana_ring_rpc::TrackingRoot {
+            registry: self.0.registry,
+            root: newest.hash,
+            revision: newest.revision.value(),
+            next_index: self.0.state().await.account.next_index(),
+        }))
+    }
+
+    async fn records(
+        &self,
+        request: GetTrackingRecordsRequest,
+    ) -> Result<GetTrackingRecordsResponse, zolana_ring_client::RingIndexerError> {
+        let indexer = &self.0.indexer;
+        api::tracking_records(indexer.db.as_ref(), indexer.rpc.as_ref(), request)
+            .await
+            .map_err(|error| spr_client::ClientError::Rpc(error.to_string()).into())
+    }
+}
+
+/// `owner`'s authorization sealed to `auditor`, as its `Enroll` leaves the account.
+fn sealed_authorization(
+    registry: Address,
+    owner: Address,
+    seed: u8,
+    auditor: &spr_keypair::X25519Pubkey,
+) -> TrackingAuthorization {
+    let key = spr_keypair::NullifierKey::from_secret([seed; 31]);
+    let mut list_salt = [seed; 32];
+    list_salt[0] = 0;
+    let sealed = zolana_ring_client::NullifierKeyEnvelope::new(&key, &list_salt, auditor)
+        .unwrap()
+        .sealed;
+    TrackingAuthorization {
+        discriminator: TrackingAuthorization::DISCRIMINATOR,
+        registry,
+        owner,
+        nullifier_pk: key.pubkey().unwrap(),
+        list_tag: custom_ring_interface::domain::list_tag(&list_salt).unwrap(),
+        viewing_u: field(seed),
+        eph_u: sealed.eph_pk.u(),
+        ciphertext: sealed.ciphertext,
+        revision: 1u64.to_le_bytes(),
+        applied_revision: [0; 8],
+    }
+}
+
+#[tokio::test]
+async fn a_fresh_auditor_scans_the_indexer_endpoint_from_the_first_leaf_and_holds_every_owner() {
+    let mut ledger = Ledger::new().await;
+    let auditor = spr_keypair::X25519Keypair::new();
+    let owners = [
+        Address::new_from_array([61; 32]),
+        Address::new_from_array([62; 32]),
+    ];
+    let proof = CustomRingProof::zeroed();
+    let mut entries = Vec::new();
+    let mut authorizations = Vec::new();
+    for (slot, owner) in (2..).zip(owners) {
+        let held = sealed_authorization(ledger.registry, owner, slot as u8, &auditor.pubkey());
+        let (authorization, _) = TrackingAuthorization::find_address(&ledger.registry, &owner);
+        ledger.chain.lock().unwrap().accounts.insert(
+            authorization.to_string(),
+            account(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&held)),
+        );
+        let ix = EnrollIxData {
+            nullifier_pk: held.nullifier_pk,
+            list_tag: held.list_tag,
+            viewing_u: held.viewing_u,
+            eph_u: held.eph_u,
+            ciphertext: held.ciphertext,
+        };
+        let request = EnrollRequest {
+            ix: &ix,
+            proof: Some(&proof),
+        };
+        let enroll = instruction(
+            vec![owner, owner, ledger.registry, authorization],
+            [&[tag::ENROLL][..], &request.encode()].concat(),
+        );
+        ledger.land(slot, enroll).await.unwrap();
+        entries.push(held.entry().unwrap());
+        authorizations.push(authorization);
+    }
+    let mut tree = TrackingTree::new().unwrap();
+    let apply = ledger.apply_for(&mut tree, &entries, &authorizations).await;
+    ledger.land(4, apply).await.unwrap();
+    ledger.serve(4).await;
+
+    let held = zolana_ring_rpc::tracking_fixture::fresh_scan(
+        Address::new_from_array([60; 32]),
+        &auditor,
+        &Endpoint(&ledger),
+        &owners,
+    )
+    .await
+    .unwrap();
+    for (owner, held) in owners.iter().zip(&held) {
+        let member = zolana_ring_policy::Member::owner_tag(owner.as_array()).unwrap();
+        assert_eq!(held.map(|held| held.member()), Some(*member.as_bytes()));
+    }
     ledger.stop().await;
 }

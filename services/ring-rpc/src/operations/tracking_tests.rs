@@ -6,6 +6,14 @@ use super::{
     fixture::{Enrollment, TrackingLedger},
     *,
 };
+use crate::{
+    database::Store,
+    hub::Clock,
+    projection_lease::LeaseClaim,
+    projection_reads::EnrollmentKey,
+    spent_index::{NoteSeal, ProjectionWriter},
+    utxos::Backing,
+};
 
 const RING: Address = Address::new_from_array([8; 32]);
 
@@ -67,7 +75,7 @@ async fn scan(
     served: &Served,
     auditor: &X25519Keypair,
     store: &AuditStore,
-    cursor: &mut u64,
+    cursor: &mut TrackingCursor,
 ) -> Result<ScanEnd, RingRpcError> {
     TrackingScan {
         ring: RING,
@@ -80,19 +88,26 @@ async fn scan(
     .await
 }
 
+async fn enrollment(store: &AuditStore, member: &[u8; 32]) -> Option<HeldEnrollment> {
+    store
+        .enrollment(EnrollmentKey::Member, member)
+        .await
+        .expect("lookup")
+}
+
 #[tokio::test]
 async fn a_scan_holds_every_enrolled_owner_and_completes_at_the_next_index() {
     let auditor = X25519Keypair::new();
     let (served, held) = served(&auditor, &[1, 2, 3]);
     let store = AuditStore::default();
-    let mut cursor = 0;
+    let mut cursor = TrackingCursor::default();
     let end = scan(&served, &auditor, &store, &mut cursor)
         .await
         .expect("scan");
     assert_eq!(end, ScanEnd::Complete);
-    assert_eq!(cursor, 4, "the sentinel and three rows");
+    assert_eq!(cursor.next_leaf(), 4, "past the sentinel and three rows");
     for held in held {
-        assert_eq!(store.enrollment(&held.member), Some(held));
+        assert_eq!(enrollment(&store, &held.member).await, Some(held));
         let secrets = held.secrets(&auditor).expect("opens");
         assert_eq!(
             secrets.nullifier_key.pubkey().expect("pk"),
@@ -109,14 +124,14 @@ async fn a_page_skipping_a_leaf_holds_nothing_and_keeps_the_cursor() {
         page.records.remove(1);
     });
     let store = AuditStore::default();
-    let mut cursor = 0;
+    let mut cursor = TrackingCursor::default();
     let refused = scan(&served, &auditor, &store, &mut cursor).await;
     assert!(matches!(
         refused,
         Err(RingRpcError::Tracking(TrackingRefusal::PageShape))
     ));
-    assert_eq!(cursor, 0);
-    assert_eq!(store.enrollment(&held[1].member), None);
+    assert_eq!(cursor, TrackingCursor::default());
+    assert_eq!(enrollment(&store, &held[1].member).await, None);
 }
 
 #[tokio::test]
@@ -124,11 +139,88 @@ async fn a_row_sealed_to_another_auditor_is_refused() {
     let auditor = X25519Keypair::new();
     let (served, _) = served(&X25519Keypair::new(), &[1]);
     let store = AuditStore::default();
-    let mut cursor = 0;
+    let mut cursor = TrackingCursor::default();
     let refused = scan(&served, &auditor, &store, &mut cursor).await;
     assert!(matches!(
         refused,
         Err(RingRpcError::Tracking(TrackingRefusal::Sealed))
     ));
-    assert_eq!(cursor, 0);
+    assert_eq!(cursor, TrackingCursor::default());
+}
+
+#[tokio::test]
+async fn a_bounded_enrollment_cache_holds_its_bound_and_storage_answers_an_evicted_row() {
+    const NOW: u64 = 1_000;
+    let auditor = X25519Keypair::new();
+    let seal = || NoteSeal::derive(&auditor, RING).expect("seal");
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let store = AuditStore::new(Backing::Database {
+        store: database.clone(),
+        ring: RING,
+        seal: Box::new(seal()),
+        capacity: 2,
+    });
+    let writer_seal = seal();
+    let writer = ProjectionWriter {
+        db: database.connection(),
+        ring: RING,
+        seal: &writer_seal,
+        lease: LeaseClaim {
+            db: database.connection(),
+            ring: RING,
+            holder: database.lease_holder(),
+            now: NOW,
+        }
+        .claim()
+        .await
+        .expect("claim")
+        .expect("held"),
+        clock: Clock::Fixed(NOW),
+    };
+    let rows: Vec<HeldEnrollment> = (1..=5)
+        .map(|seed| {
+            HeldEnrollment::unsealed(
+                owner(seed).to_bytes(),
+                &NullifierKey::from_secret([seed; 31]),
+            )
+        })
+        .collect();
+    // One page per row, as a scan admits them, each committed before the cache takes it.
+    for row in &rows {
+        let admission = store
+            .enrollment_admission(vec![*row])
+            .await
+            .expect("admission");
+        writer
+            .commit_enrollments(admission.rows(), TrackingCursor::default())
+            .await
+            .expect("commit");
+        store.admit_enrollments(admission);
+    }
+    assert!(store
+        .cached_enrollments()
+        .iter()
+        .all(|entries| *entries <= 2));
+
+    // 1. The evicted first row answers by each key it is read by, from storage.
+    let first = rows[0];
+    for (key, value) in [
+        (EnrollmentKey::Member, first.member),
+        (EnrollmentKey::OwnerHash, first.owner_hash),
+        (EnrollmentKey::ListKey, first.list_key),
+    ] {
+        assert_eq!(
+            store.enrollment(key, &value).await.expect("lookup"),
+            Some(first)
+        );
+    }
+    // 2. A page naming the evicted member with other key fields still refuses.
+    let conflicting = HeldEnrollment {
+        nullifier_pk: [9; 32],
+        ..first
+    };
+    assert!(matches!(
+        store.enrollment_admission(vec![conflicting]).await,
+        Err(RingRpcError::Tracking(TrackingRefusal::Conflict))
+    ));
 }

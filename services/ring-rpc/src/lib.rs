@@ -155,7 +155,7 @@ pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, 
 pub use storage_chain::{live_ring_client, LiveStorageChain, ProvedEnrollments, StorageChain};
 #[cfg(feature = "test-fixtures")]
 pub use tracking::fixture as tracking_fixture;
-pub use tracking::{HeldEnrollment, TrackingRefusal};
+pub use tracking::{HeldEnrollment, TrackingRefusal, TrackingSource};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
     RingFrame, RingHistoryPage, TrackingRoot, TransactionPage, TransactionSource, Upstreams,
