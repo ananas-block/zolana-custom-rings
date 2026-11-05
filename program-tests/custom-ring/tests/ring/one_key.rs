@@ -788,10 +788,6 @@ pub(super) fn with_altered_record(
     reframed(instruction, &data)
 }
 
-pub(super) struct LandedCost {
-    pub(super) heap: Option<u64>,
-}
-
 pub(super) struct Landed<'a> {
     pub(super) env: &'a TestEnv,
     pub(super) signature: Signature,
@@ -821,16 +817,8 @@ impl Landed<'_> {
             .and_then(|group| group.outer.data.first().copied()))
     }
 
-    pub(super) fn cost_with_heap(self, label: &str) -> Result<()> {
-        ensure!(
-            self.cost(label)?.heap.is_some(),
-            "{label} returned no heap peak"
-        );
-        Ok(())
-    }
-
     /// The heap peak needs `CUSTOM_RING_PROGRAM_SO` naming the heap report build.
-    pub(super) fn cost(self, label: &str) -> Result<LandedCost> {
+    pub(super) fn cost(self, label: &str) -> Result<()> {
         let units_limit = compute_unit_limit(
             self.tag()?
                 .and_then(|tag| InstructionTag::try_from(tag).ok())
@@ -873,7 +861,7 @@ impl Landed<'_> {
         println!(
             "{label}: {bytes} bytes of {MAX_TRANSACTION_SIZE}, {addresses} addresses of {MAX_ADDRESSES}, {units} units of {units_limit}, heap {heap:?} of {HEAP_LIMIT}"
         );
-        Ok(LandedCost { heap })
+        Ok(())
     }
 }
 
