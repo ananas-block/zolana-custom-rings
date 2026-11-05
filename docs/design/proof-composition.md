@@ -196,8 +196,8 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 ### A policy update applies its writes in order
 
-- The program chains each entry from the instruction data, and classifies the grace from the masks.
-- `ApplyRecordsCircuit` keeps list bits outside each mask, moves mint settings only under the entry's flag, and keeps the records sorted.
+- The program chains each entry from the instruction data, and takes the grace from the statement's restrictive bit.
+- `ApplyRecordsCircuit` keeps list bits outside each mask, moves mint settings only under the entry's flag, and keeps the records sorted. It sets the restrictive bit exactly when an active write tightens a list, guard or bound, writes a private list or changes an asset limit. It reads an absent member's old fields as zero.
 - The tests in `prover/circuits/registry` are `TestApplyRecordsAppliesWritesInOrder`, `TestApplyRecordsRefusals` and `TestMintRecordsMatchRustAndPreserveSettings`.
 
 ### A hidden sender stays apart from the public parties

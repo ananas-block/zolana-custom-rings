@@ -5,7 +5,7 @@ Every ring proof has one public input. It is the fold of a statement its verifie
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
 | Transfer | `HashChain4` | `50 + 2K` | `Transfer`, `AuthorityTransfer` |
-| Apply records | `HashChain4` | `12 + 2W` | Storage `Update` |
+| Apply records | `HashChain4` | 9, or `13 + 2W` on a private key | Storage `Update` |
 | Register key | `HashChain4` | 10 | ring `Enroll` |
 | Deposit | `HashChain4` | `45 + 2K` | `Deposit` |
 | Merge | `HashChain` | 14 | `Merge` |
@@ -20,9 +20,9 @@ credential_roots = [ credential_owner, address_root, (tree_id_i, root_i) for i i
 
 - `credential_owner` is the SPP owner hash of the ring's credential PDA, which the program derives from its own program id.
 - `address_root` is the tree 0 nullifier tree root at the frame's `address_root_index`. The program reads its append sequence from the tree's history and refuses one below the highest `absence_floor` of the salted sources the frame reads.
-- Each `(tree_id_i, root_i)` is a state root of an SPP tree the frame names, read at its root index, `tree_id` as `tree_id_field`. The frame names `D >= 1` distinct trees in ascending id, and the program pads the table to `K` with copies of the first entry. Only an empty read, on a public apply or a zero-key merge, carries an all zero table.
+- Each `(tree_id_i, root_i)` is a state root of an SPP tree the frame names, read at its root index, `tree_id` as `tree_id_field`. The frame names `D >= 1` distinct trees in ascending id, and the program pads the table to `K` with copies of the first entry. Only a zero-key merge carries an all zero table.
 - The program accepts only SPP-owned tree accounts, tree 0 as the address tree, and a nonzero root inside the written history. A paused tree stays readable.
-- A public apply carries a run of zeros, `credential_owner` and `address_root` included.
+- A public apply proves under the public key and carries no credential run.
 
 ## Transfer
 
@@ -100,13 +100,15 @@ No zolana ciphertext enters the statement, an exit's scheme 3 body included. The
 
 ```text
 [ CRAP, old_root, new_root, right_align(old_next_index), right_align(new_next_index),
-  chain_start, chain_end, right_align(count),
-  right_align(credential_writes), private_ring_id, credential_roots ]
+  chain_start, chain_end, right_align(count), right_align(restrictive),
+  right_align(credential_writes), private_ring_id, credential_roots ]   private key only past restrictive
 ```
+
+The instruction data carries `restrictive`, and the proof holds it at `1` exactly when an active write meets a condition of [root history](../../design/records-and-roots.md#root-history). A zero bound reads as no bound, and an absent member's old fields read as zero. The Storage program retires every earlier root only when it is `1`.
 
 The Storage program supplies `old_root` as the registry's newest root and `old_next_index`. It folds `chain_end` over the update's writes from [`chain_start(registry, revision)`](hashing.md#record-tree), one chain per `Update`, and supplies `count` as their number. It refuses a `revision` other than the registry's own. Of the roots and indices, only `new_root` and `new_next_index` come from the instruction data.
 
-`credential_writes` is a `u16` bitmap with bit `i` set for write `i` to a private list, except a write an asset entry exempts. The program derives it from the masks, and no caller flag sets it. When it is nonzero, `private_ring_id` is the registry's own. `credential_roots` then carries the credential PDA owner of the ring program the instruction names, checked against `private_ring_id`. The instruction also carries the address root's claimed sequence, and the program refuses it unless it equals the sequence it reads from tree 0. When it is zero, both values are zero and the instruction carries no credential account.
+`credential_writes` is a `u16` bitmap with bit `i` set for write `i` to a private list, except a write an asset entry exempts. The program derives it from the masks, and no caller flag sets it. When it is nonzero, `private_ring_id` is the registry's own. `credential_roots` then carries the credential PDA owner of the ring program the instruction names, checked against `private_ring_id`. The instruction also carries the address root's claimed sequence, and the program refuses it unless it equals the sequence it reads from tree 0. When it is zero, the update proves under the public key, its statement ends at `restrictive`, and the instruction carries no credential account.
 
 ## Register key
 

@@ -119,13 +119,13 @@ A private list entry is an ordinary record under the salted member. While the ow
 ## Policy table hash
 
 ```text
-fields      = [CRTB, (list_id_i, registry_i) × 8, salted, rule_count, rule_j × 16]   // zero padded to 44
+fields      = [CRTB, (list_id_i, registry_i) × 9, salted, rule_count, rule_j × 16]   // zero padded to 44
 acc_0       = 0
 acc_{c + 1} = Poseidon(acc_c, fields[11 c .. 11 c + 11])
 policy_hash = acc_4
 ```
 
-`salted` is the list bitmap byte of the private lists the table maps, bit `id - 1` for list `id`. `registry_i` is `0` for the ring's own records and `hash_bytes(address)` for a curator. Each `rule_j` is the 32-byte row `Rule::encoded` writes in `program-libs/policy/src/rule_table/mod.rs`, zero past `rule_count`.
+`salted` is the `u16` list bitmap of the private lists the table maps, bit `id - 1` for list `id`. `registry_i` is `0` for the ring's own records and `hash_bytes(address)` for a curator. Each `rule_j` is the 32-byte row `Rule::encoded` writes in `program-libs/policy/src/rule_table/mod.rs`, zero past `rule_count`.
 
 ## Approval totals digest
 

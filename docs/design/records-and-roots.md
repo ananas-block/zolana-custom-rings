@@ -28,7 +28,7 @@ A ring reads two kinds of state, each with its own root and its own write path. 
 
 ## Private lists
 
-- `PrivateAllow` and `PrivateBlock` are always salted. A private entry is an ordinary record under `Poseidon(CRPL, owner, list_salt)`, written through the same apply path.
+- `PrivateAllow`, `PrivateBlock` and `PrivateFrozen` are always salted. A private entry is an ordinary record under `Poseidon(CRPL, owner, list_salt)`, written through the same apply path.
 - The credential contains `list_tag = Poseidon(CRPT, list_salt)`, proven at enrollment and final.
 - While a subject opens its credential, the circuit forces its salt to open that tag, so it forces the key too. A proven absent credential is the one skip.
 - A subject proven absent reads no salted list. A deny rule on a salted list passes, and an allow rule on one fails.
@@ -62,12 +62,21 @@ A ring reads two kinds of state, each with its own root and its own write path. 
 
 ## Root history
 
+A batch is restrictive when one of its writes does any of these:
+
+- clears an allow, approval or private-allow bit
+- sets a block, frozen, private-block or private-frozen bit
+- writes a private list
+- lowers a guard threshold
+- sets or lowers a cap, co-sign or withdrawal bound, where zero means no bound
+- changes an asset limit
+
+The apply proof binds that restrictive bit, reading an absent member's old fields as zero.
+
 - A registry keeps its newest roots, each with a revision.
-- A graced update keeps the outgoing root valid for the grace period, so a proof in flight under it still lands.
-- An immediate update retires every earlier root at once, and every proof under them fails.
-- A graced update waits while the oldest kept root is still valid, so it never drops a valid root.
-- The program classifies each policy write from its masks. A write that touches a list a rule can read or mint settings is immediate, and any other write is graced.
-- Every such list write therefore fails proofs in flight at that root, an allowlist addition included. Those proofs prove again.
+- A restrictive update retires every earlier root at once, and every proof under them fails and proves again.
+- Any other update keeps the outgoing root valid for the grace period, so a proof in flight under it still lands. Over a full history it evicts the oldest kept root, and that root's proofs prove again.
+- A kept root reads no policy field more permissively than the newest root. Rules are monotone in those fields, so a kept root admits no transfer the newest refuses.
 
 ## Absence floor
 
@@ -91,4 +100,4 @@ A ring reads two kinds of state, each with its own root and its own write path. 
 
 - A graced write is in the newest root at once. A new proof can still name the old root for the grace period.
 - Ring RPC checks reader grants against the newest root, so a graced grant revocation stops reads once its batch lands.
-- A curator's immediate write stops a subscriber ring at once, since the ring reads the curator's roots at transaction time.
+- A curator's restrictive write stops a subscriber ring at once, since the ring reads the curator's roots at transaction time.
