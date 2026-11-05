@@ -1,3 +1,17 @@
+//! Rewrites a ring's rule table, one list's source, or its records registry.
+//!
+//! A statement reads `policy_hash` and the own root from live state, so each write changes what the next proof names.
+//! A delegate frame reads neither, a policy write cannot fail it. `RingPolicy::set_policy` validates each table it stores.
+//!
+//! The instruction guarantees:
+//!
+//! 1. Only the policy authority writes.
+//! 2. An audit-only ring keeps no rules, the table and source writes refuse it.
+//! 3. A source moves only for a list the rules reference, and at most one curator serves the ring.
+//! 4. The records registry carries the ring's id.
+//!
+//! Read after `instructions/verification/policy_binding.rs`. Read before `program-libs/interface/src/accounts/state.rs`.
+
 use custom_ring_interface::{
     CustomRingError, PolicySourceIxData, PolicyTableIxData, PolicyUpdate, RingPolicy, RingRole,
     SourceSlot, UpdatePolicyIxData,

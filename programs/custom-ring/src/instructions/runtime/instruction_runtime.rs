@@ -1,3 +1,10 @@
+//! Shared instruction plumbing, and the one place the program signs as `ring_auth`.
+//!
+//! SPP accepts a ring's call on that one signature. `PlacedRingAuth` exists only after an address
+//! check, and every signed call goes through it. A forwarded list also passes the slot check.
+//!
+//! Read after `instructions/transfer/verify.rs`. Read before `instructions/accounts/loader.rs`.
+
 use custom_ring_interface::{CustomRingError, RingAccount};
 use pinocchio::{
     address::address_eq,
@@ -144,6 +151,7 @@ impl RingAuth {
     }
 
     /// SPP reads every copy of the PDA as signed, a forwarded list holds it at `index` alone.
+    /// A second copy would pass as an owner or a funder under the ring's own signature.
     pub fn check_slot(
         self,
         accounts: &[AccountView],

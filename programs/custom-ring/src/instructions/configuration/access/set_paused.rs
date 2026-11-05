@@ -1,3 +1,10 @@
+//! Pauses or resumes the ring through `ring_auth`.
+//!
+//! SPP holds the flag in `RingConfig` and reads it on all four operational rails, the delegate's included.
+//! The pause stays with the ring, SPP's governance instruction writes other flags.
+//!
+//! Read after `instructions/runtime/instruction_runtime.rs`. Read before `instructions/configuration/access/update_authority.rs`.
+
 use custom_ring_interface::{RingRole, SetPausedIxData};
 use pinocchio::{AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;

@@ -1,3 +1,22 @@
+//! Every account read of the program, and what each read accepts as proof of the account's identity.
+//!
+//! Owner and discriminator suffice for an account created only at its canonical PDA. A registry any
+//! authority can create gets its identity from the ring's pin, by address.
+//!
+//! A statement binds root values, and these rules fix the roots a frame may name:
+//!
+//! 1. A frame names a revision and the registry serves the root, no root value comes from the frame.
+//! 2. A registry serves its current root and each retired root before its expiry.
+//! 3. A write no rule reads retires the root under the registry's grace, an in-flight proof still settles.
+//! 4. A write a rule can read retires every earlier root at once, a revocation takes effect in the next transaction.
+//! 5. A tracking root always retires under grace, enrollment refuses no in-flight proof.
+//! 6. A floor limits that grace, a stale tracking root could prove a blocked enrolled owner unenrolled.
+//!
+//! A source that pins a tracking registry records a floor at each write a rule can read, that registry's
+//! newest revision. `LiveRoots::tracking` refuses a frame below the highest floor among sources the ring reads a private list from.
+//!
+//! Read after `instructions/runtime/instruction_runtime.rs`. Read before `instructions/settlement/frame_buffer.rs`, `program-libs/interface/src/accounts/state.rs`.
+
 use custom_ring_interface::{
     anonymous_exit_destination,
     cosign::{CoSignCover, CoSignRequirement, MAX_CO_SIGNERS},
@@ -50,6 +69,14 @@ pub fn load_policy<'a>(
     load(program_id, account)
 }
 
+#[inline(always)]
+pub fn load_policy_mut<'a>(
+    program_id: &Address,
+    account: &'a mut AccountView,
+) -> Result<RefMut<'a, RingPolicy>, ProgramError> {
+    load_mut(program_id, account)
+}
+
 /// Owner only, `FrameBuffer::of` checks the discriminator.
 #[inline(always)]
 pub fn load_frame_buffer<'a>(
@@ -75,14 +102,6 @@ pub fn load_frame_buffer_mut<'a>(
     account
         .try_borrow_mut()
         .map_err(|_| CustomRingError::InvalidFrameBuffer.into())
-}
-
-#[inline(always)]
-pub fn load_policy_mut<'a>(
-    program_id: &Address,
-    account: &'a mut AccountView,
-) -> Result<RefMut<'a, RingPolicy>, ProgramError> {
-    load_mut(program_id, account)
 }
 
 /// The ring account whose `role` the signer holds, the processor checks the signature.
@@ -122,18 +141,6 @@ pub fn load_storage_registry(
     }
     let data = account.try_borrow().map_err(|_| invalid)?;
     Ref::filter_map(data, StorageRegistry::from_data).map_err(|_| invalid.into())
-}
-
-/// Any creator can make one with a matching `ring_id`, a caller compares the address.
-fn load_tracking_registry(
-    account: &AccountView,
-) -> Result<Ref<'_, TrackingRegistry>, ProgramError> {
-    let invalid = CustomRingError::InvalidTrackingRegistry;
-    if !account.owned_by(&STORAGE_PROGRAM_ID) {
-        return Err(invalid.into());
-    }
-    let data = account.try_borrow().map_err(|_| invalid)?;
-    Ref::filter_map(data, TrackingRegistry::from_data).map_err(|_| invalid.into())
 }
 
 /// A registry fit to hold the ring's records, one own registry per ring, its ring id scopes every address.
@@ -177,6 +184,7 @@ pub struct RegistrySlots<'a> {
 }
 
 impl RegistrySlots<'_> {
+    /// Own, curator, then tracking, each compared with the ring's pin before its bytes are read.
     #[inline(never)]
     pub fn load<'b>(
         self,
@@ -197,6 +205,7 @@ impl RegistrySlots<'_> {
             bound
                 .map(|bound| {
                     let source = load_storage_registry(bound_account(&bound)?)?;
+                    // A private list's source pins the ring's tracking registry, its floor counts those revisions.
                     ring.check_source_pair(&bound, &source)?;
                     tracking_floor =
                         u64::max(tracking_floor, ring.tracking_floor(&bound, &source).value());
@@ -215,6 +224,18 @@ impl RegistrySlots<'_> {
             len,
         })
     }
+}
+
+/// Any creator can make one with a matching `ring_id`, a caller compares the address.
+fn load_tracking_registry(
+    account: &AccountView,
+) -> Result<Ref<'_, TrackingRegistry>, ProgramError> {
+    let invalid = CustomRingError::InvalidTrackingRegistry;
+    if !account.owned_by(&STORAGE_PROGRAM_ID) {
+        return Err(invalid.into());
+    }
+    let data = account.try_borrow().map_err(|_| invalid)?;
+    Ref::filter_map(data, TrackingRegistry::from_data).map_err(|_| invalid.into())
 }
 
 /// The shielded pool by address, its account position differs per forwarded layout.
@@ -263,7 +284,7 @@ impl CoSignerSlot<'_> {
     }
 }
 
-/// The demand fixes how many `[record, signer]` pairs lead the slice.
+/// `[record, signer]` pairs lead the slice until the demand is covered, each pair covers a new class.
 #[derive(Default)]
 pub struct CoSigners {
     signers: [Address; MAX_CO_SIGNERS],
@@ -306,6 +327,39 @@ impl CoSigners {
 
     pub fn contains(&self, address: &Address) -> bool {
         self.as_slice().contains(address)
+    }
+}
+
+/// The destination every anonymous withdrawal names, read from the settlement window SPP settles.
+pub fn load_anonymous_exit(
+    transfers: &[InterfaceTransfer],
+    window: &[AccountView],
+) -> Result<Option<[u8; 32]>, CustomRingError> {
+    let accounts: Vec<LoadedSettlement<'_>> = window.iter().map(LoadedSettlement).collect();
+    anonymous_exit_destination(transfers, &accounts)
+}
+
+pub(crate) struct LoadedSettlement<'a>(pub &'a AccountView);
+
+impl SettlementAccount for LoadedSettlement<'_> {
+    fn address(&self) -> &Address {
+        self.0.address()
+    }
+
+    fn owner(&self) -> &Address {
+        self.0.owner()
+    }
+
+    fn data_len(&self) -> usize {
+        self.0.data_len()
+    }
+
+    fn token_account(&self) -> Result<TokenAccountState, CustomRingError> {
+        let data = self
+            .0
+            .try_borrow()
+            .map_err(|_| CustomRingError::AnonymousExitTokenAccountInvalid)?;
+        TokenAccountState::unpack(&data)
     }
 }
 
@@ -363,37 +417,4 @@ fn loader_state(account: &AccountView) -> Result<Option<UpgradeableLoaderState>,
             .ok()
             .map(|(state, _)| state),
     )
-}
-
-/// The destination every anonymous withdrawal names, read from the settlement window SPP settles.
-pub fn load_anonymous_exit(
-    transfers: &[InterfaceTransfer],
-    window: &[AccountView],
-) -> Result<Option<[u8; 32]>, CustomRingError> {
-    let accounts: Vec<LoadedSettlement<'_>> = window.iter().map(LoadedSettlement).collect();
-    anonymous_exit_destination(transfers, &accounts)
-}
-
-pub(crate) struct LoadedSettlement<'a>(pub &'a AccountView);
-
-impl SettlementAccount for LoadedSettlement<'_> {
-    fn address(&self) -> &Address {
-        self.0.address()
-    }
-
-    fn owner(&self) -> &Address {
-        self.0.owner()
-    }
-
-    fn data_len(&self) -> usize {
-        self.0.data_len()
-    }
-
-    fn token_account(&self) -> Result<TokenAccountState, CustomRingError> {
-        let data = self
-            .0
-            .try_borrow()
-            .map_err(|_| CustomRingError::AnonymousExitTokenAccountInvalid)?;
-        TokenAccountState::unpack(&data)
-    }
 }

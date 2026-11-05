@@ -1,3 +1,9 @@
+//! Writes a ring account's first image and checks the auditor key before a ring stores it.
+//!
+//! Every statement binds the stored auditor key for the ring's life, so a weak key here weakens all audit recovery.
+//!
+//! Read after `instructions/mod.rs`. Read before `instructions/configuration/setup/initialize.rs`.
+
 use custom_ring_interface::{RingAccount, VIEWING_PUBKEY_TAG};
 use pinocchio::{error::ProgramError, AccountView, ProgramResult};
 use spr_hasher::primitives::is_canonical_x25519_public_key;

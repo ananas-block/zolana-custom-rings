@@ -1,3 +1,10 @@
+//! Turns instruction table data into the rule table and source slots a ring stores.
+//!
+//! The policy hash covers the rules and their source map, and every policy proof binds that hash. A
+//! source for a list no rule reads would change the hash with no rule behind it.
+//!
+//! Read after `instructions/configuration/setup/initialize.rs`. Read before `instructions/configuration/policy/update_policy.rs`.
+
 use bytemuck::Zeroable;
 use custom_ring_interface::{CustomRingError, PolicyTableIxData, SourceSlot, N_SOURCE_SLOTS};
 use pinocchio::{error::ProgramError, AccountView, Address};
