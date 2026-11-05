@@ -22,27 +22,25 @@ import (
 )
 
 const (
-	transferKey   common.CircuitType = "custom-ring-transfer-2-in24-w4-s4"
-	transfer4Key  common.CircuitType = "custom-ring-transfer-4-in24-w4-s4"
-	transfer8Key  common.CircuitType = "custom-ring-transfer-8-in16-w4-s4"
-	transfer16Key common.CircuitType = "custom-ring-transfer-16-in5-w8-s5"
-	wideKey       common.CircuitType = "custom-ring-transfer-wide-8-in24-w32-s24"
-	wide49Key     common.CircuitType = "custom-ring-transfer-wide-2-in49-w4-s12"
-	wide16Key     common.CircuitType = "custom-ring-transfer-wide-16-in5-w8-s5"
-	entryKey      common.CircuitType = "custom-ring-transfer-entry-4-in8-w4-s8"
-	entry24Key    common.CircuitType = "custom-ring-transfer-entry-2-in24-w32-s12"
-	entry8Key     common.CircuitType = "custom-ring-transfer-entry-8-in2-w4-s2"
-	applyKey      common.CircuitType = "custom-ring-apply-records-1"
-	batchKey      common.CircuitType = "custom-ring-apply-records-16"
-	privateKey    common.CircuitType = "custom-ring-apply-records-private-1"
-	enrollKey     common.CircuitType = "custom-ring-apply-enrollments-2"
-	registerKey   common.CircuitType = "custom-ring-register-key"
-	depositKey    common.CircuitType = "custom-ring-deposit-8"
-	mergeKey      common.CircuitType = "custom-ring-merge"
+	transferKey  common.CircuitType = "custom-ring-transfer-2-in24-w4-s4"
+	transfer4Key common.CircuitType = "custom-ring-transfer-4-in24-w4-s4"
+	transfer8Key common.CircuitType = "custom-ring-transfer-8-in16-w4-s4"
+	wideKey      common.CircuitType = "custom-ring-transfer-wide-8-in24-w32-s13"
+	wide40Key    common.CircuitType = "custom-ring-transfer-wide-2-in40-w4-s8"
+	entryKey     common.CircuitType = "custom-ring-transfer-entry-4-in8-w4-s8"
+	entryWideKey common.CircuitType = "custom-ring-transfer-entry-8-in8-w32-s8"
+	entry8Key    common.CircuitType = "custom-ring-transfer-entry-8-in2-w4-s2"
+	applyKey     common.CircuitType = "custom-ring-apply-records-1"
+	batchKey     common.CircuitType = "custom-ring-apply-records-16"
+	privateKey   common.CircuitType = "custom-ring-apply-records-private-1"
+	enrollKey    common.CircuitType = "custom-ring-apply-enrollments-2"
+	registerKey  common.CircuitType = "custom-ring-register-key"
+	depositKey   common.CircuitType = "custom-ring-deposit-8"
+	mergeKey     common.CircuitType = "custom-ring-merge"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, wide49Key, entryKey, entry8Key, entry24Key, applyKey, batchKey, privateKey, enrollKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, wideKey, wide40Key, entryKey, entry8Key, entryWideKey, applyKey, batchKey, privateKey, enrollKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit

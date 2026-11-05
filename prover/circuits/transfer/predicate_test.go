@@ -18,7 +18,7 @@ import (
 
 const recipientSlot = 1
 
-var hiddenData = transfer.Shape{Inputs: 5, Outputs: 16, Withdrawals: 8, Owners: 5}
+var hiddenData = transfer.Shape{Inputs: 16, Outputs: 8, Withdrawals: 4, Owners: 4}
 
 type fixture struct {
 	name    string
