@@ -4,7 +4,7 @@
  * the state root indexes, a merge read names one state root alone.
  * Read after `protocol/codec/audit-stream.ts`. Read before `protocol/transaction/transact.ts`.
  */
-import { Reader, Writer } from "@heliuslabs/zolana/internal";
+import { equalBytes, isZero, Reader, Writer } from "@heliuslabs/zolana/internal";
 import { treeIdField, type Bytes32 } from "@heliuslabs/zolana/interface";
 
 import { MAX_TRANSACTION_ADDRESSES } from "../proof/transfer-shapes.js";
@@ -147,10 +147,54 @@ export class CredentialRoots {
     ]);
   }
 
+  /** A table as a prover request carries it, refused unless `empty` or `selected` builds it. */
+  static read(
+    input: Readonly<{
+      ownerHash: Bytes32;
+      addressRoot: Bytes32;
+      stateRoots: readonly CredentialStateRoot[];
+    }>,
+  ): CredentialRoots {
+    const capacity = input.stateRoots.length;
+    const [first] = input.stateRoots;
+    const distinct = input.stateRoots.findIndex(
+      (entry, index) =>
+        index > 0 && entry.treeId === first?.treeId && equalBytes(entry.root, first.root),
+    );
+    const table =
+      first !== undefined && isZero(first.root) && isZero(input.ownerHash)
+        ? CredentialRoots.empty(capacity)
+        : CredentialRoots.selected({
+            ...input,
+            stateRoots: input.stateRoots.slice(0, distinct === -1 ? capacity : distinct),
+            capacity,
+          });
+    const same = table
+      .elements()
+      .every((element, index) => equalBytes(element, CredentialRoots.raw(input)[index] ?? zero()));
+    if (!same) throw invalidRoots();
+    return table;
+  }
+
   /** Rust `CredentialRoots::state_only`, the merge table with a zero address root. */
   static stateOnly(ownerHash: Bytes32, stateRoot: CredentialStateRoot): CredentialRoots {
     checkRoots([stateRoot], 1);
     return new CredentialRoots(ownerHash, zero(), [stateRoot]);
+  }
+
+  /** The elements `input` states, compared against a canonical table. */
+  private static raw(
+    input: Readonly<{
+      ownerHash: Bytes32;
+      addressRoot: Bytes32;
+      stateRoots: readonly CredentialStateRoot[];
+    }>,
+  ): readonly Bytes32[] {
+    return [
+      input.ownerHash,
+      input.addressRoot,
+      ...input.stateRoots.flatMap(({ treeId, root }) => [treeIdField(treeId), root]),
+    ];
   }
 
   get capacity(): number {
@@ -186,15 +230,19 @@ function checkRoots(roots: readonly CredentialStateRoot[], capacity: number): vo
   if (
     roots.length === 0 ||
     roots.length > capacity ||
-    roots.some((entry) => entry.root.every((byte) => byte === 0)) ||
+    roots.some((entry) => isZero(entry.root)) ||
     roots.some(
       (entry, index) =>
         index > 0 && (roots[index - 1] as CredentialStateRoot).treeId >= entry.treeId,
     )
   )
-    throw new RingError("RING_TRANSACT_DATA_INVALID", {
-      details: { reason: "InvalidCredentialRoots" },
-    });
+    throw invalidRoots();
+}
+
+function invalidRoots(): RingError {
+  return new RingError("RING_TRANSACT_DATA_INVALID", {
+    details: { reason: "InvalidCredentialRoots" },
+  });
 }
 
 function u16(value: number): number {
