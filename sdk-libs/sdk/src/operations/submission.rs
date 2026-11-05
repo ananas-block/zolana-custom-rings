@@ -458,9 +458,7 @@ impl<'a> RingSubmission<'a> {
         payer: &(dyn Signer + Sync),
         signers: &[&(dyn Signer + Sync)],
     ) -> Result<Attempt, RingError> {
-        if self.attempts > 0 {
-            self.operation.refresh_for_retry()?;
-        }
+        self.operation.refresh_for_retry()?;
         let public: Vec<Address> = core::iter::once(payer.pubkey())
             .chain(signers.iter().map(|signer| signer.pubkey()))
             .collect();
@@ -504,9 +502,12 @@ impl<'a> RingSubmission<'a> {
 }
 
 impl RingOperation<'_> {
+    /// A proof that failed spends its frame as one that landed does.
     fn refresh_for_retry(&mut self) -> Result<(), RingError> {
         if let Self::Deposit(deposit) = self {
-            **deposit = deposit.fresh_attempt()?;
+            if deposit.frame_spent() {
+                **deposit = deposit.fresh_attempt()?;
+            }
         }
         Ok(())
     }
@@ -667,9 +668,12 @@ async fn observe(
     Ok(decode_status(statuses))
 }
 
+/// `AlreadyProcessed` stays in doubt, a resent request reads it after the bytes landed.
 pub(crate) fn transaction_error(error: ClientError) -> Option<TransactionError> {
     match error {
-        ClientError::SolanaRpcTransaction { source, .. } => source.get_transaction_error(),
+        ClientError::SolanaRpcTransaction { source, .. } => source
+            .get_transaction_error()
+            .filter(|error| *error != TransactionError::AlreadyProcessed),
         _ => None,
     }
 }
