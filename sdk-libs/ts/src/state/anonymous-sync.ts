@@ -933,6 +933,7 @@ export class NoteLedger {
   readonly #spent = new Map<string, Bytes32>();
   readonly #senderClaims: SenderClaim[] = [];
   readonly #sent: SentPayment[] = [];
+  readonly #sentKeys = new Set<string>();
   readonly #unknownMints = new Set<Address>();
 
   constructor(keys: ShieldedKeys, held: readonly WalletUtxo[]) {
@@ -959,7 +960,10 @@ export class NoteLedger {
       if (claim !== undefined)
         this.#senderClaims.push(Object.freeze({ utxoHash: slot.outputContext.hash, claim }));
     }
-    this.#sent.push(...read.sent);
+    // A repeated row lists its payments again, the published output names each once.
+    for (const payment of read.sent)
+      if (unseen(this.#sentKeys, `${payment.txSignature}:${bytesKey(payment.utxoHash)}`))
+        this.#sent.push(payment);
     for (const mint of read.unknownMints) this.unknownMint(mint);
   }
 
