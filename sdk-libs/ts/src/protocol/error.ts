@@ -303,6 +303,14 @@ export const RingProgramError = Object.freeze({
   framePayerNotWriter: 8526,
   invalidSignerDataCounts: 8527,
   tooManyAnonymousParties: 8528,
+  invalidCredentialPda: 8529,
+  invalidEnrollmentAccounts: 8530,
+  invalidAddressTree: 8531,
+  invalidCredentialRead: 8532,
+  invalidCredentialRoots: 8533,
+  invalidAddressCheckpoint: 8534,
+  absenceRootBelowFloor: 8535,
+  saltedSourceOtherRing: 8536,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;
@@ -337,6 +345,10 @@ export const StorageProgramError = Object.freeze({
   invalidOwnerGrant: 9031,
   invalidReaderKey: 9032,
   invalidAuditorKey: 9033,
+  invalidAssetWrite: 9034,
+  privateWriteWithoutRing: 9035,
+  invalidCredentialRead: 9036,
+  invalidPrivateRing: 9037,
 } as const);
 
 export class RingError extends Error {
