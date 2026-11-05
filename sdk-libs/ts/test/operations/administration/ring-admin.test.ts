@@ -231,7 +231,7 @@ describe("ring account", () => {
     });
   });
 
-  it("refuses a short layout, a retired discriminator and an unknown mode like Rust `InvalidRingMode`", () => {
+  it("refuses a short layout, a foreign discriminator and an unknown mode like Rust `InvalidRingMode`", () => {
     const data = account();
     expect(() => decodeRingPolicy(data.subarray(0, CREATED_SLOT_OFFSET))).toThrow(
       expect.objectContaining({
@@ -239,9 +239,9 @@ describe("ring account", () => {
         details: { length: CREATED_SLOT_OFFSET, discriminator: 15 },
       }),
     );
-    for (const retired of [10, 13]) {
+    for (const foreign of [10, 13]) {
       const stale = account();
-      stale[0] = retired;
+      stale[0] = foreign;
       expect(() => decodeRingPolicy(stale)).toThrow(
         expect.objectContaining({ code: "RING_POLICY_INVALID" }),
       );

@@ -66,7 +66,7 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 		mutate func(map[string]any)
 		want   string
 	}{
-		{"unknown field", func(m map[string]any) { m["version"] = 3 }, "unknown field"},
+		{"unknown field", func(m map[string]any) { m["other"] = 3 }, "unknown field"},
 		{"unknown record field", func(m map[string]any) { record(m)["present"] = true }, "unknown field"},
 		{"missing common field", func(m map[string]any) { delete(m, "privateTxHash") }, "missing field"},
 		{"missing record field", func(m map[string]any) { delete(record(m), "next") }, "missing field"},

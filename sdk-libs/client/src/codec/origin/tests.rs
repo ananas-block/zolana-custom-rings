@@ -1388,8 +1388,8 @@ fn a_frame_reads_under_its_tag_alone() {
         panic!("a vector frame")
     };
     assert!(audit_frame_of(first, RingMode::Confidential).is_ok());
-    for removed in [31, 43, 44, 45, 46, 47] {
-        assert!(audit_frame_of(&[removed], RingMode::Confidential).is_err());
+    for unassigned in [31, 43, 44, 45, 46, 47] {
+        assert!(audit_frame_of(&[unassigned], RingMode::Confidential).is_err());
     }
 }
 

@@ -81,8 +81,8 @@ describe("ring member registry wire", () => {
       const indexer = indexerFor({ error: { code: rpcCode, message: "private diagnostics" } });
       await expect(indexer.getStorageMemberOpenings(request)).rejects.toMatchObject({ code });
     }
-    for (const retired of [-32072, -32073, -32076]) {
-      const indexer = indexerFor({ error: { code: retired, message: "private diagnostics" } });
+    for (const unassigned of [-32072, -32073, -32076]) {
+      const indexer = indexerFor({ error: { code: unassigned, message: "private diagnostics" } });
       await expect(indexer.getStorageMemberOpenings(request)).rejects.toMatchObject({
         code: "CLIENT_INDEXER",
       });

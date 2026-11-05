@@ -48,7 +48,7 @@ def main():
             target = interface/verifier_relative_path(module)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes((temp/module).read_bytes())
-        # Obsolete verifiers are not retained as aliases for stronger statements.
+        # Only the verifiers of the exported keys stay.
         expected = {verifier_relative_path(module) for module in modules}
         for path in interface.rglob('*_verifying_key.rs'):
             if path.relative_to(interface) not in expected:

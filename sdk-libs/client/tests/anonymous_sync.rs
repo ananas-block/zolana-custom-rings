@@ -1855,7 +1855,7 @@ fn a_wallet_document_round_trips_and_refuses_an_unknown_field() {
     let wallet = AnonymousWallet::new(rotated);
     let json = wallet.to_json();
     assert_eq!(AnonymousWallet::from_json(&json).unwrap(), wallet);
-    let other = json.replacen('{', r#"{"version":6,"#, 1);
+    let other = json.replacen('{', r#"{"other":6,"#, 1);
     assert!(matches!(
         AnonymousWallet::from_json(&other),
         Err(AnonymousError::WalletDocument(_))
