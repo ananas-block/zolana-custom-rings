@@ -1,4 +1,10 @@
-// The count stays in range, used slots come first and only they enter the hash the program rebuilds.
+// Helpers for circuits with a fixed number of slots and a smaller real count. SPP
+// reads a dummy off each slot. A ring statement also names how many slots it used, so
+// the count must be in range, the used slots come first, and only the used slots
+// enter the hash the program rebuilds.
+//
+// Read first. Read before audit/audit.go, policy/table.go, registry/apply_records.go,
+// transfer/input.go.
 
 package ringgadget
 
@@ -7,6 +13,11 @@ import (
 
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
+
+// Properties:
+// 1. SelectCount sets exactly one OneHot flag, a count outside [first, first+n) fails the proof.
+// 2. Active's flags are boolean and set exactly on the slots below the count, the used slots form a prefix.
+// 3. HashPrefix4 equals HashChain4 over the prefix the set flag names, it binds no length.
 
 // Count is a witnessed count in [first, first+n) and the slot flags it selects.
 type Count struct {
@@ -29,6 +40,7 @@ func SelectCount(api frontend.API, count frontend.Variable, first, n int) Count 
 	// 2. Exactly one candidate equals the count, a count outside [first, first+n) sets no flag.
 	api.AssertIsEqual(sum, 1)
 	// 3. Slot i is active when a flag at or above count i+1 is set.
+	// Each Active is a sum over flags with exactly one set overall, a bit with no boolean check of its own.
 	active := frontend.Variable(0)
 	for i := len(c.Active) - 1; i >= 0; i-- {
 		active = api.Add(active, c.OneHot[i+1-first])
@@ -42,6 +54,7 @@ func (c Count) Candidate(k int) int {
 }
 
 // HashPrefix4 is HashChain4 over values[:k+1] when oneHot sets only flag k.
+// HashChain4 pads a short group with zeros and hashes no length, prefixes that differ by trailing zeros collide and audit/audit.go hashes the length beside the result.
 func HashPrefix4(api frontend.API, values, oneHot []frontend.Variable) frontend.Variable {
 	if len(oneHot) != len(values) {
 		panic("hash prefix needs one flag per prefix length")
@@ -76,6 +89,7 @@ func HashPrefix4(api frontend.API, values, oneHot []frontend.Variable) frontend.
 	return selected
 }
 
+// IsConstantZero reads the compiled wire, it shapes the circuit and no witness moves its answer.
 func IsConstantZero(api frontend.API, v frontend.Variable) bool {
 	value, ok := api.Compiler().ConstantValue(v)
 	return ok && value.Sign() == 0

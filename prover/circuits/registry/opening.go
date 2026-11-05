@@ -1,4 +1,10 @@
-// A missing record reads as empty, a prover cannot call a record missing when it exists.
+// Reads one registry record of a member or token, or proves that it has none. A
+// missing record reads as empty, and a prover cannot call a record missing when
+// it exists. Each read here takes its own Merkle path. The shipped ring keys read
+// through policy/record_pool.go by the same argument, only tests call these two gadgets.
+//
+// Read after registry/registry.go, ringgadget/canonical.go. Read before
+// policy/record_pool.go.
 
 package registry
 
@@ -9,6 +15,12 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
+
+// Properties:
+// 1. A present member opens its own leaf, the leaf hash names member and no other record passes.
+// 2. An absent member opens the low record whose link it falls strictly inside, the sorted tree registry/apply_records.go keeps has no such link for a present member.
+// 3. Resolve reads zero for an absent member or an unset cond, an absent member's own fields are held empty.
+// 4. AssertPresent opens member's own leaf, an absent member fails the fold.
 
 type QuadOpening struct {
 	Present frontend.Variable
