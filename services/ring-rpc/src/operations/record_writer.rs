@@ -5,8 +5,8 @@ use std::{
 };
 
 use custom_ring_interface::{
-    storage::StorageRegistry, storage_instruction::StorageUpdateIxData, RecordWrite,
-    RecordWriteData, RingAccount, RingPolicy, ROOT_HISTORY,
+    storage::StorageRegistry, storage_instruction::StorageUpdateIxData, CredentialRead,
+    RecordWrite, RecordWriteData, RingAccount, RingPolicy, ROOT_HISTORY,
 };
 use custom_ring_sdk::{CustomRing, InitializeStorage, UpdateStorage};
 use log::warn;
@@ -355,11 +355,14 @@ impl RecordWriter {
             entries: &entries,
         }
         .check()?;
-        let apply = self.chain.prove_apply(&checked.inputs).await?;
+        let apply = self.chain.prove_apply(&checked.inputs, &state).await?;
         // 4. The storage update is the transaction's one instruction.
         let data = StorageUpdateIxData {
             revision: checked.revision,
             writes,
+            asset_writes: Vec::new(),
+            credential_read: CredentialRead::empty(),
+            private_write: None,
             apply: &apply,
         };
         // The program rotates a write no rule can read with grace, over a full history it fails.
@@ -369,7 +372,6 @@ impl RecordWriter {
         let instruction = UpdateStorage {
             authority: self.authority(),
             registry,
-            state: &state,
             data,
         }
         .instruction()

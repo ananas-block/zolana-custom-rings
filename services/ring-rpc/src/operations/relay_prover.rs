@@ -288,7 +288,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             inputs: merge.inputs.clone(),
         })
         .await
-        .map_err(RelayError::proof)?;
+        .map_err(|error| RelayError::proof(*error))?;
         Ok(ProvenRelay {
             instruction: proven
                 .instruction(request.parties.fee_payer)

@@ -1,11 +1,10 @@
 use std::future::Future;
 
 use async_trait::async_trait;
-use custom_ring_interface::{storage::Revision, ApplyRecordsIxData};
-use custom_ring_sdk::{tracking_apply_inputs, ApplyEnrollments, RingClient, StorageApplyProof};
+use custom_ring_interface::{storage::StorageRegistry, ApplyRecordsIxData};
+use custom_ring_sdk::{RingClient, StorageApplyProof};
 use solana_account::Account;
 use solana_address::Address;
-use solana_instruction::Instruction;
 use solana_signature::Signature;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_client::{
@@ -16,9 +15,6 @@ use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
 };
-use zolana_ring_indexer::tracking::{
-    GetPendingEnrollmentsRequest, GetPendingEnrollmentsResponse, GetTrackingApplyProofInputsRequest,
-};
 use zolana_ring_member_registry::ApplyProofInputs;
 
 use crate::{
@@ -26,15 +22,6 @@ use crate::{
     landing::{ChainOutcome, ChainSubmit, LatestBlockhash, Simulation, SolanaChain},
     upstream::{ChainSource, OpeningFetch, RingConfiguration, TransactionSource, Upstreams},
 };
-
-#[must_use]
-pub struct ProvedEnrollments {
-    pub instruction: Instruction,
-    /// The registry revision the proof starts from.
-    pub revision: Revision,
-    /// The authorization revision each named account proved at, in request order.
-    pub revisions: Vec<u64>,
-}
 
 #[async_trait]
 pub trait StorageChain: ChainSubmit {
@@ -55,19 +42,8 @@ pub trait StorageChain: ChainSubmit {
     async fn prove_apply(
         &self,
         inputs: &ApplyProofInputs,
+        registry: &StorageRegistry,
     ) -> Result<ApplyRecordsIxData, RingRpcError>;
-
-    async fn pending_enrollments(
-        &self,
-        request: GetPendingEnrollmentsRequest,
-    ) -> Result<GetPendingEnrollmentsResponse, RingRpcError>;
-
-    /// `owners` applied in order from the current root.
-    async fn prove_enrollments(
-        &self,
-        registry: Address,
-        owners: &[Address],
-    ) -> Result<ProvedEnrollments, RingRpcError>;
 }
 
 impl OpeningFetch for dyn StorageChain {
@@ -171,53 +147,15 @@ impl StorageChain for LiveStorageChain {
     async fn prove_apply(
         &self,
         inputs: &ApplyProofInputs,
+        registry: &StorageRegistry,
     ) -> Result<ApplyRecordsIxData, RingRpcError> {
-        StorageApplyProof { inputs }
-            .prove(&self.client)
-            .await
-            .map_err(|error| RingRpcError::StorageUpdate(error.into()))
-    }
-
-    async fn pending_enrollments(
-        &self,
-        request: GetPendingEnrollmentsRequest,
-    ) -> Result<GetPendingEnrollmentsResponse, RingRpcError> {
-        Ok(self
-            .client
-            .indexer()
-            .get_pending_enrollments(request)
-            .await?)
-    }
-
-    async fn prove_enrollments(
-        &self,
-        registry: Address,
-        owners: &[Address],
-    ) -> Result<ProvedEnrollments, RingRpcError> {
-        let response = self
-            .client
-            .indexer()
-            .get_tracking_apply_proof_inputs(GetTrackingApplyProofInputsRequest {
-                registry: registry.into(),
-                owners: owners.iter().copied().map(Into::into).collect(),
-            })
-            .await?;
-        let storage = |error: custom_ring_sdk::RingError| RingRpcError::StorageUpdate(error.into());
-        let inputs = tracking_apply_inputs(&response).map_err(storage)?;
-        let revision = Revision::from(response.revision);
-        let instruction = ApplyEnrollments {
-            tracking_registry: registry,
-            revision,
-            owners,
-            inputs: &inputs,
+        StorageApplyProof {
+            inputs,
+            registry,
+            asset_writes: &[],
         }
         .prove(&self.client)
         .await
-        .map_err(storage)?;
-        Ok(ProvedEnrollments {
-            instruction,
-            revision,
-            revisions: response.writes.iter().map(|write| write.revision).collect(),
-        })
+        .map_err(|error| RingRpcError::StorageUpdate(error.into()))
     }
 }

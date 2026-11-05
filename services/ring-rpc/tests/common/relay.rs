@@ -123,7 +123,7 @@ pub struct RecordingChain {
     pub refuse_at: AtomicU64,
     pub slot: AtomicU64,
     pub accounts: Mutex<Vec<Address>>,
-    /// Live accounts that hold data, an enrolled owner's tracking authorization.
+    /// Live accounts that hold data.
     pub filled: Mutex<Vec<Address>>,
     pub simulation_refusal: Mutex<Option<String>>,
 }
