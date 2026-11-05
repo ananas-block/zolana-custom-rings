@@ -440,7 +440,7 @@ mod private_write {
         assert!(matches!(
             refused,
             Err(RingError::Credential(error))
-                if matches!(*error, CredentialError::AddressQueued { address } if address == credential_address())
+                if matches!(*error, CredentialError::AddressQueued { address, write_index: 0 } if address == credential_address())
         ));
     }
 

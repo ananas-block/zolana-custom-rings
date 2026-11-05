@@ -1,10 +1,10 @@
 //! The one writer of a ring's records, it batches signed updates, proves each batch and sends it.
 //!
 //! A batch with salted owner writes proves each owner's credential and applied tree 0 address in
-//! the same update that moves the root, and Storage raises the source's absence floor with it. An
-//! owner whose address is still queued holds the batch until its forester batch applies, the writer
-//! never sends the write first. Without a wired credential source such a batch fails its flush and
-//! stays queued.
+//! the same update that moves the root, and Storage raises the source's absence floor with it. A
+//! write whose owner address is still queued waits for its forester batch. Its update and every later
+//! update sharing a member with a held update wait with it, writes to other members go out.
+//! Without a wired credential source such a batch fails its flush and stays queued.
 //!
 //! Read after `operations/record_update.rs` and `custom_ring_sdk::PrivateStorageWrite`.
 //! Read before `storage/update_queue.rs`.
@@ -51,7 +51,8 @@ use crate::{
     landing::{Attempt, ChainOutcome, Landing},
     record_update::{
         limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate, ListApproval,
-        QueuedCheck, QueuedState, RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
+        QueuedCheck, QueuedState, QueuedUpdate, RecordUpdateCheck, RecordUpdateRefusal,
+        UpdateContext,
     },
     storage_chain::StorageChain,
     update_queue::{
@@ -98,6 +99,24 @@ pub struct RecordWriter {
     /// One records creation at a time, a second request finds the first registry.
     creations: tokio::sync::Mutex<()>,
     credential_writes: OnceLock<Arc<dyn CredentialWrites>>,
+}
+
+enum Proving {
+    Proved(BatchProof),
+    /// The owner address of the write at `write_index` waits for its forester batch.
+    Queued {
+        write_index: u8,
+    },
+}
+
+enum Sent {
+    Done,
+    Held(HeldWrite),
+}
+
+/// The update holding a queued owner's write.
+struct HeldWrite {
+    update: [u8; 32],
 }
 
 enum BatchProof {
@@ -377,11 +396,30 @@ impl RecordWriter {
         if deferred {
             return Ok(());
         }
-        let Some(plan) = (BatchPlan { queue: &live, slot }).decide()? else {
-            return Ok(());
-        };
-        let batch = plan.updates.as_slice();
-        // 3. The proof starts at the registry's current root and covers the batch in order.
+        // 3. A write whose owner address is queued sits out this flush with its update and every
+        //    later update sharing a held member, writes to other members commute with it and go out.
+        loop {
+            let Some(plan) = (BatchPlan { queue: &live, slot }).decide()? else {
+                return Ok(());
+            };
+            let batch = plan.updates.as_slice();
+            match self.prove_and_send(registry, slot, batch).await? {
+                Sent::Done => return Ok(()),
+                Sent::Held(held) => {
+                    warn!("record flush of registry {registry} holds a write until its owner address applies");
+                    live = held.release(live)?;
+                }
+            }
+        }
+    }
+
+    async fn prove_and_send(
+        &self,
+        registry: Address,
+        slot: u64,
+        batch: &[&QueuedUpdate],
+    ) -> Result<Sent, RingRpcError> {
+        // 1. The proof starts at the registry's current root and covers the batch in order.
         let writes: Vec<_> = batch
             .iter()
             .flat_map(|update| update.writes.iter().copied())
@@ -408,18 +446,21 @@ impl RecordWriter {
             entries: &entries,
         }
         .check()?;
-        // 4. A queued credential address holds the whole batch, a later flush proves it again.
+        // 2. A queued credential address names the write to hold, nothing of the batch is sent.
         let ring = batch
             .first()
             .map(|update| update.ring)
             .ok_or(DbErr::Custom("a planned batch holds no update".to_owned()))?;
-        let Some(proof) = self
+        let proof = match self
             .prove_batch(ring, &checked.inputs, &state, &entries)
             .await?
-        else {
-            return Ok(());
+        {
+            Proving::Proved(proof) => proof,
+            Proving::Queued { write_index } => {
+                return Ok(Sent::Held(HeldWrite::of(batch, write_index)?))
+            }
         };
-        // 5. The storage update is the transaction's one instruction.
+        // 3. The storage update is the transaction's one instruction.
         let data = StorageUpdateIxData {
             revision: checked.revision,
             writes,
@@ -430,7 +471,7 @@ impl RecordWriter {
         };
         // The program rotates a write no rule can read with grace, over a full history it fails.
         if !data.reaches_policy() && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
-            return Ok(());
+            return Ok(Sent::Done);
         }
         let instruction = UpdateStorage {
             authority: self.authority(),
@@ -448,8 +489,8 @@ impl RecordWriter {
             ComputeBudgetConfig::new(UPDATE_COMPUTE_UNITS),
         )?;
         let transaction = sign_transaction(message, &[&self.authority])?;
-        // 6. The batch is durable before it is sent, a restart settles it by its signature.
-        queue
+        // 4. The batch is durable before it is sent, a restart settles it by its signature.
+        self.queue()
             .record_batch(NewBatch {
                 registry,
                 attempt: Attempt {
@@ -461,17 +502,16 @@ impl RecordWriter {
             })
             .await?;
         self.chain.send(&transaction).await?;
-        Ok(())
+        Ok(Sent::Done)
     }
 
-    /// `None` while a salted owner's address waits for its forester batch.
     async fn prove_batch(
         &self,
         ring: Address,
         inputs: &ApplyProofInputs,
         registry: &StorageRegistry,
         entries: &[RecordWrite],
-    ) -> Result<Option<BatchProof>, RingRpcError> {
+    ) -> Result<Proving, RingRpcError> {
         let storage = |error: RingError| RingRpcError::StorageUpdate(Box::new(error));
         // 1. Storage derives the credential writes from the masks, the writer reads them the same way.
         let credential_writes = RecordWriteClassification {
@@ -482,7 +522,7 @@ impl RecordWriter {
         .map_err(|error| storage(error.into()))?;
         if credential_writes == 0 {
             let apply = self.chain.prove_apply(inputs, registry).await?;
-            return Ok(Some(BatchProof::Public(Box::new(apply))));
+            return Ok(Proving::Proved(BatchProof::Public(Box::new(apply))));
         }
         let source = self
             .credential_writes
@@ -506,7 +546,7 @@ impl RecordWriter {
                 list_salt: owner.list_salt,
             });
         }
-        // 3. The proof and the floor raise travel together, a queued address sends nothing.
+        // 3. The proof and the floor raise travel together, a queued address names its write.
         let write = PrivateStorageWrite {
             ring: CustomRing::new(ring),
             inputs,
@@ -515,12 +555,13 @@ impl RecordWriter {
             owners: &owners,
         };
         match source.prove(write).await {
-            Ok(proven) => Ok(Some(BatchProof::Private(Box::new(proven)))),
-            Err(RingError::Credential(error))
-                if matches!(*error, CredentialError::AddressQueued { .. }) =>
-            {
-                Ok(None)
-            }
+            Ok(proven) => Ok(Proving::Proved(BatchProof::Private(Box::new(proven)))),
+            Err(RingError::Credential(error)) => match *error {
+                CredentialError::AddressQueued { write_index, .. } => {
+                    Ok(Proving::Queued { write_index })
+                }
+                error => Err(storage(error.into())),
+            },
             Err(error) => Err(storage(error)),
         }
     }
@@ -622,5 +663,44 @@ impl BatchProof {
             Self::Public(_) => None,
             Self::Private(proven) => Some(proven.credential_trees.clone()),
         }
+    }
+}
+
+impl HeldWrite {
+    fn of(batch: &[&QueuedUpdate], write_index: u8) -> Result<Self, RingRpcError> {
+        let mut rest = usize::from(write_index);
+        for update in batch {
+            match update.writes.get(rest) {
+                Some(_) => return Ok(Self { update: update.id }),
+                None => rest -= update.writes.len(),
+            }
+        }
+        Err(DbErr::Custom("a queued write lies past its batch".to_owned()).into())
+    }
+
+    /// An update is signed whole, its other writes wait with it. A later update writing any held
+    /// member waits too and adds its own members, so each record keeps its write order.
+    fn release(self, live: Vec<QueuedUpdate>) -> Result<Vec<QueuedUpdate>, RingRpcError> {
+        let start = live
+            .iter()
+            .position(|update| update.id == self.update)
+            .ok_or(DbErr::Custom(
+                "a held update left the live queue".to_owned(),
+            ))?;
+        let mut held: Vec<[u8; 32]> = Vec::new();
+        let mut kept = Vec::with_capacity(live.len());
+        for (index, update) in live.into_iter().enumerate() {
+            let waits = index == start
+                || (index > start
+                    && update
+                        .writes
+                        .iter()
+                        .any(|write| held.contains(&write.member)));
+            match waits {
+                true => held.extend(update.writes.iter().map(|write| write.member)),
+                false => kept.push(update),
+            }
+        }
+        Ok(kept)
     }
 }
