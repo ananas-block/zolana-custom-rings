@@ -27,7 +27,7 @@ use crate::{
     projection_lease::ProjectionLease,
     spend_machine::{SpendRow, SpendState},
     tracking::{HeldEnrollment, TrackingCursor},
-    utxos::{CreatedIn, PageDelta, StoredUtxo},
+    utxos::{CreatedIn, LateOwner, PageDelta, StoredUtxo},
 };
 
 const NOTE_SEAL_INFO: &[u8] = b"zolana/ring-rpc-note-seal";
@@ -494,16 +494,6 @@ impl ProjectionWriter<'_> {
         }
         .write(&transaction)
         .await?;
-        for owner in delta.derived_owners() {
-            let member = zolana_ring_policy::Member::owner_tag(owner)
-                .map_err(|_| DbErr::Custom("owner tag is invalid".into()))?;
-            transaction
-                .execute(run(
-                    "DELETE FROM pending_derivations WHERE ring=$1 AND member=$2",
-                    vec![self.ring_value(), member.as_bytes().to_vec().into()],
-                ))
-                .await?;
-        }
         if let Some(checkpoint) = delta.checkpoint() {
             let [after_slot, token] = position_values(&checkpoint.position)?;
             transaction
@@ -582,17 +572,28 @@ impl ProjectionWriter<'_> {
         transaction.commit().await
     }
 
-    pub(crate) async fn pending_owners(&self) -> Result<Vec<[u8; 32]>, DbErr> {
+    pub(crate) async fn pending_owners(&self) -> Result<Vec<LateOwner>, DbErr> {
         self.db
             .query_all(Statement::from_sql_and_values(
                 self.db.get_database_backend(),
-                "SELECT e.member,e.sealed FROM held_enrollments e JOIN pending_derivations p \
-             ON e.ring=p.ring AND e.member=p.member WHERE e.ring=$1 ORDER BY e.member LIMIT 256",
+                "SELECT e.member,e.sealed,p.after_tag FROM held_enrollments e JOIN \
+                 pending_derivations p ON e.ring=p.ring AND e.member=p.member WHERE e.ring=$1 \
+                 ORDER BY e.member LIMIT 256",
                 vec![self.ring_value()],
             ))
             .await?
             .iter()
-            .map(|row| read_enrollment(row, self.seal).map(|held| held.owner_key))
+            .map(|row| {
+                let resume = row
+                    .try_get::<Option<Vec<u8>>>("", "after_tag")?
+                    .map(<[u8; 32]>::try_from)
+                    .transpose()
+                    .map_err(|_| DbErr::Custom("resume tag has another length".into()))?;
+                Ok(LateOwner {
+                    owner: read_enrollment(row, self.seal)?.owner_key,
+                    resume,
+                })
+            })
             .collect()
     }
 
@@ -820,7 +821,7 @@ async fn read_revision(db: &impl ConnectionTrait, ring: &Address) -> Result<i64,
 
 /// Postgres pins one snapshot for the transaction, a SQLite read transaction pins it at its
 /// first read.
-async fn read_snapshot(db: &DatabaseConnection) -> Result<DatabaseTransaction, DbErr> {
+pub(crate) async fn read_snapshot(db: &DatabaseConnection) -> Result<DatabaseTransaction, DbErr> {
     match db.get_database_backend() {
         DatabaseBackend::Postgres => {
             db.begin_with_config(

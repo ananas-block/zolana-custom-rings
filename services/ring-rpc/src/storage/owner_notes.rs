@@ -3,13 +3,14 @@
 //! A row enters with the commit that opens its note. The commit that spends the note writes the
 //! spend slot on the row, and a later commit whose prior history slot covers that spend deletes it.
 //! A read therefore touches the owner's live notes and the spends of at most one commit beyond the
-//! history slot, and never a settled spend.
+//! history slot, and never a settled spend. A read selects one bounded range in note tag order and
+//! opens only the rows of that range.
 //!
 //! Read after `storage/spent_index.rs`, its page commit runs these writes in its transaction.
 //! Read before `operations/utxos.rs`, the wallet reads page over these rows.
 
 use hkdf::Hkdf;
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, Value};
+use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, Value};
 use sha2::Sha256;
 use solana_address::Address;
 use spr_keypair::X25519Keypair;
@@ -17,10 +18,13 @@ use zolana_ring_policy::Member;
 
 use crate::{
     spent_index::{note_body, note_from_body, slot_value, NoteSeal},
-    utxos::{IndexedNote, PageDelta},
+    utxos::{history_through, IndexedNote, LateProgress, OwnerPage, OwnerRange, PageDelta},
 };
 
 const INDEX_TAG_INFO: &[u8] = b"zolana/ring-rpc-owner-index";
+
+/// Rows one query opens when a read walks an owner's whole range.
+pub(crate) const OWNER_ROW_BATCH: usize = 512;
 
 /// One domain per tagged value, a tag of one kind never equals a tag of another of the same bytes.
 #[derive(Clone, Copy)]
@@ -124,64 +128,169 @@ impl OwnerNoteWrites<'_> {
             vec![ring_value(), slot_value(delta.prune_through())?],
         ))
         .await?;
+        // 3. A late owner keeps its pending row until a page derives its last note. The resume tag
+        //    lets a restart continue past the notes a committed page derived.
+        for (owner, progress) in delta.derived_owners() {
+            let member = Member::owner_tag(owner)
+                .map_err(|_| DbErr::Custom("owner tag is invalid".into()))?;
+            let member = Value::from(member.as_bytes().to_vec());
+            let statement = match progress {
+                LateProgress::Done => Statement::from_sql_and_values(
+                    backend,
+                    "DELETE FROM pending_derivations WHERE ring=$1 AND member=$2",
+                    vec![ring_value(), member],
+                ),
+                LateProgress::After(tag) => Statement::from_sql_and_values(
+                    backend,
+                    "UPDATE pending_derivations SET after_tag=$3 WHERE ring=$1 AND member=$2",
+                    vec![ring_value(), member, tag.to_vec().into()],
+                ),
+            };
+            db.execute(statement).await?;
+        }
         Ok(())
     }
 }
 
-/// One owner's rows in note tag order, the cursor of a wallet page.
+/// One owner's rows past `range.after` in note tag order, the cursor of a wallet page.
 #[must_use]
-pub(crate) struct OwnerNotesRead<'a> {
-    pub db: &'a DatabaseConnection,
+pub(crate) struct OwnerNotesPage<'a> {
     pub ring: Address,
     pub seal: &'a NoteSeal,
-    pub member: [u8; 32],
+    pub range: OwnerRange,
 }
 
-impl OwnerNotesRead<'_> {
-    pub(crate) async fn read(self) -> Result<Vec<IndexedNote>, DbErr> {
-        let Self {
-            db,
-            ring,
-            seal,
+impl OwnerNotesPage<'_> {
+    /// Opens `range.limit` rows at most, the one row past them is selected unopened to set `more`.
+    pub(crate) async fn read(&self, db: &impl ConnectionTrait) -> Result<OwnerPage, DbErr> {
+        let OwnerRange {
             member,
-        } = self;
-        let owner_tag = seal.tags.tag(TagDomain::Owner, &member)?;
+            after,
+            limit,
+        } = self.range;
+        let owner_tag = self.seal.tags.tag(TagDomain::Owner, &member)?;
+        let fetched = i64::try_from(limit.saturating_add(1))
+            .map_err(|_| DbErr::Custom("owner page limit past i64".into()))?;
+        let mut values = vec![
+            self.ring.as_ref().to_vec().into(),
+            owner_tag.to_vec().into(),
+            fetched.into(),
+        ];
+        let after_clause = match after {
+            Some(tag) => {
+                values.push(tag.to_vec().into());
+                " AND note_tag>$4"
+            }
+            None => "",
+        };
         let rows = db
             .query_all(Statement::from_sql_and_values(
                 db.get_database_backend(),
-                "SELECT note_tag,sealed,spent_slot FROM owner_notes WHERE ring=$1 AND owner_tag=$2 \
-                 ORDER BY note_tag",
-                vec![ring.as_ref().to_vec().into(), owner_tag.to_vec().into()],
+                format!(
+                    "SELECT note_tag,sealed,spent_slot FROM owner_notes WHERE ring=$1 AND \
+                     owner_tag=$2{after_clause} ORDER BY note_tag LIMIT $3"
+                ),
+                values,
             ))
             .await?;
-        let moved = || DbErr::Custom("owner note row names another note or owner".into());
-        rows.iter()
-            .map(|row| {
-                let note_tag = <[u8; 32]>::try_from(row.try_get::<Vec<u8>>("", "note_tag")?)
-                    .map_err(|_| moved())?;
-                let body = seal.open(&note_tag, &row.try_get::<Vec<u8>>("", "sealed")?)?;
-                let (commitment, note) = body.split_at_checked(32).ok_or_else(moved)?;
-                let commitment = <[u8; 32]>::try_from(commitment).map_err(|_| moved())?;
-                let note = note_from_body(note)?;
-                // A row copied under another owner tag opens, its body still names the first owner.
-                let owner = Member::owner_tag(&note.utxo.owner_key).map_err(|_| moved())?;
-                if seal.tags.tag(TagDomain::Note, &commitment)? != note_tag
-                    || *owner.as_bytes() != member
-                {
-                    return Err(moved());
-                }
-                let spent_at = row
-                    .try_get::<Option<i64>>("", "spent_slot")?
-                    .map(u64::try_from)
-                    .transpose()
-                    .map_err(|_| DbErr::Custom("negative spend slot".into()))?;
-                Ok(IndexedNote {
-                    key: note_tag,
-                    commitment,
-                    note,
-                    spent_at,
-                })
-            })
-            .collect()
+        Ok(OwnerPage {
+            more: rows.len() > limit,
+            notes: rows
+                .iter()
+                .take(limit)
+                .map(|row| self.open(row, &member))
+                .collect::<Result<_, _>>()?,
+        })
     }
+
+    /// Opens every row past `range.after`, `range.limit` rows per query.
+    pub(crate) async fn for_each(
+        mut self,
+        db: &impl ConnectionTrait,
+        mut visit: impl FnMut(IndexedNote),
+    ) -> Result<(), DbErr> {
+        loop {
+            let page = self.read(db).await?;
+            let last = page.notes.last().map(|indexed| indexed.key);
+            page.notes.into_iter().for_each(&mut visit);
+            match (page.more, last) {
+                (true, Some(key)) => self.range.after = Some(key),
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    fn open(&self, row: &QueryResult, member: &[u8; 32]) -> Result<IndexedNote, DbErr> {
+        let Self { seal, .. } = self;
+        let moved = || DbErr::Custom("owner note row names another note or owner".into());
+        let note_tag =
+            <[u8; 32]>::try_from(row.try_get::<Vec<u8>>("", "note_tag")?).map_err(|_| moved())?;
+        #[cfg(test)]
+        OPENED_ROWS.with(|opened| opened.set(opened.get() + 1));
+        let body = seal.open(&note_tag, &row.try_get::<Vec<u8>>("", "sealed")?)?;
+        let (commitment, note) = body.split_at_checked(32).ok_or_else(moved)?;
+        let commitment = <[u8; 32]>::try_from(commitment).map_err(|_| moved())?;
+        let note = note_from_body(note)?;
+        // A row copied under another owner tag opens, its body still names the first owner.
+        let owner = Member::owner_tag(&note.utxo.owner_key).map_err(|_| moved())?;
+        if seal.tags.tag(TagDomain::Note, &commitment)? != note_tag || owner.as_bytes() != member {
+            return Err(moved());
+        }
+        let spent_at = row
+            .try_get::<Option<i64>>("", "spent_slot")?
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| DbErr::Custom("negative spend slot".into()))?;
+        Ok(IndexedNote {
+            key: note_tag,
+            commitment,
+            note,
+            spent_at,
+        })
+    }
+}
+
+/// The history slot as the snapshot's checkpoint and its first unread frame hold it.
+pub(crate) async fn snapshot_history_through(
+    db: &impl ConnectionTrait,
+    ring: Address,
+) -> Result<u64, DbErr> {
+    let query = |sql: &str| {
+        Statement::from_sql_and_values(
+            db.get_database_backend(),
+            sql,
+            vec![ring.as_ref().to_vec().into()],
+        )
+    };
+    let slot = |value: Option<i64>| {
+        value
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| DbErr::Custom("negative history slot".into()))
+    };
+    let checkpoint = db
+        .query_one(query(
+            "SELECT through_slot FROM spend_checkpoints WHERE ring=$1",
+        ))
+        .await?
+        .map(|row| row.try_get::<i64>("", "through_slot"))
+        .transpose()?;
+    let first_unread = db
+        .query_one(query(
+            "SELECT MIN(slot) AS slot FROM spend_unread_frames WHERE ring=$1",
+        ))
+        .await?
+        .map(|row| row.try_get::<Option<i64>>("", "slot"))
+        .transpose()?
+        .flatten();
+    Ok(history_through(
+        slot(first_unread)?,
+        slot(checkpoint)?.unwrap_or(0),
+    ))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Rows `OwnerNotesPage` opened on this thread, a test reads it around one wallet read.
+    pub(crate) static OPENED_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

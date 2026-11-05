@@ -19,7 +19,10 @@ use spr_keypair::NullifierKey;
 use zolana_ring_client::{history::HistoryPosition, CreatedUtxo, KnownUtxo};
 use zolana_ring_policy::Member;
 
-use super::{AuditStore, CreatedIn, IndexedNote, OwnerChange, PageDelta, StoredUtxo};
+use super::{
+    AuditStore, CreatedIn, IndexedNote, LateOwner, LateProgress, OwnerChange, OwnerPage,
+    OwnerRange, PageDelta, StoredUtxo,
+};
 use crate::{
     bounded_map::Cached,
     error::RingRpcError,
@@ -35,6 +38,13 @@ pub(crate) type KeyOpener<'a> = dyn Fn(&HeldEnrollment) -> Option<NullifierKey> 
 /// Each round loads every key the last replay missed, a later round meets only keys an earlier
 /// load revealed.
 const MAX_LOAD_ROUNDS: usize = 4;
+
+/// Late owners one page derives, the rest wait in the queue for a later page.
+pub(crate) const MAX_LATE_OWNERS: usize = 8;
+
+/// Rows one page opens of each late owner. With `MAX_LATE_OWNERS` it bounds a page's
+/// derivation reads, a larger owner resumes after the last row on the next page.
+pub(crate) const MAX_LATE_NOTES: usize = 128;
 
 /// The steps of one page, replayed by `finish` once every key they read is at hand.
 #[must_use]
@@ -76,7 +86,7 @@ struct Loaded {
     notes: HashMap<[u8; 32], Option<StoredUtxo>>,
     by_nullifier: HashMap<[u8; 32], Option<[u8; 32]>>,
     rows: HashMap<[u8; 32], Option<SpendRow>>,
-    owners: HashMap<[u8; 32], Vec<[u8; 32]>>,
+    owners: HashMap<OwnerRange, OwnerPage>,
     enrollments: HashMap<[u8; 32], Option<HeldEnrollment>>,
 }
 
@@ -85,7 +95,7 @@ struct Missed {
     notes: BTreeSet<[u8; 32]>,
     by_nullifier: BTreeSet<[u8; 32]>,
     rows: BTreeSet<[u8; 32]>,
-    owners: BTreeSet<[u8; 32]>,
+    owners: BTreeSet<OwnerRange>,
     enrollments: BTreeSet<[u8; 32]>,
 }
 
@@ -123,7 +133,8 @@ impl<'a> PageWork<'a> {
         self.steps.push(PageStep::MarkRead(frame));
     }
 
-    /// A late key recomputes that owner's notes, a failed page leaves the owner to the next.
+    /// A late key recomputes that owner's notes in bounded ranges, a failed page leaves the owner
+    /// where the last committed page left it.
     pub(crate) fn late_keys(&mut self) {
         self.steps.push(PageStep::LateKeys);
     }
@@ -265,29 +276,50 @@ impl Replay<'_> {
         self.apply(Observation { hit, ..observation }.apply(existing.as_ref()));
     }
 
+    /// Reads `MAX_LATE_NOTES` rows of each of the first `MAX_LATE_OWNERS` queued owners. The
+    /// queue order and the loaded ranges are fixed across replays, so every replay asks for the
+    /// same ranges and the load rounds converge.
     fn late_keys(&mut self) {
-        let owners: Vec<[u8; 32]> = self
+        let queued: Vec<LateOwner> = self
             .store
             .late_owners
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .copied()
+            .take(MAX_LATE_OWNERS)
+            .map(|(owner, resume)| LateOwner {
+                owner: *owner,
+                resume: *resume,
+            })
             .collect();
-        for owner in &owners {
-            let Ok(member) = Member::owner_tag(owner) else {
+        for LateOwner { owner, resume } in queued {
+            // 1. An owner with no tag holds no row, a database commit refuses it.
+            let Ok(member) = Member::owner_tag(&owner) else {
+                self.delta.late_owners.insert(owner, LateProgress::Done);
                 continue;
             };
-            for commitment in self.owner_commitments(member.as_bytes()) {
+            let Some(page) = self.owner_page(OwnerRange {
+                member: *member.as_bytes(),
+                after: resume,
+                limit: MAX_LATE_NOTES,
+            }) else {
+                continue;
+            };
+            // 2. Only a note still missing its nullifier derives, a resumed range skips none.
+            for indexed in &page.notes {
                 if self
-                    .note(&commitment)
+                    .note(&indexed.commitment)
                     .is_some_and(|note| note.nullifier.is_none())
                 {
-                    self.derive(&commitment);
+                    self.derive(&indexed.commitment);
                 }
             }
+            let progress = match page.notes.last() {
+                Some(last) if page.more => LateProgress::After(last.key),
+                _ => LateProgress::Done,
+            };
+            self.delta.late_owners.insert(owner, progress);
         }
-        self.delta.late_owners = owners;
     }
 
     /// Names the owner rows the page moves and the slot its commit prunes through.
@@ -381,25 +413,18 @@ impl Replay<'_> {
         }
     }
 
-    /// A complete mirror keeps the owner index, a cache reads it from storage.
-    fn owner_commitments(&mut self, member: &[u8; 32]) -> Vec<[u8; 32]> {
+    /// A complete mirror keeps the owner index, a cache reads the range from storage.
+    fn owner_page(&mut self, range: OwnerRange) -> Option<OwnerPage> {
         let book = self.store.read_book();
         if book.is_complete() {
-            return book
-                .active
-                .by_owner
-                .get(member)
-                .map(|keys| keys.keys().copied().collect())
-                .unwrap_or_default();
+            return Some(book.owner_page(range));
         }
         drop(book);
-        match self.loaded.owners.get(member) {
-            Some(commitments) => commitments.clone(),
-            None => {
-                self.missed.owners.insert(*member);
-                Vec::new()
-            }
+        if let Some(page) = self.loaded.owners.get(&range) {
+            return Some(page.clone());
         }
+        self.missed.owners.insert(range);
+        None
     }
 
     /// The owner's stored enrollment, a cache miss records the member.
@@ -477,15 +502,14 @@ impl Loaded {
         for nullifier in rows {
             self.rows.insert(nullifier, found.remove(&nullifier));
         }
-        for member in owners {
-            let mut commitments = Vec::new();
-            for indexed in store.indexed_notes(&member).await? {
+        for range in owners {
+            let page = store.owner_page(range).await?;
+            for indexed in &page.notes {
                 self.notes
                     .entry(indexed.commitment)
                     .or_insert(Some(indexed.note));
-                commitments.push(indexed.commitment);
             }
-            self.owners.insert(member, commitments);
+            self.owners.insert(range, page);
         }
         let members: Vec<[u8; 32]> = enrollments.into_iter().collect();
         let mut found = store.enrollments(EnrollmentKey::Member, &members).await?;
