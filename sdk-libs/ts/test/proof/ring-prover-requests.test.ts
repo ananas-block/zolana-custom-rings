@@ -17,12 +17,16 @@ import {
   type PolicyTableProofInputs,
   type RingProofRequest,
   type RingSlotOpening,
-  type TrackingProofInputs,
-  type TrackingWriteProofInput,
+  type CredentialLeafProofInput,
+  type CredentialOpeningProofInput,
+  type CredentialProofInputs,
+  type CredentialWriteProofInput,
   type TransferProofRequest,
 } from "../../src/rpc/prover/ring.js";
+import { CredentialRoots } from "../../src/protocol/codec/credential-read.js";
+import { registerKeyHash } from "../../src/protocol/membership/credential.js";
 import { ZERO_32, encodeBase58, isZero } from "@heliuslabs/zolana/internal";
-import { UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
+import { DUMMY_DOMAIN, UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import {
   NullifierKey,
@@ -39,11 +43,6 @@ import type {
   RecordPool,
   RecordWriteProofInput,
 } from "../../src/protocol/membership/member-registry.js";
-import type {
-  TrackingEntry,
-  TrackingOpening,
-  TrackingRecord,
-} from "../../src/protocol/membership/tracking.js";
 import {
   RING_KEYS,
   RING_PROVING_KEY_SHA256S,
@@ -74,7 +73,6 @@ import { buildRuleTable } from "../../src/protocol/membership/policy.js";
 import { sealNullifierKeyWith } from "../../src/operations/management/register-key.js";
 import {
   applyRecordsStatementHash,
-  registerKeyStatementHash,
   signerBinding,
   transferStatementHash,
   type TransferStatement,
@@ -212,7 +210,7 @@ function ownerEntry(value: unknown): PolicyOwnerEntry {
   if (curatorSalted === undefined || rest.length !== 0) throw new Error("golden salted entry");
   return {
     ...entry(item),
-    tracking: count(item["tracking"]),
+    credential: count(item["credential"]),
     listSalt: field(item["listSalt"]),
     ownSalted: count(item["ownSalted"]),
     curatorSalted: count(curatorSalted),
@@ -289,56 +287,77 @@ function entryOpening(value: unknown): EntryOpeningProofInput {
   };
 }
 
-function trackingRecord(value: unknown): TrackingRecord {
+/** Go `CredentialStateRoot`. */
+function stateRoot(value: unknown): Readonly<{ treeId: number; root: Bytes32 }> {
   const item = record(value);
+  return { treeId: count(item["treeId"]), root: field(item["root"]) };
+}
+
+/** Go `CredentialLeafParams`. */
+function credentialLeaf(item: Json): CredentialLeafProofInput {
+  const pair = (value: unknown): readonly [Bytes32, Bytes32] => {
+    const [first, second, ...rest] = fields(value);
+    if (first === undefined || second === undefined || rest.length !== 0)
+      throw new Error("golden credential pair");
+    return [first, second];
+  };
   return {
     member: field(item["member"]),
-    next: field(item["next"]),
-    ...trackingFields(item),
-  };
-}
-
-function trackingFields(item: Json): Omit<TrackingEntry, "member"> {
-  const view0 = field(item["view0"]);
-  const view1 = field(item["view1"]);
-  return {
     nullifierPk: field(item["nullifierPk"]),
-    ctHash: field(item["ctHash"]),
-    viewingU: Uint8Array.of(...view0.subarray(1), ...view1.subarray(31)) as Bytes32,
-    revision: amountOf(field(item["revision"])),
     listTag: field(item["listTag"]),
+    aud: pair(item["aud"]),
+    eph: pair(item["eph"]),
+    ctHash: field(item["ctHash"]),
+    blinding: field(item["blinding"]),
+    treeSlot: count(item["treeSlot"]),
+    stateIndex: BigInt(count(item["stateIndex"])),
+    statePath: fields(item["statePath"]),
   };
 }
 
-function trackingSection(item: Json): TrackingProofInputs {
-  const proof = record(item["trackingProof"]);
+/** Go `CredentialOpeningParams`, the leaf fields embedded beside the gap. */
+function credentialOpening(value: unknown): CredentialOpeningProofInput {
+  const item = record(value);
   return {
-    trackingRoot: field(item["trackingRoot"]),
-    trackingPool: {
-      records: list(item["trackingRecords"]).map(trackingRecord),
-      canopy: fields(proof["canopy"]),
-      paths: list(proof["paths"]).map((value) => {
-        const path = record(value);
-        return { index: count(path["index"]), siblings: list(path["siblings"]).map(fields) };
-      }),
-      subjects: list(item["trackingSubjects"]).map((value) => {
-        const subject = record(value);
-        return { member: field(subject["member"]), recordIndex: count(subject["recordIndex"]) };
-      }),
-    },
+    present: flag(item["present"]),
+    ...credentialLeaf(item),
+    lowValue: field(item["lowValue"]),
+    lowNext: field(item["lowNext"]),
+    lowIndex: BigInt(count(item["lowIndex"])),
+    lowPath: fields(item["lowPath"]),
+  };
+}
+
+function credentialRoots(item: Json, stateRoots: readonly unknown[]): CredentialRoots {
+  return CredentialRoots.read({
+    ownerHash: field(item["credentialOwner"]),
+    addressRoot: item["addressRoot"] === undefined ? ZERO : field(item["addressRoot"]),
+    stateRoots: stateRoots.map(stateRoot),
+  });
+}
+
+/** Go `CredentialParams`. */
+function credentialSection(item: Json): CredentialProofInputs {
+  return {
+    credentialRoots: credentialRoots(item, list(item["stateRoots"])),
+    credentialOpenings: list(item["credentialOpenings"]).map(credentialOpening),
     rowEntries: list(item["rowEntries"]).map(count),
     outputEntries: list(item["outputEntries"]).map(count),
   };
 }
 
-function trackingOpening(value: unknown): TrackingOpening | undefined {
+/** Go `CredentialWriteParams`, `null` past the private writes. */
+function credentialWrite(value: unknown): CredentialWriteProofInput | undefined {
   if (value === null) return undefined;
   const item = record(value);
-  const path = record(item["path"]);
-  const quad = { index: count(path["index"]), siblings: list(path["siblings"]).map(fields) };
-  return flag(item["present"])
-    ? { kind: "present", record: trackingRecord(item["record"]), path: quad }
-    : { kind: "absent", low: trackingRecord(item["record"]), path: quad };
+  return {
+    member: field(item["member"]),
+    listSalt: field(item["listSalt"]),
+    leaf: credentialLeaf(record(item["leaf"])),
+    addressNext: field(item["addressNext"]),
+    addressIndex: BigInt(count(item["addressIndex"])),
+    addressPath: fields(item["addressPath"]),
+  };
 }
 
 function policy(item: Json): PolicyProofInputs {
@@ -412,18 +431,6 @@ function write(value: unknown): RecordWriteProofInput {
   };
 }
 
-function trackingWrite(value: unknown): TrackingWriteProofInput {
-  const item = record(value);
-  return {
-    entry: { member: field(item["member"]), ...trackingFields(item) },
-    exists: flag(item["exists"]),
-    oldRecord: trackingRecord(item["oldRecord"]),
-    slot: quadPath(item["index"], item["path"]),
-    lowRecord: trackingRecord(item["lowRecord"]),
-    lowPath: quadPath(item["lowIndex"], item["lowPath"]),
-  };
-}
-
 /** The typed request a golden file holds, built field by field. */
 function request(item: Json): RingProofRequest {
   const circuitType = text(item["circuitType"]);
@@ -457,6 +464,8 @@ function request(item: Json): RingProofRequest {
       outputCount: count(item["outputCount"]),
       outputs: list(item["outputs"]).map(outputOpening),
       inputCount: count(item["inputCount"]),
+      inputNullifierChain: field(item["inputNullifierChain"]),
+      inputNullifiers: fields(item["inputNullifiers"]),
       inputs: list(item["inputs"]).map(opening),
       entries: item["entries"] === undefined ? [] : list(item["entries"]).map(entryOpening),
       signerCount: count(item["signerCount"]),
@@ -467,8 +476,7 @@ function request(item: Json): RingProofRequest {
       rows: fields(item["rows"]),
       privateTxHash: field(item["privateTxHash"]),
       privateTxBlinding: field(item["privateTxBlinding"]),
-      addressChain: field(item["addressChain"]),
-      ...trackingSection(item),
+      ...credentialSection(item),
       ...policy(item),
     };
   if (circuitType.startsWith("custom-ring-apply-records-"))
@@ -476,12 +484,10 @@ function request(item: Json): RingProofRequest {
       kind: "applyRecords",
       ...applied(),
       writes: list(item["writes"]).slice(0, count(item["count"])).map(write),
-    };
-  if (circuitType.startsWith("custom-ring-apply-enrollments-"))
-    return {
-      kind: "applyEnrollments",
-      ...applied(),
-      writes: list(item["writes"]).slice(0, count(item["count"])).map(trackingWrite),
+      credentialWrites: count(item["credentialWrites"]),
+      privateRingId: field(item["privateRingId"]),
+      credentialRoots: credentialRoots(item, list(item["stateRoots"])),
+      credentials: list(item["credentials"]).map(credentialWrite),
     };
   if (circuitType === "custom-ring-register-key")
     return {
@@ -511,7 +517,7 @@ function request(item: Json): RingProofRequest {
       assets: fields(item["assets"]),
       amounts: fields(item["amounts"]),
       mintChunks: list(item["mintChunks"]).map(fields),
-      ...trackingSection(item),
+      ...credentialSection(item),
       ...policy(item),
     };
   }
@@ -524,7 +530,7 @@ function request(item: Json): RingProofRequest {
       ringProgramId: field(item["ringProgramId"]),
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
       payer: field(item["payer"]),
-      trackingRoot: field(item["trackingRoot"]),
+      credentialRoots: credentialRoots(item, [item["stateRoot"]]),
       ephSk: bytes<Bytes32>(item["ephSk"], 32),
       ownerKey: bytes<Bytes32>(item["ownerKey"], 32),
       ownerPkHash: field(item["ownerPkHash"]),
@@ -535,9 +541,9 @@ function request(item: Json): RingProofRequest {
       seed: field(item["seed"]),
       outputTreeId: field(item["outputTreeId"]),
       outputRingDataHash: field(item["outputRingDataHash"]),
-      ...(item["tracking"] === null
+      ...(item["credential"] === null
         ? {}
-        : { tracking: trackingOpening(item["tracking"]) as TrackingOpening }),
+        : { credential: credentialLeaf(record(item["credential"])) }),
     };
   throw new Error(`no request for ${circuitType}`);
 }
@@ -853,7 +859,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         ephU: envelope.sealed.ephemeralPublicKey.u(),
         ciphertext: envelope.sealed.ciphertext,
       };
-      expect(hex(registerKeyStatementHash(statement))).toBe(hex(typed.publicInputHash));
+      expect(hex(registerKeyHash(statement))).toBe(hex(typed.publicInputHash));
     } finally {
       ephemeral.destroy();
       key.destroy();
@@ -969,6 +975,13 @@ function checkTransferStatement(typed: TransferProofRequest): void {
     envelope: encodeAuditEnvelope({
       txViewingSecret: typed.txViewingSk,
       realInputs: live.length,
+      addressInputBits: inputs.reduce(
+        (bits, input, slot) =>
+          isUtxo(input) || amountOf(input.domain) === BigInt(DUMMY_DOMAIN)
+            ? bits
+            : bits | (1n << BigInt(slot)),
+        0n,
+      ),
       evidence,
     }),
     records: records.map((entry, slot) => ({
@@ -1021,13 +1034,14 @@ function checkTransferStatement(typed: TransferProofRequest): void {
     })),
     capacity: typed.outputs.length,
     inputCount: typed.inputCount,
+    inputNullifierChain: typed.inputNullifierChain,
     privateTxHash: typed.privateTxHash,
     signers: signerBinding(typed.signers.slice(0, typed.signerCount), typed.inputs.length),
     roots: {
       policyHash: typed.policyHash,
       ownRoot: typed.ownRoot,
       curatorRoot: typed.curatorRoot,
-      trackingRoot: typed.trackingRoot,
+      credentials: typed.credentialRoots,
     },
     publicAssets: typed.publicAssets,
     publicAmounts: typed.publicAmounts,

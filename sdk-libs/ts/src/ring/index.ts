@@ -577,25 +577,18 @@ export {
 export type { ReaderKey } from "../operations/management/reader-access.js";
 export { createPasskey, passkeyReader, type Passkey } from "../crypto/keys/passkey.js";
 export {
-  APPLY_ENROLLMENTS_TAG,
-  ENROLL_TAG,
   OWNER_GRANT_TAG,
-  applyEnrollmentsInstruction,
   checkEnrolledCredential,
   credentialRegistration,
+  decodeOwnerGrant,
   enrollCredentialInstruction,
-  enrollInstruction,
-  enrollmentState,
   enrollmentSubmission,
   ownerGrantInstruction,
   prepareEnrollment,
   proveCredential,
-  proveEnrollment,
-  type ApplyEnrollments,
   type CredentialEnrollmentClient,
-  type Enroll,
   type EnrollCredential,
-  type EnrollmentSeal,
+  type OwnerGrant,
   type PreparedEnrollment,
   type ProvenCredential,
   type WriteOwnerGrant,
@@ -616,26 +609,6 @@ export {
   type ViewingKeyUpdateClient,
   type ViewingRotation,
 } from "../operations/management/viewing-rotation.js";
-export {
-  TRACKING_CAPACITY,
-  TRACKING_EMPTY_ROOT,
-  TRACKING_GRACE_SLOTS,
-  TRACKING_QUAD_HEIGHT,
-  decodeOwnerGrant,
-  decodeTrackingAuthorization,
-  decodeTrackingRegistry,
-  isEnrollmentPending,
-  trackingEntryChained,
-  trackingEntryHash,
-  trackingRecordHash,
-  verifyTrackingOpening,
-  type OwnerGrant,
-  type TrackingAuthorization,
-  type TrackingEntry,
-  type TrackingOpening,
-  type TrackingRecord,
-  type TrackingRegistry,
-} from "../protocol/membership/tracking.js";
 export { privateListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
 export { BufferedFrame } from "../operations/payments/buffered-frame.js";
@@ -676,6 +649,7 @@ export {
 export {
   checkAbsenceFloor,
   resolveCredential,
+  resolveCredentials,
   resolveRecipientKeys,
   type AbsentCredential,
   type CredentialClient,
@@ -688,28 +662,11 @@ export {
 } from "../rpc/credential-resolver.js";
 export type { AddressRoot, AuditCredential } from "../protocol/membership/credential.js";
 export {
-  fetchTrackingRegistry,
-  newestTrackingRoot,
-  resolveRingRecipient,
-  type ResolvedRecipient,
-  type RingRecipientClient,
-  type TrackingRoot,
-} from "../rpc/tracking-resolver.js";
-export {
   resolveViewingKey,
   type ResolvedViewingKey,
   type ViewingKeyClient,
 } from "../rpc/viewing-key-resolver.js";
-export type {
-  PendingEnrollment,
-  PendingEnrollments,
-  PendingEnrollmentsRequest,
-  ServedTrackingOpening,
-  TrackingOpenings,
-  TrackingOpeningsRequest,
-  TrackingSeal,
-} from "../protocol/indexer/tracking-codec.js";
-export { ownerGrantPda, trackingAuthorizationPda } from "../protocol/pda/index.js";
+export { ownerGrantPda } from "../protocol/pda/index.js";
 export type { ReplyMetadata } from "../protocol/codec/anonymous-delivery.js";
 export {
   checkCoOwnerKeys,

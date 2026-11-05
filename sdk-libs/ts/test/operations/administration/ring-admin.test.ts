@@ -9,8 +9,6 @@ import {
   ringAuthAddress,
   ringCoSignerAddress,
   ringPolicyAddress,
-  STORAGE_PROGRAM_ID,
-  trackingRegistryPda,
 } from "../../../src/protocol/pda/index.js";
 import {
   RingInstructionTag,
@@ -89,8 +87,6 @@ describe("initialize and policy update", () => {
       [await protocolConfigAddress(), READ],
       [await ringAuthAddress(RING), WRITE],
       [SHIELDED_POOL_PROGRAM_ID, READ],
-      [(await trackingRegistryPda(RING))[0], WRITE],
-      [STORAGE_PROGRAM_ID, READ],
     ];
     const policy = await initializeRingInstruction({
       ringProgramId: RING,
@@ -223,7 +219,7 @@ describe("ring account", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(1092);
+    expect(data).toHaveLength(1060);
     expect(decodeRingPolicy(data)).toMatchObject({
       createdSlot: slot,
       roles: ROLES,

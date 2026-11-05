@@ -49,7 +49,6 @@ import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
 import {
   ADDRESS_TREE_ID,
-  EMPTY_CREDENTIAL_READ,
   NULLIFIER_SEQUENCE_OFFSET,
   credentialAddress,
   credentialElements,
@@ -58,12 +57,11 @@ import {
   credentialStateHash,
   credentialUtxoHash,
   encodeAuditCredential,
-  encodeCredentialRead,
+  registerKeyHash,
   rootSequence,
   type AuditCredential,
 } from "../../src/protocol/membership/credential.js";
 import { FIELD_MAX } from "../../src/protocol/membership/member-opening.js";
-import { registerKeyStatementHash } from "../../src/protocol/proof/statement.js";
 import {
   checkAbsenceFloor,
   resolveCredential,
@@ -533,22 +531,12 @@ describe("credential hashes and reads", () => {
   it("keeps the RegisterKey hash and moves only the domain for the state hash", () => {
     const served = credential();
     expect(hashChain4(credentialElements(served, RingDomain.registerKey))).toEqual(
-      registerKeyStatementHash(served),
+      registerKeyHash(served),
     );
     const [stateDomain, ...stateFields] = credentialElements(served, RingDomain.credentialState);
     const [, ...keyFields] = credentialElements(served, RingDomain.registerKey);
     expect(stateFields).toEqual(keyFields);
     expect(stateDomain).toEqual(field(RingDomain.credentialState));
-    expect(credentialStateHash(served)).not.toEqual(registerKeyStatementHash(served));
-  });
-
-  it("encodes the empty read as three zero bytes and refuses a root index with no state read", () => {
-    expect(encodeCredentialRead(EMPTY_CREDENTIAL_READ)).toEqual(new Uint8Array(3));
-    expect(
-      encodeCredentialRead({ addressRootIndex: 0x0102, stateRootIndexes: [7, 0x0304] }),
-    ).toEqual(Uint8Array.of(2, 1, 2, 7, 0, 4, 3));
-    expect(() => encodeCredentialRead({ addressRootIndex: 1, stateRootIndexes: [] })).toThrow(
-      invalid("emptyRead"),
-    );
+    expect(credentialStateHash(served)).not.toEqual(registerKeyHash(served));
   });
 });

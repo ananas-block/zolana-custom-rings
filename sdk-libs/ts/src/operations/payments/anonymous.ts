@@ -27,6 +27,8 @@ import type { RingAddress } from "../../crypto/keys/ring-address.js";
 
 import { RingError, type RingErrorCode } from "../../protocol/error.js";
 import { spendsDefaultRing } from "../workflow/pipeline.js";
+import { inputClassOf } from "../../proof/audit-proof.js";
+import { InputClass } from "../../protocol/codec/audit-stream.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
 import type { ReplyMetadata } from "../../protocol/codec/anonymous-delivery.js";
 
@@ -103,13 +105,13 @@ export function checkHiddenParties(
     throw new RingError("RING_ANONYMOUS_SIGNER_LINKS_OWNER");
 }
 
-/** The hidden owner's notes lead, public co-owners follow. */
+/** The hidden owner's notes lead from input 0, public co-owners follow, an address at input 0 refused. */
 export function checkHiddenOwnerSpends(proofInputs: SppProofInputs, sender: ShieldedAddress): void {
-  const spent = proofInputs.inputUtxos.filter((input) => !input.isDummy() && !input.isCompact());
+  const spent = proofInputs.inputUtxos.filter((input) => inputClassOf(input) === InputClass.note);
   const held = (input: (typeof spent)[number]): boolean =>
     input.utxo.owner.equals(sender.signingPublicKey);
-  const [first] = spent;
-  if (first === undefined || !held(first))
+  const [first] = proofInputs.inputUtxos;
+  if (first === undefined || inputClassOf(first) !== InputClass.note || !held(first))
     throw new RingError("RING_NO_HIDDEN_OWNER", { details: { index: 0 } });
   const firstForeign = spent.findIndex((input) => !held(input));
   if (firstForeign >= 0 && spent.slice(firstForeign).some(held))

@@ -12,10 +12,12 @@ use zolana_ring_client::rpc::{
     GetDelegateNotesResponse, GetListSaltRequest, GetListSaltResponse, ListSaltAttestation,
     PrepareAuthorityTransferRequest, RelayStep,
 };
+use zolana_ring_client::CredentialError;
 
 use crate::{
     audit::{AuditService, WALLET_NOTE_PAGE_LIMIT},
     authorize::WalletCheck,
+    credentials::CredentialRefusal,
     error::RingRpcError,
     hub::Hub,
     relay_prover::{DelegateSeal, SealedSource},
@@ -71,21 +73,25 @@ impl From<DelegateSourceError> for RingRpcError {
             DelegateSourceError::SourcesMismatch | DelegateSourceError::UnrequestedInput { .. } => {
                 AuthorityTransferError::UnrequestedInput.into()
             }
-            DelegateSourceError::SealMismatch => Self::TrackedKey,
+            DelegateSourceError::Credential(CredentialError::SealMismatch) => {
+                CredentialRefusal::Sealed.into()
+            }
+            DelegateSourceError::Credential(CredentialError::Rpc(error)) => (*error).into(),
+            DelegateSourceError::Credential(CredentialError::Seal(error)) => (*error).into(),
+            DelegateSourceError::Credential(_) => Self::StateUnavailable,
             DelegateSourceError::Keypair(error) => error.into(),
             DelegateSourceError::Transaction(error) => error.into(),
             DelegateSourceError::Client(error) => error.into(),
-            DelegateSourceError::Seal(error) => error.into(),
         }
     }
 }
 
-struct TrackedEnrollment<'a, S> {
+struct ScannedEnrollment<'a, S> {
     service: &'a AuditService<S>,
 }
 
 #[async_trait]
-impl<S: TransactionSource> SourceEnrollment for TrackedEnrollment<'_, S> {
+impl<S: TransactionSource> SourceEnrollment for ScannedEnrollment<'_, S> {
     type Error = RingRpcError;
 
     async fn escrowed_key(
@@ -96,7 +102,7 @@ impl<S: TransactionSource> SourceEnrollment for TrackedEnrollment<'_, S> {
             .solana_address()
             .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
             .to_bytes();
-        self.service.held_nullifier_key(&owner_key)
+        self.service.escrowed_key(&owner_key).await
     }
 }
 
@@ -150,15 +156,18 @@ impl<S: TransactionSource> Hub<S> {
                 now,
             })
             .await?;
-        // 3. The secret opens to the key the owner's record binds, it stays out of the store.
-        let nullifier_secret = service
-            .held_nullifier_key(&owner.to_bytes())?
+        // 3. One scan answers both, the secret opens to the key the owner's credential binds and stays
+        // out of the store.
+        let credential = service.scanned_credential(&owner.to_bytes()).await?;
+        let nullifier_secret = credential
+            .held()
+            .map(|held| held.nullifier_key(service.auditor_keypair()))
+            .transpose()?
             .map(|key| spr_hasher::primitives::right_align(&key.secret()).into());
-        let enrollment = shared.source.tracking_enrollment(ring, owner).await?;
         Ok(GetDelegateNotesResponse {
             nullifier_secret,
             status: shared.store(ring).wallet_status(WalletStatusQuery {
-                enrollment,
+                enrollment: credential.enrollment(),
                 wallet: owner,
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,
@@ -289,7 +298,7 @@ impl<S: TransactionSource> Hub<S> {
                 mints.push(payment.mint.0);
             }
         }
-        let enrollment = TrackedEnrollment { service: &service };
+        let enrollment = ScannedEnrollment { service: &service };
         let mut allowed = AllowedNullifiers::default();
         let mut sources = Vec::with_capacity(transfer.sources.len());
         for source in &transfer.sources {
@@ -741,12 +750,10 @@ mod tests {
             .await
             .expect_err("only a writer reads");
         assert_eq!(ErrorObjectOwned::from(refused).code(), -32226);
-        // An owner held only by a tracking row has no credential, the salt reads nothing.
-        let tracked = Keypair::new_from_array([12; 32]);
-        fixture.escrow_notes(&tracked, 1);
+        let unenrolled = Keypair::new_from_array([12; 32]);
         let none = fixture
             .hub
-            .list_salt(&salt_request(&fixture, &writer, tracked.pubkey()))
+            .list_salt(&salt_request(&fixture, &writer, unenrolled.pubkey()))
             .await
             .expect("a complete scan without the credential reads nothing");
         assert_eq!(none.list_salt, None);

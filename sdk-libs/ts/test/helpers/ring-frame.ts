@@ -2,6 +2,7 @@ import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
+import { CredentialRead } from "../../src/protocol/codec/credential-read.js";
 import {
   AUDIT_RECORD_LEN,
   DATA_TAIL_LEN,
@@ -77,7 +78,7 @@ export function ringFrame(
     nIn: shape.inputs,
     nOut: shape.outputs,
     proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-    trackingRevision: 7n,
+    credentialRead: CredentialRead.create(7, [3]),
     ...(delegate ? {} : { ownRevision: 1n }),
     splWithdrawalOwners: [],
     approval: 0,

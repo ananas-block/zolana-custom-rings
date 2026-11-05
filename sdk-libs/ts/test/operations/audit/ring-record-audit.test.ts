@@ -55,7 +55,7 @@ import {
   createdDepositUtxo,
   openConfirmedDeposit,
 } from "../../../src/operations/workflow/created-utxos.js";
-import { RecordKind } from "../../../src/protocol/codec/audit-stream.js";
+import { decodeAuditEnvelope, RecordKind } from "../../../src/protocol/codec/audit-stream.js";
 import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
 import {
   decodeRingDepositOutput,
@@ -71,7 +71,7 @@ import {
   ringWithdrawalsOf,
 } from "../../../src/protocol/transaction/origin.js";
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
-import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "../../../src/protocol/transaction/deposit-instruction.js";
+import { ZERO_READ_DEPOSIT_PREFIX_LENGTH } from "../../helpers/confirmed-deposits.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { readRingOutput } from "../../../src/protocol/transaction/output.js";
 
@@ -136,7 +136,13 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
     ringProgramId: ring,
     txViewingPublicKey: txViewingKey,
     salt: SALT,
-    nullifiers: [field(auditVector.first_nullifier), SECOND_NULLIFIER].slice(0, entry.input_count),
+    // Only the first nullifier seeds the stream, the rest fill the published count.
+    nullifiers: [
+      field(auditVector.first_nullifier),
+      ...Array.from({ length: entry.input_count - 1 }, (_, slot) =>
+        slot === 0 ? SECOND_NULLIFIER : field(`${"00".repeat(31)}${(0x78 + slot).toString(16)}`),
+      ),
+    ],
     messages: [{ viewTag: auditor().publicKey().u(), data: message }],
     outputSlots: entry.output_hashes.map((hash, index) => ({
       viewTag: new Uint8Array(32).fill(index + 1) as Bytes32,
@@ -154,7 +160,8 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
     transaction,
     layout,
     rail: "confidential",
-    noSpend: false,
+    // The statement's `no_spend` bit, an address input alone sends no note.
+    noSpend: decodeAuditEnvelope(hex(entry.envelope_plaintext), layout).realInputs === 0,
     inputTreeIds: transaction.nullifiers.map(() => TREE_ID),
     ...rest,
   });
@@ -219,21 +226,26 @@ describe("the transfer reader", () => {
     expect(row.payloadErrors).toEqual([{ slotIndex: 0, kind: "commitment" }]);
   });
 
-  it("refuses R past the frame, a default bit past R and a clear noSpend under R zero", () => {
+  it("refuses R past the frame, a default bit past the notes and a clear noSpend under R zero", () => {
     const entry = caseNamed("entry");
     const refusal = (reason: string) =>
       expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason } });
     const pastFrame = envelopeOf(entry, (bytes) => {
       bytes[32] = 3;
     });
-    expect(() => audited(entry, { envelope: pastFrame })).toThrow(refusal("real input count"));
-    const bitPastR = envelopeOf(entry, (bytes) => {
+    expect(() => audited(entry, { envelope: pastFrame })).toThrow(refusal("envelope"));
+    const bitPastNotes = envelopeOf(entry, (bytes) => {
       bytes[32] = 1;
     });
-    expect(() => audited(entry, { envelope: bitPastR })).toThrow(refusal("default input bits"));
+    expect(() => audited(entry, { envelope: bitPastNotes })).toThrow(refusal("envelope"));
+    const onAddress = envelopeOf(entry, (bytes) => {
+      bytes[32] = 1;
+      bytes[40] = 2;
+    });
+    expect(() => audited(entry, { envelope: onAddress })).toThrow(refusal("envelope"));
     const noReal = envelopeOf(entry, (bytes) => {
       bytes[32] = 0;
-      bytes[40] = 0;
+      bytes.fill(0, 33);
     });
     expect(() => audited(entry, { envelope: noReal })).toThrow(refusal("no spend"));
   });
@@ -251,7 +263,7 @@ describe("the transfer reader", () => {
     );
   });
 
-  it("reads padding past R, a default bit from its evidence and a real unknown input as unresolved", () => {
+  it("reads padding past the notes, an address apart, a default bit from its evidence and an unknown note as unresolved", () => {
     const entry = caseNamed("entry");
     const { audited: row, realInputs } = audited(entry);
     expect(realInputs).toBe(2);
@@ -267,6 +279,14 @@ describe("the transfer reader", () => {
     expect(
       audited(entry, { envelope: padded }).audited.inputs.map((input) => input.opening.kind),
     ).toEqual(["unresolvedReal", "dummy"]);
+    // Input 0 an address, the default note at input 1 still opens from its evidence.
+    const address = envelopeOf(entry, (bytes) => {
+      bytes[32] = 1;
+      bytes[40] = 1;
+    });
+    expect(
+      audited(entry, { envelope: address }).audited.inputs.map((input) => input.opening.kind),
+    ).toEqual(["address", "opened"]);
   });
 });
 
@@ -547,7 +567,7 @@ describe("the deposit reader", () => {
     });
     const [binding] = confirmedOver(
       RingInstructionTag.deposit,
-      AUDITED_DEPOSIT_PREFIX_LENGTH,
+      ZERO_READ_DEPOSIT_PREFIX_LENGTH,
       capsule,
       owner,
       hex(deposit.eph_pk) as Bytes33,

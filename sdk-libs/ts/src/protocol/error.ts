@@ -197,6 +197,7 @@ export const RING_ERROR_CODES = [
   "RING_CREDENTIAL_LIST_TAG_MISMATCH",
   "RING_CREDENTIAL_UNKNOWN",
   "RING_VIEWING_KEY_UNVERIFIED",
+  "RING_OWNER_GRANT_INVALID",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
@@ -303,6 +304,14 @@ export const RingProgramError = Object.freeze({
   framePayerNotWriter: 8526,
   invalidSignerDataCounts: 8527,
   tooManyAnonymousParties: 8528,
+  absenceRootBelowFloor: 8535,
+  invalidAddressCheckpoint: 8534,
+  invalidAddressTree: 8531,
+  invalidCredentialPda: 8529,
+  invalidCredentialRead: 8532,
+  invalidCredentialRoots: 8533,
+  invalidEnrollmentAccounts: 8530,
+  saltedSourceOtherRing: 8536,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;
@@ -337,6 +346,10 @@ export const StorageProgramError = Object.freeze({
   invalidOwnerGrant: 9031,
   invalidReaderKey: 9032,
   invalidAuditorKey: 9033,
+  invalidAssetWrite: 9034,
+  invalidCredentialRead: 9036,
+  invalidPrivateRing: 9037,
+  privateWriteWithoutRing: 9035,
 } as const);
 
 export class RingError extends Error {

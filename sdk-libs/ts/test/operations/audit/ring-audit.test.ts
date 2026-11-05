@@ -204,11 +204,14 @@ function sealedTransfer(
     auditor: X25519PublicKey;
     records?: readonly AuditRecord[];
     nullifiers?: readonly Bytes32[];
+    addressInputBits?: bigint;
     txSignature?: Signature;
   }>,
 ) {
   const records = input.records ?? otherRecords;
   const nullifiers = input.nullifiers ?? [FIRST_NULLIFIER];
+  const addressInputBits = input.addressInputBits ?? 0n;
+  const addresses = nullifiers.filter((_, slot) => (addressInputBits >> BigInt(slot)) & 1n).length;
   const blindingSeed = ringBlindingSeed(TX_SECRET, TX_SALT);
   const blindings = records.map((_, outputIndex) =>
     ringOutputBlinding({ firstNullifier: nullifiers[0]!, blindingSeed, outputIndex }),
@@ -221,7 +224,8 @@ function sealedTransfer(
       disclosure: {
         envelope: {
           txViewingSecret: TX_SECRET,
-          realInputs: nullifiers.length,
+          realInputs: nullifiers.length - addresses,
+          addressInputBits,
           evidence: { kind: "none" },
         },
         records,
@@ -332,6 +336,20 @@ describe("auditRing", () => {
       amount: record.amount,
       ring: { kind: "ring", commitment },
     });
+  });
+
+  it("reads an address input apart from the note it follows", async () => {
+    const auditor = X25519Keypair.generate();
+    const { transaction } = sealedTransfer({
+      auditor: auditor.publicKey(),
+      nullifiers: [FIRST_NULLIFIER, field(`${"00".repeat(31)}77`)],
+      addressInputBits: 2n,
+    });
+    const page = await scan([transaction], TRANSFERS, { auditor });
+    expect(page.transactions[0]?.inputs.map((input) => input.opening)).toEqual([
+      { kind: "unresolvedReal" },
+      { kind: "address" },
+    ]);
   });
 
   it("resolves a merged input before tracing its later transfer in either history order", async () => {

@@ -477,6 +477,124 @@ mod tests {
         );
     }
 
+    fn hex_field(value: &serde_json::Value) -> [u8; 32] {
+        let digits = value.as_str().unwrap().trim_start_matches("0x");
+        bytes(&format!("{digits:0>64}"))
+    }
+
+    #[test]
+    fn the_seal_reaches_the_public_hash_of_the_go_request() {
+        let request: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../prover/ring/testdata/deposit/custom-ring-deposit-2.json"
+        ))
+        .unwrap();
+        let count = request["count"].as_u64().unwrap() as usize;
+        let list = |name: &str| -> Vec<[u8; 32]> {
+            request[name]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(hex_field)
+                .collect()
+        };
+        let amounts = list("amounts");
+        let amount = |slot: usize| {
+            let (_, low) = amounts[slot].split_last_chunk::<8>().unwrap();
+            u64::from_be_bytes(*low)
+        };
+        let secrets = list("blindingSecrets");
+        let blindings: Vec<_> = secrets[..count]
+            .iter()
+            .map(|secret| domain::deposit_blinding(secret).unwrap())
+            .collect();
+        let mints: Vec<[u8; 32]> = request["mintChunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chunks| {
+                let (head, tail) = (hex_field(&chunks[0]), hex_field(&chunks[1]));
+                let mut mint = [0; 32];
+                mint[..31].copy_from_slice(&head[1..]);
+                mint[31] = tail[31];
+                mint
+            })
+            .collect();
+        let (owner_keys, nullifier_pks) = (list("ownerKeys"), list("nullifierPks"));
+        let records: Vec<_> = (0..count)
+            .map(|slot| OpeningRecord {
+                record: custom_ring_interface::AuditRecord {
+                    kind: RecordKind::Ring,
+                    amount: amount(slot),
+                    owner_key: owner_keys[slot],
+                    mint: mints[slot],
+                    nullifier_pk: nullifier_pks[slot],
+                },
+                secret: blindings[slot],
+            })
+            .collect();
+        let auditor_pk = X25519Pubkey::from_bytes(custom_ring_interface::tagged_x25519(
+            &hex_field(&request["auditorPk"]),
+        ))
+        .unwrap();
+        let ephemeral = X25519Keypair::from_bytes(&hex_field(&request["ephSk"]));
+        let sealed = seal_deposits_with(&records, &auditor_pk, ephemeral).unwrap();
+        let owner_hashes = list("ownerPkHashes");
+        let owners: Vec<_> = (0..count)
+            .map(|slot| {
+                let owner = Poseidon::hashv(&[&owner_hashes[slot], &nullifier_pks[slot]]).unwrap();
+                Poseidon::hashv(&[&owner, &blindings[slot]]).unwrap()
+            })
+            .collect();
+        let assets: Vec<_> = (0..count)
+            .map(|slot| custom_ring_interface::DepositedAsset {
+                asset: list("assets")[slot],
+                amount: amount(slot),
+            })
+            .collect();
+        // The request repeats its first state root up to the key capacity, the selection pads the same way.
+        let state_roots: Vec<_> = request["stateRoots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| custom_ring_interface::CredentialStateRoot {
+                tree_id: u16::try_from(entry["treeId"].as_u64().unwrap()).unwrap(),
+                root: hex_field(&entry["root"]),
+            })
+            .collect();
+        let credentials = custom_ring_interface::CredentialRootSelection {
+            ring_program: &crate::deposit::tests::RING,
+            address_checkpoint: crate::credential::tests::address_checkpoint(hex_field(
+                &request["addressRoot"],
+            )),
+            state_roots: &state_roots[..1],
+            capacity: state_roots.len(),
+        }
+        .roots()
+        .unwrap();
+        assert_eq!(
+            credentials.owner_hash(),
+            &hex_field(&request["credentialOwner"])
+        );
+        let hash = custom_ring_interface::DepositPublicInput {
+            context_hash: &hex_field(&request["contextHash"]),
+            ring_id: &hex_field(&request["ringId"]),
+            owner_utxo_hashes: &owners,
+            ciphertexts: &sealed.ciphertexts,
+            assets: &assets,
+            auditor_pk: auditor_pk.as_bytes(),
+            eph_pk: sealed.ephemeral_pk.as_bytes(),
+            credentials: &credentials,
+            registry: Some(custom_ring_interface::DepositRegistry {
+                own_root: &hex_field(&request["ownRoot"]),
+                curator_root: Some(&hex_field(&request["curatorRoot"])),
+                policy_hash: &hex_field(&request["policyHash"]),
+            }),
+        }
+        .hash()
+        .unwrap();
+        assert_eq!(hash, hex_field(&request["publicInputHash"]));
+    }
+
     fn deposit_record(index: u8) -> OpeningRecord {
         let mut nullifier_pk = [index + 3; 32];
         nullifier_pk[0] = 0;

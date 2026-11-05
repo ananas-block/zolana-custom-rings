@@ -72,7 +72,7 @@ const DENY_LISTS: readonly ListId[] = Object.freeze([
 /** Rust `ListSet::PRIVATE_LISTS`, an owner reads them at a salted key on every ring. */
 const PRIVATE_LIST_BITS = (1 << (ListId.privateBlock - 1)) | (1 << (ListId.privateAllow - 1));
 
-/** Owners read it at salted keys, its source needs a tracking floor. */
+/** Owners read it at salted keys, its source holds an absence floor. */
 export function isPrivateList(id: ListId): boolean {
   return (PRIVATE_LIST_BITS & listBit(id)) !== 0;
 }
@@ -374,7 +374,7 @@ export interface RecordLists {
   readonly own: bigint;
   /** Read only for a list a curator serves. */
   readonly curator: bigint;
-  /** Read only for an owner's salted list, zero with no tracking row. */
+  /** Read only for an owner's salted list, zero for an owner proven absent. */
   readonly salted?: bigint;
 }
 

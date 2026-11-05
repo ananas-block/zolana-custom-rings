@@ -1,3 +1,4 @@
+import { CredentialRead } from "../../../src/protocol/codec/credential-read.js";
 import { frameDigest, settleBufferedData } from "../../../src/protocol/transaction/frame-buffer.js";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -32,7 +33,7 @@ import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction"
 import { RingError } from "../../../src/protocol/error.js";
 import { readMergeData } from "../../../src/protocol/codec/codecs.js";
 import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
-import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "../../../src/protocol/transaction/deposit-instruction.js";
+import { ZERO_READ_DEPOSIT_PREFIX_LENGTH } from "../../helpers/confirmed-deposits.js";
 import {
   ConfirmedDeposit,
   confirmedInstructionGroups,
@@ -1079,7 +1080,15 @@ describe("RpcTransactionOrigin", () => {
       tamper = false,
       wrapperTag: number = RingInstructionTag.merge,
     ) {
-      const request = { ...vectorFrame, authority };
+      // An owner signed merge reads no credential, the ring authority reads the vector's root.
+      const request = {
+        ...vectorFrame,
+        authority,
+        credentialRead:
+          authority === MergeRingAuthority.ownerSigned
+            ? CredentialRead.empty()
+            : vectorFrame.credentialRead,
+      };
       const forwarded = forwardedMergeData(
         request,
         sppMergeBody(request.compactBody),
@@ -1170,7 +1179,7 @@ describe("RpcTransactionOrigin", () => {
           Uint8Array.of(InstructionTag.emitEvent, 0),
           Uint8Array.of(
             RingInstructionTag.deposit,
-            ...zeros(AUDITED_DEPOSIT_PREFIX_LENGTH - 1),
+            ...zeros(ZERO_READ_DEPOSIT_PREFIX_LENGTH - 1),
             ...forwarded,
           ),
         ),

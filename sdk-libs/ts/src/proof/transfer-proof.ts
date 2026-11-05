@@ -1,5 +1,5 @@
 /** The one ring proof of a transfer, one request over the audit and policy sections. */
-import { hashChain, ZERO_32 } from "@heliuslabs/zolana/internal";
+import { ZERO_32 } from "@heliuslabs/zolana/internal";
 import { NO_CACHE_WRITES, type Bytes32, type CacheAccess } from "@heliuslabs/zolana/interface";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import type {
@@ -21,6 +21,7 @@ import {
   type TransferSpend,
 } from "../protocol/proof/transfer-shapes.js";
 import { ANONYMOUS_PARTIES, type RingRail } from "../protocol/transaction/transact.js";
+import { inputNullifierChain, inputNullifierSlots } from "../protocol/proof/statement.js";
 import { RingError } from "../protocol/error.js";
 import {
   auditEnvelope,
@@ -151,13 +152,6 @@ export function cacheAccessOf(proofInputs: SppProofInputs): CacheAccess | undefi
   return readBitmap === 0n ? undefined : Object.freeze({ readBitmap, writeSlots: NO_CACHE_WRITES });
 }
 
-/** Mirror `PrivateTxHash`, no chain folds an empty list. */
-function addressChainOf(proofInputs: SppProofInputs): Bytes32 {
-  return hashChain(
-    proofInputs.inputUtxos.filter((input) => input.isAddress()).map((input) => input.nullifier()),
-  );
-}
-
 /** The request of the key the frame selects, every section over the same slots. */
 export function transferProofRequest(
   input: Readonly<{
@@ -166,7 +160,7 @@ export function transferProofRequest(
     sealed: SealedAudit;
     /** `m`. */
     outputCount: number;
-    /** The spent notes in SPP order, compact padding left out. */
+    /** The published inputs in SPP order, compact padding left out. */
     inputs: readonly ProofInputUtxo[];
     proofInputs: SppProofInputs;
     auditor: X25519PublicKey;
@@ -191,6 +185,8 @@ export function transferProofRequest(
   const inputClass = circuit.class;
   const entry = input.sealed.audit.entry;
   const anonymousFrame = input.ringRail === "anonymous" || input.ringRail === "anonymousDelegate";
+  // The proof derives its address chain from these nullifiers and the chain binds them to the frame.
+  const nullifiers = inputs.map((spent) => spent.nullifier());
   return Object.freeze({
     kind: "transfer",
     publicInputHash: input.publicInputHash,
@@ -207,6 +203,8 @@ export function transferProofRequest(
     // Every slot of the key's capacity, an omitted suffix runs its gadgets over its own proof output.
     outputs: outputOpenings(proofInputs.outputs, proofInputs.outputTreeId, circuit.outputs),
     inputCount: inputs.length,
+    inputNullifierChain: inputNullifierChain(nullifiers, inputClass),
+    inputNullifiers: inputNullifierSlots(nullifiers, inputClass),
     inputs: inputOpenings(inputs, inputClass),
     entries: entry ? entryOpenings(inputs, inputClass) : [],
     signerCount: signers.length,
@@ -218,8 +216,7 @@ export function transferProofRequest(
     rows: policy.rows,
     privateTxHash: input.privateTxHash,
     privateTxBlinding: proofInputs.privateTxBlinding(),
-    addressChain: addressChainOf(proofInputs),
-    ...policy.tracking,
+    ...policy.credentials.inputs,
     ...policyParams(policy, input.proving),
     inProof: input.inProof,
     hidden: input.ringRail === "anonymous" && !input.publicOwners,

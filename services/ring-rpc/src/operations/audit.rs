@@ -1,13 +1,11 @@
 use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Duration};
 
 use custom_ring_interface::RingMode;
-use custom_ring_interface::{REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
-use spr_hasher::primitives::hash_bytes;
 use spr_indexer_api::{Base64String, Hash, Limit};
-use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{instructions::transact::canonical_shape, ShieldedTransaction};
 use zolana_ring_client::{
     auditor_view_tag, confirmed_merge,
@@ -24,19 +22,13 @@ use zolana_ring_client::{
         WalletStatusAttestation, AUDIT_PAGE_LIMIT,
     },
     AuditError, AuditedInput, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, CreatedUtxos,
-    DepositNote, InputOpening, ReaderKey, RingOrigin, RowDisposition, SealedNullifierKey,
-    TransactionAudit,
+    DepositNote, InputOpening, ReaderKey, RingOrigin, RowDisposition, TransactionAudit,
 };
-use zolana_ring_indexer::{
-    rpc::{RingRecordPathView, MAX_RING_MEMBER_PAGE_LIMIT},
-    tracking::{GetTrackingRecordsRequest, RingIndexedTrackingRecordView},
-};
-use zolana_ring_member_registry::{OpeningCheck, TrackingOpening, TrackingPath, TrackingRecord};
 use zolana_ring_policy::Member;
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
-    credentials::{CredentialRefusal, CredentialScan, ScanEnd},
+    credentials::{CredentialScan, OwnerCredential, ScanEnd},
     error::{redacted, GrantRefusal, RingRpcError},
     grant_rows::{GrantPair, GrantRow},
     grants::{GrantQuery, Grants, ReadScope},
@@ -48,10 +40,7 @@ use crate::{
     upstream::{
         MergeAuditRequest, RingConfiguration, RingHistoryPage, TransactionPage, TransactionSource,
     },
-    utxos::{
-        AuditStore, CreatedIn, PageDelta, PageWork, TrackedOwner, TrackingRoot, WalletStatusQuery,
-        MAX_BACKFILL_PAGES,
-    },
+    utxos::{AuditStore, CreatedIn, PageDelta, PageWork, WalletStatusQuery, MAX_BACKFILL_PAGES},
 };
 
 pub(crate) const WALLET_NOTE_PAGE_LIMIT: usize = 100;
@@ -193,34 +182,22 @@ impl<S: TransactionSource> AuditService<S> {
         self.view_tag
     }
 
-    /// Opened from the owner's credential, or its tracking seal without one, never kept past one use.
+    /// The store's credential alone, no scan runs.
     pub(crate) fn held_nullifier_key(
         &self,
         owner_key: &[u8; 32],
     ) -> Result<Option<NullifierKey>, RingRpcError> {
-        let store = self.shared.store(self.ring);
         let member = Member::owner_tag(owner_key)?;
-        if let Some(held) = store.credential(member.as_bytes()) {
-            return Ok(Some(held.nullifier_key(&self.auditor)?));
-        }
-        let Some(tracked) = store.tracked(owner_key) else {
-            return Ok(None);
-        };
-        let key = tracked
-            .sealed
-            .open(&self.auditor)
-            .map_err(|_| RingRpcError::TrackedKey)?;
-        if key.pubkey()? != tracked.nullifier_pk {
-            return Err(RingRpcError::TrackedKey);
-        }
-        Ok(Some(key))
+        let held = self.shared.store(self.ring).credential(member.as_bytes());
+        Ok(held
+            .map(|held| held.nullifier_key(&self.auditor))
+            .transpose()?)
     }
 
-    /// `None` only after a scan reached its terminal page without the owner's credential.
-    pub(crate) async fn credential_list_salt(
+    pub(crate) async fn scanned_credential(
         &self,
         owner_key: &[u8; 32],
-    ) -> Result<Option<[u8; 32]>, RingRpcError> {
+    ) -> Result<OwnerCredential, RingRpcError> {
         let store = self.shared.store(self.ring);
         let member = Member::owner_tag(owner_key)?;
         // 1. The refresh holds the backfill lock, no other scan moves the position meanwhile.
@@ -230,11 +207,29 @@ impl<S: TransactionSource> AuditService<S> {
                 .await?
         };
         // 2. A held credential answers whatever the scan end, a missing one only after a complete scan.
-        match (store.credential(member.as_bytes()), scanned) {
-            (Some(held), _) => Ok(Some(held.list_salt(&self.auditor)?)),
-            (None, ScanEnd::Complete) => Ok(None),
-            (None, ScanEnd::Partial) => Err(CredentialRefusal::Incomplete.into()),
-        }
+        Ok(match (store.credential(member.as_bytes()), scanned) {
+            (Some(held), _) => OwnerCredential::Held(Box::new(held)),
+            (None, ScanEnd::Complete) => OwnerCredential::Absent,
+            (None, ScanEnd::Partial) => OwnerCredential::Unknown,
+        })
+    }
+
+    pub(crate) async fn credential_list_salt(
+        &self,
+        owner_key: &[u8; 32],
+    ) -> Result<Option<[u8; 32]>, RingRpcError> {
+        let held = self.scanned_credential(owner_key).await?.known()?;
+        Ok(held.map(|held| held.list_salt(&self.auditor)).transpose()?)
+    }
+
+    pub(crate) async fn escrowed_key(
+        &self,
+        owner_key: &[u8; 32],
+    ) -> Result<Option<NullifierKey>, RingRpcError> {
+        let held = self.scanned_credential(owner_key).await?.known()?;
+        Ok(held
+            .map(|held| held.nullifier_key(&self.auditor))
+            .transpose()?)
     }
 
     /// `None` until the config exists, the config then fixes the key forever.
@@ -291,16 +286,12 @@ impl<S: TransactionSource> AuditService<S> {
             .grant(&request.auth, &attestation, Some(wallet))
             .await?;
         grant.spend().await?;
-        let enrollment = self
-            .shared
-            .source
-            .tracking_enrollment(self.ring, wallet)
-            .await?;
+        let credential = self.scanned_credential(&wallet.to_bytes()).await?;
         Ok(self
             .shared
             .store(self.ring)
             .wallet_status(WalletStatusQuery {
-                enrollment,
+                enrollment: credential.enrollment(),
                 wallet,
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,
@@ -599,10 +590,10 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     /// An unreadable secret reads as absent, the note stays `Unknown` until it opens.
-    fn open_tracked_key(&self, owner_key: &[u8; 32]) -> Option<NullifierKey> {
+    fn open_held_key(&self, owner_key: &[u8; 32]) -> Option<NullifierKey> {
         self.held_nullifier_key(owner_key)
             .inspect_err(|error| {
-                log::warn!("a tracked key failed to open because {}", redacted(error));
+                log::warn!("a held key failed to open because {}", redacted(error));
             })
             .ok()
             .flatten()
@@ -615,8 +606,10 @@ impl<S: TransactionSource> AuditService<S> {
         let mut guard = store.backfill.lock().await;
         let backfill = &mut *guard;
         let position = self.load_tables(store, &mut backfill.history).await?;
+        // Read before the retries, a frame unread for want of a key opens once its credential is held.
+        self.refresh_or_warn(store, &mut backfill.credentials).await;
         self.retry_unread(store, mode, limit).await?;
-        let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
+        let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
         for _ in 0..MAX_BACKFILL_PAGES {
             let response = source
                 .ring_history(RingHistoryPage {
@@ -630,25 +623,8 @@ impl<S: TransactionSource> AuditService<S> {
                 .advance(&response, limit.get())
                 .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
             self.validate_indexer_response(&response)?;
-            // Read after the page, the root every transfer on it proves under is already on chain.
-            if let Err(error) = self.refresh_tracked(store).await {
-                log::warn!(
-                    "tracked key refresh of ring {} failed because {}",
-                    self.ring,
-                    redacted(&error)
-                );
-            }
             // Read after the page, an enrollment finalized before a note on it is held unless the refresh stops early.
-            if let Err(error) = self
-                .refresh_credentials(store, &mut backfill.credentials)
-                .await
-            {
-                log::warn!(
-                    "credential refresh of ring {} failed because {}",
-                    self.ring,
-                    redacted(&error)
-                );
-            }
+            self.refresh_or_warn(store, &mut backfill.credentials).await;
             let mut work = PageWork::new(store, &opener);
             work.late_keys();
             let rows = self.audit_rows(response, mode, &mut work, None).await?;
@@ -676,7 +652,7 @@ impl<S: TransactionSource> AuditService<S> {
         mode: RingMode,
         limit: NonZeroU32,
     ) -> Result<(), RingRpcError> {
-        let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
+        let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
         for frame in store.unread_frames().into_iter().take(MAX_RETRIED_FRAMES) {
             let mut position = frame
                 .slot
@@ -705,13 +681,6 @@ impl<S: TransactionSource> AuditService<S> {
                             && tx.event_index == Some(frame.event_index)
                     });
                 if held {
-                    if let Err(error) = self.refresh_tracked(store).await {
-                        log::warn!(
-                            "tracked key refresh of ring {} failed because {}",
-                            self.ring,
-                            redacted(&error)
-                        );
-                    }
                     let mut work = PageWork::new(store, &opener);
                     work.late_keys();
                     let rows = self
@@ -731,6 +700,17 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
+    /// A failed refresh keeps every admitted page, the next pass resumes at its position.
+    async fn refresh_or_warn(&self, store: &AuditStore, position: &mut HistoryPosition) {
+        if let Err(error) = self.refresh_credentials(store, position).await {
+            log::warn!(
+                "credential refresh of ring {} failed because {}",
+                self.ring,
+                redacted(&error)
+            );
+        }
+    }
+
     /// The caller holds the backfill lock that owns `position`.
     async fn refresh_credentials(
         &self,
@@ -745,47 +725,6 @@ impl<S: TransactionSource> AuditService<S> {
         }
         .run(position)
         .await
-    }
-
-    /// Every seal under the tracking registry's newest root, read again once that root moves.
-    async fn refresh_tracked(&self, store: &AuditStore) -> Result<(), RingRpcError> {
-        let Some(root) = self.shared.source.tracking_root(self.ring).await? else {
-            return Ok(());
-        };
-        let settled = store
-            .tracking_root()
-            .is_some_and(|current| current.settles(&root));
-        if !settled {
-            store.replace_tracked(root, self.rescan_tracking(root).await?);
-        }
-        Ok(())
-    }
-
-    /// Every leaf from 1, each verified under the root read above.
-    async fn rescan_tracking(
-        &self,
-        root: TrackingRoot,
-    ) -> Result<HashMap<[u8; 32], TrackedOwner>, RingRpcError> {
-        let mut owners = HashMap::new();
-        let mut start_index = Some(1);
-        while let Some(start) = start_index {
-            let page = self
-                .shared
-                .source
-                .tracking_records(GetTrackingRecordsRequest {
-                    registry: root.registry.into(),
-                    expected_root: Hash(root.root),
-                    start_index: start,
-                    limit: MAX_RING_MEMBER_PAGE_LIMIT,
-                })
-                .await?;
-            start_index = page.next_leaf_index;
-            for row in &page.records {
-                let owner = tracked_owner(row, &root.root)?;
-                owners.insert(owner.owner_key, owner);
-            }
-        }
-        Ok(owners)
     }
 
     fn audit(&self, bound: BoundTransaction<'_>) -> Result<AuditedTransaction, AuditError> {
@@ -824,7 +763,7 @@ impl<S: TransactionSource> AuditService<S> {
         let context = response.context;
         let cursor = query.next_cursor(&position).map(Into::into);
         let store = self.shared.store(self.ring);
-        let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
+        let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
         let mut work = PageWork::new(&store, &opener);
         let rows = self.audit_rows(response, mode, &mut work, None).await?;
         Ok(GetDecryptedTransactionsResponse {
@@ -1186,72 +1125,6 @@ impl<S: TransactionSource> AuthorizedUtxos<'_, S> {
             },
         })
     }
-}
-
-fn tracking_path(view: &RingRecordPathView) -> Option<TrackingPath> {
-    Some(TrackingPath {
-        index: view.index,
-        siblings: view
-            .siblings
-            .iter()
-            .map(|level| level.clone().map(|sibling| sibling.0))
-            .collect::<Vec<_>>()
-            .try_into()
-            .ok()?,
-    })
-}
-
-/// Verified under `root`, a seal whose owner, key or ciphertext hash differs from the leaf refuses the page.
-fn tracked_owner(
-    row: &RingIndexedTrackingRecordView,
-    root: &[u8; 32],
-) -> Result<TrackedOwner, RingRpcError> {
-    let invalid = || RingRpcError::InvalidIndexerResponse;
-    let view = &row.record;
-    let record = TrackingRecord {
-        member: view.member.0,
-        next: view.next.0,
-        nullifier_pk: view.nullifier_pk.0,
-        ct_hash: view.ct_hash.0,
-        viewing_u: view.viewing_u.0,
-        revision: view.revision,
-        list_tag: view.list_tag.0,
-    };
-    let opening = TrackingOpening::Present {
-        record,
-        path: tracking_path(&row.path).ok_or_else(invalid)?,
-    };
-    OpeningCheck {
-        opening: &opening,
-        root,
-        member: &record.member,
-    }
-    .verify()
-    .map_err(|_| invalid())?;
-    let seal = view.seal.as_ref().ok_or_else(invalid)?;
-    let ciphertext = <[u8; REGISTER_KEY_CIPHERTEXT_LEN]>::try_from(seal.ciphertext.0.as_slice())
-        .map_err(|_| invalid())?;
-    let eph_pk = <[u8; TAGGED_X25519_KEY_LEN]>::try_from(seal.eph_pk.0.as_slice())
-        .ok()
-        .and_then(|bytes| X25519Pubkey::from_bytes(bytes).ok())
-        .ok_or_else(invalid)?;
-    let owner = seal.owner.0;
-    let bound = Member::owner_tag(owner.as_array())
-        .is_ok_and(|tag| *tag.as_bytes() == record.member)
-        && hash_bytes(&ciphertext).is_ok_and(|hash| hash == record.ct_hash);
-    if !bound {
-        return Err(invalid());
-    }
-    Ok(TrackedOwner {
-        owner_key: owner.to_bytes(),
-        nullifier_pk: record.nullifier_pk,
-        owner_hash: owner_hash(
-            &PublicKey::from_ed25519(owner.as_array()),
-            &record.nullifier_pk,
-        )?,
-        list_tag: record.list_tag,
-        sealed: SealedNullifierKey { eph_pk, ciphertext },
-    })
 }
 
 struct MergeRow<'a, 'w> {

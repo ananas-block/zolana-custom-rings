@@ -68,7 +68,7 @@ import type {
   RelayQuote,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 import {
-  AUDITED_DEPOSIT_PREFIX_LENGTH,
+  depositSppData,
   ringDepositSpp,
   type RingDepositSpp,
 } from "../protocol/transaction/deposit-instruction.js";
@@ -779,11 +779,8 @@ function checkDepositSnapshot(
   };
   const instruction = open(envelope, message);
   const { data, accounts } = instruction;
-  if (
-    data[0] !== RingInstructionTag.deposit ||
-    !equalBytes(data.subarray(AUDITED_DEPOSIT_PREFIX_LENGTH), expected.spp.data)
-  )
-    throw mismatch("Data");
+  const forwarded = depositSppData(data);
+  if (forwarded === undefined || !equalBytes(forwarded, expected.spp.data)) throw mismatch("Data");
   const split = accounts.length - expected.spp.accounts.length;
   if (
     split < 0 ||

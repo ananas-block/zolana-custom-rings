@@ -1,3 +1,5 @@
+import { CredentialRoots } from "../../../src/protocol/codec/credential-read.js";
+import { treeIdField } from "@heliuslabs/zolana/interface";
 import { describe, expect, it } from "vitest";
 
 import { MAX_CACHE_WRITES } from "@heliuslabs/zolana/interface";
@@ -8,6 +10,7 @@ import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-rin
 import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
 import { RingError } from "../../../src/protocol/error.js";
 import {
+  inputNullifierChain,
   ringTransferStatement,
   signerBinding,
   transferStatementElements,
@@ -47,7 +50,12 @@ function binding(signers: readonly Bytes32[] = [], slots = 24): TransferBinding 
       policyHash: field(23),
       ownRoot: field(24),
       curatorRoot: field(25),
-      trackingRoot: field(26),
+      credentials: CredentialRoots.selected({
+        ownerHash: field(26),
+        addressRoot: field(27),
+        stateRoots: [{ treeId: 1, root: field(28) }],
+        capacity: 2,
+      }),
     },
     publicAssets: [ZERO, ZERO, ZERO],
     publicAmounts: [ZERO, ZERO, ZERO],
@@ -242,7 +250,8 @@ describe("the ring frame", () => {
     const bytes = RingTransactData.encode(frame);
     expect(RingTransactData.parse(bytes, "confidential")).toEqual(frame);
     // The extension byte follows the salt.
-    const extensions = 4 + 1 + CUSTOM_RING_PROOF_LENGTH + 8 + 8 + 4 + 32 + 16;
+    // The credential read names one state root, five bytes.
+    const extensions = 4 + 1 + CUSTOM_RING_PROOF_LENGTH + 5 + 8 + 4 + 32 + 16;
     expect(bytes[extensions]).toBe(1 | 2 | 4 | 8);
     bytes[extensions] = 1 | 2 | 4 | 8 | 64;
     expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("FlagNotAllowed");
@@ -295,7 +304,9 @@ describe("the ring frame", () => {
 });
 
 describe("the transfer statement", () => {
-  const STATEMENT_LENGTH = 48;
+  // The fixed elements, then the credential owner, address root and `K` tree and root pairs.
+  const CREDENTIAL_CAPACITY = 2;
+  const STATEMENT_LENGTH = 48 + 2 + 2 * CREDENTIAL_CAPACITY;
 
   it("orders the confidential elements and closes on the length", () => {
     const frame: Frame = {
@@ -312,7 +323,22 @@ describe("the transfer statement", () => {
     expect(bigint(elements[16])).toBe(1n);
     expect(bigint(elements[17])).toBe(2n);
     expect(bigint(elements[21])).toBe(2n);
-    expect(bigint(elements[31])).toBe(1n);
+    expect(elements[22]).toEqual(
+      inputNullifierChain(frame.nullifiers, RingTransactData.streamLayout(frame).key.class),
+    );
+    expect(bigint(elements[32])).toBe(1n);
+    // The credential table follows the curator root, padded with its first entry.
+    const owner = elements.findIndex((element) =>
+      element.every((byte, at) => byte === field(26)[at]),
+    );
+    expect(elements.slice(owner, owner + 6)).toEqual([
+      field(26),
+      field(27),
+      treeIdField(1),
+      field(28),
+      treeIdField(1),
+      field(28),
+    ]);
     expect(bigint(elements.at(-1))).toBe(BigInt(elements.length));
     const disclosed: Frame = { ...frame, extensions: { approvalTotals: field(88) } };
     expect(
@@ -381,7 +407,15 @@ describe("the transfer statement", () => {
     const base = transferStatementHash(ringTransferStatement(frame, binding()));
     const moved = {
       ...binding(),
-      roots: { ...binding().roots, trackingRoot: field(99) },
+      roots: {
+        ...binding().roots,
+        credentials: CredentialRoots.selected({
+          ownerHash: field(26),
+          addressRoot: field(99),
+          stateRoots: [{ treeId: 1, root: field(28) }],
+          capacity: CREDENTIAL_CAPACITY,
+        }),
+      },
     };
     expect(transferStatementHash(ringTransferStatement(frame, moved))).not.toEqual(base);
     expect(

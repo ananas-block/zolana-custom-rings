@@ -78,6 +78,7 @@ pub use crate::{
     },
     buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
+    credentials::{CredentialPool, CredentialPoolRead},
     delegate_source::{
         AllowedNullifiers, CredentialEnrollment, DelegateSourceError, ResolvedSource,
         SourceEnrollment,

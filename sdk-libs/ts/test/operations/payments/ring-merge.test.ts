@@ -51,6 +51,7 @@ import {
   mergePrivateTxBlinding,
   NullifierKey,
   type Bytes31,
+  ShieldedAddress,
   ShieldedKeypair,
   ShieldedPda,
   ViewingKey,
@@ -93,32 +94,23 @@ import {
   type RingMergeSealer,
 } from "../../../src/crypto/audit/merge-disclosure.js";
 import { zeroKeyNullifier } from "../../../src/state/exposed-notes.js";
-import type { TrackingOpeningsRequest } from "../../../src/protocol/indexer/tracking-codec.js";
-import type { TrackingEntry } from "../../../src/protocol/membership/tracking.js";
+import { CredentialRead, CredentialRoots } from "../../../src/protocol/codec/credential-read.js";
+import { stateRootAt } from "../../../src/protocol/membership/credential.js";
 import type { RingMergeTransactionParams } from "../../../src/operations/payments/merge.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { stateTree } from "../../helpers/state-tree.js";
 import { notImplemented } from "../../helpers/clients.js";
-import { trackingTree } from "../../helpers/member-registry.js";
-import {
-  ownedAccount,
-  ringPolicyData,
-  trackingRegistryAccount,
-} from "../../helpers/ring-accounts.js";
-import {
-  PROOF_SERVICE,
-  TRACKING_REVISION,
-  trackingEntry,
-  walletKeys,
-} from "../../helpers/ring-pipeline.js";
+import { CredentialChain } from "../../helpers/credential-chain.js";
+import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
+import { PROOF_SERVICE, walletKeys } from "../../helpers/ring-pipeline.js";
 import { decompressG2 } from "../../../src/protocol/codec/codecs.js";
 import { OPENING_RECORD_LEN } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 /** Rust `WIDEST_MERGE`, the keyed merge one v1 transaction carries. */
 const WIDEST_MERGE = 45;
-/** Rust `WIDEST_ZERO_KEY_MERGE`, the owner signature and account narrow it. */
-const WIDEST_ZERO_KEY_MERGE = 44;
+/** Rust `WIDEST_ZERO_KEY_MERGE`, the owner account takes the slot the credential tree leaves. */
+const WIDEST_ZERO_KEY_MERGE = 45;
 /** Pays every merge, the merge circuit refuses the owner as payer. */
 const RELAYER = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
 function field(value: number): Bytes32 {
@@ -129,15 +121,25 @@ function field(value: number): Bytes32 {
 await initializePoseidon();
 const owner = ShieldedKeypair.generate();
 const RECORDS = ShieldedKeypair.generate().shieldedAddress().solanaAddress();
-const TRACKING = ShieldedKeypair.generate().shieldedAddress().solanaAddress();
+/** Tree 0 serves every fixture credential's state root. */
+const CREDENTIAL_TREE = treeAddress(0);
 const mergeAuditor = X25519Keypair.generate();
 const OWNER_MEMBER = owner.signingPublicKey().ownerProofInputHash();
 const PROOF = new Uint8Array(CUSTOM_RING_PROOF_LENGTH).fill(7);
 
-function ownerRows(enrolled: "own" | "foreign" | "none") {
+/** `foreign` enrolls the owner under another nullifier key. */
+function ownerCredentials(enrolled: "own" | "foreign" | "none"): readonly ShieldedAddress[] {
   if (enrolled === "none") return [];
-  const row = trackingEntry(owner.shieldedAddress());
-  return [enrolled === "own" ? row : { ...row, nullifierPk: field(77) }];
+  const address = owner.shieldedAddress();
+  return [
+    enrolled === "own"
+      ? address
+      : ShieldedAddress.fromPublicKeys(
+          address.signingPublicKey,
+          ShieldedKeypair.generate().shieldedAddress().nullifierPublicKey,
+          address.viewingPublicKey,
+        ),
+  ];
 }
 
 function input(
@@ -365,7 +367,7 @@ async function ringMergeParams({
   anonymous = true,
   mode = anonymous ? "anonymous" : "confidential",
   enrolled = "own",
-  rows = ownerRows(enrolled),
+  credentials = ownerCredentials(enrolled),
 }: Readonly<{
   proveMerge: MergeAssembler["proveMerge"];
   wallet: Wallet;
@@ -374,10 +376,16 @@ async function ringMergeParams({
   anonymous?: boolean;
   mode?: RingMode;
   enrolled?: "own" | "foreign" | "none";
-  /** Tracking rows of an owner other than the shared fixture owner. */
-  rows?: readonly TrackingEntry[];
+  /** Credentials of an owner other than the shared fixture owner. */
+  credentials?: readonly ShieldedAddress[];
 }>) {
-  const tracked = trackingTree(rows);
+  const chain = await CredentialChain.create({
+    ringProgramId: RING,
+    auditorPubkey: mergeAuditor.publicKey().toBytes(),
+    accounts: new Map(),
+  });
+  for (const enrolledOwner of credentials) chain.enroll(enrolledOwner);
+  const reader = chain.reader();
   const [policy, policyBump] = await ringPolicyPda(RING);
   return {
     client: {
@@ -393,25 +401,15 @@ async function ringMergeParams({
               auditorPublicKey: mergeAuditor.publicKey().toBytes(),
               mode,
               records: RECORDS,
-              tracking: TRACKING,
             }),
           );
-        if (account === TRACKING)
-          return trackingRegistryAccount({
-            root: tracked.root,
-            revision: TRACKING_REVISION,
-            nextIndex: tracked.nextIndex,
-            auditorPubkey: mergeAuditor.publicKey().toBytes(),
-          });
-        return undefined;
+        return chain.account(account);
       },
+      getMultipleAccounts: reader.getMultipleAccounts,
+      getMerkleProofs: reader.getMerkleProofs,
+      getNonInclusionProofs: reader.getNonInclusionProofs,
+      getShieldedTransactionsByNullifiers: vi.fn(reader.getShieldedTransactionsByNullifiers),
       getStorageMemberOpenings: vi.fn(notImplemented("getStorageMemberOpenings")),
-      getTrackingOpenings: vi.fn(async (request: TrackingOpeningsRequest) => ({
-        slot: 1n,
-        root: tracked.root,
-        revision: TRACKING_REVISION,
-        openings: request.members.map((member) => tracked.opening(member)),
-      })),
       getLatestBlockhash: async () => BLOCKHASH,
       proveMerge,
       proveRing: vi.fn(async (_request: RingProofRequest) => PROOF),
@@ -442,7 +440,7 @@ function ringAccounts(transaction: Transaction): readonly Address[] {
 }
 
 describe("ring merge", () => {
-  it("proves a merge under the owner's tracking row", async () => {
+  it("proves a merge under the owner's credential state root", async () => {
     const wallet = ringWallet([3n, 5n]);
     const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared }) => {
       const data = provenMerge(prepared);
@@ -460,23 +458,27 @@ describe("ring merge", () => {
         anonymous: false,
       });
       const transaction = await buildRingMergeTransaction(params);
-      expect(params.client.getTrackingOpenings).toHaveBeenCalledTimes(1);
+      expect(params.client.getShieldedTransactionsByNullifiers).toHaveBeenCalledTimes(1);
       const [request] = asked;
       if (request?.kind !== "merge") throw new Error("no disclosure request");
-      expect(request.trackingRoot).toEqual(trackingTree(ownerRows("own")).root);
+      const tree = await params.client.getAccount(CREDENTIAL_TREE);
+      if (tree === undefined) throw new Error("no tree 0");
+      expect(request.credentialRoots.stateRoots).toEqual([
+        { treeId: 0, root: stateRootAt(tree.data, 0) },
+      ]);
+      expect(request.credentialRoots.addressRoot).toEqual(ZERO_32);
       expect(request.nullifierPk).toEqual(owner.nullifierPublicKey());
-      expect(request.tracking?.kind).toBe("present");
-      if (request.tracking?.kind !== "present") throw new Error("no tracking row");
-      expect(request.tracking.record.nullifierPk).toEqual(owner.nullifierPublicKey());
+      expect(request.credential?.nullifierPk).toEqual(owner.nullifierPublicKey());
+      expect(request.credential?.member).toEqual(OWNER_MEMBER);
       const merged = decodeRingMergeRequest(ringInstruction(transaction).subarray(1));
-      expect(merged.trackingRevision).toBe(TRACKING_REVISION);
+      expect(merged.credentialRead.stateRootIndexes).toEqual([0]);
       expect(merged.authority).toBe(MergeRingAuthority.ring);
     } finally {
       local.destroy();
     }
   });
 
-  it("refuses a merge of an owner off its tracking row before any proof", async () => {
+  it("refuses a merge of an owner off its credential before any proof", async () => {
     for (const [enrolled, causeCode] of [
       ["foreign", "RING_ADDRESS_MISMATCH"],
       ["none", "RING_RECIPIENT_NOT_ENROLLED"],
@@ -508,7 +510,7 @@ describe("ring merge", () => {
     }
   });
 
-  it("reads no record and names only the tracking registry, a merge runs no rules", async () => {
+  it("reads no record and names only the credential tree, a merge runs no rules", async () => {
     const wallet = ringWallet([3n, 5n]);
     const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared }) => {
       const data = provenMerge(prepared);
@@ -527,7 +529,11 @@ describe("ring merge", () => {
       const transaction = await buildRingMergeTransaction(params);
       expect(params.client.getStorageMemberOpenings).not.toHaveBeenCalled();
       const [ring] = await ringPolicyPda(RING);
-      expect(ringAccounts(transaction).slice(0, 3)).toEqual([ring, TRACKING, treeAddress(7)]);
+      expect(ringAccounts(transaction).slice(0, 3)).toEqual([
+        ring,
+        CREDENTIAL_TREE,
+        treeAddress(7),
+      ]);
       expect(ringAccounts(transaction)).not.toContain(RECORDS);
     } finally {
       local.destroy();
@@ -566,7 +572,7 @@ describe("ring merge", () => {
     expect(discard).toHaveBeenCalledTimes(2);
   });
 
-  it("trims a zero-key merge to its narrower width, Rust `WIDEST_ZERO_KEY_MERGE`", async () => {
+  it("trims a zero-key merge to its width, Rust `WIDEST_ZERO_KEY_MERGE`", async () => {
     const owner = ShieldedKeypair.generate();
     const wallet = zeroKeyWallet(
       owner,
@@ -610,14 +616,14 @@ describe("ring merge", () => {
     });
     const transaction = await buildRingMergeTransaction({ ...params, mergeZeroKey: true });
     expect(params.client.getStorageMemberOpenings).not.toHaveBeenCalled();
-    expect(params.client.getTrackingOpenings).not.toHaveBeenCalled();
+    expect(params.client.getShieldedTransactionsByNullifiers).not.toHaveBeenCalled();
     const request = params.client.proveRing.mock.calls[0]?.[0];
     if (request?.kind !== "merge") throw new Error("no disclosure request");
-    expect(request.trackingRoot).toEqual(ZERO_32);
+    expect(request.credentialRoots.elements()).toEqual(CredentialRoots.empty(1).elements());
     expect(request.nullifierPk).toEqual(ZERO_NULLIFIER_PK);
-    expect(request).not.toHaveProperty("tracking");
+    expect(request).not.toHaveProperty("credential");
     const merged = decodeRingMergeRequest(ringInstruction(transaction).subarray(1));
-    expect(merged.trackingRevision).toBe(0n);
+    expect(merged.credentialRead.isEmpty).toBe(true);
     expect(merged.authority).toBe(MergeRingAuthority.ownerSigned);
     expect(request.publicInputHash).toEqual(
       mergePublicInputHash({
@@ -629,14 +635,14 @@ describe("ring merge", () => {
         ciphertext: merged.sealed.ciphertext,
         payer: request.payer,
         publishedOwner: OWNER_MEMBER,
-        trackingRoot: ZERO_32,
+        credentials: CredentialRoots.empty(1),
       }),
     );
     const accounts = ringAccounts(transaction);
     const [ring] = await ringPolicyPda(RING);
-    expect(accounts.slice(0, 2)).toEqual([ring, TRACKING]);
-    // `[ring, tracking]` ahead of SPP's list, Rust `RING_MERGE_OWNER_INDEX` 6.
-    expect(accounts[2 + 6]).toBe(owner.shieldedAddress().solanaAddress());
+    expect(accounts.slice(0, 2)).toEqual([ring, treeAddress(7)]);
+    // The ring alone ahead of SPP's list, Rust `RING_MERGE_OWNER_INDEX` 6.
+    expect(accounts[1 + 6]).toBe(owner.shieldedAddress().solanaAddress());
   });
 
   it("refuses a forged output and retries a lagging prover indexer", async () => {
@@ -808,7 +814,7 @@ describe("ring merge", () => {
     );
   });
 
-  it("compresses proof b and places the ring policy and the tracking registry ahead of SPP's accounts", async () => {
+  it("compresses proof b and places the ring policy and the credential tree ahead of SPP's accounts", async () => {
     const inputs = [input(3n), input(5n)];
     const data = provenMerge(merge(inputs).prepare(), g2Point());
     const sealed = {
@@ -824,15 +830,16 @@ describe("ring merge", () => {
       payer,
       outputRingDataHash: field(4),
       sealed,
-      tracking: TRACKING,
-      trackingRevision: 11n,
+      credentialRead: CredentialRead.state(11),
+      credentialTree: CREDENTIAL_TREE,
       data,
     });
     const bytes = instruction.data ?? new Uint8Array();
     expect(instruction.programAddress).toBe(RING);
     expect(bytes[0]).toBe(RingInstructionTag.merge);
-    expect(bytes.slice(1, 9)).toEqual(Uint8Array.of(11, 0, 0, 0, 0, 0, 0, 0));
-    expect(bytes.slice(9, 41)).toEqual(field(4));
+    // One state root index, then the output ring data hash.
+    expect(bytes.slice(1, 4)).toEqual(Uint8Array.of(1, 11, 0));
+    expect(bytes.slice(4, 36)).toEqual(field(4));
     const request = decodeRingMergeRequest(bytes.subarray(1));
     expect(request.authority).toBe(MergeRingAuthority.ring);
     expect(request.sealed).toEqual(sealed);
@@ -843,7 +850,7 @@ describe("ring merge", () => {
     const [ring] = await ringPolicyPda(RING);
     expect(instruction.accounts?.slice(0, 2)).toEqual([
       { address: ring, role: AccountRole.READONLY },
-      { address: TRACKING, role: AccountRole.READONLY },
+      { address: CREDENTIAL_TREE, role: AccountRole.READONLY },
     ]);
     expect(instruction.accounts?.[4]).toEqual({
       address: await ringAuthAddress(RING),
@@ -912,10 +919,14 @@ describe("anonymous ring merge", () => {
       const data = ringInstruction(transaction);
       expect(data[0]).toBe(RingInstructionTag.merge);
       const merged = decodeRingMergeRequest(data.subarray(1));
-      expect(merged.trackingRevision).toBe(TRACKING_REVISION);
+      expect(merged.credentialRead.stateRootIndexes).toEqual([0]);
       expect(merged.sealed.proof).toEqual(PROOF);
       const [ring] = await ringPolicyPda(RING);
-      expect(ringAccounts(transaction).slice(0, 3)).toEqual([ring, TRACKING, treeAddress(7)]);
+      expect(ringAccounts(transaction).slice(0, 3)).toEqual([
+        ring,
+        CREDENTIAL_TREE,
+        treeAddress(7),
+      ]);
       const prepared = proveMerge.mock.calls[0]?.[0].prepared;
       if (prepared === undefined) throw new Error("no merge");
       const spp = provenMerge(prepared);
@@ -930,7 +941,7 @@ describe("anonymous ring merge", () => {
           ciphertext: merged.sealed.ciphertext,
           payer: request.payer,
           publishedOwner: ZERO_32,
-          trackingRoot: request.trackingRoot,
+          credentials: request.credentialRoots,
         }),
       ).toEqual(request.publicInputHash);
       const opened = openMergeRecord(mergeAuditor, merged.sealed);
@@ -1010,18 +1021,18 @@ describe("PDA owner merge", () => {
         ciphertext: merged.sealed.ciphertext,
         payer: request.payer,
         publishedOwner: holder.signingPublicKey().ownerProofInputHash(),
-        trackingRoot: ZERO_32,
+        credentials: CredentialRoots.empty(1),
       }),
     );
     expect(openMergeRecord(mergeAuditor, merged.sealed).record.ownerKey).toEqual(addressBytes(pda));
     // The owning program signs the owner account through CPI, Rust `RING_MERGE_OWNER_INDEX` 6.
-    expect(ringCall(transaction).accounts?.[2 + 6]).toEqual({
+    expect(ringCall(transaction).accounts?.[1 + 6]).toEqual({
       address: pda,
       role: AccountRole.READONLY_SIGNER,
     });
   });
 
-  it("merges a PDA's keyed notes under its tracking row with no owner signer", async () => {
+  it("merges a PDA's keyed notes under its credential with no owner signer", async () => {
     const holder = await pdaOwner();
     const owner = holder.shieldedAddress();
     const wallet = new Wallet({ identity: owner, registry: new AssetRegistry() });
@@ -1075,7 +1086,7 @@ describe("PDA owner merge", () => {
           },
         }),
         proofDataSource: "client",
-        rows: [trackingEntry(owner)],
+        credentials: [owner],
       }),
     );
     const pda = addressBytes(owner.solanaAddress());

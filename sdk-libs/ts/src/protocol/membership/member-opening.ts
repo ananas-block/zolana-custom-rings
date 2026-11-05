@@ -37,6 +37,8 @@ import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js"
 import { RingError } from "../error.js";
 import { ListId, recordBit } from "./policy.js";
 import type { ApplyRecordsStatement } from "../proof/statement.js";
+import { CredentialRoots } from "../codec/credential-read.js";
+import { applyKeyWidth } from "../proof/proving-keys.js";
 
 /** `q - 1`, the sentinel's next, every member sorts strictly below it. */
 export const FIELD_MAX = bigIntBytes(BN254_SCALAR_ORDER - 1n) as Bytes32;
@@ -278,8 +280,16 @@ export function replayRecordWrites(
   });
 }
 
-/** Rust `ApplyProofInputs::statement`. */
+/**
+ * Rust `ApplyProofInputs::statement` under `RecordCredentials::Public`, an update writing no
+ * private list. A private write proves its owner's credential, the SDK builds none yet.
+ */
 export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsStatement {
+  const privateBits = recordBit(ListId.privateAllow) | recordBit(ListId.privateBlock);
+  if (inputs.writes.some((write) => (write.entry.mask & privateBits) !== 0n))
+    throw new RingError("RING_STORAGE_WRITE_INVALID", {
+      details: { reason: "InvalidCredentialRead" },
+    });
   return Object.freeze({
     oldRoot: inputs.oldRoot,
     newRoot: inputs.newRoot,
@@ -288,6 +298,9 @@ export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsSta
     chainStart: inputs.chainStart,
     chainEnd: inputs.chainEnd,
     count: BigInt(inputs.writes.length),
+    credentialWrites: 0,
+    privateRingId: new Uint8Array(32) as Bytes32,
+    credentials: CredentialRoots.empty(applyKeyWidth(inputs.writes.length)),
   });
 }
 

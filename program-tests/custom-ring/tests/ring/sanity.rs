@@ -83,19 +83,21 @@ fn a_pda_enrolls_its_immutable_credential_on_the_validator() -> Result<()> {
     assert_eq!(enrolled, enrollment.credential);
     let viewing = env
         .client
-        .block_on(
+        .block_on(async {
             zolana_ring_client::ViewingKeyResolver::new(owner)
                 .with_credential(enrolled.nullifier_pk)
-                .resolve(env.client.as_async()),
-        )?
+                .resolve(env.client.as_async())
+                .await
+                .map_err(RingError::from)
+        })?
         .context("the PDA viewing key")?;
     assert_eq!(viewing.viewing_pubkey, viewing_key.pubkey());
     Ok(())
 }
 
 #[test]
-fn a_zero_key_payment_settles_for_an_unregistered_owner_and_refuses_a_registered_one() -> Result<()>
-{
+fn a_zero_key_payment_settles_for_an_unregistered_owner_and_a_registered_one_needs_an_opt_in(
+) -> Result<()> {
     let env = setup()?;
     let ring_program = custom_ring_program_id()?;
     let ring = CustomRing::new(ring_program);
@@ -141,19 +143,41 @@ fn a_zero_key_payment_settles_for_an_unregistered_owner_and_refuses_a_registered
         prepared.transfer_sol(&recipient, 1)?;
         Ok(prepared)
     };
-    let refused = CustomRingTransfer::new(CustomRingTransferInput {
-        ring,
-        sender,
-        nullifier_key: Some(&sender.nullifier_key),
-        transaction: at_zero(sender)?,
-    });
+    // The payer's key resolution refuses the zero key of an enrolled owner, an explicit opt in accepts it.
+    let enrolled_at_zero = RingAddress {
+        recipient: ShieldedAddress {
+            nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+            ..sender.shielded_address()?
+        },
+        ring_program_id: ring_program,
+        list_salt: [0; 32],
+    };
+    let client = env.client.as_async();
+    let resolve = |opt_in: bool| {
+        env.client.block_on(async {
+            let resolver = RecipientKeyResolver::new(&enrolled_at_zero);
+            let resolver = match opt_in {
+                true => resolver.with_zero_key_to_enrolled(),
+                false => resolver,
+            };
+            resolver
+                .resolve(client, client)
+                .await
+                .map_err(RingError::from)
+        })
+    };
     assert!(
         matches!(
-            env.run(refused.prove(env.client.ring_client())),
-            Err(RingError::EnrolledRecipientAtZeroKey { .. })
+            resolve(false),
+            Err(RingError::Credential(error))
+                if matches!(*error, CredentialError::EnrolledOwnerAtZeroKey)
         ),
         "a registered owner takes its enrolled key"
     );
+    assert!(matches!(
+        resolve(true)?,
+        RecipientKeys::ZeroKeyToEnrolled { .. }
+    ));
     let receipt = OwnerTransfer {
         ring,
         sender,
@@ -249,11 +273,13 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
             assert_eq!(updated, original_address);
             let viewing = env
                 .client
-                .block_on(
+                .block_on(async {
                     zolana_ring_client::ViewingKeyResolver::new(rotated.pubkey())
                         .with_credential(updated.nullifier_pk)
-                        .resolve(env.client.as_async()),
-                )?
+                        .resolve(env.client.as_async())
+                        .await
+                        .map_err(RingError::from)
+                })?
                 .context("the rotated viewing key")?;
             assert_eq!(viewing.viewing_pubkey, rotated.viewing_pubkey());
             let history = wallet

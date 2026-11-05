@@ -44,7 +44,7 @@ fn initialize_records() -> custom_ring_interface::storage_instruction::Initializ
         registry_id: custom_ring_interface::storage::RegistryId([0; 32]),
         grace_slots: [0; 8],
         ring_id: [1; 32],
-        tracking_registry: Address::default(),
+        private_ring_id: [0; 32],
     }
 }
 
@@ -194,24 +194,10 @@ impl StorageChain for StubChain {
         })
     }
 
-    async fn pending_enrollments(
-        &self,
-        _request: zolana_ring_indexer::tracking::GetPendingEnrollmentsRequest,
-    ) -> Result<zolana_ring_indexer::tracking::GetPendingEnrollmentsResponse, RingRpcError> {
-        unreachable!("the record writer applies no enrollment")
-    }
-
-    async fn prove_enrollments(
-        &self,
-        _registry: Address,
-        _owners: &[Address],
-    ) -> Result<zolana_ring_rpc::ProvedEnrollments, RingRpcError> {
-        unreachable!("the record writer applies no enrollment")
-    }
-
     async fn prove_apply(
         &self,
         inputs: &ApplyProofInputs,
+        _registry: &StorageRegistry,
     ) -> Result<ApplyRecordsIxData, RingRpcError> {
         Ok(ApplyRecordsIxData {
             new_root: inputs.new_root,

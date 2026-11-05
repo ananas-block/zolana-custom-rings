@@ -148,13 +148,13 @@ describe("public package surface", () => {
       "updateRingAuthorityInstruction",
       "buildRingUpdatePolicyTransaction",
       "deployRingProgram",
-      "proveEnrollment",
+      "prepareEnrollment",
       "recoverRingMemberNotes",
       "createCustomRingClient",
       "decryptRingDepositUtxo",
       "customRingDepositPayload",
-      "enrollInstruction",
-      "decodeTrackingAuthorization",
+      "enrollCredentialInstruction",
+      "decodeOwnerGrant",
     ] as const) {
       expect(root[name]).toBeTypeOf("function");
     }

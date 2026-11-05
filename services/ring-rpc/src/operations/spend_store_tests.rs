@@ -393,7 +393,7 @@ fn a_zero_key_note_of_a_wallet_is_exposed_and_a_pda_note_is_not() {
     let read = status_of(&store, program);
     assert_eq!(statuses(&read), [WalletNoteStatus::Unspent]);
     assert_eq!(balance(&read), 70);
-    // Spent takes precedence, the zero secret needs no tracked key.
+    // Spent takes precedence, the zero secret needs no credential.
     apply(&store, &keys, |work| {
         work.observe(real(nullifier_of(&exposed, &zero), frame(4), 0));
     });

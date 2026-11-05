@@ -1,7 +1,10 @@
 //! Each relay operation lands through a served Ring RPC that pays the fee and proves with the suite's prover.
 
 use anyhow::bail;
-use custom_ring_sdk::{MergeRelay, PreparedAuthorityTransfer, RelaySent};
+use custom_ring_sdk::{
+    AllowedNullifiers, CredentialEnrollment, MergeRelay, RelaySent, RequestedAuthorityTransfer,
+    ResolvedSource,
+};
 use custom_ring_test_validator::{
     policy::{DEPOSIT, TRANSFER_AMOUNT},
     ring_rpc::RelayedRingRpc,
@@ -168,8 +171,29 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
     let delegate = env.funded_keypair()?;
     relayed.appoint(&delegate)?;
     env.enable_authority_rail(relayed.ring)?;
-    relayed.notes(member, 1).deposit()?;
+    let deposited = relayed.notes(member, 1).deposit()?;
     let ring_rpc = relayed.serve()?;
+    // The delegate admits exactly the member's notes it opened under the credential's sealed key.
+    let notes = deposited
+        .into_iter()
+        .map(|utxo| indexed_note(utxo, member, env, env.tree))
+        .collect::<Result<Vec<_>>>()?;
+    let client = env.client.as_async();
+    let source = env.run(async {
+        ResolvedSource::resolve(
+            member_address,
+            &CredentialEnrollment {
+                photon: client,
+                rpc: client,
+                ring: relayed.ring.program_id(),
+                auditor: &relayed.auditor,
+            },
+        )
+        .await
+        .map_err(RingError::from)
+    })?;
+    let mut allowed = AllowedNullifiers::default();
+    allowed.admit(&source, &notes)?;
     let transfer = AuthorityTransfer {
         sources: vec![member_address.into()],
         payments: vec![AuthorityPayment {
@@ -190,7 +214,13 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
             transfer: transfer.clone(),
         })
         .sign(&delegate, &spr_keypair::ViewingKey::new())?;
-        let prepared = PreparedAuthorityTransfer::new(request, &quote, &config)?;
+        let prepared = RequestedAuthorityTransfer {
+            request,
+            quote: &quote,
+            config: &config,
+            allowed: allowed.clone(),
+        }
+        .prepare()?;
         Ok(match env.run(prepared.send(&ring_rpc.relay)) {
             Ok(RelaySent::SignMessage(pending)) => Probe::Ready(pending),
             Ok(RelaySent::Submitted(_)) => bail!("the delegate signs the move"),
