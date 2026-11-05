@@ -507,7 +507,7 @@ impl AuditStore {
             .absorb(delta);
     }
 
-    /// Any published row of this nullifier, reads no slot bound.
+    /// Any published row of the nullifier, no slot bound applies.
     pub(crate) fn is_spent(&self, nullifier: &[u8; 32]) -> bool {
         self.read_book().rows.contains_key(nullifier)
     }
@@ -717,7 +717,7 @@ impl AuditStore {
         })
     }
 
-    /// Fails closed, an input no row names to this wallet reads as another party's.
+    /// Fails closed, an input no row names to `wallet` reads as another party's.
     pub(crate) fn input_party(&self, wallet: &Address, input: &DecryptedInput) -> InputParty {
         if !input.real {
             return InputParty::Padding;

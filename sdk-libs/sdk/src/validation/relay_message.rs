@@ -319,7 +319,7 @@ struct Envelope {
     units: u32,
     fee_payer: Address,
     signer: Address,
-    /// Ahead of the ring instruction, in this order, and the relay omits one for a live account.
+    /// Ahead of the ring instruction in list order, the relay omits one for a live account.
     setup: Vec<Instruction>,
 }
 

@@ -33,7 +33,7 @@ pub struct Initialize<'a> {
     pub auditor_pubkey: X25519Pubkey,
     pub kind: RingKind,
     pub roles: RingRoles,
-    /// Required on a policy ring, an audit-only ring takes it for its withdrawal exemptions.
+    /// Required on a policy ring, any other ring may bind records alone for its thresholds.
     pub policy: Option<InitialPolicy<'a>>,
 }
 

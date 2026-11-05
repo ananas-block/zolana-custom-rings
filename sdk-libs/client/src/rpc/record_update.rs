@@ -98,7 +98,7 @@ pub struct GetRecordUpdateStatusRequest {
     rename_all_fields = "camelCase"
 )]
 pub enum RecordUpdateStatus {
-    /// Held until a config authority update sets every awaited list of the member.
+    /// Held until a policy authority update sets every awaited list of the member.
     AwaitingAuthority,
     Queued,
     Submitted {

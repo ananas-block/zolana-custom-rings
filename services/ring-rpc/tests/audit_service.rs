@@ -1163,14 +1163,11 @@ fn page() -> Page {
     Page::new(None, None).expect("page")
 }
 
-/// A member paid on an anonymous ring, then two transfers that spend the member's UTXO.
+/// A member paid on an anonymous ring, then two transfers of one real input, neither frame names a note.
 struct SpentUtxo {
     paid: ShieldedTransaction,
-    /// The commitment key's spend, the input named by its UTXO hash.
     spent: ShieldedTransaction,
-    /// The entry key's spend, the input opened in full.
     entry: ShieldedTransaction,
-    /// The paid output as the spending input names it.
     commitment: [u8; 32],
     member: UtxoFields,
 }

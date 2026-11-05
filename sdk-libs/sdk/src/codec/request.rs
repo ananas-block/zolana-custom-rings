@@ -1,4 +1,4 @@
-//! The ring prover's request bodies, field for field the Go `prover/custom_ring` params.
+//! The ring prover's request bodies, field for field the Go `prover/ring` params.
 
 use custom_ring_interface::{QueueEntry, QUAD_ARITY};
 use serde::{Serialize, Serializer};

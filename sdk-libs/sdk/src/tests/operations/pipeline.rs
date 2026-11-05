@@ -3162,7 +3162,7 @@ fn a_transaction_past_the_account_bound_is_refused_before_proving() {
         co_signers: 2,
         legs: 4,
     };
-    // 64 - 4 - 6 - 24 - 2 * 2 - 4.
+    // 64 addresses less 4 for SPP, 6 for the ring, 24 nullifier PDAs, 2 co-signers with their records and 4 legs.
     assert!(check_owner_capacity(&capacity(22)).is_ok());
     assert!(matches!(
         check_owner_capacity(&capacity(23)),
