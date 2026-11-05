@@ -543,6 +543,7 @@ mod tests {
                 budget: ComputeBudgetConfig::new(400_000),
                 co_signers: Vec::new(),
                 signers: vec![delegate],
+                tree_fees: 0,
             })
         }
 

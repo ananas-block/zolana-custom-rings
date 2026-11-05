@@ -40,6 +40,8 @@ use zolana_ring_transaction::AnonymousPlan;
 pub const SLOT: u64 = 1_000;
 pub const RENT_LAMPORTS: u64 = 1_000;
 pub const LAST_VALID_BLOCK_HEIGHT: u64 = 500;
+/// An input tree and an output tree, each under the default schedule.
+pub const TREE_FEES: u64 = 2 * spr_interface::state::DEFAULT_FEE_PER_TREE_LAMPORTS;
 const OWNER_SEED: [u8; 32] = [5; 32];
 
 #[derive(Default)]
@@ -93,6 +95,7 @@ impl RelayProver for RecordingProver {
             budget: ComputeBudgetConfig::new(400_000),
             co_signers,
             signers,
+            tree_fees: TREE_FEES,
         })
     }
 

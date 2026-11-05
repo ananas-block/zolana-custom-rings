@@ -90,7 +90,7 @@ pub(crate) struct Fund {
     pub lamports: u64,
     /// `lamports` less rent, a spend inside it leaves the rent whole.
     pub fee_allowance: u64,
-    /// Rent the relay never recovers once its transaction lands.
+    /// Rent and SPP tree fees the relay never recovers once its transaction lands.
     pub landing_rent: u64,
     pub budget: RelayBudget,
 }

@@ -617,6 +617,11 @@ const fn authority_of(owner: Option<Address>) -> MergeRingAuthority {
 }
 
 impl ProvenCustomRingMerge {
+    /// Every tree SPP charges a fee to, see [`crate::written_tree_fees`].
+    pub fn written_trees(&self) -> [Address; 2] {
+        [self.input_tree, self.output_tree]
+    }
+
     /// `Some` on a zero-key merge.
     pub fn owner_signer(&self) -> Option<Address> {
         self.owner

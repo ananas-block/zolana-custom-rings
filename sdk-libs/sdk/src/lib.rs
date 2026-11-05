@@ -127,6 +127,6 @@ pub use crate::{
     submission::{
         live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,
     },
-    trees::tree_id,
+    trees::{tree_id, written_tree_fees},
     viewing_rotation::{RotateViewingKey, RotatedViewingKey},
 };

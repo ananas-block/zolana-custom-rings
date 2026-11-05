@@ -1212,6 +1212,15 @@ impl ProvenRingTransfer {
         &self.accounts.owner_signers
     }
 
+    /// Every tree SPP charges a fee to, see [`crate::written_tree_fees`].
+    pub fn written_trees(&self) -> impl Iterator<Item = Address> + '_ {
+        self.accounts
+            .input_trees
+            .iter()
+            .copied()
+            .chain([self.accounts.output_tree])
+    }
+
     /// The keys that sign for a deposit leg, in leg order, the payer among them where it funds one.
     pub fn deposit_funders(&self) -> Vec<Address> {
         self.accounts

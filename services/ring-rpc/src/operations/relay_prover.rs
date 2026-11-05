@@ -6,8 +6,9 @@ use custom_ring_interface::{
     InstructionTag, RegisterKeyCheck,
 };
 use custom_ring_sdk::{
-    AllowedNullifiers, CustomRing, DelegateMove, DelegatePayment, DelegateSource,
-    DelegateWithdrawal, RelayedTransferInput, RingClient, RingIndexerBackend, RingTransfer,
+    written_tree_fees, AllowedNullifiers, CustomRing, DelegateMove, DelegatePayment,
+    DelegateSource, DelegateWithdrawal, RelayedTransferInput, RingClient, RingIndexerBackend,
+    RingTransfer,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -67,6 +68,8 @@ pub struct ProvenRelay {
     pub co_signers: Vec<Address>,
     /// The owners, the delegate or the funders, each signs the returned message.
     pub signers: Vec<Address>,
+    /// SPP takes it from the fee payer only when the message lands.
+    pub tree_fees: u64,
 }
 
 #[async_trait]
@@ -240,6 +243,9 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             }
             _ => (InstructionTag::Transfer, None),
         };
+        let tree_fees = written_tree_fees(self.client.zolana(), proven.written_trees())
+            .await
+            .map_err(RelayError::proof)?;
         Ok(ProvenRelay {
             instruction: proven.instruction().map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(tag)),
@@ -256,6 +262,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                         .filter(|funder| *funder != request.parties.fee_payer),
                 )
                 .collect(),
+            tree_fees,
         })
     }
 
@@ -281,6 +288,9 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
         })
         .await
         .map_err(|error| RelayError::proof(*error))?;
+        let tree_fees = written_tree_fees(self.client.zolana(), proven.written_trees())
+            .await
+            .map_err(RelayError::proof)?;
         Ok(ProvenRelay {
             instruction: proven
                 .instruction(request.parties.fee_payer)
@@ -288,6 +298,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
             co_signers: Vec::new(),
             signers: Vec::new(),
+            tree_fees,
         })
     }
 }
