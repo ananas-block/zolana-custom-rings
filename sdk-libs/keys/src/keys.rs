@@ -1,4 +1,6 @@
-use custom_ring_interface::stream::{slot_tag, DeliveredSlot, SlotSecret, StreamError};
+use custom_ring_interface::stream::{
+    confidential_slot_tag, DeliveredSlot, SlotSecret, StreamError,
+};
 use spr_keypair::{
     shielded::{ShieldedAddress, ShieldedKeypair},
     viewing_key::{Salt, ViewTag},
@@ -22,10 +24,28 @@ pub struct RingDeliveryRequest {
     pub first_nullifier: [u8; 32],
 }
 
+/// The derivation a published tag follows, one reader answers every kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RingTagKind {
+    /// A confidential output, tagged by the recipient key.
+    Confidential,
+    /// An anonymous payment, tagged by its slot secret.
     Recipient,
     SenderBundle,
+}
+
+impl RingTagKind {
+    fn tag(
+        self,
+        viewing_pubkey: &X25519Pubkey,
+        secret: &SlotSecret,
+    ) -> Result<ViewTag, StreamError> {
+        Ok(match self {
+            Self::Confidential => confidential_slot_tag(viewing_pubkey.u()),
+            Self::Recipient => secret.anonymous_slot_tag()?,
+            Self::SenderBundle => secret.sender_tag()?,
+        })
+    }
 }
 
 /// One published tag, `output_index` is `m` on a sender bundle.
@@ -271,11 +291,7 @@ fn tag_matches<H: HeldKeys>(
                         probe.output_index,
                         &frame.first_nullifier,
                     )?;
-                    let tag = match probe.kind {
-                        RingTagKind::Recipient => secret.recipient_tag().map(slot_tag),
-                        RingTagKind::SenderBundle => secret.sender_tag(),
-                    }
-                    .map_err(StreamError::from)?;
+                    let tag = probe.kind.tag(&frame.viewing_pubkey, &secret)?;
                     Ok((tag == probe.tag).then_some(secret))
                 })
                 .collect()
@@ -419,18 +435,28 @@ mod tests {
                     probe(
                         RingTagKind::Recipient,
                         1,
-                        slot_tag(body.recipient_tag().unwrap()),
+                        body.anonymous_slot_tag().unwrap(),
                     ),
                     probe(RingTagKind::SenderBundle, 2, bundle.sender_tag().unwrap()),
                     probe(
+                        RingTagKind::Confidential,
+                        1,
+                        confidential_slot_tag(viewing_pubkey.u()),
+                    ),
+                    probe(
                         RingTagKind::Recipient,
                         0,
-                        slot_tag(body.recipient_tag().unwrap()),
+                        body.anonymous_slot_tag().unwrap(),
                     ),
                     probe(
                         RingTagKind::SenderBundle,
                         2,
                         bundle.recipient_tag().unwrap(),
+                    ),
+                    probe(
+                        RingTagKind::Confidential,
+                        1,
+                        body.anonymous_slot_tag().unwrap(),
                     ),
                 ],
             )])
@@ -441,7 +467,14 @@ mod tests {
             .collect();
         assert_eq!(
             hits,
-            [Some(body.as_bytes()), Some(bundle.as_bytes()), None, None]
+            [
+                Some(body.as_bytes()),
+                Some(bundle.as_bytes()),
+                Some(body.as_bytes()),
+                None,
+                None,
+                None
+            ]
         );
     }
 
@@ -483,7 +516,7 @@ mod tests {
         assert_eq!(rotated.viewing_public_keys(), [current, old]);
         let tx = ViewingKey::new();
         for key in [old, current] {
-            let tag = slot_tag(sealed(&tx, &key, 0).recipient_tag().unwrap());
+            let tag = sealed(&tx, &key, 0).anonymous_slot_tag().unwrap();
             let answers = rotated
                 .ring_tag_matches(&[frame(
                     &tx,

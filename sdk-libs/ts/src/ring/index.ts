@@ -204,7 +204,7 @@ export type {
   AnonymousScan,
   AnonymousStream,
   AnonymousSyncClient,
-  ReplyClaim,
+  SenderClaim,
   SentCheck,
   SentPayment,
 } from "../state/anonymous-sync.js";

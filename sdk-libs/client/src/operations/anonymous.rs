@@ -702,7 +702,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             .collect();
         let mut bootstrap = Some([
             viewing_pubkey.u(),
-            custom_ring_interface::stream::slot_tag(viewing_pubkey.u()),
+            custom_ring_interface::stream::confidential_slot_tag(viewing_pubkey.u()),
         ]);
         while !active.is_empty() {
             let mut tagged: Vec<(RoundTag, ViewTag)> = bootstrap

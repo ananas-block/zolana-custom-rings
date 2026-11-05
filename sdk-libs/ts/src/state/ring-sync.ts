@@ -10,7 +10,7 @@ import {
   PAGE_LIMIT,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
-import { slotTag } from "../crypto/derivation/ring-stream.js";
+import { confidentialSlotTag } from "../crypto/derivation/ring-stream.js";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
@@ -28,7 +28,7 @@ import { openRecipientBody } from "../protocol/codec/anonymous-delivery.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import { registeredMint, spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
-import { isRingKeys, type RingKeys } from "./ring-keys.js";
+import { isRingKeys, type RingKeys, type RingTagFrame } from "./ring-keys.js";
 import { isSmallOrder } from "../crypto/keys/x25519.js";
 import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { answered, exactlyOne, unseen } from "./batch.js";
@@ -381,9 +381,10 @@ async function heldSlotSecret(
   site: Site,
   context: RequestContext | undefined,
 ): Promise<Bytes32 | undefined> {
+  // The holder is asked only under the key whose public tag the slot carries.
   const viewingPublicKey = keys
     .viewingPublicKeys()
-    .find((key) => equalBytes(slotTag(key.u()), site.slot.viewTag));
+    .find((key) => equalBytes(confidentialSlotTag(key.u()), site.slot.viewTag));
   const firstNullifier = site.tx.nullifiers[0];
   if (
     viewingPublicKey === undefined ||
@@ -392,20 +393,15 @@ async function heldSlotSecret(
     !isCanonicalField(firstNullifier)
   )
     return undefined;
-  return exactlyOne(
-    await keys.ringDeliverySecrets(
-      [
-        {
-          viewingPublicKey,
-          txViewingPublicKey: site.txViewingPublicKey,
-          salt: site.salt,
-          outputIndex: site.slotIndex,
-          firstNullifier,
-        },
-      ],
-      context,
-    ),
-  );
+  const frame: RingTagFrame = {
+    viewingPublicKey,
+    txViewingPublicKey: site.txViewingPublicKey,
+    salt: site.salt,
+    firstNullifier,
+    probes: [{ kind: "confidential", outputIndex: site.slotIndex, tag: site.slot.viewTag }],
+  };
+  const answers = exactlyOne(await keys.ringTagMatches([frame], context));
+  return answered(frame.probes, answers)[0]?.[1];
 }
 
 function stageRingHistory(wallet: Wallet): Wallet {
@@ -433,7 +429,7 @@ class RingSyncPages {
     const withSlotTags = (tags: readonly Bytes32[]): readonly Bytes32[] =>
       tags.flatMap((tag) => {
         const key = held.find((candidate) => equalBytes(candidate.u(), tag));
-        return key === undefined ? [tag] : [tag, slotTag(key.u())];
+        return key === undefined ? [tag] : [tag, confidentialSlotTag(key.u())];
       });
     this.client = {
       ...(client.solanaRpc === undefined ? {} : { solanaRpc: client.solanaRpc }),

@@ -79,6 +79,7 @@ pub struct LimitedCoSignerInit<L> {
     pub approval: CoSignerApproval,
 }
 
+/// Window limits bind only the transactions that need its signature.
 pub struct LimitedCoSigner<L> {
     signer: Keypair,
     limits: L,

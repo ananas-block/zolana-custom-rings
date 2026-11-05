@@ -1,6 +1,6 @@
 # Co-signing and limits
 
-A ring bounds what moves in three places. The ring program checks co-signer approval, the transfer proof enforces caps and sets approval bits, and Ring RPC enforces window limits. [Spec](../spec.md)
+A ring bounds what moves in three places. The ring program checks co-signer approval, the transfer proof enforces caps and sets approval bits, and Ring RPC enforces window limits on the transactions that need its signature. [Spec](../spec.md)
 
 ## Who must co-sign
 
@@ -25,6 +25,7 @@ The limits bind on every ring with its own registry, with or without a policy ha
 - `charge` splits `displaced` over the kept funds by running floors over the ascending rows. It conserves amounts, and no prover input selects a share.
 - `outflow` is `debit` plus `charge`. The peak outflow of each asset stays at or below its `cap`, and a zero cap turns the check off.
 - A peak above `cosign_above` sets the `OUTFLOW` bit. A gross withdrawal above `withdrawal_threshold` sets the `WITHDRAWAL` bit, with no deposit subtracted.
+- Neither threshold caps outflow. Above one a transfer needs an approver's signature, and `cap` is the only outflow bound.
 - A zero threshold and an asset with no record set no threshold in the proof.
 - The program demands the approval class of each proven bit, and refuses a bit on the delegate rail.
 
@@ -39,6 +40,7 @@ As an example, S spends 1000, deposits 1000, returns 1000 to S and exits 1000 to
 
 ## Window limits, in Ring RPC
 
+- Window limits are optional service policy and never a ring limit.
 - Each asset's record holds a sender cap, a volume cap, a deposit cap and a withdrawal cap, each with its own window in slots. A zero cap is no cap.
 - The sender cap counts one owner's outflow. The volume cap counts what the ring moves.
 - Ring RPC checks them when it decides whether to co-sign, and the program checks only the co-signature.
@@ -47,6 +49,7 @@ As an example, S spends 1000, deposits 1000, returns 1000 to S and exits 1000 to
 - `owner_debits` in `program-libs/policy/src/quantities.rs` is the Rust computation. A shared vector pins it to the circuit.
 - The window read and the reservation commit in one database transaction, so no allowance is granted twice.
 - A delegate frame reads no limit and reserves nothing.
+- No proof carries a window limit. A proof of one would need authenticated usage state that every transaction updates.
 
 ## What passes them
 

@@ -1,10 +1,8 @@
 //! Slot secrets of the ring outputs under a wallet's viewing keys.
 
-use std::collections::HashMap;
-
 use custom_ring_interface::{
     ring_body_output,
-    stream::{slot_tag, SlotSecret},
+    stream::{confidential_slot_tag, SlotSecret},
 };
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
@@ -12,7 +10,7 @@ use spr_keypair::{NullifierKey, X25519Pubkey};
 use spr_transaction::{
     DeriveRequest, ShieldedKeys, ShieldedTransaction, TransactionError, WalletUtxo,
 };
-use zolana_ring_keys::{RingDeliveryRequest, RingKeys};
+use zolana_ring_keys::{RingKeys, RingTagFrame, RingTagKind, RingTagProbe};
 use zolana_ring_transaction::is_contributory;
 
 use crate::{exactly_one_each, is_zero_key, AnonymousError};
@@ -55,60 +53,68 @@ pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
     shielded_keys: &K,
     transactions: &'a [ShieldedTransaction],
 ) -> Result<Vec<RingDeliveredCandidate<'a>>, AnonymousError> {
-    let held: HashMap<[u8; 32], X25519Pubkey> = shielded_keys
-        .viewing_public_keys()
-        .into_iter()
-        .map(|pubkey| (slot_tag(pubkey.u()), pubkey))
-        .collect();
-    let mut sites = Vec::new();
-    let mut requests = Vec::new();
+    let held = shielded_keys.viewing_public_keys();
+    let mut framed = Vec::new();
+    let mut frames = Vec::new();
     for tx in transactions {
-        let Some(RingDeliveryContext {
-            tx_viewing_pk,
-            salt,
-            first_nullifier,
-            ..
-        }) = RingDeliveryContext::of(tx)
-        else {
+        let Some(context) = RingDeliveryContext::of(tx) else {
             continue;
         };
-        for (position, slot) in tx.output_slots.iter().enumerate() {
-            let Some(&viewing_pubkey) = held.get(&slot.view_tag) else {
-                continue;
-            };
-            if ring_body_output(&slot.payload).is_none() {
+        for viewing_pubkey in &held {
+            // 1. The tag is public, a frame names only a key whose tag a ring body publishes.
+            let tag = confidential_slot_tag(viewing_pubkey.u());
+            let probes = tx
+                .output_slots
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| {
+                    slot.view_tag == tag && ring_body_output(&slot.payload).is_some()
+                })
+                .map(|(position, _)| {
+                    Ok(RingTagProbe {
+                        kind: RingTagKind::Confidential,
+                        output_index: u32::try_from(position)
+                            .map_err(|_| TransactionError::TooManyOutputs)?,
+                        tag,
+                    })
+                })
+                .collect::<Result<Vec<_>, AnonymousError>>()?;
+            if probes.is_empty() {
                 continue;
             }
-            let output_index =
-                u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?;
-            sites.push((tx, output_index));
-            requests.push(RingDeliveryRequest {
-                viewing_pubkey,
-                tx_viewing_pk,
-                salt,
-                output_index,
-                first_nullifier,
+            framed.push(tx);
+            frames.push(RingTagFrame {
+                viewing_pubkey: *viewing_pubkey,
+                tx_viewing_pk: context.tx_viewing_pk,
+                salt: context.salt,
+                first_nullifier: context.first_nullifier,
+                probes,
             });
         }
     }
-    if requests.is_empty() {
+    if frames.is_empty() {
         return Ok(Vec::new());
     }
-    let secrets = exactly_one_each(
-        shielded_keys.ring_delivery_secrets(&requests)?,
-        requests.len(),
-    )?;
-    sites
-        .into_iter()
-        .zip(secrets)
-        .map(|((tx, slot_index), secret)| {
-            Ok(RingDeliveredCandidate {
-                tx,
-                slot_index,
-                slot_secret: SlotSecret::new(secret)?,
-            })
-        })
-        .collect()
+    // 2. The holder answers each probe with its slot secret, one agreement per frame.
+    let answers = exactly_one_each(shielded_keys.ring_tag_matches(&frames)?, frames.len())?;
+    let mut candidates = Vec::new();
+    for ((tx, frame), answers) in framed.into_iter().zip(&frames).zip(answers) {
+        let answers = exactly_one_each(answers, frame.probes.len())?;
+        candidates.extend(
+            frame
+                .probes
+                .iter()
+                .zip(answers)
+                .filter_map(|(probe, secret)| {
+                    secret.map(|slot_secret| RingDeliveredCandidate {
+                        tx,
+                        slot_index: probe.output_index,
+                        slot_secret,
+                    })
+                }),
+        );
+    }
+    Ok(candidates)
 }
 
 pub(crate) fn assign_nullifiers<K: ShieldedKeys + ?Sized>(

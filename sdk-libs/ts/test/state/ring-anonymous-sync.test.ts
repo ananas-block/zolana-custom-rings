@@ -443,7 +443,7 @@ describe("anonymous sync", () => {
     const carol = new ScanWallet(3);
     await carol.pay(indexer, [{ to: bob.address, amount: 5n }]);
     const bare = await bob.sync(indexer, bob.fresh());
-    expect(bare.replyClaims).toEqual([]);
+    expect(bare.senderClaims).toEqual([]);
     expect(bare.history.current().knownSenders()).toEqual([]);
 
     const paid = await alice.pay(indexer, [
@@ -451,7 +451,7 @@ describe("anonymous sync", () => {
     ]);
     const scan = await bob.sync(indexer, bob.fresh());
     expect(scan.history.current().knownSenders()).toEqual([]);
-    const claim = scan.replyClaims[0];
+    const claim = scan.senderClaims[0];
     if (claim === undefined) throw new Error("no claim");
     expect(hex(claim.utxoHash)).toBe(hex(output(paid, 1)));
 
@@ -483,15 +483,15 @@ describe("anonymous sync", () => {
     ]);
     const decodes = await bob.sync(indexer, bob.fresh());
     expect(found(decodes)).toEqual([hex(output(paid, 1))]);
-    expect(decodes.replyClaims.map(({ reply }) => reply.viewingKey.u())).toEqual([
+    expect(decodes.senderClaims.map(({ claim }) => claim.claimed.viewingKey.u())).toEqual([
       alice.viewingKey.u(),
     ]);
-    expect(decodes.replyClaims[0]?.reply.ownerKey).toEqual(
+    expect(decodes.senderClaims[0]?.claim.claimed.ownerKey).toEqual(
       alice.address.signingPublicKey.confidentialViewTag(),
     );
     const undecodable = await carol.sync(indexer, carol.fresh());
     expect(found(undecodable)).toEqual([hex(output(paid, 2))]);
-    expect(undecodable.replyClaims).toEqual([]);
+    expect(undecodable.senderClaims).toEqual([]);
   });
 
   it("opens the bundle under its published count and skips a bundle of another length", async () => {

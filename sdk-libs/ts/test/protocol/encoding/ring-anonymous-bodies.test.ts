@@ -115,10 +115,10 @@ describe("reply metadata", () => {
       const sealed = sealReply(SECRET, metadata, length);
       expect(sealed).toHaveLength(length);
       const opened = openReply(SECRET, sealed);
-      expect(opened?.viewingKey.toBytes()).toEqual(metadata.viewingKey.toBytes());
-      expect(opened?.ownerKey).toEqual(metadata.ownerKey);
-      expect(opened?.nullifierPk).toEqual(metadata.nullifierPk);
-      expect(opened?.data.records()).toEqual(metadata.data.records());
+      expect(opened?.claimed.viewingKey.toBytes()).toEqual(metadata.viewingKey.toBytes());
+      expect(opened?.claimed.ownerKey).toEqual(metadata.ownerKey);
+      expect(opened?.claimed.nullifierPk).toEqual(metadata.nullifierPk);
+      expect(opened?.claimed.data.records()).toEqual(metadata.data.records());
     }
   });
 
@@ -182,10 +182,10 @@ describe("the shared reply vector", () => {
       const sealed = hexToBytes(ciphertext);
       expect(sealed).toHaveLength(replyLen);
       const opened = openReply(slotSecret, sealed);
-      expect(bytesToHex(opened?.viewingKey.u() ?? ZERO_32)).toBe(viewingU);
-      expect(bytesToHex(opened?.ownerKey ?? ZERO_32)).toBe(ownerKey);
-      expect(bytesToHex(opened?.nullifierPk ?? ZERO_32)).toBe(nullifierPk);
-      expect(opened?.data.records()).toEqual(data.records());
+      expect(bytesToHex(opened?.claimed.viewingKey.u() ?? ZERO_32)).toBe(viewingU);
+      expect(bytesToHex(opened?.claimed.ownerKey ?? ZERO_32)).toBe(ownerKey);
+      expect(bytesToHex(opened?.claimed.nullifierPk ?? ZERO_32)).toBe(nullifierPk);
+      expect(opened?.claimed.data.records()).toEqual(data.records());
       const metadata: ReplyMetadata = {
         viewingKey: x25519FromU(hexToBytes(viewingU) as Bytes32),
         ownerKey: hexToBytes(ownerKey) as Bytes32,

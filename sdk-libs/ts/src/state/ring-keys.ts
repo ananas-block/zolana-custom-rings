@@ -20,10 +20,10 @@ import { extended } from "../operations/workflow/extended.js";
 import { RingKeyError } from "../crypto/error.js";
 import { listSaltOf } from "../crypto/keys/list-salt.js";
 import {
+  anonymousSlotTag,
   bundleTag,
+  confidentialSlotTag,
   deliveredSlotSecret,
-  recipientTag,
-  slotTag,
 } from "../crypto/derivation/ring-stream.js";
 
 /** The public context of one delivered ring output slot. */
@@ -45,8 +45,8 @@ export interface ViewTagRequest {
   readonly stream: ViewTagStream;
 }
 
-/** The domain a published tag answers under. */
-export type RingTagKind = "recipient" | "senderBundle";
+/** The derivation a published tag follows, `recipient` being an anonymous payment's slot tag. */
+export type RingTagKind = "confidential" | "recipient" | "senderBundle";
 
 /** `outputIndex` is `m` on a sender bundle. */
 export interface RingTagProbe {
@@ -281,9 +281,8 @@ export class ViewingKeyHolder {
       return frames.map((frame) =>
         frame.probes.map((probe) => {
           const secret = agreements.slotSecret(frame, probe.outputIndex);
-          const tag =
-            probe.kind === "recipient" ? slotTag(recipientTag(secret)) : bundleTag(secret);
-          if (equalBytes(tag, probe.tag)) return secret;
+          if (equalBytes(publishedTag(probe.kind, frame.viewingPublicKey, secret), probe.tag))
+            return secret;
           secret.fill(0);
           return undefined;
         }),
@@ -347,6 +346,21 @@ class AgreementBatch {
     const agreement = this.#holder.held(viewingPublicKey).ecdh(txViewingPublicKey);
     this.#agreements.set(key, agreement);
     return agreement;
+  }
+}
+
+function publishedTag(
+  kind: RingTagKind,
+  viewingPublicKey: X25519PublicKey,
+  secret: Bytes32,
+): Bytes32 {
+  switch (kind) {
+    case "confidential":
+      return confidentialSlotTag(viewingPublicKey.u());
+    case "recipient":
+      return anonymousSlotTag(secret);
+    case "senderBundle":
+      return bundleTag(secret);
   }
 }
 

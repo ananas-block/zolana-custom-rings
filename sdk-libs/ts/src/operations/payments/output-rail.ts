@@ -40,9 +40,9 @@ import {
   type ReplyMetadata,
 } from "../../protocol/codec/anonymous-delivery.js";
 import {
+  anonymousSlotTag,
   bundleTag,
-  recipientTag,
-  slotTag,
+  confidentialSlotTag,
   txKeySlotSecret,
 } from "../../crypto/derivation/ring-stream.js";
 import { randomTagPreimage } from "../../crypto/derivation/dummy-tag.js";
@@ -160,8 +160,8 @@ export class AnonymousPlan {
   }
 }
 
-/** Zero on change, `undefined` on an exit whose scheme 3 owner tag stays on the frame. */
-export function anonymousSlotTag(
+/** Zero on change, `undefined` on an exit whose scheme 3 owner tag stays on the frame, Rust `RingOutputRail::anonymous_tag`. */
+export function anonymousTag(
   slot: AnonymousSlot,
   slotSecret: (recipient: X25519PublicKey) => Bytes32,
 ): Bytes32 | undefined {
@@ -171,11 +171,11 @@ export function anonymousSlotTag(
     case "change":
       return ZERO_32;
     case "dummy":
-      return slotTag(recipientTag(slot.preimage));
+      return anonymousSlotTag(slot.preimage);
     case "payment": {
       const secret = slotSecret(slot.payment.recipient);
       try {
-        return slotTag(recipientTag(secret));
+        return anonymousSlotTag(secret);
       } finally {
         secret.fill(0);
       }
@@ -493,7 +493,7 @@ export class RingOutputRail {
   }
 
   #slotTag(slot: AnonymousSlot, slotIndex: number): Bytes32 | undefined {
-    return anonymousSlotTag(slot, (recipient) => this.slotSecret(recipient, slotIndex));
+    return anonymousTag(slot, (recipient) => this.slotSecret(recipient, slotIndex));
   }
 
   #bundleTag(senderViewingPublicKey: X25519PublicKey, outputCount: number): Bytes32 {
@@ -600,7 +600,10 @@ export class RingOutputRail {
         const secret = this.slotSecret(slot.owner.viewingPublicKey, slotIndex);
         try {
           const body = sealRecipientBody(secret, recipientBody(output));
-          return framed(slotTag(slot.owner.viewingPublicKey.u()), { kind: "recipient", body });
+          return framed(confidentialSlotTag(slot.owner.viewingPublicKey.u()), {
+            kind: "recipient",
+            body,
+          });
         } finally {
           secret.fill(0);
         }
@@ -609,7 +612,7 @@ export class RingOutputRail {
         // A random key publishes as a real recipient's would.
         const key = ViewingKey.generate();
         try {
-          return framed(slotTag(key.publicKey().u()), {
+          return framed(confidentialSlotTag(key.publicKey().u()), {
             kind: "recipient",
             body: randomBytes(RECIPIENT_BODY_LEN),
           });

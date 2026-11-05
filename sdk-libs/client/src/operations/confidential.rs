@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use custom_ring_interface::{ring_body_output, stream::slot_tag};
+use custom_ring_interface::{ring_body_output, stream::confidential_slot_tag};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
@@ -83,7 +83,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
             .keys
             .viewing_public_keys()
             .iter()
-            .map(|key| slot_tag(key.u()))
+            .map(|key| confidential_slot_tag(key.u()))
             .chain([owner_tag])
             .collect();
         let tagged = reads.tagged(&tags).await?;
@@ -738,7 +738,7 @@ mod tests {
             tx_viewing_pk: Some(tx_key.pubkey()),
             salt: Some(salt),
             output_slots: vec![OutputSlot {
-                view_tag: slot_tag(view.u()),
+                view_tag: confidential_slot_tag(view.u()),
                 output_context: output_context(hash),
                 payload: encode_ring_body_output(&body, &[]).unwrap(),
             }],

@@ -30,7 +30,7 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { slotTag, txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
+import { confidentialSlotTag, txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
 import { isSmallOrder, x25519FromU } from "../crypto/keys/x25519.js";
 import {
   openRecipientBody,
@@ -38,7 +38,7 @@ import {
   openSenderBundle,
   senderBundleLen,
   type RecipientBody,
-  type ReplyMetadata,
+  type ReplyClaim,
   type SenderBundle,
 } from "../protocol/codec/anonymous-delivery.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
@@ -104,9 +104,9 @@ export interface SentPayment {
 }
 
 /** An unauthenticated sender claim, `AnonymousWallet.confirmClaim` alone learns from it. */
-export interface ReplyClaim {
+export interface SenderClaim {
   readonly utxoHash: Bytes32;
-  readonly reply: ReplyMetadata;
+  readonly claim: ReplyClaim;
 }
 
 export interface AnonymousRecovery {
@@ -115,7 +115,7 @@ export interface AnonymousRecovery {
   readonly spentNullifiers: readonly Bytes32[];
   readonly found: readonly AnonymousRingUtxo[];
   /** The replies on found notes, a frame without one adds none. */
-  readonly replyClaims: readonly ReplyClaim[];
+  readonly senderClaims: readonly SenderClaim[];
   /** The wallet's payments in the transfers it sent, a body that fails to open left out. */
   readonly sent: readonly SentPayment[];
   /** Notes under a mint the registry lacks, stored and unspendable until it registers, no rescan needed. */
@@ -426,7 +426,7 @@ type Rebuilt = Readonly<{
 interface RebuiltNote extends Rebuilt {
   readonly body: Body;
   readonly position: number;
-  readonly reply: ReplyMetadata | undefined;
+  readonly claim: ReplyClaim | undefined;
   readonly pending: boolean;
 }
 
@@ -471,7 +471,10 @@ class Scan {
       stream,
       scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
     }));
-    let bootstrap: readonly ViewTag[] = [viewingPublicKey.u(), slotTag(viewingPublicKey.u())];
+    let bootstrap: readonly ViewTag[] = [
+      viewingPublicKey.u(),
+      confidentialSlotTag(viewingPublicKey.u()),
+    ];
     while (active.length > 0) {
       const tagged: (readonly [RoundTag, ViewTag])[] = bootstrap.map((tag) => [BOOTSTRAP, tag]);
       bootstrap = [];
@@ -940,7 +943,7 @@ class NoteLedger {
   readonly #streams: AnonymousRingUtxo[] = [];
   readonly #spends = new Set<string>();
   readonly #spent = new Map<string, Bytes32>();
-  readonly #replyClaims: ReplyClaim[] = [];
+  readonly #senderClaims: SenderClaim[] = [];
   readonly #sent: SentPayment[] = [];
   readonly #unknownMints = new Set<Address>();
 
@@ -951,7 +954,7 @@ class NoteLedger {
 
   /** A claim stays with its note, a note found twice adds none. */
   absorb(viewingPublicKey: X25519PublicKey, read: BodyRead): void {
-    for (const { utxo, nullifierPublicKey, body, position, reply, pending } of read.notes) {
+    for (const { utxo, nullifierPublicKey, body, position, claim, pending } of read.notes) {
       const slot = body.tx.outputSlots[position];
       if (slot === undefined || this.isFound(slot.outputContext.hash)) continue;
       this.keep(
@@ -965,8 +968,8 @@ class NoteLedger {
         viewingPublicKey,
         body.found,
       );
-      if (reply !== undefined)
-        this.#replyClaims.push(Object.freeze({ utxoHash: slot.outputContext.hash, reply }));
+      if (claim !== undefined)
+        this.#senderClaims.push(Object.freeze({ utxoHash: slot.outputContext.hash, claim }));
     }
     this.#sent.push(...read.sent);
     for (const mint of read.unknownMints) this.unknownMint(mint);
@@ -1074,7 +1077,7 @@ class NoteLedger {
         ),
       ),
       found: Object.freeze([...this.#streams]),
-      replyClaims: Object.freeze([...this.#replyClaims]),
+      senderClaims: Object.freeze([...this.#senderClaims]),
       sent: Object.freeze([...this.#sent]),
       unknownMints: Object.freeze([...this.#unknownMints]),
       unmatched: Object.freeze(this.#pending.map(({ utxo }) => utxo.outputContext.hash)),
@@ -1106,7 +1109,7 @@ class BodyRead {
   recipientBody(body: Body, position: number, secret: Bytes32): void {
     const opening = decoded(() => openRecipientBody(secret, body.ciphertext));
     if (opening === undefined) return;
-    this.#note(body, position, opening, replyOf(body.reply, secret));
+    this.#note(body, position, opening, claimOf(body.reply, secret));
   }
 
   /** Each change slot the bundle rebuilds from the seed and retained chain history with no auditor read, then the payments only the sender's own key proves. */
@@ -1135,22 +1138,22 @@ class BodyRead {
     body: Body,
     position: number,
     opening: RecipientBody | undefined,
-    reply: ReplyMetadata | undefined,
+    claim: ReplyClaim | undefined,
   ): void {
     const slot = body.tx.outputSlots[position];
     if (slot === undefined || opening === undefined) return;
     const rebuilt = rebuild(this.#reads.assets, this.#owner, slot, body.context.ring, opening);
-    if (rebuilt !== undefined) this.#keep(body, position, rebuilt, reply);
+    if (rebuilt !== undefined) this.#keep(body, position, rebuilt, claim);
   }
 
   /** A mint the registry lacks holds the note back, the scan still moves past it. */
-  #keep(body: Body, position: number, rebuilt: Rebuilt, reply: ReplyMetadata | undefined): void {
+  #keep(body: Body, position: number, rebuilt: Rebuilt, claim: ReplyClaim | undefined): void {
     const slot = body.tx.outputSlots[position];
     if (slot === undefined) return;
     const mint = rebuilt.utxo.asset;
     const pending = registeredMint(this.#reads.assets, mint) === undefined;
     if (pending) this.unknownMints.push(mint);
-    this.notes.push({ ...rebuilt, body, position, reply, pending });
+    this.notes.push({ ...rebuilt, body, position, claim, pending });
   }
 
   /** `undefined` when the body at `position` fails to open under the recipient's key. */
@@ -1366,7 +1369,7 @@ function bodyAt(
 }
 
 /** `undefined` without a reply or on bytes that never decode. */
-function replyOf(reply: Uint8Array, secret: Bytes32): ReplyMetadata | undefined {
+function claimOf(reply: Uint8Array, secret: Bytes32): ReplyClaim | undefined {
   return reply.length === 0 ? undefined : decoded(() => openReply(secret, reply));
 }
 

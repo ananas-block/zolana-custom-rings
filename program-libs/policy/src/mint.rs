@@ -15,10 +15,11 @@ use crate::AssetLimits;
 pub struct MintPolicy {
     pub threshold: u64,
     pub cap: u64,
+    /// Caps nothing, a peak outflow above it sets the `OUTFLOW` approval bit.
     pub cosign_above: u64,
-    /// A public gross above it sets the `WITHDRAWAL` approval bit.
+    /// Caps nothing, a public gross above it sets the `WITHDRAWAL` approval bit.
     pub withdrawal_threshold: u64,
-    /// Ring RPC checks them only on operations it co-signs.
+    /// Ring RPC checks them only on transactions that need its signature.
     pub limits: AssetLimits,
 }
 

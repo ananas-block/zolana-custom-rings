@@ -203,7 +203,7 @@ describe("ring bodies", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const failure = new Error("holder offline");
-    vi.spyOn(keys, "ringDeliverySecrets").mockRejectedValue(failure);
+    vi.spyOn(keys, "ringTagMatches").mockRejectedValue(failure);
     await expect(opened(keys, [ringBody(recipient, note(recipient).hash)])).rejects.toBe(failure);
   });
 });
@@ -339,7 +339,7 @@ describe("syncRingWallet", () => {
     const wallet = new Wallet({ identity: recipient.shieldedAddress() });
     const client = syncClient([ringBody(recipient)]);
     const failure = new Error("holder offline");
-    vi.spyOn(keys, "ringDeliverySecrets").mockRejectedValue(failure);
+    vi.spyOn(keys, "ringTagMatches").mockRejectedValue(failure);
     const before = wallet._state();
 
     await expect(syncRingWallet({ wallet, keys, client })).rejects.toBe(failure);
@@ -352,7 +352,7 @@ describe("syncRingWallet", () => {
   it("refuses a holder that answers no secret for a delivered slot", async () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
-    vi.spyOn(keys, "ringDeliverySecrets").mockResolvedValue([]);
+    vi.spyOn(keys, "ringTagMatches").mockResolvedValue([]);
     await expect(opened(keys, [ringBody(recipient)])).rejects.toMatchObject({
       code: "WALLET_KEYS_BATCH_MISMATCH",
     });
@@ -381,7 +381,7 @@ describe("syncRingWallet", () => {
   it("asks the holder nothing for a published key or first nullifier no agreement accepts", async () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
-    const asked = vi.spyOn(keys, "ringDeliverySecrets");
+    const asked = vi.spyOn(keys, "ringTagMatches");
     const good = ringBody(recipient);
     const smallOrder = X25519PublicKey.fromBytes(
       new Uint8Array([4, ...new Uint8Array(32)]) as Bytes33,
