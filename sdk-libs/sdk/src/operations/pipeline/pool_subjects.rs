@@ -240,7 +240,7 @@ impl RecordPlan {
         RecordPools {
             own: self.own.len(),
             curator: self.curator.len(),
-            tracking: credentials.len(),
+            credentials: credentials.len(),
         }
     }
 

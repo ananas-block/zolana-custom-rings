@@ -96,7 +96,7 @@ export interface TransferKeyCircuit {
 export interface PolicyPoolCapacity {
   readonly own: number;
   readonly curator: number;
-  /** `K`, credential openings, Rust `RecordPools::tracking`. */
+  /** `K`, credential openings, Rust `RecordPools::credentials`. */
   readonly credentials: number;
 }
 
@@ -235,7 +235,7 @@ function publicOwners(circuit: TransferKeyCircuit): number {
   return Math.min(circuit.owners, fit) + circuit.withdrawals;
 }
 
-/** Withdrawal owners a wide key opens a credential for, Go `trackedWithdrawals`. */
+/** Withdrawal owners a wide key opens a credential for, Go `credentialWithdrawals`. */
 function credentialWithdrawals(circuit: TransferKeyCircuit): number {
   return circuit.wide ? publicOwners(circuit) - circuit.owners : 0;
 }

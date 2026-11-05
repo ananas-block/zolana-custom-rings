@@ -142,7 +142,7 @@ func NewSections(shape Shape) (Sections, error) {
 	if err != nil {
 		return Sections{}, err
 	}
-	credentials, err := policy.NewCredentials(shape.Owners, shape.Outputs, shape.trackedWithdrawals())
+	credentials, err := policy.NewCredentials(shape.Owners, shape.Outputs, shape.credentialWithdrawals())
 	if err != nil {
 		return Sections{}, err
 	}
@@ -171,7 +171,7 @@ func (c *Sections) validate(shape Shape) error {
 		shared.ValidateLength("transfer", "signer", len(c.Signers), shape.Inputs),
 		shared.ValidateLength("transfer", "owner row", len(c.Rows), shape.Owners),
 		shared.ValidateLength("transfer", "withdrawal", len(c.Withdrawals), shape.Withdrawals),
-		c.ValidateCredentials(shape.Owners, shape.Outputs, shape.trackedWithdrawals()),
+		c.ValidateCredentials(shape.Owners, shape.Outputs, shape.credentialWithdrawals()),
 	)
 }
 

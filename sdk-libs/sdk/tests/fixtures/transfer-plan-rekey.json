@@ -10,7 +10,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "tracking": 22
+      "credentials": 22
     },
     "sealed": {
       "outputs": 16,
@@ -41,7 +41,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "tracking": 7
+      "credentials": 7
     },
     "sealed": {
       "outputs": 2,
@@ -72,7 +72,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "tracking": 7
+      "credentials": 7
     },
     "sealed": {
       "outputs": 2,
@@ -103,7 +103,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "tracking": 7
+      "credentials": 7
     },
     "sealed": {
       "outputs": 2,
@@ -134,7 +134,7 @@
     "readPools": {
       "own": 0,
       "curator": 0,
-      "tracking": 17
+      "credentials": 17
     },
     "sealed": {
       "outputs": 4,
