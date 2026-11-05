@@ -1,6 +1,6 @@
 # Storage
 
-Storage keeps tree roots for rings and curators, and verifies the proof behind every root it accepts. Start with [the instruction entry point](src/lib.rs). The layouts and `StorageError` live in `custom_ring_interface::{storage, tracking}`, and the instruction data in `custom_ring_interface::storage_instruction`.
+Storage keeps tree roots for rings and curators, and verifies the proof behind every root it accepts. Start with [the instruction entry point](src/lib.rs). The layouts and `StorageError` live in `custom_ring_interface::{storage, owner_grant}`, and the instruction data in `custom_ring_interface::storage_instruction`. Enrollment lives in the ring program, as SPP state.
 
 ## Policy registries
 
@@ -12,29 +12,23 @@ The program classifies an update from its masks. A write touching a list a rule 
 
 The authority hands the registry to a new authority with `UpdateAuthority`. Both keys sign, so a typo cannot lock the registry. The old authority loses every right at once.
 
-## Salted lists
+## Private writes
 
-A registry created with a nonzero `tracking_registry`, a ring's own or a curator's, may back a salted list. Its writes are ordinary record writes under salted member keys. A zero grace update on it takes the pinned registry as a third account and stores that registry's newest revision as `tracking_floor`, and a ring refuses a frame reading the source under an older tracking root through `LiveRoots::tracking`. A stale root could otherwise prove a blocked owner unenrolled. The ring also compares `tracking_registry` to its own pin, because this program does not know which ring a source serves.
+A registry created with a nonzero `private_ring_id`, a ring's own or a curator's, may back a salted list of that ring. Its private entries are ordinary record writes under salted member keys, and each proves the owner's audit credential. The ring refuses a frame that reads a salted list through a source whose `private_ring_id` is not its own. This program does not know which ring a source serves.
 
-## Tracking registries
+The program classes each write from its masks, and no caller flag selects the class. A write that touches no private list needs no credential proof. A private write that names an asset entry passes when the mint hashes to the written member. Every other private write sets its bit in `credential_writes`. The apply proof must then show the owner's salted key, its credential's list tag, and the credential's state and address inclusion.
 
-A ring creates one tracking registry at `[b"tracking_registry", creator, ring_id]`, pinning its ring id and auditor key. Neither the seeds nor the ring id authenticate it: anyone can create one naming any ring, and only the address a ring pins in its policy counts.
+A private write names the ring program and the address root's append sequence. The program checks the ring program against `private_ring_id`, reads the root's sequence from tree 0's history and refuses a different claim, all before the proof. After the proof it raises `absence_floor` to that sequence together with the new root, and a refusal writes neither. A ring accepts an address root for a salted read only at or above the floor. An owner with a private entry therefore never proves itself unenrolled. No proof covers a private write for an owner whose address still sits in tree 0's queue. Ring RPC's writer waits for the forester and refuses once its wait ends.
 
-`Enroll` needs the owner's signature, a program signing its PDA through CPI, and any payer may fund it. A first enrollment verifies a `RegisterKey` proof in the same instruction and creates the owner's `TrackingAuthorization`. `Enroll` only reads the registry, so enrollment traffic takes no write lock on it. The program supplies the member, the ring id and the auditor key to the statement. A later `Enroll` carries no proof and moves only the viewing key and the revision. The nullifier key, list tag and ciphertext are final.
+A public update carries an empty credential read and no tree accounts, and a registry with a zero `private_ring_id` refuses every private write.
 
-`ApplyEnrollments` is permissionless. The applier names up to `APPLY_BATCH` authorization accounts in any order, and the program computes each entry from account state, so an applier chooses only which accounts and in what order. A stale proof fails and the accounts stay pending for the next applier. Nothing grants anything while pending, because every check reads the root.
+## Owner grants
 
-Tracking roots keep `TRACKING_GRACE_SLOTS` and a full history makes an apply wait, so a flood of applies never evicts a root an in-flight transfer names. A rotation stales a proof that names the rotated account, so an applier leaves out an account that changed recently.
-
-The tracking tree is taller than a policy tree because anyone can pay to fill it and no tree replaces a full one. A first enrollment past capacity stays pending and grants nothing, and no other entry waits for it, since an applier names its accounts. Rotations of enrolled owners need no free leaf.
-
-The tracking registry stays separate from the policy registry because authority revocation must not race permissionless enrollment: a stale apply proof fails on revision, so one shared tree would let enrollment traffic delay a block.
-
-`OwnerGrant` lets a program owner name a reader through CPI, since a PDA cannot sign an off-chain read. A wallet signs its Reader grant, and the record writer takes that grant only on the wallet's signature. The owner alone writes the grant account and can revoke it. Ring RPC reads the account at the grant's address, which names the registry, owner and reader.
+`OwnerGrant` lets a program owner name a reader through CPI, since a PDA cannot sign an off-chain read. A wallet signs its Reader grant, and the record writer takes that grant only on the wallet's signature. The owner alone writes the grant account and can revoke it. Ring RPC reads the account at the grant's address, which names the ring program, owner and reader.
 
 ## Limits
 
-An enrollment is public: anyone can see a wallet enrolled on a ring. Accounts created here are never closed, which is what prices a flood of first enrollments. The program verifies no policy. A consumer reads a root and authenticates the registry, the rules and the action before it acts.
+The program verifies no policy. A consumer reads a root and authenticates the registry, the rules and the action before it acts.
 
 ## Tests
 
