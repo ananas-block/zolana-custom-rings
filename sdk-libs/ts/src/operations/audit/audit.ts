@@ -58,6 +58,7 @@ import {
   MergeLedger,
   mergeInputOf,
   type AuditedMergeOutput,
+  type ConfirmedMerge,
   type MergeInput,
 } from "../../state/merge-ledger.js";
 import { zeroKeyNullifier } from "../../state/exposed-notes.js";
@@ -268,6 +269,11 @@ export class KnownUtxoIndex implements KnownUtxos {
 
   byNullifier(nullifier: Bytes32): KnownNote | undefined {
     return this.#notes.get(bytesKey(nullifier)) ?? this.#fallback?.byNullifier?.(nullifier);
+  }
+
+  /** Tag 47 alone, a later merge's record names its output directly. */
+  applyMerge(merge: ConfirmedMerge): void {
+    this.#merges.apply(merge, (commitment) => this.#mergeInput(commitment));
   }
 
   merged(commitment: Bytes32): MergeInput | undefined {

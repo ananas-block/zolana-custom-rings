@@ -212,6 +212,23 @@ export interface SetReaderGrantRequest {
   readonly signature: Signature;
 }
 
+/** Rust `MergeSettings`. */
+export interface MergeSettings {
+  readonly mint: Address;
+  readonly targetNoteCount: number;
+  readonly minAverageAmount: bigint;
+}
+
+/** Rust `SetMergeSettingsRequest`. */
+export interface SetMergeSettingsRequest {
+  readonly ring: Address;
+  readonly owner: Address;
+  readonly settings: MergeSettings;
+  readonly timestamp: bigint;
+  readonly nonce: Base64String;
+  readonly signature: Signature;
+}
+
 /** Rust `AuthorityPayment`. */
 export interface AuthorityPayment {
   readonly recipient: ShieldedAddress;
