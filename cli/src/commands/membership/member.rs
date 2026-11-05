@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use custom_ring_sdk::enrollment::Enroll;
+use custom_ring_sdk::Enroll;
 use solana_signer::Signer;
 use spr_interface::pda;
 use spr_keypair::ShieldedKeypair;
@@ -56,11 +56,15 @@ pub(crate) fn enroll_members(ctx: &Context, members: &[&ShieldedKeypair]) -> Res
 
 /// An unknown lookup refuses, it never reads as unenrolled.
 pub(crate) fn enrolled(ctx: &Context, keys: &ShieldedKeypair) -> Result<bool> {
-    let lookup = ctx.block(
-        CredentialResolver::new(ctx.ring.program_id(), keys.pubkey())
-            .with_nullifier_key(keys.nullifier_key.pubkey()?)
-            .resolve(ctx.chain().indexer(), ctx.chain().rpc()),
-    )?;
+    let resolver = CredentialResolver::new(ctx.ring.program_id(), keys.pubkey())
+        .with_nullifier_key(keys.nullifier_key.pubkey()?);
+    let lookup = ctx.block(async {
+        anyhow::Ok(
+            resolver
+                .resolve(ctx.chain().indexer(), ctx.chain().rpc())
+                .await?,
+        )
+    })?;
     Ok(match lookup {
         CredentialLookup::Present(_) => true,
         CredentialLookup::Absent(_) => false,

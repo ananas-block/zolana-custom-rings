@@ -264,13 +264,7 @@ impl EntryArgs {
                 continue;
             };
             ctx.zolana
-                .block_on(
-                    SaltedOwnerCheck {
-                        ring: ctx.ring,
-                        address,
-                    }
-                    .run(ctx.zolana.as_async()),
-                )
+                .block_on(SaltedOwnerCheck { address }.run(ctx.zolana.as_async()))
                 .with_context(|| {
                     format!(
                         "the salt of {} does not reach a list entry",
