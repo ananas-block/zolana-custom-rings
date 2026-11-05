@@ -27,7 +27,7 @@ use spr_interface::{
     N_PUBLIC_SLOTS, PROGRAM_ID_PUBKEY,
 };
 use spr_keypair::{
-    random_blinding, viewing_key::ViewTag, Curve, ShieldedAddress, X25519Keypair, X25519Pubkey,
+    random_blinding, viewing_key::ViewTag, ShieldedAddress, X25519Keypair, X25519Pubkey,
 };
 use spr_program::instruction::{DepositAsset, RingAssetDeposit};
 use spr_transaction::{owner_utxo_hash, Data, Mint, Utxo, SOL_ASSET_ID, SOL_MINT};
@@ -1098,16 +1098,13 @@ impl SealedBatch {
     }
 }
 
-/// An anonymous ring spends only through the hidden Ed25519 proof.
+/// A deposit proves no signature, a PDA owner spends on the public owner rail of either mode.
 fn disclosed_owner(mode: RingMode, address: &ShieldedAddress) -> Result<DisclosedOwner, RingError> {
-    let owner = &address.signing_pubkey;
-    match mode {
-        RingMode::Anonymous if owner.curve()? != Curve::Ed25519 => {
-            Err(RingError::AnonymousRecipient)
-        }
-        RingMode::Anonymous => Ok(DisclosedOwner::Anonymous(owner.as_ed25519()?)),
-        RingMode::Confidential => Ok(DisclosedOwner::Confidential(request::owner_key(owner)?)),
-    }
+    let key = request::owner_key(&address.signing_pubkey)?;
+    Ok(match mode {
+        RingMode::Anonymous => DisclosedOwner::Anonymous(key),
+        RingMode::Confidential => DisclosedOwner::Confidential(key),
+    })
 }
 
 impl DepositDisclosure {
