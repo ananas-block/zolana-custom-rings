@@ -20,7 +20,7 @@ use custom_ring_interface::{
     storage::StorageRegistry,
     storage_instruction::{PrivateWriteCheckpoint, RecordWriteClassification, StorageUpdateIxData},
     ApplyRecordsIxData, CredentialRead, CustomRingError, RecordWrite, RecordWriteData, RingAccount,
-    RingPolicy, ROOT_HISTORY,
+    RingPolicy,
 };
 use custom_ring_sdk::{
     CredentialTrees, CustomRing, InitializeStorage, PrivateStorageWrite, ProvenPrivateWrite,
@@ -403,7 +403,7 @@ impl RecordWriter {
                 return Ok(());
             };
             let batch = plan.updates.as_slice();
-            match self.prove_and_send(registry, slot, batch).await? {
+            match self.prove_and_send(registry, batch).await? {
                 Sent::Done => return Ok(()),
                 Sent::Held(held) => {
                     warn!("record flush of registry {registry} holds a write until its owner address applies");
@@ -416,7 +416,6 @@ impl RecordWriter {
     async fn prove_and_send(
         &self,
         registry: Address,
-        slot: u64,
         batch: &[&QueuedUpdate],
     ) -> Result<Sent, RingRpcError> {
         // 1. The proof starts at the registry's current root and covers the batch in order.
@@ -469,10 +468,6 @@ impl RecordWriter {
             private_write: proof.private_write(),
             apply: proof.apply(),
         };
-        // The program rotates a batch that tightens nothing with grace, over a full history it fails.
-        if !data.apply.restrictive() && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
-            return Ok(Sent::Done);
-        }
         let instruction = UpdateStorage {
             authority: self.authority(),
             registry,

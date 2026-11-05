@@ -7,8 +7,8 @@
 //!
 //! 1. A frame names a revision and the registry serves the root, no root value comes from the frame.
 //! 2. A registry serves its current root and each retired root before its expiry.
-//! 3. A write no rule reads retires the root under the registry's grace, an in-flight proof still settles.
-//! 4. A write a rule can read retires every earlier root at once, a revocation takes effect in the next transaction.
+//! 3. A batch the apply proof marks permissive retires the root under the registry's grace, an in-flight proof still settles.
+//! 4. A batch the apply proof marks restrictive retires every earlier root at once, a revocation takes effect in the next transaction.
 //! 5. Credential state roots come from SPP tree accounts and remain readable while the tree is paused.
 //! 6. An address root comes from the canonical address tree and meets every private source's absence floor.
 //!

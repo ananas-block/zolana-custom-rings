@@ -324,36 +324,31 @@ fn an_allow_list_addition_keeps_grace_and_a_block_list_addition_ends_every_older
 }
 
 #[test]
-fn a_restrictive_update_runs_through_a_full_history() {
+fn a_permissive_update_over_a_full_history_evicts_the_oldest_root() {
     let apply = apply_ix();
     let mut registry = public_registry(u64::MAX);
-    let revision = ROOT_HISTORY as u64 - 1;
-    for earlier in 0..revision {
+    let newest = ROOT_HISTORY as u64;
+    for revision in 0..newest {
         registry
             .update(RootUpdate {
                 slot: 1,
-                data: &update_data(earlier, ListId::Reader, &apply),
+                data: &update_data(revision, ListId::Allow, &apply),
                 absence_checkpoint: None,
             })
             .unwrap();
     }
-    assert_eq!(
-        registry.update(RootUpdate {
-            slot: 2,
-            data: &update_data(revision, ListId::Reader, &apply),
-            absence_checkpoint: None,
-        }),
-        Err(StorageError::HistoryFull)
-    );
+    assert_eq!(registry.root(0.into(), 2), Err(StorageError::RootExpired));
+    assert!(registry.root(1.into(), 2).is_ok());
+    assert!(registry.root(newest.into(), 2).is_ok());
     registry
         .update(RootUpdate {
             slot: 2,
-            data: &update_data(revision, ListId::Block, &restrictive_apply_ix()),
+            data: &update_data(newest, ListId::Block, &restrictive_apply_ix()),
             absence_checkpoint: None,
         })
         .unwrap();
     assert_eq!(
-        registry.root((revision - 1).into(), 2),
+        registry.root(newest.into(), 2),
         Err(StorageError::RootExpired)
     );
 }

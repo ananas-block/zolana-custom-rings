@@ -11,7 +11,7 @@
 //!
 //! Invariants:
 //! 1. An update whose apply proof sets the restrictive bit retires every earlier root in the same instruction, and a proof in flight under one of them fails and proves again. The bit is set when a write clears a grant bit, sets a deny bit, masks a private list, tightens a mint setting or changes an asset limit, and the statement binds it.
-//! 2. Any other update keeps the outgoing root for `grace_slots`, and refuses while the oldest kept root is unexpired, so no such update drops a root its grace promised. Every served root then reads each policy field no more permissive than the newest root, and rules are monotone in those fields, so a kept root admits no transfer the newest refuses.
+//! 2. Any other update keeps the outgoing root for `grace_slots` and over a full history evicts the oldest kept root, so routine writes never stall. Every served root then reads each policy field no more permissive than the newest root, and rules are monotone in those fields, so a kept root admits no transfer the newest refuses.
 //! 3. Every salted owner write proves credential state and address inclusion, then raises `absence_floor` to the accepted address sequence in the same instruction. A salted read accepts no address root below the source floor, preventing absence for an owner with a private entry.
 //! 4. A revision counts up by one per update and names at most one root.
 
@@ -227,7 +227,7 @@ pub fn chain_start(registry: &Address, revision: Revision) -> Result<[u8; 32], S
 /// How an update treats the roots it replaces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Retirement {
-    /// The outgoing root stays served for `grace_slots`, an unexpired oldest root refuses the update.
+    /// The outgoing root stays served for `grace_slots`, a full history evicts its oldest root.
     Graced { slot: u64, grace_slots: u64 },
     /// Every earlier root stops being served.
     Immediate,
@@ -248,10 +248,7 @@ pub(crate) fn advance_roots(
         .checked_add(1)
         .ok_or(StorageError::RevisionOverflow)?;
     match retirement {
-        // Dropping the oldest root before its expiry would fail a proof its grace promised.
-        Retirement::Graced { slot, .. } if slot < roots[ROOT_HISTORY - 1].expires_at() => {
-            return Err(StorageError::HistoryFull);
-        }
+        // A graced update tightens nothing, so the rotation dropping the oldest root only makes its proofs prove again.
         Retirement::Graced { slot, grace_slots } => {
             // A saturated expiry never lapses.
             roots[0].expires_at = slot.saturating_add(grace_slots).to_le_bytes();
