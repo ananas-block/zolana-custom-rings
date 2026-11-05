@@ -438,6 +438,7 @@ impl<'a> RingDepositBatch<'a> {
         let prepared = self.prepare(client.zolana()).await?;
         let signers = self.signers(&prepared);
         let mut submission = RingSubmission::new(prepared);
+        submission.prove(client, fee_payer, &signers).await?;
         match submission
             .send_until_settled(client, fee_payer, &signers)
             .await?

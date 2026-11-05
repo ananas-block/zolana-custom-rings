@@ -21,6 +21,7 @@ use spr_client::{
     compile_message, sign_transaction, AsyncRpc, ClientError, ComputeBudgetConfig,
     RpcSendTransactionConfig,
 };
+use zolana_ring_policy::OwnerDebit;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -281,6 +282,7 @@ struct Proved {
     instruction: Instruction,
     budget: ComputeBudgetConfig,
     bound: BoundState,
+    charged_outflows: Vec<OwnerDebit>,
 }
 
 /// One transaction the submission owes, held from before its broadcast until its signature resolves.
@@ -351,6 +353,23 @@ impl<'a> RingSubmission<'a> {
         }
     }
 
+    /// Holds the attempt unsigned, `send` signs only after its charges were read here.
+    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
+        &mut self,
+        client: &RingClient<R, I>,
+        payer: &(dyn Signer + Sync),
+        signers: &[&(dyn Signer + Sync)],
+    ) -> Result<&[OwnerDebit], RingError> {
+        if self.pending.is_none() && self.terminal.is_none() {
+            let attempt = boxed(|| self.prepare(client, payer, signers)).await?;
+            self.pending = Some(attempt);
+        }
+        Ok(self
+            .pending
+            .as_ref()
+            .map_or(&[], |attempt| &attempt.proved.charged_outflows))
+    }
+
     /// Inputs stay reserved while the sent signature is unresolved.
     pub async fn send<R: AsyncRpc, I: RingIndexerBackend>(
         &mut self,
@@ -366,8 +385,10 @@ impl<'a> RingSubmission<'a> {
             // can land until its blockhash expires, and a nullifier stops no double landing of a
             // deposit, so a new proof waits for a final status. Every RPC error below returns with
             // the attempt still held, and the next call resumes here.
+            // A reproof keeps the operation's amounts, so its charges are the ones `prove` showed.
             let attempt = match self.pending.take() {
                 Some(attempt) => attempt,
+                None if self.attempts == 0 => return Err(RingError::SubmissionUnproved),
                 None => boxed(|| self.prepare(client, payer, signers)).await?,
             };
             let attempt = self.pending.insert(attempt);
@@ -565,38 +586,55 @@ impl RingOperation<'_> {
             instruction,
             budget: send_budget(tag, priority_fee),
             bound,
+            charged_outflows: Vec::new(),
+        };
+        let charged = |proved: Proved, charged_outflows| Proved {
+            charged_outflows,
+            ..proved
         };
         Ok(match self {
             Self::Transfer(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                proved(
-                    proven.instruction()?,
-                    InstructionTag::Transfer,
-                    proven.bound(),
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::Transfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::Anonymous(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                proved(
-                    proven.instruction()?,
-                    InstructionTag::Transfer,
-                    proven.bound(),
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::Transfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::PublicOwners(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                proved(
-                    proven.instruction()?,
-                    InstructionTag::Transfer,
-                    proven.bound(),
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::Transfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::Delegate(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                proved(
-                    proven.instruction()?,
-                    InstructionTag::AuthorityTransfer,
-                    proven.bound(),
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::AuthorityTransfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::Merge(operation) => {

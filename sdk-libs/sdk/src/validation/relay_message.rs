@@ -28,7 +28,7 @@ use zolana_ring_client::{
     rpc::{AuthorityWithdrawal, RelayEnrollInputs, RelayId, TxViewingSecret, ENROLL_COMPUTE_UNITS},
     AuditEnvelope, OpenedAudit,
 };
-use zolana_ring_policy::{ApprovalTotals, Member, OutputTotals, PublicTotals};
+use zolana_ring_policy::{ApprovalTotals, Member, OutputTotals, OwnerDebit, PublicTotals};
 
 use crate::{
     pipeline::delegate_rail, AllowedNullifiers, CustomRing, CustomRingConfig, PendingSignature,
@@ -168,6 +168,7 @@ pub(crate) struct SealedTerms {
     pub owners: Vec<RelayTransferTerms>,
     pub funders: Vec<RelayFunderTerms>,
     pub approval: Option<ApprovalOpening>,
+    pub charged_outflows: Vec<OwnerDebit>,
 }
 
 /// The totals and blinder a frame's digest commits, no transaction secret and no slot.
@@ -376,6 +377,13 @@ impl ExpectedMessage {
         match self {
             Self::Sealed(sealed) => sealed.approval.as_ref(),
             _ => None,
+        }
+    }
+
+    pub fn charged_outflows(&self) -> &[OwnerDebit] {
+        match self {
+            Self::Sealed(sealed) => &sealed.charged_outflows,
+            _ => &[],
         }
     }
 }

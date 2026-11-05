@@ -9,13 +9,15 @@ use spr_program::instruction::CreateAssociatedTokenAccount;
 use spr_transaction::instructions::transact::SettlementTransfer;
 use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayCoOwner, RelayIntent, RelayProofInputs, RelayQuote,
-    RelayRail,
+    RelayRail, TokenAccountSetup,
 };
 use zolana_ring_transaction::{published_outputs, ClassifiedInput, RingDelivery};
 
+use zolana_ring_policy::OwnerDebit;
+
 use super::{
-    approval_totals_of, owner::deposit_funder, Anonymous, Delegated, Owner, Planned, Rail,
-    RingTransfer, Sealed,
+    approval_totals_of, charged_outflows_of, owner::deposit_funder, Anonymous, Delegated, Owner,
+    Planned, Rail, RingTransfer, Sealed,
 };
 use crate::{
     relay_message::{
@@ -25,13 +27,65 @@ use crate::{
     PreparedRelay, RingError,
 };
 
+/// The hidden or in-proof owner's signature waits on [`Self::sign`], the charges read first.
+#[must_use = "sign the relay"]
+pub struct UnsignedRelay<'t> {
+    signer: &'t SigningKey,
+    message_hash: [u8; 32],
+    intent: UnsignedIntent,
+    ring: SerializablePubkey,
+    quote: RelayQuote,
+    co_signers: Vec<SerializablePubkey>,
+    expected: SealedTerms,
+}
+
+enum UnsignedIntent {
+    Anonymous(ProofInputBytes, Vec<TokenAccountSetup>),
+    Confidential(ProofInputBytes, Vec<TokenAccountSetup>),
+}
+
+impl UnsignedRelay<'_> {
+    pub fn charged_outflows(&self) -> &[OwnerDebit] {
+        &self.expected.charged_outflows
+    }
+
+    pub fn sign(self) -> Result<PreparedRelay, RingError> {
+        let owner_signature = SerializableSignature(Signature::from(
+            self.signer.sign_message(&self.message_hash)?,
+        ));
+        let intent = match self.intent {
+            UnsignedIntent::Anonymous(proof_inputs, token_account_setup) => {
+                RelayIntent::Anonymous {
+                    proof_inputs,
+                    owner_signature,
+                    token_account_setup,
+                }
+            }
+            UnsignedIntent::Confidential(proof_inputs, token_account_setup) => {
+                RelayIntent::Confidential {
+                    proof_inputs,
+                    owner_signature,
+                    token_account_setup,
+                }
+            }
+        };
+        Ok(PreparedRelay::new(PrepareRelayRequest {
+            ring: self.ring,
+            quote: self.quote,
+            intent,
+            co_signers: self.co_signers,
+        })
+        .expecting(ExpectedMessage::Sealed(self.expected)))
+    }
+}
+
 impl RingTransfer<Anonymous<'_>> {
-    /// The hidden owner signs the message hash, the wallet reads no Merkle path and no record.
+    /// The wallet reads no Merkle path and no record.
     pub async fn prepare_relay<C: AsyncRpc + ?Sized>(
         &self,
         client: &C,
         quote: RelayQuote,
-    ) -> Result<PreparedRelay, RingError> {
+    ) -> Result<UnsignedRelay<'_>, RingError> {
         WalletRelay {
             transfer: self,
             owner: &self.rail.owner,
@@ -44,12 +98,12 @@ impl RingTransfer<Anonymous<'_>> {
 }
 
 impl RingTransfer<Owner<'_>> {
-    /// The in-proof owner signs the message hash, the wallet reads no Merkle path and no record.
+    /// The wallet reads no Merkle path and no record.
     pub async fn prepare_relay<C: AsyncRpc + ?Sized>(
         &self,
         client: &C,
         quote: RelayQuote,
-    ) -> Result<PreparedRelay, RingError> {
+    ) -> Result<UnsignedRelay<'_>, RingError> {
         WalletRelay {
             transfer: self,
             owner: &self.rail,
@@ -71,12 +125,12 @@ struct WalletRelay<'t, R: Rail> {
     exit_token_owner: Option<Address>,
 }
 
-impl<R: Rail> WalletRelay<'_, R> {
+impl<'t, R: Rail> WalletRelay<'t, R> {
     async fn prepare<C: AsyncRpc + ?Sized>(
         self,
         client: &C,
         quote: RelayQuote,
-    ) -> Result<PreparedRelay, RingError> {
+    ) -> Result<UnsignedRelay<'t>, RingError> {
         let payer = self.owner.transaction.payer();
         if payer != quote.fee_payer.0 {
             return Err(RingError::RelayPayerMismatch {
@@ -92,9 +146,6 @@ impl<R: Rail> WalletRelay<'_, R> {
             .owner
             .clone()
             .ok_or(RingError::MissingAnonymousSigner)?;
-        let owner_signature = SerializableSignature(Signature::from(
-            self.signer.sign_message(&inputs.message_hash()?)?,
-        ));
         let token_account_setup = self.owner.token_account_setup.clone();
         // The relay refuses a setup naming no withdrawal, only an owner's terms read it here.
         let setup = match staged.owner_signers.is_empty() {
@@ -121,24 +172,23 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .map_err(RingError::from)
         };
         let intent = match staged.rail.delivery() {
-            RingDelivery::Anonymous(plan) => RelayIntent::Anonymous {
-                proof_inputs: encode(RelayRail::Anonymous {
+            RingDelivery::Anonymous(plan) => UnsignedIntent::Anonymous(
+                encode(RelayRail::Anonymous {
                     plan: plan.clone(),
                     exit_token_owner: self.exit_token_owner,
                 })?,
-                owner_signature,
                 token_account_setup,
-            },
-            RingDelivery::Delivered => RelayIntent::Confidential {
-                proof_inputs: encode(RelayRail::Confidential)?,
-                owner_signature,
-                token_account_setup,
-            },
+            ),
+            RingDelivery::Delivered => {
+                UnsignedIntent::Confidential(encode(RelayRail::Confidential)?, token_account_setup)
+            }
         };
-        Ok(PreparedRelay::new(PrepareRelayRequest {
+        Ok(UnsignedRelay {
+            signer: self.signer,
+            message_hash: inputs.message_hash()?,
+            intent,
             ring: SerializablePubkey(self.transfer.ring.program_id()),
             quote,
-            intent,
             co_signers: self
                 .transfer
                 .co_signers
@@ -146,12 +196,13 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .copied()
                 .map(SerializablePubkey)
                 .collect(),
+            expected: SealedTerms {
+                owners: terms,
+                funders,
+                approval,
+                charged_outflows: charged_outflows_of(inputs)?,
+            },
         })
-        .expecting(ExpectedMessage::Sealed(SealedTerms {
-            owners: terms,
-            funders,
-            approval,
-        })))
     }
 }
 

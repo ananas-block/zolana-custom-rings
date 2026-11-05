@@ -919,8 +919,9 @@ async fn an_anonymous_transfer_its_owner_would_sign_in_public_is_refused_before_
         .with_payment(payment(&paid, 4))
         .unwrap();
         let refused = crate::RingSubmission::new(transfer)
-            .send(&client, fee_payer, signers)
-            .await;
+            .prove(&client, fee_payer, signers)
+            .await
+            .map(<[_]>::len);
         assert!(matches!(
             refused,
             Err(RingError::AnonymousPublicSignerLinksOwner)

@@ -332,6 +332,10 @@ pub enum RingError {
     AttemptUnreadable,
     #[error("the enrollment attempt reconciles to {0:?}, only an expired attempt goes again")]
     AttemptNotExpired(crate::enrollment::EnrollmentOutcome),
+    #[error("ring rpc failed the relay with {reason}")]
+    RelayFailed { reason: String },
+    #[error("the submission sends only an attempt its charged outflows were read from")]
+    SubmissionUnproved,
     #[error("{owner} holds no tracking authorization, enroll before a rotation")]
     RotationUnenrolled { owner: Address },
     #[error("the viewing history's current key differs from the key holder's")]
