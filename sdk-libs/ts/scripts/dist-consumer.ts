@@ -7,7 +7,6 @@ export {
   memberRecordHash,
   parseAuditorMessage,
   quadPathRoot,
-  readRegisteredRecord,
   readRingDepositCapsule,
   registerKeyStatementHash,
   ringRail,
@@ -66,7 +65,6 @@ export {
   readMemberRecords,
 } from "@heliuslabs/zolana-custom-rings";
 export type {
-  EscrowedRecord,
   RingRecordReadClient,
   RingDelegateTransferClient,
   RingDepositClient,
@@ -104,7 +102,10 @@ export type {
   RingDirectRail,
   RingMergeTransactionParams,
   RingOwnerRail,
+  RingPublicOwnerRail,
+  PublicOwnerTransferClient,
 } from "@heliuslabs/zolana-custom-rings";
+export { PublicOwnerTransfer } from "@heliuslabs/zolana-custom-rings";
 export { MEMBER_REGISTRY_CAPACITY } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   MemberRecord,
