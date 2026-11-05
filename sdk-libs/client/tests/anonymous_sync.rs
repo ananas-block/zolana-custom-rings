@@ -3,9 +3,12 @@
 #[path = "common/history_page.rs"]
 pub mod history_page;
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Mutex,
+use std::{
+    collections::HashSet,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 use async_trait::async_trait;
@@ -1014,10 +1017,6 @@ async fn a_sender_recovers_its_change_after_a_wipe() {
     assert_eq!(found(&scan), [output(&paid, 0)]);
     assert_eq!(stream(&scan, output(&paid, 0)), AnonymousStream::FullScan);
     assert_eq!(scan.sent.len(), 1);
-    assert!(scan
-        .decrypted()
-        .spent_nullifiers
-        .contains(&paid.nullifiers[0]));
     assert_eq!(after_slot(scan.history()), Some(paid.slot));
 }
 
@@ -1033,10 +1032,6 @@ async fn a_sender_with_no_change_recovers_its_payment_row_after_a_wipe() {
     assert_eq!(scan.sent.len(), 1);
     assert_eq!(scan.sent[0].amount, 100);
     assert_eq!(scan.sent[0].utxo_hash, output(&paid, 0));
-    assert!(scan
-        .decrypted()
-        .spent_nullifiers
-        .contains(&paid.nullifiers[0]));
 }
 
 /// The second transfer spends the first change, the wiped sender restores the chain from its seed.
@@ -1553,6 +1548,7 @@ enum HolderCall {
     TagMatches,
     DeliverySecrets,
     MergeSeeds,
+    MergeOutputKey,
 }
 
 /// A remote holder whose first call of one kind fails.
@@ -1593,6 +1589,12 @@ impl ShieldedKeys for FlakyHolder {
     }
 
     fn derive(&self, requests: &[DeriveRequest]) -> Result<Vec<[u8; 32]>, TransactionError> {
+        let asks_merge_key = requests
+            .iter()
+            .any(|request| matches!(request, DeriveRequest::MergeOutputKey { .. }));
+        if asks_merge_key && self.fails(HolderCall::MergeOutputKey) {
+            return Err(TransactionError::IncompleteDerivation { got: 0, want: 1 });
+        }
         self.keys.derive(requests)
     }
 
@@ -1763,6 +1765,57 @@ async fn recovery_opens_a_merge_whose_inputs_the_wallet_never_saw() {
     );
     let tag_only = bob.sync(&indexer, &fresh(&bob)).await;
     assert!(tag_only.utxos.is_empty());
+}
+
+/// A holder failure on the first page's merge ends the read before a second page.
+#[tokio::test]
+async fn an_every_site_recovery_opens_each_page_before_the_next_read() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let (bob, carol) = (Wallet::new(2), Wallet::new(3));
+    publish_merge(&indexer, &bob, vec![[0x11; 32]], 100);
+    for _ in 0..3 {
+        alice.pay(&indexer, &[pay(&carol.address(), 10)]);
+    }
+    *indexer.page_cap.lock().unwrap() = Some(1);
+    let holder = FlakyHolder::new(2, HolderCall::MergeOutputKey);
+    indexer.take_ring_pages();
+    assert!(AnonymousSync::new(&holder, &assets())
+        .full_scan(&indexer, &fresh(&bob), RING)
+        .await
+        .is_err());
+    assert_eq!(indexer.take_ring_pages(), 1);
+}
+
+/// Ring rows also spend notes of other owners, the stored wallet keeps only the spends of its own notes.
+#[tokio::test]
+async fn the_stored_wallet_keeps_only_its_own_nullifiers() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let (bob, carol) = (Wallet::new(2), Wallet::new(3));
+    alice.pay(&indexer, &[pay(&bob.address(), 30)]);
+    for _ in 0..3 {
+        alice.pay(&indexer, &[pay(&carol.address(), 10)]);
+    }
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    wallet
+        .absorb(bob.sync(&indexer, wallet.history()).await)
+        .unwrap();
+    assert!(wallet.decrypted().spent_nullifiers.is_empty());
+    let note = wallet.notes()[0].clone();
+    publish_merge(&indexer, &bob, vec![note.nullifier], 30);
+    alice.pay(&indexer, &[pay(&carol.address(), 10)]);
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .with_held_notes(wallet.notes())
+        .fetch(&indexer, wallet.history())
+        .await
+        .unwrap();
+    wallet.absorb(scan).unwrap();
+    let own = HashSet::from([note.nullifier]);
+    assert_eq!(wallet.decrypted().spent_nullifiers, own);
+    let mut restored = AnonymousWallet::new(fresh(&bob));
+    restored.absorb(bob.recover(&indexer).await).unwrap();
+    assert_eq!(restored.decrypted().spent_nullifiers, own);
 }
 
 #[test]
