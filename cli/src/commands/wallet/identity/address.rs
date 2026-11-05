@@ -19,12 +19,18 @@ pub fn run(ctx: &Context, args: AddressArgs) -> Result<()> {
         None => ctx.sender()?,
     };
     let member = ShieldedKeypair::from_keypair(&keypair)?;
-    let address = RingAddress::enrolled(&member, ctx.ring.program_id())?;
+    let held = ctx.ring_keys(&member)?;
+    let address = RingAddress::enrolled(&held, ctx.ring.program_id())?;
     // Stored before it prints, a sync reads every deposit tag a payer may hold.
     let deposit_tag = ctx
         .anonymous_wallet_store(member.viewing_pubkey())
         .update(|wallet| {
-            let minted = wallet.history().request_tag(&member)?;
+            // A request names the holder's current key, its tag must come from the same key.
+            ensure!(
+                wallet.history().current().viewing_pubkey() == address.recipient.viewing_pubkey,
+                "a rotation stopped before the wallet history took its key, run `zolana-ring key rotate`"
+            );
+            let minted = wallet.history().request_tag(&held)?;
             wallet.update_history(minted.history)?;
             Ok(minted.tag)
         })?;

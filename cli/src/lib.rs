@@ -76,6 +76,8 @@ pub mod tool;
 pub mod transact;
 #[path = "ui/terminal.rs"]
 pub mod ui;
+#[path = "commands/wallet/identity/viewing_keys.rs"]
+pub mod viewing_keys;
 #[path = "commands/wallet/mod.rs"]
 pub mod wallet;
 #[path = "ui/wizard.rs"]
