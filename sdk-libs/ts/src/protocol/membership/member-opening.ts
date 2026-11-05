@@ -1,4 +1,5 @@
 import {
+  ASSET_LIMIT_KEYS,
   EMPTY_MINT_POLICY,
   assetLimitsFields,
   isEmptyMintPolicy,
@@ -299,7 +300,28 @@ export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsSta
     chainStart: inputs.chainStart,
     chainEnd: inputs.chainEnd,
     count: BigInt(inputs.writes.length),
+    restrictive: inputs.writes.some(restricts),
   });
+}
+
+/** Rust `RecordWriteProofInput::restricts` for a write on no private list. */
+function restricts(write: RecordWriteProofInput): boolean {
+  const { mask, value, mintPolicy } = write.entry;
+  const grants = recordBit(ListId.allow) | recordBit(ListId.approval);
+  const denies = recordBit(ListId.block) | recordBit(ListId.frozen);
+  if ((write.oldLists & mask & ~value & grants) !== 0n || (value & ~write.oldLists & denies) !== 0n)
+    return true;
+  if (mintPolicy === undefined) return false;
+  const old = write.oldMintPolicy;
+  // A zero cap, cosign or withdrawal bound is no bound and orders above every amount.
+  const bound = (amount: bigint) => (amount === 0n ? U64_MAX : amount - 1n);
+  return (
+    mintPolicy.threshold < old.threshold ||
+    bound(mintPolicy.cap) < bound(old.cap) ||
+    bound(mintPolicy.cosignAbove) < bound(old.cosignAbove) ||
+    bound(mintPolicy.withdrawalThreshold) < bound(old.withdrawalThreshold) ||
+    ASSET_LIMIT_KEYS.some((key) => mintPolicy.limits[key] !== old.limits[key])
+  );
 }
 
 /** List bits outside the mask keep their value. */

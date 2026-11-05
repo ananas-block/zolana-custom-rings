@@ -312,6 +312,7 @@ describe("ring-statements.json", () => {
       chainStart: field(apply.chain_start),
       chainEnd: field(apply.chain_end),
       count: BigInt(apply.count),
+      restrictive: apply.restrictive,
       private: {
         credentialWrites: apply.credential_writes,
         privateRingId: field(apply.private_ring_id),
@@ -329,6 +330,7 @@ describe("ring-statements.json", () => {
       chainStart: field(pub.chain_start),
       chainEnd: field(pub.chain_end),
       count: BigInt(pub.count),
+      restrictive: pub.restrictive,
     };
     expect(hexes(applyRecordsStatementElements(publicStatement))).toEqual(pub.elements);
     expect(hex(applyRecordsStatementHash(publicStatement))).toBe(pub.public_input_hash);
