@@ -41,7 +41,7 @@ A blocklist is a list of identities or assets the ring refuses. A sender rule ov
 
 ### 1.3. Frozen list
 
-The frozen list is a second authority list, kept apart from the blocklist. A sender rule over it stops every transfer of a frozen identity. A merge and a delegate move read no rule.
+The frozen list is a second authority list, kept apart from the blocklist. A sender rule over it stops every transfer of a frozen identity. A merge and a delegate move read no rule. The private frozen list is its salted counterpart. It holds enrolled owners under salted keys, and a rule reads it as its own deny list.
 
 ### 1.4. Asset allowlist
 
@@ -153,7 +153,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 5. **Delegate:** trusted with every member's funds. It moves, withdraws and exits any note of the ring outside the rules, guards, caps and approvals.
 6. **Upgrade authority:** trusted to create the ring and to deploy upgrades that keep the program's guarantees. An upgrade can replace every check. Only the operator tools refuse an upgrade over a ring account the new release cannot read.
 7. **Key generator:** the ring proving keys come from a single-party setup. Whoever ran it could forge every ring proof.
-8. **Revocation timing:** an immediate revocation binds on chain the moment its storage update applies, and a transaction that passed Ring RPC or a relayer before then fails on chain. Ring RPC sends the revocations [the record writer](design/record-writer.md) names as immediate updates. Any other revocation goes graced, so a proof under the earlier root still lands within the grace period. A curator's revocation binds as fast as its authority writes it.
+8. **Revocation timing:** a restrictive update binds on chain the moment the Storage program applies it. A transaction that passed Ring RPC or a relayer before then fails on chain. The apply proof marks an update restrictive when it tightens a list, guard or bound, writes a private list or changes an asset limit. A curator's revocation binds as fast as its authority writes it.
 9. **Limits:** Ring RPC enforces co-signer limits only on what it co-signs. A co-signer outside Ring RPC enforces none.
 10. **Photon, ring indexer and chain RPC:** Photon and the ring indexer that forwards to it are trusted for complete history, the chain RPC for confirmed contents. A balance read is a provisional observation at `confirmed` commitment, and no authoritative balance or limit decision reads it, see [reading through Ring RPC](design/audit-and-recovery.md#reading-through-ring-rpc). Ring RPC verifies each record opening under the newest root. While the ring indexer lags that root, Ring RPC's tree-mode reader grant checks, its limit updates and its co-signatures on a deposit, transfer or withdrawal fail.
 11. **SPP governance:** trusted to activate the ring when SPP does not activate it at creation, and to enable its authority rail.
@@ -245,7 +245,7 @@ The **Wallet** writes its own viewing flag and its wallet grants. The **Policy a
    1. Checks that the signer may write each entry.
    2. Queues wallet and authority updates in separate batches. An update its list approval joined rides first in its approver's batch.
    3. Sends an authority batch at its next pass, and a wallet batch when it is full, aged or ahead of a queued authority update.
-   4. Leaves the grace to the **Storage program**. A batch that touches a list a rule can read, or mint settings, applies with zero grace and retires every earlier root. Any other batch goes graced, so no wallet can clear the root history.
+   4. Leaves the grace to the **Storage program**. The apply proof marks a batch [restrictive](design/records-and-roots.md#root-history) when it tightens a list, guard or bound, writes a private list or changes an asset limit. Such a batch retires every earlier root. Any other batch keeps the outgoing root for the grace period, and over a full history it evicts the oldest kept root.
    5. Proves, for each salted owner write, the owner's credential in an SPP state tree and its address in tree 0 under one address root. The Storage program reads that root's append sequence and raises the registry's absence floor to it in the same instruction. A write for an owner whose address no root holds yet waits a bounded time for the forester, then refuses.
    6. Refuses a queued authority update once its signer no longer holds the policy role.
    7. Proves each batch and submits it, paying fees.
@@ -297,7 +297,7 @@ A unified flow for anonymous and confidential transfers, exits and withdrawals. 
 
 A recipient wallet finds an anonymous note by scanning ring history, see [wallet scanning](design/audit-and-recovery.md#wallet-scanning). Without Ring RPC the **Wallet** does step 2 itself and pays from a fee payer it chooses. A demanded co-signer still signs. On the anonymous rail that payer and any co-signer must differ from the hidden owner, and the ring program accepts any such payer.
 
-A frame publishes `m` output slots up to the key's capacity, and omits the rest as a suffix. A ring output publishes no owner identity, and an exit's owner is public. Every transfer settles in one transaction. The SDKs refuse before proving a frame whose transaction passes 4,096 bytes or 64 addresses, or whose SPP CPI data passes 10 KiB. The key catalog in `program-libs/interface/src/proof/key_catalog.rs` fixes each key's input class. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
+A frame publishes `m` output slots up to the key's capacity, and omits the rest as a suffix. A ring output publishes no owner identity, and an exit's owner is public. Every ring program transaction is one inline v1 transaction, with no frame buffer and no lookup table. The SDKs refuse before proving a frame whose transaction passes 4,096 bytes or 64 addresses, or whose SPP CPI data passes 10 KiB. The key catalog in `program-libs/interface/src/proof/key_catalog.rs` fixes each key's input class. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
 
 ## 5. User merge
 
@@ -401,7 +401,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 ### Storage Program
 
 1. `Initialize`: creates a policy registry at an address only its creator can take, with the empty root. Its grace, ring id and private ring id are final. The creator becomes the authority.
-2. `Update`: applies 1 to 16 writes with a proof of the tree update. The program classifies the writes. A write that touches a list a rule can read, or mint settings, retires every earlier root. Any other write keeps the earlier root valid for the grace period. A write to a private list proves the owner's credential and address inclusion, unless the write names an asset whose mint hashes to its member. The program refuses such a write on a registry with no private ring id. It reads the address root's sequence from tree 0 and refuses a claimed sequence that differs. It raises the absence floor to that sequence with the new root. The authority signs.
+2. `Update`: applies 1 to 16 writes with a proof of the tree update. The proof binds whether the batch is restrictive, and a restrictive batch retires every earlier root. Any other batch keeps the earlier root valid for the grace period and evicts the oldest kept root from a full history. A write to a private list proves the owner's credential and address inclusion, unless the write names an asset whose mint hashes to its member. The program refuses such a write on a registry with no private ring id. It reads the address root's sequence from tree 0 and refuses a claimed sequence that differs. It raises the absence floor to that sequence with the new root. The authority signs.
 3. `UpdateAuthority`: hands the registry to a new authority. Both keys sign.
 4. `OwnerGrant`: grants or revokes one reader's access to a program owner's activity in one ring program. The owner signs, a program through CPI, and the payer funds the account.
 
@@ -411,7 +411,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 2. The Storage program verifies each tree update, and the ring program verifies each enrollment's `RegisterKey` proof on chain. Ring RPC checks the signatures of policy record updates off chain. Update proofs stay small, as the draft's notes 5 and 6 ask, and no false seal reaches a credential.
 3. Each `Enroll` publishes its credential as SPP plaintext output data, the sealed secret and salt included. The auditor and Ring RPC recover every enrolled secret from finalized history after a restart.
 4. A credential is immutable, and the viewing key lives in zolana's user record. No later write can redirect an owner's seal, and a viewing key rotation touches no ring.
-5. The program applies a write that touches a list a rule can read, or mint settings, with zero grace, and any other write graced. A block binds at once, an allowlist addition also fails proofs in flight, and no wallet write can void every member's pending proofs.
+5. The program retires every earlier root only for a batch whose apply proof marks it restrictive, and keeps the others within grace. A block binds at once. An allowlist addition or a wallet write keeps the outgoing root valid for the grace period. A kept root reads no policy field more permissively than the newest root, so it admits no transfer the newest refuses.
 6. Authority and wallet writes never share a batch, except an update its list approval joined. A queued authority write needs its signer to still hold the policy role. A rotated-out key loses its pending writes.
 7. An update pending list approval waits within a bounded window under rate limits, with no cap on pending updates. A cap would let spam lock list approval out.
 8. The config and the policy are one ring account. A transfer loads fewer accounts.
@@ -464,7 +464,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 6. Should the delegate move a blocked or frozen member's funds?
 7. A ring reads lists from one curator. Is one enough?
 8. Third-party ZK programs settle through plain SPP transfers and cannot touch ring notes. Should the ring program offer a hook for allowlisted programs?
-9. Do you need full 16-output payouts in one transaction on a confidential policy ring without a delegate? They do not fit, a compact frame publishes fewer, and fitting all of them needs less published per output.
+9. Do you need full 16-output payouts in one transaction on a confidential policy ring? They do not fit, a compact frame publishes fewer, and fitting all of them needs less published per output.
 10. An enrolled nullifier key cannot change once its credential exists. Should a wallet be able to rotate it?
 11. Roots are read live from the storage registries, so a policy transfer passes the ring account plus one or two registry accounts. Do you accept this over your question 3.1, which syncs roots into the policy account?
 12. On a ring with a delegate an exit pays only an escrowed owner, though neither the delegate nor a managed merge moves default-ring notes. Should an exit pay any owner the rules admit, as a public withdrawal does?
