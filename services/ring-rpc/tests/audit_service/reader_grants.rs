@@ -2,7 +2,7 @@
 
 use super::*;
 use custom_ring_interface::{InProofOwner, RingRail, RingTransactData};
-use zolana_ring_client::rpc::{GetWalletStatusResponse, WalletNoteStatus, GET_WALLET_STATUS};
+use zolana_ring_client::rpc::{GetWalletStatusResponse, GET_WALLET_STATUS};
 
 async fn wallet_read(
     service: &AuditService<StaticSource>,
@@ -732,12 +732,8 @@ async fn an_anonymous_spend_reads_a_resolved_input_an_unresolved_one_and_padding
         )
         .await
         .expect("status");
-    let spent = status
-        .notes
-        .iter()
-        .find(|note| note.amount == 900)
-        .expect("the resolved note");
-    assert_eq!(spent.status, WalletNoteStatus::Spent);
+    // The resolved spend took its note out of the wallet.
+    assert!(status.notes.iter().all(|note| note.amount != 900));
 
     // The unresolved input makes the wallet a co-owner, it reads its own notes alone.
     let items = activity(wallet_read(&service, &reader, OWNER).await);

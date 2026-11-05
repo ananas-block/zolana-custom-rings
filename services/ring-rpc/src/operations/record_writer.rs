@@ -48,6 +48,7 @@ use crate::{
     config::ReaderGrantStore,
     database::Store,
     error::{redacted, RingRpcError},
+    keyed_tasks::{KeyedTasks, MAX_CONCURRENT_KEYED_TASKS},
     landing::{Attempt, ChainOutcome, Landing},
     record_update::{
         limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate, ListApproval,
@@ -335,28 +336,43 @@ impl RecordWriter {
         })
     }
 
-    /// Every `interval`, the first at once.
+    /// Every `interval`, the first at once, each registry on its own task.
+    ///
+    /// A registry still flushing sits out the tick, a stalled send never holds another registry.
     pub async fn run(self: Arc<Self>, interval: Duration) {
+        let registries = KeyedTasks::new(MAX_CONCURRENT_KEYED_TASKS);
         let mut ticks = tokio::time::interval(interval);
         loop {
             ticks.tick().await;
-            if let Err(error) = self.flush().await {
-                warn!("record flush failed because {}", redacted(&error));
-            }
+            let due = match self.queue().registries().await {
+                Ok(due) => due,
+                Err(error) => {
+                    warn!("record flush failed because {}", redacted(&error));
+                    continue;
+                }
+            };
+            registries.spawn_idle(due, |registry| {
+                let writer = self.clone();
+                async move { writer.flush_logged(registry).await }
+            });
         }
     }
 
     /// One pass over every registry with work, a failing registry never holds up another.
     pub async fn flush(&self) -> Result<(), RingRpcError> {
         for registry in self.queue().registries().await? {
-            if let Err(error) = self.flush_registry(registry).await {
-                warn!(
-                    "record flush of registry {registry} failed because {}",
-                    redacted(&error)
-                );
-            }
+            self.flush_logged(registry).await;
         }
         Ok(())
+    }
+
+    async fn flush_logged(&self, registry: Address) {
+        if let Err(error) = self.flush_registry(registry).await {
+            warn!(
+                "record flush of registry {registry} failed because {}",
+                redacted(&error)
+            );
+        }
     }
 
     async fn flush_registry(&self, registry: Address) -> Result<(), RingRpcError> {

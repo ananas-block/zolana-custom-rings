@@ -13,6 +13,8 @@ mod cosign_relay;
 mod coverage_failures;
 #[path = "audit_service/deposits.rs"]
 mod deposits;
+#[path = "audit_service/frame_repairs.rs"]
+mod frame_repairs;
 #[path = "audit_service/reader_grants.rs"]
 mod reader_grants;
 #[path = "audit_service/record_updates.rs"]
@@ -80,8 +82,9 @@ use zolana_ring_indexer::rpc::{
 use zolana_ring_rpc::{
     rpc_module, ApproveClass, AuditRead, AuditService, Clock, CoSignerApproval, DepositHistory,
     DepositPage, GrantRowsSecret, Hub, MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck,
-    ReaderGrantStore, RecordsTip, RingConfiguration, RingHistoryPage, RingRpcError, RootSecret,
-    ServiceIdentity, Store, TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
+    ReaderGrantStore, RecordsTip, RingConfiguration, RingFrame, RingHistoryPage, RingRpcError,
+    RootSecret, ServiceIdentity, Store, TransactionPage, TransactionSource, Unauthorized,
+    AUTH_SKEW,
 };
 use zolana_ring_transaction::RingAssets;
 
@@ -418,11 +421,13 @@ struct StaticSource {
     pages: HashMap<Option<Vec<u8>>, Paged>,
     record_reads: Arc<AtomicUsize>,
     history_reads: Arc<AtomicUsize>,
-    /// Rows whose confirmed call does not decode.
-    undecodable: HashSet<Signature>,
+    /// Rows whose confirmed call does not decode, shared so a test can repair one.
+    undecodable: Arc<Mutex<HashSet<Signature>>>,
     /// Rows whose confirmed call stack names a parent no instruction holds.
     stack_faults: HashSet<Signature>,
     history_cursors: Arc<Mutex<Vec<Option<Vec<u8>>>>>,
+    /// The signature of every frame read again.
+    frame_reads: Arc<Mutex<Vec<Signature>>>,
     /// The page each served token continues to.
     issued: Arc<Mutex<HashMap<PaginationToken, Vec<u8>>>>,
     /// The page a pass past the last terminal page reads.
@@ -630,6 +635,24 @@ impl TransactionSource for StaticSource {
         async move { Ok(response) }
     }
 
+    /// The listed rows of the signature, at the slot the frame names.
+    fn ring_frame(
+        &self,
+        frame: RingFrame,
+    ) -> impl Future<Output = Result<Vec<ShieldedTransaction>, ClientError>> + Send {
+        self.frame_reads.lock().unwrap().push(frame.signature);
+        let events = self
+            .transactions
+            .iter()
+            .filter(|tx| tx.tx_signature == frame.signature)
+            .map(|tx| ShieldedTransaction {
+                slot: frame.slot,
+                ..tx.clone()
+            })
+            .collect();
+        async move { Ok(events) }
+    }
+
     fn ring_history(
         &self,
         request: RingHistoryPage,
@@ -656,7 +679,7 @@ impl TransactionSource for StaticSource {
         event_index: u16,
         _ring: Address,
     ) -> impl Future<Output = Result<RingOrigin, AuditError>> + Send {
-        let undecodable = self.undecodable.contains(&signature);
+        let undecodable = self.undecodable.lock().unwrap().contains(&signature);
         let stack_fault = self.stack_faults.contains(&signature);
         let origin = self
             .origins
@@ -1113,9 +1136,10 @@ impl Fixture {
             pages: HashMap::new(),
             record_reads: Arc::new(AtomicUsize::new(0)),
             history_reads: Arc::new(AtomicUsize::new(0)),
-            undecodable: HashSet::new(),
+            undecodable: Arc::default(),
             stack_faults: HashSet::new(),
             history_cursors: Arc::default(),
+            frame_reads: Arc::default(),
             issued: Arc::default(),
             resume: Arc::default(),
             forged_token: None,

@@ -1,7 +1,9 @@
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 
-use crate::{error::RingRpcError, migration::Migrator};
+use sha2::{Digest, Sha256};
+
+use crate::{error::RingRpcError, migration::Migrator, projection_lease::LeaseHolder};
 
 /// One flush at a time, the rest serve submits and status reads.
 pub const STORE_CONNECTIONS: u32 = 4;
@@ -10,6 +12,7 @@ pub const STORE_CONNECTIONS: u32 = 4;
 #[derive(Clone)]
 pub struct Store {
     db: DatabaseConnection,
+    holder: LeaseHolder,
 }
 
 impl Store {
@@ -27,11 +30,28 @@ impl Store {
             db.execute_unprepared("PRAGMA journal_mode=WAL").await?;
         }
         Migrator::up(&db, None).await?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            holder: LeaseHolder {
+                replica: rand::random(),
+                instance: rand::random(),
+            },
+        })
+    }
+
+    /// A stable name lets a restart take its own lease at once, an unnamed store waits out its expiry.
+    #[must_use]
+    pub fn with_replica(mut self, name: &str) -> Self {
+        self.holder.replica = Sha256::digest(name.as_bytes()).into();
+        self
     }
 
     pub fn connection(&self) -> &DatabaseConnection {
         &self.db
+    }
+
+    pub(crate) const fn lease_holder(&self) -> LeaseHolder {
+        self.holder
     }
 }
 

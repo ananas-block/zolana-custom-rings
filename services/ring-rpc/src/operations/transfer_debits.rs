@@ -1,5 +1,7 @@
 //! Each owner's outflow of the transfer a co-signer signs, read from the frame and the note index.
 
+use std::collections::HashMap;
+
 use custom_ring_interface::{
     ring_deposit_assets, settlement_mints, tag, DepositPrefix, InstructionTag, ParsedTransact,
     PublicLeg, PublicSlotError, PublicSlots, RingRail, RingTransactData,
@@ -33,7 +35,7 @@ use crate::{
     error::RingRpcError,
     hub::Shared,
     upstream::TransactionSource,
-    utxos::AuditStore,
+    utxos::{AuditStore, StoredUtxo},
 };
 
 /// The output tree's position in SPP's transact account list.
@@ -133,9 +135,10 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
             .iter()
             .map(|owner| identity(owner.as_array()))
             .collect::<Result<Vec<_>, _>>()?;
+        let notes = real_input_notes(&store, &audited).await?;
         FrameFlows {
             audited: &audited,
-            store: &store,
+            notes: &notes,
             owner_signers,
             public,
             assets: &assets,
@@ -414,9 +417,26 @@ impl OwnerFlows<'_> {
     }
 }
 
+/// The note of each real input by its nullifier, a missing one refuses the read.
+type InputNotes = HashMap<[u8; 32], ([u8; 32], StoredUtxo)>;
+
+/// Read before the flow math, a note the cache evicted answers from storage.
+async fn real_input_notes(
+    store: &AuditStore,
+    audited: &AuditedTransaction,
+) -> Result<InputNotes, RingRpcError> {
+    let real: Vec<[u8; 32]> = audited
+        .inputs
+        .iter()
+        .filter(|input| matches!(input.opening, InputOpening::Real))
+        .map(|input| input.nullifier)
+        .collect();
+    store.notes_of_nullifiers(&real).await
+}
+
 struct FrameFlows<'a> {
     audited: &'a AuditedTransaction,
-    store: &'a AuditStore,
+    notes: &'a InputNotes,
     /// The public run a public-funded transfer screens, it spends no note.
     owner_signers: Vec<[u8; 32]>,
     public: Vec<PublicFlow>,
@@ -456,10 +476,7 @@ impl FrameFlows<'_> {
                     amount: external.utxo.amount,
                 }),
                 InputOpening::Real => {
-                    let (_, note) = self
-                        .store
-                        .note_of_nullifier(&input.nullifier)
-                        .ok_or_else(unavailable)?;
+                    let (_, note) = self.notes.get(&input.nullifier).ok_or_else(unavailable)?;
                     inputs.push(DebitInput {
                         owner: identity(&note.utxo.owner_key)?,
                         asset: note.utxo.asset,

@@ -30,7 +30,7 @@ use spr_interface::{
     BPF_LOADER_UPGRADEABLE_ID, PROGRAM_ID_PUBKEY,
 };
 use spr_keypair::X25519Pubkey;
-use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
+use spr_transaction::{AssetRegistry, Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
     history::HistoryPosition, program_data, ring_deposits_in, AsyncRingIndexer, AuditError,
     ConfirmedEventKind, MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError,
@@ -66,6 +66,12 @@ pub trait TransactionSource: Send + Sync {
         &self,
         request: TransactionPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send;
+
+    /// The events of one finalized ring signature, each bound to its confirmed origin.
+    fn ring_frame(
+        &self,
+        frame: RingFrame,
+    ) -> impl Future<Output = Result<Vec<ShieldedTransaction>, ClientError>> + Send;
 
     /// Rows strictly after the requested position, in history order.
     fn ring_history(
@@ -209,6 +215,14 @@ pub struct TransactionPage {
     pub tag: [u8; 32],
     pub position: HistoryPosition,
     pub limit: NonZeroU32,
+}
+
+/// A frame the history already returned, read again by its signature.
+#[derive(Clone, Copy, Debug)]
+pub struct RingFrame {
+    pub ring: Address,
+    pub signature: Signature,
+    pub slot: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -435,6 +449,15 @@ impl TransactionSource for ChainSource {
                 },
             )
             .await
+    }
+
+    async fn ring_frame(&self, frame: RingFrame) -> Result<Vec<ShieldedTransaction>, ClientError> {
+        FinalizedUpstreams {
+            rpc: &self.rpc,
+            indexer: &self.indexer,
+        }
+        .frame(frame)
+        .await
     }
 
     async fn ring_history(

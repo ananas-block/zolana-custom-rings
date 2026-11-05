@@ -33,6 +33,7 @@ use crate::{
     error::{redacted, RingRpcError},
     grant_rows::{GrantRowKey, GrantRows},
     grants::{GrantQuery, GrantSource, Grants, ReadScope, TreeGrants},
+    keyed_tasks::{KeyedTasks, MAX_CONCURRENT_KEYED_TASKS},
     keys::{AuditorKeyDerivation, KeySource},
     limits::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
@@ -49,9 +50,10 @@ use crate::{
     relay_reservations::RelayBudget,
     relay_services::{MergeParts, RelayServices},
     replay::{LocalNonces, ReplayGuard},
+    spent_index::NoteSeal,
     storage_chain::StorageChain,
     upstream::{DepositHistory, DepositPage, TransactionSource},
-    utxos::{AuditStore, UTXO_BACKFILL_INTERVAL},
+    utxos::{AuditStore, Backing, MAX_CACHED_ENTRIES, UTXO_BACKFILL_INTERVAL},
 };
 
 const READINESS_CACHE_INTERVAL: Duration = Duration::from_secs(1);
@@ -181,7 +183,35 @@ struct ReadinessCache {
 impl<S> Shared<S> {
     pub(crate) fn store(&self, ring: Address) -> Arc<AuditStore> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
-        stores.entry(ring).or_default().clone()
+        stores
+            .entry(ring)
+            .or_insert_with(|| Arc::new(AuditStore::new(self.backing(ring))))
+            .clone()
+    }
+
+    /// Beside a database the mirror is a bounded cache, storage answers what it evicted.
+    fn backing(&self, ring: Address) -> Backing {
+        let Some(store) = &self.database else {
+            return Backing::Memory;
+        };
+        let seal = self
+            .auditor(Some(ring))
+            .and_then(|(ring, auditor)| Ok(NoteSeal::derive(&auditor, ring)?));
+        match seal {
+            Ok(seal) => Backing::Database {
+                store: store.clone(),
+                ring,
+                seal: Box::new(seal),
+                capacity: MAX_CACHED_ENTRIES,
+            },
+            Err(error) => {
+                log::error!(
+                    "the projection of ring {ring} is unusable because {}",
+                    redacted(&error)
+                );
+                Backing::Unavailable
+            }
+        }
     }
 
     fn store_rings(&self) -> Vec<Address> {
@@ -193,13 +223,24 @@ impl<S> Shared<S> {
         self: &Arc<Self>,
         ring: Option<Address>,
     ) -> Result<AuditService<S>, RingRpcError> {
-        let (ring, auditor) = match &self.keys {
+        let (ring, auditor) = self.auditor(ring)?;
+        Ok(AuditServiceInit {
+            ring,
+            auditor,
+            shared: self.clone(),
+        }
+        .build())
+    }
+
+    /// `None` names the one ring a local key serves.
+    fn auditor(&self, ring: Option<Address>) -> Result<(Address, X25519Keypair), RingRpcError> {
+        match &self.keys {
             KeySource::Local {
                 ring: served,
                 auditor,
             } => {
                 self.validate_ring(ring.unwrap_or(*served))?;
-                (*served, auditor.clone())
+                Ok((*served, auditor.clone()))
             }
             KeySource::Derived(root) => {
                 let ring = ring.ok_or(RingRpcError::RingRequired)?;
@@ -209,15 +250,9 @@ impl<S> Shared<S> {
                     ring,
                 }
                 .derive()?;
-                (ring, auditor)
+                Ok((ring, auditor))
             }
-        };
-        Ok(AuditServiceInit {
-            ring,
-            auditor,
-            shared: self.clone(),
         }
-        .build())
     }
 
     pub(crate) fn validate_ring(&self, ring: Address) -> Result<(), RingRpcError> {
@@ -456,22 +491,33 @@ impl<S: TransactionSource> Hub<S> {
     }
 
     /// Every `interval`, the first at once, backfills the local ring and every ring a read opened.
-    pub async fn run_utxo_backfill(self: Arc<Self>, interval: Duration) {
+    ///
+    /// Each ring runs on its own task, a ring still backfilling sits out the tick.
+    pub async fn run_utxo_backfill(self: Arc<Self>, interval: Duration)
+    where
+        S: 'static,
+    {
+        let rings = KeyedTasks::new(MAX_CONCURRENT_KEYED_TASKS);
         let mut ticks = tokio::time::interval(interval);
         loop {
             ticks.tick().await;
-            for ring in self.backfill_rings() {
-                let backfill = match self.service(Some(ring)) {
-                    Ok(service) => service.backfill_utxos().await,
-                    Err(error) => Err(error),
-                };
-                if let Err(error) = backfill {
-                    log::warn!(
-                        "UTXO backfill of ring {ring} failed because {}",
-                        redacted(&error)
-                    );
-                }
-            }
+            rings.spawn_idle(self.backfill_rings(), |ring| {
+                let hub = self.clone();
+                async move { hub.backfill_ring(ring).await }
+            });
+        }
+    }
+
+    async fn backfill_ring(&self, ring: Address) {
+        let backfill = match self.service(Some(ring)) {
+            Ok(service) => service.backfill_utxos().await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = backfill {
+            log::warn!(
+                "UTXO backfill of ring {ring} failed because {}",
+                redacted(&error)
+            );
         }
     }
 

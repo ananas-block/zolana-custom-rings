@@ -91,11 +91,15 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         client_limits: args.client_limits.client_limits(),
     };
     let store = match &args.store_url {
-        Some(url) => Some(
-            Store::open(url, STORE_CONNECTIONS)
+        Some(url) => {
+            let store = Store::open(url, STORE_CONNECTIONS)
                 .await
-                .context("opening the service store")?,
-        ),
+                .context("opening the service store")?;
+            Some(match &args.replica_id {
+                Some(name) => store.with_replica(name),
+                None => store,
+            })
+        }
         None => None,
     };
     let relay_services = fee_payer

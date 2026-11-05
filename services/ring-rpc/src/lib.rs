@@ -4,6 +4,8 @@ mod audit;
 mod authority_transfer;
 #[path = "security/authorize.rs"]
 mod authorize;
+#[path = "operations/bounded_map.rs"]
+mod bounded_map;
 #[path = "security/client_identity.rs"]
 mod client_identity;
 #[path = "config/client_rate.rs"]
@@ -25,12 +27,16 @@ mod error;
 mod escrow_merge;
 #[path = "rpc/finalized_history.rs"]
 mod finalized_history;
+#[path = "storage/frame_repairs.rs"]
+mod frame_repairs;
 #[path = "storage/grant_rows.rs"]
 mod grant_rows;
 #[path = "security/grants.rs"]
 mod grants;
 #[path = "operations/hub.rs"]
 mod hub;
+#[path = "operations/keyed_tasks.rs"]
+mod keyed_tasks;
 #[path = "security/keys.rs"]
 mod keys;
 #[path = "rpc/landing.rs"]
@@ -49,8 +55,14 @@ mod metering;
 mod migration;
 #[path = "security/origins.rs"]
 mod origins;
+#[path = "storage/owner_notes.rs"]
+mod owner_notes;
 #[path = "operations/policy_authority.rs"]
 mod policy_authority;
+#[path = "storage/projection_lease.rs"]
+mod projection_lease;
+#[path = "storage/projection_reads.rs"]
+mod projection_reads;
 #[path = "operations/record_update.rs"]
 mod record_update;
 #[path = "operations/record_writer.rs"]
@@ -143,6 +155,6 @@ pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, 
 pub use storage_chain::{live_ring_client, LiveStorageChain, StorageChain};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
-    RingHistoryPage, TransactionPage, TransactionSource, Upstreams,
+    RingFrame, RingHistoryPage, TransactionPage, TransactionSource, Upstreams,
 };
 pub use utxos::UTXO_BACKFILL_INTERVAL;

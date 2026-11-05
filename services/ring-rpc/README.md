@@ -189,7 +189,7 @@ A frame names each real input by its published nullifier alone, and an entry fra
 
 A real input the note index cannot name stays `unresolvedReal` in `getSpendCoverage`, the outputs stay open, and the spend stays unresolved until the note or its secret opens. `getWalletActivity` reads such an input as another party's.
 
-`getAuditedUtxos` serves the same notes from memory. A held output reads `null` until it opens, and the response context can already be past its slot. Its read authorization binds the cluster, the service key, the ring, the timestamp, the nonce and the SHA-256 digest of the hashes in request order.
+`getAuditedUtxos` serves the same notes from the service's projection. With a store, memory keeps a bounded cache of it and the store answers every other note. A held output reads `null` until it opens, and the response context can already be past its slot. Its read authorization binds the cluster, the service key, the ring, the timestamp, the nonce and the SHA-256 digest of the hashes in request order.
 
 A transaction that carries the auditor view tag but did not run under this ring is not reported. It reaches neither the audited items nor the skipped rows, and the page cursor still advances past it, so an empty page is not the end of the history.
 
@@ -203,7 +203,9 @@ Disclosure errors leave unresolved history. Only a finalized event marks a note 
 
 ## Balance status
 
-`getWalletStatus` lists one wallet's notes as of `historyThrough`, the finalized slot the service verified. Only an unreadable frame holds `historyThrough` back, and an unresolved spend never does. A note created past `historyThrough` stays out, so a spent input and its change never both count. `balances` sums the `unspent` notes over every page. A note with no readable secret reads `unknown` and never counts, and a zero key note of an Ed25519 owner reads `exposedIfSpent` outside the balance. Activity after `historyThrough` can spend a listed note. `enrollment` reads `enrolled` once the service holds the owner's finalized credential, `notEnrolled` once a complete credential scan holds none, and `{"unknown":"partialPage"}` while the scan has not reached its terminal page.
+`getWalletStatus` lists one wallet's unspent notes as of `historyThrough`, the finalized slot the service verified. Only an unreadable frame holds `historyThrough` back, and an unresolved spend never does. A note created past `historyThrough` stays out, so a spent input and its change never both count. A spent note leaves the list once its spend slot is at or before `historyThrough`. Until then it reads `unspent`. `balances` sums the `unspent` notes over every page.
+
+With a store, the service reads each wallet from an index of the owner's notes. Owner and note are keyed tags, and each row is sealed under the auditor key. The page commit that records a spend marks the note's row with the spend slot. The next commit deletes the row once its history slot covers that spend, so a read never meets a settled spend. A read of a slot older than the spend still finds the note. `cursor` is opaque and pages in index order. A client passes it back until it is absent. A note with no readable secret reads `unknown` and never counts, and a zero key note of an Ed25519 owner reads `exposedIfSpent` outside the balance. Activity after `historyThrough` can spend a listed note. `enrollment` reads `enrolled` once the service holds the owner's finalized credential, `notEnrolled` once a complete credential scan holds none, and `{"unknown":"partialPage"}` while the scan has not reached its terminal page.
 
 `getSpendCoverage` is the one read that lists unresolved spends by nullifier. Only the ring authority signs it, and a reader grant never reaches it. It lists the unresolved rows, the unreadable frames and each repeated nullifier as an `integrityFaults` row.
 

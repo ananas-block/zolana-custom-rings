@@ -6,8 +6,15 @@ use std::{
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spr_indexer_api::{Context, PaginationToken, TransactionEvents};
+use spr_keypair::{NullifierKey, X25519Pubkey};
 
 use super::{fixture::Enrollment, *};
+use crate::{
+    database::Store,
+    hub::Clock,
+    projection_lease::LeaseClaim,
+    spent_index::{HistoryScope, LoadSpends, NoteSeal},
+};
 
 const RING: Address = Address::new_from_array([8; 32]);
 const PAYER: Address = Address::new_from_array([2; 32]);
@@ -29,6 +36,8 @@ struct Chain {
     rows: Vec<Row>,
     accounts: HashMap<Signature, Vec<Address>>,
     tampers: Mutex<VecDeque<Tamper>>,
+    /// The position of every page read.
+    requests: Mutex<Vec<HistoryPosition>>,
 }
 
 struct Owner {
@@ -41,6 +50,10 @@ impl CredentialSource for Chain {
         &self,
         request: TransactionPage,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+        self.requests
+            .lock()
+            .expect("requests")
+            .push(request.position);
         let filters = request.position.filters();
         let token = request.position.token();
         let after: Vec<&Row> = self
@@ -165,6 +178,7 @@ async fn scan(
         auditor,
         source: chain,
         store,
+        durable: None,
     }
     .run(position)
     .await
@@ -390,4 +404,78 @@ async fn a_forged_output_a_foreign_auditor_and_an_unnamed_owner_are_refused() {
         assert_eq!(store.credential(&owner.member()), None, "{name}");
         assert_eq!(position, HistoryPosition::default(), "{name}");
     }
+}
+
+#[tokio::test]
+async fn a_restart_resumes_the_scan_after_its_last_committed_page() {
+    let auditor = X25519Keypair::new();
+    let owners = [Owner::new(18), Owner::new(19)];
+    let chain = Chain::with_rows(
+        250,
+        &[(&owners[0], 5), (&owners[1], 230)],
+        &auditor.pubkey(),
+    );
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let seal = NoteSeal::derive(&auditor, RING).expect("seal");
+    let lease = LeaseClaim {
+        db: database.connection(),
+        ring: RING,
+        holder: database.lease_holder(),
+        now: 1_000,
+    }
+    .claim()
+    .await
+    .expect("claim")
+    .expect("held");
+    let writer = ProjectionWriter {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        lease,
+        clock: Clock::Fixed(1_000),
+    };
+    // 1. The first page commits, a truncated second page stops the scan.
+    chain.tamper(|_| {});
+    chain.tamper(|page| {
+        page.data.pop();
+    });
+    let mut position = HistoryPosition::default();
+    let stopped = CredentialScan {
+        ring: RING,
+        auditor: &auditor,
+        source: &chain,
+        store: &AuditStore::default(),
+        durable: Some(&writer),
+    }
+    .run(&mut position)
+    .await;
+    assert_eq!(refusal(stopped), CredentialRefusal::PageShape);
+
+    // 2. A restart holds the first page's credential and reads on from the page after it.
+    let loaded = LoadSpends {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        scope: HistoryScope::Everything,
+    }
+    .load()
+    .await
+    .expect("load");
+    assert_eq!(loaded.credential_position, position);
+    let restarted = AuditStore::default();
+    restarted
+        .admit_credentials(loaded.credentials)
+        .expect("admit");
+    assert!(restarted.credential(&owners[0].member()).is_some());
+    chain.requests.lock().expect("requests").clear();
+    let mut resumed = loaded.credential_position;
+    let end = scan(&chain, &auditor, &restarted, &mut resumed)
+        .await
+        .expect("resume");
+
+    assert_eq!(end, ScanEnd::Complete);
+    let requests = chain.requests.lock().expect("requests").clone();
+    assert_eq!(requests.len(), 2, "the pages after the commit and no other");
+    assert_eq!(requests[0], position);
+    assert!(restarted.credential(&owners[1].member()).is_some());
 }

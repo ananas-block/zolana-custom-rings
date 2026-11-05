@@ -8,12 +8,15 @@ use zolana_ring_client::{rpc::WalletNoteStatus, CreatedUtxo, KnownUtxo, UtxoOwne
 use super::*;
 use crate::{
     database::Store,
+    hub::Clock,
+    projection_lease::LeaseClaim,
     spend_machine::{InputRead, Observation},
-    spent_index::{LoadSpends, NoteSeal, PageCommit},
+    spent_index::{HistoryScope, LoadSpends, NoteSeal, ProjectionWriter},
 };
 
 const RING: Address = Address::new_from_array([8; 32]);
 const ASSET: [u8; 32] = [4; 32];
+const NOW: u64 = 1_000;
 
 /// A real Ed25519 point, `Address::is_on_curve` holds.
 fn wallet(seed: u8) -> Address {
@@ -93,7 +96,7 @@ fn apply(store: &AuditStore, keys: &Keys, page: impl FnOnce(&mut PageWork<'_>)) 
     let opener = |owner: &[u8; 32]| keys.open(owner);
     let mut work = PageWork::new(store, &opener);
     page(&mut work);
-    store.commit(work.finish());
+    store.commit(block_on(work.finish()).expect("page"));
 }
 
 fn real(nullifier: [u8; 32], at: CreatedIn, position: u16) -> Observation {
@@ -118,13 +121,17 @@ fn through(store: &AuditStore, keys: &Keys, slot: u64) {
     });
 }
 
-fn status_of(store: &AuditStore, owner: Address) -> GetWalletStatusResponse {
-    store.wallet_status(WalletStatusQuery {
+fn query(owner: Address) -> WalletStatusQuery {
+    WalletStatusQuery {
         enrollment: WalletEnrollment::NotEnrolled,
         wallet: owner,
         after: None,
         limit: 100,
-    })
+    }
+}
+
+fn status_of(store: &AuditStore, owner: Address) -> GetWalletStatusResponse {
+    block_on(store.wallet_status(query(owner))).expect("status")
 }
 
 fn balance(response: &GetWalletStatusResponse) -> u64 {
@@ -136,7 +143,7 @@ fn statuses(response: &GetWalletStatusResponse) -> Vec<WalletNoteStatus> {
 }
 
 #[test]
-fn a_note_reads_unspent_then_spent_from_its_own_nullifier() {
+fn a_note_reads_unspent_then_leaves_the_wallet_once_spent() {
     let store = AuditStore::default();
     let owner = wallet(1);
     let keys = Keys::with(owner, 7);
@@ -151,7 +158,7 @@ fn a_note_reads_unspent_then_spent_from_its_own_nullifier() {
     });
     through(&store, &keys, 12);
     let read = status_of(&store, owner);
-    assert_eq!(statuses(&read), [WalletNoteStatus::Spent]);
+    assert!(read.notes.is_empty());
     assert_eq!(balance(&read), 0);
 }
 
@@ -198,10 +205,7 @@ fn a_late_key_recomputes_the_owners_notes_and_resolves_their_rows() {
     );
     assert!(store.late_owners.read().expect("late").is_empty());
     through(&store, &keys, 10);
-    assert_eq!(
-        statuses(&status_of(&store, owner)),
-        [WalletNoteStatus::Spent]
-    );
+    assert!(status_of(&store, owner).notes.is_empty());
 }
 
 #[test]
@@ -214,7 +218,7 @@ fn a_spend_of_an_unknown_note_stays_unresolved_then_resolves_when_it_opens() {
     apply(&store, &keys, |work| {
         work.observe(real(nullifier, frame(6), 0));
     });
-    let coverage = store.spend_coverage();
+    let coverage = block_on(store.spend_coverage()).expect("coverage");
     assert_eq!(coverage.unresolved_real.len(), 1);
     assert_eq!(coverage.padding, 0);
     apply(&store, &keys, |work| work.open(frame(5), [created]));
@@ -224,7 +228,7 @@ fn a_spend_of_an_unknown_note_stays_unresolved_then_resolves_when_it_opens() {
             note: created.commitment
         })
     );
-    let coverage = store.spend_coverage();
+    let coverage = block_on(store.spend_coverage()).expect("coverage");
     assert!(coverage.unresolved_real.is_empty());
     assert_eq!(coverage.resolved, 1);
 }
@@ -304,13 +308,23 @@ fn only_an_unreadable_frame_holds_the_history_slot() {
     apply(&store, &keys, |work| {
         work.observe(real([1; 32], frame(50), 0));
     });
-    assert_eq!(store.spend_coverage().history_through, 100);
+    assert_eq!(
+        block_on(store.spend_coverage())
+            .expect("coverage")
+            .history_through,
+        100
+    );
     apply(&store, &keys, |work| work.mark_unread(frame(60)));
-    let coverage = store.spend_coverage();
+    let coverage = block_on(store.spend_coverage()).expect("coverage");
     assert_eq!(coverage.history_through, 59);
     assert_eq!(coverage.unreadable.len(), 1);
     apply(&store, &keys, |work| work.mark_read(frame(60)));
-    assert_eq!(store.spend_coverage().history_through, 100);
+    assert_eq!(
+        block_on(store.spend_coverage())
+            .expect("coverage")
+            .history_through,
+        100
+    );
 }
 
 #[test]
@@ -346,7 +360,7 @@ fn padding_and_external_add_no_unresolved_state() {
             ..real([2; 32], frame(5), 0)
         });
     });
-    let coverage = store.spend_coverage();
+    let coverage = block_on(store.spend_coverage()).expect("coverage");
     assert!(coverage.unresolved_real.is_empty());
     assert_eq!((coverage.padding, coverage.external), (1, 1));
 }
@@ -367,7 +381,9 @@ fn a_duplicate_nullifier_is_surfaced_and_the_first_state_stays() {
         work.observe(real(nullifier, frame(4), 0));
     });
     assert_eq!(store.row_state(&nullifier), before);
-    let faults = store.spend_coverage().integrity_faults;
+    let faults = block_on(store.spend_coverage())
+        .expect("coverage")
+        .integrity_faults;
     assert_eq!(faults.len(), 1);
     assert_eq!(faults[0].frame.slot, 4);
 }
@@ -398,10 +414,7 @@ fn a_zero_key_note_of_a_wallet_is_exposed_and_a_pda_note_is_not() {
         work.observe(real(nullifier_of(&exposed, &zero), frame(4), 0));
     });
     through(&store, &keys, 5);
-    assert_eq!(
-        statuses(&status_of(&store, owner)),
-        [WalletNoteStatus::Spent]
-    );
+    assert!(status_of(&store, owner).notes.is_empty());
 }
 
 #[test]
@@ -422,14 +435,13 @@ fn merge_selection_skips_a_published_nullifier_and_ignores_an_unrelated_row() {
         work.observe(real([0xee; 32], frame(3), 1));
     });
     let key = secret(7);
-    let selected = store
-        .spendable(SpendableNotes {
-            ring: RING,
-            owner_key: owner.to_bytes(),
-            mint: Mint::new(mint, 6),
-            nullifier_key: &key,
-        })
-        .expect("selection");
+    let selected = block_on(store.spendable(SpendableNotes {
+        ring: RING,
+        owner_key: owner.to_bytes(),
+        mint: Mint::new(mint, 6),
+        nullifier_key: &key,
+    }))
+    .expect("selection");
     let hashes: Vec<[u8; 32]> = selected.iter().map(|note| note.utxo_hash).collect();
     assert_eq!(hashes, [kept.commitment]);
 }
@@ -481,31 +493,41 @@ async fn commit_page(
     let opener = |owner: &[u8; 32]| keys.open(owner);
     let mut work = PageWork::new(book, &opener);
     page(&mut work);
-    let delta = work.finish();
-    PageCommit {
+    let delta = work.finish().await.expect("page");
+    let lease = LeaseClaim {
+        db: store.connection(),
+        ring: RING,
+        holder: store.lease_holder(),
+        now: NOW,
+    }
+    .claim()
+    .await?
+    .expect("one replica holds the lease");
+    let revision = ProjectionWriter {
         db: store.connection(),
         ring: RING,
         seal,
-        delta: &delta,
+        lease,
+        clock: Clock::Fixed(NOW),
     }
-    .commit()
+    .commit_page(&delta)
     .await?;
-    book.commit(delta);
+    book.commit(delta.at_revision(revision));
     Ok(())
 }
 
 async fn restart(store: &Store, seal: &NoteSeal) -> AuditStore {
     let book = AuditStore::default();
-    book.seed(
-        LoadSpends {
-            db: store.connection(),
-            ring: RING,
-            seal,
-        }
-        .load()
-        .await
-        .expect("load"),
-    );
+    let loaded = LoadSpends {
+        db: store.connection(),
+        ring: RING,
+        seal,
+        scope: HistoryScope::Everything,
+    }
+    .load()
+    .await
+    .expect("load");
+    book.refresh(loaded.spends, loaded.revision);
     book
 }
 
@@ -634,6 +656,7 @@ async fn a_note_row_opens_only_under_the_auditor_key_and_holds_no_plaintext() {
         db: store.connection(),
         ring: RING,
         seal: &other,
+        scope: HistoryScope::Everything,
     }
     .load()
     .await
@@ -652,4 +675,310 @@ async fn a_note_row_opens_only_under_the_auditor_key_and_holds_no_plaintext() {
     for secret_field in [owner.to_bytes(), identity, created[0].utxo.blinding] {
         assert!(!sealed.windows(32).any(|window| window == secret_field));
     }
+}
+
+fn indexed_store(store: &Store) -> AuditStore {
+    AuditStore::new(Backing::Database {
+        store: store.clone(),
+        ring: RING,
+        seal: Box::new(seal()),
+        capacity: MAX_CACHED_ENTRIES,
+    })
+}
+
+fn terminal(work: &mut PageWork<'_>, slot: u64) {
+    work.checkpoint(
+        HistoryPosition::after_slot(slot),
+        Some(Context {
+            slot,
+            block_time: 1,
+        }),
+    );
+}
+
+async fn count(store: &Store, sql: &str) -> i64 {
+    store
+        .connection()
+        .query_one(sea_orm::Statement::from_string(
+            store.connection().get_database_backend(),
+            sql,
+        ))
+        .await
+        .expect("query")
+        .expect("row")
+        .try_get_by_index(0)
+        .expect("count")
+}
+
+#[tokio::test]
+async fn a_wallet_page_and_balance_read_only_the_owners_active_rows() {
+    let (first, second) = (wallet(1), wallet(2));
+    let keys = Keys::with(first, 7);
+    keys.grant(second, 8);
+    let spent = [
+        note(first, &secret(7), 0x10, 50),
+        note(first, &secret(7), 0x11, 20),
+    ];
+    let live = note(first, &secret(7), 0x12, 5);
+    let others = [
+        note(second, &secret(8), 0x20, 9),
+        note(second, &secret(8), 0x21, 4),
+    ];
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let book = indexed_store(&store);
+    let seal = seal();
+    let pages: [PageScript<'_>; 3] = [
+        Box::new(|work| {
+            work.open(frame(2), [spent[0], spent[1], live, others[0], others[1]]);
+            terminal(work, 3);
+        }),
+        Box::new(|work| {
+            for (position, created) in spent.iter().enumerate() {
+                let nullifier = nullifier_of(created, &secret(7));
+                work.observe(real(nullifier, frame(4), position as u16));
+            }
+            terminal(work, 5);
+        }),
+        Box::new(|work| terminal(work, 6)),
+    ];
+    for page in &pages {
+        commit_page(&store, &book, &seal, &keys, page.as_ref())
+            .await
+            .expect("page");
+    }
+    let member = |owner: Address| {
+        *Member::owner_tag(owner.as_array())
+            .expect("member")
+            .as_bytes()
+    };
+    let read = |owner| OwnerNotesRead {
+        db: store.connection(),
+        ring: RING,
+        seal: &seal,
+        member: member(owner),
+    };
+    let rows = read(first).read().await.expect("rows");
+    assert_eq!(rows.len(), 1, "the spent notes left the index");
+    assert_eq!(rows[0].commitment, live.commitment);
+    assert_eq!(read(second).read().await.expect("rows").len(), 2);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM owner_notes").await, 3);
+    let status = book.wallet_status(query(first)).await.expect("status");
+    assert_eq!((status.notes.len(), balance(&status)), (1, 5));
+    // The cursor is the note tag, the second page holds the other note.
+    let first_page = book
+        .wallet_status(WalletStatusQuery {
+            limit: 1,
+            ..query(second)
+        })
+        .await
+        .expect("page");
+    let cursor: [u8; 32] = first_page
+        .cursor
+        .clone()
+        .expect("cursor")
+        .0
+        .try_into()
+        .expect("tag");
+    let next = book
+        .wallet_status(WalletStatusQuery {
+            after: Some(cursor),
+            limit: 1,
+            ..query(second)
+        })
+        .await
+        .expect("page");
+    assert_eq!((balance(&first_page), balance(&next)), (13, 13));
+    assert_ne!(first_page.notes[0].utxo_hash, next.notes[0].utxo_hash);
+    assert!(next.cursor.is_none());
+}
+
+#[tokio::test]
+async fn a_spend_leaves_the_owner_index_in_the_transaction_of_its_row() {
+    let owner = wallet(1);
+    let keys = Keys::with(owner, 7);
+    let created = note(owner, &secret(7), 0x10, 50);
+    let nullifier = nullifier_of(&created, &secret(7));
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let book = indexed_store(&store);
+    let seal = seal();
+    let open: PageScript<'_> = Box::new(|work| {
+        work.open(frame(2), [created]);
+        terminal(work, 3);
+    });
+    let spend: PageScript<'_> = Box::new(|work| {
+        work.observe(real(nullifier, frame(4), 0));
+        terminal(work, 5);
+    });
+    commit_page(&store, &book, &seal, &keys, open.as_ref())
+        .await
+        .expect("open");
+    let active = "SELECT COUNT(*) FROM owner_notes WHERE spent_slot IS NULL";
+    let rows = "SELECT COUNT(*) FROM finalized_spent_nullifiers";
+    let park = |from: &str, to: &str| format!("ALTER TABLE {from} RENAME TO {to}");
+    let connection = store.connection();
+    // The checkpoint write fails after the index write, the transaction drops both.
+    connection
+        .execute_unprepared(&park("spend_checkpoints", "parked"))
+        .await
+        .expect("park");
+    let refused = commit_page(&store, &book, &seal, &keys, spend.as_ref()).await;
+    connection
+        .execute_unprepared(&park("parked", "spend_checkpoints"))
+        .await
+        .expect("restore");
+    assert!(refused.is_err());
+    assert_eq!(
+        (count(&store, active).await, count(&store, rows).await),
+        (1, 0)
+    );
+    assert_eq!(
+        balance(&book.wallet_status(query(owner)).await.expect("status")),
+        50
+    );
+    commit_page(&store, &book, &seal, &keys, spend.as_ref())
+        .await
+        .expect("spend");
+    assert_eq!(
+        (count(&store, active).await, count(&store, rows).await),
+        (0, 1)
+    );
+    assert!(book
+        .wallet_status(query(owner))
+        .await
+        .expect("status")
+        .notes
+        .is_empty());
+}
+
+fn cached_store(store: &Store, capacity: usize) -> AuditStore {
+    AuditStore::new(Backing::Database {
+        store: store.clone(),
+        ring: RING,
+        seal: Box::new(seal()),
+        capacity,
+    })
+}
+
+#[tokio::test]
+async fn a_bounded_cache_holds_its_bound_and_storage_answers_every_evicted_row() {
+    let owner = wallet(1);
+    let keys = Keys::with(owner, 7);
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let book = cached_store(&store, 4);
+    let seal = seal();
+    let created: Vec<CreatedUtxo> = (0..12)
+        .map(|index| note(owner, &secret(7), 0x10 + index, 10))
+        .collect();
+    for (index, utxo) in created.iter().enumerate() {
+        let open: PageScript<'_> = Box::new(move |work| {
+            work.open(frame(2 + index as u64), [*utxo]);
+            terminal(work, 2 + index as u64);
+        });
+        commit_page(&store, &book, &seal, &keys, open.as_ref())
+            .await
+            .expect("open");
+    }
+    let first = nullifier_of(&created[0], &secret(7));
+    let spend: PageScript<'_> = Box::new(|work| {
+        work.observe(real(first, frame(20), 0));
+        terminal(work, 21);
+    });
+    commit_page(&store, &book, &seal, &keys, spend.as_ref())
+        .await
+        .expect("spend");
+    assert!(book.cached_entries().iter().all(|entries| *entries <= 4));
+
+    // 1. The evicted note and its spend still answer, from storage.
+    let commitment = created[0].commitment;
+    assert!(book
+        .notes(&[commitment])
+        .await
+        .expect("note")
+        .contains_key(&commitment));
+    let rows = book.spend_rows(&[first]).await.expect("row");
+    assert_eq!(
+        rows[&first].state,
+        SpendState::Resolved { note: commitment }
+    );
+    // 2. A second spend of the evicted nullifier reads its stored row and faults.
+    let repeat: PageScript<'_> = Box::new(|work| work.observe(real(first, frame(30), 0)));
+    commit_page(&store, &book, &seal, &keys, repeat.as_ref())
+        .await
+        .expect("repeat");
+    let coverage = book.spend_coverage().await.expect("coverage");
+    assert_eq!(coverage.integrity_faults.len(), 1);
+    assert_eq!(coverage.resolved, 1);
+    assert_eq!(
+        balance(&book.wallet_status(query(owner)).await.expect("status")),
+        110
+    );
+}
+
+#[tokio::test]
+async fn a_follower_reload_reads_only_the_rows_written_since_its_revision() {
+    let owner = wallet(1);
+    let keys = Keys::with(owner, 7);
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let writer = cached_store(&store, MAX_CACHED_ENTRIES);
+    let follower = cached_store(&store, MAX_CACHED_ENTRIES);
+    let seal = seal();
+    let reload = |follower: &AuditStore| {
+        let scope = follower.history_scope();
+        let seal = &seal;
+        let store = &store;
+        async move {
+            LoadSpends {
+                db: store.connection(),
+                ring: RING,
+                seal,
+                scope,
+            }
+            .load()
+            .await
+            .expect("load")
+        }
+    };
+    let created: Vec<CreatedUtxo> = (0..5)
+        .map(|index| note(owner, &secret(7), 0x10 + index, 10))
+        .collect();
+    let history: PageScript<'_> = Box::new(|work| {
+        work.open(frame(2), created.iter().copied());
+        terminal(work, 3);
+    });
+    commit_page(&store, &writer, &seal, &keys, history.as_ref())
+        .await
+        .expect("history");
+    // 1. A cold follower reads no note or spend row, its cache fills from lookups.
+    let cold = reload(&follower).await;
+    assert_eq!((cold.spends.notes.len(), cold.spends.rows.len()), (0, 0));
+    follower.refresh(cold.spends, cold.revision);
+
+    let fresh = [
+        note(owner, &secret(7), 0x30, 4),
+        note(owner, &secret(7), 0x31, 6),
+    ];
+    let spent = nullifier_of(&created[0], &secret(7));
+    let next: PageScript<'_> = Box::new(|work| {
+        work.open(frame(5), fresh);
+        work.observe(real(spent, frame(5), 0));
+        terminal(work, 6);
+    });
+    commit_page(&store, &writer, &seal, &keys, next.as_ref())
+        .await
+        .expect("next");
+    // 2. The next pass reads the two new notes and the one spend, never the older history.
+    let changed = reload(&follower).await;
+    assert_eq!(
+        (changed.spends.notes.len(), changed.spends.rows.len()),
+        (2, 1)
+    );
+    follower.refresh(changed.spends, changed.revision);
+    assert!(follower
+        .spend_rows(&[spent])
+        .await
+        .expect("row")
+        .contains_key(&spent));
+    assert_eq!(follower.context().slot, 6);
+    let idle = reload(&follower).await;
+    assert_eq!((idle.spends.notes.len(), idle.spends.rows.len()), (0, 0));
 }
