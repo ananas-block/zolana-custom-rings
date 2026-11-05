@@ -1,17 +1,24 @@
 //! Applies each named ring's pending enrollments to its tracking tree, one batch per root.
 //!
+//! Each ring runs on its own task under the shared bound of `keyed_tasks`, so a ring whose proof stalls
+//! holds one slot and never the apply of another ring.
+//!
 //! The ring indexer lists pending authorizations unverified. A page must ascend by owner past the
 //! cursor, only a full page continues, and every listed account must still read pending at the
 //! revision the proof chained, so a dropped or reordered page delays an owner and never grants one.
 //!
 //! Read after `services/ring-indexer/src/rpc/tracking.rs` and `sdk-libs/sdk/src/operations/storage.rs`.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, PoisonError},
+    time::Duration,
+};
 
 use custom_ring_interface::{
     member_registry::APPLY_BATCH,
     tracking::{TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY, TRACKING_GRACE_SLOTS},
-    RingAccount, RingPolicy, ROOT_HISTORY,
+    RingAccount, RingPolicy,
 };
 use custom_ring_sdk::CustomRing;
 use log::warn;
@@ -20,10 +27,12 @@ use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::SerializablePubkey;
+use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_indexer::tracking::{GetPendingEnrollmentsRequest, RingPendingEnrollmentView};
 
 use crate::{
     error::{redacted, RingRpcError},
+    keyed_tasks::{KeyedTasks, MAX_CONCURRENT_KEYED_TASKS},
     landing::{Attempt, Landing},
     record_writer::UPDATE_COMPUTE_UNITS,
     storage_chain::{ProvedEnrollments, StorageChain},
@@ -32,10 +41,8 @@ use crate::{
 
 /// Applies the pending enrollments of each named ring, the payer holds no ring role.
 pub struct EnrollmentApplier {
-    chain: Arc<dyn StorageChain>,
-    payer: Keypair,
+    applier: Arc<Applier>,
     rings: Vec<Address>,
-    registries: HashMap<Address, RegistryState>,
 }
 
 #[must_use]
@@ -43,6 +50,13 @@ pub struct EnrollmentApplierParts {
     pub chain: Arc<dyn StorageChain>,
     pub payer: Keypair,
     pub rings: Vec<Address>,
+}
+
+/// Shared by every ring task.
+struct Applier {
+    chain: Arc<dyn StorageChain>,
+    payer: Keypair,
+    registries: Mutex<HashMap<Address, Arc<AsyncMutex<RegistryState>>>>,
 }
 
 #[derive(Default)]
@@ -69,41 +83,58 @@ struct Batch {
 impl EnrollmentApplierParts {
     pub fn applier(self) -> EnrollmentApplier {
         EnrollmentApplier {
-            chain: self.chain,
-            payer: self.payer,
+            applier: Arc::new(Applier {
+                chain: self.chain,
+                payer: self.payer,
+                registries: Mutex::default(),
+            }),
             rings: self.rings,
-            registries: HashMap::new(),
         }
     }
 }
 
 impl EnrollmentApplier {
     pub fn payer(&self) -> Address {
-        self.payer.pubkey()
+        self.applier.payer.pubkey()
     }
 
     /// Every `interval`, the first at once.
-    pub async fn run(mut self, interval: Duration) {
+    pub async fn run(self, interval: Duration) {
+        let rings = KeyedTasks::new(MAX_CONCURRENT_KEYED_TASKS);
         let mut ticks = tokio::time::interval(interval);
         loop {
             ticks.tick().await;
-            self.flush().await;
+            self.spawn_idle(&rings);
         }
     }
 
-    /// One pass over the named rings, a failing ring never holds up another.
-    pub async fn flush(&mut self) {
-        for ring in self.rings.clone() {
-            if let Err(error) = self.apply_ring(ring).await {
-                warn!(
-                    "enrollment apply of ring {ring} failed because {}",
-                    redacted(&error)
-                );
-            }
+    /// One pass over the named rings in turn, a failing ring never holds up another.
+    pub async fn flush(&self) {
+        for ring in &self.rings {
+            self.applier.apply_logged(*ring).await;
         }
     }
 
-    async fn apply_ring(&mut self, ring: Address) -> Result<(), RingRpcError> {
+    /// Starts a pass for each ring with none running and returns at once.
+    fn spawn_idle(&self, rings: &KeyedTasks<Address>) {
+        rings.spawn_idle(self.rings.iter().copied(), |ring| {
+            let applier = self.applier.clone();
+            async move { applier.apply_logged(ring).await }
+        });
+    }
+}
+
+impl Applier {
+    async fn apply_logged(&self, ring: Address) {
+        if let Err(error) = self.apply_ring(ring).await {
+            warn!(
+                "enrollment apply of ring {ring} failed because {}",
+                redacted(&error)
+            );
+        }
+    }
+
+    async fn apply_ring(&self, ring: Address) -> Result<(), RingRpcError> {
         let account = self
             .chain
             .account(CustomRing::new(ring).policy_pda())
@@ -113,14 +144,27 @@ impl EnrollmentApplier {
         else {
             return Ok(());
         };
+        // Rings pinning one registry share its state, a ring finding it busy sits out the tick.
+        let Ok(mut state) = self.registry_state(policy.tracking).try_lock_owned() else {
+            return Ok(());
+        };
         RegistryPass {
             chain: self.chain.as_ref(),
             payer: &self.payer,
             registry: policy.tracking,
-            state: self.registries.entry(policy.tracking).or_default(),
+            state: &mut state,
         }
         .run()
         .await
+    }
+
+    fn registry_state(&self, registry: Address) -> Arc<AsyncMutex<RegistryState>> {
+        self.registries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(registry)
+            .or_default()
+            .clone()
     }
 }
 
@@ -137,15 +181,11 @@ impl RegistryPass<'_> {
         let Some(tracking) = self.tracking().await? else {
             return Ok(());
         };
-        // 2. The program refuses an apply over a full history, waiting spends no proof.
-        if slot < tracking.roots[ROOT_HISTORY - 1].expires_at() {
-            return Ok(());
-        }
         let owners = self.choose(slot, &tracking).await?;
         if owners.is_empty() {
             return Ok(());
         }
-        // 3. Proving takes long, the accounts and the root can move meanwhile.
+        // 2. Proving takes long, the accounts and the root can move meanwhile.
         let proved = self.chain.prove_enrollments(self.registry, &owners).await?;
         let moved = self.moved(&owners, &proved).await?;
         if !moved.is_empty() {
