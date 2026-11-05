@@ -15,6 +15,7 @@ import {
   poseidon,
   solanaOwnerIdentity,
   treeAddress,
+  addressBytes,
   bigIntToBytes,
   checkedBytes,
   decodeRingDepositInstructionData,
@@ -28,7 +29,14 @@ import {
   type Bytes32,
   type Bytes33,
 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, ViewingKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
+import {
+  NullifierKey,
+  ShieldedKeypair,
+  ShieldedPda,
+  ViewingKey,
+  X25519Keypair,
+  type Bytes31,
+} from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import depositVector from "../../../../test-vectors/deposit/deposit.json" with { type: "json" };
 import mergeVector from "../../../../test-vectors/merge/merge.json" with { type: "json" };
@@ -41,7 +49,11 @@ import { RingInstructionTag } from "../../src/protocol/transaction/instruction-t
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import type { StorageRecordPool, StorageRecordPoolRequest } from "../../src/rpc/ports.js";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
-import { ringCoSignerAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
+import {
+  ringAuthAddress,
+  ringCoSignerAddress,
+  ringPolicyPda,
+} from "../../src/protocol/pda/index.js";
 import { depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
 import {
   RING_COSIGN_DEPOSITS,
@@ -891,6 +903,50 @@ describe("ring deposit builder", () => {
       local.destroy();
       member.destroy();
       recipient.destroy();
+    }
+  });
+
+  it("pays a PDA member of an anonymous ring and refuses the PDA as a public signer", async () => {
+    const holder = ShieldedPda.withViewingKey(
+      await ringAuthAddress(RING),
+      NullifierKey.fromSecret(new Uint8Array(31).fill(3) as Bytes31),
+      ViewingKey.generate(),
+    );
+    const owner = holder.shieldedAddress();
+    const { client, requests } = await fixture({
+      mode: "anonymous",
+      enrolled: [trackingEntry(owner)],
+    });
+    const viewing = holder.viewingKey();
+    const depositTag = viewing.recipientRequestViewTag(0n);
+    viewing.destroy();
+    const to = new RingPaymentRequest({
+      address: new RingAddress({
+        recipient: owner,
+        ringProgramId: RING,
+        listSalt: new Uint8Array(32).fill(1) as Bytes32,
+      }),
+      depositTag,
+    });
+    try {
+      const prepared = await PreparedRingDeposit.prepare(
+        params(client, { kind: "anonymousPayment", to }),
+      );
+      expect(await publishes(prepared, client, depositTag)).toBe(true);
+      prepared.destroy();
+      const [request] = requests;
+      if (request?.kind !== "deposit") throw new Error("no deposit proof request");
+      expect(request.ownerKeys[0]).toEqual(addressBytes(owner.solanaAddress()));
+      await expect(
+        PreparedRingDeposit.prepare(
+          params(client, { kind: "anonymousPayment", to }, { feePayer: owner.solanaAddress() }),
+        ),
+      ).rejects.toMatchObject({
+        code: "RING_BUILD_DEPOSIT",
+        causeCode: "RING_ANONYMOUS_SIGNER_LINKS_OWNER",
+      });
+    } finally {
+      holder.destroy();
     }
   });
 
