@@ -79,7 +79,7 @@ The apply proof binds that restrictive bit, reading an absent member's old field
 - A restrictive update retires every earlier root at once, and every proof under them fails and proves again.
 - Any other update keeps the outgoing root valid for the grace period, so a proof in flight under it still lands. Over a full history it evicts the oldest kept root, and that root's proofs prove again.
 - A kept root reads no policy field more permissively than the newest root. Rules are monotone in those fields, so a kept root admits no transfer the newest refuses.
-- A tracking update is always graced, under a program constant, and every retired tracking root serves its whole grace. An apply that would evict an unexpired root refuses, and its accounts stay pending until the oldest root expires.
+- A tracking apply retires the outgoing root under a program constant, and every retired tracking root serves its whole grace. An apply that would evict an unexpired root fails with `RootHistoryRetained`, and its accounts stay pending until the oldest root expires.
 - The limit is enrollment availability. New owners can fill the kept roots, and a one entry apply spends a root as a full batch does, so enrollment waits under sustained load while enrolled owners keep their tracking witnesses.
 
 ## Tracking floor

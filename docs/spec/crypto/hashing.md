@@ -95,14 +95,14 @@ A tracking registry holds one leaf per enrolled owner.
 | Member | `solana_owner_identity(owner)`, for a wallet or a PDA |
 | List tag | `Poseidon(CRPT, list_salt)`. `RegisterKey` proves it, and it is final |
 | Ciphertext hash | `ct_hash = hash_bytes(ciphertext)`, the 64-byte nullifier secret and list salt sealed to the auditor key |
-| Tracking leaf | `Poseidon(CRTK, member, next, nullifier_pk, ct_hash, view_0, view_1, right_align(revision as u64 BE), list_tag)`, `(view_0, view_1) = pack_be(viewing_u)`, 9 inputs |
+| Tracking leaf | `Poseidon(CRTK, member, next, nullifier_pk, ct_hash, list_tag)`, 6 inputs |
 | Sentinel | `member = 0`, `next = q - 1`, every other field `0`, at leaf `0` |
 | Tree node | `Poseidon(c_0, c_1, c_2, c_3)`, height 16, the leaf index as 32 bits |
-| Tracking entry | `Poseidon(CRTQ, member, nullifier_pk, ct_hash, view_0, view_1, right_align(revision as u64 BE), list_tag)`, 8 inputs |
+| Tracking entry | `Poseidon(CRTQ, member, nullifier_pk, ct_hash, list_tag)`, 5 inputs |
 | Entry chain start | `HashChain4([CRTA, hash_bytes(registry address), right_align(revision as u64 BE)])` |
 | Entry chain | `chain(-1) = chain_start`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
 
-An unwritten leaf is `0`. The sentinel carries a zero `nullifier_pk`, and a query for an absent owner reads a zero key. The program computes every entry from the owner's tracking authorization, never from instruction data. A rotation moves only `view_0`, `view_1` and `revision`. The apply proof keeps `nullifier_pk`, `ct_hash` and `list_tag` of a present leaf. A present owner opens by its leaf, and an absent one proves `member < owner < next` for a leaf under the frame's tracking root.
+An unwritten leaf is `0`. The sentinel carries a zero `nullifier_pk`, and a query for an absent owner reads a zero key. The program computes every entry from the owner's tracking authorization, never from instruction data. No leaf holds a viewing key. The apply proof inserts each entry once, at the next index, and a leaf never changes after its insert. `test-vectors/registry/tracking-records.json` pins both hashes, the entry chain and the apply statement. A present owner opens by its leaf, and an absent one proves `member < owner < next` for a leaf under the frame's tracking root.
 
 ## Private list key
 
@@ -110,7 +110,7 @@ An unwritten leaf is `0`. The sentinel carries a zero `nullifier_pk`, and a quer
 |---|---|
 | Salted member | `Poseidon(CRPL, owner_identity, list_salt)` |
 
-A private list entry is an ordinary record under the salted member. While the owner's tracking row is present, the transfer proof holds `list_salt` to open the row's `list_tag`, so the prover cannot choose the key. A private write proves the same opening against the written member.
+A private list entry is an ordinary record under the salted member. While the owner's tracking row is present, the transfer proof holds `list_salt` to open the row's `list_tag`, so the prover cannot choose the key. A private write's proof holds the written member to `Poseidon(CRPL, row.member, list_salt)`. It holds `Poseidon(CRPT, list_salt)` to the `list_tag` of a row under the tracking root, and that row's `nullifier_pk` to nonzero. The write must carry a private list bit in its mask.
 
 ## Policy table hash
 

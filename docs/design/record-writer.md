@@ -46,4 +46,4 @@ Ring RPC writes a ring's policy records when it holds the storage authority key.
 
 - A write the storage authority signs directly skips every check above, and the tree accepts it.
 - The Storage program checks the tree update and the authority's signature, not who asked for the write.
-- A salted entry's correctness rests on its writer. Under a wrong salt, the record sits at a key no proof of the listed owner reads, and the block silently has no effect.
+- A salted owner write under a wrong salt fails its proof, because the salt must open the owner's row tag.

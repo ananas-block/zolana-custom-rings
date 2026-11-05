@@ -117,10 +117,11 @@ viewing_u || owner_key || nullifier_pk || wincode(Data), zero padded to reply_le
 Scheme 9 is the first SPP message of an anonymous frame, under `CRING/snd` and the slot secret at `i = m` of the sender's viewing key:
 
 ```text
-mint0 || u64be(amount0) || u64be(amount1) || output_seed || recipient_u * m
+output_seed || change_cell * b || recipient_u * (m - b)
+change_cell = mint || u64be(amount)                                             40 bytes
 ```
 
-The bundle has `80 + 32 m` bytes. `mint0` and `amount0` are slot 0's when slot 0 is change, else zero. `amount1` is slot 1's when slot 1 is change, else zero, and that slot's asset is native SOL. `recipient_u_i` is the viewing key the sender sealed slot `i`'s body to, and zero on change, exit and dummy. The reader rebuilds change at slots 0 and 1 from these cells, its own address and `TXOB(n0, output_seed, i)`. It accepts a slot only when its commitment rebuilds.
+`b` is the popcount of the frame's bodiless bitmap. The bundle has `32 + 40 b + 32 (m - b)` bytes and carries no count. Cell `k` belongs to the `k`th bodiless slot in ascending slot order, and `mint` is the 32-byte mint address. Key `k` belongs to the `k`th slot that carries a body. It is the viewing key the sender sealed that body to, and zero on an exit or a dummy. The reader rebuilds bodiless slot `i` from its cell, its own address and `TXOB(n0, output_seed, i)` at the slot's own index. It accepts a slot only when its commitment rebuilds. `test-vectors/audit/anonymous_bodies.json` pins a bundle with one change cell and three keys.
 
 ## Opening a transfer
 
@@ -128,7 +129,7 @@ The bundle has `80 + 32 m` bytes. `mint0` and `amount0` are slot 0's when slot 0
 2. It derives `seed_out = TXOS(n0, CRBS(tx_viewing_sk, salt))` and each blinding `TXOB(n0, seed_out, i)`. No frame field carries `seed_out`.
 3. It decrypts the record of slot `i` at its counter, and its tail under `has_data`.
 4. It rebuilds slot `i`'s commitment from the record, the tail, the blinding and the frame's tree id. The ring id enters on kind `1`, and zero on kind `2`. It accepts the slot only when that commitment equals the published hash at `i`. A kind `0` slot rebuilds as SPP's dummy hash under its blinding. A record moved to another slot rebuilds nothing.
-5. It links each nullifier below `R` that is not a default-ring input, see [spent notes](#spent-notes).
+5. It links the nullifier of each spent note that is not a default-ring input, see [spent notes](#spent-notes). A spent note is an input `k < L` whose bit of `A` is clear.
 
 ## Layout
 

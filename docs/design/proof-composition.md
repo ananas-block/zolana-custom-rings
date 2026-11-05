@@ -181,7 +181,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 - The Storage program computes the member from the signer. It takes the ring id and the auditor key from the tracking registry the ring created.
 - The circuit holds the nullifier key and the list tag to nonzero secrets, and seals both secrets under `CRING/nfk`, in `RegisterKeyCircuit`.
-- The program computes each applied entry from its account and refuses an applied revision. `ApplyEnrollmentsCircuit` keeps the final fields on a rotation, and keeps the tree sorted.
+- The program computes each applied entry from its account and refuses an account already applied. `ApplyEnrollmentsCircuit` inserts each owner once at the next index and keeps the tree sorted, so no leaf changes after its insert.
 - The proof does not show that the secret came from a particular derivation. A wallet that seals another secret harms itself alone.
 - The tests in `prover/circuits/registry` are `TestRegisterKeySealsTheEnrolledSecret`, `TestRegisterKeyRefusals`, `TestApplyEnrollmentsAppliesEntriesInNamedOrder`, `TestApplyEnrollmentsRefusals` and `TestApplyEnrollmentsAtCapacity`. The tests in `programs/storage/tests/lifecycle.rs` are `a_first_enrollment_needs_the_owner_and_a_proof_the_pairing_accepts`, `a_rotation_moves_the_viewing_key_with_no_proof` and `anyone_applies_named_enrollments_with_no_authority_signature`. `a_pda_enrolls_and_applies_its_key_on_the_validator` in `program-tests/custom-ring/tests/ring/sanity.rs` runs both steps on the validator.
 
@@ -189,7 +189,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 - The Storage program classes each write from its masks. A private write needs its owner's row unless an asset entry names a mint whose hash is the member.
 - A batch with a private write proves under the private apply key. Its statement adds the private write bitmap and the tracking root at the revision the update names. The program reads that root from the tracking registry the source pins.
-- `ApplyRecordsCircuit` proves that `ListKey(member, salt)` equals the written member, and that the salt opens the `list_tag` of the owner's row under that root.
+- `ApplyRecordsCircuit` proves that `ListKey(member, salt)` equals the written member, and that the salt opens the `list_tag` of the owner's row under that root. The row must hold a nonzero nullifier key, and the write a private list bit.
 - After the proof the program raises `tracking_floor` to the revision together with the new root. A refusal writes neither.
 - The tests are `TestPrivateWriteOpensTheOwnersTrackingRow` and `TestPrivateKeyRefusesAPublicMask` in `prover/ringtest/ringregistry`, and `a_private_write_refuses_a_missing_or_substituted_tracking_registry` and `private_proof_failure_and_stale_revision_keep_the_root_and_floor` in `programs/storage/tests/lifecycle.rs`.
 
