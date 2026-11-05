@@ -2,7 +2,7 @@
 
 The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for a transfer's auditor stream, an enrolling owner's nullifier secret and list salt, deposit opening records and a merge's opening record. The stream schedule also keys every recipient body, reply and sender bundle from a slot secret, outside every proof. [Spec](../../spec.md) [Hashing](hashing.md) [Disclosure](disclosure.md)
 
-The ring program verifies the transfer, deposit and merge proofs, and the Storage program verifies the register key proof in `Enroll` on an owner's first enrollment. In each, the ciphertext's hash in the statement fixes the plaintext.
+The ring program verifies the transfer, deposit and merge proofs. The Storage program verifies the register key proof in `Enroll` on an owner's first enrollment. In each, the ciphertext's hash in the statement fixes the plaintext.
 
 ## Key encoding
 
@@ -20,7 +20,7 @@ secret = Poseidon(CR_S, pack_be(dh), pack_be(eph_pk), pack_be(auditor_pk))   // 
 salted = Poseidon(secret, right_align(salt))         // auditor stream only
 ```
 
-The auditor stream takes `tx_viewing_sk` as `eph_sk`, so `eph_pk` is SPP's `tx_viewing_pk`, and keys its schedule from `salted` with SPP's 16-byte `salt`. A resend under one first nullifier repeats `tx_viewing_sk`, and the SDKs draw a fresh salt per build, so the keystream differs. Every other line keys its schedule from `secret` under a fresh `eph_sk`. The circuit proves neither freshness. A reused key and salt under one auditor key repeats the keystream.
+The auditor stream takes `tx_viewing_sk` as `eph_sk`, so `eph_pk` is SPP's `tx_viewing_pk`. The stream keys its schedule from `salted` with SPP's 16-byte `salt`. A resend under one first nullifier repeats `tx_viewing_sk`, and the SDKs draw a fresh salt per build, so the keystream differs. The register key, deposit and merge lines key their schedule from `secret` under a fresh `eph_sk`. The circuit proves neither freshness. A reused key and salt under one auditor key repeats the keystream.
 
 ## Stream schedule
 
@@ -46,7 +46,7 @@ ciphertext = AES-256-CTR(key, nonce || u32be(counter), plaintext), counter from 
 | `CRING/dep` | deposit | `secret` above |
 | `CRING/mrg` | merge | `secret` above |
 
-One label per ciphertext kind gives each kind its own key and nonce, so a reply never restarts the body's counter. A ring slot's tag and the bundle tag are each one more Poseidon output of the slot secret that keys that ciphertext, under its own [domain](hashing.md#domain-tags). An exit's scheme 3 body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
+One label per ciphertext kind gives each kind its own key and nonce, so a reply never restarts the body's counter. On an anonymous frame, the ring output tags and the bundle tag each take one more Poseidon output of the slot secret keying the ciphertext. Each tag has its own [domain](hashing.md#domain-tags). An exit's scheme 3 body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
 
 ## Envelope uses
 
@@ -54,7 +54,7 @@ No line has an authentication tag. Integrity comes from the statement, or for a 
 
 | Use | Schedule | Plaintext | Statement binds |
 |---|---|---|---|
-| Auditor stream | `CRING/adt` | the envelope, records and tails of [Disclosure](disclosure.md) | `pack_be` of `tx_viewing_pk` and of the auditor key, the salt, `digest(envelope_ct)`, `HashChain4(hash_bytes(record_ct_i))` and `HashChain4(hash_bytes(tail_ct_i))` zero filled to `N` |
+| Auditor stream | `CRING/adt` | the envelope, records and tails of [Disclosure](disclosure.md) | `pack_be` of `tx_viewing_pk` and of the auditor key, the salt, `digest(envelope_ct)`, `HashChain4(hash_bytes(record_ct_i))` and `HashChain4(hash_bytes(tail_ct_i))` zero filled to `N`, the tail chain `0` without `has_data` |
 | Recipient body | `CRING/rcp`, slot secret | the [recipient body](disclosure.md#recipient-body) | no statement, SPP's external data hash binds the bytes |
 | Reply metadata | `CRING/rpl`, slot secret | the [reply](disclosure.md#reply-metadata) | no statement, SPP's external data hash binds the bytes |
 | Sender bundle | `CRING/snd`, slot secret | the [sender bundle](disclosure.md#sender-bundle) | no statement, SPP's external data hash binds the bytes |
