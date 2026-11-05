@@ -63,8 +63,8 @@ const MAX_CONCURRENT_PROOFS: usize = 4;
 const EXPIRED: &str = "the relay message expired before it landed";
 
 const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge";
-/// One quote window and one blockhash lifetime for the wallet to sign.
-pub const ABANDONED_AFTER_SLOTS: u64 = 2 * QUOTE_SLOTS;
+/// One blockhash lifetime for the wallet to sign the stored message.
+pub const ABANDONED_AFTER_SLOTS: u64 = QUOTE_SLOTS;
 const SWEEP_PAGE: u64 = 16;
 const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
 const ATTEMPT_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-attempt";
