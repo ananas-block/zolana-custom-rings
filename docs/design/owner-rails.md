@@ -16,7 +16,7 @@ An entry key is not a rail. It adds a default-ring input to the signer, hidden o
 
 - Except on the delegate rail, a key's rows contain the distinct live input owners, strictly ascending with zero rows last. No prover input orders them.
 - Every live input needs its owner's row, whatever the rail. The sender rules, attribution and the auditor's nullifier all read rows.
-- A live ring input under a nonzero key must match its owner's enrolled key under the tracking root.
+- A live ring input under a nonzero key must match the key of its owner's credential.
 - A default-ring input needs a row and no key match, since the ring never enrolled that key.
 - On the delegate rail a zero-key note alone goes without a row, since no policy reads the rows there.
 - A subject past a key's rows has no valid proof. The SDK selects the first key that fits the spend, and it refuses by name a spend no key fits.
@@ -37,9 +37,10 @@ An entry key is not a rail. It adds a default-ring input to the signer, hidden o
 
 A zero-key note has `nullifier_secret = 0`. Anyone who knows its opening computes its nullifier, its sender included. Encryption cannot remove the exposure, and a chain observer without the opening cannot compute the nullifier.
 
-- A ring output under a nonzero key must match its owner's tracking row. A zero key needs that row absent under the frame's tracking root.
-- A sender can therefore not name zero for an enrolled wallet, except inside the tracking grace after that wallet enrolls.
-- The circuit cannot tell a PDA from a wallet. A sender can name zero for an unenrolled wallet, and an SDK check does not bind that sender.
+- A ring output under a nonzero key must match the key of its owner's credential. A zero-key output needs no credential for its key.
+- A sender can name zero for any owner, enrolled or not, when no salted payee read applies. Under a salted payee read the payee still opens its credential or proves absence above the floor.
+- The SDKs pay an enrolled owner under the zero key only on the caller's explicit choice. They refuse it when the credential lookup fails or answers unknown. That check does not bind another sender.
+- The circuit cannot tell a PDA from a wallet.
 - A hidden owner cannot spend a zero-key note, since that spend would name it. A public signer spends it on the public-owner rail or as a public co-owner.
 - The delegate moves a zero-key note with its owner unpublished.
 - A wallet reports such a note as exposed if spent and never selects it automatically. `spend_public` names the wallet that becomes public.
@@ -56,7 +57,7 @@ A zero-key note has `nullifier_secret = 0`. Anyone who knows its opening compute
 
 - The delegate is permanent and set once. It may move any eligible note of the ring, its own and several members' included.
 - The rail clears the rules, caps and approval bits, and its statement reads no policy root. A curator's restrictive update therefore cannot fail a delegate's proof in flight.
-- The tracking root, the input predicate, the output predicate, the auditor record and the sealed count `R` all stay.
+- The credential roots, the input predicate, the output predicate, the auditor record and the sealed input map all stay.
 - A delegate may withdraw and exit, and SPP's exit selector settles an exit. A deposit leg is refused, since it would bring an unlisted asset in.
 - `getDelegateNotes` serves the owner's openings and secret to the delegate on a signed request. Recovery therefore depends on Ring RPC.
 
