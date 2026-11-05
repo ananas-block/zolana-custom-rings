@@ -4116,6 +4116,7 @@ async fn credential_trees_follow_the_registries_and_refuse_past_the_address_ceil
         .frame(&enrolled(&[sender, recipient]).client())
         .await
         .unwrap();
+    unwitnessed.frame.accounts.credential_trees = None;
     let bare = unwitnessed.instruction().unwrap();
     let payer = unwitnessed.frame.proof_inputs.payer;
     let addresses = |instruction: &Instruction| {

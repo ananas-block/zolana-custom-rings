@@ -14,6 +14,7 @@ const REGISTRY: Address = Address::new_from_array([4; 32]);
 
 fn write_of(list: ListId) -> RecordWriteData {
     let mut write = RecordWriteData::zeroed();
+    write.member = [1; 32];
     write.lists.mask = list.record_bit().to_le_bytes();
     write
 }

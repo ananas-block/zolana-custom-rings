@@ -723,7 +723,9 @@ pub(crate) fn credential_of(address: &ShieldedAddress, list_tag: [u8; 32]) -> Au
 struct CredentialFixture {
     /// By credential address.
     enrollments: HashMap<[u8; 32], ShieldedTransaction>,
-    leaves: HashMap<[u8; 32], u64>,
+    /// Each leaf's index and path, computed once.
+    paths: HashMap<[u8; 32], (u64, Vec<[u8; 32]>)>,
+    root: [u8; 32],
     tree: Account,
 }
 
@@ -748,7 +750,7 @@ impl CredentialFixture {
             id: CREDENTIAL_TREE_ID,
         });
         let mut enrollments = HashMap::new();
-        let mut leaves = HashMap::new();
+        let mut leaves = Vec::new();
         for (leaf_index, credential) in (0..).zip(credentials) {
             let address = *NewAddress::derive(authority.owner(), credential.seed().unwrap())
                 .unwrap()
@@ -797,11 +799,40 @@ impl CredentialFixture {
                     ring_program_id: None,
                 },
             );
-            leaves.insert(leaf, leaf_index);
+            leaves.push(leaf);
         }
+        // One pass per level, the unwritten right side of each level is the zero subtree.
+        let zero = Poseidon::zero_bytes();
+        let mut levels = Vec::with_capacity(STATE_TREE_HEIGHT);
+        let mut level = leaves.clone();
+        for zero_subtree in &zero[..STATE_TREE_HEIGHT] {
+            let parents = level
+                .chunks(2)
+                .map(|pair| {
+                    Poseidon::hashv(&[&pair[0], pair.get(1).unwrap_or(zero_subtree)]).unwrap()
+                })
+                .collect();
+            levels.push(core::mem::replace(&mut level, parents));
+        }
+        let root = level.first().copied().unwrap_or(zero[STATE_TREE_HEIGHT]);
+        let paths = (0..)
+            .zip(&leaves)
+            .map(|(index, leaf)| {
+                let path = (0..STATE_TREE_HEIGHT)
+                    .map(|height| {
+                        levels[height]
+                            .get(((index >> height) ^ 1) as usize)
+                            .copied()
+                            .unwrap_or(zero[height])
+                    })
+                    .collect();
+                (*leaf, (index, path))
+            })
+            .collect();
         Self {
             enrollments,
-            leaves,
+            paths,
+            root,
             tree,
         }
     }
@@ -814,22 +845,19 @@ impl CredentialFixture {
         let mut data = self.tree.data.clone();
         let mut tree = TreeAccount::from_bytes(&mut data, tree_account.to_bytes()).unwrap();
         let root_index = tree.utxo_tree().current_root_index();
-        let served = LeafTree::new(&self.leaves);
         let proofs = leaves
             .iter()
             .map(|leaf| {
-                let leaf_index = self.leaves[leaf];
+                let (leaf_index, path) = self.paths[leaf].clone();
                 MerkleProof {
                     leaf: *leaf,
                     merkle_context: MerkleContext {
                         tree_type: 0,
                         tree: tree_account,
                     },
-                    path: (0..STATE_TREE_HEIGHT)
-                        .map(|level| served.node(level, (leaf_index >> level) ^ 1))
-                        .collect(),
+                    path,
                     leaf_index,
-                    root: served.node(STATE_TREE_HEIGHT, 0),
+                    root: self.root,
                     root_seq: SLOT,
                     root_index,
                 }

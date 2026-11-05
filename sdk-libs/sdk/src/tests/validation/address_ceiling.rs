@@ -301,7 +301,7 @@ async fn a_zero_key_group_splits_at_the_zero_key_capacity() {
 }
 
 /// Inputs a zero-key merge carries in one v1 transaction, measured here.
-const WIDEST_ZERO_KEY_MERGE: usize = 44;
+const WIDEST_ZERO_KEY_MERGE: usize = 45;
 
 /// An anonymous transfer of `inputs` x `outputs`, slot 0 change, each other slot a body and a reply.
 fn anonymous_transfer(inputs: usize, outputs: usize, reply_len: Option<usize>) -> Instruction {
