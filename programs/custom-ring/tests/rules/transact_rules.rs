@@ -502,10 +502,11 @@ fn the_entry_key_takes_an_owner_run() {
 /// A run wider than `S` cannot fit the chain the key binds.
 #[test]
 fn an_owner_run_past_the_key_slots_is_refused() {
-    let fixture = Fixture::new();
+    let fixture = Fixture::new().with_format(DisclosureFormat::SingleAssetPayout);
     let mut ring = Ring::new(Setup::AuditOnly);
-    let data = fixture.transfer(RingRail::Confidential, 1, 8, false);
-    let owners: Vec<Keypair> = (0..6).map(|_| Keypair::new()).collect();
+    let data = fixture.transfer(RingRail::Confidential, 1, 16, false);
+    let slots = data.audit_stream().unwrap().key.signer_slots();
+    let owners: Vec<Keypair> = (0..=slots).map(|_| Keypair::new()).collect();
     let run: Vec<AccountMeta> = owners
         .iter()
         .map(|owner| AccountMeta::new_readonly(owner.pubkey(), true))
