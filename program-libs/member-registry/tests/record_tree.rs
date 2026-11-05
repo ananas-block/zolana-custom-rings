@@ -1,10 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 
+use bytemuck::Zeroable;
 use custom_ring_interface::{
     key_catalog::{ApplyMode, RingCircuit},
-    storage::{RegistryId, StorageError, StorageRegistry},
-    storage_instruction::{AssetWrite, InitializeIxData},
-    RecordWrite, FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
+    mint_policy_write,
+    storage::{RegistryId, RootUpdate, StorageError, StorageRegistry},
+    storage_instruction::{AssetWrite, InitializeIxData, StorageUpdateIxData},
+    ApplyRecordsIxData, CredentialRead, RecordWrite, RecordWriteData, WriteRecordsIxData,
+    FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
 };
 use solana_address::Address;
 use spr_hasher::primitives::right_align;
@@ -13,7 +16,7 @@ use zolana_ring_member_registry::{
     OpeningCheck, QuadPath, RecordCredentials, RecordOpening, RecordStatementContext,
     RecordStatementError, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
 };
-use zolana_ring_policy::{ListId, Member};
+use zolana_ring_policy::{ListId, Member, MintPolicy};
 
 fn member(byte: u8) -> [u8; 32] {
     right_align(&[byte])
@@ -485,7 +488,81 @@ fn public_statements_select_the_public_key_and_bind_no_credentials() {
             mode: ApplyMode::Public
         }
     );
-    assert_eq!(statement.elements().len(), 8);
+    assert!(statement.restrictive);
+    assert_eq!(statement.elements().len(), 9);
+}
+
+#[test]
+fn only_a_tightening_write_retires_the_served_root() {
+    let mint = |policy: MintPolicy| RecordWrite {
+        mint_policy: Some(policy),
+        ..write(9, 0, 0)
+    };
+    let capped = |cap| MintPolicy {
+        threshold: 5,
+        cap,
+        ..MintPolicy::EMPTY
+    };
+    let mut tree = MemberRegistryTree::new().unwrap();
+    let mut state = StorageRegistry::new(
+        Address::new_from_array([0x52; 32]),
+        &InitializeIxData {
+            registry_id: RegistryId::default(),
+            grace_slots: 10u64.to_le_bytes(),
+            ring_id: [0; 32],
+            private_ring_id: [0; 32],
+        },
+    );
+    for (entry, served) in [
+        (write(4, ALLOW, ALLOW), true),
+        (write(4, ALLOW, ALLOW), true),
+        (write(4, BLOCK, BLOCK), false),
+        (write(4, BLOCK, 0), true),
+        (mint(capped(0)), true),
+        (mint(capped(100)), false),
+        (mint(capped(200)), true),
+        (mint(capped(0)), true),
+    ] {
+        let AppliedTree { tree: next, proof } = tree.apply([0; 32], &[entry]).unwrap();
+        let statement = proof
+            .statement(RecordStatementContext {
+                registry: &state,
+                asset_writes: &[],
+                credentials: RecordCredentials::Public,
+            })
+            .unwrap();
+        let apply = ApplyRecordsIxData {
+            new_root: statement.new_root,
+            new_next_index: statement.new_next_index.to_le_bytes(),
+            restrictive: u8::from(statement.restrictive),
+            ..ApplyRecordsIxData::zeroed()
+        };
+        let revision = state.newest().revision;
+        let data = StorageUpdateIxData {
+            revision,
+            writes: vec![RecordWriteData {
+                member: entry.member,
+                lists: WriteRecordsIxData {
+                    mask: entry.mask.to_le_bytes(),
+                    value: entry.value.to_le_bytes(),
+                },
+                mint_policy: mint_policy_write(entry.mint_policy),
+            }],
+            asset_writes: Vec::new(),
+            credential_read: CredentialRead::empty(),
+            private_write: None,
+            apply: &apply,
+        };
+        state
+            .update(RootUpdate {
+                slot: 1,
+                data: &data,
+                absence_checkpoint: None,
+            })
+            .unwrap();
+        assert_eq!(state.root(revision, 1).is_ok(), served, "{entry:?}");
+        tree = next;
+    }
 }
 
 #[test]

@@ -6,6 +6,7 @@
 //! Invariants, `ApplyRecordsCircuit` holds each.
 //! 1. A write keeps every list bit outside its mask, and moves mint settings only under the entry's flag.
 //! 2. A write that would leave a new member's record empty inserts nothing, the member stays absent and the root stays.
+//! 3. A batch is restrictive exactly when a write tightens a policy field or changes an asset limit.
 
 use custom_ring_interface::{
     key_catalog::apply_width,
@@ -16,7 +17,7 @@ use custom_ring_interface::{
 };
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use thiserror::Error;
-use zolana_ring_policy::{ring_id_field, MintPolicy};
+use zolana_ring_policy::{ring_id_field, ListSet, MintPolicy};
 
 use crate::{
     tree::{ApplyProofInputs, IndexedLeaf, WritableLeaf, WriteStep},
@@ -255,6 +256,7 @@ impl ApplyProofInputs<RecordWriteProofInput> {
         };
         let index = |value: u64| u32::try_from(value).map_err(|_| RecordTreeError::IndexOutOfRange);
         Ok(ApplyRecordsStatement {
+            restrictive: self.writes.iter().any(RecordWriteProofInput::restricts),
             old_root: self.old_root,
             new_root: self.new_root,
             old_next_index: index(self.old_next_index)?,
@@ -264,6 +266,34 @@ impl ApplyProofInputs<RecordWriteProofInput> {
             count,
             private,
         })
+    }
+}
+
+impl RecordWriteProofInput {
+    /// Mirror of `restricts` in `prover/circuits/registry/apply_records.go`, an absent member reads as empty.
+    pub fn restricts(&self) -> bool {
+        let RecordWrite { mask, value, .. } = self.entry;
+        let old = self.old_lists;
+        // 1. A private mask always restricts.
+        if mask & ListSet::PRIVATE_LISTS.record_bits() != 0
+            || old & mask & !value & ListSet::GRANT_LISTS.record_bits() != 0
+            || value & !old & ListSet::DENY_LISTS.record_bits() != 0
+        {
+            return true;
+        }
+        // 2. Without replacement settings no amount moves.
+        let Some(new) = self.entry.mint_policy else {
+            return false;
+        };
+        let old = self.old_mint_policy;
+        // A zero cap, cosign or withdrawal bound is no bound, the wrap orders it above every amount.
+        let bound = |amount: u64| amount.wrapping_sub(1);
+        new.threshold < old.threshold
+            || bound(new.cap) < bound(old.cap)
+            || bound(new.cosign_above) < bound(old.cosign_above)
+            || bound(new.withdrawal_threshold) < bound(old.withdrawal_threshold)
+            // 3. Ring RPC reads the windowed limits outside any proof, and a window has no permissive order.
+            || new.limits != old.limits
     }
 }
 

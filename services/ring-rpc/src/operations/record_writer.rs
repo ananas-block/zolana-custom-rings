@@ -469,8 +469,8 @@ impl RecordWriter {
             private_write: proof.private_write(),
             apply: proof.apply(),
         };
-        // The program rotates a write no rule can read with grace, over a full history it fails.
-        if !data.reaches_policy() && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
+        // The program rotates a batch that tightens nothing with grace, over a full history it fails.
+        if !data.apply.restrictive() && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
             return Ok(Sent::Done);
         }
         let instruction = UpdateStorage {

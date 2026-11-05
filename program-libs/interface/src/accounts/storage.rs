@@ -2,15 +2,16 @@
 //!
 //! A ring proof opens a member's lists and mint settings under a root of a policy registry. SPP's note
 //! tree only appends, so an old root of it never proves a false note. A list record changes, so an old
-//! policy root can prove a revoked grant or an absence no longer true. A write a rule reads therefore
-//! retires every earlier root at once, and any other write keeps the outgoing root for a proof in flight.
+//! policy root can prove a revoked grant or an absence no longer true. A write that tightens a field a
+//! rule reads therefore retires every earlier root at once, and any other write keeps the outgoing root
+//! for a proof in flight.
 //!
 //! Read after `docs/design/records-and-roots.md`, `program-libs/interface/src/accounts/member_registry.rs`.
 //! Read before `programs/storage/src/instructions/update.rs`.
 //!
 //! Invariants:
-//! 1. An update that touches a list a rule can read, or mint settings, retires every earlier root in the same instruction, and a proof in flight under one of them fails and proves again. `StorageUpdateIxData::reaches_policy` classifies from the write masks, an allow list addition included, and no authority flag selects it.
-//! 2. Any other update keeps the outgoing root for `grace_slots`, and refuses while the oldest kept root is unexpired, so no such update drops a root its grace promised. Such a write changes no list a rule reads, so a long grace keeps no policy fact alive.
+//! 1. An update whose apply proof sets the restrictive bit retires every earlier root in the same instruction, and a proof in flight under one of them fails and proves again. The bit is set when a write clears a grant bit, sets a deny bit, masks a private list, tightens a mint setting or changes an asset limit, and the statement binds it.
+//! 2. Any other update keeps the outgoing root for `grace_slots`, and refuses while the oldest kept root is unexpired, so no such update drops a root its grace promised. Every served root then reads each policy field no more permissive than the newest root, and rules are monotone in those fields, so a kept root admits no transfer the newest refuses.
 //! 3. Every salted owner write proves credential state and address inclusion, then raises `absence_floor` to the accepted address sequence in the same instruction. A salted read accepts no address root below the source floor, preventing absence for an owner with a private entry.
 //! 4. A revision counts up by one per update and names at most one root.
 
@@ -184,8 +185,8 @@ impl StorageRegistry {
             }
             None
         };
-        // 2. The write masks pick the retirement, the authority's grace reaches only a write no rule reads.
-        let retirement = match data.reaches_policy() {
+        // 2. The proven restrictive bit picks the retirement, the grace reaches only a batch that tightens nothing.
+        let retirement = match data.apply.restrictive() {
             true => Retirement::Immediate,
             false => Retirement::Graced {
                 slot,

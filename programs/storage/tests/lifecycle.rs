@@ -227,6 +227,7 @@ impl Store {
             new_next_index: u32::try_from(vector["nextIndex"].as_u64().unwrap())
                 .unwrap()
                 .to_le_bytes(),
+            restrictive: u8::from(vector["restrictive"].as_bool().unwrap()),
         };
         let data = StorageUpdateIxData {
             revision: revision.into(),
@@ -574,10 +575,27 @@ fn a_curator_initializes_without_a_ring() {
 fn record_writes_apply_with_a_real_proof() {
     let mut store = Store::new();
     store.initialize(GRACE);
-    for revision in 0..3 {
-        store.send_as_authority(store.update(revision)).unwrap();
-    }
+    store.send_as_authority(store.update(0)).unwrap();
+    store.send_as_authority(store.update(1)).unwrap();
+    assert_eq!(store.root(1), Err(StorageError::RootExpired));
+    // The approval grant tightens nothing and keeps the block list root served.
+    store.send_as_authority(store.update(2)).unwrap();
     assert_eq!(store.root(3), Ok(field(&store.proofs["update2"]["root"])));
+    assert_eq!(store.root(2), Ok(field(&store.proofs["update1"]["root"])));
+}
+
+#[test]
+#[ignore = "missing artifact, proofs.json needs the rotated apply keys"]
+fn a_block_list_addition_claimed_permissive_fails_the_real_proof() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    store.send_as_authority(store.update(0)).unwrap();
+    let mut permissive = store.update(1);
+    *permissive.data.last_mut().unwrap() = 0;
+    assert_eq!(
+        store.send_as_authority(permissive),
+        refusal(StorageError::ProofVerificationFailed)
+    );
 }
 
 #[test]
@@ -586,7 +604,8 @@ fn a_forged_root_fails_the_real_proof() {
     let mut store = Store::new();
     store.initialize(GRACE);
     let mut forged = store.update(0);
-    *forged.data.last_mut().unwrap() ^= 1;
+    let root_end = forged.data.len() - 5;
+    forged.data[root_end - 1] ^= 1;
     assert_eq!(
         store.send_as_authority(forged),
         refusal(StorageError::ProofVerificationFailed)

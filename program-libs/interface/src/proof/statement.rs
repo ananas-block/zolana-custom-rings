@@ -400,7 +400,9 @@ pub struct ApplyRecordsStatement {
     /// The chain past the last write.
     pub chain_end: [u8; 32],
     pub count: u64,
-    /// `None` selects the public key, its statement ends at the count.
+    /// Set exactly when a write tightens a policy field or changes an asset limit.
+    pub restrictive: bool,
+    /// `None` selects the public key, its statement ends at the restrictive bit.
     pub private: Option<PrivateWrites>,
 }
 
@@ -429,8 +431,8 @@ impl ApplyRecordsStatement {
             .private
             .as_ref()
             .map_or(0, |private| 2 + 2 * private.credentials.capacity());
-        let mut elements = Vec::with_capacity(8 + credential_fields);
-        // 1. CRAP binds the record transition and the exact write chain under the selected write count.
+        let mut elements = Vec::with_capacity(9 + credential_fields);
+        // 1. CRAP binds the record transition, the exact write chain under the selected write count and the proven retirement class.
         elements.extend([
             domain::field(domain::APPLY_RECORDS),
             self.old_root,
@@ -440,6 +442,7 @@ impl ApplyRecordsStatement {
             self.chain_start,
             self.chain_end,
             right_align(&self.count.to_be_bytes()),
+            bit(self.restrictive),
         ]);
         // 2. A private key also binds the registry's ring and the authenticated credential roots.
         // The two families verify under distinct keys, so the shorter public statement needs no separate domain.

@@ -1,8 +1,9 @@
 //! The storage program's tags, instruction data and write classification.
 //!
-//! `StorageUpdateIxData::reaches_policy` reads the writes and no authority flag. A flag would let an
-//! authority keep a revoked root served by how it labels a write. Private masks require credential
-//! proofs unless a mint preimage authenticates an asset key at the same write position.
+//! The apply proof, and no authority label, decides whether an update retires the older roots. The
+//! instruction carries the restrictive bit and the statement binds it, so a label the writes do not
+//! prove fails verification. Private masks require credential proofs unless a mint preimage
+//! authenticates an asset key at the same write position.
 //!
 //! Read after `program-libs/interface/src/accounts/storage.rs`, `program-libs/interface/src/accounts/owner_grant.rs`.
 //! Read before `programs/storage/src/instructions/update.rs`.
@@ -174,6 +175,12 @@ impl<'a> StorageUpdateIxData<'a> {
                 sequence: u64::from_le_bytes(*sequence),
             })
         };
+        let apply =
+            ApplyRecordsIxData::parse(rest).map_err(|_| StorageError::InvalidInstructionData)?;
+        // 3. The restrictive bit has one encoding, the statement binds it.
+        if apply.restrictive > 1 {
+            return Err(StorageError::InvalidInstructionData);
+        }
         let ix = Self {
             revision: Revision(*revision),
             writes: writes
@@ -190,8 +197,7 @@ impl<'a> StorageUpdateIxData<'a> {
                 .collect(),
             credential_read,
             private_write,
-            apply: ApplyRecordsIxData::parse(rest)
-                .map_err(|_| StorageError::InvalidInstructionData)?,
+            apply,
         };
         // 4. The authenticated write classes decide whether the selected credential roots are required or forbidden.
         ix.check_credential_read()?;
@@ -246,11 +252,6 @@ impl<'a> StorageUpdateIxData<'a> {
         Ok(())
     }
 
-    /// Any write a rule can read takes effect with zero grace.
-    pub fn reaches_policy(&self) -> bool {
-        self.writes.iter().any(RecordWriteData::reaches_policy)
-    }
-
     /// The leaf writes the apply proof hashes, a mint settings tag above 1 refused.
     pub fn entries(&self) -> impl Iterator<Item = Result<RecordWrite, CustomRingError>> + '_ {
         self.writes.iter().map(RecordWriteData::storage_entry)
@@ -266,11 +267,6 @@ impl RecordWriteData {
             &self.mint_policy,
             ListSet::STORAGE_WRITES,
         )
-    }
-
-    fn reaches_policy(&self) -> bool {
-        self.mint_policy[0] != 0
-            || u64::from_le_bytes(self.lists.mask) & ListSet::POLICY_LISTS.record_bits() != 0
     }
 }
 

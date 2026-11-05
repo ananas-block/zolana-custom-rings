@@ -332,6 +332,7 @@ fn apply_records_appends_private_write_identity_and_credential_roots() {
         chain_start: [5; 32],
         chain_end: [6; 32],
         count: 2,
+        restrictive: true,
         private: Some(PrivateWrites {
             credential_writes: 1,
             private_ring_id: [7; 32],
@@ -347,11 +348,12 @@ fn apply_records_appends_private_write_identity_and_credential_roots() {
         [5; 32],
         [6; 32],
         right_align(&[2]),
+        right_align(&[1]),
     ];
     let mut expected = public_prefix.clone();
     expected.extend([right_align(&[1]), [7; 32]]);
     expected.extend(roots(2).elements());
-    assert_eq!(expected.len(), 16);
+    assert_eq!(expected.len(), 17);
     assert_eq!(statement.elements(), expected);
     assert_eq!(
         statement.hash().unwrap(),
