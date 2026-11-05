@@ -36,6 +36,8 @@ Breaking
   service clients reject malformed or conflicting credentials during construction
   and preserve unrelated URL queries → forward method paths unchanged and supply
   the API key in one place.
+- `syncRingWallet` takes a `RingWallet` holding the wallet beside its notes of unregistered mints, and `openRingNotes` returns those notes in `pendingOpenings` in place of a `pending` count → wrap each wallet with `RingWallet.create(wallet)`, store it with `RingWallet.toJson()` and read waiting notes through `RingWallet.pendingOpenings()`.
+- `MergeLedger`, its `ConfirmedMerge`, `MergeInput`, `KnownMergeInput`, `MergeTransition` and `AuditedMergeOutput` types, `recoverMergeOpening`, `MergeAuditorOpening`, `KnownUtxos.merged` and the `merged` kind of `InputOpening` are gone, a ring merge record opens its output in full → read a merge output from `KnownUtxoIndex.utxo` by its commitment.
 - `openAuditorRegions`, the `EscrowedKeys` type and the error code `RING_ANONYMOUS_RECIPIENT_CURVE` are gone, `openAuditorRegions` opened an unsalted schedule no transfer stream uses → open an auditor stream with `openRingDisclosure` and drop handling of that code.
 
 Added
@@ -49,7 +51,8 @@ Added
 
 Fixed
 
-- `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, now that commitment stays in `unopened` and a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done.
+- `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, and it lost every zero-key note and every merge output whose seed the nullifier key does not derive, now that commitment stays in `unopened`, a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done, and each owned note opens from the auditor's record alone.
+- `syncRingWallet` refused every sync after a payment of an unregistered mint arrived and read the whole ring history on each sync, now that note waits in `RingWallet.pendingOpenings()` until its mint registers and a later sync reads only rows past its last position.
 - A hand-built `RuleTable` skipped the checks `decodeRuleTable` runs, now policy writes, `policyTableProofInputs` and its hash rerun `buildRuleTable` and refuse such a table with `RING_RULE_TABLE_INVALID`.
 - `buildRingMergeTransaction` and `PreparedRingDeposit.prepare` on an anonymous ring refused a PDA owner before any proof, now both build for one, and a zero-key merge names the PDA as the signer its program signs through CPI.
 - `LocalRingKeys.destroy` left the list salt key usable, now it wipes that key too and every method needing a secret raises `KEYPAIR_INVALID_SECRET_KEY` afterward.
