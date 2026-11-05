@@ -390,6 +390,66 @@ describe("relay transfer terms", () => {
     expect(decoded.coOwners).toEqual([]);
   });
 
+  it.each(["anonymous", "confidential"] as const)(
+    "sends a spending co-owner's key and keeps an idle one's off the %s relay",
+    async (mode) => {
+      const fixture = await ringFixture({ mode });
+      const signing = SigningKey.generate();
+      const sender = ShieldedKeypair.fromKeypair(signing);
+      const [spending, idle, payee] = [0, 1, 2].map(() => ShieldedKeypair.generate()) as [
+        ShieldedKeypair,
+        ShieldedKeypair,
+        ShieldedKeypair,
+      ];
+      for (const owner of [sender, spending, idle, payee]) fixture.enroll(owner.shieldedAddress());
+      const notes = [
+        noteInput(sender, 10n, fixture.ringProgramId),
+        noteInput(spending, 10n, fixture.ringProgramId),
+      ];
+      const coOwnerOf = (owner: ShieldedKeypair) => ({
+        owner: owner.shieldedAddress().solanaAddress(),
+        nullifierKey: owner.nullifierKey(),
+      });
+      const relayInput = {
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+        nullifierKey: sender.nullifierKey(),
+        notes: notes.map(noteOf),
+      };
+      const transfer = ringSpendTransfer({
+        owner: sender.shieldedAddress(),
+        inputs: notes,
+        feePayer: fixture.authority,
+      });
+      const confidential = CustomRingTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        keys: walletKeys(sender),
+        transfer,
+        assets,
+      })
+        .withCoOwner(coOwnerOf(idle))
+        .withCoOwner(coOwnerOf(spending));
+      let relay;
+      if (mode === "anonymous") {
+        ({ relay } = await confidential
+          .withAnonymousSigner(signingKeySpendSigner(signing))
+          .withPayment({ to: addressOf(fixture, payee), asset: SOL_MINT, amount: 4n, reply: null })
+          .prepareRelay(fixture.client, relayInput));
+      } else {
+        transfer.send(payee.shieldedAddress(), SOL_MINT, 4n);
+        relay = await confidential
+          .withInProofOwner(signingKeySpendSigner(signing))
+          .prepareRelay(fixture.client, relayInput);
+      }
+      const { intent } = relay.request;
+      if (intent.operation !== mode) throw new Error(`a ${mode} relay`);
+      const decoded = await decodeRelayProofInputs(
+        new Uint8Array(getBase64Encoder().encode(intent.proofInputs)),
+        assets,
+      );
+      expect(decoded.coOwners.map((held) => held.owner)).toEqual([coOwnerOf(spending).owner]);
+    },
+  );
+
   it("carries a public co-owner's key across the wire and opens its notes to it", async () => {
     const fixture = await ringFixture({ mode: "anonymous" });
     const signing = SigningKey.generate();
