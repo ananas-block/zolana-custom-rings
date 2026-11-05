@@ -59,6 +59,7 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_READ_LIMIT",
   "RING_READER_KEY",
   "RING_RECOVERY_INCOMPLETE",
+  "RING_RECOVERY_PROGRESS_MISMATCH",
   "RING_RESERVED_INPUT_SPENT",
   "RING_RPC",
   "RING_RPC_CONFIG",

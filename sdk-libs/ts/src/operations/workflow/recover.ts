@@ -52,7 +52,7 @@ export interface RingRecoveryParams {
   readonly pageSize?: number;
   /** Pages one call reads before it pauses. */
   readonly maxPages?: number;
-  /** Continues after the last page it covers, once. */
+  /** Continues after the last page it covers. */
   readonly progress?: RingRecoveryProgress;
 }
 
@@ -61,9 +61,34 @@ export type RingRecoveryStep =
   | Readonly<{ kind: "complete"; notes: RecoveredRingNotes }>
   | Readonly<{ kind: "paused"; progress: RingRecoveryProgress }>;
 
-/** Mirrors Rust `RecoveryProgress`, `cursor` is the text Rust `HistoryCursor` prints. */
-export interface RingRecoveryProgress {
-  readonly cursor: string;
+// Set in the static block of `RingRecoveryProgress`, no other code reads its state.
+let pausedAt: (cursor: string, member: Bytes32, state: RecoveryState) => RingRecoveryProgress;
+let resumedState: (progress: RingRecoveryProgress, member: Bytes32) => RecoveryState;
+
+/** Mirrors Rust `RecoveryProgress`, `cursor` prints as Rust `HistoryCursor` and every resume works on a copy. */
+export class RingRecoveryProgress {
+  /** The source's owner hash, the ring stays bound through `cursor`. */
+  readonly member: Bytes32;
+  readonly #state: RecoveryState;
+
+  private constructor(
+    readonly cursor: string,
+    member: Bytes32,
+    state: RecoveryState,
+  ) {
+    this.member = Uint8Array.from(member) as Bytes32;
+    this.#state = state;
+    Object.freeze(this);
+  }
+
+  static {
+    pausedAt = (cursor, member, state) => new RingRecoveryProgress(cursor, member, state);
+    resumedState = (progress, member) => {
+      if (!equalBytes(progress.member, member))
+        throw new RingError("RING_RECOVERY_PROGRESS_MISMATCH");
+      return progress.#state.clone();
+    };
+  }
 }
 
 /** Mirrors Rust `RecoveredNotes`, verified unspent notes with the coverage left unresolved. */
@@ -87,7 +112,9 @@ export async function recoverRingMemberNotes(
   await initializePoseidon();
   if (!equalBytes(input.nullifierKey.publicKey(), input.source.nullifierPublicKey))
     throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
-  const state = input.progress === undefined ? newState() : resumedState(input.progress);
+  const member = input.source.ownerHash();
+  const state =
+    input.progress === undefined ? new RecoveryState() : resumedState(input.progress, member);
   const origin = input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc);
   const rows = new RowOrigins(origin, input.ringProgramId, context);
   // 1. One page at a time, the cursor names the last row read and the next call starts after it.
@@ -113,9 +140,7 @@ export async function recoverRingMemberNotes(
   );
   // 2. A page with more holds the last slot back, the terminal page closes it.
   if (reach.nextCursor !== undefined) {
-    const progress: RingRecoveryProgress = Object.freeze({ cursor: reach.nextCursor });
-    progressStates.set(progress, state);
-    return Object.freeze({ kind: "paused", progress });
+    return Object.freeze({ kind: "paused", progress: pausedAt(reach.nextCursor, member, state) });
   }
   applyRows(input, state, state.openSlot.splice(0), rows);
   const { found } = state;
@@ -131,26 +156,23 @@ export async function recoverRingMemberNotes(
   });
 }
 
-interface RecoveryState {
+class RecoveryState {
   readonly found: Found;
   readonly unsupportedDeposits: Bytes32[];
   readonly unseenInputs: Bytes32[];
   /** The indexer orders one slot by signature, a later row of the slot can create the note an earlier row spends. */
   openSlot: ConfirmedRingTransaction[];
-}
 
-/** A progress holds the state its pages built, a copy or a second resume finds none. */
-const progressStates = new WeakMap<RingRecoveryProgress, RecoveryState>();
+  constructor(source?: RecoveryState) {
+    this.found = source?.found.clone() ?? new Found();
+    this.unsupportedDeposits = [...(source?.unsupportedDeposits ?? [])];
+    this.unseenInputs = [...(source?.unseenInputs ?? [])];
+    this.openSlot = [...(source?.openSlot ?? [])];
+  }
 
-function newState(): RecoveryState {
-  return { found: new Found(), unsupportedDeposits: [], unseenInputs: [], openSlot: [] };
-}
-
-function resumedState(progress: RingRecoveryProgress): RecoveryState {
-  const state = progressStates.get(progress);
-  if (state === undefined) throw new RingError("RING_HISTORY_CURSOR_INVALID");
-  progressStates.delete(progress);
-  return state;
+  clone(): RecoveryState {
+    return new RecoveryState(this);
+  }
 }
 
 /** A row left unread can hold a source note or its spend, Rust `refuse_skipped`. */
@@ -250,10 +272,20 @@ class Found {
     readonly commitment: Bytes32;
     readonly nullifier: Bytes32;
   }[] = [];
-  readonly unknownMints = new Set<Address>();
+  unknownMints = new Set<Address>();
   /** Every deposit and merge UTXO the auditor opened, a transfer disclosure names them by hash. */
-  readonly created = new KnownUtxoIndex();
-  readonly #seen = new Set<string>();
+  created = new KnownUtxoIndex();
+  #seen = new Set<string>();
+
+  clone(): Found {
+    const copy = new Found();
+    copy.candidates = [...this.candidates];
+    copy.unresolved = [...this.unresolved];
+    copy.unknownMints = new Set(this.unknownMints);
+    copy.created = this.created.clone();
+    copy.#seen = new Set(this.#seen);
+    return copy;
+  }
 
   /** `false` when the commitment was already claimed. */
   claim(commitment: Bytes32): boolean {

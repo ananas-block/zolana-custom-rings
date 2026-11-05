@@ -1307,7 +1307,9 @@ describe("recoverRingMemberNotes", () => {
     );
     let page = 0;
     const endless = () => transactionsPage({ paginationToken: `t${++page}` });
-    await expect(recoverStep({ owner, auditor, transaction, tags: endless })).resolves.toEqual({
+    await expect(
+      recoverStep({ owner, auditor, transaction, tags: endless }),
+    ).resolves.toMatchObject({
       kind: "paused",
       progress: { cursor: historyCursor(RING, "ring", "t32") },
     });
@@ -1390,30 +1392,43 @@ describe("recoverRingMemberNotes", () => {
       expect(await pagedRecovery({ ...page, progress: second })).toEqual(full);
     });
 
-    it("resumes past every row its progress read and resumes it only once", async () => {
+    it("resumes past every row its progress read and retries the same progress after an error", async () => {
       const auditor = X25519Keypair.generate();
       const owner = ShieldedKeypair.generate();
       const { rows } = await slotSplitHistory(owner, auditor);
+      const [spend, , kept] = rows;
       const full = await pagedRecovery({ owner, auditor, rows });
-      const page = { owner, auditor, rows, pageSize: 1, maxPages: 2 };
+      const page = { owner, auditor, rows, pageSize: 1, maxPages: 1 };
       const progress = paused(await pagedRecovery(page));
-      const read = new Set(rows.slice(0, 2).map((row) => row.txSignature));
-      const origin: TransactionOrigin = {
+      // A read of the row the progress already holds fails, the failing attempt reads one page more.
+      const origin = (failing: ReadonlySet<Signature>): TransactionOrigin => ({
         confirmedTransaction: async (row, ring) => {
-          if (read.has(row.txSignature)) throw new RingError("RING_ORIGIN_UNAVAILABLE");
+          if (failing.has(row.txSignature)) throw new RingError("RING_ORIGIN_UNAVAILABLE");
           return TRANSFERS.confirmedTransaction(row, ring);
         },
-      };
-      await expect(pagedRecovery({ ...page, origin })).rejects.toThrow(
-        ringError("RING_ORIGIN_UNAVAILABLE"),
-      );
-      expect(await pagedRecovery({ ...page, origin, progress })).toEqual(full);
-      await expect(pagedRecovery({ ...page, progress })).rejects.toThrow(
-        ringError("RING_HISTORY_CURSOR_INVALID"),
-      );
+      });
+      const resume = { ...page, maxPages: 4, progress };
       await expect(
-        pagedRecovery({ ...page, progress: { cursor: progress.cursor } }),
-      ).rejects.toThrow(ringError("RING_HISTORY_CURSOR_INVALID"));
+        pagedRecovery({
+          ...resume,
+          origin: origin(new Set([spend!.txSignature, kept!.txSignature])),
+        }),
+      ).rejects.toThrow(ringError("RING_ORIGIN_UNAVAILABLE"));
+      for (const _ of [0, 1])
+        expect(
+          await pagedRecovery({ ...resume, origin: origin(new Set([spend!.txSignature])) }),
+        ).toEqual(full);
+    });
+
+    it("refuses a progress another member started", async () => {
+      const auditor = X25519Keypair.generate();
+      const owner = ShieldedKeypair.generate();
+      const { rows } = await slotSplitHistory(owner, auditor);
+      const page = { owner, auditor, rows, pageSize: 1, maxPages: 1 };
+      const progress = paused(await pagedRecovery(page));
+      await expect(
+        pagedRecovery({ ...page, owner: ShieldedKeypair.generate(), progress }),
+      ).rejects.toThrow(ringError("RING_RECOVERY_PROGRESS_MISMATCH"));
     });
   });
 });

@@ -73,6 +73,7 @@ export function auditFailureKind(error: unknown): AuditFailureKind {
     case "RING_AUDIT_OUTPUT_MISMATCH":
     case "RING_INVALID_LENGTH":
     case "RING_NULLIFIER_KEY_MISMATCH":
+    case "RING_RECOVERY_PROGRESS_MISMATCH":
       return "auditData";
     default:
       return "transport";
