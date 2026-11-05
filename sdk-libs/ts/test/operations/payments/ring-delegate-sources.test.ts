@@ -380,9 +380,8 @@ describe("delegate sources", () => {
           ],
           txViewingKey: TX_VIEWING_KEY,
         });
-      // The client's tree holds SOL alone, the second tree holds both mints.
+      // The second tree holds both mints, the move spends it alone.
       await move([
-        noteOf(fixture, member, 0),
         on(noteOf(fixture, member, 1), second),
         on(noteOf(fixture, member, 2, USDC), second),
       ]);
@@ -393,10 +392,10 @@ describe("delegate sources", () => {
         fixture.client.treeId + 1,
         fixture.client.treeId + 1,
       ]);
-      // A move only two trees fund together is refused.
+      // Notes the greedy pick takes from two trees refuse, the owner consolidates first.
       await expect(
         move([noteOf(fixture, member, 0), on(noteOf(fixture, member, 1, USDC), second)]),
-      ).rejects.toMatchObject({ causeCode: "RING_INSUFFICIENT_BALANCE" });
+      ).rejects.toMatchObject({ causeCode: "RING_TOO_MANY_INPUT_TREES" });
     });
 
     it("spends several owners' notes and pays the change to the last note's owner", async () => {
