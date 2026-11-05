@@ -25,9 +25,9 @@ use zolana_ring_indexer::tracking::{GetPendingEnrollmentsRequest, RingPendingEnr
 use crate::{
     error::{redacted, RingRpcError},
     landing::{Attempt, Landing},
-    tracking::TrackingRefusal,
     record_writer::UPDATE_COMPUTE_UNITS,
     storage_chain::{ProvedEnrollments, StorageChain},
+    tracking::TrackingRefusal,
 };
 
 /// Applies the pending enrollments of each named ring, the payer holds no ring role.
@@ -169,7 +169,7 @@ impl RegistryPass<'_> {
     ) -> Result<Vec<Address>, RingRpcError> {
         let mut batch = Batch {
             owners: Vec::new(),
-            free_leaves: TRACKING_CAPACITY.saturating_sub(u64::from(tracking.next_index())),
+            free_leaves: TRACKING_CAPACITY.saturating_sub(tracking.next_index()),
         };
         let mut seen = HashMap::new();
         let mut after = None;

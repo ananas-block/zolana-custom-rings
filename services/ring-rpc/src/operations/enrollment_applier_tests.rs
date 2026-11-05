@@ -6,11 +6,13 @@ use std::sync::{
 use async_trait::async_trait;
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    storage::Revision, storage_instruction::tag, ApplyRecordsIxData, RING_POLICY,
-    STORAGE_PROGRAM_ID,
+    storage::{Revision, StorageRegistry},
+    storage_instruction::tag,
+    ApplyRecordsIxData, RING_POLICY, STORAGE_PROGRAM_ID,
 };
 use solana_account::Account;
 use solana_instruction::{AccountMeta, Instruction};
+use solana_message::VersionedMessage;
 use solana_signature::Signature;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_indexer_api::{Context, Hash};
@@ -25,7 +27,7 @@ use zolana_ring_member_registry::ApplyProofInputs;
 
 use super::*;
 use crate::{
-    landing::{ChainOutcome, ChainSubmit, LatestBlockhash},
+    landing::{ChainOutcome, ChainSubmit, LatestBlockhash, Simulation},
     upstream::RingConfiguration,
 };
 
@@ -80,7 +82,7 @@ impl StubChain {
         let account = accounts.entry(REGISTRY).or_insert_with(|| {
             let mut registry = TrackingRegistry::zeroed();
             registry.discriminator = TrackingRegistry::DISCRIMINATOR;
-            registry.next_index = 1u32.to_le_bytes();
+            registry.next_index = 1u64.to_le_bytes();
             stored(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&registry))
         });
         write(bytemuck::from_bytes_mut(&mut account.data));
@@ -152,6 +154,10 @@ impl ChainSubmit for StubChain {
     async fn outcome(&self, _signature: Signature) -> Result<Option<ChainOutcome>, RingRpcError> {
         Ok(self.outcome.lock().unwrap().take())
     }
+
+    async fn simulate(&self, _message: &VersionedMessage) -> Result<Simulation, RingRpcError> {
+        unreachable!("an applier sends without a simulation")
+    }
 }
 
 #[async_trait]
@@ -181,6 +187,7 @@ impl StorageChain for StubChain {
     async fn prove_apply(
         &self,
         _inputs: &ApplyProofInputs,
+        _registry: &StorageRegistry,
     ) -> Result<ApplyRecordsIxData, RingRpcError> {
         unreachable!("an applier writes no policy leaf")
     }
@@ -379,7 +386,7 @@ async fn a_root_another_applier_moved_during_the_proof_sends_nothing() {
 #[tokio::test]
 async fn a_full_tree_leaves_out_a_first_enrollment_and_applies_a_rotation() {
     let chain = StubChain::new();
-    chain.tracking(|registry| registry.next_index = (TRACKING_CAPACITY as u32).to_le_bytes());
+    chain.tracking(|registry| registry.next_index = TRACKING_CAPACITY.to_le_bytes());
     chain.enroll(owner(3), 1, 0);
     chain.enroll(owner(4), 2, 1);
     applier(&chain).flush().await;

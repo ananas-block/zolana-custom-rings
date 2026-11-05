@@ -15,8 +15,8 @@ use std::{
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    storage::StorageRegistry,
     storage::Revision,
+    storage::StorageRegistry,
     storage_instruction::{RecordWriteClassification, StorageUpdateIxData},
     ApplyRecordsIxData, CustomRingError, RecordWrite, RecordWriteData, RingAccount, RingPolicy,
 };
@@ -392,7 +392,7 @@ impl RecordWriter {
         if deferred {
             return Ok(());
         }
-        // 3. One batch per flush, the next starts from the root this one lands.
+        // 3. One batch per flush, the next starts from the root the sent batch lands.
         let Some(plan) = (BatchPlan { queue: &live, slot }).decide()? else {
             return Ok(());
         };

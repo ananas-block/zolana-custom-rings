@@ -1552,7 +1552,6 @@ name = "custom-ring-sdk"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "borsh",
  "bytemuck",
  "curve25519-dalek",
  "custom-ring-interface",
@@ -1587,7 +1586,6 @@ dependencies = [
  "spr-program",
  "spr-transaction",
  "spr-tree",
- "spr-user-registry-interface",
  "thiserror 2.0.20",
  "tokio",
  "wincode",
@@ -7446,15 +7444,11 @@ dependencies = [
 name = "spr-program"
 version = "0.1.0"
 dependencies = [
- "borsh",
- "pinocchio 0.11.2",
  "solana-address 2.6.1",
  "spr-hasher",
  "spr-instruction",
  "spr-interface",
- "spr-tree",
  "spr-zk-dsl",
- "thiserror 2.0.20",
  "wincode",
 ]
 
@@ -9176,9 +9170,7 @@ dependencies = [
  "spr-instruction",
  "spr-interface",
  "spr-keypair",
- "spr-program",
  "spr-transaction",
- "spr-tree",
  "spr-user-registry-interface",
  "thiserror 2.0.20",
  "tokio",
@@ -9265,7 +9257,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
- "borsh",
  "bytemuck",
  "clap",
  "custom-ring-interface",
@@ -9309,10 +9300,8 @@ dependencies = [
  "spr-instruction",
  "spr-interface",
  "spr-keypair",
- "spr-program",
  "spr-rpc-http",
  "spr-transaction",
- "spr-tree",
  "thiserror 2.0.20",
  "tokio",
  "tower",

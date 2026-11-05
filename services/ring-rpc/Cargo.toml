@@ -17,7 +17,6 @@ path = "src/main.rs"
 [dependencies]
 aes-gcm = { workspace = true }
 async-trait = { workspace = true }
-borsh = { workspace = true }
 custom-ring-interface = { workspace = true }
 custom-ring-sdk = { workspace = true }
 anyhow = { workspace = true }
@@ -68,8 +67,6 @@ spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
 spr-rpc-http = { workspace = true }
 spr-instruction = { workspace = true }
-spr-program = { workspace = true, features = ["compression"] }
-spr-tree = { workspace = true }
 spr-interface = { workspace = true }
 spr-keypair = { workspace = true }
 zolana-secret-file = { workspace = true }

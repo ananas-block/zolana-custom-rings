@@ -28,7 +28,6 @@ use zolana_ring_policy::Member;
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
-    tracking::{HeldEnrollment, OwnerEnrollment, ScanEnd, TrackingScan},
     error::{redacted, GrantRefusal, RingRpcError},
     frame_repairs::RepairBook,
     grant_rows::{GrantPair, GrantRow},
@@ -40,6 +39,7 @@ use crate::{
     replay::ReplayCheck,
     spend_machine::{InputRead, Observation},
     spent_index::{LoadSpends, LoadedProjection, NoteSeal, ProjectionWriter},
+    tracking::{HeldEnrollment, OwnerEnrollment, ScanEnd, TrackingScan},
     upstream::{
         MergeAuditRequest, RingConfiguration, RingFrame, RingHistoryPage, TransactionPage,
         TransactionSource,

@@ -80,6 +80,10 @@ pub use crate::{
         fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RelayedDeposit,
         RingDeposit, RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
     },
+    enrollment::{
+        Enroll, EnrollInstruction, EnrollRelay, EnrollmentAttempt, EnrollmentJournal,
+        EnrollmentOutcome, WriteOwnerGrant,
+    },
     error::RingError,
     merge::{
         CustomRingMerge, CustomRingMergeInstruction, FittedMerge, MergeProofInput, MergeRelay,

@@ -1265,6 +1265,7 @@ impl DepositDisclosure {
         let assets: Vec<_> = self.slots.iter().map(|slot| slot.asset).collect();
         let public_input_hash = DepositPublicInput {
             context_hash: &self.context_hash,
+            key_capacity: records.key_capacity,
             owner_utxo_hashes: &owner_utxo_hashes,
             ciphertexts: &self.encryption.ciphertexts,
             assets: &assets,

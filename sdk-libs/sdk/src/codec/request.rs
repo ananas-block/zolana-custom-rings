@@ -759,8 +759,8 @@ pub(crate) struct ApplyEnrollments {
     pub old_root: [u8; 32],
     #[serde(with = "fe")]
     pub new_root: [u8; 32],
-    pub old_next_index: u32,
-    pub new_next_index: u32,
+    pub old_next_index: u64,
+    pub new_next_index: u64,
     #[serde(with = "fe")]
     pub chain_start: [u8; 32],
     #[serde(with = "fe")]

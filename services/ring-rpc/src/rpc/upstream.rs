@@ -16,9 +16,6 @@ use solana_rpc_client::{
     rpc_client::GetConfirmedSignaturesForAddress2Config,
 };
 use solana_signature::Signature;
-use solana_transaction_status_client_types::{
-    option_serializer::OptionSerializer, EncodedTransaction, UiMessage,
-};
 use spr_api::ZolanaApi;
 use spr_client::{
     rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
@@ -35,7 +32,7 @@ use spr_transaction::{AssetRegistry, Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
     history::HistoryPosition, program_data, ring_deposits_in, AsyncRingIndexer, AuditError,
     ConfirmedEventKind, MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError,
-    RingOrigin, StorageTip, TransactionOrigin, ORIGIN_TRANSACTION_CONFIG,
+    RingOrigin, StorageTip, TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,

@@ -135,7 +135,8 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, StorageRegistry> {
         let account = &*self.state.account;
         // The program served the named tracking revision from its pin before it verified the proof,
         // and a failed transaction never reaches here, so the floor moves to the named revision.
-        if data.tracking_revision.is_some() && tracking_registry != Some(account.tracking_registry) {
+        if data.tracking_revision.is_some() && tracking_registry != Some(account.tracking_registry)
+        {
             return Err(fault("the update names another tracking registry"));
         }
         let mut rotated = *account;

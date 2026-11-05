@@ -36,6 +36,13 @@ fn owner(seed: u8) -> Address {
     Address::new_from_array([seed; 32])
 }
 
+/// Byte 0 is the seal's pad, a canonical salt leaves it zero.
+fn list_salt(seed: u8) -> [u8; 32] {
+    let mut salt = [seed; 32];
+    salt[0] = 0;
+    salt
+}
+
 fn served(auditor: &X25519Keypair, owners: &[u8]) -> (Served, Vec<HeldEnrollment>) {
     let ledger = TrackingLedger::default();
     let held = owners
@@ -44,7 +51,7 @@ fn served(auditor: &X25519Keypair, owners: &[u8]) -> (Served, Vec<HeldEnrollment
             ledger.enroll(Enrollment {
                 owner: owner(*seed),
                 key: &NullifierKey::from_secret([*seed; 31]),
-                list_salt: [0; 32].map(|_| *seed & 0x0f),
+                list_salt: list_salt(*seed),
                 auditor: &auditor.pubkey(),
             })
         })
@@ -56,7 +63,12 @@ fn served(auditor: &X25519Keypair, owners: &[u8]) -> (Served, Vec<HeldEnrollment
     (served, held)
 }
 
-async fn scan(served: &Served, auditor: &X25519Keypair, store: &AuditStore, cursor: &mut u64) -> Result<ScanEnd, RingRpcError> {
+async fn scan(
+    served: &Served,
+    auditor: &X25519Keypair,
+    store: &AuditStore,
+    cursor: &mut u64,
+) -> Result<ScanEnd, RingRpcError> {
     TrackingScan {
         ring: RING,
         auditor,
@@ -74,13 +86,18 @@ async fn a_scan_holds_every_enrolled_owner_and_completes_at_the_next_index() {
     let (served, held) = served(&auditor, &[1, 2, 3]);
     let store = AuditStore::default();
     let mut cursor = 0;
-    let end = scan(&served, &auditor, &store, &mut cursor).await.expect("scan");
+    let end = scan(&served, &auditor, &store, &mut cursor)
+        .await
+        .expect("scan");
     assert_eq!(end, ScanEnd::Complete);
     assert_eq!(cursor, 4, "the sentinel and three rows");
     for held in held {
         assert_eq!(store.enrollment(&held.member), Some(held));
         let secrets = held.secrets(&auditor).expect("opens");
-        assert_eq!(secrets.nullifier_key.pubkey().expect("pk"), held.nullifier_pk);
+        assert_eq!(
+            secrets.nullifier_key.pubkey().expect("pk"),
+            held.nullifier_pk
+        );
     }
 }
 

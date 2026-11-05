@@ -6,7 +6,7 @@ use custom_ring_interface::{
     },
     tracking::{
         tracking_chain_start, TrackingAuthorization, TrackingEntry, TrackingRegistry,
-        TRACKING_EMPTY_ROOT,
+        TRACKING_EMPTY_ROOT, TRACKING_QUAD_HEIGHT,
     },
     CustomRingProof, STORAGE_PROGRAM_ID, VIEWING_PUBKEY_TAG,
 };
@@ -427,7 +427,7 @@ fn wire_record(view: &RingTrackingRecordView) -> TrackingRecord {
     }
 }
 
-fn wire_path(path: &RingRecordPathView) -> QuadPathOf<13> {
+fn wire_path(path: &RingRecordPathView) -> QuadPathOf<TRACKING_QUAD_HEIGHT> {
     QuadPathOf {
         index: path.index,
         siblings: core::array::from_fn(|level| {

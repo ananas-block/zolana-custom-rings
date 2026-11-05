@@ -38,6 +38,8 @@ use std::{
     },
     time::Duration,
 };
+use zolana_ring_client::rpc::WalletEnrollment;
+use zolana_ring_indexer::tracking::{GetTrackingRecordsRequest, GetTrackingRecordsResponse};
 use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
 use zolana_ring_policy::{ListId, Member, MintPolicy};
 use zolana_ring_rpc::tracking_fixture::{Enrollment, TrackingLedger};
@@ -596,7 +598,10 @@ impl TransactionSource for StaticSource {
         Ok(self.co_signers.get(&signer).copied())
     }
 
-    async fn tracking_root(&self, _ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+    async fn tracking_root(
+        &self,
+        _ring: Address,
+    ) -> Result<Option<zolana_ring_rpc::TrackingRoot>, ClientError> {
         Ok(self.tracking.0.root())
     }
 

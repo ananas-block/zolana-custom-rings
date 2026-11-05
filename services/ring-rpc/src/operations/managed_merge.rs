@@ -363,8 +363,7 @@ pub(crate) mod tests {
         GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
     };
 
-    use spr_indexer_api::{Context, TransactionEvents};
-    use spr_transaction::ShieldedTransaction;
+    use zolana_ring_indexer::tracking::{GetTrackingRecordsRequest, GetTrackingRecordsResponse};
 
     use super::*;
     use crate::{
@@ -379,7 +378,7 @@ pub(crate) mod tests {
         },
         upstream::{
             DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
-            RingFrame, RingHistoryPage, TransactionPage,
+            RingFrame, RingHistoryPage, TrackingRoot, TransactionPage,
         },
         utxos::CreatedIn,
     };

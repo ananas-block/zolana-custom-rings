@@ -6,8 +6,7 @@ use custom_ring_interface::{
     mint_policy_write,
     storage::{chain_start, RegistryId, Revision, StorageRegistry},
     storage_instruction::{tag, InitializeIxData, StorageUpdateIxData},
-    ApplyRecordsIxData, RecordWriteData, WriteRecordsIxData, FIELD_MAX,
-    STORAGE_PROGRAM_ID,
+    ApplyRecordsIxData, RecordWriteData, WriteRecordsIxData, FIELD_MAX, STORAGE_PROGRAM_ID,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement, TransactionTrait};
 use sea_orm_migration::MigratorTrait;
@@ -193,7 +192,10 @@ async fn refused_rows_leave_the_tree_and_floor(
     tx.commit().await.unwrap();
     let after = stored(db).await;
     assert_eq!(after, before);
-    assert_eq!(after.state.unwrap().account.tracking_floor, Revision::from(FLOOR));
+    assert_eq!(
+        after.state.unwrap().account.tracking_floor,
+        Revision::from(FLOOR)
+    );
     assert_eq!(state.account.tracking_floor, Revision::from(FLOOR));
 }
 
@@ -209,7 +211,10 @@ async fn the_update_with_no_blocked_leaf_applies_and_raises_the_floor() {
         .unwrap();
     tx.commit().await.unwrap();
     let after = stored(&db).await;
-    assert_eq!(after.state.unwrap().account.tracking_floor, Revision::from(FLOOR + 5));
+    assert_eq!(
+        after.state.unwrap().account.tracking_floor,
+        Revision::from(FLOOR + 5)
+    );
     assert_eq!(after.records.len(), 3);
 }
 

@@ -980,7 +980,10 @@ mod capacities {
             .instruction(CustomRingProof::zeroed(), frame)
             .unwrap();
         let (prefix, spp) = instruction.data.split_at(DepositPrefix::SIZE);
-        assert_eq!(DepositPrefix::parse(prefix).unwrap().key_capacity, key);
+        assert_eq!(
+            DepositPrefix::parse(&mut &prefix[..]).unwrap().key_capacity,
+            key
+        );
         let deposit = RingDepositIxDataRef::from_bytes(&spp[1..]).unwrap();
         assert_eq!(deposit.deposits.len(), count);
         let capsules: Vec<_> = deposit

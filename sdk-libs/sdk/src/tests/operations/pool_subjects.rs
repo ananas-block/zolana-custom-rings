@@ -163,7 +163,7 @@ fn the_widest_in_proof_spend_fills_the_wide_pools_exactly() {
         .unwrap(),
     );
     let mut plan = RecordPlan::new(gates);
-    let mut credentials = PoolSubjects::default();
+    let mut tracking = PoolSubjects::default();
     let member = |index: usize| {
         let mut member = [0; 32];
         member[31] = 0x10 + index as u8;
@@ -173,7 +173,7 @@ fn the_widest_in_proof_spend_fills_the_wide_pools_exactly() {
         let key = Member::salted(&Member::from_bytes(owner).unwrap(), &SALT).unwrap();
         plan.owner(OwnerQuery {
             member: owner,
-            credential: credentials.index(Some(owner)),
+            tracking: tracking.index(Some(owner)),
             salted: Some(SaltedKey {
                 list_salt: SALT,
                 key: *key.as_bytes(),
@@ -201,7 +201,7 @@ fn the_widest_in_proof_spend_fills_the_wide_pools_exactly() {
         spends_default_ring: false,
         legs: 32,
         owners: 12,
-        pools: plan.pools(&credentials),
+        pools: plan.pools(&tracking),
         wide: false,
     };
     let keyed = transfer_key(spend).unwrap();
@@ -212,7 +212,7 @@ fn the_widest_in_proof_spend_fills_the_wide_pools_exactly() {
         RecordPools {
             own: 115,
             curator: 115,
-            credentials: 52
+            tracking: 52
         }
     );
 }

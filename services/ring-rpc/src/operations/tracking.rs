@@ -19,15 +19,11 @@
 
 use std::{collections::HashMap, future::Future};
 
-use custom_ring_interface::{
-    domain,
-    tracking::{TrackingRecord, TRACKING_QUAD_HEIGHT},
-    REGISTER_KEY_CIPHERTEXT_LEN,
-};
+use custom_ring_interface::{domain, tracking::TRACKING_QUAD_HEIGHT, REGISTER_KEY_CIPHERTEXT_LEN};
 use solana_address::Address;
+use spr_client::ClientError;
 use spr_hasher::primitives::hash_bytes;
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
-use spr_client::ClientError;
 use thiserror::Error;
 use zolana_ring_client::{
     records::path_of, resolver::tracking_record, RingIndexerError, SealedNullifierKey,
@@ -35,7 +31,7 @@ use zolana_ring_client::{
 use zolana_ring_indexer::tracking::{
     GetTrackingRecordsRequest, GetTrackingRecordsResponse, RingIndexedTrackingRecordView,
 };
-use zolana_ring_member_registry::{OpeningCheck, TrackingOpening};
+use zolana_ring_member_registry::{OpeningCheck, TrackingOpening, TrackingRecord};
 use zolana_ring_policy::{Member, MemberError};
 
 use crate::{
@@ -167,7 +163,10 @@ impl HeldEnrollment {
     }
 
     /// Opened per use, the secrets never stay in the store.
-    pub fn secrets(&self, auditor: &X25519Keypair) -> Result<EnrollmentSecrets, TrackingRefusal> {
+    pub(crate) fn secrets(
+        &self,
+        auditor: &X25519Keypair,
+    ) -> Result<EnrollmentSecrets, TrackingRefusal> {
         open_seal(
             &self.eph_u,
             &self.ciphertext,
@@ -210,10 +209,7 @@ impl HeldEnrollments {
     }
 
     /// All or nothing, returns the owner keys held for the first time.
-    pub fn admit(
-        &mut self,
-        found: Vec<HeldEnrollment>,
-    ) -> Result<Vec<[u8; 32]>, TrackingRefusal> {
+    pub fn admit(&mut self, found: Vec<HeldEnrollment>) -> Result<Vec<[u8; 32]>, TrackingRefusal> {
         // 1. The program never changes a row's key fields, a differing one refuses the page.
         let mut fresh: HashMap<[u8; 32], HeldEnrollment> = HashMap::new();
         for held in found {
@@ -298,8 +294,8 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
         root: &TrackingRoot,
     ) -> Result<HeldEnrollment, TrackingRefusal> {
         let record = tracking_record(&view.record);
-        let path = path_of::<TRACKING_QUAD_HEIGHT>(&view.path)
-            .map_err(|_| TrackingRefusal::Opening)?;
+        let path =
+            path_of::<TRACKING_QUAD_HEIGHT>(&view.path).map_err(|_| TrackingRefusal::Opening)?;
         // 1. The path rebuilds the registry's root, the indexer cannot add or alter a row.
         OpeningCheck {
             opening: &TrackingOpening::Present { record, path },
@@ -309,7 +305,11 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
         .verify()
         .map_err(|_| TrackingRefusal::Opening)?;
         // 2. The seal hashes to `ct_hash` and its owner hashes to the member, so the row names them.
-        let seal = view.record.seal.as_ref().ok_or(TrackingRefusal::SealMismatch)?;
+        let seal = view
+            .record
+            .seal
+            .as_ref()
+            .ok_or(TrackingRefusal::SealMismatch)?;
         let owner = seal.owner.0;
         let ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN] = seal
             .ciphertext
@@ -323,11 +323,11 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
             .as_slice()
             .try_into()
             .map_err(|_| TrackingRefusal::SealMismatch)?;
-        let eph_u = X25519Pubkey::from_bytes(&eph_pk)
+        let eph_u = X25519Pubkey::from_bytes(eph_pk)
             .map_err(|_| TrackingRefusal::SealMismatch)?
             .u();
-        let member_of_owner = Member::owner_tag(owner.as_array())
-            .map_err(|_| TrackingRefusal::SealMismatch)?;
+        let member_of_owner =
+            Member::owner_tag(owner.as_array()).map_err(|_| TrackingRefusal::SealMismatch)?;
         if hash_bytes(&ciphertext).ok() != Some(record.ct_hash)
             || *member_of_owner.as_bytes() != record.member
         {
@@ -343,8 +343,11 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
         )?;
         Ok(HeldEnrollment {
             owner_key: owner.to_bytes(),
-            owner_hash: owner_hash(&PublicKey::from_ed25519(owner.as_array()), &record.nullifier_pk)
-                .map_err(|_| TrackingRefusal::SealMismatch)?,
+            owner_hash: owner_hash(
+                &PublicKey::from_ed25519(owner.as_array()),
+                &record.nullifier_pk,
+            )
+            .map_err(|_| TrackingRefusal::SealMismatch)?,
             member: record.member,
             nullifier_pk: record.nullifier_pk,
             list_tag: record.list_tag,
@@ -371,7 +374,13 @@ fn checked_page(
     let len = u64::try_from(records.len()).map_err(|_| TrackingRefusal::PageShape)?;
     let next = cursor.checked_add(len).ok_or(TrackingRefusal::PageShape)?;
     let short = len < TRACKING_PAGE_ROWS && next != root.next_index;
-    if !consecutive || sentinel || len == 0 || len > TRACKING_PAGE_ROWS || short || next > root.next_index {
+    if !consecutive
+        || sentinel
+        || len == 0
+        || len > TRACKING_PAGE_ROWS
+        || short
+        || next > root.next_index
+    {
         return Err(TrackingRefusal::PageShape);
     }
     Ok(next)

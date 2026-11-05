@@ -13,7 +13,7 @@ use zolana_ring_policy::MemberError;
 
 use crate::{
     authority_transfer::AuthorityTransferError, authorize::Unauthorized, cosign::CoSignError,
-    tracking::TrackingRefusal, record_update::RecordUpdateRefusal, relay::RelayError,
+    record_update::RecordUpdateRefusal, relay::RelayError, tracking::TrackingRefusal,
 };
 
 #[derive(Debug, Error)]

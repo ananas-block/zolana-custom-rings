@@ -20,9 +20,9 @@ mod cosign_limits;
 mod cosign_usage;
 #[path = "storage/database.rs"]
 mod database;
-mod error;
 #[path = "operations/enrollment_applier.rs"]
 mod enrollment_applier;
+mod error;
 #[path = "operations/escrow_merge.rs"]
 mod escrow_merge;
 #[path = "rpc/finalized_history.rs"]

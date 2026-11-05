@@ -469,7 +469,7 @@ async fn an_enrollment_the_chain_simulation_refuses_holds_no_budget_and_sends_no
     let fixture = Fixture::with_budget(ENROLLMENT_LAMPORTS).await;
     let owner = Keypair::new_from_array([42; 32]);
     let quote = fixture.quote(RelayOperation::Enroll).await;
-    let request = enrollment(&owner, enroll_data(1), quote);
+    let request = enrollment(&owner, vec![6, 1, 2, 3], quote);
     *fixture.chain.simulation_refusal.lock().expect("refusal") =
         Some("TransactProofVerificationFailed".to_owned());
 

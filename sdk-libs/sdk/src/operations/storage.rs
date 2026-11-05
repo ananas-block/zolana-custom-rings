@@ -20,8 +20,8 @@ use custom_ring_interface::{
         StorageUpdateIxData,
     },
     tracking::{TrackingAuthorization, TrackingEntry},
-    ApplyRecordsIxData, ApplyRecordsStatement, CustomRingError, GRACE_SLOTS,
-    STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
+    ApplyRecordsIxData, ApplyRecordsStatement, CustomRingError, GRACE_SLOTS, STORAGE_PROGRAM_ID,
+    SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -264,7 +264,7 @@ impl PrivateStorageWrite<'_> {
             return Err(RingError::PrivateWritesMismatch);
         }
         // 2. One tracking root answers every owner. Storage raises the floor to its revision, so a
-        //    frame never proves absence under a root older than the row this write relies on.
+        //    frame never proves absence under a root older than the rows the write relies on.
         let tracking = BoundRoot::tracking(&*self.ring.require_policy(rpc).await?, rpc).await?;
         let mut requests = vec![None; width];
         for owner in &owners {
@@ -428,7 +428,7 @@ impl ApplyEnrollments<'_> {
         self,
         client: &RingClient<R, I>,
     ) -> Result<Instruction, RingError> {
-        let statement = self.inputs.statement()?;
+        let statement = self.inputs.statement();
         let circuit = RingCircuit::apply_enrollments(statement.count);
         let RingCircuit::ApplyEnrollments { writes: batch } = circuit else {
             return Err(RingError::UnpinnedProvingKey(circuit));
@@ -457,13 +457,9 @@ impl ApplyEnrollments<'_> {
             .await?;
         let data = ApplyEnrollmentsIxData {
             revision: self.revision,
-            apply: ApplyRecordsIxData {
-                proof: to_instruction_proof(proof)?,
-                new_root: statement.new_root,
-                new_next_index: statement.new_next_index.to_le_bytes(),
-                // The tracking apply retires no root, Storage refuses a set bit.
-                restrictive: 0,
-            },
+            proof: to_instruction_proof(proof)?,
+            new_root: statement.new_root,
+            new_next_index: statement.new_next_index.to_le_bytes(),
         };
         let mut accounts = vec![AccountMeta::new(self.tracking_registry, false)];
         accounts.extend(self.owners.iter().map(|owner| {

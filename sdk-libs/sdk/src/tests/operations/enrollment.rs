@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex};
 
+use bytemuck::Zeroable;
 use custom_ring_interface::{
-    tracking::FirstEnrollment, RingMode, REGISTER_KEY_CIPHERTEXT_LEN, STORAGE_PROGRAM_ID,
+    tracking::FirstEnrollment, CustomRingProof, RingMode, REGISTER_KEY_CIPHERTEXT_LEN,
+    STORAGE_PROGRAM_ID,
 };
 use solana_account::Account;
 use solana_message::Hash;
@@ -27,14 +29,25 @@ fn sealed() -> EnrollIxData {
     }
 }
 
-fn instruction(owner: Address, payer: Address) -> EnrollInstruction {
+fn enroll_instruction(
+    owner: Address,
+    payer: Address,
+    proof: Option<&CustomRingProof>,
+) -> EnrollInstruction {
     EnrollInstruction {
         payer,
         owner,
         tracking_registry: TRACKING,
-        data: sealed(),
-        proof: Some(bytemuck::Zeroable::zeroed()),
+        request: EnrollRequest {
+            ix: &sealed(),
+            proof,
+        }
+        .encode(),
     }
+}
+
+fn instruction(owner: Address, payer: Address) -> EnrollInstruction {
+    enroll_instruction(owner, payer, Some(&CustomRingProof::zeroed()))
 }
 
 #[tokio::test]
@@ -45,7 +58,10 @@ async fn member_records_come_back_in_member_order() {
         has_policy: true,
         ..RingSettings::new(RingMode::Confidential)
     })
-    .with_registry(Registry::new(&[(&registered, 1)]), &crate::tests::pipeline_rules())
+    .with_registry(
+        Registry::new(&[(&registered, 1)]),
+        &crate::tests::pipeline_rules(),
+    )
     .client();
     let reads = MemberRecords {
         ring: ring(),
@@ -62,15 +78,8 @@ async fn member_records_come_back_in_member_order() {
 fn an_enrollment_writes_the_owner_authorization_on_the_pinned_registry() {
     let owner = Address::new_from_array([3; 32]);
     let payer = Address::new_from_array([7; 32]);
-    let enroll = |proof| {
-        EnrollInstruction {
-            proof,
-            ..instruction(owner, payer)
-        }
-        .instruction()
-    };
-    let rotation = enroll(None);
-    let first = enroll(Some(bytemuck::Zeroable::zeroed()));
+    let rotation = enroll_instruction(owner, payer, None).instruction();
+    let first = instruction(owner, payer).instruction();
     assert_eq!(rotation.program_id, STORAGE_PROGRAM_ID);
     assert_eq!(rotation.data[0], tag::ENROLL);
     assert_eq!(rotation.data.len(), 1 + EnrollIxData::SIZE);
@@ -140,12 +149,13 @@ impl AsyncRpc for Ledger {
             ix: &sealed(),
         }
         .account();
-        Ok((reserved && address == instruction(keypair(1).pubkey(), keypair(2).pubkey()).authorization())
-            .then(|| Account {
-                data: bytemuck::bytes_of(&enrolled).to_vec(),
-                owner: STORAGE_PROGRAM_ID,
-                ..Account::default()
-            }))
+        Ok((reserved
+            && address == instruction(keypair(1).pubkey(), keypair(2).pubkey()).authorization())
+        .then(|| Account {
+            data: bytemuck::bytes_of(&enrolled).to_vec(),
+            owner: STORAGE_PROGRAM_ID,
+            ..Account::default()
+        }))
     }
 
     async fn get_latest_blockhash(&self) -> Result<(Hash, u64), ClientError> {
@@ -356,4 +366,3 @@ async fn only_an_expired_attempt_with_no_reservation_goes_again_with_the_same_re
     assert_ne!(second.signature(), first.signature());
     assert_eq!(journal.recorded.lock().unwrap().len(), 2);
 }
-

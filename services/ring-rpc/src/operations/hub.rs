@@ -43,9 +43,7 @@ use crate::{
     merge_settings::MergeSettingsBook,
     origins::Origins,
     record_update::RecordUpdateRefusal,
-    record_writer::{
-        PrivateWrites, RecordWriter, SaltedOwner, WriterParts, RECORD_FLUSH_INTERVAL,
-    },
+    record_writer::{PrivateWrites, RecordWriter, SaltedOwner, WriterParts, RECORD_FLUSH_INTERVAL},
     relay::{Relay, RelayError, RelayParts, ServedRings, RELAY_TRACK_INTERVAL},
     relay_reservations::RelayBudget,
     relay_services::{MergeParts, RelayServices},
@@ -645,10 +643,7 @@ where
 
 impl<S: TransactionSource + 'static> Hub<S> {
     /// A record writer without it refuses every salted owner write.
-    pub fn serve_private_writes<R, I>(
-        &self,
-        client: RingClient<R, I>,
-    ) -> Result<(), RingRpcError>
+    pub fn serve_private_writes<R, I>(&self, client: RingClient<R, I>) -> Result<(), RingRpcError>
     where
         R: AsyncRpc + Send + Sync + 'static,
         I: RingIndexerBackend + Send + Sync + 'static,

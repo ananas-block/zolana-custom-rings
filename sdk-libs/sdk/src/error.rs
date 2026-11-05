@@ -52,6 +52,8 @@ pub enum RingError {
     #[error(transparent)]
     Records(#[from] RecordTreeError),
     #[error(transparent)]
+    RecordStatement(#[from] zolana_ring_member_registry::RecordStatementError),
+    #[error(transparent)]
     Audit(#[from] zolana_ring_client::AuditError),
     #[error(transparent)]
     Encoding(#[from] wincode::WriteError),

@@ -8,7 +8,6 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng, Payload},
     Aes256Gcm, Nonce,
 };
-use borsh::BorshDeserialize;
 use custom_ring_interface::REGISTER_KEY_CIPHERTEXT_LEN;
 use sea_orm::{
     AccessMode, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, DbErr,
@@ -350,8 +349,7 @@ fn enrollment_from_body(body: &[u8]) -> Result<HeldEnrollment, DbErr> {
     let (list_tag, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
     let (eph_u, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
     let (list_key, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
-    let ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN] =
-        rest.try_into().map_err(|_| malformed())?;
+    let ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN] = rest.try_into().map_err(|_| malformed())?;
     Ok(HeldEnrollment {
         owner_key: *owner_key,
         owner_hash: *owner_hash,
@@ -543,8 +541,8 @@ impl ProjectionWriter<'_> {
                 ))
                 .await?;
         }
-        let cursor = i64::try_from(cursor)
-            .map_err(|_| DbErr::Custom("tracking cursor past i64".into()))?;
+        let cursor =
+            i64::try_from(cursor).map_err(|_| DbErr::Custom("tracking cursor past i64".into()))?;
         transaction
             .execute(Statement::from_sql_and_values(
                 backend,
@@ -709,7 +707,9 @@ impl LoadSpends<'_> {
             loaded.enrollments.push(held);
         }
         if let Some(row) = snapshot
-            .query_one(query("SELECT next_leaf FROM tracking_cursors WHERE ring=$1"))
+            .query_one(query(
+                "SELECT next_leaf FROM tracking_cursors WHERE ring=$1",
+            ))
             .await?
         {
             loaded.tracking_cursor = u64::try_from(row.try_get::<i64>("", "next_leaf")?)

@@ -6,12 +6,10 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
     storage_instruction::{tag, StorageUpdateIxData},
-    ApplyRecordsIxData, RingPolicy, SourceSlot, GRACE_SLOTS, QUAD_HEIGHT,
-    RING_POLICY, ROOT_HISTORY, STORAGE_PROGRAM_ID,
+    ApplyRecordsIxData, RingPolicy, SourceSlot, GRACE_SLOTS, QUAD_HEIGHT, RING_POLICY,
+    ROOT_HISTORY, STORAGE_PROGRAM_ID,
 };
-use custom_ring_sdk::{
-    CustomRing, PrivateStorageWrite, ProvenPrivateWrite,
-};
+use custom_ring_sdk::{CustomRing, PrivateStorageWrite, ProvenPrivateWrite};
 use jsonrpsee::MethodsError;
 use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
@@ -992,10 +990,12 @@ impl PrivateWrites for HeldOwner {
         ring: Address,
         written_key: [u8; 32],
     ) -> Result<Option<SaltedOwner>, RingRpcError> {
-        Ok((ring == RING && written_key == SALTED_KEY).then_some(SaltedOwner {
-            owner: salted_owner(),
-            list_salt: LIST_SALT,
-        }))
+        Ok(
+            (ring == RING && written_key == SALTED_KEY).then_some(SaltedOwner {
+                owner: salted_owner(),
+                list_salt: LIST_SALT,
+            }),
+        )
     }
 
     async fn prove(
@@ -1044,7 +1044,10 @@ async fn a_salted_owner_write_sends_its_tracking_revision_and_the_pinned_registr
     let flushed = records.flushed().await;
 
     let sent = StorageUpdateIxData::parse(&flushed.data[0][1..]).expect("update data");
-    assert_eq!(sent.tracking_revision, Some(Revision::from(TRACKING_REVISION)));
+    assert_eq!(
+        sent.tracking_revision,
+        Some(Revision::from(TRACKING_REVISION))
+    );
     assert_eq!(flushed.members, [SALTED_KEY]);
     assert_eq!(
         *held.proved.lock().unwrap(),

@@ -167,7 +167,8 @@ impl Enroll<'_> {
         let config = self.ring.require_config(client.zolana()).await?;
         let tracking_registry = config.account().tracking;
         // 1. A present authorization fixed key, tag and seal, a rotation repeats them unproven.
-        let (authorization, _) = TrackingAuthorization::find_address(&tracking_registry, &self.owner);
+        let (authorization, _) =
+            TrackingAuthorization::find_address(&tracking_registry, &self.owner);
         let enrolled = client
             .get_account(authorization)
             .await?

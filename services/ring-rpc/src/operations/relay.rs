@@ -1,9 +1,7 @@
 use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{
-    compute_unit_limit, storage_instruction, tracking::TrackingAuthorization, InstructionTag,
-};
+use custom_ring_interface::{storage_instruction, tracking::TrackingAuthorization};
 use custom_ring_sdk::{FitError, FitSigners, RingError, SealRow, TransactionFit};
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
@@ -127,7 +125,9 @@ pub enum RelayError {
     /// One code per row, a client reads the row from the code alone.
     #[error("the sealed auditor stream does not open under the key the records select, seal under the {row:?} row and sign again")]
     Reseal { row: SealRow },
-    #[error("the owner already holds a tracking authorization, only a rotation goes without a proof")]
+    #[error(
+        "the owner already holds a tracking authorization, only a rotation goes without a proof"
+    )]
     AlreadyEnrolled,
     #[error("the RegisterKey proof does not verify for the enrolled key")]
     RegisterKeyProof,

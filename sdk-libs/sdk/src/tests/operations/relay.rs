@@ -3898,8 +3898,7 @@ mod enroll_message {
             payer: FEE_PAYER,
             owner: keypair(1).pubkey(),
             tracking_registry: REGISTRY,
-            data: bytemuck::Zeroable::zeroed(),
-            proof: None,
+            request: Vec::new(),
         }
         .instruction();
         assert_eq!(honest.accounts, built.accounts);
