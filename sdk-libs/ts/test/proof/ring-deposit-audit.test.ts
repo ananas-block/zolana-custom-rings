@@ -4,6 +4,7 @@ import {
   generateKeyPairSigner,
   getAddressDecoder,
   getBase58Decoder,
+  getProgramDerivedAddress,
   signTransactionWithSigners,
   type Address,
   type Signature,
@@ -49,11 +50,7 @@ import { RingInstructionTag } from "../../src/protocol/transaction/instruction-t
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import type { StorageRecordPool, StorageRecordPoolRequest } from "../../src/rpc/ports.js";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
-import {
-  ringAuthAddress,
-  ringCoSignerAddress,
-  ringPolicyPda,
-} from "../../src/protocol/pda/index.js";
+import { ringCoSignerAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
 import { depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
 import {
   RING_COSIGN_DEPOSITS,
@@ -907,8 +904,9 @@ describe("ring deposit builder", () => {
   });
 
   it("pays a PDA member of an anonymous ring and refuses the PDA as a public signer", async () => {
+    const [pda] = await getProgramDerivedAddress({ programAddress: RING, seeds: ["owner"] });
     const holder = ShieldedPda.withViewingKey(
-      await ringAuthAddress(RING),
+      pda,
       NullifierKey.fromSecret(new Uint8Array(31).fill(3) as Bytes31),
       ViewingKey.generate(),
     );

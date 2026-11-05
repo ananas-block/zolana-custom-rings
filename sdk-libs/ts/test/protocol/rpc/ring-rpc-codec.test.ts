@@ -5,6 +5,7 @@ import {
   mergeSettingsAttestation,
 } from "../../../src/ring-advanced.js";
 import { encodeGetListSaltRequest } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
+import { ringRpcRefusalName } from "../../../src/protocol/ring-rpc/ring-rpc-refusal.js";
 import type { RelayIntent } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
 import {
   encodeRelayEnrollInputs,
@@ -539,3 +540,10 @@ describe("setMergeSettings", () => {
 function base58Bytes(text: string): Uint8Array {
   return getBase58Encoder().encode(text) as Uint8Array;
 }
+
+describe("ring rpc refusals", () => {
+  it("names -32227 as a recovered delegate note its source does not own", () => {
+    expect(ringRpcRefusalName(-32227)).toBe("sourceNote");
+    expect(ringRpcRefusalName(-32228)).toBeUndefined();
+  });
+});
