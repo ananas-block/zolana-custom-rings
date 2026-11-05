@@ -468,7 +468,7 @@ export class PreparedRingDeposit {
             ringProgramId: this.#ringProgramId,
             ringId: ringIdField(this.#ringProgramId),
             config,
-            owner: this.#ownerPkHash,
+            recipient: this.#recipient,
             nullifierPk: this.#nullifierPk,
             viewingU: this.#recipient.viewingPublicKey.u(),
             asset: this.#asset.asset,

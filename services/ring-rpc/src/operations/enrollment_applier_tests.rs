@@ -1,6 +1,9 @@
-use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
-    Mutex,
+use std::{
+    collections::HashSet,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 use async_trait::async_trait;
@@ -49,6 +52,8 @@ struct StubChain {
     during_proof: Mutex<Option<DuringProof>>,
     /// A proof for the named registry waits for the notify.
     stalled: Mutex<Option<(Address, Arc<Notify>)>>,
+    /// Owners a lagging indexer still lists after their apply.
+    stale: Mutex<HashSet<Address>>,
 }
 
 type DuringProof = Box<dyn Fn(&StubChain) + Send + Sync>;
@@ -101,29 +106,30 @@ impl StubChain {
         write(bytemuck::from_bytes_mut(&mut account.data));
     }
 
-    /// `applied` of `revision`, zero marks a first enrollment.
-    fn enroll(&self, owner: Address, revision: u64, applied: u64) {
-        self.enroll_in(REGISTRY, owner, revision, applied);
+    fn enroll(&self, owner: Address, applied: bool) {
+        self.enroll_in(REGISTRY, owner, applied);
     }
 
-    fn enroll_in(&self, registry: Address, owner: Address, revision: u64, applied: u64) {
+    fn enroll_in(&self, registry: Address, owner: Address, applied: bool) {
         let mut authorization = TrackingAuthorization::zeroed();
         authorization.discriminator = TrackingAuthorization::DISCRIMINATOR;
         authorization.registry = registry;
         authorization.owner = owner;
-        authorization.revision = revision.to_le_bytes();
-        authorization.applied_revision = applied.to_le_bytes();
+        authorization.applied = u8::from(applied);
         self.accounts.lock().unwrap().insert(
             TrackingAuthorization::find_address(&registry, &owner).0,
             stored(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&authorization)),
         );
     }
 
-    fn revision_of(&self, registry: Address, owner: Address) -> Option<TrackingAuthorization> {
-        let accounts = self.accounts.lock().unwrap();
-        accounts
-            .get(&TrackingAuthorization::find_address(&registry, &owner).0)
-            .and_then(|account| TrackingAuthorization::decode(&account.owner, &account.data))
+    /// Writes a new viewing key into the account, the one field a rotation moves.
+    fn rotate(&self, owner: Address, viewing: u8) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let account = accounts
+            .get_mut(&TrackingAuthorization::find_address(&REGISTRY, &owner).0)
+            .expect("enrolled");
+        let authorization: &mut TrackingAuthorization = bytemuck::from_bytes_mut(&mut account.data);
+        authorization.viewing_u = [viewing; 32];
     }
 
     fn named(&self) -> Vec<Vec<Address>> {
@@ -218,7 +224,8 @@ impl StorageChain for StubChain {
             .values()
             .filter_map(|account| TrackingAuthorization::decode(&account.owner, &account.data))
             .filter(|authorization| {
-                authorization.is_pending()
+                (authorization.is_pending()
+                    || self.stale.lock().unwrap().contains(&authorization.owner))
                     && authorization.registry == request.registry.0
                     && request
                         .after
@@ -241,9 +248,6 @@ impl StorageChain for StubChain {
                     member: hash([0; 32]),
                     nullifier_pk: hash(authorization.nullifier_pk),
                     ct_hash: hash([0; 32]),
-                    viewing_u: hash(authorization.viewing_u),
-                    revision: authorization.revision(),
-                    applied_revision: authorization.applied_revision(),
                     list_tag: hash(authorization.list_tag),
                 })
                 .collect(),
@@ -275,14 +279,6 @@ impl StorageChain for StubChain {
             .expect("registry")
             .newest()
             .revision;
-        let revisions = owners
-            .iter()
-            .map(|owner| {
-                self.revision_of(registry, *owner)
-                    .expect("enrolled")
-                    .revision()
-            })
-            .collect();
         if let Some(act) = self.during_proof.lock().unwrap().take() {
             act(self);
         }
@@ -293,7 +289,6 @@ impl StorageChain for StubChain {
                 data: vec![tag::APPLY_ENROLLMENTS],
             },
             revision,
-            revisions,
         })
     }
 }
@@ -317,9 +312,9 @@ fn refused(chain: &StubChain) {
 #[tokio::test]
 async fn an_apply_names_pending_accounts_under_the_payer_alone_and_waits_for_its_landing() {
     let chain = StubChain::new();
-    chain.enroll(owner(4), 1, 0);
-    chain.enroll(owner(3), 2, 1);
-    chain.enroll(owner(5), 1, 1);
+    chain.enroll(owner(4), false);
+    chain.enroll(owner(3), false);
+    chain.enroll(owner(5), true);
     let applier = applier(&chain);
 
     applier.flush().await;
@@ -342,66 +337,48 @@ async fn an_apply_names_pending_accounts_under_the_payer_alone_and_waits_for_its
     assert_eq!(chain.proofs.load(Ordering::Relaxed), 2);
 }
 
+/// A lagging indexer lists an applied account, the batch fills from the next page without it.
 #[tokio::test]
-async fn an_account_that_moves_while_pending_sits_out_one_rotation_period() {
+async fn an_account_the_chain_holds_applied_stays_out_of_the_batch() {
     let chain = StubChain::new();
-    chain.enroll(owner(3), 1, 0);
-    chain.enroll(owner(4), 1, 0);
-    let applier = applier(&chain);
-    applier.flush().await;
-
-    refused(&chain);
-    chain.enroll(owner(3), 2, 0);
-    applier.flush().await;
-    assert_eq!(chain.named().last().unwrap(), &[owner(4)]);
-
-    refused(&chain);
-    chain
-        .slot
-        .store(SLOT + TRACKING_GRACE_SLOTS, Ordering::Relaxed);
-    applier.flush().await;
-    assert_eq!(chain.named().last().unwrap(), &[owner(3), owner(4)]);
-}
-
-#[tokio::test]
-async fn a_held_page_leaves_the_batch_to_the_next_page() {
-    let chain = StubChain::new();
-    (1..=APPLY_BATCH as u8 + 1).for_each(|byte| chain.enroll(owner(byte), 1, 0));
-    let applier = applier(&chain);
-    applier.flush().await;
-    assert_eq!(chain.named()[0].len(), APPLY_BATCH);
-
-    refused(&chain);
-    chain.enroll(owner(1), 2, 0);
-    applier.flush().await;
+    (1..=APPLY_BATCH as u8 + 1).for_each(|byte| chain.enroll(owner(byte), false));
+    chain.enroll(owner(1), true);
+    chain.stale.lock().unwrap().insert(owner(1));
+    applier(&chain).flush().await;
     let named = chain.named();
-    let batch = named.last().unwrap();
+    let [batch] = named.as_slice() else {
+        panic!("one proof, {named:?}");
+    };
     assert_eq!(batch.len(), APPLY_BATCH);
     assert!(!batch.contains(&owner(1)));
     assert!(batch.contains(&owner(APPLY_BATCH as u8 + 1)));
 }
 
+/// A rotation of a pending or an applied account moves no root and lists nothing.
 #[tokio::test]
-async fn a_rotation_during_the_proof_sends_nothing_and_holds_the_account() {
+async fn a_rotation_neither_stales_a_proof_nor_moves_the_pending_set() {
     let chain = StubChain::new();
-    chain.enroll(owner(3), 1, 0);
-    chain.enroll(owner(4), 1, 0);
-    *chain.during_proof.lock().unwrap() =
-        Some(Box::new(|chain: &StubChain| chain.enroll(owner(3), 2, 0)));
+    chain.enroll(owner(3), false);
+    chain.enroll(owner(4), true);
+    *chain.during_proof.lock().unwrap() = Some(Box::new(|chain: &StubChain| {
+        chain.rotate(owner(3), 7);
+        chain.rotate(owner(4), 7);
+    }));
     let applier = applier(&chain);
 
     applier.flush().await;
-    assert!(chain.sent.lock().unwrap().is_empty());
-
-    applier.flush().await;
-    assert_eq!(chain.named().last().unwrap(), &[owner(4)]);
     assert_eq!(chain.sent.lock().unwrap().len(), 1);
+
+    refused(&chain);
+    chain.rotate(owner(4), 8);
+    applier.flush().await;
+    assert_eq!(chain.named(), [vec![owner(3)], vec![owner(3)]]);
 }
 
 #[tokio::test]
 async fn a_root_another_applier_moved_during_the_proof_sends_nothing() {
     let chain = StubChain::new();
-    chain.enroll(owner(3), 1, 0);
+    chain.enroll(owner(3), false);
     *chain.during_proof.lock().unwrap() = Some(Box::new(|chain: &StubChain| {
         chain.tracking(|registry| registry.roots[0].revision = Revision::from(1))
     }));
@@ -415,24 +392,28 @@ async fn a_root_another_applier_moved_during_the_proof_sends_nothing() {
 }
 
 #[tokio::test]
-async fn a_full_tree_leaves_out_a_first_enrollment_and_applies_a_rotation() {
+async fn a_full_tree_names_no_account() {
     let chain = StubChain::new();
     chain.tracking(|registry| registry.next_index = TRACKING_CAPACITY.to_le_bytes());
-    chain.enroll(owner(3), 1, 0);
-    chain.enroll(owner(4), 2, 1);
+    chain.enroll(owner(3), false);
     applier(&chain).flush().await;
-    assert_eq!(chain.named(), [vec![owner(4)]]);
+    assert_eq!(chain.proofs.load(Ordering::Relaxed), 0);
 }
 
-/// The program evicts the oldest root over a full history and refuses nothing.
+/// The program refuses an apply that would evict a root inside its grace.
 #[tokio::test]
-async fn a_full_history_of_live_roots_still_applies() {
+async fn an_unexpired_oldest_root_waits_without_a_proof_and_applies_once_it_expires() {
     let chain = StubChain::new();
-    chain.enroll(owner(3), 1, 0);
+    chain.enroll(owner(3), false);
     chain.tracking(|registry| {
         registry.roots[ROOT_HISTORY - 1].expires_at = (SLOT + 1).to_le_bytes()
     });
-    applier(&chain).flush().await;
+    let applier = applier(&chain);
+    applier.flush().await;
+    assert_eq!(chain.proofs.load(Ordering::Relaxed), 0);
+
+    chain.slot.store(SLOT + 1, Ordering::Relaxed);
+    applier.flush().await;
     assert_eq!(chain.sent.lock().unwrap().len(), 1);
 }
 
@@ -441,8 +422,8 @@ async fn a_full_history_of_live_roots_still_applies() {
 async fn a_stalled_ring_never_delays_another_rings_apply() {
     let chain = StubChain::new();
     chain.ring(OTHER_RING, OTHER_REGISTRY);
-    chain.enroll(owner(3), 1, 0);
-    chain.enroll_in(OTHER_REGISTRY, owner(4), 1, 0);
+    chain.enroll(owner(3), false);
+    chain.enroll_in(OTHER_REGISTRY, owner(4), false);
     let stall = Arc::new(Notify::new());
     *chain.stalled.lock().unwrap() = Some((REGISTRY, stall.clone()));
     let applier = EnrollmentApplierParts {

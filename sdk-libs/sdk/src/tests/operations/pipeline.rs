@@ -1993,7 +1993,7 @@ async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving()
 
 /// A payment a recipient cannot open is refused before proving, a rotated row names the current key.
 #[tokio::test]
-async fn a_payment_names_the_viewing_key_of_its_owners_row() {
+async fn a_payment_names_the_viewing_key_of_its_owners_authorization() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let recipient = keypair(2);

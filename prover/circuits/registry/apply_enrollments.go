@@ -23,27 +23,24 @@ import (
 
 // Properties:
 // 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in the named order, exactly the Count entries whose chain runs from ChainStart to ChainEnd.
-// 2. A rotation changes only the view key and the revision, the nullifier key, ciphertext hash and list tag of a leaf are final.
-// 3. An absent owner is inserted after its low record at exactly the next index, below capacity, a rotation needs no free leaf.
-// 4. An owner holds one leaf, an owner already in the tree falls inside no link and cannot insert again.
-// 5. The statement binds both roots, both next indexes, both chain ends and the count.
+// 2. Every active write inserts an absent owner after its low record at exactly the next index, below capacity. A leaf never changes once written, a viewing key rotation touches only the owner's account.
+// 3. An owner holds one leaf, an owner already in the tree falls inside no link and cannot insert again.
+// 4. The statement binds both roots, both next indexes, both chain ends and the count.
 //
-// The program holds what the circuit takes as given. tracking_chain_start in program-libs/interface/src/accounts/tracking.rs names one registry at one revision in ChainStart, and TrackingAuthorization::apply refuses an applied revision, the circuit does not order revisions.
+// The program holds what the circuit takes as given. tracking_chain_start in program-libs/interface/src/accounts/tracking.rs names one registry at one revision in ChainStart, and TrackingAuthorization::apply refuses an applied account.
 
 // TrackingEntry mirrors the entry the program computes from an authorization account.
 type TrackingEntry struct {
-	Member, NullifierPk, CtHash, View0, View1, Revision, ListTag frontend.Variable
+	Member, NullifierPk, CtHash, ListTag frontend.Variable
 }
 
 func (e TrackingEntry) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{shared.TrackingEntryDomain, e.Member, e.NullifierPk, e.CtHash, e.View0, e.View1, e.Revision, e.ListTag})
+	return gadget.PoseidonHash(api, []frontend.Variable{shared.TrackingEntryDomain, e.Member, e.NullifierPk, e.CtHash, e.ListTag})
 }
 
-// EnrollmentWrite's Slot opens the owner's leaf, or the empty leaf an insert takes.
+// EnrollmentWrite's Slot opens the empty leaf the insert takes.
 type EnrollmentWrite struct {
 	Entry   TrackingEntry
-	Exists  frontend.Variable
-	Old     TrackingRecord
 	Slot    TrackingPath
 	Low     TrackingRecord
 	LowSlot TrackingPath
@@ -92,41 +89,26 @@ func (c *ApplyEnrollmentsCircuit) Define(api frontend.API) error {
 }
 
 func (w EnrollmentWrite) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
-	api.AssertIsBoolean(w.Exists)
-	rotates := api.Mul(active, w.Exists)
-	inserts := api.Sub(active, rotates)
-	// 1. A rotation opens the owner's own leaf and keeps its final fields.
-	// A later `Enroll` carries no proof, the first enrollment's RegisterKeyCircuit keeps these fields proven only while they cannot move. TrackingAuthorization::rotate refuses a change on the account, and these equalities hold the leaf to the same rule. registry/register_key.go says why a list tag must stay final.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: rotates, A: w.Old.Member, B: w.Entry.Member})
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: rotates, A: w.Old.NullifierPk, B: w.Entry.NullifierPk})
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: rotates, A: w.Old.CtHash, B: w.Entry.CtHash})
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: rotates, A: w.Old.ListTag, B: w.Entry.ListTag})
-	// 2. An absent owner lies strictly inside its low record's link under the running root, a link no present owner falls inside.
-	// The sort argument of registry/apply_records.go applies, the links descend from the sentinel's (0, q-1) by one split per insert.
-	ringgadget.AssertOrderedWhen(api, inserts, w.Low.Member, w.Entry.Member, w.Low.Next)
+	// 1. The owner lies strictly inside its low record's link under the running root, a link no present owner falls inside.
+	// The sort argument of registry/apply_records.go applies, the links descend from the sentinel's (0, q-1) by one split per insert. A present owner has no such link, so a second enrollment of one owner never proves.
+	ringgadget.AssertOrderedWhen(api, active, w.Low.Member, w.Entry.Member, w.Low.Next)
 	relinked := w.Low
 	relinked.Next = w.Entry.Member
-	lowRoot, relinkedRoot := w.LowSlot.Update(api, w.Low.Hash(api), relinked.Hash(api))
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: inserts, A: lowRoot, B: s.root})
-	linked := api.Select(inserts, relinkedRoot, s.root)
-	// 3. An insert takes the empty leaf at the next index, linking on to the low record's old next.
-	// At next = TrackingCapacity the index fails TrackingPath.digits, a full tree takes no new owner and a rotation still applies.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: inserts, A: w.Slot.Index, B: s.next})
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: inserts, A: w.Old.Next, B: w.Low.Next})
-	// 4. The entry replaces the slot's old leaf under the linked root, an insert's old leaf is the empty leaf 0.
-	// Every active entry writes a leaf. Old.Next is held by the old leaf's hash on a rotation and by step 3 on an insert.
-	before := api.Select(w.Exists, w.Old.Hash(api), 0)
+	lowRoot, linked := w.LowSlot.Update(api, w.Low.Hash(api), relinked.Hash(api))
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: lowRoot, B: s.root})
+	// 2. The insert takes the empty leaf 0 at the next index under the relinked root, linking on to the low record's old next.
+	// At next = TrackingCapacity the index fails TrackingPath.digits, a full tree takes no new owner.
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: w.Slot.Index, B: s.next})
 	after := TrackingRecord{
-		Member: w.Entry.Member, Next: w.Old.Next, NullifierPk: w.Entry.NullifierPk, CtHash: w.Entry.CtHash,
-		View0: w.Entry.View0, View1: w.Entry.View1, Revision: w.Entry.Revision, ListTag: w.Entry.ListTag,
+		Member: w.Entry.Member, Next: w.Low.Next, NullifierPk: w.Entry.NullifierPk, CtHash: w.Entry.CtHash, ListTag: w.Entry.ListTag,
 	}.Hash(api)
-	opened, written := w.Slot.Update(api, before, after)
+	opened, written := w.Slot.Update(api, 0, after)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: opened, B: linked})
-	// 5. The chain absorbs every active entry, the program computed each from its account.
+	// 3. The chain absorbs every active entry, the program computed each from its account.
 	chain := gadget.PoseidonHash(api, []frontend.Variable{s.chain, w.Entry.Hash(api)})
 	return registryState{
 		root:  api.Select(active, written, s.root),
-		next:  api.Add(s.next, inserts),
+		next:  api.Add(s.next, active),
 		chain: api.Select(active, chain, s.chain),
 	}
 }

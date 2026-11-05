@@ -181,8 +181,6 @@ function enrolled(seed: number) {
     member: who.member,
     nullifierPk: envelope.nullifierPublicKey,
     ctHash: hashBytes(envelope.sealed.ciphertext) as Bytes32,
-    viewingU: new Uint8Array(32).fill(9) as Bytes32,
-    revision: 1n,
     listTag: new Uint8Array(32).fill(3) as Bytes32,
   };
   return { ...who, seal, row, envelope };
@@ -262,7 +260,7 @@ describe("enrolled keys", () => {
         const served = await client.getTrackingOpenings(request);
         const [opening] = served.openings;
         if (opening?.kind !== "present") throw new Error("expected a present row");
-        const record = { ...opening.record, revision: opening.record.revision + 1n };
+        const record = { ...opening.record, listTag: new Uint8Array(32).fill(4) as Bytes32 };
         return { ...served, openings: [{ ...opening, record }] };
       },
     };

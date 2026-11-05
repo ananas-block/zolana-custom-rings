@@ -25,7 +25,7 @@ use crate::{block::BlockMetadata, indexer::Quarantine};
 
 mod tracking;
 
-pub(crate) use tracking::{AppliedRevision, Enrollment, EnrollmentRevision};
+pub(crate) use tracking::Enrollment;
 
 /// A read takes each row's newest version at or below `version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,8 +121,7 @@ impl StoredLeaf for MemberRecord {
 
 impl StoredLeaf for TrackingRecord {
     const TABLE: &'static str = "tracking_records";
-    const COLUMNS: &'static str =
-        "member, next_member, nullifier_pk, ct_hash, viewing_u, revision, list_tag";
+    const COLUMNS: &'static str = "member, next_member, nullifier_pk, ct_hash, list_tag";
 
     fn from_row(row: &QueryResult) -> Result<Self> {
         Ok(Self {
@@ -130,8 +129,6 @@ impl StoredLeaf for TrackingRecord {
             next: field(row, "next_member")?,
             nullifier_pk: field(row, "nullifier_pk")?,
             ct_hash: field(row, "ct_hash")?,
-            viewing_u: field(row, "viewing_u")?,
-            revision: uint(row, "revision")?,
             list_tag: field(row, "list_tag")?,
         })
     }
@@ -142,8 +139,6 @@ impl StoredLeaf for TrackingRecord {
             bytes(&self.next),
             bytes(&self.nullifier_pk),
             bytes(&self.ct_hash),
-            bytes(&self.viewing_u),
-            int(self.revision)?,
             bytes(&self.list_tag),
         ])
     }

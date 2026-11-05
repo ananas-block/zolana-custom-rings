@@ -9,11 +9,11 @@
 //!
 //! Guarantees:
 //! 1. The new root and next index follow from the current ones by exactly the entries of the named accounts, in the named order, and the next index stays within `TRACKING_CAPACITY`.
-//! 2. Each authorization applies a revision once, a duplicate account in one instruction included.
-//! 3. The outgoing root keeps its full grace unless a full history evicts the oldest root, whose proofs then prove again.
+//! 2. Each authorization applies once, a duplicate account in one instruction included.
+//! 3. The outgoing root keeps its full grace. An apply that would evict an unexpired root refuses, and its accounts stay pending.
 //!
 //! Relies on:
-//! 1. `ApplyEnrollmentsCircuit` keeps the tree sorted, and the nullifier key, ciphertext hash and list tag of a rotated row.
+//! 1. `ApplyEnrollmentsCircuit` keeps the tree sorted and only inserts absent owners.
 //! 2. The ring pins the registry by address.
 
 use custom_ring_interface::{

@@ -737,14 +737,24 @@ fn a_rotation_moves_the_viewing_key_with_no_proof() {
             refusal(StorageError::EnrollmentKeyFinal)
         );
     }
+    let tracking = store.tracking_registry();
     store.send(rotate(&store, &rotated), &[&owner]).unwrap();
     let account = store.authorization(&owner.pubkey());
-    assert_eq!((account.viewing_u, account.revision()), ([9; 32], 2));
-    assert_eq!(account.applied_revision(), 0);
+    assert_eq!((account.viewing_u, account.applied), ([9; 32], 0));
+    // An applied owner stays applied, the rotation leaves no tracking work and no new root.
+    let mut applied = account;
+    applied.applied = 1;
+    store.seed(
+        TrackingAuthorization::find_address(&store.tracking, &owner.pubkey()).0,
+        bytemuck::bytes_of(&applied),
+    );
     store
         .send(rotate(&store, &enroll_ix([7; 32])), &[&owner])
         .unwrap();
-    assert_eq!(store.authorization(&owner.pubkey()).revision(), 3);
+    let account = store.authorization(&owner.pubkey());
+    assert_eq!((account.viewing_u, account.applied), ([7; 32], 1));
+    assert!(!account.is_pending());
+    assert_eq!(store.tracking_registry(), tracking);
 }
 
 #[test]
@@ -823,7 +833,7 @@ fn anyone_applies_named_enrollments_with_no_authority_signature() {
     let reversed = [metas[1].clone(), metas[0].clone()];
     let instruction = store.apply_enrollments(0, &reversed);
     past_every_apply_check(&mut store, instruction, 2);
-    assert_eq!(store.authorization(&first.pubkey()).applied_revision(), 0);
+    assert!(store.authorization(&first.pubkey()).is_pending());
 }
 
 #[test]
@@ -875,7 +885,7 @@ fn an_apply_refuses_what_it_cannot_chain() {
         refusal(StorageError::InvalidTrackingRegistry)
     );
     let mut applied = store.authorization(&owner.pubkey());
-    applied.applied_revision = applied.revision;
+    applied.applied = 1;
     store.seed(meta.pubkey, bytemuck::bytes_of(&applied));
     assert_eq!(
         store.send(store.apply_enrollments(0, &[meta]), &[]),
@@ -898,17 +908,25 @@ fn an_authorization_of_another_registry_does_not_apply() {
     );
 }
 
-/// An apply over a full history evicts the oldest root, a flood only makes its proofs prove again.
+/// An apply that would evict an unexpired root waits, its accounts stay pending until the oldest root expires.
 #[test]
-fn an_apply_over_a_full_history_reaches_its_key_and_a_failed_proof_keeps_it() {
+fn an_apply_over_unexpired_roots_waits_until_the_oldest_expires() {
     let mut store = Store::new();
     store.initialize_tracking();
     let owner = Keypair::new();
     let meta = store.seed_enrollment(&owner.pubkey());
+    let expiry = store.svm.get_sysvar::<solana_clock::Clock>().slot + 10;
     let mut registry = store.tracking_registry();
     registry.roots[ROOT_HISTORY - 1].hash = [5; 32];
-    registry.roots[ROOT_HISTORY - 1].expires_at = u64::MAX.to_le_bytes();
+    registry.roots[ROOT_HISTORY - 1].expires_at = expiry.to_le_bytes();
     store.set_tracking_registry(&registry);
+    assert_eq!(
+        store.send(store.apply_enrollments(0, std::slice::from_ref(&meta)), &[]),
+        refusal(StorageError::RootHistoryRetained)
+    );
+    assert_eq!(store.tracking_registry(), registry);
+    assert!(store.authorization(&owner.pubkey()).is_pending());
+    store.svm.warp_to_slot(expiry);
     let instruction = store.apply_enrollments(0, &[meta]);
     past_every_apply_check(&mut store, instruction, 1);
     assert_eq!(store.tracking_registry(), registry);

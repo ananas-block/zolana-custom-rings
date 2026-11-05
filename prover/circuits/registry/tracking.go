@@ -21,7 +21,7 @@ import (
 )
 
 // Properties:
-// 1. A leaf carries CRTK and one owner's nullifier key, ciphertext hash, view key, revision and list tag, its domain keeps it apart from a policy leaf.
+// 1. A leaf carries CRTK and one owner's nullifier key, ciphertext hash and list tag, its domain keeps it apart from a policy leaf. Every field is final, the owner's viewing key stays on its authorization account.
 // 2. Resolve reads a present owner's own leaf or proves the owner absent by the one link it falls inside, the sort order registry/apply_enrollments.go keeps leaves no third case.
 // 3. An absent owner or an unset cond reads an all zero row.
 // 4. The leaf folds to root while cond is set, and one index below TrackingCapacity names it.
@@ -33,19 +33,16 @@ const (
 	TrackingCapacity  = 1 << TrackingIndexBits
 )
 
-// The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0, 0, 0, 0) at index 0 brackets every member in [1, q-2].
+// The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0) at index 0 brackets every member in [1, q-2].
 type TrackingRecord struct {
 	Member, Next frontend.Variable
 	NullifierPk  frontend.Variable
 	CtHash       frontend.Variable
-	// View0 and View1 are the pack_be of the owner's X25519 u.
-	View0, View1 frontend.Variable
-	Revision     frontend.Variable
 	ListTag      frontend.Variable
 }
 
 func (r TrackingRecord) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{shared.TrackingLeafDomain, r.Member, r.Next, r.NullifierPk, r.CtHash, r.View0, r.View1, r.Revision, r.ListTag})
+	return gadget.PoseidonHash(api, []frontend.Variable{shared.TrackingLeafDomain, r.Member, r.Next, r.NullifierPk, r.CtHash, r.ListTag})
 }
 
 type TrackingPath struct {
@@ -64,7 +61,7 @@ func (p TrackingPath) Update(api frontend.API, oldLeaf, newLeaf frontend.Variabl
 }
 
 func (p TrackingPath) digits(api frontend.API) []frontend.Variable {
-	// A full tree has no index for the next leaf, a new enrollment fails here and a rotation reads an existing one.
+	// A full tree has no index for the next leaf, a new enrollment fails here.
 	return api.ToBinary(p.Index, TrackingIndexBits)
 }
 
@@ -77,7 +74,7 @@ type TrackingOpening struct {
 
 // TrackingRow is zero for an absent owner or an unset cond.
 type TrackingRow struct {
-	Present, NullifierPk, CtHash, View0, View1, Revision, ListTag frontend.Variable
+	Present, NullifierPk, CtHash, ListTag frontend.Variable
 }
 
 // Resolve binds the opening to root while the boolean cond is set.
@@ -95,9 +92,6 @@ func (o TrackingOpening) Resolve(api frontend.API, cond, root, member frontend.V
 		Present:     present,
 		NullifierPk: api.Mul(present, o.Record.NullifierPk),
 		CtHash:      api.Mul(present, o.Record.CtHash),
-		View0:       api.Mul(present, o.Record.View0),
-		View1:       api.Mul(present, o.Record.View1),
-		Revision:    api.Mul(present, o.Record.Revision),
 		ListTag:     api.Mul(present, o.Record.ListTag),
 	}
 }

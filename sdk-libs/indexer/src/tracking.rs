@@ -43,7 +43,7 @@ pub mod method {
     }
 }
 
-/// `viewing_u` splits into the leaf's two view fields.
+/// The leaf holds no viewing key, a sender reads it from the owner's authorization account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RingTrackingRecordView {
@@ -51,8 +51,6 @@ pub struct RingTrackingRecordView {
     pub next: Hash,
     pub nullifier_pk: Hash,
     pub ct_hash: Hash,
-    pub viewing_u: Hash,
-    pub revision: u64,
     pub list_tag: Hash,
     /// Absent on the sentinel alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,6 +164,7 @@ pub struct GetPendingEnrollmentsRequest {
     pub limit: u64,
 }
 
+/// A first enrollment no apply has inserted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RingPendingEnrollmentView {
@@ -173,9 +172,6 @@ pub struct RingPendingEnrollmentView {
     pub member: Hash,
     pub nullifier_pk: Hash,
     pub ct_hash: Hash,
-    pub viewing_u: Hash,
-    pub revision: u64,
-    pub applied_revision: u64,
     pub list_tag: Hash,
 }
 
@@ -203,15 +199,9 @@ pub struct RingTrackingWriteView {
     pub member: Hash,
     pub nullifier_pk: Hash,
     pub ct_hash: Hash,
-    pub viewing_u: Hash,
-    pub revision: u64,
     pub list_tag: Hash,
-    pub exists: bool,
-    /// An insert reads its low record's `next` and nothing else.
-    pub old: RingTrackingRecordView,
-    /// An absent member's append leaf after its low record relinks.
+    /// The append leaf after the low record relinks.
     pub slot: RingRecordPathView,
-    /// An absent member's low record, empty for a present member.
     pub low: RingTrackingRecordView,
     pub low_path: RingRecordPathView,
 }

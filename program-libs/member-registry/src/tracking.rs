@@ -4,18 +4,15 @@
 //! Read before `prover/circuits/registry/tracking.go`, `prover/circuits/registry/apply_enrollments.go`.
 //!
 //! Invariants, `ApplyEnrollmentsCircuit` holds each.
-//! 1. A rotation keeps the row's nullifier key, ciphertext hash and list tag.
-//! 2. An insert takes the next empty leaf, so a full tree refuses a new owner while rotations still apply.
+//! 1. Every write inserts an absent owner, a row never changes once inserted.
+//! 2. An insert takes the next empty leaf, so a full tree refuses a new owner.
 
 use custom_ring_interface::{
     domain,
     tracking::{TrackingEntry, TRACKING_QUAD_HEIGHT},
     ApplyEnrollmentsStatement, FIELD_MAX,
 };
-use spr_hasher::{
-    primitives::{pack_be, right_align},
-    Hasher, HasherError, Poseidon,
-};
+use spr_hasher::{Hasher, HasherError, Poseidon};
 
 use crate::{
     memory::MemoryTree,
@@ -32,8 +29,6 @@ pub struct TrackingRecord {
     pub next: [u8; 32],
     pub nullifier_pk: [u8; 32],
     pub ct_hash: [u8; 32],
-    pub viewing_u: [u8; 32],
-    pub revision: u64,
     pub list_tag: [u8; 32],
 }
 
@@ -46,12 +41,9 @@ pub type TrackingPool = RecordPoolOf<TrackingRecord>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrackingWriteProofInput {
     pub entry: TrackingEntry,
-    pub exists: bool,
-    /// A rotation's old leaf, an insert reads its low record's `next` and nothing else.
-    pub old: TrackingRecord,
-    /// The owner's leaf, an insert's `next_index` leaf after the relink.
+    /// The `next_index` leaf after the relink.
     pub slot: TrackingPath,
-    /// An insert's low record and its path before the relink, empty for a rotation.
+    /// The low record and its path before the relink.
     pub low: TrackingRecord,
     pub low_path: TrackingPath,
 }
@@ -63,24 +55,18 @@ impl TrackingRecord {
         next: FIELD_MAX,
         nullifier_pk: [0; 32],
         ct_hash: [0; 32],
-        viewing_u: [0; 32],
-        revision: 0,
         list_tag: [0; 32],
     };
 
-    /// `Poseidon(CRTK, member, next, nullifier_pk, ct_hash, view0, view1, revision, list_tag)`, mirror
+    /// `Poseidon(CRTK, member, next, nullifier_pk, ct_hash, list_tag)`, mirror
     /// `prover/circuits/registry/tracking.go`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        let [view0, view1] = pack_be(&self.viewing_u);
         Poseidon::hashv(&[
             &domain::field(domain::TRACKING_LEAF),
             &self.member,
             &self.next,
             &self.nullifier_pk,
             &self.ct_hash,
-            &view0,
-            &view1,
-            &right_align(&self.revision.to_be_bytes()),
             &self.list_tag,
         ])
     }
@@ -143,34 +129,27 @@ impl WritableLeaf<TRACKING_QUAD_HEIGHT> for TrackingRecord {
         entry.chained(previous)
     }
 
-    /// The nullifier key, ciphertext hash and list tag are final, the apply circuit holds them.
+    /// A present owner refuses, the apply circuit only inserts.
     fn after(self, entry: &TrackingEntry) -> Result<Self, RecordTreeError> {
-        if !self.is_blank()
-            && (self.nullifier_pk != entry.nullifier_pk
-                || self.ct_hash != entry.ct_hash
-                || self.list_tag != entry.list_tag)
-        {
-            return Err(RecordTreeError::TrackingKeyChanged);
+        if !self.is_blank() {
+            return Err(RecordTreeError::TrackingOwnerPresent);
         }
         Ok(Self {
             nullifier_pk: entry.nullifier_pk,
             ct_hash: entry.ct_hash,
-            viewing_u: entry.viewing_u,
-            revision: entry.revision,
             list_tag: entry.list_tag,
             ..self
         })
     }
 
+    /// `after` refused a present owner before the tree built a `Present` step, the slot alone stands.
     fn write_proof(
         entry: TrackingEntry,
         step: WriteStep<Self, TRACKING_QUAD_HEIGHT>,
     ) -> TrackingWriteProofInput {
         match step {
-            WriteStep::Present { old, slot } => TrackingWriteProofInput {
+            WriteStep::Present { slot, .. } => TrackingWriteProofInput {
                 entry,
-                exists: true,
-                old,
                 slot,
                 low: Self::default(),
                 low_path: TrackingPath::default(),
@@ -181,8 +160,6 @@ impl WritableLeaf<TRACKING_QUAD_HEIGHT> for TrackingRecord {
                 slot,
             } => TrackingWriteProofInput {
                 entry,
-                exists: false,
-                old: Self::blank(entry.member, low.next),
                 slot,
                 low,
                 low_path,

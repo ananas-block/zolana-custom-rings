@@ -24,10 +24,12 @@ use super::{
 };
 use crate::{
     limits::Outflows,
-    records::{check_recipient_viewing_key, OutputKey, PoolRead, TrackingPoolRead, TrackingRead},
+    records::{
+        OutputKey, PoolRead, RecipientViewingKeys, SealedOutput, TrackingPoolRead, TrackingRead,
+    },
     request::{
-        OwnerEntry, PolicyParams, PolicyTable, PolicyWithdrawalRequest, PoolEntry, RecordPools,
-        TrackingParams,
+        owner_key, OwnerEntry, PolicyParams, PolicyTable, PolicyWithdrawalRequest, PoolEntry,
+        RecordPools, TrackingParams,
     },
     submission::BoundRoot,
     CustomRingConfig, PinnedPolicy, RingError,
@@ -211,7 +213,13 @@ impl PolicyRead<'_> {
         .read(client)
         .await?;
         self.check_input_keys(&tracking_pool)?;
-        self.check_output_keys(&tracking_pool, &ring_owners, gates)?;
+        let sealed = self.check_output_keys(&tracking_pool, &ring_owners, gates)?;
+        RecipientViewingKeys {
+            registry: tracking.registry,
+            outputs: &sealed,
+        }
+        .check(client)
+        .await?;
         let mut sender_entries = core::mem::take(&mut planned.senders);
         sender_entries.resize(capacity, OwnerEntry::default());
         let public_asset_entries = core::mem::take(&mut planned.public_assets);
@@ -343,12 +351,14 @@ impl PolicyRead<'_> {
         Ok(())
     }
 
+    /// The outputs whose viewing key the owner's authorization must hold, a spending owner's outputs excluded.
     fn check_output_keys(
         &self,
         pool: &TrackingPoolRead,
         owners: &[Option<[u8; 32]>],
         gates: SourceGates,
-    ) -> Result<(), RingError> {
+    ) -> Result<Vec<SealedOutput>, RingError> {
+        let mut sealed = Vec::new();
         for (slot_index, (output, owner)) in self.inputs.output_utxos.iter().zip(owners).enumerate()
         {
             let (Some(address), Some(member)) = (output.owner_address, owner) else {
@@ -368,11 +378,15 @@ impl PolicyRead<'_> {
                 .input_utxos
                 .iter()
                 .any(|input| input.is_note() && input.utxo.owner == address.signing_pubkey);
-            if !spends {
-                check_recipient_viewing_key(row, &address.viewing_pubkey.u(), slot_index)?;
+            if row.is_some() && !spends {
+                sealed.push(SealedOutput {
+                    slot_index,
+                    owner: Address::new_from_array(owner_key(&address.signing_pubkey)?),
+                    viewing_u: address.viewing_pubkey.u(),
+                });
             }
         }
-        Ok(())
+        Ok(sealed)
     }
 }
 

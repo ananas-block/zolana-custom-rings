@@ -45,7 +45,7 @@ export function ringRegistrySlots(
   ]);
 }
 
-/** Each output key under `root`, a nonzero key at its own row, the zero key at the row's absence, Rust `check_output_key`. */
+/** Each output key under `root`, a nonzero key at its own row, Rust `check_output_key`. A merge runs no salted payee read, so the zero key takes any row. */
 export async function readOutputKeys(
   input: Readonly<{
     client: Pick<TrackingReader, "getTrackingOpenings">;
@@ -69,10 +69,7 @@ export async function readOutputKeys(
     outputs.map(({ member, nullifierPk }, index) => {
       const opening = openings[index] as TrackingOpening;
       const row = verifyTrackingOpening(opening, root.root, member);
-      if (equalBytes(nullifierPk, ZERO_NULLIFIER_PK)) {
-        if (row !== undefined) throw new RingError("RING_RECIPIENT_ENROLLED");
-        return opening;
-      }
+      if (equalBytes(nullifierPk, ZERO_NULLIFIER_PK)) return opening;
       if (row === undefined) throw new RingError("RING_RECIPIENT_NOT_ENROLLED");
       if (!equalBytes(row.nullifierPk, nullifierPk))
         throw new RingError("RING_ADDRESS_MISMATCH", { details: { field: "nullifierPk" } });

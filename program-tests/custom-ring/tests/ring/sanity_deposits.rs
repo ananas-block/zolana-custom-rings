@@ -72,7 +72,6 @@ fn tracking_pool(
         .first()
         .context("the owner's tracking row")?;
     let record = &row.record;
-    let [view0, view1] = pack_be::<32, 2>(&record.viewing_u.0);
     let siblings: Vec<[[u8; 32]; 3]> = row
         .path
         .siblings
@@ -86,9 +85,6 @@ fn tracking_pool(
             "next": field(record.next.0),
             "nullifierPk": field(record.nullifier_pk.0),
             "ctHash": field(record.ct_hash.0),
-            "view0": field(view0),
-            "view1": field(view1),
-            "revision": field(right_align(&record.revision.to_be_bytes())),
             "listTag": field(record.list_tag.0),
         }); capacity],
         "trackingProof": {

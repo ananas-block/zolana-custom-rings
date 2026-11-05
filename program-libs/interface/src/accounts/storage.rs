@@ -213,6 +213,13 @@ pub fn chain_start(registry: &Address, revision: Revision) -> Result<[u8; 32], S
 pub(crate) enum Retirement {
     /// The outgoing root stays served for `grace_slots`, a full history evicts its oldest root.
     Graced { slot: u64, grace_slots: u64 },
+    /// The outgoing root stays served for `grace_slots`, an update that would evict an unexpired
+    /// root refuses.
+    ///
+    /// The limit is enrollment availability. New owners can fill the kept roots, and a one entry apply
+    /// spends a root as a full batch does, so enrollment waits under sustained load while enrolled
+    /// owners keep their tracking witnesses.
+    Retained { slot: u64, grace_slots: u64 },
     /// Every earlier root stops being served.
     Immediate,
 }
@@ -232,8 +239,11 @@ pub(crate) fn advance_roots(
         .checked_add(1)
         .ok_or(StorageError::RevisionOverflow)?;
     match retirement {
+        Retirement::Retained { slot, .. } if slot < roots[ROOT_HISTORY - 1].expires_at() => {
+            return Err(StorageError::RootHistoryRetained);
+        }
         // A graced update tightens nothing, so the rotation dropping the oldest root only makes its proofs prove again.
-        Retirement::Graced { slot, grace_slots } => {
+        Retirement::Graced { slot, grace_slots } | Retirement::Retained { slot, grace_slots } => {
             // A saturated expiry never lapses.
             roots[0].expires_at = slot.saturating_add(grace_slots).to_le_bytes();
             roots.rotate_right(1);
@@ -330,6 +340,8 @@ pub enum StorageError {
     PrivateWriteWithoutTracking = 9035,
     #[error("the tracking tree holds no further leaf")]
     TrackingTreeFull = 9036,
+    #[error("the apply would evict a tracking root inside its grace")]
+    RootHistoryRetained = 9037,
 }
 
 impl From<StorageError> for ProgramError {

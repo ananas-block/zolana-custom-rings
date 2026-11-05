@@ -4,8 +4,9 @@
 //! holds one slot and never the apply of another ring.
 //!
 //! The ring indexer lists pending authorizations unverified. A page must ascend by owner past the
-//! cursor, only a full page continues, and every listed account must still read pending at the
-//! revision the proof chained, so a dropped or reordered page delays an owner and never grants one.
+//! cursor, only a full page continues, and every named account must read pending on chain, so a
+//! dropped or reordered page delays an owner and never grants one. A rotation moves only the viewing
+//! key, so it neither lists an account nor stales a proof.
 //!
 //! Read after `services/ring-indexer/src/rpc/tracking.rs` and `sdk-libs/sdk/src/operations/storage.rs`.
 
@@ -17,8 +18,8 @@ use std::{
 
 use custom_ring_interface::{
     member_registry::APPLY_BATCH,
-    tracking::{TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY, TRACKING_GRACE_SLOTS},
-    RingAccount, RingPolicy,
+    tracking::{TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY},
+    RingAccount, RingPolicy, ROOT_HISTORY,
 };
 use custom_ring_sdk::CustomRing;
 use log::warn;
@@ -62,9 +63,6 @@ struct Applier {
 #[derive(Default)]
 struct RegistryState {
     attempt: Option<Attempt>,
-    /// The revision of each account the last pass read pending.
-    seen: HashMap<Address, u64>,
-    held_until: HashMap<Address, u64>,
 }
 
 struct RegistryPass<'a> {
@@ -74,7 +72,7 @@ struct RegistryPass<'a> {
     state: &'a mut RegistryState,
 }
 
-/// A first enrollment takes a leaf, a rotation of an enrolled owner takes none.
+/// Every pending enrollment is a first enrollment and takes a leaf.
 struct Batch {
     owners: Vec<Address>,
     free_leaves: u64,
@@ -169,7 +167,7 @@ impl Applier {
 }
 
 impl RegistryPass<'_> {
-    async fn run(mut self) -> Result<(), RingRpcError> {
+    async fn run(self) -> Result<(), RingRpcError> {
         // 1. One apply at a time, a second proof from the same root could not land.
         if let Some(attempt) = self.state.attempt {
             if attempt.landing(self.chain).await? == Landing::Pending {
@@ -181,19 +179,16 @@ impl RegistryPass<'_> {
         let Some(tracking) = self.tracking().await? else {
             return Ok(());
         };
-        let owners = self.choose(slot, &tracking).await?;
+        // 2. The program refuses an apply that would evict a root inside its grace, waiting spends no proof.
+        if slot < tracking.roots[ROOT_HISTORY - 1].expires_at() {
+            return Ok(());
+        }
+        let owners = self.choose(&tracking).await?;
         if owners.is_empty() {
             return Ok(());
         }
-        // 2. Proving takes long, the accounts and the root can move meanwhile.
+        // 3. Proving takes long. Only an apply moves a named account out of pending, and it moves the root too.
         let proved = self.chain.prove_enrollments(self.registry, &owners).await?;
-        let moved = self.moved(&owners, &proved).await?;
-        if !moved.is_empty() {
-            moved
-                .into_iter()
-                .for_each(|owner| self.state.hold(owner, slot));
-            return Ok(());
-        }
         let current = self.tracking().await?;
         if current.is_none_or(|current| current.newest().revision != proved.revision) {
             return Ok(());
@@ -201,17 +196,12 @@ impl RegistryPass<'_> {
         self.send(proved).await
     }
 
-    /// Oldest pages first until one batch fills, held accounts and full-tree inserts wait unnamed.
-    async fn choose(
-        &mut self,
-        slot: u64,
-        tracking: &TrackingRegistry,
-    ) -> Result<Vec<Address>, RingRpcError> {
+    /// Oldest pages first until one batch fills, an account the chain holds applied or absent stays out.
+    async fn choose(&self, tracking: &TrackingRegistry) -> Result<Vec<Address>, RingRpcError> {
         let mut batch = Batch {
             owners: Vec::new(),
             free_leaves: TRACKING_CAPACITY.saturating_sub(tracking.next_index()),
         };
-        let mut seen = HashMap::new();
         let mut after = None;
         loop {
             let page = self
@@ -224,49 +214,29 @@ impl RegistryPass<'_> {
                 .await?;
             after = checked_page(&page.enrollments, after, page.next_after)?;
             for view in &page.enrollments {
-                let owner = view.owner.0;
-                if self
-                    .state
-                    .seen
-                    .get(&owner)
-                    .is_some_and(|revision| *revision != view.revision)
-                {
-                    self.state.hold(owner, slot);
+                if batch.is_full() {
+                    break;
                 }
-                seen.insert(owner, view.revision);
-                if !self.state.is_held(&owner, slot) {
-                    batch.offer(view);
+                // The indexer lists unverified, the program refuses the whole apply over one applied account.
+                if self.pending_on_chain(&view.owner.0).await? {
+                    batch.offer(view.owner.0);
                 }
             }
             if after.is_none() || batch.is_full() {
                 break;
             }
         }
-        self.state.seen = seen;
-        self.state.held_until.retain(|_, until| slot < *until);
         Ok(batch.owners)
     }
 
-    /// Named accounts the proof no longer matches, the program would refuse the whole apply.
-    async fn moved(
-        &self,
-        owners: &[Address],
-        proved: &ProvedEnrollments,
-    ) -> Result<Vec<Address>, RingRpcError> {
-        let mut moved = Vec::new();
-        for (owner, revision) in owners.iter().zip(&proved.revisions) {
-            let (address, _) = TrackingAuthorization::find_address(&self.registry, owner);
-            let authorization =
-                self.chain.account(address).await?.and_then(|account| {
-                    TrackingAuthorization::decode(&account.owner, &account.data)
-                });
-            if !authorization.is_some_and(|authorization| {
-                authorization.is_pending() && authorization.revision() == *revision
-            }) {
-                moved.push(*owner);
-            }
-        }
-        Ok(moved)
+    async fn pending_on_chain(&self, owner: &Address) -> Result<bool, RingRpcError> {
+        let (address, _) = TrackingAuthorization::find_address(&self.registry, owner);
+        Ok(self
+            .chain
+            .account(address)
+            .await?
+            .and_then(|account| TrackingAuthorization::decode(&account.owner, &account.data))
+            .is_some_and(|authorization| authorization.is_pending()))
     }
 
     async fn send(self, proved: ProvedEnrollments) -> Result<(), RingRpcError> {
@@ -295,7 +265,7 @@ impl RegistryPass<'_> {
     }
 }
 
-/// The cursor past the page, a page out of order, past its claimed end or short of a continuation refuses.
+/// The cursor past the page, a page out of order or short of a continuation refuses.
 fn checked_page(
     enrollments: &[RingPendingEnrollmentView],
     after: Option<SerializablePubkey>,
@@ -303,9 +273,7 @@ fn checked_page(
 ) -> Result<Option<SerializablePubkey>, TrackingRefusal> {
     let mut previous = after.map(|after| after.0);
     for view in enrollments {
-        if previous.is_some_and(|previous| view.owner.0 <= previous)
-            || view.revision <= view.applied_revision
-        {
+        if previous.is_some_and(|previous| view.owner.0 <= previous) {
             return Err(TrackingRefusal::PageShape);
         }
         previous = Some(view.owner.0);
@@ -318,32 +286,14 @@ fn checked_page(
     }
 }
 
-impl RegistryState {
-    /// Each move stales a proof naming the account, one rotation period costs it the wait alone.
-    fn hold(&mut self, owner: Address, slot: u64) {
-        self.held_until
-            .insert(owner, slot.saturating_add(TRACKING_GRACE_SLOTS));
-    }
-
-    fn is_held(&self, owner: &Address, slot: u64) -> bool {
-        self.held_until
-            .get(owner)
-            .is_some_and(|until| slot < *until)
-    }
-}
-
 impl Batch {
-    fn offer(&mut self, view: &RingPendingEnrollmentView) {
-        if self.is_full() {
+    /// A full tree takes no further owner.
+    fn offer(&mut self, owner: Address) {
+        let Some(left) = self.free_leaves.checked_sub(1) else {
             return;
-        }
-        if view.applied_revision == 0 {
-            let Some(left) = self.free_leaves.checked_sub(1) else {
-                return;
-            };
-            self.free_leaves = left;
-        }
-        self.owners.push(view.owner.0);
+        };
+        self.free_leaves = left;
+        self.owners.push(owner);
     }
 
     fn is_full(&self) -> bool {

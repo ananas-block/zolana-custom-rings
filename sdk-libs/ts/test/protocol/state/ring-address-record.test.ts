@@ -167,8 +167,7 @@ describe("tracking_enroll.json", () => {
   it("decodes the authorization account after its apply", () => {
     expect(ACCOUNT.registry).toBe(REGISTRY);
     expect(ACCOUNT.owner).toBe(OWNER);
-    expect(ACCOUNT.revision).toBe(BigInt(enroll.revision));
-    expect(ACCOUNT.appliedRevision).toBe(BigInt(enroll.revision));
+    expect(ACCOUNT.applied).toBe(true);
     expect(hex(ACCOUNT.nullifierPk)).toBe(enroll.enroll_data.slice(0, 64));
     expect(hex(ACCOUNT.listTag)).toBe(enroll.enroll_data.slice(64, 128));
     expect(hex(ACCOUNT.viewingU)).toBe(enroll.enroll_data.slice(128, 192));

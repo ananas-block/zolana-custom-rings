@@ -61,8 +61,7 @@ function stored(fields: Partial<TrackingAuthorization> = {}): TrackingAuthorizat
     owner: OWNER,
     ...SEAL,
     viewingU: field(0x15),
-    revision: 1n,
-    appliedRevision: 1n,
+    applied: true,
     ...fields,
   };
 }
@@ -71,19 +70,17 @@ const unenrolled = {
   getAccount: async () => undefined,
 } as never;
 
-function authorizationBytes(): Uint8Array {
-  const data = new Uint8Array(273);
+function authorizationBytes(applied = 0, owner: Address = OWNER): Uint8Array {
+  const data = new Uint8Array(258);
   data[0] = 4;
   data.set(addressBytes(REGISTRY, "registry"), 1);
-  data.set(addressBytes(OWNER, "owner"), 33);
+  data.set(addressBytes(owner, "owner"), 33);
   data.set(SEAL.nullifierPk, 65);
   data.set(SEAL.listTag, 97);
   data.set(field(0x15), 129);
   data.set(SEAL.ephU, 161);
   data.set(SEAL.ciphertext, 193);
-  const view = new DataView(data.buffer);
-  view.setBigUint64(257, 3n, true);
-  view.setBigUint64(265, 2n, true);
+  data[257] = applied;
   return data;
 }
 
@@ -120,16 +117,11 @@ describe("checkEnrollment", () => {
 describe("tracking accounts", () => {
   it("decodes an authorization at its field offsets and reports it pending", () => {
     const decoded = decodeTrackingAuthorization(authorizationBytes());
-    expect(decoded).toMatchObject({
-      registry: REGISTRY,
-      owner: OWNER,
-      revision: 3n,
-      appliedRevision: 2n,
-    });
+    expect(decoded).toMatchObject({ registry: REGISTRY, owner: OWNER, applied: false });
     expect(decoded.nullifierPk).toEqual(SEAL.nullifierPk);
     expect(decoded.ciphertext).toEqual(SEAL.ciphertext);
     expect(isEnrollmentPending(decoded)).toBe(true);
-    expect(isEnrollmentPending({ ...decoded, appliedRevision: 3n })).toBe(false);
+    expect(isEnrollmentPending(decodeTrackingAuthorization(authorizationBytes(1)))).toBe(false);
   });
 
   it("refuses an account off its discriminator or size", () => {
@@ -272,7 +264,9 @@ describe("enrollment instructions", () => {
     const [authorization] = await trackingAuthorizationPda(REGISTRY, owner.address);
     const enrolled = {
       getAccount: async (key: Address) =>
-        key === authorization ? { data: authorizationBytes() } : undefined,
+        key === authorization
+          ? { owner: STORAGE_PROGRAM_ID, data: authorizationBytes(1, owner.address) }
+          : undefined,
     } as never;
     const enroll = (seal: EnrollmentSeal) =>
       enrollInstruction(
@@ -426,12 +420,12 @@ describe("proveEnrollment", () => {
   it("reads the stored enrollment by its account address", async () => {
     const [account] = await trackingAuthorizationPda(REGISTRY, OWNER);
     const getAccount = vi.fn(async (key: Address) =>
-      key === account ? { data: authorizationBytes() } : undefined,
+      key === account ? { owner: STORAGE_PROGRAM_ID, data: authorizationBytes(1) } : undefined,
     );
     const state = await enrollmentState({ trackingRegistry: REGISTRY, owner: OWNER }, {
       getAccount,
     } as never);
-    expect(state?.revision).toBe(3n);
+    expect(state?.applied).toBe(true);
     expect(
       await enrollmentState({ trackingRegistry: REGISTRY, owner: REGISTRY }, {
         getAccount,

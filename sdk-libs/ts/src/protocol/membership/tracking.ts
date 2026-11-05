@@ -3,7 +3,6 @@ import { hexToBytes } from "@noble/hashes/utils.js";
 import type { Address } from "@solana/kit";
 
 import {
-  bigIntBytes,
   checkedBytes,
   encodeBase58,
   equalBytes,
@@ -13,7 +12,6 @@ import {
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
 
-import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { domainField, RingDomain } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import type { StorageRegistryRoot } from "../codec/ring-codecs.js";
@@ -31,14 +29,14 @@ export const TRACKING_CAPACITY = 1n << BigInt(2 * TRACKING_QUAD_HEIGHT);
 export const TRACKING_GRACE_SLOTS = 750n;
 /** The sentinel at leaf 0 under zero subtrees. */
 export const TRACKING_EMPTY_ROOT = hexToBytes(
-  "22febb04d2840e2726e552991b273a0f796f4ecba0c6cea4b0981bc624d456cc",
+  "2425fb189630d5f84bcc34f42804377d8564a55959c92ad1fa6fee86a590614e",
 ) as Bytes32;
 
 const REGISTRY_DISCRIMINATOR = 3;
 const AUTHORIZATION_DISCRIMINATOR = 4;
 const OWNER_GRANT_DISCRIMINATOR = 5;
 const REGISTRY_SIZE = 1610;
-const AUTHORIZATION_SIZE = 273;
+const AUTHORIZATION_SIZE = 258;
 const OWNER_GRANT_SIZE = 2;
 
 export interface TrackingRegistry {
@@ -58,8 +56,8 @@ export interface TrackingAuthorization {
   readonly viewingU: Bytes32;
   readonly ephU: Bytes32;
   readonly ciphertext: Bytes64;
-  readonly revision: bigint;
-  readonly appliedRevision: bigint;
+  /** Set once an apply inserts the owner's row, a rotation leaves it. */
+  readonly applied: boolean;
 }
 
 /** The address names the registry, the owner and the reader. */
@@ -72,8 +70,6 @@ export interface TrackingEntry {
   readonly member: Bytes32;
   readonly nullifierPk: Bytes32;
   readonly ctHash: Bytes32;
-  readonly viewingU: Bytes32;
-  readonly revision: bigint;
   readonly listTag: Bytes32;
 }
 
@@ -91,8 +87,6 @@ export const TRACKING_SENTINEL: TrackingRecord = Object.freeze({
   next: FIELD_MAX,
   nullifierPk: ZERO_32,
   ctHash: ZERO_32,
-  viewingU: ZERO_32,
-  revision: 0n,
   listTag: ZERO_32,
 });
 
@@ -133,8 +127,7 @@ export function decodeTrackingAuthorization(data: Uint8Array): TrackingAuthoriza
     viewingU: reader.bytes(32, "viewingU") as Bytes32,
     ephU: reader.bytes(32, "ephU") as Bytes32,
     ciphertext: reader.bytes(64, "ciphertext") as Bytes64,
-    revision: reader.u64("revision"),
-    appliedRevision: reader.u64("appliedRevision"),
+    applied: reader.u8("applied") !== 0,
   });
   reader.done();
   return authorization;
@@ -155,18 +148,16 @@ export function decodeOwnerGrant(data: Uint8Array): OwnerGrant {
 }
 
 export function isEnrollmentPending(authorization: TrackingAuthorization): boolean {
-  return authorization.appliedRevision < authorization.revision;
+  return !authorization.applied;
 }
 
-/** `Poseidon(CRTQ, member, nullifier_pk, ct_hash, view0, view1, revision, list_tag)`. */
+/** `Poseidon(CRTQ, member, nullifier_pk, ct_hash, list_tag)`. */
 export function trackingEntryHash(entry: TrackingEntry): Bytes32 {
   return poseidon([
     domainField(RingDomain.trackingEntry),
     checkedBytes<Bytes32>(entry.member, 32, "member"),
     checkedBytes<Bytes32>(entry.nullifierPk, 32, "nullifier pk"),
     checkedBytes<Bytes32>(entry.ctHash, 32, "ct hash"),
-    ...packBytesBe(checkedBytes<Bytes32>(entry.viewingU, 32, "viewing key")),
-    bigIntBytes(entry.revision, 32) as Bytes32,
     checkedBytes<Bytes32>(entry.listTag, 32, "list tag"),
   ]) as Bytes32;
 }
@@ -179,7 +170,7 @@ export function trackingEntryChained(previous: Bytes32, entry: TrackingEntry): B
   ]) as Bytes32;
 }
 
-/** `Poseidon(CRTK, member, next, nullifier_pk, ct_hash, view0, view1, revision, list_tag)`. */
+/** `Poseidon(CRTK, member, next, nullifier_pk, ct_hash, list_tag)`. */
 export function trackingRecordHash(record: TrackingRecord): Bytes32 {
   return poseidon([
     domainField(RingDomain.trackingLeaf),
@@ -187,8 +178,6 @@ export function trackingRecordHash(record: TrackingRecord): Bytes32 {
     checkedBytes<Bytes32>(record.next, 32, "next"),
     checkedBytes<Bytes32>(record.nullifierPk, 32, "nullifier pk"),
     checkedBytes<Bytes32>(record.ctHash, 32, "ct hash"),
-    ...packBytesBe(checkedBytes<Bytes32>(record.viewingU, 32, "viewing key")),
-    bigIntBytes(record.revision, 32) as Bytes32,
     checkedBytes<Bytes32>(record.listTag, 32, "list tag"),
   ]) as Bytes32;
 }

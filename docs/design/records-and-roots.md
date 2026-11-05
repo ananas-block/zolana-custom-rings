@@ -41,25 +41,25 @@ A ring reads two kinds of tree, each in a Storage program account with its own r
 
 ## Tracking
 
-- A tracking leaf contains one owner's nullifier key, ciphertext hash, viewing key, revision and list tag.
+- A tracking leaf contains one owner's nullifier key, ciphertext hash and list tag. Every field is final, so a leaf never changes once inserted.
 - The tree has 16 levels of four, taller than a policy tree. Anyone can pay to fill it, and no tree replaces a full one. Its next index is a `u64`, and an apply past `TRACKING_CAPACITY` leaves fails.
 - `Enroll` needs the owner's signature, and a program signs its PDA through CPI. Any payer may fund it, and Ring RPC can relay it for a wallet with no SOL.
 - A first enrollment carries a proof. It shows the ciphertext seals the secret of that nullifier key and the salt of that tag to the auditor key.
 - The program supplies the ring id, the member and the auditor key from the signer and the registry. A proof for another ring, member or auditor fails.
 - The program verifies that proof in the same instruction, and refuses the zero nullifier key.
 - `Enroll` only reads the registry, so enrollment traffic takes no write lock on it.
-- `ApplyEnrollments` is permissionless. An applier names the authorization accounts in any order, and the program computes each entry from the account, so no applier can alter one. An applied revision refuses a second apply.
+- `ApplyEnrollments` is permissionless. An applier names the authorization accounts in any order, and the program computes each entry from the account, so no applier can alter one. An applied account refuses a second apply.
 - An enrollment is complete only when its leaf sits under an accepted tracking root. A pending account grants nothing, because every check reads the root. A recipient is usable from that root on.
 - Ring RPC applies the pending enrollments of the rings its operator names. Any other party can apply the same accounts.
-- A full tree leaves a first enrollment pending, and rotations of enrolled owners still apply, since a rotation takes no new leaf.
+- A full tree leaves a first enrollment pending.
 - A ring creates its tracking registry at `Initialize` and pins its address. A forged registry with a matching ring id fails that address check.
 
 ## Viewing keys
 
-- The row holds the owner's current viewing key for one ring. No other ring reads it.
-- A rotation is a later `Enroll` with no proof. It moves only the viewing key and the revision. The nullifier key, the list tag and the ciphertext are final.
-- The row takes the new key when an apply lands the new revision.
-- A sender's SDK resolves a recipient address through the verified tracking row and seals to the row's viewing key. An address that names an older viewing key therefore resolves to the current one.
+- The owner's authorization account holds its current viewing key for one ring. No other ring reads it, and no tracking leaf holds it.
+- A rotation is a later `Enroll` with no proof. It moves only the viewing key in the account. The nullifier key, the list tag and the ciphertext are final. A rotation moves no root, marks nothing pending and leaves no tracking work.
+- A sender's SDK proves presence, nullifier key and list tag through the verified tracking row, then reads the viewing key from the authorization account at `confirmed`. It checks the account's program owner, registry and owner. An address that names an older viewing key resolves to the current one.
+- A rotation that lands after the read leaves the payment sealed to the key read. No program check reads a viewing key.
 - A wallet keeps every replaced viewing key in its viewing history, so notes sealed to an older key still open.
 
 ## Root history
@@ -79,7 +79,8 @@ The apply proof binds that restrictive bit, reading an absent member's old field
 - A restrictive update retires every earlier root at once, and every proof under them fails and proves again.
 - Any other update keeps the outgoing root valid for the grace period, so a proof in flight under it still lands. Over a full history it evicts the oldest kept root, and that root's proofs prove again.
 - A kept root reads no policy field more permissively than the newest root. Rules are monotone in those fields, so a kept root admits no transfer the newest refuses.
-- A tracking update is always graced, under a program constant. Over a full history it evicts the oldest kept root, and that root's proofs prove again.
+- A tracking update is always graced, under a program constant, and every retired tracking root serves its whole grace. An apply that would evict an unexpired root refuses, and its accounts stay pending until the oldest root expires.
+- The limit is enrollment availability. New owners can fill the kept roots, and a one entry apply spends a root as a full batch does, so enrollment waits under sustained load while enrolled owners keep their tracking witnesses.
 
 ## Tracking floor
 

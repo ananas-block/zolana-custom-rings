@@ -1,7 +1,7 @@
 //! Registry records, read under a root or signed as record updates.
 
 use async_trait::async_trait;
-use custom_ring_interface::domain;
+use custom_ring_interface::{domain, tracking::TrackingAuthorization};
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_api::ZolanaApi;
@@ -17,7 +17,7 @@ use zolana_ring_client::{
         RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest, WalletGrant,
         AWAITABLE_LISTS,
     },
-    AsyncRingIndexer, ReaderKey, RecipientResolver, ResolvedRecipient,
+    AsyncRingIndexer, AuthorizationCheck, ReaderKey, RecipientResolver, ResolvedRecipient,
 };
 use zolana_ring_indexer::{
     rpc::{
@@ -340,20 +340,49 @@ impl OutputKey<'_> {
     }
 }
 
-/// The row names the current viewing key, a body sealed to any other stays unread.
-pub(crate) fn check_recipient_viewing_key(
-    row: Option<&TrackingRecord>,
-    viewing_u: &[u8; 32],
-    slot_index: usize,
-) -> Result<(), RingError> {
-    match row {
-        Some(record) if record.viewing_u != *viewing_u => {
-            Err(RingError::RecipientViewingKeyStale {
-                slot_index,
-                row_revision: record.revision,
-            })
+/// An output whose owner holds a tracking row, sealed to `viewing_u`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SealedOutput {
+    pub slot_index: usize,
+    /// The Solana owner the tracking member commits.
+    pub owner: Address,
+    pub viewing_u: [u8; 32],
+}
+
+/// Refuses an output sealed to a key other than its owner's authorization holds, a body sealed to it stays unread.
+#[must_use]
+pub(crate) struct RecipientViewingKeys<'a> {
+    pub registry: Address,
+    pub outputs: &'a [SealedOutput],
+}
+
+impl RecipientViewingKeys<'_> {
+    /// Reads the authorization at `confirmed`. A rotation that lands after the read leaves the payment
+    /// sealed to the key read, no program check reads a viewing key.
+    pub async fn check(self, rpc: &(impl AsyncRpc + ?Sized)) -> Result<(), RingError> {
+        if self.outputs.is_empty() {
+            return Ok(());
         }
-        Some(_) | None => Ok(()),
+        let addresses = self
+            .outputs
+            .iter()
+            .map(|output| TrackingAuthorization::find_address(&self.registry, &output.owner).0)
+            .collect();
+        let accounts = rpc.get_multiple_accounts(addresses).await?;
+        for (index, output) in self.outputs.iter().enumerate() {
+            let held = AuthorizationCheck {
+                registry: self.registry,
+                owner: output.owner,
+                account: accounts.get(index).and_then(Option::as_ref),
+            }
+            .viewing_u()?;
+            if held != output.viewing_u {
+                return Err(RingError::RecipientViewingKeyStale {
+                    slot_index: output.slot_index,
+                });
+            }
+        }
+        Ok(())
     }
 }
 

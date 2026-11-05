@@ -11,7 +11,7 @@ import {
   rotateViewingKey,
   updateViewingKey,
 } from "../../../src/operations/management/viewing-rotation.js";
-import { trackingAuthorizationPda } from "../../../src/protocol/pda/index.js";
+import { STORAGE_PROGRAM_ID, trackingAuthorizationPda } from "../../../src/protocol/pda/index.js";
 import { LocalRingKeys } from "../../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../../src/state/viewing-history.js";
 
@@ -25,10 +25,10 @@ const wallet = (seed: number) =>
     SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(seed) as Bytes32),
   );
 
-/** `OWNER`'s tracking authorization for `holder`, `land` applies a pending rotation. */
-async function enrolled(holder: ShieldedKeypair) {
+/** `OWNER`'s tracking authorization for `holder`, `enroll` lands a rotation. */
+async function enrolled(holder: ShieldedKeypair, applied = 1) {
   const [pda] = await trackingAuthorizationPda(REGISTRY, OWNER);
-  const data = new Uint8Array(273);
+  const data = new Uint8Array(258);
   data[0] = 4;
   data.set(addressBytes(REGISTRY), 1);
   data.set(addressBytes(OWNER), 33);
@@ -37,20 +37,14 @@ async function enrolled(holder: ShieldedKeypair) {
   data.set(holder.viewingPublicKey().u(), 129);
   data.fill(0x22, 161, 193);
   data.fill(0x33, 193, 257);
-  const view = new DataView(data.buffer);
-  view.setBigUint64(257, 1n, true);
-  view.setBigUint64(265, 1n, true);
+  data[257] = applied;
   const client = {
     getAccount: async (read: Address) =>
-      read === pda ? { owner: REGISTRY, data: data.slice(), lamports: 1n } : undefined,
+      read === pda ? { owner: STORAGE_PROGRAM_ID, data: data.slice(), lamports: 1n } : undefined,
   };
-  // The program raises the revision on Enroll, the applier folds it into the tree.
-  const enroll = (viewingU: Uint8Array) => {
-    data.set(viewingU, 129);
-    view.setBigUint64(257, 2n, true);
-  };
-  const apply = () => view.setBigUint64(265, 2n, true);
-  return { client, enroll, apply };
+  // A rotation writes the key alone, the applied flag stays.
+  const enroll = (viewingU: Uint8Array) => data.set(viewingU, 129);
+  return { client, enroll };
 }
 
 function rotation(holder: ShieldedKeypair, next: ViewingKey) {
@@ -63,9 +57,9 @@ function rotation(holder: ShieldedKeypair, next: ViewingKey) {
 }
 
 describe("viewing key rotation through the tracking row", () => {
-  it("enrolls the new key without a proof and confirms it only once applied", async () => {
+  it("enrolls the new key without a proof and confirms it once the rotation lands", async () => {
     const holder = wallet(1);
-    const { client, enroll, apply } = await enrolled(holder);
+    const { client, enroll } = await enrolled(holder);
     const rotated = rotation(holder, ViewingKey.generate());
     const current = rotated.keys.address().viewingPublicKey.u();
     const update = () =>
@@ -87,12 +81,23 @@ describe("viewing key rotation through the tracking row", () => {
     expect(instruction?.data?.subarray(65, 97)).toEqual(current);
     await expect(confirm()).rejects.toMatchObject({ code: "RING_VIEWING_KEY_NOT_PUBLISHED" });
 
-    // 2. A pending revision confirms nothing, the applied one does.
+    // 2. The landed rotation confirms without an apply.
     enroll(current);
-    await expect(confirm()).rejects.toMatchObject({ code: "RING_VIEWING_KEY_NOT_PUBLISHED" });
-    apply();
     expect((await confirm()).viewingU).toEqual(current);
     expect(await update()).toBeUndefined();
+  });
+
+  it("confirms nothing for a first enrollment no apply has inserted", async () => {
+    const holder = wallet(5);
+    const { client } = await enrolled(holder, 0);
+    await expect(
+      confirmViewingKey({
+        client,
+        owner: OWNER,
+        trackingRegistry: REGISTRY,
+        keys: LocalRingKeys.fromKeypair(holder),
+      }),
+    ).rejects.toMatchObject({ code: "RING_VIEWING_KEY_NOT_PUBLISHED" });
   });
 
   it("opens a note sealed to the old key only with the retained key", async () => {

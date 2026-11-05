@@ -1,7 +1,6 @@
 package registry_test
 
 import (
-	"encoding/hex"
 	"math/big"
 	"testing"
 
@@ -15,19 +14,16 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 )
 
-func trackingEntry(member, revision, key int64) ringregistry.TrackingEntry {
-	return ringregistry.TrackingEntry{
-		Member: big.NewInt(member), NullifierPk: big.NewInt(key), CtHash: big.NewInt(key + 1), View0: big.NewInt(revision + 0x100), View1: big.NewInt(revision + 0x200),
-		Revision: big.NewInt(revision), ListTag: big.NewInt(key + 2),
-	}
+func trackingEntry(member, key int64) ringregistry.TrackingEntry {
+	return ringregistry.TrackingEntry{Member: big.NewInt(member), NullifierPk: big.NewInt(key), CtHash: big.NewInt(key + 1), ListTag: big.NewInt(key + 2)}
 }
 
 // The tree holds alice (0x10) and carol (0x30), bob (0x20) is absent between them.
 func trackingTree(t *testing.T) *ringregistry.Tracking {
 	t.Helper()
 	tree := ringregistry.NewTracking(t)
-	tree.Apply(t, trackingEntry(0x10, 1, 0xa0))
-	tree.Apply(t, trackingEntry(0x30, 1, 0xc0))
+	tree.Apply(t, trackingEntry(0x10, 0xa0))
+	tree.Apply(t, trackingEntry(0x30, 0xc0))
 	return tree
 }
 
@@ -124,8 +120,6 @@ type trackingVector struct {
 	Member        string `json:"member"`
 	NullifierPk   string `json:"nullifier_pk"`
 	CtHash        string `json:"ct_hash"`
-	ViewingU      string `json:"viewing_u"`
-	Revision      uint64 `json:"revision"`
 	ListTag       string `json:"list_tag"`
 	EntryHash     string `json:"entry_hash"`
 	ChainFromZero string `json:"chain_from_zero"`
@@ -143,14 +137,9 @@ func TestTrackingHashesMatchRustVector(t *testing.T) {
 	if got := ringregistry.NewTracking(t).Root(); got.Cmp(ringtest.VectorField(t, v.EmptyRoot)) != 0 {
 		t.Fatalf("empty root %x, Rust %s", got, v.EmptyRoot)
 	}
-	u, err := hex.DecodeString(v.ViewingU)
-	if err != nil || len(u) != 32 {
-		t.Fatalf("viewing key %q", v.ViewingU)
-	}
 	entry := ringregistry.TrackingEntry{
 		Member: ringtest.VectorField(t, v.Member), NullifierPk: ringtest.VectorField(t, v.NullifierPk), CtHash: ringtest.VectorField(t, v.CtHash),
-		View0: new(big.Int).SetBytes(u[:31]), View1: new(big.Int).SetBytes(u[31:]),
-		Revision: new(big.Int).SetUint64(v.Revision), ListTag: ringtest.VectorField(t, v.ListTag),
+		ListTag: ringtest.VectorField(t, v.ListTag),
 	}
 	hash := entry.Hash(t)
 	if hash.Cmp(ringtest.VectorField(t, v.EntryHash)) != 0 {
@@ -207,7 +196,7 @@ func (c *sharedTrackingCircuit) Define(api frontend.API) error {
 func TestSharedTrackingProofOpensLeaves(t *testing.T) {
 	tree := ringregistry.NewTracking(t)
 	for m := int64(1); m <= 20; m++ {
-		tree.Apply(t, trackingEntry(m*10, 1, 0x1000+m))
+		tree.Apply(t, trackingEntry(m*10, 0x1000+m))
 	}
 	for _, openings := range []int{1, 4, 17} {
 		indices := make([]uint64, openings)

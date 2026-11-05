@@ -342,6 +342,8 @@ export const StorageProgramError = Object.freeze({
   invalidAuditorKey: 9033,
   invalidAssetWrite: 9034,
   privateWriteWithoutTracking: 9035,
+  trackingTreeFull: 9036,
+  rootHistoryRetained: 9037,
 } as const);
 
 export class RingError extends Error {

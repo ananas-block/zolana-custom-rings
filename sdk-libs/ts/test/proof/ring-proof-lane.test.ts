@@ -407,8 +407,6 @@ describe("merge.json", () => {
         next: field(row["next"] ?? ""),
         nullifierPk: field(row["nullifierPk"] ?? ""),
         ctHash: field(row["ctHash"] ?? ""),
-        viewingU: viewingU(row["view0"] ?? "", row["view1"] ?? ""),
-        revision: BigInt(row["revision"] ?? 0),
         listTag: field(row["listTag"] ?? ""),
       };
       const quad = { index: path.index, siblings: path.siblings.map((level) => level.map(field)) };
@@ -574,8 +572,6 @@ describe("tracking predicates", () => {
     next: fill(2),
     nullifierPk,
     ctHash: fill(3),
-    viewingU: fill(4),
-    revision: 1n,
     listTag: fill(5),
   });
   const zero = ZERO_NULLIFIER_PK as Bytes32;
@@ -618,7 +614,14 @@ describe("tracking predicates", () => {
       outputs: readonly (ProofOutputUtxo | undefined)[],
       served: TrackingRecord | undefined,
       saltedPayees = true,
-    ) => checkOutputKeys({ outputs, rowOf: () => served, spenders: [], saltedPayees });
+    ) =>
+      checkOutputKeys({
+        outputs,
+        rowOf: () => served,
+        viewingKeyOf: () => fill(4),
+        spenders: [],
+        saltedPayees,
+      });
     checked([output(fill(9)), undefined], row(fill(9)));
     checked([output(zero)], undefined);
     checked([output(zero)], row(fill(9)), false);
@@ -630,7 +633,7 @@ describe("tracking predicates", () => {
     );
   });
 
-  it("refuses a recipient address sealing to a viewing key the row retired", () => {
+  it("refuses a recipient address sealing to a viewing key its authorization retired", () => {
     const spender = {} as ShieldedPublicKey;
     const output = {
       ownerAddress: {
@@ -646,15 +649,16 @@ describe("tracking predicates", () => {
       checkOutputKeys({
         outputs: [output],
         rowOf: () => row(fill(9)),
+        viewingKeyOf: () => fill(4),
         spenders: [],
         saltedPayees: false,
       }),
     );
     expect(stale.code).toBe("RING_RECIPIENT_VIEWING_KEY_STALE");
-    expect(stale.details).toMatchObject({ rowRevision: "1" });
     checkOutputKeys({
       outputs: [output],
       rowOf: () => row(fill(9)),
+      viewingKeyOf: () => undefined,
       spenders: [spender],
       saltedPayees: false,
     });
@@ -790,16 +794,6 @@ function row0(): TrackingRecord {
     next: zero,
     nullifierPk: zero,
     ctHash: zero,
-    viewingU: zero,
-    revision: 0n,
     listTag: zero,
   };
-}
-
-/** Inverse of `pack_be`, 31 bytes then the last. */
-function viewingU(view0: string, view1: string): Bytes32 {
-  const out = new Uint8Array(32);
-  out.set(field(view0).subarray(1), 0);
-  out.set(field(view1).subarray(31), 31);
-  return out as Bytes32;
 }

@@ -199,11 +199,31 @@ impl TestEnv {
 
     /// Keeps the account's owner and lamports.
     pub fn set_account_data(&self, address: Address, data: &[u8]) -> Result<()> {
+        self.set_account(address, serde_json::json!({ "data": hex::encode(data) }))
+    }
+
+    /// A rent exempt account `owner` holds, no transaction backs it.
+    pub fn create_account(&self, address: Address, owner: Address, data: &[u8]) -> Result<()> {
+        let lamports = self
+            .client
+            .rpc()
+            .get_minimum_balance_for_rent_exemption(data.len())?;
+        self.set_account(
+            address,
+            serde_json::json!({
+                "lamports": lamports,
+                "owner": owner.to_string(),
+                "data": hex::encode(data),
+            }),
+        )
+    }
+
+    fn set_account(&self, address: Address, fields: serde_json::Value) -> Result<()> {
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "surfnet_setAccount",
-            "params": [address.to_string(), { "data": hex::encode(data) }],
+            "params": [address.to_string(), fields],
         });
         let reply: serde_json::Value = self.client.block_on(async {
             anyhow::Ok(

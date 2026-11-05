@@ -22,10 +22,9 @@ type OwnerWrite struct {
 func SaltedTracking(t testing.TB, salt *big.Int) *Tracking {
 	t.Helper()
 	tracking := NewTracking(t)
-	view0, view1 := PackedView(big.NewInt(0xa1a2))
 	tracking.Apply(t, TrackingEntry{
 		Member: big.NewInt(101), NullifierPk: spptest.MustNullifierPk(t, big.NewInt(7)), CtHash: big.NewInt(17),
-		View0: view0, View1: view1, Revision: big.NewInt(1), ListTag: ListTag(t, salt),
+		ListTag: ListTag(t, salt),
 	})
 	return tracking
 }
@@ -45,7 +44,7 @@ func NewOwnerWrite(t testing.TB, salt *big.Int) OwnerWrite {
 // ZeroPrivateOwner is the all zero slot an unselected write carries.
 func ZeroPrivateOwner() registry.PrivateOwner {
 	zero := ZeroTrackingWrite()
-	return registry.PrivateOwner{ListSalt: 0, Record: zero.Old.Wires(), Path: zero.Slot.Wires()}
+	return registry.PrivateOwner{ListSalt: 0, Record: zero.Low.Wires(), Path: zero.Slot.Wires()}
 }
 
 // PrivateBatch writes mask on the salted owner key at slot 0 of a private key of capacity writes, the other slots stay inactive.

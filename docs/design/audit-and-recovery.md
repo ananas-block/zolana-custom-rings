@@ -47,7 +47,7 @@ The auditor holds one viewing key for the ring's life. Every operation proves a 
 
 A recipient body contains the blinding, the amount and the mint. A note that commits a ring data hash or application data carries them after those fields. The cipher has no authentication, so the commitment a reader rebuilds under its own keys is the only proof of ownership.
 
-The sender's SDK resolves a nonzero-key recipient through its tracking row under a root it verified, and seals to the row's viewing key. It refuses an owner with no applied row. It also refuses a row whose nullifier key differs from the address, or whose list tag the address's salt does not open. That check protects an honest sender and binds nobody else.
+The sender's SDK resolves a nonzero-key recipient through its tracking row under a root it verified, and seals to the viewing key of the owner's authorization account. It refuses an owner with no applied row. It also refuses a row whose nullifier key differs from the address, or whose list tag the address's salt does not open. That check protects an honest sender and binds nobody else.
 
 ## Auditor fallback
 

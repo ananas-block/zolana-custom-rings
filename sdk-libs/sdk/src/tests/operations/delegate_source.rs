@@ -30,8 +30,7 @@ fn enrolled(owner: Address, key: &NullifierKey) -> Chain {
         viewing_u: [0; 32],
         eph_u: envelope.sealed.eph_pk.u(),
         ciphertext: envelope.sealed.ciphertext,
-        revision: 1u64.to_le_bytes(),
-        applied_revision: 1u64.to_le_bytes(),
+        applied: 1,
     };
     Chain::default().with(
         TrackingAuthorization::find_address(&TRACKING, &owner).0,

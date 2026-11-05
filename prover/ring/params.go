@@ -67,9 +67,6 @@ type TrackingRecordParams struct {
 	Next        Field `json:"next"`
 	NullifierPk Field `json:"nullifierPk"`
 	CtHash      Field `json:"ctHash"`
-	View0       Field `json:"view0"`
-	View1       Field `json:"view1"`
-	Revision    Field `json:"revision"`
 	ListTag     Field `json:"listTag"`
 }
 
@@ -248,12 +245,7 @@ type TrackingWrite struct {
 	Member      Field                `json:"member"`
 	NullifierPk Field                `json:"nullifierPk"`
 	CtHash      Field                `json:"ctHash"`
-	View0       Field                `json:"view0"`
-	View1       Field                `json:"view1"`
-	Revision    Field                `json:"revision"`
 	ListTag     Field                `json:"listTag"`
-	Exists      bool                 `json:"exists"`
-	OldRecord   TrackingRecordParams `json:"oldRecord"`
 	Index       uint64               `json:"index"`
 	Path        []Field              `json:"path"`
 	LowRecord   TrackingRecordParams `json:"lowRecord"`
@@ -323,9 +315,6 @@ type TrackingLeaf struct {
 	Next        Field `json:"next"`
 	NullifierPk Field `json:"nullifierPk"`
 	CtHash      Field `json:"ctHash"`
-	View0       Field `json:"view0"`
-	View1       Field `json:"view1"`
-	Revision    Field `json:"revision"`
 	ListTag     Field `json:"listTag"`
 }
 

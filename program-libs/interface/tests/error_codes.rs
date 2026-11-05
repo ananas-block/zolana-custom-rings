@@ -164,6 +164,7 @@ fn storage_error_codes_are_stable() {
         (Error::InvalidAssetWrite, 9034),
         (Error::PrivateWriteWithoutTracking, 9035),
         (Error::TrackingTreeFull, 9036),
+        (Error::RootHistoryRetained, 9037),
     ];
     for (error, code) in pins {
         assert_eq!(error as u32, code, "{error:?}");

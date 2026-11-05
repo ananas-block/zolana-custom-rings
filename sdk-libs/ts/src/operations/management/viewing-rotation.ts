@@ -1,5 +1,5 @@
 /**
- * A wallet's viewing key rotation through its tracking row.
+ * A wallet's viewing key rotation through its tracking authorization.
  *
  * Read after `operations/management/enrollment.ts`, whose `Enroll` without a
  * proof carries the new key. Read after `LocalRingKeys` and `ViewingHistory`,
@@ -7,11 +7,12 @@
  *
  * A rotation runs in three steps. `rotateViewingKey` is local, and the wallet
  * stores the new viewing secret and the rotated history before the owner signs
- * what `updateViewingKey` builds. A row naming a key the wallet lost routes
- * every later payment to notes nobody opens. `confirmViewingKey` reads the
- * authorization back once an `ApplyEnrollments` folds the new revision into
- * the tree. The row holds only the current key, the history keeps every
- * earlier one, and notes sealed to an earlier key open through it.
+ * what `updateViewingKey` builds. An authorization naming a key the wallet lost
+ * routes every later payment to notes nobody opens. `confirmViewingKey` reads
+ * the authorization back once the rotation lands. A rotation writes only the
+ * authorization, so it moves no tracking root and waits on no apply. The
+ * account holds only the current key, the history keeps every earlier one, and
+ * notes sealed to an earlier key open through it.
  */
 import type { Address, Instruction } from "@solana/kit";
 
@@ -60,8 +61,8 @@ export async function updateViewingKey(
   if (!equalBytes(input.history.current().viewingPublicKey.u(), viewingU))
     throw new RingError("RING_VIEWING_HISTORY_NOT_CURRENT");
   // 2. A rotation repeats the final seal of the first enrollment, the program
-  // refuses any other and raises the revision. A holder of another nullifier
-  // key would publish a viewing key the enrolled row does not belong to.
+  // refuses any other. A holder of another nullifier key would publish a
+  // viewing key the enrolled row does not belong to.
   const stored = await storedAuthorization(input, context);
   if (!equalBytes(stored.nullifierPk, input.keys.address().nullifierPublicKey))
     throw new RingError("RING_ENROLLMENT_KEY_MISMATCH");
@@ -79,7 +80,7 @@ export async function updateViewingKey(
   );
 }
 
-/** Resolves once the applied row holds the holder's current key, a pending or older one refuses. */
+/** Resolves once the authorization of an applied enrollment holds the holder's current key, a pending enrollment or an older key refuses. */
 export async function confirmViewingKey(
   input: Readonly<{
     client: EnrollmentReadClient;

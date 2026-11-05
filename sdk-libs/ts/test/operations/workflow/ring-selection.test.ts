@@ -23,6 +23,7 @@ import { trackingTree } from "../../helpers/member-registry.js";
 import {
   ringPolicyData,
   sppRingRegistration,
+  trackingAuthorizations,
   trackingRegistryAccount,
 } from "../../helpers/ring-accounts.js";
 import { TRACKING_REVISION, trackingEntry } from "../../helpers/ring-pipeline.js";
@@ -356,6 +357,7 @@ describe("ring approval summary", () => {
     mode: RingMode = "confidential",
   ) {
     const tracked = trackingTree(enrolled.map((owner) => trackingEntry(owner)));
+    const authorizations = await trackingAuthorizations(TRACKING, enrolled);
     const [ring, bump] = await ringPolicyPda(RING);
     const [ringAuth, registration] = await sppRingRegistration({
       authority: PAYER,
@@ -375,7 +377,7 @@ describe("ring approval summary", () => {
                   nextIndex: tracked.nextIndex,
                   auditorPubkey: new Uint8Array(33),
                 })
-              : undefined,
+              : authorizations.get(address),
       getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     });
   }

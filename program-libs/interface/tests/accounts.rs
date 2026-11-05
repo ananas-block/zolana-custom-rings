@@ -18,7 +18,7 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use spr_hasher::{
-    primitives::{hash_bytes, pack_be, right_align, solana_owner_identity},
+    primitives::{hash_bytes, solana_owner_identity},
     Hasher, Poseidon,
 };
 use zolana_ring_policy::{ListId, ListSet, Member, Rule, RuleTable, Subject};
@@ -204,7 +204,6 @@ fn first_enrollment() -> TrackingAuthorization {
 fn the_entry_binds_every_field_and_comes_from_the_account() {
     let account = first_enrollment();
     let entry = account.entry().unwrap();
-    let [view0, view1] = pack_be(&entry.viewing_u);
     assert_eq!(
         entry.member,
         solana_owner_identity(account.owner.as_array()).unwrap()
@@ -217,9 +216,6 @@ fn the_entry_binds_every_field_and_comes_from_the_account() {
             &entry.member,
             &entry.nullifier_pk,
             &entry.ct_hash,
-            &view0,
-            &view1,
-            &right_align(&1u64.to_be_bytes()),
             &entry.list_tag,
         ])
         .unwrap()
@@ -238,14 +234,6 @@ fn the_entry_binds_every_field_and_comes_from_the_account() {
             ..entry
         },
         TrackingEntry {
-            viewing_u: [9; 32],
-            ..entry
-        },
-        TrackingEntry {
-            revision: 2,
-            ..entry
-        },
-        TrackingEntry {
             list_tag: [9; 32],
             ..entry
         },
@@ -256,28 +244,18 @@ fn the_entry_binds_every_field_and_comes_from_the_account() {
 }
 
 #[test]
-fn an_enrollment_applies_once_and_a_rotation_opens_the_next() {
+fn an_enrollment_applies_once_and_a_rotation_never_reopens_it() {
     let mut account = first_enrollment();
     assert!(account.is_pending());
-    assert_eq!(account.applied_revision(), 0);
-    assert_eq!(account.apply().unwrap().revision, 1);
-    assert_eq!(account.applied_revision(), 1);
+    let entry = account.apply().unwrap();
+    assert_eq!(entry, first_enrollment().entry().unwrap());
     assert!(!account.is_pending());
     assert_eq!(account.apply(), Err(StorageError::EnrollmentAlreadyApplied));
     account.rotate(&enroll_ix([0x19; 32])).unwrap();
-    assert!(account.is_pending());
-    let entry = account.apply().unwrap();
-    assert_eq!((entry.revision, entry.viewing_u), (2, [0x19; 32]));
-}
-
-#[test]
-fn rotations_coalesce_into_the_latest_state() {
-    let mut account = first_enrollment();
-    account.rotate(&enroll_ix([0x19; 32])).unwrap();
-    account.rotate(&enroll_ix([0x1a; 32])).unwrap();
-    let entry = account.apply().unwrap();
-    assert_eq!((entry.revision, entry.viewing_u), (3, [0x1a; 32]));
+    assert!(!account.is_pending());
     assert_eq!(account.apply(), Err(StorageError::EnrollmentAlreadyApplied));
+    // The entry holds no viewing key, a rotation leaves the row the apply chained.
+    assert_eq!(account.entry().unwrap(), entry);
 }
 
 #[test]
@@ -314,14 +292,8 @@ fn a_rotation_refuses_every_final_field_and_moves_the_viewing_key_alone() {
         account,
         TrackingAuthorization {
             viewing_u: [0x19; 32],
-            revision: 2u64.to_le_bytes(),
             ..before
         }
-    );
-    account.revision = u64::MAX.to_le_bytes();
-    assert_eq!(
-        account.rotate(&rotated),
-        Err(StorageError::RevisionOverflow)
     );
 }
 
@@ -449,7 +421,7 @@ fn tracking_update(revision: u64, slot: u64, byte: u8) -> TrackingRootUpdate {
 }
 
 #[test]
-fn a_tracking_update_serves_the_old_root_for_its_grace_until_a_full_history_evicts_it() {
+fn a_tracking_update_serves_the_old_root_for_its_grace() {
     let mut registry = TrackingRegistry::new(&tracking_ix());
     registry.update(tracking_update(0, 10, 1)).unwrap();
     let first_root = TRACKING_EMPTY_ROOT;
@@ -464,15 +436,26 @@ fn a_tracking_update_serves_the_old_root_for_its_grace_until_a_full_history_evic
         registry.update(tracking_update(0, 11, 2)),
         Err(StorageError::RevisionChanged)
     );
-    // A full history evicts the oldest root, every newer root stays served.
-    let mut filled = registry;
-    let newest = ROOT_HISTORY as u64;
-    for revision in 1..newest {
-        filled.update(tracking_update(revision, 11, 3)).unwrap();
+}
+
+/// The update that would evict the oldest unexpired root refuses and writes nothing, the same update applies once it lapses.
+#[test]
+fn a_tracking_update_waits_while_its_eviction_would_drop_an_unexpired_root() {
+    let mut filled = TrackingRegistry::new(&tracking_ix());
+    let full = ROOT_HISTORY as u64 - 1;
+    for revision in 0..full {
+        filled.update(tracking_update(revision, 10, 3)).unwrap();
     }
-    assert_eq!(filled.root(0.into(), 11), Err(StorageError::RootExpired));
-    assert!(filled.root(1.into(), 12).is_ok());
-    assert!(filled.root(newest.into(), 12).is_ok());
+    assert_eq!(filled.root(0.into(), 11), Ok(TRACKING_EMPTY_ROOT));
+    let before = filled;
+    let lapse = 10 + TRACKING_GRACE_SLOTS;
+    assert_eq!(
+        filled.update(tracking_update(full, lapse - 1, 4)),
+        Err(StorageError::RootHistoryRetained)
+    );
+    assert_eq!(filled, before);
+    filled.update(tracking_update(full, lapse, 4)).unwrap();
+    assert_eq!(filled.newest().revision, Revision::from(full + 1));
 }
 
 #[test]

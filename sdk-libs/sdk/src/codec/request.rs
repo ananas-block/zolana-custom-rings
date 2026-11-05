@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{RecordWrite, QUAD_ARITY};
 use serde::{Serialize, Serializer};
-use spr_hasher::primitives::{pack_be, right_align};
+use spr_hasher::primitives::right_align;
 use spr_keypair::{PublicKey, X25519Pubkey};
 use spr_transaction::{
     instructions::transact::SppProofOutputUtxo,
@@ -309,26 +309,16 @@ pub(crate) struct TrackingLeafRequest {
     #[serde(with = "fe")]
     pub ct_hash: [u8; 32],
     #[serde(with = "fe")]
-    pub view0: [u8; 32],
-    #[serde(with = "fe")]
-    pub view1: [u8; 32],
-    #[serde(with = "fe")]
-    pub revision: [u8; 32],
-    #[serde(with = "fe")]
     pub list_tag: [u8; 32],
 }
 
 impl From<&TrackingRecord> for TrackingLeafRequest {
     fn from(record: &TrackingRecord) -> Self {
-        let [view0, view1] = pack_be(&record.viewing_u);
         Self {
             member: record.member,
             next: record.next,
             nullifier_pk: record.nullifier_pk,
             ct_hash: record.ct_hash,
-            view0,
-            view1,
-            revision: right_align(&record.revision.to_be_bytes()),
             list_tag: record.list_tag,
         }
     }
@@ -709,15 +699,7 @@ pub(crate) struct TrackingWrite {
     #[serde(with = "fe")]
     pub ct_hash: [u8; 32],
     #[serde(with = "fe")]
-    pub view0: [u8; 32],
-    #[serde(with = "fe")]
-    pub view1: [u8; 32],
-    #[serde(with = "fe")]
-    pub revision: [u8; 32],
-    #[serde(with = "fe")]
     pub list_tag: [u8; 32],
-    pub exists: bool,
-    pub old_record: TrackingLeafRequest,
     pub index: u64,
     #[serde(serialize_with = "fe::seq")]
     pub path: Vec<[u8; 32]>,
@@ -730,17 +712,11 @@ pub(crate) struct TrackingWrite {
 impl From<&TrackingWriteProofInput> for TrackingWrite {
     fn from(write: &TrackingWriteProofInput) -> Self {
         let entry = &write.entry;
-        let [view0, view1] = pack_be(&entry.viewing_u);
         Self {
             member: entry.member,
             nullifier_pk: entry.nullifier_pk,
             ct_hash: entry.ct_hash,
-            view0,
-            view1,
-            revision: right_align(&entry.revision.to_be_bytes()),
             list_tag: entry.list_tag,
-            exists: write.exists,
-            old_record: (&write.old).into(),
             index: write.slot.index,
             path: write.slot.siblings.as_flattened().to_vec(),
             low_record: (&write.low).into(),

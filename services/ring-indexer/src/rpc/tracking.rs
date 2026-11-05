@@ -260,8 +260,6 @@ fn record_view(record: &TrackingRecord) -> RingTrackingRecordView {
         next: Hash(record.next),
         nullifier_pk: Hash(record.nullifier_pk),
         ct_hash: Hash(record.ct_hash),
-        viewing_u: Hash(record.viewing_u),
-        revision: record.revision,
         list_tag: Hash(record.list_tag),
         seal: None,
     }
@@ -272,11 +270,7 @@ fn write_view(write: &TrackingWriteProofInput) -> RingTrackingWriteView {
         member: Hash(write.entry.member),
         nullifier_pk: Hash(write.entry.nullifier_pk),
         ct_hash: Hash(write.entry.ct_hash),
-        viewing_u: Hash(write.entry.viewing_u),
-        revision: write.entry.revision,
         list_tag: Hash(write.entry.list_tag),
-        exists: write.exists,
-        old: record_view(&write.old),
         slot: path_view(write.slot.index, &write.slot.siblings),
         low: record_view(&write.low),
         low_path: path_view(write.low_path.index, &write.low_path.siblings),
@@ -289,9 +283,6 @@ fn pending_view(row: &Enrollment) -> RingPendingEnrollmentView {
         member: Hash(row.member),
         nullifier_pk: Hash(row.nullifier_pk),
         ct_hash: Hash(row.ct_hash),
-        viewing_u: Hash(row.viewing_u),
-        revision: row.revision,
-        applied_revision: row.applied_revision,
         list_tag: Hash(row.list_tag),
     }
 }

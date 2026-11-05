@@ -24,7 +24,6 @@ import { checkedViewingU } from "../../protocol/membership/member-opening.js";
 import { memberOfTag } from "../../protocol/membership/policy.js";
 import {
   TRACKING_CAPACITY,
-  decodeTrackingAuthorization,
   decodeTrackingRegistry,
   type TrackingAuthorization,
 } from "../../protocol/membership/tracking.js";
@@ -36,6 +35,7 @@ import {
 import { registerKeyStatementHash } from "../../protocol/proof/statement.js";
 import { enrollAccounts } from "../../protocol/ring-rpc/relay-enroll-inputs.js";
 import type { RingProver } from "../../rpc/ports.js";
+import { readTrackingAuthorization } from "../../rpc/tracking-resolver.js";
 import { readerKeyBytes, type ReaderKey } from "./reader-access.js";
 import { sealNullifierKey } from "./register-key.js";
 
@@ -93,9 +93,7 @@ export async function enrollmentState(
   client: EnrollmentReadClient,
   context?: RequestContext,
 ): Promise<TrackingAuthorization | undefined> {
-  const [address] = await trackingAuthorizationPda(input.trackingRegistry, input.owner);
-  const account = await client.getAccount(address, context);
-  return account === undefined ? undefined : decodeTrackingAuthorization(account.data);
+  return readTrackingAuthorization({ client, ...input }, context);
 }
 
 export function checkEnrollment(
