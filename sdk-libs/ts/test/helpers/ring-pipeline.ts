@@ -389,7 +389,12 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     treeId: TREE_ID,
     ...reader,
     proveRing: async (request: RingProofRequest): Promise<Uint8Array> => {
-      ringRequests.push(structuredClone(request));
+      // A clone keeps the request past the caller's wipe, the immutable root table stays shared.
+      ringRequests.push(
+        "credentialRoots" in request
+          ? { ...structuredClone(request), credentialRoots: request.credentialRoots }
+          : structuredClone(request),
+      );
       proofs += 1;
       return new Uint8Array(192).fill(proofs);
     },

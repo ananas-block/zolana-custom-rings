@@ -40,6 +40,7 @@ import {
   credentialPda,
   credentialSeed,
   credentialUtxoHash,
+  encodeAuditCredential,
   encodeCredentialOutput,
   type AuditCredential,
 } from "../../src/protocol/membership/credential.js";
@@ -123,7 +124,7 @@ export class CredentialChain {
     return this.#accounts.get(address);
   }
 
-  /** `Enroll` landed and its leaf is under the newest state root, a repeat is refused. */
+  /** `Enroll` landed and its leaf is under the newest state root. */
   enroll(owner: ShieldedAddress, listTag: Bytes32 = ZERO_32): AuditCredential {
     const credential: AuditCredential = Object.freeze({
       ringId: ringIdField(this.#ring),
@@ -135,7 +136,13 @@ export class CredentialChain {
       ciphertext: new Uint8Array(64).fill(0x21) as Bytes64,
     });
     const key = Buffer.from(credential.member).toString("hex");
-    if (this.#enrolled.has(key)) throw new Error("a credential is never replaced");
+    const held = this.#enrolled.get(key);
+    // A second `Enroll` of the same credential changes nothing, another credential is refused.
+    if (held !== undefined) {
+      if (!same(encodeAuditCredential(held.credential), encodeAuditCredential(credential)))
+        throw new Error("a credential is never replaced");
+      return held.credential;
+    }
     const pda = this.#pda;
     const address = credentialAddress(pda, credentialSeed(credential.ringId, credential.member));
     const leaf = credentialUtxoHash({ pda, address, credential, treeId: ADDRESS_TREE_ID });

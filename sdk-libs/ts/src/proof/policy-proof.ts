@@ -277,7 +277,10 @@ function policySubjects(
     ]),
     subjectOf: new Map(
       [
-        ...publishedNotes(proofInputs).map((spent) => credentialSubject(spent.utxo.owner)),
+        // A dummy input carries the zero key, no owner opens a credential for it.
+        ...publishedNotes(proofInputs).flatMap((spent) =>
+          spent.isDummy() || spent.utxo.owner.isZero() ? [] : [credentialSubject(spent.utxo.owner)],
+        ),
         ...outputs.flatMap((output) =>
           output.ownerAddress === undefined
             ? []
