@@ -6,7 +6,7 @@ use spr_client::AsyncRpc;
 use spr_indexer_api::{Hash, SerializablePubkey, SerializableSignature};
 use spr_keypair::{NullifierKey, PublicKey, SigningKey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
-use spr_transaction::instructions::transact::SettlementTransfer;
+use spr_transaction::{instructions::transact::SettlementTransfer, utxo::SppProofInputUtxo};
 use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayCoOwner, RelayIntent, RelayProofInputs, RelayQuote,
     RelayRail,
@@ -14,8 +14,8 @@ use zolana_ring_client::rpc::{
 use zolana_ring_transaction::{published_outputs, RingDelivery};
 
 use super::{
-    approval_totals_of, owner::deposit_funder, Anonymous, Delegated, Owner, Rail, RingTransfer,
-    Sealed,
+    approval_totals_of, owner::deposit_funder, Anonymous, CoOwnerKey, Delegated, Owner, Rail,
+    RingTransfer, Sealed,
 };
 use crate::{
     relay_message::{
@@ -288,10 +288,12 @@ impl<P> Sealed<'_, P> {
             ring_program_id: self.pipeline.ring.program_id(),
             sender: staged.sender,
             nullifier_key,
+            // The relayer gets no nullifier secret of a co-owner that spends no input.
             co_owners: staged
                 .authority
                 .co_owners
                 .iter()
+                .filter(|held| inputs.input_utxos.iter().any(|input| spends(held, input)))
                 .map(|held| RelayCoOwner {
                     owner: held.owner,
                     nullifier_key: held.key.clone(),
@@ -309,6 +311,13 @@ impl<P> Sealed<'_, P> {
             approval_blinder: self.pipeline.approval_blinder,
         }
     }
+}
+
+/// Co-owner match of `SpendWire::of` on a real note, the wire refuses a cached one.
+fn spends(held: &CoOwnerKey, input: &SppProofInputUtxo) -> bool {
+    !(input.is_dummy() || input.is_address() || input.is_compact())
+        && input.utxo.owner.as_ed25519().ok() == Some(held.owner.to_bytes())
+        && held.key.pubkey().ok() == Some(input.nullifier_pubkey)
 }
 
 fn token_account_creates(setup: &[CreateAssociatedTokenAccount]) -> Vec<TokenAccountCreate> {

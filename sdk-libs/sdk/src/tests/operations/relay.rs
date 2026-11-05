@@ -1879,6 +1879,68 @@ mod public_signers {
         );
     }
 
+    async fn relayed_co_owners(mode: RingMode) -> Vec<Address> {
+        let (sender, payee, spending, idle) = (keypair(1), keypair(2), keypair(3), keypair(5));
+        let client = chain(mode, None, &[&sender, &payee, &spending, &idle]).client();
+        let notes = vec![
+            ring_utxo(&sender, Mint::SOL, 10, 0),
+            ring_utxo(&spending, Mint::SOL, 10, 1),
+        ];
+        let held = |owner| CoOwner {
+            owner: address(owner),
+            nullifier_key: &owner.nullifier_key,
+        };
+        let prepared = match mode {
+            RingMode::Anonymous => transfer(&sender, notes)
+                .with_anonymous_signer(&sender.signing_key)
+                .with_co_owner(held(&idle))
+                .with_co_owner(held(&spending))
+                .with_payment(pay(&payee, 4))
+                .unwrap()
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+            RingMode::Confidential => {
+                let mut transaction =
+                    ConfidentialTransaction::new_with_ring(notes, FEE_PAYER, ring().program_id())
+                        .unwrap();
+                transaction
+                    .transfer_sol(&payee.shielded_address().unwrap(), 4)
+                    .unwrap();
+                CustomRingTransfer::new(CustomRingTransferInput {
+                    ring: ring(),
+                    sender: &sender,
+                    nullifier_key: Some(&sender.nullifier_key),
+                    transaction,
+                })
+                .with_in_proof_owner(&sender.signing_key)
+                .with_co_owner(held(&idle))
+                .with_co_owner(held(&spending))
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap()
+            }
+        };
+        let (RelayIntent::Anonymous { proof_inputs, .. }
+        | RelayIntent::Confidential { proof_inputs, .. }) = sent(prepared).await.request.intent
+        else {
+            panic!("a wallet relay");
+        };
+        let inputs = RelayProofInputs::decode(proof_inputs.as_bytes()).unwrap();
+        inputs.co_owners.iter().map(|held| held.owner).collect()
+    }
+
+    #[tokio::test]
+    async fn a_relay_carries_a_spending_co_owner_key_and_no_idle_one_on_both_rails() {
+        for mode in [RingMode::Anonymous, RingMode::Confidential] {
+            assert_eq!(
+                relayed_co_owners(mode).await,
+                [address(&keypair(3))],
+                "{mode:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_public_co_owner_crosses_the_wire_with_its_key_and_signs_for_its_notes() {
         let (sender, payee, co_owner) = (keypair(1), keypair(2), keypair(3));
