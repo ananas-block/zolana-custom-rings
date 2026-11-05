@@ -278,17 +278,19 @@ The **Wallet** writes its own viewing flag and its wallet grants. The **Policy a
 
 ## 3. Deposit
 
-A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring notes, in at most 3 tokens. The token and amounts are public. It is a transfer that spends no note, every SPP input a dummy, funded by a deposit leg.
+A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring notes. The token and amounts are public. It is a transfer that spends no note, every SPP input a dummy, funded by a deposit leg.
+
+**Limit:** one deposit carries at most 3 distinct tokens, the public slots of a transfer key. The SDKs refuse a wider deposit before proving, and the wallet splits it.
 
 1. **Wallet:**
    1. Chooses the token, amount and recipient.
    2. Prepares the deposit notes and seals their openings to the **Auditor**.
-   3. Sends the deposit request with its proof inputs to **Ring RPC**.
+   3. Sends the deposit request to **Ring RPC** on the deposit relay rail. The funder signs `deposit_request_digest`, the SHA-256 of `"zolana/ring-rpc-relay-deposit"` and the proof input bytes. No owner signs.
 2. **Ring RPC:**
-   1. Checks that the ring is active.
+   1. Checks that the ring is active. Refuses a frame with a real input, with two funders, with the fee payer as funder, or with a signature the funder did not make.
    2. Generates the transfer proof. It shows the owner and asset rules hold for each recipient and asset. It also shows that each nonzero nullifier key matches its owner's tracking row. Under a salted payee read it shows that each zero-key owner has no row.
    3. Returns the transaction to the **Wallet** for signing.
-3. **Wallet:** signs to authorize the SOL or SPL token transfer.
+3. **Wallet:** the funder signs the transaction to authorize the SOL or SPL token transfer.
 4. **Ring RPC:**
    1. Co-signs when deposits demand approval.
    2. Pays fees and submits the deposit to the **Ring Program**.
@@ -321,7 +323,7 @@ A unified flow for anonymous and confidential transfers, exits and withdrawals. 
 
 A recipient wallet finds an anonymous note by scanning ring history, see [wallet scanning](design/audit-and-recovery.md#wallet-scanning). Without Ring RPC the **Wallet** does step 2 itself and pays from a fee payer it chooses. A demanded co-signer still signs. On the anonymous rail that payer and any co-signer must differ from the hidden owner, and the ring program accepts any such payer.
 
-A frame publishes `m` output slots up to the key's capacity, and omits the rest as a suffix. A ring output publishes no owner identity, and an exit's owner is public. Every ring program transaction is one inline v1 transaction, with no frame buffer and no lookup table. The SDKs refuse before proving a frame whose transaction passes 4,096 bytes or 64 addresses, or whose SPP CPI data passes 10 KiB. The key catalog in `program-libs/interface/src/proof/key_catalog.rs` fixes each key's input class. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg.
+A frame publishes `m` output slots up to the key's capacity, and omits the rest as a suffix. A ring output publishes no owner identity, and an exit's owner is public. Every ring program transaction is one inline v1 transaction, with no frame buffer and no lookup table. The SDKs refuse before proving a frame whose transaction passes 4,096 bytes or 64 addresses, or whose SPP CPI data passes 10 KiB. The key catalog in `program-libs/interface/src/proof/key_catalog.rs` fixes each key's input class. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only, and a relayed deposit takes the deposit relay rail of [Deposit](#3-deposit). A transfer that spends a note beside a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg.
 
 The table names construction paths, subject to policy, key capacity and frame fit. Direct SDK paths build their own proofs. Hosted paths ask Ring RPC to prove and submit. Public co-owners still sign the transaction. A missing proving key refuses every path.
 
@@ -473,7 +475,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 11. Each co-signer has its own account. A transaction carries a co-signer for each demanded class, and one co-signer may cover several. A ring can then keep separate outflow and withdrawal approvers. The hot path loads each co-signer account by owner and discriminator, as the draft's note 2 asks.
 12. Co-signer limits live per asset in the asset record, each cap with its own window. The tree already serves per-asset data under a root the program reads.
 13. Co-signing fails closed when Ring RPC cannot read the limits or the asset has no record. Either would otherwise read as no limits.
-14. Ring RPC relays and pays for every wallet operation except a transfer with a deposit leg or an operation that needs an outside co-signer. A relayed wallet never fetches a Merkle path, as the draft's note 4 asks.
+14. Ring RPC relays and pays for every wallet operation except a transfer that spends a note beside a deposit leg, or an operation that needs an outside co-signer. A deposit relays on its own rail, where the funder signs the deposit request and no owner signs. A relayed wallet never fetches a Merkle path, as the draft's note 4 asks.
 15. The confidential in-proof rail proves on SPP's anonymous rail, and admits signing co-owners beside the in-proof owner, as SPP does. The transfer proof holds every input to the in-proof owner or an owner of the signed run. It follows the maintainer's suggestion and keeps no new SPP circuit.
 16. Both confidential owner rails stay. The program admits an entry key on every rail but the delegate's. The SDKs refuse a default-ring input on the in-proof rail, and a hidden owner's ring notes beside its own default-ring note.
 17. This repository never refactors zolana circuits. They are audited, and a source change reopens the audit.
