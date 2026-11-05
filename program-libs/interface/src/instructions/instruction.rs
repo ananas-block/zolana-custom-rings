@@ -295,6 +295,8 @@ pub struct ApplyRecordsIxData {
     pub proof: CustomRingProof,
     pub new_root: [u8; 32],
     pub new_next_index: [u8; 4],
+    /// The proven `ApplyRecordsStatement::restrictive`, one or zero.
+    pub restrictive: u8,
 }
 
 macro_rules! fixed_ix_data {
@@ -415,6 +417,11 @@ impl ApplyRecordsIxData {
     pub const fn new_next_index(&self) -> u32 {
         u32::from_le_bytes(self.new_next_index)
     }
+
+    /// `StorageUpdateIxData::parse` refuses a byte above one.
+    pub const fn restrictive(&self) -> bool {
+        self.restrictive != 0
+    }
 }
 
 /// One to `APPLY_BATCH` writes, `AuthorityBatchTooLarge` past it.
@@ -429,7 +436,7 @@ pub(crate) fn write_count(count: usize) -> Result<u8, CustomRingError> {
 const _: () = assert!(WriteRecordsIxData::SIZE == 16);
 const _: () = assert!(core::mem::align_of::<RecordWriteData>() == 1);
 const _: () = assert!(RecordWriteData::SIZE == 145);
-const _: () = assert!(ApplyRecordsIxData::SIZE == 228);
+const _: () = assert!(ApplyRecordsIxData::SIZE == 229);
 const _: () = assert!(APPLY_BATCH <= u8::MAX as usize);
 
 #[cfg(test)]

@@ -100,6 +100,7 @@ struct ApplyCase {
     chain_start: String,
     chain_end: String,
     count: u64,
+    restrictive: bool,
     credential_writes: u16,
     private_ring_id: String,
     credential_fields: Vec<String>,
@@ -116,6 +117,7 @@ struct ApplyPublicCase {
     chain_start: String,
     chain_end: String,
     count: u64,
+    restrictive: bool,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -528,6 +530,7 @@ fn compute_vectors() -> StatementVectors {
         chain_start: values.fields[11],
         chain_end: values.fields[12],
         count: 16,
+        restrictive: true,
         private: Some(PrivateWrites {
             credential_writes: 1,
             private_ring_id: values.ring_id,
@@ -537,6 +540,7 @@ fn compute_vectors() -> StatementVectors {
     let private = apply.private.as_ref().expect("private apply statement");
     let public_apply = ApplyRecordsStatement {
         count: 3,
+        restrictive: false,
         private: None,
         ..apply.clone()
     };
@@ -603,6 +607,7 @@ fn compute_vectors() -> StatementVectors {
             chain_start: hex::encode(apply.chain_start),
             chain_end: hex::encode(apply.chain_end),
             count: apply.count,
+            restrictive: apply.restrictive,
             credential_writes: private.credential_writes,
             private_ring_id: hex::encode(private.private_ring_id),
             credential_fields: hexes(&private.credentials.elements().collect::<Vec<_>>()),
@@ -617,6 +622,7 @@ fn compute_vectors() -> StatementVectors {
             chain_start: hex::encode(public_apply.chain_start),
             chain_end: hex::encode(public_apply.chain_end),
             count: public_apply.count,
+            restrictive: public_apply.restrictive,
             elements: hexes(&public_apply.elements()),
             public_input_hash: hex::encode(public_apply.hash().unwrap()),
         },

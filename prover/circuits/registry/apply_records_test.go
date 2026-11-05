@@ -52,11 +52,18 @@ func applyBatch(t *testing.T, members *ringregistry.Registry, n int, chainStart 
 // bind hashes the statement from the circuit's current values, as the program rebuilds it.
 func (b *batch) bind(t *testing.T) {
 	t.Helper()
+	b.bindAs(t, ringregistry.Restrictive(b.circuit.Writes, len(b.writes)))
+}
+
+// bindAs hashes the statement under the restrictive bit the instruction claims.
+func (b *batch) bindAs(t *testing.T, restrictive int64) {
+	t.Helper()
 	c := b.circuit
 	statement := []*big.Int{big.NewInt(shared.ApplyRecordsDomain)}
 	for _, v := range []frontend.Variable{c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count} {
 		statement = append(statement, ringtest.AsBigInt(v))
 	}
+	statement = append(statement, big.NewInt(restrictive))
 	c.PublicInputHash = spptest.MustHashChain4(t, statement)
 }
 
@@ -273,6 +280,36 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			}
 			tt.tamper(t, b)
 			ringtest.RequireRefused(t, solve(t, b.circuit), tt.frames...)
+		})
+	}
+}
+
+// The writes prove the restrictive bit, an instruction claiming the other one is refused.
+func TestApplyRecordsRestrictiveBit(t *testing.T) {
+	firstCap := entry(0x40, 0, 0)
+	firstCap.MintPolicy = new(big.Int).SetBit(new(big.Int).Lsh(big.NewInt(500), 64), 192, 1)
+	tests := []struct {
+		name        string
+		write       ringregistry.Entry
+		restrictive int64
+	}{
+		{"an allow list addition", entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit), 0},
+		{"an allow bit rewritten unchanged", entry(0x10, ringregistry.AllowBit, ringregistry.AllowBit), 0},
+		{"a block list addition", entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit), 1},
+		{"an allow bit cleared", entry(0x10, ringregistry.AllowBit, 0), 1},
+		{"a first cap on a mint", firstCap, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := applyBatch(t, seeded(t), 1, big.NewInt(0x5eed), tt.write)
+			if got := ringregistry.Restrictive(b.circuit.Writes, 1); got != tt.restrictive {
+				t.Fatalf("restrictive %d, want %d", got, tt.restrictive)
+			}
+			if err := solve(t, b.circuit); err != nil {
+				t.Fatalf("honest batch: %v", err)
+			}
+			b.bindAs(t, 1-tt.restrictive)
+			ringtest.RequireRefused(t, solve(t, b.circuit), "[assertIsEqual]", "registry.(*ApplyRecordsCircuit).Define")
 		})
 	}
 }

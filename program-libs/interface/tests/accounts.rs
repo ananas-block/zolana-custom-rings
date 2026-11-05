@@ -10,7 +10,7 @@ use custom_ring_interface::{
     MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS, READER_KEY_ED25519, ROOT_HISTORY,
 };
 use solana_address::Address;
-use zolana_ring_policy::{ListId, ListSet, Member, MintPolicy, Rule, RuleTable, Subject};
+use zolana_ring_policy::{ListId, ListSet, Member, Rule, RuleTable, Subject};
 
 const PROGRAM: Address = Address::new_from_array([7; 32]);
 fn key(byte: u8) -> Address {
@@ -222,6 +222,13 @@ fn apply_ix() -> ApplyRecordsIxData {
     }
 }
 
+fn restrictive_apply_ix() -> ApplyRecordsIxData {
+    ApplyRecordsIxData {
+        restrictive: 1,
+        ..apply_ix()
+    }
+}
+
 fn list_write(list: ListId) -> RecordWriteData {
     RecordWriteData {
         member: [1; 32],
@@ -291,13 +298,13 @@ fn pinned_registry(ring_id: [u8; 32]) -> StorageRegistry {
 }
 
 #[test]
-fn a_policy_write_ends_every_older_root_at_once_and_a_reader_write_keeps_grace() {
-    let apply = apply_ix();
+fn an_allow_list_addition_keeps_grace_and_a_block_list_addition_ends_every_older_root() {
+    let (permissive, restrictive) = (apply_ix(), restrictive_apply_ix());
     let mut registry = public_registry(10);
     registry
         .update(RootUpdate {
             slot: 1,
-            data: &update_data(0, ListId::Reader, &apply),
+            data: &update_data(0, ListId::Allow, &permissive),
             absence_checkpoint: None,
         })
         .unwrap();
@@ -307,7 +314,7 @@ fn a_policy_write_ends_every_older_root_at_once_and_a_reader_write_keeps_grace()
     registry
         .update(RootUpdate {
             slot: 1,
-            data: &update_data(1, ListId::Block, &apply),
+            data: &update_data(1, ListId::Block, &restrictive),
             absence_checkpoint: None,
         })
         .unwrap();
@@ -317,36 +324,31 @@ fn a_policy_write_ends_every_older_root_at_once_and_a_reader_write_keeps_grace()
 }
 
 #[test]
-fn a_policy_write_runs_through_a_full_history() {
+fn a_permissive_update_over_a_full_history_evicts_the_oldest_root() {
     let apply = apply_ix();
     let mut registry = public_registry(u64::MAX);
-    let revision = ROOT_HISTORY as u64 - 1;
-    for earlier in 0..revision {
+    let newest = ROOT_HISTORY as u64;
+    for revision in 0..newest {
         registry
             .update(RootUpdate {
                 slot: 1,
-                data: &update_data(earlier, ListId::Reader, &apply),
+                data: &update_data(revision, ListId::Allow, &apply),
                 absence_checkpoint: None,
             })
             .unwrap();
     }
-    assert_eq!(
-        registry.update(RootUpdate {
-            slot: 2,
-            data: &update_data(revision, ListId::Reader, &apply),
-            absence_checkpoint: None,
-        }),
-        Err(StorageError::HistoryFull)
-    );
+    assert_eq!(registry.root(0.into(), 2), Err(StorageError::RootExpired));
+    assert!(registry.root(1.into(), 2).is_ok());
+    assert!(registry.root(newest.into(), 2).is_ok());
     registry
         .update(RootUpdate {
             slot: 2,
-            data: &update_data(revision, ListId::Block, &apply),
+            data: &update_data(newest, ListId::Block, &restrictive_apply_ix()),
             absence_checkpoint: None,
         })
         .unwrap();
     assert_eq!(
-        registry.root((revision - 1).into(), 2),
+        registry.root(newest.into(), 2),
         Err(StorageError::RootExpired)
     );
 }
@@ -374,27 +376,19 @@ fn a_mint_settings_tag_above_one_is_no_entry() {
 }
 
 #[test]
-fn the_masks_alone_decide_zero_grace() {
-    let apply = apply_ix();
-    for list in [
-        ListId::Allow,
-        ListId::Block,
-        ListId::Frozen,
-        ListId::Approval,
-    ] {
-        assert!(update_data(0, list, &apply).reaches_policy(), "{list:?}");
-        let mut clears = list_write(list);
-        clears.lists.value = [0; 8];
-        assert!(update_of(0, vec![clears], &apply).reaches_policy());
-    }
-    for list in [ListId::Reader, ListId::RingViewing] {
-        assert!(!update_data(0, list, &apply).reaches_policy(), "{list:?}");
-    }
-    let mixed = vec![list_write(ListId::Reader), list_write(ListId::Allow)];
-    assert!(update_of(0, mixed, &apply).reaches_policy());
-    let mut mint = list_write(ListId::Reader);
-    mint.mint_policy = custom_ring_interface::mint_policy_write(Some(MintPolicy::EMPTY));
-    assert!(update_of(0, vec![mint], &apply).reaches_policy());
+fn the_restrictive_byte_has_one_encoding() {
+    let apply = restrictive_apply_ix();
+    let encoded = update_data(0, ListId::Block, &apply).encode().unwrap();
+    assert!(StorageUpdateIxData::parse(&encoded)
+        .unwrap()
+        .apply
+        .restrictive());
+    let mut two = encoded;
+    *two.last_mut().unwrap() = 2;
+    assert_eq!(
+        StorageUpdateIxData::parse(&two),
+        Err(StorageError::InvalidInstructionData)
+    );
 }
 
 #[test]
@@ -440,14 +434,14 @@ fn private_writes_require_a_ring_and_checkpoint_before_any_root_changes() {
 
 #[test]
 fn private_updates_keep_the_maximum_checkpoint_and_retire_old_roots() {
-    let apply = apply_ix();
+    let (apply, restrictive) = (apply_ix(), restrictive_apply_ix());
     for ring_id in [[3; 32], [0; 32]] {
         let mut source = pinned_registry(ring_id);
         for (revision, checkpoint, floor) in [(0, 5, 5), (1, 3, 5), (2, 8, 8)] {
             source
                 .update(RootUpdate {
                     slot: 1,
-                    data: &update_data(revision, ListId::PrivateBlock, &apply),
+                    data: &update_data(revision, ListId::PrivateBlock, &restrictive),
                     absence_checkpoint: Some(checkpoint),
                 })
                 .unwrap();

@@ -168,6 +168,7 @@ fn apply_data(new_root: [u8; 32], new_next_index: u64) -> ApplyRecordsIxData {
         proof: Zeroable::zeroed(),
         new_root,
         new_next_index: u32::try_from(new_next_index).unwrap().to_le_bytes(),
+        restrictive: 0,
     }
 }
 

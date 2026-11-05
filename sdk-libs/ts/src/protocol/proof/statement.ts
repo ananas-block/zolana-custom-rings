@@ -120,6 +120,8 @@ export interface ApplyRecordsStatement {
   /** The chain past the last write. */
   readonly chainEnd: Bytes32;
   readonly count: bigint;
+  /** Set exactly when a write tightens a policy field or changes an asset limit. */
+  readonly restrictive: boolean;
   /** Absent on a public batch, the public apply key binds no credential section. */
   readonly private?: PrivateWrites;
 }
@@ -305,7 +307,7 @@ export function signerBinding(identities: readonly Bytes32[], slots: number): Si
 }
 
 /**
- * `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`, a private batch
+ * `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count, restrictive]`, a private batch
  * appends `[credential_writes, private_ring_id, credential_owner, address_root, tree_id_i, root_i ...]`.
  */
 export function applyRecordsStatementElements(
@@ -320,6 +322,7 @@ export function applyRecordsStatementElements(
     checkedBytes<Bytes32>(statement.chainStart, 32, "chain start"),
     checkedBytes<Bytes32>(statement.chainEnd, 32, "chain end"),
     u64Field(statement.count, "count"),
+    u64Field(statement.restrictive ? 1n : 0n, "restrictive"),
     ...(statement.private === undefined
       ? []
       : [

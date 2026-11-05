@@ -318,7 +318,6 @@ export const StorageProgramError = Object.freeze({
   unauthorized: 9001,
   revisionChanged: 9002,
   rootExpired: 9003,
-  historyFull: 9004,
   invalidInstructionData: 9005,
   batchTooLarge: 9006,
   invalidWrite: 9007,

@@ -497,6 +497,7 @@ async fn prove_apply<R: AsyncRpc, I: RingIndexerBackend>(
         proof: to_instruction_proof(proof)?,
         new_root: statement.new_root,
         new_next_index: statement.new_next_index.to_le_bytes(),
+        restrictive: u8::from(statement.restrictive),
     })
 }
 

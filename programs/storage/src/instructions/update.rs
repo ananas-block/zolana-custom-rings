@@ -10,14 +10,14 @@
 //!
 //! Guarantees:
 //! 1. The new root and next index follow from the current ones by exactly the instruction's writes, in order.
-//! 2. A write a rule can read retires every earlier root in the instruction, any other write keeps the outgoing root for the registry's grace.
+//! 2. A batch the proof marks restrictive retires every earlier root in the instruction, any other batch keeps the outgoing root for the registry's grace.
 //! 3. Every salted owner write proves credential state and address inclusion under the pinned ring namespace.
 //! 4. The classified writes pick the key family, a batch with a salted owner write never verifies under a public key.
 //! 5. Proof acceptance precedes atomic publication of the new policy root and monotonic absence floor.
 //!
 //! Relies on:
 //! 1. `RecordWriteData::storage_entry` keeps each value inside its mask and each mask inside the accepted list bits.
-//! 2. `ApplyRecordsCircuit` keeps list bits outside each mask, moves mint settings only under the entry's flag and keeps the records sorted.
+//! 2. `ApplyRecordsCircuit` keeps list bits outside each mask, moves mint settings only under the entry's flag, keeps the records sorted and sets the restrictive bit exactly when a write tightens a policy field or changes an asset limit.
 
 use custom_ring_interface::{
     key_catalog::apply_width,
@@ -95,6 +95,7 @@ pub fn process_update_ix(
         chain_start,
         chain_end,
         count,
+        restrictive: ix.apply.restrictive(),
         private,
     };
     // 4. One proof under the mode's key binds the policy transition and every required credential and address inclusion.

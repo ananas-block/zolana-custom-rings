@@ -9,6 +9,7 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
@@ -129,7 +130,8 @@ func applyRequest(t testing.TB, circuit common.CircuitType, capacity int) *Apply
 		entries = append(entries, entry(0x100, ringregistry.BlockBit), empty)
 	}
 	// A nonzero chain start, as `chain_start` derives from the registry and revision.
-	return (registryBatch{circuit, capacity, ringregistry.New(t), entries, big.NewInt(0x5eed)}).request(t)
+	request, _ := (registryBatch{circuit, capacity, ringregistry.New(t), entries, big.NewInt(0x5eed)}).request(t)
+	return request
 }
 
 type registryBatch struct {
@@ -140,7 +142,8 @@ type registryBatch struct {
 	chainStart *big.Int
 }
 
-func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
+// request also returns the restrictive bit its statement binds.
+func (batch registryBatch) request(t testing.TB) (*ApplyRecordsParams, bool) {
 	t.Helper()
 	members, entries := batch.members, batch.entries
 	p := &ApplyRecordsParams{
@@ -148,18 +151,20 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWriteProofInput, batch.capacity),
 	}
 	chain := p.ChainStart.Int
+	wires := make([]registry.RecordWriteProofInput, len(entries))
 	for i, e := range entries {
-		w := members.Apply(t, e)
+		wires[i] = members.Apply(t, e).Wires()
 		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
-		p.Writes[i] = requestValue[RecordWriteProofInput](t, w.Wires())
+		p.Writes[i] = requestValue[RecordWriteProofInput](t, wires[i])
 	}
 	p.NewRoot, p.NewNextIndex, p.ChainEnd = fb(members.Root()), uint32(members.NextIndex()), fb(chain)
 	fields := []*big.Int{
 		big.NewInt(shared.ApplyRecordsDomain), p.OldRoot.Int, p.NewRoot.Int, big.NewInt(int64(p.OldNextIndex)),
 		big.NewInt(int64(p.NewNextIndex)), p.ChainStart.Int, p.ChainEnd.Int, big.NewInt(int64(p.Count)),
+		big.NewInt(ringregistry.Restrictive(wires, len(wires))),
 	}
 	p.PublicInputHash = fb(spptest.MustHashChain4(t, fields))
-	return p
+	return p, fields[len(fields)-1].Sign() != 0
 }
 
 func flatPath(path ringregistry.Path) []Field {

@@ -64,7 +64,7 @@ func TestRegisterKeyStatementMatchesRustVector(t *testing.T) {
 type recordsStatementCircuit struct {
 	PublicInputHash                                                    frontend.Variable `gnark:",public"`
 	OldRoot, NewRoot, OldNextIndex, NewNextIndex, ChainStart, ChainEnd frontend.Variable
-	Count                                                              frontend.Variable
+	Count, Restrictive                                                 frontend.Variable
 	CredentialWrites, PrivateRingID, CredentialOwner, AddressRoot      frontend.Variable
 	StateRoots                                                         [][2]frontend.Variable
 }
@@ -77,7 +77,7 @@ func (c *recordsStatementCircuit) Define(api frontend.API) error {
 		},
 		CredentialWrites: c.CredentialWrites, PrivateRingID: c.PrivateRingID,
 		CredentialOwner: c.CredentialOwner, AddressRoot: c.AddressRoot, StateRoots: c.StateRoots,
-	}).statement()
+	}).statement(c.Restrictive)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
 }
@@ -90,6 +90,7 @@ type applyStatementVector struct {
 	ChainStart       string   `json:"chain_start"`
 	ChainEnd         string   `json:"chain_end"`
 	Count            uint64   `json:"count"`
+	Restrictive      bool     `json:"restrictive"`
 	CredentialWrites uint16   `json:"credential_writes"`
 	PrivateRingID    string   `json:"private_ring_id"`
 	CredentialFields []string `json:"credential_fields"`
@@ -109,7 +110,7 @@ func TestApplyRecordsStatementMatchesRustVector(t *testing.T) {
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash),
 		OldRoot:         ringtest.VectorField(t, v.OldRoot), NewRoot: ringtest.VectorField(t, v.NewRoot),
 		OldNextIndex: v.OldNextIndex, NewNextIndex: v.NewNextIndex,
-		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count,
+		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count, Restrictive: ringtest.Bit(v.Restrictive),
 		CredentialWrites: uint64(v.CredentialWrites), PrivateRingID: ringtest.VectorField(t, v.PrivateRingID),
 		CredentialOwner: ringtest.VectorField(t, v.CredentialFields[0]), AddressRoot: ringtest.VectorField(t, v.CredentialFields[1]),
 		StateRoots: make([][2]frontend.Variable, (len(v.CredentialFields)-2)/2),
@@ -124,14 +125,14 @@ func TestApplyRecordsStatementMatchesRustVector(t *testing.T) {
 type publicRecordsStatementCircuit struct {
 	PublicInputHash                                                    frontend.Variable `gnark:",public"`
 	OldRoot, NewRoot, OldNextIndex, NewNextIndex, ChainStart, ChainEnd frontend.Variable
-	Count                                                              frontend.Variable
+	Count, Restrictive                                                 frontend.Variable
 }
 
 func (c *publicRecordsStatementCircuit) Define(api frontend.API) error {
 	statement := (&ApplyRecordsCircuit{
 		OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex,
 		ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count,
-	}).statement()
+	}).statement(c.Restrictive)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
 }
@@ -146,7 +147,7 @@ func TestPublicApplyRecordsStatementMatchesRustVector(t *testing.T) {
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash),
 		OldRoot:         ringtest.VectorField(t, v.OldRoot), NewRoot: ringtest.VectorField(t, v.NewRoot),
 		OldNextIndex: v.OldNextIndex, NewNextIndex: v.NewNextIndex,
-		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count,
+		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count, Restrictive: ringtest.Bit(v.Restrictive),
 	}
 	ringtest.RequirePublicInputBound(t, &publicRecordsStatementCircuit{}, witness)
 }
