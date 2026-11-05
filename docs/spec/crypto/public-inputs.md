@@ -1,6 +1,6 @@
 # Public inputs
 
-Every ring proof has one public input. It is the fold of a statement its verifier rebuilds, the ring program for transfers, deposits and merges and the Storage program for applies and register key. A prover supplies none of the elements the verifier can derive. Element lists are in order. [Spec](../../spec.md) [Hashing](hashing.md)
+Every ring proof has one public input. It is the fold of a statement its verifier rebuilds. The ring program rebuilds the transfer, deposit and merge statements, and the Storage program the apply and register key statements. A prover supplies none of the elements the verifier can derive. Element lists are in order. [Spec](../../spec.md) [Hashing](hashing.md)
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
@@ -59,8 +59,8 @@ The rail bits:
 | Public owners, anonymous ring | 0 | 0 | 0 |
 | Delegate, anonymous ring | 0 | 0 | 1 |
 
-- `in_proof` is set by the frame's `OWNER_IN_PROOF` flag. `hidden` is set on an anonymous ring without the frame's `PUBLIC_OWNERS` flag. `delegate` is set by the `AuthorityTransfer` tag alone, so a proof made with `delegate = 1` fails under `Transfer`.
-- `approval_mask` is `right_align` of one byte, bit `1` `OUTFLOW` and bit `2` `WITHDRAWAL`. The proof computes it: `OUTFLOW` when some `outflow(o, a) > cosign_above(a)` with `cosign_above(a) != 0`, `WITHDRAWAL` when some `gross(a) > withdrawal_threshold(a)` with `withdrawal_threshold(a) != 0`. The mask is zero while `own_root` is zero, and the program refuses a nonzero mask on a delegate frame. The program demands a co-signer for each set bit.
+- `in_proof` is set by the frame's `OWNER_IN_PROOF` flag. `hidden` is set on an anonymous ring's `Transfer` without the frame's `PUBLIC_OWNERS` flag. `delegate` is set by the `AuthorityTransfer` tag alone, so a proof made with `delegate = 1` fails under `Transfer`.
+- `approval_mask` is `right_align` of one byte, bit `1` `OUTFLOW` and bit `2` `WITHDRAWAL`. The proof sets `OUTFLOW` when some `outflow(o, a) > cosign_above(a)` with `cosign_above(a) != 0`, and `WITHDRAWAL` when some `gross(a) > withdrawal_threshold(a)` with `withdrawal_threshold(a) != 0`. The mask is zero while `own_root` is zero, and the program refuses a nonzero mask on a delegate frame. The program demands a co-signer for each set bit.
 - `approval_totals` is `0` or the [approval totals digest](hashing.md#approval-totals-digest). The proof holds a nonzero value to the totals its outflow section computed.
 - `signer_data_counts` is `right_align` of a `u64`. Entry `k` holds bits `5k .. 5k + 5`, the count of live output slots that the `k`th signer of `signer_chain` owns with a nonzero `data_hash`. It has 12 entries, and a bit above the last entry is refused. The frame carries it under `EXTENSIONS` only when nonzero, and the program supplies `0` when it is absent.
 - `no_spend` is `1` when `R`, the sealed count of spent notes, is `0`. The proof sets it from `R`. The program then demands no owner signer and no `TRANSFERS` co-signer.
@@ -69,7 +69,7 @@ The rail bits:
 - `party_0` is the payer. `party_1 .. party_5` are the co-signers, then each deposit leg funder not already named. `party_6` is the exit destination of a hidden sender. Each is `solana_owner_identity`, and `0` when absent. Every party is `0` off an anonymous ring. The circuit refuses a hidden owner equal to any nonzero party.
 - `signer_count` is the number of distinct keys in the SPP owner signer run, deduplicated by first occurrence. `signer_chain` is `HashChain4` of their identities in that order, zero-filled to `S`, and `0` when the count is `0`. The delegate rails bind count `0` and chain `0`.
 - `policy_hash` is the ring account's written hash on a policy ring, else `0`. `own_root` is the ring's own registry root at the frame's `own_revision` on a ring with own records, else `0`. `curator_root` is the curator root at the frame's `curator_revision` on a policy ring with a curator, else `0`. The delegate rails read no policy root, so all three are `0` there. `tracking_root` is the tracking registry root at the frame's `tracking_revision` on every rail.
-- A public slot holds SPP's asset field, the signed net, `right_align(net)` when positive or `q - |net|` when negative, and the gross public withdrawal of the asset as `right_align` of a `u128`, deposits excluded. Slots past the used ones are zeros.
+- A public slot holds SPP's asset field, the signed net and the gross public withdrawal of the asset. The net is `right_align(net)` when positive and `q - |net|` when negative. The gross is `right_align` of a `u128`, deposits excluded. Slots past the used ones are zeros.
 - `withdrawal_hash` is the policy withdrawal hash below. The count closes the chain, so a statement of another length hashes apart.
 
 The chains over the slots, each zero past `m`:
@@ -91,7 +91,7 @@ No zolana ciphertext enters the statement, an exit's scheme 3 body included. The
   chain_start, chain_end, right_align(count) ]
 ```
 
-The Storage program supplies `old_root` as the registry's newest root, `old_next_index`, `chain_start = HashChain4([CRAP, hash_bytes(registry), right_align(revision)])`, `chain_end` as the chain over the update's writes and `count` as their number. Only `new_root` and `new_next_index` come from the instruction data.
+The Storage program supplies `old_root` as the registry's newest root and `old_next_index`. It folds `chain_end` over the update's writes from [`chain_start(registry, revision)`](hashing.md#record-tree), one chain per `Update`, and supplies `count` as their number. It refuses a `revision` other than the registry's own. Of the roots and indices, only `new_root` and `new_next_index` come from the instruction data.
 
 ## Apply enrollments
 
@@ -100,7 +100,7 @@ The Storage program supplies `old_root` as the registry's newest root, `old_next
   chain_start, chain_end, right_align(count) ]
 ```
 
-The Storage program supplies `old_root` as the tracking registry's newest root, `old_next_index`, `chain_start = HashChain4([CRTA, hash_bytes(registry), right_align(revision)])` and `count` as the number of authorization accounts named. It computes each [tracking entry](hashing.md#tracking-tree) from its account and folds `chain = Poseidon(chain, entry)` from `chain_start` to `chain_end`, so the applier chooses no entry. Only `new_root` and `new_next_index` come from the instruction data.
+The Storage program supplies `old_root` as the tracking registry's newest root, `old_next_index` and `chain_start = HashChain4([CRTA, hash_bytes(registry), right_align(revision)])`. It supplies `count` as the number of authorization accounts named. It computes each [tracking entry](hashing.md#tracking-tree) from its account and folds `chain = Poseidon(chain, entry)` from `chain_start` to `chain_end`. The applier chooses which accounts to name and never an entry's content. It refuses a `revision` other than the registry's own. Of the roots and indices, only `new_root` and `new_next_index` come from the instruction data.
 
 ## Register key
 
