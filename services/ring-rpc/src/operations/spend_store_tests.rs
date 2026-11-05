@@ -455,14 +455,20 @@ fn merge_selection_skips_a_published_nullifier_and_ignores_an_unrelated_row() {
         work.observe(real([0xee; 32], frame(3), 1));
     });
     let key = secret(7);
-    let selected = block_on(store.spendable(SpendableNotes {
+    let mut selected = block_on(store.spendable_by_mint(SpendableNotes {
         ring: RING,
         owner_key: owner.to_bytes(),
-        mint: Mint::new(mint, 6),
         nullifier_key: &key,
+        mints: &[Mint::new(mint, 6)],
+        held: &HashSet::new(),
     }))
     .expect("selection");
-    let hashes: Vec<[u8; 32]> = selected.iter().map(|note| note.utxo_hash).collect();
+    let hashes: Vec<[u8; 32]> = selected
+        .remove(&mint)
+        .unwrap_or_default()
+        .iter()
+        .map(|note| note.utxo_hash)
+        .collect();
     assert_eq!(hashes, [kept.commitment]);
 }
 

@@ -184,7 +184,6 @@ pub(crate) struct HeldMerge {
     pub ring: Address,
     pub message: VersionedMessage,
     pub last_valid_block_height: u64,
-    pub co_signature: Option<CollectedSignature>,
     pub nullifiers: Vec<[u8; 32]>,
 }
 
@@ -970,9 +969,9 @@ impl Relay {
             )
             .into(),
         );
-        // The merge awaits no wallet signer, its co-signature is collected already.
+        // A merge awaits no wallet signer and demands no co-signer.
         let closing = Closing {
-            co_signature: merge.co_signature,
+            co_signature: None,
             fee_payer: self.fee_payer_signs(&merge.message),
         };
         let unsigned = Awaiting {

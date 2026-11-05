@@ -345,11 +345,11 @@ A merge runs no policy rule and demands no co-signer. The **Auditor** rebuilds t
 
 ## 6. Managed merge
 
-Managed merge is initiated by **Ring RPC** on a ring with a delegate. It combines one wallet's notes of one token toward the wallet's settings.
+Managed merge is initiated by **Ring RPC** on every ring it audits, in either mode, for a wallet whose tracking enrollment it holds. It combines one wallet's notes of one token toward the wallet's settings.
 
 1. **Wallet:** signs its merge settings for a token: a target note count and a minimum average amount. A zero target revokes them.
 2. **Ring RPC:**
-   1. When the wallet holds more notes than its settings allow, selects its smallest notes in the tree that holds most of them.
+   1. When the wallet holds more notes than its settings allow, selects its smallest notes in the tree that holds most of them, up to 24 so that the merge fits one transaction.
    2. Opens the wallet's nullifier secret from its tracking seal with the auditor key and prepares the merged note.
    3. Generates SPP's merge proof and the ring merge proof.
    4. Pays fees and submits the merge through its relay.
