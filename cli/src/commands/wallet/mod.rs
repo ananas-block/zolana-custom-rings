@@ -430,7 +430,7 @@ mod tests {
                 scope.spawn(move || {
                     store
                         .update(|wallet| {
-                            let minted = wallet.history().request_tag(keys)?.history;
+                            let minted = wallet.history().sender_tag(keys)?.history;
                             wallet.update_history(minted)?;
                             Ok(())
                         })
@@ -438,10 +438,7 @@ mod tests {
                 });
             }
         });
-        assert_eq!(
-            store.load().unwrap().history().current().request_count(),
-            16
-        );
+        assert_eq!(store.load().unwrap().history().current().tx_count(), 16);
     }
 
     #[test]
