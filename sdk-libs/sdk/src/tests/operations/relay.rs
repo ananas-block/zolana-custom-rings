@@ -1743,6 +1743,48 @@ mod public_signers {
     }
 
     #[tokio::test]
+    async fn a_reply_that_claims_another_sender_moves_no_verdict() {
+        let (sender, payee, thief) = (keypair(1), keypair(2), keypair(3));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee, &thief]).client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let claimed = thief.shielded_address().unwrap();
+        let forged = zolana_ring_transaction::ReplyMetadata {
+            viewing_key: claimed.viewing_pubkey,
+            owner_key: claimed.signing_pubkey.as_ed25519().unwrap(),
+            nullifier_pk: claimed.nullifier_pubkey,
+            data: spr_transaction::Data::default(),
+        };
+        for reply in [None, Some(forged)] {
+            let replied = reply.is_some();
+            let asked = sent(
+                transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 10, 0)])
+                    .with_anonymous_signer(&sender.signing_key)
+                    .with_payment(AnonymousPayment {
+                        reply,
+                        ..data_payment(&payee)
+                    })
+                    .unwrap()
+                    .prepare_relay(client.zolana(), quote())
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            let terms = asked
+                .pending
+                .transfer_terms(address(&payee))
+                .unwrap()
+                .clone();
+            let built = frame(&client, &asked.request).await;
+            let parsed = RingTransactData::parse(&built.data[1..], RingRail::Anonymous).unwrap();
+            assert_eq!(parsed.data().replies.is_some(), replied);
+            let message = relay_message(&FEE_PAYER, core::slice::from_ref(&built), UNITS).0;
+            let pending = pending_for(&asked.relay_id, message, &terms, &config);
+            signs(&pending, &payee).await;
+            refused(&pending, &thief, MessageMismatch::Unrequested);
+        }
+    }
+
+    #[tokio::test]
     async fn a_data_recipient_opens_its_own_slot_and_signs() {
         let (sender, payee, thief) = (keypair(1), keypair(2), keypair(3));
         let client = chain(RingMode::Anonymous, None, &[&sender, &payee, &thief]).client();

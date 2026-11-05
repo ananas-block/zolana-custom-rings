@@ -106,6 +106,7 @@ export {
   sealSenderBundle,
   senderBundleLen,
   type RecipientBody,
+  type ReplyClaim,
   type ReplyMetadata,
   type SenderBundle,
 } from "../protocol/codec/anonymous-delivery.js";

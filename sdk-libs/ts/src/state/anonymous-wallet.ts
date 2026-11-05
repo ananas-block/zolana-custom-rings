@@ -117,9 +117,9 @@ export class AnonymousWallet {
           nullifiers.has(bytesKey(entry.nullifier)) ? { ...entry, spent: true } : entry,
         );
       const claimed = new Set(this.#claims.map((claim) => bytesKey(claim.utxoHash)));
-      const claims = scan.replyClaims
+      const claims = scan.senderClaims
         .filter((claim) => unseen(claimed, bytesKey(claim.utxoHash)))
-        .map(({ utxoHash, reply }): PendingClaim =>
+        .map(({ utxoHash, claim: { claimed: reply } }): PendingClaim =>
           Object.freeze({
             utxoHash,
             claimedViewingKey: reply.viewingKey,

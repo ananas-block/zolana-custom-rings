@@ -218,9 +218,9 @@ describe("anonymous_bodies.json", () => {
     const sealed = sealReply(secret, reply, MIN_REPLY_LEN);
     expect(hex(sealed.subarray(0, 72))).not.toBe(bodies.body);
     const opened = openReply(secret, sealed);
-    expect(opened?.viewingKey.u()).toEqual(viewingKey.u());
-    expect(opened?.ownerKey).toEqual(reply.ownerKey);
-    expect(opened?.nullifierPk).toEqual(reply.nullifierPk);
+    expect(opened?.claimed.viewingKey.u()).toEqual(viewingKey.u());
+    expect(opened?.claimed.ownerKey).toEqual(reply.ownerKey);
+    expect(opened?.claimed.nullifierPk).toEqual(reply.nullifierPk);
   });
 });
 

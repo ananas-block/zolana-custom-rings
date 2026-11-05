@@ -697,8 +697,8 @@ describe("anonymous delivery slots", () => {
     const secret = (reader: ShieldedKeypair, slot: number) =>
       slotSecretOf(reader, data, call, slot);
     const opened = openReply(secret(itemAt(recipients, 0), 1), itemAt(replies, 0));
-    expect(opened?.ownerKey).toEqual(sayer.shieldedAddress().signingPublicKey.ed25519());
-    expect(opened?.viewingKey.u()).toEqual(sayer.shieldedAddress().viewingPublicKey.u());
+    expect(opened?.claimed.ownerKey).toEqual(sayer.shieldedAddress().signingPublicKey.ed25519());
+    expect(opened?.claimed.viewingKey.u()).toEqual(sayer.shieldedAddress().viewingPublicKey.u());
     // The slot that names none and the dummy hold random bytes, no reply opens from them.
     expect(openReply(secret(itemAt(recipients, 1), 2), itemAt(replies, 1))).toBeUndefined();
     expect(itemAt(replies, 2).some((byte) => byte !== 0)).toBe(true);

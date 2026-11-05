@@ -61,6 +61,11 @@ export interface ReplyMetadata {
   readonly data: Data;
 }
 
+/** A decrypted reply, an unverified sender claim no authorization reads, Rust `ReplyClaim`. */
+export interface ReplyClaim {
+  readonly claimed: ReplyMetadata;
+}
+
 /** What the sender bundle opens to, the sender rebuilds its change from it. */
 export interface SenderBundle {
   /** Slot 0's mint under `change_bits` bit 0, else the zero address. */
@@ -148,17 +153,19 @@ export function sealReply(slotSecret: Bytes32, reply: ReplyMetadata, length: num
 }
 
 /** The proof binds the bytes alone, `undefined` on a reply that never decodes. */
-export function openReply(slotSecret: Bytes32, ciphertext: Uint8Array): ReplyMetadata | undefined {
+export function openReply(slotSecret: Bytes32, ciphertext: Uint8Array): ReplyClaim | undefined {
   if (ciphertext.length < MIN_REPLY_LEN) return undefined;
   return open(slotSecret, REPLY_ENC_INFO, ciphertext, ciphertext.length, (plaintext) => {
     const data = readReplyData(plaintext.subarray(REPLY_HEAD_LEN));
     const viewingKey = replyKey(plaintext.slice(0, FIELD_LEN) as Bytes32);
     if (data === undefined || viewingKey === undefined) return undefined;
     return Object.freeze({
-      viewingKey,
-      ownerKey: plaintext.slice(FIELD_LEN, 2 * FIELD_LEN) as Bytes32,
-      nullifierPk: plaintext.slice(2 * FIELD_LEN, REPLY_HEAD_LEN) as Bytes32,
-      data,
+      claimed: Object.freeze({
+        viewingKey,
+        ownerKey: plaintext.slice(FIELD_LEN, 2 * FIELD_LEN) as Bytes32,
+        nullifierPk: plaintext.slice(2 * FIELD_LEN, REPLY_HEAD_LEN) as Bytes32,
+        data,
+      }),
     });
   });
 }

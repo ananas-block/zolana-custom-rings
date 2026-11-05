@@ -15,7 +15,8 @@ import {
   type AuditRecord,
 } from "../../../src/protocol/codec/audit-stream.js";
 import { DATA_TAIL_LEN, recordRegion } from "../../../src/protocol/codec/ring-disclosure-layout.js";
-import { RingTransactData } from "../../../src/protocol/transaction/transact.js";
+import { RingTransactData, type Replies } from "../../../src/protocol/transaction/transact.js";
+import { replyLength, sealReply } from "../../../src/protocol/codec/anonymous-delivery.js";
 import { ringInstructionData } from "../../helpers/ring-frame.js";
 import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
@@ -41,7 +42,8 @@ import {
   type Bytes33,
 } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
-import { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { ShieldedAddress, ShieldedKeypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { Data } from "@heliuslabs/zolana/transaction";
 
 import {
   checkRelayMessage,
@@ -421,6 +423,7 @@ describe("relay message check", () => {
       signerDataCounts: bigint | undefined,
       published: readonly (typeof first)[] = [dataOpening],
       runHead: readonly AccountMeta[] = [],
+      replies?: Replies,
     ): Promise<string> => {
       const frame = RingTransactData.parse(
         Uint8Array.from(instruction().data ?? []).subarray(1),
@@ -436,6 +439,7 @@ describe("relay message check", () => {
             accounts: withRunHead(runHead),
             data: ringInstructionData({
               ...frame,
+              ...(replies === undefined ? {} : { replies }),
               extensions: {
                 ...extensions,
                 ...(signerDataCounts === undefined ? {} : { signerDataCounts }),
@@ -489,6 +493,38 @@ describe("relay message check", () => {
 
     it("passes one opening for each proved slot at the signer's place in the run", async () => {
       expect(await verdictWith(opened, count(1n))).toBe("Accepted");
+    });
+
+    it("moves no verdict on a reply that claims another sender", async () => {
+      const frame = RingTransactData.parse(
+        Uint8Array.from(instruction().data ?? []).subarray(1),
+        "anonymous",
+      );
+      const thief = ShieldedKeypair.generate().shieldedAddress();
+      const forged = {
+        viewingKey: thief.viewingPublicKey,
+        ownerKey: thief.signingPublicKey.ed25519(),
+        nullifierPk: thief.nullifierPublicKey,
+        data: new Data(),
+      };
+      const length = replyLength([forged]);
+      const bodies = frame.outputs.filter((output) => output.body.kind === "recipient");
+      const replies = {
+        length,
+        region: Uint8Array.from(
+          bodies.flatMap(() => [
+            ...sealReply(new Uint8Array(32).fill(7) as Bytes32, forged, length),
+          ]),
+        ),
+      };
+      const carried = RingTransactData.parse(
+        ringInstructionData({ ...frame, replies }).subarray(1),
+        "anonymous",
+      );
+      expect(bodies.length).toBeGreaterThan(0);
+      expect(carried.replies?.region).toEqual(replies.region);
+      expect(await verdictWith(opened, count(1n), [dataOpening], [], replies)).toBe("Accepted");
+      expect(await verdictWith(ordinary, count(1n), [dataOpening], [], replies)).toBe("Recipients");
     });
 
     it("refuses an omitted data output", async () => {
