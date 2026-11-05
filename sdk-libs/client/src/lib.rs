@@ -55,6 +55,8 @@ pub mod tags;
 mod types;
 #[path = "state/viewing_history.rs"]
 pub mod viewing_history;
+#[path = "operations/viewing_key.rs"]
+mod viewing_key;
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
@@ -114,6 +116,7 @@ pub use crate::{
         CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
         OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
+    viewing_key::{ResolvedViewingKey, ViewingKeyError, ViewingKeyResolver},
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};
 pub use zolana_ring_indexer::rpc::RingRpcError;
