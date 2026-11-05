@@ -19,14 +19,13 @@ import type { ProofInputUtxo } from "@heliuslabs/zolana/transaction";
 import type { AccountMeta } from "@solana/kit";
 
 import { RingError } from "../../protocol/error.js";
-import { MAX_CPI_DATA_LEN, MAX_FRAME_LEN } from "../../protocol/transaction/frame-buffer.js";
 import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
 import {
+  MAX_CPI_DATA_LEN,
   ringRailOf,
   RingTransactData,
   type RingTransactConfig,
 } from "../../protocol/transaction/transact.js";
-import { BufferedFrame } from "../payments/buffered-frame.js";
 import {
   MAX_TRANSACTION_ADDRESSES,
   MAX_TRANSACTION_INSTRUCTIONS,
@@ -55,9 +54,6 @@ export interface FitBudget {
   readonly priorityFeeLamports?: bigint;
 }
 
-/** `buffered` figures are the settlement's, each upload write fits by its own chunking. */
-export type FitTransport = "inline" | "buffered";
-
 /** What setup adds to the transaction it shares with the operation. */
 export interface SetupEffect {
   readonly instructions: number;
@@ -68,7 +64,6 @@ export interface SetupEffect {
 
 /** What the transaction costs against each ceiling, setup included. */
 export interface Fit {
-  readonly transport: FitTransport;
   readonly signatures: number;
   readonly bytes: number;
   readonly addresses: number;
@@ -141,8 +136,6 @@ export interface MergeGroup {
 
 export type CeilingDecision =
   | Readonly<{ kind: "inline"; size: TransactionSize }>
-  /** The frame settles from a buffer, the size is the settlement's. */
-  | Readonly<{ kind: "buffered"; size: TransactionSize }>
   /** `addresses` counts one nullifier PDA left per merged note. */
   | Readonly<{ kind: "mergeFirst"; groups: readonly MergeGroup[]; addresses: number }>;
 
@@ -161,32 +154,15 @@ export async function spentInputOf(input: ProofInputUtxo, tree: Address): Promis
 
 /** Rust `TransactionFit`, the one acceptance rule of a final transaction, refusing CPI bytes, then signatures, instructions, bytes, addresses. */
 export const TransactionFit = Object.freeze({
-  /** A transfer past the byte ceiling settles from a buffer, nothing else changes transport. */
-  async of(instruction: Instruction, signers: FitSigners, budget: FitBudget): Promise<Fit> {
-    const cpiBytes = sppCpiBytes(instruction);
-    // Runs before the compile, the kit refuses a frame past its u16 length.
-    const frame = instruction.data?.length ?? 0;
-    if (takesBuffer(instruction) && frame > MAX_FRAME_LEN)
-      throw new RingError("RING_FRAME_TOO_LARGE", {
-        details: { bytes: frame, limit: MAX_FRAME_LEN },
-      });
-    checkCounts(instruction, signers);
-    const settlement = await settlementOf(instruction, signers, budget);
-    return settlement === undefined
-      ? accept({ form: instruction, transport: "inline", signers, budget, cpiBytes })
-      : accept({ form: settlement, transport: "buffered", signers, budget, cpiBytes });
-  },
-
-  /** The operation refuses a buffer, a deposit, a merge or a transfer sent in one transaction. */
-  inline(instruction: Instruction, signers: FitSigners, budget: FitBudget): Fit {
+  of(instruction: Instruction, signers: FitSigners, budget: FitBudget): Fit {
     const cpiBytes = sppCpiBytes(instruction);
     checkCounts(instruction, signers);
-    return accept({ form: instruction, transport: "inline", signers, budget, cpiBytes });
+    return accept({ form: instruction, signers, budget, cpiBytes });
   },
 });
 
 /** Rust `AddressCeiling::decide`, `RING_ADDRESS_CEILING` when merging every valid group falls short. */
-export async function decideAddressCeiling(
+export function decideAddressCeiling(
   input: Readonly<{
     payer: Address;
     instruction: Instruction;
@@ -196,7 +172,7 @@ export async function decideAddressCeiling(
     inputs: readonly SpentInput[];
     mergeCapacity: MergeCapacity;
   }>,
-): Promise<CeilingDecision> {
+): CeilingDecision {
   const { inputs, instruction, payer } = input;
   const signers: FitSigners = {
     payer,
@@ -211,22 +187,22 @@ export async function decideAddressCeiling(
       : { priorityFeeLamports: input.priorityFeeLamports }),
   };
   try {
-    const fit = await TransactionFit.of(instruction, signers, budget);
+    const fit = TransactionFit.of(instruction, signers, budget);
     return Object.freeze({
-      kind: fit.transport,
+      kind: "inline",
       size: Object.freeze({ bytes: fit.bytes, addresses: fit.addresses }),
     });
   } catch (cause) {
     // Only the address count leaves a route, merging first narrows the spend.
     if (!(cause instanceof RingError) || cause.code !== "RING_FIT_ADDRESSES") throw cause;
   }
-  // Past the byte ceiling only the settlement's own compiled count decides.
-  const form = (await settlementOf(instruction, signers, budget)) ?? instruction;
   const sized = (mergedAway: ReadonlySet<Address>): TransactionSize =>
     compiled(
       {
-        ...form,
-        accounts: (form.accounts ?? []).filter((account) => !mergedAway.has(account.address)),
+        ...instruction,
+        accounts: (instruction.accounts ?? []).filter(
+          (account) => !mergedAway.has(account.address),
+        ),
       },
       signers,
       budget,
@@ -258,7 +234,7 @@ export async function decideAddressCeiling(
   });
 }
 
-function takesBuffer(instruction: Instruction): boolean {
+function isTransfer(instruction: Instruction): boolean {
   const tag = instruction.data?.[0];
   return tag === RingInstructionTag.transfer || tag === RingInstructionTag.authorityTransfer;
 }
@@ -274,11 +250,7 @@ function compiled(form: Instruction, signers: FitSigners, budget: FitBudget): Tr
   });
 }
 
-/**
- * The counts read the metas with no compile, so the kit's own ceilings never name the refusal. A
- * settlement keeps every signer of the transfer and the instruction count, the verdict holds for
- * either transport.
- */
+/** The counts read the metas with no compile, so the kit's own ceilings never name the refusal. */
 function checkCounts(form: Instruction, signers: FitSigners): void {
   const setup = signers.setupInstructions ?? [];
   const signatures = transactionSignatures({
@@ -298,27 +270,15 @@ function checkCounts(form: Instruction, signers: FitSigners): void {
     });
 }
 
-/** Set past the byte ceiling on a tag the buffer takes, a buffer relieves bytes and nothing else. */
-async function settlementOf(
-  instruction: Instruction,
-  signers: FitSigners,
-  budget: FitBudget,
-): Promise<Instruction | undefined> {
-  if (!takesBuffer(instruction) || compiled(instruction, signers, budget).bytes <= LIMIT_BYTES)
-    return undefined;
-  return (await BufferedFrame.of(instruction, signers.payer, 0n)).settle();
-}
-
 function accept(
   input: Readonly<{
     form: Instruction;
-    transport: FitTransport;
     signers: FitSigners;
     budget: FitBudget;
     cpiBytes: number | undefined;
   }>,
 ): Fit {
-  const { form, transport, signers, budget, cpiBytes } = input;
+  const { form, signers, budget, cpiBytes } = input;
   const size = compiled(form, signers, budget);
   if (size.bytes > LIMIT_BYTES)
     throw new RingError("RING_FIT_BYTES", {
@@ -334,7 +294,6 @@ function accept(
     instructions: [form],
   });
   return Object.freeze({
-    transport,
     signatures,
     bytes: size.bytes,
     addresses: size.addresses,
@@ -368,14 +327,14 @@ function setupEffect(
 
 /**
  * The exact data the program forwards to SPP, undefined off the transfer tags, refused past the CPI
- * limit under either transport, since the program forwards one expansion. A frame can clear
- * `MAX_FRAME_LEN` and still pass it, because the expansion widens outputs and messages. The ring's
- * mode decides the rail and the compact frame does not name it, so the strict parser reads the frame
- * under both rails of its tag and the longer expansion counts. The zero auditor key changes no
- * length, the expansion reads it only as a view tag of fixed width.
+ * limit since the program forwards one expansion. The expansion widens outputs and messages, so a
+ * frame inside one transaction can still pass it. The ring's mode decides the rail and the compact
+ * frame does not name it, so the strict parser reads the frame under both rails of its tag and the
+ * longer expansion counts. The zero auditor key changes no length, the expansion reads it only as a
+ * view tag of fixed width.
  */
 function sppCpiBytes(instruction: Instruction): number | undefined {
-  if (!takesBuffer(instruction)) return undefined;
+  if (!isTransfer(instruction)) return undefined;
   const data = Uint8Array.from(instruction.data ?? []);
   const lengths = (["confidential", "anonymous"] as const).flatMap((mode) => {
     try {

@@ -146,8 +146,6 @@ export interface CustomRingTransferInput {
   readonly extensions?: Omit<FrameExtensions, "approvalTotals" | "signerDataCounts" | "cache">;
   /** The frame carries a digest of its totals, Rust `with_exact_approval`. */
   readonly exactApproval?: boolean;
-  /** Past one transaction the frame settles from a buffer its payer writes. */
-  readonly bufferedSettlement?: boolean;
 }
 
 /** The confidential rail, the owner signs its spends in public or inside the proof, Rust `RingTransfer<Owner>`. */
@@ -173,15 +171,6 @@ export class CustomRingTransfer {
   static new(input: CustomRingTransferInput): CustomRingTransfer {
     input.transfer.withRingProgramId(input.ringProgramId);
     return new CustomRingTransfer(input, undefined, undefined);
-  }
-
-  withBufferedSettlement(): CustomRingTransfer {
-    return new CustomRingTransfer(
-      { ...this.#input, bufferedSettlement: true },
-      this.#withdrawal,
-      this.#inProofOwner,
-      this.#coOwners,
-    );
   }
 
   /** The frame carries a digest of its totals, the opening reads as `approvalOpening`. */
@@ -363,7 +352,6 @@ export class CustomRingTransfer {
             ...stagedBlinder(approvalBlinder),
             spend: this.#spend(client, owner),
           },
-          bufferedSettlement: this.#input.bufferedSettlement === true,
           ...suppliedCoSigners(this.#input.coSigners),
           listSalts: this.#input.listSalts ?? [],
           ...approvedStage(approval, prepared),
@@ -586,13 +574,6 @@ export class AnonymousTransfer {
     });
   }
 
-  withBufferedSettlement(): AnonymousTransfer {
-    return new AnonymousTransfer({
-      ...this.#fields(),
-      owner: { ...this.#owner, bufferedSettlement: true },
-    });
-  }
-
   /** Named notes spend from `cache`, SPP checks each slot against the frame's selector, Rust `with_read_cache`. */
   withReadCache(readCache: ReadCache): AnonymousTransfer {
     return new AnonymousTransfer({ ...this.#fields(), readCache });
@@ -666,7 +647,6 @@ export class AnonymousTransfer {
           staged: { ...staged, ...stagedBlinder(approvalBlinder), spend },
           ...suppliedCoSigners(this.#owner.coSigners),
           listSalts: this.#owner.listSalts ?? [],
-          bufferedSettlement: this.#owner.bufferedSettlement === true,
           ...approvedStage(approval, prepared),
         },
         context,
@@ -961,17 +941,6 @@ export class PublicOwnerTransfer {
     });
   }
 
-  withBufferedSettlement(): PublicOwnerTransfer {
-    return new PublicOwnerTransfer({
-      owner: { ...this.#owner, bufferedSettlement: true },
-      withdrawal: this.#withdrawal,
-      wallet: this.#wallet,
-      inProofOwner: this.#inProofOwner,
-      coOwners: this.#coOwners,
-      payments: this.#payments,
-    });
-  }
-
   /** The frame carries a digest of its totals, the opening reads as `approvalOpening`. */
   withExactApproval(): PublicOwnerTransfer {
     return new PublicOwnerTransfer({
@@ -1065,7 +1034,6 @@ export class PublicOwnerTransfer {
           client,
           ringProgramId,
           config,
-          bufferedSettlement: this.#owner.bufferedSettlement === true,
           staged: {
             proofInputs,
             rail,
@@ -1152,8 +1120,6 @@ export interface DelegateTransferInput {
   readonly assets: AssetRegistry;
   /** The outputs land in the first input's tree unless named. */
   readonly outputTreeId?: number;
-  /** Past one transaction the frame settles from a buffer its payer writes. */
-  readonly bufferedSettlement?: boolean;
 }
 
 /** The delegate moves members' notes with their keys, no member signs, Rust `RingTransfer<Delegated>`. */
@@ -1167,10 +1133,6 @@ export class DelegateTransfer {
 
   static new(input: DelegateTransferInput): DelegateTransfer {
     return new DelegateTransfer(input);
-  }
-
-  withBufferedSettlement(): DelegateTransfer {
-    return new DelegateTransfer({ ...this.#input, bufferedSettlement: true });
   }
 
   withTxViewingKey(txViewingKey: Bytes32): DelegateTransfer {
@@ -1251,7 +1213,6 @@ export class DelegateTransfer {
           client,
           ringProgramId,
           config,
-          bufferedSettlement: input.bufferedSettlement === true,
           staged: {
             proofInputs,
             rail,

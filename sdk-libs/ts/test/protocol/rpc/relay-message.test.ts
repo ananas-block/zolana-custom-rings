@@ -24,7 +24,6 @@ import { replyLength, sealReply } from "../../../src/protocol/codec/anonymous-de
 import { ringInstructionData } from "../../helpers/ring-frame.js";
 import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
-import { BufferedFrame } from "../../../src/operations/payments/buffered-frame.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { ringAuthAddress } from "../../../src/protocol/pda/index.js";
@@ -52,10 +51,7 @@ import { Data } from "@heliuslabs/zolana/transaction";
 import {
   type AllowedNullifiers,
   checkRelayMessage,
-  checkSettledMessage,
-  settledBufferOf,
   decodeRelayTransferTerms,
-  type ExpectedDelegate,
   expectedDelegate,
   expectedDeposit,
   expectedEnroll,
@@ -618,131 +614,6 @@ describe("relay message check", () => {
       expect(await verdictWith(opened, count(1n) << 5n)).toBe("DataOutputCount");
       expect(await verdictWith(opened, count(2n))).toBe("DataOutputCount");
       expect(await verdictWith(opened, undefined)).toBe("DataOutputCount");
-    });
-  });
-
-  describe("a delegate frame settled from a buffer", () => {
-    const inlineOf = (name: string): Instruction => {
-      const compiled = getCompiledTransactionMessageDecoder().decode(
-        message(delegates.cases, name),
-      );
-      const [instruction] = decompileTransactionMessage(
-        compiled as Parameters<typeof decompileTransactionMessage>[0] & { version: 1 },
-      ).instructions;
-      if (instruction === undefined) throw new Error("no instruction");
-      return instruction as Instruction;
-    };
-    const settling = async (inline: Instruction): Promise<Uint8Array> => {
-      const { feePayer } = delegates.request;
-      const buffered = await BufferedFrame.forWriter(inline, feePayer);
-      const { messageBytes } = compileUnsignedTransaction({
-        feePayer,
-        lifetime: SIZE_PROBE_LIFETIME,
-        instructions: [buffered.settle()],
-        computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.settleBuffered),
-      });
-      return new Uint8Array(messageBytes);
-    };
-    const held = (frame: Uint8Array): Uint8Array =>
-      Uint8Array.of(16, ...new Uint8Array(32), RingInstructionTag.frameEvent, ...frame);
-    const data = (inline: Instruction) => Uint8Array.from(inline.data ?? []);
-
-    it("names the buffer and passes the frame its digest signs", async () => {
-      const expected = (await delegate(delegates.request)) as ExpectedDelegate;
-      const honest = inlineOf("honest");
-      const settle = await settling(honest);
-      const { buffer } = await BufferedFrame.forWriter(honest, delegates.request.feePayer);
-      expect(settledBufferOf(expected, settle, DELEGATE)).toBe(buffer);
-      expect(
-        settledBufferOf(expected, message(delegates.cases, "honest"), DELEGATE),
-      ).toBeUndefined();
-      expect(checkSettledMessage(expected, settle, held(data(honest)), DELEGATE).signer).toBe(
-        delegates.request.prepare.delegate,
-      );
-    });
-
-    it("refuses the plain check, a rewritten buffer and a swapped recipient", async () => {
-      const expected = (await delegate(delegates.request)) as ExpectedDelegate;
-      const honest = inlineOf("honest");
-      const settle = await settling(honest);
-      const reason = (action: () => unknown) => {
-        try {
-          action();
-        } catch (error) {
-          return (error as { details?: { mismatch?: unknown } }).details?.mismatch;
-        }
-        return "Accepted";
-      };
-      expect(reason(() => checkRelayMessage(expected, settle, DELEGATE))).toBe("SettlesBuffer");
-      const rewritten = data(honest);
-      rewritten[rewritten.length - 1] = (rewritten[rewritten.length - 1] ?? 0) ^ 1;
-      expect(reason(() => checkSettledMessage(expected, settle, held(rewritten), DELEGATE))).toBe(
-        "Data",
-      );
-      const swapped = inlineOf("swappedRecipient");
-      expect(
-        reason(() => checkSettledMessage(expected, settle, held(data(swapped)), DELEGATE)),
-      ).toBe("Data");
-      const swappedSettle = await settling(swapped);
-      expect(
-        reason(() => checkSettledMessage(expected, swappedSettle, held(data(swapped)), DELEGATE)),
-      ).toBe("Recipients");
-    });
-
-    it("signs the checked settling message after the caller overwrites its array", async () => {
-      const expected = await delegate(delegates.request);
-      const honest = inlineOf("honest");
-      const settle = await settling(honest);
-      const checked = settle.slice();
-      const verified = checkSettledMessage(expected, settle, held(data(honest)), DELEGATE);
-      overwrite(settle);
-      const delegateSigner = recording(DELEGATE);
-      await verified.sign(delegateSigner);
-      expect(delegateSigner.signed).toEqual([checked]);
-    });
-
-    it("reads and signs the pending message across the buffer read", async () => {
-      const expected = await delegate(delegates.request);
-      const honest = inlineOf("honest");
-      const settle = await settling(honest);
-      const checked = settle.slice();
-      const pending = new PendingRelaySignature(RELAY_ID, settle, expected);
-      const delegateSigner = recording(DELEGATE);
-      await pending.signOnChain(
-        relay(),
-        {
-          getAccount: async () => {
-            overwrite(settle);
-            return { data: held(data(honest)) };
-          },
-        } as never,
-        delegateSigner,
-      );
-      expect(delegateSigner.signed).toEqual([checked]);
-    });
-
-    it("signs on chain after reading the buffer and refuses a missing one", async () => {
-      const expected = await delegate(delegates.request);
-      const honest = inlineOf("honest");
-      const pending = new PendingRelaySignature(RELAY_ID, await settling(honest), expected);
-      const delegateSigner = signer(delegates.request.prepare.delegate);
-      const ringRpc = relay();
-      await pending.signOnChain(
-        ringRpc,
-        { getAccount: async () => ({ data: held(data(honest)) }) } as never,
-        delegateSigner,
-      );
-      expect(ringRpc.submitRelay).toHaveBeenCalledOnce();
-      await expect(
-        pending.signOnChain(
-          ringRpc,
-          { getAccount: async () => undefined } as never,
-          delegateSigner,
-        ),
-      ).rejects.toMatchObject({ details: { mismatch: "Accounts" } });
-      await expect(pending.sign(ringRpc, delegateSigner)).rejects.toMatchObject({
-        details: { mismatch: "SettlesBuffer" },
-      });
     });
   });
 

@@ -1,5 +1,4 @@
 /** The Ring RPC relay a wallet sends its transfer through, Rust `relay`. */
-import type { ChainReader } from "@heliuslabs/zolana/client";
 import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
 import {
   type Address,
@@ -26,12 +25,10 @@ import type {
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 import {
   checkRelayMessage,
-  checkSettledMessage,
   expectedPublicOwner,
   type RelayFunderTerms,
   type RelayTransferTerms,
   type DelegateRingConfig,
-  settledBufferOf,
   type ExpectedRelayMessage,
   expectedDelegate,
   mismatch,
@@ -149,7 +146,6 @@ export class PendingRelaySignature {
   /** @internal */
   constructor(relayId: Hash, message: Uint8Array, expected?: ExpectedRelayMessage) {
     this.relayId = relayId;
-    // `signOnChain` reads the buffer the message names across an await, a caller write must not change the message.
     this.#message = message.slice();
     this.#expected = expected;
     Object.freeze(this);
@@ -182,26 +178,6 @@ export class PendingRelaySignature {
   verify(signer: Address): VerifiedRelayMessage {
     if (this.#expected === undefined) throw mismatch("Unrequested");
     return checkRelayMessage(this.#expected, this.#message, signer);
-  }
-
-  /** As `sign`, a settling message reads the frame its digest signs from the chain. */
-  async signOnChain(
-    relay: RingRelayClient,
-    chain: Pick<ChainReader, "getAccount">,
-    signer: TransactionPartialSigner,
-    context?: RequestContext,
-  ): Promise<RelayStatus> {
-    if (this.#expected === undefined) throw mismatch("Unrequested");
-    const buffer = settledBufferOf(this.#expected, this.#message, signer.address);
-    if (buffer === undefined) return this.sign(relay, signer, context);
-    const held = await chain.getAccount(buffer, context);
-    if (held === undefined) throw mismatch("Accounts");
-    return this.#submit(
-      relay,
-      checkSettledMessage(this.#expected, this.#message, held.data, signer.address),
-      signer,
-      context,
-    );
   }
 
   async sign(

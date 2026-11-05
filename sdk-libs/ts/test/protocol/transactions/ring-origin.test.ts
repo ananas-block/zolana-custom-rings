@@ -1,5 +1,4 @@
 import { CredentialRead } from "../../../src/protocol/codec/credential-read.js";
-import { frameDigest, settleBufferedData } from "../../../src/protocol/transaction/frame-buffer.js";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { address, getBase58Decoder, type Address, type Signature } from "@solana/kit";
@@ -971,68 +970,6 @@ describe("RpcTransactionOrigin", () => {
         });
     },
   );
-
-  describe("a buffered settlement", () => {
-    const settlement = (eventData: (frame: Uint8Array) => Uint8Array) => {
-      const { indexed, confirmed, frame, ringData } = transferFixture(
-        1,
-        InstructionTag.ringTransact,
-      );
-      const outer = confirmed.transaction.message.instructions[0]!;
-      outer.data = getBase58Decoder().decode(settleBufferedData(frameDigest(ringData)));
-      const inner = confirmed.meta.innerInstructions[0]!.instructions;
-      inner.unshift({
-        programIdIndex: outer.programIdIndex,
-        accounts: [],
-        stackHeight: 2,
-        data: getBase58Decoder().decode(eventData(ringData)),
-      });
-      return { indexed, confirmed, frame };
-    };
-    const event = (frame: Uint8Array) => Uint8Array.of(RingInstructionTag.frameEvent, ...frame);
-
-    it("reads the frame from its own event", async () => {
-      const { indexed, confirmed, frame } = settlement(event);
-      await expect(
-        new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
-      ).resolves.toMatchObject({
-        kind: "transfer",
-        layout: RingTransactData.streamLayout(frame),
-      });
-    });
-
-    it("opens no frame from an event another settlement signed", async () => {
-      const forged = settlement((frame) => {
-        const moved = event(frame);
-        moved[moved.length - 1] = (moved[moved.length - 1] ?? 0) ^ 1;
-        return moved;
-      });
-      await expect(
-        new RpcTransactionOrigin(rpcWith(forged.confirmed)).confirmedTransaction(
-          forged.indexed,
-          RING,
-        ),
-      ).rejects.toMatchObject({
-        code: "RING_ORIGIN_DECODE",
-        details: { path: "transfer.instruction" },
-      });
-    });
-
-    it("opens no frame from an event outside its settlement", async () => {
-      const { indexed, confirmed } = settlement(event);
-      const { instructions } = confirmed.transaction.message;
-      const inner = confirmed.meta.innerInstructions;
-      const moved = inner[0]!.instructions.shift()!;
-      instructions.push({ ...instructions[0]!, accounts: [] });
-      inner.push({ index: 1, instructions: [moved] });
-      await expect(
-        new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
-      ).rejects.toMatchObject({
-        code: "RING_ORIGIN_DECODE",
-        details: { path: "transfer.instruction" },
-      });
-    });
-  });
 
   it.each([
     [55, InstructionTag.ringTransact, false, "confidential"],

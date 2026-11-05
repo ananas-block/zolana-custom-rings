@@ -63,7 +63,6 @@ function frameOf(rekey: RekeyCase): PlanFrame {
         hasData: rekey.hasData,
         wideOwners,
       }),
-    settlement: "inline",
   };
 }
 

@@ -54,7 +54,6 @@ describe("relayer-free wallet surface", () => {
       "RingTransactionSubmission",
       "createKitRingSubmissionTransport",
       "reconcileRingSubmissions",
-      "RingBufferLedger",
     ] as const satisfies readonly (keyof typeof entry)[];
     for (const name of direct) expect(typeof entry[name], name).toBe("function");
   });

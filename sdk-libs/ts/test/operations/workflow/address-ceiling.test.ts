@@ -13,7 +13,7 @@ import { AccountRole } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
-import { MAX_CPI_DATA_LEN } from "../../../src/protocol/transaction/frame-buffer.js";
+import { MAX_CPI_DATA_LEN } from "../../../src/protocol/transaction/transact.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { MAX_TRANSACTION_ADDRESSES as LIMIT } from "../../../src/operations/workflow/compile.js";
 import { ringTransactInstruction } from "../../../src/operations/workflow/pipeline.js";
@@ -53,7 +53,7 @@ function decide(
   inputs: readonly SpentInput[],
   other: number,
   mergeCapacity: MergeCapacity = { keyed: 45, zeroKey: 45 },
-): Promise<CeilingDecision> {
+): CeilingDecision {
   const accounts = [
     ...inputs.map((input) => input.nullifierPda),
     ...Array.from({ length: other }, (_, seed) => address(5000 + seed)),
@@ -71,14 +71,17 @@ function decide(
 const notes = (owner: number, count: number): readonly SpentInput[] =>
   Array.from({ length: count }, (_, seed) => note(owner, seed));
 
-const refused = async (inputs: readonly SpentInput[], other: number) => {
+const refused = (inputs: readonly SpentInput[], other: number) =>
+  (thrown(() => decide(inputs, other)) as { details?: unknown }).details;
+
+function thrown(action: () => unknown): unknown {
   try {
-    await decide(inputs, other);
+    action();
   } catch (error) {
-    return (error as { code?: string; details?: unknown }).details;
+    return error;
   }
-  throw new Error("under the ceiling");
-};
+  throw new Error("accepted");
+}
 
 /** A frame that parses under its rail, each message stretches it. */
 const realFrame = (messages: readonly number[] = []): Instruction =>
@@ -102,25 +105,25 @@ const signing = (key: number): Instruction =>
 const BUDGET = { computeUnitLimit: 1_000_000 };
 
 describe("decideAddressCeiling, the cases of Rust `validation::address_ceiling`", () => {
-  it("keeps a transaction at the ceiling one transaction", async () => {
-    expect(await decide(notes(1, 10), LIMIT - 2 - 10)).toMatchObject({
+  it("keeps a transaction at the ceiling one transaction", () => {
+    expect(decide(notes(1, 10), LIMIT - 2 - 10)).toMatchObject({
       kind: "inline",
       size: { addresses: LIMIT },
     });
   });
 
-  it("names only the groups the ceiling needs", async () => {
+  it("names only the groups the ceiling needs", () => {
     const inputs = [...notes(1, 4), note(2, 4), note(2, 5)];
-    const decision = await decide(inputs, LIMIT - 2 - 6 + 2);
+    const decision = decide(inputs, LIMIT - 2 - 6 + 2);
     if (decision.kind !== "mergeFirst") throw new Error("merge first");
     expect(decision.addresses).toBe(LIMIT - 1);
     expect(decision.groups.map((group) => group.inputs)).toEqual([[0, 1, 2, 3]]);
     expect(decision.groups[0]?.owner.equals(inputs[0]?.owner as never)).toBe(true);
   });
 
-  it("forms no group of mixed owners and reports the compiled count", async () => {
+  it("forms no group of mixed owners and reports the compiled count", () => {
     const inputs = [0, 1, 2, 3].map((seed) => note(seed + 1, seed));
-    expect(await refused(inputs, LIMIT - 2 - 4 + 1)).toEqual({
+    expect(refused(inputs, LIMIT - 2 - 4 + 1)).toEqual({
       compiled: LIMIT + 1,
       limit: LIMIT,
       afterMerging: LIMIT + 1,
@@ -128,42 +131,42 @@ describe("decideAddressCeiling, the cases of Rust `validation::address_ceiling`"
     });
   });
 
-  it("keeps a data note out of every group", async () => {
+  it("keeps a data note out of every group", () => {
     const inputs = notes(1, 4).map((input) => ({
       ...input,
       dataHash: new Uint8Array(32).fill(9) as Bytes32,
     }));
-    expect(await refused(inputs, LIMIT - 2 - 4 + 1)).toMatchObject({
+    expect(refused(inputs, LIMIT - 2 - 4 + 1)).toMatchObject({
       afterMerging: LIMIT + 1,
       dataNotes: 4,
     });
   });
 
-  it("merges no notes of another asset, key or tree", async () => {
+  it("merges no notes of another asset, key or tree", () => {
     const inputs = [
       note(1, 0),
       { ...note(1, 1), asset: address(7) },
       { ...note(1, 2), nullifierPublicKey: new Uint8Array(32).fill(9) as Bytes32 },
       { ...note(1, 3), treeId: 2 },
     ];
-    expect(await refused(inputs, LIMIT - 2 - 4 + 1)).toMatchObject({ afterMerging: LIMIT + 1 });
+    expect(refused(inputs, LIMIT - 2 - 4 + 1)).toMatchObject({ afterMerging: LIMIT + 1 });
   });
 
-  it("refuses consolidation short of the ceiling with how far it reached", async () => {
-    expect(await refused(notes(1, 4), LIMIT - 2 - 4 + 5)).toMatchObject({
+  it("refuses consolidation short of the ceiling with how far it reached", () => {
+    expect(refused(notes(1, 4), LIMIT - 2 - 4 + 5)).toMatchObject({
       compiled: LIMIT + 5,
       afterMerging: LIMIT + 2,
     });
   });
 
-  it("names no merge for a lone note past the capacity", async () => {
-    const decision = await decide(notes(1, 4), LIMIT - 2 - 4 + 1, { keyed: 3, zeroKey: 3 });
+  it("names no merge for a lone note past the capacity", () => {
+    const decision = decide(notes(1, 4), LIMIT - 2 - 4 + 1, { keyed: 3, zeroKey: 3 });
     if (decision.kind !== "mergeFirst") throw new Error("merge first");
     expect(decision.groups.map((group) => group.inputs)).toEqual([[0, 1, 2]]);
     expect(decision.addresses).toBe(LIMIT - 1);
   });
 
-  it("reads a frame that parses under neither rail as unparsed, whatever its length", async () => {
+  it("reads a frame that parses under neither rail as unparsed, whatever its length", () => {
     const data = new Uint8Array(1000);
     data[0] = RingInstructionTag.transfer;
     const instruction = {
@@ -171,107 +174,101 @@ describe("decideAddressCeiling, the cases of Rust `validation::address_ceiling`"
       accounts: [],
       data,
     } as unknown as Instruction;
-    await expect(
-      decideAddressCeiling({
-        payer: address(1),
-        instruction,
-        computeUnitLimit: 1_000_000,
-        inputs: [],
-        mergeCapacity: { keyed: 45, zeroKey: 45 },
-      }),
-    ).rejects.toMatchObject({ code: "RING_FIT_UNPARSED_FRAME" });
+    expect(
+      thrown(() =>
+        decideAddressCeiling({
+          payer: address(1),
+          instruction,
+          computeUnitLimit: 1_000_000,
+          inputs: [],
+          mergeCapacity: { keyed: 45, zeroKey: 45 },
+        }),
+      ),
+    ).toMatchObject({ code: "RING_FIT_UNPARSED_FRAME" });
   });
 });
 
 describe("TransactionFit, the refusals of Rust `TransactionFit`", () => {
   const payer = { payer: address(1) };
 
-  it("keeps a frame under the ceiling inline and reads its CPI bytes", async () => {
-    const fit = await TransactionFit.of(realFrame(), payer, BUDGET);
-    expect(fit).toMatchObject({ transport: "inline", signatures: 1, addresses: 2 });
+  it("keeps a frame under the ceiling inline and reads its CPI bytes", () => {
+    const fit = TransactionFit.of(realFrame(), payer, BUDGET);
+    expect(fit).toMatchObject({ signatures: 1, addresses: 2 });
     expect(fit.cpiBytes).toBeGreaterThan(realFrame().data?.length ?? 0);
     expect(fit.setup).toEqual({ instructions: 0, signatures: 0, bytes: 0, addresses: 0 });
   });
 
-  it("names no CPI bytes off the transfer tags", async () => {
-    const fit = await TransactionFit.of(signing(4), payer, BUDGET);
+  it("names no CPI bytes off the transfer tags", () => {
+    const fit = TransactionFit.of(signing(4), payer, BUDGET);
     expect(fit.cpiBytes).toBeUndefined();
     expect(fit.signatures).toBe(2);
   });
 
-  it("settles from a buffer past the byte ceiling, the figures the settlement's", async () => {
-    const instruction = realFrame([4000]);
-    const fit = await TransactionFit.of(instruction, payer, BUDGET);
-    expect(fit.transport).toBe("buffered");
-    expect(fit.bytes).toBeLessThan(TRANSACTION_SIZE_LIMIT);
+  it("refuses a transfer past the byte ceiling by its bytes", () => {
+    expect(thrown(() => TransactionFit.of(realFrame([4000]), payer, BUDGET))).toMatchObject({
+      code: "RING_FIT_BYTES",
+      details: { limit: TRANSACTION_SIZE_LIMIT },
+    });
   });
 
-  it("refuses a buffer on the inline path by its bytes", () => {
-    expect(() => TransactionFit.inline(realFrame([4096]), payer, BUDGET)).toThrowError(
-      expect.objectContaining({ code: "RING_FIT_BYTES" }),
-    );
-  });
-
-  it("refuses bytes on a tag no buffer takes", async () => {
+  it("refuses bytes on any other tag", () => {
     const instruction = {
       ...signing(4),
       data: new Uint8Array(TRANSACTION_SIZE_LIMIT).fill(0xff),
     } as unknown as Instruction;
-    await expect(TransactionFit.of(instruction, payer, BUDGET)).rejects.toMatchObject({
+    expect(thrown(() => TransactionFit.of(instruction, payer, BUDGET))).toMatchObject({
       code: "RING_FIT_BYTES",
     });
   });
 
-  it("refuses an expansion past one CPI under either transport, ahead of every other ceiling", async () => {
+  it("refuses an expansion past one CPI ahead of every other ceiling", () => {
     const instruction = realFrame([MAX_CPI_DATA_LEN]);
     const refusal = { code: "RING_FIT_CPI_BYTES", details: { limit: MAX_CPI_DATA_LEN } };
-    await expect(TransactionFit.of(instruction, payer, BUDGET)).rejects.toMatchObject(refusal);
+    expect(thrown(() => TransactionFit.of(instruction, payer, BUDGET))).toMatchObject(refusal);
     const crowded = Array.from({ length: 13 }, (_, key) => signing(50 + key));
-    await expect(
-      TransactionFit.of(instruction, { ...payer, setupInstructions: crowded }, BUDGET),
-    ).rejects.toMatchObject(refusal);
+    expect(
+      thrown(() =>
+        TransactionFit.of(instruction, { ...payer, setupInstructions: crowded }, BUDGET),
+      ),
+    ).toMatchObject(refusal);
   });
 
-  it("counts a signer two instructions share once and refuses past twelve", async () => {
+  it("counts a signer two instructions share once and refuses past twelve", () => {
     const twelve = Array.from({ length: 11 }, (_, key) => signing(50 + key));
-    const fit = await TransactionFit.of(
-      signing(50),
-      { ...payer, setupInstructions: twelve },
-      BUDGET,
-    );
+    const fit = TransactionFit.of(signing(50), { ...payer, setupInstructions: twelve }, BUDGET);
     expect(fit.signatures).toBe(12);
     expect(fit.setup).toMatchObject({ instructions: 11, signatures: 10 });
-    await expect(
-      TransactionFit.of(signing(61), { ...payer, setupInstructions: twelve }, BUDGET),
-    ).rejects.toMatchObject({
+    expect(
+      thrown(() => TransactionFit.of(signing(61), { ...payer, setupInstructions: twelve }, BUDGET)),
+    ).toMatchObject({
       code: "RING_FIT_SIGNATURES",
       details: { signers: 13, limit: 12 },
     });
   });
 
-  it("refuses instructions past the v1 ceiling after signatures", async () => {
+  it("refuses instructions past the v1 ceiling after signatures", () => {
     const setupInstructions = Array.from({ length: 64 }, () => signing(4));
-    await expect(
-      TransactionFit.of(signing(4), { ...payer, setupInstructions }, BUDGET),
-    ).rejects.toMatchObject({
+    expect(
+      thrown(() => TransactionFit.of(signing(4), { ...payer, setupInstructions }, BUDGET)),
+    ).toMatchObject({
       code: "RING_FIT_INSTRUCTIONS",
       details: { instructions: 65, limit: 64 },
     });
   });
 
-  it("refuses addresses by their compiled count", async () => {
+  it("refuses addresses by their compiled count", () => {
     const accounts = Array.from({ length: LIMIT }, (_, seed) => ({
       address: address(5000 + seed),
       role: 1,
     }));
     const instruction = { programAddress: address(2), accounts } as unknown as Instruction;
-    await expect(TransactionFit.of(instruction, payer, BUDGET)).rejects.toMatchObject({
+    expect(thrown(() => TransactionFit.of(instruction, payer, BUDGET))).toMatchObject({
       code: "RING_FIT_ADDRESSES",
       details: { addresses: LIMIT + 2, limit: LIMIT },
     });
   });
 
-  it("refuses the address a setup instruction adds past the ceiling", async () => {
+  it("refuses the address a setup instruction adds past the ceiling", () => {
     const accounts = Array.from({ length: LIMIT - 3 }, (_, seed) => ({
       address: address(5000 + seed),
       role: AccountRole.READONLY,
@@ -287,15 +284,15 @@ describe("TransactionFit, the refusals of Rust `TransactionFit`", () => {
       }) as unknown as Instruction;
     const fit = (extra: number) =>
       TransactionFit.of(instruction, { ...payer, setupInstructions: [setup(extra)] }, BUDGET);
-    expect((await fit(0)).addresses).toBe(LIMIT);
-    await expect(fit(1)).rejects.toMatchObject({
+    expect(fit(0).addresses).toBe(LIMIT);
+    expect(thrown(() => fit(1))).toMatchObject({
       code: "RING_FIT_ADDRESSES",
       details: { addresses: LIMIT + 1, limit: LIMIT },
     });
   });
 
-  it("names what setup adds to the shared transaction", async () => {
-    const fit = await TransactionFit.of(
+  it("names what setup adds to the shared transaction", () => {
+    const fit = TransactionFit.of(
       signing(4),
       { ...payer, setupInstructions: [signing(5)] },
       BUDGET,
@@ -369,7 +366,7 @@ describe("CredentialTrees in the preproof fit, the shared Rust cases", () => {
         data: new Uint8Array(fixture.data ?? 0),
       } as unknown as Instruction;
       const preproof = () =>
-        TransactionFit.inline(
+        TransactionFit.of(
           instruction,
           { payer: address(CREDENTIAL_FIT.payer) },
           { computeUnitLimit: CREDENTIAL_FIT.computeUnitLimit },
@@ -419,7 +416,7 @@ describe("CredentialTrees in the preproof fit, the shared Rust cases", () => {
       }).addresses;
     const range = (count: number) => Array.from({ length: count }, (_, index) => 100 + index);
     const preproof = (instruction: Instruction) =>
-      TransactionFit.inline(instruction, { payer: accounts.payer }, BUDGET);
+      TransactionFit.of(instruction, { payer: accounts.payer }, BUDGET);
 
     // 1. The address tree is tree 0 and holds the frame's notes, so only the state trees add addresses, right after the registries.
     const bare = await ringTransactInstruction(program, accounts, data);

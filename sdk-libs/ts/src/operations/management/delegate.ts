@@ -341,7 +341,6 @@ async function buildDelegateTransaction(
         chain: move.client,
         transaction: approval.transaction,
         intentHash: planned,
-        buffered: retry.lifetime === "submission",
       },
       context,
     );

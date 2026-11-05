@@ -282,6 +282,9 @@ export function isAnonymousFrame(rail: RingRail): boolean {
 /** Rust `MAX_SPP_MESSAGES`, SPP's `messages` vector has a `u8` length. */
 export const MAX_SPP_MESSAGES = 0xff;
 
+/** Rust `MAX_CPI_DATA_LEN`, the runtime's ceiling on the SPP data a transfer forwards. */
+export const MAX_CPI_DATA_LEN = 10 * 1024;
+
 /** Rust `max_application_messages`, SPP also receives the auditor message and an anonymous frame's sender bundle. */
 export function maxApplicationMessages(rail: RingRail): number {
   return MAX_SPP_MESSAGES - 1 - (isAnonymousFrame(rail) ? 1 : 0);
