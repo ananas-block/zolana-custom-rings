@@ -4,11 +4,10 @@ use custom_ring_interface::{
     audit_stream::{AuditRecord, OpeningRecord, RecordKind},
     domain::deposit_blinding,
     key_catalog::RingCircuit,
-    ring_deposit_assets, CredentialRead, CredentialRootSelection, CredentialRoots,
-    CredentialStateRoot, CredentialTreeRead, DepositContext, DepositPrefix, DepositPublicInput,
-    DepositSubjects, RingDepositAuditCapsule, PROVING_KEY_SHA256S,
+    ring_deposit_assets, DepositContext, DepositPrefix, DepositPublicInput, DepositSubjects,
+    RingDepositAuditCapsule, PROVING_KEY_SHA256S,
 };
-use custom_ring_sdk::secret_json_body;
+use custom_ring_sdk::{secret_json_body, CredentialPoolRead};
 use solana_instruction::AccountMeta;
 use spr_client::{
     prover::{verify_proof_statement, ExpectedProvingKey, ProveRequest},
@@ -20,7 +19,7 @@ use spr_interface::N_PUBLIC_SLOTS;
 use spr_program::instruction::{RingAssetDeposit, RingDeposit as SppRingDeposit};
 use spr_transaction::owner_utxo_hash;
 use zeroize::Zeroizing;
-use zolana_ring_client::{seal_deposits, CredentialOpening, CredentialReads};
+use zolana_ring_client::seal_deposits;
 use zolana_ring_member_registry::RecordPool;
 use zolana_ring_policy::{EncodedRuleTable, SourceMap};
 use zolana_ring_transaction::RingDepositPlaintext;
@@ -58,123 +57,6 @@ fn proof_paths<'a>(
             })
         })
         .collect()
-}
-
-struct DepositCredentialRead<'a> {
-    ring: CustomRing,
-    member: [u8; 32],
-    capacity: usize,
-    env: &'a TestEnv,
-}
-
-struct DepositCredentials {
-    read: CredentialRead,
-    roots: CredentialRoots,
-    trees: Vec<Address>,
-    request: serde_json::Value,
-}
-
-impl DepositCredentialRead<'_> {
-    fn read(self) -> Result<DepositCredentials> {
-        use spr_client::rpc::{NULLIFIER_TREE_HEIGHT, STATE_TREE_HEIGHT};
-        let client = self.env.client.as_async();
-        let snapshot = self.env.run(async {
-            CredentialReads {
-                ring: self.ring.program_id(),
-                members: &[self.member],
-            }
-            .read(client, client)
-            .await
-            .map_err(RingError::from)
-        })?;
-        let address_tree = spr_interface::pda::tree(spr_program::ADDRESS_TREE_ID);
-        let mut account = fetch_account(self.env.client.rpc(), &address_tree)?;
-        let checkpoint = CredentialTreeRead {
-            address: &address_tree,
-            owner: &account.owner,
-            data: &mut account.data,
-        }
-        .checkpoint(snapshot.address_root.root_index)?;
-        ensure!(*checkpoint.root() == snapshot.address_root.root);
-        ensure!(checkpoint.sequence() == snapshot.address_root.sequence);
-        let state_roots = snapshot
-            .state_roots
-            .iter()
-            .map(|tree| CredentialStateRoot {
-                tree_id: tree.tree_id,
-                root: tree.root.root,
-            })
-            .collect::<Vec<_>>();
-        let roots = CredentialRootSelection {
-            ring_program: &self.ring.program_id(),
-            address_checkpoint: checkpoint,
-            state_roots: &state_roots,
-            capacity: self.capacity,
-        }
-        .roots()?;
-        let read = CredentialRead::new(
-            snapshot.address_root.root_index,
-            &snapshot
-                .state_roots
-                .iter()
-                .map(|tree| tree.root.root_index)
-                .collect::<Vec<_>>(),
-        )?;
-        let Some(CredentialOpening::Present(present)) = snapshot.openings.first() else {
-            anyhow::bail!("deposit owner has no credential")
-        };
-        let tree_slot = state_roots
-            .iter()
-            .position(|tree| tree.tree_id == present.tree_id)
-            .context("credential state tree")?;
-        let [_, _, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, ct_hash] = present
-            .credential
-            .elements(custom_ring_interface::domain::CREDENTIAL_STATE)?;
-        let padding = serde_json::json!({
-            "present": false,
-            "member": field([0; 32]), "nullifierPk": field([0; 32]),
-            "listTag": field([0; 32]), "aud": vec![field([0; 32]); 2],
-            "eph": vec![field([0; 32]); 2], "ctHash": field([0; 32]),
-            "blinding": field([0; 32]), "treeSlot": 0, "stateIndex": 0,
-            "statePath": vec![field([0; 32]); STATE_TREE_HEIGHT],
-            "lowValue": field([0; 32]), "lowNext": field([0; 32]), "lowIndex": 0,
-            "lowPath": vec![field([0; 32]); NULLIFIER_TREE_HEIGHT],
-        });
-        let mut openings = vec![padding; self.capacity];
-        openings[0] = serde_json::json!({
-            "present": true,
-            "member": field(member), "nullifierPk": field(nullifier_pk),
-            "listTag": field(list_tag), "aud": [field(aud0), field(aud1)],
-            "eph": [field(eph0), field(eph1)], "ctHash": field(ct_hash),
-            "blinding": field(present.blinding), "treeSlot": tree_slot,
-            "stateIndex": present.leaf_index,
-            "statePath": present.path.iter().map(field).collect::<Vec<_>>(),
-            "lowValue": field([0; 32]), "lowNext": field([0; 32]), "lowIndex": 0,
-            "lowPath": vec![field([0; 32]); NULLIFIER_TREE_HEIGHT],
-        });
-        let request = serde_json::json!({
-            "credentialOwner": field(roots.owner_hash()),
-            "addressRoot": field(roots.address_root()),
-            "stateRoots": roots.state_roots().iter().map(|root| serde_json::json!({
-                "treeId": root.tree_id, "root": field(root.root),
-            })).collect::<Vec<_>>(),
-            "credentialOpenings": openings,
-            "rowEntries": [], "outputEntries": vec![0; self.capacity],
-        });
-        let trees = std::iter::once(address_tree)
-            .chain(
-                state_roots
-                    .iter()
-                    .map(|root| spr_interface::pda::tree(root.tree_id)),
-            )
-            .collect();
-        Ok(DepositCredentials {
-            read,
-            roots,
-            trees,
-            request,
-        })
-    }
 }
 
 /// A pool no gate reads.
@@ -305,13 +187,18 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
             .iter()
             .map(|deposit| deposit.owner_utxo_hash)
             .collect();
-        let credentials = DepositCredentialRead {
-            ring,
-            member: owner_identity,
-            capacity,
-            env: &env,
-        }
-        .read()?;
+        let client = env.client.as_async();
+        let credentials = env.run(
+            CredentialPoolRead {
+                ring,
+                members: &[owner_identity],
+            }
+            .read(client),
+        )?;
+        credentials
+            .credential(&owner_identity)
+            .context("deposit owner has no credential")?;
+        let roots = credentials.roots(capacity)?;
         let statement = DepositPublicInput {
             context_hash: &context,
             owner_utxo_hashes: &commitments,
@@ -320,7 +207,7 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
             auditor_pk: auditor.pubkey().as_bytes(),
             eph_pk: encryption.ephemeral_pk.as_bytes(),
             ring_id: &ring.ring_id()?,
-            credentials: &credentials.roots,
+            credentials: &roots,
             registry: None,
         }
         .hash()?;
@@ -384,8 +271,7 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
         let fields = body.as_object_mut().context("a request object")?;
         for section in [
             credentials
-                .request
-                .clone()
+                .proof_inputs(capacity, Vec::new(), vec![0; capacity])?
                 .as_object()
                 .cloned()
                 .context("a request section")?,
@@ -418,21 +304,18 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
                 commitment: commitment.commitment,
                 commitment_pok: commitment.commitment_pok,
             },
-            credential_read: credentials.read,
+            credential_read: credentials.read()?,
             own_revision: Default::default(),
             curator_revision: Default::default(),
         };
         let prefix_bytes = prefix.encode()?;
+        let trees = credentials.trees(capacity)?;
         let wrap = |mut instruction: Instruction| {
             instruction.data = [prefix_bytes.as_slice(), &instruction.data].concat();
             instruction.accounts.splice(
                 0..0,
-                std::iter::once(AccountMeta::new_readonly(ring.policy_pda(), false)).chain(
-                    credentials
-                        .trees
-                        .iter()
-                        .map(|tree| AccountMeta::new_readonly(*tree, false)),
-                ),
+                std::iter::once(AccountMeta::new_readonly(ring.policy_pda(), false))
+                    .chain(trees.metas()),
             );
             instruction
         };
