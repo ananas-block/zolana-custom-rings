@@ -70,7 +70,6 @@ pub struct RingTagFrame {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewTagStream {
     Sender { tx_count: u64 },
-    Request { request_count: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,9 +313,6 @@ fn view_tags<H: HeldKeys>(
             let key = holder.held(&request.viewing_pubkey)?;
             Ok(match request.stream {
                 ViewTagStream::Sender { tx_count } => key.get_sender_view_tag(tx_count)?,
-                ViewTagStream::Request { request_count } => {
-                    key.get_recipient_request_view_tag(request_count)?
-                }
             })
         })
         .collect()

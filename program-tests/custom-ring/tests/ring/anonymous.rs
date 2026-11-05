@@ -30,12 +30,7 @@ fn cli_pays_an_anonymous_ring_address_end_to_end() -> Result<()> {
 
     // 1. Without a fee payer the cli refuses, it never charges the hidden owner or the authority.
     let recipient = ShieldedKeypair::new_ed25519()?;
-    let minted = ViewingHistory::new(recipient.viewing_pubkey(), 0).request_tag(&recipient)?;
-    let request = RingPaymentRequest {
-        deposit_tag: Some(minted.tag),
-        ..RingPaymentRequest::new(ring_address(&recipient, ring.program_id())?)
-    }
-    .to_string();
+    let request = RingPaymentRequest::new(ring_address(&recipient, ring.program_id())?).to_string();
     let amount = PAIR_AMOUNT.to_string();
     let refused = project.output(&["transfer", &request, "--amount", &amount])?;
     assert!(
@@ -389,7 +384,6 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         sender_wallet.history.current(),
     );
     assert_eq!(rebuilt.tx_count(), stored.tx_count());
-    assert_eq!(rebuilt.request_count(), stored.request_count());
     assert!(rebuilt.known_senders().is_empty());
     let empty_history =
         ViewingHistory::new(sender_keys.viewing_pubkey(), 0).with_ring(ring_program, None);

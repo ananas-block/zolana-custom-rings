@@ -30,7 +30,6 @@ pub struct ViewingKeyEntry {
     viewing_pubkey: X25519Pubkey,
     created_at: i64,
     tx: StreamCounter,
-    request: StreamCounter,
     /// Viewing keys whose reply claim the wallet confirmed.
     known_senders: HashSet<X25519Pubkey>,
     /// `after_slot` per ring, `None` reads from the first indexed block.
@@ -84,7 +83,6 @@ impl ViewingKeyEntry {
             viewing_pubkey,
             created_at,
             tx: StreamCounter::default(),
-            request: StreamCounter::default(),
             known_senders: HashSet::new(),
             ring_positions: BTreeMap::new(),
             tag_position: None,
@@ -101,10 +99,6 @@ impl ViewingKeyEntry {
 
     pub fn tx_count(&self) -> u64 {
         self.tx.next
-    }
-
-    pub fn request_count(&self) -> u64 {
-        self.request.next
     }
 
     pub fn known_senders(&self) -> &HashSet<X25519Pubkey> {
@@ -140,7 +134,6 @@ impl ViewingKeyEntry {
 
     fn progress_matches(&self, stored: &Self) -> bool {
         self.tx.same_progress(&stored.tx)
-            && self.request.same_progress(&stored.request)
             && self.tag_position == stored.tag_position
             && stored
                 .ring_positions
@@ -157,7 +150,6 @@ impl fmt::Debug for ViewingKeyEntry {
         f.debug_struct("ViewingKeyEntry")
             .field("created_at", &self.created_at)
             .field("tx", &self.tx)
-            .field("request", &self.request)
             .field("known_senders", &REDACTED)
             .finish_non_exhaustive()
     }
@@ -265,18 +257,6 @@ impl ViewingHistory {
         })
     }
 
-    /// A fresh `recipient_request_view_tag` for a request a deposit pays under.
-    pub fn request_tag<K: RingKeys + ?Sized>(
-        &self,
-        keys: &K,
-    ) -> Result<AdvancedTag<ViewTag>, AnonymousError> {
-        self.own_tag(keys, |entry| {
-            Ok(ViewTagStream::Request {
-                request_count: entry.request.take_next()?,
-            })
-        })
-    }
-
     fn own_tag<K: RingKeys + ?Sized>(
         &self,
         keys: &K,
@@ -305,7 +285,6 @@ impl ViewingHistory {
         }) && self.entries.iter().all(|entry| {
             stored.entry(&entry.viewing_pubkey).is_some()
                 || (entry.tx.scanned == 0
-                    && entry.request.scanned == 0
                     && entry.tag_position.is_none()
                     && entry.ring_positions.values().all(Option::is_none))
         })
@@ -333,7 +312,6 @@ struct EntryJson {
     viewing_pubkey: String,
     created_at: i64,
     tx: CounterJson,
-    request: CounterJson,
     known_senders: Vec<String>,
     ring_positions: Vec<RingPositionJson>,
     tag_position: Option<u64>,
@@ -408,7 +386,6 @@ impl ViewingHistory {
                         viewing_pubkey: hex::encode(entry.viewing_pubkey.as_bytes()),
                         created_at: entry.created_at,
                         tx: (&entry.tx).into(),
-                        request: (&entry.request).into(),
                         known_senders,
                         ring_positions: entry
                             .ring_positions
@@ -465,7 +442,6 @@ fn entry_of(stored: EntryJson) -> Result<ViewingKeyEntry, AnonymousError> {
         viewing_pubkey: pubkey("viewingPubkey", &stored.viewing_pubkey)?,
         created_at: stored.created_at,
         tx: stored.tx.try_into()?,
-        request: stored.request.try_into()?,
         known_senders: senders(&stored.known_senders)?,
         ring_positions,
         tag_position: stored.tag_position,

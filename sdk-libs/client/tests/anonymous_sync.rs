@@ -951,7 +951,7 @@ async fn a_scan_cannot_overwrite_a_later_tag_key_or_sender() {
         .confirm_sender(alice.keys.viewing_pubkey())
         .unwrap();
     let updates = [
-        history.request_tag(&bob.keys).unwrap().history,
+        history.sender_tag(&bob.keys).unwrap().history,
         history
             .clone()
             .with_rotated_key(ViewingKey::new().pubkey(), 1)

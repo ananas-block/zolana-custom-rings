@@ -21,27 +21,13 @@ pub fn run(ctx: &Context, args: AddressArgs) -> Result<()> {
     let member = ShieldedKeypair::from_keypair(&keypair)?;
     let held = ctx.ring_keys(&member)?;
     let address = RingAddress::enrolled(&held, ctx.ring.program_id())?;
-    // Stored before it prints, a sync reads every deposit tag a payer may hold.
-    let deposit_tag = ctx
-        .anonymous_wallet_store(member.viewing_pubkey())
-        .update(|wallet| {
-            // A request names the holder's current key, its tag must come from the same key.
-            ensure!(
-                wallet.history().current().viewing_pubkey() == address.recipient.viewing_pubkey,
-                "a rotation stopped before the wallet history took its key, run `zolana-ring key rotate`"
-            );
-            let minted = wallet.history().request_tag(&held)?;
-            wallet.update_history(minted.history)?;
-            Ok(minted.tag)
-        })?;
-    println!("{}", args.request(address, Some(deposit_tag)));
+    println!("{}", args.request(address));
     Ok(())
 }
 
 impl AddressArgs {
-    fn request(self, address: RingAddress, deposit_tag: Option<[u8; 32]>) -> RingPaymentRequest {
+    fn request(self, address: RingAddress) -> RingPaymentRequest {
         RingPaymentRequest {
-            deposit_tag,
             amount: self.amount,
             mint: self.mint.map(|mint| mint.0),
             label: self.label,
@@ -73,7 +59,6 @@ mod tests {
         recipient: String,
         ring_program_id: String,
         list_salt: String,
-        deposit_tag: Option<String>,
         amount: Option<String>,
         mint: Option<String>,
         label: Option<String>,
@@ -106,12 +91,8 @@ mod tests {
                 ring_program_id: case.ring_program_id.parse().unwrap(),
                 list_salt: hex::decode(&case.list_salt).unwrap().try_into().unwrap(),
             };
-            let tag = case
-                .deposit_tag
-                .as_ref()
-                .map(|tag| hex::decode(tag).unwrap().try_into().unwrap());
             assert_eq!(
-                parse(&flags).request(address, tag).to_string(),
+                parse(&flags).request(address).to_string(),
                 case.uri,
                 "{}",
                 case.name
