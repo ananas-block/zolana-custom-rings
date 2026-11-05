@@ -286,6 +286,7 @@ fn held_transfer(payer: &ShieldedKeypair) -> RingSubmission<'static> {
         },
         budget: send_budget(InstructionTag::Transfer, None),
         bound: BoundState::default(),
+        charged_outflows: Vec::new(),
     };
     let mut submission = RingSubmission::new(RingOperation::Instruction(Instruction {
         program_id: program(),
@@ -295,6 +296,30 @@ fn held_transfer(payer: &ShieldedKeypair) -> RingSubmission<'static> {
     submission.pending = Some(Attempt { proved, sent: None });
     submission.attempts = 1;
     submission
+}
+
+#[tokio::test]
+async fn a_submission_signs_only_an_attempt_its_charges_were_read_from() {
+    let cluster = Cluster::default();
+    let client = client(&cluster);
+    let payer = keypair(1);
+    let mut submission = RingSubmission::new(RingOperation::Instruction(Instruction {
+        program_id: program(),
+        accounts: vec![AccountMeta::new(payer.pubkey(), true)],
+        data: vec![tag::SET_DELEGATE],
+    }));
+    assert!(matches!(
+        submission.send(&client, &payer, &[]).await,
+        Err(RingError::SubmissionUnproved)
+    ));
+    assert!(cluster.sent_tags().is_empty());
+    assert!(submission
+        .prove(&client, &payer, &[])
+        .await
+        .unwrap()
+        .is_empty());
+    let _sent = submission.send(&client, &payer, &[]).await.unwrap();
+    assert_eq!(cluster.sent_tags(), [tag::SET_DELEGATE]);
 }
 
 #[tokio::test]

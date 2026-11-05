@@ -23,8 +23,8 @@ use crate::tests::{
     support::{keypair, ring, ring_utxo, Chain, Registry, RingSettings},
 };
 use crate::{
-    AnonymousPayment, CustomRingTransfer, CustomRingTransferInput, RelayedTransferInput, RingError,
-    RingRelay, RingTransfer, SealRow,
+    AnonymousPayment, AnonymousTransfer, CustomRingTransfer, CustomRingTransferInput,
+    RelayedTransferInput, RingError, RingRelay, RingTransfer, SealRow,
 };
 
 #[derive(Default)]
@@ -81,28 +81,74 @@ impl RingRelay for StubRelay {
     }
 }
 
-#[tokio::test]
-async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_message_hash() {
-    let sender = keypair(1);
-    let recipient = keypair(2);
-    let fee_payer = Address::new_from_array([0x44; 32]);
-    let chain = Chain::ring(RingSettings {
+/// Ring RPC stored the relay and sent it, the answer to the first prepare never arrived.
+#[derive(Default)]
+struct LostAnswer {
+    prepared: Mutex<usize>,
+}
+
+#[async_trait]
+impl RingRelay for LostAnswer {
+    async fn get_relay_quote(
+        &self,
+        _request: GetRelayQuoteRequest,
+    ) -> Result<RelayQuote, RingError> {
+        unreachable!("the test holds its quote")
+    }
+
+    async fn prepare_relay(&self, _request: PrepareRelayRequest) -> Result<RelayStep, RingError> {
+        *self.prepared.lock().unwrap() += 1;
+        Err(RingError::RelayIdMismatch)
+    }
+
+    async fn prepare_authority_transfer(
+        &self,
+        _request: PrepareAuthorityTransferRequest,
+    ) -> Result<RelayStep, RingError> {
+        unreachable!("the wallet names no delegate")
+    }
+
+    async fn submit_relay(&self, _request: SubmitRelayRequest) -> Result<RelayStatus, RingError> {
+        unreachable!("the relay asks no signature")
+    }
+
+    async fn get_relay_status(
+        &self,
+        _request: GetRelayStatusRequest,
+    ) -> Result<RelayStatus, RingError> {
+        Ok(RelayStatus::Sent {
+            signature: spr_indexer_api::SerializableSignature(Default::default()),
+        })
+    }
+}
+
+const RELAY_FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
+
+fn anonymous_chain(sender: &ShieldedKeypair, recipient: &ShieldedKeypair) -> Chain {
+    Chain::ring(RingSettings {
         has_policy: true,
         ..RingSettings::new(RingMode::Anonymous)
     })
     .with_registry(
-        Registry::new(&[(&sender, 1), (&recipient, 1)]),
+        Registry::new(&[(sender, 1), (recipient, 1)]),
         &pipeline_rules(),
-    );
+    )
+}
+
+/// 4 of the sender's 10 to `recipient`, the 6 of change back to the sender.
+fn anonymous_payment<'a>(
+    sender: &'a ShieldedKeypair,
+    recipient: &ShieldedKeypair,
+) -> AnonymousTransfer<'a> {
     let transaction = ConfidentialTransaction::new_with_ring(
-        vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
-        fee_payer,
+        vec![ring_utxo(sender, Mint::SOL, 10, 0)],
+        RELAY_FEE_PAYER,
         ring().program_id(),
     )
     .unwrap();
-    let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+    CustomRingTransfer::new(CustomRingTransferInput {
         ring: ring(),
-        sender: &sender,
+        sender,
         nullifier_key: Some(&sender.nullifier_key),
         transaction,
     })
@@ -118,15 +164,30 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
         reply: None,
         data: crate::NoteData::default(),
     })
-    .unwrap();
-    let quote = RelayQuote {
-        fee_payer: SerializablePubkey(fee_payer),
+    .unwrap()
+}
+
+fn relay_quote() -> RelayQuote {
+    RelayQuote {
+        fee_payer: SerializablePubkey(RELAY_FEE_PAYER),
         valid_until_slot: u64::MAX,
-    };
+    }
+}
+
+#[tokio::test]
+async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_message_hash() {
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let fee_payer = RELAY_FEE_PAYER;
+    let chain = anonymous_chain(&sender, &recipient);
+    let transfer = anonymous_payment(&sender, &recipient);
+    let quote = relay_quote();
     let relay = StubRelay::default();
     let relay_id = transfer
         .prepare_relay(&chain, quote)
         .await
+        .unwrap()
+        .sign()
         .unwrap()
         .send(&relay)
         .await
@@ -216,6 +277,8 @@ async fn a_confidential_relay_carries_its_token_account_setup() {
         .prepare_relay(&chain, quote)
         .await
         .unwrap()
+        .sign()
+        .unwrap()
         .send(&relay)
         .await
         .unwrap()
@@ -263,6 +326,8 @@ async fn relay_attempt(
             },
         )
         .await
+        .unwrap()
+        .sign()
         .unwrap()
         .send(&relay)
         .await
@@ -2204,6 +2269,8 @@ mod public_signers {
                     .unwrap()
                     .prepare_relay(client.zolana(), quote())
                     .await
+                    .unwrap()
+                    .sign()
                     .unwrap(),
             )
             .await;
@@ -2238,6 +2305,8 @@ mod public_signers {
             honest
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2301,6 +2370,8 @@ mod public_signers {
             stolen
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2337,6 +2408,8 @@ mod public_signers {
                 .unwrap()
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
             RingMode::Confidential => {
                 let mut transaction =
@@ -2356,6 +2429,8 @@ mod public_signers {
                 .with_co_owner(held(&spending))
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap()
             }
         };
@@ -2401,6 +2476,8 @@ mod public_signers {
             transaction
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2495,6 +2572,8 @@ mod public_signers {
             in_proof
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2580,6 +2659,8 @@ mod public_signers {
             paying
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2625,6 +2706,8 @@ mod public_signers {
             honest
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2639,6 +2722,8 @@ mod public_signers {
             stolen
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2669,6 +2754,8 @@ mod public_signers {
             shared
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2719,6 +2806,8 @@ mod public_signers {
             repeating
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2770,6 +2859,8 @@ mod public_signers {
             exit_transfer
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -2887,6 +2978,8 @@ mod public_signers {
             transaction
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3013,6 +3106,8 @@ mod public_signers {
             paying
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3082,6 +3177,8 @@ mod public_signers {
             paying
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3171,6 +3268,8 @@ mod public_signers {
             attempt
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3258,6 +3357,8 @@ mod public_signers {
             paying
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3331,7 +3432,15 @@ mod public_signers {
                 .unwrap()
         };
         let exact = build().with_exact_approval();
-        let disclosed = sent(exact.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let disclosed = sent(
+            exact
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap()
+                .sign()
+                .unwrap(),
+        )
+        .await;
         let opening = disclosed.pending.approval_opening().unwrap().clone();
         let digested = frame(&client, &disclosed.request).await;
         let message = relay_message(&FEE_PAYER, core::slice::from_ref(&digested), UNITS).0;
@@ -3340,6 +3449,8 @@ mod public_signers {
             plain_transfer
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3455,6 +3566,8 @@ mod public_signers {
             through
                 .prepare_relay(through_client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3505,6 +3618,8 @@ mod public_signers {
             funded
                 .prepare_relay(approval_client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3522,6 +3637,8 @@ mod public_signers {
             owning
                 .prepare_relay(approval_client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3717,10 +3834,26 @@ mod public_signers {
             .with_in_proof_owner(&sender.signing_key)
         };
         let first = attempt();
-        let asked = sent(first.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let asked = sent(
+            first
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap()
+                .sign()
+                .unwrap(),
+        )
+        .await;
         let opening = asked.pending.approval_opening().unwrap().clone();
         let again = attempt();
-        let retried = sent(again.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let retried = sent(
+            again
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap()
+                .sign()
+                .unwrap(),
+        )
+        .await;
         assert_ne!(
             opening.blinder,
             retried.pending.approval_opening().unwrap().blinder
@@ -3799,6 +3932,8 @@ mod public_signers {
                 .with_exact_approval()
                 .prepare_relay(client.zolana(), quote())
                 .await
+                .unwrap()
+                .sign()
                 .unwrap(),
         )
         .await;
@@ -3921,7 +4056,15 @@ mod request_fixtures {
         assert_opens(&built, direct.frame.approval_opening.as_ref().unwrap());
 
         let relay = build();
-        let asked = sent(relay.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let asked = sent(
+            relay
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap()
+                .sign()
+                .unwrap(),
+        )
+        .await;
         let opening = asked.pending.approval_opening().unwrap().clone();
         let relayed = assembled(&client, &asked.request).await;
         let (built, _) = pinned("relayed-exact-approval", &relayed);
@@ -3987,7 +4130,15 @@ mod request_fixtures {
         check(&direct, circuit);
 
         let relay = build();
-        let asked = sent(relay.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let asked = sent(
+            relay
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap()
+                .sign()
+                .unwrap(),
+        )
+        .await;
         let relayed = assembled(&client, &asked.request).await;
         let (_, circuit) = pinned("relayed-anonymous-entry", &relayed);
         check(&relayed, circuit);
@@ -4145,4 +4296,43 @@ mod enroll_message {
             Err(RingError::RelayMessage(MessageMismatch::Data))
         ));
     }
+}
+
+#[tokio::test]
+async fn each_owner_charge_reads_before_the_owner_signs_the_relay() {
+    let (sender, recipient) = (keypair(1), keypair(2));
+    let chain = anonymous_chain(&sender, &recipient);
+    let transfer = anonymous_payment(&sender, &recipient);
+    let unsigned = transfer.prepare_relay(&chain, relay_quote()).await.unwrap();
+    let owner = sender
+        .shielded_address()
+        .unwrap()
+        .signing_pubkey
+        .owner_proof_input_hash()
+        .unwrap();
+    let charged: Vec<_> = unsigned
+        .charged_outflows()
+        .iter()
+        .map(|flow| (flow.owner, flow.debit, flow.charge, flow.charged_outflow))
+        .collect();
+    assert_eq!(charged, [(owner, 4, 0, 4)]);
+    let shown = unsigned.charged_outflows().to_vec();
+    assert_eq!(unsigned.sign().unwrap().charged_outflows(), shown);
+}
+
+#[tokio::test]
+async fn a_relay_resent_after_a_lost_answer_reconciles_by_its_id() {
+    let (sender, recipient) = (keypair(1), keypair(2));
+    let chain = anonymous_chain(&sender, &recipient);
+    let prepared = anonymous_payment(&sender, &recipient)
+        .prepare_relay(&chain, relay_quote())
+        .await
+        .unwrap()
+        .sign()
+        .unwrap();
+    let relay = LostAnswer::default();
+    assert!(prepared.send(&relay).await.is_err());
+    let resent = prepared.send(&relay).await.unwrap().submitted().unwrap();
+    assert_eq!(resent, prepared.relay_id().unwrap());
+    assert_eq!(*relay.prepared.lock().unwrap(), 1);
 }
