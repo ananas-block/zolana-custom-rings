@@ -48,6 +48,7 @@ Added
 - `BufferedFrame` and `withBufferedSettlement` settle a frame past one transaction from a buffer its payer writes, `closeAbandonedFrameBuffers` returns the rent of an abandoned buffer, and `TransactionFit` and `decideAddressCeiling` report and refuse a transaction before any proof.
 - `CoSignerApproval` with `CoSignerRule` and `ApprovalOpening` lets an outside co-signer read the proven bits or exact totals under `withExactApproval`, `OwnerApproval` with `RelayTransferTerms` lets a public owner check its own slots, and `FunderApproval` with `RelayFunderTerms` lets a public funder check its deposit legs.
 - `RingRpc.getWalletStatus`, `RingRpc.getWalletActivity` and `RingRpc.getSpendCoverage` read a wallet's notes, its history and a ring's unresolved spends, and `ringFullScan` and `RingAuditPage.skipped` read a whole ring with no tag read and list each row that does not open.
+- `resolveViewingKey` reads an owner's current viewing key from the user registry, returns `undefined` only when the owner has not registered, and refuses a malformed key or a nullifier key other than the one passed.
 - `RingMergeSettingsRequest` signs an owner's merge settings for a mint and `RingRpc.setMergeSettings` sends them, a zero `targetNoteCount` stops Ring RPC merging that mint, and `RingRpcRefusal.sourceNote` names `-32227`, a recovered delegate note its source does not own.
 
 Fixed
