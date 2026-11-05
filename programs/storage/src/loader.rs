@@ -1,3 +1,16 @@
+//! Account access of the Storage program, each account an instruction reads or writes loads here.
+//!
+//! Read after `programs/storage/src/lib.rs`, `program-libs/interface/src/accounts/storage.rs`,
+//! `program-libs/interface/src/accounts/tracking.rs`. Read before
+//! `programs/storage/src/instructions/update.rs`, `programs/storage/src/instructions/enroll.rs`.
+//!
+//! Guarantees:
+//! 1. A registry, authorization or grant loads only when the program owns it, at its exact size and under its discriminator.
+//! 2. A created account takes its canonical bump from the derivation, never from instruction data.
+//!
+//! Relies on:
+//! 1. The processor checks the signature of each creator or owner a seed names, ahead of its `init` or `write`.
+
 use custom_ring_interface::{
     storage::{Revision, StorageError, StorageRegistry},
     storage_instruction::{
@@ -292,6 +305,7 @@ impl CanonicalPda<'_> {
     #[inline(always)]
     fn create(self, account: &mut AccountView) -> ProgramResult {
         let bump = [self.bump];
+        // The slot past the last seed keeps the bump, the slice below ends on it.
         let mut signer_seeds: [Seed; MAX_SIGNER_SEEDS] =
             core::array::from_fn(|_| Seed::from(&bump));
         for (slot, seed) in signer_seeds.iter_mut().zip(self.seeds) {

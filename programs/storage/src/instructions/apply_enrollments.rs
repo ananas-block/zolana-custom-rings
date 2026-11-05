@@ -1,3 +1,21 @@
+//! Applies pending enrollments to a ring's tracking tree.
+//!
+//! Enrollment never waits on an authority. Anyone may apply, so the program computes each entry from
+//! its account and the applier chooses only the accounts and their order. A stale proof fails and
+//! the accounts stay pending for the next applier.
+//!
+//! Read after `programs/storage/src/instructions/enroll.rs`, `program-libs/interface/src/accounts/tracking.rs`.
+//! Read before `prover/circuits/registry/apply_enrollments.go`.
+//!
+//! Guarantees:
+//! 1. The new root and next index follow from the current ones by exactly the entries of the named accounts, in the named order.
+//! 2. Each authorization applies a revision once, a duplicate account in one instruction included.
+//! 3. The outgoing root keeps its full grace and a full history refuses the apply, so a flood of applies fails no proof in flight.
+//!
+//! Relies on:
+//! 1. `ApplyEnrollmentsCircuit` keeps the tree sorted, and the nullifier key, ciphertext hash and list tag of a rotated row.
+//! 2. The ring pins the registry by address.
+
 use custom_ring_interface::{
     key_catalog::RingCircuit,
     storage::StorageError,
@@ -16,7 +34,6 @@ use crate::{
     parse,
 };
 
-/// Permissionless, every entry comes from its named account, an applier picks only accounts and order.
 pub fn process_apply_enrollments_ix(
     program_id: &Address,
     accounts: &mut [AccountView],
@@ -26,10 +43,12 @@ pub fn process_apply_enrollments_ix(
     let [registry_account, authorizations @ ..] = accounts else {
         return Err(StorageError::MissingAccounts.into());
     };
+    // 1. One to `APPLY_BATCH` accounts, and the chain starts from the registry and revision the proof names.
     ApplyEnrollmentsIxData::check_count(authorizations.len())?;
     let registry_address = *registry_account.address();
     let chain_start = tracking_chain_start(&registry_address, ix.revision)?;
     let mut registry = load_tracking_registry_mut(program_id, registry_account)?;
+    // 2. The statement's old values come from the account, and a stale revision fails ahead of the proof.
     let (old_root, old_next_index) = (registry.roots[0].hash, registry.next_index());
     registry.update(TrackingRootUpdate {
         revision: ix.revision,
@@ -37,6 +56,7 @@ pub fn process_apply_enrollments_ix(
         new_root: ix.apply.new_root,
         new_next_index: ix.apply.new_next_index(),
     })?;
+    // 3. Each entry comes from its account, marked applied as it enters the chain.
     let count = authorizations.len() as u64;
     let chain_end = authorizations.iter_mut().try_fold(
         chain_start,
@@ -50,6 +70,7 @@ pub fn process_apply_enrollments_ix(
                 .map_err(|_| StorageError::HashingFailed.into())
         },
     )?;
+    // 4. A failed proof reverts the root and every account step 3 marked.
     let statement = ApplyEnrollmentsStatement {
         old_root,
         new_root: ix.apply.new_root,

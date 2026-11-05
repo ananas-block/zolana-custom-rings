@@ -1,3 +1,18 @@
+//! Creates a tracking registry at `[tracking_registry, creator, ring_id]`, holding the sentinel root at revision zero.
+//!
+//! The ring's `Initialize` signs its ring PDA as creator through CPI and pins the address. Anyone
+//! else may create a registry naming any ring, and no ring reads it.
+//!
+//! Read after `programs/storage/src/lib.rs`, `program-libs/interface/src/accounts/tracking.rs`. Read
+//! before `programs/storage/src/instructions/enroll.rs`, `programs/custom-ring/src/instructions/configuration/setup/initialize.rs`.
+//!
+//! Guarantees:
+//! 1. `ring_id` and `auditor_pubkey` are final, and every first enrollment seals to that key.
+//! 2. A key no proof can seal to is refused here, it would lock enrollment for good.
+//!
+//! Relies on:
+//! 1. The ring compares the registry's address on every read, its seeds and `ring_id` authenticate nothing.
+
 use custom_ring_interface::{storage::StorageError, storage_instruction::InitializeTrackingIxData};
 use pinocchio::{AccountView, Address, ProgramResult};
 

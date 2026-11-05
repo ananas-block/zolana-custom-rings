@@ -1,3 +1,8 @@
+//! A [`RecordStore`] holding every node and record in memory.
+//!
+//! Read after `program-libs/member-registry/src/tree.rs`. Read before
+//! `program-libs/member-registry/src/record.rs`, `program-libs/member-registry/src/tracking.rs`.
+
 use std::collections::BTreeMap;
 
 use custom_ring_interface::{QUAD_ARITY, QUAD_HEIGHT};

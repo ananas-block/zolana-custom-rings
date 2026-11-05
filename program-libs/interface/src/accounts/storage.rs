@@ -1,3 +1,19 @@
+//! The policy registry account, its root history and the rule naming the root a revision answers for at a slot.
+//!
+//! A ring proof opens a member's lists and mint settings under a root of a policy registry. SPP's note
+//! tree only appends, so an old root of it never proves a false note. A list record changes, so an old
+//! policy root can prove a revoked grant or an absence no longer true. A write a rule reads therefore
+//! retires every earlier root at once, and any other write keeps the outgoing root for a proof in flight.
+//!
+//! Read after `docs/design/records-and-roots.md`, `program-libs/interface/src/accounts/member_registry.rs`.
+//! Read before `program-libs/interface/src/accounts/tracking.rs`, `programs/storage/src/instructions/update.rs`.
+//!
+//! Invariants:
+//! 1. An update that touches a list a rule can read, or mint settings, retires every earlier root in the same instruction, and a proof in flight under one of them fails and proves again. `StorageUpdateIxData::reaches_policy` classifies from the write masks, an allow list addition included, and no authority flag selects it.
+//! 2. Any other update keeps the outgoing root for `grace_slots`, and refuses while the oldest kept root is unexpired, so no such update drops a root its grace promised. Such a write changes no list a rule reads, so a long grace keeps no policy fact alive.
+//! 3. A zero grace update on a source with a tracking pin stores the pinned registry's newest revision as `tracking_floor`, and `LiveRoots::tracking` refuses a frame reading a salted list through the source under a lower revision. Without the floor an enrolled owner whose salted entry was just blocked names a tracking root from before its enrollment, proves its row absent and skips the salted read. The floor covers a row the newest tracking root holds at the write, a row applied later takes no cover from it.
+//! 4. A revision counts up by one per update and names at most one root.
+
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use solana_program_error::ProgramError;
@@ -13,6 +29,7 @@ use crate::{
     STORAGE_PROGRAM_ID,
 };
 
+/// Little endian, counts a registry's updates from the sentinel root at zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct Revision(pub [u8; 8]);
@@ -22,6 +39,7 @@ pub struct Revision(pub [u8; 8]);
 pub struct Root {
     pub hash: [u8; 32],
     pub revision: Revision,
+    /// Little endian slot, zero on the current root and on an empty entry.
     pub expires_at: [u8; 8],
 }
 
@@ -34,8 +52,11 @@ pub struct RegistryId(pub [u8; 32]);
 #[repr(C)]
 pub struct StorageRegistry {
     pub discriminator: u8,
+    /// Signs every update, `UpdateAuthority` hands it on.
     pub authority: Address,
+    /// Little endian and final, how long an outgoing root serves after a write no rule reads.
     pub grace_slots: [u8; 8],
+    /// Little endian, the leaf the next insert takes, the apply statement moves it.
     pub next_index: [u8; 4],
     /// Immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
@@ -45,67 +66,6 @@ pub struct StorageRegistry {
     pub tracking_floor: Revision,
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
-}
-
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-#[repr(u32)]
-pub enum StorageError {
-    #[error("invalid registry")]
-    InvalidRegistry = 9000,
-    #[error("authority does not match")]
-    Unauthorized = 9001,
-    #[error("revision changed")]
-    RevisionChanged = 9002,
-    #[error("root expired or absent")]
-    RootExpired = 9003,
-    #[error("root history is full")]
-    HistoryFull = 9004,
-    #[error("instruction data is invalid")]
-    InvalidInstructionData = 9005,
-    #[error("update carries more writes than one apply proof takes")]
-    BatchTooLarge = 9006,
-    #[error("write is not a record write")]
-    InvalidWrite = 9007,
-    #[error("apply proof does not verify")]
-    ProofVerificationFailed = 9008,
-    #[error("hashing failed")]
-    HashingFailed = 9009,
-    #[error("accounts are missing")]
-    MissingAccounts = 9010,
-    #[error("required signer did not sign")]
-    MissingSignature = 9011,
-    #[error("registry account is not writable")]
-    ReadOnlyRegistry = 9012,
-    #[error("system program account is invalid")]
-    InvalidSystemProgram = 9013,
-    #[error("registry is already initialized")]
-    AlreadyInitialized = 9014,
-    #[error("revision overflows u64")]
-    RevisionOverflow = 9015,
-    #[error("no apply key serves the write count")]
-    UnsupportedBatch = 9016,
-    #[error("viewing key is zero or not canonical")]
-    NonCanonicalViewingKey = 9021,
-    #[error("tracking registry is invalid")]
-    InvalidTrackingRegistry = 9022,
-    #[error("tracking authorization is invalid")]
-    InvalidTrackingAuthorization = 9023,
-    #[error("the enrollment's revision is already applied")]
-    EnrollmentAlreadyApplied = 9024,
-    #[error("the enrolled nullifier key, list tag and ciphertext are final")]
-    EnrollmentKeyFinal = 9025,
-    #[error("a zero nullifier key does not enroll")]
-    ZeroNullifierKey = 9028,
-    #[error("a first enrollment carries a proof and a rotation none")]
-    EnrollmentProofShape = 9029,
-    #[error("an apply names no enrollment")]
-    NoEnrollmentsNamed = 9030,
-    #[error("owner grant account is invalid")]
-    InvalidOwnerGrant = 9031,
-    #[error("reader key names no scheme")]
-    InvalidReaderKey = 9032,
-    #[error("auditor key is untagged, zero or not canonical")]
-    InvalidAuditorKey = 9033,
 }
 
 #[must_use]
@@ -213,10 +173,12 @@ impl StorageRegistry {
             data,
             tracking_revision,
         } = update;
+        // 1. A pinned source cannot skip its floor, a zero grace write with no revision refuses.
         let floor = self
             .reads_tracking(data)
             .then(|| tracking_revision.ok_or(StorageError::InvalidTrackingRegistry))
             .transpose()?;
+        // 2. The write masks pick the retirement, the authority's grace reaches only a write no rule reads.
         let retirement = match data.reaches_policy() {
             true => Retirement::Immediate,
             false => Retirement::Graced {
@@ -224,6 +186,7 @@ impl StorageRegistry {
                 grace_slots: self.grace_slots(),
             },
         };
+        // 3. A refusal in the history leaves the floor and the next index unwritten.
         advance_roots(
             &mut self.roots,
             data.revision,
@@ -278,6 +241,7 @@ pub(crate) fn advance_roots(
         .checked_add(1)
         .ok_or(StorageError::RevisionOverflow)?;
     match retirement {
+        // Dropping the oldest root before its expiry would fail a proof its grace promised.
         Retirement::Graced { slot, .. } if slot < roots[ROOT_HISTORY - 1].expires_at() => {
             return Err(StorageError::HistoryFull);
         }
@@ -304,6 +268,8 @@ pub(crate) fn root_at(
 ) -> Result<[u8; 32], StorageError> {
     roots
         .iter()
+        // An empty entry reads revision zero, the hash test keeps it from answering for the sentinel root.
+        // Only the current root carries no expiry.
         .find(|root| {
             root.hash != [0; 32]
                 && root.revision == revision
@@ -311,6 +277,67 @@ pub(crate) fn root_at(
         })
         .map(|root| root.hash)
         .ok_or(StorageError::RootExpired)
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[repr(u32)]
+pub enum StorageError {
+    #[error("invalid registry")]
+    InvalidRegistry = 9000,
+    #[error("authority does not match")]
+    Unauthorized = 9001,
+    #[error("revision changed")]
+    RevisionChanged = 9002,
+    #[error("root expired or absent")]
+    RootExpired = 9003,
+    #[error("root history is full")]
+    HistoryFull = 9004,
+    #[error("instruction data is invalid")]
+    InvalidInstructionData = 9005,
+    #[error("update carries more writes than one apply proof takes")]
+    BatchTooLarge = 9006,
+    #[error("write is not a record write")]
+    InvalidWrite = 9007,
+    #[error("apply proof does not verify")]
+    ProofVerificationFailed = 9008,
+    #[error("hashing failed")]
+    HashingFailed = 9009,
+    #[error("accounts are missing")]
+    MissingAccounts = 9010,
+    #[error("required signer did not sign")]
+    MissingSignature = 9011,
+    #[error("registry account is not writable")]
+    ReadOnlyRegistry = 9012,
+    #[error("system program account is invalid")]
+    InvalidSystemProgram = 9013,
+    #[error("registry is already initialized")]
+    AlreadyInitialized = 9014,
+    #[error("revision overflows u64")]
+    RevisionOverflow = 9015,
+    #[error("no apply key serves the write count")]
+    UnsupportedBatch = 9016,
+    #[error("viewing key is zero or not canonical")]
+    NonCanonicalViewingKey = 9021,
+    #[error("tracking registry is invalid")]
+    InvalidTrackingRegistry = 9022,
+    #[error("tracking authorization is invalid")]
+    InvalidTrackingAuthorization = 9023,
+    #[error("the enrollment's revision is already applied")]
+    EnrollmentAlreadyApplied = 9024,
+    #[error("the enrolled nullifier key, list tag and ciphertext are final")]
+    EnrollmentKeyFinal = 9025,
+    #[error("a zero nullifier key does not enroll")]
+    ZeroNullifierKey = 9028,
+    #[error("a first enrollment carries a proof and a rotation none")]
+    EnrollmentProofShape = 9029,
+    #[error("an apply names no enrollment")]
+    NoEnrollmentsNamed = 9030,
+    #[error("owner grant account is invalid")]
+    InvalidOwnerGrant = 9031,
+    #[error("reader key names no scheme")]
+    InvalidReaderKey = 9032,
+    #[error("auditor key is untagged, zero or not canonical")]
+    InvalidAuditorKey = 9033,
 }
 
 impl From<StorageError> for ProgramError {

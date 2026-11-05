@@ -1,5 +1,12 @@
 //! The record pool a policy proof opens, mirror `prover/circuits/policy/record_pool.go`
 //! and `prover/circuits/registry/shared_path.go`.
+//!
+//! A transfer proof opens many records under one root, and their paths share the top of the tree. The
+//! proof carries that top once as a canopy, and each path stops where it reaches the canopy. A key's
+//! opening count is fixed, so a client repeats its records and subjects to fill it.
+//!
+//! Read after `program-libs/member-registry/src/tree.rs`. Read before
+//! `prover/circuits/policy/record_pool.go`, `prover/circuits/registry/shared_path.go`.
 
 use custom_ring_interface::{tracking::TRACKING_QUAD_HEIGHT, QUAD_ARITY, QUAD_HEIGHT};
 

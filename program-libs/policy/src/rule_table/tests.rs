@@ -1,3 +1,5 @@
+//! Pins the row bytes the circuit reads, the table hash and the refusals of `RuleTable::validate` and `EncodedRuleTable::validate`, each refused form alone and behind a valid row.
+
 use super::*;
 
 const TABLE: RuleTable = RuleTable::builder()
