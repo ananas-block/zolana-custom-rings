@@ -770,38 +770,37 @@ pub(crate) mod tests {
             enrollment.held(credential)
         }
 
-        pub(crate) fn escrow_notes(&self, wallet: &Keypair, notes: u8) -> NullifierKey {
-            self.escrow_wallets(&[(wallet, notes)]).remove(0)
+        pub(crate) async fn escrow_notes(&self, wallet: &Keypair, notes: u8) -> NullifierKey {
+            self.escrow_wallets(&[(wallet, notes)]).await.remove(0)
         }
 
         /// Held before any scan, a merge pass opens only held credentials.
-        pub(crate) fn escrow_wallets(&self, wallets: &[(&Keypair, u8)]) -> Vec<NullifierKey> {
+        pub(crate) async fn escrow_wallets(&self, wallets: &[(&Keypair, u8)]) -> Vec<NullifierKey> {
             let store = self.hub.shared().store(RING);
-            wallets
-                .iter()
-                .map(|(wallet, notes)| {
-                    let key = NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]);
-                    // Slots rise in enrollment order, a scan refuses a page out of order.
-                    let enrolled = self
-                        .hub
-                        .shared()
-                        .source
-                        .enrollments
-                        .lock()
-                        .expect("enrollments")
-                        .len();
-                    let slot = u8::try_from(enrolled + 1).expect("few enrollments");
-                    let held = self.enroll(wallet, &key, slot);
-                    store
-                        .admit_credentials(vec![held])
-                        .expect("held credential");
-                    self.record_notes(wallet, &key, *notes);
-                    key
-                })
-                .collect()
+            let mut keys = Vec::with_capacity(wallets.len());
+            for (wallet, notes) in wallets {
+                let key = NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]);
+                // Slots rise in enrollment order, a scan refuses a page out of order.
+                let enrolled = self
+                    .hub
+                    .shared()
+                    .source
+                    .enrollments
+                    .lock()
+                    .expect("enrollments")
+                    .len();
+                let slot = u8::try_from(enrolled + 1).expect("few enrollments");
+                let held = self.enroll(wallet, &key, slot);
+                store
+                    .admit_credentials(vec![held])
+                    .expect("held credential");
+                self.record_notes(wallet, &key, *notes).await;
+                keys.push(key);
+            }
+            keys
         }
 
-        fn record_notes(&self, wallet: &Keypair, key: &NullifierKey, notes: u8) {
+        async fn record_notes(&self, wallet: &Keypair, key: &NullifierKey, notes: u8) {
             let store = self.hub.shared().store(RING);
             let owner_key = wallet.pubkey().to_bytes();
             let nullifier_pk = key.pubkey().expect("nullifier pk");
@@ -819,30 +818,32 @@ pub(crate) mod tests {
                 .hash(&nullifier_pk, &[0; 32], &[0; 32], 1)
                 .expect("commitment")
             };
-            store.record(
-                CreatedIn {
-                    slot: 1,
-                    tx_signature: Signature::from([7; 64]),
-                    event_index: 0,
-                },
-                (0..notes).map(|index| CreatedUtxo {
-                    commitment: commitment(index),
-                    slot_index: u32::from(index),
-                    leaf_index: u64::from(index),
-                    utxo: KnownUtxo {
-                        owner_key,
-                        owner: UtxoOwner::Keyed { nullifier_pk },
-                        asset: asset.0,
-                        mint: Some(MINT),
-                        amount: 10,
-                        blinding: [index; 32],
-                        data_hash: [0; 32],
-                        ring_data_hash: [0; 32],
-                        tree_id: 1,
+            store
+                .record(
+                    CreatedIn {
+                        slot: 1,
+                        tx_signature: Signature::from([7; 64]),
+                        event_index: 0,
                     },
-                    ring_note: true,
-                }),
-            );
+                    (0..notes).map(|index| CreatedUtxo {
+                        commitment: commitment(index),
+                        slot_index: u32::from(index),
+                        leaf_index: u64::from(index),
+                        utxo: KnownUtxo {
+                            owner_key,
+                            owner: UtxoOwner::Keyed { nullifier_pk },
+                            asset: asset.0,
+                            mint: Some(MINT),
+                            amount: 10,
+                            blinding: [index; 32],
+                            data_hash: [0; 32],
+                            ring_data_hash: [0; 32],
+                            tree_id: 1,
+                        },
+                        ring_note: true,
+                    }),
+                )
+                .await;
         }
 
         async fn settle(&self, wallet: &Keypair, target_note_count: u32) {
@@ -903,7 +904,7 @@ pub(crate) mod tests {
     async fn a_wallet_above_its_target_count_is_merged() {
         let fixture = Fixture::new().await;
         let wallet = Keypair::new_from_array([11; 32]);
-        fixture.escrow_notes(&wallet, 3);
+        fixture.escrow_notes(&wallet, 3).await;
         fixture.settle(&wallet, 1).await;
 
         assert_eq!(fixture.merge_due().await.len(), 1);
@@ -919,8 +920,8 @@ pub(crate) mod tests {
         let fixture = Fixture::new().await;
         let settled = Keypair::new_from_array([11; 32]);
         let unsettled = Keypair::new_from_array([12; 32]);
-        fixture.escrow_notes(&settled, 1);
-        fixture.escrow_notes(&unsettled, 3);
+        fixture.escrow_notes(&settled, 1).await;
+        fixture.escrow_notes(&unsettled, 3).await;
         fixture.settle(&settled, 1).await;
 
         assert!(fixture.merge_due().await.is_empty());
@@ -931,7 +932,7 @@ pub(crate) mod tests {
     async fn a_dropped_merge_frees_its_notes_after_expiry() {
         let fixture = Fixture::new().await;
         let wallet = Keypair::new_from_array([11; 32]);
-        fixture.escrow_notes(&wallet, 3);
+        fixture.escrow_notes(&wallet, 3).await;
         fixture.settle(&wallet, 1).await;
         assert_eq!(fixture.merge_due().await.len(), 1);
         assert!(fixture.merge_due().await.is_empty());
@@ -947,7 +948,7 @@ pub(crate) mod tests {
     async fn a_confirmed_merge_holds_nothing_once_its_spend_syncs() {
         let fixture = Fixture::new().await;
         let wallet = Keypair::new_from_array([11; 32]);
-        fixture.escrow_notes(&wallet, 3);
+        fixture.escrow_notes(&wallet, 3).await;
         fixture.settle(&wallet, 1).await;
         assert_eq!(fixture.merge_due().await.len(), 1);
         *fixture.chain.outcome.lock().expect("outcome") = Some(ChainOutcome::Confirmed { slot: 5 });
@@ -962,7 +963,7 @@ pub(crate) mod tests {
             .map(|input| input.nullifier)
             .collect();
         assert_eq!(spent.len(), 3);
-        fixture.hub.shared().store(RING).spend(spent);
+        fixture.hub.shared().store(RING).spend(spent).await;
 
         assert!(fixture.merge_due().await.is_empty());
         assert!(fixture.held().await.is_empty());
@@ -973,13 +974,13 @@ pub(crate) mod tests {
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let before = Fixture::on(store.clone()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        before.escrow_notes(&wallet, 3);
+        before.escrow_notes(&wallet, 3).await;
         before.settle(&wallet, 1).await;
         *before.chain.down.lock().expect("down") = true;
         assert!(before.merge_due().await.is_empty());
 
         let after = Fixture::on(store).await;
-        after.escrow_notes(&wallet, 3);
+        after.escrow_notes(&wallet, 3).await;
         assert!(after.merge_due().await.is_empty());
         after.track().await;
 
@@ -992,7 +993,7 @@ pub(crate) mod tests {
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let before = Fixture::on(store.clone()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        before.escrow_notes(&wallet, 3);
+        before.escrow_notes(&wallet, 3).await;
         before.settle(&wallet, 1).await;
         assert_eq!(before.merge_due().await.len(), 1);
         drop(before);

@@ -955,8 +955,8 @@ pub(crate) struct StoreDump {
 
 #[cfg(test)]
 impl AuditStore {
-    /// Notes opened with no secret, a commit with no database.
-    pub(crate) fn record(
+    /// Notes opened with no secret.
+    pub(crate) async fn record(
         &self,
         created_in: CreatedIn,
         utxos: impl IntoIterator<Item = CreatedUtxo>,
@@ -964,11 +964,28 @@ impl AuditStore {
         let opener = |_: &[u8; 32]| None;
         let mut work = PageWork::new(self, &opener);
         work.open(created_in, utxos);
-        self.commit(work.finish());
+        let delta = work.finish();
+        self.commit_fixture(delta).await;
+    }
+
+    /// A store with a database reads wallets from its tables, the page writes them first.
+    async fn commit_fixture(&self, delta: PageDelta) {
+        if let OwnerIndex::Database { store, ring, seal } = &self.index {
+            crate::spent_index::PageCommit {
+                db: store.connection(),
+                ring: *ring,
+                seal,
+                delta: &delta,
+            }
+            .commit()
+            .await
+            .expect("fixture page");
+        }
+        self.commit(delta);
     }
 
     /// Published rows with no frame the test reads.
-    pub(crate) fn spend(&self, nullifiers: impl IntoIterator<Item = [u8; 32]>) {
+    pub(crate) async fn spend(&self, nullifiers: impl IntoIterator<Item = [u8; 32]>) {
         use crate::spend_machine::InputRead;
         let opener = |_: &[u8; 32]| None;
         let mut work = PageWork::new(self, &opener);
@@ -987,7 +1004,8 @@ impl AuditStore {
                 hit: None,
             });
         }
-        self.commit(work.finish());
+        let delta = work.finish();
+        self.commit_fixture(delta).await;
     }
 
     pub(crate) fn dump(&self) -> StoreDump {

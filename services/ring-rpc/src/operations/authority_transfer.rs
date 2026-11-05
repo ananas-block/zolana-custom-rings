@@ -562,7 +562,7 @@ mod tests {
         let delegate = Keypair::new_from_array([21; 32]);
         let (fixture, prover) = served(delegate.pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let escrowed = fixture.escrow_notes(&wallet, 2).await;
 
         let step = fixture
             .hub
@@ -595,7 +595,9 @@ mod tests {
         let delegate = Keypair::new_from_array([21; 32]);
         let (fixture, prover) = served(delegate.pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        let keys = fixture.escrow_wallets(&[(&delegate, 1), (&wallet, 2)]);
+        let keys = fixture
+            .escrow_wallets(&[(&delegate, 1), (&wallet, 2)])
+            .await;
         let (own, other) = (&keys[0], &keys[1]);
         let sources = [address(&delegate, own), address(&wallet, other)];
 
@@ -641,7 +643,7 @@ mod tests {
         };
         let fixture = Fixture::serving(Some(delegate.pubkey()), Some(relay)).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let escrowed = fixture.escrow_notes(&wallet, 2).await;
         let reservations = RelayReservations::new(store.connection());
 
         let stranger = Keypair::new_from_array([22; 32]);
@@ -707,7 +709,7 @@ mod tests {
         let delegate = Keypair::new_from_array([21; 32]);
         let (fixture, _prover) = served(delegate.pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let escrowed = fixture.escrow_notes(&wallet, 2).await;
         let read = fixture
             .hub
             .delegate_notes(&notes_request(&fixture, &delegate, wallet.pubkey()))
@@ -803,7 +805,7 @@ mod tests {
         let delegate = Keypair::new_from_array([21; 32]);
         let (fixture, prover) = served(delegate.pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let escrowed = fixture.escrow_notes(&wallet, 2).await;
         let mut victim = SppProofInputUtxo::dummy(0).expect("dummy");
         victim.utxo.owner = PublicKey::from_ed25519(&[12; 32]);
         victim.nullifier = [12; 32];
@@ -825,7 +827,7 @@ mod tests {
         let delegate = Keypair::new_from_array([21; 32]);
         let (fixture, prover) = served(delegate.pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let escrowed = fixture.escrow_notes(&wallet, 2).await;
         let address_input =
             SppProofInputUtxo::new_address(PublicKey::from_ed25519(&[4; 32]), [5; 32], 0)
                 .expect("address input");
@@ -846,7 +848,7 @@ mod tests {
         let delegate = Keypair::new_from_array([21; 32]);
         let (fixture, prover) = served(delegate.pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let escrowed = fixture.escrow_notes(&wallet, 2).await;
         let impostor = Keypair::new_from_array([22; 32]);
 
         let refused = fixture
