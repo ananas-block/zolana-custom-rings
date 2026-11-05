@@ -8,9 +8,9 @@
 //
 // One transition serves two key families. A public key compiles the transition alone.
 // A private key adds one tracking row opening per write slot and binds the tracking
-// root, and the program selects it only when a write needs one. A public key
-// therefore pays no tracking constraint, and a private owner write never verifies
-// under it because the program refuses that pairing before it reads the proof.
+// root. The program selects the key from the private write bitmap it derives, a nonzero
+// bitmap takes the private key. A public key therefore pays no tracking constraint,
+// and a private owner write never verifies under it.
 //
 // Both families prove whether a batch tightens any field a policy reads. Storage keeps
 // the older roots served after a batch that tightens nothing. A proof under an older
