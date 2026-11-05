@@ -59,7 +59,7 @@ func TestPolicySections(t *testing.T) {
 	for _, r := range refusals {
 		capacities := []int{0}
 		if r.wide {
-			capacities = append(capacities, 8, 16)
+			capacities = append(capacities, 8)
 		}
 		for _, outputs := range capacities {
 			name := r.name

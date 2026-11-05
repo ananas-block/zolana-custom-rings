@@ -202,7 +202,10 @@ pub(super) fn key_reaches(reaches: &[Reach]) -> Result<Vec<(RingKey, Option<KeyR
                 rows: most(&|reach| reach.rows),
                 subjects: most(&subjects),
                 records: most(&records),
-                widest: *held.iter().max_by_key(|reach| subjects(reach)).unwrap_or(&held[0]),
+                widest: *held
+                    .iter()
+                    .max_by_key(|reach| subjects(reach))
+                    .unwrap_or(&held[0]),
             }),
         ));
     }
@@ -212,7 +215,10 @@ pub(super) fn key_reaches(reaches: &[Reach]) -> Result<Vec<(RingKey, Option<KeyR
 pub fn run() -> Result<()> {
     let reaches = reaches()?;
     let mut table = String::new();
-    writeln!(table, "| key | inputs | outputs | legs | rows | subjects | records | widest spend |")?;
+    writeln!(
+        table,
+        "| key | inputs | outputs | legs | rows | subjects | records | widest spend |"
+    )?;
     writeln!(table, "|---|---|---|---|---|---|---|---|")?;
     for (key, reach) in key_reaches(&reaches)? {
         match reach {
@@ -236,11 +242,20 @@ pub fn run() -> Result<()> {
         }
     }
     writeln!(table)?;
-    writeln!(table, "Each rail and SPP shape at its least spend, no policy, no leg and the rail's least run.")?;
-    writeln!(table, "| rail | shape | key | inline bytes | accounts | signatures | frame | SPP CPI | inline |")?;
+    writeln!(
+        table,
+        "Each rail and SPP shape at its least spend, no policy, no leg and the rail's least run."
+    )?;
+    writeln!(
+        table,
+        "| rail | shape | key | inline bytes | accounts | signatures | frame | SPP CPI | inline |"
+    )?;
     writeln!(table, "|---|---|---|---|---|---|---|---|---|")?;
     for frame in FrameRail::ALL {
-        for shape in SPP_SUPPORTED_SHAPES.into_iter().filter(|shape| frame.rail().supports(*shape)) {
+        for shape in SPP_SUPPORTED_SHAPES
+            .into_iter()
+            .filter(|shape| frame.rail().supports(*shape))
+        {
             let least = Transfer {
                 frame,
                 shape,
@@ -260,7 +275,11 @@ pub fn run() -> Result<()> {
                     }
                     .shape()
                 })
-                .and_then(|shape| RING_KEYS.iter().find(|key| TransferShape::of(key.circuit) == Some(shape)))
+                .and_then(|shape| {
+                    RING_KEYS
+                        .iter()
+                        .find(|key| TransferShape::of(key.circuit) == Some(shape))
+                })
                 .map_or("none", |key| key.name);
             match least.measure()? {
                 TransferFit::Measured(measured) => writeln!(
@@ -315,7 +334,8 @@ mod tests {
         let reaches = reaches().unwrap();
         for (key, reach) in key_reaches(&reaches).unwrap() {
             let shape = TransferShape::of(key.circuit).unwrap();
-            let reach = reach.unwrap_or_else(|| panic!("{} serves no inline transaction", key.name));
+            let reach =
+                reach.unwrap_or_else(|| panic!("{} serves no inline transaction", key.name));
             assert_eq!(
                 (reach.inputs, reach.outputs, reach.legs, reach.rows),
                 (

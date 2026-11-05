@@ -397,8 +397,6 @@ impl RingCircuit {
         let shape = TransferShape::of(self)?;
         // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
         let withdrawal_assets = usize::from(shape.withdrawals).min(N_PUBLIC_SLOTS);
-        // An input slot takes no row, its asset reads a payment's record or a free one and a spend
-        // past the rows selects the wide key.
         let records = usize::from(shape.records);
         Some(RecordPools {
             own: records + withdrawal_assets.max(N_PUBLIC_SLOTS),
