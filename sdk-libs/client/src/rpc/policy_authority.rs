@@ -1,3 +1,6 @@
+//! The Ring RPC requests the ring policy authority signs. It pages and refuses the wallet updates pending list approval, and it creates the records registry.
+//! Read `record_update` first for the awaited lists a wallet update carries.
+
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_signer::Signer;
@@ -5,9 +8,9 @@ use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignat
 
 use super::{base64, Attestation, ReadTarget, RecordUpdateId, RequestBuildError, SignedRequest};
 
-const ENROLMENT_DOMAIN: &str = "zolana/ring-rpc-enrolment";
+const POLICY_AUTHORITY_DOMAIN: &str = "zolana/ring-rpc-policy-authority";
 
-/// Raw Ed25519 over the `EnrolmentAttestation` message.
+/// Raw Ed25519 over the `PolicyAuthorityAttestation` message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PolicyAuthorityAuth {
@@ -19,9 +22,9 @@ pub struct PolicyAuthorityAuth {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct GetPendingEnrolmentsRequest {
+pub struct GetPendingListApprovalsRequest {
     pub ring: SerializablePubkey,
-    /// The last enrolment of the previous page.
+    /// The last update of the previous page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<RecordUpdateId>,
     pub auth: PolicyAuthorityAuth,
@@ -29,7 +32,7 @@ pub struct GetPendingEnrolmentsRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RefuseEnrolmentRequest {
+pub struct RefuseListApprovalRequest {
     pub ring: SerializablePubkey,
     pub update_id: RecordUpdateId,
     pub auth: PolicyAuthorityAuth,
@@ -54,8 +57,8 @@ pub struct CreateRecordsRegistryResponse {
 /// Oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct GetPendingEnrolmentsResponse {
-    pub enrolments: Vec<PendingEnrolment>,
+pub struct GetPendingListApprovalsResponse {
+    pub pending: Vec<PendingListApproval>,
     /// Absent on the last page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<RecordUpdateId>,
@@ -63,7 +66,7 @@ pub struct GetPendingEnrolmentsResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct PendingEnrolment {
+pub struct PendingListApproval {
     pub update_id: RecordUpdateId,
     pub wallet: SerializablePubkey,
     /// The owner identity of `wallet`, the record an approval writes.
@@ -74,25 +77,25 @@ pub struct PendingEnrolment {
 
 /// The page after `cursor`, the first page without one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ListEnrolments {
+pub struct ListPendingApprovals {
     pub cursor: Option<RecordUpdateId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RefuseEnrolment(pub RecordUpdateId);
+pub struct RefuseListApproval(pub RecordUpdateId);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CreateRecords;
 
 /// The service rebuilds it from its own target and the request fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnrolmentAttestation<A> {
+pub struct PolicyAuthorityAttestation<A> {
     pub target: ReadTarget,
     pub authority: Address,
     pub action: A,
 }
 
-pub trait EnrolmentAction: sealed::Sealed {
+pub trait PolicyAuthorityAction: sealed::Sealed {
     type Request;
 
     fn line(&self) -> String;
@@ -103,13 +106,13 @@ pub trait EnrolmentAction: sealed::Sealed {
 mod sealed {
     pub trait Sealed {}
 
-    impl Sealed for super::ListEnrolments {}
-    impl Sealed for super::RefuseEnrolment {}
+    impl Sealed for super::ListPendingApprovals {}
+    impl Sealed for super::RefuseListApproval {}
     impl Sealed for super::CreateRecords {}
 }
 
-impl EnrolmentAction for ListEnrolments {
-    type Request = GetPendingEnrolmentsRequest;
+impl PolicyAuthorityAction for ListPendingApprovals {
+    type Request = GetPendingListApprovalsRequest;
 
     fn line(&self) -> String {
         match &self.cursor {
@@ -118,8 +121,8 @@ impl EnrolmentAction for ListEnrolments {
         }
     }
 
-    fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> GetPendingEnrolmentsRequest {
-        GetPendingEnrolmentsRequest {
+    fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> GetPendingListApprovalsRequest {
+        GetPendingListApprovalsRequest {
             ring: ring.into(),
             cursor: self.cursor,
             auth,
@@ -127,15 +130,15 @@ impl EnrolmentAction for ListEnrolments {
     }
 }
 
-impl EnrolmentAction for RefuseEnrolment {
-    type Request = RefuseEnrolmentRequest;
+impl PolicyAuthorityAction for RefuseListApproval {
+    type Request = RefuseListApprovalRequest;
 
     fn line(&self) -> String {
         format!("refuse {}", self.0 .0.to_base58())
     }
 
-    fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> RefuseEnrolmentRequest {
-        RefuseEnrolmentRequest {
+    fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> RefuseListApprovalRequest {
+        RefuseListApprovalRequest {
             ring: ring.into(),
             update_id: self.0,
             auth,
@@ -143,7 +146,7 @@ impl EnrolmentAction for RefuseEnrolment {
     }
 }
 
-impl EnrolmentAction for CreateRecords {
+impl PolicyAuthorityAction for CreateRecords {
     type Request = CreateRecordsRegistryRequest;
 
     fn line(&self) -> String {
@@ -158,10 +161,10 @@ impl EnrolmentAction for CreateRecords {
     }
 }
 
-impl<A: EnrolmentAction> Attestation for EnrolmentAttestation<A> {
+impl<A: PolicyAuthorityAction> Attestation for PolicyAuthorityAttestation<A> {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
         format!(
-            "{ENROLMENT_DOMAIN}\n{}\nauthority: {}\naction: {}\ntimestamp: {timestamp}\nnonce: {}",
+            "{POLICY_AUTHORITY_DOMAIN}\n{}\nauthority: {}\naction: {}\ntimestamp: {timestamp}\nnonce: {}",
             self.target.lines(),
             self.authority,
             self.action.line(),
@@ -171,14 +174,14 @@ impl<A: EnrolmentAction> Attestation for EnrolmentAttestation<A> {
     }
 }
 
-impl<A: EnrolmentAction> SignedRequest<EnrolmentAttestation<A>> {
+impl<A: PolicyAuthorityAction> SignedRequest<PolicyAuthorityAttestation<A>> {
     /// `authority` must be the attestation's authority, the service checks the signature against it.
     pub fn sign<S: Signer + ?Sized>(self, authority: &S) -> Result<A::Request, RequestBuildError> {
         let (timestamp, message) = self.message()?;
         let signature = authority
             .try_sign_message(&message)
             .map_err(RequestBuildError::Signature)?;
-        let EnrolmentAttestation {
+        let PolicyAuthorityAttestation {
             target,
             authority,
             action,
@@ -195,36 +198,36 @@ impl<A: EnrolmentAction> SignedRequest<EnrolmentAttestation<A>> {
     }
 }
 
-impl GetPendingEnrolmentsRequest {
+impl GetPendingListApprovalsRequest {
     pub fn read(
         target: ReadTarget,
         authority: Address,
-    ) -> SignedRequest<EnrolmentAttestation<ListEnrolments>> {
-        SignedRequest::new(EnrolmentAttestation {
+    ) -> SignedRequest<PolicyAuthorityAttestation<ListPendingApprovals>> {
+        SignedRequest::new(PolicyAuthorityAttestation {
             target,
             authority,
-            action: ListEnrolments::default(),
+            action: ListPendingApprovals::default(),
         })
     }
 }
 
-impl SignedRequest<EnrolmentAttestation<ListEnrolments>> {
+impl SignedRequest<PolicyAuthorityAttestation<ListPendingApprovals>> {
     pub fn with_cursor(mut self, cursor: RecordUpdateId) -> Self {
         self.attestation.action.cursor = Some(cursor);
         self
     }
 }
 
-impl RefuseEnrolmentRequest {
+impl RefuseListApprovalRequest {
     pub fn refusal(
         target: ReadTarget,
         authority: Address,
         update_id: RecordUpdateId,
-    ) -> SignedRequest<EnrolmentAttestation<RefuseEnrolment>> {
-        SignedRequest::new(EnrolmentAttestation {
+    ) -> SignedRequest<PolicyAuthorityAttestation<RefuseListApproval>> {
+        SignedRequest::new(PolicyAuthorityAttestation {
             target,
             authority,
-            action: RefuseEnrolment(update_id),
+            action: RefuseListApproval(update_id),
         })
     }
 }
@@ -233,8 +236,8 @@ impl CreateRecordsRegistryRequest {
     pub fn create(
         target: ReadTarget,
         authority: Address,
-    ) -> SignedRequest<EnrolmentAttestation<CreateRecords>> {
-        SignedRequest::new(EnrolmentAttestation {
+    ) -> SignedRequest<PolicyAuthorityAttestation<CreateRecords>> {
+        SignedRequest::new(PolicyAuthorityAttestation {
             target,
             authority,
             action: CreateRecords,

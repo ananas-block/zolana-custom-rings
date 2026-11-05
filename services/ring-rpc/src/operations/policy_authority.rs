@@ -1,9 +1,12 @@
+//! The Ring RPC methods the ring policy authority signs. They page and refuse the updates pending list approval and create the records registry.
+//! Read `record_update` after for the pending state, and `record_writer` for how an approval lands.
+
 use solana_address::Address;
 use zolana_ring_client::rpc::{
-    CreateRecords, CreateRecordsRegistryRequest, CreateRecordsRegistryResponse, EnrolmentAction,
-    EnrolmentAttestation, GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse,
-    ListEnrolments, PolicyAuthorityAuth, ReadTarget, RecordUpdateStatus, RefuseEnrolment,
-    RefuseEnrolmentRequest,
+    CreateRecords, CreateRecordsRegistryRequest, CreateRecordsRegistryResponse,
+    GetPendingListApprovalsRequest, GetPendingListApprovalsResponse, ListPendingApprovals,
+    PolicyAuthorityAction, PolicyAuthorityAttestation, PolicyAuthorityAuth, ReadTarget,
+    RecordUpdateStatus, RefuseListApproval, RefuseListApprovalRequest,
 };
 
 use crate::{
@@ -12,33 +15,33 @@ use crate::{
 };
 
 impl<S: TransactionSource> Hub<S> {
-    pub async fn pending_enrolments(
+    pub async fn pending_list_approvals(
         &self,
-        request: &GetPendingEnrolmentsRequest,
-    ) -> Result<GetPendingEnrolmentsResponse, RingRpcError> {
+        request: &GetPendingListApprovalsRequest,
+    ) -> Result<GetPendingListApprovalsResponse, RingRpcError> {
         let ring = request.ring.0;
-        let action = ListEnrolments {
+        let action = ListPendingApprovals {
             cursor: request.cursor.clone(),
         };
         let authority = self
-            .authorize_enrolment(ring, &request.auth, action)
+            .authorize_policy_action(ring, &request.auth, action)
             .await?;
         self.record_writer()?
-            .pending_enrolments(authority, request)
+            .pending_list_approvals(authority, request)
             .await
     }
 
-    pub async fn refuse_enrolment(
+    pub async fn refuse_list_approval(
         &self,
-        request: &RefuseEnrolmentRequest,
+        request: &RefuseListApprovalRequest,
     ) -> Result<RecordUpdateStatus, RingRpcError> {
         let ring = request.ring.0;
-        let action = RefuseEnrolment(request.update_id.clone());
+        let action = RefuseListApproval(request.update_id.clone());
         let authority = self
-            .authorize_enrolment(ring, &request.auth, action)
+            .authorize_policy_action(ring, &request.auth, action)
             .await?;
         self.record_writer()?
-            .refuse_enrolment(ring, authority, &request.update_id)
+            .refuse_list_approval(ring, authority, &request.update_id)
             .await
     }
 
@@ -50,7 +53,7 @@ impl<S: TransactionSource> Hub<S> {
         let ring = request.ring.0;
         let writer = self.record_writer()?;
         let authority = self
-            .authorize_enrolment(ring, &request.auth, CreateRecords)
+            .authorize_policy_action(ring, &request.auth, CreateRecords)
             .await?;
         self.shared()
             .require_ring_authority(ring, authority)
@@ -62,7 +65,7 @@ impl<S: TransactionSource> Hub<S> {
     }
 
     /// Signature and nonce only, the writer checks the policy authority.
-    async fn authorize_enrolment<A: EnrolmentAction>(
+    async fn authorize_policy_action<A: PolicyAuthorityAction>(
         &self,
         ring: Address,
         auth: &PolicyAuthorityAuth,
@@ -76,7 +79,7 @@ impl<S: TransactionSource> Hub<S> {
             timestamp: auth.timestamp,
             nonce: &auth.nonce,
             signature: &auth.signature,
-            attestation: &EnrolmentAttestation {
+            attestation: &PolicyAuthorityAttestation {
                 target: ReadTarget {
                     cluster: shared.genesis_hash,
                     service: shared.service,

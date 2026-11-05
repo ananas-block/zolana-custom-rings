@@ -906,7 +906,10 @@ fn a_signed_wallet_update_verifies_from_the_shared_vector() {
 fn write_record_update_vectors() {
     for (name, signed) in [
         ("record_update.json", signed_wallet_update()),
-        ("enrolment_update.json", signed_enrolment()),
+        (
+            "list_approval_update.json",
+            signed_update_pending_approval(),
+        ),
     ] {
         let path = format!(
             "{}/../../test-vectors/rpc/{name}",
@@ -1442,7 +1445,7 @@ fn a_signed_authority_transfer_matches_the_shared_vector() {
     pinned(file, "/wire", &wire, &vector.wire);
 }
 
-fn signed_enrolment() -> SubmitRecordUpdateRequest {
+fn signed_update_pending_approval() -> SubmitRecordUpdateRequest {
     let wallet = Keypair::new_from_array([7; 32]);
     let identity = Hash(
         *zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array())
@@ -1470,7 +1473,7 @@ fn signed_enrolment() -> SubmitRecordUpdateRequest {
 
 /// The TypeScript signer writes the same wire bytes.
 #[test]
-fn a_signed_enrolment_verifies_from_the_shared_vector() {
+fn a_signed_update_pending_approval_verifies_from_the_shared_vector() {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Vector {
@@ -1478,14 +1481,14 @@ fn a_signed_enrolment_verifies_from_the_shared_vector() {
         update_id: RecordUpdateId,
     }
     let vector: Vector = serde_json::from_str(include_str!(
-        "../../../../test-vectors/rpc/enrolment_update.json"
+        "../../../../test-vectors/rpc/list_approval_update.json"
     ))
     .expect("vector");
-    let signed = signed_enrolment();
+    let signed = signed_update_pending_approval();
     assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
     let read: SubmitRecordUpdateRequest = serde_json::from_str(&vector.wire).expect("read");
     assert_eq!(read.verify(), Ok(vector.update_id));
-    // An enrolment signature never verifies as a plain update.
+    // A signature pending list approval never verifies as a plain update.
     let mut plain = read;
     plain.update.awaited_lists = 0;
     assert_eq!(plain.verify(), Err(RecordUpdateError::Signature));
@@ -1493,7 +1496,7 @@ fn a_signed_enrolment_verifies_from_the_shared_vector() {
 
 /// The TypeScript signers write the same messages and wire bytes.
 #[test]
-fn the_enrolment_requests_match_the_shared_vector() {
+fn the_policy_authority_requests_match_the_shared_vector() {
     #[derive(Deserialize)]
     struct Signed {
         message: String,
@@ -1515,24 +1518,24 @@ fn the_enrolment_requests_match_the_shared_vector() {
         create_records: Signed,
     }
     let vector: Vector = serde_json::from_str(include_str!(
-        "../../../../test-vectors/rpc/enrolment_attestation.json"
+        "../../../../test-vectors/rpc/policy_authority_attestation.json"
     ))
     .expect("vector");
     let authority = Keypair::new_from_array([8; 32]);
-    let list = EnrolmentAttestation {
+    let list = PolicyAuthorityAttestation {
         target: target(),
         authority: authority.pubkey(),
-        action: ListEnrolments::default(),
+        action: ListPendingApprovals::default(),
     };
-    let refuse = EnrolmentAttestation {
+    let refuse = PolicyAuthorityAttestation {
         target: target(),
         authority: authority.pubkey(),
-        action: RefuseEnrolment(vector.refuse.update_id.clone()),
+        action: RefuseListApproval(vector.refuse.update_id.clone()),
     };
-    let list_after = GetPendingEnrolmentsRequest::read(target(), authority.pubkey())
+    let list_after = GetPendingListApprovalsRequest::read(target(), authority.pubkey())
         .with_cursor(vector.refuse.update_id.clone());
     let message = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
-    let file = "enrolment_attestation.json";
+    let file = "policy_authority_attestation.json";
     pinned(
         file,
         "/listAfter/message",

@@ -81,9 +81,9 @@ pub enum Command {
     /// Enroll the member's nullifier key in the ring's tracking registry.
     #[command(subcommand)]
     Key(KeyCommand),
-    /// List the wallet enrolments that await the policy authority, or approve one.
+    /// List the wallet updates pending list approval, or approve one.
     #[command(subcommand)]
-    Enrolment(EnrolmentCommand),
+    ListApproval(ListApprovalCommand),
     /// Read and write the list bits of member records.
     #[command(subcommand)]
     List(ListCommand),
@@ -226,10 +226,10 @@ pub struct CosignerArg {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum EnrolmentCommand {
-    /// Print each awaiting enrolment with the lists it awaits.
+pub enum ListApprovalCommand {
+    /// Print each update pending list approval with the lists it awaits.
     Pending,
-    /// Set every list the wallet's enrolments await in one update that lands them.
+    /// Set every list the wallet's pending updates await in one update that lands them.
     Approve { wallet: Address },
 }
 

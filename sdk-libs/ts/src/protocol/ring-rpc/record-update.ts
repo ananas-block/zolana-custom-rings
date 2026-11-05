@@ -38,8 +38,8 @@ const STORAGE_WRITE_BITS = [...AUTHORITY_WRITABLE_LISTS, ...MEMBER_WRITABLE_LIST
   0n,
 );
 
-/** Rust `ENROLMENT_LISTS`. */
-export const ENROLMENT_LISTS: readonly ListId[] = Object.freeze([
+/** Rust `AWAITABLE_LISTS`. */
+export const AWAITABLE_LISTS: readonly ListId[] = Object.freeze([
   ListId.allow,
   ListId.reader,
   ListId.approval,
@@ -99,7 +99,7 @@ export function recordUpdateStatementHash(input: UnsignedRecordUpdate): Bytes32 
     hashBytes(addressBytes(input.registry, "registry")) as Bytes32,
     entries.map(recordUpdateQueueEntry).reduce(queueChain, ZERO_32),
     bigIntBytes(validUntilSlot) as Bytes32,
-    // The width separates an enrolment's hash from a plain update's.
+    // The width binds the wait to the signature, a pending update never verifies as a plain one.
     ...(awaitedLists === 0n ? [] : [bigIntBytes(awaitedLists) as Bytes32]),
   ]);
 }

@@ -22,15 +22,17 @@ Ring RPC writes a ring's policy records when it holds the storage authority key.
 - A wallet batch goes out when it is full, when it has aged a window, or when an authority batch waits behind it.
 - The program decides the grace from the writes, see [root history](records-and-roots.md#root-history). A wallet's writes stay graced, so no wallet can void every member's proof in flight.
 - A graced batch waits while the root history is full.
-- When the writer refuses an authority update whose signer lost the policy role, a list enrolment that update approved waits again.
+- When the writer refuses an authority update whose signer lost the policy role, an update that approval joined turns pending list approval again.
 
-## List enrolment
+## List approval
 
+- List approval is the policy authority's off chain decision on a wallet's request for a list, a KYC check for one. The writer holds the request as one state of its lifecycle, pending list approval, and keeps no other record of it.
 - A wallet's update can await the reader list, or the allow or approval lists the policy reads from the ring's own records.
-- It waits until the policy authority's own update sets every awaited list on the wallet. Both then go out in one batch.
+- It waits until the policy authority's own update sets every awaited list on the wallet. Both then go out in one batch, or neither does.
 - The policy authority can refuse it. An update that still waits after its expiry slot is refused, and the expiry has an upper bound.
+- Nothing obliges the authority to answer, and the writer checks no process behind an approval.
 - No cap limits pending updates. Per-client and per-key rate limits bound how fast they arrive.
-- List enrolment grants lists and differs from [tracking enrollment](records-and-roots.md#tracking), which the authority does not control.
+- List approval grants lists and differs from [tracking enrollment](records-and-roots.md#tracking), a secret the wallet registers outside the authority's control.
 
 ## Durability
 

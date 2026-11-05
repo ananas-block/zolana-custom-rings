@@ -15,10 +15,10 @@ import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
   encodeCreateRecordsRegistryRequest,
-  encodeGetPendingEnrolmentsRequest,
+  encodeGetPendingListApprovalsRequest,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
-  encodeRefuseEnrolmentRequest,
+  encodeRefuseListApprovalRequest,
   encodeSetReaderGrantRequest,
 } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
 import { depositRequestDigest } from "../../../src/protocol/ring-rpc/relay-deposit-inputs.js";
@@ -29,13 +29,13 @@ import {
   RingReaderGrantRequest,
   auditedUtxosAttestation,
   authorityTransferAttestation,
-  enrolmentAttestation,
+  policyAuthorityAttestation,
   readerGrantAttestation,
   ringReadAttestation,
   signCreateRecordsRegistryRequest,
-  signPendingEnrolmentsRequest,
-  signRefuseEnrolmentRequest,
-  type RingEnrolmentAction,
+  signPendingListApprovalsRequest,
+  signRefuseListApprovalRequest,
+  type PolicyAuthorityAction,
 } from "../../../src/rpc/ring-rpc.js";
 
 const base58 = getBase58Decoder();
@@ -259,12 +259,12 @@ describe("prepareAuthorityTransfer", () => {
   });
 });
 
-describe("enrolment requests", () => {
+describe("policy authority requests", () => {
   it("signs the policy authority's list and refusal byte for byte as the Rust vector", async () => {
     type Signed = { message: string; wire: string };
     const vector = JSON.parse(
       readFileSync(
-        new URL("../../../../../test-vectors/rpc/enrolment_attestation.json", import.meta.url),
+        new URL("../../../../../test-vectors/rpc/policy_authority_attestation.json", import.meta.url),
         "utf8",
       ),
     ) as {
@@ -280,9 +280,9 @@ describe("enrolment requests", () => {
       ringProgramId: filled(7, 32) as Address,
     };
     const { updateId } = vector.refuse;
-    const message = (action: RingEnrolmentAction) =>
+    const message = (action: PolicyAuthorityAction) =>
       new TextDecoder().decode(
-        enrolmentAttestation({
+        policyAuthorityAttestation({
           target,
           authority: authority.address,
           action,
@@ -299,19 +299,19 @@ describe("enrolment requests", () => {
       return array;
     });
     try {
-      const list = await signPendingEnrolmentsRequest(target, authority, undefined, 1_700_000_000n);
-      const listAfter = await signPendingEnrolmentsRequest(
+      const list = await signPendingListApprovalsRequest(target, authority, undefined, 1_700_000_000n);
+      const listAfter = await signPendingListApprovalsRequest(
         target,
         authority,
         updateId,
         1_700_000_000n,
       );
-      const refuse = await signRefuseEnrolmentRequest(target, authority, updateId, 1_700_000_000n);
-      expect(JSON.stringify(encodeGetPendingEnrolmentsRequest(list))).toBe(vector.list.wire);
-      expect(JSON.stringify(encodeGetPendingEnrolmentsRequest(listAfter))).toBe(
+      const refuse = await signRefuseListApprovalRequest(target, authority, updateId, 1_700_000_000n);
+      expect(JSON.stringify(encodeGetPendingListApprovalsRequest(list))).toBe(vector.list.wire);
+      expect(JSON.stringify(encodeGetPendingListApprovalsRequest(listAfter))).toBe(
         vector.listAfter.wire,
       );
-      expect(JSON.stringify(encodeRefuseEnrolmentRequest(refuse))).toBe(vector.refuse.wire);
+      expect(JSON.stringify(encodeRefuseListApprovalRequest(refuse))).toBe(vector.refuse.wire);
       const createRecords = await signCreateRecordsRegistryRequest(
         target,
         authority,

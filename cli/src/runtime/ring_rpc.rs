@@ -13,12 +13,12 @@ use zolana_ring_client::{
         unix_now, AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
         CreateRecordsRegistryRequest, CreateRecordsRegistryResponse, DecryptedTransaction,
         DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
-        GetDecryptedTransactionsResponse, GetListSaltResponse, GetPendingEnrolmentsRequest,
-        GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, HealthResponse,
-        ListSaltAttestation, ListSaltRequest, PendingEnrolment, ReadTarget, RecordUpdateStatus,
+        GetDecryptedTransactionsResponse, GetListSaltResponse, GetPendingListApprovalsRequest,
+        GetPendingListApprovalsResponse, GetRecordUpdateStatusRequest, HealthResponse,
+        ListSaltAttestation, ListSaltRequest, PendingListApproval, ReadTarget, RecordUpdateStatus,
         RingState, RingStatusRequest, RingStatusResponse, SubmitRecordUpdateRequest,
         SubmitRecordUpdateResponse, CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY,
-        GET_DECRYPTED_TRANSACTIONS, GET_LIST_SALT, GET_PENDING_ENROLMENTS,
+        GET_DECRYPTED_TRANSACTIONS, GET_LIST_SALT, GET_PENDING_LIST_APPROVALS,
         GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS, SUBMIT_RECORD_UPDATE,
     },
 };
@@ -230,7 +230,7 @@ impl RingRpcClient {
                 RecordUpdateStatus::Refused { reason } => {
                     bail!("the writer refused the record update, {reason}")
                 }
-                RecordUpdateStatus::AwaitingAuthority
+                RecordUpdateStatus::PendingListApproval
                 | RecordUpdateStatus::Queued
                 | RecordUpdateStatus::Submitted { .. } => Ok(Probe::NotYet),
             }
@@ -238,33 +238,33 @@ impl RingRpcClient {
     }
 
     /// Every page signed by the policy authority, oldest first.
-    pub fn pending_enrolments(
+    pub fn pending_list_approvals(
         &self,
         target: ReadTarget,
         authority: &dyn Signer,
-    ) -> Result<Vec<PendingEnrolment>> {
-        let mut enrolments = Vec::new();
+    ) -> Result<Vec<PendingListApproval>> {
+        let mut pending = Vec::new();
         let mut cursor = None;
         for _ in 0..MAX_PAGES {
-            let read = GetPendingEnrolmentsRequest::read(target, authority.pubkey());
+            let read = GetPendingListApprovalsRequest::read(target, authority.pubkey());
             let read = match cursor.clone() {
                 Some(cursor) => read.with_cursor(cursor),
                 None => read,
             };
-            let page: GetPendingEnrolmentsResponse =
-                self.call(GET_PENDING_ENROLMENTS, read.sign(authority)?)?;
+            let page: GetPendingListApprovalsResponse =
+                self.call(GET_PENDING_LIST_APPROVALS, read.sign(authority)?)?;
             let Some(next) = page.next_cursor else {
-                enrolments.extend(page.enrolments);
-                return Ok(enrolments);
+                pending.extend(page.pending);
+                return Ok(pending);
             };
             ensure!(
-                page.enrolments.last().map(|row| &row.update_id) == Some(&next),
+                page.pending.last().map(|row| &row.update_id) == Some(&next),
                 "the ring rpc named a cursor outside its page"
             );
-            enrolments.extend(page.enrolments);
+            pending.extend(page.pending);
             cursor = Some(next);
         }
-        bail!("the ring rpc returned more than {MAX_PAGES} pending enrolment pages")
+        bail!("the ring rpc returned more than {MAX_PAGES} pending list approval pages")
     }
 
     /// A service that holds another key for this ring can open nothing here.

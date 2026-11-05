@@ -13,7 +13,7 @@ import {
   type ListId,
   type Member,
 } from "../../protocol/membership/policy.js";
-import { ENROLMENT_LISTS, signRecordUpdate } from "../../protocol/ring-rpc/record-update.js";
+import { AWAITABLE_LISTS, signRecordUpdate } from "../../protocol/ring-rpc/record-update.js";
 import type {
   ReaderAccess,
   RecordUpdateEntry,
@@ -70,10 +70,10 @@ export class WalletRecordUpdate {
     });
   }
 
-  /** Rust `WalletRecordUpdate::awaiting_authority`, held until the policy authority sets every list. */
-  awaitingAuthority(lists: readonly ListId[]): WalletRecordUpdate {
-    if (lists.length === 0 || lists.some((list) => !ENROLMENT_LISTS.includes(list)))
-      throw invalid("EnrolmentLists");
+  /** Rust `WalletRecordUpdate::awaiting_list_approval`, held until the policy authority sets every list. */
+  awaitingListApproval(lists: readonly ListId[]): WalletRecordUpdate {
+    if (lists.length === 0 || lists.some((list) => !AWAITABLE_LISTS.includes(list)))
+      throw invalid("AwaitedLists");
     const next = this.#copy(this.#entries);
     next.#awaitedLists = lists.reduce((bits, list) => bits | recordBit(list), 0n);
     return next;

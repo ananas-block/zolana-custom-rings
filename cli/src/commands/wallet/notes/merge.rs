@@ -13,7 +13,7 @@ use spr_transaction::{SpendableDecryptionResult, WalletUtxo, SOL_MINT};
 use zolana_ring_keys::RotatingRingKeys;
 
 use crate::{
-    assets, fund::MIN_AUTHORITY_BALANCE, line, member::KeyEnrolment, wallet::WalletScan, Context,
+    assets, fund::MIN_AUTHORITY_BALANCE, line, member::KeyEnrollment, wallet::WalletScan, Context,
     MergeArgs,
 };
 
@@ -65,7 +65,7 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     let merge = RingMergeOperation::new(prepared, proof_input);
     ctx.fund(payer.pubkey(), MIN_AUTHORITY_BALANCE)?;
     // A keyed merge proves the owner's tracking row.
-    KeyEnrolment {
+    KeyEnrollment {
         members: &[&sender],
     }
     .ensure(ctx)?;
