@@ -8,10 +8,7 @@ import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
 
 export interface PolicyWithdrawal {
-  /** `solana_owner_identity` of `holder`. */
   readonly owner: Bytes32;
-  /** The account a salted read opens the owner's credential for. */
-  readonly holder: Address;
   readonly asset: Bytes32;
   readonly amount: bigint;
 }
@@ -46,7 +43,6 @@ export async function readPolicyWithdrawals(
     }
     withdrawals.push({
       owner: solanaOwnerIdentity(addressBytes(owner)) as Bytes32,
-      holder: owner,
       asset: assetField(
         transfer.kind === "sol" ? ("11111111111111111111111111111111" as Address) : transfer.mint,
       ),

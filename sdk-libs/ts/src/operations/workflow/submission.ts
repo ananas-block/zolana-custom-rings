@@ -37,7 +37,7 @@ import type {
 } from "../../rpc/ports.js";
 import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { RingError, RingProgramError } from "../../protocol/error.js";
-import { credentialRootsHeld } from "../../proof/credential-proof.js";
+import { fetchTrackingRegistry } from "../../rpc/tracking-resolver.js";
 import { ringComputeUnitLimit } from "../management/admin.js";
 import { TransactionFit } from "./address-ceiling.js";
 import {
@@ -97,7 +97,7 @@ const MAX_ATTEMPTS = 3;
 /** @internal Rust `REPROOF`, pinned row for row by the parity test. */
 export const REPROOF: ReadonlyMap<number, "fixes" | "ifMoved"> = new Map([
   [RingProgramError.rootNotServed, "fixes"],
-  [RingProgramError.absenceRootBelowFloor, "fixes"],
+  [RingProgramError.trackingRootBelowFloor, "fixes"],
   [RingProgramError.unboundRegistry, "fixes"],
   [RingProgramError.proofVerificationFailed, "ifMoved"],
 ]);
@@ -400,10 +400,17 @@ export class RingTransactionSubmission {
 
   /** Rust `BoundState::moved`. */
   async #moved(context?: RequestContext): Promise<boolean> {
-    const { roots = [], credentialRoots = [], policy } = this.#attempt;
+    const { roots = [], trackingRoot, policy } = this.#attempt;
     const chain = this.#registry;
     if (chain === undefined) return false;
-    if (!(await credentialRootsHeld(chain, credentialRoots, context))) return true;
+    if (trackingRoot !== undefined) {
+      const tracking = await fetchTrackingRegistry(chain, trackingRoot.registry, context);
+      const held = tracking.roots.some(
+        (root) =>
+          root?.revision === trackingRoot.revision && equalBytes(root.hash, trackingRoot.root),
+      );
+      if (!held) return true;
+    }
     for (const bound of roots) {
       // Expiry is not checked here, an expired root fails on chain as `rootNotServed` and a reproof follows.
       const registry = await fetchStorageRegistry(chain, bound.registry, context);

@@ -19,6 +19,7 @@ export { transferPoolCapacity as policyPoolCapacity, type PolicyPoolCapacity };
 export type RingKeyCircuit =
   | TransferKeyCircuit
   | Readonly<{ family: "applyRecords"; writes: number; private: boolean }>
+  | Readonly<{ family: "applyEnrollments"; writes: number }>
   | Readonly<{ family: "registerKey" }>
   | Readonly<{ family: "deposit"; capacity: number }>
   | Readonly<{ family: "merge" }>;
@@ -51,6 +52,13 @@ export const RING_KEYS: readonly Readonly<{
             ] as const,
         ),
       ),
+      ...APPLY_WIDTHS.map(
+        (writes) =>
+          [
+            { family: "applyEnrollments", writes },
+            `custom-ring-apply-enrollments-${writes}`,
+          ] as const,
+      ),
       [{ family: "registerKey" }, "custom-ring-register-key"],
       ...[1, 2, 4, 8].map(
         (capacity) => [{ family: "deposit", capacity }, `custom-ring-deposit-${capacity}`] as const,
@@ -61,23 +69,6 @@ export const RING_KEYS: readonly Readonly<{
     Object.freeze({ circuit: Object.freeze<RingKeyCircuit>(circuit), name }),
   ),
 );
-
-/** Rust `RingCircuit::credential_capacity`, the state roots a credential read may name, `undefined` off the catalog and for RegisterKey. */
-export function ringCredentialCapacity(circuit: RingKeyCircuit): number | undefined {
-  if (!RING_KEYS.some((key) => sameRingCircuit(key.circuit, circuit))) return undefined;
-  switch (circuit.family) {
-    case "transfer":
-      return transferPoolCapacity(circuit).credentials;
-    case "deposit":
-      return circuit.capacity;
-    case "merge":
-      return 1;
-    case "applyRecords":
-      return circuit.private ? circuit.writes : 0;
-    case "registerKey":
-      return undefined;
-  }
-}
 
 /** The circuit type the prover serves `circuit` under, refused for a shape no ring key serves. */
 export function ringCircuitType(circuit: RingKeyCircuit): string {

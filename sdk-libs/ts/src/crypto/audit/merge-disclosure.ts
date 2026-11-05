@@ -4,7 +4,6 @@ import {
   equalBytes,
   hashBytes,
   hashChain,
-  isZero,
   Reader,
   rightAlign,
   Writer,
@@ -35,7 +34,6 @@ import {
   STREAM_FIRST_COUNTER,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 import { decompressG2 } from "../../protocol/codec/codecs.js";
-import { CredentialRead, type CredentialRoots } from "../../protocol/codec/credential-read.js";
 import { RingError } from "../../protocol/error.js";
 import { taggedX25519 } from "../../protocol/transaction/transact.js";
 import type { RingProver } from "../../rpc/ports.js";
@@ -58,8 +56,8 @@ export interface SealedMergeRecord {
 
 /** Tag 57 past its tag, Rust `CustomRingMergeIxData`. */
 export interface RingMergeRequest {
-  /** One state root under the ring authority, empty under `ownerSigned`. */
-  readonly credentialRead: CredentialRead;
+  /** Read under the ring authority alone. */
+  readonly trackingRevision: bigint;
   readonly outputRingDataHash: Bytes32;
   readonly authority: MergeRingAuthority;
   readonly sealed: SealedMergeRecord;
@@ -81,14 +79,14 @@ export interface MergePublicInput {
   readonly payer: Bytes32;
   /** The signing owner's identity under `ownerSigned`, zero under the ring. */
   readonly publishedOwner: Bytes32;
-  /** `CredentialRoots.empty(1)` under `ownerSigned`, else the credential's state root. */
-  readonly credentials: CredentialRoots;
+  /** Zero under `ownerSigned`. */
+  readonly trackingRoot: Bytes32;
 }
 
 /** `expiry_unix_ts u64 ‖ proof.a` ahead of `proof.b`, Rust `MERGE_B_OFFSET`. */
 const MERGE_B_OFFSET = 8 + 32;
-/** `output_ring_data_hash ‖ authority ‖ proof ‖ eph_pk ‖ ciphertext` past the state credential read. */
-const REQUEST_HEAD_LEN = 32 + 1 + CUSTOM_RING_PROOF_LENGTH + 33 + OPENING_RECORD_LEN;
+/** `tracking_revision ‖ output_ring_data_hash ‖ authority ‖ proof ‖ eph_pk ‖ ciphertext`. */
+const REQUEST_HEAD_LEN = 8 + 32 + 1 + CUSTOM_RING_PROOF_LENGTH + 33 + OPENING_RECORD_LEN;
 const COMPRESSED_G2_LEN = 64;
 const DECOMPRESSED_G2_LEN = 128;
 /** `tag ‖ output_ring_data_hash ‖ authority` ahead of the SPP body. */
@@ -143,7 +141,7 @@ export function completeRingMerge(
         publishedOwner: equalBytes(request.nullifierPk, ZERO_NULLIFIER_PK)
           ? request.ownerPkHash
           : ZERO_32,
-        credentials: request.credentialRoots,
+        trackingRoot: request.trackingRoot,
       }),
       ephSk: ephemeralSecret,
       seed,
@@ -242,15 +240,8 @@ export function openMergeRecord(
   }
 }
 
-/**
- * `[CRMG, output, n0, ring_id, aud0, aud1, eph0, eph1, hash_bytes(ct), payer, published_owner,
- * credential_owner, tree_id, state_root]`.
- */
+/** `[CRMG, output, n0, ring_id, aud0, aud1, eph0, eph1, hash_bytes(ct), payer, published_owner, tracking_root]`. */
 export function mergePublicInputElements(input: MergePublicInput): readonly Bytes32[] {
-  const { credentials } = input;
-  // A merge reads one immutable credential state and no address checkpoint.
-  if (credentials.capacity !== 1 || !isZero(credentials.addressRoot))
-    throw invalid("merge.credentials");
   return [
     domainField(RingDomain.mergeStatement),
     checkedBytes<Bytes32>(input.outputUtxoHash, 32, "output utxo hash"),
@@ -261,8 +252,7 @@ export function mergePublicInputElements(input: MergePublicInput): readonly Byte
     hashBytes(checkedBytes(input.ciphertext, OPENING_RECORD_LEN, "ciphertext")) as Bytes32,
     checkedBytes<Bytes32>(input.payer, 32, "payer"),
     checkedBytes<Bytes32>(input.publishedOwner, 32, "published owner"),
-    credentials.ownerHash,
-    ...credentials.stateElements(),
+    checkedBytes<Bytes32>(input.trackingRoot, 32, "tracking root"),
   ];
 }
 
@@ -273,9 +263,8 @@ export function mergePublicInputHash(input: MergePublicInput): Bytes32 {
 /** Tag 57 past its tag, the SPP body at its compressed length. */
 export function encodeRingMergeRequest(request: RingMergeRequest): Uint8Array {
   const { sealed } = request;
-  checkMergeAuthority(request.credentialRead, request.authority);
-  return request.credentialRead
-    .writeState(new Writer())
+  return new Writer()
+    .u64(request.trackingRevision, "merge.trackingRevision")
     .bytes(request.outputRingDataHash, 32, "merge.outputRingDataHash")
     .u8(request.authority, "merge.authority")
     .bytes(sealed.proof, CUSTOM_RING_PROOF_LENGTH, "merge.proof")
@@ -288,7 +277,7 @@ export function encodeRingMergeRequest(request: RingMergeRequest): Uint8Array {
 /** Refuses an authority byte off the two, Rust `CustomRingMergeIxDataRef::from_bytes`. */
 export function decodeRingMergeRequest(data: Uint8Array): RingMergeRequest {
   const reader = new Reader(data);
-  const credentialRead = CredentialRead.readState(reader);
+  const trackingRevision = reader.u64("merge.trackingRevision");
   const outputRingDataHash = reader.bytes(32, "merge.outputRingDataHash") as Bytes32;
   const authority = reader.u8("merge.authority");
   if (authority !== MergeRingAuthority.ring && authority !== MergeRingAuthority.ownerSigned)
@@ -296,23 +285,14 @@ export function decodeRingMergeRequest(data: Uint8Array): RingMergeRequest {
   const proof = reader.bytes(CUSTOM_RING_PROOF_LENGTH, "merge.proof");
   const ephemeralPublicKey = reader.bytes(33, "merge.ephemeralPublicKey") as Bytes33;
   const ciphertext = reader.bytes(OPENING_RECORD_LEN, "merge.ciphertext");
-  checkMergeAuthority(credentialRead, authority);
-  // The state read is its count byte then one u16 per index.
-  const stateReadLen = 1 + 2 * credentialRead.stateRootIndexes.length;
-  const compactBody = data.subarray(stateReadLen + REQUEST_HEAD_LEN);
+  const compactBody = data.subarray(REQUEST_HEAD_LEN);
   return Object.freeze({
-    credentialRead,
+    trackingRevision,
     outputRingDataHash,
     authority,
     sealed: Object.freeze({ proof, ephemeralPublicKey, ciphertext }),
     compactBody,
   });
-}
-
-/** Rust `check_credential_authority`, the ring reads one state root and an owner signed merge none. */
-function checkMergeAuthority(read: CredentialRead, authority: MergeRingAuthority): void {
-  if (authority === MergeRingAuthority.ring) read.checkCapacity(1);
-  else read.checkEmpty();
 }
 
 /** The SPP body with `proof.b` compressed, the program decompresses it, Rust `SppMergeBody`. */

@@ -30,7 +30,6 @@ import {
   checkIntentApproval,
   ownerSolanaAccount,
   equalBytes,
-  treeAddress,
   type UtxoReservation,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -50,11 +49,7 @@ import type {
   Signature,
   Transaction,
 } from "@heliuslabs/zolana/interface";
-import {
-  ShieldedAddress,
-  type NullifierKey,
-  type ShieldedPublicKey,
-} from "@heliuslabs/zolana/keypair";
+import { ShieldedAddress, type NullifierKey } from "@heliuslabs/zolana/keypair";
 import {
   assetField,
   Merge,
@@ -72,7 +67,7 @@ import {
 } from "../../protocol/ring-rpc/relay-proof-inputs.js";
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
-import type { RingMergeClient } from "../../rpc/ports.js";
+import type { RingMergeClient, TrackingReader } from "../../rpc/ports.js";
 import { ringAuthAddress, ringPolicyAddress } from "../../protocol/pda/index.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import { OPENING_RECORD_LEN } from "../../protocol/codec/ring-disclosure-layout.js";
@@ -97,15 +92,8 @@ import {
   type RingMergeSealer,
   type SealedMergeRecord,
 } from "../../crypto/audit/merge-disclosure.js";
-import { resolveCredential, type CredentialClient } from "../../rpc/credential-resolver.js";
-import { CredentialRead, CredentialRoots } from "../../protocol/codec/credential-read.js";
-import { credentialOwnerHash, credentialPda } from "../../protocol/membership/credential.js";
-import {
-  credentialLeaf,
-  credentialSubject,
-  type BoundCredentialRoot,
-} from "../../proof/credential-proof.js";
-import type { CredentialLeafProofInput } from "../../rpc/prover/ring.js";
+import { newestTrackingRoot } from "../../rpc/tracking-resolver.js";
+import type { TrackingOpening } from "../../protocol/membership/tracking.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
@@ -118,6 +106,7 @@ import {
   ringProofInput,
   ringSelectionErrors,
 } from "../workflow/selection.js";
+import { MERGE_ROOT_READ, readOutputKeys, ringRegistrySlots } from "../workflow/ring-reads.js";
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
 import { fitsOneTransaction, SIZE_PROBE_LIFETIME, transactionSize } from "../workflow/compile.js";
 
@@ -131,7 +120,9 @@ export const RING_MERGE_COMPUTE_UNIT_LIMIT = 1_400_000;
 const MERGE_B_OFFSET = 8 + 32;
 
 export interface RingMergeTransactionParams {
-  readonly client: RingMergeClient & ProofDataSourceContext & CredentialClient;
+  readonly client: RingMergeClient &
+    ProofDataSourceContext &
+    Pick<TrackingReader, "getTrackingOpenings">;
   readonly ringProgramId: Address;
   readonly wallet: Wallet;
   /** Off the zero key the seed reaches the record only through `sealRingMerge`, under it through `mergeSeeds`. */
@@ -245,8 +236,8 @@ export function createRingMergeSubmission(
 }
 
 /**
- * Tag 57, the ring then under the ring authority the credential's state tree, ahead of SPP's
- * `merge_ring_v2` list, the owner signing at Rust `RING_MERGE_OWNER_INDEX` under `ownerSigned`.
+ * Tag 57, the accounts `[ring, tracking]` ahead of SPP's `merge_ring_v2` list, the owner signing at
+ * Rust `RING_MERGE_OWNER_INDEX` under `ownerSigned`.
  */
 export async function ringMergeInstruction(
   input: Readonly<{
@@ -257,10 +248,10 @@ export async function ringMergeInstruction(
     data: MergeTransactInstructionData;
     outputRingDataHash: Bytes32;
     sealed: SealedMergeRecord;
-    /** One state root under the ring authority, empty under `ownerSigned`. */
-    credentialRead: CredentialRead;
-    /** The tree the state root comes from, absent under `ownerSigned`. */
-    credentialTree?: Address;
+    /** The ring's pinned registry, passed under either authority. */
+    tracking: Address;
+    /** Zero under `ownerSigned`. */
+    trackingRevision: bigint;
     /** Selects `ownerSigned`. */
     owner?: SignerAccount;
   }>,
@@ -275,7 +266,7 @@ export async function ringMergeInstruction(
     tagged(
       RingInstructionTag.merge,
       encodeRingMergeRequest({
-        credentialRead: input.credentialRead,
+        trackingRevision: input.trackingRevision,
         outputRingDataHash: input.outputRingDataHash,
         authority:
           input.owner === undefined ? MergeRingAuthority.ring : MergeRingAuthority.ownerSigned,
@@ -288,7 +279,7 @@ export async function ringMergeInstruction(
     ),
     [
       meta(ring, false, false),
-      ...(input.credentialTree === undefined ? [] : [meta(input.credentialTree, false, false)]),
+      meta(input.tracking, false, false),
       meta(input.inputTree, false, true),
       meta(input.outputTree, false, true),
       meta(auth, false, false),
@@ -341,10 +332,18 @@ async function buildRingMerge(
     retry.entries = entries;
     retry.reservation ??= reserveEntries(params.wallet, entries, retry.lifetime);
     const ownerPkHash = owner.signingPublicKey.ownerProofInputHash();
-    // A hidden owner opens its credential under one state root, a zero key reads none.
-    const credential = zeroKey
+    const trackingRoot = zeroKey
       ? undefined
-      : await mergeCredential(params, owner.signingPublicKey, context);
+      : await newestTrackingRoot(
+          {
+            client: params.client,
+            trackingRegistry: config.tracking,
+            ring: params.ringProgramId,
+          },
+          context,
+        );
+    const [registry] = ringRegistrySlots(config, MERGE_ROOT_READ);
+    if (registry === undefined) throw new RingError("RING_TRACKING_INVALID");
     const mergeInstruction = (
       data: MergeTransactInstructionData,
       sealed: SealedMergeRecord,
@@ -357,8 +356,8 @@ async function buildRingMerge(
         data,
         outputRingDataHash: ZERO_32,
         sealed,
-        credentialRead: credential?.read ?? CredentialRead.empty(),
-        ...(credential === undefined ? {} : { credentialTree: credential.bound.tree }),
+        tracking: registry,
+        trackingRevision: trackingRoot?.revision ?? 0n,
         ...(ownerAccount === undefined ? {} : { owner: ownerAccount }),
       });
     const compile = async (
@@ -439,11 +438,19 @@ async function buildRingMerge(
         retry.reservation = reserveEntries(params.wallet, retry.entries, retry.lifetime);
       }
       const expectedHash = prepared.outputHash();
-      if (
-        credential !== undefined &&
-        !equalBytes(credential.leaf.nullifierPk, prepared.nullifierPublicKey)
-      )
-        throw new RingError("RING_ADDRESS_MISMATCH", { details: { field: "nullifierPk" } });
+      const tracking =
+        trackingRoot === undefined
+          ? undefined
+          : (
+              await readOutputKeys(
+                {
+                  client: params.client,
+                  root: trackingRoot,
+                  outputs: [{ member: ownerPkHash, nullifierPk: prepared.nullifierPublicKey }],
+                },
+                context,
+              )
+            )[0];
       const intent: RingMergeIntent = {
         kind: "ringMerge",
         ringProgramId: params.ringProgramId,
@@ -471,8 +478,8 @@ async function buildRingMerge(
         payer: params.feePayer,
         ownerPkHash,
         outputTreeId: bigIntBytes(BigInt(proofInputs.inputs.payload.outputTreeId)) as Bytes32,
-        credentialRoots: credential?.roots ?? CredentialRoots.empty(1),
-        ...(credential === undefined ? {} : { credential: credential.leaf }),
+        trackingRoot: trackingRoot?.root ?? ZERO_32,
+        ...(tracking === undefined ? {} : { tracking }),
       });
       const sealed =
         seed === undefined
@@ -484,7 +491,7 @@ async function buildRingMerge(
         lastValidBlockHeight: lifetime.lastValidBlockHeight,
         intentHash: planned,
         ringInstructionIndex: 0,
-        ...(credential === undefined ? {} : { credentialRoots: [credential.bound] }),
+        ...(trackingRoot === undefined ? {} : { trackingRoot }),
       };
     } finally {
       seed?.fill(0);
@@ -497,43 +504,6 @@ async function buildRingMerge(
 }
 
 type RingMergeIntent = Extract<TransactionIntent, { kind: "ringMerge" }>;
-
-/** The hidden owner's credential under the one state root a merge statement binds. */
-interface MergeCredential {
-  readonly read: CredentialRead;
-  readonly roots: CredentialRoots;
-  readonly leaf: CredentialLeafProofInput;
-  readonly bound: BoundCredentialRoot;
-}
-
-/** The program reads the root at `read`'s index from `bound.tree`, unknown or absent refuses. */
-async function mergeCredential(
-  params: Pick<RingMergeTransactionParams, "client" | "ringProgramId">,
-  owner: ShieldedPublicKey,
-  context: RequestContext | undefined,
-): Promise<MergeCredential> {
-  const lookup = await resolveCredential(
-    {
-      client: params.client,
-      ring: params.ringProgramId,
-      owner: credentialSubject(owner).owner,
-    },
-    context,
-  );
-  if (lookup.kind === "absent") throw new RingError("RING_RECIPIENT_NOT_ENROLLED");
-  if (lookup.kind === "unknown")
-    throw new RingError("RING_CREDENTIAL_UNKNOWN", { details: { reason: lookup.reason } });
-  const { rootIndex, root } = lookup.root;
-  return Object.freeze({
-    read: CredentialRead.state(rootIndex),
-    roots: CredentialRoots.stateOnly(
-      credentialOwnerHash(await credentialPda(params.ringProgramId)),
-      { treeId: lookup.treeId, root },
-    ),
-    leaf: credentialLeaf(lookup.credential, { ...lookup, treeSlot: 0 }),
-    bound: Object.freeze({ tree: treeAddress(lookup.treeId), kind: "state", rootIndex, root }),
-  });
-}
 
 const MIN_MERGE_INPUTS = 2;
 
@@ -631,8 +601,8 @@ function mergeDisclosureRequest(
     payer: Address;
     ownerPkHash: Bytes32;
     outputTreeId: Bytes32;
-    credentialRoots: CredentialRoots;
-    credential?: CredentialLeafProofInput;
+    trackingRoot: Bytes32;
+    tracking?: TrackingOpening;
   }>,
 ): RingMergeDisclosureRequest {
   const { prepared, spp } = input;
@@ -646,7 +616,7 @@ function mergeDisclosureRequest(
     ringProgramId: ringIdField(input.ringProgramId),
     auditorPk: input.auditorU,
     payer: solanaOwnerIdentity(addressBytes(input.payer)) as Bytes32,
-    credentialRoots: input.credentialRoots,
+    trackingRoot: input.trackingRoot,
     // The merge proves no owner signature, a PDA owner key is valid.
     ownerKey: prepared.signingPublicKey.confidentialViewTag() as Bytes32,
     ownerPkHash: input.ownerPkHash,
@@ -657,7 +627,7 @@ function mergeDisclosureRequest(
     nullifierPk: prepared.nullifierPublicKey,
     outputTreeId: input.outputTreeId,
     outputRingDataHash: ZERO_32,
-    ...(input.credential === undefined ? {} : { credential: input.credential }),
+    ...(input.tracking === undefined ? {} : { tracking: input.tracking }),
   });
 }
 

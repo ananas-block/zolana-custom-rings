@@ -35,7 +35,7 @@ import type {
   Signature,
 } from "@heliuslabs/zolana/interface";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
-import { depositSppData } from "./deposit-instruction.js";
+import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "./deposit-instruction.js";
 import {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
@@ -162,8 +162,7 @@ export class ConfirmedDeposit {
     if (found === undefined || found.source.data[0] !== InstructionTag.ringDeposit) return [];
     const wrapper = found.wrapper?.data;
     if (wrapper?.[0] !== RingInstructionTag.deposit) return [];
-    const forwarded = depositSppData(wrapper);
-    if (forwarded === undefined || !equalBytes(forwarded, found.source.data))
+    if (!equalBytes(wrapper.subarray(AUDITED_DEPOSIT_PREFIX_LENGTH), found.source.data))
       throw invalid("auditedDeposit");
     return ConfirmedDeposit.#decode(found.source.data);
   }

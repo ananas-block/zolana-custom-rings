@@ -1,5 +1,5 @@
 import type { BlockhashProvider, ChainReader } from "@heliuslabs/zolana/client";
-import { compileUnsignedTransaction, equalBytes } from "@heliuslabs/zolana/internal";
+import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
 import type {
   Address,
   Instruction,
@@ -14,7 +14,6 @@ import {
   type RingPolicyUpdate,
   type RingSharedSource,
 } from "./admin.js";
-import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 import { isZeroAddress, registryCurator } from "../../protocol/codec/ring-codecs.js";
 import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { isPrivateList, listIdFromByte } from "../../protocol/membership/policy.js";
@@ -75,16 +74,16 @@ async function checkSource(
   }
   const address = curator ?? policy.records;
   const source = await fetchStorageRegistry(params.client, address, context);
-  // Rust `RegistrySlots::load` refuses a salted read through a source bound to another ring, its
-  // absence floor counts that ring's private writes. A public read takes no floor.
+  // Rust `check_source_pair`, an unpaired source serving a private list takes no floor. A public
+  // read holds no such risk, one curator serves many rings and pins at most one of their registries.
   const servesPrivate = policy.sources.some(({ listId, registry }) => {
     const id = listIdFromByte(listId);
     if (id === undefined || !isPrivateList(id)) return false;
     if (id === update.listId) return true;
     return (isZeroAddress(registry) ? policy.records : registry) === address;
   });
-  if (servesPrivate && !equalBytes(source.privateRingId, ringIdField(params.ringProgramId)))
-    throw sourceInvalid("SaltedSourceOtherRing");
+  if (source.trackingRegistry !== policy.tracking && servesPrivate)
+    throw sourceInvalid("SaltedSourceOtherTracking");
   if (curator === undefined) return;
   await checkCurators(
     params,

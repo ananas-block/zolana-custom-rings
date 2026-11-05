@@ -216,7 +216,7 @@ export function transferProofRequest(
     rows: policy.rows,
     privateTxHash: input.privateTxHash,
     privateTxBlinding: proofInputs.privateTxBlinding(),
-    ...policy.credentials.inputs,
+    ...policy.tracking,
     ...policyParams(policy, input.proving),
     inProof: input.inProof,
     hidden: input.ringRail === "anonymous" && !input.publicOwners,

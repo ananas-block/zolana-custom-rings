@@ -17,6 +17,8 @@ import {
   ringAuthAddress,
   ringCoSignerAddress,
   ringPolicyAddress,
+  STORAGE_PROGRAM_ID,
+  trackingRegistryPda,
 } from "../../protocol/pda/index.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
 
@@ -63,7 +65,6 @@ export function ringComputeUnitLimit(tag: RingInstructionTag): number {
     case RingInstructionTag.merge:
     case RingInstructionTag.authorityTransfer:
     case RingInstructionTag.deposit:
-    case RingInstructionTag.enroll:
       return PROOF_UNITS;
     default:
       return ACCOUNT_UNITS;
@@ -86,7 +87,7 @@ function ringKindByte(kind: RingKind): number {
   return RING_KIND_BYTES[kind];
 }
 
-/** Rust `Initialize`, the upgrade authority signs and names the four roles and the pool registers the ring in the same instruction. */
+/** Rust `Initialize`, the upgrade authority signs and names the four roles, storage creates the tracking registry and the pool registers the ring in the same instruction. */
 export async function initializeRingInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -102,11 +103,12 @@ export async function initializeRingInstruction(
   if (isSmallOrder(input.auditorPublicKey))
     throw new RingError("RING_CONFIG_INVALID", { details: { reason: "InvalidAuditorPubkey" } });
   checkRoles(input.roles);
-  const [ring, programData, protocolConfig, ringAuth] = await Promise.all([
+  const [ring, programData, protocolConfig, ringAuth, [tracking]] = await Promise.all([
     ringPolicyAddress(input.ringProgramId),
     ringProgramDataAddress(input.ringProgramId),
     protocolConfigAddress(),
     ringAuthAddress(input.ringProgramId),
+    trackingRegistryPda(input.ringProgramId),
   ]);
   const writer = new Writer()
     .u8(RingInstructionTag.initialize, "tag")
@@ -123,6 +125,8 @@ export async function initializeRingInstruction(
     meta(protocolConfig, false, false),
     meta(ringAuth, false, true),
     meta(SHIELDED_POOL_PROGRAM_ID, false, false),
+    meta(tracking, false, true),
+    meta(STORAGE_PROGRAM_ID, false, false),
   ];
   const { policy } = input;
   writer.bool(policy !== undefined, "policy");

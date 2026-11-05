@@ -56,7 +56,6 @@ import {
   unframedSlotTag,
 } from "../../crypto/derivation/ring-stream.js";
 import { fittedSpend, frameKeyShape } from "../proof/transfer-shapes.js";
-import { CredentialRead, MAX_CREDENTIAL_READS } from "../codec/credential-read.js";
 import { validSignerDataCounts } from "../membership/signer-data-counts.js";
 
 import { RingInstructionTag } from "./instruction-tag.js";
@@ -179,8 +178,8 @@ export interface RingTransactData {
   /** SPP shape outputs, the key's `N`. */
   readonly nOut: number;
   readonly proof: Uint8Array;
-  /** The address root and the state roots every credential opening of the proof reads. */
-  readonly credentialRead: CredentialRead;
+  /** Every rail reads it, the output predicate needs a served root. */
+  readonly trackingRevision: bigint;
   /** Present exactly on a ring with own records, off the delegate rails. */
   readonly ownRevision?: bigint;
   /** Present exactly on a policy ring, off the delegate rails. */
@@ -342,7 +341,7 @@ export function ringStreamLayout(
     spendsDefaultRing: shape.entry,
     legs: 0,
     owners: 0,
-    pools: { own: 0, curator: 0, credentials: 0 },
+    pools: { own: 0, curator: 0, tracking: 0 },
     wide: false,
   });
   const spend = { ...fitted, wide: shape.wideOwners ?? fitted.wide };
@@ -608,8 +607,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
   const stream = streamOf(rail, header);
   const approval = checkedApproval(bytes.u8("approval"));
   const proof = bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "proof");
-  const credentialRead = CredentialRead.read(bytes);
-  credentialRead.checkCapacity(MAX_CREDENTIAL_READS);
+  const trackingRevision = bytes.u64("trackingRevision");
   const ownRevision = has(flags, Flag.ownRoot) ? bytes.u64("ownRevision") : undefined;
   const policy: PolicyProof | undefined = has(flags, Flag.policy)
     ? Object.freeze(
@@ -685,7 +683,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
     nIn,
     nOut,
     proof,
-    credentialRead,
+    trackingRevision,
     ...(ownRevision === undefined ? {} : { ownRevision }),
     ...(policy === undefined ? {} : { policy }),
     splWithdrawalOwners: Object.freeze(splWithdrawalOwners),
@@ -927,9 +925,8 @@ function writeCompact(data: RingTransactData): Uint8Array {
     .u8(inputByte, "inputByte")
     .u8(outputByte, "outputByte")
     .u8(checkedApproval(data.approval), "approval")
-    .bytes(data.proof, CUSTOM_RING_PROOF_LENGTH, "proof");
-  data.credentialRead.checkCapacity(MAX_CREDENTIAL_READS);
-  data.credentialRead.write(out);
+    .bytes(data.proof, CUSTOM_RING_PROOF_LENGTH, "proof")
+    .u64(data.trackingRevision, "trackingRevision");
   if (data.ownRevision !== undefined) out.u64(data.ownRevision, "ownRevision");
   if (data.policy?.curatorRevision !== undefined)
     out.u64(data.policy.curatorRevision, "curatorRevision");

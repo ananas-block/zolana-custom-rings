@@ -1,8 +1,9 @@
 import { getBase58Decoder, getBase64Decoder, type MessagePartialSigner } from "@solana/kit";
 import type { RequestContext, Signature } from "@heliuslabs/zolana/interface";
-import { fetchUserRecord, treeAddress } from "@heliuslabs/zolana/internal";
+import { signerAddress } from "@heliuslabs/zolana/internal";
 
 import { RingError } from "../../protocol/error.js";
+import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import {
   encodeRelayEnrollInputs,
   enrollRequestDigest,
@@ -12,7 +13,7 @@ import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-t
 import { expectedEnroll, mismatch } from "../../rpc/relay-message.js";
 import { PreparedRelay } from "../../rpc/relay.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
-import { prepareEnrollment } from "./enrollment.js";
+import { enrollInstruction, type Enroll, type EnrollmentReadClient } from "./enrollment.js";
 
 /** A PDA holds no key to sign here, its program enrolls through CPI. */
 export async function prepareEnrollRelay(
@@ -36,26 +37,34 @@ export async function prepareEnrollRelay(
   );
 }
 
-/** Rust `Enroll::prepare_relay`, the quoted fee payer funds `Enroll` alone. */
 export async function prepareEnrollmentRelay(
-  input: Omit<Parameters<typeof prepareEnrollment>[0], "owner" | "payer"> &
-    Readonly<{ owner: MessagePartialSigner; quote: RelayQuote }>,
+  input: Readonly<{
+    ringProgramId: RelayEnrollInputs["ringProgramId"];
+    enroll: Enroll;
+    owner: MessagePartialSigner;
+    quote: RelayQuote;
+  }>,
+  client: EnrollmentReadClient,
   context?: RequestContext,
 ): Promise<PreparedRelay> {
-  const { owner, quote, ringProgramId, outputTreeId } = input;
-  // The relay funds no record rent, a missing record refuses before any proof.
-  if ((await fetchUserRecord({ rpc: input.client, owner: owner.address }, context)) === undefined)
-    throw new RingError("RING_RELAY_NEEDS_USER_RECORD", { details: { owner: owner.address } });
-  const prepared = await prepareEnrollment(
-    { ...input, owner: owner.address, payer: quote.feePayer },
+  const { ringProgramId, enroll, owner, quote } = input;
+  const payer = signerAddress(enroll.payer);
+  if (payer !== quote.feePayer)
+    throw new RingError("RING_RELAY_PAYER_MISMATCH", {
+      details: { payer, feePayer: quote.feePayer },
+    });
+  const { tracking } = await fetchRingPolicy(client, ringProgramId, context);
+  const proved = await enrollInstruction(
+    { ...enroll, trackingRegistry: tracking },
+    client,
     context,
   );
   return prepareEnrollRelay({
     inputs: {
       ringProgramId,
-      owner: owner.address,
-      outputTree: treeAddress(outputTreeId),
-      instructionData: new Uint8Array(prepared.enroll.data ?? []),
+      owner: signerAddress(enroll.owner),
+      trackingRegistry: tracking,
+      instructionData: new Uint8Array(proved.data ?? []),
     },
     owner,
     quote,
