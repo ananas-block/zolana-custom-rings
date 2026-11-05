@@ -657,11 +657,9 @@ impl<'a> Prepared<'a> {
             }
         };
         let rows = read.owner_rows()?;
-        // 2. Only a salted list opens more records than the row holding these counts provides,
-        // every other read fits it by the catalog's pool widths.
-        let salted =
-            root_read == RootRead::Policy && SourceGates::of(&policy.source_map()?).any_salted();
-        let pools = match salted {
+        // 2. An unmatched input asset or a salted list opens more records than the row holding these
+        // counts provides, and only a policy read opens them.
+        let pools = match root_read == RootRead::Policy {
             true => {
                 let mut owners = rows.clone();
                 owners.extend(read.output_owners()?.into_iter().flatten());
@@ -687,6 +685,7 @@ impl<'a> Prepared<'a> {
                 UnreadSubjects {
                     owners: owners.len() + legs,
                     assets: assets.len(),
+                    salted: SourceGates::of(&policy.source_map()?).any_salted(),
                 }
                 .pools()
             }

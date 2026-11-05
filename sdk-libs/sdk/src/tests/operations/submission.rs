@@ -78,6 +78,48 @@ async fn a_refused_status_lookup_keeps_polling_until_the_blockhash_expires() {
     ));
 }
 
+/// The status cache dropped the signature, the ledger still holds it.
+struct LandedPastTheCache;
+
+#[async_trait::async_trait]
+impl AsyncRpc for LandedPastTheCache {
+    async fn get_block_height(&self) -> Result<u64, spr_client::ClientError> {
+        Ok(11)
+    }
+
+    async fn get_signature_statuses(
+        &self,
+        signatures: Vec<Signature>,
+    ) -> Result<Vec<Option<TransactionStatus>>, spr_client::ClientError> {
+        Ok(vec![None; signatures.len()])
+    }
+
+    async fn get_signature_statuses_with_history(
+        &self,
+        signatures: Vec<Signature>,
+    ) -> Result<Vec<Option<TransactionStatus>>, spr_client::ClientError> {
+        let landed = TransactionStatus {
+            slot: SLOT,
+            confirmations: None,
+            status: Ok(()),
+            err: None,
+            confirmation_status: Some(TransactionConfirmationStatus::Finalized),
+        };
+        Ok(vec![Some(landed); signatures.len()])
+    }
+}
+
+/// A fresh attempt here would debit a deposit's funder twice.
+#[tokio::test]
+async fn a_landed_signature_past_the_status_cache_never_reads_as_expired() {
+    assert_eq!(
+        outcome(&LandedPastTheCache, Signature::default(), 10)
+            .await
+            .unwrap(),
+        Outcome::Confirmed { slot: SLOT }
+    );
+}
+
 #[test]
 fn only_a_confirmed_status_settles_an_attempt() {
     let status = |confirmation, err| TransactionStatus {
@@ -181,6 +223,13 @@ impl AsyncRpc for Cluster {
             return Err(REFUSED);
         }
         Ok(VALID_UNTIL + u64::from(state.expired))
+    }
+
+    async fn get_signature_statuses_with_history(
+        &self,
+        signatures: Vec<Signature>,
+    ) -> Result<Vec<Option<TransactionStatus>>, ClientError> {
+        self.get_signature_statuses(signatures).await
     }
 
     async fn get_signature_statuses(

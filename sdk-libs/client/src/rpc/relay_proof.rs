@@ -286,11 +286,7 @@ struct CoOwnerWire {
 
 impl Drop for ProofInputsWire {
     fn drop(&mut self) {
-        self.nullifier_secret.zeroize();
-        self.tx_viewing_secret.zeroize();
-        for co_owner in &mut self.co_owners {
-            co_owner.nullifier_secret.zeroize();
-        }
+        self.clear_secrets();
     }
 }
 
@@ -399,6 +395,16 @@ enum LegWire {
 }
 
 impl ProofInputsWire {
+    fn clear_secrets(&mut self) {
+        self.nullifier_secret.zeroize();
+        self.tx_viewing_secret.zeroize();
+        self.blinding_seed.zeroize();
+        self.approval_blinder.zeroize();
+        for co_owner in &mut self.co_owners {
+            co_owner.nullifier_secret.zeroize();
+        }
+    }
+
     fn of(inputs: &RelayProofInputs) -> Result<Self, RelayProofInputsError> {
         check_nullifier_key(&inputs.sender, &inputs.nullifier_key)?;
         let external = &inputs.external_data;
@@ -890,5 +896,28 @@ fn check_nullifier_key(
     match nullifier_key.pubkey()? == sender.nullifier_pubkey {
         true => Ok(()),
         false => Err(RelayProofInputsError::NullifierKey),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropped_wire_inputs_hold_no_secret_a_blinding_derives_from() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../test-vectors/rpc/relay_proof_inputs.json"
+        ))
+        .unwrap();
+        let encoded: spr_indexer_api::Base64String =
+            serde_json::from_value(vector["proofInputs"].clone()).unwrap();
+        let mut wire: ProofInputsWire = wincode::deserialize_exact(&encoded.0).unwrap();
+        wire.approval_blinder = Some([9; 32]);
+        assert_ne!(wire.blinding_seed, [0; 32]);
+        wire.clear_secrets();
+        assert_eq!(wire.nullifier_secret, [0; BLINDING_LEN]);
+        assert_eq!(wire.tx_viewing_secret, [0; 32]);
+        assert_eq!(wire.blinding_seed, [0; 32]);
+        assert_eq!(wire.approval_blinder, None);
     }
 }

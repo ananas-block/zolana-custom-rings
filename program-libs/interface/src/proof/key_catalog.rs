@@ -266,10 +266,9 @@ impl TransferSpend {
 
     /// The wide flag a wallet seals under ahead of every record read, `pools` from [`UnreadSubjects`].
     ///
-    /// The wallet knows its rail, shape, live owners, legs and the ring's source map. It reads no
-    /// tracking row, so it cannot tell who holds a salted record, and a leg's destination may not
-    /// exist yet. On a table with no salted list its counts decide alone, an unsalted read always
-    /// fits the row holding those counts, so the reader's [`Self::fitted`] reaches the same key.
+    /// The wallet knows its rail, shape, live owners, legs, assets and the ring's source map. It reads
+    /// no tracking row, so it cannot tell who holds a salted record, and a leg's destination may not
+    /// exist yet.
     ///
     /// A bound past the narrow row is a possibility, never a need. Where both rows seal one stream
     /// the flag stays clear and the reader raises it from the records it reads. Where the streams
@@ -373,23 +372,30 @@ impl RecordPools {
     }
 }
 
-/// What a wallet counts ahead of its reads on a table with a salted list.
+/// What a wallet counts ahead of its reads under a written policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnreadSubjects {
     /// Distinct live input and output owners, plus one per leg since a destination stays unread.
     pub owners: usize,
     /// Distinct live input, output and public assets.
     pub assets: usize,
+    /// The table reads a salted list, an owner may then open a salted record and a tracking row.
+    pub salted: bool,
 }
 
 impl UnreadSubjects {
-    /// The widest read of these subjects, every owner enrolled with a public and a salted record.
+    /// The widest read of these subjects, every owner enrolled with a public and a salted record on a salted table.
     pub const fn pools(self) -> RecordPools {
-        let records = 2 * self.owners + self.assets;
+        let (owner_records, tracking) = match self.salted {
+            true => (2 * self.owners, self.owners),
+            // Rows and output owners fit the tracking pool by the shape, no owner reads a row.
+            false => (self.owners, 0),
+        };
+        let records = owner_records + self.assets;
         RecordPools {
             own: records,
             curator: records,
-            tracking: self.owners,
+            tracking,
         }
     }
 }
@@ -755,7 +761,10 @@ mod tests {
             ..RecordPools::default()
         };
         assert_eq!(fitted(2, distinct_assets(12)), Some(transfer(2, 24, 4, 4)));
-        assert_eq!(fitted(2, distinct_assets(13)), Some(wide(8, 24, 32, 24).circuit()));
+        assert_eq!(
+            fitted(2, distinct_assets(13)),
+            Some(wide(8, 24, 32, 24).circuit())
+        );
         assert_eq!(
             fitted(2, RecordPools::default()),
             Some(transfer(2, 24, 4, 4))
@@ -835,6 +844,7 @@ mod tests {
         let bound = UnreadSubjects {
             owners: 5 + 16 + 8,
             assets: 3,
+            salted: true,
         }
         .pools();
         let spend = loaded(sixteen, bound);
@@ -848,12 +858,30 @@ mod tests {
         let bound = UnreadSubjects {
             owners: 4 + 2 + 4,
             assets: 3,
+            salted: true,
         }
         .pools();
         let spend = loaded(narrow(2, 24, 4, 4), bound);
         assert!(spend.fitted().wide);
         assert!(!spend.sealed_wide(false));
         assert!(spend.sealed_wide(true));
+    }
+
+    #[test]
+    fn unmatched_input_assets_past_a_narrow_row_seal_the_wide_stream_on_an_unsalted_table() {
+        let shape = narrow(2, 24, 4, 4);
+        let pools = |assets| {
+            UnreadSubjects {
+                owners: 2,
+                assets,
+                salted: false,
+            }
+            .pools()
+        };
+        let own = shape.circuit().record_pools().unwrap().own;
+        assert!(!loaded(shape, pools(own - 2)).sealed_wide(true));
+        // A data tail's counter moves from two outputs to the wide row's eight.
+        assert!(loaded(shape, pools(own - 1)).sealed_wide(true));
     }
 
     #[test]
@@ -874,6 +902,7 @@ mod tests {
                 owners: usize::from(shape.owners + shape.outputs + shape.withdrawals),
                 // Inputs repeating the payments' assets open no record.
                 assets: usize::from(shape.outputs) + N_PUBLIC_SLOTS,
+                salted: true,
             }
             .pools();
             let spend = loaded(shape, bound);

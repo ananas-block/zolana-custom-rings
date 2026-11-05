@@ -747,7 +747,7 @@ impl RingOperation<'_> {
     }
 }
 
-/// Past expiry a fresh absent lookup releases the attempt and a failed one surfaces.
+/// Past expiry only the ledger's absent answer releases the attempt and a failed lookup surfaces.
 async fn outcome(
     client: &(impl AsyncRpc + ?Sized),
     signature: Signature,
@@ -759,10 +759,12 @@ async fn outcome(
     if client.get_block_height().await? <= last_valid_block_height {
         return Ok(Outcome::Unknown);
     }
-    // The transaction can land between the first lookup and the expiry check.
-    Ok(observe(client, signature)
-        .await?
-        .unwrap_or(Outcome::Failed(TransactionError::BlockhashNotFound)))
+    // A signature that landed between the lookups or left the status cache reads absent above. A
+    // release on that answer rebuilds the operation and debits a deposit's funder a second time.
+    let statuses = client
+        .get_signature_statuses_with_history(vec![signature])
+        .await?;
+    Ok(decode_status(statuses).unwrap_or(Outcome::Failed(TransactionError::BlockhashNotFound)))
 }
 
 /// One transaction to its end, nothing proves again.
