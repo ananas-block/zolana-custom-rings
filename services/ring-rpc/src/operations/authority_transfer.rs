@@ -22,7 +22,7 @@ use crate::{
     replay::ReplayCheck,
     tracking::TrackingRefusal,
     upstream::TransactionSource,
-    utxos::{SpendableNotes, WalletStatusQuery},
+    utxos::{SpendableNotes, WalletCursor, WalletStatusQuery},
 };
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -111,9 +111,8 @@ impl<S: TransactionSource> Hub<S> {
         let cursor = request
             .cursor
             .as_ref()
-            .map(|cursor| <[u8; 32]>::try_from(cursor.0.as_slice()))
-            .transpose()
-            .map_err(|_| RingRpcError::InvalidCursor)?;
+            .map(|cursor| WalletCursor::decode(&cursor.0))
+            .transpose()?;
         let service = self.service(Some(ring))?;
         let shared = self.shared();
         let now = shared.clock.now()?;
@@ -168,6 +167,7 @@ impl<S: TransactionSource> Hub<S> {
                 .wallet_status(WalletStatusQuery {
                     enrollment: shared.source.tracking_enrollment(ring, owner).await?,
                     wallet: owner,
+                    ring,
                     after: cursor,
                     limit: WALLET_NOTE_PAGE_LIMIT,
                 })

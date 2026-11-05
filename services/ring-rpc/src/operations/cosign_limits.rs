@@ -186,7 +186,6 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let slot = self.limits.current_slot().await?;
         let policies = self.limits.asset_policies(request.ring, &assets).await?;
         if policies.len() != assets.len() {
             return Err(CoSignError::LimitsUnavailable.into());
@@ -235,17 +234,21 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
         // approver's rows of the message stay out of the read, so a later approver passes the
         // same limits the message passed once and adds no second count, and a message admitted
         // since then has already counted the first approver's rows.
-        let usage = WindowUsage {
-            slot,
-            reservations: ledger
-                .window(UsageWindow {
-                    ring: &request.ring,
-                    assets: &assets,
-                    since_slot: slot.saturating_sub(longest_window(&checks)),
-                    message: &message,
-                })
-                .await?,
-        };
+        let window_slot = self.limits.current_slot().await?;
+        let reservations = ledger
+            .window(UsageWindow {
+                ring: &request.ring,
+                assets: &assets,
+                since_slot: window_slot.saturating_sub(longest_window(&checks)),
+                message: &message,
+            })
+            .await?;
+        let slot = self.limits.current_slot().await?;
+        if slot < window_slot {
+            transaction.rollback().await?;
+            return Err(CoSignError::LimitsUnavailable.into());
+        }
+        let usage = WindowUsage { slot, reservations };
         let decision = LimitDecision {
             flows: &flows,
             assets: &checks,
@@ -262,6 +265,10 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
                     flows: &flows,
                 })
                 .await?;
+            if self.limits.current_slot().await? != slot {
+                transaction.rollback().await?;
+                return Err(CoSignError::LimitsUnavailable.into());
+            }
         }
         transaction.commit().await?;
         Ok(decision)
@@ -534,7 +541,13 @@ mod cosign_window_tests;
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{
+        collections::{HashMap, VecDeque},
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Mutex,
+        },
+    };
 
     use sea_orm::ConnectionTrait;
     use solana_message::Message;
@@ -766,6 +779,52 @@ mod tests {
             _message: &VersionedMessage,
         ) -> Result<FrameRead, RingRpcError> {
             self.flows.clone().map_err(Into::into)
+        }
+    }
+
+    struct TimedLimits {
+        limits: FixedLimits,
+        slots: Mutex<VecDeque<u64>>,
+        policies_ready: AtomicBool,
+    }
+
+    impl AssetLimitSource for TimedLimits {
+        async fn current_slot(&self) -> Result<u64, RingRpcError> {
+            if !self.policies_ready.load(Ordering::SeqCst) {
+                return Ok(1_000);
+            }
+            let mut slots = self.slots.lock().expect("slots");
+            if slots.len() > 1 {
+                Ok(slots.pop_front().expect("slot"))
+            } else {
+                Ok(*slots.front().expect("slot"))
+            }
+        }
+
+        async fn asset_policies(
+            &self,
+            ring: Address,
+            assets: &[Address],
+        ) -> Result<Vec<Option<MintPolicy>>, RingRpcError> {
+            let policies = self.limits.asset_policies(ring, assets).await?;
+            self.policies_ready.store(true, Ordering::SeqCst);
+            Ok(policies)
+        }
+
+        async fn co_signer_scope(
+            &self,
+            ring: Address,
+            signer: Address,
+        ) -> Result<CoSignScope, RingRpcError> {
+            self.limits.co_signer_scope(ring, signer).await
+        }
+
+        async fn transfer_flows(
+            &self,
+            ring: Address,
+            message: &VersionedMessage,
+        ) -> Result<FrameRead, RingRpcError> {
+            self.limits.transfer_flows(ring, message).await
         }
     }
 
@@ -1174,6 +1233,60 @@ mod tests {
                 .await,
             Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
         ));
+    }
+
+    fn timed_approver(
+        store: &Store,
+        slots: impl IntoIterator<Item = u64>,
+    ) -> LimitedCoSigner<TimedLimits> {
+        LimitedCoSignerInit {
+            signer: Keypair::new_from_array([5; 32]),
+            limits: TimedLimits {
+                limits: within_limits(),
+                slots: Mutex::new(slots.into_iter().collect()),
+                policies_ready: AtomicBool::new(false),
+            },
+            store: Arc::new(store.clone()),
+            approval: all_classes(),
+        }
+        .build()
+    }
+
+    #[tokio::test]
+    async fn policy_and_window_reads_do_not_age_a_new_reservation() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let co_signer = timed_approver(&store, [1_051, 1_102, 1_102]);
+        assert!(matches!(
+            co_signer.decide(&request(1, 60)).await.expect("decision"),
+            CoSignDecision::Signed(_)
+        ));
+        let rows = store
+            .connection()
+            .query_all(sea_orm::Statement::from_string(
+                store.connection().get_database_backend(),
+                "SELECT slot FROM cosign_usage",
+            ))
+            .await
+            .expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].try_get::<i64>("", "slot").expect("slot"), 1_102);
+        assert_eq!(
+            co_signer.decide(&request(2, 41)).await.expect("decision"),
+            CoSignDecision::Refused(CoSignRefusal::OverLimit)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_changed_admission_slot_releases_the_reservation() {
+        for slots in [[1_051, 1_051, 1_052], [1_051, 1_050, 1_050]] {
+            let store = Store::open("sqlite::memory:", 1).await.expect("store");
+            let co_signer = timed_approver(&store, slots);
+            assert!(matches!(
+                co_signer.decide(&request(1, 60)).await,
+                Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
+            ));
+            assert_eq!(store_rows(&store).await, 0);
+        }
     }
 
     #[tokio::test]

@@ -48,7 +48,8 @@ use crate::{
         TransactionPage, TransactionSource,
     },
     utxos::{
-        AuditStore, Backfill, CreatedIn, PageDelta, PageWork, WalletStatusQuery, MAX_BACKFILL_PAGES,
+        AuditStore, Backfill, CreatedIn, PageDelta, PageWork, WalletCursor, WalletStatusQuery,
+        MAX_BACKFILL_PAGES,
     },
 };
 
@@ -344,9 +345,8 @@ impl<S: TransactionSource> AuditService<S> {
         let cursor = request
             .cursor
             .as_ref()
-            .map(|cursor| <[u8; 32]>::try_from(cursor.0.as_slice()))
-            .transpose()
-            .map_err(|_| RingRpcError::InvalidCursor)?;
+            .map(|cursor| WalletCursor::decode(&cursor.0))
+            .transpose()?;
         let wallet = request.wallet.0;
         let attestation = WalletStatusAttestation {
             target: self.read_target(),
@@ -368,6 +368,7 @@ impl<S: TransactionSource> AuditService<S> {
             .wallet_status(WalletStatusQuery {
                 enrollment,
                 wallet,
+                ring: self.ring,
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,
             })

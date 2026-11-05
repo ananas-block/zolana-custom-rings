@@ -9,6 +9,8 @@ use super::{
     SignedRequest,
 };
 
+pub const WALLET_SNAPSHOT_CHANGED: i32 = -32172;
+
 pub const GET_WALLET_STATUS: &str = "getWalletStatus";
 const WALLET_STATUS_DOMAIN: &str = "zolana/ring-rpc-wallet-status";
 

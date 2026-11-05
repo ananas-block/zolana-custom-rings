@@ -46,7 +46,9 @@ use crate::{
     projection_lease::ProjectionLease,
     projection_reads::{EnrollmentKey, ProjectionReads},
     spend_machine::{NoteRead, SpendRow, SpendState},
-    spent_index::{read_snapshot, state_name, Checkpoint, HistoryScope, LoadedSpends, NoteSeal},
+    spent_index::{
+        read_revision, read_snapshot, state_name, Checkpoint, HistoryScope, LoadedSpends, NoteSeal,
+    },
     tracking::{EnrollmentAdmission, HeldEnrollment, HeldEnrollments, TrackingCursor},
 };
 
@@ -119,6 +121,7 @@ struct SpendBook {
     position_slot: Option<u64>,
     /// The projection revision every cached entry is current at, `None` before the first load.
     revision: Option<i64>,
+    wallet_snapshot: [u8; 32],
 }
 
 /// What one page changes, the mirror takes it after its database transaction commits.
@@ -209,8 +212,51 @@ pub(crate) struct CreatedIn {
 pub(crate) struct WalletStatusQuery {
     pub enrollment: WalletEnrollment,
     pub wallet: Address,
-    pub after: Option<[u8; 32]>,
+    pub ring: Address,
+    pub after: Option<WalletCursor>,
     pub limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub(crate) struct WalletCursor {
+    version: u8,
+    ring: [u8; 32],
+    wallet: [u8; 32],
+    snapshot: [u8; 32],
+    after: [u8; 32],
+}
+
+impl WalletCursor {
+    const VERSION: u8 = 1;
+
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, RingRpcError> {
+        let cursor = bytemuck::try_from_bytes::<Self>(bytes)
+            .copied()
+            .map_err(|_| RingRpcError::InvalidCursor)?;
+        if cursor.version != Self::VERSION {
+            return Err(RingRpcError::InvalidCursor);
+        }
+        Ok(cursor)
+    }
+}
+
+impl WalletStatusQuery {
+    fn validate_scope(&self) -> Result<(), RingRpcError> {
+        if self.after.is_some_and(|cursor| {
+            cursor.ring != self.ring.to_bytes() || cursor.wallet != self.wallet.to_bytes()
+        }) {
+            return Err(RingRpcError::InvalidCursor);
+        }
+        Ok(())
+    }
+
+    fn validate_snapshot(&self, snapshot: [u8; 32]) -> Result<(), RingRpcError> {
+        if self.after.is_some_and(|cursor| cursor.snapshot != snapshot) {
+            return Err(RingRpcError::WalletSnapshotChanged);
+        }
+        Ok(())
+    }
 }
 
 #[must_use]
@@ -248,6 +294,7 @@ impl SpendBook {
     }
 
     fn absorb(&mut self, delta: PageDelta) {
+        self.wallet_snapshot = rand::random();
         if self.is_complete() {
             self.active.apply(&delta.owners, delta.prune_through);
         }
@@ -395,30 +442,49 @@ impl Balances {
     }
 }
 
-/// One snapshot's page. The cursor is the last row the page read, listed or not, so a page past
-/// a run of spent rows still moves forward.
-fn wallet_page(
-    page: &OwnerPage,
+struct WalletPage<'a> {
+    page: &'a OwnerPage,
     balances: Option<Balances>,
     query: WalletStatusQuery,
     through: u64,
-) -> GetWalletStatusResponse {
-    let last = page.notes.last().map(|indexed| indexed.key);
-    GetWalletStatusResponse {
-        history_through: through,
-        enrollment: query.enrollment,
-        balances: balances
-            .map(|balances| balances.0.into_values().collect())
-            .unwrap_or_default(),
-        notes: page
-            .notes
-            .iter()
-            .filter_map(|indexed| {
-                let status = indexed.listed_status(through)?;
-                Some(indexed.note.wallet_note(&indexed.commitment, status))
-            })
-            .collect(),
-        cursor: last.filter(|_| page.more).map(|key| key.to_vec().into()),
+    snapshot: [u8; 32],
+}
+
+impl WalletPage<'_> {
+    fn response(self) -> GetWalletStatusResponse {
+        let Self {
+            page,
+            balances,
+            query,
+            through,
+            snapshot,
+        } = self;
+        let last = page.notes.last().map(|indexed| indexed.key);
+        GetWalletStatusResponse {
+            history_through: through,
+            enrollment: query.enrollment,
+            balances: balances
+                .map(|balances| balances.0.into_values().collect())
+                .unwrap_or_default(),
+            notes: page
+                .notes
+                .iter()
+                .filter_map(|indexed| {
+                    let status = indexed.listed_status(through)?;
+                    Some(indexed.note.wallet_note(&indexed.commitment, status))
+                })
+                .collect(),
+            cursor: last.filter(|_| page.more).map(|after| {
+                let cursor = WalletCursor {
+                    version: WalletCursor::VERSION,
+                    ring: query.ring.to_bytes(),
+                    wallet: query.wallet.to_bytes(),
+                    snapshot,
+                    after,
+                };
+                bytemuck::bytes_of(&cursor).to_vec().into()
+            }),
+        }
     }
 }
 
@@ -702,23 +768,31 @@ impl AuditStore {
         &self,
         query: WalletStatusQuery,
     ) -> Result<GetWalletStatusResponse, RingRpcError> {
+        query.validate_scope()?;
         let Ok(member) = Member::owner_tag(query.wallet.as_array()) else {
-            return Ok(wallet_page(
-                &OwnerPage::default(),
-                query.after.is_none().then(Balances::default),
+            if query.after.is_some() {
+                return Err(RingRpcError::InvalidCursor);
+            }
+            return Ok(WalletPage {
+                page: &OwnerPage::default(),
+                balances: Some(Balances::default()),
                 query,
-                self.read_book().history_through(),
-            ));
+                through: self.read_book().history_through(),
+                snapshot: [0; 32],
+            }
+            .response());
         };
         let range = OwnerRange {
             member: *member.as_bytes(),
-            after: query.after,
+            after: query.after.map(|cursor| cursor.after),
             limit: query.limit,
         };
         match &self.backing {
             // 1. One hold of the lock copies the rows and the history slot together.
             Backing::Memory => {
                 let book = self.read_book();
+                let snapshot = book.wallet_snapshot;
+                query.validate_snapshot(snapshot)?;
                 let through = book.history_through();
                 let page = book.owner_page(range);
                 let balances = query.after.is_none().then(|| {
@@ -732,14 +806,28 @@ impl AuditStore {
                     }
                     balances
                 });
-                Ok(wallet_page(&page, balances, query, through))
+                Ok(WalletPage {
+                    page: &page,
+                    balances,
+                    query,
+                    through,
+                    snapshot,
+                }
+                .response())
             }
             // 2. One read snapshot answers the rows, the checkpoint and the unread frames. The
             //    mirror's slot may lag or lead the rows a follower or the writer reads.
             Backing::Database {
                 store, ring, seal, ..
             } => {
+                if query.ring != *ring {
+                    return Err(RingRpcError::InvalidCursor);
+                }
                 let snapshot = read_snapshot(store.connection()).await?;
+                let revision = read_revision(&snapshot, ring).await?;
+                let mut generation = [0; 32];
+                generation[..8].copy_from_slice(&revision.to_le_bytes());
+                query.validate_snapshot(generation)?;
                 let through = snapshot_history_through(&snapshot, *ring).await?;
                 let pages = |range| OwnerNotesPage {
                     ring: *ring,
@@ -766,7 +854,14 @@ impl AuditStore {
                     balances = Some(sum);
                 }
                 snapshot.commit().await?;
-                Ok(wallet_page(&page, balances, query, through))
+                Ok(WalletPage {
+                    page: &page,
+                    balances,
+                    query,
+                    through,
+                    snapshot: generation,
+                }
+                .response())
             }
             Backing::Unavailable => Err(RingRpcError::StateUnavailable),
         }

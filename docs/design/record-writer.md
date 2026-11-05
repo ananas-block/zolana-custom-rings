@@ -23,6 +23,7 @@ Ring RPC writes a ring's policy records when it holds the storage authority key.
 - The apply proof decides the grace from the writes, see [root history](records-and-roots.md#root-history). A wallet's writes stay graced, so no wallet can void every member's proof in flight.
 - A graced batch over a full history evicts the oldest kept root and never waits.
 - When the writer refuses an authority update whose signer lost the policy role, an update that approval joined turns pending list approval again.
+- After proving, the writer checks each update's expiry and authority again before signing. A refused or deferred member prevents submission of the batch.
 
 ## List approval
 
@@ -46,4 +47,5 @@ Ring RPC writes a ring's policy records when it holds the storage authority key.
 
 - A write the storage authority signs directly skips every check above, and the tree accepts it.
 - The Storage program checks the tree update and the authority's signature, not who asked for the write.
+- Expiry or role rotation after signing does not revoke an in-flight transaction.
 - A salted owner write under a wrong salt fails its proof, because the salt must open the owner's row tag.

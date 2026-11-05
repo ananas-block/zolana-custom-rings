@@ -149,6 +149,7 @@ fn query(owner: Address) -> WalletStatusQuery {
     WalletStatusQuery {
         enrollment: WalletEnrollment::NotEnrolled,
         wallet: owner,
+        ring: RING,
         after: None,
         limit: 100,
     }
@@ -788,7 +789,6 @@ async fn a_wallet_page_and_balance_read_only_the_owners_active_rows() {
     assert_eq!(count(&store, "SELECT COUNT(*) FROM owner_notes").await, 3);
     let status = book.wallet_status(query(first)).await.expect("status");
     assert_eq!((status.notes.len(), balance(&status)), (1, 5));
-    // The cursor is the note tag, the second page holds the other note.
     let first_page = book
         .wallet_status(WalletStatusQuery {
             limit: 1,
@@ -796,13 +796,8 @@ async fn a_wallet_page_and_balance_read_only_the_owners_active_rows() {
         })
         .await
         .expect("page");
-    let cursor: [u8; 32] = first_page
-        .cursor
-        .clone()
-        .expect("cursor")
-        .0
-        .try_into()
-        .expect("tag");
+    let cursor =
+        WalletCursor::decode(&first_page.cursor.clone().expect("cursor").0).expect("cursor");
     let next = book
         .wallet_status(WalletStatusQuery {
             after: Some(cursor),
@@ -1112,6 +1107,128 @@ async fn wallet_pages_read_one_snapshot_on_postgres() {
     stale_follower_read(store).await;
 }
 
+#[tokio::test]
+async fn wallet_cursor_restarts_after_a_same_slot_spend_and_change() {
+    for persistent in [false, true] {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let book = if persistent {
+            indexed_store(&store)
+        } else {
+            AuditStore::default()
+        };
+        let owner = wallet(1);
+        let keys = Keys::with(owner, 7);
+        let key = secret(7);
+        let seal = seal();
+        let initial = [
+            indexed_note(owner, &key, 30, 10),
+            indexed_note(owner, &key, 40, 10),
+            indexed_note(owner, &key, 50, 10),
+        ];
+        let open = |work: &mut PageWork<'_>| {
+            work.open(frame(2), initial);
+            terminal(work, 5);
+        };
+        commit_page(&store, &book, &seal, &keys, &open)
+            .await
+            .expect("open");
+        let first_query = WalletStatusQuery {
+            limit: 2,
+            ..query(owner)
+        };
+        let first = book.wallet_status(first_query).await.expect("first page");
+        let cursor = WalletCursor::decode(&first.cursor.expect("cursor").0).expect("cursor");
+        assert!(zolana_ring_client::rpc::cursor_in_bounds(
+            bytemuck::bytes_of(&cursor)
+        ));
+        let continuation = WalletStatusQuery {
+            after: Some(cursor),
+            ..first_query
+        };
+        let next = book
+            .wallet_status(continuation)
+            .await
+            .expect("same snapshot");
+        assert_eq!(next.notes.len(), 1);
+        assert!(next.cursor.is_none());
+        assert!(next.balances.is_empty());
+        for foreign in [
+            WalletStatusQuery {
+                wallet: wallet(2),
+                ..continuation
+            },
+            WalletStatusQuery {
+                ring: Address::new_from_array([9; 32]),
+                ..continuation
+            },
+        ] {
+            assert!(matches!(
+                book.wallet_status(foreign).await,
+                Err(RingRpcError::InvalidCursor)
+            ));
+        }
+        let spent = initial
+            .iter()
+            .find(|note| note.commitment == first.notes[0].utxo_hash.0)
+            .expect("input");
+        let change = indexed_note(owner, &key, 0, 9);
+        if !persistent {
+            assert!(change.commitment < cursor.after);
+        }
+        let spend = |work: &mut PageWork<'_>| {
+            work.open(frame(4), [change]);
+            work.observe(real(nullifier_of(spent, &key), frame(4), 0));
+            terminal(work, 5);
+        };
+        commit_page(&store, &book, &seal, &keys, &spend)
+            .await
+            .expect("spend");
+        assert!(matches!(
+            book.wallet_status(continuation).await,
+            Err(RingRpcError::WalletSnapshotChanged)
+        ));
+        let restarted = book.wallet_status(query(owner)).await.expect("restart");
+        assert_eq!(restarted.history_through, first.history_through);
+        assert_eq!(balance(&restarted), 29);
+        assert!(restarted
+            .notes
+            .iter()
+            .any(|note| note.utxo_hash.0 == change.commitment));
+        assert!(restarted
+            .notes
+            .iter()
+            .all(|note| note.utxo_hash.0 != spent.commitment
+                || note.status == WalletNoteStatus::Spent));
+    }
+}
+
+#[test]
+fn wallet_cursor_refuses_unknown_versions_and_old_positions() {
+    assert!(matches!(
+        WalletCursor::decode(&[0; 32]),
+        Err(RingRpcError::InvalidCursor)
+    ));
+    let cursor = WalletCursor {
+        version: 2,
+        ring: [0; 32],
+        wallet: [0; 32],
+        snapshot: [0; 32],
+        after: [0; 32],
+    };
+    assert!(matches!(
+        WalletCursor::decode(bytemuck::bytes_of(&cursor)),
+        Err(RingRpcError::InvalidCursor)
+    ));
+    let error = jsonrpsee::types::ErrorObjectOwned::from(RingRpcError::WalletSnapshotChanged);
+    assert_eq!(
+        error.code(),
+        zolana_ring_client::rpc::WALLET_SNAPSHOT_CHANGED
+    );
+    assert!(error
+        .message()
+        .contains("discard prior pages and restart without a cursor"));
+}
+
 async fn paged_wallet_read(store: Store) {
     let owner = wallet(1);
     let keys = Keys::with(owner, 7);
@@ -1142,7 +1259,7 @@ async fn paged_wallet_read(store: Store) {
     let mut cursor = first.cursor.clone();
     let mut later_opens = 0;
     while let Some(next) = cursor {
-        let after = <[u8; 32]>::try_from(next.0).expect("tag");
+        let after = WalletCursor::decode(&next.0).expect("cursor");
         let (read, opened) = opened_by(book.wallet_status(page(Some(after)))).await;
         let read = read.expect("page");
         assert!(opened <= limit && read.balances.is_empty());

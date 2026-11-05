@@ -808,7 +808,7 @@ pub(crate) fn read_spend_row(row: &QueryResult, seal: &NoteSeal) -> Result<Spend
 }
 
 /// Zero before the ring's first commit.
-async fn read_revision(db: &impl ConnectionTrait, ring: &Address) -> Result<i64, DbErr> {
+pub(crate) async fn read_revision(db: &impl ConnectionTrait, ring: &Address) -> Result<i64, DbErr> {
     let row = db
         .query_one(Statement::from_sql_and_values(
             db.get_database_backend(),
