@@ -42,13 +42,17 @@ export async function buildRingUpdatePolicyTransaction(
 ): Promise<Transaction> {
   try {
     const { update } = params;
+    const current = await fetchRingPolicy(params.client, params.ringProgramId, context);
     if (update.kind === "rules") {
       await checkTier(params, context);
-      const { records } = await fetchRingPolicy(params.client, params.ringProgramId, context);
-      await checkCurators(params, update.sharedSources ?? [], records, context);
+      await checkCurators(params, update.sharedSources ?? [], current.records, context);
     }
     if (update.kind === "source") await checkSource(params, update, context);
-    return await compile(params, await updateRingPolicyInstruction(params), context);
+    return await compile(
+      params,
+      await updateRingPolicyInstruction({ ...params, current }),
+      context,
+    );
   } catch (cause) {
     throw wrapRingError("RING_BUILD_POLICY", cause);
   }

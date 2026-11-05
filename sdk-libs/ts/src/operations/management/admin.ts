@@ -21,10 +21,13 @@ import {
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
 
 import {
+  isZeroAddress,
+  registryCurator,
   RING_COSIGN_SCOPE_MASK,
   RING_ROLE_BYTES,
   RING_ROLES,
   type RingAuthorityRole,
+  type RingPolicy,
   type RingRoles,
 } from "../../protocol/codec/ring-codecs.js";
 import { ringProgramDataAddress } from "../../protocol/membership/config.js";
@@ -280,19 +283,33 @@ const POLICY_UPDATE_VARIANT = Object.freeze({
   records: 2,
 } as const);
 
-/** Rust `UpdatePolicy`, the policy role signs. */
+/**
+ * Rust `UpdatePolicy`, the policy role signs. The program loads every registry a salted list of the
+ * proposed account reads, matched by address, so the records and curator `current` holds follow
+ * the registries the write names.
+ */
 export async function updateRingPolicyInstruction(
   input: Readonly<{
     ringProgramId: Address;
     authority: SignerAccount;
+    /** The ring account as read. */
+    current: Pick<RingPolicy, "records" | "sources">;
     update: RingPolicyUpdate;
   }>,
 ): Promise<Instruction> {
-  const { update } = input;
+  const { update, current } = input;
   const writer = new Writer()
     .u8(RingInstructionTag.updatePolicy, "tag")
     .u8(POLICY_UPDATE_VARIANT[update.kind], "variant");
-  const trailing = policyUpdateBody(writer, update);
+  const named = policyUpdateBody(writer, update);
+  const held = [
+    isZeroAddress(current.records) ? undefined : current.records,
+    registryCurator(current),
+  ];
+  const trailing = [...named];
+  for (const registry of held) {
+    if (registry !== undefined && !trailing.includes(registry)) trailing.push(registry);
+  }
   const accounts = await policyWriteMetas(input.ringProgramId, input.authority);
   const instruction = ringInstruction(input.ringProgramId, writer.finish(), [
     ...accounts,

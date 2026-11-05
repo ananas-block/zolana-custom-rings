@@ -40,6 +40,10 @@ const NEXT = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
 const PAYER = address("29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2");
 const RECORDS = address("7BgBvyjrZX1YKz4oh9mjb8ZScatkkwb8DzFx7LoiVkM3");
 
+const ZERO = address("11111111111111111111111111111111");
+/** A ring account that holds no records and no curator. */
+const UNBOUND = { records: ZERO, sources: [] };
+
 const READ = 0;
 const WRITE = 1;
 const SIGN = 2;
@@ -131,6 +135,7 @@ describe("initialize and policy update", () => {
     const instruction = await updateRingPolicyInstruction({
       ringProgramId: RING,
       authority: AUTHORITY,
+      current: UNBOUND,
       update: { kind: "records", records: RECORDS },
     });
     expect(instruction.data).toEqual(Uint8Array.of(54, 2));
@@ -376,6 +381,7 @@ describe("policy writes", () => {
       updateRingPolicyInstruction({
         ringProgramId: RING,
         authority: AUTHORITY,
+        current: UNBOUND,
         update: { kind: "rules", ...input },
       }),
   ];
@@ -387,6 +393,7 @@ describe("policy writes", () => {
     const instruction = await updateRingPolicyInstruction({
       ringProgramId: RING,
       authority: AUTHORITY,
+      current: UNBOUND,
       update: {
         kind: "rules",
         table,
@@ -521,6 +528,7 @@ describe("policy writes", () => {
       updateRingPolicyInstruction({
         ringProgramId: RING,
         authority: AUTHORITY,
+        current: UNBOUND,
         update: { kind: "source", listId: ListId.block, source: to },
       });
     const curator = await source({ kind: "curator", registry: CURATOR });
@@ -533,6 +541,32 @@ describe("policy writes", () => {
     expect(metas(curator)).toEqual([...head, [CURATOR, READ]]);
     expect(own.data).toEqual(Uint8Array.of(54, 1, ListId.block, 0));
     expect(metas(own)).toEqual(head);
+  });
+
+  it("appends the held records and curator after the named registries once each", async () => {
+    const held = { records: RECORDS, sources: [{ listId: ListId.block, registry: CURATOR }] };
+    const trailing = async (update: Parameters<typeof updateRingPolicyInstruction>[0]["update"]) =>
+      metas(
+        await updateRingPolicyInstruction({
+          ringProgramId: RING,
+          authority: AUTHORITY,
+          current: held,
+          update,
+        }),
+      )
+        .slice(2)
+        .map(([account]) => account);
+    expect(await trailing({ kind: "records", records: NEXT })).toEqual([NEXT, RECORDS, CURATOR]);
+    expect(
+      await trailing({
+        kind: "source",
+        listId: ListId.block,
+        source: { kind: "curator", registry: CURATOR },
+      }),
+    ).toEqual([CURATOR, RECORDS]);
+    expect(
+      await trailing({ kind: "source", listId: ListId.block, source: { kind: "own" } }),
+    ).toEqual([RECORDS, CURATOR]);
   });
 
   it("budgets each instruction like Rust `compute_unit_limit`", () => {
