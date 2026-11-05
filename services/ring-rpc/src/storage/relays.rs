@@ -405,14 +405,32 @@ struct StoredCoSign {
     flows: Option<Vec<StoredFlow>>,
 }
 
+/// Amounts as decimal strings, the internally tagged state buffers numbers and refuses a `u128`.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredFlow {
     owner: Hash,
     asset: SerializablePubkey,
+    #[serde(with = "decimal")]
     outflow: u128,
+    #[serde(with = "decimal")]
     deposited: u128,
+    #[serde(with = "decimal")]
     withdrawn: u128,
+}
+
+mod decimal {
+    use serde::{de::Error, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(amount: &u128, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(amount)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u128, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(D::Error::custom)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -711,5 +729,48 @@ mod tests {
         let stored = relays.get(&id).await.expect("read").expect("row");
         assert_eq!(stored.revision, RelayRevision(1));
         assert_eq!(stored.record.state, expired);
+    }
+
+    /// Deposit legs sum past `u64::MAX`, the stored amounts read back exact.
+    #[tokio::test]
+    async fn a_deposit_relay_with_co_sign_amounts_past_u64_round_trips() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let relays = RelayStore::new(store.connection());
+        let id = RelayId([6; 32].into());
+        let message = compile_message(
+            &FEE_PAYER,
+            &[],
+            Default::default(),
+            ComputeBudgetConfig::new(1),
+        )
+        .expect("message");
+        let past_u64 = u128::from(u64::MAX) + 2;
+        let state = RelayState::AwaitingSignature(Awaiting {
+            signatures: Vec::new(),
+            awaiting: vec![SIGNER],
+            co_sign: Some(PendingCoSign {
+                signer: SIGNER,
+                ring: FEE_PAYER,
+                flows: CoSignFlows::Published(vec![OwnerFlow {
+                    owner: Member::from_bytes([7; 32]).expect("member"),
+                    flow: AssetFlow {
+                        asset: FEE_PAYER,
+                        outflow: u128::MAX,
+                        deposited: past_u64,
+                        withdrawn: 0,
+                    },
+                }]),
+            }),
+        });
+        let record = RelayRecord {
+            message,
+            last_valid_block_height: 1,
+            state: state.clone(),
+        };
+
+        assert!(relays.insert(&id, &record).await.expect("insert"));
+
+        let stored = relays.get(&id).await.expect("read").expect("row");
+        assert_eq!(stored.record.state, state);
     }
 }
