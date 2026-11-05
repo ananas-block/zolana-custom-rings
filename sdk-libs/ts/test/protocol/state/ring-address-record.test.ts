@@ -31,6 +31,7 @@ import {
   trackingRecordHash,
 } from "../../../src/protocol/membership/tracking.js";
 import { STORAGE_PROGRAM_ID, trackingAuthorizationPda } from "../../../src/protocol/pda/index.js";
+import { withConfirmedReads } from "../../helpers/clients.js";
 import { recordTree } from "../../helpers/member-registry.js";
 
 function field(value: string): Bytes32 {
@@ -65,7 +66,7 @@ const enroll = JSON.parse(
     | "chain_start"
     | "chain_end",
     string
-  > & { revision: number; bump: number }
+  > & { bump: number }
 >;
 
 const REGISTRY = address(encodeBase58(field(enroll.registry)));
@@ -82,12 +83,10 @@ const ENTRY = {
   member: field(enroll.member),
   nullifierPk: ACCOUNT.nullifierPk,
   ctHash: field(enroll.ct_hash),
-  viewingU: ACCOUNT.viewingU,
-  revision: BigInt(enroll.revision),
   listTag: ACCOUNT.listTag,
 };
 
-const UNENROLLED = { getAccount: async () => undefined } as never;
+const UNENROLLED = withConfirmedReads({ getAccount: async () => undefined }) as never;
 
 beforeAll(initializePoseidon);
 
@@ -188,7 +187,7 @@ describe("tracking_enroll.json", () => {
   it("hashes the entry and chains it from the apply's start", () => {
     expect(hex(trackingEntryHash(ENTRY))).toBe(enroll.entry_hash);
     expect(hex(trackingEntryChained(field(enroll.chain_start), ENTRY))).toBe(enroll.chain_end);
-    const moved = { ...ENTRY, revision: ENTRY.revision + 1n };
+    const moved = { ...ENTRY, listTag: field(enroll.member) };
     expect(hex(trackingEntryHash(moved))).not.toBe(enroll.entry_hash);
   });
 });
