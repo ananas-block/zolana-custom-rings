@@ -180,7 +180,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - The proof does not show that the secret came from a particular derivation. A wallet that seals another secret harms itself alone.
 - The tests in `prover/circuits/registry` are `TestRegisterKeySealsTheEnrolledSecret`, `TestRegisterKeyRefusals`, `TestApplyEnrollmentsAppliesEntriesInNamedOrder`, `TestApplyEnrollmentsRefusals` and `TestApplyEnrollmentsAtCapacity`, with `programs/storage/tests/lifecycle.rs`.
 
-### A policy write applies in queue order
+### A policy update applies its writes in order
 
 - The program chains each entry from the instruction data, and classifies the grace from the masks.
 - `ApplyRecordsCircuit` keeps list bits outside each mask, moves mint settings only under the entry's flag, and keeps the records sorted.
