@@ -8,7 +8,7 @@ use spr_hasher::primitives::hash_bytes;
 use spr_transaction::instructions::merge::MergeSeed;
 
 use crate::{
-    types::{KnownUtxo, UtxoOwner},
+    types::{CreatedUtxo, KnownUtxo, UtxoOwner},
     AuditError, REDACTED,
 };
 
@@ -16,17 +16,18 @@ use crate::{
 pub type MergeId = (Signature, u16);
 
 /// One confirmed merge, the published count never reads as a count of real inputs.
+/// Built only by `confirmed_merge` once its record rebuilds `output_commitment`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfirmedMerge {
-    pub slot: u64,
-    pub tx_signature: Signature,
-    pub event_index: u16,
-    pub output_commitment: [u8; 32],
-    pub tree_id: u16,
-    pub leaf_index: u64,
-    pub first_nullifier: [u8; 32],
-    pub ring_data_hash: [u8; 32],
-    pub disclosed: MergeRecordOutput,
+    pub(crate) slot: u64,
+    pub(crate) tx_signature: Signature,
+    pub(crate) event_index: u16,
+    pub(crate) output_commitment: [u8; 32],
+    pub(crate) tree_id: u16,
+    pub(crate) leaf_index: u64,
+    pub(crate) first_nullifier: [u8; 32],
+    pub(crate) ring_data_hash: [u8; 32],
+    pub(crate) disclosed: MergeRecordOutput,
 }
 
 /// A rebuilt merge record.
@@ -65,21 +66,21 @@ impl core::fmt::Debug for MergeRecordOutput {
 /// The fields a merge output inherits, an audit record and no wallet opening.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditedMergeOutput {
-    pub commitment: [u8; 32],
-    pub slot: u64,
-    pub tx_signature: Signature,
-    pub event_index: u16,
-    pub tree_id: u16,
-    pub leaf_index: u64,
-    pub first_nullifier: [u8; 32],
-    pub ring_data_hash: [u8; 32],
-    pub owner_key: [u8; 32],
-    pub owner: UtxoOwner,
-    pub asset: [u8; 32],
-    pub mint: Address,
-    pub amount: u64,
-    pub real_nullifiers: Vec<[u8; 32]>,
-    pub seed: [u8; 32],
+    pub(crate) commitment: [u8; 32],
+    pub(crate) slot: u64,
+    pub(crate) tx_signature: Signature,
+    pub(crate) event_index: u16,
+    pub(crate) tree_id: u16,
+    pub(crate) leaf_index: u64,
+    pub(crate) first_nullifier: [u8; 32],
+    pub(crate) ring_data_hash: [u8; 32],
+    pub(crate) owner_key: [u8; 32],
+    pub(crate) owner: UtxoOwner,
+    pub(crate) asset: [u8; 32],
+    pub(crate) mint: Address,
+    pub(crate) amount: u64,
+    pub(crate) real_nullifiers: Vec<[u8; 32]>,
+    pub(crate) seed: [u8; 32],
 }
 
 /// Keeps one state per ring.
@@ -95,7 +96,7 @@ impl MergeLedger {
         if !self.applied.insert((merge.tx_signature, merge.event_index)) {
             return None;
         }
-        let output = merge.resolved().ok()?;
+        let output = merge.output().ok()?;
         self.outputs.insert(output.commitment, output.clone());
         Some(output)
     }
@@ -110,9 +111,13 @@ impl MergeLedger {
 }
 
 impl AuditedMergeOutput {
-    /// The record's opening, `None` unless it rebuilds the published commitment.
-    pub fn opening(&self, ring: Address) -> Result<Option<KnownUtxo>, AuditError> {
-        let opening = KnownUtxo {
+    pub fn commitment(&self) -> [u8; 32] {
+        self.commitment
+    }
+
+    /// The record's opening of the output, owned by whichever key the record names.
+    pub fn opening(&self) -> Result<KnownUtxo, AuditError> {
+        Ok(KnownUtxo {
             owner_key: self.owner_key,
             owner: self.owner,
             asset: self.asset,
@@ -122,13 +127,30 @@ impl AuditedMergeOutput {
             data_hash: [0; 32],
             ring_data_hash: self.ring_data_hash,
             tree_id: self.tree_id,
-        };
-        Ok((opening.commitment(Some(ring))? == self.commitment).then_some(opening))
+        })
+    }
+
+    pub fn created_utxo(&self) -> Result<CreatedUtxo, AuditError> {
+        Ok(CreatedUtxo {
+            commitment: self.commitment,
+            slot_index: 0,
+            leaf_index: self.leaf_index,
+            utxo: self.opening()?,
+            ring_note: true,
+        })
     }
 }
 
 impl ConfirmedMerge {
-    fn resolved(&self) -> Result<AuditedMergeOutput, AuditError> {
+    pub fn output_commitment(&self) -> [u8; 32] {
+        self.output_commitment
+    }
+
+    pub fn disclosed(&self) -> &MergeRecordOutput {
+        &self.disclosed
+    }
+
+    pub fn output(&self) -> Result<AuditedMergeOutput, AuditError> {
         let record = &self.disclosed;
         Ok(AuditedMergeOutput {
             commitment: self.output_commitment,
