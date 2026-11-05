@@ -83,7 +83,7 @@ impl Case {
         }
     }
 
-    /// One tracking record past the narrow row, a salted read the wallet cannot make.
+    /// One credential opening past the narrow row, a salted read the wallet cannot make.
     fn read_pools(&self) -> RecordPools {
         let narrow = RingCircuit::transfer(self.subjects())
             .and_then(RingCircuit::record_pools)
