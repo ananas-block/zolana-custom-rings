@@ -257,17 +257,22 @@ export interface ExactApproval {
   readonly seenBlinders: readonly Bytes32[];
 }
 
-/** `peak` bounds one owner's outflow, `outflow` the sum over owners. */
+/**
+ * `peak` bounds one owner's outflow, `outflow` the sum over owners, `gross` each public row's
+ * withdrawals with no deposit subtracted.
+ */
 export interface ApprovalLimit {
   readonly mint: Address;
   readonly peak: bigint;
   readonly outflow: bigint;
+  readonly gross: bigint;
 }
 
 /** A co-signer the frame names, what it signs is the rule it holds, Rust `ExpectedCoSigner`. */
 export interface ExpectedCoSigner {
   readonly kind: "coSigner";
   readonly ring: Address;
+  readonly ringAuth: Address;
   readonly policy: Address;
   readonly feePayer: Address;
   readonly signer: Address;
@@ -657,6 +662,7 @@ export async function expectedCoSigner(
   return Object.freeze({
     kind: "coSigner",
     ring: input.ring,
+    ringAuth: await ringAuthAddress(input.ring),
     feePayer: input.feePayer,
     signer: input.signer,
     ...(await frameSetup(input.ring, input.feePayer, input.setup)),
@@ -844,6 +850,13 @@ function checkFrame(
     named.length === 1 &&
     named.every((meta) => isSignerRole(meta.role) && !isWritableRole(meta.role));
   if (!signsOnce || !readsOnly(envelope, accounts.slice(0, 1))) throw mismatch("Accounts");
+  // The rule reads an approval and nothing else. A signature named in SPP's list also moves the
+  // key's own funds or authorizes its notes and data outputs, none of it in the rule.
+  if (expected.kind === "coSigner") {
+    const spp = ringAuthSlot(expected.ringAuth, accounts) - RING_TRANSACT_RING_CONFIG_INDEX;
+    if (accounts.slice(spp).some((meta) => meta.address === envelope.signer))
+      throw mismatch("Accounts");
+  }
 }
 
 /** The proof binds each record to its slot under the key the frame publishes. */
@@ -946,7 +959,10 @@ function checkOpenings(
       published === undefined ||
       opening.owner !== terms.signer ||
       !equalBytes(
-        withMismatch("Recipients", () => openingHash(opening, terms.ring)),
+        // An exit commits no ring, a ring id here would refuse every exit the owner holds.
+        withMismatch("Recipients", () =>
+          openingHash(opening, published.body.kind === "exit" ? undefined : terms.ring),
+        ),
         published.hash,
       )
     )
@@ -1031,8 +1047,13 @@ function checkExactApproval(exact: ExactApproval, frame: RingTransactData): void
     const limit = withMismatch("ApprovalOverLimit", () =>
       limits.find((entry) => equalBytes(memberOfAsset(entry.mint), slot.asset)),
     );
+    // A deposit the sender funds offsets its own withdrawal in peak and outflow, a public row's
+    // gross alone shows what leaves through it.
     if (
       limit === undefined ||
+      totals.publicSlots.some(
+        (row) => equalBytes(row.asset, slot.asset) && row.gross > limit.gross,
+      ) ||
       totals.peakOf(slot.asset) > limit.peak ||
       totals.outflowOf(slot.asset) > limit.outflow
     )
@@ -1054,11 +1075,13 @@ function signerRunEntry(
   const ringAuth = ringAuthSlot(expected.ringAuth, accounts);
   const trees = frame.inputTrees.kind === "one" ? 1 : 2;
   const start = ringAuth + 1 + trees + frame.nullifiers.length;
-  const entry = accounts
-    .slice(start, settlementWindow(frame, accounts).start)
-    .findIndex((meta) => meta.address === expected.terms.signer);
-  if (entry < 0) throw mismatch("Accounts");
-  return entry;
+  const window = accounts.slice(start, settlementWindow(frame, accounts).start);
+  const first = window.findIndex((meta) => meta.address === expected.terms.signer);
+  if (first < 0) throw mismatch("Accounts");
+  // SPP and `SignerSet::new` deduplicate the window by first occurrence and the counts index that
+  // run. Under `[X, X, V]` a raw position reads V past its entry, finds zero, and V signs for a data
+  // output its terms leave out. The program accepts a repeat, so none is refused.
+  return new Set(window.slice(0, first).map((meta) => meta.address)).size;
 }
 
 /** The one ring auth PDA the program admits in SPP's list. */
@@ -1122,13 +1145,13 @@ function checkFundedLegs(
     throw mismatch("Accounts");
 }
 
-export function openingHash(opening: SlotOpening, ring: Address): Bytes32 {
+export function openingHash(opening: SlotOpening, ring: Address | undefined): Bytes32 {
   return new Utxo({
     owner: ShieldedPublicKey.fromEd25519(addressBytes(opening.owner) as Bytes32),
     asset: opening.mint,
     amount: opening.amount,
     blinding: opening.blinding,
-    ringProgramId: ring,
+    ...(ring === undefined ? {} : { ringProgramId: ring }),
   })
     .proofInput(opening.nullifierPk, opening.treeId, opening.dataHash, opening.ringDataHash)
     .hash();

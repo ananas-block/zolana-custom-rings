@@ -216,12 +216,14 @@ pub struct ExactApproval {
     pub seen_blinders: Vec<Hash>,
 }
 
-/// `peak` bounds one owner's outflow, `outflow` the sum over owners.
+/// `peak` bounds one owner's outflow, `outflow` the sum over owners, `gross` each public row's
+/// withdrawals with no deposit subtracted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApprovalLimit {
     pub mint: Address,
     pub peak: u128,
     pub outflow: u128,
+    pub gross: u128,
 }
 
 /// A co-signer the frame names, what it signs is the rule it holds.
@@ -781,7 +783,8 @@ impl ExpectedPublicOwner {
                 .outputs
                 .get(opening.slot as usize)
                 .ok_or(MessageMismatch::Recipients)?;
-            let rebuilt = opening.utxo_hash(terms.ring.0)?;
+            // An exit commits no ring, a ring id here would refuse every exit the owner holds.
+            let rebuilt = opening.utxo_hash((!published.is_exit()).then_some(terms.ring.0))?;
             if opening.owner != terms.signer || rebuilt != *published.hash {
                 return Err(MessageMismatch::Recipients);
             }
@@ -835,11 +838,22 @@ impl ExpectedPublicOwner {
         let spp = spp_accounts(self.terms.ring.0, accounts)?;
         let settlements = settlement_accounts(&data.interface_transfers, data.circuit(), spp)
             .ok_or(MessageMismatch::Accounts)?;
-        data.owner_signers(spp, settlements.len())
-            .map_err(|_| MessageMismatch::Accounts)?
+        let window = data
+            .owner_signers(spp, settlements.len())
+            .map_err(|_| MessageMismatch::Accounts)?;
+        let first = window
             .iter()
             .position(|meta| meta.pubkey == self.terms.signer.0)
-            .ok_or(MessageMismatch::Accounts)
+            .ok_or(MessageMismatch::Accounts)?;
+        // SPP and `SignerSet::new` deduplicate the window by first occurrence and the counts index
+        // that run. Under `[X, X, V]` a raw position reads V past its entry, finds zero, and V signs
+        // for a data output its terms leave out. The program accepts a repeat, so none is refused.
+        Ok(window
+            .iter()
+            .take(first)
+            .map(|meta| meta.pubkey)
+            .collect::<BTreeSet<_>>()
+            .len())
     }
 }
 
@@ -862,13 +876,13 @@ fn spp_accounts(
 }
 
 impl SlotOpening {
-    fn utxo_hash(&self, ring: Address) -> Result<[u8; 32], MessageMismatch> {
+    fn utxo_hash(&self, ring: Option<Address>) -> Result<[u8; 32], MessageMismatch> {
         Utxo {
             owner: PublicKey::from_ed25519(self.owner.0.as_array()),
             asset: Mint::new(self.mint.0, 0),
             amount: self.amount,
             blinding: self.blinding.0,
-            ring_program_id: Some(ring),
+            ring_program_id: ring,
             data: Default::default(),
         }
         .hash(
@@ -1118,7 +1132,16 @@ impl ExactApproval {
                     Member::asset(&limit.mint).is_ok_and(|field| *field.as_bytes() == asset)
                 })
                 .ok_or(MessageMismatch::ApprovalOverLimit)?;
-            if totals.peak_of(&asset) > limit.peak || totals.outflow_of(&asset) > limit.outflow {
+            // A deposit the sender funds offsets its own withdrawal in peak and outflow, a public
+            // row's gross alone shows what leaves through it.
+            let over_gross = totals
+                .public
+                .iter()
+                .any(|slot| slot.asset == asset && slot.gross > limit.gross);
+            if over_gross
+                || totals.peak_of(&asset) > limit.peak
+                || totals.outflow_of(&asset) > limit.outflow
+            {
                 return Err(MessageMismatch::ApprovalOverLimit);
             }
         }
@@ -1166,7 +1189,16 @@ impl ExpectedFrame for ExpectedCoSigner {
                 parsed.audit_stream().capacity,
             )?,
         }
-        check_signer(&self.envelope(signer, Self::TAG)?, accounts)
+        check_signer(&self.envelope(signer, Self::TAG)?, accounts)?;
+        // The rule reads an approval and nothing else. A signature named in SPP's list also moves the
+        // key's own funds or authorizes its notes and data outputs, none of it in the rule.
+        let in_spp = spp_accounts(self.ring, accounts)?
+            .iter()
+            .any(|meta| meta.pubkey == signer);
+        match in_spp {
+            true => Err(MessageMismatch::Accounts),
+            false => Ok(()),
+        }
     }
 }
 
