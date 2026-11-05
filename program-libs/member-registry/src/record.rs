@@ -1,3 +1,12 @@
+//! The policy tree's leaf, one member's list bits and mint settings, and the proof input of one queued write.
+//!
+//! Read after `program-libs/member-registry/src/tree.rs`, `program-libs/interface/src/accounts/member_registry.rs`.
+//! Read before `prover/circuits/registry/apply_records.go`.
+//!
+//! Invariants, `ApplyRecordsCircuit` holds each.
+//! 1. A write keeps every list bit outside its mask, and moves mint settings only under the entry's flag.
+//! 2. A write that would leave a new member's record empty inserts nothing, the member stays absent and the root stays.
+
 use custom_ring_interface::{
     queue_chain, ApplyRecordsStatement, QueueEntry, FIELD_MAX, QUAD_HEIGHT,
 };
