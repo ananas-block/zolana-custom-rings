@@ -2,12 +2,12 @@
 
 The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for a transfer's auditor stream, an enrolling owner's nullifier secret and list salt, deposit opening records and a merge's opening record. The stream schedule also keys every recipient body, reply and sender bundle from a slot secret, outside every proof. [Spec](../../spec.md) [Hashing](hashing.md) [Disclosure](disclosure.md)
 
-The ring program verifies the transfer, deposit and merge proofs. The Storage program verifies the register key proof in `Enroll` on an owner's first enrollment. In each, the ciphertext's hash in the statement fixes the plaintext.
+The ring program verifies the transfer, deposit and merge proofs, and the register key proof in `Enroll`. In each, the ciphertext's hash in the statement fixes the plaintext.
 
 ## Key encoding
 
 - A tagged X25519 key is `0x04 || u`, 33 bytes, with `u` the canonical 32-byte little-endian coordinate below `2^255 - 19`.
-- Ring `Initialize` and Storage `InitializeTracking` refuse an auditor key whose `u` is one of the 5 low-order values. The program supplies the auditor key from the ring policy or the tracking registry, so a prover cannot pick the recipient.
+- Ring `Initialize` refuses an auditor key whose `u` is one of the 5 low-order values. The program supplies the auditor key from the ring account, so a prover cannot pick the recipient.
 - The auditor view tag is `u` without the tag byte.
 - Secret scalars are clamped as RFC 7748. The audit circuit asserts that `tx_viewing_sk` is clamped.
 

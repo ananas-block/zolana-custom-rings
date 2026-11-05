@@ -70,7 +70,7 @@ func (s Shape) publicOwners() int {
 	return min(s.Owners, (ownerAddresses-s.Withdrawals)/2) + s.Withdrawals
 }
 
-func (s Shape) trackedWithdrawals() int {
+func (s Shape) credentialWithdrawals() int {
 	if !s.Wide {
 		return 0
 	}

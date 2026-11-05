@@ -167,8 +167,8 @@ impl TransferShape {
         (if owners < fit { owners } else { fit }) + self.withdrawals as usize
     }
 
-    /// Mirror `trackedWithdrawals`.
-    const fn tracked_withdrawals(self) -> usize {
+    /// Mirror `credentialWithdrawals`.
+    const fn credential_withdrawals(self) -> usize {
         if self.wide {
             self.public_owners() - self.owners as usize
         } else {
@@ -329,14 +329,14 @@ const fn apply_width(pending: u64) -> u8 {
 pub struct RecordPools {
     pub own: usize,
     pub curator: usize,
-    pub tracking: usize,
+    pub credentials: usize,
 }
 
 impl RecordPools {
     const fn within(self, capacity: Self) -> bool {
         self.own <= capacity.own
             && self.curator <= capacity.curator
-            && self.tracking <= capacity.tracking
+            && self.credentials <= capacity.credentials
     }
 }
 
@@ -362,7 +362,7 @@ impl RingCircuit {
             return None;
         }
         match self {
-            Self::Transfer { .. } => self.record_pools().map(|pools| pools.tracking),
+            Self::Transfer { .. } => self.record_pools().map(|pools| pools.credentials),
             Self::Deposit { capacity } => Some(usize::from(capacity)),
             Self::Merge => Some(1),
             Self::ApplyRecords { writes } => Some(usize::from(writes)),
@@ -404,7 +404,7 @@ impl RingCircuit {
         Some(RecordPools {
             own: distinct + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: distinct + withdrawal_assets,
-            tracking: owners + outputs + shape.tracked_withdrawals(),
+            credentials: owners + outputs + shape.credential_withdrawals(),
         })
     }
 }
@@ -534,7 +534,7 @@ mod tests {
             Some(RecordPools {
                 own: 41,
                 curator: 41,
-                tracking: 18
+                credentials: 18
             })
         );
     }
@@ -588,7 +588,7 @@ mod tests {
             Some(RecordPools {
                 own: 95,
                 curator: 95,
-                tracking: 45
+                credentials: 45
             })
         );
     }
@@ -721,7 +721,7 @@ mod tests {
     fn the_pools_hold_every_screened_owner_output_and_withdrawal() {
         let pools = |circuit: RingCircuit| {
             let pools = circuit.record_pools().unwrap();
-            (pools.own, pools.curator, pools.tracking)
+            (pools.own, pools.curator, pools.credentials)
         };
         assert_eq!(pools(transfer(2, 24, 4, 4)), (15, 15, 6));
         assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (113, 113, 51));
@@ -744,11 +744,11 @@ mod tests {
                 .fitted(),
             )
         };
-        let tracked = RecordPools {
-            tracking: 7,
+        let credentials = RecordPools {
+            credentials: 7,
             ..RecordPools::default()
         };
-        assert_eq!(fitted(2, tracked), Some(wide(8, 24, 32, 24).circuit()));
+        assert_eq!(fitted(2, credentials), Some(wide(8, 24, 32, 24).circuit()));
         // Two owners, the payment's asset and 13 unmatched input assets hold the 15 narrow rows.
         let distinct_assets = |unmatched: usize| RecordPools {
             own: 2 + 1 + unmatched,
@@ -772,13 +772,13 @@ mod tests {
         let salted = RecordPools {
             own: 2 * 29 + 1,
             curator: 2 * 29 + 1,
-            tracking: 29,
+            credentials: 29,
         };
         assert_eq!(fitted(16, salted), Some(wide(16, 5, 8, 5).circuit()));
         let public = RecordPools {
             own: 29 + 1,
             curator: 29 + 1,
-            tracking: 21,
+            credentials: 21,
         };
         assert_eq!(fitted(16, public), Some(transfer(16, 5, 8, 5)));
     }
