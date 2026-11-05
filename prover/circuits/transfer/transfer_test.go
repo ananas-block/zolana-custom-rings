@@ -112,7 +112,7 @@ func TestRailsSolve(t *testing.T) {
 	}
 }
 
-// Every base shape solves at each owner capacity, a data key's tails included.
+// Every base shape solves at each owner capacity.
 func TestEveryKeySolves(t *testing.T) {
 	if testing.Short() {
 		t.Skip("solves every catalog key")
@@ -534,7 +534,7 @@ func TestEntry(t *testing.T) {
 	})
 }
 
-// A data output settles on a data key and the records open it.
+// A data output settles and the records open it.
 func TestDataOutputs(t *testing.T) {
 	t.Run("a confidential rail", func(t *testing.T) {
 		w := ringtransfer.Signed(dataKey2)
@@ -546,7 +546,7 @@ func TestDataOutputs(t *testing.T) {
 		w.HasData = true
 		requireSolved(t, w.Build(t).Circuit)
 	})
-	t.Run("a data key with the bit clear pays no tails", func(t *testing.T) {
+	t.Run("the bit clear pays no tails", func(t *testing.T) {
 		requireSolved(t, ringtransfer.Signed(dataKey2).Build(t).Circuit)
 	})
 }

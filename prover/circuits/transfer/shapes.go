@@ -52,7 +52,7 @@ func (s Shape) String() string {
 
 // Stream compiles the tails into every key, a clear has_data transmits none.
 func (s Shape) Stream() audit.StreamShape {
-	return audit.StreamShape{InputClass: s.Inputs, Outputs: s.Outputs, Entry: s.Entry, Data: true}
+	return audit.StreamShape{InputClass: s.Inputs, Outputs: s.Outputs, Entry: s.Entry}
 }
 
 func (s Shape) entries() int {

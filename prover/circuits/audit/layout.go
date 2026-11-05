@@ -9,7 +9,6 @@
 // The file proves the following.
 //  1. The layout value holds two flags, a value past them fails its decomposition.
 //  2. The entry flag equals the key's entry capacity.
-//  3. has_data stays clear off a data key, a key with no tail region seals no data hash.
 //
 // Read after shared/envelope.go. Read before audit/audit.go, audit/record.go.
 
@@ -30,15 +29,10 @@ const layoutBits = 2
 type StreamShape struct {
 	InputClass, Outputs int
 	Entry               bool
-	Data                bool
 }
 
-type Layout struct {
-	HasData, Entry frontend.Variable
-}
-
-// DecodeLayout pins the entry flag to the key and has_data to zero off a data key.
-func (s StreamShape) DecodeLayout(api frontend.API, layout frontend.Variable) Layout {
+// DecodeLayout returns has_data and pins the entry flag to the key.
+func (s StreamShape) DecodeLayout(api frontend.API, layout frontend.Variable) frontend.Variable {
 	// The decomposition bounds the layout to its flags.
 	bits := api.ToBinary(layout, layoutBits)
 	entry := 0
@@ -46,10 +40,7 @@ func (s StreamShape) DecodeLayout(api frontend.API, layout frontend.Variable) La
 		entry = 1
 	}
 	api.AssertIsEqual(bits[1], entry)
-	if !s.Data {
-		api.AssertIsEqual(bits[0], 0)
-	}
-	return Layout{HasData: bits[0], Entry: bits[1]}
+	return bits[0]
 }
 
 // StreamRanges mirrors AuditStreamLayout in program-libs/interface/src/proof/audit_stream.rs.
@@ -118,13 +109,9 @@ func (r StreamRanges) TailCounter(i int) int {
 	return r.RecordCounter(r.Outputs) + i*TailBlocks
 }
 
-// CapacityBlocks covers every slot the key serves, a dataless key has no tail region.
+// CapacityBlocks covers every slot's record and tail, a frame omits what it does not publish.
 func (r StreamRanges) CapacityBlocks() int {
-	blocks := r.EnvelopeBlocks() + r.Outputs*RecordBlocks
-	if r.Data {
-		blocks += r.Outputs * TailBlocks
-	}
-	return blocks
+	return r.EnvelopeBlocks() + r.Outputs*(RecordBlocks+TailBlocks)
 }
 
 func (r StreamRanges) RecordOffset(i int) int {

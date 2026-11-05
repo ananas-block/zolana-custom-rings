@@ -11,7 +11,7 @@ import (
 var PeakHint = peakHint
 
 func DecodeTable(t Table, api frontend.API, rc frontend.Rangechecker, policyHash frontend.Variable) {
-	t.decode(api, rc, policyHash)
+	t.decodeWhen(api, rc, 1, policyHash)
 }
 
 // Quantities are one row's flows of one asset.

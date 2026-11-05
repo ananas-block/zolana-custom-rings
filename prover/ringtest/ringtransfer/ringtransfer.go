@@ -64,7 +64,7 @@ type World struct {
 	Inputs []ringaudit.Input
 	// DefaultInput moves input 1 to the default ring, an entry key's evidence opens it.
 	DefaultInput bool
-	// HasData writes data hashes on the first ring output, the key needs tails.
+	// HasData writes data hashes on the first ring output.
 	HasData bool
 	// Outputs replace slots by index before any hash reads them.
 	Outputs map[int]func(*ringaudit.Slot)

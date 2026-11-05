@@ -31,8 +31,13 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 		t.Fatal("the vector holds no key")
 	}
 	for _, v := range vectors.Keys {
-		r := audit.StreamShape{InputClass: v.Class, Outputs: v.Outputs, Entry: v.Entry, Data: v.HasData}.Ranges()
-		if r.EnvelopeBlocks() != v.EnvelopeBlocks || r.RecordCounter(0) != v.FirstRecordCounter || r.TailCounter(0) != v.FirstTailCounter || r.CapacityBlocks() != v.CapacityBlocks {
+		r := audit.StreamShape{InputClass: v.Class, Outputs: v.Outputs, Entry: v.Entry}.Ranges()
+		// A key seals every tail, a reader of a clear has_data decrypts none.
+		capacity := v.CapacityBlocks
+		if !v.HasData {
+			capacity += v.Outputs * audit.TailBlocks
+		}
+		if r.EnvelopeBlocks() != v.EnvelopeBlocks || r.RecordCounter(0) != v.FirstRecordCounter || r.TailCounter(0) != v.FirstTailCounter || r.CapacityBlocks() != capacity {
 			t.Errorf("%+v: E %d R0 %d T0 %d capacity %d", v, r.EnvelopeBlocks(), r.RecordCounter(0), r.TailCounter(0), r.CapacityBlocks())
 		}
 		records, tails := make([]int, v.Outputs), make([]int, v.Outputs)
@@ -58,7 +63,7 @@ func TestStreamRegionsHoldTheirPlaintext(t *testing.T) {
 	if audit.RecordBlocks*blockLen != audit.RecordStride || audit.RecordLen > audit.RecordStride || audit.TailBlocks*blockLen != audit.TailLen {
 		t.Fatal("a region differs from its plaintext")
 	}
-	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 5, Outputs: 16, Data: true}} {
+	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 5, Outputs: 16}} {
 		r := shape.Ranges()
 		if r.EnvelopeLen(r.InputClass) > r.EnvelopeBlocks()*blockLen {
 			t.Fatalf("%+v: the envelope overruns its region", r)

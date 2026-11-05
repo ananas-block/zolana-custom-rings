@@ -180,10 +180,8 @@ func (a Audit) Stream(t testing.TB) Stream {
 	for _, slot := range a.Outputs {
 		plaintext = append(plaintext, slot.Record(t)...)
 	}
-	if a.Shape.Data {
-		for _, slot := range a.Outputs {
-			plaintext = append(plaintext, slot.Tail(t)...)
-		}
+	for _, slot := range a.Outputs {
+		plaintext = append(plaintext, slot.Tail(t)...)
 	}
 	return Stream{Ranges: ranges, Salt: a.Salt, Ciphertext: a.Keys.TransferCiphertext(t, plaintext, a.Salt)}
 }

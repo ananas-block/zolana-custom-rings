@@ -23,14 +23,6 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// RingMode mirrors RingMode in program-libs/interface/src/accounts/state.rs.
-type RingMode int
-
-const (
-	ModeConfidential RingMode = iota
-	ModeAnonymous
-)
-
 var MintA, MintB = fixtureMint(0xa0), fixtureMint(0xb0)
 
 func fixtureMint(seed byte) [32]byte {
@@ -75,7 +67,6 @@ type Spec struct {
 	// Capacity is the key's slots, zero takes MaxDeposits.
 	Capacity int
 	Count    int
-	Mode     RingMode
 	// ZeroKeys holds these slots under ZeroNullifierPk with no row.
 	ZeroKeys []int
 	// Recipients is the owners the slots cycle and Assets the mints, zero gives each slot its own owner and every slot Policy.Mint.
@@ -85,9 +76,9 @@ type Spec struct {
 }
 
 // Build deposits count enrolled owners under the CRDB blinding.
-func Build(t testing.TB, count int, mode RingMode) *Deposit {
+func Build(t testing.TB, count int) *Deposit {
 	t.Helper()
-	return Spec{Count: count, Mode: mode}.Build(t)
+	return Spec{Count: count}.Build(t)
 }
 
 // Allowlisted requires every deposited asset on AllowBit, where the registry lists only MintA.

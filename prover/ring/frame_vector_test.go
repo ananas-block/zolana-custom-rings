@@ -145,7 +145,7 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	if anonymousFrame {
 		c.take(32 + ringprotocol.SenderBundleHeadLen + 32*m)
 	}
-	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0, Data: inputByte&hasData != 0}.Ranges()
+	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0}.Ranges()
 	c.take(stream.EnvelopeLen(n))
 	c.take(m * audit.RecordLen)
 	if inputByte&hasData != 0 {
