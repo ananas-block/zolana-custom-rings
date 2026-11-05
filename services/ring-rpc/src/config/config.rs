@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use p256::elliptic_curve::subtle::ConstantTimeEq;
 use rand::RngCore;
 use solana_address::Address;
@@ -37,11 +37,6 @@ pub enum Command {
 }
 
 #[derive(Debug, Args)]
-#[command(group(
-    ArgGroup::new("proves")
-        .args(["store_url", "enrollment_applier_key_file"])
-        .multiple(true)
-))]
 pub struct ServeArgs {
     #[arg(long, env = "RING_RPC_BIND", default_value = "127.0.0.1")]
     pub bind: IpAddr,
@@ -144,23 +139,8 @@ pub struct ServeArgs {
     )]
     pub store_url: Option<String>,
     /// Serves the ring keys the record writer and the relay prove with.
-    #[arg(long, env = "RING_RPC_PROVER_URL", requires = "proves")]
+    #[arg(long, env = "RING_RPC_PROVER_URL", requires = "store_url")]
     pub prover_url: Option<String>,
-    /// Lowercase hex Ed25519 seed, set to apply enrollments and pay their fees, holds no ring role.
-    #[arg(
-        long,
-        env = "RING_RPC_ENROLLMENT_APPLIER_KEY_FILE",
-        requires_all = ["prover_url", "enrollment_apply_rings"]
-    )]
-    pub enrollment_applier_key_file: Option<PathBuf>,
-    /// A ring whose pending enrollments the applier sends.
-    #[arg(
-        long = "enrollment-apply-ring",
-        env = "RING_RPC_ENROLLMENT_APPLY_RINGS",
-        value_delimiter = ',',
-        requires = "enrollment_applier_key_file"
-    )]
-    pub enrollment_apply_rings: Vec<Address>,
     /// Serve plain HTTP on a public address and accept plain HTTP origins, test deployments only.
     #[arg(long, env = "RING_RPC_INSECURE_PUBLIC_BIND")]
     pub insecure_public_bind: bool,
@@ -203,7 +183,6 @@ pub enum KeyKind {
     StorageAuthority,
     CoSigner,
     GrantRows,
-    EnrollmentApplier,
 }
 
 impl KeyKind {
@@ -216,7 +195,6 @@ impl KeyKind {
             Self::StorageAuthority => "storage authority",
             Self::CoSigner => "co-signer",
             Self::GrantRows => "grant rows",
-            Self::EnrollmentApplier => "enrollment applier",
         }
     }
 
@@ -229,7 +207,6 @@ impl KeyKind {
             Self::StorageAuthority => "--storage-authority-key-file",
             Self::CoSigner => "--co-signer-key-file",
             Self::GrantRows => "--grant-rows-key-file",
-            Self::EnrollmentApplier => "--enrollment-applier-key-file",
         }
     }
 }
@@ -242,7 +219,6 @@ pub struct ServeKeys {
     pub co_signer: Option<Keypair>,
     pub grant_rows: Option<GrantRowsSecret>,
     pub fee_payer: Option<Keypair>,
-    pub enrollment_applier: Option<Keypair>,
 }
 
 #[derive(Debug, Error)]
@@ -316,10 +292,6 @@ impl ServeArgs {
         let co_signer = read(KeyKind::CoSigner, self.co_signer_key_file.as_deref())?;
         let grant_rows = read(KeyKind::GrantRows, self.grant_rows_key_file.as_deref())?;
         let fee_payer = read(KeyKind::FeePayer, self.fee_payer_key_file.as_deref())?;
-        let enrollment_applier = read(
-            KeyKind::EnrollmentApplier,
-            self.enrollment_applier_key_file.as_deref(),
-        )?;
         refuse_shared(&[
             (KeyKind::Auditor, auditor.as_deref()),
             (KeyKind::Root, root.as_deref()),
@@ -328,7 +300,6 @@ impl ServeArgs {
             (KeyKind::CoSigner, co_signer.as_deref()),
             (KeyKind::GrantRows, grant_rows.as_deref()),
             (KeyKind::FeePayer, fee_payer.as_deref()),
-            (KeyKind::EnrollmentApplier, enrollment_applier.as_deref()),
         ])?;
         let auditor = match (auditor, root) {
             (Some(secret), None) => KeySource::Local {
@@ -349,7 +320,6 @@ impl ServeArgs {
             co_signer: co_signer.map(keypair),
             grant_rows: grant_rows.map(GrantRowsSecret),
             fee_payer: fee_payer.map(keypair),
-            enrollment_applier: enrollment_applier.map(keypair),
         })
     }
 }
@@ -494,30 +464,6 @@ mod tests {
             Command::Serve(args) => Ok(*args),
             Command::Keygen(_) => panic!("serve parses as keygen"),
         }
-    }
-
-    #[test]
-    fn an_enrollment_applier_takes_no_store_or_authority_and_names_its_rings() {
-        let dir = Path::new("/");
-        let ring = Address::new_from_array([1; 32]).to_string();
-        let keys = [
-            "--root-secret-file",
-            "@root.key",
-            "--service-key-file",
-            "@service.key",
-        ];
-        let applier = [
-            "--prover-url",
-            UNREACHABLE,
-            "--enrollment-applier-key-file",
-            "@applier.key",
-            "--enrollment-apply-ring",
-            &ring,
-        ];
-        let parsed = parse_serve(dir, &[&keys[..], &applier].concat()).expect("applier alone");
-        assert_eq!(parsed.enrollment_apply_rings.len(), 1);
-        assert!(parse_serve(dir, &[&keys[..], &applier[..2]].concat()).is_err());
-        assert!(parse_serve(dir, &[&keys[..], &applier[..4]].concat()).is_err());
     }
 
     fn temp_dir(label: &str) -> PathBuf {

@@ -146,7 +146,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
         Ok(sent)
     }
 
-    /// An enrolled wallet's secret opens from its tracking seal on every ring.
+    /// An enrolled wallet's secret opens from its credential on every ring.
     async fn merge_ring(
         &self,
         book: &MergeSettingsBook<'_>,
@@ -316,8 +316,8 @@ pub(crate) mod tests {
     use spr_transaction::{Data, Mint, Utxo};
     use zolana_ring_client::{
         rpc::{unix_now, MergeSettingsRequest, ReadTarget, RingChainStatus, SignedRequest},
-        AuditError, CreatedUtxo, KnownUtxo, MergeAuditPage, NullifierKeyEnvelope, RingIndexerError,
-        RingOrigin, UtxoOwner,
+        AuditError, CreatedUtxo, KnownUtxo, MergeAuditPage, RingIndexerError, RingOrigin,
+        UtxoOwner,
     };
     use zolana_ring_indexer::rpc::{
         GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
@@ -329,6 +329,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::{
+        credentials::HeldCredential,
         credentials::{fixture::Enrollment, CredentialPda},
         database::Store,
         hub::ServiceIdentity,
@@ -339,7 +340,7 @@ pub(crate) mod tests {
             DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
             RingHistoryPage, TransactionPage,
         },
-        utxos::{CreatedIn, TrackedOwner, TrackingRoot},
+        utxos::CreatedIn,
     };
 
     pub(crate) const RING: Address = Address::new_from_array([8; 32]);
@@ -704,7 +705,12 @@ pub(crate) mod tests {
         }
 
         /// A finalized Enroll of `wallet` at `slot`, sealed to the served auditor.
-        pub(crate) fn enroll(&self, wallet: &Keypair, key: &NullifierKey, slot: u8) {
+        pub(crate) fn enroll(
+            &self,
+            wallet: &Keypair,
+            key: &NullifierKey,
+            slot: u8,
+        ) -> HeldCredential {
             let auditor = self
                 .hub
                 .service(Some(RING))
@@ -719,7 +725,8 @@ pub(crate) mod tests {
                 signature: Signature::from([slot; 64]),
                 slot: u64::from(slot),
             };
-            let event = enrollment.event_of(&enrollment.credential());
+            let credential = enrollment.credential();
+            let event = enrollment.event_of(&credential);
             self.hub
                 .shared()
                 .source
@@ -727,60 +734,38 @@ pub(crate) mod tests {
                 .lock()
                 .expect("enrollments")
                 .push((event, wallet.pubkey()));
+            enrollment.held(credential)
         }
 
         pub(crate) fn escrow_notes(&self, wallet: &Keypair, notes: u8) -> NullifierKey {
             self.escrow_wallets(&[(wallet, notes)]).remove(0)
         }
 
-        /// One replace of the tracked owners holds them all.
+        /// Held before any scan, a merge pass opens only held credentials.
         pub(crate) fn escrow_wallets(&self, wallets: &[(&Keypair, u8)]) -> Vec<NullifierKey> {
-            let keys: Vec<NullifierKey> = wallets
-                .iter()
-                .map(|(wallet, _)| NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]))
-                .collect();
             let store = self.hub.shared().store(RING);
-            let tracked = wallets
+            wallets
                 .iter()
-                .zip(&keys)
-                .map(|((wallet, _), key)| self.tracked_owner(wallet, key))
-                .collect();
-            store.replace_tracked(
-                TrackingRoot {
-                    registry: Address::new_from_array([1; 32]),
-                    root: [1; 32],
-                    revision: 0,
-                },
-                tracked,
-            );
-            for ((wallet, notes), key) in wallets.iter().zip(&keys) {
-                self.record_notes(wallet, key, *notes);
-            }
-            keys
-        }
-
-        fn tracked_owner(&self, wallet: &Keypair, key: &NullifierKey) -> ([u8; 32], TrackedOwner) {
-            let nullifier_pk = key.pubkey().expect("nullifier pk");
-            let auditor = self
-                .hub
-                .service(Some(RING))
-                .expect("service")
-                .auditor_pubkey();
-            let owner_key = wallet.pubkey().to_bytes();
-            let owner = TrackedOwner {
-                owner_key,
-                nullifier_pk,
-                owner_hash: spr_keypair::hash::owner_hash(
-                    &spr_keypair::PublicKey::from_ed25519(&owner_key),
-                    &nullifier_pk,
-                )
-                .expect("owner hash"),
-                list_tag: custom_ring_interface::domain::list_tag(&LIST_SALT).expect("tag"),
-                sealed: NullifierKeyEnvelope::new(key, &LIST_SALT, &auditor)
-                    .expect("envelope")
-                    .sealed,
-            };
-            (owner_key, owner)
+                .map(|(wallet, notes)| {
+                    let key = NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]);
+                    // Slots rise in enrollment order, a scan refuses a page out of order.
+                    let enrolled = self
+                        .hub
+                        .shared()
+                        .source
+                        .enrollments
+                        .lock()
+                        .expect("enrollments")
+                        .len();
+                    let slot = u8::try_from(enrolled + 1).expect("few enrollments");
+                    let held = self.enroll(wallet, &key, slot);
+                    store
+                        .admit_credentials(vec![held])
+                        .expect("held credential");
+                    self.record_notes(wallet, &key, *notes);
+                    key
+                })
+                .collect()
         }
 
         fn record_notes(&self, wallet: &Keypair, key: &NullifierKey, notes: u8) {

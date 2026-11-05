@@ -22,7 +22,7 @@ mod relay_fixture;
 #[path = "../../../sdk-libs/client/tests/common/transfer.rs"]
 pub mod transfer;
 
-use custom_ring_interface::{tracking::TrackingEntry, CoSignScope};
+use custom_ring_interface::{CoSignScope, CREDENTIAL_PDA_SEED};
 use custom_ring_interface::{RecordWrite, RingMode, RING_TRANSACT_ACCOUNT_PREFIX_LEN};
 use spr_keypair::NullifierKey;
 use spr_keypair::{X25519Keypair, X25519Pubkey};
@@ -36,16 +36,9 @@ use std::{
     },
     time::Duration,
 };
-use zolana_ring_client::NullifierKeyEnvelope;
-use zolana_ring_indexer::tracking::{
-    GetTrackingRecordsRequest, GetTrackingRecordsResponse, RingIndexedTrackingRecordView,
-    RingTrackingRecordView, RingTrackingSealView,
-};
-use zolana_ring_member_registry::{
-    MemberRecord, MemberRegistryTree, RecordOpening, RecordTree, TrackingTree,
-};
+use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
 use zolana_ring_policy::{ListId, Member, MintPolicy};
-use zolana_ring_rpc::TrackingRoot;
+use zolana_ring_rpc::credential_fixture::Enrollment;
 
 use p256::ecdsa::signature::hazmat::PrehashSigner;
 use sha2::Digest;
@@ -112,7 +105,12 @@ const SPL_WITHDRAWN: u64 = 75;
 const ORIGIN: &str = "http://localhost:3000";
 /// Every fixture ring's own `StorageRegistry`.
 const RECORDS: Address = Address::new_from_array([11; 32]);
-const TRACKING: Address = Address::new_from_array([12; 32]);
+/// A zero lead byte as `RegisterKey` proves.
+const LIST_SALT: [u8; 32] = {
+    let mut salt = [0x12; 32];
+    salt[0] = 0;
+    salt
+};
 const USER_PRESENT_AND_VERIFIED: u8 = 0x05;
 
 fn authority() -> Keypair {
@@ -436,7 +434,7 @@ struct StaticSource {
     config_down: Arc<AtomicBool>,
     registry: Arc<Mutex<Address>>,
     records_down: Arc<AtomicBool>,
-    tracking: Tracking,
+    credentials: Credentials,
     co_signers: HashMap<Address, CoSignScope>,
 }
 
@@ -593,15 +591,11 @@ impl TransactionSource for StaticSource {
         Ok(self.co_signers.get(&signer).copied())
     }
 
-    async fn tracking_root(&self, _ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
-        Ok(self.tracking.root())
-    }
-
-    async fn tracking_records(
+    async fn transaction_accounts(
         &self,
-        _request: GetTrackingRecordsRequest,
-    ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
-        Ok(self.tracking.page())
+        signature: Signature,
+    ) -> Result<Vec<Address>, ClientError> {
+        Ok(self.credentials.owners(signature))
     }
 
     async fn merge_audit_page(
@@ -623,11 +617,16 @@ impl TransactionSource for StaticSource {
         request: TransactionPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send
     {
-        let response = self.page_at(
-            request.position,
-            request.limit,
-            self.by_tag.get(&request.tag),
-        );
+        let (credential_pda, _) =
+            Address::find_program_address(&[CREDENTIAL_PDA_SEED], &request.ring);
+        let response = match request.tag == credential_pda.to_bytes() {
+            true => self.credentials.page(&request),
+            false => self.page_at(
+                request.position,
+                request.limit,
+                self.by_tag.get(&request.tag),
+            ),
+        };
         async move { Ok(response) }
     }
 
@@ -1125,7 +1124,7 @@ impl Fixture {
             config_down: Arc::default(),
             registry: Arc::new(Mutex::new(RECORDS)),
             records_down: Arc::default(),
-            tracking: Tracking::default(),
+            credentials: Credentials::default(),
             co_signers: HashMap::new(),
         };
         source.with_transactions(vec![
@@ -1300,106 +1299,66 @@ fn reader_member(reader: ReaderKey) -> Member {
 #[derive(Clone)]
 struct Records(Arc<Mutex<OwnRecords>>);
 
-/// The ring's tracking tree, `None` until a key enrolls.
+/// Finalized Enroll events of `RING`, each with its owner account.
 #[derive(Clone, Default)]
-struct Tracking(Arc<Mutex<Option<TrackedTree>>>);
+struct Credentials(Arc<Mutex<Vec<(ShieldedTransaction, Address)>>>);
 
-struct TrackedTree {
-    tree: TrackingTree,
-    seals: HashMap<[u8; 32], RingTrackingSealView>,
-    revision: u64,
-}
-
-impl Tracking {
-    /// The owner's key, sealed to `auditor` and applied to a new root.
+impl Credentials {
+    /// The owner's key and `LIST_SALT`, sealed to `auditor` in a finalized Enroll.
     fn enroll(&self, owner: &[u8; 32], key: &NullifierKey, auditor: &X25519Pubkey) {
-        let member = *Member::owner_tag(owner).expect("member").as_bytes();
-        let mut list_salt = [9; 32];
-        list_salt[0] = 0;
-        let sealed = NullifierKeyEnvelope::new(key, &list_salt, auditor)
-            .expect("envelope")
-            .sealed;
         let mut held = self.0.lock().unwrap();
-        let held = held.get_or_insert_with(|| TrackedTree {
-            tree: TrackingTree::new().expect("tree"),
-            seals: HashMap::new(),
-            revision: 0,
-        });
-        held.tree = held
-            .tree
-            .clone()
-            .apply(
-                [0; 32],
-                &[TrackingEntry {
-                    member,
-                    nullifier_pk: key.pubkey().expect("key"),
-                    ct_hash: spr_hasher::primitives::hash_bytes(&sealed.ciphertext).expect("hash"),
-                    viewing_u: x25519_u(0x11),
-                    revision: 1,
-                    list_tag: field(0x12),
-                }],
-            )
-            .expect("apply")
-            .tree;
-        held.revision += 1;
-        held.seals.insert(
-            member,
-            RingTrackingSealView {
-                owner: Address::new_from_array(*owner).into(),
-                eph_pk: Base64String(sealed.eph_pk.as_bytes().to_vec()),
-                ciphertext: Base64String(sealed.ciphertext.to_vec()),
-            },
-        );
+        let number = u8::try_from(held.len() + 1).expect("few enrollments");
+        let mut signature = [0xee; 64];
+        signature[0] = number;
+        let owner = Address::new_from_array(*owner);
+        let enrollment = Enrollment {
+            ring: RING,
+            owner,
+            key,
+            list_salt: LIST_SALT,
+            auditor,
+            signature: Signature::from(signature),
+            slot: u64::from(number),
+        };
+        held.push((enrollment.event_of(&enrollment.credential()), owner));
     }
 
-    fn root(&self) -> Option<TrackingRoot> {
-        let held = self.0.lock().unwrap();
-        held.as_ref().map(|held| TrackingRoot {
-            registry: TRACKING,
-            root: held.tree.root().expect("root"),
-            revision: held.revision,
-        })
-    }
-
-    fn page(&self) -> GetTrackingRecordsResponse {
-        let held = self.0.lock().unwrap();
-        let held = held.as_ref().expect("a tracking tree");
-        let records = held
-            .tree
-            .records()
+    /// One terminal page of the enrollments under the requested tag past the position.
+    fn page(&self, request: &TransactionPage) -> GetShieldedTransactionsByTagsResponse {
+        let filters = request.position.filters();
+        let data = self
+            .0
+            .lock()
+            .unwrap()
             .iter()
-            .enumerate()
-            .skip(1)
-            .map(|(index, record)| RingIndexedTrackingRecordView {
-                record: RingTrackingRecordView {
-                    member: Hash(record.member),
-                    next: Hash(record.next),
-                    nullifier_pk: Hash(record.nullifier_pk),
-                    ct_hash: Hash(record.ct_hash),
-                    viewing_u: Hash(record.viewing_u),
-                    revision: record.revision,
-                    list_tag: Hash(record.list_tag),
-                    seal: held.seals.get(&record.member).cloned(),
-                },
-                path: path_view(
-                    index as u64,
-                    &held.tree.path(index as u64).expect("path").siblings,
-                ),
+            .filter(|(event, _)| {
+                event.output_slots[0].view_tag == request.tag && filters.slot.contains(event.slot)
+            })
+            .map(|(event, _)| TransactionEvents {
+                slot: event.slot,
+                signature: event.tx_signature,
+                events: vec![event.clone()],
             })
             .collect();
-        GetTrackingRecordsResponse {
+        GetShieldedTransactionsByTagsResponse {
             context: Context {
+                slot: 1_000,
                 block_time: 0,
-                slot: 99,
             },
-            root: StorageRootView {
-                root: Hash(held.tree.root().expect("root")),
-                revision: held.revision,
-                next_index: held.tree.records().len() as u64,
-            },
-            records,
-            next_leaf_index: None,
+            output_tree_id: None,
+            data,
+            pagination_token: None,
         }
+    }
+
+    fn owners(&self, signature: Signature) -> Vec<Address> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(event, _)| event.tx_signature == signature)
+            .map(|(_, owner)| *owner)
+            .collect()
     }
 }
 
