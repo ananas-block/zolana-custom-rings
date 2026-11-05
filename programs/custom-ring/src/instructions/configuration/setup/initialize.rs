@@ -1,3 +1,20 @@
+//! Creates the ring account, its tracking registry and SPP's `RingConfig` in one instruction.
+//!
+//! The ring account fixes the auditor key and the mode for the ring's life. SPP admits any program's
+//! `RingConfig` and reads no auditor key, so the check of who sets those values lives here.
+//!
+//! The instruction guarantees:
+//!
+//! 1. Only the deployed binary's upgrade authority creates the ring, at its one canonical PDA.
+//! 2. The auditor key is canonical and of large order, and four distinct nonzero keys hold the roles.
+//! 3. A policy ring stores a validated table and its hash, any other ring stores no rule.
+//! 4. The ring pins the tracking registry that storage derives from `ring_auth`, a registry of another creator fails that derivation.
+//! 5. `RingConfig` names `ring_auth` as its authority, so SPP's ring admin actions pass through the program.
+//!
+//! The instruction relies on storage for the registry's derivation, and on SPP for `RingConfig`'s derivation and activation.
+//!
+//! Read after `instructions/accounts/loader.rs`, `state.rs`. Read before `instructions/verification/policy_binding.rs`.
+
 use custom_ring_interface::{
     storage_instruction::{tag as storage_tag, InitializeTrackingIxData},
     CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, PolicyUpdate, RingKind,
@@ -123,7 +140,8 @@ pub fn process_initialize_ix(
     // 6. SPP's `RingConfig` sits at the ring PDA, the one point where SPP checks the ring's identity.
     let data = encode_instruction(
         tag::CREATE_RING_CONFIG,
-        // Rail off and config inert until governance runs `set_ring_activation`.
+        // SPP starts the authority rail off, and the config stays inert until `set_ring_activation`
+        // unless the protocol config allows permissionless activation.
         &CreateRingConfigData {
             program_id: *program_id,
             // SPP admin actions on the ring pass only through the ring program.

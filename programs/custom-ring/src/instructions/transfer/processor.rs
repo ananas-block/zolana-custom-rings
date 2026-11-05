@@ -1,3 +1,19 @@
+//! Runs one transfer, the ring's checks in order and then the call into SPP's ring rail.
+//!
+//! SPP settles what `ring_auth` signs and its own proof accepts. The run adds rail selection, account
+//! placement and the ring proof. A defect here settles a transfer no ring rule covered.
+//!
+//! The run guarantees:
+//!
+//! 1. The tag, the ring's mode and its delegate fix the rail, frame flags select only the owner form SPP's selector reads.
+//! 2. `ring_auth` signs only after the ring proof verifies, over the data the frame expands to.
+//! 3. A buffered frame's SPP payer is the buffer's writer.
+//!
+//! The run relies on SPP for note membership, unspent nullifiers, value conservation, expiry, and the
+//! activation and pause of `RingConfig`. SPP's proof covers the expanded data through its external data hash.
+//!
+//! Read after `lib.rs`. Read before `instructions/transfer/accounts.rs`, `instructions/transfer/verify.rs`.
+
 use custom_ring_interface::{
     CustomRingError, InstructionTag, RailSigner, RingTransactData, TRANSACT_PAYER_INDEX,
 };
@@ -9,6 +25,16 @@ use pinocchio::{
 
 use super::{accounts::TransactCheck, verify::RingStatements};
 use crate::instructions::loader::{load_policy, validate_spp_program};
+
+#[must_use]
+pub struct TransferRun<'a> {
+    pub program_id: &'a Address,
+    pub accounts: &'a [AccountView],
+    pub data: &'a [u8],
+    pub tag: InstructionTag,
+    /// A buffered frame's writer, the SPP payer must be it.
+    pub writer: Option<&'a Address>,
+}
 
 #[inline(never)]
 pub fn process_transfer_ix(
@@ -26,16 +52,6 @@ pub fn process_transfer_ix(
     }
     .run()
     .map(|_| ())
-}
-
-#[must_use]
-pub struct TransferRun<'a> {
-    pub program_id: &'a Address,
-    pub accounts: &'a [AccountView],
-    pub data: &'a [u8],
-    pub tag: InstructionTag,
-    /// A buffered frame's writer, the SPP payer must be it.
-    pub writer: Option<&'a Address>,
 }
 
 impl TransferRun<'_> {
@@ -68,7 +84,8 @@ impl TransferRun<'_> {
             slot,
         }
         .validate(accounts)?;
-        // The party check covers the payer, a hidden sender cannot be the writer.
+        // The writer pays rent in public. The party cells name the payer, so a hidden owner cannot be
+        // the writer.
         if let Some(writer) = writer {
             let payer = accounts
                 .get(validated.spp + TRANSACT_PAYER_INDEX)
@@ -80,6 +97,7 @@ impl TransferRun<'_> {
         // 4. A bad SPP proof point is refused before either pairing.
         let spp_data = data.spp_instruction_data(&ring)?;
         // 5. The ring proof verifies the frame's approval mask and spend bit before the SPP call.
+        // Step 3 demanded co-signers from those bits, the demand holds only because the proof fixes them.
         RingStatements {
             program_id,
             ring: &ring,
@@ -87,7 +105,8 @@ impl TransferRun<'_> {
             accounts: &validated,
         }
         .verify()?;
-        // 6. SPP verifies its own proof over the expanded data the ring PDA signs.
+        // 6. SPP verifies its own proof over the expanded data the ring PDA signs. The ring proof and
+        // the SPP proof meet at the values `lib.rs` names, a refusal by SPP reverts the whole transfer.
         let spp = accounts
             .get(validated.spp..)
             .ok_or(ProgramError::NotEnoughAccountKeys)?;

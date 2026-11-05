@@ -1,4 +1,56 @@
-//! Verifies the ring's proofs over an SPP transaction and forwards it signed by the ring PDA.
+//! Custom ring program, the gate that signs as a ring's `ring_auth` PDA in front of SPP.
+//!
+//! SPP holds notes, nullifiers and value, and verifies its own proof. SPP requires `ring_auth` to sign
+//! and reads only `RingConfig` about the ring. SPP reads no policy, no audit data and no co-signer.
+//! Every rule below holds only because no other caller can produce that signature.
+//!
+//! One deployment serves one ring, the seeds of the ring account and of `ring_auth` name no other
+//! ring. A ring note commits `hash_bytes` of the program id, the value SPP reads from `RingConfig`.
+//!
+//! # What the ring adds to SPP
+//!
+//! 1. Auditor recovery. The ring proof shows the auditor opens each instruction's sealed records, SPP reads none of them.
+//! 2. Policy. A transfer or deposit on a policy ring proves the rules under the hash and roots the ring pins.
+//! 3. Tracking. Owner keys resolve against the rows of the one tracking registry the ring pins.
+//! 4. Co-signers. The operation and the proven approval bits demand signed records, outside SPP's account list.
+//! 5. Hidden senders. The proof holds the hidden owner apart from the payer, the co-signers, the funders, the exit key and the owner run.
+//! 6. Delegate. One permanent key moves notes without owner signatures and outside every policy rule.
+//!
+//! # What each side verifies in a transfer
+//!
+//! The program verifies the ring proof, then calls SPP with the data the frame expands to. One
+//! transaction holds both, a refusal by either leaves no state. One frame feeds both proofs, and these links tie them:
+//!
+//! 1. `ring_id` is `hash_bytes` of the program id, the value SPP reads from the signed `RingConfig`.
+//! 2. `first_nullifier` and `private_tx_hash` travel unchanged, the ring proof reopens the hash over the slots the audit opened.
+//! 3. Off the authority rails, the signer chain covers the run SPP hashes as its owner signers.
+//! 4. The public slots fold legs and mints in SPP's order, over the settlement accounts SPP settles.
+//! 5. The ring statement binds the output hashes and the auditor message bytes, SPP's external data hash covers the same bytes.
+//!
+//! SPP verifies no proof on a deposit, the ring proof alone binds its data. A merge pairs SPP's merge
+//! proof with a ring proof over the auditor's record, see `instructions/settlement/merge.rs`.
+//!
+//! # Instruction data
+//!
+//! A frame is a prover's claim. An element enters a statement from the frame only when a proof or
+//! SPP refuses any other value, `instructions/transfer/verify.rs` names each element.
+//!
+//! # Reading order
+//!
+//! Crate paths start at `src`, `program-libs` and `prover` paths start at the repository root. Each file names its neighbours in the same way.
+//!
+//! 1. `instructions/transfer/processor.rs`, the stages of one transfer.
+//! 2. `instructions/transfer/accounts.rs`, the account windows and the party checks.
+//! 3. `instructions/transfer/verify.rs`, the source of each statement element.
+//! 4. `instructions/runtime/instruction_runtime.rs`, the placement check behind every `ring_auth` signature.
+//! 5. `instructions/accounts/loader.rs`, root reads with grace and floor, and co-signer records.
+//! 6. `instructions/settlement/frame_buffer.rs`, a frame settled by digest with its self-CPI event.
+//! 7. `instructions/settlement/forward.rs` then `instructions/settlement/deposit_audit.rs`, the deposit.
+//! 8. `instructions/settlement/merge.rs`, the merge.
+//! 9. `instructions/configuration`, the setup, the delegate, the roles and the policy writes.
+//!
+//! The statements live in `program-libs/interface/src/proof/statement.rs`, their circuits in
+//! `prover/circuits/transfer/transfer.go`, `prover/circuits/deposit.go` and `prover/circuits/merge.go`.
 
 mod instructions;
 mod state;
@@ -45,6 +97,7 @@ pub fn process_instruction(
             process_close_frame_buffer_ix(program_id, accounts, ix_data)
         }
         InstructionTag::SettleBuffered => process_settle_buffered_ix(program_id, accounts, ix_data),
+        // No check and no state, a reader accepts it only under the digest of its `SettleBuffered`.
         InstructionTag::FrameEvent => Ok(()),
     }
 }

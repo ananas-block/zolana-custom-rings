@@ -1,3 +1,21 @@
+//! Verifies a ring merge and forwards it to SPP's `merge_ring_v2`.
+//!
+//! SPP's proof ties every input to one owner, asset and sum, and SPP publishes no auditor message for a
+//! merge. The auditor reads the record from the confirmed ring instruction, and the ring statement alone binds those bytes.
+//!
+//! The instruction guarantees:
+//!
+//! 1. The record opens the output under the ring's auditor key, the output and first nullifier come from SPP's body.
+//! 2. A hidden owner's key is its enrolled row under the tracking root the ring pins, and the payer is another account.
+//! 3. A zero key reads no row, the statement publishes that owner and SPP requires its signature.
+//! 4. `ring_auth` sits only in SPP's `ring_config` slot, and the payer signs.
+//!
+//! No list, guard, cap or co-signer rule applies, a merge keeps one owner's value in one asset.
+//!
+//! The instruction relies on SPP for the merge proof, the nullifiers, and the activation and pause of `RingConfig`.
+//!
+//! Read after `instructions/accounts/loader.rs`. Read before `prover/circuits/merge.go`.
+
 use custom_ring_interface::{
     key_catalog::RingCircuit, CustomRingError, CustomRingMergeIxDataRef, MergePublicInput,
     RootRead, RING_MERGE_OWNER_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
@@ -71,6 +89,7 @@ pub fn process_merge_ix(
         .nullifiers
         .first()
         .ok_or(CustomRingError::InvalidInstructionData)?;
+    // 5. The program supplies the ring id, the auditor key, the payer, the published owner and the root.
     let payer = solana_owner_identity(spp_accounts[RING_MERGE_PAYER_INDEX].address().as_array())
         .map_err(CustomRingError::from)?;
     let statement = MergePublicInput {
@@ -92,7 +111,7 @@ pub fn process_merge_ix(
         key: ring_key(RingCircuit::Merge)?,
     }
     .verify()?;
-    // 5. SPP's proof binds the output ciphertext, the ring data hash and the published owner.
+    // 6. SPP's proof binds the output ciphertext, the ring data hash and the published owner.
     let forwarded = request.forwarded(&spp_body);
     validate_spp_program(spp_accounts)?;
     ring_auth.invoke(spp_accounts, &forwarded)

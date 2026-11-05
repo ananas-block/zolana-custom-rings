@@ -1,3 +1,20 @@
+//! Verifies a ring deposit and forwards SPP's deposit data unchanged.
+//!
+//! SPP verifies no proof on a deposit. It appends the owner commitment the data names, whatever that
+//! commitment opens to. The ring proof alone shows the auditor opens each commitment and its owner meets tracking and the rules.
+//!
+//! The instruction guarantees:
+//!
+//! 1. The statement covers the program id, the target tree, every SPP data byte and each deposited mint.
+//! 2. The tracking root comes from the ring's pin, and a policy ring also binds its own root, its policy and any curator root.
+//! 3. A record covering the deposit class signs when the ring configured one.
+//! 4. `ring_auth` sits only in SPP's `ring_config` slot, and the depositor signs.
+//!
+//! The instruction relies on SPP for the debit, the settlement accounts of each asset group, and the
+//! activation and pause of `RingConfig`.
+//!
+//! Read after `instructions/accounts/loader.rs`. Read before `instructions/settlement/deposit_audit.rs`.
+
 use custom_ring_interface::{
     cosign::CoSignDemand, ring_deposit_assets, CustomRingError, DepositRegistry, RingMode,
     RootRead, RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
@@ -39,6 +56,7 @@ pub fn process_deposit_ix(
     .load(|| Ok(iter.next_account("registry")?))?;
     let roots = registries.roots(Clock::get()?.slot);
     // 2. Every deposit binds the tracking root, a policy ring also its own root, its policy and any curator root.
+    // A revision the ring does not read must be zero, a frame names no unbound registry.
     let tracking_root = roots.tracking(audited.tracking_revision)?;
     let own_root = roots.own_if_read(
         audited.own_revision,
@@ -63,6 +81,7 @@ pub fn process_deposit_ix(
         .verify(requirement)?;
     }
     let spp_accounts = iter.remaining()?;
+    // The statement binds the mode bit, the deposit circuit reads it in no predicate.
     let anonymous = mode == RingMode::Anonymous;
     // 4. The ring PDA sits in its SPP slot alone and the depositor SPP debits signs.
     let ring_auth =
@@ -73,6 +92,7 @@ pub fn process_deposit_ix(
     let tree = spp_accounts
         .first()
         .ok_or(ProgramError::NotEnoughAccountKeys)?;
+    // The mints come from SPP's list at SPP's stride, the circuit screens the assets SPP deposits.
     let assets = ring_deposit_assets(&deposit, |index| {
         spp_accounts
             .get(index)
