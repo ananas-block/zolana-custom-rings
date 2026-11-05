@@ -44,6 +44,8 @@ use spr_program::instruction::{
 use spr_transaction::{serialization::confidential::ConfidentialOutputPlaintext, Data, DataRecord};
 use zolana_ring_transaction::RingDepositPlaintext;
 
+pub mod inline_capacity;
+
 /// The narrowest withdrawal capacity the catalog keys.
 const LEGS: usize = 4;
 /// `N_PUBLIC_SLOTS` distinct mints name the most SPL accounts.

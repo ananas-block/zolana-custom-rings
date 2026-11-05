@@ -131,6 +131,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("inline-capacity") => {
+            if let Err(error) = frame_fit::inline_capacity::run() {
+                eprintln!("inline-capacity failed: {error:?}");
+                std::process::exit(1);
+            }
+        }
         Some("frame-fit") => {
             if let Err(error) = frame_fit::run() {
                 eprintln!("frame-fit failed: {error:?}");

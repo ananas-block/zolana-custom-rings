@@ -58,9 +58,19 @@ pub struct TransferShape {
     pub owners: u8,
     pub entry: bool,
     pub wide: bool,
+    /// The most tracking rows one inline transaction on the key opens.
+    pub tracking: u8,
+    /// The most owner and asset records one inline transaction reads in a pool, public slot assets aside.
+    pub records: u8,
 }
 
-const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
+const fn narrow(
+    outputs: u8,
+    inputs: u8,
+    withdrawals: u8,
+    owners: u8,
+    pools: [u8; 2],
+) -> TransferShape {
     TransferShape {
         outputs,
         inputs,
@@ -68,61 +78,64 @@ const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> Transfe
         owners,
         entry: false,
         wide: false,
+        tracking: pools[0],
+        records: pools[1],
     }
 }
 
-const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
+const fn wide(
+    outputs: u8,
+    inputs: u8,
+    withdrawals: u8,
+    owners: u8,
+    pools: [u8; 2],
+) -> TransferShape {
     TransferShape {
-        outputs,
-        inputs,
-        withdrawals,
-        owners,
         entry: false,
         wide: true,
+        ..narrow(outputs, inputs, withdrawals, owners, pools)
     }
 }
 
-const fn entry(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
+const fn entry(
+    outputs: u8,
+    inputs: u8,
+    withdrawals: u8,
+    owners: u8,
+    pools: [u8; 2],
+) -> TransferShape {
     TransferShape {
-        outputs,
-        inputs,
-        withdrawals,
-        owners,
         entry: true,
         wide: true,
+        ..narrow(outputs, inputs, withdrawals, owners, pools)
     }
 }
 
 /// Ascending outputs, a frame takes the first that holds its SPP width.
-const NARROW_SHAPES: [TransferShape; 4] = [
-    narrow(2, 24, 4, 4),
-    narrow(4, 24, 4, 4),
-    narrow(8, 16, 4, 4),
-    narrow(16, 5, 8, 5),
+const NARROW_SHAPES: [TransferShape; 3] = [
+    narrow(2, 24, 4, 4, [6, 12]),
+    narrow(4, 24, 4, 4, [8, 16]),
+    narrow(8, 16, 4, 4, [12, 24]),
 ];
 /// The wide flag takes the first row holding the frame, the last only past 24 inputs.
-const WIDE_SHAPES: [TransferShape; 4] = [
-    wide(8, 24, 32, 24),
-    wide(16, 5, 8, 5),
-    // Sized by the 8x16 rows of `test-vectors/proof/ring-frame-fit.md`, those frames settle buffered.
-    // Wide alone, a narrow row would leave a salted read of the same frame with no key.
-    wide(16, 8, 8, 8),
-    wide(2, 49, 4, 12),
+const WIDE_SHAPES: [TransferShape; 2] =
+    [wide(8, 24, 32, 13, [42, 88]), wide(2, 40, 4, 8, [11, 24])];
+/// A frame takes the first row holding its width.
+const ENTRY_SHAPES: [TransferShape; 3] = [
+    entry(4, 8, 4, 8, [14, 32]),
+    entry(8, 2, 4, 2, [14, 36]),
+    entry(8, 5, 4, 4, [15, 38]),
 ];
-/// A frame takes the first row holding its width, the last sized by the 4x8 rows of `test-vectors/proof/ring-frame-fit.md`.
-const ENTRY_SHAPES: [TransferShape; 3] = [entry(4, 8, 4, 8), entry(8, 2, 4, 2), entry(8, 4, 4, 4)];
-/// Sized by the entry table of `test-vectors/proof/ring-frame-fit.md`.
-const WIDE_ENTRY_SHAPE: TransferShape = entry(2, 24, 32, 12);
+const WIDE_ENTRY_SHAPE: TransferShape = entry(8, 8, 32, 8, [38, 80]);
 
-pub const TRANSFER_SHAPES: [TransferShape; 12] = [
+/// Each key's widths and pools are exactly what the inline transactions it serves reach, pinned
+/// by `ring-xtask inline-capacity`.
+pub const TRANSFER_SHAPES: [TransferShape; 9] = [
     NARROW_SHAPES[0],
     NARROW_SHAPES[1],
     NARROW_SHAPES[2],
-    NARROW_SHAPES[3],
     WIDE_SHAPES[0],
     WIDE_SHAPES[1],
-    WIDE_SHAPES[2],
-    WIDE_SHAPES[3],
     ENTRY_SHAPES[0],
     ENTRY_SHAPES[1],
     ENTRY_SHAPES[2],
@@ -170,67 +183,6 @@ impl TransferShape {
                 .is_some_and(|pools| spend.pools.within(pools))
     }
 
-    /// The most distinct rows and withdrawal owners one spend on the key names, mirror `publicOwners`.
-    const fn public_owners(self) -> usize {
-        let mut most = 0;
-        let mut mode = 0;
-        while mode < RowAuthorization::ALL.len() {
-            let authorization = RowAuthorization::ALL[mode];
-            mode += 1;
-            if self.entry && !authorization.enters() {
-                continue;
-            }
-            let mut legs = 0;
-            while legs <= self.withdrawals as usize {
-                let named = self.fitted_rows(authorization, legs) + authorization.leg_owners(legs);
-                if named > most {
-                    most = named;
-                }
-                legs += 1;
-            }
-        }
-        most
-    }
-
-    /// The key's rows the addresses admit beside `legs`, each row spending one note, the fewest
-    /// nullifier PDAs a row can take.
-    const fn fitted_rows(self, authorization: RowAuthorization, legs: usize) -> usize {
-        let mut rows = self.owners as usize;
-        while rows > 0 {
-            let fit = TransferAddresses {
-                n_inputs: rows,
-                co_signers: 0,
-                legs,
-            }
-            .owner_rows(authorization);
-            if rows <= fit {
-                break;
-            }
-            rows -= 1;
-        }
-        rows
-    }
-
-    /// Mirror `trackedWithdrawals`.
-    const fn tracked_withdrawals(self) -> usize {
-        if self.wide {
-            self.public_owners() - self.owners as usize
-        } else {
-            0
-        }
-    }
-
-    /// Mirror `saltedKeys`.
-    const fn salted_keys(self) -> usize {
-        if self.wide {
-            2 * self.public_owners() + self.outputs as usize
-                - self.owners as usize
-                - self.withdrawals as usize
-        } else {
-            0
-        }
-    }
-
     pub const fn audit_key(self) -> AuditKey {
         AuditKey {
             class: self.inputs as usize,
@@ -244,6 +196,14 @@ impl TransferShape {
     pub const fn seals_like(self, other: Self, has_data: bool) -> bool {
         self.audit_key().first_record_counter() == other.audit_key().first_record_counter()
             && (!has_data || self.outputs == other.outputs)
+    }
+
+    /// The catalog row of `circuit`, `None` outside the transfer keys.
+    #[must_use]
+    pub fn of(circuit: RingCircuit) -> Option<Self> {
+        TRANSFER_SHAPES
+            .into_iter()
+            .find(|shape| shape.circuit() == circuit)
     }
 
     const fn circuit(self) -> RingCircuit {
@@ -275,27 +235,12 @@ pub enum RowAuthorization {
 }
 
 impl RowAuthorization {
-    pub const ALL: [Self; 3] = [Self::Run, Self::InProof, Self::Hidden];
-
     /// Rows outside the owner run, each takes its nullifier PDA alone.
     pub const fn unsigned_rows(self) -> usize {
         match self {
             Self::Run => 0,
             Self::InProof | Self::Hidden => 1,
         }
-    }
-
-    /// Distinct withdrawal owners `legs` can name, `anonymous_exit_destination` holds a hidden spend to one.
-    pub const fn leg_owners(self, legs: usize) -> usize {
-        match self {
-            Self::Run | Self::InProof => legs,
-            Self::Hidden => (legs > 0) as usize,
-        }
-    }
-
-    /// `InProofOwner::proof_data` carries no default owner tag.
-    pub const fn enters(self) -> bool {
-        !matches!(self, Self::InProof)
     }
 }
 
@@ -450,39 +395,16 @@ impl RingCircuit {
 
     /// Each pool takes as many subjects as records, `None` outside the transfer keys.
     pub fn record_pools(self) -> Option<RecordPools> {
-        let Self::Transfer {
-            outputs,
-            inputs,
-            withdrawals,
-            owners,
-            entry,
-            wide,
-        } = self
-        else {
-            return None;
-        };
-        let shape = TransferShape {
-            outputs,
-            inputs,
-            withdrawals,
-            owners,
-            entry,
-            wide,
-        };
-        let (outputs, withdrawals, owners) = (
-            usize::from(outputs),
-            usize::from(withdrawals),
-            usize::from(owners),
-        );
+        let shape = TransferShape::of(self)?;
         // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
-        let withdrawal_assets = withdrawals.min(N_PUBLIC_SLOTS);
+        let withdrawal_assets = usize::from(shape.withdrawals).min(N_PUBLIC_SLOTS);
         // An input slot takes no row, its asset reads a payment's record or a free one and a spend
         // past the rows selects the wide key.
-        let distinct = owners + 2 * outputs + withdrawals + shape.salted_keys();
+        let records = usize::from(shape.records);
         Some(RecordPools {
-            own: distinct + withdrawal_assets.max(N_PUBLIC_SLOTS),
-            curator: distinct + withdrawal_assets,
-            tracking: owners + outputs + shape.tracked_withdrawals(),
+            own: records + withdrawal_assets.max(N_PUBLIC_SLOTS),
+            curator: records + withdrawal_assets,
+            tracking: usize::from(shape.tracking),
         })
     }
 }
