@@ -671,11 +671,6 @@ export {
   type RingRecipientClient,
   type TrackingRoot,
 } from "../rpc/tracking-resolver.js";
-export {
-  resolveViewingKey,
-  type ResolvedViewingKey,
-  type ViewingKeyClient,
-} from "../rpc/viewing-key-resolver.js";
 export type {
   PendingEnrollment,
   PendingEnrollments,
