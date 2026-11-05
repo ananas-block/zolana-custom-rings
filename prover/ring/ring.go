@@ -12,6 +12,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
+	spp "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 	"github.com/helius-labs/zolana/prover/server/prover/provingkeys"
 )
@@ -32,8 +33,6 @@ func (k Key) extension() common.ExtensionCircuit {
 		return bindPolicy[TransferParams](k, transfer.NewTransferCircuit, k.transferShape())
 	case ApplyRecords:
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
-	case ApplyEnrollments:
-		return bind[ApplyEnrollmentsParams](k, registry.NewApplyEnrollmentsCircuit, k.Inputs)
 	case RegisterKey:
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:
@@ -64,13 +63,13 @@ func bind[P headed, S any, C frontend.Circuit](k Key, constructor func(S) (C, er
 type pooledCircuit interface {
 	frontend.Circuit
 	RecordPools() policy.RecordPoolShape
-	TrackingPoolSize() int
+	CredentialPoolSize() int
 }
 
 type pooledParams interface {
 	headed
 	pooled() PolicyParams
-	tracking() TrackingParams
+	credentials() CredentialParams
 }
 
 // bindPolicy refuses a pool index outside the key's pools before assignment.
@@ -79,7 +78,7 @@ func bindPolicy[P pooledParams, S any, C pooledCircuit](k Key, constructor func(
 	plain := extension.Request
 	extension.Request = func() common.ExtensionRequest {
 		circuit := extension.Circuit().(C)
-		return &policyRequest[P]{request: plain().(*request[P]), pools: circuit.RecordPools(), trackingPool: circuit.TrackingPoolSize()}
+		return &policyRequest[P]{request: plain().(*request[P]), pools: circuit.RecordPools(), credentialPool: circuit.CredentialPoolSize()}
 	}
 	return extension
 }
@@ -107,15 +106,15 @@ func (r *request[P]) UnmarshalJSON(data []byte) error {
 
 type policyRequest[P pooledParams] struct {
 	*request[P]
-	pools        policy.RecordPoolShape
-	trackingPool int
+	pools          policy.RecordPoolShape
+	credentialPool int
 }
 
 func (r *policyRequest[P]) Assignment() (frontend.Circuit, error) {
-	if err := r.params.pooled().validateIndices(r.pools, r.trackingPool); err != nil {
+	if err := r.params.pooled().validateIndices(r.pools, r.credentialPool); err != nil {
 		return nil, err
 	}
-	if err := r.params.tracking().validateIndices(r.trackingPool); err != nil {
+	if err := r.params.credentials().validateIndices(r.credentialPool); err != nil {
 		return nil, err
 	}
 	return r.request.Assignment()
@@ -123,11 +122,11 @@ func (r *policyRequest[P]) Assignment() (frontend.Circuit, error) {
 
 func (p PolicyParams) pooled() PolicyParams { return p }
 
-func (p TransferParams) tracking() TrackingParams { return p.TrackingParams }
+func (p TransferParams) credentials() CredentialParams { return p.CredentialParams }
 
-func (p DepositParams) tracking() TrackingParams { return p.TrackingParams }
+func (p DepositParams) credentials() CredentialParams { return p.CredentialParams }
 
-func (p PolicyParams) validateIndices(pools policy.RecordPoolShape, trackingPool int) error {
+func (p PolicyParams) validateIndices(pools policy.RecordPoolShape, credentialPool int) error {
 	if err := validatePoolIndices(p.OwnSubjects, p.OwnProof, pools.Own); err != nil {
 		return err
 	}
@@ -138,7 +137,7 @@ func (p PolicyParams) validateIndices(pools policy.RecordPoolShape, trackingPool
 		if err := entry.validateOwnerIndices(pools); err != nil {
 			return err
 		}
-		if err := poolIndex("tracking subject", entry.Tracking, trackingPool); err != nil {
+		if err := poolIndex("credential subject", entry.Credential, credentialPool); err != nil {
 			return err
 		}
 	}
@@ -155,19 +154,20 @@ func (p PolicyParams) validateIndices(pools policy.RecordPoolShape, trackingPool
 	return nil
 }
 
-func (t TrackingParams) validateIndices(size int) error {
-	for _, subject := range t.TrackingSubjects {
-		if err := poolIndex("tracking record", subject.RecordIndex, size); err != nil {
+func (c CredentialParams) validateIndices(size int) error {
+	if len(c.StateRoots) != size || len(c.Openings) != size {
+		return fmt.Errorf("credential roots and openings must match the pool")
+	}
+	for _, opening := range c.Openings {
+		if err := poolIndex("credential tree", uint32(opening.TreeSlot), size); err != nil {
 			return err
 		}
-	}
-	for _, path := range t.TrackingProof.Paths {
-		if path.Index >= registry.TrackingCapacity {
-			return fmt.Errorf("tracking path index is outside the tree")
+		if opening.StateIndex >= uint64(1)<<spp.StateTreeHeight || opening.LowIndex >= uint64(1)<<spp.NullifierTreeHeight {
+			return fmt.Errorf("credential path index is outside the tree")
 		}
 	}
-	for _, entry := range slices.Concat(t.RowEntries, t.OutputEntries) {
-		if err := poolIndex("tracking subject", entry, size); err != nil {
+	for _, entry := range slices.Concat(c.RowEntries, c.OutputEntries) {
+		if err := poolIndex("credential subject", entry, size); err != nil {
 			return err
 		}
 	}

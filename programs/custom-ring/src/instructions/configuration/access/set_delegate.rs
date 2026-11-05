@@ -40,7 +40,7 @@ pub fn process_set_delegate_ix(
     if ring.delegate().is_some() {
         return Err(CustomRingError::DelegateAlreadySet.into());
     }
-    // 2. The delegate holds no role, and the tracking rows every ring holds serve its proof the victim's key.
+    // 2. The delegate holds no role, and immutable credentials bind nonzero input keys to their enrolled owners.
     ring.roles.check(Some(delegate.address()))?;
     ring.delegate = *delegate.address();
     Ok(())

@@ -61,26 +61,41 @@ type EntryOpening struct {
 	MintChunks []Field `json:"mintChunks"`
 }
 
-// TrackingRecordParams is one opened tracking leaf.
-type TrackingRecordParams struct {
-	Member      Field `json:"member"`
-	Next        Field `json:"next"`
-	NullifierPk Field `json:"nullifierPk"`
-	CtHash      Field `json:"ctHash"`
-	View0       Field `json:"view0"`
-	View1       Field `json:"view1"`
-	Revision    Field `json:"revision"`
-	ListTag     Field `json:"listTag"`
+type CredentialStateRoot struct {
+	TreeID uint16 `json:"treeId"`
+	Root   Field  `json:"root"`
 }
 
-// TrackingParams opens every owner row and live ring output under the frame's tracking root.
-type TrackingParams struct {
-	TrackingRoot     Field                  `json:"trackingRoot"`
-	TrackingRecords  []TrackingRecordParams `json:"trackingRecords"`
-	TrackingProof    SharedRegistryProof    `json:"trackingProof"`
-	TrackingSubjects []PooledSubject        `json:"trackingSubjects"`
-	RowEntries       []uint32               `json:"rowEntries"`
-	OutputEntries    []uint32               `json:"outputEntries"`
+type CredentialLeafParams struct {
+	RingID      Field   `json:"-"`
+	Member      Field   `json:"member"`
+	NullifierPk Field   `json:"nullifierPk"`
+	ListTag     Field   `json:"listTag"`
+	Aud         []Field `json:"aud"`
+	Eph         []Field `json:"eph"`
+	CtHash      Field   `json:"ctHash"`
+	Blinding    Field   `json:"blinding"`
+	TreeSlot    uint8   `json:"treeSlot"`
+	StateIndex  uint64  `json:"stateIndex"`
+	StatePath   []Field `json:"statePath"`
+}
+
+type CredentialOpeningParams struct {
+	Present bool `json:"present"`
+	CredentialLeafParams
+	LowValue Field   `json:"lowValue"`
+	LowNext  Field   `json:"lowNext"`
+	LowIndex uint64  `json:"lowIndex"`
+	LowPath  []Field `json:"lowPath"`
+}
+
+type CredentialParams struct {
+	CredentialOwner Field                     `json:"credentialOwner"`
+	AddressRoot     Field                     `json:"addressRoot"`
+	StateRoots      []CredentialStateRoot     `json:"stateRoots"`
+	Openings        []CredentialOpeningParams `json:"credentialOpenings"`
+	RowEntries      []uint32                  `json:"rowEntries"`
+	OutputEntries   []uint32                  `json:"outputEntries"`
 }
 
 type TransferParams struct {
@@ -93,21 +108,22 @@ type TransferParams struct {
 	PartyIdentities []Field `json:"partyIdentities"`
 	ApprovalMask    uint8   `json:"approvalMask"`
 	// Both absent read zero, a frame that discloses nothing.
-	ApprovalTotals    *Field          `json:"approvalTotals,omitempty"`
-	ApprovalBlinder   *Field          `json:"approvalBlinder,omitempty"`
-	OutputCount       uint8           `json:"outputCount"`
-	Outputs           []OutputOpening `json:"outputs"`
-	InputCount        uint8           `json:"inputCount"`
-	Inputs            []Opening       `json:"inputs"`
-	Entries           []EntryOpening  `json:"entries,omitempty"`
-	SignerCount       uint8           `json:"signerCount"`
-	Signers           []Field         `json:"signers"`
-	SignerDataCounts  uint64          `json:"signerDataCounts,omitempty"`
-	Rows              []Field         `json:"rows"`
-	PrivateTxHash     Field           `json:"privateTxHash"`
-	PrivateTxBlinding Field           `json:"privateTxBlinding"`
-	AddressChain      Field           `json:"addressChain"`
-	TrackingParams
+	ApprovalTotals      *Field          `json:"approvalTotals,omitempty"`
+	ApprovalBlinder     *Field          `json:"approvalBlinder,omitempty"`
+	OutputCount         uint8           `json:"outputCount"`
+	Outputs             []OutputOpening `json:"outputs"`
+	InputCount          uint8           `json:"inputCount"`
+	InputNullifierChain Field           `json:"inputNullifierChain"`
+	InputNullifiers     []Field         `json:"inputNullifiers"`
+	Inputs              []Opening       `json:"inputs"`
+	Entries             []EntryOpening  `json:"entries,omitempty"`
+	SignerCount         uint8           `json:"signerCount"`
+	Signers             []Field         `json:"signers"`
+	SignerDataCounts    uint64          `json:"signerDataCounts,omitempty"`
+	Rows                []Field         `json:"rows"`
+	PrivateTxHash       Field           `json:"privateTxHash"`
+	PrivateTxBlinding   Field           `json:"privateTxBlinding"`
+	CredentialParams
 	PolicyParams
 }
 
@@ -164,10 +180,10 @@ type PooledEntry struct {
 	Curator []uint32 `json:"curator"`
 }
 
-// PooledOwnerEntry takes a zero salt with no tracking row.
+// An absent credential requires a zero list salt.
 type PooledOwnerEntry struct {
 	PooledEntry
-	Tracking      uint32   `json:"tracking"`
+	Credential    uint32   `json:"credential"`
 	ListSalt      Field    `json:"listSalt"`
 	OwnSalted     uint32   `json:"ownSalted"`
 	CuratorSalted []uint32 `json:"curatorSalted"`
@@ -239,38 +255,22 @@ type ApplyRecordsParams struct {
 	ChainEnd     Field  `json:"chainEnd"`
 	Count        uint8  `json:"count"`
 	// A nil write past Count assigns zeros.
-	Writes []*RecordWriteProofInput `json:"writes"`
+	Writes           []*RecordWriteProofInput `json:"writes"`
+	CredentialWrites uint64                   `json:"credentialWrites"`
+	PrivateRingID    Field                    `json:"privateRingId"`
+	CredentialOwner  Field                    `json:"credentialOwner"`
+	AddressRoot      Field                    `json:"addressRoot"`
+	StateRoots       []CredentialStateRoot    `json:"stateRoots"`
+	Credentials      []*CredentialWriteParams `json:"credentials"`
 }
 
-// TrackingWrite is the witness of one applied entry.
-type TrackingWrite struct {
-	Member      Field                `json:"member"`
-	NullifierPk Field                `json:"nullifierPk"`
-	CtHash      Field                `json:"ctHash"`
-	View0       Field                `json:"view0"`
-	View1       Field                `json:"view1"`
-	Revision    Field                `json:"revision"`
-	ListTag     Field                `json:"listTag"`
-	Exists      bool                 `json:"exists"`
-	OldRecord   TrackingRecordParams `json:"oldRecord"`
-	Index       uint64               `json:"index"`
-	Path        []Field              `json:"path"`
-	LowRecord   TrackingRecordParams `json:"lowRecord"`
-	LowIndex    uint64               `json:"lowIndex"`
-	LowPath     []Field              `json:"lowPath"`
-}
-
-type ApplyEnrollmentsParams struct {
-	RequestHead
-	OldRoot      Field  `json:"oldRoot"`
-	NewRoot      Field  `json:"newRoot"`
-	OldNextIndex uint32 `json:"oldNextIndex"`
-	NewNextIndex uint32 `json:"newNextIndex"`
-	ChainStart   Field  `json:"chainStart"`
-	ChainEnd     Field  `json:"chainEnd"`
-	Count        uint8  `json:"count"`
-	// A nil write past Count assigns zeros.
-	Writes []*TrackingWrite `json:"writes"`
+type CredentialWriteParams struct {
+	Member       Field                `json:"member"`
+	ListSalt     Field                `json:"listSalt"`
+	Leaf         CredentialLeafParams `json:"leaf"`
+	AddressNext  Field                `json:"addressNext"`
+	AddressIndex uint64               `json:"addressIndex"`
+	AddressPath  []Field              `json:"addressPath"`
 }
 
 type RegisterKeyParams struct {
@@ -296,49 +296,30 @@ type DepositParams struct {
 	Assets          []Field   `json:"assets"`
 	Amounts         []Field   `json:"amounts"`
 	MintChunks      [][]Field `json:"mintChunks"`
-	TrackingParams
+	CredentialParams
 	PolicyParams
 }
 
-// TrackingLeaf mirrors registry.TrackingRecord field for field.
-type TrackingLeaf struct {
-	Member      Field `json:"member"`
-	Next        Field `json:"next"`
-	NullifierPk Field `json:"nullifierPk"`
-	CtHash      Field `json:"ctHash"`
-	View0       Field `json:"view0"`
-	View1       Field `json:"view1"`
-	Revision    Field `json:"revision"`
-	ListTag     Field `json:"listTag"`
-}
-
-// TrackingOpening mirrors registry.TrackingOpening field for field.
-type TrackingOpening struct {
-	Present bool               `json:"present"`
-	Record  TrackingLeaf       `json:"record"`
-	Path    SharedRegistryPath `json:"path"`
-}
-
-// MergeParams seals a ring's SPP merge output to its auditor, Tracking is nil under a zero key.
 type MergeParams struct {
 	RequestHead
-	OutputUtxoHash     Field            `json:"outputUtxoHash"`
-	FirstNullifier     Field            `json:"firstNullifier"`
-	RingProgramID      Field            `json:"ringProgramId"`
-	AuditorPk          Bytes            `json:"auditorPk"`
-	Payer              Field            `json:"payer"`
-	TrackingRoot       Field            `json:"trackingRoot"`
-	EphSk              Bytes            `json:"ephSk"`
-	OwnerKey           Bytes            `json:"ownerKey"`
-	OwnerPkHash        Field            `json:"ownerPkHash"`
-	MintChunks         []Field          `json:"mintChunks"`
-	Asset              Field            `json:"asset"`
-	Amount             Field            `json:"amount"`
-	NullifierPk        Field            `json:"nullifierPk"`
-	Seed               Field            `json:"seed"`
-	OutputTreeID       Field            `json:"outputTreeId"`
-	OutputRingDataHash Field            `json:"outputRingDataHash"`
-	Tracking           *TrackingOpening `json:"tracking"`
+	OutputUtxoHash     Field                 `json:"outputUtxoHash"`
+	FirstNullifier     Field                 `json:"firstNullifier"`
+	RingProgramID      Field                 `json:"ringProgramId"`
+	AuditorPk          Bytes                 `json:"auditorPk"`
+	Payer              Field                 `json:"payer"`
+	CredentialOwner    Field                 `json:"credentialOwner"`
+	StateRoot          CredentialStateRoot   `json:"stateRoot"`
+	EphSk              Bytes                 `json:"ephSk"`
+	OwnerKey           Bytes                 `json:"ownerKey"`
+	OwnerPkHash        Field                 `json:"ownerPkHash"`
+	MintChunks         []Field               `json:"mintChunks"`
+	Asset              Field                 `json:"asset"`
+	Amount             Field                 `json:"amount"`
+	NullifierPk        Field                 `json:"nullifierPk"`
+	Seed               Field                 `json:"seed"`
+	OutputTreeID       Field                 `json:"outputTreeId"`
+	OutputRingDataHash Field                 `json:"outputRingDataHash"`
+	Credential         *CredentialLeafParams `json:"credential"`
 }
 
 // Unmarshal refuses an unknown or repeated key, a missing key without omitempty and trailing data.

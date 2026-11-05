@@ -12,7 +12,10 @@ use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
 use zolana_ring_policy::{ListSet, ListWrite, MintPolicy, Writer};
 
 use crate::{
+    bytes::Bytes,
+    credential_read::CredentialRead,
     error::CustomRingError,
+    key_catalog::RingCircuit,
     member_registry::{check_member, RecordWrite, APPLY_BATCH},
     state::{RingRole, RingRoles},
     storage::Revision,
@@ -58,6 +61,7 @@ const PROOF_UNITS: u32 = 1_400_000;
 
 instruction_tags! {
     Transfer = TRANSFER: 55 => PROOF_UNITS,
+    Enroll = ENROLL: 65 => PROOF_UNITS,
     Merge = MERGE: 57 => PROOF_UNITS,
     UpdateAuthority = UPDATE_AUTHORITY: 6 => ACCOUNT_UNITS,
     SetPaused = SET_PAUSED: 11 => ACCOUNT_UNITS,
@@ -156,19 +160,65 @@ impl CustomRingProof {
 
 const _: () = assert!(CustomRingProof::SIZE == 192);
 
-/// `tag || key_capacity || proof || tracking_revision || own_revision || curator_revision`, then the SPP deposit instruction unchanged.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
+/// The credential root selection has variable length, the SPP deposit follows the two policy revisions.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepositPrefix {
     pub tag: u8,
     /// Every deposit key proves one statement, a key below the count cannot solve it.
     pub key_capacity: u8,
     pub proof: CustomRingProof,
-    pub tracking_revision: Revision,
+    pub credential_read: CredentialRead,
     /// Zero off a policy ring.
     pub own_revision: Revision,
     /// Zero without a curator source.
     pub curator_revision: Revision,
+}
+
+impl DepositPrefix {
+    pub fn parse(data: &mut &[u8]) -> Result<Self, CustomRingError> {
+        // 1. The fixed head selects the deposit key before the root table is accepted.
+        let mut bytes = Bytes::new(data, CustomRingError::InvalidInstructionData);
+        let tag = bytes.byte()?;
+        let key_capacity = bytes.byte()?;
+        let proof = *bytes.pod()?;
+        let credential_read = CredentialRead::read(&mut bytes)?;
+        let prefix = Self {
+            tag,
+            key_capacity,
+            proof,
+            credential_read,
+            own_revision: *bytes.pod()?,
+            curator_revision: *bytes.pod()?,
+        };
+        // 2. Every published root fits the selected key, the caller receives the exact remaining SPP bytes.
+        prefix.check()?;
+        *data = bytes.rest();
+        Ok(prefix)
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
+        self.check()?;
+        let mut out = vec![self.tag, self.key_capacity];
+        out.extend_from_slice(bytemuck::bytes_of(&self.proof));
+        self.credential_read.encode_into(&mut out);
+        out.extend_from_slice(&self.own_revision.0);
+        out.extend_from_slice(&self.curator_revision.0);
+        Ok(out)
+    }
+
+    fn check(&self) -> Result<(), CustomRingError> {
+        if self.tag != tag::DEPOSIT {
+            return Err(CustomRingError::InvalidAuditedDeposit);
+        }
+        let circuit = RingCircuit::Deposit {
+            capacity: self.key_capacity,
+        };
+        self.credential_read.check_capacity(
+            circuit
+                .credential_capacity()
+                .ok_or(CustomRingError::RingShapeUnkeyed)?,
+        )
+    }
 }
 
 /// Compressed Groth16 points, `b` decompresses to SPP's raw 128 bytes.
@@ -267,7 +317,7 @@ macro_rules! fixed_ix_data {
     )*};
 }
 
-fixed_ix_data!(DepositPrefix, WriteRecordsIxData, ApplyRecordsIxData);
+fixed_ix_data!(WriteRecordsIxData, ApplyRecordsIxData);
 
 impl WriteRecordsIxData {
     pub const fn new(write: ListWrite) -> Self {

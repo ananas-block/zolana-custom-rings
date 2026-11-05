@@ -135,12 +135,7 @@ type EntryWires struct {
 	MintChunks [2]frontend.Variable
 }
 
-// A ring input gets no record, the stream seals R alone. The auditor links a spent ring note by
-// recomputing its nullifier from the opening an earlier record gave and the owner's escrowed secret,
-// then matching SPP's published list. No constraint here binds a nullifier to a record, a note the
-// auditor never opened stays unlinked. R is what separates that unlinked spend from padding, SPP's
-// published nullifiers read alike and a position at or past R is a dummy or an address. A default-ring
-// input has no earlier record, so an entry key's evidence opens it in the same stream.
+// Note count and address bits bind note positions before the dummy suffix.
 type SpentInputs struct {
 	Slots []shared.Output
 	// The published n, R may sit below it.
@@ -160,13 +155,17 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 		panic("audit: the input section differs from the key's class")
 	}
 	realInputs := frontend.Variable(0)
+	addresses := make([]frontend.Variable, len(s.Slots))
 	defaults := make([]frontend.Variable, len(s.Slots))
 	for i, slot := range s.Slots {
-		// OpenInputs holds dummies last, position below R is a spend.
 		realInputs = api.Add(realInputs, slot.Utxo)
+		addresses[i] = slot.Address
 		defaults[i] = slot.Exit
 	}
-	head := ringgadget.UintBytesBE(api, realInputs, RealInputCountLen)
+	head := slices.Concat(
+		ringgadget.UintBytesBE(api, realInputs, RealInputCountLen),
+		ringgadget.UintBytesBE(api, weightedBits(api, addresses), AddressInputBitsLen),
+	)
 	if !ranges.Entry {
 		// A key with no entry capacity carries no evidence, a default-ring spend under it would stay unreadable.
 		for _, slot := range s.Slots {

@@ -55,6 +55,8 @@ pub mod tags;
 mod types;
 #[path = "state/viewing_history.rs"]
 pub mod viewing_history;
+#[path = "operations/viewing_key.rs"]
+mod viewing_key;
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
@@ -62,10 +64,12 @@ pub use crate::anonymous::{
     AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, AuditorRecovery, SenderClaim,
     SentCheck, SentPayment,
 };
-pub use crate::anonymous_wallet::{AnonymousWallet, PendingClaim, PendingNote};
+pub use crate::anonymous_wallet::{
+    AnonymousWallet, LedgerScan, PendingClaim, PendingNote, ScanCommit,
+};
 #[cfg(feature = "solana-rpc")]
 pub use crate::origin::{confirmed_origin, ConfirmedRingOrigins, ORIGIN_TRANSACTION_CONFIG};
-pub use crate::tags::{IndexerReads, TagWindow, TAGS_PER_REQUEST};
+pub use crate::tags::{HistoryRows, IndexerReads, TagWindow, TAGS_PER_REQUEST};
 pub use crate::viewing_history::{
     AdvancedTag, StreamCounter, ViewingHistory, ViewingKeyEntry, PENDING_RETENTION, TAG_GAP,
 };
@@ -112,6 +116,7 @@ pub use crate::{
         CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
         OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
+    viewing_key::{ResolvedViewingKey, ViewingKeyError, ViewingKeyResolver},
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};
 pub use zolana_ring_indexer::rpc::RingRpcError;

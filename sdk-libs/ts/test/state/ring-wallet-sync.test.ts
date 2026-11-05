@@ -15,10 +15,20 @@ import {
 } from "@heliuslabs/zolana";
 import { DEFAULT_TREE_ID, type Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { bytesKey, ZERO_NULLIFIER_PK, encodeBase58 } from "@heliuslabs/zolana/internal";
+import {
+  bytesKey,
+  ZERO_NULLIFIER_PK,
+  encodeBase58,
+  encodeMergeOutputData,
+  encryptMergeOutput,
+  mergeOutputBlinding,
+  mergeOutputKey,
+  poseidon,
+} from "@heliuslabs/zolana/internal";
 import {
   AssetRegistry,
   Wallet,
+  ownerUtxoHash,
   type IndexedShieldedTransaction,
 } from "@heliuslabs/zolana/transaction";
 
@@ -32,7 +42,8 @@ import { deliveredSlotSecret, slotTag } from "../../src/crypto/derivation/ring-s
 import { noteState } from "../../src/state/exposed-notes.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { openRingNotes, syncRingWallet, type RingSyncClient } from "../../src/state/ring-sync.js";
-import { RingWallet } from "../../src/state/ring-wallet.js";
+import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
+import { ViewingHistory } from "../../src/state/viewing-history.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
@@ -163,8 +174,12 @@ function syncClient(
   };
 }
 
-function ringWallet(owner: ShieldedKeypair): RingWallet {
-  return RingWallet.create(new Wallet({ identity: owner.shieldedAddress() }));
+function ringWallet(owner: ShieldedKeypair): AnonymousWallet {
+  const identity = owner.shieldedAddress();
+  return AnonymousWallet.create(
+    new Wallet({ identity }),
+    ViewingHistory.create(identity.viewingPublicKey, 0n),
+  );
 }
 
 /** Ring body under the sender's agreement with the recipient key. */
@@ -239,6 +254,51 @@ describe("ring bodies", () => {
   });
 });
 
+/** A ring merge spending `nullifier`, its output encrypted under the owner's nullifier key. */
+function mergeOf(owner: ShieldedKeypair, nullifier: Bytes32, mint: Address) {
+  const key = owner.nullifierKey();
+  const salt = new Uint8Array(16).fill(3) as Bytes16;
+  const ringDataHash = new Uint8Array(32).fill(5) as Bytes32;
+  const commitment = ownerUtxoHash({
+    owner: poseidon([
+      owner.shieldedAddress().signingPublicKey.ownerProofInputHash(),
+      key.publicKey(),
+    ]),
+    asset: mint,
+    amount: AMOUNT,
+    blinding: mergeOutputBlinding(key, nullifier),
+    treeId: DEFAULT_TREE_ID,
+    ringDataHash,
+    ringProgramId: RING,
+  });
+  const transaction: IndexedShieldedTransaction = {
+    slot: 25n,
+    txSignature: "6".repeat(64) as Signature,
+    eventIndex: 0,
+    proofless: false,
+    ringProgramId: RING,
+    nullifiers: [nullifier, new Uint8Array(32).fill(7) as Bytes32],
+    messages: [],
+    outputSlots: [
+      {
+        viewTag: nullifier,
+        payload: encodeMergeOutputData({
+          salt,
+          ciphertext: encryptMergeOutput(
+            { amount: AMOUNT, mint },
+            mergeOutputKey(key, nullifier),
+            salt,
+          ),
+          ringDataHash,
+          ringV2: true,
+        }),
+        outputContext: { hash: commitment, tree: TREE, treeId: DEFAULT_TREE_ID, leafIndex: 4n },
+      },
+    ],
+  };
+  return { transaction, commitment };
+}
+
 describe("syncRingWallet", () => {
   it("reads a confidential payment under the slot tag it publishes", async () => {
     const recipient = ShieldedKeypair.generate();
@@ -268,12 +328,16 @@ describe("syncRingWallet", () => {
 
     expect(report.storedUtxos).toBe(1);
     expect(wallet.utxos().map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
-    // The core tags, the slot tag a delivery publishes, then the owner tag a zero-key merge carries.
+    // The core tags, then the slot tag a delivery publishes beside the owner tag a zero-key merge carries.
     const viewing = keys.viewingPublicKeys()[0]!;
     const owner = recipient.shieldedAddress().signingPublicKey.ownerProofInputHash();
     expect(
       client.getShieldedTransactionsByTags.mock.calls.map(([request]) => request.tags),
-    ).toEqual([expect.anything(), [slotTag(viewing.u())], [owner]]);
+    ).toEqual([expect.anything(), [slotTag(viewing.u()), owner]]);
+    expect(client.getEncryptedUtxosByTags.mock.calls.map(([request]) => request.tags)).toEqual([
+      expect.anything(),
+      [viewing.u()],
+    ]);
     expect(client.getShieldedTransactionsByTags.mock.calls[1]).toEqual([
       expect.objectContaining({ limit: 5 }),
       { poll: retry, requireSlot: 7n },
@@ -284,21 +348,22 @@ describe("syncRingWallet", () => {
       { poll: retry, requireSlot: 7n },
       context,
     ]);
-    for (const key of [viewing.u(), slotTag(viewing.u())])
-      for (const stream of ["transactions", "proofless"] as const)
-        expect(wallet._syncCheckpoint(stream, bytesKey(key))).toBe(20n);
-    expect(wallet._syncCheckpoint("transactions", bytesKey(owner))).toBe(20n);
+    for (const stream of ["transactions", "proofless"] as const)
+      expect(wallet._syncCheckpoint(stream, bytesKey(viewing.u()))).toBe(20n);
+    expect(ring.history().current().tagPosition).toBe(20n);
+    expect(ring.toJson()).toContain('"tagPosition":20}');
 
-    const calls = client.getShieldedTransactionsByTags.mock.calls.length;
+    const tagged = client.getShieldedTransactionsByTags.mock.calls.length;
+    const deposits = client.getEncryptedUtxosByTags.mock.calls.length;
     const second = await syncRingWallet(input, context);
 
     expect(second.storedUtxos).toBe(0);
     expect(wallet.utxos()).toHaveLength(1);
     const reads = [
-      ...client.getShieldedTransactionsByTags.mock.calls.slice(calls),
-      ...client.getEncryptedUtxosByTags.mock.calls.slice(2),
+      ...client.getShieldedTransactionsByTags.mock.calls.slice(tagged),
+      ...client.getEncryptedUtxosByTags.mock.calls.slice(deposits),
     ];
-    expect(reads).toHaveLength(5);
+    expect(reads).toHaveLength(4);
     for (const [request] of reads) expect(request.filters).toEqual({ slot: { gt: 20n } });
   });
 
@@ -492,7 +557,7 @@ describe("syncRingWallet", () => {
     expect(ring.wallet.utxos().map((entry) => entry.utxo.asset)).toEqual([SOL_MINT]);
     expect(ring.wallet.ringBalances()).toHaveLength(1);
     expect(ring.pendingOpenings().map((entry) => entry.utxo.asset)).toEqual([unknownMint]);
-    const restored = RingWallet.fromJson(ring.toJson());
+    const restored = AnonymousWallet.fromJson(ring.toJson());
     expect(restored.pendingOpenings().map((entry) => entry.outputContext.hash)).toEqual([
       pending.outputSlots[0]!.outputContext.hash,
     ]);
@@ -513,17 +578,96 @@ describe("syncRingWallet", () => {
       expect(request.filters).toEqual({ slot: { gt: 20n } });
   });
 
+  it("refuses a held key the history lists no entry for and moves nothing", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const identity = recipient.shieldedAddress();
+    const ring = AnonymousWallet.create(
+      new Wallet({ identity }),
+      ViewingHistory.create(ShieldedKeypair.generate().shieldedAddress().viewingPublicKey, 0n),
+    );
+    const client = syncClient([ringBody(recipient)]);
+    const before = ring.toJson();
+
+    await expect(syncRingWallet({ wallet: ring, keys, client })).rejects.toMatchObject({
+      code: "RING_HELD_KEY_NOT_IN_HISTORY",
+    });
+
+    expect(ring.toJson()).toBe(before);
+    expect(client.getShieldedTransactionsByTags.mock.calls).toHaveLength(1);
+  });
+
   it("refuses a stored document whose pending notes name another identity", () => {
-    const owner = ShieldedKeypair.generate();
-    const document = JSON.parse(ringWallet(owner).toJson()) as Record<string, string>;
+    const document = JSON.parse(ringWallet(ShieldedKeypair.generate()).toJson()) as Record<
+      string,
+      unknown
+    >;
     const other = JSON.parse(ringWallet(ShieldedKeypair.generate()).toJson()) as Record<
       string,
-      string
+      unknown
     >;
     expect(() =>
-      RingWallet.fromJson(
-        JSON.stringify({ wallet: document["wallet"], pending: other["pending"] }),
-      ),
+      AnonymousWallet.fromJson(JSON.stringify({ ...document, pending: other["pending"] })),
     ).toThrow(expect.objectContaining({ code: "RING_WALLET_DOCUMENT" }));
+  });
+
+  it("stores a merge output of an unregistered mint as pending and spendable once the mint registers", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const ring = ringWallet(recipient);
+    const { hash } = note(recipient);
+    const nullifier = recipient.nullifierKey().nullifier(hash, blinding());
+    const unknownMint = encodeBase58(new Uint8Array(32).fill(1));
+    const merge = mergeOf(recipient, nullifier, unknownMint);
+    const client = syncClient([ringBody(recipient)], [merge.transaction]);
+
+    await syncRingWallet({ wallet: ring, keys, client });
+
+    expect(ring.wallet.utxos().map((entry) => [entry.outputContext.hash, entry.spent])).toEqual([
+      [hash, true],
+    ]);
+    expect(ring.pendingOpenings().map((entry) => entry.outputContext.hash)).toEqual([
+      merge.commitment,
+    ]);
+    expect(ring._mergeRetries()).toEqual([]);
+    ring.wallet.ensureAsset(9n, unknownMint);
+    await syncRingWallet({ wallet: ring, keys, client });
+    expect(ring.pendingOpenings()).toEqual([]);
+    expect(ring.wallet.utxos().map((entry) => entry.outputContext.hash)).toEqual([
+      hash,
+      merge.commitment,
+    ]);
+  });
+
+  it("rereads a stored merge retry until the indexer returns its spend row", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const { hash } = note(recipient);
+    const nullifier = recipient.nullifierKey().nullifier(hash, blinding());
+    const merge = mergeOf(recipient, nullifier, SOL_MINT);
+    const client = syncClient([ringBody(recipient)], [{ ...merge.transaction, outputSlots: [] }]);
+    const synced = ringWallet(recipient);
+    await syncRingWallet({ wallet: synced, keys, client });
+    // A Rust sync whose registry lacked the merge mint stored the spend as a retry.
+    const document = JSON.parse(synced.toJson()) as Record<string, unknown>;
+    expect(document["mergeRetries"]).toEqual([]);
+    const ring = AnonymousWallet.fromJson(
+      JSON.stringify({ ...document, mergeRetries: [bytesKey(nullifier)] }),
+    );
+
+    // A lagging indexer returns no spend row, the retry stays.
+    client.spent.length = 0;
+    await syncRingWallet({ wallet: ring, keys, client });
+    expect(ring._mergeRetries()).toEqual([nullifier]);
+    expect(ring.wallet.utxos()).toHaveLength(1);
+
+    client.spent.push(merge.transaction);
+    await syncRingWallet({ wallet: ring, keys, client });
+    expect(ring._mergeRetries()).toEqual([]);
+    expect(ring.wallet.utxos().map((entry) => [entry.outputContext.hash, entry.spent])).toEqual([
+      [hash, true],
+      [merge.commitment, false],
+    ]);
+    expect(JSON.parse(ring.toJson())).toMatchObject({ mergeRetries: [] });
   });
 });

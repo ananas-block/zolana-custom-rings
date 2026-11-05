@@ -211,7 +211,6 @@ export type {
 export type { PlannedPayment } from "../operations/payments/output-rail.js";
 export { openRingNotes, syncRingWallet } from "../state/ring-sync.js";
 export type { RingNotes, RingSyncClient, RingSyncInput } from "../state/ring-sync.js";
-export { RingWallet } from "../state/ring-wallet.js";
 export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../state/ring-keys.js";
 export type {
   RingDeliveryRequest,
@@ -382,6 +381,8 @@ export type {
   RingMergeTransactionParams,
 } from "../operations/payments/merge.js";
 export type { RingMergeClient } from "../rpc/ports.js";
+export { RingBufferLedger } from "../operations/workflow/buffer-ledger.js";
+export type { RingBufferTransaction } from "../operations/workflow/buffer-ledger.js";
 export {
   RingTransactionSubmission,
   closeAbandonedFrameBuffers,
@@ -652,6 +653,11 @@ export {
   type RingRecipientClient,
   type TrackingRoot,
 } from "../rpc/tracking-resolver.js";
+export {
+  resolveViewingKey,
+  type ResolvedViewingKey,
+  type ViewingKeyClient,
+} from "../rpc/viewing-key-resolver.js";
 export type {
   PendingEnrollment,
   PendingEnrollments,

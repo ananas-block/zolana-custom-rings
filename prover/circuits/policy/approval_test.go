@@ -64,12 +64,14 @@ func TestWithdrawalBitReadsTheGross(t *testing.T) {
 		w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: 900, Gross: 101}}
 		requireMask(t, w, policy.ApprovalWithdrawal)
 	})
-	t.Run("a gross past u64 fails while read", func(t *testing.T) {
-		b := watched(100).Build(t)
-		b.Policy().PublicGross[0] = new(big.Int).Lsh(big.NewInt(1), 64)
+	t.Run("a gross outside 72 bits fails while read", func(t *testing.T) {
+		w := watched(100)
+		w.Approval = policy.ApprovalWithdrawal
+		b := w.Build(t)
+		b.Policy().PublicGross[0] = new(big.Int).Lsh(big.NewInt(1), 72)
 		b.Rebind(t)
 		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
-			t.Fatal("a gross past u64 solved")
+			t.Fatal("a gross outside 72 bits solved")
 		}
 	})
 }

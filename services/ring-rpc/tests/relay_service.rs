@@ -6,6 +6,8 @@ mod attempts;
 mod relay_fixture;
 #[path = "common/store.rs"]
 mod store_fixture;
+#[path = "relay_service/transitions.rs"]
+mod transitions;
 #[path = "common/wide_frame.rs"]
 mod wide_frame;
 

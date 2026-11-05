@@ -6,8 +6,8 @@
 //! The instruction guarantees:
 //!
 //! 1. The record opens the output under the ring's auditor key, the output and first nullifier come from SPP's body.
-//! 2. A hidden owner's key is its enrolled row under the tracking root the ring pins, and the payer is another account.
-//! 3. A zero key reads no row, the statement publishes that owner and SPP requires its signature.
+//! 2. A hidden owner opens its immutable credential under an authenticated SPP state root, and the payer is another account.
+//! 3. A zero key reads no credential, the statement publishes that owner and SPP requires its signature.
 //! 4. `ring_auth` sits only in SPP's `ring_config` slot, and the payer signs.
 //!
 //! No list, guard, cap or co-signer rule applies, a merge keeps one owner's value in one asset.
@@ -17,15 +17,11 @@
 //! Read after `instructions/accounts/loader.rs`. Read before `prover/circuits/merge.go`.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit, CustomRingError, CustomRingMergeIxDataRef, MergePublicInput,
-    RootRead, RING_MERGE_OWNER_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
+    key_catalog::RingCircuit, CredentialRoots, CustomRingError, CustomRingMergeIxDataRef,
+    MergePublicInput, RING_MERGE_OWNER_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
     VIEWING_PUBKEY_TAG,
 };
-use pinocchio::{
-    error::ProgramError,
-    sysvars::{clock::Clock, Sysvar},
-    AccountView, Address, ProgramResult,
-};
+use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;
 use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::instruction::instruction_data::{
@@ -35,7 +31,7 @@ use zolana_ring_policy::ring_id_field;
 
 use crate::instructions::{
     instruction_runtime::RingAuth,
-    loader::{check_funding_signer, load_policy, validate_spp_program, RegistrySlots},
+    loader::{check_funding_signer, load_policy, validate_spp_program, MergeCredentialAccounts},
     verifier::{ring_key, RingProof},
 };
 
@@ -50,12 +46,18 @@ pub fn process_merge_ix(
 
     let mut iter = AccountIterator::new(accounts);
     let ring = load_policy(program_id, iter.next_account("ring")?)?;
-    // 1. A merge runs no rules, a restrictive policy update cannot fail it.
-    let registries = RegistrySlots {
-        ring: &ring,
-        read: RootRead::merge(),
-    }
-    .load(|| Ok(iter.next_account("registry")?))?;
+    // 1. A hidden owner proves immutable state inclusion, a public owner consumes no credential account.
+    let credentials = match request.authority {
+        MergeRingAuthority::Ring => MergeCredentialAccounts {
+            program_id,
+            read: &request.credential_read,
+        }
+        .load(iter.next_account("credential_tree")?)?,
+        MergeRingAuthority::OwnerSigned => {
+            request.credential_read.check_empty()?;
+            CredentialRoots::empty(1)?
+        }
+    };
     // 2. The ring PDA sits in its SPP slot alone and the payer SPP debits signs.
     let spp_accounts = iter.remaining()?;
     let ring_auth =
@@ -64,21 +66,14 @@ pub fn process_merge_ix(
     if request.eph_pk[0] != VIEWING_PUBKEY_TAG {
         return Err(CustomRingError::InvalidMergeDisclosure.into());
     }
-    // 3. A nonzero key reads its row, a zero key names the owner SPP makes sign.
-    let (tracking_root, published_owner) = match request.authority {
-        MergeRingAuthority::Ring => (
-            registries
-                .roots(Clock::get()?.slot)
-                .tracking(request.tracking_revision)?,
-            [0; 32],
-        ),
+    // 3. A hidden owner proves its credential, a zero key names the owner SPP makes sign.
+    let published_owner = match request.authority {
+        MergeRingAuthority::Ring => [0; 32],
         MergeRingAuthority::OwnerSigned => {
             let owner = spp_accounts
                 .get(RING_MERGE_OWNER_INDEX)
                 .ok_or(ProgramError::NotEnoughAccountKeys)?;
-            let identity =
-                solana_owner_identity(owner.address().as_array()).map_err(CustomRingError::from)?;
-            ([0; 32], identity)
+            solana_owner_identity(owner.address().as_array()).map_err(CustomRingError::from)?
         }
     };
     // 4. A bad SPP proof point is refused before the record pairing.
@@ -101,7 +96,7 @@ pub fn process_merge_ix(
         ciphertext: request.ciphertext,
         payer: &payer,
         published_owner: &published_owner,
-        tracking_root: &tracking_root,
+        credentials: &credentials,
     }
     .hash()
     .map_err(CustomRingError::from)?;

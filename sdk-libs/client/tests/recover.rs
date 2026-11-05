@@ -24,10 +24,12 @@ use spr_event::{
     MergeOutputDataRef,
 };
 use spr_hasher::primitives::right_align;
-use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
+use spr_keypair::{NullifierKey, ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
 use spr_transaction::{
-    instructions::merge::MergeTransaction, Data, DataRecord, Mint, OutputContext, OutputSlot,
-    ShieldedTransaction, SppProofOutputUtxo, Utxo, WalletUtxo, SOL_MINT,
+    instructions::merge::{MergeSeed, MergeTransaction},
+    Data, DataRecord, Mint, OutputContext, OutputSlot, ShieldedTransaction, SppProofOutputUtxo,
+    Utxo, WalletUtxo, SOL_MINT,
 };
 use zolana_ring_client::{
     seal_deposits, AuditError, ConfirmedMergeDisclosure, MemberRecovery, MergeRecordSeal,
@@ -299,6 +301,84 @@ impl Fixture {
         (held, transaction)
     }
 
+    /// A zero-key merge under a private seed and its sealed record, its body opens under no key.
+    fn zero_key_merge(&self, amount: u64, tree_id: u16) -> (ZeroKeyMerge, ShieldedTransaction) {
+        let seed = field(0x5a);
+        let first = field(0x61);
+        let ring_data_hash = field(0x05);
+        let blinding = MergeSeed::from_bytes(seed)
+            .unwrap()
+            .output_blinding(&first)
+            .unwrap();
+        let utxo = Utxo {
+            owner: self.address.signing_pubkey,
+            asset: Mint::SOL,
+            amount,
+            blinding,
+            ring_program_id: Some(RING),
+            data: Data::default(),
+        };
+        let commitment = utxo
+            .hash(&ZERO_NULLIFIER_PUBKEY, &[0; 32], &ring_data_hash, tree_id)
+            .unwrap();
+        let sealed = MergeRecordSeal {
+            record: OpeningRecord {
+                record: AuditRecord {
+                    nullifier_pk: ZERO_NULLIFIER_PUBKEY,
+                    ..self.record(&utxo)
+                },
+                secret: seed,
+            },
+        }
+        .seal(&self.auditor.pubkey())
+        .unwrap();
+        let signature = self.signature();
+        self.merges.lock().unwrap().push((
+            signature,
+            ConfirmedMergeDisclosure {
+                eph_pk: *sealed.eph_pk.as_bytes(),
+                ciphertext: sealed.ciphertext,
+            },
+        ));
+        let transaction = ShieldedTransaction {
+            slot: u64::from(self.sequence.get()),
+            tx_signature: signature,
+            event_index: Some(0),
+            tx_viewing_pk: None,
+            salt: None,
+            output_slots: vec![OutputSlot {
+                view_tag: self
+                    .address
+                    .signing_pubkey
+                    .owner_proof_input_hash()
+                    .unwrap(),
+                output_context: OutputContext {
+                    hash: commitment,
+                    tree_id,
+                    leaf_index: 9,
+                },
+                payload: encode_merge_output_data(MergeOutputDataRef {
+                    salt: &[3; 16],
+                    ciphertext: &[[0xff; 32], [0; 32], [0; 32]],
+                    prefix: &[ring_data_hash],
+                    binding: MergeCiphertextBinding::Unverified,
+                }),
+            }],
+            messages: Vec::new(),
+            nullifiers: vec![first, field(0x07)],
+            proofless: false,
+            ring_config: None,
+            ring_program_id: Some(RING),
+        };
+        let merge = ZeroKeyMerge {
+            commitment,
+            nullifier: NullifierKey::from_secret([0; 31])
+                .nullifier(&commitment, &blinding)
+                .unwrap(),
+        };
+        (merge, transaction)
+    }
+
     fn record(&self, utxo: &Utxo) -> AuditRecord {
         AuditRecord {
             kind: RecordKind::Ring,
@@ -441,6 +521,11 @@ fn output_context(note: &WalletUtxo) -> OutputContext {
         tree_id: note.tree_id,
         leaf_index: note.leaf_index,
     }
+}
+
+struct ZeroKeyMerge {
+    commitment: [u8; 32],
+    nullifier: [u8; 32],
 }
 
 #[derive(Default)]
@@ -1389,4 +1474,42 @@ async fn a_merge_record_off_the_confirmed_output_fails_the_recovery() {
         fixture.run(fixture.recovery(), &history).await,
         Err(AuditError::MergeDisclosureMismatch)
     ));
+}
+
+#[tokio::test]
+async fn a_wiped_wallet_restores_a_zero_key_merge_from_its_record_and_a_stranger_keeps_nothing() {
+    let fixture = Fixture::new();
+    let (merge, merge_tx) = fixture.zero_key_merge(6, 7);
+    let history = History {
+        transactions: vec![merge_tx],
+        discovery_unavailable: true,
+        ..Default::default()
+    };
+    let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
+    let restored: Vec<_> = recovered
+        .utxos
+        .iter()
+        .map(|note| {
+            (
+                note.utxo_hash,
+                note.nullifier_pubkey,
+                note.nullifier,
+                note.utxo.amount,
+            )
+        })
+        .collect();
+    assert_eq!(
+        restored,
+        [(merge.commitment, ZERO_NULLIFIER_PUBKEY, merge.nullifier, 6)]
+    );
+    assert!(recovered.unopened.is_empty());
+
+    let stranger = ShieldedKeypair::new_ed25519().unwrap();
+    let address = stranger.shielded_address().unwrap();
+    let foreign = RingRecovery::new(RING, &fixture.auditor).for_member(SourceMember {
+        address: &address,
+        nullifier_key: &stranger.nullifier_key,
+    });
+    let recovered = fixture.run(foreign, &history).await.unwrap();
+    assert!(recovered.utxos.is_empty() && recovered.unopened.is_empty());
 }

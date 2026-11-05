@@ -3,7 +3,7 @@
 // SPP's ring_deposit takes each output's Poseidon(owner_hash, blinding) as an opaque value with a public
 // asset and amount, leaves the blinding's freshness to the ring and runs no proof. A depositor alone
 // could therefore credit a note no auditor opens. The ring proof gives each occupied slot the opening
-// record a transfer's auditor would read, and it spends nothing, so it reads no nullifier tree.
+// record a transfer's auditor would read. It spends no notes, but salted recipient checks can require credential address absence.
 //
 // No envelope key derives a deposit's blinding, so the record seals the blinding itself after a
 // transfer's record. BlindingSecret stays out of the record, and CRDB keeps the result off every SPP
@@ -14,8 +14,10 @@
 //     ciphertext seals the opening record that rebuilds it, under one CRING/dep stream.
 //  2. The record's asset and amount are the statement's public cells, the program rebuilds those from
 //     SPP's instruction.
-//  3. A nonzero key is the owner's enrolled row's under the tracking root, a zero key leaves the owner absent.
+//  3. A key outside ZeroNullifierPk equals the owner's permanent credential key. ZeroNullifierPk needs no credential for the key check,
+//     and literal zero fails. Applicable salted rules still authenticate the recipient.
 //  4. On a policy ring the recipient and the deposited asset meet the rules under the bound roots.
+//  5. RingProgramID binds the credential address namespace, ContextHash remains an opaque commitment to the forwarded SPP data.
 //
 // A padding slot carries nothing, its statement cells read zero.
 //
@@ -23,7 +25,7 @@
 // statement only through ContextHash, a hash of the program id, the tree and the whole SPP data, and no
 // constraint reads them. Delivery stays outside the circuit as on a transfer, see package audit.
 //
-// Read after shared/envelope.go, audit/record.go, registry/tracking.go, policy/deposit.go, transfer/owners.go.
+// Read after shared/envelope.go, audit/record.go, registry/credential.go, policy/deposit.go, transfer/owners.go.
 // Read before ../ring/ring.go.
 package circuits
 
@@ -65,7 +67,7 @@ type DepositCircuit struct {
 	Assets     []frontend.Variable
 	Amounts    []frontend.Variable
 	MintChunks [][2]frontend.Variable
-	policy.Tracking
+	policy.Credentials
 	policy.Policy
 }
 
@@ -79,13 +81,13 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 	if err != nil {
 		return nil, err
 	}
-	tracking, err := policy.NewTracking(0, capacity, 0)
+	credentials, err := policy.NewCredentials(0, capacity, 0)
 	if err != nil {
 		return nil, err
 	}
 	return &DepositCircuit{
 		Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity),
-		Assets: make([]frontend.Variable, capacity), Amounts: make([]frontend.Variable, capacity), MintChunks: make([][2]frontend.Variable, capacity), Tracking: tracking, Policy: screen,
+		Assets: make([]frontend.Variable, capacity), Amounts: make([]frontend.Variable, capacity), MintChunks: make([][2]frontend.Variable, capacity), Credentials: credentials, Policy: screen,
 	}, nil
 }
 
@@ -109,7 +111,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		shared.ValidateLength("deposit", "mint", len(c.MintChunks), c.Capacity),
 		shared.ValidateLength("deposit", "payment", c.Policy.Outputs, c.Capacity),
 		c.Validate(0),
-		c.ValidateTracking(0, c.Capacity, 0),
+		c.ValidateCredentials(0, c.Capacity, 0),
 	); err != nil {
 		return err
 	}
@@ -139,11 +141,12 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 			OwnerKey: c.OwnerKeys[i], MintChunks: c.MintChunks[i],
 		}, Secret: blinding}.Encode(api, rc))
 	}
-	// 5. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under the root. The owners read the same check as a transfer's outputs.
-	tracking := c.OpenTracking(api)
-	transfer.AssertOutputOwners(api, tracking, slots, c.OutputEntries)
+	// 5. Every key outside ZeroNullifierPk comes from the recipient's permanent credential, whose enrollment sealed its secret to the auditor.
+	// ZeroNullifierPk needs no credential for the key check, the same recipient still enters any salted policy read.
+	credentials := c.OpenCredentials(api, c.RingProgramID)
+	transfer.AssertOutputOwners(api, credentials, slots, c.OutputEntries)
 	// 6. On a policy ring every recipient and deposited asset meets the rules under the bound roots.
-	c.ScreenDeposit(api, rc, tracking, slots)
+	c.ScreenDeposit(api, rc, credentials, slots)
 	// 7. The statement binds each commitment SPP receives to the ciphertext the auditor opens, one CRING/dep stream puts slot i at counter 2 + 9i.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.SealStream(api)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(api, count, commitments, sealed)))
@@ -152,7 +155,8 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 
 // statement mirrors DepositPublicInput::elements in program-libs/interface/src/instructions/deposit.rs.
 func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, commitments []frontend.Variable, sealed shared.Sealed) []frontend.Variable {
-	chain := []frontend.Variable{shared.DepositStatementDomain, c.ContextHash, c.Count}
+	// Credential absence derives from RingProgramID, ContextHash alone does not expose that identity to the circuit.
+	chain := []frontend.Variable{shared.DepositStatementDomain, c.ContextHash, c.RingProgramID, c.Count}
 	ciphertexts := audit.SlotRegions{Stride: DepositRecordLen, Length: DepositRecordLen}.Hashes(api, sealed.Ciphertext, count.Active)
 	for i, commitment := range commitments {
 		chain = append(chain, api.Mul(count.Active[i], commitment), ciphertexts[i])
@@ -161,7 +165,7 @@ func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, com
 	for i := len(commitments); i < MaxDeposits; i++ {
 		chain = append(chain, 0, 0)
 	}
-	chain = slices.Concat(chain, sealed.Auditor, sealed.Eph, []frontend.Variable{c.TrackingRoot, c.OwnRoot, c.CuratorRoot, c.PolicyHash})
+	chain = slices.Concat(chain, sealed.Auditor, sealed.Eph, c.Credentials.StatementFields(), []frontend.Variable{c.OwnRoot, c.CuratorRoot, c.PolicyHash})
 	for i := range MaxDeposits {
 		if i < len(c.Assets) {
 			chain = append(chain, c.Assets[i], c.Amounts[i])

@@ -26,6 +26,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { buildRingTransferTransaction } from "../../../src/operations/payments/transfer.js";
+import { RingBufferLedger } from "../../../src/operations/workflow/buffer-ledger.js";
 import {
   RingTransactionSubmission,
   reconcileRingSubmissions,
@@ -239,7 +240,14 @@ async function persistedFixture(count = 1) {
     send: vi.fn(async () => undefined),
     status: vi.fn(async () => ({ kind: "unknown" as const })),
   };
-  return { ...f, store, cipher, submission, transport };
+  let ledger: string | undefined;
+  const buffers = await RingBufferLedger.load({
+    load: async () => ledger,
+    save: async (document) => {
+      ledger = document;
+    },
+  });
+  return { ...f, store, cipher, submission, transport, buffers };
 }
 
 it("saves the signed checkpoint before broadcast and restores held notes after restart", async () => {

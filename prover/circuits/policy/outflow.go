@@ -97,9 +97,8 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 	// 1. The gross of a slot is the program's fold of its legs. The range check gives every sum below the bound the comparator needs.
 	gross := make([]frontend.Variable, len(p.PublicGross))
 	for k := range gross {
-		// An active gross lies below 2^64 as the comparator needs, an inactive one is unread.
 		gross[k] = api.Mul(active, p.PublicGross[k])
-		cmp.rc.Check(gross[k], transaction.AmountBits)
+		cmp.rc.Check(gross[k], cmp.width)
 	}
 	source := newFlowSource(api, spend, outputs, p.PublicAssets[:], gross)
 	// 2. One peak per asset stands for one comparison per row. A peak within the cap holds every row within it, and the peak equals some row's outflow.

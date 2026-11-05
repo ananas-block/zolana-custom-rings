@@ -50,7 +50,7 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 	slots := make([]shared.Output, len(c.Inputs))
 	for i, input := range c.Inputs {
 		slots[i] = input.OpenInput(api)
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, count.Active[i]), V: slots[i].Utxo})
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, count.Active[i]), V: api.Add(slots[i].Utxo, slots[i].Address)})
 	}
 	stream := c.SealStream(api, rc, envelope, c.Shape, opened, audit.SpentInputs{Slots: slots, Count: count, Entries: c.Entries})
 	statement := append(envelope.Head(c.AuditWires, stream, shared.TransferStatementDomain),
@@ -135,6 +135,8 @@ type Plaintexts struct {
 func (a Audit) Plaintexts(t testing.TB) Plaintexts {
 	t.Helper()
 	envelope := append(slices.Clone(a.Keys.txViewingSk[:]), byte(a.RealInputs()))
+	addresses := a.inputBits(func(input Utxo) bool { return input.Domain == protocol.AddressDomain })
+	envelope = binary.BigEndian.AppendUint64(envelope, addresses)
 	if a.Shape.Entry {
 		envelope = binary.BigEndian.AppendUint64(envelope, a.defaultBits())
 		for _, input := range a.Inputs {
@@ -251,7 +253,7 @@ func (r AuditReader) Envelope(t testing.TB, stream Stream) (realInputs int, defa
 	plaintext := r.Keys.Open(t, stream)
 	realInputs = int(plaintext[audit.EnvelopeKeyLen])
 	if r.Shape.Entry {
-		defaultBits = binary.BigEndian.Uint64(plaintext[audit.EnvelopeKeyLen+audit.RealInputCountLen:])
+		defaultBits = binary.BigEndian.Uint64(plaintext[r.Shape.Ranges().EnvelopeHeadLen()-audit.DefaultInputBitsLen:])
 	}
 	return realInputs, defaultBits
 }

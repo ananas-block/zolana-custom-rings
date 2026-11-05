@@ -1,5 +1,9 @@
-//! Pins the heap the transfer path's codec phases take for the widest frame of every key, the
-//! hashing and the pairing are syscalls the rule tests cover on the target.
+//! Host allocation counts do not establish SBF heap bounds.
+
+#[path = "../../../program-tests/custom-ring/src/resource_frames.rs"]
+mod resource_frames;
+
+use resource_frames::{MaximumPayload, Payload};
 
 mod frames;
 mod ring_policy;
@@ -14,11 +18,10 @@ use custom_ring_interface::{
     key_catalog::{FrameKey, RecordPools, TransferShape, TransferSpend},
     storage::Revision,
     AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PublicLeg, PublicSlots,
-    Replies, RingRail, RingTransactData, MIN_REPLY_LEN,
+    Replies, RingRail, RingTransactData, SlotBody, MAX_CPI_DATA_LEN, MIN_REPLY_LEN,
 };
 use frames::Fixture;
 use ring_policy::config;
-use solana_message::v1::MAX_TRANSACTION_SIZE;
 use spr_interface::instruction::{InterfaceTransfer, TransactProof};
 use spr_interface::shape::SPP_SUPPORTED_SHAPES;
 
@@ -102,12 +105,13 @@ struct Widest {
     entry: bool,
     in_proof: bool,
     replies: bool,
+    payload: Payload,
 }
 
 impl Widest {
     fn name(&self) -> String {
         format!(
-            "{} {}x{} {}{} {}{}{}",
+            "{} {}x{} {}{} {}{}{}{}",
             self.rail,
             self.inputs,
             self.outputs,
@@ -127,6 +131,11 @@ impl Widest {
             } else {
                 ""
             },
+            match self.payload {
+                Payload::Base => "",
+                Payload::MaximumBytes => " maximum bytes",
+                Payload::MaximumMessages => " maximum messages",
+            },
         )
     }
 }
@@ -134,6 +143,7 @@ impl Widest {
 /// The owners the widest frames reference.
 struct Pool {
     owners: Vec<[u8; 32]>,
+    message: Vec<u8>,
 }
 
 /// Each key at the widest SPP shape of every output width it serves on `rail`.
@@ -180,6 +190,7 @@ fn cases() -> Vec<Widest> {
             entry: false,
             in_proof: false,
             replies: false,
+            payload: Payload::Base,
         };
         cases.push(base);
         cases.push(Widest {
@@ -208,6 +219,7 @@ fn cases() -> Vec<Widest> {
             entry: false,
             in_proof: false,
             replies: false,
+            payload: Payload::Base,
         };
         cases.push(base);
         cases.push(Widest {
@@ -236,6 +248,7 @@ fn cases() -> Vec<Widest> {
             entry: true,
             in_proof: false,
             replies: false,
+            payload: Payload::Base,
         };
         cases.push(base);
         cases.push(Widest {
@@ -255,7 +268,19 @@ fn cases() -> Vec<Widest> {
         entry: false,
         in_proof: false,
         replies: false,
+        payload: Payload::Base,
     });
+    let maximum_payloads: Vec<_> = cases
+        .iter()
+        .flat_map(|case| {
+            [Payload::MaximumBytes, Payload::MaximumMessages].map(|payload| Widest {
+                payload,
+                replies: case.rail == RingRail::Anonymous,
+                ..*case
+            })
+        })
+        .collect();
+    cases.extend(maximum_payloads);
     cases
 }
 
@@ -332,6 +357,24 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
             commitment_pok: &fixture.bytes[21],
         });
     }
+    if case.payload != Payload::Base {
+        data.has_data = true;
+        for output in &mut data.outputs {
+            output.body = match output.body {
+                SlotBody::Recipient(_) => SlotBody::Recipient(&fixture.extended_body),
+                SlotBody::Exit(_) => SlotBody::Exit(&fixture.extended_body),
+                SlotBody::None => SlotBody::None,
+            };
+        }
+        data = fixture.with_audit_stream(data);
+        MaximumPayload {
+            data: &mut data,
+            policy: &config(),
+            message: &pool.message,
+            view_tag: &fixture.bytes[30],
+        }
+        .fill(case.payload);
+    }
     fixture.with_audit_stream(data)
 }
 
@@ -376,10 +419,11 @@ fn measure(compact: &[u8], rail: RingRail) -> Phases {
 }
 
 #[test]
-fn the_codec_phases_of_every_widest_frame_stay_within_the_budget() {
+fn host_codec_allocations_cover_inline_and_buffered_maximum_frames() {
     let fixture = Fixture::new();
     let pool = Pool {
         owners: vec![[0x70; 32]; spr_interface::MAX_INTERFACE_TRANSFERS],
+        message: vec![0x71; MAX_CPI_DATA_LEN],
     };
     let mut report = Vec::new();
     let committed = fixture.cases();
@@ -404,8 +448,6 @@ fn the_codec_phases_of_every_widest_frame_stay_within_the_budget() {
     }
     let over: Vec<_> = report
         .iter()
-        // A longer frame reaches no program in one transaction.
-        .filter(|(_, bytes, _)| *bytes <= MAX_TRANSACTION_SIZE)
         .filter(|(_, _, phases)| phases.spp > BUDGET)
         .map(|(name, _, phases)| format!("{name} takes {} of {BUDGET}", phases.spp))
         .collect();

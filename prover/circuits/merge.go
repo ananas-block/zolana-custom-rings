@@ -13,8 +13,8 @@
 // The merge statement proves the following for one SPP merge output named by its hash and first nullifier.
 //  1. The ciphertext is the output's opening record under the ring's auditor key, the auditor rebuilds
 //     the published hash from the record, the first nullifier and the tree id and ring data hash SPP publishes.
-//  2. A hidden owner's nullifier key is its enrolled row's under the tracking root and the public payer
-//     is another account. A zero key reads no row, and the statement names that owner for SPP's signature.
+//  2. A hidden owner's nullifier key equals its permanent credential key under an accepted SPP state root.
+//     The public payer differs from that owner. A zero key reads no credential and names its owner for SPP's signature.
 //
 // SPP's proof ties every input to that owner, asset and sum. No list, guard, cap or co-signer rule is proven.
 //
@@ -22,7 +22,7 @@
 // reads the ciphertext from the ring instruction that called SPP in the confirmed transaction, and
 // the statement alone binds those bytes.
 //
-// Read after shared/envelope.go, audit/record.go, registry/tracking.go. Read before ../ring/ring.go.
+// Read after shared/envelope.go, audit/record.go, registry/credential.go. Read before ../ring/ring.go.
 
 package circuits
 
@@ -47,12 +47,13 @@ const MergeRecordLen = audit.OpeningRecordLen
 type MergeCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 
-	OutputUtxoHash frontend.Variable
-	FirstNullifier frontend.Variable
-	RingProgramID  frontend.Variable
-	AuditorPk      [32]frontend.Variable
-	Payer          frontend.Variable
-	TrackingRoot   frontend.Variable
+	OutputUtxoHash  frontend.Variable
+	FirstNullifier  frontend.Variable
+	RingProgramID   frontend.Variable
+	AuditorPk       [32]frontend.Variable
+	Payer           frontend.Variable
+	CredentialOwner frontend.Variable
+	StateRoot       [2]frontend.Variable
 
 	EphSk [32]frontend.Variable
 	// The record's encoding binds OwnerPkHash to OwnerKey and Asset to MintChunks.
@@ -66,7 +67,7 @@ type MergeCircuit struct {
 	Seed               frontend.Variable
 	OutputTreeID       frontend.Variable
 	OutputRingDataHash frontend.Variable
-	Tracking           registry.TrackingOpening
+	Credential         registry.CredentialLeaf
 }
 
 // No list, guard, cap or co-signer rule is proven, a merge keeps one owner's value in one asset.
@@ -75,10 +76,13 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	hidden := api.Sub(1, zeroKey)
 	// 1. A hidden owner cannot pay, the payer is public.
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: hidden, V: api.IsZero(api.Sub(c.OwnerPkHash, c.Payer))})
-	// 2. A hidden owner's key is its row's, a zero key reads no row and its owner signs in SPP.
-	row := c.Tracking.Resolve(api, hidden, c.TrackingRoot, c.OwnerPkHash)
-	api.AssertIsEqual(row.Present, hidden)
-	api.AssertIsEqual(row.NullifierPk, api.Mul(hidden, c.NullifierPk))
+	// 2. A hidden owner's key comes from permanent credential state. No policy reads an address root,
+	// and a zero-key merge carries no credential opening because its owner signs publicly in SPP.
+	api.AssertIsEqual(c.Credential.Member, api.Mul(hidden, c.OwnerPkHash))
+	c.Credential.AssertInclusion(api, hidden, registry.CredentialRoots{
+		RingID: c.RingProgramID, Owner: c.CredentialOwner, StateRoots: [][2]frontend.Variable{c.StateRoot},
+	})
+	api.AssertIsEqual(c.Credential.NullifierPk, api.Mul(hidden, c.NullifierPk))
 
 	// 3. The output is the SPP merge output, the program reads OutputUtxoHash from the SPP body it forwards and the auditor rebuilds it from the record.
 	api.AssertIsEqual(c.OutputUtxoHash, transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
@@ -98,7 +102,7 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, slices.Concat(
 		[]frontend.Variable{shared.MergeStatementDomain, c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID},
 		sealed.StatementFields(api),
-		[]frontend.Variable{c.Payer, api.Mul(zeroKey, c.OwnerPkHash), c.TrackingRoot},
+		[]frontend.Variable{c.Payer, api.Mul(zeroKey, c.OwnerPkHash), c.CredentialOwner, c.StateRoot[0], c.StateRoot[1]},
 	)))
 	return nil
 }

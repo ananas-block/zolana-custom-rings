@@ -29,7 +29,9 @@ const (
 	// ApplyRecordsDomain = "CRAP"
 	ApplyRecordsDomain = 0x43524150
 	// RegisterKeyDomain = "CRRG"
-	RegisterKeyDomain = 0x43525247
+	RegisterKeyDomain     = 0x43525247
+	CredentialStateDomain = 0x43524352
+	CredentialSeedDomain  = 0x43524341
 	// DepositStatementDomain = "CRDP"
 	DepositStatementDomain = 0x43524450
 	// MergeStatementDomain = "CRMG"

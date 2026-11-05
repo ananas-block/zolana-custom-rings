@@ -101,7 +101,7 @@ func variable(src any) (frontend.Variable, error) {
 			return 1, nil
 		}
 		return 0, nil
-	case uint8, uint32, uint64, int:
+	case uint8, uint16, uint32, uint64, int:
 		return v, nil
 	default:
 		return nil, fmt.Errorf("unsupported type %T", src)
@@ -142,30 +142,98 @@ type writeView struct {
 	LowSlot quadPath
 }
 
-// enrollmentView mirrors registry.EnrollmentWrite field for field.
-type enrollmentView struct {
-	Entry   trackingEntryView
-	Exists  bool
-	Old     TrackingRecordParams
-	Slot    quadPath
-	Low     TrackingRecordParams
-	LowSlot quadPath
+type credentialGapView struct {
+	Low, Next Field
+	Index     uint64
+	Path      []Field
 }
 
-// trackingEntryView mirrors registry.TrackingEntry field for field.
-type trackingEntryView struct {
-	Member, NullifierPk, CtHash, View0, View1, Revision, ListTag Field
+type credentialOpeningView struct {
+	Present bool
+	Leaf    CredentialLeafParams
+	Gap     credentialGapView
 }
 
-func (w TrackingWrite) view() any {
-	return enrollmentView{
-		Entry:   trackingEntryView{Member: w.Member, NullifierPk: w.NullifierPk, CtHash: w.CtHash, View0: w.View0, View1: w.View1, Revision: w.Revision, ListTag: w.ListTag},
-		Exists:  w.Exists,
-		Old:     w.OldRecord,
-		Slot:    newQuadPath(w.Index, w.Path),
-		Low:     w.LowRecord,
-		LowSlot: newQuadPath(w.LowIndex, w.LowPath),
+func (r CredentialStateRoot) view() any {
+	return []Field{{Int: new(big.Int).SetUint64(uint64(r.TreeID))}, r.Root}
+}
+
+func (o CredentialOpeningParams) view() any {
+	return credentialOpeningView{
+		Present: o.Present, Leaf: o.CredentialLeafParams,
+		Gap: credentialGapView{Low: o.LowValue, Next: o.LowNext, Index: o.LowIndex, Path: o.LowPath},
 	}
+}
+
+type credentialAddressView struct {
+	Next  Field
+	Index uint64
+	Path  []Field
+}
+
+type credentialWriteView struct {
+	Member, ListSalt Field
+	Leaf             CredentialLeafParams
+	Address          credentialAddressView
+}
+
+func (w CredentialWriteParams) view() any {
+	return credentialWriteView{
+		Member: w.Member, ListSalt: w.ListSalt, Leaf: w.Leaf,
+		Address: credentialAddressView{Next: w.AddressNext, Index: w.AddressIndex, Path: w.AddressPath},
+	}
+}
+
+func (p CredentialParams) withRingID(ringID Field) CredentialParams {
+	p.Openings = slices.Clone(p.Openings)
+	for i := range p.Openings {
+		p.Openings[i].RingID = Field{Int: new(big.Int)}
+		if p.Openings[i].Present {
+			p.Openings[i].RingID = ringID
+		}
+	}
+	return p
+}
+
+func (p TransferParams) view() any {
+	type assignment TransferParams
+	p.CredentialParams = p.CredentialParams.withRingID(p.RingProgramID)
+	return assignment(p)
+}
+
+func (p DepositParams) view() any {
+	type assignment DepositParams
+	p.CredentialParams = p.CredentialParams.withRingID(p.RingProgramID)
+	return assignment(p)
+}
+
+func (p MergeParams) view() any {
+	type assignment MergeParams
+	if p.Credential != nil {
+		leaf := *p.Credential
+		leaf.RingID = Field{Int: new(big.Int)}
+		if leaf.Member.Int != nil && leaf.Member.Int.Sign() != 0 {
+			leaf.RingID = p.RingProgramID
+		}
+		p.Credential = &leaf
+	}
+	return assignment(p)
+}
+
+func (p ApplyRecordsParams) view() any {
+	type assignment ApplyRecordsParams
+	p.Credentials = slices.Clone(p.Credentials)
+	for i, credential := range p.Credentials {
+		if credential != nil {
+			write := *credential
+			write.Leaf.RingID = Field{Int: new(big.Int)}
+			if i < 64 && p.CredentialWrites&(uint64(1)<<i) != 0 {
+				write.Leaf.RingID = p.PrivateRingID
+			}
+			p.Credentials[i] = &write
+		}
+	}
+	return assignment(p)
 }
 
 func (w RecordWriteProofInput) view() any {
