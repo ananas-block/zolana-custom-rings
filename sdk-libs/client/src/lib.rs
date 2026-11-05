@@ -6,6 +6,8 @@ pub mod anonymous;
 mod anonymous_wallet;
 #[path = "operations/confidential.rs"]
 mod confidential;
+#[path = "operations/compact_assets.rs"]
+pub mod compact_assets;
 #[path = "operations/created_utxos.rs"]
 mod created;
 #[path = "crypto/decrypt/mod.rs"]
@@ -64,7 +66,7 @@ mod viewing_rotation;
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, AuditorRecovery, SenderClaim,
+    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, AuditorRecovery, RecoveryStatus, SenderClaim,
     SentCheck, SentPayment,
 };
 pub use crate::anonymous_wallet::{

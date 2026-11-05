@@ -15,14 +15,32 @@ use spr_keypair::{x25519::X25519_PUBKEY_LEN, X25519Pubkey};
 use spr_transaction::{DecryptionResult, Mint, WalletUtxo};
 use zolana_ring_transaction::RingAssets;
 
+use crate::anonymous::{RecoverySession, RecoveryUpdate};
+
 use crate::{
     is_zero_key, mint_balances, note_state, AnonymousError, AnonymousScan, MintBalance, NoteState,
     SenderClaim, ViewingHistory,
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct WalletRevision {
+    sequence: u64,
+    stamp: [u8; 16],
+}
+
+impl WalletRevision {
+    fn advance(&mut self) {
+        self.sequence = self.sequence.wrapping_add(1);
+        self.stamp = spr_keypair::random_salt();
+    }
+}
+
 /// Notes stay listed once spent, their nullifiers mark them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnonymousWallet {
+    revision: WalletRevision,
+    recovery: Option<RecoverySession>,
     history: ViewingHistory,
     notes: Vec<WalletUtxo>,
     spent_nullifiers: BTreeSet<[u8; 32]>,
@@ -34,6 +52,7 @@ pub struct AnonymousWallet {
 
 /// One sync, stored whole by [`AnonymousWallet::absorb`] or not at all.
 pub struct ScanCommit {
+    pub(crate) recovery: RecoveryUpdate,
     pub(crate) starting_history: ViewingHistory,
     pub(crate) history: ViewingHistory,
     pub(crate) decrypted: DecryptionResult,
@@ -67,34 +86,52 @@ impl LedgerScan for AnonymousScan {}
 impl LedgerScan for ScanCommit {}
 
 mod sealed {
-    use super::{AnonymousScan, BTreeSet, PendingClaim, ScanCommit, ViewingHistory};
+    use super::{AnonymousScan, AnonymousWallet, BTreeSet, PendingClaim, ScanCommit};
 
     pub trait Sealed {
         /// `None` unless the scan read from `stored`.
-        fn commit_on(self, stored: &ViewingHistory) -> Option<ScanCommit>;
+        fn commit_on(self, stored: &AnonymousWallet) -> Option<ScanCommit>;
     }
 
     impl Sealed for AnonymousScan {
-        fn commit_on(self, stored: &ViewingHistory) -> Option<ScanCommit> {
-            if !self.starts_from(stored) {
+        fn commit_on(mut self, stored: &AnonymousWallet) -> Option<ScanCommit> {
+            if !self.starts_from(stored.history())
+                || self
+                    .expected_revision()
+                    .is_some_and(|revision| revision != stored.revision())
+                || (self.expected_revision().is_none() && stored.recovery_session().is_some())
+            {
                 return None;
             }
+            let recovery = self.take_recovery();
+            let retried = self.take_retried();
             let (history, decrypted, pending, claims) = self.into_stored();
             Some(ScanCommit {
-                starting_history: stored.clone(),
+                recovery,
+                starting_history: stored.history().clone(),
                 history,
                 decrypted,
                 pending,
                 claims: claims.iter().map(PendingClaim::of).collect(),
-                retried: BTreeSet::new(),
+                retried,
                 unresolved: BTreeSet::new(),
             })
         }
     }
 
     impl Sealed for ScanCommit {
-        fn commit_on(self, stored: &ViewingHistory) -> Option<ScanCommit> {
-            (self.starting_history == *stored).then_some(self)
+        fn commit_on(self, stored: &AnonymousWallet) -> Option<ScanCommit> {
+            let compatible = stored.recovery_session().is_none_or(|session| {
+                self.history == *stored.history()
+                    && session.target_slot.is_some_and(|target| {
+                        self.decrypted.utxos.iter().all(|note| note.slot <= target)
+                            && self
+                                .pending
+                                .iter()
+                                .all(|note| note.opening().slot <= target)
+                    })
+            });
+            (self.starting_history == *stored.history() && compatible).then_some(self)
         }
     }
 }
@@ -119,6 +156,10 @@ impl PendingNote {
 
     pub fn utxo_hash(&self) -> [u8; 32] {
         self.0.utxo_hash
+    }
+
+    pub(crate) fn opening(&self) -> &WalletUtxo {
+        &self.0
     }
 
     pub(crate) fn nullifier(&self) -> [u8; 32] {
@@ -164,6 +205,10 @@ impl fmt::Debug for PendingClaim {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct WalletJson {
+    #[serde(default)]
+    revision: WalletRevision,
+    #[serde(default)]
+    recovery: Option<RecoverySession>,
     history: Value,
     notes: Vec<WalletUtxo>,
     spent_nullifiers: Vec<String>,
@@ -184,6 +229,8 @@ struct ClaimJson {
 impl AnonymousWallet {
     pub fn new(history: ViewingHistory) -> Self {
         Self {
+            revision: WalletRevision::default(),
+            recovery: None,
             history,
             notes: Vec::new(),
             spent_nullifiers: BTreeSet::new(),
@@ -195,6 +242,43 @@ impl AnonymousWallet {
 
     pub fn history(&self) -> &ViewingHistory {
         &self.history
+    }
+
+    pub(crate) fn revision(&self) -> WalletRevision {
+        self.revision
+    }
+
+    pub(crate) fn recovery_session(&self) -> Option<&RecoverySession> {
+        self.recovery.as_ref()
+    }
+
+    pub fn recovery_status(&self) -> crate::anonymous::RecoveryStatus {
+        if self.recovery.is_some() {
+            crate::anonymous::RecoveryStatus::Paused
+        } else {
+            crate::anonymous::RecoveryStatus::Complete
+        }
+    }
+
+    pub fn funding_notes(&self) -> impl Iterator<Item = &WalletUtxo> {
+        self.checked_notes()
+            .filter(|note| !is_zero_key(note) && !self.spent_nullifiers.contains(&note.nullifier))
+    }
+
+    fn checked_notes(&self) -> impl Iterator<Item = &WalletUtxo> {
+        self.notes.iter().filter(|note| {
+            self.recovery
+                .as_ref()
+                .is_none_or(|session| session.checked.contains(&note.nullifier))
+        })
+    }
+
+    pub fn require_complete(&self) -> Result<(), AnonymousError> {
+        if self.recovery.is_some() {
+            Err(AnonymousError::SyncIncomplete)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn notes(&self) -> &[WalletUtxo] {
@@ -210,18 +294,25 @@ impl AnonymousWallet {
     }
 
     pub fn note_state(&self, note: &WalletUtxo) -> NoteState {
+        if !self.spent_nullifiers.contains(&note.nullifier)
+            && self
+                .recovery
+                .as_ref()
+                .is_some_and(|session| !session.checked.contains(&note.nullifier))
+        {
+            return NoteState::PendingSpendCheck;
+        }
         note_state(note, |nullifier| self.spent_nullifiers.contains(nullifier))
     }
 
     /// Unspent zero-key notes, spent only through an explicit public spend.
     pub fn exposed_notes(&self) -> impl Iterator<Item = &WalletUtxo> {
-        self.notes
-            .iter()
+        self.checked_notes()
             .filter(|note| is_zero_key(note) && !self.spent_nullifiers.contains(&note.nullifier))
     }
 
     pub fn balances(&self) -> BTreeMap<Address, MintBalance> {
-        mint_balances(&self.notes, |nullifier| {
+        mint_balances(self.checked_notes(), |nullifier| {
             self.spent_nullifiers.contains(nullifier)
         })
     }
@@ -233,6 +324,7 @@ impl AnonymousWallet {
 
     /// Admits every pending note `assets` now names, nothing is read from history.
     pub fn resolve_pending(&mut self, assets: &RingAssets) {
+        self.revision.advance();
         let (registered, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
             .into_iter()
             .map(|note| (assets.by_mint(&note.mint()), note))
@@ -252,6 +344,9 @@ impl AnonymousWallet {
 
     /// The wallet's own decision to trust a claimed sender, nothing else confirms one.
     pub fn confirm_claim(&mut self, claimed: X25519Pubkey) -> Result<(), AnonymousError> {
+        if self.recovery.is_some() {
+            return Err(AnonymousError::RecoveryScopeChanged);
+        }
         if !self
             .claims
             .iter()
@@ -260,6 +355,7 @@ impl AnonymousWallet {
             return Err(AnonymousError::UnknownSenderClaim);
         }
         self.history.confirm_sender(claimed)?;
+        self.revision.advance();
         self.claims
             .retain(|claim| claim.claimed_viewing_key != claimed);
         Ok(())
@@ -268,7 +364,7 @@ impl AnonymousWallet {
     /// Rejects a scan if the wallet history changed.
     pub fn absorb(&mut self, scan: impl LedgerScan) -> Result<(), AnonymousError> {
         let scan = scan
-            .commit_on(&self.history)
+            .commit_on(self)
             .ok_or(AnonymousError::ScanHistoryChanged)?;
         let mut held: HashSet<[u8; 32]> = self.notes.iter().map(|note| note.utxo_hash).collect();
         self.notes.extend(
@@ -298,22 +394,32 @@ impl AnonymousWallet {
             .retain(|nullifier| !scan.retried.contains(nullifier));
         self.merge_retries.extend(scan.unresolved);
         self.history = scan.history;
+        match scan.recovery {
+            RecoveryUpdate::Keep => {}
+            RecoveryUpdate::Paused(session) => self.recovery = Some(*session),
+            RecoveryUpdate::Complete => self.recovery = None,
+        }
+        self.revision.advance();
         Ok(())
     }
 
     /// A tag counter or an added key, a stored position or watermark never moves here.
     pub fn update_history(&mut self, updated: ViewingHistory) -> Result<(), AnonymousError> {
+        if self.recovery.is_some() && updated != self.history {
+            return Err(AnonymousError::RecoveryScopeChanged);
+        }
         if !updated.progress_matches(&self.history) {
             return Err(AnonymousError::ScanProgressMoved);
         }
         self.history = updated;
+        self.revision.advance();
         Ok(())
     }
 
     /// The held notes and spends as a scan reports them.
     pub fn decrypted(&self) -> DecryptionResult {
         DecryptionResult {
-            utxos: self.notes.clone(),
+            utxos: self.checked_notes().cloned().collect(),
             spent_nullifiers: self.spent_nullifiers.iter().copied().collect(),
             ..DecryptionResult::default()
         }
@@ -322,6 +428,8 @@ impl AnonymousWallet {
     /// Its notes open the wallet's funds, store it as key material under one atomic replace.
     pub fn to_json(&self) -> String {
         let wallet = WalletJson {
+            revision: self.revision,
+            recovery: self.recovery.clone(),
             history: self.history.to_json_value(),
             notes: self.notes.clone(),
             spent_nullifiers: self.spent_nullifiers.iter().map(hex::encode).collect(),
@@ -371,7 +479,12 @@ impl AnonymousWallet {
             .iter()
             .map(|text| field(text))
             .collect::<Result<_, _>>()?;
+        if let Some(session) = &wallet.recovery {
+            session.validate()?;
+        }
         Ok(Self {
+            revision: wallet.revision,
+            recovery: wallet.recovery,
             history: ViewingHistory::from_json_value(wallet.history)?,
             notes: wallet.notes,
             spent_nullifiers,

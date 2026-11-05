@@ -19,7 +19,7 @@ use zolana_ring_client::{
         GetWalletStatusRequest, GetWalletStatusResponse, PagedRead, ReadAttestation, ReadAuth,
         ReadTarget, ReaderGrantAction, ReaderGrantAttestation, RingChainStatus,
         SetReaderGrantRequest, SkippedReason, SkippedTransaction, SpendCoverageAttestation,
-        WalletStatusAttestation, AUDIT_PAGE_LIMIT,
+        WalletSnapshotReleaseAttestation, WalletStatusAttestation, AUDIT_PAGE_LIMIT,
     },
     AuditError, AuditedInput, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, CreatedUtxos,
     DepositNote, InputOpening, ReaderKey, RingOrigin, RowDisposition, TransactionAudit,
@@ -51,6 +51,7 @@ use crate::{
         AuditStore, Backfill, CreatedIn, PageDelta, PageWork, WalletCursor, WalletStatusQuery,
         MAX_BACKFILL_PAGES,
     },
+    wallet_snapshots::WalletSnapshotRelease,
 };
 
 pub(crate) const WALLET_NOTE_PAGE_LIMIT: usize = 100;
@@ -87,6 +88,7 @@ struct Grant<'a, S> {
     /// The config read at authorization names the rail its frames parse under.
     mode: RingMode,
     scope: ReadScope,
+    reader: ReaderKey,
     _reader: ReaderPermit<'a>,
 }
 
@@ -366,6 +368,8 @@ impl<S: TransactionSource> AuditService<S> {
         self.shared
             .store(self.ring)
             .wallet_status(WalletStatusQuery {
+                principal: grant.reader.to_bytes(),
+                now: self.shared.clock.now()?,
                 enrollment,
                 wallet,
                 ring: self.ring,
@@ -373,6 +377,35 @@ impl<S: TransactionSource> AuditService<S> {
                 limit: WALLET_NOTE_PAGE_LIMIT,
             })
             .await
+    }
+
+    pub async fn release_wallet_snapshot(
+        &self,
+        request: &GetWalletStatusRequest,
+    ) -> Result<bool, RingRpcError> {
+        let encoded = request.cursor.as_ref().ok_or(RingRpcError::InvalidCursor)?;
+        let cursor = WalletCursor::decode(&encoded.0)?;
+        let wallet = request.wallet.0;
+        let attestation = WalletSnapshotReleaseAttestation {
+            target: self.read_target(),
+            wallet,
+            cursor: encoded.clone(),
+        };
+        let grant = self
+            .grant(&request.auth, &attestation, Some(wallet))
+            .await?;
+        grant.spend().await?;
+        self.shared
+            .store(self.ring)
+            .release_wallet_snapshot(WalletSnapshotRelease {
+                ring: self.ring,
+                wallet,
+                principal: grant.reader.to_bytes(),
+                cursor,
+                now: self.shared.clock.now()?,
+            })
+            .await?;
+        Ok(true)
     }
 
     /// The one read that names an unresolved spend, a reader grant never reaches it.
@@ -390,6 +423,7 @@ impl<S: TransactionSource> AuditService<S> {
             attestation: &SpendCoverageAttestation {
                 target: self.read_target(),
                 authority,
+                cursor: request.cursor.clone(),
             },
             now,
         }
@@ -406,7 +440,11 @@ impl<S: TransactionSource> AuditService<S> {
                 now,
             })
             .await?;
-        self.shared.store(self.ring).spend_coverage().await
+        let cursor = request.cursor.as_ref().map_or_else(
+            || Ok(crate::spend_coverage::CoverageCursor::new(self.ring)),
+            |cursor| crate::spend_coverage::CoverageCursor::decode(&cursor.0, self.ring),
+        )?;
+        self.shared.store(self.ring).spend_coverage(cursor).await
     }
 
     /// A limited co-signer opens the frame it signs under the served ring's key.
@@ -538,6 +576,7 @@ impl<S: TransactionSource> AuditService<S> {
             timestamp: auth.timestamp,
             mode: config.mode,
             scope,
+            reader,
             _reader: permit,
         })
     }
@@ -670,11 +709,6 @@ impl<S: TransactionSource> AuditService<S> {
         })
     }
 
-    /// Moves the mirror and every backfill position to one snapshot of the durable tables.
-    ///
-    /// A cache reads only rows written past the revision it holds, so a follower pass costs the
-    /// history committed since its last pass. A failed or cancelled read changes nothing, the next
-    /// pass reloads before any page commits.
     async fn reload(
         &self,
         store: &AuditStore,
@@ -723,7 +757,7 @@ impl<S: TransactionSource> AuditService<S> {
         let delta = match durable {
             Some(writer) => {
                 let revision = writer.commit_page(&delta).await?;
-                delta.at_revision(revision)
+                delta.at_commit(revision)
             }
             None => delta,
         };
@@ -821,7 +855,14 @@ impl<S: TransactionSource> AuditService<S> {
             }
         };
         let mut failed = Vec::new();
-        for frame in repairs.due(store.unread_frames(), now) {
+        let due = match store.due_repairs(repairs, now).await {
+            Ok(due) => due,
+            Err(error) => {
+                log::warn!("frame repair of ring {} did not load because {}", self.ring, redacted(&error));
+                return;
+            }
+        };
+        for frame in due {
             match self.repair_frame(store, durable, mode, frame).await {
                 Ok(true) => repairs.forget(&frame),
                 outcome => {
@@ -916,7 +957,7 @@ impl<S: TransactionSource> AuditService<S> {
         durable: Option<&ProjectionWriter<'_>>,
     ) -> Result<ScanEnd, RingRpcError> {
         if let Some(writer) = durable {
-            store.queue_late_owners(writer.pending_owners().await?);
+            store.replace_late_owners(writer.pending_owners().await?);
         }
         TrackingScan {
             ring: self.ring,

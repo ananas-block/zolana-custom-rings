@@ -153,6 +153,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
             .chain(wallet.pending_notes().iter().map(PendingNote::nullifier))
             .collect();
         Ok(ScanCommit {
+            recovery: crate::anonymous::RecoveryUpdate::Keep,
             starting_history: wallet.history().clone(),
             history,
             decrypted: DecryptionResult {

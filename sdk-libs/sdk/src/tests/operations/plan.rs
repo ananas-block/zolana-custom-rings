@@ -72,6 +72,7 @@ const CASES: [Case; 5] = [
 impl Case {
     fn subjects(&self) -> TransferSpend {
         TransferSpend {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             rail: self.rail,
             inputs: self.inputs,
             outputs: self.outputs,
@@ -97,6 +98,7 @@ impl Case {
     /// The layout `stream_under` derives from the frame, built from the catalog row alone.
     fn plan(&self, spend: TransferSpend) -> PlannedTransfer {
         let shape = FrameKey {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             rail: spend.rail,
             inputs: spend.inputs,
             outputs: spend.outputs,
@@ -130,6 +132,7 @@ fn circuit_json(circuit: RingCircuit) -> Value {
         owners,
         entry,
         wide,
+        ..
     } = circuit
     else {
         panic!("a transfer key");

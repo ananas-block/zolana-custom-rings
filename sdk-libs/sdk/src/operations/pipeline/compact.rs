@@ -2,9 +2,9 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask, statement::SignerDataCounts, storage::Revision, tag, AnonymousProofData,
-    AppMessage, CustomRingError, CustomRingProof, FrameExtensions, FramedSenderBundle,
-    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy,
-    RingRail, RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    AppMessage, CustomRingError, CustomRingProof, DisclosureFormat, FrameExtensions,
+    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies,
+    RingOutput, RingPolicy, RingRail, RingTransactData, RootRead, SlotBody, DATA_TAIL_LEN,
     MAX_SPP_CPI_ACCOUNTS,
 };
 use solana_address::Address;
@@ -49,7 +49,7 @@ pub(crate) struct OwnedOutput {
     pub hash: [u8; 32],
     pub owner_tag: [u8; 32],
     pub body: OwnedBody,
-    pub record: [u8; AUDIT_RECORD_LEN],
+    pub record: Vec<u8>,
     pub tail: Option<[u8; DATA_TAIL_LEN]>,
 }
 
@@ -81,7 +81,7 @@ impl OwnedOutput {
             hash: *output.hash,
             owner_tag: output.owner_tag,
             body: OwnedBody::of(output.body),
-            record: *output.record,
+            record: output.record.to_vec(),
             tail: output.tail.copied(),
         }
     }
@@ -109,6 +109,7 @@ pub(crate) struct OwnedAppMessage {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OwnedExtensions {
+    pub format: DisclosureFormat,
     pub data_hash: Option<[u8; 32]>,
     pub ring_data_hash: Option<[u8; 32]>,
     pub messages: Vec<OwnedAppMessage>,
@@ -120,6 +121,7 @@ pub(crate) struct OwnedExtensions {
 impl OwnedExtensions {
     fn view(&self) -> FrameExtensions<'_> {
         FrameExtensions {
+            format: self.format,
             data_hash: self.data_hash.as_ref(),
             ring_data_hash: self.ring_data_hash.as_ref(),
             messages: self
@@ -191,13 +193,13 @@ impl TransactParts {
     pub fn seal_audit(
         &mut self,
         envelope: Vec<u8>,
-        records: &[[u8; AUDIT_RECORD_LEN]],
+        records: &[Vec<u8>],
         tails: &[[u8; DATA_TAIL_LEN]],
     ) {
         self.envelope = envelope;
         for (slot, output) in self.outputs.iter_mut().enumerate() {
             if let Some(record) = records.get(slot) {
-                output.record = *record;
+                output.record = record.clone();
             }
             output.tail = tails.get(slot).copied();
         }

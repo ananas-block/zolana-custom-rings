@@ -33,7 +33,7 @@ use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::Hash;
 use zolana_ring_client::{
     rpc::{
-        GetPendingListApprovalsRequest, GetPendingListApprovalsResponse,
+        GetPendingListApprovalsRequest, GetPendingListApprovalsResponse, RefuseListApprovalRequest,
         GetRecordUpdateStatusRequest, PendingListApproval, RecordUpdateId, RecordUpdateStatus,
         SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, PENDING_LIST_APPROVALS_PAGE_LIMIT,
     },
@@ -54,12 +54,13 @@ use crate::{
     },
     storage_chain::StorageChain,
     update_queue::{
-        BatchOutcome, NewBatch, NewUpdate, OpenBatch, PendingApprovalPage, UpdateQueue,
+        ApprovalCandidates, ApprovalScope, BatchOutcome, NewBatch, NewUpdate, OpenBatch, PendingApprovalPage, UpdateQueue,
     },
     upstream::VerifiedOpenings,
 };
 
 pub const RECORD_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_BATCH_PLANS: usize = 2;
 const CONFIRM_POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// The apply proof pairing fits under the transaction ceiling.
 pub(crate) const UPDATE_COMPUTE_UNITS: u32 = 1_400_000;
@@ -225,10 +226,15 @@ impl RecordWriter {
         }
         // An expired pending update joins no approval.
         queue.expire(request.registry.0, slot).await?;
+        let grants = update.approval_grants()?;
         let approves = ListApproval {
             update: &update,
             pending: &queue
-                .pending_approvals(ring, &update.written_members()?)
+                .pending_approvals(ApprovalCandidates {
+                    scope: ApprovalScope { ring, registry: request.registry.0 },
+                    grants: &grants,
+                    slot,
+                })
                 .await?,
         }
         .decide()?;
@@ -266,7 +272,7 @@ impl RecordWriter {
         let mut pending = self
             .queue()
             .pending_approval_page(PendingApprovalPage {
-                ring,
+                scope: ApprovalScope { ring, registry: request.registry.0 },
                 cursor: request.cursor.as_ref().map(|cursor| cursor.0 .0),
                 limit: PENDING_LIST_APPROVALS_PAGE_LIMIT + 1,
             })
@@ -295,15 +301,15 @@ impl RecordWriter {
 
     pub(crate) async fn refuse_list_approval(
         &self,
-        ring: Address,
         signer: Address,
-        update_id: &RecordUpdateId,
+        request: &RefuseListApprovalRequest,
     ) -> Result<RecordUpdateStatus, RingRpcError> {
-        self.require_policy_authority(ring, signer).await?;
+        let scope = ApprovalScope { ring: request.ring.0, registry: request.registry.0 };
+        self.require_policy_authority(scope.ring, signer).await?;
         let _queueing = self.submits.lock().await;
         if !self
             .queue()
-            .refuse_pending_approval(ring, &update_id.0 .0)
+            .refuse_pending_approval(scope, &request.update_id.0 .0)
             .await?
         {
             return Err(RecordUpdateRefusal::UnknownListApproval.into());
@@ -358,12 +364,11 @@ impl RecordWriter {
         if let Some(batch) = queue.open_batch(registry).await? {
             return self.settle(batch).await;
         }
-        // 2. Expiry is one indexed update, an approval expires with the earliest update it joined.
         let slot = self.chain.slot().await?;
         queue.expire(registry, slot).await?;
         // 3. One batch per flush, the next starts from the root the sent batch lands. A refused
         //    update leaves the queue and the plan reads the heads again.
-        loop {
+        for _ in 0..MAX_BATCH_PLANS {
             let Some(batch) = queue.plan(registry, slot).await? else {
                 return Ok(());
             };
@@ -390,6 +395,7 @@ impl RecordWriter {
                 return self.prove_and_send(registry, &batch).await;
             }
         }
+        Ok(())
     }
 
     async fn prove_and_send(

@@ -3,57 +3,63 @@
   "keys": [
     {
       "key": "custom_ring_transfer_2_in24_w4_s4",
-      "own": 15,
-      "curator": 15,
+      "own": 39,
+      "curator": 39,
       "tracking": 6
     },
     {
       "key": "custom_ring_transfer_4_in24_w4_s4",
-      "own": 19,
-      "curator": 19,
+      "own": 43,
+      "curator": 43,
       "tracking": 8
     },
     {
       "key": "custom_ring_transfer_8_in16_w4_s4",
-      "own": 27,
-      "curator": 27,
+      "own": 43,
+      "curator": 43,
       "tracking": 12
     },
     {
       "key": "custom_ring_transfer_wide_8_in24_w32_s13",
-      "own": 91,
-      "curator": 91,
+      "own": 115,
+      "curator": 115,
       "tracking": 42
     },
     {
       "key": "custom_ring_transfer_wide_2_in40_w4_s8",
-      "own": 27,
-      "curator": 27,
+      "own": 67,
+      "curator": 67,
       "tracking": 11
     },
     {
       "key": "custom_ring_transfer_entry_4_in8_w4_s8",
-      "own": 35,
-      "curator": 35,
+      "own": 43,
+      "curator": 43,
       "tracking": 14
     },
     {
       "key": "custom_ring_transfer_entry_8_in2_w4_s2",
-      "own": 39,
-      "curator": 39,
+      "own": 41,
+      "curator": 41,
       "tracking": 14
     },
     {
       "key": "custom_ring_transfer_entry_8_in5_w4_s4",
-      "own": 41,
-      "curator": 41,
+      "own": 46,
+      "curator": 46,
       "tracking": 15
     },
     {
       "key": "custom_ring_transfer_entry_8_in8_w32_s8",
-      "own": 83,
-      "curator": 83,
+      "own": 91,
+      "curator": 91,
       "tracking": 38
+    },
+    {
+      "key": "custom_ring_transfer_payout_16_in1_w0_s1",
+      "own": 35,
+      "curator": 35,
+      "tracking": 17
     }
   ]
 }

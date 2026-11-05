@@ -1259,7 +1259,27 @@
       "authorization": "Each page checks the current ring authority and signed cursor.",
       "consistency": "One database snapshot per page. Later pages read live diagnostic state.",
       "stored_cursor_state": false,
-      "cursor_ttl": null
+      "cursor_ttl": null,
+      "totals": {
+        "response_field": "totals",
+        "rust_type": "SpendCoverageTotals",
+        "typescript_type": "RingSpendCoverageTotals",
+        "fields": {
+          "observed": "u64",
+          "padding": "u64",
+          "address": "u64",
+          "external": "u64",
+          "resolved": "u64"
+        },
+        "presence": "Present on the first traversal page and omitted on continuation pages.",
+        "nesting": "Counters reside inside totals rather than at the response root."
+      },
+      "database_cost": {
+        "history_size": "H is the number of retained spend rows for the ring.",
+        "first_page": "Exact grouped totals require O(H) work.",
+        "continuation": "Indexed detail reads remain bounded by the page limit and do not recount totals."
+      },
+      "memory_cost": "Detail selection scans the retained diagnostic collections on each page."
     },
     "managed_merge_selection": {
       "owner": "projection-bounds",

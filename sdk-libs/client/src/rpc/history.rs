@@ -1,5 +1,6 @@
 use std::{fmt, str::FromStr};
 
+use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use spr_indexer_api::{
     Base64String, Context, HistoryFilters, InvalidPage, Page, PageRequest, PaginationToken,
@@ -47,6 +48,40 @@ pub enum HistoryCursorError {
     Malformed,
     #[error("history cursor belongs to another ring or stream")]
     OtherQuery,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RecoveryWindow {
+    pub page_limit: Option<u32>,
+    pub after_slot: Option<u64>,
+    pub target_slot: Option<u64>,
+    pub token: Option<PaginationToken>,
+}
+
+impl RecoveryWindow {
+    pub fn filters(self) -> HistoryFilters {
+        let mut filters = self
+            .after_slot
+            .map_or_else(HistoryFilters::default, HistoryFilters::after_slot);
+        filters.slot.lte = self.target_slot;
+        filters
+    }
+
+    pub fn advance<T: Positioned>(
+        &mut self,
+        page: &Page<T>,
+        limit: u32,
+    ) -> Result<bool, InvalidPage> {
+        page.validate_indexed(&PageRequest {
+            pagination_token: self.token,
+            limit: limit.into(),
+            filters: self.filters(),
+            min_context_slot: self.target_slot,
+        })?;
+        self.token = page.pagination_token;
+        Ok(self.token.is_none())
+    }
 }
 
 impl HistoryPosition {

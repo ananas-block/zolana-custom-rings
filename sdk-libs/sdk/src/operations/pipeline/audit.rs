@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     disclosure::AuditLayout, AuditEvidence, AuditRecord, AuditStreamLayout, AuditorMessage,
-    DataTail, EntryInput, RecordKind, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    DataTail, DisclosureFormat, EntryInput, RecordKind, DATA_TAIL_LEN,
 };
 use spr_event::MessageData;
 use spr_hasher::primitives::pack_be;
@@ -25,7 +25,7 @@ pub(crate) struct SealedAudit {
     pub eph_u: [u8; 32],
     pub envelope: Vec<u8>,
     /// One per slot.
-    pub records: Vec<[u8; AUDIT_RECORD_LEN]>,
+    pub records: Vec<Vec<u8>>,
     /// One per slot under `has_data`, else none.
     pub tails: Vec<[u8; DATA_TAIL_LEN]>,
 }
@@ -77,6 +77,17 @@ impl AuditSeal<'_> {
 
     /// Bit `i` names absolute position `i`, an address or a dummy never sets one.
     fn evidence(&self) -> Result<AuditEvidence, RingError> {
+        if self.layout.key.format == DisclosureFormat::SingleAssetPayout {
+            let mint = self
+                .inputs
+                .output_utxos
+                .first()
+                .ok_or(RingError::RelayAuditorMessage)?
+                .asset
+                .asset
+                .to_bytes();
+            return Ok(AuditEvidence::SingleAssetPayout { mint });
+        }
         if !self.layout.key.entry {
             return Ok(AuditEvidence::None);
         }
@@ -164,7 +175,7 @@ impl PresealedAudit {
             .try_into()
             .map_err(|_| RingError::RelayAuditorMessage)?;
         let records = (0..layout.outputs)
-            .map(|slot| message.record(slot).copied())
+            .map(|slot| message.record(slot).map(<[u8]>::to_vec))
             .collect::<Option<_>>()
             .ok_or(RingError::RelayAuditorMessage)?;
         let tails = match layout.has_data {
@@ -192,7 +203,7 @@ impl SealedAudit {
             data: AuditorMessage::data(
                 &self.eph_u,
                 core::iter::once(self.envelope.as_slice())
-                    .chain(self.records.iter().map(<[u8; AUDIT_RECORD_LEN]>::as_slice))
+                    .chain(self.records.iter().map(Vec::as_slice))
                     .chain(self.tails.iter().map(<[u8; DATA_TAIL_LEN]>::as_slice)),
             ),
         }

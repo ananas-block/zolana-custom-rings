@@ -85,6 +85,8 @@ mod replay;
 mod replay_nonces;
 #[path = "rpc/server.rs"]
 mod server;
+#[path = "operations/spend_coverage.rs"]
+mod spend_coverage;
 #[path = "operations/spend_machine.rs"]
 mod spend_machine;
 #[path = "storage/spent_index.rs"]
@@ -101,6 +103,8 @@ mod update_queue;
 mod upstream;
 #[path = "operations/utxos.rs"]
 mod utxos;
+#[path = "storage/wallet_snapshots.rs"]
+mod wallet_snapshots;
 #[path = "security/webauthn.rs"]
 mod webauthn;
 
@@ -160,3 +164,5 @@ pub use upstream::{
     TransactionSource, Upstreams,
 };
 pub use utxos::UTXO_BACKFILL_INTERVAL;
+
+pub use wallet_snapshots::WalletSnapshotLimits;

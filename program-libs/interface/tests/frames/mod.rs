@@ -224,6 +224,7 @@ impl Fixture {
     pub fn confidential_extensions(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 2, 2);
         data.extensions = FrameExtensions {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             data_hash: Some(&self.fields[70]),
             ring_data_hash: Some(&self.fields[71]),
             messages: vec![AppMessage {

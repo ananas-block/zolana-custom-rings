@@ -14,7 +14,8 @@ use custom_ring_interface::{
     blinding::ring_blinding_seed,
     encode_ring_sender_bundle_output,
     stream::{confidential_slot_tag, DeliveredSlot, SlotSecret},
-    RingOutput, SlotBody, AUDIT_RECORD_LEN, RECIPIENT_BODY_LEN,
+    CompactRecipientBody, DisclosureFormat, RingOutput, SlotBody, AUDIT_RECORD_LEN,
+    RECIPIENT_BODY_LEN, SINGLE_ASSET_PAYOUT_OUTPUTS,
 };
 use rand::{rngs::OsRng, RngCore};
 use spr_event::MessageData;
@@ -40,9 +41,10 @@ pub use error::RingRailError;
 pub use input_map::{published_input_map, ClassifiedInput};
 pub use published::PublishedSlot;
 pub use recipient_delivery::{
-    is_contributory, open_recipient_body, open_reply, open_sender_bundle, recipient_body,
-    seal_recipient_body, seal_reply, seal_sender_bundle, AnonymousOutput, OpenedBody, OpenedNote,
-    OutputBlindings, ReplyClaim, ReplyMetadata,
+    is_contributory, open_compact_recipient_body, open_recipient_body, open_reply,
+    open_sender_bundle, recipient_body, seal_compact_recipient_body, seal_recipient_body,
+    seal_reply, seal_sender_bundle, AnonymousOutput, OpenedBody, OpenedNote, OutputBlindings,
+    ReplyClaim, ReplyMetadata,
 };
 pub use ring_deposit::RingDepositPlaintext;
 
@@ -70,6 +72,7 @@ pub struct RingOutputRail {
     tx_viewing_key: ViewingKey,
     salt: Salt,
     delivery: RingDelivery,
+    format: DisclosureFormat,
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +89,7 @@ impl RingOutputRail {
             tx_viewing_key,
             salt: random_salt(),
             delivery,
+            format: DisclosureFormat::Standard,
         }
     }
 
@@ -95,7 +99,18 @@ impl RingOutputRail {
             tx_viewing_key,
             salt,
             delivery,
+            format: DisclosureFormat::Standard,
         }
+    }
+
+    #[must_use]
+    pub fn with_format(mut self, format: DisclosureFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    pub fn format(&self) -> DisclosureFormat {
+        self.format
     }
 
     /// SPP's encryption fixes the slots and blindings, the rail then re-encodes every slot.
@@ -109,6 +124,11 @@ impl RingOutputRail {
             true => transaction,
             false => transaction.with_blinding_seed(blinding_seed)?,
         };
+        if self.format == DisclosureFormat::SingleAssetPayout
+            && !matches!(self.delivery, RingDelivery::Delivered)
+        {
+            return Err(RingRailError::PayoutProfile);
+        }
         let mut inputs = match &self.delivery {
             RingDelivery::Delivered => self.spp_encrypt(transaction, sender)?,
             RingDelivery::Anonymous(_) => {
@@ -122,6 +142,7 @@ impl RingOutputRail {
                 inputs
             }
         };
+        self.check_format(&inputs)?;
         match &self.delivery {
             RingDelivery::Delivered => self.reencode_delivered(&mut inputs)?,
             RingDelivery::Anonymous(plan) => self.reencode_anonymous(plan, &mut inputs, sender)?,
@@ -226,6 +247,7 @@ impl RingOutputRail {
     fn reencode_delivered(&self, inputs: &mut SppProofInputs) -> Result<(), RingRailError> {
         check_carried(published_outputs(&inputs.output_utxos))?;
         let first_nullifier = inputs.first_nullifier()?;
+        let body_width = recipient_body_width(&inputs.output_utxos);
         let mut published = inputs.external_data.outputs.iter_mut();
         let mut resolved = inputs.external_data.resolved_owner_tags.iter();
         for (index, output) in published_outputs(&inputs.output_utxos).iter().enumerate() {
@@ -239,6 +261,7 @@ impl RingOutputRail {
                 output,
                 slot_index,
                 first_nullifier,
+                body_width,
                 owner_tag: ResolvedOwnerTag {
                     tag: transact_output.owner_tag,
                     resolved: *resolved,
@@ -270,6 +293,7 @@ impl RingOutputRail {
             outputs: published,
             slots: &slots,
             plan,
+            body_width: recipient_body_width(published),
         };
         let tree_id = inputs.output_tree_id;
         let blindings = OutputBlindings::new(&first_nullifier, &inputs.blinding_seed)?;
@@ -411,6 +435,34 @@ impl RingOutputRail {
         )?)
     }
 
+    pub fn check_format(&self, inputs: &SppProofInputs) -> Result<(), RingRailError> {
+        if self.format == DisclosureFormat::Standard {
+            return Ok(());
+        }
+        let valid = match inputs.input_utxos.as_slice() {
+            [input] if input.is_note() && input.utxo.ring_program_id.is_some() => {
+                inputs.output_utxos.len() == SINGLE_ASSET_PAYOUT_OUTPUTS
+                    && inputs.output_utxos.iter().all(|output| {
+                        !output.is_dummy()
+                            && output.ring_program_id == input.utxo.ring_program_id
+                            && output.asset == input.utxo.asset
+                            && output.data_hash.is_none_or(|hash| hash == [0; 32])
+                            && output.ring_data_hash.is_none_or(|hash| hash == [0; 32])
+                            && output.data.is_empty()
+                    })
+                    && inputs.external_data.interface_transfers.is_empty()
+                    && inputs.external_data.messages.is_empty()
+                    && inputs.external_data.data_hash.is_none()
+                    && inputs.external_data.ring_data_hash.is_none()
+            }
+            _ => false,
+        };
+        match valid {
+            true => Ok(()),
+            false => Err(RingRailError::PayoutProfile),
+        }
+    }
+
     fn encode_delivered(&self, slot: &SlotEncode<'_>) -> Result<MessageData, RingRailError> {
         let slot_index = slot.slot_index as usize;
         // The expansion ignores the hash, only the published bytes are kept.
@@ -424,9 +476,24 @@ impl RingOutputRail {
                     &slot.first_nullifier,
                     slot.slot_index,
                 )?;
-                seal_recipient_body(&recipient_body(slot.output), &secret)?
+                match self.format {
+                    DisclosureFormat::SingleAssetPayout => seal_compact_recipient_body(
+                        &CompactRecipientBody {
+                            blinding: slot.output.blinding,
+                            amount: slot.output.amount,
+                            asset_id: slot.output.asset.asset_id,
+                        },
+                        &secret,
+                    )?,
+                    DisclosureFormat::Standard => recipient_delivery::PaddedRecipientBody {
+                        body: &recipient_body(slot.output),
+                        slot_secret: &secret,
+                        width: slot.body_width,
+                    }
+                    .seal()?,
+                }
             }
-            Slot::Dummy => random_body(RECIPIENT_BODY_LEN),
+            Slot::Dummy => random_body(slot.body_width),
         };
         Self::framed(
             RingOutput {
@@ -483,6 +550,7 @@ struct SlotEncode<'a> {
     output: &'a SppProofOutputUtxo,
     slot_index: u32,
     first_nullifier: [u8; 32],
+    body_width: usize,
     owner_tag: ResolvedOwnerTag,
 }
 
@@ -505,4 +573,26 @@ fn random_body(len: usize) -> Vec<u8> {
     let mut body = vec![0u8; len];
     OsRng.fill_bytes(&mut body);
     body
+}
+
+pub(crate) fn recipient_body_width(outputs: &[SppProofOutputUtxo]) -> usize {
+    let minimum = RECIPIENT_BODY_LEN
+        + if outputs.iter().any(|output| {
+            !output.is_dummy()
+                && [output.data_hash, output.ring_data_hash]
+                    .into_iter()
+                    .flatten()
+                    .any(|hash| hash != [0; 32])
+        }) {
+            custom_ring_interface::RECIPIENT_BODY_LENGTH_LEN
+        } else {
+            0
+        };
+    outputs
+        .iter()
+        .filter(|output| !output.is_dummy() && output.ring_program_id.is_some())
+        .map(|output| recipient_body(output).encoded_len())
+        .max()
+        .unwrap_or(minimum)
+        .max(minimum)
 }

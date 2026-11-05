@@ -362,7 +362,7 @@ impl StoreFault {
                 "SELECT RAISE(FAIL, 'the update reply was lost')",
             ),
             Self::ReservationReleaseRefused => (
-                "BEFORE DELETE ON cosign_usage",
+                "BEFORE UPDATE OF state ON cosign_usage WHEN NEW.state='released'",
                 "SELECT RAISE(ABORT, 'reservation release refused')",
             ),
         };

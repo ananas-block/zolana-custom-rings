@@ -243,6 +243,45 @@ describe("selectFunding", () => {
     );
   });
 
+  it("funds a delegate move from two trees", () => {
+    const selected = selectAuthorityNotes({
+      wallet: walletOf(
+        [
+          [0, 6n],
+          [1, 6n],
+        ],
+        RING,
+      ),
+      covers: [{ asset: SOL_MINT, amount: 10n }],
+      outputs: 2,
+      eligible: () => true,
+    });
+    expect(sortedByTree(selected)).toEqual(
+      expected([
+        [0, 6n],
+        [1, 6n],
+      ]),
+    );
+  });
+
+  it("refuses delegate funding across three trees", () => {
+    expect(() =>
+      selectAuthorityNotes({
+        wallet: walletOf(
+          [
+            [0, 4n],
+            [1, 4n],
+            [2, 4n],
+          ],
+          RING,
+        ),
+        covers: [{ asset: SOL_MINT, amount: 10n }],
+        outputs: 2,
+        eligible: () => true,
+      }),
+    ).toThrow("RING_TOO_MANY_INPUT_TREES");
+  });
+
   it("leaves delegate change feasibility to transaction assembly", () => {
     const notes: readonly Note[] = [
       [0, 101n],

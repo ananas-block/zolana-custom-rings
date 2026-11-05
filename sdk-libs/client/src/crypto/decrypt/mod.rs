@@ -334,7 +334,9 @@ impl Transfer {
                             let tree = trees.and_then(|trees| trees.get(index).copied().flatten());
                             InputOpening::External(Box::new(self.default_input(entry, tree)?))
                         }
-                        AuditEvidence::None | AuditEvidence::Entry { .. } => InputOpening::Real,
+                        AuditEvidence::None
+                        | AuditEvidence::SingleAssetPayout { .. }
+                        | AuditEvidence::Entry { .. } => InputOpening::Real,
                     },
                 };
                 Ok(AuditedInput {

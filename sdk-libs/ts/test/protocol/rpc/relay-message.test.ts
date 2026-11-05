@@ -109,6 +109,13 @@ interface DelegateRequest {
         readonly mint: Address;
         readonly amount: number;
       }[];
+      readonly exits: readonly { recipient: string; mint: Address; amount: number }[];
+      readonly withdrawals: readonly {
+        recipient: Address;
+        mint: Address;
+        amount: number;
+        tokenProgram?: Address;
+      }[];
     };
   };
   readonly feePayer: Address;
@@ -166,7 +173,10 @@ function auditorOf(request: DelegateRequest): X25519PublicKey {
   return X25519PublicKey.fromBytes(new Uint8Array(base64.encode(request.auditor)) as Bytes33);
 }
 
-function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
+function delegate(
+  request: DelegateRequest,
+  cases: readonly MessageCase[] = delegates.cases,
+): Promise<ExpectedRelayMessage> {
   const shielded = (text: string) => ShieldedAddress.fromBytes(new Uint8Array(base58.encode(text)));
   const { prepare } = request;
   return expectedDelegate({
@@ -176,6 +186,15 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
       txViewingKey: new Uint8Array(base64.encode(prepare.txViewingKey)),
       transfer: {
         sources: prepare.transfer.sources.map(shielded),
+        exits: prepare.transfer.exits.map((exit) => ({
+          recipient: shielded(exit.recipient),
+          mint: exit.mint,
+          amount: BigInt(exit.amount),
+        })),
+        withdrawals: prepare.transfer.withdrawals.map((withdrawal) => ({
+          ...withdrawal,
+          amount: BigInt(withdrawal.amount),
+        })),
         payments: prepare.transfer.payments.map((payment) => ({
           recipient: shielded(payment.recipient),
           mint: payment.mint,
@@ -185,7 +204,7 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
     } as unknown as PrepareAuthorityTransferRequest,
     quote: { feePayer: request.feePayer, validUntilSlot: 0n },
     config: { mode: "confidential", auditorPublicKey: auditorOf(request) },
-    allowed: pinnedAllowed(delegates.cases),
+    allowed: pinnedAllowed(cases),
   });
 }
 
@@ -273,6 +292,7 @@ function relay(): RingRelayClient & { submitRelay: ReturnType<typeof vi.fn> } {
 const RELAY_ID = "11111111111111111111111111111111" as indexerTypes.Hash;
 const deposits = vector<DepositRequest>("relay_deposit_messages.json");
 const delegates = vector<DelegateRequest>("relay_delegate_messages.json");
+const settlements = vector<DelegateRequest>("relay_delegate_settlement_messages.json");
 const DELEGATE = delegates.request.prepare.delegate;
 const owners = fixture<{ readonly cases: readonly OwnerCase[] }>("relay_transfer_messages.json");
 const enrolls = vector<EnrollRequest>("relay_enroll_messages.json");
@@ -284,6 +304,12 @@ describe("relay message check", () => {
 
   it.each(delegates.cases)("reaches the Rust verdict on delegate message $name", async (entry) => {
     expect(verdict(await delegate(delegates.request), entry.message)).toBe(entry.verdict);
+  });
+
+  it.each(settlements.cases)("binds every hosted settlement field for $name", async (entry) => {
+    expect(verdict(await delegate(settlements.request, settlements.cases), entry.message)).toBe(
+      entry.verdict,
+    );
   });
 
   it.each(owners.cases)("reaches the Rust verdict on owner message $name", async (entry) => {

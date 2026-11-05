@@ -37,6 +37,9 @@ import {
 } from "../protocol/codec/audit-stream.js";
 import {
   checkedStreamLayout,
+  DisclosureFormat,
+  SINGLE_ASSET_PAYOUT_INPUTS,
+  disclosureFormat,
   type AuditLayout,
   type AuditStreamLayout,
 } from "../protocol/codec/ring-disclosure-layout.js";
@@ -89,7 +92,11 @@ export function sealAudit(
       }),
     });
     return Object.freeze({
-      audit: Object.freeze({ hasData: layout.hasData, entry: layout.key.entry }),
+      audit: Object.freeze({
+        hasData: layout.hasData,
+        entry: layout.key.entry,
+        format: disclosureFormat(layout.key.format),
+      }),
       layout,
       ...sealed,
     });
@@ -133,6 +140,16 @@ function auditEnvelopeOf(
     realInputs: map.noteCount,
     addressInputBits: map.addressInputBits,
   };
+  if (disclosureFormat(layout.key.format) === DisclosureFormat.SingleAssetPayout) {
+    const first = inputs[0];
+    if (
+      first === undefined ||
+      map.noteCount !== SINGLE_ASSET_PAYOUT_INPUTS ||
+      map.addressInputBits !== 0n
+    )
+      throw new RingError("RING_CATALOG_KEY_MISSING");
+    return { ...head, evidence: { kind: "singleAssetPayout", mint: first.utxo.asset } };
+  }
   if (!layout.key.entry) return { ...head, evidence: { kind: "none" } };
   return {
     ...head,

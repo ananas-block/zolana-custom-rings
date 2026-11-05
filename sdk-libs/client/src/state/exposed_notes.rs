@@ -12,6 +12,7 @@ use spr_transaction::{
 /// Where a note stands for its wallet, read from its key and its nullifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoteState {
+    PendingSpendCheck,
     Spendable,
     /// Its sender and the auditor compute its nullifier, spending publishes its owner.
     ExposedIfSpent,
@@ -62,7 +63,7 @@ pub fn mint_balances<'a>(
             NoteState::ExposedIfSpent => {
                 slot.exposed_if_spent = slot.exposed_if_spent.saturating_add(amount);
             }
-            NoteState::Spent => {}
+            NoteState::Spent | NoteState::PendingSpendCheck => {}
         }
     }
     balances

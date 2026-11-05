@@ -14,6 +14,7 @@ The confidential mode and the anonymous mode differ at the sender and the recipi
 
 - Chain observers see the payer, the published input count, the published output count and which slots carry no body. They see a short tag on each body-bearing slot, and the sender bundle with its tag.
 - A public co-owner signs in the open. Its link to the transfer is public, and the hidden owner's stays hidden.
+- The program requires equal lengths for standard ring recipient bodies, including dummy bodies. Data can increase their common length.
 - A reply has one length per frame, and a slot with no reply carries random bytes of that length. Observers see whether a frame carries reply bytes.
 - They see each exit owner and each public leg.
 - They do not see the hidden sender, the recipients, the amounts, the assets or the spent notes.

@@ -11,7 +11,7 @@
 
 use hkdf::Hkdf;
 use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, Value};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use solana_address::Address;
 use spr_keypair::X25519Keypair;
 use zolana_ring_policy::Member;
@@ -35,6 +35,8 @@ enum TagDomain {
     Nullifier = 2,
     OwnerHash = 3,
     ListKey = 4,
+    SnapshotScope = 5,
+    SnapshotMetadata = 6,
 }
 
 /// HKDF expand under the ring salt is the PRF, the tags of another ring or auditor never match.
@@ -61,6 +63,25 @@ impl IndexTags {
     /// Finds an enrollment by the list key a salted write names.
     pub(crate) fn list_key_tag(&self, list_key: &[u8; 32]) -> Result<[u8; 32], DbErr> {
         self.tag(TagDomain::ListKey, list_key)
+    }
+
+    pub(crate) fn snapshot_scope(
+        &self,
+        principal: &[u8; 34],
+        wallet: &Address,
+    ) -> Result<[u8; 32], DbErr> {
+        let mut hash = Sha256::new();
+        hash.update(principal);
+        hash.update(wallet.as_ref());
+        self.tag(TagDomain::SnapshotScope, &hash.finalize().into())
+    }
+
+    pub(crate) fn snapshot_metadata(&self, id: &[u8; 32]) -> Result<[u8; 32], DbErr> {
+        self.tag(TagDomain::SnapshotMetadata, id)
+    }
+
+    pub(crate) fn owner_tag(&self, member: &[u8; 32]) -> Result<[u8; 32], DbErr> {
+        self.tag(TagDomain::Owner, member)
     }
 
     fn tag(&self, domain: TagDomain, value: &[u8; 32]) -> Result<[u8; 32], DbErr> {
@@ -203,24 +224,7 @@ impl OwnerNotesPage<'_> {
         })
     }
 
-    /// Opens every row past `range.after`, `range.limit` rows per query.
-    pub(crate) async fn for_each(
-        mut self,
-        db: &impl ConnectionTrait,
-        mut visit: impl FnMut(IndexedNote),
-    ) -> Result<(), DbErr> {
-        loop {
-            let page = self.read(db).await?;
-            let last = page.notes.last().map(|indexed| indexed.key);
-            page.notes.into_iter().for_each(&mut visit);
-            match (page.more, last) {
-                (true, Some(key)) => self.range.after = Some(key),
-                _ => return Ok(()),
-            }
-        }
-    }
-
-    fn open(&self, row: &QueryResult, member: &[u8; 32]) -> Result<IndexedNote, DbErr> {
+    pub(crate) fn open(&self, row: &QueryResult, member: &[u8; 32]) -> Result<IndexedNote, DbErr> {
         let Self { seal, .. } = self;
         let moved = || DbErr::Custom("owner note row names another note or owner".into());
         let note_tag =

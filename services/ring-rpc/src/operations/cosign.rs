@@ -90,6 +90,8 @@ pub enum CoSignError {
     MessageScope = -32164,
     #[error("the co-signer approves no class the operation demands")]
     NotApproved = -32165,
+    #[error("the co-sign reservation is already released")]
+    ReleasedReservation = -32166,
     #[error("the co-sign request names an asset with no record")]
     UnrecordedAsset = -32296,
 }

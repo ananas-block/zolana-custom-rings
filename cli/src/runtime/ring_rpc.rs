@@ -15,7 +15,7 @@ use zolana_ring_client::{
         DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
         GetDecryptedTransactionsResponse, GetListSaltResponse, GetPendingListApprovalsRequest,
         GetPendingListApprovalsResponse, GetRecordUpdateStatusRequest, HealthResponse,
-        ListSaltAttestation, ListSaltRequest, PendingListApproval, ReadTarget, RecordUpdateStatus,
+        ListApprovalScope, ListSaltAttestation, ListSaltRequest, PendingListApproval, ReadTarget, RecordUpdateStatus,
         RingState, RingStatusRequest, RingStatusResponse, SubmitRecordUpdateRequest,
         SubmitRecordUpdateResponse, CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY,
         GET_DECRYPTED_TRANSACTIONS, GET_LIST_SALT, GET_PENDING_LIST_APPROVALS,
@@ -240,13 +240,13 @@ impl RingRpcClient {
     /// Every page signed by the policy authority, oldest first.
     pub fn pending_list_approvals(
         &self,
-        target: ReadTarget,
+        scope: ListApprovalScope,
         authority: &dyn Signer,
     ) -> Result<Vec<PendingListApproval>> {
         let mut pending = Vec::new();
         let mut cursor = None;
         for _ in 0..MAX_PAGES {
-            let read = GetPendingListApprovalsRequest::read(target, authority.pubkey());
+            let read = GetPendingListApprovalsRequest::read(scope);
             let read = match cursor.clone() {
                 Some(cursor) => read.with_cursor(cursor),
                 None => read,

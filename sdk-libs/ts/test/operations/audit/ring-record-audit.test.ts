@@ -1,3 +1,4 @@
+import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { getBase58Decoder, type Address, type Signature } from "@solana/kit";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -93,7 +94,12 @@ const caseNamed = (name: string): Case => {
 
 function layoutOf(entry: Case): AuditStreamLayout {
   return {
-    key: { class: entry.input_class, entry: (entry.layout & 2) !== 0 },
+    key: {
+      class: entry.input_class,
+      entry: (entry.layout & 2) !== 0,
+      format:
+        (entry.layout & 4) !== 0 ? DisclosureFormat.SingleAssetPayout : DisclosureFormat.Standard,
+    },
     inputs: entry.input_count,
     outputs: entry.output_count,
     capacity: entry.outputs,

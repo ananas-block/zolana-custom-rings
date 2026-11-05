@@ -26,10 +26,13 @@ fn key_cases() -> Vec<KeyCase> {
     TRANSFER_SHAPES
         .iter()
         .flat_map(|shape| {
-            [false, true].map(|has_data| KeyCase {
-                key: shape.audit_key(),
-                outputs: usize::from(shape.outputs),
-                has_data,
+            [false, true].into_iter().filter_map(|has_data| {
+                (shape.format == custom_ring_interface::DisclosureFormat::Standard || !has_data)
+                    .then_some(KeyCase {
+                        key: shape.audit_key(),
+                        outputs: usize::from(shape.outputs),
+                        has_data,
+                    })
             })
         })
         .collect()
@@ -56,12 +59,13 @@ impl KeyCase {
             "class": self.key.class(),
             "outputs": self.outputs,
             "entry": self.key.entry,
+            "single_asset_payout": self.key.format == custom_ring_interface::DisclosureFormat::SingleAssetPayout,
             "has_data": self.has_data,
             "envelope_blocks": self.key.envelope_blocks(),
             "first_record_counter": self.key.first_record_counter(),
             "first_tail_counter": bare.first_tail_counter(),
             "capacity_blocks": bare.capacity_blocks(),
-            "record_len": AUDIT_RECORD_LEN,
+            "record_len": self.key.format.record_len(),
             "tail_len": bare.tail_len(0),
             "record_start_counters": (0..self.outputs)
                 .map(|slot| bare.record(slot).start_counter)
@@ -81,7 +85,7 @@ impl KeyCase {
 
 fn compute_vector() -> Value {
     json!({
-        "description": "Auditor stream ranges per transfer key and layout at m = N. The envelope starts at counter 2 with envelope_blocks blocks, slot i's record at first_record_counter + 7 * i, its tail at first_tail_counter + 4 * i. Each by_input_count list starts at n = 1 and ends at the class, every length in bytes. message_len is 33 + envelope + records + tails. Produced by program-libs/interface/tests/audit_stream.rs.",
+        "description": "Auditor stream ranges for each transfer key at full output capacity.",
         "keys": key_cases().iter().map(KeyCase::vector).collect::<Vec<_>>(),
     })
 }
@@ -107,7 +111,11 @@ const fn block_bytes(blocks: usize) -> usize {
 
 #[test]
 fn the_contract_counts_each_key() {
-    let key = |class, entry| AuditKey { class, entry };
+    let key = |class, entry| AuditKey {
+        format: custom_ring_interface::DisclosureFormat::Standard,
+        class,
+        entry,
+    };
     for (key, envelope_blocks) in [
         (key(5, false), 3),
         (key(24, false), 3),
@@ -145,7 +153,7 @@ fn no_counter_serves_two_regions_and_every_region_holds_its_bytes() {
             for slot in 0..case.outputs {
                 let record = layout.record(slot);
                 assert_eq!(record.start_counter as usize, next);
-                assert_eq!(record.len, AUDIT_RECORD_LEN);
+                assert_eq!(record.len, case.key.format.record_len());
                 assert!(record.len <= block_bytes(record.max_blocks));
                 assert_eq!(record.keystream_offset(), block_bytes(next - 2));
                 next += record.max_blocks;
@@ -194,6 +202,7 @@ fn the_input_past_the_class_is_refused() {
 fn a_compact_frame_keeps_every_counter_and_drops_the_suffix() {
     let layout = |outputs, has_data| AuditStreamLayout {
         key: AuditKey {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             class: 16,
             entry: false,
         },
@@ -223,6 +232,7 @@ fn a_compact_frame_keeps_every_counter_and_drops_the_suffix() {
 fn a_clear_has_data_transmits_no_tail() {
     let plain = AuditStreamLayout {
         key: AuditKey {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             class: 24,
             entry: false,
         },
@@ -322,6 +332,7 @@ fn envelopes_read_back_at_their_layout_length() {
     let cases = [
         (
             AuditKey {
+                format: custom_ring_interface::DisclosureFormat::Standard,
                 class: 8,
                 entry: false,
             },
@@ -331,6 +342,7 @@ fn envelopes_read_back_at_their_layout_length() {
         ),
         (
             AuditKey {
+                format: custom_ring_interface::DisclosureFormat::Standard,
                 class: 8,
                 entry: true,
             },
@@ -379,6 +391,7 @@ fn envelopes_read_back_at_their_layout_length() {
 fn the_auditor_message_cuts_by_the_layout() {
     let layout = AuditStreamLayout {
         key: AuditKey {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             class: 8,
             entry: false,
         },
@@ -406,7 +419,7 @@ fn the_auditor_message_cuts_by_the_layout() {
     assert_eq!(data.len(), layout.message_len());
     let message = AuditorMessage::parse(&data, layout).expect("message");
     assert_eq!(message.envelope, envelope);
-    assert_eq!(message.record(1), Some(&records[1]));
+    assert_eq!(message.record(1), Some(records[1].as_slice()));
     assert_eq!(message.tail(0), Some(&tails[0]));
     assert_eq!(message.record(2), None);
     assert!(AuditorMessage::parse(&data[..data.len() - 1], layout).is_none());
@@ -425,7 +438,7 @@ fn the_recipient_body_extends_past_its_plain_head() {
         mint: [2; 32],
         ..RecipientBody::default()
     };
-    let encoded = plain.encode();
+    let encoded = plain.encode().unwrap();
     assert_eq!(encoded.len(), RECIPIENT_BODY_LEN);
     assert_eq!(encoded[32..40], [1, 2, 3, 4, 5, 6, 7, 8]);
     assert_eq!(RecipientBody::decode(&encoded), Ok(plain.clone()));
@@ -435,8 +448,14 @@ fn the_recipient_body_extends_past_its_plain_head() {
         ring_data_hash: Some([3; 32]),
         ..plain.clone()
     };
-    assert_eq!(ring_data.encode().len(), RECIPIENT_BODY_LEN + 1 + 32);
-    assert_eq!(RecipientBody::decode(&ring_data.encode()), Ok(ring_data));
+    assert_eq!(
+        ring_data.encode().unwrap().len(),
+        RECIPIENT_BODY_LEN + 2 + 1 + 32
+    );
+    assert_eq!(
+        RecipientBody::decode(&ring_data.encode().unwrap()),
+        Ok(ring_data)
+    );
 
     // Application data of a hash's length never reads as ring data.
     let application = RecipientBody {
@@ -444,7 +463,7 @@ fn the_recipient_body_extends_past_its_plain_head() {
         ..plain.clone()
     };
     assert_eq!(
-        RecipientBody::decode(&application.encode()),
+        RecipientBody::decode(&application.encode().unwrap()),
         Ok(application)
     );
 
@@ -453,8 +472,11 @@ fn the_recipient_body_extends_past_its_plain_head() {
         data: vec![9; 5],
         ..plain
     };
-    assert_eq!(RecipientBody::decode(&both.encode()), Ok(both.clone()));
-    let mut off_form = both.encode();
+    assert_eq!(
+        RecipientBody::decode(&both.encode().unwrap()),
+        Ok(both.clone())
+    );
+    let mut off_form = both.encode().unwrap();
     off_form[RECIPIENT_BODY_LEN] = 2;
     assert!(RecipientBody::decode(&off_form).is_err());
 }
@@ -557,11 +579,17 @@ fn the_solved_go_stream_reads_back_under_the_rust_layout() {
             "address_only",
             "interleaved",
             "interleaved_entry",
+            "single_asset_payout",
         ]
     );
     for case in &vector.cases {
         let layout = AuditStreamLayout {
             key: AuditKey {
+                format: if case.layout & 4 != 0 {
+                    custom_ring_interface::DisclosureFormat::SingleAssetPayout
+                } else {
+                    custom_ring_interface::DisclosureFormat::Standard
+                },
                 class: case.input_class,
                 entry: case.layout & 2 != 0,
             },
@@ -591,18 +619,33 @@ fn the_solved_go_stream_reads_back_under_the_rust_layout() {
         assert_eq!(case.records.len(), case.output_count, "{}", case.name);
         for record in &case.records {
             let bytes = unhex(record);
-            assert_eq!(
-                AuditRecord::decode(&bytes).unwrap().encode()[..],
-                bytes,
-                "{}",
-                case.name
-            );
+            match &envelope.evidence {
+                AuditEvidence::SingleAssetPayout { mint } => assert_eq!(
+                    AuditRecord::decode_compact(&bytes, mint)
+                        .unwrap()
+                        .encode_compact()[..],
+                    bytes,
+                    "{}",
+                    case.name
+                ),
+                _ => assert_eq!(
+                    AuditRecord::decode(&bytes).unwrap().encode()[..],
+                    bytes,
+                    "{}",
+                    case.name
+                ),
+            }
         }
         assert_eq!(
-            hex::encode(region_chain::<AUDIT_RECORD_LEN>(
-                &case.record_ciphertexts,
-                case.outputs
-            )),
+            hex::encode(match layout.key.format {
+                custom_ring_interface::DisclosureFormat::Standard =>
+                    region_chain::<AUDIT_RECORD_LEN>(&case.record_ciphertexts, case.outputs),
+                custom_ring_interface::DisclosureFormat::SingleAssetPayout =>
+                    region_chain::<{ custom_ring_interface::COMPACT_AUDIT_RECORD_LEN }>(
+                        &case.record_ciphertexts,
+                        case.outputs
+                    ),
+            }),
             case.record_chain,
             "{}",
             case.name
@@ -627,4 +670,131 @@ fn the_solved_go_stream_reads_back_under_the_rust_layout() {
             }
         }
     }
+}
+
+#[test]
+fn compact_payout_regions_and_plaintexts_match() {
+    use custom_ring_interface::{CompactRecipientBody, DisclosureFormat};
+    let layout = AuditStreamLayout {
+        key: AuditKey {
+            class: 1,
+            entry: false,
+            format: DisclosureFormat::SingleAssetPayout,
+        },
+        inputs: 1,
+        outputs: 16,
+        capacity: 16,
+        has_data: false,
+    }
+    .checked()
+    .unwrap();
+    assert_eq!(layout.envelope().len, 73);
+    assert_eq!(layout.key.envelope_blocks(), 5);
+    assert_eq!(layout.record(0).start_counter, 7);
+    assert_eq!(layout.record(15).start_counter, 82);
+    assert_eq!(layout.record(15).len, 73);
+    assert_eq!(layout.capacity_blocks(), 85);
+    let mint = [3; 32];
+    let mut envelope = AuditEnvelope {
+        tx_viewing_secret: [7; 32],
+        real_inputs: 1,
+        address_input_bits: 0,
+        evidence: AuditEvidence::SingleAssetPayout { mint },
+    };
+    assert!(AuditEnvelope::decode(&envelope.encode(), layout).is_ok());
+    envelope.real_inputs = 0;
+    assert!(AuditEnvelope::decode(&envelope.encode(), layout).is_err());
+    envelope.address_input_bits = 1;
+    assert!(AuditEnvelope::decode(&envelope.encode(), layout).is_err());
+    let record = AuditRecord {
+        kind: RecordKind::Ring,
+        amount: 7,
+        owner_key: [2; 32],
+        mint,
+        nullifier_pk: [4; 32],
+    };
+    assert_eq!(
+        AuditRecord::decode_compact(&record.encode_compact(), &mint),
+        Ok(record)
+    );
+    assert!(AuditRecord::decode_compact(&record.encode(), &mint).is_err());
+    assert!(AuditRecord::decode_compact(&AuditRecord::default().encode_compact(), &mint).is_err());
+    let body = CompactRecipientBody {
+        blinding: [1; 32],
+        amount: 7,
+        asset_id: 11,
+    };
+    assert_eq!(body.encode().len(), 48);
+    assert_eq!(CompactRecipientBody::decode(&body.encode()), Ok(body));
+    assert!(CompactRecipientBody::decode(&[0; 72]).is_err());
+    for invalid in [
+        AuditStreamLayout {
+            has_data: true,
+            ..layout
+        },
+        AuditStreamLayout {
+            outputs: 15,
+            ..layout
+        },
+        AuditStreamLayout {
+            inputs: 2,
+            ..layout
+        },
+    ] {
+        assert!(invalid.checked().is_err());
+    }
+}
+
+#[test]
+fn padded_bodies_preserve_data_and_refuse_padding_changes() {
+    let plain = RecipientBody {
+        blinding: [1; 32],
+        amount: 7,
+        mint: [2; 32],
+        ..Default::default()
+    };
+    let data = RecipientBody {
+        data: vec![5; 80],
+        ring_data_hash: Some([3; 32]),
+        ..plain.clone()
+    };
+    let width = data.encoded_len();
+    let mut plain_bytes = plain.encode_padded(width).unwrap();
+    let data_bytes = data.encode_padded(width).unwrap();
+    assert_eq!(plain_bytes.len(), data_bytes.len());
+    assert_eq!(RecipientBody::decode(&plain_bytes), Ok(plain.clone()));
+    assert_eq!(RecipientBody::decode(&data_bytes), Ok(data));
+    *plain_bytes.last_mut().unwrap() = 1;
+    assert!(RecipientBody::decode(&plain_bytes).is_err());
+    assert!(plain.encode_padded(73).is_err());
+    let too_long = RecipientBody {
+        data: vec![0; u16::MAX as usize],
+        ..plain
+    };
+    assert!(too_long.encode().is_err());
+}
+
+#[test]
+fn compact_delivery_scheme_is_explicit() {
+    use custom_ring_interface::{
+        encode_ring_body_output, ring_body_format, ring_body_output, DisclosureFormat,
+    };
+    let compact = encode_ring_body_output(&[1; 48], &[]).unwrap();
+    assert_eq!(compact[5], 11);
+    assert_eq!(
+        ring_body_format(&compact),
+        Some(DisclosureFormat::SingleAssetPayout)
+    );
+    let standard = encode_ring_body_output(&[2; 72], &[]).unwrap();
+    assert_eq!(
+        ring_body_format(&standard),
+        Some(DisclosureFormat::Standard)
+    );
+    let mut wrong_scheme = compact.clone();
+    wrong_scheme[5] = 10;
+    assert!(ring_body_output(&wrong_scheme).is_none());
+    let mut wrong_scheme = standard;
+    wrong_scheme[5] = 11;
+    assert!(ring_body_output(&wrong_scheme).is_none());
+    assert!(encode_ring_body_output(&[1; 48], &[3]).is_err());
 }

@@ -3,7 +3,7 @@
 use custom_ring_interface::{
     domain::{RECIPIENT_BODY_LABEL, REPLY_LABEL, SENDER_BUNDLE_LABEL},
     stream::SlotSecret,
-    BundleLayout, ChangeCell, RecipientBody, SenderBundle,
+    BundleLayout, ChangeCell, CompactRecipientBody, RecipientBody, SenderBundle,
 };
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_x25519_public_key;
@@ -97,13 +97,35 @@ pub fn seal_recipient_body(
     body: &RecipientBody,
     slot_secret: &SlotSecret,
 ) -> Result<Vec<u8>, RingRailError> {
-    let mut ciphertext = body.encode();
-    symmetric_apply_audit(
-        slot_secret.as_bytes(),
-        RECIPIENT_BODY_LABEL,
-        &mut ciphertext,
-    )?;
-    Ok(ciphertext)
+    encrypt_recipient_body(body.encode()?, slot_secret)
+}
+
+pub fn seal_compact_recipient_body(
+    body: &CompactRecipientBody,
+    slot_secret: &SlotSecret,
+) -> Result<Vec<u8>, RingRailError> {
+    encrypt_recipient_body(body.encode().to_vec(), slot_secret)
+}
+
+pub fn open_compact_recipient_body(
+    ciphertext: &[u8],
+    slot_secret: &SlotSecret,
+) -> Result<CompactRecipientBody, RingRailError> {
+    let mut plaintext = Zeroizing::new(ciphertext.to_vec());
+    symmetric_apply_audit(slot_secret.as_bytes(), RECIPIENT_BODY_LABEL, &mut plaintext)?;
+    Ok(CompactRecipientBody::decode(&plaintext)?)
+}
+
+pub(crate) struct PaddedRecipientBody<'a> {
+    pub body: &'a RecipientBody,
+    pub slot_secret: &'a SlotSecret,
+    pub width: usize,
+}
+
+impl PaddedRecipientBody<'_> {
+    pub fn seal(self) -> Result<Vec<u8>, RingRailError> {
+        encrypt_recipient_body(self.body.encode_padded(self.width)?, self.slot_secret)
+    }
 }
 
 /// The cipher is unauthenticated, only the commitment a reader rebuilds proves ownership.
@@ -321,4 +343,12 @@ pub fn is_contributory(tx_viewing_pk: &X25519Pubkey) -> bool {
     X25519Keypair::from_bytes(&[0; 32])
         .ecdh(tx_viewing_pk)
         .is_ok()
+}
+
+fn encrypt_recipient_body(
+    mut plaintext: Vec<u8>,
+    slot_secret: &SlotSecret,
+) -> Result<Vec<u8>, RingRailError> {
+    symmetric_apply_audit(slot_secret.as_bytes(), RECIPIENT_BODY_LABEL, &mut plaintext)?;
+    Ok(plaintext)
 }

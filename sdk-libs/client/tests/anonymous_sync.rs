@@ -2548,3 +2548,380 @@ async fn a_bad_body_opens_nothing_and_a_foreign_slot_stays_a_miss_under_auditor_
     assert!(scan.auditor_recovery.unopened.contains(&bad));
     assert!(scan.auditor_recovery.unopened.contains(&foreign));
 }
+
+#[tokio::test]
+async fn bounded_recovery_resumes_after_restart_at_its_fixed_target() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    for _ in 0..4 {
+        alice.pay(&indexer, &[pay(&bob.address(), 5)]);
+    }
+    *indexer.page_cap.lock().unwrap() = Some(1);
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    let initial = AnonymousSync::new(&bob.keys, &assets())
+        .with_page_budget(1)
+        .unwrap()
+        .with_full_scan(RING)
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    let target = initial.target_slot().unwrap();
+    assert_eq!(initial.status(), zolana_ring_client::RecoveryStatus::Paused);
+    wallet.absorb(initial).unwrap();
+    assert!(matches!(
+        wallet.require_complete(),
+        Err(AnonymousError::SyncIncomplete)
+    ));
+    alice.pay(&indexer, &[pay(&bob.address(), 7)]);
+    for _ in 0..32 {
+        wallet = AnonymousWallet::from_json(&wallet.to_json()).unwrap();
+        let step = AnonymousSync::new(&bob.keys, &assets())
+            .with_page_budget(1)
+            .unwrap()
+            .with_full_scan(RING)
+            .fetch_wallet(&indexer, &wallet)
+            .await
+            .unwrap();
+        assert_eq!(step.target_slot(), Some(target));
+        let complete = step.status() == zolana_ring_client::RecoveryStatus::Complete;
+        wallet.absorb(step).unwrap();
+        if complete {
+            break;
+        }
+    }
+    wallet.require_complete().unwrap();
+    assert_eq!(wallet.notes().len(), 4);
+    assert_eq!(after_slot(wallet.history()), Some(target));
+}
+
+#[tokio::test]
+async fn a_persisted_pending_note_keeps_a_later_spend_after_registration() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let unknown = Mint::new(Address::new_from_array([0xee; 32]), 9);
+    let blinding = field(7, 6);
+    let deposit = deposit_row_in(
+        &bob.address(),
+        bob.keys.viewing_pubkey().u(),
+        blinding,
+        unknown,
+    );
+    let hash = deposit.output_slot.output_context.hash;
+    let nullifier = bob.keys.nullifier(&hash, &blinding).unwrap();
+    indexer.publish_deposit(deposit);
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    let initial = AnonymousSync::new(&bob.keys, &assets())
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    wallet.absorb(initial).unwrap();
+    assert_eq!(wallet.pending_notes().len(), 1);
+    wallet = AnonymousWallet::from_json(&wallet.to_json()).unwrap();
+    indexer.publish(ShieldedTransaction {
+        slot: 20,
+        tx_signature: Signature::from(signature(20)),
+        event_index: Some(0),
+        tx_viewing_pk: None,
+        salt: None,
+        output_slots: Vec::new(),
+        messages: Vec::new(),
+        nullifiers: vec![nullifier],
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
+    });
+    let updated = AnonymousSync::new(&bob.keys, &assets())
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    wallet.absorb(updated).unwrap();
+    wallet.resolve_pending(&RingAssets::new([unknown]).unwrap());
+    let note = wallet
+        .notes()
+        .iter()
+        .find(|note| note.utxo_hash == hash)
+        .unwrap();
+    assert_eq!(wallet.note_state(note), NoteState::Spent);
+}
+
+#[tokio::test]
+async fn same_slot_spends_before_creation_survive_page_boundaries() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    alice.pay(&indexer, &[pay(&bob.address(), 30)]);
+    let initial = bob.sync(&indexer, &fresh(&bob)).await;
+    let note = initial.decrypted().utxos[0].clone();
+    let merged = publish_merge(&indexer, &bob, vec![note.nullifier], 30);
+    for row in indexer.transactions.lock().unwrap().iter_mut() {
+        row.slot = 10;
+        row.tx_signature = if row
+            .output_slots
+            .iter()
+            .any(|slot| slot.output_context.hash == merged)
+        {
+            Signature::from([1; 64])
+        } else {
+            Signature::from([2; 64])
+        };
+    }
+    *indexer.tip.lock().unwrap() = 10;
+    *indexer.page_cap.lock().unwrap() = Some(1);
+    let mut recovered = AnonymousWallet::new(fresh(&bob));
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .with_full_scan(RING)
+        .fetch_wallet(&indexer, &recovered)
+        .await
+        .unwrap();
+    recovered.absorb(scan).unwrap();
+    assert_eq!(recovered.note_state(&note), NoteState::Spent);
+    assert!(recovered
+        .notes()
+        .iter()
+        .any(|note| note.utxo_hash == merged));
+}
+
+#[tokio::test]
+async fn keyed_unknown_mint_merge_promotes_without_history_replay() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let first = field(2, 8);
+    let unknown = Mint::new(Address::new_from_array([0xed; 32]), 8);
+    publish_merge(&indexer, &bob, vec![first], 100);
+    let utxo = Utxo {
+        owner: bob.address().signing_pubkey,
+        asset: unknown,
+        amount: 100,
+        blinding: merge_output_blinding(&bob.keys.nullifier_key, &first).unwrap(),
+        ring_program_id: Some(RING),
+        data: Data::default(),
+    };
+    let hash = utxo
+        .hash(&bob.address().nullifier_pubkey, &[0; 32], &[0; 32], TREE)
+        .unwrap();
+    let salt = [8; 16];
+    let ciphertext = MergeOutputPlaintext {
+        amount: 100,
+        mint: unknown.asset,
+    }
+    .encrypt(
+        &merge_output_key(&bob.keys.nullifier_key, &first).unwrap(),
+        &salt,
+    )
+    .unwrap();
+    {
+        let mut rows = indexer.transactions.lock().unwrap();
+        let row = rows.last_mut().unwrap();
+        row.output_slots[0].output_context.hash = hash;
+        row.output_slots[0].payload = encode_merge_output_data(MergeOutputDataRef {
+            salt: &salt,
+            ciphertext: &ciphertext,
+            prefix: &[[0; 32]],
+            binding: spr_event::MergeCiphertextBinding::Unverified,
+        });
+    }
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .with_full_scan(RING)
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    assert_eq!(scan.pending_notes().len(), 1);
+    assert!(scan.decrypted().utxos.is_empty());
+    wallet.absorb(scan).unwrap();
+    let before = wallet.history().clone();
+    wallet = AnonymousWallet::from_json(&wallet.to_json()).unwrap();
+    wallet.resolve_pending(&RingAssets::new([unknown]).unwrap());
+    assert_eq!(wallet.notes()[0].utxo_hash, hash);
+    assert_eq!(wallet.history(), &before);
+}
+
+#[tokio::test]
+async fn canonical_scan_refuses_a_stale_wallet_revision() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    wallet.resolve_pending(&assets());
+    assert!(matches!(
+        wallet.absorb(scan),
+        Err(AnonymousError::ScanHistoryChanged)
+    ));
+}
+
+#[tokio::test]
+async fn recovery_diagnostics_keep_a_bounded_sample_across_restarts() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    let carol = Wallet::new(3);
+    for _ in 0..80 {
+        alice.pay(&indexer, &[pay(&carol.address(), 1)]);
+    }
+    *indexer.page_cap.lock().unwrap() = Some(10);
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    let mut count = 0;
+    for _ in 0..16 {
+        let scan = AnonymousSync::new(&bob.keys, &assets())
+            .with_page_budget(2)
+            .unwrap()
+            .with_full_scan(RING)
+            .fetch_wallet(&indexer, &wallet)
+            .await
+            .unwrap();
+        count = scan.auditor_recovery.unopened_count;
+        assert!(scan.auditor_recovery.unopened.len() <= 64);
+        let complete = scan.status() == zolana_ring_client::RecoveryStatus::Complete;
+        wallet.absorb(scan).unwrap();
+        wallet = AnonymousWallet::from_json(&wallet.to_json()).unwrap();
+        assert!(wallet.notes().is_empty());
+        assert!(wallet.decrypted().spent_nullifiers.is_empty());
+        if complete {
+            break;
+        }
+    }
+    wallet.require_complete().unwrap();
+    assert!(count >= 80);
+}
+
+#[tokio::test]
+async fn a_reply_cannot_change_an_active_recovery_scope() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    alice.pay(&indexer, &[pay(&bob.address(), 10)]);
+    let sender = alice.keys.viewing_pubkey();
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    let paused = AnonymousSync::new(&bob.keys, &assets())
+        .with_page_budget(2)
+        .unwrap()
+        .with_full_scan(RING)
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    assert_eq!(paused.status(), zolana_ring_client::RecoveryStatus::Paused);
+    wallet.absorb(paused).unwrap();
+    assert_eq!(wallet.pending_claims().len(), 1);
+    let stored = wallet.to_json();
+    let changed_mode = AnonymousSync::new(&bob.keys, &assets())
+        .with_sender_fast_path()
+        .with_full_scan(RING)
+        .fetch_wallet(&indexer, &wallet)
+        .await;
+    assert!(matches!(
+        changed_mode,
+        Err(AnonymousError::RecoveryScopeChanged)
+    ));
+    assert!(matches!(
+        wallet.confirm_claim(sender),
+        Err(AnonymousError::RecoveryScopeChanged)
+    ));
+    assert_eq!(wallet.to_json(), stored);
+    wallet = AnonymousWallet::from_json(&stored).unwrap();
+    let completed = AnonymousSync::new(&bob.keys, &assets())
+        .with_full_scan(RING)
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    wallet.absorb(completed).unwrap();
+    wallet.require_complete().unwrap();
+    wallet.confirm_claim(sender).unwrap();
+    assert!(wallet.pending_claims().is_empty());
+}
+
+#[derive(Clone, Copy)]
+enum AssetSourceFailure {
+    Unsupported,
+    Unavailable,
+}
+
+#[async_trait]
+impl AsyncRpc for AssetSourceFailure {
+    fn should_retry(&self, error: &ClientError) -> bool {
+        matches!(error, ClientError::IndexerUnavailable(_))
+    }
+
+    async fn get_program_accounts_filtered(
+        &self,
+        _program_id: Address,
+        _filter: &spr_client::ProgramAccountsFilter,
+    ) -> Result<Vec<(Address, solana_account::Account)>, ClientError> {
+        Err(match self {
+            Self::Unsupported => ClientError::UnsupportedRpcMethod("get_program_accounts_filtered"),
+            Self::Unavailable => ClientError::IndexerUnavailable("temporarily unavailable".into()),
+        })
+    }
+}
+
+#[tokio::test]
+async fn compact_recovery_pauses_only_for_retryable_source_failures() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    let mut transaction = alice.seal(&indexer, &[pay(&bob.address(), 10)]);
+    let first = transaction.nullifiers[0];
+    let tx_key = alice
+        .keys
+        .viewing_key
+        .get_transaction_viewing_key(&first)
+        .unwrap();
+    let view = bob.keys.viewing_pubkey();
+    let secret = DeliveredSlot {
+        agreement: &tx_key.ecdh(&view).unwrap(),
+        tx_viewing_pk: tx_key.pubkey().as_bytes(),
+        recipient_viewing_pk: view.as_bytes(),
+        salt: &transaction.salt.unwrap(),
+        output_index: 1,
+        first_nullifier: &first,
+    }
+    .secret()
+    .unwrap();
+    let body = zolana_ring_transaction::seal_compact_recipient_body(
+        &custom_ring_interface::CompactRecipientBody {
+            blinding: field(3, 7),
+            amount: 10,
+            asset_id: 2,
+        },
+        &secret,
+    )
+    .unwrap();
+    transaction.output_slots[1].payload = encode_ring_body_output(&body, &[]).unwrap();
+    indexer.publish(transaction);
+    let wallet = AnonymousWallet::new(fresh(&bob));
+    let missing_source = AnonymousSync::new(&bob.keys, &assets())
+        .with_full_scan(RING)
+        .fetch_wallet(&indexer, &wallet)
+        .await;
+    assert!(matches!(
+        missing_source,
+        Err(AnonymousError::CompactAssetSourceRequired)
+    ));
+    for source in [
+        AssetSourceFailure::Unsupported,
+        AssetSourceFailure::Unavailable,
+    ] {
+        let wallet = AnonymousWallet::new(fresh(&bob));
+        let result = AnonymousSync::new(&bob.keys, &assets())
+            .with_asset_rpc(&source)
+            .with_full_scan(RING)
+            .fetch_wallet(&indexer, &wallet)
+            .await;
+        match source {
+            AssetSourceFailure::Unsupported => assert!(matches!(
+                result,
+                Err(AnonymousError::CompactAssets(zolana_ring_client::compact_assets::CompactAssetError::Source(error)))
+                    if matches!(*error, ClientError::UnsupportedRpcMethod(_))
+            )),
+            AssetSourceFailure::Unavailable => {
+                let paused = result.unwrap();
+                assert_eq!(paused.status(), zolana_ring_client::RecoveryStatus::Paused);
+                assert!(paused.pending_notes().is_empty());
+                assert!(paused.decrypted().utxos.is_empty());
+            }
+        }
+    }
+}

@@ -4,14 +4,16 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
 
-use super::{
-    base64, cursor_in_bounds, Attestation, ReadAuth, ReadBuildError, ReadSigner, ReadTarget,
-    SignedRequest,
-};
+use super::{base64, Attestation, ReadAuth, ReadBuildError, ReadSigner, ReadTarget, SignedRequest};
 
-pub const WALLET_SNAPSHOT_CHANGED: i32 = -32172;
+pub const WALLET_SNAPSHOT_EXPIRED: i32 = -32172;
+pub const WALLET_SNAPSHOT_CAPACITY: i32 = -32173;
+pub const WALLET_SNAPSHOT_CURSOR_LEN: usize = 129;
+pub const WALLET_SNAPSHOT_CURSOR_VERSION: u8 = 2;
 
 pub const GET_WALLET_STATUS: &str = "getWalletStatus";
+pub const RELEASE_WALLET_SNAPSHOT: &str = "releaseWalletSnapshot";
+const WALLET_SNAPSHOT_RELEASE_DOMAIN: &str = "zolana/ring-rpc-wallet-snapshot-release";
 const WALLET_STATUS_DOMAIN: &str = "zolana/ring-rpc-wallet-status";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +35,8 @@ pub struct GetWalletStatusResponse {
     /// Only an unreadable stream holds it back.
     pub history_through: u64,
     pub enrollment: WalletEnrollment,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_expires_at: Option<u64>,
     /// Sums every `Unspent` note from one snapshot, empty past the first page.
     pub balances: Vec<WalletBalance>,
     pub notes: Vec<WalletNote>,
@@ -107,17 +111,85 @@ pub struct WalletStatusRequest {
     signed: SignedRequest<WalletStatusAttestation>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletSnapshotReleaseAttestation {
+    pub target: ReadTarget,
+    pub wallet: Address,
+    pub cursor: Base64String,
+}
+
+#[must_use]
+pub struct WalletSnapshotReleaseRequest {
+    signed: SignedRequest<WalletSnapshotReleaseAttestation>,
+}
+
+struct WalletStatusMessage<'a> {
+    domain: &'a str,
+    target: &'a ReadTarget,
+    wallet: Address,
+    cursor: &'a [u8],
+    timestamp: u64,
+    nonce: &'a [u8; 32],
+}
+
 impl Attestation for WalletStatusAttestation {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
-        let cursor = self.cursor.as_ref().map_or(&[][..], |cursor| &cursor.0);
-        format!(
-            "{WALLET_STATUS_DOMAIN}\n{}\ntimestamp: {timestamp}\nnonce: {}\nwallet: {}\ncursor: {}",
-            self.target.lines(),
-            base64(nonce),
-            self.wallet,
-            base64(cursor),
-        )
-        .into_bytes()
+        WalletStatusMessage {
+            domain: WALLET_STATUS_DOMAIN,
+            target: &self.target,
+            wallet: self.wallet,
+            cursor: self.cursor.as_ref().map_or(&[], |cursor| &cursor.0),
+            timestamp,
+            nonce,
+        }
+        .encode()
+    }
+}
+
+impl Attestation for WalletSnapshotReleaseAttestation {
+    fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
+        WalletStatusMessage {
+            domain: WALLET_SNAPSHOT_RELEASE_DOMAIN,
+            target: &self.target,
+            wallet: self.wallet,
+            cursor: &self.cursor.0,
+            timestamp,
+            nonce,
+        }
+        .encode()
+    }
+}
+
+impl WalletSnapshotReleaseRequest {
+    pub fn new(attestation: WalletSnapshotReleaseAttestation) -> Result<Self, ReadBuildError> {
+        super::wallet_snapshot::validate_snapshot_cursor(&attestation.cursor)?;
+        Ok(Self {
+            signed: SignedRequest::new(attestation),
+        })
+    }
+
+    pub fn at(self, timestamp: u64) -> Self {
+        Self {
+            signed: self.signed.at(timestamp),
+        }
+    }
+
+    pub fn sign<S: ReadSigner + ?Sized>(
+        self,
+        signer: &S,
+    ) -> Result<GetWalletStatusRequest, ReadBuildError> {
+        let auth = self.signed.read_auth(signer)?;
+        let WalletSnapshotReleaseAttestation {
+            target,
+            wallet,
+            cursor,
+        } = self.signed.attestation;
+        Ok(WalletStatusAttestation {
+            target,
+            wallet,
+            cursor: Some(cursor),
+        }
+        .request(auth))
     }
 }
 
@@ -139,9 +211,7 @@ impl WalletStatusRequest {
     }
 
     pub fn with_cursor(mut self, cursor: Base64String) -> Result<Self, ReadBuildError> {
-        if !cursor_in_bounds(&cursor.0) {
-            return Err(ReadBuildError::Cursor);
-        }
+        super::wallet_snapshot::validate_snapshot_cursor(&cursor)?;
         self.signed.attestation.cursor = Some(cursor);
         Ok(self)
     }
@@ -151,16 +221,32 @@ impl WalletStatusRequest {
         signer: &S,
     ) -> Result<GetWalletStatusRequest, ReadBuildError> {
         let auth = self.signed.read_auth(signer)?;
-        let WalletStatusAttestation {
-            target,
-            wallet,
-            cursor,
-        } = self.signed.attestation;
-        Ok(GetWalletStatusRequest {
-            ring_program_id: Some(target.ring.to_bytes().into()),
-            wallet: wallet.into(),
-            cursor,
+        Ok(self.signed.attestation.request(auth))
+    }
+}
+
+impl WalletStatusMessage<'_> {
+    fn encode(self) -> Vec<u8> {
+        format!(
+            "{}\n{}\ntimestamp: {}\nnonce: {}\nwallet: {}\ncursor: {}",
+            self.domain,
+            self.target.lines(),
+            self.timestamp,
+            base64(self.nonce),
+            self.wallet,
+            base64(self.cursor),
+        )
+        .into_bytes()
+    }
+}
+
+impl WalletStatusAttestation {
+    fn request(self, auth: ReadAuth) -> GetWalletStatusRequest {
+        GetWalletStatusRequest {
+            ring_program_id: Some(self.target.ring.into()),
+            wallet: self.wallet.into(),
+            cursor: self.cursor,
             auth,
-        })
+        }
     }
 }

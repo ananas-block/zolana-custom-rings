@@ -365,7 +365,7 @@ impl Transfer {
             ring_data_hash: ring_data,
             ..RecipientBody::default()
         }
-        .encode();
+        .encode()?;
         let exit_body = vec![
             11u8;
             RECIPIENT_KEY_LEN
@@ -419,6 +419,7 @@ impl Transfer {
         let message_bytes = vec![15u8; load.message_len];
         let extensions = match load.extensions {
             true => FrameExtensions {
+                format: custom_ring_interface::DisclosureFormat::Standard,
                 data_hash: Some(&field),
                 ring_data_hash: Some(&field),
                 messages: vec![
@@ -464,6 +465,7 @@ impl Transfer {
             has_data: load.has_data,
             entry: frame.entry(),
             wide_owners: TransferSpend {
+                format: custom_ring_interface::DisclosureFormat::Standard,
                 rail,
                 inputs,
                 outputs,

@@ -392,12 +392,7 @@ impl Transfer {
                     data: AuditorMessage::data(
                         &sealed.eph_u,
                         core::iter::once(sealed.envelope.as_slice())
-                            .chain(
-                                sealed
-                                    .records
-                                    .iter()
-                                    .map(<[u8; AUDIT_RECORD_LEN]>::as_slice),
-                            )
+                            .chain(sealed.records.iter().map(Vec::as_slice))
                             .chain(sealed.tails.iter().map(<[u8; 64]>::as_slice)),
                     ),
                 }])
@@ -453,6 +448,7 @@ impl Transfer {
             evidence,
         } = keyed;
         let shape = FrameKey {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             rail,
             inputs: self.nullifiers.len(),
             outputs: outputs.len(),
@@ -464,6 +460,7 @@ impl Transfer {
         Disclosure {
             layout: AuditStreamLayout {
                 key: AuditKey {
+                    format: custom_ring_interface::DisclosureFormat::Standard,
                     class: usize::from(shape.inputs),
                     entry,
                 },
@@ -582,7 +579,7 @@ struct Keyed<'a> {
 /// The inverse of `RingOutput::transact_output`, the record from the auditor message.
 fn wire<'a>(
     slot: &'a OutputSlot,
-    record: &'a [u8; AUDIT_RECORD_LEN],
+    record: &'a [u8],
     tail: Option<&'a [u8; custom_ring_interface::DATA_TAIL_LEN]>,
 ) -> RingOutput<'a> {
     let payload = &slot.payload;

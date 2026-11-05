@@ -5,7 +5,7 @@ use anyhow::{ensure, Context as _, Result};
 use custom_ring_sdk::AuthorityRecordUpdate;
 use solana_address::Address;
 use solana_signer::Signer;
-use zolana_ring_client::rpc::PendingListApproval;
+use zolana_ring_client::rpc::{ListApprovalScope, PendingListApproval};
 use zolana_ring_policy::{ListChange, ListSet, Member};
 
 use crate::{line, Context, ListApprovalCommand};
@@ -18,7 +18,7 @@ pub fn run(ctx: &Context, command: ListApprovalCommand) -> Result<()> {
 }
 
 fn pending(ctx: &Context) -> Result<()> {
-    let pending = read_pending(ctx)?;
+    let pending = read_pending(ctx, ctx.record_update_target()?.registry)?;
     if pending.is_empty() {
         line("pending", "none");
     }
@@ -38,7 +38,8 @@ fn pending(ctx: &Context) -> Result<()> {
 
 /// The writer lands the wallet's pending updates in the same batch as the approval.
 fn approve(ctx: &Context, wallet: Address) -> Result<()> {
-    let lists = read_pending(ctx)?
+    let target = ctx.record_update_target()?;
+    let lists = read_pending(ctx, target.registry)?
         .iter()
         .filter(|update| update.wallet.0 == wallet)
         .try_fold(ListSet::EMPTY, |lists, update| {
@@ -54,7 +55,7 @@ fn approve(ctx: &Context, wallet: Address) -> Result<()> {
         clear: ListSet::EMPTY,
     }
     .check()?;
-    let update = AuthorityRecordUpdate::new(ctx.record_update_target()?, authority.pubkey())
+    let update = AuthorityRecordUpdate::new(target, authority.pubkey())
         .with_write(Member::owner_tag(wallet.as_array())?, write)?;
     let revision = ctx
         .ring_rpc()
@@ -66,9 +67,16 @@ fn approve(ctx: &Context, wallet: Address) -> Result<()> {
     Ok(())
 }
 
-fn read_pending(ctx: &Context) -> Result<Vec<PendingListApproval>> {
-    ctx.ring_rpc()
-        .pending_list_approvals(ctx.ring_rpc_target()?, ctx.authority()?)
+fn read_pending(ctx: &Context, registry: Address) -> Result<Vec<PendingListApproval>> {
+    let authority = ctx.authority()?;
+    ctx.ring_rpc().pending_list_approvals(
+        ListApprovalScope {
+            target: ctx.ring_rpc_target()?,
+            authority: authority.pubkey(),
+            registry,
+        },
+        authority,
+    )
 }
 
 fn awaited(update: &PendingListApproval) -> Result<ListSet> {

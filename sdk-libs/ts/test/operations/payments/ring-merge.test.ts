@@ -92,6 +92,10 @@ import {
   type RingMergeDisclosureRequest,
   type RingMergeSealer,
 } from "../../../src/crypto/audit/merge-disclosure.js";
+import { AnonymousSync } from "../../../src/state/anonymous-sync.js";
+import { AnonymousWallet } from "../../../src/state/anonymous-wallet.js";
+import { ViewingHistory } from "../../../src/state/viewing-history.js";
+import { checkRetainedEntries } from "../../../src/operations/workflow/submission.js";
 import { zeroKeyNullifier } from "../../../src/state/exposed-notes.js";
 import type { TrackingOpeningsRequest } from "../../../src/protocol/indexer/tracking-codec.js";
 import type { TrackingEntry } from "../../../src/protocol/membership/tracking.js";
@@ -442,6 +446,39 @@ function ringAccounts(transaction: Transaction): readonly Address[] {
 }
 
 describe("ring merge", () => {
+  it.each([false, true])("refuses unchecked recovery notes before a merge proof with zero key %s", async (mergeZeroKey) => {
+    const wallet = mergeZeroKey ? zeroKeyWallet(owner, [3n, 5n]) : ringWallet([3n, 5n]);
+    const keys = walletKeys(owner);
+    const tracked = AnonymousWallet.create(wallet, ViewingHistory.create(owner.viewingPublicKey(), 0n).withRing(RING));
+    const empty = async () => ({ context: { slot: 100n, blockTime: 0n }, data: [], paginationToken: null });
+    const source = { getEncryptedUtxosByTags: empty, getShieldedTransactionsByTags: empty, getShieldedTransactionsByNullifiers: empty };
+    try {
+      const retained = wallet.utxos();
+      expect(() => checkRetainedEntries(wallet, retained)).not.toThrow();
+      const sync = AnonymousSync.create(keys, wallet.registry).withScanLimits({ maxPages: 1 });
+      await tracked.absorb(await sync.fetchWallet(source, tracked));
+      expect(tracked.recoveryCoverage().status).toBe("Paused");
+      expect(tracked.notes().map((note) => tracked.noteState(note))).toEqual(["pendingSpendCheck", "pendingSpendCheck"]);
+      expect(tracked.balances().get(SOL_MINT)).toBeUndefined();
+      expect(tracked.exposedNotes()).toEqual([]);
+      const proveMerge = vi.fn<MergeAssembler["proveMerge"]>();
+      const params = await ringMergeParams({ proveMerge, wallet, keys, proofDataSource: "client", anonymous: false });
+      const build = mergeZeroKey
+        ? buildRingMergeTransaction({ ...params, mergeZeroKey: true })
+        : buildRingMergeTransaction(params);
+      await expect(build).rejects.toMatchObject({ code: "RING_BUILD_MERGE", causeCode: "RING_SYNC_INCOMPLETE" });
+      expect(proveMerge).not.toHaveBeenCalled();
+      expect(params.client.proveRing).not.toHaveBeenCalled();
+      expect(wallet._reservationEntries()).toHaveLength(0);
+      expect(() => checkRetainedEntries(wallet, retained)).toThrow("RING_SYNC_INCOMPLETE");
+      await tracked.absorb(await sync.fetchWallet(source, tracked));
+      expect(tracked.recoveryCoverage().status).toBe("Paused");
+      expect(() => checkRetainedEntries(wallet, retained)).not.toThrow();
+      expect(tracked.notes().map((note) => tracked.noteState(note))).toEqual(Array(2).fill(mergeZeroKey ? "exposedIfSpent" : "spendable"));
+      expect(tracked.balances().get(SOL_MINT)).toEqual(mergeZeroKey ? { spendable: 0n, exposedIfSpent: 8n } : { spendable: 8n, exposedIfSpent: 0n });
+    } finally { keys.destroy(); }
+  });
+
   it("proves a merge under the owner's tracking row", async () => {
     const wallet = ringWallet([3n, 5n]);
     const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared }) => {

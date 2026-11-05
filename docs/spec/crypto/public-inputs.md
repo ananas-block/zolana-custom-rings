@@ -44,9 +44,9 @@ The head has 10 elements:
 | 5, 6 | `pack_be(auditor_pubkey)` | ring account |
 | 7 | `digest(envelope_ct)` | frame |
 | 8 | `right_align(salt)` | frame, SPP salt, 16 bytes |
-| 9 | `right_align(has_data \| entry << 1)` | frame header flags |
+| 9 | `right_align(has_data \| entry << 1 \| single_asset_payout << 2)` | frame header flags |
 
-The auditor stream seals under `tx_viewing_sk`, so `txpk` is also the stream's ephemeral key and no separate ephemeral key enters the head. `entry` must equal the key's entry capacity, and the circuit holds every slot's data hashes to zero while `has_data` is clear.
+The auditor stream seals under `tx_viewing_sk`, so `txpk` is also the stream's ephemeral key and no separate ephemeral key enters the head. `entry` and `single_asset_payout` must match the key's shape. A payout key requires `has_data = 0`. A clear `has_data` holds every slot's data hashes to zero.
 
 The rail bits:
 
@@ -76,12 +76,12 @@ The rail bits:
 The chains over the slots, each zero past `m`:
 
 - `output_chain = HashChain4(hash_i)`, a hidden dummy's hash included.
-- `record_chain = HashChain4(hash_bytes(record_i))`. `record_i` is the slot's 105-byte record ciphertext in the frame.
+- `record_chain = HashChain4(hash_bytes(record_i))`. `record_i` is the slot's record ciphertext, 105 bytes in the standard format or 73 bytes in the single-asset payout format.
 - `tail_chain = HashChain4(hash_bytes(tail_i))` over the 64-byte data tails, and `0` when no slot carries a tail.
 
 `withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`, in settlement order. A SOL leg's owner is `solana_owner_identity(recipient)`, and an SPL leg's owner is the identity of the token account's owner. The program reads both from the live settlement accounts. The list is empty on a ring without own records and on the delegate rails.
 
-No zolana ciphertext enters the statement, an exit's scheme 3 body included. The circuit holds every spent UTXO to its rail's owner predicate and reopens SPP's `private_tx_hash` over the same inputs and outputs with no address input. `private_tx_blinding` stays private.
+No zolana ciphertext enters the statement, an exit's scheme 3 body included. The circuit holds every spent UTXO to its rail's owner predicate and reopens SPP's `private_tx_hash` as `Poseidon(input_chain, output_chain, address_chain, private_tx_blinding)`. The address chain follows the address subsequence of the statement-bound nullifiers. `private_tx_blinding` stays private.
 
 ## Apply records
 
@@ -120,14 +120,14 @@ The statement has 10 elements and no registry root. The Storage program takes `r
 ```text
 context_hash = HashChain([ hash_bytes(program id), hash_bytes(tree),
                            right_align(len(spp_data) as u64), HashChain(right-aligned 31-byte chunks of spp_data) ])
-statement    = HashChain4([ CRDP, context_hash, ring_id, right_align(count),
+statement    = HashChain4([ CRDP, context_hash, right_align(count),
                             (owner_utxo_hash_i, hash_bytes(ciphertext_i)) × 8,
                             pack_be(auditor_pubkey), pack_be(eph_pk),
                             tracking_root, own_root, curator_root, policy_hash,
                             (asset_i, right_align(amount_i)) × 8 ])
 ```
 
-`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `ciphertext_i` is slot `i`'s 144-byte opening record, and every slot shares one `eph_pk`. `ring_id` is `hash_bytes` of the executing program id. `tracking_root` is the tracking root at the prefix's `tracking_revision`. `own_root` is the own root at the prefix's `own_revision` on a policy ring, else `0`. `curator_root` is the curator root at the prefix's `curator_revision` when a policy source names a curator, else `0`. `policy_hash` is the ring account's written hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
+`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `ciphertext_i` is slot `i`'s 144-byte opening record, and every slot shares one `eph_pk`. The context binds the executing program id. `tracking_root` is the tracking root at the prefix's `tracking_revision`. `own_root` is the own root at the prefix's `own_revision` on a policy ring, else `0`. `curator_root` is the curator root at the prefix's `curator_revision` when a policy source names a curator, else `0`. `policy_hash` is the ring account's written hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
 
 ## Merge
 

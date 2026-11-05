@@ -161,6 +161,7 @@ export interface PolicyAuthorityAuth {
 /** Rust `GetPendingListApprovalsRequest`, `cursor` is the last update of the previous page. */
 export interface GetPendingListApprovalsRequest {
   readonly ring: Address;
+  readonly registry: Address;
   readonly cursor?: Hash;
   readonly auth: PolicyAuthorityAuth;
 }
@@ -168,6 +169,7 @@ export interface GetPendingListApprovalsRequest {
 /** Rust `RefuseListApprovalRequest`. */
 export interface RefuseListApprovalRequest {
   readonly ring: Address;
+  readonly registry: Address;
   readonly updateId: Hash;
   readonly auth: PolicyAuthorityAuth;
 }
@@ -238,10 +240,19 @@ export interface AuthorityPayment {
   readonly amount: bigint;
 }
 
+export interface AuthorityWithdrawal {
+  readonly recipient: Address;
+  readonly mint: Address;
+  readonly amount: bigint;
+  readonly tokenProgram?: Address;
+}
+
 /** Rust `AuthorityTransfer`, change returns to an input's owner. */
 export interface AuthorityTransfer {
   readonly sources: readonly ShieldedAddress[];
   readonly payments: readonly AuthorityPayment[];
+  readonly exits: readonly AuthorityPayment[];
+  readonly withdrawals: readonly AuthorityWithdrawal[];
 }
 
 /** Rust `GetListSaltRequest`. */

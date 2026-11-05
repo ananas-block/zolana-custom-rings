@@ -3,6 +3,7 @@ use std::{
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use sea_orm::{ConnectionTrait, Statement};
 use solana_message::Message;
 use zolana_ring_policy::AssetLimits;
@@ -151,11 +152,7 @@ impl Window {
     }
 
     async fn clear(&self) {
-        self.store
-            .connection()
-            .execute_unprepared("DELETE FROM cosign_usage")
-            .await
-            .expect("empty usage");
+        clear_usage(&self.store).await;
     }
 
     fn limit(&self, limits: AssetLimits) {
@@ -168,7 +165,7 @@ impl Window {
         let mut rows: Vec<_> = connection
             .query_all(Statement::from_string(
                 connection.get_database_backend(),
-                "SELECT owner, slot, outflow_hi, outflow_lo FROM cosign_usage",
+                "SELECT owner, slot, outflow_hi, outflow_lo FROM cosign_usage WHERE state<>'released'",
             ))
             .await
             .expect("rows")
@@ -187,6 +184,16 @@ impl Window {
             .collect();
         rows.sort_unstable();
         rows
+    }
+}
+
+pub(super) async fn clear_usage(store: &Store) {
+    for table in ["cosign_totals", "cosign_usage", "cosign_admission"] {
+        store
+            .connection()
+            .execute_unprepared(&format!("DELETE FROM {table}"))
+            .await
+            .expect("empty usage");
     }
 }
 
@@ -243,12 +250,18 @@ async fn a_zero_window_counts_the_checked_transaction_alone() {
 }
 
 #[tokio::test]
-async fn a_reservation_of_a_slot_past_the_reader_still_counts() {
+async fn an_admission_slot_below_the_watermark_fails_closed() {
     let window = Window::open("sqlite::memory:").await;
     window.slot.store(START_SLOT + 5, Ordering::Relaxed);
     window.signed(1, vec![flow(7, SOL, CAP)]).await;
     window.slot.store(START_SLOT, Ordering::Relaxed);
-    window.refuses(2, vec![flow(7, SOL, 1)]).await;
+    assert!(matches!(
+        window
+            .co_signer
+            .decide(&request(2, vec![flow(7, SOL, 1)]))
+            .await,
+        Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
+    ));
 }
 
 /// Halves sum exactly up to `u64::MAX`, one unit past it refuses.
@@ -404,11 +417,7 @@ async fn concurrent_retries_of_one_message_reserve_one_row_set_on_sqlite() {
 async fn concurrent_retries_of_one_message_reserve_one_row_set_on_postgres() {
     let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
     let store = Store::open(&url, 1).await.expect("store");
-    store
-        .connection()
-        .execute_unprepared("DELETE FROM cosign_usage")
-        .await
-        .expect("empty usage");
+    clear_usage(&store).await;
     assert_concurrent_retries_reserve_one_row_set(&url).await;
 }
 
@@ -475,4 +484,391 @@ async fn a_restart_keeps_a_confirmed_reservation_through_a_late_failure() {
         .await
         .expect("late failure");
     restarted.refuses(2, vec![flow(7, SOL, 1)]).await;
+}
+
+#[tokio::test]
+async fn slot_zero_counts_until_the_inclusive_window_expires() {
+    let window = Window::open("sqlite::memory:").await;
+    window.slot.store(0, Ordering::Relaxed);
+    window.signed(1, vec![flow(7, SOL, CAP)]).await;
+    window.slot.store(WINDOW - 1, Ordering::Relaxed);
+    window.refuses(2, vec![flow(7, SOL, 1)]).await;
+    window.slot.store(WINDOW, Ordering::Relaxed);
+    window.signed(3, vec![flow(7, SOL, CAP)]).await;
+}
+
+#[tokio::test]
+async fn window_enlargement_recovers_usage_across_an_epoch_boundary() {
+    let window = Window::open("sqlite::memory:").await;
+    let epoch = MAX_LIMIT_WINDOW_SLOTS.next_power_of_two();
+    window.limit(AssetLimits::EMPTY);
+    window.slot.store(epoch - 1, Ordering::Relaxed);
+    window.signed(1, vec![flow(7, SOL, CAP)]).await;
+    window.slot.store(epoch, Ordering::Relaxed);
+    window.limit(AssetLimits {
+        sender_window_slots: 1,
+        ..SENDER_LIMITS
+    });
+    window.signed(2, vec![flow(7, SOL, 1)]).await;
+    window.limit(AssetLimits {
+        sender_window_slots: 2,
+        ..SENDER_LIMITS
+    });
+    window.refuses(3, vec![flow(7, SOL, 1)]).await;
+    window.slot.store(epoch + 1, Ordering::Relaxed);
+    window.signed(4, vec![flow(7, SOL, CAP - 1)]).await;
+}
+
+#[tokio::test]
+async fn released_signatures_remain_tombstoned_after_restart() {
+    let file = StoreFile::new("released");
+    let window = Window::open(&file.url()).await;
+    let signature = window.signed(1, vec![flow(7, SOL, CAP)]).await;
+    for _ in 0..2 {
+        window
+            .co_signer
+            .settle(CoSignSettlement::Failed(signature))
+            .await
+            .expect("release");
+    }
+    assert!(window
+        .co_signer
+        .settle(CoSignSettlement::Confirmed(signature))
+        .await
+        .is_err());
+    drop(window);
+    let restarted = Window::open(&file.url()).await;
+    assert!(matches!(
+        restarted
+            .co_signer
+            .decide(&request(1, vec![flow(7, SOL, CAP)]))
+            .await,
+        Err(RingRpcError::CoSign(CoSignError::ReleasedReservation))
+    ));
+    restarted.signed(2, vec![flow(7, SOL, CAP)]).await;
+}
+
+#[tokio::test]
+async fn refunds_preserve_small_contributions_beside_a_clipped_contribution() {
+    let window = Window::open("sqlite::memory:").await;
+    window.limit(AssetLimits::EMPTY);
+    let deposited = |amount| OwnerFlow {
+        owner: member(7),
+        flow: AssetFlow {
+            deposited: amount,
+            ..flow(7, SOL, 0).flow
+        },
+    };
+    let huge = window.signed(1, vec![deposited(u128::MAX)]).await;
+    let small = window.signed(2, vec![deposited(35)]).await;
+    let conn = window.store.connection();
+    let nodes = conn
+        .query_all(Statement::from_string(
+            conn.get_database_backend(),
+            "SELECT deposited FROM cosign_totals WHERE scope_kind=0",
+        ))
+        .await
+        .expect("nodes");
+    assert!(!nodes.is_empty());
+    let exact = ((1_u128 << 64) + 35).to_be_bytes();
+    for node in nodes {
+        assert_eq!(
+            node.try_get::<Vec<u8>>("", "deposited").expect("counter"),
+            exact
+        );
+    }
+    window.limit(AssetLimits {
+        deposit_cap: CAP,
+        deposit_window_slots: WINDOW,
+        ..AssetLimits::EMPTY
+    });
+    window.refuses(3, vec![deposited(1)]).await;
+    window
+        .co_signer
+        .settle(CoSignSettlement::Failed(huge))
+        .await
+        .expect("refund huge");
+    window.refuses(4, vec![deposited(66)]).await;
+    window.signed(5, vec![deposited(65)]).await;
+    window
+        .co_signer
+        .settle(CoSignSettlement::Failed(small))
+        .await
+        .expect("refund small");
+    window.signed(6, vec![deposited(35)]).await;
+}
+
+#[tokio::test]
+async fn a_late_refund_skips_pruned_epochs_and_preserves_current_usage() {
+    let window = Window::open("sqlite::memory:").await;
+    window.slot.store(0, Ordering::Relaxed);
+    let old = window.signed(1, vec![flow(7, SOL, CAP)]).await;
+    window.slot.store(
+        2 * MAX_LIMIT_WINDOW_SLOTS.next_power_of_two(),
+        Ordering::Relaxed,
+    );
+    window.signed(2, vec![flow(7, SOL, CAP)]).await;
+    let conn = window.store.connection();
+    let count = conn
+        .query_one(Statement::from_string(
+            conn.get_database_backend(),
+            "SELECT COUNT(*) AS count FROM cosign_totals WHERE epoch=0",
+        ))
+        .await
+        .expect("query")
+        .expect("count")
+        .try_get::<i64>("", "count")
+        .expect("count");
+    assert_eq!(count, 0);
+    window
+        .co_signer
+        .settle(CoSignSettlement::Failed(old))
+        .await
+        .expect("late refund");
+    window.refuses(3, vec![flow(7, SOL, 1)]).await;
+}
+
+#[tokio::test]
+async fn an_unsupported_window_fails_before_reservation() {
+    let window = Window::open("sqlite::memory:").await;
+    window.limit(AssetLimits {
+        sender_window_slots: MAX_LIMIT_WINDOW_SLOTS + 1,
+        ..SENDER_LIMITS
+    });
+    assert!(matches!(
+        window
+            .co_signer
+            .decide(&request(1, vec![flow(7, SOL, 1)]))
+            .await,
+        Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
+    ));
+    assert!(window.rows().await.is_empty());
+}
+
+struct WindowOracle<'a> {
+    entries: &'a [(u64, OwnerFlow)],
+    windows: &'a [u64],
+}
+
+impl WindowOracle<'_> {
+    async fn assert_matches(self, window: &Window) {
+        let ledger = UsageLedger {
+            conn: window.store.connection(),
+        };
+        let slot = window.slot.load(Ordering::Relaxed);
+        for asset in [SOL, USDC] {
+            for &window_slots in self.windows {
+                let active = || {
+                    self.entries.iter().filter(|(at, flow)| {
+                        flow.flow.asset == asset
+                            && slot.checked_sub(*at).is_some_and(|age| age < window_slots)
+                    })
+                };
+                for measure in [
+                    Measure::Outflow,
+                    Measure::Deposited,
+                    Measure::Withdrawn,
+                    Measure::Volume,
+                ] {
+                    let expected: u128 = active()
+                        .map(|(_, flow)| {
+                            let outflow = flow.flow.charged_outflow.min(1_u128 << 64);
+                            let deposited = flow.flow.deposited.min(1_u128 << 64);
+                            match measure {
+                                Measure::Outflow => outflow,
+                                Measure::Deposited => deposited,
+                                Measure::Withdrawn => flow.flow.withdrawn.min(1_u128 << 64),
+                                Measure::Volume => outflow + deposited,
+                            }
+                        })
+                        .sum();
+                    let sum = WindowSum {
+                        ring: &RING,
+                        asset: &asset,
+                        measure,
+                        slot,
+                        window_slots,
+                    };
+                    assert_eq!(
+                        ledger.ring_total(sum).await.expect("total"),
+                        expected,
+                        "asset {asset} slot {slot} window {window_slots} measure {measure:?}"
+                    );
+                }
+                let owners = [*member(7).as_bytes(), *member(8).as_bytes()];
+                let sum = WindowSum {
+                    ring: &RING,
+                    asset: &asset,
+                    measure: Measure::Outflow,
+                    slot,
+                    window_slots,
+                };
+                let totals = ledger
+                    .owner_totals(sum, &owners)
+                    .await
+                    .expect("owner totals");
+                for owner in owners {
+                    let expected: u128 = active()
+                        .filter(|(_, flow)| flow.owner.as_bytes() == &owner)
+                        .map(|(_, flow)| flow.flow.charged_outflow.min(1_u128 << 64))
+                        .sum();
+                    assert_eq!(
+                        totals[&owner], expected,
+                        "owner {owner:?} asset {asset} slot {slot} window {window_slots}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn all_window_measures_match_an_immutable_ledger_after_out_of_order_refunds() {
+    let mut window = Window::open("sqlite::memory:").await;
+    window.co_signer.approval = CoSignerApproval::new([
+        ApproveClass::Transfers,
+        ApproveClass::Deposits,
+        ApproveClass::Withdrawals,
+    ]);
+    window.limit(AssetLimits::EMPTY);
+    let epoch = MAX_LIMIT_WINDOW_SLOTS.next_power_of_two();
+    let mut entries = Vec::new();
+    let mut signatures = Vec::new();
+    for (index, slot) in [
+        0,
+        0,
+        1,
+        epoch - 2,
+        epoch - 1,
+        epoch - 1,
+        epoch,
+        epoch,
+        epoch + 1,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        window.slot.store(slot, Ordering::Relaxed);
+        let amount = index as u64 + 1;
+        let mut moved = flow(
+            if index % 2 == 0 { 7 } else { 8 },
+            if index % 3 == 0 { SOL } else { USDC },
+            amount,
+        );
+        moved.flow.deposited = u128::from(amount * 2);
+        moved.flow.withdrawn = u128::from(amount * 3);
+        signatures.push(window.signed(amount as u8, vec![moved]).await);
+        entries.push((slot, moved));
+        WindowOracle {
+            entries: &entries,
+            windows: &[0, 1, 2, WINDOW, MAX_LIMIT_WINDOW_SLOTS],
+        }
+        .assert_matches(&window)
+        .await;
+    }
+    for index in [7, 4, 0] {
+        window
+            .co_signer
+            .settle(CoSignSettlement::Failed(signatures[index]))
+            .await
+            .expect("refund");
+        entries[index].1.flow.charged_outflow = 0;
+        entries[index].1.flow.deposited = 0;
+        entries[index].1.flow.withdrawn = 0;
+        WindowOracle {
+            entries: &entries,
+            windows: &[0, 1, 2, WINDOW, MAX_LIMIT_WINDOW_SLOTS],
+        }
+        .assert_matches(&window)
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn seeded_window_histories_match_direct_sums_through_refunds() {
+    let mut random = StdRng::seed_from_u64(0xd45a_67b0_8e31_29cf);
+    let mut window = Window::open("sqlite::memory:").await;
+    window.co_signer.approval = CoSignerApproval::new([
+        ApproveClass::Transfers,
+        ApproveClass::Deposits,
+        ApproveClass::Withdrawals,
+    ]);
+    window.limit(AssetLimits::EMPTY);
+    let epoch = MAX_LIMIT_WINDOW_SLOTS.next_power_of_two();
+    let mut slots = vec![
+        0,
+        0,
+        1,
+        WINDOW - 1,
+        WINDOW,
+        MAX_LIMIT_WINDOW_SLOTS - 1,
+        MAX_LIMIT_WINDOW_SLOTS,
+        epoch - 1,
+        epoch,
+        epoch + 1,
+        2 * epoch - 1,
+        2 * epoch,
+        2 * epoch + 1,
+    ];
+    slots.extend((0..11).map(|_| random.gen_range(0..=2 * epoch + WINDOW)));
+    slots.sort_unstable();
+    let mut entries = Vec::new();
+    let mut signatures = Vec::new();
+    for (index, slot) in slots.into_iter().enumerate() {
+        window.slot.store(slot, Ordering::Relaxed);
+        let mut moved = flow(
+            random.gen_range(7..=8),
+            [SOL, USDC][random.gen_range(0..2)],
+            0,
+        );
+        for amount in [
+            &mut moved.flow.charged_outflow,
+            &mut moved.flow.deposited,
+            &mut moved.flow.withdrawn,
+        ] {
+            *amount = match random.gen_range(0..5) {
+                0 => 0,
+                1 => u128::from(u64::MAX),
+                2 => 1_u128 << 64,
+                3 => u128::MAX,
+                _ => random.gen_range(1..=10_000),
+            };
+        }
+        signatures.push(window.signed(index as u8 + 1, vec![moved]).await);
+        entries.push((slot, moved));
+        let age = slot - entries[random.gen_range(0..entries.len())].0;
+        let windows = [
+            0,
+            1,
+            MAX_LIMIT_WINDOW_SLOTS,
+            random.gen_range(0..=MAX_LIMIT_WINDOW_SLOTS),
+            age.min(MAX_LIMIT_WINDOW_SLOTS),
+            (age + 1).min(MAX_LIMIT_WINDOW_SLOTS),
+        ];
+        WindowOracle {
+            entries: &entries,
+            windows: &windows,
+        }
+        .assert_matches(&window)
+        .await;
+        if index % 3 == 2 {
+            let refunded = random.gen_range(0..signatures.len());
+            for _ in 0..2 {
+                window
+                    .co_signer
+                    .settle(CoSignSettlement::Failed(signatures[refunded]))
+                    .await
+                    .expect("refund");
+            }
+            entries[refunded].1.flow.charged_outflow = 0;
+            entries[refunded].1.flow.deposited = 0;
+            entries[refunded].1.flow.withdrawn = 0;
+            WindowOracle {
+                entries: &entries,
+                windows: &windows,
+            }
+            .assert_matches(&window)
+            .await;
+        }
+    }
 }

@@ -1,6 +1,6 @@
 //! The confidential rail.
 
-use custom_ring_interface::{RingMode, RingRail};
+use custom_ring_interface::{DisclosureFormat, RingMode, RingRail};
 use solana_address::Address;
 use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
 use spr_interface::{instruction::InterfaceTransfer, shape::Shape};
@@ -195,7 +195,20 @@ impl Owner<'_> {
         }
         .delivery()?;
         let first_nullifier = *transaction.first_nullifier();
-        let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery);
+        let format = if shape.n_inputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_INPUTS
+            && shape.n_outputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_OUTPUTS
+        {
+            if self.in_proof_owner.is_some() {
+                return Err(RingError::ShapeUnkeyed {
+                    rail: RingRail::Confidential,
+                });
+            }
+            DisclosureFormat::SingleAssetPayout
+        } else {
+            DisclosureFormat::Standard
+        };
+        let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery)
+            .with_format(format);
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
         let proof_inputs = rail.encrypt(transaction, &sender)?;
         let (owner_signers, spend) = match self.in_proof_owner {

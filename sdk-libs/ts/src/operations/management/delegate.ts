@@ -426,7 +426,5 @@ export function selectAuthorityNotes(
       maxInputs,
       errors: ringSelectionErrors,
     },
-    // The core `prepareRingAuthorityTransfer` refuses inputs on two trees.
-    maxTrees: 1,
   });
 }

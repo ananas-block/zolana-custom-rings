@@ -408,45 +408,32 @@ impl<'c, C: ConnectionTrait, L: StoredLeaf> RegistryStore<'c, C, L> {
         keys: &BTreeSet<NodePosition>,
         applied: u64,
     ) -> Result<BTreeMap<NodePosition, [u8; 32]>> {
-        let mut by_level = BTreeMap::<usize, Vec<u64>>::new();
-        for key in keys {
-            by_level.entry(key.level).or_default().push(key.position);
-        }
-        let mut values = vec![int(applied)?];
-        let mut levels = Vec::new();
-        for (level, positions) in by_level {
-            values.push(int(u64::try_from(level)?)?);
-            let level_param = values.len() + 1;
-            let mut params = Vec::with_capacity(positions.len());
-            for position in positions {
-                values.push(int(position)?);
-                params.push(format!("${}", values.len() + 1));
+        const BATCH_LIMIT: usize = 256;
+
+        let applied = int(applied)?;
+        let mut keys = keys.iter();
+        let mut nodes = BTreeMap::new();
+        loop {
+            let batch: Vec<_> = keys.by_ref().take(BATCH_LIMIT).collect();
+            if batch.is_empty() {
+                return Ok(nodes);
             }
-            levels.push(format!(
-                "(level=${level_param} AND position IN ({}))",
-                params.join(",")
-            ));
-        }
-        if levels.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let sql = format!(
-            "SELECT level, position, hash FROM ring_record_nodes AS n WHERE program=$1 \
-             AND applied=(SELECT MAX(applied) FROM ring_record_nodes AS m \
-             WHERE m.program=n.program AND m.level=n.level AND m.position=n.position \
-             AND m.applied<=$2) AND ({})",
-            levels.join(" OR ")
-        );
-        let rows = self.query_all(&sql, values).await?;
-        rows.iter()
-            .map(|row| {
-                let at = NodePosition {
-                    level: usize::try_from(uint(row, "level")?)?,
-                    position: uint(row, "position")?,
+            let statement = self.node_statement(&batch, applied.clone())?;
+            for row in self.conn.query_all(statement).await? {
+                let Some(hash) = row.try_get::<Option<Vec<u8>>>("", "hash")? else {
+                    continue;
                 };
-                Ok((at, field(row, "hash")?))
-            })
-            .collect()
+                let at = NodePosition {
+                    level: usize::try_from(uint(&row, "level")?)?,
+                    position: uint(&row, "position")?,
+                };
+                nodes.insert(
+                    at,
+                    hash.try_into()
+                        .map_err(|_| anyhow::anyhow!("invalid node hash length"))?,
+                );
+            }
+        }
     }
 
     pub async fn save_nodes(
@@ -466,6 +453,30 @@ impl<'c, C: ConnectionTrait, L: StoredLeaf> RegistryStore<'c, C, L> {
             self.exec(sql, values).await?;
         }
         Ok(())
+    }
+
+    fn node_statement(&self, keys: &[&NodePosition], applied: Value) -> Result<Statement> {
+        let mut values = vec![applied];
+        let mut requested = Vec::with_capacity(keys.len());
+        for (index, at) in keys.iter().enumerate() {
+            values.push(int(u64::try_from(at.level)?)?);
+            values.push(int(at.position)?);
+            let level_param = index * 2 + 3;
+            let position_param = level_param + 1;
+            requested.push(format!(
+                "(CAST(${level_param} AS BIGINT),CAST(${position_param} AS BIGINT))"
+            ));
+        }
+        let sql = format!(
+            "WITH requested(level,position) AS (VALUES {}) \
+             SELECT level, position, \
+             (SELECT hash FROM ring_record_nodes AS n WHERE n.program=$1 \
+             AND n.level=requested.level AND n.position=requested.position \
+             AND n.applied<=$2 ORDER BY n.applied DESC LIMIT 1) AS hash \
+             FROM requested",
+            requested.join(",")
+        );
+        Ok(self.statement(&sql, values))
     }
 
     fn statement(&self, sql: &str, values: Vec<Value>) -> Statement {
@@ -681,4 +692,218 @@ mod account_image {
 fn read_mint_policy(row: &QueryResult) -> Result<Option<zolana_ring_policy::MintPolicy>> {
     let value = row.try_get::<Option<String>>("", "mint_policy")?;
     Ok(value.as_deref().map(serde_json::from_str).transpose()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::database;
+
+    #[tokio::test]
+    async fn historical_nodes_span_batches_without_crossing_registry_or_revision() {
+        let db = database().await;
+        let initial: BTreeMap<_, _> = (0..513u64)
+            .map(|position| {
+                let mut hash = [0; 32];
+                hash[..8].copy_from_slice(&position.to_be_bytes());
+                (
+                    NodePosition {
+                        level: usize::try_from(position % 3).unwrap(),
+                        position,
+                    },
+                    hash,
+                )
+            })
+            .collect();
+        let changed: BTreeMap<_, _> = initial
+            .keys()
+            .filter(|at| at.position % 2 == 0)
+            .map(|at| (*at, [7; 32]))
+            .collect();
+        let future = NodePosition {
+            level: 4,
+            position: 900,
+        };
+        let missing = NodePosition {
+            level: 5,
+            position: 901,
+        };
+        let keys = initial.keys().copied().chain([future, missing]).collect();
+        let store = RegistryStore::<_, MemberRecord>::new(&db, [1; 32]);
+        store.save_nodes(&initial, 3).await.unwrap();
+        store.save_nodes(&changed, 7).await.unwrap();
+        store
+            .save_nodes(&BTreeMap::from([(future, [8; 32])]), 8)
+            .await
+            .unwrap();
+        RegistryStore::<_, MemberRecord>::new(&db, [2; 32])
+            .save_nodes(&BTreeMap::from([(missing, [9; 32])]), 1)
+            .await
+            .unwrap();
+
+        let tx = begin_read(&db).await.unwrap();
+        let snapshot = RegistryStore::<_, MemberRecord>::new(&tx, [1; 32]);
+        assert!(snapshot.nodes(&keys, 2).await.unwrap().is_empty());
+        assert_eq!(snapshot.nodes(&keys, 3).await.unwrap(), initial);
+        assert_eq!(snapshot.nodes(&keys, 6).await.unwrap(), initial);
+        let mut expected = initial;
+        expected.extend(changed);
+        assert_eq!(snapshot.nodes(&keys, 7).await.unwrap(), expected);
+        expected.insert(future, [8; 32]);
+        assert_eq!(snapshot.nodes(&keys, 8).await.unwrap(), expected);
+        assert!(snapshot
+            .nodes(&BTreeSet::new(), 8)
+            .await
+            .unwrap()
+            .is_empty());
+        tx.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn historical_node_plan_seeks_the_sqlite_primary_key() {
+        let db = database().await;
+        let store = RegistryStore::<_, MemberRecord>::new(&db, [1; 32]);
+        let keys = [
+            NodePosition::root(0),
+            NodePosition {
+                level: 0,
+                position: 1,
+            },
+        ];
+        store
+            .save_nodes(&BTreeMap::from([(keys[0], [3; 32])]), 3)
+            .await
+            .unwrap();
+        let mut query = store
+            .node_statement(&keys.iter().collect::<Vec<_>>(), int(7).unwrap())
+            .unwrap();
+        query.sql.insert_str(0, "EXPLAIN QUERY PLAN ");
+        let plan: Vec<String> = db
+            .query_all(query)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.try_get("", "detail").unwrap())
+            .collect();
+        let seeks: Vec<_> = plan
+            .iter()
+            .filter(|line| line.contains("SEARCH n USING INDEX"))
+            .collect();
+        assert_eq!(seeks.len(), 1, "{plan:?}");
+        for term in [
+            "sqlite_autoindex_ring_record_nodes_1",
+            "program",
+            "level",
+            "position",
+            "applied",
+        ] {
+            assert!(seeks[0].contains(term), "{plan:?}");
+        }
+        assert_eq!(
+            plan.iter()
+                .filter(|line| line.contains("ring_record_nodes"))
+                .count(),
+            1,
+            "{plan:?}"
+        );
+        assert!(!plan.iter().any(|line| line.contains("SCAN n")), "{plan:?}");
+        assert!(
+            !plan.iter().any(|line| line.contains("USE TEMP B-TREE")),
+            "{plan:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs RING_INDEXER_TEST_POSTGRES_URL"]
+    async fn postgres_historical_node_seeks_keep_the_caller_snapshot() {
+        let db = crate::savepoint_tests::postgres("historical_node_seeks").await;
+        let store = RegistryStore::<_, MemberRecord>::new(&db, [1; 32]);
+        store
+            .exec(
+                "INSERT INTO ring_record_nodes(program,level,position,applied,hash) \
+                 SELECT $1,0,positions.position,revisions.applied,$2 \
+                 FROM generate_series(0,512) AS positions(position) \
+                 CROSS JOIN generate_series(0,31) AS revisions(applied)",
+                vec![bytes(&[3; 32])],
+            )
+            .await
+            .unwrap();
+        db.execute_unprepared("ANALYZE ring_record_nodes")
+            .await
+            .unwrap();
+        let keys: BTreeSet<_> = (0..513)
+            .map(|position| NodePosition { level: 0, position })
+            .collect();
+        let plan_keys: Vec<_> = keys.iter().take(2).collect();
+        let mut query = store.node_statement(&plan_keys, int(31).unwrap()).unwrap();
+        query.sql.insert_str(0, "EXPLAIN (COSTS OFF) ");
+        let plan: Vec<String> = db
+            .query_all(query)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.try_get("", "QUERY PLAN").unwrap())
+            .collect();
+        assert!(
+            plan.iter().any(|line| {
+                line.contains("Index Scan Backward using ring_record_nodes_pkey")
+            }),
+            "{plan:?}"
+        );
+        let conditions: Vec<_> = plan
+            .iter()
+            .filter(|line| line.contains("Index Cond:"))
+            .collect();
+        assert_eq!(conditions.len(), 1, "{plan:?}");
+        for term in ["program", "level", "position", "applied"] {
+            assert!(conditions[0].contains(term), "{plan:?}");
+        }
+        assert!(
+            !plan
+                .iter()
+                .any(|line| line.contains("Seq Scan") || line.contains("Sort")),
+            "{plan:?}"
+        );
+
+        let tx = begin_read(&db).await.unwrap();
+        let snapshot = RegistryStore::<_, MemberRecord>::new(&tx, [1; 32]);
+        let expected: BTreeMap<_, _> = keys.iter().map(|key| (*key, [3; 32])).collect();
+        assert_eq!(snapshot.nodes(&keys, 32).await.unwrap(), expected);
+        let updates: BTreeMap<_, _> = [0, 256, 512]
+            .map(|position| (NodePosition { level: 0, position }, [4; 32]))
+            .into_iter()
+            .collect();
+        let writer = db.begin().await.unwrap();
+        RegistryStore::<_, MemberRecord>::new(&writer, [1; 32])
+            .save_nodes(&updates, 32)
+            .await
+            .unwrap();
+        writer.commit().await.unwrap();
+        assert_eq!(snapshot.nodes(&keys, 32).await.unwrap(), expected);
+        tx.commit().await.unwrap();
+        let mut current = expected;
+        current.extend(updates);
+        let fresh = begin_read(&db).await.unwrap();
+        let store = RegistryStore::<_, MemberRecord>::new(&fresh, [1; 32]);
+        assert_eq!(store.nodes(&keys, 32).await.unwrap(), current);
+        fresh.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn historical_nodes_reject_malformed_stored_hashes() {
+        let db = database().await;
+        let store = RegistryStore::<_, MemberRecord>::new(&db, [1; 32]);
+        store
+            .exec(
+                "INSERT INTO ring_record_nodes(program,level,position,applied,hash) \
+                 VALUES($1,$2,$3,$4,$5)",
+                vec![0i64.into(), 0i64.into(), 1i64.into(), vec![1u8].into()],
+            )
+            .await
+            .unwrap();
+        assert!(store
+            .nodes(&BTreeSet::from([NodePosition::root(0)]), 1)
+            .await
+            .is_err());
+    }
 }

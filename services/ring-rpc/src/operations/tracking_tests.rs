@@ -12,7 +12,7 @@ use crate::{
     projection_lease::LeaseClaim,
     projection_reads::EnrollmentKey,
     spent_index::{HistoryScope, LoadSpends, NoteSeal, ProjectionWriter},
-    utxos::{Backing, MAX_CACHED_ENTRIES},
+    utxos::{Backing, PageWork, MAX_CACHED_ENTRIES, MAX_LATE_OWNERS},
 };
 
 const RING: Address = Address::new_from_array([8; 32]);
@@ -121,6 +121,46 @@ async fn a_scan_holds_every_enrolled_owner_and_completes_at_the_next_index() {
 }
 
 #[tokio::test]
+async fn a_full_memory_pending_set_keeps_the_page_until_derivation_frees_capacity() {
+    let auditor = X25519Keypair::new();
+    let (source, held) = served(&auditor, &[1, 2]);
+    let store = AuditStore::default();
+    store.queue_late_owners((0..MAX_CACHED_ENTRIES).map(|index| {
+        let mut owner = [0xa5; 32];
+        owner[..8].copy_from_slice(&(index as u64).to_le_bytes());
+        owner
+    }));
+    let mut cursor = TrackingCursor::default();
+    assert_eq!(
+        scan(&source, &auditor, &store, &mut cursor)
+            .await
+            .expect("full scan"),
+        ScanEnd::Partial
+    );
+    assert_eq!(cursor, TrackingCursor::default());
+    for row in &held {
+        assert_eq!(enrollment(&store, &row.member).await, None);
+    }
+
+    let opener = |_: &HeldEnrollment| None;
+    let mut work = PageWork::new(&store, &opener);
+    work.late_keys();
+    let delta = work.finish().await.expect("derive");
+    assert_eq!(delta.derived_owners().len(), MAX_LATE_OWNERS);
+    store.commit(delta);
+    assert_eq!(
+        scan(&source, &auditor, &store, &mut cursor)
+            .await
+            .expect("resumed scan"),
+        ScanEnd::Complete
+    );
+    assert_eq!(cursor.next_leaf(), 3);
+    for row in held {
+        assert_eq!(enrollment(&store, &row.member).await, Some(row));
+    }
+}
+
+#[tokio::test]
 async fn a_page_skipping_a_leaf_holds_nothing_and_keeps_the_cursor() {
     let auditor = X25519Keypair::new();
     let (served, held) = served(&auditor, &[1, 2]);
@@ -207,7 +247,7 @@ async fn a_bounded_enrollment_cache_holds_its_bound_and_storage_answers_an_evict
             .commit_enrollments(admission.rows(), TrackingCursor::default())
             .await
             .expect("commit");
-        store.admit_enrollments(admission);
+        store.admit_enrollments(admission).expect("admitted");
     }
     assert!(store
         .cached_enrollments()
@@ -305,7 +345,7 @@ async fn cached_scan_rows_are_persisted_before_the_durable_cursor() {
         .await
         .expect("pending after restart");
     assert_eq!(pending.len(), 3);
-    restarted.queue_late_owners(pending);
+    restarted.replace_late_owners(pending);
     let opener = |_: &HeldEnrollment| None;
     let mut work = crate::utxos::PageWork::new(&restarted, &opener);
     work.late_keys();
@@ -320,6 +360,66 @@ async fn cached_scan_rows_are_persisted_before_the_durable_cursor() {
     );
     writer.commit_page(&delta).await.expect("commit derivation");
     assert!(writer.pending_owners().await.expect("completed").is_empty());
+}
+
+#[tokio::test]
+async fn durable_admission_keeps_the_backlog_outside_the_active_derivation_set() {
+    let auditor = X25519Keypair::new();
+    let count = MAX_LATE_OWNERS * 2 + 1;
+    let owners: Vec<u8> = (1..=count)
+        .map(|owner| u8::try_from(owner).expect("owner seed"))
+        .collect();
+    let (source, _) = served(&auditor, &owners);
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let seal = NoteSeal::derive(&auditor, RING).expect("seal");
+    let store = cached_store(&database, &auditor, 2);
+    let writer = writer(&database, &seal).await;
+    let mut cursor = TrackingCursor::default();
+    assert_eq!(
+        TrackingScan {
+            ring: RING,
+            auditor: &auditor,
+            source: &source,
+            store: &store,
+            durable: Some(&writer),
+        }
+        .run(&mut cursor)
+        .await
+        .expect("scan"),
+        ScanEnd::Complete
+    );
+    let opener = |_: &HeldEnrollment| None;
+    let mut work = PageWork::new(&store, &opener);
+    work.late_keys();
+    assert!(work
+        .finish()
+        .await
+        .expect("no active owners")
+        .derived_owners()
+        .is_empty());
+
+    for expected in [MAX_LATE_OWNERS, MAX_LATE_OWNERS, 1] {
+        let pending = writer.pending_owners().await.expect("pending");
+        assert_eq!(pending.len(), expected);
+        store.replace_late_owners(pending.clone());
+        let mut work = PageWork::new(&store, &opener);
+        work.late_keys();
+        let delta = work.finish().await.expect("derive");
+        assert_eq!(delta.derived_owners().len(), expected);
+        assert_eq!(writer.pending_owners().await.expect("uncommitted"), pending);
+        let revision = writer.commit_page(&delta).await.expect("commit");
+        store.commit(delta.at_commit(revision));
+    }
+    assert!(writer.pending_owners().await.expect("drained").is_empty());
+    store.replace_late_owners(Vec::new());
+    let mut work = PageWork::new(&store, &opener);
+    work.late_keys();
+    assert!(work
+        .finish()
+        .await
+        .expect("empty active set")
+        .derived_owners()
+        .is_empty());
 }
 
 /// Confirmed reads the fork while it lives, finalized reads the canonical chain.

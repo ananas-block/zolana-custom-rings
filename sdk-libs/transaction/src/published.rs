@@ -3,7 +3,7 @@
 
 use custom_ring_interface::{
     ring_body_output, ring_sender_bundle_output_body, FramedSenderBundle, RingOutput, SlotBody,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    DATA_TAIL_LEN,
 };
 use spr_event::confidential_encrypted_output_body;
 use spr_interface::instruction::instruction_data::transact::{OwnerTag, TransactOutput};
@@ -33,7 +33,7 @@ impl<'a> PublishedSlot<'a> {
     /// The frame's slot once its record and tail sealed.
     pub fn wire<'r>(
         &self,
-        record: &'r [u8; AUDIT_RECORD_LEN],
+        record: &'r [u8],
         tail: Option<&'r [u8; DATA_TAIL_LEN]>,
     ) -> RingOutput<'r>
     where

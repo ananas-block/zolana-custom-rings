@@ -1,6 +1,6 @@
 use std::{
     net::IpAddr,
-    num::{NonZeroU32, NonZeroU64},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -18,6 +18,7 @@ use zolana_secret_file::{create_new, read_key32, Access, SecretFileError, Visibi
 use crate::{
     client_rate::ClientLimitArgs, cosign::ApproveClass, keys::KeySource, origins::OriginTransport,
     server::BindPolicy,
+    wallet_snapshots::WalletSnapshotLimits,
 };
 
 #[derive(Debug, Parser)]
@@ -107,6 +108,10 @@ pub struct ServeArgs {
     pub webauthn_rp_id: Option<String>,
     #[arg(long, env = "RING_RPC_MAX_CONNECTIONS", default_value = "256")]
     pub max_connections: NonZeroU32,
+    #[arg(long, env = "RING_RPC_WALLET_SNAPSHOTS", default_value_t = WalletSnapshotLimits::default().store)]
+    pub wallet_snapshots: NonZeroUsize,
+    #[arg(long, env = "RING_RPC_WALLET_SNAPSHOTS_PER_PRINCIPAL", default_value_t = WalletSnapshotLimits::default().principal_wallet)]
+    pub wallet_snapshots_per_principal: NonZeroUsize,
     #[arg(long, env = "RING_RPC_REQUEST_TIMEOUT_SECS", default_value = "30")]
     pub request_timeout_secs: NonZeroU64,
     #[arg(long, env = "RING_RPC_UPSTREAM_TIMEOUT_SECS", default_value = "10")]

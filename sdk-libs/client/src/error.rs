@@ -252,6 +252,17 @@ impl From<RingIndexerError> for AuditError {
 #[derive(Debug, Error)]
 pub enum AnonymousError {
     #[error(transparent)]
+    CompactAssets(#[from] crate::compact_assets::CompactAssetError),
+    #[error("compact recovery requires with_asset_rpc")]
+    CompactAssetSourceRequired,
+    #[error("recovery budget must be positive")]
+    RecoveryBudget,
+    #[error("recovery scope or progress changed")]
+    RecoveryScopeChanged,
+    #[error("wallet recovery is incomplete")]
+    SyncIncomplete,
+
+    #[error(transparent)]
     Client(#[from] ClientError),
     #[error(transparent)]
     Transaction(#[from] TransactionError),

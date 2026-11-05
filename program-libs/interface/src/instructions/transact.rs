@@ -76,8 +76,8 @@ use crate::{
     },
     storage::Revision,
     stream::{framed_slot_tag, slot_tag, unframed_slot_tag, SLOT_TAG_LEN},
-    CustomRingProof, InstructionTag, LiveRoots, PlainGroth16Proof, RingMode, RingPolicy, RootRead,
-    TAGGED_X25519_KEY_LEN,
+    CustomRingProof, DisclosureFormat, InstructionTag, LiveRoots, PlainGroth16Proof, RingMode,
+    RingPolicy, RootRead, TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
@@ -207,7 +207,11 @@ impl RingRail {
     }
 
     /// The key the header names, before the outputs are read.
-    fn key_shape(self, header: &FrameHeader) -> Result<TransferShape, CustomRingError> {
+    fn key_shape(
+        self,
+        header: &FrameHeader,
+        format: DisclosureFormat,
+    ) -> Result<TransferShape, CustomRingError> {
         let supported = self
             .spp_rail(header.flags.public_owners)
             .supports(Shape::new(
@@ -216,6 +220,7 @@ impl RingRail {
             ));
         let (n_out, inputs) = (usize::from(header.n_out), usize::from(header.input_count));
         let key = FrameKey {
+            format,
             rail: self,
             inputs,
             outputs: n_out,
@@ -318,6 +323,7 @@ pub struct AppMessage<'a> {
 /// SPP's optional fields a frame carries through.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameExtensions<'a> {
+    pub format: DisclosureFormat,
     /// The transaction's application digest, distinct from a note's `data_hash`.
     pub data_hash: Option<&'a [u8; 32]>,
     /// The transaction's ring digest, distinct from a note's `ring_data_hash`.
@@ -406,7 +412,7 @@ pub struct RingOutput<'a> {
     /// SPP binds an exit's tag to its owner, any other is a slot tag.
     pub owner_tag: [u8; 32],
     pub body: SlotBody<'a>,
-    pub record: &'a [u8; AUDIT_RECORD_LEN],
+    pub record: &'a [u8],
     /// Present exactly under `has_data`.
     pub tail: Option<&'a [u8; DATA_TAIL_LEN]>,
 }
@@ -429,10 +435,10 @@ impl<'a> RingOutput<'a> {
     }
 
     /// A frame with no data carries each body at its plain length.
-    const fn has_plain_body(&self) -> bool {
+    const fn has_plain_body(&self, format: DisclosureFormat) -> bool {
         match self.body {
             SlotBody::None => true,
-            SlotBody::Recipient(body) => body.len() == RECIPIENT_BODY_LEN,
+            SlotBody::Recipient(body) => body.len() == format.recipient_body_len(),
             SlotBody::Exit(payload) => payload.len() == CONFIDENTIAL_DATA_FREE_BODY_LEN,
         }
     }
@@ -650,7 +656,6 @@ impl<'a> RingTransactData<'a> {
         flags.check(rail)?;
         let header = FrameHeader::read(&mut bytes, rail)?;
         let input_count = header.input_count;
-        let shape = rail.key_shape(&header)?;
         let output_count = usize::from(header.output_count);
         // 2. The ring's own fields, ahead of everything SPP reads. A revision names a root, `roots` reads it.
         let approval = ApprovalMask::new(bytes.byte()?).ok_or(CustomRingError::FlagNotAllowed)?;
@@ -678,6 +683,7 @@ impl<'a> RingTransactData<'a> {
             true => FrameExtensions::read(&mut bytes, rail)?,
         };
         check_extensions(&extensions, rail)?;
+        let shape = rail.key_shape(&header, extensions.format)?;
         let interface_transfers = bytes.interface_transfers()?;
         let spl_withdrawal_owners = match flags.reads_own_root() {
             true => bytes.fields(crate::spl_withdrawal_count(&interface_transfers))?,
@@ -705,7 +711,7 @@ impl<'a> RingTransactData<'a> {
                 (false, ..) => 0,
                 (true, true, _) => usize::from(bytes.u16()?),
                 (true, false, true) => CONFIDENTIAL_DATA_FREE_BODY_LEN,
-                (true, false, false) => RECIPIENT_BODY_LEN,
+                (true, false, false) => extensions.format.recipient_body_len(),
             };
             let hash = bytes.array()?;
             let owner_tag = match exit {
@@ -754,7 +760,7 @@ impl<'a> RingTransactData<'a> {
         // 8. The auditor message, each record replacing the placeholder its slot took in step 5.
         let envelope = bytes.take(stream.envelope().len)?;
         for output in &mut outputs {
-            output.record = bytes.array()?;
+            output.record = bytes.take(stream.key.format.record_len())?;
         }
         if stream.has_data {
             for output in &mut outputs {
@@ -836,7 +842,10 @@ impl<'a> RingTransactData<'a> {
 
     /// The bytes `parse` reads back, refusing what it refuses.
     pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
-        self.encode_under(self.rail.key_shape(&FrameHeader::of(self)?)?)
+        self.encode_under(
+            self.rail
+                .key_shape(&FrameHeader::of(self)?, self.extensions.format)?,
+        )
     }
 
     /// For catalog sizing, `parse` refuses a `shape` off the catalog.
@@ -953,6 +962,7 @@ impl<'a> RingTransactData<'a> {
         // 2. Published counts fit the stream, each required section has the length selected by its flags.
         // Replies contain one complete chunk per recipient body, nonexit tags retain their canonical leading zeros.
         stream.checked()?;
+        self.check_disclosure_format(stream)?;
         let anonymous_frame = self.rail.anonymous_frame();
         let owners_expected = match flags.reads_own_root() {
             true => crate::spl_withdrawal_count(&self.interface_transfers),
@@ -967,7 +977,8 @@ impl<'a> RingTransactData<'a> {
             || self.envelope.len() != stream.envelope().len
             || !self.outputs.iter().all(|output| {
                 output.tail.is_some() == self.has_data
-                    && (self.has_data || output.has_plain_body())
+                    && output.record.len() == stream.key.format.record_len()
+                    && (self.has_data || output.has_plain_body(self.extensions.format))
                     && (output.is_exit() || slot_tag(output.owner_tag) == output.owner_tag)
             })
         {
@@ -1009,6 +1020,46 @@ impl<'a> RingTransactData<'a> {
         }
         check_public_legs(&self.interface_transfers)?;
         Ok(authorization)
+    }
+
+    fn check_disclosure_format(&self, stream: AuditStreamLayout) -> Result<(), CustomRingError> {
+        if stream.key.format != self.extensions.format {
+            return Err(CustomRingError::RingTransactLength);
+        }
+        if self.extensions.format == DisclosureFormat::SingleAssetPayout
+            && (self.rail != RingRail::Confidential
+                || self.in_proof_owner.is_some()
+                || self.has_data
+                || self.entry
+                || self.wide_owners
+                || self.no_spend
+                || !self.interface_transfers.is_empty()
+                || self
+                    .outputs
+                    .iter()
+                    .any(|output| output.is_exit() || output.body == SlotBody::None)
+                || self.replies.is_some()
+                || self.extensions.data_hash.is_some()
+                || self.extensions.ring_data_hash.is_some()
+                || !self.extensions.messages.is_empty()
+                || self.extensions.signer_data_counts.is_some())
+        {
+            return Err(CustomRingError::FlagNotAllowed);
+        }
+        if self.has_data {
+            let mut widths = self.outputs.iter().filter_map(|output| match output.body {
+                SlotBody::Recipient(body) => Some(body.len()),
+                _ => None,
+            });
+            if let Some(width) = widths.next() {
+                if width < RECIPIENT_BODY_LEN + crate::RECIPIENT_BODY_LENGTH_LEN
+                    || widths.any(|next| next != width)
+                {
+                    return Err(CustomRingError::OutputBodyLength);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn frame_len(
@@ -1130,6 +1181,7 @@ impl<'a> RingTransactData<'a> {
     pub fn transfer_circuit(&self, legs: usize) -> Result<RingCircuit, CustomRingError> {
         // The proof holds the live owners to the key's rows, the frame names only the key.
         RingCircuit::transfer(TransferSpend {
+            format: self.extensions.format,
             rail: self.rail,
             inputs: self.nullifiers.len(),
             outputs: usize::from(self.n_out),
@@ -1220,12 +1272,14 @@ impl<'a> RingTransactData<'a> {
     }
 
     pub fn audit_layout(&self) -> AuditLayout {
-        FrameFlags::of(self).audit_layout()
+        FrameFlags::of(self).audit_layout(self.extensions.format)
     }
 
     /// Every ciphertext length of the transfer, refusing a frame no key serves.
     pub fn audit_stream(&self) -> Result<AuditStreamLayout, CustomRingError> {
-        let shape = self.rail.key_shape(&FrameHeader::of(self)?)?;
+        let shape = self
+            .rail
+            .key_shape(&FrameHeader::of(self)?, self.extensions.format)?;
         Ok(self.stream_under(shape))
     }
 
@@ -1341,6 +1395,11 @@ impl<'a> FrameExtensions<'a> {
             .then(|| SignerDataCounts::new(u64::from_le_bytes(*bytes.array()?)))
             .transpose()?;
         Ok(Self {
+            format: if has(extension_flag::SINGLE_ASSET_PAYOUT) {
+                DisclosureFormat::SingleAssetPayout
+            } else {
+                DisclosureFormat::Standard
+            },
             data_hash,
             ring_data_hash,
             messages,
@@ -1353,7 +1412,10 @@ impl<'a> FrameExtensions<'a> {
     fn write(&self, out: &mut Vec<u8>) -> Result<(), CustomRingError> {
         let flag = |set: bool, bit: u8| if set { bit } else { 0 };
         out.push(
-            flag(self.data_hash.is_some(), extension_flag::DATA_HASH)
+            flag(
+                self.format == DisclosureFormat::SingleAssetPayout,
+                extension_flag::SINGLE_ASSET_PAYOUT,
+            ) | flag(self.data_hash.is_some(), extension_flag::DATA_HASH)
                 | flag(
                     self.ring_data_hash.is_some(),
                     extension_flag::RING_DATA_HASH,
@@ -1427,8 +1489,14 @@ pub mod extension_flag {
     pub const CACHE: u8 = 1 << 3;
     pub const APPROVAL_TOTALS: u8 = 1 << 4;
     pub const SIGNER_DATA_COUNTS: u8 = 1 << 5;
-    pub const KNOWN: u8 =
-        DATA_HASH | RING_DATA_HASH | MESSAGES | CACHE | APPROVAL_TOTALS | SIGNER_DATA_COUNTS;
+    pub const SINGLE_ASSET_PAYOUT: u8 = 1 << 6;
+    pub const KNOWN: u8 = DATA_HASH
+        | RING_DATA_HASH
+        | MESSAGES
+        | CACHE
+        | APPROVAL_TOTALS
+        | SIGNER_DATA_COUNTS
+        | SINGLE_ASSET_PAYOUT;
 }
 
 const CACHE_ACCESS_LEN: usize = 8 + 2 * MAX_CACHE_WRITES;
@@ -1693,8 +1761,9 @@ impl FrameFlags {
         }
     }
 
-    const fn audit_layout(self) -> AuditLayout {
+    const fn audit_layout(self, format: DisclosureFormat) -> AuditLayout {
         AuditLayout {
+            format,
             has_data: self.has_data,
             entry: self.entry,
         }

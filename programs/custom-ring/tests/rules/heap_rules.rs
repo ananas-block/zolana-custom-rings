@@ -167,6 +167,7 @@ fn cases() -> Vec<Wide> {
                 in_proof: false,
                 payload: Payload::Base,
                 wide: FrameKey {
+                    format: custom_ring_interface::DisclosureFormat::Standard,
                     rail: RingRail::Anonymous,
                     inputs: usize::from(shape.inputs),
                     outputs: usize::from(shape.outputs),
@@ -275,7 +276,8 @@ fn instruction(ring: &mut Ring, case: Wide) -> Option<Instruction> {
         ring_data_hash: Some([0x5a; 32]),
         ..RecipientBody::default()
     }
-    .encode();
+    .encode()
+    .unwrap();
     let tail = [0x7b; DATA_TAIL_LEN];
     let replies = vec![0x72; data.outputs.len() * MIN_REPLY_LEN];
     let message = vec![0x73; MAX_CPI_DATA_LEN];

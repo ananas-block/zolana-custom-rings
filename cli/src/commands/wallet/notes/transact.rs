@@ -1993,6 +1993,7 @@ mod tests {
         let within = |spendable: Spendable, outputs: usize, spends_default_ring: bool| {
             let widest = spendable.widest_anonymous(outputs).unwrap();
             let key = custom_ring_sdk::transfer_key(TransferSpend {
+                format: custom_ring_interface::DisclosureFormat::Standard,
                 rail: RingRail::Anonymous,
                 inputs: widest,
                 outputs,

@@ -141,7 +141,7 @@ func (a Audit) OutputCount() int {
 }
 
 func (a Audit) Layout() int64 {
-	return ringtest.Bit(a.HasData)*audit.LayoutHasData | ringtest.Bit(a.Shape.Entry)*audit.LayoutEntry
+	return ringtest.Bit(a.HasData)*audit.LayoutHasData | ringtest.Bit(a.Shape.Entry)*audit.LayoutEntry | ringtest.Bit(a.Shape.SingleAssetPayout)*audit.LayoutSingleAssetPayout
 }
 
 // RealInputs is R, the spent notes among the slots.

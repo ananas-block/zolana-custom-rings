@@ -1,3 +1,4 @@
+import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { readFileSync } from "node:fs";
 
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
@@ -158,7 +159,14 @@ describe("transfer_statement.json", () => {
         auditorPubkey: hexToBytes(vector.auditor_pubkey) as Bytes33,
         envelope: hexToBytes(vector.envelope),
         salt: hexToBytes(vector.salt) as Bytes16,
-        layout: { hasData: (vector.layout & 1) !== 0, entry: (vector.layout & 2) !== 0 },
+        layout: {
+          hasData: (vector.layout & 1) !== 0,
+          entry: (vector.layout & 2) !== 0,
+          format:
+            (vector.layout & 4) !== 0
+              ? DisclosureFormat.SingleAssetPayout
+              : DisclosureFormat.Standard,
+        },
       },
       family:
         vector.family === "confidential"

@@ -3,6 +3,8 @@
 //! It reserves no approval and binds the authority to nothing, an update past its valid until slot turns refused.
 //! Read `update_queue` after for the stored states and `record_writer` for the passes that move them.
 
+use std::collections::BTreeMap;
+
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
     ListRegistry, RecordWrite, RecordWriteData, RingPolicy, APPLY_BATCH,
@@ -121,6 +123,11 @@ pub(crate) struct PendingApproval {
     pub valid_until_slot: u64,
 }
 
+pub(crate) struct ApprovalGrant {
+    pub member: [u8; 32],
+    pub lists: ListSet,
+}
+
 #[must_use]
 pub(crate) struct ListApproval<'a> {
     pub update: &'a CheckedUpdate,
@@ -131,6 +138,8 @@ pub(crate) struct ListApproval<'a> {
 pub(crate) struct QueuedUpdate {
     pub id: [u8; 32],
     pub ring: Address,
+    pub registry: Address,
+    pub joined: Vec<[u8; 32]>,
     pub writes: Vec<RecordWriteData>,
     pub signer: UpdateSigner,
     pub queued_slot: u64,
@@ -283,6 +292,27 @@ impl CheckedUpdate {
         Ok(members)
     }
 
+    pub fn approval_grants(&self) -> Result<Vec<ApprovalGrant>, RecordUpdateRefusal> {
+        if self.awaited.is_some() {
+            return Ok(Vec::new());
+        }
+        let mut grants = BTreeMap::new();
+        for entry in &self.entries {
+            let lists = ListSet::from_record_bits(
+                entry.mask & entry.value & AWAITABLE_LISTS.record_bits(),
+            )
+            .ok_or(RecordUpdateRefusal::InvalidAwaitedLists)?;
+            if !lists.is_empty() {
+                let granted = grants.entry(entry.member).or_insert(ListSet::EMPTY);
+                *granted = granted.union(lists);
+            }
+        }
+        Ok(grants
+            .into_iter()
+            .map(|(member, lists)| ApprovalGrant { member, lists })
+            .collect())
+    }
+
     pub fn limited_assets(&self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
         Ok(self
             .entries
@@ -392,16 +422,14 @@ impl ListApproval<'_> {
         if self.update.awaited.is_some() {
             return Ok(Vec::new());
         }
-        let entries = &self.update.entries;
+        let grants = self.update.approval_grants()?;
         let approved: Vec<&PendingApproval> = self
             .pending
             .iter()
             .filter(|pending| {
-                let granted = entries
-                    .iter()
-                    .filter(|entry| entry.member == pending.member)
-                    .fold(0, |bits, entry| bits | (entry.mask & entry.value));
-                pending.lists.record_bits() & !granted == 0
+                grants.iter().any(|grant| {
+                    grant.member == pending.member && pending.lists.is_subset(grant.lists)
+                })
             })
             .collect();
         // The approval and the updates it approves land in one `Update` or not at all.

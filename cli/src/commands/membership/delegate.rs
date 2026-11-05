@@ -88,6 +88,8 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
     let authority = ctx.authority()?;
     let transfer = ctx.block(
         DelegateMove {
+            exits: Vec::new(),
+            withdrawals: Vec::new(),
             ring: ctx.ring,
             delegate: delegate.pubkey(),
             payer: authority.pubkey(),

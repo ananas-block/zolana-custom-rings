@@ -47,6 +47,11 @@ fn every_stream_rebuilds_its_published_hashes_with_no_mint_registry() {
         let bits = case["layout"].as_u64().unwrap();
         let layout = AuditStreamLayout {
             key: AuditKey {
+                format: if bits & 4 != 0 {
+                    custom_ring_interface::DisclosureFormat::SingleAssetPayout
+                } else {
+                    custom_ring_interface::DisclosureFormat::Standard
+                },
                 class: case["input_class"].as_u64().unwrap() as usize,
                 entry: bits & 2 != 0,
             },

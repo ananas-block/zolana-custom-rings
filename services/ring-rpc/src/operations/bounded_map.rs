@@ -50,6 +50,11 @@ impl<K: Copy + Eq + Hash, V: Copy> BoundedMap<K, V> {
         }
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
+
     pub(crate) fn get(&self, key: &K) -> Option<&V> {
         self.entries.get(key)
     }

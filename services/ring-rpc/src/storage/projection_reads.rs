@@ -3,19 +3,18 @@
 //! Each read sees committed rows only. The mirror never caches what these return, so a read racing
 //! a commit cannot leave a stale entry behind. Read after `storage/spent_index.rs`.
 
-use std::collections::HashMap;
-
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, Value};
 use solana_address::Address;
 
 use crate::{
-    spend_machine::{SpendRow, SpendState},
+    frame_repairs::{RepairAttempt, MAX_REPAIRED_FRAMES},
+    spend_machine::SpendRow,
     spent_index::{
-        read_enrollment, read_note, read_spend_row, state_name, NoteSeal, ENROLLMENT_COLUMNS,
+        read_enrollment, read_frame, read_note, read_spend_row, NoteSeal, ENROLLMENT_COLUMNS,
         NOTE_COLUMNS, ROW_COLUMNS,
     },
     tracking::HeldEnrollment,
-    utxos::StoredUtxo,
+    utxos::{CreatedIn, StoredUtxo},
 };
 
 /// The key an enrollment lookup names, each read through its own column.
@@ -32,13 +31,33 @@ pub(crate) enum EnrollmentKey {
 const KEYS_PER_READ: usize = 256;
 
 #[must_use]
-pub(crate) struct ProjectionReads<'a> {
-    pub db: &'a DatabaseConnection,
+pub(crate) struct ProjectionReads<'a, C = DatabaseConnection> {
+    pub db: &'a C,
     pub ring: Address,
     pub seal: &'a NoteSeal,
 }
 
-impl ProjectionReads<'_> {
+impl<C: ConnectionTrait> ProjectionReads<'_, C> {
+    pub(crate) async fn due_repairs(&self, now: u64) -> Result<Vec<(CreatedIn, RepairAttempt)>, DbErr> {
+        let now = i64::try_from(now)
+            .map_err(|_| DbErr::Custom("repair time exceeds the column range".into()))?;
+        let limit = i64::try_from(MAX_REPAIRED_FRAMES)
+            .map_err(|_| DbErr::Custom("repair limit exceeds the column range".into()))?;
+        self.db.query_all(self.statement(
+            "SELECT slot,tx_signature,event_index,attempts,retry_after FROM spend_unread_frames \
+             WHERE ring=$1 AND retry_after<=$2 ORDER BY retry_after,slot,tx_signature,event_index \
+             LIMIT $3".into(),
+            vec![now.into(), limit.into()],
+        )).await?.iter().map(|row| {
+            Ok((read_frame(row)?, RepairAttempt {
+                attempts: u32::try_from(row.try_get::<i64>("", "attempts")?)
+                    .map_err(|_| DbErr::Custom("repair attempts out of range".into()))?,
+                retry_after: u64::try_from(row.try_get::<i64>("", "retry_after")?)
+                    .map_err(|_| DbErr::Custom("negative repair time".into()))?,
+            }))
+        }).collect()
+    }
+
     pub(crate) async fn notes(
         &self,
         commitments: &[[u8; 32]],
@@ -108,26 +127,6 @@ impl ProjectionReads<'_> {
         Ok(rows)
     }
 
-    pub(crate) async fn state_counts(&self) -> Result<HashMap<String, u64>, DbErr> {
-        self.db
-            .query_all(
-                self.statement(
-                    "SELECT state,COUNT(*) AS rows FROM finalized_spent_nullifiers WHERE ring=$1 \
-                 GROUP BY state"
-                        .to_owned(),
-                    Vec::new(),
-                ),
-            )
-            .await?
-            .iter()
-            .map(|row| {
-                let count = u64::try_from(row.try_get::<i64>("", "rows")?)
-                    .map_err(|_| DbErr::Custom("negative row count".into()))?;
-                Ok((row.try_get::<String>("", "state")?, count))
-            })
-            .collect()
-    }
-
     /// A row found by a tag counts only when its sealed body names the asked key.
     pub(crate) async fn enrollments(
         &self,
@@ -166,21 +165,6 @@ impl ProjectionReads<'_> {
             }
         }
         Ok(found)
-    }
-
-    pub(crate) async fn unresolved(&self) -> Result<Vec<SpendRow>, DbErr> {
-        self.db
-            .query_all(self.statement(
-                format!(
-                    "SELECT {ROW_COLUMNS} FROM finalized_spent_nullifiers WHERE ring=$1 \
-                     AND state=$2"
-                ),
-                vec![state_name(SpendState::UnresolvedReal).into()],
-            ))
-            .await?
-            .iter()
-            .map(|row| read_spend_row(row, self.seal))
-            .collect()
     }
 
     async fn keyed(

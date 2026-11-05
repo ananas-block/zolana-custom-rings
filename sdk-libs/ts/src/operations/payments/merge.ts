@@ -13,7 +13,6 @@ import {
   reserveEntries,
   reservedUtxoKeys,
   unreserved,
-  selectUtxos,
   encodeMergeTransactInstructionData,
   mergeMintChunks,
   mergePaddedInputCount,
@@ -105,6 +104,7 @@ import {
   ringIntentMismatch,
   ringProofInput,
   ringSelectionErrors,
+  selectCoveredUtxos,
 } from "../workflow/selection.js";
 import { MERGE_ROOT_READ, readOutputKeys, ringRegistrySlots } from "../workflow/ring-reads.js";
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
@@ -670,7 +670,7 @@ function selectMergeNotes(
 ): readonly WalletUtxo[] {
   const reserved = reservedUtxoKeys(input.wallet);
   const owner = input.wallet.identity;
-  return selectUtxos({
+  return selectCoveredUtxos({
     wallet: input.wallet,
     asset: input.asset,
     target: { kind: "consolidate", minInputs: 2 },

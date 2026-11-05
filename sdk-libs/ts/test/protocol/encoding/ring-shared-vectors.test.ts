@@ -1,3 +1,4 @@
+import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import {
   TRACKING_EMPTY_ROOT,
@@ -243,7 +244,14 @@ describe("ring-statements.json", () => {
       auditorPubkey: bytes<Bytes33>(vector.auditor_pubkey, 33),
       envelope: bytes(vector.envelope),
       salt: bytes<Bytes16>(vector.salt, 16),
-      layout: { hasData: (vector.layout & 1) !== 0, entry: (vector.layout & 2) !== 0 },
+      layout: {
+        hasData: (vector.layout & 1) !== 0,
+        entry: (vector.layout & 2) !== 0,
+        format:
+          (vector.layout & 4) !== 0
+            ? DisclosureFormat.SingleAssetPayout
+            : DisclosureFormat.Standard,
+      },
     },
     family: family(vector),
     approvalMask: vector.approval_mask,
@@ -393,6 +401,7 @@ describe("ring-statements.json", () => {
 
 describe("transfer key selection", () => {
   const spend = {
+    format: DisclosureFormat.Standard,
     rail: "confidential",
     inputs: 2,
     outputs: 2,
@@ -421,16 +430,45 @@ describe("transfer key selection", () => {
     );
   });
 
-  it("moves a spend past the narrow rows by its unmatched input assets", () => {
-    // Two owners, the payment's asset and the unmatched assets, 15 rows on the narrow key.
-    const opened = (unmatched: number) => {
-      const own = 2 + 1 + unmatched;
-      return ringTransferCircuit(
-        fittedSpend({ ...spend, pools: { own, curator: own, tracking: 0 } }),
-      );
+  it("holds forty distinct input assets and their owner subjects", () => {
+    const candidate = {
+      ...spend,
+      inputs: 40,
+      pools: { own: 43, curator: 43, tracking: 3 },
     };
-    expect(opened(12)).toMatchObject({ outputs: 2, class: 24, wide: false });
-    expect(opened(13)).toMatchObject({ outputs: 8, class: 24, wide: true });
+    const key = ringTransferCircuit(fittedSpend(candidate));
+    expect(key).toMatchObject({ class: 40, outputs: 2, wide: true });
+    if (key === undefined) throw new Error("missing key");
+    const capacity = transferPoolCapacity(key);
+    expect(ringTransferCircuit({
+      ...fittedSpend(candidate),
+      pools: { ...candidate.pools, own: capacity.own + 1 },
+    })).toBeUndefined();
+  });
+
+  it("routes payout format only through its confidential profile", () => {
+    const payout = {
+      ...spend,
+      format: DisclosureFormat.SingleAssetPayout,
+      inputs: 1,
+      outputs: 16,
+      pools: { own: 35, curator: 35, tracking: 17 },
+    };
+    const key = ringTransferCircuit(fittedSpend(payout));
+    expect(key).toMatchObject({ format: DisclosureFormat.SingleAssetPayout, class: 1, outputs: 16 });
+    if (key === undefined) throw new Error("missing payout key");
+    expect(transferPoolCapacity(key)).toEqual(payout.pools);
+    for (const candidate of [
+      { ...payout, format: DisclosureFormat.Standard },
+      { ...payout, rail: "anonymous" as const },
+      { ...payout, inputs: 2 },
+      { ...payout, outputs: 15 },
+      { ...payout, spendsDefaultRing: true },
+      { ...payout, wide: true },
+      { ...payout, legs: 1 },
+      { ...payout, owners: 2 },
+      { ...payout, pools: { ...payout.pools, own: 36 } },
+    ]) expect(ringTransferCircuit(candidate)).toBeUndefined();
   });
 
   it("holds the pools of pool_capacity.json", () => {

@@ -152,7 +152,7 @@ func (s Stream) Envelope(count int) []byte {
 
 func (s Stream) Record(i int) []byte {
 	offset := s.Ranges.RecordOffset(i)
-	return s.Ciphertext[offset : offset+audit.RecordLen]
+	return s.Ciphertext[offset : offset+s.Ranges.RecordLen()]
 }
 
 func (s Stream) Tail(i int) []byte {

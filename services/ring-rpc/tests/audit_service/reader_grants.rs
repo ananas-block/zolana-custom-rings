@@ -710,8 +710,8 @@ async fn an_anonymous_spend_reads_a_resolved_input_an_unresolved_one_and_padding
         .spend_coverage(&coverage_failures::coverage_request(&authority()))
         .await
         .expect("coverage");
-    assert_eq!(coverage.resolved, 1);
-    assert_eq!(coverage.padding, 1);
+    assert_eq!(coverage.totals.expect("first page totals").resolved, 1);
+    assert_eq!(coverage.totals.expect("first page totals").padding, 1);
     // The paying transfer's own input stays unresolved beside the spend's.
     assert_eq!(
         coverage

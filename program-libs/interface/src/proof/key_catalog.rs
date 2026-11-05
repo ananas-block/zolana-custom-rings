@@ -8,7 +8,10 @@
 
 use spr_interface::{shape::MAX_TRANSACTION_ADDRESSES, N_PUBLIC_SLOTS};
 
-use crate::{audit_stream::AuditKey, member_registry::APPLY_BATCH, transact::RingRail};
+use crate::{
+    audit_stream::AuditKey, member_registry::APPLY_BATCH, transact::RingRail, DisclosureFormat,
+    SINGLE_ASSET_PAYOUT_INPUTS, SINGLE_ASSET_PAYOUT_OUTPUTS,
+};
 
 pub use crate::ring_keys::RING_KEYS;
 
@@ -16,6 +19,7 @@ pub use crate::ring_keys::RING_KEYS;
 pub enum RingCircuit {
     /// Every rail, the statement's bits name it.
     Transfer {
+        format: DisclosureFormat,
         outputs: u8,
         /// The widest published input count.
         inputs: u8,
@@ -52,6 +56,7 @@ pub enum ApplyMode {
 /// One transfer key, mirror `Shapes` in `prover/circuits/transfer`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferShape {
+    pub format: DisclosureFormat,
     pub outputs: u8,
     pub inputs: u8,
     pub withdrawals: u8,
@@ -60,7 +65,7 @@ pub struct TransferShape {
     pub wide: bool,
     /// The most tracking rows one inline transaction on the key opens.
     pub tracking: u8,
-    /// The most owner and asset records one inline transaction reads in a pool, public slot assets aside.
+    /// Standard format excludes input and public slot assets.
     pub records: u8,
 }
 
@@ -72,6 +77,7 @@ const fn narrow(
     pools: [u8; 2],
 ) -> TransferShape {
     TransferShape {
+        format: DisclosureFormat::Standard,
         outputs,
         inputs,
         withdrawals,
@@ -128,8 +134,19 @@ const ENTRY_SHAPES: [TransferShape; 3] = [
 ];
 const WIDE_ENTRY_SHAPE: TransferShape = entry(8, 8, 32, 8, [38, 80]);
 
-/// Each key's widths and pools equal its inline reach, pinned by the ring-xtask `inline_capacity` test.
-pub const TRANSFER_SHAPES: [TransferShape; 9] = [
+const PAYOUT_SHAPE: TransferShape = TransferShape {
+    format: DisclosureFormat::SingleAssetPayout,
+    outputs: SINGLE_ASSET_PAYOUT_OUTPUTS as u8,
+    inputs: SINGLE_ASSET_PAYOUT_INPUTS as u8,
+    withdrawals: 0,
+    owners: 1,
+    entry: false,
+    wide: false,
+    tracking: 17,
+    records: 35,
+};
+
+pub const TRANSFER_SHAPES: [TransferShape; 10] = [
     NARROW_SHAPES[0],
     NARROW_SHAPES[1],
     NARROW_SHAPES[2],
@@ -139,11 +156,13 @@ pub const TRANSFER_SHAPES: [TransferShape; 9] = [
     ENTRY_SHAPES[1],
     ENTRY_SHAPES[2],
     WIDE_ENTRY_SHAPE,
+    PAYOUT_SHAPE,
 ];
 
 /// What names a frame's key, nothing else moves a record's counter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameKey {
+    pub format: DisclosureFormat,
     pub rail: RingRail,
     /// `n`, the frame's nullifier count.
     pub inputs: usize,
@@ -154,6 +173,14 @@ pub struct FrameKey {
 
 impl FrameKey {
     pub fn shape(self) -> Option<TransferShape> {
+        if self.format == DisclosureFormat::SingleAssetPayout {
+            return (self.rail == RingRail::Confidential
+                && self.inputs == usize::from(PAYOUT_SHAPE.inputs)
+                && self.outputs == usize::from(PAYOUT_SHAPE.outputs)
+                && !self.spends_default_ring
+                && !self.wide)
+                .then_some(PAYOUT_SHAPE);
+        }
         let holds = |shape: &TransferShape| {
             self.outputs <= usize::from(shape.outputs) && self.inputs <= usize::from(shape.inputs)
         };
@@ -184,6 +211,7 @@ impl TransferShape {
 
     pub const fn audit_key(self) -> AuditKey {
         AuditKey {
+            format: self.format,
             class: self.inputs as usize,
             entry: self.entry,
         }
@@ -193,7 +221,8 @@ impl TransferShape {
     /// The first record counter moves with an entry key's class, the first tail counter with `N`.
     #[must_use]
     pub const fn seals_like(self, other: Self, has_data: bool) -> bool {
-        self.audit_key().first_record_counter() == other.audit_key().first_record_counter()
+        self.format as u8 == other.format as u8
+            && self.audit_key().first_record_counter() == other.audit_key().first_record_counter()
             && (!has_data || self.outputs == other.outputs)
     }
 
@@ -207,6 +236,7 @@ impl TransferShape {
 
     const fn circuit(self) -> RingCircuit {
         RingCircuit::Transfer {
+            format: self.format,
             outputs: self.outputs,
             inputs: self.inputs,
             withdrawals: self.withdrawals,
@@ -272,6 +302,7 @@ impl TransferAddresses {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferSpend {
+    pub format: DisclosureFormat,
     pub rail: RingRail,
     /// Published inputs, the spent notes.
     pub inputs: usize,
@@ -304,6 +335,7 @@ impl TransferSpend {
 
     const fn frame_key(self) -> FrameKey {
         FrameKey {
+            format: self.format,
             rail: self.rail,
             inputs: self.inputs,
             outputs: self.outputs,
@@ -398,6 +430,14 @@ impl RingCircuit {
         // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
         let withdrawal_assets = usize::from(shape.withdrawals).min(N_PUBLIC_SLOTS);
         let records = usize::from(shape.records);
+        if shape.format == DisclosureFormat::SingleAssetPayout {
+            return Some(RecordPools {
+                own: records,
+                curator: records,
+                tracking: usize::from(shape.tracking),
+            });
+        }
+        let records = records + usize::from(shape.inputs);
         Some(RecordPools {
             own: records + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: records + withdrawal_assets,
@@ -467,6 +507,7 @@ mod tests {
         wide: bool,
     ) -> TransferSpend {
         TransferSpend {
+            format: DisclosureFormat::Standard,
             rail,
             inputs: 1,
             outputs,
@@ -682,20 +723,20 @@ mod tests {
     }
 
     #[test]
-    fn the_pools_hold_the_measured_inline_maxima() {
+    fn the_pools_reserve_distinct_input_assets() {
         let pools = |circuit: RingCircuit| {
             let pools = circuit.record_pools().unwrap();
             (pools.own, pools.curator, pools.tracking)
         };
-        assert_eq!(pools(TWO), (15, 15, 6));
-        assert_eq!(pools(FOUR), (19, 19, 8));
-        assert_eq!(pools(EIGHT), (27, 27, 12));
-        assert_eq!(pools(WIDE), (91, 91, 42));
-        assert_eq!(pools(WIDE_INPUTS), (27, 27, 11));
-        assert_eq!(pools(ENTRY_FOUR), (35, 35, 14));
-        assert_eq!(pools(ENTRY_EIGHT_TWO), (39, 39, 14));
-        assert_eq!(pools(ENTRY_EIGHT_FIVE), (41, 41, 15));
-        assert_eq!(pools(WIDE_ENTRY), (83, 83, 38));
+        assert_eq!(pools(TWO), (39, 39, 6));
+        assert_eq!(pools(FOUR), (43, 43, 8));
+        assert_eq!(pools(EIGHT), (43, 43, 12));
+        assert_eq!(pools(WIDE), (115, 115, 42));
+        assert_eq!(pools(WIDE_INPUTS), (67, 67, 11));
+        assert_eq!(pools(ENTRY_FOUR), (43, 43, 14));
+        assert_eq!(pools(ENTRY_EIGHT_TWO), (41, 41, 14));
+        assert_eq!(pools(ENTRY_EIGHT_FIVE), (46, 46, 15));
+        assert_eq!(pools(WIDE_ENTRY), (91, 91, 38));
     }
 
     #[test]
@@ -714,19 +755,107 @@ mod tests {
             ..RecordPools::default()
         };
         assert_eq!(fitted(2, tracked), Some(WIDE));
-        // Two owners, the payment's asset and 13 unmatched input assets hold the 15 narrow rows.
-        let distinct_assets = |unmatched: usize| RecordPools {
-            own: 2 + 1 + unmatched,
+        let opened = |own| RecordPools {
+            own,
             ..RecordPools::default()
         };
-        assert_eq!(fitted(2, distinct_assets(12)), Some(TWO));
-        assert_eq!(fitted(2, distinct_assets(13)), Some(WIDE));
+        let capacity = TWO.record_pools().unwrap().own;
+        assert_eq!(fitted(2, opened(capacity)), Some(TWO));
+        assert_eq!(fitted(2, opened(capacity + 1)), Some(WIDE));
         assert_eq!(fitted(2, RecordPools::default()), Some(TWO));
         let past_wide = RecordPools {
             tracking: 43,
             ..RecordPools::default()
         };
         assert_eq!(fitted(8, past_wide), None);
+    }
+
+    #[test]
+    fn forty_distinct_input_assets_fit_the_largest_input_key() {
+        let inputs = 40;
+        let owner_subjects = 3;
+        let candidate = TransferSpend {
+            inputs,
+            pools: RecordPools {
+                own: inputs + owner_subjects,
+                curator: inputs + owner_subjects,
+                tracking: owner_subjects,
+            },
+            ..spend(RingRail::Confidential, 2, false, false)
+        };
+        assert_eq!(RingCircuit::transfer(candidate.fitted()), Some(WIDE_INPUTS));
+        let limit = WIDE_INPUTS.record_pools().unwrap().own;
+        assert_eq!(
+            RingCircuit::transfer(TransferSpend {
+                pools: RecordPools {
+                    own: limit + 1,
+                    ..candidate.pools
+                },
+                ..candidate.fitted()
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn payout_key_requires_its_format_and_confidential_shape() {
+        let payout = TransferSpend {
+            format: DisclosureFormat::SingleAssetPayout,
+            pools: RecordPools {
+                own: 35,
+                curator: 35,
+                tracking: 17,
+            },
+            ..spend(RingRail::Confidential, 16, false, false)
+        };
+        let key = PAYOUT_SHAPE.circuit();
+        assert_eq!(RingCircuit::transfer(payout.fitted()), Some(key));
+        assert_eq!(key.record_pools(), Some(payout.pools));
+        for refused in [
+            TransferSpend {
+                format: DisclosureFormat::Standard,
+                ..payout
+            },
+            TransferSpend {
+                rail: RingRail::Anonymous,
+                ..payout
+            },
+            TransferSpend {
+                rail: RingRail::Delegate,
+                ..payout
+            },
+            TransferSpend {
+                inputs: 2,
+                ..payout
+            },
+            TransferSpend {
+                outputs: 15,
+                ..payout
+            },
+            TransferSpend {
+                spends_default_ring: true,
+                ..payout
+            },
+            TransferSpend {
+                wide: true,
+                ..payout
+            },
+            TransferSpend { legs: 1, ..payout },
+            TransferSpend {
+                owners: 2,
+                ..payout
+            },
+            TransferSpend {
+                pools: RecordPools {
+                    own: 36,
+                    ..payout.pools
+                },
+                ..payout
+            },
+        ] {
+            assert_eq!(RingCircuit::transfer(refused), None);
+        }
+        assert!(!PAYOUT_SHAPE.seals_like(NARROW_SHAPES[0], false));
     }
 
     #[test]

@@ -102,7 +102,7 @@ A tracking registry holds one leaf per enrolled owner.
 | Entry chain start | `HashChain4([CRTA, hash_bytes(registry address), right_align(revision as u64 BE)])` |
 | Entry chain | `chain(-1) = chain_start`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
 
-An unwritten leaf is `0`. The sentinel carries a zero `nullifier_pk`, and a query for an absent owner reads a zero key. The program computes every entry from the owner's tracking authorization, never from instruction data. No leaf holds a viewing key. The apply proof inserts each entry once, at the next index, and a leaf never changes after its insert. `test-vectors/registry/tracking-records.json` pins both hashes, the entry chain and the apply statement. A present owner opens by its leaf, and an absent one proves `member < owner < next` for a leaf under the frame's tracking root.
+An unwritten leaf is `0`. The sentinel carries a zero `nullifier_pk`, and a query for an absent owner reads a zero key. The program computes every entry from the owner's tracking authorization, never from instruction data. No leaf holds a viewing key. The apply proof inserts each entry once, at the next index. Its member, nullifier key, ciphertext hash and list tag stay fixed. An insertion changes its predecessor's `next` and leaf hash. `test-vectors/registry/tracking-records.json` pins both hashes, the entry chain and the apply statement. A present owner opens by its leaf, and an absent one proves `member < owner < next` for a leaf under the frame's tracking root.
 
 ## Private list key
 

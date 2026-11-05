@@ -208,8 +208,7 @@ func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
 	outputs, withdrawals := p.Outputs, len(p.Withdrawals)
 	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
 	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
-	// An input slot takes no row. Every live input queries these pools and a repeated asset reads the record a payment or another input opened. SPP's balance keeps a funded input's asset among the output and public assets, only a zero value note can name another, and it needs a free row or a larger key. The rows bound what a key can prove and never what it checks, the query binds at any capacity.
-	distinct := p.Senders + outputs + withdrawals + outputs + p.SaltedKeys
+	distinct := p.Senders + outputs + withdrawals + outputs + p.SaltedKeys + p.Spent
 	return RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets), Curator: distinct + withdrawalAssets}
 }
 

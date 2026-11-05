@@ -48,7 +48,11 @@ import {
   type PolicyPoolCapacity,
   type TransferKeyCircuit,
 } from "../../protocol/proof/transfer-shapes.js";
-import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
+import {
+  auditLayoutValue,
+  disclosureFormat,
+  type AuditLayout,
+} from "../../protocol/codec/ring-disclosure-layout.js";
 import { ANONYMOUS_PARTIES } from "../../protocol/transaction/transact.js";
 import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "./types.js";
 import { N_PUBLIC_SLOTS } from "../../protocol/transaction/spp.js";
@@ -352,6 +356,7 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
 function transferCircuit(request: TransferProofRequest): TransferKeyCircuit {
   const narrow: TransferKeyCircuit = {
     family: "transfer",
+    format: disclosureFormat(request.layout.format),
     outputs: listLength(request.outputs),
     class: listLength(request.inputs),
     withdrawals: listLength(request.withdrawals),
@@ -364,6 +369,7 @@ function transferCircuit(request: TransferProofRequest): TransferKeyCircuit {
   return (
     transferKeys().find(
       (key) =>
+        key.format === narrow.format &&
         key.outputs === narrow.outputs &&
         key.class === narrow.class &&
         key.withdrawals === narrow.withdrawals &&

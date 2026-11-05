@@ -7,7 +7,7 @@ The auditor holds one viewing key for the ring's life. Every operation proves a 
 - The sender draws a transaction viewing key. The transfer proof seals its secret to the auditor in one AES-256-CTR stream.
 - The key schedule binds the auditor key, the transaction key and a salt. A resend repeats the key, and a fresh salt gives a different keystream.
 - The stream contains an envelope, one record per published slot and, under `has_data`, one data tail per slot.
-- A record contains the kind, the amount, the owner key, the mint and the nullifier key. A dummy's record is all zero, so the auditor skips it by its kind byte.
+- A record contains the kind, amount, owner key and nullifier key. The standard format carries its mint in each record. A single-asset payout carries the common mint in its envelope. A dummy's record is all zero, so the auditor skips it by its kind byte.
 - The proof holds every published blinding to a derivation from the sealed key, the salt, the first nullifier and the slot index.
 - The auditor rebuilds each commitment from its record and that blinding. It needs no other slot, no history and no mint registry.
 - A record of another slot rebuilds no published hash, so the reader refuses it.
@@ -45,7 +45,7 @@ The auditor holds one viewing key for the ring's life. Every operation proves a 
 - A full scan repairs a bad discovery tag. It never repairs a wrongly encrypted body, since no held key rebuilds that note's commitment.
 - Auditor recovery is a separate authorized fallback. It depends on Ring RPC, and an owner with no Ring RPC cannot open a note under a bad body.
 
-A recipient body contains the blinding, the amount and the mint. A note that commits a ring data hash or application data carries them after those fields. The cipher has no authentication, so the commitment a reader rebuilds under its own keys is the only proof of ownership.
+A standard recipient body contains the blinding, amount and mint. A compact payout body replaces the mint with its authenticated asset id. A note that commits a ring data hash or application data carries them after those fields. The cipher has no authentication, so the commitment a reader rebuilds under its own keys is the only proof of ownership.
 
 The sender's SDK resolves a nonzero-key recipient through its tracking row under a root it verified, and seals to the viewing key of the owner's authorization account. It refuses an owner with no applied row. It also refuses a row whose nullifier key differs from the address, or whose list tag the address's salt does not open. That check protects an honest sender and binds nobody else.
 
@@ -60,15 +60,25 @@ The sender's SDK resolves a nonzero-key recipient through its tracking row under
 - `AnonymousSync` reads the history of each ring the wallet's `ViewingHistory` names, then tests each slot and bundle tag for each held key.
 - The key holder runs one agreement per candidate per key and returns a slot secret on a match. Raw agreements stay inside the holder.
 - A deposit is found through its tag stream. A nonzero-key merge is found from its nullifiers, and a zero-key merge from the owner tag SPP publishes.
-- `AnonymousSync::full_scan` reads a ring from its first row and tries every output and message with no use of a tag.
+- Full recovery reads a ring from its first row and tries every output and message without a tag. Rust uses `AnonymousSync::new(keys, assets).with_full_scan(ring).fetch_wallet(indexer, wallet)`. TypeScript uses `fullScanWallet(client, wallet, ring)`.
 - A body a full scan leaves unopened stays in `auditor_recovery.unopened`, foreign notes and dummies among them.
 - A wallet tries its enrolled key and the zero key on every body, so a note received before enrollment stays recoverable.
 - A zero-key note enters the wallet as exposed if spent. No automatic path selects it.
 - Only a final page's `context.slot` becomes a stored position. A failed page moves nothing, and a key added later is its own query.
 - `AnonymousWallet` contains notes, pending notes, spends, reply claims and positions in one document. `absorb` takes a scan's results together, so a position is never saved without what it covers.
-- A note under a mint the registry does not name stays a pending note. It is unspendable until `resolve_pending` admits it, and that read takes no history rescan.
+- A standard body under an unknown mint can stay pending until mint resolution. A compact body establishes no ownership until authenticated asset resolution rebuilds its commitment.
 - `RotatingRingKeys` contains one identity's current and retired viewing keys, so a note sealed to any of them opens.
 - The CLI refuses a wallet store that contains no entry of the wallet's viewing key.
+
+Durable recovery fixes its target slot and stores its continuation with the wallet. `Paused` means coverage is incomplete. Absorb each returned scan, then repeat the same durable call and scan scope. Rust full scans keep `with_full_scan(ring)`. TypeScript full scans repeat `fullScanWallet` with the same ring.
+
+An unspent note whose nullifier check has not reached the target reads `PendingSpendCheck` in Rust or `pendingSpendCheck` in TypeScript. Wallet balances and exposed-note lists omit it. Rust `funding_notes` also omits it. `notes` remains the full inventory. Rust `require_complete` refuses an unfinished session.
+
+TypeScript compact SPL recovery requires `withCompactAssetClient` and a durable wallet call. A missing client returns `RING_SYNC_INCOMPLETE`. Lookup budget exhaustion or transient source errors pause the session.
+
+TypeScript sets its target at or above the saved recovery floor, ring and tag positions, core checkpoints, private-transaction slots and configured `requireSlot`. The recovery floor retains the highest committed target or authenticated note observation. Imported notes without publication slots supply no additional floor.
+
+History-only calls do not preserve a wallet recovery session. A paused Rust `fetch` or `full_scan` result must be absorbed and resumed through `fetch_wallet`. TypeScript `fetch` and `fullScan` refuse compact SPL recovery with `RING_SYNC_INCOMPLETE`. Use `fetchWallet` or `fullScanWallet` for that format.
 
 ## Deposits and merges
 

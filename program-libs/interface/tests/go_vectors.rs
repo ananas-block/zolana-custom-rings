@@ -4,7 +4,7 @@ use custom_ring_interface::{
     cosign::ApprovalMask, domain, key_catalog::RING_KEYS, AuditHead, AuditLayout,
     ConfidentialSender, MergePublicInput, OpeningRecord, RecordKind, RingOutput, SignerDataCounts,
     SignerSet, SlotBody, TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    DATA_TAIL_LEN,
 };
 use serde::Deserialize;
 use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
@@ -124,8 +124,11 @@ fn transfer_statements_reach_the_go_public_inputs() {
     assert!(!vector.cases.is_empty());
     for case in &vector.cases {
         let hashes: Vec<[u8; 32]> = case.outputs.iter().map(|o| array(&o.hash)).collect();
-        let records: Vec<[u8; AUDIT_RECORD_LEN]> =
-            case.outputs.iter().map(|o| array(&o.record)).collect();
+        let records: Vec<Vec<u8>> = case
+            .outputs
+            .iter()
+            .map(|o| hex::decode(o.record.trim_start_matches("0x")).unwrap())
+            .collect();
         let tails: Vec<Option<[u8; DATA_TAIL_LEN]>> = case
             .outputs
             .iter()
@@ -189,6 +192,11 @@ fn transfer_statements_reach_the_go_public_inputs() {
                 envelope: &envelope,
                 salt: &array(&case.salt),
                 layout: AuditLayout {
+                    format: if case.layout & 4 != 0 {
+                        custom_ring_interface::DisclosureFormat::SingleAssetPayout
+                    } else {
+                        custom_ring_interface::DisclosureFormat::Standard
+                    },
                     has_data: case.layout & 1 != 0,
                     entry: case.layout & 2 != 0,
                 },

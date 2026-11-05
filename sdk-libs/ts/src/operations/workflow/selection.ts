@@ -1,6 +1,7 @@
 import type { ChainReader, TreeContext } from "@heliuslabs/zolana/client";
 import {
   equalBytes,
+  bytesKey,
   selectUtxos,
   ZERO_NULLIFIER_PK,
   type SpendPolicy,
@@ -16,6 +17,7 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { ProofInputUtxo } from "@heliuslabs/zolana/transaction";
 import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 
+import { recoveryAllows, type RecoveryWallet } from "../../state/recovery-session.js";
 import { RingError } from "../../protocol/error.js";
 import { ringTreeIdResolver } from "../../protocol/membership/trees.js";
 
@@ -38,7 +40,7 @@ export function selectFunding(
   const entries: WalletUtxo[] = [];
   for (const cover of covers) {
     entries.push(
-      ...selectUtxos({
+      ...selectCoveredUtxos({
         wallet,
         asset: cover.asset,
         target: { kind: "cover", amount: cover.amount },
@@ -46,7 +48,10 @@ export function selectFunding(
           ...policy,
           maxInputs: policy.maxInputs - entries.length,
           tree: { kind: "infer", maxTrees },
-          errors: { ...policy.errors, multipleTrees: ({ treeCount }) => multipleTrees(treeCount) },
+          errors: {
+            ...policy.errors,
+            multipleTrees: ({ treeCount }) => multipleTrees(treeCount),
+          },
         },
       }).entries,
     );
@@ -54,6 +59,30 @@ export function selectFunding(
   const treeCount = new Set(entries.map((entry) => entry.outputContext.tree)).size;
   if (treeCount > maxTrees) throw multipleTrees(treeCount);
   return entries;
+}
+
+export function selectCoveredUtxos(input: Parameters<typeof selectUtxos>[0]): ReturnType<typeof selectUtxos> {
+  const coverage = recoveryCoverage(input.wallet);
+  if (coverage === undefined || coverage.status === "Complete") return selectUtxos(input);
+  return selectUtxos({
+    ...input,
+    policy: {
+      ...input.policy,
+      eligible: (note) => input.policy.eligible(note) && recoveryAllows(coverage, note, bytesKey(note.nullifier)),
+      errors: {
+        ...input.policy.errors,
+        insufficient: () => new RingError("RING_SYNC_INCOMPLETE"),
+        tooFewUtxos: () => new RingError("RING_SYNC_INCOMPLETE"),
+      },
+    },
+  });
+}
+
+export function checkSpendCoverage(wallet: Wallet, entries: readonly WalletUtxo[]): void {
+  const coverage = recoveryCoverage(wallet);
+  if (coverage === undefined || coverage.status === "Complete") return;
+  if (entries.some((note) => !recoveryAllows(coverage, note, bytesKey(note.nullifier))))
+    throw new RingError("RING_SYNC_INCOMPLETE");
 }
 
 /** Proof inputs at each note's own tree, a second tree's id read once from its account. */
@@ -126,3 +155,8 @@ export const ringSelectionErrors: SpendSelectionErrors = {
       details: { available: available.toString() },
     }),
 };
+
+function recoveryCoverage(wallet: Wallet) {
+  return "recoveryCoverage" in wallet && typeof wallet.recoveryCoverage === "function"
+    ? (wallet as RecoveryWallet).recoveryCoverage() : undefined;
+}

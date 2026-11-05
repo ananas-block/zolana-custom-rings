@@ -12,9 +12,12 @@ import { RingError } from "../../protocol/error.js";
 import {
   decodeAuditEnvelope,
   decodeAuditRecord,
+  decodeCompactAuditRecord,
   decodeDataTail,
   encodeAuditEnvelope,
+  envelopeInputMap,
   encodeAuditRecord,
+  encodeCompactAuditRecord,
   encodeDataTail,
   type AuditEnvelope,
   type AuditRecord,
@@ -22,6 +25,8 @@ import {
 } from "../../protocol/codec/audit-stream.js";
 import {
   ENVELOPE_KEY_LEN,
+  DisclosureFormat,
+  disclosureFormat,
   checkedStreamLayout,
   envelopeRegion,
   recordRegion,
@@ -73,8 +78,19 @@ export function sealRingDisclosure(
     (disclosure.envelope.evidence.kind === "entry") !== layout.key.entry
   )
     throw shapeError("disclosure");
+  const compact = disclosureFormat(layout.key.format) === DisclosureFormat.SingleAssetPayout;
+  const evidence = disclosure.envelope.evidence;
+  if (
+    compact !== (evidence.kind === "singleAssetPayout") ||
+    (evidence.kind === "singleAssetPayout" &&
+      disclosure.records.some((record) => record.mint !== evidence.mint))
+  )
+    throw shapeError("mint");
+  envelopeInputMap(disclosure.envelope, layout);
   const envelope = encodeAuditEnvelope(disclosure.envelope);
-  const recordBytes = disclosure.records.map(encodeAuditRecord);
+  const recordBytes = disclosure.records.map(
+    compact ? encodeCompactAuditRecord : encodeAuditRecord,
+  );
   const tailBytes = tails.map(encodeDataTail);
   try {
     if (envelope.length !== envelopeRegion(layout).length) throw shapeError("envelope");
@@ -128,7 +144,7 @@ export function openSealedDisclosure(
 }
 
 function readDisclosure(schedule: AuditSchedule, published: PublishedAudit): RingDisclosure {
-  const { layout, message } = published;
+  const { message } = published;
   const opened: Uint8Array[] = [];
   const plain = (counter: number, bytes: Uint8Array): Uint8Array => {
     const plaintext = schedule.apply(counter, bytes);
@@ -136,9 +152,21 @@ function readDisclosure(schedule: AuditSchedule, published: PublishedAudit): Rin
     return plaintext;
   };
   try {
+    const layout = checkedStreamLayout(published.layout);
+    if (
+      message.records.length !== layout.outputs ||
+      (message.tails?.length ?? 0) !== (layout.hasData ? layout.outputs : 0)
+    ) {
+      throw shapeError("disclosure");
+    }
     const envelope = decodeAuditEnvelope(plain(STREAM_FIRST_COUNTER, message.envelope), layout);
     const records = message.records.map((record, slot) =>
-      decodeAuditRecord(plain(recordRegion(layout, slot).startCounter, record)),
+      envelope.evidence.kind === "singleAssetPayout"
+        ? decodeCompactAuditRecord(
+            plain(recordRegion(layout, slot).startCounter, record),
+            envelope.evidence.mint,
+          )
+        : decodeAuditRecord(plain(recordRegion(layout, slot).startCounter, record)),
     );
     const tails = message.tails?.map((tail, slot) =>
       decodeDataTail(plain(tailRegion(layout, slot).startCounter, tail)),
@@ -158,7 +186,11 @@ function readDisclosure(schedule: AuditSchedule, published: PublishedAudit): Rin
 export function disclosurePlaintext(disclosure: RingDisclosure): Uint8Array {
   return concatBytes(
     encodeAuditEnvelope(disclosure.envelope),
-    ...disclosure.records.map(encodeAuditRecord),
+    ...disclosure.records.map(
+      disclosure.envelope.evidence.kind === "singleAssetPayout"
+        ? encodeCompactAuditRecord
+        : encodeAuditRecord,
+    ),
     ...(disclosure.tails ?? []).map(encodeDataTail),
   );
 }

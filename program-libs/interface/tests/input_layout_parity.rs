@@ -124,6 +124,7 @@ fn default_bits_select_only_note_positions() {
 fn ordinary_envelope_encodes_the_high_address_bit_in_big_endian_order() {
     let layout = AuditStreamLayout {
         key: AuditKey {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             class: 64,
             entry: false,
         },
@@ -162,6 +163,7 @@ fn ordinary_envelope_encodes_the_high_address_bit_in_big_endian_order() {
 fn entry_envelope_keeps_openings_and_stream_counters_at_capacity_offsets() {
     let layout = AuditStreamLayout {
         key: AuditKey {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             class: 4,
             entry: true,
         },

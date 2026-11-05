@@ -641,7 +641,7 @@ pub(super) fn with_altered_record(
 ) -> Result<Instruction> {
     let mut data = frame(instruction, rail)?;
     let output = data.outputs.first_mut().context("a published output")?;
-    let mut record = *output.record;
+    let mut record = output.record.to_vec();
     record[0] ^= 1;
     output.record = &record;
     reframed(instruction, &data)

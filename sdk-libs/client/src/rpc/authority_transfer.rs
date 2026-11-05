@@ -23,12 +23,24 @@ pub struct AuthorityPayment {
     pub amount: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AuthorityWithdrawal {
+    pub recipient: SerializablePubkey,
+    pub mint: SerializablePubkey,
+    pub amount: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_program: Option<SerializablePubkey>,
+}
+
 /// A delegate moves the notes of any member, its own among them, change returns to an input's owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthorityTransfer {
     pub sources: Vec<SerializableShieldedAddress>,
     pub payments: Vec<AuthorityPayment>,
+    pub exits: Vec<AuthorityPayment>,
+    pub withdrawals: Vec<AuthorityWithdrawal>,
 }
 
 /// The delegate picks the transaction key, the frame's proof binds each record to it.
@@ -114,17 +126,33 @@ impl From<ShieldedAddress> for SerializableShieldedAddress {
 impl Attestation for AuthorityTransferAttestation {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
         let transfer = &self.transfer;
-        let payments = transfer
-            .payments
-            .iter()
-            .fold(String::new(), |mut lines, payment| {
-                let _ = write!(
-                    lines,
-                    "\npayment: {} {} {}",
-                    payment.recipient.0, payment.mint.0, payment.amount
-                );
+        let outputs = [("payment", &transfer.payments), ("exit", &transfer.exits)]
+            .into_iter()
+            .fold(String::new(), |mut lines, (kind, outputs)| {
+                for output in outputs {
+                    let _ = write!(
+                        lines,
+                        "\n{kind}: {} {} {}",
+                        output.recipient.0, output.mint.0, output.amount
+                    );
+                }
                 lines
             });
+        let withdrawals =
+            transfer
+                .withdrawals
+                .iter()
+                .fold(String::new(), |mut lines, withdrawal| {
+                    let program = withdrawal
+                        .token_program
+                        .map_or_else(|| "-".to_owned(), |program| program.0.to_string());
+                    let _ = write!(
+                        lines,
+                        "\nwithdrawal: {} {} {} {}",
+                        withdrawal.recipient.0, withdrawal.mint.0, withdrawal.amount, program
+                    );
+                    lines
+                });
         let sources = transfer
             .sources
             .iter()
@@ -133,7 +161,7 @@ impl Attestation for AuthorityTransferAttestation {
                 lines
             });
         format!(
-            "{AUTHORITY_TRANSFER_DOMAIN}\n{}\ndelegate: {}{sources}{payments}\ntimestamp: {timestamp}\nnonce: {}",
+            "{AUTHORITY_TRANSFER_DOMAIN}\n{}\ndelegate: {}{sources}{outputs}{withdrawals}\ntimestamp: {timestamp}\nnonce: {}",
             self.target.lines(),
             self.delegate,
             base64(nonce),

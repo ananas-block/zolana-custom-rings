@@ -1,6 +1,6 @@
 /** One document holds a wallet's scan progress and everything it covers, one write stores both. */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { bytesKey } from "@heliuslabs/zolana/internal";
+import { bytesKey, U64_MAX } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ViewTag } from "@heliuslabs/zolana/keypair";
 import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
@@ -11,6 +11,7 @@ import { mintBalances, noteState, type MintBalance, type NoteState } from "./exp
 import { consumeScan, type AnonymousScan } from "./anonymous-sync.js";
 import type { RingKeys } from "./ring-keys.js";
 import { RingWallet, type NoteCommit, type NoteDelta } from "./ring-wallet.js";
+import { recoveryAllows, recoverySessionJson, restoreRecoverySession, type RecoverySession, type RecoveryCoverage, type RecoveryWallet } from "./recovery-session.js";
 import { parseExact, viewTagStream, ViewingHistory, type EntryStream } from "./viewing-history.js";
 
 /** A reply read from a note, what a sender wrote about itself and nothing the proof binds. */
@@ -29,10 +30,15 @@ export interface ConfidentialCommit extends NoteDelta {
   readonly retried: readonly Bytes32[];
 }
 
+export type AnonymousNoteState = NoteState | "pendingSpendCheck";
+
 export class AnonymousWallet {
   readonly #notes: RingWallet;
   #history: ViewingHistory;
   #claims: readonly PendingClaim[];
+  #recovery: RecoverySession | null;
+  #revision: bigint;
+  #recoveryFloor: bigint;
   /** Spent by a merge whose output named an unregistered mint, each confidential sync reads the spend again. A Rust sync writes them, a TS sync stores such an output as pending. */
   #mergeRetries: ReadonlyMap<string, Bytes32>;
 
@@ -42,11 +48,25 @@ export class AnonymousWallet {
       history: ViewingHistory;
       claims: readonly PendingClaim[];
       mergeRetries: readonly Bytes32[];
+      recovery?: RecoverySession | null;
+      revision?: bigint;
+      recoveryFloor?: bigint;
     }>,
   ) {
     this.#notes = fields.notes;
     this.#history = fields.history;
     this.#claims = fields.claims;
+    this.#recovery = fields.recovery ?? null;
+    this.#revision = fields.revision ?? 0n;
+    this.#recoveryFloor = fields.recoveryFloor ?? 0n;
+    if (this.#recovery !== null) {
+      const held = new Set([...this.#notes.wallet.utxos(), ...this.#notes.pendingOpenings()].map((note) => bytesToHex(note.nullifier)));
+      if (this.#recovery.owner !== bytesToHex(this.#notes.wallet.identity.toBytes()) ||
+          [...this.#recovery.queue, ...this.#recovery.checked, ...(this.#recovery.active?.nullifiers ?? [])].some((key) => !held.has(key)))
+        throw invalid("recovery session names another wallet");
+    }
+    if ("recoveryCoverage" in this.#notes.wallet) throw invalid("wallet already has a recovery owner");
+    Object.defineProperty(this.#notes.wallet, "recoveryCoverage", { value: () => this.recoveryCoverage() });
     this.#mergeRetries = new Map(
       fields.mergeRetries.map((nullifier) => [bytesKey(nullifier), nullifier]),
     );
@@ -62,8 +82,33 @@ export class AnonymousWallet {
   }
 
   /** Holds the notes and spends, a transfer selects from it. */
-  get wallet(): Wallet {
-    return this.#notes.wallet;
+  get wallet(): RecoveryWallet {
+    return this.#notes.wallet as RecoveryWallet;
+  }
+
+  recoveryCoverage(): RecoveryCoverage {
+    return Object.freeze({
+      status: this.#recovery === null ? "Complete" : "Paused",
+      targetSlot: this.#recovery?.targetSlot ?? null,
+      checkedNullifiers: new Set(this.#recovery?.checked ?? []),
+    });
+  }
+
+  _recoveryState(): Readonly<{ session: RecoverySession | null; revision: bigint; coreRevision: number }> {
+    return { session: structuredClone(this.#recovery), revision: this.#revision, coreRevision: this.wallet._revision };
+  }
+
+  _recoveryMinimumSlot(wallet: Wallet = this.wallet): bigint {
+    let floor = this.#recoveryFloor;
+    const observe = (slot: bigint) => { if (slot > floor) floor = slot; };
+    for (const entry of this.#history.entries) {
+      observe(entry.tagPosition ?? 0n);
+      for (const position of entry.ringPositions()) observe(position.afterSlot ?? 0n);
+    }
+    for (const stream of ["transactions", "proofless", "nullifiers"] as const)
+      for (const [, slot] of wallet._checkpointEntries(stream)) observe(slot);
+    for (const transaction of wallet.privateTransactions()) observe(transaction.id.slot);
+    return floor;
   }
 
   history(): ViewingHistory {
@@ -74,17 +119,18 @@ export class AnonymousWallet {
     return this.wallet.utxos();
   }
 
-  noteState(note: WalletUtxo): NoteState {
+  noteState(note: WalletUtxo): AnonymousNoteState {
+    if (!note.spent && !recoveryAllows(this.recoveryCoverage(), note, bytesKey(note.nullifier))) return "pendingSpendCheck";
     return noteState(note);
   }
 
   /** Unspent zero-key notes, only a public spend naming the wallet takes one. */
   exposedNotes(): readonly WalletUtxo[] {
-    return this.wallet.utxos().filter((note) => noteState(note) === "exposedIfSpent");
+    return this.#coveredNotes().filter((note) => noteState(note) === "exposedIfSpent");
   }
 
   balances(): ReadonlyMap<Address, MintBalance> {
-    return mintBalances(this.wallet.utxos());
+    return mintBalances(this.#coveredNotes());
   }
 
   /** Stored and unspendable, the next absorb or `promotePending` moves each once its mint registers. */
@@ -103,12 +149,14 @@ export class AnonymousWallet {
       throw new RingError("RING_UNKNOWN_SENDER_CLAIM");
     this.#history = this.#history.withConfirmedSender(claimed);
     this.#claims = this.#claims.filter((claim) => !claim.claimedViewingKey.equals(claimed));
+    this.#revision += 1n;
   }
 
   /** Takes a scan's notes, spends, claims and progress together and consumes it. */
   async absorb(scan: AnonymousScan): Promise<void> {
     return this.wallet._withSyncLock(async () => {
-      consumeScan(scan, this.#history);
+      const recovery = consumeScan(scan, this.#history, this);
+      if (recovery === undefined && this.#recovery !== null) throw new RingError("RING_SCAN_HISTORY_CHANGED");
       const claimed = new Set(this.#claims.map((claim) => bytesKey(claim.utxoHash)));
       const claims = scan.senderClaims
         .filter((claim) => unseen(claimed, bytesKey(claim.utxoHash)))
@@ -120,6 +168,7 @@ export class AnonymousWallet {
             claimedNullifierPk: reply.nullifierPk,
           }),
         );
+      const history = this.#history._withScanProgress(scan.history);
       this.#notes._absorb(
         {
           notes: [...scan.utxos, ...scan.pendingOpenings],
@@ -129,7 +178,11 @@ export class AnonymousWallet {
         (commit) => this.wallet._replace({ ...this.wallet._state(), ...commit }),
       );
       this.#claims = [...this.#claims, ...claims];
-      this.#history = this.#history._withScanProgress(scan.history);
+      this.#history = history;
+      const observed = scan.targetSlot ?? scan.observedSlot;
+      if (observed > this.#recoveryFloor) this.#recoveryFloor = observed;
+      if (recovery !== undefined) this.#recovery = recovery;
+      this.#revision += 1n;
     });
   }
 
@@ -148,7 +201,11 @@ export class AnonymousWallet {
     base: Wallet,
     write: (fields: NoteCommit) => void,
   ): void {
+    if (this.#recovery !== null && (commit.tagPosition !== undefined ||
+        (this.#recovery.targetSlot !== null && this._recoveryMinimumSlot(base) > this.#recovery.targetSlot)))
+      throw new RingError("RING_SYNC_INCOMPLETE");
     this.#notes._absorb(commit, base, write);
+    this.#revision += 1n;
     const { tagPosition } = commit;
     if (tagPosition !== undefined)
       this.#history = this.#history._withTagPosition(tagPosition.keys, tagPosition.afterSlot);
@@ -167,6 +224,7 @@ export class AnonymousWallet {
   updateHistory(updated: ViewingHistory): void {
     if (!updated._progressMatches(this.#history)) throw new RingError("RING_SCAN_PROGRESS_MOVED");
     this.#history = updated;
+    this.#revision += 1n;
   }
 
   /** The current key's next sender tag, concurrent callers never share one. */
@@ -191,6 +249,7 @@ export class AnonymousWallet {
       this.#history.entries.length - 1,
       current.withCounter(stream, counter),
     );
+    this.#revision += 1n;
     return exactlyOne(
       await keys.viewTags(
         [{ viewingPublicKey: current.viewingPublicKey, stream: viewTagStream(stream, index) }],
@@ -213,14 +272,15 @@ export class AnonymousWallet {
       `"wallet":${JSON.stringify(wallet)},` +
       `"pending":${JSON.stringify(pending)},` +
       `"claims":${JSON.stringify(claims)},` +
-      `"mergeRetries":${JSON.stringify([...this.#mergeRetries.keys()].sort())}}`
+      `"mergeRetries":${JSON.stringify([...this.#mergeRetries.keys()].sort())},` +
+      `"revision":"${this.#revision}","recoveryFloor":"${this.#recoveryFloor}","recovery":${recoverySessionJson(this.#recovery)}}`
     );
   }
 
   static fromJson(text: string): AnonymousWallet {
     const stored = document(parseExact(text));
     const { history, wallet, pending, claims, mergeRetries } = stored;
-    const known = ["history", "wallet", "pending", "claims", "mergeRetries"];
+    const known = ["history", "wallet", "pending", "claims", "mergeRetries", "recovery", "revision", "recoveryFloor"];
     if (Object.keys(stored).some((key) => !known.includes(key)))
       throw invalid("the document names other fields");
     if (!Array.isArray(claims)) throw invalid("claims is not a list");
@@ -230,7 +290,14 @@ export class AnonymousWallet {
       history: ViewingHistory._fromValue(history),
       claims: claims.map(storedClaim),
       mergeRetries: mergeRetries.map(field),
+      recovery: restoreRecoverySession(stored.recovery),
+      revision: storedRevision(stored.revision),
+      recoveryFloor: storedRecoveryFloor(stored.recoveryFloor),
     });
+  }
+  #coveredNotes(): readonly WalletUtxo[] {
+    const coverage = this.recoveryCoverage();
+    return this.wallet.utxos().filter((note) => recoveryAllows(coverage, note, bytesKey(note.nullifier)));
   }
 }
 
@@ -263,4 +330,16 @@ function document(value: unknown): Readonly<Record<string, unknown>> {
 
 function invalid(reason: string): RingError {
   return new RingError("RING_WALLET_DOCUMENT", { details: { reason } });
+}
+
+function storedRevision(value: unknown): bigint {
+  if (value === undefined) return 0n;
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) throw invalid("invalid wallet revision");
+  return BigInt(value);
+}
+
+function storedRecoveryFloor(value: unknown): bigint {
+  const floor = storedRevision(value);
+  if (floor > U64_MAX) throw invalid("invalid recovery floor");
+  return floor;
 }

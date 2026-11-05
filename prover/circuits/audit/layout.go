@@ -31,13 +31,15 @@ import (
 const (
 	LayoutHasData = 1 << iota
 	LayoutEntry
+	LayoutSingleAssetPayout
 )
 
-const layoutBits = 2
+const layoutBits = 3
 
 type StreamShape struct {
 	InputClass, Outputs int
 	Entry               bool
+	SingleAssetPayout   bool
 }
 
 // DecodeLayout returns has_data and pins the entry flag to the key.
@@ -49,6 +51,12 @@ func (s StreamShape) DecodeLayout(api frontend.API, layout frontend.Variable) fr
 		entry = 1
 	}
 	api.AssertIsEqual(bits[1], entry)
+	payout := 0
+	if s.SingleAssetPayout {
+		payout = 1
+		api.AssertIsEqual(bits[0], 0)
+	}
+	api.AssertIsEqual(bits[2], payout)
 	return bits[0]
 }
 
@@ -77,19 +85,30 @@ const (
 	EntryInputLen = amountLen + 6*fieldLen
 	RecordBlocks  = (RecordLen + streamBlockLen - 1) / streamBlockLen
 	// RecordStride mirrors RECORD_STRIDE, slot i keeps its counter and a transfer frame omits the padding.
-	RecordStride = RecordBlocks * streamBlockLen
-	TailBlocks   = TailLen / streamBlockLen
+	RecordStride       = RecordBlocks * streamBlockLen
+	TailBlocks         = TailLen / streamBlockLen
+	PayoutRecordLen    = kindLen + amountLen + 2*fieldLen
+	PayoutRecordBlocks = (PayoutRecordLen + streamBlockLen - 1) / streamBlockLen
+	PayoutRecordStride = PayoutRecordBlocks * streamBlockLen
+	recordMintStart    = kindLen + amountLen + fieldLen
+	recordMintEnd      = recordMintStart + fieldLen
 )
 
 func (s StreamShape) Ranges() StreamRanges {
 	if err := shared.ValidateInputCapacity(s.InputClass); err != nil {
 		panic(err)
 	}
+	if s.SingleAssetPayout && (s.InputClass != 1 || s.Outputs != 16 || s.Entry) {
+		panic("invalid single asset payout shape")
+	}
 	return StreamRanges{StreamShape: s}
 }
 
 func (r StreamRanges) EnvelopeHeadLen() int {
 	head := EnvelopeKeyLen + RealInputCountLen + AddressInputBitsLen
+	if r.SingleAssetPayout {
+		return head + fieldLen
+	}
 	if r.Entry {
 		return head + DefaultInputBitsLen
 	}
@@ -115,7 +134,7 @@ func (r StreamRanges) EnvelopeBlocks() int {
 
 // RecordCounter must match the readers, another counter decrypts noise.
 func (r StreamRanges) RecordCounter(i int) int {
-	return StreamFirstCounter + r.EnvelopeBlocks() + i*RecordBlocks
+	return StreamFirstCounter + r.EnvelopeBlocks() + i*r.RecordBlocks()
 }
 
 // TailCounter must match the readers, a tail shares no counter with a record.
@@ -125,7 +144,10 @@ func (r StreamRanges) TailCounter(i int) int {
 
 // CapacityBlocks covers every slot's record and tail, a frame omits what it does not publish.
 func (r StreamRanges) CapacityBlocks() int {
-	return r.EnvelopeBlocks() + r.Outputs*(RecordBlocks+TailBlocks)
+	if r.SingleAssetPayout {
+		return r.EnvelopeBlocks() + r.Outputs*r.RecordBlocks()
+	}
+	return r.EnvelopeBlocks() + r.Outputs*(r.RecordBlocks()+TailBlocks)
 }
 
 func (r StreamRanges) RecordOffset(i int) int {
@@ -134,4 +156,22 @@ func (r StreamRanges) RecordOffset(i int) int {
 
 func (r StreamRanges) TailOffset(i int) int {
 	return (r.TailCounter(i) - StreamFirstCounter) * streamBlockLen
+}
+
+func (r StreamRanges) RecordLen() int {
+	if r.SingleAssetPayout {
+		return PayoutRecordLen
+	}
+	return RecordLen
+}
+
+func (r StreamRanges) RecordBlocks() int {
+	if r.SingleAssetPayout {
+		return PayoutRecordBlocks
+	}
+	return RecordBlocks
+}
+
+func (r StreamRanges) RecordStride() int {
+	return r.RecordBlocks() * streamBlockLen
 }

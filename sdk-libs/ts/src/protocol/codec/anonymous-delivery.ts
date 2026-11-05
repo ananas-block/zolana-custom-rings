@@ -30,6 +30,13 @@ const FIELD_LEN = 32;
 const AMOUNT_LEN = 8;
 /** `be32(blinding) ‖ u64be(amount) ‖ mint`. */
 export const RECIPIENT_BODY_LEN = FIELD_LEN + AMOUNT_LEN + FIELD_LEN;
+export const COMPACT_RECIPIENT_BODY_LEN = FIELD_LEN + 2 * AMOUNT_LEN;
+
+export interface CompactRecipientBody {
+  readonly blinding: Bytes32;
+  readonly amount: bigint;
+  readonly assetId: bigint;
+}
 /** `viewing_u ‖ owner_key ‖ nullifier_pk`, the reply's fields ahead of its data. */
 const REPLY_HEAD_LEN = 3 * FIELD_LEN;
 /** A reply holding empty data. */
@@ -88,22 +95,37 @@ export interface SenderBundle {
 }
 
 /** A plain note is exactly the head, an extended one follows it with one presence byte. */
-export function encodeRecipientBody(body: RecipientBody): Uint8Array {
+export function encodeRecipientBody(body: RecipientBody, paddedLength?: number): Uint8Array {
   const { ringDataHash, data = new Uint8Array() } = body;
   const head = concatBytes(
     checkedBytes<Bytes32>(body.blinding, FIELD_LEN, "blinding"),
     u64be(checkedCounter(body.amount, "amount")),
     addressBytes(body.mint, "mint"),
   );
-  if (ringDataHash === undefined && data.length === 0) return head;
-  return concatBytes(
-    head,
-    Uint8Array.of(ringDataHash === undefined ? 0 : 1),
-    ...(ringDataHash === undefined
-      ? []
-      : [checkedBytes<Bytes32>(ringDataHash, FIELD_LEN, "ring data hash")]),
-    data,
-  );
+  if (ringDataHash === undefined && data.length === 0 && paddedLength === undefined) return head;
+  const payload =
+    ringDataHash === undefined && data.length === 0
+      ? new Uint8Array()
+      : concatBytes(
+          Uint8Array.of(ringDataHash === undefined ? 0 : 1),
+          ...(ringDataHash === undefined
+            ? []
+            : [checkedBytes<Bytes32>(ringDataHash, FIELD_LEN, "ring data hash")]),
+          data,
+        );
+  const length = paddedLength ?? RECIPIENT_BODY_LEN + 2 + payload.length;
+  if (
+    !Number.isSafeInteger(length) ||
+    payload.length > 0xffff ||
+    length > 0xffff ||
+    length < RECIPIENT_BODY_LEN + 2 + payload.length
+  )
+    throw bodyInvalid("length");
+  const encoded = new Uint8Array(length);
+  encoded.set(head);
+  new DataView(encoded.buffer).setUint16(RECIPIENT_BODY_LEN, payload.length, false);
+  encoded.set(payload, RECIPIENT_BODY_LEN + 2);
+  return encoded;
 }
 
 /** Refuses a short head and a presence byte off its two values. */
@@ -115,8 +137,18 @@ export function decodeRecipientBody(plaintext: Uint8Array): RecipientBody {
     mint: encodeBase58(plaintext.subarray(FIELD_LEN + AMOUNT_LEN, RECIPIENT_BODY_LEN)),
   };
   if (plaintext.length === RECIPIENT_BODY_LEN) return Object.freeze(head);
-  const presence = plaintext[RECIPIENT_BODY_LEN];
-  const rest = plaintext.subarray(RECIPIENT_BODY_LEN + 1);
+  if (plaintext.length < RECIPIENT_BODY_LEN + 2) throw bodyInvalid("length");
+  const length = new DataView(
+    plaintext.buffer,
+    plaintext.byteOffset + RECIPIENT_BODY_LEN,
+    2,
+  ).getUint16(0, false);
+  const end = RECIPIENT_BODY_LEN + 2 + length;
+  if (end > plaintext.length || plaintext.subarray(end).some((byte) => byte !== 0))
+    throw bodyInvalid("padding");
+  if (length === 0) return Object.freeze(head);
+  const presence = plaintext[RECIPIENT_BODY_LEN + 2];
+  const rest = plaintext.subarray(RECIPIENT_BODY_LEN + 3, end);
   if (presence === 0) return Object.freeze({ ...head, data: rest.slice() });
   if (presence !== 1 || rest.length < FIELD_LEN) throw bodyInvalid("presence");
   return Object.freeze({
@@ -126,13 +158,54 @@ export function decodeRecipientBody(plaintext: Uint8Array): RecipientBody {
   });
 }
 
-export function sealRecipientBody(slotSecret: Bytes32, body: RecipientBody): Uint8Array {
-  return seal(slotSecret, RECIPIENT_BODY_ENC_INFO, () => encodeRecipientBody(body));
+export function sealRecipientBody(
+  slotSecret: Bytes32,
+  body: RecipientBody,
+  paddedLength?: number,
+): Uint8Array {
+  return seal(slotSecret, RECIPIENT_BODY_ENC_INFO, () => encodeRecipientBody(body, paddedLength));
 }
 
 /** The cipher is unauthenticated, only the commitment a reader rebuilds proves ownership. */
 export function openRecipientBody(slotSecret: Bytes32, body: Uint8Array): RecipientBody {
   return open(slotSecret, RECIPIENT_BODY_ENC_INFO, body, body.length, decodeRecipientBody);
+}
+
+export function encodeCompactRecipientBody(body: CompactRecipientBody): Uint8Array {
+  return concatBytes(
+    checkedBytes<Bytes32>(body.blinding, FIELD_LEN, "blinding"),
+    u64be(checkedCounter(body.amount, "amount")),
+    u64be(checkedCounter(body.assetId, "asset id")),
+  );
+}
+
+export function decodeCompactRecipientBody(plaintext: Uint8Array): CompactRecipientBody {
+  if (plaintext.length !== COMPACT_RECIPIENT_BODY_LEN) throw bodyInvalid("length");
+  return Object.freeze({
+    blinding: plaintext.slice(0, FIELD_LEN) as Bytes32,
+    amount: bytesToBigInt(plaintext.subarray(FIELD_LEN, FIELD_LEN + AMOUNT_LEN)),
+    assetId: bytesToBigInt(plaintext.subarray(FIELD_LEN + AMOUNT_LEN)),
+  });
+}
+
+export function sealCompactRecipientBody(
+  slotSecret: Bytes32,
+  body: CompactRecipientBody,
+): Uint8Array {
+  return seal(slotSecret, RECIPIENT_BODY_ENC_INFO, () => encodeCompactRecipientBody(body));
+}
+
+export function openCompactRecipientBody(
+  slotSecret: Bytes32,
+  body: Uint8Array,
+): CompactRecipientBody {
+  return open(
+    slotSecret,
+    RECIPIENT_BODY_ENC_INFO,
+    body,
+    COMPACT_RECIPIENT_BODY_LEN,
+    decodeCompactRecipientBody,
+  );
 }
 
 /** The longest reply `replies` encode to, every body of a frame shares one length. */

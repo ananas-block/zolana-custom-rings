@@ -229,7 +229,7 @@ async fn a_failed_later_entry_keeps_the_earlier_entries_out_of_the_tree() {
 }
 
 /// A fresh database per test, the recipe runs the ignored tests of this crate in parallel.
-async fn postgres(name: &str) -> DatabaseConnection {
+pub(crate) async fn postgres(name: &str) -> DatabaseConnection {
     let url = std::env::var("RING_INDEXER_TEST_POSTGRES_URL").unwrap();
     let server = Database::connect(&url).await.unwrap();
     for sql in [

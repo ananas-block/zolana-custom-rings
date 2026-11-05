@@ -16,7 +16,15 @@ import {
 } from "@solana/kit";
 
 import { getCreateAssociatedTokenAccountInstructionAsync } from "@heliuslabs/zolana/instructions";
-import { NO_CACHE_WRITES } from "@heliuslabs/zolana/interface";
+import {
+  NO_CACHE_WRITES,
+  SOL_INTERFACE,
+  SHIELDED_POOL_CPI_AUTHORITY,
+} from "@heliuslabs/zolana/interface";
+import {
+  getAssociatedTokenAddress,
+  getSplAssetVaultAddressWithBump,
+} from "@heliuslabs/zolana/addresses";
 import type {
   Bytes32,
   RequestContext,
@@ -40,7 +48,7 @@ import {
   type ShieldedAddress,
   type X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
-import { ProofInputUtxo, Utxo, type WalletUtxo } from "@heliuslabs/zolana/transaction";
+import { ProofInputUtxo, Utxo, SOL_MINT, type WalletUtxo } from "@heliuslabs/zolana/transaction";
 
 import { ringComputeUnitLimit } from "../operations/management/admin.js";
 import { RingError } from "../protocol/error.js";
@@ -60,6 +68,7 @@ import {
   type RelayEnrollInputs,
 } from "../protocol/ring-rpc/relay-enroll-inputs.js";
 import type {
+  AuthorityWithdrawal,
   PrepareAuthorityTransferRequest,
   RelayQuote,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
@@ -195,9 +204,15 @@ interface ExpectedOwner {
 }
 
 interface ExpectedPayment {
+  readonly kind: typeof RecordKind.ring | typeof RecordKind.exit;
   readonly owner: ExpectedOwner;
   readonly mint: Address;
   readonly amount: bigint;
+}
+
+interface ExpectedWithdrawal {
+  readonly transfer: InterfaceTransfer;
+  readonly accounts: readonly Address[];
 }
 
 /** Rust `ExpectedDelegate`. */
@@ -214,6 +229,7 @@ export interface ExpectedDelegate {
   /** Change returns to an input's owner. */
   readonly sources: readonly ExpectedOwner[];
   readonly payments: readonly ExpectedPayment[];
+  readonly withdrawals: readonly ExpectedWithdrawal[];
   /** Every note of each requested source, a note Ring RPC selects outside it is refused. */
   readonly allowed: AllowedNullifiers;
 }
@@ -440,15 +456,38 @@ export async function expectedDelegate({
     txViewingKey: request.txViewingKey,
     sources: Object.freeze(transfer.sources.map(expectedOwner)),
     payments: Object.freeze(
-      transfer.payments.map((payment) =>
+      [
+        ...transfer.payments.map((payment) => ({ kind: RecordKind.ring, payment })),
+        ...transfer.exits.map((payment) => ({ kind: RecordKind.exit, payment })),
+      ].map(({ kind, payment }) =>
         Object.freeze({
+          kind,
           owner: expectedOwner(payment.recipient),
           mint: payment.mint,
           amount: payment.amount,
         }),
       ),
     ),
+    withdrawals: Object.freeze(await Promise.all(transfer.withdrawals.map(expectedWithdrawal))),
     allowed,
+  });
+}
+
+async function expectedWithdrawal(withdrawal: AuthorityWithdrawal): Promise<ExpectedWithdrawal> {
+  const { mint, recipient, amount, tokenProgram } = withdrawal;
+  if (mint === SOL_MINT) {
+    if (tokenProgram !== undefined) throw mismatch("Data");
+    return Object.freeze({
+      transfer: { kind: "solWithdrawal" as const, amount },
+      accounts: Object.freeze([SOL_INTERFACE, recipient]),
+    });
+  }
+  if (tokenProgram === undefined) throw mismatch("Data");
+  const [vault, bump] = await getSplAssetVaultAddressWithBump(mint);
+  const tokenAccount = await getAssociatedTokenAddress(recipient, mint, tokenProgram);
+  return Object.freeze({
+    transfer: { kind: "splWithdrawal" as const, amount, splInterfaceBump: bump },
+    accounts: Object.freeze([SHIELDED_POOL_CPI_AUTHORITY, mint, vault, tokenAccount, tokenProgram]),
   });
 }
 
@@ -878,7 +917,7 @@ function checkFrame(
       throw mismatch("Accounts");
     return;
   }
-  if (expected.kind === "delegate") checkMoved(expected, frame);
+  if (expected.kind === "delegate") checkMoved(expected, frame, accounts);
   else if (expected.kind === "coSigner") checkCoSignerRule(expected.rule, frame);
   else checkOpenings(expected, frame, accounts);
   const envelope = frameEnvelope(expected, signer, tag);
@@ -897,11 +936,15 @@ function checkFrame(
 }
 
 /** The proof binds each record to its slot under the key the frame publishes. */
-function checkMoved(expected: ExpectedDelegate, frame: RingTransactData): void {
+function checkMoved(
+  expected: ExpectedDelegate,
+  frame: RingTransactData,
+  accounts: readonly AccountMeta[],
+): void {
   // Owner tags alone, the message holds no blinding, a hidden frame's tags bind nothing.
   checkTransactionKey(expected.txViewingKey, frame);
-  // 1. The request names ring payments alone, a leg or a data commitment moves what no one asked.
-  if (frame.interfaceTransfers.length !== 0 || frame.hasData) throw mismatch("Data");
+  if (frame.hasData) throw mismatch("Data");
+  checkWithdrawals(expected, frame, accounts);
   const { records, envelope } = openStream(expected.txViewingKey, expected.auditor, frame);
   // 2. Matching outputs bind no input, each proven note position answers to the requested openings.
   if (!expected.allowed.spendsOnly(frame.nullifiers.slice(0, envelope.realInputs)))
@@ -913,32 +956,65 @@ function checkMoved(expected: ExpectedDelegate, frame: RingTransactData): void {
   const unpaid = [...expected.payments];
   records.forEach((record, slot) => {
     if (record.kind === RecordKind.dummy) return;
-    if (record.kind === RecordKind.exit) throw mismatch("Recipients");
     const paid = unpaid.findIndex(
       (payment) =>
+        record.kind === payment.kind &&
         record.mint === payment.mint &&
         record.amount === payment.amount &&
         owns(payment.owner, record),
     );
     if (paid < 0) {
-      if (!expected.sources.some((source) => owns(source, record))) throw mismatch("Recipients");
+      if (
+        record.kind !== RecordKind.ring ||
+        !expected.sources.some((source) => owns(source, record))
+      )
+        throw mismatch("Recipients");
       return;
     }
     const payment = unpaid[paid];
     // Rust `swap_remove`, the order decides the equal payment a later record takes.
     unpaid[paid] = unpaid[unpaid.length - 1] as ExpectedPayment;
     unpaid.pop();
-    // A wrong hint strands the note with no scan reaching it.
     const tag = frame.outputs[slot]?.ownerTag;
-    if (
-      !isAnonymousFrame(frame.rail) &&
-      (payment === undefined ||
-        tag === undefined ||
-        !equalBytes(tag, confidentialSlotTag(payment.owner.viewingU)))
-    )
+    const expectedTag =
+      payment?.kind === RecordKind.exit
+        ? payment.owner.ownerKey
+        : payment !== undefined && !isAnonymousFrame(frame.rail)
+          ? confidentialSlotTag(payment.owner.viewingU)
+          : undefined;
+    if (expectedTag !== undefined && (tag === undefined || !equalBytes(tag, expectedTag)))
       throw mismatch("Recipients");
   });
   if (unpaid.length !== 0) throw mismatch("Recipients");
+}
+
+function checkWithdrawals(
+  expected: ExpectedDelegate,
+  frame: RingTransactData,
+  accounts: readonly AccountMeta[],
+): void {
+  const window = settlementWindow(frame, accounts);
+  const unpaid = [...expected.withdrawals];
+  let at = window.start;
+  for (const transfer of frame.interfaceTransfers) {
+    const group = accounts.slice(at, at + SETTLEMENT_ACCOUNTS[transfer.kind]);
+    at += group.length;
+    const paid = unpaid.findIndex((withdrawal) => {
+      const wanted = withdrawal.transfer;
+      return (
+        transfer.kind === wanted.kind &&
+        transfer.amount === wanted.amount &&
+        (transfer.kind !== "splWithdrawal" ||
+          (wanted.kind === "splWithdrawal" &&
+            transfer.splInterfaceBump === wanted.splInterfaceBump)) &&
+        withdrawal.accounts.length === group.length &&
+        withdrawal.accounts.every((address, index) => group[index]?.address === address)
+      );
+    });
+    if (paid < 0) throw mismatch("Data");
+    unpaid.splice(paid, 1);
+  }
+  if (unpaid.length !== 0) throw mismatch("Data");
 }
 
 function checkTransactionKey(txViewingKey: Bytes32, frame: RingTransactData): void {

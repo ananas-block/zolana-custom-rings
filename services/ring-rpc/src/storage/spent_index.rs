@@ -27,7 +27,7 @@ use crate::{
     projection_lease::ProjectionLease,
     spend_machine::{SpendRow, SpendState},
     tracking::{HeldEnrollment, TrackingCursor},
-    utxos::{CreatedIn, LateOwner, PageDelta, StoredUtxo},
+    utxos::{CreatedIn, LateOwner, PageDelta, StoredUtxo, MAX_LATE_OWNERS},
 };
 
 const NOTE_SEAL_INFO: &[u8] = b"zolana/ring-rpc-note-seal";
@@ -65,8 +65,6 @@ pub(crate) struct LoadedProjection {
 pub(crate) enum HistoryScope {
     /// Every row, for a mirror that holds the whole projection.
     Everything,
-    /// Rows written after a revision the cache already holds, enrollments too.
-    ChangedSince(i64),
     /// No row, a bounded cache fills from lookups.
     Cold,
 }
@@ -78,6 +76,29 @@ pub(crate) struct LoadedSpends {
     pub rows: Vec<SpendRow>,
     pub unread: Vec<CreatedIn>,
     pub faults: Vec<SpendRow>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CommittedPage {
+    pub revision: i64,
+    pub first_unread: Option<CreatedIn>,
+}
+
+pub(crate) async fn first_unread(
+    connection: &impl ConnectionTrait,
+    ring: Address,
+) -> Result<Option<CreatedIn>, DbErr> {
+    connection
+        .query_one(Statement::from_sql_and_values(
+            connection.get_database_backend(),
+            "SELECT slot,tx_signature,event_index FROM spend_unread_frames WHERE ring=$1 \
+             ORDER BY slot,tx_signature,event_index LIMIT 1",
+            vec![Value::from(ring.as_ref().to_vec())],
+        ))
+        .await?
+        .as_ref()
+        .map(read_frame)
+        .transpose()
 }
 
 impl NoteSeal {
@@ -398,8 +419,7 @@ impl ProjectionWriter<'_> {
         Value::from(self.ring.as_ref().to_vec())
     }
 
-    /// Every write of one page commits together, or none does. Returns the page's revision.
-    pub(crate) async fn commit_page(&self, delta: &PageDelta) -> Result<i64, DbErr> {
+    pub(crate) async fn commit_page(&self, delta: &PageDelta) -> Result<CommittedPage, DbErr> {
         let Self { ring, seal, .. } = self;
         let (transaction, revision) = self.begin().await?;
         let backend = transaction.get_database_backend();
@@ -512,8 +532,9 @@ impl ProjectionWriter<'_> {
                 ))
                 .await?;
         }
+        let first_unread = first_unread(&transaction, *ring).await?;
         transaction.commit().await?;
-        Ok(revision)
+        Ok(CommittedPage { revision, first_unread })
     }
 
     /// A page's enrollments and the tracking cursor past it commit together.
@@ -573,13 +594,15 @@ impl ProjectionWriter<'_> {
     }
 
     pub(crate) async fn pending_owners(&self) -> Result<Vec<LateOwner>, DbErr> {
+        let limit = i64::try_from(MAX_LATE_OWNERS)
+            .map_err(|_| DbErr::Custom("pending owner limit exceeds the column range".into()))?;
         self.db
             .query_all(Statement::from_sql_and_values(
                 self.db.get_database_backend(),
                 "SELECT e.member,e.sealed,p.after_tag FROM held_enrollments e JOIN \
                  pending_derivations p ON e.ring=p.ring AND e.member=p.member WHERE e.ring=$1 \
-                 ORDER BY e.member LIMIT 256",
-                vec![self.ring_value()],
+                 ORDER BY e.member LIMIT $2",
+                vec![self.ring_value(), limit.into()],
             ))
             .await?
             .iter()
@@ -650,74 +673,66 @@ impl LoadSpends<'_> {
                 vec![Value::from(ring.as_ref().to_vec())],
             )
         };
-        let since = match scope {
-            HistoryScope::ChangedSince(revision) => *revision,
-            HistoryScope::Everything | HistoryScope::Cold => 0,
-        };
-        let changed = |sql: &str| {
-            Statement::from_sql_and_values(
-                snapshot.get_database_backend(),
-                sql,
-                vec![Value::from(ring.as_ref().to_vec()), since.into()],
-            )
-        };
         let mut loaded = LoadedProjection {
             revision: read_revision(snapshot, ring).await?,
             ..LoadedProjection::default()
         };
         let spends = &mut loaded.spends;
-        // 1. Only rows past the cache's revision, a follower pass costs its new history alone.
-        if *scope != HistoryScope::Cold {
+        if *scope == HistoryScope::Everything {
             for row in snapshot
-                .query_all(changed(&format!(
-                    "SELECT {NOTE_COLUMNS} FROM finalized_notes WHERE ring=$1 AND revision>$2"
+                .query_all(query(&format!(
+                    "SELECT {NOTE_COLUMNS} FROM finalized_notes WHERE ring=$1"
                 )))
                 .await?
             {
                 spends.notes.push(read_note(&row, seal)?);
             }
             for row in snapshot
-                .query_all(changed(&format!(
+                .query_all(query(&format!(
                     "SELECT {ROW_COLUMNS} FROM finalized_spent_nullifiers \
-                     WHERE ring=$1 AND revision>$2"
+                     WHERE ring=$1"
                 )))
                 .await?
             {
                 spends.rows.push(read_spend_row(&row, seal)?);
             }
         }
-        for row in snapshot
-            .query_all(query(
-                "SELECT slot,tx_signature,event_index,attempts,retry_after FROM \
-                 spend_unread_frames WHERE ring=$1",
-            ))
-            .await?
-        {
-            let frame = read_frame(&row)?;
-            let attempt = RepairAttempt {
-                attempts: u32::try_from(row.try_get::<i64>("", "attempts")?)
-                    .map_err(|_| DbErr::Custom("repair attempts out of range".into()))?,
-                retry_after: u64::try_from(row.try_get::<i64>("", "retry_after")?)
-                    .map_err(|_| DbErr::Custom("negative repair time".into()))?,
-            };
-            spends.unread.push(frame);
-            if attempt.attempts > 0 {
-                loaded.repairs.push((frame, attempt));
+        if *scope == HistoryScope::Everything {
+            for row in snapshot
+                .query_all(query(
+                    "SELECT slot,tx_signature,event_index,attempts,retry_after FROM \
+                     spend_unread_frames WHERE ring=$1",
+                ))
+                .await?
+            {
+                let frame = read_frame(&row)?;
+                let attempt = RepairAttempt {
+                    attempts: u32::try_from(row.try_get::<i64>("", "attempts")?)
+                        .map_err(|_| DbErr::Custom("repair attempts out of range".into()))?,
+                    retry_after: u64::try_from(row.try_get::<i64>("", "retry_after")?)
+                        .map_err(|_| DbErr::Custom("negative repair time".into()))?,
+                };
+                spends.unread.push(frame);
+                if attempt.attempts > 0 {
+                    loaded.repairs.push((frame, attempt));
+                }
             }
-        }
-        for row in snapshot
-            .query_all(query(
-                "SELECT nullifier,slot,tx_signature,event_index FROM spend_integrity_faults \
-                 WHERE ring=$1",
-            ))
-            .await?
-        {
-            spends.faults.push(SpendRow {
-                nullifier: read_bytes(&row, "nullifier")?,
-                frame: read_frame(&row)?,
-                position: 0,
-                state: SpendState::Observed,
-            });
+            for row in snapshot
+                .query_all(query(
+                    "SELECT nullifier,slot,tx_signature,event_index FROM spend_integrity_faults \
+                     WHERE ring=$1",
+                ))
+                .await?
+            {
+                spends.faults.push(SpendRow {
+                    nullifier: read_bytes(&row, "nullifier")?,
+                    frame: read_frame(&row)?,
+                    position: 0,
+                    state: SpendState::Observed,
+                });
+            }
+        } else {
+            spends.unread.extend(first_unread(snapshot, *ring).await?);
         }
         if let Some(row) = snapshot
             .query_one(query(
@@ -735,11 +750,10 @@ impl LoadSpends<'_> {
                 },
             };
         }
-        // 2. A cold cache reads no enrollment, a lookup that misses reads its one row.
-        if *scope != HistoryScope::Cold {
+        if *scope == HistoryScope::Everything {
             for row in snapshot
-                .query_all(changed(&format!(
-                    "SELECT {ENROLLMENT_COLUMNS} FROM held_enrollments WHERE ring=$1 AND revision>$2"
+                .query_all(query(&format!(
+                    "SELECT {ENROLLMENT_COLUMNS} FROM held_enrollments WHERE ring=$1"
                 )))
                 .await?
             {

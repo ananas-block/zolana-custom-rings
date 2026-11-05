@@ -17,6 +17,7 @@ fn field(byte: u8) -> [u8; 32] {
 fn plain_layout() -> AuditStreamLayout {
     AuditStreamLayout {
         key: AuditKey {
+            format: DisclosureFormat::Standard,
             class: 2,
             entry: false,
         },
@@ -30,6 +31,7 @@ fn plain_layout() -> AuditStreamLayout {
 fn entry_layout() -> AuditStreamLayout {
     AuditStreamLayout {
         key: AuditKey {
+            format: DisclosureFormat::Standard,
             class: 8,
             entry: true,
         },
@@ -327,6 +329,7 @@ fn evidence_outside_the_field_is_refused() {
 fn interleaved_layout() -> AuditStreamLayout {
     AuditStreamLayout {
         key: AuditKey {
+            format: DisclosureFormat::Standard,
             class: 4,
             entry: true,
         },
@@ -424,4 +427,55 @@ fn a_default_bit_on_an_address_or_a_map_off_its_layout_is_refused() {
         on_address.seal(&auditor.pubkey()),
         Err(AuditError::DisclosureLayout)
     ));
+}
+
+#[test]
+fn compact_audit_records_open_with_the_encrypted_common_mint() {
+    use custom_ring_interface::SINGLE_ASSET_PAYOUT_OUTPUTS;
+    let layout = AuditStreamLayout {
+        key: AuditKey {
+            class: 1,
+            entry: false,
+            format: DisclosureFormat::SingleAssetPayout,
+        },
+        inputs: 1,
+        outputs: SINGLE_ASSET_PAYOUT_OUTPUTS,
+        capacity: SINGLE_ASSET_PAYOUT_OUTPUTS,
+        has_data: false,
+    };
+    let tx_viewing_key = ViewingKey::new();
+    let auditor = X25519Keypair::new();
+    let mint = [9; 32];
+    let records: Vec<_> = (0..SINGLE_ASSET_PAYOUT_OUTPUTS)
+        .map(|slot| AuditRecord {
+            mint,
+            ..ring_record(slot as u8 + 1)
+        })
+        .collect();
+    let seal = |records: Vec<AuditRecord>| {
+        AuditStreamSeal {
+            layout,
+            tx_viewing_key: &tx_viewing_key,
+            salt: &SALT,
+            inputs: notes(layout, 1),
+            evidence: AuditEvidence::SingleAssetPayout { mint },
+            records,
+            tails: Vec::new(),
+        }
+        .seal(&auditor.pubkey())
+    };
+    let sealed = seal(records.clone()).unwrap();
+    let opened = opened_envelope(&sealed, &auditor, layout).unwrap();
+    for (slot, expected) in records.iter().enumerate() {
+        assert_eq!(
+            opened.record(slot, &sealed.records[slot]).unwrap(),
+            *expected
+        );
+    }
+    let mut mixed = records;
+    mixed[1].mint = [8; 32];
+    assert!(matches!(seal(mixed), Err(AuditError::DisclosureLayout)));
+    let mut standard = layout;
+    standard.key.format = DisclosureFormat::Standard;
+    assert!(opened_envelope(&sealed, &auditor, standard).is_err());
 }

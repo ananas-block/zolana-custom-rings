@@ -4,11 +4,12 @@
 
 use spr_hasher::primitives::{pack_be_chunks, PACK_BE_CHUNK_BYTES};
 
-pub const TRANSFER_OUTPUT_CAPACITIES: [usize; 3] = [2, 4, 8];
+pub const TRANSFER_OUTPUT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];
 
 /// The transfer statement's layout element, mirror `prover/circuits/audit/layout.go`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuditLayout {
+    pub format: crate::DisclosureFormat,
     /// One tail per published slot, the proof holds every data hash to zero while clear.
     pub has_data: bool,
     /// The key carries default bits and one evidence entry per published input.
@@ -17,7 +18,7 @@ pub struct AuditLayout {
 
 impl AuditLayout {
     pub const fn value(self) -> u8 {
-        self.has_data as u8 | (self.entry as u8) << 1
+        self.has_data as u8 | (self.entry as u8) << 1 | (self.format as u8) << 2
     }
 }
 
@@ -56,7 +57,14 @@ mod tests {
 
     #[test]
     fn the_layout_value_is_the_circuit_flags() {
-        let value = |has_data, entry| AuditLayout { has_data, entry }.value();
+        let value = |has_data, entry| {
+            AuditLayout {
+                has_data,
+                entry,
+                format: crate::DisclosureFormat::Standard,
+            }
+            .value()
+        };
         assert_eq!(value(false, false), 0);
         assert_eq!(value(true, false), 1);
         assert_eq!(value(false, true), 2);

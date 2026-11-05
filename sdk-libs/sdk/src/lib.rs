@@ -93,11 +93,11 @@ pub use crate::{
     pipeline::{
         entry_shape_keyed, shape_keyed, transfer_key, Anonymous, AnonymousMove, AnonymousPayment,
         AnonymousTransfer, ApplicationData, CachedNote, CoOwner, CustomRingTransfer,
-        CustomRingTransferInput, DelegateMove, DelegateOutput, DelegatePayment, DelegateSource,
-        DelegateTransfer, DelegateTransferInput, DelegateWithdrawal, Delegated, EntrySpend,
-        NoteData, Owner, ProvenRingTransfer, PublicOwnerTransfer, PublicOwners, Rail, RailKind,
-        ReadCache, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment, RingSender,
-        RingTransfer, SealRow, TransferKey,
+        CustomRingTransferInput, DelegateCandidates, DelegateFunding, DelegateMove, DelegateOutput,
+        DelegatePayment, DelegateSource, DelegateTransfer, DelegateTransferInput,
+        DelegateWithdrawal, Delegated, EntrySpend, NoteData, Owner, ProvenRingTransfer,
+        PublicOwnerTransfer, PublicOwners, Rail, RailKind, ReadCache, Relayed, RelayedTransfer,
+        RelayedTransferInput, RingPayment, RingSender, RingTransfer, SealRow, TransferKey,
     },
     records::{
         AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, RecordUpdateService,

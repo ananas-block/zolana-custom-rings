@@ -3,12 +3,14 @@ import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
 import {
-  AUDIT_RECORD_LEN,
+  auditRecordLength,
+  DisclosureFormat,
   DATA_TAIL_LEN,
   envelopeRegion,
 } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   RECIPIENT_BODY_LEN,
+  COMPACT_RECIPIENT_BODY_LEN,
   senderBundleLen,
 } from "../../src/protocol/codec/anonymous-delivery.js";
 import { RingInstructionTag } from "../../src/protocol/transaction/instruction-tag.js";
@@ -33,6 +35,7 @@ export function field(byte: number): Bytes32 {
 export function ringFrame(
   input: Readonly<{
     rail: RingRail;
+    format?: DisclosureFormat;
     inputs: number;
     outputs: number;
     entry?: boolean;
@@ -50,6 +53,7 @@ export function ringFrame(
   if (shape === undefined) throw new Error("no shape serves the counts");
   const layout = ringStreamLayout({
     rail,
+    format: input.format ?? DisclosureFormat.Standard,
     nIn: shape.inputs,
     nOut: shape.outputs,
     inputs,
@@ -66,8 +70,15 @@ export function ringFrame(
       ownerTag: change ? (new Uint8Array(32) as Bytes32) : field(40 + index),
       body: change
         ? { kind: "none" }
-        : { kind: "recipient", body: new Uint8Array(RECIPIENT_BODY_LEN) },
-      record: new Uint8Array(AUDIT_RECORD_LEN).fill(index + 1),
+        : {
+            kind: "recipient",
+            body: new Uint8Array(
+              input.format === DisclosureFormat.SingleAssetPayout
+                ? COMPACT_RECIPIENT_BODY_LEN
+                : RECIPIENT_BODY_LEN + (hasData ? 2 : 0),
+            ),
+          },
+      record: new Uint8Array(auditRecordLength(layout.key)).fill(index + 1),
       ...(hasData ? { tail: new Uint8Array(DATA_TAIL_LEN).fill(index + 101) } : {}),
     };
   };
@@ -86,7 +97,7 @@ export function ringFrame(
     expiryUnixTs: 0,
     txViewingU: field(1),
     salt: new Uint8Array(16).fill(3) as Bytes16,
-    extensions: {},
+    extensions: input.format === undefined ? {} : { format: input.format },
     interfaceTransfers: [],
     hasData,
     entry,

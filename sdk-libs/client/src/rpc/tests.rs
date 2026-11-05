@@ -1426,6 +1426,27 @@ fn a_signed_authority_transfer_matches_the_shared_vector() {
         target: target(),
         delegate: delegate.pubkey(),
         transfer: AuthorityTransfer {
+            exits: vec![AuthorityPayment {
+                recipient: shielded_address(10).into(),
+                mint: Address::new_from_array([3; 32]).into(),
+                amount: 20,
+            }],
+            withdrawals: vec![
+                super::AuthorityWithdrawal {
+                    recipient: Address::new_from_array([11; 32]).into(),
+                    mint: Address::new_from_array([3; 32]).into(),
+                    amount: 30,
+                    token_program: Some(
+                        Address::new_from_array(spr_interface::SPL_TOKEN_PROGRAM_ID).into(),
+                    ),
+                },
+                super::AuthorityWithdrawal {
+                    recipient: Address::new_from_array([12; 32]).into(),
+                    mint: spr_transaction::SOL_MINT.into(),
+                    amount: 40,
+                    token_program: None,
+                },
+            ],
             sources: vec![shielded_address(5).into()],
             payments: vec![AuthorityPayment {
                 recipient: shielded_address(9).into(),
@@ -1533,14 +1554,14 @@ fn the_policy_authority_requests_match_the_shared_vector() {
     let list = PolicyAuthorityAttestation {
         target: target(),
         authority: authority.pubkey(),
-        action: ListPendingApprovals::default(),
+        action: ListPendingApprovals { registry: Address::new_from_array([2; 32]), cursor: None },
     };
     let refuse = PolicyAuthorityAttestation {
         target: target(),
         authority: authority.pubkey(),
-        action: RefuseListApproval(vector.refuse.update_id.clone()),
+        action: RefuseListApproval { registry: Address::new_from_array([2; 32]), update_id: vector.refuse.update_id.clone() },
     };
-    let list_after = GetPendingListApprovalsRequest::read(target(), authority.pubkey())
+    let list_after = GetPendingListApprovalsRequest::read(ListApprovalScope { target: target(), authority: authority.pubkey(), registry: Address::new_from_array([2; 32]) })
         .with_cursor(vector.refuse.update_id.clone());
     let message = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
     let file = "policy_authority_attestation.json";

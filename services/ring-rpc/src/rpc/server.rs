@@ -41,8 +41,8 @@ use zolana_ring_client::rpc::{
     CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_DELEGATE_NOTES, GET_LIST_SALT,
     GET_PENDING_LIST_APPROVALS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS,
     GET_SPEND_COVERAGE, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY,
-    REFUSE_LIST_APPROVAL, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
-    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
+    REFUSE_LIST_APPROVAL, RELEASE_DELEGATE_SNAPSHOT, RELEASE_WALLET_SNAPSHOT, RING_DEPOSITS,
+    RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -277,6 +277,23 @@ pub fn rpc_module<S: TransactionSource + 'static>(
             let _authentication = hub.admit(Lane::Authentication)?;
             let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
             service.wallet_status(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        RELEASE_WALLET_SNAPSHOT,
+        |hub, request: GetWalletStatusRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
+            service.release_wallet_snapshot(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        RELEASE_DELEGATE_SNAPSHOT,
+        |hub, request: GetDelegateNotesRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.release_delegate_snapshot(&request).await
         },
     )?;
     method(

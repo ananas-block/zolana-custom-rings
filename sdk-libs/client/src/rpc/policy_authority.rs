@@ -24,6 +24,7 @@ pub struct PolicyAuthorityAuth {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetPendingListApprovalsRequest {
     pub ring: SerializablePubkey,
+    pub registry: SerializablePubkey,
     /// The last update of the previous page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<RecordUpdateId>,
@@ -34,6 +35,7 @@ pub struct GetPendingListApprovalsRequest {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RefuseListApprovalRequest {
     pub ring: SerializablePubkey,
+    pub registry: SerializablePubkey,
     pub update_id: RecordUpdateId,
     pub auth: PolicyAuthorityAuth,
 }
@@ -75,14 +77,25 @@ pub struct PendingListApproval {
     pub valid_until_slot: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListApprovalScope {
+    pub target: ReadTarget,
+    pub authority: Address,
+    pub registry: Address,
+}
+
 /// The page after `cursor`, the first page without one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListPendingApprovals {
+    pub registry: Address,
     pub cursor: Option<RecordUpdateId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RefuseListApproval(pub RecordUpdateId);
+pub struct RefuseListApproval {
+    pub registry: Address,
+    pub update_id: RecordUpdateId,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CreateRecords;
@@ -116,14 +129,15 @@ impl PolicyAuthorityAction for ListPendingApprovals {
 
     fn line(&self) -> String {
         match &self.cursor {
-            None => "list".to_owned(),
-            Some(cursor) => format!("list after {}", cursor.0.to_base58()),
+            None => format!("list {}", self.registry),
+            Some(cursor) => format!("list {} after {}", self.registry, cursor.0.to_base58()),
         }
     }
 
     fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> GetPendingListApprovalsRequest {
         GetPendingListApprovalsRequest {
             ring: ring.into(),
+            registry: self.registry.into(),
             cursor: self.cursor,
             auth,
         }
@@ -134,13 +148,14 @@ impl PolicyAuthorityAction for RefuseListApproval {
     type Request = RefuseListApprovalRequest;
 
     fn line(&self) -> String {
-        format!("refuse {}", self.0 .0.to_base58())
+        format!("refuse {} {}", self.registry, self.update_id.0.to_base58())
     }
 
     fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> RefuseListApprovalRequest {
         RefuseListApprovalRequest {
             ring: ring.into(),
-            update_id: self.0,
+            registry: self.registry.into(),
+            update_id: self.update_id,
             auth,
         }
     }
@@ -200,13 +215,15 @@ impl<A: PolicyAuthorityAction> SignedRequest<PolicyAuthorityAttestation<A>> {
 
 impl GetPendingListApprovalsRequest {
     pub fn read(
-        target: ReadTarget,
-        authority: Address,
+        scope: ListApprovalScope,
     ) -> SignedRequest<PolicyAuthorityAttestation<ListPendingApprovals>> {
         SignedRequest::new(PolicyAuthorityAttestation {
-            target,
-            authority,
-            action: ListPendingApprovals::default(),
+            target: scope.target,
+            authority: scope.authority,
+            action: ListPendingApprovals {
+                registry: scope.registry,
+                cursor: None,
+            },
         })
     }
 }
@@ -220,14 +237,16 @@ impl SignedRequest<PolicyAuthorityAttestation<ListPendingApprovals>> {
 
 impl RefuseListApprovalRequest {
     pub fn refusal(
-        target: ReadTarget,
-        authority: Address,
+        scope: ListApprovalScope,
         update_id: RecordUpdateId,
     ) -> SignedRequest<PolicyAuthorityAttestation<RefuseListApproval>> {
         SignedRequest::new(PolicyAuthorityAttestation {
-            target,
-            authority,
-            action: RefuseListApproval(update_id),
+            target: scope.target,
+            authority: scope.authority,
+            action: RefuseListApproval {
+                registry: scope.registry,
+                update_id,
+            },
         })
     }
 }

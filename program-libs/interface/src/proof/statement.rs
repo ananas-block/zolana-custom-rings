@@ -30,7 +30,7 @@ use crate::{
     key_catalog::{ApplyMode, RingCircuit},
     tagged_x25519,
     transact::RingOutput,
-    REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    AUDIT_RECORD_LEN, COMPACT_AUDIT_RECORD_LEN, REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
@@ -365,9 +365,22 @@ pub fn ciphertext_digest(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> {
 pub fn record_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
     let mut hashes = Vec::with_capacity(outputs.len());
     for output in outputs {
-        hashes.push(hash_bytes(output.record)?);
+        let hash = match output.record.len() {
+            AUDIT_RECORD_LEN => record_hash::<AUDIT_RECORD_LEN>(output.record),
+            COMPACT_AUDIT_RECORD_LEN => record_hash::<COMPACT_AUDIT_RECORD_LEN>(output.record),
+            length => Err(HasherError::InvalidInputLength(length, AUDIT_RECORD_LEN)),
+        }?;
+        hashes.push(hash);
     }
     zero_filled_chain(hashes.iter(), capacity)
+}
+
+fn record_hash<const N: usize>(record: &[u8]) -> Result<[u8; 32], HasherError> {
+    hash_bytes::<N>(
+        record
+            .try_into()
+            .map_err(|_| HasherError::InvalidInputLength(record.len(), N))?,
+    )
 }
 
 /// `HashChain4(hash_bytes(tail_i))`, zero while no slot carries a tail.

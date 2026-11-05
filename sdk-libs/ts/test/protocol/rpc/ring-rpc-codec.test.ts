@@ -21,6 +21,7 @@ import {
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { describe, expect, it, vi } from "vitest";
 
+import { SPL_TOKEN_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/interface";
 import { addressBytes, type indexerTypes } from "@heliuslabs/zolana/internal";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
@@ -248,6 +249,16 @@ describe("prepareAuthorityTransfer", () => {
     };
     const transfer = {
       sources: [address(5)],
+      exits: [{ recipient: address(10), mint: filled(3, 32) as Address, amount: 20n }],
+      withdrawals: [
+        {
+          recipient: filled(11, 32) as Address,
+          mint: filled(3, 32) as Address,
+          amount: 30n,
+          tokenProgram: SPL_TOKEN_PROGRAM_ID,
+        },
+        { recipient: filled(12, 32) as Address, mint: filled(0, 32) as Address, amount: 40n },
+      ],
       payments: [{ recipient: address(9), mint: filled(3, 32) as Address, amount: 250n }],
     };
     const message = authorityTransferAttestation({
@@ -293,6 +304,7 @@ describe("policy authority requests", () => {
       cluster: new Uint8Array(32).fill(1) as Bytes32,
       service: filled(2, 32) as Address,
       ringProgramId: filled(7, 32) as Address,
+      registry: filled(2, 32) as Address,
     };
     const { updateId } = vector.refuse;
     const message = (action: PolicyAuthorityAction) =>
@@ -305,9 +317,9 @@ describe("policy authority requests", () => {
           nonce: new Uint8Array(32).fill(4) as Bytes32,
         }),
       );
-    expect(message({ kind: "list" })).toBe(vector.list.message);
-    expect(message({ kind: "list", cursor: updateId })).toBe(vector.listAfter.message);
-    expect(message({ kind: "refuse", updateId })).toBe(vector.refuse.message);
+    expect(message({ kind: "list", registry: target.registry })).toBe(vector.list.message);
+    expect(message({ kind: "list", registry: target.registry, cursor: updateId })).toBe(vector.listAfter.message);
+    expect(message({ kind: "refuse", registry: target.registry, updateId })).toBe(vector.refuse.message);
     expect(message({ kind: "createRecords" })).toBe(vector.createRecords.message);
     const nonce = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
       (array as Uint8Array).fill(4);

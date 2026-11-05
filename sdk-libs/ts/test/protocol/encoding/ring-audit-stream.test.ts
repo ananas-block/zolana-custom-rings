@@ -23,6 +23,7 @@ import {
   decodeOpeningRecord,
   encodeAuditEnvelope,
   encodeAuditRecord,
+  encodeCompactAuditRecord,
   encodeDataTail,
   encodeOpeningRecord,
   RecordKind,
@@ -33,6 +34,7 @@ import {
 } from "../../../src/protocol/codec/anonymous-delivery.js";
 import {
   auditorMessageLen,
+  DisclosureFormat,
   capacityBlocks,
   checkedStreamLayout,
   envelopeBlocks,
@@ -53,7 +55,14 @@ describe("the stream regions", () => {
   it("are the shared vector for every key", () => {
     for (const key of ranges.keys) {
       const layoutAt = (inputs: number): AuditStreamLayout => ({
-        key: { class: key.class, entry: key.entry },
+        key: {
+          class: key.class,
+          entry: key.entry,
+          format:
+            "single_asset_payout" in key && key.single_asset_payout === true
+              ? DisclosureFormat.SingleAssetPayout
+              : DisclosureFormat.Standard,
+        },
         inputs,
         outputs: key.outputs,
         capacity: key.outputs,
@@ -103,7 +112,14 @@ describe("the stream vector", () => {
 
   for (const testCase of vector.cases) {
     const layout: AuditStreamLayout = {
-      key: { class: testCase.input_class, entry: (testCase.layout & 2) !== 0 },
+      key: {
+        class: testCase.input_class,
+        entry: (testCase.layout & 2) !== 0,
+        format:
+          (testCase.layout & 4) !== 0
+            ? DisclosureFormat.SingleAssetPayout
+            : DisclosureFormat.Standard,
+      },
       inputs: testCase.input_count,
       outputs: testCase.output_count,
       capacity: testCase.outputs,
@@ -143,9 +159,15 @@ describe("the stream vector", () => {
       await initializePoseidon();
       const opened = openRingDisclosure(auditor(), { layout, message: message(), salt });
       expect(bytesToHex(encodeAuditEnvelope(opened.envelope))).toBe(testCase.envelope_plaintext);
-      expect(opened.records.map((record) => bytesToHex(encodeAuditRecord(record)))).toEqual(
-        testCase.records,
-      );
+      expect(
+        opened.records.map((record) =>
+          bytesToHex(
+            (layout.key.format === DisclosureFormat.SingleAssetPayout
+              ? encodeCompactAuditRecord
+              : encodeAuditRecord)(record),
+          ),
+        ),
+      ).toEqual(testCase.records);
       if (testCase.tails === null) expect(opened.tails).toBeUndefined();
       else
         expect(opened.tails?.map((tail) => bytesToHex(encodeDataTail(tail)))).toEqual(
@@ -333,7 +355,7 @@ describe("the stream codecs", () => {
     expect(() => decodeAuditEnvelope(envelope.subarray(1), layout)).toThrow(RingError);
   });
 
-  it("keeps a plain recipient body at the head and extends with one presence byte", () => {
+  it("keeps a plain body fixed and bounds its encrypted data length", () => {
     const body = {
       blinding: new Uint8Array(32).fill(3) as Bytes32,
       amount: 9n,
@@ -343,12 +365,12 @@ describe("the stream codecs", () => {
     expect(decodeRecipientBody(encodeRecipientBody(body))).toEqual(body);
     const ringDataHash = new Uint8Array(32).fill(4) as Bytes32;
     const withHash = encodeRecipientBody({ ...body, ringDataHash });
-    expect(withHash).toHaveLength(72 + 1 + 32);
-    expect(withHash[72]).toBe(1);
+    expect(withHash).toHaveLength(72 + 2 + 1 + 32);
+    expect(withHash[74]).toBe(1);
     expect(decodeRecipientBody(withHash).ringDataHash).toEqual(ringDataHash);
     const data = new Uint8Array(40).fill(6);
     const withData = encodeRecipientBody({ ...body, data });
-    expect(withData[72]).toBe(0);
+    expect(withData[74]).toBe(0);
     expect(decodeRecipientBody(withData).data).toEqual(data);
     for (const refused of [new Uint8Array(71), Uint8Array.of(...new Uint8Array(72), 2)])
       expect(() => decodeRecipientBody(refused)).toThrow(RingError);

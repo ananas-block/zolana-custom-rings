@@ -39,7 +39,7 @@ A zero-key note has `nullifier_secret = 0`. Anyone who knows its opening compute
 
 - A ring output under a nonzero key must match its owner's tracking row.
 - A zero-key output to an enrolled owner passes only while no salted payee read is active. Under a salted payee read a zero key needs the payee's row absent, so it skips no salted list.
-- The SDKs refuse to pay an enrolled owner under the zero key. That check does not bind another sender.
+- The SDKs permit an enrolled recipient under the zero key when no salted payee read applies. They read its current viewing key from its authorization account.
 - The circuit cannot tell a PDA from a wallet.
 - A hidden owner cannot spend a zero-key note, since that spend would name it. A public signer spends it on the public-owner rail or as a public co-owner.
 - The delegate moves a zero-key note with its owner unpublished.

@@ -2,17 +2,19 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 use custom_ring_sdk::{
-    AllowedNullifiers, DelegatePayment, DelegateSourceError, ResolvedSource, SourceEnrollment,
+    AllowedNullifiers, DelegateFunding, DelegatePayment, DelegateSourceError, DelegateWithdrawal,
+    ResolvedSource, SourceEnrollment,
 };
 use jsonrpsee::types::ErrorObjectOwned;
 use spr_indexer_api::Hash;
-use spr_keypair::{NullifierKey, ShieldedAddress};
+use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress};
 use spr_transaction::{Mint, WalletUtxo};
 use thiserror::Error;
 use zolana_ring_client::rpc::{
-    AuthorityTransferAttestation, DelegateNotesAttestation, GetDelegateNotesRequest,
-    GetDelegateNotesResponse, GetListSaltRequest, GetListSaltResponse, ListSaltAttestation,
-    PrepareAuthorityTransferRequest, RelayStep,
+    Attestation, AuthorityTransferAttestation, DelegateNotesAttestation,
+    DelegateSnapshotReleaseAttestation, GetDelegateNotesRequest, GetDelegateNotesResponse,
+    GetListSaltRequest, GetListSaltResponse, ListSaltAttestation, PrepareAuthorityTransferRequest,
+    RelayStep,
 };
 
 use crate::{
@@ -25,6 +27,7 @@ use crate::{
     tracking::TrackingRefusal,
     upstream::TransactionSource,
     utxos::{SpendableNotes, WalletCursor, WalletStatusQuery},
+    wallet_snapshots::WalletSnapshotRelease,
 };
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -48,6 +51,8 @@ pub enum AuthorityTransferError {
     SourceNote = -32227,
     #[error("the sealed move spends a note no requested source holds")]
     UnrequestedInput = -32228,
+    #[error("the withdrawal mint uses another token program")]
+    WithdrawalMint = -32229,
 }
 
 impl AuthorityTransferError {
@@ -81,6 +86,12 @@ impl From<DelegateSourceError> for RingRpcError {
             DelegateSourceError::Client(error) => error.into(),
         }
     }
+}
+
+struct DelegateSourceScan {
+    address: ShieldedAddress,
+    owner_key: [u8; 32],
+    resolved: ResolvedSource,
 }
 
 struct ScannedEnrollment<'a, S> {
@@ -117,41 +128,16 @@ impl<S: TransactionSource> Hub<S> {
             .transpose()?;
         let service = self.service(Some(ring))?;
         let shared = self.shared();
-        let now = shared.clock.now()?;
-        // 1. The named key signed the read for the service and ring.
-        let nonce = WalletCheck {
-            wallet: delegate,
-            signature: &request.signature,
-            timestamp: request.timestamp,
-            nonce: &request.nonce,
-            attestation: &DelegateNotesAttestation {
+        self.authorize_delegate_read(
+            request,
+            &DelegateNotesAttestation {
                 target: service.read_target(),
                 delegate,
                 owner,
                 cursor: request.cursor.clone(),
             },
-            now,
-        }
-        .decide()?;
-        // 2. The config names the key its delegate under the auditor key held here.
-        let config = shared
-            .source
-            .ring_config(ring)
-            .await?
-            .filter(|config| config.delegate == Some(delegate))
-            .ok_or(AuthorityTransferError::NotDelegate)?;
-        if config.auditor_pubkey != service.auditor_pubkey() {
-            return Err(AuthorityTransferError::ForeignAuditor.into());
-        }
-        shared
-            .replay
-            .accept(ReplayCheck {
-                ring,
-                nonce,
-                timestamp: request.timestamp,
-                now,
-            })
-            .await?;
+        )
+        .await?;
         // 3. One scan answers the secret, it opens to the key the owner's tracking row binds and
         //    stays out of the store. The owner's own account answers the enrollment.
         let enrolled = service.scanned_enrollment(&owner.to_bytes()).await?;
@@ -167,6 +153,8 @@ impl<S: TransactionSource> Hub<S> {
             status: shared
                 .store(ring)
                 .wallet_status(WalletStatusQuery {
+                    principal: *PublicKey::from_ed25519(delegate.as_array()).as_bytes(),
+                    now: shared.clock.now()?,
                     enrollment: shared.source.tracking_enrollment(ring, owner).await?,
                     wallet: owner,
                     ring,
@@ -175,6 +163,74 @@ impl<S: TransactionSource> Hub<S> {
                 })
                 .await?,
         })
+    }
+
+    pub async fn release_delegate_snapshot(
+        &self,
+        request: &GetDelegateNotesRequest,
+    ) -> Result<bool, RingRpcError> {
+        let encoded = request.cursor.as_ref().ok_or(RingRpcError::InvalidCursor)?;
+        let cursor = WalletCursor::decode(&encoded.0)?;
+        let service = self.service(Some(request.ring.0))?;
+        self.authorize_delegate_read(
+            request,
+            &DelegateSnapshotReleaseAttestation {
+                target: service.read_target(),
+                delegate: request.delegate.0,
+                owner: request.owner.0,
+                cursor: encoded.clone(),
+            },
+        )
+        .await?;
+        self.shared()
+            .store(request.ring.0)
+            .release_wallet_snapshot(WalletSnapshotRelease {
+                ring: request.ring.0,
+                wallet: request.owner.0,
+                principal: *PublicKey::from_ed25519(request.delegate.0.as_array()).as_bytes(),
+                cursor,
+                now: self.shared().clock.now()?,
+            })
+            .await?;
+        Ok(true)
+    }
+
+    async fn authorize_delegate_read(
+        &self,
+        request: &GetDelegateNotesRequest,
+        attestation: &impl Attestation,
+    ) -> Result<(), RingRpcError> {
+        let (ring, delegate) = (request.ring.0, request.delegate.0);
+        let shared = self.shared();
+        let now = shared.clock.now()?;
+        let nonce = WalletCheck {
+            wallet: delegate,
+            signature: &request.signature,
+            timestamp: request.timestamp,
+            nonce: &request.nonce,
+            attestation,
+            now,
+        }
+        .decide()?;
+        let config = shared
+            .source
+            .ring_config(ring)
+            .await?
+            .filter(|config| config.delegate == Some(delegate))
+            .ok_or(AuthorityTransferError::NotDelegate)?;
+        if config.auditor_pubkey != self.service(Some(ring))?.auditor_pubkey() {
+            return Err(AuthorityTransferError::ForeignAuditor.into());
+        }
+        shared
+            .replay
+            .accept(ReplayCheck {
+                ring,
+                nonce,
+                timestamp: request.timestamp,
+                now: shared.clock.now()?,
+            })
+            .await?;
+        Ok(())
     }
 
     /// An owner dodging a block need not hand over an address.
@@ -295,43 +351,85 @@ impl<S: TransactionSource> Hub<S> {
         // The same openings fill the allowed set the sealed inputs answer to.
         let assets = shared.due_assets().await;
         let mut mints: Vec<Mint> = Vec::new();
-        for payment in &transfer.payments {
-            let mint = assets.registry().mint(&payment.mint.0)?;
+        for address in transfer
+            .payments
+            .iter()
+            .chain(&transfer.exits)
+            .map(|payment| payment.mint.0)
+            .chain(transfer.withdrawals.iter().map(|leg| leg.mint.0))
+        {
+            let mint = assets.registry().mint(&address)?;
             if !mints.contains(&mint) {
                 mints.push(mint);
             }
         }
+        let payments: Vec<DelegatePayment> =
+            transfer.payments.iter().copied().map(Into::into).collect();
+        let exits: Vec<DelegatePayment> = transfer.exits.iter().copied().map(Into::into).collect();
+        let withdrawals: Vec<DelegateWithdrawal> = transfer
+            .withdrawals
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect();
+        let mut candidates = DelegateFunding {
+            payments: &payments,
+            exits: &exits,
+            withdrawals: &withdrawals,
+        }
+        .candidates()
+        .map_err(crate::relay::RelayError::proof)?;
         let unheld = HashSet::new();
         let enrollment = ScannedEnrollment { service: &service };
-        let mut allowed = AllowedNullifiers::default();
-        let mut sources = Vec::with_capacity(transfer.sources.len());
+        let mut resolved_sources = Vec::with_capacity(transfer.sources.len());
         for source in &transfer.sources {
-            let source = source.0;
-            let owner_key = source
+            let address = source.0;
+            let owner_key = address
                 .solana_address()
                 .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
                 .to_bytes();
-            let resolved = ResolvedSource::resolve(source, &enrollment).await?;
-            let mut by_mint = shared
+            let resolved = ResolvedSource::resolve(address, &enrollment).await?;
+            shared
                 .store(ring)
-                .spendable_by_mint(SpendableNotes {
-                    ring,
-                    owner_key,
-                    nullifier_key: resolved.nullifier_key(),
-                    mints: &mints,
-                    held: &unheld,
-                })
+                .visit_spendable_notes(
+                    SpendableNotes {
+                        ring,
+                        owner_key,
+                        nullifier_key: resolved.nullifier_key(),
+                        mints: &mints,
+                        held: &unheld,
+                    },
+                    |note| candidates.observe(&note),
+                )
                 .await?;
-            let notes: Vec<WalletUtxo> = mints
-                .iter()
-                .flat_map(|mint| by_mint.remove(&mint.asset).unwrap_or_default())
+            resolved_sources.push(DelegateSourceScan {
+                address,
+                owner_key,
+                resolved,
+            });
+        }
+        let mut selected = candidates
+            .select()
+            .map_err(crate::relay::RelayError::proof)?;
+        let mut allowed = AllowedNullifiers::default();
+        let mut sources = Vec::with_capacity(resolved_sources.len());
+        for source in resolved_sources {
+            let owner = PublicKey::from_ed25519(&source.owner_key);
+            let notes: Vec<WalletUtxo> = selected
+                .extract_if(.., |note| {
+                    note.utxo.owner == owner
+                        && note.nullifier_pubkey == source.address.nullifier_pubkey
+                })
                 .collect();
-            allowed.admit(&resolved, &notes)?;
+            allowed.admit(&source.resolved, &notes)?;
             sources.push(SealedSource {
-                address: source,
-                nullifier_key: resolved.into_nullifier_key(),
+                address: source.address,
+                nullifier_key: source.resolved.into_nullifier_key(),
                 notes,
             });
+        }
+        if !selected.is_empty() {
+            return Err(AuthorityTransferError::SourceNote.into());
         }
         relay
             .prepare_delegated(
@@ -342,15 +440,9 @@ impl<S: TransactionSource> Hub<S> {
                     sources: &sources,
                     allowed: &allowed,
                     tx_viewing_key,
-                    payments: transfer
-                        .payments
-                        .iter()
-                        .map(|payment| DelegatePayment {
-                            recipient: payment.recipient.0,
-                            mint: payment.mint.0,
-                            amount: payment.amount,
-                        })
-                        .collect(),
+                    payments,
+                    exits,
+                    withdrawals,
                     assets: assets.registry(),
                 },
             )
@@ -363,6 +455,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
+    use custom_ring_sdk::{DelegatePayment, DelegateWithdrawal};
     use solana_address::Address;
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;
@@ -401,6 +494,9 @@ mod tests {
         /// One per source, in the request's order.
         secrets: Vec<[u8; 31]>,
         nullifiers: Vec<[u8; 32]>,
+        payments: Vec<DelegatePayment>,
+        exits: Vec<DelegatePayment>,
+        withdrawals: Vec<DelegateWithdrawal>,
     }
 
     #[async_trait]
@@ -450,6 +546,9 @@ mod tests {
         ) -> Result<RelayProofInputs, RingRpcError> {
             self.sealed.lock().expect("sealed").push(Sealed {
                 delegate: seal.delegate,
+                payments: seal.payments.clone(),
+                exits: seal.exits.clone(),
+                withdrawals: seal.withdrawals.clone(),
                 secrets: seal
                     .sources
                     .iter()
@@ -543,6 +642,8 @@ mod tests {
             },
             delegate: signer.pubkey(),
             transfer: AuthorityTransfer {
+                exits: Vec::new(),
+                withdrawals: Vec::new(),
                 sources: sources.iter().map(|source| (*source).into()).collect(),
                 payments: vec![AuthorityPayment {
                     recipient: recipient.into(),
@@ -555,6 +656,100 @@ mod tests {
             .at(unix_now().expect("clock"))
             .sign(signer, &ViewingKey::new())
             .expect("signed request")
+    }
+
+    #[tokio::test]
+    async fn hosted_public_legs_are_signed_and_forwarded() {
+        let delegate = Keypair::new_from_array([21; 32]);
+        let (fixture, prover) = served(delegate.pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let escrowed = fixture.escrow_notes(&wallet, 2).await;
+        let mut transfer = request(&fixture, &delegate, address(&wallet, &escrowed)).transfer;
+        transfer.payments[0].amount = 3;
+        transfer.exits = transfer.payments.clone();
+        transfer.withdrawals = vec![zolana_ring_client::rpc::AuthorityWithdrawal {
+            recipient: wallet.pubkey().into(),
+            mint: MINT.into(),
+            amount: 2,
+            token_program: Some(
+                Address::new_from_array(spr_interface::SPL_TOKEN_PROGRAM_ID).into(),
+            ),
+        }];
+        let signed = SignedRequest::new(AuthorityTransferAttestation {
+            target: ReadTarget {
+                cluster: GENESIS,
+                service: fixture.hub.service_pubkey(),
+                ring: RING,
+            },
+            delegate: delegate.pubkey(),
+            transfer: transfer.clone(),
+        })
+        .at(unix_now().unwrap())
+        .sign(&delegate, &ViewingKey::new())
+        .unwrap();
+        let mut changed = signed.clone();
+        changed.transfer.withdrawals[0].amount += 1;
+        assert!(fixture
+            .hub
+            .prepare_authority_transfer(&changed)
+            .await
+            .is_err());
+        let mut changed = signed.clone();
+        changed
+            .transfer
+            .payments
+            .append(&mut changed.transfer.exits);
+        assert!(fixture
+            .hub
+            .prepare_authority_transfer(&changed)
+            .await
+            .is_err());
+        assert!(prover.sealed.lock().unwrap().is_empty());
+        fixture
+            .hub
+            .prepare_authority_transfer(&signed)
+            .await
+            .unwrap();
+        let sealed = prover.sealed.lock().unwrap();
+        assert_eq!(
+            sealed[0].payments,
+            transfer
+                .payments
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<DelegatePayment>>()
+        );
+        assert_eq!(
+            sealed[0].exits,
+            transfer
+                .exits
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<DelegatePayment>>()
+        );
+        assert_eq!(
+            sealed[0].withdrawals,
+            transfer
+                .withdrawals
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<DelegateWithdrawal>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn hosted_selection_retains_only_the_funded_openings() {
+        let delegate = Keypair::new_from_array([21; 32]);
+        let (fixture, prover) = served(delegate.pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let key = fixture.escrow_notes(&wallet, 100).await;
+        fixture
+            .hub
+            .prepare_authority_transfer(&request(&fixture, &delegate, address(&wallet, &key)))
+            .await
+            .unwrap();
+        let sealed = prover.sealed.lock().unwrap();
+        assert_eq!(sealed[0].nullifiers.len(), 2);
     }
 
     #[tokio::test]
@@ -611,7 +806,7 @@ mod tests {
             .try_into()
             .unwrap_or_else(|_| panic!("one seal"));
         assert_eq!(sealed.secrets, [*own.secret(), *other.secret()]);
-        assert_eq!(sealed.nullifiers.len(), 3);
+        assert_eq!(sealed.nullifiers.len(), 2);
 
         let unescrowed = Keypair::new_from_array([12; 32]);
         let missing = address(&unescrowed, &NullifierKey::from_secret([12; 31]));

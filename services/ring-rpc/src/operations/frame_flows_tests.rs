@@ -79,7 +79,7 @@ fn store_with(notes: &[CreatedUtxo]) -> AuditStore {
         .map(|note| HeldEnrollment::unsealed(note.utxo.owner_key, &key_of(&note.utxo.owner_key)))
         .collect();
     let admission = block_on(store.enrollment_admission(rows)).expect("admission");
-    store.admit_enrollments(admission);
+    store.admit_enrollments(admission).expect("admitted");
     let opener = |held: &HeldEnrollment| Some(key_of(&held.owner_key));
     let mut work = PageWork::new(&store, &opener);
     work.open(frame(), notes.iter().copied());

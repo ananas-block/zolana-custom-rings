@@ -348,7 +348,7 @@ describe("delegate sources", () => {
       notes: assets.map((asset, at) => noteOf(fixture, owner, leaf + at, asset)),
     });
 
-    it("funds every mint of a move from one shared tree, the client's or another", async () => {
+    it("funds every mint of a move across at most two trees", async () => {
       const [member, payee] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
       const { fixture, delegate } = await moveRing("confidential", [member, payee]);
       const second = treeAddress(fixture.client.treeId + 1);
@@ -380,9 +380,7 @@ describe("delegate sources", () => {
           ],
           txViewingKey: TX_VIEWING_KEY,
         });
-      // The client's tree holds SOL alone, the second tree holds both mints.
       await move([
-        noteOf(fixture, member, 0),
         on(noteOf(fixture, member, 1), second),
         on(noteOf(fixture, member, 2, USDC), second),
       ]);
@@ -393,10 +391,12 @@ describe("delegate sources", () => {
         fixture.client.treeId + 1,
         fixture.client.treeId + 1,
       ]);
-      // A move only two trees fund together is refused.
-      await expect(
-        move([noteOf(fixture, member, 0), on(noteOf(fixture, member, 1, USDC), second)]),
-      ).rejects.toMatchObject({ causeCode: "RING_INSUFFICIENT_BALANCE" });
+      await move([noteOf(fixture, member, 0), on(noteOf(fixture, member, 1, USDC), second)]);
+      const split = fixture.sppCalls.at(-1)?.proofInputs;
+      expect(
+        split?.inputUtxos.filter((input) => !input.isDummy()).map((input) => input.treeId),
+      ).toEqual([fixture.client.treeId, fixture.client.treeId + 1]);
+      expect(split?.inputTreeIds()).toEqual([fixture.client.treeId, fixture.client.treeId + 1]);
     });
 
     it("spends several owners' notes and pays the change to the last note's owner", async () => {

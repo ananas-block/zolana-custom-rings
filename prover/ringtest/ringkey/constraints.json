@@ -20,13 +20,14 @@
   "custom_ring_deposit_8": 342171,
   "custom_ring_merge": 56114,
   "custom_ring_register_key": 39533,
-  "custom_ring_transfer_2_in24_w4_s4": 283806,
-  "custom_ring_transfer_4_in24_w4_s4": 359833,
-  "custom_ring_transfer_8_in16_w4_s4": 493062,
-  "custom_ring_transfer_entry_4_in8_w4_s8": 601688,
-  "custom_ring_transfer_entry_8_in2_w4_s2": 572049,
-  "custom_ring_transfer_entry_8_in5_w4_s4": 655666,
-  "custom_ring_transfer_entry_8_in8_w32_s8": 1112862,
-  "custom_ring_transfer_wide_2_in40_w4_s8": 419514,
-  "custom_ring_transfer_wide_8_in24_w32_s13": 1064576
+  "custom_ring_transfer_2_in24_w4_s4": 416147,
+  "custom_ring_transfer_4_in24_w4_s4": 491234,
+  "custom_ring_transfer_8_in16_w4_s4": 580599,
+  "custom_ring_transfer_entry_4_in8_w4_s8": 645710,
+  "custom_ring_transfer_entry_8_in2_w4_s2": 583056,
+  "custom_ring_transfer_entry_8_in5_w4_s4": 683181,
+  "custom_ring_transfer_entry_8_in8_w32_s8": 1151443,
+  "custom_ring_transfer_payout_16_in1_w0_s1": 540859,
+  "custom_ring_transfer_wide_2_in40_w4_s8": 635226,
+  "custom_ring_transfer_wide_8_in24_w32_s13": 1180315
 }

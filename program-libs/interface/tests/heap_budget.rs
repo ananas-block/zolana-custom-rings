@@ -156,6 +156,7 @@ fn served(rail: RingRail, entry: bool) -> Vec<(TransferShape, usize, usize)> {
         {
             let (inputs, outputs) = (spp.n_inputs(), spp.n_outputs());
             let key = FrameKey {
+                format: custom_ring_interface::DisclosureFormat::Standard,
                 rail,
                 inputs,
                 outputs,
@@ -289,6 +290,7 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> Option<RingT
     let mut data = fixture.base(case.rail, case.inputs as u8, case.outputs as u8);
     data.entry = case.entry;
     data.wide_owners = TransferSpend {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         rail: case.rail,
         inputs: case.inputs,
         outputs: case.outputs,

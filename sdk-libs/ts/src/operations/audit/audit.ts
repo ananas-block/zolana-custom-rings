@@ -29,6 +29,7 @@ import type { IndexedShieldedTransaction, OutputContext } from "@heliuslabs/zola
 import {
   decodeAuditEnvelope,
   decodeAuditRecord,
+  decodeCompactAuditRecord,
   decodeDataTail,
   EMPTY_TAIL,
   envelopeInputMap,
@@ -381,6 +382,9 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
     const seed = blindingSeed;
     const slots: SlotReader = {
       ringId: ringIdField(ring),
+      ...(envelope.evidence.kind === "singleAssetPayout"
+        ? { commonMint: envelope.evidence.mint }
+        : {}),
       anonymous: isAnonymousFrame(input.rail),
       hasData: layout.hasData,
       blinding: (outputIndex) =>
@@ -647,6 +651,7 @@ function auditRefusal(reason: string): RingError {
 }
 
 interface SlotReader {
+  readonly commonMint?: Address;
   readonly ringId: Bytes32;
   readonly anonymous: boolean;
   readonly hasData: boolean;
@@ -718,7 +723,10 @@ function readSlotFields(
 ): Readonly<{ record: ReturnType<typeof decodeAuditRecord>; tail: DataTail }> | undefined {
   try {
     return {
-      record: decodeAuditRecord(reader.record(slot)),
+      record:
+        reader.commonMint === undefined
+          ? decodeAuditRecord(reader.record(slot))
+          : decodeCompactAuditRecord(reader.record(slot), reader.commonMint),
       tail: reader.hasData ? decodeDataTail(reader.tail(slot)) : EMPTY_TAIL,
     };
   } catch (error) {

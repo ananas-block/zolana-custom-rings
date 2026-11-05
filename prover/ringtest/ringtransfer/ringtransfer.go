@@ -131,11 +131,19 @@ func (w World) spend(t testing.TB, a *ringaudit.Audit) {
 		return
 	}
 	a.InputCount = 2 + len(w.CoOwners)
+	if a.Shape.SingleAssetPayout {
+		a.InputCount = 1
+	}
 	if w.PublicFunded {
 		return
 	}
 	owed := w.owedAsset(t, a)
 	sender, nullifierPk := Sender(t), SenderNullifierPk(t)
+	if a.Shape.SingleAssetPayout {
+		a.InputCount = 1
+		a.Inputs[0] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, nullifierPk, a.RingProgramID, owed, 51), OwnerKey: SenderKey(), Mint: ringaudit.FixtureMint}
+		return
+	}
 	secondRing := a.RingProgramID
 	if w.DefaultInput {
 		secondRing = big.NewInt(0)
@@ -174,7 +182,7 @@ func (w World) owedAsset(t testing.TB, a *ringaudit.Audit) uint64 {
 func (w World) newAudit(t testing.TB, shape audit.StreamShape) ringaudit.Audit {
 	t.Helper()
 	exits := w.Exits
-	if exits == nil && shape.Outputs > 2 {
+	if exits == nil && shape.Outputs > 2 && !shape.SingleAssetPayout {
 		exits = []int{shape.Outputs - 2}
 	}
 	a := ringaudit.NewAudit(t, shape, exits...)

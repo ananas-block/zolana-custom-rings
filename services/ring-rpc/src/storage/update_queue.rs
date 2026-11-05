@@ -10,7 +10,7 @@ use zolana_ring_policy::ListSet;
 use crate::{
     landing::Attempt,
     record_update::{
-        authority_batch, AuthorityHead, CheckedUpdate, PendingApproval, QueuedUpdate,
+        authority_batch, ApprovalGrant, AuthorityHead, CheckedUpdate, PendingApproval, QueuedUpdate,
         RecordUpdateRefusal, UpdateSigner, WalletBatch, MAX_BATCH_ATTEMPTS,
     },
 };
@@ -23,12 +23,13 @@ const APPLIED: &str = "applied";
 const REFUSED: &str = "refused";
 const FAILED: &str = "failed";
 const PENDING_APPROVAL_COLUMNS: &str = "id, signer, member, writes, awaited, valid_until_slot";
-const HEAD_COLUMNS: &str = "u.seq, u.id, u.ring, u.writes, u.signer, u.role, u.queued_slot, \
+const HEAD_COLUMNS: &str = "u.seq, u.id, u.ring, u.registry, u.writes, u.signer, u.role, u.queued_slot, \
                             u.valid_until_slot";
 /// Keys bound into one delete, under every backend's parameter ceiling.
 const KEYS_PER_DELETE: usize = 256;
 /// One update past a full batch, the planner reads whether more wallet updates wait behind it.
 const OLDEST_HEADS: usize = APPLY_BATCH + 1;
+const EXPIRY_HEADS_PER_STATUS: usize = APPLY_BATCH;
 const WALLET_ROLE: &str = "wallet";
 const POLICY_ROLE: &str = "policy";
 
@@ -63,9 +64,20 @@ pub(crate) struct NewBatch<'a> {
     pub updates: &'a [QueuedUpdate],
 }
 
-/// `cursor` names any update of the ring, the page starts after it in submit order.
-pub(crate) struct PendingApprovalPage {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ApprovalScope {
     pub ring: Address,
+    pub registry: Address,
+}
+
+pub(crate) struct ApprovalCandidates<'a> {
+    pub scope: ApprovalScope,
+    pub grants: &'a [ApprovalGrant],
+    pub slot: u64,
+}
+
+pub(crate) struct PendingApprovalPage {
+    pub scope: ApprovalScope,
     pub cursor: Option<[u8; 32]>,
     pub limit: usize,
 }
@@ -152,16 +164,23 @@ impl<'a> UpdateQueue<'a> {
         }
         let approves = new.approves;
         for pending in approves {
-            let sql = "UPDATE records_updates SET status=$1, joined=$2 WHERE id=$3 AND status=$4";
+            let sql = "UPDATE records_updates SET status=$1, joined=$2 \
+                       WHERE id=$3 AND status=$4 AND registry=$5 AND ring=$6";
             let values = vec![
                 QUEUED.into(),
                 id.clone(),
                 bytes(pending),
                 PENDING_APPROVAL.into(),
+                registry.clone(),
+                bytes(new.request.update.ring.0.as_array()),
             ];
-            transaction
+            let joined = transaction
                 .execute(statement(&transaction, sql, values))
                 .await?;
+            if joined.rows_affected() != 1 {
+                transaction.rollback().await?;
+                return Err(corrupt("pending approval scope"));
+            }
         }
         // 2. An approval expires with the earliest update it joined, so expiry reads one column.
         if !approves.is_empty() {
@@ -312,7 +331,7 @@ impl<'a> UpdateQueue<'a> {
             .map(|row| column_bytes(row, "id"))
             .collect::<Result<Vec<_>, _>>()?;
         let sql = format!(
-            "SELECT joined, writes FROM records_updates WHERE status=$1 AND joined IN ({}) \
+            "SELECT id, joined, ring, registry, writes FROM records_updates WHERE status=$1 AND joined IN ({}) \
              ORDER BY seq",
             placeholders(2, ids.len())
         );
@@ -323,16 +342,24 @@ impl<'a> UpdateQueue<'a> {
         rows.iter()
             .zip(ids)
             .map(|(row, id)| {
+                let scope = ApprovalScope::from_row(row)?;
                 let mut writes = Vec::new();
+                let mut members = Vec::new();
                 for joined in &joined {
                     if column_bytes(joined, "joined")? == id {
+                        if ApprovalScope::from_row(joined)? != scope {
+                            return Err(corrupt("joined approval scope"));
+                        }
+                        members.push(column_bytes(joined, "id")?);
                         writes.extend(stored_writes(joined)?);
                     }
                 }
                 writes.extend(stored_writes(row)?);
                 Ok(QueuedUpdate {
                     id,
-                    ring: address(row, "ring")?,
+                    ring: scope.ring,
+                    registry: scope.registry,
+                    joined: members,
                     writes,
                     signer: update_signer(row)?,
                     queued_slot: unsigned(row, "queued_slot")?,
@@ -342,24 +369,43 @@ impl<'a> UpdateQueue<'a> {
             .collect()
     }
 
-    /// Oldest first.
     pub async fn pending_approvals(
         &self,
-        ring: Address,
-        members: &[[u8; 32]],
+        query: ApprovalCandidates<'_>,
     ) -> Result<Vec<PendingApproval>, DbErr> {
-        if members.is_empty() {
+        let mut values = vec![
+            bytes(query.scope.ring.as_array()),
+            bytes(query.scope.registry.as_array()),
+            PENDING_APPROVAL.into(),
+            integer(query.slot)?,
+            count(APPLY_BATCH)?,
+        ];
+        let mut buckets = Vec::new();
+        for grant in query.grants {
+            let granted = grant.lists.record_bits();
+            let mut awaited = granted;
+            while awaited != 0 {
+                let member_index = values.len() + 1;
+                let awaited_index = member_index + 1;
+                values.push(bytes(&grant.member));
+                values.push(integer(awaited)?);
+                buckets.push(format!(
+                    "SELECT * FROM (SELECT {PENDING_APPROVAL_COLUMNS}, seq FROM records_updates \
+                     WHERE ring=$1 AND registry=$2 AND status=$3 AND valid_until_slot >= $4 \
+                     AND member=${member_index} AND awaited=${awaited_index} \
+                     ORDER BY valid_until_slot, seq LIMIT $5) AS pending_{}",
+                    buckets.len()
+                ));
+                awaited = (awaited - 1) & granted;
+            }
+        }
+        if buckets.is_empty() {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "SELECT {PENDING_APPROVAL_COLUMNS} FROM records_updates \
-             WHERE ring=$1 AND status=$2 AND member IN ({}) ORDER BY seq",
-            placeholders(3, members.len())
+            "SELECT {PENDING_APPROVAL_COLUMNS} FROM ({}) AS pending ORDER BY seq LIMIT $5",
+            buckets.join(" UNION ALL ")
         );
-        let values = [bytes(ring.as_array()), PENDING_APPROVAL.into()]
-            .into_iter()
-            .chain(members.iter().map(bytes))
-            .collect();
         self.query_all(&sql, values)
             .await?
             .iter()
@@ -367,18 +413,18 @@ impl<'a> UpdateQueue<'a> {
             .collect()
     }
 
-    /// `None` when `cursor` names no update of the ring.
     pub async fn pending_approval_page(
         &self,
         page: PendingApprovalPage,
     ) -> Result<Option<Vec<PendingApproval>>, DbErr> {
-        let ring = bytes(page.ring.as_array());
+        let ring = bytes(page.scope.ring.as_array());
+        let registry = bytes(page.scope.registry.as_array());
         let after = match page.cursor {
             None => 0,
             Some(cursor) => {
-                let sql = "SELECT seq FROM records_updates WHERE id=$1 AND ring=$2";
+                let sql = "SELECT seq FROM records_updates WHERE id=$1 AND ring=$2 AND registry=$3";
                 match self
-                    .query_one(sql, vec![bytes(&cursor), ring.clone()])
+                    .query_one(sql, vec![bytes(&cursor), ring.clone(), registry.clone()])
                     .await?
                 {
                     Some(row) => row.try_get::<i64>("", "seq")?,
@@ -390,9 +436,9 @@ impl<'a> UpdateQueue<'a> {
             .map_err(|_| DbErr::Custom("page limit exceeds the store integer range".to_owned()))?;
         let sql = format!(
             "SELECT {PENDING_APPROVAL_COLUMNS} FROM records_updates \
-             WHERE ring=$1 AND status=$2 AND seq>$3 ORDER BY seq LIMIT $4"
+             WHERE ring=$1 AND registry=$2 AND status=$3 AND seq>$4 ORDER BY seq LIMIT $5"
         );
-        let values = vec![ring, PENDING_APPROVAL.into(), after.into(), limit.into()];
+        let values = vec![ring, registry, PENDING_APPROVAL.into(), after.into(), limit.into()];
         self.query_all(&sql, values)
             .await?
             .iter()
@@ -401,19 +447,19 @@ impl<'a> UpdateQueue<'a> {
             .map(Some)
     }
 
-    /// `false` when no update of `ring` is pending list approval under `id`.
     pub async fn refuse_pending_approval(
         &self,
-        ring: Address,
+        scope: ApprovalScope,
         id: &[u8; 32],
     ) -> Result<bool, DbErr> {
         let sql = "UPDATE records_updates SET status=$1, reason=$2 \
-                   WHERE id=$3 AND ring=$4 AND status=$5";
+                   WHERE id=$3 AND ring=$4 AND registry=$5 AND status=$6";
         let values = vec![
             REFUSED.into(),
             RecordUpdateRefusal::ListApprovalRefused.to_string().into(),
             bytes(id),
-            bytes(ring.as_array()),
+            bytes(scope.ring.as_array()),
+            bytes(scope.registry.as_array()),
             PENDING_APPROVAL.into(),
         ];
         let transaction = self.db.begin().await?;
@@ -422,23 +468,31 @@ impl<'a> UpdateQueue<'a> {
         Ok(refused == 1)
     }
 
-    /// An update past its valid until slot turns refused, an expired approval takes its joined
-    /// updates with it.
     pub async fn expire(&self, registry: Address, slot: u64) -> Result<(), DbErr> {
-        let sql = "UPDATE records_updates SET status=$1, reason=$2 \
-                   WHERE registry=$3 AND status IN ($4,$5) AND (valid_until_slot<$6 \
-                   OR joined IN (SELECT id FROM records_updates WHERE registry=$3 \
-                   AND status=$5 AND valid_until_slot<$6))";
-        let values = vec![
-            REFUSED.into(),
-            RecordUpdateRefusal::Expired.to_string().into(),
-            bytes(registry.as_array()),
-            PENDING_APPROVAL.into(),
-            QUEUED.into(),
-            integer(slot)?,
-        ];
         let transaction = self.db.begin().await?;
-        finish_updates(&transaction, sql, values).await?;
+        for status in [PENDING_APPROVAL, QUEUED] {
+            let sql = "SELECT id, ring, registry FROM records_updates \
+                       WHERE registry=$1 AND status=$2 AND joined IS NULL AND valid_until_slot<$3 \
+                       ORDER BY valid_until_slot, seq LIMIT $4";
+            let heads = transaction.query_all(statement(&transaction, sql, vec![
+                bytes(registry.as_array()), status.into(), integer(slot)?, count(EXPIRY_HEADS_PER_STATUS)?,
+            ])).await?;
+            for head in heads {
+                let scope = ApprovalScope::from_row(&head)?;
+                let sql = "UPDATE records_updates SET status=$1, reason=$2 \
+                           WHERE (id=$3 OR joined=$3) AND ring=$4 AND registry=$5 AND status IN ($6,$7)";
+                let values = vec![
+                    REFUSED.into(),
+                    RecordUpdateRefusal::Expired.to_string().into(),
+                    bytes(&column_bytes(&head, "id")?),
+                    bytes(scope.ring.as_array()),
+                    bytes(scope.registry.as_array()),
+                    PENDING_APPROVAL.into(),
+                    QUEUED.into(),
+                ];
+                finish_updates(&transaction, sql, values).await?;
+            }
+        }
         transaction.commit().await
     }
 
@@ -484,17 +538,39 @@ impl<'a> UpdateQueue<'a> {
             .ok_or_else(|| corrupt("batch id"))?
             .try_get("", "id")?;
         for update in batch.updates {
+            if update.registry != batch.registry {
+                transaction.rollback().await?;
+                return Err(corrupt("batch registry"));
+            }
             let sql = "UPDATE records_updates SET status=$1, batch=$2 \
-                       WHERE (id=$3 OR joined=$3) AND status=$4";
+                       WHERE ((id=$3 AND joined IS NULL) OR joined=$3) AND status=$4 \
+                       AND registry=$5 AND ring=$6 RETURNING id, joined";
             let values = vec![
                 SUBMITTED.into(),
                 id.into(),
                 bytes(&update.id),
                 QUEUED.into(),
+                bytes(update.registry.as_array()),
+                bytes(update.ring.as_array()),
             ];
-            transaction
-                .execute(statement(&transaction, sql, values))
+            let claimed = transaction
+                .query_all(statement(&transaction, sql, values))
                 .await?;
+            let mut matches = claimed.len() == update.joined.len() + 1;
+            for row in claimed {
+                let member = column_bytes(&row, "id")?;
+                let joined = row.try_get::<Option<Vec<u8>>>("", "joined")?;
+                matches &= if member == update.id {
+                    joined.is_none()
+                } else {
+                    update.joined.contains(&member)
+                        && joined.as_deref() == Some(update.id.as_slice())
+                };
+            }
+            if !matches {
+                transaction.rollback().await?;
+                return Err(corrupt("batch selection"));
+            }
         }
         transaction.commit().await
     }
@@ -552,6 +628,15 @@ impl<'a> UpdateQueue<'a> {
         self.read
             .fetch_add(rows.len(), std::sync::atomic::Ordering::Relaxed);
         Ok(rows)
+    }
+}
+
+impl ApprovalScope {
+    fn from_row(row: &QueryResult) -> Result<Self, DbErr> {
+        Ok(Self {
+            ring: address(row, "ring")?,
+            registry: address(row, "registry")?,
+        })
     }
 }
 
@@ -683,7 +768,8 @@ mod tests {
     use zolana_ring_client::rpc::{RecordUpdate, RecordUpdateId};
 
     use super::*;
-    use crate::database::Store;
+    use crate::{database::Store, record_update::AwaitedLists};
+    use zolana_ring_policy::ListId;
 
     const REGISTRY: Address = Address::new_from_array([0x52; 32]);
     const RING: Address = Address::new_from_array([8; 32]);
@@ -695,41 +781,311 @@ mod tests {
         member
     }
 
-    /// One update writing `member(index)`, its id unique per role and index.
-    async fn insert(queue: &UpdateQueue<'_>, index: u32, signer: UpdateSigner) {
-        let mut id = member(index);
-        id[31] = u8::from(signer.is_authority()) + 1;
-        let request = SubmitRecordUpdateRequest {
-            registry: REGISTRY.into(),
-            update: RecordUpdate {
-                genesis_hash: Hash([0; 32]),
-                ring: RING.into(),
-                entries: Vec::new(),
-                valid_until_slot: u64::from(u32::MAX),
-                awaited_lists: 0,
-            },
-            signer: signer.address().into(),
-            signature: Signature::default().into(),
-        };
-        let update = CheckedUpdate {
-            id: RecordUpdateId(Hash(id)),
-            writes: vec![RecordWriteData {
-                member: member(index),
-                ..RecordWriteData::default()
-            }],
-            entries: Vec::new(),
-            signer,
-            awaited: None,
-        };
-        queue
-            .insert(NewUpdate {
-                request: &request,
-                update: &update,
+    struct UpdateFixture {
+        request: SubmitRecordUpdateRequest,
+        update: CheckedUpdate,
+    }
+
+    impl UpdateFixture {
+        fn new(index: u32, signer: UpdateSigner) -> Self {
+            let mut id = member(index);
+            id[31] = u8::from(signer.is_authority()) + 1;
+            Self {
+                request: SubmitRecordUpdateRequest {
+                    registry: REGISTRY.into(),
+                    update: RecordUpdate {
+                        genesis_hash: Hash([0; 32]),
+                        ring: RING.into(),
+                        entries: Vec::new(),
+                        valid_until_slot: u64::from(u32::MAX),
+                        awaited_lists: 0,
+                    },
+                    signer: signer.address().into(),
+                    signature: Signature::default().into(),
+                },
+                update: CheckedUpdate {
+                    id: RecordUpdateId(Hash(id)),
+                    writes: vec![RecordWriteData {
+                        member: member(index),
+                        ..RecordWriteData::default()
+                    }],
+                    entries: Vec::new(),
+                    signer,
+                    awaited: None,
+                },
+            }
+        }
+
+        fn pending(index: u32) -> Self {
+            let mut fixture = Self::new(index, UpdateSigner::Wallet(Address::new_from_array([1; 32])));
+            fixture.update.awaited = Some(AwaitedLists {
+                lists: ListSet::single(ListId::Allow),
+                member: member(0),
+            });
+            fixture.request.update.awaited_lists = ListId::Allow.record_bit();
+            fixture
+        }
+
+        async fn insert(&self, queue: &UpdateQueue<'_>, approves: &[[u8; 32]]) -> Result<(), DbErr> {
+            queue.insert(NewUpdate {
+                request: &self.request,
+                update: &self.update,
                 queued_slot: 0,
-                approves: &[],
-            })
-            .await
-            .expect("insert");
+                approves,
+            }).await
+        }
+    }
+
+    async fn insert(queue: &UpdateQueue<'_>, index: u32, signer: UpdateSigner) {
+        UpdateFixture::new(index, signer).insert(queue, &[]).await.expect("insert");
+    }
+
+    #[tokio::test]
+    async fn approval_insert_rolls_back_when_pending_scope_changes() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let queue = UpdateQueue::new(store.connection());
+        let pending = UpdateFixture::pending(0);
+        pending.insert(&queue, &[]).await.expect("pending");
+        let approval = UpdateFixture::new(1, UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])));
+        queue.db.execute(statement(queue.db, "UPDATE records_updates SET registry=$1 WHERE id=$2", vec![
+            bytes(Address::new_from_array([3; 32]).as_array()), bytes(&pending.update.id.0.0),
+        ])).await.expect("change scope");
+        assert!(approval.insert(&queue, &[pending.update.id.0.0]).await.is_err());
+        assert!(!queue.contains(&approval.update.id.0.0).await.expect("lookup"));
+        assert_eq!(queue.status(&pending.update.id.0.0).await.expect("status"), Some(RecordUpdateStatus::PendingListApproval));
+        assert_eq!(member_rows(&queue).await, 1);
+    }
+
+    #[tokio::test]
+    async fn batch_claim_rolls_back_when_a_selected_member_changes() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let queue = UpdateQueue::new(store.connection());
+        let pending = UpdateFixture::pending(0);
+        pending.insert(&queue, &[]).await.expect("pending");
+        let approval = UpdateFixture::new(1, UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])));
+        approval.insert(&queue, &[pending.update.id.0.0]).await.expect("approval");
+        let batch = queue.plan(REGISTRY, 0).await.expect("plan").expect("batch");
+        queue.db.execute(statement(queue.db, "UPDATE records_updates SET registry=$1 WHERE id=$2", vec![
+            bytes(Address::new_from_array([3; 32]).as_array()), bytes(&pending.update.id.0.0),
+        ])).await.expect("change scope");
+        assert!(queue.plan(REGISTRY, 0).await.is_err());
+        assert!(queue.record_batch(NewBatch {
+            registry: REGISTRY,
+            attempt: Attempt { signature: Signature::default(), last_valid_block_height: 10 },
+            revision: 0,
+            updates: &batch,
+        }).await.is_err());
+        assert!(queue.open_batch(REGISTRY).await.expect("open batch").is_none());
+        assert_eq!(queue.status(&approval.update.id.0.0).await.expect("status"), Some(RecordUpdateStatus::Queued));
+        assert_eq!(member_rows(&queue).await, 2);
+    }
+
+    #[tokio::test]
+    async fn expiry_and_batch_claim_keep_one_group_status() {
+        for expiry_first in [true, false] {
+            let store = Store::open("sqlite::memory:", 1).await.expect("store");
+            let queue = UpdateQueue::new(store.connection());
+            let mut pending = UpdateFixture::pending(0);
+            pending.request.update.valid_until_slot = 10;
+            pending.insert(&queue, &[]).await.expect("pending");
+            let approval = UpdateFixture::new(1, UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])));
+            approval.insert(&queue, &[pending.update.id.0.0]).await.expect("approval");
+            let batch = queue.plan(REGISTRY, 0).await.expect("plan").expect("batch");
+            if expiry_first {
+                queue.expire(REGISTRY, 11).await.expect("expire");
+            }
+            let claimed = queue.record_batch(NewBatch {
+                registry: REGISTRY,
+                attempt: Attempt { signature: Signature::default(), last_valid_block_height: 20 },
+                revision: 0,
+                updates: &batch,
+            }).await;
+            if expiry_first {
+                assert!(claimed.is_err());
+                assert!(queue.open_batch(REGISTRY).await.expect("open batch").is_none());
+                assert_eq!(member_rows(&queue).await, 0);
+            } else {
+                claimed.expect("claim");
+                queue.expire(REGISTRY, 11).await.expect("expire");
+                let open = queue.open_batch(REGISTRY).await.expect("open batch").expect("claimed batch");
+                queue.settle(open.id, BatchOutcome::Applied).await.expect("settle");
+            }
+            for id in [pending.update.id.0.0, approval.update.id.0.0] {
+                let status = queue.status(&id).await.expect("status").expect("row");
+                if expiry_first {
+                    assert!(matches!(status, RecordUpdateStatus::Refused { .. }));
+                } else {
+                    assert!(matches!(status, RecordUpdateStatus::Applied { revision: 1, .. }));
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum QueueWinner {
+        Claim,
+        Expiry,
+    }
+
+    #[tokio::test]
+    #[ignore = "needs RING_RPC_TEST_POSTGRES_URL"]
+    async fn overlapping_expiry_and_claim_preserve_the_winning_transaction_on_postgres() {
+        let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
+        let winner_store = Store::open(&url, 1).await.expect("winner store");
+        let contender_store = Store::open(&url, 1).await.expect("contender store");
+        let observer_store = Store::open(&url, 1).await.expect("observer store");
+        for winner in [QueueWinner::Claim, QueueWinner::Expiry] {
+            let registry = Address::new_from_array(rand::random());
+            let queue = UpdateQueue::new(winner_store.connection());
+            let mut pending = UpdateFixture::pending(0);
+            pending.request.registry = registry.into();
+            pending.request.update.valid_until_slot = 10;
+            pending.update.id = RecordUpdateId(Hash(rand::random()));
+            pending.insert(&queue, &[]).await.expect("pending");
+            let mut approval = UpdateFixture::new(
+                1,
+                UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])),
+            );
+            approval.request.registry = registry.into();
+            approval.update.id = RecordUpdateId(Hash(rand::random()));
+            approval.insert(&queue, &[pending.update.id.0.0]).await.expect("approval");
+            let batch = queue.plan(registry, 0).await.expect("plan").expect("batch");
+            let contender_pid = backend_pid(contender_store.connection()).await;
+            let transaction = winner_store.connection().begin().await.expect("winning transaction");
+            let winner_pid = backend_pid(&transaction).await;
+            match winner {
+                QueueWinner::Claim => {
+                    let claimed_batch: i64 = transaction.query_one(statement(&transaction,
+                        "INSERT INTO records_batches(registry,signature,revision,last_valid_block_height,status) \
+                         VALUES($1,$2,0,20,$3) RETURNING id",
+                        vec![bytes(registry.as_array()), Signature::default().as_ref().to_vec().into(), SUBMITTED.into()],
+                    )).await.expect("winning batch").expect("batch row").try_get("", "id").expect("batch id");
+                    let claimed = transaction.execute(statement(&transaction,
+                        "UPDATE records_updates SET status=$1,batch=$2 WHERE registry=$3 AND status=$4",
+                        vec![SUBMITTED.into(), claimed_batch.into(), bytes(registry.as_array()), QUEUED.into()],
+                    )).await.expect("winning claim");
+                    assert_eq!(claimed.rows_affected(), 2);
+                }
+                QueueWinner::Expiry => {
+                    let expired = finish_updates(&transaction,
+                        "UPDATE records_updates SET status=$1,reason=$2 WHERE registry=$3 AND status=$4",
+                        vec![REFUSED.into(), RecordUpdateRefusal::Expired.to_string().into(), bytes(registry.as_array()), QUEUED.into()],
+                    ).await.expect("winning expiry");
+                    assert_eq!(expired, 2);
+                }
+            }
+            let contender = contender_store.clone();
+            let operation = tokio::spawn(async move {
+                let queue = UpdateQueue::new(contender.connection());
+                match winner {
+                    QueueWinner::Claim => queue.expire(registry, 11).await,
+                    QueueWinner::Expiry => queue.record_batch(NewBatch {
+                        registry,
+                        attempt: Attempt { signature: Signature::default(), last_valid_block_height: 20 },
+                        revision: 0,
+                        updates: &batch,
+                    }).await,
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    let observer = observer_store.connection();
+                    let blocked: bool = observer.query_one(statement(observer,
+                        "SELECT $1 = ANY(pg_blocking_pids($2)) AS blocked",
+                        vec![winner_pid.into(), contender_pid.into()],
+                    )).await.expect("lock wait").expect("lock row").try_get("", "blocked").expect("blocked");
+                    if blocked {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }).await.expect("contender must reach the winning row lock");
+            transaction.commit().await.expect("release winner");
+            let result = tokio::time::timeout(std::time::Duration::from_secs(10), operation)
+                .await.expect("contender must finish after release").expect("contender task");
+            let open = queue.open_batch(registry).await.expect("open batch");
+            let expected_batch = match winner {
+                QueueWinner::Claim => {
+                    result.expect("expiry skips the claimed group");
+                    Some(open.expect("claimed batch").id)
+                }
+                QueueWinner::Expiry => {
+                    assert!(result.is_err());
+                    assert!(open.is_none());
+                    None
+                }
+            };
+            let rows = queue.query_all(
+                "SELECT id,joined,status,batch FROM records_updates WHERE registry=$1",
+                vec![bytes(registry.as_array())],
+            ).await.expect("group rows");
+            assert_eq!(rows.len(), 2);
+            for row in rows {
+                let id = column_bytes(&row, "id").expect("update id");
+                let joined = row.try_get::<Option<Vec<u8>>>("", "joined").expect("joined head");
+                if id == pending.update.id.0.0 {
+                    assert_eq!(joined.as_deref(), Some(approval.update.id.0.0.as_slice()));
+                } else {
+                    assert_eq!(id, approval.update.id.0.0);
+                    assert!(joined.is_none());
+                }
+                assert_eq!(row.try_get::<Option<i64>>("", "batch").expect("batch link"), expected_batch);
+                assert_eq!(row.try_get::<String>("", "status").expect("status"),
+                    if expected_batch.is_some() { SUBMITTED } else { REFUSED });
+            }
+            let batch_count: i64 = queue.query_one(
+                "SELECT COUNT(*) AS count FROM records_batches WHERE registry=$1",
+                vec![bytes(registry.as_array())],
+            ).await.expect("batches").expect("count row").try_get("", "count").expect("count");
+            assert_eq!(batch_count, if expected_batch.is_some() { 1 } else { 0 });
+            assert_eq!(registry_member_rows(&queue, registry).await,
+                if expected_batch.is_some() { 2 } else { 0 });
+            if let Some(batch_id) = expected_batch {
+                queue.settle(batch_id, BatchOutcome::Applied).await.expect("settle winner");
+                for id in [pending.update.id.0.0, approval.update.id.0.0] {
+                    assert!(matches!(queue.status(&id).await.expect("status"), Some(RecordUpdateStatus::Applied { revision: 1, .. })));
+                }
+                assert_eq!(registry_member_rows(&queue, registry).await, 0);
+            }
+            for sql in [
+                "DELETE FROM records_update_members WHERE registry=$1",
+                "DELETE FROM records_updates WHERE registry=$1",
+                "DELETE FROM records_batches WHERE registry=$1",
+            ] {
+                queue.db.execute(statement(queue.db, sql, vec![bytes(registry.as_array())]))
+                    .await.expect("remove fixture rows");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_backlog_leaves_live_approval_reads_bounded() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let queue = UpdateQueue::new(store.connection());
+        let backlog = 3 * EXPIRY_HEADS_PER_STATUS;
+        for index in 0..backlog {
+            let mut pending = UpdateFixture::pending(index as u32);
+            pending.request.update.valid_until_slot = 10;
+            pending.insert(&queue, &[]).await.expect("expired pending");
+        }
+        let live = UpdateFixture::pending(backlog as u32);
+        live.insert(&queue, &[]).await.expect("live pending");
+        queue.expire(REGISTRY, 11).await.expect("bounded expiry");
+        assert_eq!(member_rows(&queue).await, (backlog + 1 - EXPIRY_HEADS_PER_STATUS) as i64);
+        let grants = [ApprovalGrant { member: member(0), lists: ListSet::single(ListId::Allow) }];
+        queue.read.store(0, Ordering::Relaxed);
+        let pending = queue.pending_approvals(ApprovalCandidates {
+            scope: ApprovalScope { ring: RING, registry: REGISTRY },
+            grants: &grants,
+            slot: 11,
+        }).await.expect("eligible pending");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, live.update.id.0.0);
+        assert_eq!(queue.read.load(Ordering::Relaxed), 1);
+        for _ in 1..3 {
+            queue.expire(REGISTRY, 11).await.expect("drain expiry");
+        }
+        assert_eq!(member_rows(&queue).await, 1);
     }
 
     #[tokio::test]
@@ -744,6 +1100,18 @@ mod tests {
         let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
         let store = Store::open(&url, 1).await.expect("store");
         plans_from_a_bounded_read(&store).await;
+    }
+
+    async fn backend_pid(connection: &impl ConnectionTrait) -> i32 {
+        connection.query_one(statement(connection, "SELECT pg_backend_pid() AS pid", Vec::new()))
+            .await.expect("backend pid").expect("pid row").try_get("", "pid").expect("pid")
+    }
+
+    async fn registry_member_rows(queue: &UpdateQueue<'_>, registry: Address) -> i64 {
+        queue.query_one(
+            "SELECT COUNT(*) AS count FROM records_update_members WHERE registry=$1",
+            vec![bytes(registry.as_array())],
+        ).await.expect("members").expect("count row").try_get("", "count").expect("count")
     }
 
     async fn member_rows(queue: &UpdateQueue<'_>) -> i64 {

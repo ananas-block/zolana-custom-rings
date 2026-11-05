@@ -7,6 +7,8 @@ use zolana_ring_keys::RingKeyError;
 
 #[derive(Debug, Error)]
 pub enum RingRailError {
+    #[error("transaction does not meet the single asset payout profile")]
+    PayoutProfile,
     #[error(transparent)]
     Transaction(#[from] TransactionError),
     #[error(transparent)]

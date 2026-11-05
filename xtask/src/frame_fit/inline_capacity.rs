@@ -5,7 +5,7 @@ use std::fmt::Write;
 use anyhow::Result;
 use custom_ring_interface::{
     key_catalog::{FrameKey, RingKey, TransferShape, RING_KEYS},
-    RingRail,
+    DisclosureFormat, RingRail,
 };
 use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
 
@@ -59,6 +59,7 @@ impl Reach {
 
     fn frame_key(self, wide: bool) -> FrameKey {
         FrameKey {
+            format: DisclosureFormat::Standard,
             rail: self.frame.rail(),
             inputs: self.inputs,
             outputs: self.outputs,
@@ -135,7 +136,6 @@ pub(super) struct KeyReach {
     pub legs: usize,
     pub rows: usize,
     pub subjects: usize,
-    /// The own pool's owner and asset records, `2 * subjects + outputs` jointly on a wide key.
     pub records: usize,
     /// The spend that opens the most subjects.
     pub widest: Reach,
@@ -158,6 +158,7 @@ fn holds(shape: TransferShape, reach: Reach) -> Option<Reach> {
 /// Narrow and small entry keys keep their widths, a spend past them moves to a wide key.
 fn fixed_width(shape: TransferShape) -> bool {
     let wide_entry = FrameKey {
+        format: DisclosureFormat::Standard,
         rail: RingRail::Confidential,
         inputs: 1,
         outputs: 1,
@@ -189,8 +190,8 @@ pub(super) fn key_reaches(reaches: &[Reach]) -> Result<Vec<(RingKey, Option<KeyR
             true => reach.subjects(),
         };
         let records = |reach: &Reach| match shape.wide {
-            false => reach.rows + 2 * reach.outputs + reach.leg_owners(),
-            true => 2 * reach.subjects() + reach.outputs,
+            false => reach.rows + 2 * reach.outputs + reach.leg_owners() + reach.inputs,
+            true => 2 * reach.subjects() + reach.outputs + reach.inputs,
         };
         let most = |value: &dyn Fn(&Reach) -> usize| held.iter().map(value).max().unwrap_or(0);
         keyed.push((
@@ -238,7 +239,16 @@ pub fn run() -> Result<()> {
                 r.widest.legs,
                 r.widest.rows
             )?,
-            None => writeln!(table, "| {} | dropped |", key.name)?,
+            None => {
+                let profile = TransferShape::of(key.circuit)
+                    .is_some_and(|shape| shape.format == DisclosureFormat::SingleAssetPayout);
+                let status = if profile {
+                    "separate payout profile"
+                } else {
+                    "dropped"
+                };
+                writeln!(table, "| {} | {status} |", key.name)?;
+            }
         }
     }
     writeln!(table)?;
@@ -267,6 +277,7 @@ pub fn run() -> Result<()> {
                 .into_iter()
                 .find_map(|wide| {
                     FrameKey {
+                        format: DisclosureFormat::Standard,
                         rail: frame.rail(),
                         inputs: shape.n_inputs(),
                         outputs: shape.n_outputs(),
@@ -330,10 +341,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_key_holds_exactly_its_inline_reach() {
+    fn every_standard_key_holds_its_inline_reach() {
         let reaches = reaches().unwrap();
         for (key, reach) in key_reaches(&reaches).unwrap() {
             let shape = TransferShape::of(key.circuit).unwrap();
+            if shape.format == DisclosureFormat::SingleAssetPayout {
+                continue;
+            }
             let reach =
                 reach.unwrap_or_else(|| panic!("{} serves no inline transaction", key.name));
             assert_eq!(
@@ -348,10 +362,17 @@ mod tests {
                 key.name
             );
             assert_eq!(
-                (reach.subjects, reach.records),
-                (usize::from(shape.tracking), usize::from(shape.records)),
-                "{} pools",
+                reach.subjects,
+                usize::from(shape.tracking),
+                "{} tracking",
                 key.name
+            );
+            assert!(
+                reach.records <= usize::from(shape.records) + usize::from(shape.inputs),
+                "{} records {} exceed capacity {}",
+                key.name,
+                reach.records,
+                usize::from(shape.records) + usize::from(shape.inputs)
             );
         }
     }

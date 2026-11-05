@@ -1,3 +1,8 @@
+import {
+  DisclosureFormat,
+  disclosureFormat,
+} from "../../src/protocol/codec/ring-disclosure-layout.js";
+import { encodeCompactAuditRecord } from "../../src/protocol/codec/audit-stream.js";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename } from "node:path";
@@ -629,6 +634,7 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
         family: "transfer",
         outputs: 3,
         class: 40,
+        format: DisclosureFormat.Standard,
         withdrawals: 4,
         owners: 4,
         entry: false,
@@ -934,39 +940,46 @@ function checkTransferStatement(typed: TransferProofRequest): void {
   const inputs = typed.inputs.slice(0, typed.inputCount);
   const live = inputs.filter(isUtxo);
   const layout: AuditStreamLayout = {
-    key: { class: typed.inputs.length, entry: typed.layout.entry },
+    key: {
+      class: typed.inputs.length,
+      entry: typed.layout.entry,
+      format: disclosureFormat(typed.layout.format),
+    },
     inputs: typed.inputCount,
     outputs: typed.outputCount,
     capacity: typed.outputs.length,
     hasData,
   };
-  const evidence = typed.layout.entry
-    ? {
-        kind: "entry" as const,
-        defaultInputBits: inputs.reduce(
-          (bits, input, slot) =>
-            isUtxo(input) && amountOf(input.ringProgramId) === 0n
-              ? bits | (1n << BigInt(slot))
-              : bits,
-          0n,
-        ),
-        inputs: inputs.map((input, slot) => {
-          const entry = typed.entries[slot];
-          if (entry === undefined) throw new Error("no entry");
-          // A ring note's evidence stays zero.
-          if (!isUtxo(input) || amountOf(input.ringProgramId) !== 0n) return EMPTY_ENTRY;
-          return {
-            ownerKey: entry.ownerKey,
-            nullifierPk: input.nullifierPk,
-            amount: amountOf(input.amount),
-            mint: mintOf(entry.mintChunks),
-            blinding: input.blinding,
-            dataHash: input.dataHash,
-            ringDataHash: input.ringDataHash,
-          };
-        }),
-      }
-    : ({ kind: "none" } as const);
+  const evidence =
+    typed.layout.format === DisclosureFormat.SingleAssetPayout
+      ? { kind: "singleAssetPayout" as const, mint: mintOf(typed.outputs[0]!.mintChunks) }
+      : typed.layout.entry
+        ? {
+            kind: "entry" as const,
+            defaultInputBits: inputs.reduce(
+              (bits, input, slot) =>
+                isUtxo(input) && amountOf(input.ringProgramId) === 0n
+                  ? bits | (1n << BigInt(slot))
+                  : bits,
+              0n,
+            ),
+            inputs: inputs.map((input, slot) => {
+              const entry = typed.entries[slot];
+              if (entry === undefined) throw new Error("no entry");
+              // A ring note's evidence stays zero.
+              if (!isUtxo(input) || amountOf(input.ringProgramId) !== 0n) return EMPTY_ENTRY;
+              return {
+                ownerKey: entry.ownerKey,
+                nullifierPk: input.nullifierPk,
+                amount: amountOf(input.amount),
+                mint: mintOf(entry.mintChunks),
+                blinding: input.blinding,
+                dataHash: input.dataHash,
+                ringDataHash: input.ringDataHash,
+              };
+            }),
+          }
+        : ({ kind: "none" } as const);
   const records = slots.map((slot): AuditRecord => {
     const { output } = slot;
     if (!isUtxo(output)) return DUMMY_RECORD;
@@ -1000,7 +1013,9 @@ function checkTransferStatement(typed: TransferProofRequest): void {
     }),
     records: records.map((entry, slot) => ({
       counter: recordRegion(layout, slot).startCounter,
-      bytes: encodeAuditRecord(entry),
+      bytes: (typed.layout.format === DisclosureFormat.SingleAssetPayout
+        ? encodeCompactAuditRecord
+        : encodeAuditRecord)(entry),
     })),
     ...(hasData
       ? {

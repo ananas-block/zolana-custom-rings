@@ -12,6 +12,7 @@ type rangesVector struct {
 	Class              int   `json:"class"`
 	Outputs            int   `json:"outputs"`
 	Entry              bool  `json:"entry"`
+	SingleAssetPayout  bool  `json:"single_asset_payout"`
 	HasData            bool  `json:"has_data"`
 	EnvelopeBlocks     int   `json:"envelope_blocks"`
 	FirstRecordCounter int   `json:"first_record_counter"`
@@ -31,10 +32,10 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 		t.Fatal("the vector holds no key")
 	}
 	for _, v := range vectors.Keys {
-		r := audit.StreamShape{InputClass: v.Class, Outputs: v.Outputs, Entry: v.Entry}.Ranges()
+		r := audit.StreamShape{InputClass: v.Class, Outputs: v.Outputs, Entry: v.Entry, SingleAssetPayout: v.SingleAssetPayout}.Ranges()
 		// A key seals every tail, a reader of a clear has_data decrypts none.
 		capacity := v.CapacityBlocks
-		if !v.HasData {
+		if !v.HasData && !v.SingleAssetPayout {
 			capacity += v.Outputs * audit.TailBlocks
 		}
 		if r.EnvelopeBlocks() != v.EnvelopeBlocks || r.RecordCounter(0) != v.FirstRecordCounter || r.TailCounter(0) != v.FirstTailCounter || r.CapacityBlocks() != capacity {
@@ -63,12 +64,15 @@ func TestStreamRegionsHoldTheirPlaintext(t *testing.T) {
 	if audit.RecordBlocks*blockLen != audit.RecordStride || audit.RecordLen > audit.RecordStride || audit.TailBlocks*blockLen != audit.TailLen {
 		t.Fatal("a region differs from its plaintext")
 	}
-	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 16, Outputs: 8}} {
+	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 16, Outputs: 8}, {InputClass: 1, Outputs: 16, SingleAssetPayout: true}} {
 		r := shape.Ranges()
+		if r.RecordLen() > r.RecordStride() || r.RecordStride() != r.RecordBlocks()*blockLen {
+			t.Fatalf("%+v record length differs", r)
+		}
 		if r.EnvelopeLen(r.InputClass) > r.EnvelopeBlocks()*blockLen {
 			t.Fatalf("%+v: the envelope overruns its region", r)
 		}
-		if r.RecordCounter(0) != audit.StreamFirstCounter+r.EnvelopeBlocks() || r.RecordCounter(1)-r.RecordCounter(0) != audit.RecordBlocks || r.TailCounter(0) != r.RecordCounter(r.Outputs) {
+		if r.RecordCounter(0) != audit.StreamFirstCounter+r.EnvelopeBlocks() || r.RecordCounter(1)-r.RecordCounter(0) != r.RecordBlocks() || r.TailCounter(0) != r.RecordCounter(r.Outputs) {
 			t.Fatalf("%+v: regions overlap", r)
 		}
 	}

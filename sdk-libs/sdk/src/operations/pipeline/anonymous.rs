@@ -596,6 +596,7 @@ fn check_audit_key(inputs: &SppProofInputs) -> Result<(), RingError> {
         .filter(|input| !input.is_compact())
         .count();
     let keyed = transfer_key(TransferSpend {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         rail: RingRail::Anonymous,
         inputs: published,
         outputs: inputs.output_utxos.len(),

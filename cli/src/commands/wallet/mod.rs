@@ -201,6 +201,7 @@ impl ScanAt<'_> {
         let anonymous = |assets: &RingAssets, wallet: &mut AnonymousWallet| {
             let scan = zolana.block_on(async {
                 AnonymousSync::new(keys, assets)
+                    .with_asset_rpc(zolana.as_async().rpc())
                     .with_indexer_config(config)
                     .with_deposit_payload(zolana_ring_client::deposit_payload)
                     .fetch_wallet(zolana.as_async().indexer(), wallet)
@@ -211,16 +212,28 @@ impl ScanAt<'_> {
             wallet.absorb(scan)?;
             Ok(unknown_mints)
         };
-        let (held, unknown_mints) = self.store.update(|wallet| {
-            let mut unknown_mints = self.synced(wallet, confidential)?;
+        let (held, unknown_mints, incomplete) = self.store.update(|wallet| {
+            let mut unknown_mints =
+                if wallet.recovery_status() == zolana_ring_client::RecoveryStatus::Paused {
+                    BTreeSet::new()
+                } else {
+                    self.synced(wallet, confidential)?
+                };
             if self.mode == RingMode::Anonymous {
                 let watched = wallet.history().clone().with_ring(self.ring, None);
                 wallet.update_history(watched)?;
                 unknown_mints.extend(self.synced(wallet, anonymous)?);
             }
             unknown_mints.extend(wallet.pending_notes().iter().map(|note| note.mint()));
-            Ok((wallet.decrypted(), unknown_mints))
+            Ok((
+                wallet.decrypted(),
+                unknown_mints,
+                wallet.recovery_status() == zolana_ring_client::RecoveryStatus::Paused,
+            ))
         })?;
+        if incomplete {
+            return Err(zolana_ring_client::AnonymousError::SyncIncomplete.into());
+        }
         let verified = verify_ring_owned(keys, &held)?;
         let found = verified.owned.spendable().with_transaction_keys(keys)?;
         let spent = &held.spent_nullifiers;

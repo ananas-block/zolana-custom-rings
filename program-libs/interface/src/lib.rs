@@ -127,6 +127,7 @@ pub fn tagged_x25519(u: &[u8; 32]) -> [u8; TAGGED_X25519_KEY_LEN] {
 /// `0x04 || eph_u || envelope_ct || record_ct... || tail_ct...`, published under the auditor's view tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditorMessage<'a> {
+    format: DisclosureFormat,
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub envelope: &'a [u8],
     /// One record per published slot.
@@ -138,10 +139,12 @@ pub struct AuditorMessage<'a> {
 impl<'a> AuditorMessage<'a> {
     /// `None` unless the key is tagged and every length is `layout`'s.
     pub fn parse(data: &'a [u8], layout: AuditStreamLayout) -> Option<Self> {
+        layout.checked().ok()?;
         let (eph_pk, rest) = data.split_first_chunk::<TAGGED_X25519_KEY_LEN>()?;
         let (envelope, rest) = rest.split_at_checked(layout.envelope().len)?;
         let (records, tails) = rest.split_at_checked(layout.records_len())?;
         (eph_pk[0] == VIEWING_PUBKEY_TAG && tails.len() == layout.tails_len()).then_some(Self {
+            format: layout.key.format,
             eph_pk,
             envelope,
             records,
@@ -149,8 +152,10 @@ impl<'a> AuditorMessage<'a> {
         })
     }
 
-    pub fn record(&self, slot: usize) -> Option<&'a [u8; AUDIT_RECORD_LEN]> {
-        self.records.as_chunks().0.get(slot)
+    pub fn record(&self, slot: usize) -> Option<&'a [u8]> {
+        let length = self.format.record_len();
+        let start = slot.checked_mul(length)?;
+        self.records.get(start..start.checked_add(length)?)
     }
 
     pub fn tail(&self, slot: usize) -> Option<&'a [u8; DATA_TAIL_LEN]> {

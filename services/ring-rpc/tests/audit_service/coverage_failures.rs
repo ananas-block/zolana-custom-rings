@@ -16,6 +16,7 @@ pub(super) fn coverage_request(
     SpendCoverageRequest::new(SpendCoverageAttestation {
         target: target(RING),
         authority: signer.pubkey(),
+        cursor: None,
     })
     .at(unix_now().expect("clock"))
     .sign(signer)
@@ -105,6 +106,9 @@ async fn an_unauthorized_caller_is_refused_the_operator_read() {
     for signer in [delegate(), stranger()] {
         assert!(call(coverage_request(&signer)).await.is_err());
     }
+    let mut changed = coverage_request(&authority());
+    changed.cursor = Some(vec![1; 240].into());
+    assert!(call(changed).await.is_err());
     call(coverage_request(&authority()))
         .await
         .expect("the authority reads it");

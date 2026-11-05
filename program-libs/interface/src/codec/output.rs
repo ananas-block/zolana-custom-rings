@@ -5,11 +5,15 @@
 
 use spr_event::{OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG};
 
-use crate::{audit_stream::RECIPIENT_BODY_LEN, CustomRingError};
+use crate::{
+    audit_stream::{COMPACT_RECIPIENT_BODY_LEN, RECIPIENT_BODY_LEN},
+    CustomRingError, DisclosureFormat,
+};
 
 pub const RING_SENDER_BUNDLE_SCHEME_TAG: u8 = 9;
 /// `u16le(body_len) || body || reply`, one form on every rail, the reply absent without reply metadata.
 pub const RING_BODY_SCHEME_TAG: u8 = 10;
+pub const RING_COMPACT_BODY_SCHEME_TAG: u8 = 11;
 
 /// `0x04 || u`, the recipient key a scheme 3 body leads with.
 pub const RECIPIENT_KEY_LEN: usize = 33;
@@ -44,7 +48,12 @@ impl<'a> OutputPayload<'a> {
             Self::Recipient { body, reply } => {
                 let len =
                     u16::try_from(body.len()).map_err(|_| CustomRingError::OutputBodyLength)?;
-                (RING_BODY_SCHEME_TAG, body, reply, Some(len.to_le_bytes()))
+                let scheme = match body.len() {
+                    COMPACT_RECIPIENT_BODY_LEN if reply.is_empty() => RING_COMPACT_BODY_SCHEME_TAG,
+                    length if length >= RECIPIENT_BODY_LEN => RING_BODY_SCHEME_TAG,
+                    _ => return Err(CustomRingError::OutputBodyLength),
+                };
+                (scheme, body, reply, Some(len.to_le_bytes()))
             }
             Self::SenderBundle(body) => (RING_SENDER_BUNDLE_SCHEME_TAG, body, &[][..], None),
         };
@@ -99,10 +108,23 @@ pub fn encode_ring_sender_bundle_output(body: &[u8]) -> Result<Vec<u8>, CustomRi
 
 /// `body || reply` of a well-formed ring body output, `None` otherwise.
 pub fn ring_body_output(data: &[u8]) -> Option<(&[u8], &[u8])> {
-    let (body_len, rest) =
-        encrypted_output_body(data, RING_BODY_SCHEME_TAG)?.split_first_chunk()?;
-    rest.split_at_checked(usize::from(u16::from_le_bytes(*body_len)))
-        .filter(|(body, _)| body.len() >= RECIPIENT_BODY_LEN)
+    let (scheme, payload) = encrypted_output(data)?;
+    let (body_len, rest) = payload.split_first_chunk()?;
+    let parts = rest.split_at_checked(usize::from(u16::from_le_bytes(*body_len)))?;
+    match (scheme, parts.0.len(), parts.1.is_empty()) {
+        (RING_BODY_SCHEME_TAG, length, _) if length >= RECIPIENT_BODY_LEN => Some(parts),
+        (RING_COMPACT_BODY_SCHEME_TAG, COMPACT_RECIPIENT_BODY_LEN, true) => Some(parts),
+        _ => None,
+    }
+}
+
+pub fn ring_body_format(data: &[u8]) -> Option<DisclosureFormat> {
+    ring_body_output(data)?;
+    match encrypted_output(data)?.0 {
+        RING_BODY_SCHEME_TAG => Some(DisclosureFormat::Standard),
+        RING_COMPACT_BODY_SCHEME_TAG => Some(DisclosureFormat::SingleAssetPayout),
+        _ => None,
+    }
 }
 
 pub fn ring_sender_bundle_output_body(data: &[u8]) -> Option<&[u8]> {

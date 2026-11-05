@@ -136,6 +136,7 @@ impl Fixture {
             has_data: false,
             entry: false,
             wide_owners: FrameKey {
+                format: custom_ring_interface::DisclosureFormat::Standard,
                 rail,
                 inputs: usize::from(n_in),
                 outputs: usize::from(n_out),

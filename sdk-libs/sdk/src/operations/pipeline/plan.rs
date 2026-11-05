@@ -51,7 +51,8 @@ impl PlannedTransfer {
     /// The key `read` selects, carrying the seal made under `self` or refusing until resealed.
     /// Mirrors `TransferShape::seals_like`, an approval opening binds `N` like a tail.
     pub fn rekeyed(self, read: Self) -> Result<Self, RingError> {
-        let opens_alike = self.stream.first_record_counter() == read.stream.first_record_counter()
+        let opens_alike = self.stream.key.format == read.stream.key.format
+            && self.stream.first_record_counter() == read.stream.first_record_counter()
             && (!self.spans_capacity || self.stream.capacity == read.stream.capacity);
         match opens_alike {
             true => Ok(read),

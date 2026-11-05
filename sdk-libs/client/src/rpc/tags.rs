@@ -12,7 +12,7 @@ use spr_client::{
 };
 use spr_indexer_api::Positioned;
 
-use crate::history::{HistoryPosition, PageEnd};
+use crate::history::{HistoryPosition, PageEnd, RecoveryWindow};
 
 const PAGE_LIMIT: u32 = spr_indexer_api::PAGE_LIMIT as u32;
 
@@ -87,38 +87,75 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
         }
     }
 
-    /// The next page of `ring` and the limit it was asked at, a refused limit loses no row.
-    pub(crate) async fn ring_page(
+    fn recovery_config(&self, window: RecoveryWindow) -> Option<IndexerRpcConfig> {
+        let mut config = self.config.unwrap_or_default();
+        config.require_slot = config.require_slot.max(window.target_slot);
+        Some(config)
+    }
+
+    pub(crate) async fn recovery_ring_page(
         &mut self,
         ring: Address,
-        position: &HistoryPosition,
+        window: RecoveryWindow,
     ) -> Result<(GetShieldedTransactionsByTagsResponse, u32), ClientError> {
         loop {
-            let limit = self.ring_page_limit;
-            match self
+            let limit = window.page_limit.unwrap_or(self.ring_page_limit);
+            let result = self
                 .indexer
                 .get_shielded_transactions_by_ring(
                     RingHistoryOptions {
                         ring_program_id: ring,
-                        pagination_token: position.token(),
+                        pagination_token: window.token,
                         limit: Some(limit),
-                        filters: position.filters(),
+                        filters: window.filters(),
                     },
-                    self.config,
+                    self.recovery_config(window),
                 )
-                .await
-            {
-                Ok(page) => {
-                    return Ok((page, limit));
-                }
+                .await;
+            match result {
+                Ok(page) => return Ok((page, limit)),
                 Err(ClientError::Indexer(message))
-                    if limit > 1 && message.contains(RESPONSE_TOO_LARGE) =>
+                    if window.page_limit.is_none()
+                        && limit > 1
+                        && message.contains(RESPONSE_TOO_LARGE) =>
                 {
                     self.ring_page_limit = limit / 2;
                 }
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    pub(crate) async fn recovery_deposit_page(
+        &self,
+        tags: Vec<ViewTag>,
+        window: RecoveryWindow,
+    ) -> Result<spr_client::GetEncryptedUtxosByTagsResponse, ClientError> {
+        self.indexer
+            .get_encrypted_utxos_by_tags(
+                tags,
+                window.token,
+                Some(PAGE_LIMIT),
+                window.filters(),
+                self.recovery_config(window),
+            )
+            .await
+    }
+
+    pub(crate) async fn recovery_spend_page(
+        &self,
+        nullifiers: Vec<[u8; 32]>,
+        window: RecoveryWindow,
+    ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+        self.indexer
+            .get_shielded_transactions_by_nullifiers(
+                nullifiers,
+                window.token,
+                Some(PAGE_LIMIT),
+                window.filters(),
+                self.recovery_config(window),
+            )
+            .await
     }
 
     /// The deposits published under one of `tags`, one transaction per deposited output.

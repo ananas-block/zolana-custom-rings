@@ -18,7 +18,7 @@ import {
   envelopeRegion,
   recordsLen,
   tailsLen,
-  AUDIT_RECORD_LEN,
+  auditRecordLength,
   DATA_TAIL_LEN,
   type AuditStreamLayout,
 } from "../../protocol/codec/ring-disclosure-layout.js";
@@ -303,7 +303,7 @@ export function parseAuditorMessage(data: Uint8Array, layout: AuditStreamLayout)
   return Object.freeze({
     ephemeralPublicKey: X25519PublicKey.fromBytes(bytes.subarray(0, TAGGED_KEY_LEN)),
     envelope: bytes.subarray(TAGGED_KEY_LEN, recordsAt),
-    records: cut(recordsAt, AUDIT_RECORD_LEN, layout.outputs),
+    records: cut(recordsAt, auditRecordLength(layout.key), layout.outputs),
     ...(tailsLen(layout) === 0 ? {} : { tails: cut(tailsAt, DATA_TAIL_LEN, layout.outputs) }),
   });
 }

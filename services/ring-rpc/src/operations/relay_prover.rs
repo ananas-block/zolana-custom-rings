@@ -6,8 +6,9 @@ use custom_ring_interface::{
     InstructionTag, RegisterKeyCheck,
 };
 use custom_ring_sdk::{
-    AllowedNullifiers, CustomRing, DelegateMove, DelegatePayment, DelegateSource, RelayedDeposit,
-    RelayedTransferInput, RingClient, RingIndexerBackend, RingTransfer,
+    AllowedNullifiers, CustomRing, DelegateMove, DelegatePayment, DelegateSource,
+    DelegateWithdrawal, RelayedDeposit, RelayedTransferInput, RingClient, RingIndexerBackend,
+    RingTransfer,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -43,6 +44,8 @@ pub struct DelegateSeal<'a> {
     pub allowed: &'a AllowedNullifiers,
     pub tx_viewing_key: ViewingKey,
     pub payments: Vec<DelegatePayment>,
+    pub exits: Vec<DelegatePayment>,
+    pub withdrawals: Vec<DelegateWithdrawal>,
     pub assets: &'a AssetRegistry,
 }
 
@@ -147,6 +150,21 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
         seal: DelegateSeal<'_>,
         parties: RelayParties,
     ) -> Result<RelayProofInputs, RingRpcError> {
+        for withdrawal in &seal.withdrawals {
+            if let Some(program) = withdrawal.token_program {
+                let token_program = [
+                    spr_interface::SPL_TOKEN_PROGRAM_ID,
+                    spr_interface::SPL_TOKEN_2022_PROGRAM_ID,
+                ]
+                .contains(program.as_array());
+                let mint = self.client.zolana().get_account(withdrawal.asset).await?;
+                if !token_program || mint.is_none_or(|mint| mint.owner != program) {
+                    return Err(
+                        crate::authority_transfer::AuthorityTransferError::WithdrawalMint.into(),
+                    );
+                }
+            }
+        }
         let transfer = DelegateMove {
             ring: CustomRing::new(seal.ring),
             delegate: seal.delegate,
@@ -161,6 +179,8 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
                 })
                 .collect(),
             payments: seal.payments,
+            exits: seal.exits,
+            withdrawals: seal.withdrawals,
             assets: seal.assets,
             tx_viewing_key: seal.tx_viewing_key,
         }

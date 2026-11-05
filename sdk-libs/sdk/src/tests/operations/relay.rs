@@ -738,7 +738,8 @@ mod delegate_message {
     use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey};
     use spr_transaction::{AssetRegistry, WalletUtxo};
     use zolana_ring_client::rpc::{
-        AuthorityPayment, AuthorityTransfer, SerializableShieldedAddress, TxViewingSecret,
+        AuthorityPayment, AuthorityTransfer, AuthorityWithdrawal, SerializableShieldedAddress,
+        TxViewingSecret,
     };
 
     use super::*;
@@ -917,6 +918,13 @@ mod delegate_message {
             assets.insert(USDC.asset_id, USDC.asset).unwrap();
             assets.insert(EURC.asset_id, EURC.asset).unwrap();
             let proof_inputs = DelegateMove {
+                exits: transfer.exits.iter().copied().map(Into::into).collect(),
+                withdrawals: transfer
+                    .withdrawals
+                    .iter()
+                    .copied()
+                    .map(Into::into)
+                    .collect(),
                 ring: ring(),
                 delegate: self.delegate,
                 payer: FEE_PAYER,
@@ -1162,6 +1170,8 @@ mod delegate_message {
             ring: SerializablePubkey(ring().program_id()),
             delegate: SerializablePubkey(delegate),
             transfer: AuthorityTransfer {
+                exits: Vec::new(),
+                withdrawals: Vec::new(),
                 sources: vec![SerializableShieldedAddress(
                     keypair(1).shielded_address().unwrap(),
                 )],
@@ -1576,6 +1586,8 @@ mod delegate_message {
             let mut paid = expected.clone();
             paid.allowed = relay
                 .allowed(&AuthorityTransfer {
+                    exits: Vec::new(),
+                    withdrawals: Vec::new(),
                     sources: vec![SerializableShieldedAddress(
                         victim.shielded_address().unwrap(),
                     )],
@@ -1668,6 +1680,183 @@ mod delegate_message {
             relay.build(&asked.transfer, &asked.tx_viewing_key).await,
             Err(RingError::RepeatedDelegateSource)
         ));
+    }
+
+    fn settlement_request(delegate: Address, mint: Mint) -> PrepareAuthorityTransferRequest {
+        let mut asked = request(delegate);
+        asked.transfer.payments = vec![payment_of(mint, 2)];
+        asked.transfer.exits = vec![payment_of(mint, 3)];
+        asked.transfer.withdrawals = vec![AuthorityWithdrawal {
+            recipient: Address::new_from_array([0x62; 32]).into(),
+            mint: mint.asset.into(),
+            amount: 2,
+            token_program: (mint != Mint::SOL)
+                .then(|| Address::new_from_array(spr_interface::SPL_TOKEN_PROGRAM_ID).into()),
+        }];
+        asked
+    }
+
+    #[tokio::test]
+    async fn hosted_delegate_funds_payments_exits_and_withdrawals() {
+        for mode in [RingMode::Confidential, RingMode::Anonymous] {
+            for mint in [Mint::SOL, USDC] {
+                let delegate = keypair(7);
+                let mut relay = DelegateRelay::on_mode(Answer::Honest, delegate.pubkey(), mode);
+                relay.members[0].1 = vec![ring_utxo(&keypair(1), mint, 10, 0)];
+                let asked = settlement_request(delegate.pubkey(), mint);
+                let frame = relay
+                    .build(&asked.transfer, &asked.tx_viewing_key)
+                    .await
+                    .unwrap();
+                let config = ring().require_config(relay.client.zolana()).await.unwrap();
+                let expected = relay.expected(&asked, &config).await;
+                let bytes = relay_message(&FEE_PAYER, std::slice::from_ref(&frame), UNITS);
+                assert_eq!(
+                    expected.check(&bytes.0).map(drop),
+                    Ok(()),
+                    "{mode:?} {mint:?}"
+                );
+
+                let mut redirected = asked.clone();
+                redirected.transfer.withdrawals[0].recipient =
+                    Address::new_from_array([0x63; 32]).into();
+                assert_eq!(
+                    relay
+                        .expected(&redirected, &config)
+                        .await
+                        .check(&bytes.0)
+                        .map(drop),
+                    Err(MessageMismatch::Data)
+                );
+                let mut amount = asked.clone();
+                amount.transfer.withdrawals[0].amount += 1;
+                assert_eq!(
+                    relay
+                        .expected(&amount, &config)
+                        .await
+                        .check(&bytes.0)
+                        .map(drop),
+                    Err(MessageMismatch::Data)
+                );
+                let mut asset = asked.clone();
+                asset.transfer.withdrawals[0].mint = EURC.asset.into();
+                asset.transfer.withdrawals[0].token_program =
+                    Some(Address::new_from_array(spr_interface::SPL_TOKEN_PROGRAM_ID).into());
+                assert_eq!(
+                    relay
+                        .expected(&asset, &config)
+                        .await
+                        .check(&bytes.0)
+                        .map(drop),
+                    Err(MessageMismatch::Data)
+                );
+                let mut kind = asked.clone();
+                kind.transfer.payments.append(&mut kind.transfer.exits);
+                assert_eq!(
+                    relay
+                        .expected(&kind, &config)
+                        .await
+                        .check(&bytes.0)
+                        .map(drop),
+                    Err(MessageMismatch::Recipients)
+                );
+                let mut extra = asked.clone();
+                extra.transfer.withdrawals[0].amount = 11;
+                assert!(relay
+                    .build(&extra.transfer, &extra.tx_viewing_key)
+                    .await
+                    .is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_delegate_settlement_messages_bind_all_legs() {
+        let delegate = keypair(7);
+        let mut relay = DelegateRelay::new(Answer::Honest, delegate.pubkey());
+        relay.members[0].1 = vec![ring_utxo(&keypair(1), USDC, 10, 0)];
+        let asked = settlement_request(delegate.pubkey(), USDC);
+        let config = ring().require_config(relay.client.zolana()).await.unwrap();
+        let honest = relay
+            .build(&asked.transfer, &asked.tx_viewing_key)
+            .await
+            .unwrap();
+        let mut cases = vec![MessageCase {
+            name: "honest".into(),
+            message: relay_message(&FEE_PAYER, std::slice::from_ref(&honest), UNITS),
+            verdict: "Accepted".into(),
+        }];
+        for (name, position) in [
+            ("withdrawalMint", 1),
+            ("withdrawalRecipient", 3),
+            ("withdrawalProgram", 4),
+        ] {
+            let mut changed = honest.clone();
+            let start = changed.accounts.len() - 5;
+            changed.accounts[start + position].pubkey = Address::new_from_array([0x63; 32]);
+            cases.push(MessageCase {
+                name: name.into(),
+                message: relay_message(&FEE_PAYER, &[changed], UNITS),
+                verdict: "Data".into(),
+            });
+        }
+        let changed = rewritten(&honest, RingRail::Delegate, |data| {
+            data.interface_transfers[0] =
+                spr_interface::instruction::InterfaceTransfer::SplWithdrawal {
+                    amount: 3,
+                    spl_interface_bump: spr_interface::pda::spl_interface_bump(
+                        USDC.asset.as_array(),
+                    ),
+                };
+        });
+        cases.push(MessageCase {
+            name: "withdrawalAmount".into(),
+            message: relay_message(&FEE_PAYER, &[changed], UNITS),
+            verdict: "Data".into(),
+        });
+        for (name, change) in [("exitKind", 0), ("exitRecipient", 1), ("exitAmount", 2)] {
+            let mut transfer = asked.transfer.clone();
+            match change {
+                0 => transfer.payments.append(&mut transfer.exits),
+                1 => transfer.exits[0].recipient = thief().into(),
+                _ => transfer.exits[0].amount += 1,
+            }
+            let frame = relay.build(&transfer, &asked.tx_viewing_key).await.unwrap();
+            cases.push(MessageCase {
+                name: name.into(),
+                message: relay_message(&FEE_PAYER, &[frame], UNITS),
+                verdict: "Recipients".into(),
+            });
+        }
+        let fresh = MessageVector {
+            description: "Delegate payments, exits and withdrawals bind their signed destinations and amounts.".into(),
+            request: DelegateRequest { prepare: asked, fee_payer: FEE_PAYER.into(), auditor: Base64String(config.auditor_pubkey.as_bytes().to_vec()) },
+            cases,
+        };
+        let vector = pinned_vector("relay_delegate_settlement_messages.json", fresh);
+        let sources: Vec<_> = vector
+            .request
+            .prepare
+            .transfer
+            .sources
+            .iter()
+            .map(|source| source.0)
+            .collect();
+        let expected = ExpectedDelegate::new(&RequestedAuthorityTransfer {
+            request: vector.request.prepare,
+            quote: &quote(),
+            config: &config,
+            allowed: allowed_as_pinned(&sources, published_nullifiers(&vector.cases[0].message.0)),
+        })
+        .unwrap();
+        for case in vector.cases {
+            assert_eq!(
+                verdict(expected.check(&case.message.0)),
+                case.verdict,
+                "{}",
+                case.name
+            );
+        }
     }
 
     #[derive(Debug, serde::Serialize, serde::Deserialize)]

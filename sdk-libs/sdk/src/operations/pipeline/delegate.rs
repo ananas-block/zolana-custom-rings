@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;
@@ -23,7 +23,7 @@ use super::{
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    select::{SpendSelection, SpendableKeys},
+    select::{BoundedSpendCandidates, SpendRequest},
     CustomRing, CustomRingConfig, RingError,
 };
 
@@ -60,6 +60,8 @@ pub struct DelegateMove<'a> {
     pub sources: Vec<DelegateSource<'a>>,
     /// Each mint's change returns to the owner of the last note spent in it.
     pub payments: Vec<DelegatePayment>,
+    pub exits: Vec<DelegatePayment>,
+    pub withdrawals: Vec<DelegateWithdrawal>,
     pub assets: &'a AssetRegistry,
     /// A relayed delegate names it, its wallet then reads the proven records.
     pub tx_viewing_key: ViewingKey,
@@ -72,6 +74,19 @@ pub struct DelegateSource<'a> {
     pub nullifier_key: &'a NullifierKey,
     /// The source's UTXOs on any tree.
     pub utxos: &'a [WalletUtxo],
+}
+
+pub struct DelegateFunding<'a> {
+    pub payments: &'a [DelegatePayment],
+    pub exits: &'a [DelegatePayment],
+    pub withdrawals: &'a [DelegateWithdrawal],
+}
+
+#[must_use]
+pub struct DelegateCandidates {
+    targets: Vec<(Address, u64)>,
+    assets: BTreeMap<Address, BoundedSpendCandidates>,
+    max_inputs: usize,
 }
 
 /// The delegate moves a member's notes with the recovered key, the member does not sign.
@@ -106,6 +121,27 @@ pub struct DelegateTransferInput<'a> {
 }
 
 pub type DelegateTransfer<'a> = RingTransfer<Delegated<'a>>;
+
+impl From<zolana_ring_client::rpc::AuthorityPayment> for DelegatePayment {
+    fn from(payment: zolana_ring_client::rpc::AuthorityPayment) -> Self {
+        Self {
+            recipient: payment.recipient.0,
+            mint: payment.mint.0,
+            amount: payment.amount,
+        }
+    }
+}
+
+impl From<zolana_ring_client::rpc::AuthorityWithdrawal> for DelegateWithdrawal {
+    fn from(withdrawal: zolana_ring_client::rpc::AuthorityWithdrawal) -> Self {
+        Self {
+            recipient: withdrawal.recipient.0,
+            asset: withdrawal.mint.0,
+            amount: withdrawal.amount,
+            token_program: withdrawal.token_program.map(|program| program.0),
+        }
+    }
+}
 
 impl sealed::Sealed for Delegated<'_> {}
 
@@ -206,40 +242,23 @@ impl<'a> DelegateMove<'a> {
         {
             return Err(RingError::RepeatedDelegateSource);
         }
-        let utxos: Vec<WalletUtxo> = self
-            .sources
-            .iter()
-            .flat_map(|source| source.utxos.iter().filter(|utxo| self.spends(source, utxo)))
-            .cloned()
-            .collect();
-        let payments = self.payments.len();
+        let funding = DelegateFunding {
+            payments: &self.payments,
+            exits: &self.exits,
+            withdrawals: &self.withdrawals,
+        };
+        let mut candidates = funding.candidates()?;
+        for source in &self.sources {
+            for note in source.utxos.iter().filter(|note| self.spends(source, note)) {
+                candidates.observe(note);
+            }
+        }
+        let funded = candidates.funded()?;
+        let payments = self.payments.len() + self.exits.len();
         let keyed = |shape| shape_keyed(RingRail::Delegate, shape);
         let unkeyed = || RingError::ShapeUnkeyed {
             rail: RingRail::Delegate,
         };
-        let max_inputs = widest(payments, keyed).ok_or_else(unkeyed)?;
-        let mut funded = Vec::new();
-        let mut remaining = max_inputs;
-        for (asset, amount) in self.mint_totals()? {
-            let selected = SpendSelection {
-                utxos: &utxos,
-                asset,
-                amount,
-                max_inputs: remaining,
-                keys: SpendableKeys::Any,
-            }
-            .select_where(|_| true)?;
-            remaining -= selected.len();
-            funded.push((asset, amount, selected));
-        }
-        let trees = spanned_trees(funded.iter().flat_map(|(_, _, utxos)| utxos));
-        if trees > MAX_INPUT_TREES {
-            return Err(TransactionError::TooManyInputTrees {
-                got: trees,
-                max: MAX_INPUT_TREES,
-            }
-            .into());
-        }
         let spent = self.spent_by_mint(funded)?;
         let change = spent.iter().filter(|mint| mint.change > 0).count();
         let shape = Candidate {
@@ -256,39 +275,25 @@ impl<'a> DelegateMove<'a> {
         Ok(transfer)
     }
 
-    /// In first-use order, a mint's total refused when zero or past a u64.
-    fn mint_totals(&self) -> Result<Vec<(Address, u64)>, RingError> {
-        let mut mints: Vec<Address> = Vec::new();
-        for payment in &self.payments {
-            if !mints.contains(&payment.mint) {
-                mints.push(payment.mint);
-            }
-        }
-        mints
-            .into_iter()
-            .map(|mint| {
-                let amounts = self.payments.iter().filter(|payment| payment.mint == mint);
-                Ok((mint, payment_total(amounts.map(|payment| payment.amount))?))
-            })
-            .collect()
-    }
-
-    fn spent_by_mint(
-        &self,
-        funded: Vec<(Address, u64, Vec<WalletUtxo>)>,
-    ) -> Result<Vec<SpentMint>, RingError> {
+    fn spent_by_mint(&self, funded: Vec<FundedMint>) -> Result<Vec<SpentMint>, RingError> {
         funded
             .into_iter()
-            .map(|(mint, amount, utxos)| {
-                let total: u128 = utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum();
-                let change = u64::try_from(total.saturating_sub(u128::from(amount)))
-                    .map_err(|_| RingError::PaymentOverflow)?;
-                Ok(SpentMint {
-                    mint,
-                    utxos,
-                    change,
-                })
-            })
+            .map(
+                |FundedMint {
+                     mint,
+                     amount,
+                     utxos,
+                 }| {
+                    let total: u128 = utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum();
+                    let change = u64::try_from(total.saturating_sub(u128::from(amount)))
+                        .map_err(|_| RingError::PaymentOverflow)?;
+                    Ok(SpentMint {
+                        mint,
+                        utxos,
+                        change,
+                    })
+                },
+            )
             .collect()
     }
 
@@ -354,10 +359,123 @@ impl<'a> DelegateMove<'a> {
         })
         .with_assets(self.assets)
         .with_tx_viewing_key(self.tx_viewing_key.clone());
+        let transfer = self.exits.iter().fold(transfer, |transfer, exit| {
+            transfer.with_exit(DelegateOutput {
+                recipient: exit.recipient,
+                asset: exit.mint,
+                amount: exit.amount,
+            })
+        });
+        let transfer = self
+            .withdrawals
+            .iter()
+            .copied()
+            .fold(transfer, DelegateTransfer::with_withdrawal);
         Ok(co_sources
             .into_iter()
             .fold(transfer, DelegateTransfer::with_co_source))
     }
+}
+
+impl DelegateFunding<'_> {
+    pub fn candidates(self) -> Result<DelegateCandidates, RingError> {
+        let outputs = self.payments.len() + self.exits.len();
+        let max_inputs = widest(outputs, |shape| shape_keyed(RingRail::Delegate, shape)).ok_or(
+            RingError::ShapeUnkeyed {
+                rail: RingRail::Delegate,
+            },
+        )?;
+        let targets = self.targets()?;
+        let assets = targets
+            .iter()
+            .map(|(asset, _)| (*asset, BoundedSpendCandidates::new(max_inputs)))
+            .collect();
+        Ok(DelegateCandidates {
+            targets,
+            assets,
+            max_inputs,
+        })
+    }
+
+    fn targets(&self) -> Result<Vec<(Address, u64)>, RingError> {
+        let legs = || {
+            self.payments
+                .iter()
+                .chain(self.exits)
+                .map(|payment| (payment.mint, payment.amount))
+                .chain(self.withdrawals.iter().map(|leg| (leg.asset, leg.amount)))
+        };
+        let mut mints = Vec::new();
+        for (mint, _) in legs() {
+            if !mints.contains(&mint) {
+                mints.push(mint);
+            }
+        }
+        mints
+            .into_iter()
+            .map(|mint| {
+                Ok((
+                    mint,
+                    payment_total(
+                        legs().filter_map(|(asset, amount)| (asset == mint).then_some(amount)),
+                    )?,
+                ))
+            })
+            .collect()
+    }
+}
+
+impl DelegateCandidates {
+    pub fn observe(&mut self, note: &WalletUtxo) {
+        if let Some(asset) = self.assets.get_mut(&note.utxo.asset.asset) {
+            asset.observe(note);
+        }
+    }
+
+    pub fn select(self) -> Result<Vec<WalletUtxo>, RingError> {
+        Ok(self
+            .funded()?
+            .into_iter()
+            .flat_map(|mint| mint.utxos)
+            .collect())
+    }
+
+    fn funded(mut self) -> Result<Vec<FundedMint>, RingError> {
+        let mut remaining = self.max_inputs;
+        let mut funded = Vec::new();
+        for (asset, amount) in self.targets {
+            let candidates = self
+                .assets
+                .remove(&asset)
+                .ok_or(TransactionError::NoSpendableBalance { asset })?;
+            let notes = candidates.select(SpendRequest {
+                asset,
+                amount,
+                max_inputs: remaining,
+            })?;
+            remaining -= notes.len();
+            funded.push(FundedMint {
+                mint: asset,
+                amount,
+                utxos: notes,
+            });
+        }
+        let trees = spanned_trees(funded.iter().flat_map(|mint| &mint.utxos));
+        if trees > MAX_INPUT_TREES {
+            return Err(TransactionError::TooManyInputTrees {
+                got: trees,
+                max: MAX_INPUT_TREES,
+            }
+            .into());
+        }
+        Ok(funded)
+    }
+}
+
+struct FundedMint {
+    mint: Address,
+    amount: u64,
+    utxos: Vec<WalletUtxo>,
 }
 
 /// The notes funding one mint and what returns from the last of them.

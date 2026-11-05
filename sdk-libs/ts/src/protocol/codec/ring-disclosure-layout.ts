@@ -1,8 +1,16 @@
 /** Regions of the ring auditor stream, Rust `custom_ring_interface::audit_stream`. */
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 
+export const SINGLE_ASSET_PAYOUT_INPUTS = 1;
+export const SINGLE_ASSET_PAYOUT_OUTPUTS = 16;
+
 /** Rust `TRANSFER_OUTPUT_CAPACITIES`, the output counts of the confidential keys. */
-export const TRANSFER_OUTPUT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8]);
+export const TRANSFER_OUTPUT_CAPACITIES: readonly number[] = Object.freeze([
+  2,
+  4,
+  8,
+  SINGLE_ASSET_PAYOUT_OUTPUTS,
+]);
 /** Rust `PACK_BE_CHUNK_BYTES`, the bytes of one packed field. */
 export const DISCLOSURE_CHUNK_BYTES = 31;
 export const STREAM_BLOCK_LEN = 16;
@@ -21,6 +29,29 @@ export const MAX_INPUT_CLASS = 64;
 export const DEFAULT_INPUT_BITS_LEN = 8;
 /** `kind ‖ u64be(amount) ‖ owner_key ‖ mint ‖ be32(nullifier_pk)`. */
 export const AUDIT_RECORD_LEN = 105;
+export const COMPACT_AUDIT_RECORD_LEN = 73;
+
+export enum DisclosureFormat {
+  Standard = 0,
+  SingleAssetPayout = 1,
+}
+
+export function disclosureFormat(format: DisclosureFormat | undefined): DisclosureFormat {
+  if (format === undefined || format === DisclosureFormat.Standard)
+    return DisclosureFormat.Standard;
+  if (format === DisclosureFormat.SingleAssetPayout) return format;
+  throw shapeError("format");
+}
+
+export function auditRecordLength(key: Pick<AuditKey, "format">): number {
+  return disclosureFormat(key.format) === DisclosureFormat.SingleAssetPayout
+    ? COMPACT_AUDIT_RECORD_LEN
+    : AUDIT_RECORD_LEN;
+}
+
+function recordBlocks(key: AuditKey): number {
+  return Math.ceil(auditRecordLength(key) / STREAM_BLOCK_LEN);
+}
 /** `be32(data_hash) ‖ be32(ring_data_hash)`. */
 export const DATA_TAIL_LEN = 64;
 /** `owner_key ‖ be32(nullifier_pk) ‖ u64be(amount) ‖ mint ‖ be32(blinding) ‖ be32(data_hash) ‖ be32(ring_data_hash)`. */
@@ -42,6 +73,7 @@ export function packedChunks(length: number): number {
 
 /** The statement's layout element, Rust `AuditLayout`. */
 export interface AuditLayout {
+  readonly format?: DisclosureFormat;
   /** One tail per published slot, the proof holds every data hash to zero while clear. */
   readonly hasData: boolean;
   /** The key carries default bits and one evidence entry per published input. */
@@ -52,11 +84,12 @@ export interface AuditLayout {
 export function auditLayoutValue(layout: AuditLayout): number {
   if (typeof layout.hasData !== "boolean" || typeof layout.entry !== "boolean")
     throw shapeError("layout");
-  return (layout.hasData ? 1 : 0) | (layout.entry ? 2 : 0);
+  return (layout.hasData ? 1 : 0) | (layout.entry ? 2 : 0) | (disclosureFormat(layout.format) << 2);
 }
 
 /** One key's envelope, every rail of a key shares one circuit, Rust `AuditKey`. */
 export interface AuditKey {
+  readonly format?: DisclosureFormat;
   /** The widest published input count, also `S`. */
   readonly class: number;
   /** Default bits and one evidence entry per published input. */
@@ -97,11 +130,25 @@ export function checkedStreamLayout(layout: AuditStreamLayout): AuditStreamLayou
     outputs >= 1 &&
     outputs <= capacity;
   if (!counted || typeof layout.hasData !== "boolean") throw shapeError("layout");
+  if (
+    disclosureFormat(key.format) === DisclosureFormat.SingleAssetPayout &&
+    (key.entry ||
+      layout.hasData ||
+      inputs !== SINGLE_ASSET_PAYOUT_INPUTS ||
+      key.class !== SINGLE_ASSET_PAYOUT_INPUTS ||
+      outputs !== SINGLE_ASSET_PAYOUT_OUTPUTS ||
+      capacity !== SINGLE_ASSET_PAYOUT_OUTPUTS)
+  )
+    throw shapeError("payout");
   return layout;
 }
 
 function headLen(key: AuditKey): number {
-  return ENVELOPE_HEAD_LEN + (key.entry ? DEFAULT_INPUT_BITS_LEN : 0);
+  return (
+    ENVELOPE_HEAD_LEN +
+    (key.entry ? DEFAULT_INPUT_BITS_LEN : 0) +
+    (disclosureFormat(key.format) === DisclosureFormat.SingleAssetPayout ? 32 : 0)
+  );
 }
 
 function entryLen(key: AuditKey): number {
@@ -120,7 +167,7 @@ export function firstRecordCounter(key: AuditKey): number {
 
 /** `T0`, past every record of `N` slots. */
 export function firstTailCounter(layout: Pick<AuditStreamLayout, "key" | "capacity">): number {
-  return firstRecordCounter(layout.key) + layout.capacity * RECORD_BLOCKS;
+  return firstRecordCounter(layout.key) + layout.capacity * recordBlocks(layout.key);
 }
 
 /** Slots at or past `n` stay absent from the evidence. */
@@ -135,8 +182,8 @@ export function envelopeRegion(layout: AuditStreamLayout): AuditStreamRegion {
 /** Its counter fixed by the slot index alone, omission moves no region. */
 export function recordRegion(layout: AuditStreamLayout, slot: number): AuditStreamRegion {
   return Object.freeze({
-    startCounter: firstRecordCounter(layout.key) + slot * RECORD_BLOCKS,
-    maxBlocks: RECORD_BLOCKS,
+    startCounter: firstRecordCounter(layout.key) + slot * recordBlocks(layout.key),
+    maxBlocks: recordBlocks(layout.key),
     length: recordLen(layout, slot),
   });
 }
@@ -150,8 +197,11 @@ export function tailRegion(layout: AuditStreamLayout, slot: number): AuditStream
   });
 }
 
-export function recordLen(layout: Pick<AuditStreamLayout, "outputs">, slot: number): number {
-  return slot < layout.outputs ? AUDIT_RECORD_LEN : 0;
+export function recordLen(
+  layout: Pick<AuditStreamLayout, "outputs" | "key">,
+  slot: number,
+): number {
+  return slot < layout.outputs ? auditRecordLength(layout.key) : 0;
 }
 
 export function tailLen(
@@ -161,8 +211,8 @@ export function tailLen(
   return layout.hasData && slot < layout.outputs ? DATA_TAIL_LEN : 0;
 }
 
-export function recordsLen(layout: Pick<AuditStreamLayout, "outputs">): number {
-  return AUDIT_RECORD_LEN * layout.outputs;
+export function recordsLen(layout: Pick<AuditStreamLayout, "outputs" | "key">): number {
+  return auditRecordLength(layout.key) * layout.outputs;
 }
 
 export function tailsLen(layout: Pick<AuditStreamLayout, "outputs" | "hasData">): number {
@@ -179,7 +229,7 @@ export function capacityBlocks(
   layout: Pick<AuditStreamLayout, "key" | "capacity" | "hasData">,
 ): number {
   const tails = layout.hasData ? layout.capacity * TAIL_BLOCKS : 0;
-  return envelopeBlocks(layout.key) + layout.capacity * RECORD_BLOCKS + tails;
+  return envelopeBlocks(layout.key) + layout.capacity * recordBlocks(layout.key) + tails;
 }
 
 function shapeError(name: string): InterfaceError {

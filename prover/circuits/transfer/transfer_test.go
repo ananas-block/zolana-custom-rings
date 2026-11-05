@@ -123,6 +123,9 @@ func TestEveryKeySolves(t *testing.T) {
 			w.DefaultInput = shape.Entry
 			requireSolved(t, w.Build(t).Circuit)
 		})
+		if shape.SingleAssetPayout {
+			continue
+		}
 		t.Run(shape.String()+"/hidden", func(t *testing.T) {
 			w := ringtransfer.Hidden(shape)
 			w.DefaultInput = shape.Entry && shape.Inputs > 2

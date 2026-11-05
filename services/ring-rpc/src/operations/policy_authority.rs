@@ -21,6 +21,7 @@ impl<S: TransactionSource> Hub<S> {
     ) -> Result<GetPendingListApprovalsResponse, RingRpcError> {
         let ring = request.ring.0;
         let action = ListPendingApprovals {
+            registry: request.registry.0,
             cursor: request.cursor.clone(),
         };
         let authority = self
@@ -36,12 +37,15 @@ impl<S: TransactionSource> Hub<S> {
         request: &RefuseListApprovalRequest,
     ) -> Result<RecordUpdateStatus, RingRpcError> {
         let ring = request.ring.0;
-        let action = RefuseListApproval(request.update_id.clone());
+        let action = RefuseListApproval {
+            registry: request.registry.0,
+            update_id: request.update_id.clone(),
+        };
         let authority = self
             .authorize_policy_action(ring, &request.auth, action)
             .await?;
         self.record_writer()?
-            .refuse_list_approval(ring, authority, &request.update_id)
+            .refuse_list_approval(authority, request)
             .await
     }
 

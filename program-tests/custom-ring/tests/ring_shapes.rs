@@ -151,6 +151,7 @@ impl Column {
 
 const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
     RingCircuit::Transfer {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         outputs,
         inputs,
         withdrawals,
@@ -162,6 +163,7 @@ const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCir
 
 const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
     RingCircuit::Transfer {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         outputs,
         inputs,
         withdrawals,
@@ -173,6 +175,7 @@ const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircu
 
 const fn entry(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
     RingCircuit::Transfer {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         outputs,
         inputs,
         withdrawals,
@@ -357,6 +360,7 @@ fn widens_legs(shape: TransferShape) -> bool {
 
 fn narrow_key(outputs: u8) -> Option<TransferShape> {
     FrameKey {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         rail: RingRail::Confidential,
         inputs: 1,
         outputs: outputs.into(),

@@ -21,10 +21,11 @@ mod tests;
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
     key_catalog::{RecordPools, RingCircuit, RowAuthorization, TransferAddresses, TransferSpend},
-    AnonymousParties, CheckedAuthorization, CustomRingError, CustomRingProof, FramedSenderBundle,
-    InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof,
-    PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts,
-    SignerSet, TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, TRANSFER_OUTPUT_CAPACITIES,
+    AnonymousParties, CheckedAuthorization, CustomRingError, CustomRingProof, DisclosureFormat,
+    FramedSenderBundle, InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof,
+    PolicyProof, PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement,
+    SignerDataCounts, SignerSet, TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN,
+    TRANSFER_OUTPUT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -54,8 +55,8 @@ pub use self::{
         CoOwner, EntrySpend, NoteData, ReadCache, RingPayment,
     },
     delegate::{
-        DelegateMove, DelegateOutput, DelegatePayment, DelegateSource, DelegateTransfer,
-        DelegateTransferInput, DelegateWithdrawal, Delegated,
+        DelegateCandidates, DelegateFunding, DelegateMove, DelegateOutput, DelegatePayment,
+        DelegateSource, DelegateTransfer, DelegateTransferInput, DelegateWithdrawal, Delegated,
     },
     owner::{CustomRingTransfer, CustomRingTransferInput, Owner},
     plan::SealRow,
@@ -517,6 +518,7 @@ impl Preview {
             published: &rail.published_slots(inputs, sender)?,
             sender_bundle: rail.published_sender(inputs, &sender.viewing_pubkey)?,
             tx_viewing_u: rail.tx_viewing_key().pubkey().u(),
+            format: rail.format(),
         }))
     }
 }
@@ -551,6 +553,10 @@ impl<'a> Pipeline<'a> {
         } = self.staged;
         let program = self.ring.program_id();
         let ring_rail = spend.rail();
+        if rail.format() == DisclosureFormat::SingleAssetPayout && !matches!(spend, Spend::Owner) {
+            return Err(RingError::ShapeUnkeyed { rail: ring_rail });
+        }
+        rail.check_format(&proof_inputs)?;
         // The compact data carries a u32 expiry, an unbounded one keeps its farthest value.
         let expiry_unix_ts =
             u32::try_from(proof_inputs.external_data.expiry_unix_ts).unwrap_or(u32::MAX);
@@ -686,6 +692,7 @@ impl<'a> Prepared<'a> {
         };
         Ok(TransferPlanner {
             subjects: TransferSpend {
+                format: staged.rail.format(),
                 rail,
                 inputs: self.published_inputs,
                 outputs: usize::from(self.preview.n_out),
@@ -1223,6 +1230,15 @@ pub fn entry_shape_keyed(shape: Shape) -> bool {
 fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
     rail.supports(shape)
         && transfer_key(TransferSpend {
+            format: if rail == RingRail::Confidential
+                && !spends_default_ring
+                && shape.n_inputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_INPUTS
+                && shape.n_outputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_OUTPUTS
+            {
+                DisclosureFormat::SingleAssetPayout
+            } else {
+                DisclosureFormat::Standard
+            },
             rail,
             inputs: shape.n_inputs(),
             outputs: shape.n_outputs(),
@@ -1243,6 +1259,7 @@ struct PreviewParts<'a> {
     published: &'a [PublishedSlot<'a>],
     sender_bundle: Option<FramedSenderBundle<'a>>,
     tx_viewing_u: [u8; 32],
+    format: DisclosureFormat,
 }
 
 const UNSEALED_RECORD: [u8; AUDIT_RECORD_LEN] = [0; AUDIT_RECORD_LEN];
@@ -1282,6 +1299,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
         tx_viewing_u: parts.tx_viewing_u,
         salt: external.salt,
         extensions: OwnedExtensions {
+            format: parts.format,
             data_hash: external.data_hash,
             ring_data_hash: external.ring_data_hash,
             messages: preview.app_messages.clone(),
@@ -1301,7 +1319,9 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
         outputs: parts
             .published
             .iter()
-            .map(|slot| OwnedOutput::of(slot.wire(&UNSEALED_RECORD, None)))
+            .map(|slot| {
+                OwnedOutput::of(slot.wire(&UNSEALED_RECORD[..parts.format.record_len()], None))
+            })
             .collect(),
         replies: owned_replies(parts.published),
         sender: parts.sender_bundle.map(OwnedSenderBundle::of),

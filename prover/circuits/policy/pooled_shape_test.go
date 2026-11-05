@@ -45,8 +45,7 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 	}
 }
 
-// An input slot adds an asset reference and no row, the pools stay at the payments' width.
-func TestInputSlotsTakeAReferenceAndNoRow(t *testing.T) {
+func TestInputAssetsHaveIndependentPoolCapacity(t *testing.T) {
 	shape := InputsShape{Outputs: 2, Withdrawals: 1, Senders: 4}
 	base, err := NewPolicy(shape.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
@@ -60,8 +59,13 @@ func TestInputSlotsTakeAReferenceAndNoRow(t *testing.T) {
 	if err = spent.Validate(transaction.NPublicSlots); err != nil {
 		t.Fatal(err)
 	}
-	if spent.RecordPools() != base.RecordPools() {
-		t.Fatalf("pools %+v over %+v", spent.RecordPools(), base.RecordPools())
+	want := base.RecordPools()
+	want.Own += shape.Spent
+	want.Curator += shape.Spent
+	want.OwnSubjects += shape.Spent
+	want.CuratorSubjects += shape.Spent
+	if spent.RecordPools() != want {
+		t.Fatalf("pools %+v want %+v", spent.RecordPools(), want)
 	}
 	if len(spent.AssetEntries) != len(base.AssetEntries)+3 || len(spent.OwnerEntries) != len(base.OwnerEntries) {
 		t.Fatalf("references %d and %d", len(spent.AssetEntries), len(spent.OwnerEntries))

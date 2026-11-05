@@ -18,6 +18,10 @@ import { checkedCounter } from "../../crypto/error.js";
 import {
   ADDRESS_INPUT_BITS_LEN,
   AUDIT_RECORD_LEN,
+  COMPACT_AUDIT_RECORD_LEN,
+  DisclosureFormat,
+  SINGLE_ASSET_PAYOUT_INPUTS,
+  disclosureFormat,
   DATA_TAIL_LEN,
   DEFAULT_INPUT_BITS_LEN,
   ENTRY_INPUT_LEN,
@@ -77,6 +81,7 @@ export interface EntryInput {
 /** The envelope past its sealed key and count, Rust `AuditEvidence`. */
 export type AuditEvidence =
   | Readonly<{ kind: "none" }>
+  | Readonly<{ kind: "singleAssetPayout"; mint: Address }>
   | Readonly<{
       kind: "entry";
       /** Bit `i` set when input `i` is a live default-ring note. */
@@ -218,12 +223,18 @@ export function envelopeInputMap(
   envelope: Pick<AuditEnvelope, "realInputs" | "addressInputBits">,
   layout: Pick<AuditStreamLayout, "inputs" | "key">,
 ): InputMap {
-  return InputMap.check({
+  const map = InputMap.check({
     publishedInputs: layout.inputs,
     capacity: layout.key.class,
     noteCount: envelope.realInputs,
     addressInputBits: envelope.addressInputBits,
   });
+  if (
+    disclosureFormat(layout.key.format) === DisclosureFormat.SingleAssetPayout &&
+    (map.noteCount !== SINGLE_ASSET_PAYOUT_INPUTS || map.addressInputBits !== 0n)
+  )
+    throw refused();
+  return map;
 }
 
 export const DUMMY_RECORD: AuditRecord = Object.freeze({
@@ -273,6 +284,28 @@ export function decodeAuditRecord(plaintext: Uint8Array): AuditRecord {
   });
 }
 
+export function encodeCompactAuditRecord(record: AuditRecord): Uint8Array {
+  if (record.kind !== RecordKind.ring) throw refused();
+  return concatBytes(
+    Uint8Array.of(record.kind),
+    u64be(checkedCounter(record.amount, "amount")),
+    checkedBytes<Bytes32>(record.ownerKey, FIELD_LEN, "owner key"),
+    checkedBytes<Bytes32>(record.nullifierPk, FIELD_LEN, "nullifier pk"),
+  );
+}
+
+export function decodeCompactAuditRecord(plaintext: Uint8Array, mint: Address): AuditRecord {
+  if (plaintext.length !== COMPACT_AUDIT_RECORD_LEN || plaintext[0] !== RecordKind.ring)
+    throw refused();
+  return Object.freeze({
+    kind: RecordKind.ring,
+    amount: bytesToBigInt(plaintext.subarray(1, 9)),
+    ownerKey: plaintext.slice(9, 41) as Bytes32,
+    mint,
+    nullifierPk: plaintext.slice(41) as Bytes32,
+  });
+}
+
 export function encodeOpeningRecord(opening: OpeningRecord): Uint8Array {
   const out = new Uint8Array(OPENING_RECORD_LEN);
   out.set(encodeAuditRecord(opening.record));
@@ -314,6 +347,8 @@ export function encodeAuditEnvelope(envelope: AuditEnvelope): Uint8Array {
     u64be(checkedCounter(addressInputBits, "address input bits")),
   );
   if (evidence.kind === "none") return head;
+  if (evidence.kind === "singleAssetPayout")
+    return concatBytes(head, addressBytes(evidence.mint, "mint"));
   return concatBytes(
     head,
     u64be(checkedCounter(evidence.defaultInputBits, "default input bits")),
@@ -336,6 +371,15 @@ export function decodeAuditEnvelope(
   // 2. `R` and `A` must form a canonical map before any evidence reads a position.
   const head = { txViewingSecret, realInputs, addressInputBits };
   const inputs = envelopeInputMap(head, layout);
+  if (disclosureFormat(layout.key.format) === DisclosureFormat.SingleAssetPayout) {
+    return Object.freeze({
+      ...head,
+      evidence: Object.freeze({
+        kind: "singleAssetPayout",
+        mint: encodeBase58(plaintext.subarray(ENVELOPE_HEAD_LEN)),
+      }),
+    });
+  }
   if (!layout.key.entry) return Object.freeze({ ...head, evidence: NO_EVIDENCE });
   // 3. Entry evidence opens default-ring notes alone, every other published position stays zero.
   const entriesAt = ENVELOPE_HEAD_LEN + DEFAULT_INPUT_BITS_LEN;

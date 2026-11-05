@@ -75,18 +75,30 @@ export class StreamCounter {
   }
 }
 
+export interface GapScanState {
+  readonly from: bigint;
+  readonly start: bigint;
+  readonly end: bigint;
+  readonly gap: bigint;
+  readonly requiredEnd: bigint;
+  readonly late: readonly bigint[];
+  readonly observed: readonly bigint[];
+}
+
 export class GapScan {
   readonly #from: bigint;
   #start: bigint;
   #end: bigint;
   #gap = TAG_GAP;
+  #requiredEnd: bigint;
   #late: readonly bigint[];
   readonly #observed = new Set<bigint>();
 
   constructor(from: bigint, counter: StreamCounter) {
     this.#from = from;
     this.#start = from;
-    this.#end = saturatingAdd(max(counter.next, from), TAG_GAP);
+    this.#requiredEnd = saturatingAdd(max(counter.next, from), TAG_GAP);
+    this.#end = min(this.#requiredEnd, saturatingAdd(from, PAGE_LIMIT));
     this.#late = counter.pending;
   }
 
@@ -104,11 +116,32 @@ export class GapScan {
       this.#observed.add(at);
       found ||= at >= this.#start && at < this.#end;
     }
-    if (!found) return false;
+    if (!found && this.#end >= this.#requiredEnd) return false;
     this.#gap = min(this.#gap * 2n, PAGE_LIMIT);
     this.#start = this.#end;
-    this.#end = saturatingAdd(this.#start, this.#gap);
+    this.#end = saturatingAdd(this.#start, this.#start < this.#requiredEnd ? PAGE_LIMIT : this.#gap);
     return true;
+  }
+
+  state(): GapScanState {
+    return {
+      from: this.#from, start: this.#start, end: this.#end, gap: this.#gap,
+      requiredEnd: this.#requiredEnd, late: [...this.#late], observed: [...this.#observed],
+    };
+  }
+
+  static restore(state: GapScanState): GapScan {
+    const scan = new GapScan(state.from, StreamCounter.EMPTY);
+    if (state.start < state.from || state.end < state.start || state.end - state.start > PAGE_LIMIT ||
+        state.gap < TAG_GAP || state.gap > PAGE_LIMIT || state.requiredEnd < state.from)
+      throw invalid("invalid gap scan state");
+    scan.#start = state.start;
+    scan.#end = state.end;
+    scan.#gap = state.gap;
+    scan.#requiredEnd = state.requiredEnd;
+    scan.#late = state.late;
+    for (const index of state.observed) scan.#observed.add(index);
+    return scan;
   }
 
   finish(counter: StreamCounter): StreamCounter {

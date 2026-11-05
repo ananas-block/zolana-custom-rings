@@ -1,3 +1,4 @@
+import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { withConfirmedReads } from "../../helpers/clients.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
@@ -185,6 +186,32 @@ import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
 const ownNullifier = (): Bytes32 => new Uint8Array(32).fill(0x12) as Bytes32;
 
 describe("confidential rail", () => {
+  it("delivers sixteen exact funded recipients under the common mint profile", async () => {
+    const fixture = await ringFixture();
+    const sender = ShieldedKeypair.generate();
+    const recipients = Array.from({ length: 16 }, () => ShieldedKeypair.generate());
+    const proven = await prove(
+      fixture,
+      sender,
+      transferTo(fixture, sender, recipients, { amount: 6_400n, each: 400n }),
+    );
+    const { data, call } = await expanded(fixture, proven, "confidential");
+    expect([data.nIn, data.nOut]).toEqual([1, 16]);
+    expect(data.extensions.format).toBe(DisclosureFormat.SingleAssetPayout);
+    expect(data.envelope).toHaveLength(73);
+    expect(
+      data.outputs.every(
+        (output) =>
+          output.record.length === 73 &&
+          output.body.kind === "recipient" &&
+          output.body.body.length === 48,
+      ),
+    ).toBe(true);
+    checkTransferProof(fixture, data);
+    checkDisclosure(fixture, call, data);
+    checkRingBlindings(call, data);
+  });
+
   it("delivers two outputs as proven bodies each owner opens to the committed note", async () => {
     const fixture = await ringFixture();
     const sender = ShieldedKeypair.generate();

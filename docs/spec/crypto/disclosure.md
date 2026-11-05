@@ -35,13 +35,13 @@ The auditor message is SPP's last message, under the auditor's `u` as its view t
 0x04 || tx_viewing_u || envelope_ct || record_ct_0 .. record_ct_{m-1} || tail_ct_0 .. tail_ct_{m-1}
 ```
 
-`tx_viewing_u` is SPP's `tx_viewing_pk` without its tag. Each record ciphertext has 105 bytes. The tails are present exactly when `has_data` is set, 64 bytes each.
+`tx_viewing_u` is SPP's `tx_viewing_pk` without its tag. The standard format has 105-byte record ciphertexts. The single-asset payout format has 73-byte records. Tails are present exactly when `has_data` is set, 64 bytes each.
 
-`n` is the published input count, the frame's nullifier count. It is never the key capacity and never a private live count. The entry flag, `n`, `m` and `has_data` fix the auditor message's length. The frame's flags, shape and counts fix every other length, and the program refuses trailing bytes.
+`n` is the published input count, the frame's nullifier count. It is never the key capacity and never a private live count. The disclosure format, entry flag, `n`, `m` and `has_data` fix the auditor message's length. The frame's flags, shape and counts fix every other length, and the program refuses trailing bytes.
 
 ## Stream regions
 
-The stream has one key, one nonce and one `CTREncrypt` call in the circuit over the capacity-sized plaintext. Each region is zero padded to a multiple of 16 bytes, so it starts on its own counter and no counter serves two regions. The key alone fixes every counter, so a reader decrypts slot `i` with no other slot. The frame carries only transmitted bytes, and padding and unpublished slots never leave the prover.
+The stream has one key, one nonce and one `CTREncrypt` call in the circuit over the capacity-sized plaintext. The table below describes the standard format. Each region is zero padded to a multiple of 16 bytes, so it starts on its own counter and no counter serves two regions. The key alone fixes every counter, so a reader decrypts slot `i` with no other slot. The frame carries only transmitted bytes, and padding and unpublished slots never leave the prover.
 
 | Region | Start counter | Maximum blocks | Transmitted bytes |
 |---|---|---|---|
@@ -91,16 +91,34 @@ The proof derives `kind` from the domain and ring id the slot's hash commits, so
 
 ## Recipient body
 
-The SDKs seal one form on every frame, under `CRING/rcp` and the slot secret of the recipient's viewing key:
+The standard format seals each ring recipient body under `CRING/rcp` and its slot secret.
 
 ```text
-fe32(blinding) || u64be(amount) || mint                                         72 bytes
-|| u8(has_ring_data) || ring_data_hash? || (data_hash || application_data)?    only when either part is present
+base    = fe32(blinding) || u64be(amount) || mint                              72 bytes
+payload = u8(has_ring_data) || ring_data_hash? || (data_hash || application_data)?
+body    = base                                                              no data or padding
+body    = base || u16be(payload_len) || payload || zero_padding              otherwise
 ```
 
-`ring_data_hash` follows when `has_ring_data` is `1`. `data_hash` and the application data follow when the note's `data_hash` is nonzero. The commitment covers both, so the reader needs them to rebuild it.
+`has_ring_data` is `0` or `1`. Its `1` form carries the 32-byte `ring_data_hash`. A nonzero `data_hash` adds that hash and its application data. The commitment covers both hashes. A padded body with no data has `payload_len = 0`. The decoder rejects nonzero bytes after the declared payload.
 
-The body travels as SPP output data under scheme 10, `u16le(body_len) || body || reply`. No proof constrains it. A recipient rebuilds the commitment under its enrolled nullifier key, then under `ZERO_NULLIFIER_PUBKEY`, and accepts the note only on a match. A rebuilt commitment establishes ownership, because the body names no key. A dummy carries 72 random bytes. A slot in the bodiless bitmap carries no SPP data, and an exit carries zolana's scheme 3 body instead.
+The SDKs use one body width for all ring recipient and dummy slots in a standard frame. The program rejects unequal recipient-body lengths. The width is the largest encoded ring body, at least 72 bytes, or 74 when any output carries data hashes. Each real body has zero padding before encryption. Each dummy has random bytes of the same width. Exits retain their separate scheme 3 encoding.
+
+SPP output data carries scheme 10 followed by `u16le(body_len) || body || reply`. No proof constrains it. The reader rebuilds the commitment under its enrolled nullifier key, then under `ZERO_NULLIFIER_PUBKEY`. It accepts ownership only on a match. A slot in the bodiless bitmap carries no SPP data.
+
+## Single-asset payout
+
+`SingleAssetPayout = 1` selects a confidential published-owner shape with one real ring input and 16 real ring outputs of that same asset. It accepts no entry, exit, public leg, data hash, application data or reply. The frame extension uses bit 6. The audit layout uses bit 2.
+
+```text
+envelope = tx_viewing_sk || u8(1) || u64be(address_bits) || common_mint        73 bytes
+record   = u8(1) || u64be(amount) || owner_key || fe32(nullifier_pk)            73 bytes
+body     = fe32(blinding) || u64be(amount) || u64be(asset_id)                  48 bytes
+```
+
+The header occupies five AES blocks from counter 2. Record `i` starts at counter `7 + 5 i`, with an 80-byte padded stride. The frame transmits only 73 bytes per record and no tails. `address_bits` is zero because the sole input is a note. The common mint opens every record's asset without a registry read.
+
+A recipient body uses scheme 11 with `u16le(48) || body` and the same `CRING/rcp` schedule. The reader selects the format from the scheme before decryption. Asset id 1 names SOL without a lookup, and id 0 is invalid. Other ids require an authenticated SPP mint-registry mapping before commitment verification. Unknown registry state cannot establish ownership. The authenticated registry may require RPC access.
 
 ## Reply metadata
 
@@ -137,8 +155,9 @@ change_cell = mint || u64be(amount)                                             
 |---|---|---|
 | 1 | `has_data` | the frame carries one tail per published slot |
 | 2 | `entry` | the frame selects a key with entry capacity |
+| 4 | `single_asset_payout` | the frame selects the single-asset payout key |
 
-The layout value is `has_data | entry << 1`. The circuit decomposes it into these two bits and holds `entry` to the key's entry capacity.
+The layout value is `has_data | entry << 1 | single_asset_payout << 2`. The circuit decomposes it into three bits. It binds entry and payout to the key and refuses `has_data` on a payout key.
 
 ## Deposits and merges
 

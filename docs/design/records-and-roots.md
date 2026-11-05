@@ -41,7 +41,7 @@ A ring reads two kinds of tree, each in a Storage program account with its own r
 
 ## Tracking
 
-- A tracking leaf contains one owner's nullifier key, ciphertext hash and list tag. Every field is final, so a leaf never changes once inserted.
+- A tracking leaf binds its member, successor, nullifier key, ciphertext hash and list tag. Only its successor changes when a new member follows it.
 - The tree has 16 levels of four, taller than a policy tree. Anyone can pay to fill it, and no tree replaces a full one. Its next index is a `u64`, and an apply past `TRACKING_CAPACITY` leaves fails.
 - `Enroll` needs the owner's signature, and a program signs its PDA through CPI. Any payer may fund it, and Ring RPC can relay it for a wallet with no SOL.
 - A first enrollment carries a proof. It shows the ciphertext seals the secret of that nullifier key and the salt of that tag to the auditor key.

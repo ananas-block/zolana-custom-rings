@@ -39,6 +39,7 @@ import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership
 import { RingError, RingProgramError } from "../../protocol/error.js";
 import { fetchTrackingRegistry } from "../../rpc/tracking-resolver.js";
 import { ringComputeUnitLimit } from "../management/admin.js";
+import { checkSpendCoverage } from "./selection.js";
 import { TransactionFit } from "./address-ceiling.js";
 import {
   boundState,
@@ -548,6 +549,7 @@ export function checkRetainedEntries(wallet: Wallet, entries: readonly WalletUtx
       });
     }
   }
+  checkSpendCoverage(wallet, entries);
 }
 
 export function createKitRingSubmissionTransport(

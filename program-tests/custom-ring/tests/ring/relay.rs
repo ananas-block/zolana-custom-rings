@@ -195,6 +195,8 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
     let mut allowed = AllowedNullifiers::default();
     allowed.admit(&source, &notes)?;
     let transfer = AuthorityTransfer {
+        exits: Vec::new(),
+        withdrawals: Vec::new(),
         sources: vec![member_address.into()],
         payments: vec![AuthorityPayment {
             recipient: member_address.into(),

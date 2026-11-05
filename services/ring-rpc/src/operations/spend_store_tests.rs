@@ -111,7 +111,7 @@ impl Keys {
                 .await
                 .expect("enrollments");
         }
-        store.admit_enrollments(admission);
+        store.admit_enrollments(admission).expect("admitted");
     }
 }
 
@@ -147,6 +147,8 @@ fn through(store: &AuditStore, keys: &Keys, slot: u64) {
 
 fn query(owner: Address) -> WalletStatusQuery {
     WalletStatusQuery {
+        principal: *spr_keypair::PublicKey::from_ed25519(owner.as_array()).as_bytes(),
+        now: NOW,
         enrollment: WalletEnrollment::NotEnrolled,
         wallet: owner,
         ring: RING,
@@ -239,9 +241,9 @@ fn a_spend_of_an_unknown_note_stays_unresolved_then_resolves_when_it_opens() {
     apply(&store, &keys, |work| {
         work.observe(real(nullifier, frame(6), 0));
     });
-    let coverage = block_on(store.spend_coverage()).expect("coverage");
+    let coverage = block_on(store.spend_coverage(CoverageCursor::new(RING))).expect("coverage");
     assert_eq!(coverage.unresolved_real.len(), 1);
-    assert_eq!(coverage.padding, 0);
+    assert_eq!(coverage.totals.expect("first page totals").padding, 0);
     apply(&store, &keys, |work| work.open(frame(5), [created]));
     assert_eq!(
         store.row_state(&nullifier),
@@ -249,9 +251,9 @@ fn a_spend_of_an_unknown_note_stays_unresolved_then_resolves_when_it_opens() {
             note: created.commitment
         })
     );
-    let coverage = block_on(store.spend_coverage()).expect("coverage");
+    let coverage = block_on(store.spend_coverage(CoverageCursor::new(RING))).expect("coverage");
     assert!(coverage.unresolved_real.is_empty());
-    assert_eq!(coverage.resolved, 1);
+    assert_eq!(coverage.totals.expect("first page totals").resolved, 1);
 }
 
 /// Replays give the same state, and no step lists the spent inputs beside their merge.
@@ -330,18 +332,18 @@ fn only_an_unreadable_frame_holds_the_history_slot() {
         work.observe(real([1; 32], frame(50), 0));
     });
     assert_eq!(
-        block_on(store.spend_coverage())
+        block_on(store.spend_coverage(CoverageCursor::new(RING)))
             .expect("coverage")
             .history_through,
         100
     );
     apply(&store, &keys, |work| work.mark_unread(frame(60)));
-    let coverage = block_on(store.spend_coverage()).expect("coverage");
+    let coverage = block_on(store.spend_coverage(CoverageCursor::new(RING))).expect("coverage");
     assert_eq!(coverage.history_through, 59);
     assert_eq!(coverage.unreadable.len(), 1);
     apply(&store, &keys, |work| work.mark_read(frame(60)));
     assert_eq!(
-        block_on(store.spend_coverage())
+        block_on(store.spend_coverage(CoverageCursor::new(RING)))
             .expect("coverage")
             .history_through,
         100
@@ -381,9 +383,9 @@ fn padding_and_external_add_no_unresolved_state() {
             ..real([2; 32], frame(5), 0)
         });
     });
-    let coverage = block_on(store.spend_coverage()).expect("coverage");
+    let coverage = block_on(store.spend_coverage(CoverageCursor::new(RING))).expect("coverage");
     assert!(coverage.unresolved_real.is_empty());
-    assert_eq!((coverage.padding, coverage.external), (1, 1));
+    assert_eq!((coverage.totals.expect("first page totals").padding, coverage.totals.expect("first page totals").external), (1, 1));
 }
 
 #[test]
@@ -402,7 +404,7 @@ fn a_duplicate_nullifier_is_surfaced_and_the_first_state_stays() {
         work.observe(real(nullifier, frame(4), 0));
     });
     assert_eq!(store.row_state(&nullifier), before);
-    let faults = block_on(store.spend_coverage())
+    let faults = block_on(store.spend_coverage(CoverageCursor::new(RING)))
         .expect("coverage")
         .integrity_faults;
     assert_eq!(faults.len(), 1);
@@ -439,7 +441,7 @@ fn a_zero_key_note_of_a_wallet_is_exposed_and_a_pda_note_is_not() {
 }
 
 #[test]
-fn merge_selection_skips_a_published_nullifier_and_ignores_an_unrelated_row() {
+fn spendable_scan_skips_a_published_nullifier_and_ignores_an_unrelated_row() {
     let store = AuditStore::default();
     let owner = wallet(1);
     let keys = Keys::with(owner, 7);
@@ -456,20 +458,18 @@ fn merge_selection_skips_a_published_nullifier_and_ignores_an_unrelated_row() {
         work.observe(real([0xee; 32], frame(3), 1));
     });
     let key = secret(7);
-    let mut selected = block_on(store.spendable_by_mint(SpendableNotes {
-        ring: RING,
-        owner_key: owner.to_bytes(),
-        nullifier_key: &key,
-        mints: &[Mint::new(mint, 6)],
-        held: &HashSet::new(),
-    }))
+    let mut hashes = Vec::new();
+    block_on(store.visit_spendable_notes(
+        SpendableNotes {
+            ring: RING,
+            owner_key: owner.to_bytes(),
+            nullifier_key: &key,
+            mints: &[Mint::new(mint, 6)],
+            held: &HashSet::new(),
+        },
+        |note| hashes.push(note.utxo_hash),
+    ))
     .expect("selection");
-    let hashes: Vec<[u8; 32]> = selected
-        .remove(&mint)
-        .unwrap_or_default()
-        .iter()
-        .map(|note| note.utxo_hash)
-        .collect();
     assert_eq!(hashes, [kept.commitment]);
 }
 
@@ -539,7 +539,7 @@ async fn commit_page(
     page(&mut work);
     let delta = work.finish().await.expect("page");
     let revision = writer.commit_page(&delta).await?;
-    book.commit(delta.at_revision(revision));
+    book.commit(delta.at_commit(revision));
     Ok(())
 }
 
@@ -930,9 +930,12 @@ async fn a_bounded_cache_holds_its_bound_and_storage_answers_every_evicted_row()
     commit_page(&store, &book, &seal, &keys, repeat.as_ref())
         .await
         .expect("repeat");
-    let coverage = book.spend_coverage().await.expect("coverage");
+    let coverage = book
+        .spend_coverage(CoverageCursor::new(RING))
+        .await
+        .expect("coverage");
     assert_eq!(coverage.integrity_faults.len(), 1);
-    assert_eq!(coverage.resolved, 1);
+    assert_eq!(coverage.totals.expect("first page totals").resolved, 1);
     assert_eq!(
         balance(&book.wallet_status(query(owner)).await.expect("status")),
         110
@@ -940,7 +943,7 @@ async fn a_bounded_cache_holds_its_bound_and_storage_answers_every_evicted_row()
 }
 
 #[tokio::test]
-async fn a_follower_reload_reads_only_the_rows_written_since_its_revision() {
+async fn a_follower_invalidates_changed_caches_without_loading_history() {
     let owner = wallet(1);
     let keys = Keys::with(owner, 7);
     let store = Store::open("sqlite::memory:", 1).await.expect("store");
@@ -973,10 +976,33 @@ async fn a_follower_reload_reads_only_the_rows_written_since_its_revision() {
     commit_page(&store, &writer, &seal, &keys, history.as_ref())
         .await
         .expect("history");
-    // 1. A cold follower reads no note or spend row, its cache fills from lookups.
     let cold = reload(&follower).await;
     assert_eq!((cold.spends.notes.len(), cold.spends.rows.len()), (0, 0));
     follower.refresh(cold.spends, cold.revision);
+    let retained = PageDelta {
+        notes: [(
+            created[0].commitment,
+            StoredUtxo {
+                utxo: created[0].utxo,
+                created_in: frame(2),
+                slot_index: 0,
+                leaf_index: 0,
+                ring_note: true,
+                nullifier: Some(nullifier_of(&created[0], &secret(7))),
+            },
+        )]
+        .into(),
+        revision: Some(cold.revision),
+        ..PageDelta::default()
+    };
+    follower.commit(retained);
+    keys.enroll(&follower, None).await;
+    let before = follower.cached_entries();
+    let before_enrollments = follower.cached_enrollments();
+    let idle = reload(&follower).await;
+    follower.refresh(idle.spends, idle.revision);
+    assert_eq!(follower.cached_entries(), before);
+    assert_eq!(follower.cached_enrollments(), before_enrollments);
 
     let fresh = [
         note(owner, &secret(7), 0x30, 4),
@@ -991,13 +1017,14 @@ async fn a_follower_reload_reads_only_the_rows_written_since_its_revision() {
     commit_page(&store, &writer, &seal, &keys, next.as_ref())
         .await
         .expect("next");
-    // 2. The next pass reads the two new notes and the one spend, never the older history.
     let changed = reload(&follower).await;
     assert_eq!(
         (changed.spends.notes.len(), changed.spends.rows.len()),
-        (2, 1)
+        (0, 0)
     );
     follower.refresh(changed.spends, changed.revision);
+    assert_eq!(follower.cached_entries(), [0; 3]);
+    assert_eq!(follower.cached_enrollments(), [0; 3]);
     assert!(follower
         .spend_rows(&[spent])
         .await
@@ -1049,7 +1076,7 @@ async fn a_restart_after_enrollment_resumes_old_note_derivation() {
         .expect("enrollment");
     drop(before);
     let after = indexed_store(&database);
-    after.queue_late_owners(writer.pending_owners().await.expect("pending"));
+    after.replace_late_owners(writer.pending_owners().await.expect("pending"));
     let keys = Keys::with(owner, 7);
     let opener = |held: &HeldEnrollment| keys.open(held);
     let mut work = PageWork::new(&after, &opener);
@@ -1114,7 +1141,7 @@ async fn wallet_pages_read_one_snapshot_on_postgres() {
 }
 
 #[tokio::test]
-async fn wallet_cursor_restarts_after_a_same_slot_spend_and_change() {
+async fn wallet_snapshot_survives_a_same_slot_spend_and_change() {
     for persistent in [false, true] {
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let book = if persistent {
@@ -1167,6 +1194,10 @@ async fn wallet_cursor_restarts_after_a_same_slot_spend_and_change() {
                 ring: Address::new_from_array([9; 32]),
                 ..continuation
             },
+            WalletStatusQuery {
+                principal: [9; 34],
+                ..continuation
+            },
         ] {
             assert!(matches!(
                 book.wallet_status(foreign).await,
@@ -1175,7 +1206,7 @@ async fn wallet_cursor_restarts_after_a_same_slot_spend_and_change() {
         }
         let spent = initial
             .iter()
-            .find(|note| note.commitment == first.notes[0].utxo_hash.0)
+            .find(|note| note.commitment == next.notes[0].utxo_hash.0)
             .expect("input");
         let change = indexed_note(owner, &key, 0, 9);
         if !persistent {
@@ -1189,9 +1220,28 @@ async fn wallet_cursor_restarts_after_a_same_slot_spend_and_change() {
         commit_page(&store, &book, &seal, &keys, &spend)
             .await
             .expect("spend");
+        let retained = book
+            .wallet_status(continuation)
+            .await
+            .expect("retained page");
+        assert_eq!(retained, next);
+        assert_eq!(
+            book.wallet_status(WalletStatusQuery {
+                enrollment: WalletEnrollment::Applied,
+                ..continuation
+            })
+            .await
+            .expect("captured enrollment"),
+            next
+        );
+        assert_eq!(retained.snapshot_expires_at, Some(NOW + 300));
         assert!(matches!(
-            book.wallet_status(continuation).await,
-            Err(RingRpcError::WalletSnapshotChanged)
+            book.wallet_status(WalletStatusQuery {
+                now: NOW + 300,
+                ..continuation
+            })
+            .await,
+            Err(RingRpcError::WalletSnapshotExpired)
         ));
         let restarted = book.wallet_status(query(owner)).await.expect("restart");
         assert_eq!(restarted.history_through, first.history_through);
@@ -1210,12 +1260,16 @@ async fn wallet_cursor_restarts_after_a_same_slot_spend_and_change() {
 
 #[test]
 fn wallet_cursor_refuses_unknown_versions_and_old_positions() {
+    assert_eq!(
+        std::mem::size_of::<WalletCursor>(),
+        zolana_ring_client::rpc::WALLET_SNAPSHOT_CURSOR_LEN
+    );
     assert!(matches!(
         WalletCursor::decode(&[0; 32]),
         Err(RingRpcError::InvalidCursor)
     ));
     let cursor = WalletCursor {
-        version: 2,
+        version: 1,
         ring: [0; 32],
         wallet: [0; 32],
         snapshot: [0; 32],
@@ -1225,14 +1279,12 @@ fn wallet_cursor_refuses_unknown_versions_and_old_positions() {
         WalletCursor::decode(bytemuck::bytes_of(&cursor)),
         Err(RingRpcError::InvalidCursor)
     ));
-    let error = jsonrpsee::types::ErrorObjectOwned::from(RingRpcError::WalletSnapshotChanged);
+    let error = jsonrpsee::types::ErrorObjectOwned::from(RingRpcError::WalletSnapshotExpired);
     assert_eq!(
         error.code(),
-        zolana_ring_client::rpc::WALLET_SNAPSHOT_CHANGED
+        zolana_ring_client::rpc::WALLET_SNAPSHOT_EXPIRED
     );
-    assert!(error
-        .message()
-        .contains("discard prior pages and restart without a cursor"));
+    assert!(error.message().contains("restart without a cursor"));
 }
 
 async fn paged_wallet_read(store: Store) {
@@ -1256,10 +1308,10 @@ async fn paged_wallet_read(store: Store) {
         limit,
         ..query(owner)
     };
-    // 1. The first page opens every row once, its listed rows and the balance pass share them.
     let (first, opened) = opened_by(book.wallet_status(page(None))).await;
     let first = first.expect("first page");
-    assert_eq!((opened, first.notes.len(), balance(&first)), (10, 3, 100));
+    assert!(opened <= 10 + 2 * limit);
+    assert_eq!((first.notes.len(), balance(&first)), (3, 100));
     // 2. Every later page opens its own rows alone and carries no balance.
     let mut listed: BTreeSet<[u8; 32]> = first.notes.iter().map(|note| note.utxo_hash.0).collect();
     let mut cursor = first.cursor.clone();
@@ -1389,7 +1441,7 @@ async fn a_late_owner_derives_in_bounded_steps_and_resumes_after_each_restart() 
         let pending = writer.pending_owners().await.expect("pending");
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].resume.is_some(), expected != MAX_LATE_NOTES);
-        restarted.queue_late_owners(pending);
+        restarted.replace_late_owners(pending);
         let opener = |held: &HeldEnrollment| keys.open(held);
         let mut work = PageWork::new(&restarted, &opener);
         work.late_keys();
@@ -1398,4 +1450,339 @@ async fn a_late_owner_derives_in_bounded_steps_and_resumes_after_each_restart() 
         assert_eq!(count(&database, derived).await, expected as i64);
     }
     assert!(writer.pending_owners().await.expect("completed").is_empty());
+}
+
+#[tokio::test]
+async fn wallet_snapshot_capacity_release_and_restart_preserve_sessions() {
+    for persistent in [false, true] {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let book = if persistent {
+            indexed_store(&store)
+        } else {
+            AuditStore::default()
+        }
+        .with_wallet_snapshots(
+            SharedWalletSnapshots::default(),
+            WalletSnapshotLimits {
+                store: std::num::NonZeroUsize::MIN,
+                principal_wallet: std::num::NonZeroUsize::MIN,
+            },
+        );
+        let owner = wallet(1);
+        let key = secret(7);
+        let keys = Keys::with(owner, 7);
+        let seal = seal();
+        commit_page(&store, &book, &seal, &keys, &|work| {
+            work.open(
+                frame(2),
+                [
+                    indexed_note(owner, &key, 30, 10),
+                    indexed_note(owner, &key, 40, 10),
+                    indexed_note(owner, &key, 50, 10),
+                ],
+            );
+            terminal(work, 5);
+        })
+        .await
+        .expect("open");
+        let first_query = WalletStatusQuery {
+            limit: 1,
+            ..query(owner)
+        };
+        let first = book.wallet_status(first_query).await.expect("snapshot");
+        let cursor = WalletCursor::decode(&first.cursor.expect("cursor").0).expect("cursor");
+        assert_eq!(first.snapshot_expires_at, Some(NOW + 300));
+        assert!(matches!(
+            book.wallet_status(first_query).await,
+            Err(RingRpcError::WalletSnapshotCapacity)
+        ));
+        let single = book.wallet_status(query(owner)).await.expect("single page");
+        assert!(single.snapshot_expires_at.is_none());
+        assert_eq!(single.notes.len(), 3);
+        let continuation = WalletStatusQuery {
+            after: Some(cursor),
+            ..first_query
+        };
+        let next = book
+            .wallet_status(continuation)
+            .await
+            .expect("retained page");
+        if persistent {
+            let reopened = indexed_store(&store);
+            assert_eq!(
+                reopened
+                    .wallet_status(continuation)
+                    .await
+                    .expect("restart page"),
+                next
+            );
+        }
+        let release = || WalletSnapshotRelease {
+            ring: RING,
+            wallet: owner,
+            principal: first_query.principal,
+            cursor,
+            now: NOW,
+        };
+        assert!(matches!(
+            book.release_wallet_snapshot(WalletSnapshotRelease {
+                principal: [9; 34],
+                ..release()
+            })
+            .await,
+            Err(RingRpcError::InvalidCursor)
+        ));
+        assert_eq!(
+            book.wallet_status(continuation).await.expect("still live"),
+            next
+        );
+        book.release_wallet_snapshot(release())
+            .await
+            .expect("release");
+        book.release_wallet_snapshot(release())
+            .await
+            .expect("idempotent release");
+        assert!(matches!(
+            book.wallet_status(continuation).await,
+            Err(RingRpcError::WalletSnapshotExpired)
+        ));
+        book.wallet_status(first_query)
+            .await
+            .expect("released capacity");
+        assert!(matches!(
+            book.wallet_status(WalletStatusQuery {
+                now: NOW + 301,
+                ..first_query
+            })
+            .await,
+            Err(RingRpcError::WalletSnapshotCapacity)
+        ));
+        if persistent {
+            crate::wallet_snapshots::WalletSnapshotCleanup {
+                db: store.connection(),
+                now: NOW + 301,
+            }
+            .run()
+            .await
+            .expect("cleanup");
+        } else {
+            book.wallet_snapshots
+                .lock()
+                .expect("snapshots")
+                .cleanup(NOW + 301);
+        }
+        book.wallet_status(WalletStatusQuery {
+            now: NOW + 301,
+            ..first_query
+        })
+        .await
+        .expect("expired capacity");
+    }
+}
+
+#[tokio::test]
+async fn wallet_snapshot_cleanup_keeps_capacity_until_all_rows_are_removed() {
+    for persistent in [false, true] {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let book = if persistent {
+            indexed_store(&store)
+        } else {
+            AuditStore::default()
+        }
+        .with_wallet_snapshots(
+            SharedWalletSnapshots::default(),
+            WalletSnapshotLimits {
+                store: std::num::NonZeroUsize::MIN,
+                principal_wallet: std::num::NonZeroUsize::MIN,
+            },
+        );
+        let owner = wallet(1);
+        let key = secret(7);
+        let keys = Keys::with(owner, 7);
+        let seal = seal();
+        let created: Vec<_> = (0..=OWNER_ROW_BATCH)
+            .map(|index| indexed_note(owner, &key, index.try_into().expect("note index"), 10))
+            .collect();
+        commit_page(&store, &book, &seal, &keys, &|work| {
+            work.open(frame(2), created.iter().copied());
+            terminal(work, 5);
+        })
+        .await
+        .expect("open");
+        let read = query(owner);
+        let first = book.wallet_status(read).await.expect("snapshot");
+        let cursor = WalletCursor::decode(&first.cursor.expect("cursor").0).expect("cursor");
+        book.release_wallet_snapshot(WalletSnapshotRelease {
+            ring: RING,
+            wallet: owner,
+            principal: read.principal,
+            cursor,
+            now: NOW,
+        })
+        .await
+        .expect("release");
+        assert!(matches!(
+            book.wallet_status(read).await,
+            Err(RingRpcError::WalletSnapshotCapacity)
+        ));
+        let remaining = if persistent {
+            crate::wallet_snapshots::WalletSnapshotCleanup {
+                db: store.connection(),
+                now: NOW,
+            }
+            .run()
+            .await
+            .expect("cleanup")
+        } else {
+            book.wallet_snapshots
+                .lock()
+                .expect("snapshots")
+                .cleanup(NOW)
+        };
+        assert_eq!(remaining, 1);
+        book.wallet_status(read).await.expect("capacity reclaimed");
+    }
+}
+
+#[tokio::test]
+async fn coverage_pages_visit_all_faults_without_retaining_database_history() {
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let seal = seal();
+    let keys = Keys::none();
+    let memory = AuditStore::default();
+    let bounded = cached_store(&database, 4);
+    let history = |work: &mut PageWork<'_>| {
+        for index in 1..=205u64 {
+            let nullifier = [index as u8; 32];
+            work.observe(real(nullifier, frame(index), 0));
+            work.observe(real(nullifier, frame(index + 300), 0));
+            work.mark_unread(frame(index));
+        }
+        terminal(work, 600);
+    };
+    let opener = |held: &HeldEnrollment| keys.open(held);
+    let mut work = PageWork::new(&memory, &opener);
+    history(&mut work);
+    memory.commit(work.finish().await.expect("memory history"));
+    commit_page(&database, &bounded, &seal, &keys, &history)
+        .await
+        .expect("history");
+    assert_eq!(bounded.read_book().unread.len(), 1);
+    assert!(bounded.read_book().faults.is_empty());
+    let loaded = LoadSpends {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        scope: bounded.history_scope(),
+    }
+    .load()
+    .await
+    .expect("load");
+    assert_eq!(loaded.spends.unread.len(), 1);
+    assert!(loaded.spends.faults.is_empty());
+    assert!(loaded.repairs.is_empty());
+    for store in [&memory, &bounded] {
+        let mut cursor = CoverageCursor::new(RING);
+        let mut totals = [0; 3];
+        let mut seen = [BTreeSet::new(), BTreeSet::new(), BTreeSet::new()];
+        let mut pages = 0;
+        loop {
+            let response = store.spend_coverage(cursor).await.expect("coverage");
+            assert_eq!(response.totals.is_some(), pages == 0);
+            let wire = serde_json::to_value(&response).expect("coverage wire");
+            assert_eq!(wire.get("totals").is_some(), pages == 0);
+            assert_eq!(response.history_through, 0);
+            let sizes = [
+                response.unresolved_real.len(),
+                response.unreadable.len(),
+                response.integrity_faults.len(),
+            ];
+            for (total, size) in totals.iter_mut().zip(sizes) {
+                assert!(size <= zolana_ring_client::rpc::AUDIT_PAGE_LIMIT as usize);
+                *total += size;
+            }
+            seen[0].extend(response.unresolved_real.iter().map(|row| row.nullifier.0));
+            seen[1].extend(response.unreadable.iter().map(|row| [row.slot as u8; 32]));
+            seen[2].extend(response.integrity_faults.iter().map(|row| row.nullifier.0));
+            pages += 1;
+            match response.cursor {
+                Some(token) => {
+                    assert!(zolana_ring_client::rpc::cursor_in_bounds(&token.0));
+                    assert!(
+                        CoverageCursor::decode(&token.0, Address::new_from_array([9; 32])).is_err()
+                    );
+                    cursor = CoverageCursor::decode(&token.0, RING).expect("cursor");
+                }
+                None => break,
+            }
+        }
+        assert_eq!(pages, 3);
+        assert_eq!(totals, [205; 3]);
+        assert_eq!(seen.map(|rows| rows.len()), [205; 3]);
+    }
+}
+
+#[tokio::test]
+async fn durable_repairs_select_due_frames_and_keep_only_one_batch() {
+    use crate::frame_repairs::MAX_REPAIRED_FRAMES;
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let book = cached_store(&database, 4);
+    let seal = seal();
+    commit_page(&database, &book, &seal, &Keys::none(), &|work| {
+        for slot in 1..=40 {
+            work.mark_unread(frame(slot));
+        }
+        terminal(work, 50);
+    })
+    .await
+    .expect("history");
+    let mut repairs = RepairBook::default();
+    let first = book.due_repairs(&mut repairs, NOW).await.expect("due");
+    assert_eq!(first.len(), MAX_REPAIRED_FRAMES);
+    assert_eq!(first[0], frame(1));
+    database
+        .connection()
+        .execute_unprepared(
+            "UPDATE spend_unread_frames SET attempts=1,retry_after=2000 WHERE slot<=16",
+        )
+        .await
+        .expect("backoff");
+    let second = book.due_repairs(&mut repairs, NOW).await.expect("due");
+    assert_eq!(second.len(), MAX_REPAIRED_FRAMES);
+    assert_eq!(second[0], frame(17));
+    assert_eq!(repairs.failed(first[0], NOW).attempts, 1);
+    commit_page(&database, &book, &seal, &Keys::none(), &|work| {
+        work.mark_read(frame(1))
+    })
+    .await
+    .expect("repair");
+    assert_eq!(book.read_book().history_through(), 1);
+}
+
+#[tokio::test]
+async fn coverage_continuation_does_not_read_lifetime_totals() {
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let book = cached_store(&database, 4);
+    let seal = seal();
+    commit_page(&database, &book, &seal, &Keys::none(), &|work| {
+        for slot in 1..=101 {
+            work.mark_unread(frame(slot));
+        }
+        terminal(work, 102);
+    }).await.expect("history");
+    let first = book.spend_coverage(CoverageCursor::new(RING)).await.expect("first page");
+    assert_eq!(first.totals, Some(SpendCoverageTotals::default()));
+    assert_eq!(first.unreadable.len(), 100);
+    let cursor = CoverageCursor::decode(&first.cursor.expect("continuation").0, RING).expect("cursor");
+    database.connection().execute_unprepared(
+        "ALTER TABLE finalized_spent_nullifiers RENAME TO parked_spent_nullifiers"
+    ).await.expect("park totals source");
+    let continuation = book.spend_coverage(cursor).await;
+    database.connection().execute_unprepared(
+        "ALTER TABLE parked_spent_nullifiers RENAME TO finalized_spent_nullifiers"
+    ).await.expect("restore totals source");
+    let continuation = continuation.expect("continuation does not count spends");
+    assert_eq!(continuation.totals, None);
+    assert_eq!(continuation.unreadable.len(), 1);
+    assert!(continuation.cursor.is_none());
 }

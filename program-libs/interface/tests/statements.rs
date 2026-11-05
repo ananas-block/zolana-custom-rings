@@ -353,10 +353,12 @@ fn compute_vectors() -> StatementVectors {
     );
     let with_tails = values.outputs(2, true);
     let wide_key = AuditKey {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         class: 16,
         entry: false,
     };
     let entry_key = AuditKey {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         class: 8,
         entry: true,
     };
@@ -420,6 +422,7 @@ fn compute_vectors() -> StatementVectors {
     let signer_data = TransferStatement {
         head: values.head(
             AuditLayout {
+                format: custom_ring_interface::DisclosureFormat::Standard,
                 has_data: true,
                 entry: false,
             },
@@ -850,6 +853,7 @@ fn the_element_count_follows_the_family_alone() {
     let roots = TransferRoots::default();
     let outputs = values.outputs(8, false);
     let key = AuditKey {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         class: 16,
         entry: false,
     };
@@ -915,6 +919,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         *party = field(70 + slot as u8);
     }
     let key = AuditKey {
+        format: custom_ring_interface::DisclosureFormat::Standard,
         class: 16,
         entry: false,
     };
@@ -1005,6 +1010,7 @@ fn delivery_bytes_stay_outside_the_statement() {
             AuditLayout::default(),
             stream(
                 AuditKey {
+                    format: custom_ring_interface::DisclosureFormat::Standard,
                     class: 16,
                     entry: false,
                 },

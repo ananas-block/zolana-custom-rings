@@ -16,13 +16,14 @@ import (
 
 // Frame byte lengths the circuit does not bind itself, mirrored by program-libs/interface/src/instructions/transact.rs.
 const (
-	frameProofLen    = 192
-	frameSppProofLen = 128
-	frameTreeLen     = 4
-	frameSlotTagLen  = 8
-	frameExitBodyLen = 83
-	frameViewTagLen  = 32
-	frameCacheWrites = 16
+	frameProofLen      = 192
+	frameSppProofLen   = 128
+	frameTreeLen       = 4
+	frameSlotTagLen    = 8
+	frameExitBodyLen   = 83
+	framePayoutBodyLen = 48
+	frameViewTagLen    = 32
+	frameCacheWrites   = 16
 )
 
 type frameRail int
@@ -99,8 +100,9 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 		c.take(8)
 	}
 	c.take(4 + 32 + 16)
+	singleAssetPayout := false
 	if flags&extensionsFlag != 0 {
-		walkExtensions(&c)
+		singleAssetPayout = walkExtensions(&c)&(1<<6) != 0
 	}
 	transfers := int(c.take(1)[0])
 	splWithdrawals := 0
@@ -128,6 +130,8 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 			length = int(binary.LittleEndian.Uint16(c.take(2)))
 		case exit:
 			length = frameExitBodyLen
+		case singleAssetPayout:
+			length = framePayoutBodyLen
 		default:
 			length = ringprotocol.RecipientBodyLen
 		}
@@ -146,9 +150,9 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	if anonymousFrame {
 		c.take(32 + ringprotocol.SenderBundleLen(m, bits.OnesCount64(bodiless)))
 	}
-	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0}.Ranges()
+	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0, SingleAssetPayout: singleAssetPayout}.Ranges()
 	c.take(stream.EnvelopeLen(n))
-	c.take(m * audit.RecordLen)
+	c.take(m * stream.RecordLen())
 	if inputByte&hasData != 0 {
 		c.take(m * audit.TailLen)
 	}
@@ -174,7 +178,7 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 }
 
 // walkExtensions mirrors FrameExtensions::read.
-func walkExtensions(c *frameCursor) {
+func walkExtensions(c *frameCursor) byte {
 	const dataHash, ringDataHash, messages, cache, approvalTotals, signerDataCounts = 1, 2, 4, 8, 16, 32
 	flags := c.take(1)[0]
 	if flags&dataHash != 0 {
@@ -198,6 +202,7 @@ func walkExtensions(c *frameCursor) {
 	if flags&signerDataCounts != 0 {
 		c.take(8)
 	}
+	return flags
 }
 
 func TestMergeFrameVectorWalksTheRecord(t *testing.T) {

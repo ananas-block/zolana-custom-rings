@@ -191,7 +191,7 @@ export type {
   ScanWorkerResponse,
 } from "../state/anonymous-scan.js";
 export { AnonymousWallet } from "../state/anonymous-wallet.js";
-export type { PendingClaim } from "../state/anonymous-wallet.js";
+export type { AnonymousNoteState, PendingClaim } from "../state/anonymous-wallet.js";
 export {
   AnonymousSync,
   ringFullScan,
@@ -296,6 +296,7 @@ export {
 export type { RelayMessageMismatch } from "../rpc/relay-message.js";
 export type {
   AuthorityPayment,
+  AuthorityWithdrawal,
   AuthorityTransfer,
   PolicyAuthorityAuth,
   CreateRecordsRegistryRequest,
@@ -515,11 +516,15 @@ export {
   messageSignerReader,
   readerGrantAttestation,
   ringReadAttestation,
+  walletStatusAttestation,
+  walletSnapshotReleaseAttestation,
+  delegateNotesAttestation,
+  delegateSnapshotReleaseAttestation,
   signCreateRecordsRegistryRequest,
   signPendingListApprovalsRequest,
   signRefuseListApprovalRequest,
 } from "../rpc/ring-rpc.js";
-export type { PolicyAuthorityAction, RingReaderGrant } from "../rpc/ring-rpc.js";
+export type { ListApprovalTarget, PolicyAuthorityAction, RingReaderGrant } from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   AuditedRingMerge,
@@ -545,6 +550,7 @@ export type {
   RingState,
   RingStatus,
   RingSpendCoverage,
+  RingSpendCoverageTotals,
   RingSpendCoverageFrame,
   RingSpendCoverageRow,
   RingWalletActivity,
@@ -553,6 +559,10 @@ export type {
   RingWalletNote,
   RingWalletNoteStatus,
   RingWalletStatusPage,
+  RingWalletStatusQuery,
+  RingWalletEnrollment,
+  RingDelegateNotesPage,
+  RingDelegateNotesQuery,
   RingWalletView,
   SignedAuditedUtxosRead,
   SignedAuditorKeyRequest,
@@ -680,3 +690,11 @@ export {
   type CoOwner,
 } from "../operations/payments/ring-spend.js";
 export { noteNullifierPublicKey, ringProofInput } from "../operations/workflow/selection.js";
+export {
+  COMPACT_ASSET_LOOKUP_BUDGET,
+  CompactAssetResolver,
+  type CompactAssetRead,
+  type CompactAssetResolution,
+} from "../rpc/compact-assets.js";
+export { RECOVERY_DIAGNOSTIC_SAMPLES } from "../state/recovery-session.js";
+export type { RecoveryCoverage, RecoveryWallet } from "../state/recovery-session.js";

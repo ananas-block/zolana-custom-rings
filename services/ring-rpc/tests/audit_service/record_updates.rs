@@ -15,7 +15,8 @@ use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
 use zolana_ring_client::rpc::{
     GetPendingListApprovalsRequest, GetPendingListApprovalsResponse, GetRecordUpdateStatusRequest,
-    ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry, RecordUpdateStatus,
+    ListApprovalScope, ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry, RecordUpdateStatus,
+    RefuseListApprovalRequest, REFUSE_LIST_APPROVAL,
     SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_LIST_APPROVALS,
     PENDING_LIST_APPROVALS_PAGE_LIMIT, RECORD_UPDATE_SLOTS, SUBMIT_RECORD_UPDATE,
 };
@@ -538,7 +539,7 @@ async fn pending_list_approvals_page_oldest_first_after_a_cursor() {
             .module
             .call::<_, GetPendingListApprovalsResponse>(GET_PENDING_LIST_APPROVALS, as_object(page))
     };
-    let read = || GetPendingListApprovalsRequest::read(target, authority().pubkey());
+    let read = || GetPendingListApprovalsRequest::read(ListApprovalScope { target, authority: authority().pubkey(), registry: REGISTRY });
 
     let first = list(read().sign(&authority()).expect("signed list"))
         .await
@@ -565,6 +566,90 @@ async fn pending_list_approvals_page_oldest_first_after_a_cursor() {
     };
     assert_eq!(only.update_id, submitted[PENDING_LIST_APPROVALS_PAGE_LIMIT]);
     assert_eq!(last.next_cursor, None);
+}
+
+#[tokio::test]
+async fn rebinding_records_keeps_pending_wallet_grants_in_the_signed_registry() {
+    let records = Records::new().await;
+    records.serves_own(ListId::Allow);
+    let wallet = wallet();
+    let owner = Member::owner_tag(wallet.pubkey().as_array()).expect("owner");
+    let reader = Member::owner_tag(&[71; 32]).expect("reader");
+    let request = RecordUpdate {
+        genesis_hash: Hash(GENESIS),
+        ring: RING.into(),
+        entries: vec![RecordUpdateEntry::WalletGrant(WalletGrant {
+            wallet: Hash(*owner.as_bytes()),
+            reader: Hash(*reader.as_bytes()),
+            access: ReaderAccess::Granted,
+        })],
+        valid_until_slot: NOW + 1_000,
+        awaited_lists: ListId::Allow.record_bit(),
+    }
+    .sign(REGISTRY, &wallet)
+    .expect("signed grant");
+    let pending = records.submit(request).await.expect("pending grant");
+    let replacement = Address::new_from_array([0x54; 32]);
+    {
+        let mut accounts = records.chain.accounts.lock().unwrap();
+        let registry = accounts.get(&REGISTRY).expect("registry").clone();
+        accounts.insert(replacement, registry);
+    }
+    records.policy(|policy| policy.records = replacement);
+    let scope = |registry| ListApprovalScope {
+        target: ReadTarget {
+            cluster: GENESIS,
+            service: records.hub.service_pubkey(),
+            ring: RING,
+        },
+        authority: authority().pubkey(),
+        registry,
+    };
+    let list = |request: GetPendingListApprovalsRequest| {
+        records.module.call::<_, GetPendingListApprovalsResponse>(
+            GET_PENDING_LIST_APPROVALS,
+            as_object(request),
+        )
+    };
+    let signed = GetPendingListApprovalsRequest::read(scope(REGISTRY))
+        .sign(&authority())
+        .expect("signed list");
+    let mut altered = signed.clone();
+    altered.registry = replacement.into();
+    assert!(list(altered).await.is_err());
+    let old_page = list(signed).await.expect("old registry");
+    assert_eq!(old_page.pending.len(), 1);
+    assert_eq!(old_page.pending[0].update_id, pending.update_id);
+    let new_page = list(GetPendingListApprovalsRequest::read(scope(replacement))
+        .sign(&authority()).expect("signed list"))
+        .await.expect("new registry");
+    assert!(new_page.pending.is_empty());
+    assert!(list(GetPendingListApprovalsRequest::read(scope(replacement))
+        .with_cursor(pending.update_id.clone())
+        .sign(&authority()).expect("signed cursor"))
+        .await.is_err());
+    let approval = RecordUpdate {
+        genesis_hash: Hash(GENESIS),
+        ring: RING.into(),
+        entries: vec![list_write(*owner.as_bytes(), ListId::Allow)],
+        valid_until_slot: NOW + 1_000,
+        awaited_lists: 0,
+    }
+    .sign(replacement, &authority())
+    .expect("signed approval");
+    records.submit(approval).await.expect("approval");
+    let applied = records.flushed().await;
+    assert!(applied.accounts.contains(&replacement));
+    assert_eq!(applied.writes.len(), 1);
+    assert_eq!(applied.members, [*owner.as_bytes()]);
+    assert_eq!(records.status(&pending).await, RecordUpdateStatus::PendingListApproval);
+    let refuse = |registry| RefuseListApprovalRequest::refusal(scope(registry), pending.update_id.clone())
+        .sign(&authority()).expect("signed refusal");
+    assert!(records.module.call::<_, RecordUpdateStatus>(REFUSE_LIST_APPROVAL, as_object(refuse(replacement)))
+        .await.is_err());
+    records.module.call::<_, RecordUpdateStatus>(REFUSE_LIST_APPROVAL, as_object(refuse(REGISTRY)))
+        .await.expect("old registry refusal");
+    assert!(matches!(records.status(&pending).await, RecordUpdateStatus::Refused { .. }));
 }
 
 #[tokio::test]
@@ -1085,7 +1170,7 @@ async fn a_wallet_update_pending_list_approval_lands_with_its_allow_entry() {
         .call(
             GET_PENDING_LIST_APPROVALS,
             as_object(
-                GetPendingListApprovalsRequest::read(target, authority().pubkey())
+                GetPendingListApprovalsRequest::read(ListApprovalScope { target, authority: authority().pubkey(), registry: REGISTRY })
                     .sign(&authority())
                     .expect("signed list"),
             ),

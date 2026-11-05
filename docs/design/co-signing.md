@@ -49,7 +49,8 @@ As an example, S spends 1000, deposits 1000, returns 1000 to S and exits 1000 to
 - A co-signed message contains one ring instruction, and Ring RPC refuses a second relevant instruction. It also refuses a message that is not version 1.
 - `owner_debits` in `program-libs/policy/src/quantities.rs` is the Rust computation. A shared vector pins it to the circuit.
 - The window read and the reservation commit in one database transaction, so no allowance is granted twice.
-- Admission uses a slot read after the asset locks and usage read. A changed slot at the final read refuses the reservation.
+- Admission reads its slot after the asset locks and before the window totals. A backward slot or a changed final slot refuses the reservation.
+- Replicas with the same signing key share one store and reserve a signature once. A released signature cannot reserve again. Different signing keys cannot share one message allowance.
 - Windows start at admission. Commit delay and transaction landing do not move the reservation's slot.
 - A delegate frame reads no limit and reserves nothing.
 - No proof carries a window limit. A proof of one would need authenticated usage state that every transaction updates.

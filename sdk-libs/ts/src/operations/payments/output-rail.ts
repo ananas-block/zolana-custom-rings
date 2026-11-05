@@ -31,6 +31,8 @@ import {
 } from "../../protocol/transaction/output.js";
 import {
   RECIPIENT_BODY_LEN,
+  encodeRecipientBody,
+  sealCompactRecipientBody,
   type RecipientBody,
   replyLength,
   sealRecipientBody,
@@ -46,6 +48,11 @@ import {
 } from "../../crypto/derivation/ring-stream.js";
 import { randomTagPreimage } from "../../crypto/derivation/dummy-tag.js";
 import { withOutputFields } from "../../protocol/proof/proof-output.js";
+import {
+  DisclosureFormat,
+  SINGLE_ASSET_PAYOUT_INPUTS,
+  SINGLE_ASSET_PAYOUT_OUTPUTS,
+} from "../../protocol/codec/ring-disclosure-layout.js";
 import type { NoteData } from "./anonymous.js";
 import {
   OutputBlindings,
@@ -294,6 +301,7 @@ type AnonymousSeal = Readonly<{
   sender: ShieldedAddress;
   /** One length for every body of the frame, `undefined` when no payment names a reply. */
   replyLength: number | undefined;
+  bodyLength: number | undefined;
 }>;
 
 /** How a delivered slot publishes. */
@@ -393,6 +401,7 @@ export class RingOutputRail {
         outputs: live,
         sender,
         replyLength: replies.length === 0 ? undefined : replyLength(replies),
+        bodyLength: paddedBodyLength(live),
       };
       messages = [
         {
@@ -402,8 +411,10 @@ export class RingOutputRail {
       ];
       frames = this.#anonymousFrames(seal, input.assets);
     } else {
+      const compact = isSingleAssetPayout(prepared, live);
+      const bodyLength = paddedBodyLength(live);
       frames = live.map((output, slotIndex) =>
-        this.#deliveredFrame(output, slotIndex, input.assets),
+        this.#deliveredFrame(output, slotIndex, input.assets, compact, bodyLength),
       );
     }
     const published: TransactOutput[] = live.map((output, slotIndex) => {
@@ -528,14 +539,14 @@ export class RingOutputRail {
     if (slot === undefined || output === undefined) throw framingError(slotIndex);
     switch (slot.kind) {
       case "dummy":
-        return randomBytes(RECIPIENT_BODY_LEN);
+        return randomBytes(seal.bodyLength ?? RECIPIENT_BODY_LEN);
       case "change":
       case "exit":
         throw framingError(slotIndex);
       case "payment": {
         const secret = this.slotSecret(slot.payment.recipient, slotIndex);
         try {
-          return sealRecipientBody(secret, recipientBody(output));
+          return sealRecipientBody(secret, recipientBody(output), seal.bodyLength);
         } finally {
           secret.fill(0);
         }
@@ -589,7 +600,13 @@ export class RingOutputRail {
   }
 
   /** Rust `RingOutputRail::encode_delivered` under the owner tag `owner_tags` resolves. */
-  #deliveredFrame(output: ProofOutputUtxo, slotIndex: number, assets: AssetRegistry): FramedSlot {
+  #deliveredFrame(
+    output: ProofOutputUtxo,
+    slotIndex: number,
+    assets: AssetRegistry,
+    compact: boolean,
+    bodyLength: number | undefined,
+  ): FramedSlot {
     const slot = deliveredSlot(output);
     switch (slot.kind) {
       case "exit":
@@ -597,7 +614,13 @@ export class RingOutputRail {
       case "ring": {
         const secret = this.slotSecret(slot.owner.viewingPublicKey, slotIndex);
         try {
-          const body = sealRecipientBody(secret, recipientBody(output));
+          const body = compact
+            ? sealCompactRecipientBody(secret, {
+                blinding: output.blinding,
+                amount: output.amount,
+                assetId: assets.assetId(output.asset),
+              })
+            : sealRecipientBody(secret, recipientBody(output), bodyLength);
           return framed(confidentialSlotTag(slot.owner.viewingPublicKey.u()), {
             kind: "recipient",
             body,
@@ -612,7 +635,7 @@ export class RingOutputRail {
         try {
           return framed(confidentialSlotTag(key.publicKey().u()), {
             kind: "recipient",
-            body: randomBytes(RECIPIENT_BODY_LEN),
+            body: randomBytes(bodyLength ?? RECIPIENT_BODY_LEN),
           });
         } finally {
           key.destroy();
@@ -762,6 +785,57 @@ function paddedInputs(prepared: PreparedTransfer): readonly ProofInputUtxo[] {
         : ProofInputUtxo.dummy(undefined, treeId),
     );
   return inputs;
+}
+
+export function outputDisclosureFormat(inputs: SppProofInputs): DisclosureFormat {
+  const formats = inputs.externalData.outputs.flatMap((output) => {
+    const body = output.data === undefined ? undefined : ringBodyOutput(output.data);
+    return body === undefined ? [] : [body.format];
+  });
+  if (!formats.includes(DisclosureFormat.SingleAssetPayout)) return DisclosureFormat.Standard;
+  if (
+    formats.length !== SINGLE_ASSET_PAYOUT_OUTPUTS ||
+    formats.some((format) => format !== DisclosureFormat.SingleAssetPayout)
+  )
+    throw framingError(0);
+  return DisclosureFormat.SingleAssetPayout;
+}
+
+function paddedBodyLength(outputs: readonly ProofOutputUtxo[]): number | undefined {
+  if (!framesData(outputs)) return undefined;
+  return outputs.reduce(
+    (width, output) =>
+      output.ringProgramId === undefined || output.isDummy()
+        ? width
+        : Math.max(width, encodeRecipientBody(recipientBody(output)).length),
+    RECIPIENT_BODY_LEN + 2,
+  );
+}
+
+function isSingleAssetPayout(
+  prepared: PreparedTransfer,
+  outputs: readonly ProofOutputUtxo[],
+): boolean {
+  const first = prepared.inputs[0];
+  return (
+    prepared.shape.inputs === SINGLE_ASSET_PAYOUT_INPUTS &&
+    prepared.inputs.length === SINGLE_ASSET_PAYOUT_INPUTS &&
+    first !== undefined &&
+    !first.isDummy() &&
+    !first.isAddress() &&
+    prepared.ownerMode === "signed" &&
+    first.utxo.ringProgramId !== undefined &&
+    prepared.interfaceTransfers.length === 0 &&
+    outputs.length === SINGLE_ASSET_PAYOUT_OUTPUTS &&
+    outputs.every(
+      (output) =>
+        !output.isDummy() &&
+        !output.isCompact() &&
+        output.ringProgramId === first.utxo.ringProgramId &&
+        output.asset === first.utxo.asset &&
+        !carriesData(output),
+    )
+  );
 }
 
 function framingError(slotIndex: number): RingError {

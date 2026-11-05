@@ -66,6 +66,7 @@ fn selectable_circuits() -> BTreeSet<String> {
                         for owners in 0..=n_in {
                             for wide in [false, true] {
                                 circuits.extend(RingCircuit::transfer(TransferSpend {
+                                    format: custom_ring_interface::DisclosureFormat::Standard,
                                     rail,
                                     inputs,
                                     outputs: n_out,

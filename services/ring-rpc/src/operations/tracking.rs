@@ -268,6 +268,12 @@ impl HeldEnrollments {
         }
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.by_member.clear();
+        self.members.clear();
+        self.list_keys.clear();
+    }
+
     pub fn by_member(&self, member: &[u8; 32]) -> Cached<HeldEnrollment> {
         self.by_member.cached(member)
     }
@@ -387,7 +393,11 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
             if let Some(writer) = self.durable {
                 writer.commit_enrollments(&found, next).await?;
             }
-            self.store.admit_enrollments(admission);
+            match self.store.admit_enrollments(admission) {
+                Ok(()) => {}
+                Err(TrackingRefusal::Incomplete) => return Ok(ScanEnd::Partial),
+                Err(error) => return Err(error.into()),
+            }
             *cursor = next;
         }
         Ok(match cursor.0 >= root.next_index {

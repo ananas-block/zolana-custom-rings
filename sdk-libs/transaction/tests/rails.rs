@@ -1161,3 +1161,115 @@ fn a_memo_on_a_ring_output_is_refused_on_both_rails() {
         }
     }
 }
+
+#[test]
+fn single_asset_payout_delivers_every_compact_opening() {
+    use custom_ring_interface::{ring_body_format, DisclosureFormat, SINGLE_ASSET_PAYOUT_OUTPUTS};
+    use zolana_ring_transaction::open_compact_recipient_body;
+
+    let sender = keypair(1);
+    let recipients: Vec<_> = (0..SINGLE_ASSET_PAYOUT_OUTPUTS)
+        .map(|index| keypair(10 + index as u8))
+        .collect();
+    let (mut transaction, tx_key) = ring_spend(
+        &sender,
+        vec![input(&sender, USDC, SINGLE_ASSET_PAYOUT_OUTPUTS as u64, 1)],
+        false,
+    );
+    for recipient in &recipients {
+        transaction
+            .transfer_with_ring(&address(recipient), USDC, 1, Some(RING))
+            .unwrap();
+    }
+    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered)
+        .with_format(DisclosureFormat::SingleAssetPayout);
+    let proof = rail.encrypt(transaction, &address(&sender)).unwrap();
+    assert_eq!(
+        proof.external_data.outputs.len(),
+        SINGLE_ASSET_PAYOUT_OUTPUTS
+    );
+    for (index, recipient) in recipients.iter().enumerate() {
+        let data = proof.external_data.outputs[index].data.as_ref().unwrap();
+        assert_eq!(
+            ring_body_format(data),
+            Some(DisclosureFormat::SingleAssetPayout)
+        );
+        let (ciphertext, reply) = ring_body_output(data).unwrap();
+        assert!(reply.is_empty());
+        let secret = delivered_secret(&recipient.viewing_key, &proof, &rail, index as u32);
+        let body = open_compact_recipient_body(ciphertext, &secret).unwrap();
+        assert_eq!(body.asset_id, USDC.asset_id);
+        assert_eq!(body.amount, 1);
+        assert_eq!(body.blinding, proof.output_utxos[index].blinding);
+        let opened = reader(
+            &address(recipient),
+            &RingAssets::new([USDC]).unwrap(),
+            &proof,
+            index,
+        )
+        .open_body(&RecipientBody {
+            blinding: body.blinding,
+            amount: body.amount,
+            mint: USDC.asset.to_bytes(),
+            ..RecipientBody::default()
+        })
+        .unwrap();
+        assert!(matches!(opened, Some(OpenedBody::Note(_))));
+    }
+    let mut wrong_asset = proof.clone();
+    wrong_asset.output_utxos[0].asset = Mint::SOL;
+    assert!(matches!(
+        rail.check_format(&wrong_asset),
+        Err(E::PayoutProfile)
+    ));
+    let mut data = proof.clone();
+    data.output_utxos[0].data_hash = Some(DATA_HASH);
+    assert!(matches!(rail.check_format(&data), Err(E::PayoutProfile)));
+}
+
+#[test]
+fn data_padding_hides_real_ring_body_lengths_on_both_rails() {
+    let sender = keypair(1);
+    let receiver = keypair(2);
+    for delivery in both_rails(&address(&receiver)) {
+        let (mut transaction, tx_key) = ring_transfer(&sender, false);
+        transaction
+            .add_output_utxo(data_note(address(&receiver)))
+            .unwrap();
+        let rail = RingOutputRail::new(tx_key, delivery);
+        let mut transaction = transaction
+            .with_blinding_seed(rail.blinding_seed().unwrap())
+            .unwrap();
+        transaction
+            .pad_utxos(Shape::new(1, 8), &address(&sender))
+            .unwrap();
+        let proof = rail.encrypt(transaction, &address(&sender)).unwrap();
+        let slots = rail.published_slots(&proof, &address(&sender)).unwrap();
+        let widths: Vec<_> = slots
+            .iter()
+            .filter_map(|slot| match slot.body {
+                SlotBody::Recipient(body) => Some(body.len()),
+                _ => None,
+            })
+            .collect();
+        assert!(widths.len() > 1);
+        assert!(widths.iter().all(|width| *width == widths[0]));
+        assert!(widths[0] > RECIPIENT_BODY_LEN);
+        let index = proof
+            .output_utxos
+            .iter()
+            .position(|output| output.owner_address == Some(address(&receiver)))
+            .unwrap();
+        assert_eq!(
+            decrypt(
+                &receiver.viewing_key,
+                &rail,
+                &proof,
+                &slots[index],
+                index as u32
+            )
+            .data,
+            [&DATA_HASH[..], &APP_DATA[..]].concat()
+        );
+    }
+}

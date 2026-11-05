@@ -25,7 +25,7 @@ import {
 } from "../../src/proof/audit-proof.js";
 import { checkHiddenOwnerSpends } from "../../src/operations/payments/anonymous.js";
 import { InputClass } from "../../src/protocol/codec/audit-stream.js";
-import type { AuditStreamLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
+import { DisclosureFormat, type AuditStreamLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { depositStatementElements } from "../../src/proof/deposit-audit.js";
 import { checkInputKeys, checkOutputKeys } from "../../src/proof/policy-proof.js";
 import { enrolledSalt } from "../../src/proof/policy-proof.js";
@@ -127,7 +127,7 @@ describe("selectTransferKey", () => {
       wide: true,
     });
     expect(widest.wideOwners).toBe(true);
-    expect(transferPoolCapacity(widest.circuit)).toEqual({ own: 27, curator: 27, tracking: 11 });
+    expect(transferPoolCapacity(widest.circuit)).toEqual({ own: 67, curator: 67, tracking: 11 });
     expect(select(40, 4, 8).circuit).toEqual(widest.circuit);
     expect(refusal(() => select(25, 5)).code).toBe("RING_CATALOG_KEY_MISSING");
     expect(refusal(() => select(25, 0, 9)).code).toBe("RING_TOO_MANY_OWNERS");
@@ -694,6 +694,7 @@ describe("prover/ring/params.go", () => {
   it("takes every required key and adds only the wire the circuit's Table reads", () => {
     const circuit = {
       family: "transfer",
+      format: DisclosureFormat.Standard,
       outputs: 2,
       class: 24,
       withdrawals: 4,

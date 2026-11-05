@@ -293,6 +293,7 @@ func TestStreamVector(t *testing.T) {
 		section ringaudit.Audit
 	}{
 		{"plain_with_exit_and_dummy", ringaudit.NewSection(t, plainShape)},
+		{"single_asset_payout", ringaudit.NewSection(t, audit.StreamShape{InputClass: 1, Outputs: 16, SingleAssetPayout: true})},
 		{"compact", ringaudit.NewSection(t, plainShape).Omit(t, 1)},
 		{"data", data},
 		{"entry", ringaudit.NewSection(t, entryShape)},
@@ -313,7 +314,7 @@ func TestStreamVector(t *testing.T) {
 			TailChain:    ringtest.FieldHex(ringaudit.TailChain(t, s.StatementOutputs(t, stream))),
 		}
 		for i := range s.OutputCount() {
-			v.Records = append(v.Records, hex.EncodeToString(p.Records[i][:audit.RecordLen]))
+			v.Records = append(v.Records, hex.EncodeToString(p.Records[i][:stream.Ranges.RecordLen()]))
 			v.RecordCts = append(v.RecordCts, hex.EncodeToString(stream.Record(i)))
 			v.OutputHashes = append(v.OutputHashes, ringtest.FieldHex(s.Outputs[i].Utxo.Hash(t)))
 			v.Blindings = append(v.Blindings, ringtest.FieldHex(s.Blinding(t, i)))
@@ -326,7 +327,7 @@ func TestStreamVector(t *testing.T) {
 	}
 	txViewingSk, auditorSk := sections[0].section.Keys.TxViewingSk(), ringaudit.AuditorSk()
 	ringtest.PinVector(t, "audit/audit-stream.json", map[string]any{
-		"description":     "Auditor streams from solved witnesses. envelope = tx_viewing_sk || R || address_input_bits || default_input_bits (entry keys) || entries, records at first_record_counter + 7 * i, tails at first_tail_counter + 4 * i under label CRING/adt. Produced by prover/circuits/audit/stream_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description":     "Auditor streams from solved witnesses under CRING/adt, with the layout selecting each encrypted record and envelope format.",
 		"tx_viewing_sk":   hex.EncodeToString(txViewingSk[:]),
 		"auditor_sk":      hex.EncodeToString(auditorSk[:]),
 		"salt":            hex.EncodeToString(sections[0].section.Salt[:]),

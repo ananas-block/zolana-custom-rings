@@ -52,6 +52,7 @@ use crate::{
     storage_chain::StorageChain,
     upstream::{DepositHistory, DepositPage, Finality, TransactionSource},
     utxos::{AuditStore, Backing, MAX_CACHED_ENTRIES, UTXO_BACKFILL_INTERVAL},
+    wallet_snapshots::{SharedWalletSnapshots, WalletSnapshotCleanup, WalletSnapshotLimits},
 };
 
 const READINESS_CACHE_INTERVAL: Duration = Duration::from_secs(1);
@@ -132,6 +133,7 @@ pub struct HubBuilder<S> {
     origins: Origins,
     clock: Clock,
     store: Option<Store>,
+    snapshot_limits: WalletSnapshotLimits,
     storage: Option<(Arc<dyn StorageChain>, Keypair)>,
     reader_grants: ReaderGrantStore,
     grant_rows: Option<GrantRowsSecret>,
@@ -157,6 +159,8 @@ pub(crate) struct Shared<S> {
     readiness: AsyncMutex<ReadinessCache>,
     /// One per ring an authorized read or the backfill opened.
     stores: Mutex<HashMap<Address, Arc<AuditStore>>>,
+    wallet_snapshots: SharedWalletSnapshots,
+    snapshot_limits: WalletSnapshotLimits,
     pub(crate) grants: Grants,
     pub(crate) database: Option<Store>,
 }
@@ -183,7 +187,12 @@ impl<S> Shared<S> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         stores
             .entry(ring)
-            .or_insert_with(|| Arc::new(AuditStore::new(self.backing(ring))))
+            .or_insert_with(|| {
+                Arc::new(AuditStore::new(self.backing(ring)).with_wallet_snapshots(
+                    self.wallet_snapshots.clone(),
+                    self.snapshot_limits,
+                ))
+            })
             .clone()
     }
 
@@ -398,6 +407,7 @@ impl<S: TransactionSource> Hub<S> {
             origins: Origins::default(),
             clock: Clock::System,
             store: None,
+            snapshot_limits: WalletSnapshotLimits::default(),
             storage: None,
             reader_grants: ReaderGrantStore::Tree,
             grant_rows: None,
@@ -508,11 +518,32 @@ impl<S: TransactionSource> Hub<S> {
         let mut ticks = tokio::time::interval(interval);
         loop {
             ticks.tick().await;
+            if let Err(error) = self.cleanup_wallet_snapshots().await {
+                log::warn!("wallet snapshot cleanup failed because {}", redacted(&error));
+            }
             rings.spawn_idle(self.backfill_rings(), |ring| {
                 let hub = self.clone();
                 async move { hub.backfill_ring(ring).await }
             });
         }
+    }
+
+    async fn cleanup_wallet_snapshots(&self) -> Result<(), RingRpcError> {
+        let now = self.shared.clock.now()?;
+        self.shared
+            .wallet_snapshots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cleanup(now);
+        if let Some(store) = &self.shared.database {
+            WalletSnapshotCleanup {
+                db: store.connection(),
+                now,
+            }
+            .run()
+            .await?;
+        }
+        Ok(())
     }
 
     async fn backfill_ring(&self, ring: Address) {
@@ -693,6 +724,12 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
+    #[must_use]
+    pub fn with_snapshot_limits(mut self, limits: WalletSnapshotLimits) -> Self {
+        self.snapshot_limits = limits;
+        self
+    }
+
     /// The record writer runs only beside a store.
     #[must_use = "use the updated builder"]
     pub fn with_storage_chain(mut self, chain: Arc<dyn StorageChain>, authority: Keypair) -> Self {
@@ -821,6 +858,8 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                 in_flight: None,
             }),
             stores: Mutex::new(HashMap::new()),
+            wallet_snapshots: SharedWalletSnapshots::default(),
+            snapshot_limits: self.snapshot_limits,
             grants,
             database: self.store.clone(),
         };

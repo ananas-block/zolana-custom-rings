@@ -139,7 +139,11 @@ func NewSections(shape Shape) (Sections, error) {
 	if err := shared.ValidateInputCapacity(shape.Inputs); err != nil {
 		return Sections{}, err
 	}
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners, SaltedKeys: shape.saltedKeys(), Spent: shape.Inputs}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
+	pools := policy.RecordPoolShape{}
+	if shape.SingleAssetPayout {
+		pools = policy.RecordPoolShape{Own: shape.Records, Curator: shape.Records}
+	}
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners, SaltedKeys: shape.saltedKeys(), Spent: shape.Inputs}.Inputs(), pools, transaction.NPublicSlots)
 	if err != nil {
 		return Sections{}, err
 	}
@@ -189,13 +193,16 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	stream := c.Shape.Stream()
 	hasData := stream.DecodeLayout(api, c.Layout)
 	envelope := w.OpenEnvelope(api, rc)
-	opened := audit.OpenSlots(api, rc, w, envelope, hasData, c.Outputs, c.OutputCount)
+	opened := stream.OpenSlots(api, rc, w, envelope, hasData, c.Outputs, c.OutputCount)
 	// 3. The input classes and private nullifiers bind to the exact published order. FirstNullifier ties
 	// the audit derivation to the same list, and only notes incur the ring membership check.
 	section := OpenInputs(api, c.Inputs, c.InputCount, c.InputNullifiers)
 	api.AssertIsEqual(c.InputNullifierChain, section.NullifierChain)
 	api.AssertIsEqual(c.FirstNullifier, c.InputNullifiers[0])
 	section.AssertRingNotes(api, c.RingProgramID, c.Shape.Entry)
+	if c.Shape.SingleAssetPayout {
+		c.assertSingleAssetPayout(api, section, opened)
+	}
 	// 4. The signer run binds the note owners to the selected rail, with the hidden and in-proof owner exceptions.
 	// SPP alone checks address owners, address-only inputs still require its authorization.
 	signers := OpenSigners(api, c.Signers, c.SignerCount)
@@ -228,6 +235,22 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	sealed := w.SealStream(api, rc, envelope, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers)))
 	return nil
+}
+
+func (c *TransferCircuit) assertSingleAssetPayout(api frontend.API, inputs InputSection, outputs audit.Opened) {
+	api.AssertIsEqual(c.InputCount, 1)
+	api.AssertIsEqual(c.SignerCount, 1)
+	api.AssertIsEqual(c.InProof, 0)
+	api.AssertIsEqual(c.Hidden, 0)
+	api.AssertIsEqual(c.Delegate, 0)
+	api.AssertIsEqual(inputs.Slots[0].Ring, 1)
+	api.AssertIsEqual(inputs.Slots[0].Asset, outputs.Slots[0].Asset)
+	api.AssertIsEqual(c.WithdrawalCount, 0)
+	for i := range c.PublicAssets {
+		api.AssertIsEqual(c.PublicAssets[i], 0)
+		api.AssertIsEqual(c.PublicAmounts[i], 0)
+		api.AssertIsEqual(c.PublicGross[i], 0)
+	}
 }
 
 // assertRail holds the bits to one rail, only the in-proof rail names a public sender.

@@ -45,7 +45,7 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	envelope := c.OpenEnvelope(api, rc)
 	hasData := c.Shape.DecodeLayout(api, c.Layout)
-	opened := audit.OpenSlots(api, rc, c.AuditWires, envelope, hasData, c.Outputs, c.OutputCount)
+	opened := c.Shape.OpenSlots(api, rc, c.AuditWires, envelope, hasData, c.Outputs, c.OutputCount)
 	count := ringgadget.SelectCount(api, c.InputCount, 1, len(c.Inputs))
 	slots := make([]shared.Output, len(c.Inputs))
 	for i, input := range c.Inputs {
@@ -81,15 +81,18 @@ func ZeroKey(t testing.TB) *big.Int {
 // NewSection is the honest fixture each refusal edits.
 func NewSection(t testing.TB, shape audit.StreamShape) Audit {
 	t.Helper()
-	s := NewAudit(t, shape).AllDummies(t)
+	s := NewAudit(t, shape)
 	s.InputCount = 1
-	s.Outputs[0] = s.RingNote(t, 0, RingOwnerKey, EnrolledNullifierPk(t), 100)
-	switch {
-	case shape.Outputs >= 4:
-		s.Outputs[1] = s.RingNote(t, 1, RingOwnerKey, ZeroKey(t), 30)
-		s.Outputs[2] = s.NewExit(t, 2)
-	case shape.Outputs >= 2:
-		s.Outputs[1] = s.NewExit(t, 1)
+	if !shape.SingleAssetPayout {
+		s = s.AllDummies(t)
+		s.Outputs[0] = s.RingNote(t, 0, RingOwnerKey, EnrolledNullifierPk(t), 100)
+		switch {
+		case shape.Outputs >= 4:
+			s.Outputs[1] = s.RingNote(t, 1, RingOwnerKey, ZeroKey(t), 30)
+			s.Outputs[2] = s.NewExit(t, 2)
+		case shape.Outputs >= 2:
+			s.Outputs[1] = s.NewExit(t, 1)
+		}
 	}
 	s.Inputs[0] = Input{Utxo: SpentUtxo(t, ringtest.MustSolanaPkField(t, PayerKey), spptest.MustNullifierPk(t, big.NewInt(7)), s.RingProgramID, 100, 51), OwnerKey: PayerKey, Mint: FixtureMint}
 	if shape.Entry {
@@ -137,6 +140,9 @@ func (a Audit) Plaintexts(t testing.TB) Plaintexts {
 	envelope := append(slices.Clone(a.Keys.txViewingSk[:]), byte(a.RealInputs()))
 	addresses := a.inputBits(func(input Utxo) bool { return input.Domain == protocol.AddressDomain })
 	envelope = binary.BigEndian.AppendUint64(envelope, addresses)
+	if a.Shape.SingleAssetPayout {
+		envelope = append(envelope, a.Outputs[0].Mint[:]...)
+	}
 	if a.Shape.Entry {
 		envelope = binary.BigEndian.AppendUint64(envelope, a.defaultBits())
 		for _, input := range a.Inputs {
@@ -145,8 +151,13 @@ func (a Audit) Plaintexts(t testing.TB) Plaintexts {
 	}
 	p := Plaintexts{Envelope: envelope, Records: make([][]byte, len(a.Outputs))}
 	for i, output := range a.Outputs {
-		p.Records[i] = output.Record(t)
-		p.Tails = append(p.Tails, output.Tail(t))
+		record := output.Record(t)
+		if a.Shape.SingleAssetPayout {
+			record = slices.Concat(record[:41], record[73:audit.RecordLen], make([]byte, audit.PayoutRecordStride-audit.PayoutRecordLen))
+		} else {
+			p.Tails = append(p.Tails, output.Tail(t))
+		}
+		p.Records[i] = record
 	}
 	return p
 }
@@ -263,7 +274,7 @@ func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int
 	t.Helper()
 	plaintext := r.Keys.Open(t, stream)
 	offset := stream.Ranges.RecordOffset(i)
-	record := plaintext[offset : offset+audit.RecordLen]
+	record := plaintext[offset : offset+stream.Ranges.RecordLen()]
 	kind := record[0]
 	if kind == audit.KindDummy {
 		if slices.ContainsFunc(record, func(b byte) bool { return b != 0 }) {
@@ -283,7 +294,14 @@ func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int
 	// The sealed key, salt and first nullifier fix the blinding.
 	seedOut, err := protocol.OutputBlindingSeed(r.FirstNullifier, ringprotocol.BlindingSeed(t, [32]byte(plaintext[:audit.EnvelopeKeyLen]), r.Salt))
 	blinding := ringprotocol.OutputBlinding(t, r.FirstNullifier, spptest.MustHash(t, seedOut, err), i)
-	note := Note{Kind: kind, OwnerKey: [32]byte(record[9:41]), Mint: [32]byte(record[41:73]), Amount: binary.BigEndian.Uint64(record[1:9]), NullifierPk: new(big.Int).SetBytes(record[73:]), Blinding: blinding}
+	mint := [32]byte(record[41:73])
+	nullifier := record[73:]
+	if r.Shape.SingleAssetPayout {
+		start := audit.EnvelopeKeyLen + audit.RealInputCountLen + audit.AddressInputBitsLen
+		mint = [32]byte(plaintext[start : start+32])
+		nullifier = record[41:73]
+	}
+	note := Note{Kind: kind, OwnerKey: [32]byte(record[9:41]), Mint: mint, Amount: binary.BigEndian.Uint64(record[1:9]), NullifierPk: new(big.Int).SetBytes(nullifier), Blinding: blinding}
 	ringID := big.NewInt(0)
 	if kind == audit.KindRing {
 		ringID = r.RingProgramID

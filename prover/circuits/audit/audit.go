@@ -122,11 +122,16 @@ type Opened struct {
 	hasData     frontend.Variable
 	records     [][]frontend.Variable
 	tails       [][]frontend.Variable
+	commonMint  []frontend.Variable
 }
 
 // OpenSlots holds each output wire to the hash SPP publishes, so a later section reads the note that settles.
-func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, hasData frontend.Variable, outputs []OutputWires, outputCount frontend.Variable) Opened {
+func (s StreamShape) OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, hasData frontend.Variable, outputs []OutputWires, outputCount frontend.Variable) Opened {
 	// 1. m selects the published slots, a key's capacity may exceed it and a slot past it publishes nothing.
+	if s.SingleAssetPayout {
+		api.AssertIsEqual(outputCount, s.Outputs)
+		api.AssertIsEqual(hasData, 0)
+	}
 	count := ringgadget.SelectCount(api, outputCount, 1, len(outputs))
 	opened := Opened{Slots: make([]shared.Output, len(outputs)), Count: count, hasData: hasData, records: make([][]frontend.Variable, len(outputs))}
 	hashes := make([]frontend.Variable, len(outputs))
@@ -140,8 +145,18 @@ func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envel
 		// 4. A clear has_data transmits no tail, a nonzero data hash would leave the commitment unrebuilt.
 		assertNoData(api, hasData, slot)
 		// 5. The plaintext reads the opened wires, SealStream seals them with no second opening to disagree.
-		opened.records[i] = output.record(api, rc, slot)
-		opened.tails = append(opened.tails, dataTail(api, rc, slot))
+		record := output.record(api, rc, slot)
+		if s.SingleAssetPayout {
+			api.AssertIsEqual(slot.Ring, 1)
+			api.AssertIsEqual(slot.Asset, outputs[0].Output.Asset)
+			if i == 0 {
+				opened.commonMint = record[recordMintStart:recordMintEnd]
+			}
+			record = slices.Concat(record[:recordMintStart], record[recordMintEnd:RecordLen], shared.Zeros(PayoutRecordStride-PayoutRecordLen))
+		} else {
+			opened.tails = append(opened.tails, dataTail(api, rc, slot))
+		}
+		opened.records[i] = record
 		opened.Slots[i], hashes[i] = slot, api.Mul(active, slot.Hash)
 	}
 	// 6. The program rebuilds the chain from the hashes it forwards to SPP, one opening off them fails the statement.
@@ -170,7 +185,8 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Env
 	ranges := shape.Ranges()
 	// 1. The envelope binds tx_viewing_sk, the note count and absolute address positions before any entry openings.
 	evidence := spent.evidence(api, rc, ranges)
-	plaintext := slices.Concat(w.TxViewingSk[:], evidence.head, slices.Concat(evidence.entries...))
+	head := slices.Concat(evidence.head, opened.commonMint)
+	plaintext := slices.Concat(w.TxViewingSk[:], head, slices.Concat(evidence.entries...))
 	// The envelope's padding ends on the block before R0, the longest evidence never reaches a record's counter.
 	plaintext = append(plaintext, shared.Zeros(ranges.EnvelopeBlocks()*streamBlockLen-len(plaintext))...)
 	// A record holds its blocks alone, a counter serving two regions reveals the XOR of their plaintexts.
@@ -188,8 +204,8 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Env
 	// record and tail has one length.
 	return Stream{
 		sealed:      sealed,
-		digest:      countedDigest(api, sealed.Ciphertext, EnvelopeKeyLen+len(evidence.head), ranges.entryLen(), spent.Count),
-		RecordChain: gadget.HashChain4(api, SlotRegions{Start: ranges.RecordOffset(0), Stride: RecordStride, Length: RecordLen}.Hashes(api, sealed.Ciphertext, opened.Count.Active)),
+		digest:      countedDigest(api, sealed.Ciphertext, EnvelopeKeyLen+len(head), ranges.entryLen(), spent.Count),
+		RecordChain: gadget.HashChain4(api, SlotRegions{Start: ranges.RecordOffset(0), Stride: ranges.RecordStride(), Length: ranges.RecordLen()}.Hashes(api, sealed.Ciphertext, opened.Count.Active)),
 		TailChain:   tailChain(api, sealed.Ciphertext, ranges, opened),
 		NoSpend:     api.IsZero(evidence.realInputs),
 	}
@@ -211,6 +227,9 @@ func (r SlotRegions) Hashes(api frontend.API, ciphertext, active []frontend.Vari
 }
 
 func tailChain(api frontend.API, ciphertext []frontend.Variable, ranges StreamRanges, opened Opened) frontend.Variable {
+	if ranges.SingleAssetPayout {
+		return 0
+	}
 	// A clear has_data transmits no tail, the program binds zero.
 	return api.Mul(opened.hasData, gadget.HashChain4(api, SlotRegions{Start: ranges.TailOffset(0), Stride: TailLen, Length: TailLen}.Hashes(api, ciphertext, opened.Count.Active)))
 }

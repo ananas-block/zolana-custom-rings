@@ -37,6 +37,7 @@ import {
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
+import { snapshotPages, SNAPSHOT_CURSOR_LENGTH, SNAPSHOT_CURSOR_VERSION } from "./wallet-snapshot.js";
 
 import {
   knownUtxoHash,
@@ -212,24 +213,76 @@ export function ringReadAttestation(
   );
 }
 
-/** Mirrors Rust `WalletStatusAttestation::message`. */
-export function walletStatusAttestation(
-  input: Readonly<{
-    target: RingReadTarget;
-    wallet: Address;
-    timestamp: bigint;
-    nonce: Bytes32;
-    cursor?: Uint8Array;
-  }>,
+export interface WalletStatusAttestationInput {
+  readonly target: RingReadTarget;
+  readonly wallet: Address;
+  readonly timestamp: bigint;
+  readonly nonce: Bytes32;
+  readonly cursor?: Uint8Array;
+}
+
+export function walletStatusAttestation(input: WalletStatusAttestationInput): Uint8Array {
+  return walletSnapshotMessage({ ...input, domain: WALLET_STATUS_DOMAIN });
+}
+
+export function walletSnapshotReleaseAttestation(
+  input: WalletStatusAttestationInput & Readonly<{ cursor: Uint8Array }>,
+): Uint8Array {
+  return walletSnapshotMessage({
+    ...input,
+    domain: "zolana/ring-rpc-wallet-snapshot-release",
+  });
+}
+
+function walletSnapshotMessage(
+  input: WalletStatusAttestationInput & Readonly<{ domain: string }>,
 ): Uint8Array {
   return encoder.encode(
     [
-      WALLET_STATUS_DOMAIN,
+      input.domain,
       ...targetLines(input.target),
       `timestamp: ${input.timestamp}`,
       `nonce: ${base64Decoder.decode(input.nonce)}`,
       `wallet: ${input.wallet}`,
       `cursor: ${input.cursor === undefined ? "" : base64Decoder.decode(input.cursor)}`,
+    ].join("\n"),
+  );
+}
+
+export interface DelegateNotesAttestationInput {
+  readonly target: RingReadTarget;
+  readonly delegate: Address;
+  readonly owner: Address;
+  readonly timestamp: bigint;
+  readonly nonce: Bytes32;
+  readonly cursor?: Uint8Array;
+}
+
+export function delegateNotesAttestation(input: DelegateNotesAttestationInput): Uint8Array {
+  return delegateSnapshotMessage({ ...input, domain: "zolana/ring-rpc-delegate-notes" });
+}
+
+export function delegateSnapshotReleaseAttestation(
+  input: DelegateNotesAttestationInput & Readonly<{ cursor: Uint8Array }>,
+): Uint8Array {
+  return delegateSnapshotMessage({
+    ...input,
+    domain: "zolana/ring-rpc-delegate-snapshot-release",
+  });
+}
+
+function delegateSnapshotMessage(
+  input: DelegateNotesAttestationInput & Readonly<{ domain: string }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      input.domain,
+      ...targetLines(input.target),
+      `delegate: ${input.delegate}`,
+      `owner: ${input.owner}`,
+      `cursor: ${input.cursor === undefined ? "" : base64Decoder.decode(input.cursor)}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
     ].join("\n"),
   );
 }
@@ -241,6 +294,7 @@ export function spendCoverageAttestation(
     authority: Address;
     timestamp: bigint;
     nonce: Bytes32;
+    cursor?: Uint8Array;
   }>,
 ): Uint8Array {
   return encoder.encode(
@@ -250,6 +304,7 @@ export function spendCoverageAttestation(
       `authority: ${input.authority}`,
       `timestamp: ${input.timestamp}`,
       `nonce: ${base64Decoder.decode(input.nonce)}`,
+      `cursor: ${input.cursor === undefined ? "" : base64Decoder.decode(input.cursor)}`,
     ].join("\n"),
   );
 }
@@ -332,9 +387,20 @@ export function authorityTransferAttestation(
       ...targetLines(input.target),
       `delegate: ${input.delegate}`,
       ...input.transfer.sources.map((source) => `source: ${shieldedAddressText(source)}`),
-      ...input.transfer.payments.map(
-        (payment) =>
-          `payment: ${shieldedAddressText(payment.recipient)} ${payment.mint} ${payment.amount}`,
+      ...(
+        [
+          ["payment", input.transfer.payments],
+          ["exit", input.transfer.exits],
+        ] as const
+      ).flatMap(([kind, outputs]) =>
+        outputs.map(
+          (output) =>
+            `${kind}: ${shieldedAddressText(output.recipient)} ${output.mint} ${output.amount}`,
+        ),
+      ),
+      ...input.transfer.withdrawals.map(
+        (withdrawal) =>
+          `withdrawal: ${withdrawal.recipient} ${withdrawal.mint} ${withdrawal.amount} ${withdrawal.tokenProgram ?? "-"}`,
       ),
       `timestamp: ${input.timestamp}`,
       `nonce: ${base64Decoder.decode(input.nonce)}`,
@@ -474,9 +540,11 @@ export class RingListSaltRequest {
 
 /** Rust `ListPendingApprovals`, `RefuseListApproval` or `CreateRecords`, the action the policy authority signs. */
 export type PolicyAuthorityAction =
-  | Readonly<{ kind: "list"; cursor?: Hash }>
-  | Readonly<{ kind: "refuse"; updateId: Hash }>
+  | Readonly<{ kind: "list"; registry: Address; cursor?: Hash }>
+  | Readonly<{ kind: "refuse"; registry: Address; updateId: Hash }>
   | Readonly<{ kind: "createRecords" }>;
+
+export type ListApprovalTarget = RingReadTarget & Readonly<{ registry: Address }>;
 
 /** Mirrors Rust `PolicyAuthorityAttestation::message`. */
 export function policyAuthorityAttestation(
@@ -504,28 +572,29 @@ export function policyAuthorityAttestation(
 function policyAuthorityActionLine(action: PolicyAuthorityAction): string {
   switch (action.kind) {
     case "refuse":
-      return `refuse ${indexerScalars.checkedHash(action.updateId, "updateId")}`;
+      return `refuse ${address(action.registry, "registry")} ${indexerScalars.checkedHash(action.updateId, "updateId")}`;
     case "createRecords":
       return "create records";
     case "list":
       return action.cursor === undefined
-        ? "list"
-        : `list after ${indexerScalars.checkedHash(action.cursor, "cursor")}`;
+        ? `list ${address(action.registry, "registry")}`
+        : `list ${address(action.registry, "registry")} after ${indexerScalars.checkedHash(action.cursor, "cursor")}`;
   }
 }
 
 /** Rust `GetPendingListApprovalsRequest::read` signed by the policy authority, the page after `cursor`. */
 export async function signPendingListApprovalsRequest(
-  target: RingReadTarget,
+  target: ListApprovalTarget,
   authority: MessagePartialSigner,
   cursor?: Hash,
   timestamp?: bigint,
 ): Promise<GetPendingListApprovalsRequest> {
   const checked = checkedReadTarget(target);
-  const action =
-    cursor === undefined ? { kind: "list" as const } : { kind: "list" as const, cursor };
+  const registry = address(target.registry, "registry");
+  const action = { kind: "list" as const, registry, ...(cursor === undefined ? {} : { cursor }) };
   return Object.freeze({
     ring: checked.ringProgramId,
+    registry,
     ...(cursor === undefined ? {} : { cursor }),
     auth: await policyAuthorityAuth(checked, authority, action, timestamp),
   });
@@ -533,16 +602,18 @@ export async function signPendingListApprovalsRequest(
 
 /** Rust `RefuseListApprovalRequest::refusal` signed by the policy authority. */
 export async function signRefuseListApprovalRequest(
-  target: RingReadTarget,
+  target: ListApprovalTarget,
   authority: MessagePartialSigner,
   updateId: Hash,
   timestamp?: bigint,
 ): Promise<RefuseListApprovalRequest> {
   const checked = checkedReadTarget(target);
+  const registry = address(target.registry, "registry");
   return Object.freeze({
     ring: checked.ringProgramId,
+    registry,
     updateId,
-    auth: await policyAuthorityAuth(checked, authority, { kind: "refuse", updateId }, timestamp),
+    auth: await policyAuthorityAuth(checked, authority, { kind: "refuse", registry, updateId }, timestamp),
   });
 }
 
@@ -1147,8 +1218,33 @@ export interface RingWalletBalance {
   readonly amount: bigint;
 }
 
+export type RingWalletEnrollment = "notEnrolled" | "pending" | "pendingPastCapacity" | "applied";
+
+export interface RingWalletStatusQuery {
+  readonly target: RingReadTarget;
+  readonly signer: RingReadSigner;
+  readonly wallet: Address;
+  readonly cursor?: Uint8Array;
+  readonly timestamp?: bigint;
+}
+
+export interface RingDelegateNotesQuery {
+  readonly target: RingReadTarget;
+  readonly delegate: MessagePartialSigner;
+  readonly owner: Address;
+  readonly cursor?: Uint8Array;
+  readonly timestamp?: bigint;
+}
+
+export interface RingDelegateNotesPage {
+  readonly nullifierSecret?: Bytes32;
+  readonly status: RingWalletStatusPage;
+}
+
 /** Mirrors Rust `GetWalletStatusResponse`, it names nothing about any other transaction. */
 export interface RingWalletStatusPage {
+  readonly enrollment: RingWalletEnrollment;
+  readonly snapshotExpiresAt?: bigint;
   /** Only an unreadable stream holds it back. */
   readonly historyThrough: bigint;
   /** `unspent` notes alone, over every page. */
@@ -1173,13 +1269,19 @@ export interface RingSpendCoverage {
   /** Absent inside a paged read. */
   readonly positionSlot?: bigint;
   readonly historyThrough: bigint;
-  readonly observed: bigint;
-  readonly padding: bigint;
-  readonly external: bigint;
-  readonly resolved: bigint;
+  readonly totals?: RingSpendCoverageTotals;
   readonly unresolvedReal: readonly RingSpendCoverageRow[];
   readonly unreadable: readonly RingSpendCoverageFrame[];
   readonly integrityFaults: readonly RingSpendCoverageRow[];
+  readonly cursor?: Uint8Array;
+}
+
+export interface RingSpendCoverageTotals {
+  readonly observed: bigint;
+  readonly padding: bigint;
+  readonly address: bigint;
+  readonly external: bigint;
+  readonly resolved: bigint;
 }
 
 /** Mirrors Rust `WalletActivity`. */
@@ -1562,46 +1664,62 @@ export class RingRpc {
 
   /** The wallet's notes and balance as of the slot the operator verified. */
   async getWalletStatus(
-    input: Readonly<{
-      target: RingReadTarget;
-      signer: RingReadSigner;
-      wallet: Address;
-      cursor?: Uint8Array;
-      timestamp?: bigint;
-    }>,
+    input: RingWalletStatusQuery,
     context?: RequestContext,
   ): Promise<RingWalletStatusPage> {
-    const target = checkedReadTarget(input.target);
-    addressBytes(input.wallet, "wallet");
-    const cursor = input.cursor === undefined ? undefined : checkedReadCursor(input.cursor);
-    const timestamp = timestampOrNow(input.timestamp);
-    const nonce = freshNonce();
-    const signature = await input.signer.sign(
-      walletStatusAttestation({
-        target,
-        wallet: input.wallet,
-        timestamp,
-        nonce,
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    );
-    const wire = record(
-      await this.#call(
-        "getWalletStatus",
-        signedReadParams({
-          ringProgramId: target.ringProgramId,
-          wallet: input.wallet,
-          reader: input.signer.reader,
-          timestamp,
-          nonce,
-          signature,
-          ...(cursor === undefined ? {} : { cursor }),
-        }),
-        context,
-      ),
-      "result",
-    );
-    return decodeWalletStatus(wire);
+    const wire = await this.#walletSnapshotCall({ input, method: "getWalletStatus", context });
+    return decodeWalletStatus(record(wire, "result"));
+  }
+
+  async releaseWalletSnapshot(
+    input: RingWalletStatusQuery & Readonly<{ cursor: Uint8Array }>,
+    context?: RequestContext,
+  ): Promise<void> {
+    const released = await this.#walletSnapshotCall({ input, method: "releaseWalletSnapshot", context });
+    if (released !== true) throw invalid("result");
+  }
+
+  walletStatusPages(
+    input: Omit<RingWalletStatusQuery, "cursor" | "timestamp">,
+    context?: RequestContext,
+  ): AsyncGenerator<RingWalletStatusPage, void> {
+    return snapshotPages({
+      read: (cursor) => this.getWalletStatus({ ...input, ...(cursor === undefined ? {} : { cursor }) }, context),
+      status: (page) => page,
+      release: (cursor, cleanup) => this.releaseWalletSnapshot({ ...input, cursor }, cleanup),
+      ...(context === undefined ? {} : { context }),
+    });
+  }
+
+  async getDelegateNotes(
+    input: RingDelegateNotesQuery,
+    context?: RequestContext,
+  ): Promise<RingDelegateNotesPage> {
+    const wire = record(await this.#delegateSnapshotCall({ input, method: "getDelegateNotes", context }), "result");
+    return Object.freeze({
+      ...(wire["nullifierSecret"] == null ? {} : { nullifierSecret: hash(wire["nullifierSecret"], "nullifierSecret") }),
+      status: decodeWalletStatus(record(wire["status"], "status")),
+    });
+  }
+
+  async releaseDelegateSnapshot(
+    input: RingDelegateNotesQuery & Readonly<{ cursor: Uint8Array }>,
+    context?: RequestContext,
+  ): Promise<void> {
+    const released = await this.#delegateSnapshotCall({ input, method: "releaseDelegateSnapshot", context });
+    if (released !== true) throw invalid("result");
+  }
+
+  delegateNotesPages(
+    input: Omit<RingDelegateNotesQuery, "cursor" | "timestamp">,
+    context?: RequestContext,
+  ): AsyncGenerator<RingDelegateNotesPage, void> {
+    return snapshotPages({
+      read: (cursor) => this.getDelegateNotes({ ...input, ...(cursor === undefined ? {} : { cursor }) }, context),
+      status: (page) => page.status,
+      release: (cursor, cleanup) => this.releaseDelegateSnapshot({ ...input, cursor }, cleanup),
+      ...(context === undefined ? {} : { context }),
+    });
   }
 
   /** The ring authority's read of unresolved spends, no wallet read carries them. */
@@ -1610,15 +1728,17 @@ export class RingRpc {
       target: RingReadTarget;
       authority: MessagePartialSigner;
       timestamp?: bigint;
+      cursor?: Uint8Array;
     }>,
     context?: RequestContext,
   ): Promise<RingSpendCoverage> {
     const target = checkedReadTarget(input.target);
     const timestamp = timestampOrNow(input.timestamp);
     const nonce = freshNonce();
+    const cursor = input.cursor === undefined ? undefined : checkedReadCursor(input.cursor);
     const signed = await signMessage(
       input.authority,
-      spendCoverageAttestation({ target, authority: input.authority.address, timestamp, nonce }),
+      spendCoverageAttestation({ target, authority: input.authority.address, timestamp, nonce, ...(cursor === undefined ? {} : { cursor }) }),
     );
     const wire = record(
       await this.#call(
@@ -1628,6 +1748,7 @@ export class RingRpc {
           authority: input.authority.address,
           timestamp: Number(timestamp),
           nonce: base64Decoder.decode(nonce),
+          ...(cursor === undefined ? {} : { cursor: base64Decoder.decode(cursor) }),
           signature: base58Decoder.decode(signed),
         },
         context,
@@ -1898,6 +2019,79 @@ export class RingRpc {
   }
 
   // `params` is the request object, not a positional list.
+  async #walletSnapshotCall({ input, method, context }: Readonly<{
+    input: RingWalletStatusQuery;
+    method: "getWalletStatus" | "releaseWalletSnapshot";
+    context: RequestContext | undefined;
+  }>): Promise<unknown> {
+    const target = checkedReadTarget(input.target);
+    addressBytes(input.wallet, "wallet");
+    const cursor = input.cursor === undefined ? undefined : checkedSnapshotCursor(input.cursor);
+    const timestamp = timestampOrNow(input.timestamp);
+    const nonce = freshNonce();
+    const attestation = {
+      target,
+      wallet: input.wallet,
+      timestamp,
+      nonce,
+      ...(cursor === undefined ? {} : { cursor }),
+    };
+    let message: Uint8Array;
+    if (method === "getWalletStatus") {
+      message = walletStatusAttestation(attestation);
+    } else {
+      if (cursor === undefined) throw invalidRequest("cursor");
+      message = walletSnapshotReleaseAttestation({ ...attestation, cursor });
+    }
+    const signature = await input.signer.sign(message);
+    return this.#call(method, signedReadParams({
+      ringProgramId: target.ringProgramId,
+      wallet: input.wallet,
+      reader: input.signer.reader,
+      timestamp,
+      nonce,
+      signature,
+      ...(cursor === undefined ? {} : { cursor }),
+    }), context);
+  }
+
+  async #delegateSnapshotCall({ input, method, context }: Readonly<{
+    input: RingDelegateNotesQuery;
+    method: "getDelegateNotes" | "releaseDelegateSnapshot";
+    context: RequestContext | undefined;
+  }>): Promise<unknown> {
+    const target = checkedReadTarget(input.target);
+    addressBytes(input.owner, "owner");
+    const cursor = input.cursor === undefined ? undefined : checkedSnapshotCursor(input.cursor);
+    const timestamp = timestampOrNow(input.timestamp);
+    const nonce = freshNonce();
+    const attestation = {
+      target,
+      delegate: input.delegate.address,
+      owner: input.owner,
+      timestamp,
+      nonce,
+      ...(cursor === undefined ? {} : { cursor }),
+    };
+    let message: Uint8Array;
+    if (method === "getDelegateNotes") {
+      message = delegateNotesAttestation(attestation);
+    } else {
+      if (cursor === undefined) throw invalidRequest("cursor");
+      message = delegateSnapshotReleaseAttestation({ ...attestation, cursor });
+    }
+    const signature = await signMessage(input.delegate, message);
+    return this.#call(method, {
+      ring: target.ringProgramId,
+      delegate: input.delegate.address,
+      owner: input.owner,
+      timestamp: Number(timestamp),
+      nonce: base64Decoder.decode(nonce),
+      signature: base58Decoder.decode(signature),
+      ...(cursor === undefined ? {} : { cursor: base64Decoder.decode(cursor) }),
+    }, context);
+  }
+
   async #call(
     method: string,
     params: Readonly<Record<string, unknown>> | undefined,
@@ -2115,7 +2309,13 @@ const WALLET_NOTE_STATUSES: readonly RingWalletNoteStatus[] = [
 
 function decodeWalletStatus(wire: Record<string, unknown>): RingWalletStatusPage {
   const cursor = wire["cursor"];
+  const enrollment = wire["enrollment"];
+  if (enrollment !== "notEnrolled" && enrollment !== "pending" && enrollment !== "pendingPastCapacity" && enrollment !== "applied") {
+    throw invalid("enrollment");
+  }
   return Object.freeze({
+    enrollment,
+    ...(wire["snapshotExpiresAt"] == null ? {} : { snapshotExpiresAt: integer(wire["snapshotExpiresAt"], "snapshotExpiresAt") }),
     historyThrough: integer(wire["historyThrough"], "historyThrough"),
     balances: Object.freeze(
       list(wire["balances"], "balances").map((entry, index) => {
@@ -2133,7 +2333,7 @@ function decodeWalletStatus(wire: Record<string, unknown>): RingWalletStatusPage
         decodeWalletNote(record(entry, `notes[${index}]`), `notes[${index}]`),
       ),
     ),
-    ...(cursor == null ? {} : { cursor: checkedReadCursor(base64(cursor, "cursor")) }),
+    ...(cursor == null ? {} : { cursor: checkedSnapshotCursor(base64(cursor, "cursor")) }),
   });
 }
 
@@ -2181,15 +2381,21 @@ function decodeSpendCoverage(wire: Record<string, unknown>): RingSpendCoverage {
         });
       }),
     );
+  const totals = wire["totals"] == null ? undefined : record(wire["totals"], "totals");
   return Object.freeze({
     ...(wire["positionSlot"] == null
       ? {}
       : { positionSlot: integer(wire["positionSlot"], "positionSlot") }),
     historyThrough: integer(wire["historyThrough"], "historyThrough"),
-    observed: integer(wire["observed"], "observed"),
-    padding: integer(wire["padding"], "padding"),
-    external: integer(wire["external"], "external"),
-    resolved: integer(wire["resolved"], "resolved"),
+    ...(totals === undefined ? {} : {
+      totals: Object.freeze({
+        observed: integer(totals["observed"], "totals.observed"),
+        padding: integer(totals["padding"], "totals.padding"),
+        address: integer(totals["address"], "totals.address"),
+        external: integer(totals["external"], "totals.external"),
+        resolved: integer(totals["resolved"], "totals.resolved"),
+      }),
+    }),
     unresolvedReal: rows("unresolvedReal"),
     unreadable: Object.freeze(
       list(wire["unreadable"], "unreadable").map((entry, index) =>
@@ -2197,6 +2403,7 @@ function decodeSpendCoverage(wire: Record<string, unknown>): RingSpendCoverage {
       ),
     ),
     integrityFaults: rows("integrityFaults"),
+    ...(wire["cursor"] == null ? {} : { cursor: checkedReadCursor(base64(wire["cursor"], "cursor")) }),
   });
 }
 
@@ -2539,6 +2746,12 @@ function exactFields(
 function requestBytes(value: unknown, length: number, field: string): Uint8Array {
   if (!(value instanceof Uint8Array) || value.length !== length) throw invalidRequest(field);
   return new Uint8Array(value);
+}
+
+function checkedSnapshotCursor(cursor: unknown): Uint8Array {
+  const checked = checkedReadCursor(cursor);
+  if (checked.length !== SNAPSHOT_CURSOR_LENGTH || checked[0] !== SNAPSHOT_CURSOR_VERSION) throw invalidRequest("cursor");
+  return checked;
 }
 
 function checkedReadCursor(cursor: unknown): Uint8Array {

@@ -15,8 +15,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 def variant(k):
     i, o, w, s, e, d = k['Inputs'], k['Outputs'], k['Withdrawals'], k['Owners'], str(k['Entry']).lower(), str(k['Wide']).lower()
     mode = 'Private' if k['Private'] else 'Public'
-    return [f'Transfer {{ outputs: {o}, inputs: {i}, withdrawals: {w}, owners: {s}, entry: {e}, wide: {d} }}',
-            f'ApplyRecords {{ writes: {i}, mode: key_catalog::ApplyMode::{mode} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
+    disclosure = 'SingleAssetPayout' if k['SingleAssetPayout'] else 'Standard'
+    return [f'Transfer {{ outputs: {o}, inputs: {i}, withdrawals: {w}, owners: {s}, entry: {e}, wide: {d}, format: crate::DisclosureFormat::{disclosure} }}',
+            f'ApplyRecords {{ writes: {i}, mode: key_catalog::ApplyMode::{mode} }}',
+            f'ApplyEnrollments {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
             'Merge'][k['Family']]
 
 def main():

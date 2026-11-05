@@ -36,7 +36,11 @@ import type {
 } from "@heliuslabs/zolana/interface";
 import { CUSTOM_RING_PROOF_LENGTH } from "../proof/custom-ring-proof.js";
 import {
-  AUDIT_RECORD_LEN,
+  auditRecordLength,
+  DisclosureFormat,
+  SINGLE_ASSET_PAYOUT_INPUTS,
+  SINGLE_ASSET_PAYOUT_OUTPUTS,
+  disclosureFormat,
   DATA_TAIL_LEN,
   checkedStreamLayout,
   envelopeRegion,
@@ -47,6 +51,7 @@ import {
   type BundleLayout,
   MIN_REPLY_LEN,
   RECIPIENT_BODY_LEN,
+  COMPACT_RECIPIENT_BODY_LEN,
   senderBundleLen,
 } from "../codec/anonymous-delivery.js";
 import {
@@ -92,6 +97,7 @@ export interface AppMessage {
 
 /** SPP's optional fields a frame carries through, each absent by default, Rust `FrameExtensions`. */
 export interface FrameExtensions {
+  readonly format?: DisclosureFormat;
   /** The transaction's application digest, distinct from a note's `data_hash`. */
   readonly dataHash?: Bytes32;
   /** The transaction's ring digest, distinct from a note's `ring_data_hash`. */
@@ -322,6 +328,7 @@ export function ringSppInputs(
 export function ringStreamLayout(
   shape: Readonly<{
     rail: RingRail;
+    format?: DisclosureFormat;
     nIn: number;
     nOut: number;
     inputs: number;
@@ -336,6 +343,7 @@ export function ringStreamLayout(
 ): AuditStreamLayout {
   const fitted = fittedSpend({
     rail: shape.rail,
+    format: disclosureFormat(shape.format),
     inputs: shape.inputs,
     outputs: shape.nOut,
     spendsDefaultRing: shape.entry,
@@ -357,13 +365,17 @@ export function ringStreamLayout(
       details: { rail: shape.rail, inputs: shape.inputs, outputs: shape.nOut },
     });
   checkFrameFlags(flags, shape.rail);
-  return streamOf(shape.rail, {
-    nIn: shape.nIn,
-    nOut: shape.nOut,
-    inputCount: shape.inputs,
-    outputCount: shape.outputs,
-    flags,
-  });
+  return streamOf(
+    shape.rail,
+    {
+      nIn: shape.nIn,
+      nOut: shape.nOut,
+      inputCount: shape.inputs,
+      outputCount: shape.outputs,
+      flags,
+    },
+    disclosureFormat(shape.format),
+  );
 }
 
 /** `0x04 ‖ u`, the tagged key the statements pack and SPP carries. */
@@ -393,12 +405,16 @@ export const RingTransactData = Object.freeze({
     }
   },
 
-  auditLayout(data: Pick<RingTransactData, "hasData" | "entry">): AuditLayout {
-    return Object.freeze({ hasData: data.hasData, entry: data.entry });
+  auditLayout(data: Pick<RingTransactData, "hasData" | "entry" | "extensions">): AuditLayout {
+    return Object.freeze({
+      hasData: data.hasData,
+      entry: data.entry,
+      format: disclosureFormat(data.extensions.format),
+    });
   },
 
   streamLayout(data: RingTransactData): AuditStreamLayout {
-    return streamOf(data.rail, headerOf(data));
+    return streamOf(data.rail, headerOf(data), disclosureFormat(data.extensions.format));
   },
 
   /** The SPP selector of the data's shape and rail. */
@@ -523,8 +539,9 @@ const ExtensionFlag = Object.freeze({
   cache: 1 << 3,
   approvalTotals: 1 << 4,
   signerDataCounts: 1 << 5,
+  singleAssetPayout: 1 << 6,
 });
-const KNOWN_EXTENSIONS = 0b11_1111;
+const KNOWN_EXTENSIONS = 0b111_1111;
 
 /** The flags of the frame header, Rust `FrameFlags`. */
 interface FrameFlags {
@@ -573,13 +590,18 @@ function sppRail(rail: RingRail, publicOwners: boolean): RingRail {
 }
 
 /** The stream layout of the key the header names, before the outputs are read, Rust `RingRail::key_shape`. */
-function streamOf(rail: RingRail, header: FrameHeader): AuditStreamLayout {
+function streamOf(
+  rail: RingRail,
+  header: FrameHeader,
+  format: DisclosureFormat = DisclosureFormat.Standard,
+): AuditStreamLayout {
   const { nIn, nOut, inputCount: inputs, outputCount: outputs, flags } = header;
   const supported = railShapes(sppRail(rail, flags.publicOwners)).some(
     (shape) => shape.inputs === nIn && shape.outputs === nOut,
   );
   const shape = frameKeyShape({
     rail,
+    format,
     inputs,
     outputs: nOut,
     spendsDefaultRing: flags.entry,
@@ -590,7 +612,7 @@ function streamOf(rail: RingRail, header: FrameHeader): AuditStreamLayout {
   if (outputs < 1 || outputs > nOut) throw invalid("OutputCountOutOfRange");
   return Object.freeze(
     checkedStreamLayout({
-      key: Object.freeze({ class: shape.inputs, entry: flags.entry }),
+      key: Object.freeze({ class: shape.inputs, entry: flags.entry, format }),
       inputs,
       outputs,
       capacity: shape.outputs,
@@ -604,7 +626,6 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
   checkFlags(flags, rail);
   const header = readHeader(bytes, rail);
   const { nIn, nOut, inputCount, outputCount } = header;
-  const stream = streamOf(rail, header);
   const approval = checkedApproval(bytes.u8("approval"));
   const proof = bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "proof");
   const trackingRevision = bytes.u64("trackingRevision");
@@ -619,6 +640,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
   const salt = bytes.bytes(16, "salt") as Bytes16;
   const extensions = has(flags, Flag.extensions) ? readExtensions(bytes, rail) : NO_EXTENSIONS;
   checkExtensions(extensions, rail);
+  const stream = streamOf(rail, header, disclosureFormat(extensions.format));
   const interfaceTransfers = within("InvalidInstructionData", () =>
     Array.from({ length: bytes.u8("interfaceTransfers.length") }, () =>
       readInterfaceTransfer(bytes),
@@ -633,7 +655,13 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
   const bodiless = readBitmap(bytes, outputCount);
   if ((exits & bodiless) !== 0n) throw invalid("BodilessExit");
   const slots = Array.from({ length: outputCount }, (_, slot) =>
-    readSlot(bytes, stream.hasData, bitAt(exits, slot), bitAt(bodiless, slot)),
+    readSlot(
+      bytes,
+      stream.hasData,
+      bitAt(exits, slot),
+      bitAt(bodiless, slot),
+      disclosureFormat(stream.key.format),
+    ),
   );
   const replies = has(flags, Flag.replyMetadata) ? readReplies(bytes, slots) : undefined;
   const sender: PublishedSenderBundle | undefined = isAnonymousFrame(rail)
@@ -643,7 +671,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
       })
     : undefined;
   const envelope = bytes.bytes(envelopeRegion(stream).length, "envelope");
-  const records = slots.map(() => bytes.bytes(AUDIT_RECORD_LEN, "record"));
+  const records = slots.map(() => bytes.bytes(auditRecordLength(stream.key), "record"));
   const tails = stream.hasData ? slots.map(() => bytes.bytes(DATA_TAIL_LEN, "tail")) : undefined;
   const outputs: readonly RingOutput[] = slots.map((slot, index) =>
     Object.freeze({
@@ -678,7 +706,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
       })()
     : Object.freeze({ kind: "one" as const, context: readTreeContext(bytes) });
   bytes.done();
-  return Object.freeze({
+  const data: RingTransactData = Object.freeze({
     rail,
     nIn,
     nOut,
@@ -709,6 +737,8 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
     nullifiers: Object.freeze(nullifiers),
     inputTrees,
   });
+  checkFormat(data);
+  return data;
 }
 
 type FramedSlot = Omit<RingOutput, "record" | "tail">;
@@ -722,14 +752,22 @@ export function bundleLayout(slots: readonly { readonly body: SlotBody }[]): Bun
 }
 
 /** A plain frame fixes each body's length, a data frame prefixes it. */
-function readSlot(bytes: Reader, hasData: boolean, exit: boolean, bodiless: boolean): FramedSlot {
+function readSlot(
+  bytes: Reader,
+  hasData: boolean,
+  exit: boolean,
+  bodiless: boolean,
+  format: DisclosureFormat,
+): FramedSlot {
   const length = bodiless
     ? 0
     : hasData
       ? bytes.u16("output.bodyLen")
       : exit
         ? CONFIDENTIAL_DATA_FREE_BODY_LEN
-        : RECIPIENT_BODY_LEN;
+        : format === DisclosureFormat.SingleAssetPayout
+          ? COMPACT_RECIPIENT_BODY_LEN
+          : RECIPIENT_BODY_LEN;
   const hash = field32(bytes, "output.hash");
   // SPP binds an exit's tag to its owner, any other is a slot tag.
   const ownerTag = exit
@@ -805,6 +843,9 @@ function readExtensions(bytes: Reader, rail: RingRail): FrameExtensions {
   if (signerDataCounts !== undefined && !validSignerDataCounts(signerDataCounts))
     throw invalid("InvalidSignerDataCounts");
   return Object.freeze({
+    ...(has(flags, ExtensionFlag.singleAssetPayout)
+      ? { format: DisclosureFormat.SingleAssetPayout }
+      : {}),
     ...(dataHash === undefined ? {} : { dataHash }),
     ...(ringDataHash === undefined ? {} : { ringDataHash }),
     ...(messages === undefined ? {} : { messages: Object.freeze(messages) }),
@@ -831,7 +872,8 @@ function extensionsEmpty(extensions: FrameExtensions): boolean {
     (extensions.messages === undefined || extensions.messages.length === 0) &&
     extensions.cache === undefined &&
     extensions.approvalTotals === undefined &&
-    extensions.signerDataCounts === undefined
+    extensions.signerDataCounts === undefined &&
+    disclosureFormat(extensions.format) === DisclosureFormat.Standard
   );
 }
 
@@ -839,6 +881,10 @@ function writeExtensions(out: Writer, extensions: FrameExtensions, rail: RingRai
   const messages = extensions.messages ?? [];
   checkMessageCount(messages.length, rail);
   const bits: readonly (readonly [boolean, number])[] = [
+    [
+      disclosureFormat(extensions.format) === DisclosureFormat.SingleAssetPayout,
+      ExtensionFlag.singleAssetPayout,
+    ],
     [extensions.dataHash !== undefined, ExtensionFlag.dataHash],
     [extensions.ringDataHash !== undefined, ExtensionFlag.ringDataHash],
     [messages.length > 0, ExtensionFlag.messages],
@@ -901,7 +947,8 @@ function writeCompact(data: RingTransactData): Uint8Array {
   checkFlags(flags, data.rail);
   const header = headerOf(data);
   checkExtensions(data.extensions, data.rail);
-  const stream = streamOf(data.rail, header);
+  const stream = streamOf(data.rail, header, disclosureFormat(data.extensions.format));
+  checkFormat(data);
   const anonymousFrame = isAnonymousFrame(data.rail);
   const hiddenOwnerProof = data.rail === "anonymous" && !data.publicOwners;
   const ownersExpected = has(flags, Flag.ownRoot)
@@ -914,7 +961,7 @@ function writeCompact(data: RingTransactData): Uint8Array {
     (data.sender !== undefined &&
       data.sender.body.length !== senderBundleLen(bundleLayout(data.outputs))) ||
     data.envelope.length !== envelopeRegion(stream).length ||
-    !data.outputs.every((output) => slotFits(output, data.hasData))
+    !data.outputs.every((output) => slotFits(output, data.hasData, stream.key))
   )
     throw invalid("RingTransactLength");
   checkReplies(data);
@@ -952,7 +999,8 @@ function writeCompact(data: RingTransactData): Uint8Array {
   if (data.sender !== undefined)
     out.bytes(data.sender.tag, 32, "sender.tag").bytes(data.sender.body);
   out.bytes(data.envelope);
-  for (const output of data.outputs) out.bytes(output.record, AUDIT_RECORD_LEN, "record");
+  for (const output of data.outputs)
+    out.bytes(output.record, auditRecordLength(stream.key), "record");
   for (const output of data.outputs)
     if (output.tail !== undefined) out.bytes(output.tail, DATA_TAIL_LEN, "tail");
   out.bytes(data.privateTxHash, 32, "privateTxHash");
@@ -1014,7 +1062,8 @@ function writeSlot(out: Writer, output: RingOutput, hasData: boolean): void {
 }
 
 /** A frame with no data carries each body at its plain length. */
-function slotFits(output: RingOutput, hasData: boolean): boolean {
+function slotFits(output: RingOutput, hasData: boolean, key: AuditStreamLayout["key"]): boolean {
+  if (output.record.length !== auditRecordLength(key)) return false;
   if ((output.tail !== undefined) !== hasData) return false;
   if (output.body.kind !== "exit" && !equalBytes(slotTag(output.ownerTag), output.ownerTag))
     return false;
@@ -1023,9 +1072,50 @@ function slotFits(output: RingOutput, hasData: boolean): boolean {
     case "none":
       return true;
     case "recipient":
-      return output.body.body.length === RECIPIENT_BODY_LEN;
+      return (
+        output.body.body.length ===
+        (disclosureFormat(key.format) === DisclosureFormat.SingleAssetPayout
+          ? COMPACT_RECIPIENT_BODY_LEN
+          : RECIPIENT_BODY_LEN)
+      );
     case "exit":
       return output.body.payload.length === CONFIDENTIAL_DATA_FREE_BODY_LEN;
+  }
+}
+
+function checkFormat(data: RingTransactData): void {
+  const format = disclosureFormat(data.extensions.format);
+  if (
+    format === DisclosureFormat.SingleAssetPayout &&
+    (data.rail !== "confidential" ||
+      data.nIn !== SINGLE_ASSET_PAYOUT_INPUTS ||
+      data.nOut !== SINGLE_ASSET_PAYOUT_OUTPUTS ||
+      data.outputs.length !== SINGLE_ASSET_PAYOUT_OUTPUTS ||
+      data.nullifiers.length !== SINGLE_ASSET_PAYOUT_INPUTS ||
+      data.hasData ||
+      data.entry ||
+      data.wideOwners ||
+      data.inProofOwner !== undefined ||
+      data.replies !== undefined ||
+      data.interfaceTransfers.length !== 0 ||
+      data.noSpend ||
+      data.extensions.dataHash !== undefined ||
+      data.extensions.ringDataHash !== undefined ||
+      (data.extensions.messages?.length ?? 0) !== 0 ||
+      data.extensions.signerDataCounts !== undefined ||
+      data.outputs.some(
+        (output) =>
+          output.body.kind !== "recipient" ||
+          output.body.body.length !== COMPACT_RECIPIENT_BODY_LEN,
+      ))
+  )
+    throw invalid("FlagNotAllowed");
+  if (data.hasData) {
+    const lengths = data.outputs.flatMap((output) =>
+      output.body.kind === "recipient" ? [output.body.body.length] : [],
+    );
+    if (lengths.some((length) => length < RECIPIENT_BODY_LEN + 2 || length !== lengths[0]))
+      throw invalid("OutputBodyLength");
   }
 }
 

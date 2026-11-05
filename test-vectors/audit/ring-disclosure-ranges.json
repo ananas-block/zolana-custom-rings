@@ -1,5 +1,5 @@
 {
-  "description": "Auditor stream ranges per transfer key and layout at m = N. The envelope starts at counter 2 with envelope_blocks blocks, slot i's record at first_record_counter + 7 * i, its tail at first_tail_counter + 4 * i. Each by_input_count list starts at n = 1 and ends at the class, every length in bytes. message_len is 33 + envelope + records + tails. Produced by program-libs/interface/tests/audit_stream.rs.",
+  "description": "Auditor stream ranges for each transfer key at full output capacity.",
   "keys": [
     {
       "capacity_blocks": 17,
@@ -67,6 +67,7 @@
         5,
         12
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         19,
@@ -139,6 +140,7 @@
         5,
         12
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         19,
@@ -213,6 +215,7 @@
         19,
         26
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         33,
@@ -289,6 +292,7 @@
         19,
         26
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         33,
@@ -353,6 +357,7 @@
         47,
         54
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         61,
@@ -421,6 +426,7 @@
         47,
         54
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         61,
@@ -505,6 +511,7 @@
         47,
         54
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         61,
@@ -589,6 +596,7 @@
         47,
         54
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         61,
@@ -699,6 +707,7 @@
         5,
         12
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         19,
@@ -803,6 +812,7 @@
         5,
         12
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         19,
@@ -845,6 +855,7 @@
         120,
         127
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         134,
@@ -889,6 +900,7 @@
         120,
         127
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         134,
@@ -925,6 +937,7 @@
         73,
         80
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         87,
@@ -965,6 +978,7 @@
         73,
         80
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         87,
@@ -1011,6 +1025,7 @@
         110,
         117
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         124,
@@ -1057,6 +1072,7 @@
         110,
         117
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         124,
@@ -1109,6 +1125,7 @@
         148,
         155
       ],
+      "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
         162,
@@ -1161,6 +1178,7 @@
         148,
         155
       ],
+      "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
         162,
@@ -1171,6 +1189,61 @@
         182,
         186,
         190
+      ]
+    },
+    {
+      "capacity_blocks": 85,
+      "class": 1,
+      "entry": false,
+      "envelope_blocks": 5,
+      "envelope_len_by_input_count": [
+        73
+      ],
+      "first_record_counter": 7,
+      "first_tail_counter": 87,
+      "has_data": false,
+      "message_len_by_input_count": [
+        1274
+      ],
+      "outputs": 16,
+      "record_len": 73,
+      "record_start_counters": [
+        7,
+        12,
+        17,
+        22,
+        27,
+        32,
+        37,
+        42,
+        47,
+        52,
+        57,
+        62,
+        67,
+        72,
+        77,
+        82
+      ],
+      "single_asset_payout": true,
+      "tail_len": 0,
+      "tail_start_counters": [
+        87,
+        91,
+        95,
+        99,
+        103,
+        107,
+        111,
+        115,
+        119,
+        123,
+        127,
+        131,
+        135,
+        139,
+        143,
+        147
       ]
     }
   ]

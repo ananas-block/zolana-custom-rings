@@ -16,13 +16,16 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::MAX_LOADED_ACCOUNTS_DATA_SIZE;
 use spr_indexer_api::{Hash, SerializablePubkey};
-use spr_interface::{instruction::instruction_data::settlement_accounts, N_PUBLIC_SLOTS};
+use spr_interface::{
+    instruction::{instruction_data::settlement_accounts, InterfaceTransfer},
+    pda, N_PUBLIC_SLOTS,
+};
 use spr_keypair::{PublicKey, ShieldedAddress, X25519Pubkey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
-use spr_transaction::{Mint, Utxo, WalletUtxo};
+use spr_transaction::{Mint, TransactionError, Utxo, WalletUtxo, SOL_MINT};
 use thiserror::Error;
 use zolana_ring_client::{
-    rpc::{RelayEnrollInputs, RelayId, TxViewingSecret, ENROLL_COMPUTE_UNITS},
+    rpc::{AuthorityWithdrawal, RelayEnrollInputs, RelayId, TxViewingSecret, ENROLL_COMPUTE_UNITS},
     AuditEnvelope, OpenedAudit,
 };
 use zolana_ring_policy::{ApprovalTotals, Member, OutputTotals, PublicTotals};
@@ -288,6 +291,7 @@ pub(crate) struct ExpectedDelegate {
     /// Change returns to an input's owner.
     pub sources: Vec<ExpectedOwner>,
     pub payments: Vec<ExpectedPayment>,
+    pub withdrawals: Vec<ExpectedWithdrawal>,
     /// Admitted from the delegate's own openings of exactly the requested sources.
     pub allowed: AllowedNullifiers,
 }
@@ -301,9 +305,16 @@ pub(crate) struct ExpectedOwner {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ExpectedPayment {
+    pub kind: RecordKind,
     pub owner: ExpectedOwner,
     pub mint: Address,
     pub amount: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ExpectedWithdrawal {
+    transfer: InterfaceTransfer,
+    accounts: Vec<Address>,
 }
 
 /// Only a check builds one.
@@ -514,14 +525,27 @@ impl ExpectedDelegate {
             payments: transfer
                 .payments
                 .iter()
-                .map(|payment| {
+                .map(|payment| (RecordKind::Ring, payment))
+                .chain(
+                    transfer
+                        .exits
+                        .iter()
+                        .map(|payment| (RecordKind::Exit, payment)),
+                )
+                .map(|(kind, payment)| {
                     Ok(ExpectedPayment {
+                        kind,
                         owner: ExpectedOwner::of(&payment.recipient.0)?,
                         mint: payment.mint.0,
                         amount: payment.amount,
                     })
                 })
                 .collect::<Result<_, RingError>>()?,
+            withdrawals: transfer
+                .withdrawals
+                .iter()
+                .map(ExpectedWithdrawal::new)
+                .collect::<Result<_, _>>()?,
             allowed: allowed.clone(),
         })
     }
@@ -530,14 +554,17 @@ impl ExpectedDelegate {
         check_message(self, message, self.delegate)
     }
 
-    fn check_moved(&self, parsed: &ParsedTransact<'_>) -> Result<(), MessageMismatch> {
+    fn check_moved(
+        &self,
+        parsed: &ParsedTransact<'_>,
+        accounts: &[AccountMeta],
+    ) -> Result<(), MessageMismatch> {
         let data = parsed.data();
         let opened = open_stream(parsed, &self.tx_viewing_key, &self.auditor)?;
-        // 1. The request names ring payments alone, a leg or a data commitment moves what no one
-        // asked.
-        if !data.interface_transfers.is_empty() || data.has_data {
+        if data.has_data {
             return Err(MessageMismatch::Data);
         }
+        self.check_withdrawals(data, accounts)?;
         // 2. Matching outputs bind no input, each proven note position answers to the requested
         // openings.
         self.allowed
@@ -553,32 +580,65 @@ impl ExpectedDelegate {
             .map_err(|_| MessageMismatch::Data)?;
         let mut unpaid = self.payments.clone();
         for (output, record) in data.outputs.iter().zip(records) {
-            match record.kind {
-                RecordKind::Dummy => {}
-                RecordKind::Exit => return Err(MessageMismatch::Recipients),
-                RecordKind::Ring => {
-                    let paid = unpaid.iter().position(|payment| payment.matches(&record));
-                    match paid {
-                        Some(index) => {
-                            let payment = unpaid.swap_remove(index);
-                            // A wrong hint strands the note with no scan reaching it.
-                            if !data.rail.anonymous_frame()
-                                && output.owner_tag
-                                    != confidential_slot_tag(payment.owner.viewing_u)
-                            {
-                                return Err(MessageMismatch::Recipients);
-                            }
+            if record.kind == RecordKind::Dummy {
+                continue;
+            }
+            let paid = unpaid.iter().position(|payment| payment.matches(&record));
+            match paid {
+                Some(index) => {
+                    let payment = unpaid.swap_remove(index);
+                    let owner_tag = match payment.kind {
+                        RecordKind::Exit => Some(payment.owner.owner_key),
+                        RecordKind::Ring if !data.rail.anonymous_frame() => {
+                            Some(confidential_slot_tag(payment.owner.viewing_u))
                         }
-                        None if self.sources.iter().any(|source| source.owns(&record)) => {}
-                        None => return Err(MessageMismatch::Recipients),
+                        _ => None,
+                    };
+                    if owner_tag.is_some_and(|tag| output.owner_tag != tag) {
+                        return Err(MessageMismatch::Recipients);
                     }
                 }
+                None if record.kind == RecordKind::Ring
+                    && self.sources.iter().any(|source| source.owns(&record)) => {}
+                None => return Err(MessageMismatch::Recipients),
             }
         }
         match unpaid.is_empty() {
             true => Ok(()),
             false => Err(MessageMismatch::Recipients),
         }
+    }
+
+    fn check_withdrawals(
+        &self,
+        data: &RingTransactData<'_>,
+        accounts: &[AccountMeta],
+    ) -> Result<(), MessageMismatch> {
+        let spp = spp_accounts(self.ring.program_id(), accounts)?;
+        let mut groups = settlement_accounts(&data.interface_transfers, data.circuit(), spp)
+            .ok_or(MessageMismatch::Accounts)?;
+        let mut unpaid = self.withdrawals.clone();
+        for transfer in &data.interface_transfers {
+            let (group, rest) = groups
+                .split_at_checked(transfer.settlement_account_count())
+                .ok_or(MessageMismatch::Accounts)?;
+            groups = rest;
+            let paid = unpaid
+                .iter()
+                .position(|expected| {
+                    expected.transfer == *transfer
+                        && expected
+                            .accounts
+                            .iter()
+                            .eq(group.iter().map(|account| &account.pubkey))
+                })
+                .ok_or(MessageMismatch::Data)?;
+            unpaid.swap_remove(paid);
+        }
+        if !unpaid.is_empty() {
+            return Err(MessageMismatch::Data);
+        }
+        Ok(())
     }
 }
 
@@ -607,7 +667,7 @@ impl ExpectedFrame for ExpectedDelegate {
             .filter(|(tag, _)| **tag == tag::AUTHORITY_TRANSFER)
             .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
             .ok_or(MessageMismatch::Data)?;
-        self.check_moved(&parsed)?;
+        self.check_moved(&parsed, accounts)?;
         check_signer(&self.envelope(signer)?, accounts)
     }
 }
@@ -1147,9 +1207,52 @@ impl ExpectedOwner {
 
 impl ExpectedPayment {
     fn matches(&self, record: &AuditRecord) -> bool {
-        self.owner.owns(record)
+        self.kind == record.kind
+            && self.owner.owns(record)
             && record.mint == self.mint.to_bytes()
             && record.amount == self.amount
+    }
+}
+
+impl ExpectedWithdrawal {
+    fn new(withdrawal: &AuthorityWithdrawal) -> Result<Self, RingError> {
+        let mint = withdrawal.mint.0;
+        if mint == SOL_MINT {
+            if let Some(program) = withdrawal.token_program {
+                return Err(TransactionError::UnexpectedSolTokenProgram {
+                    token_program: program.0,
+                }
+                .into());
+            }
+            return Ok(Self {
+                transfer: InterfaceTransfer::SolWithdrawal {
+                    amount: withdrawal.amount,
+                },
+                accounts: vec![pda::sol_interface(), withdrawal.recipient.0],
+            });
+        }
+        let program = withdrawal
+            .token_program
+            .ok_or(TransactionError::MissingSplTokenProgram { mint })?
+            .0;
+        let (vault, bump) = pda::spl_interface_with_bump(&mint);
+        Ok(Self {
+            transfer: InterfaceTransfer::SplWithdrawal {
+                amount: withdrawal.amount,
+                spl_interface_bump: bump,
+            },
+            accounts: vec![
+                pda::shielded_pool_cpi_authority(),
+                mint,
+                vault,
+                pda::associated_token_address_with_program(
+                    &withdrawal.recipient.0,
+                    &mint,
+                    &program,
+                ),
+                program,
+            ],
+        })
     }
 }
 

@@ -677,6 +677,7 @@ fn a_frame_on_the_entry_key_parses_on_the_owner_rails() {
             .audit_stream()
             .key,
         AuditKey {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             class: 8,
             entry: true
         }
@@ -788,7 +789,7 @@ fn a_data_frame_carries_each_length_and_each_tail() {
     assert_eq!(message.len(), stream.message_len());
     let read = AuditorMessage::parse(&message, stream).unwrap();
     assert_eq!(read.tail(1), Some(&fixture.tails[1]));
-    assert_eq!(read.record(1), Some(&fixture.records[1]));
+    assert_eq!(read.record(1), Some(fixture.records[1].as_slice()));
     let mut tailless = data.clone();
     tailless.outputs[1].tail = None;
     assert_eq!(tailless.encode(), Err(CustomRingError::RingTransactLength));
@@ -1215,7 +1216,11 @@ fn an_spp_point_off_the_curve_is_refused_at_expansion() {
 #[test]
 fn every_rail_reads_its_audit_stream() {
     let fixture = Fixture::new();
-    let key = |class, entry| AuditKey { class, entry };
+    let key = |class, entry| AuditKey {
+        format: custom_ring_interface::DisclosureFormat::Standard,
+        class,
+        entry,
+    };
     for (data, key, inputs, outputs, has_data) in [
         (fixture.confidential_policy(), key(24, false), 2, 2, false),
         (
@@ -1351,6 +1356,7 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
     assert_eq!(
         data.transfer_circuit(1),
         Ok(RingCircuit::Transfer {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             outputs: 4,
             inputs: 24,
             withdrawals: 4,
@@ -1523,4 +1529,44 @@ fn withdrawal_owner_metadata_is_required_in_transfer_order() {
     assert_eq!(parsed.data().interface_transfers, data.interface_transfers);
     data.spl_withdrawal_owners = &owners[..1];
     assert!(data.encode().is_err());
+}
+
+#[test]
+fn payout_frame_binds_format_and_rejects_mixed_widths() {
+    use custom_ring_interface::{
+        DisclosureFormat, COMPACT_AUDIT_RECORD_LEN, COMPACT_RECIPIENT_BODY_LEN,
+    };
+    let fixture = Fixture::new();
+    let body = [5; COMPACT_RECIPIENT_BODY_LEN];
+    let record = [6; COMPACT_AUDIT_RECORD_LEN];
+    let mut payout = fixture.base(RingRail::Confidential, 1, 16);
+    payout.extensions.format = DisclosureFormat::SingleAssetPayout;
+    payout.outputs = (0..16)
+        .map(|slot| {
+            let mut output = fixture.recipient(slot);
+            output.body = SlotBody::Recipient(&body);
+            output.record = &record;
+            output
+        })
+        .collect();
+    let payout = fixture.with_audit_stream(payout);
+    let bytes = payout.encode().unwrap();
+    let decoded = RingTransactData::parse(&bytes, RingRail::Confidential)
+        .unwrap()
+        .into_data();
+    assert_eq!(decoded, payout);
+    assert_eq!(decoded.audit_layout().value(), 4);
+    assert_eq!(decoded.outputs.len(), 16);
+    let mut wrong = payout.clone();
+    wrong.extensions.format = DisclosureFormat::Standard;
+    assert!(wrong.encode().is_err());
+    let mut wrong = payout.clone();
+    wrong.outputs[0].record = &fixture.records[0];
+    assert!(wrong.encode().is_err());
+    let mut wrong = payout.clone();
+    wrong.outputs[0].body = SlotBody::Recipient(&fixture.recipient_body);
+    assert!(wrong.encode().is_err());
+    let mut wrong = payout;
+    wrong.outputs[0].body = SlotBody::None;
+    assert!(wrong.encode().is_err());
 }

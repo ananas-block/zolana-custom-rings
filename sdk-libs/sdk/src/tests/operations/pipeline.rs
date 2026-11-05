@@ -1078,6 +1078,8 @@ struct MoveCase<'a> {
 impl<'a> MoveFixture<'a> {
     fn delegate_move(&self, case: MoveCase<'a>) -> DelegateMove<'a> {
         DelegateMove {
+            exits: Vec::new(),
+            withdrawals: Vec::new(),
             ring: ring(),
             delegate: self.delegate,
             payer: case.payer,
@@ -1403,6 +1405,7 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
     assert_eq!(
         request.circuit,
         custom_ring_interface::key_catalog::RingCircuit::Transfer {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             outputs: 4,
             inputs: 24,
             withdrawals: 4,
@@ -1459,6 +1462,7 @@ async fn the_in_proof_owner_request_publishes_the_sender_of_every_spent_note() {
     assert_eq!(
         request.circuit,
         custom_ring_interface::key_catalog::RingCircuit::Transfer {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             outputs: 2,
             inputs: 24,
             withdrawals: 4,
@@ -2096,6 +2100,14 @@ impl Measured {
     }
 
     fn keyed(self, shape: spr_client::Shape) -> bool {
+        if shape.n_outputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_OUTPUTS
+            && !matches!(
+                self,
+                Self::Confidential | Self::ConfidentialPolicy | Self::ConfidentialEscrow
+            )
+        {
+            return false;
+        }
         match self.entry() {
             true => super::anonymous::AnonymousKey::Entry.serves(shape),
             false => shape_keyed(self.ring_rail(), shape),
@@ -2608,6 +2620,7 @@ async fn ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs() {
                         }
                         let served = super::transfer_key(
                             custom_ring_interface::key_catalog::TransferSpend {
+                                format: custom_ring_interface::DisclosureFormat::Standard,
                                 rail: rail.ring_rail(),
                                 inputs: shape.n_inputs(),
                                 outputs: shape.n_outputs(),
@@ -2681,7 +2694,7 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
     let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES
         .into_iter()
-        .filter(|shape| !shape.entry && !shape.wide);
+        .filter(|shape| !shape.entry && !shape.wide && shape.format == DisclosureFormat::Standard);
     for family in narrow {
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {
@@ -2708,6 +2721,7 @@ fn a_shape_past_a_confidential_class_is_unkeyed() {
     assert!(shape_keyed(RingRail::Confidential, Shape::IN16_OUT8));
     for (inputs, outputs) in [(41, 2), (25, 4), (25, 8), (1, 16)] {
         let spend = TransferSpend {
+            format: custom_ring_interface::DisclosureFormat::Standard,
             rail: RingRail::Confidential,
             inputs,
             outputs,
@@ -4055,6 +4069,8 @@ async fn a_delegate_move_selects_a_zero_key_balance_alone() {
     .client();
     let address = member.shielded_address().unwrap();
     let transfer = DelegateMove {
+        exits: Vec::new(),
+        withdrawals: Vec::new(),
         ring: ring(),
         delegate,
         payer: crate::tests::support::payer(),
@@ -4318,6 +4334,8 @@ async fn delegate_selection_shares_the_input_budget_across_assets() {
         ));
     }
     let transfer = DelegateMove {
+        exits: Vec::new(),
+        withdrawals: Vec::new(),
         ring: ring(),
         delegate,
         payer: delegate,
@@ -4384,6 +4402,8 @@ async fn delegate_spent_trees(
         })
         .collect();
     let assembled = DelegateMove {
+        exits: Vec::new(),
+        withdrawals: Vec::new(),
         ring: ring(),
         delegate,
         payer: delegate,
@@ -4479,4 +4499,91 @@ async fn an_anonymous_move_counts_the_sender_change_before_selection() {
     assert_eq!(trees.len(), 21);
     assert_eq!(trees.first(), Some(&1));
     assert_eq!(trees.last(), Some(&2));
+}
+
+#[tokio::test]
+async fn confidential_payout_keeps_the_complete_transaction_within_inline_limits() {
+    use crate::tests::support::{keypair, Registry};
+    use custom_ring_interface::{DisclosureFormat, SINGLE_ASSET_PAYOUT_OUTPUTS};
+    use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
+
+    let sender = keypair(1);
+    let recipients: Vec<_> = (0..SINGLE_ASSET_PAYOUT_OUTPUTS)
+        .map(|index| keypair(index as u8 + 10))
+        .collect();
+    let owners: Vec<_> = core::iter::once(&sender)
+        .chain(&recipients)
+        .map(|owner| (owner, 1))
+        .collect();
+    let rules = RuleTable::builder()
+        .rule(Rule::require(Subject::Sender, ListId::Allow))
+        .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
+        .rule(Rule::forbid(Subject::OutputOwner, ListId::Block))
+        .build();
+    let client = Chain::ring(RingSettings {
+        has_policy: true,
+        co_signer: Some(MEASURED_CO_SIGNER),
+        ..RingSettings::new(RingMode::Confidential)
+    })
+    .with_registry(Registry::new(&owners), &rules)
+    .with_curator(MEASURED_CURATOR, &rules)
+    .client();
+    let payer = crate::tests::support::payer();
+    assert_ne!(
+        payer,
+        sender.shielded_address().unwrap().solana_address().unwrap()
+    );
+    let mut transaction = paid_ring_transaction(
+        vec![ring_utxo(
+            &sender,
+            Mint::SOL,
+            SINGLE_ASSET_PAYOUT_OUTPUTS as u64,
+            0,
+        )],
+        payer,
+    );
+    for recipient in &recipients {
+        transaction
+            .transfer_with_ring(
+                &recipient.shielded_address().unwrap(),
+                Mint::SOL,
+                1,
+                Some(ring().program_id()),
+            )
+            .unwrap();
+    }
+    let transfer = owner_transfer(&sender, transaction)
+        .with_co_signer(MEASURED_CO_SIGNER.0)
+        .with_priority_fee(1);
+    let prepared = transfer.frame(&client).await.unwrap();
+    let data = prepared.frame.parts.data().unwrap();
+    assert_eq!(data.extensions.format, DisclosureFormat::SingleAssetPayout);
+    assert_eq!(data.outputs.len(), SINGLE_ASSET_PAYOUT_OUTPUTS);
+    assert!(data.outputs.iter().all(|output| matches!(output.body,
+        custom_ring_interface::SlotBody::Recipient(body)
+        if body.len() == custom_ring_interface::COMPACT_RECIPIENT_BODY_LEN)));
+    let instruction = prepared.instruction().unwrap();
+    assert!(instruction
+        .accounts
+        .iter()
+        .any(|account| account.pubkey == MEASURED_CURATOR));
+    assert!(instruction
+        .accounts
+        .iter()
+        .any(|account| account.pubkey == MEASURED_CO_SIGNER.0 && account.is_signer));
+    let size = spr_client::transaction_size(
+        &payer,
+        core::slice::from_ref(&instruction),
+        spr_client::ComputeBudgetConfig::new(0).with_priority_fee(1),
+    )
+    .unwrap();
+    assert!(size.bytes <= solana_message::v1::MAX_TRANSACTION_SIZE);
+    assert!(size.addresses <= usize::from(solana_message::v1::MAX_ADDRESSES));
+    let cpi = data
+        .spp_instruction_data_under(
+            prepared.config.account(),
+            spr_interface::instruction::TransactProof::zeroed(),
+        )
+        .unwrap();
+    assert!(cpi.len() <= custom_ring_interface::MAX_CPI_DATA_LEN);
 }

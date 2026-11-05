@@ -2,6 +2,8 @@
  * One transfer pipeline for every rail, Rust `pipeline`. The rail seals the outputs, the ring proof
  * opens them to the auditor and screens the ring's table, the SPP proof spends.
  */
+import { disclosureFormat } from "../../protocol/codec/ring-disclosure-layout.js";
+import { outputDisclosureFormat } from "../payments/output-rail.js";
 import type { AccountMeta, Instruction } from "@solana/kit";
 
 import {
@@ -405,9 +407,11 @@ function stagedPlanFrame(
   const published = publishedOutputs(proofInputs.outputs);
   const entry = spendsDefaultRing(proofInputs);
   const hasData = framesData(published);
+  const format = outputDisclosureFormat(proofInputs);
   return Object.freeze({
     subjects: Object.freeze({
       rail: spend.rail,
+      format,
       inputs: inputs.length,
       outputs: shape.outputs,
       spendsDefaultRing: entry,
@@ -421,6 +425,7 @@ function stagedPlanFrame(
     layoutUnder: (wideOwners: boolean) =>
       ringStreamLayout({
         rail: spend.rail,
+        format,
         nIn: shape.inputs,
         nOut: shape.outputs,
         inputs: inputs.length,
@@ -859,7 +864,7 @@ function previewData(
     expiryUnixTs: Number(U32_MAX),
     txViewingU: input.txViewingU,
     salt: external.salt,
-    extensions: input.extensions,
+    extensions: { ...input.extensions, format: disclosureFormat(sealed.audit.format) },
     interfaceTransfers: external.interfaceTransfers.map(interfaceTransferOf),
     hasData,
     entry,

@@ -11,12 +11,12 @@ use spr_keypair::{viewing_key::ViewTag, x25519::X25519_PUBKEY_LEN, X25519Pubkey}
 use zolana_ring_keys::{RingKeys, ViewTagRequest, ViewTagStream};
 use zolana_ring_transaction::is_contributory;
 
-use crate::{exactly_one, AnonymousError, REDACTED, TAGS_PER_REQUEST};
+use crate::{exactly_one, AnonymousError, REDACTED};
 
 /// How far below its watermark a sync still reads an unobserved index.
 pub const PENDING_RETENTION: u64 = 256;
 
-/// Indices a stream's first round reads past its next index, doubled up to [`TAGS_PER_REQUEST`] after every round that finds one.
+/// Indices a stream's first round reads past its next index, doubled up to [`crate::TAGS_PER_REQUEST`] after every round that finds one.
 pub const TAG_GAP: u64 = 20;
 
 /// `scanned` never passes `next`.
@@ -56,16 +56,6 @@ pub struct AdvancedTag<T> {
     pub history: ViewingHistory,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct GapScan {
-    from: u64,
-    start: u64,
-    end: u64,
-    gap: u64,
-    late: Vec<u64>,
-    observed: BTreeSet<u64>,
-}
-
 impl StreamCounter {
     pub fn next(&self) -> u64 {
         self.next
@@ -102,42 +92,6 @@ impl StreamCounter {
         let next = self.next;
         self.next = next.checked_add(1).ok_or(AnonymousError::CounterOverflow)?;
         Ok(next)
-    }
-}
-
-impl GapScan {
-    pub(crate) fn new(from: u64, counter: &StreamCounter) -> Self {
-        Self {
-            from,
-            start: from,
-            end: counter.next.max(from).saturating_add(TAG_GAP),
-            gap: TAG_GAP,
-            late: counter.pending().collect(),
-            observed: BTreeSet::new(),
-        }
-    }
-
-    pub(crate) fn round(&mut self) -> Vec<u64> {
-        std::mem::take(&mut self.late)
-            .into_iter()
-            .chain(self.start..self.end)
-            .collect()
-    }
-
-    /// `false` once a round finds nothing in its range.
-    pub(crate) fn advance(&mut self, seen: impl IntoIterator<Item = u64>) -> bool {
-        self.observed.extend(seen);
-        if self.observed.range(self.start..self.end).next().is_none() {
-            return false;
-        }
-        self.gap = self.gap.saturating_mul(2).min(TAGS_PER_REQUEST as u64);
-        self.start = self.end;
-        self.end = self.start.saturating_add(self.gap);
-        true
-    }
-
-    pub(crate) fn finish(&self, counter: &mut StreamCounter) {
-        counter.observe(self.from, &self.observed);
     }
 }
 
@@ -604,16 +558,6 @@ mod tests {
             counter.pending().collect::<Vec<_>>(),
             (4..PENDING_RETENTION).collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn a_round_finding_its_last_index_reads_at_most_one_request_next() {
-        let mut scan = GapScan::new(0, &StreamCounter::default());
-        for _ in 0..64 {
-            let round = scan.round();
-            assert!(round.len() <= TAGS_PER_REQUEST);
-            assert!(scan.advance(round.last().copied()));
-        }
     }
 
     #[test]

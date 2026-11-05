@@ -1,7 +1,7 @@
 //! The anonymous rail's slots, the sender's change leading at output 0, one body per
 //! recipient output and the sender bundle after them.
 
-use custom_ring_interface::{ChangeCell, SenderBundle, MIN_REPLY_LEN, RECIPIENT_BODY_LEN};
+use custom_ring_interface::{ChangeCell, SenderBundle, MIN_REPLY_LEN};
 use rand::{rngs::OsRng, RngCore};
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_interface::MAX_OUTPUTS;
@@ -11,7 +11,7 @@ use spr_transaction::{
 };
 
 use crate::{
-    recipient_delivery::{recipient_body, seal_recipient_body, seal_reply, seal_sender_bundle},
+    recipient_delivery::{recipient_body, seal_reply, seal_sender_bundle, PaddedRecipientBody},
     OutputBlindings, ReplyMetadata, RingRailError,
 };
 
@@ -114,7 +114,7 @@ impl AnonymousPlan {
                 _ if slot_index < change => AnonymousSlot::Change,
                 None => AnonymousSlot::Dummy { preimage },
                 Some(_) if is_change(output, sender) => {
-                    return Err(RingRailError::AnonymousChange { slot_index })
+                    return Err(RingRailError::AnonymousChange { slot_index });
                 }
                 Some(owner) if output.ring_program_id.is_none() => {
                     if owner.signing_pubkey == sender.signing_pubkey {
@@ -207,6 +207,7 @@ pub(crate) struct AnonymousSeal<'a> {
     pub outputs: &'a [SppProofOutputUtxo],
     pub slots: &'a [AnonymousSlot],
     pub plan: &'a AnonymousPlan,
+    pub body_width: usize,
 }
 
 /// One body-bearing slot's bytes, its reply empty without reply metadata.
@@ -225,7 +226,7 @@ impl AnonymousSeal<'_> {
             AnonymousSlot::Payment { recipient } => recipient,
             AnonymousSlot::Dummy { .. } => {
                 return Ok(Some(SealedBody {
-                    body: random_bytes(RECIPIENT_BODY_LEN),
+                    body: random_bytes(self.body_width),
                     reply: random_reply(),
                 }));
             }
@@ -236,7 +237,12 @@ impl AnonymousSeal<'_> {
         let secret = self
             .rail
             .slot_secret(&recipient, &self.first_nullifier, index)?;
-        let body = seal_recipient_body(&recipient_body(output), &secret)?;
+        let body = PaddedRecipientBody {
+            body: &recipient_body(output),
+            slot_secret: &secret,
+            width: self.body_width,
+        }
+        .seal()?;
         let replies = self.plan.slot_replies(self.slots);
         let reply = match (replies[slot_index], reply_len) {
             (Some(reply), Some(reply_len)) => seal_reply(reply, reply_len, &secret)?,

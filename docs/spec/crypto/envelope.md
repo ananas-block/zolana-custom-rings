@@ -39,7 +39,7 @@ ciphertext = AES-256-CTR(key, nonce || u32be(counter), plaintext), counter from 
 | Label | Line | Secret |
 |---|---|---|
 | `CRING/adt` | auditor stream | `salted` above, `eph_sk = tx_viewing_sk` |
-| `CRING/rcp` | recipient body, scheme 10 | [slot secret](hashing.md#slot-secret) at `i` |
+| `CRING/rcp` | recipient body, scheme 10 or 11 | [slot secret](hashing.md#slot-secret) at `i` |
 | `CRING/rpl` | reply metadata | the secret of slot `i`'s body |
 | `CRING/snd` | sender bundle, scheme 9 | slot secret at `m` under the sender's viewing key |
 | `CRING/nfk` | register key | `secret` above |

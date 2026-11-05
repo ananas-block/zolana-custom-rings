@@ -32,6 +32,11 @@ pub const ENTRY_INPUT_LEN: usize = 200;
 /// The secret is the deposit's blinding or the merge's seed.
 pub const OPENING_RECORD_LEN: usize = RECORD_STRIDE + FIELD_LEN;
 pub const RECIPIENT_BODY_LEN: usize = 72;
+pub const COMPACT_RECIPIENT_BODY_LEN: usize = 48;
+pub const COMPACT_AUDIT_RECORD_LEN: usize = 73;
+pub const RECIPIENT_BODY_LENGTH_LEN: usize = 2;
+pub const SINGLE_ASSET_PAYOUT_INPUTS: usize = 1;
+pub const SINGLE_ASSET_PAYOUT_OUTPUTS: usize = 16;
 /// `mint || u64be(amount)`, one per bodiless slot of the bundle.
 pub const CHANGE_CELL_LEN: usize = FIELD_LEN + AMOUNT_LEN;
 /// `viewing_u || owner_key || nullifier_pk`, one byte for the wincode of no data.
@@ -50,8 +55,37 @@ const _: () = assert!(AMOUNT_LEN + 6 * FIELD_LEN == ENTRY_INPUT_LEN);
 const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == RECIPIENT_BODY_LEN);
 const _: () = assert!(3 * FIELD_LEN + 1 == MIN_REPLY_LEN);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DisclosureFormat {
+    #[default]
+    Standard = 0,
+    SingleAssetPayout = 1,
+}
+
+impl DisclosureFormat {
+    pub const fn record_len(self) -> usize {
+        match self {
+            Self::Standard => AUDIT_RECORD_LEN,
+            Self::SingleAssetPayout => COMPACT_AUDIT_RECORD_LEN,
+        }
+    }
+
+    pub const fn record_blocks(self) -> usize {
+        self.record_len().div_ceil(STREAM_BLOCK_LEN)
+    }
+
+    pub const fn recipient_body_len(self) -> usize {
+        match self {
+            Self::Standard => RECIPIENT_BODY_LEN,
+            Self::SingleAssetPayout => COMPACT_RECIPIENT_BODY_LEN,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditKey {
+    pub format: DisclosureFormat,
     /// The widest published input count.
     pub class: usize,
     pub entry: bool,
@@ -69,6 +103,10 @@ impl AuditKey {
 
     const fn head_len(self) -> usize {
         ENVELOPE_HEAD_LEN
+            + match self.format {
+                DisclosureFormat::Standard => 0,
+                DisclosureFormat::SingleAssetPayout => FIELD_LEN,
+            }
             + if self.entry {
                 DEFAULT_INPUT_BITS_LEN
             } else {
@@ -126,7 +164,19 @@ pub struct AuditStreamLayout {
 impl AuditStreamLayout {
     pub fn checked(self) -> Result<Self, CustomRingError> {
         let outputs_fit = self.outputs >= 1 && self.outputs <= self.capacity;
-        match self.inputs >= 1
+        let profile_fits = match self.key.format {
+            DisclosureFormat::Standard => true,
+            DisclosureFormat::SingleAssetPayout => {
+                self.inputs == SINGLE_ASSET_PAYOUT_INPUTS
+                    && self.key.class == SINGLE_ASSET_PAYOUT_INPUTS
+                    && self.outputs == SINGLE_ASSET_PAYOUT_OUTPUTS
+                    && self.capacity == SINGLE_ASSET_PAYOUT_OUTPUTS
+                    && !self.key.entry
+                    && !self.has_data
+            }
+        };
+        match profile_fits
+            && self.inputs >= 1
             && self.inputs <= self.key.class()
             && self.key.class() <= u64::BITS as usize
             && outputs_fit
@@ -142,7 +192,7 @@ impl AuditStreamLayout {
 
     /// `T0`, past every record of `N` slots.
     pub const fn first_tail_counter(self) -> u32 {
-        self.first_record_counter() + (self.capacity * RECORD_BLOCKS) as u32
+        self.first_record_counter() + (self.capacity * self.key.format.record_blocks()) as u32
     }
 
     /// Slots at or past `n` stay absent from the evidence.
@@ -156,8 +206,9 @@ impl AuditStreamLayout {
 
     pub const fn record(self, slot: usize) -> StreamRegion {
         StreamRegion {
-            start_counter: self.first_record_counter() + (slot * RECORD_BLOCKS) as u32,
-            max_blocks: RECORD_BLOCKS,
+            start_counter: self.first_record_counter()
+                + (slot * self.key.format.record_blocks()) as u32,
+            max_blocks: self.key.format.record_blocks(),
             len: self.record_len(slot),
         }
     }
@@ -172,7 +223,7 @@ impl AuditStreamLayout {
 
     pub const fn record_len(self, slot: usize) -> usize {
         match slot < self.outputs {
-            true => AUDIT_RECORD_LEN,
+            true => self.key.format.record_len(),
             false => 0,
         }
     }
@@ -185,7 +236,7 @@ impl AuditStreamLayout {
     }
 
     pub const fn records_len(self) -> usize {
-        AUDIT_RECORD_LEN * self.outputs
+        self.key.format.record_len() * self.outputs
     }
 
     pub const fn tails_len(self) -> usize {
@@ -205,7 +256,7 @@ impl AuditStreamLayout {
             true => self.capacity * TAIL_BLOCKS,
             false => 0,
         };
-        self.key.envelope_blocks() + self.capacity * RECORD_BLOCKS + tails
+        self.key.envelope_blocks() + self.capacity * self.key.format.record_blocks() + tails
     }
 }
 
@@ -257,6 +308,33 @@ impl AuditRecord {
         out[41..73].copy_from_slice(&self.mint);
         out[73..].copy_from_slice(&self.nullifier_pk);
         out
+    }
+
+    pub fn encode_compact(&self) -> [u8; COMPACT_AUDIT_RECORD_LEN] {
+        let mut out = [0; COMPACT_AUDIT_RECORD_LEN];
+        out[0] = self.kind as u8;
+        out[1..9].copy_from_slice(&self.amount.to_be_bytes());
+        out[9..41].copy_from_slice(&self.owner_key);
+        out[41..].copy_from_slice(&self.nullifier_pk);
+        out
+    }
+
+    pub fn decode_compact(
+        plaintext: &[u8],
+        mint: &[u8; FIELD_LEN],
+    ) -> Result<Self, CustomRingError> {
+        if plaintext.len() != COMPACT_AUDIT_RECORD_LEN {
+            return Err(CustomRingError::RingTransactLength);
+        }
+        let mut standard = [0; AUDIT_RECORD_LEN];
+        standard[..41].copy_from_slice(&plaintext[..41]);
+        standard[41..73].copy_from_slice(mint);
+        standard[73..].copy_from_slice(&plaintext[41..]);
+        let record = Self::decode(&standard)?;
+        if record.kind != RecordKind::Ring {
+            return Err(CustomRingError::RingTransactLength);
+        }
+        Ok(record)
     }
 
     pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
@@ -512,6 +590,9 @@ impl InputMap {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuditEvidence {
     None,
+    SingleAssetPayout {
+        mint: [u8; FIELD_LEN],
+    },
     Entry {
         default_input_bits: u64,
         /// One per published input.
@@ -529,6 +610,12 @@ pub struct AuditEnvelope {
 
 impl AuditEnvelope {
     pub fn input_map(&self, layout: AuditStreamLayout) -> Result<InputMap, CustomRingError> {
+        if layout.key.format == DisclosureFormat::SingleAssetPayout
+            && (usize::from(self.real_inputs) != SINGLE_ASSET_PAYOUT_INPUTS
+                || self.address_input_bits != 0)
+        {
+            return Err(CustomRingError::RingTransactLength);
+        }
         InputClassification {
             published_inputs: layout.inputs,
             capacity: layout.key.class(),
@@ -542,6 +629,7 @@ impl AuditEnvelope {
     pub fn encode(&self) -> Vec<u8> {
         let evidence_len = match &self.evidence {
             AuditEvidence::None => 0,
+            AuditEvidence::SingleAssetPayout { .. } => FIELD_LEN,
             AuditEvidence::Entry { inputs, .. } => {
                 DEFAULT_INPUT_BITS_LEN + ENTRY_INPUT_LEN * inputs.len()
             }
@@ -550,6 +638,9 @@ impl AuditEnvelope {
         out.extend_from_slice(&self.tx_viewing_secret);
         out.push(self.real_inputs);
         out.extend_from_slice(&self.address_input_bits.to_be_bytes());
+        if let AuditEvidence::SingleAssetPayout { mint } = &self.evidence {
+            out.extend_from_slice(mint);
+        }
         if let AuditEvidence::Entry {
             default_input_bits,
             inputs,
@@ -570,9 +661,15 @@ impl AuditEnvelope {
             let real_inputs = bytes.byte()?;
             let address_input_bits = u64::from_be_bytes(*bytes.array()?);
             // 2. Entry openings retain absolute published positions, absent capacity slots carry no bytes.
-            let evidence = match layout.key.entry {
-                false => AuditEvidence::None,
-                true => AuditEvidence::Entry {
+            let evidence = match (layout.key.format, layout.key.entry) {
+                (DisclosureFormat::SingleAssetPayout, false) => AuditEvidence::SingleAssetPayout {
+                    mint: *bytes.array()?,
+                },
+                (DisclosureFormat::SingleAssetPayout, true) => {
+                    return Err(CustomRingError::RingTransactLength)
+                }
+                (DisclosureFormat::Standard, false) => AuditEvidence::None,
+                (DisclosureFormat::Standard, true) => AuditEvidence::Entry {
                     default_input_bits: u64::from_be_bytes(*bytes.array()?),
                     inputs: (0..layout.inputs)
                         .map(|_| EntryInput::read(bytes))
@@ -618,20 +715,41 @@ pub struct RecipientBody {
 }
 
 impl RecipientBody {
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encoded_len(&self) -> usize {
         let extended = self.ring_data_hash.is_some() || !self.data.is_empty();
-        let mut out = Vec::with_capacity(RECIPIENT_BODY_LEN + 1 + FIELD_LEN + self.data.len());
-        out.extend_from_slice(&self.blinding);
-        out.extend_from_slice(&self.amount.to_be_bytes());
-        out.extend_from_slice(&self.mint);
-        if extended {
-            out.push(u8::from(self.ring_data_hash.is_some()));
-            if let Some(ring_data_hash) = &self.ring_data_hash {
-                out.extend_from_slice(ring_data_hash);
+        RECIPIENT_BODY_LEN
+            + if extended {
+                RECIPIENT_BODY_LENGTH_LEN
+                    + 1
+                    + self.ring_data_hash.map_or(0, |_| FIELD_LEN)
+                    + self.data.len()
+            } else {
+                0
             }
-            out.extend_from_slice(&self.data);
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
+        let mut out = self.base();
+        if self.encoded_len() > RECIPIENT_BODY_LEN {
+            self.extend_payload(&mut out)?;
         }
-        out
+        Ok(out)
+    }
+
+    pub fn encode_padded(&self, width: usize) -> Result<Vec<u8>, CustomRingError> {
+        if width < self.encoded_len()
+            || width > usize::from(u16::MAX)
+            || (width != RECIPIENT_BODY_LEN
+                && width < RECIPIENT_BODY_LEN + RECIPIENT_BODY_LENGTH_LEN)
+        {
+            return Err(CustomRingError::OutputBodyLength);
+        }
+        let mut out = self.encode()?;
+        if width > RECIPIENT_BODY_LEN && out.len() == RECIPIENT_BODY_LEN {
+            out.extend_from_slice(&0u16.to_be_bytes());
+        }
+        out.resize(width, 0);
+        Ok(out)
     }
 
     pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
@@ -645,13 +763,69 @@ impl RecipientBody {
         if plaintext.len() == RECIPIENT_BODY_LEN {
             return Ok(body);
         }
-        body.ring_data_hash = match bytes.byte()? {
+        let length = usize::from(u16::from_be_bytes(*bytes.array()?));
+        let payload = bytes.take(length)?;
+        if bytes.rest().iter().any(|byte| *byte != 0) {
+            return Err(CustomRingError::RingTransactLength);
+        }
+        if payload.is_empty() {
+            return Ok(body);
+        }
+        let mut payload = Bytes::new(payload, CustomRingError::RingTransactLength);
+        body.ring_data_hash = match payload.byte()? {
             0 => None,
-            1 => Some(*bytes.array()?),
+            1 => Some(*payload.array()?),
             _ => return Err(CustomRingError::RingTransactLength),
         };
-        body.data = bytes.rest().to_vec();
+        body.data = payload.rest().to_vec();
         Ok(body)
+    }
+
+    fn base(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.encoded_len());
+        out.extend_from_slice(&self.blinding);
+        out.extend_from_slice(&self.amount.to_be_bytes());
+        out.extend_from_slice(&self.mint);
+        out
+    }
+
+    fn extend_payload(&self, out: &mut Vec<u8>) -> Result<(), CustomRingError> {
+        let length = 1 + self.ring_data_hash.map_or(0, |_| FIELD_LEN) + self.data.len();
+        let length = u16::try_from(length).map_err(|_| CustomRingError::OutputBodyLength)?;
+        out.extend_from_slice(&length.to_be_bytes());
+        out.push(u8::from(self.ring_data_hash.is_some()));
+        if let Some(ring_data_hash) = self.ring_data_hash {
+            out.extend_from_slice(&ring_data_hash);
+        }
+        out.extend_from_slice(&self.data);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompactRecipientBody {
+    pub blinding: [u8; FIELD_LEN],
+    pub amount: u64,
+    pub asset_id: u64,
+}
+
+impl CompactRecipientBody {
+    pub fn encode(self) -> [u8; COMPACT_RECIPIENT_BODY_LEN] {
+        let mut out = [0; COMPACT_RECIPIENT_BODY_LEN];
+        out[..FIELD_LEN].copy_from_slice(&self.blinding);
+        out[FIELD_LEN..FIELD_LEN + AMOUNT_LEN].copy_from_slice(&self.amount.to_be_bytes());
+        out[FIELD_LEN + AMOUNT_LEN..].copy_from_slice(&self.asset_id.to_be_bytes());
+        out
+    }
+
+    pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
+        read_all(plaintext, |bytes| {
+            Ok(Self {
+                blinding: *bytes.array()?,
+                amount: read_amount(bytes)?,
+                asset_id: read_amount(bytes)?,
+            })
+        })
     }
 }
 

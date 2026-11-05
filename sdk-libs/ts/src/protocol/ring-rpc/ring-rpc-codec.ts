@@ -10,6 +10,7 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { encodeMintPolicy } from "../indexer/indexer-codec.js";
 import type {
   AuthorityTransfer,
+  AuthorityPayment,
   PolicyAuthorityAuth,
   CreateRecordsRegistryRequest,
   GetPendingListApprovalsRequest,
@@ -351,6 +352,7 @@ export function encodeGetPendingListApprovalsRequest(
 ): WireObject {
   return {
     ring: checkedAddress(value.ring, "ring"),
+    registry: checkedAddress(value.registry, "registry"),
     ...(value.cursor === undefined ? {} : { cursor: checkedHash(value.cursor, "cursor") }),
     auth: encodePolicyAuthorityAuth(value.auth),
   };
@@ -360,6 +362,7 @@ export function encodeGetPendingListApprovalsRequest(
 export function encodeRefuseListApprovalRequest(value: RefuseListApprovalRequest): WireObject {
   return {
     ring: checkedAddress(value.ring, "ring"),
+    registry: checkedAddress(value.registry, "registry"),
     updateId: checkedHash(value.updateId, "updateId"),
     auth: encodePolicyAuthorityAuth(value.auth),
   };
@@ -459,13 +462,35 @@ function checkedTxKey(key: Bytes32): Bytes32 {
   return key;
 }
 
+function encodeAuthorityPayment(payment: AuthorityPayment, path: string): WireObject {
+  return {
+    recipient: shieldedAddressText(payment.recipient),
+    mint: checkedAddress(payment.mint, `${path}.mint`),
+    amount: toU64(payment.amount, `${path}.amount`),
+  };
+}
+
 function encodeAuthorityTransfer(value: AuthorityTransfer): WireObject {
   return {
     sources: value.sources.map(shieldedAddressText),
-    payments: value.payments.map((payment, index) => ({
-      recipient: shieldedAddressText(payment.recipient),
-      mint: checkedAddress(payment.mint, `transfer.payments[${index}].mint`),
-      amount: toU64(payment.amount, `transfer.payments[${index}].amount`),
+    payments: value.payments.map((payment, index) =>
+      encodeAuthorityPayment(payment, `transfer.payments[${index}]`),
+    ),
+    exits: value.exits.map((exit, index) =>
+      encodeAuthorityPayment(exit, `transfer.exits[${index}]`),
+    ),
+    withdrawals: value.withdrawals.map((withdrawal, index) => ({
+      recipient: checkedAddress(withdrawal.recipient, `transfer.withdrawals[${index}].recipient`),
+      mint: checkedAddress(withdrawal.mint, `transfer.withdrawals[${index}].mint`),
+      amount: toU64(withdrawal.amount, `transfer.withdrawals[${index}].amount`),
+      ...(withdrawal.tokenProgram === undefined
+        ? {}
+        : {
+            tokenProgram: checkedAddress(
+              withdrawal.tokenProgram,
+              `transfer.withdrawals[${index}].tokenProgram`,
+            ),
+          }),
     })),
   };
 }
