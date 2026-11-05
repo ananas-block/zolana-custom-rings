@@ -16,8 +16,10 @@ export type { RingKeyCircuit } from "../protocol/proof/proving-keys.js";
 export { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
+  ApplyEnrollmentsProofRequest,
   ApplyRecordsProofRequest,
   PrivateApplyProofInput,
+  PrivateOwnerProofInput,
   AuditEnvelopeProofInputs,
   TransferProofRequest,
   DepositProofRequest,
@@ -47,6 +49,7 @@ export type {
   RingSubmissionPending,
   RingSubmissionStatus,
   RingSubmissionTransport,
+  TrackingReader,
   StorageMemberOpenings,
   StorageMemberPage,
   StorageOpeningsRequest,

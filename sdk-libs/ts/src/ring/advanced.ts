@@ -183,23 +183,19 @@ export {
   applyRecordsStatementHash,
   ciphertextDigest,
   recordChain,
+  registerKeyStatementElements,
+  registerKeyStatementHash,
   ringTransferStatement,
   signerBinding,
   tailChain,
   transferStatementElements,
   transferStatementHash,
 } from "../protocol/proof/statement.js";
-export { credentialElements, registerKeyHash } from "../protocol/membership/credential.js";
-export {
-  CredentialRead,
-  CredentialRoots,
-  MAX_CREDENTIAL_READS,
-  type CredentialStateRoot,
-} from "../protocol/codec/credential-read.js";
 export type {
   ApplyRecordsStatement,
   PrivateWrites,
   AuditHead,
+  RegisterKeyStatement,
   SignerBinding,
   TransferBinding,
   TransferFamily,

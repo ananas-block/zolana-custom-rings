@@ -78,7 +78,7 @@ export const PRIVATE_LIST_BITS =
   (1 << (ListId.privateAllow - 1)) |
   (1 << (ListId.privateFrozen - 1));
 
-/** Owners read it at salted keys, its source holds an absence floor. */
+/** Owners read it at salted keys, its source needs a tracking floor. */
 export function isPrivateList(id: ListId): boolean {
   return (PRIVATE_LIST_BITS & listBit(id)) !== 0;
 }
@@ -384,7 +384,7 @@ export interface RecordLists {
   readonly own: bigint;
   /** Read only for a list a curator serves. */
   readonly curator: bigint;
-  /** Read only for an owner's salted list, zero for an owner proven absent. */
+  /** Read only for an owner's salted list, zero with no tracking row. */
   readonly salted?: bigint;
 }
 

@@ -96,8 +96,8 @@ export interface TransferKeyCircuit {
 export interface PolicyPoolCapacity {
   readonly own: number;
   readonly curator: number;
-  /** `K`, credential openings, Rust `RecordPools::credentials`. */
-  readonly credentials: number;
+  /** Tracking openings, Rust `RecordPools::tracking`. */
+  readonly tracking: number;
 }
 
 /** What selects a transfer key, Rust `TransferSpend`. */
@@ -143,7 +143,7 @@ export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCap
   return Object.freeze({
     own: distinct + Math.max(withdrawalAssets, N_PUBLIC_SLOTS),
     curator: distinct + withdrawalAssets,
-    credentials: circuit.owners + circuit.outputs + credentialWithdrawals(circuit),
+    tracking: circuit.owners + circuit.outputs + trackedWithdrawals(circuit),
   });
 }
 
@@ -180,8 +180,8 @@ export function depositKeyCapacity(
 
 /** Rust `SPP_ADDRESSES`, the addresses SPP takes beside its nullifier PDAs. */
 const SPP_ADDRESSES = 4;
-/** Rust `RING_ADDRESSES`, ring program, policy, config, own registry and curator registry. */
-const RING_ADDRESSES = 5;
+/** Rust `RING_ADDRESSES`, ring program, policy, config, own, curator and tracking registries. */
+const RING_ADDRESSES = 6;
 /** Rust `MAX_TRANSACTION_ADDRESSES`, the v1 ceiling. */
 export const MAX_TRANSACTION_ADDRESSES = 64;
 
@@ -191,19 +191,12 @@ export interface TransferAddresses {
   readonly nInputs: number;
   readonly coSigners: number;
   readonly legs: number;
-  /** Distinct credential tree addresses absent from the remaining transaction accounts. */
-  readonly credentialAccounts: number;
 }
 
 /** Rust `TransferAddresses::owner_signers`, a co-signer takes its record too. */
 export function ownerSignerCapacity(addresses: TransferAddresses): number {
   const taken =
-    SPP_ADDRESSES +
-    RING_ADDRESSES +
-    addresses.nInputs +
-    2 * addresses.coSigners +
-    addresses.legs +
-    addresses.credentialAccounts;
+    SPP_ADDRESSES + RING_ADDRESSES + addresses.nInputs + 2 * addresses.coSigners + addresses.legs;
   return Math.max(0, MAX_TRANSACTION_ADDRESSES - taken);
 }
 
@@ -230,7 +223,7 @@ function shapeHolds(entry: TransferShape, spend: TransferSpend): boolean {
     spend.owners <= entry.owners &&
     spend.pools.own <= pools.own &&
     spend.pools.curator <= pools.curator &&
-    spend.pools.credentials <= pools.credentials
+    spend.pools.tracking <= pools.tracking
   );
 }
 
@@ -261,11 +254,7 @@ function publicOwners(circuit: TransferKeyCircuit): number {
     if (circuit.entry && !authorization.enters) continue;
     for (let legs = 0; legs <= circuit.withdrawals; legs += 1) {
       let rows = circuit.owners;
-      while (
-        rows > 0 &&
-        rows >
-          ownerRows(authorization, { nInputs: rows, coSigners: 0, legs, credentialAccounts: 0 })
-      )
+      while (rows > 0 && rows > ownerRows(authorization, { nInputs: rows, coSigners: 0, legs }))
         rows -= 1;
       const legOwners = authorization.hiddenExit ? Math.min(legs, 1) : legs;
       most = Math.max(most, rows + legOwners);
@@ -274,8 +263,8 @@ function publicOwners(circuit: TransferKeyCircuit): number {
   return most;
 }
 
-/** Withdrawal owners a wide key opens a credential for, Go `credentialWithdrawals`. */
-function credentialWithdrawals(circuit: TransferKeyCircuit): number {
+/** Withdrawal owners a wide key opens a tracking row for, Go `trackedWithdrawals`. */
+function trackedWithdrawals(circuit: TransferKeyCircuit): number {
   return circuit.wide ? publicOwners(circuit) - circuit.owners : 0;
 }
 

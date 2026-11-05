@@ -88,7 +88,6 @@ import { expectedDeposit, mismatch } from "../../rpc/relay-message.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
 import { ringIntentMismatch } from "../workflow/selection.js";
 import { depositRootRead, ringRegistrySlots } from "../workflow/ring-reads.js";
-import { boundCredentialRoots, type BoundCredentialRoot } from "../../proof/credential-proof.js";
 import { RingTransactionSubmission, type RingSubmissionAttempt } from "../workflow/submission.js";
 import { assetLabel } from "./transfer.js";
 
@@ -173,8 +172,7 @@ export interface ProvenRingDeposit {
   readonly instruction: Instruction;
   /** The own root a policy ring's proof binds by revision, then any curator root. */
   readonly roots?: readonly BoundRoot[];
-  /** The credential roots the proof binds, reread from their tree accounts. */
-  readonly credentialRoots: readonly BoundCredentialRoot[];
+  readonly trackingRoot: BoundRoot;
 }
 
 /** Rust `DepositRecords`. */
@@ -367,7 +365,7 @@ export class PreparedRingDeposit {
     this.#proved = true;
     try {
       const records = await this.#records(client, context);
-      const { capacity, own, curator, credentials } = records;
+      const { capacity, own, curator, trackingBound } = records;
       const commitment = this.#deposit.ownerUtxoHash;
       const pad = (values: readonly Bytes32[]): readonly Bytes32[] => [
         ...values,
@@ -375,7 +373,7 @@ export class PreparedRingDeposit {
       ];
       const {
         registries,
-        credentials: _credentials,
+        trackingBound: _bound,
         own: _own,
         curator: _curator,
         ...sections
@@ -389,8 +387,7 @@ export class PreparedRingDeposit {
           capsules: [this.#capsule],
           assets: [this.#asset],
           auditorPublicKey: this.#auditor,
-          ringId: ringIdField(this.#ringProgramId),
-          credentials: credentials.inputs.credentialRoots,
+          trackingRoot: trackingBound.root,
           ...(own === undefined
             ? {}
             : {
@@ -426,13 +423,12 @@ export class PreparedRingDeposit {
           keyCapacity: capacity,
           proof,
           registries,
-          credentialRead: credentials.read,
-          credentialTrees: credentials.trees.metas(),
+          trackingRevision: trackingBound.revision,
           ...(own === undefined ? {} : { ownRevision: own.revision }),
           ...(curator === undefined ? {} : { curatorRevision: curator.revision }),
           ...(this.#cosigner === undefined ? {} : { cosigner: this.#cosigner }),
         }),
-        credentialRoots: boundCredentialRoots(credentials),
+        trackingRoot: trackingBound,
         ...(own === undefined
           ? {}
           : { roots: Object.freeze(curator === undefined ? [own] : [own, curator]) }),
@@ -472,8 +468,9 @@ export class PreparedRingDeposit {
             ringProgramId: this.#ringProgramId,
             ringId: ringIdField(this.#ringProgramId),
             config,
-            recipient: this.#recipient.signingPublicKey,
+            owner: this.#ownerPkHash,
             nullifierPk: this.#nullifierPk,
+            viewingU: this.#recipient.viewingPublicKey.u(),
             asset: this.#asset.asset,
             listSalts:
               this.#listSalt === undefined
@@ -646,7 +643,7 @@ async function depositAttempt(
   params: RingDepositParams,
   context: RequestContext | undefined,
 ): Promise<RingSubmissionAttempt> {
-  const { instruction, roots, credentialRoots } = await prepared.prove(params.client, context);
+  const { instruction, roots, trackingRoot } = await prepared.prove(params.client, context);
   const lifetime = await params.client.getLatestBlockhash(context);
   return Object.freeze({
     transaction: await compileUnsignedTransaction({
@@ -659,7 +656,7 @@ async function depositAttempt(
     intentHash: intentHash(prepared.intent()),
     ringInstructionIndex: 0,
     ...(roots === undefined ? {} : { roots }),
-    credentialRoots,
+    trackingRoot,
     ...(prepared.viewingHistory === undefined ? {} : { viewingHistory: prepared.viewingHistory }),
   });
 }

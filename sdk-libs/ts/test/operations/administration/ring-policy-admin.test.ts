@@ -5,7 +5,6 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { RpcAccount } from "@heliuslabs/zolana/client";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import type { RingSourceSlot } from "../../../src/protocol/codec/ring-codecs.js";
 import {
@@ -44,9 +43,7 @@ const RULES: readonly Rule[] = [
 beforeAll(initializePoseidon);
 
 /** The ring's policy reads allow from its own records and block from curator A. */
-async function chain(
-  input: Readonly<{ hasPolicy?: boolean; privateBlock?: boolean; privateRingId?: Bytes32 }> = {},
-) {
+async function chain(input: Readonly<{ hasPolicy?: boolean; privateBlock?: boolean }> = {}) {
   const accounts = new Map<Address, RpcAccount>();
   const sources: RingSourceSlot[] = LIST_IDS.map((listId) =>
     listId === ListId.allow || (input.privateBlock === true && listId === ListId.privateBlock)
@@ -64,6 +61,7 @@ async function chain(
         bump: policyBump,
         roles: { policy: AUTHORITY },
         records: RECORDS,
+        ...(input.privateBlock === true ? { tracking: CURATOR_A } : {}),
         sources,
         ...(input.hasPolicy === false ? {} : { policyHash: new Uint8Array(32).fill(1) as Bytes32 }),
       }),
@@ -72,13 +70,9 @@ async function chain(
   for (const registry of [RECORDS, CURATOR_A])
     accounts.set(
       registry,
-      storageRegistryAccount(
-        [{ hash: new Uint8Array(32).fill(1) as Bytes32, revision: 1n, expiresAt: 0n }],
-        undefined,
-        registry === RECORDS && input.privateRingId !== undefined
-          ? { privateRingId: input.privateRingId }
-          : {},
-      ),
+      storageRegistryAccount([
+        { hash: new Uint8Array(32).fill(1) as Bytes32, revision: 1n, expiresAt: 0n },
+      ]),
     );
   return {
     getAccount: vi.fn(async (account: Address) => accounts.get(account)),
@@ -142,16 +136,16 @@ describe("policy transactions", () => {
     expect(client.getLatestBlockhash).not.toHaveBeenCalled();
   });
 
-  it("points a private list only at a source bound to this ring", async () => {
-    const build = async (privateRingId: Bytes32) =>
+  it("refuses an unpaired source for a private list whatever the stored bits say", async () => {
+    const client = await chain({ privateBlock: true });
+    await expect(
       buildRingUpdatePolicyTransaction({
-        client: await chain({ privateBlock: true, privateRingId }),
+        client,
         ringProgramId: RING,
         authority: AUTHORITY,
         update: { kind: "source", listId: ListId.privateBlock, source: { kind: "own" } },
-      });
-    await expect(build(ringIdField(RING))).resolves.toBeDefined();
-    await expect(build(ringIdField(CURATOR_A))).rejects.toMatchObject({
+      }),
+    ).rejects.toMatchObject({
       causeCode: "RING_POLICY_SOURCE_INVALID",
     });
   });

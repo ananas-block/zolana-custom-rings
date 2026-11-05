@@ -1,5 +1,3 @@
-import { CredentialRead } from "../../src/protocol/codec/credential-read.js";
-import { vectorCredentialRoots } from "../helpers/credential-chain.js";
 import { describe, expect, it } from "vitest";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 
@@ -59,14 +57,7 @@ describe("the merge record vector", () => {
         publishedOwner: zeroMode
           ? (hex(request.ownerPkHash) as Bytes32)
           : (new Uint8Array(32) as Bytes32),
-        credentials: vectorCredentialRoots(
-          [
-            request.credentialOwner,
-            request.stateRoot.treeId.toString(16).padStart(64, "0"),
-            request.stateRoot.root,
-          ],
-          true,
-        ),
+        trackingRoot: hex(request.trackingRoot) as Bytes32,
       };
       expect(mergePublicInputElements(input).map((element) => `0x${bytesToHex(element)}`)).toEqual(
         testCase.elements,
@@ -91,7 +82,7 @@ describe("the merge record vector", () => {
 
 describe("the tag 57 request", () => {
   const request = {
-    credentialRead: CredentialRead.empty(),
+    trackingRevision: 3n,
     outputRingDataHash: new Uint8Array(32).fill(8) as Bytes32,
     authority: MergeRingAuthority.ownerSigned,
     sealed: {
@@ -108,31 +99,7 @@ describe("the tag 57 request", () => {
 
   it("refuses an authority byte off the two", () => {
     const bytes = encodeRingMergeRequest(request);
-    // The empty state read is its zero count byte, the output ring data hash follows.
-    bytes[33] = 2;
+    bytes[40] = 2;
     expect(() => decodeRingMergeRequest(bytes)).toThrow(RingError);
-  });
-
-  it("reads one state root under the ring authority", () => {
-    const ring = {
-      ...request,
-      authority: MergeRingAuthority.ring,
-      credentialRead: CredentialRead.state(5),
-    };
-    const bytes = encodeRingMergeRequest(ring);
-    expect([...bytes.subarray(0, 3)]).toEqual([1, 5, 0]);
-    expect(decodeRingMergeRequest(bytes)).toEqual(ring);
-  });
-
-  it("refuses a state root under the owner and none under the ring", () => {
-    expect(() =>
-      encodeRingMergeRequest({ ...request, credentialRead: CredentialRead.state(5) }),
-    ).toThrow(RingError);
-    expect(() =>
-      encodeRingMergeRequest({ ...request, authority: MergeRingAuthority.ring }),
-    ).toThrow(RingError);
-    const owner = encodeRingMergeRequest(request);
-    owner[33] = MergeRingAuthority.ring;
-    expect(() => decodeRingMergeRequest(owner)).toThrow(RingError);
   });
 });

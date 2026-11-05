@@ -1,11 +1,9 @@
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
-import { vectorCredentialRoots } from "../../helpers/credential-chain.js";
 import {
-  credentialElements,
-  registerKeyHash,
-  type AuditCredential,
-} from "../../../src/protocol/membership/credential.js";
-import { RingDomain } from "../../../src/crypto/derivation/ring-domain.js";
+  TRACKING_EMPTY_ROOT,
+  trackingEntryChained,
+  trackingEntryHash,
+} from "../../../src/protocol/membership/tracking.js";
 import { describe, expect, it } from "vitest";
 
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
@@ -39,6 +37,10 @@ import {
 import {
   applyRecordsStatementElements,
   applyRecordsStatementHash,
+  registerKeyStatementElements,
+  registerKeyStatementHash,
+  applyEnrollmentsStatementElements,
+  applyEnrollmentsStatementHash,
   ciphertextDigest,
   recordChain,
   tailChain,
@@ -260,7 +262,7 @@ describe("ring-statements.json", () => {
       policyHash: field(vector.policy_hash),
       ownRoot: field(vector.own_root),
       curatorRoot: field(vector.curator_root),
-      credentials: vectorCredentialRoots(vector.credential_fields),
+      trackingRoot: field(vector.tracking_root),
     },
     publicAssets: vector.public_assets.map(field),
     publicAmounts: vector.public_amounts.map(field),
@@ -314,9 +316,8 @@ describe("ring-statements.json", () => {
       count: BigInt(apply.count),
       restrictive: apply.restrictive,
       private: {
-        credentialWrites: apply.credential_writes,
-        privateRingId: field(apply.private_ring_id),
-        credentials: vectorCredentialRoots(apply.credential_fields),
+        privateWrites: apply.private_writes,
+        trackingRoot: field(apply.tracking_root),
       },
     };
     expect(hexes(applyRecordsStatementElements(applyStatement))).toEqual(apply.elements);
@@ -335,7 +336,7 @@ describe("ring-statements.json", () => {
     expect(hexes(applyRecordsStatementElements(publicStatement))).toEqual(pub.elements);
     expect(hex(applyRecordsStatementHash(publicStatement))).toBe(pub.public_input_hash);
     const register = statements.register_key;
-    const registerStatement: AuditCredential = {
+    const registerStatement = {
       ringId: field(register.ring_id),
       member: field(register.member),
       nullifierPk: field(register.nullifier_pk),
@@ -344,10 +345,38 @@ describe("ring-statements.json", () => {
       ephU: field(register.eph_u),
       ciphertext: bytes<Bytes64>(register.ciphertext, 64),
     };
-    expect(hexes(credentialElements(registerStatement, RingDomain.registerKey))).toEqual(
-      register.elements,
-    );
-    expect(hex(registerKeyHash(registerStatement))).toBe(register.public_input_hash);
+    expect(hexes(registerKeyStatementElements(registerStatement))).toEqual(register.elements);
+    expect(hex(registerKeyStatementHash(registerStatement))).toBe(register.public_input_hash);
+  });
+
+  it("rebuilds the apply enrollments statement, its domain apart from apply records", () => {
+    const apply = statements.apply_enrollments;
+    const statement = {
+      oldRoot: field(apply.old_root),
+      newRoot: field(apply.new_root),
+      oldNextIndex: BigInt(apply.old_next_index),
+      newNextIndex: BigInt(apply.new_next_index),
+      chainStart: field(apply.chain_start),
+      chainEnd: field(apply.chain_end),
+      count: BigInt(apply.count),
+    };
+    expect(hexes(applyEnrollmentsStatementElements(statement))).toEqual(apply.elements);
+    expect(hex(applyEnrollmentsStatementHash(statement))).toBe(apply.public_input_hash);
+  });
+
+  it("hashes a tracking entry and chains it as the program does", () => {
+    const tracking = statements.tracking;
+    const entry = {
+      member: field(tracking.member),
+      nullifierPk: field(tracking.nullifier_pk),
+      ctHash: field(tracking.ct_hash),
+      viewingU: field(tracking.viewing_u),
+      revision: BigInt(tracking.revision),
+      listTag: field(tracking.list_tag),
+    };
+    expect(hex(trackingEntryHash(entry))).toBe(tracking.entry_hash);
+    expect(hex(trackingEntryChained(ZERO_32, entry))).toBe(tracking.chain_from_zero);
+    expect(hex(TRACKING_EMPTY_ROOT)).toBe(tracking.empty_root);
   });
 
   it("hashes the deposit context of its SPP data", () => {
@@ -372,7 +401,7 @@ describe("transfer key selection", () => {
     spendsDefaultRing: false,
     legs: 0,
     owners: 1,
-    pools: { own: 0, curator: 0, credentials: 0 },
+    pools: { own: 0, curator: 0, tracking: 0 },
     wide: false,
   } as const;
 
@@ -387,7 +416,7 @@ describe("transfer key selection", () => {
     const narrow = ringTransferCircuit(spend);
     if (narrow === undefined) throw new Error("no narrow key");
     const width = transferPoolCapacity(narrow).own;
-    const own = (records: number) => ({ own: records, curator: 0, credentials: 0 });
+    const own = (records: number) => ({ own: records, curator: 0, tracking: 0 });
     expect(fittedSpend({ ...spend, pools: own(width) }).wide).toBe(false);
     expect(ringTransferCircuit(fittedSpend({ ...spend, pools: own(width + 1) }))?.owners).toBe(24);
   });
@@ -397,7 +426,7 @@ describe("transfer key selection", () => {
     const opened = (unmatched: number) => {
       const own = 2 + 1 + unmatched;
       return ringTransferCircuit(
-        fittedSpend({ ...spend, pools: { own, curator: own, credentials: 0 } }),
+        fittedSpend({ ...spend, pools: { own, curator: own, tracking: 0 } }),
       );
     };
     expect(opened(12)).toMatchObject({ outputs: 2, class: 24, wide: false });

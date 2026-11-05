@@ -646,12 +646,10 @@ describe("anonymous delivery slots", () => {
     const request = checkTransferProof(fixture, data);
     const owner = sender.keypair.shieldedAddress().signingPublicKey;
     expect(request.outputs[0]?.ownerKey).toEqual(owner.confidentialViewTag());
-    // The proof holds the change key to the sender's credential.
-    expect(itemAt(request.credentialOpenings, request.outputEntries[0] ?? -1)).toMatchObject({
-      present: true,
-      member: owner.ownerProofInputHash(),
-      nullifierPk: sender.keypair.shieldedAddress().nullifierPublicKey,
-    });
+    // The proof holds the change key to the sender's tracking row.
+    expect(itemAt(request.trackingPool.subjects, request.outputEntries[0] ?? -1).member).toEqual(
+      owner.ownerProofInputHash(),
+    );
   });
 
   it("builds a frame with no change output when no padding slot is left", async () => {
@@ -1108,23 +1106,19 @@ describe("anonymous ring exits and entries", () => {
     });
   });
 
-  it("refuses a recipient key other than its credential's", async () => {
+  it("refuses a recipient viewing key off its record", async () => {
     const fixture = await anonymousRing();
     const sender = anonymousSender();
     const bob = ShieldedKeypair.generate();
+    const to = await addressOf(fixture, bob);
     const enrolledElsewhere = bob.shieldedAddress();
     fixture.enroll(
       ShieldedAddress.fromPublicKeys(
         enrolledElsewhere.signingPublicKey,
-        ShieldedKeypair.generate().shieldedAddress().nullifierPublicKey,
-        enrolledElsewhere.viewingPublicKey,
+        enrolledElsewhere.nullifierPublicKey,
+        ShieldedKeypair.generate().viewingPublicKey(),
       ),
     );
-    const to = new RingAddress({
-      recipient: bob.shieldedAddress(),
-      ringProgramId: fixture.ringProgramId,
-      listSalt: new Uint8Array(32).fill(1) as Bytes32,
-    });
     await expect(
       rail({ fixture, sender, transfer: spend(fixture, sender) })
         .withPayment({
@@ -1134,7 +1128,7 @@ describe("anonymous ring exits and entries", () => {
           reply: null,
         })
         .prove(fixture.client),
-    ).rejects.toThrow(ringError("RING_ADDRESS_MISMATCH", { field: "nullifierPk" }));
+    ).rejects.toThrow(ringError("RING_RECIPIENT_VIEWING_KEY_STALE"));
     noProofs(fixture);
   });
 

@@ -1,42 +1,38 @@
 /**
- * A wallet's viewing key rotation through zolana's `UserRecord`, Rust
- * `ViewingRotation` and `UpdateViewingKey`.
+ * A wallet's viewing key rotation through its tracking row.
  *
- * Read before `rpc/viewing-key-resolver.ts`, whose read confirms the record
- * once the owner's update lands. Read after `LocalRingKeys` and
- * `ViewingHistory`, the two halves of a wallet a rotation moves together.
+ * Read after `operations/management/enrollment.ts`, whose `Enroll` without a
+ * proof carries the new key. Read after `LocalRingKeys` and `ViewingHistory`,
+ * the two halves of a wallet a rotation moves together.
  *
  * A rotation runs in three steps. `rotateViewingKey` is local, and the wallet
  * stores the new viewing secret and the rotated history before the owner signs
- * what `updateViewingKey` builds. A record naming a key the wallet lost routes
+ * what `updateViewingKey` builds. A row naming a key the wallet lost routes
  * every later payment to notes nobody opens. `confirmViewingKey` reads the
- * record back once the update lands. The record holds only the current key, the
- * history keeps every earlier one, and notes sealed to an earlier key open
- * through it.
+ * authorization back once an `ApplyEnrollments` folds the new revision into
+ * the tree. The row holds only the current key, the history keeps every
+ * earlier one, and notes sealed to an earlier key open through it.
  */
-import type { Address } from "@solana/kit";
+import type { Address, Instruction } from "@solana/kit";
 
-import type { BlockhashProvider, ChainReader } from "@heliuslabs/zolana/client";
-import type { RequestContext, Transaction } from "@heliuslabs/zolana/interface";
+import { equalBytes, type SignerAccount } from "@heliuslabs/zolana/internal";
+import type { RequestContext } from "@heliuslabs/zolana/interface";
 import type { ViewingKey } from "@heliuslabs/zolana/keypair";
-import { buildKeyUpdateTransaction } from "@heliuslabs/zolana/wallet";
 
 import { RingError } from "../../protocol/error.js";
 import {
-  resolveViewingKey,
-  type ResolvedViewingKey,
-  type ViewingKeyClient,
-} from "../../rpc/viewing-key-resolver.js";
+  isEnrollmentPending,
+  type TrackingAuthorization,
+} from "../../protocol/membership/tracking.js";
 import type { LocalRingKeys, RingKeys } from "../../state/ring-keys.js";
 import type { ViewingHistory } from "../../state/viewing-history.js";
+import { enrollInstruction, enrollmentState, type EnrollmentReadClient } from "./enrollment.js";
 
 /** `rotateViewingKey` moves both to one current key. */
 export interface ViewingRotation {
   readonly keys: LocalRingKeys;
   readonly history: ViewingHistory;
 }
-
-export type ViewingKeyUpdateClient = Pick<ChainReader, "getAccount"> & BlockhashProvider;
 
 /** `next` becomes current in both, every earlier key stays held and scanned. */
 export function rotateViewingKey(
@@ -46,51 +42,76 @@ export function rotateViewingKey(
   return Object.freeze({ keys: input.keys.rotate(input.next), history });
 }
 
-/** The unsigned `UPDATE_KEYS` of the holder's current key, `undefined` when the record already holds it. */
+/** The proofless `Enroll` of the holder's current key, `undefined` when the authorization already holds it. */
 export async function updateViewingKey(
   input: Readonly<{
-    client: ViewingKeyUpdateClient;
-    owner: Address;
+    client: EnrollmentReadClient;
+    payer: SignerAccount;
+    owner: SignerAccount;
+    trackingRegistry: Address;
     keys: RingKeys;
     history: ViewingHistory;
-    /** Pays the fee, the owner when absent. */
-    payer?: Address;
   }>,
   context?: RequestContext,
-): Promise<Transaction | undefined> {
+): Promise<Instruction | undefined> {
   // 1. No sync reads a key the history lacks. Publishing one routes payments
   // to notes the wallet never finds.
-  const address = input.keys.address();
-  if (!input.history.current().viewingPublicKey.equals(address.viewingPublicKey))
+  const viewingU = input.keys.address().viewingPublicKey.u();
+  if (!equalBytes(input.history.current().viewingPublicKey.u(), viewingU))
     throw new RingError("RING_VIEWING_HISTORY_NOT_CURRENT");
-  // 2. zolana refuses a missing record and a changed nullifier key, and the
-  // program refuses the changed key again.
-  return buildKeyUpdateTransaction(
+  // 2. A rotation repeats the final seal of the first enrollment, the program
+  // refuses any other and raises the revision. A holder of another nullifier
+  // key would publish a viewing key the enrolled row does not belong to.
+  const stored = await storedAuthorization(input, context);
+  if (!equalBytes(stored.nullifierPk, input.keys.address().nullifierPublicKey))
+    throw new RingError("RING_ENROLLMENT_KEY_MISMATCH");
+  if (equalBytes(stored.viewingU, viewingU)) return undefined;
+  return enrollInstruction(
     {
-      client: input.client,
+      payer: input.payer,
       owner: input.owner,
-      address,
-      ...(input.payer === undefined ? {} : { payer: input.payer }),
+      trackingRegistry: input.trackingRegistry,
+      seal: stored,
+      viewingU,
     },
+    input.client,
     context,
   );
 }
 
-/** Resolves once the record holds the holder's current key, any other key refuses. */
+/** Resolves once the applied row holds the holder's current key, a pending or older one refuses. */
 export async function confirmViewingKey(
-  input: Readonly<{ client: ViewingKeyClient; owner: Address; keys: RingKeys }>,
+  input: Readonly<{
+    client: EnrollmentReadClient;
+    owner: Address;
+    trackingRegistry: Address;
+    keys: RingKeys;
+  }>,
   context?: RequestContext,
-): Promise<ResolvedViewingKey> {
-  const address = input.keys.address();
-  const resolved = await resolveViewingKey(
-    {
-      client: input.client,
-      owner: input.owner,
-      nullifierPublicKey: address.nullifierPublicKey,
-    },
+): Promise<TrackingAuthorization> {
+  const stored = await storedAuthorization(input, context);
+  if (
+    isEnrollmentPending(stored) ||
+    !equalBytes(stored.viewingU, input.keys.address().viewingPublicKey.u())
+  )
+    throw new RingError("RING_VIEWING_KEY_NOT_PUBLISHED", { details: { owner: input.owner } });
+  return stored;
+}
+
+async function storedAuthorization(
+  input: Readonly<{
+    client: EnrollmentReadClient;
+    owner: Address | SignerAccount;
+    trackingRegistry: Address;
+  }>,
+  context?: RequestContext,
+): Promise<TrackingAuthorization> {
+  const owner = typeof input.owner === "string" ? input.owner : input.owner.address;
+  const stored = await enrollmentState(
+    { trackingRegistry: input.trackingRegistry, owner },
+    input.client,
     context,
   );
-  if (resolved === undefined || !resolved.viewingPublicKey.equals(address.viewingPublicKey))
-    throw new RingError("RING_VIEWING_KEY_NOT_PUBLISHED", { details: { owner: input.owner } });
-  return resolved;
+  if (stored === undefined) throw new RingError("RING_KEY_NOT_REGISTERED", { details: { owner } });
+  return stored;
 }

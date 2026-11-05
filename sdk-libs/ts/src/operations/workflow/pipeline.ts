@@ -111,15 +111,9 @@ import {
   interfaceTransferOf,
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
-import {
-  TransactionFit,
-  type CredentialTrees,
-  type FitBudget,
-  type FitSigners,
-} from "./address-ceiling.js";
+import { TransactionFit, type FitBudget, type FitSigners } from "./address-ceiling.js";
 import { checkTransferFits } from "./compile.js";
 import { ringRegistrySlots, transferRootRead } from "./ring-reads.js";
-import { boundCredentialRoots, type BoundCredentialRoot } from "../../proof/credential-proof.js";
 import {
   NO_RECORD_POOLS,
   planTransfer,
@@ -184,22 +178,20 @@ export interface RingTransactAccounts {
   readonly outputTree: Address;
   readonly ownerSigners: readonly Address[];
   readonly withdrawal?: TransactWithdrawal;
-  /** Read only, the policy registries right after the ring account. */
+  /** Read only, right after the ring account, tracking last. */
   readonly registries: readonly Address[];
   readonly coSigners: readonly Address[];
   readonly delegate?: Address;
   /** A cached input reads through it, last in SPP's list. */
   readonly cache?: TransactCacheAccounts;
-  /** Tree 0 then the state trees, after the registries, absent before the credential read. */
-  readonly credentialTrees?: CredentialTrees;
 }
 
 /** Every value a transfer's proofs bind that the chain can move before it lands, Rust `BoundState`. */
 export interface RingBoundState {
   /** The live roots the proofs bind by revision, the own root first. */
   readonly roots?: readonly BoundRoot[];
-  /** Reread from SPP tree accounts at the indexes the frame names. */
-  readonly credentialRoots?: readonly BoundCredentialRoot[];
+  /** Read from the tracking registry, a separate account layout. */
+  readonly trackingRoot?: BoundRoot;
   readonly policy?: BoundPolicy;
 }
 
@@ -213,7 +205,7 @@ export class ProvenRingTransfer {
   readonly coSigners: readonly Address[];
   /** The live roots the proofs bind, a submission proves again once one leaves its registry. */
   readonly roots: readonly BoundRoot[];
-  readonly credentialRoots: readonly BoundCredentialRoot[];
+  readonly trackingRoot: BoundRoot;
   readonly policy?: BoundPolicy;
   /** What opens the frame's digest, handed to a co-signer under `CoSignerRule` exact. */
   readonly approvalOpening?: ApprovalOpening;
@@ -226,7 +218,7 @@ export class ProvenRingTransfer {
     this.outputs = fields.outputs;
     this.coSigners = fields.coSigners;
     this.roots = fields.roots;
-    this.credentialRoots = fields.credentialRoots;
+    this.trackingRoot = fields.trackingRoot;
     if (fields.policy !== undefined) this.policy = fields.policy;
     if (fields.approvalOpening !== undefined) this.approvalOpening = fields.approvalOpening;
     Object.freeze(this);
@@ -386,9 +378,8 @@ async function selectStagedKey(input: StagedTransferInput, context: RequestConte
   const demand = await policyDemand({ ...demandInput, rows: liveRows }, context);
   const shape = staged.proofInputs.checkShape();
   const addresses = { nInputs: shape.inputs, legs: transfers.length };
-  // A lower bound ahead of the credential read, the final check counts the credential trees.
   checkOwnerSignerBound(
-    { ...addresses, coSigners: input.coSigners?.length ?? 0, credentialAccounts: 0 },
+    { ...addresses, coSigners: input.coSigners?.length ?? 0 },
     staged.ownerSigners.length,
   );
   const plan = planTransfer(stagedPlanFrame(input), demand.pools);
@@ -558,16 +549,9 @@ async function assembleStagedTransfer<T>(
         context,
       )
     ).map(({ signer }) => signer);
-    // The final co-signer count and the credential trees the read named move the account bound.
+    // The final co-signer count moves the account bound.
     checkOwnerSignerBound(
-      {
-        ...addresses,
-        coSigners: coSigners.length,
-        credentialAccounts: policy.credentials.trees.addedAccounts(
-          proofInputs.inputTreeIds().map(treeAddress),
-          treeAddress(proofInputs.outputTreeId),
-        ),
-      },
+      { ...addresses, coSigners: coSigners.length },
       staged.ownerSigners.length,
     );
     const partyIdentities =
@@ -588,7 +572,6 @@ async function assembleStagedTransfer<T>(
       ownerSigners: staged.ownerSigners,
       ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
       registries: ringRegistrySlots(config, transferRootRead(config, delegate)),
-      credentialTrees: policy.credentials.trees,
       coSigners,
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
       ...(proofInputs.cacheAccounts.read === undefined
@@ -738,7 +721,7 @@ async function proveAssembled(
     outputs: proofInputs.outputs,
     coSigners,
     roots: boundRoots(policy),
-    credentialRoots: boundCredentialRoots(policy.credentials),
+    trackingRoot: policy.trackingBound,
     ...(screened(policy)
       ? { policy: Object.freeze({ ringProgramId, policyHash: policy.policyHash }) }
       : {}),
@@ -777,7 +760,6 @@ export async function ringTransactInstruction(
   const prefix: AccountMeta[] = [
     meta(ring, false, false),
     ...accounts.registries.map((registry) => meta(registry, false, false)),
-    ...(accounts.credentialTrees?.metas() ?? []),
   ];
   for (const coSigner of accounts.coSigners)
     prefix.push(...(await ringCoSignerMetas(ringProgramId, coSigner)));
@@ -862,7 +844,7 @@ function previewData(
     nIn: input.shape.inputs,
     nOut: input.shape.outputs,
     proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-    credentialRead: policy.credentials.read,
+    trackingRevision: policy.trackingBound.revision,
     ...(policy.own === undefined ? {} : { ownRevision: policy.own.revision }),
     ...(policySection === undefined ? {} : { policy: policySection }),
     splWithdrawalOwners: policy.own === undefined ? [] : policy.splWithdrawalOwners,
@@ -1054,7 +1036,7 @@ function checkMembership(ringProgramId: Address, proofInputs: SppProofInputs): v
 export function boundState(proven: ProvenRingTransfer): RingBoundState {
   return Object.freeze({
     ...(proven.roots.length === 0 ? {} : { roots: proven.roots }),
-    credentialRoots: proven.credentialRoots,
+    trackingRoot: proven.trackingRoot,
     ...(proven.policy === undefined ? {} : { policy: proven.policy }),
   });
 }

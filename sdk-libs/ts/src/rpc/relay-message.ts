@@ -52,8 +52,9 @@ import {
 } from "../protocol/membership/approval-totals.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
 import { signerDataCountAt } from "../protocol/membership/signer-data-counts.js";
-import { ringAuthAddress, ringPolicyAddress } from "../protocol/pda/index.js";
+import { ringAuthAddress, ringPolicyAddress, STORAGE_PROGRAM_ID } from "../protocol/pda/index.js";
 import {
+  ENROLL_COMPUTE_UNITS,
   enrollRequestDigest,
   relayEnrollInstruction,
   type RelayEnrollInputs,
@@ -63,7 +64,7 @@ import type {
   RelayQuote,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 import {
-  depositSppData,
+  AUDITED_DEPOSIT_PREFIX_LENGTH,
   ringDepositSpp,
   type RingDepositSpp,
 } from "../protocol/transaction/deposit-instruction.js";
@@ -771,8 +772,11 @@ function checkDepositSnapshot(
   };
   const instruction = open(envelope, message);
   const { data, accounts } = instruction;
-  const forwarded = depositSppData(data);
-  if (forwarded === undefined || !equalBytes(forwarded, expected.spp.data)) throw mismatch("Data");
+  if (
+    data[0] !== RingInstructionTag.deposit ||
+    !equalBytes(data.subarray(AUDITED_DEPOSIT_PREFIX_LENGTH), expected.spp.data)
+  )
+    throw mismatch("Data");
   const split = accounts.length - expected.spp.accounts.length;
   if (
     split < 0 ||
@@ -802,9 +806,9 @@ export async function expectedEnroll(
 
 function checkEnrollSnapshot(expected: ExpectedEnroll, message: Uint8Array): VerifiedRelayMessage {
   const envelope: Envelope = {
-    program: expected.inputs.ringProgramId,
+    program: STORAGE_PROGRAM_ID,
     policy: expected.policy,
-    units: ringComputeUnitLimit(RingInstructionTag.enroll),
+    units: ENROLL_COMPUTE_UNITS,
     feePayer: expected.feePayer,
     signer: expected.inputs.owner,
     setup: [],

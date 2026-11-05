@@ -19,8 +19,13 @@ import {
   selectRingInputs,
 } from "../../../src/operations/payments/transfer.js";
 import { ringTransferClient } from "../../helpers/clients.js";
-import { CredentialChain } from "../../helpers/credential-chain.js";
-import { ringPolicyData, sppRingRegistration } from "../../helpers/ring-accounts.js";
+import { trackingTree } from "../../helpers/member-registry.js";
+import {
+  ringPolicyData,
+  sppRingRegistration,
+  trackingRegistryAccount,
+} from "../../helpers/ring-accounts.js";
+import { TRACKING_REVISION, trackingEntry } from "../../helpers/ring-pipeline.js";
 import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
@@ -29,6 +34,7 @@ const TREE = treeAddress(0);
 const PAYER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
 const RECIPIENT = address("8qbHbw2BbbTHBW1sbeqakYXV9q2RZ1R6MUi6nEZa6wJk");
 const RING = address("9EwHno8C1T1vVGjasGnDH1GubiEu8qbgLX9qDjBshFhz");
+const TRACKING = address("Cura111111111111111111111111111111111111111");
 
 function filled(value: number): Bytes32 {
   return new Uint8Array(32).fill(value) as Bytes32;
@@ -349,20 +355,28 @@ describe("ring approval summary", () => {
     enrolled: readonly ShieldedAddress[],
     mode: RingMode = "confidential",
   ) {
-    const chain = await CredentialChain.enrolled(RING, enrolled);
+    const tracked = trackingTree(enrolled.map((owner) => trackingEntry(owner)));
     const [ring, bump] = await ringPolicyPda(RING);
     const [ringAuth, registration] = await sppRingRegistration({
       authority: PAYER,
       ringProgramId: RING,
     });
     return ringTransferClient({
-      ...chain.reader(),
+      tree: TREE,
       getAccount: async (address: Address) =>
         address === ring
-          ? { owner: RING, lamports: 1n, data: ringPolicyData({ bump, mode }) }
+          ? { owner: RING, lamports: 1n, data: ringPolicyData({ bump, mode, tracking: TRACKING }) }
           : address === ringAuth
             ? registration
-            : chain.account(address),
+            : address === TRACKING
+              ? trackingRegistryAccount({
+                  root: tracked.root,
+                  revision: TRACKING_REVISION,
+                  nextIndex: tracked.nextIndex,
+                  auditorPubkey: new Uint8Array(33),
+                })
+              : undefined,
+      getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     });
   }
   /** An entry of 25 from one default note of 40, the approval stops it before the prover. */

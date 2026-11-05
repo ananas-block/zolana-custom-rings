@@ -152,12 +152,12 @@ export const RING_ERROR_CODES = [
   "RING_ENROLLMENT_KEY_MISMATCH",
   "RING_ENROLLMENT_ZERO_KEY",
   "RING_ENROLLMENT_NONE_NAMED",
+  // Reserved, nothing raises these and the snapshot keeps later codes in place.
   "RING_ENROLLMENT_CREDENTIAL_MISMATCH",
   "RING_ALREADY_ENROLLED",
   "RING_ENROLLMENT_STATUS_UNKNOWN",
   "RING_RELAY_NEEDS_USER_RECORD",
   "RING_ENROLLMENT_ADDRESS_PROOF",
-  // Reserved, nothing raises it and the snapshot keeps later codes in place.
   "RING_TRACKING_INVALID",
   "RING_RECIPIENT_ENROLLED",
   "RING_RECIPIENT_NOT_ENROLLED",
@@ -192,9 +192,11 @@ export const RING_ERROR_CODES = [
   // Reserved, nothing raises it and the snapshot keeps later codes in place.
   "RING_FRAME_BUFFER_CLOSE",
   "RING_HELD_KEY_NOT_IN_HISTORY",
+  // Reserved, nothing raises it and the snapshot keeps later codes in place.
   "RING_FIT_CREDENTIAL_CAPACITY",
   "RING_VIEWING_HISTORY_NOT_CURRENT",
   "RING_VIEWING_KEY_NOT_PUBLISHED",
+  // Reserved, nothing raises these and the snapshot keeps later codes in place.
   "RING_CREDENTIAL_INVALID",
   "RING_ABSENCE_ROOT_BELOW_FLOOR",
   "RING_CREDENTIAL_MISMATCH",
@@ -299,16 +301,11 @@ export const RingProgramError = Object.freeze({
   unboundRegistry: 8480,
   rootNotServed: 8481,
   missingRegistry: 8482,
+  invalidTrackingRegistry: 8502,
+  trackingRootBelowFloor: 8503,
+  saltedSourceOtherTracking: 8504,
   invalidSignerDataCounts: 8527,
   tooManyAnonymousParties: 8528,
-  absenceRootBelowFloor: 8535,
-  invalidAddressCheckpoint: 8534,
-  invalidAddressTree: 8531,
-  invalidCredentialPda: 8529,
-  invalidCredentialRead: 8532,
-  invalidCredentialRoots: 8533,
-  invalidEnrollmentAccounts: 8530,
-  saltedSourceOtherRing: 8536,
   tooManyDepositsForKey: 8537,
 } as const);
 
@@ -332,14 +329,19 @@ export const StorageProgramError = Object.freeze({
   alreadyInitialized: 9014,
   revisionOverflow: 9015,
   unsupportedBatch: 9016,
+  nonCanonicalViewingKey: 9021,
+  invalidTrackingRegistry: 9022,
+  invalidTrackingAuthorization: 9023,
+  enrollmentAlreadyApplied: 9024,
+  enrollmentKeyFinal: 9025,
   zeroNullifierKey: 9028,
+  enrollmentProofShape: 9029,
+  noEnrollmentsNamed: 9030,
   invalidOwnerGrant: 9031,
   invalidReaderKey: 9032,
   invalidAuditorKey: 9033,
   invalidAssetWrite: 9034,
-  invalidCredentialRead: 9036,
-  invalidPrivateRing: 9037,
-  privateWriteWithoutRing: 9035,
+  privateWriteWithoutTracking: 9035,
 } as const);
 
 export class RingError extends Error {

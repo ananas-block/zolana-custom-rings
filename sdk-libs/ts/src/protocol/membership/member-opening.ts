@@ -281,13 +281,13 @@ export function replayRecordWrites(
 }
 
 /**
- * Rust `ApplyProofInputs::statement` under `RecordCredentials::Public`, an update writing no
- * private list. A private write proves its owner's credential, the SDK builds none yet.
+ * Rust `ApplyProofInputs::statement` under `ApplyMode::Public`, an update writing no private list.
+ * A private write proves its owner's tracking row, the SDK builds none yet.
  */
 export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsStatement {
   if (inputs.writes.some((write) => (write.entry.mask & BigInt(PRIVATE_LIST_BITS)) !== 0n))
     throw new RingError("RING_STORAGE_WRITE_INVALID", {
-      details: { reason: "InvalidCredentialRead" },
+      details: { reason: "PrivateWriteWithoutTracking" },
     });
   // A count no apply key holds has no statement.
   applyKeyWidth(inputs.writes.length);

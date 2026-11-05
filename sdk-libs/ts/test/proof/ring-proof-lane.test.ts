@@ -1,3 +1,4 @@
+import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -57,14 +58,11 @@ import { transferPoolCapacity } from "../../src/protocol/proof/transfer-shapes.j
 import { ringStreamLayout } from "../../src/protocol/transaction/transact.js";
 import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
-import type { AuditCredential } from "../../src/protocol/membership/credential.js";
-import { CredentialRoots } from "../../src/protocol/codec/credential-read.js";
-import { vectorCredentialRoots } from "../helpers/credential-chain.js";
+import type { TrackingRecord } from "../../src/protocol/membership/tracking.js";
 import {
   ringProofRequestBody,
-  type CredentialLeafProofInput,
-  type CredentialOpeningProofInput,
   type TransferProofRequest,
+  type MergeProofRequest,
 } from "../../src/rpc/prover/ring.js";
 
 await initializePoseidon();
@@ -89,10 +87,10 @@ const SPEND = {
   spendsDefaultRing: false,
   legs: 0,
   owners: 2,
-  pools: { own: 0, curator: 0, credentials: 0 },
+  pools: { own: 0, curator: 0, tracking: 0 },
   wide: false,
 } as const;
-const ADDRESSES = { nInputs: 2, coSigners: 0, legs: 0, credentialAccounts: 0 };
+const ADDRESSES = { nInputs: 2, coSigners: 0, legs: 0 };
 
 describe("selectTransferKey", () => {
   it("takes the narrowest rows and the wide key past them", () => {
@@ -127,7 +125,7 @@ describe("selectTransferKey", () => {
       wide: true,
     });
     expect(widest.wideOwners).toBe(true);
-    expect(transferPoolCapacity(widest.circuit)).toEqual({ own: 41, curator: 41, credentials: 18 });
+    expect(transferPoolCapacity(widest.circuit)).toEqual({ own: 41, curator: 41, tracking: 18 });
     expect(select(49, 4, 12).circuit).toEqual(widest.circuit);
     expect(refusal(() => select(25, 5)).code).toBe("RING_CATALOG_KEY_MISSING");
     expect(refusal(() => select(25, 0, 13)).code).toBe("RING_TOO_MANY_OWNERS");
@@ -153,7 +151,7 @@ describe("selectTransferKey", () => {
     expect(entered(2, 8, 4, 2)).toMatchObject({ class: 2, outputs: 8, entry: true });
     const wide = entered(9, 2, 0, 1);
     expect(wide).toMatchObject({ class: 24, outputs: 2, withdrawals: 32, owners: 12, entry: true });
-    expect(transferPoolCapacity(wide)).toEqual({ own: 95, curator: 95, credentials: 45 });
+    expect(transferPoolCapacity(wide)).toEqual({ own: 95, curator: 95, tracking: 45 });
     expect(entered(1, 2, 5, 1)).toEqual(wide);
     expect(refusal(() => entered(25, 2, 0, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
     expect(refusal(() => entered(9, 4, 0, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
@@ -176,9 +174,9 @@ describe("selectTransferKey", () => {
   });
 
   it("refuses past the account bound with the counts", () => {
-    const addresses = { nInputs: 24, coSigners: 5, legs: 2, credentialAccounts: 1 };
+    const addresses = { nInputs: 24, coSigners: 5, legs: 2 };
     const capacity = ownerSignerCapacity(addresses);
-    expect(capacity).toBe(64 - 4 - 5 - 24 - 10 - 2 - 1);
+    expect(capacity).toBe(64 - 4 - 6 - 24 - 10 - 2);
     selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity });
     const refused = refusal(() =>
       selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity + 1 }),
@@ -213,15 +211,13 @@ describe("enrolledSalt", () => {
   const owner = new Uint8Array(32).fill(1) as Bytes32;
   const salt = new Uint8Array(32).fill(2) as Bytes32;
   const salts = new Map([[bytesKey(owner), salt]]);
-  const row0 = (): AuditCredential =>
-    ({ member: owner, listTag: new Uint8Array(32) }) as unknown as AuditCredential;
 
-  it("takes no salt with no credential and the credential's salt under its tag", () => {
+  it("takes no salt with no row and the row's salt under its tag", () => {
     expect(enrolledSalt(owner, undefined, new Map())).toBeUndefined();
     expect(enrolledSalt(owner, { ...row0(), listTag: listTagOf(salt) }, salts)).toEqual(salt);
   });
 
-  it("refuses a credential with no salt and a salt off the credential's tag", () => {
+  it("refuses a row with no salt and a salt off the row's tag", () => {
     expect(refusal(() => enrolledSalt(owner, row0(), new Map())).code).toBe(
       "RING_LIST_SALT_MISSING",
     );
@@ -352,8 +348,7 @@ describe("deposit.json", () => {
     amounts: readonly number[];
     auditor_pubkey: string;
     eph_pk: string;
-    ring_id: string;
-    credential_fields: readonly string[];
+    tracking_root: string;
     own_root: string;
     curator_root: string;
     policy_hash: string;
@@ -373,8 +368,7 @@ describe("deposit.json", () => {
       })),
       auditorPk: field(entry.auditor_pubkey) as unknown as Bytes33,
       ephPk: field(entry.eph_pk) as unknown as Bytes33,
-      ringId: field(entry.ring_id),
-      credentials: vectorCredentialRoots(entry.credential_fields),
+      trackingRoot: field(entry.tracking_root),
       registry: {
         ownRoot: field(entry.own_root),
         curatorRoot: field(entry.curator_root),
@@ -386,30 +380,15 @@ describe("deposit.json", () => {
   });
 });
 
-/** Go `CredentialLeafParams` as a vector writes it. */
-function leafOf(leaf: Readonly<Record<string, unknown>>): CredentialLeafProofInput {
-  const at = (key: string): Bytes32 => field(leaf[key] as string);
-  const pair = (key: string): readonly [Bytes32, Bytes32] => {
-    const [first = "", second = ""] = leaf[key] as readonly string[];
-    return [field(first), field(second)];
-  };
-  return {
-    member: at("member"),
-    nullifierPk: at("nullifierPk"),
-    listTag: at("listTag"),
-    aud: pair("aud"),
-    eph: pair("eph"),
-    ctHash: at("ctHash"),
-    blinding: at("blinding"),
-    treeSlot: leaf["treeSlot"] as number,
-    stateIndex: BigInt(leaf["stateIndex"] as number),
-    statePath: (leaf["statePath"] as readonly string[]).map(field),
-  };
-}
-
 describe("merge.json", () => {
   type Request = Readonly<Record<string, unknown>> &
-    Readonly<{ credential: Readonly<Record<string, unknown>> | null }>;
+    Readonly<{
+      tracking: Readonly<{
+        present: boolean;
+        record: Readonly<Record<string, string>>;
+        path: Readonly<{ index: number; siblings: readonly (readonly string[])[] }>;
+      }> | null;
+    }>;
   const { cases } = vector("merge/merge.json") as Readonly<{
     cases: readonly Readonly<{ name: string; request: Request }>[];
   }>;
@@ -417,6 +396,25 @@ describe("merge.json", () => {
   it.each(cases.map((entry) => [entry.name, entry] as const))("round trips %s", (_, entry) => {
     const { request } = entry;
     const text = (key: string): Bytes32 => field(request[key] as string);
+    const opening = (): MergeProofRequest["tracking"] => {
+      const { tracking } = request;
+      if (tracking === null) return undefined;
+      const { record: row, path } = tracking;
+      const record = {
+        member: field(row["member"] ?? ""),
+        next: field(row["next"] ?? ""),
+        nullifierPk: field(row["nullifierPk"] ?? ""),
+        ctHash: field(row["ctHash"] ?? ""),
+        viewingU: viewingU(row["view0"] ?? "", row["view1"] ?? ""),
+        revision: BigInt(row["revision"] ?? 0),
+        listTag: field(row["listTag"] ?? ""),
+      };
+      const quad = { index: path.index, siblings: path.siblings.map((level) => level.map(field)) };
+      return tracking.present
+        ? { kind: "present", record, path: quad }
+        : { kind: "absent", low: record, path: quad };
+    };
+    const tracking = opening();
     expect(
       ringProofRequestBody({
         kind: "merge",
@@ -426,16 +424,7 @@ describe("merge.json", () => {
         ringProgramId: text("ringProgramId"),
         auditorPk: text("auditorPk"),
         payer: text("payer"),
-        credentialRoots: CredentialRoots.read({
-          ownerHash: text("credentialOwner"),
-          addressRoot: new Uint8Array(32) as Bytes32,
-          stateRoots: [
-            {
-              treeId: (request["stateRoot"] as { treeId: number }).treeId,
-              root: field((request["stateRoot"] as { root: string }).root),
-            },
-          ],
-        }),
+        trackingRoot: text("trackingRoot"),
         ephSk: text("ephSk"),
         ownerKey: text("ownerKey"),
         ownerPkHash: text("ownerPkHash"),
@@ -446,7 +435,7 @@ describe("merge.json", () => {
         seed: text("seed"),
         outputTreeId: text("outputTreeId"),
         outputRingDataHash: text("outputRingDataHash"),
-        ...(request.credential === null ? {} : { credential: leafOf(request.credential) }),
+        ...(tracking === undefined ? {} : { tracking }),
       }),
     ).toEqual(request);
   });
@@ -577,15 +566,18 @@ describe("input evidence", () => {
   });
 });
 
-describe("credential predicates", () => {
-  const credential = (nullifierPk: Bytes32): AuditCredential =>
-    ({ member: fill(1), nullifierPk, listTag: fill(5) }) as unknown as AuditCredential;
+describe("tracking predicates", () => {
+  const row = (nullifierPk: Bytes32): TrackingRecord => ({
+    member: fill(1),
+    next: fill(2),
+    nullifierPk,
+    ctHash: fill(3),
+    viewingU: fill(4),
+    revision: 1n,
+    listTag: fill(5),
+  });
   const zero = ZERO_NULLIFIER_PK as Bytes32;
-  const check = (
-    input: ProofInputUtxo,
-    rowOf: AuditCredential | undefined,
-    rail = "confidential",
-  ) =>
+  const check = (input: ProofInputUtxo, rowOf: TrackingRecord | undefined, rail = "confidential") =>
     checkInputKeys({
       inputs: [input],
       rail: rail as "confidential",
@@ -593,14 +585,14 @@ describe("credential predicates", () => {
       rowOf: () => rowOf,
     });
 
-  it("holds a nonzero input key to its credential and waives only the equality on a zero key", () => {
-    check(note({ ring: RING, key: fill(9) }), credential(fill(9)));
+  it("holds a nonzero input key to its row and waives only the equality on a zero key", () => {
+    check(note({ ring: RING, key: fill(9) }), row(fill(9)));
     check(note({ ring: RING, key: zero }), undefined);
     check(note({ key: fill(6) }), undefined);
     expect(refusal(() => check(note({ ring: RING, key: fill(9) }), undefined)).code).toBe(
       "RING_ADDRESS_NOT_ENROLLED",
     );
-    expect(refusal(() => check(note({ ring: RING, key: fill(9) }), credential(fill(6)))).code).toBe(
+    expect(refusal(() => check(note({ ring: RING, key: fill(9) }), row(fill(6)))).code).toBe(
       "RING_ADDRESS_MISMATCH",
     );
   });
@@ -612,28 +604,47 @@ describe("credential predicates", () => {
   });
 
   it("holds an output to the rule of its key", () => {
-    const output = (key: Bytes32): ProofOutputUtxo =>
+    const output = (key: Bytes32, viewingU = fill(4)): ProofOutputUtxo =>
       ({
         ownerAddress: {
           nullifierPublicKey: key,
           signingPublicKey: { ownerProofInputHash: () => fill(1) },
+          viewingPublicKey: { u: () => viewingU },
         },
       }) as unknown as ProofOutputUtxo;
     const checked = (
       outputs: readonly (ProofOutputUtxo | undefined)[],
-      served: AuditCredential | undefined,
-    ) => checkOutputKeys({ outputs, rowOf: () => served });
-    checked([output(fill(9)), undefined], credential(fill(9)));
+      served: TrackingRecord | undefined,
+      spenders: readonly ShieldedPublicKey[] = [],
+    ) => checkOutputKeys({ outputs, rowOf: () => served, spenders });
+    checked([output(fill(9)), undefined], row(fill(9)));
     checked([output(zero)], undefined);
-    expect(refusal(() => checked([output(zero)], credential(fill(9)))).code).toBe(
+    expect(refusal(() => checked([output(zero)], row(fill(9)))).code).toBe(
       "RING_RECIPIENT_ENROLLED",
     );
     expect(refusal(() => checked([output(fill(9))], undefined)).code).toBe(
       "RING_RECIPIENT_NOT_ENROLLED",
     );
-    expect(refusal(() => checked([output(fill(9))], credential(fill(6)))).code).toBe(
-      "RING_ADDRESS_MISMATCH",
+  });
+
+  it("refuses a recipient address sealing to a viewing key the row retired", () => {
+    const spender = {} as ShieldedPublicKey;
+    const output = {
+      ownerAddress: {
+        nullifierPublicKey: fill(9),
+        signingPublicKey: {
+          ownerProofInputHash: () => fill(1),
+          equals: (other: unknown) => other === spender,
+        },
+        viewingPublicKey: { u: () => fill(8) },
+      },
+    } as unknown as ProofOutputUtxo;
+    const stale = refusal(() =>
+      checkOutputKeys({ outputs: [output], rowOf: () => row(fill(9)), spenders: [] }),
     );
+    expect(stale.code).toBe("RING_RECIPIENT_VIEWING_KEY_STALE");
+    expect(stale.details).toMatchObject({ rowRevision: "1" });
+    checkOutputKeys({ outputs: [output], rowOf: () => row(fill(9)), spenders: [spender] });
   });
 });
 
@@ -689,24 +700,8 @@ describe("prover/ring/params.go", () => {
     ) as unknown as TransferProofRequest["inputs"][number];
     const repeat = <T>(length: number, value: T): readonly T[] => Array<T>(length).fill(value);
     const entry = { own: 0, curator: 0 };
-    const ownerEntry = { ...entry, credential: 0, listSalt: zero, ownSalted: 0, curatorSalted: 0 };
-    const padding: CredentialOpeningProofInput = {
-      present: false,
-      member: zero,
-      nullifierPk: zero,
-      listTag: zero,
-      aud: [zero, zero],
-      eph: [zero, zero],
-      ctHash: zero,
-      blinding: zero,
-      treeSlot: 0,
-      stateIndex: 0n,
-      statePath: repeat(32, zero),
-      lowValue: zero,
-      lowNext: zero,
-      lowIndex: 0n,
-      lowPath: repeat(40, zero),
-    };
+    const ownerEntry = { ...entry, tracking: 0, listSalt: zero, ownSalted: 0, curatorSalted: 0 };
+    const pool = unopenedRecordPool(capacity.tracking);
     const request: TransferProofRequest = {
       kind: "transfer",
       publicInputHash: zero,
@@ -728,8 +723,16 @@ describe("prover/ring/params.go", () => {
       rows: repeat(4, zero),
       privateTxHash: zero,
       privateTxBlinding: zero,
-      credentialRoots: CredentialRoots.empty(capacity.credentials),
-      credentialOpenings: repeat(capacity.credentials, padding),
+      trackingRoot: zero,
+      trackingPool: {
+        records: repeat(capacity.tracking, row0()),
+        canopy: repeat(16, zero),
+        paths: repeat(capacity.tracking, {
+          index: 0,
+          siblings: repeat(11, repeat(3, zero)),
+        }),
+        subjects: pool.subjects,
+      },
       rowEntries: repeat(4, 0),
       outputEntries: repeat(2, 0),
       withdrawalCount: 0,
@@ -766,3 +769,24 @@ describe("prover/ring/params.go", () => {
     );
   });
 });
+
+function row0(): TrackingRecord {
+  const zero = new Uint8Array(32) as Bytes32;
+  return {
+    member: zero,
+    next: zero,
+    nullifierPk: zero,
+    ctHash: zero,
+    viewingU: zero,
+    revision: 0n,
+    listTag: zero,
+  };
+}
+
+/** Inverse of `pack_be`, 31 bytes then the last. */
+function viewingU(view0: string, view1: string): Bytes32 {
+  const out = new Uint8Array(32);
+  out.set(field(view0).subarray(1), 0);
+  out.set(field(view1).subarray(31), 31);
+  return out as Bytes32;
+}

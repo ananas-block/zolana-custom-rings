@@ -89,7 +89,7 @@ describe("relay_enroll_inputs.json", () => {
   const inputs = {
     ringProgramId: filled(1, 32) as Address,
     owner: filled(2, 32) as Address,
-    outputTree: filled(3, 32) as Address,
+    trackingRegistry: filled(3, 32) as Address,
     instructionData: bytes("instruction_data"),
   };
   const request = (intent: RelayIntent) => ({
@@ -107,7 +107,7 @@ describe("relay_enroll_inputs.json", () => {
 
   it("moves the digest with a changed field", () => {
     expect(
-      hex(enrollRequestDigest({ ...inputs, instructionData: Uint8Array.of(65, 7, 9) })),
+      hex(enrollRequestDigest({ ...inputs, instructionData: Uint8Array.of(6, 7, 9) })),
     ).not.toBe(vector["request_digest"]);
   });
 

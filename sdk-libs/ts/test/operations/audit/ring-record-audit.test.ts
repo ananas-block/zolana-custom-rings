@@ -71,7 +71,7 @@ import {
   ringWithdrawalsOf,
 } from "../../../src/protocol/transaction/origin.js";
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
-import { ZERO_READ_DEPOSIT_PREFIX_LENGTH } from "../../helpers/confirmed-deposits.js";
+import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "../../../src/protocol/transaction/deposit-instruction.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { readRingOutput } from "../../../src/protocol/transaction/output.js";
 
@@ -567,7 +567,7 @@ describe("the deposit reader", () => {
     });
     const [binding] = confirmedOver(
       RingInstructionTag.deposit,
-      ZERO_READ_DEPOSIT_PREFIX_LENGTH,
+      AUDITED_DEPOSIT_PREFIX_LENGTH,
       capsule,
       owner,
       hex(deposit.eph_pk) as Bytes33,

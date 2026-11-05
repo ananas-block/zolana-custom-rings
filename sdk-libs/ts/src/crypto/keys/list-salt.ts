@@ -20,7 +20,7 @@ export function listSaltOf(key: ViewingKey, ringProgramId: Address): Bytes32 {
   );
 }
 
-/** `Poseidon(CRPT, list_salt)`, immutable in the credential. */
+/** `Poseidon(CRPT, list_salt)`, final in the tracking leaf. */
 export function listTagOf(listSalt: Bytes32): Bytes32 {
   return poseidon([domainField(RingDomain.listTag), listSalt]) as Bytes32;
 }

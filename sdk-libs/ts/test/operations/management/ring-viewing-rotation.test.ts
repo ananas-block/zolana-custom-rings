@@ -1,19 +1,23 @@
-import { getAddressEncoder, getProgramDerivedAddress, address } from "@solana/kit";
+import { address, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { USER_REGISTRY_PROGRAM_ID, type Bytes16, type Bytes32 } from "@heliuslabs/zolana/interface";
+import { addressBytes } from "@heliuslabs/zolana/internal";
+import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 
+import { ENROLL_TAG } from "../../../src/operations/management/enrollment.js";
 import {
   confirmViewingKey,
   rotateViewingKey,
   updateViewingKey,
-  type ViewingKeyUpdateClient,
 } from "../../../src/operations/management/viewing-rotation.js";
+import { trackingAuthorizationPda } from "../../../src/protocol/pda/index.js";
 import { LocalRingKeys } from "../../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../../src/state/viewing-history.js";
 
 const OWNER = address("7xKqmYUZ7pQHXcQnaZaZzR1oPjQb8kk8gA7XN3XxKzKq");
+const PAYER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
+const REGISTRY = address("9EwHno8C1T1vVGjasGnDH1GubiEu8qbgLX9qDjBshFhz");
 const SALT = new Uint8Array(16).fill(5) as Bytes16;
 
 const wallet = (seed: number) =>
@@ -21,30 +25,32 @@ const wallet = (seed: number) =>
     SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(seed) as Bytes32),
   );
 
-/** One user record of `OWNER`, `land` sets its viewing key. */
-async function registry(holder: ShieldedKeypair) {
-  const [pda, bump] = await getProgramDerivedAddress({
-    programAddress: USER_REGISTRY_PROGRAM_ID,
-    seeds: [new TextEncoder().encode("zolana/registry/v0"), getAddressEncoder().encode(OWNER)],
-  });
-  const data = new Uint8Array(100);
-  data[0] = 1;
-  data.set(getAddressEncoder().encode(OWNER), 1);
-  data[33] = bump;
-  data.set(holder.nullifierPublicKey(), 34);
-  data.set(holder.viewingPublicKey().toBytes(), 66);
-  const client: ViewingKeyUpdateClient = {
-    getAccount: async (read) =>
-      read === pda
-        ? { owner: USER_REGISTRY_PROGRAM_ID, data: data.slice(), lamports: 1n }
-        : undefined,
-    getLatestBlockhash: async () => ({
-      blockhash: "11111111111111111111111111111111" as never,
-      lastValidBlockHeight: 1n,
-    }),
+/** `OWNER`'s tracking authorization for `holder`, `land` applies a pending rotation. */
+async function enrolled(holder: ShieldedKeypair) {
+  const [pda] = await trackingAuthorizationPda(REGISTRY, OWNER);
+  const data = new Uint8Array(273);
+  data[0] = 4;
+  data.set(addressBytes(REGISTRY), 1);
+  data.set(addressBytes(OWNER), 33);
+  data.set(holder.nullifierPublicKey(), 65);
+  data.fill(0x11, 97, 129);
+  data.set(holder.viewingPublicKey().u(), 129);
+  data.fill(0x22, 161, 193);
+  data.fill(0x33, 193, 257);
+  const view = new DataView(data.buffer);
+  view.setBigUint64(257, 1n, true);
+  view.setBigUint64(265, 1n, true);
+  const client = {
+    getAccount: async (read: Address) =>
+      read === pda ? { owner: REGISTRY, data: data.slice(), lamports: 1n } : undefined,
   };
-  const land = (viewingPublicKey: Uint8Array) => data.set(viewingPublicKey, 66);
-  return { client, land };
+  // The program raises the revision on Enroll, the applier folds it into the tree.
+  const enroll = (viewingU: Uint8Array) => {
+    data.set(viewingU, 129);
+    view.setBigUint64(257, 2n, true);
+  };
+  const apply = () => view.setBigUint64(265, 2n, true);
+  return { client, enroll, apply };
 }
 
 function rotation(holder: ShieldedKeypair, next: ViewingKey) {
@@ -56,30 +62,36 @@ function rotation(holder: ShieldedKeypair, next: ViewingKey) {
   });
 }
 
-const contains = (haystack: ArrayLike<number>, needle: Uint8Array) =>
-  Buffer.from(haystack).includes(Buffer.from(needle));
-
-describe("viewing key rotation", () => {
-  it("resolves the new key once the update lands, and a repeat builds nothing", async () => {
+describe("viewing key rotation through the tracking row", () => {
+  it("enrolls the new key without a proof and confirms it only once applied", async () => {
     const holder = wallet(1);
-    const { client, land } = await registry(holder);
+    const { client, enroll, apply } = await enrolled(holder);
     const rotated = rotation(holder, ViewingKey.generate());
-    const current = rotated.keys.address().viewingPublicKey;
+    const current = rotated.keys.address().viewingPublicKey.u();
     const update = () =>
-      updateViewingKey({ client, owner: OWNER, keys: rotated.keys, history: rotated.history });
+      updateViewingKey({
+        client,
+        payer: PAYER,
+        owner: OWNER,
+        trackingRegistry: REGISTRY,
+        keys: rotated.keys,
+        history: rotated.history,
+      });
+    const confirm = () =>
+      confirmViewingKey({ client, owner: OWNER, trackingRegistry: REGISTRY, keys: rotated.keys });
 
-    const transaction = await update();
-    expect(transaction).toBeDefined();
-    expect(contains(transaction!.messageBytes, current.toBytes())).toBe(true);
-    await expect(
-      confirmViewingKey({ client, owner: OWNER, keys: rotated.keys }),
-    ).rejects.toMatchObject({ code: "RING_VIEWING_KEY_NOT_PUBLISHED" });
+    // 1. The rotation repeats the seal, carries the new key and no proof.
+    const instruction = await update();
+    expect(instruction?.data?.[0]).toBe(ENROLL_TAG);
+    expect(instruction?.data).toHaveLength(1 + 192);
+    expect(instruction?.data?.subarray(65, 97)).toEqual(current);
+    await expect(confirm()).rejects.toMatchObject({ code: "RING_VIEWING_KEY_NOT_PUBLISHED" });
 
-    land(current.toBytes());
-    const resolved = await confirmViewingKey({ client, owner: OWNER, keys: rotated.keys });
-    expect(resolved.viewingPublicKey.equals(current)).toBe(true);
-    expect(rotated.history.current().viewingPublicKey.equals(current)).toBe(true);
-    expect(rotated.history.entry(holder.viewingPublicKey())).toBeDefined();
+    // 2. A pending revision confirms nothing, the applied one does.
+    enroll(current);
+    await expect(confirm()).rejects.toMatchObject({ code: "RING_VIEWING_KEY_NOT_PUBLISHED" });
+    apply();
+    expect((await confirm()).viewingU).toEqual(current);
     expect(await update()).toBeUndefined();
   });
 
@@ -109,24 +121,17 @@ describe("viewing key rotation", () => {
     await expect(currentOnly.decrypt([request])).rejects.toThrow();
   });
 
-  it("refuses a rotation under another nullifier key before any transaction", async () => {
-    const { client } = await registry(wallet(3));
+  it("refuses a holder of another nullifier key and one ahead of its history", async () => {
+    const holder = wallet(3);
+    const { client } = await enrolled(holder);
     const stranger = rotation(wallet(4), ViewingKey.generate());
+    const input = { client, payer: PAYER, owner: OWNER, trackingRegistry: REGISTRY };
     await expect(
-      updateViewingKey({ client, owner: OWNER, keys: stranger.keys, history: stranger.history }),
-    ).rejects.toMatchObject({
-      code: "WALLET_BUILD_KEY_UPDATE",
-      causeCode: "WALLET_USER_RECORD_NULLIFIER_KEY_MISMATCH",
-    });
-  });
-
-  it("refuses a holder ahead of its history before any transaction", async () => {
-    const holder = wallet(5);
-    const { client } = await registry(holder);
+      updateViewingKey({ ...input, keys: stranger.keys, history: stranger.history }),
+    ).rejects.toMatchObject({ code: "RING_ENROLLMENT_KEY_MISMATCH" });
     await expect(
       updateViewingKey({
-        client,
-        owner: OWNER,
+        ...input,
         keys: LocalRingKeys.fromKeypair(holder).rotate(ViewingKey.generate()),
         history: ViewingHistory.create(holder.viewingPublicKey(), 0n),
       }),

@@ -6,7 +6,7 @@ import {
   bytesKey,
   rightAlign,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import type { Bytes16, Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
 import { poseidon } from "@heliuslabs/zolana/keypair";
 import { packDisclosure } from "../../crypto/audit/audit.js";
 import { u32Field } from "../../crypto/error.js";
@@ -24,7 +24,7 @@ import {
   type RingOutput,
 } from "../transaction/transact.js";
 import { N_PUBLIC_SLOTS } from "../transaction/spp.js";
-import type { CredentialRoots } from "../codec/credential-read.js";
+import { TRACKING_CAPACITY } from "../membership/tracking.js";
 
 /** The values every transfer statement opens with, Rust `AuditHead`. */
 export interface AuditHead {
@@ -66,12 +66,12 @@ export interface SignerBinding {
   readonly chain: Bytes32;
 }
 
-/** Unread policy roots are zero, the credential table follows the key's `K`, Rust `TransferRoots`. */
+/** Zero where the frame reads none, Rust `TransferRoots`. */
 export interface TransferRoots {
   readonly policyHash: Bytes32;
   readonly ownRoot: Bytes32;
   readonly curatorRoot: Bytes32;
-  readonly credentials: CredentialRoots;
+  readonly trackingRoot: Bytes32;
 }
 
 /** One ring transfer's proof, Rust `TransferStatement`. */
@@ -122,17 +122,43 @@ export interface ApplyRecordsStatement {
   readonly count: bigint;
   /** Set exactly when a write tightens a policy field or changes an asset limit. */
   readonly restrictive: boolean;
-  /** Absent on a public batch, the public apply key binds no credential section. */
+  /** Absent on a public batch, the public apply key binds no tracking section. */
   readonly private?: PrivateWrites;
 }
 
 /** Rust `PrivateWrites`. */
 export interface PrivateWrites {
-  /** Bit `i` marks write `i` a private owner write the circuit proves a credential for, never zero. */
-  readonly credentialWrites: number;
-  /** The registry's `private_ring_id`. */
-  readonly privateRingId: Bytes32;
-  readonly credentials: CredentialRoots;
+  /** Bit `i` marks write `i` a private owner write whose member's row the circuit opens, never zero. */
+  readonly privateWrites: number;
+  /** The pinned tracking registry's root at the batch's `tracking_revision`. */
+  readonly trackingRoot: Bytes32;
+}
+
+/** An application of named enrollments, Rust `ApplyEnrollmentsStatement`. */
+export interface ApplyEnrollmentsStatement {
+  readonly oldRoot: Bytes32;
+  readonly newRoot: Bytes32;
+  /** u64, at most `TRACKING_CAPACITY`. */
+  readonly oldNextIndex: bigint;
+  readonly newNextIndex: bigint;
+  /** `chain_start` of the registry and revision. */
+  readonly chainStart: Bytes32;
+  /** The chain past the last entry. */
+  readonly chainEnd: Bytes32;
+  readonly count: bigint;
+}
+
+/** The auditor envelope of an enrolled nullifier key, Rust `RegisterKeyStatement`. */
+export interface RegisterKeyStatement {
+  /** The tracking registry's. */
+  readonly ringId: Bytes32;
+  /** The owner identity of the signing member. */
+  readonly member: Bytes32;
+  readonly nullifierPk: Bytes32;
+  readonly listTag: Bytes32;
+  readonly auditorPubkey: Bytes33;
+  readonly ephU: Bytes32;
+  readonly ciphertext: Bytes64;
 }
 
 export function transferStatementElements(statement: TransferStatement): readonly Bytes32[] {
@@ -186,7 +212,7 @@ export function transferStatementElements(statement: TransferStatement): readonl
     checkedBytes<Bytes32>(statement.roots.policyHash, 32, "policy hash"),
     checkedBytes<Bytes32>(statement.roots.ownRoot, 32, "own root"),
     checkedBytes<Bytes32>(statement.roots.curatorRoot, 32, "curator root"),
-    ...statement.roots.credentials.elements(),
+    checkedBytes<Bytes32>(statement.roots.trackingRoot, 32, "tracking root"),
     ...publicAssets.flatMap((asset, slot) => [
       checkedBytes<Bytes32>(asset, 32, "public asset"),
       checkedBytes<Bytes32>(publicAmounts[slot] as Bytes32, 32, "public amount"),
@@ -307,34 +333,77 @@ export function signerBinding(identities: readonly Bytes32[], slots: number): Si
 }
 
 /**
- * `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count, restrictive]`, a private batch
- * appends `[credential_writes, private_ring_id, credential_owner, address_root, tree_id_i, root_i ...]`.
+ * `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count, restrictive]`,
+ * a private batch appends `[private_writes, tracking_root]`.
  */
 export function applyRecordsStatementElements(
   statement: ApplyRecordsStatement,
 ): readonly Bytes32[] {
+  const head = {
+    ...statement,
+    oldNextIndex: BigInt(statement.oldNextIndex),
+    newNextIndex: BigInt(statement.newNextIndex),
+  };
   return [
-    domainField(RingDomain.applyRecords),
-    checkedBytes<Bytes32>(statement.oldRoot, 32, "old root"),
-    checkedBytes<Bytes32>(statement.newRoot, 32, "new root"),
-    u64Field(BigInt(statement.oldNextIndex), "old next index", U32_MAX),
-    u64Field(BigInt(statement.newNextIndex), "new next index", U32_MAX),
-    checkedBytes<Bytes32>(statement.chainStart, 32, "chain start"),
-    checkedBytes<Bytes32>(statement.chainEnd, 32, "chain end"),
-    u64Field(statement.count, "count"),
+    ...applyStatementHead(RingDomain.applyRecords, head, U32_MAX),
     u64Field(statement.restrictive ? 1n : 0n, "restrictive"),
     ...(statement.private === undefined
       ? []
       : [
-          u64Field(BigInt(statement.private.credentialWrites), "credential writes", U16_MAX),
-          checkedBytes<Bytes32>(statement.private.privateRingId, 32, "private ring id"),
-          ...statement.private.credentials.elements(),
+          u64Field(BigInt(statement.private.privateWrites), "private writes", U16_MAX),
+          checkedBytes<Bytes32>(statement.private.trackingRoot, 32, "tracking root"),
         ]),
   ];
 }
 
 export function applyRecordsStatementHash(statement: ApplyRecordsStatement): Bytes32 {
   return chain(applyRecordsStatementElements(statement));
+}
+
+/** `[CRTA, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`. */
+export function applyEnrollmentsStatementElements(
+  statement: ApplyEnrollmentsStatement,
+): readonly Bytes32[] {
+  return applyStatementHead(RingDomain.applyEnrollments, statement, TRACKING_CAPACITY);
+}
+
+export function applyEnrollmentsStatementHash(statement: ApplyEnrollmentsStatement): Bytes32 {
+  return chain(applyEnrollmentsStatementElements(statement));
+}
+
+function applyStatementHead(
+  domain: RingDomain,
+  statement: ApplyEnrollmentsStatement,
+  indexMax: bigint,
+): readonly Bytes32[] {
+  return [
+    domainField(domain),
+    checkedBytes<Bytes32>(statement.oldRoot, 32, "old root"),
+    checkedBytes<Bytes32>(statement.newRoot, 32, "new root"),
+    u64Field(statement.oldNextIndex, "old next index", indexMax),
+    u64Field(statement.newNextIndex, "new next index", indexMax),
+    checkedBytes<Bytes32>(statement.chainStart, 32, "chain start"),
+    checkedBytes<Bytes32>(statement.chainEnd, 32, "chain end"),
+    u64Field(statement.count, "count"),
+  ];
+}
+
+/** `[CRRG, ring_id, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`. */
+export function registerKeyStatementElements(statement: RegisterKeyStatement): readonly Bytes32[] {
+  return [
+    domainField(RingDomain.registerKey),
+    checkedBytes<Bytes32>(statement.ringId, 32, "ring id"),
+    checkedBytes<Bytes32>(statement.member, 32, "member"),
+    checkedBytes<Bytes32>(statement.nullifierPk, 32, "nullifier pk"),
+    checkedBytes<Bytes32>(statement.listTag, 32, "list tag"),
+    ...packedKey(checkedBytes<Bytes33>(statement.auditorPubkey, 33, "auditor pubkey")),
+    ...packedKey(taggedX25519(statement.ephU)),
+    hashBytes(checkedBytes<Bytes64>(statement.ciphertext, 64, "ciphertext")) as Bytes32,
+  ];
+}
+
+export function registerKeyStatementHash(statement: RegisterKeyStatement): Bytes32 {
+  return chain(registerKeyStatementElements(statement));
 }
 
 const ZERO_FIELD = new Uint8Array(32) as Bytes32;
