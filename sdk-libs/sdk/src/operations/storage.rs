@@ -1,27 +1,26 @@
+//! Storage registry builders and the apply proof of a public record batch.
+//!
+//! A private write needs a credential write proof under tree 0 address inclusion, which Photon does
+//! not serve yet. Only public batches prove here, the statement then carries empty credential roots.
+//!
+//! Read after `program-libs/interface/src/instructions/storage.rs` and
+//! `program-libs/member-registry/src/record.rs`. Read before `programs/storage/src/instructions/update.rs`.
+
 use custom_ring_interface::{
     key_catalog::RingCircuit,
-    member_registry::APPLY_BATCH,
-    storage::{RegistryId, Revision, StorageRegistry},
-    storage_instruction::{tag, ApplyEnrollmentsIxData, InitializeIxData, StorageUpdateIxData},
-    tracking::{TrackingAuthorization, TrackingEntry},
+    storage::{RegistryId, StorageRegistry},
+    storage_instruction::{tag, AssetWrite, InitializeIxData, StorageUpdateIxData},
     ApplyRecordsIxData, GRACE_SLOTS, STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use spr_client::AsyncRpc;
-use zolana_ring_client::{records::path_of, resolver::tracking_record, AsyncRingIndexer};
-use zolana_ring_indexer::tracking::{
-    GetPendingEnrollmentsRequest, GetTrackingApplyProofInputsRequest,
-    GetTrackingApplyProofInputsResponse,
-};
-use zolana_ring_member_registry::{ApplyProofInputs, TrackingWriteProofInput};
+use zolana_ring_member_registry::{ApplyProofInputs, RecordCredentials, RecordStatementContext};
 
 use crate::{
     client::{RingClient, RingIndexerBackend},
     prover::{to_instruction_proof, RingRequest},
-    request::{
-        ApplyEnrollments as ApplyEnrollmentsBody, ApplyRecords, RecordWriteProofInputRequest,
-    },
+    request::{ApplyRecords, RecordWriteProofInputRequest, StateRootRequest},
     CustomRing, RingError,
 };
 
@@ -39,17 +38,16 @@ pub struct InitializeStorage {
     pub grace_slots: u64,
     /// `ring_id_field` of the ring it serves, immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-    /// Nonzero creates a private source paired with the named tracking registry.
-    pub tracking_registry: Address,
+    /// Nonzero lets salted writes prove credentials of that ring, immutable.
+    pub private_ring_id: [u8; 32],
 }
 
+/// A public batch, its data carries the empty credential read.
 #[must_use]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateStorage<'a> {
     pub authority: Address,
     pub registry: Address,
-    /// The account as read, its pin decides whether the update carries the floor account.
-    pub state: &'a StorageRegistry,
     pub data: StorageUpdateIxData<'a>,
 }
 
@@ -61,28 +59,32 @@ pub struct UpdateStorageAuthority {
     pub registry: Address,
 }
 
-/// Proves `inputs` with the apply key of their write count, the batch padded with empty writes.
+/// Proves a public batch with the apply key of its write count, padded with empty writes.
 #[must_use]
 #[derive(Clone, Copy, Debug)]
 pub struct StorageApplyProof<'a> {
     pub inputs: &'a ApplyProofInputs,
+    /// The registry as read, its root and cursor must equal the inputs' old state.
+    pub registry: &'a StorageRegistry,
+    /// The mint preimages of private asset writes.
+    pub asset_writes: &'a [AssetWrite],
 }
 
 impl InitializeStorage {
     /// The ring's records, keyed by the ring program id under the creator who pays.
     ///
-    /// The pin is immutable and a later policy can serve a private list from these records, so
-    /// every ring pins its tracking registry at creation. An unpinned source refuses every frame
-    /// reading a private list, and without the floor a blocked enrolled owner could prove itself
-    /// unenrolled under an old tracking root.
+    /// The private ring id is immutable and a later policy can serve a private list from these
+    /// records, so every ring binds its own credentials at creation. A source without one refuses
+    /// every frame reading a private list.
     pub fn records(ring: CustomRing, creator: Address) -> Self {
+        let ring_id = ring.ring_id().unwrap_or_default();
         Self {
             payer: creator,
             creator,
             registry_id: RegistryId(ring.program_id().to_bytes()),
             grace_slots: GRACE_SLOTS,
-            ring_id: ring.ring_id().unwrap_or_default(),
-            tracking_registry: ring.tracking_registry().unwrap_or_default(),
+            ring_id,
+            private_ring_id: ring_id,
         }
     }
 
@@ -95,7 +97,7 @@ impl InitializeStorage {
             registry_id: self.registry_id,
             grace_slots: self.grace_slots.to_le_bytes(),
             ring_id: self.ring_id,
-            tracking_registry: self.tracking_registry,
+            private_ring_id: self.private_ring_id,
         };
         storage_ix(
             vec![
@@ -110,19 +112,13 @@ impl InitializeStorage {
 }
 
 impl UpdateStorage<'_> {
-    /// A zero grace write on a pinned source moves the floor, the program reads the pinned account.
+    /// `encode` refuses a private write without its credential read.
     pub fn instruction(self) -> Result<Instruction, RingError> {
-        let mut accounts = vec![
-            AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new(self.registry, false),
-        ];
-        accounts.extend(
-            self.state
-                .reads_tracking(&self.data)
-                .then(|| AccountMeta::new_readonly(self.state.tracking_registry, false)),
-        );
         Ok(storage_ix(
-            accounts,
+            vec![
+                AccountMeta::new_readonly(self.authority, true),
+                AccountMeta::new(self.registry, false),
+            ],
             [vec![tag::UPDATE], self.data.encode()?].concat(),
         ))
     }
@@ -146,7 +142,11 @@ impl StorageApplyProof<'_> {
         self,
         client: &RingClient<R, I>,
     ) -> Result<ApplyRecordsIxData, RingError> {
-        let statement = self.inputs.statement()?;
+        let statement = self.inputs.statement(RecordStatementContext {
+            registry: self.registry,
+            asset_writes: self.asset_writes,
+            credentials: RecordCredentials::Public,
+        })?;
         let circuit = RingCircuit::apply_records(statement.count);
         let RingCircuit::ApplyRecords { writes: batch } = circuit else {
             return Err(RingError::UnpinnedProvingKey(circuit));
@@ -169,6 +169,17 @@ impl StorageApplyProof<'_> {
             chain_end: statement.chain_end,
             count: u8::try_from(statement.count).map_err(|_| RingError::RecordProjectionStale)?,
             writes,
+            credential_writes: u64::from(statement.credential_writes),
+            private_ring_id: statement.private_ring_id,
+            credential_owner: *statement.credentials.owner_hash(),
+            address_root: *statement.credentials.address_root(),
+            state_roots: statement
+                .credentials
+                .state_roots()
+                .iter()
+                .map(StateRootRequest::from)
+                .collect(),
+            credentials: vec![(); usize::from(batch)],
         };
         let proof = RingRequest::new(circuit, &body)?
             .prove(client, public_input_hash)
@@ -179,156 +190,6 @@ impl StorageApplyProof<'_> {
             new_next_index: statement.new_next_index.to_le_bytes(),
         })
     }
-}
-
-/// Anyone may send it.
-#[must_use]
-pub struct ApplyEnrollments<'a> {
-    pub tracking_registry: Address,
-    /// The registry revision `chain_start` binds.
-    pub revision: Revision,
-    /// In chain order.
-    pub owners: &'a [Address],
-    pub inputs: &'a ApplyProofInputs<TrackingWriteProofInput>,
-}
-
-impl ApplyEnrollments<'_> {
-    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
-        self,
-        client: &RingClient<R, I>,
-    ) -> Result<Instruction, RingError> {
-        let statement = self.inputs.statement()?;
-        let circuit = RingCircuit::apply_enrollments(statement.count);
-        let RingCircuit::ApplyEnrollments { writes: batch } = circuit else {
-            return Err(RingError::UnpinnedProvingKey(circuit));
-        };
-        let public_input_hash = statement.hash()?;
-        let mut writes: Vec<_> = self
-            .inputs
-            .writes
-            .iter()
-            .map(|write| Some(write.into()))
-            .collect();
-        writes.resize_with(usize::from(batch), || None);
-        let body = ApplyEnrollmentsBody {
-            public_input_hash,
-            old_root: statement.old_root,
-            new_root: statement.new_root,
-            old_next_index: statement.old_next_index,
-            new_next_index: statement.new_next_index,
-            chain_start: statement.chain_start,
-            chain_end: statement.chain_end,
-            count: u8::try_from(statement.count).map_err(|_| RingError::RecordProjectionStale)?,
-            writes,
-        };
-        let proof = RingRequest::new(circuit, &body)?
-            .prove(client, public_input_hash)
-            .await?;
-        let data = ApplyEnrollmentsIxData {
-            revision: self.revision,
-            apply: ApplyRecordsIxData {
-                proof: to_instruction_proof(proof)?,
-                new_root: statement.new_root,
-                new_next_index: statement.new_next_index.to_le_bytes(),
-            },
-        };
-        let mut accounts = vec![AccountMeta::new(self.tracking_registry, false)];
-        accounts.extend(self.owners.iter().map(|owner| {
-            let (authorization, _) =
-                TrackingAuthorization::find_address(&self.tracking_registry, owner);
-            AccountMeta::new(authorization, false)
-        }));
-        Ok(storage_ix(
-            accounts,
-            [&[tag::APPLY_ENROLLMENTS][..], bytemuck::bytes_of(&data)].concat(),
-        ))
-    }
-}
-
-/// Oldest first, up to one apply key's batch.
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EnrollPending {
-    pub ring: CustomRing,
-}
-
-impl EnrollPending {
-    /// `None` when nothing is pending, a pending enrollment grants nothing until its root lands.
-    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
-        self,
-        client: &RingClient<R, I>,
-    ) -> Result<Option<Instruction>, RingError> {
-        let policy = self.ring.require_policy(client.zolana()).await?;
-        let registry = policy.tracking;
-        let pending = client
-            .zolana()
-            .get_pending_enrollments(GetPendingEnrollmentsRequest {
-                registry: registry.into(),
-                after: None,
-                limit: u64::from(APPLY_BATCH as u32),
-            })
-            .await?;
-        if pending.enrollments.is_empty() {
-            return Ok(None);
-        }
-        let owners: Vec<Address> = pending
-            .enrollments
-            .iter()
-            .map(|enrollment| enrollment.owner.0)
-            .collect();
-        let response = client
-            .zolana()
-            .get_tracking_apply_proof_inputs(GetTrackingApplyProofInputsRequest {
-                registry: registry.into(),
-                owners: owners.iter().copied().map(Into::into).collect(),
-            })
-            .await?;
-        let inputs = tracking_apply_inputs(&response)?;
-        let instruction = ApplyEnrollments {
-            tracking_registry: registry,
-            revision: Revision(response.revision.to_le_bytes()),
-            owners: &owners,
-            inputs: &inputs,
-        }
-        .prove(client)
-        .await?;
-        Ok(Some(instruction))
-    }
-}
-
-pub fn tracking_apply_inputs(
-    response: &GetTrackingApplyProofInputsResponse,
-) -> Result<ApplyProofInputs<TrackingWriteProofInput>, RingError> {
-    let writes = response
-        .writes
-        .iter()
-        .map(|write| {
-            Ok(TrackingWriteProofInput {
-                entry: TrackingEntry {
-                    member: write.member.0,
-                    nullifier_pk: write.nullifier_pk.0,
-                    ct_hash: write.ct_hash.0,
-                    viewing_u: write.viewing_u.0,
-                    revision: write.revision,
-                    list_tag: write.list_tag.0,
-                },
-                exists: write.exists,
-                old: tracking_record(&write.old),
-                slot: path_of(&write.slot)?,
-                low: tracking_record(&write.low),
-                low_path: path_of(&write.low_path)?,
-            })
-        })
-        .collect::<Result<_, RingError>>()?;
-    Ok(ApplyProofInputs {
-        old_root: response.old_root.0,
-        new_root: response.new_root.0,
-        old_next_index: response.old_next_index,
-        new_next_index: response.new_next_index,
-        chain_start: response.chain_start.0,
-        chain_end: response.chain_end.0,
-        writes,
-    })
 }
 
 pub(crate) fn storage_ix(accounts: Vec<AccountMeta>, data: Vec<u8>) -> Instruction {

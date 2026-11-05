@@ -140,9 +140,7 @@ async fn a_merge_takes_every_input_one_transaction_carries() {
     assert!(matches!(
         crate::submission::check_transaction_size(
             &payer,
-            &one_more
-                .preview_instruction(&input, payer, &config)
-                .unwrap(),
+            &one_more.preview_instruction(&input, payer).unwrap(),
             crate::submission::send_budget(custom_ring_interface::InstructionTag::Merge, None),
         ),
         Err(RingError::TransactionTooLarge { .. })
@@ -335,9 +333,7 @@ async fn a_wide_zero_key_merge_asks_its_holder_once_for_the_prefix_it_fits() {
     assert!(matches!(
         crate::submission::check_transaction_size(
             &payer,
-            &one_more
-                .preview_instruction(&input, payer, &config)
-                .unwrap(),
+            &one_more.preview_instruction(&input, payer).unwrap(),
             budget,
         ),
         Err(RingError::TransactionTooLarge { .. } | RingError::TooManyAddresses { .. })
@@ -412,7 +408,7 @@ async fn a_pda_owns_a_zero_key_and_a_keyed_merge_on_both_modes() {
             Some(program_owner),
             "{mode:?}"
         );
-        let instruction = zero.preview_instruction(&input, payer, &config).unwrap();
+        let instruction = zero.preview_instruction(&input, payer).unwrap();
         assert!(instruction
             .accounts
             .iter()

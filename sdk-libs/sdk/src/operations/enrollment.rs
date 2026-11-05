@@ -17,11 +17,14 @@ use std::error::Error as StdError;
 use async_trait::async_trait;
 use borsh::BorshDeserialize;
 use custom_ring_interface::{
-    domain, key_catalog::RingCircuit, tag, AuditCredential, EnrollIxData, EnrollRequest,
-    Enrollment, InstructionTag,
+    domain,
+    key_catalog::RingCircuit,
+    storage_instruction::{tag as storage_tag, OwnerGrantIxData},
+    tag, AuditCredential, EnrollIxData, EnrollRequest, Enrollment, InstructionTag, OwnerGrant,
+    ReaderKeyBytes, SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
-use solana_instruction::Instruction;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
@@ -68,6 +71,7 @@ use crate::{
     prover::{to_instruction_proof, RingRequest},
     relay_message::{ExpectedEnroll, ExpectedMessage},
     request::KeyRegister,
+    storage::storage_ix,
     submission::{check_transaction_size, outcome, send_budget, transaction_error, Outcome},
     trees::tree_id,
     CustomRing, CustomRingConfig, MessageMismatch, PreparedRelay, RingError,
@@ -594,5 +598,40 @@ impl EnrollmentAttempt {
             EnrollmentOutcome::Expired => self.instruction.submit(client, signers, journal).await,
             settled => Err(RingError::AttemptNotExpired(settled)),
         }
+    }
+}
+
+/// A PDA owner's on-chain reader grant, its program signs through CPI. The grant address binds the
+/// ring program, the owner and the reader, so the builder derives it and takes no address.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WriteOwnerGrant {
+    pub payer: Address,
+    pub owner: Address,
+    pub ring: CustomRing,
+    pub reader: ReaderKeyBytes,
+    pub active: bool,
+}
+
+impl WriteOwnerGrant {
+    pub fn grant(&self) -> Address {
+        OwnerGrant::find_address(&self.ring.program_id(), &self.owner, &self.reader).0
+    }
+
+    pub fn instruction(self) -> Instruction {
+        let data = OwnerGrantIxData {
+            ring_program: self.ring.program_id(),
+            reader: self.reader,
+            active: u8::from(self.active),
+        };
+        storage_ix(
+            vec![
+                AccountMeta::new(self.payer, true),
+                AccountMeta::new_readonly(self.owner, true),
+                AccountMeta::new(self.grant(), false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            ],
+            [&[storage_tag::OWNER_GRANT][..], bytemuck::bytes_of(&data)].concat(),
+        )
     }
 }
