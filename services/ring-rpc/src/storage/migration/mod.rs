@@ -48,7 +48,7 @@ impl MigrationTrait for Schema {
         for sql in [
             format!("CREATE TABLE records_batches (id {serial}, registry {blob} NOT NULL, signature {blob} NOT NULL, revision BIGINT NOT NULL, last_valid_block_height BIGINT NOT NULL, status TEXT NOT NULL)"),
             format!("CREATE TABLE cosign_admission (ring {blob} NOT NULL, asset {blob} NOT NULL, PRIMARY KEY(ring, asset))"),
-            format!("CREATE TABLE cosign_usage (signature {blob} NOT NULL, ring {blob} NOT NULL, owner {blob} NOT NULL, asset {blob} NOT NULL, slot BIGINT NOT NULL, debit {blob} NOT NULL, charged_outflow {blob} NOT NULL, deposited {blob} NOT NULL, withdrawn {blob} NOT NULL, confirmed BOOLEAN NOT NULL, message_digest {blob} NOT NULL, PRIMARY KEY(signature, owner, asset))"),
+            format!("CREATE TABLE cosign_usage (signature {blob} NOT NULL, ring {blob} NOT NULL, owner {blob} NOT NULL, asset {blob} NOT NULL, slot BIGINT NOT NULL, outflow_hi BIGINT NOT NULL, outflow_lo BIGINT NOT NULL, deposited_hi BIGINT NOT NULL, deposited_lo BIGINT NOT NULL, withdrawn_hi BIGINT NOT NULL, withdrawn_lo BIGINT NOT NULL, confirmed BOOLEAN NOT NULL, PRIMARY KEY(signature, owner, asset))"),
             format!("CREATE TABLE finalized_notes (ring {blob} NOT NULL, commitment {blob} NOT NULL, sealed {blob} NOT NULL, nullifier_tag {blob}, revision BIGINT NOT NULL, PRIMARY KEY(ring, commitment))"),
             format!("CREATE TABLE projection_revisions (ring {blob} NOT NULL PRIMARY KEY, revision BIGINT NOT NULL)"),
             format!("CREATE TABLE owner_notes (ring {blob} NOT NULL, owner_tag {blob} NOT NULL, note_tag {blob} NOT NULL, sealed {blob} NOT NULL, spent_slot BIGINT, PRIMARY KEY(ring, owner_tag, note_tag))"),
@@ -78,7 +78,7 @@ impl MigrationTrait for Schema {
             format!("CREATE TABLE pending_derivations (ring {blob} NOT NULL, member {blob} NOT NULL, after_tag {blob}, PRIMARY KEY(ring, member))"),
             format!("CREATE TABLE projection_leases (ring {blob} NOT NULL PRIMARY KEY, holder {blob} NOT NULL, instance {blob} NOT NULL, token BIGINT NOT NULL, expires_at BIGINT NOT NULL)"),
             "CREATE INDEX cosign_usage_window ON cosign_usage(ring, asset, slot)".to_owned(),
-            "CREATE INDEX cosign_usage_message ON cosign_usage(message_digest)".to_owned(),
+            "CREATE INDEX cosign_usage_owner ON cosign_usage(ring, asset, owner, slot)".to_owned(),
             "CREATE INDEX grants_reader ON grants(reader)".to_owned(),
             "CREATE INDEX finalized_notes_nullifier ON finalized_notes(ring, nullifier_tag)".to_owned(),
             "CREATE INDEX finalized_notes_revision ON finalized_notes(ring, revision)".to_owned(),

@@ -1,8 +1,12 @@
-use std::{collections::BTreeSet, future::Future, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    future::Future,
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use custom_ring_interface::CoSignScope;
-use sea_orm::TransactionTrait;
+use sea_orm::{ConnectionTrait, DbErr, TransactionTrait};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_message::VersionedMessage;
@@ -17,7 +21,7 @@ use crate::{
         AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy, CoSignRefusal,
         CoSignRequest, CoSignSettlement, CoSignerApproval, OwnerFlow,
     },
-    cosign_usage::{MessageDigest, Reservation, Reserve, UsageLedger, UsageWindow},
+    cosign_usage::{Measure, Reserve, UsageLedger, WindowSum},
     database::Store,
     error::RingRpcError,
     hub::Shared,
@@ -88,31 +92,37 @@ pub struct LimitedCoSigner<L> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AssetCheck {
+pub(crate) struct AssetCheck {
     pub asset: Address,
     pub policy: MintPolicy,
 }
 
-/// Windows end at the current `slot`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WindowUsage {
-    pub slot: u64,
-    pub reservations: Vec<Reservation>,
+/// Each non-zero cap's window total before the transfer, the sender cap per owner.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct WindowTotals(HashMap<TotalKey, u128>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TotalKey {
+    asset: Address,
+    measure: Measure,
+    /// `None` on a ring cap.
+    owner: Option<[u8; 32]>,
+}
+
+/// The ledger reads a window per non-zero cap, ending at `slot`.
+#[must_use]
+struct TotalsRead<'a> {
+    ring: &'a Address,
+    slot: u64,
+    flows: &'a [OwnerFlow],
+    checks: &'a [AssetCheck],
 }
 
 #[must_use]
-pub struct LimitDecision<'a> {
+pub(crate) struct LimitDecision<'a> {
     pub flows: &'a [OwnerFlow],
     pub assets: &'a [AssetCheck],
-    pub usage: &'a WindowUsage,
-}
-
-#[derive(Clone, Copy)]
-enum Measure {
-    Outflow,
-    Volume,
-    Deposited,
-    Withdrawn,
+    pub held: &'a WindowTotals,
 }
 
 #[derive(Clone, Copy)]
@@ -217,9 +227,7 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
         {
             return Ok(CoSignDecision::Refused(CoSignRefusal::NotApproved));
         }
-        let message_bytes = request.message.serialize();
-        let signature = self.signer.sign_message(&message_bytes);
-        let message = MessageDigest::of(&message_bytes);
+        let signature = self.signer.sign_message(&request.message.serialize());
 
         // 4. Co-signers sharing the store decide one at a time for each asset.
         let transaction = self.store.connection().begin().await?;
@@ -231,32 +239,26 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             return Ok(CoSignDecision::Signed(signature));
         }
 
-        // 6. The window read and the reservation commit in one database transaction. Another
-        // approver's rows of the message stay out of the read, so a later approver passes the
-        // same limits the message passed once and adds no second count, and a message admitted
-        // since then has already counted the first approver's rows.
-        let usage = WindowUsage {
+        // 6. The window read and the reservation commit in one database transaction. Each
+        // approver's signature reserves its own rows, one Ring RPC serves a ring.
+        let held = TotalsRead {
+            ring: &request.ring,
             slot,
-            reservations: ledger
-                .window(UsageWindow {
-                    ring: &request.ring,
-                    assets: &assets,
-                    since_slot: slot.saturating_sub(longest_window(&checks)),
-                    message: &message,
-                })
-                .await?,
-        };
+            flows: &flows,
+            checks: &checks,
+        }
+        .read(&ledger)
+        .await?;
         let decision = LimitDecision {
             flows: &flows,
             assets: &checks,
-            usage: &usage,
+            held: &held,
         }
         .decide(signature);
         if let CoSignDecision::Signed(_) = decision {
             ledger
                 .reserve(Reserve {
                     signature: &signature,
-                    message: &message,
                     ring: &request.ring,
                     slot,
                     flows: &flows,
@@ -417,6 +419,67 @@ impl Operation {
     }
 }
 
+impl TotalsRead<'_> {
+    async fn read<C: ConnectionTrait>(
+        self,
+        ledger: &UsageLedger<'_, C>,
+    ) -> Result<WindowTotals, DbErr> {
+        let mut totals = HashMap::new();
+        for check in self.checks {
+            for cap in window_caps(&check.policy.limits) {
+                // A zero cap reads nothing, a zero window counts the checked transaction alone.
+                if cap.cap == 0 || cap.window_slots == 0 {
+                    continue;
+                }
+                let sum = WindowSum {
+                    ring: self.ring,
+                    asset: &check.asset,
+                    measure: cap.measure,
+                    after_slot: after_slot(self.slot, cap.window_slots)?,
+                };
+                let key = |owner| TotalKey {
+                    asset: check.asset,
+                    measure: cap.measure,
+                    owner,
+                };
+                match cap.scope {
+                    Scope::Owner => {
+                        let owners: Vec<[u8; 32]> = self
+                            .flows
+                            .iter()
+                            .filter(|flow| flow.flow.asset == check.asset)
+                            .map(|flow| *flow.owner.as_bytes())
+                            .collect();
+                        for (owner, total) in ledger.owner_totals(sum, &owners).await? {
+                            totals.insert(key(Some(owner)), total);
+                        }
+                    }
+                    Scope::Ring => {
+                        totals.insert(key(None), ledger.ring_total(sum).await?);
+                    }
+                }
+            }
+        }
+        Ok(WindowTotals(totals))
+    }
+}
+
+impl WindowTotals {
+    /// Zero under a zero window, `None` for a window the read skipped.
+    fn held(&self, asset: Address, cap: &WindowCap, owner: Option<[u8; 32]>) -> Option<u128> {
+        if cap.window_slots == 0 {
+            return Some(0);
+        }
+        self.0
+            .get(&TotalKey {
+                asset,
+                measure: cap.measure,
+                owner,
+            })
+            .copied()
+    }
+}
+
 impl LimitDecision<'_> {
     /// `signature` is the co-signature over the request message.
     pub fn decide(self, signature: Signature) -> CoSignDecision {
@@ -443,47 +506,25 @@ impl LimitDecision<'_> {
             // Credits never move between owners, each answers for its own debit.
             Scope::Owner => of_asset().all(|flow| {
                 fits(
-                    self.window_total(asset, cap, Some(flow.owner.as_bytes()))
+                    self.held
+                        .held(asset, cap, Some(*flow.owner.as_bytes()))
                         .zip(cap.measure.of(&flow.flow))
                         .and_then(|(held, moved)| held.checked_add(moved)),
                 )
             }),
-            Scope::Ring => fits(self.window_total(asset, cap, None).and_then(|held| {
+            Scope::Ring => fits(self.held.held(asset, cap, None).and_then(|held| {
                 of_asset()
                     .map(|flow| cap.measure.of(&flow.flow))
                     .try_fold(held, |total, moved| total.checked_add(moved?))
             })),
         }
     }
-
-    fn window_total(
-        &self,
-        asset: Address,
-        cap: &WindowCap,
-        owner: Option<&[u8; 32]>,
-    ) -> Option<u128> {
-        self.usage
-            .reservations
-            .iter()
-            .filter(|reservation| {
-                reservation.flow.asset == asset
-                    && self.usage.slot.saturating_sub(reservation.slot) < cap.window_slots
-                    && owner.is_none_or(|owner| reservation.owner == *owner)
-            })
-            .map(|reservation| cap.measure.of(&reservation.flow))
-            .try_fold(0u128, |total, measured| total.checked_add(measured?))
-    }
 }
 
-impl Measure {
-    fn of(self, flow: &AssetFlow) -> Option<u128> {
-        match self {
-            Self::Outflow => Some(flow.charged_outflow),
-            Self::Volume => flow.charged_outflow.checked_add(flow.deposited),
-            Self::Deposited => Some(flow.deposited),
-            Self::Withdrawn => Some(flow.withdrawn),
-        }
-    }
+/// A row counts while `slot - row.slot < window_slots`, a row of a later slot counts too.
+fn after_slot(slot: u64, window_slots: u64) -> Result<i64, DbErr> {
+    let after = (i128::from(slot) - i128::from(window_slots)).max(-1);
+    i64::try_from(after).map_err(|_| DbErr::Custom("usage slot exceeds the column range".into()))
 }
 
 /// A zero window counts the checked transaction alone.
@@ -517,15 +558,6 @@ fn window_caps(limits: &zolana_ring_policy::AssetLimits) -> [WindowCap; 4] {
             Measure::Withdrawn,
         ),
     ]
-}
-
-fn longest_window(checks: &[AssetCheck]) -> u64 {
-    checks
-        .iter()
-        .flat_map(|check| window_caps(&check.policy.limits))
-        .map(|cap| cap.window_slots)
-        .max()
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -567,15 +599,16 @@ mod tests {
         }
     }
 
-    fn window(slot: u64, owner: u8, amount: u64) -> WindowUsage {
-        WindowUsage {
-            slot,
-            reservations: vec![Reservation {
-                owner: [owner; 32],
-                slot: 1_000,
-                flow: debit(owner, amount).flow,
-            }],
-        }
+    /// One window total of `measure`, an owner's or the ring's.
+    fn held(measure: Measure, owner: Option<u8>, total: u128) -> WindowTotals {
+        WindowTotals(HashMap::from([(
+            TotalKey {
+                asset: ASSET,
+                measure,
+                owner: owner.map(|owner| [owner; 32]),
+            },
+            total,
+        )]))
     }
 
     fn policy(limits: AssetLimits) -> MintPolicy {
@@ -592,7 +625,7 @@ mod tests {
         }]
     }
 
-    /// A gross past `u64::MAX` reads exact under a zero cap, a total past `u128::MAX` refuses.
+    /// A gross past `u64::MAX` signs under a zero cap and refuses under any cap, a held total past it refuses.
     #[test]
     fn a_gross_past_u64_signs_uncapped_and_an_overflowing_total_refuses() {
         let signature = Signature::from([1; 64]);
@@ -613,16 +646,16 @@ mod tests {
                 }),
             }]
         };
-        let decide = |flows: &[OwnerFlow], cap: u64, usage: &WindowUsage| {
+        let decide = |flows: &[OwnerFlow], cap: u64, held: &WindowTotals| {
             LimitDecision {
                 flows,
                 assets: &limits(cap),
-                usage,
+                held,
             }
             .decide(signature)
         };
         let past_u64 = u128::from(u64::MAX) + 1;
-        let idle = window(1_000, 7, 0);
+        let idle = held(Measure::Withdrawn, None, 0);
         assert_eq!(
             decide(&[withdrawal(past_u64)], 0, &idle),
             CoSignDecision::Signed(signature)
@@ -631,55 +664,23 @@ mod tests {
             decide(&[withdrawal(past_u64)], u64::MAX, &idle),
             CoSignDecision::Refused(CoSignRefusal::OverLimit)
         );
-        let full = WindowUsage {
-            slot: 1_000,
-            reservations: vec![Reservation {
-                owner: [7; 32],
-                slot: 1_000,
-                flow: withdrawal(u128::MAX).flow,
-            }],
-        };
+        let full = held(Measure::Withdrawn, None, past_u64);
         assert_eq!(
-            decide(&[withdrawal(1)], u64::MAX, &full),
+            decide(&[withdrawal(0)], u64::MAX, &full),
             CoSignDecision::Refused(CoSignRefusal::OverLimit)
-        );
-    }
-
-    #[test]
-    fn a_second_transfer_over_the_owner_window_cap_is_refused() {
-        let signature = Signature::from([1; 64]);
-        let decide = |owner: u8, usage: &WindowUsage| {
-            LimitDecision {
-                flows: &[debit(owner, 60)],
-                assets: &sender_check(),
-                usage,
-            }
-            .decide(signature)
-        };
-
-        assert_eq!(
-            decide(7, &window(1_049, 7, 60)),
-            CoSignDecision::Refused(CoSignRefusal::OverLimit)
-        );
-        assert_eq!(
-            decide(7, &window(1_050, 7, 60)),
-            CoSignDecision::Signed(signature)
-        );
-        assert_eq!(
-            decide(8, &window(1_049, 7, 60)),
-            CoSignDecision::Signed(signature)
         );
     }
 
     #[test]
     fn each_owner_of_a_mixed_transfer_answers_for_its_own_window() {
         let signature = Signature::from([1; 64]);
-        let usage = window(1_010, 7, 60);
+        let mut usage = held(Measure::Outflow, Some(7), 60);
+        usage.0.extend(held(Measure::Outflow, Some(8), 0).0);
         let decide = |flows: &[OwnerFlow]| {
             LimitDecision {
                 flows,
                 assets: &sender_check(),
-                usage: &usage,
+                held: &usage,
             }
             .decide(signature)
         };
@@ -706,15 +707,12 @@ mod tests {
                 ..AssetLimits::EMPTY
             }),
         }];
-        let usage = WindowUsage {
-            slot: 1_000,
-            reservations: Vec::new(),
-        };
+        let usage = held(Measure::Volume, None, 0);
         let decide = |flows: &[OwnerFlow]| {
             LimitDecision {
                 flows,
                 assets: &check,
-                usage: &usage,
+                held: &usage,
             }
             .decide(signature)
         };
@@ -1244,91 +1242,6 @@ mod tests {
                 .await,
             Err(RingRpcError::CoSign(CoSignError::RepeatedAsset))
         ));
-    }
-
-    fn approver(store: &Store, key: u8) -> LimitedCoSigner<FixedLimits> {
-        LimitedCoSignerInit {
-            signer: Keypair::new_from_array([key; 32]),
-            limits: within_limits(),
-            store: Arc::new(store.clone()),
-            approval: all_classes(),
-        }
-        .build()
-    }
-
-    async fn signed(approver: &LimitedCoSigner<FixedLimits>, request: &CoSignRequest) -> Signature {
-        match approver.decide(request).await.expect("decision") {
-            CoSignDecision::Signed(signature) => signature,
-            refused => panic!("within the cap, got {refused:?}"),
-        }
-    }
-
-    async fn assert_over_limit(approver: &LimitedCoSigner<FixedLimits>, request: &CoSignRequest) {
-        assert_eq!(
-            approver.decide(request).await.expect("decision"),
-            CoSignDecision::Refused(CoSignRefusal::OverLimit)
-        );
-    }
-
-    #[tokio::test]
-    async fn two_approvers_count_one_message_once_and_another_message_again() {
-        let store = Store::open("sqlite::memory:", 1).await.expect("store");
-        let [first, second] = [5, 6].map(|key| approver(&store, key));
-        let shared = signed(&first, &request(1, 60)).await;
-        let other = signed(&second, &request(1, 60)).await;
-        assert_ne!(shared, other, "each approver signs with its own key");
-
-        assert_over_limit(&second, &request(2, 41)).await;
-        signed(&second, &request(2, 40)).await;
-        assert_over_limit(&first, &request(3, 1)).await;
-    }
-
-    #[tokio::test]
-    async fn a_message_counts_until_every_approver_frees_it() {
-        let store = Store::open("sqlite::memory:", 1).await.expect("store");
-        let [first, second] = [5, 6].map(|key| approver(&store, key));
-        let first_hold = signed(&first, &request(1, 60)).await;
-        let second_hold = signed(&second, &request(1, 60)).await;
-
-        first
-            .settle(CoSignSettlement::Failed(first_hold))
-            .await
-            .expect("settle");
-        assert_over_limit(&first, &request(2, 41)).await;
-
-        second
-            .settle(CoSignSettlement::Failed(second_hold))
-            .await
-            .expect("settle");
-        signed(&first, &request(2, 100)).await;
-    }
-
-    #[tokio::test]
-    async fn one_approver_confirming_keeps_the_message_through_the_other_failing() {
-        let store = Store::open("sqlite::memory:", 1).await.expect("store");
-        let [first, second] = [5, 6].map(|key| approver(&store, key));
-        let first_hold = signed(&first, &request(1, 60)).await;
-        let second_hold = signed(&second, &request(1, 60)).await;
-
-        first
-            .settle(CoSignSettlement::Confirmed(first_hold))
-            .await
-            .expect("confirm");
-        second
-            .settle(CoSignSettlement::Failed(second_hold))
-            .await
-            .expect("late failure");
-        first
-            .settle(CoSignSettlement::Failed(first_hold))
-            .await
-            .expect("late failure");
-        assert_eq!(
-            store_rows(&store).await,
-            2,
-            "no approver's row settles alone"
-        );
-        assert_over_limit(&second, &request(2, 41)).await;
-        signed(&second, &request(2, 40)).await;
     }
 
     async fn co_signer(url: &str) -> Arc<LimitedCoSigner<FixedLimits>> {

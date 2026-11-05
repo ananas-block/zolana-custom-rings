@@ -1,34 +1,46 @@
+//! Co-sign window usage, one row per signature, owner and asset, summed in SQL per cap.
+//!
+//! Every read and reservation runs under the `cosign_admission` row lock of its ring and asset.
+//! A measure stores capped at 2^64 as two 32 bit halves in signed `BIGINT` columns, so SQL sums
+//! them exactly, and any total past `u64::MAX` reads past every cap.
+//!
+//! Read after `services/ring-rpc/src/operations/cosign_limits.rs`.
+
+use std::collections::HashMap;
+
 use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, Value};
-use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_signature::Signature;
 
-use crate::cosign::{AssetFlow, OwnerFlow};
+use crate::{
+    cosign::{AssetFlow, OwnerFlow},
+    record_update::MAX_LIMIT_WINDOW_SLOTS,
+};
 
-/// Counts until its window passes or every approver of an unconfirmed message frees it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Reservation {
-    pub owner: [u8; 32],
-    pub slot: u64,
-    pub flow: AssetFlow,
+/// One past every u64 cap, the order of a capped total against a cap stays the order of the true total.
+const MEASURE_CEILING: u128 = 1 << 64;
+
+/// The quantity a cap bounds, each read from the stored halves of its columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Measure {
+    Outflow,
+    Volume,
+    Deposited,
+    Withdrawn,
 }
 
-/// The one identity of a transaction across the separate signatures of its approvers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MessageDigest([u8; 32]);
-
-pub(crate) struct UsageWindow<'a> {
+/// Rows of one ring and asset with a slot past `after_slot`.
+#[derive(Clone, Copy)]
+pub(crate) struct WindowSum<'a> {
     pub ring: &'a Address,
-    pub assets: &'a [Address],
-    pub since_slot: u64,
-    /// Left out of the window, the decision adds its flows once itself.
-    pub message: &'a MessageDigest,
+    pub asset: &'a Address,
+    pub measure: Measure,
+    /// Negative counts every row.
+    pub after_slot: i64,
 }
 
-/// One row per approver, owner and asset, the window counts a message once across approvers.
 pub(crate) struct Reserve<'a> {
     pub signature: &'a Signature,
-    pub message: &'a MessageDigest,
     pub ring: &'a Address,
     pub slot: u64,
     pub flows: &'a [OwnerFlow],
@@ -38,13 +50,25 @@ pub(crate) struct UsageLedger<'a, C> {
     pub conn: &'a C,
 }
 
-impl MessageDigest {
-    pub fn of(message: &[u8]) -> Self {
-        Self(Sha256::digest(message).into())
+impl Measure {
+    /// `None` past `u128::MAX`, an overflowing measure lies past every cap.
+    pub fn of(self, flow: &AssetFlow) -> Option<u128> {
+        match self {
+            Self::Outflow => Some(flow.charged_outflow),
+            Self::Volume => flow.charged_outflow.checked_add(flow.deposited),
+            Self::Deposited => Some(flow.deposited),
+            Self::Withdrawn => Some(flow.withdrawn),
+        }
     }
 
-    fn value(&self) -> Value {
-        Value::from(self.0.to_vec())
+    /// Volume adds two capped columns, a sum at or past 2^64 still reads past every cap.
+    fn halves(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Outflow => ("outflow_hi", "outflow_lo"),
+            Self::Volume => ("outflow_hi+deposited_hi", "outflow_lo+deposited_lo"),
+            Self::Deposited => ("deposited_hi", "deposited_lo"),
+            Self::Withdrawn => ("withdrawn_hi", "withdrawn_lo"),
+        }
     }
 }
 
@@ -71,63 +95,89 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
         Ok(row.is_some())
     }
 
-    /// Approvers of one message hold separate rows, each frees only its own, so usage outlives
-    /// a failure one relay reports while another still holds a stored `Sent` of the message.
-    /// Grouping on the digest counts those rows once, the latest approver's slot holds the
-    /// window. Rows of one message that disagree on an amount stay separate and all count,
-    /// a disagreement never lowers the total.
-    pub async fn window(&self, window: UsageWindow<'_>) -> Result<Vec<Reservation>, DbErr> {
-        let sql = "SELECT asset, owner, MAX(slot) AS slot, debit, charged_outflow, deposited, \
-                   withdrawn FROM cosign_usage \
-                   WHERE ring=$1 AND asset=$2 AND slot>=$3 AND message_digest<>$4 \
-                   GROUP BY message_digest, asset, owner, debit, charged_outflow, deposited, withdrawn";
-        let mut reservations = Vec::new();
-        for asset in window.assets {
-            let values = vec![
-                address_value(window.ring),
-                address_value(asset),
-                slot_value(window.since_slot)?,
-                window.message.value(),
-            ];
-            for row in self.conn.query_all(self.statement(sql, values)).await? {
-                reservations.push(reservation(&row)?);
-            }
-        }
-        Ok(reservations)
+    /// Every owner's rows of the window, a ring cap bounds them together.
+    pub async fn ring_total(&self, sum: WindowSum<'_>) -> Result<u128, DbErr> {
+        let (hi, lo) = sum.measure.halves();
+        let sql = format!(
+            "SELECT {} FROM cosign_usage WHERE ring=$1 AND asset=$2 AND slot>$3",
+            summed(hi, lo)
+        );
+        let row = self
+            .conn
+            .query_one(self.statement(&sql, sum.values()))
+            .await?
+            .ok_or_else(|| DbErr::Custom("an aggregate returned no row".into()))?;
+        total(&row)
     }
 
+    /// Each named owner's rows of the window, an owner with none reads zero.
+    pub async fn owner_totals(
+        &self,
+        sum: WindowSum<'_>,
+        owners: &[[u8; 32]],
+    ) -> Result<HashMap<[u8; 32], u128>, DbErr> {
+        if owners.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let (hi, lo) = sum.measure.halves();
+        let named = (0..owners.len())
+            .map(|index| format!("${}", index + 4))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT owner, {} FROM cosign_usage WHERE ring=$1 AND asset=$2 AND slot>$3 \
+             AND owner IN ({named}) GROUP BY owner",
+            summed(hi, lo)
+        );
+        let mut values = sum.values();
+        values.extend(owners.iter().map(|owner| Value::from(owner.to_vec())));
+        let mut totals: HashMap<_, _> = owners.iter().map(|owner| (*owner, 0)).collect();
+        for row in self.conn.query_all(self.statement(&sql, values)).await? {
+            totals.insert(bytes(&row, "owner")?, total(&row)?);
+        }
+        Ok(totals)
+    }
+
+    /// Rows past the longest window a record writer accepts count toward no cap and leave.
     pub async fn reserve(&self, reserve: Reserve<'_>) -> Result<(), DbErr> {
-        let sql = "INSERT INTO cosign_usage(signature,asset,ring,owner,slot,debit,charged_outflow,\
-                   deposited,withdrawn,confirmed,message_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
+        let sql = "INSERT INTO cosign_usage(signature,asset,ring,owner,slot,outflow_hi,outflow_lo,\
+                   deposited_hi,deposited_lo,withdrawn_hi,withdrawn_lo,confirmed) \
+                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
+        let prune = "DELETE FROM cosign_usage WHERE ring=$1 AND asset=$2 AND slot<$3";
+        let oldest = reserve.slot.checked_sub(MAX_LIMIT_WINDOW_SLOTS);
         for OwnerFlow { owner, flow } in reserve.flows {
-            let values = vec![
+            let mut values = vec![
                 signature_value(reserve.signature),
                 address_value(&flow.asset),
                 address_value(reserve.ring),
                 Value::from(owner.as_bytes().to_vec()),
                 slot_value(reserve.slot)?,
-                amount_value(flow.debit),
-                amount_value(flow.charged_outflow),
-                amount_value(flow.deposited),
-                amount_value(flow.withdrawn),
-                Value::from(false),
-                reserve.message.value(),
             ];
+            for amount in [flow.charged_outflow, flow.deposited, flow.withdrawn] {
+                values.extend(halves(amount));
+            }
+            values.push(Value::from(false));
             self.conn.execute(self.statement(sql, values)).await?;
+            if let Some(oldest) = oldest {
+                let values = vec![
+                    address_value(reserve.ring),
+                    address_value(&flow.asset),
+                    slot_value(oldest)?,
+                ];
+                self.conn.execute(self.statement(prune, values)).await?;
+            }
         }
         Ok(())
     }
 
-    /// One statement over every approver's rows of the message, no row settles alone.
     pub async fn confirm(&self, signature: &Signature) -> Result<(), DbErr> {
-        let sql = "UPDATE cosign_usage SET confirmed=$2 WHERE message_digest IN \
-                   (SELECT message_digest FROM cosign_usage WHERE signature=$1)";
+        let sql = "UPDATE cosign_usage SET confirmed=$2 WHERE signature=$1";
         let values = vec![signature_value(signature), Value::from(true)];
         self.conn.execute(self.statement(sql, values)).await?;
         Ok(())
     }
 
-    /// One statement over the rows of one approver, a confirmed transaction keeps its usage.
+    /// A confirmed transaction keeps its usage.
     pub async fn free(&self, signature: &Signature) -> Result<(), DbErr> {
         let sql = "DELETE FROM cosign_usage WHERE signature=$1 AND confirmed=$2";
         let values = vec![signature_value(signature), Value::from(false)];
@@ -140,20 +190,35 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
     }
 }
 
-fn reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
-    let amount = |column| bytes::<16>(row, column).map(u128::from_be_bytes);
-    let slot = row.try_get::<i64>("", "slot")?;
-    Ok(Reservation {
-        owner: bytes(row, "owner")?,
-        slot: u64::try_from(slot).map_err(|_| DbErr::Custom("negative usage slot".into()))?,
-        flow: AssetFlow {
-            asset: Address::new_from_array(bytes(row, "asset")?),
-            debit: amount("debit")?,
-            charged_outflow: amount("charged_outflow")?,
-            deposited: amount("deposited")?,
-            withdrawn: amount("withdrawn")?,
-        },
-    })
+impl WindowSum<'_> {
+    fn values(&self) -> Vec<Value> {
+        vec![
+            address_value(self.ring),
+            address_value(self.asset),
+            Value::from(self.after_slot),
+        ]
+    }
+}
+
+/// A half is below 2^33 per row, the cast refuses a sum past `i64::MAX` rather than wrap.
+fn summed(hi: &str, lo: &str) -> String {
+    format!(
+        "CAST(COALESCE(SUM({hi}),0) AS BIGINT) AS hi, CAST(COALESCE(SUM({lo}),0) AS BIGINT) AS lo"
+    )
+}
+
+fn total(row: &QueryResult) -> Result<u128, DbErr> {
+    let half = |column| {
+        let sum = row.try_get::<i64>("", column)?;
+        u128::try_from(sum).map_err(|_| DbErr::Custom("negative usage sum".into()))
+    };
+    Ok((half("hi")? << 32) + half("lo")?)
+}
+
+fn halves(amount: u128) -> [Value; 2] {
+    let capped = amount.min(MEASURE_CEILING);
+    let half = |value: u128| Value::from(value as i64);
+    [half(capped >> 32), half(capped & u128::from(u32::MAX))]
 }
 
 fn bytes<const N: usize>(row: &QueryResult, column: &str) -> Result<[u8; N], DbErr> {
@@ -168,10 +233,6 @@ fn signature_value(signature: &Signature) -> Value {
 
 fn address_value(address: &Address) -> Value {
     Value::from(address.as_ref().to_vec())
-}
-
-fn amount_value(amount: u128) -> Value {
-    Value::from(amount.to_be_bytes().to_vec())
 }
 
 fn slot_value(slot: u64) -> Result<Value, DbErr> {
