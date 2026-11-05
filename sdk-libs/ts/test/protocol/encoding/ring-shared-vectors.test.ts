@@ -440,10 +440,12 @@ describe("transfer key selection", () => {
     expect(key).toMatchObject({ class: 40, outputs: 2, wide: true });
     if (key === undefined) throw new Error("missing key");
     const capacity = transferPoolCapacity(key);
-    expect(ringTransferCircuit({
-      ...fittedSpend(candidate),
-      pools: { ...candidate.pools, own: capacity.own + 1 },
-    })).toBeUndefined();
+    expect(
+      ringTransferCircuit({
+        ...fittedSpend(candidate),
+        pools: { ...candidate.pools, own: capacity.own + 1 },
+      }),
+    ).toBeUndefined();
   });
 
   it("routes payout format only through its confidential profile", () => {
@@ -455,7 +457,11 @@ describe("transfer key selection", () => {
       pools: { own: 35, curator: 35, tracking: 17 },
     };
     const key = ringTransferCircuit(fittedSpend(payout));
-    expect(key).toMatchObject({ format: DisclosureFormat.SingleAssetPayout, class: 1, outputs: 16 });
+    expect(key).toMatchObject({
+      format: DisclosureFormat.SingleAssetPayout,
+      class: 1,
+      outputs: 16,
+    });
     if (key === undefined) throw new Error("missing payout key");
     expect(transferPoolCapacity(key)).toEqual(payout.pools);
     for (const candidate of [
@@ -468,7 +474,8 @@ describe("transfer key selection", () => {
       { ...payout, legs: 1 },
       { ...payout, owners: 2 },
       { ...payout, pools: { ...payout.pools, own: 36 } },
-    ]) expect(ringTransferCircuit(candidate)).toBeUndefined();
+    ])
+      expect(ringTransferCircuit(candidate)).toBeUndefined();
   });
 
   it("holds the pools of pool_capacity.json", () => {

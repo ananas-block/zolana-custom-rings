@@ -172,7 +172,11 @@ describe("getSpendCoverage", () => {
       integrityFaults: [],
     });
     const authority = await generateKeyPairSigner();
-    const coverage = await rpc.getSpendCoverage({ target: TARGET, authority, cursor: new Uint8Array([4, 5]) });
+    const coverage = await rpc.getSpendCoverage({
+      target: TARGET,
+      authority,
+      cursor: new Uint8Array([4, 5]),
+    });
     expect(coverage).not.toHaveProperty("totals");
     const params = bodies[0]?.["params"] as Record<string, unknown>;
     expect(params["cursor"]).toBe(Buffer.from([4, 5]).toString("base64"));
@@ -194,7 +198,13 @@ describe("getSpendCoverage", () => {
     expect(coverage.unresolvedReal[0]?.nullifier).toEqual(new Uint8Array(32).fill(0x20));
     expect(coverage.unreadable).toHaveLength(1);
     expect(coverage.positionSlot).toBe(12n);
-    expect(coverage.totals).toEqual({ observed: 5n, padding: 2n, address: 3n, external: 1n, resolved: 1n });
+    expect(coverage.totals).toEqual({
+      observed: 5n,
+      padding: 2n,
+      address: 3n,
+      external: 1n,
+      resolved: 1n,
+    });
     expect(coverage.cursor).toEqual(new Uint8Array([1, 2, 3]));
     const params = bodies[0]?.["params"] as Record<string, unknown>;
     expect(bodies[0]?.["method"]).toBe("getSpendCoverage");
@@ -249,19 +259,31 @@ describe("wallet snapshots", () => {
     };
     const release = new TextDecoder().decode(walletSnapshotReleaseAttestation(input));
     const read = new TextDecoder().decode(walletStatusAttestation(input));
-    expect(release).toBe(read.replace("zolana/ring-rpc-wallet-status", "zolana/ring-rpc-wallet-snapshot-release"));
-    expect(walletSnapshotReleaseAttestation({ ...input, cursor: snapshotCursor(2) })).not.toEqual(walletSnapshotReleaseAttestation(input));
+    expect(release).toBe(
+      read.replace("zolana/ring-rpc-wallet-status", "zolana/ring-rpc-wallet-snapshot-release"),
+    );
+    expect(walletSnapshotReleaseAttestation({ ...input, cursor: snapshotCursor(2) })).not.toEqual(
+      walletSnapshotReleaseAttestation(input),
+    );
   });
 
   it("releases after all pages are consumed", async () => {
     const { rpc, bodies } = sequence([snapshotPage(snapshotCursor(1)), snapshotPage(), true]);
     const pages = [];
-    for await (const page of rpc.walletStatusPages({ target: TARGET, wallet: WALLET, signer: reader })) {
+    for await (const page of rpc.walletStatusPages({
+      target: TARGET,
+      wallet: WALLET,
+      signer: reader,
+    })) {
       pages.push(page);
     }
     expect(pages).toHaveLength(2);
     expect(pages[0]?.snapshotExpiresAt).toBe(300n);
-    expect(bodies.map((body) => body["method"])).toEqual(["getWalletStatus", "getWalletStatus", "releaseWalletSnapshot"]);
+    expect(bodies.map((body) => body["method"])).toEqual([
+      "getWalletStatus",
+      "getWalletStatus",
+      "releaseWalletSnapshot",
+    ]);
     const release = bodies[2]?.["params"] as Record<string, unknown>;
     expect(release["cursor"]).toBe(Buffer.from(snapshotCursor(1)).toString("base64"));
   });
@@ -276,7 +298,10 @@ describe("wallet snapshots", () => {
       abort.abort();
       break;
     }
-    expect(bodies.map((body) => body["method"])).toEqual(["getWalletStatus", "releaseWalletSnapshot"]);
+    expect(bodies.map((body) => body["method"])).toEqual([
+      "getWalletStatus",
+      "releaseWalletSnapshot",
+    ]);
     expect(signals[1]?.aborted ?? false).toBe(false);
   });
 
@@ -306,7 +331,11 @@ describe("wallet snapshots", () => {
   it("needs no release for a single page", async () => {
     const { snapshotExpiresAt: _, ...single } = snapshotPage();
     const { rpc, bodies } = sequence([single]);
-    for await (const _page of rpc.walletStatusPages({ target: TARGET, wallet: WALLET, signer: reader })) {
+    for await (const _page of rpc.walletStatusPages({
+      target: TARGET,
+      wallet: WALLET,
+      signer: reader,
+    })) {
     }
     expect(bodies.map((body) => body["method"])).toEqual(["getWalletStatus"]);
   });
@@ -323,9 +352,13 @@ describe("delegate snapshots", () => {
       cursor: snapshotCursor(1),
     };
     expect(new TextDecoder().decode(delegateSnapshotReleaseAttestation(input))).toBe(
-      new TextDecoder().decode(delegateNotesAttestation(input)).replace("zolana/ring-rpc-delegate-notes", "zolana/ring-rpc-delegate-snapshot-release"),
+      new TextDecoder()
+        .decode(delegateNotesAttestation(input))
+        .replace("zolana/ring-rpc-delegate-notes", "zolana/ring-rpc-delegate-snapshot-release"),
     );
-    expect(delegateSnapshotReleaseAttestation({ ...input, owner: addressOf(5) })).not.toEqual(delegateSnapshotReleaseAttestation(input));
+    expect(delegateSnapshotReleaseAttestation({ ...input, owner: addressOf(5) })).not.toEqual(
+      delegateSnapshotReleaseAttestation(input),
+    );
   });
 
   it("releases the delegate session when its iterator returns", async () => {
@@ -338,7 +371,10 @@ describe("delegate snapshots", () => {
     const first = await pages.next();
     expect(first.done).toBe(false);
     await pages.return();
-    expect(bodies.map((body) => body["method"])).toEqual(["getDelegateNotes", "releaseDelegateSnapshot"]);
+    expect(bodies.map((body) => body["method"])).toEqual([
+      "getDelegateNotes",
+      "releaseDelegateSnapshot",
+    ]);
     expect(bodies[1]?.["params"]).toEqual(expect.objectContaining({ owner: WALLET }));
   });
 });

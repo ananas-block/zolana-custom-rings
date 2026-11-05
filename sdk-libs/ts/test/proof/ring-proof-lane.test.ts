@@ -25,7 +25,10 @@ import {
 } from "../../src/proof/audit-proof.js";
 import { checkHiddenOwnerSpends } from "../../src/operations/payments/anonymous.js";
 import { InputClass } from "../../src/protocol/codec/audit-stream.js";
-import { DisclosureFormat, type AuditStreamLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  DisclosureFormat,
+  type AuditStreamLayout,
+} from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { depositStatementElements } from "../../src/proof/deposit-audit.js";
 import { checkInputKeys, checkOutputKeys } from "../../src/proof/policy-proof.js";
 import { enrolledSalt } from "../../src/proof/policy-proof.js";

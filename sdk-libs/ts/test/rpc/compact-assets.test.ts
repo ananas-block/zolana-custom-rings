@@ -19,10 +19,7 @@ import {
 import { splAssetCounterAddress, splAssetRegistryAddress } from "@heliuslabs/zolana/internal";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import { kitReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import {
-  COMPACT_ASSET_LOOKUP_BUDGET,
-  CompactAssetResolver,
-} from "../../src/rpc/compact-assets.js";
+import { COMPACT_ASSET_LOOKUP_BUDGET, CompactAssetResolver } from "../../src/rpc/compact-assets.js";
 
 const mint = address("54XGz8UVJaGpwba1nxsNC4AfVZ6Uiue6J9cymVSv2Qpu");
 const base64Decoder = getBase64Decoder();
@@ -81,7 +78,11 @@ function reader(registryRead: (assetId: bigint) => Promise<readonly RegistryEntr
     (program: Address, config: Readonly<{ filters: readonly Filter[] }>) => ({
       send: async () => {
         expect(program).toBe(SHIELDED_POOL_PROGRAM_ID);
-        expect(config).toMatchObject({ commitment: "confirmed", minContextSlot: 99n, withContext: true });
+        expect(config).toMatchObject({
+          commitment: "confirmed",
+          minContextSlot: 99n,
+          withContext: true,
+        });
         const filter = config.filters.find(
           (filter) => filter.memcmp.offset === SPL_ASSET_REGISTRY_ASSET_ID_OFFSET,
         );
@@ -105,7 +106,10 @@ describe("compact asset resolution", () => {
     expect(await resolver.resolve(0n)).toEqual({ kind: "foreign" });
     expect(await resolver.resolve(100n)).toEqual({ kind: "foreign" });
     expect(await resolver.resolve(0xffff_ffff_ffff_ffffn)).toEqual({ kind: "foreign" });
-    expect(await resolver.resolve(1n)).toMatchObject({ kind: "resolved", mint: { asset: SOL_MINT } });
+    expect(await resolver.resolve(1n)).toMatchObject({
+      kind: "resolved",
+      mint: { asset: SOL_MINT },
+    });
     expect(rpc.getProgramAccounts).not.toHaveBeenCalled();
     const resolved = await resolver.resolve(2n);
     expect(resolved).toMatchObject({ kind: "resolved", mint: { asset: mint, assetId: 2n } });
@@ -117,7 +121,9 @@ describe("compact asset resolution", () => {
   it("treats a missing allocated mapping as inconsistent", async () => {
     const rpc = reader(async () => []);
     const resolver = await CompactAssetResolver.open({ client: rpc.client, targetSlot: 99n });
-    await expect(resolver.resolve(2n)).rejects.toMatchObject({ code: "CLIENT_INVALID_RPC_RESPONSE" });
+    await expect(resolver.resolve(2n)).rejects.toMatchObject({
+      code: "CLIENT_INVALID_RPC_RESPONSE",
+    });
     expect(resolver.remainingLookups).toBe(COMPACT_ASSET_LOOKUP_BUDGET - 1);
   });
 
@@ -129,7 +135,9 @@ describe("compact asset resolution", () => {
       return field === "duplicate" ? [row, row] : [row];
     });
     const resolver = await CompactAssetResolver.open({ client: rpc.client, targetSlot: 99n });
-    await expect(resolver.resolve(2n)).rejects.toMatchObject({ code: "CLIENT_INVALID_RPC_RESPONSE" });
+    await expect(resolver.resolve(2n)).rejects.toMatchObject({
+      code: "CLIENT_INVALID_RPC_RESPONSE",
+    });
   });
 
   it("pauses without another network read when the lookup budget is empty", async () => {
@@ -151,12 +159,16 @@ describe("compact asset resolution", () => {
     let unavailable = true;
     const rpc = reader(async (assetId) => {
       if (unavailable) {
-        throw new SolanaError(SOLANA_ERROR__JSON_RPC__METHOD_NOT_FOUND, { __serverMessage: "unavailable" });
+        throw new SolanaError(SOLANA_ERROR__JSON_RPC__METHOD_NOT_FOUND, {
+          __serverMessage: "unavailable",
+        });
       }
       return [await registration(assetId)];
     });
     const resolver = await CompactAssetResolver.open({ client: rpc.client, targetSlot: 99n });
-    await expect(resolver.resolve(2n)).rejects.toMatchObject({ code: "CLIENT_UNSUPPORTED_RPC_METHOD" });
+    await expect(resolver.resolve(2n)).rejects.toMatchObject({
+      code: "CLIENT_UNSUPPORTED_RPC_METHOD",
+    });
     unavailable = false;
     expect(await resolver.resolve(2n)).toMatchObject({ kind: "resolved" });
     expect(rpc.getProgramAccounts).toHaveBeenCalledTimes(2);

@@ -119,21 +119,35 @@ export class GapScan {
     if (!found && this.#end >= this.#requiredEnd) return false;
     this.#gap = min(this.#gap * 2n, PAGE_LIMIT);
     this.#start = this.#end;
-    this.#end = saturatingAdd(this.#start, this.#start < this.#requiredEnd ? PAGE_LIMIT : this.#gap);
+    this.#end = saturatingAdd(
+      this.#start,
+      this.#start < this.#requiredEnd ? PAGE_LIMIT : this.#gap,
+    );
     return true;
   }
 
   state(): GapScanState {
     return {
-      from: this.#from, start: this.#start, end: this.#end, gap: this.#gap,
-      requiredEnd: this.#requiredEnd, late: [...this.#late], observed: [...this.#observed],
+      from: this.#from,
+      start: this.#start,
+      end: this.#end,
+      gap: this.#gap,
+      requiredEnd: this.#requiredEnd,
+      late: [...this.#late],
+      observed: [...this.#observed],
     };
   }
 
   static restore(state: GapScanState): GapScan {
     const scan = new GapScan(state.from, StreamCounter.EMPTY);
-    if (state.start < state.from || state.end < state.start || state.end - state.start > PAGE_LIMIT ||
-        state.gap < TAG_GAP || state.gap > PAGE_LIMIT || state.requiredEnd < state.from)
+    if (
+      state.start < state.from ||
+      state.end < state.start ||
+      state.end - state.start > PAGE_LIMIT ||
+      state.gap < TAG_GAP ||
+      state.gap > PAGE_LIMIT ||
+      state.requiredEnd < state.from
+    )
       throw invalid("invalid gap scan state");
     scan.#start = state.start;
     scan.#end = state.end;

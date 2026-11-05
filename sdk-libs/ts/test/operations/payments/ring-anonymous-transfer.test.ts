@@ -1067,7 +1067,9 @@ describe("anonymous ring exits and entries", () => {
       expect(proven.accounts.ownerSigners).toEqual([coOwner.shieldedAddress().solanaAddress()]);
       const core = await anonymousCoreInputs(fixture);
       for (const [index, ring] of [hiddenRing, publicRing].entries()) {
-        expect(itemAt(request.inputs, index).ringDataHash).toEqual(small(ring === "ring" ? 0x66 : 0));
+        expect(itemAt(request.inputs, index).ringDataHash).toEqual(
+          small(ring === "ring" ? 0x66 : 0),
+        );
         expect(itemAt(core.inputs, index).circuit.ringDataHash).toBe(ring === "ring" ? 0x66n : 0n);
       }
       expect(core.signerPublicKeyHashes.filter((value) => value !== 0n)).toEqual([

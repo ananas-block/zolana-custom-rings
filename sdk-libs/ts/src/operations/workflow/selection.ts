@@ -61,14 +61,17 @@ export function selectFunding(
   return entries;
 }
 
-export function selectCoveredUtxos(input: Parameters<typeof selectUtxos>[0]): ReturnType<typeof selectUtxos> {
+export function selectCoveredUtxos(
+  input: Parameters<typeof selectUtxos>[0],
+): ReturnType<typeof selectUtxos> {
   const coverage = recoveryCoverage(input.wallet);
   if (coverage === undefined || coverage.status === "Complete") return selectUtxos(input);
   return selectUtxos({
     ...input,
     policy: {
       ...input.policy,
-      eligible: (note) => input.policy.eligible(note) && recoveryAllows(coverage, note, bytesKey(note.nullifier)),
+      eligible: (note) =>
+        input.policy.eligible(note) && recoveryAllows(coverage, note, bytesKey(note.nullifier)),
       errors: {
         ...input.policy.errors,
         insufficient: () => new RingError("RING_SYNC_INCOMPLETE"),
@@ -158,5 +161,6 @@ export const ringSelectionErrors: SpendSelectionErrors = {
 
 function recoveryCoverage(wallet: Wallet) {
   return "recoveryCoverage" in wallet && typeof wallet.recoveryCoverage === "function"
-    ? (wallet as RecoveryWallet).recoveryCoverage() : undefined;
+    ? (wallet as RecoveryWallet).recoveryCoverage()
+    : undefined;
 }

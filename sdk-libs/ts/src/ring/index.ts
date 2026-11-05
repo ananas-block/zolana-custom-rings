@@ -524,7 +524,11 @@ export {
   signPendingListApprovalsRequest,
   signRefuseListApprovalRequest,
 } from "../rpc/ring-rpc.js";
-export type { ListApprovalTarget, PolicyAuthorityAction, RingReaderGrant } from "../rpc/ring-rpc.js";
+export type {
+  ListApprovalTarget,
+  PolicyAuthorityAction,
+  RingReaderGrant,
+} from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   AuditedRingMerge,
