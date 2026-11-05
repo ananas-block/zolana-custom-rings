@@ -30,6 +30,9 @@ pub enum RingCircuit {
         writes: u8,
         mode: ApplyMode,
     },
+    ApplyEnrollments {
+        writes: u8,
+    },
     RegisterKey,
     Deposit {
         capacity: u8,
@@ -40,9 +43,9 @@ pub enum RingCircuit {
 /// Mirror `Key.Private` in `prover/ring/keys.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ApplyMode {
-    /// No write needs a credential, the key compiles no credential slot.
+    /// No write needs a tracking row, the key compiles no row opening.
     Public,
-    /// At least one private owner write, every write slot opens a credential.
+    /// At least one private owner write, the key compiles a tracking row opening per write slot.
     Private,
 }
 
@@ -198,7 +201,6 @@ impl TransferShape {
                 n_inputs: rows,
                 co_signers: 0,
                 legs,
-                credential_accounts: 0,
             }
             .owner_rows(authorization);
             if rows <= fit {
@@ -209,8 +211,8 @@ impl TransferShape {
         rows
     }
 
-    /// Mirror `credentialWithdrawals`.
-    const fn credential_withdrawals(self) -> usize {
+    /// Mirror `trackedWithdrawals`.
+    const fn tracked_withdrawals(self) -> usize {
         if self.wide {
             self.public_owners() - self.owners as usize
         } else {
@@ -258,8 +260,8 @@ impl TransferShape {
 
 /// Addresses SPP takes beside its nullifier PDAs, zolana/docs/spec.md.
 const SPP_ADDRESSES: usize = 4;
-/// Ring program, policy, config, own registry and curator registry.
-const RING_ADDRESSES: usize = 5;
+/// Ring program, ring, ring config, own, curator, tracking.
+const RING_ADDRESSES: usize = 6;
 
 /// The only spend input that moves a row's address cost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -304,8 +306,6 @@ pub struct TransferAddresses {
     pub n_inputs: usize,
     pub co_signers: usize,
     pub legs: usize,
-    /// Distinct authenticated credential tree addresses absent from the remaining transaction accounts.
-    pub credential_accounts: usize,
 }
 
 impl TransferAddresses {
@@ -317,7 +317,6 @@ impl TransferAddresses {
             .saturating_sub(self.n_inputs)
             .saturating_sub(self.co_signers.saturating_mul(2))
             .saturating_sub(self.legs)
-            .saturating_sub(self.credential_accounts)
     }
 
     /// The rows that fit, one bound for the catalog's pools and the SDK's refusal.
@@ -397,9 +396,15 @@ impl RingCircuit {
             mode,
         }
     }
+
+    pub const fn apply_enrollments(pending: u64) -> Self {
+        Self::ApplyEnrollments {
+            writes: apply_width(pending),
+        }
+    }
 }
 
-/// The narrowest apply key width holding `pending` writes up to `APPLY_BATCH`, the same in both modes.
+/// The narrowest apply key width holding `pending` writes up to `APPLY_BATCH`, the same for every apply circuit.
 pub const fn apply_width(pending: u64) -> u8 {
     match pending {
         0..=1 => 1,
@@ -415,14 +420,14 @@ pub const fn apply_width(pending: u64) -> u8 {
 pub struct RecordPools {
     pub own: usize,
     pub curator: usize,
-    pub credentials: usize,
+    pub tracking: usize,
 }
 
 impl RecordPools {
     const fn within(self, capacity: Self) -> bool {
         self.own <= capacity.own
             && self.curator <= capacity.curator
-            && self.credentials <= capacity.credentials
+            && self.tracking <= capacity.tracking
     }
 }
 
@@ -440,26 +445,6 @@ impl RingCircuit {
         match self {
             Self::Transfer { owners, .. } => Some(owners),
             _ => None,
-        }
-    }
-
-    pub fn credential_capacity(self) -> Option<usize> {
-        if !RING_KEYS.iter().any(|key| key.circuit == self) {
-            return None;
-        }
-        match self {
-            Self::Transfer { .. } => self.record_pools().map(|pools| pools.credentials),
-            Self::Deposit { capacity } => Some(usize::from(capacity)),
-            Self::Merge => Some(1),
-            Self::ApplyRecords {
-                writes,
-                mode: ApplyMode::Private,
-            } => Some(usize::from(writes)),
-            Self::ApplyRecords {
-                mode: ApplyMode::Public,
-                ..
-            } => Some(0),
-            Self::RegisterKey => None,
         }
     }
 
@@ -497,7 +482,7 @@ impl RingCircuit {
         Some(RecordPools {
             own: distinct + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: distinct + withdrawal_assets,
-            credentials: owners + outputs + shape.credential_withdrawals(),
+            tracking: owners + outputs + shape.tracked_withdrawals(),
         })
     }
 }
@@ -627,7 +612,7 @@ mod tests {
             Some(RecordPools {
                 own: 41,
                 curator: 41,
-                credentials: 18
+                tracking: 18
             })
         );
     }
@@ -681,7 +666,7 @@ mod tests {
             Some(RecordPools {
                 own: 95,
                 curator: 95,
-                credentials: 45
+                tracking: 45
             })
         );
     }
@@ -750,38 +735,23 @@ mod tests {
     }
 
     #[test]
-    fn credential_accounts_reduce_owner_capacity_without_changing_the_catalog() {
-        let base = TransferAddresses {
-            n_inputs: 24,
-            co_signers: 5,
-            legs: 4,
-            credential_accounts: 0,
+    fn the_address_bound_leaves_room_for_each_key_of_the_catalog() {
+        let bound = |n_inputs, co_signers, legs| {
+            TransferAddresses {
+                n_inputs,
+                co_signers,
+                legs,
+            }
+            .owner_signers()
         };
-        assert_eq!(base.owner_signers(), 17);
-        assert_eq!(
-            TransferAddresses {
-                credential_accounts: 1,
-                ..base
-            }
-            .owner_signers(),
-            16
-        );
-        assert_eq!(
-            TransferAddresses {
-                credential_accounts: 17,
-                ..base
-            }
-            .owner_signers(),
-            0
-        );
-        assert_eq!(
-            TransferAddresses {
-                credential_accounts: 18,
-                ..base
-            }
-            .owner_signers(),
-            0
-        );
+        assert_eq!(bound(24, 0, 0), 30);
+        assert_eq!(bound(32, 0, 0), 22);
+        assert_eq!(bound(24, 5, 4), 16);
+        assert_eq!(bound(64, 5, 32), 0);
+        for shape in TRANSFER_SHAPES {
+            let owners = usize::from(shape.owners);
+            assert!(owners <= bound(owners, 0, 0));
+        }
     }
 
     #[test]
@@ -800,10 +770,6 @@ mod tests {
                 legs: usize::MAX,
                 ..base
             },
-            TransferAddresses {
-                credential_accounts: usize::MAX,
-                ..base
-            },
         ] {
             assert_eq!(accounts.owner_signers(), 0);
         }
@@ -813,10 +779,10 @@ mod tests {
     fn the_pools_hold_every_screened_owner_output_and_withdrawal() {
         let pools = |circuit: RingCircuit| {
             let pools = circuit.record_pools().unwrap();
-            (pools.own, pools.curator, pools.credentials)
+            (pools.own, pools.curator, pools.tracking)
         };
         assert_eq!(pools(transfer(2, 24, 4, 4)), (15, 15, 6));
-        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (115, 115, 52));
+        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (113, 113, 51));
         assert_eq!(pools(transfer(16, 5, 8, 5)), (48, 48, 21));
         assert_eq!(pools(wide(16, 5, 8, 5).circuit()), (77, 77, 29));
         assert_eq!(pools(entry(4, 8, 4, 8).circuit()), (39, 39, 16));
@@ -836,11 +802,11 @@ mod tests {
                 .fitted(),
             )
         };
-        let credentials = RecordPools {
-            credentials: 7,
+        let tracked = RecordPools {
+            tracking: 7,
             ..RecordPools::default()
         };
-        assert_eq!(fitted(2, credentials), Some(wide(8, 24, 32, 24).circuit()));
+        assert_eq!(fitted(2, tracked), Some(wide(8, 24, 32, 24).circuit()));
         // Two owners, the payment's asset and 13 unmatched input assets hold the 15 narrow rows.
         let distinct_assets = |unmatched: usize| RecordPools {
             own: 2 + 1 + unmatched,
@@ -864,13 +830,13 @@ mod tests {
         let salted = RecordPools {
             own: 2 * 29 + 1,
             curator: 2 * 29 + 1,
-            credentials: 29,
+            tracking: 29,
         };
         assert_eq!(fitted(16, salted), Some(wide(16, 5, 8, 5).circuit()));
         let public = RecordPools {
             own: 29 + 1,
             curator: 29 + 1,
-            credentials: 21,
+            tracking: 21,
         };
         assert_eq!(fitted(16, public), Some(transfer(16, 5, 8, 5)));
     }

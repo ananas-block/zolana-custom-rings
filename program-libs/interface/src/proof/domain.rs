@@ -25,8 +25,12 @@ pub const RECORD_WRITE: u32 = 0x4352_5157;
 pub const APPLY_RECORDS: u32 = 0x4352_4150;
 /// `"CRRG"`
 pub const REGISTER_KEY: u32 = 0x4352_5247;
-pub const CREDENTIAL_STATE: u32 = 0x4352_4352;
-pub const CREDENTIAL_SEED: u32 = 0x4352_4341;
+/// `"CRTK"`
+pub const TRACKING_LEAF: u32 = 0x4352_544b;
+/// `"CRTQ"`
+pub const TRACKING_ENTRY: u32 = 0x4352_5451;
+/// `"CRTA"`
+pub const APPLY_ENROLLMENTS: u32 = 0x4352_5441;
 /// `"CRDB"`
 pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
 /// `"CRDP"`
@@ -57,7 +61,7 @@ pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
 }
 
-/// `Poseidon(CRPT, list_salt)`, immutable in the credential.
+/// `Poseidon(CRPT, list_salt)`, final in the tracking leaf.
 pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[&field(LIST_TAG), list_salt])
 }

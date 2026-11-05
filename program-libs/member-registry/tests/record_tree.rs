@@ -6,15 +6,15 @@ use custom_ring_interface::{
     mint_policy_write,
     storage::{RegistryId, RootUpdate, StorageError, StorageRegistry},
     storage_instruction::{AssetWrite, InitializeIxData, StorageUpdateIxData},
-    ApplyRecordsIxData, CredentialRead, RecordWrite, RecordWriteData, WriteRecordsIxData,
-    FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
+    ApplyRecordsIxData, PrivateWrites, RecordWrite, RecordWriteData, WriteRecordsIxData, FIELD_MAX,
+    MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
 };
 use solana_address::Address;
 use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{
     quad_node, AppliedTree, Canopy, IndexedRecord, MemberRecord, MemberRegistryTree, NodePosition,
-    OpeningCheck, QuadPath, RecordCredentials, RecordOpening, RecordStatementContext,
-    RecordStatementError, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
+    OpeningCheck, QuadPath, RecordOpening, RecordStatementContext, RecordStatementError,
+    RecordStore, RecordTracking, RecordTree, RecordTreeError, ZERO_SUBTREES,
 };
 use zolana_ring_policy::{ListId, ListSet, Member, MintPolicy};
 
@@ -451,13 +451,13 @@ fn registry() -> StorageRegistry {
             registry_id: RegistryId::default(),
             grace_slots: [0; 8],
             ring_id: [0; 32],
-            private_ring_id: [0; 32],
+            tracking_registry: Address::default(),
         },
     )
 }
 
 #[test]
-fn public_statements_select_the_public_key_and_bind_no_credentials() {
+fn public_statements_select_the_public_key_and_bind_no_tracking_root() {
     let proof = MemberRegistryTree::new()
         .unwrap()
         .apply(
@@ -471,12 +471,12 @@ fn public_statements_select_the_public_key_and_bind_no_credentials() {
         .unwrap()
         .proof;
     let mut state = registry();
-    state.private_ring_id = member(9);
+    state.tracking_registry = Address::new_from_array(member(9));
     let statement = proof
         .statement(RecordStatementContext {
             registry: &state,
             asset_writes: &[],
-            credentials: RecordCredentials::Public,
+            tracking: RecordTracking::Public,
         })
         .unwrap();
     assert_eq!(statement.count, 3);
@@ -510,7 +510,7 @@ fn only_a_tightening_write_retires_the_served_root() {
             registry_id: RegistryId::default(),
             grace_slots: 10u64.to_le_bytes(),
             ring_id: [0; 32],
-            private_ring_id: [0; 32],
+            tracking_registry: Address::default(),
         },
     );
     for (entry, served) in [
@@ -528,7 +528,7 @@ fn only_a_tightening_write_retires_the_served_root() {
             .statement(RecordStatementContext {
                 registry: &state,
                 asset_writes: &[],
-                credentials: RecordCredentials::Public,
+                tracking: RecordTracking::Public,
             })
             .unwrap();
         let apply = ApplyRecordsIxData {
@@ -549,15 +549,13 @@ fn only_a_tightening_write_retires_the_served_root() {
                 mint_policy: mint_policy_write(entry.mint_policy),
             }],
             asset_writes: Vec::new(),
-            credential_read: CredentialRead::empty(),
-            private_write: None,
+            tracking_revision: None,
             apply: &apply,
         };
         state
             .update(RootUpdate {
                 slot: 1,
                 data: &data,
-                absence_checkpoint: None,
             })
             .unwrap();
         assert_eq!(state.root(revision, 1).is_ok(), served, "{entry:?}");
@@ -579,14 +577,59 @@ fn private_owner_writes_cannot_use_public_statement_context() {
                 proof.statement(RecordStatementContext {
                     registry: &state,
                     asset_writes: &[],
-                    credentials: RecordCredentials::Public,
+                    tracking: RecordTracking::Public,
                 }),
                 Err(RecordStatementError::Storage(
-                    StorageError::InvalidCredentialRead
+                    StorageError::InvalidTrackingRegistry
                 ))
             ));
         }
     }
+}
+
+#[test]
+fn private_owner_writes_bind_the_tracking_root_on_a_pinned_registry_only() {
+    let private = ListId::PrivateBlock.record_bit();
+    let proof = MemberRegistryTree::new()
+        .unwrap()
+        .apply(
+            [0; 32],
+            &[write(4, private, private), write(5, ALLOW, ALLOW)],
+        )
+        .unwrap()
+        .proof;
+    let tracking = RecordTracking::Private {
+        tracking_root: member(7),
+    };
+    let unpinned = registry();
+    assert!(matches!(
+        proof.statement(RecordStatementContext {
+            registry: &unpinned,
+            asset_writes: &[],
+            tracking,
+        }),
+        Err(RecordStatementError::Storage(
+            StorageError::PrivateWriteWithoutTracking
+        ))
+    ));
+    let mut pinned = registry();
+    pinned.tracking_registry = Address::new_from_array(member(9));
+    let statement = proof
+        .statement(RecordStatementContext {
+            registry: &pinned,
+            asset_writes: &[],
+            tracking,
+        })
+        .unwrap();
+    assert_eq!(
+        statement.private,
+        Some(PrivateWrites {
+            private_writes: 0b01,
+            tracking_root: member(7),
+        })
+    );
+    assert_eq!(statement.mode(), ApplyMode::Private);
+    assert_eq!(statement.elements().len(), 11);
 }
 
 #[test]
@@ -610,7 +653,7 @@ fn private_asset_exemption_requires_the_exact_mint_preimage() {
                 write_index: 0,
                 mint,
             }],
-            credentials: RecordCredentials::Public,
+            tracking: RecordTracking::Public,
         })
         .unwrap();
     assert_eq!(statement.mode(), ApplyMode::Public);
@@ -625,7 +668,7 @@ fn private_asset_exemption_requires_the_exact_mint_preimage() {
                     write_index: 0,
                     mint: claimed_mint
                 }],
-                credentials: RecordCredentials::Public,
+                tracking: RecordTracking::Public,
             }),
             Err(RecordStatementError::Storage(
                 StorageError::InvalidAssetWrite
@@ -650,7 +693,7 @@ fn statements_refuse_a_different_registry_root_or_allocation_cursor() {
             proof.statement(RecordStatementContext {
                 registry: &state,
                 asset_writes: &[],
-                credentials: RecordCredentials::Public,
+                tracking: RecordTracking::Public,
             }),
             Err(RecordStatementError::RegistryStateMismatch)
         ));

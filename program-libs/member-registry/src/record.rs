@@ -9,15 +9,13 @@
 //! 3. A batch is restrictive exactly when a write tightens a policy field or changes an asset limit.
 
 use custom_ring_interface::{
-    key_catalog::apply_width,
     storage::{StorageError, StorageRegistry},
     storage_instruction::{AssetWrite, RecordWriteClassification},
-    write_chain, ApplyRecordsStatement, CredentialRootSelection, CustomRingError, PrivateWrites,
-    RecordWrite, FIELD_MAX, QUAD_HEIGHT,
+    write_chain, ApplyRecordsStatement, PrivateWrites, RecordWrite, FIELD_MAX, QUAD_HEIGHT,
 };
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use thiserror::Error;
-use zolana_ring_policy::{ring_id_field, ListSet, MintPolicy};
+use zolana_ring_policy::{ListSet, MintPolicy};
 
 use crate::{
     tree::{ApplyProofInputs, IndexedLeaf, WritableLeaf, WriteStep},
@@ -55,12 +53,14 @@ pub struct RecordWriteProofInput {
 pub struct RecordStatementContext<'a> {
     pub registry: &'a StorageRegistry,
     pub asset_writes: &'a [AssetWrite],
-    pub credentials: RecordCredentials<'a>,
+    pub tracking: RecordTracking,
 }
 
-pub enum RecordCredentials<'a> {
+/// The tracking root a private batch's rows open under, read from the pinned registry at the instruction's revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordTracking {
     Public,
-    Private(CredentialRootSelection<'a>),
+    Private { tracking_root: [u8; 32] },
 }
 
 #[derive(Debug, Error)]
@@ -69,8 +69,6 @@ pub enum RecordStatementError {
     Tree(#[from] RecordTreeError),
     #[error(transparent)]
     Storage(#[from] StorageError),
-    #[error(transparent)]
-    Credential(#[from] CustomRingError),
     #[error("proof inputs do not match the registry state")]
     RegistryStateMismatch,
 }
@@ -220,37 +218,26 @@ impl ApplyProofInputs<RecordWriteProofInput> {
         {
             return Err(RecordStatementError::RegistryStateMismatch);
         }
-        // 2. The shared host classifier binds credential selection to the exact writes and authenticated asset preimages.
-        let credential_writes = RecordWriteClassification {
+        // 2. The classifier the program runs derives the private bitmap from the exact writes and the asset preimages it authenticates.
+        let private_writes = RecordWriteClassification {
             entries: self.writes.iter().map(|write| Ok(write.entry)),
             asset_writes: context.asset_writes,
         }
-        .credential_writes()?;
+        .private_writes()?;
         let count = self.writes.len() as u64;
-        // 3. Public batches bind no credential section, private batches require the pinned ring's supplied root selection.
-        let private = match context.credentials {
-            RecordCredentials::Public => {
-                if credential_writes != 0 {
-                    return Err(StorageError::InvalidCredentialRead.into());
-                }
-                None
+        // 3. Public batches bind no tracking root, private batches need the registry's tracking pin.
+        let private = match (private_writes, context.tracking) {
+            (0, RecordTracking::Public) => None,
+            (0, RecordTracking::Private { .. }) | (_, RecordTracking::Public) => {
+                return Err(StorageError::InvalidTrackingRegistry.into());
             }
-            RecordCredentials::Private(selection) => {
-                if credential_writes == 0 || selection.capacity != usize::from(apply_width(count)) {
-                    return Err(StorageError::InvalidCredentialRead.into());
-                }
+            (private_writes, RecordTracking::Private { tracking_root }) => {
                 if !context.registry.is_private() {
-                    return Err(StorageError::PrivateWriteWithoutRing.into());
-                }
-                let ring_id = ring_id_field(selection.ring_program.as_array())
-                    .map_err(|_| StorageError::HashingFailed)?;
-                if ring_id != context.registry.private_ring_id {
-                    return Err(StorageError::InvalidPrivateRing.into());
+                    return Err(StorageError::PrivateWriteWithoutTracking.into());
                 }
                 Some(PrivateWrites {
-                    credential_writes,
-                    private_ring_id: context.registry.private_ring_id,
-                    credentials: selection.roots()?,
+                    private_writes,
+                    tracking_root,
                 })
             }
         };

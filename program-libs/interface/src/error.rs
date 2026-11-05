@@ -113,17 +113,12 @@ ring_errors! {
     UnboundRegistry = 8480 => "the registry account is not the one the ring binds",
     RootNotServed = 8481 => "the registry serves no root at the revision",
     MissingRegistry = 8482 => "the instruction reads a registry it does not pass",
+    InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
+    TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a salted source's floor",
+    SaltedSourceOtherTracking = 8504 => "a salted source pins no tracking registry or another one",
     InvalidSignerDataCounts = 8527 => "signer data counts are zero under their bit or pass the encoding",
     TooManyAnonymousParties = 8528 => "the co-signers and deposit funders pass the statement's party cells",
-    InvalidCredentialPda = 8529 => "credential PDA is invalid",
-    InvalidEnrollmentAccounts = 8530 => "enrollment accounts do not match the required layout",
-    InvalidAddressTree = 8531 => "address tree is invalid",
-    InvalidCredentialRead = 8532 => "credential read layout is invalid",
-    InvalidCredentialRoots = 8533 => "credential root table is invalid",
-    InvalidAddressCheckpoint = 8534 => "address checkpoint is invalid",
-    AbsenceRootBelowFloor = 8535 => "address root sequence is below the absence floor",
-    SaltedSourceOtherRing = 8536 => "salted source serves another ring",
-    TooManyDepositsForKey = 8537 => "the deposits outnumber the key's credential capacity",
+    TooManyDepositsForKey = 8537 => "the deposits outnumber the key's capacity",
 }
 
 impl From<CustomRingError> for ProgramError {

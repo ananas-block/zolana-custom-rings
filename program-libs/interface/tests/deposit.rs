@@ -1,5 +1,3 @@
-mod vector_credentials;
-
 use custom_ring_interface::{
     CustomRingError, CustomRingProof, DepositContext, DepositPublicInput, DepositRegistry,
     DepositedAsset, OpeningRecord, PlainGroth16Proof, RecordKind, MAX_RING_DEPOSIT_AUDIT_SLOTS,
@@ -56,9 +54,9 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
         assets: &assets,
         auditor_pk: &[6; 33],
         eph_pk: &[7; 33],
-        ring_id: &[16; 32],
-        credentials: &credentials(14),
+        tracking_root: &[14; 32],
         registry: None,
+        key_capacity: MAX_RING_DEPOSIT_AUDIT_SLOTS as u8,
     };
     let registry = |own_root, policy_hash| {
         Some(DepositRegistry {
@@ -69,10 +67,6 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
     };
     let expected = input.hash().unwrap();
     for changed in [
-        DepositPublicInput {
-            ring_id: &[17; 32],
-            ..input
-        },
         DepositPublicInput {
             context_hash: &[6; 32],
             ..input
@@ -102,7 +96,7 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
             ..input
         },
         DepositPublicInput {
-            credentials: &credentials(15),
+            tracking_root: &[15; 32],
             ..input
         },
         DepositPublicInput {
@@ -132,19 +126,6 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
     }
 }
 
-fn credentials(address_root: u8) -> custom_ring_interface::CredentialRoots {
-    vector_credentials::CredentialFixture {
-        ring_program: [0x90; 32],
-        address_root: [address_root; 32],
-        state_roots: &[custom_ring_interface::CredentialStateRoot {
-            tree_id: 3,
-            root: [14; 32],
-        }],
-        capacity: MAX_RING_DEPOSIT_AUDIT_SLOTS,
-    }
-    .roots()
-}
-
 fn asset(asset: u8, amount: u64) -> DepositedAsset {
     DepositedAsset {
         asset: [asset; 32],
@@ -161,9 +142,9 @@ fn statement_rejects_empty_oversized_and_mismatched_batches() {
         assets: &[],
         auditor_pk: &[0; 33],
         eph_pk: &[0; 33],
-        ring_id: &[16; 32],
-        credentials: &credentials(14),
+        tracking_root: &[14; 32],
         registry: None,
+        key_capacity: MAX_RING_DEPOSIT_AUDIT_SLOTS as u8,
     };
     let malformed = Err(CustomRingError::from(HasherError::InvalidNumFields));
     assert_eq!(input.hash(), malformed);
@@ -177,16 +158,6 @@ fn statement_rejects_empty_oversized_and_mismatched_batches() {
         .hash(),
         Err(CustomRingError::TooManyDepositsForKey)
     );
-    let single_key = vector_credentials::CredentialFixture {
-        ring_program: [0x90; 32],
-        address_root: [14; 32],
-        state_roots: &[custom_ring_interface::CredentialStateRoot {
-            tree_id: 3,
-            root: [14; 32],
-        }],
-        capacity: 1,
-    }
-    .roots();
     let pair = DepositPublicInput {
         owner_utxo_hashes: &[[0; 32]; 2],
         ciphertexts: &[[0; CT]; 2],
@@ -196,7 +167,7 @@ fn statement_rejects_empty_oversized_and_mismatched_batches() {
     assert!(pair.hash().is_ok());
     assert_eq!(
         DepositPublicInput {
-            credentials: &single_key,
+            key_capacity: 1,
             ..pair
         }
         .hash(),
@@ -248,8 +219,7 @@ struct VectorCase {
     amounts: Vec<u64>,
     auditor_pubkey: String,
     eph_pk: String,
-    ring_id: String,
-    credential_fields: Vec<String>,
+    tracking_root: String,
     own_root: String,
     curator_root: String,
     policy_hash: String,
@@ -259,7 +229,6 @@ struct VectorCase {
 
 #[derive(Deserialize)]
 struct Vectors {
-    ring_program: String,
     cases: Vec<VectorCase>,
 }
 
@@ -307,20 +276,6 @@ fn solved_go_deposits_reach_the_program_statement_and_the_reader() {
             array(&case.curator_root),
             array(&case.policy_hash),
         );
-        let credential_fields: Vec<[u8; 32]> = case
-            .credential_fields
-            .iter()
-            .map(|value| array(value))
-            .collect();
-        let credentials = vector_credentials::CredentialFields {
-            ring_program: &array(&vectors.ring_program),
-            fields: &credential_fields,
-        }
-        .roots();
-        assert_eq!(
-            array::<32>(&case.ring_id),
-            hash_bytes(&array::<32>(&vectors.ring_program)).unwrap()
-        );
         let input = DepositPublicInput {
             context_hash: &array(&case.context_hash),
             owner_utxo_hashes: &owners,
@@ -328,8 +283,8 @@ fn solved_go_deposits_reach_the_program_statement_and_the_reader() {
             assets: &assets,
             auditor_pk: &array(&case.auditor_pubkey),
             eph_pk: &array(&case.eph_pk),
-            ring_id: &array(&case.ring_id),
-            credentials: &credentials,
+            tracking_root: &array(&case.tracking_root),
+            key_capacity: MAX_RING_DEPOSIT_AUDIT_SLOTS as u8,
             registry: (policy_hash != [0; 32]).then_some(DepositRegistry {
                 own_root: &own_root,
                 curator_root: (curator_root != [0; 32]).then_some(&curator_root),
@@ -357,9 +312,9 @@ fn a_zero_tail_stays_injective_at_the_one_length() {
             assets: &assets[..count],
             auditor_pk: &[6; 33],
             eph_pk: &[7; 33],
-            ring_id: &[16; 32],
-            credentials: &credentials(14),
+            tracking_root: &[14; 32],
             registry: None,
+            key_capacity: MAX_RING_DEPOSIT_AUDIT_SLOTS as u8,
         }
         .elements()
         .unwrap()

@@ -19,14 +19,11 @@ use spr_interface::instruction::{
 use wincode::{SchemaRead, SchemaWrite};
 
 use crate::{
-    bytes::Bytes,
-    credential_read::{CredentialRead, CredentialRoots},
-    error::CustomRingError,
-    key_catalog::RingCircuit,
-    CustomRingProof, OPENING_RECORD_LEN, TAGGED_X25519_KEY_LEN,
+    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof, OPENING_RECORD_LEN,
+    TAGGED_X25519_KEY_LEN,
 };
 
-pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 14;
+pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 12;
 /// The owner's slot in an SPP `merge_ring_v2` account list under `OwnerSigned`, past `ring_config`, payer and the two programs.
 pub const RING_MERGE_OWNER_INDEX: usize = 6;
 /// `expiry_unix_ts u64 || proof.a` open the SPP merge body ahead of `proof.b`.
@@ -44,7 +41,7 @@ pub struct SealedMergeRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomRingMergeIxData {
     /// Read under `MergeRingAuthority::Ring` alone.
-    pub credential_read: CredentialRead,
+    pub tracking_revision: Revision,
     pub output_ring_data_hash: [u8; 32],
     pub authority: MergeRingAuthority,
     pub sealed: SealedMergeRecord,
@@ -55,7 +52,6 @@ pub struct CustomRingMergeIxData {
 impl CustomRingMergeIxData {
     /// The bytes after the instruction tag.
     pub fn serialize(&self) -> Result<Vec<u8>, CustomRingError> {
-        check_credential_authority(&self.credential_read, self.authority)?;
         let body = self.merge.serialize().map_err(invalid_data)?;
         let (head, rest) = body
             .split_at_checked(MERGE_B_OFFSET)
@@ -65,11 +61,8 @@ impl CustomRingMergeIxData {
             .ok_or(CustomRingError::InvalidInstructionData)?;
         let b = solana_bn254::compression::prelude::alt_bn128_g2_compress_be(&self.merge.proof.b)
             .map_err(|_| CustomRingError::InvalidSppProofPoint)?;
-        let mut credential_read = Vec::new();
-        self.credential_read
-            .encode_state_into(&mut credential_read)?;
         Ok([
-            &credential_read[..],
+            &self.tracking_revision.0[..],
             &self.output_ring_data_hash,
             &[authority_byte(self.authority)],
             &wincode::serialize(&self.sealed).map_err(invalid_data)?,
@@ -88,7 +81,7 @@ fn invalid_data<E>(_: E) -> CustomRingError {
 
 /// Borrowed view of the tag 57 request.
 pub struct CustomRingMergeIxDataRef<'a> {
-    pub credential_read: CredentialRead,
+    pub tracking_revision: Revision,
     pub output_ring_data_hash: &'a [u8; 32],
     pub authority: MergeRingAuthority,
     pub proof: &'a CustomRingProof,
@@ -99,11 +92,9 @@ pub struct CustomRingMergeIxDataRef<'a> {
 
 impl<'a> CustomRingMergeIxDataRef<'a> {
     pub fn from_bytes(data: &'a [u8]) -> Result<Self, CustomRingError> {
-        let mut remaining = data;
-        let credential_read = CredentialRead::decode_state(&mut remaining)?;
-        let mut bytes = Bytes::new(remaining, CustomRingError::InvalidInstructionData);
-        let request = Self {
-            credential_read,
+        let mut bytes = Bytes::new(data, CustomRingError::InvalidInstructionData);
+        Ok(Self {
+            tracking_revision: *bytes.pod()?,
             output_ring_data_hash: bytes.array()?,
             authority: match bytes.byte()? {
                 0 => MergeRingAuthority::Ring,
@@ -114,9 +105,7 @@ impl<'a> CustomRingMergeIxDataRef<'a> {
             eph_pk: bytes.array()?,
             ciphertext: bytes.array()?,
             body: SppMergeBody::read(bytes)?,
-        };
-        check_credential_authority(&request.credential_read, request.authority)?;
-        Ok(request)
+        })
     }
 
     /// The SPP merge body the program forwards, `proof.b` decompressed, SPP's parser reads the rest.
@@ -133,20 +122,6 @@ impl<'a> CustomRingMergeIxDataRef<'a> {
             spp_body,
         ]
         .concat()
-    }
-}
-
-fn check_credential_authority(
-    read: &CredentialRead,
-    authority: MergeRingAuthority,
-) -> Result<(), CustomRingError> {
-    match authority {
-        MergeRingAuthority::Ring => read.check_capacity(
-            RingCircuit::Merge
-                .credential_capacity()
-                .ok_or(CustomRingError::RingShapeUnkeyed)?,
-        ),
-        MergeRingAuthority::OwnerSigned => read.check_empty(),
     }
 }
 
@@ -194,8 +169,8 @@ pub struct MergePublicInput<'a> {
     pub payer: &'a [u8; 32],
     /// The signing owner's identity under `OwnerSigned`, zero under `Ring`.
     pub published_owner: &'a [u8; 32],
-    /// One zero state entry under `OwnerSigned`, otherwise the credential's accepted state root.
-    pub credentials: &'a CredentialRoots,
+    /// Zero under `OwnerSigned`.
+    pub tracking_root: &'a [u8; 32],
 }
 
 impl MergePublicInput<'_> {
@@ -203,18 +178,10 @@ impl MergePublicInput<'_> {
         create_hash_chain_from_slice(&self.elements()?)
     }
 
-    pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
-        // 1. Merge reads one immutable credential state, no address checkpoint participates in its statement.
-        if Some(self.credentials.capacity()) != RingCircuit::Merge.credential_capacity()
-            || self.credentials.address_root() != &[0; 32]
-        {
-            return Err(HasherError::InvalidNumFields);
-        }
+    pub fn elements(&self) -> Result<[[u8; 32]; MERGE_PUBLIC_INPUT_ELEMENTS], HasherError> {
         let [auditor_lo, auditor_hi] = pack_be(self.auditor_pk);
         let [eph_lo, eph_hi] = pack_be(self.eph_pk);
-        let mut elements = Vec::with_capacity(MERGE_PUBLIC_INPUT_ELEMENTS);
-        // 2. CRMG binds the merged output and auditor record, the published owner controls the public merge exception.
-        elements.extend([
+        Ok([
             crate::domain::field(crate::domain::MERGE_STATEMENT),
             *self.output_utxo_hash,
             *self.first_nullifier,
@@ -226,11 +193,8 @@ impl MergePublicInput<'_> {
             hash_bytes(self.ciphertext)?,
             *self.payer,
             *self.published_owner,
-            *self.credentials.owner_hash(),
-        ]);
-        // 3. Canonical SPP owner and tree identity bind inclusion to the credential issuer and state namespace.
-        elements.extend(self.credentials.state_elements());
-        Ok(elements)
+            *self.tracking_root,
+        ])
     }
 }
 
