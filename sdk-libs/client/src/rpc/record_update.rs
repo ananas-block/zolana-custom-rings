@@ -1,6 +1,6 @@
 use custom_ring_interface::{
     domain, mint_policy_write, write_chain, CustomRingError, RecordWrite, RecordWriteData,
-    WriteRecordsIxData, GRACE_SLOTS,
+    WriteRecordsIxData,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -18,8 +18,8 @@ use super::{GET_RECORD_UPDATE_STATUS, SUBMIT_RECORD_UPDATE};
 
 /// Slots a graced update waits for more writes before it goes out short.
 pub const BATCH_WINDOW_SLOTS: u64 = 40;
-/// Outlives the batch window, a full grace wait and one more window for the pass that sends the batch.
-pub const RECORD_UPDATE_SLOTS: u64 = 2 * BATCH_WINDOW_SLOTS + GRACE_SLOTS;
+/// Outlives signing, the batch window and one more window for the pass that sends the batch.
+pub const RECORD_UPDATE_SLOTS: u64 = 2 * BATCH_WINDOW_SLOTS;
 
 /// Authority lists a wallet update may await, each grants and none restricts.
 pub const AWAITABLE_LISTS: ListSet =
