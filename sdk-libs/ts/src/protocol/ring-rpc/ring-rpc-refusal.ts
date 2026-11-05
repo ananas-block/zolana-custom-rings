@@ -51,6 +51,7 @@ export const RingRpcRefusal = Object.freeze({
   alreadyEnrolled: -32213,
   registerKeyProof: -32214,
   enrollmentRefused: -32215,
+  oversized: -32216,
   notDelegate: -32220,
   foreignAuditor: -32221,
   sourceUnescrowed: -32222,

@@ -751,7 +751,7 @@ function tableJson(table: PolicyTableProofInputs): Json {
       listId: integer(source.listId, `sources[${i}].listId`, 0, U8_MAX),
       registry: field(source.registry, `sources[${i}].registry`),
     })),
-    salted: integer(table.salted, "salted", 0, U8_MAX),
+    salted: integer(table.salted, "salted", 0, (1 << RING_SOURCE_SLOTS) - 1),
     policyLen: integer(table.policyLen, "policyLen", 0, RING_RULE_SLOTS),
     rules: fields(table.rules, RING_RULE_SLOTS, "rules"),
   };
