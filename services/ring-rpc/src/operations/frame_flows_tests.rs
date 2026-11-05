@@ -153,7 +153,7 @@ fn read(
     .read(0)
 }
 
-fn outflows(flows: &[OwnerFlow]) -> Vec<([u8; 32], u64)> {
+fn outflows(flows: &[OwnerFlow]) -> Vec<([u8; 32], u128)> {
     flows
         .iter()
         .map(|flow| (*flow.owner.as_bytes(), flow.flow.outflow))
@@ -171,8 +171,8 @@ fn public(withdrawn: u64, deposited: u64) -> PublicFlow {
     PublicFlow {
         mint: mint_of_asset(),
         asset: asset_field(),
-        deposited,
-        withdrawn,
+        deposited: deposited.into(),
+        withdrawn: withdrawn.into(),
     }
 }
 
@@ -364,7 +364,7 @@ fn the_reserved_figure_matches_the_circuit_quantities() {
                 mint: Address::new_from_array(identity(&public["asset"])),
                 asset: identity(&public["asset"]),
                 deposited: 0,
-                withdrawn: public["gross"].as_u64().expect("gross"),
+                withdrawn: public["gross"].as_u64().expect("gross").into(),
             })
             .collect();
         let rows = OwnerFlows {
@@ -376,7 +376,7 @@ fn the_reserved_figure_matches_the_circuit_quantities() {
         }
         .rows(|asset| Ok(Address::new_from_array(*asset)))
         .expect("rows");
-        let reserved: Vec<([u8; 32], [u8; 32], u64)> = rows
+        let reserved: Vec<([u8; 32], [u8; 32], u128)> = rows
             .iter()
             .filter(|row| row.flow.outflow != 0)
             .map(|row| {
@@ -387,14 +387,14 @@ fn the_reserved_figure_matches_the_circuit_quantities() {
                 )
             })
             .collect();
-        let circuit: Vec<([u8; 32], [u8; 32], u64)> = notes("rows")
+        let circuit: Vec<([u8; 32], [u8; 32], u128)> = notes("rows")
             .iter()
             .filter(|row| row["outflow"].as_u64() != Some(0))
             .map(|row| {
                 (
                     identity(&row["owner"]),
                     identity(&row["asset"]),
-                    row["outflow"].as_u64().expect("outflow"),
+                    u128::from(row["outflow"].as_u64().expect("outflow")),
                 )
             })
             .collect();

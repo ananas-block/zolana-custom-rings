@@ -1864,7 +1864,7 @@ impl RelayPayload {
                     flow: AssetFlow {
                         asset: inputs.asset.mint(),
                         outflow: 0,
-                        deposited: inputs.amount,
+                        deposited: inputs.amount.into(),
                         withdrawn: 0,
                     },
                 }])

@@ -93,9 +93,9 @@ struct StoredCoSign {
 struct StoredFlow {
     owner: Hash,
     asset: SerializablePubkey,
-    outflow: u64,
-    deposited: u64,
-    withdrawn: u64,
+    outflow: u128,
+    deposited: u128,
+    withdrawn: u128,
 }
 
 #[derive(Serialize, Deserialize)]

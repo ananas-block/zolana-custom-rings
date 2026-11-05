@@ -357,17 +357,17 @@ fn approval_mask(flows: &[OwnerFlow], checks: &[AssetCheck]) -> ApprovalMask {
         .map(|flow| OwnerDebit {
             owner: *flow.owner.as_bytes(),
             asset: flow.flow.asset.to_bytes(),
-            debit: flow.flow.outflow.into(),
+            debit: flow.flow.outflow,
             kept: 0,
             charge: 0,
-            outflow: flow.flow.outflow.into(),
+            outflow: flow.flow.outflow,
         })
         .collect();
     let public_gross: Vec<PublicGross> = flows
         .iter()
         .map(|flow| PublicGross {
             asset: flow.flow.asset.to_bytes(),
-            gross: flow.flow.withdrawn.into(),
+            gross: flow.flow.withdrawn,
         })
         .collect();
     ApprovalInputs {
@@ -396,7 +396,7 @@ impl Operation {
 
     /// The classes the ring's rule demands of the operation.
     fn demand(self, flows: &[OwnerFlow], mask: ApprovalMask) -> CoSignScope {
-        let moved = |legs: fn(&AssetFlow) -> u64| flows.iter().any(|flow| legs(&flow.flow) != 0);
+        let moved = |legs: fn(&AssetFlow) -> u128| flows.iter().any(|flow| legs(&flow.flow) != 0);
         let when = |held: bool, scope| if held { scope } else { CoSignScope::NONE };
         let deposits = moved(|flow| flow.deposited);
         let spends_note = match self {
@@ -437,21 +437,31 @@ impl LimitDecision<'_> {
             return true;
         }
         let of_asset = || self.flows.iter().filter(|flow| flow.flow.asset == asset);
+        // An overflowing total lies past every u64 cap and refuses.
+        let fits = |total: Option<u128>| total.is_some_and(|total| total <= u128::from(cap.cap));
         match cap.scope {
             // Credits never move between owners, each answers for its own debit.
             Scope::Owner => of_asset().all(|flow| {
-                self.window_total(asset, cap, Some(flow.owner.as_bytes()))
-                    + cap.measure.of(&flow.flow)
-                    <= u128::from(cap.cap)
+                fits(
+                    self.window_total(asset, cap, Some(flow.owner.as_bytes()))
+                        .zip(cap.measure.of(&flow.flow))
+                        .and_then(|(held, moved)| held.checked_add(moved)),
+                )
             }),
-            Scope::Ring => {
-                let moved: u128 = of_asset().map(|flow| cap.measure.of(&flow.flow)).sum();
-                self.window_total(asset, cap, None) + moved <= u128::from(cap.cap)
-            }
+            Scope::Ring => fits(self.window_total(asset, cap, None).and_then(|held| {
+                of_asset()
+                    .map(|flow| cap.measure.of(&flow.flow))
+                    .try_fold(held, |total, moved| total.checked_add(moved?))
+            })),
         }
     }
 
-    fn window_total(&self, asset: Address, cap: &WindowCap, owner: Option<&[u8; 32]>) -> u128 {
+    fn window_total(
+        &self,
+        asset: Address,
+        cap: &WindowCap,
+        owner: Option<&[u8; 32]>,
+    ) -> Option<u128> {
         self.usage
             .reservations
             .iter()
@@ -461,19 +471,17 @@ impl LimitDecision<'_> {
                     && owner.is_none_or(|owner| reservation.owner == *owner)
             })
             .map(|reservation| cap.measure.of(&reservation.flow))
-            .sum()
+            .try_fold(0u128, |total, measured| total.checked_add(measured?))
     }
 }
 
 impl Measure {
-    fn of(self, flow: &AssetFlow) -> u128 {
-        let [outflow, deposited, withdrawn] =
-            [flow.outflow, flow.deposited, flow.withdrawn].map(u128::from);
+    fn of(self, flow: &AssetFlow) -> Option<u128> {
         match self {
-            Self::Outflow => outflow,
-            Self::Volume => outflow + deposited,
-            Self::Deposited => deposited,
-            Self::Withdrawn => withdrawn,
+            Self::Outflow => Some(flow.outflow),
+            Self::Volume => flow.outflow.checked_add(flow.deposited),
+            Self::Deposited => Some(flow.deposited),
+            Self::Withdrawn => Some(flow.withdrawn),
         }
     }
 }
@@ -551,7 +559,7 @@ mod tests {
             owner: member(owner),
             flow: AssetFlow {
                 asset: ASSET,
-                outflow: amount,
+                outflow: amount.into(),
                 deposited: 0,
                 withdrawn: 0,
             },
@@ -581,6 +589,59 @@ mod tests {
             asset: ASSET,
             policy: policy(SENDER_LIMITS),
         }]
+    }
+
+    /// A gross past `u64::MAX` reads exact under a zero cap, a total past `u128::MAX` refuses.
+    #[test]
+    fn a_gross_past_u64_signs_uncapped_and_an_overflowing_total_refuses() {
+        let signature = Signature::from([1; 64]);
+        let withdrawal = |withdrawn| OwnerFlow {
+            owner: member(7),
+            flow: AssetFlow {
+                withdrawn,
+                ..debit(7, 0).flow
+            },
+        };
+        let limits = |withdrawal_cap| {
+            [AssetCheck {
+                asset: ASSET,
+                policy: policy(AssetLimits {
+                    withdrawal_cap,
+                    withdrawal_window_slots: 50,
+                    ..AssetLimits::EMPTY
+                }),
+            }]
+        };
+        let decide = |flows: &[OwnerFlow], cap: u64, usage: &WindowUsage| {
+            LimitDecision {
+                flows,
+                assets: &limits(cap),
+                usage,
+            }
+            .decide(signature)
+        };
+        let past_u64 = u128::from(u64::MAX) + 1;
+        let idle = window(1_000, 7, 0);
+        assert_eq!(
+            decide(&[withdrawal(past_u64)], 0, &idle),
+            CoSignDecision::Signed(signature)
+        );
+        assert_eq!(
+            decide(&[withdrawal(past_u64)], u64::MAX, &idle),
+            CoSignDecision::Refused(CoSignRefusal::OverLimit)
+        );
+        let full = WindowUsage {
+            slot: 1_000,
+            reservations: vec![Reservation {
+                owner: [7; 32],
+                slot: 1_000,
+                flow: withdrawal(u128::MAX).flow,
+            }],
+        };
+        assert_eq!(
+            decide(&[withdrawal(1)], u64::MAX, &full),
+            CoSignDecision::Refused(CoSignRefusal::OverLimit)
+        );
     }
 
     #[test]

@@ -2,8 +2,8 @@
 
 use custom_ring_interface::{
     frame_digest, ring_deposit_assets, settlement_mints, tag, DepositPrefix, FrameBuffer,
-    InstructionTag, ParsedTransact, RingRail, RingTransactData, RING_DEPOSIT_RING_CONFIG_INDEX,
-    RING_TRANSACT_RING_CONFIG_INDEX,
+    InstructionTag, ParsedTransact, PublicLeg, PublicSlotError, PublicSlots, RingRail,
+    RingTransactData, RING_DEPOSIT_RING_CONFIG_INDEX, RING_TRANSACT_RING_CONFIG_INDEX,
 };
 use custom_ring_sdk::CustomRing;
 use solana_account::Account;
@@ -15,6 +15,7 @@ use spr_interface::{
     instruction::{
         instruction_data::{deposit::RingDepositIxDataRef, settlement_accounts},
         tag::RING_DEPOSIT,
+        InterfaceTransfer,
     },
     pda, PROGRAM_ID_PUBKEY,
 };
@@ -59,8 +60,8 @@ struct PublicFlow {
     mint: Address,
     /// The field the statement's gross and every note of the mint hash under.
     asset: [u8; 32],
-    deposited: u64,
-    withdrawn: u64,
+    deposited: u128,
+    withdrawn: u128,
 }
 
 /// Unknown input refuses, the wallet retries once the auditor ingested the note.
@@ -286,7 +287,7 @@ fn deposit_read(
                 flow.flow.deposited = flow
                     .flow
                     .deposited
-                    .checked_add(leg.amount)
+                    .checked_add(leg.amount.into())
                     .ok_or_else(unavailable)?;
             }
             None => flows.push(OwnerFlow {
@@ -294,7 +295,7 @@ fn deposit_read(
                 flow: AssetFlow {
                     asset,
                     outflow: 0,
-                    deposited: leg.amount,
+                    deposited: leg.amount.into(),
                     withdrawn: 0,
                 },
             }),
@@ -315,39 +316,58 @@ fn public_flows(
     let data = parsed.data();
     let window = settlement_accounts(&data.interface_transfers, data.circuit(), spp)
         .ok_or_else(unavailable)?;
-    let mut flows: Vec<PublicFlow> = Vec::new();
-    for (transfer, mint) in data
-        .interface_transfers
-        .iter()
-        .zip(settlement_mints(&data.interface_transfers, window))
-    {
-        let named = mint.map_err(|_| unavailable())?.copied();
+    let named = settlement_mints(&data.interface_transfers, window)
+        .map(|mint| {
+            mint.map(Option::<&Address>::copied)
+                .map_err(|_| unavailable())
+        })
+        .collect::<Result<Vec<_>, RingRpcError>>()?;
+    fold_public_flows(data.interface_transfers.iter().copied().zip(named))
+}
+
+/// The program's fold bounds each net to a u64 magnitude, a gross past `u64::MAX` stays exact.
+fn fold_public_flows(
+    named_legs: impl ExactSizeIterator<Item = (InterfaceTransfer, Option<Address>)>,
+) -> Result<Vec<PublicFlow>, RingRpcError> {
+    // 1. Each leg names its mint, the first leg of a mint opens its slot as the fold orders them.
+    let mut mints: Vec<(Address, [u8; 32])> = Vec::new();
+    let mut legs = Vec::with_capacity(named_legs.len());
+    for (transfer, named) in named_legs {
         let mint = named.unwrap_or(SOL_MINT);
-        let asset = named.map_or(Ok(SOL_ASSET_FIELD), |mint| {
-            hash_bytes(mint.as_array()).map_err(|_| unavailable())
-        })?;
-        let position = flows.iter().position(|flow| flow.mint == mint);
-        let flow = match position {
-            Some(position) => &mut flows[position],
-            None => {
-                flows.push(PublicFlow {
-                    mint,
-                    asset,
-                    deposited: 0,
-                    withdrawn: 0,
-                });
-                flows.last_mut().ok_or_else(unavailable)?
-            }
-        };
-        let side = match transfer.is_deposit() {
-            true => &mut flow.deposited,
-            false => &mut flow.withdrawn,
-        };
-        *side = side
-            .checked_add(transfer.amount())
-            .ok_or_else(unavailable)?;
+        if !mints.iter().any(|(known, _)| *known == mint) {
+            let asset = named.map_or(Ok(SOL_ASSET_FIELD), |mint| {
+                hash_bytes(mint.as_array()).map_err(|_| unavailable())
+            })?;
+            mints.push((mint, asset));
+        }
+        legs.push(Ok(PublicLeg {
+            transfer,
+            mint: named.map(|mint| mint.to_bytes()),
+        }));
     }
-    Ok(flows)
+    // 2. The canonical fold refuses a net the program refuses, its gross is the withdrawal sum.
+    let slots = PublicSlots::fold::<PublicSlotError>(legs).map_err(|_| unavailable())?;
+    if slots.len() != mints.len() {
+        return Err(unavailable());
+    }
+    // 3. Deposits are the gross plus the signed net, the net counts a deposit positive.
+    mints
+        .into_iter()
+        .zip(slots.gross().into_iter().zip(slots.amounts()))
+        .map(|((mint, asset), (withdrawn, net))| {
+            let deposited = i128::try_from(withdrawn)
+                .ok()
+                .and_then(|gross| gross.checked_add(net))
+                .and_then(|deposited| u128::try_from(deposited).ok())
+                .ok_or_else(unavailable)?;
+            Ok(PublicFlow {
+                mint,
+                asset,
+                deposited,
+                withdrawn,
+            })
+        })
+        .collect()
 }
 
 /// A public leg has no owner on the frame, it joins the first sender or a no-spend frame's ring tag.
@@ -378,7 +398,7 @@ impl OwnerFlows<'_> {
             .iter()
             .map(|public| PublicGross {
                 asset: public.asset,
-                gross: public.withdrawn.into(),
+                gross: public.withdrawn,
             })
             .collect();
         let assets: Vec<[u8; 32]> = self
@@ -401,7 +421,7 @@ impl OwnerFlows<'_> {
                 owner: member(debit.owner)?,
                 flow: AssetFlow {
                     asset: mint_of(&debit.asset)?,
-                    outflow: u64::try_from(debit.outflow).map_err(|_| unavailable())?,
+                    outflow: debit.outflow,
                     deposited: 0,
                     withdrawn: 0,
                 },
@@ -636,60 +656,42 @@ mod tests {
         ));
     }
 
+    /// A gross past `u64::MAX` under a valid net passes exact, an aggregate the program refuses refuses here.
     #[test]
-    fn alternating_public_legs_refuse_gross_overflow() {
-        use custom_ring_interface::{CustomRingError, PublicLeg, PublicSlots};
-        use spr_interface::instruction::InterfaceTransfer;
-
-        let frame = hex::decode(
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../test-vectors/settlement/frame.hex"
-            ))
-            .lines()
-            .next()
-            .expect("frame"),
-        )
-        .expect("hex");
-        let base = RingTransactData::parse(&frame, RingRail::Confidential)
-            .expect("frame")
-            .into_data();
+    fn a_gross_past_u64_passes_and_an_invalid_aggregate_refuses() {
         let deposit = |amount| InterfaceTransfer::SolDeposit { amount };
         let withdrawal = |amount| InterfaceTransfer::SolWithdrawal { amount };
-        for amount in [u64::MAX - 1, u64::MAX] {
-            for transfers in [
-                [withdrawal(amount), deposit(amount), withdrawal(1)],
-                [deposit(amount), withdrawal(amount), deposit(1)],
-            ] {
-                let slots =
-                    PublicSlots::fold::<CustomRingError>(transfers.iter().map(|transfer| {
-                        Ok(PublicLeg {
-                            transfer: *transfer,
-                            mint: None,
-                        })
-                    }))
-                    .expect("bounded public net");
-                assert_eq!(slots.amounts()[0].unsigned_abs(), 1);
-                let mut data = base.clone();
-                data.interface_transfers = transfers.to_vec();
-                let parsed = ParsedTransact::new(data).expect("frame");
-                let flows = public_flows(&parsed, &[PAYER; 6]);
-                if amount == u64::MAX {
-                    assert!(matches!(
-                        flows,
-                        Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
-                    ));
-                } else {
-                    let flows = flows.expect("gross fits u64");
-                    assert_eq!(flows.len(), 1);
-                    let (deposited, withdrawn) = match transfers[0].is_deposit() {
-                        true => (u64::MAX, amount),
-                        false => (amount, u64::MAX),
-                    };
-                    assert_eq!(flows[0].deposited, deposited);
-                    assert_eq!(flows[0].withdrawn, withdrawn);
-                }
-            }
+        let fold = |transfers: &[InterfaceTransfer]| {
+            fold_public_flows(transfers.iter().map(|transfer| (*transfer, None)))
+        };
+        let past_u64 = u128::from(u64::MAX) + 1;
+        for (transfers, deposited, withdrawn) in [
+            (
+                [withdrawal(u64::MAX), deposit(u64::MAX), withdrawal(1)],
+                u128::from(u64::MAX),
+                past_u64,
+            ),
+            (
+                [deposit(u64::MAX), withdrawal(u64::MAX), deposit(1)],
+                past_u64,
+                u128::from(u64::MAX),
+            ),
+        ] {
+            let flows = fold(&transfers).expect("a valid net");
+            assert_eq!(flows.len(), 1);
+            assert_eq!(
+                (flows[0].deposited, flows[0].withdrawn),
+                (deposited, withdrawn)
+            );
+        }
+        for invalid in [
+            vec![withdrawal(u64::MAX), withdrawal(1)],
+            vec![deposit(5), withdrawal(5)],
+        ] {
+            assert!(matches!(
+                fold(&invalid),
+                Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
+            ));
         }
     }
 
@@ -765,8 +767,8 @@ mod tests {
             .map(|flow| PublicFlow {
                 mint: Address::new_from_array(bytes32(&flow["mint"])),
                 asset: bytes32(&flow["asset"]),
-                deposited: flow["deposited"].as_u64().expect("deposited"),
-                withdrawn: flow["withdrawn"].as_u64().expect("withdrawn"),
+                deposited: flow["deposited"].as_u64().expect("deposited").into(),
+                withdrawn: flow["withdrawn"].as_u64().expect("withdrawn").into(),
             })
             .collect();
         OwnerFlows {

@@ -33,7 +33,7 @@ fn flow(owner: u8, asset: Address, debit: u64) -> OwnerFlow {
         owner: member(owner),
         flow: AssetFlow {
             asset,
-            outflow: debit,
+            outflow: debit.into(),
             deposited: 0,
             withdrawn: 0,
         },
@@ -149,7 +149,7 @@ impl Window {
     }
 
     /// `(owner, slot, debit)` of every reservation, confirmed or not.
-    async fn rows(&self) -> Vec<(u8, i64, u64)> {
+    async fn rows(&self) -> Vec<(u8, i64, u128)> {
         let connection = self.store.connection();
         let mut rows: Vec<_> = connection
             .query_all(Statement::from_string(
@@ -165,7 +165,7 @@ impl Window {
                 (
                     owner[0],
                     row.try_get("", "slot").expect("slot"),
-                    u64::from_be_bytes(debit.try_into().expect("debit length")),
+                    u128::from_be_bytes(debit.try_into().expect("debit length")),
                 )
             })
             .collect();

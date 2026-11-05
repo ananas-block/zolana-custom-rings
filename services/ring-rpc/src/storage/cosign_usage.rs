@@ -140,7 +140,7 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
 }
 
 fn reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
-    let amount = |column| bytes::<8>(row, column).map(u64::from_be_bytes);
+    let amount = |column| bytes::<16>(row, column).map(u128::from_be_bytes);
     let slot = row.try_get::<i64>("", "slot")?;
     Ok(Reservation {
         owner: bytes(row, "owner")?,
@@ -168,7 +168,7 @@ fn address_value(address: &Address) -> Value {
     Value::from(address.as_ref().to_vec())
 }
 
-fn amount_value(amount: u64) -> Value {
+fn amount_value(amount: u128) -> Value {
     Value::from(amount.to_be_bytes().to_vec())
 }
 
