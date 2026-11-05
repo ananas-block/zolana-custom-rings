@@ -6,7 +6,7 @@ use solana_address::Address;
 use spr_keypair::viewing_key::ViewTag;
 
 use spr_client::{
-    rpc::{Context, EncryptedUtxoMatch, HistoryFilters, Page, PaginationToken},
+    rpc::{EncryptedUtxoMatch, HistoryFilters, Page, PaginationToken},
     AsyncRpc, ClientError, GetShieldedTransactionsByTagsResponse, IndexerRpcConfig,
     RingHistoryOptions, ShieldedTransaction,
 };
@@ -50,12 +50,11 @@ impl<K: Copy> TagWindow<K> {
     }
 }
 
-/// Exact-tag and spend reads, keeping the lowest persisted slot any answer reports.
+/// Exact-tag and spend reads.
 #[must_use]
 pub struct IndexerReads<'a, I: ?Sized> {
     indexer: &'a I,
     config: Option<IndexerRpcConfig>,
-    persisted: Option<u64>,
     /// Halved in place while a ring page is too large, the rest of the read asks for less.
     ring_page_limit: u32,
 }
@@ -76,14 +75,8 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
         Self {
             indexer,
             config,
-            persisted: None,
             ring_page_limit: PAGE_LIMIT,
         }
-    }
-
-    /// The lowest slot any answer reports persisted, `None` before the first answer.
-    pub fn persisted_slot(&self) -> Option<u64> {
-        self.persisted
     }
 
     /// The next page of `ring` and the limit it was asked at, a refused limit loses no row.
@@ -108,7 +101,6 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
                 .await
             {
                 Ok(page) => {
-                    self.observe(&page.context);
                     return Ok((page, limit));
                 }
                 Err(ClientError::Indexer(message))
@@ -208,7 +200,6 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
                 let end = position
                     .advance(&page, PAGE_LIMIT)
                     .map_err(|_| ClientError::IndexerCursorNotAdvanced)?;
-                self.observe(&page.context);
                 items.extend(page.data);
                 if let PageEnd::Terminal(_) = end {
                     break;
@@ -216,12 +207,5 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
             }
         }
         Ok(items)
-    }
-
-    fn observe(&mut self, context: &Context) {
-        self.persisted = Some(
-            self.persisted
-                .map_or(context.slot, |slot| slot.min(context.slot)),
-        );
     }
 }

@@ -512,23 +512,6 @@ impl<'a> RingOutput<'a> {
     }
 }
 
-/// Frame parsing alone reads it.
-pub fn exits_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
-    slot_bits(outputs.iter().map(RingOutput::is_exit))
-}
-
-/// Frame parsing alone reads it. The bitmap is public and no proof reads it, any reader sees the
-/// slots with no recipient body. SPP's external data hash binds each slot's present or absent data.
-pub fn bodiless_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
-    slot_bits(outputs.iter().map(|output| output.body == SlotBody::None))
-}
-
-fn slot_bits(set: impl Iterator<Item = bool>) -> u64 {
-    set.enumerate()
-        .filter(|(_, set)| *set)
-        .fold(0, |bits, (slot, _)| bits | 1 << slot)
-}
-
 /// Sender bundle, forwarded under its tag as the first SPP message, `m` fixes the length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramedSenderBundle<'a> {
