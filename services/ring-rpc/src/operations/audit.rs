@@ -28,7 +28,7 @@ use zolana_ring_policy::Member;
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
-    credentials::{CredentialScan, HeldCredential, OwnerCredential, ScanEnd},
+    tracking::{HeldEnrollment, OwnerEnrollment, ScanEnd, TrackingScan},
     error::{redacted, GrantRefusal, RingRpcError},
     frame_repairs::RepairBook,
     grant_rows::{GrantPair, GrantRow},
@@ -192,35 +192,35 @@ impl<S: TransactionSource> AuditService<S> {
         self.view_tag
     }
 
-    /// The store's credential alone, no scan runs.
+    /// The store's enrollment alone, no scan runs.
     pub(crate) fn held_nullifier_key(
         &self,
         owner_key: &[u8; 32],
     ) -> Result<Option<NullifierKey>, RingRpcError> {
         let member = Member::owner_tag(owner_key)?;
-        let held = self.shared.store(self.ring).credential(member.as_bytes());
+        let held = self.shared.store(self.ring).enrollment(member.as_bytes());
         Ok(held
             .map(|held| held.secrets(&self.auditor))
             .transpose()?
             .map(|secrets| secrets.nullifier_key))
     }
 
-    pub(crate) async fn scanned_credential(
+    pub(crate) async fn scanned_enrollment(
         &self,
         owner_key: &[u8; 32],
-    ) -> Result<OwnerCredential, RingRpcError> {
+    ) -> Result<OwnerEnrollment, RingRpcError> {
         let member = Member::owner_tag(owner_key)?;
-        self.scanned(|store| store.credential(member.as_bytes()))
+        self.scanned(|store| store.enrollment(member.as_bytes()))
             .await
     }
 
-    /// The owner whose list key `written_key` is, with the salt its credential seals.
+    /// The owner whose list key `written_key` is, with the salt its enrollment seals.
     pub(crate) async fn salted_owner(
         &self,
         written_key: &[u8; 32],
     ) -> Result<Option<SaltedOwner>, RingRpcError> {
         let held = self
-            .scanned(|store| store.credential_by_list_key(written_key))
+            .scanned(|store| store.enrollment_by_list_key(written_key))
             .await?
             .known()?;
         held.map(|held| {
@@ -234,31 +234,31 @@ impl<S: TransactionSource> AuditService<S> {
 
     async fn scanned(
         &self,
-        lookup: impl Fn(&AuditStore) -> Option<HeldCredential>,
-    ) -> Result<OwnerCredential, RingRpcError> {
+        lookup: impl Fn(&AuditStore) -> Option<HeldEnrollment>,
+    ) -> Result<OwnerEnrollment, RingRpcError> {
         let store = self.shared.store(self.ring);
-        // 1. The refresh holds the backfill lock, no other scan moves the position meanwhile.
+        // 1. The refresh holds the backfill lock, no other scan moves the cursor meanwhile.
         //    The holder commits each page, another replica scans into memory until its next reload.
         let scanned = {
             let mut backfill = store.backfill.lock().await;
             let seal = self.note_seal()?;
             let durable = self.writer(backfill.writer, &seal);
-            self.refresh_credentials(&store, &mut backfill.credentials, durable.as_ref())
+            self.refresh_enrollments(&store, &mut backfill.tracking_cursor, durable.as_ref())
                 .await?
         };
-        // 2. A held credential answers whatever the scan end, a missing one only after a complete scan.
+        // 2. A held enrollment answers whatever the scan end, a missing one only after a complete scan.
         Ok(match (lookup(&store), scanned) {
-            (Some(held), _) => OwnerCredential::Held(Box::new(held)),
-            (None, ScanEnd::Complete) => OwnerCredential::Absent,
-            (None, ScanEnd::Partial) => OwnerCredential::Unknown,
+            (Some(held), _) => OwnerEnrollment::Held(Box::new(held)),
+            (None, ScanEnd::Complete) => OwnerEnrollment::Absent,
+            (None, ScanEnd::Partial) => OwnerEnrollment::Unknown,
         })
     }
 
-    pub(crate) async fn credential_list_salt(
+    pub(crate) async fn enrolled_list_salt(
         &self,
         owner_key: &[u8; 32],
     ) -> Result<Option<[u8; 32]>, RingRpcError> {
-        let held = self.scanned_credential(owner_key).await?.known()?;
+        let held = self.scanned_enrollment(owner_key).await?.known()?;
         Ok(held
             .map(|held| held.secrets(&self.auditor))
             .transpose()?
@@ -269,7 +269,7 @@ impl<S: TransactionSource> AuditService<S> {
         &self,
         owner_key: &[u8; 32],
     ) -> Result<Option<NullifierKey>, RingRpcError> {
-        let held = self.scanned_credential(owner_key).await?.known()?;
+        let held = self.scanned_enrollment(owner_key).await?.known()?;
         Ok(held
             .map(|held| held.secrets(&self.auditor))
             .transpose()?
@@ -330,11 +330,16 @@ impl<S: TransactionSource> AuditService<S> {
             .grant(&request.auth, &attestation, Some(wallet))
             .await?;
         grant.spend().await?;
-        let credential = self.scanned_credential(&wallet.to_bytes()).await?;
+        // The owner's own authorization account answers, it needs no scan.
+        let enrollment = self
+            .shared
+            .source
+            .tracking_enrollment(self.ring, wallet)
+            .await?;
         self.shared
             .store(self.ring)
             .wallet_status(WalletStatusQuery {
-                enrollment: credential.enrollment(),
+                enrollment,
                 wallet,
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,
@@ -654,8 +659,8 @@ impl<S: TransactionSource> AuditService<S> {
         let LoadedProjection {
             spends,
             repairs,
-            credentials,
-            credential_position,
+            enrollments,
+            tracking_cursor,
             revision,
         } = LoadSpends {
             db: database.connection(),
@@ -668,10 +673,10 @@ impl<S: TransactionSource> AuditService<S> {
         // 1. The snapshot's unread frames replace the mirror's, a frame the holder read since leaves.
         let position = spends.checkpoint.position;
         store.refresh(spends, revision);
-        // 2. A held credential equals its row, a differing row refuses the reload.
-        store.admit_credentials(credentials)?;
+        // 2. A held enrollment equals its row, a differing row refuses the reload.
+        store.admit_enrollments(enrollments)?;
         backfill.history = Some(position);
-        backfill.credentials = credential_position;
+        backfill.tracking_cursor = tracking_cursor;
         backfill.repairs = repairs.into_iter().collect();
         Ok(())
     }
@@ -720,13 +725,13 @@ impl<S: TransactionSource> AuditService<S> {
         let limit = Page::new(None, None)?.limit();
         let Backfill {
             history,
-            credentials,
+            tracking_cursor,
             repairs,
             ..
         } = backfill;
         let position = history.get_or_insert_default();
-        // Read before the repairs, a frame unread for want of a key opens once its credential is held.
-        self.refresh_or_warn(store, credentials, durable).await;
+        // Read before the repairs, a frame unread for want of a key opens once its enrollment is held.
+        self.refresh_or_warn(store, tracking_cursor, durable).await;
         self.repair_frames(store, repairs, durable, mode).await;
         let opener = |owner_key: &[u8; 32]| self.open_held_key(owner_key);
         for _ in 0..MAX_BACKFILL_PAGES {
@@ -743,7 +748,7 @@ impl<S: TransactionSource> AuditService<S> {
                 .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
             self.validate_indexer_response(&response)?;
             // Read after the page, an enrollment finalized before a note on it is held unless the refresh stops early.
-            self.refresh_or_warn(store, credentials, durable).await;
+            self.refresh_or_warn(store, tracking_cursor, durable).await;
             let mut work = PageWork::new(store, &opener);
             work.late_keys();
             let rows = self.audit_rows(response, mode, &mut work, None).await?;
@@ -859,37 +864,37 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(read)
     }
 
-    /// A failed refresh keeps every admitted page, the next pass resumes at its position.
+    /// A failed refresh keeps every admitted page, the next pass resumes at its cursor.
     async fn refresh_or_warn(
         &self,
         store: &AuditStore,
-        position: &mut HistoryPosition,
+        cursor: &mut u64,
         durable: Option<&ProjectionWriter<'_>>,
     ) {
-        if let Err(error) = self.refresh_credentials(store, position, durable).await {
+        if let Err(error) = self.refresh_enrollments(store, cursor, durable).await {
             log::warn!(
-                "credential refresh of ring {} failed because {}",
+                "enrollment refresh of ring {} failed because {}",
                 self.ring,
                 redacted(&error)
             );
         }
     }
 
-    /// The caller holds the backfill lock that owns `position`.
-    async fn refresh_credentials(
+    /// The caller holds the backfill lock that owns `cursor`.
+    async fn refresh_enrollments(
         &self,
         store: &AuditStore,
-        position: &mut HistoryPosition,
+        cursor: &mut u64,
         durable: Option<&ProjectionWriter<'_>>,
     ) -> Result<ScanEnd, RingRpcError> {
-        CredentialScan {
+        TrackingScan {
             ring: self.ring,
             auditor: &self.auditor,
             source: &self.shared.source,
             store,
             durable,
         }
-        .run(position)
+        .run(cursor)
         .await
     }
 

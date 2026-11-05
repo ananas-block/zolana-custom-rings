@@ -24,7 +24,7 @@ mod relay_fixture;
 #[path = "../../../sdk-libs/client/tests/common/transfer.rs"]
 pub mod transfer;
 
-use custom_ring_interface::{CoSignScope, CREDENTIAL_PDA_SEED};
+use custom_ring_interface::CoSignScope;
 use custom_ring_interface::{RecordWrite, RingMode, RING_TRANSACT_ACCOUNT_PREFIX_LEN};
 use spr_keypair::NullifierKey;
 use spr_keypair::{X25519Keypair, X25519Pubkey};
@@ -40,7 +40,7 @@ use std::{
 };
 use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
 use zolana_ring_policy::{ListId, Member, MintPolicy};
-use zolana_ring_rpc::credential_fixture::Enrollment;
+use zolana_ring_rpc::tracking_fixture::{Enrollment, TrackingLedger};
 
 use p256::ecdsa::signature::hazmat::PrehashSigner;
 use sha2::Digest;
@@ -439,7 +439,7 @@ struct StaticSource {
     config_down: Arc<AtomicBool>,
     registry: Arc<Mutex<Address>>,
     records_down: Arc<AtomicBool>,
-    credentials: Credentials,
+    tracking: Tracking,
     co_signers: HashMap<Address, CoSignScope>,
 }
 
@@ -596,11 +596,23 @@ impl TransactionSource for StaticSource {
         Ok(self.co_signers.get(&signer).copied())
     }
 
-    async fn transaction_accounts(
+    async fn tracking_root(&self, _ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+        Ok(self.tracking.0.root())
+    }
+
+    async fn tracking_records(
         &self,
-        signature: Signature,
-    ) -> Result<Vec<Address>, ClientError> {
-        Ok(self.credentials.owners(signature))
+        request: GetTrackingRecordsRequest,
+    ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
+        Ok(self.tracking.0.page(&request))
+    }
+
+    async fn tracking_enrollment(
+        &self,
+        _ring: Address,
+        owner: Address,
+    ) -> Result<WalletEnrollment, ClientError> {
+        Ok(self.tracking.0.enrollment(&owner))
     }
 
     async fn merge_audit_page(
@@ -622,16 +634,11 @@ impl TransactionSource for StaticSource {
         request: TransactionPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send
     {
-        let (credential_pda, _) =
-            Address::find_program_address(&[CREDENTIAL_PDA_SEED], &request.ring);
-        let response = match request.tag == credential_pda.to_bytes() {
-            true => self.credentials.page(&request),
-            false => self.page_at(
-                request.position,
-                request.limit,
-                self.by_tag.get(&request.tag),
-            ),
-        };
+        let response = self.page_at(
+            request.position,
+            request.limit,
+            self.by_tag.get(&request.tag),
+        );
         async move { Ok(response) }
     }
 
@@ -1148,7 +1155,7 @@ impl Fixture {
             config_down: Arc::default(),
             registry: Arc::new(Mutex::new(RECORDS)),
             records_down: Arc::default(),
-            credentials: Credentials::default(),
+            tracking: Tracking::default(),
             co_signers: HashMap::new(),
         };
         source.with_transactions(vec![
@@ -1323,66 +1330,19 @@ fn reader_member(reader: ReaderKey) -> Member {
 #[derive(Clone)]
 struct Records(Arc<Mutex<OwnRecords>>);
 
-/// Finalized Enroll events of `RING`, each with its owner account.
+/// The tracking tree of `RING`, shared by every clone of the source.
 #[derive(Clone, Default)]
-struct Credentials(Arc<Mutex<Vec<(ShieldedTransaction, Address)>>>);
+struct Tracking(TrackingLedger);
 
-impl Credentials {
-    /// The owner's key and `LIST_SALT`, sealed to `auditor` in a finalized Enroll.
+impl Tracking {
+    /// The owner's key and `LIST_SALT`, sealed to `auditor` and applied.
     fn enroll(&self, owner: &[u8; 32], key: &NullifierKey, auditor: &X25519Pubkey) {
-        let mut held = self.0.lock().unwrap();
-        let number = u8::try_from(held.len() + 1).expect("few enrollments");
-        let mut signature = [0xee; 64];
-        signature[0] = number;
-        let owner = Address::new_from_array(*owner);
-        let enrollment = Enrollment {
-            ring: RING,
-            owner,
+        self.0.enroll(Enrollment {
+            owner: Address::new_from_array(*owner),
             key,
             list_salt: LIST_SALT,
             auditor,
-            signature: Signature::from(signature),
-            slot: u64::from(number),
-        };
-        held.push((enrollment.event_of(&enrollment.credential()), owner));
-    }
-
-    /// One terminal page of the enrollments under the requested tag past the position.
-    fn page(&self, request: &TransactionPage) -> GetShieldedTransactionsByTagsResponse {
-        let filters = request.position.filters();
-        let data = self
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(event, _)| {
-                event.output_slots[0].view_tag == request.tag && filters.slot.contains(event.slot)
-            })
-            .map(|(event, _)| TransactionEvents {
-                slot: event.slot,
-                signature: event.tx_signature,
-                events: vec![event.clone()],
-            })
-            .collect();
-        GetShieldedTransactionsByTagsResponse {
-            context: Context {
-                slot: 1_000,
-                block_time: 0,
-            },
-            output_tree_id: None,
-            data,
-            pagination_token: None,
-        }
-    }
-
-    fn owners(&self, signature: Signature) -> Vec<Address> {
-        self.0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(event, _)| event.tx_signature == signature)
-            .map(|(_, owner)| *owner)
-            .collect()
+        });
     }
 }
 

@@ -1,4 +1,3 @@
-use custom_ring_interface::{CredentialRead, CustomRingProof, DepositPrefix, PlainGroth16Proof};
 use solana_address::Address;
 use spr_event::{tag, EncryptedRingDepositData};
 use spr_event_parser::{InstructionGroup, ParsedInstruction};
@@ -33,24 +32,9 @@ pub fn group(ring: Address, audited: bool, deposits: Vec<([u8; 32], Vec<u8>)>) -
     let mut data = vec![tag::RING_DEPOSIT];
     data.extend(deposit.serialize().unwrap());
     let mut outer_data = if audited {
-        DepositPrefix {
-            tag: custom_ring_interface::tag::DEPOSIT,
-            key_capacity: 1,
-            proof: CustomRingProof {
-                groth16: PlainGroth16Proof {
-                    proof_a: [0; 32],
-                    proof_b: [0; 64],
-                    proof_c: [0; 32],
-                },
-                commitment: [0; 32],
-                commitment_pok: [0; 32],
-            },
-            credential_read: CredentialRead::new_state(0),
-            own_revision: Default::default(),
-            curator_revision: Default::default(),
-        }
-        .encode()
-        .unwrap()
+        let mut header = vec![0; custom_ring_interface::DepositPrefix::SIZE];
+        header[0] = custom_ring_interface::tag::DEPOSIT;
+        header
     } else {
         Vec::new()
     };

@@ -13,7 +13,7 @@ use zolana_ring_policy::MemberError;
 
 use crate::{
     authority_transfer::AuthorityTransferError, authorize::Unauthorized, cosign::CoSignError,
-    credentials::CredentialRefusal, record_update::RecordUpdateRefusal, relay::RelayError,
+    tracking::TrackingRefusal, record_update::RecordUpdateRefusal, relay::RelayError,
 };
 
 #[derive(Debug, Error)]
@@ -81,7 +81,7 @@ pub enum RingRpcError {
     #[error("stored merge settings are signed at the same time or later")]
     StaleMergeSettings,
     #[error(transparent)]
-    Credential(#[from] CredentialRefusal),
+    Tracking(#[from] TrackingRefusal),
     #[error("merge build failed because {0}")]
     MergeBuild(Box<custom_ring_sdk::RingError>),
 }
@@ -234,7 +234,7 @@ impl From<RingRpcError> for ErrorObjectOwned {
             }
             CoSign(inner) => return (*inner).into(),
             AuthorityTransfer(refusal) => return (*refusal).into(),
-            Credential(CredentialRefusal::Incomplete) => {
+            Tracking(TrackingRefusal::Incomplete) => {
                 let message = failure.to_string();
                 return ErrorObjectOwned::owned(
                     ErrorCode::ServerIsBusy.code(),
@@ -242,9 +242,9 @@ impl From<RingRpcError> for ErrorObjectOwned {
                     None::<()>,
                 );
             }
-            Credential(inner) => {
-                error!("credential discovery refused {inner}");
-                (ErrorCode::InternalError, "credential discovery failed")
+            Tracking(inner) => {
+                error!("tracking discovery refused {inner}");
+                (ErrorCode::InternalError, "tracking discovery failed")
             }
             MergeBuild(_) => {
                 error!("managed merge failed {}", redacted(&failure));

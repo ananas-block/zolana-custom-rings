@@ -41,7 +41,7 @@ use crate::{
     line,
     list::{ListChange, ListUpdate, Subject},
     macros::named_enum,
-    member::{enroll_members, enrolled},
+    member::{registered, KeyEnrollment},
     merge::carries_no_data,
     policy, records,
     ui::{self, icon},
@@ -259,7 +259,10 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     );
     let authority = ctx.funded_authority()?;
     let parties = [("sender", &sender), ("recipient", &recipient)];
-    enroll_members(ctx, &[&sender, &recipient])?;
+    KeyEnrollment {
+        members: &[&sender, &recipient],
+    }
+    .ensure(ctx)?;
     AllowListWrite {
         authority,
         parties: &parties,
@@ -356,9 +359,12 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     };
     payments.fits(&inputs)?;
     ctx.ring_rpc().check_serves(ctx.ring.program_id())?;
-    // A public spend needs no credential, its zero-key change serves an unenrolled wallet.
+    // A public spend needs no row, its zero-key change serves an unenrolled wallet.
     if args.spend_public.is_none() {
-        enroll_members(ctx, &[&sender])?;
+        KeyEnrollment {
+            members: &[&sender],
+        }
+        .ensure(ctx)?;
     }
     transfer.fund(ctx, inputs.drawn_lamports())?;
     let sent = transfer.send(ctx, inputs)?;
@@ -398,7 +404,10 @@ pub fn run_deposit(ctx: &Context, args: DepositArgs) -> Result<()> {
         args.token_account,
         args.amount,
     )?;
-    enroll_members(ctx, &[&sender])?;
+    KeyEnrollment {
+        members: &[&sender],
+    }
+    .ensure(ctx)?;
     let drawn = deposit_lamports(asset, args.amount);
     ctx.fund(payer.pubkey(), drawn.saturating_add(PAYER_FEE_BUDGET))?;
     let receipt = Deposit {
@@ -1286,13 +1295,13 @@ impl Transfer<'_> {
 }
 
 impl<'a> Transfer<'a> {
-    /// An unenrolled wallet's change takes the zero key, an unknown credential refuses.
+    /// An unenrolled wallet's change takes the only key its tracking state allows.
     fn named_wallet(
         &self,
         ctx: &Context,
         transfer: PublicOwnerTransfer<'a>,
     ) -> Result<PublicOwnerTransfer<'a>> {
-        Ok(match enrolled(ctx, self.sender)? {
+        Ok(match registered(ctx.ring, &ctx.zolana, self.sender)? {
             true => transfer,
             false => transfer.with_zero_key_change(),
         })

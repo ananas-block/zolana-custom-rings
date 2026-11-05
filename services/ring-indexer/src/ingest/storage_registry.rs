@@ -30,6 +30,8 @@ pub(crate) struct StorageInit<'a> {
 
 pub(crate) struct StorageUpdate<'a> {
     pub authority: Address,
+    /// Named only by a batch with private writes.
+    pub tracking_registry: Option<Address>,
     pub data: StorageUpdateIxData<'a>,
 }
 
@@ -58,6 +60,7 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<RegistryInstruction<St
             call: account(0).and_then(|authority| {
                 Ok(StorageCall::Update(Box::new(StorageUpdate {
                     authority,
+                    tracking_registry: account(2).ok(),
                     data: StorageUpdateIxData::parse(data)?,
                 })))
             }),
@@ -122,18 +125,24 @@ impl RegistryCall<StorageRegistry> for StorageCall<'_> {
 
 impl<C: ConnectionTrait> Projection<'_, '_, C, StorageRegistry> {
     async fn update(self, update: StorageUpdate<'_>) -> Result<(), ApplyError> {
-        let StorageUpdate { authority, data } = update;
+        let StorageUpdate {
+            authority,
+            tracking_registry,
+            data,
+        } = update;
         // 1. The program admits the update at the projected revision.
         self.authorize(&authority)?;
         let account = &*self.state.account;
-        // The program refuses a header sequence other than the sequence of the tree 0 root it read, and a failed transaction never reaches here.
-        let absence_checkpoint = data.private_write.map(|checkpoint| checkpoint.sequence);
+        // The program served the named tracking revision from its pin before it verified the proof,
+        // and a failed transaction never reaches here, so the floor moves to the named revision.
+        if data.tracking_revision.is_some() && tracking_registry != Some(account.tracking_registry) {
+            return Err(fault("the update names another tracking registry"));
+        }
         let mut rotated = *account;
         rotated
             .update(RootUpdate {
                 slot: self.slot,
                 data: &data,
-                absence_checkpoint,
             })
             .map_err(|error| fault(format!("update refused ({error})")))?;
         let revision = rotated.roots[0].revision.value();
@@ -155,7 +164,7 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, StorageRegistry> {
             chain_start,
             entries: &entries,
             new_root: data.apply.new_root,
-            new_next_index: data.apply.new_next_index(),
+            new_next_index: u64::from(data.apply.new_next_index()),
             revision,
         }
         .save(self.store.tree())

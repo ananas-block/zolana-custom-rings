@@ -10,6 +10,7 @@ use std::{
 use custom_ring_interface::{
     check_member, mint_policy_write,
     storage::{chain_start, Revision, StorageRegistry},
+    tracking::TrackingRegistry,
     CustomRingError, RecordWrite, RecordWriteData, WriteRecordsIxData, APPLY_BATCH, QUAD_ARITY,
     QUAD_HEIGHT, STORAGE_PROGRAM_ID,
 };
@@ -45,6 +46,13 @@ use crate::{
     },
 };
 
+mod tracking;
+
+pub(crate) use tracking::{
+    pending_enrollments, tracking_apply_proof_inputs, tracking_openings, tracking_record_pool,
+    tracking_records,
+};
+
 /// The longest a stalled tip misses a chain move.
 pub(crate) const CONFIRMATION_AGE: Duration = Duration::from_millis(DEFAULT_MS_PER_SLOT);
 
@@ -67,6 +75,12 @@ impl CachedAccount for StorageRegistry {
     }
 }
 
+impl CachedAccount for TrackingRegistry {
+    fn cache(chain: &CachedChain) -> &ReadCache<Self> {
+        &chain.tracking
+    }
+}
+
 pub(crate) struct Confirmation<T> {
     context: ApiContext,
     chain: Arc<T>,
@@ -76,6 +90,7 @@ pub(crate) struct Confirmation<T> {
 pub(crate) struct CachedChain {
     rpc: Arc<SolanaRpc>,
     storage: ReadCache<StorageRegistry>,
+    tracking: ReadCache<TrackingRegistry>,
 }
 
 pub(crate) struct ReadCache<T> {
@@ -104,6 +119,7 @@ impl CachedChain {
         Self {
             rpc,
             storage: ReadCache::default(),
+            tracking: ReadCache::default(),
         }
     }
 }
@@ -517,6 +533,8 @@ enum Served<'r> {
     Root(&'r StorageRoot),
     /// Apply proof inputs hold while the current root stays.
     Current(&'r StorageRoot),
+    /// Pending state names no root.
+    Tip,
 }
 
 impl Served<'_> {
@@ -524,6 +542,7 @@ impl Served<'_> {
         match self {
             Self::Root(root) => chain.root_at(Revision::from(root.revision), slot) == Ok(root.root),
             Self::Current(root) => StorageRoot::current(chain) == **root,
+            Self::Tip => true,
         }
     }
 }

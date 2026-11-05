@@ -174,7 +174,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
         })
     }
 
-    /// An enrolled wallet's secret opens from its credential on every ring.
+    /// An enrolled wallet's secret opens from its tracking row on every ring.
     async fn merge_ring(
         &self,
         book: &MergeSettingsBook<'_>,
@@ -368,13 +368,15 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::{
-        credentials::HeldCredential,
-        credentials::{fixture::Enrollment, CredentialPda},
         database::Store,
         hub::ServiceIdentity,
         landing::{ChainOutcome, ChainSubmit, LatestBlockhash},
         relay::RelayParts,
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
+        tracking::{
+            fixture::{Enrollment, TrackingLedger},
+            HeldEnrollment,
+        },
         upstream::{
             DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
             RingFrame, RingHistoryPage, TransactionPage,
@@ -393,8 +395,7 @@ pub(crate) mod tests {
     pub(crate) struct EscrowRingSource {
         config: RingConfiguration,
         pub(crate) origins: Mutex<HashMap<Signature, RingOrigin>>,
-        /// Enroll events under the credential tag, each with its owner account.
-        pub(crate) enrollments: Mutex<Vec<(ShieldedTransaction, Address)>>,
+        pub(crate) tracking: TrackingLedger,
     }
 
     fn unused<T>() -> Result<T, ClientError> {
@@ -406,48 +407,22 @@ pub(crate) mod tests {
             Ok(vec![list_writer().pubkey()])
         }
 
-        /// One terminal page of the enrollments after the position.
         async fn transactions_by_tag(
             &self,
-            request: TransactionPage,
+            _request: TransactionPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-            if request.tag != CredentialPda::of(&RING).expect("pda").view_tag() {
-                return unused();
-            }
-            let filters = request.position.filters();
-            let data = self
-                .enrollments
-                .lock()
-                .expect("enrollments")
-                .iter()
-                .filter(|(event, _)| filters.slot.contains(event.slot))
-                .map(|(event, _)| TransactionEvents {
-                    slot: event.slot,
-                    signature: event.tx_signature,
-                    events: vec![event.clone()],
-                })
-                .collect();
-            Ok(GetShieldedTransactionsByTagsResponse {
-                context: Context {
-                    slot: 1_000,
-                    block_time: 0,
-                },
-                output_tree_id: None,
-                data,
-                pagination_token: None,
-            })
+            unused()
         }
 
-        async fn transaction_accounts(
+        async fn tracking_root(&self, _ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+            Ok(self.tracking.root())
+        }
+
+        async fn tracking_records(
             &self,
-            signature: Signature,
-        ) -> Result<Vec<Address>, ClientError> {
-            let enrollments = self.enrollments.lock().expect("enrollments");
-            Ok(enrollments
-                .iter()
-                .filter(|(event, _)| event.tx_signature == signature)
-                .map(|(_, owner)| *owner)
-                .collect())
+            request: GetTrackingRecordsRequest,
+        ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
+            Ok(self.tracking.page(&request))
         }
 
         async fn ring_frame(
@@ -719,7 +694,7 @@ pub(crate) mod tests {
                     delegate,
                 },
                 origins: Mutex::default(),
-                enrollments: Mutex::default(),
+                tracking: TrackingLedger::default(),
             };
             let store = match &relay {
                 Some(relay) => relay.store.clone(),
@@ -751,63 +726,35 @@ pub(crate) mod tests {
             }
         }
 
-        /// A finalized Enroll of `wallet` at `slot`, sealed to the served auditor.
-        pub(crate) fn enroll(
-            &self,
-            wallet: &Keypair,
-            key: &NullifierKey,
-            slot: u8,
-        ) -> HeldCredential {
+        /// An applied enrollment of `wallet`, sealed to the served auditor.
+        pub(crate) fn enroll(&self, wallet: &Keypair, key: &NullifierKey) -> HeldEnrollment {
             let auditor = self
                 .hub
                 .service(Some(RING))
                 .expect("service")
                 .auditor_pubkey();
-            let enrollment = Enrollment {
-                ring: RING,
+            self.hub.shared().source.tracking.enroll(Enrollment {
                 owner: wallet.pubkey(),
                 key,
                 list_salt: LIST_SALT,
                 auditor: &auditor,
-                signature: Signature::from([slot; 64]),
-                slot: u64::from(slot),
-            };
-            let credential = enrollment.credential();
-            let event = enrollment.event_of(&credential);
-            self.hub
-                .shared()
-                .source
-                .enrollments
-                .lock()
-                .expect("enrollments")
-                .push((event, wallet.pubkey()));
-            enrollment.held(credential)
+            })
         }
 
         pub(crate) async fn escrow_notes(&self, wallet: &Keypair, notes: u8) -> NullifierKey {
             self.escrow_wallets(&[(wallet, notes)]).await.remove(0)
         }
 
-        /// Held before any scan, a merge pass opens only held credentials.
+        /// Held before any scan, a merge pass opens only held enrollments.
         pub(crate) async fn escrow_wallets(&self, wallets: &[(&Keypair, u8)]) -> Vec<NullifierKey> {
             let store = self.hub.shared().store(RING);
             let mut keys = Vec::with_capacity(wallets.len());
             for (wallet, notes) in wallets {
                 let key = NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]);
-                // Slots rise in enrollment order, a scan refuses a page out of order.
-                let enrolled = self
-                    .hub
-                    .shared()
-                    .source
-                    .enrollments
-                    .lock()
-                    .expect("enrollments")
-                    .len();
-                let slot = u8::try_from(enrolled + 1).expect("few enrollments");
-                let held = self.enroll(wallet, &key, slot);
+                let held = self.enroll(wallet, &key);
                 store
-                    .admit_credentials(vec![held])
-                    .expect("held credential");
+                    .admit_enrollments(vec![held])
+                    .expect("held enrollment");
                 self.record_notes(wallet, &key, *notes).await;
                 keys.push(key);
             }

@@ -412,7 +412,7 @@ fn enrolled_spend(fixture: &Fixture, co_spent: &[[u8; 32]]) -> StaticSource {
     let mut source = fixture.source().with_transactions(vec![note, spend]);
     source.next_cursor = None;
     source
-        .credentials
+        .tracking
         .enroll(OWNER.as_array(), &key, &fixture.auditor.pubkey());
     source
 }
@@ -693,7 +693,7 @@ fn anonymous_spend(fixture: &Fixture, others: &[([u8; 32], bool)]) -> StaticSour
     source.configs.get_mut(&RING).expect("config").mode = RingMode::Anonymous;
     source.next_cursor = None;
     source
-        .credentials
+        .tracking
         .enroll(OWNER.as_array(), &key, &fixture.auditor.pubkey());
     source
 }

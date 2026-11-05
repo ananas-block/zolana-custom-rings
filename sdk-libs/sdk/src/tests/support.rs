@@ -6,31 +6,21 @@ use std::{
 };
 
 use async_trait::async_trait;
-use borsh::BorshSerialize;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
-    credential::CredentialAuthority,
     storage::{RegistryId, Revision, StorageRegistry},
-    storage_instruction::InitializeIxData,
-    AuditCredential, CoSignScope, CoSigner, CoSignerCounts, NewRing, PolicyUpdate, RingMode,
-    RingPolicy, RingRoles, SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED,
-    STORAGE_PROGRAM_ID,
+    storage_instruction::{InitializeIxData, InitializeTrackingIxData},
+    tracking::TrackingRegistry,
+    CoSignScope, CoSigner, CoSignerCounts, NewRing, PolicyUpdate, RingMode, RingPolicy, RingRoles,
+    SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use solana_account::Account;
 use solana_address::Address;
-use solana_signature::Signature;
 use spr_client::{
-    rpc::{
-        GetNonInclusionProofsResponse, GetShieldedTransactionsByNullifiersResponse,
-        NonInclusionProof, OutputContext, OutputSlot, PaginationToken, ShieldedTransaction,
-        TransactionEvents, NULLIFIER_TREE_HEIGHT, STATE_TREE_HEIGHT,
-    },
-    AsyncProverClient, AsyncRpc, AsyncWitnessReader, AsyncZolanaClient, ClientError, Context,
-    GetMerkleProofsResponse, HistoryFilters, IndexerRpcConfig, InputWitnesses, MerkleContext,
+    rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncWitnessReader, AsyncZolanaClient,
+    ClientError, Context, GetMerkleProofsResponse, IndexerRpcConfig, InputWitnesses, MerkleContext,
     MerkleProof, ProofDataSource,
 };
-use spr_event::OutputDataEncoding;
-use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
 use spr_hasher::{Hasher, Poseidon};
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey};
 use spr_interface::{
@@ -43,30 +33,26 @@ use spr_interface::{
 };
 use spr_keypair::ShieldedAddress;
 use spr_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
-use spr_program::program::{NewAddress, ACCOUNT_BLINDING_SEED};
-use spr_transaction::{
-    utxo::{
-        derive_output_blinding_seed, derive_transact_output_blinding, ProofInputUtxo,
-        SppProofInputUtxo,
-    },
-    Data, Mint, Utxo, WalletUtxo, SOL_MINT,
-};
-use spr_tree::{
-    nullifier_tree::constants::NULLIFIER_TREE_INIT_ROOT_40, TreeAccount, UTXO_TREE_HEIGHT,
-};
-use spr_user_registry_interface::{
-    user_record_pda, user_registry_program_id, MergeEncryptionScheme, UserRecord,
-};
+use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
+use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
 use zolana_ring_client::{AsyncRingIndexer, RingIndexerError, ViewingHistory};
-use zolana_ring_indexer::rpc::{
-    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse, GetStorageRecordPoolRequest,
-    GetStorageRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, StorageRootView,
+use zolana_ring_indexer::{
+    rpc::{
+        GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+        GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
+        RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
+    },
+    tracking::{
+        GetTrackingOpeningsRequest, GetTrackingOpeningsResponse, GetTrackingRecordPoolRequest,
+        GetTrackingRecordPoolResponse, RingIndexedTrackingRecordView, RingTrackingOpening,
+        RingTrackingRecordView,
+    },
 };
 use zolana_ring_member_registry::{
-    Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,
+    Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree, TrackingOpening,
+    TrackingRecord, TrackingTree,
 };
-use zolana_ring_policy::RuleTable;
+use zolana_ring_policy::{Member, RuleTable};
 
 use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
@@ -75,13 +61,10 @@ pub(crate) const SLOT: u64 = 2_359_301;
 /// The ring's own `StorageRegistry`, its newest root at `REVISION`.
 pub(crate) const RECORDS: Address = Address::new_from_array([0x5a; 32]);
 pub(crate) const REVISION: u64 = 1;
-/// Every `keypair(seed)` below it holds a credential under its own nullifier key.
+pub(crate) const TRACKING: Address = Address::new_from_array([0x5b; 32]);
+/// Every `keypair(seed)` below it holds a tracking row under its own nullifier key.
 const ENROLLED_SEEDS: u8 = 64;
-/// The note tree and tree 0, the address tree every credential address lands in.
 pub(crate) const TREE_ID: u16 = 0;
-/// The state tree every fixture credential sits in.
-pub(crate) const CREDENTIAL_TREE_ID: u16 = 5;
-const ENROLLMENT_SLOT: u64 = 9;
 
 pub(crate) fn program() -> Address {
     Address::new_from_array([42; 32])
@@ -109,6 +92,16 @@ pub(crate) fn keypair(seed: u8) -> ShieldedKeypair {
 
 pub(crate) fn history(owner: &ShieldedKeypair) -> ViewingHistory {
     ViewingHistory::new(owner.viewing_pubkey(), 0)
+}
+
+pub(crate) fn owner_identity(owner: &ShieldedKeypair) -> Member {
+    let identity = owner
+        .shielded_address()
+        .unwrap()
+        .signing_pubkey
+        .owner_proof_input_hash()
+        .unwrap();
+    Member::from_bytes(identity).unwrap()
 }
 
 pub(crate) fn wallet(utxo: Utxo, key: &NullifierKey, tree_id: u16, leaf_index: u64) -> WalletUtxo {
@@ -261,6 +254,7 @@ impl RingSettings {
             auditor_pubkey: *auditor().pubkey().as_bytes(),
             created_slot: self.created_slot,
             records: Address::default(),
+            tracking: TRACKING,
         }
         .account();
         if self.has_policy {
@@ -300,7 +294,7 @@ pub(crate) struct Chain {
     pub witness_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
     /// The ring of every record opening or pool request.
     pub record_requests: Arc<Mutex<Vec<SerializablePubkey>>>,
-    credentials: Option<Arc<CredentialFixture>>,
+    tracking: Option<Arc<TrackingFixture>>,
 }
 
 impl Chain {
@@ -314,7 +308,12 @@ impl Chain {
             activated: 1,
             bump: Address::find_program_address(&[RING_AUTH_PDA_SEED], &program()).1,
         };
-        let chain = Self::default().with_credential_fixture(CredentialFixture::enrolled());
+        let tracking = TrackingFixture::enrolled();
+        let chain = Self {
+            tracking: Some(Arc::clone(&tracking)),
+            ..Self::default()
+        }
+        .with(TRACKING, tracking.account());
         let chain = match settings.co_signer {
             Some((signer, scope)) => chain.with(
                 ring().co_signer_pda(&signer),
@@ -411,61 +410,28 @@ impl Chain {
             .expect("Chain::ring writes the ring account")
     }
 
-    /// `addresses` alone hold credentials, a test of the output predicate names its keys.
-    pub(crate) fn with_credentials(self, addresses: &[ShieldedAddress]) -> Self {
-        self.with_credential_tag(addresses, FIXTURE_LIST_TAG)
+    /// `addresses` alone hold tracking rows, a test of the output predicate names its keys.
+    pub(crate) fn with_tracking(self, addresses: &[ShieldedAddress]) -> Self {
+        let tracking = Arc::new(TrackingFixture::of(addresses));
+        Self {
+            tracking: Some(Arc::clone(&tracking)),
+            ..self
+        }
+        .with(TRACKING, tracking.account())
     }
 
-    /// One tag in every credential, a test of a salt names the tag it hashes to.
-    pub(crate) fn with_credential_tag(
+    /// One tag on every row, a test of a salt names the tag it hashes to.
+    pub(crate) fn with_tracking_tag(
         self,
         addresses: &[ShieldedAddress],
         list_tag: [u8; 32],
     ) -> Self {
-        let credentials: Vec<_> = addresses
-            .iter()
-            .map(|address| credential_of(address, list_tag))
-            .collect();
-        self.with_credential_fixture(Arc::new(CredentialFixture::of(&credentials)))
-    }
-
-    /// Exactly these credentials, each enrolled once in the fixture's state tree.
-    pub(crate) fn with_enrolled(self, credentials: &[AuditCredential]) -> Self {
-        self.with_credential_fixture(Arc::new(CredentialFixture::of(credentials)))
-    }
-
-    /// `address`'s user record naming `address`'s keys.
-    pub(crate) fn with_user_record(self, address: &ShieldedAddress) -> Self {
-        let owner = address.solana_address().unwrap();
-        let (record_address, bump) = user_record_pda(&owner);
-        let record = UserRecord {
-            owner,
-            bump,
-            nullifier_pubkey: address.nullifier_pubkey,
-            viewing_pubkey: *address.viewing_pubkey.as_bytes(),
-            merge_encryption: MergeEncryptionScheme::Disabled,
-        };
-        let mut data = vec![UserRecord::DISCRIMINATOR];
-        record.serialize(&mut data).unwrap();
-        self.with(
-            record_address,
-            Account {
-                lamports: 1,
-                data,
-                owner: user_registry_program_id(),
-                executable: false,
-                rent_epoch: 0,
-            },
-        )
-    }
-
-    fn with_credential_fixture(self, fixture: Arc<CredentialFixture>) -> Self {
-        let tree = fixture.tree.clone();
+        let tracking = Arc::new(TrackingFixture::tagged(addresses, list_tag));
         Self {
-            credentials: Some(fixture),
+            tracking: Some(Arc::clone(&tracking)),
             ..self
         }
-        .with(spr_interface::pda::tree(CREDENTIAL_TREE_ID), tree)
+        .with(TRACKING, tracking.account())
     }
 
     /// The indexed route, the prover fetches the input proofs and no witness is read here.
@@ -512,72 +478,12 @@ impl AsyncRpc for Chain {
         Ok(SLOT)
     }
 
-    async fn get_shielded_transactions_by_nullifiers(
-        &self,
-        nullifiers: Vec<[u8; 32]>,
-        _pagination_token: Option<PaginationToken>,
-        _limit: Option<u32>,
-        _filters: HistoryFilters,
-        _config: Option<IndexerRpcConfig>,
-    ) -> Result<GetShieldedTransactionsByNullifiersResponse, ClientError> {
-        let fixture = self.credential_fixture()?;
-        Ok(GetShieldedTransactionsByNullifiersResponse {
-            context: CONTEXT,
-            output_tree_id: None,
-            data: nullifiers
-                .iter()
-                .filter_map(|address| fixture.enrollments.get(address))
-                .map(|enrollment| TransactionEvents {
-                    slot: enrollment.slot,
-                    signature: enrollment.tx_signature,
-                    events: vec![enrollment.clone()],
-                })
-                .collect(),
-            pagination_token: None,
-        })
-    }
-
-    /// Tree 0 holds only its init leaf, every address falls in its one gap.
-    async fn get_non_inclusion_proofs(
-        &self,
-        tree_account: Address,
-        leaves: Vec<[u8; 32]>,
-        _config: Option<IndexerRpcConfig>,
-    ) -> Result<GetNonInclusionProofsResponse, ClientError> {
-        let mut high_element = BN254_SCALAR_MODULUS_BE;
-        high_element[31] -= 1;
-        Ok(GetNonInclusionProofsResponse {
-            context: CONTEXT,
-            proofs: leaves
-                .into_iter()
-                .map(|leaf| NonInclusionProof {
-                    leaf,
-                    merkle_context: MerkleContext {
-                        tree_type: 0,
-                        tree: tree_account,
-                    },
-                    path: Poseidon::zero_bytes()[..NULLIFIER_TREE_HEIGHT].to_vec(),
-                    low_element: [0; 32],
-                    low_element_index: 0,
-                    high_element,
-                    high_element_index: 0,
-                    root: NULLIFIER_TREE_INIT_ROOT_40,
-                    root_seq: 0,
-                    root_index: 0,
-                })
-                .collect(),
-        })
-    }
-
     async fn get_merkle_proofs(
         &self,
         tree_account: Address,
         leaves: Vec<[u8; 32]>,
         _config: Option<IndexerRpcConfig>,
     ) -> Result<GetMerkleProofsResponse, ClientError> {
-        if tree_account == spr_interface::pda::tree(CREDENTIAL_TREE_ID) {
-            return self.credential_fixture()?.proofs(tree_account, &leaves);
-        }
         self.proof_requests.lock().unwrap().push(leaves.clone());
         let mut data = self.accounts[&tree_account].data.clone();
         let mut tree = TreeAccount::from_bytes(&mut data, tree_account.to_bytes()).unwrap();
@@ -690,183 +596,174 @@ impl AsyncRingIndexer for Chain {
                 .collect(),
         })
     }
+
+    async fn get_tracking_openings(
+        &self,
+        request: GetTrackingOpeningsRequest,
+    ) -> Result<GetTrackingOpeningsResponse, RingIndexerError> {
+        let tracking = self.tracking()?;
+        Ok(GetTrackingOpeningsResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: SLOT,
+            },
+            root: tracking.root_view(),
+            openings: request
+                .members
+                .iter()
+                .map(|member| tracking.opening(&member.0))
+                .collect(),
+        })
+    }
+
+    async fn get_tracking_record_pool(
+        &self,
+        request: GetTrackingRecordPoolRequest,
+    ) -> Result<GetTrackingRecordPoolResponse, RingIndexerError> {
+        let tracking = self.tracking()?;
+        let members: Vec<[u8; 32]> = request.members.iter().map(|member| member.0).collect();
+        let pool = tracking
+            .tree
+            .record_pool(
+                &members,
+                Canopy::covering_tracking(request.openings as usize).unwrap(),
+            )
+            .unwrap();
+        Ok(GetTrackingRecordPoolResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: SLOT,
+            },
+            root: tracking.root_view(),
+            records: pool
+                .records
+                .iter()
+                .zip(&pool.proof.paths)
+                .map(|(record, path)| RingIndexedTrackingRecordView {
+                    record: record_view(record),
+                    path: RingRecordPathView {
+                        index: path.index,
+                        siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+                    },
+                })
+                .collect(),
+            canopy: pool.proof.canopy.into_iter().map(Hash).collect(),
+            subjects: pool
+                .subjects
+                .iter()
+                .map(|subject| subject.record_index)
+                .collect(),
+        })
+    }
 }
 
 impl Chain {
-    fn credential_fixture(&self) -> Result<&CredentialFixture, ClientError> {
-        self.credentials
+    fn tracking(&self) -> Result<&TrackingFixture, RingIndexerError> {
+        self.tracking
             .as_deref()
-            .ok_or(ClientError::UnsupportedRpcMethod(
-                "get_shielded_transactions_by_nullifiers",
-            ))
+            .ok_or(ClientError::UnsupportedRpcMethod("get_tracking_openings").into())
     }
 }
 
-/// The tag a fixture credential holds when a test names no salt.
-pub(crate) const FIXTURE_LIST_TAG: [u8; 32] = [0x06; 32];
-
-/// `address`'s credential in the test ring, sealed to nothing a test opens.
-pub(crate) fn credential_of(address: &ShieldedAddress, list_tag: [u8; 32]) -> AuditCredential {
-    AuditCredential {
-        ring_id: ring().ring_id().unwrap(),
-        member: address.signing_pubkey.owner_proof_input_hash().unwrap(),
-        nullifier_pk: address.nullifier_pubkey,
-        list_tag,
-        auditor_pubkey: *auditor().pubkey().as_bytes(),
-        eph_u: [0x05; 32],
-        ciphertext: [0x07; 64],
-    }
+struct TrackingFixture {
+    tree: TrackingTree,
 }
 
-/// Each credential's `Enroll` output, appended in order to one state tree, the leaves built here
-/// apart from the SDK code that reads them.
-struct CredentialFixture {
-    /// By credential address.
-    enrollments: HashMap<[u8; 32], ShieldedTransaction>,
-    /// Each leaf's index and path, computed once.
-    paths: HashMap<[u8; 32], (u64, Vec<[u8; 32]>)>,
-    root: [u8; 32],
-    tree: Account,
-}
-
-impl CredentialFixture {
+impl TrackingFixture {
     fn enrolled() -> Arc<Self> {
-        static FIXTURE: std::sync::OnceLock<Arc<CredentialFixture>> = std::sync::OnceLock::new();
+        static FIXTURE: std::sync::OnceLock<Arc<TrackingFixture>> = std::sync::OnceLock::new();
         Arc::clone(FIXTURE.get_or_init(|| {
-            let credentials: Vec<_> = (0..ENROLLED_SEEDS)
-                .map(|seed| {
-                    credential_of(&keypair(seed).shielded_address().unwrap(), FIXTURE_LIST_TAG)
-                })
+            let addresses: Vec<_> = (0..ENROLLED_SEEDS)
+                .map(|seed| keypair(seed).shielded_address().unwrap())
                 .collect();
-            Arc::new(Self::of(&credentials))
+            Arc::new(Self::of(&addresses))
         }))
     }
 
-    fn of(credentials: &[AuditCredential]) -> Self {
-        let authority = CredentialAuthority::derive(&program()).unwrap();
-        let tree_address = spr_interface::pda::tree(CREDENTIAL_TREE_ID);
-        let mut tree = tree_account(PoolTree {
-            address: tree_address,
-            id: CREDENTIAL_TREE_ID,
-        });
-        let mut enrollments = HashMap::new();
-        let mut leaves = Vec::new();
-        for (leaf_index, credential) in (0..).zip(credentials) {
-            let address = *NewAddress::derive(authority.owner(), credential.seed().unwrap())
-                .unwrap()
-                .address();
-            let seed = derive_output_blinding_seed(&address, &ACCOUNT_BLINDING_SEED).unwrap();
-            let blinding = derive_transact_output_blinding(&address, &seed, 0).unwrap();
-            let leaf = ProofInputUtxo::new(
-                *authority.owner().owner_hash(),
-                &SOL_MINT,
-                0,
-                &blinding,
-                CREDENTIAL_TREE_ID,
-            )
-            .unwrap()
-            .with_data_hash(credential.data_hash(&address).unwrap())
-            .hash()
-            .unwrap();
-            TreeAccount::from_bytes(&mut tree.data, tree_address.to_bytes())
-                .unwrap()
-                .utxo_tree()
-                .append(leaf, ENROLLMENT_SLOT)
-                .unwrap();
-            let mut state = address.to_vec();
-            credential.serialize(&mut state).unwrap();
-            enrollments.insert(
-                address,
-                ShieldedTransaction {
-                    slot: ENROLLMENT_SLOT,
-                    tx_signature: Signature::from([1; 64]),
-                    event_index: Some(0),
-                    tx_viewing_pk: None,
-                    salt: None,
-                    output_slots: vec![OutputSlot {
-                        view_tag: [0; 32],
-                        output_context: OutputContext {
-                            hash: leaf,
-                            tree_id: CREDENTIAL_TREE_ID,
-                            leaf_index,
-                        },
-                        payload: borsh::to_vec(&OutputDataEncoding::Plaintext(state)).unwrap(),
-                    }],
-                    messages: Vec::new(),
-                    nullifiers: vec![address],
-                    proofless: false,
-                    ring_config: None,
-                    ring_program_id: None,
-                },
-            );
-            leaves.push(leaf);
-        }
-        // One pass per level, the unwritten right side of each level is the zero subtree.
-        let zero = Poseidon::zero_bytes();
-        let mut levels = Vec::with_capacity(STATE_TREE_HEIGHT);
-        let mut level = leaves.clone();
-        for zero_subtree in &zero[..STATE_TREE_HEIGHT] {
-            let parents = level
-                .chunks(2)
-                .map(|pair| {
-                    Poseidon::hashv(&[&pair[0], pair.get(1).unwrap_or(zero_subtree)]).unwrap()
-                })
-                .collect();
-            levels.push(core::mem::replace(&mut level, parents));
-        }
-        let root = level.first().copied().unwrap_or(zero[STATE_TREE_HEIGHT]);
-        let paths = (0..)
-            .zip(&leaves)
-            .map(|(index, leaf)| {
-                let path = (0..STATE_TREE_HEIGHT)
-                    .map(|height| {
-                        levels[height]
-                            .get(((index >> height) ^ 1) as usize)
-                            .copied()
-                            .unwrap_or(zero[height])
-                    })
-                    .collect();
-                (*leaf, (index, path))
+    /// Records in leaf order, each owner's own key.
+    fn of(addresses: &[ShieldedAddress]) -> Self {
+        Self::tagged(addresses, [0x06; 32])
+    }
+
+    fn tagged(addresses: &[ShieldedAddress], list_tag: [u8; 32]) -> Self {
+        let mut members: Vec<([u8; 32], ShieldedAddress)> = addresses
+            .iter()
+            .map(|address| {
+                (
+                    address.signing_pubkey.owner_proof_input_hash().unwrap(),
+                    *address,
+                )
             })
             .collect();
+        members.sort_by_key(|(member, _)| *member);
+        let mut records = vec![TrackingRecord {
+            next: members
+                .first()
+                .map_or(TrackingRecord::SENTINEL.next, |(member, _)| *member),
+            ..TrackingRecord::SENTINEL
+        }];
+        for (position, (member, address)) in members.iter().enumerate() {
+            records.push(TrackingRecord {
+                member: *member,
+                next: members
+                    .get(position + 1)
+                    .map_or(TrackingRecord::SENTINEL.next, |(next, _)| *next),
+                nullifier_pk: address.nullifier_pubkey,
+                ct_hash: [0x05; 32],
+                viewing_u: address.viewing_pubkey.u(),
+                revision: 1,
+                list_tag,
+            });
+        }
         Self {
-            enrollments,
-            paths,
-            root,
-            tree,
+            tree: TrackingTree::from_records(records).unwrap(),
         }
     }
 
-    fn proofs(
-        &self,
-        tree_account: Address,
-        leaves: &[[u8; 32]],
-    ) -> Result<GetMerkleProofsResponse, ClientError> {
-        let mut data = self.tree.data.clone();
-        let mut tree = TreeAccount::from_bytes(&mut data, tree_account.to_bytes()).unwrap();
-        let root_index = tree.utxo_tree().current_root_index();
-        let proofs = leaves
-            .iter()
-            .map(|leaf| {
-                let (leaf_index, path) = self.paths[leaf].clone();
-                MerkleProof {
-                    leaf: *leaf,
-                    merkle_context: MerkleContext {
-                        tree_type: 0,
-                        tree: tree_account,
-                    },
-                    path,
-                    leaf_index,
-                    root: self.root,
-                    root_seq: SLOT,
-                    root_index,
-                }
-            })
-            .collect();
-        Ok(GetMerkleProofsResponse {
-            context: CONTEXT,
-            proofs,
-        })
+    fn account(&self) -> Account {
+        let mut registry = TrackingRegistry::new(&InitializeTrackingIxData {
+            ring_id: ring().ring_id().unwrap(),
+            auditor_pubkey: *auditor().pubkey().as_bytes(),
+        });
+        registry.roots[0].hash = self.tree.root().unwrap();
+        registry.roots[0].revision = Revision::from(REVISION);
+        account(STORAGE_PROGRAM_ID, &registry)
+    }
+
+    fn root_view(&self) -> StorageRootView {
+        StorageRootView {
+            root: Hash(self.tree.root().unwrap()),
+            revision: REVISION,
+            next_index: self.tree.records().len() as u64,
+        }
+    }
+
+    fn opening(&self, member: &[u8; 32]) -> RingTrackingOpening {
+        let (present, record, path) = match self.tree.opening(member).unwrap() {
+            TrackingOpening::Present { record, path } => (true, record, path),
+            TrackingOpening::Absent { low, path } => (false, low, path),
+        };
+        RingTrackingOpening {
+            present,
+            record: record_view(&record),
+            path: RingRecordPathView {
+                index: path.index,
+                siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+            },
+        }
+    }
+}
+
+fn record_view(record: &TrackingRecord) -> RingTrackingRecordView {
+    RingTrackingRecordView {
+        member: Hash(record.member),
+        next: Hash(record.next),
+        nullifier_pk: Hash(record.nullifier_pk),
+        ct_hash: Hash(record.ct_hash),
+        viewing_u: Hash(record.viewing_u),
+        revision: record.revision,
+        list_tag: Hash(record.list_tag),
+        seal: None,
     }
 }
 
@@ -966,7 +863,7 @@ impl Registry {
                 registry_id: RegistryId([0; 32]),
                 grace_slots: 0u64.to_le_bytes(),
                 ring_id: ring().ring_id().unwrap(),
-                private_ring_id: [0; 32],
+                tracking_registry: Address::default(),
             },
         );
         records.roots[0].hash = self.root();

@@ -12,16 +12,15 @@ use zolana_ring_client::rpc::{
     GetDelegateNotesResponse, GetListSaltRequest, GetListSaltResponse, ListSaltAttestation,
     PrepareAuthorityTransferRequest, RelayStep,
 };
-use zolana_ring_client::CredentialError;
 
 use crate::{
     audit::{AuditService, WALLET_NOTE_PAGE_LIMIT},
     authorize::WalletCheck,
-    credentials::CredentialRefusal,
     error::RingRpcError,
     hub::Hub,
     relay_prover::{DelegateSeal, SealedSource},
     replay::ReplayCheck,
+    tracking::TrackingRefusal,
     upstream::TransactionSource,
     utxos::{SpendableNotes, WalletStatusQuery},
 };
@@ -73,12 +72,8 @@ impl From<DelegateSourceError> for RingRpcError {
             DelegateSourceError::SourcesMismatch | DelegateSourceError::UnrequestedInput { .. } => {
                 AuthorityTransferError::UnrequestedInput.into()
             }
-            DelegateSourceError::Credential(CredentialError::SealMismatch) => {
-                CredentialRefusal::Sealed.into()
-            }
-            DelegateSourceError::Credential(CredentialError::Rpc(error)) => (*error).into(),
-            DelegateSourceError::Credential(CredentialError::Seal(error)) => (*error).into(),
-            DelegateSourceError::Credential(_) => Self::StateUnavailable,
+            DelegateSourceError::SealMismatch => TrackingRefusal::Sealed.into(),
+            DelegateSourceError::Seal(error) => error.into(),
             DelegateSourceError::Keypair(error) => error.into(),
             DelegateSourceError::Transaction(error) => error.into(),
             DelegateSourceError::Client(error) => error.into(),
@@ -156,10 +151,10 @@ impl<S: TransactionSource> Hub<S> {
                 now,
             })
             .await?;
-        // 3. One scan answers both, the secret opens to the key the owner's credential binds and stays
-        // out of the store.
-        let credential = service.scanned_credential(&owner.to_bytes()).await?;
-        let nullifier_secret = credential
+        // 3. One scan answers the secret, it opens to the key the owner's tracking row binds and
+        //    stays out of the store. The owner's own account answers the enrollment.
+        let enrolled = service.scanned_enrollment(&owner.to_bytes()).await?;
+        let nullifier_secret = enrolled
             .held()
             .map(|held| held.secrets(service.auditor_keypair()))
             .transpose()?
@@ -171,7 +166,7 @@ impl<S: TransactionSource> Hub<S> {
             status: shared
                 .store(ring)
                 .wallet_status(WalletStatusQuery {
-                    enrollment: credential.enrollment(),
+                    enrollment: shared.source.tracking_enrollment(ring, owner).await?,
                     wallet: owner,
                     after: cursor,
                     limit: WALLET_NOTE_PAGE_LIMIT,
@@ -232,7 +227,7 @@ impl<S: TransactionSource> Hub<S> {
             .await?;
         Ok(GetListSaltResponse {
             list_salt: service
-                .credential_list_salt(&owner.to_bytes())
+                .enrolled_list_salt(&owner.to_bytes())
                 .await?
                 .map(Hash),
         })
@@ -733,10 +728,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_list_writer_reads_the_credential_salt_and_another_key_nothing() {
+    async fn a_list_writer_reads_the_enrolled_salt_and_another_key_nothing() {
         let (fixture, _prover) = served(Keypair::new_from_array([21; 32]).pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        fixture.enroll(&wallet, &NullifierKey::from_secret([11; 31]), 1);
+        fixture.enroll(&wallet, &NullifierKey::from_secret([11; 31]));
         let writer = list_writer();
         let read = fixture
             .hub
@@ -756,7 +751,7 @@ mod tests {
             .hub
             .list_salt(&salt_request(&fixture, &writer, unenrolled.pubkey()))
             .await
-            .expect("a complete scan without the credential reads nothing");
+            .expect("a complete scan without the enrollment reads nothing");
         assert_eq!(none.list_salt, None);
     }
 
@@ -764,7 +759,7 @@ mod tests {
     async fn a_list_key_names_its_enrolled_owner_and_another_key_none() {
         let (fixture, _prover) = served(Keypair::new_from_array([21; 32]).pubkey()).await;
         let wallet = Keypair::new_from_array([11; 32]);
-        fixture.enroll(&wallet, &NullifierKey::from_secret([11; 31]), 1);
+        fixture.enroll(&wallet, &NullifierKey::from_secret([11; 31]));
         let service = fixture.hub.service(Some(RING)).expect("service");
         let member =
             zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array()).expect("member");

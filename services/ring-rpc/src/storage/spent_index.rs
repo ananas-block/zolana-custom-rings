@@ -9,7 +9,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use borsh::BorshDeserialize;
-use custom_ring_interface::AuditCredential;
+use custom_ring_interface::REGISTER_KEY_CIPHERTEXT_LEN;
 use sea_orm::{
     AccessMode, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, DbErr,
     IsolationLevel, QueryResult, Statement, TransactionTrait, Value,
@@ -22,12 +22,12 @@ use spr_keypair::X25519Keypair;
 use zolana_ring_client::{history::HistoryPosition, KnownUtxo, UtxoOwner};
 
 use crate::{
-    credentials::{CredentialLeaf, HeldCredential},
     frame_repairs::RepairAttempt,
     hub::Clock,
     owner_notes::{IndexTags, OwnerNoteWrites},
     projection_lease::ProjectionLease,
     spend_machine::{SpendRow, SpendState},
+    tracking::HeldEnrollment,
     utxos::{CreatedIn, PageDelta, StoredUtxo},
 };
 
@@ -55,8 +55,8 @@ pub(crate) struct Checkpoint {
 pub(crate) struct LoadedProjection {
     pub spends: LoadedSpends,
     pub repairs: Vec<(CreatedIn, RepairAttempt)>,
-    pub credentials: Vec<HeldCredential>,
-    pub credential_position: HistoryPosition,
+    pub enrollments: Vec<HeldEnrollment>,
+    pub tracking_cursor: u64,
     /// The snapshot's revision, every row the load read was written at or below it.
     pub revision: i64,
 }
@@ -66,7 +66,7 @@ pub(crate) struct LoadedProjection {
 pub(crate) enum HistoryScope {
     /// Every row, for a mirror that holds the whole projection.
     Everything,
-    /// Rows written after a revision the cache already holds, credentials too.
+    /// Rows written after a revision the cache already holds, enrollments too.
     ChangedSince(i64),
     /// No row, a bounded cache fills from lookups.
     Cold,
@@ -326,42 +326,40 @@ fn read_position(row: &QueryResult) -> Result<HistoryPosition, DbErr> {
     })
 }
 
-/// The one layout of a sealed credential, the Borsh credential last.
-fn credential_body(held: &HeldCredential) -> Result<Vec<u8>, DbErr> {
-    let credential = borsh::to_vec(&held.credential)
-        .map_err(|_| DbErr::Custom("credential does not encode".into()))?;
-    Ok([
+/// The one layout of a sealed enrollment, the seal last.
+fn enrollment_body(held: &HeldEnrollment) -> Vec<u8> {
+    [
         held.owner_key.as_slice(),
         &held.owner_hash,
-        &held.address,
-        &held.leaf.utxo_hash,
-        &held.leaf.tree_id.to_be_bytes(),
-        &held.leaf.leaf_index.to_be_bytes(),
+        &held.member,
+        &held.nullifier_pk,
+        &held.list_tag,
+        &held.eph_u,
         &held.list_key,
-        &credential,
+        &held.ciphertext,
     ]
-    .concat())
+    .concat()
 }
 
-fn credential_from_body(body: &[u8]) -> Result<HeldCredential, DbErr> {
-    let malformed = || DbErr::Custom("credential body has another layout".into());
+fn enrollment_from_body(body: &[u8]) -> Result<HeldEnrollment, DbErr> {
+    let malformed = || DbErr::Custom("enrollment body has another layout".into());
     let (owner_key, rest) = body.split_first_chunk::<32>().ok_or_else(malformed)?;
     let (owner_hash, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
-    let (address, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
-    let (utxo_hash, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
-    let (tree_id, rest) = rest.split_first_chunk::<2>().ok_or_else(malformed)?;
-    let (leaf_index, rest) = rest.split_first_chunk::<8>().ok_or_else(malformed)?;
+    let (member, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
+    let (nullifier_pk, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
+    let (list_tag, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
+    let (eph_u, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
     let (list_key, rest) = rest.split_first_chunk::<32>().ok_or_else(malformed)?;
-    Ok(HeldCredential {
+    let ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN] =
+        rest.try_into().map_err(|_| malformed())?;
+    Ok(HeldEnrollment {
         owner_key: *owner_key,
         owner_hash: *owner_hash,
-        address: *address,
-        credential: AuditCredential::try_from_slice(rest).map_err(|_| malformed())?,
-        leaf: CredentialLeaf {
-            utxo_hash: *utxo_hash,
-            tree_id: u16::from_be_bytes(*tree_id),
-            leaf_index: u64::from_be_bytes(*leaf_index),
-        },
+        member: *member,
+        nullifier_pk: *nullifier_pk,
+        list_tag: *list_tag,
+        eph_u: *eph_u,
+        ciphertext,
         list_key: *list_key,
     })
 }
@@ -520,21 +518,21 @@ impl ProjectionWriter<'_> {
         Ok(revision)
     }
 
-    /// A page's credentials and the scan position past it commit together.
-    pub(crate) async fn commit_credentials(
+    /// A page's enrollments and the tracking cursor past it commit together.
+    pub(crate) async fn commit_enrollments(
         &self,
-        held: &[HeldCredential],
-        position: &HistoryPosition,
+        held: &[HeldEnrollment],
+        cursor: u64,
     ) -> Result<(), DbErr> {
         let (transaction, revision) = self.begin().await?;
         let backend = transaction.get_database_backend();
-        for credential in held {
-            let member = credential.member();
-            let sealed = self.seal.seal(&member, &credential_body(credential)?)?;
+        for enrollment in held {
+            let member = enrollment.member();
+            let sealed = self.seal.seal(&member, &enrollment_body(enrollment))?;
             transaction
                 .execute(Statement::from_sql_and_values(
                     backend,
-                    "INSERT INTO held_credentials(ring,member,sealed,revision) \
+                    "INSERT INTO held_enrollments(ring,member,sealed,revision) \
                      VALUES($1,$2,$3,$4) ON CONFLICT(ring,member) DO NOTHING",
                     vec![
                         self.ring_value(),
@@ -545,14 +543,14 @@ impl ProjectionWriter<'_> {
                 ))
                 .await?;
         }
-        let [after_slot, token] = position_values(position)?;
+        let cursor = i64::try_from(cursor)
+            .map_err(|_| DbErr::Custom("tracking cursor past i64".into()))?;
         transaction
             .execute(Statement::from_sql_and_values(
                 backend,
-                "INSERT INTO credential_checkpoints(ring,after_slot,token) VALUES($1,$2,$3) \
-                 ON CONFLICT(ring) DO UPDATE SET after_slot=excluded.after_slot, \
-                 token=excluded.token",
-                vec![self.ring_value(), after_slot, token],
+                "INSERT INTO tracking_cursors(ring,next_leaf) VALUES($1,$2) \
+                 ON CONFLICT(ring) DO UPDATE SET next_leaf=excluded.next_leaf",
+                vec![self.ring_value(), cursor.into()],
             ))
             .await?;
         transaction.commit().await
@@ -698,25 +696,24 @@ impl LoadSpends<'_> {
         }
         for row in snapshot
             .query_all(changed(
-                "SELECT member,sealed FROM held_credentials WHERE ring=$1 AND revision>$2",
+                "SELECT member,sealed FROM held_enrollments WHERE ring=$1 AND revision>$2",
             ))
             .await?
         {
             let member: [u8; 32] = read_bytes(&row, "member")?;
             let body = seal.open(&member, &row.try_get::<Vec<u8>>("", "sealed")?)?;
-            let held = credential_from_body(&body)?;
+            let held = enrollment_from_body(&body)?;
             if held.member() != member {
-                return Err(DbErr::Custom("credential row names another member".into()));
+                return Err(DbErr::Custom("enrollment row names another member".into()));
             }
-            loaded.credentials.push(held);
+            loaded.enrollments.push(held);
         }
         if let Some(row) = snapshot
-            .query_one(query(
-                "SELECT after_slot,token FROM credential_checkpoints WHERE ring=$1",
-            ))
+            .query_one(query("SELECT next_leaf FROM tracking_cursors WHERE ring=$1"))
             .await?
         {
-            loaded.credential_position = read_position(&row)?;
+            loaded.tracking_cursor = u64::try_from(row.try_get::<i64>("", "next_leaf")?)
+                .map_err(|_| DbErr::Custom("negative tracking cursor".into()))?;
         }
         Ok(loaded)
     }

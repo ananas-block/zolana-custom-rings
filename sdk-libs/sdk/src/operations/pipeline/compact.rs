@@ -2,10 +2,10 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask, statement::SignerDataCounts, storage::Revision, tag, AnonymousProofData,
-    AppMessage, CredentialRead, CustomRingError, CustomRingProof, FrameExtensions,
-    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies,
-    RingOutput, RingPolicy, RingRail, RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN,
-    DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
+    AppMessage, CustomRingError, CustomRingProof, FrameExtensions, FramedSenderBundle,
+    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy,
+    RingRail, RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    MAX_SPP_CPI_ACCOUNTS,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -17,7 +17,7 @@ use spr_program::instruction::{
 };
 
 use super::owner::deposit_funder;
-use crate::{CredentialTrees, CustomRing, RingError};
+use crate::{CustomRing, RingError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OwnedBody {
@@ -158,7 +158,7 @@ pub(crate) struct TransactParts {
     pub n_in: u8,
     pub n_out: u8,
     pub proof: CustomRingProof,
-    pub credential_read: CredentialRead,
+    pub tracking_revision: Revision,
     pub own_revision: Option<Revision>,
     pub policy: Option<PolicyProof>,
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
@@ -210,7 +210,7 @@ impl TransactParts {
             n_in: self.n_in,
             n_out: self.n_out,
             proof: &self.proof,
-            credential_read: self.credential_read.clone(),
+            tracking_revision: self.tracking_revision,
             own_revision: self.own_revision,
             policy: self.policy,
             spl_withdrawal_owners: &self.spl_withdrawal_owners,
@@ -264,8 +264,6 @@ pub(crate) struct TransactAccounts {
     pub read_cache: Option<Address>,
     pub co_signers: Vec<Address>,
     pub delegate: Option<Address>,
-    /// `None` before the credential read, the trees the frame's indexes name after it.
-    pub credential_trees: Option<CredentialTrees>,
 }
 
 impl TransactAccounts {
@@ -329,11 +327,6 @@ impl TransactAccounts {
             config
                 .root_registries(RootRead::transfer(config, parts.rail.is_delegate()))
                 .map(|registry| AccountMeta::new_readonly(registry, false)),
-        );
-        accounts.extend(
-            self.credential_trees
-                .iter()
-                .flat_map(CredentialTrees::metas),
         );
         accounts.extend(
             self.co_signers

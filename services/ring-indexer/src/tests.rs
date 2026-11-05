@@ -5,7 +5,8 @@ use std::sync::{
 
 use custom_ring_interface::{
     storage::{RegistryId, Revision, StorageRegistry},
-    storage_instruction::{tag, InitializeIxData},
+    storage_instruction::{tag, InitializeIxData, InitializeTrackingIxData},
+    tracking::TrackingRegistry,
     MEMBER_REGISTRY_EMPTY_ROOT,
 };
 use sea_orm::{Database, DatabaseConnection, TransactionTrait};
@@ -22,8 +23,12 @@ use crate::{
     indexer::{block_batch, Indexer, Readiness, RegistryCall, StartSlot, MIN_BLOCK_BATCH},
     migration::Migrator,
     rpc::SolanaRpc,
-    storage::{self, RingCursor, StorageRoot, StorageState, StorageStore},
+    storage::{
+        self, AppliedRevision, Enrollment, RingCursor, StorageRoot, StorageState, StorageStore,
+        TrackingState, TrackingStore,
+    },
     storage_registry::StorageCall,
+    tracking_registry::TrackingCall,
 };
 
 pub(crate) fn field(value: u8) -> [u8; 32] {
@@ -56,7 +61,7 @@ pub(crate) async fn create_registry(db: &DatabaseConnection, registry: [u8; 32])
                 registry_id: RegistryId::default(),
                 grace_slots: [0; 8],
                 ring_id: [0; 32],
-                private_ring_id: [0; 32],
+                tracking_registry: Address::default(),
             },
         )),
         fault: None,
@@ -219,7 +224,9 @@ async fn storage_shaped_instructions_of_other_programs_cost_no_queries() {
         tag::INITIALIZE,
         tag::UPDATE,
         tag::UPDATE_AUTHORITY,
-        tag::OWNER_GRANT,
+        tag::ENROLL,
+        tag::APPLY_ENROLLMENTS,
+        tag::INITIALIZE_TRACKING,
     ];
     let shaped = storage_tags
         .into_iter()
@@ -291,5 +298,49 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
     assert!(storage::cursor(&tx).await.unwrap().unwrap().is_ready());
     tx.commit().await.unwrap();
     storage::prune(&db, 1).await.unwrap();
+    let tracking = TrackingStore::new(&db, [12; 32]);
+    let creator = InitializeTrackingIxData {
+        ring_id: field(9),
+        auditor_pubkey: [9; 33],
+    };
+    <TrackingCall as RegistryCall<TrackingRegistry>>::create(
+        &tracking,
+        &TrackingState {
+            registry: [12; 32],
+            account: Box::new(TrackingRegistry::new(&creator)),
+            fault: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(tracking.state().await.unwrap().is_some());
+    let low = tracking.tree().low_record(&field(4), 0).await.unwrap();
+    assert_eq!(low.index, 0);
+    let enrollment = Enrollment {
+        owner: [1; 32],
+        authorization: [2; 32],
+        member: field(4),
+        nullifier_pk: field(5),
+        ct_hash: field(6),
+        list_tag: field(7),
+        eph_u: [8; 32],
+        ciphertext: [9; 64],
+        viewing_u: [10; 32],
+        revision: 1,
+        applied_revision: 0,
+    };
+    tracking.save_first(&enrollment, 5).await.unwrap();
+    assert_eq!(tracking.pending(None, 8).await.unwrap(), [enrollment]);
+    tracking
+        .mark_applied(&AppliedRevision {
+            owner: [1; 32],
+            revision: 1,
+            slot: 6,
+        })
+        .await
+        .unwrap();
+    assert!(tracking.pending(None, 8).await.unwrap().is_empty());
+    let applied = tracking.enrollment_at(&[2; 32]).await.unwrap().unwrap();
+    assert_eq!(applied.applied_revision, 1);
     Migrator::reset(&db).await.unwrap();
 }

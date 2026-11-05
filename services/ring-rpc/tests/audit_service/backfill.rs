@@ -668,51 +668,20 @@ async fn an_enrolled_key_names_a_note_and_another_key_names_none() {
 
     let enrolled = source(&row);
     enrolled
-        .credentials
+        .tracking
         .enroll(&owner, &key, &fixture.auditor.pubkey());
     let read = status(enrolled).await;
-    assert_eq!(read.enrollment, WalletEnrollment::Enrolled);
+    assert_eq!(read.enrollment, WalletEnrollment::Applied);
     assert_eq!(read.notes[0].status, WalletNoteStatus::Unspent);
     assert_eq!(read.balances[0].amount, 500);
 
-    // A credential under another key derives no nullifier of the note, the note stays unknown.
+    // An enrollment under another key derives no nullifier of the note, the note stays unknown.
     let forged = source(&row);
-    forged.credentials.enroll(
+    forged.tracking.enroll(
         &owner,
         &NullifierKey::from_secret([8; 31]),
         &fixture.auditor.pubkey(),
     );
     let read = status(forged).await;
     assert_eq!(read.notes[0].status, WalletNoteStatus::Unknown);
-}
-
-/// A credential the scan cannot resolve refuses the read, the owner never reads as unenrolled.
-#[tokio::test]
-async fn an_unresolved_credential_refuses_the_wallet_status() {
-    let fixture = Fixture::new();
-    let owner = [0xb0; 32];
-    let mut source = fixture.source().with_transactions(Vec::new());
-    source.next_cursor = None;
-    source.credentials.enroll(
-        &owner,
-        &NullifierKey::from_secret([7; 31]),
-        &fixture.auditor.pubkey(),
-    );
-    source.credentials.0.lock().unwrap()[0].1 = stranger().pubkey();
-    let service = fixture.hub(source).service(None).expect("service");
-    let request = WalletStatusRequest::new(target(RING), Address::new_from_array(owner))
-        .sign(&delegate())
-        .expect("signed");
-
-    let refused = service.wallet_status(&request).await;
-
-    assert!(
-        matches!(
-            refused,
-            Err(RingRpcError::Credential(
-                zolana_ring_rpc::CredentialRefusal::OwnerUnresolved
-            ))
-        ),
-        "{refused:?}"
-    );
 }

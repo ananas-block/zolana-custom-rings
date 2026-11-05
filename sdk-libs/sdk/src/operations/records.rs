@@ -1,30 +1,36 @@
 //! Registry records, read under a root or signed as record updates.
 
 use async_trait::async_trait;
-use custom_ring_interface::{domain, AuditCredential};
+use custom_ring_interface::domain;
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_api::ZolanaApi;
 use spr_client::{AsyncRpc, ClientError};
 use spr_indexer_api::Hash;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
-use spr_keypair::ShieldedAddress;
 use zolana_ring_client::{
-    records::{MemberOpeningRead, RecordPoolCheck, RecordPoolRead},
+    records::{path_of, MemberOpeningRead, RecordPoolCheck, RecordPoolRead},
+    resolver::tracking_record,
     rpc::{
         method::{GetRecordUpdateStatus, SubmitRecordUpdate},
         GetRecordUpdateStatusRequest, ReaderAccess, RecordUpdate, RecordUpdateEntry,
         RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest, WalletGrant,
         AWAITABLE_LISTS,
     },
-    AsyncRingIndexer, CredentialError, CredentialLookup, CredentialResolver, ReaderKey,
-    RecipientKeyResolver, RecipientKeys, ViewingKeyResolver,
+    AsyncRingIndexer, ReaderKey, RecipientResolver, ResolvedRecipient,
 };
-use zolana_ring_indexer::rpc::{
-    GetStorageMemberOpeningsRequest, GetStorageRecordPoolRequest, RingListWriteView,
-    MAX_RING_MEMBER_PAGE_LIMIT,
+use zolana_ring_indexer::{
+    rpc::{
+        GetStorageMemberOpeningsRequest, GetStorageRecordPoolRequest, RingListWriteView,
+        MAX_RING_MEMBER_PAGE_LIMIT,
+    },
+    tracking::{GetTrackingOpeningsRequest, GetTrackingRecordPoolRequest},
 };
 use zolana_ring_keys::RingAddress;
+use zolana_ring_member_registry::{
+    Canopy, OpeningCheck, PoolSubject, SharedPath, SharedProof, TrackingOpening, TrackingPool,
+    TrackingRecord,
+};
 use zolana_ring_policy::{ListSet, ListWrite, Member, MintPolicy, Writer};
 
 use crate::{submission::BoundRoot, CustomRing, RingError};
@@ -119,18 +125,118 @@ impl PoolRead<'_> {
     }
 }
 
-/// A salted entry reads only under the salt the owner's credential commits, any other disarms it silently.
+/// `members` stay distinct, the canopy sized for `openings` paths.
+pub(crate) struct TrackingRead<'a> {
+    pub root: BoundRoot,
+    pub members: &'a [[u8; 32]],
+    pub openings: usize,
+}
+
+/// An absent subject reads its bracketing low row.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct TrackingPoolRead {
+    pool: TrackingPool,
+}
+
+impl TrackingRead<'_> {
+    pub async fn read(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<TrackingPoolRead, RingError> {
+        let BoundRoot { registry, root, .. } = self.root;
+        let response = rpc
+            .get_tracking_record_pool(GetTrackingRecordPoolRequest {
+                registry: registry.into(),
+                members: self.members.iter().copied().map(Hash).collect(),
+                expected_root: Hash(root),
+                openings: self.openings as u64,
+            })
+            .await?;
+        let canopy = Canopy::covering_tracking(self.openings)?;
+        if response.root.root.0 != root
+            || response.canopy.len() != canopy.width()
+            || response.subjects.len() != self.members.len()
+        {
+            return Err(RingError::InvalidRecordOpening);
+        }
+        let pool = TrackingPool {
+            records: response
+                .records
+                .iter()
+                .map(|row| tracking_record(&row.record))
+                .collect(),
+            proof: SharedProof {
+                canopy: response.canopy.iter().map(|node| node.0).collect(),
+                paths: response
+                    .records
+                    .iter()
+                    .map(|row| SharedPath {
+                        index: row.path.index,
+                        siblings: row
+                            .path
+                            .siblings
+                            .iter()
+                            .map(|level| level.clone().map(|sibling| sibling.0))
+                            .collect(),
+                    })
+                    .collect(),
+            },
+            subjects: self
+                .members
+                .iter()
+                .zip(&response.subjects)
+                .map(|(member, record_index)| PoolSubject {
+                    member: *member,
+                    record_index: *record_index,
+                })
+                .collect(),
+        };
+        pool.verify(&root)
+            .map_err(|_| RingError::InvalidRecordOpening)?;
+        Ok(TrackingPoolRead { pool })
+    }
+}
+
+impl TrackingPoolRead {
+    pub fn pool(&self) -> &TrackingPool {
+        &self.pool
+    }
+
+    /// `None` for an absent member or one outside the pool.
+    pub fn record(&self, member: &[u8; 32]) -> Option<&TrackingRecord> {
+        let subject = self
+            .pool
+            .subjects
+            .iter()
+            .find(|subject| subject.member == *member)?;
+        self.pool
+            .records
+            .get(subject.record_index as usize)
+            .filter(|record| record.member == *member)
+    }
+}
+
+/// A salted entry reads only under the salt the owner's row commits, any other disarms it silently.
 #[must_use]
 pub struct SaltedOwnerCheck<'a> {
+    pub ring: CustomRing,
     pub address: &'a RingAddress,
 }
 
 impl SaltedOwnerCheck<'_> {
-    /// The address's keys, bound to the owner's credential or to its authenticated absence.
-    pub async fn run<R: AsyncRpc>(self, rpc: &R) -> Result<RecipientKeys, RingError> {
-        Ok(RecipientKeyResolver::new(self.address)
-            .resolve(rpc, rpc)
-            .await?)
+    pub async fn run(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<ResolvedRecipient, RingError> {
+        let policy = self.ring.require_policy(rpc).await?;
+        let tracking = BoundRoot::tracking(&policy, rpc).await?;
+        Ok(RecipientResolver {
+            address: self.address,
+            registry: tracking.registry,
+            root: tracking.root,
+        }
+        .resolve(rpc)
+        .await?)
     }
 }
 
@@ -144,57 +250,92 @@ pub struct OwnerSaltCheck<'a> {
 }
 
 impl OwnerSaltCheck<'_> {
-    pub async fn run<R: AsyncRpc>(self, rpc: &R) -> Result<(), RingError> {
+    pub async fn run(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<(), RingError> {
         let member = *Member::owner_tag(self.owner.as_array())?.as_bytes();
-        match CredentialResolver::new(self.ring.program_id(), *self.owner)
-            .resolve(rpc, rpc)
-            .await?
-        {
-            CredentialLookup::Present(present)
-                if domain::list_tag(self.list_salt)? == present.credential.list_tag =>
+        let policy = self.ring.require_policy(rpc).await?;
+        let root = BoundRoot::tracking(&policy, rpc).await?;
+        match (TrackingMemberRead { root, member }).read(rpc).await? {
+            TrackingOpening::Present { record, .. }
+                if domain::list_tag(self.list_salt)? == record.list_tag =>
             {
                 Ok(())
             }
-            CredentialLookup::Present(_) => Err(RingError::ListSaltMismatch { member }),
-            CredentialLookup::Absent(_) => Err(RingError::ListSaltUnknown { member }),
-            CredentialLookup::Unknown(unknown) => Err(CredentialError::Unknown(unknown).into()),
+            TrackingOpening::Present { .. } => Err(RingError::ListSaltMismatch { member }),
+            TrackingOpening::Absent { .. } => Err(RingError::ListSaltUnknown { member }),
         }
     }
 }
 
-/// A nonzero key pays only the owner whose credential holds it. The zero key needs no credential,
-/// the sender's key resolution decides whether an enrolled owner may take it.
+pub(crate) struct TrackingMemberRead {
+    pub root: BoundRoot,
+    pub member: [u8; 32],
+}
+
+impl TrackingMemberRead {
+    pub async fn read(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<TrackingOpening, RingError> {
+        let BoundRoot { registry, root, .. } = self.root;
+        let response = rpc
+            .get_tracking_openings(GetTrackingOpeningsRequest {
+                registry: registry.into(),
+                members: vec![Hash(self.member)],
+                expected_root: Hash(root),
+            })
+            .await?;
+        let [view] = response.openings.as_slice() else {
+            return Err(RingError::InvalidRecordOpening);
+        };
+        let path = path_of(&view.path)?;
+        let record = tracking_record(&view.record);
+        let opening = match view.present {
+            true => TrackingOpening::Present { record, path },
+            false => TrackingOpening::Absent { low: record, path },
+        };
+        OpeningCheck {
+            opening: &opening,
+            root: &root,
+            member: &self.member,
+        }
+        .verify()
+        .map_err(|_| RingError::InvalidRecordOpening)?;
+        Ok(opening)
+    }
+}
+
+/// An enrolled owner takes its enrolled key, only an owner with no row takes zero.
 pub(crate) fn check_output_key(
-    credential: Option<&AuditCredential>,
+    row: Option<&TrackingRecord>,
     nullifier_pk: &[u8; 32],
     slot_index: usize,
 ) -> Result<(), RingError> {
-    if *nullifier_pk == ZERO_NULLIFIER_PUBKEY {
-        return Ok(());
-    }
-    match credential {
-        None => Err(RingError::RecipientNotEnrolled { slot_index }),
-        Some(credential) if credential.nullifier_pk != *nullifier_pk => {
+    match (row, *nullifier_pk == ZERO_NULLIFIER_PUBKEY) {
+        (None, true) => Ok(()),
+        (None, false) => Err(RingError::RecipientNotEnrolled { slot_index }),
+        (Some(_), true) => Err(RingError::EnrolledRecipientAtZeroKey { slot_index }),
+        (Some(record), false) if record.nullifier_pk != *nullifier_pk => {
             Err(RingError::RecipientKeyMismatch { slot_index })
         }
-        Some(_) => Ok(()),
+        (Some(_), false) => Ok(()),
     }
 }
 
-/// The user record names the current viewing key, a body sealed to any other stays unread. An
-/// owner with no record keeps the key its address names.
-pub(crate) async fn check_recipient_viewing_key<R: AsyncRpc>(
-    rpc: &R,
-    recipient: &ShieldedAddress,
+/// The row names the current viewing key, a body sealed to any other stays unread.
+pub(crate) fn check_recipient_viewing_key(
+    row: Option<&TrackingRecord>,
+    viewing_u: &[u8; 32],
     slot_index: usize,
 ) -> Result<(), RingError> {
-    let record = ViewingKeyResolver::new(recipient.solana_address()?)
-        .with_credential(recipient.nullifier_pubkey)
-        .resolve(rpc)
-        .await?;
-    match record {
-        Some(record) if record.viewing_pubkey != recipient.viewing_pubkey => {
-            Err(RingError::RecipientViewingKeyStale { slot_index })
+    match row {
+        Some(record) if record.viewing_u != *viewing_u => {
+            Err(RingError::RecipientViewingKeyStale {
+                slot_index,
+                row_revision: record.revision,
+            })
         }
         Some(_) | None => Ok(()),
     }

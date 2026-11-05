@@ -6,14 +6,13 @@ use custom_ring_interface::{
     RingTransactData, MAX_CPI_DATA_LEN,
 };
 use solana_address::Address;
-use solana_instruction::{AccountMeta, Instruction};
+use solana_instruction::Instruction;
 use solana_message::v1;
 use spr_client::{
     compile_message, transaction_size, ClientError, ComputeBudgetConfig, TransactionSize,
 };
 use spr_interface::{instruction::TransactProof, pda, ZERO_NULLIFIER_PUBKEY};
 use spr_keypair::PublicKey;
-use spr_program::ADDRESS_TREE_ID;
 use spr_transaction::utxo::SppProofInputUtxo;
 use thiserror::Error;
 
@@ -64,14 +63,6 @@ pub struct SetupEffect {
     pub addresses: usize,
 }
 
-/// Named after the policy registries, the compiled fit alone bounds their accounts.
-#[must_use]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CredentialTrees {
-    /// Distinct and ascending, the frame's state root table.
-    state: Vec<u16>,
-}
-
 #[derive(Debug, Error)]
 pub enum FitError {
     #[error("the transaction needs {signatures} signatures, a v1 transaction carries {limit}")]
@@ -88,8 +79,6 @@ pub enum FitError {
     UnparsedFrame,
     #[error("the frame carries more application messages than SPP takes beside its own, {limit} on its rail")]
     ApplicationMessages { limit: usize },
-    #[error("the frame reads {trees} credential trees, its key reads 1 to {capacity}")]
-    CredentialCapacity { trees: usize, capacity: usize },
     #[error(transparent)]
     Program(#[from] CustomRingError),
     #[error(transparent)]
@@ -105,41 +94,6 @@ impl<'a> FitSigners<'a> {
     pub const fn with_setup(mut self, setup: &'a [Instruction]) -> Self {
         self.setup = setup;
         self
-    }
-}
-
-impl CredentialTrees {
-    /// One tree id per opening, `capacity` is the key's `K`.
-    pub fn new(openings: impl IntoIterator<Item = u16>, capacity: usize) -> Result<Self, FitError> {
-        let mut state: Vec<u16> = openings.into_iter().collect();
-        state.sort_unstable();
-        state.dedup();
-        if state.is_empty() || state.len() > capacity {
-            return Err(FitError::CredentialCapacity {
-                trees: state.len(),
-                capacity,
-            });
-        }
-        Ok(Self { state })
-    }
-
-    /// The address tree an absent owner opens a gap in, then each state tree.
-    pub fn metas(&self) -> impl Iterator<Item = AccountMeta> + '_ {
-        core::iter::once(ADDRESS_TREE_ID)
-            .chain(self.state.iter().copied())
-            .map(|tree_id| AccountMeta::new_readonly(pda::tree(tree_id), false))
-    }
-
-    /// Distinct tree accounts no SPP input or output tree already names.
-    pub fn added_accounts(&self, inputs: &[Address], output: &Address) -> usize {
-        let mut added: Vec<Address> = self
-            .metas()
-            .map(|meta| meta.pubkey)
-            .filter(|tree| tree != output && !inputs.contains(tree))
-            .collect();
-        added.sort_unstable();
-        added.dedup();
-        added.len()
     }
 }
 

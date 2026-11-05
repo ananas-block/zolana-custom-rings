@@ -11,8 +11,6 @@ mod admin;
 mod client;
 #[path = "validation/co_signer.rs"]
 mod co_signer;
-#[path = "operations/credentials.rs"]
-mod credentials;
 #[path = "operations/delegate_source.rs"]
 mod delegate_source;
 #[path = "operations/deposit.rs"]
@@ -66,24 +64,22 @@ pub use crate::{
         RingStatus,
     },
     address_ceiling::{
-        AddressCeiling, AddressCeilingError, CeilingDecision, CredentialTrees, Fit, FitError,
-        FitSigners, MergeCapacity, MergeGroup, SetupEffect, SpentInput, TransactionFit,
+        AddressCeiling, AddressCeilingError, CeilingDecision, Fit, FitError, FitSigners,
+        MergeCapacity, MergeGroup, SetupEffect, SpentInput, TransactionFit,
     },
     admin::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,
         SetDelegate, SourceOwner, UpdateAuthority, UpdatePolicy,
     },
     client::{RingClient, RingIndexerBackend},
-    credentials::{CredentialPool, CredentialPoolRead},
     delegate_source::{
-        AllowedNullifiers, CredentialEnrollment, DelegateSourceError, ResolvedSource,
-        SourceEnrollment,
+        AllowedNullifiers, DelegateSourceError, ResolvedSource, SourceEnrollment,
+        TrackingEnrollment,
     },
     deposit::{
         fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RelayedDeposit,
         RingDeposit, RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
     },
-    enrollment::{Enroll, EnrollInstruction, EnrollRelay, WriteOwnerGrant},
     error::RingError,
     merge::{
         CustomRingMerge, CustomRingMergeInstruction, FittedMerge, MergeProofInput, MergeRelay,
@@ -114,8 +110,9 @@ pub use crate::{
     },
     select::{select_merge_where, select_spend_where},
     storage::{
-        InitializeStorage, PrivateStorageWrite, ProvenPrivateWrite, SaltedOwnerWrite,
-        StorageApplyProof, UpdateStorage, UpdateStorageAuthority,
+        tracking_apply_inputs, ApplyEnrollments, EnrollPending, InitializeStorage,
+        PrivateStorageWrite, ProvenPrivateWrite, SaltedOwnerWrite, StorageApplyProof,
+        UpdateStorage, UpdateStorageAuthority,
     },
     submission::{
         live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,

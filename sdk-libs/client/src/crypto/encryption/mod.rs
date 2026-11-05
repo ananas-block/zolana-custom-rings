@@ -551,39 +551,15 @@ mod tests {
                 amount: amount(slot),
             })
             .collect();
-        // The request repeats its first state root up to the key capacity, the selection pads the same way.
-        let state_roots: Vec<_> = request["stateRoots"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|entry| custom_ring_interface::CredentialStateRoot {
-                tree_id: u16::try_from(entry["treeId"].as_u64().unwrap()).unwrap(),
-                root: hex_field(&entry["root"]),
-            })
-            .collect();
-        let credentials = custom_ring_interface::CredentialRootSelection {
-            ring_program: &crate::deposit::tests::RING,
-            address_checkpoint: crate::credential::tests::address_checkpoint(hex_field(
-                &request["addressRoot"],
-            )),
-            state_roots: &state_roots[..1],
-            capacity: state_roots.len(),
-        }
-        .roots()
-        .unwrap();
-        assert_eq!(
-            credentials.owner_hash(),
-            &hex_field(&request["credentialOwner"])
-        );
         let hash = custom_ring_interface::DepositPublicInput {
             context_hash: &hex_field(&request["contextHash"]),
-            ring_id: &hex_field(&request["ringId"]),
+            key_capacity: u8::try_from(owner_hashes.len()).unwrap(),
             owner_utxo_hashes: &owners,
             ciphertexts: &sealed.ciphertexts,
             assets: &assets,
             auditor_pk: auditor_pk.as_bytes(),
             eph_pk: sealed.ephemeral_pk.as_bytes(),
-            credentials: &credentials,
+            tracking_root: &hex_field(&request["trackingRoot"]),
             registry: Some(custom_ring_interface::DepositRegistry {
                 own_root: &hex_field(&request["ownRoot"]),
                 curator_root: Some(&hex_field(&request["curatorRoot"])),

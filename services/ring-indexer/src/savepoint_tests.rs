@@ -1,13 +1,12 @@
 //! A storage update whose record rows fail to save part way leaves the stored tree, roots and
-//! absence floor as they were. A row already saved for `applied = 1` blocks one insert, the update's
+//! tracking floor as they were. A row already saved for `applied = 1` blocks one insert, the update's
 //! savepoint must drop every row it wrote before that one.
 
 use custom_ring_interface::{
-    key_catalog::apply_width,
     mint_policy_write,
     storage::{chain_start, RegistryId, Revision, StorageRegistry},
-    storage_instruction::{tag, InitializeIxData, PrivateWriteCheckpoint, StorageUpdateIxData},
-    ApplyRecordsIxData, CredentialRead, RecordWriteData, WriteRecordsIxData, FIELD_MAX,
+    storage_instruction::{tag, InitializeIxData, StorageUpdateIxData},
+    ApplyRecordsIxData, RecordWriteData, WriteRecordsIxData, FIELD_MAX,
     STORAGE_PROGRAM_ID,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement, TransactionTrait};
@@ -30,9 +29,10 @@ use crate::{
 
 const REGISTRY: [u8; 32] = [11; 32];
 const AUTHORITY: Address = Address::new_from_array([3; 32]);
+const TRACKING: Address = Address::new_from_array([12; 32]);
 const FLOOR: u64 = 4;
 
-/// A registry bound to a ring, its floor already raised to `FLOOR`.
+/// A registry pinned to a tracking registry, its floor already raised to `FLOOR`.
 async fn private_registry(db: &DatabaseConnection) -> StorageState {
     let mut account = StorageRegistry::new(
         AUTHORITY,
@@ -40,10 +40,10 @@ async fn private_registry(db: &DatabaseConnection) -> StorageState {
             registry_id: RegistryId::default(),
             grace_slots: [0; 8],
             ring_id: field(9),
-            private_ring_id: field(9),
+            tracking_registry: TRACKING,
         },
     );
-    account.absence_floor = FLOOR.to_le_bytes();
+    account.tracking_floor = Revision::from(FLOOR);
     let state = StorageState {
         registry: REGISTRY,
         account: Box::new(account),
@@ -60,7 +60,7 @@ async fn private_registry(db: &DatabaseConnection) -> StorageState {
     state
 }
 
-/// A PrivateAllow write of each member at revision 0, the checkpoint above `FLOOR`.
+/// A PrivateAllow write of each member at revision 0, its tracking revision above `FLOOR`.
 fn private_update(members: &[u8]) -> BlockInfo {
     let mask = ListSet::single(ListId::PrivateAllow).record_bits();
     let writes: Vec<RecordWriteData> = members
@@ -87,7 +87,6 @@ fn private_update(members: &[u8]) -> BlockInfo {
         )
         .unwrap()
         .proof;
-    let width = apply_width(writes.len() as u64);
     let apply = ApplyRecordsIxData {
         proof: bytemuck::Zeroable::zeroed(),
         new_root: proof.new_root,
@@ -98,17 +97,13 @@ fn private_update(members: &[u8]) -> BlockInfo {
         revision: Revision::default(),
         writes,
         asset_writes: Vec::new(),
-        credential_read: CredentialRead::new(0, &vec![0; usize::from(width)]).unwrap(),
-        private_write: Some(PrivateWriteCheckpoint {
-            ring_program: Address::new_from_array([43; 32]),
-            sequence: FLOOR + 5,
-        }),
+        tracking_revision: Some(Revision::from(FLOOR + 5)),
         apply: &apply,
     };
     let instruction = Instruction {
         program_id: STORAGE_PROGRAM_ID,
         data: [&[tag::UPDATE][..], &data.encode().unwrap()].concat(),
-        accounts: vec![AUTHORITY, registry],
+        accounts: vec![AUTHORITY, registry, TRACKING],
         stack_height: Some(1),
     };
     BlockInfo {
@@ -198,8 +193,8 @@ async fn refused_rows_leave_the_tree_and_floor(
     tx.commit().await.unwrap();
     let after = stored(db).await;
     assert_eq!(after, before);
-    assert_eq!(after.state.unwrap().account.absence_floor(), FLOOR);
-    assert_eq!(state.account.absence_floor(), FLOOR);
+    assert_eq!(after.state.unwrap().account.tracking_floor, Revision::from(FLOOR));
+    assert_eq!(state.account.tracking_floor, Revision::from(FLOOR));
 }
 
 #[tokio::test]
@@ -214,7 +209,7 @@ async fn the_update_with_no_blocked_leaf_applies_and_raises_the_floor() {
         .unwrap();
     tx.commit().await.unwrap();
     let after = stored(&db).await;
-    assert_eq!(after.state.unwrap().account.absence_floor(), FLOOR + 5);
+    assert_eq!(after.state.unwrap().account.tracking_floor, Revision::from(FLOOR + 5));
     assert_eq!(after.records.len(), 3);
 }
 
