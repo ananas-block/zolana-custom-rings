@@ -38,7 +38,7 @@ func Restrictive(writes []registry.RecordWriteProofInput, count int) int64 {
 
 func restricts(w registry.RecordWriteProofInput) bool {
 	mask, value, old := ringtest.AsBigInt(w.Entry.Mask).Uint64(), ringtest.AsBigInt(w.Entry.Value).Uint64(), ringtest.AsBigInt(w.Old.Lists).Uint64()
-	const grants, denies, private = AllowBit | ApprovalBit | PrivateAllowBit, BlockBit | FrozenBit | PrivateBlockBit, PrivateBlockBit | PrivateAllowBit
+	const grants, denies, private = AllowBit | ApprovalBit | PrivateAllowBit, BlockBit | FrozenBit | PrivateBlockBit | PrivateFrozenBit, PrivateBlockBit | PrivateAllowBit | PrivateFrozenBit
 	if mask&private != 0 || old&mask&^value&grants != 0 || value&^old&denies != 0 {
 		return true
 	}
