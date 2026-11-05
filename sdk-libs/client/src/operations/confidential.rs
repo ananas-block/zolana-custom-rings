@@ -1,6 +1,11 @@
 //! Confidential ring notes and ring deposits opened into a wallet, the pinned zolana scan skips them.
+//!
+//! A confidential sync shares the anonymous ledger. It reads each held key's slot tag above that key's committed tag
+//! position, opens the rows it reads, follows the spends of every unspent note, and returns one [`ScanCommit`]. Only
+//! [`AnonymousWallet::absorb`] stores it, so a crash before the absorb repeats the read and never skips a row.
+//! Discovery and opening stay here, the ledger owns every stored field.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use custom_ring_interface::{ring_body_output, stream::confidential_slot_tag};
 use solana_address::Address;
@@ -16,13 +21,14 @@ use zolana_ring_transaction::{open_recipient_body, AnonymousOutput, OpenedBody, 
 
 use crate::{
     anonymous::{published_note, AnonymousSync, AuditorRecovery, OwnerMergeOpener},
-    anonymous_wallet::PendingNote,
+    anonymous_wallet::{AnonymousWallet, PendingNote, ScanCommit},
     delivered::{
         assign_nullifiers, confidential_delivered, RingDeliveredCandidate, RingDeliveryContext,
     },
     deposit::{DepositOpener, OpenedDeposit},
     deposit_payload,
     exposed_notes::{verify_ring_owned, RingOwnedUtxos},
+    history::HistoryPosition,
     merge_audit::RingMergeBody,
     tags::IndexerReads,
     viewing_history::ViewingHistory,
@@ -52,6 +58,23 @@ pub struct RingConfidentialScan<'a, K: ?Sized> {
     config: Option<IndexerRpcConfig>,
 }
 
+/// Every commitment rebuilt under the owner.
+struct OpenedRows {
+    notes: RingConfidentialNotes,
+    /// Rebuilt under a mint `assets` does not name, nullifiers assigned.
+    pending: Vec<WalletUtxo>,
+}
+
+#[derive(Default)]
+struct Found {
+    notes: Vec<WalletUtxo>,
+    pending: Vec<WalletUtxo>,
+    /// Every nullifier a read row published, the commit keeps the wallet's own.
+    published: HashSet<[u8; 32]>,
+    unknown_mints: BTreeSet<Address>,
+    unresolved: BTreeSet<[u8; 32]>,
+}
+
 impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidentialScan<'a, K> {
     pub fn new(keys: &'a K, assets: &'a RingAssets) -> Self {
         Self {
@@ -66,77 +89,192 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         self
     }
 
+    /// A sync from no stored state, for a caller that keeps no ledger between reads.
     pub async fn fetch<I: AsyncRpc + ?Sized>(
         &self,
         indexer: &I,
         transactions: &[ShieldedTransaction],
     ) -> Result<RingConfidentialNotes, AnonymousError> {
+        let mut wallet = AnonymousWallet::new(self.unread_history()?);
+        let scan = self.sync(indexer, &wallet, transactions).await?;
+        let unknown_mints = scan.decrypted().unknown_mints.clone();
+        wallet.absorb(scan)?;
+        let RingOwnedUtxos {
+            mut owned,
+            exposed_if_spent,
+            ..
+        } = verify_ring_owned(self.keys, &wallet.decrypted())?;
+        owned.unknown_mints = unknown_mints;
+        Ok(RingConfidentialNotes {
+            owned,
+            exposed_if_spent,
+        })
+    }
+
+    /// Reads from `wallet`'s committed tag positions, `transactions` open again on every call.
+    pub async fn sync<I: AsyncRpc + ?Sized>(
+        &self,
+        indexer: &I,
+        wallet: &AnonymousWallet,
+        transactions: &[ShieldedTransaction],
+    ) -> Result<ScanCommit, AnonymousError> {
         let mut reads = IndexerReads::configured(indexer, self.config);
-        // 1. A delivered slot publishes the short tag and a zero-key merge its owner tag, a read by the full key reaches neither.
-        // The owner tag finds a seeded merge with no input history, a spend read would miss it without the spent note.
+        let mut history = wallet.history().clone();
+        // 1. Only rows above the committed positions come back, the ledger holds what earlier rows opened.
+        let tagged = self.read_tags(&mut reads, &mut history).await?;
+        // 2. Every event read so far opens once. Later rounds follow only spends.
+        let rows = union_events(transactions, tagged);
+        let opened = self.open_rows(&rows)?;
+        let mut found = Found {
+            notes: opened
+                .notes
+                .owned
+                .utxos
+                .into_iter()
+                .chain(opened.notes.exposed_if_spent)
+                .collect(),
+            unknown_mints: opened.notes.owned.unknown_mints,
+            pending: opened.pending,
+            published: rows
+                .iter()
+                .flat_map(|tx| tx.nullifiers.iter().copied())
+                .collect(),
+            ..Found::default()
+        };
+        // 3. A spend without change publishes no tag of the wallet, only a nullifier read finds it.
+        self.read_spends(&mut reads, wallet, &mut found).await?;
+        // 4. The commit keeps the wallet's own spent nullifiers, a foreign input of a read row stays out.
+        let own: HashSet<[u8; 32]> = wallet
+            .notes()
+            .iter()
+            .chain(&found.notes)
+            .chain(&found.pending)
+            .map(|note| note.nullifier)
+            .chain(wallet.pending_notes().iter().map(PendingNote::nullifier))
+            .collect();
+        Ok(ScanCommit {
+            starting_history: wallet.history().clone(),
+            history,
+            decrypted: DecryptionResult {
+                utxos: found.notes,
+                spent_nullifiers: found.published.intersection(&own).copied().collect(),
+                unknown_mints: found.unknown_mints,
+                ..DecryptionResult::default()
+            },
+            pending: found.pending.into_iter().map(PendingNote::new).collect(),
+            claims: Vec::new(),
+            retried: wallet
+                .merge_retries()
+                .iter()
+                .filter(|nullifier| found.published.contains(*nullifier))
+                .copied()
+                .collect(),
+            unresolved: found.unresolved,
+        })
+    }
+
+    /// Reads each held key's slot tag above its position, every read key moves to the lowest terminal slot.
+    async fn read_tags<I: AsyncRpc + ?Sized>(
+        &self,
+        reads: &mut IndexerReads<'_, I>,
+        history: &mut ViewingHistory,
+    ) -> Result<Vec<ShieldedTransaction>, AnonymousError> {
+        let held = self.keys.viewing_public_keys();
+        // A held key with no entry would read nothing and report nothing missed.
+        if held.iter().any(|key| history.entry(key).is_none()) {
+            return Err(AnonymousError::HeldKeyNotInHistory);
+        }
+        // 1. Keys at one position share a read, a new key reads from the first indexed block.
+        let mut groups: BTreeMap<Option<u64>, Vec<usize>> = BTreeMap::new();
+        for (index, entry) in history.entries().iter().enumerate() {
+            if held.contains(&entry.viewing_pubkey()) {
+                groups.entry(entry.tag_position()).or_default().push(index);
+            }
+        }
+        // 2. A delivered slot publishes the short tag and a zero-key merge its owner tag, a read by the full key
+        // reaches neither. The owner tag finds a seeded merge with no input history, a spend read would miss it
+        // without the spent note. It rides the lowest group, and step 3 keeps every read key at or below a slot the
+        // owner tag has covered, so its next read leaves no gap.
         let owner_tag = self
             .keys
             .address()?
             .signing_pubkey
             .owner_proof_input_hash()?;
-        let tags: Vec<[u8; 32]> = self
-            .keys
-            .viewing_public_keys()
-            .iter()
-            .map(|key| confidential_slot_tag(key.u()))
-            .chain([owner_tag])
-            .collect();
-        let tagged = reads.tagged(&tags).await?;
-        // 2. Every event read so far opens once. Later rounds follow only the spends of what opened here.
-        let read = union_events(transactions, tagged);
-        let mut notes = self.open(&read)?;
-        // 3. Each round reads the spends of the notes the last one opened, until no unread nullifier remains.
-        let mut queried = HashSet::new();
-        loop {
-            let unread: Vec<[u8; 32]> = notes
-                .owned
-                .utxos
+        let mut rows = Vec::new();
+        let mut covered: Option<u64> = None;
+        for (group, (position, entries)) in groups.iter().enumerate() {
+            let tags: Vec<[u8; 32]> = entries
                 .iter()
-                .map(|utxo| utxo.nullifier)
-                .filter(|nullifier| !notes.owned.spent.contains(nullifier))
-                .chain(notes.exposed_if_spent.iter().map(|utxo| utxo.nullifier))
+                .map(|index| confidential_slot_tag(history.entries()[*index].viewing_pubkey().u()))
+                .chain((group == 0).then_some(owner_tag))
+                .collect();
+            let from = position.map_or_else(HistoryPosition::default, HistoryPosition::after_slot);
+            let read = reads.tagged(&tags, from).await?;
+            rows.extend(read.rows);
+            if let Some(slot) = read.next.checkpoint() {
+                covered = Some(covered.map_or(slot, |lowest| lowest.min(slot)));
+            }
+        }
+        // 3. One shared position keeps the next sync at one read.
+        if let Some(slot) = covered {
+            for index in groups.into_values().flatten() {
+                history.entries_mut()[index].set_tag_position(slot);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Rounds of nullifier reads until no unread nullifier of an unspent note remains.
+    async fn read_spends<I: AsyncRpc + ?Sized>(
+        &self,
+        reads: &mut IndexerReads<'_, I>,
+        wallet: &AnonymousWallet,
+        found: &mut Found,
+    ) -> Result<(), AnonymousError> {
+        // 1. A stored retry is spent, its merge output opens only on a read of that spend.
+        let mut queried: HashSet<[u8; 32]> = HashSet::new();
+        let mut retries: Vec<[u8; 32]> = wallet.merge_retries().iter().copied().collect();
+        loop {
+            let unread: Vec<[u8; 32]> = wallet
+                .notes()
+                .iter()
+                .chain(&found.notes)
+                .map(|note| note.nullifier)
+                .filter(|nullifier| {
+                    !wallet.is_spent(nullifier) && !found.published.contains(nullifier)
+                })
+                .chain(std::mem::take(&mut retries))
                 .filter(|nullifier| queried.insert(*nullifier))
                 .collect();
             if unread.is_empty() {
-                return Ok(notes);
+                return Ok(());
             }
             let spends = reads.spends(&unread).await?;
-            let read: HashSet<[u8; 32]> = spends
-                .iter()
-                .flat_map(|tx| tx.nullifiers.iter().copied())
-                .collect();
-            notes
-                .exposed_if_spent
-                .retain(|utxo| !read.contains(&utxo.nullifier));
-            notes.owned.spent.extend(
-                unread
-                    .into_iter()
-                    .filter(|nullifier| read.contains(nullifier)),
-            );
-            let merged = verify_owned(
-                self.keys,
-                &RingMerges::among(spends).open(self.keys, self.assets)?,
-            )?;
-            for utxo in merged.utxos {
-                if !notes
-                    .owned
-                    .utxos
+            found
+                .published
+                .extend(spends.iter().flat_map(|tx| tx.nullifiers.iter().copied()));
+            // 2. Each merge opens alone, an unregistered mint keeps only its own spends for the next sync.
+            for merge in RingMerges::among(spends).0 {
+                let spent: Vec<[u8; 32]> = merge
+                    .nullifiers
                     .iter()
-                    .any(|held| held.utxo_hash == utxo.utxo_hash)
-                {
-                    notes.owned.utxos.push(utxo);
+                    .filter(|nullifier| unread.contains(nullifier))
+                    .copied()
+                    .collect();
+                let opened = RingMerges(vec![merge]).open(self.keys, self.assets)?;
+                if !opened.unknown_mints.is_empty() {
+                    found.unresolved.extend(spent);
+                    found
+                        .unknown_mints
+                        .extend(opened.unknown_mints.iter().copied());
+                }
+                for utxo in verify_owned(self.keys, &opened)?.utxos {
+                    let mut held = wallet.notes().iter().chain(&found.notes);
+                    if !held.any(|note| note.utxo_hash == utxo.utxo_hash) {
+                        found.notes.push(utxo);
+                    }
                 }
             }
-            notes
-                .owned
-                .unknown_asset_ids
-                .extend(merged.unknown_asset_ids);
-            notes.owned.unknown_mints.extend(merged.unknown_mints);
         }
     }
 
@@ -145,6 +283,13 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         &self,
         transactions: &[ShieldedTransaction],
     ) -> Result<RingConfidentialNotes, AnonymousError> {
+        Ok(self.open_rows(transactions)?.notes)
+    }
+
+    fn open_rows(
+        &self,
+        transactions: &[ShieldedTransaction],
+    ) -> Result<OpenedRows, AnonymousError> {
         // 1. Every opening below is a candidate until step 4, rows from the caller or the indexer earn no trust here.
         let address = self.keys.address()?;
         let candidates = confidential_delivered(self.keys, transactions)?;
@@ -155,10 +300,12 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
                 .collect(),
             ..DecryptionResult::default()
         };
+        let mut pending = Vec::new();
         for candidate in &candidates {
             if let Some(opened) = open_recipient_candidate(&address, self.assets, candidate)? {
                 keep_opened(
                     &mut decrypted,
+                    &mut pending,
                     candidate.tx,
                     candidate.slot_index as usize,
                     opened,
@@ -166,7 +313,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
             }
         }
         // 2. A seeded merge opens from its row alone, the spent input may be absent from `transactions`.
-        self.open_owner_merges(transactions, &mut decrypted)?;
+        self.open_owner_merges(transactions, &mut decrypted, &mut pending)?;
         assign_nullifiers(self.keys, &mut decrypted.utxos)?;
         // 3. Deposits carry the key their commitment rebuilt under, step 4 sorts zero-key notes by it.
         let opener = DepositOpener {
@@ -180,18 +327,24 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
                 OpenedDeposit::Note(utxo) => decrypted.utxos.push(*utxo),
                 OpenedDeposit::UnknownMint(held) => {
                     decrypted.unknown_mints.insert(held.utxo.asset.asset);
+                    pending.push(*held);
                 }
             }
         }
         // 4. Only a commitment rebuilt here under the owner proves a note, and a zero-key note stays out of `owned`.
+        // A pending note rebuilt its commitment in its opener, the ledger holds it until its mint registers.
+        assign_nullifiers(self.keys, &mut pending)?;
         let RingOwnedUtxos {
             owned,
             exposed_if_spent,
             ..
         } = verify_ring_owned(self.keys, &decrypted)?;
-        Ok(RingConfidentialNotes {
-            owned,
-            exposed_if_spent,
+        Ok(OpenedRows {
+            notes: RingConfidentialNotes {
+                owned,
+                exposed_if_spent,
+            },
+            pending,
         })
     }
 
@@ -200,6 +353,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         &self,
         transactions: &[ShieldedTransaction],
         decrypted: &mut DecryptionResult,
+        pending: &mut Vec<WalletUtxo>,
     ) -> Result<(), AnonymousError> {
         let owner = self.keys.address()?.signing_pubkey;
         let opener = OwnerMergeOpener::new(self.keys, owner, self.assets)?;
@@ -207,7 +361,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         for merge in transactions.iter().filter_map(|tx| opener.candidate(tx)) {
             for viewing_pubkey in &held {
                 if let Some(opened) = opener.open(&merge, *viewing_pubkey)? {
-                    keep_opened(decrypted, merge.tx, 0, opened)?;
+                    keep_opened(decrypted, pending, merge.tx, 0, opened)?;
                     break;
                 }
             }
@@ -221,15 +375,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         indexer: &I,
         ring: Address,
     ) -> Result<RingFullScan, AnonymousError> {
-        let mut held = self.keys.viewing_public_keys().into_iter().rev();
-        let current = held.next().ok_or(AnonymousError::HeldKeyNotInHistory)?;
-        let history = held
-            .zip(1..)
-            .try_fold(
-                ViewingHistory::new(current, 0),
-                |history, (key, created_at)| history.with_rotated_key(key, created_at),
-            )?
-            .with_ring(ring, None);
+        let history = self.unread_history()?.with_ring(ring, None);
         let sync = AnonymousSync::new(self.keys, self.assets);
         let sync = match self.config {
             Some(config) => sync.with_indexer_config(config),
@@ -241,6 +387,16 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
             pending: scan.pending_notes().to_vec(),
             auditor_recovery: scan.auditor_recovery,
         })
+    }
+
+    /// Every held key with nothing read, the creation order invented.
+    fn unread_history(&self) -> Result<ViewingHistory, AnonymousError> {
+        let mut held = self.keys.viewing_public_keys().into_iter().rev();
+        let current = held.next().ok_or(AnonymousError::HeldKeyNotInHistory)?;
+        held.zip(1..).try_fold(
+            ViewingHistory::new(current, 0),
+            |history, (key, created_at)| history.with_rotated_key(key, created_at),
+        )
     }
 }
 
@@ -269,9 +425,10 @@ fn union_events(
         .collect()
 }
 
-/// A note under an unregistered mint stays out of `utxos` and names its mint.
+/// A note under an unregistered mint stays out of `utxos`, waits in `pending` and names its mint.
 fn keep_opened(
     decrypted: &mut DecryptionResult,
+    pending: &mut Vec<WalletUtxo>,
     tx: &ShieldedTransaction,
     position: usize,
     opened: OpenedBody,
@@ -280,6 +437,7 @@ fn keep_opened(
         OpenedBody::Note(note) => decrypted.utxos.push(published_note(tx, position, note)?),
         OpenedBody::UnknownMint(note) => {
             decrypted.unknown_mints.insert(note.utxo.asset.asset);
+            pending.push(published_note(tx, position, note)?);
         }
     }
     Ok(())
@@ -381,34 +539,58 @@ mod tests {
     };
     use zolana_ring_transaction::seal_recipient_body;
 
+    use std::sync::Mutex;
+
+    use spr_transaction::Utxo;
+
     use super::*;
-    use crate::deposit::tests::{
-        deposit_under, ring_note, ring_row, wallet, AMOUNT, RING, THIRD_KEY, TREE,
+    use crate::{
+        deposit::tests::{
+            deposit_under, ring_note, ring_row, wallet, AMOUNT, RING, THIRD_KEY, TREE,
+        },
+        NoteState,
     };
 
     const NOT_IN_FIELD: [u8; 32] = [0xff; 32];
+
+    /// Rows each read served since the last take.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    struct Served {
+        tagged: usize,
+        spent: usize,
+    }
 
     /// Answers each read from one list, in the position order Photon pages.
     #[derive(Default)]
     struct Rows {
         rows: Vec<ShieldedTransaction>,
         deposits: Vec<EncryptedUtxoMatch>,
+        served: Mutex<Served>,
     }
 
     impl Rows {
         fn of(rows: Vec<ShieldedTransaction>) -> Self {
             Self {
                 rows,
-                deposits: Vec::new(),
+                ..Self::default()
             }
+        }
+
+        fn take_served(&self) -> Served {
+            std::mem::take(&mut *self.served.lock().unwrap())
         }
 
         fn page(
             &self,
+            filters: &HistoryFilters,
             matches: impl Fn(&ShieldedTransaction) -> bool,
         ) -> GetShieldedTransactionsByTagsResponse {
-            let mut rows: Vec<ShieldedTransaction> =
-                self.rows.iter().filter(|tx| matches(tx)).cloned().collect();
+            let mut rows: Vec<ShieldedTransaction> = self
+                .rows
+                .iter()
+                .filter(|tx| filters.slot.contains(tx.slot) && matches(tx))
+                .cloned()
+                .collect();
             rows.sort_by_key(|row| {
                 (
                     PaginationToken::new(row.slot, row.tx_signature),
@@ -458,14 +640,16 @@ mod tests {
             tags: Vec<[u8; 32]>,
             _pagination_token: Option<PaginationToken>,
             _limit: Option<u32>,
-            _filters: HistoryFilters,
+            filters: HistoryFilters,
             _config: Option<IndexerRpcConfig>,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-            Ok(self.page(|tx| {
+            let page = self.page(&filters, |tx| {
                 tx.output_slots
                     .iter()
                     .any(|slot| tags.contains(&slot.view_tag))
-            }))
+            });
+            self.served.lock().unwrap().tagged += served(&page);
+            Ok(page)
         }
 
         async fn get_shielded_transactions_by_ring(
@@ -473,7 +657,9 @@ mod tests {
             options: RingHistoryOptions,
             _config: Option<IndexerRpcConfig>,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-            Ok(self.page(|tx| tx.ring_program_id == Some(options.ring_program_id)))
+            Ok(self.page(&options.filters, |tx| {
+                tx.ring_program_id == Some(options.ring_program_id)
+            }))
         }
 
         async fn get_encrypted_utxos_by_tags(
@@ -502,11 +688,19 @@ mod tests {
             nullifiers: Vec<[u8; 32]>,
             _pagination_token: Option<PaginationToken>,
             _limit: Option<u32>,
-            _filters: HistoryFilters,
+            filters: HistoryFilters,
             _config: Option<IndexerRpcConfig>,
         ) -> Result<GetShieldedTransactionsByNullifiersResponse, ClientError> {
-            Ok(self.page(|tx| tx.nullifiers.iter().any(|spent| nullifiers.contains(spent))))
+            let page = self.page(&filters, |tx| {
+                tx.nullifiers.iter().any(|spent| nullifiers.contains(spent))
+            });
+            self.served.lock().unwrap().spent += served(&page);
+            Ok(page)
         }
+    }
+
+    fn served(page: &GetShieldedTransactionsByTagsResponse) -> usize {
+        page.data.iter().map(|item| item.events.len()).sum()
     }
 
     #[derive(PartialEq)]
@@ -623,11 +817,11 @@ mod tests {
         }
     }
 
-    fn merge_payload(key: &[u8; 32], published: [u8; 32]) -> Vec<u8> {
+    fn merge_payload(key: &[u8; 32], published: [u8; 32], mint: Mint) -> Vec<u8> {
         let salt = [8; 16];
         let ciphertext = MergeOutputPlaintext {
             amount: AMOUNT,
-            mint: Mint::SOL.asset,
+            mint: mint.asset,
         }
         .encrypt(key, &salt)
         .unwrap();
@@ -648,16 +842,28 @@ mod tests {
     impl ProvenMerge {
         /// The row of `merge_ring_v2` under `owner`'s nonzero key and the utxo hash it commits.
         fn row(self, owner: &ShieldedKeypair, first: [u8; 32]) -> ([u8; 32], ShieldedTransaction) {
+            self.row_under(owner, first, Mint::SOL)
+        }
+
+        fn row_under(
+            self,
+            owner: &ShieldedKeypair,
+            first: [u8; 32],
+            mint: Mint,
+        ) -> ([u8; 32], ShieldedTransaction) {
             let address = owner.shielded_address().unwrap();
             let blinding = merge_output_blinding(&owner.nullifier_key, &first).unwrap();
-            let hash = ring_note(&address, blinding)
-                .hash(&address.nullifier_pubkey, &[0; 32], &self.committed, TREE)
-                .unwrap();
+            let hash = Utxo {
+                asset: mint,
+                ..ring_note(&address, blinding)
+            }
+            .hash(&address.nullifier_pubkey, &[0; 32], &self.committed, TREE)
+            .unwrap();
             let key = merge_output_key(&owner.nullifier_key, &first).unwrap();
             let slot = OutputSlot {
                 view_tag: first,
                 output_context: output_context(hash),
-                payload: merge_payload(&key, self.published),
+                payload: merge_payload(&key, self.published, mint),
             };
             (hash, merge_row(slot, first))
         }
@@ -685,7 +891,7 @@ mod tests {
         let slot = OutputSlot {
             view_tag: owner.signing_pubkey.owner_proof_input_hash().unwrap(),
             output_context: output_context(hash),
-            payload: merge_payload(&seed.output_key(&first).unwrap(), [0; 32]),
+            payload: merge_payload(&seed.output_key(&first).unwrap(), [0; 32], Mint::SOL),
         };
         (hash, merge_row(slot, first))
     }
@@ -702,52 +908,304 @@ mod tests {
 
     /// One delivered payment, every event shares one signature.
     fn payment_event(recipient: &ShieldedKeypair, event_index: u16) -> ShieldedTransaction {
-        let address = recipient.shielded_address().unwrap();
-        let tx_key = ViewingKey::new();
-        let salt = [9; 16];
-        let first_nullifier = [0x21; 32];
-        let view = recipient.viewing_pubkey();
-        let secret = DeliveredSlot {
-            agreement: &tx_key.ecdh(&view).unwrap(),
-            tx_viewing_pk: tx_key.pubkey().as_bytes(),
-            recipient_viewing_pk: view.as_bytes(),
-            salt: &salt,
-            output_index: 0,
-            first_nullifier: &first_nullifier,
+        Payment {
+            slot: 3,
+            event_index,
+            mint: Mint::SOL,
         }
-        .secret()
-        .unwrap();
-        let blinding = [0x20 + event_index as u8; 32];
-        let hash = ring_note(&address, blinding)
+        .row(recipient)
+    }
+
+    /// Events at one slot share its signature and first nullifier.
+    struct Payment {
+        slot: u64,
+        event_index: u16,
+        mint: Mint,
+    }
+
+    impl Payment {
+        fn row(self, recipient: &ShieldedKeypair) -> ShieldedTransaction {
+            let address = recipient.shielded_address().unwrap();
+            let tx_key = ViewingKey::new();
+            let salt = [9; 16];
+            let first_nullifier = [0x1e + self.slot as u8; 32];
+            let view = recipient.viewing_pubkey();
+            let secret = DeliveredSlot {
+                agreement: &tx_key.ecdh(&view).unwrap(),
+                tx_viewing_pk: tx_key.pubkey().as_bytes(),
+                recipient_viewing_pk: view.as_bytes(),
+                salt: &salt,
+                output_index: 0,
+                first_nullifier: &first_nullifier,
+            }
+            .secret()
+            .unwrap();
+            let blinding = [0x10 + self.slot as u8 + self.event_index as u8; 32];
+            let hash = Utxo {
+                asset: self.mint,
+                ..ring_note(&address, blinding)
+            }
             .hash(&address.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
             .unwrap();
-        let body = seal_recipient_body(
-            &RecipientBody {
-                blinding,
-                amount: AMOUNT,
-                mint: Mint::SOL.asset.to_bytes(),
-                ..RecipientBody::default()
-            },
-            &secret,
-        )
-        .unwrap();
-        ShieldedTransaction {
-            slot: 3,
-            tx_signature: Signature::from([3; 64]),
-            event_index: Some(event_index),
-            tx_viewing_pk: Some(tx_key.pubkey()),
-            salt: Some(salt),
-            output_slots: vec![OutputSlot {
-                view_tag: confidential_slot_tag(view.u()),
-                output_context: output_context(hash),
-                payload: encode_ring_body_output(&body, &[]).unwrap(),
-            }],
-            messages: Vec::new(),
-            nullifiers: vec![first_nullifier],
-            proofless: false,
-            ring_config: None,
-            ring_program_id: Some(RING),
+            let body = seal_recipient_body(
+                &RecipientBody {
+                    blinding,
+                    amount: AMOUNT,
+                    mint: self.mint.asset.to_bytes(),
+                    ..RecipientBody::default()
+                },
+                &secret,
+            )
+            .unwrap();
+            ShieldedTransaction {
+                slot: self.slot,
+                tx_signature: Signature::from([self.slot as u8; 64]),
+                event_index: Some(self.event_index),
+                tx_viewing_pk: Some(tx_key.pubkey()),
+                salt: Some(salt),
+                output_slots: vec![OutputSlot {
+                    view_tag: confidential_slot_tag(view.u()),
+                    output_context: output_context(hash),
+                    payload: encode_ring_body_output(&body, &[]).unwrap(),
+                }],
+                messages: Vec::new(),
+                nullifiers: vec![first_nullifier],
+                proofless: false,
+                ring_config: None,
+                ring_program_id: Some(RING),
+            }
         }
+    }
+
+    /// Spends `nullifier` at `slot` and publishes no output, no tag of the wallet finds it.
+    fn spend_row(nullifier: [u8; 32], slot: u64) -> ShieldedTransaction {
+        ShieldedTransaction {
+            tx_signature: Signature::from([0x50 + slot as u8; 64]),
+            slot,
+            output_slots: Vec::new(),
+            ..merge_row(
+                OutputSlot {
+                    view_tag: [0; 32],
+                    output_context: output_context([0; 32]),
+                    payload: Vec::new(),
+                },
+                nullifier,
+            )
+        }
+    }
+
+    /// Registered after the first payment under it.
+    const LATE: Mint = Mint {
+        asset: Address::new_from_array([0x44; 32]),
+        asset_id: 5,
+    };
+
+    fn ledger(owner: &ShieldedKeypair) -> AnonymousWallet {
+        AnonymousWallet::new(ViewingHistory::new(owner.viewing_pubkey(), 0))
+    }
+
+    /// Stores one sync and returns the unregistered mints it met.
+    async fn absorb_sync(
+        scan: &RingConfidentialScan<'_, ShieldedKeypair>,
+        indexer: &Rows,
+        ledger: &mut AnonymousWallet,
+    ) -> BTreeSet<Address> {
+        let commit = scan.sync(indexer, ledger, &[]).await.unwrap();
+        let unknown = commit.decrypted().unknown_mints.clone();
+        ledger.absorb(commit).unwrap();
+        unknown
+    }
+
+    #[tokio::test]
+    async fn a_restarted_sync_reads_no_committed_row_and_a_new_payment_and_spend_once() {
+        let owner = wallet(7);
+        let assets = assets();
+        let scan = RingConfidentialScan::new(&owner, &assets);
+        let first = payment_event(&owner, 0);
+        let mut indexer = Rows::of(vec![first.clone()]);
+        let mut stored = ledger(&owner);
+        absorb_sync(&scan, &indexer, &mut stored).await;
+        let held = stored.notes()[0].clone();
+        assert_eq!(held.utxo_hash, first.output_slots[0].output_context.hash);
+        assert_eq!(stored.history().current().tag_position(), Some(3));
+        assert_eq!(
+            indexer.take_served(),
+            Served {
+                tagged: 1,
+                spent: 0
+            }
+        );
+
+        let mut restarted = AnonymousWallet::from_json(&stored.to_json()).unwrap();
+        absorb_sync(&scan, &indexer, &mut restarted).await;
+        assert_eq!(indexer.take_served(), Served::default());
+        assert_eq!(restarted, stored);
+
+        let second = Payment {
+            slot: 5,
+            event_index: 0,
+            mint: Mint::SOL,
+        }
+        .row(&owner);
+        indexer
+            .rows
+            .extend([second.clone(), spend_row(held.nullifier, 5)]);
+        absorb_sync(&scan, &indexer, &mut restarted).await;
+        assert_eq!(
+            indexer.take_served(),
+            Served {
+                tagged: 1,
+                spent: 1
+            }
+        );
+        assert_eq!(restarted.history().current().tag_position(), Some(5));
+        let states: Vec<_> = restarted
+            .notes()
+            .iter()
+            .map(|note| (note.utxo_hash, restarted.note_state(note)))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                (held.utxo_hash, NoteState::Spent),
+                (
+                    second.output_slots[0].output_context.hash,
+                    NoteState::Spendable
+                ),
+            ]
+        );
+
+        absorb_sync(&scan, &indexer, &mut restarted).await;
+        assert_eq!(indexer.take_served(), Served::default());
+    }
+
+    #[tokio::test]
+    async fn a_pending_mint_waits_in_the_ledger_and_registers_with_no_history_read() {
+        let owner = wallet(7);
+        let row = Payment {
+            slot: 3,
+            event_index: 0,
+            mint: LATE,
+        }
+        .row(&owner);
+        let hash = row.output_slots[0].output_context.hash;
+        let indexer = Rows::of(vec![row]);
+        let (unregistered, registered) = (assets(), RingAssets::new([LATE]).unwrap());
+        let mut stored = ledger(&owner);
+        let unknown = absorb_sync(
+            &RingConfidentialScan::new(&owner, &unregistered),
+            &indexer,
+            &mut stored,
+        )
+        .await;
+        assert_eq!(unknown, BTreeSet::from([LATE.asset]));
+        assert!(stored.notes().is_empty());
+        assert_eq!(stored.pending_notes()[0].utxo_hash(), hash);
+
+        indexer.take_served();
+        absorb_sync(
+            &RingConfidentialScan::new(&owner, &registered),
+            &indexer,
+            &mut stored,
+        )
+        .await;
+        assert_eq!(indexer.take_served(), Served::default());
+        assert!(stored.notes().is_empty());
+
+        stored.resolve_pending(&registered);
+        assert!(stored.pending_notes().is_empty());
+        let owned = verify_ring_owned(&owner, &stored.decrypted())
+            .unwrap()
+            .owned;
+        assert_eq!(hashes(&owned.utxos), [hash]);
+        assert_eq!(owned.utxos[0].utxo.asset, LATE);
+    }
+
+    #[tokio::test]
+    async fn a_merge_under_an_unregistered_mint_reads_its_spend_again_until_the_mint_registers() {
+        let owner = wallet(7);
+        let (unregistered, registered) = (assets(), RingAssets::new([LATE]).unwrap());
+        let mut indexer = Rows::of(vec![Payment {
+            slot: 3,
+            event_index: 0,
+            mint: LATE,
+        }
+        .row(&owner)]);
+        let mut stored = ledger(&owner);
+        let late_scan = RingConfidentialScan::new(&owner, &registered);
+        absorb_sync(&late_scan, &indexer, &mut stored).await;
+        let held = stored.notes()[0].clone();
+        let (merged, merge) = ProvenMerge {
+            committed: [0; 32],
+            published: [0; 32],
+        }
+        .row_under(&owner, held.nullifier, LATE);
+        indexer.rows.push(merge);
+        indexer.take_served();
+
+        let stale_scan = RingConfidentialScan::new(&owner, &unregistered);
+        for _ in 0..2 {
+            let unknown = absorb_sync(&stale_scan, &indexer, &mut stored).await;
+            assert_eq!(unknown, BTreeSet::from([LATE.asset]));
+            assert_eq!(
+                indexer.take_served(),
+                Served {
+                    tagged: 0,
+                    spent: 1
+                }
+            );
+            assert_eq!(stored.note_state(&held), NoteState::Spent);
+            assert_eq!(hashes(stored.notes()), [held.utxo_hash]);
+        }
+
+        let lagging = Rows::of(vec![indexer.rows[0].clone()]);
+        absorb_sync(&late_scan, &lagging, &mut stored).await;
+        assert_eq!(lagging.take_served(), Served::default());
+        assert!(stored.merge_retries().contains(&held.nullifier));
+
+        absorb_sync(&late_scan, &indexer, &mut stored).await;
+        assert_eq!(
+            indexer.take_served(),
+            Served {
+                tagged: 0,
+                spent: 1
+            }
+        );
+        assert_eq!(hashes(stored.notes()), [held.utxo_hash, merged]);
+        assert!(stored.merge_retries().is_empty());
+
+        absorb_sync(&late_scan, &indexer, &mut stored).await;
+        assert_eq!(indexer.take_served(), Served::default());
+    }
+
+    #[tokio::test]
+    async fn a_sync_read_before_another_commit_is_refused_whole() {
+        let owner = wallet(7);
+        let assets = assets();
+        let scan = RingConfidentialScan::new(&owner, &assets);
+        let indexer = Rows::of(vec![payment_event(&owner, 0)]);
+        let mut stored = ledger(&owner);
+        let (first, stale) = (
+            scan.sync(&indexer, &stored, &[]).await.unwrap(),
+            scan.sync(&indexer, &stored, &[]).await.unwrap(),
+        );
+        stored.absorb(first).unwrap();
+        let committed = stored.clone();
+        assert!(matches!(
+            stored.absorb(stale),
+            Err(AnonymousError::ScanHistoryChanged)
+        ));
+        assert_eq!(stored, committed);
+    }
+
+    #[tokio::test]
+    async fn a_held_key_absent_from_the_ledger_refuses_the_sync() {
+        let (owner, other) = (wallet(7), wallet(8));
+        let assets = assets();
+        let refused = RingConfidentialScan::new(&owner, &assets)
+            .sync(&Rows::default(), &ledger(&other), &[])
+            .await;
+        assert!(matches!(refused, Err(AnonymousError::HeldKeyNotInHistory)));
     }
 
     /// `merge_ring_v2` under a nonzero key, the proven encoding and its first nullifier tag.
@@ -791,6 +1249,7 @@ mod tests {
         let indexer = Rows {
             rows: vec![row.clone()],
             deposits: vec![deposit],
+            ..Rows::default()
         };
 
         let opened = scan.open(core::slice::from_ref(&row)).unwrap();
