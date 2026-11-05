@@ -50,7 +50,7 @@ import {
 } from "../../../src/protocol/codec/ring-codecs.js";
 import { readMemberRecords } from "../../../src/rpc/registered-record.js";
 import { sealAudit } from "../../../src/proof/audit-proof.js";
-import { transferApprovalMask } from "../../../src/proof/policy-proof.js";
+import { transferOutflows } from "../../../src/proof/policy-proof.js";
 import { ApprovalMask, ringStreamLayout } from "../../../src/protocol/transaction/transact.js";
 import type { ProvenRingTransfer } from "../../../src/operations/workflow/pipeline.js";
 import {
@@ -507,6 +507,12 @@ describe("policy ring", () => {
     const { instruction, data, call } = await expanded(fixture, proven, "confidential");
 
     expect(proven.coSigners).toEqual([coSigner]);
+    expect(proven.chargedOutflows).toMatchObject([
+      {
+        owner: sender.shieldedAddress().signingPublicKey.ownerProofInputHash(),
+        chargedOutflow: 400n,
+      },
+    ]);
     expect(data.approval).toBe(ApprovalMask.outflow);
     expect(data.ownRevision).toBe(OWN_REVISION);
     expect(data.policy?.curatorRevision).toBe(CURATOR_REVISION);
@@ -637,7 +643,7 @@ describe("policy ring", () => {
     const recipient = ShieldedKeypair.generate();
     const fixture = await curatedRing([sender, recipient], { cap: 399n });
     await expect(prove(fixture, sender, transferTo(fixture, sender, [recipient]))).rejects.toThrow(
-      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "399", outflow: "400" }),
+      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "399", chargedOutflow: "400" }),
     );
     expect(fixture.ringRequests).toHaveLength(0);
     expect(fixture.sppCalls).toHaveLength(0);
@@ -922,7 +928,7 @@ describe("signer set and owner debits", () => {
       return prove(fixture, payer, spent, undefined, [funded]);
     };
     await expect(transfer(499n)).rejects.toThrow(
-      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "499", outflow: "500" }),
+      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "499", chargedOutflow: "500" }),
     );
     await expect(transfer(500n)).resolves.toBeDefined();
   });
@@ -949,7 +955,7 @@ describe("signer set and owner debits", () => {
       ],
     } as unknown as SppProofInputs;
     expect(
-      transferApprovalMask({
+      transferOutflows({
         rows: [identity(owner)],
         proofInputs,
         publicSlots: {
@@ -959,7 +965,7 @@ describe("signer set and owner debits", () => {
         },
         policyOf: () => ({ ...EMPTY_MINT_POLICY, cap: 1n, cosignAbove: 1n }),
       }),
-    ).toBe(0);
+    ).toEqual({ chargedOutflows: [], approvalMask: 0 });
   });
 });
 

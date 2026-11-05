@@ -11,7 +11,7 @@ use crate::quantities::{asset_flows, ordered_owners, DebitTransfer, PublicGross}
 /// "CRAO".
 pub const APPROVAL_TOTALS_DOMAIN: u32 = 0x4352_414f;
 
-/// `peak` is one owner's largest outflow of the asset, the value `cosign_above` compares.
+/// `peak` is one owner's largest charged outflow of the asset, the value `cosign_above` compares.
 #[must_use]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OutputTotals {
@@ -57,7 +57,7 @@ impl ApprovalTotals {
                         let (peak, outflow) = peak_and_sum(
                             asset_flows(transfer, &owners, &asset)
                                 .iter()
-                                .map(|row| row.outflow),
+                                .map(|row| row.charged_outflow),
                         );
                         OutputTotals {
                             asset,

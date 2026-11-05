@@ -1,4 +1,4 @@
-//! Each owner's guard, debit and outflow per asset, mirror `prover/circuits/policy/outflow.go` and `rules.go`.
+//! Each owner's guard, debit and charged outflow per asset, mirror `prover/circuits/policy/outflow.go` and `rules.go`.
 //!
 //! The circuit computes these values. A wallet computes the same ones for its approval bits ahead of
 //! a proof, and the program derives no threshold.
@@ -32,6 +32,7 @@ pub struct PublicGross {
 }
 
 /// One row's quantities of one asset, the sums pass a u64 and `held = debit + kept`.
+/// `debit` is the owner's net outflow, `charged_outflow` adds the charge the cap reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OwnerDebit {
     pub owner: [u8; 32],
@@ -39,7 +40,7 @@ pub struct OwnerDebit {
     pub debit: u128,
     pub kept: u128,
     pub charge: u128,
-    pub outflow: u128,
+    pub charged_outflow: u128,
 }
 
 /// One transfer's parties, the assets are its output and public assets.
@@ -52,7 +53,7 @@ pub struct DebitTransfer<'a> {
     pub public_gross: &'a [PublicGross],
 }
 
-/// Nonzero outflow rows by ascending owner then assets order, no caller input selects a share.
+/// Nonzero charged outflow rows by ascending owner then assets order, no caller input selects a share.
 #[must_use]
 pub fn owner_debits(transfer: &DebitTransfer<'_>) -> Vec<OwnerDebit> {
     let owners = ordered_owners(transfer);
@@ -62,7 +63,7 @@ pub fn owner_debits(transfer: &DebitTransfer<'_>) -> Vec<OwnerDebit> {
             flows.extend(asset_flows(transfer, &owners, asset));
         }
     }
-    flows.retain(|flow| flow.outflow != 0);
+    flows.retain(|flow| flow.charged_outflow != 0);
     flows.sort_by_key(|flow| flow.owner);
     flows
 }
@@ -107,7 +108,7 @@ pub(crate) fn asset_flows(
                 debit,
                 kept: held - debit,
                 charge: 0,
-                outflow: debit,
+                charged_outflow: debit,
             }
         })
         .collect();
@@ -135,7 +136,7 @@ pub(crate) fn asset_flows(
         running += row.kept;
         let share = mul_div_floor(displaced, running, sum_kept);
         row.charge = share - previous;
-        row.outflow = row.debit + row.charge;
+        row.charged_outflow = row.debit + row.charge;
         previous = share;
     }
     rows
@@ -214,7 +215,7 @@ pub struct ApprovalMask(u8);
 
 impl ApprovalMask {
     pub const EMPTY: Self = Self(0);
-    /// Some `outflow` passes the asset's `cosign_above`.
+    /// Some `charged_outflow` passes the asset's `cosign_above`.
     pub const OUTFLOW: Self = Self(1);
     /// Some public gross passes the asset's `withdrawal_threshold`.
     pub const WITHDRAWAL: Self = Self(2);
@@ -255,7 +256,7 @@ impl ApprovalInputs<'_> {
     pub fn mask(&self, policy_of: impl Fn(&[u8; 32]) -> MintPolicy) -> ApprovalMask {
         let over_outflow = self.flows.iter().any(|flow| {
             let above = policy_of(&flow.asset).cosign_above;
-            above != 0 && flow.outflow > u128::from(above)
+            above != 0 && flow.charged_outflow > u128::from(above)
         });
         let over_withdrawal = self.public_gross.iter().any(|public| {
             let threshold = policy_of(&public.asset).withdrawal_threshold;
@@ -480,7 +481,7 @@ mod tests {
             debit: 0,
             kept: 10,
             charge: 10,
-            outflow: 10,
+            charged_outflow: 10,
         };
         let gross = PublicGross {
             asset: SOL,

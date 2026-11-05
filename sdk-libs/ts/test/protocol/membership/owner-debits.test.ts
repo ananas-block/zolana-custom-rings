@@ -94,6 +94,20 @@ describe("ownerDebits", () => {
     expect(debits).toEqual([]);
   });
 
+  it("charges a returned spend beside a public withdrawal, the intended composition cost", () => {
+    // A spends 100 and receives 100 back, B's public deposit of 100 funds a public withdrawal of 100.
+    const debits = ownerDebits({
+      senders: [ALICE],
+      assets: [ASSET],
+      inputs: [{ owner: ALICE, asset: ASSET, amount: 100n }],
+      outputs: [{ owner: ALICE, asset: ASSET, amount: 100n, ring: true }],
+      publicGross: [{ asset: ASSET, gross: 100n }],
+    });
+    expect(debits).toEqual([
+      { owner: ALICE, asset: ASSET, debit: 0n, kept: 100n, charge: 100n, chargedOutflow: 100n },
+    ]);
+  });
+
   it("names a repeated subject once", () => {
     const debits = ownerDebits({
       senders: [ALICE, ALICE],

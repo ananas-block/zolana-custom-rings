@@ -62,51 +62,58 @@ fn a_withdrawal_counts_against_the_cap_through_its_debit() {
         gross: 150,
     }
     .flows();
-    assert_eq!(flows[0].outflow, 150);
+    assert_eq!(flows[0].charged_outflow, 150);
     assert!(Outflows::check_caps(&flows, capped(150)).is_ok());
     assert!(matches!(
         Outflows::check_caps(&flows, capped(100)),
         Err(RingError::OutflowCapExceeded {
             cap: 100,
-            outflow: 150,
+            charged_outflow: 150,
             ..
         })
     ));
 }
 
-/// `S 1000 + deposit 1000, return 1000, exit 1000` nets no debit.
+/// The intended composition cost. A spends 100 and receives 100 back, B's public deposit of 100
+/// funds a public withdrawal of 100, A's net outflow is zero and its charged outflow is 100.
 #[test]
-fn a_deposit_funded_return_does_not_hide_what_leaves() {
+fn a_returned_spend_beside_a_public_withdrawal_is_charged() {
     let flows = Case {
-        held: &[1000],
-        returned: 1000,
-        gross: 1000,
+        held: &[100],
+        returned: 100,
+        gross: 100,
     }
     .flows();
-    assert_eq!(flows[0].debit, 0);
-    assert_eq!(flows[0].outflow, 1000);
+    assert_eq!(
+        (flows[0].debit, flows[0].charge, flows[0].charged_outflow),
+        (0, 100, 100)
+    );
+    assert!(Outflows::check_caps(&flows, capped(100)).is_ok());
     assert!(matches!(
-        Outflows::check_caps(&flows, capped(100)),
-        Err(RingError::OutflowCapExceeded { .. })
+        Outflows::check_caps(&flows, capped(99)),
+        Err(RingError::OutflowCapExceeded {
+            charged_outflow: 100,
+            ..
+        })
     ));
 }
 
-/// The circuit bounds an aggregate at 72 bits, a gross past `u64::MAX` keeps its exact outflow.
+/// The circuit bounds an aggregate at 72 bits, a gross past `u64::MAX` keeps its exact charged outflow.
 #[test]
-fn a_gross_past_u64_keeps_its_exact_outflow() {
+fn a_gross_past_u64_keeps_its_exact_charged_outflow() {
     let case = Case {
         held: &[u64::MAX, u64::MAX],
         returned: 0,
         gross: u128::from(u64::MAX) + 1,
     };
     let flows = case.flows();
-    let outflow = flows[0].outflow;
-    assert!(outflow > u128::from(u64::MAX));
+    let charged_outflow = flows[0].charged_outflow;
+    assert!(charged_outflow > u128::from(u64::MAX));
     assert!(Outflows::check_caps(&flows, capped(0)).is_ok());
     assert!(case.read(|outflows| outflows.approval_totals(4)).is_ok());
     assert!(matches!(
         Outflows::check_caps(&flows, capped(u64::MAX)),
-        Err(RingError::OutflowCapExceeded { outflow: refused, .. }) if refused == outflow
+        Err(RingError::OutflowCapExceeded { charged_outflow: refused, .. }) if refused == charged_outflow
     ));
 }
 

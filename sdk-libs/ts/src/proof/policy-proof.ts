@@ -48,6 +48,7 @@ import {
   ownerDebits,
   type DebitInput,
   type DebitOutput,
+  type OwnerDebit,
   type PublicGross,
 } from "../protocol/membership/owner-debits.js";
 import { listTagOf } from "../crypto/keys/list-salt.js";
@@ -127,6 +128,8 @@ export interface PolicyInputs {
   readonly tracking: TrackingProofInputs;
   /** The statement's proven bits, zero while thresholds are off. */
   readonly approvalMask: number;
+  /** Empty while the ring reads no own records, the circuit then bounds no outflow. */
+  readonly chargedOutflows: readonly OwnerDebit[];
 }
 
 /** What the request reads beside the section, Rust `PolicyProving`. */
@@ -372,6 +375,7 @@ export async function readPolicy(
     trackingBound,
     tracking,
     approvalMask: 0,
+    chargedOutflows: Object.freeze([]) as readonly OwnerDebit[],
   };
   if (!readsPolicyRoot(config, rail)) return Object.freeze(base);
   const own = await fetchBoundRoot({ client, ringProgramId, registry: config.records }, context);
@@ -522,7 +526,7 @@ export async function readPolicy(
     publicAssetEntries: Object.freeze(
       input.publicSlots.assets.map((asset) => subject(ownReads, asset)),
     ),
-    approvalMask: transferApprovalMask({
+    ...transferOutflows({
       rows: liveRows,
       proofInputs,
       publicSlots: input.publicSlots,
@@ -903,15 +907,15 @@ export function policyParams(policy: PolicyInputs, proving: PolicyProving): Poli
   });
 }
 
-/** The proven mask, a nonzero cap refuses a larger `outflow`, no record reads no threshold. */
-export function transferApprovalMask(
+/** Each owner's charged outflow and the proven mask, a nonzero cap refuses a larger charged outflow, no record reads no threshold. */
+export function transferOutflows(
   input: Readonly<{
     rows: readonly Bytes32[];
     proofInputs: SppProofInputs;
     publicSlots: PublicSlots;
     policyOf: (asset: Bytes32) => MintPolicy;
   }>,
-): number {
+): Readonly<{ chargedOutflows: readonly OwnerDebit[]; approvalMask: number }> {
   const { proofInputs, publicSlots, policyOf } = input;
   const debitOutputs = slotOutputs(proofInputs);
   const publicGross = grossOf(publicSlots);
@@ -928,12 +932,12 @@ export function transferApprovalMask(
   });
   for (const flow of flows) {
     const { cap } = policyOf(flow.asset);
-    if (cap !== 0n && flow.outflow > cap)
+    if (cap !== 0n && flow.chargedOutflow > cap)
       throw new RingError("RING_OUTFLOW_CAP_EXCEEDED", {
-        details: { cap: cap.toString(), outflow: flow.outflow.toString() },
+        details: { cap: cap.toString(), chargedOutflow: flow.chargedOutflow.toString() },
       });
   }
-  return approvalMask({ flows, publicGross, policyOf });
+  return { chargedOutflows: flows, approvalMask: approvalMask({ flows, publicGross, policyOf }) };
 }
 
 /**

@@ -72,7 +72,7 @@ describe("quantities.json", () => {
         debit: BigInt(row.debit),
         kept: BigInt(row.kept),
         charge: BigInt(row.charge),
-        outflow: BigInt(row.outflow),
+        chargedOutflow: BigInt(row.outflow),
       })),
     );
     const scope = new GuardScope({
@@ -105,7 +105,7 @@ describe("quantities.json", () => {
         debit: 10n,
         kept: 0n,
         charge: 0n,
-        outflow: 10n,
+        chargedOutflow: 10n,
       },
     ];
     expect(

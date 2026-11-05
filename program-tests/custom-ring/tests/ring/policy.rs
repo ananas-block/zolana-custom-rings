@@ -126,9 +126,13 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
 
     // A single send above the cap is refused before any proof.
     match prove(prepare(utxos[2].clone(), OVER_CAP)?) {
-        Err(RingError::OutflowCapExceeded { cap, outflow, .. }) => {
+        Err(RingError::OutflowCapExceeded {
+            cap,
+            charged_outflow,
+            ..
+        }) => {
             assert_eq!(cap, LIMIT_CAP);
-            assert_eq!(outflow, u128::from(OVER_CAP));
+            assert_eq!(charged_outflow, u128::from(OVER_CAP));
         }
         Err(other) => return Err(anyhow!("expected the cap refusal, got {other}")),
         Ok(_) => return Err(anyhow!("the capped send was proven")),
