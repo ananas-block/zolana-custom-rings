@@ -4,8 +4,8 @@
 //! The policy hash covers the rules and their source map, and every policy proof binds that hash. A
 //! source for a list no rule reads would change the hash with no rule behind it.
 //!
-//! A salted list proves absence above its source's floor, and only a credential write of the ring the
-//! source pairs with raises that floor. Every configuration write checks the pairing of each salted
+//! A salted list reads tracking roots at or above its source's floor, and only a private write proving
+//! a row of the tracking registry the source pins raises that floor. Every configuration write checks the pairing of each salted
 //! source of the account it proposes, so a refused pairing never reaches the stored account. The
 //! policy reads in `instructions/accounts/loader.rs` check it again on the stored account.
 //!
@@ -103,8 +103,7 @@ impl ProposedSources<'_> {
                 true => load_records_registry(self.program_id, account)?,
                 false => load_storage_registry(account)?,
             };
-            self.proposed
-                .check_salted_source(self.program_id, &address, &registry)?;
+            self.proposed.check_source_pair(&address, &registry)?;
         }
         Ok(())
     }

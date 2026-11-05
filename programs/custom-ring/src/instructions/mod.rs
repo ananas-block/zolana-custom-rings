@@ -4,7 +4,6 @@
 
 #[path = "settlement/deposit_audit.rs"]
 mod deposit_audit;
-mod enrollment;
 #[path = "settlement/forward.rs"]
 mod forward;
 #[path = "configuration/setup/initialize.rs"]
@@ -33,7 +32,6 @@ mod update_policy;
 #[path = "verification/verifier.rs"]
 mod verifier;
 
-pub(crate) use enrollment::process_enroll_ix;
 pub(crate) use forward::process_deposit_ix;
 pub(crate) use initialize::process_initialize_ix;
 pub(crate) use merge::process_merge_ix;

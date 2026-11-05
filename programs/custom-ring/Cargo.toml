@@ -29,8 +29,6 @@ wincode = { workspace = true }
 spr-account-checks = { workspace = true }
 spr-hasher = { workspace = true }
 spr-interface = { workspace = true, features = ["borsh"] }
-spr-program = { workspace = true, default-features = false, features = ["compression"] }
-spr-tree = { workspace = true }
 zolana-ring-policy = { workspace = true }
 
 [dev-dependencies]
@@ -49,6 +47,7 @@ solana-signer = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true }
 spl-token-2022-interface = { workspace = true }
+spr-tree = { workspace = true }
 x25519-dalek = { workspace = true }
 
 [lints.rust.unexpected_cfgs]

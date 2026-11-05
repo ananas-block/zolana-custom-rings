@@ -2,7 +2,7 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    tag, CoSignScope, CredentialRead, CustomRingError, CustomRingMergeIxData, SealedMergeRecord,
+    tag, CoSignScope, CustomRingError, CustomRingMergeIxData, RootRead, SealedMergeRecord,
     OPENING_RECORD_LEN, RING_MERGE_OWNER_INDEX, RING_MERGE_PAYER_INDEX,
     RING_MERGE_RING_CONFIG_INDEX,
 };
@@ -17,21 +17,19 @@ use spr_interface::instruction::instruction_data::{
 
 use crate::{
     common::{
-        auditor_pubkey, credential_tree, off_curve_g2, on_curve_g2, policy_pda,
-        reaches_verification, refused, ring_auth, set_co_signer, Ring, Setup, PROGRAM,
+        auditor_pubkey, off_curve_g2, on_curve_g2, policy_pda, reaches_verification, refused,
+        ring_auth, set_co_signer, Ring, Setup, PROGRAM,
     },
     transact_rules::SPP,
 };
 
 const RINGS: [Setup; 3] = [Setup::AuditOnly, Setup::Policy, Setup::Anonymous];
+/// The ring account and the tracking registry lead the forwarded list.
 const MERGE_SPP: usize = 2;
 
 pub(crate) fn merge_data(authority: MergeRingAuthority) -> CustomRingMergeIxData {
     CustomRingMergeIxData {
-        credential_read: match authority {
-            MergeRingAuthority::Ring => CredentialRead::new_state(0),
-            MergeRingAuthority::OwnerSigned => CredentialRead::empty(),
-        },
+        tracking_revision: 0.into(),
         output_ring_data_hash: [8; 32],
         authority,
         sealed: SealedMergeRecord {
@@ -78,9 +76,7 @@ pub(crate) fn merge_instruction(
         spp.push(AccountMeta::new_readonly(owner.pubkey(), true));
     }
     let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
-    if data.authority == MergeRingAuthority::Ring {
-        accounts.push(AccountMeta::new_readonly(credential_tree(), false));
-    }
+    accounts.extend(ring.registries(RootRead::merge()));
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
@@ -89,33 +85,17 @@ pub(crate) fn merge_instruction(
     }
 }
 
-#[test]
-fn merge_authority_refuses_a_substituted_credential_selection() {
-    for authority in [MergeRingAuthority::Ring, MergeRingAuthority::OwnerSigned] {
-        let mut data = merge_data(authority);
-        let encoded = data.serialize().unwrap();
-        let parsed = custom_ring_interface::CustomRingMergeIxDataRef::from_bytes(&encoded).unwrap();
-        assert_eq!(parsed.credential_read, data.credential_read);
-        data.credential_read = match authority {
-            MergeRingAuthority::Ring => CredentialRead::empty(),
-            MergeRingAuthority::OwnerSigned => CredentialRead::new_state(0),
-        };
-        assert!(data.serialize().is_err());
-    }
-}
-
 fn ring_merge(ring: &Ring) -> Instruction {
     merge_instruction(ring, &merge_data(MergeRingAuthority::Ring), None)
 }
 
 #[test]
-fn a_nonzero_merge_binds_a_retained_credential_state_root_on_every_ring() {
+fn a_nonzero_merge_binds_a_served_tracking_root_on_every_ring() {
     for setup in RINGS {
         let mut ring = Ring::new(setup);
         let mut data = merge_data(MergeRingAuthority::Ring);
-        data.credential_read = CredentialRead::new_state(u16::MAX);
+        data.tracking_revision = 1.into();
         let stale = merge_instruction(&ring, &data, None);
-        // The tree authenticates first, an index its history does not serve is a stale read the SDK reproves.
         refused(ring.send(stale, &[]), CustomRingError::RootNotServed);
         let served = ring_merge(&ring);
         reaches_verification(ring.send(served, &[]));
@@ -123,11 +103,12 @@ fn a_nonzero_merge_binds_a_retained_credential_state_root_on_every_ring() {
 }
 
 #[test]
-fn a_zero_key_merge_reads_no_credential_root() {
+fn a_zero_key_merge_reads_no_tracking_root() {
     for setup in RINGS {
         let mut ring = Ring::new(setup);
         let owner = Keypair::new();
-        let data = merge_data(MergeRingAuthority::OwnerSigned);
+        let mut data = merge_data(MergeRingAuthority::OwnerSigned);
+        data.tracking_revision = 1.into();
         let instruction = merge_instruction(&ring, &data, Some(&owner));
         reaches_verification(ring.send(instruction, &[&owner]));
     }
@@ -145,13 +126,13 @@ fn a_zero_key_merge_without_its_owner_account_is_refused() {
 }
 
 #[test]
-fn a_merge_refuses_an_unauthenticated_credential_tree() {
+fn a_merge_reads_only_the_pinned_tracking_registry() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let mut instruction = ring_merge(&ring);
     instruction.accounts[1] = AccountMeta::new_readonly(Address::new_unique(), false);
     refused(
         ring.send(instruction, &[]),
-        CustomRingError::InvalidCredentialRoots,
+        CustomRingError::UnboundRegistry,
     );
 }
 

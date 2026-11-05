@@ -9,23 +9,20 @@
 //! 2. A registry serves its current root and each retired root before its expiry.
 //! 3. A batch the apply proof marks permissive retires the root under the registry's grace, an in-flight proof still settles.
 //! 4. A batch the apply proof marks restrictive retires every earlier root at once, a revocation takes effect in the next transaction.
-//! 5. Credential state roots come from SPP tree accounts and remain readable while the tree is paused.
-//! 6. An address root comes from the canonical address tree and meets every private source's absence floor.
+//! 5. A tracking root always retires under grace, enrollment refuses no in-flight proof.
+//! 6. A floor limits that grace, a stale tracking root could prove an owner with a private entry unenrolled.
 //!
-//! A private source binds the ring identity. Its floor requires an address root that contains every owner with a private entry.
-//! Positive credential reads use immutable state inclusion and publish no account specific to an owner.
+//! A source that pins a tracking registry records a floor at each private write, the tracking revision the
+//! write proved its rows under. `LiveRoots::tracking` refuses a frame below the highest floor among sources
+//! the ring reads a private list from.
 //!
 //! Read after `instructions/runtime/instruction_runtime.rs`. Read before `program-libs/interface/src/accounts/state.rs`.
-
-#[path = "credential.rs"]
-mod credential;
-
-pub use credential::{CredentialAccounts, MergeCredentialAccounts};
 
 use custom_ring_interface::{
     anonymous_exit_destination,
     cosign::{CoSignCover, CoSignRequirement, MAX_CO_SIGNERS},
-    storage::StorageRegistry,
+    storage::{Revision, StorageRegistry},
+    tracking::TrackingRegistry,
     CoSigner, CustomRingError, LiveRoots, RingAccount, RingPolicy, RingRole, RootRead,
     SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
 };
@@ -137,7 +134,8 @@ pub fn load_records_registry<'a>(
 pub struct RingRegistries<'a> {
     own: Option<Ref<'a, StorageRegistry>>,
     curator: Option<Ref<'a, StorageRegistry>>,
-    pub absence_floor: u64,
+    tracking: Ref<'a, TrackingRegistry>,
+    tracking_floor: Revision,
     pub len: usize,
 }
 
@@ -146,6 +144,8 @@ impl RingRegistries<'_> {
         LiveRoots {
             own: self.own.as_deref(),
             curator: self.curator.as_deref(),
+            tracking: &self.tracking,
+            tracking_floor: self.tracking_floor,
             slot,
         }
     }
@@ -153,13 +153,12 @@ impl RingRegistries<'_> {
 
 #[must_use]
 pub struct RegistrySlots<'a> {
-    pub program_id: &'a Address,
     pub ring: &'a RingPolicy,
     pub read: RootRead,
 }
 
 impl RegistrySlots<'_> {
-    /// Each policy registry matches the ring pin before its bytes are read.
+    /// Own, curator, then tracking, each compared with the ring's pin before its bytes are read.
     #[inline(never)]
     pub fn load<'b>(
         self,
@@ -175,28 +174,42 @@ impl RegistrySlots<'_> {
             Ok(account)
         };
         let ring = self.ring;
-        let program_id = self.program_id;
-        let mut absence_floor = 0;
+        let mut tracking_floor = 0;
         let mut storage = |bound: Option<Address>| {
             bound
                 .map(|bound| {
                     let source = load_storage_registry(bound_account(&bound)?)?;
-                    // Private sources bind the ring whose credentials established their absence floor.
-                    ring.check_salted_source(program_id, &bound, &source)?;
-                    absence_floor = absence_floor.max(ring.absence_floor(&bound, &source));
+                    // A private list's source pins the ring's tracking registry, its floor counts those revisions.
+                    ring.check_source_pair(&bound, &source)?;
+                    tracking_floor =
+                        u64::max(tracking_floor, ring.tracking_floor(&bound, &source).value());
                     Ok::<_, ProgramError>(source)
                 })
                 .transpose()
         };
         let own = storage(self.ring.own_registry(self.read))?;
         let curator = storage(self.ring.curator_registry(self.read))?;
+        let tracking = load_tracking_registry(bound_account(&self.ring.tracking)?)?;
         Ok(RingRegistries {
             own,
             curator,
-            absence_floor,
+            tracking,
+            tracking_floor: tracking_floor.into(),
             len,
         })
     }
+}
+
+/// Any creator can make one with a matching `ring_id`, a caller compares the address.
+fn load_tracking_registry(
+    account: &AccountView,
+) -> Result<Ref<'_, TrackingRegistry>, ProgramError> {
+    let invalid = CustomRingError::InvalidTrackingRegistry;
+    if !account.owned_by(&STORAGE_PROGRAM_ID) {
+        return Err(invalid.into());
+    }
+    let data = account.try_borrow().map_err(|_| invalid)?;
+    Ref::filter_map(data, TrackingRegistry::from_data).map_err(|_| invalid.into())
 }
 
 /// The shielded pool by address, its account position differs per forwarded layout.
