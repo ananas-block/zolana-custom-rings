@@ -1785,6 +1785,17 @@ mod delegate_message {
                 case.name
             );
         }
+        // Settlement checks read the frame built here, whose notes take fresh blindings and nullifiers.
+        let expected = ExpectedDelegate::new(&RequestedAuthorityTransfer {
+            request: vector.request.prepare.clone(),
+            quote: &quote,
+            config: &config,
+            allowed: allowed_as_pinned(
+                &sources,
+                published_nullifiers(&Answer::Honest.message(&honest, relay.delegate).0),
+            ),
+        })
+        .unwrap();
         assert_eq!(
             expected.check(&settle.0).unwrap_err(),
             MessageMismatch::SettlesBuffer

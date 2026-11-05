@@ -1013,7 +1013,7 @@ fn fold_path(leaf: [u8; 32], leaf_index: u64, path: &[[u8; 32]]) -> Result<[u8; 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
 
     use async_trait::async_trait;
@@ -1175,27 +1175,15 @@ mod tests {
             };
             let mut state = identity.address.to_vec();
             credential.serialize(&mut state).unwrap();
-            let enrollment = ShieldedTransaction {
-                slot: ENROLLMENT_SLOT,
-                tx_signature: Signature::from([1; 64]),
-                event_index: Some(0),
-                tx_viewing_pk: None,
-                salt: None,
-                output_slots: vec![OutputSlot {
-                    view_tag: [0; 32],
-                    output_context: OutputContext {
-                        hash: leaf,
-                        tree_id: TREE_ID,
-                        leaf_index: 0,
-                    },
-                    payload: borsh::to_vec(&OutputDataEncoding::Plaintext(state)).unwrap(),
-                }],
-                messages: Vec::new(),
-                nullifiers: vec![identity.address, [2; 32]],
-                proofless: false,
-                ring_config: None,
-                ring_program_id: None,
-            };
+            let enrollment = enrollment(
+                vec![identity.address, [2; 32]],
+                OutputContext {
+                    hash: leaf,
+                    tree_id: TREE_ID,
+                    leaf_index: 0,
+                },
+                borsh::to_vec(&OutputDataEncoding::Plaintext(state)).unwrap(),
+            );
             let mut ledger = Self::absent();
             ledger.accounts.insert(tree, spp_account(data));
             ledger.enrollments = vec![enrollment];
@@ -1244,6 +1232,30 @@ mod tests {
         }
     }
 
+    fn enrollment(
+        nullifiers: Vec<[u8; 32]>,
+        output_context: OutputContext,
+        payload: Vec<u8>,
+    ) -> ShieldedTransaction {
+        ShieldedTransaction {
+            slot: ENROLLMENT_SLOT,
+            tx_signature: Signature::from([1; 64]),
+            event_index: Some(0),
+            tx_viewing_pk: None,
+            salt: None,
+            output_slots: vec![OutputSlot {
+                view_tag: [0; 32],
+                output_context,
+                payload,
+            }],
+            messages: Vec::new(),
+            nullifiers,
+            proofless: false,
+            ring_config: None,
+            ring_program_id: None,
+        }
+    }
+
     fn context() -> Context {
         Context {
             block_time: 0,
@@ -1264,6 +1276,22 @@ mod tests {
         )
         .unwrap();
         data
+    }
+
+    /// `root` as the newest address tree root.
+    pub(crate) fn address_checkpoint(root: [u8; 32]) -> custom_ring_interface::AddressCheckpoint {
+        let mut data = tree_bytes(ADDRESS_TREE_ID);
+        let mut account =
+            TreeAccount::from_bytes(&mut data, pda::tree(ADDRESS_TREE_ID).to_bytes()).unwrap();
+        let history = account.nullifier_tree();
+        history.root_history.roots[0] = root;
+        AddressRootSelection {
+            tree_id: ADDRESS_TREE_ID,
+            root_index: 0,
+            history,
+        }
+        .checkpoint()
+        .unwrap()
     }
 
     fn spp_account(data: Vec<u8>) -> Account {
@@ -1635,5 +1663,43 @@ mod tests {
             "{keys:?}"
         );
         assert_eq!(keys.viewing_pubkey(), viewing_pubkey);
+    }
+
+    #[test]
+    fn the_shared_enrollment_rebuilds_to_its_address_and_leaf() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../test-vectors/registry/credential.json"
+        ))
+        .unwrap();
+        let field = |name: &str| hex::decode(vector["enrollment"][name].as_str().unwrap()).unwrap();
+        let word = |name: &str| -> [u8; 32] { field(name).try_into().unwrap() };
+        // 1. The resolver derives the member and address from the ring program and owner alone.
+        let identity = CredentialIdentity::derive(
+            &Address::new_from_array(word("ring_program")),
+            &Address::new_from_array(word("owner")),
+        )
+        .unwrap();
+        assert_eq!(identity.member, word("member"));
+        assert_eq!(identity.address, word("address"));
+        // 2. The plaintext output folds to the published leaf under the tree it landed in.
+        let output = |tree_id: u16| {
+            enrollment(
+                vec![identity.address],
+                OutputContext {
+                    hash: word("utxo_hash"),
+                    tree_id,
+                    leaf_index: 0,
+                },
+                field("output_data"),
+            )
+        };
+        let tree_id =
+            u16::try_from(vector["enrollment"]["output_tree_id"].as_u64().unwrap()).unwrap();
+        EnrolledLeaf::verify(&identity, &output(tree_id)).unwrap();
+        // 3. The same output claimed under another tree folds to another leaf.
+        assert!(matches!(
+            EnrolledLeaf::verify(&identity, &output(tree_id + 1)),
+            Err(CredentialError::MalformedEnrollment)
+        ));
     }
 }

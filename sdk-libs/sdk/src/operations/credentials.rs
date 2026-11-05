@@ -33,14 +33,14 @@ use crate::{
 
 /// Distinct nonzero members, in the order their entries index them.
 #[must_use]
-pub(crate) struct CredentialPoolRead<'a> {
+pub struct CredentialPoolRead<'a> {
     pub ring: CustomRing,
     pub members: &'a [[u8; 32]],
 }
 
 /// The pool's openings and the roots they fold to.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CredentialPool {
+pub struct CredentialPool {
     ring: CustomRing,
     members: Vec<[u8; 32]>,
     snapshot: CredentialSnapshot,
@@ -154,7 +154,7 @@ impl CredentialPool {
         .roots()?)
     }
 
-    pub fn bound(&self) -> BoundCredentials {
+    pub(crate) fn bound(&self) -> BoundCredentials {
         BoundCredentials {
             address: Some(BoundTreeRoot {
                 tree_id: ADDRESS_TREE_ID,
@@ -175,7 +175,7 @@ impl CredentialPool {
     }
 
     /// Every opening at `capacity`, the rows and outputs indexing them.
-    pub fn params(
+    pub(crate) fn params(
         &self,
         capacity: usize,
         row_entries: Vec<u32>,
@@ -235,8 +235,22 @@ impl CredentialPool {
         }
     }
 
+    /// The prover's credential fields at `capacity`, each row and output naming its opening.
+    pub fn proof_inputs(
+        &self,
+        capacity: usize,
+        row_entries: Vec<u32>,
+        output_entries: Vec<u32>,
+    ) -> Result<serde_json::Value, RingError> {
+        let params = self.params(capacity, row_entries, output_entries)?;
+        Ok(serde_json::to_value(params)?)
+    }
+
     /// The leaf's tree slot is its tree's position in the frame's ascending table.
-    pub fn leaf(&self, present: &PresentCredential) -> Result<CredentialLeafRequest, RingError> {
+    pub(crate) fn leaf(
+        &self,
+        present: &PresentCredential,
+    ) -> Result<CredentialLeafRequest, RingError> {
         let tree_slot = self
             .snapshot
             .state_roots
@@ -294,7 +308,7 @@ pub(crate) struct MergeCredential {
 
 impl CredentialPool {
     /// `member`'s present credential under its tree's root, an absent one cannot merge keyed notes.
-    pub fn merge(&self, member: &[u8; 32]) -> Result<MergeCredential, RingError> {
+    pub(crate) fn merge(&self, member: &[u8; 32]) -> Result<MergeCredential, RingError> {
         let Some(CredentialOpening::Present(present)) = self.opening(member) else {
             return Err(RingError::InputKeyNotEnrolled { index: 0 });
         };

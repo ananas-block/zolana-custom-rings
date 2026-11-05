@@ -258,10 +258,10 @@ fn deposit_read(
     ring: Address,
     assets: &RingAssets,
 ) -> Result<TransferRead, RingRpcError> {
-    let (_, spp_data) = frame
-        .data
-        .split_at_checked(DepositPrefix::SIZE - 1)
-        .ok_or_else(unavailable)?;
+    // The prefix carries a variable credential read, only its parse finds where the SPP bytes start.
+    let instruction = [&[frame.tag][..], frame.data].concat();
+    let mut spp_data = instruction.as_slice();
+    DepositPrefix::parse(&mut spp_data).map_err(|_| unavailable())?;
     let body = match spp_data.split_first() {
         Some((&RING_DEPOSIT, body)) => body,
         _ => return Err(unavailable()),
@@ -560,6 +560,7 @@ mod frame_flows_tests;
 
 #[cfg(test)]
 mod tests {
+    use custom_ring_interface::{CredentialRead, CustomRingProof};
     use solana_instruction::{AccountMeta, Instruction};
     use spr_client::{compile_message, ComputeBudgetConfig};
 
@@ -958,5 +959,75 @@ mod tests {
             data: vec![9],
         };
         refuses_scope(&[unrelated]);
+    }
+
+    /// A SOL deposit of `amount` behind an audited prefix carrying `credential_read`.
+    fn deposit_frame(credential_read: CredentialRead, amount: u64) -> Vec<u8> {
+        use spr_event::EncryptedRingDepositData;
+        use spr_interface::instruction::instruction_data::deposit::{
+            DepositAssetKind, RingDepositEntry, RingDepositIxData,
+        };
+        let prefix = DepositPrefix {
+            tag: tag::DEPOSIT,
+            key_capacity: 2,
+            proof: bytemuck::Zeroable::zeroed(),
+            credential_read,
+            own_revision: Default::default(),
+            curator_revision: Default::default(),
+        };
+        let deposit = RingDepositIxData {
+            assets: vec![DepositAssetKind::Sol],
+            deposits: vec![RingDepositEntry {
+                asset_index: 0,
+                view_tag: [0; 32],
+                owner_utxo_hash: [0; 32],
+                amount,
+                ring_data_hash: [0; 32],
+                encrypted: EncryptedRingDepositData {
+                    tx_viewing_pk: [0; 33],
+                    salt: [0; 16],
+                    ciphertext: Vec::new(),
+                },
+            }],
+        };
+        [
+            prefix.encode().expect("prefix"),
+            vec![RING_DEPOSIT],
+            deposit.serialize().expect("deposit"),
+        ]
+        .concat()
+    }
+
+    fn read_deposit(instruction: &[u8]) -> Result<TransferRead, RingRpcError> {
+        let (&tag, data) = instruction.split_first().expect("tag");
+        let frame = RingFrame {
+            tag,
+            data,
+            accounts: vec![PAYER, PAYER, pda::ring_auth(&RING).0],
+        };
+        deposit_read(&frame, RING, &RingAssets::new([]).expect("assets"))
+    }
+
+    #[test]
+    fn a_deposit_reads_its_legs_past_a_credential_read_of_either_width() {
+        let two_trees = CredentialRead::new(0, &[3, 4]).expect("two state roots");
+        for credential_read in [CredentialRead::new_state(3), two_trees] {
+            let read = read_deposit(&deposit_frame(credential_read, 7)).expect("deposit legs");
+            let [flow] = read.flows.as_slice() else {
+                panic!("one SOL leg, got {:?}", read.flows.len());
+            };
+            assert_eq!((flow.flow.asset, flow.flow.deposited), (SOL_MINT, 7));
+            assert!(!read.spends_note);
+        }
+    }
+
+    #[test]
+    fn a_deposit_cut_inside_its_credential_read_refuses() {
+        let frame = deposit_frame(CredentialRead::new_state(3), 7);
+        let prefix_end = 2 + core::mem::size_of::<CustomRingProof>() + 2;
+        assert!(matches!(
+            read_deposit(&frame[..prefix_end]),
+            Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
+        ));
     }
 }

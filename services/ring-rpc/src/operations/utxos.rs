@@ -1,4 +1,4 @@
-//! The notes a ring's auditor opened, their nullifiers, and the keys its credentials and registry hold.
+//! The notes a ring's auditor opened, their nullifiers, and the keys its credentials hold.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -21,7 +21,7 @@ use zolana_ring_client::{
         WalletEnrollment, WalletNote, WalletNoteStatus,
     },
     AuditedMergeOutput, ConfirmedMerge, CreatedUtxo, DepositOwner, DepositOwners, KnownUtxo,
-    SealedNullifierKey, UtxoOwner,
+    UtxoOwner,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
@@ -42,7 +42,6 @@ pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 #[derive(Default)]
 pub(crate) struct AuditStore {
     book: RwLock<SpendBook>,
-    tracked: RwLock<TrackedKeys>,
     credentials: RwLock<HeldCredentials>,
     /// The registry last named on the notes, a different one names them again.
     assets: RwLock<Option<RingAssets>>,
@@ -111,30 +110,6 @@ pub(crate) struct WalletStatusQuery {
     pub limit: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TrackingRoot {
-    pub registry: Address,
-    pub root: [u8; 32],
-    pub revision: u64,
-}
-
-impl TrackingRoot {
-    /// A lagging RPC node answers an older root, revisions order one registry alone.
-    pub(crate) fn settles(&self, read: &TrackingRoot) -> bool {
-        self.registry == read.registry && (self.root == read.root || read.revision < self.revision)
-    }
-}
-
-/// Verified under the tracking root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TrackedOwner {
-    pub owner_key: [u8; 32],
-    pub nullifier_pk: [u8; 32],
-    pub owner_hash: [u8; 32],
-    pub list_tag: [u8; 32],
-    pub sealed: SealedNullifierKey,
-}
-
 #[must_use]
 pub(crate) struct SpendableNotes<'a> {
     pub ring: Address,
@@ -153,14 +128,6 @@ pub(crate) struct StoredUtxo {
     pub ring_note: bool,
     /// `None` until the owner's secret names it.
     pub nullifier: Option<[u8; 32]>,
-}
-
-#[derive(Default)]
-struct TrackedKeys {
-    root: Option<TrackingRoot>,
-    keys: HashMap<[u8; 32], TrackedOwner>,
-    /// Owner hash to owner key, over the owners of `keys`.
-    owner_keys: HashMap<[u8; 32], [u8; 32]>,
 }
 
 impl SpendBook {
@@ -287,7 +254,7 @@ impl<'a> PageWork<'a> {
             .or_else(|| self.store.read_book().rows.get(nullifier).copied())
     }
 
-    /// The zero key's secret is public, every other opens from the owner's tracked record.
+    /// The zero key's secret is public, every other opens from the owner's credential.
     fn key_of(&mut self, utxo: &KnownUtxo) -> Option<&NullifierKey> {
         let nullifier_pk = utxo.owner.nullifier_pk()?;
         if nullifier_pk == ZERO_NULLIFIER_PUBKEY {
@@ -664,15 +631,6 @@ impl AuditStore {
         Ok(())
     }
 
-    pub(crate) fn tracked(&self, owner_key: &[u8; 32]) -> Option<TrackedOwner> {
-        self.tracked
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .keys
-            .get(owner_key)
-            .copied()
-    }
-
     pub(crate) fn context(&self) -> Context {
         self.read_book().context
     }
@@ -687,40 +645,6 @@ impl AuditStore {
             event_index: stored.created_in.event_index,
             slot_index: stored.slot_index,
         })
-    }
-
-    pub(crate) fn tracking_root(&self) -> Option<TrackingRoot> {
-        self.tracked
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .root
-    }
-
-    /// Every key the tracking registry holds under `root`, a new owner's notes derive on the next page.
-    pub(crate) fn replace_tracked(
-        &self,
-        root: TrackingRoot,
-        owners: HashMap<[u8; 32], TrackedOwner>,
-    ) {
-        let mut tracked = self.tracked.write().unwrap_or_else(PoisonError::into_inner);
-        self.late_owners
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(
-                owners
-                    .values()
-                    .filter(|owner| !tracked.keys.contains_key(&owner.owner_key))
-                    .map(|owner| owner.owner_key),
-            );
-        tracked.owner_keys = owners
-            .values()
-            .map(|owner| (owner.owner_hash, owner.owner_key))
-            .collect();
-        tracked.keys = owners
-            .into_values()
-            .map(|owner| (owner.owner_key, owner))
-            .collect();
-        tracked.root = Some(root);
     }
 
     /// The audit view of a merge the checkpoint opened.
@@ -812,24 +736,15 @@ impl StoredUtxo {
 }
 
 impl DepositOwners for AuditStore {
-    /// A credential answers first, the tracking registry only an owner with none.
     fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
         let credentials = self
             .credentials
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(held) = credentials.by_owner_hash(owner_hash) {
-            return Some(DepositOwner {
-                owner_key: held.owner_key,
-                nullifier_pk: held.credential.nullifier_pk,
-            });
-        }
-        drop(credentials);
-        let tracked = self.tracked.read().unwrap_or_else(PoisonError::into_inner);
-        let owner = tracked.keys.get(tracked.owner_keys.get(owner_hash)?)?;
+        let held = credentials.by_owner_hash(owner_hash)?;
         Some(DepositOwner {
-            owner_key: owner.owner_key,
-            nullifier_pk: owner.nullifier_pk,
+            owner_key: held.owner_key,
+            nullifier_pk: held.credential.nullifier_pk,
         })
     }
 }

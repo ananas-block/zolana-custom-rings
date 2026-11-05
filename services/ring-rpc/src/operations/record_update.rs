@@ -1,5 +1,5 @@
 //! Checks a signed record update and plans its batches. Every update takes one lifecycle, pending list approval when it awaits lists, then queued, submitted, and applied or refused.
-//! Pending list approval is the wait for the policy authority to approve off chain, a KYC check for one, and is not tracking enrollment. The writer holds the wallet's writes until the authority's own update sets every awaited list, then sends both in one `Update`.
+//! Pending list approval is the wait for the policy authority to approve off chain, a KYC check for one, and is not an enrollment. The writer holds the wallet's writes until the authority's own update sets every awaited list, then sends both in one `Update`.
 //! It reserves no approval and binds the authority to nothing, an update past its valid until slot turns refused.
 //! Read `update_queue` after for the stored states and `record_writer` for the passes that move them.
 

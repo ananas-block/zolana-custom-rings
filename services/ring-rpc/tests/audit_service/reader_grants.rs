@@ -387,8 +387,8 @@ fn owned_note(amount: u64) -> UtxoFields {
     }
 }
 
-/// `OWNER`'s tracked note spent beside `co_spent`, paying a stranger and `OWNER`.
-fn tracked_spend(fixture: &Fixture, co_spent: &[[u8; 32]]) -> StaticSource {
+/// `OWNER`'s enrolled note spent beside `co_spent`, paying a stranger and `OWNER`.
+fn enrolled_spend(fixture: &Fixture, co_spent: &[[u8; 32]]) -> StaticSource {
     let key = NullifierKey::from_secret([7; 31]);
     let (note, nullifier) = KeyedNote {
         fixture,
@@ -412,7 +412,7 @@ fn tracked_spend(fixture: &Fixture, co_spent: &[[u8; 32]]) -> StaticSource {
     let mut source = fixture.source().with_transactions(vec![note, spend]);
     source.next_cursor = None;
     source
-        .tracking
+        .credentials
         .enroll(OWNER.as_array(), &key, &fixture.auditor.pubkey());
     source
 }
@@ -447,9 +447,9 @@ async fn spent_amounts(source: StaticSource, fixture: &Fixture) -> Vec<u64> {
 #[tokio::test]
 async fn a_sole_owner_keeps_every_output_and_a_co_owner_its_own() {
     let fixture = Fixture::new();
-    let sole = tracked_spend(&fixture, &[]);
+    let sole = enrolled_spend(&fixture, &[]);
     assert_eq!(spent_amounts(sole, &fixture).await, [500, 7]);
-    let co_owned = tracked_spend(&fixture, &[field(0x71)]);
+    let co_owned = enrolled_spend(&fixture, &[field(0x71)]);
     assert_eq!(spent_amounts(co_owned, &fixture).await, [7]);
 }
 
@@ -654,7 +654,7 @@ async fn a_wallet_reads_its_own_notes_with_its_own_signature() {
     assert!(service.wallet_status(&other).await.is_err());
 }
 
-/// `OWNER`'s tracked note spent on the anonymous rail, `real` flags each input after it.
+/// `OWNER`'s enrolled note spent on the anonymous rail, `real` flags each input after it.
 fn anonymous_spend(fixture: &Fixture, others: &[([u8; 32], bool)]) -> StaticSource {
     let key = NullifierKey::from_secret([7; 31]);
     let (note, nullifier) = KeyedNote {
@@ -693,7 +693,7 @@ fn anonymous_spend(fixture: &Fixture, others: &[([u8; 32], bool)]) -> StaticSour
     source.configs.get_mut(&RING).expect("config").mode = RingMode::Anonymous;
     source.next_cursor = None;
     source
-        .tracking
+        .credentials
         .enroll(OWNER.as_array(), &key, &fixture.auditor.pubkey());
     source
 }
