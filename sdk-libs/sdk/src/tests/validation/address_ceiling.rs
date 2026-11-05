@@ -1,8 +1,7 @@
 use custom_ring_interface::{
-    cosign::ApprovalMask, sender_bundle_len, storage::Revision, stream::slot_tag,
-    AnonymousProofData, CustomRingProof, FrameExtensions, FramedSenderBundle, InputTrees,
-    PlainGroth16Proof, Replies, RingOutput, SlotBody, AUDIT_RECORD_LEN, MAX_FRAME_LEN,
-    MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
+    cosign::ApprovalMask, sender_bundle_len, stream::slot_tag, AnonymousProofData, CredentialRead,
+    CustomRingProof, FrameExtensions, FramedSenderBundle, InputTrees, PlainGroth16Proof, Replies,
+    RingOutput, SlotBody, AUDIT_RECORD_LEN, MAX_FRAME_LEN, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -321,7 +320,7 @@ fn anonymous_transfer(inputs: usize, outputs: usize, reply_len: Option<usize>) -
         n_in: inputs as u8,
         n_out: outputs as u8,
         proof: &proof,
-        tracking_revision: Revision::from(9),
+        credential_read: CredentialRead::new(9, &[9]).unwrap(),
         own_revision: None,
         policy: None,
         spl_withdrawal_owners: &[],

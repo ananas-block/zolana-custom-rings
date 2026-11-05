@@ -153,7 +153,15 @@ pub enum RingError {
     #[error(transparent)]
     AddressCeiling(#[from] crate::AddressCeilingError),
     #[error(transparent)]
-    Resolve(#[from] zolana_ring_client::ResolveError),
+    Credential(#[from] zolana_ring_client::CredentialError),
+    #[error(transparent)]
+    RecordStatement(#[from] zolana_ring_member_registry::RecordStatementError),
+    #[error("tree 0 moved its root history between the credential read and the root check")]
+    CredentialRootMoved,
+    #[error("the credential pool reads {members} members, the key opens {capacity}")]
+    CredentialCapacity { members: usize, capacity: usize },
+    #[error("a pool entry names a member the credential read did not answer")]
+    CredentialNotRead,
     #[error(transparent)]
     DelegateSource(#[from] crate::DelegateSourceError),
     #[error("a deposit frame proves once, a retry draws a new blinding secret")]
@@ -178,7 +186,7 @@ pub enum RingError {
     DepositUnkeyed,
     #[error("a salted list reads enrolled owner {member:?} and no list salt is known")]
     ListSaltUnknown { member: [u8; 32] },
-    #[error("no known list salt of owner {member:?} opens its tracking leaf's list tag")]
+    #[error("no known list salt of owner {member:?} opens its credential's list tag")]
     ListSaltMismatch { member: [u8; 32] },
     #[error("the policy refuses the transfer, {0}")]
     PolicyRuleUnsatisfied(#[from] RuleRefusal),
@@ -194,19 +202,14 @@ pub enum RingError {
     RepeatedDelegateSource,
     #[error(transparent)]
     TokenAccountSetup(#[from] zolana_ring_client::rpc::TokenAccountSetupError),
-    #[error("input {index} spends under a key its owner's tracking row does not hold")]
+    #[error("input {index} spends under a key its owner's credential does not hold")]
     InputKeyNotEnrolled { index: usize },
-    #[error("the owner at output {slot_index} holds no tracking row, only the zero key pays it")]
+    #[error("the owner at output {slot_index} holds no credential, only the zero key pays it")]
     RecipientNotEnrolled { slot_index: usize },
-    #[error("the owner at output {slot_index} is enrolled, the zero key does not pay it")]
-    EnrolledRecipientAtZeroKey { slot_index: usize },
-    #[error("output {slot_index} names another key than its owner's tracking row")]
+    #[error("output {slot_index} names another key than its owner's credential")]
     RecipientKeyMismatch { slot_index: usize },
-    #[error("output {slot_index} names a viewing key other than its owner's row at revision {row_revision}, ask for a new address")]
-    RecipientViewingKeyStale {
-        slot_index: usize,
-        row_revision: u64,
-    },
+    #[error("output {slot_index} names a viewing key other than its owner's user record, ask for a new address")]
+    RecipientViewingKeyStale { slot_index: usize },
     #[error("the transfer has {owners} owner signers, its accounts leave room for {limit}")]
     TooManyOwnerSigners { owners: usize, limit: usize },
     #[error("an anonymous transfer leads with its hidden owner's note, a frame of only public owners takes the confidential family")]

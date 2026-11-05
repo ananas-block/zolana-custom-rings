@@ -1,42 +1,45 @@
-use custom_ring_interface::{tracking::TrackingAuthorization, InputClass, STORAGE_PROGRAM_ID};
+use custom_ring_interface::InputClass;
 use solana_address::Address;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{random_blinding, NullifierKey, PublicKey, ShieldedAddress, X25519Keypair};
 use spr_transaction::{Data, Mint, Utxo, WalletUtxo};
 use zolana_ring_client::NullifierKeyEnvelope;
 
-use super::{AllowedNullifiers, DelegateSourceError, ResolvedSource, TrackingEnrollment};
+use super::{AllowedNullifiers, CredentialEnrollment, DelegateSourceError, ResolvedSource};
 use crate::tests::support::{
-    account, auditor, keypair, program, ring_utxo, wallet, Chain, TRACKING, TREE_ID,
+    auditor, credential_of, keypair, program, ring, ring_utxo, wallet, Chain, FIXTURE_LIST_TAG,
+    TREE_ID,
 };
 
-fn enrollment<'a>(chain: &'a Chain, auditor: &'a X25519Keypair) -> TrackingEnrollment<'a, Chain> {
-    TrackingEnrollment {
+fn enrollment<'a>(
+    chain: &'a Chain,
+    auditor: &'a X25519Keypair,
+) -> CredentialEnrollment<'a, Chain, Chain> {
+    CredentialEnrollment {
+        photon: chain,
         rpc: chain,
-        tracking_registry: TRACKING,
+        ring: ring().program_id(),
         auditor,
     }
 }
 
-/// `owner`'s tracking authorization sealing `key` to the ring auditor.
-fn enrolled(owner: Address, key: &NullifierKey) -> Chain {
+/// Tree 0 and no credential.
+fn unenrolled() -> Chain {
+    Chain::default().with_tree(TREE_ID).with_enrolled(&[])
+}
+
+/// `source`'s credential sealing `key` to the ring auditor.
+fn enrolled(source: &ShieldedAddress, key: &NullifierKey) -> Chain {
     let envelope = NullifierKeyEnvelope::new(key, &[0; 32], &auditor().pubkey()).unwrap();
-    let authorization = TrackingAuthorization {
-        discriminator: TrackingAuthorization::DISCRIMINATOR,
-        registry: TRACKING,
-        owner,
+    let credential = custom_ring_interface::AuditCredential {
         nullifier_pk: envelope.nullifier_pk,
-        list_tag: [0; 32],
-        viewing_u: [0; 32],
         eph_u: envelope.sealed.eph_pk.u(),
         ciphertext: envelope.sealed.ciphertext,
-        revision: 1u64.to_le_bytes(),
-        applied_revision: 1u64.to_le_bytes(),
+        ..credential_of(source, FIXTURE_LIST_TAG)
     };
-    Chain::default().with(
-        TrackingAuthorization::find_address(&TRACKING, &owner).0,
-        account(STORAGE_PROGRAM_ID, &authorization),
-    )
+    Chain::default()
+        .with_tree(TREE_ID)
+        .with_enrolled(&[credential])
 }
 
 #[tokio::test]
@@ -47,7 +50,7 @@ async fn a_zero_key_pda_source_moves_with_no_enrollment() {
         nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
         viewing_pubkey: X25519Keypair::new().pubkey(),
     };
-    let (chain, auditor) = (Chain::default(), auditor());
+    let (chain, auditor) = (unenrolled(), auditor());
 
     let resolved = ResolvedSource::resolve(source, &enrollment(&chain, &auditor))
         .await
@@ -71,10 +74,7 @@ async fn a_zero_key_pda_source_moves_with_no_enrollment() {
 async fn a_nonzero_source_spends_under_its_enrolled_key() {
     let owner = keypair(11);
     let source = owner.shielded_address().unwrap();
-    let (chain, auditor) = (
-        enrolled(source.solana_address().unwrap(), &owner.nullifier_key),
-        auditor(),
-    );
+    let (chain, auditor) = (enrolled(&source, &owner.nullifier_key), auditor());
 
     let resolved = ResolvedSource::resolve(source, &enrollment(&chain, &auditor))
         .await
@@ -92,7 +92,7 @@ async fn a_nonzero_source_spends_under_its_enrolled_key() {
 #[tokio::test]
 async fn an_unenrolled_nonzero_source_is_refused() {
     let source = keypair(12).shielded_address().unwrap();
-    let (chain, auditor) = (Chain::default(), auditor());
+    let (chain, auditor) = (unenrolled(), auditor());
 
     let refused = ResolvedSource::resolve(source, &enrollment(&chain, &auditor)).await;
 
@@ -103,10 +103,7 @@ async fn an_unenrolled_nonzero_source_is_refused() {
 async fn an_enrollment_under_another_key_is_refused() {
     let source = keypair(13).shielded_address().unwrap();
     let other = NullifierKey::from_secret([14; 31]);
-    let (chain, auditor) = (
-        enrolled(source.solana_address().unwrap(), &other),
-        auditor(),
-    );
+    let (chain, auditor) = (enrolled(&source, &other), auditor());
 
     let refused = ResolvedSource::resolve(source, &enrollment(&chain, &auditor)).await;
 
@@ -117,10 +114,7 @@ async fn an_enrollment_under_another_key_is_refused() {
 async fn a_recovered_note_of_another_owner_is_refused() {
     let (owner, stranger) = (keypair(15), keypair(16));
     let source = owner.shielded_address().unwrap();
-    let (chain, auditor) = (
-        enrolled(source.solana_address().unwrap(), &owner.nullifier_key),
-        auditor(),
-    );
+    let (chain, auditor) = (enrolled(&source, &owner.nullifier_key), auditor());
     let resolved = ResolvedSource::resolve(source, &enrollment(&chain, &auditor))
         .await
         .unwrap();
@@ -172,10 +166,7 @@ fn zero_key_note(owner: &ShieldedAddress, leaf: u64) -> WalletUtxo {
 async fn every_note_position_answers_to_the_requested_openings() {
     let (owner, member) = (keypair(17), zero_key_source(18));
     let source = owner.shielded_address().unwrap();
-    let (chain, auditor) = (
-        enrolled(source.solana_address().unwrap(), &owner.nullifier_key),
-        auditor(),
-    );
+    let (chain, auditor) = (enrolled(&source, &owner.nullifier_key), auditor());
     let enrollment = enrollment(&chain, &auditor);
     let own = ring_utxo(&owner, Mint::SOL, 5, 0);
     let members = zero_key_note(&member, 1);
@@ -215,7 +206,7 @@ async fn every_note_position_answers_to_the_requested_openings() {
 #[tokio::test]
 async fn a_relabeled_zero_key_opening_is_refused() {
     let (source, victim) = (zero_key_source(20), zero_key_source(21));
-    let (chain, auditor) = (Chain::default(), auditor());
+    let (chain, auditor) = (unenrolled(), auditor());
     let resolved = ResolvedSource::resolve(source, &enrollment(&chain, &auditor))
         .await
         .unwrap();

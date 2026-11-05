@@ -4,8 +4,6 @@ mod account;
 mod limits;
 #[path = "operations/merge.rs"]
 mod merge;
-#[path = "operations/register_key.rs"]
-mod register_key;
 pub(crate) mod support;
 
 /// A table every fixture member satisfies on the allow list.

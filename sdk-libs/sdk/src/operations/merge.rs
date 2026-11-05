@@ -1,9 +1,9 @@
 //! The record opens the merged note for its auditor.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit, AuditRecord, CustomRingMergeIxData, InstructionTag, MergePublicInput,
-    OpeningRecord, RecordKind, RingMode, SealedMergeRecord, OPENING_RECORD_LEN,
-    TAGGED_X25519_KEY_LEN,
+    key_catalog::RingCircuit, AuditRecord, CredentialRead, CredentialRoots, CustomRingMergeIxData,
+    InstructionTag, MergePublicInput, OpeningRecord, RecordKind, RingMode, SealedMergeRecord,
+    OPENING_RECORD_LEN, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -18,11 +18,12 @@ use spr_interface::{
             MergeOutputEncryption, MergeProof, MergeTransactIxData, MERGE_SUPPORTED_INPUT_COUNTS,
         },
     },
+    pda,
     tree_slot::tree_id_field,
     ZERO_NULLIFIER_PUBKEY,
 };
 use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress};
-use spr_program::instruction::MergeRingV2;
+use spr_program::{instruction::MergeRingV2, ADDRESS_TREE_ID};
 use spr_transaction::{
     error::TransactionError,
     instructions::merge::{MergeProofInputs, MergeRail, MergeTransaction},
@@ -39,11 +40,11 @@ use zolana_ring_keys::{MergeSeedHolder, MergeSeedRequest};
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::relay_message::MessageMismatch;
 use crate::{
+    credentials::{BoundCredentials, CredentialPoolRead},
     pipeline::HiddenOwner,
     prover::{to_instruction_proof, RingRequest},
-    records::TrackingMemberRead,
-    request::{self, MergeRequest, TrackingOpeningRequest},
-    submission::{check_transaction_size, send_budget, BoundRoot},
+    request::{self, MergeRequest, StateRootRequest},
+    submission::{check_transaction_size, send_budget},
     tree_id, CustomRing, CustomRingConfig, PreparedRelay, RingError,
 };
 
@@ -76,13 +77,13 @@ impl<K: ShieldedKeys + MergeSeedHolder + ?Sized> FittedMerge<'_, K> {
         self,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<PreparedCustomRingMerge, RingError> {
-        let config = self.ring.require_config(rpc).await?;
+        // An unconfigured ring refuses before any size check.
+        self.ring.require_config(rpc).await?;
         let budget = send_budget(InstructionTag::Merge, None);
         let site = MergeSite {
             ring: self.ring,
             input: self.proof_input,
             payer: self.payer,
-            config: &config,
         };
         // 1. Every input is validated, a note past the fitted prefix refuses as one inside it would.
         let whole = CustomRingMerge::new(self.ring, self.inputs.clone(), None)?;
@@ -216,11 +217,12 @@ pub struct ProvenCustomRingMerge {
     input_tree: Address,
     output_tree: Address,
     ring: CustomRing,
-    tracking_registry: Address,
+    /// The hidden owner's credential tree, `None` under a zero key.
+    credential_tree: Option<Address>,
     /// Signs a zero-key merge.
     owner: Option<Address>,
-    /// `None` under a zero key, the program reads no tracking root.
-    bound: Option<BoundRoot>,
+    /// `None` under a zero key, the program reads no credential root.
+    bound: Option<BoundCredentials>,
     pub data: CustomRingMergeIxData,
     pub output_hash: [u8; 32],
     pub input_count: usize,
@@ -292,13 +294,11 @@ impl PreparedCustomRingMerge {
         &self,
         input: &MergeProofInput,
         payer: Address,
-        config: &CustomRingConfig,
     ) -> Result<Instruction, RingError> {
         MergeSite {
             ring: self.ring,
             input,
             payer,
-            config,
         }
         .instruction(self.layout()?)
     }
@@ -338,22 +338,22 @@ impl PreparedCustomRingMerge {
         self.check_width()?;
         check_transaction_size(
             &payer,
-            &self.preview_instruction(&input, payer, &config)?,
+            &self.preview_instruction(&input, payer)?,
             send_budget(InstructionTag::Merge, self.priority_fee),
         )?;
         let owner_pk_hash = self.inner.signing_pubkey.owner_proof_input_hash()?;
-        let tracking = match owner {
+        // A hidden owner proves its credential in a state tree, a zero-key owner signs in public.
+        let credential = match owner {
             Some(_) => None,
-            None => {
-                let root = BoundRoot::tracking(config.account(), client.zolana()).await?;
-                let opening = TrackingMemberRead {
-                    root,
-                    member: owner_pk_hash,
+            None => Some(
+                CredentialPoolRead {
+                    ring: self.ring,
+                    members: &[owner_pk_hash],
                 }
                 .read(client.zolana())
-                .await?;
-                Some((root, opening))
-            }
+                .await?
+                .merge(&owner_pk_hash)?,
+            ),
         };
         let input_tree_id = tree_id(client.zolana(), input.input_tree).await?;
         if self
@@ -413,7 +413,14 @@ impl PreparedCustomRingMerge {
             .ok_or(TransactionError::NoInputs)?;
         let ring_id = self.ring.ring_id()?;
         let payer_identity = solana_owner_identity(payer.as_array())?;
-        let tracking_root = tracking.as_ref().map_or([0; 32], |(root, _)| root.root);
+        let roots = match &credential {
+            Some(credential) => credential.roots.clone(),
+            None => CredentialRoots::empty(1)?,
+        };
+        let state_root = roots
+            .state_roots()
+            .first()
+            .ok_or(RingError::CredentialNotRead)?;
         let published_owner = match owner {
             Some(_) => owner_pk_hash,
             None => [0; 32],
@@ -428,7 +435,7 @@ impl PreparedCustomRingMerge {
             ciphertext: &sealed.ciphertext,
             payer: &payer_identity,
             published_owner: &published_owner,
-            tracking_root: &tracking_root,
+            credentials: &roots,
         }
         .hash()?;
         let body = MergeRequest {
@@ -438,7 +445,8 @@ impl PreparedCustomRingMerge {
             ring_program_id: ring_id,
             auditor_pk: auditor,
             payer: payer_identity,
-            tracking_root,
+            credential_owner: *roots.owner_hash(),
+            state_root: StateRootRequest::from(state_root),
             eph_sk: sealed.ephemeral_sk,
             owner_key,
             owner_pk_hash,
@@ -452,9 +460,9 @@ impl PreparedCustomRingMerge {
             seed: Zeroizing::new(*seed.as_bytes()),
             output_tree_id: tree_id_field(inner.output_tree_id),
             output_ring_data_hash: output.ring_data_hash.unwrap_or_default(),
-            tracking: tracking
+            credential: credential
                 .as_ref()
-                .map(|(_, opening)| TrackingOpeningRequest::from(opening)),
+                .map(|credential| credential.leaf.clone()),
         };
         let proof = RingRequest::new(RingCircuit::Merge, &body)?
             .prove(client, public_input_hash)
@@ -463,13 +471,12 @@ impl PreparedCustomRingMerge {
             input_tree: input.input_tree,
             output_tree: input.output_tree,
             ring: self.ring,
-            tracking_registry: config.account().tracking,
+            credential_tree: credential.as_ref().map(|credential| credential.tree),
             owner,
-            bound: tracking.as_ref().map(|(root, _)| *root),
             data: CustomRingMergeIxData {
-                tracking_revision: tracking
+                credential_read: credential
                     .as_ref()
-                    .map_or_else(Default::default, |(root, _)| root.revision),
+                    .map_or_else(CredentialRead::empty, |credential| credential.read.clone()),
                 output_ring_data_hash: data.output_ring_data_hash,
                 authority: data.authority,
                 sealed: SealedMergeRecord {
@@ -486,6 +493,7 @@ impl PreparedCustomRingMerge {
                 .filter(|utxo| !utxo.is_dummy())
                 .count(),
             merged_amount: output.amount,
+            bound: credential.map(|credential| credential.bound),
         })
     }
 }
@@ -495,7 +503,6 @@ struct MergeSite<'a> {
     ring: CustomRing,
     input: &'a MergeProofInput,
     payer: Address,
-    config: &'a CustomRingConfig,
 }
 
 /// Every proof, hash and record beside these fields is fixed width.
@@ -532,10 +539,14 @@ impl MergeSite<'_> {
             input_tree: self.input.input_tree,
             output_tree: self.input.output_tree,
             payer: self.payer,
-            tracking_registry: self.config.account().tracking,
+            // A hidden owner's tree is one more account, tree 0 stands in until the read.
+            credential_tree: layout.owner.is_none().then(|| pda::tree(ADDRESS_TREE_ID)),
             owner: layout.owner,
             data: CustomRingMergeIxData {
-                tracking_revision: Default::default(),
+                credential_read: match layout.owner {
+                    Some(_) => CredentialRead::empty(),
+                    None => CredentialRead::new_state(0),
+                },
                 output_ring_data_hash: layout.output_ring_data_hash,
                 authority: authority_of(layout.owner),
                 sealed: SealedMergeRecord {
@@ -582,8 +593,8 @@ impl ProvenCustomRingMerge {
         self.owner
     }
 
-    pub(crate) fn bound_root(&self) -> Option<BoundRoot> {
-        self.bound
+    pub(crate) fn bound_credentials(&self) -> Option<BoundCredentials> {
+        self.bound.clone()
     }
 
     pub fn instruction(&self, payer: Address) -> Result<Instruction, RingError> {
@@ -592,7 +603,7 @@ impl ProvenCustomRingMerge {
             input_tree: self.input_tree,
             output_tree: self.output_tree,
             payer,
-            tracking_registry: self.tracking_registry,
+            credential_tree: self.credential_tree,
             owner: self.owner,
             data: self.data.clone(),
         }
@@ -612,14 +623,15 @@ impl RingMergeOperation {
     }
 }
 
-/// `[ring, tracking registry]` ahead of SPP's `merge_ring_v2` list.
+/// `[ring, credential tree]` ahead of SPP's `merge_ring_v2` list, the tree only for a hidden owner.
 #[must_use]
 pub struct CustomRingMergeInstruction {
     pub ring: CustomRing,
     pub input_tree: Address,
     pub output_tree: Address,
     pub payer: Address,
-    pub tracking_registry: Address,
+    /// `None` under a zero key.
+    pub credential_tree: Option<Address>,
     /// Signs a zero-key merge.
     pub owner: Option<Address>,
     pub data: CustomRingMergeIxData,
@@ -641,10 +653,12 @@ impl CustomRingMergeInstruction {
         }
         .instruction();
         instruction.data = data;
-        let prefix = [
-            AccountMeta::new_readonly(self.ring.policy_pda(), false),
-            AccountMeta::new_readonly(self.tracking_registry, false),
-        ];
+        let prefix = [AccountMeta::new_readonly(self.ring.policy_pda(), false)]
+            .into_iter()
+            .chain(
+                self.credential_tree
+                    .map(|tree| AccountMeta::new_readonly(tree, false)),
+            );
         instruction.accounts.splice(0..0, prefix);
         Ok(instruction)
     }

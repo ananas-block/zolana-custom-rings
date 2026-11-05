@@ -23,16 +23,15 @@ use super::{
     pool_subjects::{pool_at_width, KnownSalts, OwnerQuery, PoolSubjects, RecordPlan, SourceGates},
 };
 use crate::{
+    credentials::{CredentialPool, CredentialPoolRead},
     limits::Outflows,
-    records::{
-        check_output_key, check_recipient_viewing_key, PoolRead, TrackingPoolRead, TrackingRead,
-    },
+    records::{check_output_key, check_recipient_viewing_key, PoolRead},
     request::{
-        OwnerEntry, PolicyParams, PolicyTable, PolicyWithdrawalRequest, PoolEntry, RecordPools,
-        TrackingParams,
+        CredentialParams, OwnerEntry, PolicyParams, PolicyTable, PolicyWithdrawalRequest,
+        PoolEntry, RecordPools,
     },
     submission::BoundRoot,
-    CustomRingConfig, PinnedPolicy, RingError,
+    CredentialTrees, CustomRing, CustomRingConfig, PinnedPolicy, RingError,
 };
 
 pub(super) struct PolicyInputs {
@@ -49,9 +48,9 @@ pub(super) struct PolicyInputs {
     sources: SourceMap,
     /// Zero off a policy, the gate of every rule.
     pub policy_hash: [u8; 32],
-    /// Every rail reads it.
-    pub tracking: BoundRoot,
-    tracking_pool: TrackingPoolRead,
+    /// Every rail reads it, padded to `credential_capacity`.
+    pub credentials: CredentialPool,
+    credential_capacity: usize,
     row_entries: Vec<u32>,
     output_entries: Vec<u32>,
     /// Bound on a ring with own records off the delegate rails, `None` leaves the own root zero.
@@ -70,6 +69,7 @@ pub(super) struct PolicyInputs {
 }
 
 pub(super) struct PolicyRead<'a> {
+    pub ring: CustomRing,
     pub token_owner_hint: Option<Address>,
     pub config: &'a CustomRingConfig,
     pub inputs: &'a SppProofInputs,
@@ -104,7 +104,7 @@ impl PlannedEntries {
 }
 
 impl PolicyRead<'_> {
-    pub async fn read<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
+    pub async fn read<R: AsyncRpc + AsyncRingIndexer>(
         self,
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
@@ -130,8 +130,9 @@ impl PolicyRead<'_> {
         });
         let live_rows = self.owner_rows()?;
         let live_owners = self.output_owners()?;
-        let tracking = BoundRoot::tracking(policy, client).await?;
         let ring_owners = self.ring_owners()?;
+        // 1. Every live row opens its credential, and a keyed ring output its owner's. A salted
+        //    read opens every screened owner too, so the pool's width decides the key.
         let mut tracked = PoolSubjects::default();
         let mut row_entries: Vec<u32> = live_rows
             .iter()
@@ -141,26 +142,23 @@ impl PolicyRead<'_> {
             .iter()
             .map(|owner| tracked.index(*owner))
             .collect();
-        // Every screened owner's row decides the key width.
-        let rows_read = match gates.any_salted() {
-            true => {
-                for owner in live_owners
-                    .iter()
-                    .flatten()
-                    .chain(withdrawals.iter().map(|w| &w.owner))
-                {
-                    tracked.index(Some(*owner));
-                }
-                let members = tracked.opened();
-                let read = TrackingRead {
-                    root: tracking,
-                    members,
-                    openings: members.len(),
-                };
-                Some(read.read(client).await?)
+        if gates.any_salted() {
+            for owner in live_owners
+                .iter()
+                .flatten()
+                .chain(withdrawals.iter().map(|w| &w.owner))
+            {
+                tracked.index(Some(*owner));
             }
-            false => None,
-        };
+        }
+        // 2. One snapshot answers the whole pool, the key's capacity only pads it.
+        let credentials = CredentialPoolRead {
+            ring: self.ring,
+            members: tracked.members(),
+        }
+        .read(client)
+        .await?;
+        let rows_read = gates.any_salted().then_some(&credentials);
         let live_assets = self.output_assets()?;
         let input_assets = self.input_assets()?;
         let public_assets = self.public.asset_fields()?;
@@ -174,7 +172,7 @@ impl PolicyRead<'_> {
             withdrawals: &withdrawals,
             public_assets: &public_assets,
             tracked: &tracked,
-            rows_read: rows_read.as_ref(),
+            rows_read,
             salts: self.salts,
         }
         .plan(&mut plan)?;
@@ -198,20 +196,17 @@ impl PolicyRead<'_> {
         let widths = circuit
             .record_pools()
             .ok_or(RingError::UnpinnedProvingKey(circuit))?;
+        let credential_capacity = circuit
+            .credential_capacity()
+            .ok_or(RingError::UnpinnedProvingKey(circuit))?;
         let capacity = circuit.owners().map_or(0, usize::from);
         let mut rows = live_rows;
         rows.resize(capacity, [0; 32]);
         row_entries.resize(capacity, 0);
         output_entries.resize(slots, 0);
-        let tracking_pool = TrackingRead {
-            root: tracking,
-            members: tracked.opened(),
-            openings: widths.tracking,
-        }
-        .read(client)
-        .await?;
-        self.check_input_keys(&tracking_pool)?;
-        self.check_output_keys(&tracking_pool, &ring_owners)?;
+        self.check_input_keys(&credentials)?;
+        self.check_output_keys(client, &credentials, &ring_owners)
+            .await?;
         let mut sender_entries = core::mem::take(&mut planned.senders);
         sender_entries.resize(capacity, OwnerEntry::default());
         let public_asset_entries = core::mem::take(&mut planned.public_assets);
@@ -229,8 +224,8 @@ impl PolicyRead<'_> {
             rules: EncodedRuleTable::default(),
             sources: SourceMap::default(),
             policy_hash: [0; 32],
-            tracking,
-            tracking_pool,
+            credentials,
+            credential_capacity,
             row_entries,
             output_entries,
             own: None,
@@ -268,6 +263,7 @@ impl PolicyRead<'_> {
         owner_rows(self.rail(), self.inputs)
     }
 
+    /// A zero-key output needs no credential, its owner joins the pool only through a salted read.
     fn ring_owners(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
         self.inputs
             .output_utxos
@@ -275,7 +271,11 @@ impl PolicyRead<'_> {
             .map(|output| {
                 output
                     .owner_address
-                    .filter(|_| output.ring_program_id.is_some() && !output.is_dummy())
+                    .filter(|owner| {
+                        output.ring_program_id.is_some()
+                            && !output.is_dummy()
+                            && owner.nullifier_pubkey != ZERO_NULLIFIER_PUBKEY
+                    })
                     .map(|owner| owner.signing_pubkey.owner_proof_input_hash())
                     .transpose()
                     .map_err(RingError::from)
@@ -322,8 +322,8 @@ impl PolicyRead<'_> {
             .collect()
     }
 
-    /// A keyed ring note spends under its owner's enrolled key, a zero key waives the equality alone.
-    fn check_input_keys(&self, pool: &TrackingPoolRead) -> Result<(), RingError> {
+    /// A keyed ring note spends under its owner's credential key, a zero key waives the equality alone.
+    fn check_input_keys(&self, pool: &CredentialPool) -> Result<(), RingError> {
         for (index, input) in self.inputs.input_utxos.iter().enumerate() {
             if !input.is_note()
                 || is_default_ring(input)
@@ -333,8 +333,8 @@ impl PolicyRead<'_> {
             }
             let member = input.utxo.owner.owner_proof_input_hash()?;
             if pool
-                .record(&member)
-                .is_none_or(|record| record.nullifier_pk != input.nullifier_pubkey)
+                .credential(&member)
+                .is_none_or(|credential| credential.nullifier_pk != input.nullifier_pubkey)
             {
                 return Err(RingError::InputKeyNotEnrolled { index });
             }
@@ -342,9 +342,10 @@ impl PolicyRead<'_> {
         Ok(())
     }
 
-    fn check_output_keys(
+    async fn check_output_keys<R: AsyncRpc>(
         &self,
-        pool: &TrackingPoolRead,
+        client: &R,
+        pool: &CredentialPool,
         owners: &[Option<[u8; 32]>],
     ) -> Result<(), RingError> {
         for (slot_index, (output, owner)) in self.inputs.output_utxos.iter().zip(owners).enumerate()
@@ -352,16 +353,19 @@ impl PolicyRead<'_> {
             let (Some(address), Some(member)) = (output.owner_address, owner) else {
                 continue;
             };
-            let row = pool.record(member);
-            check_output_key(row, &address.nullifier_pubkey, slot_index)?;
-            // A spending owner holds every key it ever enrolled.
+            check_output_key(
+                pool.credential(member),
+                &address.nullifier_pubkey,
+                slot_index,
+            )?;
+            // A spending owner holds every viewing key it ever registered.
             let spends = self
                 .inputs
                 .input_utxos
                 .iter()
                 .any(|input| input.is_note() && input.utxo.owner == address.signing_pubkey);
             if !spends {
-                check_recipient_viewing_key(row, &address.viewing_pubkey.u(), slot_index)?;
+                check_recipient_viewing_key(client, &address, slot_index).await?;
             }
         }
         Ok(())
@@ -397,7 +401,7 @@ struct EntryPlan<'a> {
     public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
     tracked: &'a PoolSubjects,
     /// `None` off a table reading a salted list.
-    rows_read: Option<&'a TrackingPoolRead>,
+    rows_read: Option<&'a CredentialPool>,
     salts: &'a KnownSalts,
 }
 
@@ -412,16 +416,16 @@ impl EntryPlan<'_> {
         }
         let screened = self.read == RootRead::Policy;
         let owner = |plan: &mut RecordPlan, member: [u8; 32]| -> Result<OwnerEntry, RingError> {
-            let (tracking, salted) = match self.rows_read {
-                Some(rows) => (
+            let (credential, salted) = match self.rows_read {
+                Some(pool) => (
                     self.tracked.position(&member),
-                    self.salts.salted_key(&member, rows.record(&member))?,
+                    self.salts.salted_key(&member, pool.credential(&member))?,
                 ),
                 None => (0, None),
             };
             Ok(plan.owner(OwnerQuery {
                 member,
-                tracking,
+                credential,
                 salted,
             }))
         };
@@ -489,7 +493,7 @@ struct ScreenedRecords<'a> {
 }
 
 impl ScreenedRecords<'_> {
-    async fn read<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
+    async fn read<R: AsyncRpc + AsyncRingIndexer>(
         self,
         client: &R,
         inputs: &mut PolicyInputs,
@@ -654,13 +658,18 @@ impl PolicyInputs {
         self.policy_hash != [0; 32]
     }
 
-    pub fn roots(&self) -> TransferRoots {
-        TransferRoots {
+    pub fn roots(&self) -> Result<TransferRoots, RingError> {
+        Ok(TransferRoots {
             policy_hash: self.policy_hash,
             own_root: self.own.map_or([0; 32], |own| own.root),
             curator_root: self.curator.map_or([0; 32], |curator| curator.root),
-            tracking_root: self.tracking.root,
-        }
+            credentials: self.credentials.roots(self.credential_capacity)?,
+        })
+    }
+
+    /// The accounts the frame's credential read names, at the key's capacity.
+    pub fn credential_trees(&self) -> Result<CredentialTrees, RingError> {
+        self.credentials.trees(self.credential_capacity)
     }
 
     pub fn withdrawal_hash(&self) -> Result<[u8; 32], RingError> {
@@ -669,17 +678,12 @@ impl PolicyInputs {
         )?)
     }
 
-    pub fn tracking_params(&self) -> Result<TrackingParams, RingError> {
-        Ok(TrackingParams {
-            tracking_root: self.tracking.root,
-            pool: self
-                .tracking_pool
-                .pool()
-                .clone()
-                .padded(self.widths.tracking)?,
-            row_entries: self.row_entries.clone(),
-            output_entries: self.output_entries.clone(),
-        })
+    pub fn credential_params(&self) -> Result<CredentialParams, RingError> {
+        self.credentials.params(
+            self.credential_capacity,
+            self.row_entries.clone(),
+            self.output_entries.clone(),
+        )
     }
 
     pub fn params(&self, proving: &PolicyProving<'_>) -> Result<PolicyParams<'_>, RingError> {
@@ -689,7 +693,6 @@ impl PolicyInputs {
                 .ok_or(RingError::UncataloguedCircuit(self.circuit()))?,
         );
         let outputs = self.slots;
-        let roots = self.roots();
         let mut withdrawals = self.withdrawals.clone();
         withdrawals.resize(capacity, PolicyWithdrawal::default());
         let mut owner_entries = self.owner_entries.clone();
@@ -710,8 +713,8 @@ impl PolicyInputs {
                 .collect(),
             policy_hash: self.policy_hash,
             ring_id: proving.ring_id,
-            own_root: roots.own_root,
-            curator_root: roots.curator_root,
+            own_root: self.own.map_or([0; 32], |own| own.root),
+            curator_root: self.curator.map_or([0; 32], |curator| curator.root),
             public_assets: proving.public_assets.to_vec(),
             public_amounts: proving.public_amounts.to_vec(),
             public_gross: proving.public_gross.to_vec(),
