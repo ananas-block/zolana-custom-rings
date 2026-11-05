@@ -70,7 +70,7 @@ const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferS
 }
 
 /// Mirror `ownerAddresses`.
-const OWNER_ADDRESSES: usize = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - RING_ADDRESSES;
+const OWNER_ADDRESSES: usize = 54;
 
 const fn entry(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
     TransferShape {
@@ -196,7 +196,8 @@ impl TransferShape {
 
     /// A stream sealed under one row opens under the other, its records and tails keep their counters.
     /// The first record counter moves with an entry key's class, the first tail counter with `N`.
-    const fn seals_like(self, other: Self, has_data: bool) -> bool {
+    #[must_use]
+    pub const fn seals_like(self, other: Self, has_data: bool) -> bool {
         self.audit_key().first_record_counter() == other.audit_key().first_record_counter()
             && (!has_data || self.outputs == other.outputs)
     }
@@ -215,8 +216,8 @@ impl TransferShape {
 
 /// Addresses SPP takes beside its nullifier PDAs, zolana/docs/spec.md.
 const SPP_ADDRESSES: usize = 4;
-/// The fixed reservation excludes variable credential tree accounts.
-const RING_ADDRESSES: usize = 6;
+/// Ring program, policy, config, own registry and curator registry.
+const RING_ADDRESSES: usize = 5;
 
 /// What takes a v1 transaction's addresses beside its owner signers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -225,14 +226,20 @@ pub struct TransferAddresses {
     pub n_inputs: usize,
     pub co_signers: usize,
     pub legs: usize,
+    /// Distinct authenticated credential tree addresses absent from the remaining transaction accounts.
+    pub credential_accounts: usize,
 }
 
 impl TransferAddresses {
     /// The owner signers that fit, a co-signer takes its record too.
+    #[must_use]
     pub const fn owner_signers(self) -> usize {
         MAX_TRANSACTION_ADDRESSES
             .saturating_sub(SPP_ADDRESSES + RING_ADDRESSES)
-            .saturating_sub(self.n_inputs + 2 * self.co_signers + self.legs)
+            .saturating_sub(self.n_inputs)
+            .saturating_sub(self.co_signers.saturating_mul(2))
+            .saturating_sub(self.legs)
+            .saturating_sub(self.credential_accounts)
     }
 }
 
@@ -266,43 +273,6 @@ impl TransferSpend {
             wide: !narrow.is_some_and(|shape| shape.holds(self)),
             ..self
         }
-    }
-
-    /// The wide flag a wallet seals under ahead of every record read, `pools` from [`UnreadSubjects`].
-    ///
-    /// The wallet knows its rail, shape, live owners, legs, assets and the ring's source map. It reads
-    /// no credential, so it cannot tell who holds a salted record, and a leg's destination may not
-    /// exist yet.
-    ///
-    /// A bound past the narrow row is a possibility, never a need. Where both rows seal one stream
-    /// the flag stays clear and the reader raises it from the records it reads. Where the streams
-    /// differ a reader cannot move a sealed frame, the wallet takes the wide row and the reader holds
-    /// it as a floor. A spend whose real read fits the narrow row then proves wide, the one case the
-    /// wallet and a direct submission part.
-    #[must_use]
-    pub fn sealed_wide(self, has_data: bool) -> bool {
-        let counted = Self {
-            pools: RecordPools::default(),
-            ..self
-        }
-        .fitted();
-        if counted.wide {
-            return true;
-        }
-        let frame = self.frame_key();
-        let rows = FrameKey {
-            wide: false,
-            ..frame
-        }
-        .shape()
-        .zip(
-            FrameKey {
-                wide: true,
-                ..frame
-            }
-            .shape(),
-        );
-        self.fitted().wide && rows.is_some_and(|(narrow, wide)| !narrow.seals_like(wide, has_data))
     }
 
     const fn frame_key(self) -> FrameKey {
@@ -367,34 +337,6 @@ impl RecordPools {
         self.own <= capacity.own
             && self.curator <= capacity.curator
             && self.tracking <= capacity.tracking
-    }
-}
-
-/// What a wallet counts ahead of its reads under a written policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnreadSubjects {
-    /// Distinct live input and output owners, plus one per leg since a destination stays unread.
-    pub owners: usize,
-    /// Distinct live input, output and public assets.
-    pub assets: usize,
-    /// The table reads a salted list, an owner may then open a salted record and a credential.
-    pub salted: bool,
-}
-
-impl UnreadSubjects {
-    /// The widest read of these subjects, every owner enrolled with a public and a salted record on a salted table.
-    pub const fn pools(self) -> RecordPools {
-        let (owner_records, tracking) = match self.salted {
-            true => (2 * self.owners, self.owners),
-            // Input and output owners fit the credential capacity selected by the shape.
-            false => (self.owners, 0),
-        };
-        let records = owner_records + self.assets;
-        RecordPools {
-            own: records,
-            curator: records,
-            tracking,
-        }
     }
 }
 
@@ -715,22 +657,63 @@ mod tests {
     }
 
     #[test]
-    fn the_address_bound_leaves_room_for_each_key_of_the_catalog() {
-        let bound = |n_inputs, co_signers, legs| {
-            TransferAddresses {
-                n_inputs,
-                co_signers,
-                legs,
-            }
-            .owner_signers()
+    fn credential_accounts_reduce_owner_capacity_without_changing_the_catalog() {
+        let base = TransferAddresses {
+            n_inputs: 24,
+            co_signers: 5,
+            legs: 4,
+            credential_accounts: 0,
         };
-        assert_eq!(bound(24, 0, 0), 30);
-        assert_eq!(bound(32, 0, 0), 22);
-        assert_eq!(bound(24, 5, 4), 16);
-        assert_eq!(bound(64, 5, 32), 0);
-        for shape in TRANSFER_SHAPES {
-            let owners = usize::from(shape.owners);
-            assert!(owners <= bound(owners, 0, 0));
+        assert_eq!(base.owner_signers(), 17);
+        assert_eq!(
+            TransferAddresses {
+                credential_accounts: 1,
+                ..base
+            }
+            .owner_signers(),
+            16
+        );
+        assert_eq!(
+            TransferAddresses {
+                credential_accounts: 17,
+                ..base
+            }
+            .owner_signers(),
+            0
+        );
+        assert_eq!(
+            TransferAddresses {
+                credential_accounts: 18,
+                ..base
+            }
+            .owner_signers(),
+            0
+        );
+        assert_eq!(OWNER_ADDRESSES, 54);
+    }
+
+    #[test]
+    fn oversized_account_counts_leave_no_owner_capacity() {
+        let base = TransferAddresses::default();
+        for accounts in [
+            TransferAddresses {
+                n_inputs: usize::MAX,
+                ..base
+            },
+            TransferAddresses {
+                co_signers: usize::MAX,
+                ..base
+            },
+            TransferAddresses {
+                legs: usize::MAX,
+                ..base
+            },
+            TransferAddresses {
+                credential_accounts: usize::MAX,
+                ..base
+            },
+        ] {
+            assert_eq!(accounts.owner_signers(), 0);
         }
     }
 
@@ -821,105 +804,35 @@ mod tests {
         assert_eq!(fitted(8, 0, 9), (true, None));
     }
 
-    fn loaded(shape: TransferShape, pools: RecordPools) -> TransferSpend {
-        TransferSpend {
-            inputs: usize::from(shape.inputs),
-            legs: usize::from(shape.withdrawals),
-            owners: usize::from(shape.owners),
-            pools,
-            ..spend(
-                RingRail::Confidential,
-                usize::from(shape.outputs),
-                shape.entry,
-                false,
-            )
-        }
-    }
-
-    /// With every subject public the wallet's counts are all a reader's selection reads.
     #[test]
-    fn a_table_with_no_salted_list_seals_the_key_its_reader_selects() {
-        for shape in TRANSFER_SHAPES {
-            let spend = loaded(shape, RecordPools::default());
-            let read = spend.fitted();
-            for has_data in [false, true] {
-                assert_eq!(spend.sealed_wide(has_data), read.wide, "{shape:?}");
-            }
-            assert!(RingCircuit::transfer(read).is_some(), "{shape:?}");
-        }
+    fn ordinary_seals_keep_record_positions_across_input_capacities() {
+        let smaller = narrow(2, 24, 4, 4);
+        let larger = wide(2, 49, 4, 12);
+        assert!(smaller.seals_like(larger, false));
+        assert!(smaller.seals_like(larger, true));
     }
 
     #[test]
-    fn a_salted_bound_leaves_the_flag_open_while_both_rows_seal_one_stream() {
-        let sixteen = narrow(16, 5, 8, 5);
-        let bound = UnreadSubjects {
-            owners: 5 + 16 + 8,
-            assets: 3,
-            salted: true,
-        }
-        .pools();
-        let spend = loaded(sixteen, bound);
-        assert!(spend.fitted().wide);
-        assert!(!spend.sealed_wide(false));
-        assert!(!spend.sealed_wide(true));
+    fn data_tails_bind_output_capacity() {
+        let smaller = narrow(2, 24, 4, 4);
+        let larger = wide(8, 24, 32, 24);
+        assert!(smaller.seals_like(larger, false));
+        assert!(!smaller.seals_like(larger, true));
     }
 
     #[test]
-    fn a_salted_bound_commits_a_data_tail_whose_counter_moves_with_the_row() {
-        let bound = UnreadSubjects {
-            owners: 4 + 2 + 4,
-            assets: 3,
-            salted: true,
-        }
-        .pools();
-        let spend = loaded(narrow(2, 24, 4, 4), bound);
-        assert!(spend.fitted().wide);
-        assert!(!spend.sealed_wide(false));
-        assert!(spend.sealed_wide(true));
+    fn entry_seals_bind_input_capacity() {
+        let smaller = entry(8, 2, 4, 2);
+        let larger = entry(8, 4, 4, 4);
+        assert!(!smaller.seals_like(larger, false));
+        assert!(!smaller.seals_like(larger, true));
     }
 
     #[test]
-    fn unmatched_input_assets_past_a_narrow_row_seal_the_wide_stream_on_an_unsalted_table() {
-        let shape = narrow(2, 24, 4, 4);
-        let pools = |assets| {
-            UnreadSubjects {
-                owners: 2,
-                assets,
-                salted: false,
-            }
-            .pools()
-        };
-        let own = shape.circuit().record_pools().unwrap().own;
-        assert!(!loaded(shape, pools(own - 2)).sealed_wide(true));
-        // A data tail's counter moves from two outputs to the wide row's eight.
-        assert!(loaded(shape, pools(own - 1)).sealed_wide(true));
-    }
-
-    #[test]
-    fn counts_past_the_narrow_row_seal_wide_whatever_the_stream() {
-        let spend = TransferSpend {
-            inputs: 25,
-            ..spend(RingRail::Confidential, 2, false, false)
-        };
-        assert!(spend.sealed_wide(false));
-        assert!(spend.sealed_wide(true));
-    }
-
-    /// Every entry key holds its salted bound, no entry seal needs a key its outputs cannot take.
-    #[test]
-    fn an_entry_takes_its_capacity_from_its_outputs_under_a_salted_bound() {
-        for shape in ENTRY_SHAPES {
-            let bound = UnreadSubjects {
-                owners: usize::from(shape.owners + shape.outputs + shape.withdrawals),
-                // Inputs repeating the payments' assets open no record.
-                assets: usize::from(shape.outputs) + N_PUBLIC_SLOTS,
-                salted: true,
-            }
-            .pools();
-            let spend = loaded(shape, bound);
-            assert!(!spend.fitted().wide, "{shape:?}");
-            assert!(!spend.sealed_wide(true), "{shape:?}");
-            assert_eq!(RingCircuit::transfer(spend.fitted()), Some(shape.circuit()));
-        }
+    fn record_pool_width_does_not_move_the_stream() {
+        let smaller = narrow(16, 5, 8, 5);
+        let larger = wide(16, 5, 8, 5);
+        assert!(smaller.seals_like(larger, false));
+        assert!(smaller.seals_like(larger, true));
     }
 }

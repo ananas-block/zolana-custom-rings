@@ -6,9 +6,16 @@
 // are the regions the published n, m and has_data select. The program cuts every ciphertext from n, m
 // and the layout flags, the entry flag moves the envelope's length and has_data adds one tail per slot.
 //
+// The envelope seals the viewing key, note count and address bitmap before any entry evidence.
+// Entry evidence keeps one position per published input, including addresses and dummies.
+// Record counters start after the envelope at full input capacity, rounded up to an AES block.
+// Readers must use that capacity even when the frame carries fewer inputs, or they select another keystream.
+// Tail counters follow every output record at full output capacity.
+//
 // The file proves the following.
 //  1. The layout value holds two flags, a value past them fails its decomposition.
 //  2. The entry flag equals the key's entry capacity.
+//  3. Range construction rejects an input capacity outside the address bitmap bound.
 //
 // Read after shared/envelope.go. Read before audit/audit.go, audit/record.go.
 

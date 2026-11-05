@@ -1,3 +1,8 @@
+//! Compact ring frames expand into canonical SPP bytes for settlement and external data hashing.
+//!
+//! Read after `program-libs/interface/src/instructions/transact.rs` and `program-libs/interface/src/codec/output.rs`.
+//! Read before `programs/custom-ring/src/instructions/transfer/processor.rs`.
+
 use spr_interface::instruction::{
     ExternalDataPreimage, InputUtxo, MessageData, OutputDataRef, OwnerTag, SegmentedBytes,
     TransactExternalDataRef, TransactIxData, TransactIxDataRef, TransactOutput, TransactOutputRef,
@@ -172,7 +177,10 @@ impl RingTransactData<'_> {
 impl SppExpansion<'_, '_> {
     fn encode(self) -> Result<EncodedSppInstruction, CustomRingError> {
         let frame = self.frame;
+        // 1. Frame validation binds section lengths to the audit layout and reply count to recipient slots.
         frame.validate_under(frame.audit_stream()?)?;
+        // 2. Reply chunks follow recipient slots only, after each body and outside its inner length.
+        // The complete framed payload must fit SPP's `u16` data length.
         let mut output_headers = Vec::with_capacity(frame.outputs.len());
         for (output, reply) in frame.outputs.iter().zip(frame.slot_replies()) {
             output_headers.push(
@@ -219,12 +227,14 @@ impl SppExpansion<'_, '_> {
             .iter()
             .map(|message| [message.data])
             .collect::<Vec<_>>();
+        // 3. The auditor payload binds the tagged viewing key, envelope, all output records, then data tails in slot order.
         let tx_viewing_pk = tagged_x25519(frame.tx_viewing_u);
         let mut auditor_segments =
             Vec::with_capacity(2 + frame.outputs.len() * (1 + usize::from(frame.has_data)));
         auditor_segments.push(&tx_viewing_pk[..]);
         auditor_segments.extend(frame.auditor_ciphertexts());
         let auditor_tag = auditor_tag(self.ring);
+        // 4. SPP receives the optional sender, application messages, then the auditor message under the ring's auditor tag.
         let mut messages = Vec::with_capacity(
             frame.extensions.messages.len() + 1 + usize::from(frame.sender.is_some()),
         );
@@ -244,6 +254,7 @@ impl SppExpansion<'_, '_> {
             view_tag: &auditor_tag,
             data: SegmentedBytes::new(&auditor_segments).map_err(invalid)?,
         });
+        // 5. The SPP schema owns the external data boundary through messages, before `private_tx_hash` and the proof suffix.
         let expanded = TransactIxDataRef {
             external_data: TransactExternalDataRef {
                 expiry_unix_ts: u64::from(frame.expiry_unix_ts),
@@ -281,9 +292,12 @@ impl EncodedSppInstruction {
         &self,
         settlements: &[Settlement<'_>],
     ) -> Result<[u8; 32], CustomRingError> {
+        // 1. The SPP instruction discriminator precedes the exact serialized prefix through messages.
         let tag = [self.data[0]];
         let prefix = &self.data[1..1 + self.external_data_prefix_len];
         let mut preimage = ExternalDataPreimage::new(&tag, prefix);
+        // 2. The caller must supply settlements in transfer order. Each pair binds asset then user after the prefix.
+        // Inline owner tags are already in the prefix.
         for settlement in settlements {
             preimage.push_settlement(settlement.asset_account, settlement.user_account)?;
         }

@@ -118,11 +118,11 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	c.InputChain = inputChain
 	c.ThresholdsActive, c.Delegate = ringtest.Bit(!w.NoOwnRegistry && !w.Delegate), ringtest.Bit(w.Delegate)
 	c.ApprovalMask, c.ApprovalTotals, c.ApprovalBlinder = w.Approval, 0, 0
-	tracking := ringregistry.NewTracking(t)
+	credentials := ringregistry.NewCredentials(t, big.NewInt(ringID))
 	for _, owner := range w.Enrolled {
-		Enroll(t, tracking, big.NewInt(owner), big.NewInt(owner+1))
+		Enroll(t, credentials, big.NewInt(owner), big.NewInt(owner+1))
 	}
-	FillPools(t, p, c.Outputs, c.Inputs, c.Senders, own, curator, tracking)
+	FillPools(t, p, c.Outputs, c.Inputs, c.Senders, own, curator, credentials)
 	payments := make([]frontend.Variable, 0, len(p.OwnerEntries))
 	for _, out := range c.Outputs {
 		payments = append(payments, out.OwnerPkHash)
@@ -134,7 +134,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	for o := range outputs {
 		outputs[o] = 0
 	}
-	FillTracking(t, &c.Tracking, tracking, c.Senders, outputs, p, payments)
+	FillCredentials(t, &c.Credentials, credentials, c.Senders, outputs, p, payments)
 	b.Rehash(t)
 	return b
 }

@@ -5,7 +5,11 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark/test"
+
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
@@ -79,4 +83,19 @@ func TestInputMapsBindAbsolutePositions(t *testing.T) {
 	claim := s.Claim()
 	claim.NoSpend = true
 	c.RefuseStatement(t, s.Circuit(t), s.StatementOf(t, s.Stream(t), claim))
+}
+
+func TestInputMapRefusesWitnessClassChangeWithSealedEvidence(t *testing.T) {
+	shape := audit.StreamShape{InputClass: 4, Outputs: 2}
+	s := ringaudit.NewSection(t, shape).Spending(t, 2)
+	s.Inputs[2] = s.Inputs[1]
+	s.Inputs[1] = addressInput()
+	s.InputCount = 3
+	assignment := s.Circuit(t)
+	circuit := ringaudit.NewSectionCircuit(shape)
+	if err := test.IsSolved(circuit, assignment, ecc.BN254.ScalarField()); err != nil {
+		t.Fatal(err)
+	}
+	assignment.Inputs[2].Domain = transaction.AddressDomain
+	ringtest.RequireRefused(t, test.IsSolved(circuit, assignment, ecc.BN254.ScalarField()), "ringaudit.(*SectionCircuit).Define")
 }

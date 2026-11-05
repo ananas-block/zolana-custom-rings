@@ -111,8 +111,8 @@ fn the_contract_counts_each_key() {
     for (key, envelope_blocks) in [
         (key(5, false), 3),
         (key(24, false), 3),
-        (key(2, true), 28),
-        (key(8, true), 103),
+        (key(2, true), 29),
+        (key(8, true), 104),
     ] {
         assert_eq!(key.envelope_blocks(), envelope_blocks, "{key:?}");
         assert_eq!(
@@ -212,7 +212,7 @@ fn a_compact_frame_keeps_every_counter_and_drops_the_suffix() {
     assert_eq!(compact.tails_len(), 2 * DATA_TAIL_LEN);
     assert_eq!(
         compact.message_len(),
-        33 + 33 + 2 * AUDIT_RECORD_LEN + 2 * DATA_TAIL_LEN
+        33 + 41 + 2 * AUDIT_RECORD_LEN + 2 * DATA_TAIL_LEN
     );
     for refused in [layout(0, false), layout(5, false)] {
         assert_eq!(refused.checked(), Err(CustomRingError::RingTransactLength));
@@ -233,7 +233,7 @@ fn a_clear_has_data_transmits_no_tail() {
     };
     assert_eq!(plain.tails_len(), 0);
     assert_eq!(plain.tail(0).len, 0);
-    assert_eq!(plain.message_len(), 33 + 33 + 2 * AUDIT_RECORD_LEN);
+    assert_eq!(plain.message_len(), 33 + 41 + 2 * AUDIT_RECORD_LEN);
     assert_eq!(plain.capacity_blocks(), 3 + 2 * 7);
 }
 
@@ -327,7 +327,7 @@ fn envelopes_read_back_at_their_layout_length() {
             },
             3,
             AuditEvidence::None,
-            33,
+            41,
         ),
         (
             AuditKey {
@@ -339,7 +339,7 @@ fn envelopes_read_back_at_their_layout_length() {
                 default_input_bits: 0b01,
                 inputs: vec![entry_input, EntryInput::default()],
             },
-            33 + 8 + 2 * ENTRY_INPUT_LEN,
+            49 + 2 * ENTRY_INPUT_LEN,
         ),
     ];
     for (key, inputs, evidence, len) in cases {
@@ -353,6 +353,7 @@ fn envelopes_read_back_at_their_layout_length() {
         let envelope = AuditEnvelope {
             tx_viewing_secret: [0x33; 32],
             real_inputs: 2,
+            address_input_bits: 0,
             evidence,
         };
         let encoded = envelope.encode();
@@ -387,7 +388,7 @@ fn the_auditor_message_cuts_by_the_layout() {
         has_data: true,
     };
     let (envelope, records, tails) = (
-        [1; 33],
+        [1; 41],
         [[2; AUDIT_RECORD_LEN], [3; AUDIT_RECORD_LEN]],
         [[4; DATA_TAIL_LEN], [5; DATA_TAIL_LEN]],
     );
@@ -522,7 +523,22 @@ fn the_solved_go_stream_reads_back_under_the_rust_layout() {
     );
     let vector: StreamVector =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(vector.cases.len(), 4);
+    assert_eq!(
+        vector
+            .cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "plain_with_exit_and_dummy",
+            "compact",
+            "data",
+            "entry",
+            "address_only",
+            "interleaved",
+            "interleaved_entry",
+        ]
+    );
     for case in &vector.cases {
         let layout = AuditStreamLayout {
             key: AuditKey {

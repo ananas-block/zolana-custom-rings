@@ -96,5 +96,13 @@
   "UnsupportedBufferedTag": 8525,
   "FramePayerNotWriter": 8526,
   "InvalidSignerDataCounts": 8527,
-  "TooManyAnonymousParties": 8528
+  "TooManyAnonymousParties": 8528,
+  "AbsenceRootBelowFloor": 8535,
+  "InvalidAddressCheckpoint": 8534,
+  "InvalidAddressTree": 8531,
+  "InvalidCredentialPda": 8529,
+  "InvalidCredentialRead": 8532,
+  "InvalidCredentialRoots": 8533,
+  "InvalidEnrollmentAccounts": 8530,
+  "SaltedSourceOtherRing": 8536
 }

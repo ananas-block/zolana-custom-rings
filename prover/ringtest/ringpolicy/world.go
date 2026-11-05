@@ -52,7 +52,7 @@ type World struct {
 	Records policy.RecordPoolShape
 	// SaltedKeys widens the pools as a key with no wider sibling does.
 	SaltedKeys int
-	// Enrolled owners hold a tracking row with their fixture salt.
+	// Enrolled owners hold a credential with their fixture salt.
 	Enrolled []int64
 	// List bits at each owner's salted key, enrolled or not.
 	Salted, CuratorSalted map[int64]uint64

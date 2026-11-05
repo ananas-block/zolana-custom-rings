@@ -1,7 +1,5 @@
 use super::*;
-use custom_ring_test_validator::{
-    policy::ApplyOwnerEnrollments, shared::STORAGE_CPI_OWNER_PROGRAM,
-};
+use custom_ring_test_validator::{policy::WaitForCredentials, shared::STORAGE_CPI_OWNER_PROGRAM};
 
 #[test]
 fn every_apply_capacity_settles_and_refuses_an_altered_root() -> Result<()> {
@@ -26,8 +24,7 @@ fn every_apply_capacity_settles_and_refuses_an_altered_root() -> Result<()> {
 }
 
 #[test]
-fn a_pda_enrolls_and_applies_its_key_on_the_validator() -> Result<()> {
-    use custom_ring_interface::STORAGE_PROGRAM_ID;
+fn a_pda_enrolls_its_immutable_credential_on_the_validator() -> Result<()> {
     use custom_ring_sdk::Enroll;
     use solana_instruction::AccountMeta;
     use spr_keypair::{NullifierKey, ViewingKey};
@@ -42,13 +39,14 @@ fn a_pda_enrolls_and_applies_its_key_on_the_validator() -> Result<()> {
     .send(&env.client)?;
     let owner = Address::find_program_address(&[b"owner"], &STORAGE_CPI_OWNER_PROGRAM).0;
     let viewing_key = ViewingKey::new();
-    let mut instruction = env.run(
+    let enrollment = env.run(
         Enroll {
             ring,
             payer: env.payer.pubkey(),
             owner,
             nullifier_key: &NullifierKey::from_secret([7; 31]),
-            viewing_key: &viewing_key,
+            viewing_pubkey: viewing_key.pubkey(),
+            output_tree: env.tree,
             list_salt: viewing_key.merge_seed(
                 ring.program_id().as_array(),
                 &zolana_ring_keys::LIST_SALT_LABEL,
@@ -56,22 +54,42 @@ fn a_pda_enrolls_and_applies_its_key_on_the_validator() -> Result<()> {
         }
         .prove(env.client.ring_client()),
     )?;
-    instruction.program_id = STORAGE_CPI_OWNER_PROGRAM;
-    instruction.accounts[1].is_signer = false;
-    instruction
-        .accounts
-        .push(AccountMeta::new_readonly(STORAGE_PROGRAM_ID, false));
-    send(env.client.rpc(), &env.payer, &[instruction])?;
-    let enrolled = owner_enrollment(&env, ring, owner)?.context("the PDA's enrollment")?;
-    ensure!(enrolled.viewing_u == viewing_key.pubkey().u() && enrolled.revision() == 1);
-    ApplyOwnerEnrollments {
+    let instructions = enrollment
+        .instruction
+        .instructions()?
+        .into_iter()
+        .map(|mut instruction| {
+            let target = instruction.program_id;
+            instruction.program_id = STORAGE_CPI_OWNER_PROGRAM;
+            for account in &mut instruction.accounts {
+                if account.pubkey == owner {
+                    account.is_signer = false;
+                }
+            }
+            instruction
+                .accounts
+                .push(AccountMeta::new_readonly(target, false));
+            instruction
+        })
+        .collect::<Vec<_>>();
+    send(env.client.rpc(), &env.payer, &instructions)?;
+    WaitForCredentials {
         ring,
         owners: &[owner],
         env: &env,
     }
-    .send()?;
-    let applied = owner_enrollment(&env, ring, owner)?.context("the PDA's enrollment")?;
-    ensure!(applied.applied_revision() == 1);
+    .wait()?;
+    let enrolled = owner_enrollment(&env, ring, owner)?.context("the PDA credential")?;
+    assert_eq!(enrolled, enrollment.credential);
+    let viewing = env
+        .client
+        .block_on(
+            zolana_ring_client::ViewingKeyResolver::new(owner)
+                .with_credential(enrolled.nullifier_pk)
+                .resolve(env.client.as_async()),
+        )?
+        .context("the PDA viewing key")?;
+    assert_eq!(viewing.viewing_pubkey, viewing_key.pubkey());
     Ok(())
 }
 
@@ -212,17 +230,32 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
     );
     for (index, (input, destination)) in inputs.into_iter().zip([recipient, &rotated]).enumerate() {
         if index == 1 {
-            EnrollOwners {
-                ring,
-                owners: &[&rotated],
-                env: &env,
+            let instruction = spr_user_registry_interface::instruction::update_keys(
+                spr_user_registry_interface::user_record_pda(&rotated.pubkey()).0,
+                rotated.pubkey(),
+                spr_user_registry_interface::instruction::UpdateKeysData {
+                    nullifier_pubkey: original_address.nullifier_pk,
+                    viewing_pubkey: *rotated.viewing_pubkey().as_bytes(),
+                },
+            );
+            SendAs {
+                rpc: env.client.rpc(),
+                payer: &env.payer,
+                holder: &rotated,
             }
-            .send()?;
+            .send(&[instruction])?;
             let updated = owner_enrollment(&env, ring, recipient.pubkey())?
-                .context("the rotated recipient enrollment")?;
-            assert_eq!(updated.viewing_u, rotated.viewing_pubkey().u());
-            assert_eq!(updated.nullifier_pk, original_address.nullifier_pk);
-            assert_eq!(updated.revision(), original_address.revision() + 1);
+                .context("the recipient credential after viewing rotation")?;
+            assert_eq!(updated, original_address);
+            let viewing = env
+                .client
+                .block_on(
+                    zolana_ring_client::ViewingKeyResolver::new(rotated.pubkey())
+                        .with_credential(updated.nullifier_pk)
+                        .resolve(env.client.as_async()),
+                )?
+                .context("the rotated viewing key")?;
+            assert_eq!(viewing.viewing_pubkey, rotated.viewing_pubkey());
             let history = wallet
                 .history()
                 .clone()

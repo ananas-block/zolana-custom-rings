@@ -1,14 +1,18 @@
 use std::collections::{BTreeMap, HashMap};
 
 use custom_ring_interface::{
+    storage::{RegistryId, StorageError, StorageRegistry},
+    storage_instruction::{AssetWrite, InitializeIxData},
     RecordWrite, FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
 };
+use solana_address::Address;
 use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{
     quad_node, AppliedTree, Canopy, IndexedRecord, MemberRecord, MemberRegistryTree, NodePosition,
-    OpeningCheck, QuadPath, RecordOpening, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
+    OpeningCheck, QuadPath, RecordCredentials, RecordOpening, RecordStatementContext,
+    RecordStatementError, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
 };
-use zolana_ring_policy::ListId;
+use zolana_ring_policy::{ListId, Member};
 
 fn member(byte: u8) -> [u8; 32] {
     right_align(&[byte])
@@ -434,4 +438,145 @@ fn mint_settings_survive_relinks_and_list_writes_and_clear_explicitly() {
             ..before
         }
     );
+}
+
+fn registry() -> StorageRegistry {
+    StorageRegistry::new(
+        Address::new_from_array([0x52; 32]),
+        &InitializeIxData {
+            registry_id: RegistryId::default(),
+            grace_slots: [0; 8],
+            ring_id: [0; 32],
+            private_ring_id: [0; 32],
+        },
+    )
+}
+
+#[test]
+fn public_statements_bind_empty_credentials_at_the_selected_key_width() {
+    let proof = MemberRegistryTree::new()
+        .unwrap()
+        .apply(
+            [0; 32],
+            &[
+                write(4, ALLOW, ALLOW),
+                write(5, BLOCK, BLOCK),
+                write(6, ALLOW, 0),
+            ],
+        )
+        .unwrap()
+        .proof;
+    let mut state = registry();
+    state.private_ring_id = member(9);
+    let statement = proof
+        .statement(RecordStatementContext {
+            registry: &state,
+            asset_writes: &[],
+            credentials: RecordCredentials::Public,
+        })
+        .unwrap();
+    assert_eq!(statement.count, 3);
+    assert_eq!(statement.credential_writes, 0);
+    assert_eq!(statement.private_ring_id, [0; 32]);
+    assert_eq!(statement.credentials.capacity(), 4);
+    assert!(statement
+        .credentials
+        .elements()
+        .all(|field| field == [0; 32]));
+}
+
+#[test]
+fn private_owner_writes_cannot_use_public_statement_context() {
+    for private in [ListId::PrivateAllow, ListId::PrivateBlock] {
+        for value in [0, private.record_bit()] {
+            let proof = MemberRegistryTree::new()
+                .unwrap()
+                .apply([0; 32], &[write(4, private.record_bit(), value)])
+                .unwrap()
+                .proof;
+            let state = registry();
+            assert!(matches!(
+                proof.statement(RecordStatementContext {
+                    registry: &state,
+                    asset_writes: &[],
+                    credentials: RecordCredentials::Public,
+                }),
+                Err(RecordStatementError::Storage(
+                    StorageError::InvalidCredentialRead
+                ))
+            ));
+        }
+    }
+}
+
+#[test]
+fn private_asset_exemption_requires_the_exact_mint_preimage() {
+    let mint = Address::new_from_array([0x31; 32]);
+    let private = ListId::PrivateBlock.record_bit();
+    let entry = RecordWrite {
+        member: *Member::asset(&mint).unwrap().as_bytes(),
+        ..write(4, private, private)
+    };
+    let proof = MemberRegistryTree::new()
+        .unwrap()
+        .apply([0; 32], &[entry])
+        .unwrap()
+        .proof;
+    let state = registry();
+    let statement = proof
+        .statement(RecordStatementContext {
+            registry: &state,
+            asset_writes: &[AssetWrite {
+                write_index: 0,
+                mint,
+            }],
+            credentials: RecordCredentials::Public,
+        })
+        .unwrap();
+    assert_eq!(statement.credential_writes, 0);
+    assert!(statement
+        .credentials
+        .elements()
+        .all(|field| field == [0; 32]));
+    for claimed_mint in [
+        Address::new_from_array([0x32; 32]),
+        Address::new_from_array([0x33; 32]),
+    ] {
+        assert!(matches!(
+            proof.statement(RecordStatementContext {
+                registry: &state,
+                asset_writes: &[AssetWrite {
+                    write_index: 0,
+                    mint: claimed_mint
+                }],
+                credentials: RecordCredentials::Public,
+            }),
+            Err(RecordStatementError::Storage(
+                StorageError::InvalidAssetWrite
+            ))
+        ));
+    }
+}
+
+#[test]
+fn statements_refuse_a_different_registry_root_or_allocation_cursor() {
+    let proof = MemberRegistryTree::new()
+        .unwrap()
+        .apply([0; 32], &[write(4, ALLOW, ALLOW)])
+        .unwrap()
+        .proof;
+    let mut wrong_root = registry();
+    wrong_root.roots[0].hash = proof.new_root;
+    let mut wrong_index = registry();
+    wrong_index.next_index = 2u32.to_le_bytes();
+    for state in [wrong_root, wrong_index] {
+        assert!(matches!(
+            proof.statement(RecordStatementContext {
+                registry: &state,
+                asset_writes: &[],
+                credentials: RecordCredentials::Public,
+            }),
+            Err(RecordStatementError::RegistryStateMismatch)
+        ));
+    }
 }

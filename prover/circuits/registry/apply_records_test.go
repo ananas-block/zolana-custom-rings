@@ -33,6 +33,11 @@ func entry(member, mask, value int64) ringregistry.Entry {
 func applyBatch(t *testing.T, members *ringregistry.Registry, n int, chainStart *big.Int, entries ...ringregistry.Entry) *batch {
 	t.Helper()
 	c := applyCircuit(t, n)
+	c.CredentialWrites, c.PrivateRingID, c.CredentialOwner, c.AddressRoot = 0, 0, 0, 0
+	for i := range c.StateRoots {
+		c.StateRoots[i] = [2]frontend.Variable{0, 0}
+		c.Credentials[i] = ringregistry.ZeroCredentialWrite()
+	}
 	c.OldRoot, c.OldNextIndex, c.ChainStart, c.Count = members.Root(), new(big.Int).SetUint64(members.NextIndex()), chainStart, len(entries)
 	b := &batch{circuit: c, chain: []*big.Int{chainStart}}
 	for i := range c.Writes {
@@ -54,8 +59,11 @@ func (b *batch) bind(t *testing.T) {
 	t.Helper()
 	c := b.circuit
 	statement := []*big.Int{big.NewInt(shared.ApplyRecordsDomain)}
-	for _, v := range []frontend.Variable{c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count} {
+	for _, v := range []frontend.Variable{c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count, c.CredentialWrites, c.PrivateRingID, c.CredentialOwner, c.AddressRoot} {
 		statement = append(statement, ringtest.AsBigInt(v))
+	}
+	for _, root := range c.StateRoots {
+		statement = append(statement, ringtest.AsBigInt(root[0]), ringtest.AsBigInt(root[1]))
 	}
 	c.PublicInputHash = spptest.MustHashChain4(t, statement)
 }

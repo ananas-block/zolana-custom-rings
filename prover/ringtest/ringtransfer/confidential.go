@@ -63,7 +63,7 @@ func (w Confidential) Build(t testing.TB) Built {
 	return b
 }
 
-// Refill reopens the policy and tracking pools after a test edits the rows.
+// Refill reopens the policy and credential pools after a test edits the rows.
 func (b Built) Refill(t testing.TB) {
 	t.Helper()
 	b.World.World.reopen(t, &b.Circuit.Sections, b.Assembled)

@@ -6,7 +6,7 @@
 // allow lists, block lists, guards and caps would hold nothing on a private transfer.
 //
 // Read after transfer/transfer.go, shared/utxo.go, registry/registry.go, policy/record_pool.go,
-// policy/tracking.go, transfer/owners.go. Read before, in call order, policy/screen.go,
+// policy/credentials.go, transfer/owners.go. Read before, in call order, policy/screen.go,
 // policy/withdrawals.go, policy/table.go, policy/subjects.go, policy/rules.go, policy/comparator.go,
 // policy/outflow.go, policy/deposit.go.
 //
@@ -14,8 +14,8 @@
 //  1. While Screened, the rules are the table the program hashed at policy_hash.
 //  2. Every live sender, payment owner, payment asset and input asset reads its list bits from a record
 //     the policy root of its source holds, present or proven absent by its predecessor.
-//  3. An enrolled owner reads a private list at the one salted key its tracking row fixes, only an owner
-//     proven absent under the tracking root skips the read.
+//  3. An enrolled owner reads a private list at the one salted key its permanent credential fixes, only an owner
+//     with proven address absence at the accepted checkpoint skips the read.
 //  4. Every sender rule holds over every live row, every owner rule over every live payment's nonzero
 //     owner and every asset rule over every live payment unless its guard exempts the total, and every
 //     unconditional asset rule over every live input's asset.
@@ -25,7 +25,7 @@
 //  7. The authority rail clears Screened and Outflow, no rule binds on it. The merge circuit reads no policy.
 //
 // The properties rely on what the package cannot see. The program validates the table at write time,
-// reads each root live, refuses a tracking root below a salted source's floor, folds the gross and reads
+// reads each root live, refuses an address root below a salted source's floor, folds the gross and reads
 // the legs. Package transfer ties the slots to SPP and gives every live input owner a row.
 package policy
 

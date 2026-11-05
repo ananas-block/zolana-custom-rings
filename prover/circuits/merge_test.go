@@ -107,45 +107,45 @@ func TestMergeRefusesAnAmountAboveItsBytes(t *testing.T) {
 	ringtest.RequireRefused(t, solved(t, s), "[ToBinary]", "audit.OpeningRecord.Encode")
 }
 
-func TestMergeTrackingRow(t *testing.T) {
+func TestMergeCredential(t *testing.T) {
 	tests := []struct {
 		name   string
 		tamper func(*testing.T, *ringmerge.Statement)
 	}{
 		{"another root", func(t *testing.T, s *ringmerge.Statement) {
-			s.Circuit.TrackingRoot = big.NewInt(1)
+			s.Circuit.StateRoot[1] = big.NewInt(1)
 			s.Rebind(t)
 		}},
 		{"another row field", func(_ *testing.T, s *ringmerge.Statement) {
-			s.Circuit.Tracking.Record.CtHash = big.NewInt(1)
+			s.Circuit.Credential.CtHash = big.NewInt(1)
 		}},
 		{"another path", func(_ *testing.T, s *ringmerge.Statement) {
-			s.Circuit.Tracking.Path.Index = 2
+			s.Circuit.Credential.StateIndex = 2
 		}},
 		{"another member's row", func(t *testing.T, s *ringmerge.Statement) {
 			other := big.NewInt(0x77)
-			s.Tracking.Apply(t, s.TrackingEntry(other, s.NullifierPk))
-			s.Circuit.Tracking = s.Tracking.Opening(other).Wires()
-			s.Circuit.TrackingRoot = s.Tracking.Root()
+			s.Credentials.Insert(t, s.CredentialEntry(other, s.NullifierPk))
+			s.Circuit.Credential = s.Credentials.Opening(t, other).Leaf
+			s.Circuit.StateRoot = s.Credentials.StateRoots(1)[0]
 			s.Rebind(t)
 		}},
 		{"a row under another key", func(t *testing.T, s *ringmerge.Statement) {
-			s.Tracking = ringregistry.NewTracking(t)
-			s.Tracking.Apply(t, s.TrackingEntry(s.OwnerPkHash, big.NewInt(5)))
-			s.Circuit.Tracking = s.Tracking.Opening(s.OwnerPkHash).Wires()
-			s.Circuit.TrackingRoot = s.Tracking.Root()
+			s.Credentials = ringregistry.NewCredentials(t, ringmerge.RingProgramID)
+			s.Credentials.Insert(t, s.CredentialEntry(s.OwnerPkHash, big.NewInt(5)))
+			s.Circuit.Credential = s.Credentials.Opening(t, s.OwnerPkHash).Leaf
+			s.Circuit.StateRoot = s.Credentials.StateRoots(1)[0]
 			s.Rebind(t)
 		}},
 		{"an absent row", func(t *testing.T, s *ringmerge.Statement) {
-			s.Tracking = ringregistry.NewTracking(t)
-			s.Tracking.Apply(t, s.TrackingEntry(big.NewInt(0x77), s.NullifierPk))
-			s.Circuit.Tracking = s.Tracking.Opening(s.OwnerPkHash).Wires()
-			s.Circuit.TrackingRoot = s.Tracking.Root()
+			s.Credentials = ringregistry.NewCredentials(t, ringmerge.RingProgramID)
+			s.Credentials.Insert(t, s.CredentialEntry(big.NewInt(0x77), s.NullifierPk))
+			s.Circuit.Credential = s.Credentials.Opening(t, s.OwnerPkHash).Leaf
+			s.Circuit.StateRoot = s.Credentials.StateRoots(1)[0]
 			s.Rebind(t)
 		}},
 		{"no row at all", func(t *testing.T, s *ringmerge.Statement) {
-			s.Circuit.Tracking = ringmerge.UnreadTracking()
-			s.Circuit.TrackingRoot = 0
+			s.Circuit.Credential = ringregistry.ZeroCredentialLeaf()
+			s.Circuit.StateRoot = [2]frontend.Variable{0, 0}
 			s.Rebind(t)
 		}},
 	}
@@ -199,8 +199,8 @@ func TestMergeModes(t *testing.T) {
 // An enrolled wallet's old zero key note stays mergeable, no row can bar it.
 func TestMergeZeroKeyIgnoresEveryRow(t *testing.T) {
 	s := ringmerge.BuildZeroKey(t)
-	s.Circuit.TrackingRoot = big.NewInt(0x99)
-	s.Rebind(t)
+	s.Credentials = ringregistry.NewCredentials(t, ringmerge.RingProgramID)
+	s.Credentials.Insert(t, s.CredentialEntry(s.OwnerPkHash, spptest.MustNullifierPk(t, big.NewInt(0x77))))
 	if err := solved(t, s); err != nil {
 		t.Fatal(err)
 	}

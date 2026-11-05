@@ -10,7 +10,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
@@ -50,9 +49,9 @@ type Statement struct {
 	Amount         *big.Int
 	OutputHash     *big.Int
 	OutputBlinding *big.Int
-	// Tracking holds the owner's row, nil under a zero key.
-	Tracking *ringregistry.Tracking
-	Record   []byte
+	// Credentials holds the owner's row, nil under a zero key.
+	Credentials *ringregistry.Credentials
+	Record      []byte
 	// PublishedOwner is what the program reads from the SPP body.
 	PublishedOwner *big.Int
 }
@@ -61,18 +60,16 @@ type Statement struct {
 func Build(t testing.TB) *Statement {
 	t.Helper()
 	s := build(t, big.NewInt(secret), spptest.MustNullifierPk(t, big.NewInt(secret)))
-	s.Tracking = ringregistry.NewTracking(t)
-	s.Tracking.Apply(t, s.TrackingEntry(s.OwnerPkHash, s.NullifierPk))
-	s.Circuit.Tracking = s.Tracking.Opening(s.OwnerPkHash).Wires()
-	s.Circuit.TrackingRoot = s.Tracking.Root()
+	s.Credentials = ringregistry.NewCredentials(t, RingProgramID)
+	s.Credentials.Insert(t, s.CredentialEntry(s.OwnerPkHash, s.NullifierPk))
+	s.Circuit.Credential = s.Credentials.Opening(t, s.OwnerPkHash).Leaf
+	s.Circuit.CredentialOwner, s.Circuit.StateRoot = s.Credentials.Owner, s.Credentials.StateRoots(1)[0]
 	s.Rebind(t)
 	return s
 }
 
-// TrackingEntry enrolls member under nullifierPk.
-func (s *Statement) TrackingEntry(member, nullifierPk *big.Int) ringregistry.TrackingEntry {
-	view0, view1 := ringregistry.PackedView(big.NewInt(0xa1a2))
-	return ringregistry.TrackingEntry{Member: member, NullifierPk: nullifierPk, CtHash: big.NewInt(0xc7), View0: view0, View1: view1, Revision: big.NewInt(1), ListTag: big.NewInt(0xb7)}
+func (s *Statement) CredentialEntry(member, nullifierPk *big.Int) ringregistry.CredentialEntry {
+	return ringregistry.CredentialEntry{Member: member, NullifierPk: nullifierPk, CtHash: big.NewInt(0xc7), ListTag: big.NewInt(0xb7)}
 }
 
 // BuildZeroKey merges under ZeroNullifierPk with a private seed, the owner is published and no row is read.
@@ -80,19 +77,10 @@ func BuildZeroKey(t testing.TB) *Statement {
 	t.Helper()
 	s := build(t, big.NewInt(zeroKeySeed), new(big.Int).Set(shared.ZeroNullifierPk))
 	s.PublishedOwner = s.OwnerPkHash
-	s.Circuit.TrackingRoot = 0
-	s.Circuit.Tracking = UnreadTracking()
+	s.Circuit.CredentialOwner, s.Circuit.StateRoot = 0, [2]frontend.Variable{0, 0}
+	s.Circuit.Credential = ringregistry.ZeroCredentialLeaf()
 	s.Rebind(t)
 	return s
-}
-
-// UnreadTracking is the all zero opening a zero key carries.
-func UnreadTracking() registry.TrackingOpening {
-	zero := big.NewInt(0)
-	return ringregistry.TrackingOpening{
-		Record: ringregistry.TrackingRecord{Member: zero, Next: zero, NullifierPk: zero, CtHash: zero, View0: zero, View1: zero, Revision: zero, ListTag: zero},
-		Path:   ringregistry.ZeroTrackingWrite().Slot,
-	}.Wires()
 }
 
 func build(t testing.TB, seed, nullifierPk *big.Int) *Statement {
@@ -154,7 +142,7 @@ func (s *Statement) Elements(t testing.TB) []*big.Int {
 	return []*big.Int{
 		big.NewInt(shared.MergeStatementDomain), ringtest.AsBigInt(s.Circuit.OutputUtxoHash), ringtest.AsBigInt(s.Circuit.FirstNullifier), ringtest.AsBigInt(s.Circuit.RingProgramID),
 		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash,
-		ringtest.AsBigInt(s.Circuit.Payer), s.PublishedOwner, ringtest.AsBigInt(s.Circuit.TrackingRoot),
+		ringtest.AsBigInt(s.Circuit.Payer), s.PublishedOwner, ringtest.AsBigInt(s.Circuit.CredentialOwner), ringtest.AsBigInt(s.Circuit.StateRoot[0]), ringtest.AsBigInt(s.Circuit.StateRoot[1]),
 	}
 }
 

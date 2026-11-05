@@ -29,10 +29,19 @@ func extensionOf(t testing.TB, circuit common.CircuitType) common.ExtensionCircu
 // requestOf is the inverse of assign, the request a client sends for assignment.
 func requestOf[P any](t testing.TB, circuit common.CircuitType, assignment frontend.Circuit) *P {
 	t.Helper()
+	params := requestValue[P](t, assignment)
+	reflect.ValueOf(params).Elem().FieldByName("CircuitType").SetString(string(circuit))
+	return params
+}
+
+func requestValue[P any](t testing.TB, source any) *P {
+	t.Helper()
 	params := new(P)
-	dst := reflect.ValueOf(params).Elem()
-	dst.FieldByName("CircuitType").SetString(string(circuit))
-	if err := errors.Join(unfill(dst, reflect.ValueOf(assignment).Elem(), "")...); err != nil {
+	value := reflect.ValueOf(source)
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	if err := errors.Join(unfill(reflect.ValueOf(params).Elem(), value, "")...); err != nil {
 		t.Fatal(err)
 	}
 	return params
@@ -55,10 +64,19 @@ func unfill(dst, src reflect.Value, path string) []error {
 		dst.Set(reflect.New(dst.Type().Elem()))
 		return unfill(dst.Elem(), src, path)
 	}
+	if dst.Type() == reflect.TypeOf(CredentialStateRoot{}) {
+		return append(unfill(dst.FieldByName("TreeID"), src.Index(0), path+".TreeID"), unfill(dst.FieldByName("Root"), src.Index(1), path+".Root")...)
+	}
 	if v, ok := interfaceOf(dst).(viewed); ok {
 		view := reflect.New(reflect.TypeOf(v.view())).Elem()
 		errs := unfill(view, src, path)
-		dst.Set(reflect.ValueOf(view.Interface().(unviewed).request()))
+		if request, ok := view.Interface().(unviewed); ok {
+			dst.Set(reflect.ValueOf(request.request()))
+		} else if view.Type().ConvertibleTo(dst.Type()) {
+			dst.Set(view.Convert(dst.Type()))
+		} else {
+			errs = append(errs, fmt.Errorf("cannot restore request at %s", path))
+		}
 		return errs
 	}
 	if src.Kind() == reflect.Interface {
@@ -123,11 +141,17 @@ func (v quadPath) flat() []Field {
 	return flat
 }
 
-func (v enrollmentView) request() any {
-	e := v.Entry
-	return TrackingWrite{
-		Member: e.Member, NullifierPk: e.NullifierPk, CtHash: e.CtHash, View0: e.View0, View1: e.View1, Revision: e.Revision, ListTag: e.ListTag,
-		Exists: v.Exists, OldRecord: v.Old, Index: v.Slot.Index, Path: v.Slot.flat(), LowRecord: v.Low, LowIndex: v.LowSlot.Index, LowPath: v.LowSlot.flat(),
+func (v credentialOpeningView) request() any {
+	return CredentialOpeningParams{
+		Present: v.Present, CredentialLeafParams: v.Leaf,
+		LowValue: v.Gap.Low, LowNext: v.Gap.Next, LowIndex: v.Gap.Index, LowPath: v.Gap.Path,
+	}
+}
+
+func (v credentialWriteView) request() any {
+	return CredentialWriteParams{
+		Member: v.Member, ListSalt: v.ListSalt, Leaf: v.Leaf,
+		AddressNext: v.Address.Next, AddressIndex: v.Address.Index, AddressPath: v.Address.Path,
 	}
 }
 
