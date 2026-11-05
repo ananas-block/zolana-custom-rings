@@ -646,6 +646,16 @@ export {
   type NoteState,
 } from "../state/exposed-notes.js";
 export {
+  resolveCredential,
+  type AddressGap,
+  type CredentialClient,
+  type CredentialLeaf,
+  type CredentialLookup,
+  type ResolvedCredential,
+  type UnknownCredential,
+} from "../rpc/credential-resolver.js";
+export type { AddressCheckpoint, AuditCredential } from "../protocol/membership/credential.js";
+export {
   fetchTrackingRegistry,
   newestTrackingRoot,
   resolveRingRecipient,
