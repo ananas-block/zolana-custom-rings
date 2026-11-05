@@ -39,6 +39,7 @@ Breaking
 - `syncRingWallet` takes a `RingWallet` holding the wallet beside its notes of unregistered mints, and `openRingNotes` returns those notes in `pendingOpenings` in place of a `pending` count → wrap each wallet with `RingWallet.create(wallet)`, store it with `RingWallet.toJson()` and read waiting notes through `RingWallet.pendingOpenings()`.
 - `MergeLedger`, its `ConfirmedMerge`, `MergeInput`, `KnownMergeInput`, `MergeTransition` and `AuditedMergeOutput` types, `recoverMergeOpening`, `MergeAuditorOpening`, `KnownUtxos.merged` and the `merged` kind of `InputOpening` are gone, a ring merge record opens its output in full → read a merge output from `KnownUtxoIndex.utxo` by its commitment.
 - `openAuditorRegions`, the `EscrowedKeys` type and the error code `RING_ANONYMOUS_RECIPIENT_CURVE` are gone, `openAuditorRegions` opened an unsalted schedule no transfer stream uses → open an auditor stream with `openRingDisclosure` and drop handling of that code.
+- The auditor envelope carries `AuditEnvelope.addressInputBits` after `R`, its head grows by eight bytes and every record and tail counter moves with it, `R` counts notes alone, `TransferProofRequest` sends `inputNullifierChain` and `inputNullifiers` in place of `addressChain`, the transfer statement binds `inputNullifierChain` after `inputCount`, `DecryptedRingInput.real` is `class`, and an audited address input reads the `address` kind of `InputOpening` → deploy this release's ring program, prover, keys and Ring RPC together and handle the `address` kind.
 
 Added
 
@@ -47,6 +48,7 @@ Added
 - `BufferedFrame` and `withBufferedSettlement` settle a frame past one transaction from a buffer its payer writes, `closeAbandonedFrameBuffers` returns the rent of an abandoned buffer, and `TransactionFit` and `decideAddressCeiling` report and refuse a transaction before any proof.
 - `CoSignerApproval` with `CoSignerRule` and `ApprovalOpening` lets an outside co-signer read the proven bits or exact totals under `withExactApproval`, `OwnerApproval` with `RelayTransferTerms` lets a public owner check its own slots, and `FunderApproval` with `RelayFunderTerms` lets a public funder check its deposit legs.
 - `RingRpc.getWalletStatus`, `RingRpc.getWalletActivity` and `RingRpc.getSpendCoverage` read a wallet's notes, its history and a ring's unresolved spends, and `ringFullScan` and `RingAuditPage.skipped` read a whole ring with no tag read and list each row that does not open.
+- `InputMap`, `InputClass`, `envelopeInputMap`, `ADDRESS_INPUT_BITS_LEN`, `ENVELOPE_HEAD_LEN` and `MAX_INPUT_CLASS` from `@heliuslabs/zolana-custom-rings/advanced` classify each published input as a note, an address or a dummy and refuse a map SPP would not publish.
 - `RingMergeSettingsRequest` signs an owner's merge settings for a mint and `RingRpc.setMergeSettings` sends them, a zero `targetNoteCount` stops Ring RPC merging that mint, and `RingRpcRefusal.sourceNote` names `-32227`, a recovered delegate note its source does not own.
 
 Fixed

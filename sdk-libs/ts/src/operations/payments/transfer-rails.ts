@@ -496,7 +496,7 @@ function checkRingNotes(proofInputs: SppProofInputs): void {
   if (index >= 0) throw new RingError("RING_IN_PROOF_DEFAULT_RING_INPUT", { details: { index } });
 }
 
-/** `R` is zero, the transfer takes public funds alone. */
+/** Padding alone, an address input still needs its owner to sign. */
 function spendsNothing(proofInputs: SppProofInputs): boolean {
   return proofInputs.inputUtxos.every((spent) => spent.isDummy() || spent.isCompact());
 }

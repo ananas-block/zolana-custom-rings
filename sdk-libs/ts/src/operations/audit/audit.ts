@@ -31,9 +31,11 @@ import {
   decodeAuditRecord,
   decodeDataTail,
   EMPTY_TAIL,
-  isEmptyEntryInput,
+  envelopeInputMap,
+  InputClass,
   RecordKind,
   type AuditEnvelope,
+  type InputMap,
   type DataTail,
   type EntryInput,
 } from "../../protocol/codec/audit-stream.js";
@@ -136,8 +138,10 @@ export interface AuditedInputOpening {
 
 /** Rust `InputOpening`. */
 export type InputOpening =
-  /** A position at or past `R`. */
+  /** Past the notes and addresses. */
   | Readonly<{ kind: "dummy" }>
+  /** SPP's address slot, neither a spent note nor evidence of an owner. */
+  | Readonly<{ kind: "address" }>
   | (Readonly<{ kind: "opened" }> & AuditedInputOpening)
   /** The evidence names a note the auditor lacks, the outputs still open. */
   | Readonly<{ kind: "unseenHash"; hash: Bytes32 }>
@@ -316,7 +320,7 @@ export interface TransactionAuditInput {
 
 export interface OpenedRingAudit {
   readonly audited: AuditedRingTransaction;
-  /** `R`, a position at or past it is padding. */
+  /** `R`, the spent notes, addresses excluded. */
   readonly realInputs: number;
 }
 
@@ -363,9 +367,10 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
   let txKey: ViewingKey | undefined;
   let blindingSeed: Bytes32 | undefined;
   try {
-    envelope = decodeAuditEnvelope(envelopePlain, layout);
+    envelope = decodedEnvelope(envelopePlain, layout);
     const { realInputs } = envelope;
-    checkEnvelope(envelope, layout.inputs, input.noSpend);
+    checkEnvelope(envelope, input.noSpend);
+    const inputMap = envelopeInputMap(envelope, layout);
     txKey = canonicalViewingKey(envelope.txViewingSecret.slice() as Bytes32);
     // The proof binds the envelope to the published key, a mismatch is a forged message.
     if (!txKey.publicKey().equals(txViewingPublicKey))
@@ -403,6 +408,7 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
       readInput({
         nullifier,
         position,
+        inputMap,
         envelope: envelope as AuditEnvelope,
         treeId: input.inputTreeIds?.[position],
         known: input.knownUtxos,
@@ -611,6 +617,15 @@ export function auditConfirmedRingHistory(
   );
 }
 
+/** A count off the input map, a default bit off a note or an opening off a default bit. */
+function decodedEnvelope(plaintext: Uint8Array, layout: AuditStreamLayout): AuditEnvelope {
+  try {
+    return decodeAuditEnvelope(plaintext, layout);
+  } catch (cause) {
+    throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "envelope" }, cause });
+  }
+}
+
 function parsedMessage(data: Uint8Array, layout: AuditStreamLayout): AuditorMessage {
   try {
     return parseAuditorMessage(data, layout);
@@ -622,13 +637,9 @@ function parsedMessage(data: Uint8Array, layout: AuditStreamLayout): AuditorMess
   }
 }
 
-/** `R` and the default bits refused off the frame. */
-function checkEnvelope(envelope: AuditEnvelope, inputs: number, noSpend: boolean): void {
-  const { realInputs, evidence } = envelope;
-  if (realInputs > inputs) throw auditRefusal("real input count");
-  if (noSpend !== (realInputs === 0)) throw auditRefusal("no spend");
-  if (evidence.kind === "entry" && evidence.defaultInputBits >> BigInt(realInputs) !== 0n)
-    throw auditRefusal("default input bits");
+/** The statement's `no_spend` bit reads `R == 0`, the decoder refused every other count. */
+function checkEnvelope(envelope: AuditEnvelope, noSpend: boolean): void {
+  if (noSpend !== (envelope.realInputs === 0)) throw auditRefusal("no spend");
 }
 
 function auditRefusal(reason: string): RingError {
@@ -716,25 +727,27 @@ function readSlotFields(
   }
 }
 
-/** `Observed`, a position at or past `R` is padding and a default bit reads `External`. */
+/** `Observed`, the class from the envelope's input map, a default bit on a note reads `External`. */
 function readInput(
   input: Readonly<{
     nullifier: Bytes32;
     position: number;
+    inputMap: InputMap;
     envelope: AuditEnvelope;
     treeId: number | undefined;
     known: KnownUtxos | undefined;
   }>,
 ): AuditedInput {
   const { nullifier, position, envelope, treeId, known } = input;
-  const { evidence, realInputs } = envelope;
-  const entry = evidence.kind === "entry" ? evidence.inputs[position] : undefined;
-  const isDefault =
-    evidence.kind === "entry" && ((evidence.defaultInputBits >> BigInt(position)) & 1n) === 1n;
-  if (entry !== undefined && !isDefault && !isEmptyEntryInput(entry))
-    throw auditRefusal("entry evidence");
-  if (position >= realInputs) return Object.freeze({ nullifier, opening: DUMMY_INPUT });
-  if (isDefault) {
+  const inputClass = input.inputMap.slot(position);
+  if (inputClass === undefined) throw auditRefusal("layout");
+  // The decoder held default bits and openings to notes, a dummy or an address opens nothing.
+  if (inputClass === InputClass.dummy) return Object.freeze({ nullifier, opening: DUMMY_INPUT });
+  if (inputClass === InputClass.address)
+    return Object.freeze({ nullifier, opening: ADDRESS_INPUT });
+  const { evidence } = envelope;
+  if (evidence.kind === "entry" && ((evidence.defaultInputBits >> BigInt(position)) & 1n) === 1n) {
+    const entry = evidence.inputs[position];
     if (entry === undefined) throw auditRefusal("entry evidence");
     return defaultInput({ nullifier, entry, treeId, known });
   }
@@ -854,6 +867,7 @@ function ringInput(commitment: Bytes32, utxo: KnownUtxo): InputOpening {
 }
 
 const DUMMY_INPUT: InputOpening = Object.freeze({ kind: "dummy" });
+const ADDRESS_INPUT: InputOpening = Object.freeze({ kind: "address" });
 const DUMMY: OutputOpening = Object.freeze({ kind: "dummy" });
 const UNRESOLVED_REAL: InputOpening = Object.freeze({ kind: "unresolvedReal" });
 const EMPTY = new Uint8Array();
