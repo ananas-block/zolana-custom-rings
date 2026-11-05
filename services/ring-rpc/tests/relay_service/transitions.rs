@@ -48,6 +48,7 @@ struct WorkerChain {
     height: Option<u64>,
     /// Every send reports success and forwards nothing.
     lost_sends: bool,
+    send_gate: Gate,
     height_gate: Gate,
     outcome_gate: Gate,
 }
@@ -58,6 +59,7 @@ impl WorkerChain {
             chain: fixture.chain.clone(),
             height: None,
             lost_sends: false,
+            send_gate: Gate::default(),
             height_gate: Gate::default(),
             outcome_gate: Gate::default(),
         }
@@ -98,6 +100,7 @@ impl ChainSubmit for WorkerChain {
     }
 
     async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
+        self.send_gate.pass().await;
         match self.lost_sends {
             true => Ok(()),
             false => self.chain.send(transaction).await,
@@ -346,6 +349,57 @@ async fn a_restarted_service_resends_the_stored_attempt() {
     let [sent] = fixture.sent().try_into().expect("one sent transaction");
     assert_eq!(signature, sent.signatures[0].into());
     assert_eq!(status(&after, &relay_id).await, confirmed(&sent));
+}
+
+#[tokio::test]
+async fn a_refused_first_send_keeps_a_pending_tracker_copy_open() {
+    let fixture = Fixture::new().await;
+    *fixture.chain.outcome.lock().expect("outcome") = Some(None);
+    let co_signer = RecordingCoSigner::new();
+    let first_chain = Arc::new(WorkerChain::of(&fixture));
+    let first = Worker {
+        chain: first_chain.clone(),
+        co_signer: Some(co_signer.clone()),
+        budget: 0,
+    }
+    .start(&fixture);
+    let tracker = Worker {
+        chain: Arc::new(WorkerChain::of(&fixture)),
+        co_signer: Some(co_signer.clone()),
+        budget: 0,
+    }
+    .start(&fixture);
+    let submit = signed_deposit(&fixture, &first).await;
+    let relay_id = submit.relay_id.clone();
+    first_chain.send_gate.arm();
+    let parked = tokio::spawn(async move { first.submit(&submit).await });
+    first_chain.send_gate.parked().await;
+
+    tokio::time::timeout(PROGRESS, tracker.track())
+        .await
+        .expect("the tracker can send the stored transaction")
+        .expect("tracking pass");
+    let [sent] = fixture.sent().try_into().expect("one tracker copy");
+    fixture.chain.refuse_next.store(true, Ordering::Relaxed);
+    first_chain.send_gate.release();
+    let pending = parked.await.expect("joined").expect("submission");
+    assert_eq!(
+        pending,
+        RelayStatus::Sent {
+            signature: sent.signatures[0].into(),
+        }
+    );
+    assert_eq!(stored_status(&fixture, &relay_id).await, "sent");
+    assert!(co_signer.settled().is_empty());
+
+    *fixture.chain.outcome.lock().expect("outcome") = None;
+    assert_eq!(status(&tracker, &relay_id).await, confirmed(&sent));
+    assert_eq!(status(&tracker, &relay_id).await, confirmed(&sent));
+    let co_signature = co_signer.keypair.sign_message(&sent.message.serialize());
+    assert_eq!(
+        co_signer.settled(),
+        [CoSignSettlement::Confirmed(co_signature)]
+    );
 }
 
 /// A relay whose chain read stalls holds nothing another relay needs.

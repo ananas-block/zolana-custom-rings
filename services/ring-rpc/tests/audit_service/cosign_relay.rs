@@ -592,21 +592,25 @@ async fn a_stored_relay_whose_update_reply_was_lost_keeps_its_reservation() {
 }
 
 #[tokio::test]
-async fn a_refused_send_whose_final_write_failed_keeps_its_reservation_through_a_resend() {
+async fn a_refused_send_keeps_its_reservation_through_a_resend() {
     let relay = CappedRelay::new(|| RelayRail::Confidential).await;
     let refused = relay.spending_cap(1);
     let relay_id = refused.relay_id().expect("relay id");
     relay.chain.refuse_next.store(true, Ordering::Relaxed);
-    relay.fault(StoreFault::UpdateRefused).await;
-    let interrupted = relay
+    relay
         .module
         .call::<_, RelayStep>(PREPARE_RELAY, as_object(&refused))
+        .await
+        .expect("pending relay");
+    let pending = relay.status(relay_id.clone()).await;
+    assert!(matches!(pending, RelayStatus::Sent { .. }), "{pending:?}");
+    let beyond = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
         .await;
-    assert!(interrupted.is_err());
-    relay.heal().await;
+    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
 
     // The record still reads `Sent`, the tracker resends it and the resend lands.
-    // A whole pass, a tracker cut inside a store write would close the in-memory store.
     relay
         .hub
         .relay()
@@ -639,7 +643,7 @@ async fn a_refused_send_whose_final_write_failed_keeps_its_reservation_through_a
 }
 
 #[tokio::test]
-async fn a_refused_send_stores_failed_and_frees_its_reservation() {
+async fn a_refused_send_frees_its_reservation_only_after_finalized_expiry() {
     let relay = CappedRelay::new(|| RelayRail::Confidential).await;
     relay.chain.refuse_next.store(true, Ordering::Relaxed);
     let refused = relay.spending_cap(1);
@@ -648,9 +652,21 @@ async fn a_refused_send_stores_failed_and_frees_its_reservation() {
         .module
         .call::<_, RelayStep>(PREPARE_RELAY, as_object(&refused))
         .await
-        .expect("the relay records the refusal");
+        .expect("pending relay");
+    let pending = relay.status(relay_id.clone()).await;
+    assert!(matches!(pending, RelayStatus::Sent { .. }), "{pending:?}");
+    let beyond = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
+        .await;
+    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
+    relay
+        .chain
+        .height
+        .store(LAST_VALID_BLOCK_HEIGHT + 1, Ordering::Relaxed);
     let status = relay.status(relay_id).await;
     assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
+    relay.chain.height.store(400, Ordering::Relaxed);
     relay.second_cap_fits().await;
 }
 
@@ -810,13 +826,25 @@ async fn a_derived_relay_refuses_a_ring_whose_auditor_key_it_does_not_hold() {
 #[tokio::test]
 async fn a_failed_reservation_release_is_retried_by_status() {
     let relay = CappedRelay::new(|| RelayRail::Confidential).await;
-    relay.chain.refuse_next.store(true, Ordering::Relaxed);
-    let refused = relay.spending_cap(1);
-    let relay_id = refused.relay_id().expect("relay id");
+    let failed = relay.spending_cap(1);
+    let relay_id = failed.relay_id().expect("relay id");
+    relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&failed))
+        .await
+        .expect("sent relay");
+    *relay.chain.outcome.lock().expect("outcome") = Some(Some(ChainOutcome::Failed {
+        reason: "custom program error".to_owned(),
+    }));
     relay.fault(StoreFault::ReservationReleaseRefused).await;
     let interrupted = relay
         .module
-        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&refused))
+        .call::<_, RelayStatus>(
+            GET_RELAY_STATUS,
+            as_object(GetRelayStatusRequest {
+                relay_id: relay_id.clone(),
+            }),
+        )
         .await;
     assert!(interrupted.is_err());
 
@@ -833,7 +861,7 @@ async fn a_failed_reservation_release_is_retried_by_status() {
         stored.try_get::<String>("", "status").expect("status"),
         "failed"
     );
-    assert!(relay.chain.sent().is_empty());
+    assert_eq!(relay.chain.sent().len(), 1);
     let beyond = relay
         .module
         .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
@@ -844,5 +872,6 @@ async fn a_failed_reservation_release_is_retried_by_status() {
     let status = relay.status(relay_id.clone()).await;
     assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
     assert_eq!(relay.status(relay_id).await, status);
+    *relay.chain.outcome.lock().expect("outcome") = None;
     relay.second_cap_fits().await;
 }

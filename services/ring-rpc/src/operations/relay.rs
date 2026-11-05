@@ -1227,28 +1227,18 @@ impl Relay {
         }
     }
 
-    /// A refused preflight forwards nothing and ends the relay.
     async fn first_send(
         &self,
         relay_id: &RelayId,
         row: RelayRow,
     ) -> Result<RelayRow, RingRpcError> {
-        let RelayState::Sent(sent) = &row.record.state else {
-            return Ok(row);
-        };
-        let signature = sent.signature;
-        let transaction = presigned_transaction(&row.record.message, &sent.signatures)?;
-        let reason = match self.chain.send(&transaction).await {
-            Ok(()) => return Ok(row),
-            Err(RingRpcError::Relay(RelayError::SendRefused { reason })) => reason,
-            Err(error) => return Err(error),
-        };
-        // A tracker resends a stored `Sent` with no lock, its copy may have landed before the refusal.
-        let event = match self.chain.outcome(signature).await? {
-            Some(outcome) => landed(outcome),
-            None => RelayEvent::Dropped { reason },
-        };
-        Ok(self.transition(relay_id, row, event).await?.row())
+        match self.resend(&row.record).await {
+            Ok(()) => Ok(row),
+            Err(RingRpcError::Relay(RelayError::SendRefused { .. })) => {
+                self.advance(relay_id, row).await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// A refusal leaves the relay open, an earlier send can still land.
