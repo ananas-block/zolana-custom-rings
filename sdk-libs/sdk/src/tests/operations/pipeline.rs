@@ -503,7 +503,6 @@ impl<'a> MoveSender<'a> {
             asset: Mint::SOL,
             payments,
             entry: EntrySpend::Allow,
-            wide_frames: WideFrames::Refuse,
             co_signer: None,
         }
     }
@@ -525,9 +524,9 @@ fn default_ring_utxo(owner: &ShieldedKeypair, amount: u64, leaf: u64) -> WalletU
     )
 }
 
-/// Ordinary padding publishes the shape's inputs, 24 at 2 outputs is the widest keyed spend.
+/// Ordinary padding publishes the shape's inputs, a shape past one transaction refuses before any proof.
 #[tokio::test]
-async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
+async fn an_anonymous_move_past_one_transaction_refuses_before_proving() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
@@ -540,18 +539,6 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
         payer: payer(),
     };
     let pay = |amount| owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), amount)]);
-    let buffered = |amount| AnonymousMove {
-        wide_frames: WideFrames::Buffer,
-        ..pay(amount)
-    };
-    for (amount, shape) in [
-        (41, spr_client::Shape::IN48_OUT2),
-        (49, spr_client::Shape::IN49_OUT2),
-    ] {
-        let widest = buffered(amount).select(&client).await.unwrap();
-        let assembled = widest.assemble(&client).await.unwrap();
-        assert_eq!(assembled.frame.proof_inputs.check_shape().unwrap(), shape);
-    }
     assert!(matches!(
         pay(41).select(&client).await,
         Err(RingError::TransferTooWide { inputs: 48, .. })
@@ -653,7 +640,6 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
     assert!(spend(30).await.frame.parts.entry);
     let refused = AnonymousMove {
         entry: EntrySpend::Refuse,
-        wide_frames: WideFrames::Refuse,
         ..owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), 30)])
     };
     assert!(matches!(
@@ -982,7 +968,6 @@ impl<'a> MoveFixture<'a> {
                 })
                 .collect(),
             assets: self.assets,
-            wide_frames: WideFrames::Refuse,
             tx_viewing_key: spr_keypair::ViewingKey::new(),
         }
     }
@@ -2079,8 +2064,6 @@ struct Measure {
     spent_inputs: Option<usize>,
     /// The last note spends from another input tree.
     second_tree: bool,
-    /// The frame may settle from a buffer, `Fit::settled` then holds the acceptance rule's figures.
-    buffered: bool,
 }
 
 /// `addresses` stays `None` past the byte ceiling.
@@ -2088,7 +2071,6 @@ struct Measure {
 struct Fit {
     bytes: usize,
     addresses: Option<usize>,
-    settled: Option<crate::address_ceiling::Fit>,
 }
 
 impl Measure {
@@ -2109,7 +2091,6 @@ impl Measure {
             priority_fee: false,
             spent_inputs: None,
             second_tree: false,
-            buffered: false,
         }
     }
 
@@ -2141,7 +2122,6 @@ impl Measure {
             priority_fee,
             spent_inputs,
             second_tree,
-            buffered,
         } = self;
         let spent_notes = spent_inputs.unwrap_or(shape.n_inputs()) as u64;
         let policy = rail.policy();
@@ -2291,7 +2271,6 @@ impl Measure {
             payer,
             co_signer: co_signer.map(|(signer, _)| signer),
             priority_fee,
-            buffered,
         };
         let compact = published.is_some() || spent_inputs.is_some();
         let spent = |utxos: Vec<WalletUtxo>| match compact {
@@ -2406,7 +2385,6 @@ struct FrameSize<'c> {
     payer: Address,
     co_signer: Option<Address>,
     priority_fee: bool,
-    buffered: bool,
 }
 
 impl FrameSize<'_> {
@@ -2418,10 +2396,6 @@ impl FrameSize<'_> {
         };
         let transfer = match self.priority_fee {
             true => transfer.with_priority_fee(1),
-            false => transfer,
-        };
-        let transfer = match self.buffered {
-            true => transfer.with_buffered_settlement(),
             false => transfer,
         };
         match transfer.frame(self.client).await {
@@ -2444,20 +2418,11 @@ impl FrameSize<'_> {
                 Fit {
                     bytes: size.bytes,
                     addresses: Some(size.addresses),
-                    settled: self.buffered.then(|| {
-                        crate::address_ceiling::TransactionFit::of(
-                            &instruction,
-                            crate::address_ceiling::FitSigners::new(self.payer),
-                            budget,
-                        )
-                        .unwrap()
-                    }),
                 }
             }
             Err(RingError::TransferTooWide { bytes, .. }) => Fit {
                 bytes,
                 addresses: None,
-                settled: None,
             },
             Err(error) => panic!("{:?} {:?}: {error}", self.rail, self.shape),
         }
@@ -2584,11 +2549,9 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
     assert_eq!(measured, SIZE_PINS, "measured:\n{table}");
 }
 
-/// Each confidential input class settles on both rails without a policy, inline up to 8 outputs and
-/// from a buffer at 16, where no frame fits one transaction.
+/// Each confidential input class settles inline on both rails without a policy.
 #[tokio::test]
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
-    use crate::address_ceiling::FitTransport;
     let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES
         .into_iter()
         .filter(|shape| !shape.entry && !shape.wide);
@@ -2596,21 +2559,13 @@ async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {
             for payer in [rail.sweep_payer(), Payer::Outsider] {
-                let settled = Measure {
+                let fit = Measure {
                     payer,
-                    buffered: true,
                     ..Measure::pinned(rail, shape)
                 }
                 .fit()
-                .await
-                .settled
-                .unwrap();
-                let transport = match shape.n_outputs() {
-                    16 => FitTransport::Buffered,
-                    _ => FitTransport::Inline,
-                };
-                assert_eq!(settled.transport, transport, "{rail:?} {payer:?} {shape:?}");
-                assert!(settled.cpi_bytes.is_some(), "{rail:?} {payer:?} {shape:?}");
+                .await;
+                assert!(fit.addresses.is_some(), "{rail:?} {payer:?} {shape:?}");
             }
         }
     }
@@ -2964,8 +2919,6 @@ async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_prov
         ),
         "{refused:?}"
     );
-    let buffered = transfer.with_buffered_settlement();
-    assert!(buffered.measure(&client).await.is_ok());
 }
 
 /// A funder stands apart from the owner run, the hidden owner alone may not fund a leg.
@@ -3894,7 +3847,6 @@ async fn a_delegate_move_selects_a_zero_key_balance_alone() {
             amount: 4,
         }],
         assets: &assets,
-        wide_frames: WideFrames::Refuse,
         tx_viewing_key: spr_keypair::ViewingKey::new(),
     }
     .select(&client)

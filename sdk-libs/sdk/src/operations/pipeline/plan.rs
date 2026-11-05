@@ -40,17 +40,9 @@ impl SealRow {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FrameSettlement {
-    Inline,
-    /// The payer writes a buffer the frame settles from.
-    Buffered,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PlannedTransfer {
     pub key: TransferKey,
     pub stream: AuditStreamLayout,
-    pub settlement: FrameSettlement,
     /// A data tail or a disclosed approval opening spans every slot of the key's `N`.
     pub spans_capacity: bool,
 }
@@ -79,7 +71,6 @@ pub(super) struct TransferPlanner<'a> {
     pub rail: &'a RingOutputRail,
     pub sender: &'a ShieldedAddress,
     pub spans_capacity: bool,
-    pub settlement: FrameSettlement,
 }
 
 impl TransferPlanner<'_> {
@@ -121,7 +112,6 @@ impl TransferPlanner<'_> {
         Ok(PlannedTransfer {
             key,
             stream,
-            settlement: self.settlement,
             spans_capacity: self.spans_capacity,
         })
     }

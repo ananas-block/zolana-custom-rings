@@ -342,41 +342,12 @@ fn confirmed_transact(
         return None;
     }
     let caller = direct_caller(groups, source)?;
-    if caller.data.first() == Some(&ring_tag::SETTLE_BUFFERED) {
-        return settled_frame(groups, caller, ring);
-    }
     (caller.program_id == ring
         && matches!(
             caller.data.first(),
             Some(&(ring_tag::TRANSFER | ring_tag::AUTHORITY_TRANSFER))
         ))
     .then(|| caller.data.clone())
-}
-
-/// A settlement closes its buffer, its own event inside it alone names the frame it signed.
-fn settled_frame(
-    groups: &[InstructionGroup],
-    settle: &ParsedInstruction,
-    ring: Address,
-) -> Option<Vec<u8>> {
-    let event = groups.iter().find_map(|group| {
-        group.inner.iter().enumerate().find_map(|(index, inner)| {
-            (inner.data.first() == Some(&ring_tag::FRAME_EVENT)
-                && event_parent(group, index).is_some_and(|parent| core::ptr::eq(parent, settle)))
-            .then_some(inner)
-        })
-    })?;
-    custom_ring_interface::SettledFrame {
-        ring_program: &ring,
-        settle_program: &settle.program_id,
-        event_program: &event.program_id,
-        succeeded: true,
-        settle: &settle.data,
-        event: &event.data,
-    }
-    .frame()
-    .ok()
-    .map(<[u8]>::to_vec)
 }
 
 fn audit_frame_of(frame: &[u8], mode: RingMode) -> Result<AuditStreamLayout, AuditError> {

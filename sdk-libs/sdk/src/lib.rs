@@ -7,8 +7,6 @@ mod account;
 mod address_ceiling;
 #[path = "operations/admin.rs"]
 mod admin;
-#[path = "operations/buffered.rs"]
-mod buffered;
 #[path = "rpc/client.rs"]
 mod client;
 #[path = "validation/co_signer.rs"]
@@ -69,14 +67,12 @@ pub use crate::{
     },
     address_ceiling::{
         AddressCeiling, AddressCeilingError, CeilingDecision, CredentialTrees, Fit, FitError,
-        FitSigners, FitTransport, MergeCapacity, MergeGroup, SetupEffect, SpentInput,
-        TransactionFit,
+        FitSigners, MergeCapacity, MergeGroup, SetupEffect, SpentInput, TransactionFit,
     },
     admin::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,
         SetDelegate, SourceOwner, UpdateAuthority, UpdatePolicy,
     },
-    buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
     credentials::{CredentialPool, CredentialPoolRead},
     delegate_source::{
@@ -101,7 +97,7 @@ pub use crate::{
         DelegateTransfer, DelegateTransferInput, DelegateWithdrawal, Delegated, EntrySpend,
         NoteData, Owner, ProvenRingTransfer, PublicOwnerTransfer, PublicOwners, Rail, RailKind,
         ReadCache, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment, RingSender,
-        RingTransfer, SealRow, TransferKey, WideFrames,
+        RingTransfer, SealRow, TransferKey,
     },
     records::{
         AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, RecordUpdateService,

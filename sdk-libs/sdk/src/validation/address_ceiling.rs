@@ -2,7 +2,7 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    max_application_messages, tag, CustomRingError, InstructionTag, RingMode, RingPolicy, RingRail,
+    max_application_messages, CustomRingError, InstructionTag, RingMode, RingPolicy, RingRail,
     RingTransactData, MAX_CPI_DATA_LEN,
 };
 use solana_address::Address;
@@ -17,7 +17,7 @@ use spr_program::ADDRESS_TREE_ID;
 use spr_transaction::utxo::SppProofInputUtxo;
 use thiserror::Error;
 
-use crate::{buffered::BufferedFrame, RingError};
+use crate::RingError;
 
 #[cfg(test)]
 #[path = "../tests/validation/address_ceiling.rs"]
@@ -47,20 +47,12 @@ pub struct FitSigners<'a> {
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fit {
-    pub transport: FitTransport,
     pub signatures: usize,
     pub bytes: usize,
     pub addresses: usize,
     /// The data SPP receives on the transfer tags, `None` on any other tag.
     pub cpi_bytes: Option<usize>,
     pub setup: SetupEffect,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FitTransport {
-    Inline,
-    /// The figures are the settlement's, each upload write fits by its own chunking.
-    Buffered,
 }
 
 /// What setup adds to the transaction it shares with the operation.
@@ -92,8 +84,6 @@ pub enum FitError {
     Instructions { instructions: usize, limit: usize },
     #[error("the transfer hands SPP {bytes} bytes of data, one CPI carries {limit}")]
     CpiBytes { bytes: usize, limit: usize },
-    #[error("a frame of {bytes} bytes passes the CPI limit of {limit}")]
-    FrameTooLarge { bytes: usize, limit: usize },
     #[error("the transfer frame parses under neither rail of its tag")]
     UnparsedFrame,
     #[error("the frame carries more application messages than SPP takes beside its own, {limit} on its rail")]
@@ -154,28 +144,14 @@ impl CredentialTrees {
 }
 
 impl<'a> TransactionFit<'a> {
-    /// A transfer past the byte ceiling settles from a buffer, nothing else changes transport.
+    /// Every operation lands as one transaction, past a ceiling it refuses before any proof.
     pub fn of(
         instruction: &'a Instruction,
         signers: FitSigners<'a>,
         budget: ComputeBudgetConfig,
     ) -> Result<Fit, FitError> {
-        let fit = Self::new(instruction, signers, budget);
         let cpi_bytes = spp_cpi_bytes(instruction)?;
-        match fit.settlement()? {
-            Some(settlement) => fit.accept(&settlement, FitTransport::Buffered, cpi_bytes),
-            None => fit.accept(instruction, FitTransport::Inline, cpi_bytes),
-        }
-    }
-
-    /// For an operation sent in one transaction, a deposit, a merge or an unbuffered transfer.
-    pub fn inline(
-        instruction: &'a Instruction,
-        signers: FitSigners<'a>,
-        budget: ComputeBudgetConfig,
-    ) -> Result<Fit, FitError> {
-        let cpi_bytes = spp_cpi_bytes(instruction)?;
-        Self::new(instruction, signers, budget).accept(instruction, FitTransport::Inline, cpi_bytes)
+        Self::new(instruction, signers, budget).accept(cpi_bytes)
     }
 
     const fn new(
@@ -191,57 +167,38 @@ impl<'a> TransactionFit<'a> {
         }
     }
 
-    /// `Some` past the byte ceiling on a tag the buffer takes.
-    ///
-    /// A settlement keeps every account and signer of the transfer and adds the buffer, so a
-    /// buffer relieves bytes and nothing else. Another ceiling refuses under either transport.
-    fn settlement(&self) -> Result<Option<Instruction>, FitError> {
-        let takes_buffer = matches!(
-            self.instruction.data.first(),
-            Some(&(tag::TRANSFER | tag::AUTHORITY_TRANSFER))
-        );
-        if !takes_buffer || self.compiled(self.instruction)?.bytes <= v1::MAX_TRANSACTION_SIZE {
-            return Ok(None);
-        }
-        Ok(Some(
-            BufferedFrame::new(self.instruction, self.payer, 0)?.settle(),
-        ))
-    }
-
-    /// The compiled form clears every message ceiling, or no transaction can execute it.
-    fn accept(
-        &self,
-        form: &Instruction,
-        transport: FitTransport,
-        cpi_bytes: Option<usize>,
-    ) -> Result<Fit, FitError> {
-        let compiled = self.compiled(form)?;
+    /// The compiled message clears every message ceiling, or no transaction can execute it.
+    fn accept(&self, cpi_bytes: Option<usize>) -> Result<Fit, FitError> {
+        let compiled = self.compiled()?;
         compiled.check()?;
         Ok(Fit {
-            transport,
             signatures: compiled.signatures,
             bytes: compiled.bytes,
             addresses: compiled.addresses,
             cpi_bytes,
-            setup: self.setup_effect(form, compiled)?,
+            setup: self.setup_effect(compiled)?,
         })
     }
 
-    fn compiled(&self, form: &Instruction) -> Result<Compiled, ClientError> {
+    fn compiled(&self) -> Result<Compiled, ClientError> {
         let instructions: Vec<Instruction> = self
             .setup
             .iter()
-            .chain(core::iter::once(form))
+            .chain(core::iter::once(self.instruction))
             .cloned()
             .collect();
         Compiled::of(&self.payer, &instructions, self.budget)
     }
 
-    fn setup_effect(&self, form: &Instruction, with: Compiled) -> Result<SetupEffect, ClientError> {
+    fn setup_effect(&self, with: Compiled) -> Result<SetupEffect, ClientError> {
         if self.setup.is_empty() {
             return Ok(SetupEffect::default());
         }
-        let alone = Compiled::of(&self.payer, core::slice::from_ref(form), self.budget)?;
+        let alone = Compiled::of(
+            &self.payer,
+            core::slice::from_ref(self.instruction),
+            self.budget,
+        )?;
         Ok(SetupEffect {
             instructions: self.setup.len(),
             signatures: with.signatures.saturating_sub(alone.signatures),
@@ -277,7 +234,7 @@ impl Compiled {
         })
     }
 
-    /// Signatures lead, merging first cannot relieve them, and bytes lead addresses for a form no buffer takes.
+    /// Signatures lead, merging first cannot relieve them.
     fn check(self) -> Result<(), FitError> {
         if self.signatures > usize::from(v1::MAX_SIGNATURES) {
             return Err(FitError::Signatures {
@@ -309,9 +266,8 @@ impl Compiled {
 
 /// The exact data the program forwards to SPP, `None` off the transfer tags, refused past the CPI limit.
 ///
-/// The limit holds under either transport, since the program forwards one expansion. A frame can
-/// clear [`custom_ring_interface::MAX_FRAME_LEN`] and still pass it, because the expansion widens
-/// outputs and messages. The ring's mode decides the rail and the compact frame does not name it,
+/// A frame inside one transaction can still pass the limit, because the expansion widens outputs
+/// and messages. The ring's mode decides the rail and the compact frame does not name it,
 /// so the strict parser reads the frame under both rails of its tag and the longer expansion
 /// counts. The zeroed policy and proof change no length, the policy reaches the expansion only as
 /// a view tag of fixed width and the proof fields are fixed width.
@@ -410,7 +366,6 @@ impl SpentInput {
 
 #[must_use]
 pub struct AddressCeiling<'a> {
-    /// Writes a buffered frame, the settlement refuses any other payer.
     pub payer: Address,
     pub instruction: &'a Instruction,
     pub budget: ComputeBudgetConfig,
@@ -429,8 +384,6 @@ pub struct MergeCapacity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CeilingDecision {
     Inline(TransactionSize),
-    /// The frame settles from a buffer, the size is the settlement's.
-    Buffered(TransactionSize),
     MergeFirst {
         /// The fewest merges that bring the compiled count under the ceiling.
         groups: Vec<MergeGroup>,
@@ -470,23 +423,16 @@ impl AddressCeiling<'_> {
         let signers = FitSigners::new(self.payer);
         match TransactionFit::of(self.instruction, signers, self.budget) {
             Ok(fit) => {
-                let size = TransactionSize {
+                return Ok(CeilingDecision::Inline(TransactionSize {
                     bytes: fit.bytes,
                     addresses: fit.addresses,
-                };
-                return Ok(match fit.transport {
-                    FitTransport::Inline => CeilingDecision::Inline(size),
-                    FitTransport::Buffered => CeilingDecision::Buffered(size),
-                });
+                }));
             }
             // Only the address count leaves a route, merging first narrows the spend.
             Err(FitError::Addresses { .. }) => {}
             Err(error) => return Err(error.into()),
         }
-        // Past the byte ceiling only the settlement's own compiled count decides.
-        let settle = TransactionFit::new(self.instruction, signers, self.budget).settlement()?;
-        let form = settle.as_ref().unwrap_or(self.instruction);
-        let compiled = self.compiled(form, &[]).map_err(FitError::from)?;
+        let compiled = self.compiled(&[]).map_err(FitError::from)?;
         let mut merged_away = Vec::new();
         let mut chosen = Vec::new();
         let mut after_merging = compiled.addresses;
@@ -499,7 +445,7 @@ impl AddressCeiling<'_> {
             );
             chosen.push(group);
             after_merging = self
-                .compiled(form, &merged_away)
+                .compiled(&merged_away)
                 .map_err(FitError::from)?
                 .addresses;
             if after_merging <= limit {
@@ -521,12 +467,8 @@ impl AddressCeiling<'_> {
         })
     }
 
-    fn compiled(
-        &self,
-        form: &Instruction,
-        merged_away: &[Address],
-    ) -> Result<TransactionSize, ClientError> {
-        let mut instruction = form.clone();
+    fn compiled(&self, merged_away: &[Address]) -> Result<TransactionSize, ClientError> {
+        let mut instruction = self.instruction.clone();
         instruction
             .accounts
             .retain(|account| !merged_away.contains(&account.pubkey));

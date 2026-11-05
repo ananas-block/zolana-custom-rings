@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 use solana_address::Address;
 use solana_signer::Signer;
-use spr_client::AsyncRpc;
 use spr_indexer_api::{SerializablePubkey, SerializableSignature};
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
@@ -210,29 +209,6 @@ impl PendingSignature {
             .as_deref()
             .ok_or(MessageMismatch::Unrequested)?;
         Ok(expected.check(&self.message, signer)?)
-    }
-
-    /// As [`Self::sign`], a settling message reads the frame its digest signs from the chain.
-    pub async fn sign_on_chain<R: RingRelay + ?Sized, C: AsyncRpc + ?Sized>(
-        &self,
-        relay: &R,
-        rpc: &C,
-        signer: &dyn Signer,
-    ) -> Result<RelayStatus, RingError> {
-        let address = signer.try_pubkey()?;
-        let expected = self
-            .expected
-            .as_deref()
-            .ok_or(MessageMismatch::Unrequested)?;
-        if let Some(buffer) = expected.settled_buffer(&self.message, address)? {
-            let held = rpc
-                .get_account(buffer)
-                .await?
-                .ok_or(MessageMismatch::Accounts)?;
-            let verified = expected.check_settled(&self.message, &held.data, address)?;
-            return self.submit(relay, &verified, signer).await;
-        }
-        self.sign(relay, signer).await
     }
 
     pub async fn sign<R: RingRelay + ?Sized>(

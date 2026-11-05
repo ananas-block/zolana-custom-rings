@@ -1,8 +1,8 @@
 use custom_ring_interface::{
     cosign::ApprovalMask, sender_bundle_len, stream::slot_tag, AnonymousProofData, AppMessage,
     CredentialRead, CustomRingProof, FrameExtensions, FramedSenderBundle, InputTrees,
-    PlainGroth16Proof, Replies, RingOutput, SlotBody, AUDIT_RECORD_LEN, MAX_FRAME_LEN,
-    MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
+    PlainGroth16Proof, Replies, RingOutput, SlotBody, AUDIT_RECORD_LEN, MIN_REPLY_LEN,
+    RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -468,10 +468,9 @@ fn carrying(signers: u32) -> Instruction {
 }
 
 #[test]
-fn past_the_byte_ceiling_a_transfer_settles_from_a_buffer_and_the_fit_names_the_settlement() {
+fn past_the_byte_ceiling_a_transfer_refuses_at_each_preproof_check() {
     let small = anonymous_transfer(2, 2, None);
     let inline = fit(&small).unwrap();
-    assert_eq!(inline.transport, FitTransport::Inline);
     assert!(inline.bytes > small.data.len());
     assert!(matches!(
         decide_transfer(&small),
@@ -479,33 +478,30 @@ fn past_the_byte_ceiling_a_transfer_settles_from_a_buffer_and_the_fit_names_the_
     ));
 
     let wide = anonymous_transfer(5, 16, Some(MIN_REPLY_LEN));
-    assert!(wide.data.len() > v1::MAX_TRANSACTION_SIZE);
-    let settled = fit(&wide).unwrap();
-    assert_eq!(settled.transport, FitTransport::Buffered);
-    assert!(settled.bytes < v1::MAX_TRANSACTION_SIZE);
-    assert_eq!(settled.signatures, 1);
-    // The payer, the program, the buffer.
-    assert_eq!(settled.addresses, 3);
-    assert!(settled
-        .cpi_bytes
-        .is_some_and(|bytes| bytes > wide.data.len()));
-    assert_eq!(settled.setup, SetupEffect::default());
+    assert!(spp_cpi_bytes(&wide).unwrap().is_some());
+    let refused = |bytes: usize| bytes > wide.data.len() && bytes > v1::MAX_TRANSACTION_SIZE;
+    assert!(matches!(
+        fit(&wide),
+        Err(FitError::Bytes { bytes, limit: v1::MAX_TRANSACTION_SIZE }) if refused(bytes)
+    ));
     assert!(matches!(
         decide_transfer(&wide),
-        Ok(CeilingDecision::Buffered(size)) if size.bytes == settled.bytes
+        Err(AddressCeilingError::Fit(FitError::Bytes { bytes, .. })) if refused(bytes)
+    ));
+    assert!(matches!(
+        crate::submission::check_transaction_size(&address(1), &wide, budget()),
+        Err(RingError::TransactionTooLarge { bytes, limit: v1::MAX_TRANSACTION_SIZE })
+            if refused(bytes)
     ));
 }
 
 #[test]
-fn signatures_past_the_limit_refuse_on_each_transport_and_at_each_preproof_check() {
+fn signatures_past_the_limit_refuse_at_each_preproof_check() {
     let limit = usize::from(v1::MAX_SIGNATURES);
     let payer_signs = |signature_count: usize| signature_count as u32 - 1;
 
     let at_limit = fit(&carrying(payer_signs(limit))).unwrap();
-    assert_eq!(
-        (at_limit.signatures, at_limit.transport),
-        (limit, FitTransport::Inline)
-    );
+    assert_eq!(at_limit.signatures, limit);
     let past = carrying(payer_signs(limit + 1));
     assert!(matches!(
         fit(&past),
@@ -522,44 +518,28 @@ fn signatures_past_the_limit_refuse_on_each_transport_and_at_each_preproof_check
         )))
     ));
 
-    let wide = || anonymous_transfer(5, 16, Some(MIN_REPLY_LEN));
-    let settled = fit(&with_signers(wide(), payer_signs(limit))).unwrap();
-    assert_eq!(
-        (settled.signatures, settled.transport),
-        (limit, FitTransport::Buffered)
-    );
-    assert!(matches!(
-        fit(&with_signers(wide(), payer_signs(limit + 1))),
-        Err(FitError::Signatures { .. })
-    ));
-
     let repeated = with_signers(with_signers(carrying(0), 3), 3);
     assert_eq!(fit(&repeated).unwrap().signatures, 4);
 }
 
-/// The compact frame clears the buffer limit, only the expansion passes the CPI limit.
 #[test]
-fn an_expansion_past_the_cpi_limit_refuses_with_the_compact_frame_under_its_own_limit() {
+fn an_expansion_past_the_cpi_limit_refuses() {
     let refused_at = (MIN_REPLY_LEN..)
         .find(|len| {
             matches!(
-                fit(&anonymous_transfer(5, 16, Some(*len))),
+                spp_cpi_bytes(&anonymous_transfer(5, 16, Some(*len))),
                 Err(FitError::CpiBytes { .. })
             )
         })
         .unwrap();
     let refused = anonymous_transfer(5, 16, Some(refused_at));
-    assert!(refused.data.len() <= MAX_FRAME_LEN);
     assert!(matches!(
         decide_transfer(&refused),
         Err(AddressCeilingError::Fit(FitError::CpiBytes { bytes, limit: MAX_CPI_DATA_LEN }))
             if bytes > MAX_CPI_DATA_LEN
     ));
-    let last_fit = fit(&anonymous_transfer(5, 16, Some(refused_at - 1))).unwrap();
-    assert_eq!(last_fit.transport, FitTransport::Buffered);
-    assert!(last_fit
-        .cpi_bytes
-        .is_some_and(|bytes| bytes <= MAX_CPI_DATA_LEN));
+    let last_fit = spp_cpi_bytes(&anonymous_transfer(5, 16, Some(refused_at - 1))).unwrap();
+    assert!(last_fit.is_some_and(|bytes| bytes <= MAX_CPI_DATA_LEN));
 }
 
 #[test]
@@ -570,7 +550,7 @@ fn the_expansion_counts_the_exact_bytes_the_program_forwards() {
         .data()
         .spp_instruction_data_under(&RingPolicy::zeroed(), TransactProof::zeroed())
         .unwrap();
-    assert_eq!(fit(&wide).unwrap().cpi_bytes, Some(forwarded.len()));
+    assert_eq!(spp_cpi_bytes(&wide).unwrap(), Some(forwarded.len()));
 
     let garbled = Instruction {
         data: vec![custom_ring_interface::tag::TRANSFER, 0],
@@ -580,7 +560,7 @@ fn the_expansion_counts_the_exact_bytes_the_program_forwards() {
 }
 
 #[test]
-fn setup_joins_the_count_and_can_change_the_transport_or_refuse() {
+fn setup_joins_the_count_and_can_refuse() {
     let signers = |setup| FitSigners::new(address(1)).with_setup(setup);
     let create = Instruction {
         program_id: address(3),
@@ -606,10 +586,8 @@ fn setup_joins_the_count_and_can_change_the_transport_or_refuse() {
         ..create.clone()
     };
     let setup = core::slice::from_ref(&filler);
-    let widened = TransactionFit::of(&small, signers(setup), budget()).unwrap();
-    assert_eq!(widened.transport, FitTransport::Buffered);
     assert!(matches!(
-        TransactionFit::inline(&small, signers(setup), budget()),
+        TransactionFit::of(&small, signers(setup), budget()),
         Err(FitError::Bytes { .. })
     ));
 
@@ -685,8 +663,7 @@ fn the_preproof_fit_counts_credential_trees_and_refuses_past_each_ceiling() {
         match case["refusal"].as_str() {
             None => {
                 preproof.unwrap();
-                let fit =
-                    TransactionFit::inline(&instruction, FitSigners::new(payer), budget).unwrap();
+                let fit = TransactionFit::of(&instruction, FitSigners::new(payer), budget).unwrap();
                 assert_eq!(
                     (fit.addresses, fit.bytes),
                     (count("addresses"), count("bytes")),

@@ -4,10 +4,9 @@ use std::collections::BTreeSet;
 
 use custom_ring_interface::cosign::ApprovalMask;
 use custom_ring_interface::{
-    compute_unit_limit, frame_digest, funder_account_position, settle_buffered_data,
-    stream::confidential_slot_tag, tag, AuditRecord, DepositPrefix, FrameBuffer, InstructionTag,
-    ParsedTransact, RecordKind, RingMode, RingRail, RingTransactData,
-    RING_TRANSACT_RING_CONFIG_INDEX,
+    compute_unit_limit, funder_account_position, stream::confidential_slot_tag, tag, AuditRecord,
+    DepositPrefix, InstructionTag, ParsedTransact, RecordKind, RingMode, RingRail,
+    RingTransactData, RING_TRANSACT_RING_CONFIG_INDEX,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -79,8 +78,6 @@ pub enum MessageMismatch {
     FunderLegs,
     #[error("the request asks for no signature")]
     Unrequested,
-    #[error("the message settles a buffer, read it from the chain before signing")]
-    SettlesBuffer,
     #[error("the signing key is not the key the request names")]
     Signer,
 }
@@ -337,40 +334,10 @@ impl ExpectedMessage {
             Self::Deposit(deposit) => deposit.check(message),
             Self::Delegate(delegate) => delegate.check(message),
             Self::Sealed(_) => Err(MessageMismatch::Unrequested),
-            Self::PublicOwner(owner) => check_inline(owner, message, signer),
-            Self::Funder(funder) => check_inline(funder, message, signer),
-            Self::CoSigner(co_signer) => check_inline(co_signer, message, signer),
+            Self::PublicOwner(owner) => check_message(owner, message, signer),
+            Self::Funder(funder) => check_message(funder, message, signer),
+            Self::CoSigner(co_signer) => check_message(co_signer, message, signer),
             Self::Enroll(enroll) => enroll.check(message),
-        }
-    }
-
-    pub fn settled_buffer(
-        &self,
-        message: &[u8],
-        signer: Address,
-    ) -> Result<Option<Address>, MessageMismatch> {
-        match self {
-            Self::Deposit(_) | Self::Sealed(_) | Self::Enroll(_) => Ok(None),
-            Self::Delegate(delegate) => delegate.settled_buffer(message),
-            Self::PublicOwner(owner) => settled_buffer(owner, message, signer),
-            Self::Funder(funder) => settled_buffer(funder, message, signer),
-            Self::CoSigner(co_signer) => settled_buffer(co_signer, message, signer),
-        }
-    }
-
-    pub fn check_settled(
-        &self,
-        message: &[u8],
-        buffer: &[u8],
-        signer: Address,
-    ) -> Result<VerifiedMessage, MessageMismatch> {
-        match self {
-            Self::Deposit(_) | Self::Enroll(_) => Err(MessageMismatch::Data),
-            Self::Delegate(delegate) => delegate.check_settled(message, buffer),
-            Self::Sealed(_) => Err(MessageMismatch::Unrequested),
-            Self::PublicOwner(owner) => check_settled(owner, message, buffer, signer),
-            Self::Funder(funder) => check_settled(funder, message, buffer, signer),
-            Self::CoSigner(co_signer) => check_settled(co_signer, message, buffer, signer),
         }
     }
 
@@ -402,11 +369,11 @@ impl ExpectedMessage {
     }
 }
 
-/// A frame a signer reads inline or, past one transaction, from the buffer its digest names.
+/// A transfer frame a named signer reads from the message it signs.
 trait ExpectedFrame {
     const TAG: InstructionTag;
 
-    fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch>;
+    fn envelope(&self, signer: Address) -> Result<Envelope, MessageMismatch>;
 
     fn check_frame(
         &self,
@@ -416,55 +383,14 @@ trait ExpectedFrame {
     ) -> Result<(), MessageMismatch>;
 }
 
-fn check_inline<E: ExpectedFrame>(
+fn check_message<E: ExpectedFrame>(
     expected: &E,
     message: &[u8],
     signer: Address,
 ) -> Result<VerifiedMessage, MessageMismatch> {
-    let envelope = expected.envelope(signer, E::TAG)?;
+    let envelope = expected.envelope(signer)?;
     let instruction = envelope.open(message)?;
-    if instruction.data.first() == Some(&tag::SETTLE_BUFFERED) {
-        return Err(MessageMismatch::SettlesBuffer);
-    }
     expected.check_frame(signer, &instruction.data, &instruction.accounts)?;
-    Ok(envelope.verified(message))
-}
-
-/// The account a settling message reads its frame from, `None` on an inline message.
-fn settled_buffer<E: ExpectedFrame>(
-    expected: &E,
-    message: &[u8],
-    signer: Address,
-) -> Result<Option<Address>, MessageMismatch> {
-    let instruction = expected
-        .envelope(signer, InstructionTag::SettleBuffered)?
-        .open(message)?;
-    match instruction.data.first() == Some(&tag::SETTLE_BUFFERED) {
-        true => Ok(instruction.accounts.first().map(|meta| meta.pubkey)),
-        false => Ok(None),
-    }
-}
-
-/// The digest binds the buffer's frame, every check of an inline message then reads it.
-fn check_settled<E: ExpectedFrame>(
-    expected: &E,
-    message: &[u8],
-    buffer: &[u8],
-    signer: Address,
-) -> Result<VerifiedMessage, MessageMismatch> {
-    let envelope = expected.envelope(signer, InstructionTag::SettleBuffered)?;
-    let instruction = envelope.open(message)?;
-    let [_, _, inner @ ..] = instruction.accounts.as_slice() else {
-        return Err(MessageMismatch::Accounts);
-    };
-    let frame = FrameBuffer::of(buffer)
-        .map_err(|_| MessageMismatch::Data)?
-        .frame();
-    let digest = frame_digest(frame).map_err(|_| MessageMismatch::Data)?;
-    if instruction.data != settle_buffered_data(&digest) {
-        return Err(MessageMismatch::Data);
-    }
-    expected.check_frame(signer, frame, inner)?;
     Ok(envelope.verified(message))
 }
 
@@ -605,19 +531,7 @@ impl ExpectedDelegate {
     }
 
     pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
-        check_inline(self, message, self.delegate)
-    }
-
-    pub fn settled_buffer(&self, message: &[u8]) -> Result<Option<Address>, MessageMismatch> {
-        settled_buffer(self, message, self.delegate)
-    }
-
-    pub fn check_settled(
-        &self,
-        message: &[u8],
-        buffer: &[u8],
-    ) -> Result<VerifiedMessage, MessageMismatch> {
-        check_settled(self, message, buffer, self.delegate)
+        check_message(self, message, self.delegate)
     }
 
     fn check_moved(&self, parsed: &ParsedTransact<'_>) -> Result<(), MessageMismatch> {
@@ -675,11 +589,11 @@ impl ExpectedDelegate {
 impl ExpectedFrame for ExpectedDelegate {
     const TAG: InstructionTag = InstructionTag::AuthorityTransfer;
 
-    fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
+    fn envelope(&self, signer: Address) -> Result<Envelope, MessageMismatch> {
         Ok(Envelope {
             ring: self.ring,
             program: self.ring.program_id(),
-            units: compute_unit_limit(tag),
+            units: compute_unit_limit(Self::TAG),
             fee_payer: self.fee_payer,
             signer,
             setup: Vec::new(),
@@ -698,7 +612,7 @@ impl ExpectedFrame for ExpectedDelegate {
             .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
             .ok_or(MessageMismatch::Data)?;
         self.check_moved(&parsed)?;
-        check_signer(&self.envelope(signer, Self::TAG)?, accounts)
+        check_signer(&self.envelope(signer)?, accounts)
     }
 }
 
@@ -918,14 +832,14 @@ impl ExpectedFrame for ExpectedPublicOwner {
     const TAG: InstructionTag = InstructionTag::Transfer;
 
     /// Another key stays refused.
-    fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
+    fn envelope(&self, signer: Address) -> Result<Envelope, MessageMismatch> {
         if self.terms.signer.0 != signer {
             return Err(MessageMismatch::Unrequested);
         }
         Ok(Envelope {
             ring: CustomRing::new(self.terms.ring.0),
             program: self.terms.ring.0,
-            units: compute_unit_limit(tag),
+            units: compute_unit_limit(Self::TAG),
             fee_payer: self.terms.fee_payer.0,
             signer,
             setup: self.setup.clone(),
@@ -944,21 +858,21 @@ impl ExpectedFrame for ExpectedPublicOwner {
             .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
             .ok_or(MessageMismatch::Data)?;
         self.check_moved(parsed.data(), accounts)?;
-        check_signer(&self.envelope(signer, Self::TAG)?, accounts)
+        check_signer(&self.envelope(signer)?, accounts)
     }
 }
 
 impl ExpectedFrame for ExpectedFunder {
     const TAG: InstructionTag = InstructionTag::Transfer;
 
-    fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
+    fn envelope(&self, signer: Address) -> Result<Envelope, MessageMismatch> {
         if self.terms.signer.0 != signer {
             return Err(MessageMismatch::Unrequested);
         }
         Ok(Envelope {
             ring: CustomRing::new(self.terms.ring.0),
             program: self.terms.ring.0,
-            units: compute_unit_limit(tag),
+            units: compute_unit_limit(Self::TAG),
             fee_payer: self.terms.fee_payer.0,
             signer,
             setup: self.setup.clone(),
@@ -1023,7 +937,7 @@ impl ExpectedFrame for ExpectedFunder {
             return Err(MessageMismatch::Accounts);
         }
         match self
-            .envelope(signer, Self::TAG)?
+            .envelope(signer)?
             .reads_only(accounts.get(..1).unwrap_or_default(), &[])
         {
             true => Ok(()),
@@ -1171,14 +1085,14 @@ impl ExactApproval {
 impl ExpectedFrame for ExpectedCoSigner {
     const TAG: InstructionTag = InstructionTag::Transfer;
 
-    fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
+    fn envelope(&self, signer: Address) -> Result<Envelope, MessageMismatch> {
         if self.signer != signer {
             return Err(MessageMismatch::Unrequested);
         }
         Ok(Envelope {
             ring: CustomRing::new(self.ring),
             program: self.ring,
-            units: compute_unit_limit(tag),
+            units: compute_unit_limit(Self::TAG),
             fee_payer: self.fee_payer,
             signer,
             setup: self.setup.clone(),
@@ -1208,7 +1122,7 @@ impl ExpectedFrame for ExpectedCoSigner {
                 parsed.audit_stream().capacity,
             )?,
         }
-        check_signer(&self.envelope(signer, Self::TAG)?, accounts)?;
+        check_signer(&self.envelope(signer)?, accounts)?;
         // The rule reads an approval and nothing else. A signature named in SPP's list also moves the
         // key's own funds or authorizes its notes and data outputs, none of it in the rule.
         let in_spp = spp_accounts(self.ring, accounts)?

@@ -294,7 +294,6 @@ async fn relay_attempt(
         fee_payer,
     })
     .with_owner_signature(signature.into())
-    .with_buffered_settlement()
     .assemble(client)
     .await;
     (inputs, assembled)
@@ -377,7 +376,6 @@ impl FullLoad {
         })
         .with_interface_transfer_accounts(accounts)
         .with_in_proof_owner(&self.sender.signing_key)
-        .with_buffered_settlement()
     }
 }
 
@@ -524,24 +522,20 @@ async fn an_unread_entry_takes_its_capacity_from_its_outputs() {
             .collect();
         let transaction =
             ConfidentialTransaction::new_with_ring(utxos, payer(), ring().program_id()).unwrap();
-        let transfer = load
-            .recipients
-            .iter()
-            .fold(
-                CustomRingTransfer::new(CustomRingTransferInput {
-                    ring: ring(),
-                    sender: &load.sender,
-                    nullifier_key: Some(&load.sender.nullifier_key),
-                    transaction,
-                })
-                .with_anonymous_signer(&load.sender.signing_key),
-                |transfer, recipient| {
-                    transfer
-                        .with_payment(public_signers::pay(recipient, 1))
-                        .unwrap()
-                },
-            )
-            .with_buffered_settlement();
+        let transfer = load.recipients.iter().fold(
+            CustomRingTransfer::new(CustomRingTransferInput {
+                ring: ring(),
+                sender: &load.sender,
+                nullifier_key: Some(&load.sender.nullifier_key),
+                transaction,
+            })
+            .with_anonymous_signer(&load.sender.signing_key),
+            |transfer, recipient| {
+                transfer
+                    .with_payment(public_signers::pay(recipient, 1))
+                    .unwrap()
+            },
+        );
         let sealed = transfer.seal_unread(client.zolana()).await.unwrap();
         assert!(!sealed.policy.key.wide, "{notes}x{outputs}");
         let submitted = transfer.frame(&client).await.unwrap();
@@ -738,7 +732,7 @@ mod delegate_message {
     use std::sync::Mutex;
 
     use custom_ring_interface::{
-        compute_unit_limit, tag, FrameBufferHeader, InstructionTag, RingRail, RingTransactData,
+        compute_unit_limit, tag, InstructionTag, RingRail, RingTransactData,
     };
     use solana_instruction::Instruction;
     use solana_signer::Signer;
@@ -954,7 +948,6 @@ mod delegate_message {
                     })
                     .collect(),
                 assets: &assets,
-                wide_frames: crate::WideFrames::Refuse,
                 tx_viewing_key: tx_viewing_key.key()?,
             }
             .select(&self.client)
@@ -1739,16 +1732,6 @@ mod delegate_message {
                 }])
                 .collect(),
         };
-        let buffered = crate::BufferedFrame::for_writer(&honest, FEE_PAYER).unwrap();
-        let settle = relay_message(
-            &FEE_PAYER,
-            &[buffered.settle()],
-            compute_unit_limit(InstructionTag::SettleBuffered),
-        );
-        let held = |frame: &[u8]| {
-            let header = FrameBufferHeader::new(FEE_PAYER);
-            [bytemuck::bytes_of(&header), frame].concat()
-        };
         let vector = pinned_vector("relay_delegate_messages.json", fresh);
         let quote = RelayQuote {
             fee_payer: vector.request.fee_payer,
@@ -1785,51 +1768,6 @@ mod delegate_message {
                 case.name
             );
         }
-        // Settlement checks read the frame built here, whose notes take fresh blindings and nullifiers.
-        let expected = ExpectedDelegate::new(&RequestedAuthorityTransfer {
-            request: vector.request.prepare.clone(),
-            quote: &quote,
-            config: &config,
-            allowed: allowed_as_pinned(
-                &sources,
-                published_nullifiers(&Answer::Honest.message(&honest, relay.delegate).0),
-            ),
-        })
-        .unwrap();
-        assert_eq!(
-            expected.check(&settle.0).unwrap_err(),
-            MessageMismatch::SettlesBuffer
-        );
-        assert_eq!(
-            expected.settled_buffer(&settle.0).unwrap(),
-            Some(buffered.buffer())
-        );
-        assert!(expected
-            .check_settled(&settle.0, &held(&honest.data))
-            .is_ok());
-        let mut rewritten = honest.data.clone();
-        *rewritten.last_mut().unwrap() ^= 1;
-        assert_eq!(
-            expected
-                .check_settled(&settle.0, &held(&rewritten))
-                .unwrap_err(),
-            MessageMismatch::Data
-        );
-        let stranger_frame =
-            crate::BufferedFrame::for_writer(&paying(&honest, 0, stranger()), FEE_PAYER)
-                .unwrap()
-                .settle();
-        let swapped = relay_message(
-            &FEE_PAYER,
-            &[stranger_frame],
-            compute_unit_limit(InstructionTag::SettleBuffered),
-        );
-        assert_eq!(
-            expected
-                .check_settled(&swapped.0, &held(&paying(&honest, 0, stranger()).data))
-                .unwrap_err(),
-            MessageMismatch::Recipients
-        );
     }
 }
 

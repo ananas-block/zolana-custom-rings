@@ -162,20 +162,16 @@ enum Status {
     Landed,
     Absent,
     LookupFails,
-    Failed,
 }
 
 #[derive(Default)]
 struct ClusterState {
     sent: Vec<VersionedTransaction>,
-    settlement: Status,
-    write: Status,
+    transfer: Status,
     expired: bool,
-    buffer_exists: bool,
-    buffer_lookup_fails: bool,
 }
 
-/// Answers by the tag of each sent transaction, a close removes the buffer.
+/// Answers by the tag of each sent transaction.
 #[derive(Clone, Default)]
 struct Cluster(Arc<Mutex<ClusterState>>);
 
@@ -202,11 +198,7 @@ impl Cluster {
 #[async_trait::async_trait]
 impl AsyncRpc for Cluster {
     async fn get_account(&self, _: Address) -> Result<Option<Account>, ClientError> {
-        let state = self.0.lock().unwrap();
-        if state.buffer_lookup_fails {
-            return Err(REFUSED);
-        }
-        Ok(state.buffer_exists.then(Account::default))
+        Ok(None)
     }
 
     async fn get_latest_blockhash(&self) -> Result<(Hash, u64), ClientError> {
@@ -215,11 +207,11 @@ impl AsyncRpc for Cluster {
 
     async fn get_block_height(&self) -> Result<u64, ClientError> {
         let state = self.0.lock().unwrap();
-        let settling = state
+        let transferring = state
             .sent
             .last()
-            .is_some_and(|sent| first_tag(sent) == tag::SETTLE_BUFFERED);
-        if settling && state.settlement == Status::LookupFails {
+            .is_some_and(|sent| first_tag(sent) == tag::TRANSFER);
+        if transferring && state.transfer == Status::LookupFails {
             return Err(REFUSED);
         }
         Ok(VALID_UNTIL + u64::from(state.expired))
@@ -246,23 +238,19 @@ impl AsyncRpc for Cluster {
                     .find(|sent| sent.signatures[0] == *signature)
                     .map(first_tag);
                 let status = match tag_of {
-                    Some(tag::SETTLE_BUFFERED) => state.settlement,
-                    Some(tag::WRITE_FRAME) => state.write,
+                    Some(tag::TRANSFER) => state.transfer,
                     Some(_) => Status::Landed,
                     None => Status::Absent,
                 };
-                let settled = |err| {
-                    Some(TransactionStatus {
-                        slot: SLOT,
-                        confirmations: None,
-                        status: Ok(()),
-                        err,
-                        confirmation_status: Some(TransactionConfirmationStatus::Confirmed),
-                    })
-                };
+                let landed = Some(TransactionStatus {
+                    slot: SLOT,
+                    confirmations: None,
+                    status: Ok(()),
+                    err: None,
+                    confirmation_status: Some(TransactionConfirmationStatus::Confirmed),
+                });
                 match status {
-                    Status::Landed => Ok(settled(None)),
-                    Status::Failed => Ok(settled(Some(TransactionError::AccountNotFound))),
+                    Status::Landed => Ok(landed),
                     Status::Absent => Ok(None),
                     Status::LookupFails => Err(REFUSED),
                 }
@@ -275,11 +263,7 @@ impl AsyncRpc for Cluster {
         transaction: &VersionedTransaction,
         _: RpcSendTransactionConfig,
     ) -> Result<Signature, ClientError> {
-        let mut state = self.0.lock().unwrap();
-        if first_tag(transaction) == tag::CLOSE_FRAME_BUFFER {
-            state.buffer_exists = false;
-        }
-        state.sent.push(transaction.clone());
+        self.0.lock().unwrap().sent.push(transaction.clone());
         Ok(transaction.signatures[0])
     }
 }
@@ -292,13 +276,13 @@ fn client(cluster: &Cluster) -> RingClient<Cluster, Chain> {
     )
 }
 
-/// Holds a proven upload at its first write, a new proof shows as `tag::SET_DELEGATE`.
-fn uploading(payer: &ShieldedKeypair) -> RingSubmission<'static> {
+/// Holds a proven transfer, a new proof shows as `tag::SET_DELEGATE`.
+fn held_transfer(payer: &ShieldedKeypair) -> RingSubmission<'static> {
     let proved = Proved {
         instruction: Instruction {
             program_id: program(),
             accounts: vec![AccountMeta::new(payer.pubkey(), true)],
-            data: [vec![tag::TRANSFER], vec![0; 5000]].concat(),
+            data: vec![tag::TRANSFER; 6],
         },
         budget: send_budget(InstructionTag::Transfer, None),
         bound: BoundState::default(),
@@ -308,74 +292,63 @@ fn uploading(payer: &ShieldedKeypair) -> RingSubmission<'static> {
         accounts: vec![AccountMeta::new(payer.pubkey(), true)],
         data: vec![tag::SET_DELEGATE],
     }));
-    submission.pending = Some(Attempt {
-        step: Step::upload(proved, payer.pubkey(), None).unwrap(),
-        sent: None,
-    });
+    submission.pending = Some(Attempt { proved, sent: None });
     submission.attempts = 1;
     submission
 }
 
 #[tokio::test]
-async fn an_unknown_settlement_holds_its_attempt_and_blocks_a_new_proof() {
+async fn an_unknown_transfer_holds_its_attempt_and_blocks_a_new_proof() {
     let cluster = Cluster::default();
-    cluster.set(|state| state.settlement = Status::LookupFails);
+    cluster.set(|state| state.transfer = Status::LookupFails);
     let client = client(&cluster);
     let payer = keypair(1);
-    let mut submission = uploading(&payer);
+    let mut submission = held_transfer(&payer);
 
     assert!(matches!(
         submission.send(&client, &payer, &[]).await,
         Err(RingError::Client(_))
     ));
-    let sent = cluster.sent_tags();
-    assert_eq!(sent.last(), Some(&tag::SETTLE_BUFFERED));
-    assert!(sent[..sent.len() - 1]
-        .iter()
-        .all(|tag_of| *tag_of == tag::WRITE_FRAME));
-    assert!(sent.len() > 2);
-    let settlement = cluster.last_signature();
+    assert_eq!(cluster.sent_tags(), [tag::TRANSFER]);
+    let transfer = cluster.last_signature();
     assert_eq!(
         submission.pending_transaction().unwrap().signatures[0],
-        settlement
+        transfer
     );
 
     assert!(matches!(
         submission.send(&client, &payer, &[]).await,
         Err(RingError::Client(_))
     ));
-    cluster.set(|state| state.settlement = Status::Absent);
+    cluster.set(|state| state.transfer = Status::Absent);
     assert_eq!(
         submission.send(&client, &payer, &[]).await.unwrap(),
         SubmissionStatus::Pending {
-            signature: settlement
+            signature: transfer
         }
     );
-    assert_eq!(cluster.sent_tags(), sent);
+    assert_eq!(cluster.sent_tags(), [tag::TRANSFER]);
     assert_eq!(submission.attempts(), 1);
 
-    cluster.set(|state| state.settlement = Status::Landed);
+    cluster.set(|state| state.transfer = Status::Landed);
     assert_eq!(
         submission.send(&client, &payer, &[]).await.unwrap(),
         SubmissionStatus::Settled(SettledSubmission::Confirmed {
-            signature: settlement,
+            signature: transfer,
             slot: SLOT,
         })
     );
-    assert_eq!(cluster.sent_tags(), sent);
+    assert_eq!(cluster.sent_tags(), [tag::TRANSFER]);
     assert!(submission.pending_transaction().is_none());
 }
 
 #[tokio::test]
-async fn an_expired_settlement_closes_its_buffer_ahead_of_the_new_proof() {
+async fn an_expired_transfer_proves_again() {
     let cluster = Cluster::default();
-    cluster.set(|state| {
-        state.settlement = Status::Absent;
-        state.buffer_exists = true;
-    });
+    cluster.set(|state| state.transfer = Status::Absent);
     let client = client(&cluster);
     let payer = keypair(1);
-    let mut submission = uploading(&payer);
+    let mut submission = held_transfer(&payer);
     let held = submission.send(&client, &payer, &[]).await.unwrap();
     assert!(matches!(held, SubmissionStatus::Pending { .. }));
 
@@ -385,63 +358,6 @@ async fn an_expired_settlement_closes_its_buffer_ahead_of_the_new_proof() {
         settled,
         SubmissionStatus::Settled(SettledSubmission::Confirmed { .. })
     ));
-    let sent = cluster.sent_tags();
-    assert_eq!(
-        sent[sent.len() - 3..],
-        [
-            tag::SETTLE_BUFFERED,
-            tag::CLOSE_FRAME_BUFFER,
-            tag::SET_DELEGATE
-        ]
-    );
+    assert_eq!(cluster.sent_tags(), [tag::TRANSFER, tag::SET_DELEGATE]);
     assert_eq!(submission.attempts(), 2);
-}
-
-#[tokio::test]
-async fn a_failed_close_keeps_the_settlement_final_and_retries_the_close() {
-    let cluster = Cluster::default();
-    cluster.set(|state| {
-        state.settlement = Status::Failed;
-        state.buffer_exists = true;
-        state.buffer_lookup_fails = true;
-    });
-    let client = client(&cluster);
-    let payer = keypair(1);
-    let mut submission = uploading(&payer);
-    assert!(matches!(
-        submission.send(&client, &payer, &[]).await,
-        Err(RingError::Client(_))
-    ));
-    let settlement = cluster.last_signature();
-    assert_eq!(cluster.sent_tags().last(), Some(&tag::SETTLE_BUFFERED));
-    assert!(submission.pending_transaction().is_some());
-
-    cluster.set(|state| state.buffer_lookup_fails = false);
-    assert_eq!(
-        submission.send(&client, &payer, &[]).await.unwrap(),
-        SubmissionStatus::Settled(SettledSubmission::Failed {
-            signature: settlement,
-            error: TransactionError::AccountNotFound,
-        })
-    );
-    assert_eq!(cluster.sent_tags().last(), Some(&tag::CLOSE_FRAME_BUFFER));
-    assert_eq!(submission.attempts(), 1);
-}
-
-#[tokio::test]
-async fn an_unknown_write_holds_the_next_chunk() {
-    let cluster = Cluster::default();
-    cluster.set(|state| state.write = Status::Absent);
-    let client = client(&cluster);
-    let payer = keypair(1);
-    let mut submission = uploading(&payer);
-    for _ in 0..2 {
-        assert_eq!(
-            submission.send(&client, &payer, &[]).await.unwrap(),
-            SubmissionStatus::Pending {
-                signature: cluster.last_signature()
-            }
-        );
-        assert_eq!(cluster.sent_tags(), [tag::WRITE_FRAME]);
-    }
 }

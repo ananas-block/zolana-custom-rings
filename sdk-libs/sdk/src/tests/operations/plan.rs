@@ -117,7 +117,6 @@ impl Case {
                 capacity: usize::from(shape.outputs),
                 has_data: self.has_data,
             },
-            settlement: FrameSettlement::Inline,
             spans_capacity: self.has_data || self.approval,
         }
     }

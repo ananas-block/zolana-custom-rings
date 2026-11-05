@@ -52,7 +52,7 @@ use zolana_ring_transaction::{random_field_element, ClassifiedInput};
 pub use self::{
     anonymous::{
         Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, ApplicationData, CachedNote,
-        CoOwner, EntrySpend, NoteData, ReadCache, RingPayment, WideFrames,
+        CoOwner, EntrySpend, NoteData, ReadCache, RingPayment,
     },
     delegate::{
         DelegateMove, DelegateOutput, DelegatePayment, DelegateSource, DelegateTransfer,
@@ -77,13 +77,12 @@ use self::{
         OwnedAppMessage, OwnedExtensions, OwnedInProofOwner, OwnedOutput, OwnedSenderBundle,
         TransactAccounts, TransactParts,
     },
-    plan::{FrameSettlement, PlannedTransfer, TransferPlanner},
+    plan::{PlannedTransfer, TransferPlanner},
     policy::{owner_rows, PolicyInputs, PolicyRead},
     spp::{Spp, SppRail, SppWitness},
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    address_ceiling::{AddressCeiling, MergeCapacity},
     co_signer::CoSignerChoice,
     heap::boxed,
     limits::Outflows,
@@ -91,7 +90,7 @@ use crate::{
     relay_message::ApprovalOpening,
     submission::{check_transaction_size, send_budget, BoundPolicy, BoundState},
     trees::{spend_trees, SpendTrees},
-    BufferedFrame, CustomRing, CustomRingConfig, RingError,
+    CustomRing, CustomRingConfig, RingError,
 };
 
 mod sealed {
@@ -123,7 +122,6 @@ pub struct RingTransfer<R: Rail> {
     rail: R,
     co_signers: Vec<Address>,
     priority_fee: Option<u64>,
-    buffered: bool,
     list_salts: Vec<SubjectListSalt>,
     approval: ApprovalDisclosure,
     /// `None` seals ahead of the relay's reads under the row the public counts select.
@@ -318,13 +316,6 @@ impl<R: Rail> RingTransfer<R> {
         self
     }
 
-    /// Past one transaction the frame settles from a buffer its payer writes.
-    #[must_use = "use the updated transfer"]
-    pub const fn with_buffered_settlement(mut self) -> Self {
-        self.buffered = true;
-        self
-    }
-
     /// The row a relay's `ResealRequired` names, the owner then signs the new seal.
     #[must_use = "use the updated transfer"]
     pub const fn with_seal_row(mut self, row: SealRow) -> Self {
@@ -415,7 +406,6 @@ impl<R: Rail> RingTransfer<R> {
                 staged,
                 co_signers: self.co_signers.clone(),
                 priority_fee: self.priority_fee,
-                buffered: self.buffered,
                 approval_blinder,
             }
             .prepare(client)
@@ -430,7 +420,6 @@ struct Pipeline<'a> {
     staged: Staged<'a>,
     co_signers: Vec<Address>,
     priority_fee: Option<u64>,
-    buffered: bool,
     approval_blinder: Option<[u8; 32]>,
 }
 
@@ -624,7 +613,6 @@ impl<'a> Pipeline<'a> {
         Ok(Prepared {
             pipeline: Pipeline {
                 priority_fee: self.priority_fee,
-                buffered: self.buffered,
                 approval_blinder: self.approval_blinder,
                 ring: self.ring,
                 config: self.config,
@@ -715,10 +703,6 @@ impl<'a> Prepared<'a> {
             // output count would leave the opening's rows short of the digest it proves.
             spans_capacity: proof_inputs.output_utxos.iter().any(carries_data)
                 || self.pipeline.approval_blinder.is_some(),
-            settlement: match self.pipeline.buffered {
-                true => FrameSettlement::Buffered,
-                false => FrameSettlement::Inline,
-            },
         })
     }
 
@@ -737,7 +721,6 @@ impl<'a> Prepared<'a> {
             staged,
             co_signers,
             priority_fee,
-            buffered,
             approval_blinder,
         } = pipeline;
         let Staged {
@@ -787,7 +770,6 @@ impl<'a> Prepared<'a> {
         Ok(Sealed {
             pipeline: Pipeline {
                 priority_fee,
-                buffered,
                 approval_blinder,
                 ring,
                 config,
@@ -826,7 +808,6 @@ impl<'a> Sealed<'a> {
                     staged,
                     co_signers: supplied_co_signers,
                     priority_fee,
-                    buffered: _,
                     approval_blinder,
                 },
             sealed,
@@ -1009,21 +990,6 @@ impl Unwitnessed<'_> {
             },
             self.priority_fee,
         );
-        if self.frame.policy.plan.settlement == FrameSettlement::Buffered {
-            return AddressCeiling {
-                payer: proof_inputs.payer,
-                instruction: &self.instruction()?,
-                budget,
-                inputs: &[],
-                merge_capacity: MergeCapacity {
-                    keyed: 0,
-                    zero_key: 0,
-                },
-            }
-            .decide()
-            .map(drop)
-            .map_err(RingError::from);
-        }
         match check_transaction_size(&proof_inputs.payer, &self.instruction()?, budget) {
             Err(RingError::TransactionTooLarge { bytes, limit }) => {
                 let shape = proof_inputs.check_shape()?;
@@ -1213,15 +1179,6 @@ impl ProvenRingTransfer {
     pub fn instruction(&self) -> Result<Instruction, RingError> {
         self.accounts
             .instruction(self.ring, &self.config, &self.parts)
-    }
-
-    /// `nonce` names the buffer, the payer writes it and pays the settlement.
-    pub fn buffered(&self, nonce: u64) -> Result<BufferedFrame, RingError> {
-        Ok(BufferedFrame::new(
-            &self.instruction()?,
-            self.accounts.payer,
-            nonce,
-        )?)
     }
 
     /// The owners who sign the transaction in public, none on the anonymous and in-proof owner rails.

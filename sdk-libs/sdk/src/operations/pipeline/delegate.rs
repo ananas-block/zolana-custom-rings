@@ -12,7 +12,7 @@ use spr_transaction::{
 use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
 
 use super::{
-    anonymous::{SenderChange, WideFrames},
+    anonymous::SenderChange,
     canonical_shape, pad_under_rail, sealed,
     selection::{payment_total, widest, Candidate, Funding},
     shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
@@ -58,7 +58,6 @@ pub struct DelegateMove<'a> {
     /// Each mint's change returns to the owner of the last note spent in it.
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
-    pub wide_frames: WideFrames,
     /// A relayed delegate names it, its wallet then reads the proven records.
     pub tx_viewing_key: ViewingKey,
 }
@@ -119,7 +118,6 @@ impl<'a> RingTransfer<Delegated<'a>> {
             ring: input.ring,
             co_signers: Vec::new(),
             priority_fee: None,
-            buffered: false,
             rail: Delegated {
                 delegate: input.delegate,
                 payer: input.payer,
@@ -272,12 +270,7 @@ impl<'a> DelegateMove<'a> {
                 }
                 .shape(payments + change, keyed)
                 .ok_or_else(unkeyed)?;
-                self.transfer(spent)?
-                    .with_shape(shape)
-                    .map(|transfer| match self.wide_frames {
-                        WideFrames::Buffer => transfer.with_buffered_settlement(),
-                        WideFrames::Refuse => transfer,
-                    })
+                self.transfer(spent)?.with_shape(shape)
             })
             .collect();
         // With no tree funding them all, the first short mint names the refusal.
