@@ -32,7 +32,7 @@ fn compute_vector() -> ListVector {
     let list_salt = wallet(7).list_salt(&RING).unwrap();
     ListVector {
         description: "list_salt is the view root's merge seed under ring_program_id and the \
-                      non-field label CRING/list_salt/v1, list_tag = Poseidon(CRPT, list_salt). \
+                      non-field label CRING/list_salt, list_tag = Poseidon(CRPT, list_salt). \
                       Produced by sdk-libs/keys/tests/list_salt.rs."
             .to_string(),
         signing_secret: hex::encode([7; 32]),

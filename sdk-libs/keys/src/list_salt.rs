@@ -4,7 +4,7 @@ use spr_keypair::{shielded::ShieldedKeypair, ViewingKey};
 use crate::{RingKeyError, RotatingRingKeys};
 
 /// Above the field modulus, so no merge of a real nullifier derives a salt.
-pub const LIST_SALT_LABEL: [u8; 32] = *b"CRING/list_salt/v1\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+pub const LIST_SALT_LABEL: [u8; 32] = *b"CRING/list_salt\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 
 /// No root the auditor holds reaches another ring's salt.
 pub trait ListSaltHolder {

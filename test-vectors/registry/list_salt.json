@@ -1,7 +1,7 @@
 {
-  "description": "list_salt is the view root's merge seed under ring_program_id and the non-field label CRING/list_salt/v1, list_tag = Poseidon(CRPT, list_salt). Produced by sdk-libs/keys/tests/list_salt.rs.",
+  "description": "list_salt is the view root's merge seed under ring_program_id and the non-field label CRING/list_salt, list_tag = Poseidon(CRPT, list_salt). Produced by sdk-libs/keys/tests/list_salt.rs.",
   "signing_secret": "0707070707070707070707070707070707070707070707070707070707070707",
   "ring_program_id": "0404040404040404040404040404040404040404040404040404040404040404",
-  "list_salt": "00221b84aa96150968728551836195b1f502aab7b293540779a6c62825e0496b",
-  "list_tag": "20e56f72078552a4026970b40b0729fe9ce9b537be5ce3230e9fc0ea55d097d1"
+  "list_salt": "00a142bc60dbd5587fdf86f79d666535f101fbbf893ce70cef2b2dd11577a0c7",
+  "list_tag": "244d4ad7ad7fa2b2b1b20763f63a8709768ef1a521e7de4210edf3a8d9598fe8"
 }
