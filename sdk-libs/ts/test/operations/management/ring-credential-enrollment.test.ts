@@ -37,8 +37,10 @@ import {
   enrollCredentialInstruction,
   enrollmentSubmission,
   prepareEnrollment,
+  type CredentialEnrollmentClient,
   type PreparedEnrollment,
 } from "../../../src/operations/management/enrollment.js";
+import { prepareEnrollmentRelay } from "../../../src/operations/management/enroll-relay.js";
 import { RingBufferLedger } from "../../../src/operations/workflow/buffer-ledger.js";
 import { reconcileRingSubmissions } from "../../../src/operations/workflow/submission.js";
 import {
@@ -57,7 +59,10 @@ import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { registerKeyStatementHash } from "../../../src/protocol/proof/statement.js";
 import { credentialAccounts } from "../../../src/protocol/ring-rpc/relay-enroll-inputs.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
-import type { ResolvedCredential } from "../../../src/rpc/credential-resolver.js";
+import {
+  resolveCredential,
+  type ResolvedCredential,
+} from "../../../src/rpc/credential-resolver.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
 import { filled, randomAddress } from "../../helpers/ring-pipeline.js";
@@ -70,6 +75,11 @@ const TRANSACT: TransactProof = {
   c: filled(9),
 };
 const ZERO_ROOT = new Uint8Array(32) as Bytes32;
+
+vi.mock("../../../src/rpc/credential-resolver.js", async (actual) => ({
+  ...(await actual<typeof import("../../../src/rpc/credential-resolver.js")>()),
+  resolveCredential: vi.fn(),
+}));
 
 beforeAll(initializePoseidon);
 
@@ -369,88 +379,104 @@ describe("user record registration", () => {
 });
 
 describe("prepared enrollment", () => {
-  async function chain(
-    ringProgramId: Address,
+  const PRESENT = {
+    kind: "present",
+    address: filled(1),
+    leaf: {},
+  } as unknown as ResolvedCredential;
+  const ABSENT = { kind: "absent", address: filled(1), gap: {} } as unknown as ResolvedCredential;
+  const QUEUED: ResolvedCredential = { kind: "unknown", address: filled(1), reason: "queued" };
+
+  async function setup(
+    resolved: ResolvedCredential,
     extra: ReadonlyMap<Address, RpcAccount> = new Map(),
   ) {
+    vi.mocked(resolveCredential).mockResolvedValue(resolved);
+    const ringProgramId = randomAddress();
     const [policy, bump] = await ringPolicyPda(ringProgramId);
     const accounts = new Map<Address, RpcAccount>([
       [policy, ownedAccount(ringProgramId, ringPolicyData({ bump }))],
       ...extra,
     ]);
-    return { getAccount: async (key: Address) => accounts.get(key) };
-  }
-
-  function provers() {
-    return {
+    const prover = {
       proveRing: vi.fn(async () => REGISTER_KEY),
       proveTransferInputs: vi.fn(async () => TRANSACT),
     };
-  }
-
-  it("refuses an owner whose address is already reserved before any proof", async () => {
-    const ringProgramId = randomAddress();
-    const owner = randomAddress();
-    const { nullifierPda } = await credentialAccounts(ringProgramId, owner);
-    const reads = await chain(
-      ringProgramId,
-      new Map([[nullifierPda, ownedAccount(randomAddress(), Uint8Array.of(1))]]),
-    );
-    const prover = provers();
     const holder = ShieldedKeypair.generate();
-    await expect(
-      prepareEnrollment({
-        holder,
-        owner,
-        payer: randomAddress(),
-        ringProgramId,
-        listSalt: filled(1),
-        outputTreeId: OUTPUT_TREE_ID,
-        client: { ...reads, getNonInclusionProofs: vi.fn() },
-        prover: prover as never,
+    const client = {
+      getAccount: async (key: Address) => accounts.get(key),
+      getNonInclusionProofs: async (_tree: Address, leaves: readonly Bytes32[]) => ({
+        context: { slot: 1n, blockTime: 1n },
+        proofs: leaves.map((leaf) => nonInclusion(leaf)),
       }),
-    ).rejects.toMatchObject({ code: "RING_ALREADY_ENROLLED" });
-    expect(prover.proveRing).not.toHaveBeenCalled();
-    holder.destroy();
-  });
-
-  it("registers then enrolls one credential sealed to the ring's auditor", async () => {
-    const ringProgramId = randomAddress();
-    const owner = randomAddress();
-    const payer = randomAddress();
-    const holder = ShieldedKeypair.generate();
-    const prover = provers();
-    const reads = await chain(ringProgramId);
-    const prepared = await prepareEnrollment({
+    } as unknown as CredentialEnrollmentClient;
+    const input = {
       holder,
-      owner,
-      payer,
+      owner: randomAddress(),
+      payer: randomAddress(),
       ringProgramId,
       listSalt: filled(1),
       outputTreeId: OUTPUT_TREE_ID,
-      client: {
-        ...reads,
-        getNonInclusionProofs: async (_tree, leaves) => ({
-          context: { slot: 1n, blockTime: 1n },
-          proofs: leaves.map((leaf) => nonInclusion(leaf)),
-        }),
-      },
+      client,
       prover: prover as never,
-    });
+    };
+    return { input, prover, holder };
+  }
+
+  it.each([
+    ["an applied or queued credential", PRESENT, "RING_ALREADY_ENROLLED"],
+    ["an enrollment Photon has not served", QUEUED, "RING_ENROLLMENT_STATUS_UNKNOWN"],
+  ] as const)("refuses %s before any proof", async (_, resolved, code) => {
+    const f = await setup(resolved);
+    await expect(prepareEnrollment(f.input)).rejects.toMatchObject({ code });
+    expect(f.prover.proveRing).not.toHaveBeenCalled();
+    f.holder.destroy();
+  });
+
+  it("registers then enrolls one credential sealed to the ring's auditor once proven absent", async () => {
+    const f = await setup(ABSENT);
+    const prepared = await prepareEnrollment(f.input);
     const { credential } = prepared;
-    expect(credential.member).toEqual(memberOfTag(addressBytes(owner)));
-    expect(credential.nullifierPk).toEqual(holder.nullifierPublicKey());
+    expect(vi.mocked(resolveCredential)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ring: f.input.ringProgramId,
+        member: memberOfTag(addressBytes(f.input.owner)),
+      }),
+      undefined,
+    );
+    expect(credential.member).toEqual(memberOfTag(addressBytes(f.input.owner)));
+    expect(credential.nullifierPk).toEqual(f.holder.nullifierPublicKey());
     expect(prepared.instructions.map((entry) => entry.programAddress)).toEqual([
       USER_REGISTRY_PROGRAM_ID,
-      ringProgramId,
+      f.input.ringProgramId,
     ]);
-    expect(prover.proveRing).toHaveBeenCalledWith(
+    expect(f.prover.proveRing).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "registerKey",
         publicInputHash: registerKeyHash(credential),
       }),
       undefined,
     );
+    f.holder.destroy();
+  });
+
+  it("relays only for an owner holding a user record, the relay funds no record", async () => {
+    const owner = await generateKeyPairSigner();
+    const quote = { feePayer: randomAddress(), validUntilSlot: 100n };
+    const missing = await setup(ABSENT);
+    await expect(prepareEnrollmentRelay({ ...missing.input, owner, quote })).rejects.toMatchObject({
+      code: "RING_RELAY_NEEDS_USER_RECORD",
+    });
+    expect(missing.prover.proveRing).not.toHaveBeenCalled();
+    const holder = ShieldedKeypair.generate();
+    const registered = await setup(
+      ABSENT,
+      new Map([await userRecord(owner.address, holder.nullifierPublicKey())]),
+    );
+    const prepared = await prepareEnrollmentRelay({ ...registered.input, holder, owner, quote });
+    expect(prepared.request.intent.operation).toBe("enroll");
+    missing.holder.destroy();
+    registered.holder.destroy();
     holder.destroy();
   });
 });

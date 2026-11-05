@@ -15,7 +15,6 @@ import type { AccountMeta, Address, Instruction } from "@solana/kit";
 import type {
   BlockhashProvider,
   ChainReader,
-  ProofReader,
   Prover,
 } from "@heliuslabs/zolana/client";
 import {
@@ -72,7 +71,11 @@ import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.j
 import type { RingProver } from "../../rpc/ports.js";
 import { RingTransactionSubmission, type RingSubmissionBuild } from "../workflow/submission.js";
 import { ringComputeUnitLimit } from "./admin.js";
-import type { ResolvedCredential } from "../../rpc/credential-resolver.js";
+import {
+  resolveCredential,
+  type CredentialClient,
+  type ResolvedCredential,
+} from "../../rpc/credential-resolver.js";
 import { proveCredentialWrite, type ProvenCredentialWrite } from "./credential-write.js";
 import { readerKeyBytes, type ReaderKey } from "./reader-access.js";
 import { sealNullifierKey } from "./register-key.js";
@@ -351,8 +354,7 @@ export async function credentialRegistration(
   });
 }
 
-export type CredentialEnrollmentClient = EnrollmentReadClient &
-  Pick<ProofReader, "getNonInclusionProofs">;
+export type CredentialEnrollmentClient = EnrollmentReadClient & CredentialClient;
 
 export interface PreparedEnrollment {
   readonly credential: AuditCredential;
@@ -378,12 +380,24 @@ export async function prepareEnrollment(
   context?: RequestContext,
 ): Promise<PreparedEnrollment> {
   const { owner, payer, ringProgramId, outputTreeId, client } = input;
-  // 1. An open address nullifier PDA refuses before any proof, a credential is never replaced.
-  const accounts = await credentialAccounts(ringProgramId, signerAddress(owner));
-  if ((await client.getAccount(accounts.nullifierPda, context)) !== undefined)
-    throw new RingError("RING_ALREADY_ENROLLED", {
-      details: { owner: signerAddress(owner) },
+  // 1. A queued or applied credential refuses before any proof, a credential is never replaced.
+  // Unknown is no absence, the owner retries once Photon serves the snapshot.
+  const resolved = await resolveCredential(
+    {
+      client,
+      ring: ringProgramId,
+      member: memberOfTag(addressBytes(signerAddress(owner), "owner")),
+      absenceFloor: 0n,
+    },
+    context,
+  );
+  if (resolved.kind === "present")
+    throw new RingError("RING_ALREADY_ENROLLED", { details: { owner: signerAddress(owner) } });
+  if (resolved.kind === "unknown")
+    throw new RingError("RING_ENROLLMENT_STATUS_UNKNOWN", {
+      details: { owner: signerAddress(owner), reason: resolved.reason },
     });
+  const accounts = await credentialAccounts(ringProgramId, signerAddress(owner));
   // 2. RegisterKey seals the key and salt to the auditor, the credential carries that envelope.
   const proven = await proveCredential({ ...input, owner: signerAddress(owner) }, context);
   const { credential } = proven;

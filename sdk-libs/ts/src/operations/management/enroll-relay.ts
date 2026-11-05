@@ -1,7 +1,8 @@
 import { getBase58Decoder, getBase64Decoder, type MessagePartialSigner } from "@solana/kit";
 import type { RequestContext, Signature } from "@heliuslabs/zolana/interface";
-import { treeAddress } from "@heliuslabs/zolana/internal";
+import { fetchUserRecord, treeAddress } from "@heliuslabs/zolana/internal";
 
+import { RingError } from "../../protocol/error.js";
 import {
   encodeRelayEnrollInputs,
   enrollRequestDigest,
@@ -35,13 +36,16 @@ export async function prepareEnrollRelay(
   );
 }
 
-/** Rust `Enroll::prepare_relay`, the relayed message carries `Enroll` and never `REGISTER`. */
+/** Rust `Enroll::prepare_relay`, the quoted fee payer funds `Enroll` alone. */
 export async function prepareEnrollmentRelay(
   input: Omit<Parameters<typeof prepareEnrollment>[0], "owner" | "payer"> &
     Readonly<{ owner: MessagePartialSigner; quote: RelayQuote }>,
   context?: RequestContext,
 ): Promise<PreparedRelay> {
   const { owner, quote, ringProgramId, outputTreeId } = input;
+  // The relay funds no record rent, a missing record refuses before any proof.
+  if ((await fetchUserRecord({ rpc: input.client, owner: owner.address }, context)) === undefined)
+    throw new RingError("RING_RELAY_NEEDS_USER_RECORD", { details: { owner: owner.address } });
   const prepared = await prepareEnrollment(
     { ...input, owner: owner.address, payer: quote.feePayer },
     context,
