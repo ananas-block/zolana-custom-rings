@@ -1,56 +1,46 @@
 # The record writer
 
-Ring RPC writes a ring's records when it holds the storage authority key. It turns signed record updates into storage updates, and its checks gate only the writes it sends. [Spec](../spec.md)
+Ring RPC writes a ring's policy records when it holds the storage authority key. It turns signed record updates into storage updates, and its checks gate only the writes it sends. Tracking enrollment takes no part in these writes. [Spec](../spec.md)
 
 ## A record update
 
-- The signer signs one hash over the cluster, the ring, the tree, every entry, an expiry slot and, for an enrolment, the awaited lists. That hash is the update id.
+- The signer signs one hash over the cluster, the ring, the registry, every entry, an expiry slot and the awaited lists. That hash is the update id.
 - Each entry hashes as the tree entry the update proof chains, so the signature binds every write that reaches the tree.
-- A wallet writes its own viewing flag, its escrow entry, its address entry and its wallet grants.
-- The policy authority writes the allow, block, frozen, reader and approval lists and the mint settings of any record.
+- A wallet writes its own member lists and its wallet grants.
+- The policy authority writes the authority lists and the mint settings of any record.
 
 ## Checks before an update queues
 
-- The cluster, the signature, the expiry, and the signer's right to each entry.
-- An escrow entry's proof shows its ciphertext seals the secret of its nullifier key to the ring's auditor key.
-- An anonymous ring refuses an escrow entry. A member that holds or awaits an escrow key gets no second one.
-- Mint settings set each cap with its window and each window within a bound, for an asset that has a record.
+- The writer checks the cluster, the signature, the expiry, the registry and the signer's right to each entry.
+- Mint settings must pair each cap with its window and bound each window. They must also name an asset that has a record.
+- A service that keeps reader grants in its database refuses a tree reader write.
 
 ## Batches
 
-- One storage update carries at most 16 writes and never splits a record update.
+- One storage update carries at most `APPLY_BATCH` writes and never splits a record update.
 - An authority batch passes queued wallet updates unless one of them writes the same record.
-- A batch revokes when, under the ring's current rule table, it clears a list a rule accepts on, sets a list a rule accepts off, or restricts mint settings. It then goes out as an immediate update.
-- A wallet batch also goes out early when an authority batch waits behind it.
-- A grant revocation goes graced. A wallet that could force an immediate update would void every member's proof in flight.
-- When the writer refuses an authority update whose signer lost the policy role, an enrolment that update approved waits again.
+- A wallet batch goes out when it is full, when it has aged a window, or when an authority batch waits behind it.
+- The program decides the grace from the writes, see [root history](records-and-roots.md#root-history). A wallet's writes stay graced, so no wallet can void every member's proof in flight.
+- A graced batch waits while the root history is full.
+- When the writer refuses an authority update whose signer lost the policy role, a list enrolment that update approved waits again.
 
-## Enrolment
+## List enrolment
 
 - A wallet's update can await the reader list, or the allow or approval lists the policy reads from the ring's own records.
-- It waits until the policy authority's own update sets every awaited list on the wallet. Both then go out in one batch, the wallet's writes first.
-- The policy authority can refuse it. An enrolment still waiting after its expiry slot is refused, and the expiry has an upper bound.
-- No cap limits pending enrolments. Per-client and per-key rate limits bound how fast they arrive.
+- It waits until the policy authority's own update sets every awaited list on the wallet. Both then go out in one batch.
+- The policy authority can refuse it. An update that still waits after its expiry slot is refused, and the expiry has an upper bound.
+- No cap limits pending updates. Per-client and per-key rate limits bound how fast they arrive.
+- List enrolment grants lists and differs from [tracking enrollment](records-and-roots.md#tracking), which the authority does not control.
 
 ## Durability
 
-- The writer stores each batch and its signature before it sends the batch, and one tree has at most one open batch.
+- The writer stores each batch and its signature before it sends the batch, and one registry has at most one open batch.
 - A restart settles the open batch by its signature.
 - An update that rides in a bounded number of failed batches, or outlives its expiry, is refused. Nothing sends it again, so its signer must check that each revocation landed.
 - Run one writer for each storage authority key. Ring RPC does not enforce this.
 
-## Address writes
-
-- The owner signs its address into its authorization account first. A record update then names that address, and the writer refuses it unless it equals the account at an unapplied revision.
-- The program reads the hash from the account at apply time, never from instruction data.
-- The writer refuses an address and an escrow key of one member that name two nullifier keys. It gives an early error, and the apply proof is the enforcement.
-- The program refuses an applied revision and a revision the account does not hold. An authority can delay an address and cannot change or clear one.
-- A record write and an escrow write carry a zero address hash.
-- The apply proof enforces the address and escrow invariant at the running state, in either write order. A conflicting write fails, and an unrelated write opens no preimage.
-- The apply prover needs the escrow preimage, and the ring indexer keeps it beside the record.
-- A revision stays pending until an authority applies it, and proofs read the record's address until then.
-
 ## What the writer does not cover
 
 - A write the storage authority signs directly skips every check above, and the tree accepts it.
-- The Storage program checks the tree update, not who asked for it.
+- The Storage program checks the tree update and the authority's signature, not who asked for the write.
+- A salted entry's correctness rests on its writer. Under a wrong salt, the record sits at a key no proof of the listed owner reads, and the block silently has no effect.
