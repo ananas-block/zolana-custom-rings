@@ -4357,23 +4357,30 @@ async fn an_anonymous_move_counts_the_sender_change_before_selection() {
             )
         })
         .collect();
-    let assembled = MoveSender {
+    let owner = MoveSender {
         sender: &sender,
         payer: payer(),
-    }
-    .anonymous_move(
-        &utxos,
-        vec![
-            RingPayment::new(paid.clone(), 12),
-            RingPayment::new(paid, 13),
-        ],
-    )
-    .select(&client)
-    .await
-    .unwrap()
-    .assemble(&client)
-    .await
-    .unwrap();
+    };
+    let payments = vec![
+        RingPayment::new(paid.clone(), 12),
+        RingPayment::new(paid, 13),
+    ];
+    let one_tree = owner
+        .anonymous_move(&utxos[..25], payments.clone())
+        .select(&client)
+        .await;
+    assert!(matches!(
+        one_tree,
+        Err(RingError::Unfunded { max_inputs: 24, .. })
+    ));
+    let assembled = owner
+        .anonymous_move(&utxos, payments)
+        .select(&client)
+        .await
+        .unwrap()
+        .assemble(&client)
+        .await
+        .unwrap();
     let trees = spent_trees(&assembled.frame);
     assert_eq!(trees.len(), 21);
     assert_eq!(trees.first(), Some(&1));

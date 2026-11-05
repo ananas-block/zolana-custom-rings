@@ -955,9 +955,6 @@ async function approveSpend(
   checkRingPreparedTransfer(input.prepared, plan.intent, ringIntentMismatch);
 }
 
-/** A spend pays its recipient or exit and returns change. */
-const SPEND_OUTPUTS = 2;
-
 /** The hidden owner rail refuses a mix of ring and default-ring UTXOs, ring UTXOs alone fund it first. */
 function selectAnonymousInputs(
   pool: Omit<Parameters<typeof selectRingInputs>[0], "inputs" | "maxInputs">,
@@ -1009,13 +1006,13 @@ function unfunded(cause: unknown): boolean {
   );
 }
 
-/** Padded inputs are published, the widest two-output shape an anonymous key serves bounds a spend. */
-function anonymousInputCap(selection: "ring" | "entry"): number {
+/** @internal Padded inputs are published, the widest shape an anonymous key serves for `payments` and the sender change bounds a spend. */
+export function anonymousInputCap(selection: "ring" | "entry", payments = 1): number {
   const keyed = (inputs: number) =>
     frameKeyShape({
       rail: "anonymous",
       inputs,
-      outputs: SPEND_OUTPUTS,
+      outputs: payments + 1,
       spendsDefaultRing: selection === "entry",
       wide: true,
     }) !== undefined;

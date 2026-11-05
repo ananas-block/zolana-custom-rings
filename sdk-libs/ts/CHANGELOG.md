@@ -78,7 +78,8 @@ Added
 
 Fixed
 
-- Funding selection searches beyond the preferred trees when that pool cannot cover a payment.
+- Funding selection searches beyond the preferred trees when that pool cannot cover a payment, and refuses only after every tree and pair.
+- A delegate move reserved a change slot per mint before selection and refused a move whose exact notes fit, now a selection counts its own change and a tree whose change no authority shape holds yields to one that fits.
 - `resolveRingRecipient` resolves explicit zero-key recipients independently of transfer policy.
 - A ring entry from a default note larger than its amount asked approval for the amount alone while the change also entered the ring, now the `ringEntry` intent and its summary name every unit entering the ring, and default notes that meet the amount exactly fund the entry first.
 - `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, and it lost every zero-key note and every merge output whose seed the nullifier key does not derive, now that commitment stays in `unopened`, a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done, and each owned note opens from the auditor's record alone.
