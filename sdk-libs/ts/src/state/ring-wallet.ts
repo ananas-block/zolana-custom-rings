@@ -1,7 +1,7 @@
 /**
  * A wallet's notes beside the opened notes whose mint the registry lacks, one reducer for both wallet modes.
  *
- * Read `RingWallet._absorb` first. `syncRingWallet` and `AnonymousWallet.absorb` call it with their own cursor write.
+ * Read `RingWallet._absorb` first. `AnonymousWallet` holds one and calls it from both sync modes with their own cursor write.
  */
 import { bytesKey } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
@@ -99,26 +99,6 @@ export class RingWallet {
     write({ utxos, nullifiers });
     this.#pending._replace({ ...pendingState, utxos: pending });
     return promoted;
-  }
-
-  /** Its notes open the wallet's funds, store it as key material under one atomic replace. */
-  toJson(): string {
-    const { wallet, pending } = this._documentFields();
-    return `{"wallet":${JSON.stringify(wallet)},"pending":${JSON.stringify(pending)}}`;
-  }
-
-  static fromJson(text: string): RingWallet {
-    let stored: unknown;
-    try {
-      stored = JSON.parse(text);
-    } catch {
-      throw invalid("is not JSON");
-    }
-    if (typeof stored !== "object" || stored === null || Array.isArray(stored))
-      throw invalid("is not an object");
-    const { wallet, pending, ...other } = stored as Readonly<Record<string, unknown>>;
-    if (Object.keys(other).length > 0) throw invalid("the document names other fields");
-    return RingWallet._fromDocument(wallet, pending);
   }
 
   /** @internal */

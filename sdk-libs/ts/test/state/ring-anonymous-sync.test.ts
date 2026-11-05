@@ -610,7 +610,7 @@ describe("viewing history", () => {
     expect(history.toJson()).toBe(
       `{"viewingHistory":[{"viewingPubkey":"${hex2(viewingPublicKey)}","createdAt":3,` +
         `"tx":${counter},"request":${counter},"knownSenders":["${sorted[0]}","${sorted[1]}"],` +
-        `"ringPositions":[{"ring":"${ringA}","afterSlot":null},{"ring":"${ringB}","afterSlot":8}]}]}`,
+        `"ringPositions":[{"ring":"${ringA}","afterSlot":null},{"ring":"${ringB}","afterSlot":8}],"tagPosition":null}]}`,
     );
     expect(ViewingHistory.fromJson(history.toJson()).toJson()).toBe(history.toJson());
   });
