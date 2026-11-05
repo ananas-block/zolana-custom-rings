@@ -23,7 +23,7 @@ import (
 
 // Properties:
 // 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in the named order, exactly the Count entries whose chain runs from ChainStart to ChainEnd.
-// 2. Every active write inserts an absent owner after its low record at exactly the next index, below capacity. A leaf never changes once written, a viewing key rotation touches only the owner's account.
+// 2. Every active write inserts an absent owner after its low record at exactly the next index, below capacity. A later insert moves only a leaf's Next, its member, nullifier key, ciphertext hash and list tag never change, a viewing key rotation touches only the owner's account.
 // 3. An owner holds one leaf, an owner already in the tree falls inside no link and cannot insert again.
 // 4. The statement binds both roots, both next indexes, both chain ends and the count.
 //
