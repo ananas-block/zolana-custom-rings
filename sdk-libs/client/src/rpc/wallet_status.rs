@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
 
+use crate::CredentialLookup;
+
 use super::{
     base64, cursor_in_bounds, Attestation, ReadAuth, ReadBuildError, ReadSigner, ReadTarget,
     SignedRequest,
@@ -37,15 +39,23 @@ pub struct GetWalletStatusResponse {
     pub cursor: Option<Base64String>,
 }
 
-/// The owner's own public tracking account, a pending enrollment grants nothing.
+/// The owner's credential lookup, an unknown lookup never reads as not enrolled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WalletEnrollment {
     NotEnrolled,
-    Pending,
-    /// The tree is full, the first enrollment stays pending with its rent spent.
-    PendingPastCapacity,
-    Applied,
+    Enrolled,
+    Unknown,
+}
+
+impl From<&CredentialLookup> for WalletEnrollment {
+    fn from(lookup: &CredentialLookup) -> Self {
+        match lookup {
+            CredentialLookup::Present(_) => Self::Enrolled,
+            CredentialLookup::Absent(_) => Self::NotEnrolled,
+            CredentialLookup::Unknown(_) => Self::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

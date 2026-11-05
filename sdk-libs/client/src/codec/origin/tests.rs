@@ -1155,7 +1155,7 @@ fn v2_merge_group() -> (
     let (mut group, _) = confirmed_merge_fixture();
     let spp = MergeRingIxData::deserialize(&group.inner[0].data[1..]).unwrap();
     let request = CustomRingMergeIxData {
-        tracking_revision: Default::default(),
+        credential_read: custom_ring_interface::CredentialRead::new_state(0),
         output_ring_data_hash: spp.output_ring_data_hash,
         authority: MergeRingAuthority::Ring,
         sealed: SealedMergeRecord {
@@ -1328,7 +1328,7 @@ fn origin_of_frame(
         n_in: 1,
         n_out: 2,
         proof: &proof,
-        tracking_revision: Default::default(),
+        credential_read: custom_ring_interface::CredentialRead::new_state(0),
         own_revision: None,
         policy: None,
         spl_withdrawal_owners: &[],

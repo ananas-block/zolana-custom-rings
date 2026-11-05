@@ -33,7 +33,7 @@ use spr_interface::{
     pda, state::discriminator::TREE_ACCOUNT_DISCRIMINATOR, SHIELDED_POOL_PROGRAM_ID,
     ZERO_NULLIFIER_PUBKEY,
 };
-use spr_keypair::{KeypairError, X25519Pubkey};
+use spr_keypair::{KeypairError, NullifierKey, X25519Keypair, X25519Pubkey};
 use spr_program::{
     program::{CompressedAccountError, NewAddress, PdaOwner, ACCOUNT_BLINDING_SEED},
     ADDRESS_TREE_ID,
@@ -47,7 +47,10 @@ use thiserror::Error;
 use zolana_ring_keys::{RingAddress, RingKeyError};
 use zolana_ring_policy::ring_id_field;
 
-use crate::viewing_key::{ViewingKeyError, ViewingKeyResolver};
+use crate::{
+    viewing_key::{ViewingKeyError, ViewingKeyResolver},
+    AuditError, SealedNullifierKey,
+};
 
 /// Distinct nonzero members of one proof.
 #[must_use]
@@ -177,6 +180,8 @@ pub enum CredentialError {
     ViewingKey(#[from] ViewingKeyError),
     #[error(transparent)]
     Ring(#[from] CustomRingError),
+    #[error(transparent)]
+    Seal(#[from] AuditError),
     #[error("the indexer answered {0} enrollments for one credential address")]
     EnrollmentCount(usize),
     #[error("the enrollment output does not rebuild the credential leaf")]
@@ -211,6 +216,8 @@ pub enum CredentialError {
     EnrolledOwnerAtZeroKey,
     #[error("the enrolled owner holds no user record to seal a zero key note to")]
     UnverifiedViewingKey,
+    #[error("the credential seal opens to another key than the credential holds")]
+    SealMismatch,
 }
 
 #[must_use]
@@ -321,6 +328,21 @@ impl CredentialResolver {
         let mut data = spp_tree(tree, rpc.get_account(tree).await?)?;
         check_state_root(&mut data, tree, opening.tree_id, opening.root)?;
         Ok(CredentialLookup::Present(Box::new(opening)))
+    }
+}
+
+impl PresentCredential {
+    /// The seal's pad alone does not bind the opened key, the credential's key must match.
+    pub fn nullifier_key(&self, auditor: &X25519Keypair) -> Result<NullifierKey, CredentialError> {
+        let key = SealedNullifierKey {
+            eph_pk: X25519Pubkey::from_u(self.credential.eph_u)?,
+            ciphertext: self.credential.ciphertext,
+        }
+        .open(auditor)?;
+        match key.pubkey()? == self.credential.nullifier_pk {
+            true => Ok(key),
+            false => Err(CredentialError::SealMismatch),
+        }
     }
 }
 
@@ -732,7 +754,7 @@ async fn state_openings<P: AsyncRpc>(
                 return Err(CredentialError::InvalidStateProof);
             }
             Ok(PresentCredential {
-                credential: enrolled.credential.clone(),
+                credential: enrolled.credential,
                 address: enrolled.address,
                 blinding: enrolled.blinding,
                 tree_id: enrolled.output.tree_id,
@@ -979,8 +1001,8 @@ mod tests {
     use borsh::BorshSerialize;
     use spr_client::rpc::{
         Context, GetMerkleProofsResponse, GetNonInclusionProofsResponse,
-        GetShieldedTransactionsByNullifiersResponse, MerkleContext, OutputContext, OutputSlot,
-        PaginationToken, TransactionEvents,
+        GetShieldedTransactionsByNullifiersResponse, MerkleContext, MerkleProof, NonInclusionProof,
+        OutputContext, OutputSlot, PaginationToken, TransactionEvents,
     };
     use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
     use spr_keypair::{
@@ -995,6 +1017,7 @@ mod tests {
     use zolana_ring_keys::ListSaltHolder;
 
     use super::*;
+    use crate::NullifierKeyEnvelope;
 
     const RING: Address = Address::new_from_array([4; 32]);
     const TREE_ID: u16 = 3;
@@ -1327,6 +1350,46 @@ mod tests {
             .unwrap()
             .set_paused(true);
         assert_eq!(present(ledger.resolve(resolver()).await.unwrap()), opened);
+    }
+
+    #[tokio::test]
+    async fn the_auditor_opens_the_credential_key_and_a_foreign_seal_refuses() {
+        let (holder, auditor) = (holder(), X25519Keypair::new());
+        let list_salt = holder.list_salt(&RING).unwrap();
+        let envelope =
+            NullifierKeyEnvelope::new(&holder.nullifier_key, &list_salt, &auditor.pubkey())
+                .unwrap();
+        let credential = AuditCredential {
+            auditor_pubkey: *auditor.pubkey().as_bytes(),
+            eph_u: envelope.sealed.eph_pk.u(),
+            ciphertext: envelope.sealed.ciphertext,
+            ..credential()
+        };
+        let opened = present(
+            Ledger::enrolled(&credential)
+                .resolve(resolver())
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            opened.nullifier_key(&auditor).unwrap().pubkey().unwrap(),
+            credential.nullifier_pk
+        );
+        assert!(opened.nullifier_key(&X25519Keypair::new()).is_err());
+        let other_key = AuditCredential {
+            nullifier_pk: NullifierKey::from_secret([9; 31]).pubkey().unwrap(),
+            ..credential
+        };
+        let other_key = present(
+            Ledger::enrolled(&other_key)
+                .resolve(resolver())
+                .await
+                .unwrap(),
+        );
+        assert!(matches!(
+            other_key.nullifier_key(&auditor),
+            Err(CredentialError::SealMismatch)
+        ));
     }
 
     #[tokio::test]

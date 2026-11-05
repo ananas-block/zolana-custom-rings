@@ -8,10 +8,10 @@ use custom_ring_interface::{
     sender_bundle_len,
     stream::{DeliveredSlot, SlotSecret},
     tag as ring_tag, tagged_x25519, AnonymousProofData, AuditEvidence, AuditKey, AuditRecord,
-    AuditStreamLayout, AuditorMessage, CustomRingProof, DataTail, EntryInput, FrameExtensions,
-    FramedSenderBundle, InProofOwner, InputClassification, InputMap, InputTrees, PlainGroth16Proof,
-    RecordKind, RingOutput, RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN,
-    CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
+    AuditStreamLayout, AuditorMessage, CredentialRead, CustomRingProof, DataTail, EntryInput,
+    FrameExtensions, FramedSenderBundle, InProofOwner, InputClassification, InputMap, InputTrees,
+    PlainGroth16Proof, RecordKind, RingOutput, RingRail, RingTransactData, SlotBody,
+    AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -512,7 +512,7 @@ impl Transfer {
             n_in: shape.n_inputs() as u8,
             n_out: shape.n_outputs() as u8,
             proof: &proof,
-            tracking_revision: Default::default(),
+            credential_read: CredentialRead::new_state(0),
             own_revision: None,
             policy: None,
             spl_withdrawal_owners: &[],
