@@ -75,6 +75,5 @@ solana-keypair = { workspace = true }
 solana-signature = { workspace = true, features = ["verify"] }
 solana-transaction = { workspace = true }
 solana-transaction-status-client-types = { workspace = true }
-spr-user-registry-interface = { workspace = true, features = ["pda"] }
 tokio = { workspace = true }
 zolana-ring-client = { path = ".", features = ["rpc", "solana-rpc"] }

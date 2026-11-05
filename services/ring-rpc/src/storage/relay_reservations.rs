@@ -6,8 +6,7 @@ use zolana_ring_client::rpc::RelayId;
 
 const TOTAL_SCOPE: [u8; 32] = [0; 32];
 
-/// One blockhash lifetime of silence hands the attempt on. Expiry decides liveness alone. The generation
-/// fence keeps a holder that overruns from spending, however long it stalls.
+/// One blockhash lifetime of silence hands the attempt on, the generation fence stops a stalled holder.
 const LEASE_SLOTS: u64 = 150;
 
 const PHASE_OPEN: &str = "open";
@@ -30,8 +29,7 @@ impl RelayBudget {
     }
 }
 
-/// Every claim raises the generation, and every spending statement compares it. A holder whose lease
-/// lapsed and passed on loses at its next statement, before it can sign away another fee.
+/// Every claim raises the generation and every spending statement compares it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Lease {
     pub key: [u8; 32],
@@ -42,8 +40,7 @@ pub(crate) struct Lease {
 pub(crate) enum AttemptPhase {
     /// No message exists, the lease holder proves and funds, a lapsed lease passes to a retry.
     Open,
-    /// A stored relay names the row. The relay id never moves again, so a message that can land keeps
-    /// its charge until settlement or proven expiry.
+    /// A stored relay names the row, its charge stays until settlement or proven expiry.
     Bound,
     /// Cleanup owns the row, a retry waits for the release.
     Closing,
@@ -54,7 +51,7 @@ pub(crate) struct Reservation {
     pub key: [u8; 32],
     pub relay_id: RelayId,
     pub signer: Address,
-    /// Zero until funded. An unfunded row dedupes the request and answers for no budget.
+    /// Zero until funded, an unfunded row answers for no budget.
     pub lamports: u64,
     pub landing_rent: u64,
     pub generation: u64,
@@ -127,7 +124,7 @@ pub(crate) enum SpendCheck {
 /// Whether the attempt's message landed, and what the total keeps for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttemptEnd {
-    /// The signer paid for a landed spend, its share returns whole. The total also keeps the rent and fee.
+    /// The signer's share returns whole, the total keeps the landed rent and fee.
     Landed { lamports: u64 },
     /// No message landed, the charged fees stay on the total and on the signer's share for good.
     Unlanded,
@@ -164,8 +161,8 @@ fn lamports_value(lamports: u64) -> Result<Value, DbErr> {
         .map_err(|_| DbErr::Custom("lamports out of range".into()))
 }
 
-/// A key's row can be deleted and inserted again, a counter restarting there would hand a stalled
-/// holder the new row's lease. The top bits stay clear for the raises and the signed column.
+/// Random, a reinserted key never reissues a stalled holder's generation, top bits stay clear for
+/// raises.
 fn first_generation() -> u64 {
     rand::random::<u64>() >> 2
 }
@@ -239,8 +236,8 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             ))
             .await?
             .rows_affected();
-        // 2. An open row with a lapsed lease passes to the new caller. The raised generation fences the old
-        // holder. The relay id moves only here, where no message exists for an older id to land.
+        // 2. An open row with a lapsed lease passes on under a raised generation, its relay id moves only
+        // here where no message exists.
         let claimed = inserted != 0
             || self
                 .db
@@ -289,8 +286,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
         row.as_ref().map(read_reservation).transpose()
     }
 
-    /// Attaches the row to the stored relay, in the transaction that stores it. A holder that lost the
-    /// lease stores no message, and cleanup cannot release a charge a stored message still spends.
+    /// Runs in the transaction that stores the relay, a holder that lost the lease stores no message.
     pub async fn bind(&self, bind: Bind<'_>) -> Result<SpendCheck, DbErr> {
         let Bind {
             lease,
@@ -319,8 +315,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
         self.spend_check(&lease, updated).await
     }
 
-    /// The fee of a relay message that landed and failed, in the transaction that stores the failure. A
-    /// crash cannot count it twice. Bound by `bind`, an unfunded row answers for no budget.
+    /// Runs in the transaction that stores the landed failure, an unfunded row answers for no fee.
     pub async fn charge_landed(&self, relay_id: &RelayId, fee: u64) -> Result<(), DbErr> {
         self.db
             .execute(self.statement(
@@ -331,8 +326,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
         Ok(())
     }
 
-    /// Oldest first, untouched since `before_slot` with no live lease. A selection is only a hint, the
-    /// row can move before its claim.
+    /// Oldest first, untouched since `before_slot` with no live lease, a selection is only a hint.
     pub async fn abandoned(
         &self,
         before_slot: u64,
@@ -357,9 +351,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             .collect()
     }
 
-    /// The one compare and update between a retry and cleanup, each side rechecked at its own statement.
-    /// A retry that resumed raised the generation or refreshed the age, either refuses a stale selection.
-    /// A won claim raises the generation in turn, a still running holder stops at its next statement.
+    /// The one compare and update between a retry and cleanup, a resumed retry refuses a stale selection.
     pub async fn claim_cleanup(&self, claim: ClaimCleanup<'_>) -> Result<Option<Claim>, DbErr> {
         let ClaimCleanup {
             held,
@@ -397,8 +389,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
         }))
     }
 
-    /// Stops holding the row. An open row that spent nothing leaves no trace, a retry starts over.
-    /// Everything else stays for a retry or the sweep to claim at once.
+    /// Deletes an unfunded open row, any other row stays for a retry or the sweep.
     pub async fn yield_lease(&self, lease: &Lease) -> Result<(), DbErr> {
         let deleted = self
             .db
@@ -449,8 +440,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
 }
 
 impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
-    /// Moves the admitted row to its budget charge, the counters and the row commit together or not at
-    /// all. A row funded by an earlier holder keeps its charge and answers as it stands.
+    /// The counters and the row commit together, a row an earlier holder funded keeps its charge.
     pub async fn fund(&self, fund: Fund) -> Result<FundOutcome, DbErr> {
         let Fund {
             lease,

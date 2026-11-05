@@ -138,8 +138,8 @@ impl<S: TransactionSource> Hub<S> {
             },
         )
         .await?;
-        // 3. One scan answers the secret, it opens to the key the owner's tracking row binds and
-        //    stays out of the store. The owner's own account answers the enrollment.
+        // One scan answers the secret, it opens to the key the owner's tracking row binds and
+        // stays out of the store.
         let enrolled = service.scanned_enrollment(&owner.to_bytes()).await?;
         let nullifier_secret = enrolled
             .held()
@@ -347,8 +347,8 @@ impl<S: TransactionSource> Hub<S> {
                 })
                 .await?;
         }
-        // 3. Each source key is the public zero key or its escrowed key, and only its own notes follow.
-        // The same openings fill the allowed set the sealed inputs answer to.
+        // 3. Each source key is the public zero key or its escrowed key, its own notes alone fill
+        //    the allowed set the sealed inputs answer to.
         let assets = shared.due_assets().await;
         let mut mints: Vec<Mint> = Vec::new();
         for address in transfer
@@ -388,6 +388,13 @@ impl<S: TransactionSource> Hub<S> {
                 .solana_address()
                 .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
                 .to_bytes();
+            // A repeated source scans once, a note observed twice would fund the move twice.
+            if resolved_sources.iter().any(|held: &DelegateSourceScan| {
+                held.owner_key == owner_key
+                    && held.address.nullifier_pubkey == address.nullifier_pubkey
+            }) {
+                continue;
+            }
             let resolved = ResolvedSource::resolve(address, &enrollment).await?;
             shared
                 .store(ring)

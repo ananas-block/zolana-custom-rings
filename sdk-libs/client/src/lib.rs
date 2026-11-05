@@ -4,10 +4,10 @@
 pub mod anonymous;
 #[path = "state/anonymous_wallet.rs"]
 mod anonymous_wallet;
-#[path = "operations/confidential.rs"]
-mod confidential;
 #[path = "operations/compact_assets.rs"]
 pub mod compact_assets;
+#[path = "operations/confidential.rs"]
+mod confidential;
 #[path = "operations/created_utxos.rs"]
 mod created;
 #[path = "crypto/decrypt/mod.rs"]
@@ -57,17 +57,14 @@ pub mod tags;
 mod types;
 #[path = "state/viewing_history.rs"]
 pub mod viewing_history;
-#[path = "operations/viewing_key.rs"]
-mod viewing_key;
-#[cfg(feature = "rpc")]
 #[path = "operations/viewing_rotation.rs"]
 mod viewing_rotation;
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, AuditorRecovery, RecoveryStatus, SenderClaim,
-    SentCheck, SentPayment,
+    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, AuditorRecovery,
+    RecoveryStatus, SenderClaim, SentCheck, SentPayment,
 };
 pub use crate::anonymous_wallet::{
     AnonymousWallet, LedgerScan, PendingClaim, PendingNote, ScanCommit,
@@ -123,13 +120,9 @@ pub use crate::{
         CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
         OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
-    viewing_key::{ResolvedViewingKey, ViewingKeyError, ViewingKeyResolver},
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};
-#[cfg(feature = "rpc")]
-pub use viewing_rotation::{
-    UpdateViewingKey, UpdatedViewingKey, ViewingRotation, ViewingRotationError,
-};
+pub use viewing_rotation::{ViewingRotation, ViewingRotationError};
 pub use zolana_ring_indexer::rpc::RingRpcError;
 
 /// The answer to a one-item request, a holder that answers more or less is refused.

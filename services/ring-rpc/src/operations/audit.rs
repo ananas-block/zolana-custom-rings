@@ -247,8 +247,8 @@ impl<S: TransactionSource> AuditService<S> {
         value: &[u8; 32],
     ) -> Result<OwnerEnrollment, RingRpcError> {
         let store = self.shared.store(self.ring);
-        // 1. The read claims a free lease. A follower answers from the holder's commits alone and
-        //    never scans into its mirror, so a restart finds no enrollment it never committed.
+        // 1. The read claims a free lease, a follower answers from the holder's commits alone and
+        //    never scans into its mirror.
         let scanned = {
             let mut guard = store.backfill.lock().await;
             let backfill = &mut *guard;
@@ -664,8 +664,7 @@ impl<S: TransactionSource> AuditService<S> {
         }
     }
 
-    /// Claims the lease under the backfill lock. A follower reloads the holder's commits on every
-    /// pass and a new holder reloads once, a renewing holder's mirror already equals its commits.
+    /// A follower reloads the holder's commits on every pass, a new holder once.
     async fn projection<'a>(
         &'a self,
         store: &AuditStore,
@@ -832,10 +831,7 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
-    /// Reads each due unread frame by its signature, the history position stays where it is.
-    ///
-    /// A failure backs only its own frame off, the next due frame still runs, and nothing here
-    /// stops the forward read.
+    /// Reads each due unread frame by its signature, a failure backs off its own frame alone.
     async fn repair_frames(
         &self,
         store: &AuditStore,
@@ -858,7 +854,11 @@ impl<S: TransactionSource> AuditService<S> {
         let due = match store.due_repairs(repairs, now).await {
             Ok(due) => due,
             Err(error) => {
-                log::warn!("frame repair of ring {} did not load because {}", self.ring, redacted(&error));
+                log::warn!(
+                    "frame repair of ring {} did not load because {}",
+                    self.ring,
+                    redacted(&error)
+                );
                 return;
             }
         };

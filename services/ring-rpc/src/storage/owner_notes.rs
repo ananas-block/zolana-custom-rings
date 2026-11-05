@@ -295,6 +295,6 @@ pub(crate) async fn snapshot_history_through(
 
 #[cfg(test)]
 thread_local! {
-    /// Rows `OwnerNotesPage` opened on this thread, a test reads it around one wallet read.
+    /// Rows `OwnerNotesPage` opened on the current thread.
     pub(crate) static OPENED_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

@@ -99,7 +99,6 @@ pub struct GetRecordUpdateStatusRequest {
 )]
 pub enum RecordUpdateStatus {
     /// Held off chain until a policy authority update sets every awaited list on the wallet's record, then both land in one `Update`.
-    /// Not tracking enrollment, it registers no secret and the program never sees the wait.
     PendingListApproval,
     Queued,
     Submitted {

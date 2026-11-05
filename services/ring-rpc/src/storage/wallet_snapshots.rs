@@ -389,18 +389,27 @@ impl WalletSnapshots<'_> {
         initial.commit().await?;
         let transaction = match self.db.get_database_backend() {
             DatabaseBackend::Postgres => {
-                self.db
+                let transaction = self
+                    .db
                     .begin_with_config(Some(IsolationLevel::RepeatableRead), None)
-                    .await?
+                    .await?;
+                // Before the snapshot starts, a row update waited on inside it fails to serialize.
+                transaction
+                    .execute_unprepared("LOCK TABLE wallet_snapshot_admission IN EXCLUSIVE MODE")
+                    .await?;
+                transaction
             }
-            DatabaseBackend::Sqlite | DatabaseBackend::MySql => self.db.begin().await?,
+            DatabaseBackend::Sqlite | DatabaseBackend::MySql => {
+                let transaction = self.db.begin().await?;
+                let admitted = transaction
+                    .execute_unprepared("UPDATE wallet_snapshot_admission SET id=id WHERE id=1")
+                    .await?;
+                if admitted.rows_affected() != 1 {
+                    return Err(RingRpcError::StateUnavailable);
+                }
+                transaction
+            }
         };
-        let admitted = transaction
-            .execute_unprepared("UPDATE wallet_snapshot_admission SET id=id WHERE id=1")
-            .await?;
-        if admitted.rows_affected() != 1 {
-            return Err(RingRpcError::StateUnavailable);
-        }
         let page = reader.read(&transaction).await?;
         let through = snapshot_history_through(&transaction, query.ring).await?;
         let mut metadata = SnapshotMetadata::new(query, through)?;

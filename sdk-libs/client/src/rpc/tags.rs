@@ -58,7 +58,6 @@ impl<K: Copy> TagWindow<K> {
     }
 }
 
-/// Exact-tag and spend reads.
 #[must_use]
 pub struct IndexerReads<'a, I: ?Sized> {
     indexer: &'a I,

@@ -724,6 +724,40 @@ mod relay_message {
             );
         }
     }
+
+    #[tokio::test]
+    async fn a_prefix_account_writes_only_where_the_forwarded_deposit_writes() {
+        let relay = DepositRelay::new(Answer::Honest);
+        relayed_signature(&relay, &keypair(9)).await.unwrap();
+        let (honest, inputs) = relay.honest.lock().unwrap().take().unwrap();
+        let owner_utxo_hash = spr_transaction::owner_utxo_hash(
+            &inputs.recipient.owner_hash().unwrap(),
+            &custom_ring_interface::domain::deposit_blinding(&inputs.blinding_secret).unwrap(),
+        )
+        .unwrap();
+        let expected = DepositRequest::of(&inputs, owner_utxo_hash).expected();
+        let forwarded = |writable: bool| {
+            expected
+                .spp
+                .accounts
+                .iter()
+                .find(|meta| meta.is_writable == writable && !meta.is_signer)
+                .unwrap()
+                .pubkey
+        };
+        let with_prefix = |meta: AccountMeta| {
+            let mut instruction = honest.clone();
+            instruction.accounts.insert(1, meta);
+            relay_message(&FEE_PAYER, &[instruction], UNITS)
+        };
+        let shared_read = with_prefix(AccountMeta::new_readonly(forwarded(true), false));
+        assert!(expected.check(&shared_read.0).is_ok());
+        let added_write = with_prefix(AccountMeta::new(forwarded(false), false));
+        assert_eq!(
+            expected.check(&added_write.0).err(),
+            Some(MessageMismatch::Accounts)
+        );
+    }
 }
 
 #[tokio::test]

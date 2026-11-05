@@ -845,9 +845,8 @@ mod tests {
             .map(|row| row.try_get("", "QUERY PLAN").unwrap())
             .collect();
         assert!(
-            plan.iter().any(|line| {
-                line.contains("Index Scan Backward using ring_record_nodes_pkey")
-            }),
+            plan.iter()
+                .any(|line| line.contains("Index Scan Backward using ring_record_nodes_pkey")),
             "{plan:?}"
         );
         let conditions: Vec<_> = plan

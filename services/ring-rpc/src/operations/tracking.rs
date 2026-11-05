@@ -146,7 +146,7 @@ pub(crate) struct TrackingScan<'a, S> {
     pub auditor: &'a X25519Keypair,
     pub source: &'a S,
     pub store: &'a AuditStore,
-    /// The lease holder persists each page, another replica scans into memory only.
+    /// The lease holder persists each page, `None` scans into memory without a database.
     pub durable: Option<&'a ProjectionWriter<'a>>,
 }
 
@@ -387,8 +387,7 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
                 .iter()
                 .map(|view| self.held(view, &root))
                 .collect::<Result<Vec<_>, _>>()?;
-            // 4. The page applies whole and commits with the cursor past it, a restart resumes there.
-            //    The check reads every stored row the page names, an evicted member still conflicts.
+            // 4. The page commits whole with the cursor past it, an evicted member still conflicts.
             let admission = self.store.enrollment_admission(found.clone()).await?;
             if let Some(writer) = self.durable {
                 writer.commit_enrollments(&found, next).await?;

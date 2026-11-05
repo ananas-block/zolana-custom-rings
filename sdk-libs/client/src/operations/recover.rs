@@ -427,7 +427,7 @@ impl<'a> MemberRecovery<'a> {
                 .map(|merge| merge.output_slots[0].output_context.hash)
                 .filter(|commitment| !found.seen.contains(commitment)),
         );
-        // 3. A later batch never creates a note this one spends, the spent notes leave the state.
+        // 3. No later batch creates a note these rows spend, the spent notes leave the state.
         let spent = rows
             .iter()
             .flat_map(|(transaction, _)| transaction.nullifiers.iter().copied())
@@ -641,7 +641,7 @@ impl<'h> MergeRecovery<'_, 'h> {
                         match owner {
                             Some(nullifier_pk) => {
                                 let opening = merged.opening()?;
-                                // Rebuild checked this commitment, the leaf check adds nothing.
+                                // The record rebuild checked the commitment, the leaf check adds nothing.
                                 let (note, _) = source.wallet_utxo(
                                     Utxo {
                                         ring_program_id: Some(ring),

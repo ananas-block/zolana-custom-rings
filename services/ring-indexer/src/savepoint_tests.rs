@@ -1,6 +1,5 @@
 //! A storage update whose record rows fail to save part way leaves the stored tree, roots and
-//! tracking floor as they were. A row already saved for `applied = 1` blocks one insert, the update's
-//! savepoint must drop every row it wrote before that one.
+//! tracking floor as they were.
 
 use custom_ring_interface::{
     mint_policy_write,
@@ -228,7 +227,7 @@ async fn a_failed_later_entry_keeps_the_earlier_entries_out_of_the_tree() {
     refused_rows_leave_the_tree_and_floor(&database().await, &[4, 9], 2).await;
 }
 
-/// A fresh database per test, the recipe runs the ignored tests of this crate in parallel.
+/// A fresh database per test, the recipe runs the crate's ignored tests in parallel.
 pub(crate) async fn postgres(name: &str) -> DatabaseConnection {
     let url = std::env::var("RING_INDEXER_TEST_POSTGRES_URL").unwrap();
     let server = Database::connect(&url).await.unwrap();

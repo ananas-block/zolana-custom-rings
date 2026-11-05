@@ -1,26 +1,23 @@
-//! `key rotate`, a new viewing key in the member's user record and tracking row, and the key holder
-//! every wallet command loads.
+//! `key rotate`, a new viewing key in the member's tracking authorization, and the key holder every
+//! wallet command loads.
 //!
-//! Read before `wallet`, whose scans and stores take the holder [`Context::ring_keys`] returns.
-//! Read after `zolana_ring_client::UpdateViewingKey`, the send and record check `rotate` runs.
+//! Read before `wallet`. Read after `custom_ring_sdk::RotateViewingKey`.
 //!
-//! The identity viewing key derives from the sender keypair. Every rotated key is a random secret
-//! in its own owner-only file, `<n>.key` for the n-th rotation, never overwritten. The holder
-//! applies the files in order, the newest key current and every earlier one retained, and notes
-//! sealed to a retired key still open. The anonymous wallet store stays keyed by the identity key.
+//! Each rotated key is an owner-only `<n>.key` file, never overwritten, the newest current and every
+//! earlier one retained. The anonymous wallet store stays keyed by the identity key.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context as _, Result};
-use custom_ring_sdk::Enroll;
+use custom_ring_sdk::RotateViewingKey;
 use solana_signer::Signer;
 use spr_keypair::{ShieldedKeypair, ViewingKey};
 use spr_transaction::ShieldedKeys;
-use zolana_ring_client::{UpdateViewingKey, ViewingKeyResolver, ViewingRotation};
-use zolana_ring_keys::{ListSaltHolder, RotatingRingKeys};
+use zolana_ring_client::ViewingRotation;
+use zolana_ring_keys::RotatingRingKeys;
 use zolana_secret_file::{create_key32, read_key32, Access};
 
-use crate::{line, wallet::unix_now, Context};
+use crate::{line, member::authorization, wallet::unix_now, Context};
 
 /// Under the `keys/` that `new` writes into `.gitignore`, one directory per owner.
 pub const ROTATED_VIEWING_KEY_DIR: &str = "keys/viewing-keys";
@@ -42,27 +39,20 @@ pub fn rotate(ctx: &Context) -> Result<()> {
     let identity = ShieldedKeypair::from_keypair(&owner)?;
     let rotated = RotatedKeys::of(ctx, &identity);
     let keys = rotated.holder(&identity)?;
-    let rpc = ctx.chain().rpc();
-    let published = ctx
-        .block(async {
-            ViewingKeyResolver::new(owner.pubkey())
-                .with_credential(identity.shielded_address()?.nullifier_pubkey)
-                .resolve(rpc)
-                .await
-                .map_err(anyhow::Error::from)
-        })?
-        .context("the sender has no user record, register its keys before a rotation")?;
-    // 1. A record key the wallet never held came from another copy of the wallet. Publishing
-    //    over it strands every payment sealed to that key.
+    let published = authorization(ctx.ring, &ctx.zolana, &identity)?
+        .context("the sender has no tracking authorization, enroll before a rotation")?
+        .viewing_u;
+    // 1. An authorization key the wallet never held is another copy's, publishing over it strands its payments.
     ensure!(
         keys.viewing_public_keys()
-            .contains(&published.viewing_pubkey),
-        "the user record names a viewing key the wallet does not hold"
+            .iter()
+            .any(|key| key.u() == published),
+        "the tracking authorization names a viewing key the wallet does not hold"
     );
     let store = ctx.anonymous_wallet_store(identity.viewing_pubkey());
-    let rotation = if published.viewing_pubkey == keys.address()?.viewing_pubkey {
-        // 2. The secret file lands before the history and the record name its key. A run
-        //    stopped after the update then still holds the key every new payment is sealed to.
+    let rotation = if published == keys.address()?.viewing_pubkey.u() {
+        // 2. The secret file lands before the history and the authorization name its key, a
+        //    stopped run still holds it.
         let next = ViewingKey::new();
         rotated.store(&next)?;
         store.update(|wallet| {
@@ -75,8 +65,8 @@ pub fn rotate(ctx: &Context) -> Result<()> {
             Ok(rotation)
         })?
     } else {
-        // 3. An older held key in the record is a stopped run's. Its stored key publishes before
-        //    a new one starts, and the history takes it first when the run stopped before that.
+        // 3. An older held key in the authorization marks a stopped run, whose newest file joins
+        //    the history and publishes before any new key.
         store.update(|wallet| {
             let current = keys.address()?.viewing_pubkey;
             if wallet.history().entry(&current).is_none() {
@@ -92,45 +82,21 @@ pub fn rotate(ctx: &Context) -> Result<()> {
             })
         })?
     };
-    let updated = ctx.block(async {
-        UpdateViewingKey {
+    let sent = ctx.block(
+        RotateViewingKey {
+            ring: ctx.ring,
             owner: &owner,
             payer: ctx.member_payer(config.mode, owner.pubkey())?,
             keys: &rotation.keys,
             history: &rotation.history,
         }
-        .send(rpc)
-        .await
-        .map_err(anyhow::Error::from)
-    })?;
-    line(
-        "viewing key",
-        hex::encode(updated.viewing_pubkey.as_bytes()),
-    );
-    match updated.signature {
-        Some(signature) => line("signature", signature),
-        None => line("record", "already current"),
-    }
-    // 4. Senders read a recipient's viewing key from its tracking row, the rotation moves it there
-    //    too. The row grants the new key once an apply lands it in a root.
-    let payer = ctx.member_payer(config.mode, owner.pubkey())?;
-    let rotation = ctx.block(
-        Enroll {
-            ring: ctx.ring,
-            payer: payer.pubkey(),
-            owner: owner.pubkey(),
-            nullifier_key: &identity.nullifier_key,
-            viewing_pubkey: updated.viewing_pubkey,
-            list_salt: identity.list_salt(&ctx.ring.program_id())?,
-        }
-        .prove(ctx.ring_client()),
+        .send(ctx.ring_client()),
     )?;
-    ensure!(
-        rotation.parsed()?.proof.is_none(),
-        "the sender has no tracking authorization, register its key before a rotation"
-    );
-    let signature = ctx.send(&[payer, &owner], &[rotation.instruction()])?;
-    line("tracking rotation", signature);
+    line("viewing key", hex::encode(sent.viewing_pubkey.as_bytes()));
+    match sent.signature {
+        Some(signature) => line("tracking rotation", signature),
+        None => line("tracking authorization", "already current"),
+    }
     Ok(())
 }
 

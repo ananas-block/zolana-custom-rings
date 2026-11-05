@@ -12,8 +12,8 @@ use zolana_ring_rpc::{
     live_ring_client, run_server, write_grant_rows_secret, write_keypair, write_root_secret,
     ChainSource, Cli, CoSignerApproval, Command, EnrollmentApplierParts, Hub, KeyKind, KeySource,
     KeygenArgs, LiveStorageChain, OriginPolicy, RelayBudget, RelayServicesInit, ServeArgs,
-    ServeKeys, ServerOptions, ServiceIdentity, Store, TransactionSource, Upstreams, WalletSnapshotLimits,
-    MANAGED_MERGE_INTERVAL, RECORD_FLUSH_INTERVAL, STORE_CONNECTIONS,
+    ServeKeys, ServerOptions, ServiceIdentity, Store, TransactionSource, Upstreams,
+    WalletSnapshotLimits, MANAGED_MERGE_INTERVAL, RECORD_FLUSH_INTERVAL, STORE_CONNECTIONS,
 };
 
 #[tokio::main]

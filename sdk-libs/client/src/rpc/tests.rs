@@ -1554,15 +1554,25 @@ fn the_policy_authority_requests_match_the_shared_vector() {
     let list = PolicyAuthorityAttestation {
         target: target(),
         authority: authority.pubkey(),
-        action: ListPendingApprovals { registry: Address::new_from_array([2; 32]), cursor: None },
+        action: ListPendingApprovals {
+            registry: Address::new_from_array([2; 32]),
+            cursor: None,
+        },
     };
     let refuse = PolicyAuthorityAttestation {
         target: target(),
         authority: authority.pubkey(),
-        action: RefuseListApproval { registry: Address::new_from_array([2; 32]), update_id: vector.refuse.update_id.clone() },
+        action: RefuseListApproval {
+            registry: Address::new_from_array([2; 32]),
+            update_id: vector.refuse.update_id.clone(),
+        },
     };
-    let list_after = GetPendingListApprovalsRequest::read(ListApprovalScope { target: target(), authority: authority.pubkey(), registry: Address::new_from_array([2; 32]) })
-        .with_cursor(vector.refuse.update_id.clone());
+    let list_after = GetPendingListApprovalsRequest::read(ListApprovalScope {
+        target: target(),
+        authority: authority.pubkey(),
+        registry: Address::new_from_array([2; 32]),
+    })
+    .with_cursor(vector.refuse.update_id.clone());
     let message = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
     let file = "policy_authority_attestation.json";
     pinned(

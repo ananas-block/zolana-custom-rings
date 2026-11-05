@@ -41,7 +41,7 @@ use crate::{
     line,
     list::{ListChange, ListUpdate, Subject},
     macros::named_enum,
-    member::{registered, KeyEnrollment},
+    member::{applied, KeyEnrollment},
     merge::carries_no_data,
     policy, records,
     ui::{self, icon},
@@ -284,8 +284,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     read_back(ctx, authority, sent.transact)
 }
 
-/// Every recipient is checked against the ring's mode before anything is deposited.
-/// Spending a zero-key note names the wallet and shows its sender the spend.
+/// Zero-key notes print apart, spending one names the wallet and shows its sender the spend.
 pub fn run_balance(ctx: &Context, args: BalanceArgs) -> Result<()> {
     let config = ctx.ring_config()?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
@@ -307,10 +306,18 @@ pub fn run_balance(ctx: &Context, args: BalanceArgs) -> Result<()> {
     Ok(())
 }
 
+/// Every recipient is checked against the ring's mode before anything is deposited.
 pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     let config = ctx.ring_config()?;
     args.owner_rail.check(config.mode)?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
+    if let Some(wallet) = args.spend_public {
+        ensure!(
+            wallet == sender.pubkey(),
+            "`--spend-public` names {wallet}, the sender is {}",
+            sender.pubkey()
+        );
+    }
     let held = ctx.ring_keys(&sender)?;
     let payments = PaymentPlan::of(&args).resolve(config.mode, ctx.ring.program_id())?;
     let payments = match args.reply {
@@ -1295,13 +1302,13 @@ impl Transfer<'_> {
 }
 
 impl<'a> Transfer<'a> {
-    /// An unenrolled wallet's change takes the only key its tracking state allows.
+    /// A wallet with no applied row takes zero-key change, a keyed change needs the row.
     fn named_wallet(
         &self,
         ctx: &Context,
         transfer: PublicOwnerTransfer<'a>,
     ) -> Result<PublicOwnerTransfer<'a>> {
-        Ok(match registered(ctx.ring, &ctx.zolana, self.sender)? {
+        Ok(match applied(ctx.ring, &ctx.zolana, self.sender)? {
             true => transfer,
             false => transfer.with_zero_key_change(),
         })

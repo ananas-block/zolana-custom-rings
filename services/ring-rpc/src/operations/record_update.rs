@@ -298,10 +298,9 @@ impl CheckedUpdate {
         }
         let mut grants = BTreeMap::new();
         for entry in &self.entries {
-            let lists = ListSet::from_record_bits(
-                entry.mask & entry.value & AWAITABLE_LISTS.record_bits(),
-            )
-            .ok_or(RecordUpdateRefusal::InvalidAwaitedLists)?;
+            let lists =
+                ListSet::from_record_bits(entry.mask & entry.value & AWAITABLE_LISTS.record_bits())
+                    .ok_or(RecordUpdateRefusal::InvalidAwaitedLists)?;
             if !lists.is_empty() {
                 let granted = grants.entry(entry.member).or_insert(ListSet::EMPTY);
                 *granted = granted.union(lists);
@@ -416,8 +415,8 @@ impl WalletBatch {
 }
 
 impl ListApproval<'_> {
-    /// The pending updates whose every awaited list the update sets on their member.
-    /// Approval is the policy authority's own signed write, the writer checks no outside process behind it.
+    /// The pending updates whose every awaited list the update sets on their member, the writer
+    /// checks no outside process behind the approval.
     pub fn decide(self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
         if self.update.awaited.is_some() {
             return Ok(Vec::new());

@@ -69,18 +69,6 @@ impl Reach {
     }
 }
 
-/// The widest owner run that still settles inline, `None` when the rail's least run does not.
-fn widest_run(transfer: Transfer) -> Result<Option<usize>> {
-    let mut widest = None;
-    for owners in transfer.frame.required_owners()..=transfer.shape.n_inputs() {
-        match (Transfer { owners, ..transfer }).measure()? {
-            TransferFit::Measured(measured) if measured.fits() => widest = Some(owners),
-            _ => break,
-        }
-    }
-    Ok(widest)
-}
-
 fn reach(frame: FrameRail, shape: Shape, legs: usize, salted: bool) -> Result<Option<Reach>> {
     let transfer = Transfer {
         frame,
@@ -93,7 +81,7 @@ fn reach(frame: FrameRail, shape: Shape, legs: usize, salted: bool) -> Result<Op
         true => (run + frame.unsigned_rows()).min(shape.n_inputs()),
         false => shape.n_inputs(),
     };
-    Ok(widest_run(transfer)?.map(|run| Reach {
+    Ok(transfer.widest_settled_run()?.map(|(run, _)| Reach {
         frame,
         inputs: shape.n_inputs(),
         outputs: shape.n_outputs(),
@@ -223,21 +211,21 @@ pub fn run() -> Result<()> {
     writeln!(table, "|---|---|---|---|---|---|---|---|")?;
     for (key, reach) in key_reaches(&reaches)? {
         match reach {
-            Some(r) => writeln!(
+            Some(reach) => writeln!(
                 table,
                 "| {} | {} | {} | {} | {} | {} | {} | {} {}x{} legs {} rows {} |",
                 key.name,
-                r.inputs,
-                r.outputs,
-                r.legs,
-                r.rows,
-                r.subjects,
-                r.records,
-                r.widest.frame.name(),
-                r.widest.inputs,
-                r.widest.outputs,
-                r.widest.legs,
-                r.widest.rows
+                reach.inputs,
+                reach.outputs,
+                reach.legs,
+                reach.rows,
+                reach.subjects,
+                reach.records,
+                reach.widest.frame.name(),
+                reach.widest.inputs,
+                reach.widest.outputs,
+                reach.widest.legs,
+                reach.widest.rows
             )?,
             None => {
                 let profile = TransferShape::of(key.circuit)

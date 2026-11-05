@@ -627,6 +627,10 @@ impl PreparedRingDeposit {
         })
     }
 
+    pub(crate) fn frame_spent(&self) -> bool {
+        self.proved.load(Ordering::Acquire)
+    }
+
     /// Lamports the v1 header carries, the size check measures the header it adds.
     pub fn with_priority_fee(mut self, lamports: u64) -> Self {
         self.priority_fee = Some(lamports);

@@ -48,6 +48,8 @@ mod submission;
 mod tests;
 #[path = "state/trees.rs"]
 mod trees;
+#[path = "operations/viewing_rotation.rs"]
+mod viewing_rotation;
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
@@ -122,4 +124,5 @@ pub use crate::{
         live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,
     },
     trees::tree_id,
+    viewing_rotation::{RotateViewingKey, RotatedViewingKey},
 };

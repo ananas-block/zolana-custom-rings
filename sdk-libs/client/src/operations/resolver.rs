@@ -91,8 +91,7 @@ enum Opened {
 }
 
 impl RecipientResolver<'_> {
-    /// Reads the authorization at `confirmed`. A rotation that lands after the read leaves the payment
-    /// sealed to the key read, no program check reads a viewing key.
+    /// Reads the authorization at confirmed commitment, a later rotation leaves the payment sealed to the key read.
     pub async fn resolve<C: AsyncRpc + AsyncRingIndexer + ?Sized>(
         self,
         client: &C,

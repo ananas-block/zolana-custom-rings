@@ -1,9 +1,6 @@
 //! Confidential ring notes and ring deposits opened into a wallet, the pinned zolana scan skips them.
 //!
-//! A confidential sync shares the anonymous ledger. It reads each held key's slot tag above that key's committed tag
-//! position, opens the rows it reads, follows the spends of every unspent note, and returns one [`ScanCommit`]. Only
-//! [`AnonymousWallet::absorb`] stores it, so a crash before the absorb repeats the read and never skips a row.
-//! Discovery and opening stay here, the ledger owns every stored field.
+//! Only [`AnonymousWallet::absorb`] stores a sync's [`ScanCommit`], a crash before the absorb repeats the read.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -122,7 +119,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         let mut history = wallet.history().clone();
         // 1. Only rows above the committed positions come back, the ledger holds what earlier rows opened.
         let tagged = self.read_tags(&mut reads, &mut history).await?;
-        // 2. Every event read so far opens once. Later rounds follow only spends.
+        // 2. Every event read so far opens once, later rounds follow only spends.
         let rows = union_events(transactions, tagged);
         let opened = self.open_rows(&rows)?;
         let mut found = Found {
@@ -192,10 +189,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
                 groups.entry(entry.tag_position()).or_default().push(index);
             }
         }
-        // 2. A delivered slot publishes the short tag and a zero-key merge its owner tag, a read by the full key
-        // reaches neither. The owner tag finds a seeded merge with no input history, a spend read would miss it
-        // without the spent note. It rides the lowest group, and step 3 keeps every read key at or below a slot the
-        // owner tag has covered, so its next read leaves no gap.
+        // 2. Only the owner tag finds a zero-key merge, it rides the lowest group and step 3 keeps its next read gapless.
         let owner_tag = self
             .keys
             .address()?
@@ -332,8 +326,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
                 }
             }
         }
-        // 4. Only a commitment rebuilt here under the owner proves a note, and a zero-key note stays out of `owned`.
-        // A pending note rebuilt its commitment in its opener, the ledger holds it until its mint registers.
+        // 4. Only a commitment rebuilt under the owner proves a note, a pending note rebuilt its own in the opener.
         assign_nullifiers(self.keys, &mut pending)?;
         let RingOwnedUtxos {
             owned,
@@ -473,11 +466,7 @@ fn open_recipient_candidate(
     .unwrap_or(None))
 }
 
-/// A row the merge readers may decode. The first nullifier and each ring data hash are the only published values
-/// that reach Poseidon unreduced in a merge rebuild. The decoder skips a ciphertext element outside the field, packs
-/// the mint and ring id in chunks below the modulus, and only compares the commitment. A malformed row stops here and
-/// fails no read. A Poseidon error past here comes from the holder and fails the read, because a skip would let the
-/// history position pass a note a retry would open.
+/// Refuses a first nullifier or ring data hash off the field, a Poseidon error past here fails the read.
 pub(crate) fn is_ring_merge(tx: &ShieldedTransaction) -> bool {
     tx.ring_program_id.is_some()
         && tx.may_be_merge()

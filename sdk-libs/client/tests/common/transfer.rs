@@ -345,7 +345,8 @@ impl Transfer {
             .map(|(index, output)| {
                 let mut slot = self.slot(index, output);
                 if let Some((body, reply)) =
-                    custom_ring_interface::ring_body_output(&slot.output.payload).filter(|_| has_data)
+                    custom_ring_interface::ring_body_output(&slot.output.payload)
+                        .filter(|_| has_data)
                 {
                     let mut padded = body.to_vec();
                     padded.resize(

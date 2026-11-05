@@ -65,7 +65,7 @@ pub struct RingTrackingSealView {
     pub owner: SerializablePubkey,
     /// Tagged X25519, 33 bytes.
     pub eph_pk: Base64String,
-    /// 32 bytes.
+    /// 64 bytes.
     pub ciphertext: Base64String,
 }
 
@@ -104,7 +104,7 @@ pub struct GetTrackingOpeningsResponse {
     pub openings: Vec<RingTrackingOpening>,
 }
 
-/// Leaf 0 is the sentinel, the first enrolled owner sits at this leaf.
+/// Leaf 0 is the sentinel.
 pub const FIRST_TRACKING_LEAF: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

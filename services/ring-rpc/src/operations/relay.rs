@@ -461,8 +461,7 @@ impl Relay {
         self.under_lease(lease, staged).await
     }
 
-    /// The durable admission of a signed request, ahead of any proof or payment. One caller holds the
-    /// lease, a concurrent duplicate proves and pays for nothing.
+    /// One caller holds the lease, a concurrent duplicate proves and pays for nothing.
     async fn admit(&self, admit: Admit<'_>) -> Result<Claim, RingRpcError> {
         let Admit {
             key,
@@ -483,10 +482,8 @@ impl Relay {
             match admission {
                 Admission::Claimed(claim) => return Ok(*claim),
                 Admission::Busy => return Err(RingRpcError::RelayProverBusy),
-                // A row bound to another relay holds a message that may land. A retry under a fresh
-                // quote would build a second message over one charge, so the row stays and the retry
-                // refuses until settlement or proven expiry frees the key. A freed key takes the second
-                // round of the loop, the old attempt's costs are settled by then.
+                // A bound message may still land, the retry refuses until settlement or proven expiry
+                // frees the key.
                 Admission::Bound(held) => self.settle_earlier_attempt(&held).await?,
             }
         }
@@ -506,8 +503,7 @@ impl Relay {
         }
     }
 
-    /// A failure yields at once, a retry resumes without waiting for the lease to lapse. A lost yield
-    /// only delays the retry until the lapse.
+    /// A failure yields at once, a lost yield only delays a retry until the lease lapses.
     async fn under_lease<T>(
         &self,
         lease: Option<Lease>,
@@ -632,8 +628,7 @@ impl Relay {
             parties,
             lease,
         } = proven;
-        // 1. Every lamport the message can cost is held before the send. The rent of a missing setup
-        // account and of the account the message creates stays charged once it lands.
+        // 1. Every lamport the message can cost is held before the send, landed rent stays charged.
         let MissingSetup {
             mut instructions,
             rent: setup_rent,
@@ -712,8 +707,7 @@ impl Relay {
         Ok(step(relay_id, &row.record))
     }
 
-    /// The record and the row's binding commit together before the send. A lost lease stores no message,
-    /// the row can never lose track of a transaction the chain could take.
+    /// The record and the row's binding commit together, a lost lease stores no message.
     async fn store_attempt(&self, staged: StagedAttempt<'_>) -> Result<AttemptWrite, WriteError> {
         let StagedAttempt {
             lease,
@@ -820,8 +814,7 @@ impl Relay {
         }
     }
 
-    /// Only a missing account takes a create, and its rent is what the row reserves. A create kept for a
-    /// live account would pay unreserved rent if its owner closed the account before the message landed.
+    /// Only a missing account takes a create, the row reserves its rent alone.
     async fn missing_setup(
         &self,
         setup: &[CreateAssociatedTokenAccount],
@@ -848,8 +841,8 @@ impl Relay {
         Ok(MissingSetup { instructions, rent })
     }
 
-    /// Every enrollment holds its fee, only a first enrollment reserves the tracking authorization rent.
-    /// No storage instruction closes the account, a rotation found enrolled lands with no create.
+    /// Every enrollment holds its fee, only a first one reserves rent, no instruction closes the
+    /// account.
     async fn created_rent(&self, payload: &RelayPayload) -> Result<Option<u64>, RingRpcError> {
         let RelayPayload::Enroll(enrollment) = payload else {
             return Ok(None);
@@ -872,9 +865,8 @@ impl Relay {
         }))
     }
 
-    /// Ends a row whose attempt can no longer land, or an open row nobody resumed. The claim excludes
-    /// retries, a selection a retry overtook loses here and changes nothing, and so does a claim
-    /// another closer holds. A failure leaves the row closing for the next sweep.
+    /// Ends a row whose attempt can no longer land, a selection a retry or another closer overtook
+    /// changes nothing.
     async fn release(&self, held: &Reservation) -> Result<(), RingRpcError> {
         let slot = self.chain.slot().await?;
         let Some(claim) = self
@@ -937,8 +929,7 @@ impl Relay {
     }
 
     async fn sweep_row(&self, held: &Reservation) -> Result<(), RingRpcError> {
-        // 1. The relay advances first. The release below acts on the stored state, a sweep that lost its
-        // write to a newer revision releases nothing a live message still needs.
+        // 1. The relay advances first, a release acts only on the stored final state.
         let record = match self.relays().get(&held.relay_id).await? {
             None => None,
             Some(row) => Some(self.advance(&held.relay_id, row).await?.record),
@@ -1048,8 +1039,7 @@ impl Relay {
         }
     }
 
-    /// A signature already collected leaves the relay as it is. Concurrent submissions each apply their
-    /// signature to the newest revision, and only the writer of `Sent` makes the first send.
+    /// Each submission applies to the newest revision, only the writer of `Sent` makes the first send.
     pub async fn submit(&self, request: &SubmitRelayRequest) -> Result<RelayStatus, RingRpcError> {
         let relay_id = &request.relay_id;
         let signature = CollectedSignature {
@@ -1057,8 +1047,7 @@ impl Relay {
             signature: request.signature.0,
         };
         let mut row = self.row(relay_id).await?;
-        // 1. Each round reads one revision. A lost write re-reads a relay another writer moved forward, a
-        // relay moves forward once per signer and once more to its end, so the rounds end.
+        // 1. Each round reads one revision, a relay moves once per signer and once to its end.
         while let RelayState::AwaitingSignature(awaiting) = &row.record.state {
             let last = match awaiting.admit(signature.signer)? {
                 SignerAdmission::Collected => break,
@@ -1286,8 +1275,7 @@ impl Relay {
     }
 
     /// Commits over the revision `row` was read at, only the winning writer settles what the new state
-    /// ends. A stale worker returns the stored relay and frees only a co-sign it reserved that the stored
-    /// relay does not hold.
+    /// ends.
     async fn transition(
         &self,
         relay_id: &RelayId,
@@ -1301,14 +1289,12 @@ impl Relay {
             Transition::Unchanged => return Ok(Applied::Unchanged(row)),
             Transition::Next(next) => next,
         };
-        // 2. A closing write holds the co-sign it reserved. A write that does not land frees it, unless the
-        // stored relay holds the same deterministic co-signature.
+        // 2. A lost closing write frees its co-sign unless the stored relay holds the same co-signature.
         let reserved = match row.record.state {
             RelayState::AwaitingSignature(_) => next.co_signature(),
             _ => None,
         };
-        // 3. Confirmed usage settles before the write. A crash between them re-reads `Sent` and settles
-        // again, the chain already proved the landing.
+        // 3. Confirmed usage settles before the write, a crash between them settles again from `Sent`.
         if let RelayState::Confirmed { co_signature, .. } = &next {
             self.settle(*co_signature, CoSignSettlement::Confirmed)
                 .await?;
@@ -1810,8 +1796,7 @@ fn token_2022_account_len(mint: &[u8]) -> Result<usize, RingRpcError> {
         .map_err(|_| RingRpcError::StateUnavailable)
 }
 
-/// Every part of the request but the quote, one attempt per signed request. A fresh quote names a new
-/// relay id for the same spend, the key still finds the row its old message still answers to.
+/// Every part of the request but the quote, a fresh quote still finds the row its old message holds.
 fn attempt_key(request: &PrepareRelayRequest) -> Result<[u8; 32], RingRpcError> {
     let unquoted = serde_json::to_vec(&(&request.ring, &request.intent, &request.co_signers))
         .map(Zeroizing::new)

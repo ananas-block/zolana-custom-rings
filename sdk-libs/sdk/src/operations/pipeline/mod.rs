@@ -653,7 +653,7 @@ impl<'a> Prepared<'a> {
         let public = public_slots(&proof_inputs.external_data.interface_transfers)?;
         let salts = KnownSalts::new(staged.list_salts.clone());
         let planner = self.planner()?;
-        // A relayed frame arrives sealed, the row its owner sealed under decides which reads keep it.
+        // A relayed frame arrives sealed, a read keeps it only under the row its owner sealed.
         let sealed = staged
             .presealed
             .as_ref()

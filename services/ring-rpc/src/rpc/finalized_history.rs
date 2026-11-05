@@ -155,8 +155,8 @@ impl FinalizedHistory {
         request: FinalizedPage,
         source: &S,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        // 1. Pin one snapshot. No lock survives the snapshot read, and a slow origin
-        //    or indexer read below stalls no other page of the ring.
+        // 1. No lock survives the snapshot read, a slow origin or indexer read stalls no other
+        //    page of the ring.
         let snapshot = self.snapshot(&request, source).await?;
         let window = snapshot.window(&request, source).await?;
         // 2. Every returned signature binds its canonical origins to its indexed events.

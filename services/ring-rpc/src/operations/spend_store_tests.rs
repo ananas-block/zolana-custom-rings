@@ -385,7 +385,13 @@ fn padding_and_external_add_no_unresolved_state() {
     });
     let coverage = block_on(store.spend_coverage(CoverageCursor::new(RING))).expect("coverage");
     assert!(coverage.unresolved_real.is_empty());
-    assert_eq!((coverage.totals.expect("first page totals").padding, coverage.totals.expect("first page totals").external), (1, 1));
+    assert_eq!(
+        (
+            coverage.totals.expect("first page totals").padding,
+            coverage.totals.expect("first page totals").external
+        ),
+        (1, 1)
+    );
 }
 
 #[test]
@@ -1109,8 +1115,7 @@ async fn opened_by<T>(read: impl std::future::Future<Output = T>) -> (T, usize) 
     (value, OPENED_ROWS.with(std::cell::Cell::get))
 }
 
-/// A note whose commitment and blinding end in a 16 bit index, past the 256 notes of `note`.
-/// The leading bytes stay below the field modulus, the nullifier derives.
+/// Commitment and blinding end in a 16 bit index, leading bytes below the field modulus.
 fn indexed_note(owner: Address, key: &NullifierKey, index: u16, amount: u64) -> CreatedUtxo {
     let mut created = note(owner, key, 0, amount);
     created.commitment[29] = 0xc0;
@@ -1738,7 +1743,7 @@ async fn overlapping_wallet_snapshots_preserve_both_quotas_on_postgres() {
             loop {
                 let row = coordinator.connection().query_one(Statement::from_sql_and_values(
                     DatabaseBackend::Postgres,
-                    "SELECT COUNT(*) AS blocked FROM pg_stat_activity WHERE pid IN ($1,$2) AND wait_event_type='Lock' AND query LIKE 'UPDATE wallet_snapshot_admission%'",
+                    "SELECT COUNT(*) AS blocked FROM pg_stat_activity WHERE pid IN ($1,$2) AND wait_event_type='Lock' AND query LIKE 'LOCK TABLE wallet_snapshot_admission%'",
                     vec![pids[0].into(), pids[1].into()],
                 )).await.expect("capture lock waits").expect("lock count");
                 if row.try_get::<i64>("", "blocked").expect("blocked captures") == 2 {
@@ -1764,6 +1769,11 @@ async fn overlapping_wallet_snapshots_preserve_both_quotas_on_postgres() {
         }
         assert_eq!(admitted.len(), 1);
         assert_eq!(refused.len(), 1);
+        assert!(
+            matches!(refused[0].1, RingRpcError::WalletSnapshotCapacity),
+            "{:?}",
+            refused[0].1
+        );
         assert_eq!(
             count(&coordinator, "SELECT COUNT(*) FROM wallet_snapshots").await,
             baseline + 1
@@ -1919,18 +1929,32 @@ async fn coverage_continuation_does_not_read_lifetime_totals() {
             work.mark_unread(frame(slot));
         }
         terminal(work, 102);
-    }).await.expect("history");
-    let first = book.spend_coverage(CoverageCursor::new(RING)).await.expect("first page");
+    })
+    .await
+    .expect("history");
+    let first = book
+        .spend_coverage(CoverageCursor::new(RING))
+        .await
+        .expect("first page");
     assert_eq!(first.totals, Some(SpendCoverageTotals::default()));
     assert_eq!(first.unreadable.len(), 100);
-    let cursor = CoverageCursor::decode(&first.cursor.expect("continuation").0, RING).expect("cursor");
-    database.connection().execute_unprepared(
-        "ALTER TABLE finalized_spent_nullifiers RENAME TO parked_spent_nullifiers"
-    ).await.expect("park totals source");
+    let cursor =
+        CoverageCursor::decode(&first.cursor.expect("continuation").0, RING).expect("cursor");
+    database
+        .connection()
+        .execute_unprepared(
+            "ALTER TABLE finalized_spent_nullifiers RENAME TO parked_spent_nullifiers",
+        )
+        .await
+        .expect("park totals source");
     let continuation = book.spend_coverage(cursor).await;
-    database.connection().execute_unprepared(
-        "ALTER TABLE parked_spent_nullifiers RENAME TO finalized_spent_nullifiers"
-    ).await.expect("restore totals source");
+    database
+        .connection()
+        .execute_unprepared(
+            "ALTER TABLE parked_spent_nullifiers RENAME TO finalized_spent_nullifiers",
+        )
+        .await
+        .expect("restore totals source");
     let continuation = continuation.expect("continuation does not count spends");
     assert_eq!(continuation.totals, None);
     assert_eq!(continuation.unreadable.len(), 1);

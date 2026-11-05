@@ -37,8 +37,8 @@ mod relay_enroll;
 mod relay_proof;
 mod spend_coverage;
 mod wallet_activity;
-mod wallet_status;
 mod wallet_snapshot;
+mod wallet_status;
 
 pub use authority_transfer::*;
 pub use delegate_read::*;
@@ -53,8 +53,8 @@ pub use relay_enroll::*;
 pub use relay_proof::*;
 pub use spend_coverage::*;
 pub use wallet_activity::*;
-pub use wallet_status::*;
 pub use wallet_snapshot::*;
+pub use wallet_status::*;
 
 use crate::{
     AuditError, AuditedInput, AuditedMergeOutput, AuditedOutput, AuditedTransaction, AuditedUtxo,

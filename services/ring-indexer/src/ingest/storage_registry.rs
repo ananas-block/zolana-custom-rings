@@ -133,8 +133,7 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, StorageRegistry> {
         // 1. The program admits the update at the projected revision.
         self.authorize(&authority)?;
         let account = &*self.state.account;
-        // The program served the named tracking revision from its pin before it verified the proof,
-        // and a failed transaction never reaches here, so the floor moves to the named revision.
+        // A landed update proved its rows under the pinned registry at the named revision.
         if data.tracking_revision.is_some() && tracking_registry != Some(account.tracking_registry)
         {
             return Err(fault("the update names another tracking registry"));

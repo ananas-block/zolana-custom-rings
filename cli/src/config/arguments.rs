@@ -239,7 +239,7 @@ pub enum KeyCommand {
     Register,
     /// Prove the pending enrollments into the tracking tree, anyone may.
     Apply,
-    /// Replace the member's viewing key in its user record, earlier keys stay held for old notes.
+    /// Replace the member's viewing key in its user record and tracking authorization, earlier keys stay held for old notes.
     Rotate,
 }
 

@@ -120,7 +120,7 @@ pub struct RelayTransferTerms {
     pub setup: Vec<TokenAccountCreate>,
 }
 
-/// What one public funder agrees to, its own deposit legs alone. It reads no slot and no note.
+/// What one public funder agrees to, its own deposit legs alone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RelayFunderTerms {
@@ -435,7 +435,7 @@ fn check_signer(envelope: &Envelope, accounts: &[AccountMeta]) -> Result<(), Mes
         (named.next(), named.next()),
         (Some(meta), None) if meta.is_signer && !meta.is_writable
     );
-    if !signs_once || !envelope.reads_only(accounts.get(..1).unwrap_or_default()) {
+    if !signs_once || !envelope.reads_only(accounts.get(..1).unwrap_or_default(), &[]) {
         return Err(MessageMismatch::Accounts);
     }
     Ok(())
@@ -466,7 +466,9 @@ impl ExpectedDeposit {
             .checked_sub(self.spp.accounts.len())
             .ok_or(MessageMismatch::Accounts)?;
         let (prefix, spp_accounts) = instruction.accounts.split_at(ring_accounts);
-        if spp_accounts != self.spp.accounts.as_slice() || !envelope.reads_only(prefix) {
+        if spp_accounts != self.spp.accounts.as_slice()
+            || !envelope.reads_only(prefix, spp_accounts)
+        {
             return Err(MessageMismatch::Accounts);
         }
         Ok(envelope.verified(message))
@@ -560,6 +562,7 @@ impl ExpectedDelegate {
         accounts: &[AccountMeta],
     ) -> Result<(), MessageMismatch> {
         let data = parsed.data();
+        // 1. The stream opens under the requested keys, and the legs are the requested withdrawals.
         let opened = open_stream(parsed, &self.tx_viewing_key, &self.auditor)?;
         if data.has_data {
             return Err(MessageMismatch::Data);
@@ -817,8 +820,7 @@ impl ExpectedPublicOwner {
     /// The signer's entry in the run the program hashes into `signers.Chain`. The ring auth PDA finds
     /// SPP's list with no read of the registries or co-signers ahead of it, since the program refuses
     /// a second copy anywhere in that list and neither a registry slot nor a signer slot can hold the
-    /// PDA. A misplaced run would read another signer's count, the same window the program takes
-    /// closes that.
+    /// PDA.
     fn run_entry(
         &self,
         data: &RingTransactData<'_>,
@@ -994,7 +996,7 @@ impl ExpectedFrame for ExpectedFunder {
         }
         match self
             .envelope(signer)?
-            .reads_only(accounts.get(..1).unwrap_or_default())
+            .reads_only(accounts.get(..1).unwrap_or_default(), &[])
         {
             true => Ok(()),
             false => Err(MessageMismatch::Accounts),
@@ -1348,14 +1350,19 @@ impl Envelope {
         })
     }
 
-    /// The ring account first, then read only accounts that never name the signer.
-    fn reads_only(&self, prefix: &[AccountMeta]) -> bool {
+    /// The ring account first, then accounts that never name the signer and write only where `forwarded` writes, a message holds one write role per address.
+    fn reads_only(&self, prefix: &[AccountMeta], forwarded: &[AccountMeta]) -> bool {
+        let forwarded_write = |meta: &AccountMeta| {
+            forwarded
+                .iter()
+                .any(|spp| spp.pubkey == meta.pubkey && spp.is_writable)
+        };
         match prefix.split_first() {
             Some((ring, rest)) => {
                 *ring == AccountMeta::new_readonly(self.ring.policy_pda(), false)
-                    && rest
-                        .iter()
-                        .all(|meta| !meta.is_writable && meta.pubkey != self.signer)
+                    && rest.iter().all(|meta| {
+                        (!meta.is_writable || forwarded_write(meta)) && meta.pubkey != self.signer
+                    })
             }
             None => false,
         }

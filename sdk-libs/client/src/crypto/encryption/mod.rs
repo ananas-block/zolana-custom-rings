@@ -26,7 +26,6 @@ pub fn auditor_view_tag(pk: &X25519Pubkey) -> [u8; 32] {
     pk.u()
 }
 
-/// The key schedule of a sealed stream.
 #[derive(Clone, Copy)]
 pub(crate) enum StreamSchedule {
     Ring(&'static [u8; 9]),

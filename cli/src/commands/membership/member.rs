@@ -1,9 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use custom_ring_interface::tracking::TrackingAuthorization;
 use custom_ring_sdk::{CustomRing, Enroll, EnrollPending};
 use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_keypair::ShieldedKeypair;
+use spr_transaction::ShieldedKeys;
 use zolana_ring_client::RingIndexer;
 use zolana_ring_keys::ListSaltHolder;
 
@@ -81,7 +82,7 @@ fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {
             payer: payer.pubkey(),
             owner: member.pubkey(),
             nullifier_key: &member.nullifier_key,
-            viewing_pubkey: member.viewing_pubkey(),
+            viewing_pubkey: ctx.ring_keys(member)?.address()?.viewing_pubkey,
             list_salt: member.list_salt(&ctx.ring.program_id())?,
         }
         .prove(ctx.ring_client()),
@@ -99,12 +100,36 @@ fn plan(registered: bool, confirm: impl FnOnce() -> Result<bool>) -> Result<Plan
 }
 
 /// The first key is final, the member's authorization account holds it.
-pub(crate) fn registered<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
+fn registered<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
     ring: CustomRing,
     zolana: &Zolana<R, I>,
     keys: &ShieldedKeypair,
 ) -> Result<bool> {
+    Ok(authorization(ring, zolana, keys)?.is_some())
+}
+
+/// An apply has landed the member's row in the tracking root.
+pub(crate) fn applied<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
+    ring: CustomRing,
+    zolana: &Zolana<R, I>,
+    keys: &ShieldedKeypair,
+) -> Result<bool> {
+    Ok(authorization(ring, zolana, keys)?.is_some_and(|held| !held.is_pending()))
+}
+
+pub(crate) fn authorization<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
+    ring: CustomRing,
+    zolana: &Zolana<R, I>,
+    keys: &ShieldedKeypair,
+) -> Result<Option<TrackingAuthorization>> {
     let policy = zolana.block_on(ring.require_policy(zolana.as_async().rpc()))?;
-    let (authorization, _) = TrackingAuthorization::find_address(&policy.tracking, &keys.pubkey());
-    Ok(zolana.rpc().get_account(authorization)?.is_some())
+    let (address, _) = TrackingAuthorization::find_address(&policy.tracking, &keys.pubkey());
+    zolana
+        .rpc()
+        .get_account(address)?
+        .map(|account| {
+            TrackingAuthorization::decode(&account.owner, &account.data)
+                .with_context(|| format!("{address} is not a tracking authorization"))
+        })
+        .transpose()
 }

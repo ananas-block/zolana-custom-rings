@@ -332,6 +332,14 @@ pub enum RingError {
     AttemptUnreadable,
     #[error("the enrollment attempt reconciles to {0:?}, only an expired attempt goes again")]
     AttemptNotExpired(crate::enrollment::EnrollmentOutcome),
+    #[error("{owner} holds no tracking authorization, enroll before a rotation")]
+    RotationUnenrolled { owner: Address },
+    #[error("the viewing history's current key differs from the key holder's")]
+    ViewingHistoryNotCurrent,
+    #[error("the tracking authorization of {owner} names a viewing key the wallet does not hold")]
+    ViewingKeyNotHeld { owner: Address },
+    #[error("the tracking authorization of {owner} does not hold the rotated viewing key")]
+    ViewingKeyNotPublished { owner: Address },
     #[error("the owner of write {write_index} holds no applied tracking row")]
     WriteOwnerNotEnrolled { write_index: u8 },
     #[error("write {write_index} is not the list key of its owner under the salt")]
