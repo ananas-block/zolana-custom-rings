@@ -193,12 +193,15 @@ export function registryCurator(registry: Pick<RingPolicy, "sources">): Address 
   return registry.sources.find((source) => !isZeroAddress(source.registry))?.registry;
 }
 
-/** Rust `RingPolicy::root_registries`, the live registries `reader` passes after the ring account, the records first. */
+/** Rust `RingPolicy::root_registries`, the live registries `reader` passes after the ring account, the tracking registry last. */
 export function ringRootRegistries(policy: RingPolicy, reader: RootReader): readonly Address[] {
   const read = rootRead(policy, reader);
-  if (read === "none") return Object.freeze([]);
   const curator = read === "policy" ? registryCurator(policy) : undefined;
-  return Object.freeze([policy.records, ...(curator === undefined ? [] : [curator])]);
+  return Object.freeze([
+    ...(read === "none" ? [] : [policy.records]),
+    ...(curator === undefined ? [] : [curator]),
+    policy.tracking,
+  ]);
 }
 
 /** Mirrors Rust `StorageRegistry::from_data`, a nonzero next index within the tree capacity. */

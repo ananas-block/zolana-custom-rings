@@ -297,4 +297,25 @@ describe("resolveRingRecipient", () => {
       }),
     ).rejects.toMatchObject({ code: "RING_TRACKING_INVALID" });
   });
+
+  it("refuses any opening count but one for the one owner asked", async () => {
+    const { to, row, accounts } = await addressed();
+    const client = chain(row, "present", accounts);
+    const served = await client.getTrackingOpenings({
+      registry: REGISTRY,
+      members: [],
+      expectedRoot: new Uint8Array(32) as Bytes32,
+    });
+    for (const openings of [[], [...served.openings, ...served.openings]])
+      await expect(
+        resolveRingRecipient({
+          client: { ...client, getTrackingOpenings: async () => ({ ...served, openings }) },
+          trackingRegistry: REGISTRY,
+          to,
+        }),
+      ).rejects.toMatchObject({
+        code: "RING_TRACKING_INVALID",
+        details: { reason: "openings", count: openings.length },
+      });
+  });
 });

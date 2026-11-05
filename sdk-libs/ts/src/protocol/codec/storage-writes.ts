@@ -3,6 +3,7 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 
 import { RingError } from "../error.js";
 import {
+  checkAssetLimits,
   MINT_POLICY_LEN,
   mintPolicyFromBytes,
   mintPolicyWrite,
@@ -33,7 +34,7 @@ export function encodeStorageWrites(writes: readonly StorageWrite[]): Uint8Array
   return writer.finish();
 }
 
-/** Refuses a partial write, a mint settings tag past 1 or nonzero settings under tag 0. */
+/** Rust `RecordWriteData::entry`, refusals beyond the writer's lists aside. */
 export function decodeStorageWrites(data: Uint8Array): readonly StorageWrite[] {
   if (data.length % RECORD_LENGTH !== 0) throw invalid(data.length);
   const writes: StorageWrite[] = [];
@@ -54,9 +55,15 @@ function recordWrite(reader: Reader): StorageWrite {
   const tag = reader.u8("mintPolicy.tag");
   const policy = reader.bytes(MINT_POLICY_LEN, "mintPolicy");
   reader.done();
-  if (tag === 1)
-    return Object.freeze({ member, mask, value, mintPolicy: mintPolicyFromBytes(policy) });
-  if (tag !== 0 || !policy.every((byte) => byte === 0))
+  if ((value & ~mask) !== 0n)
+    throw new RingError("RING_STORAGE_WRITE_INVALID", { details: { field: "value" } });
+  if (tag === 1) {
+    const mintPolicy = mintPolicyFromBytes(policy);
+    checkAssetLimits(mintPolicy.limits);
+    return Object.freeze({ member, mask, value, mintPolicy });
+  }
+  // A write keeping both the lists and the mint settings changes nothing.
+  if (tag !== 0 || mask === 0n || !policy.every((byte) => byte === 0))
     throw new RingError("RING_STORAGE_WRITE_INVALID", { details: { field: "mintPolicy" } });
   return Object.freeze({ member, mask, value });
 }

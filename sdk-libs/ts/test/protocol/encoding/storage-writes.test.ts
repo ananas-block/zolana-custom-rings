@@ -66,4 +66,17 @@ describe("RecordWriteData", () => {
       expect.objectContaining({ code: "RING_STORAGE_WRITE_INVALID" }),
     );
   });
+
+  it("refuses a value outside its mask and a write keeping both lists and settings", async () => {
+    const wallet = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(7));
+    const member = memberOfTag(addressBytes(wallet.address));
+    const viewing = recordBit(ListId.ringViewing);
+    for (const write of [
+      { member, mask: viewing, value: viewing | recordBit(ListId.reader) },
+      { member, mask: 0n, value: 0n },
+    ])
+      expect(() => decodeStorageWrites(encodeStorageWrites([write]))).toThrow(
+        expect.objectContaining({ code: "RING_STORAGE_WRITE_INVALID" }),
+      );
+  });
 });

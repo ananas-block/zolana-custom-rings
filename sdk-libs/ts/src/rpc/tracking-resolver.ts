@@ -70,9 +70,9 @@ export async function resolveRingRecipient(
     context,
   );
   const [opening] = openings;
-  if (opening === undefined)
+  if (opening === undefined || openings.length !== 1)
     throw new RingError("RING_TRACKING_INVALID", {
-      details: { reason: "openings" },
+      details: { reason: "openings", count: openings.length },
     });
   const row = verifyTrackingOpening(opening, root.root, member);
   const named = to.recipient.nullifierPublicKey;

@@ -313,8 +313,9 @@ describe("delegate sources", () => {
       owner: ShieldedKeypair,
       leaf: number,
       asset: Address = SOL_MINT,
+      amount = 10n,
     ): WalletUtxo => {
-      const input = noteInput(owner, 10n, fixture.ringProgramId, asset);
+      const input = noteInput(owner, amount, fixture.ringProgramId, asset);
       return {
         utxo: input.utxo,
         outputContext: {
@@ -356,26 +357,34 @@ describe("delegate sources", () => {
       notes: assets.map((asset, at) => noteOf(fixture, owner, leaf + at, asset)),
     });
 
-    it("funds every mint of a move across at most two trees", async () => {
-      const [member, payee] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
-      const { fixture, delegate } = await moveRing("confidential", [member, payee]);
+    const on = (note: WalletUtxo, tree: Address): WalletUtxo => ({
+      ...note,
+      outputContext: { ...note.outputContext, tree },
+    });
+    const withSecondTree = async (fixture: Fixture) => {
       const second = treeAddress(fixture.client.treeId + 1);
       const first = await fixture.client.getAccount(fixture.client.tree);
       if (first === undefined) throw new Error("the client's tree is published");
       const data = first.data.slice();
       new DataView(data.buffer).setUint16(2, fixture.client.treeId + 1, true);
       const client = clientOf(fixture);
-      const on = (note: WalletUtxo, tree: Address): WalletUtxo => ({
-        ...note,
-        outputContext: { ...note.outputContext, tree },
-      });
+      return {
+        second,
+        client: withConfirmedReads({
+          ...client,
+          getAccount: async (address: Address) =>
+            address === second ? { ...first, data } : client.getAccount(address),
+        }),
+      };
+    };
+
+    it("funds every mint of a move across at most two trees", async () => {
+      const [member, payee] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
+      const { fixture, delegate } = await moveRing("confidential", [member, payee]);
+      const { second, client } = await withSecondTree(fixture);
       const move = (notes: readonly WalletUtxo[]) =>
         buildRingDelegateRecoveredTransaction({
-          client: withConfirmedReads({
-            ...client,
-            getAccount: async (address: Address) =>
-              address === second ? { ...first, data } : client.getAccount(address),
-          }),
+          client,
           ringProgramId: fixture.ringProgramId,
           delegate: delegate as never,
           feePayer: fixture.authority,
@@ -405,6 +414,45 @@ describe("delegate sources", () => {
         split?.inputUtxos.filter((input) => !input.isDummy()).map((input) => input.treeId),
       ).toEqual([fixture.client.treeId, fixture.client.treeId + 1]);
       expect(split?.inputTreeIds()).toEqual([fixture.client.treeId, fixture.client.treeId + 1]);
+    });
+
+    it("pays the change to the owner of the smallest note across tree runs", async () => {
+      const [member, other, payee] = [
+        ShieldedKeypair.generate(),
+        ShieldedKeypair.generate(),
+        ShieldedKeypair.generate(),
+      ];
+      const { fixture, delegate } = await moveRing("confidential", [member, other, payee]);
+      const { second, client } = await withSecondTree(fixture);
+      await buildRingDelegateRecoveredTransaction({
+        client,
+        ringProgramId: fixture.ringProgramId,
+        delegate: delegate as never,
+        feePayer: fixture.authority,
+        outputs: [{ recipient: payee.shieldedAddress(), asset: SOL_MINT, amount: 200n }],
+        sources: [
+          {
+            address: member.shieldedAddress(),
+            nullifierKey: member.nullifierKey(),
+            notes: [
+              noteOf(fixture, member, 0, SOL_MINT, 100n),
+              noteOf(fixture, member, 1, SOL_MINT, 50n),
+            ],
+          },
+          {
+            address: other.shieldedAddress(),
+            nullifierKey: other.nullifierKey(),
+            notes: [on(noteOf(fixture, other, 2, SOL_MINT, 80n), second)],
+          },
+        ],
+        txViewingKey: TX_VIEWING_KEY,
+      });
+      const change = fixture.sppCalls
+        .at(-1)
+        ?.proofInputs.outputs.find((output) => output.amount === 30n);
+      expect(
+        change?.ownerAddress?.signingPublicKey.equals(member.shieldedAddress().signingPublicKey),
+      ).toBe(true);
     });
 
     it("spends several owners' notes and pays the change to the last note's owner", async () => {
