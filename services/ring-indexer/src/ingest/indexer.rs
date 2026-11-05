@@ -24,7 +24,7 @@ use crate::{
         self, BlockJournal, BlockUndo, ProjectedAccount, ProjectedStore, RegistryState,
         RegistryUndo, RingCursor,
     },
-    storage_registry, tracking_registry,
+    storage_registry,
 };
 
 const MAX_RETRY_DELAY_SECS: u64 = 15;
@@ -233,13 +233,7 @@ impl Indexer {
         block: &BlockInfo,
         cursor: &mut RingCursor,
     ) -> Result<()> {
-        let undo = BlockWork {
-            tx,
-            block,
-            rpc: &self.rpc,
-        }
-        .run()
-        .await?;
+        let undo = BlockWork { tx, block }.run().await?;
         storage::save_journal(
             tx,
             &BlockJournal {
@@ -350,13 +344,11 @@ pub(crate) struct Projection<'p, 'c, C, A: ProjectedAccount> {
     pub store: &'p ProjectedStore<'c, C, A>,
     pub state: &'p mut RegistryState<A>,
     pub slot: u64,
-    pub rpc: &'p SolanaRpc,
 }
 
 struct BlockWork<'a> {
     tx: &'a DatabaseTransaction,
     block: &'a BlockInfo,
-    rpc: &'a SolanaRpc,
 }
 
 impl BlockWork<'_> {
@@ -368,9 +360,7 @@ impl BlockWork<'_> {
                 if instruction.program_id != STORAGE_PROGRAM_ID {
                     continue;
                 }
-                if let Some(decoded) = tracking_registry::decode(instruction) {
-                    self.project(decoded, &mut undo.tracking).await?;
-                } else if let Some(decoded) = storage_registry::decode(instruction) {
+                if let Some(decoded) = storage_registry::decode(instruction) {
                     self.project(decoded, &mut undo.storage).await?;
                 }
             }
@@ -416,7 +406,6 @@ impl BlockWork<'_> {
                 store: &store,
                 state: &mut state,
                 slot: self.block.metadata.slot,
-                rpc: self.rpc,
             })
             .await;
         let saved = match projected {
