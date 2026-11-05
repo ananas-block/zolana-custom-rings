@@ -20,6 +20,7 @@ use custom_ring_interface::{
     storage::StorageError,
     AddressRootSelection, AuditCredential, CustomRingError,
 };
+use serde::{Deserialize, Serialize};
 use solana_account::Account;
 use solana_address::Address;
 use solana_signature::Signature;
@@ -127,7 +128,8 @@ pub struct AddressRoot {
     pub sequence: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum UnknownCredential {
     /// The address holds a queue PDA and the indexer serves no enrollment for it.
     Queued,

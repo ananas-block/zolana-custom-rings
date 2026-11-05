@@ -1866,3 +1866,18 @@ fn write_decrypted_page_vectors() {
     )
     .expect("vector");
 }
+
+#[test]
+fn an_unknown_credential_reaches_the_wallet_status_with_its_reason() {
+    let queued = WalletEnrollment::from(&crate::CredentialLookup::Unknown(
+        crate::UnknownCredential::Queued,
+    ));
+    assert_eq!(
+        queued,
+        WalletEnrollment::Unknown(crate::UnknownCredential::Queued)
+    );
+    assert_eq!(
+        serde_json::to_value(queued).unwrap(),
+        serde_json::json!({ "unknown": "queued" })
+    );
+}

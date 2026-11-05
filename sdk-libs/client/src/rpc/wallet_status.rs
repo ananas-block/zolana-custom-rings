@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
 
-use crate::CredentialLookup;
+use crate::{CredentialLookup, UnknownCredential};
 
 use super::{
     base64, cursor_in_bounds, Attestation, ReadAuth, ReadBuildError, ReadSigner, ReadTarget,
@@ -39,13 +39,13 @@ pub struct GetWalletStatusResponse {
     pub cursor: Option<Base64String>,
 }
 
-/// The owner's credential lookup, an unknown lookup never reads as not enrolled.
+/// The owner's credential lookup, an unknown lookup keeps its reason and never reads as not enrolled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WalletEnrollment {
     NotEnrolled,
     Enrolled,
-    Unknown,
+    Unknown(UnknownCredential),
 }
 
 impl From<&CredentialLookup> for WalletEnrollment {
@@ -53,7 +53,7 @@ impl From<&CredentialLookup> for WalletEnrollment {
         match lookup {
             CredentialLookup::Present(_) => Self::Enrolled,
             CredentialLookup::Absent(_) => Self::NotEnrolled,
-            CredentialLookup::Unknown(_) => Self::Unknown,
+            CredentialLookup::Unknown(reason) => Self::Unknown(*reason),
         }
     }
 }
