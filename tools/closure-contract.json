@@ -94,6 +94,9 @@
     },
     "integration": {
       "branch": "alex/one-ring-proof-tracking"
+    },
+    "asset-resolution": {
+      "branch": "alex/one-ring-proof-tracking"
     }
   },
   "coordination": {
@@ -420,12 +423,15 @@
         "Random foreign decryptions do not become PendingNote entries.",
         "An unknown local identifier alone does not block progress.",
         "A transient mint lookup failure or exhausted budget preserves the exact page for retry.",
-        "An allocated identifier with a missing authenticated mapping returns a source consistency error."
+        "An allocated identifier with a missing authenticated mapping returns a source consistency error.",
+        "The session persists a candidate offset within an unfinished page.",
+        "A page larger than the mint lookup budget resumes after completed candidates rather than restarting their lookups."
       ],
       "required_evidence": [
         "Foreign compact bodies do not create owned or pending entries.",
         "Impossible asset identifiers perform no mint lookup.",
-        "A transient lookup failure resumes the same page without losing entries."
+        "A transient lookup failure resumes the same page without losing entries.",
+        "A page larger than lookup budget and cache capacity completes through repeated bounded recovery calls."
       ],
       "evidence": []
     },
@@ -595,12 +601,14 @@
         "Unavailable proof keys fail closed.",
         "The ordinary anonymous format retains its accepted output capacity.",
         "Authenticated SPP mint registry reads support recipient recovery.",
-        "Auditor recovery remains self contained."
+        "Auditor recovery remains self contained.",
+        "The explicit SPP body scheme selects the same format as frame flags, audit layout and proof dispatch."
       ],
       "required_evidence": [
         "Positive circuit solver case for the accepted shape.",
         "Wrong mint, owner, amount, output order and discriminator refuse.",
-        "Rust, Go and TypeScript deterministic codec vectors agree."
+        "Rust, Go and TypeScript deterministic codec vectors agree.",
+        "A format mismatch or invalid scheme length refuses before opening acceptance."
       ],
       "evidence": []
     },
@@ -875,6 +883,13 @@
         "release": "Set expiry to zero and run bounded cleanup.",
         "cleanup_max_rows": 512,
         "metadata_removal": "Only after all captured rows are removed."
+      },
+      "capacity_configuration": {
+        "type": "NonZeroUsize",
+        "store_default": 1024,
+        "principal_wallet_default": 2,
+        "ttl_seconds": 300,
+        "ttl_configurable": false
       }
     },
     "cosign": {
@@ -1023,7 +1038,19 @@
         "public_owners": 17,
         "salted_owners": 17,
         "assets": 1
-      }
+      },
+      "spp_ring_body_schemes": {
+        "standard": {
+          "tag": 10,
+          "minimum_body_bytes": 72
+        },
+        "single_asset_payout": {
+          "tag": 11,
+          "exact_body_bytes": 48
+        }
+      },
+      "format_agreement": "The frame flag, audit layout, proof key format and SPP body scheme must select the same format.",
+      "recovery_format": "Recovery selects the decoder from the SPP body scheme before decryption."
     },
     "projection_admission": {
       "owner": "projection-bounds",
@@ -1061,7 +1088,13 @@
       "ordering": "Existing source and payment lines precede ordered exit and withdrawal lines.",
       "validation": "Match output kinds and every withdrawal settlement field. Permit ring change only to signed sources. Refuse deposits, extra legs and data.",
       "mint_resolution": "Authenticate token program against the actual mint account.",
-      "withdrawal_recipient": "SOL uses the recipient account. SPL uses the recipient owner and derives its token account from owner, mint and token program."
+      "withdrawal_recipient": "SOL uses the recipient account. SPL uses the recipient owner and derives its token account from owner, mint and token program.",
+      "mint_owner_refusal": {
+        "rust": "AuthorityTransferError::WithdrawalMint",
+        "code": -32229,
+        "message": "the withdrawal mint uses another token program",
+        "typescript": "withdrawalMint"
+      }
     },
     "recovery_target": {
       "owners": [
@@ -1072,6 +1105,38 @@
       "query_rule": "Every persisted query starts with slot.lte equal to the fixed target.",
       "budget_rule": "The context probe consumes page budget.",
       "serialization": "Language specific versioned sessions enforce the shared recovery invariants."
+    },
+    "compact_asset_resolution": {
+      "owner": "asset-resolution",
+      "rust_open": "CompactAssetRead { client, target_slot }.open() -> CompactAssetResolver",
+      "rust_resolve": "resolve(id) -> Foreign | Resolved(Mint) | Paused",
+      "rust_errors": {
+        "Source(Box<ClientError>)": "Retryable source error pauses at the exact page and candidate.",
+        "InvalidCounter": "Permanent source consistency error.",
+        "InvalidRegistry { asset_id }": "Permanent source consistency error."
+      },
+      "typescript_open": "CompactAssetResolver.open({ client, targetSlot }, context?)",
+      "typescript_resolve": "resolve(id, context?) -> Foreign | Resolved(Mint) | Paused",
+      "typescript_errors": {
+        "ClientError transport error": "Retryable source error pauses at the exact page and candidate.",
+        "CLIENT_INVALID_RPC_RESPONSE": "Permanent source consistency error."
+      },
+      "verified_mapping_cache_capacity": 256,
+      "lookup_budget_per_invocation": 32,
+      "counter_authentication": [
+        "program owner",
+        "canonical counter PDA",
+        "account discriminator",
+        "next asset identifier at least two"
+      ],
+      "counter_read_context": "Confirmed with minContextSlot equal to the recovery target.",
+      "foreign_asset_ids": "Zero or identifiers at or above the authenticated next asset identifier require no registry lookup.",
+      "builtin_asset_id": 1,
+      "reverse_lookup": "Filter getProgramAccounts by the asset identifier at the canonical layout field.",
+      "mapping_authentication": "Exactly one returned account must match the program owner, canonical registry PDA, decoded mint and asset identifier.",
+      "missing_allocated_mapping": "Permanent source consistency error.",
+      "server_cost": "Filtered program account reads can scan the server index. The client lookup budget does not bound server work.",
+      "resume": "Persist the exact page query, cursor and next candidate offset across budget pauses."
     }
   }
 }
