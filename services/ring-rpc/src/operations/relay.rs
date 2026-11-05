@@ -126,6 +126,10 @@ pub enum RelayError {
     LiveAttempt,
     #[error("the request does not carry the depositor's signature")]
     DepositorSignature,
+    #[error(
+        "the relay budget is unset, the operator funds no enrollment, buffer or token account"
+    )]
+    BudgetUnset,
 }
 
 pub enum RelayPayload {
@@ -249,6 +253,7 @@ impl RelayError {
             Self::Allowance => -32207,
             Self::LiveAttempt => -32208,
             Self::DepositorSignature => -32209,
+            Self::BudgetUnset => -32210,
         }
     }
 
@@ -352,6 +357,9 @@ impl Relay {
         self.rings.check(ring).await?;
         let payload = RelayPayload::decode(&request.intent).map_err(RelayError::from)?;
         if let RelayPayload::Enroll(enrollment) = &payload {
+            // Every enrollment spends the operator's lamports, a disabled budget refuses before the
+            // admission and the proof check.
+            self.require_budget()?;
             if enrollment.tracking_registry != self.rings.tracking_registry(ring).await? {
                 return Err(RelayError::InvalidEnrollment.into());
             }
@@ -400,18 +408,8 @@ impl Relay {
                 (_, Some(stored)) => StoredProof::read(stored)?,
                 // The wallet proved its seal, the relay only pays.
                 (RelayPayload::Enroll(enrollment), None) => {
-                    let lease = lease.ok_or(RelayError::EnrollmentSignature)?;
-                    let step = enrollment_step(enrollment, parties.fee_payer);
-                    // The funding below pays for the exact message, it must fit first.
-                    let _fit = TransactionFit::inline(
-                        &step.instruction,
-                        FitSigners::new(parties.fee_payer),
-                        step.budget,
-                    )
-                    .map_err(refused_fit)?;
                     self.prover.check_enrollment(enrollment).await?;
-                    self.fund_enrollment(lease).await?;
-                    step
+                    enrollment_step(enrollment, parties.fee_payer)
                 }
                 (_, None) => {
                     let _proof = self
@@ -573,28 +571,15 @@ impl Relay {
         Ok(self.reservations().by_relay(relay_id).await?.is_some())
     }
 
-    /// The owner's signature over the digest was checked, a retry finds the held charge.
-    async fn fund_enrollment(&self, lease: Lease) -> Result<(), RingRpcError> {
-        let rent = self
-            .chain
-            .rent_exempt_lamports(TrackingAuthorization::SIZE)
-            .await?;
-        let fees = 2 * LAMPORTS_PER_SIGNATURE;
-        self.fund(Fund {
-            lease,
-            lamports: rent.saturating_add(fees),
-            fee_allowance: fees,
-            closing_fees: fees,
-            landing_rent: rent,
-            buffer: None,
-            proven: None,
-            budget: self.budget,
-        })
-        .await
-        .map(|_| ())
+    fn require_budget(&self) -> Result<(), RelayError> {
+        match self.budget.is_set() {
+            true => Ok(()),
+            false => Err(RelayError::BudgetUnset),
+        }
     }
 
     async fn fund(&self, fund: Fund) -> Result<Reservation, RingRpcError> {
+        self.require_budget()?;
         match self.reservations().fund(fund).await? {
             FundOutcome::Held(held) => Ok(*held),
             FundOutcome::OverTotal => Err(RelayError::Budget.into()),
@@ -684,16 +669,18 @@ impl Relay {
             lease,
         } = proven;
         let mut proven = proven;
-        // 1. Every lamport the message and its upload can cost is held before the first send.
+        // 1. Every lamport the message and its upload can cost is held before the first send. The rent
+        // of a missing setup account and of the account the message creates stays charged once it lands.
         let MissingSetup {
             mut instructions,
             rent: setup_rent,
         } = self.missing_setup(&setup).await?;
+        let landing_rent = setup_rent.saturating_add(self.created_rent(&payload).await?);
         self.reserve_and_upload(RelaySpend {
             proven: &mut proven,
             lease,
             setup: &instructions,
-            setup_rent,
+            landing_rent,
         })
         .await?;
         // 2. The final message reads the settlement, the writes above hold what it digests.
@@ -852,18 +839,18 @@ impl Relay {
             proven,
             lease,
             setup,
-            setup_rent,
+            landing_rent,
         } = spend;
         // 1. The transport is decided, a frame the relay cannot carry costs nothing.
         let Some(frame) = self.wide_frame(proven, setup)? else {
-            if setup_rent > 0 {
+            if landing_rent > 0 {
                 let fee = message_fee_of(&proven.instruction, self.fee_payer());
                 self.fund(Fund {
                     lease: lease.ok_or(RelayError::OwnerSignature)?,
-                    lamports: setup_rent.saturating_add(fee),
+                    lamports: landing_rent.saturating_add(fee),
                     fee_allowance: fee,
                     closing_fees: fee,
-                    landing_rent: setup_rent,
+                    landing_rent,
                     buffer: None,
                     proven: None,
                     budget: self.budget,
@@ -880,10 +867,10 @@ impl Relay {
         let held = self
             .fund(Fund {
                 lease,
-                lamports: cost.lamports.saturating_add(setup_rent),
+                lamports: cost.lamports.saturating_add(landing_rent),
                 fee_allowance: cost.fee_allowance,
                 closing_fees: cost.closing_fees,
-                landing_rent: setup_rent,
+                landing_rent,
                 buffer: Some(ReservedBuffer {
                     ring: proven.instruction.program_id,
                     buffer: frame.buffer(),
@@ -939,6 +926,18 @@ impl Relay {
             rent = rent.saturating_add(self.chain.rent_exempt_lamports(data_len).await?);
         }
         Ok(MissingSetup { instructions, rent })
+    }
+
+    /// A rotation creates no account but reserves the rent of a first enrollment, the total keeps it.
+    async fn created_rent(&self, payload: &RelayPayload) -> Result<u64, RingRpcError> {
+        match payload {
+            RelayPayload::Enroll(_) => {
+                self.chain
+                    .rent_exempt_lamports(TrackingAuthorization::SIZE)
+                    .await
+            }
+            RelayPayload::Transfer(_) | RelayPayload::Deposit(_) | RelayPayload::Merge(_) => Ok(0),
+        }
     }
 
     /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
@@ -1540,7 +1539,7 @@ struct RelaySpend<'a> {
     proven: &'a mut ProvenRelay,
     lease: Option<Lease>,
     setup: &'a [Instruction],
-    setup_rent: u64,
+    landing_rent: u64,
 }
 
 struct StagedAttempt<'a> {

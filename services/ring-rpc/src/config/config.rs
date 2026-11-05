@@ -120,7 +120,7 @@ pub struct ServeArgs {
         requires_all = ["store_url", "prover_url"]
     )]
     pub fee_payer_key_file: Option<PathBuf>,
-    /// Lamports reserved and spent over the store's life on buffers, enrollments and token accounts, zero funds none.
+    /// Lamports reserved and spent over the store's life on enrollments, buffers and token accounts, zero refuses every charge.
     #[arg(
         long,
         env = "RING_RPC_RELAY_BUDGET_LAMPORTS",
@@ -128,7 +128,7 @@ pub struct ServeArgs {
         requires = "fee_payer_key_file"
     )]
     pub relay_budget_lamports: u64,
-    /// Lamports one signer holds outstanding at once, the fees of its attempts that never landed stay counted.
+    /// Lamports one signer holds outstanding at once, the fees of its attempts that never landed stay counted, zero refuses every charge.
     #[arg(
         long,
         env = "RING_RPC_RELAY_SIGNER_BUDGET_LAMPORTS",

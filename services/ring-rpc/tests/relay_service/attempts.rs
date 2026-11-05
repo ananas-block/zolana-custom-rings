@@ -410,3 +410,49 @@ async fn a_failed_settlement_charges_its_fee_once_and_frees_the_key() {
     assert_eq!(fixture.outstanding().await, 0);
     assert_eq!(fixture.committed().await, 2 * 5_000);
 }
+
+/// A signed enrollment the chain never answers keeps its charge under its persisted signature until expiry.
+#[tokio::test]
+async fn a_sent_enrollment_that_never_lands_is_reconciled_at_expiry_and_charges_nothing() {
+    let fixture = Fixture::with_budget(ENROLLMENT_LAMPORTS).await;
+    let owner = Keypair::new_from_array([42; 32]);
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    let step = fixture
+        .prepare(&enrollment(&owner, vec![6, 1], quote.clone()))
+        .await
+        .expect("the relay");
+    let RelayStep::SignMessage { relay_id, message } = step else {
+        panic!("the owner signs its enrollment, got {step:?}");
+    };
+    pending_answer(&fixture, Some(None));
+    let sent: RelayStatus = fixture
+        .call(
+            SUBMIT_RELAY,
+            SubmitRelayRequest {
+                relay_id: relay_id.clone(),
+                signer: owner.pubkey().into(),
+                signature: owner.sign_message(&message.0).into(),
+            },
+        )
+        .await;
+    assert!(matches!(sent, RelayStatus::Sent { .. }), "{sent:?}");
+
+    let retried = fixture
+        .prepare(&enrollment(&owner, vec![6, 1], fresh(&quote)))
+        .await;
+    assert!(
+        refused_with(&retried, RelayError::LiveAttempt),
+        "{retried:?}"
+    );
+    assert_eq!(fixture.outstanding().await, ENROLLMENT_LAMPORTS as i64);
+
+    past_blockhash(&fixture);
+    let status: RelayStatus = fixture
+        .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
+        .await;
+
+    assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
+    assert_eq!(fixture.row_count().await, 0);
+    assert_eq!(fixture.committed().await, 0);
+    assert_eq!(fixture.sent().len(), 1);
+}
