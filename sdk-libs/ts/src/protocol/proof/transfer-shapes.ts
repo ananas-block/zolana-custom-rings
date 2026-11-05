@@ -178,15 +178,12 @@ export function depositKeyCapacity(
   );
 }
 
-/** Addresses SPP takes beside its nullifier PDAs. */
+/** Rust `SPP_ADDRESSES`, the addresses SPP takes beside its nullifier PDAs. */
 const SPP_ADDRESSES = 4;
-/** The fixed reservation excludes variable credential tree accounts. */
-const RING_ADDRESSES = 6;
+/** Rust `RING_ADDRESSES`, ring program, policy, config, own registry and curator registry. */
+const RING_ADDRESSES = 5;
 /** Rust `MAX_TRANSACTION_ADDRESSES`, the v1 ceiling. */
 export const MAX_TRANSACTION_ADDRESSES = 64;
-/** Rust `RING_ADDRESSES`, the catalog reserves no credential tree account. */
-const CATALOG_RING_ADDRESSES = 5;
-const ROW_ADDRESSES = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - CATALOG_RING_ADDRESSES;
 
 /** What takes a v1 transaction's addresses beside its owner signers, Rust `TransferAddresses`. */
 export interface TransferAddresses {
@@ -194,12 +191,19 @@ export interface TransferAddresses {
   readonly nInputs: number;
   readonly coSigners: number;
   readonly legs: number;
+  /** Distinct credential tree addresses absent from the remaining transaction accounts. */
+  readonly credentialAccounts: number;
 }
 
-/** The owner signers that fit, a co-signer takes its record too. */
+/** Rust `TransferAddresses::owner_signers`, a co-signer takes its record too. */
 export function ownerSignerCapacity(addresses: TransferAddresses): number {
   const taken =
-    SPP_ADDRESSES + RING_ADDRESSES + addresses.nInputs + 2 * addresses.coSigners + addresses.legs;
+    SPP_ADDRESSES +
+    RING_ADDRESSES +
+    addresses.nInputs +
+    2 * addresses.coSigners +
+    addresses.legs +
+    addresses.credentialAccounts;
   return Math.max(0, MAX_TRANSACTION_ADDRESSES - taken);
 }
 
@@ -231,7 +235,7 @@ function shapeHolds(entry: TransferShape, spend: TransferSpend): boolean {
 }
 
 /** Rust `RowAuthorization`. */
-interface RowAuthorization {
+export interface RowAuthorization {
   /** Rows outside the owner run, each takes its nullifier PDA alone. */
   readonly unsignedRows: number;
   /** Every withdrawal names one destination. */
@@ -245,9 +249,9 @@ const ROW_AUTHORIZATIONS: readonly RowAuthorization[] = Object.freeze([
   { unsignedRows: 1, hiddenExit: true, enters: true },
 ]);
 
-/** Rust `TransferAddresses::owner_rows` with no co-signer and shared credential trees. */
-function ownerRows(authorization: RowAuthorization, nInputs: number, legs: number): number {
-  return Math.max(0, ROW_ADDRESSES - nInputs - legs) + authorization.unsignedRows;
+/** Rust `TransferAddresses::owner_rows`, one bound for the catalog's pools and the owner check. */
+export function ownerRows(authorization: RowAuthorization, addresses: TransferAddresses): number {
+  return ownerSignerCapacity(addresses) + authorization.unsignedRows;
 }
 
 /** Rust `TransferShape::public_owners`, each row spends one note. */
@@ -257,7 +261,12 @@ function publicOwners(circuit: TransferKeyCircuit): number {
     if (circuit.entry && !authorization.enters) continue;
     for (let legs = 0; legs <= circuit.withdrawals; legs += 1) {
       let rows = circuit.owners;
-      while (rows > 0 && rows > ownerRows(authorization, rows, legs)) rows -= 1;
+      while (
+        rows > 0 &&
+        rows >
+          ownerRows(authorization, { nInputs: rows, coSigners: 0, legs, credentialAccounts: 0 })
+      )
+        rows -= 1;
       const legOwners = authorization.hiddenExit ? Math.min(legs, 1) : legs;
       most = Math.max(most, rows + legOwners);
     }

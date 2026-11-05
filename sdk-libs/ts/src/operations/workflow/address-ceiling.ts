@@ -103,6 +103,13 @@ export class CredentialTrees {
       meta(treeAddress(treeId), false, false),
     );
   }
+
+  /** Rust `CredentialTrees::added_accounts`, distinct trees no SPP input or output tree names. */
+  addedAccounts(inputs: readonly Address[], output: Address): number {
+    const trees = new Set(this.metas().map(({ address }) => address));
+    for (const named of [...inputs, output]) trees.delete(named);
+    return trees.size;
+  }
 }
 
 /** One real input of the transaction, as SPP merge groups it. */

@@ -91,7 +91,7 @@ const SPEND = {
   pools: { own: 0, curator: 0, credentials: 0 },
   wide: false,
 } as const;
-const ADDRESSES = { nInputs: 2, coSigners: 0, legs: 0 };
+const ADDRESSES = { nInputs: 2, coSigners: 0, legs: 0, credentialAccounts: 0 };
 
 describe("selectTransferKey", () => {
   it("takes the narrowest rows and the wide key past them", () => {
@@ -175,9 +175,9 @@ describe("selectTransferKey", () => {
   });
 
   it("refuses past the account bound with the counts", () => {
-    const addresses = { nInputs: 24, coSigners: 5, legs: 2 };
+    const addresses = { nInputs: 24, coSigners: 5, legs: 2, credentialAccounts: 1 };
     const capacity = ownerSignerCapacity(addresses);
-    expect(capacity).toBe(64 - 4 - 6 - 24 - 10 - 2);
+    expect(capacity).toBe(64 - 4 - 5 - 24 - 10 - 2 - 1);
     selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity });
     const refused = refusal(() =>
       selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity + 1 }),

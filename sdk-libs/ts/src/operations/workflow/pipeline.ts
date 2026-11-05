@@ -395,8 +395,9 @@ async function selectStagedKey(input: StagedTransferInput, context: RequestConte
   const demand = await policyDemand({ ...demandInput, rows: liveRows }, context);
   const shape = staged.proofInputs.checkShape();
   const addresses = { nInputs: shape.inputs, legs: transfers.length };
+  // A lower bound ahead of the credential read, the final check counts the credential trees.
   checkOwnerSignerBound(
-    { ...addresses, coSigners: input.coSigners?.length ?? 0 },
+    { ...addresses, coSigners: input.coSigners?.length ?? 0, credentialAccounts: 0 },
     staged.ownerSigners.length,
   );
   const plan = planTransfer(stagedPlanFrame(input), demand.pools);
@@ -568,9 +569,16 @@ async function assembleStagedTransfer<T>(
         context,
       )
     ).map(({ signer }) => signer);
-    // The final co-signer count moves the account bound.
+    // The final co-signer count and the credential trees the read named move the account bound.
     checkOwnerSignerBound(
-      { ...addresses, coSigners: coSigners.length },
+      {
+        ...addresses,
+        coSigners: coSigners.length,
+        credentialAccounts: policy.credentials.trees.addedAccounts(
+          proofInputs.inputTreeIds().map(treeAddress),
+          treeAddress(proofInputs.outputTreeId),
+        ),
+      },
       staged.ownerSigners.length,
     );
     const partyIdentities =
