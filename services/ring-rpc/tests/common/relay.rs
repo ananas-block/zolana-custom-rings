@@ -6,7 +6,6 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use custom_ring_sdk::DepositAsset;
 use solana_address::Address;
 use solana_hash::Hash;
 use solana_instruction::{AccountMeta, Instruction};
@@ -14,19 +13,23 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_client::{ClientError, ComputeBudgetConfig};
-use spr_event::{EncryptedRingDepositData, MessageData};
+use spr_event::MessageData;
+use spr_instruction::instruction::{
+    TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
+};
 use spr_interface::{
     instruction::instruction_data::transact::{OwnerTag, TransactOutput},
     MAX_OUTPUTS,
 };
 use spr_keypair::{NullifierKey, ShieldedKeypair, SigningKey, ViewingKey, X25519Keypair};
 use spr_transaction::{
-    instructions::transact::ExternalData, utxo::SppProofInputUtxo, Data, Mint, SppProofOutputUtxo,
-    Utxo,
+    instructions::transact::{ExternalData, SettlementTransfer},
+    utxo::SppProofInputUtxo,
+    Data, Mint, SppProofOutputUtxo, Utxo,
 };
 use zolana_ring_client::rpc::{
-    PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayEnrollInputs, RelayIntent,
-    RelayProofInputs, RelayQuote, RelayRail,
+    PrepareRelayRequest, ProofInputBytes, RelayEnrollInputs, RelayIntent, RelayProofInputs,
+    RelayQuote, RelayRail,
 };
 use zolana_ring_rpc::{
     ChainOutcome, ChainSubmit, DelegateSeal, LatestBlockhash, ProvenRelay, RelayError,
@@ -64,7 +67,7 @@ impl RelayProver for RecordingProver {
                 },
                 proof_inputs.blinding_seed.to_vec(),
             ),
-            RelayPayload::Deposit(deposit) => (vec![deposit.depositor], vec![1, 2, 3]),
+            RelayPayload::Deposit(deposit) => (deposit.deposit_funders().collect(), vec![1, 2, 3]),
             RelayPayload::Merge(_) => (Vec::new(), vec![1, 2, 3]),
             RelayPayload::Enroll(_) => panic!("the relay builds an enrollment itself"),
         };
@@ -320,23 +323,19 @@ pub fn deposit_request(
     depositor: &solana_keypair::Keypair,
     amount: u64,
 ) -> PrepareRelayRequest {
-    let deposit = RelayDepositInputs {
-        ring_program_id: ring,
-        tree: Address::new_from_array([42; 32]),
-        depositor: depositor.pubkey(),
-        recipient: owner().shielded_address().expect("address"),
-        list_salt: [0; 32],
-        asset: DepositAsset::Sol,
+    let mut deposit = proof_inputs(ring, RelayRail::Deposit { plan: None });
+    deposit.inputs = vec![SppProofInputUtxo::dummy_with_blinding([47; 32], 4).expect("dummy")];
+    deposit.outputs[0].amount = amount;
+    deposit.external_data.interface_transfers = vec![SettlementTransfer::Sol {
+        is_deposit: true,
         amount,
-        view_tag: [43; 32],
-        encrypted: EncryptedRingDepositData {
-            tx_viewing_pk: [44; 33],
-            salt: [45; 16],
-            ciphertext: vec![46; 8],
+        user_sol_account: depositor.pubkey(),
+    }];
+    deposit.interface_transfer_accounts = vec![TransactInterfaceTransferAccounts::Sol(
+        TransactSolTransferAccounts {
+            recipient: depositor.pubkey(),
         },
-        blinding_secret: zeroize::Zeroizing::new([47; 32]),
-        audit_ephemeral_key: zeroize::Zeroizing::new([48; 32]),
-    };
+    )];
     let proof_inputs = ProofInputBytes::new(deposit.encode().expect("encode"));
     let depositor_signature = depositor
         .sign_message(&proof_inputs.deposit_request_digest())

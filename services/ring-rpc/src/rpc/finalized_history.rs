@@ -921,7 +921,6 @@ mod tests {
                                     .with_slot(transaction.slot),
                                 signers: Vec::new(),
                                 withdrawals: Vec::new(),
-                                deposits: Vec::new(),
                                 merge_disclosure: None,
                                 transact: None,
                                 pool_accounts: Vec::new(),
@@ -988,7 +987,7 @@ mod tests {
             output_slots: Vec::new(),
             messages: Vec::new(),
             nullifiers: Vec::new(),
-            proofless: true,
+            proofless: false,
             ring_config: None,
             ring_program_id: Some(RING),
         }

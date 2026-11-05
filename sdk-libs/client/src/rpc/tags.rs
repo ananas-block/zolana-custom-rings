@@ -6,7 +6,7 @@ use solana_address::Address;
 use spr_keypair::viewing_key::ViewTag;
 
 use spr_client::{
-    rpc::{EncryptedUtxoMatch, HistoryFilters, Page, PaginationToken},
+    rpc::{HistoryFilters, Page, PaginationToken},
     AsyncRpc, ClientError, GetShieldedTransactionsByTagsResponse, IndexerRpcConfig,
     RingHistoryOptions, ShieldedTransaction,
 };
@@ -125,22 +125,6 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
         }
     }
 
-    pub(crate) async fn recovery_deposit_page(
-        &self,
-        tags: Vec<ViewTag>,
-        window: RecoveryWindow,
-    ) -> Result<spr_client::GetEncryptedUtxosByTagsResponse, ClientError> {
-        self.indexer
-            .get_encrypted_utxos_by_tags(
-                tags,
-                window.token,
-                Some(PAGE_LIMIT),
-                window.filters(),
-                self.recovery_config(window),
-            )
-            .await
-    }
-
     pub(crate) async fn recovery_spend_page(
         &self,
         nullifiers: Vec<[u8; 32]>,
@@ -155,31 +139,6 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
                 self.recovery_config(window),
             )
             .await
-    }
-
-    /// The deposits published under one of `tags`, one transaction per deposited output.
-    pub async fn deposits(
-        &mut self,
-        tags: &[ViewTag],
-    ) -> Result<Vec<ShieldedTransaction>, ClientError> {
-        let (indexer, config) = (self.indexer, self.config);
-        let matches = self
-            .paged(
-                tags,
-                HistoryPosition::default(),
-                |tags, token, filters| async move {
-                    indexer
-                        .get_encrypted_utxos_by_tags(tags, token, Some(PAGE_LIMIT), filters, config)
-                        .await
-                },
-            )
-            .await?;
-        Ok(matches
-            .rows
-            .into_iter()
-            .flat_map(|item| item.outputs)
-            .filter_map(EncryptedUtxoMatch::into_proofless_transaction)
-            .collect())
     }
 
     /// The transfers above `from` publishing a slot under one of `tags`.

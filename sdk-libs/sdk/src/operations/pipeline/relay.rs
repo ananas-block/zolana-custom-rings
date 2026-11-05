@@ -206,6 +206,37 @@ impl<'t, R: Rail> WalletRelay<'t, R> {
     }
 }
 
+impl<R: Rail> RingTransfer<R> {
+    /// A frame of only dummies, each funder reads its legs and signs the message Ring RPC returns.
+    pub(crate) async fn deposit_relay<C: AsyncRpc + ?Sized>(
+        &self,
+        client: &C,
+    ) -> Result<(RelayProofInputs, SealedTerms), RingError> {
+        let sealed = self.seal_unread(client).await?;
+        let staged = &sealed.pipeline.staged;
+        let inputs = &staged.proof_inputs;
+        let plan = match staged.rail.delivery() {
+            RingDelivery::Anonymous(plan) => Some(plan.clone()),
+            RingDelivery::Delivered => None,
+        };
+        let nullifier_key = staged
+            .authority
+            .owner
+            .clone()
+            .ok_or(RingError::NullifierKeyMismatch)?;
+        let terms = SealedTerms {
+            owners: Vec::new(),
+            funders: sealed.funder_terms(inputs.payer, &[])?,
+            approval: None,
+            charged_outflows: charged_outflows_of(inputs)?,
+        };
+        Ok((
+            sealed.relay_proof_inputs(RelayRail::Deposit { plan }, nullifier_key),
+            terms,
+        ))
+    }
+}
+
 impl RingTransfer<Delegated<'_>> {
     /// Reads accounts only, the relayed delegate rail proves the result.
     pub async fn relay_proof_inputs<C: AsyncRpc + ?Sized>(

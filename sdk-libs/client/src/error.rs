@@ -41,8 +41,6 @@ pub enum AuditError {
     InputTreeCount { trees: usize, inputs: usize },
     #[error("audited notes answer {got} of {want} requested hashes")]
     AuditedUtxosCount { got: usize, want: usize },
-    #[error("audited note names both or neither of its nullifier key and owner hash")]
-    AuditedUtxoOwner,
     #[error("audited note does not rebuild UTXO hash {utxo_hash:?}")]
     AuditedUtxoMismatch { utxo_hash: [u8; 32] },
     #[error("the transfer names no ring Transact frame its audit layout is bound to")]
@@ -56,12 +54,6 @@ pub enum AuditError {
     MissingEventIndex,
     #[error("nullifier ciphertext did not decrypt to a zero-padded secret")]
     NullifierPad,
-    #[error("deposit count must be between one and eight, got {0}")]
-    DepositCount(usize),
-    #[error("deposit slot must be below eight, got {0}")]
-    DepositSlot(usize),
-    #[error("deposit opening does not match the owner commitment")]
-    DepositOpeningMismatch,
     #[error("recovered nullifier key does not match the source member identity")]
     NullifierKeyMismatch,
     #[error("recovery progress belongs to another member")]
@@ -87,8 +79,6 @@ pub enum AuditError {
     InvalidStackHeight(u32),
     #[error("ring transact instruction data is undecodable {0}")]
     InvalidTransactData(String),
-    #[error("confirmed audited deposit data is undecodable {0}")]
-    InvalidDepositData(String),
     #[error("ring transact settlement accounts do not match its interface transfers")]
     SettlementAccounts,
     #[error("trusted event index {0} is unavailable")]
@@ -192,7 +182,6 @@ impl AuditError {
             | Self::InvalidHistoryPage
             | Self::HistoryCursor(_) => AuditFailureKind::IndexerResponse,
             Self::MissingRingTransact
-            | Self::InvalidDepositData(_)
             | Self::SettlementAccounts
             | Self::InvalidEventIndex(_)
             | Self::InvalidConfirmedEvent(_) => AuditFailureKind::OriginDecode,
@@ -210,13 +199,9 @@ impl AuditError {
             | Self::DisclosureLayout
             | Self::InputTreeCount { .. }
             | Self::AuditedUtxosCount { .. }
-            | Self::AuditedUtxoOwner
             | Self::AuditedUtxoMismatch { .. }
             | Self::UnopenedOutput { .. }
             | Self::NullifierPad
-            | Self::DepositCount(_)
-            | Self::DepositSlot(_)
-            | Self::DepositOpeningMismatch
             | Self::NullifierKeyMismatch
             | Self::RecoveryProgressMismatch
             | Self::MergeDisclosureMismatch

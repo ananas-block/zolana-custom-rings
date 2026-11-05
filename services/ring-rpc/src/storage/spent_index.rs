@@ -151,16 +151,13 @@ impl NoteSeal {
 /// The one layout of a sealed note.
 pub(crate) fn note_body(note: &StoredUtxo) -> Vec<u8> {
     let utxo = &note.utxo;
-    let (owner_kind, owner_field) = match utxo.owner {
-        UtxoOwner::Keyed { nullifier_pk } => (0u8, nullifier_pk),
-        UtxoOwner::Deposited { owner_hash } => (1u8, owner_hash),
-    };
+    let UtxoOwner::Keyed { nullifier_pk } = utxo.owner;
     let mint = utxo.mint.map_or([0; 32], |mint| mint.to_bytes());
     let nullifier = note.nullifier.unwrap_or_default();
     [
         utxo.owner_key.as_slice(),
-        &[owner_kind],
-        &owner_field,
+        &[0],
+        &nullifier_pk,
         &utxo.asset,
         &[u8::from(utxo.mint.is_some())],
         &mint,
@@ -203,9 +200,6 @@ pub(crate) fn note_from_body(body: &[u8]) -> Result<StoredUtxo, DbErr> {
     let owner = match owner_kind {
         0 => UtxoOwner::Keyed {
             nullifier_pk: owner_field,
-        },
-        1 => UtxoOwner::Deposited {
-            owner_hash: owner_field,
         },
         _ => return Err(malformed()),
     };

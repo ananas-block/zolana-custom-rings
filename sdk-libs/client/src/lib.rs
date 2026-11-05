@@ -8,16 +8,10 @@ mod anonymous_wallet;
 pub mod compact_assets;
 #[path = "operations/confidential.rs"]
 mod confidential;
-#[path = "operations/created_utxos.rs"]
-mod created;
 #[path = "crypto/decrypt/mod.rs"]
 mod decrypt;
 #[path = "operations/delivered_utxos.rs"]
 pub mod delivered;
-#[path = "crypto/deposit.rs"]
-mod deposit;
-#[path = "codec/deposit_payload.rs"]
-mod deposit_payload;
 #[path = "crypto/disclosure/mod.rs"]
 mod disclosure;
 #[path = "crypto/encryption/mod.rs"]
@@ -73,24 +67,17 @@ pub use crate::anonymous_wallet::{
 pub use crate::origin::{confirmed_origin, ConfirmedRingOrigins, ORIGIN_TRANSACTION_CONFIG};
 pub use crate::tags::{HistoryRows, IndexerReads, TagWindow, TAGS_PER_REQUEST};
 pub use crate::viewing_history::{
-    AdvancedTag, StreamCounter, ViewingHistory, ViewingKeyEntry, PENDING_RETENTION, TAG_GAP,
+    AdvancedTag, StreamCounter, ViewingHistory, ViewingKeyEntry, PENDING_RETENTION,
 };
 pub use crate::{
     confidential::{
         open_ring_confidential, RingConfidentialNotes, RingConfidentialScan, RingFullScan,
     },
-    created::{
-        CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
-        DepositOwners,
-    },
     decrypt::{FramedRow, TransactionAudit},
-    deposit::{ring_deposits_in, RingDeposit},
-    deposit_payload::deposit_payload,
     disclosure::{AuditEnvelope, AuditStreamSeal, OpenedAudit, SealedAuditStream},
     encryption::{
-        auditor_view_tag, open_deposit, open_merge_record, seal_deposits, DepositEncryption,
-        DepositOpening, DepositedNote, MergeRecordSeal, NullifierKeyEnvelope, SealedMergeOpening,
-        SealedNullifierKey,
+        auditor_view_tag, open_merge_record, MergeRecordSeal, NullifierKeyEnvelope,
+        SealedMergeOpening, SealedNullifierKey,
     },
     error::{AnonymousError, AuditError, AuditFailureKind, RowDisposition},
     exposed_notes::{
@@ -102,8 +89,8 @@ pub use crate::{
     merge_audit::{confirmed_merge, MergeAudit, MergeAuditPage},
     merge_ledger::{AuditedMergeOutput, ConfirmedMerge, MergeId, MergeLedger, MergeRecordOutput},
     origin::{
-        ring_event_origin_in, ConfirmedDeposit, ConfirmedEvent, ConfirmedEventKind,
-        ConfirmedMergeDisclosure, RingOrigin, RingWithdrawal, TransactionOrigin,
+        ring_event_origin_in, ConfirmedEvent, ConfirmedEventKind, ConfirmedMergeDisclosure,
+        RingOrigin, RingWithdrawal, TransactionOrigin,
     },
     reader::{Ed25519ReaderKey, P256ReaderKey, ReaderKey, ReaderKeyError},
     records::{

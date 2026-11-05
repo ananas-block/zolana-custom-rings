@@ -35,8 +35,8 @@ use zolana_ring_client::rpc::{
     GET_DECRYPTED_TRANSACTIONS, GET_DELEGATE_NOTES, GET_LIST_SALT, GET_PENDING_LIST_APPROVALS,
     GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, GET_SPEND_COVERAGE,
     GET_WALLET_ACTIVITY, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER,
-    REFUSE_LIST_APPROVAL, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
-    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
+    REFUSE_LIST_APPROVAL, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
+    SUBMIT_RELAY,
 };
 
 use crate::{
@@ -44,7 +44,6 @@ use crate::{
         ApiKeyDigest, ClientIdentity, ClientIdentityPolicy, PeerAddress, UnknownApiKey,
     },
     error::RingRpcError,
-    metering::call_units,
 };
 
 /// Past it the bucket nearest to full is dropped.
@@ -163,9 +162,7 @@ enum MethodClass {
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RatedCall {
-    PublicRead {
-        units: u32,
-    },
+    PublicRead,
     SignedRead,
     /// Claimed by the request, unverified until the answer succeeds.
     SignedWrite {
@@ -184,7 +181,6 @@ enum BucketKey {
 struct Charge {
     key: BucketKey,
     rate: BucketRate,
-    units: u32,
 }
 
 /// GCRA buckets, a bucket whose arrival is not past now is full and equals an absent one.
@@ -321,16 +317,13 @@ impl ClientRateLimiter {
         let mut buckets = self.buckets.lock().map_err(|_| Admission::Unavailable)?;
         let class = call.class();
         let rate = self.rates.of(class);
-        let units = call.units();
         let client_charge = Charge {
             key: BucketKey::Client(class, client),
             rate,
-            units,
         };
         let network_charge = client.network().map(|network| Charge {
             key: BucketKey::Network(class, network),
             rate: rate.shared_by(NETWORK_CLIENTS),
-            units,
         });
         let (arrivals, waits): (Vec<_>, Vec<_>) = std::iter::once(client_charge)
             .chain(network_charge)
@@ -369,7 +362,6 @@ impl ClientRateLimiter {
         Charge {
             key: BucketKey::Signer(signer),
             rate: self.rates.signed_writes,
-            units: 1,
         }
     }
 }
@@ -400,8 +392,7 @@ impl Buckets {
             .map_or(Duration::ZERO, |arrival| {
                 arrival.saturating_duration_since(now)
             });
-        let units = charge.units.clamp(1, charge.rate.burst.get());
-        owed.saturating_add(charge.rate.interval().saturating_mul(units))
+        owed.saturating_add(charge.rate.interval())
     }
 
     fn record(&mut self, key: BucketKey, arrival: Instant, now: Instant) {
@@ -508,23 +499,16 @@ where
 impl RatedCall {
     fn class(self) -> MethodClass {
         match self {
-            Self::PublicRead { .. } => MethodClass::PublicRead,
+            Self::PublicRead => MethodClass::PublicRead,
             Self::SignedRead => MethodClass::SignedRead,
             Self::SignedWrite { .. } => MethodClass::SignedWrite,
-        }
-    }
-
-    fn units(self) -> u32 {
-        match self {
-            Self::PublicRead { units } => units,
-            Self::SignedRead | Self::SignedWrite { .. } => 1,
         }
     }
 
     fn signer(self) -> Option<Address> {
         match self {
             Self::SignedWrite { signer } => signer,
-            Self::PublicRead { .. } | Self::SignedRead => None,
+            Self::PublicRead | Self::SignedRead => None,
         }
     }
 
@@ -534,12 +518,9 @@ impl RatedCall {
         match request.method_name() {
             HEALTH
             | RING_STATUS
-            | RING_DEPOSITS
             | GET_RECORD_UPDATE_STATUS
             | GET_RELAY_QUOTE
-            | GET_RELAY_STATUS => Self::PublicRead {
-                units: call_units(request).unwrap_or(1),
-            },
+            | GET_RELAY_STATUS => Self::PublicRead,
             CREATE_AUDITOR_KEY
             | GET_DECRYPTED_TRANSACTIONS
             | GET_WALLET_ACTIVITY

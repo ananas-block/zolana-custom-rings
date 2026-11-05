@@ -68,7 +68,7 @@ pub use self::{
 pub(crate) use self::{
     anonymous::HiddenOwner,
     delegate::{delegate_rail, same_owner},
-    pool_subjects::{pool_at_width, KnownSalts, OwnerQuery, PoolSubjects, RecordPlan, SourceGates},
+    pool_subjects::{KnownSalts, SourceGates},
 };
 
 use self::{
@@ -1116,6 +1116,25 @@ impl Unwitnessed<'_> {
             sender,
             bound,
         })
+    }
+}
+
+#[cfg(test)]
+impl Assembled {
+    pub(crate) fn proof_inputs(&self) -> &SppProofInputs {
+        &self.frame.proof_inputs
+    }
+
+    pub(crate) fn parts(&self) -> &TransactParts {
+        &self.frame.parts
+    }
+
+    pub(crate) fn accounts(&self) -> &TransactAccounts {
+        &self.frame.accounts
+    }
+
+    pub(crate) fn co_sign_demand(&self) -> CoSignDemand {
+        self.frame.co_sign_demand
     }
 }
 

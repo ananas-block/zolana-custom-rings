@@ -79,8 +79,8 @@ pub use crate::{
         TrackingEnrollment,
     },
     deposit::{
-        fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RelayedDeposit,
-        RingDeposit, RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
+        fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RingDeposit,
+        RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
     },
     enrollment::{
         Enroll, EnrollInstruction, EnrollRelay, EnrollmentAttempt, EnrollmentJournal,

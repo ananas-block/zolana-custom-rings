@@ -1,4 +1,5 @@
 use solana_keypair::Keypair;
+use solana_signature::Signature;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
 use spr_transaction::OutputContext;
 
@@ -13,14 +14,6 @@ fn temp_dir(label: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
     dir
-}
-
-fn deposits_request(limit: Option<u32>, cursor: Option<Vec<u8>>) -> RingDepositsRequest {
-    RingDepositsRequest {
-        ring_program_id: Address::new_from_array([5; 32]).to_bytes().into(),
-        limit,
-        cursor: cursor.map(Into::into),
-    }
 }
 
 #[test]
@@ -171,45 +164,6 @@ fn an_audit_page_holds_at_its_cursor_and_limit_bounds() {
     assert!(!limit_in_bounds(
         &Limit::new(AUDIT_PAGE_LIMIT + 1).expect("indexer limit")
     ));
-}
-
-/// The deposits limit counts signatures examined, so it is clamped, never refused.
-#[test]
-fn a_deposits_page_clamps_its_limit_into_range() {
-    for (limit, expected) in [
-        (None, DEPOSITS_PAGE_LIMIT),
-        (Some(0), 1),
-        (Some(1), 1),
-        (Some(MAX_DEPOSITS_PAGE_LIMIT), MAX_DEPOSITS_PAGE_LIMIT),
-        (Some(MAX_DEPOSITS_PAGE_LIMIT + 1), MAX_DEPOSITS_PAGE_LIMIT),
-        (Some(u32::MAX), MAX_DEPOSITS_PAGE_LIMIT),
-    ] {
-        assert_eq!(
-            deposits_request(limit, None).page_limit(),
-            expected as usize
-        );
-    }
-}
-
-/// The deposits cursor is a Solana signature, unlike the opaque audit cursor.
-#[test]
-fn a_deposits_cursor_is_exactly_one_signature() {
-    assert_eq!(
-        deposits_request(None, Some(vec![1; 64]))
-            .before()
-            .expect("cursor"),
-        Some(Signature::from([1; 64]))
-    );
-    assert_eq!(
-        deposits_request(None, None).before().expect("no cursor"),
-        None
-    );
-    for length in [0, 63, 65, AUDIT_CURSOR_LIMIT] {
-        assert!(matches!(
-            deposits_request(None, Some(vec![1; length])).before(),
-            Err(ReadBuildError::Cursor)
-        ));
-    }
 }
 
 fn utxo(seed: u8, mint: Option<Address>) -> AuditedUtxo {
@@ -753,14 +707,14 @@ fn audited_utxos_are_used_only_when_they_rebuild_their_hashes() {
         ring_data_hash: [0; 32],
         tree_id: 3,
     };
-    let deposited = KnownUtxo {
-        owner: UtxoOwner::Deposited {
-            owner_hash: small_field(9),
+    let second = KnownUtxo {
+        owner: UtxoOwner::Keyed {
+            nullifier_pk: small_field(9),
         },
         amount: 12,
         ..keyed
     };
-    let hashes = [keyed, deposited].map(|utxo| utxo.commitment(Some(ring)).unwrap());
+    let hashes = [keyed, second].map(|utxo| utxo.commitment(Some(ring)).unwrap());
     let hash = |index: usize| Hash(hashes[index]);
     let view = |utxo: KnownUtxo, utxo_hash: Hash| AuditedUtxoView {
         utxo_hash,
@@ -779,7 +733,7 @@ fn audited_utxos_are_used_only_when_they_rebuild_their_hashes() {
     };
     let full = answer(vec![
         Some(view(keyed, hash(0))),
-        Some(view(deposited, hash(1))),
+        Some(view(second, hash(1))),
         None,
     ]);
     let known = full
@@ -787,7 +741,7 @@ fn audited_utxos_are_used_only_when_they_rebuild_their_hashes() {
         .unwrap();
     assert_eq!(
         known,
-        HashMap::from([(hashes[0], keyed), (hashes[1], deposited)])
+        HashMap::from([(hashes[0], keyed), (hashes[1], second)])
     );
     let tampered = answer(vec![Some(view(
         KnownUtxo {
@@ -802,21 +756,11 @@ fn audited_utxos_are_used_only_when_they_rebuild_their_hashes() {
     ));
     let pair = answer(vec![
         Some(view(keyed, hash(0))),
-        Some(view(deposited, hash(1))),
+        Some(view(second, hash(1))),
     ]);
     assert!(matches!(
         pair.known_utxos(ring, &[hash(1), hash(0)]),
         Err(AuditError::AuditedUtxoMismatch { .. })
-    ));
-    let mut both = DecryptedKnownUtxo::from(keyed);
-    both.owner_hash = Some(Hash(small_field(9)));
-    let ambiguous = answer(vec![Some(AuditedUtxoView {
-        utxo: both,
-        ..view(keyed, hash(0))
-    })]);
-    assert!(matches!(
-        ambiguous.known_utxos(ring, &[hash(0)]),
-        Err(AuditError::AuditedUtxoOwner)
     ));
     assert!(matches!(
         full.known_utxos(ring, &[hash(0), hash(1)]),
@@ -1325,41 +1269,44 @@ fn shielded_address(seed: u8) -> ShieldedAddress {
         .expect("address")
 }
 
-/// The TypeScript encoder writes the same deposit payload.
+/// `relay_proof_inputs` on the deposit rail, every input a dummy. `UPDATE_RING_VECTORS=1` rewrites the payload.
 #[test]
 fn relay_deposit_inputs_encode_to_the_shared_vector() {
-    use spr_event::EncryptedRingDepositData;
-    use spr_instruction::instruction::{DepositAsset, DepositSplAccounts};
-    let vector: PayloadVector = serde_json::from_str(include_str!(
-        "../../../../test-vectors/rpc/relay_deposit_inputs.json"
-    ))
-    .expect("vector");
-    let recipient = shielded_address(5);
-    let inputs = RelayDepositInputs {
-        ring_program_id: Address::new_from_array([6; 32]),
-        tree: Address::new_from_array([42; 32]),
-        depositor: Address::new_from_array([41; 32]),
-        recipient,
-        list_salt: [0; 32],
-        asset: DepositAsset::Spl(DepositSplAccounts {
-            mint: Address::new_from_array([48; 32]),
-            user_token: Address::new_from_array([49; 32]),
-            token_program: Address::new_from_array([50; 32]),
-        }),
-        amount: 700,
-        view_tag: [43; 32],
-        encrypted: EncryptedRingDepositData {
-            tx_viewing_pk: [44; 33],
-            salt: [45; 16],
-            ciphertext: vec![46; 8],
-        },
-        blinding_secret: zeroize::Zeroizing::new([47; 32]),
-        audit_ephemeral_key: zeroize::Zeroizing::new([51; 32]),
+    let mut inputs = relay_proof_inputs();
+    inputs.rail = RelayRail::Deposit {
+        plan: Some(Box::new(
+            zolana_ring_transaction::AnonymousPlan::from_parts(
+                Vec::new(),
+                [[25; 32]; spr_interface::MAX_OUTPUTS],
+            ),
+        )),
     };
+    inputs.inputs = vec![
+        spr_transaction::utxo::SppProofInputUtxo::dummy_with_blinding([29; 32], 4).expect("dummy"),
+        spr_transaction::utxo::SppProofInputUtxo::dummy_with_blinding([27; 32], 4).expect("dummy"),
+    ];
+    let encoded = Base64String::from(inputs.encode().expect("encode").to_vec());
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-vectors/rpc/relay_deposit_proof_inputs.json"
+    );
+    if std::env::var_os("UPDATE_RING_VECTORS").is_some() {
+        let stored = serde_json::json!({
+            "description": "relay_proof_inputs.json on the deposit rail (RailWire tag 3) with an anonymous plan of no payment, its inputs two dummies of blindings 0x1d and 0x1b in tree 4. Pinned by the sdk-libs/client rpc tests.",
+            "proofInputs": encoded,
+        });
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&stored).expect("json") + "\n",
+        )
+        .expect("vector");
+    }
+    let vector: PayloadVector =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("vector")).expect("vector");
     assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
-    let read = RelayDepositInputs::decode(&vector.proof_inputs.0).expect("decode");
-    assert_eq!(read.recipient, recipient);
-    assert_eq!(*read.encode().expect("encode"), vector.proof_inputs.0);
+    let read = RelayProofInputs::decode(&vector.proof_inputs.0).expect("decode");
+    assert_eq!(read.inputs, inputs.inputs);
+    assert_eq!(read.rail.operation(), RelayOperation::Deposit);
 }
 
 /// The TypeScript encoder writes the same merge payload.

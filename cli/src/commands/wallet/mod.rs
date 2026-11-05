@@ -203,7 +203,6 @@ impl ScanAt<'_> {
                 AnonymousSync::new(keys, assets)
                     .with_asset_rpc(zolana.as_async().rpc())
                     .with_indexer_config(config)
-                    .with_deposit_payload(zolana_ring_client::deposit_payload)
                     .fetch_wallet(zolana.as_async().indexer(), wallet)
                     .await
                     .map_err(anyhow::Error::from)

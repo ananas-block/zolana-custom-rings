@@ -1,4 +1,4 @@
-//! Confidential ring notes and ring deposits opened into a wallet, the pinned zolana scan skips them.
+//! Confidential ring notes opened into a wallet, the pinned zolana scan skips them.
 //!
 //! Only [`AnonymousWallet::absorb`] stores a sync's [`ScanCommit`], a crash before the absorb repeats the read.
 
@@ -22,8 +22,6 @@ use crate::{
     delivered::{
         assign_nullifiers, confidential_delivered, RingDeliveredCandidate, RingDeliveryContext,
     },
-    deposit::{DepositOpener, OpenedDeposit},
-    deposit_payload,
     exposed_notes::{verify_ring_owned, RingOwnedUtxos},
     history::HistoryPosition,
     merge_audit::RingMergeBody,
@@ -273,7 +271,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         }
     }
 
-    /// Spent state covers `transactions` alone, a malformed audit capsule skips its deposit.
+    /// Spent state covers `transactions` alone.
     pub fn open(
         &self,
         transactions: &[ShieldedTransaction],
@@ -285,7 +283,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         &self,
         transactions: &[ShieldedTransaction],
     ) -> Result<OpenedRows, AnonymousError> {
-        // 1. Every opening below is a candidate until step 4, rows from the caller or the indexer earn no trust here.
+        // 1. Every opening below is a candidate until step 3, rows from the caller or the indexer earn no trust here.
         let address = self.keys.address()?;
         let candidates = confidential_delivered(self.keys, transactions)?;
         let mut decrypted = DecryptionResult {
@@ -310,23 +308,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> RingConfidential
         // 2. A seeded merge opens from its row alone, the spent input may be absent from `transactions`.
         self.open_owner_merges(transactions, &mut decrypted, &mut pending)?;
         assign_nullifiers(self.keys, &mut decrypted.utxos)?;
-        // 3. Deposits carry the key their commitment rebuilt under, step 4 sorts zero-key notes by it.
-        let opener = DepositOpener {
-            keys: self.keys,
-            address: &address,
-            assets: self.assets.registry(),
-            deposit_payload,
-        };
-        for opened in opener.open_held(transactions)? {
-            match opened {
-                OpenedDeposit::Note(utxo) => decrypted.utxos.push(*utxo),
-                OpenedDeposit::UnknownMint(held) => {
-                    decrypted.unknown_mints.insert(held.utxo.asset.asset);
-                    pending.push(*held);
-                }
-            }
-        }
-        // 4. Only a commitment rebuilt under the owner proves a note, a pending note rebuilt its own in the opener.
+        // 3. Only a commitment rebuilt under the owner proves a note, a pending note rebuilt its own in the opener.
         assign_nullifiers(self.keys, &mut pending)?;
         let RingOwnedUtxos {
             owned,
@@ -509,14 +491,14 @@ mod tests {
     };
     use spr_client::{
         rpc::{Context, GetShieldedTransactionsByNullifiersResponse, HistoryFilters, Page},
-        ClientError, EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse,
-        GetShieldedTransactionsByTagsResponse, OutputContext, OutputSlot, PaginationToken,
-        RingHistoryOptions, TransactionEvents, TransactionOutputs,
+        ClientError, GetShieldedTransactionsByTagsResponse, OutputContext, OutputSlot,
+        PaginationToken, RingHistoryOptions, TransactionEvents,
     };
     use spr_event::{encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef};
     use spr_interface::ZERO_NULLIFIER_PUBKEY;
     use spr_keypair::{
-        viewing_key::ViewTag, KeypairError, NullifierKey, ShieldedKeypair, ViewingKey, X25519Pubkey,
+        viewing_key::ViewTag, KeypairError, NullifierKey, ShieldedKeypair, SigningKey, ViewingKey,
+        X25519Pubkey,
     };
     use spr_transaction::{
         instructions::merge::{
@@ -534,14 +516,27 @@ mod tests {
     use spr_transaction::Utxo;
 
     use super::*;
-    use crate::{
-        deposit::tests::{
-            deposit_under, ring_note, ring_row, wallet, AMOUNT, RING, THIRD_KEY, TREE,
-        },
-        NoteState,
-    };
+    use crate::NoteState;
 
     const NOT_IN_FIELD: [u8; 32] = [0xff; 32];
+    const RING: Address = Address::new_from_array([0x90; 32]);
+    const TREE: u16 = 9;
+    const AMOUNT: u64 = 25;
+
+    fn wallet(seed: u8) -> ShieldedKeypair {
+        ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
+    }
+
+    fn ring_note(owner: &ShieldedAddress, blinding: [u8; 32]) -> Utxo {
+        Utxo {
+            owner: owner.signing_pubkey,
+            asset: Mint::SOL,
+            amount: AMOUNT,
+            blinding,
+            ring_program_id: Some(RING),
+            data: Default::default(),
+        }
+    }
 
     /// Rows each read served since the last take.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -554,7 +549,6 @@ mod tests {
     #[derive(Default)]
     struct Rows {
         rows: Vec<ShieldedTransaction>,
-        deposits: Vec<EncryptedUtxoMatch>,
         served: Mutex<Served>,
     }
 
@@ -604,10 +598,7 @@ mod tests {
         }
 
         fn tip(&self) -> u64 {
-            let rows = self.rows.iter().map(|tx| tx.slot);
-            rows.chain(self.deposits.iter().map(|deposit| deposit.slot))
-                .max()
-                .unwrap_or_default()
+            self.rows.iter().map(|tx| tx.slot).max().unwrap_or_default()
         }
     }
 
@@ -650,27 +641,6 @@ mod tests {
             Ok(self.page(&options.filters, |tx| {
                 tx.ring_program_id == Some(options.ring_program_id)
             }))
-        }
-
-        async fn get_encrypted_utxos_by_tags(
-            &self,
-            tags: Vec<[u8; 32]>,
-            _pagination_token: Option<PaginationToken>,
-            _limit: Option<u32>,
-            _filters: HistoryFilters,
-            _config: Option<IndexerRpcConfig>,
-        ) -> Result<GetEncryptedUtxosByTagsResponse, ClientError> {
-            let data = self
-                .deposits
-                .iter()
-                .filter(|deposit| tags.contains(&deposit.output_slot.view_tag))
-                .map(|deposit| TransactionOutputs {
-                    slot: deposit.slot,
-                    signature: deposit.tx_signature,
-                    outputs: vec![deposit.clone()],
-                })
-                .collect();
-            Ok(terminal(self.tip(), data))
         }
 
         async fn get_shielded_transactions_by_nullifiers(
@@ -776,10 +746,6 @@ mod tests {
 
     fn hashes(notes: &[WalletUtxo]) -> Vec<[u8; 32]> {
         notes.iter().map(|note| note.utxo_hash).collect()
-    }
-
-    fn deposit_hash(deposit: &EncryptedUtxoMatch) -> [u8; 32] {
-        deposit.output_slot.output_context.hash
     }
 
     /// A row with no transaction key or salt, spending `first`.
@@ -895,6 +861,9 @@ mod tests {
         .unwrap()
         .remove(0)
     }
+
+    /// The blinding of `payment_event(_, 0)`.
+    const PAYMENT_BLINDING: [u8; 32] = [0x13; 32];
 
     /// One delivered payment, every event shares one signature.
     fn payment_event(recipient: &ShieldedKeypair, event_index: u16) -> ShieldedTransaction {
@@ -1228,62 +1197,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_deposit_before_enrollment_reads_exposed_on_every_reader() {
-        let owner = wallet(7);
-        let address = owner.shielded_address().unwrap();
-        let deposit = deposit_under(&address, &ZERO_NULLIFIER_PUBKEY, [0x12; 32]);
-        let hash = deposit_hash(&deposit);
-        let row = ring_row(deposit.clone());
-        let assets = assets();
-        let scan = RingConfidentialScan::new(&owner, &assets);
-        let indexer = Rows {
-            rows: vec![row.clone()],
-            deposits: vec![deposit],
-            ..Rows::default()
-        };
-
-        let opened = scan.open(core::slice::from_ref(&row)).unwrap();
-        assert_eq!(hashes(&opened.exposed_if_spent), [hash]);
-        assert!(opened.owned.utxos.is_empty());
-
-        let fetched = scan
-            .fetch(&indexer, core::slice::from_ref(&row))
-            .await
-            .unwrap();
-        assert_eq!(hashes(&fetched.exposed_if_spent), [hash]);
-        assert!(fetched.owned.utxos.is_empty());
-
-        let full = scan.full_scan(&indexer, RING).await.unwrap();
-        assert_eq!(hashes(&full.owned.exposed_if_spent), [hash]);
-        assert!(full.owned.owned.utxos.is_empty());
-
-        let history = ViewingHistory::new(owner.viewing_pubkey(), 0).with_ring(RING, None);
-        let synced = AnonymousSync::new(&owner, &assets)
-            .fetch(&indexer, &history)
-            .await
-            .unwrap();
-        let owned = verify_ring_owned(&owner, synced.decrypted()).unwrap();
-        assert_eq!(hashes(&owned.exposed_if_spent), [hash]);
-        assert_eq!(
-            owned.exposed_if_spent[0].nullifier_pubkey,
-            ZERO_NULLIFIER_PUBKEY
-        );
-    }
-
-    #[tokio::test]
-    async fn a_deposit_under_a_third_key_opens_on_no_reader() {
-        let owner = wallet(7);
-        let address = owner.shielded_address().unwrap();
-        let row = ring_row(deposit_under(&address, &THIRD_KEY, [0x12; 32]));
-        let assets = assets();
-        let scan = RingConfidentialScan::new(&owner, &assets);
-        let opened = scan.open(core::slice::from_ref(&row)).unwrap();
-        assert!(opened.exposed_if_spent.is_empty() && opened.owned.utxos.is_empty());
-        let full = scan.full_scan(&Rows::of(vec![row]), RING).await.unwrap();
-        assert!(full.owned.exposed_if_spent.is_empty() && full.owned.owned.utxos.is_empty());
-    }
-
-    #[tokio::test]
     async fn fetch_finds_a_zero_key_merge_with_no_input_history_and_reads_it_exposed() {
         let owner = wallet(7);
         let address = owner.shielded_address().unwrap();
@@ -1302,17 +1215,20 @@ mod tests {
     async fn fetch_moves_the_exposure_from_a_spent_zero_key_note_to_its_merge_output() {
         let owner = wallet(7);
         let address = owner.shielded_address().unwrap();
-        let blinding = [0x12; 32];
-        let deposit = ring_row(deposit_under(&address, &ZERO_NULLIFIER_PUBKEY, blinding));
+        let mut payment = payment_event(&owner, 0);
+        let note = &mut payment.output_slots[0].output_context;
+        note.hash = ring_note(&address, PAYMENT_BLINDING)
+            .hash(&ZERO_NULLIFIER_PUBKEY, &[0; 32], &[0; 32], TREE)
+            .unwrap();
         let input = NullifierKey::from_secret([0; 31])
-            .nullifier(&deposit.output_slots[0].output_context.hash, &blinding)
+            .nullifier(&note.hash, &PAYMENT_BLINDING)
             .unwrap();
         let (hash, merge) = seeded_merge(&address, &own_seed(&owner, input), input);
         let assets = assets();
         let notes = RingConfidentialScan::new(&owner, &assets)
             .fetch(
-                &Rows::of(vec![deposit.clone(), merge]),
-                core::slice::from_ref(&deposit),
+                &Rows::of(vec![payment.clone(), merge]),
+                core::slice::from_ref(&payment),
             )
             .await
             .unwrap();
@@ -1339,19 +1255,20 @@ mod tests {
     #[tokio::test]
     async fn a_poseidon_error_from_the_holder_fails_fetch_and_full_scan() {
         let holder = FailingHolder(wallet(7), HolderFailure::MergeOutputKey);
-        let address = holder.address().unwrap();
-        let blinding = [0x12; 32];
-        let deposit = ring_row(deposit_under(&address, &address.nullifier_pubkey, blinding));
+        let payment = payment_event(&holder.0, 0);
         let input = holder
             .0
-            .nullifier(&deposit.output_slots[0].output_context.hash, &blinding)
+            .nullifier(
+                &payment.output_slots[0].output_context.hash,
+                &PAYMENT_BLINDING,
+            )
             .unwrap();
         let (_, merge) = ProvenMerge {
             committed: [0; 32],
             published: [0; 32],
         }
         .row(&holder.0, input);
-        let indexer = Rows::of(vec![deposit.clone(), merge]);
+        let indexer = Rows::of(vec![payment.clone(), merge]);
         let assets = assets();
         let scan = RingConfidentialScan::new(&holder, &assets);
         let refused = |error: AnonymousError| {
@@ -1361,7 +1278,7 @@ mod tests {
             )
         };
         assert!(refused(
-            scan.fetch(&indexer, core::slice::from_ref(&deposit))
+            scan.fetch(&indexer, core::slice::from_ref(&payment))
                 .await
                 .err()
                 .unwrap()

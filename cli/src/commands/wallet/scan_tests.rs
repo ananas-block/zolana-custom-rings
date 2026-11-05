@@ -13,7 +13,7 @@ use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncProverClient, ClientError,
     Context as Page, EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse,
     GetShieldedTransactionsByTagsResponse, HistoryFilters, OutputContext, OutputSlot,
-    PaginationToken, RingHistoryOptions, ShieldedTransaction, WitnessReader,
+    PaginationToken, RingHistoryOptions, ShieldedTransaction, TransactionOutputs, WitnessReader,
 };
 use spr_event::{
     encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef, MessageData,
@@ -37,7 +37,7 @@ use super::{
 #[path = "../../../../sdk-libs/client/tests/common/history_page.rs"]
 mod history_page;
 
-use history_page::{EventsPage, OutputsPage};
+use history_page::EventsPage;
 
 const TREE: u16 = 2;
 const SALT: [u8; 16] = [7; 16];
@@ -318,20 +318,29 @@ impl Rpc for Ledger {
         filters: HistoryFilters,
         _config: Option<IndexerRpcConfig>,
     ) -> Result<GetEncryptedUtxosByTagsResponse, ClientError> {
-        Ok(OutputsPage {
+        // One terminal page, rows of one transaction grouped as Photon groups them.
+        let mut data: Vec<TransactionOutputs<_, _>> = Vec::new();
+        let rows = self.deposits.iter().filter(|deposit| {
+            filters.slot.contains(deposit.slot) && tags.contains(&deposit.output_slot.view_tag)
+        });
+        for row in rows {
+            match data.last_mut() {
+                Some(last) if last.slot == row.slot && last.signature == row.tx_signature => {
+                    last.outputs.push(row.clone())
+                }
+                _ => data.push(TransactionOutputs {
+                    slot: row.slot,
+                    signature: row.tx_signature,
+                    outputs: vec![row.clone()],
+                }),
+            }
+        }
+        Ok(GetEncryptedUtxosByTagsResponse {
             context: CAUGHT_UP,
             output_tree_id: Some(TREE),
-            rows: self
-                .deposits
-                .iter()
-                .filter(|deposit| {
-                    filters.slot.contains(deposit.slot)
-                        && tags.contains(&deposit.output_slot.view_tag)
-                })
-                .cloned()
-                .collect(),
-        }
-        .response())
+            data,
+            pagination_token: None,
+        })
     }
 
     fn get_shielded_transactions_by_nullifiers(

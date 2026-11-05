@@ -11,16 +11,12 @@ use solana_account::Account;
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
 use solana_loader_v3_interface::get_program_data_address;
-use solana_rpc_client::{
-    nonblocking::rpc_client::RpcClient as NonblockingRpcClient,
-    rpc_client::GetConfirmedSignaturesForAddress2Config,
-};
+use solana_rpc_client::nonblocking::rpc_client::RpcClient as NonblockingRpcClient;
 use solana_signature::Signature;
 use spr_api::ZolanaApi;
 use spr_client::{
     rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
-    GetShieldedTransactionsByTagsResponse, IndexedShieldedTransaction, IndexerRpcConfig,
-    RingHistoryOptions,
+    GetShieldedTransactionsByTagsResponse, IndexerRpcConfig, RingHistoryOptions,
 };
 use spr_interface::{
     pda,
@@ -30,9 +26,8 @@ use spr_interface::{
 use spr_keypair::X25519Pubkey;
 use spr_transaction::{AssetRegistry, Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
-    history::HistoryPosition, program_data, ring_deposits_in, AsyncRingIndexer, AuditError,
-    ConfirmedEventKind, MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError,
-    RingOrigin, StorageTip, TransactionOrigin,
+    history::HistoryPosition, program_data, AsyncRingIndexer, AuditError, MemberOpeningRead,
+    MergeAudit, MergeAuditPage, RingIndexerError, RingOrigin, StorageTip, TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
@@ -40,9 +35,7 @@ use zolana_ring_indexer::rpc::{
 };
 use zolana_ring_transaction::RingAssets;
 
-use zolana_ring_client::rpc::{
-    DepositRecord, RingChainStatus, RingDepositsResponse, WalletEnrollment,
-};
+use zolana_ring_client::rpc::{RingChainStatus, WalletEnrollment};
 use zolana_ring_indexer::tracking::{GetTrackingRecordsRequest, GetTrackingRecordsResponse};
 
 use crate::{
@@ -91,11 +84,6 @@ pub trait TransactionSource: Send + Sync {
         event_index: u16,
         ring: Address,
     ) -> impl Future<Output = Result<RingOrigin, AuditError>> + Send;
-
-    fn ring_deposits(
-        &self,
-        page: DepositPage,
-    ) -> impl Future<Output = Result<DepositHistory, ClientError>> + Send;
 
     fn ring_config(
         &self,
@@ -288,37 +276,6 @@ pub struct MergeAuditRequest<'a> {
     pub ring: Address,
     pub auditor: &'a spr_keypair::X25519Keypair,
     pub page: &'a Page,
-}
-
-#[derive(Clone, Copy)]
-#[must_use]
-pub struct DepositPage {
-    pub ring: Address,
-    /// Signatures examined, which is not the number of deposits found.
-    pub limit: usize,
-    /// Resume bound, the oldest signature the previous page examined.
-    pub before: Option<Signature>,
-}
-
-pub struct DepositHistory {
-    pub deposits: Vec<DepositRecord>,
-    /// Absent once the ring has no older history.
-    pub cursor: Option<Signature>,
-    /// Slot of the oldest signature examined, absent when the page examined
-    /// nothing.
-    pub oldest_slot: Option<u64>,
-}
-
-impl From<DepositHistory> for RingDepositsResponse {
-    fn from(history: DepositHistory) -> Self {
-        Self {
-            deposits: history.deposits,
-            cursor: history
-                .cursor
-                .map(|signature| signature.as_ref().to_vec().into()),
-            oldest_slot: history.oldest_slot,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -545,55 +502,6 @@ impl TransactionSource for ChainSource {
                 },
             )
             .await
-    }
-
-    /// The ring's own signatures name the candidates, and every deposit field
-    /// this reports is public.
-    async fn ring_deposits(&self, page: DepositPage) -> Result<DepositHistory, ClientError> {
-        let ring = page.ring;
-        let signatures = self
-            .rpc
-            .client()
-            .get_signatures_for_address_with_config(
-                &ring,
-                GetConfirmedSignaturesForAddress2Config {
-                    before: page.before,
-                    until: None,
-                    limit: Some(page.limit),
-                    commitment: Some(CommitmentConfig::finalized()),
-                },
-            )
-            .await
-            .map_err(|error| ClientError::Rpc(format!("signatures for {ring}: {error}")))?;
-        // A short page means the ring has no older history.
-        let more = signatures.len() == page.limit;
-        let mut deposits = Vec::new();
-        let mut oldest = None;
-        for entry in signatures {
-            let signature = confirmed_signature(&entry.signature)?;
-            oldest = Some((signature, entry.slot));
-            if entry.err.is_some() {
-                continue;
-            }
-            let response = self
-                .indexer
-                .get_shielded_transactions_by_signature(signature, None)
-                .await?;
-            for indexed in response.transactions {
-                let records = ConfirmedDepositRecords {
-                    origin: &self.history(),
-                    signature,
-                    ring,
-                    indexed,
-                };
-                deposits.extend(records.read().await?);
-            }
-        }
-        Ok(DepositHistory {
-            deposits,
-            cursor: oldest.map(|(signature, _)| signature).filter(|_| more),
-            oldest_slot: oldest.map(|(_, slot)| slot),
-        })
     }
 
     async fn transaction_origin(
@@ -847,66 +755,6 @@ impl TransactionSource for ChainSource {
     }
 }
 
-/// A malformed signature must stop the page before its cursor can advance.
-fn confirmed_signature(value: &str) -> Result<Signature, ClientError> {
-    value
-        .parse()
-        .map_err(|_| ClientError::Rpc("confirmed ring signature is invalid".to_owned()))
-}
-
-/// Public deposit metadata needs the same settlement binding as private recovery.
-#[must_use]
-struct ConfirmedDepositRecords<'a, O> {
-    origin: &'a O,
-    signature: Signature,
-    ring: Address,
-    indexed: IndexedShieldedTransaction,
-}
-
-impl<O: TransactionOrigin> ConfirmedDepositRecords<'_, O> {
-    async fn read(self) -> Result<Vec<DepositRecord>, ClientError> {
-        let Self {
-            origin,
-            signature,
-            ring,
-            mut indexed,
-        } = self;
-        let transaction = &mut indexed.transaction;
-        let failure = |error: AuditError| {
-            ClientError::Rpc(format!("confirmed deposit event refused because {error}"))
-        };
-        if transaction.tx_signature != signature
-            || transaction.event_index != Some(indexed.event_index)
-        {
-            return Err(failure(AuditError::ConfirmedEventMismatch));
-        }
-        let confirmed = origin
-            .origin(signature, indexed.event_index, ring)
-            .await
-            .map_err(failure)?;
-        if !confirmed.ring_invoked || confirmed.event.kind() != ConfirmedEventKind::Deposit {
-            return Ok(Vec::new());
-        }
-        confirmed
-            .bind_transaction(transaction, ring)
-            .map_err(failure)?;
-        let slots = transaction
-            .output_slots
-            .iter()
-            .map(|slot| (slot.view_tag, slot.payload.clone()));
-        Ok(ring_deposits_in(slots, ring)
-            .into_iter()
-            .map(|found| DepositRecord {
-                signature: signature.into(),
-                slot: transaction.slot,
-                depositor: found.depositor.into(),
-                asset: found.asset.to_bytes().into(),
-                amount: found.amount,
-            })
-            .collect())
-    }
-}
-
 const INVALID_POLICY: &str = "custom ring policy account is invalid";
 
 /// `bump` is the canonical bump of the address `account` was read from.
@@ -947,13 +795,6 @@ mod tests {
     use custom_ring_interface::{RING_POLICY, RING_POLICY_PDA_SEED};
 
     use super::*;
-
-    #[test]
-    fn malformed_confirmed_signature_aborts_a_deposit_page() {
-        assert!(confirmed_signature("not a Solana signature").is_err());
-        let valid = Signature::from([7; 64]);
-        assert_eq!(confirmed_signature(&valid.to_string()).unwrap(), valid);
-    }
 
     fn account<T: Pod>(owner: Address, value: &T) -> Account {
         Account {
@@ -1008,90 +849,5 @@ mod tests {
             let invalid = config_account(ring, invalid_key, bump);
             assert!(configuration(&invalid, bump).is_err());
         }
-    }
-
-    struct ConfirmedOrigin(RingOrigin);
-
-    impl TransactionOrigin for ConfirmedOrigin {
-        async fn origin(&self, _: Signature, _: u16, _: Address) -> Result<RingOrigin, AuditError> {
-            Ok(self.0.clone())
-        }
-    }
-
-    #[tokio::test]
-    async fn public_deposit_history_rejects_forged_amount_asset_context_and_signature() {
-        use spr_transaction::{OutputContext, OutputSlot, ShieldedTransaction};
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../sdk-libs/client/tests/fixtures/confirmed-deposit-event.json"
-        ))
-        .unwrap();
-        let ring: Address = fixture["ring"].as_str().unwrap().parse().unwrap();
-        let output = &fixture["expected"]["outputs"][0];
-        let bytes = |key: &str| hex::decode(output[key].as_str().unwrap()).unwrap();
-        let signature = Signature::from([7; 64]);
-        let indexed = IndexedShieldedTransaction {
-            event_index: 0,
-            transaction: ShieldedTransaction {
-                slot: 99,
-                tx_signature: signature,
-                event_index: Some(0),
-                tx_viewing_pk: None,
-                salt: None,
-                proofless: true,
-                ring_config: None,
-                ring_program_id: Some(ring),
-                messages: Vec::new(),
-                nullifiers: Vec::new(),
-                output_slots: vec![OutputSlot {
-                    view_tag: bytes("viewTagHex").try_into().unwrap(),
-                    output_context: OutputContext {
-                        hash: bytes("hashHex").try_into().unwrap(),
-                        tree_id: output["treeId"].as_u64().unwrap() as u16,
-                        leaf_index: output["leafIndex"].as_u64().unwrap(),
-                    },
-                    payload: bytes("payloadHex"),
-                }],
-            },
-        };
-        let origin = ConfirmedOrigin(RingOrigin {
-            ring_invoked: true,
-            event: super::origin_fixture::event(&indexed.transaction).with_slot(99),
-            signers: Vec::new(),
-            withdrawals: Vec::new(),
-            deposits: Vec::new(),
-            merge_disclosure: None,
-            transact: None,
-            pool_accounts: Vec::new(),
-        });
-        let records = |origin, indexed| ConfirmedDepositRecords {
-            origin,
-            signature,
-            ring,
-            indexed,
-        };
-        let opened = records(&origin, indexed.clone()).read().await.unwrap();
-        assert_eq!(opened.len(), 1);
-        assert_eq!(opened[0].amount, 123);
-        type Mutation = fn(&mut IndexedShieldedTransaction);
-        let mutations: &[Mutation] = &[
-            |tx| tx.transaction.tx_signature = Signature::from([8; 64]),
-            |tx| tx.transaction.event_index = Some(1),
-            |tx| tx.transaction.slot += 1,
-            |tx| tx.transaction.proofless = false,
-            |tx| tx.transaction.output_slots[0].output_context.leaf_index += 1,
-            // Borsh outer tag + Vec length + scheme, then owner hash and asset.
-            |tx| tx.transaction.output_slots[0].payload[6 + 32] ^= 1,
-            |tx| tx.transaction.output_slots[0].payload[6 + 32 + 32] ^= 1,
-        ];
-        for mutate in mutations {
-            let mut forged = indexed.clone();
-            mutate(&mut forged);
-            assert!(records(&origin, forged).read().await.is_err());
-        }
-        let foreign = ConfirmedOrigin(RingOrigin {
-            ring_invoked: false,
-            ..origin.0.clone()
-        });
-        assert!(records(&foreign, indexed).read().await.unwrap().is_empty());
     }
 }

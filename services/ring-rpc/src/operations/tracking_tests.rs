@@ -258,7 +258,6 @@ async fn a_bounded_enrollment_cache_holds_its_bound_and_storage_answers_an_evict
     let first = rows[0];
     for (key, value) in [
         (EnrollmentKey::Member, first.member),
-        (EnrollmentKey::OwnerHash, first.owner_hash),
         (EnrollmentKey::ListKey, first.list_key),
     ] {
         assert_eq!(

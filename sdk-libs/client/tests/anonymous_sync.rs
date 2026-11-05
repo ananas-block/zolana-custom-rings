@@ -16,20 +16,16 @@ use custom_ring_interface::stream::slot_tag;
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output,
     stream::{DeliveredSlot, SlotSecret},
-    RecipientBody, RingDepositAuditCapsule, SenderBundle, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
+    RecipientBody, SenderBundle, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncRpc, ClientError, Context,
-    EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse, GetShieldedTransactionsByTagsResponse,
-    HistoryFilters, IndexerRpcConfig, OutputContext, OutputSlot, PaginationToken,
-    RingHistoryOptions, ShieldedTransaction,
+    GetShieldedTransactionsByTagsResponse, HistoryFilters, IndexerRpcConfig, OutputContext,
+    OutputSlot, PaginationToken, RingHistoryOptions, ShieldedTransaction,
 };
-use spr_event::{
-    encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositData,
-    EncryptedRingDepositOutput, MergeOutputDataRef, MessageData,
-};
+use spr_event::{encode_merge_output_data, MergeOutputDataRef, MessageData};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
     random_salt, viewing_key::ViewTag, ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey,
@@ -41,13 +37,13 @@ use spr_transaction::{
         merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
         transact::ConfidentialTransaction,
     },
-    owner_utxo_hash, verify_spendable, Data, DecryptRequest, DecryptionResult, DeriveRequest, Mint,
-    ShieldedKeys, TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
+    verify_spendable, Data, DecryptRequest, DecryptionResult, DeriveRequest, Mint, ShieldedKeys,
+    TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
 };
 use zolana_ring_client::{
     note_state, open_ring_confidential, verify_ring_owned, AnonymousError, AnonymousScan,
     AnonymousStream, AnonymousSync, AnonymousWallet, NoteState, RingConfidentialScan, SentCheck,
-    ViewingHistory, TAGS_PER_REQUEST, TAG_GAP,
+    ViewingHistory,
 };
 use zolana_ring_keys::{
     MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeyError, RingKeys, RingTagFrame,
@@ -55,10 +51,10 @@ use zolana_ring_keys::{
 };
 use zolana_ring_transaction::{
     seal_recipient_body, seal_reply, seal_sender_bundle, AnonymousPlan, ReplyMetadata, RingAssets,
-    RingDelivery, RingDepositPlaintext, RingOutputRail,
+    RingDelivery, RingOutputRail,
 };
 
-use history_page::{EventsPage, OutputsPage};
+use history_page::EventsPage;
 
 const RING: Address = Address::new_from_array([4; 32]);
 const TREE: u16 = 2;
@@ -75,7 +71,6 @@ fn keypair(seed: u8) -> ShieldedKeypair {
 #[derive(Default)]
 struct Indexer {
     transactions: Mutex<Vec<ShieldedTransaction>>,
-    deposits: Mutex<Vec<EncryptedUtxoMatch>>,
     next_leaf: Mutex<u64>,
     tip: Mutex<u64>,
     /// Transactions per ring page below the asked limit.
@@ -113,16 +108,6 @@ impl Indexer {
         let mut tip = self.tip.lock().unwrap();
         *tip = (*tip).max(transaction.slot);
         self.transactions.lock().unwrap().push(transaction);
-    }
-
-    /// A deposit reaches the tag read and the ring's history as a proofless row.
-    fn publish_deposit(&self, deposit: EncryptedUtxoMatch) {
-        self.deposits.lock().unwrap().push(deposit.clone());
-        let row = deposit.into_proofless_transaction().unwrap();
-        self.publish(ShieldedTransaction {
-            ring_program_id: Some(RING),
-            ..row
-        });
     }
 
     /// Leaves in append order, every published output takes the next.
@@ -244,39 +229,6 @@ impl AsyncRpc for Indexer {
         ))
     }
 
-    async fn get_encrypted_utxos_by_tags(
-        &self,
-        tags: Vec<[u8; 32]>,
-        pagination_token: Option<PaginationToken>,
-        limit: Option<u32>,
-        filters: HistoryFilters,
-        config: Option<IndexerRpcConfig>,
-    ) -> Result<GetEncryptedUtxosByTagsResponse, ClientError> {
-        self.require_context(config)?;
-        Ok(page_window(
-            OutputsPage {
-                context: self.context(),
-                output_tree_id: Some(TREE),
-                rows: self
-                    .deposits
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|deposit| {
-                        filters.slot.contains(deposit.slot)
-                            && tags.contains(&deposit.output_slot.view_tag)
-                    })
-                    .cloned()
-                    .collect(),
-            }
-            .response(),
-            MockPageWindow {
-                token: pagination_token,
-                limit: limit.unwrap_or(spr_indexer_api::PAGE_LIMIT as u32) as usize,
-            },
-        ))
-    }
-
     async fn get_shielded_transactions_by_nullifiers(
         &self,
         nullifiers: Vec<[u8; 32]>,
@@ -339,8 +291,6 @@ impl AsyncRpc for RecoveryHistory<'_> {
 
 struct Wallet {
     keys: ShieldedKeypair,
-    /// Holds the deposit tag counters a depositor stores before it sends.
-    history: ViewingHistory,
     /// Notes it spends, never published, the sync of another wallet never reads them.
     funding: Vec<WalletUtxo>,
     replies: bool,
@@ -354,13 +304,11 @@ struct Pay<'a> {
 impl Wallet {
     fn new(seed: u8) -> Self {
         let keys = keypair(seed);
-        let history = ViewingHistory::new(keys.viewing_pubkey(), 0);
         let funding = (0..8)
             .map(|index| funding_utxo(&keys, seed, index))
             .collect();
         Self {
             keys,
-            history,
             funding,
             replies: true,
         }
@@ -431,39 +379,7 @@ impl Wallet {
         }
         let rail = RingOutputRail::new(tx_key, RingDelivery::Anonymous(Box::new(plan)));
         let proof = rail.encrypt(transaction, &self.address()).unwrap();
-        let external = &proof.external_data;
-        let leaf = indexer.leaves(external.outputs.len());
-        ShieldedTransaction {
-            slot: leaf + 1,
-            tx_signature: Signature::from(signature(leaf)),
-            event_index: Some(0),
-            tx_viewing_pk: Some(rail.tx_viewing_key().pubkey()),
-            salt: Some(rail.salt()),
-            output_slots: external
-                .outputs
-                .iter()
-                .zip(&external.resolved_owner_tags)
-                .zip(leaf..)
-                .map(|((output, tag), leaf_index)| OutputSlot {
-                    view_tag: *tag,
-                    output_context: OutputContext {
-                        hash: output.utxo_hash,
-                        tree_id: TREE,
-                        leaf_index,
-                    },
-                    payload: output.data.clone().unwrap_or_default(),
-                })
-                .collect(),
-            messages: external.messages.clone(),
-            nullifiers: proof
-                .input_utxos
-                .iter()
-                .map(|input| input.nullifier())
-                .collect(),
-            proofless: false,
-            ring_config: None,
-            ring_program_id: Some(RING),
-        }
+        indexed(indexer, &rail, &proof)
     }
 
     async fn sync(&self, indexer: &Indexer, history: &ViewingHistory) -> AnonymousScan {
@@ -472,6 +388,47 @@ impl Wallet {
 
     async fn recover(&self, indexer: &Indexer) -> AnonymousScan {
         restore(indexer, &self.keys, &fresh(self)).await
+    }
+}
+
+/// The indexed row of a sealed frame, its leaves taken.
+fn indexed(
+    indexer: &Indexer,
+    rail: &RingOutputRail,
+    proof: &spr_transaction::instructions::transact::SppProofInputs,
+) -> ShieldedTransaction {
+    let external = &proof.external_data;
+    let leaf = indexer.leaves(external.outputs.len());
+    ShieldedTransaction {
+        slot: leaf + 1,
+        tx_signature: Signature::from(signature(leaf)),
+        event_index: Some(0),
+        tx_viewing_pk: Some(rail.tx_viewing_key().pubkey()),
+        salt: Some(rail.salt()),
+        output_slots: external
+            .outputs
+            .iter()
+            .zip(&external.resolved_owner_tags)
+            .zip(leaf..)
+            .map(|((output, tag), leaf_index)| OutputSlot {
+                view_tag: *tag,
+                output_context: OutputContext {
+                    hash: output.utxo_hash,
+                    tree_id: TREE,
+                    leaf_index,
+                },
+                payload: output.data.clone().unwrap_or_default(),
+            })
+            .collect(),
+        messages: external.messages.clone(),
+        nullifiers: proof
+            .input_utxos
+            .iter()
+            .map(|input| input.nullifier())
+            .collect(),
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
     }
 }
 
@@ -624,7 +581,48 @@ async fn a_payment_is_found_under_its_tag_hint_and_the_read_stores_its_final_con
         0,
         "a transfer is read from the ring's history alone"
     );
-    assert_eq!(*indexer.limits_asked.lock().unwrap(), [1000]);
+    assert_eq!(*indexer.limits_asked.lock().unwrap(), [1000, 1000]);
+}
+
+/// A deposit spends only dummies under a fresh zero-key sender, its payee syncs it as a payment.
+#[tokio::test]
+async fn a_deposit_payee_finds_its_note_through_the_tag_scan() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let funder = Address::new_from_array([0x44; 32]);
+    let mut sender = ShieldedKeypair::new_ed25519().unwrap();
+    sender.nullifier_key = spr_keypair::NullifierKey::from_secret([0; 31]);
+    let mut transaction =
+        ConfidentialTransaction::new_deposit_with_ring(TREE, funder, RING).unwrap();
+    transaction.deposit_sol(30, funder).unwrap();
+    transaction
+        .transfer_with_ring(&bob.address(), Mint::SOL, 30, Some(RING))
+        .unwrap();
+    let tx_key = sender
+        .viewing_key
+        .get_transaction_viewing_key(transaction.first_nullifier())
+        .unwrap();
+    let plan = AnonymousPlan::new().with_payment(bob.address().viewing_pubkey);
+    let rail = RingOutputRail::new(tx_key, RingDelivery::Anonymous(Box::new(plan)));
+    let proof = rail
+        .encrypt(transaction, &sender.shielded_address().unwrap())
+        .unwrap();
+    assert!(proof.input_utxos.iter().all(|input| input.is_dummy()));
+    let deposited = indexed(&indexer, &rail, &proof);
+    indexer.publish(deposited.clone());
+
+    let scan = bob.sync(&indexer, &fresh(&bob)).await;
+
+    let paid = proof
+        .output_utxos
+        .iter()
+        .position(|output| output.owner_address == Some(bob.address()))
+        .unwrap();
+    assert_eq!(found(&scan), [output(&deposited, paid)]);
+    assert_eq!(
+        stream(&scan, output(&deposited, paid)),
+        AnonymousStream::TagHint
+    );
 }
 
 #[tokio::test]
@@ -844,7 +842,11 @@ async fn an_imported_key_finds_the_notes_below_the_wallets_position() {
         .await
         .unwrap();
     assert_eq!(found(&scan), [output(&old_note, 1)]);
-    assert_eq!(indexer.take_ring_pages(), 2, "one query per position");
+    assert_eq!(
+        indexer.take_ring_pages(),
+        3,
+        "the target probe and one query per position"
+    );
     let retired = scan.history().entry(&imported_key.pubkey()).unwrap();
     assert_eq!(retired.ring_positions()[&RING], Some(old_note.slot));
 }
@@ -877,8 +879,8 @@ async fn a_restart_inside_a_split_slot_skips_nothing_and_repeats_nothing() {
     let scan = bob.sync(&indexer, restarted.history()).await;
     assert_eq!(
         indexer.take_ring_pages(),
-        3,
-        "a token on every page ahead of more"
+        4,
+        "the target probe and a token on every page ahead of more"
     );
     assert_eq!(scan.utxos.len(), split.len());
     for paid in &split {
@@ -994,7 +996,7 @@ async fn a_page_too_large_halves_the_limit_and_loses_no_row() {
     assert_eq!(found(&scan), paid.each_ref().map(|paid| output(paid, 1)));
     let asked = indexer.limits_asked.lock().unwrap().clone();
     assert_eq!(asked[..2], [1000, 500]);
-    assert_eq!(asked.iter().filter(|limit| **limit == 1).count(), 2);
+    assert_eq!(asked.iter().filter(|limit| **limit == 1).count(), 3);
     assert_eq!(after_slot(scan.history()), Some(paid[1].slot));
 }
 
@@ -1179,75 +1181,6 @@ async fn a_wiped_rotated_wallet_restores_every_note_only_with_its_retained_key()
         .auditor_recovery
         .unopened
         .contains(&output(&to_new, 1)));
-}
-
-/// Past the tag gap the deposit's stream stops, the ring's history still names the row.
-#[tokio::test]
-async fn recovery_opens_a_deposit_past_the_tag_gap() {
-    let indexer = Indexer::default();
-    let bob = Wallet::new(2);
-    let owner = bob.address();
-    let lost = bob.keys.get_sender_view_tag(TAG_GAP + 5).unwrap();
-    let deposit = deposit_row(&owner, lost, true, field(7, 3));
-    let hash = deposit.output_slot.output_context.hash;
-    indexer.publish_deposit(deposit);
-    assert!(bob.sync(&indexer, &fresh(&bob)).await.utxos.is_empty());
-    let recovered = bob.recover(&indexer).await;
-    assert_eq!(found(&recovered), [hash]);
-    assert_eq!(stream(&recovered, hash), AnonymousStream::FullScan);
-}
-
-#[tokio::test]
-async fn a_deposit_under_a_request_tag_is_found_by_the_tag_read() {
-    let indexer = Indexer::default();
-    let bob = Wallet::new(2);
-    let minted = bob.history.request_tag(&bob.keys).unwrap();
-    let deposit = deposit_row(&bob.address(), minted.tag, true, field(7, 4));
-    let hash = deposit.output_slot.output_context.hash;
-    indexer.publish_deposit(deposit);
-    let scan = bob
-        .sync(&indexer, &minted.history.with_ring(RING, None))
-        .await;
-    assert_eq!(stream(&scan, hash), AnonymousStream::Request { index: 0 });
-    assert_eq!(scan.history().current().request_count(), 1);
-}
-
-#[tokio::test]
-async fn a_deposit_under_the_bootstrap_tag_is_found_by_the_tag_read() {
-    let indexer = Indexer::default();
-    let bob = Wallet::new(2);
-    let deposit = deposit_row(
-        &bob.address(),
-        bob.keys.viewing_pubkey().u(),
-        true,
-        field(7, 5),
-    );
-    let hash = deposit.output_slot.output_context.hash;
-    indexer.publish_deposit(deposit);
-    let scan = bob.sync(&indexer, &fresh(&bob)).await;
-    assert_eq!(stream(&scan, hash), AnonymousStream::Bootstrap);
-}
-
-/// A deposit to the wallet's own note takes its next sender tag, a malformed capsule opens to nothing.
-#[tokio::test]
-async fn an_own_deposit_is_found_on_the_sender_tag_and_moves_tx_count() {
-    let indexer = Indexer::default();
-    let mut alice = Wallet::new(1);
-    let truncated = alice.history.sender_tag(&alice.keys).unwrap();
-    alice.history = truncated.history;
-    let kept = alice.history.sender_tag(&alice.keys).unwrap();
-    alice.history = kept.history;
-    let owner = alice.address();
-    for (tag, capsule, blinding) in [
-        (truncated.tag, false, field(7, 1)),
-        (kept.tag, true, field(7, 2)),
-    ] {
-        indexer.publish_deposit(deposit_row(&owner, tag, capsule, blinding));
-    }
-    let scanned = alice.sync(&indexer, &fresh(&alice)).await;
-    let found: Vec<AnonymousStream> = scanned.utxos.iter().map(|utxo| utxo.stream).collect();
-    assert_eq!(found, [AnonymousStream::Sender { index: 1 }]);
-    assert_eq!(scanned.history().current().tx_count(), 2);
 }
 
 #[tokio::test]
@@ -1753,23 +1686,6 @@ async fn a_holder_failure_on_a_tag_test_leaves_the_position_and_the_retry_finds_
 }
 
 #[tokio::test]
-async fn a_holder_failure_on_a_deposit_leaves_the_position_and_the_retry_finds_the_note() {
-    let indexer = Indexer::default();
-    let bob = Wallet::new(2);
-    let deposit = deposit_row(
-        &bob.address(),
-        bob.keys.viewing_pubkey().u(),
-        true,
-        field(7, 7),
-    );
-    let hash = deposit.output_slot.output_context.hash;
-    indexer.publish_deposit(deposit);
-    let holder = FlakyHolder::new(2, HolderCall::Decrypt);
-    let mut wallet = AnonymousWallet::new(fresh(&bob));
-    a_failed_holder_moves_nothing(&indexer, &holder, &mut wallet, hash).await;
-}
-
-#[tokio::test]
 async fn a_holder_failure_in_recovery_fails_the_read_and_the_retry_finds_the_note() {
     let indexer = Indexer::default();
     let mut alice = Wallet::new(1);
@@ -1786,34 +1702,6 @@ async fn a_holder_failure_in_recovery_fails_the_read_and_the_retry_finds_the_not
         .await
         .unwrap();
     assert_eq!(found(&scan), [output(&paid, 1)]);
-}
-
-/// A deposit under an unregistered mint holds back its verified note the same way.
-#[tokio::test]
-async fn a_deposit_of_an_unknown_mint_waits_with_its_data_hashes() {
-    let indexer = Indexer::default();
-    let bob = Wallet::new(2);
-    let unregistered = Mint {
-        asset: Address::new_from_array([0xee; 32]),
-        asset_id: 9,
-    };
-    let deposit = deposit_row_in(
-        &bob.address(),
-        bob.keys.viewing_pubkey().u(),
-        field(7, 6),
-        unregistered,
-    );
-    let hash = deposit.output_slot.output_context.hash;
-    indexer.publish_deposit(deposit);
-    let mut wallet = AnonymousWallet::new(fresh(&bob));
-    let scan = bob.sync(&indexer, wallet.history()).await;
-    assert_eq!(scan.pending_notes().len(), 1);
-    assert_eq!(scan.pending_notes()[0].utxo_hash(), hash);
-    assert!(scan.utxos.is_empty());
-    wallet.absorb(scan).unwrap();
-    wallet.resolve_pending(&RingAssets::new([unregistered]).unwrap());
-    assert_eq!(wallet.notes()[0].utxo_hash, hash);
-    assert_eq!(wallet.notes()[0].utxo.asset, unregistered);
 }
 
 /// A merge of notes the wallet never opened names only unknown nullifiers, recovery still rebuilds it.
@@ -2148,90 +2036,63 @@ fn a_history_prints_no_contact() {
     assert!(!printed.contains(&format!("{:?}", sender.u())));
 }
 
-#[test]
-fn a_tag_round_reads_at_most_one_request() {
-    assert!(usize::try_from(TAG_GAP).unwrap() <= TAGS_PER_REQUEST);
-}
-
-fn deposit_row_in(
-    owner: &ShieldedAddress,
-    tag: ViewTag,
-    blinding: [u8; 32],
-    asset: Mint,
-) -> EncryptedUtxoMatch {
-    deposit_of(owner, tag, true, blinding, asset)
-}
-
-fn deposit_row(
-    owner: &ShieldedAddress,
-    tag: ViewTag,
-    capsule: bool,
-    blinding: [u8; 32],
-) -> EncryptedUtxoMatch {
-    deposit_of(owner, tag, capsule, blinding, Mint::SOL)
-}
-
-fn deposit_of(
-    owner: &ShieldedAddress,
-    tag: ViewTag,
-    capsule: bool,
-    blinding: [u8; 32],
-    deposited: Mint,
-) -> EncryptedUtxoMatch {
-    let encrypted = RingDepositPlaintext {
-        blinding,
-        utxo_data: None,
-        memo: None,
-        ring_data: Vec::new(),
+/// One delivered payment of 5 to `owner` at slot 1, its mint named by the body alone.
+fn unknown_mint_payment(owner: &Wallet, mint: Mint, blinding: [u8; 32]) -> ShieldedTransaction {
+    let tx_key = ViewingKey::new();
+    let salt = random_salt();
+    let first_nullifier = field(9, blinding[31]);
+    let view = owner.keys.viewing_pubkey();
+    let secret = DeliveredSlot {
+        agreement: &tx_key.ecdh(&view).unwrap(),
+        tx_viewing_pk: tx_key.pubkey().as_bytes(),
+        recipient_viewing_pk: view.as_bytes(),
+        salt: &salt,
+        output_index: 0,
+        first_nullifier: &first_nullifier,
     }
-    .encrypt(&owner.viewing_pubkey)
+    .secret()
     .unwrap();
-    let ciphertext = match capsule {
-        true => RingDepositAuditCapsule {
-            slot_index: 0,
-            eph_pk: &[2; 33],
-            ciphertext: &[0; custom_ring_interface::RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN],
-            recipient_ciphertext: &encrypted.ciphertext,
-        }
-        .encode(),
-        false => b"CRDEPOST".to_vec(),
-    };
-    let payload = encode_encrypted_ring_deposit_output(EncryptedRingDepositOutput {
-        owner_utxo_hash: owner_utxo_hash(&owner.owner_hash().unwrap(), &blinding).unwrap(),
-        asset: deposited.asset.to_bytes(),
-        amount: 25,
-        data_hash: None,
-        ring_program_id: RING.to_bytes(),
-        ring_data_hash: [0; 32],
-        encrypted: EncryptedRingDepositData {
-            ciphertext,
-            ..encrypted
-        },
-    });
+    let address = owner.address();
     let hash = Utxo {
-        owner: owner.signing_pubkey,
-        asset: deposited,
-        amount: 25,
+        owner: address.signing_pubkey,
+        asset: mint,
+        amount: 5,
         blinding,
         ring_program_id: Some(RING),
-        data: Default::default(),
+        data: Data::default(),
     }
-    .hash(&owner.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
+    .hash(&address.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
     .unwrap();
-    EncryptedUtxoMatch {
+    let body = seal_recipient_body(
+        &RecipientBody {
+            blinding,
+            amount: 5,
+            mint: mint.asset.to_bytes(),
+            ..RecipientBody::default()
+        },
+        &secret,
+    )
+    .unwrap();
+    ShieldedTransaction {
         slot: 1,
-        tx_signature: Signature::from([blinding[31]; 64]),
-        output_slot: OutputSlot {
-            view_tag: tag,
+        tx_signature: Signature::from(signature(1)),
+        event_index: Some(0),
+        tx_viewing_pk: Some(tx_key.pubkey()),
+        salt: Some(salt),
+        output_slots: vec![OutputSlot {
+            view_tag: slot_tag(secret.recipient_tag().unwrap()),
             output_context: OutputContext {
                 hash,
                 tree_id: TREE,
-                leaf_index: 500 + u64::from(blinding[31]),
+                leaf_index: 0,
             },
-            payload,
-        },
-        tx_viewing_pk: None,
-        salt: None,
+            payload: encode_ring_body_output(&body, &[]).unwrap(),
+        }],
+        messages: Vec::new(),
+        nullifiers: vec![first_nullifier],
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
     }
 }
 
@@ -2687,15 +2548,10 @@ async fn a_persisted_pending_note_keeps_a_later_spend_after_registration() {
     let bob = Wallet::new(2);
     let unknown = Mint::new(Address::new_from_array([0xee; 32]), 9);
     let blinding = field(7, 6);
-    let deposit = deposit_row_in(
-        &bob.address(),
-        bob.keys.viewing_pubkey().u(),
-        blinding,
-        unknown,
-    );
-    let hash = deposit.output_slot.output_context.hash;
+    let payment = unknown_mint_payment(&bob, unknown, blinding);
+    let hash = payment.output_slots[0].output_context.hash;
     let nullifier = bob.keys.nullifier(&hash, &blinding).unwrap();
-    indexer.publish_deposit(deposit);
+    indexer.publish(payment);
     let mut wallet = AnonymousWallet::new(fresh(&bob));
     let initial = AnonymousSync::new(&bob.keys, &assets())
         .fetch_wallet(&indexer, &wallet)
@@ -2828,12 +2684,7 @@ async fn canonical_scan_refuses_a_stale_wallet_revision() {
     let indexer = Indexer::default();
     let bob = Wallet::new(2);
     let unknown = Mint::new(Address::new_from_array([0xec; 32]), 8);
-    indexer.publish_deposit(deposit_row_in(
-        &bob.address(),
-        bob.keys.viewing_pubkey().u(),
-        field(4, 3),
-        unknown,
-    ));
+    indexer.publish(unknown_mint_payment(&bob, unknown, field(4, 3)));
     let mut wallet = AnonymousWallet::new(fresh(&bob));
     let initial = AnonymousSync::new(&bob.keys, &assets())
         .fetch_wallet(&indexer, &wallet)

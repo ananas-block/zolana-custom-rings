@@ -28,7 +28,7 @@ use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient, Rpc};
 use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use spr_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
-use zolana_ring_client::{records::storage_apply_proof_inputs, RingIndexer, ViewingHistory};
+use zolana_ring_client::{records::storage_apply_proof_inputs, RingIndexer};
 use zolana_ring_indexer::{
     rpc::{GetStorageApplyProofInputsRequest, StorageWriteView},
     tracking::GetPendingEnrollmentsRequest,
@@ -126,24 +126,10 @@ impl RingNotes<'_> {
         self.deposit_to(recipient, payer)
     }
 
-    /// Notes of the owner's hidden identity on an anonymous ring, each under the next sender tag.
+    /// Notes of the owner's hidden identity on an anonymous ring, each a payment its sync finds.
     pub fn deposit_hidden_from(self, payer: &(dyn Signer + Sync)) -> Result<Vec<Utxo>> {
-        let owner = self.owner;
-        let mut history = ViewingHistory::new(owner.viewing_pubkey(), 0);
-        let mut utxos = Vec::with_capacity(self.count);
-        for _ in 0..self.count {
-            let recipient = DepositRecipient::Anonymous {
-                keys: owner,
-                history: &history,
-            };
-            let deposit = self.deposit_with(recipient, payer);
-            let next = deposit
-                .viewing_history()?
-                .ok_or_else(|| anyhow!("an anonymous deposit advances its history"))?;
-            utxos.push(self.land(&deposit)?);
-            history = next;
-        }
-        Ok(utxos)
+        let recipient = DepositRecipient::Anonymous { keys: self.owner };
+        self.deposit_to(recipient, payer)
     }
 
     fn deposit_to(

@@ -141,7 +141,7 @@ use spr_user_registry_interface::user_registry_program_id;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{write_auditor_key, CreateAuditorKeyRequest},
-    AuditedTransaction, InputOpening, KnownUtxo, OutputOpening, RecoveryStep, RingRecovery,
+    AuditedTransaction, AuditedUtxo, InputOpening, OutputOpening, RecoveryStep, RingRecovery,
     RingScan, SealedNullifierKey, SourceMember, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
@@ -247,28 +247,19 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         env: &env,
     }
     .send()?;
-    let mut history = ViewingHistory::new(sender.viewing_pubkey(), 0);
-
     for &amount in amounts {
         let deposit = RingDeposit {
             ring,
             payer: &env.payer,
-            recipient: DepositRecipient::Anonymous {
-                keys: &sender,
-                history: &history,
-            },
+            recipient: DepositRecipient::Anonymous { keys: &sender },
             tree,
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
             list_salt: None,
         };
-        let next = deposit
-            .viewing_history()?
-            .context("an anonymous deposit advances its history")?;
         let receipt = env.run(deposit.send(env.client.ring_client()))?;
         custom_ring_cli::wait_for_indexed_transaction(&env.client, receipt.signature)?;
-        history = next;
     }
 
     let output = project.run(&[
@@ -810,15 +801,17 @@ struct AuditedSpends<'a> {
 }
 
 impl AuditedSpends<'_> {
-    /// A nullifier of none of `owners` fails.
-    fn notes(self, env: &TestEnv) -> Result<Vec<KnownUtxo>> {
+    /// A nullifier of none of `owners` fails, a deposit's note opens as any transfer output.
+    fn notes(self, env: &TestEnv) -> Result<Vec<AuditedUtxo>> {
         let client = env.client.as_async();
-        let created = env.client.block_on(
-            zolana_ring_client::CreatedUtxoScan::new(self.ring.program_id(), self.auditor)
-                .run(client.indexer(), client.rpc()),
+        let config = env.run(self.ring.require_config(client))?;
+        let history = env.client.block_on(
+            RingScan::new(self.ring.program_id(), self.auditor.pubkey())
+                .with_mode(config.mode)
+                .audit(self.auditor, client.indexer(), client.rpc()),
         )?;
         ensure!(
-            created.next_cursor.is_none(),
+            history.next_cursor.is_none(),
             "created-note history is incomplete"
         );
         let keys = self
@@ -835,12 +828,12 @@ impl AuditedSpends<'_> {
             })
             .collect::<Result<Vec<_>>>()?;
         let mut spent = HashMap::new();
-        for note in &created.utxos {
+        for output in history.transactions.iter().flat_map(|tx| &tx.outputs) {
+            let Some(utxo) = output.opening.utxo() else {
+                continue;
+            };
             for key in &keys {
-                spent.insert(
-                    key.nullifier(&note.commitment, &note.utxo.blinding)?,
-                    note.utxo,
-                );
+                spent.insert(key.nullifier(&output.context.hash, &utxo.blinding)?, *utxo);
             }
         }
         self.audited

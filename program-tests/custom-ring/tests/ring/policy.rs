@@ -260,7 +260,6 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         bail!("the recovery paused at the page cap");
     };
     assert!(deposited.unopened.is_empty());
-    assert!(deposited.unsupported_deposits.is_empty());
     assert_eq!(deposited.utxos.len(), 1);
     assert_eq!(deposited.utxos[0].utxo, input.utxo);
     assert_eq!(deposited.utxos[0].utxo.amount, DEFAULT_DEPOSIT);

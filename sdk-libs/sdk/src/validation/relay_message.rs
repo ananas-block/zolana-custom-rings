@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use custom_ring_interface::cosign::ApprovalMask;
 use custom_ring_interface::{
     compute_unit_limit, funder_account_position, stream::confidential_slot_tag, tag, AuditRecord,
-    DepositPrefix, InstructionTag, ParsedTransact, RecordKind, RingMode, RingRail,
-    RingTransactData, RING_TRANSACT_RING_CONFIG_INDEX, STORAGE_PROGRAM_ID,
+    InstructionTag, ParsedTransact, RecordKind, RingMode, RingRail, RingTransactData,
+    RING_TRANSACT_RING_CONFIG_INDEX, STORAGE_PROGRAM_ID,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -88,7 +88,6 @@ pub enum MessageMismatch {
 /// Built from the wallet's own request, never from Ring RPC's answer.
 #[derive(Clone, Debug)]
 pub(crate) enum ExpectedMessage {
-    Deposit(ExpectedDeposit),
     Delegate(ExpectedDelegate),
     /// The sealing wallet hands each signer what it reads and signs nothing itself.
     Sealed(SealedTerms),
@@ -272,15 +271,6 @@ pub(crate) struct ExpectedFunder {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ExpectedDeposit {
-    pub ring: CustomRing,
-    pub fee_payer: Address,
-    pub depositor: Address,
-    /// The SPP deposit the ring forwards unchanged.
-    pub spp: Instruction,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct ExpectedDelegate {
     pub ring: CustomRing,
     pub fee_payer: Address,
@@ -343,7 +333,6 @@ impl ExpectedMessage {
         signer: Address,
     ) -> Result<VerifiedMessage, MessageMismatch> {
         match self {
-            Self::Deposit(deposit) => deposit.check(message),
             Self::Delegate(delegate) => delegate.check(message),
             Self::Sealed(_) => Err(MessageMismatch::Unrequested),
             Self::PublicOwner(owner) => check_message(owner, message, signer),
@@ -357,11 +346,7 @@ impl ExpectedMessage {
         match self {
             Self::Sealed(sealed) => sealed.owners.iter().find(|terms| terms.signer.0 == signer),
             Self::PublicOwner(owner) => (owner.terms.signer.0 == signer).then_some(&owner.terms),
-            Self::Deposit(_)
-            | Self::Delegate(_)
-            | Self::Enroll(_)
-            | Self::Funder(_)
-            | Self::CoSigner(_) => None,
+            Self::Delegate(_) | Self::Enroll(_) | Self::Funder(_) | Self::CoSigner(_) => None,
         }
     }
 
@@ -447,40 +432,6 @@ fn check_signer(envelope: &Envelope, accounts: &[AccountMeta]) -> Result<(), Mes
         return Err(MessageMismatch::Accounts);
     }
     Ok(())
-}
-
-impl ExpectedDeposit {
-    /// The ring prefix carries the proof and revisions, every SPP byte and account is the wallet's.
-    pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
-        let envelope = Envelope {
-            ring: self.ring,
-            program: self.ring.program_id(),
-            units: compute_unit_limit(InstructionTag::Deposit),
-            fee_payer: self.fee_payer,
-            signer: self.depositor,
-            setup: Vec::new(),
-        };
-        let instruction = envelope.open(message)?;
-        let spp_data = instruction
-            .data
-            .get(size_of::<DepositPrefix>()..)
-            .filter(|_| instruction.data.first() == Some(&tag::DEPOSIT));
-        if spp_data != Some(self.spp.data.as_slice()) {
-            return Err(MessageMismatch::Data);
-        }
-        let ring_accounts = instruction
-            .accounts
-            .len()
-            .checked_sub(self.spp.accounts.len())
-            .ok_or(MessageMismatch::Accounts)?;
-        let (prefix, spp_accounts) = instruction.accounts.split_at(ring_accounts);
-        if spp_accounts != self.spp.accounts.as_slice()
-            || !envelope.reads_only(prefix, spp_accounts)
-        {
-            return Err(MessageMismatch::Accounts);
-        }
-        Ok(envelope.verified(message))
-    }
 }
 
 impl ExpectedEnroll {

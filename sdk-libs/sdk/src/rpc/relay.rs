@@ -98,6 +98,11 @@ impl PreparedRelay {
         Ok(self.request.relay_id()?)
     }
 
+    #[cfg(test)]
+    pub(crate) fn request(&self) -> &PrepareRelayRequest {
+        &self.request
+    }
+
     /// Per owner and asset, read before `send` hands the owner's signature over.
     pub fn charged_outflows(&self) -> &[OwnerDebit] {
         self.expected

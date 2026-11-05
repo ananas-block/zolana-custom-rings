@@ -345,7 +345,7 @@ impl<'a> RingSubmission<'a> {
         self.attempts
     }
 
-    /// The notes of the deposit's latest attempt, the ones a confirmation settled, in slot order.
+    /// The notes of the deposit's latest attempt, the ones a confirmation settled, in output order.
     pub fn deposit_utxos(&self) -> Option<&[spr_transaction::Utxo]> {
         match &self.operation {
             RingOperation::Deposit(deposit) => Some(deposit.utxos()),
@@ -655,14 +655,14 @@ impl RingOperation<'_> {
                 )
             }
             Self::Deposit(deposit) => {
-                let proven = boxed(|| deposit.prove_bound(client)).await?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::Deposit,
-                    BoundState {
-                        roots: proven.roots,
-                        policy: proven.policy,
-                    },
+                let proven = boxed(|| deposit.prove_transfer(client)).await?;
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::Transfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::Instruction(instruction) => {

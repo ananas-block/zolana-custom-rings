@@ -6,7 +6,6 @@ mod error;
 mod input_map;
 mod published;
 mod recipient_delivery;
-mod ring_deposit;
 
 use std::cell::RefCell;
 
@@ -46,7 +45,6 @@ pub use recipient_delivery::{
     seal_reply, seal_sender_bundle, AnonymousOutput, OpenedBody, OpenedNote, OutputBlindings,
     ReplyClaim, ReplyMetadata,
 };
-pub use ring_deposit::RingDepositPlaintext;
 
 #[derive(Clone, Debug)]
 pub enum RingDelivery {

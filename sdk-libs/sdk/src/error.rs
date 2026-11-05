@@ -9,7 +9,6 @@ use spr_client::ClientError;
 use spr_hasher::HasherError;
 use spr_interface::error::ShieldedPoolError;
 use spr_keypair::KeypairError;
-use spr_program::instruction::DepositBuildError;
 use spr_transaction::TransactionError;
 use spr_tree::TreeError;
 use thiserror::Error;
@@ -59,8 +58,6 @@ pub enum RingError {
     Encoding(#[from] wincode::WriteError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
-    DepositBuild(#[from] DepositBuildError),
     #[error(transparent)]
     Tree(#[from] TreeError),
     #[error(transparent)]
@@ -161,10 +158,10 @@ pub enum RingError {
     Resolve(#[from] zolana_ring_client::ResolveError),
     #[error(transparent)]
     DelegateSource(#[from] crate::DelegateSourceError),
-    #[error("a deposit frame proves once, a retry draws a new blinding secret")]
+    #[error("a deposit frame proves once")]
     DepositFrameReused,
-    #[error("a deposit to another member needs its request's tag, the viewing key is no tag")]
-    DepositBootstrapTag,
+    #[error("a deposit frame spends a note")]
+    DepositSpendsNote,
     #[error("tree account {address} is missing")]
     MissingTree { address: Address },
     #[error("tree account {address} is not a shielded pool tree")]
@@ -179,7 +176,7 @@ pub enum RingError {
     IncompleteProofSet,
     #[error("the catalog has no {rail} key for the transfer")]
     ShapeUnkeyed { rail: RingRail },
-    #[error("the deposit needs more records than any deposit key holds")]
+    #[error("a deposit takes one to eight recipients and at most one leg per public slot")]
     DepositUnkeyed,
     #[error("a salted list reads enrolled owner {member:?} and no list salt is known")]
     ListSaltUnknown { member: [u8; 32] },
@@ -232,7 +229,7 @@ pub enum RingError {
     MergeTooWide { width: usize },
     #[error("a zero-key merge names its owner as a shielded address under the zero key")]
     MergeOwnerKey,
-    #[error("a deposit to an anonymous ring names its recipient under a tag")]
+    #[error("a deposit to an anonymous ring pays a ring address")]
     AnonymousDepositUntagged,
     #[error("the ring is not anonymous, its owners sign in public")]
     NotAnonymousRing,
@@ -305,10 +302,6 @@ pub enum RingError {
     RelayAuditorMessage,
     #[error("the sealed auditor stream does not open under the {row:?} row the records select, seal under that row and sign again")]
     ResealRequired { row: crate::SealRow },
-    #[error("the relayed deposit ciphertext opens with no auditor capsule")]
-    RelayDepositCapsule,
-    #[error("the relayed audit secret does not derive the capsule's ephemeral key")]
-    RelayAuditKeyMismatch,
     #[error("the transfer pays from {payer}, the relay quote names {fee_payer}")]
     RelayPayerMismatch { payer: Address, fee_payer: Address },
     #[error("ring rpc names another relay than the request hashes to")]
