@@ -615,7 +615,8 @@ async fn a_frame_over_budget_is_refused_before_any_write_and_budget_off_by_defau
         Fixture::new().await,
         Fixture::with_budget(RENT_LAMPORTS).await,
     ] {
-        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+        *fixture.prover.frame.lock().expect("frame") =
+            Some(wide_frame(custom_ring_interface::tag::TRANSFER));
         let quote = fixture.quote(RelayOperation::Anonymous).await;
         let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
         let refused = fixture.prepare(&request).await;
@@ -629,7 +630,8 @@ async fn a_frame_over_budget_is_refused_before_any_write_and_budget_off_by_defau
 #[tokio::test]
 async fn a_retried_frame_resumes_its_upload_and_is_charged_once() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+    *fixture.prover.frame.lock().expect("frame") =
+        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     fixture.chain.refuse_at.store(1, Ordering::Relaxed);
     let quote = fixture.quote(RelayOperation::Anonymous).await;
     let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
@@ -676,7 +678,8 @@ async fn a_crash_between_reserve_and_upload_is_swept_after_a_restart() {
     use custom_ring_interface::tag as ring_tag;
     for buffer_landed in [false, true] {
         let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+        *fixture.prover.frame.lock().expect("frame") =
+            Some(wide_frame(custom_ring_interface::tag::TRANSFER));
         fixture
             .chain
             .refuse_at
@@ -820,13 +823,20 @@ fn delegate_request(
 }
 
 fn delegate_inputs(delegate: Address) -> RelayProofInputs {
-    proof_inputs(RING, RelayRail::Delegate { delegate, plan: None })
+    proof_inputs(
+        RING,
+        RelayRail::Delegate {
+            delegate,
+            plan: None,
+        },
+    )
 }
 
 #[tokio::test]
 async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+    *fixture.prover.frame.lock().expect("frame") =
+        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     let delegate = ring_delegate();
     let quote = fixture.quote(RelayOperation::Delegate).await;
     let request = delegate_request(quote, &delegate_inputs(delegate.pubkey()), &delegate);
@@ -853,7 +863,8 @@ async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() 
 #[tokio::test]
 async fn an_unsigned_or_foreign_delegate_request_consumes_nothing() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+    *fixture.prover.frame.lock().expect("frame") =
+        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     let delegate = ring_delegate();
     let stranger = Keypair::new_from_array([52; 32]);
     let quote = fixture.quote(RelayOperation::Delegate).await;
