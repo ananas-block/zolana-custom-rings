@@ -4,7 +4,7 @@
 //! Read before `prover/circuits/registry/tracking.go`, `prover/circuits/registry/apply_enrollments.go`.
 //!
 //! Invariants, `ApplyEnrollmentsCircuit` holds each.
-//! 1. Every write inserts an absent owner, a row never changes once inserted.
+//! 1. Every write inserts an absent owner, only a row's successor link moves after insert.
 //! 2. An insert takes the next empty leaf, so a full tree refuses a new owner.
 
 use custom_ring_interface::{
