@@ -6,7 +6,7 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    key_catalog::RingCircuit,
+    key_catalog::apply_width,
     mint_policy_write,
     storage::{chain_start, RegistryId, Revision, StorageRegistry},
     storage_instruction::{tag, InitializeIxData, PrivateWriteCheckpoint, StorageUpdateIxData},
@@ -414,10 +414,7 @@ impl PolicySource {
         let (credential_read, private_write) = match mask & PRIVATE_MASK {
             0 => (CredentialRead::new(0, &[]).unwrap(), None),
             _ => {
-                let RingCircuit::ApplyRecords { writes } = RingCircuit::apply_records(1) else {
-                    unreachable!()
-                };
-                let state_roots = vec![0; usize::from(writes)];
+                let state_roots = vec![0; usize::from(apply_width(1))];
                 (
                     CredentialRead::new(0, &state_roots).unwrap(),
                     Some(PrivateWriteCheckpoint {

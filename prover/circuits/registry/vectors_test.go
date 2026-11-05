@@ -5,7 +5,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/consensys/gnark/frontend"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 )
@@ -37,30 +36,15 @@ func TestApplyRecordsMatchesRustVectors(t *testing.T) {
 				}
 			}
 			// 3. The host twin replays the batch to the Rust statement and proof inputs, and the circuit accepts them.
-			if len(update.CredentialFields) < 4 || len(update.CredentialFields)%2 != 0 {
-				t.Fatal("invalid credential statement length")
-			}
-			n := (len(update.CredentialFields) - 2) / 2
-			b := applyBatch(t, members, n, update.ChainStart.Int, entries...)
+			b := applyBatch(t, members, update.Width, update.ChainStart.Int, entries...)
 			c := b.circuit
-			credentialFields := []frontend.Variable{c.CredentialOwner, c.AddressRoot}
-			for _, root := range c.StateRoots {
-				credentialFields = append(credentialFields, root[:]...)
-			}
-			for i, field := range credentialFields {
-				if ringtest.AsBigInt(field).Cmp(update.CredentialFields[i].Int) != 0 {
-					t.Fatalf("credential field %d differs", i)
-				}
-			}
 			for name, pair := range map[string][2]*big.Int{
-				"old root":          {ringtest.AsBigInt(c.OldRoot), update.OldRoot.Int},
-				"new root":          {ringtest.AsBigInt(c.NewRoot), update.NewRoot.Int},
-				"old next index":    {ringtest.AsBigInt(c.OldNextIndex), new(big.Int).SetUint64(update.OldNextIndex)},
-				"new next index":    {ringtest.AsBigInt(c.NewNextIndex), new(big.Int).SetUint64(update.NewNextIndex)},
-				"chain end":         {ringtest.AsBigInt(c.ChainEnd), update.ChainEnd.Int},
-				"statement":         {ringtest.AsBigInt(c.PublicInputHash), update.StatementHash.Int},
-				"credential writes": {ringtest.AsBigInt(c.CredentialWrites), new(big.Int).SetUint64(uint64(update.CredentialWrites))},
-				"private ring":      {ringtest.AsBigInt(c.PrivateRingID), update.PrivateRingID.Int},
+				"old root":       {ringtest.AsBigInt(c.OldRoot), update.OldRoot.Int},
+				"new root":       {ringtest.AsBigInt(c.NewRoot), update.NewRoot.Int},
+				"old next index": {ringtest.AsBigInt(c.OldNextIndex), new(big.Int).SetUint64(update.OldNextIndex)},
+				"new next index": {ringtest.AsBigInt(c.NewNextIndex), new(big.Int).SetUint64(update.NewNextIndex)},
+				"chain end":      {ringtest.AsBigInt(c.ChainEnd), update.ChainEnd.Int},
+				"statement":      {ringtest.AsBigInt(c.PublicInputHash), update.StatementHash.Int},
 			} {
 				if pair[0].Cmp(pair[1]) != 0 {
 					t.Fatalf("%s %x, Rust %x", name, pair[0], pair[1])

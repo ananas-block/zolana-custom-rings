@@ -66,21 +66,26 @@ pub fn verifying_key(
     circuit: key_catalog::RingCircuit,
 ) -> Option<&'static groth16_solana::groth16::Groth16Verifyingkey<'static>> {
     match circuit {
-        key_catalog::RingCircuit::ApplyRecords { writes: 1 } => {
-            Some(&apply_records_1_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::ApplyRecords { writes: 2 } => {
-            Some(&apply_records_2_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::ApplyRecords { writes: 4 } => {
-            Some(&apply_records_4_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::ApplyRecords { writes: 8 } => {
-            Some(&apply_records_8_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::ApplyRecords { writes: 16 } => {
-            Some(&apply_records_16_verifying_key::VERIFYINGKEY)
-        }
+        key_catalog::RingCircuit::ApplyRecords {
+            writes: 1,
+            mode: key_catalog::ApplyMode::Public,
+        } => Some(&apply_records_1_verifying_key::VERIFYINGKEY),
+        key_catalog::RingCircuit::ApplyRecords {
+            writes: 2,
+            mode: key_catalog::ApplyMode::Public,
+        } => Some(&apply_records_2_verifying_key::VERIFYINGKEY),
+        key_catalog::RingCircuit::ApplyRecords {
+            writes: 4,
+            mode: key_catalog::ApplyMode::Public,
+        } => Some(&apply_records_4_verifying_key::VERIFYINGKEY),
+        key_catalog::RingCircuit::ApplyRecords {
+            writes: 8,
+            mode: key_catalog::ApplyMode::Public,
+        } => Some(&apply_records_8_verifying_key::VERIFYINGKEY),
+        key_catalog::RingCircuit::ApplyRecords {
+            writes: 16,
+            mode: key_catalog::ApplyMode::Public,
+        } => Some(&apply_records_16_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::RegisterKey => Some(&register_key_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Deposit { capacity: 1 } => {
             Some(&deposit_1_verifying_key::VERIFYINGKEY)

@@ -17,6 +17,7 @@ export { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
   ApplyRecordsProofRequest,
+  PrivateApplyProofInput,
   AuditEnvelopeProofInputs,
   TransferProofRequest,
   DepositProofRequest,

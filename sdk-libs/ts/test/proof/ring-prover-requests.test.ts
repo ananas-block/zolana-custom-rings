@@ -484,10 +484,16 @@ function request(item: Json): RingProofRequest {
       kind: "applyRecords",
       ...applied(),
       writes: list(item["writes"]).slice(0, count(item["count"])).map(write),
-      credentialWrites: count(item["credentialWrites"]),
-      privateRingId: field(item["privateRingId"]),
-      credentialRoots: credentialRoots(item, list(item["stateRoots"])),
-      credentials: list(item["credentials"]).map(credentialWrite),
+      ...(item["credentialWrites"] === undefined
+        ? {}
+        : {
+            private: {
+              credentialWrites: count(item["credentialWrites"]),
+              privateRingId: field(item["privateRingId"]),
+              credentialRoots: credentialRoots(item, list(item["stateRoots"])),
+              credentials: list(item["credentials"]).map(credentialWrite),
+            },
+          }),
     };
   if (circuitType === "custom-ring-register-key")
     return {

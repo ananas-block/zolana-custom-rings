@@ -70,9 +70,11 @@ type recordsStatementCircuit struct {
 }
 
 func (c *recordsStatementCircuit) Define(api frontend.API) error {
-	statement := (&ApplyRecordsCircuit{
-		OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex,
-		ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count,
+	statement := (&PrivateApplyRecordsCircuit{
+		ApplyRecordsCircuit: ApplyRecordsCircuit{
+			OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex,
+			ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count,
+		},
 		CredentialWrites: c.CredentialWrites, PrivateRingID: c.PrivateRingID,
 		CredentialOwner: c.CredentialOwner, AddressRoot: c.AddressRoot, StateRoots: c.StateRoots,
 	}).statement()
@@ -117,4 +119,34 @@ func TestApplyRecordsStatementMatchesRustVector(t *testing.T) {
 	}
 	shape := &recordsStatementCircuit{StateRoots: make([][2]frontend.Variable, len(witness.StateRoots))}
 	ringtest.RequirePublicInputBound(t, shape, witness)
+}
+
+type publicRecordsStatementCircuit struct {
+	PublicInputHash                                                    frontend.Variable `gnark:",public"`
+	OldRoot, NewRoot, OldNextIndex, NewNextIndex, ChainStart, ChainEnd frontend.Variable
+	Count                                                              frontend.Variable
+}
+
+func (c *publicRecordsStatementCircuit) Define(api frontend.API) error {
+	statement := (&ApplyRecordsCircuit{
+		OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex,
+		ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count,
+	}).statement()
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
+	return nil
+}
+
+func TestPublicApplyRecordsStatementMatchesRustVector(t *testing.T) {
+	var vectors struct {
+		ApplyRecords applyStatementVector `json:"apply_records_public"`
+	}
+	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
+	v := vectors.ApplyRecords
+	witness := &publicRecordsStatementCircuit{
+		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash),
+		OldRoot:         ringtest.VectorField(t, v.OldRoot), NewRoot: ringtest.VectorField(t, v.NewRoot),
+		OldNextIndex: v.OldNextIndex, NewNextIndex: v.NewNextIndex,
+		ChainStart: ringtest.VectorField(t, v.ChainStart), ChainEnd: ringtest.VectorField(t, v.ChainEnd), Count: v.Count,
+	}
+	ringtest.RequirePublicInputBound(t, &publicRecordsStatementCircuit{}, witness)
 }

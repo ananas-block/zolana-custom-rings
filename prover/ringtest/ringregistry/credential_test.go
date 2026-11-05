@@ -14,7 +14,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 type inclusionCircuit struct {
@@ -35,13 +34,7 @@ func credentialFixture(t testing.TB) *ringregistry.Credentials {
 
 func credentialFixtureWithSalt(t testing.TB, salt *big.Int) *ringregistry.Credentials {
 	t.Helper()
-	credentials := ringregistry.NewCredentials(t, big.NewInt(71))
-	credentials.Insert(t, ringregistry.CredentialEntry{
-		Member: big.NewInt(101), NullifierPk: spptest.MustNullifierPk(t, big.NewInt(7)),
-		ListTag: ringregistry.ListTag(t, salt), CtHash: big.NewInt(17),
-		Aud: [2]*big.Int{big.NewInt(19), big.NewInt(23)}, Eph: [2]*big.Int{big.NewInt(29), big.NewInt(31)},
-	})
-	return credentials
+	return ringregistry.SaltedCredentials(t, salt)
 }
 
 func inclusionFixture(t testing.TB) *inclusionCircuit {

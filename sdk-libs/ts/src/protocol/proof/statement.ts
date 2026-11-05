@@ -120,11 +120,16 @@ export interface ApplyRecordsStatement {
   /** The chain past the last write. */
   readonly chainEnd: Bytes32;
   readonly count: bigint;
-  /** Bit `i` marks write `i` a private owner write the circuit proves a credential for. */
+  /** Absent on a public batch, the public apply key binds no credential section. */
+  readonly private?: PrivateWrites;
+}
+
+/** Rust `PrivateWrites`. */
+export interface PrivateWrites {
+  /** Bit `i` marks write `i` a private owner write the circuit proves a credential for, never zero. */
   readonly credentialWrites: number;
-  /** The registry's `private_ring_id`, zero on a public source. */
+  /** The registry's `private_ring_id`. */
   readonly privateRingId: Bytes32;
-  /** `CredentialRoots.empty(writes)` when no write is private. */
   readonly credentials: CredentialRoots;
 }
 
@@ -300,8 +305,8 @@ export function signerBinding(identities: readonly Bytes32[], slots: number): Si
 }
 
 /**
- * `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count,
- * credential_writes, private_ring_id, credential_owner, address_root, tree_id_i, root_i ...]`.
+ * `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`, a private batch
+ * appends `[credential_writes, private_ring_id, credential_owner, address_root, tree_id_i, root_i ...]`.
  */
 export function applyRecordsStatementElements(
   statement: ApplyRecordsStatement,
@@ -315,9 +320,13 @@ export function applyRecordsStatementElements(
     checkedBytes<Bytes32>(statement.chainStart, 32, "chain start"),
     checkedBytes<Bytes32>(statement.chainEnd, 32, "chain end"),
     u64Field(statement.count, "count"),
-    u64Field(BigInt(statement.credentialWrites), "credential writes", U16_MAX),
-    checkedBytes<Bytes32>(statement.privateRingId, 32, "private ring id"),
-    ...statement.credentials.elements(),
+    ...(statement.private === undefined
+      ? []
+      : [
+          u64Field(BigInt(statement.private.credentialWrites), "credential writes", U16_MAX),
+          checkedBytes<Bytes32>(statement.private.privateRingId, 32, "private ring id"),
+          ...statement.private.credentials.elements(),
+        ]),
   ];
 }
 

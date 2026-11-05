@@ -12,18 +12,19 @@
 //! 1. The new root and next index follow from the current ones by exactly the instruction's writes, in order.
 //! 2. A write a rule can read retires every earlier root in the instruction, any other write keeps the outgoing root for the registry's grace.
 //! 3. Every salted owner write proves credential state and address inclusion under the pinned ring namespace.
-//! 4. Proof acceptance precedes atomic publication of the new policy root and monotonic absence floor.
+//! 4. The classified writes pick the key family, a batch with a salted owner write never verifies under a public key.
+//! 5. Proof acceptance precedes atomic publication of the new policy root and monotonic absence floor.
 //!
 //! Relies on:
 //! 1. `RecordWriteData::storage_entry` keeps each value inside its mask and each mask inside the accepted list bits.
 //! 2. `ApplyRecordsCircuit` keeps list bits outside each mask, moves mint settings only under the entry's flag and keeps the records sorted.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit,
+    key_catalog::apply_width,
     storage::{chain_start, RootUpdate, StorageError, StorageRegistry},
     storage_instruction::StorageUpdateIxData,
-    verifying_key, write_chain, ApplyRecordsStatement, CredentialRootSelection, CredentialRoots,
-    CredentialTreeRead, CustomRingError, RingProof,
+    verifying_key, write_chain, ApplyRecordsStatement, CredentialRootSelection, CredentialTreeRead,
+    CustomRingError, PrivateWrites, RingProof,
 };
 use pinocchio::{
     error::ProgramError,
@@ -37,12 +38,13 @@ use crate::loader::{check_authority, check_signer, load_registry_mut};
 struct PrivateWriteRoots<'a, 'data> {
     registry: &'a StorageRegistry,
     ix: &'a StorageUpdateIxData<'data>,
+    credential_writes: u16,
     capacity: usize,
 }
 
 struct CheckedWriteRoots {
-    credentials: CredentialRoots,
-    absence_checkpoint: Option<u64>,
+    private: PrivateWrites,
+    absence_checkpoint: u64,
 }
 
 pub fn process_update_ix(
@@ -63,19 +65,20 @@ pub fn process_update_ix(
         return Err(StorageError::RevisionChanged.into());
     }
     let count = ix.writes.len() as u64;
-    let circuit = RingCircuit::apply_records(count);
-    let RingCircuit::ApplyRecords { writes } = circuit else {
-        return Err(StorageError::UnsupportedBatch.into());
-    };
     // 2. The host derives credential selection from private masks and authenticated asset preimages.
-    // Account roots and the verified ring preimage bind the proof to the canonical credential owner.
+    // Parsing already refused a checkpoint that disagrees with it, so the bitmap alone names the key family.
     let credential_writes = ix.credential_writes()?;
+    // Account roots and the verified ring preimage bind a private proof to the canonical credential owner.
     let checked = PrivateWriteRoots {
         registry: &registry,
         ix: &ix,
-        capacity: usize::from(writes),
+        credential_writes,
+        capacity: usize::from(apply_width(count)),
     }
     .load(credential_accounts)?;
+    let (private, absence_checkpoint) = checked
+        .map(|checked| (checked.private, checked.absence_checkpoint))
+        .unzip();
     // 3. The chain binds every write in instruction order, including writes with unchanged leaves.
     let chain_end = ix.entries().try_fold(
         chain_start,
@@ -92,19 +95,13 @@ pub fn process_update_ix(
         chain_start,
         chain_end,
         count,
-        credential_writes,
-        private_ring_id: if credential_writes == 0 {
-            [0; 32]
-        } else {
-            registry.private_ring_id
-        },
-        credentials: checked.credentials,
+        private,
     };
-    // 4. One proof binds the policy transition and every required credential and address inclusion.
+    // 4. One proof under the mode's key binds the policy transition and every required credential and address inclusion.
     RingProof {
         proof: &ix.apply.proof,
         statement: statement.hash().map_err(|_| StorageError::HashingFailed)?,
-        key: verifying_key(circuit).ok_or(StorageError::UnsupportedBatch)?,
+        key: verifying_key(statement.circuit()).ok_or(StorageError::UnsupportedBatch)?,
     }
     .verify()
     .map_err(|_| StorageError::ProofVerificationFailed)?;
@@ -112,15 +109,15 @@ pub fn process_update_ix(
     registry.update(RootUpdate {
         slot: Clock::get()?.slot,
         data: &ix,
-        absence_checkpoint: checked.absence_checkpoint,
+        absence_checkpoint,
     })?;
     Ok(())
 }
 
 impl PrivateWriteRoots<'_, '_> {
-    fn load(self, accounts: &mut [AccountView]) -> Result<CheckedWriteRoots, ProgramError> {
-        // 1. A public batch has no credential accounts and contributes an all zero statement suffix.
-        if self.ix.credential_writes()? == 0 {
+    fn load(self, accounts: &mut [AccountView]) -> Result<Option<CheckedWriteRoots>, ProgramError> {
+        // 1. A public batch has no credential accounts and binds no credential section.
+        if self.credential_writes == 0 {
             self.ix
                 .credential_read
                 .check_empty()
@@ -128,11 +125,7 @@ impl PrivateWriteRoots<'_, '_> {
             if !accounts.is_empty() || self.ix.private_write.is_some() {
                 return Err(StorageError::InvalidCredentialRead.into());
             }
-            return Ok(CheckedWriteRoots {
-                credentials: CredentialRoots::empty(self.capacity)
-                    .map_err(|_| StorageError::InvalidCredentialRead)?,
-                absence_checkpoint: None,
-            });
+            return Ok(None);
         }
         // 2. The ring program preimage authenticates the credential signing PDA before roots enter the statement.
         if !self.registry.is_private() {
@@ -181,10 +174,14 @@ impl PrivateWriteRoots<'_, '_> {
         }
         .roots()
         .map_err(|_| StorageError::InvalidCredentialRead)?;
-        Ok(CheckedWriteRoots {
-            credentials,
-            absence_checkpoint: Some(checkpoint.sequence()),
-        })
+        Ok(Some(CheckedWriteRoots {
+            private: PrivateWrites {
+                credential_writes: self.credential_writes,
+                private_ring_id: self.registry.private_ring_id,
+                credentials,
+            },
+            absence_checkpoint: checkpoint.sequence(),
+        }))
     }
 }
 

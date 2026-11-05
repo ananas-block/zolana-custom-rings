@@ -1,8 +1,9 @@
 //! Storage registry builders and the apply proof of a record batch.
 //!
-//! A public batch proves with empty credential roots. A batch with salted owner writes proves, for
-//! each one, the owner's credential in a state tree, its address applied in tree 0 and the written
-//! key `ListKey(member, salt)` under the credential's list tag. All addresses share one tree 0 root.
+//! A public batch proves under the public apply key and binds no credential section. A batch with
+//! salted owner writes uses the private apply key of its width and proves, for each one, the
+//! owner's credential in a state tree, its address applied in tree 0 and the written key
+//! `ListKey(member, salt)` under the credential's list tag. All addresses share one tree 0 root.
 //! The update names that root's sequence, Storage compares it to tree 0 and raises the absence floor
 //! in the same instruction. An owner whose address is still queued is refused before any proof.
 //!
@@ -15,7 +16,7 @@ use std::collections::BTreeMap;
 use custom_ring_interface::{
     credential::owner_member,
     domain,
-    key_catalog::RingCircuit,
+    key_catalog::{apply_width, RingCircuit},
     storage::{RegistryId, StorageError, StorageRegistry},
     storage_instruction::{
         tag, AssetWrite, InitializeIxData, PrivateWriteCheckpoint, RecordWriteClassification,
@@ -39,7 +40,8 @@ use crate::{
     credentials::credential_leaf,
     prover::{to_instruction_proof, RingRequest},
     request::{
-        ApplyRecords, CredentialWriteRequest, RecordWriteProofInputRequest, StateRootRequest,
+        ApplyRecords, CredentialWriteRequest, PrivateApplyRecords, RecordWriteProofInputRequest,
+        StateRootRequest,
     },
     CredentialTrees, CustomRing, RingError,
 };
@@ -80,7 +82,7 @@ pub struct UpdateStorageAuthority {
     pub registry: Address,
 }
 
-/// Proves a public batch with the apply key of its write count, padded with empty writes.
+/// Proves a public batch with the public apply key of its write count, padded with empty writes.
 #[must_use]
 #[derive(Clone, Copy, Debug)]
 pub struct StorageApplyProof<'a> {
@@ -223,7 +225,7 @@ impl StorageApplyProof<'_> {
             asset_writes: self.asset_writes,
             credentials: RecordCredentials::Public,
         })?;
-        let key = ApplyKey::of(self.inputs)?;
+        let key = ApplyKey::of(&statement)?;
         let body = key.body(self.inputs, &statement, Vec::new())?;
         prove_apply(client, key.circuit, &statement, &body).await
     }
@@ -246,8 +248,7 @@ impl PrivateStorageWrite<'_> {
     pub(crate) async fn plan<R: AsyncRpc>(self, rpc: &R) -> Result<PrivateWritePlan, RingError> {
         // 1. The salted owners must name exactly the writes Storage classifies as credential writes,
         //    and each written key must be its owner's list key, so a wrong salt fails before any read.
-        let key = ApplyKey::of(self.inputs)?;
-        let width = key.width;
+        let width = usize::from(apply_width(self.inputs.writes.len() as u64));
         let credential_writes = RecordWriteClassification {
             entries: self
                 .inputs
@@ -378,6 +379,7 @@ impl PrivateStorageWrite<'_> {
                 address_path: inclusion.path.to_vec(),
             });
         }
+        let key = ApplyKey::of(&statement)?;
         let body = key.body(self.inputs, &statement, credentials)?;
         Ok(PrivateWritePlan {
             circuit: key.circuit,
@@ -420,25 +422,25 @@ impl BoundOwner {
     }
 }
 
-/// The apply key of a batch, writes past the batch pad to `width`.
+/// The apply key of a statement, writes past the batch pad to `width`.
 struct ApplyKey {
     circuit: RingCircuit,
     width: usize,
 }
 
 impl ApplyKey {
-    fn of(inputs: &ApplyProofInputs) -> Result<Self, RingError> {
-        let circuit = RingCircuit::apply_records(inputs.writes.len() as u64);
-        match circuit {
-            RingCircuit::ApplyRecords { writes } => Ok(Self {
+    /// The statement's mode picks the family, as Storage does from the classified writes.
+    fn of(statement: &ApplyRecordsStatement) -> Result<Self, RingError> {
+        match statement.circuit() {
+            circuit @ RingCircuit::ApplyRecords { writes, .. } => Ok(Self {
                 circuit,
                 width: usize::from(writes),
             }),
-            _ => Err(RingError::UnpinnedProvingKey(circuit)),
+            circuit => Err(RingError::UnpinnedProvingKey(circuit)),
         }
     }
 
-    /// Writes and credentials past the batch assign zeros.
+    /// Writes and credentials past the batch assign zeros, a public key takes no credential.
     fn body(
         &self,
         inputs: &ApplyProofInputs,
@@ -451,7 +453,22 @@ impl ApplyKey {
             .map(|write| Some(write.into()))
             .collect();
         writes.resize(self.width, None);
-        credentials.resize(self.width, None);
+        let private = statement.private.as_ref().map(|private| {
+            credentials.resize(self.width, None);
+            PrivateApplyRecords {
+                credential_writes: u64::from(private.credential_writes),
+                private_ring_id: private.private_ring_id,
+                credential_owner: *private.credentials.owner_hash(),
+                address_root: *private.credentials.address_root(),
+                state_roots: private
+                    .credentials
+                    .state_roots()
+                    .iter()
+                    .map(StateRootRequest::from)
+                    .collect(),
+                credentials,
+            }
+        });
         Ok(ApplyRecords {
             public_input_hash: statement.hash()?,
             old_root: statement.old_root,
@@ -462,17 +479,7 @@ impl ApplyKey {
             chain_end: statement.chain_end,
             count: u8::try_from(statement.count).map_err(|_| RingError::RecordProjectionStale)?,
             writes,
-            credential_writes: u64::from(statement.credential_writes),
-            private_ring_id: statement.private_ring_id,
-            credential_owner: *statement.credentials.owner_hash(),
-            address_root: *statement.credentials.address_root(),
-            state_roots: statement
-                .credentials
-                .state_roots()
-                .iter()
-                .map(StateRootRequest::from)
-                .collect(),
-            credentials,
+            private,
         })
     }
 }

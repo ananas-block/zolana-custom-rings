@@ -220,8 +220,8 @@ func (p MergeParams) view() any {
 	return assignment(p)
 }
 
-func (p ApplyRecordsParams) view() any {
-	type assignment ApplyRecordsParams
+func (p PrivateApplyRecordsParams) view() any {
+	type assignment PrivateApplyRecordsParams
 	p.Credentials = slices.Clone(p.Credentials)
 	for i, credential := range p.Credentials {
 		if credential != nil {

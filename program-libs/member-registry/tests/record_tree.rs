@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use custom_ring_interface::{
+    key_catalog::{ApplyMode, RingCircuit},
     storage::{RegistryId, StorageError, StorageRegistry},
     storage_instruction::{AssetWrite, InitializeIxData},
     RecordWrite, FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
@@ -453,7 +454,7 @@ fn registry() -> StorageRegistry {
 }
 
 #[test]
-fn public_statements_bind_empty_credentials_at_the_selected_key_width() {
+fn public_statements_select_the_public_key_and_bind_no_credentials() {
     let proof = MemberRegistryTree::new()
         .unwrap()
         .apply(
@@ -476,13 +477,15 @@ fn public_statements_bind_empty_credentials_at_the_selected_key_width() {
         })
         .unwrap();
     assert_eq!(statement.count, 3);
-    assert_eq!(statement.credential_writes, 0);
-    assert_eq!(statement.private_ring_id, [0; 32]);
-    assert_eq!(statement.credentials.capacity(), 4);
-    assert!(statement
-        .credentials
-        .elements()
-        .all(|field| field == [0; 32]));
+    assert_eq!(statement.private, None);
+    assert_eq!(
+        statement.circuit(),
+        RingCircuit::ApplyRecords {
+            writes: 4,
+            mode: ApplyMode::Public
+        }
+    );
+    assert_eq!(statement.elements().len(), 8);
 }
 
 #[test]
@@ -533,11 +536,7 @@ fn private_asset_exemption_requires_the_exact_mint_preimage() {
             credentials: RecordCredentials::Public,
         })
         .unwrap();
-    assert_eq!(statement.credential_writes, 0);
-    assert!(statement
-        .credentials
-        .elements()
-        .all(|field| field == [0; 32]));
+    assert_eq!(statement.mode(), ApplyMode::Public);
     for claimed_mint in [
         Address::new_from_array([0x32; 32]),
         Address::new_from_array([0x33; 32]),

@@ -33,13 +33,14 @@ const (
 	entry8Key     common.CircuitType = "custom-ring-transfer-entry-8-in2-w4-s2"
 	applyKey      common.CircuitType = "custom-ring-apply-records-1"
 	batchKey      common.CircuitType = "custom-ring-apply-records-16"
+	privateKey    common.CircuitType = "custom-ring-apply-records-private-1"
 	registerKey   common.CircuitType = "custom-ring-register-key"
 	depositKey    common.CircuitType = "custom-ring-deposit-8"
 	mergeKey      common.CircuitType = "custom-ring-merge"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, wide49Key, entryKey, entry8Key, entry24Key, applyKey, batchKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, wide49Key, entryKey, entry8Key, entry24Key, applyKey, batchKey, privateKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -58,6 +59,18 @@ func TestHostRequestsDecodeAndSolve(t *testing.T) {
 	}
 }
 
+// Each apply family decodes only its own body, a request names its family by its fields.
+func TestApplyRequestsDecodeOnlyUnderTheirMode(t *testing.T) {
+	public := applyRequest(t, privateKey, 1)
+	if _, err := decode(privateKey, mustMarshal(t, public)); err == nil {
+		t.Fatal("a private key decoded a body without credential fields")
+	}
+	private := requestOf[PrivateApplyRecordsParams](t, applyKey, ringregistry.PrivateBatch(t, 1, ringregistry.PrivateBlockBit))
+	if _, err := decode(applyKey, mustMarshal(t, private)); err == nil {
+		t.Fatal("a public key decoded a body with credential fields")
+	}
+}
+
 func hostRequest(t testing.TB, k Key) any {
 	t.Helper()
 	switch k.Family {
@@ -67,6 +80,9 @@ func hostRequest(t testing.TB, k Key) any {
 		w.DefaultInput = k.Entry
 		return requestOf[TransferParams](t, k.Circuit, w.Build(t).Circuit)
 	case ApplyRecords:
+		if k.Private {
+			return requestOf[PrivateApplyRecordsParams](t, k.Circuit, ringregistry.PrivateBatch(t, k.Inputs, ringregistry.PrivateBlockBit))
+		}
 		return applyRequest(t, k.Circuit, k.Inputs)
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
@@ -130,11 +146,6 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 	p := &ApplyRecordsParams{
 		RequestHead: RequestHead{CircuitType: batch.circuit}, OldRoot: fb(members.Root()), OldNextIndex: uint32(members.NextIndex()),
 		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWriteProofInput, batch.capacity),
-		PrivateRingID: fi(0), CredentialOwner: fi(0), AddressRoot: fi(0),
-		StateRoots: make([]CredentialStateRoot, batch.capacity), Credentials: make([]*CredentialWriteParams, batch.capacity),
-	}
-	for i := range p.StateRoots {
-		p.StateRoots[i].Root = fi(0)
 	}
 	chain := p.ChainStart.Int
 	for i, e := range entries {
@@ -146,10 +157,6 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 	fields := []*big.Int{
 		big.NewInt(shared.ApplyRecordsDomain), p.OldRoot.Int, p.NewRoot.Int, big.NewInt(int64(p.OldNextIndex)),
 		big.NewInt(int64(p.NewNextIndex)), p.ChainStart.Int, p.ChainEnd.Int, big.NewInt(int64(p.Count)),
-		new(big.Int), p.PrivateRingID.Int, p.CredentialOwner.Int, p.AddressRoot.Int,
-	}
-	for range p.StateRoots {
-		fields = append(fields, new(big.Int), new(big.Int))
 	}
 	p.PublicInputHash = fb(spptest.MustHashChain4(t, fields))
 	return p

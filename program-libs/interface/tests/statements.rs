@@ -5,9 +5,9 @@ use custom_ring_interface::{
     ciphertext_digest, cosign::ApprovalMask, domain, record_chain, tail_chain,
     ApplyRecordsStatement, AuditCredential, AuditHead, AuditKey, AuditLayout, AuditStreamLayout,
     ConfidentialSender, CredentialRoots, CustomRingError, DepositContext, DepositPublicInput,
-    DepositRegistry, DepositedAsset, RingOutput, SignerDataCounts, SignerSet, SlotBody,
-    TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES, AUDIT_HEAD_ELEMENTS,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, OPENING_RECORD_LEN, RECIPIENT_BODY_LEN,
+    DepositRegistry, DepositedAsset, PrivateWrites, RingOutput, SignerDataCounts, SignerSet,
+    SlotBody, TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES,
+    AUDIT_HEAD_ELEMENTS, AUDIT_RECORD_LEN, DATA_TAIL_LEN, OPENING_RECORD_LEN, RECIPIENT_BODY_LEN,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,7 @@ struct StatementVectors {
     ring_program: String,
     transfer: Vec<TransferCase>,
     apply_records: ApplyCase,
+    apply_records_public: ApplyPublicCase,
     register_key: RegisterKeyCase,
     deposit: DepositCase,
 }
@@ -102,6 +103,19 @@ struct ApplyCase {
     credential_writes: u16,
     private_ring_id: String,
     credential_fields: Vec<String>,
+    elements: Vec<String>,
+    public_input_hash: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct ApplyPublicCase {
+    old_root: String,
+    new_root: String,
+    old_next_index: u32,
+    new_next_index: u32,
+    chain_start: String,
+    chain_end: String,
+    count: u64,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -514,9 +528,17 @@ fn compute_vectors() -> StatementVectors {
         chain_start: values.fields[11],
         chain_end: values.fields[12],
         count: 16,
-        credential_writes: 1,
-        private_ring_id: values.ring_id,
-        credentials: credential_fixture(16),
+        private: Some(PrivateWrites {
+            credential_writes: 1,
+            private_ring_id: values.ring_id,
+            credentials: credential_fixture(16),
+        }),
+    };
+    let private = apply.private.as_ref().expect("private apply statement");
+    let public_apply = ApplyRecordsStatement {
+        count: 3,
+        private: None,
+        ..apply.clone()
     };
     let ring_id = values.fields[17];
     let list_tag = values.fields[16];
@@ -581,11 +603,22 @@ fn compute_vectors() -> StatementVectors {
             chain_start: hex::encode(apply.chain_start),
             chain_end: hex::encode(apply.chain_end),
             count: apply.count,
-            credential_writes: apply.credential_writes,
-            private_ring_id: hex::encode(apply.private_ring_id),
-            credential_fields: hexes(&apply.credentials.elements().collect::<Vec<_>>()),
+            credential_writes: private.credential_writes,
+            private_ring_id: hex::encode(private.private_ring_id),
+            credential_fields: hexes(&private.credentials.elements().collect::<Vec<_>>()),
             elements: hexes(&apply.elements()),
             public_input_hash: hex::encode(apply.hash().unwrap()),
+        },
+        apply_records_public: ApplyPublicCase {
+            old_root: hex::encode(public_apply.old_root),
+            new_root: hex::encode(public_apply.new_root),
+            old_next_index: public_apply.old_next_index,
+            new_next_index: public_apply.new_next_index,
+            chain_start: hex::encode(public_apply.chain_start),
+            chain_end: hex::encode(public_apply.chain_end),
+            count: public_apply.count,
+            elements: hexes(&public_apply.elements()),
+            public_input_hash: hex::encode(public_apply.hash().unwrap()),
         },
         register_key: RegisterKeyCase {
             ring_id: hex::encode(register.ring_id),

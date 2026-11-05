@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 use custom_ring_interface::{
-    key_catalog::{FrameKey, RingCircuit, RingKey, TransferShape, RING_KEYS, TRANSFER_SHAPES},
+    key_catalog::{
+        ApplyMode, FrameKey, RingCircuit, RingKey, TransferShape, RING_KEYS, TRANSFER_SHAPES,
+    },
     ParsedTransact, TRANSFER_OUTPUT_CAPACITIES,
 };
 use custom_ring_sdk::BufferedFrame;
@@ -761,7 +763,10 @@ impl ShapeRing<'_> {
                 env: self.env,
             }
             .send()?;
-            coverage.cover_proved(self.gate, RingCircuit::apply_records(u64::try_from(width)?))?;
+            coverage.cover_proved(
+                self.gate,
+                RingCircuit::apply_records(u64::try_from(width)?, ApplyMode::Public),
+            )?;
         }
         Ok(())
     }

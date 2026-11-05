@@ -5,6 +5,7 @@
 //! `sdk-libs/ts/test/protocol/encoding/ring-shared-vectors.test.ts`.
 
 use custom_ring_interface::{
+    key_catalog::apply_width,
     mint_policy_write,
     storage::{chain_start, RegistryId, Revision, StorageRegistry},
     storage_instruction::InitializeIxData,
@@ -50,9 +51,8 @@ struct Update {
     chain_end: String,
     count: u64,
     statement_hash: String,
-    credential_writes: u16,
-    private_ring_id: String,
-    credential_fields: Vec<String>,
+    /// The public apply key's write capacity, every update writes public lists.
+    width: u8,
     /// One per write, instruction order.
     proof_inputs: Vec<WriteInput>,
 }
@@ -209,9 +209,7 @@ impl Registry {
             chain_end: hex::encode(inputs.chain_end),
             count: statement.count,
             statement_hash: hex::encode(statement.hash().expect("statement hash")),
-            credential_writes: statement.credential_writes,
-            private_ring_id: hex::encode(statement.private_ring_id),
-            credential_fields: statement.credentials.elements().map(hex::encode).collect(),
+            width: apply_width(statement.count),
             proof_inputs: inputs.writes.iter().map(write_input).collect(),
         }
     }

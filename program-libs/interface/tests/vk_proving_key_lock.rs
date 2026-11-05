@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use custom_ring_interface::{
-    key_catalog::{RecordPools, RingCircuit, TransferSpend, RING_KEYS},
+    key_catalog::{ApplyMode, RecordPools, RingCircuit, TransferSpend, RING_KEYS},
     verifying_key, RingRail, APPLY_BATCH, PROVING_KEY_SHA256S,
 };
 use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
@@ -82,7 +82,10 @@ fn selectable_circuits() -> BTreeSet<String> {
             }
         }
     }
-    circuits.extend((1..=APPLY_BATCH as u64).map(RingCircuit::apply_records));
+    for mode in [ApplyMode::Public, ApplyMode::Private] {
+        circuits
+            .extend((1..=APPLY_BATCH as u64).map(|count| RingCircuit::apply_records(count, mode)));
+    }
     circuits.push(RingCircuit::Merge);
     circuits
         .iter()

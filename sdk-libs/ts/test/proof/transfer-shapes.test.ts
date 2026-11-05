@@ -67,10 +67,13 @@ function rustRingKeys(): readonly Readonly<{ circuit: RingKeyCircuit; name: stri
   return [
     ...source.matchAll(/circuit: RingCircuit::(\w+)(?: \{([^}]*)\})?,\s*name: "([a-z0-9-]+)"/gu),
   ].map(([, variant = "", body = "", name = ""]) => {
-    const fields = [...body.matchAll(/(\w+): (\w+)/gu)].map(([, field = "", value = ""]) => [
-      field === "inputs" ? "class" : field,
-      value === "true" || value === "false" ? value === "true" : Number(value),
-    ]);
+    const fields = [...body.matchAll(/(\w+): ([\w:]+)/gu)].map(([, field = "", value = ""]) => {
+      if (field === "mode") return ["private", value.endsWith("::Private")];
+      return [
+        field === "inputs" ? "class" : field,
+        value === "true" || value === "false" ? value === "true" : Number(value),
+      ];
+    });
     const family = `${variant.slice(0, 1).toLowerCase()}${variant.slice(1)}`;
     return { circuit: { family, ...Object.fromEntries(fields) } as RingKeyCircuit, name };
   });
@@ -88,12 +91,15 @@ describe("the ring key catalog", () => {
     expect(ringCredentialCapacity(transfer)).toBe(transferPoolCapacity(transfer).credentials);
     expect(ringCredentialCapacity({ family: "deposit", capacity: 8 })).toBe(8);
     expect(ringCredentialCapacity({ family: "merge" })).toBe(1);
-    expect(ringCredentialCapacity({ family: "applyRecords", writes: 16 })).toBe(16);
+    expect(ringCredentialCapacity({ family: "applyRecords", writes: 16, private: true })).toBe(16);
+    expect(ringCredentialCapacity({ family: "applyRecords", writes: 16, private: false })).toBe(0);
   });
 
   it("gives no credential capacity to RegisterKey or a shape off the catalog", () => {
     expect(ringCredentialCapacity({ family: "registerKey" })).toBeUndefined();
-    expect(ringCredentialCapacity({ family: "applyRecords", writes: 3 })).toBeUndefined();
+    expect(
+      ringCredentialCapacity({ family: "applyRecords", writes: 3, private: true }),
+    ).toBeUndefined();
     expect(ringCredentialCapacity({ family: "deposit", capacity: 16 })).toBeUndefined();
   });
 });

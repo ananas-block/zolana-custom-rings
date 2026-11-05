@@ -28,12 +28,22 @@ pub enum RingCircuit {
     },
     ApplyRecords {
         writes: u8,
+        mode: ApplyMode,
     },
     RegisterKey,
     Deposit {
         capacity: u8,
     },
     Merge,
+}
+
+/// Mirror `Key.Private` in `prover/ring/keys.go`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplyMode {
+    /// No write needs a credential, the key compiles no credential slot.
+    Public,
+    /// At least one private owner write, every write slot opens a credential.
+    Private,
 }
 
 /// One transfer key, mirror `Shapes` in `prover/circuits/transfer`.
@@ -307,14 +317,16 @@ impl RingCircuit {
         }
     }
 
-    pub const fn apply_records(pending: u64) -> Self {
+    pub const fn apply_records(pending: u64, mode: ApplyMode) -> Self {
         Self::ApplyRecords {
             writes: apply_width(pending),
+            mode,
         }
     }
 }
 
-const fn apply_width(pending: u64) -> u8 {
+/// The narrowest apply key width holding `pending` writes up to `APPLY_BATCH`, the same in both modes.
+pub const fn apply_width(pending: u64) -> u8 {
     match pending {
         0..=1 => 1,
         2 => 2,
@@ -365,7 +377,14 @@ impl RingCircuit {
             Self::Transfer { .. } => self.record_pools().map(|pools| pools.credentials),
             Self::Deposit { capacity } => Some(usize::from(capacity)),
             Self::Merge => Some(1),
-            Self::ApplyRecords { writes } => Some(usize::from(writes)),
+            Self::ApplyRecords {
+                writes,
+                mode: ApplyMode::Private,
+            } => Some(usize::from(writes)),
+            Self::ApplyRecords {
+                mode: ApplyMode::Public,
+                ..
+            } => Some(0),
             Self::RegisterKey => None,
         }
     }
