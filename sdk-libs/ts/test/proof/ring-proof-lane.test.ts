@@ -1,4 +1,3 @@
-import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -63,7 +62,6 @@ import {
   ringProofRequestBody,
   type CredentialOpeningProofInput,
   type TransferProofRequest,
-  type MergeProofRequest,
 } from "../../src/rpc/prover/ring.js";
 
 await initializePoseidon();
@@ -736,11 +734,3 @@ describe("prover/ring/params.go", () => {
     );
   });
 });
-
-/** Inverse of `pack_be`, 31 bytes then the last. */
-function viewingU(view0: string, view1: string): Bytes32 {
-  const out = new Uint8Array(32);
-  out.set(field(view0).subarray(1), 0);
-  out.set(field(view1).subarray(31), 31);
-  return out as Bytes32;
-}

@@ -1,9 +1,11 @@
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
+import { CredentialRoots } from "../../../src/protocol/codec/credential-read.js";
 import {
-  TRACKING_EMPTY_ROOT,
-  trackingEntryChained,
-  trackingEntryHash,
-} from "../../../src/protocol/membership/tracking.js";
+  credentialElements,
+  registerKeyHash,
+  type AuditCredential,
+} from "../../../src/protocol/membership/credential.js";
+import { RingDomain } from "../../../src/crypto/derivation/ring-domain.js";
 import { describe, expect, it } from "vitest";
 
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
@@ -37,10 +39,6 @@ import {
 import {
   applyRecordsStatementElements,
   applyRecordsStatementHash,
-  registerKeyStatementElements,
-  registerKeyStatementHash,
-  applyEnrollmentsStatementElements,
-  applyEnrollmentsStatementHash,
   ciphertextDigest,
   recordChain,
   tailChain,
@@ -235,6 +233,22 @@ describe("ring-statements.json", () => {
           sender: field(vector.sender ?? "00".repeat(32)),
         };
 
+  /** The credential owner, address root and padded state table the statement binds. */
+  type CredentialVector = Readonly<{
+    credential_owner: string;
+    address_root?: string;
+    state_roots: readonly Readonly<{ tree_id: number; root: string }>[];
+  }>;
+  const vectorRoots = (vector: CredentialVector): CredentialRoots =>
+    CredentialRoots.read({
+      ownerHash: field(vector.credential_owner),
+      addressRoot: field(vector.address_root ?? "00".repeat(32)),
+      stateRoots: vector.state_roots.map((entry) => ({
+        treeId: entry.tree_id,
+        root: field(entry.root),
+      })),
+    });
+
   const statementOf = (vector: TransferCase, outputs: TransferStatement["outputs"]) => ({
     head: {
       firstNullifier: field(vector.first_nullifier),
@@ -262,7 +276,7 @@ describe("ring-statements.json", () => {
       policyHash: field(vector.policy_hash),
       ownRoot: field(vector.own_root),
       curatorRoot: field(vector.curator_root),
-      trackingRoot: field(vector.tracking_root),
+      credentials: vectorRoots(vector as unknown as CredentialVector),
     },
     publicAssets: vector.public_assets.map(field),
     publicAmounts: vector.public_amounts.map(field),
@@ -314,11 +328,14 @@ describe("ring-statements.json", () => {
       chainStart: field(apply.chain_start),
       chainEnd: field(apply.chain_end),
       count: BigInt(apply.count),
+      credentialWrites: (apply as unknown as { credential_writes: number }).credential_writes,
+      privateRingId: field((apply as unknown as { private_ring_id: string }).private_ring_id),
+      credentials: vectorRoots(apply as unknown as CredentialVector),
     };
     expect(hexes(applyRecordsStatementElements(applyStatement))).toEqual(apply.elements);
     expect(hex(applyRecordsStatementHash(applyStatement))).toBe(apply.public_input_hash);
     const register = statements.register_key;
-    const registerStatement = {
+    const registerStatement: AuditCredential = {
       ringId: field(register.ring_id),
       member: field(register.member),
       nullifierPk: field(register.nullifier_pk),
@@ -327,38 +344,10 @@ describe("ring-statements.json", () => {
       ephU: field(register.eph_u),
       ciphertext: bytes<Bytes64>(register.ciphertext, 64),
     };
-    expect(hexes(registerKeyStatementElements(registerStatement))).toEqual(register.elements);
-    expect(hex(registerKeyStatementHash(registerStatement))).toBe(register.public_input_hash);
-  });
-
-  it("rebuilds the apply enrollments statement, its domain apart from apply records", () => {
-    const apply = statements.apply_enrollments;
-    const statement = {
-      oldRoot: field(apply.old_root),
-      newRoot: field(apply.new_root),
-      oldNextIndex: apply.old_next_index,
-      newNextIndex: apply.new_next_index,
-      chainStart: field(apply.chain_start),
-      chainEnd: field(apply.chain_end),
-      count: BigInt(apply.count),
-    };
-    expect(hexes(applyEnrollmentsStatementElements(statement))).toEqual(apply.elements);
-    expect(hex(applyEnrollmentsStatementHash(statement))).toBe(apply.public_input_hash);
-  });
-
-  it("hashes a tracking entry and chains it as the program does", () => {
-    const tracking = statements.tracking;
-    const entry = {
-      member: field(tracking.member),
-      nullifierPk: field(tracking.nullifier_pk),
-      ctHash: field(tracking.ct_hash),
-      viewingU: field(tracking.viewing_u),
-      revision: BigInt(tracking.revision),
-      listTag: field(tracking.list_tag),
-    };
-    expect(hex(trackingEntryHash(entry))).toBe(tracking.entry_hash);
-    expect(hex(trackingEntryChained(ZERO_32, entry))).toBe(tracking.chain_from_zero);
-    expect(hex(TRACKING_EMPTY_ROOT)).toBe(tracking.empty_root);
+    expect(hexes(credentialElements(registerStatement, RingDomain.registerKey))).toEqual(
+      register.elements,
+    );
+    expect(hex(registerKeyHash(registerStatement))).toBe(register.public_input_hash);
   });
 
   it("hashes the deposit context of its SPP data", () => {
@@ -383,7 +372,7 @@ describe("transfer key selection", () => {
     spendsDefaultRing: false,
     legs: 0,
     owners: 1,
-    pools: { own: 0, curator: 0, tracking: 0 },
+    pools: { own: 0, curator: 0, credentials: 0 },
     wide: false,
   } as const;
 
@@ -398,7 +387,7 @@ describe("transfer key selection", () => {
     const narrow = ringTransferCircuit(spend);
     if (narrow === undefined) throw new Error("no narrow key");
     const width = transferPoolCapacity(narrow).own;
-    const own = (records: number) => ({ own: records, curator: 0, tracking: 0 });
+    const own = (records: number) => ({ own: records, curator: 0, credentials: 0 });
     expect(fittedSpend({ ...spend, pools: own(width) }).wide).toBe(false);
     expect(ringTransferCircuit(fittedSpend({ ...spend, pools: own(width + 1) }))?.owners).toBe(24);
   });
@@ -408,7 +397,7 @@ describe("transfer key selection", () => {
     const opened = (unmatched: number) => {
       const own = 2 + 1 + unmatched;
       return ringTransferCircuit(
-        fittedSpend({ ...spend, pools: { own, curator: own, tracking: 0 } }),
+        fittedSpend({ ...spend, pools: { own, curator: own, credentials: 0 } }),
       );
     };
     expect(opened(12)).toMatchObject({ outputs: 2, class: 24, wide: false });
@@ -417,10 +406,16 @@ describe("transfer key selection", () => {
 
   it("holds the pools of pool_capacity.json", () => {
     expect(poolCapacity.keys).toEqual(
-      transferKeys().map((circuit) => ({
-        key: transferCircuitType(circuit).replaceAll("-", "_"),
-        ...transferPoolCapacity(circuit),
-      })),
+      transferKeys().map((circuit) => {
+        const { own, curator, credentials } = transferPoolCapacity(circuit);
+        // The vector names the credential capacity by Rust `RecordPools::tracking`.
+        return {
+          key: transferCircuitType(circuit).replaceAll("-", "_"),
+          own,
+          curator,
+          tracking: credentials,
+        };
+      }),
     );
   });
 

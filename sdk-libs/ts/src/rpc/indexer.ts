@@ -1,10 +1,5 @@
 import { ClientError, type Bytes32, type RequestContext } from "@heliuslabs/zolana";
-import {
-  ApiError,
-  indexerScalars,
-  wrapIndexer,
-  type ZolanaApi,
-} from "@heliuslabs/zolana/internal";
+import { ApiError, indexerScalars, wrapIndexer, type ZolanaApi } from "@heliuslabs/zolana/internal";
 
 import {
   getStorageMemberOpeningsMethod,
