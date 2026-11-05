@@ -7,7 +7,7 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
     let tags = [
         spp::RING_TRANSACT,
         spp::RING_AUTHORITY_TRANSACT,
-        spp::RING_MERGE_V2,
+        spp::RING_MERGE_TRANSACT,
         tag::INITIALIZE,
         tag::UPDATE_POLICY,
         tag::TRANSFER,

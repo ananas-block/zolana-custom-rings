@@ -109,7 +109,7 @@ use solana_transaction_error::TransactionError;
 use spr_api::BlockingInsideRuntime;
 use spr_client::{
     prover::tee::TeePolicy, Blocking, ClientError, ComputeBudgetConfig, IndexerPollConfig, Rpc,
-    SolanaRpc, ZolanaIndexer,
+    SolanaRpc, SprIndexer,
 };
 use spr_interface::error::ShieldedPoolError;
 use spr_keypair::ShieldedAddress;

@@ -1076,13 +1076,13 @@ fn a_ring_with_an_unknown_mode_reads_as_invalid() {
 
 #[test]
 fn an_spp_tag_with_its_forwarded_body_refuses_at_the_ring() {
-    use spr_interface::instruction::tag::{RING_AUTHORITY_TRANSACT, RING_MERGE_V2};
+    use spr_interface::instruction::tag::{RING_AUTHORITY_TRANSACT, RING_MERGE_TRANSACT};
 
     let mut ring = Ring::new(Setup::Policy);
     let admin = ring.holder(RingRole::Admin);
     let delegate = Keypair::new();
     let mut merge = set_delegate(&admin.pubkey(), &delegate.pubkey());
-    merge.data = vec![RING_MERGE_V2, 1, 2, 3];
+    merge.data = vec![RING_MERGE_TRANSACT, 1, 2, 3];
     refused(
         ring.send(merge, &[&admin, &delegate]),
         CustomRingError::InvalidInstructionData,

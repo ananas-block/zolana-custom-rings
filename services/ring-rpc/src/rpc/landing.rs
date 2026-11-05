@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use custom_ring_sdk::SignatureHistory;
 use solana_address::Address;
 use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_hash::Hash;
@@ -169,11 +170,8 @@ impl ChainSubmit for SolanaChain {
         // Without history a landed signature reads as expired once the status cache drops it.
         let statuses = self
             .rpc
-            .client()
-            .get_signature_statuses_with_history(&[signature])
-            .await
-            .map_err(|error| ClientError::Rpc(format!("get_signature_statuses: {error}")))?
-            .value;
+            .signature_statuses_with_history(vec![signature])
+            .await?;
         let Some(Some(status)) = statuses.into_iter().next() else {
             return Ok(None);
         };

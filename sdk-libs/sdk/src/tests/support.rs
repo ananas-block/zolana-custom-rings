@@ -17,7 +17,7 @@ use custom_ring_interface::{
 use solana_account::Account;
 use solana_address::Address;
 use spr_client::{
-    rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncWitnessReader, AsyncZolanaClient,
+    rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncSprClient, AsyncWitnessReader,
     ClientError, Context, GetMerkleProofsResponse, IndexerRpcConfig, InputWitnesses, MerkleContext,
     MerkleProof, ProofDataSource,
 };
@@ -34,7 +34,7 @@ use spr_interface::{
 use spr_keypair::ShieldedAddress;
 use spr_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
 use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
-use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
+use spr_tree::{TreeAccount, TreeFeeSchedule, UTXO_TREE_HEIGHT};
 use zolana_ring_client::{AsyncRingIndexer, RingIndexerError};
 use zolana_ring_indexer::{
     rpc::{
@@ -194,7 +194,7 @@ impl LeafTree {
     }
 }
 
-fn tree_account(tree: PoolTree) -> Account {
+fn tree_account(tree: PoolTree, fees: TreeFeeSchedule) -> Account {
     let mut data = vec![0u8; TreeAccount::account_size()];
     let params = nullifier_tree_params();
     TreeAccount::init(
@@ -204,7 +204,7 @@ fn tree_account(tree: PoolTree) -> Account {
         tree.address.to_bytes(),
         tree.id,
         params,
-        default_tree_fees(params.input_queue_zkp_batch_size).unwrap(),
+        fees,
     )
     .unwrap();
     Account {
@@ -342,11 +342,15 @@ impl Chain {
     }
 
     pub(crate) fn with_tree(self, id: u16) -> Self {
+        self.with_tree_fees(id, default_tree_fees())
+    }
+
+    pub(crate) fn with_tree_fees(self, id: u16, fees: TreeFeeSchedule) -> Self {
         let tree = PoolTree {
             address: spr_interface::pda::tree(id),
             id,
         };
-        self.with(tree.address, tree_account(tree))
+        self.with(tree.address, tree_account(tree, fees))
     }
 
     /// The ring account pinning `rules`, every list read from the ring's records.
@@ -442,10 +446,7 @@ impl Chain {
 
     fn client_on(self, source: ProofDataSource) -> RingClient<Chain, Chain> {
         let prover = || AsyncProverClient::local().with_proof_data_source(source);
-        RingClient::new(
-            AsyncZolanaClient::new(self.clone(), self, prover()),
-            prover(),
-        )
+        RingClient::new(AsyncSprClient::new(self.clone(), self, prover()), prover())
     }
 }
 

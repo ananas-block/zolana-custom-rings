@@ -358,7 +358,7 @@ fn remember_merge(
 mod tests {
     use custom_ring_interface::AuditRecord;
     use spr_client::rpc::PaginationToken;
-    use spr_event::{encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef};
+    use spr_event::{encode_merge_output_data, MergeOutputDataRef};
     use spr_interface::ZERO_NULLIFIER_PUBKEY;
     use spr_transaction::{OutputContext, OutputSlot};
 
@@ -371,11 +371,7 @@ mod tests {
     const MINT: [u8; 32] = [0xc1; 32];
     const RING_DATA: [u8; 32] = [0; 32];
 
-    fn merge_row(
-        hash: [u8; 32],
-        nullifiers: Vec<[u8; 32]>,
-        binding: MergeCiphertextBinding,
-    ) -> ShieldedTransaction {
+    fn merge_row(hash: [u8; 32], nullifiers: Vec<[u8; 32]>) -> ShieldedTransaction {
         ShieldedTransaction {
             slot: 1,
             tx_signature: Signature::default(),
@@ -393,7 +389,6 @@ mod tests {
                     salt: &[5; 16],
                     ciphertext: &[[0; 32]; 3],
                     prefix: &[RING_DATA],
-                    binding,
                 }),
             }],
             messages: Vec::new(),
@@ -491,7 +486,7 @@ mod tests {
                 [0; 32],
                 [0; 32],
             ];
-            let row = merge_row(commitment, nullifiers, MergeCiphertextBinding::Proven);
+            let row = merge_row(commitment, nullifiers);
             let merge = confirmed_merge(&row, 0, &sealed(&auditor, record), &auditor)
                 .unwrap()
                 .unwrap();
@@ -511,7 +506,7 @@ mod tests {
     fn each_record_field_changed_fails_the_rebuild() {
         let auditor = X25519Keypair::new();
         let (record, commitment) = merged_note([0x07; 32], [0x13; 32].map(|byte: u8| byte & 0x1f));
-        let row = merge_row(commitment, vec![FIRST; 8], MergeCiphertextBinding::Proven);
+        let row = merge_row(commitment, vec![FIRST; 8]);
         let opens =
             |spoiled: OpeningRecord| confirmed_merge(&row, 0, &sealed(&auditor, spoiled), &auditor);
         assert!(opens(record).is_ok());

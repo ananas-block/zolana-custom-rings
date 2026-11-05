@@ -636,7 +636,8 @@ impl Relay {
         let landing_rent = match self.created_rent(&payload).await? {
             Some(created) => Some(setup_rent.saturating_add(created)),
             None => (setup_rent > 0).then_some(setup_rent),
-        };
+        }
+        .map(|rent| rent.saturating_add(proven.tree_fees));
         self.reserve(RelaySpend {
             proven: &proven,
             lease,
@@ -1431,7 +1432,7 @@ struct RelaySpend<'a> {
     proven: &'a ProvenRelay,
     lease: Option<Lease>,
     setup: &'a [Instruction],
-    /// `None` holds nothing, `Some(0)` still holds its fee.
+    /// `None` holds nothing, `Some(0)` still holds its fee, `Some` counts the tree fees.
     landing_rent: Option<u64>,
 }
 
@@ -1832,6 +1833,7 @@ fn enrollment_step(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Proven
         budget: ComputeBudgetConfig::new(ENROLL_COMPUTE_UNITS),
         co_signers: Vec::new(),
         signers: vec![enrollment.owner],
+        tree_fees: 0,
     }
 }
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use custom_ring_sdk::RingClient;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use spr_client::{AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient, AsyncZolanaIndexer};
+use spr_client::{AsyncProverClient, AsyncSolanaRpc, AsyncSprClient, AsyncSprIndexer};
 
 use crate::{
     database::Store, escrow_merge::RingSdkMergeBuilder, landing::SolanaChain,
@@ -33,9 +33,9 @@ pub struct RelayServicesInit<'a> {
 impl RelayServicesInit<'_> {
     pub fn build(self) -> RelayServices {
         let ring_client = || {
-            let zolana = AsyncZolanaClient::new(
+            let zolana = AsyncSprClient::new(
                 AsyncSolanaRpc::new(self.rpc_url),
-                AsyncZolanaIndexer::new(self.indexer_url),
+                AsyncSprIndexer::new(self.indexer_url),
                 AsyncProverClient::new(self.prover_url.to_owned()),
             );
             RingClient::new(zolana, AsyncProverClient::new(self.prover_url.to_owned()))

@@ -101,9 +101,9 @@ use solana_message::v1::MAX_TRANSACTION_SIZE;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{
-    compile_message, sign_transaction, AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient,
-    AsyncZolanaIndexer, ComputeBudgetConfig, ProofDataSource, Rpc, ShieldedTransaction, SolanaRpc,
-    ZolanaIndexer,
+    compile_message, sign_transaction, AsyncProverClient, AsyncSolanaRpc, AsyncSprClient,
+    AsyncSprIndexer, ComputeBudgetConfig, ProofDataSource, Rpc, ShieldedTransaction, SolanaRpc,
+    SprIndexer,
 };
 use spr_interface::{
     error::ShieldedPoolError,
@@ -579,7 +579,7 @@ impl<'a> DefaultRingDeposit<'a> {
     fn send(
         self,
         rpc: &SolanaRpc,
-        indexer: &ZolanaIndexer,
+        indexer: &SprIndexer,
         assets: &AssetRegistry,
     ) -> Result<Note<'a>> {
         let address = self.depositor.shielded_address()?;
@@ -708,9 +708,9 @@ impl AsyncHopParity<'_> {
 
         // `local()` on both clients, a parity failure cannot be two different provers.
         let native = RingClient::new(
-            AsyncZolanaClient::new(
+            AsyncSprClient::new(
                 AsyncSolanaRpc::new(env.rpc_url.clone()),
-                AsyncZolanaIndexer::new(env.indexer_url.clone()),
+                AsyncSprIndexer::new(env.indexer_url.clone()),
                 AsyncProverClient::local(),
             ),
             AsyncProverClient::local(),

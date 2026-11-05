@@ -45,7 +45,7 @@ use wide_frame::wide_frame;
 
 use relay_fixture::{
     anonymous_rail, deposit_request, owner_wallet, proof_inputs, signed_request, signers_verify,
-    RecordingChain, RecordingProver, LAST_VALID_BLOCK_HEIGHT, RENT_LAMPORTS, SLOT,
+    RecordingChain, RecordingProver, LAST_VALID_BLOCK_HEIGHT, RENT_LAMPORTS, SLOT, TREE_FEES,
 };
 
 const RING: Address = Address::new_from_array([6; 32]);
@@ -1044,7 +1044,7 @@ async fn an_unsigned_or_foreign_delegate_request_consumes_nothing() {
     assert_eq!(fixture.committed().await, 0);
 }
 
-/// The relay's fee payer funds the create, only a missing account costs rent.
+/// The relay's fee payer funds the create, only a missing account costs rent and holds the tree fees.
 #[tokio::test]
 async fn token_account_setup_reserves_the_rent_of_a_missing_account() {
     let mint = Address::new_from_array([0x61; 32]);
@@ -1127,7 +1127,7 @@ async fn token_account_setup_reserves_the_rent_of_a_missing_account() {
         let kept = if exists {
             0
         } else {
-            RENT_LAMPORTS as i64 + fee
+            RENT_LAMPORTS as i64 + TREE_FEES as i64 + fee
         };
         assert_eq!(fixture.committed().await, kept);
     }

@@ -8,7 +8,7 @@ use spr_client::{
         indexed::{IndexedTransferPreparation, IndexedTransferRail, PreparedIndexedTransfer},
         transact::{AnonymousEddsaTransferInputs, AnonymousRingEddsaProver},
     },
-    AsyncRpc, AsyncWitnessReader, ClientError, OwnerAuthorization, ProofAuthority, ProofCompressed,
+    AsyncRpc, AsyncWitnessReader, OwnerAuthorization, ProofAuthority, ProofCompressed,
     RingAuthorityProver, RingTransferProver, TransferInputs,
 };
 use spr_hasher::primitives::solana_owner_identity;
@@ -64,7 +64,6 @@ pub(super) struct CompleteSpp {
 enum SppInputs {
     Ring(TransferInputs),
     Authority(TransferInputs),
-    AuthorityExit(TransferInputs),
     Anonymous {
         inputs: Box<AnonymousEddsaTransferInputs>,
         default_owner_tag: Option<[u8; 32]>,
@@ -86,16 +85,22 @@ impl SppWitness<'_> {
         self,
         client: &RingClient<R, I>,
     ) -> Result<Spp, RingError> {
+        if matches!(self.rail, SppRail::DelegateExit) {
+            return Err(RingError::ExitProofUnavailable);
+        }
         let inputs = self.inputs;
         let allow_dummy_inputs = self.trees.allow_dummy_inputs;
-        if client.indexed_prover().is_some() {
+        // A deposit spends only dummies with no state root, only the indexed route opens their tree.
+        let deposit = inputs.input_utxos.iter().all(|input| input.is_dummy());
+        if deposit || client.indexed_prover().is_some() {
             let rail = match self.rail {
                 SppRail::Anonymous(owner) => IndexedTransferRail::AnonymousRingEddsa {
                     ring: self.ring,
                     owner,
                 },
-                SppRail::Delegate => IndexedTransferRail::RingAuthority(self.ring),
-                SppRail::DelegateExit => IndexedTransferRail::RingAuthorityExit(self.ring),
+                SppRail::Delegate | SppRail::DelegateExit => {
+                    IndexedTransferRail::RingAuthority(self.ring)
+                }
                 SppRail::OwnerSigners => IndexedTransferRail::Ring(self.ring),
             };
             let prepared = IndexedTransferPreparation {
@@ -172,7 +177,7 @@ impl SppWitness<'_> {
                 }
             }
             SppRail::Delegate | SppRail::DelegateExit => {
-                let prover = RingAuthorityProver {
+                let result = RingAuthorityProver {
                     inputs: spends,
                     outputs: inputs.output_utxos.clone(),
                     blinding_seed: inputs.blinding_seed,
@@ -183,17 +188,10 @@ impl SppWitness<'_> {
                     allow_dummy_inputs,
                     ring_program_id: Some(self.ring),
                     shape,
-                };
-                let exit = matches!(self.rail, SppRail::DelegateExit);
-                let result = match exit {
-                    true => prover.build_exit()?,
-                    false => prover.build()?,
-                };
+                }
+                .build()?;
                 CompleteSpp {
-                    inputs: match exit {
-                        true => SppInputs::AuthorityExit(result.inputs),
-                        false => SppInputs::Authority(result.inputs),
-                    },
+                    inputs: SppInputs::Authority(result.inputs),
                     nullifiers: result.nullifiers,
                     input_tree_indexes: result.input_tree_indexes,
                     tree_contexts: result.tree_contexts,
@@ -202,9 +200,7 @@ impl SppWitness<'_> {
             }
         };
         let transfer = match &mut complete.inputs {
-            SppInputs::Ring(inputs)
-            | SppInputs::Authority(inputs)
-            | SppInputs::AuthorityExit(inputs) => inputs,
+            SppInputs::Ring(inputs) | SppInputs::Authority(inputs) => inputs,
             SppInputs::Anonymous { inputs, .. } => &mut inputs.transfer,
         };
         self.authority.complete_inputs(&mut transfer.inputs)?;
@@ -236,10 +232,7 @@ impl Spp {
     ) -> Result<ProvenSpp, RingError> {
         let raw = match self {
             Self::Indexed(prepared) => {
-                let prover = client
-                    .indexed_prover()
-                    .ok_or(ClientError::InvalidIndexedRequest)?;
-                let proven = prover.prove_indexed(prepared.as_ref()).await?;
+                let proven = client.prover().prove_indexed(prepared.as_ref()).await?;
                 RawSpp {
                     default_owner_tag: match proven.data.circuit {
                         CircuitId::AnonymousRingEddsa(.., data)
@@ -272,10 +265,6 @@ impl Spp {
                     SppInputs::Authority(inputs) => {
                         (client.prover().prove_ring_authority(inputs).await?, None)
                     }
-                    SppInputs::AuthorityExit(inputs) => (
-                        client.prover().prove_ring_authority_exit(inputs).await?,
-                        None,
-                    ),
                     SppInputs::Anonymous {
                         inputs,
                         default_owner_tag,

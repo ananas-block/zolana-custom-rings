@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use spr_api::{ApiError, BlockingInsideRuntime, ZolanaApi};
+use spr_api::{ApiError, BlockingInsideRuntime, SprApi};
 use spr_client::{
-    indexer::{indexer_error, AsyncZolanaIndexer, ZolanaIndexer},
-    AsyncZolanaClient, Blocking, ClientError, ZolanaClient,
+    indexer::{indexer_error, AsyncSprIndexer, SprIndexer},
+    AsyncSprClient, Blocking, ClientError, SprClient,
 };
 use spr_indexer_api::RpcMethod;
 use thiserror::Error;
@@ -55,7 +55,7 @@ macro_rules! ring_indexer {
             })+
         }
 
-        impl RingIndexer for ZolanaIndexer {
+        impl RingIndexer for SprIndexer {
             $(fn $name(
                 &self,
                 request: <$method as RpcMethod>::Request,
@@ -65,7 +65,7 @@ macro_rules! ring_indexer {
         }
 
         #[async_trait]
-        impl AsyncRingIndexer for AsyncZolanaIndexer {
+        impl AsyncRingIndexer for AsyncSprIndexer {
             $(async fn $name(
                 &self,
                 request: <$method as RpcMethod>::Request,
@@ -74,7 +74,7 @@ macro_rules! ring_indexer {
             })+
         }
 
-        impl<R, I: RingIndexer> RingIndexer for ZolanaClient<R, I> {
+        impl<R, I: RingIndexer> RingIndexer for SprClient<R, I> {
             $(fn $name(
                 &self,
                 request: <$method as RpcMethod>::Request,
@@ -99,7 +99,7 @@ macro_rules! ring_indexer {
         }
 
         #[async_trait]
-        impl<R: Send + Sync, I: AsyncRingIndexer> AsyncRingIndexer for AsyncZolanaClient<R, I> {
+        impl<R: Send + Sync, I: AsyncRingIndexer> AsyncRingIndexer for AsyncSprClient<R, I> {
             $(async fn $name(
                 &self,
                 request: <$method as RpcMethod>::Request,
@@ -123,7 +123,7 @@ ring_indexer! {
 }
 
 async fn call<M: RpcMethod>(
-    api: &ZolanaApi,
+    api: &SprApi,
     request: M::Request,
 ) -> Result<M::Response, RingIndexerError> {
     api.call::<M>(request).await.map_err(ring_error)
@@ -152,7 +152,7 @@ mod tests {
     use http::{HeaderMap, StatusCode};
     use serde_json::{json, Value};
     use spr_api::{
-        BlockingHttpClient, BlockingZolanaApi, HttpClient, HttpFuture, HttpRequest, HttpResponse,
+        BlockingHttpClient, BlockingSprApi, HttpClient, HttpFuture, HttpRequest, HttpResponse,
     };
     use spr_indexer_api::{Hash, SerializablePubkey};
     use zolana_ring_indexer::rpc::GetStorageMemberRecordsRequest;
@@ -226,10 +226,8 @@ mod tests {
     #[test]
     fn storage_page_transport_returns_the_page() {
         let http = Canned::new(page_result(20));
-        let indexer = ZolanaIndexer::with_api(BlockingZolanaApi::with_client(
-            "http://indexer",
-            http.clone(),
-        ));
+        let indexer =
+            SprIndexer::with_api(BlockingSprApi::with_client("http://indexer", http.clone()));
         let response = indexer.get_storage_member_records(query()).unwrap();
         let (url, body) = http.sent();
         assert_eq!(url, "http://indexer/getStorageMemberRecords");
@@ -243,7 +241,7 @@ mod tests {
     async fn async_storage_page_transport_returns_the_page() {
         let http = Canned::new(page_result(21));
         let indexer =
-            AsyncZolanaIndexer::with_api(ZolanaApi::with_client("http://indexer", http.clone()));
+            AsyncSprIndexer::with_api(SprApi::with_client("http://indexer", http.clone()));
         let response = indexer.get_storage_member_records(query()).await.unwrap();
         assert_eq!(http.sent().1["method"], "getStorageMemberRecords");
         assert_eq!(response.context.slot, 21);

@@ -61,7 +61,7 @@ impl ContextSetup {
         let urls = config.urls();
         let zolana = ZolanaServices {
             rpc: SolanaRpc::new(urls.rpc.clone()),
-            indexer: ZolanaIndexer::new(&urls.indexer),
+            indexer: SprIndexer::new(&urls.indexer),
             prover: urls.prover_client(&root, prover_tee_policy.clone())?,
             ring_prover: urls.prover_client(&root, prover_tee_policy)?,
         }
@@ -130,7 +130,7 @@ impl Context {
 
     pub fn ring_client(
         &self,
-    ) -> &custom_ring_sdk::RingClient<Blocking<SolanaRpc>, Blocking<ZolanaIndexer>> {
+    ) -> &custom_ring_sdk::RingClient<Blocking<SolanaRpc>, Blocking<SprIndexer>> {
         self.zolana.ring_client()
     }
 

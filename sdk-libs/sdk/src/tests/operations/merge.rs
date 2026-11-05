@@ -153,9 +153,9 @@ async fn a_merge_takes_every_input_one_transaction_carries() {
 /// Inputs a keyed merge carries in one v1 transaction, measured here.
 const WIDEST_MERGE: usize = 45;
 
-/// What `OwnerMergeProof` builds from the relay's wire, it holds no merge seed.
+/// The relay's keyed build refuses the zero secret, every derivation under it is public.
 #[test]
-fn the_relays_keyed_build_names_no_signer_on_a_zero_key_merge() {
+fn the_relays_keyed_build_refuses_a_zero_key_merge() {
     use spr_interface::ZERO_NULLIFIER_PUBKEY;
     let owner = keypair(1);
     let utxos: Vec<_> = (0..2)
@@ -172,13 +172,12 @@ fn the_relays_keyed_build_names_no_signer_on_a_zero_key_merge() {
         spr_keypair::NullifierKey::from_secret([0; 31]),
     )
     .unwrap();
-    let built = CustomRingMerge::new(ring(), utxos, None)
-        .unwrap()
-        .encrypt(&keys);
-    match built {
-        Ok(prepared) => assert_eq!(prepared.signing_owner().unwrap(), None),
-        Err(refusal) => panic!("REFUSED {refusal:?}"),
-    }
+    assert!(matches!(
+        CustomRingMerge::new(ring(), utxos, None)
+            .unwrap()
+            .encrypt(&keys),
+        Err(spr_transaction::TransactionError::InvalidMergeSeed)
+    ));
 }
 
 #[test]

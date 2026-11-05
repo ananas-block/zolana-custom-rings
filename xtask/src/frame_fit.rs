@@ -34,7 +34,7 @@ use spr_interface::{
     MAX_INTERFACE_TRANSFERS, N_PUBLIC_SLOTS,
 };
 use spr_program::instruction::{
-    MergeRingV2, RingAuthorityTransact, RingTransact, TransactInterfaceTransferAccounts,
+    MergeRing, RingAuthorityTransact, RingTransact, TransactInterfaceTransferAccounts,
     TransactSolTransferAccounts, TransactSplWithdrawalAccounts,
 };
 use spr_transaction::{serialization::confidential::ConfidentialOutputPlaintext, Data, DataRecord};
@@ -734,7 +734,7 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
         merge: merge.clone(),
     }
     .serialize()?;
-    let spp = MergeRingV2 {
+    let spp = MergeRing {
         input_tree: tree(),
         output_tree: tree(),
         ring_program_id: RING_PROGRAM,

@@ -6,7 +6,7 @@
 // opening of a merged note.
 //
 // SPP derives the output blinding as TMOB(seed, n0). The seed is the owner's nullifier secret off the
-// zero key, and a private merge seed under it, zolana/prover/server/circuits/spp_merge/ring_v2.go. The
+// zero key, and a private merge seed under it, zolana/prover/server/circuits/spp_merge/ring.go. The
 // record seals that seed. The auditor already holds a hidden owner's secret through enrollment, so the
 // record gives it nothing new there, and a zero key's seed exists nowhere else for the auditor.
 //

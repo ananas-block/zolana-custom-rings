@@ -138,7 +138,7 @@ impl SeededNotes {
 }
 
 pub(super) struct SeededIndexer {
-    pub(super) indexer: ZolanaIndexer,
+    pub(super) indexer: SprIndexer,
     pub(super) notes: SeededNotes,
     pub(super) own: MemberRegistryTree,
     /// A curator registry read beside the ring's own.
@@ -364,7 +364,7 @@ impl SeededChain<'_> {
         Ok(ZolanaServices {
             rpc: SolanaRpc::new(self.env.rpc_url.clone()),
             indexer: SeededIndexer {
-                indexer: ZolanaIndexer::new(self.env.indexer_url.clone()),
+                indexer: SprIndexer::new(self.env.indexer_url.clone()),
                 notes: self.notes,
                 own: own_tree(self.rows, &[])?,
                 curator: None,

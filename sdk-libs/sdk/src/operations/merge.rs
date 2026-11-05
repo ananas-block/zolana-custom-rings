@@ -22,10 +22,10 @@ use spr_interface::{
     ZERO_NULLIFIER_PUBKEY,
 };
 use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress};
-use spr_program::instruction::MergeRingV2;
+use spr_program::instruction::MergeRing;
 use spr_transaction::{
     error::TransactionError,
-    instructions::merge::{MergeProofInputs, MergeRail, MergeTransaction},
+    instructions::merge::{MergeProofInputs, MergeTransaction},
     utxo::SppProofInputUtxo,
     ShieldedKeys, SppProofOutputUtxo, WalletUtxo,
 };
@@ -144,7 +144,7 @@ impl CustomRingMerge {
     ) -> Result<Self, TransactionError> {
         let first_nullifier = inputs.first().ok_or(TransactionError::NoInputs)?.nullifier;
         let inner =
-            MergeTransaction::new_ring_v2(inputs, ring.program_id(), output_ring_data_hash)?;
+            MergeTransaction::new_with_ring(inputs, ring.program_id(), output_ring_data_hash)?;
         Ok(Self {
             ring,
             inner,
@@ -268,9 +268,9 @@ impl PreparedCustomRingMerge {
 
     /// `Some` exactly on the zero-key rail.
     pub(crate) fn signing_owner(&self) -> Result<Option<Address>, RingError> {
-        match self.inner.rail {
-            MergeRail::RingV2ZeroKey(_) => public_owner(&self.inner.signing_pubkey).map(Some),
-            _ => Ok(None),
+        match self.inner.merge_seed {
+            Some(_) => public_owner(&self.inner.signing_pubkey).map(Some),
+            None => Ok(None),
         }
     }
 
@@ -381,14 +381,14 @@ impl PreparedCustomRingMerge {
             cache: None,
         }
         .build()?;
-        let proof = client.prover().prove_merge_ring_v2(&result.inputs).await?;
+        let proof = client.prover().prove_merge_ring(&result.inputs).await?;
         let data =
-            result.ring_v2_instruction_data(ProofCompressed::try_from(proof)?.to_merge_proof()?);
+            result.ring_instruction_data(ProofCompressed::try_from(proof)?.to_merge_proof()?);
         let inner = &self.inner;
         let output = &inner.output_utxo;
         let mint = output.asset.asset.to_bytes();
         let owner_key = request::owner_key(&inner.signing_pubkey)?;
-        let seed = inner.seed(&input.nullifier_key);
+        let seed = inner.seed(&input.nullifier_key)?;
         let sealed = MergeRecordSeal {
             record: OpeningRecord {
                 record: AuditRecord {
@@ -577,6 +577,11 @@ const fn authority_of(owner: Option<Address>) -> MergeRingAuthority {
 }
 
 impl ProvenCustomRingMerge {
+    /// Every tree SPP charges a fee to, see [`crate::written_tree_fees`].
+    pub fn written_trees(&self) -> [Address; 2] {
+        [self.input_tree, self.output_tree]
+    }
+
     /// `Some` on a zero-key merge.
     pub fn owner_signer(&self) -> Option<Address> {
         self.owner
@@ -612,7 +617,7 @@ impl RingMergeOperation {
     }
 }
 
-/// `[ring, tracking registry]` ahead of SPP's `merge_ring_v2` list.
+/// `[ring, tracking registry]` ahead of SPP's `merge_ring` list.
 #[must_use]
 pub struct CustomRingMergeInstruction {
     pub ring: CustomRing,
@@ -629,7 +634,7 @@ impl CustomRingMergeInstruction {
     pub fn instruction(self) -> Result<Instruction, RingError> {
         let mut data = vec![custom_ring_interface::tag::MERGE];
         data.extend(self.data.serialize()?);
-        let mut instruction = MergeRingV2 {
+        let mut instruction = MergeRing {
             input_tree: self.input_tree,
             output_tree: self.output_tree,
             ring_program_id: self.ring.program_id(),
