@@ -1828,8 +1828,8 @@ mod tests {
             },
             outputs: None,
         };
-        assert!(anonymous(15).fits(&deposits).is_ok());
-        let refused = refusal(anonymous(16).fits(&deposits));
+        assert!(anonymous(7).fits(&deposits).is_ok());
+        let refused = refusal(anonymous(8).fits(&deposits));
         assert!(refused.contains("no anonymous audit key"), "{refused}");
     }
 
@@ -2004,10 +2004,10 @@ mod tests {
             });
             assert!(key.is_some(), "{outputs}");
         };
-        for outputs in [2, 4, 8, 16] {
+        for outputs in [2, 4, 8] {
             within(Spendable::RingOnly, outputs, false);
         }
-        assert_eq!(Spendable::RingOnly.widest_anonymous(17), None);
+        assert_eq!(Spendable::RingOnly.widest_anonymous(9), None);
         for outputs in [2, 4, 8] {
             within(Spendable::DefaultRingOnly, outputs, true);
         }
