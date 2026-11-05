@@ -1098,6 +1098,48 @@ mod tests {
         );
     }
 
+    /// A bound row has no lease and no age left to refuse, only the generation does.
+    #[tokio::test]
+    async fn a_stale_selection_loses_to_a_row_a_retry_bound() {
+        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let store = RelayReservations::new(database.connection());
+        let first = uploading(&store).await;
+        store.yield_lease(&first.lease).await.expect("yield");
+        let [selected] = store
+            .abandoned(LATER, LATER, 8)
+            .await
+            .expect("read")
+            .try_into()
+            .expect("one row");
+
+        let resumed = claim(&store, 1, signer(1), LATER).await;
+        let live = relay_id(9);
+        assert_eq!(
+            store
+                .bind(Bind {
+                    lease: resumed.lease,
+                    relay_id: &live,
+                    fee: 5,
+                    slot: LATER,
+                })
+                .await
+                .expect("bind"),
+            SpendCheck::Accepted
+        );
+        let claim = store
+            .claim_cleanup(ClaimCleanup {
+                held: &selected,
+                slot: LATER + 1,
+                abandoned_before: LATER,
+            })
+            .await
+            .expect("claim");
+
+        assert_eq!(claim, None);
+        let row = store.by_relay(&live).await.expect("read").expect("row");
+        assert_eq!(row.phase, AttemptPhase::Bound);
+    }
+
     #[tokio::test]
     async fn a_won_cleanup_stops_the_old_upload_and_turns_a_retry_away() {
         let database = Store::open("sqlite::memory:", 1).await.expect("store");
