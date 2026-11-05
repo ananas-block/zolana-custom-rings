@@ -33,6 +33,7 @@ import type {
   CredentialStateRoot,
 } from "../../protocol/codec/credential-read.js";
 import {
+  applyKeyWidth,
   ringCircuitType,
   ringProvingKey,
   type RingKeyCircuit,
@@ -468,9 +469,9 @@ const MINT_CHUNKS = 2;
 const MAX_LEAF_INDEX = Number(MEMBER_REGISTRY_CAPACITY) - 1;
 const U16_MAX = 0xffff;
 
-/** One write takes the 1-write key, 2 to `APPLY_BATCH` the batch key, any other count none. */
+/** A count no apply key holds keeps its own width and fails the catalog lookup. */
 function applyCapacity(count: number): number {
-  return [1, 2, 4, 8, APPLY_BATCH].find((n) => count <= n) ?? count;
+  return count >= 1 && count <= APPLY_BATCH ? applyKeyWidth(count) : count;
 }
 
 /** A list width no key serves fails here, before any encoding. */
