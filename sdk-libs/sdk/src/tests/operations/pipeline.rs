@@ -2030,7 +2030,7 @@ fn ceiling_entry(reply_len: usize) -> Measure {
 }
 
 /// Sets [`ceiling_entry`] at the transaction ceiling exactly.
-const CEILING_REPLY_LEN: usize = 2306;
+const CEILING_REPLY_LEN: usize = 2338;
 
 include!("size_pins.rs");
 
@@ -2718,8 +2718,8 @@ async fn every_frame_limit_of_the_byte_model_holds() {
         payer: Payer::Outsider,
         ..Measure::pinned(Measured::InProofOwnerPolicy, Shape::new(24, 4))
     };
-    assert_eq!(pin(signer_policy).await, 3406);
-    assert_eq!(pin(in_proof_policy).await, 3405);
+    assert_eq!(pin(signer_policy).await, 3414);
+    assert_eq!(pin(in_proof_policy).await, 3413);
 
     // An outsider payer adds its signature and key.
     let owner_paid = Measure::pinned(Measured::Confidential, Shape::IN16_OUT8);
@@ -2791,19 +2791,19 @@ async fn every_frame_boundary_takes_its_modelled_bytes() {
         ..relayed(Measured::ConfidentialPolicy, Shape::new(16, 8))
     };
     for (measure, bytes) in [
-        (with_reply(Measured::AnonymousEntry, 2), 4228),
-        (with_reply(Measured::Anonymous, 5), 3983),
+        (with_reply(Measured::AnonymousEntry, 2), 4196),
+        (with_reply(Measured::Anonymous, 5), 3951),
         (
             relayed(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            3754,
+            3762,
         ),
         (
             relayed(Measured::InProofOwnerPolicy, Shape::new(16, 8)),
-            3753,
+            3761,
         ),
-        (compact_fifteen, 3689),
-        (key_escrow_co_signed, 3536),
-        (loaded_commitment, 3281),
+        (compact_fifteen, 3697),
+        (key_escrow_co_signed, 3544),
+        (loaded_commitment, 3249),
     ] {
         assert_eq!(
             measure.bytes().await,
@@ -2878,23 +2878,23 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
     for (measure, bytes) in [
         (
             Measure::pinned(Measured::Confidential, Shape::new(2, 2)),
-            1446 + 38,
+            1454 + 38,
         ),
         (
             Measure::pinned(Measured::Anonymous, Shape::new(2, 2)),
-            1613 + 38,
+            1581 + 38,
         ),
         (
             Measure::pinned(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            3658 + 39,
+            3666 + 39,
         ),
         (
             Measure::relayed(Measured::ConfidentialPolicy, Shape::new(24, 4)),
-            3406 + 40,
+            3414 + 40,
         ),
         (
             Measure::relayed(Measured::InProofOwnerPolicy, Shape::new(24, 4)),
-            3405 + 40,
+            3413 + 40,
         ),
     ] {
         let second_tree = Measure {
@@ -2937,8 +2937,8 @@ async fn change_slots_and_replies_move_the_anonymous_frame_by_their_bytes() {
         change_slots,
         ..base
     };
-    assert_eq!(at(0).bytes().await - at(1).bytes().await, 72);
-    assert_eq!(at(1).bytes().await - at(2).bytes().await, 72);
+    assert_eq!(at(0).bytes().await - at(1).bytes().await, 64);
+    assert_eq!(at(1).bytes().await - at(2).bytes().await, 64);
     let replied = Measure {
         reply_len: Some(custom_ring_interface::MIN_REPLY_LEN),
         ..base
