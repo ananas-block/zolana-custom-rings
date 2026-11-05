@@ -338,7 +338,7 @@ pub(crate) mod tests {
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
         upstream::{
             DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
-            RingHistoryPage, TransactionPage,
+            RingFrame, RingHistoryPage, TransactionPage,
         },
         utxos::CreatedIn,
     };
@@ -409,6 +409,13 @@ pub(crate) mod tests {
                 .filter(|(event, _)| event.tx_signature == signature)
                 .map(|(_, owner)| *owner)
                 .collect())
+        }
+
+        async fn ring_frame(
+            &self,
+            _frame: RingFrame,
+        ) -> Result<Vec<spr_transaction::ShieldedTransaction>, ClientError> {
+            unused()
         }
 
         async fn ring_history(

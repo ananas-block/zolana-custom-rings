@@ -184,14 +184,18 @@ async fn a_row_whose_origin_does_not_decode_is_skipped_and_the_backfill_goes_pas
     let fixture = Fixture::new();
     let utxos = SpentUtxo::new(&fixture);
     let rows = vec![utxos.entry.clone(), utxos.paid.clone()];
-    let mut source = utxos.source(
+    let source = utxos.source(
         &fixture,
         [
             (None, paged(rows, Some(1), None)),
             (Some(vec![1]), paged(Vec::new(), None, Some(2))),
         ],
     );
-    source.undecodable.insert(utxos.entry.tx_signature);
+    source
+        .undecodable
+        .lock()
+        .unwrap()
+        .insert(utxos.entry.tx_signature);
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");
     let found = service
@@ -252,10 +256,11 @@ async fn a_permanently_invalid_row_passes_the_cursor() {
     service.backfill_utxos().await.expect("backfill");
     assert_eq!(stored_amount(&service, &hash).await, Some(500));
     service.backfill_utxos().await.expect("backfill");
+    assert_eq!(cursors(&probe), [None, Some(vec![1])]);
     assert_eq!(
-        cursors(&probe),
-        [None, None, Some(vec![1])],
-        "the row retries"
+        *probe.frame_reads.lock().unwrap(),
+        [fixture.foreign_key.tx_signature],
+        "the row retries by its signature"
     );
 }
 

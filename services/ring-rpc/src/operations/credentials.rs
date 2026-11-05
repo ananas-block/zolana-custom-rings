@@ -7,8 +7,9 @@
 //! credential is therefore a verified enrollment without a state proof.
 //!
 //! A scan moves its position only past a page whose every credential verified, resolved its owner and
-//! opened. A held credential is never replaced, and a page naming a held member with other contents
-//! refuses whole. A missing credential reads as unknown until a scan ends on a terminal page.
+//! opened. On the lease holder the page commits with that position before the move. A held
+//! credential is never replaced, and a page naming a held member with other contents refuses whole.
+//! A missing credential reads as unknown until a scan ends on a terminal page.
 //!
 //! Read after `rpc/finalized_history.rs` and `program-libs/interface/src/accounts/credential.rs`.
 //! Read before `operations/audit.rs`, the caller holding the backfill lock.
@@ -36,6 +37,7 @@ use zolana_ring_policy::{ring_id_field, Member, MemberError};
 
 use crate::{
     error::RingRpcError,
+    spent_index::ProjectionWriter,
     upstream::{TransactionPage, TransactionSource},
     utxos::AuditStore,
 };
@@ -145,6 +147,8 @@ pub(crate) struct CredentialScan<'a, C> {
     pub auditor: &'a X25519Keypair,
     pub source: &'a C,
     pub store: &'a AuditStore,
+    /// The lease holder persists each page, another replica scans into memory only.
+    pub durable: Option<&'a ProjectionWriter<'a>>,
 }
 
 impl<S: TransactionSource> CredentialSource for S {
@@ -361,8 +365,12 @@ impl<C: CredentialSource> CredentialScan<'_, C> {
                     }
                 }
             }
-            // 3. The page applies whole, the position moves past it only after.
+            // 3. The page applies whole and commits with the position past it, a restart resumes there.
+            let admitted = found.clone();
             self.store.admit_credentials(found)?;
+            if let Some(writer) = self.durable {
+                writer.commit_credentials(&admitted, &next).await?;
+            }
             *position = next;
             if matches!(end, PageEnd::Terminal(_)) {
                 return Ok(ScanEnd::Complete);

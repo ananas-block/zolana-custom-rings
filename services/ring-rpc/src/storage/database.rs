@@ -10,6 +10,8 @@ pub const STORE_CONNECTIONS: u32 = 4;
 #[derive(Clone)]
 pub struct Store {
     db: DatabaseConnection,
+    /// Drawn per open, a restarted process waits out the lease its last open held.
+    replica: [u8; 16],
 }
 
 impl Store {
@@ -27,11 +29,18 @@ impl Store {
             db.execute_unprepared("PRAGMA journal_mode=WAL").await?;
         }
         Migrator::up(&db, None).await?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            replica: rand::random(),
+        })
     }
 
     pub fn connection(&self) -> &DatabaseConnection {
         &self.db
+    }
+
+    pub(crate) const fn replica(&self) -> [u8; 16] {
+        self.replica
     }
 }
 

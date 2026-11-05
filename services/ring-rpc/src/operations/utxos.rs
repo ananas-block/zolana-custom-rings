@@ -29,6 +29,8 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     credentials::{CredentialRefusal, HeldCredential, HeldCredentials},
     error::RingRpcError,
+    frame_repairs::RepairBook,
+    projection_lease::ProjectionLease,
     spend_machine::{NoteRead, Observation, SpendRow, SpendState, Transition},
     spent_index::{Checkpoint, LoadedSpends},
 };
@@ -55,8 +57,11 @@ pub(crate) struct AuditStore {
 pub(crate) struct Backfill {
     /// `None` until the durable tables load.
     pub history: Option<HistoryPosition>,
-    /// In memory, a restart scans every credential from the first finalized slot.
+    /// Durable on the lease holder, a restart resumes the scan where its last page committed.
     pub credentials: HistoryPosition,
+    pub repairs: RepairBook,
+    /// The lease the last claim returned, `None` while another replica writes the ring.
+    pub writer: Option<ProjectionLease>,
 }
 
 #[derive(Default)]
