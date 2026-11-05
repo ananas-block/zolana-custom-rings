@@ -13,7 +13,6 @@ import {
   unreserved,
   signerAddress,
   type SignerAccount,
-  ZERO_32,
   checkIntentApproval,
   checkPreparedTransfer,
   checkTransactionIntent,
@@ -401,11 +400,6 @@ function selectSourceNotes(
     eligible: (entry) =>
       unreserved(reserved)(entry) &&
       entry.utxo.ringProgramId === move.ringProgramId &&
-      entry.dataHash === undefined &&
-      (entry.ringDataHash === undefined || equalBytes(entry.ringDataHash, ZERO_32)) &&
-      entry.utxo.data.utxoData() === undefined &&
-      entry.utxo.data.memo() === undefined &&
-      (entry.utxo.data.ringData()?.length ?? 0) === 0 &&
       owners.some((owner) =>
         equalBytes(
           entry.utxo.owner.ownerProofInputHash(),

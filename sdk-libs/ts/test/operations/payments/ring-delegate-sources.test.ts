@@ -14,9 +14,10 @@ import {
   indexerScalars,
   treeAddress,
 } from "@heliuslabs/zolana/internal";
-import { ShieldedKeypair, ViewingKey } from "@heliuslabs/zolana/keypair";
+import { randomBlinding, ShieldedKeypair, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
   AssetRegistry,
+  Data,
   SOL_MINT,
   ProofInputUtxo,
   Utxo,
@@ -414,6 +415,49 @@ describe("delegate sources", () => {
         split?.inputUtxos.filter((input) => !input.isDummy()).map((input) => input.treeId),
       ).toEqual([fixture.client.treeId, fixture.client.treeId + 1]);
       expect(split?.inputTreeIds()).toEqual([fixture.client.treeId, fixture.client.treeId + 1]);
+    });
+
+    it("moves a note carrying ring data, application data and a memo", async () => {
+      const [member, payee] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
+      const { fixture, delegate } = await moveRing("confidential", [member, payee]);
+      const input = ProofInputUtxo.fromKeypair(
+        new Utxo({
+          owner: member.signingPublicKey(),
+          asset: SOL_MINT,
+          amount: 10n,
+          blinding: randomBlinding(),
+          ringProgramId: fixture.ringProgramId,
+          data: new Data([
+            { kind: "ringData", bytes: Uint8Array.of(1) },
+            { kind: "utxoData", bytes: Uint8Array.of(2) },
+            { kind: "memo", bytes: Uint8Array.of(3) },
+          ]),
+        }),
+        member,
+        {},
+        fixture.client.treeId,
+      );
+      const note: WalletUtxo = {
+        utxo: input.utxo,
+        outputContext: { hash: small(1), tree: fixture.client.tree, leafIndex: 0n },
+        nullifier: input.nullifier(),
+        spent: false,
+      };
+      await buildRingDelegateRecoveredTransaction({
+        client: clientOf(fixture),
+        ringProgramId: fixture.ringProgramId,
+        delegate: delegate as never,
+        feePayer: fixture.authority,
+        outputs: [{ recipient: payee.shieldedAddress(), asset: SOL_MINT, amount: 4n }],
+        sources: [
+          { address: member.shieldedAddress(), nullifierKey: member.nullifierKey(), notes: [note] },
+        ],
+        txViewingKey: TX_VIEWING_KEY,
+      });
+      const spent = fixture.sppCalls
+        .at(-1)
+        ?.proofInputs.inputUtxos.filter((input) => !input.isDummy());
+      expect(spent?.map((input) => input.utxo.data.memo())).toEqual([Uint8Array.of(3)]);
     });
 
     it("pays the change to the owner of the smallest note across tree runs", async () => {
