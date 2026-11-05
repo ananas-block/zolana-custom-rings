@@ -64,9 +64,33 @@ export const SLOT_TAG_LEN = 8;
 
 /** Leading bytes stay zero and off the frame. */
 export function slotTag(tag: Bytes32): Bytes32 {
-  const short = new Uint8Array(32);
-  short.set(tag.subarray(32 - SLOT_TAG_LEN), 32 - SLOT_TAG_LEN);
-  return short as Bytes32;
+  return unframedSlotTag(framedSlotTag(tag));
+}
+
+export function framedSlotTag(tag: Bytes32): Uint8Array {
+  return tag.slice(32 - SLOT_TAG_LEN);
+}
+
+export function unframedSlotTag(framed: Uint8Array): Bytes32 {
+  const tag = new Uint8Array(32);
+  tag.set(framed, 32 - SLOT_TAG_LEN);
+  return tag as Bytes32;
+}
+
+/**
+ * A confidential output's tag, stable per recipient key, since the confidential rail hides
+ * amounts and leaves the recipient linkable to anyone who holds its address.
+ */
+export function confidentialSlotTag(viewingU: Bytes32): Bytes32 {
+  return slotTag(viewingU);
+}
+
+/**
+ * An anonymous payment's tag, fresh per transaction and slot, since a tag stable per recipient
+ * would link every payment to one recipient in public.
+ */
+export function anonymousSlotTag(slotSecret: Bytes32): Bytes32 {
+  return slotTag(recipientTag(slotSecret));
 }
 
 /** `Poseidon(CRRT, slot_secret)`, published for a live recipient and proven against its body's secret. */

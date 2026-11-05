@@ -24,7 +24,7 @@ import type {
   RingAssetDeposit,
   Signature,
 } from "@heliuslabs/zolana/interface";
-import { slotTag } from "../crypto/derivation/ring-stream.js";
+import { confidentialSlotTag } from "../crypto/derivation/ring-stream.js";
 import {
   addressBytes,
   encodeBase58,
@@ -893,7 +893,7 @@ function checkMoved(expected: ExpectedDelegate, frame: RingTransactData): void {
       !isAnonymousFrame(frame.rail) &&
       (payment === undefined ||
         tag === undefined ||
-        !equalBytes(tag, slotTag(payment.owner.viewingU)))
+        !equalBytes(tag, confidentialSlotTag(payment.owner.viewingU)))
     )
       throw mismatch("Recipients");
   });

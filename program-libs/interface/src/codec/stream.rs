@@ -79,17 +79,35 @@ impl SlotSecret {
     pub fn sender_tag(&self) -> Result<[u8; 32], HasherError> {
         Poseidon::hashv(&[&domain::field(domain::SENDER_TAG), &self.0])
     }
+
+    /// An anonymous payment's tag, fresh per transaction and slot, since a tag stable per
+    /// recipient would link every payment to one recipient in public.
+    pub fn anonymous_slot_tag(&self) -> Result<[u8; 32], HasherError> {
+        self.recipient_tag().map(slot_tag)
+    }
+}
+
+/// A confidential output's tag, stable per recipient key, since the confidential rail hides
+/// amounts and leaves the recipient linkable to anyone who holds its address.
+pub fn confidential_slot_tag(viewing_u: [u8; 32]) -> [u8; 32] {
+    slot_tag(viewing_u)
 }
 
 /// A ring slot's tag reaches the indexer alone, its leading bytes stay zero and off the frame.
-pub const fn slot_tag(tag: [u8; 32]) -> [u8; 32] {
-    let mut short = [0; 32];
-    let mut byte = 32 - SLOT_TAG_LEN;
-    while byte < 32 {
-        short[byte] = tag[byte];
-        byte += 1;
-    }
-    short
+pub fn slot_tag(tag: [u8; 32]) -> [u8; 32] {
+    unframed_slot_tag(&framed_slot_tag(&tag))
+}
+
+pub fn framed_slot_tag(tag: &[u8; 32]) -> [u8; SLOT_TAG_LEN] {
+    let mut framed = [0; SLOT_TAG_LEN];
+    framed.copy_from_slice(&tag[32 - SLOT_TAG_LEN..]);
+    framed
+}
+
+pub fn unframed_slot_tag(framed: &[u8; SLOT_TAG_LEN]) -> [u8; 32] {
+    let mut tag = [0; 32];
+    tag[32 - SLOT_TAG_LEN..].copy_from_slice(framed);
+    tag
 }
 
 fn tagged_key_fields(key: &[u8; TAGGED_X25519_KEY_LEN]) -> Result<[[u8; 32]; 2], StreamError> {

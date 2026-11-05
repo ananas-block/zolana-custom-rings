@@ -44,7 +44,12 @@ import {
   type AuditStreamLayout,
 } from "../codec/ring-disclosure-layout.js";
 import { MIN_REPLY_LEN, RECIPIENT_BODY_LEN, senderBundleLen } from "../codec/anonymous-delivery.js";
-import { SLOT_TAG_LEN, slotTag } from "../../crypto/derivation/ring-stream.js";
+import {
+  SLOT_TAG_LEN,
+  framedSlotTag,
+  slotTag,
+  unframedSlotTag,
+} from "../../crypto/derivation/ring-stream.js";
 import { fittedSpend, frameKeyShape } from "../proof/transfer-shapes.js";
 import { validSignerDataCounts } from "../membership/signer-data-counts.js";
 
@@ -698,7 +703,9 @@ function readSlot(bytes: Reader, hasData: boolean, exit: boolean, bodiless: bool
         : RECIPIENT_BODY_LEN;
   const hash = field32(bytes, "output.hash");
   // SPP binds an exit's tag to its owner, any other is a slot tag.
-  const ownerTag = exit ? field32(bytes, "output.ownerTag") : readSlotTag(bytes);
+  const ownerTag = exit
+    ? field32(bytes, "output.ownerTag")
+    : unframedSlotTag(bytes.bytes(SLOT_TAG_LEN, "output.ownerTag"));
   const raw = bytes.bytes(length, "output.body");
   const body: SlotBody = bodiless
     ? Object.freeze({ kind: "none" })
@@ -706,12 +713,6 @@ function readSlot(bytes: Reader, hasData: boolean, exit: boolean, bodiless: bool
       ? Object.freeze({ kind: "exit", payload: raw })
       : Object.freeze({ kind: "recipient", body: raw });
   return { hash, ownerTag, body };
-}
-
-function readSlotTag(bytes: Reader): Bytes32 {
-  const tag = new Uint8Array(32);
-  tag.set(bytes.bytes(SLOT_TAG_LEN, "output.ownerTag"), 32 - SLOT_TAG_LEN);
-  return tag as Bytes32;
 }
 
 /** `reply_len`, then one reply per body-bearing slot. */
@@ -976,7 +977,7 @@ function writeSlot(out: Writer, output: RingOutput, hasData: boolean): void {
   }
   out.bytes(output.hash, 32, "output.hash");
   if (output.body.kind === "exit") out.bytes(output.ownerTag, 32, "output.ownerTag");
-  else out.bytes(output.ownerTag.subarray(32 - SLOT_TAG_LEN), SLOT_TAG_LEN, "output.ownerTag");
+  else out.bytes(framedSlotTag(output.ownerTag), SLOT_TAG_LEN, "output.ownerTag");
   out.bytes(raw);
 }
 

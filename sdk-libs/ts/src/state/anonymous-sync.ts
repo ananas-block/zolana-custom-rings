@@ -30,7 +30,7 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { slotTag, txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
+import { confidentialSlotTag, txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
 import { isSmallOrder, x25519FromU } from "../crypto/keys/x25519.js";
 import {
   openRecipientBody,
@@ -471,7 +471,10 @@ class Scan {
       stream,
       scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
     }));
-    let bootstrap: readonly ViewTag[] = [viewingPublicKey.u(), slotTag(viewingPublicKey.u())];
+    let bootstrap: readonly ViewTag[] = [
+      viewingPublicKey.u(),
+      confidentialSlotTag(viewingPublicKey.u()),
+    ];
     while (active.length > 0) {
       const tagged: (readonly [RoundTag, ViewTag])[] = bootstrap.map((tag) => [BOOTSTRAP, tag]);
       bootstrap = [];

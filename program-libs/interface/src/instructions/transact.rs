@@ -71,7 +71,7 @@ use crate::{
         TransferStatement,
     },
     storage::Revision,
-    stream::{slot_tag, SLOT_TAG_LEN},
+    stream::{framed_slot_tag, slot_tag, unframed_slot_tag, SLOT_TAG_LEN},
     tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, LiveRoots, PlainGroth16Proof,
     RingMode, RingPolicy, RootRead, TAGGED_X25519_KEY_LEN,
 };
@@ -644,11 +644,7 @@ impl<'a> RingTransactData<'a> {
             let hash = bytes.array()?;
             let owner_tag = match exit {
                 true => *bytes.array()?,
-                false => {
-                    let mut tag = [0; 32];
-                    tag[32 - SLOT_TAG_LEN..].copy_from_slice(bytes.take(SLOT_TAG_LEN)?);
-                    tag
-                }
+                false => unframed_slot_tag(bytes.array()?),
             };
             let body = bytes.take(len)?;
             outputs.push(RingOutput {
@@ -851,7 +847,7 @@ impl<'a> RingTransactData<'a> {
             out.extend_from_slice(output.hash);
             match output.is_exit() {
                 true => out.extend_from_slice(&output.owner_tag),
-                false => out.extend_from_slice(&output.owner_tag[32 - SLOT_TAG_LEN..]),
+                false => out.extend_from_slice(&framed_slot_tag(&output.owner_tag)),
             }
             if let SlotBody::Recipient(body) | SlotBody::Exit(body) = output.body {
                 out.extend_from_slice(body);

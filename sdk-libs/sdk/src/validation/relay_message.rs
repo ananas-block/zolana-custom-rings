@@ -5,9 +5,9 @@ use std::collections::BTreeSet;
 use custom_ring_interface::cosign::ApprovalMask;
 use custom_ring_interface::{
     compute_unit_limit, frame_digest, funder_account_position, settle_buffered_data,
-    stream::slot_tag, tag, AuditRecord, DepositPrefix, FrameBuffer, InstructionTag, ParsedTransact,
-    RecordKind, RingMode, RingRail, RingTransactData, RING_TRANSACT_RING_CONFIG_INDEX,
-    STORAGE_PROGRAM_ID,
+    stream::confidential_slot_tag, tag, AuditRecord, DepositPrefix, FrameBuffer, InstructionTag,
+    ParsedTransact, RecordKind, RingMode, RingRail, RingTransactData,
+    RING_TRANSACT_RING_CONFIG_INDEX, STORAGE_PROGRAM_ID,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -635,7 +635,8 @@ impl ExpectedDelegate {
                             let payment = unpaid.swap_remove(index);
                             // A wrong hint strands the note with no scan reaching it.
                             if !data.rail.anonymous_frame()
-                                && output.owner_tag != slot_tag(payment.owner.viewing_u)
+                                && output.owner_tag
+                                    != confidential_slot_tag(payment.owner.viewing_u)
                             {
                                 return Err(MessageMismatch::Recipients);
                             }
