@@ -81,3 +81,4 @@ Fixed
 - A salted transfer with an in-proof owner, eleven co-owners, eight outputs and thirty two withdrawals had no key, now `transferPoolCapacity` sizes `custom-ring-transfer-wide-8-in24-w32-s24` for one row outside the owner run → deploy this release's ring program, prover and keys together.
 - `recoverRingMemberNotes` let a paused `RingRecoveryProgress` grow with every output the auditor opened and copied it on each resume, now it grows only with the member's own notes.
 - `RecoveredRingNotes.unseenInputs` depended on the page size, now it lists every ring note input no member note answers, another owner's zero-key spend among them.
+- `resolveRingRecipient` refused an address issued before its owner rotated the viewing key, now it returns the tracking row's current `viewingPublicKey` and `revision`.
