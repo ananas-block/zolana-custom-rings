@@ -1,6 +1,6 @@
 # Disclosure
 
-A ring transfer opens to the auditor through one AES-256-CTR stream, the auditor message. Its envelope seals the transaction viewing secret and the count of spent notes. Its records open every published output slot. Recipient bodies, tags, replies and the sender bundle stay outside every proof. [Spec](../../spec.md) [Envelope](envelope.md)
+A ring transfer opens to the auditor through one AES-256-CTR stream, the auditor message. Its envelope seals the transaction viewing secret and the input map. Its records open every published output slot. Recipient bodies, tags, replies and the sender bundle stay outside every proof. [Spec](../../spec.md) [Envelope](envelope.md)
 
 ## Verified audit recovery
 
@@ -45,21 +45,27 @@ The stream has one key, one nonce and one `CTREncrypt` call in the circuit over 
 
 | Region | Start counter | Maximum blocks | Transmitted bytes |
 |---|---|---|---|
-| Envelope | `2` | `E` | `33`, or `41 + 200 n` on an entry key |
+| Envelope | `2` | `E` | `41`, or `49 + 200 n` on an entry key |
 | Record of slot `i` | `R0 + 7 i`, `R0 = 2 + E` | `7` | `105` for `i < m` |
 | Tail of slot `i` | `T0 + 4 i`, `T0 = R0 + 7 N` | `4` | `64` for `i < m` under `has_data` |
 
-`E = ceil(33 / 16)` on a key without entry capacity, and `E = ceil((41 + 200 c) / 16)` on an entry key of input class `c`.
+`E = ceil(41 / 16)` on a key without entry capacity, and `E = ceil((49 + 200 c) / 16)` on an entry key of input class `c`.
 
 ## Envelope plaintext
 
 ```text
-tx_viewing_sk || u8(R)                                                  key without entry capacity
-tx_viewing_sk || u8(R) || u64be(default_input_bits) || entry_input * n  entry key
+tx_viewing_sk || u8(R) || u64be(A)                                                  key without entry capacity
+tx_viewing_sk || u8(R) || u64be(A) || u64be(default_input_bits) || entry_input * n  entry key
 entry_input = owner_key || fe32(nullifier_pk) || u64be(amount) || mint || fe32(blinding) || fe32(data_hash) || fe32(ring_data_hash)
 ```
 
-`R` counts the spent notes among the published inputs. Spent notes come first in SPP's order. A nullifier at position `k < R` is a spend, and one at `k >= R` belongs to a dummy or an address. Bit `k` of `default_input_bits` is set exactly when input `k` is a default-ring note. `entry_input_k` opens that note in 200 bytes and is all zero on every other input. `mint` is the 32-byte mint address, and the proof holds the input's asset to it.
+`R` counts the spent notes among the published inputs, and bit `k` of `A` is set exactly when input `k` is an address. Notes and addresses interleave in SPP's order, and dummies form the suffix. With `L = R + popcount(A)`:
+
+- `1 <= n <= C <= 64`, `R <= n` and `L <= n`, with `C` the key's input capacity.
+- No bit of `A` is set at or past `L`.
+- Input `k < L` is an address when bit `k` of `A` is set and a spent note otherwise. Input `k >= L` is a dummy.
+
+The circuit derives `R` and `A` from the same slot classes that open the inputs. It binds the nullifiers to `input_nullifier_chain`, so a reader takes no address for a spent note. The hidden rail holds input `0` to a note. Bit `k` of `default_input_bits` is set exactly when input `k` is a default-ring note, never an address or a dummy. `entry_input_k` opens that note in 200 bytes and is all zero on every other input. `mint` is the 32-byte mint address, and the proof holds the input's asset to it.
 
 ## Spent notes
 

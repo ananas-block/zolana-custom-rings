@@ -32,7 +32,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Owner hash | `Poseidon(owner_identity, nullifier_pk)` |
 | Ring id | `hash_bytes(ring program id)` |
 | Asset | `hash_bytes(mint)`, and `SOL_ASSET_FIELD = Poseidon(0, 0) = 0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864` for SOL |
-| Zero nullifier key | `ZERO_NULLIFIER_PUBKEY = Poseidon(0) = 0x2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c`. No secret stands behind it, so no owner enrolls it. A ring output of a transfer or deposit under it proves its owner's tracking row absent |
+| Zero nullifier key | `ZERO_NULLIFIER_PUBKEY = Poseidon(0) = 0x2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c`. No secret stands behind it, so no owner enrolls it. A ring output under it needs no credential for its key |
 | Owner member | `solana_owner_identity(key)` |
 | Asset member | `hash_bytes(mint)`. The CLI names SOL by the zero address. |
 | UTXO hash | `Poseidon(domain, tree_id, asset, amount, data_hash, Poseidon(ring_data_hash, ring_id), Poseidon(owner_hash, blinding))`, domains dummy `1`, address `2`, UTXO `3`, as zolana defines it |
@@ -86,23 +86,27 @@ A policy registry holds one record per member.
 
 A write sets `lists' = (lists & !mask) | value`, and `value` must sit inside `mask`. It replaces the mint settings only when `mint_policy_write` is nonzero. The chain start names one registry at one revision, so an apply proof serves that registry at that revision only.
 
-## Tracking tree
+## Audit credential
 
-A tracking registry holds one leaf per enrolled owner.
+One credential per ring and owner, an SPP unique data note. Its Borsh encoding is the field order below with no length prefix, 257 bytes, and SPP publishes `address || Borsh(credential)` as the output's plaintext data.
 
 | Value | Encoding |
 |---|---|
 | Member | `solana_owner_identity(owner)`, for a wallet or a PDA |
 | List tag | `Poseidon(CRPT, list_salt)`. `RegisterKey` proves it, and it is final |
-| Ciphertext hash | `ct_hash = hash_bytes(ciphertext)`, the 64-byte nullifier secret and list salt sealed to the auditor key |
-| Tracking leaf | `Poseidon(CRTK, member, next, nullifier_pk, ct_hash, view_0, view_1, right_align(revision as u64 BE), list_tag)`, `(view_0, view_1) = PackBytesBE(viewing_u)`, 9 inputs |
-| Sentinel | `member = 0`, `next = q - 1`, every other field `0`, at leaf `0` |
-| Tree node | `Poseidon(c_0, c_1, c_2, c_3)`, height 13, the leaf index as 26 bits |
-| Tracking entry | `Poseidon(CRTQ, member, nullifier_pk, ct_hash, view_0, view_1, right_align(revision as u64 BE), list_tag)`, 8 inputs |
-| Entry chain start | `HashChain4([CRTA, hash_bytes(registry address), right_align(revision as u64 BE)])` |
-| Entry chain | `chain(-1) = chain_start`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
+| Ciphertext hash | `hash_bytes(ciphertext)`, the 64-byte nullifier secret and list salt sealed to the auditor key |
+| Fields | `ring_id[32] \|\| member[32] \|\| nullifier_pk[32] \|\| list_tag[32] \|\| auditor_pubkey[33] \|\| eph_u[32] \|\| ciphertext[64]` |
+| Elements | `elements(d) = [d, ring_id, member, nullifier_pk, list_tag, pack_be(auditor_pubkey), pack_be(0x04 \|\| eph_u), hash_bytes(ciphertext)]`, 10 elements |
+| Register key hash | `HashChain4(elements(CRRG))`, the `RegisterKey` statement |
+| State hash | `HashChain4(elements(CRCR))` |
+| Credential PDA | `find_program_address([b"credential"], ring program id)`, canonical bump |
+| Credential owner | `owner_hash` of the credential PDA as an SPP PDA owner |
+| Address seed | `Poseidon(CRCA, ring_id, member)` |
+| Address | SPP `NewAddress::derive(credential owner, address seed)` in tree 0 |
+| Data hash | SPP `unique_data_hash(address, state hash) = Poseidon(UNIQ, address, state hash)` |
+| UTXO hash | SPP's data UTXO hash with the credential owner and the output tree's id |
 
-A zero `nullifier_pk` marks the sentinel and an unwritten leaf. The program computes every entry from the owner's enrollment account, never from instruction data. A rotation moves only `view_0`, `view_1` and `revision`. The apply proof keeps `nullifier_pk`, `ct_hash` and `list_tag` of a present leaf.
+The two hashes share every element but the domain, so a statement hash and a state hash never stand for each other. Only the ring id and the member enter the address seed, so no key change makes a second credential identity. A present credential proves its UTXO hash in a state tree under an accepted root. An absent one proves `low < address < next` for an indexed leaf of tree 0's nullifier tree under the frame's address root.
 
 ## Private list key
 
@@ -110,7 +114,7 @@ A zero `nullifier_pk` marks the sentinel and an unwritten leaf. The program comp
 |---|---|
 | Salted member | `Poseidon(CRPL, owner_identity, list_salt)` |
 
-A private list entry is an ordinary record under the salted member. While the owner's tracking row is present, the transfer proof holds `list_salt` to open the row's `list_tag`, so the prover cannot choose the key.
+A private list entry is an ordinary record under the salted member. While the owner's credential is present, the transfer proof holds `list_salt` to open the credential's `list_tag`, so the prover cannot choose the key. A private write proves the same opening against the written member.
 
 ## Policy table hash
 
@@ -148,9 +152,8 @@ Each amount is a u128 under `right_align`. An output slot reads the largest sing
 | `CRQW` | `0x43525157` | record write |
 | `CRAP` | `0x43524150` | apply records statement and write chain start |
 | `CRRG` | `0x43525247` | register key statement |
-| `CRTK` | `0x4352544b` | tracking leaf |
-| `CRTQ` | `0x43525451` | tracking entry |
-| `CRTA` | `0x43525441` | apply enrollments statement and entry chain start |
+| `CRCR` | `0x43524352` | credential state hash |
+| `CRCA` | `0x43524341` | credential address seed |
 | `CRPT` | `0x43525054` | list tag |
 | `CRPL` | `0x4352504c` | salted member |
 | `CRAO` | `0x4352414f` | approval totals digest |
