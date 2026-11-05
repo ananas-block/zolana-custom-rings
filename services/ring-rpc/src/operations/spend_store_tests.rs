@@ -1094,9 +1094,27 @@ fn indexed_note(owner: Address, key: &NullifierKey, index: u16, amount: u64) -> 
 
 #[tokio::test]
 async fn a_wallet_read_page_by_page_opens_each_listed_row_once() {
+    paged_wallet_read(Store::open("sqlite::memory:", 1).await.expect("store")).await;
+}
+
+#[tokio::test]
+async fn a_stale_follower_reads_newer_rows_at_their_own_history_slot() {
+    stale_follower_read(Store::open("sqlite::memory:", 1).await.expect("store")).await;
+}
+
+/// Both reads over the repeatable read snapshot, two owners of one ring in one database.
+#[tokio::test]
+#[ignore = "needs RING_RPC_TEST_POSTGRES_URL"]
+async fn wallet_pages_read_one_snapshot_on_postgres() {
+    let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
+    let store = Store::open(&url, 2).await.expect("store");
+    paged_wallet_read(store.clone()).await;
+    stale_follower_read(store).await;
+}
+
+async fn paged_wallet_read(store: Store) {
     let owner = wallet(1);
     let keys = Keys::with(owner, 7);
-    let store = Store::open("sqlite::memory:", 1).await.expect("store");
     let book = indexed_store(&store);
     let seal = seal();
     let created: Vec<CreatedUtxo> = (0..10)
@@ -1168,13 +1186,11 @@ async fn a_wallet_read_never_pairs_rows_with_a_mirror_that_moved_past_them() {
     assert_eq!(statuses(&read), [WalletNoteStatus::Unspent]);
 }
 
-#[tokio::test]
-async fn a_stale_follower_reads_newer_rows_at_their_own_history_slot() {
-    let owner = wallet(1);
-    let keys = Keys::with(owner, 7);
-    let input = note(owner, &secret(7), 0x10, 50);
-    let change = note(owner, &secret(7), 0x11, 30);
-    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+async fn stale_follower_read(store: Store) {
+    let owner = wallet(2);
+    let keys = Keys::with(owner, 8);
+    let input = note(owner, &secret(8), 0x10, 50);
+    let change = note(owner, &secret(8), 0x11, 30);
     let writer = indexed_store(&store);
     let follower = indexed_store(&store);
     let seal = seal();
@@ -1185,7 +1201,7 @@ async fn a_stale_follower_reads_newer_rows_at_their_own_history_slot() {
         }),
         Box::new(|work| {
             work.open(frame(4), [change]);
-            work.observe(real(nullifier_of(&input, &secret(7)), frame(4), 0));
+            work.observe(real(nullifier_of(&input, &secret(8)), frame(4), 0));
             terminal(work, 5);
         }),
         Box::new(|work| terminal(work, 6)),
