@@ -1,15 +1,15 @@
-//! Record updates refuse an update pending list approval past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an update pending list approval for its allow entry, page the updates pending list approval, apply a batch that lands after its status lookup once, and requeue an expired batch once.
+//! Record updates refuse an update pending list approval past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an update pending list approval for its allow entry, page the updates pending list approval, apply a batch that lands after its status lookup once, requeue an expired batch once, send a salted owner write with its checkpoint and credential trees, hold it while its address is queued and send nothing without a credential source.
 
 use std::{collections::VecDeque, sync::atomic::AtomicU64};
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::StorageRegistry,
-    storage_instruction::{tag, StorageUpdateIxData},
-    ApplyRecordsIxData, RingPolicy, SourceSlot, GRACE_SLOTS, QUAD_HEIGHT, RING_POLICY,
-    ROOT_HISTORY, STORAGE_PROGRAM_ID,
+    storage_instruction::{tag, PrivateWriteCheckpoint, StorageUpdateIxData},
+    ApplyRecordsIxData, CredentialRead, RingPolicy, SourceSlot, GRACE_SLOTS, QUAD_HEIGHT,
+    RING_POLICY, ROOT_HISTORY, STORAGE_PROGRAM_ID,
 };
-use custom_ring_sdk::CustomRing;
+use custom_ring_sdk::{CredentialTrees, CustomRing, PrivateStorageWrite, ProvenPrivateWrite};
 use jsonrpsee::MethodsError;
 use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
@@ -19,6 +19,7 @@ use zolana_ring_client::rpc::{
     SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_LIST_APPROVALS,
     PENDING_LIST_APPROVALS_PAGE_LIMIT, RECORD_UPDATE_SLOTS, SUBMIT_RECORD_UPDATE,
 };
+use zolana_ring_client::CredentialError;
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse, RingListWriteView,
@@ -27,9 +28,9 @@ use zolana_ring_indexer::rpc::{
 use zolana_ring_member_registry::ApplyProofInputs;
 use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
-    ChainOutcome, ChainSubmit, LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal,
-    RecordWriter, StorageChain, Store, BATCH_WINDOW_SLOTS, MAX_LIMIT_WINDOW_SLOTS,
-    MAX_LIST_APPROVAL_WINDOW_SLOTS,
+    ChainOutcome, ChainSubmit, CredentialWrites, LatestBlockhash, ReaderGrantStore,
+    RecordUpdateRefusal, RecordWriter, SaltedOwner, StorageChain, Store, BATCH_WINDOW_SLOTS,
+    MAX_LIMIT_WINDOW_SLOTS, MAX_LIST_APPROVAL_WINDOW_SLOTS,
 };
 
 use super::*;
@@ -370,6 +371,7 @@ impl Records {
             .expect("update data")
             .writes;
         Flushed {
+            accounts: message.static_account_keys().to_vec(),
             signature: transaction.signatures[0],
             mode: *mode,
             members: writes.iter().map(|write| write.member).collect(),
@@ -380,6 +382,7 @@ impl Records {
 }
 
 struct Flushed {
+    accounts: Vec<Address>,
     signature: Signature,
     mode: u8,
     /// The members the `Update` writes, in order.
@@ -950,4 +953,137 @@ async fn a_wallet_update_pending_list_approval_lands_with_its_allow_entry() {
         records.status(&pending_update).await,
         RecordUpdateStatus::Applied { .. }
     ));
+}
+
+/// The owner behind `SALTED_KEY`, proven at `SEQUENCE` in credential tree `CREDENTIAL_TREE` once its address applies.
+struct HeldOwner {
+    queued: std::sync::atomic::AtomicBool,
+    proved: Mutex<Vec<(u8, Address, [u8; 32])>>,
+}
+
+const SALTED_KEY: [u8; 32] = [0x0d; 32];
+const LIST_SALT: [u8; 32] = [0x2a; 32];
+const SEQUENCE: u64 = 40;
+const CREDENTIAL_TREE: u16 = 5;
+
+fn salted_owner() -> Address {
+    Address::new_from_array([0x0e; 32])
+}
+
+#[async_trait::async_trait]
+impl CredentialWrites for HeldOwner {
+    async fn salted_owner(
+        &self,
+        ring: Address,
+        written_key: [u8; 32],
+    ) -> Result<Option<SaltedOwner>, RingRpcError> {
+        Ok(
+            (ring == RING && written_key == SALTED_KEY).then_some(SaltedOwner {
+                owner: salted_owner(),
+                list_salt: LIST_SALT,
+            }),
+        )
+    }
+
+    async fn prove(
+        &self,
+        write: PrivateStorageWrite<'_>,
+    ) -> Result<ProvenPrivateWrite, custom_ring_sdk::RingError> {
+        if self.queued.load(Ordering::Relaxed) {
+            return Err(CredentialError::AddressQueued { address: [1; 32] }.into());
+        }
+        self.proved.lock().unwrap().extend(
+            write
+                .owners
+                .iter()
+                .map(|owner| (owner.write_index, owner.owner, owner.list_salt)),
+        );
+        Ok(ProvenPrivateWrite {
+            apply: ApplyRecordsIxData {
+                new_root: write.inputs.new_root,
+                ..ApplyRecordsIxData::zeroed()
+            },
+            credential_read: CredentialRead::new(1, &[0]).unwrap(),
+            private_write: PrivateWriteCheckpoint {
+                ring_program: RING,
+                sequence: SEQUENCE,
+            },
+            credential_trees: CredentialTrees::new([CREDENTIAL_TREE], 1).unwrap(),
+        })
+    }
+}
+
+impl Records {
+    fn serve_salted_owner(&self, queued: bool) -> Arc<HeldOwner> {
+        let held = Arc::new(HeldOwner {
+            queued: std::sync::atomic::AtomicBool::new(queued),
+            proved: Mutex::default(),
+        });
+        assert!(self.writer.serve_credential_writes(held.clone()).is_ok());
+        held
+    }
+
+    async fn submit_salted_write(&self) -> SubmitRecordUpdateResponse {
+        self.submit(signed(
+            &authority(),
+            vec![list_write(SALTED_KEY, ListId::PrivateAllow)],
+        ))
+        .await
+        .expect("queued")
+    }
+}
+
+#[tokio::test]
+async fn a_salted_owner_write_sends_its_checkpoint_and_credential_trees() {
+    let records = Records::new().await;
+    let held = records.serve_salted_owner(false);
+    records.submit_salted_write().await;
+
+    let flushed = records.flushed().await;
+
+    let sent = StorageUpdateIxData::parse(&flushed.data[0][1..]).expect("update data");
+    assert_eq!(
+        sent.private_write,
+        Some(PrivateWriteCheckpoint {
+            ring_program: RING,
+            sequence: SEQUENCE,
+        })
+    );
+    assert_eq!(flushed.members, [SALTED_KEY]);
+    assert_eq!(
+        *held.proved.lock().unwrap(),
+        [(0, salted_owner(), LIST_SALT)]
+    );
+    assert!(flushed.accounts.contains(&spr_interface::pda::tree(0)));
+    assert!(flushed
+        .accounts
+        .contains(&spr_interface::pda::tree(CREDENTIAL_TREE)));
+}
+
+#[tokio::test]
+async fn a_queued_owner_address_holds_the_batch_until_it_applies() {
+    let records = Records::new().await;
+    let held = records.serve_salted_owner(true);
+    let update = records.submit_salted_write().await;
+
+    records.writer.flush().await.expect("held flush");
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    assert!(matches!(
+        records.status(&update).await,
+        RecordUpdateStatus::Queued
+    ));
+
+    held.queued.store(false, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.members, [SALTED_KEY]);
+}
+
+#[tokio::test]
+async fn a_salted_owner_write_without_a_credential_source_sends_nothing() {
+    let records = Records::new().await;
+    records.submit_salted_write().await;
+
+    records.writer.flush().await.expect("flush");
+
+    assert!(records.chain.sent.lock().unwrap().is_empty());
 }

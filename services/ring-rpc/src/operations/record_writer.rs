@@ -1,14 +1,31 @@
+//! The one writer of a ring's records, it batches signed updates, proves each batch and sends it.
+//!
+//! A batch with salted owner writes proves each owner's credential and applied tree 0 address in
+//! the same update that moves the root, and Storage raises the source's absence floor with it. An
+//! owner whose address is still queued holds the batch until its forester batch applies, the writer
+//! never sends the write first. Without a wired credential source such a batch fails its flush and
+//! stays queued.
+//!
+//! Read after `operations/record_update.rs` and `custom_ring_sdk::PrivateStorageWrite`.
+//! Read before `storage/update_queue.rs`.
+
 use std::{
     collections::{hash_map::Entry, HashMap},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
+use async_trait::async_trait;
 use custom_ring_interface::{
-    storage::StorageRegistry, storage_instruction::StorageUpdateIxData, CredentialRead,
-    RecordWrite, RecordWriteData, RingAccount, RingPolicy, ROOT_HISTORY,
+    storage::StorageRegistry,
+    storage_instruction::{PrivateWriteCheckpoint, RecordWriteClassification, StorageUpdateIxData},
+    ApplyRecordsIxData, CredentialRead, CustomRingError, RecordWrite, RecordWriteData, RingAccount,
+    RingPolicy, ROOT_HISTORY,
 };
-use custom_ring_sdk::{CustomRing, InitializeStorage, UpdateStorage};
+use custom_ring_sdk::{
+    CredentialTrees, CustomRing, InitializeStorage, PrivateStorageWrite, ProvenPrivateWrite,
+    RingError, SaltedOwnerWrite, UpdateStorage,
+};
 use log::warn;
 use sea_orm::DbErr;
 use solana_address::Address;
@@ -22,9 +39,10 @@ use zolana_ring_client::{
         GetRecordUpdateStatusRequest, PendingListApproval, RecordUpdateId, RecordUpdateStatus,
         SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, PENDING_LIST_APPROVALS_PAGE_LIMIT,
     },
-    StorageTip,
+    CredentialError, StorageTip,
 };
 use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
+use zolana_ring_member_registry::ApplyProofInputs;
 
 use crate::{
     config::ReaderGrantStore,
@@ -48,6 +66,26 @@ const CONFIRM_POLL_INTERVAL: Duration = Duration::from_millis(400);
 pub(crate) const UPDATE_COMPUTE_UNITS: u32 = 1_400_000;
 const CREATE_COMPUTE_UNITS: u32 = 100_000;
 
+/// The owner and list salt behind a salted list key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SaltedOwner {
+    pub owner: Address,
+    pub list_salt: [u8; 32],
+}
+
+/// The service that holds a ring's credentials and auditor key resolves and proves salted owner writes.
+#[async_trait]
+pub trait CredentialWrites: Send + Sync {
+    /// `None` when no held credential of `ring` opens to `written_key`.
+    async fn salted_owner(
+        &self,
+        ring: Address,
+        written_key: [u8; 32],
+    ) -> Result<Option<SaltedOwner>, RingRpcError>;
+
+    async fn prove(&self, write: PrivateStorageWrite<'_>) -> Result<ProvenPrivateWrite, RingError>;
+}
+
 /// The one writer of every registry its authority key holds.
 pub struct RecordWriter {
     store: Store,
@@ -59,6 +97,12 @@ pub struct RecordWriter {
     submits: tokio::sync::Mutex<()>,
     /// One records creation at a time, a second request finds the first registry.
     creations: tokio::sync::Mutex<()>,
+    credential_writes: OnceLock<Arc<dyn CredentialWrites>>,
+}
+
+enum BatchProof {
+    Public(Box<ApplyRecordsIxData>),
+    Private(Box<ProvenPrivateWrite>),
 }
 
 #[must_use]
@@ -80,6 +124,7 @@ impl WriterParts {
             reader_grants: self.reader_grants,
             submits: tokio::sync::Mutex::default(),
             creations: tokio::sync::Mutex::default(),
+            credential_writes: OnceLock::new(),
         }
     }
 }
@@ -87,6 +132,14 @@ impl WriterParts {
 impl RecordWriter {
     pub fn authority(&self) -> Address {
         self.authority.pubkey()
+    }
+
+    /// Set once, a second source is returned.
+    pub fn serve_credential_writes(
+        &self,
+        source: Arc<dyn CredentialWrites>,
+    ) -> Result<(), Arc<dyn CredentialWrites>> {
+        self.credential_writes.set(source)
     }
 
     /// The writer authority owns and pays for the ring's records.
@@ -355,15 +408,25 @@ impl RecordWriter {
             entries: &entries,
         }
         .check()?;
-        let apply = self.chain.prove_apply(&checked.inputs, &state).await?;
-        // 4. The storage update is the transaction's one instruction.
+        // 4. A queued credential address holds the whole batch, a later flush proves it again.
+        let ring = batch
+            .first()
+            .map(|update| update.ring)
+            .ok_or(DbErr::Custom("a planned batch holds no update".to_owned()))?;
+        let Some(proof) = self
+            .prove_batch(ring, &checked.inputs, &state, &entries)
+            .await?
+        else {
+            return Ok(());
+        };
+        // 5. The storage update is the transaction's one instruction.
         let data = StorageUpdateIxData {
             revision: checked.revision,
             writes,
             asset_writes: Vec::new(),
-            credential_read: CredentialRead::empty(),
-            private_write: None,
-            apply: &apply,
+            credential_read: proof.credential_read(),
+            private_write: proof.private_write(),
+            apply: proof.apply(),
         };
         // The program rotates a write no rule can read with grace, over a full history it fails.
         if !data.reaches_policy() && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
@@ -373,6 +436,7 @@ impl RecordWriter {
             authority: self.authority(),
             registry,
             data,
+            credential_trees: proof.credential_trees(),
         }
         .instruction()
         .map_err(|error| RingRpcError::StorageUpdate(error.into()))?;
@@ -384,7 +448,7 @@ impl RecordWriter {
             ComputeBudgetConfig::new(UPDATE_COMPUTE_UNITS),
         )?;
         let transaction = sign_transaction(message, &[&self.authority])?;
-        // 5. The batch is durable before it is sent, a restart settles it by its signature.
+        // 6. The batch is durable before it is sent, a restart settles it by its signature.
         queue
             .record_batch(NewBatch {
                 registry,
@@ -398,6 +462,67 @@ impl RecordWriter {
             .await?;
         self.chain.send(&transaction).await?;
         Ok(())
+    }
+
+    /// `None` while a salted owner's address waits for its forester batch.
+    async fn prove_batch(
+        &self,
+        ring: Address,
+        inputs: &ApplyProofInputs,
+        registry: &StorageRegistry,
+        entries: &[RecordWrite],
+    ) -> Result<Option<BatchProof>, RingRpcError> {
+        let storage = |error: RingError| RingRpcError::StorageUpdate(Box::new(error));
+        // 1. Storage derives the credential writes from the masks, the writer reads them the same way.
+        let credential_writes = RecordWriteClassification {
+            entries: entries.iter().map(|entry| Ok::<_, CustomRingError>(*entry)),
+            asset_writes: &[],
+        }
+        .credential_writes()
+        .map_err(|error| storage(error.into()))?;
+        if credential_writes == 0 {
+            let apply = self.chain.prove_apply(inputs, registry).await?;
+            return Ok(Some(BatchProof::Public(Box::new(apply))));
+        }
+        let source = self
+            .credential_writes
+            .get()
+            .ok_or(RecordUpdateRefusal::Disabled)?;
+        // 2. Each salted key names its owner through a credential the auditor key opens.
+        let mut owners = Vec::new();
+        for (write_index, entry) in (0u8..).zip(entries) {
+            if credential_writes & (1 << write_index) == 0 {
+                continue;
+            }
+            let owner = source
+                .salted_owner(ring, entry.member)
+                .await?
+                .ok_or_else(|| {
+                    storage(CredentialError::WriteOwnerNotEnrolled { write_index }.into())
+                })?;
+            owners.push(SaltedOwnerWrite {
+                write_index,
+                owner: owner.owner,
+                list_salt: owner.list_salt,
+            });
+        }
+        // 3. The proof and the floor raise travel together, a queued address sends nothing.
+        let write = PrivateStorageWrite {
+            ring: CustomRing::new(ring),
+            inputs,
+            registry,
+            asset_writes: &[],
+            owners: &owners,
+        };
+        match source.prove(write).await {
+            Ok(proven) => Ok(Some(BatchProof::Private(Box::new(proven)))),
+            Err(RingError::Credential(error))
+                if matches!(*error, CredentialError::AddressQueued { .. }) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(storage(error)),
+        }
     }
 
     async fn settle(&self, batch: OpenBatch) -> Result<(), RingRpcError> {
@@ -467,5 +592,35 @@ impl RecordWriter {
 
     fn queue(&self) -> UpdateQueue<'_> {
         UpdateQueue::new(self.store.connection())
+    }
+}
+
+impl BatchProof {
+    fn apply(&self) -> &ApplyRecordsIxData {
+        match self {
+            Self::Public(apply) => apply,
+            Self::Private(proven) => &proven.apply,
+        }
+    }
+
+    fn credential_read(&self) -> CredentialRead {
+        match self {
+            Self::Public(_) => CredentialRead::empty(),
+            Self::Private(proven) => proven.credential_read.clone(),
+        }
+    }
+
+    fn private_write(&self) -> Option<PrivateWriteCheckpoint> {
+        match self {
+            Self::Public(_) => None,
+            Self::Private(proven) => Some(proven.private_write),
+        }
+    }
+
+    fn credential_trees(&self) -> Option<CredentialTrees> {
+        match self {
+            Self::Public(_) => None,
+            Self::Private(proven) => Some(proven.credential_trees.clone()),
+        }
     }
 }
