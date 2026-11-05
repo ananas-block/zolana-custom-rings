@@ -51,6 +51,11 @@ const stored = ring.toJson();
 Ring projection errors, such as a storage registry the indexer has not caught
 up with, are `RingError` codes. The flows retry the transient ones.
 
+Automatic funding selects the largest eligible notes of each asset within a shared input budget.
+It rejects a selection that exceeds the tree or transaction limits without searching alternative note combinations.
+An entry can return excess default-ring funds as ring change.
+Consolidation requires a separate merge operation.
+
 ## Custom Rings
 
 Besides the permissionless default Ring, regulated entities can create custom Rings.

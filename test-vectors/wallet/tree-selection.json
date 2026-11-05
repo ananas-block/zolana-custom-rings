@@ -1,5 +1,5 @@
 {
-  "description": "Ring funding across input trees. One tree alone before any pair, preferred pairs before every other pair, then the fewest notes, then the least change. Rust Funding::candidates and TS selectAcrossTrees both pin the first choice.",
+  "description": "Largest first funding within the input and tree limits.",
   "cases": [
     {
       "name": "the tree covering with one note wins over two notes",
@@ -35,7 +35,7 @@
       ]
     },
     {
-      "name": "a pair with no change when no tree covers alone",
+      "name": "largest notes take precedence over least change",
       "amount": 11,
       "maxInputs": 5,
       "notes": [
@@ -62,13 +62,13 @@
           "amount": 6
         },
         {
-          "tree": 3,
-          "amount": 5
+          "tree": 1,
+          "amount": 7
         }
       ]
     },
     {
-      "name": "a pair past the preferred trees funds when no preferred pair does",
+      "name": "large notes fund a fragmented wallet",
       "amount": 120,
       "maxInputs": 2,
       "notes": [

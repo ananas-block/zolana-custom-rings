@@ -210,7 +210,7 @@ describe("selectRingInputs", () => {
     ).toThrow("RING_INSUFFICIENT_BALANCE");
   });
 
-  it("funds default value exactly from smaller notes so no change enters the ring", () => {
+  it("selects the largest default note and returns change", () => {
     const wallet = ringUtxoWallet(spendingKeypair(), [
       [40n, undefined],
       [15n, undefined],
@@ -228,10 +228,7 @@ describe("selectRingInputs", () => {
         inputs,
         maxInputs: INPUT_CAP,
       }).map((entry) => [entry.utxo.amount, entry.utxo.ringProgramId]);
-    expect(amounts("default")).toEqual([
-      [15n, undefined],
-      [10n, undefined],
-    ]);
+    expect(amounts("default")).toEqual([[40n, undefined]]);
     expect(amounts("entry")).toEqual(amounts("default"));
     expect(amounts("ring")).toEqual([[40n, RING]]);
   });
@@ -253,7 +250,7 @@ describe("selectRingInputs", () => {
     expect(selected.map((entry) => entry.outputContext.tree).sort()).toEqual([TREE, second].sort());
   });
 
-  it("keeps a spend on one tree when that tree alone covers it", () => {
+  it("selects larger notes across trees before smaller notes on one tree", () => {
     const second = treeAddress(1);
     const wallet = ringUtxoWallet(spendingKeypair(), [
       [6n, RING],
@@ -268,7 +265,7 @@ describe("selectRingInputs", () => {
       inputs: "ring",
       maxInputs: INPUT_CAP,
     });
-    expect(selected.map((entry) => entry.outputContext.tree)).toEqual([second, second]);
+    expect(selected.map((entry) => entry.outputContext.tree)).toEqual([TREE, second]);
   });
 
   it("refuses a spend only three trees cover", () => {
@@ -286,7 +283,7 @@ describe("selectRingInputs", () => {
         inputs: "ring",
         maxInputs: INPUT_CAP,
       }),
-    ).toThrow("RING_INSUFFICIENT_BALANCE");
+    ).toThrow("RING_TOO_MANY_INPUT_TREES");
   });
 
   it("covers a fragmented balance with the largest UTXO", () => {

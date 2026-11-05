@@ -562,11 +562,12 @@ async fn an_anonymous_move_stops_at_the_widest_inline_class() {
     assert!(pay(40).select(&client).await.is_ok());
     assert!(matches!(
         pay(41).select(&client).await,
-        Err(RingError::Unfunded {
-            amount: 41,
-            max_inputs: 40,
-            ..
-        })
+        Err(RingError::Transaction(
+            spr_transaction::TransactionError::SpendNeedsMerge {
+                amount: 41,
+                max_inputs: 40,
+            }
+        ))
     ));
 }
 
@@ -665,9 +666,8 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
     ));
 }
 
-/// Smaller default notes meeting the payments exactly fund an entry, no change enters the ring.
 #[tokio::test]
-async fn an_anonymous_entry_prefers_an_exact_funding_over_change() {
+async fn an_anonymous_entry_selects_largest_first() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
@@ -705,13 +705,34 @@ async fn an_anonymous_entry_prefers_an_exact_funding_over_change() {
             amounts
         }
     };
-    assert_eq!(spent(25).await, vec![10, 15]);
+    assert_eq!(spent(25).await, vec![40]);
     assert_eq!(spent(30).await, vec![40]);
 }
 
-/// Six on each of two trees pay ten together, a tree holding the amount alone wins over the pair.
 #[tokio::test]
-async fn an_anonymous_move_funds_from_two_trees_only_when_one_falls_short() {
+async fn an_anonymous_entry_reports_capacity_without_ring_funding() {
+    use crate::tests::support::{keypair, payer};
+    let sender = keypair(1);
+    let paid = ring_address(&keypair(2));
+    let client = enrolled(&[&sender, &keypair(2)]).client();
+    let utxos: Vec<_> = (0..5)
+        .map(|leaf| default_ring_utxo(&sender, 1, leaf))
+        .collect();
+    let owner = MoveSender {
+        sender: &sender,
+        payer: payer(),
+    };
+    let payments = (0..5).map(|_| RingPayment::new(paid.clone(), 1)).collect();
+    let result = owner.anonymous_move(&utxos, payments).select(&client).await;
+    assert!(
+        matches!(&result, Err(RingError::TransferTooWide { .. })),
+        "{:?}",
+        result.err()
+    );
+}
+
+#[tokio::test]
+async fn an_anonymous_move_selects_largest_first_across_trees() {
     use crate::tests::support::{keypair, payer, wallet};
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
@@ -733,7 +754,7 @@ async fn an_anonymous_move_funds_from_two_trees_only_when_one_falls_short() {
     };
     let split = vec![on_tree(1, 6, 0), on_tree(2, 6, 1)];
     let one_suffices = vec![on_tree(1, 6, 0), on_tree(2, 6, 1), on_tree(2, 4, 2)];
-    for (utxos, expected) in [(&split, [1, 2]), (&one_suffices, [2, 2])] {
+    for (utxos, expected) in [(&split, [1, 2]), (&one_suffices, [1, 2])] {
         let assembled = owner
             .anonymous_move(utxos, vec![RingPayment::new(paid.clone(), 10)])
             .select(&client)
@@ -1141,11 +1162,12 @@ async fn a_delegate_move_takes_the_fewest_utxos() {
     });
     assert!(matches!(
         short.select(&client).await,
-        Err(RingError::Unfunded {
-            amount: 5,
-            max_inputs: 4,
-            ..
-        })
+        Err(RingError::Transaction(
+            spr_transaction::TransactionError::SpendNeedsMerge {
+                amount: 5,
+                max_inputs: 4,
+            }
+        ))
     ));
     let large = ring_utxo(&member, Mint::SOL, 50, 8);
     utxos.push(wallet(large.utxo, &member.nullifier_key, 1, 8));
@@ -4339,7 +4361,7 @@ fn spent_trees(frame: &Frame) -> Vec<u16> {
 async fn delegate_spent_trees(
     held: &[(u16, u64)],
     amounts: &[u64],
-) -> (spr_client::Shape, Vec<u16>) {
+) -> Result<(spr_client::Shape, Vec<u16>), RingError> {
     use crate::tests::support::{keypair, wallet};
     let member = keypair(1);
     let recipient = keypair(2);
@@ -4382,33 +4404,27 @@ async fn delegate_spent_trees(
         tx_viewing_key: spr_keypair::ViewingKey::new(),
     }
     .select(&client)
-    .await
-    .unwrap()
+    .await?
     .assemble(&client)
-    .await
-    .unwrap();
-    (
+    .await?;
+    Ok((
         assembled.frame.proof_inputs.check_shape().unwrap(),
         spent_trees(&assembled.frame),
-    )
+    ))
 }
 
-/// Eight trees outreach trees 9 and 10 alone, only the pair past them funds the move.
 #[tokio::test]
-async fn a_delegate_move_funds_from_a_pair_past_the_preferred_trees() {
+async fn a_delegate_move_takes_large_notes_from_a_fragmented_wallet() {
     let small = (1..=8).flat_map(|tree| [(tree, 20), (tree, 20), (tree, 20), (tree, 5)]);
     let held: Vec<(u16, u64)> = small.chain([(9, 60), (10, 60)]).collect();
-    let (_, trees) = delegate_spent_trees(&held, &[120]).await;
+    let (_, trees) = delegate_spent_trees(&held, &[120]).await.unwrap();
     assert_eq!(trees, [9, 10]);
 }
 
-/// Tree 1 funds four payments but its change needs a fifth output, the exact pair fits.
 #[tokio::test]
-async fn a_delegate_move_skips_a_tree_whose_change_no_shape_holds() {
-    let (shape, trees) =
-        delegate_spent_trees(&[(1, 101), (2, 50), (3, 50)], &[25, 25, 25, 25]).await;
-    assert_eq!(trees, [2, 3]);
-    assert_eq!(shape.n_outputs(), 4);
+async fn a_delegate_move_refuses_greedy_change_without_searching_alternatives() {
+    let result = delegate_spent_trees(&[(1, 101), (2, 50), (3, 50)], &[25, 25, 25, 25]).await;
+    assert!(matches!(result, Err(RingError::ShapeUnkeyed { .. })));
 }
 
 /// The sender change slot narrows two payments to the 4-output keys before selection.
@@ -4447,7 +4463,9 @@ async fn an_anonymous_move_counts_the_sender_change_before_selection() {
         .await;
     assert!(matches!(
         one_tree,
-        Err(RingError::Unfunded { max_inputs: 24, .. })
+        Err(RingError::Transaction(
+            spr_transaction::TransactionError::SpendNeedsMerge { max_inputs: 24, .. }
+        ))
     ));
     let assembled = owner
         .anonymous_move(&utxos, payments)

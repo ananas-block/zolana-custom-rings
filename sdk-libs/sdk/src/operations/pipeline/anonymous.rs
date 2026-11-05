@@ -298,31 +298,21 @@ impl<'a> AnonymousMove<'a> {
             amount,
             max_inputs,
         };
-        let ring_only = funding
-            .candidates(|utxo| utxo.utxo.owner == owner && utxo.utxo.ring_program_id == ring);
-        let entry_width = match self.entry {
-            EntrySpend::Allow => widest_spend(AnonymousKey::Entry),
-            EntrySpend::Refuse => None,
-        };
-        let entries = entry_width.map_or_else(Vec::new, |max_inputs| {
-            Funding {
-                max_inputs,
-                ..funding
+        let mut attempts = vec![funding
+            .select(|utxo| utxo.utxo.owner == owner && utxo.utxo.ring_program_id == ring)
+            .and_then(|candidate| self.attempt(AnonymousKey::Commitment, &candidate))];
+        if let EntrySpend::Allow = self.entry {
+            if let Some(max_inputs) = widest_spend(AnonymousKey::Entry) {
+                let entry = Funding {
+                    max_inputs,
+                    ..funding
+                }
+                .select(|utxo| utxo.utxo.owner == owner && utxo.is_default_ring_spendable());
+                attempts.push(
+                    entry.and_then(|candidate| self.attempt(AnonymousKey::Entry, &candidate)),
+                );
             }
-            .exact_first(|utxo| {
-                // The prover refuses a spend that mixes ring and default-ring UTXOs.
-                utxo.utxo.owner == owner && utxo.is_default_ring_spendable()
-            })
-        });
-        let attempts = ring_only
-            .iter()
-            .map(|candidate| self.attempt(AnonymousKey::Commitment, candidate))
-            .chain(
-                entries
-                    .iter()
-                    .map(|candidate| self.attempt(AnonymousKey::Entry, candidate)),
-            )
-            .collect();
+        }
         funding.first_fit(attempts, client).await
     }
 

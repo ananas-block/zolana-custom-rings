@@ -67,7 +67,7 @@ import {
   ringIntentMismatch,
   ringProofInputs,
   ringSelectionErrors,
-  selectAcrossTrees,
+  selectFunding,
 } from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
@@ -395,19 +395,7 @@ export function selectRingInputs(
       (inputs !== "entry" || carriesNoData([entry.dataHash]))
     );
   };
-  // The change of default notes enters the ring, an exact cover on one tree keeps it out.
-  const exact =
-    inputs === "default" || inputs === "entry"
-      ? exactCoverOnOneTree({
-          candidates: wallet
-            .utxos()
-            .filter((entry) => !entry.spent && entry.utxo.asset === asset && eligible(entry)),
-          amount,
-          maxInputs: input.maxInputs,
-        })
-      : undefined;
-  if (exact !== undefined) return exact;
-  return selectAcrossTrees({
+  return selectFunding({
     wallet,
     covers: [{ asset, amount }],
     policy: {
@@ -418,43 +406,6 @@ export function selectRingInputs(
       errors,
     },
   });
-}
-
-/** Rust `Selection::exact_first`, the fewest notes meeting `amount` exactly on any one tree. */
-function exactCoverOnOneTree(
-  input: Readonly<{ candidates: readonly WalletUtxo[]; amount: bigint; maxInputs: number }>,
-): readonly WalletUtxo[] | undefined {
-  const trees = [...new Set(input.candidates.map((entry) => entry.outputContext.tree))];
-  return trees
-    .map((tree) =>
-      exactCover({
-        ...input,
-        candidates: input.candidates.filter((entry) => entry.outputContext.tree === tree),
-      }),
-    )
-    .filter((cover) => cover !== undefined)
-    .reduce<readonly WalletUtxo[] | undefined>(
-      (fewest, cover) => (fewest === undefined || cover.length < fewest.length ? cover : fewest),
-      undefined,
-    );
-}
-
-/** One largest first pass over the notes no larger than the remainder, a full subset sum search is out of scope. */
-function exactCover(
-  input: Readonly<{ candidates: readonly WalletUtxo[]; amount: bigint; maxInputs: number }>,
-): readonly WalletUtxo[] | undefined {
-  const picked: WalletUtxo[] = [];
-  let remainder = input.amount;
-  const largestFirst = [...input.candidates].sort((left, right) =>
-    left.utxo.amount < right.utxo.amount ? 1 : left.utxo.amount > right.utxo.amount ? -1 : 0,
-  );
-  for (const entry of largestFirst) {
-    if (remainder === 0n || picked.length === input.maxInputs) break;
-    if (entry.utxo.amount === 0n || entry.utxo.amount > remainder) continue;
-    picked.push(entry);
-    remainder -= entry.utxo.amount;
-  }
-  return remainder === 0n ? Object.freeze(picked) : undefined;
 }
 
 /** A plain build drops the viewing history and never takes the anonymous rail. */
@@ -956,7 +907,7 @@ async function approveSpend(
 }
 
 /** The hidden owner rail refuses a mix of ring and default-ring UTXOs, ring UTXOs alone fund it first. */
-function selectAnonymousInputs(
+export function selectAnonymousInputs(
   pool: Omit<Parameters<typeof selectRingInputs>[0], "inputs" | "maxInputs">,
   selection: "ring" | "ring-or-default" | "default",
 ): readonly WalletUtxo[] {
@@ -970,7 +921,11 @@ function selectAnonymousInputs(
     try {
       return select("entry");
     } catch (defaultAlone) {
-      if (!unfunded(defaultAlone)) throw defaultAlone;
+      if (
+        !unfunded(defaultAlone) ||
+        (balanceShortfall(ringAlone) && !balanceShortfall(defaultAlone))
+      )
+        throw defaultAlone;
       throw ringAlone;
     }
   }
@@ -997,13 +952,17 @@ function spendListSalts(params: SpendBase): readonly RingListSalt[] {
   ];
 }
 
-function unfunded(cause: unknown): boolean {
+function unfunded(cause: unknown): cause is RingError {
   return (
     cause instanceof RingError &&
-    (cause.code === "RING_INSUFFICIENT_BALANCE" ||
-      cause.code === "RING_UNFUNDED_PAST_EXPOSURE" ||
-      cause.code === "RING_TOO_MANY_INPUTS")
+    (balanceShortfall(cause) ||
+      cause.code === "RING_TOO_MANY_INPUTS" ||
+      cause.code === "RING_TOO_MANY_INPUT_TREES")
   );
+}
+
+function balanceShortfall(cause: RingError): boolean {
+  return cause.code === "RING_INSUFFICIENT_BALANCE" || cause.code === "RING_UNFUNDED_PAST_EXPOSURE";
 }
 
 /** @internal Padded inputs are published, the widest shape an anonymous key serves for `payments` and the sender change bounds a spend. */

@@ -47,7 +47,7 @@ import {
   ringIntentMismatch,
   ringProofInputs,
   ringSelectionErrors,
-  selectAcrossTrees,
+  selectFunding,
   type Cover,
 } from "../workflow/selection.js";
 import {
@@ -401,10 +401,6 @@ function selectSourceNotes(
   });
 }
 
-/**
- * @internal Rust `DelegateMove::select` on one tree, the widest authority shape holding `outputs`
- * bounds the inputs and a selection fits only where a shape also holds each mint's change.
- */
 export function selectAuthorityNotes(
   input: Readonly<{
     wallet: Wallet;
@@ -414,15 +410,13 @@ export function selectAuthorityNotes(
   }>,
 ): readonly WalletUtxo[] {
   const { covers, outputs } = input;
-  const holds = (inputs: number, needed: number) =>
-    RING_AUTHORITY_SHAPES.some((shape) => shape.inputs >= inputs && shape.outputs >= needed);
   const maxInputs = Math.max(
     0,
     ...RING_AUTHORITY_SHAPES.filter((shape) => shape.outputs >= outputs).map(
       (shape) => shape.inputs,
     ),
   );
-  return selectAcrossTrees({
+  return selectFunding({
     wallet: input.wallet,
     covers,
     policy: {
@@ -431,15 +425,6 @@ export function selectAuthorityNotes(
       allowWideBalance: true,
       maxInputs,
       errors: ringSelectionErrors,
-    },
-    feasible: (entries) => {
-      const change = covers.filter(
-        (cover) =>
-          entries
-            .filter((entry) => entry.utxo.asset === cover.asset)
-            .reduce((sum, entry) => sum + entry.utxo.amount, 0n) > cover.amount,
-      ).length;
-      return holds(entries.length, outputs + change);
     },
     // The core `prepareRingAuthorityTransfer` refuses inputs on two trees.
     maxTrees: 1,

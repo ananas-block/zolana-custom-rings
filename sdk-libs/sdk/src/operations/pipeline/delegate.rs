@@ -3,7 +3,10 @@ use std::collections::BTreeSet;
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;
 use spr_client::AsyncRpc;
-use spr_interface::shape::{Shape, RING_AUTHORITY_WIDTHS};
+use spr_interface::{
+    shape::{Shape, RING_AUTHORITY_WIDTHS},
+    MAX_INPUT_TREES,
+};
 use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey};
 use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, SppProofOutputUtxo},
@@ -14,16 +17,13 @@ use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
 use super::{
     anonymous::SenderChange,
     canonical_shape, pad_under_rail, sealed,
-    selection::{
-        payment_total, spanned_trees, widest, Candidate, Funding, RankedTrees, Reach, TreeSearch,
-        Trial,
-    },
+    selection::{payment_total, spanned_trees, widest, Candidate},
     shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
     RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    select::{candidates, SpendSelection, SpendableKeys},
+    select::{SpendSelection, SpendableKeys},
     CustomRing, CustomRingConfig, RingError,
 };
 
@@ -193,7 +193,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
 }
 
 impl<'a> DelegateMove<'a> {
-    /// The fewest UTXOs over the fewest input trees funding the payments whose move fits one transaction, keyed and zero-key notes alike.
+    /// Largest first per asset, change returns to the last selected owner.
     pub async fn select<P: AsyncRpc, I: RingIndexerBackend>(
         self,
         client: &RingClient<P, I>,
@@ -218,109 +218,42 @@ impl<'a> DelegateMove<'a> {
             rail: RingRail::Delegate,
         };
         let max_inputs = widest(payments, keyed).ok_or_else(unkeyed)?;
-        let fundings = self
-            .mint_totals()?
-            .into_iter()
-            .map(|(asset, amount)| Funding {
+        let mut funded = Vec::new();
+        let mut remaining = max_inputs;
+        for (asset, amount) in self.mint_totals()? {
+            let selected = SpendSelection {
                 utxos: &utxos,
                 asset,
                 amount,
-                max_inputs,
-            })
-            .collect::<Vec<_>>();
-        let funded_on = |funding: &Funding<'_>, trees: &[u16]| {
-            SpendSelection {
-                utxos: funding.utxos,
-                asset: funding.asset,
-                amount: funding.amount,
-                max_inputs: funding.max_inputs,
+                max_inputs: remaining,
                 keys: SpendableKeys::Any,
             }
-            .select_where(|utxo| trees.contains(&utxo.tree_id))
-            .ok()
-        };
-        // 1. Each mint's reach bounds its funding, the mints share the input budget.
-        let reaches: Vec<Reach> = fundings
-            .iter()
-            .map(|funding| {
-                Reach::new(
-                    candidates(&utxos, funding.asset, SpendableKeys::Any, |_| true),
-                    max_inputs,
-                )
-            })
-            .collect();
-        // 2. Every mint funds on one shared set and a keyed shape holds its payments and change.
-        let mut ranked = TreeSearch {
-            trees: &RankedTrees::new(&reaches),
-            reaches: |set: &[u16]| {
-                fundings
-                    .iter()
-                    .zip(&reaches)
-                    .all(|(funding, reach)| reach.of(set) >= u128::from(funding.amount))
-            },
-            fund: |set: &[u16]| {
-                let funded = fundings
-                    .iter()
-                    .map(|funding| {
-                        funded_on(funding, set).map(|utxos| (funding.asset, funding.amount, utxos))
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                // Picks on one tree repeat that tree's own trial.
-                if spanned_trees(funded.iter().flat_map(|(_, _, utxos)| utxos)) < set.len() {
-                    return None;
-                }
-                let notes = funded
-                    .iter()
-                    .map(|(_, _, utxos)| utxos.len())
-                    .sum::<usize>();
-                if notes > max_inputs {
-                    return None;
-                }
-                let totals: Vec<u128> = funded
-                    .iter()
-                    .map(|(_, _, utxos)| {
-                        utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum()
-                    })
-                    .collect();
-                let change = funded
-                    .iter()
-                    .zip(&totals)
-                    .filter(|((_, amount, _), total)| **total > u128::from(*amount))
-                    .count();
-                let shape = Candidate {
-                    utxos: funded
-                        .iter()
-                        .flat_map(|(_, _, utxos)| utxos.clone())
-                        .collect(),
-                    change: false,
-                }
-                .shape(payments + change, keyed);
-                let found = (notes, totals.iter().sum::<u128>(), set.to_vec());
-                Some(match shape {
-                    Some(_) => Trial::Feasible((found, funded, shape)),
-                    None => Trial::Infeasible((found, funded, shape)),
-                })
-            },
+            .select_where(|_| true)?;
+            remaining -= selected.len();
+            funded.push((asset, amount, selected));
         }
-        .run();
-        ranked.sort_unstable_by(|(left, ..), (right, ..)| left.cmp(right));
-        let attempts = ranked
-            .into_iter()
-            .map(|(_, funded, shape)| {
-                let shape = shape.ok_or_else(unkeyed)?;
-                self.transfer(self.spent_by_mint(funded)?)?
-                    .with_shape(shape)
-            })
-            .collect();
-        // With no tree set funding them all, the first mint no set reaches names the refusal.
-        let funding = fundings
-            .iter()
-            .zip(&reaches)
-            .find(|(funding, reach)| !reach.reaches_anywhere(funding.amount))
-            .map(|(funding, _)| funding)
-            .or_else(|| fundings.first())
-            .ok_or(TransactionError::ZeroSpendAmount)?;
-        funding.first_fit(attempts, client).await
+        let trees = spanned_trees(funded.iter().flat_map(|(_, _, utxos)| utxos));
+        if trees > MAX_INPUT_TREES {
+            return Err(TransactionError::TooManyInputTrees {
+                got: trees,
+                max: MAX_INPUT_TREES,
+            }
+            .into());
+        }
+        let spent = self.spent_by_mint(funded)?;
+        let change = spent.iter().filter(|mint| mint.change > 0).count();
+        let shape = Candidate {
+            utxos: spent
+                .iter()
+                .flat_map(|mint| mint.utxos.iter().cloned())
+                .collect(),
+            change: false,
+        }
+        .shape(payments + change, keyed)
+        .ok_or_else(unkeyed)?;
+        let transfer = self.transfer(spent)?.with_shape(shape)?;
+        crate::projection::retry_projection_lag(|| transfer.measure(client)).await?;
+        Ok(transfer)
     }
 
     /// In first-use order, a mint's total refused when zero or past a u64.

@@ -1,11 +1,10 @@
-use std::cell::RefCell;
-
 use serde::Deserialize;
 use solana_address::Address;
-use spr_transaction::{Mint, WalletUtxo};
+use spr_transaction::{Mint, TransactionError, WalletUtxo};
 
-use super::{Funding, RankedTrees, Reach, TreeSearch, Trial, PAIR_POOL_TREES};
+use super::Funding;
 use crate::tests::support::{keypair, ring_utxo, wallet};
+use crate::RingError;
 
 fn notes(held: impl IntoIterator<Item = (u16, u64)>) -> Vec<WalletUtxo> {
     let owner = keypair(7);
@@ -32,11 +31,10 @@ fn funding(utxos: &[WalletUtxo], amount: u64, max_inputs: usize) -> Funding<'_> 
 }
 
 fn first_choice(utxos: &[WalletUtxo], amount: u64, max_inputs: usize) -> Vec<(u16, u64)> {
-    let candidates = funding(utxos, amount, max_inputs).candidates(|_| true);
-    let mut picked: Vec<_> = candidates
-        .first()
-        .map(|candidate| &candidate.utxos[..])
-        .unwrap_or_default()
+    let mut picked: Vec<_> = funding(utxos, amount, max_inputs)
+        .select(|_| true)
+        .unwrap()
+        .utxos
         .iter()
         .map(|utxo| (utxo.tree_id, utxo.utxo.amount))
         .collect();
@@ -44,59 +42,44 @@ fn first_choice(utxos: &[WalletUtxo], amount: u64, max_inputs: usize) -> Vec<(u1
     picked
 }
 
-/// Every set the search funds, `funds` deciding feasibility and none pruned by reach.
-fn tried_sets(trees: &[u16], pool: usize, funds: impl Fn(&[u16]) -> bool) -> Vec<Vec<u16>> {
-    let tried = RefCell::new(Vec::new());
-    let _: Vec<()> = TreeSearch {
-        trees: &RankedTrees {
-            trees: trees.to_vec(),
-            pool,
-        },
-        reaches: |_: &[u16]| true,
-        fund: |set: &[u16]| {
-            tried.borrow_mut().push(set.to_vec());
-            funds(set).then_some(Trial::Feasible(()))
-        },
-    }
-    .run();
-    tried.into_inner()
+#[test]
+fn rejects_three_selected_trees_without_searching_for_an_alternative() {
+    let utxos = notes([(0, 60), (0, 20), (1, 55), (2, 50)]);
+    assert!(matches!(
+        funding(&utxos, 130, 4).select(|_| true),
+        Err(RingError::Transaction(
+            TransactionError::TooManyInputTrees { got: 3, max: 2 }
+        ))
+    ));
 }
 
 #[test]
-fn one_tree_funding_tries_no_pair() {
-    let tried = tried_sets(&[1, 2, 3], 3, |set| set == [2]);
-    assert_eq!(tried, [vec![1], vec![2], vec![3]]);
+fn a_large_fragmented_wallet_returns_the_tree_refusal() {
+    let note = notes([(0, 1)]).pop().unwrap();
+    let utxos: Vec<_> = (0..10_000)
+        .map(|tree_id| WalletUtxo {
+            tree_id,
+            ..note.clone()
+        })
+        .collect();
+    assert!(matches!(
+        funding(&utxos, 3, 5).select(|_| true),
+        Err(RingError::Transaction(
+            TransactionError::TooManyInputTrees { got: 3, max: 2 }
+        ))
+    ));
 }
 
 #[test]
-fn a_many_tree_wallet_tries_every_pair_only_when_the_pool_fails() {
-    let trees: Vec<u16> = (0..20).collect();
-    let pool_pairs = PAIR_POOL_TREES * (PAIR_POOL_TREES - 1) / 2;
-    let in_pool = tried_sets(&trees, PAIR_POOL_TREES, |set| set == [0, 1]);
-    assert_eq!(in_pool.len(), trees.len() + pool_pairs);
-    let complete = tried_sets(&trees, PAIR_POOL_TREES, |_| false);
-    assert_eq!(
-        complete.len(),
-        trees.len() + trees.len() * (trees.len() - 1) / 2
-    );
-}
-
-#[test]
-fn a_pair_no_reach_covers_runs_no_selection() {
-    let utxos = notes((0..20).map(|tree| (tree, 1)));
-    let reach = Reach::new(&utxos, 5);
-    let selections = RefCell::new(0usize);
-    let found: Vec<()> = TreeSearch {
-        trees: &RankedTrees::new(std::slice::from_ref(&reach)),
-        reaches: |set: &[u16]| reach.of(set) >= 3,
-        fund: |_: &[u16]| {
-            *selections.borrow_mut() += 1;
-            None
-        },
-    }
-    .run();
-    assert!(found.is_empty());
-    assert_eq!(selections.into_inner(), 0);
+fn input_fragmentation_requires_an_explicit_merge() {
+    let utxos = notes([(0, 4), (0, 4), (0, 4)]);
+    assert!(matches!(
+        funding(&utxos, 10, 2).select(|_| true),
+        Err(RingError::Transaction(TransactionError::SpendNeedsMerge {
+            max_inputs: 2,
+            ..
+        }))
+    ));
 }
 
 #[test]
@@ -109,11 +92,14 @@ fn pays_ten_from_six_on_each_of_two_trees() {
 fn a_tree_of_another_asset_stays_out_of_the_search() {
     let mut utxos = notes([(0, 6), (1, 6)]);
     utxos[1].utxo.asset = Mint::new(Address::new_from_array([9; 32]), 2);
-    assert!(funding(&utxos, 10, 5).candidates(|_| true).is_empty());
+    assert!(matches!(
+        funding(&utxos, 10, 5).select(|_| true),
+        Err(RingError::Unfunded { .. })
+    ));
 }
 
 #[test]
-fn pair_selection_respects_the_shared_input_budget() {
+fn largest_notes_fit_the_input_budget() {
     let utxos = notes(
         (0..8)
             .flat_map(|tree| [(tree, 40), (tree, 40)])
@@ -146,7 +132,6 @@ struct Vectors {
     cases: Vec<Case>,
 }
 
-/// TS `selectAcrossTrees` pins the same file.
 #[test]
 fn matches_the_shared_tree_selection_vector() {
     let vectors: Vectors = serde_json::from_str(include_str!(

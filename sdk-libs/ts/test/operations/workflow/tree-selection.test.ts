@@ -7,15 +7,12 @@ import { describe, expect, it } from "vitest";
 
 import vectors from "../../../../../test-vectors/wallet/tree-selection.json" with { type: "json" };
 import { selectAuthorityNotes } from "../../../src/operations/management/delegate.js";
-import { anonymousInputCap, selectRingInputs } from "../../../src/operations/payments/transfer.js";
 import {
-  PAIR_POOL_TREES,
-  ringSelectionErrors,
-  selectAcrossTrees,
-  TreeReach,
-  rankedTrees,
-  treeSearch,
-} from "../../../src/operations/workflow/selection.js";
+  anonymousInputCap,
+  selectAnonymousInputs,
+  selectRingInputs,
+} from "../../../src/operations/payments/transfer.js";
+import { ringSelectionErrors, selectFunding } from "../../../src/operations/workflow/selection.js";
 
 const RING = address("9EwHno8C1T1vVGjasGnDH1GubiEu8qbgLX9qDjBshFhz");
 
@@ -23,9 +20,15 @@ function filled(value: number): Bytes32 {
   return new Uint8Array(32).fill(value) as Bytes32;
 }
 
-type Note = readonly [tree: number, amount: bigint, asset?: Address];
+type Note = readonly [tree: number, amount: bigint, asset?: Address, origin?: "default"];
 
 const MINT = address("Mint111111111111111111111111111111111111111");
+
+function noteId(index: number): Bytes32 {
+  const bytes = new Uint8Array(32);
+  new DataView(bytes.buffer).setUint32(0, index + 1, true);
+  return bytes as Bytes32;
+}
 
 function walletOf(notes: readonly Note[], ringProgramId?: Address): Wallet {
   const keypair = ShieldedKeypair.fromKeypair(SigningKey.fromEd25519Bytes(filled(42)));
@@ -34,25 +37,21 @@ function walletOf(notes: readonly Note[], ringProgramId?: Address): Wallet {
     registry: new AssetRegistry([[2n, MINT]]),
   });
   wallet._replace({
-    utxos: notes.map(([tree, amount, asset = SOL_MINT], index) => ({
+    utxos: notes.map(([tree, amount, asset = SOL_MINT, origin], index) => ({
       utxo: new Utxo({
         owner: keypair.signingPublicKey(),
         asset,
         amount,
         blinding: filled((index % 250) + 1),
         data: new Data(),
-        ...(ringProgramId === undefined ? {} : { ringProgramId }),
+        ...(ringProgramId === undefined || origin === "default" ? {} : { ringProgramId }),
       }),
       outputContext: {
-        hash: new Uint8Array(32)
-          .fill(index % 250)
-          .map((byte, at) => (at === 0 ? index >> 8 : byte)) as Bytes32,
+        hash: noteId(index),
         tree: treeAddress(tree),
         leafIndex: BigInt(index),
       },
-      nullifier: new Uint8Array(32)
-        .fill(index % 250)
-        .map((byte, at) => (at === 1 ? 7 : byte)) as Bytes32,
+      nullifier: noteId(index),
       spent: false,
     })),
     transactions: [],
@@ -74,7 +73,7 @@ function sortedByTree(
 /** Each picked note as its tree and amount, sorted by tree address. */
 function picked(notes: readonly Note[], amount: bigint, maxInputs: number) {
   return sortedByTree(
-    selectAcrossTrees({
+    selectFunding({
       wallet: walletOf(notes),
       covers: [{ asset: SOL_MINT, amount }],
       policy: {
@@ -96,64 +95,121 @@ function expected(notes: readonly Note[]) {
   );
 }
 
-/** Every set the search funds, `funds` deciding feasibility and none pruned by reach. */
-function triedSets(
-  trees: readonly Address[],
-  pool: readonly Address[],
-  funds: (set: readonly Address[]) => boolean,
-) {
-  const tried: (readonly Address[])[] = [];
-  treeSearch({
-    trees,
-    pool,
-    maxTrees: 2,
-    reaches: () => true,
-    fund: (set) => {
-      tried.push(set);
-      return funds(set) ? { found: set, feasible: true } : undefined;
-    },
-  });
-  return tried;
-}
-
-describe("selectAcrossTrees", () => {
-  it("tries no pair when one tree funds", () => {
-    const trees = [treeAddress(1), treeAddress(2), treeAddress(3)];
-    const tried = triedSets(trees, trees, (set) => set.length === 1 && set[0] === trees[1]);
-    expect(tried).toEqual(trees.map((tree) => [tree]));
+describe("selectFunding", () => {
+  it("rejects three selected trees without searching for an alternative", () => {
+    expect(() =>
+      picked(
+        [
+          [0, 60n],
+          [0, 20n],
+          [1, 55n],
+          [2, 50n],
+        ],
+        130n,
+        4,
+      ),
+    ).toThrow("RING_TOO_MANY_INPUT_TREES");
   });
 
-  it("tries every pair of a many-tree wallet only when the pool fails", () => {
-    const trees = Array.from({ length: 20 }, (_, id) => treeAddress(id));
-    const pool = trees.slice(0, PAIR_POOL_TREES);
-    const poolPairs = (PAIR_POOL_TREES * (PAIR_POOL_TREES - 1)) / 2;
-    const first = [trees[0], trees[1]];
-    const inPool = triedSets(
-      trees,
-      pool,
-      (set) => set.length === 2 && set.every((tree, at) => tree === first[at]),
+  it("returns a tree refusal for a large fragmented wallet", () => {
+    const notes: Note[] = Array.from({ length: 1_000 }, (_, tree) => [tree, 1n]);
+    expect(() => picked(notes, 3n, 5)).toThrow("RING_TOO_MANY_INPUT_TREES");
+  });
+
+  it("tries default funding after a ring tree refusal", () => {
+    const wallet = walletOf(
+      [
+        [0, 60n],
+        [0, 20n],
+        [1, 55n],
+        [2, 50n],
+        [0, 140n, SOL_MINT, "default"],
+      ],
+      RING,
     );
-    expect(inPool).toHaveLength(trees.length + poolPairs);
-    expect(triedSets(trees, pool, () => false)).toHaveLength(
-      trees.length + (trees.length * (trees.length - 1)) / 2,
+    const selected = selectAnonymousInputs(
+      { wallet, ringProgramId: RING, asset: SOL_MINT, amount: 130n },
+      "ring-or-default",
     );
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.utxo.ringProgramId).toBeUndefined();
+    expect(selected[0]?.utxo.amount).toBe(140n);
   });
 
-  it("runs no selection on a pair no reach covers", () => {
-    const wallet = walletOf(Array.from({ length: 20 }, (_, tree) => [tree, 1n] as const));
-    const reach = new TreeReach(wallet.utxos(), 5);
-    let selections = 0;
-    const found = treeSearch({
-      ...rankedTrees([reach]),
-      maxTrees: 2,
-      reaches: (set) => reach.of(set) >= 3n,
-      fund: () => {
-        selections += 1;
-        return undefined;
-      },
+  it("reports the default tree refusal when the ring balance is empty", () => {
+    const wallet = walletOf([
+      [0, 60n],
+      [0, 20n],
+      [1, 55n],
+      [2, 50n],
+    ]);
+    expect(() =>
+      selectAnonymousInputs(
+        { wallet, ringProgramId: RING, asset: SOL_MINT, amount: 130n },
+        "ring-or-default",
+      ),
+    ).toThrow("RING_TOO_MANY_INPUT_TREES");
+  });
+
+  it("selects a large default note without exact funding search", () => {
+    const selected = selectRingInputs({
+      wallet: walletOf([
+        [0, 40n],
+        [0, 15n],
+        [0, 10n],
+      ]),
+      ringProgramId: RING,
+      asset: SOL_MINT,
+      amount: 25n,
+      inputs: "entry",
+      maxInputs: 8,
     });
-    expect(found).toEqual([]);
-    expect(selections).toBe(0);
+    expect(selected.map((entry) => entry.utxo.amount)).toEqual([40n]);
+  });
+
+  it("checks the tree limit across all assets", () => {
+    expect(() =>
+      selectFunding({
+        wallet: walletOf([
+          [0, 6n],
+          [1, 6n],
+          [2, 10n, MINT],
+        ]),
+        covers: [
+          { asset: SOL_MINT, amount: 10n },
+          { asset: MINT, amount: 10n },
+        ],
+        policy: {
+          eligible: () => true,
+          ordering: "largestFirst",
+          maxInputs: 4,
+          errors: ringSelectionErrors,
+        },
+      }),
+    ).toThrow("RING_TOO_MANY_INPUT_TREES");
+  });
+
+  it("shares the input budget across assets", () => {
+    expect(() =>
+      selectFunding({
+        wallet: walletOf([
+          [0, 6n],
+          [0, 6n],
+          [0, 5n, MINT],
+          [0, 5n, MINT],
+        ]),
+        covers: [
+          { asset: SOL_MINT, amount: 10n },
+          { asset: MINT, amount: 10n },
+        ],
+        policy: {
+          eligible: () => true,
+          ordering: "largestFirst",
+          maxInputs: 3,
+          errors: ringSelectionErrors,
+        },
+      }),
+    ).toThrow("RING_TOO_MANY_INPUTS");
   });
 
   it("pays ten from six on each of two trees", () => {
@@ -175,8 +231,7 @@ describe("selectAcrossTrees", () => {
     );
   });
 
-  /** Rust `a_delegate_move_funds_from_a_pair_past_the_preferred_trees`, on the transfer path. */
-  it("funds from a pair past the preferred trees", () => {
+  it("takes large notes from a fragmented wallet", () => {
     const small = Array.from({ length: 8 }, (_, tree) =>
       [20n, 20n, 20n, 5n].map((amount) => [tree + 1, amount] as const),
     ).flat();
@@ -188,8 +243,7 @@ describe("selectAcrossTrees", () => {
     );
   });
 
-  /** Rust `a_delegate_move_skips_a_tree_whose_change_no_shape_holds`, on one tree as the core authority builder takes. */
-  it("skips a delegate selection whose change no authority shape holds", () => {
+  it("leaves delegate change feasibility to transaction assembly", () => {
     const notes: readonly Note[] = [
       [0, 101n],
       [1, 50n],
@@ -201,12 +255,7 @@ describe("selectAcrossTrees", () => {
       outputs: 4,
       eligible: () => true,
     });
-    expect(sortedByTree(selected)).toEqual(
-      expected([
-        [1, 50n],
-        [1, 50n],
-      ]),
-    );
+    expect(sortedByTree(selected)).toEqual(expected([[0, 101n]]));
   });
 
   /** Rust `an_anonymous_move_counts_the_sender_change_before_selection`. */
@@ -230,9 +279,9 @@ describe("selectAcrossTrees", () => {
     );
   });
 
-  it("names the mint no tree set reaches", () => {
+  it("names an asset with insufficient balance", () => {
     const select = () =>
-      selectAcrossTrees({
+      selectFunding({
         wallet: walletOf([
           [1, 10n],
           [2, 5n, MINT],
@@ -256,7 +305,6 @@ describe("selectAcrossTrees", () => {
     );
   });
 
-  /** Rust `Funding::candidates` pins the same file. */
   it.each(vectors.cases)("matches the shared vector: $name", (vector) => {
     expect(
       picked(
