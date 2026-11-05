@@ -60,7 +60,7 @@ pub fn select_spend_where<'a>(
     select(admitted, asset, amount, max_inputs)
 }
 
-/// One largest first pass over the keyed UTXOs no larger than the remainder, `None` unless they meet `amount` exactly.
+/// One largest first pass over the keyed UTXOs no larger than the remainder, a full subset sum search is out of scope.
 pub(crate) fn select_exact_where<'a>(
     utxos: impl IntoIterator<Item = &'a WalletUtxo>,
     asset: Address,
