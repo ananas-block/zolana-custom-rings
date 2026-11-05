@@ -1,8 +1,8 @@
 mod vector_credentials;
 
 use custom_ring_interface::{
-    CustomRingProof, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
-    OpeningRecord, PlainGroth16Proof, RecordKind, MAX_RING_DEPOSIT_AUDIT_SLOTS,
+    CustomRingError, CustomRingProof, DepositContext, DepositPublicInput, DepositRegistry,
+    DepositedAsset, OpeningRecord, PlainGroth16Proof, RecordKind, MAX_RING_DEPOSIT_AUDIT_SLOTS,
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN as CT,
 };
 use serde::Deserialize;
@@ -165,7 +165,8 @@ fn statement_rejects_empty_oversized_and_mismatched_batches() {
         credentials: &credentials(14),
         registry: None,
     };
-    assert_eq!(input.hash(), Err(HasherError::InvalidNumFields));
+    let malformed = Err(CustomRingError::from(HasherError::InvalidNumFields));
+    assert_eq!(input.hash(), malformed);
     assert_eq!(
         DepositPublicInput {
             owner_utxo_hashes: &[[0; 32]; 9],
@@ -174,7 +175,32 @@ fn statement_rejects_empty_oversized_and_mismatched_batches() {
             ..input
         }
         .hash(),
-        Err(HasherError::InvalidNumFields)
+        Err(CustomRingError::TooManyDepositsForKey)
+    );
+    let single_key = vector_credentials::CredentialFixture {
+        ring_program: [0x90; 32],
+        address_root: [14; 32],
+        state_roots: &[custom_ring_interface::CredentialStateRoot {
+            tree_id: 3,
+            root: [14; 32],
+        }],
+        capacity: 1,
+    }
+    .roots();
+    let pair = DepositPublicInput {
+        owner_utxo_hashes: &[[0; 32]; 2],
+        ciphertexts: &[[0; CT]; 2],
+        assets: &[asset(0, 0); 2],
+        ..input
+    };
+    assert!(pair.hash().is_ok());
+    assert_eq!(
+        DepositPublicInput {
+            credentials: &single_key,
+            ..pair
+        }
+        .hash(),
+        Err(CustomRingError::TooManyDepositsForKey)
     );
     assert_eq!(
         DepositPublicInput {
@@ -182,7 +208,7 @@ fn statement_rejects_empty_oversized_and_mismatched_batches() {
             ..input
         }
         .hash(),
-        Err(HasherError::InvalidNumFields)
+        malformed
     );
     assert_eq!(
         DepositPublicInput {
@@ -191,7 +217,7 @@ fn statement_rejects_empty_oversized_and_mismatched_batches() {
             ..input
         }
         .hash(),
-        Err(HasherError::InvalidNumFields)
+        malformed
     );
 }
 

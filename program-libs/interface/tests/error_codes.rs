@@ -125,6 +125,7 @@ pinned_codes! {
     InvalidAddressCheckpoint = 8534,
     AbsenceRootBelowFloor = 8535,
     SaltedSourceOtherRing = 8536,
+    TooManyDepositsForKey = 8537,
 }
 
 #[test]

@@ -132,6 +132,7 @@ ring_errors! {
     InvalidAddressCheckpoint = 8534 => "address checkpoint is invalid",
     AbsenceRootBelowFloor = 8535 => "address root sequence is below the absence floor",
     SaltedSourceOtherRing = 8536 => "salted source serves another ring",
+    TooManyDepositsForKey = 8537 => "the deposits outnumber the key's credential capacity",
 }
 
 impl From<CustomRingError> for ProgramError {
