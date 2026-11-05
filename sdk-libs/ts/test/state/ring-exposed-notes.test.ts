@@ -29,7 +29,7 @@ function zeroKeyed(owner: ScanWallet): ShieldedAddress {
   );
 }
 
-/** A wallet holding a keyed note of `keyed` and a zero-key note of `zero`. */
+/** A wallet holding a keyed note of `keyed` and a zero-key note of a nonzero `zero`. */
 async function holding(keyed: bigint, zero: bigint) {
   const indexer = new ScanIndexer();
   const alice = new ScanWallet(1);
@@ -40,12 +40,12 @@ async function holding(keyed: bigint, zero: bigint) {
     history,
   );
   await alice.pay(indexer, [{ to: bob.address, amount: keyed }]);
-  await alice.pay(indexer, [{ to: zeroKeyed(bob), amount: zero }]);
+  if (zero > 0n) await alice.pay(indexer, [{ to: zeroKeyed(bob), amount: zero }]);
   await wallet.absorb(await bob.sync(indexer, wallet.history()));
   return { wallet, bob };
 }
 
-const select = (wallet: Wallet, amount: bigint, spendExposed?: boolean) =>
+const select = (wallet: Wallet, amount: bigint) =>
   selectRingInputs({
     wallet,
     ringProgramId: RING,
@@ -53,7 +53,6 @@ const select = (wallet: Wallet, amount: bigint, spendExposed?: boolean) =>
     amount,
     inputs: "ring",
     maxInputs: 8,
-    ...(spendExposed === undefined ? {} : { spendExposed }),
   });
 
 describe("exposed notes", () => {
@@ -92,18 +91,9 @@ describe("exposed notes", () => {
     );
   });
 
-  it("selects one only under a spend naming the wallet", async () => {
-    const { wallet } = await holding(40n, 25n);
-    expect(
-      select(wallet.wallet, 50n, true)
-        .map((note) => note.utxo.amount)
-        .sort(),
-    ).toEqual([25n, 40n]);
-  });
-
   it("reports the plain shortfall on a wallet with no exposed funds", async () => {
-    const { wallet } = await holding(40n, 25n);
-    expect(() => select(wallet.wallet, 500n, true)).toThrow(
+    const { wallet } = await holding(40n, 0n);
+    expect(() => select(wallet.wallet, 500n)).toThrow(
       expect.objectContaining({ code: "RING_INSUFFICIENT_BALANCE" }),
     );
   });

@@ -524,7 +524,11 @@ export {
   signPendingListApprovalsRequest,
   signRefuseListApprovalRequest,
 } from "../rpc/ring-rpc.js";
-export type { ListApprovalTarget, PolicyAuthorityAction, RingReaderGrant } from "../rpc/ring-rpc.js";
+export type {
+  ListApprovalTarget,
+  PolicyAuthorityAction,
+  RingReaderGrant,
+} from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   AuditedRingMerge,
@@ -667,11 +671,6 @@ export {
   type RingRecipientClient,
   type TrackingRoot,
 } from "../rpc/tracking-resolver.js";
-export {
-  resolveViewingKey,
-  type ResolvedViewingKey,
-  type ViewingKeyClient,
-} from "../rpc/viewing-key-resolver.js";
 export type {
   PendingEnrollment,
   PendingEnrollments,

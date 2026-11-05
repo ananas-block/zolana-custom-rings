@@ -146,17 +146,39 @@ describe("pending merge notes", () => {
     const indexer = new ScanIndexer();
     const seed = heldNote(owner, mint);
     const first = publishMerge({ indexer, owner, spent: seed, slot: 2n });
-    let wallet = AnonymousWallet.create(new Wallet({ identity: owner.address, registry: new AssetRegistry() }), owner.fresh());
-    const initial = await AnonymousSync.create(owner.keys, wallet.wallet.registry).withHeldNotes([seed]).fetch(indexer.client(), wallet.history());
+    let wallet = AnonymousWallet.create(
+      new Wallet({ identity: owner.address, registry: new AssetRegistry() }),
+      owner.fresh(),
+    );
+    const initial = await AnonymousSync.create(owner.keys, wallet.wallet.registry)
+      .withHeldNotes([seed])
+      .fetch(indexer.client(), wallet.history());
     await wallet.absorb(initial);
     const second = publishMerge({ indexer, owner, spent: first, slot: 3n });
     const source = indexer.client();
     const client = {
-      getEncryptedUtxosByTags: async (...args: Parameters<typeof source.getEncryptedUtxosByTags>) => ({ ...await source.getEncryptedUtxosByTags(...args), context: { slot: 100n, blockTime: 0n } }),
-      getShieldedTransactionsByTags: async (...args: Parameters<typeof source.getShieldedTransactionsByTags>) => ({ ...await source.getShieldedTransactionsByTags(...args), context: { slot: 100n, blockTime: 0n } }),
-      getShieldedTransactionsByNullifiers: async (...args: Parameters<typeof source.getShieldedTransactionsByNullifiers>) => ({ ...await source.getShieldedTransactionsByNullifiers(...args), context: { slot: 100n, blockTime: 0n } }),
+      getEncryptedUtxosByTags: async (
+        ...args: Parameters<typeof source.getEncryptedUtxosByTags>
+      ) => ({
+        ...(await source.getEncryptedUtxosByTags(...args)),
+        context: { slot: 100n, blockTime: 0n },
+      }),
+      getShieldedTransactionsByTags: async (
+        ...args: Parameters<typeof source.getShieldedTransactionsByTags>
+      ) => ({
+        ...(await source.getShieldedTransactionsByTags(...args)),
+        context: { slot: 100n, blockTime: 0n },
+      }),
+      getShieldedTransactionsByNullifiers: async (
+        ...args: Parameters<typeof source.getShieldedTransactionsByNullifiers>
+      ) => ({
+        ...(await source.getShieldedTransactionsByNullifiers(...args)),
+        context: { slot: 100n, blockTime: 0n },
+      }),
     };
-    const sync = AnonymousSync.create(owner.keys, wallet.wallet.registry).withScanLimits({ maxPages: 1 });
+    const sync = AnonymousSync.create(owner.keys, wallet.wallet.registry).withScanLimits({
+      maxPages: 1,
+    });
     let status: "Paused" | "Complete" = "Paused";
     for (let attempt = 0; attempt < 20 && status === "Paused"; attempt++) {
       const scan = await sync.fetchWallet(client, wallet);
@@ -169,8 +191,12 @@ describe("pending merge notes", () => {
     const reads = indexer.ringReads.length;
     wallet.wallet.ensureAsset(9n, mint);
     await wallet.promotePending();
-    expect(wallet.notes().filter((note) => !note.spent).map((note) => hex(note.outputContext.hash))).toEqual([hex(second.outputContext.hash)]);
+    expect(
+      wallet
+        .notes()
+        .filter((note) => !note.spent)
+        .map((note) => hex(note.outputContext.hash)),
+    ).toEqual([hex(second.outputContext.hash)]);
     expect(indexer.ringReads).toHaveLength(reads);
   });
-
 });

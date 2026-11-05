@@ -411,7 +411,7 @@ const U16_MAX = 0xffffn;
 const U32_MAX = 0xffff_ffffn;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 
-/** `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, digest(envelope_ct), salt, layout]`. */
+/** `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, digest(envelope_ct), salt, layout]`. */
 function auditHeadElements(head: AuditHead): readonly Bytes32[] {
   return [
     domainField(RingDomain.transferStatement),

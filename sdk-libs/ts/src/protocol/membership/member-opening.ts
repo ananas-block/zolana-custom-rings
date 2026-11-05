@@ -280,10 +280,7 @@ export function replayRecordWrites(
   });
 }
 
-/**
- * Rust `ApplyProofInputs::statement` under `ApplyMode::Public`, an update writing no private list.
- * A private write proves its owner's tracking row, the SDK builds none yet.
- */
+/** Rust `ApplyProofInputs::statement` under `ApplyMode::Public`, a private list write refused. */
 export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsStatement {
   if (inputs.writes.some((write) => (write.entry.mask & BigInt(PRIVATE_LIST_BITS)) !== 0n))
     throw new RingError("RING_STORAGE_WRITE_INVALID", {

@@ -20,7 +20,9 @@ export async function* snapshotPages<Page>(
 ): AsyncGenerator<Page, void> {
   let cursor: Uint8Array | undefined;
   let releaseCursor: Uint8Array | undefined;
-  let captured: Pick<RingWalletStatusPage, "historyThrough" | "enrollment" | "snapshotExpiresAt"> | undefined;
+  let captured:
+    | Pick<RingWalletStatusPage, "historyThrough" | "enrollment" | "snapshotExpiresAt">
+    | undefined;
   let readFailure: { error: unknown } | undefined;
   try {
     do {
@@ -32,7 +34,10 @@ export async function* snapshotPages<Page>(
           status.cursor.length !== SNAPSHOT_CURSOR_LENGTH ||
           status.cursor[0] !== SNAPSHOT_CURSOR_VERSION ||
           (releaseCursor !== undefined &&
-            (!equalBytes(releaseCursor.subarray(0, SNAPSHOT_POSITION_OFFSET), status.cursor.subarray(0, SNAPSHOT_POSITION_OFFSET)) ||
+            (!equalBytes(
+              releaseCursor.subarray(0, SNAPSHOT_POSITION_OFFSET),
+              status.cursor.subarray(0, SNAPSHOT_POSITION_OFFSET),
+            ) ||
               !advances(releaseCursor, status.cursor)))
         ) {
           throw inconsistentPage();
@@ -45,7 +50,9 @@ export async function* snapshotPages<Page>(
         captured = {
           historyThrough: status.historyThrough,
           enrollment: status.enrollment,
-          ...(status.snapshotExpiresAt === undefined ? {} : { snapshotExpiresAt: status.snapshotExpiresAt }),
+          ...(status.snapshotExpiresAt === undefined
+            ? {}
+            : { snapshotExpiresAt: status.snapshotExpiresAt }),
         };
       } else if (
         status.historyThrough !== captured.historyThrough ||

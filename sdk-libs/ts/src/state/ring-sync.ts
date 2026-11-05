@@ -155,7 +155,7 @@ export async function syncRingWallet(
       ))
         staging.ensureAsset(assetId, mint);
     // 4. The core sync read the spends of held notes. A note new to the wallet or promoted and a stored retry still need theirs.
-    // A merge output under an unregistered mint opens and waits as pending, so this sync adds no retry. It rereads a stored one until the spend row returns.
+    // A merge output under an unregistered mint opens and waits as pending, a TS sync adds no retry and rereads a stored one until the spend row returns.
     const held = new Set(
       [...staging.utxos(), ...ring.pendingOpenings()].map((note) =>
         bytesKey(note.outputContext.hash),

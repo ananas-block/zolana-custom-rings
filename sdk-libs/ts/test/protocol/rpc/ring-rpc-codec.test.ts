@@ -318,8 +318,12 @@ describe("policy authority requests", () => {
         }),
       );
     expect(message({ kind: "list", registry: target.registry })).toBe(vector.list.message);
-    expect(message({ kind: "list", registry: target.registry, cursor: updateId })).toBe(vector.listAfter.message);
-    expect(message({ kind: "refuse", registry: target.registry, updateId })).toBe(vector.refuse.message);
+    expect(message({ kind: "list", registry: target.registry, cursor: updateId })).toBe(
+      vector.listAfter.message,
+    );
+    expect(message({ kind: "refuse", registry: target.registry, updateId })).toBe(
+      vector.refuse.message,
+    );
     expect(message({ kind: "createRecords" })).toBe(vector.createRecords.message);
     const nonce = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
       (array as Uint8Array).fill(4);
@@ -554,9 +558,13 @@ function base58Bytes(text: string): Uint8Array {
 }
 
 describe("ring rpc refusals", () => {
-  it("names -32227 as a recovered delegate note its source does not own", () => {
+  it("names -32227 and -32228 as delegate notes outside the requested sources", () => {
     expect(ringRpcRefusalName(-32227)).toBe("sourceNote");
-    expect(ringRpcRefusalName(-32228)).toBeUndefined();
+    expect(ringRpcRefusalName(-32228)).toBe("unrequestedInput");
+  });
+
+  it("names -32165 as a co-signer that approves no demanded class", () => {
+    expect(ringRpcRefusalName(-32165)).toBe("notApproved");
   });
 
   it("names -32216 as a relayed message past one transaction", () => {

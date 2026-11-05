@@ -19,6 +19,7 @@ import {
 
 const RECORDS = address("Stor111111111111111111111111111111111111111");
 const CURATOR = address("Cura111111111111111111111111111111111111111");
+const TRACKING = address("Trac111111111111111111111111111111111111111");
 const POLICY_HASH = new Uint8Array(32).fill(1) as Bytes32;
 
 function ring(input: Readonly<{ mode?: RingMode; policy?: boolean; curator?: boolean }>) {
@@ -26,6 +27,7 @@ function ring(input: Readonly<{ mode?: RingMode; policy?: boolean; curator?: boo
     ringPolicyData({
       bump: 255,
       records: RECORDS,
+      tracking: TRACKING,
       ...(input.mode === undefined ? {} : { mode: input.mode }),
       ...(input.policy === true
         ? {
@@ -43,19 +45,20 @@ function ring(input: Readonly<{ mode?: RingMode; policy?: boolean; curator?: boo
 
 describe("live root registries", () => {
   it("passes no curator account on a ring without a curator source, the records then the curator with one", () => {
-    expect(ringRootRegistries(ring({ policy: true }), "transfer")).toEqual([RECORDS]);
+    expect(ringRootRegistries(ring({ policy: true }), "transfer")).toEqual([RECORDS, TRACKING]);
     expect(ringRootRegistries(ring({ policy: true, curator: true }), "transfer")).toEqual([
       RECORDS,
       CURATOR,
+      TRACKING,
     ]);
   });
 
   it.each<[Parameters<typeof ring>[0], RootReader, readonly string[]]>([
-    [{}, "transfer", [RECORDS]],
-    [{ policy: true, curator: true }, "delegateTransfer", []],
-    [{}, "deposit", []],
-    [{ policy: true, curator: true }, "deposit", [RECORDS, CURATOR]],
-    [{ policy: true, curator: true }, "merge", []],
+    [{}, "transfer", [RECORDS, TRACKING]],
+    [{ policy: true, curator: true }, "delegateTransfer", [TRACKING]],
+    [{}, "deposit", [TRACKING]],
+    [{ policy: true, curator: true }, "deposit", [RECORDS, CURATOR, TRACKING]],
+    [{ policy: true, curator: true }, "merge", [TRACKING]],
   ])("reads the roots Rust `RootRead` names for %o on %s", (input, reader, registries) => {
     expect(ringRootRegistries(ring(input), reader)).toEqual(registries);
   });

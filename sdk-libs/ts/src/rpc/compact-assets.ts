@@ -1,8 +1,4 @@
-import {
-  getBase64Decoder,
-  getU64Encoder,
-  type Base64EncodedBytes,
-} from "@solana/kit";
+import { getBase64Decoder, getU64Encoder, type Base64EncodedBytes } from "@solana/kit";
 import { ClientError, type KitRpcAccess } from "@heliuslabs/zolana/client";
 import {
   decodeSplAssetCounter,
@@ -68,7 +64,10 @@ export class CompactAssetResolver {
         })
         .send({ abortSignal }),
     );
-    const data = accountBytes(contextValue(response, targetSlot, "getAccountInfo"), "getAccountInfo");
+    const data = accountBytes(
+      contextValue(response, targetSlot, "getAccountInfo"),
+      "getAccountInfo",
+    );
     let nextId: bigint;
     try {
       nextId = decodeSplAssetCounter(data).nextId;

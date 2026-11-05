@@ -37,7 +37,11 @@ import {
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
-import { snapshotPages, SNAPSHOT_CURSOR_LENGTH, SNAPSHOT_CURSOR_VERSION } from "./wallet-snapshot.js";
+import {
+  snapshotPages,
+  SNAPSHOT_CURSOR_LENGTH,
+  SNAPSHOT_CURSOR_VERSION,
+} from "./wallet-snapshot.js";
 
 import {
   knownUtxoHash,
@@ -613,7 +617,12 @@ export async function signRefuseListApprovalRequest(
     ring: checked.ringProgramId,
     registry,
     updateId,
-    auth: await policyAuthorityAuth(checked, authority, { kind: "refuse", registry, updateId }, timestamp),
+    auth: await policyAuthorityAuth(
+      checked,
+      authority,
+      { kind: "refuse", registry, updateId },
+      timestamp,
+    ),
   });
 }
 
@@ -1675,7 +1684,11 @@ export class RingRpc {
     input: RingWalletStatusQuery & Readonly<{ cursor: Uint8Array }>,
     context?: RequestContext,
   ): Promise<void> {
-    const released = await this.#walletSnapshotCall({ input, method: "releaseWalletSnapshot", context });
+    const released = await this.#walletSnapshotCall({
+      input,
+      method: "releaseWalletSnapshot",
+      context,
+    });
     if (released !== true) throw invalid("result");
   }
 
@@ -1684,7 +1697,8 @@ export class RingRpc {
     context?: RequestContext,
   ): AsyncGenerator<RingWalletStatusPage, void> {
     return snapshotPages({
-      read: (cursor) => this.getWalletStatus({ ...input, ...(cursor === undefined ? {} : { cursor }) }, context),
+      read: (cursor) =>
+        this.getWalletStatus({ ...input, ...(cursor === undefined ? {} : { cursor }) }, context),
       status: (page) => page,
       release: (cursor, cleanup) => this.releaseWalletSnapshot({ ...input, cursor }, cleanup),
       ...(context === undefined ? {} : { context }),
@@ -1695,9 +1709,14 @@ export class RingRpc {
     input: RingDelegateNotesQuery,
     context?: RequestContext,
   ): Promise<RingDelegateNotesPage> {
-    const wire = record(await this.#delegateSnapshotCall({ input, method: "getDelegateNotes", context }), "result");
+    const wire = record(
+      await this.#delegateSnapshotCall({ input, method: "getDelegateNotes", context }),
+      "result",
+    );
     return Object.freeze({
-      ...(wire["nullifierSecret"] == null ? {} : { nullifierSecret: hash(wire["nullifierSecret"], "nullifierSecret") }),
+      ...(wire["nullifierSecret"] == null
+        ? {}
+        : { nullifierSecret: hash(wire["nullifierSecret"], "nullifierSecret") }),
       status: decodeWalletStatus(record(wire["status"], "status")),
     });
   }
@@ -1706,7 +1725,11 @@ export class RingRpc {
     input: RingDelegateNotesQuery & Readonly<{ cursor: Uint8Array }>,
     context?: RequestContext,
   ): Promise<void> {
-    const released = await this.#delegateSnapshotCall({ input, method: "releaseDelegateSnapshot", context });
+    const released = await this.#delegateSnapshotCall({
+      input,
+      method: "releaseDelegateSnapshot",
+      context,
+    });
     if (released !== true) throw invalid("result");
   }
 
@@ -1715,7 +1738,8 @@ export class RingRpc {
     context?: RequestContext,
   ): AsyncGenerator<RingDelegateNotesPage, void> {
     return snapshotPages({
-      read: (cursor) => this.getDelegateNotes({ ...input, ...(cursor === undefined ? {} : { cursor }) }, context),
+      read: (cursor) =>
+        this.getDelegateNotes({ ...input, ...(cursor === undefined ? {} : { cursor }) }, context),
       status: (page) => page.status,
       release: (cursor, cleanup) => this.releaseDelegateSnapshot({ ...input, cursor }, cleanup),
       ...(context === undefined ? {} : { context }),
@@ -1738,7 +1762,13 @@ export class RingRpc {
     const cursor = input.cursor === undefined ? undefined : checkedReadCursor(input.cursor);
     const signed = await signMessage(
       input.authority,
-      spendCoverageAttestation({ target, authority: input.authority.address, timestamp, nonce, ...(cursor === undefined ? {} : { cursor }) }),
+      spendCoverageAttestation({
+        target,
+        authority: input.authority.address,
+        timestamp,
+        nonce,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
     );
     const wire = record(
       await this.#call(
@@ -2019,7 +2049,11 @@ export class RingRpc {
   }
 
   // `params` is the request object, not a positional list.
-  async #walletSnapshotCall({ input, method, context }: Readonly<{
+  async #walletSnapshotCall({
+    input,
+    method,
+    context,
+  }: Readonly<{
     input: RingWalletStatusQuery;
     method: "getWalletStatus" | "releaseWalletSnapshot";
     context: RequestContext | undefined;
@@ -2044,18 +2078,26 @@ export class RingRpc {
       message = walletSnapshotReleaseAttestation({ ...attestation, cursor });
     }
     const signature = await input.signer.sign(message);
-    return this.#call(method, signedReadParams({
-      ringProgramId: target.ringProgramId,
-      wallet: input.wallet,
-      reader: input.signer.reader,
-      timestamp,
-      nonce,
-      signature,
-      ...(cursor === undefined ? {} : { cursor }),
-    }), context);
+    return this.#call(
+      method,
+      signedReadParams({
+        ringProgramId: target.ringProgramId,
+        wallet: input.wallet,
+        reader: input.signer.reader,
+        timestamp,
+        nonce,
+        signature,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
+      context,
+    );
   }
 
-  async #delegateSnapshotCall({ input, method, context }: Readonly<{
+  async #delegateSnapshotCall({
+    input,
+    method,
+    context,
+  }: Readonly<{
     input: RingDelegateNotesQuery;
     method: "getDelegateNotes" | "releaseDelegateSnapshot";
     context: RequestContext | undefined;
@@ -2081,15 +2123,19 @@ export class RingRpc {
       message = delegateSnapshotReleaseAttestation({ ...attestation, cursor });
     }
     const signature = await signMessage(input.delegate, message);
-    return this.#call(method, {
-      ring: target.ringProgramId,
-      delegate: input.delegate.address,
-      owner: input.owner,
-      timestamp: Number(timestamp),
-      nonce: base64Decoder.decode(nonce),
-      signature: base58Decoder.decode(signature),
-      ...(cursor === undefined ? {} : { cursor: base64Decoder.decode(cursor) }),
-    }, context);
+    return this.#call(
+      method,
+      {
+        ring: target.ringProgramId,
+        delegate: input.delegate.address,
+        owner: input.owner,
+        timestamp: Number(timestamp),
+        nonce: base64Decoder.decode(nonce),
+        signature: base58Decoder.decode(signature),
+        ...(cursor === undefined ? {} : { cursor: base64Decoder.decode(cursor) }),
+      },
+      context,
+    );
   }
 
   async #call(
@@ -2310,12 +2356,19 @@ const WALLET_NOTE_STATUSES: readonly RingWalletNoteStatus[] = [
 function decodeWalletStatus(wire: Record<string, unknown>): RingWalletStatusPage {
   const cursor = wire["cursor"];
   const enrollment = wire["enrollment"];
-  if (enrollment !== "notEnrolled" && enrollment !== "pending" && enrollment !== "pendingPastCapacity" && enrollment !== "applied") {
+  if (
+    enrollment !== "notEnrolled" &&
+    enrollment !== "pending" &&
+    enrollment !== "pendingPastCapacity" &&
+    enrollment !== "applied"
+  ) {
     throw invalid("enrollment");
   }
   return Object.freeze({
     enrollment,
-    ...(wire["snapshotExpiresAt"] == null ? {} : { snapshotExpiresAt: integer(wire["snapshotExpiresAt"], "snapshotExpiresAt") }),
+    ...(wire["snapshotExpiresAt"] == null
+      ? {}
+      : { snapshotExpiresAt: integer(wire["snapshotExpiresAt"], "snapshotExpiresAt") }),
     historyThrough: integer(wire["historyThrough"], "historyThrough"),
     balances: Object.freeze(
       list(wire["balances"], "balances").map((entry, index) => {
@@ -2387,15 +2440,17 @@ function decodeSpendCoverage(wire: Record<string, unknown>): RingSpendCoverage {
       ? {}
       : { positionSlot: integer(wire["positionSlot"], "positionSlot") }),
     historyThrough: integer(wire["historyThrough"], "historyThrough"),
-    ...(totals === undefined ? {} : {
-      totals: Object.freeze({
-        observed: integer(totals["observed"], "totals.observed"),
-        padding: integer(totals["padding"], "totals.padding"),
-        address: integer(totals["address"], "totals.address"),
-        external: integer(totals["external"], "totals.external"),
-        resolved: integer(totals["resolved"], "totals.resolved"),
-      }),
-    }),
+    ...(totals === undefined
+      ? {}
+      : {
+          totals: Object.freeze({
+            observed: integer(totals["observed"], "totals.observed"),
+            padding: integer(totals["padding"], "totals.padding"),
+            address: integer(totals["address"], "totals.address"),
+            external: integer(totals["external"], "totals.external"),
+            resolved: integer(totals["resolved"], "totals.resolved"),
+          }),
+        }),
     unresolvedReal: rows("unresolvedReal"),
     unreadable: Object.freeze(
       list(wire["unreadable"], "unreadable").map((entry, index) =>
@@ -2403,7 +2458,9 @@ function decodeSpendCoverage(wire: Record<string, unknown>): RingSpendCoverage {
       ),
     ),
     integrityFaults: rows("integrityFaults"),
-    ...(wire["cursor"] == null ? {} : { cursor: checkedReadCursor(base64(wire["cursor"], "cursor")) }),
+    ...(wire["cursor"] == null
+      ? {}
+      : { cursor: checkedReadCursor(base64(wire["cursor"], "cursor")) }),
   });
 }
 
@@ -2750,7 +2807,8 @@ function requestBytes(value: unknown, length: number, field: string): Uint8Array
 
 function checkedSnapshotCursor(cursor: unknown): Uint8Array {
   const checked = checkedReadCursor(cursor);
-  if (checked.length !== SNAPSHOT_CURSOR_LENGTH || checked[0] !== SNAPSHOT_CURSOR_VERSION) throw invalidRequest("cursor");
+  if (checked.length !== SNAPSHOT_CURSOR_LENGTH || checked[0] !== SNAPSHOT_CURSOR_VERSION)
+    throw invalidRequest("cursor");
   return checked;
 }
 

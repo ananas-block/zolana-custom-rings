@@ -80,7 +80,7 @@ function actor(seed: number) {
   return { keypair, shielded, signer, member: memberOfTag(addressBytes(signer)) };
 }
 
-/** A tracking tree of height 13 holding the sentinel at leaf 0 and `row` at leaf 1. */
+/** A tracking tree holding the sentinel at leaf 0 and `row` at leaf 1. */
 function trackingTree(row: TrackingRecord) {
   const sentinel: TrackingRecord = { ...TRACKING_SENTINEL, next: row.member };
   const zeros: Bytes32[] = [new Uint8Array(32) as Bytes32];

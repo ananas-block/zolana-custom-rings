@@ -45,7 +45,7 @@ export function ringRegistrySlots(
   ]);
 }
 
-/** Each output key under `root`, a nonzero key at its own row, Rust `check_output_key`. A merge runs no salted payee read, so the zero key takes any row. */
+/** Each output key under `root`, a nonzero key at its own row and the zero key at any row, Rust `check_output_key`. */
 export async function readOutputKeys(
   input: Readonly<{
     client: Pick<TrackingReader, "getTrackingOpenings">;

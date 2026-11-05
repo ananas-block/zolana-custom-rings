@@ -90,8 +90,12 @@ describe("full scan recovery", () => {
     );
     expect(byTag).not.toHaveBeenCalled();
     expect(byNullifier).toHaveBeenCalledTimes(1);
-    expect(byNullifier.mock.calls.flatMap(([request]) => request.nullifiers).map(hex)).toEqual(recovered.utxos.map((note) => hex(note.nullifier)));
-    expect(byNullifier.mock.calls.every(([request]) => request.nullifiers.length <= TAGS_PER_REQUEST)).toBe(true);
+    expect(byNullifier.mock.calls.flatMap(([request]) => request.nullifiers).map(hex)).toEqual(
+      recovered.utxos.map((note) => hex(note.nullifier)),
+    );
+    expect(
+      byNullifier.mock.calls.every(([request]) => request.nullifiers.length <= TAGS_PER_REQUEST),
+    ).toBe(true);
     expect(recovered.spentNullifiers).toEqual([]);
     expect(recovered.status).toBe("Complete");
     expect(recovered.history.current().request).toEqual(history.current().request);
@@ -281,9 +285,13 @@ describe("full scan recovery", () => {
     expect(indexer.ringReads.length - pagesBefore).toBe(1);
     expect(byNullifier).toHaveBeenCalledTimes(1);
     const queried = byNullifier.mock.calls.flatMap(([request]) => request.nullifiers).map(hex);
-    expect(queried.sort()).toEqual([...nullifiers, merged.nullifier(mergedHash, nullifierKey)].map(hex).sort());
+    expect(queried.sort()).toEqual(
+      [...nullifiers, merged.nullifier(mergedHash, nullifierKey)].map(hex).sort(),
+    );
     expect(new Set(queried).size).toBe(queried.length);
-    expect(byNullifier.mock.calls.every(([request]) => request.nullifiers.length <= TAGS_PER_REQUEST)).toBe(true);
+    expect(
+      byNullifier.mock.calls.every(([request]) => request.nullifiers.length <= TAGS_PER_REQUEST),
+    ).toBe(true);
     expect(recovered.utxos).toHaveLength(3);
     expect(recovered.status).toBe("Complete");
     expect(recovered.found.at(-1)?.stream).toEqual({ kind: "merge", firstNullifier: first });

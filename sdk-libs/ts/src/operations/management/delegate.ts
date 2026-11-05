@@ -13,12 +13,12 @@ import {
   unreserved,
   signerAddress,
   type SignerAccount,
-  ZERO_32,
   checkIntentApproval,
   checkPreparedTransfer,
   checkTransactionIntent,
   ownerSolanaAccount,
   type UtxoReservation,
+  bytesKey,
   encodeBase58,
   equalBytes,
   fetchSplAssetRegistrations,
@@ -260,10 +260,23 @@ async function buildDelegateTransaction(
         throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
       return found;
     };
-    // Every note of a mint but the last is spent whole, its change is that note's owner's.
+    // Every note of a mint but the last in largest first order is spent whole, its change is
+    // that note's owner's, also after selection regroups the notes by tree.
+    const walletOrder = new Map(
+      wallet.utxos().map((entry, index) => [bytesKey(entry.nullifier), index]),
+    );
+    const orderOf = (entry: WalletUtxo) => walletOrder.get(bytesKey(entry.nullifier)) ?? -1;
     const spentMints = [...amounts].map(([asset, amount]) => {
       const notes = selected.filter((entry) => entry.utxo.asset === asset);
-      const last = notes.at(-1);
+      const last = notes.reduce<WalletUtxo | undefined>(
+        (found, entry) =>
+          found === undefined ||
+          entry.utxo.amount < found.utxo.amount ||
+          (entry.utxo.amount === found.utxo.amount && orderOf(entry) > orderOf(found))
+            ? entry
+            : found,
+        undefined,
+      );
       if (last === undefined)
         throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
       const spent = notes.reduce((total, entry) => total + entry.utxo.amount, 0n);
@@ -387,11 +400,6 @@ function selectSourceNotes(
     eligible: (entry) =>
       unreserved(reserved)(entry) &&
       entry.utxo.ringProgramId === move.ringProgramId &&
-      entry.dataHash === undefined &&
-      (entry.ringDataHash === undefined || equalBytes(entry.ringDataHash, ZERO_32)) &&
-      entry.utxo.data.utxoData() === undefined &&
-      entry.utxo.data.memo() === undefined &&
-      (entry.utxo.data.ringData()?.length ?? 0) === 0 &&
       owners.some((owner) =>
         equalBytes(
           entry.utxo.owner.ownerProofInputHash(),

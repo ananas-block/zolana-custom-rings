@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildRingEntryTransaction,
   buildRingTransferTransaction,
+  createRingTransferSubmission,
   prepareRingEntryRelay,
   selectRingInputs,
 } from "../../../src/operations/payments/transfer.js";
@@ -31,6 +32,7 @@ import { TRACKING_REVISION, trackingEntry } from "../../helpers/ring-pipeline.js
 import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
+import { zeroKeyNullifier } from "../../../src/state/exposed-notes.js";
 
 const TREE = treeAddress(0);
 const PAYER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
@@ -465,6 +467,43 @@ describe("ring approval summary", () => {
     ).rejects.toMatchObject({ cause: { message: "stopped at the prover" } });
     expect(proved).toEqual([0, 1]);
   });
+
+  it.each(["confidential", "anonymous"] as const)(
+    "never selects a zero-key note on the public owner route of a %s ring",
+    async (mode) => {
+      const keypair = spendingKeypair();
+      const recipient = ShieldedKeypair.generate().shieldedAddress();
+      const wallet = ringUtxoWallet(keypair, [
+        [6n, RING],
+        [25n, RING],
+      ]);
+      const [keyed, zero] = wallet.utxos();
+      if (keyed === undefined || zero === undefined) throw new Error("two notes");
+      wallet._replace({
+        utxos: [
+          keyed,
+          { ...zero, nullifier: zeroKeyNullifier(zero.outputContext.hash, zero.utxo.blinding) },
+        ],
+        transactions: [],
+        nullifiers: new Set(),
+      });
+      await expect(
+        createRingTransferSubmission({
+          client: await approvalClient([keypair.shieldedAddress(), recipient], mode),
+          ringProgramId: RING,
+          wallet,
+          keys: localKeys(keypair),
+          feePayer: keypair.shieldedAddress().solanaAddress(),
+          recipient,
+          amount: 10n,
+          spendPublic: { wallet: keypair.shieldedAddress().solanaAddress(), reply: null },
+        }),
+      ).rejects.toMatchObject({
+        code: "RING_BUILD_TRANSFER",
+        causeCode: "RING_UNFUNDED_PAST_EXPOSURE",
+      });
+    },
+  );
 
   async function capturedSummary(
     utxos: readonly (readonly [bigint, Address | undefined])[],

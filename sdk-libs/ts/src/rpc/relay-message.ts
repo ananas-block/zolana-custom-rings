@@ -246,7 +246,7 @@ export interface RelayTransferTerms {
   readonly setup: readonly TokenAccountCreate[];
 }
 
-/** What one public funder agrees to, its own deposit legs alone. It reads no slot and no note. */
+/** What one public funder agrees to, its own deposit legs alone and no slot or note. */
 export interface RelayFunderTerms {
   readonly ring: Address;
   readonly feePayer: Address;
