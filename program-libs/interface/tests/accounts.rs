@@ -8,14 +8,16 @@ use custom_ring_interface::{
         OwnerGrantIxData, StorageUpdateIxData,
     },
     tracking::{
-        FirstEnrollment, TrackingAuthorization, TrackingEntry, TrackingRegistry,
-        TrackingRootUpdate, TRACKING_CAPACITY, TRACKING_EMPTY_ROOT, TRACKING_GRACE_SLOTS,
+        tracking_chain_start, FirstEnrollment, TrackingAuthorization, TrackingEntry,
+        TrackingRegistry, TrackingRootUpdate, TRACKING_CAPACITY, TRACKING_EMPTY_ROOT,
+        TRACKING_GRACE_SLOTS,
     },
     ApplyRecordsIxData, CustomRingError, CustomRingProof, NewRing, PolicyUpdate, RecordWriteData,
     RingAccount, RingMode, RingPolicy, RingRole, RingRoles, SourceSlot, WriteRecordsIxData,
     MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS, READER_KEY_ED25519, ROOT_HISTORY,
     STORAGE_PROGRAM_ID, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
+use serde_json::{json, Value};
 use solana_address::Address;
 use spr_hasher::{
     primitives::{hash_bytes, solana_owner_identity},
@@ -24,6 +26,10 @@ use spr_hasher::{
 use zolana_ring_policy::{ListId, ListSet, Member, Rule, RuleTable, Subject};
 
 const PROGRAM: Address = Address::new_from_array([7; 32]);
+const ENROLL_VECTOR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../test-vectors/registry/tracking_enroll.json"
+);
 fn key(byte: u8) -> Address {
     Address::new_from_array([byte; 32])
 }
@@ -877,4 +883,54 @@ fn public_update_wire_has_no_tracking_revision() {
     expected.extend_from_slice(bytemuck::bytes_of(&apply));
     assert_eq!(data.encode().unwrap(), expected);
     assert_eq!(StorageUpdateIxData::parse(&expected), Ok(data));
+}
+
+fn enrollment_vector() -> Value {
+    let registry = key(0x31);
+    let owner = key(0x32);
+    let ix = EnrollIxData {
+        nullifier_pk: [0x23; 32],
+        list_tag: [0x24; 32],
+        viewing_u: [0x34; 32],
+        eph_u: [0x35; 32],
+        ciphertext: [0x36; 64],
+    };
+    let (authorization, bump) = TrackingAuthorization::find_address(&registry, &owner);
+    let mut account = FirstEnrollment {
+        registry,
+        owner,
+        ix: &ix,
+    }
+    .account();
+    let entry = account.apply().unwrap();
+    let chain_start = tracking_chain_start(&registry, Revision::from(0)).unwrap();
+    json!({
+        "description": "One enrollment and its permissionless apply. enroll_data follows tag 6, nullifier_pk || list_tag || viewing_u || eph_u || ciphertext, and a first enrollment appends a RegisterKey proof. The authorization PDA has seeds [tracking, registry, owner]. entry_hash is Poseidon(CRTQ, member, nullifier_pk, ct_hash, list_tag), chain_start is the hash chain of [CRTA, registry field, revision], chain_end is Poseidon(chain_start, entry_hash). account is the authorization after the apply. Produced by program-libs/interface/tests/accounts.rs.",
+        "registry": hex::encode(registry),
+        "owner": hex::encode(owner),
+        "member": hex::encode(entry.member),
+        "ct_hash": hex::encode(entry.ct_hash),
+        "enroll_data": hex::encode(bytemuck::bytes_of(&ix)),
+        "authorization": hex::encode(authorization),
+        "bump": bump,
+        "entry_hash": hex::encode(entry.hash().unwrap()),
+        "chain_start": hex::encode(chain_start),
+        "chain_end": hex::encode(entry.chained(&chain_start).unwrap()),
+        "account": hex::encode(bytemuck::bytes_of(&account)),
+    })
+}
+
+#[test]
+fn the_enrollment_is_the_shared_vector() {
+    let committed: Value =
+        serde_json::from_str(&std::fs::read_to_string(ENROLL_VECTOR).expect("vector file"))
+            .expect("vector json");
+    assert_eq!(committed, enrollment_vector());
+}
+
+#[test]
+#[ignore = "rewrites test-vectors/registry/tracking_enroll.json"]
+fn write_tracking_enroll_vector() {
+    let json = serde_json::to_string_pretty(&enrollment_vector()).expect("json");
+    std::fs::write(ENROLL_VECTOR, json + "\n").expect("write vector file");
 }

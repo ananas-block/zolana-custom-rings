@@ -114,6 +114,24 @@ pinned_codes! {
     TooManyDepositsForKey = 8537,
 }
 
+const ERROR_VECTORS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors/errors");
+
+fn ring_errors() -> Vec<(String, u32)> {
+    VARIANTS
+        .iter()
+        .map(|&error| (format!("{error:?}"), error as u32))
+        .collect()
+}
+
+/// Keeps declaration order, the TS tests compare entries in order.
+fn error_vector(errors: &[(String, u32)]) -> String {
+    let rows: Vec<String> = errors
+        .iter()
+        .map(|(name, code)| format!("  {}: {code}", serde_json::to_string(name).unwrap()))
+        .collect();
+    format!("{{\n{}\n}}\n", rows.join(",\n"))
+}
+
 #[test]
 fn error_codes_are_stable() {
     for &error in VARIANTS {
@@ -123,17 +141,25 @@ fn error_codes_are_stable() {
         "../../../test-vectors/errors/custom-ring-errors.json"
     ))
     .unwrap();
-    let actual = VARIANTS
-        .iter()
-        .map(|&error| (format!("{error:?}"), error as u32))
-        .collect();
+    let actual = ring_errors().into_iter().collect();
     assert_eq!(fixture, actual, "shared error code fixture drifted");
 }
 
 #[test]
-fn storage_error_codes_are_stable() {
+#[ignore = "rewrites test-vectors/errors/custom-ring-errors.json and storage-errors.json"]
+fn write_error_vectors() {
+    for (file, errors) in [
+        ("custom-ring-errors.json", ring_errors()),
+        ("storage-errors.json", storage_errors()),
+    ] {
+        std::fs::write(format!("{ERROR_VECTORS}/{file}"), error_vector(&errors))
+            .expect("write vector file");
+    }
+}
+
+fn storage_pins() -> [(StorageError, u32); 31] {
     use StorageError as Error;
-    let pins = [
+    [
         (Error::InvalidRegistry, 9000),
         (Error::Unauthorized, 9001),
         (Error::RevisionChanged, 9002),
@@ -165,17 +191,25 @@ fn storage_error_codes_are_stable() {
         (Error::PrivateWriteWithoutTracking, 9035),
         (Error::TrackingTreeFull, 9036),
         (Error::RootHistoryRetained, 9037),
-    ];
-    for (error, code) in pins {
+    ]
+}
+
+fn storage_errors() -> Vec<(String, u32)> {
+    storage_pins()
+        .iter()
+        .map(|(error, code)| (format!("{error:?}"), *code))
+        .collect()
+}
+
+#[test]
+fn storage_error_codes_are_stable() {
+    for (error, code) in storage_pins() {
         assert_eq!(error as u32, code, "{error:?}");
     }
     let fixture: BTreeMap<String, u32> = serde_json::from_str(include_str!(
         "../../../test-vectors/errors/storage-errors.json"
     ))
     .unwrap();
-    let actual = pins
-        .iter()
-        .map(|(error, code)| (format!("{error:?}"), *code))
-        .collect();
+    let actual = storage_errors().into_iter().collect();
     assert_eq!(fixture, actual, "shared error code fixture drifted");
 }
