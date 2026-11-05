@@ -17,6 +17,7 @@ use crate::{
     authorize::WalletCheck,
     error::{redacted, RingRpcError},
     hub::Hub,
+    keyed_tasks::{KeyedTasks, MAX_CONCURRENT_KEYED_TASKS},
     merge_inputs::HeldInput,
     merge_settings::{MergeSettingsBook, SignedMergeSettings, WalletMergeSettings},
     relay::{HeldMerge, Relay},
@@ -118,32 +119,59 @@ impl<S> ManagedMergeInit<S> {
     }
 }
 
-impl<S: TransactionSource> ManagedMerge<S> {
+impl<S: TransactionSource + 'static> ManagedMerge<S> {
     /// Every `interval`, the first at once, merges each wallet above its signed target.
+    ///
+    /// Each ring runs on its own task, a ring still merging sits out the tick.
     pub async fn run(self, interval: Duration) {
+        let merge = Arc::new(self);
+        let rings = KeyedTasks::new(MAX_CONCURRENT_KEYED_TASKS);
         let mut ticks = tokio::time::interval(interval);
         loop {
             ticks.tick().await;
-            if let Err(error) = self.merge_due().await {
-                log::warn!("managed merge failed because {}", redacted(&error));
-            }
+            let due = match merge.due_rings().await {
+                Ok(due) => due,
+                Err(error) => {
+                    log::warn!("managed merge failed because {}", redacted(&error));
+                    continue;
+                }
+            };
+            rings.spawn_idle(due, |ring| {
+                let merge = merge.clone();
+                async move {
+                    merge.merge_ring_logged(ring).await;
+                }
+            });
         }
     }
+}
 
+impl<S: TransactionSource> ManagedMerge<S> {
     /// At most one merge for each wallet and mint, a failed ring or wallet only logs.
     pub async fn merge_due(&self) -> Result<Vec<RelayId>, RingRpcError> {
-        let book = self.hub.shared().merge_settings()?;
         let mut sent = Vec::new();
-        for ring in book.rings().await? {
-            match self.merge_ring(&book, ring).await {
-                Ok(signatures) => sent.extend(signatures),
-                Err(error) => log::warn!(
-                    "managed merge of ring {ring} failed because {}",
-                    redacted(&error)
-                ),
-            }
+        for ring in self.due_rings().await? {
+            sent.extend(self.merge_ring_logged(ring).await);
         }
         Ok(sent)
+    }
+
+    async fn due_rings(&self) -> Result<Vec<Address>, RingRpcError> {
+        self.hub.shared().merge_settings()?.rings().await
+    }
+
+    async fn merge_ring_logged(&self, ring: Address) -> Vec<RelayId> {
+        let merged = match self.hub.shared().merge_settings() {
+            Ok(book) => self.merge_ring(&book, ring).await,
+            Err(error) => Err(error),
+        };
+        merged.unwrap_or_else(|error| {
+            log::warn!(
+                "managed merge of ring {ring} failed because {}",
+                redacted(&error)
+            );
+            Vec::new()
+        })
     }
 
     /// An enrolled wallet's secret opens from its credential on every ring.
