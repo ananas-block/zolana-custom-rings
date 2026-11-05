@@ -15,8 +15,8 @@ The auditor holds one viewing key for the ring's life. Every operation proves a 
 
 ## Spent notes
 
-- A ring input takes no record. The envelope seals `R`, the count of spent notes among the published inputs.
-- A published input at or past `R` is padding. A position below `R` is a spend.
+- A ring input takes no record. The envelope seals `R`, the count of spent notes, and `A`, the bitmap of address positions.
+- Notes and addresses interleave in SPP's order before the dummy suffix. Let `L = R + popcount(A)`. Input `k < L` is an address when bit `k` of `A` is set and a spent note otherwise. Input `k >= L` is padding, see [envelope plaintext](../spec/crypto/disclosure.md#envelope-plaintext).
 - The auditor recomputes a nullifier from an opening it already read and the owner's sealed secret. It then matches SPP's published list, and a match links the spend.
 - No constraint binds a nullifier to a record. A note the auditor never opened stays unlinked until the opening arrives.
 - A default-ring input has no earlier record. An entry key therefore opens it in the stream, with its owner key, nullifier key, amount, mint, blinding and data hashes.
@@ -83,7 +83,7 @@ The sender's SDK resolves a nonzero-key recipient through its tracking row under
 
 - Ring RPC enumerates finalized signatures and binds each indexed event to the canonical transaction.
 - Missing or altered indexed events stop the page before coverage advances.
-- Each published nullifier takes one state. A position at or past `R` is padding, a default-ring position is external, and a note index hit resolves it.
+- Each published nullifier takes one state. A position at or past `L` is padding, and an address position spends no note. A default-ring position is external, and a note index hit resolves the rest.
 - A real nullifier with no hit stays unresolved. It never reads as padding or unspent, and a later opening resolves it.
 - One database transaction per finalized page commits the rows, the notes and the position.
 - `getWalletStatus` derives each note's status from that note's own nullifier. An unresolved spend elsewhere never changes it, and the response names no other transaction.

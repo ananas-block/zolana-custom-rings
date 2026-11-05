@@ -181,7 +181,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 9. **Limits:** Ring RPC enforces co-signer limits only on what it co-signs. A co-signer outside Ring RPC enforces none.
 10. **Photon, ring indexer and chain RPC:** Photon and the ring indexer that forwards to it are trusted for complete history, the chain RPC for confirmed contents. A balance read is a provisional observation at `confirmed` commitment, and no authoritative balance or limit decision reads it, see [reading through Ring RPC](design/audit-and-recovery.md#reading-through-ring-rpc). Ring RPC verifies each record opening under the newest root. While the ring indexer lags that root, Ring RPC's tree-mode reader grant checks, its limit updates and its co-signatures on a deposit, transfer or withdrawal fail.
 11. **SPP governance:** trusted to activate the ring when SPP does not activate it at creation, and to enable its authority rail.
-12. **Delegate message:** the ring SDKs bind the leading output owners of the delegate's message to the payees in payment order, and each other owner to the source or zero. They do not bind whose notes it spends, the mint or the amount each payee gets.
+12. **Delegate message:** before the delegate signs, the ring SDKs open the message's auditor records and check the move against the request. Each requested payment must match one ring output's owner key, nullifier key, mint and amount. Every other ring output must return to a requested source. The message carries no exit, public leg or data. Each spent note position must carry a nullifier of a note the delegate opened for exactly the requested sources. The SDKs do not choose which of those notes the move spends.
 
 ## Glossary
 
@@ -213,7 +213,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 | 24 | **Policy authority** | Authority | Sets the ring's rules, lists, mint settings and ring-wide grants. |
 | 25 | **Storage authority** | Authority | Signs the updates of one record tree. Ring RPC holds it for the ring's records. |
 | 26 | **Upgrade authority** | Authority | Deploys and upgrades the ring program and signs `Initialize`. |
-| 27 | **Auditor stream** | Ciphertext | One AES-256-CTR stream per transfer, sealed to the auditor key and proven. It carries the transaction viewing secret, the real input count `R` and the entry openings on an entry key. It also carries one record per published slot and, under `has_data`, one data tail per slot. |
+| 27 | **Auditor stream** | Ciphertext | One AES-256-CTR stream per transfer, sealed to the auditor key and proven. It carries the transaction viewing secret, the input map and the entry openings on an entry key. It also carries one record per published slot and, under `has_data`, one data tail per slot. |
 | 28 | **Recipient body** | Ciphertext | A ring output's blinding, amount and mint, encrypted to its recipient's viewing key. No proof constrains it. |
 | 29 | **Change** | Output | An anonymous output to the sender, published with no recipient body. The sender bundle rebuilds it. |
 | 30 | **Sender bundle** | Ciphertext | One per anonymous transfer, encrypted to the sender's viewing key. It holds the change cells, the output seed and each recipient's viewing key. No proof constrains it. |
@@ -270,7 +270,7 @@ The **Wallet** writes its own viewing flag and its wallet grants. The **Policy a
    2. Queues wallet and authority updates in separate batches. An update its list approval joined rides first in its approver's batch.
    3. Sends an authority batch at its next pass, and a wallet batch when it is full, aged or ahead of a queued authority update.
    4. Leaves the grace to the **Storage program**. The apply proof marks a batch [restrictive](design/records-and-roots.md#root-history) when it tightens a list, guard or bound, writes a private list or changes an asset limit. Such a batch retires every earlier root. Any other batch keeps the outgoing root for the grace period, and over a full history it evicts the oldest kept root.
-   5. Proves a batch with salted owner writes under the private apply key. The proof opens each such owner's applied row under one root of the pinned tracking registry, and the written key under the row's list tag. The update names that root's revision. The Storage program reads the root and raises the registry's tracking floor to the revision in the same instruction. A batch whose salted owner has no applied row fails before the proof.
+   5. Proves a batch with salted owner writes under the private apply key. The proof opens each such owner's applied row under one root of the pinned tracking registry. It holds the written key to the owner's salted member under a salt that opens the row's list tag. A wrong salt fails the proof. The update names that root's revision. The Storage program reads the root and raises the registry's tracking floor to the revision in the same instruction. A batch whose salted owner has no applied row fails before the proof.
    6. Refuses a queued authority update once its signer no longer holds the policy role.
    7. Proves each batch and submits it, paying fees.
 
@@ -367,7 +367,7 @@ An authority transfer moves a wallet's funds to recipients within the same ring,
    2. Opens the source's nullifier secret from its tracking seal, or takes zero under the zero key, and checks it against the source's nullifier key.
    3. Funds the payments from the source's notes and returns the change to the source.
    4. Generates the SPP proof and the ring proof, the inputs' tracking rows and the outputs' key rule included.
-3. **Delegate:** signs the transaction.
+3. **Delegate:** checks the message against its request, see trust assumption 12, then signs the transaction.
 4. **Ring RPC:** co-signs when the move demands a co-signer, pays fees, submits the transfer to the **Ring Program** and indexes the result.
 
 A **Delegate** can generate the proofs and send the move without Ring RPC. It reads the source's nullifier secret and openings through `getDelegateNotes`, which Ring RPC answers only to the ring's configured delegate.
@@ -424,10 +424,10 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 ### Storage Program
 
 1. `Initialize`: creates a policy registry at an address only its creator can take, with the empty root. Its grace, ring id and tracking registry pin are final. The creator becomes the authority.
-2. `Update`: applies 1 to 16 writes with a proof of the tree update. The proof binds whether the batch is restrictive, and a restrictive batch retires every earlier root. Any other batch keeps the earlier root valid for the grace period and evicts the oldest kept root from a full history. A write to a private list is a private write, unless it names an asset whose mint hashes to its member. A batch with a private write proves under the private apply key. That proof opens each private write's owner row under the pinned tracking registry's root at the revision the update names. The program refuses a private write on a registry with no tracking pin. It raises the tracking floor to that revision with the new root. The authority signs.
+2. `Update`: applies 1 to 16 writes with a proof of the tree update. The proof binds whether the batch is restrictive, and a restrictive batch retires every earlier root. Any other batch keeps the earlier root valid for the grace period and evicts the oldest kept root from a full history. A write to a private list is a private write, unless it names an asset whose mint hashes to its member. A batch with a private write proves under the private apply key. That proof opens each private write's owner row under the pinned tracking registry's root at the revision the update names. It holds the written key to `Poseidon(CRPL, member, list_salt)` for a salt whose `Poseidon(CRPT, list_salt)` is the row's list tag. The program refuses a private write on a registry with no tracking pin. It raises the tracking floor to that revision with the new root. The authority signs.
 3. `UpdateAuthority`: hands the registry to a new authority. Both keys sign.
 4. `Enroll`: creates an owner's tracking authorization with a `RegisterKey` proof the program verifies, or rotates its viewing key with no proof. The owner and the payer sign.
-5. `ApplyEnrollments`: applies 1 to 16 named authorizations to the tracking tree with a proof of the tree update. The program computes each entry from its account. The outgoing root keeps its grace, and over a full history the oldest root leaves. No authority signs.
+5. `ApplyEnrollments`: applies 1 to 16 named authorizations to the tracking tree with a proof of the tree update. The program computes each entry from its account. Every retired root keeps its full grace, and an apply over a full history of unexpired roots fails with `RootHistoryRetained`. No authority signs.
 6. `OwnerGrant`: grants or revokes one reader's access to a program owner's activity. The owner signs, a program through CPI, and the payer funds the account.
 7. `InitializeTracking`: creates a tracking registry under a signing creator, with its final ring id and auditor key. Ring `Initialize` creates the ring's own through CPI signed by its ring PDA, and binds its address.
 
@@ -479,7 +479,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 2. An anonymous transfer cannot create an address.
 3. A delegate is permanent for the deployed program. An enrolled nullifier key, ciphertext and list tag are final.
 4. A paused ring, or one SPP governance has not activated, moves no note.
-5. A tracking registry keeps `ROOT_HISTORY = 32` roots, and each apply keeps the outgoing root for `TRACKING_GRACE_SLOTS = 750` slots. Over a full history an apply evicts the oldest root before its grace ends, and a proof under it proves again. Anyone can apply, and a rotation that keeps the viewing key still adds an apply. How long a proof's tracking root stays served therefore depends on the ring's apply rate.
+5. A tracking registry keeps `ROOT_HISTORY = 32` roots, and every retired root serves its full `TRACKING_GRACE_SLOTS = 750` slots. An apply that would evict an unexpired root fails with `RootHistoryRetained` (9037), and its accounts stay pending until the oldest root expires. A rotation writes only the authorization and moves no root. A proof under a served tracking root therefore stays valid for the grace, and enrollment waits under sustained apply load.
 
 ## Open questions for the maintainer
 
