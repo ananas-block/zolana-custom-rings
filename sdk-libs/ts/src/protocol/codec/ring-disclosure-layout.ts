@@ -2,7 +2,7 @@
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 
 /** Rust `TRANSFER_OUTPUT_CAPACITIES`, the output counts of the confidential keys. */
-export const TRANSFER_OUTPUT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
+export const TRANSFER_OUTPUT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8]);
 /** Rust `PACK_BE_CHUNK_BYTES`, the bytes of one packed field. */
 export const DISCLOSURE_CHUNK_BYTES = 31;
 export const STREAM_BLOCK_LEN = 16;

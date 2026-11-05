@@ -14,41 +14,45 @@ export interface TransferShape {
   readonly entry: boolean;
   /** A salted and a public record per owner fit. */
   readonly wide: boolean;
+  /** The most tracking rows one inline transaction on the key opens. */
+  readonly tracking: number;
+  /** The most owner and asset records one inline transaction reads in a pool, public slot assets aside. */
+  readonly records: number;
 }
 
+/** Rust `narrow`, `wide` and `entry`. */
 const shape = (
   outputs: number,
   inputs: number,
   withdrawals: number,
   owners: number,
-  entry: boolean,
-  wide: boolean,
-): TransferShape => Object.freeze({ outputs, inputs, withdrawals, owners, entry, wide });
+  family: Readonly<{ entry: boolean; wide: boolean }>,
+  [tracking, records]: readonly [number, number],
+): TransferShape =>
+  Object.freeze({ outputs, inputs, withdrawals, owners, ...family, tracking, records });
+
+const NARROW = Object.freeze({ entry: false, wide: false });
+const WIDE = Object.freeze({ entry: false, wide: true });
+const ENTRY = Object.freeze({ entry: true, wide: true });
 
 /** Ascending outputs, a frame takes the first that holds its SPP width. */
 const NARROW_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(2, 24, 4, 4, false, false),
-  shape(4, 24, 4, 4, false, false),
-  shape(8, 16, 4, 4, false, false),
-  shape(16, 5, 8, 5, false, false),
+  shape(2, 24, 4, 4, NARROW, [6, 12]),
+  shape(4, 24, 4, 4, NARROW, [8, 16]),
+  shape(8, 16, 4, 4, NARROW, [12, 24]),
 ]);
 /** The wide flag takes the first row holding the frame, the last only past 24 inputs. */
 const WIDE_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(8, 24, 32, 24, false, true),
-  shape(16, 5, 8, 5, false, true),
-  // Sized by the 8x16 rows of `ring-frame-fit.md`, those frames settle buffered. Wide alone, a
-  // narrow row would leave a salted read of the same frame with no key.
-  shape(16, 8, 8, 8, false, true),
-  shape(2, 49, 4, 12, false, true),
+  shape(8, 24, 32, 13, WIDE, [42, 88]),
+  shape(2, 40, 4, 8, WIDE, [11, 24]),
 ]);
-/** A frame takes the first row holding its width, the last sized by the 4x8 rows of `ring-frame-fit.md`. */
+/** A frame takes the first row holding its width. */
 const ENTRY_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(4, 8, 4, 8, true, true),
-  shape(8, 2, 4, 2, true, true),
-  shape(8, 4, 4, 4, true, true),
+  shape(4, 8, 4, 8, ENTRY, [14, 32]),
+  shape(8, 2, 4, 2, ENTRY, [14, 36]),
+  shape(8, 5, 4, 4, ENTRY, [15, 38]),
 ]);
-/** Sized by the entry table of `ring-frame-fit.md`. */
-const WIDE_ENTRY_SHAPE = shape(2, 24, 32, 12, true, true);
+const WIDE_ENTRY_SHAPE = shape(8, 8, 32, 8, ENTRY, [38, 80]);
 
 export const TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
   ...NARROW_SHAPES,
@@ -135,16 +139,26 @@ export function signerSlots(circuit: TransferKeyCircuit): number {
 
 /** Rust `RingCircuit::record_pools`, each pool takes as many subjects as records. */
 export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCapacity {
+  const row = TRANSFER_SHAPES.find((entry) => sameCircuit(shapeCircuit(entry), circuit));
+  if (row === undefined) throw new RangeError(`no catalog key ${transferCircuitType(circuit)}`);
   // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
-  const withdrawalAssets = Math.min(circuit.withdrawals, N_PUBLIC_SLOTS);
-  // An input slot takes no row, its asset reads a payment's record or a free one and a spend past
-  // the rows selects the wide key.
-  const distinct = circuit.owners + 2 * circuit.outputs + circuit.withdrawals + saltedKeys(circuit);
+  const withdrawalAssets = Math.min(row.withdrawals, N_PUBLIC_SLOTS);
   return Object.freeze({
-    own: distinct + Math.max(withdrawalAssets, N_PUBLIC_SLOTS),
-    curator: distinct + withdrawalAssets,
-    tracking: circuit.owners + circuit.outputs + trackedWithdrawals(circuit),
+    own: row.records + Math.max(withdrawalAssets, N_PUBLIC_SLOTS),
+    curator: row.records + withdrawalAssets,
+    tracking: row.tracking,
   });
+}
+
+function sameCircuit(left: TransferKeyCircuit, right: TransferKeyCircuit): boolean {
+  return (
+    left.outputs === right.outputs &&
+    left.class === right.class &&
+    left.withdrawals === right.withdrawals &&
+    left.owners === right.owners &&
+    left.entry === right.entry &&
+    left.wide === right.wide
+  );
 }
 
 /** The circuit type the prover serves the key under, Go `Key.circuitType`. */
@@ -225,52 +239,4 @@ function shapeHolds(entry: TransferShape, spend: TransferSpend): boolean {
     spend.pools.curator <= pools.curator &&
     spend.pools.tracking <= pools.tracking
   );
-}
-
-/** Rust `RowAuthorization`. */
-export interface RowAuthorization {
-  /** Rows outside the owner run, each takes its nullifier PDA alone. */
-  readonly unsignedRows: number;
-  /** Every withdrawal names one destination. */
-  readonly hiddenExit: boolean;
-  readonly enters: boolean;
-}
-
-const ROW_AUTHORIZATIONS: readonly RowAuthorization[] = Object.freeze([
-  { unsignedRows: 0, hiddenExit: false, enters: true },
-  { unsignedRows: 1, hiddenExit: false, enters: false },
-  { unsignedRows: 1, hiddenExit: true, enters: true },
-]);
-
-/** Rust `TransferAddresses::owner_rows`, one bound for the catalog's pools and the owner check. */
-export function ownerRows(authorization: RowAuthorization, addresses: TransferAddresses): number {
-  return ownerSignerCapacity(addresses) + authorization.unsignedRows;
-}
-
-/** Rust `TransferShape::public_owners`, each row spends one note. */
-function publicOwners(circuit: TransferKeyCircuit): number {
-  let most = 0;
-  for (const authorization of ROW_AUTHORIZATIONS) {
-    if (circuit.entry && !authorization.enters) continue;
-    for (let legs = 0; legs <= circuit.withdrawals; legs += 1) {
-      let rows = circuit.owners;
-      while (rows > 0 && rows > ownerRows(authorization, { nInputs: rows, coSigners: 0, legs }))
-        rows -= 1;
-      const legOwners = authorization.hiddenExit ? Math.min(legs, 1) : legs;
-      most = Math.max(most, rows + legOwners);
-    }
-  }
-  return most;
-}
-
-/** Withdrawal owners a wide key opens a tracking row for, Go `trackedWithdrawals`. */
-function trackedWithdrawals(circuit: TransferKeyCircuit): number {
-  return circuit.wide ? publicOwners(circuit) - circuit.owners : 0;
-}
-
-/** Go `saltedKeys`. */
-function saltedKeys(circuit: TransferKeyCircuit): number {
-  return circuit.wide
-    ? 2 * publicOwners(circuit) + circuit.outputs - circuit.owners - circuit.withdrawals
-    : 0;
 }

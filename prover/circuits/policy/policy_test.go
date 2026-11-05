@@ -141,7 +141,7 @@ var forgeries = []struct {
 	}},
 }
 
-// refusals each mutate one honest value, the circuit refuses inside the named function, a wide one also on the 8- and 16-output keys.
+// refusals each mutate one honest value, the circuit refuses inside the named function, a wide one also on the 8-output key.
 var refusals = []struct {
 	name    string
 	honest  func() ringpolicy.World

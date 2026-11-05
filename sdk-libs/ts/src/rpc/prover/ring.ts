@@ -44,6 +44,7 @@ import {
 } from "../../protocol/proof/proving-keys.js";
 import {
   depositPoolWidth,
+  transferKeys,
   transferPoolCapacity,
   type PolicyPoolCapacity,
   type TransferKeyCircuit,
@@ -361,9 +362,19 @@ function transferCircuit(request: TransferProofRequest): TransferKeyCircuit {
     entry: flag(request.layout.entry),
     wide: false,
   };
-  // Two keys differ by their pools alone.
-  const wide = listLength(request.ownPool.records) !== transferPoolCapacity(narrow).own;
-  return { ...narrow, wide };
+  // The layout carries no wide flag, the own pool's length names it.
+  const records = listLength(request.ownPool.records);
+  return (
+    transferKeys().find(
+      (key) =>
+        key.outputs === narrow.outputs &&
+        key.class === narrow.class &&
+        key.withdrawals === narrow.withdrawals &&
+        key.owners === narrow.owners &&
+        key.entry === narrow.entry &&
+        transferPoolCapacity(key).own === records,
+    ) ?? narrow
+  );
 }
 
 export function ringRequestKey(request: RingProofRequest): ExpectedProvingKey {

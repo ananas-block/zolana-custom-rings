@@ -63,7 +63,7 @@ func TestStreamRegionsHoldTheirPlaintext(t *testing.T) {
 	if audit.RecordBlocks*blockLen != audit.RecordStride || audit.RecordLen > audit.RecordStride || audit.TailBlocks*blockLen != audit.TailLen {
 		t.Fatal("a region differs from its plaintext")
 	}
-	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 5, Outputs: 16}} {
+	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 16, Outputs: 8}} {
 		r := shape.Ranges()
 		if r.EnvelopeLen(r.InputClass) > r.EnvelopeBlocks()*blockLen {
 			t.Fatalf("%+v: the envelope overruns its region", r)

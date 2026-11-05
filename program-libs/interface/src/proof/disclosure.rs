@@ -4,7 +4,7 @@
 
 use spr_hasher::primitives::{pack_be_chunks, PACK_BE_CHUNK_BYTES};
 
-pub const TRANSFER_OUTPUT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];
+pub const TRANSFER_OUTPUT_CAPACITIES: [usize; 3] = [2, 4, 8];
 
 /// The transfer statement's layout element, mirror `prover/circuits/audit/layout.go`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
