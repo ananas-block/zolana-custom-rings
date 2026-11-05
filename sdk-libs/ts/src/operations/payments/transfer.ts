@@ -149,8 +149,13 @@ export type RingDirectRail = RingOwnerRail | RingAnonymousRail | RingPublicOwner
 
 /** `anonymous` on an anonymous ring, `confidential` on any other. */
 export type RingRelayRail =
-  | Readonly<{ anonymous: AnonymousRingSpend; confidential?: never }>
+  | RingAnonymousRelayRail
   | Readonly<{ confidential: RingRelaySpend; anonymous?: never }>;
+
+export type RingAnonymousRelayRail = Readonly<{
+  anonymous: AnonymousRingSpend;
+  confidential?: never;
+}>;
 
 /** Ring RPC pays and co-signs a relayed spend. */
 export type RingRelaySpendParams<
@@ -310,10 +315,11 @@ export function prepareRingExitRelay<R extends RingRelayRail>(
   return relayRingSpend({ params: input, strategy: sendStrategy(input, "default") }, context);
 }
 
-export function prepareRingEntryRelay<R extends RingRelayRail>(
-  input: RingRelaySpendParams<RingEntryTransactionParams, R>,
+/** Anonymous rings alone, the in-proof owner of a confidential relay refuses every default-ring note. */
+export function prepareRingEntryRelay(
+  input: RingRelaySpendParams<RingEntryTransactionParams, RingAnonymousRelayRail>,
   context?: RequestContext,
-): Promise<PreparedSpendRelay<R>> {
+): Promise<PreparedRingRelay> {
   return relayRingSpend({ params: input, strategy: entryStrategy(input) }, context);
 }
 
@@ -374,23 +380,42 @@ export function selectRingInputs(
           });
     },
   };
+  const eligible = (entry: WalletUtxo): boolean => {
+    if (!unreserved(reserved)(entry)) return false;
+    if (input.spendExposed !== true && exposed(entry)) return false;
+    if (entry.utxo.ringProgramId === ringProgramId)
+      return inputs === "ring" || inputs === "ring-or-default";
+    return (
+      inputs !== "ring" &&
+      entry.utxo.ringProgramId === undefined &&
+      entry.ringDataHash === undefined &&
+      (inputs !== "entry" || carriesNoData([entry.dataHash]))
+    );
+  };
+  // The change of default notes enters the ring, an exact cover keeps it out.
+  const exact =
+    inputs === "default" || inputs === "entry"
+      ? exactCover({
+          candidates: wallet
+            .utxos()
+            .filter(
+              (entry) =>
+                !entry.spent &&
+                entry.utxo.asset === asset &&
+                entry.outputContext.tree === input.tree &&
+                eligible(entry),
+            ),
+          amount,
+          maxInputs: input.maxInputs,
+        })
+      : undefined;
+  if (exact !== undefined) return exact;
   return selectUtxos({
     wallet,
     asset,
     target: { kind: "cover", amount },
     policy: {
-      eligible: (entry) => {
-        if (!unreserved(reserved)(entry)) return false;
-        if (input.spendExposed !== true && exposed(entry)) return false;
-        if (entry.utxo.ringProgramId === ringProgramId)
-          return inputs === "ring" || inputs === "ring-or-default";
-        return (
-          inputs !== "ring" &&
-          entry.utxo.ringProgramId === undefined &&
-          entry.ringDataHash === undefined &&
-          (inputs !== "entry" || carriesNoData([entry.dataHash]))
-        );
-      },
+      eligible,
       ordering: "largestFirst",
       allowWideBalance: true,
       maxInputs: input.maxInputs,
@@ -398,6 +423,24 @@ export function selectRingInputs(
       errors,
     },
   }).entries;
+}
+
+/** One largest first pass over the notes no larger than the remainder, not a full subset sum search. */
+function exactCover(
+  input: Readonly<{ candidates: readonly WalletUtxo[]; amount: bigint; maxInputs: number }>,
+): readonly WalletUtxo[] | undefined {
+  const picked: WalletUtxo[] = [];
+  let remainder = input.amount;
+  const largestFirst = [...input.candidates].sort((left, right) =>
+    left.utxo.amount < right.utxo.amount ? 1 : left.utxo.amount > right.utxo.amount ? -1 : 0,
+  );
+  for (const entry of largestFirst) {
+    if (remainder === 0n || picked.length === input.maxInputs) break;
+    if (entry.utxo.amount === 0n || entry.utxo.amount > remainder) continue;
+    picked.push(entry);
+    remainder -= entry.utxo.amount;
+  }
+  return remainder === 0n ? Object.freeze(picked) : undefined;
 }
 
 /** A plain build drops the viewing history and never takes the anonymous rail. */
@@ -511,16 +554,19 @@ function entryStrategy(params: SpendBase): RingSpendStrategy<undefined> {
     errorCode: "RING_BUILD_ENTRY",
     selection: "default",
     resolve: () => Promise.resolve(undefined),
-    configure: ({ transfer, owner, asset }) => {
+    configure: ({ transfer, owner, asset, selected }) => {
       transfer.sendToRing(owner, asset, params.amount, params.ringProgramId);
+      // The change stays bound to the ring, so the approval names every selected unit.
+      const entered = selected.reduce((sum, entry) => sum + entry.utxo.amount, 0n);
+      const change = entered - params.amount;
       return {
         intent: {
           kind: "ringEntry",
           ringProgramId: params.ringProgramId,
           asset,
-          amount: params.amount,
+          amount: entered,
         },
-        summary: `ring entry of ${String(params.amount)} ${assetLabel(asset)} into ring ${params.ringProgramId}`,
+        summary: `ring entry of ${String(entered)} ${assetLabel(asset)} into ring ${params.ringProgramId}${change === 0n ? "" : `, ${String(change)} ${assetLabel(asset)} of it as change`}`,
       };
     },
   };

@@ -1519,7 +1519,7 @@ describe("anonymous ring relay", () => {
         expect.arrayContaining(moved(fixture.ringProgramId)),
       );
       expect(entered(sent.outputs, sender)).toHaveLength(2);
-      expect(requests[0]?.intent).toMatchObject({ kind: "ringEntry", amount: 25n });
+      expect(requests[0]?.intent).toMatchObject({ kind: "ringEntry", amount: 40n });
       noProofs(fixture);
     });
 
@@ -1545,7 +1545,7 @@ describe("anonymous ring relay", () => {
       expect(entered(outputs, sender)).toHaveLength(2);
     });
 
-    it("refuses change of another owner, another ring or the default ring", () => {
+    it("refuses an approval short of the change and change of another owner, another ring or the default ring", () => {
       const owner = ShieldedKeypair.generate().shieldedAddress();
       const ring = randomAddress();
       const output = (slot: Readonly<Record<string, unknown>>) =>
@@ -1557,7 +1557,7 @@ describe("anonymous ring relay", () => {
           ringProgramId: ring,
           ...slot,
         }) as unknown as ProofOutputUtxo;
-      const check = (change: Readonly<Record<string, unknown>>) =>
+      const check = (change: Readonly<Record<string, unknown>>, amount = 40n) =>
         checkRingPreparedTransfer(
           {
             owner,
@@ -1566,10 +1566,13 @@ describe("anonymous ring relay", () => {
             senderOutputCount: 1,
             outputs: [output({ amount: 15n, ...change }), output({})],
           } as unknown as PreparedTransfer,
-          { kind: "ringEntry", ringProgramId: ring, asset: SOL_MINT, amount: 25n },
+          { kind: "ringEntry", ringProgramId: ring, asset: SOL_MINT, amount },
           ringIntentMismatch,
         );
       expect(() => check({})).not.toThrow();
+      expect(() => check({}, 25n)).toThrow(
+        expect.objectContaining({ code: "RING_INTENT_MISMATCH", details: { field: "amount" } }),
+      );
       for (const wrong of [
         { ownerAddress: ShieldedKeypair.generate().shieldedAddress() },
         { ownerAddress: undefined },
@@ -1580,7 +1583,7 @@ describe("anonymous ring relay", () => {
         expect(() => check(wrong)).toThrow(
           expect.objectContaining({
             code: "RING_INTENT_MISMATCH",
-            details: { field: "change" },
+            details: { field: "outputs" },
           }),
         );
     });

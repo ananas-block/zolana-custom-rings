@@ -24,7 +24,6 @@ import { ringPolicyData, sppRingRegistration } from "../../helpers/ring-accounts
 import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
-import { ViewingHistory } from "../../../src/state/viewing-history.js";
 
 const TREE = treeAddress(0);
 const PAYER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
@@ -208,6 +207,33 @@ describe("selectRingInputs", () => {
     ).toThrow("RING_INSUFFICIENT_BALANCE");
   });
 
+  it("funds default value exactly from smaller notes so no change enters the ring", () => {
+    const wallet = ringUtxoWallet(spendingKeypair(), [
+      [40n, undefined],
+      [15n, undefined],
+      [10n, undefined],
+      [40n, RING],
+      [15n, RING],
+      [10n, RING],
+    ]);
+    const amounts = (inputs: "ring" | "default" | "entry") =>
+      selectRingInputs({
+        wallet,
+        ringProgramId: RING,
+        asset: SOL_MINT,
+        amount: 25n,
+        inputs,
+        tree: TREE,
+        maxInputs: INPUT_CAP,
+      }).map((entry) => [entry.utxo.amount, entry.utxo.ringProgramId]);
+    expect(amounts("default")).toEqual([
+      [15n, undefined],
+      [10n, undefined],
+    ]);
+    expect(amounts("entry")).toEqual(amounts("default"));
+    expect(amounts("ring")).toEqual([[40n, RING]]);
+  });
+
   it("never offers a UTXO outside the requested tree", () => {
     const wallet = ringUtxoWallet(spendingKeypair(), [
       [50n, RING, RECIPIENT],
@@ -326,29 +352,42 @@ describe("ring approval summary", () => {
             : chain.account(address),
     });
   }
-  it("approves the exact amount moved into the ring and reaches the proof with its change", async () => {
+  /** An entry of 25 from one default note of 40, the approval stops it before the prover. */
+  async function entryOf25From40(approve: RingApprovalHandler) {
     const keypair = spendingKeypair();
-    const wallet = ringUtxoWallet(keypair, [[40n, undefined]]);
-    const { approve, requests } = recordingApproval();
+    return buildRingEntryTransaction({
+      client: await approvalClient([keypair.shieldedAddress()]),
+      ringProgramId: RING,
+      wallet: ringUtxoWallet(keypair, [[40n, undefined]]),
+      keys: localKeys(keypair),
+      approve,
+      feePayer: keypair.shieldedAddress().solanaAddress(),
+      amount: 25n,
+    });
+  }
 
-    await expect(
-      buildRingEntryTransaction({
-        client: await approvalClient([keypair.shieldedAddress()]),
-        ringProgramId: RING,
-        wallet,
-        keys: localKeys(keypair),
-        approve,
-        feePayer: keypair.shieldedAddress().solanaAddress(),
-        amount: 25n,
-      }),
-    ).rejects.toMatchObject({
+  it("approves all 40 an entry of 25 moves into the ring, its change included", async () => {
+    const { approve, requests } = recordingApproval();
+    await expect(entryOf25From40(approve)).rejects.toMatchObject({
       code: "RING_BUILD_ENTRY",
       cause: { message: expect.stringContaining("proveRingTransact must not be called") },
     });
     expect(requests.map((request) => request.summary)).toEqual([
-      `ring entry of 25 SOL into ring ${RING}`,
+      `ring entry of 40 SOL into ring ${RING}, 15 SOL of it as change`,
     ]);
-    expect(requests[0]?.intent).toMatchObject({ kind: "ringEntry", amount: 25n });
+    expect(requests[0]?.intent).toMatchObject({ kind: "ringEntry", amount: 40n });
+  });
+
+  it("refuses an approval of the 25 alone while the 15 change enters the ring", async () => {
+    const approvedShort: RingApprovalHandler = (request) =>
+      approveRingUnattended({
+        ...request,
+        intent: { kind: "ringEntry", ringProgramId: RING, asset: SOL_MINT, amount: 25n },
+      });
+    await expect(entryOf25From40(approvedShort)).rejects.toMatchObject({
+      code: "RING_BUILD_ENTRY",
+      causeCode: "RING_INTENT_MISMATCH",
+    });
   });
 
   async function capturedSummary(
@@ -396,11 +435,35 @@ describe("ring approval summary", () => {
         quote: { feePayer: PAYER, validUntilSlot: 1n },
         nullifierKey: keypair.nullifierKey(),
         signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
-        history: ViewingHistory.create(keypair.shieldedAddress().viewingPublicKey, 0n),
       },
     }).catch((cause: unknown) => cause);
     return { error, requests };
   }
+
+  it("types out a confidential entry relay, its in-proof owner refuses every default note", async () => {
+    const keypair = spendingKeypair();
+    const { approve, requests } = recordingApproval();
+    await expect(
+      prepareRingEntryRelay({
+        client: await approvalClient([keypair.shieldedAddress()]),
+        ringProgramId: RING,
+        wallet: ringUtxoWallet(keypair, [[40n, undefined]]),
+        keys: localKeys(keypair),
+        approve,
+        amount: 25n,
+        // @ts-expect-error An entry relays on an anonymous ring alone.
+        confidential: {
+          quote: { feePayer: PAYER, validUntilSlot: 1n },
+          nullifierKey: keypair.nullifierKey(),
+          signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "RING_BUILD_ENTRY",
+      causeCode: "RING_IN_PROOF_DEFAULT_RING_INPUT",
+    });
+    expect(requests).toEqual([]);
+  });
 
   it("refuses an SPL entry with change on the anonymous rail, the bundle's second cell is SOL", async () => {
     const keypair = spendingKeypair();
@@ -419,7 +482,6 @@ describe("ring approval summary", () => {
           quote: { feePayer: PAYER, validUntilSlot: 1n },
           nullifierKey: keypair.nullifierKey(),
           signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
-          history: ViewingHistory.create(keypair.shieldedAddress().viewingPublicKey, 0n),
         },
       }),
     ).rejects.toMatchObject({
