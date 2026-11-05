@@ -31,7 +31,7 @@ pub struct GetWalletStatusResponse {
     /// Only an unreadable stream holds it back.
     pub history_through: u64,
     pub enrollment: WalletEnrollment,
-    /// `Unspent` notes alone, over every page.
+    /// Sums every `Unspent` note from one snapshot, empty past the first page.
     pub balances: Vec<WalletBalance>,
     pub notes: Vec<WalletNote>,
     pub cursor: Option<Base64String>,
