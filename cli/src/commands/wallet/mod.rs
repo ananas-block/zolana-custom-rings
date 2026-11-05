@@ -380,14 +380,14 @@ mod tests {
     }
 
     #[test]
-    fn a_foreign_or_older_store_is_refused() {
+    fn a_foreign_or_malformed_store_is_refused() {
         let member = Member::new(1, "foreign");
         let path = member.state_file();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let other = ViewingHistory::new(keypair(2).viewing_pubkey(), 1);
         fs::write(&path, AnonymousWallet::new(other).to_json()).unwrap();
         assert!(member.store.load().is_err(), "another viewing key");
-        fs::write(&path, r#"{"version":4,"ring":"x"}"#).unwrap();
+        fs::write(&path, r#"{"ring":"x"}"#).unwrap();
         let refused = member.store.load().unwrap_err();
         assert!(matches!(
             refused.downcast_ref::<AnonymousError>(),
