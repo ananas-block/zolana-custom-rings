@@ -220,7 +220,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     args.owner_rail.check(config.mode)?;
     let program = ctx.ring.program_id();
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
-    let held = RotatingRingKeys::new(&sender)?;
+    let held = ctx.ring_keys(&sender)?;
     let recipient = ShieldedKeypair::new_ed25519()?;
     let to = match config.mode {
         RingMode::Anonymous => {
@@ -289,7 +289,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
 pub fn run_balance(ctx: &Context, args: BalanceArgs) -> Result<()> {
     let config = ctx.ring_config()?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
-    let held = RotatingRingKeys::new(&sender)?;
+    let held = ctx.ring_keys(&sender)?;
     let mint = args.mint.map_or(SOL_MINT, |mint| mint.0);
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
     let notes = WalletScan {
@@ -311,7 +311,7 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     let config = ctx.ring_config()?;
     args.owner_rail.check(config.mode)?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
-    let held = RotatingRingKeys::new(&sender)?;
+    let held = ctx.ring_keys(&sender)?;
     let payments = PaymentPlan::of(&args).resolve(config.mode, ctx.ring.program_id())?;
     let payments = match args.reply {
         true => payments.with_reply(&held.address()?)?,
@@ -396,7 +396,7 @@ pub fn run_deposit(ctx: &Context, args: DepositArgs) -> Result<()> {
     let cosigner = CoSigner::read(ctx, &args.cosigner)?;
     let deposit_cosigner = cosigner.sign(&config, Demand::Deposit)?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
-    let held = RotatingRingKeys::new(&sender)?;
+    let held = ctx.ring_keys(&sender)?;
     let payer = ctx.member_payer(config.mode, sender.pubkey())?;
     let asset = assets::resolve(ctx.rpc(), mint)?.deposit(
         ctx.rpc(),

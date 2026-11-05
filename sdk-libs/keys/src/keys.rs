@@ -155,6 +155,11 @@ impl RotatingRingKeys {
         })
     }
 
+    /// A rotation keeps it, a wallet's stored state stays keyed by it.
+    pub fn identity_viewing_pubkey(&self) -> X25519Pubkey {
+        self.list_root.pubkey()
+    }
+
     pub(crate) const fn list_root(&self) -> &ViewingKey {
         &self.list_root
     }

@@ -27,6 +27,7 @@ pub fn key(ctx: &Context, command: KeyCommand) -> Result<()> {
     match command {
         KeyCommand::Register => register_key(ctx),
         KeyCommand::Apply => apply(ctx),
+        KeyCommand::Rotate => crate::viewing_keys::rotate(ctx),
     }
 }
 

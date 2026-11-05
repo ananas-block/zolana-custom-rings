@@ -10,7 +10,6 @@ use solana_signer::Signer;
 use spr_interface::pda;
 use spr_keypair::ShieldedKeypair;
 use spr_transaction::{SpendableDecryptionResult, WalletUtxo, SOL_MINT};
-use zolana_ring_keys::RotatingRingKeys;
 
 use crate::{
     assets, fund::MIN_AUTHORITY_BALANCE, line, member::KeyEnrollment, wallet::WalletScan, Context,
@@ -22,7 +21,7 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
     let mint = args.mint.map_or(SOL_MINT, |mint| mint.0);
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
-    let held = RotatingRingKeys::new(&sender)?;
+    let held = ctx.ring_keys(&sender)?;
     let scan = || {
         WalletScan {
             keys: &held,

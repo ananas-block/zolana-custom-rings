@@ -15,7 +15,7 @@ use custom_ring_sdk::CustomRingConfig;
 use solana_address::Address;
 use spr_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
 use spr_keypair::X25519Pubkey;
-use spr_transaction::{ShieldedKeys, SpendableDecryptionResult, WalletUtxo};
+use spr_transaction::{SpendableDecryptionResult, WalletUtxo};
 use zolana_ring_client::{
     verify_ring_owned, AnonymousSync, AnonymousWallet, RingConfidentialScan, ViewingHistory,
 };
@@ -157,7 +157,7 @@ impl WalletScan<'_> {
     }
 
     pub fn fetch_notes(self, ctx: &Context) -> Result<WalletNotes> {
-        let store = ctx.anonymous_wallet_store(self.keys.address()?.viewing_pubkey);
+        let store = ctx.anonymous_wallet_store(self.keys.identity_viewing_pubkey());
         ScanAt {
             keys: self.keys,
             assets: self.assets,
@@ -297,7 +297,7 @@ impl Context {
     }
 }
 
-fn unix_now() -> Result<i64> {
+pub(crate) fn unix_now() -> Result<i64> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("the system clock is before the Unix epoch")?
