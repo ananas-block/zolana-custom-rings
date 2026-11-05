@@ -29,7 +29,7 @@ func TestPooledPolicyModes(t *testing.T) {
 }
 
 func TestPooledPolicyConstraintMatrix(t *testing.T) {
-	for _, shape := range []ringpolicy.SectionShape{{Outputs: 2}, {Outputs: 16, Withdrawals: 32}} {
+	for _, shape := range []ringpolicy.SectionShape{{Outputs: 2}, {Outputs: 8, Withdrawals: 32}} {
 		for _, compact := range []bool{true, false} {
 			shape.Records = compactPools(compact)
 			c, err := ringpolicy.NewSectionCircuit(shape)

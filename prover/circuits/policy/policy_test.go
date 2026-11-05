@@ -59,7 +59,7 @@ func TestPolicySections(t *testing.T) {
 	for _, r := range refusals {
 		capacities := []int{0}
 		if r.wide {
-			capacities = append(capacities, 8, 16)
+			capacities = append(capacities, 8)
 		}
 		for _, outputs := range capacities {
 			name := r.name
@@ -141,7 +141,7 @@ var forgeries = []struct {
 	}},
 }
 
-// refusals each mutate one honest value, the circuit refuses inside the named function, a wide one also on the 8- and 16-output keys.
+// refusals each mutate one honest value, the circuit refuses inside the named function, a wide one also on the 8-output key.
 var refusals = []struct {
 	name    string
 	honest  func() ringpolicy.World

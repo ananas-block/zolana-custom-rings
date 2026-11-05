@@ -553,12 +553,12 @@ describe("ring approval summary", () => {
     ]);
   });
 
-  it("funds an anonymous ring's entry from at most 24 default notes, the widest entry key", async () => {
-    const widest = await anonymousEntry(24_000n, 25);
+  it("funds an anonymous ring's entry from at most 8 default notes, the widest entry key", async () => {
+    const widest = await anonymousEntry(8_000n, 9);
     expect(widest.requests.map((request) => request.intent)).toMatchObject([
-      { kind: "ringEntry", amount: 24_000n },
+      { kind: "ringEntry", amount: 8_000n },
     ]);
-    const past = await anonymousEntry(24_001n, 25);
+    const past = await anonymousEntry(8_001n, 9);
     expect(past.error).toMatchObject({
       code: "RING_BUILD_ENTRY",
       causeCode: "RING_TOO_MANY_INPUTS",

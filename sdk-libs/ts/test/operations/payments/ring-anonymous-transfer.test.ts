@@ -1006,7 +1006,7 @@ describe("anonymous ring exits and entries", () => {
     noProofs(fixture);
   });
 
-  it("refuses a frame past one transaction before any proof", async () => {
+  it("refuses an unkeyed sixteen output frame before any proof", async () => {
     const fixture = await anonymousRing();
     const sender = anonymousSender();
     const payments = await Promise.all(
@@ -1016,7 +1016,9 @@ describe("anonymous ring exits and entries", () => {
       (transfer, to) => transfer.withPayment({ to, asset: SOL_MINT, amount: 1n, reply: null }),
       rail({ fixture, sender, transfer: spend(fixture, sender) }),
     );
-    await expect(paying.prove(fixture.client)).rejects.toThrow(ringError("RING_TRANSFER_TOO_WIDE"));
+    await expect(paying.prove(fixture.client)).rejects.toThrow(
+      ringError("RING_CATALOG_KEY_MISSING"),
+    );
     noProofs(fixture);
   });
 
@@ -1716,14 +1718,14 @@ describe("anonymous ring relay", () => {
   });
 
   it("spends the widest commitment class and refuses a payment past it before approval", async () => {
-    const widest = await anonymousSpend({ notes: 49, amount: 485n });
-    expect((await payload(await widest.relay)).inputs).toHaveLength(49);
+    const widest = await anonymousSpend({ notes: 40, amount: 395n });
+    expect((await payload(await widest.relay)).inputs).toHaveLength(40);
     expect(widest.requests).toHaveLength(1);
-    const wider = await anonymousSpend({ notes: 50, amount: 495n });
+    const wider = await anonymousSpend({ notes: 41, amount: 405n });
     await expect(wider.relay).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_TOO_MANY_INPUTS",
-      cause: { details: { maximum: 49 } },
+      cause: { details: { maximum: 40 } },
     });
     expect(wider.requests).toEqual([]);
     noProofs(wider.fixture);
@@ -1743,22 +1745,22 @@ describe("anonymous ring relay", () => {
 
   it("spends the entry key's input class of default-ring notes and refuses one more", async () => {
     const entry = await anonymousSpend({
-      notes: 24,
-      amount: 235n,
+      notes: 8,
+      amount: 75n,
       ring: "default",
       policy: true,
     });
-    expect((await payload(await entry.relay)).inputs).toHaveLength(24);
+    expect((await payload(await entry.relay)).inputs).toHaveLength(8);
     expect(entry.requests).toHaveLength(1);
     const wider = await anonymousSpend({
-      notes: 25,
-      amount: 245n,
+      notes: 9,
+      amount: 85n,
       ring: "default",
     });
     await expect(wider.relay).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_TOO_MANY_INPUTS",
-      cause: { details: { maximum: 24 } },
+      cause: { details: { maximum: 8 } },
     });
     expect(wider.requests).toEqual([]);
     noProofs(wider.fixture);
@@ -2322,7 +2324,7 @@ describe("anonymous rail on a policy ring", () => {
     const { data } = await expanded(fixture, proven, "anonymous");
     expect(data.wideOwners).toBe(true);
     const { request, circuit } = anonymousTransfer(fixture);
-    expect(circuit).toBe("custom-ring-transfer-wide-8-in24-w32-s24");
+    expect(circuit).toBe("custom-ring-transfer-wide-8-in24-w32-s13");
     expect(request.rows.filter((row) => row.some((byte) => byte !== 0))).toHaveLength(5);
   });
 

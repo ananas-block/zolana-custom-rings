@@ -58,7 +58,6 @@ package transfer
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 
 	"github.com/consensys/gnark/frontend"
@@ -85,8 +84,9 @@ type TransferCircuit struct {
 }
 
 func NewTransferCircuit(shape Shape) (*TransferCircuit, error) {
-	if !slices.Contains(Shapes[:], shape) {
-		return nil, fmt.Errorf("unsupported transfer shape %+v, want one of %v", shape, Shapes)
+	shape, err := Keyed(shape)
+	if err != nil {
+		return nil, err
 	}
 	wires, err := NewSections(shape)
 	if err != nil {

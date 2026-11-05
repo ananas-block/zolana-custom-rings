@@ -25,7 +25,7 @@ import (
 
 var (
 	confidential2 = transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	wideOwners2   = transfer.Shape{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24, Wide: true}
+	wideOwners2   = transfer.Shape{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 13, Wide: true}
 	dataKey2      = confidential2
 	confEntry2    = transfer.Shape{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true, Wide: true}
 	anonymous2    = confidential2
@@ -456,8 +456,8 @@ func TestOwnerCapacity(t *testing.T) {
 		w.CoOwners = owners(n)
 		return w
 	}
-	t.Run("four and twenty four owners, plain and policy", func(t *testing.T) {
-		for _, n := range []int{3, 22} {
+	t.Run("four and thirteen owners, plain and policy", func(t *testing.T) {
+		for _, n := range []int{3, 12} {
 			shape := confidential2
 			if n > 3 {
 				shape = wideOwners2
@@ -676,40 +676,40 @@ func TestSaltedList(t *testing.T) {
 }
 
 // A count below the live notes leaves one past it.
-func Test49InputsOnTheWideKey(t *testing.T) {
-	shape := transfer.Shape{Inputs: 49, Outputs: 2, Withdrawals: 4, Owners: 12, Wide: true}
+func Test40InputsOnTheWideKey(t *testing.T) {
+	shape := transfer.Shape{Inputs: 40, Outputs: 2, Withdrawals: 4, Owners: 8, Wide: true}
 	w := ringtransfer.Signed(shape)
 	sender, key, ring := ringtransfer.Sender(t), ringtransfer.SenderNullifierPk(t), ringID(t)
-	w.Inputs = make([]ringaudit.Input, 49)
+	w.Inputs = make([]ringaudit.Input, 40)
 	for i := range w.Inputs {
 		amount := uint64(4)
-		if i == 48 {
+		if i == 39 {
 			amount = 8
 		}
 		w.Inputs[i] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, key, ring, amount, int64(51+i)), OwnerKey: ringtransfer.SenderKey()}
 	}
 	built := w.Build(t)
 	requireSolved(t, built.Circuit)
-	built.Circuit.InputCount = 48
+	built.Circuit.InputCount = 39
 	refused(t, built.Circuit, "transfer.OpenInputs")
 }
 
 // A count below the live notes leaves one past it.
-func Test24DefaultNotesOnTheWideEntryKey(t *testing.T) {
-	shape := transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 32, Owners: 12, Entry: true, Wide: true}
+func Test8DefaultNotesOnTheWideEntryKey(t *testing.T) {
+	shape := transfer.Shape{Inputs: 8, Outputs: 8, Withdrawals: 32, Owners: 8, Entry: true, Wide: true}
 	w := ringtransfer.Signed(shape)
 	sender, key := ringtransfer.Sender(t), ringtransfer.SenderNullifierPk(t)
-	w.Inputs = make([]ringaudit.Input, 24)
+	w.Inputs = make([]ringaudit.Input, 8)
 	for i := range w.Inputs {
 		amount := uint64(4)
-		if i == 23 {
+		if i == 7 {
 			amount = 8
 		}
 		w.Inputs[i] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, key, big.NewInt(0), amount, int64(51+i)), OwnerKey: ringtransfer.SenderKey(), Mint: ringaudit.FixtureMint}
 	}
 	built := w.Build(t)
 	requireSolved(t, built.Circuit)
-	built.Circuit.InputCount = 23
+	built.Circuit.InputCount = 7
 	refused(t, built.Circuit, "transfer.OpenInputs")
 }
 

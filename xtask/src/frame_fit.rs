@@ -12,13 +12,13 @@ use custom_ring_interface::{
     statement::SignerDataCounts,
     storage::Revision,
     stream::slot_tag,
-    tag, AnonymousProofData, AppMessage, BundleLayout, CredentialRead, CustomRingError,
-    CustomRingMergeIxData, CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle,
-    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, RecipientBody, Replies,
-    RingDepositAuditCapsule, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead,
-    SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN,
-    MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN,
-    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    tag, AnonymousProofData, AppMessage, BundleLayout, CustomRingError, CustomRingMergeIxData,
+    CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
+    RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
+    OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -44,6 +44,8 @@ use spr_program::instruction::{
 use spr_transaction::{serialization::confidential::ConfidentialOutputPlaintext, Data, DataRecord};
 use zolana_ring_transaction::RingDepositPlaintext;
 
+pub mod inline_capacity;
+
 /// The narrowest withdrawal capacity the catalog keys.
 const LEGS: usize = 4;
 /// `N_PUBLIC_SLOTS` distinct mints name the most SPL accounts.
@@ -53,6 +55,7 @@ const RING_PROGRAM: Address = address(0xa0);
 const PAYER: Address = address(0xa3);
 const OWN: Address = address(0xa4);
 const CURATOR: Address = address(0xa5);
+const TRACKING: Address = address(0xa6);
 const DELEGATE: Address = address(0xa8);
 const COSIGNER_RECORD: Address = address(0xac);
 const COSIGNER: Address = address(0xad);
@@ -143,17 +146,11 @@ enum Legs {
     Spl,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CredentialPlacement {
-    Shared,
-    Disjoint,
-}
-
 #[derive(Clone, Copy)]
 struct Load {
     name: &'static str,
     outsider_payer: bool,
-    /// Own and curator roots precede the credential tree accounts.
+    /// Own and curator roots precede the tracking registry.
     policy_roots: bool,
     /// The ring names a curator, its registry joins the policy roots.
     curator: bool,
@@ -170,8 +167,6 @@ struct Load {
     messages: usize,
     message_len: usize,
     second_tree: bool,
-    credential_state_trees: usize,
-    credential_placement: CredentialPlacement,
 }
 
 const MIN: Load = Load {
@@ -190,8 +185,6 @@ const MIN: Load = Load {
     messages: 0,
     message_len: 0,
     second_tree: false,
-    credential_state_trees: 1,
-    credential_placement: CredentialPlacement::Shared,
 };
 const FULL: Load = Load {
     name: "full",
@@ -201,10 +194,9 @@ const FULL: Load = Load {
     legs: Legs::Sol,
     priority_fee: true,
     every_body: true,
-    credential_state_trees: 2,
     ..MIN
 };
-const LOADS: [Load; 8] = [
+const LOADS: [Load; 6] = [
     MIN,
     FULL,
     Load {
@@ -224,19 +216,6 @@ const LOADS: [Load; 8] = [
     },
     Load {
         name: "full+2tree",
-        second_tree: true,
-        ..FULL
-    },
-    Load {
-        name: "full+4credential-shared",
-        credential_state_trees: 4,
-        second_tree: true,
-        ..FULL
-    },
-    Load {
-        name: "full+4credential-disjoint",
-        credential_state_trees: 4,
-        credential_placement: CredentialPlacement::Disjoint,
         second_tree: true,
         ..FULL
     },
@@ -322,27 +301,15 @@ impl TransferFit {
     }
 }
 
-enum CredentialFit {
-    Supported,
-    Excess { selected: usize, capacity: usize },
-}
-
 struct Measured {
     fit: Fit,
     frame_len: usize,
     spp_cpi_len: usize,
-    credentials: CredentialFit,
 }
 
 impl Measured {
-    /// Credential capacity and runtime ceilings both constrain a selected key.
     fn limits(&self) -> Vec<String> {
         let mut limits = Vec::new();
-        if let CredentialFit::Excess { selected, capacity } = self.credentials {
-            limits.push(format!(
-                "credential trees {selected} exceed key capacity {capacity}"
-            ));
-        }
         if !self.fit.fits() {
             limits.push(self.fit.over());
         }
@@ -477,7 +444,7 @@ impl Transfer {
             n_in: u8::try_from(inputs)?,
             n_out: u8::try_from(outputs)?,
             proof: &proof,
-            credential_read: credential_read(load.credential_state_trees)?,
+            tracking_revision: revision,
             own_revision: policy_roots.then_some(revision),
             policy: policy_roots.then_some(PolicyProof {
                 curator_revision: Some(revision),
@@ -549,21 +516,11 @@ impl Transfer {
         } else {
             data.interface_transfers.len()
         };
-        let circuit = match data.transfer_circuit(circuit_legs) {
-            Ok(circuit) => circuit,
+        match data.transfer_circuit(circuit_legs) {
+            Ok(_) => {}
             Err(CustomRingError::RingShapeUnkeyed) => return Ok(TransferFit::Unkeyed),
             Err(error) => return Err(error.into()),
-        };
-        let Some(capacity) = circuit.credential_capacity() else {
-            return Ok(TransferFit::Unkeyed);
-        };
-        let credentials = match data.credential_read.check_capacity(capacity) {
-            Ok(()) => CredentialFit::Supported,
-            Err(_) => CredentialFit::Excess {
-                selected: data.credential_read.state_root_indexes().len(),
-                capacity,
-            },
-        };
+        }
         let envelope = vec![14u8; stream.envelope().len];
         data.envelope = &envelope;
         let encoded = data
@@ -582,13 +539,9 @@ impl Transfer {
         };
         let owner_signers: Vec<Address> =
             (0..self.owners).map(|owner| indexed(0xc0, owner)).collect();
-        let input_tree_id = match load.credential_placement {
-            CredentialPlacement::Shared => spr_program::ADDRESS_TREE_ID,
-            CredentialPlacement::Disjoint => u16::try_from(load.credential_state_trees + 1)?,
-        };
-        let input_tree = spr_interface::pda::tree(input_tree_id);
+        let input_tree = spr_interface::pda::tree(0);
         let input_trees = match load.second_tree {
-            true => vec![input_tree, spr_interface::pda::tree(input_tree_id + 1)],
+            true => vec![input_tree, spr_interface::pda::tree(1)],
             false => vec![input_tree],
         };
         let accounts: Vec<TransactInterfaceTransferAccounts> =
@@ -637,11 +590,9 @@ impl Transfer {
             );
         }
 
-        let credential_accounts = load.credential_placement.accounts(&data.credential_read);
         let mut metas = RingPrefix {
             config: &config,
             read,
-            credential_accounts: &credential_accounts,
             co_signer,
         }
         .metas();
@@ -664,7 +615,6 @@ impl Transfer {
             fit: Fit::of(&instruction, &payer, load.priority_fee)?,
             frame_len,
             spp_cpi_len,
-            credentials,
         }))
     }
 
@@ -724,39 +674,20 @@ fn ring_config(curator: bool) -> Box<RingPolicy> {
     let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
     config.auditor_pubkey[0] = 4;
     config.records = OWN;
+    config.tracking = TRACKING;
     if curator {
         config.sources[0].registry = CURATOR;
     }
     config
 }
 
-fn address_tree() -> Address {
-    spr_interface::pda::tree(spr_program::ADDRESS_TREE_ID)
-}
-
-fn credential_read(state_trees: usize) -> Result<CredentialRead> {
-    Ok(CredentialRead::new(0, &vec![0; state_trees])?)
-}
-
-impl CredentialPlacement {
-    fn accounts(self, read: &CredentialRead) -> Vec<AccountMeta> {
-        let state_tree_start = usize::from(self == Self::Disjoint);
-        core::iter::once(address_tree())
-            .chain(
-                read.state_root_indexes()
-                    .iter()
-                    .enumerate()
-                    .map(|(index, _)| spr_interface::pda::tree((state_tree_start + index) as u16)),
-            )
-            .map(|tree| AccountMeta::new_readonly(tree, false))
-            .collect()
-    }
+fn tree() -> Address {
+    spr_interface::pda::tree(0)
 }
 
 struct RingPrefix<'a> {
     config: &'a RingPolicy,
     read: RootRead,
-    credential_accounts: &'a [AccountMeta],
     co_signer: bool,
 }
 
@@ -769,7 +700,6 @@ impl RingPrefix<'_> {
                 .root_registries(self.read)
                 .map(|registry| AccountMeta::new_readonly(registry, false)),
         );
-        metas.extend_from_slice(self.credential_accounts);
         if self.co_signer {
             metas.push(AccountMeta::new_readonly(COSIGNER_RECORD, false));
             metas.push(AccountMeta::new_readonly(COSIGNER, true));
@@ -796,10 +726,7 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
         cache_slot: None,
     };
     let encoded = CustomRingMergeIxData {
-        credential_read: match authority {
-            MergeRingAuthority::Ring => CredentialRead::new_state(0),
-            MergeRingAuthority::OwnerSigned => CredentialRead::empty(),
-        },
+        tracking_revision: Revision::from(1),
         output_ring_data_hash: [8; 32],
         authority,
         sealed: SealedMergeRecord {
@@ -811,8 +738,8 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
     }
     .serialize()?;
     let spp = MergeRingV2 {
-        input_tree: address_tree(),
-        output_tree: address_tree(),
+        input_tree: tree(),
+        output_tree: tree(),
         ring_program_id: RING_PROGRAM,
         payer: PAYER,
         owner: matches!(authority, MergeRingAuthority::OwnerSigned).then_some(indexed(0xc0, 0)),
@@ -822,14 +749,9 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
     }
     .instruction()
     .accounts;
-    let credential_accounts = match authority {
-        MergeRingAuthority::Ring => vec![AccountMeta::new_readonly(address_tree(), false)],
-        MergeRingAuthority::OwnerSigned => Vec::new(),
-    };
     let mut metas = RingPrefix {
         config: &ring_config(true),
         read: RootRead::merge(),
-        credential_accounts: &credential_accounts,
         co_signer: false,
     }
     .metas();
@@ -880,7 +802,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
         })
         .collect::<Result<Vec<_>>>()?;
     let spp = RingDeposit {
-        tree: address_tree(),
+        tree: tree(),
         depositor: PAYER,
         ring_program_id: RING_PROGRAM,
         deposits,
@@ -890,7 +812,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
         tag: tag::DEPOSIT,
         key_capacity: u8::try_from(width)?,
         proof: bytemuck::Zeroable::zeroed(),
-        credential_read: credential_read(if full { width } else { 1 })?,
+        tracking_revision: Revision::from(1),
         own_revision: Revision::from(1),
         curator_revision: Revision::from(1),
     };
@@ -898,11 +820,9 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
         true => RootRead::Policy,
         false => RootRead::None,
     };
-    let credential_accounts = CredentialPlacement::Shared.accounts(&prefix.credential_read);
     let mut metas = RingPrefix {
         config: &ring_config(true),
         read,
-        credential_accounts: &credential_accounts,
         co_signer: full,
     }
     .metas();
@@ -926,8 +846,8 @@ fn table() -> Result<String> {
         table,
         "Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings {MAX_TRANSACTION_SIZE} B, {MAX_ADDRESSES} accounts, {MAX_SIGNATURES} signatures."
     )?;
-    writeln!(table, "min: one credential state tree, no co-signer, no leg, no fee, the payer an owner where it may be. full: own and curator roots, two credential state trees, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. Shared loads start credential state trees at tree zero and reuse the first SPP input tree as the address tree. Both full+4credential loads carry four credential state trees and two SPP input trees. The disjoint load uses separate address, credential state and SPP input trees. Full deposits use one credential state tree per slot. Ring-authority merges read one credential state tree. Owner-signed merges read none. The owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
-    writeln!(table, "Every row is one transaction. fits: the row clears the transaction and CPI ceilings and the selected key credential capacity. limit: what refuses a row, rail for a shape the rail has no SPP key for, else the excess in credential trees, accounts, signatures, bytes or CPI data at that row's load. A missing catalog key has no encoded measurement.")?;
+    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
+    writeln!(table, "Every row is one transaction. fits: the row clears the transaction and CPI ceilings. limit: what refuses a row, rail for a shape the rail has no SPP key for, else the excess in accounts, signatures, bytes or CPI data at that row's load. A missing catalog key has no encoded measurement.")?;
     writeln!(table, "| shape | rail | load | catalog key | bytes | accounts | signatures | owner run | frame | SPP CPI | fits | limit |")?;
     writeln!(table, "|---|---|---|---|---|---|---|---|---|---|---|---|")?;
     for shape in SPP_SUPPORTED_SHAPES {
@@ -1098,8 +1018,6 @@ const MAXIMUM: Load = Load {
     replies: true,
     extensions: true,
     second_tree: true,
-    credential_state_trees: 4,
-    credential_placement: CredentialPlacement::Disjoint,
     ..FULL
 };
 
@@ -1210,7 +1128,7 @@ impl Transfer {
 
 fn maxima(table: &mut String) -> Result<()> {
     writeln!(table)?;
-    writeln!(table, "Maxima. Load max is full with data tails, every extension but the cache, two SPP input trees and four disjoint credential state trees, replies on anonymous frames. Each row widens one axis from that load to the largest value one transaction clears. reply: the reply length. messages: empty application messages. message bytes: one application message. over: what refuses one more step. Heap is not measured here.")?;
+    writeln!(table, "Maxima. Load max is full with data tails, every extension but the cache, two SPP input trees, replies on anonymous frames. Each row widens one axis from that load to the largest value one transaction clears. reply: the reply length. messages: empty application messages. message bytes: one application message. over: what refuses one more step. Heap is not measured here.")?;
     writeln!(
         table,
         "| shape | rail | axis | widest | frame | SPP CPI | bytes | accounts | signatures | over |"
@@ -1269,7 +1187,6 @@ mod tests {
     #[test]
     fn frame_construction_covers_declared_loads() {
         use super::*;
-        use custom_ring_interface::MAX_CREDENTIAL_READS;
 
         for shape in SPP_SUPPORTED_SHAPES {
             for frame in FrameRail::ALL {
@@ -1295,46 +1212,10 @@ mod tests {
         let transfer = Transfer {
             frame: FrameRail::Signer,
             shape: Shape::new(2, 2),
-            load: Load {
-                credential_state_trees: 4,
-                second_tree: true,
-                ..FULL
-            },
+            load: FULL,
             owners: 1,
             legs: LEGS,
         };
-        let TransferFit::Measured(shared) = transfer.measure().unwrap() else {
-            panic!("shared fixture has no catalog key");
-        };
-        let disjoint = Transfer {
-            load: Load {
-                credential_placement: CredentialPlacement::Disjoint,
-                ..transfer.load
-            },
-            ..transfer
-        }
-        .measure()
-        .unwrap();
-        let TransferFit::Measured(disjoint) = disjoint else {
-            panic!("disjoint fixture has no catalog key");
-        };
-        assert_eq!(disjoint.fit.addresses, shared.fit.addresses + 3);
-
-        let excess = Transfer {
-            load: Load {
-                credential_state_trees: MAX_CREDENTIAL_READS,
-                ..MIN
-            },
-            ..transfer
-        }
-        .measure()
-        .unwrap();
-        let TransferFit::Measured(excess) = excess else {
-            panic!("excess fixture has no catalog key");
-        };
-        assert!(matches!(excess.credentials, CredentialFit::Excess { .. }));
-        assert!(!excess.fits());
-
         let unkeyed = Transfer {
             frame: FrameRail::SignerEntry,
             shape: Shape::new(1, 16),
@@ -1368,7 +1249,6 @@ mod tests {
         let TransferFit::Measured(measured) = transfer.measure().unwrap() else {
             panic!("the spend has no catalog key");
         };
-        assert!(matches!(measured.credentials, CredentialFit::Supported));
         assert_eq!(
             measured.limits(),
             [format!("{} B", measured.fit.bytes - MAX_TRANSACTION_SIZE)]

@@ -211,39 +211,36 @@ const CONFIDENTIAL_KEY_CASES: &[KeyCase] = &[
     KeyCase::of(narrow(2, 24, 4, 4), Shape::IN1_OUT2, 1, 0),
     KeyCase::of(narrow(4, 24, 4, 4), Shape::IN1_OUT4, 1, 0),
     KeyCase::of(narrow(8, 16, 4, 4), Shape::IN1_OUT8, 1, 0),
-    KeyCase::of(narrow(16, 5, 8, 5), Shape::IN1_OUT16, 1, 0),
-    KeyCase::of(wide(16, 8, 8, 8), Shape::IN8_OUT16, 1, 0),
-    KeyCase::of(wide(2, 49, 4, 12), Shape::IN32_OUT2, 1, 0),
+    KeyCase::of(wide(2, 40, 4, 8), Shape::IN32_OUT2, 1, 0),
 ];
-const WIDE_LEG_KEY_CASES: &[KeyCase] = &[KeyCase::of(wide(8, 24, 32, 24), Shape::IN1_OUT8, 1, 5)];
+const WIDE_LEG_KEY_CASES: &[KeyCase] = &[KeyCase::of(wide(8, 24, 32, 13), Shape::IN1_OUT8, 1, 5)];
 const ENTRY_KEY_CASES: &[KeyCase] = &[
     KeyCase::of(entry(4, 8, 4, 8), Shape::IN1_OUT4, 1, 0),
     KeyCase::of(entry(8, 2, 4, 2), Shape::IN1_OUT8, 1, 0),
-    KeyCase::of(entry(8, 4, 4, 4), Shape::IN3_OUT8, 3, 0),
-    // Nine inputs pass every smaller entry key, twelve is the next published width.
-    KeyCase::of(entry(2, 24, 32, 12), Shape::IN12_OUT2, 12, 0),
+    KeyCase::of(entry(8, 5, 4, 4), Shape::IN3_OUT8, 3, 0),
+    // Five legs pass every smaller entry key.
+    KeyCase::of(entry(8, 8, 32, 8), Shape::IN1_OUT2, 1, 5),
 ];
-const SALTED_KEY_CASES: &[KeyCase] = &[KeyCase::of(wide(16, 5, 8, 5), Shape::IN1_OUT16, 1, 8)];
+const SALTED_KEY_CASES: &[KeyCase] = &[KeyCase::of(wide(8, 24, 32, 13), Shape::IN1_OUT8, 1, 4)];
 
 const CONFIDENTIAL_POLICY_CAPACITY: &[KeyCase] = &[
     KeyCase::of(narrow(2, 24, 4, 4), Shape::IN24_OUT2, 24, 4),
     KeyCase::of(narrow(4, 24, 4, 4), Shape::IN24_OUT4, 24, 4),
     KeyCase::of(narrow(8, 16, 4, 4), Shape::IN16_OUT8, 16, 4),
-    KeyCase::of(narrow(16, 5, 8, 5), Shape::IN5_OUT16, 5, 8),
-    KeyCase::of(wide(16, 8, 8, 8), Shape::IN8_OUT16, 8, 8),
 ];
 /// An audit only ring opens no record and takes the fewest accounts.
 const CONFIDENTIAL_CAPACITY: &[KeyCase] =
-    &[KeyCase::of(wide(2, 49, 4, 12), Shape::IN49_OUT2, 49, 4)];
-/// Every leg of a hidden sender names one destination, 16 is the widest input at 8 outputs.
+    &[KeyCase::of(wide(2, 40, 4, 8), Shape::IN40_OUT2, 40, 4)];
+/// Every leg of a hidden sender names one destination, each entry case at the most inputs its legs leave inline.
 const ANONYMOUS_POLICY_CAPACITY: &[KeyCase] = &[
-    KeyCase::of(wide(8, 24, 32, 24), Shape::IN16_OUT8, 16, 32),
-    KeyCase::of(entry(4, 8, 4, 8), Shape::IN8_OUT4, 8, 4),
+    KeyCase::of(wide(8, 24, 32, 13), Shape::IN8_OUT8, 8, 32),
+    KeyCase::of(entry(4, 8, 4, 8), Shape::IN6_OUT4, 6, 4),
     KeyCase::of(entry(8, 2, 4, 2), Shape::IN2_OUT8, 2, 4),
-    KeyCase::of(entry(8, 4, 4, 4), Shape::IN4_OUT8, 4, 4),
-    KeyCase::of(entry(2, 24, 32, 12), Shape::IN24_OUT2, 24, 32),
+    KeyCase::of(entry(8, 5, 4, 4), Shape::IN3_OUT8, 3, 4),
+    KeyCase::of(entry(8, 8, 32, 8), Shape::IN8_OUT2, 8, 32),
+    KeyCase::of(entry(8, 8, 32, 8), Shape::IN1_OUT8, 1, 32),
 ];
-const SALTED_CAPACITY: &[KeyCase] = &[KeyCase::of(wide(16, 5, 8, 5), Shape::IN5_OUT16, 5, 8)];
+const SALTED_CAPACITY: &[KeyCase] = &[KeyCase::of(wide(8, 24, 32, 13), Shape::IN1_OUT8, 1, 4)];
 
 /// Every prover call of a column passes here, the selection under test is the SDK's own.
 #[derive(Clone, Debug, Default)]
@@ -773,7 +770,7 @@ impl ShapeRing<'_> {
         Ok(())
     }
 
-    /// Sixteen record slots pass one transaction, the fit refuses before proving.
+    /// No inline transaction reaches sixteen outputs, the catalog keys none.
     fn sixteen_outputs_refused(&self, coverage: &mut Coverage) -> Result<()> {
         let transfer = ShapeTransfer {
             shape: Shape::IN1_OUT16,
@@ -781,9 +778,16 @@ impl ShapeRing<'_> {
             spend: Spend::Rail(RingRail::Confidential),
             legs: Vec::new(),
         };
-        match self.settle(transfer, coverage)? {
-            Settlement::TooLarge => Ok(()),
-            Settlement::Settled => Err(anyhow!("{:?} settled sixteen outputs", self.column)),
+        match self
+            .prove(transfer)
+            .map_err(|error| error.downcast::<RingError>())
+        {
+            Err(Ok(RingError::ShapeUnkeyed { .. })) => Ok(()),
+            other => Err(anyhow!(
+                "{:?} sixteen outputs not refused as unkeyed, {:?}",
+                self.column,
+                other.err()
+            )),
         }
     }
 

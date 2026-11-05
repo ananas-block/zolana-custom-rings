@@ -102,11 +102,11 @@ describe("selectTransferKey", () => {
       addresses: { ...ADDRESSES, nInputs: 5 },
       ownerSigners: 5,
     });
-    expect(wide.circuit.owners).toBe(24);
+    expect(wide.circuit.owners).toBe(13);
     expect(wide.wideOwners).toBe(true);
   });
 
-  it("routes by the published inputs, only past 24 reaches the 49 input key", () => {
+  it("routes by the published inputs, only past 24 reaches the 40 input key", () => {
     const select = (inputs: number, legs = 0, owners = 2) =>
       selectTransferKey({
         spend: { ...SPEND, inputs, legs, owners },
@@ -118,18 +118,18 @@ describe("selectTransferKey", () => {
     expect(select(24, 0, 5).circuit).toMatchObject({ class: 24, outputs: 8, wide: true });
     const widest = select(25);
     expect(widest.circuit).toMatchObject({
-      class: 49,
+      class: 40,
       outputs: 2,
       withdrawals: 4,
-      owners: 12,
+      owners: 8,
       wide: true,
     });
     expect(widest.wideOwners).toBe(true);
-    expect(transferPoolCapacity(widest.circuit)).toEqual({ own: 41, curator: 41, tracking: 18 });
-    expect(select(49, 4, 12).circuit).toEqual(widest.circuit);
+    expect(transferPoolCapacity(widest.circuit)).toEqual({ own: 27, curator: 27, tracking: 11 });
+    expect(select(40, 4, 8).circuit).toEqual(widest.circuit);
     expect(refusal(() => select(25, 5)).code).toBe("RING_CATALOG_KEY_MISSING");
-    expect(refusal(() => select(25, 0, 13)).code).toBe("RING_TOO_MANY_OWNERS");
-    expect(refusal(() => select(50)).code).toBe("RING_CATALOG_KEY_MISSING");
+    expect(refusal(() => select(25, 0, 9)).code).toBe("RING_TOO_MANY_OWNERS");
+    expect(refusal(() => select(41)).code).toBe("RING_CATALOG_KEY_MISSING");
   });
 
   it("fits an entry past the small keys on the wide entry key", () => {
@@ -149,12 +149,14 @@ describe("selectTransferKey", () => {
       }).circuit;
     expect(entered(8, 2, 4, 8)).toMatchObject({ class: 8, outputs: 4, entry: true });
     expect(entered(2, 8, 4, 2)).toMatchObject({ class: 2, outputs: 8, entry: true });
-    const wide = entered(9, 2, 0, 1);
-    expect(wide).toMatchObject({ class: 24, outputs: 2, withdrawals: 32, owners: 12, entry: true });
-    expect(transferPoolCapacity(wide)).toEqual({ own: 95, curator: 95, tracking: 45 });
+    expect(entered(5, 8, 4, 4)).toMatchObject({ class: 5, outputs: 8, entry: true });
+    const wide = entered(6, 8, 0, 1);
+    expect(wide).toMatchObject({ class: 8, outputs: 8, withdrawals: 32, owners: 8, entry: true });
+    expect(transferPoolCapacity(wide)).toEqual({ own: 83, curator: 83, tracking: 38 });
     expect(entered(1, 2, 5, 1)).toEqual(wide);
-    expect(refusal(() => entered(25, 2, 0, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
-    expect(refusal(() => entered(9, 4, 0, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
+    expect(entered(8, 4, 32, 8)).toEqual(wide);
+    expect(refusal(() => entered(9, 2, 0, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
+    expect(refusal(() => entered(1, 2, 33, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
   });
 
   it("seals a tail past the capacity of the key the spend selects", () => {

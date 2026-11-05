@@ -477,7 +477,7 @@ fn past_the_byte_ceiling_a_transfer_refuses_at_each_preproof_check() {
         Ok(CeilingDecision::Inline(size)) if size.bytes == inline.bytes
     ));
 
-    let wide = anonymous_transfer(5, 16, Some(MIN_REPLY_LEN));
+    let wide = anonymous_transfer(16, 8, Some(4 * MIN_REPLY_LEN));
     assert!(spp_cpi_bytes(&wide).unwrap().is_some());
     let refused = |bytes: usize| bytes > wide.data.len() && bytes > v1::MAX_TRANSACTION_SIZE;
     assert!(matches!(
@@ -527,24 +527,24 @@ fn an_expansion_past_the_cpi_limit_refuses() {
     let refused_at = (MIN_REPLY_LEN..)
         .find(|len| {
             matches!(
-                spp_cpi_bytes(&anonymous_transfer(5, 16, Some(*len))),
+                spp_cpi_bytes(&anonymous_transfer(5, 8, Some(*len))),
                 Err(FitError::CpiBytes { .. })
             )
         })
         .unwrap();
-    let refused = anonymous_transfer(5, 16, Some(refused_at));
+    let refused = anonymous_transfer(5, 8, Some(refused_at));
     assert!(matches!(
         decide_transfer(&refused),
         Err(AddressCeilingError::Fit(FitError::CpiBytes { bytes, limit: MAX_CPI_DATA_LEN }))
             if bytes > MAX_CPI_DATA_LEN
     ));
-    let last_fit = spp_cpi_bytes(&anonymous_transfer(5, 16, Some(refused_at - 1))).unwrap();
+    let last_fit = spp_cpi_bytes(&anonymous_transfer(5, 8, Some(refused_at - 1))).unwrap();
     assert!(last_fit.is_some_and(|bytes| bytes <= MAX_CPI_DATA_LEN));
 }
 
 #[test]
 fn the_expansion_counts_the_exact_bytes_the_program_forwards() {
-    let wide = anonymous_transfer(5, 16, Some(MIN_REPLY_LEN));
+    let wide = anonymous_transfer(5, 8, Some(MIN_REPLY_LEN));
     let parsed = RingTransactData::parse(&wide.data[1..], RingRail::Anonymous).unwrap();
     let forwarded = parsed
         .data()

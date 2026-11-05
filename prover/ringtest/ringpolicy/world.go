@@ -59,7 +59,7 @@ type World struct {
 }
 
 // OutputCapacities are the output counts of the transfer keys.
-var OutputCapacities = []int{2, 4, 8, 16}
+var OutputCapacities = []int{2, 4, 8}
 
 // Table is a policy table of ringregistry list bits, a list reads the curator registry when Curator holds its bit.
 type Table struct {
@@ -157,15 +157,8 @@ func Wide8() World {
 	return w
 }
 
-func Wide16() World {
-	w := Wide8()
-	w.Outputs = 16
-	w.Slots = append(w.Slots, Slot{Owner: Frank, Asset: AssetC, Amount: 100}, Slot{Owner: Grace, Asset: AssetB, Amount: 100}, Slot{Owner: Sender, Asset: AssetB, Amount: 50})
-	return w
-}
-
 // MemberWorlds is the honest world of every member key capacity.
-var MemberWorlds = map[int]func() World{2: Confidential, 4: Four, 8: Wide8, 16: Wide16}
+var MemberWorlds = map[int]func() World{2: Confidential, 4: Four, 8: Wide8}
 
 // Delegate is a move on the authority rail, no rule or cap binds it.
 func Delegate(outputs int) World {
