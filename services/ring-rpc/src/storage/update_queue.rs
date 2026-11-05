@@ -25,6 +25,8 @@ const FAILED: &str = "failed";
 const PENDING_APPROVAL_COLUMNS: &str = "id, signer, member, writes, awaited, valid_until_slot";
 const HEAD_COLUMNS: &str = "u.seq, u.id, u.ring, u.writes, u.signer, u.role, u.queued_slot, \
                             u.valid_until_slot";
+/// Keys bound into one delete, under every backend's parameter ceiling.
+const KEYS_PER_DELETE: usize = 256;
 /// One update past a full batch, the planner reads whether more wallet updates wait behind it.
 const OLDEST_HEADS: usize = APPLY_BATCH + 1;
 const WALLET_ROLE: &str = "wallet";
@@ -414,12 +416,10 @@ impl<'a> UpdateQueue<'a> {
             bytes(ring.as_array()),
             PENDING_APPROVAL.into(),
         ];
-        Ok(self
-            .db
-            .execute(statement(self.db, sql, values))
-            .await?
-            .rows_affected()
-            == 1)
+        let transaction = self.db.begin().await?;
+        let refused = finish_updates(&transaction, sql, values).await?;
+        transaction.commit().await?;
+        Ok(refused == 1)
     }
 
     /// An update past its valid until slot turns refused, an expired approval takes its joined
@@ -437,7 +437,9 @@ impl<'a> UpdateQueue<'a> {
             QUEUED.into(),
             integer(slot)?,
         ];
-        self.exec(sql, values).await
+        let transaction = self.db.begin().await?;
+        finish_updates(&transaction, sql, values).await?;
+        transaction.commit().await
     }
 
     /// The updates joined to `id` share its refusal, or turn pending list approval again when its approver lost the policy role.
@@ -459,9 +461,7 @@ impl<'a> UpdateQueue<'a> {
             refusal.to_string().into(),
             QUEUED.into(),
         ];
-        transaction
-            .execute(statement(&transaction, sql, values))
-            .await?;
+        finish_updates(&transaction, sql, values).await?;
         transaction.commit().await
     }
 
@@ -513,40 +513,33 @@ impl<'a> UpdateQueue<'a> {
                 vec![batch_status.into(), batch.into()],
             ))
             .await?;
-        let updates = match outcome {
-            BatchOutcome::Applied => vec![(
-                "UPDATE records_updates SET status=$1 WHERE batch=$2",
-                vec![APPLIED.into(), batch.into()],
-            )],
-            BatchOutcome::Requeued => vec![
-                (
-                    "UPDATE records_updates SET status=$1, reason=$2, batch=NULL, \
-                     attempts=attempts+1 WHERE batch=$3 AND attempts+1>=$4",
-                    vec![
-                        REFUSED.into(),
-                        RecordUpdateRefusal::BatchFailed.to_string().into(),
-                        batch.into(),
-                        integer(MAX_BATCH_ATTEMPTS)?,
-                    ],
-                ),
-                (
-                    "UPDATE records_updates SET status=$1, batch=NULL, attempts=attempts+1 \
-                     WHERE batch=$2",
-                    vec![QUEUED.into(), batch.into()],
-                ),
-            ],
-        };
-        for (sql, values) in updates {
-            transaction
-                .execute(statement(&transaction, sql, values))
-                .await?;
+        match outcome {
+            BatchOutcome::Applied => {
+                let sql = "UPDATE records_updates SET status=$1 WHERE batch=$2";
+                finish_updates(&transaction, sql, vec![APPLIED.into(), batch.into()]).await?;
+            }
+            BatchOutcome::Requeued => {
+                let sql = "UPDATE records_updates SET status=$1, reason=$2, batch=NULL, \
+                           attempts=attempts+1 WHERE batch=$3 AND attempts+1>=$4";
+                let values = vec![
+                    REFUSED.into(),
+                    RecordUpdateRefusal::BatchFailed.to_string().into(),
+                    batch.into(),
+                    integer(MAX_BATCH_ATTEMPTS)?,
+                ];
+                finish_updates(&transaction, sql, values).await?;
+                let sql = "UPDATE records_updates SET status=$1, batch=NULL, \
+                           attempts=attempts+1 WHERE batch=$2";
+                transaction
+                    .execute(statement(
+                        &transaction,
+                        sql,
+                        vec![QUEUED.into(), batch.into()],
+                    ))
+                    .await?;
+            }
         }
         transaction.commit().await
-    }
-
-    async fn exec(&self, sql: &str, values: Vec<Value>) -> Result<(), DbErr> {
-        self.db.execute(statement(self.db, sql, values)).await?;
-        Ok(())
     }
 
     async fn query_one(&self, sql: &str, values: Vec<Value>) -> Result<Option<QueryResult>, DbErr> {
@@ -560,6 +553,37 @@ impl<'a> UpdateQueue<'a> {
             .fetch_add(rows.len(), std::sync::atomic::Ordering::Relaxed);
         Ok(rows)
     }
+}
+
+/// Runs `sql`, which moves updates to applied or refused, and drops their member rows in the same
+/// transaction, so the blocking check reads the live queue alone. Returns the updates it moved.
+async fn finish_updates<C: ConnectionTrait>(
+    connection: &C,
+    sql: &str,
+    values: Vec<Value>,
+) -> Result<usize, DbErr> {
+    let finished = connection
+        .query_all(statement(
+            connection,
+            &format!("{sql} RETURNING seq"),
+            values,
+        ))
+        .await?;
+    let seqs = finished
+        .iter()
+        .map(|row| row.try_get::<i64>("", "seq"))
+        .collect::<Result<Vec<_>, _>>()?;
+    for chunk in seqs.chunks(KEYS_PER_DELETE) {
+        let sql = format!(
+            "DELETE FROM records_update_members WHERE seq IN ({})",
+            placeholders(1, chunk.len())
+        );
+        let values = chunk.iter().map(|seq| Value::from(*seq)).collect();
+        connection
+            .execute(statement(connection, &sql, values))
+            .await?;
+    }
+    Ok(seqs.len())
 }
 
 /// `$first` onward, NULL for none so an empty list matches no row.
@@ -711,6 +735,31 @@ mod tests {
     #[tokio::test]
     async fn a_ten_thousand_update_queue_plans_each_flush_from_a_bounded_read() {
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        plans_from_a_bounded_read(&store).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs RING_RPC_TEST_POSTGRES_URL"]
+    async fn a_ten_thousand_update_queue_plans_each_flush_from_a_bounded_read_on_postgres() {
+        let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
+        let store = Store::open(&url, 1).await.expect("store");
+        plans_from_a_bounded_read(&store).await;
+    }
+
+    async fn member_rows(queue: &UpdateQueue<'_>) -> i64 {
+        queue
+            .query_one(
+                "SELECT COUNT(*) AS rows FROM records_update_members",
+                Vec::new(),
+            )
+            .await
+            .expect("count")
+            .expect("row")
+            .try_get("", "rows")
+            .expect("rows")
+    }
+
+    async fn plans_from_a_bounded_read(store: &Store) {
         let queue = UpdateQueue::new(store.connection());
         let wallet = UpdateSigner::Wallet(Address::new_from_array([1; 32]));
         let authority = UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32]));
@@ -767,6 +816,12 @@ mod tests {
                 .settle(open.id, BatchOutcome::Applied)
                 .await
                 .expect("settle");
+            // Each update writes one record, an applied update keeps no member row.
+            let queued = 2 * UPDATES as usize - (flush + 1) * APPLY_BATCH;
+            assert_eq!(
+                member_rows(&queue).await,
+                i64::try_from(queued).expect("count")
+            );
         }
     }
 }
