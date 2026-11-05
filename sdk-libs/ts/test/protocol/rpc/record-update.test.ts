@@ -57,11 +57,11 @@ describe("submitRecordUpdate", () => {
   });
 });
 
-describe("enrolment", () => {
-  it("signs an enrolment byte for byte as the Rust vector and binds its awaited lists", async () => {
+describe("list approval", () => {
+  it("signs an update pending list approval byte for byte as the Rust vector and binds its awaited lists", async () => {
     const vector = JSON.parse(
       readFileSync(
-        new URL("../../../../../test-vectors/rpc/enrolment_update.json", import.meta.url),
+        new URL("../../../../../test-vectors/rpc/list_approval_update.json", import.meta.url),
         "utf8",
       ),
     ) as { wire: string; updateId: string };
@@ -74,13 +74,13 @@ describe("enrolment", () => {
       validUntilSlot: 4242n,
     })
       .withLists(listWrite({ set: [ListId.ringViewing] }))
-      .awaitingAuthority([ListId.allow])
+      .awaitingListApproval([ListId.allow])
       .sign(wallet);
     expect(JSON.stringify(encodeSubmitRecordUpdateRequest(signed))).toBe(vector.wire);
     expect(verifyRecordUpdate(signed)).toEqual(
       indexerScalars.hashBytes(vector.updateId as Parameters<typeof indexerScalars.hashBytes>[0]),
     );
-    // An enrolment signature never verifies as a plain update.
+    // A signature pending list approval never verifies as a plain update.
     const plain = { ...signed, update: { ...signed.update, awaitedLists: 0n } };
     expect(() => verifyRecordUpdate(plain)).toThrow();
   });

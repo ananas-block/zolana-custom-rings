@@ -258,7 +258,7 @@ export {
   walletGrantMember,
 } from "../protocol/membership/policy.js";
 export {
-  ENROLMENT_LISTS,
+  AWAITABLE_LISTS,
   recordUpdateQueueEntry,
   recordUpdateStatementHash,
   signRecordUpdate,

@@ -29,14 +29,14 @@ use thiserror::Error;
 use tower::{Layer, Service};
 
 use zolana_ring_client::rpc::{
-    CreateRecordsRegistryRequest, PrepareAuthorityTransferRequest, RefuseEnrolmentRequest,
+    CreateRecordsRegistryRequest, PrepareAuthorityTransferRequest, RefuseListApprovalRequest,
     SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
     CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
-    GET_DECRYPTED_TRANSACTIONS, GET_DELEGATE_NOTES, GET_LIST_SALT, GET_PENDING_ENROLMENTS,
+    GET_DECRYPTED_TRANSACTIONS, GET_DELEGATE_NOTES, GET_LIST_SALT, GET_PENDING_LIST_APPROVALS,
     GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, GET_SPEND_COVERAGE,
-    GET_WALLET_ACTIVITY, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, REFUSE_ENROLMENT,
-    RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
-    SUBMIT_RELAY,
+    GET_WALLET_ACTIVITY, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER,
+    REFUSE_LIST_APPROVAL, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
+    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -549,16 +549,16 @@ impl RatedCall {
             | GET_SPEND_COVERAGE
             | GET_DELEGATE_NOTES
             | GET_LIST_SALT
-            | GET_PENDING_ENROLMENTS => Self::SignedRead,
+            | GET_PENDING_LIST_APPROVALS => Self::SignedRead,
             SUBMIT_RECORD_UPDATE => write(
                 params
                     .parse::<SubmitRecordUpdateRequest>()
                     .ok()
                     .map(|request| request.signer.0),
             ),
-            REFUSE_ENROLMENT => write(
+            REFUSE_LIST_APPROVAL => write(
                 params
-                    .parse::<RefuseEnrolmentRequest>()
+                    .parse::<RefuseListApprovalRequest>()
                     .ok()
                     .map(|request| request.auth.authority.0),
             ),

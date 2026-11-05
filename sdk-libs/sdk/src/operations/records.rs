@@ -15,7 +15,7 @@ use zolana_ring_client::{
         method::{GetRecordUpdateStatus, SubmitRecordUpdate},
         GetRecordUpdateStatusRequest, ReaderAccess, RecordUpdate, RecordUpdateEntry,
         RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest, WalletGrant,
-        ENROLMENT_LISTS,
+        AWAITABLE_LISTS,
     },
     AsyncRingIndexer, ReaderKey, RecipientResolver, ResolvedRecipient,
 };
@@ -423,10 +423,10 @@ impl WalletRecordUpdate {
         Ok(self)
     }
 
-    /// The writer holds the update until a policy authority update sets every list of `lists` on the member.
-    pub fn awaiting_authority(mut self, lists: ListSet) -> Result<Self, RingError> {
-        if lists.is_empty() || !lists.is_subset(ENROLMENT_LISTS) {
-            return Err(RingError::EnrolmentLists);
+    /// Puts the update pending list approval, the writer sends none of its writes until a policy authority update sets every list of `lists` on the member.
+    pub fn awaiting_list_approval(mut self, lists: ListSet) -> Result<Self, RingError> {
+        if lists.is_empty() || !lists.is_subset(AWAITABLE_LISTS) {
+            return Err(RingError::InvalidAwaitedLists);
         }
         self.draft.awaited_lists = lists;
         Ok(self)

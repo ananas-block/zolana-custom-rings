@@ -19,8 +19,8 @@ export const RingRpcMethod = Object.freeze({
   setMergeSettings: "setMergeSettings",
   prepareAuthorityTransfer: "prepareAuthorityTransfer",
   getListSalt: "getListSalt",
-  getPendingEnrolments: "getPendingEnrolments",
-  refuseEnrolment: "refuseEnrolment",
+  getPendingListApprovals: "getPendingListApprovals",
+  refuseListApproval: "refuseListApproval",
   createRecordsRegistry: "createRecordsRegistry",
   setReaderGrant: "setReaderGrant",
 } as const);
@@ -144,7 +144,7 @@ export interface SubmitRecordUpdateRequest {
 
 /** Rust `RecordUpdateStatus`. */
 export type RecordUpdateStatus =
-  | Readonly<{ status: "awaitingAuthority" }>
+  | Readonly<{ status: "pendingListApproval" }>
   | Readonly<{ status: "queued" }>
   | Readonly<{ status: "submitted"; signature: Signature }>
   | Readonly<{ status: "applied"; signature: Signature; revision: bigint }>
@@ -158,15 +158,15 @@ export interface PolicyAuthorityAuth {
   readonly signature: Signature;
 }
 
-/** Rust `GetPendingEnrolmentsRequest`, `cursor` is the last enrolment of the previous page. */
-export interface GetPendingEnrolmentsRequest {
+/** Rust `GetPendingListApprovalsRequest`, `cursor` is the last update of the previous page. */
+export interface GetPendingListApprovalsRequest {
   readonly ring: Address;
   readonly cursor?: Hash;
   readonly auth: PolicyAuthorityAuth;
 }
 
-/** Rust `RefuseEnrolmentRequest`. */
-export interface RefuseEnrolmentRequest {
+/** Rust `RefuseListApprovalRequest`. */
+export interface RefuseListApprovalRequest {
   readonly ring: Address;
   readonly updateId: Hash;
   readonly auth: PolicyAuthorityAuth;
@@ -184,14 +184,14 @@ export interface RecordsRegistry {
   readonly storageAuthority: Address;
 }
 
-/** Rust `GetPendingEnrolmentsResponse`, oldest first, `nextCursor` absent on the last page. */
-export interface PendingEnrolmentsPage {
-  readonly enrolments: readonly PendingEnrolment[];
+/** Rust `GetPendingListApprovalsResponse`, oldest first, `nextCursor` absent on the last page. */
+export interface PendingListApprovalsPage {
+  readonly pending: readonly PendingListApproval[];
   readonly nextCursor?: Hash;
 }
 
-/** Rust `PendingEnrolment`, `member` is the record an approval writes. */
-export interface PendingEnrolment {
+/** Rust `PendingListApproval`, `member` is the record an approval writes. */
+export interface PendingListApproval {
   readonly updateId: Hash;
   readonly wallet: Address;
   readonly member: Hash;

@@ -25,9 +25,9 @@ use zolana_secret_file::{
 
 mod authority_transfer;
 mod delegate_read;
-mod enrolment;
 mod list_salt_read;
 mod merge_settings;
+mod policy_authority;
 mod reader_grant;
 mod record_update;
 mod relay;
@@ -40,9 +40,9 @@ mod wallet_status;
 
 pub use authority_transfer::*;
 pub use delegate_read::*;
-pub use enrolment::*;
 pub use list_salt_read::*;
 pub use merge_settings::*;
+pub use policy_authority::*;
 pub use reader_grant::*;
 pub use record_update::*;
 pub use relay::*;
@@ -76,8 +76,8 @@ pub const GET_RECORD_UPDATE_STATUS: &str = "getRecordUpdateStatus";
 pub const SET_MERGE_SETTINGS: &str = "setMergeSettings";
 pub const SET_READER_GRANT: &str = "setReaderGrant";
 pub const PREPARE_AUTHORITY_TRANSFER: &str = "prepareAuthorityTransfer";
-pub const GET_PENDING_ENROLMENTS: &str = "getPendingEnrolments";
-pub const REFUSE_ENROLMENT: &str = "refuseEnrolment";
+pub const GET_PENDING_LIST_APPROVALS: &str = "getPendingListApprovals";
+pub const REFUSE_LIST_APPROVAL: &str = "refuseListApproval";
 pub const CREATE_RECORDS_REGISTRY: &str = "createRecordsRegistry";
 /// The most UTXO hashes one `getAuditedUtxos` request names.
 pub const AUDITED_UTXOS_LIMIT: usize = 100;
@@ -85,7 +85,7 @@ pub const AUDIT_CURSOR_LIMIT: usize = 256;
 pub const AUDIT_PAGE_LIMIT: u64 = 100;
 pub const DEPOSITS_PAGE_LIMIT: u32 = 50;
 pub const MAX_DEPOSITS_PAGE_LIMIT: u32 = 200;
-pub const PENDING_ENROLMENTS_PAGE_LIMIT: usize = 100;
+pub const PENDING_LIST_APPROVALS_PAGE_LIMIT: usize = 100;
 const ATTESTATION_DOMAIN: &[u8] = b"zolana/ring-auditor-key";
 const READ_DOMAIN: &str = "zolana/ring-rpc-read";
 const AUDITOR_KEY_REQUEST_DOMAIN: &str = "zolana/ring-rpc-auditor-key-request";

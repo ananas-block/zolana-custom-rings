@@ -20,8 +20,6 @@ mod cosign_usage;
 mod database;
 #[path = "operations/enrollment_applier.rs"]
 mod enrollment_applier;
-#[path = "operations/enrolment.rs"]
-mod enrolment;
 mod error;
 #[path = "operations/escrow_merge.rs"]
 mod escrow_merge;
@@ -51,6 +49,8 @@ mod metering;
 mod migration;
 #[path = "security/origins.rs"]
 mod origins;
+#[path = "operations/policy_authority.rs"]
+mod policy_authority;
 #[path = "operations/record_update.rs"]
 mod record_update;
 #[path = "operations/record_writer.rs"]
@@ -123,8 +123,8 @@ pub use managed_merge::{
 pub use migration::Migrator;
 pub use origins::{OriginError, OriginPolicy, OriginTransport, Origins};
 pub use record_update::{
-    RecordUpdateRefusal, BATCH_WINDOW_SLOTS, MAX_BATCH_ATTEMPTS, MAX_ENROLMENT_WINDOW_SLOTS,
-    MAX_LIMIT_WINDOW_SLOTS,
+    RecordUpdateRefusal, BATCH_WINDOW_SLOTS, MAX_BATCH_ATTEMPTS, MAX_LIMIT_WINDOW_SLOTS,
+    MAX_LIST_APPROVAL_WINDOW_SLOTS,
 };
 pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
 pub use relay::{

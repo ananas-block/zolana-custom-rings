@@ -32,16 +32,16 @@ use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, CreateRecordsRegistryRequest,
     GetAuditedMergesResponse, GetAuditedUtxosRequest, GetDecryptedTransactionsRequest,
     GetDecryptedTransactionsResponse, GetDelegateNotesRequest, GetListSaltRequest,
-    GetPendingEnrolmentsRequest, GetRecordUpdateStatusRequest, GetRelayQuoteRequest,
+    GetPendingListApprovalsRequest, GetRecordUpdateStatusRequest, GetRelayQuoteRequest,
     GetRelayStatusRequest, GetSpendCoverageRequest, GetWalletActivityResponse,
     GetWalletStatusRequest, HealthResponse, PagedRead, PrepareAuthorityTransferRequest,
-    PrepareRelayRequest, RefuseEnrolmentRequest, RingDepositsRequest, RingDepositsResponse,
+    PrepareRelayRequest, RefuseListApprovalRequest, RingDepositsRequest, RingDepositsResponse,
     RingState, RingStatusRequest, RingStatusResponse, SetMergeSettingsRequest,
     SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest, CREATE_AUDITOR_KEY,
     CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_DELEGATE_NOTES, GET_LIST_SALT,
-    GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS,
+    GET_PENDING_LIST_APPROVALS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS,
     GET_SPEND_COVERAGE, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY,
-    REFUSE_ENROLMENT, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
+    REFUSE_LIST_APPROVAL, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
     SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
@@ -322,18 +322,18 @@ pub fn rpc_module<S: TransactionSource + 'static>(
     )?;
     method(
         &mut module,
-        GET_PENDING_ENROLMENTS,
-        |hub, request: GetPendingEnrolmentsRequest| async move {
+        GET_PENDING_LIST_APPROVALS,
+        |hub, request: GetPendingListApprovalsRequest| async move {
             let _authentication = hub.admit(Lane::Authentication)?;
-            hub.pending_enrolments(&request).await
+            hub.pending_list_approvals(&request).await
         },
     )?;
     method(
         &mut module,
-        REFUSE_ENROLMENT,
-        |hub, request: RefuseEnrolmentRequest| async move {
+        REFUSE_LIST_APPROVAL,
+        |hub, request: RefuseListApprovalRequest| async move {
             let _authentication = hub.admit(Lane::Authentication)?;
-            hub.refuse_enrolment(&request).await
+            hub.refuse_list_approval(&request).await
         },
     )?;
     method(

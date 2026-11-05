@@ -1,4 +1,4 @@
-//! Record updates refuse an enrolment past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an enrolment for its allow entry, page the enrolments that await the policy authority, apply a batch that lands after its status lookup once, and requeue an expired batch once.
+//! Record updates refuse an update pending list approval past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an update pending list approval for its allow entry, page the updates pending list approval, apply a batch that lands after its status lookup once, and requeue an expired batch once.
 
 use std::{collections::VecDeque, sync::atomic::AtomicU64};
 
@@ -14,10 +14,10 @@ use jsonrpsee::MethodsError;
 use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
 use zolana_ring_client::rpc::{
-    GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest,
+    GetPendingListApprovalsRequest, GetPendingListApprovalsResponse, GetRecordUpdateStatusRequest,
     ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry, RecordUpdateStatus,
-    SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_ENROLMENTS,
-    PENDING_ENROLMENTS_PAGE_LIMIT, RECORD_UPDATE_SLOTS, SUBMIT_RECORD_UPDATE,
+    SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_LIST_APPROVALS,
+    PENDING_LIST_APPROVALS_PAGE_LIMIT, RECORD_UPDATE_SLOTS, SUBMIT_RECORD_UPDATE,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
@@ -28,8 +28,8 @@ use zolana_ring_member_registry::ApplyProofInputs;
 use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
     ChainOutcome, ChainSubmit, LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal,
-    RecordWriter, StorageChain, Store, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS,
-    MAX_LIMIT_WINDOW_SLOTS,
+    RecordWriter, StorageChain, Store, BATCH_WINDOW_SLOTS, MAX_LIMIT_WINDOW_SLOTS,
+    MAX_LIST_APPROVAL_WINDOW_SLOTS,
 };
 
 use super::*;
@@ -442,8 +442,8 @@ fn signed_update(signer: &Keypair, update: RecordUpdate) -> SubmitRecordUpdateRe
     request
 }
 
-/// An enrolment that sets ring-viewing on the wallet's own record.
-fn viewing_enrolment(wallet: &Keypair, awaited: ListId) -> SubmitRecordUpdateRequest {
+/// An update pending list approval that sets ring-viewing on the wallet's own record.
+fn viewing_update_pending_approval(wallet: &Keypair, awaited: ListId) -> SubmitRecordUpdateRequest {
     let member = Member::owner_tag(wallet.pubkey().as_array()).expect("member");
     let viewing = ListId::RingViewing.record_bit();
     signed_update(
@@ -464,57 +464,57 @@ fn viewing_enrolment(wallet: &Keypair, awaited: ListId) -> SubmitRecordUpdateReq
 }
 
 #[tokio::test]
-async fn an_enrolment_past_its_window_is_refused() {
+async fn an_update_pending_approval_past_its_window_is_refused() {
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
     let wallet = Keypair::new();
-    let enrolment = viewing_enrolment(&wallet, ListId::Allow);
+    let pending = viewing_update_pending_approval(&wallet, ListId::Allow);
     let late = signed_update(
         &wallet,
         RecordUpdate {
-            valid_until_slot: NOW + MAX_ENROLMENT_WINDOW_SLOTS + 1,
-            ..enrolment.update
+            valid_until_slot: NOW + MAX_LIST_APPROVAL_WINDOW_SLOTS + 1,
+            ..pending.update
         },
     );
 
     assert_eq!(
         refusal(records.submit(late).await),
-        RecordUpdateRefusal::EnrolmentWindow.code()
+        RecordUpdateRefusal::ListApprovalWindow.code()
     );
 }
 
 #[tokio::test]
-async fn pending_enrolments_page_oldest_first_after_a_cursor() {
+async fn pending_list_approvals_page_oldest_first_after_a_cursor() {
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
     let mut submitted = Vec::new();
-    for _ in 0..=PENDING_ENROLMENTS_PAGE_LIMIT {
-        let enrolment = viewing_enrolment(&Keypair::new(), ListId::Allow);
-        submitted.push(records.submit(enrolment).await.expect("awaiting").update_id);
+    for _ in 0..=PENDING_LIST_APPROVALS_PAGE_LIMIT {
+        let pending = viewing_update_pending_approval(&Keypair::new(), ListId::Allow);
+        submitted.push(records.submit(pending).await.expect("awaiting").update_id);
     }
     let target = ReadTarget {
         cluster: GENESIS,
         service: records.hub.service_pubkey(),
         ring: RING,
     };
-    let list = |page: GetPendingEnrolmentsRequest| {
+    let list = |page: GetPendingListApprovalsRequest| {
         records
             .module
-            .call::<_, GetPendingEnrolmentsResponse>(GET_PENDING_ENROLMENTS, as_object(page))
+            .call::<_, GetPendingListApprovalsResponse>(GET_PENDING_LIST_APPROVALS, as_object(page))
     };
-    let read = || GetPendingEnrolmentsRequest::read(target, authority().pubkey());
+    let read = || GetPendingListApprovalsRequest::read(target, authority().pubkey());
 
     let first = list(read().sign(&authority()).expect("signed list"))
         .await
         .expect("first page");
     let listed: Vec<_> = first
-        .enrolments
+        .pending
         .iter()
         .map(|row| row.update_id.clone())
         .collect();
-    assert_eq!(listed, submitted[..PENDING_ENROLMENTS_PAGE_LIMIT]);
+    assert_eq!(listed, submitted[..PENDING_LIST_APPROVALS_PAGE_LIMIT]);
     let cursor = first.next_cursor.expect("a second page");
-    assert_eq!(cursor, submitted[PENDING_ENROLMENTS_PAGE_LIMIT - 1]);
+    assert_eq!(cursor, submitted[PENDING_LIST_APPROVALS_PAGE_LIMIT - 1]);
 
     let last = list(
         read()
@@ -524,20 +524,20 @@ async fn pending_enrolments_page_oldest_first_after_a_cursor() {
     )
     .await
     .expect("last page");
-    let [only] = last.enrolments.as_slice() else {
-        panic!("one enrolment past the cursor, {last:?}");
+    let [only] = last.pending.as_slice() else {
+        panic!("one update past the cursor, {last:?}");
     };
-    assert_eq!(only.update_id, submitted[PENDING_ENROLMENTS_PAGE_LIMIT]);
+    assert_eq!(only.update_id, submitted[PENDING_LIST_APPROVALS_PAGE_LIMIT]);
     assert_eq!(last.next_cursor, None);
 }
 
 #[tokio::test]
-async fn database_mode_refuses_an_enrolment_awaiting_a_tree_reader_list() {
+async fn database_mode_refuses_an_update_awaiting_a_tree_reader_list() {
     let records = Records::with_reader_grants(ReaderGrantStore::Database).await;
     records.serves_own(ListId::Reader);
 
     let awaiting = records
-        .submit(viewing_enrolment(&wallet(), ListId::Reader))
+        .submit(viewing_update_pending_approval(&wallet(), ListId::Reader))
         .await;
 
     assert_eq!(
@@ -579,18 +579,18 @@ async fn an_authority_write_queued_before_a_policy_rotation_is_refused_and_a_wal
 {
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
-    let enrolling = Keypair::new();
-    let enrolled = *Member::owner_tag(enrolling.pubkey().as_array())
+    let applicant = Keypair::new();
+    let applicant_member = *Member::owner_tag(applicant.pubkey().as_array())
         .expect("member")
         .as_bytes();
-    let enrolment = records
-        .submit(viewing_enrolment(&enrolling, ListId::Allow))
+    let pending = records
+        .submit(viewing_update_pending_approval(&applicant, ListId::Allow))
         .await
         .expect("awaiting");
     let approval = records
         .submit(signed(
             &authority(),
-            vec![list_write(enrolled, ListId::Allow)],
+            vec![list_write(applicant_member, ListId::Allow)],
         ))
         .await
         .expect("queued");
@@ -620,10 +620,10 @@ async fn an_authority_write_queued_before_a_policy_rotation_is_refused_and_a_wal
             reason: RecordUpdateRefusal::AuthorityLapsed.to_string()
         }
     );
-    // The approval lapsed, the enrolment it joined waits for the new policy authority.
+    // The approval lapsed, the update it joined waits for the new policy authority.
     assert_eq!(
-        records.status(&enrolment).await,
-        RecordUpdateStatus::AwaitingAuthority
+        records.status(&pending).await,
+        RecordUpdateStatus::PendingListApproval
     );
 }
 
@@ -882,7 +882,7 @@ async fn a_wallet_reader_revocation_goes_out_graced_and_a_block_entry_immediate_
 }
 
 #[tokio::test]
-async fn a_wallet_enrolment_awaits_the_policy_authority_then_lands_with_its_allow_entry() {
+async fn a_wallet_update_pending_list_approval_lands_with_its_allow_entry() {
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
     let wallet = wallet();
@@ -892,8 +892,8 @@ async fn a_wallet_enrolment_awaits_the_policy_authority_then_lands_with_its_allo
             .as_bytes(),
     );
     let allowed = ListId::Allow.record_bit();
-    let enrolment = records
-        .submit(viewing_enrolment(&wallet, ListId::Allow))
+    let pending_update = records
+        .submit(viewing_update_pending_approval(&wallet, ListId::Allow))
         .await
         .expect("awaiting");
     records
@@ -903,8 +903,8 @@ async fn a_wallet_enrolment_awaits_the_policy_authority_then_lands_with_its_allo
     records.writer.flush().await.expect("flush");
     assert!(records.chain.sent.lock().unwrap().is_empty());
     assert_eq!(
-        records.status(&enrolment).await,
-        RecordUpdateStatus::AwaitingAuthority
+        records.status(&pending_update).await,
+        RecordUpdateStatus::PendingListApproval
     );
 
     let target = ReadTarget {
@@ -912,22 +912,22 @@ async fn a_wallet_enrolment_awaits_the_policy_authority_then_lands_with_its_allo
         service: records.hub.service_pubkey(),
         ring: RING,
     };
-    let pending: GetPendingEnrolmentsResponse = records
+    let pending: GetPendingListApprovalsResponse = records
         .module
         .call(
-            GET_PENDING_ENROLMENTS,
+            GET_PENDING_LIST_APPROVALS,
             as_object(
-                GetPendingEnrolmentsRequest::read(target, authority().pubkey())
+                GetPendingListApprovalsRequest::read(target, authority().pubkey())
                     .sign(&authority())
                     .expect("signed list"),
             ),
         )
         .await
         .expect("pending");
-    let [listed] = pending.enrolments.as_slice() else {
-        panic!("one pending enrolment, {pending:?}");
+    let [listed] = pending.pending.as_slice() else {
+        panic!("one pending update, {pending:?}");
     };
-    assert_eq!(listed.update_id, enrolment.update_id);
+    assert_eq!(listed.update_id, pending_update.update_id);
     assert_eq!(listed.member, member);
 
     records
@@ -954,7 +954,7 @@ async fn a_wallet_enrolment_awaits_the_policy_authority_then_lands_with_its_allo
     *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
     records.writer.flush().await.expect("settle");
     assert!(matches!(
-        records.status(&enrolment).await,
+        records.status(&pending_update).await,
         RecordUpdateStatus::Applied { .. }
     ));
 }

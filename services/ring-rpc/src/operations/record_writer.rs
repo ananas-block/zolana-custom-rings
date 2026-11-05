@@ -18,9 +18,9 @@ use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::Hash;
 use zolana_ring_client::{
     rpc::{
-        GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest,
-        PendingEnrolment, RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest,
-        SubmitRecordUpdateResponse, PENDING_ENROLMENTS_PAGE_LIMIT,
+        GetPendingListApprovalsRequest, GetPendingListApprovalsResponse,
+        GetRecordUpdateStatusRequest, PendingListApproval, RecordUpdateId, RecordUpdateStatus,
+        SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, PENDING_LIST_APPROVALS_PAGE_LIMIT,
     },
     StorageTip,
 };
@@ -32,11 +32,13 @@ use crate::{
     error::{redacted, RingRpcError},
     landing::{Attempt, ChainOutcome, Landing},
     record_update::{
-        limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate, EnrolmentApproval,
+        limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate, ListApproval,
         QueuedCheck, QueuedState, RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
     },
     storage_chain::StorageChain,
-    update_queue::{AwaitingPage, BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
+    update_queue::{
+        BatchOutcome, NewBatch, NewUpdate, OpenBatch, PendingApprovalPage, UpdateQueue,
+    },
     upstream::VerifiedOpenings,
 };
 
@@ -169,12 +171,14 @@ impl RecordWriter {
                 update_id: update.id,
             });
         }
-        // An expired enrolment joins no approval.
-        queue.expire_awaiting(request.registry.0, slot).await?;
-        let approves = EnrolmentApproval {
+        // An expired pending update joins no approval.
+        queue
+            .expire_pending_approvals(request.registry.0, slot)
+            .await?;
+        let approves = ListApproval {
             update: &update,
-            awaiting: &queue
-                .awaiting_members(ring, &update.written_members()?)
+            pending: &queue
+                .pending_approvals(ring, &update.written_members()?)
                 .await?,
         }
         .decide()?;
@@ -201,45 +205,45 @@ impl RecordWriter {
             .ok_or_else(|| RecordUpdateRefusal::UnknownUpdate.into())
     }
 
-    /// One page of the ring's enrolments that await its policy authority, oldest first.
-    pub(crate) async fn pending_enrolments(
+    /// One page of the ring's updates pending list approval, oldest first.
+    pub(crate) async fn pending_list_approvals(
         &self,
         signer: Address,
-        request: &GetPendingEnrolmentsRequest,
-    ) -> Result<GetPendingEnrolmentsResponse, RingRpcError> {
+        request: &GetPendingListApprovalsRequest,
+    ) -> Result<GetPendingListApprovalsResponse, RingRpcError> {
         let ring = request.ring.0;
         self.require_policy_authority(ring, signer).await?;
-        let mut enrolments = self
+        let mut pending = self
             .queue()
-            .awaiting_page(AwaitingPage {
+            .pending_approval_page(PendingApprovalPage {
                 ring,
                 cursor: request.cursor.as_ref().map(|cursor| cursor.0 .0),
-                limit: PENDING_ENROLMENTS_PAGE_LIMIT + 1,
+                limit: PENDING_LIST_APPROVALS_PAGE_LIMIT + 1,
             })
             .await?
             .ok_or(RecordUpdateRefusal::UnknownUpdate)?
             .into_iter()
-            .map(|enrolment| PendingEnrolment {
-                update_id: RecordUpdateId(Hash(enrolment.id)),
-                wallet: enrolment.wallet.into(),
-                member: Hash(enrolment.member),
-                awaited_lists: enrolment.lists.record_bits(),
-                valid_until_slot: enrolment.valid_until_slot,
+            .map(|approval| PendingListApproval {
+                update_id: RecordUpdateId(Hash(approval.id)),
+                wallet: approval.wallet.into(),
+                member: Hash(approval.member),
+                awaited_lists: approval.lists.record_bits(),
+                valid_until_slot: approval.valid_until_slot,
             })
             .collect::<Vec<_>>();
-        let next_cursor = (enrolments.len() > PENDING_ENROLMENTS_PAGE_LIMIT).then(|| {
-            enrolments.truncate(PENDING_ENROLMENTS_PAGE_LIMIT);
-            enrolments[PENDING_ENROLMENTS_PAGE_LIMIT - 1]
+        let next_cursor = (pending.len() > PENDING_LIST_APPROVALS_PAGE_LIMIT).then(|| {
+            pending.truncate(PENDING_LIST_APPROVALS_PAGE_LIMIT);
+            pending[PENDING_LIST_APPROVALS_PAGE_LIMIT - 1]
                 .update_id
                 .clone()
         });
-        Ok(GetPendingEnrolmentsResponse {
-            enrolments,
+        Ok(GetPendingListApprovalsResponse {
+            pending,
             next_cursor,
         })
     }
 
-    pub(crate) async fn refuse_enrolment(
+    pub(crate) async fn refuse_list_approval(
         &self,
         ring: Address,
         signer: Address,
@@ -247,11 +251,15 @@ impl RecordWriter {
     ) -> Result<RecordUpdateStatus, RingRpcError> {
         self.require_policy_authority(ring, signer).await?;
         let _queueing = self.submits.lock().await;
-        if !self.queue().refuse_awaiting(ring, &update_id.0 .0).await? {
-            return Err(RecordUpdateRefusal::UnknownEnrolment.into());
+        if !self
+            .queue()
+            .refuse_pending_approval(ring, &update_id.0 .0)
+            .await?
+        {
+            return Err(RecordUpdateRefusal::UnknownListApproval.into());
         }
         Ok(RecordUpdateStatus::Refused {
-            reason: RecordUpdateRefusal::EnrolmentRefused.to_string(),
+            reason: RecordUpdateRefusal::ListApprovalRefused.to_string(),
         })
     }
 
@@ -285,9 +293,9 @@ impl RecordWriter {
         if let Some(batch) = queue.open_batch(registry).await? {
             return self.settle(batch).await;
         }
-        // 2. Each live update is within its valid until slot, an enrolment's own included, and its signer holds the role it signed as.
+        // 2. Each live update is within its valid until slot, a joined pending update's own included, and its signer holds the role it signed as.
         let slot = self.chain.slot().await?;
-        queue.expire_awaiting(registry, slot).await?;
+        queue.expire_pending_approvals(registry, slot).await?;
         let queued = queue.queued(registry).await?;
         let mut policies = HashMap::new();
         for update in &queued {

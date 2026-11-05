@@ -33,8 +33,6 @@ pub mod controls;
 pub mod delegate;
 #[path = "commands/ring/deploy.rs"]
 pub mod deploy;
-#[path = "commands/membership/enrolment.rs"]
-pub mod enrolment;
 #[path = "runtime/file.rs"]
 pub mod file;
 #[path = "commands/wallet/notes/fund.rs"]
@@ -45,6 +43,8 @@ pub mod init;
 pub mod keys;
 #[path = "commands/wallet/notes/list.rs"]
 pub mod list;
+#[path = "commands/membership/list_approval.rs"]
+pub mod list_approval;
 #[path = "commands/ring/localnet.rs"]
 pub mod localnet;
 #[path = "commands/membership/member.rs"]
@@ -265,7 +265,7 @@ fn dispatch(ctx: &mut Context, command: Command) -> Result<()> {
         Command::Cosigner(command) => controls::cosigner(ctx, command),
         Command::Delegate(command) => controls::delegate(ctx, command),
         Command::Key(command) => member::key(ctx, command),
-        Command::Enrolment(command) => enrolment::run(ctx, command),
+        Command::ListApproval(command) => list_approval::run(ctx, command),
         Command::List(command) => list::run(ctx, command),
         Command::Policy(command) => policy::run(ctx, command),
         Command::AuditorKey(args) => keys::run(&ctx.path(&args.key_file), args.create),

@@ -1,51 +1,52 @@
-//! `enrolment`, the policy authority's side of a wallet enrolment that awaits authority lists.
+//! `list-approval`, the policy authority's side of a wallet update pending list approval.
+//! Approval is the authority's own record update, the off chain check behind it stays with the authority. Not tracking enrollment, see `member`.
 
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_sdk::AuthorityRecordUpdate;
 use solana_address::Address;
 use solana_signer::Signer;
-use zolana_ring_client::rpc::PendingEnrolment;
+use zolana_ring_client::rpc::PendingListApproval;
 use zolana_ring_policy::{ListChange, ListSet, Member};
 
-use crate::{line, Context, EnrolmentCommand};
+use crate::{line, Context, ListApprovalCommand};
 
-pub fn run(ctx: &Context, command: EnrolmentCommand) -> Result<()> {
+pub fn run(ctx: &Context, command: ListApprovalCommand) -> Result<()> {
     match command {
-        EnrolmentCommand::Pending => pending(ctx),
-        EnrolmentCommand::Approve { wallet } => approve(ctx, wallet),
+        ListApprovalCommand::Pending => pending(ctx),
+        ListApprovalCommand::Approve { wallet } => approve(ctx, wallet),
     }
 }
 
 fn pending(ctx: &Context) -> Result<()> {
-    let enrolments = read_pending(ctx)?;
-    if enrolments.is_empty() {
+    let pending = read_pending(ctx)?;
+    if pending.is_empty() {
         line("pending", "none");
     }
-    for enrolment in &enrolments {
+    for update in &pending {
         line(
             "wallet",
             format_args!(
                 "{} awaits {} until slot {}",
-                enrolment.wallet.0,
-                list_names(awaited(enrolment)?),
-                enrolment.valid_until_slot
+                update.wallet.0,
+                list_names(awaited(update)?),
+                update.valid_until_slot
             ),
         );
     }
     Ok(())
 }
 
-/// The writer lands the wallet's enrolments in the same batch as the approval.
+/// The writer lands the wallet's pending updates in the same batch as the approval.
 fn approve(ctx: &Context, wallet: Address) -> Result<()> {
     let lists = read_pending(ctx)?
         .iter()
-        .filter(|enrolment| enrolment.wallet.0 == wallet)
-        .try_fold(ListSet::EMPTY, |lists, enrolment| {
-            Ok::<_, anyhow::Error>(lists.union(awaited(enrolment)?))
+        .filter(|update| update.wallet.0 == wallet)
+        .try_fold(ListSet::EMPTY, |lists, update| {
+            Ok::<_, anyhow::Error>(lists.union(awaited(update)?))
         })?;
     ensure!(
         !lists.is_empty(),
-        "no enrolment of {wallet} awaits the policy authority"
+        "no update of {wallet} is pending list approval"
     );
     let authority = ctx.authority()?;
     let write = ListChange {
@@ -65,13 +66,13 @@ fn approve(ctx: &Context, wallet: Address) -> Result<()> {
     Ok(())
 }
 
-fn read_pending(ctx: &Context) -> Result<Vec<PendingEnrolment>> {
+fn read_pending(ctx: &Context) -> Result<Vec<PendingListApproval>> {
     ctx.ring_rpc()
-        .pending_enrolments(ctx.ring_rpc_target()?, ctx.authority()?)
+        .pending_list_approvals(ctx.ring_rpc_target()?, ctx.authority()?)
 }
 
-fn awaited(enrolment: &PendingEnrolment) -> Result<ListSet> {
-    ListSet::from_record_bits(enrolment.awaited_lists)
+fn awaited(update: &PendingListApproval) -> Result<ListSet> {
+    ListSet::from_record_bits(update.awaited_lists)
         .context("the ring rpc named a list bit no list owns")
 }
 

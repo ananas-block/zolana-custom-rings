@@ -56,7 +56,7 @@ import {
 } from "../operations/management/reader-access.js";
 import { verifyRecordUpdate } from "../protocol/ring-rpc/record-update.js";
 import {
-  decodePendingEnrolmentsPage,
+  decodePendingListApprovalsPage,
   decodeRecordsRegistry,
   decodeRecordUpdateStatus,
   decodeRelayQuote,
@@ -65,12 +65,12 @@ import {
   decodeRelayStep,
   decodeSubmitRecordUpdate,
   encodeCreateRecordsRegistryRequest,
-  encodeGetPendingEnrolmentsRequest,
+  encodeGetPendingListApprovalsRequest,
   encodeGetListSaltRequest,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
   encodeRecordUpdateStatusRequest,
-  encodeRefuseEnrolmentRequest,
+  encodeRefuseListApprovalRequest,
   encodeRelayQuoteRequest,
   encodeRelayStatusRequest,
   encodeSetReaderGrantRequest,
@@ -83,15 +83,15 @@ import {
   type AuthorityTransfer,
   type PolicyAuthorityAuth,
   type CreateRecordsRegistryRequest,
-  type GetPendingEnrolmentsRequest,
-  type PendingEnrolmentsPage,
+  type GetPendingListApprovalsRequest,
+  type PendingListApprovalsPage,
   type GetListSaltRequest,
   type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
   type ReaderGrantAction,
   type RecordsRegistry,
   type RecordUpdateStatus,
-  type RefuseEnrolmentRequest,
+  type RefuseListApprovalRequest,
   type RelayQuote,
   type RelayQuoteRequest,
   type RelayStatus,
@@ -131,7 +131,7 @@ const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request";
 const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos";
 const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer";
 const LIST_SALT_DOMAIN = "zolana/ring-rpc-list-salt";
-const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment";
+const POLICY_AUTHORITY_DOMAIN = "zolana/ring-rpc-policy-authority";
 const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant";
 const WALLET_STATUS_DOMAIN = "zolana/ring-rpc-wallet-status";
 const SPEND_COVERAGE_DOMAIN = "zolana/ring-rpc-spend-coverage";
@@ -465,26 +465,26 @@ export class RingListSaltRequest {
   }
 }
 
-/** Rust `ListEnrolments`, `RefuseEnrolment` or `CreateRecords`, the action the policy authority signs. */
-export type RingEnrolmentAction =
+/** Rust `ListPendingApprovals`, `RefuseListApproval` or `CreateRecords`, the action the policy authority signs. */
+export type PolicyAuthorityAction =
   | Readonly<{ kind: "list"; cursor?: Hash }>
   | Readonly<{ kind: "refuse"; updateId: Hash }>
   | Readonly<{ kind: "createRecords" }>;
 
-/** Mirrors Rust `EnrolmentAttestation::message`. */
-export function enrolmentAttestation(
+/** Mirrors Rust `PolicyAuthorityAttestation::message`. */
+export function policyAuthorityAttestation(
   input: Readonly<{
     target: RingReadTarget;
     authority: Address;
-    action: RingEnrolmentAction;
+    action: PolicyAuthorityAction;
     timestamp: bigint;
     nonce: Bytes32;
   }>,
 ): Uint8Array {
-  const action = enrolmentActionLine(input.action);
+  const action = policyAuthorityActionLine(input.action);
   return encoder.encode(
     [
-      ENROLMENT_DOMAIN,
+      POLICY_AUTHORITY_DOMAIN,
       ...targetLines(input.target),
       `authority: ${input.authority}`,
       `action: ${action}`,
@@ -494,7 +494,7 @@ export function enrolmentAttestation(
   );
 }
 
-function enrolmentActionLine(action: RingEnrolmentAction): string {
+function policyAuthorityActionLine(action: PolicyAuthorityAction): string {
   switch (action.kind) {
     case "refuse":
       return `refuse ${indexerScalars.checkedHash(action.updateId, "updateId")}`;
@@ -507,13 +507,13 @@ function enrolmentActionLine(action: RingEnrolmentAction): string {
   }
 }
 
-/** Rust `GetPendingEnrolmentsRequest::read` signed by the policy authority, the page after `cursor`. */
-export async function signPendingEnrolmentsRequest(
+/** Rust `GetPendingListApprovalsRequest::read` signed by the policy authority, the page after `cursor`. */
+export async function signPendingListApprovalsRequest(
   target: RingReadTarget,
   authority: MessagePartialSigner,
   cursor?: Hash,
   timestamp?: bigint,
-): Promise<GetPendingEnrolmentsRequest> {
+): Promise<GetPendingListApprovalsRequest> {
   const checked = checkedReadTarget(target);
   const action =
     cursor === undefined ? { kind: "list" as const } : { kind: "list" as const, cursor };
@@ -524,13 +524,13 @@ export async function signPendingEnrolmentsRequest(
   });
 }
 
-/** Rust `RefuseEnrolmentRequest::refusal` signed by the policy authority. */
-export async function signRefuseEnrolmentRequest(
+/** Rust `RefuseListApprovalRequest::refusal` signed by the policy authority. */
+export async function signRefuseListApprovalRequest(
   target: RingReadTarget,
   authority: MessagePartialSigner,
   updateId: Hash,
   timestamp?: bigint,
-): Promise<RefuseEnrolmentRequest> {
+): Promise<RefuseListApprovalRequest> {
   const checked = checkedReadTarget(target);
   return Object.freeze({
     ring: checked.ringProgramId,
@@ -555,7 +555,7 @@ export async function signCreateRecordsRegistryRequest(
 async function policyAuthorityAuth(
   target: RingReadTarget,
   authority: MessagePartialSigner,
-  action: RingEnrolmentAction,
+  action: PolicyAuthorityAction,
   timestamp: bigint | undefined,
 ): Promise<PolicyAuthorityAuth> {
   const signedAt = timestampOrNow(
@@ -564,7 +564,7 @@ async function policyAuthorityAuth(
   const nonce = freshNonce();
   const signature = await signMessage(
     authority,
-    enrolmentAttestation({
+    policyAuthorityAttestation({
       target,
       authority: authority.address,
       action,
@@ -1394,28 +1394,28 @@ export class RingRpc {
     );
   }
 
-  /** One page of the enrolments that await the policy authority, oldest first. */
-  async getPendingEnrolments(
-    request: GetPendingEnrolmentsRequest,
+  /** One page of the ring's updates pending list approval, oldest first. */
+  async getPendingListApprovals(
+    request: GetPendingListApprovalsRequest,
     context?: RequestContext,
-  ): Promise<PendingEnrolmentsPage> {
-    return decodePendingEnrolmentsPage(
+  ): Promise<PendingListApprovalsPage> {
+    return decodePendingListApprovalsPage(
       await this.#call(
-        RingRpcMethod.getPendingEnrolments,
-        encodeGetPendingEnrolmentsRequest(request),
+        RingRpcMethod.getPendingListApprovals,
+        encodeGetPendingListApprovalsRequest(request),
         context,
       ),
     );
   }
 
-  async refuseEnrolment(
-    request: RefuseEnrolmentRequest,
+  async refuseListApproval(
+    request: RefuseListApprovalRequest,
     context?: RequestContext,
   ): Promise<RecordUpdateStatus> {
     return decodeRecordUpdateStatus(
       await this.#call(
-        RingRpcMethod.refuseEnrolment,
-        encodeRefuseEnrolmentRequest(request),
+        RingRpcMethod.refuseListApproval,
+        encodeRefuseListApprovalRequest(request),
         context,
       ),
     );

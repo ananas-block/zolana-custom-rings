@@ -12,17 +12,17 @@ import type {
   AuthorityTransfer,
   PolicyAuthorityAuth,
   CreateRecordsRegistryRequest,
-  GetPendingEnrolmentsRequest,
+  GetPendingListApprovalsRequest,
   MergeSettings,
-  PendingEnrolment,
-  PendingEnrolmentsPage,
+  PendingListApproval,
+  PendingListApprovalsPage,
   GetListSaltRequest,
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
   RecordsRegistry,
   RecordUpdateEntry,
   RecordUpdateStatus,
-  RefuseEnrolmentRequest,
+  RefuseListApprovalRequest,
   RelayIntent,
   RelayQuote,
   RelayQuoteRequest,
@@ -277,7 +277,7 @@ export function encodeRecordUpdateStatusRequest(updateId: Hash): WireObject {
 export function decodeRecordUpdateStatus(value: unknown): RecordUpdateStatus {
   const status = object(value, "$", ["status", "signature", "revision", "reason"])["status"];
   switch (status) {
-    case "awaitingAuthority":
+    case "pendingListApproval":
     case "queued":
       object(value, "$", ["status"]);
       return { status };
@@ -345,8 +345,8 @@ export function decodeMergeSettings(value: unknown): MergeSettings {
   };
 }
 
-/** Rust `GetPendingEnrolmentsRequest`. */
-export function encodeGetPendingEnrolmentsRequest(value: GetPendingEnrolmentsRequest): WireObject {
+/** Rust `GetPendingListApprovalsRequest`. */
+export function encodeGetPendingListApprovalsRequest(value: GetPendingListApprovalsRequest): WireObject {
   return {
     ring: checkedAddress(value.ring, "ring"),
     ...(value.cursor === undefined ? {} : { cursor: checkedHash(value.cursor, "cursor") }),
@@ -354,8 +354,8 @@ export function encodeGetPendingEnrolmentsRequest(value: GetPendingEnrolmentsReq
   };
 }
 
-/** Rust `RefuseEnrolmentRequest`. */
-export function encodeRefuseEnrolmentRequest(value: RefuseEnrolmentRequest): WireObject {
+/** Rust `RefuseListApprovalRequest`. */
+export function encodeRefuseListApprovalRequest(value: RefuseListApprovalRequest): WireObject {
   return {
     ring: checkedAddress(value.ring, "ring"),
     updateId: checkedHash(value.updateId, "updateId"),
@@ -382,14 +382,14 @@ export function decodeRecordsRegistry(value: unknown): RecordsRegistry {
   };
 }
 
-/** Rust `GetPendingEnrolmentsResponse`, oldest first. */
-export function decodePendingEnrolmentsPage(value: unknown): PendingEnrolmentsPage {
-  const page = object(value, "$", ["enrolments", "nextCursor"]);
-  const enrolments = page["enrolments"];
-  if (!Array.isArray(enrolments))
-    return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", "enrolments", "an array", enrolments);
-  const rows = enrolments.map((entry: unknown, index): PendingEnrolment => {
-    const path = `enrolments[${String(index)}]`;
+/** Rust `GetPendingListApprovalsResponse`, oldest first. */
+export function decodePendingListApprovalsPage(value: unknown): PendingListApprovalsPage {
+  const page = object(value, "$", ["pending", "nextCursor"]);
+  const pending = page["pending"];
+  if (!Array.isArray(pending))
+    return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", "pending", "an array", pending);
+  const rows = pending.map((entry: unknown, index): PendingListApproval => {
+    const path = `pending[${String(index)}]`;
     const row = object(entry, path, [
       "updateId",
       "wallet",
@@ -407,8 +407,8 @@ export function decodePendingEnrolmentsPage(value: unknown): PendingEnrolmentsPa
   });
   const nextCursor = page["nextCursor"];
   return nextCursor === undefined
-    ? { enrolments: rows }
-    : { enrolments: rows, nextCursor: checkedHash(nextCursor, "nextCursor") };
+    ? { pending: rows }
+    : { pending: rows, nextCursor: checkedHash(nextCursor, "nextCursor") };
 }
 
 function encodePolicyAuthorityAuth(value: PolicyAuthorityAuth): WireObject {

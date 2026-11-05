@@ -5,23 +5,24 @@ use sea_orm::{
 use solana_address::Address;
 use solana_signature::Signature;
 use zolana_ring_client::rpc::{RecordUpdateStatus, SubmitRecordUpdateRequest};
-use zolana_ring_policy::{ListSet, Member};
+use zolana_ring_policy::ListSet;
 
 use crate::{
     landing::Attempt,
     record_update::{
-        AwaitingEnrolment, CheckedUpdate, QueuedUpdate, RecordUpdateRefusal, UpdateSigner,
+        CheckedUpdate, PendingApproval, QueuedUpdate, RecordUpdateRefusal, UpdateSigner,
         MAX_BATCH_ATTEMPTS,
     },
 };
 
-const AWAITING: &str = "awaiting";
+/// Held off chain for list approval, never in a batch until an approval joins it.
+const PENDING_APPROVAL: &str = "pending_approval";
 const QUEUED: &str = "queued";
 const SUBMITTED: &str = "submitted";
 const APPLIED: &str = "applied";
 const REFUSED: &str = "refused";
 const FAILED: &str = "failed";
-const AWAITING_COLUMNS: &str = "id, request, writes, awaited, valid_until_slot";
+const PENDING_APPROVAL_COLUMNS: &str = "id, signer, member, writes, awaited, valid_until_slot";
 const WALLET_ROLE: &str = "wallet";
 const POLICY_ROLE: &str = "policy";
 
@@ -35,7 +36,7 @@ pub(crate) struct NewUpdate<'a> {
     pub request: &'a SubmitRecordUpdateRequest,
     pub update: &'a CheckedUpdate,
     pub queued_slot: u64,
-    /// Awaiting enrolments that queue joined to the update.
+    /// Updates pending list approval the update approves, they queue joined to it.
     pub approves: &'a [[u8; 32]],
 }
 
@@ -55,7 +56,7 @@ pub(crate) struct NewBatch<'a> {
 }
 
 /// `cursor` names any update of the ring, the page starts after it in submit order.
-pub(crate) struct AwaitingPage {
+pub(crate) struct PendingApprovalPage {
     pub ring: Address,
     pub cursor: Option<[u8; 32]>,
     pub limit: usize,
@@ -85,7 +86,7 @@ impl<'a> UpdateQueue<'a> {
         let id = bytes(&new.update.id.0 .0);
         let (status, awaited, member) = match new.update.awaited {
             Some(awaited) => (
-                AWAITING,
+                PENDING_APPROVAL,
                 awaited.lists.record_bits(),
                 bytes(&awaited.member),
             ),
@@ -119,9 +120,14 @@ impl<'a> UpdateQueue<'a> {
             == 1;
         // A resubmit that lost the insert race joins nothing.
         let approves = if inserted { new.approves } else { &[] };
-        for enrolment in approves {
+        for pending in approves {
             let sql = "UPDATE records_updates SET status=$1, joined=$2 WHERE id=$3 AND status=$4";
-            let values = vec![QUEUED.into(), id.clone(), bytes(enrolment), AWAITING.into()];
+            let values = vec![
+                QUEUED.into(),
+                id.clone(),
+                bytes(pending),
+                PENDING_APPROVAL.into(),
+            ];
             transaction
                 .execute(statement(&transaction, sql, values))
                 .await?;
@@ -137,7 +143,7 @@ impl<'a> UpdateQueue<'a> {
         };
         let status = row.try_get::<String>("", "status")?;
         Ok(Some(match status.as_str() {
-            AWAITING => RecordUpdateStatus::AwaitingAuthority,
+            PENDING_APPROVAL => RecordUpdateStatus::PendingListApproval,
             QUEUED => RecordUpdateStatus::Queued,
             SUBMITTED => RecordUpdateStatus::Submitted {
                 signature: signature(&row)?.into(),
@@ -157,14 +163,17 @@ impl<'a> UpdateQueue<'a> {
         }))
     }
 
-    /// Every registry with an awaiting or queued update or an open batch.
+    /// Every registry with an update pending list approval, a queued update or an open batch.
     pub async fn registries(&self) -> Result<Vec<Address>, DbErr> {
         let sql = "SELECT DISTINCT registry FROM records_updates WHERE status IN ($1,$2,$3)";
-        self.query_all(sql, vec![AWAITING.into(), QUEUED.into(), SUBMITTED.into()])
-            .await?
-            .iter()
-            .map(|row| address(row, "registry"))
-            .collect()
+        self.query_all(
+            sql,
+            vec![PENDING_APPROVAL.into(), QUEUED.into(), SUBMITTED.into()],
+        )
+        .await?
+        .iter()
+        .map(|row| address(row, "registry"))
+        .collect()
     }
 
     pub async fn open_batch(&self, registry: Address) -> Result<Option<OpenBatch>, DbErr> {
@@ -183,7 +192,7 @@ impl<'a> UpdateQueue<'a> {
         }))
     }
 
-    /// Submit order, each joined enrolment's writes ahead of the update that approved it.
+    /// Submit order, each joined update's writes ahead of the approval it joined.
     pub async fn queued(&self, registry: Address) -> Result<Vec<QueuedUpdate>, DbErr> {
         let sql = "SELECT id, ring, writes, signer, role, queued_slot, valid_until_slot, joined \
                    FROM records_updates WHERE registry=$1 AND status=$2 ORDER BY seq";
@@ -200,11 +209,11 @@ impl<'a> UpdateQueue<'a> {
             let id = column_bytes(&row, "id")?;
             let mut writes = Vec::new();
             let mut until = valid_until_slot;
-            for (_, enrolment, enrolment_until) in
+            for (_, joined_writes, joined_until) in
                 joined.iter().filter(|(approval, ..)| *approval == id)
             {
-                writes.extend_from_slice(enrolment);
-                until = until.min(*enrolment_until);
+                writes.extend_from_slice(joined_writes);
+                until = until.min(*joined_until);
             }
             writes.extend(stored_writes(&row)?);
             queued.push(QueuedUpdate {
@@ -220,35 +229,35 @@ impl<'a> UpdateQueue<'a> {
     }
 
     /// Oldest first.
-    pub async fn awaiting_members(
+    pub async fn pending_approvals(
         &self,
         ring: Address,
         members: &[[u8; 32]],
-    ) -> Result<Vec<AwaitingEnrolment>, DbErr> {
+    ) -> Result<Vec<PendingApproval>, DbErr> {
         if members.is_empty() {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "SELECT {AWAITING_COLUMNS} FROM records_updates \
+            "SELECT {PENDING_APPROVAL_COLUMNS} FROM records_updates \
              WHERE ring=$1 AND status=$2 AND member IN ({}) ORDER BY seq",
             placeholders(3, members.len())
         );
-        let values = [bytes(ring.as_array()), AWAITING.into()]
+        let values = [bytes(ring.as_array()), PENDING_APPROVAL.into()]
             .into_iter()
             .chain(members.iter().map(bytes))
             .collect();
         self.query_all(&sql, values)
             .await?
             .iter()
-            .map(awaiting_enrolment)
+            .map(pending_approval)
             .collect()
     }
 
     /// `None` when `cursor` names no update of the ring.
-    pub async fn awaiting_page(
+    pub async fn pending_approval_page(
         &self,
-        page: AwaitingPage,
-    ) -> Result<Option<Vec<AwaitingEnrolment>>, DbErr> {
+        page: PendingApprovalPage,
+    ) -> Result<Option<Vec<PendingApproval>>, DbErr> {
         let ring = bytes(page.ring.as_array());
         let after = match page.cursor {
             None => 0,
@@ -266,28 +275,32 @@ impl<'a> UpdateQueue<'a> {
         let limit = i64::try_from(page.limit)
             .map_err(|_| DbErr::Custom("page limit exceeds the store integer range".to_owned()))?;
         let sql = format!(
-            "SELECT {AWAITING_COLUMNS} FROM records_updates \
+            "SELECT {PENDING_APPROVAL_COLUMNS} FROM records_updates \
              WHERE ring=$1 AND status=$2 AND seq>$3 ORDER BY seq LIMIT $4"
         );
-        let values = vec![ring, AWAITING.into(), after.into(), limit.into()];
+        let values = vec![ring, PENDING_APPROVAL.into(), after.into(), limit.into()];
         self.query_all(&sql, values)
             .await?
             .iter()
-            .map(awaiting_enrolment)
+            .map(pending_approval)
             .collect::<Result<_, _>>()
             .map(Some)
     }
 
-    /// `false` when no enrolment of `ring` awaits under `id`.
-    pub async fn refuse_awaiting(&self, ring: Address, id: &[u8; 32]) -> Result<bool, DbErr> {
+    /// `false` when no update of `ring` is pending list approval under `id`.
+    pub async fn refuse_pending_approval(
+        &self,
+        ring: Address,
+        id: &[u8; 32],
+    ) -> Result<bool, DbErr> {
         let sql = "UPDATE records_updates SET status=$1, reason=$2 \
                    WHERE id=$3 AND ring=$4 AND status=$5";
         let values = vec![
             REFUSED.into(),
-            RecordUpdateRefusal::EnrolmentRefused.to_string().into(),
+            RecordUpdateRefusal::ListApprovalRefused.to_string().into(),
             bytes(id),
             bytes(ring.as_array()),
-            AWAITING.into(),
+            PENDING_APPROVAL.into(),
         ];
         Ok(self
             .db
@@ -297,26 +310,30 @@ impl<'a> UpdateQueue<'a> {
             == 1)
     }
 
-    pub async fn expire_awaiting(&self, registry: Address, slot: u64) -> Result<(), DbErr> {
+    pub async fn expire_pending_approvals(
+        &self,
+        registry: Address,
+        slot: u64,
+    ) -> Result<(), DbErr> {
         let sql = "UPDATE records_updates SET status=$1, reason=$2 \
                    WHERE registry=$3 AND status=$4 AND valid_until_slot<$5";
         let values = vec![
             REFUSED.into(),
             RecordUpdateRefusal::Expired.to_string().into(),
             bytes(registry.as_array()),
-            AWAITING.into(),
+            PENDING_APPROVAL.into(),
             integer(slot)?,
         ];
         self.exec(sql, values).await
     }
 
-    /// The enrolments joined to `id` share its refusal, or await again when its approval lapsed.
+    /// The updates joined to `id` share its refusal, or turn pending list approval again when its approver lost the policy role.
     pub async fn refuse(&self, id: &[u8; 32], refusal: RecordUpdateRefusal) -> Result<(), DbErr> {
         let transaction = self.db.begin().await?;
         if refusal == RecordUpdateRefusal::AuthorityLapsed {
             let sql =
                 "UPDATE records_updates SET status=$1, joined=NULL WHERE joined=$2 AND status=$3";
-            let values = vec![AWAITING.into(), bytes(id), QUEUED.into()];
+            let values = vec![PENDING_APPROVAL.into(), bytes(id), QUEUED.into()];
             transaction
                 .execute(statement(&transaction, sql, values))
                 .await?;
@@ -439,20 +456,14 @@ fn placeholders(first: usize, count: usize) -> String {
     }
 }
 
-fn awaiting_enrolment(row: &QueryResult) -> Result<AwaitingEnrolment, DbErr> {
-    let request: SubmitRecordUpdateRequest =
-        serde_json::from_str(&row.try_get::<String>("", "request")?)
-            .map_err(|_| corrupt("request"))?;
-    let wallet = request.signer.0;
+fn pending_approval(row: &QueryResult) -> Result<PendingApproval, DbErr> {
     let lists = u8::try_from(unsigned(row, "awaited")?)
         .map(ListSet::from_bits)
         .map_err(|_| corrupt("awaited"))?;
-    Ok(AwaitingEnrolment {
+    Ok(PendingApproval {
         id: column_bytes(row, "id")?,
-        wallet,
-        member: *Member::owner_tag(wallet.as_array())
-            .map_err(|_| corrupt("request"))?
-            .as_bytes(),
+        wallet: address(row, "signer")?,
+        member: column_bytes(row, "member")?,
         lists,
         writes: stored_writes(row)?.len(),
         valid_until_slot: unsigned(row, "valid_until_slot")?,

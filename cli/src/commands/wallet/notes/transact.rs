@@ -41,7 +41,7 @@ use crate::{
     line,
     list::{ListChange, ListUpdate, Subject},
     macros::named_enum,
-    member::{registered, KeyEnrolment},
+    member::{registered, KeyEnrollment},
     merge::carries_no_data,
     policy, records,
     ui::{self, icon},
@@ -157,7 +157,7 @@ pub enum AllowListing {
 
 /// The demo parties a table referencing `Allow` refuses until their records carry it.
 #[must_use]
-struct AllowEnrolment<'a> {
+struct AllowListWrite<'a> {
     authority: &'a Keypair,
     parties: &'a [(&'a str, &'a ShieldedKeypair)],
     listing: AllowListing,
@@ -259,11 +259,11 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     );
     let authority = ctx.funded_authority()?;
     let parties = [("sender", &sender), ("recipient", &recipient)];
-    KeyEnrolment {
+    KeyEnrollment {
         members: &[&sender, &recipient],
     }
     .ensure(ctx)?;
-    AllowEnrolment {
+    AllowListWrite {
         authority,
         parties: &parties,
         listing,
@@ -361,7 +361,7 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     ctx.ring_rpc().check_serves(ctx.ring.program_id())?;
     // A public spend needs no row, its zero-key change serves an unenrolled wallet.
     if args.spend_public.is_none() {
-        KeyEnrolment {
+        KeyEnrollment {
             members: &[&sender],
         }
         .ensure(ctx)?;
@@ -404,7 +404,7 @@ pub fn run_deposit(ctx: &Context, args: DepositArgs) -> Result<()> {
         args.token_account,
         args.amount,
     )?;
-    KeyEnrolment {
+    KeyEnrollment {
         members: &[&sender],
     }
     .ensure(ctx)?;
@@ -943,7 +943,7 @@ impl TransactArgs {
     }
 }
 
-impl AllowEnrolment<'_> {
+impl AllowListWrite<'_> {
     /// A curated `Allow` list is the curator's to write.
     fn send(self, ctx: &Context) -> Result<()> {
         let Some(pinned) = policy::pinned_if_any(ctx)? else {
@@ -1047,7 +1047,7 @@ impl Transfer<'_> {
             .select_held(&scanned.spendable, ctx.ring.program_id())
     }
 
-    /// Runs after the enrolments, their top-ups would otherwise leave the deposits short.
+    /// Runs after the key enrollments and the allow writes, their top-ups would otherwise leave the deposits short.
     fn fund(&self, ctx: &Context, drawn: u64) -> Result<()> {
         let fees = SENDER_FEE_BUDGET + PAYER_FEE_BUDGET;
         ctx.fund(self.payer.pubkey(), drawn.saturating_add(fees))

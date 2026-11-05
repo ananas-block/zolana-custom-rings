@@ -19,7 +19,7 @@ enum Plan {
 }
 
 #[must_use]
-pub(crate) struct KeyEnrolment<'a> {
+pub(crate) struct KeyEnrollment<'a> {
     pub members: &'a [&'a ShieldedKeypair],
 }
 
@@ -46,7 +46,7 @@ fn register_key(ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-impl KeyEnrolment<'_> {
+impl KeyEnrollment<'_> {
     pub(crate) fn ensure(self, ctx: &Context) -> Result<()> {
         for member in self.members {
             let outcome = if registered(ctx.ring, &ctx.zolana, member)? {

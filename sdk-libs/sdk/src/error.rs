@@ -109,8 +109,8 @@ pub enum RingError {
     RecordUpdate(#[from] RecordUpdateError),
     #[error("the record update needs the signature of {expected}")]
     RecordUpdateSigner { expected: Address },
-    #[error("an enrolment awaits no list or a list outside allow, reader and approval")]
-    EnrolmentLists,
+    #[error("a wallet update awaits no list or a list outside allow, reader and approval")]
+    InvalidAwaitedLists,
     #[error("ring rpc answered another update id")]
     RecordUpdateIdMismatch,
     #[error("the {writer:?} writer may not write the list {list:?}")]

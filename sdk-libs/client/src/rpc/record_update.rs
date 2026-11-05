@@ -21,8 +21,8 @@ pub const BATCH_WINDOW_SLOTS: u64 = 40;
 /// Outlives the batch window, a full grace wait and one more window for the pass that sends the batch.
 pub const RECORD_UPDATE_SLOTS: u64 = 2 * BATCH_WINDOW_SLOTS + GRACE_SLOTS;
 
-/// Authority lists that grant, never a restriction.
-pub const ENROLMENT_LISTS: ListSet =
+/// Authority lists a wallet update may await, each grants and none restricts.
+pub const AWAITABLE_LISTS: ListSet =
     ListSet::of(&[ListId::Allow, ListId::Reader, ListId::Approval]);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,7 +57,7 @@ pub struct RecordUpdate {
     pub ring: SerializablePubkey,
     pub entries: Vec<RecordUpdateEntry>,
     pub valid_until_slot: u64,
-    /// Record bits of the authority lists the update waits for, zero for none.
+    /// Record bits of the authority lists the update waits for, nonzero puts it pending list approval.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub awaited_lists: u64,
 }
@@ -98,8 +98,9 @@ pub struct GetRecordUpdateStatusRequest {
     rename_all_fields = "camelCase"
 )]
 pub enum RecordUpdateStatus {
-    /// Held until a policy authority update sets every awaited list of the member.
-    AwaitingAuthority,
+    /// Held off chain until a policy authority update sets every awaited list on the wallet's record, then both land in one `Update`.
+    /// Not tracking enrollment, it registers no secret and the program never sees the wait.
+    PendingListApproval,
     Queued,
     Submitted {
         signature: SerializableSignature,
@@ -257,7 +258,7 @@ impl RecordUpdateStatement {
             &right_align(&self.valid_until_slot.to_be_bytes()),
             &awaited,
         ];
-        // The width separates an enrolment's hash from a plain update's.
+        // The width binds the wait to the signature, a pending update never verifies as a plain one.
         let width = if self.awaited_lists == 0 { 6 } else { 7 };
         Ok(Poseidon::hashv(&elements[..width])?)
     }
