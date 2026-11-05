@@ -220,6 +220,7 @@ fn set(ctx: &Context, yes: bool) -> Result<()> {
     let replace = UpdatePolicy {
         ring: ctx.ring,
         authority: authority.pubkey(),
+        current: &current.account,
         update: PolicyUpdate::Rules(PolicyTable {
             rules: &compiled.rules,
             shared_sources: &shared_sources,

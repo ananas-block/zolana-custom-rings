@@ -334,6 +334,7 @@ impl PolicyPin<'_> {
                     let point = UpdatePolicy {
                         ring: ctx.ring,
                         authority: authority.pubkey(),
+                        current: &pinned.account,
                         update: PolicyUpdate::Source {
                             list_id: *list,
                             source: SourceOwner::Curator(*registry),

@@ -391,6 +391,7 @@ fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()>
         let point = UpdatePolicy {
             ring: ctx.ring,
             authority: authority.pubkey(),
+            current: &account,
             update: PolicyUpdate::Source { list_id, source },
         }
         .instruction()?;
