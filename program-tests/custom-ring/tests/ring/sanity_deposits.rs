@@ -77,13 +77,16 @@ struct DepositCredentials {
 impl DepositCredentialRead<'_> {
     fn read(self) -> Result<DepositCredentials> {
         use spr_client::rpc::{NULLIFIER_TREE_HEIGHT, STATE_TREE_HEIGHT};
-        let snapshot = self.env.client.block_on(
+        let client = self.env.client.as_async();
+        let snapshot = self.env.run(async {
             CredentialReads {
                 ring: self.ring.program_id(),
                 members: &[self.member],
             }
-            .read(self.env.client.as_async(), self.env.client.as_async()),
-        )?;
+            .read(client, client)
+            .await
+            .map_err(RingError::from)
+        })?;
         let address_tree = spr_interface::pda::tree(spr_program::ADDRESS_TREE_ID);
         let mut account = fetch_account(self.env.client.rpc(), &address_tree)?;
         let checkpoint = CredentialTreeRead {
@@ -505,7 +508,7 @@ fn an_sdk_batch_settles_at_keys_four_and_eight() -> Result<()> {
         };
         let prepared = env.run(batch.prepare(client.zolana()))?;
         let instruction = env.run(prepared.prove(client))?;
-        let prefix = DepositPrefix::parse(&instruction.data[..DepositPrefix::SIZE])?;
+        let prefix = DepositPrefix::parse(&mut instruction.data.as_slice())?;
         ensure!(
             prefix.key_capacity == key,
             "{notes} notes took key {}",

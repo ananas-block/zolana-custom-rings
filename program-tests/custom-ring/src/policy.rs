@@ -23,7 +23,7 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient, Rpc};
+use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient};
 use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use spr_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
@@ -336,10 +336,13 @@ pub fn owner_enrollment(
     ring: CustomRing,
     owner: Address,
 ) -> Result<Option<AuditCredential>> {
-    match env.client.block_on(
+    let client = env.client.as_async();
+    match env.client.block_on(async {
         CredentialResolver::new(ring.program_id(), owner)
-            .resolve(env.client.as_async(), env.client.as_async()),
-    )? {
+            .resolve(client, client)
+            .await
+            .map_err(RingError::from)
+    })? {
         CredentialLookup::Present(present) => Ok(Some(present.credential)),
         CredentialLookup::Absent(_) => Ok(None),
         CredentialLookup::Unknown(reason) => {
@@ -358,10 +361,13 @@ impl WaitForCredentials<'_> {
     pub fn wait(self) -> Result<()> {
         wait_for("credential state inclusion", || {
             for owner in self.owners {
-                match self.env.client.block_on(
+                let client = self.env.client.as_async();
+                match self.env.client.block_on(async {
                     CredentialResolver::new(self.ring.program_id(), *owner)
-                        .resolve(self.env.client.as_async(), self.env.client.as_async()),
-                )? {
+                        .resolve(client, client)
+                        .await
+                        .map_err(RingError::from)
+                })? {
                     CredentialLookup::Present(_) => {}
                     CredentialLookup::Absent(_) | CredentialLookup::Unknown(_) => {
                         return Ok(Probe::NotYet);
