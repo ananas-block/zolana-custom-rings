@@ -39,15 +39,7 @@ impl Assembled {
         let parsed = ParsedTransact::new(parts.data()?)?;
         let stream = parsed.audit_stream();
         let class = stream.key.class();
-        // The circuit opens the nullifiers the program chains, zero past `n` up to the input class.
-        let input_nullifiers = parsed
-            .data()
-            .nullifiers
-            .iter()
-            .copied()
-            .chain(core::iter::repeat([0; 32]))
-            .take(class)
-            .collect();
+        let input_nullifiers = parsed.padded_nullifiers().copied().collect();
         let entries = match parts.entry {
             true => audit.entry_openings(class)?,
             false => Vec::new(),
