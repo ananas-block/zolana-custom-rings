@@ -24,7 +24,7 @@ use zolana_ring_indexer::{
     },
     tree::{MemberRecord, OpeningCheck, QuadPath, RecordOpening, RecordTree},
 };
-use zolana_ring_member_registry::MemberRegistryTree;
+use zolana_ring_member_registry::{ApplyProofInputs, MemberRegistryTree, RecordWriteProofInput};
 use zolana_ring_policy::{ListId, ListSet, Member};
 
 use crate::{
@@ -163,12 +163,12 @@ fn transaction(program: Address, accounts: &[Address], data: &[u8]) -> Value {
     }})
 }
 
-fn apply_data(new_root: [u8; 32], new_next_index: u64) -> ApplyRecordsIxData {
+fn apply_data(inputs: &ApplyProofInputs) -> ApplyRecordsIxData {
     ApplyRecordsIxData {
         proof: Zeroable::zeroed(),
-        new_root,
-        new_next_index: u32::try_from(new_next_index).unwrap().to_le_bytes(),
-        restrictive: 0,
+        new_root: inputs.new_root,
+        new_next_index: u32::try_from(inputs.new_next_index).unwrap().to_le_bytes(),
+        restrictive: u8::from(inputs.writes.iter().any(RecordWriteProofInput::restricts)),
     }
 }
 
@@ -268,7 +268,7 @@ impl StorageReplay {
                 asset_writes: vec![],
                 credential_read: CredentialRead::new(0, &[]).unwrap(),
                 private_write: None,
-                apply: &apply_data(inputs.new_root, inputs.new_next_index),
+                apply: &apply_data(&inputs),
             },
         );
         let chain = Arc::new(Mutex::new(Chain {
@@ -431,7 +431,7 @@ impl PolicySource {
             asset_writes: vec![],
             credential_read,
             private_write,
-            apply: &apply_data(inputs.new_root, inputs.new_next_index),
+            apply: &apply_data(&inputs),
         };
         let wire = [&[tag::UPDATE][..], &data.encode().unwrap()].concat();
         (
