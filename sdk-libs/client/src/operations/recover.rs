@@ -571,13 +571,9 @@ impl<'h> MergeRecovery<'_, 'h> {
                     Some(merged) => {
                         let owner =
                             source.nullifier_pk_of(merged.owner.hash(&merged.owner_key)?)?;
-                        // 2. Another owner's record, the member's spends alone never claim its output.
-                        let opening = match owner {
-                            Some(_) => merged.opening(ring)?,
-                            None => None,
-                        };
-                        match (owner, opening) {
-                            (Some(nullifier_pk), Some(opening)) => {
+                        match owner {
+                            Some(nullifier_pk) => {
+                                let opening = merged.opening()?;
                                 // Rebuild checked this commitment, the leaf check adds nothing.
                                 let (note, _) = source.wallet_utxo(
                                     Utxo {
@@ -599,7 +595,8 @@ impl<'h> MergeRecovery<'_, 'h> {
                                 )?;
                                 Some(RecoveredMerge { note, opening })
                             }
-                            _ => None,
+                            // 2. Another owner's record, the member's spends alone never claim its output.
+                            None => None,
                         }
                     }
                     // 3. With no record, only a merge spending a source note opens under the nullifier key.
