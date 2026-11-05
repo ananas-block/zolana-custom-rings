@@ -477,6 +477,8 @@ export type {
   RecoveredRingNotes,
   RingRecoveryClient,
   RingRecoveryParams,
+  RingRecoveryProgress,
+  RingRecoveryStep,
 } from "../operations/workflow/recover.js";
 export {
   ConfirmedDeposit,

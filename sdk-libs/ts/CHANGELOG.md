@@ -47,6 +47,7 @@ Breaking
 - `openAuditorRegions`, the `EscrowedKeys` type and the error code `RING_ANONYMOUS_RECIPIENT_CURVE` are gone, `openAuditorRegions` opened an unsalted schedule no transfer stream uses → open an auditor stream with `openRingDisclosure` and drop handling of that code.
 - The auditor envelope carries `AuditEnvelope.addressInputBits` after `R`, its head grows by eight bytes and every record and tail counter moves with it, `R` counts notes alone, `TransferProofRequest` sends `inputNullifierChain` and `inputNullifiers` in place of `addressChain`, the transfer statement binds `inputNullifierChain` after `inputCount`, `DecryptedRingInput.real` is `class`, and an audited address input reads the `address` kind of `InputOpening` → deploy this release's ring program, prover, keys and Ring RPC together and handle the `address` kind.
 - `RingTransactionSubmission.sendPersisted`, `reconcileRingSubmissions` and `closeAbandonedFrameBuffers` take a `RingBufferLedger` as `buffers`, holding each buffer write and close until its signature resolves → load one with `RingBufferLedger.load(store)` from its own store beside the wallet store and pass it to all three.
+- `recoverRingMemberNotes` returns a `RingRecoveryStep`, and at the `maxPages` cap a `paused` step in place of `RING_RECOVERY_INCOMPLETE` → read `notes` from a `complete` step and pass the `progress` of a `paused` step back once as `progress` until the recovery completes.
 
 Added
 

@@ -52,7 +52,10 @@ import {
   type TransactionOrigin,
 } from "../../../src/protocol/transaction/origin.js";
 import { RingError } from "../../../src/protocol/error.js";
-import { recoverRingMemberNotes } from "../../../src/operations/workflow/recover.js";
+import {
+  recoverRingMemberNotes,
+  type RingRecoveryStep,
+} from "../../../src/operations/workflow/recover.js";
 import { ringAuditReader } from "../../helpers/clients.js";
 import { transactionsPage } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import {
@@ -681,7 +684,13 @@ describe("recoverRingMemberNotes", () => {
     return { transaction, commitment, blinding: blindings[0]!, amount: AMOUNT };
   }
 
-  function recover(
+  async function recover(input: Parameters<typeof recoverStep>[0]) {
+    const step = await recoverStep(input);
+    if (step.kind !== "complete") throw new Error("the recovery paused");
+    return step.notes;
+  }
+
+  function recoverStep(
     input: Readonly<{
       owner: ShieldedKeypair;
       auditor: X25519Keypair;
@@ -1242,10 +1251,13 @@ describe("recoverRingMemberNotes", () => {
       owner.nullifierKey(),
       merge.transaction.nullifiers[0]!,
     );
-    const { transaction: spend } = sealedTransfer({
-      auditor: auditor.publicKey(),
-      nullifiers: [owner.nullifierKey().nullifier(merge.commitment, mergedBlinding)],
-    });
+    const spend = {
+      ...sealedTransfer({
+        auditor: auditor.publicKey(),
+        nullifiers: [owner.nullifierKey().nullifier(merge.commitment, mergedBlinding)],
+      }).transaction,
+      slot: merge.transaction.slot + 1n,
+    };
     const anonymousRows = transferRows("anonymous");
     try {
       const result = await recover({
@@ -1295,8 +1307,113 @@ describe("recoverRingMemberNotes", () => {
     );
     let page = 0;
     const endless = () => transactionsPage({ paginationToken: `t${++page}` });
-    await expect(recover({ owner, auditor, transaction, tags: endless })).rejects.toThrow(
-      ringError("RING_RECOVERY_INCOMPLETE"),
-    );
+    await expect(recoverStep({ owner, auditor, transaction, tags: endless })).resolves.toEqual({
+      kind: "paused",
+      progress: { cursor: historyCursor(RING, "ring", "t32") },
+    });
+  });
+
+  describe("paged", () => {
+    /** Serves `rows` `limit` at a time behind tokens `p<offset>`. */
+    function pagedRecovery(
+      input: Readonly<{
+        owner: ShieldedKeypair;
+        auditor: X25519Keypair;
+        rows: readonly IndexedShieldedTransaction[];
+        pageSize?: number;
+        maxPages?: number;
+        progress?: Extract<RingRecoveryStep, { kind: "paused" }>["progress"];
+        origin?: TransactionOrigin;
+      }>,
+    ) {
+      return recoverRingMemberNotes({
+        client: ringAuditReader({
+          getShieldedTransactionsByTags: async (request) => {
+            const start = Number(request.paginationToken?.slice(1) ?? 0);
+            const end = start + Number(request.limit);
+            return transactionsPage({
+              data: transactionItems(input.rows.slice(start, end)),
+              ...(end < input.rows.length ? { paginationToken: `p${end}` } : {}),
+            });
+          },
+        }),
+        ringProgramId: RING,
+        auditor: input.auditor,
+        source: input.owner.shieldedAddress(),
+        nullifierKey: input.owner.nullifierKey(),
+        assets: new AssetRegistry([[2n, FOREIGN_MINT]]),
+        origin: input.origin ?? TRANSFERS,
+        ...(input.pageSize === undefined ? {} : { pageSize: input.pageSize }),
+        ...(input.maxPages === undefined ? {} : { maxPages: input.maxPages }),
+        ...(input.progress === undefined ? {} : { progress: input.progress }),
+      });
+    }
+
+    /** A spend that sorts ahead of the note it spends inside one slot, then a note one slot later. */
+    async function slotSplitHistory(owner: ShieldedKeypair, auditor: X25519Keypair) {
+      const { transaction: spent } = ownedTransfer(owner, auditor.publicKey());
+      const nullifier = (await recover({ owner, auditor, transaction: spent })).notes[0]!.nullifier;
+      const spend = sealedTransfer({
+        auditor: auditor.publicKey(),
+        nullifiers: [nullifier],
+        txSignature: "5".repeat(64) as Signature,
+      }).transaction;
+      const kept = {
+        ...sealedTransfer({
+          auditor: auditor.publicKey(),
+          records: [ownedRecord(owner), ...otherRecords],
+          nullifiers: [OTHER_NULLIFIER],
+          txSignature: "4".repeat(64) as Signature,
+        }).transaction,
+        slot: spent.slot + 1n,
+      };
+      return { rows: [spend, spent, kept], kept: kept.outputSlots[0]!.outputContext.hash };
+    }
+
+    function paused(step: RingRecoveryStep) {
+      if (step.kind !== "paused") throw new Error("the recovery completed");
+      return step.progress;
+    }
+
+    it("splits over three calls into the result of one full recovery", async () => {
+      const auditor = X25519Keypair.generate();
+      const owner = ShieldedKeypair.generate();
+      const { rows, kept } = await slotSplitHistory(owner, auditor);
+      const full = await pagedRecovery({ owner, auditor, rows });
+      expect(
+        full.kind === "complete" && full.notes.notes.map((note) => note.outputContext.hash),
+      ).toEqual([kept]);
+      const page = { owner, auditor, rows, pageSize: 1, maxPages: 1 };
+      const first = paused(await pagedRecovery(page));
+      expect(first.cursor).toBe(historyCursor(RING, "ring", "p1"));
+      const second = paused(await pagedRecovery({ ...page, progress: first }));
+      expect(await pagedRecovery({ ...page, progress: second })).toEqual(full);
+    });
+
+    it("resumes past every row its progress read and resumes it only once", async () => {
+      const auditor = X25519Keypair.generate();
+      const owner = ShieldedKeypair.generate();
+      const { rows } = await slotSplitHistory(owner, auditor);
+      const full = await pagedRecovery({ owner, auditor, rows });
+      const page = { owner, auditor, rows, pageSize: 1, maxPages: 2 };
+      const progress = paused(await pagedRecovery(page));
+      const read = new Set(rows.slice(0, 2).map((row) => row.txSignature));
+      const origin: TransactionOrigin = {
+        confirmedTransaction: async (row, ring) => {
+          if (read.has(row.txSignature)) throw new RingError("RING_ORIGIN_UNAVAILABLE");
+          return TRANSFERS.confirmedTransaction(row, ring);
+        },
+      };
+      await expect(pagedRecovery({ ...page, origin })).rejects.toThrow(
+        ringError("RING_ORIGIN_UNAVAILABLE"),
+      );
+      expect(await pagedRecovery({ ...page, origin, progress })).toEqual(full);
+      await expect(pagedRecovery({ ...page, progress })).rejects.toThrow(
+        ringError("RING_HISTORY_CURSOR_INVALID"),
+      );
+      await expect(
+        pagedRecovery({ ...page, progress: { cursor: progress.cursor } }),
+      ).rejects.toThrow(ringError("RING_HISTORY_CURSOR_INVALID"));
+    });
   });
 });

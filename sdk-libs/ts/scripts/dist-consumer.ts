@@ -78,6 +78,8 @@ export type {
   NullifierKeyEnvelope,
   RingRecoveryClient,
   RingRecoveryParams,
+  RingRecoveryProgress,
+  RingRecoveryStep,
   RecoveredRingNotes,
   RingDelegateRecoveredParams,
 } from "@heliuslabs/zolana-custom-rings";
