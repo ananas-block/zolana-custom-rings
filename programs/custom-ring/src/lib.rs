@@ -10,7 +10,7 @@
 //! # What the ring adds to SPP
 //!
 //! 1. Auditor recovery. The ring proof shows the auditor opens each instruction's sealed records, SPP reads none of them.
-//! 2. Policy. A transfer or deposit on a policy ring proves the rules under the hash and roots the ring pins.
+//! 2. Policy. A transfer on a policy ring proves the rules under the hash and roots the ring pins.
 //! 3. Tracking. Owner keys resolve against the rows of the one tracking registry the ring pins.
 //! 4. Co-signers. The operation and the proven approval bits demand signed records, outside SPP's account list.
 //! 5. Hidden senders. The proof holds the hidden owner apart from the payer, the co-signers, the funders, the exit key and the owner run.
@@ -27,8 +27,9 @@
 //! 4. The public slots fold legs and mints in SPP's order, over the settlement accounts SPP settles.
 //! 5. The ring statement binds the output hashes and the auditor message bytes, SPP's external data hash covers the same bytes.
 //!
-//! SPP verifies no proof on a deposit, the ring proof alone binds its data. A merge pairs SPP's merge
-//! proof with a ring proof over the auditor's record, see `instructions/settlement/merge.rs`.
+//! A ring deposit is a transfer that spends no note, its public leg funds the outputs. No ring path
+//! signs SPP's proofless `ring_deposit`. A merge pairs SPP's merge proof with a ring proof over the
+//! auditor's record, see `instructions/settlement/merge.rs`.
 //!
 //! # Instruction data
 //!
@@ -44,12 +45,11 @@
 //! 3. `instructions/transfer/verify.rs`, the source of each statement element.
 //! 4. `instructions/runtime/instruction_runtime.rs`, the placement check behind every `ring_auth` signature.
 //! 5. `instructions/accounts/loader.rs`, root reads with grace and floor, and co-signer records.
-//! 6. `instructions/settlement/forward.rs` then `instructions/settlement/deposit_audit.rs`, the deposit.
-//! 7. `instructions/settlement/merge.rs`, the merge.
-//! 8. `instructions/configuration`, the setup, the delegate, the roles and the policy writes.
+//! 6. `instructions/settlement/merge.rs`, the merge.
+//! 7. `instructions/configuration`, the setup, the delegate, the roles and the policy writes.
 //!
 //! The statements live in `program-libs/interface/src/proof/statement.rs`, their circuits in
-//! `prover/circuits/transfer/transfer.go`, `prover/circuits/deposit.go` and `prover/circuits/merge.go`.
+//! `prover/circuits/transfer/transfer.go` and `prover/circuits/merge.go`.
 
 mod instructions;
 mod state;
@@ -79,8 +79,6 @@ pub fn process_instruction(
         InstructionTag::Transfer | InstructionTag::AuthorityTransfer => {
             process_transfer_ix(program_id, accounts, ix_data, ix_tag)
         }
-        // The deposit prefix layout starts at the tag byte.
-        InstructionTag::Deposit => process_deposit_ix(program_id, accounts, instruction_data),
         // SPP proves that owner, asset, value and ring ownership stay unchanged.
         InstructionTag::Merge => process_merge_ix(program_id, accounts, ix_data),
         InstructionTag::UpdateAuthority => {

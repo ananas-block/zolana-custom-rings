@@ -718,7 +718,7 @@ fn a_delegate_exit_selects_the_exit_circuit() {
 #[test]
 fn the_rail_follows_the_instruction_and_the_ring_mode() {
     use custom_ring_interface::{InstructionTag, RingMode};
-    use InstructionTag::{AuthorityTransfer, Deposit, Transfer};
+    use InstructionTag::{AuthorityTransfer, Merge, Transfer};
     let delegate = solana_address::Address::new_from_array([3; 32]);
     let ring = |mode: RingMode, delegate: Option<solana_address::Address>| {
         let mut ring = <RingPolicy as bytemuck::Zeroable>::zeroed();
@@ -741,7 +741,7 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
         Ok(RingRail::AnonymousDelegate)
     );
     assert_eq!(
-        rail(Deposit, RingMode::Confidential),
+        rail(Merge, RingMode::Confidential),
         Err(CustomRingError::InvalidInstructionData)
     );
     for mode in [RingMode::Confidential, RingMode::Anonymous] {

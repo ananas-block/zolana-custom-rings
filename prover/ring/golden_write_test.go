@@ -27,7 +27,7 @@ func TestWriteGoldenRequests(t *testing.T) {
 		name := string(head.CircuitType)
 		paths[common.CircuitType(name)] = path
 	}
-	for _, name := range []common.CircuitType{transferKey, transfer4Key, wideKey, entryKey, "custom-ring-deposit-1", "custom-ring-deposit-2", "custom-ring-deposit-4", "custom-ring-apply-records-2", "custom-ring-apply-records-4", "custom-ring-apply-records-8", privateKey} {
+	for _, name := range []common.CircuitType{transferKey, transfer4Key, wideKey, entryKey, "custom-ring-apply-records-2", "custom-ring-apply-records-4", "custom-ring-apply-records-8", privateKey} {
 		paths[name] = goldenPath(string(name))
 	}
 	writeSolved(t, paths)

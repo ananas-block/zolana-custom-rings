@@ -9,7 +9,7 @@
 //
 // Properties:
 // 1. Withdrawal legs join the payments only once WithdrawalHash binds them.
-// 2. The rule sections run over one payment list, a deposit shares them and reads no row or input.
+// 2. The rule sections run over one payment list.
 // 3. The rows ascend strictly with zero rows last, off the authority rail.
 // 4. A nonzero approval totals digest opens to the outflow section's values, it refuses while the section is off.
 
@@ -53,7 +53,7 @@ func (p *Policy) Screen(api frontend.API, rc frontend.Rangechecker, g Gates, spe
 	return screening
 }
 
-// screenPayments runs the rule sections of a transfer and a deposit over one flow, a deposit's Spend has no row and no input and those sections stay out of its key.
+// screenPayments runs the rule sections over one flow.
 func (p *Policy) screenPayments(api frontend.API, cmp comparator, g Gates, spend Spend, payments []Payment) subjects {
 	// 1. While Screened, the table is the one the program hashed at policy_hash. A clear table binds nothing because every rule below reads through the same gate.
 	table := p.Table.decodeWhen(api, cmp.rc, g.Screened, p.PolicyHash)

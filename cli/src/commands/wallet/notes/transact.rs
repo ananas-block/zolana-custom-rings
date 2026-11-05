@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignDemand, CoSignOperation, CoSignRequirement},
+    cosign::{ApprovalMask, CoSignOperation, CoSignRequirement},
     RingPolicy, RingRail,
 };
 use custom_ring_sdk::{
@@ -920,16 +920,17 @@ impl Requirement {
             demand != Demand::Approval || config.co_signers.covered().is_some(),
             "dual control needs a configured co-signer"
         );
-        let spend = |approval| CoSignOperation {
-            spends_note: true,
-            public_legs: CoSignScope::NONE,
+        let operation = |spends_note, public_legs, approval| CoSignOperation {
+            spends_note,
+            public_legs,
             approval,
         };
         let demanded = match demand {
-            Demand::Deposit => CoSignDemand::DEPOSIT,
-            Demand::Transfer => spend(ApprovalMask::default()).demand(),
-            Demand::Approval => spend(ApprovalMask::OUTFLOW).demand(),
-        };
+            Demand::Deposit => operation(false, CoSignScope::DEPOSITS, ApprovalMask::default()),
+            Demand::Transfer => operation(true, CoSignScope::NONE, ApprovalMask::default()),
+            Demand::Approval => operation(true, CoSignScope::NONE, ApprovalMask::OUTFLOW),
+        }
+        .demand();
         Ok(Self {
             demanded: demanded.requirement(config),
         })

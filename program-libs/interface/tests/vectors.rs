@@ -30,7 +30,7 @@ fn ring_derivation_vectors() {
 
 #[test]
 fn domains_are_their_ascii_tags() {
-    let table: [(u32, &[u8; 4]); 19] = [
+    let table: [(u32, &[u8; 4]); 17] = [
         (domain::TRANSFER_STATEMENT, b"CRTX"),
         (domain::DELIVERED_SLOT_SECRET, b"CRDS"),
         (domain::BLINDING_SEED, b"CRBS"),
@@ -44,8 +44,6 @@ fn domains_are_their_ascii_tags() {
         (domain::SENDER_TAG, b"CRST"),
         (domain::APPLY_RECORDS, b"CRAP"),
         (domain::REGISTER_KEY, b"CRRG"),
-        (domain::DEPOSIT_BLINDING, b"CRDB"),
-        (domain::DEPOSIT_STATEMENT, b"CRDP"),
         (domain::MERGE_STATEMENT, b"CRMG"),
         (domain::WITHDRAWALS, b"CRPW"),
         (domain::RECORD_UPDATE, b"CRRU"),
@@ -81,7 +79,6 @@ struct Scenario {
     salt: [u8; 16],
     first_nullifier: [u8; 32],
     sender_key: [u8; 32],
-    deposit_blinding_secret: [u8; 32],
 }
 
 impl Scenario {
@@ -95,7 +92,6 @@ impl Scenario {
             salt: pattern(0x3e),
             first_nullifier: field(0x2b),
             sender_key: pattern(0x61),
-            deposit_blinding_secret: field(0x08),
         }
     }
 
@@ -124,8 +120,6 @@ impl Scenario {
         let sender_pk_hash = solana_owner_identity(&self.sender_key).expect("sender pk hash");
         let private_tx_blinding = derive_private_tx_blinding(&self.first_nullifier, &blinding_seed)
             .expect("private tx blinding");
-        let deposit_blinding =
-            domain::deposit_blinding(&self.deposit_blinding_secret).expect("deposit blinding");
         json!({
             "description": "Ring output blindings of one transaction. blinding_seed is \
                 Poseidon(CRBS, pack_be(tx_viewing_secret), salt), every output blinding \
@@ -133,7 +127,7 @@ impl Scenario {
                 output_blinding_seed = Poseidon(TXOS, first_nullifier, blinding_seed). A \
                 delivered slot secret is Poseidon(CRDS, pack_be(agreement), pack_be(tx_viewing_pk), \
                 pack_be(recipient_viewing_pk), salt, output_index, first_nullifier) with agreement \
-                = X25519(tx_viewing_secret, recipient_viewing_pk). The deposit blinding is Poseidon(CRDB, deposit_blinding_secret). sender_pk_hash = \
+                = X25519(tx_viewing_secret, recipient_viewing_pk). sender_pk_hash = \
                 owner_identity(sender_key) and private_tx_blinding = Poseidon(TXPB, \
                 first_nullifier, blinding_seed). Produced by \
                 program-libs/interface/tests/vectors.rs print_ring_secret_vectors.",
@@ -150,8 +144,6 @@ impl Scenario {
             "sender_key": hex::encode(self.sender_key),
             "sender_pk_hash": hex::encode(sender_pk_hash),
             "private_tx_blinding": hex::encode(private_tx_blinding),
-            "deposit_blinding_secret": hex::encode(self.deposit_blinding_secret),
-            "deposit_blinding": hex::encode(deposit_blinding),
         })
     }
 

@@ -25,7 +25,7 @@
 //     Address and dummy positions have zero default bits and zero entry openings.
 //
 // Read after audit/audit.go, audit/layout.go, shared/utxo.go, transfer/input.go.
-// Read before audit/signer_data.go, deposit.go, merge.go.
+// Read before audit/signer_data.go, merge.go.
 
 package audit
 
@@ -105,10 +105,10 @@ func assertMint(api frontend.API, live, asset frontend.Variable, chunks [2]front
 // OpeningRecordLen mirrors OPENING_RECORD_LEN in program-libs/interface/src/proof/audit_stream.rs.
 const OpeningRecordLen = RecordStride + fieldLen
 
-// OpeningRecord is the one plaintext of a deposit slot and a merge output. No envelope key derives their blinding, so a record seals the secret that rebuilds it.
+// OpeningRecord is the one plaintext of a merge output. No envelope key derives its blinding, so a record seals the secret that rebuilds it.
 type OpeningRecord struct {
 	RecordOpening
-	// Secret is the deposit's blinding or the merge's seed, a clear Live seals zero.
+	// Secret is the merge's seed, a clear Live seals zero.
 	Secret frontend.Variable
 }
 

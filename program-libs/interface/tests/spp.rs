@@ -2,16 +2,12 @@
 
 use custom_ring_interface::{
     amount_field, signed_amount, CoSignScope, PublicLeg, PublicSlotError, PublicSlots,
-    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
-    RING_MERGE_RING_CONFIG_INDEX, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
+    RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
     RING_TRANSACT_RING_CONFIG_INDEX, SOL_ASSET_ADDRESS, SYSTEM_PROGRAM_ID, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
-use spr_event::EncryptedRingDepositData;
 use spr_hasher::primitives::{hash_bytes, right_align};
-use spr_instruction::instruction::{
-    DepositAsset, MergeRing, RingAssetDeposit, RingDeposit, RingTransact,
-};
+use spr_instruction::instruction::{DepositAsset, MergeRing, RingTransact};
 use spr_interface::{
     instruction::{
         instruction_data::merge_transact::{MergeOutputEncryption, MergeProof},
@@ -68,37 +64,6 @@ fn transact_accounts_put_the_payer_and_the_ring_config_where_the_ring_reads_them
         accounts[RING_TRANSACT_ACCOUNT_PREFIX_LEN].pubkey,
         INPUT_TREE
     );
-}
-
-#[test]
-fn deposit_accounts_put_the_depositor_and_the_ring_config_where_the_ring_reads_them() {
-    let deposit = RingDeposit {
-        tree: TREE,
-        depositor: PAYER,
-        ring_program_id: RING,
-        deposits: vec![RingAssetDeposit {
-            asset: DepositAsset::Sol,
-            view_tag: [0; 32],
-            owner_utxo_hash: [0; 32],
-            amount: 1,
-            ring_data_hash: [0; 32],
-            encrypted: EncryptedRingDepositData {
-                tx_viewing_pk: [4; 33],
-                salt: [0; 16],
-                ciphertext: vec![],
-            },
-        }],
-    }
-    .cpi_instruction()
-    .unwrap();
-    let accounts = &deposit.accounts;
-    assert_eq!(accounts[RING_DEPOSIT_DEPOSITOR_INDEX].pubkey, PAYER);
-    assert!(accounts[RING_DEPOSIT_DEPOSITOR_INDEX].is_signer);
-    assert_eq!(
-        accounts[RING_DEPOSIT_RING_CONFIG_INDEX].pubkey,
-        ring_config()
-    );
-    assert!(accounts[RING_DEPOSIT_RING_CONFIG_INDEX].is_signer);
 }
 
 #[test]

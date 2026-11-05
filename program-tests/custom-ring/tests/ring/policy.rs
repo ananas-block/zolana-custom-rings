@@ -246,7 +246,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         rpc,
         &signature,
         "audited ring deposit",
-        u64::from(compute_unit_limit(InstructionTag::Deposit)),
+        u64::from(compute_unit_limit(InstructionTag::Transfer)),
     )?;
     let recovery = RingRecovery::new(ring_program, &auditor).for_member(SourceMember {
         address: &member_address,
@@ -393,7 +393,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         rpc,
         &signature,
         "enrolled audited deposit",
-        u64::from(compute_unit_limit(InstructionTag::Deposit)),
+        u64::from(compute_unit_limit(InstructionTag::Transfer)),
     )?;
 
     // The delegate moves the enrolled member's note back to the member.

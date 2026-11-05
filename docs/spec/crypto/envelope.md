@@ -1,8 +1,8 @@
 # Envelope
 
-The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for a transfer's auditor stream, an enrolling owner's nullifier secret and list salt, deposit opening records and a merge's opening record. The stream schedule also keys every recipient body, reply and sender bundle from a slot secret, outside every proof. [Spec](../../spec.md) [Hashing](hashing.md) [Disclosure](disclosure.md)
+The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for a transfer's auditor stream, an enrolling owner's nullifier secret and list salt, and a merge's opening record. The stream schedule also keys every recipient body, reply and sender bundle from a slot secret, outside every proof. [Spec](../../spec.md) [Hashing](hashing.md) [Disclosure](disclosure.md)
 
-The ring program verifies the transfer, deposit and merge proofs. The Storage program verifies the register key proof in `Enroll` on an owner's first enrollment. In each, the ciphertext's hash in the statement fixes the plaintext.
+The ring program verifies the transfer and merge proofs. The Storage program verifies the register key proof in `Enroll` on an owner's first enrollment. In each, the ciphertext's hash in the statement fixes the plaintext.
 
 ## Key encoding
 
@@ -20,7 +20,7 @@ secret = Poseidon(CR_S, pack_be(dh), pack_be(eph_pk), pack_be(auditor_pk))   // 
 salted = Poseidon(secret, right_align(salt))         // auditor stream only
 ```
 
-The auditor stream takes `tx_viewing_sk` as `eph_sk`, so `eph_pk` is SPP's `tx_viewing_pk`. The stream keys its schedule from `salted` with SPP's 16-byte `salt`. A resend under one first nullifier repeats `tx_viewing_sk`, and the SDKs draw a fresh salt per build, so the keystream differs. The register key, deposit and merge lines key their schedule from `secret` under a fresh `eph_sk`. The circuit proves neither freshness. A reused key and salt under one auditor key repeats the keystream.
+The auditor stream takes `tx_viewing_sk` as `eph_sk`, so `eph_pk` is SPP's `tx_viewing_pk`. The stream keys its schedule from `salted` with SPP's 16-byte `salt`. A resend under one first nullifier repeats `tx_viewing_sk`, and the SDKs draw a fresh salt per build, so the keystream differs. The register key and merge lines key their schedule from `secret` under a fresh `eph_sk`. The circuit proves neither freshness. A reused key and salt under one auditor key repeats the keystream.
 
 ## Stream schedule
 
@@ -43,7 +43,6 @@ ciphertext = AES-256-CTR(key, nonce || u32be(counter), plaintext), counter from 
 | `CRING/rpl` | reply metadata | the secret of slot `i`'s body |
 | `CRING/snd` | sender bundle, scheme 9 | slot secret at `m` under the sender's viewing key |
 | `CRING/nfk` | register key | `secret` above |
-| `CRING/dep` | deposit | `secret` above |
 | `CRING/mrg` | merge | `secret` above |
 
 One label per ciphertext kind gives each kind its own key and nonce, so a reply never restarts the body's counter. On an anonymous frame, the ring output tags and the bundle tag each take one more Poseidon output of the slot secret keying the ciphertext. Each tag has its own [domain](hashing.md#domain-tags). An exit's scheme 3 body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
@@ -59,21 +58,6 @@ No line has an authentication tag. Integrity comes from the statement, or for a 
 | Reply metadata | `CRING/rpl`, slot secret | the [reply](disclosure.md#reply-metadata) | no statement, SPP's external data hash binds the bytes |
 | Sender bundle | `CRING/snd`, slot secret | the [sender bundle](disclosure.md#sender-bundle) | no statement, SPP's external data hash binds the bytes |
 | Register key | `CRING/nfk` | `fe32(nullifier_secret) \|\| fe32(list_salt)`, 64 bytes, each with a zero lead byte | `pack_be` of both tagged keys, `hash_bytes(ciphertext)` |
-| Deposit | `CRING/dep` | per occupied slot one 144-byte [opening record](disclosure.md#deposits-and-merges), its secret the blinding | `pack_be` of both tagged keys, `hash_bytes` of each slot's 144 bytes |
-| Merge | `CRING/mrg` | one 144-byte opening record, its secret the merge seed | `pack_be` of both tagged keys, `hash_bytes(ciphertext)` |
+| Merge | `CRING/mrg` | one 144-byte [opening record](disclosure.md#merges), its secret the merge seed | `pack_be` of both tagged keys, `hash_bytes(ciphertext)` |
 
-The deposit batch is one contiguous stream under one `eph_sk`, slot `i` at counter `2 + 9i`. A deposit or merge record's `owner_key` is the key whose `solana_owner_identity` is the note's `owner_pk_hash`. The merge's `eph_pk` and ciphertext travel in the ring instruction, since SPP's merge publishes no auditor message.
-
-## Deposit capsule
-
-Each SPP deposit entry's ciphertext starts with a capsule the program parses:
-
-```text
-magic       "CRDEPOST"
-slot_index  u8, below 8, equal to the entry's position
-eph_pk      [33], tag 0x04, equal across the batch
-ciphertext  [144], bytes 144 i .. 144 i + 144 of the batch stream
-recipient   the rest, the recipient's RingDepositPlaintext ciphertext, not proven
-```
-
-The capsule header is 186 bytes. The auditor opens the batch from one agreement and rebuilds each slot's `Poseidon(owner_hash, blinding)` from its record against the published `owner_utxo_hash`.
+A merge record's `owner_key` is the key whose `solana_owner_identity` is the note's `owner_pk_hash`. The merge's `eph_pk` and ciphertext travel in the ring instruction, since SPP's merge publishes no auditor message.

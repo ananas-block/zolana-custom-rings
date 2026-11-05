@@ -5,7 +5,6 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
     use spr_interface::instruction::tag as spp;
 
     let tags = [
-        spp::RING_DEPOSIT,
         spp::RING_TRANSACT,
         spp::RING_AUTHORITY_TRANSACT,
         spp::RING_MERGE_V2,
@@ -19,7 +18,6 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
         tag::CLEAR_CO_SIGNER,
         tag::SET_DELEGATE,
         tag::AUTHORITY_TRANSFER,
-        tag::DEPOSIT,
     ];
     let unique: std::collections::BTreeSet<_> = tags.into_iter().collect();
     assert_eq!(unique.len(), tags.len());
@@ -28,13 +26,8 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
 #[test]
 fn frame_tags_stay_pinned() {
     assert_eq!(
-        (
-            tag::TRANSFER,
-            tag::AUTHORITY_TRANSFER,
-            tag::MERGE,
-            tag::DEPOSIT
-        ),
-        (55, 56, 57, 58)
+        (tag::TRANSFER, tag::AUTHORITY_TRANSFER, tag::MERGE),
+        (55, 56, 57)
     );
 }
 
@@ -42,7 +35,7 @@ fn frame_tags_stay_pinned() {
 fn unassigned_tags_name_no_instruction() {
     for unassigned in [
         1, 2, 4, 5, 7, 8, 9, 10, 12, 18, 21, 22, 23, 24, 26, 28, 29, 30, 32, 33, 34, 35, 36, 37,
-        38, 39, 40, 41, 42, 48, 3, 25, 31, 43, 44, 45, 46, 47, 59, 60, 61, 63,
+        38, 39, 40, 41, 42, 48, 3, 25, 31, 43, 44, 45, 46, 47, 58, 59, 60, 61, 63,
     ] {
         assert_eq!(
             InstructionTag::try_from(unassigned),

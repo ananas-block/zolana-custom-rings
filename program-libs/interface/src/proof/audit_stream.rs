@@ -29,7 +29,7 @@ pub const DEFAULT_INPUT_BITS_LEN: usize = 8;
 pub const AUDIT_RECORD_LEN: usize = 105;
 pub const DATA_TAIL_LEN: usize = 64;
 pub const ENTRY_INPUT_LEN: usize = 200;
-/// The secret is the deposit's blinding or the merge's seed.
+/// The secret is the merge's seed.
 pub const OPENING_RECORD_LEN: usize = RECORD_STRIDE + FIELD_LEN;
 pub const RECIPIENT_BODY_LEN: usize = 72;
 pub const COMPACT_RECIPIENT_BODY_LEN: usize = 48;
