@@ -453,14 +453,6 @@ export type {
   RingMergeAuditPage,
   RingMergeAuditReader,
 } from "../operations/audit/audit-merge.js";
-export { MergeLedger } from "../state/merge-ledger.js";
-export type {
-  AuditedMergeOutput,
-  ConfirmedMerge,
-  KnownMergeInput,
-  MergeInput,
-  MergeTransition,
-} from "../state/merge-ledger.js";
 export {
   MergeRingAuthority,
   decodeRingMergeRequest,
