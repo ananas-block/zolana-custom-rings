@@ -94,7 +94,7 @@ func TestApprovalTotalsBindTheProvedOutflow(t *testing.T) {
 		})
 	}
 	ringtest.PinVector(t, "policy/approval_totals.json", map[string]any{
-		"description": "HashChain4(CRAO, blinder, layout) over each policy/quantities.json case. The layout is asset, peak and outflow per output slot, then asset, peak of debits, sum of debits and gross per public slot, zeros past the live slots. Produced by prover/circuits/policy/approval_totals_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description": "HashChain4(CRAO, blinder, layout) over each policy/quantities.json case. The layout is asset, peak and charged outflow per output slot, then asset, peak of debits, sum of debits and gross per public slot, zeros past the live slots. Produced by prover/circuits/policy/approval_totals_test.go with WRITE_AUDIT_VECTORS=1.",
 		"cases":       vector,
 	})
 }

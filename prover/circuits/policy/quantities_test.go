@@ -260,7 +260,7 @@ type quantityRow struct {
 	Debit          uint64 `json:"debit"`
 	Kept           uint64 `json:"kept"`
 	Charge         uint64 `json:"charge"`
-	ChargedOutflow uint64 `json:"outflow"`
+	ChargedOutflow uint64 `json:"charged_outflow"`
 }
 
 type guardRow struct {
