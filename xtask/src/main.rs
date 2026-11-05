@@ -144,7 +144,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("usage: ring-xtask create-release --tag <tag> [options] | frame-fit");
+            eprintln!("usage: ring-xtask create-release --tag <tag> [options] | frame-fit | inline-capacity");
             std::process::exit(2);
         }
     }
