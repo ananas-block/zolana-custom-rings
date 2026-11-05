@@ -7,7 +7,7 @@
  * tree 0, and `rootSequence` orders those roots by their authenticated append count.
  *
  * Read after `crypto/derivation/ring-domain.ts` and `protocol/proof/statement.ts`.
- * Read before `rpc/credential-resolver.ts`.
+ * Read before `rpc/credential-resolver.ts` and `operations/management/credential-write.ts`.
  */
 import { getProgramDerivedAddress, type Address } from "@solana/kit";
 
@@ -55,7 +55,7 @@ export const ADDRESS_TREE_ID: TreeId = 0;
 /** Rust `offset_of!(TreeAccountLayout, nullifier)`, where `sequence_number` opens the layout. */
 export const NULLIFIER_SEQUENCE_OFFSET = 17_152;
 /** Rust `spr_program::program::ACCOUNT_BLINDING_SEED`. */
-const ACCOUNT_BLINDING_SEED = rightAlign(Uint8Array.of(1)) as Bytes32;
+export const ACCOUNT_BLINDING_SEED = rightAlign(Uint8Array.of(1)) as Bytes32;
 /** Rust `spr_program::hasher::UNIQUE_DATA_HASH_DOMAIN`, "UNIQ". */
 const UNIQUE_DATA_HASH_DOMAIN = 0x554e_4951;
 /** Rust `OutputDataEncoding::PLAINTEXT_TAG`. */
@@ -101,6 +101,11 @@ export function credentialElements(
   return [domainField(domain), ...fields];
 }
 
+/** The RegisterKey public input, the statement hash `Enroll` verifies. */
+export function registerKeyHash(credential: AuditCredential): Bytes32 {
+  return hashChain4(credentialElements(credential, RingDomain.registerKey)) as Bytes32;
+}
+
 export function credentialStateHash(credential: AuditCredential): Bytes32 {
   return hashChain4(credentialElements(credential, RingDomain.credentialState)) as Bytes32;
 }
@@ -135,9 +140,14 @@ export function credentialOwnerHash(pda: Address): Bytes32 {
   ) as Bytes32;
 }
 
-/** The address slot's zero key nullifier in tree 0, Rust `NewAddress::derive`. */
+/** The address slot `Enroll` proves absent in tree 0, Rust `NewAddress::derive`. */
+export function credentialAddressInput(pda: Address, seed: Bytes32): ProofInputUtxo {
+  return ProofInputUtxo.address(ShieldedPublicKey.fromPda(pda), seed, ADDRESS_TREE_ID);
+}
+
+/** The address slot's zero key nullifier in tree 0. */
 export function credentialAddress(pda: Address, seed: Bytes32): Bytes32 {
-  return ProofInputUtxo.address(ShieldedPublicKey.fromPda(pda), seed, ADDRESS_TREE_ID).nullifier();
+  return credentialAddressInput(pda, seed).nullifier();
 }
 
 /** Enroll writes one output, so its blinding derives from the address alone. */
@@ -188,6 +198,18 @@ export function decodeAuditCredential(data: Uint8Array): AuditCredential {
   });
   reader.done();
   return credential;
+}
+
+/** Rust `plaintext_output_data`, `tag || u32 LE length || address || Borsh(credential)`. */
+export function encodeCredentialOutput(address: Bytes32, credential: AuditCredential): Uint8Array {
+  const length = new Uint8Array(4);
+  new DataView(length.buffer).setUint32(0, 32 + AUDIT_CREDENTIAL_SIZE, true);
+  return concatBytes(
+    Uint8Array.of(PLAINTEXT_TAG),
+    length,
+    address,
+    encodeAuditCredential(credential),
+  );
 }
 
 /** `undefined` unless `payload` is `Plaintext(address || Borsh(credential))` for `address`. */

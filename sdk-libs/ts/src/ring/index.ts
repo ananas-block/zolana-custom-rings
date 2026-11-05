@@ -581,15 +581,30 @@ export {
   ENROLL_TAG,
   OWNER_GRANT_TAG,
   applyEnrollmentsInstruction,
+  checkEnrolledCredential,
+  credentialRegistration,
+  enrollCredentialInstruction,
   enrollInstruction,
   enrollmentState,
+  enrollmentSubmission,
   ownerGrantInstruction,
+  prepareEnrollment,
+  proveCredential,
   proveEnrollment,
   type ApplyEnrollments,
+  type CredentialEnrollmentClient,
   type Enroll,
+  type EnrollCredential,
   type EnrollmentSeal,
+  type PreparedEnrollment,
+  type ProvenCredential,
   type WriteOwnerGrant,
 } from "../operations/management/enrollment.js";
+export {
+  proveCredentialWrite,
+  type CredentialWrite,
+  type ProvenCredentialWrite,
+} from "../operations/management/credential-write.js";
 export {
   prepareEnrollRelay,
   prepareEnrollmentRelay,
@@ -625,8 +640,10 @@ export { privateListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
 export { BufferedFrame } from "../operations/payments/buffered-frame.js";
 export {
+  credentialAccounts,
   encodeRelayEnrollInputs,
   enrollRequestDigest,
+  type CredentialAccounts,
   type RelayEnrollInputs,
 } from "../protocol/ring-rpc/relay-enroll-inputs.js";
 export type { TransactionSize } from "../operations/workflow/compile.js";

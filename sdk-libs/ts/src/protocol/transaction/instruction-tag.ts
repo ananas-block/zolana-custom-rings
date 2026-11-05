@@ -2,6 +2,7 @@
 export const RingInstructionTag = Object.freeze({
   transfer: 55,
   merge: 57,
+  enroll: 65,
   updateAuthority: 6,
   setPaused: 11,
   setCoSigner: 27,
