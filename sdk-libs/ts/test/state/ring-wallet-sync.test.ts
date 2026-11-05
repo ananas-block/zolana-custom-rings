@@ -578,6 +578,25 @@ describe("syncRingWallet", () => {
       expect(request.filters).toEqual({ slot: { gt: 20n } });
   });
 
+  it("refuses a held key the history lists no entry for and moves nothing", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const identity = recipient.shieldedAddress();
+    const ring = AnonymousWallet.create(
+      new Wallet({ identity }),
+      ViewingHistory.create(ShieldedKeypair.generate().shieldedAddress().viewingPublicKey, 0n),
+    );
+    const client = syncClient([ringBody(recipient)]);
+    const before = ring.toJson();
+
+    await expect(syncRingWallet({ wallet: ring, keys, client })).rejects.toMatchObject({
+      code: "RING_HELD_KEY_NOT_IN_HISTORY",
+    });
+
+    expect(ring.toJson()).toBe(before);
+    expect(client.getShieldedTransactionsByTags.mock.calls).toHaveLength(1);
+  });
+
   it("refuses a stored document whose pending notes name another identity", () => {
     const document = JSON.parse(ringWallet(ShieldedKeypair.generate()).toJson()) as Record<
       string,

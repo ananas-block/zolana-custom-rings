@@ -455,10 +455,7 @@ class RingReads {
     const groups = new Map<bigint | null, X25519PublicKey[]>();
     for (const key of held) {
       const entry = history.entry(key);
-      if (entry === undefined)
-        throw new RingError("RING_VIEWING_HISTORY_INVALID", {
-          details: { reason: "a held key has no entry" },
-        });
+      if (entry === undefined) throw new RingError("RING_HELD_KEY_NOT_IN_HISTORY");
       groups.set(entry.tagPosition, [...(groups.get(entry.tagPosition) ?? []), key]);
     }
     // 2. One read per group and stream, an unread group first.
