@@ -132,7 +132,10 @@ pub enum RingError {
         bytes: usize,
         limit: usize,
     },
-    #[error("no tree holds {amount} of {mint} in {max_inputs} inputs")]
+    #[error(
+        "no set of up to {max_trees} input trees holds {amount} of {mint} in {max_inputs} inputs",
+        max_trees = spr_interface::MAX_INPUT_TREES
+    )]
     Unfunded {
         mint: Address,
         amount: u64,

@@ -379,8 +379,7 @@ export function selectRingInputs(
   };
   return selectAcrossTrees({
     wallet,
-    asset,
-    target: { kind: "cover", amount },
+    covers: [{ asset, amount }],
     policy: {
       eligible: (entry) => {
         if (!unreserved(reserved)(entry)) return false;
@@ -838,7 +837,7 @@ async function stageRingSpend<R>(
   retry.entries = selected;
   const transfer = ringSpendTransfer({
     owner,
-    inputs: await ringProofInputs(selected, owner, params.client, context),
+    inputs: await ringProofInputs(selected, () => owner, params.client, context),
     feePayer: input.feePayer,
   }).withOutputTreeId(outputTree.treeId);
   let anonymousPayment: AnonymousPayment | undefined;

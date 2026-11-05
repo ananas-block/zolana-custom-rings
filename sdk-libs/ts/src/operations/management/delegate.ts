@@ -11,7 +11,6 @@ import {
   reserveEntries,
   reservedUtxoKeys,
   unreserved,
-  selectUtxos,
   signerAddress,
   type SignerAccount,
   ZERO_32,
@@ -44,7 +43,12 @@ import {
   type RingTransferApproval,
 } from "../payments/transfer-rails.js";
 import { standIn, type CoOwner } from "../payments/ring-spend.js";
-import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
+import {
+  ringIntentMismatch,
+  ringProofInputs,
+  ringSelectionErrors,
+  selectAcrossTrees,
+} from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
@@ -299,7 +303,7 @@ async function buildDelegateTransaction(
       payer: move.feePayer,
       source: owner,
       sourceProofs: spender.proofs,
-      inputs: selected.map((entry) => ringProofInput(entry, ownerOf(entry), move.client)),
+      inputs: await ringProofInputs(selected, ownerOf, move.client, context),
       coSources,
       outputs: moved,
       assets,
@@ -367,7 +371,7 @@ function delegateCoSources(
   );
 }
 
-/** Plain ring notes of the source, one cover per mint inside the widest authority shape holding the outputs. */
+/** Plain ring notes of the source on one input tree, one cover per mint inside the widest authority shape holding the outputs. */
 function selectSourceNotes(
   move: DelegateMove,
   wallet: Wallet,
@@ -383,36 +387,30 @@ function selectSourceNotes(
     ),
   );
   const reserved = reservedUtxoKeys(wallet);
-  const selected: WalletUtxo[] = [];
-  for (const [asset, amount] of amounts) {
-    selected.push(
-      ...selectUtxos({
-        wallet,
-        asset,
-        target: { kind: "cover", amount },
-        policy: {
-          eligible: (entry) =>
-            unreserved(reserved)(entry) &&
-            entry.utxo.ringProgramId === move.ringProgramId &&
-            entry.dataHash === undefined &&
-            (entry.ringDataHash === undefined || equalBytes(entry.ringDataHash, ZERO_32)) &&
-            entry.utxo.data.utxoData() === undefined &&
-            entry.utxo.data.memo() === undefined &&
-            (entry.utxo.data.ringData()?.length ?? 0) === 0 &&
-            owners.some((owner) =>
-              equalBytes(
-                entry.utxo.owner.ownerProofInputHash(),
-                owner.signingPublicKey.ownerProofInputHash(),
-              ),
-            ),
-          ordering: "largestFirst",
-          allowWideBalance: true,
-          maxInputs: maxInputs - selected.length,
-          tree: { kind: "fixed", tree: move.client.tree },
-          errors: ringSelectionErrors,
-        },
-      }).entries,
-    );
-  }
-  return selected;
+  return selectAcrossTrees({
+    wallet,
+    covers: [...amounts].map(([asset, amount]) => ({ asset, amount })),
+    policy: {
+      eligible: (entry) =>
+        unreserved(reserved)(entry) &&
+        entry.utxo.ringProgramId === move.ringProgramId &&
+        entry.dataHash === undefined &&
+        (entry.ringDataHash === undefined || equalBytes(entry.ringDataHash, ZERO_32)) &&
+        entry.utxo.data.utxoData() === undefined &&
+        entry.utxo.data.memo() === undefined &&
+        (entry.utxo.data.ringData()?.length ?? 0) === 0 &&
+        owners.some((owner) =>
+          equalBytes(
+            entry.utxo.owner.ownerProofInputHash(),
+            owner.signingPublicKey.ownerProofInputHash(),
+          ),
+        ),
+      ordering: "largestFirst",
+      allowWideBalance: true,
+      maxInputs,
+      errors: ringSelectionErrors,
+    },
+    // The core `prepareRingAuthorityTransfer` refuses inputs on two trees.
+    maxTrees: 1,
+  });
 }
