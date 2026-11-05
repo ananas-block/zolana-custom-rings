@@ -138,7 +138,7 @@ The ring uses these SPP rails:
 2. **Confidential in-proof rail:** the owner signs inside the proof of SPP's anonymous rail, and public co-owners can sign the transaction beside it. SPP hides the owner, and the ring statement publishes it as the sender.
 3. **Anonymous rail:** a hidden owner signs inside the SPP proof, with optional public co-owners who sign the transaction. Under the frame's `PUBLIC_OWNERS` flag no hidden owner exists, every live owner is a published signer, and SPP's confidential rail settles the frame.
 4. **Authority rail:** the ring PDA moves notes with no owner signature, for the delegate, on a confidential and on an anonymous ring. A delegate exit settles on SPP's `ring_authority_exit` selector.
-5. **Ring deposit and ring merge.**
+5. **Ring merge.** A deposit is a transfer on the signer rail, or under `PUBLIC_OWNERS` on an anonymous ring, that spends no note.
 
 An in-proof owner on ring transfers lets Ring RPC pay for and send a confidential transfer from one wallet signature. Zolana's own in-proof circuit serves default-ring transfers only, so the confidential in-proof rail proves on SPP's anonymous rail. Both confidential owner rails stay. [Owner rails](design/owner-rails.md)
 
@@ -278,7 +278,7 @@ The **Wallet** writes its own viewing flag and its wallet grants. The **Policy a
 
 ## 3. Deposit
 
-A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring notes. The token and amounts are public.
+A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring notes, in at most 3 tokens. The token and amounts are public. It is a transfer that spends no note, every SPP input a dummy, funded by a deposit leg.
 
 1. **Wallet:**
    1. Chooses the token, amount and recipient.
@@ -286,7 +286,7 @@ A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring n
    3. Sends the deposit request with its proof inputs to **Ring RPC**.
 2. **Ring RPC:**
    1. Checks that the ring is active.
-   2. Generates the deposit proof. It shows the owner and asset rules hold for each recipient and asset. It also shows that each nonzero nullifier key matches its owner's tracking row. Under a salted payee read it shows that each zero-key owner has no row.
+   2. Generates the transfer proof. It shows the owner and asset rules hold for each recipient and asset. It also shows that each nonzero nullifier key matches its owner's tracking row. Under a salted payee read it shows that each zero-key owner has no row.
    3. Returns the transaction to the **Wallet** for signing.
 3. **Wallet:** signs to authorize the SOL or SPL token transfer.
 4. **Ring RPC:**
@@ -294,9 +294,9 @@ A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring n
    2. Pays fees and submits the deposit to the **Ring Program**.
    3. Follows the deposit to confirmation. The recipient's **Wallet** finds its notes by view tag.
 
-Without Ring RPC the **Wallet** reads the records itself, generates the deposit proof, and pays for and submits the deposit.
+Without Ring RPC the **Wallet** reads the records itself, generates the transfer proof, and pays for and submits the deposit.
 
-On every ring the sealed opening names each note's owner key, and the deposit proof binds that key to the note's owner commitment.
+On every ring the sealed opening names each note's owner key, and the transfer proof binds that key to the note's owner commitment. No ring instruction signs SPP's proofless ring deposit.
 
 ## 4. Transfer
 
@@ -443,7 +443,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 5. `SetCoSigner`: creates a co-signer account or changes its scope. The co-signer admin signs.
 6. `ClearCoSigner`: closes a co-signer account to a rent recipient. The co-signer admin signs.
 7. `SetDelegate`: sets the delegate once. It changes no mode and needs no policy. The admin and the delegate sign.
-8. `Deposit`: verifies the deposit proof before SPP CPI. The depositor signs, and a co-signer when the ring demands one.
+8. Tag 58 is unassigned. A deposit is a `Transfer` that spends no note.
 9. `Transfer`: verifies the one ring proof before SPP CPI. Its statement carries the audit, the tracking root and the policy section under the ring's written policy hash. It also carries `approval_mask` under the thresholds of the ring's own records. The payer signs. On the signer rail each input owner also signs. On the in-proof rail the owner the frame names signs inside the SPP proof, and each other owner of the run signs the transaction. The proof holds every input to one of them. On the anonymous rail each public co-owner signs. Each co-signer the demanded classes need and each deposit leg's funder also sign.
 10. `AuthorityTransfer`: as `Transfer` on the authority rail, on a confidential or an anonymous ring. It reads no policy root, sets no approval bit, demands no co-signer and takes no deposit leg. The delegate and the payer sign.
 11. `Merge`: verifies the ring merge proof before SPP CPI. Its statement carries the output hash, the first nullifier, the ring id, the auditor and ephemeral keys and the sealed record. It also carries the payer, the published owner and the tracking root. The payer signs, and under the zero key the published owner. No co-signer signs.
@@ -478,7 +478,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 16. Both confidential owner rails stay. The program admits an entry key on every rail but the delegate's. The SDKs refuse a default-ring input on the in-proof rail, and a hidden owner's ring notes beside its own default-ring note.
 17. This repository never refactors zolana circuits. They are audited, and a source change reopens the audit.
 18. The transfer statement holds no recipient key, body or tag. Recipient delivery stays outside every proof, and the audit stays provable on every transfer.
-19. The deposit proof also opens the curator root. Curator asset lists then admit deposits.
+19. A deposit proves on a transfer key and opens the curator root. Curator asset lists then admit deposits.
 20. The SDKs refuse a merge whose payer is the owner, on every ring. The merge circuit already refuses it, and the SDKs fail before proving.
 21. Every ring merge proves one opening record of its output and the seed, sealed to the auditor. SPP's proof ties every input to that owner, asset and sum, so the ring proof opens no input and one ring key serves every width.
 22. A deployment keeps reader grants in one store. Every read checks one source of truth.

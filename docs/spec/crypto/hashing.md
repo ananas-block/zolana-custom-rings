@@ -45,7 +45,6 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Output seed | `TXOS(n0, seed) = Poseidon(TXOS, n0, seed)` |
 | Output blinding | `TXOB(n0, output_seed, i) = Poseidon(TXOB, n0, output_seed, i)` |
 | Private transaction blinding | `TXPB(n0, seed) = Poseidon(TXPB, n0, seed)` |
-| Deposit blinding | `Poseidon(CRDB, blinding_secret)` |
 | Merge output blinding | `TMOB(seed, n0)`, as zolana defines it. `seed` is the owner's nullifier secret, and under the zero nullifier key the private merge seed |
 
 `n0` is the transfer's first nullifier. The transfer proof pins every published output's blinding, a dummy's included. SPP derives every output blinding and `private_tx_blinding` from one seed, so the slots fix the seed to `CRBS(tx_viewing_sk, salt)`. The auditor derives each output blinding from the sealed key. No frame field carries the output seed.
@@ -154,8 +153,6 @@ Each amount is a u128 under `right_align`. An output slot reads the largest char
 | `CRPT` | `0x43525054` | list tag |
 | `CRPL` | `0x4352504c` | salted member |
 | `CRAO` | `0x4352414f` | approval totals digest |
-| `CRDP` | `0x43524450` | deposit statement |
-| `CRDB` | `0x43524442` | deposit blinding |
 | `CRMG` | `0x43524d47` | merge statement |
 | `CRRU` | `0x43525255` | record update statement |
 | `CRWG` | `0x43525747` | wallet grant record key |

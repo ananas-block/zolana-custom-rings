@@ -159,12 +159,12 @@ change_cell = mint || u64be(amount)                                             
 
 The layout value is `has_data | entry << 1 | single_asset_payout << 2`. The circuit decomposes it into three bits. It binds entry and payout to the key and refuses `has_data` on a payout key.
 
-## Deposits and merges
+## Merges
 
-A deposit seals one opening record per occupied slot, and a merge seals one opening record of its output:
+A merge seals one opening record of its output:
 
 ```text
 opening_record = record || 7 zero bytes || fe32(secret)   144 bytes
 ```
 
-The secret is the deposit note's blinding, or the merge's seed. No envelope key derives either blinding, so the record seals what rebuilds it. The auditor rebuilds a merged note's blinding as `TMOB(seed, n0)`. A merge's ring proof opens no input, since SPP's merge proof ties every input to the output's owner, asset and sum. [Envelope uses](envelope.md#envelope-uses) states the keys and counters.
+The secret is the merge's seed. No envelope key derives the merged blinding, so the record seals what rebuilds it. The auditor rebuilds a merged note's blinding as `TMOB(seed, n0)`. A merge's ring proof opens no input, since SPP's merge proof ties every input to the output's owner, asset and sum. [Envelope uses](envelope.md#envelope-uses) states the keys and counters.
