@@ -401,7 +401,7 @@ struct SpentMint {
 
 /// The circuit's owner identity hashes the 32 key bytes alone, a compare of tagged keys would split
 /// one owner whose note and address carry different Ed25519 or PDA tags.
-fn same_owner(left: &PublicKey, right: &PublicKey) -> bool {
+pub(crate) fn same_owner(left: &PublicKey, right: &PublicKey) -> bool {
     match (left.confidential_view_tag(), right.confidential_view_tag()) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
