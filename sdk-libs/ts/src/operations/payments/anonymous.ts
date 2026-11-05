@@ -16,17 +16,17 @@ import {
   encodeBase58,
   associatedTokenAddress,
   equalBytes,
-} from "@heliuslabs/zolana/internal";
-import type { ChainReader, RpcAccount } from "@heliuslabs/zolana/client";
-import { SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { Address, Bytes32, Bytes64, RequestContext } from "@heliuslabs/zolana/interface";
-import { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
-import type { ShieldedAddress, SigningKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { ChainReader, RpcAccount } from "@heliuslabs/spr/client";
+import { SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID } from "@heliuslabs/spr/interface";
+import type { Address, Bytes32, Bytes64, RequestContext } from "@heliuslabs/spr/interface";
+import { ShieldedPublicKey } from "@heliuslabs/spr/keypair";
+import type { ShieldedAddress, SigningKey } from "@heliuslabs/spr/keypair";
 import type {
   ProofInputUtxo,
   SettlementTransfer,
   SppProofInputs,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import type { RingAddress } from "../../crypto/keys/ring-address.js";
 
 import { RingError, type RingErrorCode } from "../../protocol/error.js";

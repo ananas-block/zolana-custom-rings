@@ -10,16 +10,16 @@ import {
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { solanaOwnerIdentity, addressBytes, sha256, ZERO_32 } from "@heliuslabs/zolana/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { solanaOwnerIdentity, addressBytes, sha256, ZERO_32 } from "@heliuslabs/spr/internal";
 import {
   MAX_MERGE_INPUTS,
   type Bytes32,
   type Bytes33,
   type Bytes64,
-} from "@heliuslabs/zolana/interface";
-import { ownerHash, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT, assetField } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/interface";
+import { ownerHash, X25519Keypair } from "@heliuslabs/spr/keypair";
+import { SOL_MINT, assetField } from "@heliuslabs/spr/transaction";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
 import {
   decodeStorageApplyProofInputs,

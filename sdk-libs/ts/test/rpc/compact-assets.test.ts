@@ -12,14 +12,18 @@ import {
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 import {
+  decodeSplAssetRegistry,
   SHIELDED_POOL_PROGRAM_ID,
-  SPL_ASSET_REGISTRY_ASSET_ID_OFFSET,
   StateDiscriminator,
-} from "@heliuslabs/zolana/interface";
-import { splAssetCounterAddress, splAssetRegistryAddress } from "@heliuslabs/zolana/internal";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/interface";
+import { splAssetCounterAddress, splAssetRegistryAddress } from "@heliuslabs/spr/internal";
+import { SOL_MINT } from "@heliuslabs/spr/transaction";
 import { kitReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { COMPACT_ASSET_LOOKUP_BUDGET, CompactAssetResolver } from "../../src/rpc/compact-assets.js";
+import {
+  COMPACT_ASSET_LOOKUP_BUDGET,
+  CompactAssetResolver,
+  SPL_ASSET_REGISTRY_ASSET_ID_OFFSET,
+} from "../../src/rpc/compact-assets.js";
 
 const mint = address("54XGz8UVJaGpwba1nxsNC4AfVZ6Uiue6J9cymVSv2Qpu");
 const base64Decoder = getBase64Decoder();
@@ -30,7 +34,7 @@ const u64Decoder = getU64Decoder();
 
 function account(data: Uint8Array, owner: Address = SHIELDED_POOL_PROGRAM_ID) {
   return {
-    data: [base64Decoder.decode(data), "base64"],
+    data: [base64Decoder.decode(data), "base64"] as const,
     executable: false,
     lamports: 1n,
     owner,
@@ -100,6 +104,13 @@ function reader(registryRead: (assetId: bigint) => Promise<readonly RegistryEntr
 }
 
 describe("compact asset resolution", () => {
+  it("filters on the asset id offset the registry decoder reads", async () => {
+    const data = new Uint8Array(base64Encoder.encode((await registration(7n)).account.data[0]));
+    const offset = Number(SPL_ASSET_REGISTRY_ASSET_ID_OFFSET);
+    expect(u64Decoder.decode(data.subarray(offset, offset + 8))).toBe(7n);
+    expect(decodeSplAssetRegistry(data).assetId).toBe(7n);
+  });
+
   it("rejects impossible IDs without registry reads and caches authenticated results", async () => {
     const rpc = reader(async (assetId) => [await registration(assetId)]);
     const resolver = await CompactAssetResolver.open({ client: rpc.client, targetSlot: 99n });

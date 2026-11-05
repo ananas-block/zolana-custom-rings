@@ -8,37 +8,36 @@ import {
   prepareRingAuthorityTransfer,
   addressBytes,
   solanaOwnerIdentity,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
 import type {
   PreparedOwnerSignature,
   ProofAuthority,
   Prover,
   WalletKeys,
-} from "@heliuslabs/zolana/client";
-import { type Shape, InstructionTag } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/client";
+import { type Shape, InstructionTag } from "@heliuslabs/spr/interface";
 import type {
   Address,
   Bytes32,
   RequestContext,
-  TransactDeposit,
   TransactWithdrawal,
-} from "@heliuslabs/zolana/interface";
-import { associatedTokenAddress, signerAddress } from "@heliuslabs/zolana/internal";
-import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/interface";
+import { associatedTokenAddress, signerAddress } from "@heliuslabs/spr/internal";
+import type { NullifierKey, ShieldedAddress } from "@heliuslabs/spr/keypair";
 import type {
   ExpectedSealed,
   RelayTransferTerms,
   TokenAccountCreate,
 } from "../../rpc/relay-message.js";
-import { randomBlinding, ShieldedPublicKey, ViewingKey } from "@heliuslabs/zolana/keypair";
+import { randomBlinding, ShieldedPublicKey, ViewingKey } from "@heliuslabs/spr/keypair";
 import type {
   AssetRegistry,
   ProofInputUtxo,
   ProofOutputUtxo,
   SettlementTransfer,
   WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   createProofOutput,
   SOL_MINT,
@@ -46,7 +45,7 @@ import {
   type ConfidentialTransfer,
   type PreparedTransfer,
   type WithdrawalTarget,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   encodeRelayProofInputs,
   type RelayLegAccounts,
@@ -92,6 +91,7 @@ import {
   type RingTransactionFrame,
   type StagedTransfer,
   type StagedTransferInput,
+  type TransactDeposit,
 } from "../workflow/pipeline.js";
 import type { SealRow } from "../workflow/transfer-plan.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
@@ -127,8 +127,7 @@ export type CustomRingTransferClient = RingProvingClient &
 
 export type AnonymousTransferClient = RingProvingClient & AnonymousRingTransactProver;
 
-export type DelegateTransferClient = RingProvingClient &
-  Pick<Prover, "proveRingAuthorityTransact" | "proveRingAuthorityExitTransact">;
+export type DelegateTransferClient = RingProvingClient & Pick<Prover, "proveRingAuthorityTransact">;
 
 /** Public owners settle on SPP's confidential rail on either ring mode. */
 export type PublicOwnerTransferClient = RingProvingClient & Pick<Prover, "proveRingTransact">;
@@ -1237,6 +1236,9 @@ export class DelegateTransfer {
     context: RequestContext | undefined,
   ): Promise<ProvenRingTransfer> {
     const input = this.#input;
+    // The pinned core holds no exit key.
+    if (input.outputs.some((output) => output.exit === true))
+      throw new RingError("RING_EXIT_PROOF_UNAVAILABLE");
     const { ringProgramId } = input;
     const config = await activeConfig(client, ringProgramId, context);
     if (config.delegate === undefined)
@@ -1261,7 +1263,6 @@ export class DelegateTransfer {
       outputTreeId: input.outputTreeId ?? first.treeId,
     });
     checkWithdrawalAccounts(prepared, input.withdrawal?.accounts);
-    const hasExit = input.outputs.some((output) => output.exit === true);
     // The member never signs, the transaction key seals the move to the auditor.
     const rail = new RingOutputRail(
       input.txViewingKey === undefined
@@ -1303,11 +1304,7 @@ export class DelegateTransfer {
                   }
                 : {}),
               prove: (inputs, proveContext) =>
-                (hasExit
-                  ? client.proveRingAuthorityExitTransact
-                  : client.proveRingAuthorityTransact
-                ).call(
-                  client,
+                client.proveRingAuthorityTransact(
                   inputs,
                   ringProgramId,
                   ringSpendAuthority({

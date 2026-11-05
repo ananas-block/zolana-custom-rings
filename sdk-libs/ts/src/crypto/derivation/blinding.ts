@@ -1,5 +1,5 @@
 /** The ring side of SPP's output blinding, Rust `custom_ring_interface::blinding`. */
-import type { Address, Bytes16, Bytes32 } from "@heliuslabs/zolana";
+import type { Address, Bytes16, Bytes32 } from "@heliuslabs/spr";
 import {
   addressBytes,
   checkedBytes,
@@ -9,8 +9,8 @@ import {
   isZero,
   rightAlign,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { ShieldedPublicKey } from "@heliuslabs/spr/keypair";
 import {
   Data,
   outputBlindingSeed,
@@ -19,7 +19,7 @@ import {
   type AssetRegistry,
   type ProofOutputUtxo,
   type TreeId,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import type { RecipientBody } from "../../protocol/codec/anonymous-delivery.js";
 import { domainHash, RingDomain } from "./ring-domain.js";

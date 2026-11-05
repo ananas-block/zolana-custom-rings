@@ -1,5 +1,5 @@
-export type { ErrorEnvelope } from "@heliuslabs/zolana";
-export { ringTransactAccounts } from "@heliuslabs/zolana/interface";
+export type { ErrorEnvelope } from "@heliuslabs/spr";
+export { ringTransactAccounts } from "@heliuslabs/spr/interface";
 export {
   RING_ERROR_CODES,
   RingError,
@@ -309,6 +309,7 @@ export type {
   RingBoundState,
   RingProvingClient,
   RingTransactAccounts,
+  TransactDeposit,
 } from "../operations/workflow/pipeline.js";
 export type { BoundPolicy, BoundRoot } from "../proof/policy-proof.js";
 export {

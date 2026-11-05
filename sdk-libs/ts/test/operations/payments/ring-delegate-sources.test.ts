@@ -4,17 +4,17 @@ import {
   getCompiledTransactionMessageDecoder,
   signature,
 } from "@solana/kit";
-import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
-import { StateDiscriminator } from "@heliuslabs/zolana/interface";
-import type { Address, Bytes32, Instruction } from "@heliuslabs/zolana/interface";
+import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr";
+import { StateDiscriminator } from "@heliuslabs/spr/interface";
+import type { Address, Bytes32, Instruction } from "@heliuslabs/spr/interface";
 import {
   addressBytes,
   compileUnsignedTransaction,
   encodeBase58,
   indexerScalars,
   treeAddress,
-} from "@heliuslabs/zolana/internal";
-import { randomBlinding, ShieldedKeypair, ViewingKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import { randomBlinding, ShieldedKeypair, ViewingKey } from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   Data,
@@ -22,7 +22,7 @@ import {
   ProofInputUtxo,
   Utxo,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { withConfirmedReads } from "../../helpers/clients.js";

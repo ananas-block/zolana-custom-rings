@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import { getBase58Decoder, getBase64Encoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { Writer, addressBytes, splInterfaceWithBump } from "@heliuslabs/zolana/internal";
-import { TransactWithdrawal, type Bytes32 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { Writer, addressBytes, splInterfaceWithBump } from "@heliuslabs/spr/internal";
+import { TransactWithdrawal, type Bytes32 } from "@heliuslabs/spr/interface";
+import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   ProofInputUtxo,
@@ -14,7 +14,7 @@ import {
   Utxo,
   createExternalData,
   createProofOutput,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { AnonymousPlan } from "../../../src/operations/payments/output-rail.js";
 import {

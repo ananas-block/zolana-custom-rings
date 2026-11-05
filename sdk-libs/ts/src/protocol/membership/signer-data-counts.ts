@@ -1,6 +1,6 @@
 /** Each public signer's count of data-bearing outputs, Rust `SignerDataCounts`. */
-import { equalBytes, isZero } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { equalBytes, isZero } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 /** `solana_message::v1::MAX_SIGNATURES`, a CPI caller's PDAs can sign past it. */
 export const SIGNER_DATA_ENTRIES = 12;

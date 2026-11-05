@@ -16,9 +16,9 @@
  */
 import type { Address, Instruction } from "@solana/kit";
 
-import { equalBytes, type SignerAccount } from "@heliuslabs/zolana/internal";
-import type { RequestContext } from "@heliuslabs/zolana/interface";
-import type { ViewingKey } from "@heliuslabs/zolana/keypair";
+import { equalBytes, type SignerAccount } from "@heliuslabs/spr/internal";
+import type { RequestContext } from "@heliuslabs/spr/interface";
+import type { ViewingKey } from "@heliuslabs/spr/keypair";
 
 import { RingError } from "../../protocol/error.js";
 import {

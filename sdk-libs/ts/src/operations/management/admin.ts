@@ -10,9 +10,9 @@ import {
   protocolConfigAddress,
   ZERO_32,
   equalBytes,
-} from "@heliuslabs/zolana/internal";
-import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr/interface";
+import type { X25519PublicKey } from "@heliuslabs/spr/keypair";
 import {
   ringAuthAddress,
   ringCoSignerAddress,

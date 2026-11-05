@@ -17,27 +17,28 @@ import {
   solanaOwnerIdentity,
   treeAddress,
   ZERO_32,
-} from "@heliuslabs/zolana/internal";
+  type SignerAccount,
+} from "@heliuslabs/spr/internal";
 import { type RingProver } from "../../rpc/ports.js";
-import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/zolana/client";
+import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/spr/client";
 import {
   ringTransactAccounts,
+  SOL_INTERFACE,
   TransactCacheAccounts,
   type Shape,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import type {
   Address,
   Bytes32,
   RequestContext,
-  TransactDeposit,
   TransactWithdrawal,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
 import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
-import type { ShieldedAddress, ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, ShieldedPublicKey } from "@heliuslabs/spr/keypair";
 import type { RelayTransferTerms, TokenAccountCreate } from "../../rpc/relay-message.js";
-import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
-import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
+import { SppProofInputs, createExternalData } from "@heliuslabs/spr/transaction";
+import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/spr/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../../protocol/pda/index.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
@@ -174,6 +175,18 @@ export interface StagedTransfer {
   readonly approvalBlinder?: Bytes32;
   readonly spend: RailSpend;
 }
+
+/** Rust `TransactInterfaceTransferAccounts` of one deposit leg. */
+export type TransactDeposit =
+  | Readonly<{ kind: "sol"; funder: SignerAccount }>
+  | Readonly<{
+      kind: "spl";
+      mint: Address;
+      splTokenInterface: Address;
+      funder: SignerAccount;
+      sourceTokenAccount: Address;
+      tokenProgram: Address;
+    }>;
 
 /** The accounts a ring transfer names besides its data, Rust `TransactAccounts`. */
 export interface RingTransactAccounts {
@@ -755,7 +768,7 @@ export async function ringTransactInstruction(
     ringPolicyAddress(ringProgramId),
     ringAuthAddress(ringProgramId),
   ]);
-  const sppAccounts = await ringTransactAccounts({
+  const signed = {
     payer: accounts.payer,
     inputTrees: accounts.inputTrees,
     outputTree: accounts.outputTree,
@@ -765,10 +778,23 @@ export async function ringTransactInstruction(
     ...(!isDelegateRail(data.rail) && accounts.ownerSigners.length > 0
       ? { ownerSigners: accounts.ownerSigners }
       : {}),
-    ...(accounts.deposits === undefined ? {} : { deposits: accounts.deposits }),
+  };
+  const settled = {
+    ...signed,
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
     ...(accounts.cache === undefined ? {} : { cache: accounts.cache }),
-  });
+  };
+  const deposits = accounts.deposits ?? [];
+  let sppAccounts = await ringTransactAccounts(settled);
+  if (deposits.length > 0) {
+    // SPP reads the deposit groups after the owner signers and ahead of the withdrawal and cache.
+    const head = await ringTransactAccounts(signed);
+    sppAccounts = [
+      ...head,
+      ...deposits.flatMap(depositSettlementAccounts),
+      ...sppAccounts.slice(head.length),
+    ];
+  }
   if (sppAccounts.length > MAX_SPP_CPI_ACCOUNTS)
     throw new RingError("RING_TOO_MANY_SETTLEMENT_ACCOUNTS", {
       details: { accounts: sppAccounts.length, limit: MAX_SPP_CPI_ACCOUNTS },
@@ -789,6 +815,18 @@ export async function ringTransactInstruction(
     accounts: Object.freeze([...prefix, ...sppAccounts]),
     data: bytes,
   });
+}
+
+function depositSettlementAccounts(deposit: TransactDeposit): AccountMeta[] {
+  if (deposit.kind === "sol")
+    return [meta(SOL_INTERFACE, false, true), meta(deposit.funder, true, true)];
+  return [
+    meta(deposit.mint, false, false),
+    meta(deposit.splTokenInterface, false, true),
+    meta(deposit.funder, true, false),
+    meta(deposit.sourceTokenAccount, false, true),
+    meta(deposit.tokenProgram, false, false),
+  ];
 }
 
 /** The auditor message joins the external data last, the expiry the compact data carries as a u32. */

@@ -8,7 +8,7 @@ import {
   type IndexerReader,
   type IndexerRpcConfig,
   type KitRpcAccess,
-} from "@heliuslabs/zolana/client";
+} from "@heliuslabs/spr/client";
 import {
   bytesKey,
   equalBytes,
@@ -16,14 +16,14 @@ import {
   isZero,
   PAGE_LIMIT,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { Address, Bytes16, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Address, Bytes16, Bytes32, RequestContext } from "@heliuslabs/spr/interface";
 import {
   X25519PublicKey,
   type ShieldedAddress,
   type ShieldedPublicKey,
   type ViewingKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   transactOutputBlinding,
   SOL_ASSET_ID,
@@ -34,7 +34,7 @@ import {
   type ShieldedKeys,
   type Utxo,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
 import { isSmallOrder, x25519FromU } from "../crypto/keys/x25519.js";

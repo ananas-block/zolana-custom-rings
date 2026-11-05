@@ -1,5 +1,5 @@
-import { ViewingKey } from "@heliuslabs/zolana/keypair";
-import { checkedApiKey, serviceUrl } from "@heliuslabs/zolana/internal";
+import { ViewingKey } from "@heliuslabs/spr/keypair";
+import { checkedApiKey, serviceUrl } from "@heliuslabs/spr/internal";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
   createSignableMessage,
@@ -15,8 +15,8 @@ import type {
   Bytes64,
   RequestContext,
   Signature,
-} from "@heliuslabs/zolana/interface";
-import { initializePoseidon } from "@heliuslabs/zolana";
+} from "@heliuslabs/spr/interface";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   isCanonicalField,
   postJsonRpc,
@@ -33,9 +33,9 @@ import {
   assetField,
   indexerScalars,
   type indexerTypes,
-} from "@heliuslabs/zolana/internal";
-import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
-import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import { MAX_MERGE_INPUTS } from "@heliuslabs/spr/interface";
+import { X25519PublicKey, KeypairError } from "@heliuslabs/spr/keypair";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
 import {
   snapshotPages,

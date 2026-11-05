@@ -3,15 +3,15 @@
  *
  * Read `RingWallet._absorb` first. `AnonymousWallet` holds one and calls it from both sync modes with their own cursor write.
  */
-import { bytesKey } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { bytesKey } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import {
   deserializeWallet,
   serializeWallet,
   Wallet,
   type AssetRegistry,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { registeredMint } from "../operations/workflow/recover.js";
 import { RingError } from "../protocol/error.js";

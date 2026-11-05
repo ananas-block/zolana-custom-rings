@@ -1,7 +1,7 @@
-import type { ProverClient } from "@heliuslabs/zolana/internal";
-import { parseCheckedProof } from "@heliuslabs/zolana/internal";
-import type { RequestContext } from "@heliuslabs/zolana";
-import type { Proof, ProvingKeyReport } from "@heliuslabs/zolana/client";
+import type { ProverClient } from "@heliuslabs/spr/internal";
+import { parseCheckedProof } from "@heliuslabs/spr/internal";
+import type { RequestContext } from "@heliuslabs/spr";
+import type { Proof, ProvingKeyReport } from "@heliuslabs/spr/client";
 
 import { RingError } from "../../protocol/error.js";
 import { RING_PROVING_KEY_SHA256S } from "../../protocol/proof/proving-keys.js";

@@ -1,7 +1,7 @@
-import type { Bytes32 } from "@heliuslabs/zolana";
-import { bigintToBytes, inputCircuitUtxo, outputCircuitUtxo } from "@heliuslabs/zolana/internal";
-import { DUMMY_DOMAIN, UTXO_DOMAIN, treeIdField } from "@heliuslabs/zolana/interface";
-import type { ProofInputUtxo, ProofOutputUtxo, TreeId } from "@heliuslabs/zolana/transaction";
+import type { Bytes32 } from "@heliuslabs/spr";
+import { bigintToBytes, inputCircuitUtxo, outputCircuitUtxo } from "@heliuslabs/spr/internal";
+import { DUMMY_DOMAIN, UTXO_DOMAIN, treeIdField } from "@heliuslabs/spr/interface";
+import type { ProofInputUtxo, ProofOutputUtxo, TreeId } from "@heliuslabs/spr/transaction";
 
 import type { RingSlotOpening } from "./ring.js";
 

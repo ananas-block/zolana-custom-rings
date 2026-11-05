@@ -1,9 +1,9 @@
 import { getBase64Encoder, type Address } from "@solana/kit";
 
-import type { ChainReader, ZolanaClient } from "@heliuslabs/zolana/client";
-import { equalBytes, runKitRpc, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type { ChainReader, SprClient } from "@heliuslabs/spr/client";
+import { equalBytes, runKitRpc, ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { Bytes32, RequestContext } from "@heliuslabs/spr/interface";
+import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/spr/keypair";
 
 import { listTagOf } from "../crypto/keys/list-salt.js";
 import type { RingAddress } from "../crypto/keys/ring-address.js";
@@ -21,7 +21,7 @@ import type { BoundRoot } from "./registered-record.js";
 import type { TrackingReader } from "./ports.js";
 
 /** Reads a tracking authorization at `confirmed` whatever the client reads at, Rust `AsyncRpc::get_account`. */
-export type AuthorizationReader = Pick<ZolanaClient, "solanaRpc">;
+export type AuthorizationReader = Pick<SprClient, "solanaRpc">;
 
 export type RingRecipientClient = Pick<ChainReader, "getAccount"> &
   AuthorizationReader &

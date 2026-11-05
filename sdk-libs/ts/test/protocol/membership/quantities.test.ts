@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { bigIntBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { bigIntBytes } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import vectors from "../../../../../test-vectors/policy/quantities.json" with { type: "json" };
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";

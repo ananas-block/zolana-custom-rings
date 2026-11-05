@@ -2,8 +2,8 @@ import { createKeyPairSignerFromPrivateKeyBytes } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import vector from "../../../../../test-vectors/registry/storage_writes.json" with { type: "json" };
-import type { Bytes33 } from "@heliuslabs/zolana/interface";
-import { addressBytes } from "@heliuslabs/zolana/internal";
+import type { Bytes33 } from "@heliuslabs/spr/interface";
+import { addressBytes } from "@heliuslabs/spr/internal";
 import {
   decodeStorageWrites,
   encodeStorageWrites,

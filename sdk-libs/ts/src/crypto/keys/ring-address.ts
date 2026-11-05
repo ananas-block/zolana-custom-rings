@@ -16,12 +16,8 @@ import {
   isCanonicalField,
   U64_MAX,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import {
-  ShieldedAddress,
-  type Bytes32,
-  type ShieldedKeypairLike,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import { ShieldedAddress, type Bytes32, type ShieldedKeypairLike } from "@heliuslabs/spr/keypair";
 
 import { checkedCounter, RingKeyError } from "../error.js";
 

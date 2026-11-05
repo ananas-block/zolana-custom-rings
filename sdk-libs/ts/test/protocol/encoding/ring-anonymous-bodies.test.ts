@@ -2,11 +2,11 @@ import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import replyVector from "../../../../../test-vectors/wallet/reply_metadata.json" with { type: "json" };
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { concatBytes, encodeBase58, ZERO_32 } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { Data } from "@heliuslabs/zolana/transaction";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { concatBytes, encodeBase58, ZERO_32 } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { X25519Keypair } from "@heliuslabs/spr/keypair";
+import { Data } from "@heliuslabs/spr/transaction";
 
 import {
   RECIPIENT_BODY_ENC_INFO,

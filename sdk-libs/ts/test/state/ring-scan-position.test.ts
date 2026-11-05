@@ -1,17 +1,17 @@
 import { encodeRingBodyOutput } from "../../src/protocol/transaction/output.js";
 import { describe, expect, it, vi } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import type { Address } from "@solana/kit";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { randomSalt, ShieldedAddress, ViewingKey } from "@heliuslabs/zolana/keypair";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { randomSalt, ShieldedAddress, ViewingKey } from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   deserializeWallet,
   serializeWallet,
   Utxo,
   Wallet,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { recipientTag, txKeySlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
 import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
@@ -20,7 +20,7 @@ import { AnonymousSync } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { StreamCounter, ViewingHistory } from "../../src/state/viewing-history.js";
-import { ClientError } from "@heliuslabs/zolana/client";
+import { ClientError } from "@heliuslabs/spr/client";
 import {
   ASSETS,
   found,

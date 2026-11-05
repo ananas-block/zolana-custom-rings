@@ -1,5 +1,5 @@
-import { equalBytes } from "@heliuslabs/zolana/internal";
-import type { RequestContext } from "@heliuslabs/zolana/interface";
+import { equalBytes } from "@heliuslabs/spr/internal";
+import type { RequestContext } from "@heliuslabs/spr/interface";
 
 import { RingError } from "../protocol/error.js";
 import type { RingWalletStatusPage } from "./ring-rpc.js";

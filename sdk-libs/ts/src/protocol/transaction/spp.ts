@@ -1,5 +1,5 @@
 /** What the ring reads of the pinned SPP, Rust `custom_ring_interface::spp`. */
-import { SOL_MINT, type Address, type Bytes32 } from "@heliuslabs/zolana";
+import { SOL_MINT, type Address, type Bytes32 } from "@heliuslabs/spr";
 import {
   assetField,
   bigIntToBytes,
@@ -8,9 +8,9 @@ import {
   SOL_INTERFACE,
   SPP_SUPPORTED_SHAPES,
   type SettlementTransfer,
-} from "@heliuslabs/zolana/internal";
-import { ClientError } from "@heliuslabs/zolana/client";
-import type { InterfaceTransfer, SettlementAccounts, Shape } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import { ClientError } from "@heliuslabs/spr/client";
+import type { InterfaceTransfer, SettlementAccounts, Shape } from "@heliuslabs/spr/interface";
 
 /** Rust `N_PUBLIC_SLOTS`, the public asset and amount slots every SPP circuit takes. */
 export const N_PUBLIC_SLOTS = 3;

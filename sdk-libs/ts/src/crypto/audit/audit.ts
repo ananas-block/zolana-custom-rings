@@ -1,14 +1,14 @@
 import { ctr } from "@noble/ciphers/aes.js";
 
-import { checkedBytes, concatBytes, copyBytes, u32be } from "@heliuslabs/zolana/internal";
-import type { MessageData } from "@heliuslabs/zolana/interface";
+import { checkedBytes, concatBytes, copyBytes, u32be } from "@heliuslabs/spr/internal";
+import type { MessageData } from "@heliuslabs/spr/interface";
 import {
   type Bytes16,
   type Bytes32,
   poseidon,
   X25519Keypair,
   X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   DISCLOSURE_CHUNK_BYTES,
   ENVELOPE_KEY_LEN,

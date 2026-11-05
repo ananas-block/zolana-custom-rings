@@ -4,7 +4,7 @@ import {
   type RingSealedKey,
   type RingSealedNullifierKey as SealedNullifierKey,
 } from "../../rpc/ports.js";
-import type { ChainReader } from "@heliuslabs/zolana/client";
+import type { ChainReader } from "@heliuslabs/spr/client";
 import {
   addressBytes,
   concatBytes,
@@ -12,15 +12,9 @@ import {
   hashBytes,
   rightAlign,
   waitForProjection,
-} from "@heliuslabs/zolana/internal";
-import type {
-  Bytes31,
-  Bytes32,
-  Bytes33,
-  Bytes64,
-  RequestContext,
-} from "@heliuslabs/zolana/interface";
-import { NullifierKey, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { Bytes31, Bytes32, Bytes33, Bytes64, RequestContext } from "@heliuslabs/spr/interface";
+import { NullifierKey, X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import type { QuadPath } from "../../protocol/membership/member-registry.js";
 import {
   auditSharedSecret,

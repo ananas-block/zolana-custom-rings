@@ -1,6 +1,6 @@
 import { EMPTY_MINT_POLICY, type MintPolicy } from "../../src/protocol/membership/mint-policy.js";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ZERO_32, bytesToBigInt, poseidon } from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { ZERO_32, bytesToBigInt, poseidon } from "@heliuslabs/spr/internal";
 import {
   QUAD_ARITY,
   QUAD_HEIGHT,

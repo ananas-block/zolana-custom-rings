@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon, SOL_MINT } from "@heliuslabs/zolana";
-import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
-import { AssetRegistry, Data, Utxo } from "@heliuslabs/zolana/transaction";
+import { initializePoseidon, SOL_MINT } from "@heliuslabs/spr";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { ShieldedPublicKey } from "@heliuslabs/spr/keypair";
+import { AssetRegistry, Data, Utxo } from "@heliuslabs/spr/transaction";
 import { address, type Address } from "@solana/kit";
 
 import { openRecipientNote, type RingOutputReader } from "../../src/crypto/derivation/blinding.js";

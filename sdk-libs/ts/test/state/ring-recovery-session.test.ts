@@ -1,19 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   ClientError,
   type GetByTagsRequest,
   type GetByNullifiersRequest,
-} from "@heliuslabs/zolana/client";
-import type { Bytes32, PageOptions } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/client";
+import type { Bytes32, PageOptions } from "@heliuslabs/spr/interface";
 import {
   AssetRegistry,
   Mint,
   SOL_MINT,
   Wallet,
   type IndexedShieldedTransaction,
-} from "@heliuslabs/zolana/transaction";
-import { ViewingKey, randomSalt } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/transaction";
+import { ViewingKey, randomSalt } from "@heliuslabs/spr/keypair";
 import { txKeySlotSecret, recipientTag, slotTag } from "../../src/crypto/derivation/ring-stream.js";
 import { sealCompactRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
 import { encodeRingBodyOutput } from "../../src/protocol/transaction/output.js";

@@ -1,5 +1,5 @@
-import { bigIntBytes, bytesToBigInt, equalBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { bigIntBytes, bytesToBigInt, equalBytes } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import { RingError } from "../error.js";
 
 /** Rust `AssetLimits`, Ring RPC checks them only on transactions that need its signature. */

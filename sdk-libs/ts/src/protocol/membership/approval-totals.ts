@@ -1,6 +1,6 @@
 /** The totals a transfer proof binds for a co-signer, Rust `zolana_ring_policy::ApprovalTotals`. */
-import { bigIntBytes, equalBytes, hashChain4, ZERO_32 } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { bigIntBytes, equalBytes, hashChain4, ZERO_32 } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import { assetFlows, orderedOwners, type DebitTransfer, type PublicGross } from "./owner-debits.js";
 

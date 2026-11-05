@@ -1,5 +1,5 @@
 /** The Ring RPC relay a wallet sends its transfer through, Rust `relay`. */
-import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
+import type { WalletUtxo } from "@heliuslabs/spr/transaction";
 import {
   type Address,
   type Signature,
@@ -8,9 +8,9 @@ import {
   type TransactionPartialSigner,
 } from "@solana/kit";
 
-import type { RequestContext } from "@heliuslabs/zolana/interface";
-import { concatBytes, indexerScalars, sha256 } from "@heliuslabs/zolana/internal";
-import type { indexerTypes } from "@heliuslabs/zolana/internal";
+import type { RequestContext } from "@heliuslabs/spr/interface";
+import { concatBytes, indexerScalars, sha256 } from "@heliuslabs/spr/internal";
+import type { indexerTypes } from "@heliuslabs/spr/internal";
 
 import { RingError } from "../protocol/error.js";
 import type { ApprovalOpening } from "../protocol/membership/approval-totals.js";

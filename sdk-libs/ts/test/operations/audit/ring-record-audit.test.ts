@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import auditVector from "../../../../../test-vectors/audit/audit-stream.json" with { type: "json" };
 import mergeVector from "../../../../../test-vectors/merge/merge.json" with { type: "json" };
-import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
+import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr";
 import {
   Writer,
   ZERO_32,
@@ -16,14 +16,16 @@ import {
   equalBytes,
   hashBytes,
   poseidon,
+  treeAddress,
+} from "@heliuslabs/spr/internal";
+import {
   seededMergeDummyNullifier,
   seededMergeOutputBlinding,
-  treeAddress,
-} from "@heliuslabs/zolana/internal";
-import { InstructionTag } from "@heliuslabs/zolana/interface";
-import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { ViewingKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+} from "../../../src/crypto/derivation/merge-seed.js";
+import { InstructionTag } from "@heliuslabs/spr/interface";
+import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import { ViewingKey, X25519Keypair } from "@heliuslabs/spr/keypair";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 
 import { readFileSync } from "node:fs";
 
@@ -395,7 +397,6 @@ describe("the merge reader", () => {
             ringDataHash,
             salt: new Uint8Array(16) as Bytes16,
             ciphertext: [ZERO_32, ZERO_32, ZERO_32],
-            ringV2: true,
           }),
           outputContext: {
             hash,
@@ -503,7 +504,7 @@ describe("the origin", () => {
     const forwarded = forwardedMergeData(
       request,
       sppMergeBody(request.compactBody),
-      InstructionTag.ringMergeV2,
+      InstructionTag.ringMergeTransact,
     );
     const tree = new Uint8Array(addressBytes(treeAddress(TREE_ID)));
     const event = new Writer()
@@ -561,7 +562,6 @@ describe("the origin", () => {
               new Uint8Array(32).fill(3) as Bytes32,
               new Uint8Array(32).fill(3) as Bytes32,
             ],
-            ringV2: true,
           }),
           outputContext: {
             hash: new Uint8Array(32).fill(1) as Bytes32,

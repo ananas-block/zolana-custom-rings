@@ -1,12 +1,12 @@
 import { address, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { encodeBase58, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
-import { AssetRegistry, ProofInputUtxo, SOL_MINT, Utxo } from "@heliuslabs/zolana/transaction";
-import type { WalletKeys } from "@heliuslabs/zolana/client";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { encodeBase58, ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { ShieldedKeypair } from "@heliuslabs/spr/keypair";
+import { AssetRegistry, ProofInputUtxo, SOL_MINT, Utxo } from "@heliuslabs/spr/transaction";
+import type { WalletKeys } from "@heliuslabs/spr/client";
 
 import type { AnonymousSpendSigner } from "../../../src/operations/payments/anonymous.js";
 import {

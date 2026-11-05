@@ -12,11 +12,11 @@ import {
   mergeMintChunks,
   ZERO_32,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import { equalBytes } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32, MessageData } from "@heliuslabs/zolana/interface";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import type { ProofInputUtxo, ProofOutputUtxo, TreeId } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import { equalBytes } from "@heliuslabs/spr/internal";
+import type { Address, Bytes32, MessageData } from "@heliuslabs/spr/interface";
+import type { X25519PublicKey } from "@heliuslabs/spr/keypair";
+import type { ProofInputUtxo, ProofOutputUtxo, TreeId } from "@heliuslabs/spr/transaction";
 import type {
   AuditEnvelopeProofInputs,
   EntryOpeningProofInput,

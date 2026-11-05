@@ -1,9 +1,9 @@
 /** Rust `zolana_ring_client::viewing_history`. */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { address as checkedRing, type Address } from "@solana/kit";
-import type { RequestContext } from "@heliuslabs/zolana";
-import { U64_MAX } from "@heliuslabs/zolana/internal";
-import { X25519PublicKey, type ViewTag } from "@heliuslabs/zolana/keypair";
+import type { RequestContext } from "@heliuslabs/spr";
+import { U64_MAX } from "@heliuslabs/spr/internal";
+import { X25519PublicKey, type ViewTag } from "@heliuslabs/spr/keypair";
 
 import { isSmallOrder } from "../crypto/keys/x25519.js";
 import { RingError } from "../protocol/error.js";

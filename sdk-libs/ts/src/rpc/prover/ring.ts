@@ -10,10 +10,10 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { rawJson } from "../../protocol/codec/raw-json.js";
 
-import { InterfaceError } from "@heliuslabs/zolana/interface";
-import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { ClientError } from "@heliuslabs/zolana/client";
+import { InterfaceError } from "@heliuslabs/spr/interface";
+import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
+import { ClientError } from "@heliuslabs/spr/client";
 import {
   APPLY_BATCH,
   MEMBER_REGISTRY_CAPACITY,

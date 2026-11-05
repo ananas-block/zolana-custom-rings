@@ -1,5 +1,5 @@
-import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
+import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/spr/interface";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
 import {

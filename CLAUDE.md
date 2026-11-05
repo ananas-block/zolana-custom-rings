@@ -42,7 +42,7 @@ The zolana notes above apply here, with their paths read under `zolana/`.
   SDKs, CLI, indexer and auditor RPC. Ring integration failures belong here
   unless they reproduce in the underlying Zolana functionality.
 - Examples consume `@heliuslabs/zolana-custom-rings` for ring operations and
-  `@heliuslabs/zolana` for core wallet functionality. Keep both dependencies on
+  `@heliuslabs/spr` for core wallet functionality. Keep both dependencies on
   compatible revisions; the submodule identifies the tested core revision.
 - Use `ed25519DerivationMessage(publicKey)` for browser-wallet signing. The
   signed off-chain message derives the existing identity; the bare payload does not.

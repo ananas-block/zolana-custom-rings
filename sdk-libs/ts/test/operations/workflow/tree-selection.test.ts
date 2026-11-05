@@ -1,7 +1,7 @@
-import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
-import { treeAddress } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
-import { AssetRegistry, Data, SOL_MINT, Utxo, Wallet } from "@heliuslabs/zolana/transaction";
+import { ShieldedKeypair, SigningKey } from "@heliuslabs/spr/keypair";
+import { treeAddress } from "@heliuslabs/spr/internal";
+import type { Address, Bytes32 } from "@heliuslabs/spr/interface";
+import { AssetRegistry, Data, SOL_MINT, Utxo, Wallet } from "@heliuslabs/spr/transaction";
 import { address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 

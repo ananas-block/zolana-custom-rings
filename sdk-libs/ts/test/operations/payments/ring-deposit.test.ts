@@ -7,14 +7,14 @@ import {
 } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32, Bytes64 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes32, Bytes64 } from "@heliuslabs/spr/interface";
+import { ShieldedKeypair, SigningKey } from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
   type IndexedShieldedTransaction,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { RingAddress } from "../../../src/crypto/keys/ring-address.js";
 import {

@@ -16,7 +16,7 @@ import {
   type Bytes32,
   TRANSACTION_SIZE_LIMIT,
   transactionSize,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   randomBlinding,
   ShieldedKeypair,
@@ -24,7 +24,7 @@ import {
   ViewingKey,
   X25519Keypair,
   X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
@@ -37,7 +37,7 @@ import {
   Wallet,
   type PreparedTransfer,
   type SppProofInputs,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   approveRingUnattended,
   type RingApprovalRequest,
@@ -180,8 +180,8 @@ function signer(address: Address) {
 
 import { ringSpendTransfer } from "../../../src/operations/payments/ring-spend.js";
 import { ringProofInput } from "../../../src/operations/workflow/selection.js";
-import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { WalletUtxo } from "@heliuslabs/spr/transaction";
 
 const ownNullifier = (): Bytes32 => new Uint8Array(32).fill(0x12) as Bytes32;
 
@@ -1082,6 +1082,67 @@ describe("delegate rail", () => {
       slotIndex: 1,
     });
     expect(opened?.utxo.amount).toBe(100n);
+  });
+
+  it("withdraws a member's note publicly on the authority rail", async () => {
+    const source = ShieldedKeypair.generate();
+    const recipient = ShieldedKeypair.generate();
+    const { fixture, delegate } = await delegateRing([source, recipient]);
+    const destination = randomAddress();
+    const proven = await DelegateTransfer.new({
+      ringProgramId: fixture.ringProgramId,
+      delegate,
+      payer: fixture.authority,
+      source: source.shieldedAddress(),
+      sourceProofs: walletKeys(source),
+      inputs: [noteInput(source, 10_000n, fixture.ringProgramId)],
+      outputs: [{ recipient: recipient.shieldedAddress(), asset: SOL_MINT, amount: 100n }],
+      withdrawal: {
+        asset: SOL_MINT,
+        amount: 200n,
+        target: WithdrawalTarget.sol({ recipient: destination }),
+        accounts: TransactWithdrawal.sol({ recipient: destination }),
+      },
+      assets,
+    }).prove(fixture.client);
+    const { instruction, data, call } = await expanded(fixture, proven, "delegate");
+
+    expect(call.data.circuit.kind).toBe("ringAuthority");
+    expect(data.interfaceTransfers).toEqual([{ kind: "solWithdrawal", amount: 200n }]);
+    await checkAccounts(instruction, {
+      fixture,
+      data,
+      prefix: [signer(delegate)],
+      payer: fixture.authority,
+      settlement: [
+        { address: SOL_INTERFACE, role: AccountRole.WRITABLE },
+        { address: destination, role: AccountRole.WRITABLE },
+      ],
+    });
+  });
+
+  it("refuses a delegate exit before any read until the exit keys are pinned", async () => {
+    const source = ShieldedKeypair.generate();
+    const outside = ShieldedKeypair.generate();
+    const { fixture, delegate } = await delegateRing([source]);
+    const reads = fixture.client.getAccount;
+    const getAccount = vi.fn(reads);
+    await expect(
+      DelegateTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        delegate,
+        payer: fixture.authority,
+        source: source.shieldedAddress(),
+        sourceProofs: walletKeys(source),
+        inputs: [noteInput(source, 10_000n, fixture.ringProgramId)],
+        outputs: [
+          { recipient: outside.shieldedAddress(), asset: SOL_MINT, amount: 100n, exit: true },
+        ],
+        assets,
+      }).prove({ ...fixture.client, getAccount }),
+    ).rejects.toMatchObject({ code: "RING_EXIT_PROOF_UNAVAILABLE" });
+    expect(getAccount).not.toHaveBeenCalled();
+    expect(fixture.sppCalls).toHaveLength(0);
   });
 
   it("takes the narrowest pinned authority shape holding a move and refuses a wider one", async () => {

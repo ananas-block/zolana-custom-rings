@@ -5,9 +5,9 @@ import {
   DOMAIN_PRIVATE_TX_BLINDING_V1,
   DOMAIN_TRANSACT_OUTPUT_BLINDING_SEED_V1,
   DOMAIN_TRANSACT_OUTPUT_BLINDING_V1,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { outputBlindingSeed, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import { outputBlindingSeed, X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import { RingDomain } from "../../src/crypto/derivation/ring-domain.js";
 import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
 import { ringBlindingSeed, ringOutputBlinding } from "../../src/crypto/derivation/blinding.js";

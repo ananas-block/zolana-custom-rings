@@ -1,5 +1,5 @@
-import { type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
-import { InterfaceError } from "@heliuslabs/zolana/interface";
+import { type ExpectedProvingKey } from "@heliuslabs/spr/internal";
+import { InterfaceError } from "@heliuslabs/spr/interface";
 
 import { RingError } from "../error.js";
 import { RING_PROVING_KEY_SHA256S } from "./ring-proving-keys.js";

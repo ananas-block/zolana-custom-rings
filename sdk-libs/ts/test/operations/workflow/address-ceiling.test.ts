@@ -3,10 +3,10 @@ import {
   type Address,
   type Bytes32,
   type Instruction,
-} from "@heliuslabs/zolana/interface";
-import { encodeBase58 } from "@heliuslabs/zolana/internal";
-import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/interface";
+import { encodeBase58 } from "@heliuslabs/spr/internal";
+import { ShieldedKeypair } from "@heliuslabs/spr/keypair";
+import { SOL_MINT } from "@heliuslabs/spr/transaction";
 import { AccountRole } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 

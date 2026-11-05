@@ -212,9 +212,12 @@ export const RING_ERROR_CODES = [
   "RING_RELAY_FAILED",
   "RING_SUBMISSION_UNPROVED",
   "RING_RELAY_FEE_PAYER_FUNDS_DEPOSIT",
+  // Reserved, nothing raises it and the snapshot keeps later codes in place.
+  "RING_ZERO_KEY_MERGE_UNAVAILABLE",
+  "RING_EXIT_PROOF_UNAVAILABLE",
 ] as const;
-import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
-import type { ErrorEnvelope } from "@heliuslabs/zolana";
+import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/spr/internal";
+import type { ErrorEnvelope } from "@heliuslabs/spr";
 
 export type RingErrorCode = (typeof RING_ERROR_CODES)[number];
 

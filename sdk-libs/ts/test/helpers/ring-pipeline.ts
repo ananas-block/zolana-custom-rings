@@ -17,7 +17,7 @@ import type {
   ProvenAnonymousRingTransact,
   ProvenRingTransact,
   RpcAccount,
-} from "@heliuslabs/zolana/client";
+} from "@heliuslabs/spr/client";
 import {
   encodeRingTransactInstructionData,
   type RingTransactInstructionData,
@@ -30,28 +30,28 @@ import {
   treeAddress,
   checkedBytes,
   ZERO_32,
-} from "@heliuslabs/zolana/internal";
-import { LocalKeys } from "@heliuslabs/zolana/client";
+} from "@heliuslabs/spr/internal";
+import { LocalKeys } from "@heliuslabs/spr/client";
 import {
   SHIELDED_POOL_PROGRAM_ID,
   DEFAULT_TREE_ID,
   TRANSACTION_SIZE_LIMIT,
-} from "@heliuslabs/zolana/interface";
-import type { Bytes32, Bytes128, TransactProof } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
+import type { Bytes32, Bytes128, TransactProof } from "@heliuslabs/spr/interface";
 import {
   randomBlinding,
   ViewingKey,
   X25519Keypair,
   X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
-import type { ShieldedAddress, ShieldedKeypair } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
+import type { ShieldedAddress, ShieldedKeypair } from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
   type SppProofInputs,
   ProofInputUtxo,
   Utxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
 import { ringAuthAddress, ringPolicyAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
 import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
@@ -198,7 +198,8 @@ function pinnedRail(
   proven: Omit<ProvenRingTransact, "data"> & Readonly<{ data: RingTransactInstructionData }>,
 ): ProvenRingTransact {
   const { circuit } = proven.data;
-  if (circuit.kind === "anonymousRingEddsa") throw new Error("anonymous selector on a pinned rail");
+  if (circuit.kind === "anonymousRingEddsa" || circuit.kind === "ringAuthorityExit")
+    throw new Error("ring selector on a pinned rail");
   return { ...proven, data: { ...proven.data, circuit } };
 }
 
@@ -460,11 +461,6 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     proveRingTransact: async (proofInputs: SppProofInputs, ring: Address, keys: ProofAuthority) =>
       pinnedRail(spp(proofInputs, { kind: "ring", ring }, keys)),
     proveRingAuthorityTransact: async (
-      proofInputs: SppProofInputs,
-      ring: Address,
-      keys: ProofAuthority,
-    ) => pinnedRail(spp(proofInputs, { kind: "ringAuthority", ring }, keys)),
-    proveRingAuthorityExitTransact: async (
       proofInputs: SppProofInputs,
       ring: Address,
       keys: ProofAuthority,

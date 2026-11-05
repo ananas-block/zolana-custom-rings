@@ -1,5 +1,5 @@
-import { rightAlign, u32be } from "@heliuslabs/zolana/internal";
-import { type Bytes32, poseidon } from "@heliuslabs/zolana/keypair";
+import { rightAlign, u32be } from "@heliuslabs/spr/internal";
+import { type Bytes32, poseidon } from "@heliuslabs/spr/keypair";
 
 /** Distinct ASCII tags, the first Poseidon input, mirroring Rust `custom_ring_interface::domain`. */
 export const RingDomain = Object.freeze({

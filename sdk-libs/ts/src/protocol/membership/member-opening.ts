@@ -18,8 +18,8 @@ import {
   copy,
   equalBytes,
   poseidon,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import {
   MEMBER_REGISTRY_CAPACITY,
   QUAD_ARITY,

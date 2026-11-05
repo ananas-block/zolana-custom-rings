@@ -1,9 +1,9 @@
 import { getAddressDecoder, type Address } from "@solana/kit";
 
-import type { RpcAccount } from "@heliuslabs/zolana/client";
-import { Writer, addressBytes } from "@heliuslabs/zolana/internal";
-import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/zolana/interface";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { RpcAccount } from "@heliuslabs/spr/client";
+import { Writer, addressBytes } from "@heliuslabs/spr/internal";
+import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/spr/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import {
   ringAuthAddress,
   ringCoSignerPda,
@@ -23,7 +23,7 @@ import {
   RING_ROLES,
   STORAGE_REGISTRY_DISCRIMINATOR,
 } from "../../src/protocol/codec/ring-codecs.js";
-import { X25519Keypair, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { X25519Keypair, type ShieldedAddress } from "@heliuslabs/spr/keypair";
 import {
   LIST_IDS,
   encodeRule,

@@ -1,8 +1,8 @@
 import type { Address } from "@solana/kit";
 
-import type { RequestContext } from "@heliuslabs/zolana/interface";
-import { KeypairError } from "@heliuslabs/zolana/keypair";
-import { TransactionError, type IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import type { RequestContext } from "@heliuslabs/spr/interface";
+import { KeypairError } from "@heliuslabs/spr/keypair";
+import { TransactionError, type IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 
 import { RingKeyError } from "../../crypto/error.js";
 import { RingError } from "../../protocol/error.js";

@@ -1,7 +1,7 @@
 /** The ring derivations over a wallet's viewing key, Rust `zolana_ring_keys::RingKeys`. */
-import type { Bytes16, Bytes32, RequestContext } from "@heliuslabs/zolana";
+import type { Bytes16, Bytes32, RequestContext } from "@heliuslabs/spr";
 import type { Address } from "@solana/kit";
-import { addressBytes, bytesKey, equalBytes, isCanonicalField } from "@heliuslabs/zolana/internal";
+import { addressBytes, bytesKey, equalBytes, isCanonicalField } from "@heliuslabs/spr/internal";
 import {
   KeypairError,
   NullifierKey,
@@ -10,12 +10,12 @@ import {
   X25519PublicKey,
   type ShieldedKeypair,
   type ViewTag,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   LocalShieldedKeys,
   TransactionError,
   type ShieldedKeys,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { extended } from "../operations/workflow/extended.js";
 import { RingKeyError } from "../crypto/error.js";

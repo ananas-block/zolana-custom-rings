@@ -1,5 +1,5 @@
-import { isCanonicalField } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/keypair";
+import { isCanonicalField } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/keypair";
 
 /** BN254's order is 254 bits wide. */
 const TOP_BYTE_MASK = 0x3f;

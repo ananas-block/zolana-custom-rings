@@ -1,7 +1,7 @@
 import { getBase64Decoder, type Address, type Commitment } from "@solana/kit";
-import { DEFAULT_TREE_ID } from "@heliuslabs/zolana/interface";
-import { treeAddress } from "@heliuslabs/zolana/internal";
-import type { ZolanaClient } from "@heliuslabs/zolana/client";
+import { DEFAULT_TREE_ID } from "@heliuslabs/spr/interface";
+import { treeAddress } from "@heliuslabs/spr/internal";
+import type { SprClient } from "@heliuslabs/spr/client";
 import { BLOCKHASH, solanaRpcReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import type { RingAuditReader } from "../../src/operations/audit/audit.js";
 import type { RingTransferClient } from "../../src/operations/payments/transfer.js";
@@ -24,7 +24,7 @@ type FakeAccountRead = (
 export function confirmedAccountReads(
   getAccount: FakeAccountRead,
   reads: object = {},
-): ZolanaClient["solanaRpc"] {
+): SprClient["solanaRpc"] {
   return solanaRpcReads({
     ...reads,
     getAccountInfo: (address: Address, config: Readonly<{ commitment?: Commitment }>) => ({
@@ -49,7 +49,7 @@ export function confirmedAccountReads(
 /** `client` with a kit reader over its own `getAccount`, beside the kit reads it already fakes. */
 export function withConfirmedReads<
   C extends { readonly getAccount: FakeAccountRead; readonly solanaRpc?: object },
->(client: C): C & Pick<ZolanaClient, "solanaRpc"> {
+>(client: C): C & Pick<SprClient, "solanaRpc"> {
   return { ...client, solanaRpc: confirmedAccountReads(client.getAccount, client.solanaRpc) };
 }
 

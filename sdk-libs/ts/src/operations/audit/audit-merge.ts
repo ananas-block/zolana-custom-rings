@@ -1,5 +1,5 @@
-import type { IndexerReader, KitRpcAccess } from "@heliuslabs/zolana/client";
-import { initializePoseidon } from "@heliuslabs/zolana";
+import type { IndexerReader, KitRpcAccess } from "@heliuslabs/spr/client";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   addressBytes,
   isCanonicalField,
@@ -8,13 +8,15 @@ import {
   equalBytes,
   MERGE_OUTPUT_BODY_LENGTH,
   readMergeOutputBody,
+  ZERO_32,
+} from "@heliuslabs/spr/internal";
+import {
   seededMergeDummyNullifier,
   seededMergeOutputBlinding,
-  ZERO_32,
-} from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32, RequestContext, Signature } from "@heliuslabs/zolana/interface";
-import type { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import type { OutputContext } from "@heliuslabs/zolana/transaction";
+} from "../../crypto/derivation/merge-seed.js";
+import type { Address, Bytes32, RequestContext, Signature } from "@heliuslabs/spr/interface";
+import type { X25519Keypair } from "@heliuslabs/spr/keypair";
+import type { OutputContext } from "@heliuslabs/spr/transaction";
 
 import { openMergeRecord, type MergeRingAuthority } from "../../crypto/audit/merge-disclosure.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";

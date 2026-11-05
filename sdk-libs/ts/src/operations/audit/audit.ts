@@ -1,5 +1,5 @@
 import { readRingHistory, scanLimits } from "../../rpc/history.js";
-import type { IndexerReader, KitRpcAccess } from "@heliuslabs/zolana/client";
+import type { IndexerReader, KitRpcAccess } from "@heliuslabs/spr/client";
 import {
   addressBytes,
   hashBytes,
@@ -10,22 +10,22 @@ import {
   bytesKey,
   isCanonicalField,
   poseidon,
-} from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
+} from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
 import type {
   Address,
   Bytes16,
   Bytes32,
   RequestContext,
   Signature,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   ownerHash,
   type ViewingKey,
   type X25519Keypair,
   type X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
-import type { IndexedShieldedTransaction, OutputContext } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/keypair";
+import type { IndexedShieldedTransaction, OutputContext } from "@heliuslabs/spr/transaction";
 import {
   decodeAuditEnvelope,
   decodeAuditRecord,

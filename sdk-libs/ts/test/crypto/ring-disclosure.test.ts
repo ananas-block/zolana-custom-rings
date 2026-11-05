@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
 import stream from "../../../../test-vectors/audit/auditor-stream.json" with { type: "json" };
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import { X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import { auditSharedSecret, symmetricAuditApply } from "../../src/crypto/audit/audit.js";
 
 beforeAll(initializePoseidon);

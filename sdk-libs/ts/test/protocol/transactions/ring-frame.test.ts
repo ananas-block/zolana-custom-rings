@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_CACHE_WRITES } from "@heliuslabs/zolana/interface";
-import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { hashChain4 } from "@heliuslabs/zolana/internal";
+import { MAX_CACHE_WRITES } from "@heliuslabs/spr/interface";
+import type { Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import { hashChain4 } from "@heliuslabs/spr/internal";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
+import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
 import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
 import { RingError } from "../../../src/protocol/error.js";
 import {
@@ -325,6 +326,33 @@ describe("the ring frame", () => {
       ),
     };
     expect(RingTransactData.circuit(exit).kind).toBe("ringAuthorityExit");
+  });
+
+  it("encodes the exit selector as Rust `CircuitId::RingAuthorityExit`", () => {
+    const transact = {
+      expiryUnixTs: 0n,
+      txViewingPk: new Uint8Array(33) as Bytes33,
+      salt: new Uint8Array(16),
+      interfaceTransfers: [],
+      outputs: [],
+      messages: [],
+      privateTxHash: new Uint8Array(32) as Bytes32,
+      proof: { a: new Uint8Array(32), b: new Uint8Array(128), c: new Uint8Array(32) },
+      inputs: [],
+      treeContexts: [],
+    };
+    const shape = { inputs: 2, outputs: 2, publicAssetSlots: 3 };
+    const authority = encodeRingTransactInstructionData({
+      ...transact,
+      circuit: { kind: "ringAuthority", ...shape },
+    } as never);
+    const exit = encodeRingTransactInstructionData({
+      ...transact,
+      circuit: { kind: "ringAuthorityExit", ...shape },
+    } as never);
+    const at = authority.findIndex((byte, index) => byte !== exit[index]);
+    expect([authority[at], authority[at + 1], exit[at], exit[at + 1]]).toEqual([2, 0, 9, 0]);
+    expect(exit.slice(at + 2)).toEqual(authority.slice(at + 2));
   });
 
   it("names the rail from the tag and refuses an unknown tag", () => {

@@ -9,10 +9,10 @@ import {
   Reader,
   readData,
   u64be,
-} from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import type { Data } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import type { Address, Bytes32 } from "@heliuslabs/spr/interface";
+import type { X25519PublicKey } from "@heliuslabs/spr/keypair";
+import type { Data } from "@heliuslabs/spr/transaction";
 
 import {
   RECIPIENT_BODY_ENC_INFO,

@@ -1,12 +1,12 @@
 import { address } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { encodeMergeTransactInstructionData, ZERO_32 } from "@heliuslabs/zolana/internal";
-import { MergeEncryptionScheme } from "@heliuslabs/zolana/interface";
-import type { Bytes16, Bytes32, Bytes33, Bytes128 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
-import { Wallet } from "@heliuslabs/zolana/transaction";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { encodeMergeTransactInstructionData, ZERO_32 } from "@heliuslabs/spr/internal";
+import { MergeEncryptionScheme } from "@heliuslabs/spr/interface";
+import type { Bytes16, Bytes32, Bytes33, Bytes128 } from "@heliuslabs/spr/interface";
+import { ShieldedKeypair } from "@heliuslabs/spr/keypair";
+import { Wallet } from "@heliuslabs/spr/transaction";
 
 import {
   buildRingMergeTransaction,

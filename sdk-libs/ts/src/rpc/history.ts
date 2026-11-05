@@ -6,10 +6,10 @@ import {
   type IndexerReader,
   type IndexerRpcConfig,
   type PaginationToken,
-} from "@heliuslabs/zolana/client";
-import { PAGE_LIMIT } from "@heliuslabs/zolana/internal";
-import type { RequestContext } from "@heliuslabs/zolana/interface";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/client";
+import { PAGE_LIMIT } from "@heliuslabs/spr/internal";
+import type { RequestContext } from "@heliuslabs/spr/interface";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 
 import { rowEventIndex, type RowOrigins } from "../operations/audit/row-origins.js";
 import { RingError } from "../protocol/error.js";

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { isCanonicalField } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { poseidon } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { isCanonicalField } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { poseidon } from "@heliuslabs/spr/keypair";
 
 import { randomTagPreimage } from "../../src/crypto/derivation/dummy-tag.js";
 import { RingDomain, domainField } from "../../src/crypto/derivation/ring-domain.js";

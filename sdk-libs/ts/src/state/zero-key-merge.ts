@@ -4,17 +4,19 @@ import {
   decryptMergeOutput,
   equalBytes,
   readMergeOutputBody,
+  ZERO_NULLIFIER_PK,
+} from "@heliuslabs/spr/internal";
+import {
   seededMergeOutputBlinding,
   seededMergeOutputKey,
-  ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "../crypto/derivation/merge-seed.js";
+import type { Bytes32, RequestContext } from "@heliuslabs/spr/interface";
+import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import {
   Utxo,
   type IndexedShieldedTransaction,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { answered } from "./batch.js";
 import { zeroKeyNullifier } from "./exposed-notes.js";

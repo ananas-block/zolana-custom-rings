@@ -1,12 +1,12 @@
-import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
-import { LocalKeys } from "@heliuslabs/zolana/client";
+import { ShieldedKeypair } from "@heliuslabs/spr/keypair";
+import { LocalKeys } from "@heliuslabs/spr/client";
 import {
   compileUnsignedTransaction,
   reserveEntries,
   DEFAULT_RESERVATION_TTL_MS,
   treeAddress,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import {
   SOL_MINT,
   AssetRegistry,
@@ -15,12 +15,12 @@ import {
   Wallet,
   deserializeWallet,
   serializeWallet,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   loadPersistedWallet,
   savePersistedWallet,
   walletSnapshotCipher,
-} from "@heliuslabs/zolana/wallet";
+} from "@heliuslabs/spr/wallet";
 import { address, generateKeyPairSigner, signTransactionWithSigners } from "@solana/kit";
 import { afterEach, expect, it, vi } from "vitest";
 

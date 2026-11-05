@@ -17,7 +17,7 @@ import {
   splInterfaceWithBump,
   writeTransactOutput,
   sha256,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   TransactWithdrawal,
   type Address,
@@ -26,14 +26,14 @@ import {
   type Bytes32,
   type OwnerTag,
   type TransactOutput,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   NullifierKey,
   ShieldedAddress,
   ViewingKey,
   X25519PublicKey,
   ShieldedPublicKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   ProofInputUtxo,
   Utxo,
@@ -43,7 +43,7 @@ import {
   type ExternalData,
   type ProofOutputUtxo,
   type SettlementTransfer,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { AnonymousPlan } from "../../operations/payments/output-rail.js";
 import type { CoOwner } from "../../operations/payments/ring-spend.js";

@@ -1,8 +1,8 @@
 /** The registries an instruction reads after the ring account and the tracking rows its proof opens. */
 import type { Address } from "@solana/kit";
 
-import { addressBytes, equalBytes, isZero, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
+import { addressBytes, equalBytes, isZero, ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { Bytes32, RequestContext } from "@heliuslabs/spr/interface";
 
 import { registryCurator, type RingPolicy } from "../../protocol/codec/ring-codecs.js";
 import { RingError } from "../../protocol/error.js";

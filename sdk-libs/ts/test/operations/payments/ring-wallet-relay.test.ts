@@ -7,8 +7,8 @@ import {
 } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { randomBlinding, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { randomBlinding, ShieldedKeypair, SigningKey } from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
@@ -17,8 +17,8 @@ import {
   approveUnattended,
   type ApprovalHandler,
   type ApprovalRequest,
-} from "@heliuslabs/zolana/transaction";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/transaction";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import { PreparedRingDeposit } from "../../../src/operations/payments/deposit.js";
 import { prepareRingMergeRelay } from "../../../src/operations/payments/merge.js";

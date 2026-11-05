@@ -1,18 +1,18 @@
 import { address, type Address } from "@solana/kit";
 
-import type { RpcAccount } from "@heliuslabs/zolana/client";
+import type { RpcAccount } from "@heliuslabs/spr/client";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { poseidon, ZERO_32, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ShieldedAddress, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { poseidon, ZERO_32, ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { ShieldedAddress, ShieldedKeypair, SigningKey } from "@heliuslabs/spr/keypair";
 
 import { withConfirmedReads } from "../helpers/clients.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
 import { readOutputKeys } from "../../src/operations/workflow/ring-reads.js";
 import { checkOutputKeys } from "../../src/proof/policy-proof.js";
-import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
+import type { ProofOutputUtxo } from "@heliuslabs/spr/transaction";
 import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
 import {
   TRACKING_QUAD_HEIGHT,

@@ -10,8 +10,8 @@ import {
   bigIntBytes,
   bytesToBigInt,
   encodeBase58,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes31, Bytes32 } from "@heliuslabs/spr/interface";
 import {
   ViewingKey,
   X25519Keypair,
@@ -19,8 +19,8 @@ import {
   NullifierKey,
   ShieldedAddress,
   ShieldedKeypair,
-} from "@heliuslabs/zolana/keypair";
-import { Data } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/keypair";
+import { Data } from "@heliuslabs/spr/transaction";
 
 import { RingDomain } from "../../../src/crypto/derivation/ring-domain.js";
 import {

@@ -2,13 +2,9 @@
 import { AccountRole, type AccountMeta, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import {
-  addressBytes,
-  compileUnsignedTransaction,
-  encodeBase58,
-} from "@heliuslabs/zolana/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { addressBytes, compileUnsignedTransaction, encodeBase58 } from "@heliuslabs/spr/internal";
 
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";

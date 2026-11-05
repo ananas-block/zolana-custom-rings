@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Bytes32 } from "@heliuslabs/zolana";
-import { parseProof } from "@heliuslabs/zolana/client";
-import { ProverClient } from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/spr";
+import { parseProof } from "@heliuslabs/spr/client";
+import { ProverClient } from "@heliuslabs/spr/internal";
 
 import { RING_PROVING_KEY_SHA256S } from "../../src/protocol/proof/proving-keys.js";
 import { CustomRingProver } from "../../src/rpc/prover/client.js";

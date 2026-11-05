@@ -5,9 +5,9 @@ import {
   bigIntBytes,
   bytesKey,
   rightAlign,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
-import { poseidon } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32, Bytes33, Bytes64 } from "@heliuslabs/spr/interface";
+import { poseidon } from "@heliuslabs/spr/keypair";
 import { packDisclosure } from "../../crypto/audit/audit.js";
 import { u32Field } from "../../crypto/error.js";
 import { packBytesBe } from "../../crypto/derivation/hasher.js";

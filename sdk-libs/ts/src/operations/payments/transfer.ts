@@ -1,7 +1,7 @@
 /** Ring transfers from a wallet, every flow selects, reserves, approves, proves and compiles through one driver. */
 import type { Instruction } from "@solana/kit";
 
-import type { BlockhashProvider, WalletKeys } from "@heliuslabs/zolana/client";
+import type { BlockhashProvider, WalletKeys } from "@heliuslabs/spr/client";
 import {
   reserveEntries,
   reservedUtxoKeys,
@@ -17,21 +17,17 @@ import {
   equalBytes,
   isZero,
   resolveShieldedRecipient,
-} from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
+} from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
 import type {
   Address,
   Bytes32,
   RequestContext,
   Transaction,
   TransactWithdrawal,
-} from "@heliuslabs/zolana/interface";
-import { ShieldedAddress, type NullifierKey } from "@heliuslabs/zolana/keypair";
-import {
-  SOL_MINT,
-  ConfidentialTransfer,
-  type PreparedTransfer,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/interface";
+import { ShieldedAddress, type NullifierKey } from "@heliuslabs/spr/keypair";
+import { SOL_MINT, ConfidentialTransfer, type PreparedTransfer } from "@heliuslabs/spr/transaction";
 import {
   approveRingUnattended,
   checkRingIntentApproval,
@@ -40,7 +36,7 @@ import {
   type RingApprovalHandler,
   type RingTransactionIntent,
 } from "../../protocol/transaction/intent.js";
-import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
+import type { Wallet, WalletUtxo } from "@heliuslabs/spr/transaction";
 import { ringSpendTransfer } from "./ring-spend.js";
 import type { RingListSalt } from "../../proof/policy-proof.js";
 import { frameKeyShape } from "../../protocol/proof/transfer-shapes.js";

@@ -1,23 +1,23 @@
 # @heliuslabs/zolana-custom-rings
 
 `@heliuslabs/zolana-custom-rings` is the TypeScript SDK for custom Rings on
-Solana Privacy Rings. It builds on `@heliuslabs/zolana` and adds the Ring
+Solana Privacy Rings. It builds on `@heliuslabs/spr` and adds the Ring
 program instructions and transactions, the auditor and key registry, and the
 Ring RPC client.
 
 ## Install
 
 ```sh
-npm install @heliuslabs/zolana-custom-rings@alpha @heliuslabs/zolana@alpha @solana/kit
+npm install @heliuslabs/zolana-custom-rings@alpha @heliuslabs/spr@alpha @solana/kit
 ```
 
-`@heliuslabs/zolana` is a peer dependency pinned to one version. Install the
+`@heliuslabs/spr` is a peer dependency pinned to one version. Install the
 version `peerDependencies` names, the two share the protocol layouts.
 
 ## Client
 
-`createCustomRingClient(config)` takes the `ZolanaClientConfig` of
-`createZolanaClient` and returns a `CustomRingClient`. It is a `ZolanaClient`
+`createCustomRingClient(config)` takes the `SprClientConfig` of
+`createSprClient` and returns a `CustomRingClient`. It is an `SprClient`
 that also proves the Ring circuits and reads the Ring projections of the
 indexer, over the same attested prover session. `checkRingProvingKeys()`
 refuses a prover that does not serve a pinned Ring key or serves another
@@ -80,7 +80,7 @@ Set a Ring up in this order.
    auditor key and the tier, binds the records, pins a policy Ring's rule table
    and registers the Ring with the pool.
 4. On a permissioned pool the governance authority activates the Ring with
-   `getSetRingActivationInstructionAsync` from `@heliuslabs/zolana/instructions`.
+   `getSetRingActivationInstructionAsync` from `@heliuslabs/spr/instructions`.
 5. `AuthorityRecordUpdate` fills the lists through `RingRpc.submitRecordUpdate`.
 
 A wallet sends its operations through the Ring RPC relay by default, or

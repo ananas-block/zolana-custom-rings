@@ -1,12 +1,8 @@
 /** The one ring proof of a transfer, one request over the audit and policy sections. */
-import { ZERO_32 } from "@heliuslabs/zolana/internal";
-import { NO_CACHE_WRITES, type Bytes32, type CacheAccess } from "@heliuslabs/zolana/interface";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import type {
-  ProofInputUtxo,
-  ProofOutputUtxo,
-  SppProofInputs,
-} from "@heliuslabs/zolana/transaction";
+import { ZERO_32 } from "@heliuslabs/spr/internal";
+import { NO_CACHE_WRITES, type Bytes32, type CacheAccess } from "@heliuslabs/spr/interface";
+import type { X25519PublicKey } from "@heliuslabs/spr/keypair";
+import type { ProofInputUtxo, ProofOutputUtxo, SppProofInputs } from "@heliuslabs/spr/transaction";
 
 import type { TransferProofRequest } from "../rpc/prover/ring.js";
 import type { RingOutputRail } from "../operations/payments/output-rail.js";

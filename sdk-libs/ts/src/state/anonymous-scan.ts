@@ -1,7 +1,7 @@
 /** The scan's candidate step over plain bytes, a `Worker` runs it as the key's holder. */
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { ViewingKey, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
+import { ViewingKey, X25519PublicKey } from "@heliuslabs/spr/keypair";
 
 import { RingError } from "../protocol/error.js";
 import {

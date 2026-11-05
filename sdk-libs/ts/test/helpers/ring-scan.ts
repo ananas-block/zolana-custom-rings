@@ -4,9 +4,9 @@ import {
   ClientError,
   type GetByNullifiersRequest,
   type GetByTagsRequest,
-} from "@heliuslabs/zolana/client";
-import { InstructionTag, type Bytes32 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/client";
+import { InstructionTag, type Bytes32 } from "@heliuslabs/spr/interface";
+import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   ConfidentialTransfer,
@@ -16,7 +16,7 @@ import {
   Utxo,
   type IndexedShieldedTransaction,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { AnonymousPlan, RingOutputRail } from "../../src/operations/payments/output-rail.js";
 import type { ReplyMetadata } from "../../src/protocol/codec/anonymous-delivery.js";

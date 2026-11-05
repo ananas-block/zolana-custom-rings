@@ -7,7 +7,7 @@ import {
   QUAD_ARITY,
   QUAD_HEIGHT,
 } from "../../../src/protocol/membership/member-registry.js";
-import { InstructionTag } from "@heliuslabs/zolana/interface";
+import { InstructionTag } from "@heliuslabs/spr/interface";
 import {
   RingInstructionTag,
   ringComputeUnitLimit,

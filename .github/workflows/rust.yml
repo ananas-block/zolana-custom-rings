@@ -448,9 +448,9 @@ jobs:
         run: |
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
-          npm pack --workspace @heliuslabs/zolana --pack-destination "$tmp"
+          npm pack --workspace @heliuslabs/spr --pack-destination "$tmp"
           npm pack --workspace @heliuslabs/zolana-custom-rings --pack-destination "$tmp"
-          set -- "$tmp"/heliuslabs-zolana-[0-9]*.tgz
+          set -- "$tmp"/heliuslabs-spr-[0-9]*.tgz
           test "$#" -eq 1
           core="$1"
           set -- "$tmp"/heliuslabs-zolana-custom-rings-*.tgz
@@ -460,9 +460,9 @@ jobs:
           kit_range="$(node -p "require('./sdk-libs/ts/package.json').peerDependencies['@solana/kit']")"
           npm --prefix "$tmp" install "$core" "$ring" "@solana/kit@$kit_range" --ignore-scripts
           cat > "$tmp/smoke.mts" <<'TS'
-          import type { ZolanaClientConfig } from "@heliuslabs/zolana";
+          import type { SprClientConfig } from "@heliuslabs/spr";
           import { createCustomRingClient, type RingTransferClient } from "@heliuslabs/zolana-custom-rings";
-          const config: ZolanaClientConfig = { solanaRpcUrl: new URL("http://127.0.0.1:8899") };
+          const config: SprClientConfig = { solanaRpcUrl: new URL("http://127.0.0.1:8899") };
           const client: RingTransferClient = await createCustomRingClient(config);
           void client;
           TS
@@ -477,7 +477,7 @@ jobs:
           await Promise.all(
             ["client", "keypair"].map((subpath) => import(`@heliuslabs/zolana-custom-rings/${subpath}`)),
           );
-          if (!ring.buildRingTransferTransaction || !ring.customRingDepositPayload) process.exit(1);
+          if (!ring.buildRingTransferTransaction || !ring.buildRingDepositTransaction) process.exit(1);
           await ring.createCustomRingClient({ solanaRpcUrl: "http://127.0.0.1:8899" });
           NODE
           )

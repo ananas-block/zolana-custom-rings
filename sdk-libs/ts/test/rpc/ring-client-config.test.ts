@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import type { ZolanaClientConfig } from "@heliuslabs/zolana";
+import type { SprClientConfig } from "@heliuslabs/spr";
 
 import vector from "../../../../zolana/test-vectors/runtime_proving_keys.json" with { type: "json" };
 import { provingKeySetFromCatalog } from "../../../../zolana/sdk-libs/ts/src/client/prover/key-set.js";
@@ -19,7 +19,7 @@ describe("ring client proving keys", () => {
         throw new Error("prover configuration read");
       },
       fetch,
-    } satisfies ZolanaClientConfig;
+    } satisfies SprClientConfig;
     const refusal = {
       code: "CLIENT_INVALID_CONFIG",
       details: { field: "provingKeys" },

@@ -15,22 +15,19 @@ import {
   type TransactionPartialSigner,
 } from "@solana/kit";
 
-import { getCreateAssociatedTokenAccountInstructionAsync } from "@heliuslabs/zolana/instructions";
+import { getCreateAssociatedTokenAccountInstructionAsync } from "@heliuslabs/spr/instructions";
 import {
   NO_CACHE_WRITES,
   SOL_INTERFACE,
   SHIELDED_POOL_CPI_AUTHORITY,
-} from "@heliuslabs/zolana/interface";
-import {
-  getAssociatedTokenAddress,
-  getSplAssetVaultAddressWithBump,
-} from "@heliuslabs/zolana/addresses";
+} from "@heliuslabs/spr/interface";
+import { getAssociatedTokenAddress } from "@heliuslabs/spr/addresses";
 import type {
   Bytes32,
   RequestContext,
   InterfaceTransfer,
   Signature,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import { confidentialSlotTag } from "../crypto/derivation/ring-stream.js";
 import {
   addressBytes,
@@ -40,14 +37,15 @@ import {
   isZero,
   U64_MAX,
   LOADED_ACCOUNTS_DATA_SIZE_LIMIT,
-} from "@heliuslabs/zolana/internal";
+  splInterfaceWithBump,
+} from "@heliuslabs/spr/internal";
 import {
   ShieldedPublicKey,
   type NullifierKey,
   type ShieldedAddress,
   type X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
-import { ProofInputUtxo, Utxo, SOL_MINT, type WalletUtxo } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/keypair";
+import { ProofInputUtxo, Utxo, SOL_MINT, type WalletUtxo } from "@heliuslabs/spr/transaction";
 
 import { ringComputeUnitLimit } from "../operations/management/admin.js";
 import { RingError } from "../protocol/error.js";
@@ -439,7 +437,7 @@ async function expectedWithdrawal(withdrawal: AuthorityWithdrawal): Promise<Expe
     });
   }
   if (tokenProgram === undefined) throw mismatch("Data");
-  const [vault, bump] = await getSplAssetVaultAddressWithBump(mint);
+  const [vault, bump] = await splInterfaceWithBump(mint);
   const tokenAccount = await getAssociatedTokenAddress(recipient, mint, tokenProgram);
   return Object.freeze({
     transfer: { kind: "splWithdrawal" as const, amount, splInterfaceBump: bump },

@@ -2,22 +2,17 @@ import { address, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
-import type { RpcAccount } from "@heliuslabs/zolana/client";
-import { initializePoseidon } from "@heliuslabs/zolana";
+import type { RpcAccount } from "@heliuslabs/spr/client";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   addressBytes,
   bytesToBigInt,
   equalBytes,
   hashBytes,
   poseidon,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
-import {
-  NullifierKey,
-  ShieldedKeypair,
-  SigningKey,
-  X25519Keypair,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { Bytes31, Bytes32 } from "@heliuslabs/spr/interface";
+import { NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair } from "@heliuslabs/spr/keypair";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { MEMBER_REGISTRY_EMPTY_ROOT } from "../../../src/protocol/membership/member-opening.js";
 import { memberOfTag } from "../../../src/protocol/membership/policy.js";

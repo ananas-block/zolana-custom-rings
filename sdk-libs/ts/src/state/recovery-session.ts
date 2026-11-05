@@ -1,6 +1,6 @@
 import { address } from "@solana/kit";
-import { U64_MAX, PAGE_LIMIT } from "@heliuslabs/zolana/internal";
-import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
+import { U64_MAX, PAGE_LIMIT } from "@heliuslabs/spr/internal";
+import type { Wallet, WalletUtxo } from "@heliuslabs/spr/transaction";
 import { RingError } from "../protocol/error.js";
 import { ViewingHistory } from "./viewing-history.js";
 
