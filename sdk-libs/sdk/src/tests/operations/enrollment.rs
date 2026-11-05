@@ -628,6 +628,7 @@ async fn only_an_expired_attempt_with_no_reservation_goes_again_with_the_same_re
     assert_eq!(journal.recorded.lock().unwrap().len(), 2);
 }
 
+#[cfg(feature = "proofs")]
 mod key_phase {
     //! Real RegisterKey and SPP proofs against a localnet that runs the ring program with `Enroll`.
     //! `ZOLANA_LOCALNET_URL`, `ZOLANA_INDEXER_URL`, `ZOLANA_PROVER_URL` and `RING_PROGRAM_ID`
@@ -714,7 +715,6 @@ mod key_phase {
     }
 
     #[tokio::test]
-    #[ignore = "key phase, needs the ring Enroll program, RegisterKey and SPP 2x2 keys on localnet"]
     async fn an_owner_enrolls_with_a_separate_payer_once() {
         let (owner, payer) = (
             ShieldedKeypair::new_ed25519().unwrap(),
@@ -759,7 +759,6 @@ mod key_phase {
     /// The program rebuilds the credential from the request and the signing owner, both proofs bind
     /// the original.
     #[tokio::test]
-    #[ignore = "key phase, needs the ring Enroll program, RegisterKey and SPP 2x2 keys on localnet"]
     async fn a_substituted_ciphertext_or_another_owner_fails_on_chain() {
         let (owner, other, payer) = (
             ShieldedKeypair::new_ed25519().unwrap(),

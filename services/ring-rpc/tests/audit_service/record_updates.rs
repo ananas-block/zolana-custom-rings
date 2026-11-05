@@ -66,6 +66,13 @@ struct StubChain {
 
 #[async_trait::async_trait]
 impl ChainSubmit for StubChain {
+    async fn simulate(
+        &self,
+        _message: &solana_message::VersionedMessage,
+    ) -> Result<zolana_ring_rpc::Simulation, RingRpcError> {
+        Ok(zolana_ring_rpc::Simulation::Passed)
+    }
+
     async fn account_data(
         &self,
         _address: solana_address::Address,

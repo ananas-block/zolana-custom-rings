@@ -473,6 +473,38 @@ async fn an_enrollment_whose_proof_fails_holds_no_budget() {
     assert_eq!(fixture.committed().await, ENROLLMENT_LAMPORTS as i64);
 }
 
+#[tokio::test]
+async fn an_enrollment_the_chain_simulation_refuses_holds_no_budget_and_sends_nothing() {
+    let fixture = Fixture::with_budget(ENROLLMENT_LAMPORTS).await;
+    let owner = Keypair::new_from_array([42; 32]);
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    let request = enrollment(&owner, enroll_data(1), quote);
+    *fixture.chain.simulation_refusal.lock().expect("refusal") =
+        Some("TransactProofVerificationFailed".to_owned());
+
+    let refused = fixture.prepare(&request).await;
+
+    let code = RelayError::EnrollmentRefused {
+        reason: String::new(),
+    }
+    .code();
+    assert!(
+        matches!(&refused, Err(jsonrpsee::MethodsError::JsonRpc(object)) if object.code() == code),
+        "{refused:?}"
+    );
+    assert_eq!(fixture.committed().await, 0);
+    assert_eq!(fixture.outstanding().await, 0);
+    assert_eq!(fixture.row_count().await, 0);
+    assert!(fixture.sent().is_empty());
+
+    *fixture.chain.simulation_refusal.lock().expect("refusal") = None;
+    fixture
+        .prepare(&request)
+        .await
+        .expect("a passing simulation");
+    assert_eq!(fixture.outstanding().await, ENROLLMENT_LAMPORTS as i64);
+}
+
 fn refused_with(refused: &Result<RelayStep, jsonrpsee::MethodsError>, error: RelayError) -> bool {
     matches!(
         refused,

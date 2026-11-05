@@ -67,6 +67,13 @@ impl WorkerChain {
 
 #[async_trait]
 impl ChainSubmit for WorkerChain {
+    async fn simulate(
+        &self,
+        message: &solana_message::VersionedMessage,
+    ) -> Result<zolana_ring_rpc::Simulation, RingRpcError> {
+        self.chain.simulate(message).await
+    }
+
     async fn slot(&self) -> Result<u64, RingRpcError> {
         self.chain.slot().await
     }

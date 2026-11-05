@@ -502,6 +502,13 @@ pub(crate) mod tests {
 
     #[async_trait]
     impl ChainSubmit for ScriptedChain {
+        async fn simulate(
+            &self,
+            _message: &solana_message::VersionedMessage,
+        ) -> Result<crate::landing::Simulation, RingRpcError> {
+            Ok(crate::landing::Simulation::Passed)
+        }
+
         async fn account_data(
             &self,
             _address: solana_address::Address,

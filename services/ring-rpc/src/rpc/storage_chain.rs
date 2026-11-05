@@ -23,7 +23,7 @@ use zolana_ring_member_registry::ApplyProofInputs;
 
 use crate::{
     error::RingRpcError,
-    landing::{ChainOutcome, ChainSubmit, LatestBlockhash, SolanaChain},
+    landing::{ChainOutcome, ChainSubmit, LatestBlockhash, Simulation, SolanaChain},
     upstream::{ChainSource, OpeningFetch, RingConfiguration, TransactionSource, Upstreams},
 };
 
@@ -130,6 +130,13 @@ impl ChainSubmit for LiveStorageChain {
 
     async fn outcome(&self, signature: Signature) -> Result<Option<ChainOutcome>, RingRpcError> {
         self.submit.outcome(signature).await
+    }
+
+    async fn simulate(
+        &self,
+        message: &solana_message::VersionedMessage,
+    ) -> Result<Simulation, RingRpcError> {
+        self.submit.simulate(message).await
     }
 }
 

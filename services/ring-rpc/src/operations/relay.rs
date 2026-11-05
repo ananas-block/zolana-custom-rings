@@ -48,7 +48,7 @@ use crate::{
     },
     database::Store,
     error::{redacted, RingRpcError},
-    landing::{Attempt, ChainOutcome, ChainSubmit, Landing, LatestBlockhash},
+    landing::{Attempt, ChainOutcome, ChainSubmit, Landing, LatestBlockhash, Simulation},
     merge_inputs::{HoldInputs, MergeInputs},
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     relay_reservations::{
@@ -134,6 +134,10 @@ pub enum RelayError {
     BudgetUnset,
     #[error("an enrollment already reserves the owner's credential address")]
     AlreadyEnrolled,
+    #[error("the RegisterKey proof does not verify for the enrolled credential")]
+    RegisterKeyProof,
+    #[error("the chain simulation refuses the enrollment before any signature because {reason}")]
+    EnrollmentRefused { reason: String },
 }
 
 pub enum RelayPayload {
@@ -263,6 +267,8 @@ impl RelayError {
             Self::DepositorSignature => -32209,
             Self::BudgetUnset => -32210,
             Self::AlreadyEnrolled => -32211,
+            Self::RegisterKeyProof => -32212,
+            Self::EnrollmentRefused { .. } => -32213,
         }
     }
 
@@ -410,7 +416,9 @@ impl Relay {
                 // The wallet proved its seal, the relay only pays.
                 (RelayPayload::Enroll(enrollment), None) => {
                     self.prover.check_enrollment(enrollment).await?;
-                    enrollment_step(enrollment, parties.fee_payer)?
+                    let proven = enrollment_step(enrollment, parties.fee_payer)?;
+                    self.preflight(&proven).await?;
+                    proven
                 }
                 (_, None) => {
                     let _proof = self
@@ -896,6 +904,22 @@ impl Relay {
         proven.budget =
             ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::SettleBuffered));
         Ok(())
+    }
+
+    /// SPP verifies the creation proof only on chain, a simulation refuses a bad one before any
+    /// signature or charge.
+    async fn preflight(&self, proven: &ProvenRelay) -> Result<(), RingRpcError> {
+        let LatestBlockhash { blockhash, .. } = self.chain.latest_blockhash().await?;
+        let message = compile_message(
+            &self.fee_payer(),
+            core::slice::from_ref(&proven.instruction),
+            blockhash,
+            proven.budget,
+        )?;
+        match self.chain.simulate(&message).await? {
+            Simulation::Passed => Ok(()),
+            Simulation::Refused { reason } => Err(RelayError::EnrollmentRefused { reason }.into()),
+        }
     }
 
     /// Only a missing account takes a create, and its rent is what the row reserves. A create kept for a

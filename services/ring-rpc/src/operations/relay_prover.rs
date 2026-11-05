@@ -78,8 +78,7 @@ pub trait RelayProver: Send + Sync {
         parties: RelayParties,
     ) -> Result<RelayProofInputs, RingRpcError>;
 
-    /// Refuses a RegisterKey proof the program would refuse and a reserved address, ahead of any
-    /// charge. The SPP proof is not checked here, a bad one costs the relay one fee.
+    /// Refuses a RegisterKey proof the program would refuse and a reserved address, ahead of any charge.
     async fn check_enrollment(&self, enrollment: &RelayEnrollInputs) -> Result<(), RingRpcError>;
 }
 
@@ -111,7 +110,7 @@ impl EnrollmentProof<'_> {
             proof: request.register_key,
         }
         .verify()
-        .map_err(refused)
+        .map_err(|_| RelayError::RegisterKeyProof)
     }
 }
 
@@ -340,13 +339,20 @@ mod tests {
 
     #[test]
     fn an_unproven_or_malformed_enrollment_refuses() {
+        assert!(matches!(
+            checked(data(&fields())),
+            Err(RelayError::RegisterKeyProof)
+        ));
         let mut storage_tag = data(&fields());
         storage_tag[0] = 6;
         let mut trailing = data(&fields());
         trailing.push(0);
+        let zero_key = EnrollIxData {
+            nullifier_pk: spr_interface::ZERO_NULLIFIER_PUBKEY,
+            ..fields()
+        };
         for bytes in [
-            data(&fields()),
-            data(&EnrollIxData::zeroed()),
+            data(&zero_key),
             storage_tag,
             trailing,
             vec![tag::ENROLL, 1, 2, 3],
