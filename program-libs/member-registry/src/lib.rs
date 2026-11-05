@@ -44,7 +44,7 @@ pub enum RecordTreeError {
     Hashing,
     #[error("member lies outside the record range")]
     MemberOutOfRange,
-    #[error("a queued list value leaves its mask")]
+    #[error("a list value leaves its mask")]
     ValueOutsideMask,
     #[error("the record tree is full")]
     Full,

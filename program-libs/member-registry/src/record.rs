@@ -1,4 +1,4 @@
-//! The policy tree's leaf, one member's list bits and mint settings, and the proof input of one queued write.
+//! The policy tree's leaf, one member's list bits and mint settings, and the proof input of one write.
 //!
 //! Read after `program-libs/member-registry/src/tree.rs`, `program-libs/interface/src/accounts/member_registry.rs`.
 //! Read before `prover/circuits/registry/apply_records.go`.
@@ -28,7 +28,7 @@ pub struct MemberRecord {
     pub mint_policy: MintPolicy,
 }
 
-/// One queued write's proof input, mirror `RecordWrite` of
+/// One write's proof input, mirror `RecordWrite` of
 /// `prover/circuits/registry/apply_records.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordWriteProofInput {

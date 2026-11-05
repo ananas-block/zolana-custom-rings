@@ -47,7 +47,7 @@ pub fn check_member(member: &[u8; 32]) -> Result<(), CustomRingError> {
     Ok(())
 }
 
-/// One queued masked write, `lists' = (lists & !mask) | value`.
+/// One masked write, `lists' = (lists & !mask) | value`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueueEntry {
     pub member: [u8; 32],

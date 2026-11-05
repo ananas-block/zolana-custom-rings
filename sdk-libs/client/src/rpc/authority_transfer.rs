@@ -59,7 +59,7 @@ pub struct AuthorityTransferAttestation {
 pub type AuthorityTransferRequest = SignedRequest<AuthorityTransferAttestation>;
 
 impl TxViewingSecret {
-    /// An unclamped alias would key another stream.
+    /// An unclamped alias keeps the stream key under another CRBS seed.
     pub fn key(&self) -> Result<ViewingKey, KeypairError> {
         ViewingKey::from_canonical_bytes(&self.0)
     }

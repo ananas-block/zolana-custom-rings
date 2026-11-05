@@ -116,7 +116,7 @@ func applyRequest(t testing.TB, circuit common.CircuitType, capacity int) *Apply
 		empty := ringregistry.Entry{Member: big.NewInt(0x200), Mask: big.NewInt(ringregistry.AllowBit), Value: big.NewInt(0)}
 		entries = append(entries, entry(0x100, ringregistry.BlockBit), empty)
 	}
-	// A nonzero chain checkpoint, as a queue past its first batch carries.
+	// A nonzero chain start, as `chain_start` derives from the registry and revision.
 	return (registryBatch{circuit, capacity, ringregistry.New(t), entries, big.NewInt(0x5eed)}).request(t)
 }
 

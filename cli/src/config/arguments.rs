@@ -238,7 +238,7 @@ pub enum EnrolmentCommand {
 pub enum KeyCommand {
     /// Seal the member's nullifier key to the ring auditor and enroll it, `transfer` does it on first use.
     Register,
-    /// Prove the queued enrollments into the tracking tree, anyone may.
+    /// Prove the pending enrollments into the tracking tree, anyone may.
     Apply,
 }
 

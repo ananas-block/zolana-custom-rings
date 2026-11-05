@@ -106,15 +106,15 @@ export interface TransferStatement {
 /** The slot fields the statement chains. */
 export type StatementOutput = Pick<RingOutput, "hash" | "record" | "tail">;
 
-/** An application of `count` queued writes, Rust `ApplyRecordsStatement`. */
+/** An application of `count` writes, Rust `ApplyRecordsStatement`. */
 export interface ApplyRecordsStatement {
   readonly oldRoot: Bytes32;
   readonly newRoot: Bytes32;
   readonly oldNextIndex: number;
   readonly newNextIndex: number;
-  /** `chain(head - 1)`. */
+  /** `chain_start` of the registry and revision. */
   readonly chainStart: Bytes32;
-  /** `chain(tail - 1)`. */
+  /** The chain past the last write. */
   readonly chainEnd: Bytes32;
   readonly count: bigint;
 }

@@ -246,8 +246,8 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			// An unmasked bit already clear keeps the record, only the chain sees the other entry.
 			b.circuit.Writes[0].Entry.Mask = big.NewInt(ringregistry.ReaderBit | ringregistry.AllowBit)
 		}, define},
-		{"the queue applied out of order", seeded, registry.ApplyBatch, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit), entry(0x10, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
-			// The writes and the root follow the swapped order, the chain end the queued one.
+		{"the writes applied out of order", seeded, registry.ApplyBatch, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit), entry(0x10, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
+			// The writes and the root follow the swapped order, the chain end the instruction's.
 			swapped := applyBatch(t, seeded(t), registry.ApplyBatch, b.chain[0], b.writes[1].Entry, b.writes[0].Entry)
 			swapped.circuit.ChainEnd = b.circuit.ChainEnd
 			swapped.bind(t)

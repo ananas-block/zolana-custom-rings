@@ -277,7 +277,7 @@ impl WriteRecordsIxData {
         u64::from_le_bytes(self.value)
     }
 
-    /// The queue entry of `writer` changing `member`'s lists, only the lists `writer` owns.
+    /// The entry of `writer` changing `member`'s lists, only the lists `writer` owns.
     pub fn entry(&self, member: [u8; 32], writer: Writer) -> Result<QueueEntry, CustomRingError> {
         self.entry_within(member, writer.writable())
     }

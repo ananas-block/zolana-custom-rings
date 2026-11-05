@@ -376,7 +376,7 @@ pub fn tail_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32
     }
 }
 
-/// An application of `count` queued writes, mirror `prover/circuits/registry`.
+/// An application of `count` writes, mirror `prover/circuits/registry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplyRecordsStatement {
     pub old_root: [u8; 32],

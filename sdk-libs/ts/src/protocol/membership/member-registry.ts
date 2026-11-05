@@ -60,7 +60,7 @@ export interface QueueEntry {
   readonly mintPolicy?: MintPolicy;
 }
 
-/** One queued write's apply proof input, Rust `RecordWriteProofInput`. */
+/** One write's apply proof input, Rust `RecordWriteProofInput`. */
 export interface RecordWriteProofInput {
   readonly entry: QueueEntry;
   readonly exists: boolean;
@@ -81,10 +81,10 @@ export interface ApplyProofInputs {
   readonly newRoot: Bytes32;
   readonly oldNextIndex: number;
   readonly newNextIndex: number;
-  /** `chain(head - 1)`. */
+  /** `chain_start` of the registry and revision. */
   readonly chainStart: Bytes32;
-  /** `chain(tail - 1)`. */
+  /** The chain past the last write. */
   readonly chainEnd: Bytes32;
-  /** Queue order. */
+  /** Instruction order. */
   readonly writes: readonly RecordWriteProofInput[];
 }

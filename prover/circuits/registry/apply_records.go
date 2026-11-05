@@ -100,12 +100,12 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 	}
 	// 1. Count selects a prefix of one write up to the capacity, the writes past it act on nothing.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.NumWrites)
-	// 2. Every active write moves the running root, next index and chain in queue order.
+	// 2. Every active write moves the running root, next index and chain in instruction order.
 	state := registryState{root: c.OldRoot, next: c.OldNextIndex, chain: c.ChainStart}
 	for i, w := range c.Writes {
 		state = w.apply(api, count.Active[i], state)
 	}
-	// 3. The registry after the batch and the queue segment it consumed are the statement's.
+	// 3. The registry after the batch and the chain end are the statement's.
 	api.AssertIsEqual(state.root, c.NewRoot)
 	api.AssertIsEqual(state.next, c.NewNextIndex)
 	api.AssertIsEqual(state.chain, c.ChainEnd)
@@ -167,7 +167,7 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 }
 
 func keptLists(api frontend.API, old frontend.Variable, maskBits []frontend.Variable) frontend.Variable {
-	// The bitmap holds ListBits bits, the width of every record and queued mask.
+	// The bitmap holds ListBits bits, the width of every record and write mask.
 	oldBits := api.ToBinary(old, ListBits)
 	kept := frontend.Variable(0)
 	for i := range oldBits {

@@ -258,7 +258,7 @@ export function queueEntryHash(entry: QueueEntry): Bytes32 {
   ]);
 }
 
-/** `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain(-1) = 0`. */
+/** `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain_start` of the registry and revision. */
 export function queueChain(previous: Bytes32, entry: QueueEntry): Bytes32 {
   return poseidon([checkedBytes<Bytes32>(previous, 32, "chain"), queueEntryHash(entry)]);
 }
@@ -365,7 +365,7 @@ function replayWrite(
   return [quadPathRoot(write.slot, memberRecordHash(inserted)), nextIndex + 1];
 }
 
-/** An entry the program never queues fails before the first write. */
+/** An entry the program refuses fails before the first write. */
 function checkEntry(entry: QueueEntry): void {
   checkMember(entry.member);
   checkedU64(entry.mask, "mask");
