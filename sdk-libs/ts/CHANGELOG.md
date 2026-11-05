@@ -6,6 +6,8 @@ The custom ring surface of `@heliuslabs/zolana` moves into `@heliuslabs/zolana-c
 
 Breaking
 
+- `RecoveredRingNotes.unseenInputs` holds a bounded sample. Read `unseenInputCount` for the total unmatched input count.
+
 - `DELIVERED_AUDIT_CAPACITIES` → `TRANSFER_OUTPUT_CAPACITIES`, `ConfigAuthorityAuth` → `PolicyAuthorityAuth`, the refusal key `notConfigAuthority` → `notPolicyAuthority` and the error key `invalidChangeBits` → `bodilessExit`.
 - List enrolment is list approval. `getPendingEnrolments` → `getPendingListApprovals` with a `pending` page, `refuseEnrolment` → `refuseListApproval`, `signPendingEnrolmentsRequest` and `signRefuseEnrolmentRequest` → `signPendingListApprovalsRequest` and `signRefuseListApprovalRequest`, the status `awaitingAuthority` → `pendingListApproval`, `WalletRecordUpdate.awaitingAuthority` → `awaitingListApproval`, `ENROLMENT_LISTS` → `AWAITABLE_LISTS`, `RingEnrolmentAction` → `PolicyAuthorityAction`, `enrolmentAttestation` → `policyAuthorityAttestation`, the `PendingEnrolment` types → `PendingListApproval`, the refusal keys `enrolmentLists`, `enrolmentBatch`, `unknownEnrolment` and `enrolmentWindow` → `invalidAwaitedLists`, `listApprovalBatch`, `unknownListApproval` and `listApprovalWindow`, and the policy authority signs over `zolana/ring-rpc-policy-authority` → deploy this release's Ring RPC with the SDK and rename each call.
 - `QueueEntry` → `RecordWrite`, `queueChain` → `writeChain`, `queueEntryHash` → `recordWriteHash` and `recordUpdateQueueEntry` → `recordUpdateWrite`, the hashes stay the same.
@@ -76,6 +78,8 @@ Added
 
 Fixed
 
+- Funding selection searches beyond the preferred trees when that pool cannot cover a payment.
+- `resolveRingRecipient` resolves explicit zero-key recipients independently of transfer policy.
 - A ring entry from a default note larger than its amount asked approval for the amount alone while the change also entered the ring, now the `ringEntry` intent and its summary name every unit entering the ring, and default notes that meet the amount exactly fund the entry first.
 - `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, and it lost every zero-key note and every merge output whose seed the nullifier key does not derive, now that commitment stays in `unopened`, a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done, and each owned note opens from the auditor's record alone.
 - `syncRingWallet` refused every sync after a payment of an unregistered mint arrived and read the whole ring history on each sync, now that note waits in `AnonymousWallet.pendingOpenings()` until its mint registers and a later sync reads only rows past its last position.
@@ -85,5 +89,5 @@ Fixed
 - A submission gave up on a proof refused for a tracking root below its floor, now it proves again after `trackingRootBelowFloor` as after a revoked root.
 - A salted transfer with an in-proof owner, eleven co-owners, eight outputs and thirty two withdrawals had no key, now `transferPoolCapacity` sizes `custom-ring-transfer-wide-8-in24-w32-s24` for one row outside the owner run → deploy this release's ring program, prover and keys together.
 - `recoverRingMemberNotes` let a paused `RingRecoveryProgress` grow with every output the auditor opened and copied it on each resume, now it grows only with the member's own notes.
-- `RecoveredRingNotes.unseenInputs` depended on the page size, now it lists every ring note input no member note answers, another owner's zero-key spend among them.
+- `RecoveredRingNotes.unseenInputCount` includes unmatched inputs from all pages, including another owner's zero-key spend.
 - `resolveRingRecipient` refused an address issued before its owner rotated the viewing key, now it returns the tracking row's current `viewingPublicKey` and `revision`.

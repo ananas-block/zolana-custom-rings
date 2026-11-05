@@ -32,6 +32,8 @@ use crate::{
     AuditError, MergeLedger,
 };
 
+pub const RECOVERY_INPUT_SAMPLE_LIMIT: usize = 64;
+
 type HistoryRow = (ShieldedTransaction, RingOrigin);
 
 #[must_use = "run the recovery explicitly"]
@@ -87,8 +89,9 @@ pub struct RecoveredNotes {
     pub unsupported_deposits: Vec<[u8; 32]>,
     /// Verified merge mints the asset registry lacks, their notes stay unresolved.
     pub unknown_mints: BTreeSet<Address>,
-    /// Nullifiers of real inputs no note the member opened matches.
+    /// First unmatched nullifiers, limited by `RECOVERY_INPUT_SAMPLE_LIMIT`.
     pub unseen_inputs: Vec<[u8; 32]>,
+    pub unseen_input_count: u64,
 }
 
 impl<'a> RingRecovery<'a> {
@@ -234,6 +237,7 @@ struct RecoveryState {
     found: Found,
     unsupported_deposits: Vec<[u8; 32]>,
     unseen_inputs: Vec<[u8; 32]>,
+    unseen_input_count: u64,
     unopened_merges: Vec<[u8; 32]>,
     /// The indexer orders one slot by signature, a later row of the slot can create the note an earlier row spends.
     open_slot: Vec<HistoryRow>,
@@ -257,6 +261,7 @@ impl RecoveryState {
             found,
             unsupported_deposits,
             unseen_inputs,
+            unseen_input_count,
             unopened_merges,
             ..
         } = self;
@@ -271,6 +276,7 @@ impl RecoveryState {
             unsupported_deposits,
             unknown_mints: found.unknown_mints,
             unseen_inputs,
+            unseen_input_count,
         }
     }
 }
@@ -372,6 +378,7 @@ impl<'a> MemberRecovery<'a> {
             found,
             unsupported_deposits,
             unseen_inputs,
+            unseen_input_count,
             unopened_merges,
             ..
         } = state;
@@ -405,11 +412,15 @@ impl<'a> MemberRecovery<'a> {
         }
         .recover(&self.source)?;
         let opened_nullifiers = found.nullifiers();
-        unseen_inputs.extend(
-            std::mem::take(&mut found.real_inputs)
-                .into_iter()
-                .filter(|nullifier| !opened_nullifiers.contains(nullifier)),
-        );
+        for nullifier in std::mem::take(&mut found.real_inputs)
+            .into_iter()
+            .filter(|nullifier| !opened_nullifiers.contains(nullifier))
+        {
+            *unseen_input_count = unseen_input_count.saturating_add(1);
+            if unseen_inputs.len() < RECOVERY_INPUT_SAMPLE_LIMIT {
+                unseen_inputs.push(nullifier);
+            }
+        }
         unopened_merges.extend(
             merges
                 .iter()

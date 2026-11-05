@@ -127,3 +127,23 @@ fn matches_the_shared_tree_selection_vector() {
         assert_eq!(picked(&candidates[0].utxos), expected, "{}", case.name);
     }
 }
+
+#[test]
+fn pair_selection_respects_the_shared_input_budget() {
+    let utxos = notes(
+        (0..8)
+            .flat_map(|tree| [(tree, 40), (tree, 40)])
+            .chain([(8, 60)]),
+    );
+    let candidates = funding(&utxos, 100, 2).candidates(|_| true);
+    assert_eq!(candidates[0].utxos.len(), 2);
+    assert_eq!(
+        candidates[0]
+            .utxos
+            .iter()
+            .map(|note| note.utxo.amount)
+            .sum::<u64>(),
+        100
+    );
+    assert!(candidates[0].utxos.iter().any(|note| note.tree_id == 8));
+}

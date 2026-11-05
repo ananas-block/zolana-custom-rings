@@ -4184,3 +4184,64 @@ async fn a_zero_value_input_of_a_delisted_asset_fails_before_proving() {
         }))
     ));
 }
+
+#[tokio::test]
+async fn delegate_selection_shares_the_input_budget_across_assets() {
+    use crate::tests::support::{keypair, wallet};
+    let member = keypair(1);
+    let recipient = keypair(2);
+    let delegate = Address::new_from_array([0x44; 32]);
+    let chain = move_chain([&member, &recipient], delegate)
+        .with_tree(2)
+        .with_tree(3);
+    let client = chain.client();
+    let asset = Mint::new(Address::new_from_array([0x55; 32]), 2);
+    let mut assets = AssetRegistry::default();
+    assets.insert(asset.asset_id, asset.asset).unwrap();
+    let width = selection::widest(2, |shape| shape_keyed(RingRail::Delegate, shape)).unwrap();
+    let amount = width as u64 * 40;
+    let mut utxos = Vec::new();
+    for mint in [Mint::SOL, asset] {
+        for leaf in 0..width as u64 {
+            utxos.push(wallet(
+                ring_utxo(&member, mint, 40, leaf).utxo,
+                &member.nullifier_key,
+                1,
+                leaf,
+            ));
+        }
+    }
+    for (tree, mint) in [(2, Mint::SOL), (3, asset)] {
+        utxos.push(wallet(
+            ring_utxo(&member, mint, amount, 100).utxo,
+            &member.nullifier_key,
+            tree,
+            100,
+        ));
+    }
+    let transfer = DelegateMove {
+        ring: ring(),
+        delegate,
+        payer: delegate,
+        sources: vec![crate::DelegateSource {
+            address: member.shielded_address().unwrap(),
+            nullifier_key: &member.nullifier_key,
+            utxos: &utxos,
+        }],
+        payments: [Mint::SOL, asset]
+            .map(|mint| DelegatePayment {
+                recipient: recipient.shielded_address().unwrap(),
+                mint: mint.asset,
+                amount,
+            })
+            .to_vec(),
+        assets: &assets,
+        tx_viewing_key: spr_keypair::ViewingKey::new(),
+    }
+    .select(&client)
+    .await
+    .unwrap();
+    let (shape, tree) = selected(transfer, &client).await;
+    assert_eq!(shape.n_inputs(), 2);
+    assert_eq!(tree, 2);
+}

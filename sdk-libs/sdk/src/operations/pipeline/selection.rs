@@ -87,6 +87,17 @@ pub(super) fn staged_tree_search<T>(
         .collect()
 }
 
+#[derive(Clone, Copy)]
+struct TreePrefix {
+    tree: u16,
+    amount: u128,
+}
+
+struct PairCover {
+    trees: [u16; 2],
+    amount: u128,
+}
+
 impl<'u> Funding<'u> {
     /// The fewest UTXOs on one tree, two trees only when no tree alone funds, then the least change.
     pub fn candidates(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Vec<Candidate> {
@@ -176,9 +187,20 @@ impl<'u> Funding<'u> {
             )
         });
         let trees: Vec<u16> = ranked.into_iter().map(|(tree, _)| *tree).collect();
-        let pool = &trees[..trees.len().min(PAIR_POOL_TREES)];
+        // A covering pair leads the pool within its cap, with none no pair search runs.
+        let pool: Vec<u16> = self.pair_cover(by_tree).map_or_else(Vec::new, |pair| {
+            pair.trees.into_iter().chain(trees.iter().copied()).fold(
+                Vec::new(),
+                |mut pool, tree| {
+                    if !pool.contains(&tree) && pool.len() < PAIR_POOL_TREES {
+                        pool.push(tree);
+                    }
+                    pool
+                },
+            )
+        });
         // 2. A pair runs only when no tree alone funds, its picks always span both trees.
-        let mut funded = staged_tree_search(&trees, pool, |set| {
+        let mut funded = staged_tree_search(&trees, &pool, |set| {
             let utxos = select_spend_where(
                 set.iter()
                     .filter_map(|tree| by_tree.get(tree))
@@ -199,6 +221,39 @@ impl<'u> Funding<'u> {
         });
         funded.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         funded.into_iter().map(|(_, candidate)| candidate).collect()
+    }
+
+    /// The distinct trees whose largest notes within the input budget hold the most, `None` below `amount`.
+    fn pair_cover(&self, by_tree: &BTreeMap<u16, Vec<&WalletUtxo>>) -> Option<PairCover> {
+        let mut leaders: Vec<Vec<TreePrefix>> = vec![Vec::new(); self.max_inputs];
+        for (&tree, notes) in by_tree {
+            let mut amounts: Vec<_> = notes.iter().map(|note| note.utxo.amount).collect();
+            amounts.sort_unstable_by_key(|amount| Reverse(*amount));
+            let mut amount = 0;
+            for (budget, best) in leaders.iter_mut().enumerate().skip(1) {
+                amount += u128::from(amounts.get(budget - 1).copied().unwrap_or_default());
+                best.push(TreePrefix { tree, amount });
+                best.sort_unstable_by_key(|prefix| (Reverse(prefix.amount), prefix.tree));
+                best.truncate(2);
+            }
+        }
+        leaders
+            .iter()
+            .enumerate()
+            .skip(1)
+            .flat_map(|(budget, left)| {
+                let right = &leaders[self.max_inputs - budget];
+                left.iter().flat_map(move |left| {
+                    right.iter().filter_map(move |right| {
+                        (left.tree != right.tree).then_some(PairCover {
+                            trees: [left.tree, right.tree],
+                            amount: left.amount + right.amount,
+                        })
+                    })
+                })
+            })
+            .filter(|pair| pair.amount >= u128::from(self.amount))
+            .max_by_key(|pair| pair.amount)
     }
 
     /// Names the zero-key funds only a public spend reaches.

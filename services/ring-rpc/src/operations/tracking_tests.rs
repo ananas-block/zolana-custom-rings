@@ -224,3 +224,88 @@ async fn a_bounded_enrollment_cache_holds_its_bound_and_storage_answers_an_evict
         Err(RingRpcError::Tracking(TrackingRefusal::Conflict))
     ));
 }
+
+#[tokio::test]
+async fn cached_scan_rows_are_persisted_before_the_durable_cursor() {
+    let auditor = X25519Keypair::new();
+    let (source, held) = served(&auditor, &[1, 2, 3]);
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let seal = NoteSeal::derive(&auditor, RING).expect("seal");
+    let store = AuditStore::new(Backing::Database {
+        store: database.clone(),
+        ring: RING,
+        seal: Box::new(NoteSeal::derive(&auditor, RING).expect("seal")),
+        capacity: 4,
+    });
+    scan(&source, &auditor, &store, &mut TrackingCursor::default())
+        .await
+        .expect("temporary scan");
+    let writer = ProjectionWriter {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        lease: LeaseClaim {
+            db: database.connection(),
+            ring: RING,
+            holder: database.lease_holder(),
+            now: 1000,
+        }
+        .claim()
+        .await
+        .expect("claim")
+        .expect("lease"),
+        clock: Clock::Fixed(1000),
+    };
+    let mut cursor = TrackingCursor::default();
+    TrackingScan {
+        ring: RING,
+        auditor: &auditor,
+        source: &source,
+        store: &store,
+        durable: Some(&writer),
+    }
+    .run(&mut cursor)
+    .await
+    .expect("durable scan");
+    drop(store);
+    let restarted = AuditStore::new(Backing::Database {
+        store: database.clone(),
+        ring: RING,
+        seal: Box::new(NoteSeal::derive(&auditor, RING).expect("seal")),
+        capacity: 1,
+    });
+    for row in held {
+        assert_eq!(enrollment(&restarted, &row.member).await, Some(row));
+    }
+    let loaded = crate::spent_index::LoadSpends {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        scope: crate::spent_index::HistoryScope::Cold,
+    }
+    .load()
+    .await
+    .expect("reload");
+    assert_eq!(loaded.tracking_cursor, cursor);
+    assert!(loaded.enrollments.is_empty());
+    let pending = writer
+        .pending_owners()
+        .await
+        .expect("pending after restart");
+    assert_eq!(pending.len(), 3);
+    restarted.queue_late_owners(pending);
+    let opener = |_: &HeldEnrollment| None;
+    let mut work = crate::utxos::PageWork::new(&restarted, &opener);
+    work.late_keys();
+    let delta = work.finish().await.expect("derive");
+    assert_eq!(
+        writer
+            .pending_owners()
+            .await
+            .expect("pending before commit")
+            .len(),
+        3
+    );
+    writer.commit_page(&delta).await.expect("commit derivation");
+    assert!(writer.pending_owners().await.expect("completed").is_empty());
+}

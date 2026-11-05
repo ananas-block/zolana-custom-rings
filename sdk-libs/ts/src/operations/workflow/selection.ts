@@ -102,6 +102,15 @@ export function selectAcrossTrees(
         .map(({ tree }) => tree);
     }),
   );
+  if (covers.length === 1) {
+    // A covering pair leads the pool within its cap, with none no pair search runs.
+    const pair = pairCover(byTree, covers[0]!, policy.maxInputs);
+    const ranked = [...pool];
+    pool.clear();
+    if (pair !== undefined)
+      for (const tree of [...new Set([...pair, ...ranked])].slice(0, PAIR_POOL_TREES))
+        pool.add(tree);
+  }
   let furthest: { rank: readonly bigint[]; error: unknown } | undefined;
   // 3. A pair runs only when no tree alone funds, its picks always span both trees.
   const consider = (set: readonly Address[]) => {
@@ -129,6 +138,48 @@ export function selectAcrossTrees(
   if (best !== undefined) return best.entries;
   // The set funding the most mints, then holding the most of the short one, names the refusal.
   throw furthest?.error;
+}
+
+/** Rust `Funding::pair_cover`, the distinct trees whose largest notes within the input budget hold the most. */
+function pairCover(
+  byTree: ReadonlyMap<Address, readonly WalletUtxo[]>,
+  cover: Cover,
+  maxInputs: number,
+): readonly Address[] | undefined {
+  const leaders: { tree: Address; amount: bigint }[][] = Array.from(
+    { length: maxInputs },
+    () => [],
+  );
+  for (const [tree, notes] of byTree) {
+    const amounts = notes
+      .filter((note) => note.utxo.asset === cover.asset)
+      .map((note) => note.utxo.amount)
+      .sort(descending);
+    let amount = 0n;
+    for (let budget = 1; budget < maxInputs; budget++) {
+      amount += amounts[budget - 1] ?? 0n;
+      const best = leaders[budget]!;
+      best.push({ tree, amount });
+      best.sort((left, right) => descending(left.amount, right.amount));
+      best.splice(2);
+    }
+  }
+  let best: { trees: readonly Address[]; amount: bigint } | undefined;
+  for (let budget = 1; budget < maxInputs; budget++) {
+    for (const left of leaders[budget]!) {
+      for (const right of leaders[maxInputs - budget]!) {
+        const amount = left.amount + right.amount;
+        if (
+          left.tree !== right.tree &&
+          amount >= cover.amount &&
+          (best === undefined || amount > best.amount)
+        ) {
+          best = { trees: [left.tree, right.tree], amount };
+        }
+      }
+    }
+  }
+  return best?.trees;
 }
 
 /** @internal Each tree alone, then only when none funds, each pair within `pool` in its order. */

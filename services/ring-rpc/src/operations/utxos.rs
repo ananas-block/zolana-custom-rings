@@ -372,6 +372,10 @@ fn wallet_page(
 }
 
 impl PageDelta {
+    pub(crate) fn derived_owners(&self) -> &[[u8; 32]] {
+        &self.late_owners
+    }
+
     pub(crate) fn notes(&self) -> impl Iterator<Item = (&[u8; 32], &StoredUtxo)> {
         self.notes.iter()
     }
@@ -744,6 +748,10 @@ impl AuditStore {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(admission.rows().iter().copied());
+        self.queue_late_owners(owners);
+    }
+
+    pub(crate) fn queue_late_owners(&self, owners: impl IntoIterator<Item = [u8; 32]>) {
         self.late_owners
             .write()
             .unwrap_or_else(PoisonError::into_inner)

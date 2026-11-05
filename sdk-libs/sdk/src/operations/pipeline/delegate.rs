@@ -274,6 +274,9 @@ impl<'a> DelegateMove<'a> {
                 .iter()
                 .map(|(_, _, utxos)| utxos.len())
                 .sum::<usize>();
+            if notes > max_inputs {
+                return None;
+            }
             let total: u128 = funded
                 .iter()
                 .flat_map(|(_, _, utxos)| utxos)

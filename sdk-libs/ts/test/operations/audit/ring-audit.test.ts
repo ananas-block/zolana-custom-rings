@@ -991,6 +991,7 @@ describe("recoverRingMemberNotes", () => {
         unsupportedDeposits: [],
         unknownMints: [],
         unseenInputs: [zeroKeyNullifier(deposit.commitment, blinding), OTHER_NULLIFIER],
+        unseenInputCount: 2n,
       });
     } finally {
       deposit.ephemeralSecret.fill(0);
@@ -1430,15 +1431,16 @@ describe("recoverRingMemberNotes", () => {
         ...sealedTransfer({
           auditor: auditor.publicKey(),
           nullifiers: [nullifier],
-          txSignature: `${"3".repeat(63)}${"ABCDEFGHJKLMN"[index]!}` as Signature,
+          txSignature:
+            `${"3".repeat(62)}${"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"[Math.floor(index / 58)]!}${"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"[index % 58]!}` as Signature,
           ...(records === undefined ? {} : { records }),
         }).transaction,
         slot: 11n + BigInt(index),
       });
-      const others = Array.from({ length: 12 }, (_, index) =>
+      const others = Array.from({ length: 70 }, (_, index) =>
         transfer(index, field(`${"00".repeat(30)}c0${index.toString(16).padStart(2, "0")}`)),
       );
-      const respend = transfer(12, spent, [ownedRecord(owner), ...otherRecords]);
+      const respend = transfer(70, spent, [ownedRecord(owner), ...otherRecords]);
       const rows = [mine, ...others.slice(0, 6), respend, ...others.slice(6)];
       const full = await pagedRecovery({ owner, auditor, rows });
       const page = { owner, auditor, rows, pageSize: 1, maxPages: 1 };
@@ -1449,6 +1451,7 @@ describe("recoverRingMemberNotes", () => {
         expect(held.notes).toBeLessThanOrEqual(1);
         expect(held.claimed).toBeLessThanOrEqual(2);
         expect(held.openSlot).toBe(1);
+        expect(held.unseenInputs).toBeLessThanOrEqual(64);
         pauses += 1;
         step = await pagedRecovery({ ...page, progress: step.progress });
       }
@@ -1457,10 +1460,10 @@ describe("recoverRingMemberNotes", () => {
       expect(step.notes.notes.map((note) => note.outputContext.hash)).toEqual([
         respend.outputSlots[0]!.outputContext.hash,
       ]);
-      expect(step.notes.unseenInputs).toEqual([
-        FIRST_NULLIFIER,
-        ...others.map(({ nullifiers }) => nullifiers[0]),
-      ]);
+      expect(step.notes.unseenInputs).toEqual(
+        [FIRST_NULLIFIER, ...others.map(({ nullifiers }) => nullifiers[0])].slice(0, 64),
+      );
+      expect(step.notes.unseenInputCount).toBe(71n);
     });
 
     it("refuses a progress another member started", async () => {

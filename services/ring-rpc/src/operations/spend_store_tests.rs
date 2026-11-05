@@ -1005,3 +1005,70 @@ async fn a_follower_reload_reads_only_the_rows_written_since_its_revision() {
     let idle = reload(&follower).await;
     assert_eq!((idle.spends.notes.len(), idle.spends.rows.len()), (0, 0));
 }
+
+#[tokio::test]
+async fn a_restart_after_enrollment_resumes_old_note_derivation() {
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let seal = seal();
+    let owner = wallet(1);
+    let key = secret(7);
+    let created = note(owner, &key, 0x10, 50);
+    let nullifier = nullifier_of(&created, &key);
+    let before = indexed_store(&database);
+    commit_page(&database, &before, &seal, &Keys::none(), &|work| {
+        work.open(frame(5), [created]);
+        work.observe(real(nullifier, frame(6), 0));
+        terminal(work, 6);
+    })
+    .await
+    .expect("history without enrollment");
+    let writer = ProjectionWriter {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        lease: LeaseClaim {
+            db: database.connection(),
+            ring: RING,
+            holder: database.lease_holder(),
+            now: NOW,
+        }
+        .claim()
+        .await
+        .expect("claim")
+        .expect("lease"),
+        clock: Clock::Fixed(NOW),
+    };
+    writer
+        .commit_enrollments(
+            &[HeldEnrollment::unsealed(owner.to_bytes(), &key)],
+            TrackingCursor::default(),
+        )
+        .await
+        .expect("enrollment");
+    drop(before);
+    let after = indexed_store(&database);
+    after.queue_late_owners(writer.pending_owners().await.expect("pending"));
+    let keys = Keys::with(owner, 7);
+    let opener = |held: &HeldEnrollment| keys.open(held);
+    let mut work = PageWork::new(&after, &opener);
+    work.late_keys();
+    let delta = work.finish().await.expect("derive");
+    writer.commit_page(&delta).await.expect("derived page");
+    let loaded = LoadSpends {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        scope: HistoryScope::Everything,
+    }
+    .load()
+    .await
+    .expect("durable result");
+    assert_eq!(loaded.spends.notes[0].1.nullifier, Some(nullifier));
+    assert_eq!(
+        loaded.spends.rows[0].state,
+        SpendState::Resolved {
+            note: created.commitment
+        }
+    );
+    assert!(writer.pending_owners().await.expect("completed").is_empty());
+}

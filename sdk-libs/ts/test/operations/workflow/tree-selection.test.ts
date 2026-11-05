@@ -128,3 +128,19 @@ describe("selectAcrossTrees", () => {
     ).toEqual(expected);
   });
 });
+
+it("finds a pair outside the preferred pool under a shared input budget", () => {
+  const notes: Note[] = Array.from(
+    { length: 8 },
+    (_, tree) =>
+      [
+        [tree, 40n],
+        [tree, 40n],
+      ] as const,
+  ).flat();
+  notes.push([8, 60n]);
+  const selected = picked(notes, 100n, 2);
+  expect(selected).toHaveLength(2);
+  expect(selected.reduce((sum, [, amount]) => sum + amount, 0n)).toBe(100n);
+  expect(selected.some(([tree]) => tree === treeAddress(8))).toBe(true);
+});
