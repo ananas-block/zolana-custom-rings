@@ -500,13 +500,15 @@ async fn projected(indexer: &Indexer, registry: Address) -> StorageState {
 }
 
 #[tokio::test]
-async fn a_credential_write_raises_the_floor_and_a_lower_sequence_never_lowers_it() {
+async fn a_credential_write_raises_the_floor_and_a_lower_sequence_or_public_write_keeps_it() {
     let mut source = PolicySource::new(field(9));
     let accounts = [PolicySource::CREATOR, source.source];
     let (_, raised) = source.update(0, PRIVATE_ALLOW_MASK, 7, &accounts);
-    let (root, lower) = source.update(1, PRIVATE_ALLOW_MASK, 3, &accounts);
+    let (_, lower) = source.update(1, PRIVATE_ALLOW_MASK, 3, &accounts);
+    let (root, public) = source.update(2, READER_MASK, 0, &accounts);
     let initialized = std::mem::take(&mut source.initialized);
-    let (indexer, handle) = replayed(vec![initialized, vec![raised], vec![lower]]).await;
+    let blocks = vec![initialized, vec![raised], vec![lower], vec![public]];
+    let (indexer, handle) = replayed(blocks).await;
     let state = projected(&indexer, source.source).await;
     assert_eq!(state.fault, None);
     assert_eq!(state.account.newest().hash, root);

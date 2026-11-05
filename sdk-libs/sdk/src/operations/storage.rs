@@ -317,7 +317,17 @@ impl PrivateStorageWrite<'_> {
                 inclusions,
             } => (root, checkpoint, inclusions),
             AddressActivation::Queued { address } => {
-                return Err(CredentialError::AddressQueued { address }.into())
+                let write_index = owners
+                    .iter()
+                    .filter(|owner| present[&owner.member].address == address)
+                    .map(|owner| owner.write.write_index)
+                    .min()
+                    .ok_or(CredentialError::MalformedProof)?;
+                return Err(CredentialError::AddressQueued {
+                    address,
+                    write_index,
+                }
+                .into());
             }
         };
         // 4. The statement takes the authenticated checkpoint and the snapshot's state roots,

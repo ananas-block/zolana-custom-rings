@@ -1,4 +1,4 @@
-//! Record updates refuse an update pending list approval past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an update pending list approval for its allow entry, page the updates pending list approval, apply a batch that lands after its status lookup once, requeue an expired batch once, send a salted owner write with its checkpoint and credential trees, hold it while its address is queued and send nothing without a credential source.
+//! Record updates refuse an update pending list approval past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an update pending list approval for its allow entry, page the updates pending list approval, apply a batch that lands after its status lookup once, requeue an expired batch once, send a salted owner write with its checkpoint and credential trees, hold it while its address is queued as another owner's write lands, and send nothing without a credential source.
 
 use std::{collections::VecDeque, sync::atomic::AtomicU64};
 
@@ -955,19 +955,25 @@ async fn a_wallet_update_pending_list_approval_lands_with_its_allow_entry() {
     ));
 }
 
-/// The owner behind `SALTED_KEY`, proven at `SEQUENCE` in credential tree `CREDENTIAL_TREE` once its address applies.
+/// The owners behind `SALTED_KEY` and `READY_KEY`, proven at `SEQUENCE` in credential tree
+/// `CREDENTIAL_TREE`, the first one queued while `queued` is set.
 struct HeldOwner {
     queued: std::sync::atomic::AtomicBool,
     proved: Mutex<Vec<(u8, Address, [u8; 32])>>,
 }
 
 const SALTED_KEY: [u8; 32] = [0x0d; 32];
+const READY_KEY: [u8; 32] = [0x0f; 32];
 const LIST_SALT: [u8; 32] = [0x2a; 32];
 const SEQUENCE: u64 = 40;
 const CREDENTIAL_TREE: u16 = 5;
 
 fn salted_owner() -> Address {
     Address::new_from_array([0x0e; 32])
+}
+
+fn ready_owner() -> Address {
+    Address::new_from_array([0x10; 32])
 }
 
 #[async_trait::async_trait]
@@ -977,20 +983,32 @@ impl CredentialWrites for HeldOwner {
         ring: Address,
         written_key: [u8; 32],
     ) -> Result<Option<SaltedOwner>, RingRpcError> {
-        Ok(
-            (ring == RING && written_key == SALTED_KEY).then_some(SaltedOwner {
-                owner: salted_owner(),
-                list_salt: LIST_SALT,
-            }),
-        )
+        let owner = match written_key {
+            SALTED_KEY => salted_owner(),
+            READY_KEY => ready_owner(),
+            _ => return Ok(None),
+        };
+        Ok((ring == RING).then_some(SaltedOwner {
+            owner,
+            list_salt: LIST_SALT,
+        }))
     }
 
     async fn prove(
         &self,
         write: PrivateStorageWrite<'_>,
     ) -> Result<ProvenPrivateWrite, custom_ring_sdk::RingError> {
-        if self.queued.load(Ordering::Relaxed) {
-            return Err(CredentialError::AddressQueued { address: [1; 32] }.into());
+        let queued = write
+            .owners
+            .iter()
+            .find(|owner| owner.owner == salted_owner())
+            .filter(|_| self.queued.load(Ordering::Relaxed));
+        if let Some(owner) = queued {
+            return Err(CredentialError::AddressQueued {
+                address: [1; 32],
+                write_index: owner.write_index,
+            }
+            .into());
         }
         self.proved.lock().unwrap().extend(
             write
@@ -1024,9 +1042,13 @@ impl Records {
     }
 
     async fn submit_salted_write(&self) -> SubmitRecordUpdateResponse {
+        self.submit_private(SALTED_KEY).await
+    }
+
+    async fn submit_private(&self, key: [u8; 32]) -> SubmitRecordUpdateResponse {
         self.submit(signed(
             &authority(),
-            vec![list_write(SALTED_KEY, ListId::PrivateAllow)],
+            vec![list_write(key, ListId::PrivateAllow)],
         ))
         .await
         .expect("queued")
@@ -1086,4 +1108,29 @@ async fn a_salted_owner_write_without_a_credential_source_sends_nothing() {
     records.writer.flush().await.expect("flush");
 
     assert!(records.chain.sent.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_queued_owner_write_waits_while_another_owner_write_lands() {
+    let records = Records::new().await;
+    let held = records.serve_salted_owner(true);
+    let waiting = records.submit_private(SALTED_KEY).await;
+    let ready = records.submit_private(READY_KEY).await;
+
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.members, [READY_KEY]);
+    assert!(matches!(
+        records.status(&waiting).await,
+        RecordUpdateStatus::Queued
+    ));
+
+    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
+    records.writer.flush().await.expect("settle");
+    assert!(matches!(
+        records.status(&ready).await,
+        RecordUpdateStatus::Applied { .. }
+    ));
+    held.queued.store(false, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.members, [SALTED_KEY]);
 }

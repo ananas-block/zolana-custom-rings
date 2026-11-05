@@ -237,8 +237,8 @@ pub enum CredentialError {
     UnverifiedViewingKey,
     #[error("the credential seal opens to another key than the credential holds")]
     SealMismatch,
-    #[error("no applied tree 0 root holds credential address {address:?} yet, the write waits")]
-    AddressQueued { address: [u8; 32] },
+    #[error("no applied tree 0 root holds the owner address of write {write_index} yet, the write waits")]
+    AddressQueued { address: [u8; 32], write_index: u8 },
     #[error("the owner of write {write_index} holds no credential")]
     WriteOwnerNotEnrolled { write_index: u8 },
     #[error("write {write_index} is not the list key of its owner under the salt")]

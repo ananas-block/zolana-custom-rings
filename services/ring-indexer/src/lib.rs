@@ -167,4 +167,6 @@ fn surfpool_fixture(rpc_url: &str) -> Result<BlockHeaders> {
 #[cfg(test)]
 mod replay_tests;
 #[cfg(test)]
+mod savepoint_tests;
+#[cfg(test)]
 mod tests;
