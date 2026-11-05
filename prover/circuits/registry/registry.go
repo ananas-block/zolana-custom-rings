@@ -67,19 +67,6 @@ func (b RecordBody) contents() []frontend.Variable {
 	return slices.Concat([]frontend.Variable{b.Lists, b.MintPolicy, b.WithdrawalThreshold}, b.AssetLimits[:])
 }
 
-func (b RecordBody) selectWhen(api frontend.API, cond frontend.Variable, other RecordBody) RecordBody {
-	selected := RecordBody{
-		Next:                api.Select(cond, b.Next, other.Next),
-		Lists:               api.Select(cond, b.Lists, other.Lists),
-		MintPolicy:          api.Select(cond, b.MintPolicy, other.MintPolicy),
-		WithdrawalThreshold: api.Select(cond, b.WithdrawalThreshold, other.WithdrawalThreshold),
-	}
-	for i := range selected.AssetLimits {
-		selected.AssetLimits[i] = api.Select(cond, b.AssetLimits[i], other.AssetLimits[i])
-	}
-	return selected
-}
-
 // assertEmptyWhen leaves Next free, an absent member has no link until an insert gives it one.
 func (b RecordBody) assertEmptyWhen(api frontend.API, cond frontend.Variable) {
 	for _, field := range b.contents() {

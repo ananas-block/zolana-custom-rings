@@ -125,29 +125,6 @@ type PolicyTable struct {
 	Rules     []Field `json:"rules"`
 }
 
-// RecordOpening opens a member's record in a member registry, Path the three siblings of every level from the leaf up in child order.
-type RecordOpening struct {
-	Next                Field   `json:"next"`
-	Lists               uint64  `json:"lists"`
-	MintPolicy          Field   `json:"mintPolicy"`
-	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
-	AssetLimits         []Field `json:"assetLimits"`
-	Index               uint64  `json:"index"`
-	Path                []Field `json:"path"`
-}
-
-// MemberOpening proves a member present, or absent under its low record, nil only for a slot that is no live UTXO.
-type MemberOpening struct {
-	Present bool `json:"present"`
-	RecordOpening
-	LowMember              Field   `json:"lowMember"`
-	LowNext                Field   `json:"lowNext"`
-	LowLists               uint64  `json:"lowLists"`
-	LowMintPolicy          Field   `json:"lowMintPolicy"`
-	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
-	LowAssetLimits         []Field `json:"lowAssetLimits"`
-}
-
 type Withdrawal struct {
 	Owner  Field `json:"owner"`
 	Asset  Field `json:"asset"`

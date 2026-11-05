@@ -20,54 +20,9 @@ import (
 )
 
 // Properties:
-// 1. SplitField's high and low recompose to value as an integer below q, with low below 2^lowBits.
-// 2. FieldToBytesBEWith's 32 bytes are the big endian form of value's integer below q.
-// 3. AssertOrderedWhen holds lo < mid < hi as integers below q while the boolean enabled is set, and says nothing of them while it is clear.
+// 1. FieldToBytesBEWith's 32 bytes are the big endian form of value's integer below q.
+// 2. AssertOrderedWhen holds lo < mid < hi as integers below q while the boolean enabled is set, and says nothing of them while it is clear.
 // Every hint output is untrusted until a range check and a recomposition bind it.
-
-// SplitField returns high and low of value = high*2^lowBits + low, never the split of value+q.
-func SplitField(api frontend.API, rc frontend.Rangechecker, value frontend.Variable, lowBits int) (high, low frontend.Variable) {
-	if lowBits < 1 || lowBits >= api.Compiler().Field().BitLen() {
-		panic("split field: low width outside the field")
-	}
-	out, err := api.Compiler().NewHint(splitFieldHint, 2, value, lowBits)
-	if err != nil {
-		panic(err)
-	}
-	high, low = out[0], out[1]
-	rc.Check(low, lowBits)
-	assertCanonicalSplit(api, rc, value, high, low, lowBits)
-	return high, low
-}
-
-// assertCanonicalSplit pins value = high*2^lowBits + low below q, the caller bounds low to lowBits.
-// With high and low range checked the integer stays below 2^bits(q), under 2q, and the field equation names value or value + q and nothing else. On BN254 the last two checks cap the integer at q-1, value + q is out.
-func assertCanonicalSplit(api frontend.API, rc frontend.Rangechecker, value, high, low frontend.Variable, lowBits int) {
-	q := api.Compiler().Field()
-	// Without the bound, a high near q wraps qHigh - high into range.
-	rc.Check(high, q.BitLen()-lowBits)
-	api.AssertIsEqual(value, api.Add(api.Mul(high, new(big.Int).Lsh(big.NewInt(1), uint(lowBits))), low))
-	qHigh := new(big.Int).Rsh(q, uint(lowBits))
-	qLow := new(big.Int).Sub(q, new(big.Int).Lsh(qHigh, uint(lowBits)))
-	// high is at most the high part of q.
-	rc.Check(api.Sub(qHigh, high), qHigh.BitLen())
-	atBound := api.IsZero(api.Sub(high, qHigh))
-	// At the high part of q, low stays below the low part of q.
-	// q is odd, the low part is at least 1 and low = 0 stays reachable. On BN254 a low at or above the low part wraps past lowBits and fails, a q just above a power of two would pass it at lowBits = bits(q)-1.
-	rc.Check(api.Mul(atBound, api.Sub(new(big.Int).Sub(qLow, big.NewInt(1)), low)), lowBits)
-}
-
-func init() { solver.RegisterHint(splitFieldHint) }
-
-func splitFieldHint(_ *big.Int, inputs, outputs []*big.Int) error {
-	if len(inputs) != 2 || len(outputs) != 2 || !inputs[1].IsUint64() {
-		return errors.New("split field: expecting a value, a low width and two outputs")
-	}
-	lowBits := uint(inputs[1].Uint64())
-	outputs[0].Rsh(inputs[0], lowBits)
-	outputs[1].Sub(inputs[0], new(big.Int).Lsh(outputs[0], lowBits))
-	return nil
-}
 
 // FieldToBytesBEWith is gadget.FieldToBytesBE through rc, both gap equations stay under 2^129 + 1 and cannot wrap modulo q.
 func FieldToBytesBEWith(api frontend.API, rc frontend.Rangechecker, value frontend.Variable) [32]frontend.Variable {
