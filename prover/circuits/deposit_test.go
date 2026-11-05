@@ -47,6 +47,7 @@ func solveDeposit(c *circuits.DepositCircuit) error {
 func TestDepositSolvesEachCountAndMode(t *testing.T) {
 	for _, spec := range []ringdeposit.Spec{
 		{Count: 1},
+		{Count: 2},
 		{Count: circuits.MaxDeposits},
 		{Count: 2, Mode: ringdeposit.ModeAnonymous},
 		{Count: 2, ZeroKeys: []int{0, 1}},

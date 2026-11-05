@@ -90,9 +90,7 @@ func TestMergeOwnerKeyBytesStayBytes(t *testing.T) {
 	s := ringmerge.Build(t)
 	key := &s.Circuit.OwnerKey
 	key[0], key[1] = ringtest.AsBigInt(key[0]).Int64()-1, ringtest.AsBigInt(key[1]).Int64()+256
-	if solved(t, s) == nil {
-		t.Fatal("a record byte above 255 settled")
-	}
+	ringtest.RequireRefused(t, solved(t, s), "lookup query too large")
 }
 
 // The record's amount is eight bytes, a wider amount has no record.
@@ -106,9 +104,7 @@ func TestMergeRefusesAnAmountAboveItsBytes(t *testing.T) {
 	}, big.NewInt(ringmerge.OutputTreeID))
 	s.Circuit.OutputUtxoHash = s.OutputHash
 	s.Rebind(t)
-	if solved(t, s) == nil {
-		t.Fatal("an amount at 2^64 settled")
-	}
+	ringtest.RequireRefused(t, solved(t, s), "[ToBinary]", "audit.OpeningRecord.Encode")
 }
 
 func TestMergeTrackingRow(t *testing.T) {

@@ -109,6 +109,13 @@ func TestSignerDataCountsRefusedOnTheRails(t *testing.T) {
 		w.CoOwners = []*big.Int{coOwner}
 		return w.Build(t)
 	}
+	t.Run("the honest element", func(t *testing.T) {
+		b := built(t)
+		if got := packedElement(b); got != 1 {
+			t.Fatalf("packed %d", got)
+		}
+		requireSolved(t, b.Circuit)
+	})
 	for _, tt := range []struct {
 		name   string
 		packed int64
@@ -129,7 +136,7 @@ func TestSignerDataCountsRefusedOnTheRails(t *testing.T) {
 		b := built(t)
 		b.Circuit.SignerDataCounts = new(big.Int).Add(big.NewInt(1), new(big.Int).Lsh(big.NewInt(1), audit.SignerDataEntries*audit.SignerDataEntryBits))
 		b.Rebind(t)
-		refused(t, b.Circuit, "[ToBinary]")
+		refused(t, b.Circuit, "[ToBinary]", signerDataPredicate)
 	})
 	t.Run("a statement of another count", func(t *testing.T) {
 		b := built(t)
