@@ -211,12 +211,6 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
         self
     }
 
-    /// Notes found by earlier syncs, their nullifiers find the merges spending them and keep their spends in the scan.
-    pub fn with_held_notes(mut self, held: &'a [WalletUtxo]) -> Self {
-        self.held = held;
-        self
-    }
-
     /// The recipients' addresses the wallet holds, a sent payment verifies only against one.
     pub fn with_recipient_addresses(mut self, recipients: &'a [ShieldedAddress]) -> Self {
         self.recipients = recipients;
@@ -241,15 +235,19 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
         scan.finish(self.keys)
     }
 
-    /// Reads from the stored history of `wallet` with its notes held, a spend of a stored note reaches the scan.
+    /// Reads from the stored history of `wallet` with its notes held, their nullifiers find the merges and spends
+    /// of stored notes.
     pub async fn fetch_wallet<I: AsyncRpc + ?Sized>(
         self,
         indexer: &I,
         wallet: &AnonymousWallet,
     ) -> Result<AnonymousScan, AnonymousError> {
-        self.with_held_notes(wallet.notes())
-            .fetch(indexer, wallet.history())
-            .await
+        AnonymousSync {
+            held: wallet.notes(),
+            ..self
+        }
+        .fetch(indexer, wallet.history())
+        .await
     }
 
     /// Reads `ring` from its first row without tag or nullifier queries.
@@ -372,7 +370,7 @@ struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
     held_back: Vec<WalletUtxo>,
     /// Kept after `found` moves into `decrypted`.
     found_hashes: HashSet<[u8; 32]>,
-    /// Of the notes [`AnonymousSync::with_held_notes`] passed.
+    /// Of the notes [`AnonymousSync::fetch_wallet`] holds.
     held_hashes: HashSet<[u8; 32]>,
     utxos: Vec<AnonymousRingUtxo>,
     decrypted: DecryptionResult,

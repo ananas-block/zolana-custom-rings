@@ -1905,14 +1905,15 @@ async fn a_merge_of_the_wallets_notes_is_found_by_recovery_and_marks_them_spent(
     for amount in [70, 30] {
         alice.pay(&indexer, &[pay(&bob.address(), amount)]);
     }
-    let held = bob.sync(&indexer, &fresh(&bob)).await;
-    let notes = &held.decrypted().utxos;
-    let nullifiers: Vec<[u8; 32]> = notes.iter().map(|utxo| utxo.nullifier).collect();
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    wallet
+        .absorb(bob.sync(&indexer, wallet.history()).await)
+        .unwrap();
+    let nullifiers: Vec<[u8; 32]> = wallet.notes().iter().map(|utxo| utxo.nullifier).collect();
     let first = nullifiers[0];
     let merged_hash = publish_merge(&indexer, &bob, nullifiers, 100);
     let next = AnonymousSync::new(&bob.keys, &assets())
-        .with_held_notes(&held.decrypted().utxos)
-        .fetch(&indexer, held.history())
+        .fetch_wallet(&indexer, &wallet)
         .await
         .unwrap();
     assert_eq!(
