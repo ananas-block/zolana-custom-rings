@@ -239,7 +239,7 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
         if index == 0 {
             let scan = env.client.block_on(async {
                 AnonymousSync::new(&original_keys, &assets)
-                    .fetch(env.client.as_async().indexer(), wallet.history())
+                    .fetch_wallet(env.client.as_async().indexer(), &wallet)
                     .await
                     .map_err(anyhow::Error::from)
             })?;
@@ -253,7 +253,7 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
         RotatingRingKeys::new(&rotated)?.with_retired(vec![recipient.viewing_key.clone()])?;
     let scan = env.client.block_on(async {
         AnonymousSync::new(&restarted_keys, &assets)
-            .fetch(env.client.as_async().indexer(), restarted.history())
+            .fetch_wallet(env.client.as_async().indexer(), &restarted)
             .await
             .map_err(anyhow::Error::from)
     })?;
