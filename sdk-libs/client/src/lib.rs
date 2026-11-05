@@ -8,6 +8,8 @@ mod anonymous_wallet;
 mod confidential;
 #[path = "operations/created_utxos.rs"]
 mod created;
+#[path = "operations/credential.rs"]
+mod credential;
 #[path = "crypto/decrypt/mod.rs"]
 mod decrypt;
 #[path = "operations/delivered_utxos.rs"]
@@ -80,6 +82,10 @@ pub use crate::{
     created::{
         CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
         DepositOwners,
+    },
+    credential::{
+        AbsentCredential, AddressRoot, CredentialError, CredentialLookup, CredentialResolver,
+        PresentCredential, RecipientKeyResolver, RecipientKeys, StateRoot, UnknownCredential,
     },
     decrypt::{FramedRow, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},

@@ -55,6 +55,7 @@ spr-client = { workspace = true }
 spr-event = { workspace = true }
 spr-event-parser = { workspace = true }
 spr-instruction = { workspace = true, optional = true }
+spr-program = { workspace = true, features = ["compression"] }
 spr-interface = { workspace = true }
 spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
@@ -66,6 +67,7 @@ zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
 zolana-secret-file = { workspace = true, optional = true }
 spr-transaction = { workspace = true, features = ["serde"] }
+spr-tree = { workspace = true }
 
 [dev-dependencies]
 http = { workspace = true }
