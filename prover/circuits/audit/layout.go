@@ -1,4 +1,17 @@
-// The program cuts every ciphertext from the layout flags, a flag off the key shifts every frame length.
+// Fixes where each byte of the auditor stream sits, per key shape and per frame.
+//
+// A circuit encrypts one plaintext length per key, and a frame publishes less. The key alone fixes
+// every counter, no published count moves a region, and a reader decrypts slot i at its own counter
+// with no other slot. The frame omits padding and unpublished slots, so the bytes the statement hashes
+// are the regions the published n, m and has_data select. The program cuts every ciphertext from n, m
+// and the layout flags, the entry flag moves the envelope's length and has_data adds one tail per slot.
+//
+// The file proves the following.
+//  1. The layout value holds two flags, a value past them fails its decomposition.
+//  2. The entry flag equals the key's entry capacity.
+//  3. has_data stays clear off a data key, a key with no tail region seals no data hash.
+//
+// Read after shared/envelope.go. Read before audit/audit.go, audit/record.go.
 
 package audit
 
@@ -37,4 +50,87 @@ func (s StreamShape) DecodeLayout(api frontend.API, layout frontend.Variable) La
 		api.AssertIsEqual(bits[0], 0)
 	}
 	return Layout{HasData: bits[0], Entry: bits[1]}
+}
+
+// StreamRanges mirrors AuditStreamLayout in program-libs/interface/src/proof/audit_stream.rs.
+//
+//	envelope, EnvelopeBlocks | records, Outputs * RecordBlocks | tails, Outputs * TailBlocks
+type StreamRanges struct {
+	StreamShape
+}
+
+const (
+	streamBlockLen = 16
+	// StreamFirstCounter is aes.Cipher.CTREncrypt's first counter, mirrored by STREAM_FIRST_COUNTER.
+	StreamFirstCounter  = 2
+	EnvelopeKeyLen      = 32
+	RealInputCountLen   = 1
+	DefaultInputBitsLen = 8
+	fieldLen            = 32
+	amountLen           = 8
+	kindLen             = 1
+	// RecordLen is the bytes a transfer frame carries, mirrored by AUDIT_RECORD_LEN.
+	RecordLen = kindLen + amountLen + 3*fieldLen
+	TailLen   = 2 * fieldLen
+	// EntryInputLen mirrors ENTRY_INPUT_LEN.
+	EntryInputLen = amountLen + 6*fieldLen
+	RecordBlocks  = (RecordLen + streamBlockLen - 1) / streamBlockLen
+	// RecordStride mirrors RECORD_STRIDE, slot i keeps its counter and a transfer frame omits the padding.
+	RecordStride = RecordBlocks * streamBlockLen
+	TailBlocks   = TailLen / streamBlockLen
+)
+
+func (s StreamShape) Ranges() StreamRanges {
+	return StreamRanges{StreamShape: s}
+}
+
+func (r StreamRanges) EnvelopeHeadLen() int {
+	if r.Entry {
+		return EnvelopeKeyLen + RealInputCountLen + DefaultInputBitsLen
+	}
+	return EnvelopeKeyLen + RealInputCountLen
+}
+
+func (r StreamRanges) entryLen() int {
+	if r.Entry {
+		return EntryInputLen
+	}
+	return 0
+}
+
+// EnvelopeLen is what the frame carries, with no padding.
+func (r StreamRanges) EnvelopeLen(count int) int {
+	return r.EnvelopeHeadLen() + count*r.entryLen()
+}
+
+// EnvelopeBlocks is fixed per shape, no published count moves a record's counter.
+func (r StreamRanges) EnvelopeBlocks() int {
+	return (r.EnvelopeLen(r.InputClass) + streamBlockLen - 1) / streamBlockLen
+}
+
+// RecordCounter must match the readers, another counter decrypts noise.
+func (r StreamRanges) RecordCounter(i int) int {
+	return StreamFirstCounter + r.EnvelopeBlocks() + i*RecordBlocks
+}
+
+// TailCounter must match the readers, a tail shares no counter with a record.
+func (r StreamRanges) TailCounter(i int) int {
+	return r.RecordCounter(r.Outputs) + i*TailBlocks
+}
+
+// CapacityBlocks covers every slot the key serves, a dataless key has no tail region.
+func (r StreamRanges) CapacityBlocks() int {
+	blocks := r.EnvelopeBlocks() + r.Outputs*RecordBlocks
+	if r.Data {
+		blocks += r.Outputs * TailBlocks
+	}
+	return blocks
+}
+
+func (r StreamRanges) RecordOffset(i int) int {
+	return (r.RecordCounter(i) - StreamFirstCounter) * streamBlockLen
+}
+
+func (r StreamRanges) TailOffset(i int) int {
+	return (r.TailCounter(i) - StreamFirstCounter) * streamBlockLen
 }

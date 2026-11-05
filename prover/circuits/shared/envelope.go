@@ -1,4 +1,44 @@
-// Each envelope needs a fresh one-time key, a reused key repeats the keystream.
+// Seals a ciphertext to the ring's auditor inside the proof.
+//
+// SPP's transfer proof binds its ciphertext as bytes and proves nothing about what they decrypt to. An
+// auditor must read what the ring proof claims, so here the key, the nonce and every AES block are
+// constraints. The cipher has no authentication tag. Integrity comes from the statement, it hashes the
+// ciphertext and the program rebuilds that hash from the instruction.
+//
+// The schedule is mirrored by sdk-libs/client/src/crypto/encryption/mod.rs and RingStream::new in
+// sdk-libs/keys/src/stream_cipher.rs.
+//
+//	dh     = X25519(eph_sk, auditor_u)
+//	secret = Poseidon(CR_S, pack_be(dh), pack_be(0x04 ‖ eph_u), pack_be(0x04 ‖ auditor_u))
+//	salted = Poseidon(secret, salt), on a salted stream alone
+//	head   = Poseidon(label ‖ 0x00, secret or salted)
+//	tail   = Poseidon(label ‖ 0x01, secret or salted)
+//	key    = low31_be(head) ‖ low13_be(tail)[0]
+//	nonce  = low13_be(tail)[1..13]
+//	ct     = AES-256-CTR(key, nonce ‖ u32_be(counter), plaintext), counter from 2
+//
+// The schedule is Poseidon where SPP runs HKDF off chain, since the proof must derive the key. Each
+// step answers one failure.
+//  1. The auditor key is canonical, so the bytes the program configures are the ones the agreement
+//     read. The gadget also refuses a zero agreement.
+//  2. secret binds both public keys, an agreement that repeats under another key pair gives another secret.
+//  3. A transfer's ephemeral key is SPP's tx_viewing_sk, derived per first nullifier, and a resend under
+//     that nullifier repeats it. The SDKs draw the salt fresh per build, and it keeps the keystream
+//     apart as it does in SPP's own schedule.
+//  4. One Poseidon output holds under 32 bytes, so two give the 44 bytes of key and nonce.
+//  5. The low bytes are those of the canonical field value. An alias at value + q would give the prover
+//     a second key no reader derives, the ciphertext would pass its statement and decrypt to noise.
+//  6. The label enters the first input, one secret gives one key and nonce per ciphertext kind.
+//  7. AES-CTR starts at counter 2 in SPP's gadget, and every reader starts there.
+//
+// The file proves the following.
+//  1. Ciphertext is AES-256-CTR of Plaintext under the schedule above, with every byte below 2^8.
+//  2. The agreement is the one between EphSk and AuditorPk. The auditor's secret opens it from eph_u
+//     when eph_u is EphSk's key, SealStream derives that key and a SealSalted caller holds it.
+//  3. Auditor and Eph hold the packed keys that schedule read.
+//
+// Read after shared/disclosure.go, ringgadget/bytes.go, shared/derivation.go.
+// Read before audit/audit.go, deposit.go, merge.go, registry/register_key.go.
 
 package shared
 
@@ -28,10 +68,6 @@ type Sealed struct {
 	Auditor, Eph, Ciphertext []frontend.Variable
 }
 
-func (s Sealed) StatementFields(api frontend.API) []frontend.Variable {
-	return append(slices.Concat(s.Auditor, s.Eph), gadget.HashBoundedBytes(api, s.Ciphertext))
-}
-
 // SealStream starts at counter 2, the readers start there.
 func (e Envelope) SealStream(api frontend.API) Sealed {
 	// The X25519 gadgets bound every key byte and return canonical bytes, the packings need no byte check.
@@ -43,6 +79,10 @@ func (e Envelope) SealStream(api frontend.API) Sealed {
 func (e Envelope) SealSalted(api frontend.API, eph []frontend.Variable, salt frontend.Variable) Sealed {
 	sealed, secret := e.agree(api, eph)
 	return e.seal(api, sealed, gadget.PoseidonHash(api, []frontend.Variable{secret, salt}))
+}
+
+func (s Sealed) StatementFields(api frontend.API) []frontend.Variable {
+	return append(slices.Concat(s.Auditor, s.Eph), gadget.HashBoundedBytes(api, s.Ciphertext))
 }
 
 func (e Envelope) agree(api frontend.API, eph []frontend.Variable) (Sealed, frontend.Variable) {
@@ -68,6 +108,7 @@ func AuditStreamKeySchedule(api frontend.API, secret frontend.Variable, label st
 	tag := func(counter byte) *big.Int {
 		return new(big.Int).SetBytes(append([]byte(label), counter))
 	}
+	// FieldLowBytesBE reads the canonical value, the reader's own Poseidon output holds no alias.
 	head := gadget.FieldLowBytesBE(api, rc, gadget.PoseidonHash(api, []frontend.Variable{tag(0), secret}), 31)
 	tail := gadget.FieldLowBytesBE(api, rc, gadget.PoseidonHash(api, []frontend.Variable{tag(1), secret}), 13)
 	copy(key[:31], head)

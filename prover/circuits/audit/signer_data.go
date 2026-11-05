@@ -12,6 +12,13 @@
 // Added disclosure. The element publishes the public signers that receive data-bearing outputs and
 // how many each receives. With one data-bearing output in the transaction, a count identifies its
 // recipient and, because data-bearing slots are visible, its slot.
+//
+// The file proves the following.
+//  1. The packed element is one 5 bit count per entry and fits its 60 bits.
+//  2. Entry k equals the live data-bearing output slots owned by run member k, zero past the run.
+//  3. A run member past the last entry owns no data-bearing output slot.
+//
+// Read after shared/utxo.go, audit/audit.go. Read before transfer/transfer.go.
 
 package audit
 
