@@ -78,8 +78,8 @@ fn a_pda_enrolls_and_applies_its_key_on_the_validator() -> Result<()> {
 }
 
 #[test]
-fn a_zero_key_payment_settles_for_an_unregistered_owner_and_refuses_a_registered_one() -> Result<()>
-{
+fn a_zero_key_payment_settles_for_a_registered_and_an_unregistered_owner_without_a_salted_read(
+) -> Result<()> {
     let env = setup()?;
     let ring_program = custom_ring_program_id()?;
     let ring = CustomRing::new(ring_program);
@@ -125,39 +125,29 @@ fn a_zero_key_payment_settles_for_an_unregistered_owner_and_refuses_a_registered
         prepared.transfer_sol(&recipient, 1)?;
         Ok(prepared)
     };
-    let refused = CustomRingTransfer::new(CustomRingTransferInput {
-        ring,
-        sender,
-        nullifier_key: Some(&sender.nullifier_key),
-        transaction: at_zero(sender)?,
-    });
-    assert!(
-        matches!(
-            env.run(refused.prove(env.client.ring_client())),
-            Err(RingError::EnrolledRecipientAtZeroKey { .. })
-        ),
-        "a registered owner takes its enrolled key"
-    );
-    let receipt = OwnerTransfer {
-        ring,
-        sender,
-        prepared: at_zero(&env.recipient.keypair)?,
-        interface_transfer_accounts: Vec::new(),
-        auditor_tag: auditor_view_tag(&auditor.pubkey()),
-        cosigner: None,
+    // No rule reads a salted list on the payee, so a registered owner may take the zero key too.
+    for owner in [sender, &env.recipient.keypair] {
+        let receipt = OwnerTransfer {
+            ring,
+            sender,
+            prepared: at_zero(owner)?,
+            interface_transfer_accounts: Vec::new(),
+            auditor_tag: auditor_view_tag(&auditor.pubkey()),
+            cosigner: None,
+        }
+        .send(&env)?;
+        let audited = AuditLookup {
+            scan: RingScan::new(ring_program, auditor.pubkey()).with_mode(RingMode::Confidential),
+            auditor: &auditor,
+            signature: receipt.signature,
+        }
+        .run(&env)?;
+        ensure!(audited
+            .outputs
+            .iter()
+            .filter_map(|output| output.opening.utxo())
+            .any(|output| output.amount == 1 && output.nullifier_pk == ZERO_NULLIFIER_PUBKEY));
     }
-    .send(&env)?;
-    let audited = AuditLookup {
-        scan: RingScan::new(ring_program, auditor.pubkey()).with_mode(RingMode::Confidential),
-        auditor: &auditor,
-        signature: receipt.signature,
-    }
-    .run(&env)?;
-    ensure!(audited
-        .outputs
-        .iter()
-        .filter_map(|output| output.opening.utxo())
-        .any(|output| output.amount == 1 && output.nullifier_pk == ZERO_NULLIFIER_PUBKEY));
     Ok(())
 }
 
