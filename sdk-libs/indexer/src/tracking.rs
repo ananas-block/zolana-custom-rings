@@ -106,7 +106,9 @@ pub struct GetTrackingOpeningsResponse {
     pub openings: Vec<RingTrackingOpening>,
 }
 
-/// Leaf 0 is the sentinel.
+/// Leaf 0 is the sentinel, the first enrolled owner sits at this leaf.
+pub const FIRST_TRACKING_LEAF: u64 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetTrackingRecordsRequest {
@@ -114,6 +116,13 @@ pub struct GetTrackingRecordsRequest {
     pub expected_root: Hash,
     pub start_index: u64,
     pub limit: u64,
+}
+
+impl GetTrackingRecordsRequest {
+    /// The indexer serves a page only from an enrolled leaf no later than the root's next index.
+    pub const fn starts_within(&self, next_index: u64) -> bool {
+        self.start_index >= FIRST_TRACKING_LEAF && self.start_index <= next_index
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
