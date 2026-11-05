@@ -97,7 +97,10 @@ impl<R: AsyncRpc + ?Sized> CompactAssetResolver<'_, R> {
         self.remaining -= 1;
         let filter = ProgramAccountsFilter::new(SplAssetRegistry::SIZE)
             .with_memcmp(0, [SPL_ASSET_REGISTRY])
-            .with_memcmp(offset_of!(SplAssetRegistry, asset_id), asset_id.to_le_bytes())
+            .with_memcmp(
+                offset_of!(SplAssetRegistry, asset_id),
+                asset_id.to_le_bytes(),
+            )
             .with_min_context_slot(self.target_slot);
         let accounts = self
             .client
@@ -138,7 +141,10 @@ impl<R: AsyncRpc + ?Sized> CompactAssetResolver<'_, R> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
 
     use async_trait::async_trait;
     use solana_account::Account;
@@ -222,8 +228,14 @@ mod tests {
         .open()
         .await
         .unwrap();
-        assert_eq!(resolver.resolve(0).await.unwrap(), CompactAssetResolution::Foreign);
-        assert_eq!(resolver.resolve(4).await.unwrap(), CompactAssetResolution::Foreign);
+        assert_eq!(
+            resolver.resolve(0).await.unwrap(),
+            CompactAssetResolution::Foreign
+        );
+        assert_eq!(
+            resolver.resolve(4).await.unwrap(),
+            CompactAssetResolution::Foreign
+        );
         assert_eq!(
             resolver.resolve(u64::MAX).await.unwrap(),
             CompactAssetResolution::Foreign
@@ -247,18 +259,30 @@ mod tests {
         .await
         .unwrap();
         let first = resolver.resolve(2).await.unwrap();
-        assert!(matches!(first, CompactAssetResolution::Resolved(Mint { asset_id: 2, .. })));
+        assert!(matches!(
+            first,
+            CompactAssetResolution::Resolved(Mint { asset_id: 2, .. })
+        ));
         assert_eq!(resolver.resolve(2).await.unwrap(), first);
-        assert_eq!(resolver.remaining_lookups(), COMPACT_ASSET_LOOKUP_BUDGET - 1);
+        assert_eq!(
+            resolver.remaining_lookups(),
+            COMPACT_ASSET_LOOKUP_BUDGET - 1
+        );
         for asset_id in 3..34 {
             assert!(matches!(
                 resolver.resolve(asset_id).await.unwrap(),
                 CompactAssetResolution::Resolved(_)
             ));
         }
-        assert_eq!(resolver.resolve(34).await.unwrap(), CompactAssetResolution::Paused);
+        assert_eq!(
+            resolver.resolve(34).await.unwrap(),
+            CompactAssetResolution::Paused
+        );
         assert_eq!(resolver.resolve(2).await.unwrap(), first);
-        assert_eq!(rpc.filters.lock().unwrap().len(), COMPACT_ASSET_LOOKUP_BUDGET + 1);
+        assert_eq!(
+            rpc.filters.lock().unwrap().len(),
+            COMPACT_ASSET_LOOKUP_BUDGET + 1
+        );
         assert_eq!(resolver.cache.len(), COMPACT_ASSET_LOOKUP_BUDGET);
     }
 
@@ -336,10 +360,19 @@ mod tests {
         .await
         .unwrap();
         rpc.unavailable.store(true, Ordering::Relaxed);
-        assert!(matches!(resolver.resolve(2).await, Err(CompactAssetError::Source(_))));
+        assert!(matches!(
+            resolver.resolve(2).await,
+            Err(CompactAssetError::Source(_))
+        ));
         assert!(resolver.cache.is_empty());
         rpc.unavailable.store(false, Ordering::Relaxed);
-        assert!(matches!(resolver.resolve(2).await.unwrap(), CompactAssetResolution::Resolved(_)));
-        assert_eq!(resolver.remaining_lookups(), COMPACT_ASSET_LOOKUP_BUDGET - 2);
+        assert!(matches!(
+            resolver.resolve(2).await.unwrap(),
+            CompactAssetResolution::Resolved(_)
+        ));
+        assert_eq!(
+            resolver.remaining_lookups(),
+            COMPACT_ASSET_LOOKUP_BUDGET - 2
+        );
     }
 }

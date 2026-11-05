@@ -1,5 +1,4 @@
-//! The Ring RPC requests the ring policy authority signs. It pages and refuses the wallet updates pending list approval, and it creates the records registry.
-//! Read `record_update` first for the awaited lists a wallet update carries.
+//! Ring RPC requests the ring policy authority signs, over wallet updates pending list approval and the records registry.
 
 use serde::{Deserialize, Serialize};
 use solana_address::Address;

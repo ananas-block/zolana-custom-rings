@@ -154,8 +154,7 @@ impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
         if utxo.data.utxo_data().is_some() && data_hash == [0; 32] {
             return Ok(None);
         }
-        // An enrollment finalizes the key for later notes and leaves a zero-key commitment valid, so only the
-        // published commitment selects the key, never the current tracking record. A third key rebuilds nothing.
+        // The published commitment selects the key, an enrollment leaves a zero-key note valid.
         let Some(nullifier_pubkey) = [self.address.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY]
             .into_iter()
             .find(|candidate| {

@@ -30,7 +30,6 @@ pub struct ConfirmedMerge {
     pub(crate) disclosed: MergeRecordOutput,
 }
 
-/// A rebuilt merge record.
 #[derive(Clone, PartialEq, Eq)]
 pub struct MergeRecordOutput {
     pub owner_key: [u8; 32],

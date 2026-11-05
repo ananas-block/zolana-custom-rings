@@ -1,7 +1,6 @@
 //! One document holds a wallet's scan progress and everything it covers, one write stores both.
 //!
-//! Both wallet modes commit here. An anonymous sync and a confidential sync each read from the stored history, and
-//! [`AnonymousWallet::absorb`] stores the whole read or refuses it. A crash between a read and its absorb loses only the read, the next sync repeats it.
+//! [`AnonymousWallet::absorb`] stores a whole sync of either mode or refuses it, a crash before it loses only the read.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},

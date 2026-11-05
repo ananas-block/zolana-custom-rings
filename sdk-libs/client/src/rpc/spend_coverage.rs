@@ -5,7 +5,10 @@ use solana_address::Address;
 use solana_signer::Signer;
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
 
-use super::{base64, cursor_in_bounds, Attestation, ReadBuildError, ReadTarget, RequestBuildError, SignedRequest};
+use super::{
+    base64, cursor_in_bounds, Attestation, ReadBuildError, ReadTarget, RequestBuildError,
+    SignedRequest,
+};
 
 pub const GET_SPEND_COVERAGE: &str = "getSpendCoverage";
 const SPEND_COVERAGE_DOMAIN: &str = "zolana/ring-rpc-spend-coverage";

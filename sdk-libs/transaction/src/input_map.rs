@@ -1,6 +1,4 @@
-//! The one SDK reading of SPP's input order. Seals, witnesses, entry evidence and owner screens classify through it.
-//!
-//! Read the interface `InputMap` first, it validates the order this module reads.
+//! The one SDK reading of SPP's input order, the interface `InputMap` validates the order.
 
 use custom_ring_interface::{CustomRingError, InputClass, InputMap};
 use spr_transaction::utxo::SppProofInputUtxo;
