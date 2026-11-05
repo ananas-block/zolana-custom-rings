@@ -16,7 +16,9 @@ use spr_hasher::{
 use spr_interface::instruction::MAX_DEPOSIT_ASSETS;
 
 use crate::{
+    credential_read::CredentialRoots,
     deposit_audit::{MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN},
+    key_catalog::RingCircuit,
     TAGGED_X25519_KEY_LEN,
 };
 
@@ -65,13 +67,13 @@ pub struct DepositRegistry<'a> {
 
 pub struct DepositPublicInput<'a> {
     pub context_hash: &'a [u8; 32],
+    pub ring_id: &'a [u8; 32],
     pub owner_utxo_hashes: &'a [[u8; 32]],
     pub ciphertexts: &'a [[u8; RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN]],
     pub assets: &'a [DepositedAsset],
     pub auditor_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    /// Holds each output key to its tracking row or its absence.
-    pub tracking_root: &'a [u8; 32],
+    pub credentials: &'a CredentialRoots,
     /// `None` off a policy ring.
     pub registry: Option<DepositRegistry<'a>>,
 }
@@ -111,57 +113,65 @@ impl DepositSubjects {
     }
 }
 
-/// Every deposit slot padded to the maximum.
-pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 3 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 8;
+const DEPOSIT_FIXED_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 7;
 
 impl DepositPublicInput<'_> {
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         create_hash_chain_4_from_slice(&self.elements()?)
     }
 
-    pub fn elements(&self) -> Result<[[u8; 32]; DEPOSIT_PUBLIC_INPUT_ELEMENTS], HasherError> {
+    pub fn element_count(&self) -> usize {
+        DEPOSIT_FIXED_ELEMENTS + self.credentials.elements().count()
+    }
+
+    pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
+        // 1. The selected root table fixes K, published deposits fit that key and have one ciphertext and asset each.
         let count = self.owner_utxo_hashes.len();
+        let capacity =
+            u8::try_from(self.credentials.capacity()).map_err(|_| HasherError::InvalidNumFields)?;
         if !(1..=MAX_RING_DEPOSIT_AUDIT_SLOTS).contains(&count)
+            || count > usize::from(capacity)
+            || (RingCircuit::Deposit { capacity })
+                .credential_capacity()
+                .is_none()
             || self.ciphertexts.len() != count
             || self.assets.len() != count
         {
             return Err(HasherError::InvalidNumFields);
         }
-        let [auditor_lo, auditor_hi] = pack_be(self.auditor_pk);
-        let [ephemeral_lo, ephemeral_hi] = pack_be(self.eph_pk);
-        let mut chain = [[0; 32]; DEPOSIT_PUBLIC_INPUT_ELEMENTS];
-        chain[0] = crate::domain::field(crate::domain::DEPOSIT_STATEMENT);
-        chain[1] = *self.context_hash;
-        chain[2] = right_align(&(count as u64).to_be_bytes());
-        for (slot, (owner, ciphertext)) in self
-            .owner_utxo_hashes
-            .iter()
-            .zip(self.ciphertexts)
-            .enumerate()
-        {
-            chain[3 + slot * 2] = *owner;
-            chain[4 + slot * 2] = hash_bytes(ciphertext)?;
-        }
-        let keys = 3 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 2;
-        chain[keys..keys + 4].copy_from_slice(&[
-            auditor_lo,
-            auditor_hi,
-            ephemeral_lo,
-            ephemeral_hi,
+        // 2. CRDP binds the exact SPP bytes and the authenticated ring before the deposit count.
+        let mut chain = Vec::with_capacity(self.element_count());
+        chain.extend([
+            crate::domain::field(crate::domain::DEPOSIT_STATEMENT),
+            *self.context_hash,
+            *self.ring_id,
+            right_align(&(count as u64).to_be_bytes()),
         ]);
-        let registry = self.registry.as_ref();
-        chain[keys + 4] = *self.tracking_root;
-        chain[keys + 5] = registry.map_or([0; 32], |registry| *registry.own_root);
-        chain[keys + 6] = registry
-            .and_then(|registry| registry.curator_root)
-            .copied()
-            .unwrap_or_default();
-        chain[keys + 7] = registry.map_or([0; 32], |registry| *registry.policy_hash);
-        let assets = keys + 8;
-        for (slot, deposited) in self.assets.iter().enumerate() {
-            chain[assets + slot * 2] = deposited.asset;
-            chain[assets + slot * 2 + 1] = right_align(&deposited.amount.to_be_bytes());
+        for (owner, ciphertext) in self.owner_utxo_hashes.iter().zip(self.ciphertexts) {
+            chain.extend([*owner, hash_bytes(ciphertext)?]);
         }
+        chain.resize(4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 2, [0; 32]);
+        // 3. The credential owner, address checkpoint and padded state roots precede the policy roots.
+        chain.extend(pack_be::<TAGGED_X25519_KEY_LEN, 2>(self.auditor_pk));
+        chain.extend(pack_be::<TAGGED_X25519_KEY_LEN, 2>(self.eph_pk));
+        chain.extend(self.credentials.elements());
+        let registry = self.registry.as_ref();
+        chain.extend([
+            registry.map_or([0; 32], |registry| *registry.own_root),
+            registry
+                .and_then(|registry| registry.curator_root)
+                .copied()
+                .unwrap_or_default(),
+            registry.map_or([0; 32], |registry| *registry.policy_hash),
+        ]);
+        // 4. Asset and amount pairs retain published order, unused slots are zero through the fixed deposit maximum.
+        for deposited in self.assets {
+            chain.extend([
+                deposited.asset,
+                right_align(&deposited.amount.to_be_bytes()),
+            ]);
+        }
+        chain.resize(self.element_count(), [0; 32]);
         Ok(chain)
     }
 }

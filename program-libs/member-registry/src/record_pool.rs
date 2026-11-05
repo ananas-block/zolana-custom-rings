@@ -8,7 +8,7 @@
 //! Read after `program-libs/member-registry/src/tree.rs`. Read before
 //! `prover/circuits/policy/record_pool.go`, `prover/circuits/registry/shared_path.go`.
 
-use custom_ring_interface::{tracking::TRACKING_QUAD_HEIGHT, QUAD_ARITY, QUAD_HEIGHT};
+use custom_ring_interface::{QUAD_ARITY, QUAD_HEIGHT};
 
 use crate::{
     path::{capacity, check_index, children, quad_node, NodePosition},
@@ -27,11 +27,6 @@ impl Canopy {
     /// The narrowest canopy over `openings` paths of the policy registry, mirror `registry.NewSharedQuadProof`.
     pub fn covering(openings: usize) -> Result<Self, RecordTreeError> {
         Self::covering_at(QUAD_HEIGHT, openings)
-    }
-
-    /// The same over the tracking tree.
-    pub fn covering_tracking(openings: usize) -> Result<Self, RecordTreeError> {
-        Self::covering_at(TRACKING_QUAD_HEIGHT, openings)
     }
 
     fn covering_at(height: usize, openings: usize) -> Result<Self, RecordTreeError> {

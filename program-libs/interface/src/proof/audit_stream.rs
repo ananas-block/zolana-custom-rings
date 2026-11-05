@@ -16,6 +16,9 @@ pub const STREAM_FIRST_COUNTER: u32 = 2;
 pub const ENVELOPE_KEY_LEN: usize = 32;
 /// `R`, spent notes among the published inputs, dummies last.
 pub const REAL_INPUT_COUNT_LEN: usize = 1;
+pub const ADDRESS_INPUT_BITS_LEN: usize = 8;
+pub const ENVELOPE_HEAD_LEN: usize =
+    ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + ADDRESS_INPUT_BITS_LEN;
 /// Keys with entry capacity alone, bit `i` set when input `i` is a default-ring note.
 pub const DEFAULT_INPUT_BITS_LEN: usize = 8;
 pub const AUDIT_RECORD_LEN: usize = 105;
@@ -61,10 +64,12 @@ impl AuditKey {
     }
 
     const fn head_len(self) -> usize {
-        match self.entry {
-            true => ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + DEFAULT_INPUT_BITS_LEN,
-            false => ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN,
-        }
+        ENVELOPE_HEAD_LEN
+            + if self.entry {
+                DEFAULT_INPUT_BITS_LEN
+            } else {
+                0
+            }
     }
 
     const fn entry_len(self) -> usize {
@@ -117,7 +122,11 @@ pub struct AuditStreamLayout {
 impl AuditStreamLayout {
     pub fn checked(self) -> Result<Self, CustomRingError> {
         let outputs_fit = self.outputs >= 1 && self.outputs <= self.capacity;
-        match self.inputs >= 1 && self.inputs <= self.key.class() && outputs_fit {
+        match self.inputs >= 1
+            && self.inputs <= self.key.class()
+            && self.key.class() <= u64::BITS as usize
+            && outputs_fit
+        {
             true => Ok(self),
             false => Err(CustomRingError::RingTransactLength),
         }
@@ -345,6 +354,132 @@ impl EntryInput {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputClass {
+    Note,
+    Address,
+    Dummy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputClassification {
+    pub published_inputs: usize,
+    pub capacity: usize,
+    pub note_count: u8,
+    pub address_input_bits: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputMap {
+    classification: InputClassification,
+    non_dummy_count: usize,
+}
+
+impl InputClassification {
+    pub fn check(self) -> Result<InputMap, CustomRingError> {
+        let non_dummy_count =
+            usize::from(self.note_count) + self.address_input_bits.count_ones() as usize;
+        if self.published_inputs == 0
+            || self.published_inputs > self.capacity
+            || self.capacity > u64::BITS as usize
+            || non_dummy_count > self.published_inputs
+            || self
+                .address_input_bits
+                .checked_shr(non_dummy_count as u32)
+                .unwrap_or(0)
+                != 0
+        {
+            return Err(CustomRingError::RingTransactLength);
+        }
+        Ok(InputMap {
+            classification: self,
+            non_dummy_count,
+        })
+    }
+}
+
+impl InputMap {
+    pub fn from_classes(
+        classes: &[InputClass],
+        published_inputs: usize,
+    ) -> Result<Self, CustomRingError> {
+        if classes.len() > u64::BITS as usize {
+            return Err(CustomRingError::RingTransactLength);
+        }
+        let mut note_count = 0;
+        let mut address_input_bits = 0;
+        let mut padding = false;
+        for (slot, class) in classes.iter().enumerate() {
+            if (padding || slot >= published_inputs) && *class != InputClass::Dummy {
+                return Err(CustomRingError::RingTransactLength);
+            }
+            match class {
+                InputClass::Note => note_count += 1,
+                InputClass::Address => address_input_bits |= 1 << slot,
+                InputClass::Dummy => padding = true,
+            }
+        }
+        InputClassification {
+            published_inputs,
+            capacity: classes.len(),
+            note_count,
+            address_input_bits,
+        }
+        .check()
+    }
+
+    pub const fn note_count(self) -> u8 {
+        self.classification.note_count
+    }
+
+    pub const fn address_input_bits(self) -> u64 {
+        self.classification.address_input_bits
+    }
+
+    pub const fn published_inputs(self) -> usize {
+        self.classification.published_inputs
+    }
+
+    pub const fn capacity(self) -> usize {
+        self.classification.capacity
+    }
+
+    pub const fn non_dummy_count(self) -> usize {
+        self.non_dummy_count
+    }
+
+    pub const fn slot(self, slot: usize) -> Option<InputClass> {
+        if slot >= self.capacity() {
+            None
+        } else {
+            Some(self.class_at(slot))
+        }
+    }
+
+    pub fn classes(self) -> impl ExactSizeIterator<Item = InputClass> {
+        (0..self.capacity()).map(move |slot| self.class_at(slot))
+    }
+
+    pub fn validate_default_input_bits(self, bits: u64) -> Result<(), CustomRingError> {
+        if bits & self.address_input_bits() != 0
+            || bits.checked_shr(self.non_dummy_count as u32).unwrap_or(0) != 0
+        {
+            return Err(CustomRingError::RingTransactLength);
+        }
+        Ok(())
+    }
+
+    const fn class_at(self, slot: usize) -> InputClass {
+        if slot >= self.non_dummy_count {
+            InputClass::Dummy
+        } else if self.address_input_bits() & (1 << slot) != 0 {
+            InputClass::Address
+        } else {
+            InputClass::Note
+        }
+    }
+}
+
 /// The envelope past its sealed key and count.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuditEvidence {
@@ -359,12 +494,22 @@ pub enum AuditEvidence {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditEnvelope {
     pub tx_viewing_secret: [u8; ENVELOPE_KEY_LEN],
-    /// `R`, nullifiers at or past it are padding.
     pub real_inputs: u8,
+    pub address_input_bits: u64,
     pub evidence: AuditEvidence,
 }
 
 impl AuditEnvelope {
+    pub fn input_map(&self, layout: AuditStreamLayout) -> Result<InputMap, CustomRingError> {
+        InputClassification {
+            published_inputs: layout.inputs,
+            capacity: layout.key.class(),
+            note_count: self.real_inputs,
+            address_input_bits: self.address_input_bits,
+        }
+        .check()
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let evidence_len = match &self.evidence {
             AuditEvidence::None => 0,
@@ -372,9 +517,10 @@ impl AuditEnvelope {
                 DEFAULT_INPUT_BITS_LEN + ENTRY_INPUT_LEN * inputs.len()
             }
         };
-        let mut out = Vec::with_capacity(ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + evidence_len);
+        let mut out = Vec::with_capacity(ENVELOPE_HEAD_LEN + evidence_len);
         out.extend_from_slice(&self.tx_viewing_secret);
         out.push(self.real_inputs);
+        out.extend_from_slice(&self.address_input_bits.to_be_bytes());
         if let AuditEvidence::Entry {
             default_input_bits,
             inputs,
@@ -388,9 +534,11 @@ impl AuditEnvelope {
 
     /// Refuses any length other than `layout`'s.
     pub fn decode(plaintext: &[u8], layout: AuditStreamLayout) -> Result<Self, CustomRingError> {
+        layout.checked()?;
         read_all(plaintext, |bytes| {
             let tx_viewing_secret = *bytes.array()?;
             let real_inputs = bytes.byte()?;
+            let address_input_bits = u64::from_be_bytes(*bytes.array()?);
             let evidence = match layout.key.entry {
                 false => AuditEvidence::None,
                 true => AuditEvidence::Entry {
@@ -400,11 +548,26 @@ impl AuditEnvelope {
                         .collect::<Result<_, CustomRingError>>()?,
                 },
             };
-            Ok(Self {
+            let envelope = Self {
                 tx_viewing_secret,
                 real_inputs,
+                address_input_bits,
                 evidence,
-            })
+            };
+            let inputs = envelope.input_map(layout)?;
+            if let AuditEvidence::Entry {
+                default_input_bits,
+                inputs: openings,
+            } = &envelope.evidence
+            {
+                inputs.validate_default_input_bits(*default_input_bits)?;
+                for (slot, opening) in openings.iter().enumerate() {
+                    if default_input_bits & (1 << slot) == 0 && *opening != EntryInput::default() {
+                        return Err(CustomRingError::RingTransactLength);
+                    }
+                }
+            }
+            Ok(envelope)
         })
     }
 }

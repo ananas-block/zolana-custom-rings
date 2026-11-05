@@ -12,6 +12,7 @@ verifying-keys = []
 
 [dependencies]
 arrayvec = { workspace = true }
+borsh = { workspace = true }
 # Required for Pod on the compressed auditor key.
 bytemuck = { workspace = true, features = ["extern_crate_alloc", "min_const_generics"] }
 groth16-solana = { workspace = true }
@@ -23,6 +24,8 @@ wincode = { workspace = true }
 zolana-ring-policy = { workspace = true }
 spr-hasher = { workspace = true }
 spr-interface = { workspace = true }
+spr-tree = { workspace = true }
+spr-program = { workspace = true, default-features = false, features = ["compression"] }
 spr-event = { workspace = true }
 
 [target.'cfg(not(target_os = "solana"))'.dependencies]
@@ -34,7 +37,6 @@ check-cfg = ['cfg(target_os, values("solana"))']
 
 [dev-dependencies]
 solana-message = { workspace = true }
-borsh = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 spr-keypair = { workspace = true }

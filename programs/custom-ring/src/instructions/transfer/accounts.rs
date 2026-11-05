@@ -6,14 +6,14 @@
 //! The account windows, in list order:
 //!
 //! 1. The ring account.
-//! 2. The registries `RootRead` names, own then curator then tracking, each compared with the ring's pin.
+//! 2. The policy registries, then the address tree and credential state trees, each authenticated before its roots are read.
 //! 3. One `[record, signer]` pair per co-signer the demand needs, SPP does not receive them.
 //! 4. The delegate's signer on the authority rails, SPP does not receive it.
 //! 5. SPP's list, forwarded whole. Prefix, input trees, nullifier PDAs, owner run, settlement groups, cache accounts.
 //!
 //! On return these facts hold:
 //!
-//! 1. Each root comes from the registry the ring pins, at the revision the frame names.
+//! 1. Policy roots come from the pinned registries, and credential roots come from authenticated SPP trees.
 //! 2. `ring_auth` sits only in SPP's `ring_config` slot, and the payer signs.
 //! 3. A signed record covers every class the ring configured and the operation demands, and every proven approval bit.
 //! 4. Every funder of a deposit leg signs, and a delegate frame has no deposit leg.
@@ -27,8 +27,8 @@
 use custom_ring_interface::{
     cosign::{CoSignDemand, CoSignOperation},
     funder_account_position, AnonymousParties, CustomRingError, ParsedTransact, PublicSlots,
-    RailSigner, RingPolicy, RootRead, SignerSet, TransferRoots, ANONYMOUS_PARTIES,
-    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    RailSigner, RingPolicy, RootRead, SignerSet, TransferRootRead, TransferRoots,
+    ANONYMOUS_PARTIES, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
 use spr_hasher::primitives::solana_owner_identity;
@@ -36,7 +36,9 @@ use spr_interface::instruction::instruction_data::settlement_accounts;
 
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
-    loader::{check_funding_signer, load_anonymous_exit, CoSigners, RegistrySlots},
+    loader::{
+        check_funding_signer, load_anonymous_exit, CoSigners, CredentialAccounts, RegistrySlots,
+    },
     public_legs::public_slots,
 };
 
@@ -72,19 +74,55 @@ impl TransactCheck<'_> {
     pub fn validate(self, accounts: &[AccountView]) -> Result<TransactAccounts, ProgramError> {
         let (ring, data) = (self.ring, self.transfer.data());
         let delegate_rail = data.rail.is_delegate();
-        // 1. The frame names only revisions, the registries the ring pins serve each root. A delegate
-        // reads no policy root, a restrictive update cannot fail its proof.
+        // 1. Policy reads bind pinned registries, and credential reads bind SPP state roots and the address namespace.
+        // A delegate reads no policy root or private source floor.
         let read = RootRead::transfer(ring, delegate_rail);
-        let registries = RegistrySlots { ring, read }.load({
+        let registries = RegistrySlots {
+            program_id: self.program_id,
+            ring,
+            read,
+        }
+        .load({
             let mut after_ring = accounts.iter().skip(RING_INDEX + 1);
             move || after_ring.next().ok_or(ProgramError::NotEnoughAccountKeys)
         })?;
-        let bound = data.roots(ring, &registries.roots(self.slot))?;
         // 2. The settlement groups end SPP's list ahead of the cache accounts, SPP reads the same window.
         // The public slots, the funders, the withdrawals and the exit all read from it.
         let window = settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
             .ok_or(CustomRingError::InvalidSettlementAccounts)?;
         let public_slots = public_slots(&data.interface_transfers, window)?;
+        // The frame's withdrawal owners match the live settlement accounts before they select the proof shape.
+        // The statement binds their checked identities and assets through `withdrawal_hash`.
+        let withdrawals = match read {
+            RootRead::None => Vec::new(),
+            RootRead::Own | RootRead::Policy => custom_ring_interface::policy_withdrawals(
+                &data.interface_transfers,
+                &window
+                    .iter()
+                    .map(crate::instructions::loader::LoadedSettlement)
+                    .collect::<Vec<_>>(),
+                data.spl_withdrawal_owners,
+            )?,
+        };
+        let credential_capacity = data
+            .transfer_circuit(withdrawals.len())?
+            .credential_capacity()
+            .ok_or(CustomRingError::RingShapeUnkeyed)?;
+        let credentials = CredentialAccounts {
+            program_id: self.program_id,
+            read: &data.credential_read,
+            capacity: credential_capacity,
+            absence_floor: registries.absence_floor,
+        }
+        .load({
+            let mut trees = accounts.iter().skip(RING_INDEX + 1 + registries.len);
+            move || trees.next().ok_or(ProgramError::NotEnoughAccountKeys)
+        })?;
+        let bound = data.roots(TransferRootRead {
+            ring,
+            policy: &registries.roots(self.slot),
+            credentials,
+        })?;
         // 3. The legs and the frame's spend and approval bits set the demand, step 5 of the run proves
         // those bits. A delegate owes no co-signer.
         let demand = match delegate_rail {
@@ -96,7 +134,8 @@ impl TransactCheck<'_> {
             }
             .demand(),
         };
-        let co_signers_start = RING_INDEX + 1 + registries.len;
+        let co_signers_start =
+            RING_INDEX + 1 + registries.len + 1 + data.credential_read.state_root_indexes().len();
         let co_signers = CoSigners::verify(
             self.program_id,
             accounts
@@ -194,20 +233,7 @@ impl TransactCheck<'_> {
             }
         };
 
-        // 9. The rules screen each withdrawal's owner and mint as the live accounts hold them, the frame's
-        // owner list must match each token account. The statement binds the result as `withdrawal_hash`.
-        let withdrawals = match read {
-            RootRead::None => Vec::new(),
-            RootRead::Own | RootRead::Policy => custom_ring_interface::policy_withdrawals(
-                &data.interface_transfers,
-                &window
-                    .iter()
-                    .map(crate::instructions::loader::LoadedSettlement)
-                    .collect::<Vec<_>>(),
-                data.spl_withdrawal_owners,
-            )?,
-        };
-        // 10. The payer, the co-signers, the funders and a hidden sender's exit key hold the party cells,
+        // 9. The payer, the co-signers, the funders and a hidden sender's exit key hold the party cells,
         // a zero cell reads as absent.
         let party_identities = match data.rail.anonymous_frame() {
             true => {

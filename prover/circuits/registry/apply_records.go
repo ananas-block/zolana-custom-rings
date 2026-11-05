@@ -7,7 +7,7 @@
 // itself unlisted.
 //
 // Read after registry/registry.go, ringgadget/canonical.go, ringgadget/count.go,
-// shared/width.go. Read before registry/tracking.go, policy/record_pool.go,
+// shared/width.go, registry/credential_write.go. Read before policy/record_pool.go,
 // prover/ring/ring.go.
 
 package registry
@@ -27,14 +27,17 @@ import (
 
 // Properties:
 // 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in chain order, exactly the Count writes whose chain runs from ChainStart to ChainEnd.
-// 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask.
+// 2. A write keeps every list bit outside its mask and refuses Value bits outside Mask.
 // 3. A write replaces the mint settings, the withdrawal threshold and the limits together under bit 192 of its MintPolicy, and otherwise keeps them.
 // 4. A present member keeps its leaf, its member and its link, a record a write empties stays in the list and reads as empty.
 // 5. An absent member is proven absent under the running root and inserted after its low record at exactly the next index below Capacity, and a write that would leave its record empty inserts nothing.
 // 6. Every write keeps the links one sorted run from the sentinel to q-1 with every member at a link's end.
-// 7. The statement binds both roots, both next indexes, both chain ends and the count.
+// 7. Every selected private owner write proves its credential and address under the bound checkpoint.
+// 8. The statement binds both roots, both next indexes, both chain ends, the count, the credential bitmap and its root table.
 //
 // The program holds what the circuit takes as given. chain_start in program-libs/interface/src/accounts/storage.rs names one registry at one revision in ChainStart, and list_and_mint_entry in program-libs/interface/src/instructions/instruction.rs refuses a member outside [1, q-2], a Value outside its Mask and invalid limits.
+// The program derives CredentialWrites from private mask bits after it verifies each asset exemption through Member::asset.
+// It derives CredentialOwner from the ring program preimage authenticated by PrivateRingID and raises the checkpoint floor atomically with the root update.
 
 // ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/accounts/member_registry.rs.
 const ApplyBatch = 16
@@ -81,6 +84,13 @@ type ApplyRecordsCircuit struct {
 	ChainEnd     frontend.Variable
 	Count        frontend.Variable
 	Writes       []RecordWriteProofInput
+
+	CredentialWrites frontend.Variable
+	PrivateRingID    frontend.Variable
+	CredentialOwner  frontend.Variable
+	AddressRoot      frontend.Variable
+	StateRoots       [][2]frontend.Variable
+	Credentials      []CredentialWrite
 }
 
 type registryState struct {
@@ -91,21 +101,36 @@ func NewApplyRecordsCircuit(writes int) (*ApplyRecordsCircuit, error) {
 	if err := shared.ValidateWidth("registry", writes, ApplyWidths); err != nil {
 		return nil, err
 	}
-	return &ApplyRecordsCircuit{NumWrites: writes, Writes: make([]RecordWriteProofInput, writes)}, nil
+	return &ApplyRecordsCircuit{
+		NumWrites: writes, Writes: make([]RecordWriteProofInput, writes),
+		StateRoots: make([][2]frontend.Variable, writes), Credentials: make([]CredentialWrite, writes),
+	}, nil
 }
 
 func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
-	if err := errors.Join(shared.ValidateWidth("registry", c.NumWrites, ApplyWidths), shared.ValidateLength("registry", "write", len(c.Writes), c.NumWrites)); err != nil {
+	if err := errors.Join(
+		shared.ValidateWidth("registry", c.NumWrites, ApplyWidths),
+		shared.ValidateLength("registry", "write", len(c.Writes), c.NumWrites),
+		shared.ValidateLength("registry", "state root", len(c.StateRoots), c.NumWrites),
+		shared.ValidateLength("registry", "credential", len(c.Credentials), c.NumWrites),
+	); err != nil {
 		return err
 	}
 	// 1. Count selects a prefix of one write up to the capacity, the writes past it act on nothing.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.NumWrites)
-	// 2. Every active write moves the running root, next index and chain in instruction order.
+	// 2. The authenticated bitmap selects private owner writes inside the active prefix.
+	credentialBits := c.credentialBits(api)
+	roots := CredentialRoots{RingID: c.PrivateRingID, Owner: c.CredentialOwner, StateRoots: c.StateRoots}
 	state := registryState{root: c.OldRoot, next: c.OldNextIndex, chain: c.ChainStart}
 	for i, w := range c.Writes {
-		state = w.apply(api, count.Active[i], state)
+		maskBits := api.ToBinary(w.Entry.Mask, ListBits)
+		privateMask := api.Or(maskBits[4], maskBits[7])
+		assertCredentialEqualWhen(api, credentialBits[i], api.Mul(count.Active[i], privateMask), 1)
+		c.Credentials[i].Assert(api, credentialBits[i], w.Entry.Member, c.AddressRoot, roots)
+		// 3. Each authenticated write moves the root and chain in instruction order.
+		state = w.apply(api, count.Active[i], state, maskBits)
 	}
-	// 3. The registry after the batch and the chain end are the statement's.
+	// 4. The resulting registry, write chain and credential checkpoint bind to one statement.
 	api.AssertIsEqual(state.root, c.NewRoot)
 	api.AssertIsEqual(state.next, c.NewNextIndex)
 	api.AssertIsEqual(state.chain, c.ChainEnd)
@@ -114,9 +139,11 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 }
 
 // apply moves s by w while active is set, an unset active leaves it.
-func (w RecordWriteProofInput) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
-	// 1. List bits outside the mask keep their old value, the program keeps the chained Value inside the mask.
-	maskBits := api.ToBinary(w.Entry.Mask, ListBits)
+func (w RecordWriteProofInput) apply(api frontend.API, active frontend.Variable, s registryState, maskBits []frontend.Variable) registryState {
+	// 1. Value contains only masked bits, while every unmasked old bit remains unchanged.
+	for i, value := range api.ToBinary(w.Entry.Value, ListBits) {
+		api.AssertIsEqual(api.Mul(value, api.Sub(1, maskBits[i])), 0)
+	}
 	updated := RecordBody{Next: w.Old.Next, Lists: api.Add(keptLists(api, w.Old.Lists, maskBits), w.Entry.Value)}
 	// 2. Mint settings move only under bit 192 of the entry, the 193 bit decomposition range-checks it.
 	// A separate flag keeps a replacement by all zeros apart from no change.
@@ -178,7 +205,12 @@ func keptLists(api frontend.API, old frontend.Variable, maskBits []frontend.Vari
 
 // statement mirrors ApplyRecordsStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *ApplyRecordsCircuit) statement() []frontend.Variable {
-	return []frontend.Variable{
+	fields := []frontend.Variable{
 		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,
+		c.CredentialWrites, c.PrivateRingID, c.CredentialOwner, c.AddressRoot,
 	}
+	for _, root := range c.StateRoots {
+		fields = append(fields, root[:]...)
+	}
+	return fields
 }

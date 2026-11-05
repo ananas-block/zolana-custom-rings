@@ -341,10 +341,7 @@ impl Fixture {
     /// The anonymous frame's replies, one of `len` bytes per body-bearing slot.
     pub fn anonymous_replies(&self, len: u16) -> RingTransactData<'_> {
         let mut data = self.anonymous();
-        data.replies = Some(Replies {
-            len,
-            region: &self.replies[..2 * usize::from(len)],
-        });
+        data.replies = Some(Replies::new(len, &self.replies[..2 * usize::from(len)]).unwrap());
         data
     }
 

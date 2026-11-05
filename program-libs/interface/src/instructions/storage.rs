@@ -1,22 +1,23 @@
 //! The storage program's tags, instruction data and write classification.
 //!
 //! `StorageUpdateIxData::reaches_policy` reads the writes and no authority flag. A flag would let an
-//! authority keep a revoked root served by how it labels a write.
+//! authority keep a revoked root served by how it labels a write. Private masks require credential
+//! proofs unless a mint preimage authenticates an asset key at the same write position.
 //!
-//! Read after `program-libs/interface/src/accounts/storage.rs`, `program-libs/interface/src/accounts/tracking.rs`.
+//! Read after `program-libs/interface/src/accounts/storage.rs`, `program-libs/interface/src/accounts/owner_grant.rs`.
 //! Read before `programs/storage/src/instructions/update.rs`.
 
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
-use zolana_ring_policy::ListSet;
+use zolana_ring_policy::{ListSet, Member};
 
 use crate::{
     error::CustomRingError,
     instruction::{list_and_mint_entry, write_count},
+    key_catalog::RingCircuit,
     member_registry::RecordWrite,
     storage::{RegistryId, Revision, StorageError},
-    ApplyRecordsIxData, CustomRingProof, ReaderKeyBytes, RecordWriteData,
-    REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    ApplyRecordsIxData, CredentialRead, ReaderKeyBytes, RecordWriteData,
 };
 
 pub mod tag {
@@ -24,12 +25,7 @@ pub mod tag {
     pub const UPDATE: u8 = 1;
     /// No data, the authority and the new authority both sign.
     pub const UPDATE_AUTHORITY: u8 = 4;
-    pub const ENROLL: u8 = 6;
-    /// Permissionless, the applier names the authorization accounts.
-    pub const APPLY_ENROLLMENTS: u8 = 7;
     pub const OWNER_GRANT: u8 = 8;
-    /// The ring program signs its ring PDA as creator through CPI.
-    pub const INITIALIZE_TRACKING: u8 = 9;
 }
 
 /// The creator signs and becomes the authority.
@@ -41,61 +37,40 @@ pub struct InitializeIxData {
     pub grace_slots: [u8; 8],
     /// `ring_id_field` of the ring it serves, immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-    /// Nonzero lets a salted list read the registry, immutable.
-    pub tracking_registry: Address,
+    /// Nonzero binds salted writes to the ring credential namespace, immutable.
+    pub private_ring_id: [u8; 32],
 }
 
-/// Tag 9, accounts `payer, creator, tracking_registry, system_program`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct InitializeTrackingIxData {
-    /// `ring_id_field` of the ring program.
-    pub ring_id: [u8; 32],
-    pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
-}
-
-/// Tag 6 ahead of a first enrollment's proof, accounts `payer, owner, tracking_registry, authorization, system_program`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct EnrollIxData {
-    /// Final after the first enrollment, with `list_tag`, `eph_u` and `ciphertext`.
-    pub nullifier_pk: [u8; 32],
-    pub list_tag: [u8; 32],
-    /// Canonical and nonzero, the owner's signature alone authorizes it.
-    pub viewing_u: [u8; 32],
-    pub eph_u: [u8; 32],
-    pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
-}
-
-/// Tag 6 data, a first enrollment holds the `RegisterKey` proof and a rotation none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EnrollRequest<'a> {
-    pub ix: &'a EnrollIxData,
-    pub proof: Option<&'a CustomRingProof>,
-}
-
-/// Tag 7, accounts `tracking_registry` then one to `APPLY_BATCH` authorizations in chain order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct ApplyEnrollmentsIxData {
-    pub revision: Revision,
-    pub apply: ApplyRecordsIxData,
-}
-
-/// Tag 8, accounts `payer, owner, tracking_registry, grant, system_program`.
+/// The owner signature authorizes a grant in the named ring program namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct OwnerGrantIxData {
+    pub ring_program: Address,
     pub reader: ReaderKeyBytes,
     /// One grants, zero revokes.
     pub active: u8,
 }
 
-/// Tag 1, `revision || count u8 || count writes || ApplyRecordsIxData`, accounts `authority, registry`, then `tracking_registry` when a zero grace update reads the pin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct AssetWrite {
+    pub write_index: u8,
+    pub mint: Address,
+}
+
+#[must_use]
+pub struct RecordWriteClassification<'a, I> {
+    pub entries: I,
+    pub asset_writes: &'a [AssetWrite],
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageUpdateIxData<'a> {
     pub revision: Revision,
     pub writes: Vec<RecordWriteData>,
+    pub asset_writes: Vec<AssetWrite>,
+    pub credential_read: CredentialRead,
+    pub ring_program: Option<Address>,
     pub apply: &'a ApplyRecordsIxData,
 }
 
@@ -107,56 +82,55 @@ impl InitializeIxData {
     }
 }
 
-impl InitializeTrackingIxData {
-    pub const SIZE: usize = core::mem::size_of::<Self>();
-}
-
-impl EnrollIxData {
-    pub const SIZE: usize = core::mem::size_of::<Self>();
-}
-
-impl<'a> EnrollRequest<'a> {
-    /// Exactly the fields, or the fields and one proof.
-    pub fn parse(data: &'a [u8]) -> Result<Self, StorageError> {
-        let (ix, proof) = data
-            .split_at_checked(EnrollIxData::SIZE)
-            .ok_or(StorageError::InvalidInstructionData)?;
-        Ok(Self {
-            ix: bytemuck::try_from_bytes(ix).map_err(|_| StorageError::InvalidInstructionData)?,
-            proof: match proof.is_empty() {
-                true => None,
-                false => Some(
-                    bytemuck::try_from_bytes(proof)
-                        .map_err(|_| StorageError::InvalidInstructionData)?,
-                ),
-            },
-        })
-    }
-
-    pub fn encode(&self) -> Vec<u8> {
-        let proof = self.proof.map_or(&[][..], bytemuck::bytes_of);
-        [bytemuck::bytes_of(self.ix), proof].concat()
-    }
-}
-
-impl ApplyEnrollmentsIxData {
-    pub const SIZE: usize = core::mem::size_of::<Self>();
-
-    /// One account per chained entry, an apply key serves up to `APPLY_BATCH`.
-    pub fn check_count(authorizations: usize) -> Result<(), StorageError> {
-        match authorizations {
-            0 => Err(StorageError::NoEnrollmentsNamed),
-            count => storage_write_count(count).map(|_| ()),
-        }
-    }
-}
-
 impl OwnerGrantIxData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 }
 
+impl<I> RecordWriteClassification<'_, I>
+where
+    I: Iterator<Item = Result<RecordWrite, CustomRingError>>,
+{
+    pub fn credential_writes(self) -> Result<u16, StorageError> {
+        let mut assets = self.asset_writes.iter().peekable();
+        let mut credential_writes = 0u16;
+        let mut count = 0;
+        for (index, entry) in self.entries.enumerate() {
+            // 1. The batch bound fixes the bitmap width, private masks require inclusion regardless of written values.
+            count = index + 1;
+            storage_write_count(count)?;
+            let entry = entry.map_err(|_| StorageError::InvalidInstructionData)?;
+            let private = entry.mask & ListSet::PRIVATE_LISTS.record_bits() != 0;
+            // 2. Mint preimages exempt only their matching private positions in strictly ascending order.
+            if let Some(asset) = assets
+                .peek()
+                .filter(|asset| usize::from(asset.write_index) <= index)
+            {
+                if usize::from(asset.write_index) != index
+                    || !private
+                    || Member::asset(&asset.mint)
+                        .map_err(|_| StorageError::InvalidAssetWrite)?
+                        .as_bytes()
+                        != &entry.member
+                {
+                    return Err(StorageError::InvalidAssetWrite);
+                }
+                assets.next();
+            } else if private {
+                credential_writes |= 1u16 << index;
+            }
+        }
+        // 3. Empty batches and asset positions outside the consumed writes have no valid statement.
+        storage_write_count(count)?;
+        if assets.next().is_some() {
+            return Err(StorageError::InvalidAssetWrite);
+        }
+        Ok(credential_writes)
+    }
+}
+
 impl<'a> StorageUpdateIxData<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Self, StorageError> {
+        // 1. The bounded write count fixes every record boundary before optional proof metadata.
         let (revision, data) = data
             .split_first_chunk::<8>()
             .ok_or(StorageError::InvalidInstructionData)?;
@@ -164,29 +138,99 @@ impl<'a> StorageUpdateIxData<'a> {
             .split_first()
             .ok_or(StorageError::InvalidInstructionData)?;
         let count = usize::from(storage_write_count(usize::from(*count))?);
-        let (writes, apply) = rest
+        let (writes, rest) = rest
             .split_at_checked(count * core::mem::size_of::<RecordWriteData>())
             .ok_or(StorageError::InvalidInstructionData)?;
-        Ok(Self {
+        // 2. Asset preimages name write positions, their hashes and ordering are checked with the derived bitmap.
+        let (asset_count, rest) = rest
+            .split_first()
+            .ok_or(StorageError::InvalidInstructionData)?;
+        if usize::from(*asset_count) > count {
+            return Err(StorageError::InvalidAssetWrite);
+        }
+        let (assets, mut rest) = rest
+            .split_at_checked(usize::from(*asset_count) * core::mem::size_of::<AssetWrite>())
+            .ok_or(StorageError::InvalidInstructionData)?;
+        let credential_read =
+            CredentialRead::decode(&mut rest).map_err(|_| StorageError::InvalidCredentialRead)?;
+        let ring_program = if credential_read.state_root_indexes().is_empty() {
+            None
+        } else {
+            let (program, remaining) = rest
+                .split_first_chunk::<32>()
+                .ok_or(StorageError::InvalidInstructionData)?;
+            rest = remaining;
+            Some(Address::new_from_array(*program))
+        };
+        let ix = Self {
             revision: Revision(*revision),
             writes: writes
-                .chunks(core::mem::size_of::<RecordWriteData>())
+                .chunks_exact(core::mem::size_of::<RecordWriteData>())
                 .map(bytemuck::pod_read_unaligned)
                 .collect(),
-            apply: ApplyRecordsIxData::parse(apply)
+            asset_writes: assets
+                .chunks_exact(core::mem::size_of::<AssetWrite>())
+                .map(bytemuck::pod_read_unaligned)
+                .collect(),
+            credential_read,
+            ring_program,
+            apply: ApplyRecordsIxData::parse(rest)
                 .map_err(|_| StorageError::InvalidInstructionData)?,
-        })
+        };
+        // 4. The authenticated write classes decide whether the selected credential roots are required or forbidden.
+        ix.check_credential_read()?;
+        Ok(ix)
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, StorageError> {
         let count = storage_write_count(self.writes.len())?;
-        Ok([
-            &self.revision.0[..],
-            &[count],
-            bytemuck::cast_slice(&self.writes),
-            bytemuck::bytes_of(self.apply),
-        ]
-        .concat())
+        self.check_credential_read()?;
+        let asset_count =
+            u8::try_from(self.asset_writes.len()).map_err(|_| StorageError::InvalidAssetWrite)?;
+        let mut data = Vec::new();
+        data.extend_from_slice(&self.revision.0);
+        data.push(count);
+        data.extend_from_slice(bytemuck::cast_slice(&self.writes));
+        data.push(asset_count);
+        data.extend_from_slice(bytemuck::cast_slice(&self.asset_writes));
+        self.credential_read.encode_into(&mut data);
+        if let Some(program) = self.ring_program {
+            data.extend_from_slice(program.as_array());
+        }
+        data.extend_from_slice(bytemuck::bytes_of(self.apply));
+        Ok(data)
+    }
+
+    pub fn credential_writes(&self) -> Result<u16, StorageError> {
+        RecordWriteClassification {
+            entries: self.entries(),
+            asset_writes: &self.asset_writes,
+        }
+        .credential_writes()
+    }
+
+    pub fn check_credential_read(&self) -> Result<(), StorageError> {
+        if self.credential_writes()? == 0 {
+            self.credential_read
+                .check_empty()
+                .map_err(|_| StorageError::InvalidCredentialRead)?;
+            if self.ring_program.is_some() {
+                return Err(StorageError::InvalidCredentialRead);
+            }
+        } else {
+            let RingCircuit::ApplyRecords { writes } =
+                RingCircuit::apply_records(self.writes.len() as u64)
+            else {
+                return Err(StorageError::UnsupportedBatch);
+            };
+            self.credential_read
+                .check_capacity(usize::from(writes))
+                .map_err(|_| StorageError::InvalidCredentialRead)?;
+            if self.ring_program.is_none() {
+                return Err(StorageError::InvalidCredentialRead);
+            }
+        }
+        Ok(())
     }
 
     /// Any write a rule can read takes effect with zero grace.
@@ -224,13 +268,9 @@ fn storage_write_count(count: usize) -> Result<u8, StorageError> {
     })
 }
 
+const _: () = assert!(core::mem::align_of::<AssetWrite>() == 1);
+const _: () = assert!(core::mem::size_of::<AssetWrite>() == 33);
 const _: () = assert!(core::mem::align_of::<InitializeIxData>() == 1);
 const _: () = assert!(InitializeIxData::SIZE == 104);
-const _: () = assert!(core::mem::align_of::<InitializeTrackingIxData>() == 1);
-const _: () = assert!(InitializeTrackingIxData::SIZE == 65);
-const _: () = assert!(core::mem::align_of::<EnrollIxData>() == 1);
-const _: () = assert!(EnrollIxData::SIZE == 192);
-const _: () = assert!(core::mem::align_of::<ApplyEnrollmentsIxData>() == 1);
-const _: () = assert!(ApplyEnrollmentsIxData::SIZE == 236);
 const _: () = assert!(core::mem::align_of::<OwnerGrantIxData>() == 1);
-const _: () = assert!(OwnerGrantIxData::SIZE == 35);
+const _: () = assert!(OwnerGrantIxData::SIZE == 67);

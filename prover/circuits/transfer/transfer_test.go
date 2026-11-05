@@ -573,7 +573,6 @@ func TestInputOrder(t *testing.T) {
 	})
 }
 
-// An address slot follows the notes and reaches the proof through the address chain, SPP's rail rules decide who may use it.
 func TestAddressSlots(t *testing.T) {
 	sender, nk, ring := ringtransfer.Sender(t), ringtransfer.SenderNullifierPk(t), ringID(t)
 	addressSlot := func() ringaudit.Input {
@@ -588,15 +587,19 @@ func TestAddressSlots(t *testing.T) {
 	}
 	t.Run("beside a spent note", func(t *testing.T) {
 		b := world(t).Build(t)
-		b.Circuit.AddressChain = 0x77
+		b.Circuit.InputNullifiers[1] = 0x77
 		b.Rehash(t)
 		requireSolved(t, b.Circuit)
 	})
 	t.Run("the chain binds the transaction hash", func(t *testing.T) {
 		b := world(t).Build(t)
-		b.Circuit.AddressChain = 0x77
+		b.Circuit.InputNullifiers[1] = 0x77
 		b.Rehash(t)
-		b.Circuit.AddressChain = 0x78
+		privateTxHash := b.Circuit.PrivateTxHash
+		b.Circuit.InputNullifiers[1] = 0x78
+		b.Rehash(t)
+		b.Circuit.PrivateTxHash = privateTxHash
+		b.Rebind(t)
 		refused(t, b.Circuit, "transfer.transactionBinding.bindTransaction")
 	})
 	t.Run("a note called an address leaves the input chain SPP hashed", func(t *testing.T) {
@@ -611,7 +614,7 @@ func TestAddressSlots(t *testing.T) {
 	t.Run("a note after an address", func(t *testing.T) {
 		w := world(t)
 		w.Inputs = []ringaudit.Input{addressSlot(), {Utxo: ringaudit.SpentUtxo(t, sender, nk, ring, 100, 51)}}
-		refused(t, w.Build(t).Circuit, "transfer.OpenInputs")
+		requireSolved(t, w.Build(t).Circuit)
 	})
 	t.Run("an unknown domain", func(t *testing.T) {
 		b := world(t).Build(t)

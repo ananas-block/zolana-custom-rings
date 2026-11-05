@@ -8,10 +8,15 @@
 //! 2. A write that would leave a new member's record empty inserts nothing, the member stays absent and the root stays.
 
 use custom_ring_interface::{
-    write_chain, ApplyRecordsStatement, RecordWrite, FIELD_MAX, QUAD_HEIGHT,
+    key_catalog::RingCircuit,
+    storage::{StorageError, StorageRegistry},
+    storage_instruction::{AssetWrite, RecordWriteClassification},
+    write_chain, ApplyRecordsStatement, CredentialRootSelection, CredentialRoots, CustomRingError,
+    RecordWrite, FIELD_MAX, QUAD_HEIGHT,
 };
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
-use zolana_ring_policy::MintPolicy;
+use thiserror::Error;
+use zolana_ring_policy::{ring_id_field, MintPolicy};
 
 use crate::{
     tree::{ApplyProofInputs, IndexedLeaf, WritableLeaf, WriteStep},
@@ -43,6 +48,30 @@ pub struct RecordWriteProofInput {
     /// An absent member's low record and its path before the relink, empty for a present member.
     pub low: MemberRecord,
     pub low_path: QuadPath,
+}
+
+#[must_use]
+pub struct RecordStatementContext<'a> {
+    pub registry: &'a StorageRegistry,
+    pub asset_writes: &'a [AssetWrite],
+    pub credentials: RecordCredentials<'a>,
+}
+
+pub enum RecordCredentials<'a> {
+    Public,
+    Private(CredentialRootSelection<'a>),
+}
+
+#[derive(Debug, Error)]
+pub enum RecordStatementError {
+    #[error(transparent)]
+    Tree(#[from] RecordTreeError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+    #[error(transparent)]
+    Credential(#[from] CustomRingError),
+    #[error("proof inputs do not match the registry state")]
+    RegistryStateMismatch,
 }
 
 impl MemberRecord {
@@ -180,7 +209,50 @@ impl WritableLeaf<QUAD_HEIGHT> for MemberRecord {
 }
 
 impl ApplyProofInputs<RecordWriteProofInput> {
-    pub fn statement(&self) -> Result<ApplyRecordsStatement, RecordTreeError> {
+    pub fn statement(
+        &self,
+        context: RecordStatementContext<'_>,
+    ) -> Result<ApplyRecordsStatement, RecordStatementError> {
+        // 1. The registry snapshot fixes the old root and allocation cursor for the supplied proof inputs.
+        if self.old_root != context.registry.newest().hash
+            || self.old_next_index != u64::from(context.registry.next_index())
+        {
+            return Err(RecordStatementError::RegistryStateMismatch);
+        }
+        // 2. The shared host classifier binds credential selection to the exact writes and authenticated asset preimages.
+        let credential_writes = RecordWriteClassification {
+            entries: self.writes.iter().map(|write| Ok(write.entry)),
+            asset_writes: context.asset_writes,
+        }
+        .credential_writes()?;
+        let count = self.writes.len() as u64;
+        let RingCircuit::ApplyRecords { writes } = RingCircuit::apply_records(count) else {
+            return Err(StorageError::UnsupportedBatch.into());
+        };
+        let capacity = usize::from(writes);
+        // 3. Public batches use the canonical empty statement, private batches require the pinned ring's supplied root selection.
+        let credentials = match context.credentials {
+            RecordCredentials::Public => {
+                if credential_writes != 0 {
+                    return Err(StorageError::InvalidCredentialRead.into());
+                }
+                CredentialRoots::empty(capacity)?
+            }
+            RecordCredentials::Private(selection) => {
+                if credential_writes == 0 || selection.capacity != capacity {
+                    return Err(StorageError::InvalidCredentialRead.into());
+                }
+                if !context.registry.is_private() {
+                    return Err(StorageError::PrivateWriteWithoutRing.into());
+                }
+                let ring_id = ring_id_field(selection.ring_program.as_array())
+                    .map_err(|_| StorageError::HashingFailed)?;
+                if ring_id != context.registry.private_ring_id {
+                    return Err(StorageError::InvalidPrivateRing.into());
+                }
+                selection.roots()?
+            }
+        };
         let index = |value: u64| u32::try_from(value).map_err(|_| RecordTreeError::IndexOutOfRange);
         Ok(ApplyRecordsStatement {
             old_root: self.old_root,
@@ -189,7 +261,14 @@ impl ApplyProofInputs<RecordWriteProofInput> {
             new_next_index: index(self.new_next_index)?,
             chain_start: self.chain_start,
             chain_end: self.chain_end,
-            count: self.writes.len() as u64,
+            count,
+            credential_writes,
+            private_ring_id: if credential_writes == 0 {
+                [0; 32]
+            } else {
+                context.registry.private_ring_id
+            },
+            credentials,
         })
     }
 }

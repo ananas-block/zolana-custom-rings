@@ -125,7 +125,7 @@ fn asset(seed: u8) -> [u8; 32] {
 }
 
 struct Registry {
-    tree: MemberRegistryTree,
+    tree: Option<MemberRegistryTree>,
     address: Address,
     revision: u64,
 }
@@ -133,7 +133,7 @@ struct Registry {
 impl Registry {
     fn new(address: Address) -> Self {
         Self {
-            tree: MemberRegistryTree::new().expect("tree"),
+            tree: Some(MemberRegistryTree::new().expect("tree")),
             address,
             revision: 0,
         }
@@ -163,7 +163,14 @@ impl Registry {
             });
         }
         // 3. The tree replays the same writes into the apply proof inputs and must reach the same chain end.
-        let inputs = self.tree.apply(chain_start, &entries).expect("update");
+        let applied = self
+            .tree
+            .take()
+            .expect("tree")
+            .apply(chain_start, &entries)
+            .expect("update");
+        self.tree = Some(applied.tree);
+        let inputs = applied.proof;
         assert_eq!(inputs.chain_end, chain);
         let statement = inputs.statement().expect("statement");
         let revision = self.revision;
@@ -185,8 +192,9 @@ impl Registry {
     }
 
     fn opening(&self, member: &[u8; 32]) -> Opening {
-        let root = self.tree.root().expect("root");
-        let opening = self.tree.opening(member).expect("opening");
+        let tree = self.tree.as_ref().expect("tree");
+        let root = tree.root().expect("root");
+        let opening = tree.opening(member).expect("opening");
         let check = OpeningCheck {
             opening: &opening,
             root: &root,

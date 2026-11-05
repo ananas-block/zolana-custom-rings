@@ -1505,7 +1505,9 @@ dependencies = [
  "spr-instruction",
  "spr-interface",
  "spr-keypair",
+ "spr-program",
  "spr-transaction",
+ "spr-tree",
  "thiserror 2.0.20",
  "wincode",
  "x25519-dalek",
@@ -1541,6 +1543,7 @@ dependencies = [
  "spr-account-checks",
  "spr-hasher",
  "spr-interface",
+ "spr-program",
  "spr-tree",
  "wincode",
  "x25519-dalek",
@@ -7444,11 +7447,15 @@ dependencies = [
 name = "spr-program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
+ "pinocchio 0.11.2",
  "solana-address 2.6.1",
  "spr-hasher",
  "spr-instruction",
  "spr-interface",
+ "spr-tree",
  "spr-zk-dsl",
+ "thiserror 2.0.20",
  "wincode",
 ]
 

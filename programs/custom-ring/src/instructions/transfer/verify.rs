@@ -12,7 +12,7 @@
 //! 4. `signers` from the run SPP hashes, the proof holds each live owner to it.
 //! 5. `party_identities` from the accounts the instruction names in public.
 //! 6. `sender` by hashing the key the frame names, the proof holds the inputs to it.
-//! 7. The roots from the pinned registries and `policy_hash` from the ring account, the frame names only revisions.
+//! 7. Policy roots from pinned registries, credential roots from authenticated SPP trees, and `policy_hash` from the ring account.
 //! 8. The public slots from the frame's legs and the window's mints in SPP's fold, SPP's proof refuses another assignment.
 //! 9. `withdrawal_hash` from the live settlement accounts.
 //!

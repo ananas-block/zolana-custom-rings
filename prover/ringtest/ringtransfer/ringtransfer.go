@@ -314,11 +314,15 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 	c.InputCount = a.InputCount
 	for i, input := range a.Inputs {
 		c.Inputs[i] = input.Utxo.Wires()
+		c.InputNullifiers[i] = 0
+		if i < a.InputCount {
+			c.InputNullifiers[i] = new(big.Int).Add(a.FirstNullifier, big.NewInt(int64(i)))
+		}
 		if i < len(c.Entries) {
 			c.Entries[i] = input.EntryWires()
 		}
 	}
-	c.PrivateTxBlinding, c.AddressChain = big.NewInt(privateTxBlinding), 0
+	c.PrivateTxBlinding = big.NewInt(privateTxBlinding)
 	c.SignerCount = len(run)
 	for k := range c.Signers {
 		c.Signers[k] = 0
@@ -410,7 +414,17 @@ func rehash(t testing.TB, c *transfer.Sections, a ringaudit.Audit) {
 	t.Helper()
 	inputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, a.InputUtxos()))
 	outputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, a.Utxos()))
-	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, ringtest.AsBigInt(c.AddressChain), ringtest.AsBigInt(c.PrivateTxBlinding)})
+	nullifiers := ringtest.ToBigInts(c.InputNullifiers)
+	c.InputNullifierChain = spptest.MustHashChain4(t, append([]*big.Int{ringtest.AsBigInt(c.InputCount)}, nullifiers...))
+	addresses := make([]*big.Int, len(a.Inputs))
+	for i, input := range a.Inputs {
+		addresses[i] = new(big.Int)
+		if input.Utxo.Domain == protocol.AddressDomain {
+			addresses[i] = nullifiers[i]
+		}
+	}
+	addressChain := spptest.MustNonZeroHashChain(t, addresses)
+	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, addressChain, ringtest.AsBigInt(c.PrivateTxBlinding)})
 }
 
 // values is the statement both families share.
@@ -420,8 +434,9 @@ func values(t testing.TB, c *transfer.Sections, a Assembled) Statement {
 	s := Statement{
 		Head: a.Audit.Head(t, stream), Outputs: a.Audit.StatementOutputs(t, stream), InputCount: a.Audit.InputCount,
 		ApprovalMask: ringtest.AsBigInt(c.ApprovalMask), ApprovalTotals: ringtest.AsBigInt(c.ApprovalTotals), SignerDataCounts: ringtest.AsBigInt(c.SignerDataCounts), NoSpend: a.Audit.RealInputs() == 0,
-		PrivateTxHash: ringtest.AsBigInt(c.PrivateTxHash),
-		SignerCount:   len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
+		InputNullifierChain: ringtest.AsBigInt(c.InputNullifierChain),
+		PrivateTxHash:       ringtest.AsBigInt(c.PrivateTxHash),
+		SignerCount:         len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
 		PolicyHash: ringtest.AsBigInt(c.PolicyHash), OwnRoot: ringtest.AsBigInt(c.OwnRoot), CuratorRoot: ringtest.AsBigInt(c.CuratorRoot),
 		TrackingRoot:   ringtest.AsBigInt(c.TrackingRoot),
 		WithdrawalHash: ringtest.AsBigInt(c.WithdrawalHash),
