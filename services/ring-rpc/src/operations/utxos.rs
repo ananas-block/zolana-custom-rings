@@ -19,9 +19,9 @@ use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_client::{
     history::HistoryPosition,
     rpc::{
-        AuditedUtxoView, DecryptedInput, GetSpendCoverageResponse, GetWalletStatusResponse,
-        InputParty, SpendCoverageFrame, SpendCoverageRow, WalletBalance, WalletEnrollment,
-        WalletNote, WalletNoteStatus,
+        AuditedUtxoView, DecryptedInput, DecryptedInputClass, GetSpendCoverageResponse,
+        GetWalletStatusResponse, InputParty, SpendCoverageFrame, SpendCoverageRow, WalletBalance,
+        WalletEnrollment, WalletNote, WalletNoteStatus,
     },
     AuditedMergeOutput, ConfirmedMerge, CreatedUtxo, DepositOwner, DepositOwners, KnownUtxo,
     SealedNullifierKey, UtxoOwner,
@@ -395,7 +395,10 @@ impl<'a> PageWork<'a> {
         use crate::spend_machine::InputRead;
         let hit = match observation.read {
             InputRead::Real => self.note_of_nullifier(&observation.nullifier),
-            InputRead::Unreadable | InputRead::Padding | InputRead::External => None,
+            InputRead::Unreadable
+            | InputRead::Padding
+            | InputRead::Address
+            | InputRead::External => None,
         };
         let existing = self.row(&observation.nullifier);
         self.apply(Observation { hit, ..observation }.apply(existing.as_ref()));
@@ -599,6 +602,7 @@ impl AuditStore {
             history_through: book.history_through(),
             observed: count(|state| matches!(state, SpendState::Observed)),
             padding: count(|state| matches!(state, SpendState::Padding)),
+            address: count(|state| matches!(state, SpendState::Address)),
             external: count(|state| matches!(state, SpendState::External)),
             resolved: count(|state| matches!(state, SpendState::Resolved { .. })),
             unresolved_real,
@@ -717,9 +721,9 @@ impl AuditStore {
         })
     }
 
-    /// Fails closed, an input no row names to `wallet` reads as another party's.
+    /// Fails closed, a note no row names to `wallet` reads as another party's and an address as no party's.
     pub(crate) fn input_party(&self, wallet: &Address, input: &DecryptedInput) -> InputParty {
-        if !input.real {
+        if input.class != DecryptedInputClass::Note {
             return InputParty::Padding;
         }
         if let Some(default_input) = &input.default_input {

@@ -260,7 +260,8 @@ impl StorageReplay {
         let inputs = MemberRegistryTree::new()
             .unwrap()
             .apply(chain_start, &entries)
-            .unwrap();
+            .unwrap()
+            .proof;
         let update = update_instruction(
             [creator, registry],
             &StorageUpdateIxData {
@@ -391,13 +392,16 @@ impl PinnedSource {
             },
             mint_policy: mint_policy_write(None),
         };
-        let inputs = self
+        let applied = self
             .tree
+            .clone()
             .apply(
                 chain_start(&self.source, revision).unwrap(),
                 &[write.storage_entry().unwrap()],
             )
             .unwrap();
+        self.tree = applied.tree;
+        let inputs = applied.proof;
         let data = StorageUpdateIxData {
             revision,
             writes: vec![write],

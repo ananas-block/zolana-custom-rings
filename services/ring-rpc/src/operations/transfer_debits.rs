@@ -471,7 +471,7 @@ impl FrameFlows<'_> {
         let mut inputs = Vec::new();
         for input in &self.audited.inputs {
             match &input.opening {
-                InputOpening::Dummy => {}
+                InputOpening::Dummy | InputOpening::Address => {}
                 // The frame's proven entry evidence, a default-ring note holds no index row.
                 InputOpening::External(external) => inputs.push(DebitInput {
                     owner: identity(&external.utxo.owner_key)?,

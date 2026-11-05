@@ -1244,10 +1244,11 @@ fn observe_all(
     }
 }
 
-/// The proven count and default bits decide, the index names the note a real input spent.
+/// The proven input map and default bits decide, the index names the note a real input spent.
 fn audited_input_read(input: &AuditedInput) -> InputRead {
     match &input.opening {
         InputOpening::Dummy => InputRead::Padding,
+        InputOpening::Address => InputRead::Address,
         InputOpening::External(_) => InputRead::External,
         InputOpening::Real => InputRead::Real,
     }

@@ -2,9 +2,10 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask, statement::SignerDataCounts, storage::Revision, tag, AnonymousProofData,
-    AppMessage, CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy, RingRail, RingTransactData,
-    RootRead, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
+    AppMessage, CustomRingError, CustomRingProof, FrameExtensions, FramedSenderBundle,
+    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy,
+    RingRail, RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    MAX_SPP_CPI_ACCOUNTS,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -202,8 +203,9 @@ impl TransactParts {
         }
     }
 
-    pub fn data(&self) -> RingTransactData<'_> {
-        RingTransactData {
+    /// Refuses a reply region the parser refuses.
+    pub fn data(&self) -> Result<RingTransactData<'_>, CustomRingError> {
+        Ok(RingTransactData {
             rail: self.rail,
             n_in: self.n_in,
             n_out: self.n_out,
@@ -227,7 +229,8 @@ impl TransactParts {
             replies: self
                 .replies
                 .as_ref()
-                .map(|(len, region)| Replies { len: *len, region }),
+                .map(|(len, region)| Replies::new(*len, region))
+                .transpose()?,
             sender: self.sender.as_ref().map(OwnedSenderBundle::view),
             envelope: &self.envelope,
             private_tx_hash: &self.private_tx_hash,
@@ -244,7 +247,7 @@ impl TransactParts {
             spp_proof: &self.spp_proof,
             nullifiers: &self.nullifiers,
             input_trees: self.input_trees,
-        }
+        })
     }
 }
 
@@ -282,7 +285,7 @@ impl TransactAccounts {
         config: &RingPolicy,
         parts: &TransactParts,
     ) -> Result<Instruction, RingError> {
-        let data = parts.data();
+        let data = parts.data()?;
         let expanded = data.transact_ix_data(config, TransactProof::zeroed())?;
         let spp = match parts.rail {
             RingRail::Delegate | RingRail::AnonymousDelegate => {

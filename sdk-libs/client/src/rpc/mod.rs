@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use custom_ring_interface::InputClass;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -523,10 +524,28 @@ pub struct DecryptedKnownUtxo {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedInput {
     pub nullifier: Hash,
-    /// False on padding.
-    pub real: bool,
+    pub class: DecryptedInputClass,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_input: Option<DecryptedDefaultInput>,
+}
+
+/// The proven class of one published input, an address spends no note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DecryptedInputClass {
+    Note,
+    Address,
+    Dummy,
+}
+
+impl From<InputClass> for DecryptedInputClass {
+    fn from(class: InputClass) -> Self {
+        match class {
+            InputClass::Note => Self::Note,
+            InputClass::Address => Self::Address,
+            InputClass::Dummy => Self::Dummy,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -866,7 +885,7 @@ impl From<AuditedInput> for DecryptedInput {
     fn from(input: AuditedInput) -> Self {
         Self {
             nullifier: input.nullifier.into(),
-            real: input.opening.is_real(),
+            class: input.opening.class().into(),
             default_input: input
                 .opening
                 .default_input()

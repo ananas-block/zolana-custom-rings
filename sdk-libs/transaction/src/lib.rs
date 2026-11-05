@@ -3,6 +3,7 @@
 mod anonymous_rail;
 mod assets;
 mod error;
+mod input_map;
 mod published;
 mod recipient_delivery;
 mod ring_deposit;
@@ -36,6 +37,7 @@ use anonymous_rail::{lead_change, AnonymousSeal};
 pub use anonymous_rail::{random_tag_preimage, AnonymousPlan, AnonymousSlot};
 pub use assets::RingAssets;
 pub use error::RingRailError;
+pub use input_map::{published_input_map, ClassifiedInput};
 pub use published::PublishedSlot;
 pub use recipient_delivery::{
     is_contributory, open_recipient_body, open_reply, open_sender_bundle, recipient_body,

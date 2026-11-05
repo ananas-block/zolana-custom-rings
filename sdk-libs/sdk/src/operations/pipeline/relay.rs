@@ -11,7 +11,7 @@ use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayCoOwner, RelayIntent, RelayProofInputs, RelayQuote,
     RelayRail,
 };
-use zolana_ring_transaction::{published_outputs, RingDelivery};
+use zolana_ring_transaction::{published_outputs, ClassifiedInput, RingDelivery};
 
 use super::{
     approval_totals_of, owner::deposit_funder, Anonymous, Delegated, Owner, Rail, RingTransfer,
@@ -183,7 +183,7 @@ impl<P> Sealed<'_, P> {
         let parts = self
             .preview
             .parts(&staged.proof_inputs, &staged.rail, &staged.sender)?;
-        Ok(parts.data().audit_stream()?.capacity)
+        Ok(parts.data()?.audit_stream()?.capacity)
     }
 
     /// One per key funding a deposit leg, the payer and an owner of the run left out. The payer pays
@@ -269,9 +269,7 @@ impl<P> Sealed<'_, P> {
                     nullifiers: inputs
                         .input_utxos
                         .iter()
-                        .filter(|input| {
-                            !input.is_dummy() && !input.is_address() && input.utxo.owner == key
-                        })
+                        .filter(|input| input.is_note() && input.utxo.owner == key)
                         .map(|input| Hash(input.nullifier()))
                         .collect(),
                     setup: setup.clone(),

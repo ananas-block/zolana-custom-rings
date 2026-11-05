@@ -4,12 +4,14 @@ use zolana_ring_client::rpc::WalletNoteStatus;
 
 use crate::utxos::CreatedIn;
 
-/// `Padding`, `External` and `Resolved` are terminal, an unresolved row never reads as padding.
+/// `Padding`, `Address`, `External` and `Resolved` are terminal, an unresolved row never reads as padding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpendState {
     /// The frame's stream is unreadable, the frame retries.
     Observed,
     Padding,
+    /// SPP's address slot spends no note and names no owner.
+    Address,
     External,
     Resolved {
         note: [u8; 32],
@@ -30,6 +32,7 @@ pub(crate) struct SpendRow {
 pub(crate) enum InputRead {
     Unreadable,
     Padding,
+    Address,
     External,
     Real,
 }
@@ -58,6 +61,7 @@ impl Observation {
         match (self.read, self.hit) {
             (InputRead::Unreadable, _) => SpendState::Observed,
             (InputRead::Padding, _) => SpendState::Padding,
+            (InputRead::Address, _) => SpendState::Address,
             (InputRead::External, _) => SpendState::External,
             (InputRead::Real, Some(note)) => SpendState::Resolved { note },
             (InputRead::Real, None) => SpendState::UnresolvedReal,
@@ -81,7 +85,10 @@ impl Observation {
         let moves = match existing.state {
             SpendState::Observed => row.state != SpendState::Observed,
             SpendState::UnresolvedReal => matches!(row.state, SpendState::Resolved { .. }),
-            SpendState::Padding | SpendState::External | SpendState::Resolved { .. } => false,
+            SpendState::Padding
+            | SpendState::Address
+            | SpendState::External
+            | SpendState::Resolved { .. } => false,
         };
         match moves {
             true => Transition::Write(row),
@@ -102,6 +109,7 @@ impl SpendRow {
             SpendState::Resolved { .. }
             | SpendState::Observed
             | SpendState::Padding
+            | SpendState::Address
             | SpendState::External => Transition::Unchanged,
         }
     }
@@ -168,6 +176,7 @@ mod tests {
         let real = InputRead::Real;
         for (read, hit, state) in [
             (InputRead::Padding, None, SpendState::Padding),
+            (InputRead::Address, None, SpendState::Address),
             (InputRead::External, None, SpendState::External),
             (real, None, SpendState::UnresolvedReal),
             (real, Some([2; 32]), SpendState::Resolved { note: [2; 32] }),
@@ -179,8 +188,8 @@ mod tests {
     }
 
     #[test]
-    fn padding_and_external_ignore_a_hit() {
-        for read in [InputRead::Padding, InputRead::External] {
+    fn padding_addresses_and_external_ignore_a_hit() {
+        for read in [InputRead::Padding, InputRead::Address, InputRead::External] {
             assert!(!matches!(
                 observed(read, Some([2; 32])).state(),
                 SpendState::Resolved { .. }
@@ -210,6 +219,7 @@ mod tests {
     fn a_replay_changes_no_terminal_row() {
         for state in [
             SpendState::Padding,
+            SpendState::Address,
             SpendState::External,
             SpendState::Resolved { note: [2; 32] },
         ] {
@@ -221,6 +231,7 @@ mod tests {
             };
             for read in [
                 InputRead::Padding,
+                InputRead::Address,
                 InputRead::External,
                 InputRead::Unreadable,
                 InputRead::Real,

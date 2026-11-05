@@ -242,8 +242,11 @@ mod tests {
 
     impl Fixture {
         fn with(entries: &[TrackingEntry]) -> Self {
-            let mut tree = TrackingTree::new().unwrap();
-            tree.apply([0; 32], entries).unwrap();
+            let tree = TrackingTree::new()
+                .unwrap()
+                .apply([0; 32], entries)
+                .unwrap()
+                .tree;
             Self { tree }
         }
 

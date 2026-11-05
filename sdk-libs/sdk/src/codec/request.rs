@@ -14,6 +14,7 @@ use zolana_ring_member_registry::{
     TrackingPool, TrackingRecord, TrackingWriteProofInput,
 };
 use zolana_ring_policy::{AssetLimits, EncodedRuleTable, SourceMap, MAX_SOURCES};
+use zolana_ring_transaction::ClassifiedInput;
 
 use crate::{prover::fe, RingError, REDACTED};
 
@@ -92,7 +93,7 @@ impl Opening {
     }
 
     pub fn input(input: &SppProofInputUtxo) -> Result<Self, RingError> {
-        let real = !input.is_dummy() && !input.is_address();
+        let real = input.is_note();
         Ok(Self::with_owner(
             ProofInputUtxo::try_from(input)?,
             match real {
@@ -500,6 +501,12 @@ pub(crate) struct TransferParams<'a> {
     pub input_count: u8,
     /// The input class, the slots past the spent notes carry no UTXO.
     pub inputs: Vec<Opening>,
+    /// The published nullifiers in SPP order, zero to the input class.
+    #[serde(serialize_with = "fe::seq")]
+    pub input_nullifiers: Vec<[u8; 32]>,
+    /// The program's chain over `n` and `input_nullifiers`.
+    #[serde(with = "fe")]
+    pub input_nullifier_chain: [u8; 32],
     /// An entry key's default-ring preimages, none off one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<EntryOpening>,
@@ -515,9 +522,6 @@ pub(crate) struct TransferParams<'a> {
     pub private_tx_hash: [u8; 32],
     #[serde(with = "fe")]
     pub private_tx_blinding: [u8; 32],
-    /// SPP's chain of address slot nullifiers, zero without one.
-    #[serde(with = "fe")]
-    pub address_chain: [u8; 32],
     pub in_proof: bool,
     pub hidden: bool,
     pub delegate: bool,

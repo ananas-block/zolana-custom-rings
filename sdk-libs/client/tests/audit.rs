@@ -336,7 +336,40 @@ fn inputs_read_real_up_to_the_proven_count_and_padding_past_it() {
     );
 }
 
-/// A set bit past `R` stays padding.
+/// SPP order `address, note, note, dummy`, the address neither spends a note nor names an owner.
+#[test]
+fn an_address_ahead_of_the_notes_reads_apart_from_them() {
+    let mut transfer = Transfer::fixture();
+    transfer.nullifiers = vec![
+        transfer.first_nullifier,
+        field(0x61),
+        field(0x62),
+        field(0x63),
+    ];
+    let outputs = delivered_outputs()[..2].to_vec();
+    let mut disclosure = transfer.disclosure(Rail::Delivered, &outputs);
+    disclosure.real_inputs = 2;
+    disclosure.address_input_bits = 0b001;
+    let built = publish(&transfer, Rail::Delivered, outputs, disclosure);
+    let audited = audit(&built.transaction, built.layout).unwrap();
+    assert_eq!(audited.real_inputs, 2);
+    let read: Vec<_> = audited
+        .inputs
+        .iter()
+        .map(|input| input.opening.clone())
+        .collect();
+    assert_eq!(
+        read,
+        [
+            InputOpening::Address,
+            InputOpening::Real,
+            InputOpening::Real,
+            InputOpening::Dummy,
+        ]
+    );
+}
+
+/// The entry bit names absolute note position 1.
 #[test]
 fn an_entry_input_opens_under_its_default_bit_and_rebuilds_its_commitment() {
     let mut transfer = Transfer::fixture();
@@ -837,7 +870,7 @@ fn the_envelope_must_seal_the_published_transaction_key() {
         layout: built.layout,
         tx_viewing_key: &other_key,
         salt: &built.transaction.salt.unwrap(),
-        real_inputs: 1,
+        inputs: built.disclosure.inputs(),
         evidence: built.disclosure.evidence.clone(),
         records: built.disclosure.records.clone(),
         tails: Vec::new(),

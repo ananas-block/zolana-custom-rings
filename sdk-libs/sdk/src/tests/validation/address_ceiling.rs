@@ -351,10 +351,7 @@ fn anonymous_transfer(inputs: usize, outputs: usize, reply_len: Option<usize>) -
                 tail: None,
             })
             .collect(),
-        replies: reply_len.map(|len| Replies {
-            len: len as u16,
-            region: &region,
-        }),
+        replies: reply_len.map(|len| Replies::new(len as u16, &region).unwrap()),
         sender: Some(FramedSenderBundle {
             tag: &field,
             body: &bundle,

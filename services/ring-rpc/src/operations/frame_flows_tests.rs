@@ -1,3 +1,4 @@
+use custom_ring_interface::InputClass;
 use solana_signature::Signature;
 use spr_keypair::{NullifierKey, PublicKey, X25519Keypair};
 use spr_transaction::{Mint, OutputContext};
@@ -130,7 +131,7 @@ fn audited(inputs: Vec<AuditedInput>, outputs: Vec<AuditedOutput>) -> AuditedTra
         payload_errors: Vec::new(),
         real_inputs: inputs
             .iter()
-            .filter(|input| input.opening.is_real())
+            .filter(|input| input.opening.class() == InputClass::Note)
             .count() as u8,
         inputs,
     }

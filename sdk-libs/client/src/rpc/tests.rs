@@ -333,9 +333,17 @@ fn a_real_input_reads_apart_from_a_dummy() {
     let [read_real, read_dummy] = parsed.value.items[0].inputs.as_slice() else {
         panic!("two inputs")
     };
-    assert!(read_real.real);
+    assert_eq!(read_real.class, DecryptedInputClass::Note);
     assert_eq!(read_real.default_input, None);
-    assert!(!read_dummy.real);
+    assert_eq!(read_dummy.class, DecryptedInputClass::Dummy);
+    assert_eq!(
+        DecryptedInput::from(AuditedInput {
+            opening: InputOpening::Address,
+            ..real.clone()
+        })
+        .class,
+        DecryptedInputClass::Address
+    );
     assert_ne!(
         DecryptedInput::from(real.clone()),
         DecryptedInput::from(AuditedInput {
@@ -349,9 +357,9 @@ fn a_real_input_reads_apart_from_a_dummy() {
     let activity = WalletActivity::of(
         Address::new_from_array([13; 32]),
         transaction.clone(),
-        |input| match input.real {
-            true => InputParty::Own,
-            false => InputParty::Padding,
+        |input| match input.class {
+            DecryptedInputClass::Note => InputParty::Own,
+            DecryptedInputClass::Address | DecryptedInputClass::Dummy => InputParty::Padding,
         },
     )
     .expect("a spender");

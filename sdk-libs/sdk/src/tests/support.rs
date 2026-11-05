@@ -834,12 +834,9 @@ impl Registry {
         }
     }
 
-    pub(crate) fn with_mint(
-        mut self,
-        mint: Address,
-        policy: zolana_ring_policy::MintPolicy,
-    ) -> Self {
-        self.tree
+    pub(crate) fn with_mint(self, mint: Address, policy: zolana_ring_policy::MintPolicy) -> Self {
+        let tree = self
+            .tree
             .apply(
                 [0; 32],
                 &[custom_ring_interface::RecordWrite {
@@ -849,8 +846,9 @@ impl Registry {
                     mint_policy: Some(policy),
                 }],
             )
-            .unwrap();
-        self
+            .unwrap()
+            .tree;
+        Self { tree }
     }
 
     pub(crate) fn root(&self) -> [u8; 32] {

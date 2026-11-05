@@ -1,6 +1,6 @@
 use custom_ring_interface::{
     blinding::ring_blinding_seed, AuditEvidence, AuditRecord, AuditStreamLayout, AuditorMessage,
-    DataTail, EntryInput, ParsedTransact, RecordKind,
+    DataTail, EntryInput, InputClass, InputMap, ParsedTransact, RecordKind,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -135,7 +135,7 @@ impl<'a> TransactionAudit<'a> {
             tx_signature: tx.tx_signature,
             slot: tx.slot,
             tx_viewing_pk,
-            real_inputs: opened.real_inputs,
+            real_inputs: opened.inputs.note_count(),
             outputs: Vec::new(),
             payload_errors: Vec::new(),
             inputs: Vec::new(),
@@ -157,7 +157,7 @@ impl<'a> TransactionAudit<'a> {
             );
         }
         audited.inputs = transfer.inputs(SpentInputs {
-            real_inputs: opened.real_inputs,
+            map: opened.inputs,
             evidence: &opened.evidence,
             nullifiers: &tx.nullifiers,
             trees: self.input_trees,
@@ -219,7 +219,7 @@ struct Transfer {
 }
 
 struct SpentInputs<'a> {
-    real_inputs: u8,
+    map: InputMap,
     evidence: &'a AuditEvidence,
     nullifiers: &'a [[u8; 32]],
     trees: Option<&'a [Option<u16>]>,
@@ -309,10 +309,10 @@ impl Transfer {
         )?)
     }
 
-    /// Dummies sit last, at or past `R`.
+    /// The proven map classifies each position, its default bits name notes alone.
     fn inputs(&self, spent: SpentInputs<'_>) -> Result<Vec<AuditedInput>, AuditError> {
         let SpentInputs {
-            real_inputs,
+            map,
             evidence,
             nullifiers,
             trees,
@@ -321,17 +321,21 @@ impl Transfer {
             .iter()
             .enumerate()
             .map(|(index, nullifier)| {
-                let opening = match evidence {
-                    _ if index >= usize::from(real_inputs) => InputOpening::Dummy,
-                    AuditEvidence::Entry {
-                        default_input_bits,
-                        inputs,
-                    } if index < 64 && default_input_bits >> index & 1 == 1 => {
-                        let entry = inputs.get(index).ok_or(AuditError::DisclosureLayout)?;
-                        let tree = trees.and_then(|trees| trees.get(index).copied().flatten());
-                        InputOpening::External(Box::new(self.default_input(entry, tree)?))
-                    }
-                    AuditEvidence::None | AuditEvidence::Entry { .. } => InputOpening::Real,
+                let class = map.slot(index).ok_or(AuditError::DisclosureLayout)?;
+                let opening = match class {
+                    InputClass::Dummy => InputOpening::Dummy,
+                    InputClass::Address => InputOpening::Address,
+                    InputClass::Note => match evidence {
+                        AuditEvidence::Entry {
+                            default_input_bits,
+                            inputs,
+                        } if default_input_bits >> index & 1 == 1 => {
+                            let entry = inputs.get(index).ok_or(AuditError::DisclosureLayout)?;
+                            let tree = trees.and_then(|trees| trees.get(index).copied().flatten());
+                            InputOpening::External(Box::new(self.default_input(entry, tree)?))
+                        }
+                        AuditEvidence::None | AuditEvidence::Entry { .. } => InputOpening::Real,
+                    },
                 };
                 Ok(AuditedInput {
                     nullifier: *nullifier,

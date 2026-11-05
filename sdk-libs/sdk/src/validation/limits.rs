@@ -6,6 +6,7 @@ use zolana_ring_policy::{
     owner_debits, ApprovalTotals, DebitInput, DebitOutput, DebitTransfer, Member, MintPolicy,
     OwnerDebit, PublicGross,
 };
+use zolana_ring_transaction::ClassifiedInput;
 
 use crate::RingError;
 
@@ -23,7 +24,7 @@ impl Outflows<'_> {
     fn debit_inputs(&self) -> Result<Vec<DebitInput>, RingError> {
         self.inputs
             .iter()
-            .filter(|input| !input.is_dummy() && !input.is_address())
+            .filter(|input| input.is_note())
             .map(|input| {
                 Ok(DebitInput {
                     owner: input.utxo.owner.owner_proof_input_hash()?,
@@ -38,9 +39,7 @@ impl Outflows<'_> {
     pub fn ring_inputs(&self) -> Result<Vec<DebitInput>, RingError> {
         self.inputs
             .iter()
-            .filter(|input| {
-                !input.is_dummy() && !input.is_address() && input.utxo.ring_program_id.is_some()
-            })
+            .filter(|input| input.is_note() && input.utxo.ring_program_id.is_some())
             .map(|input| {
                 Ok(DebitInput {
                     owner: input.utxo.owner.owner_proof_input_hash()?,
@@ -135,7 +134,7 @@ impl Outflows<'_> {
                 return Err(RingError::OutflowCapExceeded {
                     asset: flow.asset,
                     cap,
-                    outflow: u64::try_from(flow.outflow).map_err(|_| RingError::OutflowOverflow)?,
+                    outflow: flow.outflow,
                 });
             }
         }

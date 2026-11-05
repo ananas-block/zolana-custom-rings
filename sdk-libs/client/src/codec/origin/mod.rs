@@ -18,9 +18,9 @@ use spr_transaction::{ShieldedTransaction, SOL_MINT};
 
 use crate::AuditError;
 use custom_ring_interface::{
-    tag as ring_tag, transact_flag, AuditStreamLayout, CustomRingError, CustomRingMergeIxDataRef,
-    DepositPrefix, InstructionTag, ParsedTransact, RingDepositAuditCapsule, RingMode, RingRail,
-    RingTransactData,
+    tag as ring_tag, transact_flag, AuditStreamLayout, CheckedAuthorization, CustomRingError,
+    CustomRingMergeIxDataRef, DepositPrefix, InstructionTag, ParsedTransact,
+    RingDepositAuditCapsule, RingMode, RingRail, RingTransactData,
 };
 
 /// What a confirmed transaction says about its ring, its signers and the value it settled out.
@@ -166,11 +166,11 @@ impl RingOrigin {
             .ok_or(AuditError::MissingRingTransact)?;
         let parsed = parse_frame(mode, frame)?;
         let data = parsed.data();
-        let run = match (data.rail, data.in_proof_owner) {
-            (RingRail::Confidential, Some(owner)) => {
+        let run = match parsed.authorization() {
+            CheckedAuthorization::ConfidentialInProof(owner) => {
                 return Ok(vec![Address::new_from_array(*owner.owner)])
             }
-            (RingRail::Confidential, None) => {
+            CheckedAuthorization::ConfidentialSigner => {
                 let accounts = &self.pool_accounts;
                 let window =
                     settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
@@ -178,9 +178,10 @@ impl RingOrigin {
                 data.owner_signers(accounts, window.len())
                     .map_err(|error| AuditError::InvalidTransactData(error.to_string()))?
             }
-            (RingRail::Anonymous | RingRail::Delegate | RingRail::AnonymousDelegate, _) => {
-                return Ok(Vec::new())
-            }
+            CheckedAuthorization::AnonymousHidden(_)
+            | CheckedAuthorization::AnonymousPublic
+            | CheckedAuthorization::Delegate
+            | CheckedAuthorization::AnonymousDelegate => return Ok(Vec::new()),
         };
         Ok(run.iter().fold(Vec::new(), |mut spenders, owner| {
             if !spenders.contains(owner) {

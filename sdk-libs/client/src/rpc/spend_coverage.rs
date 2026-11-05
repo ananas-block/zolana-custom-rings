@@ -30,6 +30,7 @@ pub struct GetSpendCoverageResponse {
     pub history_through: u64,
     pub observed: u64,
     pub padding: u64,
+    pub address: u64,
     pub external: u64,
     pub resolved: u64,
     pub unresolved_real: Vec<SpendCoverageRow>,

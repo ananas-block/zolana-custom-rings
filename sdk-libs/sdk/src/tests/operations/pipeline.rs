@@ -702,15 +702,15 @@ async fn an_anonymous_spend_of_ring_and_default_ring_utxos_is_refused_before_pro
     ));
 }
 
-/// An address slot spends nothing, it leaves the frame off the entry key and names no zero-key spend.
+/// SPP's builder leads with the address, the hidden owner's proof needs its note at slot zero.
 #[tokio::test]
-async fn an_anonymous_transfer_reserves_an_address_reads_a_cache_and_writes_none() {
+async fn an_anonymous_transfer_led_by_an_address_is_refused_reads_a_cache_and_writes_none() {
     let sender = &crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
     let chain = Chain::ring(anonymous());
-    for (note, entry) in [
-        (ring_utxo(sender, Mint::SOL, 10, 0), false),
-        (default_ring_utxo(sender, 10, 0), true),
+    for note in [
+        ring_utxo(sender, Mint::SOL, 10, 0),
+        default_ring_utxo(sender, 10, 0),
     ] {
         let address =
             SppProofInputUtxo::new_address(sender.signing_pubkey(), [7; 32], TREE_ID).unwrap();
@@ -724,9 +724,10 @@ async fn an_anonymous_transfer_reserves_an_address_reads_a_cache_and_writes_none
             .with_anonymous_signer(&sender.signing_key)
             .with_payment(payment(&paid, 10))
             .unwrap();
-        let staged = stage_anonymous(&transfer, &chain).await.unwrap();
-        assert_eq!(spends_default_ring(&staged.proof_inputs.input_utxos), entry);
-        assert!(staged.owner_signers.is_empty());
+        assert!(matches!(
+            stage_anonymous(&transfer, &chain).await,
+            Err(RingError::HiddenOwnerMissing)
+        ));
     }
 
     let note = ring_utxo(sender, Mint::SOL, 10, 0);
@@ -1577,7 +1578,7 @@ async fn a_reply_joins_the_frame_only_through_with_reply() {
             .unwrap()
             .data()
             .replies
-            .map(|replies| replies.len)
+            .map(|replies| replies.byte_len())
     };
     assert_eq!(parse(&frame_of(None).await), None);
     let replied = frame_of(Some(own_reply(&sender))).await;
@@ -3388,7 +3389,7 @@ async fn a_delegate_exit_and_withdrawal_read_no_policy() {
     assert!(frame.parts.own_revision.is_none() && frame.parts.policy.is_none());
     assert!(frame.parts.approval.is_empty());
     assert!(matches!(
-        frame.parts.data().circuit(),
+        frame.parts.data().unwrap().circuit(),
         spr_interface::instruction::CircuitId::RingAuthorityExit(..)
     ));
     assert_eq!(frame.parts.interface_transfers.len(), 1);
@@ -3451,7 +3452,7 @@ async fn a_public_spend_on_an_anonymous_ring_publishes_its_owners_alone() {
     assert!(parts.public_owners && parts.anonymous.is_none());
     assert_eq!(framed.frame.accounts.owner_signers, [wallet]);
     assert!(matches!(
-        parts.data().circuit(),
+        parts.data().unwrap().circuit(),
         spr_interface::instruction::CircuitId::ConfidentialRingEddsa(..)
     ));
     let unenrolled = Chain::ring(anonymous())

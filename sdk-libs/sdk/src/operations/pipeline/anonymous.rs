@@ -18,7 +18,9 @@ use spr_transaction::{
 };
 use zolana_ring_client::rpc::SubjectListSalt;
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
-use zolana_ring_transaction::{AnonymousPlan, ReplyMetadata, RingDelivery, RingOutputRail};
+use zolana_ring_transaction::{
+    AnonymousPlan, ClassifiedInput, ReplyMetadata, RingDelivery, RingOutputRail,
+};
 
 use super::{
     canonical_shape,
@@ -469,8 +471,7 @@ impl Anonymous<'_> {
         // A signer owning no input authorizes its data output alone, it spends with no key, and an address slot spends nothing.
         let spends = |owner: &&Address| {
             proof_inputs.input_utxos.iter().any(|input| {
-                !input.is_dummy()
-                    && !input.is_address()
+                input.is_note()
                     && input.utxo.owner.confidential_view_tag().ok() == Some(owner.to_bytes())
             })
         };
@@ -575,7 +576,7 @@ pub(super) fn check_anonymous_inputs(
     let hidden_leads = inputs
         .input_utxos
         .first()
-        .is_some_and(|input| !input.is_dummy() && input.utxo.owner == sender.signing_pubkey);
+        .is_some_and(|input| input.is_note() && input.utxo.owner == sender.signing_pubkey);
     if !hidden_leads {
         return Err(RingError::HiddenOwnerMissing);
     }
@@ -638,9 +639,11 @@ fn check_audit_key(inputs: &SppProofInputs) -> Result<(), RingError> {
 /// SPP publishes a hidden owner spending its default-ring note, an address slot carries no ring and spends none.
 fn check_entry_inputs(inputs: &SppProofInputs, sender: &ShieldedAddress) -> Result<(), RingError> {
     let live = || {
-        inputs.input_utxos.iter().enumerate().filter(|(_, input)| {
-            !input.is_dummy() && !input.is_address() && input.utxo.owner == sender.signing_pubkey
-        })
+        inputs
+            .input_utxos
+            .iter()
+            .enumerate()
+            .filter(|(_, input)| input.is_note() && input.utxo.owner == sender.signing_pubkey)
     };
     let holds_default = live().any(|(_, input)| input.utxo.ring_program_id.is_none());
     match live().find(|(_, input)| holds_default && input.utxo.ring_program_id.is_some()) {

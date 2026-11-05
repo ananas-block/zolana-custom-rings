@@ -217,10 +217,9 @@ pub enum RingError {
     OutflowCapExceeded {
         asset: [u8; 32],
         cap: u64,
-        outflow: u64,
+        /// A public gross reaches past `u64::MAX` under the policy's 72-bit aggregate bound.
+        outflow: u128,
     },
-    #[error("an outflow sum overflows")]
-    OutflowOverflow,
     #[error("the payments' total overflows")]
     PaymentOverflow,
     #[error("the compact transfer expands to external data the SPP proof does not bind")]

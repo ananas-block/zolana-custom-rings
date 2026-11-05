@@ -112,15 +112,16 @@ pub struct LoadedTree<L = MemberRecord, const H: usize = QUAD_HEIGHT> {
 }
 
 impl<L: WritableLeaf<H>, const H: usize> LoadedTree<L, H> {
+    /// A failed batch drops the staged tree and leaves the caller's savepoint nothing to roll back.
     pub fn apply_batch(
-        mut self,
+        self,
         chain_start: [u8; 32],
         entries: &[L::Entry],
     ) -> Result<Application<L::WriteProof, L>, LoadedTreeError> {
-        let inputs = RecordTree::<L, H>::apply(&mut self, chain_start, entries)?;
+        let applied = RecordTree::<L, H>::apply(self, chain_start, entries)?;
         Ok(Application {
-            inputs,
-            rows: self.written,
+            inputs: applied.proof,
+            rows: applied.tree.written,
         })
     }
 }
@@ -191,4 +192,49 @@ pub fn node_keys<const H: usize>(
         );
     }
     Ok(keys)
+}
+
+#[cfg(test)]
+mod tests {
+    use custom_ring_interface::RecordWrite;
+
+    use super::*;
+
+    /// The sentinel tree with `member` read as absent, its low record the sentinel.
+    fn loaded(member: [u8; 32]) -> LoadedTree {
+        let fresh = WrittenRows::<MemberRecord>::fresh::<QUAD_HEIGHT>().unwrap();
+        let low = *fresh.records.values().next().unwrap();
+        ReadRows {
+            next_index: 1,
+            reads: vec![MemberRead::Absent { member, low }],
+            nodes: fresh.nodes,
+        }
+        .into_tree()
+    }
+
+    fn write(byte: u8) -> RecordWrite {
+        RecordWrite {
+            member: [byte; 32],
+            mask: 1,
+            value: 1,
+            mint_policy: None,
+        }
+    }
+
+    #[test]
+    fn a_batch_returns_its_proof_and_staged_rows() {
+        let applied = loaded([1; 32]).apply_batch([0; 32], &[write(1)]).unwrap();
+        assert_eq!(applied.inputs.writes.len(), 1);
+        assert_eq!(applied.inputs.new_next_index, 2);
+        assert!(applied.rows.records.contains_key(&[1; 32]));
+    }
+
+    /// A later entry fails after the first relinked its low record, the consumed tree leaves no rows to save.
+    #[test]
+    fn a_batch_failing_on_a_later_entry_returns_no_rows() {
+        assert!(matches!(
+            loaded([1; 32]).apply_batch([0; 32], &[write(1), write(2)]),
+            Err(LoadedTreeError::RecordNotLoaded)
+        ));
+    }
 }

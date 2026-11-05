@@ -1325,7 +1325,9 @@ impl Tracking {
             seals: HashMap::new(),
             revision: 0,
         });
-        held.tree
+        held.tree = held
+            .tree
+            .clone()
             .apply(
                 [0; 32],
                 &[TrackingEntry {
@@ -1337,7 +1339,8 @@ impl Tracking {
                     list_tag: field(0x12),
                 }],
             )
-            .expect("apply");
+            .expect("apply")
+            .tree;
         held.revision += 1;
         held.seals.insert(
             member,
@@ -1441,7 +1444,12 @@ impl Records {
 
     fn apply(&self, entry: RecordWrite) {
         let mut own = self.0.lock().unwrap();
-        own.tree.apply([0; 32], &[entry]).expect("record write");
+        own.tree = own
+            .tree
+            .clone()
+            .apply([0; 32], &[entry])
+            .expect("record write")
+            .tree;
         own.revision += 1;
     }
 

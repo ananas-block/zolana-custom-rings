@@ -197,6 +197,7 @@ fn state_name(state: SpendState) -> &'static str {
     match state {
         SpendState::Observed => "observed",
         SpendState::Padding => "padding",
+        SpendState::Address => "address",
         SpendState::External => "external",
         SpendState::Resolved { .. } => "resolved",
         SpendState::UnresolvedReal => "unresolved",
@@ -207,6 +208,7 @@ fn state_of(name: &str, link: Option<[u8; 32]>) -> Result<SpendState, DbErr> {
     match (name, link) {
         ("observed", None) => Ok(SpendState::Observed),
         ("padding", None) => Ok(SpendState::Padding),
+        ("address", None) => Ok(SpendState::Address),
         ("external", None) => Ok(SpendState::External),
         ("resolved", Some(note)) => Ok(SpendState::Resolved { note }),
         ("unresolved", None) => Ok(SpendState::UnresolvedReal),
@@ -220,6 +222,7 @@ fn state_link(state: SpendState) -> Option<[u8; 32]> {
         SpendState::UnresolvedReal
         | SpendState::Observed
         | SpendState::Padding
+        | SpendState::Address
         | SpendState::External => None,
     }
 }

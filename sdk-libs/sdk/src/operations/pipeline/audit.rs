@@ -12,7 +12,7 @@ use spr_transaction::{
     TransactionError,
 };
 use zolana_ring_client::AuditStreamSeal;
-use zolana_ring_transaction::RingOutputRail;
+use zolana_ring_transaction::{published_input_map, ClassifiedInput, RingOutputRail};
 
 use crate::{
     request::{owner_key, AuditParams, EntryOpening, Opening, OutputOpening},
@@ -54,11 +54,12 @@ impl AuditSeal<'_> {
             true => slots.iter().map(data_tail).collect(),
             false => Vec::new(),
         };
+        let inputs = published_input_map(&self.inputs.input_utxos, self.layout.key.class())?;
         let sealed = AuditStreamSeal {
             layout: self.layout,
             tx_viewing_key: self.rail.tx_viewing_key(),
             salt: &self.rail.salt(),
-            real_inputs: real_input_count(&self.inputs.input_utxos)?,
+            inputs,
             evidence: self.evidence()?,
             records,
             tails,
@@ -73,6 +74,7 @@ impl AuditSeal<'_> {
         })
     }
 
+    /// Bit `i` names absolute position `i`, an address or a dummy never sets one.
     fn evidence(&self) -> Result<AuditEvidence, RingError> {
         if !self.layout.key.entry {
             return Ok(AuditEvidence::None);
@@ -101,23 +103,8 @@ impl AuditSeal<'_> {
     }
 }
 
-/// The circuit's `R`, dummies last.
-pub(super) fn real_input_count(inputs: &[SppProofInputUtxo]) -> Result<u8, RingError> {
-    let real = inputs
-        .iter()
-        .filter(|input| !input.is_compact() && !input.is_dummy())
-        .count();
-    u8::try_from(real).map_err(|_| {
-        TransactionError::TooManyInputs {
-            got: real,
-            max: usize::from(u8::MAX),
-        }
-        .into()
-    })
-}
-
 pub(super) fn is_default_ring(input: &SppProofInputUtxo) -> bool {
-    !input.is_dummy() && !input.is_address() && input.utxo.ring_program_id.is_none()
+    input.is_note() && input.utxo.ring_program_id.is_none()
 }
 
 /// Never the note's nullifier secret, the auditor rebuilds the commitment alone.

@@ -1,7 +1,7 @@
 //! The auditor stream of a ring transfer, mirrored by Go `prover/circuits/audit`, and the pad a merge keeps.
 
 use custom_ring_interface::{
-    domain::AUDIT_STREAM_LABEL, AuditEvidence, AuditRecord, AuditStreamLayout, DataTail,
+    domain::AUDIT_STREAM_LABEL, AuditEvidence, AuditRecord, AuditStreamLayout, DataTail, InputMap,
     StreamRegion, AUDIT_RECORD_LEN, DATA_TAIL_LEN, STREAM_FIRST_COUNTER,
 };
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
@@ -19,8 +19,8 @@ pub struct AuditStreamSeal<'a> {
     pub layout: AuditStreamLayout,
     pub tx_viewing_key: &'a ViewingKey,
     pub salt: &'a [u8; 16],
-    /// `R`, nullifiers at or past it are padding.
-    pub real_inputs: u8,
+    /// The published inputs under the key's input class.
+    pub inputs: InputMap,
     pub evidence: AuditEvidence,
     /// One per slot.
     pub records: Vec<AuditRecord>,
@@ -45,20 +45,34 @@ impl AuditStreamSeal<'_> {
             layout,
             tx_viewing_key,
             salt,
-            real_inputs,
+            inputs,
             evidence,
             records,
             tails,
         } = self;
         let tails_expected = if layout.has_data { layout.outputs } else { 0 };
-        if records.len() != layout.outputs || tails.len() != tails_expected {
+        if records.len() != layout.outputs
+            || tails.len() != tails_expected
+            || inputs.published_inputs() != layout.inputs
+            || inputs.capacity() != layout.key.class()
+        {
             return Err(AuditError::DisclosureLayout);
+        }
+        // The opener refuses a default bit off a note, a seal writes none.
+        if let AuditEvidence::Entry {
+            default_input_bits, ..
+        } = &evidence
+        {
+            inputs
+                .validate_default_input_bits(*default_input_bits)
+                .map_err(|_| AuditError::DisclosureLayout)?;
         }
         let key = X25519Keypair::from_bytes(&tx_viewing_key.secret_bytes());
         let stream = sealing_salted_stream(&key, auditor_pk, salt, AUDIT_STREAM_LABEL)?;
         let mut plaintext = custom_ring_interface::AuditEnvelope {
             tx_viewing_secret: *tx_viewing_key.secret_bytes(),
-            real_inputs,
+            real_inputs: inputs.note_count(),
+            address_input_bits: inputs.address_input_bits(),
             evidence,
         };
         let mut envelope = plaintext.encode();
@@ -105,7 +119,7 @@ pub struct AuditEnvelope<'a> {
 
 pub struct OpenedAudit {
     pub tx_viewing_key: ViewingKey,
-    pub real_inputs: u8,
+    pub inputs: InputMap,
     pub evidence: AuditEvidence,
     layout: AuditStreamLayout,
     stream: RingStream,
@@ -148,13 +162,16 @@ impl AuditEnvelope<'_> {
         stream.apply_at(STREAM_FIRST_COUNTER, &mut plaintext);
         let mut envelope = custom_ring_interface::AuditEnvelope::decode(&plaintext, layout)
             .map_err(|_| AuditError::DisclosureField)?;
+        let inputs = envelope
+            .input_map(layout)
+            .map_err(|_| AuditError::DisclosureField);
         let tx_viewing_key = ViewingKey::from_canonical_bytes(&envelope.tx_viewing_secret)
             .map_err(|_| AuditError::NonCanonicalViewingKey);
         envelope.tx_viewing_secret.zeroize();
         check_evidence(&envelope.evidence)?;
         Ok(OpenedAudit {
             tx_viewing_key: tx_viewing_key?,
-            real_inputs: envelope.real_inputs,
+            inputs: inputs?,
             evidence: envelope.evidence,
             layout,
             stream,

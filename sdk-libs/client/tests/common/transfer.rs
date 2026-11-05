@@ -9,9 +9,9 @@ use custom_ring_interface::{
     stream::{DeliveredSlot, SlotSecret},
     tag as ring_tag, tagged_x25519, AnonymousProofData, AuditEvidence, AuditKey, AuditRecord,
     AuditStreamLayout, AuditorMessage, CustomRingProof, DataTail, EntryInput, FrameExtensions,
-    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, RecordKind, RingOutput,
-    RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    RECIPIENT_BODY_LEN,
+    FramedSenderBundle, InProofOwner, InputClassification, InputMap, InputTrees, PlainGroth16Proof,
+    RecordKind, RingOutput, RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN,
+    CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -162,9 +162,24 @@ pub struct Disclosure {
     /// The frame names its owner, the layout reads the same on the signer rail.
     pub in_proof: bool,
     pub real_inputs: u8,
+    /// Bit `i` makes published input `i` an address.
+    pub address_input_bits: u64,
     pub evidence: AuditEvidence,
     pub records: Vec<AuditRecord>,
     pub tails: Vec<DataTail>,
+}
+
+impl Disclosure {
+    pub fn inputs(&self) -> InputMap {
+        InputClassification {
+            published_inputs: self.layout.inputs,
+            capacity: self.layout.key.class(),
+            note_count: self.real_inputs,
+            address_input_bits: self.address_input_bits,
+        }
+        .check()
+        .unwrap()
+    }
 }
 
 pub struct Slot {
@@ -335,7 +350,7 @@ impl Transfer {
             layout: disclosure.layout,
             tx_viewing_key: &self.tx_key,
             salt: &self.salt,
-            real_inputs: disclosure.real_inputs,
+            inputs: disclosure.inputs(),
             evidence: disclosure.evidence.clone(),
             records: disclosure.records.clone(),
             tails: disclosure.tails.clone(),
@@ -454,6 +469,7 @@ impl Transfer {
             },
             in_proof: false,
             real_inputs: self.nullifiers.len() as u8,
+            address_input_bits: 0,
             evidence,
             records: outputs.iter().map(Output::record).collect(),
             tails: Vec::new(),

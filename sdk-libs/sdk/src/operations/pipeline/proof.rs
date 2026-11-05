@@ -1,6 +1,6 @@
 //! The one ring proof of a transfer, one request over the audit and policy sections.
 
-use custom_ring_interface::{key_catalog::RingCircuit, CustomRingProof};
+use custom_ring_interface::{key_catalog::RingCircuit, CustomRingProof, ParsedTransact};
 use spr_client::AsyncRpc;
 use spr_hasher::primitives::solana_owner_identity;
 use spr_transaction::TransactionError;
@@ -36,8 +36,18 @@ impl Assembled {
         };
         let byte = |count: usize| u8::try_from(count).map_err(|_| too_many(count));
         let owner_run = &frame.accounts.owner_signers;
-        let stream = parts.data().audit_stream()?;
+        let parsed = ParsedTransact::new(parts.data()?)?;
+        let stream = parsed.audit_stream();
         let class = stream.key.class();
+        // The circuit opens the nullifiers the program chains, zero past `n` up to the input class.
+        let input_nullifiers = parsed
+            .data()
+            .nullifiers
+            .iter()
+            .copied()
+            .chain(core::iter::repeat([0; 32]))
+            .take(class)
+            .collect();
         let entries = match parts.entry {
             true => audit.entry_openings(class)?,
             false => Vec::new(),
@@ -59,13 +69,14 @@ impl Assembled {
             outputs: audit.output_openings(stream.capacity)?,
             input_count: byte(frame.published_inputs)?,
             inputs: audit.input_openings(class)?,
+            input_nullifiers,
+            input_nullifier_chain: parsed.input_nullifier_chain()?,
             entries,
             signer_count: byte(owner_run.len())?,
             signers: signer_identities(owner_run, class)?,
             rows: frame.policy.rows.clone(),
             private_tx_hash: parts.private_tx_hash,
             private_tx_blinding: frame.private_tx_blinding,
-            address_chain: frame.address_chain,
             in_proof: parts.in_proof_owner.is_some(),
             hidden: parts.anonymous.is_some(),
             delegate: parts.rail.is_delegate(),

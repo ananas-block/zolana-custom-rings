@@ -20,16 +20,16 @@ mod tests;
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
     key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend, UnreadSubjects},
-    AnonymousParties, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
-    InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg,
-    PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts, SignerSet,
-    TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, TRANSFER_OUTPUT_CAPACITIES,
+    AnonymousParties, CheckedAuthorization, CustomRingError, CustomRingProof, FramedSenderBundle,
+    InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof,
+    PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts,
+    SignerSet, TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, TRANSFER_OUTPUT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
 use spr_client::{AsyncRpc, ClientError, OwnerAuthorization, ProofAuthority, Shape, TransferInput};
 use spr_event::is_confidential_encrypted_output;
-use spr_hasher::{hash_chain::create_hash_chain_from_slice, primitives::solana_owner_identity};
+use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::instruction::instruction_data::transact::CacheAccess;
 use spr_interface::{instruction::TreeContext, N_PUBLIC_SLOTS};
 use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey, X25519Pubkey};
@@ -44,8 +44,8 @@ use spr_transaction::{
 use zolana_ring_client::{rpc::SubjectListSalt, AsyncRingIndexer};
 use zolana_ring_keys::RingKeys;
 use zolana_ring_policy::{ApprovalTotals, Member};
-use zolana_ring_transaction::random_field_element;
 use zolana_ring_transaction::{published_outputs, PublishedSlot, RingDelivery, RingOutputRail};
+use zolana_ring_transaction::{random_field_element, ClassifiedInput};
 
 pub use self::{
     anonymous::{
@@ -414,7 +414,6 @@ struct Frame {
     published_inputs: usize,
     policy: PolicyInputs,
     private_tx_blinding: [u8; 32],
-    address_chain: [u8; 32],
     sender_pk_hash: [u8; 32],
     public_assets: [[u8; 32]; N_PUBLIC_SLOTS],
     public_amount_fields: [[u8; 32]; N_PUBLIC_SLOTS],
@@ -670,7 +669,7 @@ impl<'a> Prepared<'a> {
                 for input in proof_inputs
                     .input_utxos
                     .iter()
-                    .filter(|input| !input.is_dummy())
+                    .filter(|input| input.is_note())
                 {
                     assets.push(*Member::asset(&input.utxo.asset.asset)?.as_bytes());
                 }
@@ -743,18 +742,14 @@ impl<'a> Prepared<'a> {
         preview.wide_owners = wide_owners;
 
         // The auditor message precedes every hash over the external data.
-        let unsealed = preview.parts(&proof_inputs, &rail, &sender)?;
+        let unsealed_parts = preview.parts(&proof_inputs, &rail, &sender)?;
+        let unsealed = unsealed_parts.data()?;
         let (layout, flags) = (
-            unsealed
-                .data()
-                .audit_stream()
-                .map_err(|error| match error {
-                    CustomRingError::RingShapeUnkeyed => {
-                        RingError::ShapeUnkeyed { rail: ring_rail }
-                    }
-                    error => error.into(),
-                })?,
-            unsealed.data().audit_layout(),
+            unsealed.audit_stream().map_err(|error| match error {
+                CustomRingError::RingShapeUnkeyed => RingError::ShapeUnkeyed { rail: ring_rail },
+                error => error.into(),
+            })?,
+            unsealed.audit_layout(),
         );
         let sealed = match presealed {
             Some(presealed) => {
@@ -858,11 +853,14 @@ impl<'a> Sealed<'a> {
             }
         };
         let transfers = &proof_inputs.external_data.interface_transfers;
-        let no_spend = audit::real_input_count(&proof_inputs.input_utxos)? == 0;
+        let spends_note = proof_inputs
+            .input_utxos
+            .iter()
+            .any(ClassifiedInput::is_note);
         let demand = match ring_rail.is_delegate() {
             true => CoSignDemand::NONE,
             false => CoSignOperation {
-                spends_note: !no_spend,
+                spends_note,
                 public_legs: public.classes(),
                 approval: policy.approval,
             }
@@ -915,7 +913,7 @@ impl<'a> Sealed<'a> {
         let approval_opening = match approval_blinder {
             Some(blinder) => {
                 let totals =
-                    approval_totals_of(&proof_inputs, parts.data().audit_stream()?.capacity)?;
+                    approval_totals_of(&proof_inputs, parts.data()?.audit_stream()?.capacity)?;
                 parts.extensions.approval_totals = Some(totals.commitment(&blinder)?);
                 Some(ApprovalOpening::of(&totals, &blinder))
             }
@@ -952,13 +950,12 @@ impl<'a> Sealed<'a> {
             })
             .collect();
         if parts
-            .data()
+            .data()?
             .external_data_hash(config.account(), &settlement_views)?
             != proof_inputs.external_data.hash()?
         {
             return Err(RingError::ExternalDataMismatch);
         }
-        let address_chain = address_chain(&proof_inputs.input_utxos)?;
         let unwitnessed = Unwitnessed {
             frame: Frame {
                 ring,
@@ -969,7 +966,6 @@ impl<'a> Sealed<'a> {
                 published_inputs,
                 policy,
                 private_tx_blinding,
-                address_chain,
                 sender_pk_hash,
                 public_assets,
                 public_amount_fields,
@@ -1086,12 +1082,16 @@ impl Unwitnessed<'_> {
         let private_tx_hash = spp.private_tx_hash();
         frame.parts.private_tx_hash = private_tx_hash;
         let auditor = config.auditor_pubkey;
+        let parsed = ParsedTransact::new(frame.parts.data()?)?;
         // Only the in-proof owner is named, the signer set carries the signer rail's owners.
-        let sender = match frame.parts.in_proof_owner.is_some() {
-            true => frame.sender_pk_hash,
-            false => [0; 32],
+        let sender = match parsed.authorization() {
+            CheckedAuthorization::ConfidentialInProof(_) => frame.sender_pk_hash,
+            CheckedAuthorization::ConfidentialSigner
+            | CheckedAuthorization::AnonymousHidden(_)
+            | CheckedAuthorization::AnonymousPublic
+            | CheckedAuthorization::Delegate
+            | CheckedAuthorization::AnonymousDelegate => [0; 32],
         };
-        let parsed = ParsedTransact::new(frame.parts.data())?;
         let signers = SignerSet::new(
             frame.accounts.owner_signers.iter().map(Address::as_array),
             parsed.audit_stream().key.signer_slots(),
@@ -1302,11 +1302,12 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
         policy: None,
         spl_withdrawal_owners: Vec::new(),
         approval: ApprovalMask::default(),
-        no_spend: parts
+        // `R == 0`, an address spends no note and still needs SPP's authorization.
+        no_spend: !parts
             .inputs
             .input_utxos
             .iter()
-            .all(SppProofInputUtxo::is_dummy),
+            .any(ClassifiedInput::is_note),
         public_owners: preview.public_owners,
         expiry_unix_ts: preview.expiry_unix_ts,
         tx_viewing_u: parts.tx_viewing_u,
@@ -1357,19 +1358,6 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
                 second_inputs: 0,
             },
         },
-    }
-}
-
-/// Mirror `PrivateTxHash`, no chain folds an empty list.
-fn address_chain(inputs: &[SppProofInputUtxo]) -> Result<[u8; 32], RingError> {
-    let nullifiers: Vec<[u8; 32]> = inputs
-        .iter()
-        .filter(|input| input.is_address())
-        .map(SppProofInputUtxo::nullifier)
-        .collect();
-    match nullifiers.is_empty() {
-        true => Ok([0; 32]),
-        false => Ok(create_hash_chain_from_slice(&nullifiers)?),
     }
 }
 
@@ -1560,7 +1548,7 @@ pub(crate) fn approval_totals_of(
     let senders = inputs
         .input_utxos
         .iter()
-        .filter(|input| !input.is_dummy() && !input.is_address())
+        .filter(|input| input.is_note())
         .map(|input| Ok(input.utxo.owner.owner_proof_input_hash()?))
         .collect::<Result<Vec<_>, RingError>>()?;
     Outflows {

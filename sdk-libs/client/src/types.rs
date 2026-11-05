@@ -1,5 +1,6 @@
 use core::fmt;
 
+use custom_ring_interface::InputClass;
 #[cfg(feature = "rpc")]
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -114,8 +115,10 @@ pub struct AuditedInput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputOpening {
-    /// At or past `R`.
+    /// Past the notes and addresses.
     Dummy,
+    /// SPP's address slot, neither a spent note nor evidence of an owner.
+    Address,
     /// A spent note, never padding or unspent.
     Real,
     /// A default-ring note whose opening the frame carries.
@@ -123,14 +126,18 @@ pub enum InputOpening {
 }
 
 impl InputOpening {
-    pub fn is_real(&self) -> bool {
-        !matches!(self, Self::Dummy)
+    pub fn class(&self) -> InputClass {
+        match self {
+            Self::Dummy => InputClass::Dummy,
+            Self::Address => InputClass::Address,
+            Self::Real | Self::External(_) => InputClass::Note,
+        }
     }
 
     pub fn default_input(&self) -> Option<&AuditedDefaultInput> {
         match self {
             Self::External(input) => Some(input.as_ref()),
-            Self::Dummy | Self::Real => None,
+            Self::Dummy | Self::Address | Self::Real => None,
         }
     }
 }

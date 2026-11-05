@@ -183,7 +183,9 @@ impl Ledger {
     async fn apply(&self, tree: &mut TrackingTree, entries: &[TrackingEntry]) -> Instruction {
         let revision: Revision = self.state().await.account.newest().revision;
         let chain_start = tracking_chain_start(&self.registry, revision).unwrap();
-        let inputs = tree.apply(chain_start, entries).unwrap();
+        let applied = tree.clone().apply(chain_start, entries).unwrap();
+        *tree = applied.tree;
+        let inputs = applied.proof;
         let data = ApplyEnrollmentsIxData {
             revision,
             apply: apply_data(inputs.new_root, inputs.new_next_index),

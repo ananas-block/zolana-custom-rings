@@ -15,6 +15,7 @@ use zolana_ring_policy::{
     ApprovalInputs, EncodedRuleTable, Member, MintPolicy, OutputSubjects, PaymentSubjects,
     PublicGross, RecordLists, SourceMap,
 };
+use zolana_ring_transaction::ClassifiedInput;
 
 use super::{
     audit::is_default_ring,
@@ -289,7 +290,7 @@ impl PolicyRead<'_> {
             .inputs
             .input_utxos
             .iter()
-            .filter(|input| !input.is_dummy() && !input.is_address())
+            .filter(|input| input.is_note())
             .filter(|input| !(delegate && input.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY))
             .map(|input| Ok(input.utxo.owner.owner_proof_input_hash()?))
             .collect::<Result<Vec<_>, RingError>>()?;
@@ -345,9 +346,9 @@ impl PolicyRead<'_> {
             .input_utxos
             .iter()
             .filter(|input| !input.is_compact())
-            .map(|input| match input.is_dummy() || input.is_address() {
-                true => Ok(None),
-                false => Ok(Some(*Member::asset(&input.utxo.asset.asset)?.as_bytes())),
+            .map(|input| match input.is_note() {
+                false => Ok(None),
+                true => Ok(Some(*Member::asset(&input.utxo.asset.asset)?.as_bytes())),
             })
             .collect()
     }
@@ -355,7 +356,7 @@ impl PolicyRead<'_> {
     /// A keyed ring note spends under its owner's enrolled key, a zero key waives the equality alone.
     fn check_input_keys(&self, pool: &TrackingPoolRead) -> Result<(), RingError> {
         for (index, input) in self.inputs.input_utxos.iter().enumerate() {
-            if input.is_dummy()
+            if !input.is_note()
                 || is_default_ring(input)
                 || input.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY
             {
@@ -385,11 +386,11 @@ impl PolicyRead<'_> {
             let row = pool.record(member);
             check_output_key(row, &address.nullifier_pubkey, slot_index)?;
             // A spending owner holds every key it ever enrolled.
-            let spends = self.inputs.input_utxos.iter().any(|input| {
-                !input.is_dummy()
-                    && !input.is_address()
-                    && input.utxo.owner == address.signing_pubkey
-            });
+            let spends = self
+                .inputs
+                .input_utxos
+                .iter()
+                .any(|input| input.is_note() && input.utxo.owner == address.signing_pubkey);
             if !spends {
                 check_recipient_viewing_key(row, &address.viewing_pubkey.u(), slot_index)?;
             }

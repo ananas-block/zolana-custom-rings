@@ -1,5 +1,6 @@
 use custom_ring_interface::{
-    AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout, DataTail, EntryInput, RecordKind,
+    AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout, DataTail, EntryInput, InputClass,
+    RecordKind,
 };
 use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
 
@@ -44,6 +45,17 @@ fn data_layout() -> AuditStreamLayout {
         has_data: true,
         ..plain_layout()
     }
+}
+
+/// `notes` spent notes lead, dummies fill the key's input class.
+fn notes(layout: AuditStreamLayout, notes: usize) -> InputMap {
+    let classes: Vec<InputClass> = (0..layout.key.class())
+        .map(|slot| match slot < notes {
+            true => InputClass::Note,
+            false => InputClass::Dummy,
+        })
+        .collect();
+    InputMap::from_classes(&classes, layout.inputs).unwrap()
 }
 
 fn ring_record(byte: u8) -> AuditRecord {
@@ -111,7 +123,7 @@ fn the_envelope_opens_to_the_sealed_key_and_a_resend_seals_another_stream() {
             layout: plain_layout(),
             tx_viewing_key: &tx_viewing_key,
             salt,
-            real_inputs: 1,
+            inputs: notes(plain_layout(), 1),
             evidence: AuditEvidence::None,
             records: vec![ring_record(1), AuditRecord::default()],
             tails: Vec::new(),
@@ -124,7 +136,7 @@ fn the_envelope_opens_to_the_sealed_key_and_a_resend_seals_another_stream() {
     assert_ne!(first.envelope, seal(&[8; 16]).envelope);
     let opened = opened_envelope(&first, &auditor, plain_layout()).unwrap();
     assert_eq!(opened.tx_viewing_key.pubkey(), tx_viewing_key.pubkey());
-    assert_eq!(opened.real_inputs, 1);
+    assert_eq!(opened.inputs, notes(plain_layout(), 1));
     assert_eq!(opened.evidence, AuditEvidence::None);
     assert!(first.tails.is_empty());
 }
@@ -135,12 +147,15 @@ fn an_unclamped_envelope_secret_is_refused() {
     let canonical = ViewingKey::new();
     let mut unclamped = *canonical.secret_bytes();
     unclamped[0] |= 0b111;
-    let sealed = raw_envelope(&[&unclamped[..], &[1]].concat(), &auditor);
+    let sealed = raw_envelope(&[&unclamped[..], &[1], &[0; 8]].concat(), &auditor);
     assert!(matches!(
         opened_envelope(&sealed, &auditor, plain_layout()),
         Err(AuditError::NonCanonicalViewingKey)
     ));
-    let sealed = raw_envelope(&[&canonical.secret_bytes()[..], &[1]].concat(), &auditor);
+    let sealed = raw_envelope(
+        &[&canonical.secret_bytes()[..], &[1], &[0; 8]].concat(),
+        &auditor,
+    );
     assert_eq!(
         opened_envelope(&sealed, &auditor, plain_layout())
             .unwrap()
@@ -160,7 +175,7 @@ fn a_record_opens_only_at_the_counter_of_its_slot() {
         layout: plain_layout(),
         tx_viewing_key: &tx_viewing_key,
         salt: &SALT,
-        real_inputs: 1,
+        inputs: notes(plain_layout(), 1),
         evidence: AuditEvidence::None,
         records: vec![record, AuditRecord::default()],
         tails: Vec::new(),
@@ -191,7 +206,7 @@ fn a_tail_opens_only_at_the_counter_of_its_slot() {
         layout: data_layout(),
         tx_viewing_key: &tx_viewing_key,
         salt: &SALT,
-        real_inputs: 1,
+        inputs: notes(data_layout(), 1),
         evidence: AuditEvidence::None,
         records: vec![ring_record(1), AuditRecord::default()],
         tails: vec![tail, DataTail::default()],
@@ -215,7 +230,7 @@ fn the_entry_evidence_and_records_round_their_own_regions() {
         layout: entry_layout(),
         tx_viewing_key: &tx_viewing_key,
         salt: &SALT,
-        real_inputs: 1,
+        inputs: notes(entry_layout(), 1),
         evidence: entry_evidence(),
         records: vec![AuditRecord::default(), ring_record(0x27)],
         tails: Vec::new(),
@@ -243,7 +258,7 @@ fn a_seal_off_its_layout_is_refused() {
             layout,
             tx_viewing_key: &tx_viewing_key,
             salt: &SALT,
-            real_inputs: 1,
+            inputs: notes(layout, 1),
             evidence,
             records,
             tails,
@@ -281,6 +296,7 @@ fn evidence_outside_the_field_is_refused() {
         custom_ring_interface::AuditEnvelope {
             tx_viewing_secret: secret,
             real_inputs: 1,
+            address_input_bits: 0,
             evidence,
         }
         .encode()
@@ -297,7 +313,7 @@ fn evidence_outside_the_field_is_refused() {
         let AuditEvidence::Entry { inputs, .. } = &mut entry else {
             unreachable!("the entry evidence");
         };
-        spoil(&mut inputs[1]);
+        spoil(&mut inputs[0]);
         let sealed = raw_envelope(&plaintext(entry), &auditor);
         assert!(matches!(
             opened_envelope(&sealed, &auditor, entry_layout()),
@@ -306,4 +322,106 @@ fn evidence_outside_the_field_is_refused() {
     }
     let sealed = raw_envelope(&plaintext(entry_evidence()), &auditor);
     assert!(opened_envelope(&sealed, &auditor, entry_layout()).is_ok());
+}
+
+fn interleaved_layout() -> AuditStreamLayout {
+    AuditStreamLayout {
+        key: AuditKey {
+            class: 4,
+            entry: true,
+        },
+        inputs: 3,
+        ..entry_layout()
+    }
+}
+
+/// SPP order `note, address, note` with a dummy past `n`, the second note a default-ring entry.
+fn interleaved() -> InputMap {
+    use InputClass::{Address, Dummy, Note};
+    InputMap::from_classes(&[Note, Address, Note, Dummy], 3).unwrap()
+}
+
+fn entry_at(default_input_bits: u64, slot: usize) -> AuditEvidence {
+    let AuditEvidence::Entry { inputs, .. } = entry_evidence() else {
+        unreachable!("the entry evidence");
+    };
+    let mut openings = vec![EntryInput::default(); 3];
+    openings[slot] = inputs[0];
+    AuditEvidence::Entry {
+        default_input_bits,
+        inputs: openings,
+    }
+}
+
+#[test]
+fn an_address_between_notes_opens_at_its_absolute_position() {
+    let auditor = X25519Keypair::new();
+    let tx_viewing_key = ViewingKey::new();
+    let sealed = AuditStreamSeal {
+        layout: interleaved_layout(),
+        tx_viewing_key: &tx_viewing_key,
+        salt: &SALT,
+        inputs: interleaved(),
+        evidence: entry_at(0b100, 2),
+        records: vec![ring_record(1), AuditRecord::default()],
+        tails: Vec::new(),
+    }
+    .seal(&auditor.pubkey())
+    .unwrap();
+    let opened = opened_envelope(&sealed, &auditor, interleaved_layout()).unwrap();
+    assert_eq!(opened.inputs, interleaved());
+    assert_eq!(opened.inputs.note_count(), 2);
+    assert_eq!(opened.inputs.slot(1), Some(InputClass::Address));
+    assert_eq!(opened.evidence, entry_at(0b100, 2));
+}
+
+/// Entry bits name notes alone, and a map off the layout's count or class seals nothing.
+#[test]
+fn a_default_bit_on_an_address_or_a_map_off_its_layout_is_refused() {
+    let auditor = X25519Keypair::new();
+    let secret = *ViewingKey::new().secret_bytes();
+    let plaintext = custom_ring_interface::AuditEnvelope {
+        tx_viewing_secret: secret,
+        real_inputs: 2,
+        address_input_bits: 0b010,
+        evidence: entry_at(0b010, 1),
+    }
+    .encode();
+    let sealed = raw_envelope(&plaintext, &auditor);
+    assert!(matches!(
+        opened_envelope(&sealed, &auditor, interleaved_layout()),
+        Err(AuditError::DisclosureField)
+    ));
+    let tx_viewing_key = ViewingKey::new();
+    let seal = |inputs| {
+        AuditStreamSeal {
+            layout: interleaved_layout(),
+            tx_viewing_key: &tx_viewing_key,
+            salt: &SALT,
+            inputs,
+            evidence: entry_at(0b100, 2),
+            records: vec![AuditRecord::default(); 2],
+            tails: Vec::new(),
+        }
+        .seal(&auditor.pubkey())
+    };
+    for off_layout in [notes(entry_layout(), 1), notes(plain_layout(), 1)] {
+        assert!(matches!(
+            seal(off_layout),
+            Err(AuditError::DisclosureLayout)
+        ));
+    }
+    let on_address = AuditStreamSeal {
+        layout: interleaved_layout(),
+        tx_viewing_key: &tx_viewing_key,
+        salt: &SALT,
+        inputs: interleaved(),
+        evidence: entry_at(0b010, 1),
+        records: vec![AuditRecord::default(); 2],
+        tails: Vec::new(),
+    };
+    assert!(matches!(
+        on_address.seal(&auditor.pubkey()),
+        Err(AuditError::DisclosureLayout)
+    ));
 }
