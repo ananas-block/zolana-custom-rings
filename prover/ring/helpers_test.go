@@ -64,9 +64,6 @@ func unfill(dst, src reflect.Value, path string) []error {
 		dst.Set(reflect.New(dst.Type().Elem()))
 		return unfill(dst.Elem(), src, path)
 	}
-	if dst.Type() == reflect.TypeOf(CredentialStateRoot{}) {
-		return append(unfill(dst.FieldByName("TreeID"), src.Index(0), path+".TreeID"), unfill(dst.FieldByName("Root"), src.Index(1), path+".Root")...)
-	}
 	if v, ok := interfaceOf(dst).(viewed); ok {
 		view := reflect.New(reflect.TypeOf(v.view())).Elem()
 		errs := unfill(view, src, path)
@@ -141,18 +138,16 @@ func (v quadPath) flat() []Field {
 	return flat
 }
 
-func (v credentialOpeningView) request() any {
-	return CredentialOpeningParams{
-		Present: v.Present, CredentialLeafParams: v.Leaf,
-		LowValue: v.Gap.Low, LowNext: v.Gap.Next, LowIndex: v.Gap.Index, LowPath: v.Gap.Path,
+func (v enrollmentView) request() any {
+	e := v.Entry
+	return TrackingWrite{
+		Member: e.Member, NullifierPk: e.NullifierPk, CtHash: e.CtHash, View0: e.View0, View1: e.View1, Revision: e.Revision, ListTag: e.ListTag,
+		Exists: v.Exists, OldRecord: v.Old, Index: v.Slot.Index, Path: v.Slot.flat(), LowRecord: v.Low, LowIndex: v.LowSlot.Index, LowPath: v.LowSlot.flat(),
 	}
 }
 
-func (v credentialWriteView) request() any {
-	return CredentialWriteParams{
-		Member: v.Member, ListSalt: v.ListSalt, Leaf: v.Leaf,
-		AddressNext: v.Address.Next, AddressIndex: v.Address.Index, AddressPath: v.Address.Path,
-	}
+func (v privateOwnerView) request() any {
+	return PrivateOwnerParams{ListSalt: v.ListSalt, Record: v.Record, Index: v.Path.Index, Path: v.Path.flat()}
 }
 
 func (v writeView) request() any {

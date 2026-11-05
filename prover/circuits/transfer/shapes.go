@@ -62,55 +62,15 @@ func (s Shape) entries() int {
 	return 0
 }
 
-// rowAddresses mirrors MAX_TRANSACTION_ADDRESSES less SPP_ADDRESSES and RING_ADDRESSES in key_catalog.rs.
-const rowAddresses = 64 - 4 - 5
+// ownerAddresses mirrors OWNER_ADDRESSES in key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
+const ownerAddresses = 64 - 4 - 6
 
-// rowAuthorization mirrors RowAuthorization in key_catalog.rs.
-type rowAuthorization struct {
-	// unsignedRows sign outside the owner run and take their nullifier PDA alone.
-	unsignedRows int
-	// hiddenExit holds every withdrawal to one destination.
-	hiddenExit bool
-	enters     bool
-}
-
-var rowAuthorizations = [...]rowAuthorization{
-	{unsignedRows: 0, enters: true},
-	{unsignedRows: 1, enters: false},
-	{unsignedRows: 1, hiddenExit: true, enters: true},
-}
-
-// ownerRows mirrors TransferAddresses::owner_rows with no co-signer and shared credential trees.
-func (a rowAuthorization) ownerRows(nInputs, legs int) int {
-	return max(rowAddresses-nInputs-legs, 0) + a.unsignedRows
-}
-
-func (a rowAuthorization) legOwners(legs int) int {
-	if a.hiddenExit {
-		return min(legs, 1)
-	}
-	return legs
-}
-
-// publicOwners mirrors TransferShape::public_owners, each row spending one note.
+// publicOwners is the distinct signers and legs one transaction can name, each signer also takes a nullifier PDA.
 func (s Shape) publicOwners() int {
-	most := 0
-	for _, authorization := range rowAuthorizations {
-		if s.Entry && !authorization.enters {
-			continue
-		}
-		for legs := 0; legs <= s.Withdrawals; legs++ {
-			rows := s.Owners
-			for rows > 0 && rows > authorization.ownerRows(rows, legs) {
-				rows--
-			}
-			most = max(most, rows+authorization.legOwners(legs))
-		}
-	}
-	return most
+	return min(s.Owners, (ownerAddresses-s.Withdrawals)/2) + s.Withdrawals
 }
 
-func (s Shape) credentialWithdrawals() int {
+func (s Shape) trackedWithdrawals() int {
 	if !s.Wide {
 		return 0
 	}

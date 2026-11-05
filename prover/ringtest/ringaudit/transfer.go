@@ -7,7 +7,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -24,7 +23,7 @@ type Transfer struct {
 // newTransfer is the fixture transfer of the default keys in the ring of program address 0x90..90.
 func newTransfer(t testing.TB) Transfer {
 	t.Helper()
-	ringProgram := ringregistry.CredentialProgram()
+	ringProgram := ringtest.Repeat(0x90)
 	tr := Transfer{
 		FirstNullifier: big.NewInt(0x1f1f),
 		RingProgramID:  ringtest.HashBytes(t, ringProgram[:]),
