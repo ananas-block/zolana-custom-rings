@@ -6,7 +6,7 @@ use custom_ring_interface::{
     InstructionTag, RegisterKeyCheck,
 };
 use custom_ring_sdk::{
-    CustomRing, DelegateMove, DelegatePayment, DelegateSource, RelayedDeposit,
+    AllowedNullifiers, CustomRing, DelegateMove, DelegatePayment, DelegateSource, RelayedDeposit,
     RelayedTransferInput, RingClient, RingIndexerBackend, RingTransfer, WideFrames,
 };
 use solana_address::Address;
@@ -39,6 +39,8 @@ pub struct DelegateSeal<'a> {
     pub ring: Address,
     pub delegate: Address,
     pub sources: &'a [SealedSource],
+    /// Admitted from `sources`, the relay holds the sealed inputs to it before proving.
+    pub allowed: &'a AllowedNullifiers,
     pub tx_viewing_key: ViewingKey,
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,

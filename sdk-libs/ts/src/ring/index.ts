@@ -275,6 +275,7 @@ export type {
   PublicTotalsOpening,
 } from "../protocol/membership/approval-totals.js";
 export {
+  AllowedNullifiers,
   VerifiedRelayMessage,
   decodeApprovalOpening,
   decodeRelayFunderTerms,
@@ -288,6 +289,7 @@ export {
   type FundedLeg,
   type RelayFunderTerms,
   type RelayTransferTerms,
+  type RequestedAuthorityTransfer,
   type SlotOpening,
   type TokenAccountCreate,
 } from "../rpc/relay-message.js";

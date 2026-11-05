@@ -23,15 +23,15 @@ use spr_program::instruction::CreateAssociatedTokenAccount;
 use spr_transaction::{Mint, Utxo, WalletUtxo};
 use thiserror::Error;
 use zolana_ring_client::{
-    rpc::{
-        PrepareAuthorityTransferRequest, RelayEnrollInputs, RelayId, RelayQuote, TxViewingSecret,
-        ENROLL_COMPUTE_UNITS,
-    },
+    rpc::{RelayEnrollInputs, RelayId, TxViewingSecret, ENROLL_COMPUTE_UNITS},
     AuditEnvelope, OpenedAudit,
 };
 use zolana_ring_policy::{ApprovalTotals, Member, OutputTotals, PublicTotals};
 
-use crate::{pipeline::delegate_rail, CustomRing, CustomRingConfig, PendingSignature, RingError};
+use crate::{
+    pipeline::delegate_rail, AllowedNullifiers, CustomRing, CustomRingConfig, PendingSignature,
+    RequestedAuthorityTransfer, RingError,
+};
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum MessageMismatch {
@@ -71,6 +71,8 @@ pub enum MessageMismatch {
     ApprovalOverLimit,
     #[error("the message spends a held note the terms do not name")]
     SpendsUnnamedNote,
+    #[error("the message spends a note no requested source opening derives")]
+    SpendsUnrequestedNote,
     #[error("the terms open another number of data outputs than the proof counts for the signer")]
     DataOutputCount,
     #[error("the deposit legs the signer funds differ from its terms")]
@@ -289,6 +291,8 @@ pub(crate) struct ExpectedDelegate {
     /// Change returns to an input's owner.
     pub sources: Vec<ExpectedOwner>,
     pub payments: Vec<ExpectedPayment>,
+    /// Admitted from the delegate's own openings of exactly the requested sources.
+    pub allowed: AllowedNullifiers,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -561,12 +565,15 @@ impl ExpectedEnroll {
 }
 
 impl ExpectedDelegate {
-    pub fn new(
-        request: &PrepareAuthorityTransferRequest,
-        quote: &RelayQuote,
-        config: &CustomRingConfig,
-    ) -> Result<Self, RingError> {
+    pub fn new(requested: &RequestedAuthorityTransfer<'_>) -> Result<Self, RingError> {
+        let RequestedAuthorityTransfer {
+            request,
+            quote,
+            config,
+            allowed,
+        } = requested;
         let transfer = &request.transfer;
+        allowed.check_sources(transfer.sources.iter().map(|source| &source.0))?;
         Ok(Self {
             ring: CustomRing::new(request.ring.0),
             fee_payer: quote.fee_payer.0,
@@ -590,6 +597,7 @@ impl ExpectedDelegate {
                     })
                 })
                 .collect::<Result<_, RingError>>()?,
+            allowed: allowed.clone(),
         })
     }
 
@@ -612,10 +620,17 @@ impl ExpectedDelegate {
     fn check_moved(&self, parsed: &ParsedTransact<'_>) -> Result<(), MessageMismatch> {
         let data = parsed.data();
         let opened = open_stream(parsed, &self.tx_viewing_key, &self.auditor)?;
-        // The request names ring payments alone, a leg or a data commitment moves what no one asked.
+        // 1. The request names ring payments alone, a leg or a data commitment moves what no one
+        // asked.
         if !data.interface_transfers.is_empty() || data.has_data {
             return Err(MessageMismatch::Data);
         }
+        // 2. Matching outputs bind no input, each proven note position answers to the requested
+        // openings.
+        self.allowed
+            .check_inputs(opened.inputs.classes().zip(data.nullifiers))
+            .map_err(|_| MessageMismatch::SpendsUnrequestedNote)?;
+        // 3. Each live record pays one requested payment or returns change to a requested source.
         let records = data
             .outputs
             .iter()

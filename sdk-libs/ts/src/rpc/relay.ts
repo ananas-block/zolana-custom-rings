@@ -21,7 +21,6 @@ import {
 import type {
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
-  RelayQuote,
   RelayStatus,
   RelayStep,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
@@ -36,6 +35,7 @@ import {
   type ExpectedRelayMessage,
   expectedDelegate,
   mismatch,
+  type RequestedAuthorityTransfer,
   type VerifiedRelayMessage,
 } from "./relay-message.js";
 import type { RingRpc } from "./ring-rpc.js";
@@ -94,18 +94,13 @@ export class PreparedRelay {
 /** Rust `PreparedAuthorityTransfer`, the delegate signs only a message the quoted fee payer pays. */
 export class PreparedAuthorityTransfer {
   readonly request: PrepareAuthorityTransferRequest;
-  readonly quote: RelayQuote;
-  /** The auditor key and the rail come from the ring account. */
-  readonly config: DelegateRingConfig;
+  readonly #requested: RequestedAuthorityTransfer;
 
-  constructor(
-    request: PrepareAuthorityTransferRequest,
-    quote: RelayQuote,
-    config: DelegateRingConfig,
-  ) {
-    this.request = request;
-    this.quote = quote;
-    this.config = config;
+  /** Rust `RequestedAuthorityTransfer::prepare`, refuses an allowed set built for other sources. */
+  constructor(requested: RequestedAuthorityTransfer) {
+    requested.allowed.checkSources(requested.request.transfer.sources);
+    this.request = requested.request;
+    this.#requested = requested;
     Object.freeze(this);
   }
 
@@ -115,7 +110,7 @@ export class PreparedAuthorityTransfer {
   }
 
   async send(relay: RingAuthorityRelayClient, context?: RequestContext): Promise<RelaySent> {
-    const expected = await expectedDelegate(this.request, this.quote, this.config);
+    const expected = await expectedDelegate(this.#requested);
     const step = await relay.prepareAuthorityTransfer(this.request, context);
     return accepted({ step, relayId: this.relayId(), expected });
   }

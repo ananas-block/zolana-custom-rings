@@ -751,10 +751,13 @@ mod delegate_message {
 
     use super::*;
     use crate::{
+        delegate_source::tests::allowed_as_pinned,
         relay_message::ExpectedDelegate,
         tests::support::{pinned_vector, relay_message, verdict, MessageCase, MessageVector},
-        DelegateMove, DelegateOutput, DelegatePayment, DelegateSource, DelegateWithdrawal,
-        MessageMismatch, PreparedAuthorityTransfer, RelaySent, RelayedTransferInput, RingTransfer,
+        AllowedNullifiers, CoOwner, CustomRingConfig, DelegateMove, DelegateOutput,
+        DelegatePayment, DelegateSource, DelegateSourceError, DelegateWithdrawal, MessageMismatch,
+        RelaySent, RelayedTransferInput, RequestedAuthorityTransfer, ResolvedSource, RingTransfer,
+        SourceEnrollment,
     };
 
     const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
@@ -1006,6 +1009,107 @@ mod delegate_message {
         }
     }
 
+    /// Each member's escrowed key as the delegate reads it, the move's own notes stay the test's.
+    struct Escrow<'a>(&'a [(ShieldedKeypair, Vec<WalletUtxo>)]);
+
+    #[async_trait]
+    impl SourceEnrollment for Escrow<'_> {
+        type Error = DelegateSourceError;
+
+        async fn escrowed_key(
+            &self,
+            source: &ShieldedAddress,
+        ) -> Result<Option<spr_keypair::NullifierKey>, DelegateSourceError> {
+            Ok(self
+                .0
+                .iter()
+                .find(|(member, _)| member.shielded_address().unwrap() == *source)
+                .map(|(member, _)| member.nullifier_key.clone()))
+        }
+    }
+
+    impl DelegateRelay {
+        async fn allowed(&self, transfer: &AuthorityTransfer) -> AllowedNullifiers {
+            let mut allowed = AllowedNullifiers::default();
+            for source in &transfer.sources {
+                let resolved = ResolvedSource::resolve(source.0, &Escrow(&self.members))
+                    .await
+                    .unwrap();
+                let (_, notes) = self
+                    .members
+                    .iter()
+                    .find(|(member, _)| member.shielded_address().unwrap() == source.0)
+                    .unwrap();
+                allowed.admit(&resolved, notes).unwrap();
+            }
+            allowed
+        }
+
+        async fn expected(
+            &self,
+            asked: &PrepareAuthorityTransferRequest,
+            config: &CustomRingConfig,
+        ) -> ExpectedDelegate {
+            ExpectedDelegate::new(&RequestedAuthorityTransfer {
+                request: asked.clone(),
+                quote: &quote(),
+                config,
+                allowed: self.allowed(&asked.transfer).await,
+            })
+            .unwrap()
+        }
+
+        /// `victim`'s note funds the requested payment and its change returns to `source`, every
+        /// output exactly as asked.
+        async fn victim_funded(
+            &self,
+            asked: &PrepareAuthorityTransferRequest,
+            source: &ShieldedKeypair,
+            victim: &ShieldedKeypair,
+        ) -> Instruction {
+            let assets = AssetRegistry::default();
+            let (_, notes) = self
+                .members
+                .iter()
+                .find(|(member, _)| member.pubkey() == victim.pubkey())
+                .unwrap();
+            let payment = &asked.transfer.payments[0];
+            let source_address = source.shielded_address().unwrap();
+            let transfer = crate::DelegateTransfer::new(crate::DelegateTransferInput {
+                ring: ring(),
+                delegate: self.delegate,
+                payer: FEE_PAYER,
+                source: source_address,
+                source_nullifier_key: &source.nullifier_key,
+                inputs: notes.clone(),
+                outputs: vec![
+                    DelegateOutput {
+                        recipient: payment.recipient.0,
+                        asset: payment.mint.0,
+                        amount: payment.amount,
+                    },
+                    DelegateOutput {
+                        recipient: source_address,
+                        asset: payment.mint.0,
+                        amount: 10 - payment.amount,
+                    },
+                ],
+            })
+            .with_co_source(CoOwner {
+                owner: victim.pubkey(),
+                nullifier_key: &victim.nullifier_key,
+            })
+            .with_assets(&assets)
+            .with_tx_viewing_key(asked.tx_viewing_key.key().unwrap());
+            let framed = transfer.frame(&self.client).await.ok().unwrap();
+            let frame = &framed.frame;
+            frame
+                .accounts
+                .instruction(frame.ring, framed.config.account(), &frame.parts)
+                .unwrap()
+        }
+    }
+
     #[async_trait]
     impl RingRelay for DelegateRelay {
         async fn get_relay_quote(
@@ -1087,8 +1191,15 @@ mod delegate_message {
         let delegate = keypair(7);
         let relay = DelegateRelay::new(answer, delegate.pubkey());
         let config = ring().require_config(relay.client.zolana()).await.unwrap();
-        let prepared =
-            PreparedAuthorityTransfer::new(request(delegate.pubkey()), &quote(), &config).unwrap();
+        let asked = request(delegate.pubkey());
+        let prepared = RequestedAuthorityTransfer {
+            allowed: relay.allowed(&asked.transfer).await,
+            request: asked,
+            quote: &quote(),
+            config: &config,
+        }
+        .prepare()
+        .unwrap();
         let RelaySent::SignMessage(pending) = prepared.send(&relay).await.unwrap() else {
             panic!("the delegate signs the move");
         };
@@ -1179,7 +1290,7 @@ mod delegate_message {
             let relay = DelegateRelay::on_mode(Answer::Honest, delegate.pubkey(), mode);
             let asked = request(delegate.pubkey());
             let config = ring().require_config(relay.client.zolana()).await.unwrap();
-            let expected = ExpectedDelegate::new(&asked, &quote(), &config).unwrap();
+            let expected = relay.expected(&asked, &config).await;
             let verdict_of = |frame: Instruction| {
                 expected
                     .check(&relay_message(&FEE_PAYER, &[frame], UNITS).0)
@@ -1234,8 +1345,9 @@ mod delegate_message {
             let mut other_mint = asked.clone();
             other_mint.transfer.payments[0].mint = SerializablePubkey(USDC.asset);
             assert_eq!(
-                ExpectedDelegate::new(&other_mint, &quote(), &config)
-                    .unwrap()
+                relay
+                    .expected(&other_mint, &config)
+                    .await
                     .check(&relay_message(&FEE_PAYER, std::slice::from_ref(&honest), UNITS).0)
                     .map(drop),
                 Err(MessageMismatch::Recipients),
@@ -1286,8 +1398,9 @@ mod delegate_message {
             unclamped.tx_viewing_key =
                 serde_json::from_value(serde_json::json!(Base64String(vec![1; 32]))).unwrap();
             assert_eq!(
-                ExpectedDelegate::new(&unclamped, &quote(), &config)
-                    .unwrap()
+                relay
+                    .expected(&unclamped, &config)
+                    .await
                     .check(&relay_message(&FEE_PAYER, std::slice::from_ref(&honest), UNITS).0)
                     .map(drop),
                 Err(MessageMismatch::TransactionKey),
@@ -1327,7 +1440,7 @@ mod delegate_message {
                     .await
                     .unwrap();
                 let config = ring().require_config(relay.client.zolana()).await.unwrap();
-                let expected = ExpectedDelegate::new(&asked, &quote(), &config).unwrap();
+                let expected = relay.expected(&asked, &config).await;
                 expected
                     .check(&relay_message(&FEE_PAYER, std::slice::from_ref(&frame), UNITS).0)
                     .map(drop)
@@ -1398,7 +1511,7 @@ mod delegate_message {
                 .await
                 .unwrap();
             let config = ring().require_config(relay.client.zolana()).await.unwrap();
-            let expected = ExpectedDelegate::new(&asked, &quote(), &config).unwrap();
+            let expected = relay.expected(&asked, &config).await;
             expected
                 .check(&relay_message(&FEE_PAYER, std::slice::from_ref(&frame), UNITS).0)
                 .map(drop)
@@ -1466,6 +1579,91 @@ mod delegate_message {
                 ),
             }
         }
+    }
+
+    /// Every output pays exactly what the request asks and returns the change to its source, the
+    /// note spent is still another member's.
+    #[tokio::test]
+    async fn a_victims_note_under_the_requested_outputs_is_refused_on_both_rails() {
+        let delegate = keypair(7);
+        let (member, victim) = (keypair(1), keypair(3));
+        for mode in [RingMode::Confidential, RingMode::Anonymous] {
+            let relay = DelegateRelay::on_mode(Answer::Honest, delegate.pubkey(), mode);
+            let asked = request(delegate.pubkey());
+            let config = ring().require_config(relay.client.zolana()).await.unwrap();
+            let expected = relay.expected(&asked, &config).await;
+            let stolen = relay.victim_funded(&asked, &member, &victim).await;
+
+            let mut paid = expected.clone();
+            paid.allowed = relay
+                .allowed(&AuthorityTransfer {
+                    sources: vec![SerializableShieldedAddress(
+                        victim.shielded_address().unwrap(),
+                    )],
+                    payments: Vec::new(),
+                })
+                .await;
+            assert_eq!(
+                paid.check(&relay_message(&FEE_PAYER, std::slice::from_ref(&stolen), UNITS).0)
+                    .map(drop),
+                Ok(()),
+                "{mode:?} the outputs alone match the request"
+            );
+            assert_eq!(
+                expected
+                    .check(&relay_message(&FEE_PAYER, &[stolen], UNITS).0)
+                    .map(drop),
+                Err(MessageMismatch::SpendsUnrequestedNote),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_allowed_set_for_other_sources_is_refused() {
+        let delegate = keypair(7);
+        let relay = DelegateRelay::new(Answer::Honest, delegate.pubkey());
+        let config = ring().require_config(relay.client.zolana()).await.unwrap();
+        let asked = request(delegate.pubkey());
+        let mut other = asked.transfer.clone();
+        other.sources = vec![SerializableShieldedAddress(
+            keypair(3).shielded_address().unwrap(),
+        )];
+
+        let refused = RequestedAuthorityTransfer {
+            allowed: relay.allowed(&other).await,
+            request: asked,
+            quote: &quote(),
+            config: &config,
+        }
+        .prepare();
+
+        assert!(matches!(
+            refused,
+            Err(RingError::DelegateSource(
+                DelegateSourceError::SourcesMismatch
+            ))
+        ));
+    }
+
+    /// A pinned frame's published nullifiers, the honest case spends only the vector source's note.
+    fn published_nullifiers(message: &[u8]) -> Vec<[u8; 32]> {
+        let message: solana_message::VersionedMessage = wincode::deserialize(message).unwrap();
+        message
+            .instructions()
+            .iter()
+            .filter_map(|instruction| {
+                let data = instruction.data.split_first()?;
+                (*data.0 == tag::AUTHORITY_TRANSFER).then_some(data.1)
+            })
+            .flat_map(|data| {
+                RingTransactData::parse(data, RingRail::Delegate)
+                    .unwrap()
+                    .data()
+                    .nullifiers
+                    .to_vec()
+            })
+            .collect()
     }
 
     #[tokio::test]
@@ -1557,7 +1755,27 @@ mod delegate_message {
             valid_until_slot: 0,
         };
         assert_eq!(vector.request.auditor.0, config.auditor_pubkey.as_bytes());
-        let expected = ExpectedDelegate::new(&vector.request.prepare, &quote, &config).unwrap();
+        let honest_nullifiers = vector
+            .cases
+            .iter()
+            .find(|case| case.name == "honest")
+            .map(|case| published_nullifiers(&case.message.0))
+            .unwrap();
+        let sources: Vec<ShieldedAddress> = vector
+            .request
+            .prepare
+            .transfer
+            .sources
+            .iter()
+            .map(|source| source.0)
+            .collect();
+        let expected = ExpectedDelegate::new(&RequestedAuthorityTransfer {
+            request: vector.request.prepare.clone(),
+            quote: &quote,
+            config: &config,
+            allowed: allowed_as_pinned(&sources, honest_nullifiers),
+        })
+        .unwrap();
         assert_eq!(vector.cases.len(), Answer::ALL.len() + 1);
         for case in &vector.cases {
             assert_eq!(

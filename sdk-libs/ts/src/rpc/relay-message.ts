@@ -36,10 +36,11 @@ import {
 } from "@heliuslabs/zolana/internal";
 import {
   ShieldedPublicKey,
+  type NullifierKey,
   type ShieldedAddress,
   type X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
-import { Utxo, type WalletUtxo } from "@heliuslabs/zolana/transaction";
+import { ProofInputUtxo, Utxo, type WalletUtxo } from "@heliuslabs/zolana/transaction";
 
 import { ringComputeUnitLimit } from "../operations/management/admin.js";
 import {
@@ -120,6 +121,7 @@ export type RelayMessageMismatch =
   | "DataOutputCount"
   | "FunderLegs"
   | "SpendsUnnamedNote"
+  | "SpendsUnrequestedNote"
   | "SettlesBuffer"
   | "Unrequested"
   | "Signer";
@@ -136,6 +138,61 @@ export interface ExpectedDeposit {
 }
 
 export type DelegateRingConfig = Pick<RingPolicy, "mode" | "auditorPublicKey">;
+
+/** Rust `AllowedNullifiers`, filled only by `admit`. */
+export class AllowedNullifiers {
+  readonly #sources = new Set<string>();
+  readonly #nullifiers = new Set<string>();
+
+  /** Rust `AllowedNullifiers::admit`, admits nothing of `source` when one opening fails. */
+  admit(
+    source: Readonly<{ address: ShieldedAddress; nullifierKey: NullifierKey }>,
+    notes: readonly ProofInputUtxo[],
+  ): this {
+    const { address, nullifierKey } = source;
+    if (!equalBytes(nullifierKey.publicKey(), address.nullifierPublicKey))
+      throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
+    const owner = address.signingPublicKey.confidentialViewTag();
+    const nullifiers = notes.map((note, index) => {
+      // 1. Owner and key are opening fields the rebuilt hash commits, so the match binds the note.
+      if (
+        !equalBytes(note.utxo.owner.confidentialViewTag(), owner) ||
+        !equalBytes(note.nullifierPublicKey, address.nullifierPublicKey)
+      )
+        throw delegateSourceRefusal("foreignNote", index);
+      // 2. Rebuilt, not read, any carried nullifier passes under the shared zero key.
+      const hashes = {
+        ...(note.dataHash === undefined ? {} : { dataHash: note.dataHash }),
+        ...(note.ringDataHash === undefined ? {} : { ringDataHash: note.ringDataHash }),
+      };
+      const rebuilt = ProofInputUtxo.fromNullifierKey(note.utxo, nullifierKey, hashes, note.treeId);
+      if (!equalBytes(rebuilt.nullifier(), note.nullifier()))
+        throw delegateSourceRefusal("unboundOpening", index);
+      return rebuilt.nullifier();
+    });
+    this.#sources.add(encodeBase58(address.toBytes()));
+    for (const nullifier of nullifiers) this.#nullifiers.add(encodeBase58(nullifier));
+    return this;
+  }
+
+  /** Rust `AllowedNullifiers::check_sources`. */
+  checkSources(requested: readonly ShieldedAddress[]): void {
+    const named = new Set(requested.map((address) => encodeBase58(address.toBytes())));
+    const same =
+      named.size === this.#sources.size && [...named].every((source) => this.#sources.has(source));
+    if (!same) throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "sources" } });
+  }
+
+  /** The published nullifiers at note positions, an address or a dummy spends no note. */
+  spendsOnly(notes: Iterable<Bytes32>): boolean {
+    for (const nullifier of notes) if (!this.#nullifiers.has(encodeBase58(nullifier))) return false;
+    return true;
+  }
+}
+
+function delegateSourceRefusal(reason: "foreignNote" | "unboundOpening", index: number): RingError {
+  return new RingError("RING_DELEGATE_INVALID", { details: { reason, index } });
+}
 
 interface ExpectedOwner {
   readonly ownerKey: Bytes32;
@@ -163,6 +220,8 @@ export interface ExpectedDelegate {
   /** Change returns to an input's owner. */
   readonly sources: readonly ExpectedOwner[];
   readonly payments: readonly ExpectedPayment[];
+  /** Every note of each requested source, a note Ring RPC selects outside it is refused. */
+  readonly allowed: AllowedNullifiers;
 }
 
 /** Holds no transaction key, no other slot opens to the signer. */
@@ -360,12 +419,23 @@ export async function expectedDeposit(
   });
 }
 
-export async function expectedDelegate(
-  request: PrepareAuthorityTransferRequest,
-  quote: RelayQuote,
-  config: DelegateRingConfig,
-): Promise<ExpectedDelegate> {
+/** Rust `RequestedAuthorityTransfer`, the delegate's ask and the notes its own openings allow. */
+export interface RequestedAuthorityTransfer {
+  readonly request: PrepareAuthorityTransferRequest;
+  readonly quote: RelayQuote;
+  /** The auditor key and the rail come from the ring account. */
+  readonly config: DelegateRingConfig;
+  readonly allowed: AllowedNullifiers;
+}
+
+export async function expectedDelegate({
+  request,
+  quote,
+  config,
+  allowed,
+}: RequestedAuthorityTransfer): Promise<ExpectedDelegate> {
   const { transfer } = request;
+  allowed.checkSources(transfer.sources);
   return Object.freeze({
     kind: "delegate",
     ring: request.ring,
@@ -385,6 +455,7 @@ export async function expectedDelegate(
         }),
       ),
     ),
+    allowed,
   });
 }
 
@@ -872,9 +943,13 @@ function checkFrame(
 function checkMoved(expected: ExpectedDelegate, frame: RingTransactData): void {
   // Owner tags alone, the message holds no blinding, a hidden frame's tags bind nothing.
   checkTransactionKey(expected.txViewingKey, frame);
-  // The request names ring payments alone, a leg or a data commitment moves what no one asked.
+  // 1. The request names ring payments alone, a leg or a data commitment moves what no one asked.
   if (frame.interfaceTransfers.length !== 0 || frame.hasData) throw mismatch("Data");
-  const { records } = openStream(expected.txViewingKey, expected.auditor, frame);
+  const { records, envelope } = openStream(expected.txViewingKey, expected.auditor, frame);
+  // 2. Matching outputs bind no input, each proven note position answers to the requested openings.
+  if (!expected.allowed.spendsOnly(frame.nullifiers.slice(0, envelope.realInputs)))
+    throw mismatch("SpendsUnrequestedNote");
+  // 3. Each live record pays one requested payment or returns change to a requested source.
   const owns = (owner: ExpectedOwner, record: AuditRecord): boolean =>
     equalBytes(record.ownerKey, owner.ownerKey) &&
     equalBytes(record.nullifierPk, owner.nullifierPk);

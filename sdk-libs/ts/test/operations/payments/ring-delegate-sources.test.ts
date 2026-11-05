@@ -11,7 +11,8 @@ import { ShieldedKeypair, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
-  type ProofInputUtxo,
+  ProofInputUtxo,
+  Utxo,
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -22,6 +23,7 @@ import { RecordKind } from "../../../src/protocol/codec/audit-stream.js";
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
 import { buildRingDelegateRecoveredTransaction } from "../../../src/operations/management/delegate.js";
 import { DelegateTransfer } from "../../../src/operations/payments/transfer-rails.js";
+import { ringProofInput } from "../../../src/operations/workflow/selection.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
 import { buildRuleTable } from "../../../src/protocol/membership/policy.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
@@ -31,7 +33,11 @@ import {
   RingTransactData,
   type RingRail,
 } from "../../../src/protocol/transaction/transact.js";
-import { checkRelayMessage, expectedDelegate } from "../../../src/rpc/relay-message.js";
+import {
+  AllowedNullifiers,
+  checkRelayMessage,
+  expectedDelegate,
+} from "../../../src/rpc/relay-message.js";
 import { BLOCKHASH, kitReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import {
   noteInput,
@@ -110,6 +116,19 @@ function movingFrom(
   return { transfer, notes };
 }
 
+function allowedOf(
+  sources: readonly Readonly<{ owner: ShieldedKeypair; notes: readonly ProofInputUtxo[] }>[],
+): AllowedNullifiers {
+  return sources.reduce(
+    (allowed, { owner, notes }) =>
+      allowed.admit(
+        { address: owner.shieldedAddress(), nullifierKey: owner.nullifierKey() },
+        notes,
+      ),
+    new AllowedNullifiers(),
+  );
+}
+
 function messageOf(fixture: Fixture, instruction: Instruction): Uint8Array {
   const { messageBytes } = compileUnsignedTransaction({
     feePayer: fixture.authority,
@@ -178,16 +197,15 @@ describe("delegate sources", () => {
       const sources = Array.from({ length: count }, () => ShieldedKeypair.generate());
       const payee = ShieldedKeypair.generate();
       const { fixture, delegate } = await moveRing(mode, [...sources, payee]);
-      const { transfer } = movingFrom(fixture, delegate, sources, payee, amount);
+      const { transfer, notes } = movingFrom(fixture, delegate, sources, payee, amount);
       const instruction = await (await transfer.prove(fixture.client)).instruction();
 
-      const config = { mode, auditorPublicKey: fixture.auditor.publicKey() };
-      const quote = { feePayer: fixture.authority, validUntilSlot: 100n };
-      const expected = await expectedDelegate(
-        requestFor(fixture, delegate, sources, payee, amount),
-        quote,
-        config,
-      );
+      const expected = await expectedDelegate({
+        request: requestFor(fixture, delegate, sources, payee, amount),
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+        config: { mode, auditorPublicKey: fixture.auditor.publicKey() },
+        allowed: allowedOf(sources.map((owner, at) => ({ owner, notes: notes.slice(at, at + 1) }))),
+      });
       const message = messageOf(fixture, instruction);
       expect(checkRelayMessage(expected, message, delegate as never).signer).toBe(delegate);
 
@@ -205,23 +223,77 @@ describe("delegate sources", () => {
       for (const record of live) expect(keys).toContain(Array.from(record.ownerKey).join());
     });
 
-    it("refuses change to an owner the request does not name", async () => {
+    it("refuses another member's note and its change the request does not name", async () => {
       const [member, other, payee] = [
         ShieldedKeypair.generate(),
         ShieldedKeypair.generate(),
         ShieldedKeypair.generate(),
       ];
       const { fixture, delegate } = await moveRing(mode, [member, other, payee]);
-      const { transfer } = movingFrom(fixture, delegate, [member, other], payee, 15n);
+      const { transfer, notes } = movingFrom(fixture, delegate, [member, other], payee, 15n);
       const instruction = await (await transfer.prove(fixture.client)).instruction();
-      const expected = await expectedDelegate(
-        requestFor(fixture, delegate, [member], payee, 15n),
-        { feePayer: fixture.authority, validUntilSlot: 100n },
-        { mode, auditorPublicKey: fixture.auditor.publicKey() },
-      );
+      const expected = await expectedDelegate({
+        request: requestFor(fixture, delegate, [member], payee, 15n),
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+        config: { mode, auditorPublicKey: fixture.auditor.publicKey() },
+        allowed: allowedOf([{ owner: member, notes: notes.slice(0, 1) }]),
+      });
       expect(() =>
         checkRelayMessage(expected, messageOf(fixture, instruction), delegate as never),
-      ).toThrow(expect.objectContaining({ details: { mismatch: "Recipients" } }));
+      ).toThrow(expect.objectContaining({ details: { mismatch: "SpendsUnrequestedNote" } }));
+    });
+
+    it("refuses a victim's note under exactly the requested payment and change", async () => {
+      const [member, victim, payee] = [
+        ShieldedKeypair.generate(),
+        ShieldedKeypair.generate(),
+        ShieldedKeypair.generate(),
+      ];
+      const { fixture, delegate } = await moveRing(mode, [member, victim, payee]);
+      const owned = noteInput(member, 10n, fixture.ringProgramId);
+      const stolen = noteInput(victim, 10n, fixture.ringProgramId);
+      // The change returns to the requested source as its own output.
+      const transfer = DelegateTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        delegate: delegate as never,
+        payer: fixture.authority,
+        source: member.shieldedAddress(),
+        sourceProofs: walletKeys(member),
+        inputs: [stolen],
+        outputs: [{ recipient: payee.shieldedAddress(), asset: SOL_MINT, amount: 4n }],
+        assets,
+      })
+        .withCoSource({
+          owner: victim.shieldedAddress().solanaAddress(),
+          nullifierKey: victim.nullifierKey(),
+        })
+        .withTxViewingKey(TX_VIEWING_KEY);
+      const message = messageOf(
+        fixture,
+        await (await transfer.prove(fixture.client)).instruction(),
+      );
+      const asked = {
+        request: requestFor(fixture, delegate, [member], payee, 4n),
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+        config: { mode, auditorPublicKey: fixture.auditor.publicKey() },
+      };
+
+      const unchecked = {
+        checkSources: () => undefined,
+        spendsOnly: () => true,
+      } as unknown as AllowedNullifiers;
+      const outputsOnly = await expectedDelegate({ ...asked, allowed: unchecked });
+      expect(checkRelayMessage(outputsOnly, message, delegate as never).signer).toBe(delegate);
+      await expect(
+        expectedDelegate({ ...asked, allowed: allowedOf([{ owner: victim, notes: [stolen] }]) }),
+      ).rejects.toMatchObject({ details: { reason: "sources" } });
+      const expected = await expectedDelegate({
+        ...asked,
+        allowed: allowedOf([{ owner: member, notes: [owned] }]),
+      });
+      expect(() => checkRelayMessage(expected, message, delegate as never)).toThrow(
+        expect.objectContaining({ details: { mismatch: "SpendsUnrequestedNote" } }),
+      );
     });
   });
 
@@ -312,6 +384,10 @@ describe("delegate sources", () => {
           ShieldedKeypair.generate(),
         ];
         const { fixture, delegate } = await moveRing(mode, [member, other, payee]);
+        const [memberSource, otherSource] = [
+          sourceOf(fixture, member, 0),
+          sourceOf(fixture, other, 1, [USDC]),
+        ];
         const { messageBytes } = await buildRingDelegateRecoveredTransaction({
           client: clientOf(fixture),
           ringProgramId: fixture.ringProgramId,
@@ -321,12 +397,21 @@ describe("delegate sources", () => {
             { recipient: payee.shieldedAddress(), asset: SOL_MINT, amount: 4n },
             { recipient: payee.shieldedAddress(), asset: USDC, amount: 3n },
           ],
-          sources: [sourceOf(fixture, member, 0), sourceOf(fixture, other, 1, [USDC])],
+          sources: [memberSource, otherSource],
           txViewingKey: TX_VIEWING_KEY,
         });
         const message = new Uint8Array(messageBytes);
-        const expected = await expectedDelegate(
-          requestOf(
+        const recovered = [
+          { owner: member, source: memberSource },
+          { owner: other, source: otherSource },
+        ].map(({ owner, source }) => ({
+          owner,
+          notes: source.notes.map((note) =>
+            ringProofInput(note, owner.shieldedAddress(), fixture.client),
+          ),
+        }));
+        const expected = await expectedDelegate({
+          request: requestOf(
             fixture,
             delegate,
             [member, other],
@@ -335,9 +420,10 @@ describe("delegate sources", () => {
               { recipient: payee, mint: USDC, amount: 3n },
             ],
           ),
-          { feePayer: fixture.authority, validUntilSlot: 100n },
-          { mode, auditorPublicKey: fixture.auditor.publicKey() },
-        );
+          quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+          config: { mode, auditorPublicKey: fixture.auditor.publicKey() },
+          allowed: allowedOf(recovered),
+        });
         expect(checkRelayMessage(expected, message, delegate as never).signer).toBe(delegate);
 
         const [instruction] = decompileTransactionMessage(
@@ -440,5 +526,28 @@ describe("delegate sources", () => {
       code: "RING_DELEGATE_INVALID",
       details: { reason: "mixedOwners" },
     });
+  });
+
+  it("admits no opening that fails to rebuild its nullifier under the source's key", () => {
+    const [member, victim] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
+    const stolen = noteInput(victim, 10n);
+    const relabeled = new ProofInputUtxo({
+      utxo: new Utxo({
+        owner: member.signingPublicKey(),
+        asset: stolen.utxo.asset,
+        amount: stolen.utxo.amount,
+        blinding: stolen.utxo.blinding,
+      }),
+      nullifierPublicKey: member.shieldedAddress().nullifierPublicKey,
+      nullifier: stolen.nullifier(),
+      treeId: stolen.treeId,
+    });
+    const source = { address: member.shieldedAddress(), nullifierKey: member.nullifierKey() };
+    expect(() => new AllowedNullifiers().admit(source, [noteInput(member, 5n), relabeled])).toThrow(
+      expect.objectContaining({ details: { reason: "unboundOpening", index: 1 } }),
+    );
+    expect(() => new AllowedNullifiers().admit(source, [stolen])).toThrow(
+      expect.objectContaining({ details: { reason: "foreignNote", index: 0 } }),
+    );
   });
 });

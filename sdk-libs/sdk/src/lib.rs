@@ -75,7 +75,10 @@ pub use crate::{
     },
     buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
-    delegate_source::{DelegateSourceError, ResolvedSource, SourceEnrollment, TrackingEnrollment},
+    delegate_source::{
+        AllowedNullifiers, DelegateSourceError, ResolvedSource, SourceEnrollment,
+        TrackingEnrollment,
+    },
     deposit::{
         fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RelayedDeposit,
         RingDeposit, RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
@@ -100,7 +103,10 @@ pub use crate::{
         RecordUpdateTarget, SaltedOwnerCheck, WalletRecordUpdate,
     },
     register_key::{Enroll, EnrollInstruction, EnrollRelay, WriteOwnerGrant},
-    relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
+    relay::{
+        PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent,
+        RequestedAuthorityTransfer, RingRelay,
+    },
     relay_message::{
         ApprovalLimit, ApprovalOpening, CoSignerApproval, CoSignerRule, ExactApproval, FundedLeg,
         FunderApproval, MessageMismatch, OutputTotalsOpening, OwnerApproval, PublicTotalsOpening,
