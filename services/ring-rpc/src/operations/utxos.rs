@@ -1,4 +1,7 @@
 //! The notes a ring's auditor opened, their nullifiers, and the keys its credentials hold.
+//!
+//! Each page also names the notes it moved in an owner's active set, the page commit writes them
+//! to `storage/owner_notes.rs` and the mirror keeps their keys. Wallet reads page over that set.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -28,9 +31,11 @@ use zolana_ring_transaction::RingAssets;
 
 use crate::{
     credentials::{CredentialRefusal, HeldCredential, HeldCredentials},
+    database::Store,
     error::RingRpcError,
+    owner_notes::OwnerNotesRead,
     spend_machine::{NoteRead, Observation, SpendRow, SpendState, Transition},
-    spent_index::{Checkpoint, LoadedSpends},
+    spent_index::{Checkpoint, LoadedSpends, NoteSeal},
 };
 
 pub const UTXO_BACKFILL_INTERVAL: Duration = Duration::from_secs(30);
@@ -49,6 +54,21 @@ pub(crate) struct AuditStore {
     late_owners: RwLock<BTreeSet<[u8; 32]>>,
     /// One backfill and key refresh at a time.
     pub(crate) backfill: AsyncMutex<Backfill>,
+    index: OwnerIndex,
+}
+
+#[derive(Default)]
+pub(crate) enum OwnerIndex {
+    /// No database, the mirror is the only copy.
+    #[default]
+    Memory,
+    Database {
+        store: Store,
+        ring: Address,
+        seal: Box<NoteSeal>,
+    },
+    /// The ring's seal failed to derive, every wallet read refuses.
+    Unavailable,
 }
 
 #[derive(Default)]
@@ -64,7 +84,7 @@ struct SpendBook {
     notes: HashMap<[u8; 32], StoredUtxo>,
     /// The note index, a late secret fills it for that owner's notes.
     by_nullifier: HashMap<[u8; 32], [u8; 32]>,
-    owned: HashMap<[u8; 32], BTreeSet<[u8; 32]>>,
+    active: ActiveIndex,
     rows: HashMap<[u8; 32], SpendRow>,
     unread: BTreeSet<CreatedIn>,
     faults: Vec<SpendRow>,
@@ -83,6 +103,32 @@ pub(crate) struct PageDelta {
     faults: Vec<SpendRow>,
     checkpoint: Option<Checkpoint>,
     late_owners: Vec<[u8; 32]>,
+    owners: Vec<OwnerChange>,
+    /// The history slot before the page, a spend at or before it leaves the index.
+    prune_through: u64,
+}
+
+/// The keys of each owner's live notes and of spends past the pruned slot.
+#[derive(Default)]
+struct ActiveIndex {
+    by_owner: HashMap<[u8; 32], BTreeMap<[u8; 32], Option<u64>>>,
+    settling: BTreeSet<(u64, [u8; 32], [u8; 32])>,
+}
+
+/// One note's whole index row as a page leaves it, keyed by its owner's member tag.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OwnerChange {
+    pub member: [u8; 32],
+    pub note: IndexedNote,
+}
+
+/// `key` orders a wallet page and names its cursor, the commitment in memory and the note tag on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct IndexedNote {
+    pub key: [u8; 32],
+    pub commitment: [u8; 32],
+    pub note: StoredUtxo,
+    pub spent_at: Option<u64>,
 }
 
 /// A page's overlay on the book, a later row reads what an earlier row opened.
@@ -132,17 +178,8 @@ pub(crate) struct StoredUtxo {
 
 impl SpendBook {
     fn absorb(&mut self, delta: PageDelta) {
-        for (commitment, note) in delta.notes {
-            if note.ring_note {
-                if let Ok(member) = Member::owner_tag(&note.utxo.owner_key) {
-                    self.owned
-                        .entry(*member.as_bytes())
-                        .or_default()
-                        .insert(commitment);
-                }
-            }
-            self.notes.insert(commitment, note);
-        }
+        self.active.apply(&delta.owners, delta.prune_through);
+        self.notes.extend(delta.notes);
         self.by_nullifier.extend(delta.by_nullifier);
         for (nullifier, row) in delta.rows {
             self.rows.insert(nullifier, row);
@@ -164,30 +201,176 @@ impl SpendBook {
         }
     }
 
-    /// Only an unreadable frame holds the claim back, an unresolved row never does.
     fn history_through(&self) -> u64 {
-        self.unread.first().map_or(self.context.slot, |frame| {
-            self.context.slot.min(frame.slot.saturating_sub(1))
-        })
+        history_through(self.unread.first(), self.context.slot)
     }
 
-    fn spent_at(&self, note: &StoredUtxo) -> Option<u64> {
-        let row = note
-            .nullifier
-            .and_then(|nullifier| self.rows.get(&nullifier));
-        row.map(|row| row.frame.slot)
+    /// Every note the delta opened or spent, each read through the delta over the book.
+    fn owner_changes(&self, delta: &PageDelta) -> Vec<OwnerChange> {
+        let note = |commitment: &[u8; 32]| {
+            delta
+                .notes
+                .get(commitment)
+                .or_else(|| self.notes.get(commitment))
+        };
+        let row = |nullifier: &[u8; 32]| {
+            delta
+                .rows
+                .get(nullifier)
+                .or_else(|| self.rows.get(nullifier))
+        };
+        let spent: Vec<&[u8; 32]> = delta
+            .rows
+            .keys()
+            .filter_map(|nullifier| {
+                delta
+                    .by_nullifier
+                    .get(nullifier)
+                    .or_else(|| self.by_nullifier.get(nullifier))
+            })
+            .collect();
+        let touched: BTreeSet<&[u8; 32]> = delta.notes.keys().chain(spent).collect();
+        touched
+            .into_iter()
+            .filter_map(|commitment| {
+                let stored = *note(commitment)?;
+                // An exit leaves the ring, its note never enters an owner's set.
+                if !stored.ring_note {
+                    return None;
+                }
+                let member = Member::owner_tag(&stored.utxo.owner_key).ok()?;
+                Some(OwnerChange {
+                    member: *member.as_bytes(),
+                    note: IndexedNote {
+                        key: *commitment,
+                        commitment: *commitment,
+                        note: stored,
+                        spent_at: stored
+                            .nullifier
+                            .and_then(|nullifier| row(&nullifier))
+                            .map(|row| row.frame.slot),
+                    },
+                })
+            })
+            .collect()
     }
 
-    /// Reads one note's own nullifier and no other row.
-    fn status(&self, note: &StoredUtxo, through: u64) -> WalletNoteStatus {
+    fn owner_notes(&self, member: &[u8; 32]) -> Vec<IndexedNote> {
+        let Some(keys) = self.active.by_owner.get(member) else {
+            return Vec::new();
+        };
+        keys.iter()
+            .filter_map(|(commitment, spent_at)| {
+                Some(IndexedNote {
+                    key: *commitment,
+                    commitment: *commitment,
+                    note: *self.notes.get(commitment)?,
+                    spent_at: *spent_at,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Only an unreadable frame holds the claim back, an unresolved row never does.
+fn history_through(first_unread: Option<&CreatedIn>, context_slot: u64) -> u64 {
+    first_unread.map_or(context_slot, |frame| {
+        context_slot.min(frame.slot.saturating_sub(1))
+    })
+}
+
+impl ActiveIndex {
+    fn apply(&mut self, changes: &[OwnerChange], prune_through: u64) {
+        for change in changes {
+            let IndexedNote {
+                commitment,
+                spent_at,
+                ..
+            } = change.note;
+            self.by_owner
+                .entry(change.member)
+                .or_default()
+                .insert(commitment, spent_at);
+            if let Some(slot) = spent_at {
+                self.settling.insert((slot, change.member, commitment));
+            }
+        }
+        while let Some(&(slot, member, commitment)) = self.settling.first() {
+            if slot > prune_through {
+                break;
+            }
+            self.settling.pop_first();
+            if let Some(keys) = self.by_owner.get_mut(&member) {
+                keys.remove(&commitment);
+                if keys.is_empty() {
+                    self.by_owner.remove(&member);
+                }
+            }
+        }
+    }
+}
+
+impl IndexedNote {
+    /// Reads one note's own spend and no other row.
+    fn status(&self, through: u64) -> WalletNoteStatus {
+        let utxo = &self.note.utxo;
         NoteRead {
-            nullifier_known: note.nullifier.is_some(),
-            spent_at: self.spent_at(note),
-            zero_key_wallet: note.utxo.owner.nullifier_pk() == Some(ZERO_NULLIFIER_PUBKEY)
-                && Address::new_from_array(note.utxo.owner_key).is_on_curve(),
+            nullifier_known: self.note.nullifier.is_some(),
+            spent_at: self.spent_at,
+            zero_key_wallet: utxo.owner.nullifier_pk() == Some(ZERO_NULLIFIER_PUBKEY)
+                && Address::new_from_array(utxo.owner_key).is_on_curve(),
             history_through: through,
         }
         .status()
+    }
+}
+
+/// Balances over every listed note, the page holds those after the cursor in key order.
+fn wallet_page(
+    notes: &[IndexedNote],
+    query: WalletStatusQuery,
+    through: u64,
+) -> GetWalletStatusResponse {
+    let mut balances: BTreeMap<[u8; 32], WalletBalance> = BTreeMap::new();
+    let mut listed = Vec::new();
+    let mut last_key = None;
+    let mut cursor = None;
+    for indexed in notes {
+        let note = &indexed.note;
+        // A spent input and its change never both count.
+        if note.created_in.slot > through {
+            continue;
+        }
+        let status = indexed.status(through);
+        if status == WalletNoteStatus::Spent {
+            continue;
+        }
+        if status == WalletNoteStatus::Unspent {
+            let balance = balances
+                .entry(note.utxo.asset)
+                .or_insert_with(|| WalletBalance {
+                    asset: Hash(note.utxo.asset),
+                    mint: note.utxo.mint.map(Into::into),
+                    amount: 0,
+                });
+            balance.amount = balance.amount.saturating_add(note.utxo.amount);
+        }
+        if query.after.is_some_and(|after| indexed.key <= after) {
+            continue;
+        }
+        if listed.len() == query.limit {
+            cursor = last_key.map(|key: [u8; 32]| key.to_vec().into());
+            continue;
+        }
+        last_key = Some(indexed.key);
+        listed.push(note.wallet_note(&indexed.commitment, status));
+    }
+    GetWalletStatusResponse {
+        history_through: through,
+        enrollment: query.enrollment,
+        balances: balances.into_values().collect(),
+        notes: listed,
+        cursor,
     }
 }
 
@@ -214,6 +397,14 @@ impl PageDelta {
 
     pub(crate) const fn checkpoint(&self) -> Option<&Checkpoint> {
         self.checkpoint.as_ref()
+    }
+
+    pub(crate) fn owner_changes(&self) -> &[OwnerChange] {
+        &self.owners
+    }
+
+    pub(crate) const fn prune_through(&self) -> u64 {
+        self.prune_through
     }
 }
 
@@ -403,8 +594,8 @@ impl<'a> PageWork<'a> {
             owners
                 .iter()
                 .filter_map(|owner| Member::owner_tag(owner).ok())
-                .filter_map(|member| book.owned.get(member.as_bytes()))
-                .flatten()
+                .filter_map(|member| book.active.by_owner.get(member.as_bytes()))
+                .flat_map(BTreeMap::keys)
                 .filter(|commitment| {
                     book.notes
                         .get(*commitment)
@@ -425,12 +616,25 @@ impl<'a> PageWork<'a> {
         self.delta.checkpoint = Some(Checkpoint { position, through });
     }
 
-    pub(crate) fn finish(self) -> PageDelta {
+    /// Names the owner rows the page moves, against the book the page read.
+    pub(crate) fn finish(mut self) -> PageDelta {
+        let store = self.store;
+        let book = store.read_book();
+        self.delta.owners = book.owner_changes(&self.delta);
+        self.delta.prune_through = book.history_through();
+        drop(book);
         self.delta
     }
 }
 
 impl AuditStore {
+    pub(crate) fn new(index: OwnerIndex) -> Self {
+        Self {
+            index,
+            ..Self::default()
+        }
+    }
+
     fn read_book(&self) -> std::sync::RwLockReadGuard<'_, SpendBook> {
         self.book.read().unwrap_or_else(PoisonError::into_inner)
     }
@@ -443,22 +647,24 @@ impl AuditStore {
             unread,
             faults,
         } = loaded;
-        let delta = PageDelta {
+        let unread: BTreeSet<CreatedIn> = unread.into_iter().collect();
+        let mut delta = PageDelta {
             by_nullifier: notes
                 .iter()
                 .filter_map(|(commitment, note)| Some((note.nullifier?, *commitment)))
                 .collect(),
             notes: notes.into_iter().collect(),
             rows: rows.into_iter().map(|row| (row.nullifier, row)).collect(),
-            unread: unread.into_iter().collect(),
+            prune_through: history_through(unread.first(), checkpoint.through.slot),
+            unread,
             faults,
             checkpoint: Some(checkpoint),
             ..PageDelta::default()
         };
-        self.book
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .absorb(delta);
+        let mut book = self.book.write().unwrap_or_else(PoisonError::into_inner);
+        // The index keys rebuild from the loaded notes and rows, a spend the tables settled stays out.
+        delta.owners = book.owner_changes(&delta);
+        book.absorb(delta);
     }
 
     /// Runs after the page's transaction commits, a crash before it replays the page.
@@ -493,54 +699,33 @@ impl AuditStore {
         self.read_book().rows.get(nullifier).map(|row| row.state)
     }
 
-    pub(crate) fn wallet_status(&self, query: WalletStatusQuery) -> GetWalletStatusResponse {
-        let member = Member::owner_tag(query.wallet.as_array()).ok();
-        let book = self.read_book();
-        let through = book.history_through();
-        let commitments = member
-            .and_then(|member| book.owned.get(member.as_bytes()))
-            .into_iter()
-            .flatten();
-        let mut balances: BTreeMap<[u8; 32], WalletBalance> = BTreeMap::new();
-        let mut notes = Vec::new();
-        let mut cursor = None;
-        for commitment in commitments {
-            let Some(note) = book.notes.get(commitment) else {
-                continue;
-            };
-            // A spent input and its change never both count.
-            if note.created_in.slot > through {
-                continue;
+    /// The owner's live notes and unsettled spends, never another owner's row or a settled spend.
+    async fn owner_notes(&self, owner_key: &[u8; 32]) -> Result<Vec<IndexedNote>, RingRpcError> {
+        let Ok(member) = Member::owner_tag(owner_key) else {
+            return Ok(Vec::new());
+        };
+        match &self.index {
+            OwnerIndex::Memory => Ok(self.read_book().owner_notes(member.as_bytes())),
+            OwnerIndex::Database { store, ring, seal } => Ok(OwnerNotesRead {
+                db: store.connection(),
+                ring: *ring,
+                seal,
+                member: *member.as_bytes(),
             }
-            let status = book.status(note, through);
-            if status == WalletNoteStatus::Unspent {
-                let balance = balances
-                    .entry(note.utxo.asset)
-                    .or_insert_with(|| WalletBalance {
-                        asset: Hash(note.utxo.asset),
-                        mint: note.utxo.mint.map(Into::into),
-                        amount: 0,
-                    });
-                balance.amount = balance.amount.saturating_add(note.utxo.amount);
-            }
-            if query.after.is_some_and(|after| *commitment <= after) {
-                continue;
-            }
-            if notes.len() == query.limit {
-                cursor = notes
-                    .last()
-                    .map(|note: &WalletNote| note.utxo_hash.0.to_vec().into());
-                continue;
-            }
-            notes.push(note.wallet_note(commitment, status));
+            .read()
+            .await?),
+            OwnerIndex::Unavailable => Err(RingRpcError::StateUnavailable),
         }
-        GetWalletStatusResponse {
-            history_through: through,
-            enrollment: query.enrollment,
-            balances: balances.into_values().collect(),
-            notes,
-            cursor,
-        }
+    }
+
+    pub(crate) async fn wallet_status(
+        &self,
+        query: WalletStatusQuery,
+    ) -> Result<GetWalletStatusResponse, RingRpcError> {
+        let notes = self.owner_notes(query.wallet.as_array()).await?;
+        // Read after the rows, a commit deletes a spend only at or before the slot it found.
+        let through = self.read_book().history_through();
+        Ok(wallet_page(&notes, query, through))
     }
 
     pub(crate) fn spend_coverage(&self) -> GetSpendCoverageResponse {
@@ -582,27 +767,26 @@ impl AuditStore {
         self.read_book().unread.iter().copied().collect()
     }
 
-    /// Reads wallet status, an unrelated unresolved spend hides no note, a published row always does.
-    pub(crate) fn spendable(
+    /// Reads the owner's index, an unrelated unresolved spend hides no note, a published row always does.
+    pub(crate) async fn spendable(
         &self,
         notes: SpendableNotes<'_>,
     ) -> Result<Vec<WalletUtxo>, RingRpcError> {
         let owner = UtxoOwner::Keyed {
             nullifier_pk: notes.nullifier_key.pubkey()?,
         };
-        let book = self.read_book();
-        book.notes
+        let indexed = self.owner_notes(&notes.owner_key).await?;
+        indexed
             .iter()
-            .filter(|(_, stored)| {
-                let utxo = &stored.utxo;
-                stored.ring_note
-                    && utxo.owner_key == notes.owner_key
+            .filter(|indexed| {
+                let utxo = &indexed.note.utxo;
+                utxo.owner_key == notes.owner_key
                     && utxo.owner == owner
                     && utxo.mint == Some(notes.mint.asset)
                     && utxo.data_hash == [0; 32]
             })
-            .map(|(commitment, stored)| stored.wallet_utxo(commitment, &notes))
-            .filter(|note| !matches!(note, Ok(note) if book.rows.contains_key(&note.nullifier)))
+            .map(|indexed| indexed.note.wallet_utxo(&indexed.commitment, &notes))
+            .filter(|note| !matches!(note, Ok(note) if self.is_spent(&note.nullifier)))
             .collect()
     }
 

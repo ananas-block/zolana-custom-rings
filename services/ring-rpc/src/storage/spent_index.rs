@@ -15,6 +15,7 @@ use spr_keypair::X25519Keypair;
 use zolana_ring_client::{history::HistoryPosition, KnownUtxo, UtxoOwner};
 
 use crate::{
+    owner_notes::{IndexTags, OwnerNoteWrites},
     spend_machine::{SpendRow, SpendState},
     utxos::{CreatedIn, PageDelta, StoredUtxo},
 };
@@ -28,6 +29,7 @@ const NOTE_BODY_LEN: usize =
 pub(crate) struct NoteSeal {
     cipher: Aes256Gcm,
     ring: Address,
+    pub(crate) tags: IndexTags,
 }
 
 /// The durable resume point, the history slot moves only at a terminal page.
@@ -56,11 +58,12 @@ impl NoteSeal {
         Ok(Self {
             cipher: Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| unusable())?,
             ring,
+            tags: IndexTags::derive(auditor, ring),
         })
     }
 
     /// The ring and the row key bind the body, a row moved to another key fails to open.
-    fn seal(&self, row_key: &[u8; 32], body: &[u8]) -> Result<Vec<u8>, DbErr> {
+    pub(crate) fn seal(&self, row_key: &[u8; 32], body: &[u8]) -> Result<Vec<u8>, DbErr> {
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let aad = [self.ring.as_ref(), row_key.as_slice()].concat();
         let sealed = self
@@ -76,7 +79,7 @@ impl NoteSeal {
         Ok([nonce.as_slice(), &sealed].concat())
     }
 
-    fn open(&self, row_key: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, DbErr> {
+    pub(crate) fn open(&self, row_key: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, DbErr> {
         let refused = || DbErr::Custom("note row does not open under the auditor key".into());
         let (nonce, ciphertext) = sealed.split_at_checked(NONCE_LEN).ok_or_else(refused)?;
         let aad = [self.ring.as_ref(), row_key.as_slice()].concat();
@@ -93,7 +96,7 @@ impl NoteSeal {
 }
 
 /// The one layout of a sealed note.
-fn note_body(note: &StoredUtxo) -> Vec<u8> {
+pub(crate) fn note_body(note: &StoredUtxo) -> Vec<u8> {
     let utxo = &note.utxo;
     let (owner_kind, owner_field) = match utxo.owner {
         UtxoOwner::Keyed { nullifier_pk } => (0u8, nullifier_pk),
@@ -125,7 +128,7 @@ fn note_body(note: &StoredUtxo) -> Vec<u8> {
     .concat()
 }
 
-fn note_from_body(body: &[u8]) -> Result<StoredUtxo, DbErr> {
+pub(crate) fn note_from_body(body: &[u8]) -> Result<StoredUtxo, DbErr> {
     let malformed = || DbErr::Custom("note body has another layout".into());
     if body.len() != NOTE_BODY_LEN {
         return Err(malformed());
@@ -227,7 +230,7 @@ fn state_link(state: SpendState) -> Option<[u8; 32]> {
     }
 }
 
-fn slot_value(slot: u64) -> Result<Value, DbErr> {
+pub(crate) fn slot_value(slot: u64) -> Result<Value, DbErr> {
     i64::try_from(slot)
         .map(Value::from)
         .map_err(|_| DbErr::Custom("spend slot exceeds the column range".into()))
@@ -338,6 +341,9 @@ impl PageCommit<'_> {
                 ))
                 .await?;
         }
+        OwnerNoteWrites { ring, seal, delta }
+            .write(&transaction)
+            .await?;
         if let Some(checkpoint) = delta.checkpoint() {
             let values = vec![
                 ring_value(),

@@ -31,6 +31,8 @@ mod grant_rows;
 mod grants;
 #[path = "operations/hub.rs"]
 mod hub;
+#[path = "operations/keyed_tasks.rs"]
+mod keyed_tasks;
 #[path = "security/keys.rs"]
 mod keys;
 #[path = "rpc/landing.rs"]
@@ -49,6 +51,8 @@ mod metering;
 mod migration;
 #[path = "security/origins.rs"]
 mod origins;
+#[path = "storage/owner_notes.rs"]
+mod owner_notes;
 #[path = "operations/policy_authority.rs"]
 mod policy_authority;
 #[path = "operations/record_update.rs"]

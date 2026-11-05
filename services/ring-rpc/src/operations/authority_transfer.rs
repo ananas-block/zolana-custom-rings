@@ -168,12 +168,15 @@ impl<S: TransactionSource> Hub<S> {
             });
         Ok(GetDelegateNotesResponse {
             nullifier_secret,
-            status: shared.store(ring).wallet_status(WalletStatusQuery {
-                enrollment: credential.enrollment(),
-                wallet: owner,
-                after: cursor,
-                limit: WALLET_NOTE_PAGE_LIMIT,
-            }),
+            status: shared
+                .store(ring)
+                .wallet_status(WalletStatusQuery {
+                    enrollment: credential.enrollment(),
+                    wallet: owner,
+                    after: cursor,
+                    limit: WALLET_NOTE_PAGE_LIMIT,
+                })
+                .await?,
         })
     }
 
@@ -312,12 +315,17 @@ impl<S: TransactionSource> Hub<S> {
             let resolved = ResolvedSource::resolve(source, &enrollment).await?;
             let mut notes = Vec::new();
             for mint in &mints {
-                notes.extend(shared.store(ring).spendable(SpendableNotes {
-                    ring,
-                    owner_key,
-                    mint: assets.registry().mint(mint)?,
-                    nullifier_key: resolved.nullifier_key(),
-                })?);
+                notes.extend(
+                    shared
+                        .store(ring)
+                        .spendable(SpendableNotes {
+                            ring,
+                            owner_key,
+                            mint: assets.registry().mint(mint)?,
+                            nullifier_key: resolved.nullifier_key(),
+                        })
+                        .await?,
+                );
             }
             allowed.admit(&resolved, &notes)?;
             sources.push(SealedSource {

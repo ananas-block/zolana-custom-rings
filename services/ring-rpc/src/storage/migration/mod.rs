@@ -13,7 +13,8 @@ impl MigratorTrait for Migrator {
 #[derive(DeriveMigrationName)]
 struct Schema;
 
-const TABLES: [&str; 16] = [
+const TABLES: [&str; 17] = [
+    "owner_notes",
     "spend_unread_frames",
     "spend_integrity_faults",
     "spend_checkpoints",
@@ -44,6 +45,7 @@ impl MigrationTrait for Schema {
             format!("CREATE TABLE cosign_admission (ring {blob} NOT NULL, asset {blob} NOT NULL, PRIMARY KEY(ring, asset))"),
             format!("CREATE TABLE cosign_usage (signature {blob} NOT NULL, ring {blob} NOT NULL, owner {blob} NOT NULL, asset {blob} NOT NULL, slot BIGINT NOT NULL, outflow {blob} NOT NULL, deposited {blob} NOT NULL, withdrawn {blob} NOT NULL, confirmed BOOLEAN NOT NULL, message_digest {blob} NOT NULL, PRIMARY KEY(signature, owner, asset))"),
             format!("CREATE TABLE finalized_notes (ring {blob} NOT NULL, commitment {blob} NOT NULL, sealed {blob} NOT NULL, PRIMARY KEY(ring, commitment))"),
+            format!("CREATE TABLE owner_notes (ring {blob} NOT NULL, owner_tag {blob} NOT NULL, note_tag {blob} NOT NULL, sealed {blob} NOT NULL, spent_slot BIGINT, PRIMARY KEY(ring, owner_tag, note_tag))"),
             format!("CREATE TABLE finalized_spent_nullifiers (ring {blob} NOT NULL, nullifier {blob} NOT NULL, slot BIGINT NOT NULL, tx_signature {blob} NOT NULL, event_index INTEGER NOT NULL, position INTEGER NOT NULL, state VARCHAR(16) NOT NULL, sealed_note {blob}, PRIMARY KEY(ring, nullifier))"),
             format!("CREATE TABLE grants (id {serial}, reader {blob} NOT NULL, sealed {blob} NOT NULL)"),
             format!("CREATE TABLE merge_inputs (nullifier {blob} PRIMARY KEY, ring {blob} NOT NULL, relay_id {blob} NOT NULL)"),
@@ -71,6 +73,7 @@ impl MigrationTrait for Schema {
             "CREATE INDEX cosign_usage_message ON cosign_usage(message_digest)".to_owned(),
             "CREATE INDEX grants_reader ON grants(reader)".to_owned(),
             "CREATE INDEX merge_inputs_ring ON merge_inputs(ring)".to_owned(),
+            "CREATE INDEX owner_notes_spent ON owner_notes(ring, spent_slot)".to_owned(),
             "CREATE INDEX records_updates_joined ON records_updates(joined)".to_owned(),
             "CREATE INDEX records_updates_member ON records_updates(ring, member)".to_owned(),
             "CREATE INDEX records_updates_queue ON records_updates(registry, status, seq)".to_owned(),

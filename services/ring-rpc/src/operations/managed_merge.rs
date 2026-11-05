@@ -209,12 +209,17 @@ impl<S: TransactionSource> ManagedMerge<S> {
         let Some(nullifier_key) = pass.service.held_nullifier_key(&owner_key)? else {
             return Ok(None);
         };
-        let notes = self.hub.shared().store(ring).spendable(SpendableNotes {
-            ring,
-            owner_key,
-            mint: pass.assets.registry().mint(&wallet.settings.mint.0)?,
-            nullifier_key: &nullifier_key,
-        })?;
+        let notes = self
+            .hub
+            .shared()
+            .store(ring)
+            .spendable(SpendableNotes {
+                ring,
+                owner_key,
+                mint: pass.assets.registry().mint(&wallet.settings.mint.0)?,
+                nullifier_key: &nullifier_key,
+            })
+            .await?;
         // 2. Each candidate is unspent and held by no merge in the store.
         let notes: Vec<WalletUtxo> = notes
             .into_iter()

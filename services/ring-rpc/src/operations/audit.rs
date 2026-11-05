@@ -319,15 +319,15 @@ impl<S: TransactionSource> AuditService<S> {
             .await?;
         grant.spend().await?;
         let credential = self.scanned_credential(&wallet.to_bytes()).await?;
-        Ok(self
-            .shared
+        self.shared
             .store(self.ring)
             .wallet_status(WalletStatusQuery {
                 enrollment: credential.enrollment(),
                 wallet,
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,
-            }))
+            })
+            .await
     }
 
     /// The one read that names an unresolved spend, a reader grant never reaches it.
