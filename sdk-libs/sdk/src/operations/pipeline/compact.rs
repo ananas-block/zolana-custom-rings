@@ -17,7 +17,7 @@ use spr_program::instruction::{
 };
 
 use super::owner::deposit_funder;
-use crate::{CustomRing, RingError};
+use crate::{CredentialTrees, CustomRing, RingError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OwnedBody {
@@ -264,6 +264,8 @@ pub(crate) struct TransactAccounts {
     pub read_cache: Option<Address>,
     pub co_signers: Vec<Address>,
     pub delegate: Option<Address>,
+    /// `None` when the frame reads the tracking registry.
+    pub credential_trees: Option<CredentialTrees>,
 }
 
 impl TransactAccounts {
@@ -327,6 +329,11 @@ impl TransactAccounts {
             config
                 .root_registries(RootRead::transfer(config, parts.rail.is_delegate()))
                 .map(|registry| AccountMeta::new_readonly(registry, false)),
+        );
+        accounts.extend(
+            self.credential_trees
+                .iter()
+                .flat_map(CredentialTrees::metas),
         );
         accounts.extend(
             self.co_signers

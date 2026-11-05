@@ -1,10 +1,12 @@
+import { readFileSync } from "node:fs";
+
 import {
   TRANSACTION_SIZE_LIMIT,
   type Address,
   type Bytes32,
   type Instruction,
 } from "@heliuslabs/zolana/interface";
-import { encodeBase58 } from "@heliuslabs/zolana/internal";
+import { encodeBase58, treeAddress } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import { AccountRole } from "@solana/kit";
@@ -14,7 +16,10 @@ import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.
 import { MAX_CPI_DATA_LEN } from "../../../src/protocol/transaction/frame-buffer.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { MAX_TRANSACTION_ADDRESSES as LIMIT } from "../../../src/operations/workflow/compile.js";
+import { ringTransactInstruction } from "../../../src/operations/workflow/pipeline.js";
+import { transactionSize } from "../../../src/operations/workflow/compile.js";
 import {
+  CredentialTrees,
   decideAddressCeiling,
   TransactionFit,
   type CeilingDecision,
@@ -297,5 +302,141 @@ describe("TransactionFit, the refusals of Rust `TransactionFit`", () => {
     );
     expect(fit.setup).toMatchObject({ instructions: 1, signatures: 1, addresses: 1 });
     expect(fit.setup.bytes).toBeGreaterThan(0);
+  });
+});
+
+/** Shared with the Rust fit test. */
+const CREDENTIAL_FIT = JSON.parse(
+  readFileSync(
+    new URL("../../../../sdk/tests/fixtures/credential-fit.json", import.meta.url),
+    "utf8",
+  ),
+) as Readonly<{
+  payer: number;
+  program: number;
+  computeUnitLimit: number;
+  trees: readonly string[];
+  cases: readonly Readonly<{
+    name: string;
+    filler?: number;
+    data?: number;
+    named?: readonly number[];
+    openings: readonly number[];
+    capacity: number;
+    refusal?: "addresses" | "bytes" | "credentialCapacity";
+    addresses?: number;
+    bytes?: number;
+    trees?: number;
+  }>[];
+}>;
+
+const refusalOf = (run: () => unknown): { code?: string; details?: unknown } => {
+  try {
+    run();
+  } catch (error) {
+    return error as { code?: string; details?: unknown };
+  }
+  throw new Error("fits");
+};
+
+describe("CredentialTrees in the preproof fit, the shared Rust cases", () => {
+  it("derives the pinned tree accounts", () => {
+    expect(CREDENTIAL_FIT.trees.map((_, treeId) => treeAddress(treeId))).toEqual(
+      CREDENTIAL_FIT.trees,
+    );
+  });
+
+  for (const fixture of CREDENTIAL_FIT.cases)
+    it(fixture.name, () => {
+      if (fixture.refusal === "credentialCapacity") {
+        expect(
+          refusalOf(() => CredentialTrees.of(fixture.openings, fixture.capacity)),
+        ).toMatchObject({
+          code: "RING_FIT_CREDENTIAL_CAPACITY",
+          details: { trees: fixture.trees, capacity: fixture.capacity },
+        });
+        return;
+      }
+      const trees = CredentialTrees.of(fixture.openings, fixture.capacity);
+      const instruction = {
+        programAddress: address(CREDENTIAL_FIT.program),
+        accounts: [
+          ...Array.from({ length: fixture.filler ?? 0 }, (_, seed) => address(5000 + seed)),
+          ...(fixture.named ?? []).map(treeAddress),
+        ]
+          .map((account) => ({ address: account, role: AccountRole.WRITABLE }))
+          .concat(trees.metas()),
+        data: new Uint8Array(fixture.data ?? 0),
+      } as unknown as Instruction;
+      const preproof = () =>
+        TransactionFit.inline(
+          instruction,
+          { payer: address(CREDENTIAL_FIT.payer) },
+          { computeUnitLimit: CREDENTIAL_FIT.computeUnitLimit },
+        );
+      switch (fixture.refusal) {
+        case undefined:
+          expect(preproof()).toMatchObject({ addresses: fixture.addresses, bytes: fixture.bytes });
+          break;
+        case "addresses":
+          expect(refusalOf(preproof)).toMatchObject({
+            code: "RING_FIT_ADDRESSES",
+            details: { addresses: fixture.addresses, limit: LIMIT },
+          });
+          break;
+        case "bytes":
+          expect(refusalOf(preproof)).toMatchObject({
+            code: "RING_FIT_BYTES",
+            details: { bytes: fixture.bytes, limit: TRANSACTION_SIZE_LIMIT },
+          });
+          break;
+      }
+    });
+
+  // The key's credential capacity admits each tree set below, only the compiled accounts refuse.
+  it("names credential trees after the registries and refuses past the address ceiling before proving", async () => {
+    const program = address(2);
+    const data = ringFrame({ rail: "confidential", inputs: 1, outputs: 2 });
+    const accounts = {
+      payer: address(1),
+      inputTrees: [treeAddress(0)],
+      outputTree: treeAddress(0),
+      ownerSigners: [],
+      registries: [address(3)],
+      coSigners: [],
+    };
+    const reading = (trees: readonly number[]) =>
+      ringTransactInstruction(
+        program,
+        { ...accounts, credentialTrees: CredentialTrees.of(trees, trees.length + 1) },
+        data,
+      );
+    const addresses = (instruction: Instruction) =>
+      transactionSize({
+        feePayer: accounts.payer,
+        instructions: [instruction],
+        computeUnitLimit: 0,
+      }).addresses;
+    const range = (count: number) => Array.from({ length: count }, (_, index) => 100 + index);
+    const preproof = (instruction: Instruction) =>
+      TransactionFit.inline(instruction, { payer: accounts.payer }, BUDGET);
+
+    // 1. The address tree is tree 0 and holds the frame's notes, so only the state trees add addresses, right after the registries.
+    const bare = await ringTransactInstruction(program, accounts, data);
+    const named = await reading(range(2));
+    const trees = CredentialTrees.of(range(2), 2).metas();
+    expect(named.accounts?.slice(0, 2)).toEqual(bare.accounts?.slice(0, 2));
+    expect(named.accounts?.slice(2, 5)).toEqual(trees);
+    expect(named.accounts?.slice(5)).toEqual(bare.accounts?.slice(2));
+    expect(addresses(named)).toBe(addresses(bare) + 2);
+
+    // 2. The largest set fits at the ceiling and one more tree refuses.
+    const fitting = LIMIT - addresses(bare);
+    expect(preproof(await reading(range(fitting))).addresses).toBe(LIMIT);
+    const past = await reading(range(fitting + 1));
+    expect(refusalOf(() => preproof(past))).toMatchObject({
+      code: "RING_FIT_ADDRESSES",
+      details: { addresses: LIMIT + 1, limit: LIMIT },
+    });
   });
 });

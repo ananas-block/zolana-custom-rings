@@ -113,6 +113,7 @@ import {
 import {
   decideAddressCeiling,
   TransactionFit,
+  type CredentialTrees,
   type FitBudget,
   type FitSigners,
 } from "./address-ceiling.js";
@@ -189,6 +190,8 @@ export interface RingTransactAccounts {
   readonly delegate?: Address;
   /** A cached input reads through it, last in SPP's list. */
   readonly cache?: TransactCacheAccounts;
+  /** Absent when the frame reads the tracking registry. */
+  readonly credentialTrees?: CredentialTrees;
 }
 
 /** Every value a transfer's proofs bind that the chain can move before it lands, Rust `BoundState`. */
@@ -785,6 +788,7 @@ export async function ringTransactInstruction(
   const prefix: AccountMeta[] = [
     meta(ring, false, false),
     ...accounts.registries.map((registry) => meta(registry, false, false)),
+    ...(accounts.credentialTrees?.metas() ?? []),
   ];
   for (const coSigner of accounts.coSigners)
     prefix.push(...(await ringCoSignerMetas(ringProgramId, coSigner)));

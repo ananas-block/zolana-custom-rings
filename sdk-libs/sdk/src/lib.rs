@@ -66,8 +66,9 @@ pub use crate::{
         RingStatus,
     },
     address_ceiling::{
-        AddressCeiling, AddressCeilingError, CeilingDecision, Fit, FitError, FitSigners,
-        FitTransport, MergeCapacity, MergeGroup, SetupEffect, SpentInput, TransactionFit,
+        AddressCeiling, AddressCeilingError, CeilingDecision, CredentialTrees, Fit, FitError,
+        FitSigners, FitTransport, MergeCapacity, MergeGroup, SetupEffect, SpentInput,
+        TransactionFit,
     },
     admin::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,

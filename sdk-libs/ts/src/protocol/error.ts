@@ -182,6 +182,7 @@ export const RING_ERROR_CODES = [
   "RING_FIT_UNPARSED_FRAME",
   "RING_FRAME_BUFFER_CLOSE",
   "RING_HELD_KEY_NOT_IN_HISTORY",
+  "RING_FIT_CREDENTIAL_CAPACITY",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

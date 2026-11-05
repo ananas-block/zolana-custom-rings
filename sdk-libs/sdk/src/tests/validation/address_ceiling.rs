@@ -587,3 +587,80 @@ fn setup_joins_the_count_and_can_change_the_transport_or_refuse() {
             if addresses == usize::from(v1::MAX_ADDRESSES) + 3
     ));
 }
+
+/// Shared with the TS fit test.
+const CREDENTIAL_FIT: &str = include_str!("../../../tests/fixtures/credential-fit.json");
+
+#[test]
+fn the_preproof_fit_counts_credential_trees_and_refuses_past_each_ceiling() {
+    let fixture: serde_json::Value = serde_json::from_str(CREDENTIAL_FIT).unwrap();
+    let pinned: Vec<String> = fixture["trees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tree| tree.as_str().unwrap().to_owned())
+        .collect();
+    let derived: Vec<String> = (0..pinned.len() as u16)
+        .map(|tree_id| pda::tree(tree_id).to_string())
+        .collect();
+    assert_eq!(derived, pinned);
+    let seed = |key: &str| address(fixture[key].as_u64().unwrap() as u32);
+    let (payer, program) = (seed("payer"), seed("program"));
+    let budget = ComputeBudgetConfig::new(fixture["computeUnitLimit"].as_u64().unwrap() as u32);
+    for case in fixture["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let count = |key: &str| case[key].as_u64().unwrap_or_default() as usize;
+        let ids = |key: &str| -> Vec<u16> {
+            case[key].as_array().map_or_else(Vec::new, |ids| {
+                ids.iter().map(|id| id.as_u64().unwrap() as u16).collect()
+            })
+        };
+        let trees = match CredentialTrees::new(ids("openings"), count("capacity")) {
+            Ok(trees) => trees,
+            Err(FitError::CredentialCapacity { trees, capacity }) => {
+                assert_eq!(case["refusal"], "credentialCapacity", "{name}");
+                assert_eq!(
+                    (trees, capacity),
+                    (count("trees"), count("capacity")),
+                    "{name}"
+                );
+                continue;
+            }
+            Err(error) => panic!("{name}: {error}"),
+        };
+        let instruction = Instruction {
+            program_id: program,
+            accounts: (0..count("filler") as u32)
+                .map(|seed| address(5000 + seed))
+                .chain(ids("named").into_iter().map(pda::tree))
+                .map(|account| AccountMeta::new(account, false))
+                .chain(trees.metas())
+                .collect(),
+            data: vec![0; count("data")],
+        };
+        let preproof = crate::submission::check_transaction_size(&payer, &instruction, budget);
+        match case["refusal"].as_str() {
+            None => {
+                preproof.unwrap();
+                let fit =
+                    TransactionFit::inline(&instruction, FitSigners::new(payer), budget).unwrap();
+                assert_eq!(
+                    (fit.addresses, fit.bytes),
+                    (count("addresses"), count("bytes")),
+                    "{name}"
+                );
+            }
+            Some("addresses") => assert!(
+                matches!(preproof, Err(RingError::TooManyAddresses { addresses, limit: 64 })
+                    if addresses == count("addresses")),
+                "{name}"
+            ),
+            Some("bytes") => assert!(
+                matches!(preproof, Err(RingError::TransactionTooLarge { bytes, .. })
+                    if bytes == count("bytes")),
+                "{name}"
+            ),
+            Some(refusal) => panic!("{name}: {refusal}"),
+        }
+    }
+}
