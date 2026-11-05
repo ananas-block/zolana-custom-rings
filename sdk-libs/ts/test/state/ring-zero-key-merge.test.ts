@@ -5,11 +5,13 @@ import {
   addressBytes,
   encodeMergeOutputData,
   encryptMergeOutput,
-  seededMergeOutputBlinding,
-  seededMergeOutputKey,
   ZERO_32,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/spr/internal";
+import {
+  seededMergeOutputBlinding,
+  seededMergeOutputKey,
+} from "../../src/crypto/derivation/merge-seed.js";
 import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
 import { ViewingKey } from "@heliuslabs/spr/keypair";
 import { SOL_MINT, Utxo } from "@heliuslabs/spr/transaction";

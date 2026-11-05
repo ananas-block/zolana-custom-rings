@@ -16,10 +16,12 @@ import {
   equalBytes,
   hashBytes,
   poseidon,
-  seededMergeDummyNullifier,
-  seededMergeOutputBlinding,
   treeAddress,
 } from "@heliuslabs/spr/internal";
+import {
+  seededMergeDummyNullifier,
+  seededMergeOutputBlinding,
+} from "../../../src/crypto/derivation/merge-seed.js";
 import { InstructionTag } from "@heliuslabs/spr/interface";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
 import { ViewingKey, X25519Keypair } from "@heliuslabs/spr/keypair";

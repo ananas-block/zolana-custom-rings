@@ -176,7 +176,7 @@ export interface StagedTransfer {
   readonly spend: RailSpend;
 }
 
-/** The account group one deposit leg settles from, the funder signs it, Rust `TransactInterfaceTransferAccounts`. */
+/** Rust `TransactInterfaceTransferAccounts` of one deposit leg. */
 export type TransactDeposit =
   | Readonly<{ kind: "sol"; funder: SignerAccount }>
   | Readonly<{

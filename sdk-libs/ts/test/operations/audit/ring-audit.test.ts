@@ -6,7 +6,6 @@ import {
   ZERO_NULLIFIER_PK,
   encodeBase58,
   rightAlign,
-  seededMergeOutputBlinding,
   treeAddress,
   mergeOutputBlinding,
   mergeOutputKey,
@@ -16,6 +15,7 @@ import {
   encodeMergeOutputData,
   encryptMergeOutput,
 } from "@heliuslabs/spr/internal";
+import { seededMergeOutputBlinding } from "../../../src/crypto/derivation/merge-seed.js";
 import { initializePoseidon } from "@heliuslabs/spr";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
 import { ShieldedKeypair, X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";

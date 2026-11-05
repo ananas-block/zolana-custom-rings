@@ -212,6 +212,8 @@ export const RING_ERROR_CODES = [
   "RING_RELAY_FAILED",
   "RING_SUBMISSION_UNPROVED",
   "RING_RELAY_FEE_PAYER_FUNDS_DEPOSIT",
+  "RING_ZERO_KEY_MERGE_UNAVAILABLE",
+  "RING_EXIT_PROOF_UNAVAILABLE",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/spr/internal";
 import type { ErrorEnvelope } from "@heliuslabs/spr";

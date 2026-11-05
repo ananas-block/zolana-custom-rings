@@ -198,7 +198,8 @@ function pinnedRail(
   proven: Omit<ProvenRingTransact, "data"> & Readonly<{ data: RingTransactInstructionData }>,
 ): ProvenRingTransact {
   const { circuit } = proven.data;
-  if (circuit.kind === "anonymousRingEddsa") throw new Error("anonymous selector on a pinned rail");
+  if (circuit.kind === "anonymousRingEddsa" || circuit.kind === "ringAuthorityExit")
+    throw new Error("ring selector on a pinned rail");
   return { ...proven, data: { ...proven.data, circuit } };
 }
 
@@ -460,11 +461,6 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     proveRingTransact: async (proofInputs: SppProofInputs, ring: Address, keys: ProofAuthority) =>
       pinnedRail(spp(proofInputs, { kind: "ring", ring }, keys)),
     proveRingAuthorityTransact: async (
-      proofInputs: SppProofInputs,
-      ring: Address,
-      keys: ProofAuthority,
-    ) => pinnedRail(spp(proofInputs, { kind: "ringAuthority", ring }, keys)),
-    proveRingAuthorityExitTransact: async (
       proofInputs: SppProofInputs,
       ring: Address,
       keys: ProofAuthority,

@@ -127,8 +127,7 @@ export type CustomRingTransferClient = RingProvingClient &
 
 export type AnonymousTransferClient = RingProvingClient & AnonymousRingTransactProver;
 
-export type DelegateTransferClient = RingProvingClient &
-  Pick<Prover, "proveRingAuthorityTransact" | "proveRingAuthorityExitTransact">;
+export type DelegateTransferClient = RingProvingClient & Pick<Prover, "proveRingAuthorityTransact">;
 
 /** Public owners settle on SPP's confidential rail on either ring mode. */
 export type PublicOwnerTransferClient = RingProvingClient & Pick<Prover, "proveRingTransact">;
@@ -1237,6 +1236,9 @@ export class DelegateTransfer {
     context: RequestContext | undefined,
   ): Promise<ProvenRingTransfer> {
     const input = this.#input;
+    // The pinned core holds no exit key.
+    if (input.outputs.some((output) => output.exit === true))
+      throw new RingError("RING_EXIT_PROOF_UNAVAILABLE");
     const { ringProgramId } = input;
     const config = await activeConfig(client, ringProgramId, context);
     if (config.delegate === undefined)
@@ -1261,7 +1263,6 @@ export class DelegateTransfer {
       outputTreeId: input.outputTreeId ?? first.treeId,
     });
     checkWithdrawalAccounts(prepared, input.withdrawal?.accounts);
-    const hasExit = input.outputs.some((output) => output.exit === true);
     // The member never signs, the transaction key seals the move to the auditor.
     const rail = new RingOutputRail(
       input.txViewingKey === undefined
@@ -1303,11 +1304,7 @@ export class DelegateTransfer {
                   }
                 : {}),
               prove: (inputs, proveContext) =>
-                (hasExit
-                  ? client.proveRingAuthorityExitTransact
-                  : client.proveRingAuthorityTransact
-                ).call(
-                  client,
+                client.proveRingAuthorityTransact(
                   inputs,
                   ringProgramId,
                   ringSpendAuthority({

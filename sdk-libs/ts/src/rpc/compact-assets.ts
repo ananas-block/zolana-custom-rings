@@ -20,7 +20,7 @@ import { AssetRegistry, Mint, SOL_ASSET_ID, SOL_MINT } from "@heliuslabs/spr/tra
 
 export const COMPACT_ASSET_LOOKUP_BUDGET = 32;
 
-/** Past the discriminator, 7 reserved bytes and the mint. */
+/** Rust `SplAssetRegistry::asset_id`. */
 export const SPL_ASSET_REGISTRY_ASSET_ID_OFFSET = 40n;
 
 export type CompactAssetResolution =

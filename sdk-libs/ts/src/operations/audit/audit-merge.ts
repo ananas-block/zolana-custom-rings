@@ -8,10 +8,12 @@ import {
   equalBytes,
   MERGE_OUTPUT_BODY_LENGTH,
   readMergeOutputBody,
-  seededMergeDummyNullifier,
-  seededMergeOutputBlinding,
   ZERO_32,
 } from "@heliuslabs/spr/internal";
+import {
+  seededMergeDummyNullifier,
+  seededMergeOutputBlinding,
+} from "../../crypto/derivation/merge-seed.js";
 import type { Address, Bytes32, RequestContext, Signature } from "@heliuslabs/spr/interface";
 import type { X25519Keypair } from "@heliuslabs/spr/keypair";
 import type { OutputContext } from "@heliuslabs/spr/transaction";

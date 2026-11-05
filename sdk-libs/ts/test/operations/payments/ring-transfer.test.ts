@@ -1084,6 +1084,30 @@ describe("delegate rail", () => {
     expect(opened?.utxo.amount).toBe(100n);
   });
 
+  it("refuses a delegate exit before any read until the exit keys are pinned", async () => {
+    const source = ShieldedKeypair.generate();
+    const outside = ShieldedKeypair.generate();
+    const { fixture, delegate } = await delegateRing([source]);
+    const reads = fixture.client.getAccount;
+    const getAccount = vi.fn(reads);
+    await expect(
+      DelegateTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        delegate,
+        payer: fixture.authority,
+        source: source.shieldedAddress(),
+        sourceProofs: walletKeys(source),
+        inputs: [noteInput(source, 10_000n, fixture.ringProgramId)],
+        outputs: [
+          { recipient: outside.shieldedAddress(), asset: SOL_MINT, amount: 100n, exit: true },
+        ],
+        assets,
+      }).prove({ ...fixture.client, getAccount }),
+    ).rejects.toMatchObject({ code: "RING_EXIT_PROOF_UNAVAILABLE" });
+    expect(getAccount).not.toHaveBeenCalled();
+    expect(fixture.sppCalls).toHaveLength(0);
+  });
+
   it("takes the narrowest pinned authority shape holding a move and refuses a wider one", async () => {
     const source = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();

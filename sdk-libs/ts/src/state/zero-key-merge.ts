@@ -4,10 +4,12 @@ import {
   decryptMergeOutput,
   equalBytes,
   readMergeOutputBody,
-  seededMergeOutputBlinding,
-  seededMergeOutputKey,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/spr/internal";
+import {
+  seededMergeOutputBlinding,
+  seededMergeOutputKey,
+} from "../crypto/derivation/merge-seed.js";
 import type { Bytes32, RequestContext } from "@heliuslabs/spr/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import {

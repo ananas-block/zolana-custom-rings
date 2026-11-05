@@ -637,7 +637,31 @@ describe("ring merge", () => {
     expect(discard).toHaveBeenCalledTimes(2);
   });
 
-  it("trims a zero-key merge to its narrower width, Rust `WIDEST_ZERO_KEY_MERGE`", async () => {
+  it("refuses a zero-key merge before approval and any proof until the pin proves one", async () => {
+    const wallet = zeroKeyWallet(owner, [3n, 5n]);
+    const proveMerge = vi.fn<MergeAssembler["proveMerge"]>();
+    const approve = vi.fn(approveUnattended);
+    const params = await ringMergeParams({
+      proveMerge,
+      wallet,
+      keys: walletKeys(owner),
+      proofDataSource: "client",
+      enrolled: "none",
+    });
+    await expect(
+      buildRingMergeTransaction({ ...params, mergeZeroKey: true, approve }),
+    ).rejects.toMatchObject({
+      code: "RING_BUILD_MERGE",
+      causeCode: "RING_ZERO_KEY_MERGE_UNAVAILABLE",
+    });
+    expect(approve).not.toHaveBeenCalled();
+    expect(proveMerge).not.toHaveBeenCalled();
+    expect(params.client.proveRing).not.toHaveBeenCalled();
+    expect(wallet._reservationEntries()).toHaveLength(0);
+  });
+
+  // `RING_ZERO_KEY_MERGE_UNAVAILABLE` refuses every zero-key merge on the pinned prover request.
+  it.skip("trims a zero-key merge to its narrower width, Rust `WIDEST_ZERO_KEY_MERGE`", async () => {
     const owner = ShieldedKeypair.generate();
     const wallet = zeroKeyWallet(
       owner,
@@ -665,7 +689,7 @@ describe("ring merge", () => {
     expect(reservation?.utxoHashes).toHaveLength(WIDEST_ZERO_KEY_MERGE);
   });
 
-  it("publishes the owner of a zero-key merge under a zero root and reads no row", async () => {
+  it.skip("publishes the owner of a zero-key merge under a zero root and reads no row", async () => {
     const wallet = zeroKeyWallet(owner, [3n, 5n]);
     const proveMerge = vi.fn<MergeAssembler["proveMerge"]>(async ({ prepared }) => {
       const data = provenMerge(prepared);
@@ -1050,7 +1074,8 @@ describe("anonymous ring merge", () => {
 });
 
 describe("PDA owner merge", () => {
-  it("merges a PDA's zero-key notes, the PDA signs as the published owner", async () => {
+  // `RING_ZERO_KEY_MERGE_UNAVAILABLE` refuses every zero-key merge on the pinned prover request.
+  it.skip("merges a PDA's zero-key notes, the PDA signs as the published owner", async () => {
     const holder = await pdaOwner();
     const pda = holder.shieldedAddress().solanaAddress();
     const wallet = zeroKeyWallet(holder, [3n, 5n]);

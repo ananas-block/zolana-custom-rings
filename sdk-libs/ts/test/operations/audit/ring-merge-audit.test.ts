@@ -6,14 +6,16 @@ import {
   treeAddress,
   encodeMergeOutputData,
   encodeBase58,
-  seededMergeDummyNullifier,
-  seededMergeOutputBlinding,
   addressBytes,
   equalBytes,
   hashBytes,
   ZERO_32,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/spr/internal";
+import {
+  seededMergeDummyNullifier,
+  seededMergeOutputBlinding,
+} from "../../../src/crypto/derivation/merge-seed.js";
 import { initializePoseidon } from "@heliuslabs/spr";
 import type { Bytes16, Bytes32, Bytes33, Signature } from "@heliuslabs/spr/interface";
 import { X25519Keypair } from "@heliuslabs/spr/keypair";
