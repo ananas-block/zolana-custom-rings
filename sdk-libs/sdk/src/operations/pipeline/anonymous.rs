@@ -288,7 +288,7 @@ impl<'a> AnonymousMove<'a> {
         let payments = self.payments.len();
         let owner = self.sender.address()?.signing_pubkey;
         let ring = Some(self.ring.program_id());
-        let widest_spend = |key: AnonymousKey| widest(payments, |shape| key.serves(shape));
+        let widest_spend = |key: AnonymousKey| widest(payments + 1, |shape| key.serves(shape));
         let max_inputs = widest_spend(AnonymousKey::Commitment).ok_or(RingError::ShapeUnkeyed {
             rail: RingRail::Anonymous,
         })?;
@@ -331,16 +331,9 @@ impl<'a> AnonymousMove<'a> {
         key: AnonymousKey,
         candidate: &Candidate,
     ) -> Result<AnonymousTransfer<'a>, RingError> {
-        // Output 0 is always the sender change, a zero one when nothing returns.
-        let with_change = Candidate {
-            change: true,
-            ..candidate.clone()
-        };
-        let shape = with_change
-            .shape(self.payments.len(), |shape| key.serves(shape))
-            .ok_or(RingError::ShapeUnkeyed {
-                rail: RingRail::Anonymous,
-            })?;
+        let shape = self.shape(key, candidate).ok_or(RingError::ShapeUnkeyed {
+            rail: RingRail::Anonymous,
+        })?;
         let transaction = ConfidentialTransaction::new_with_ring(
             candidate.utxos.clone(),
             self.payer,
@@ -368,6 +361,14 @@ impl<'a> AnonymousMove<'a> {
                 })
             })?
             .with_shape(shape)
+    }
+
+    /// Output 0 is always the sender change, a zero one when nothing returns.
+    fn shape(&self, key: AnonymousKey, candidate: &Candidate) -> Option<Shape> {
+        let sender_change = usize::from(!candidate.change);
+        candidate.shape(self.payments.len() + sender_change, |shape| {
+            key.serves(shape)
+        })
     }
 }
 

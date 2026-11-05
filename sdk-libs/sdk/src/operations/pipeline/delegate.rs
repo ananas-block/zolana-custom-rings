@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BTreeSet};
+use std::collections::BTreeSet;
 
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;
@@ -15,15 +15,15 @@ use super::{
     anonymous::SenderChange,
     canonical_shape, pad_under_rail, sealed,
     selection::{
-        payment_total, spanned_trees, staged_tree_search, widest, Candidate, Funding,
-        PAIR_POOL_TREES,
+        payment_total, spanned_trees, widest, Candidate, Funding, RankedTrees, Reach, TreeSearch,
+        Trial,
     },
     shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
     RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    select::{SpendSelection, SpendableKeys},
+    select::{candidates, SpendSelection, SpendableKeys},
     CustomRing, CustomRingConfig, RingError,
 };
 
@@ -239,72 +239,85 @@ impl<'a> DelegateMove<'a> {
             .select_where(|utxo| trees.contains(&utxo.tree_id))
             .ok()
         };
-        // 1. Trees holding more of the move's mints lead the pair pool, a pair must hold every mint.
-        let mut trees: Vec<u16> = utxos
+        // 1. Each mint's reach bounds its funding, the mints share the input budget.
+        let reaches: Vec<Reach> = fundings
             .iter()
-            .map(|utxo| utxo.tree_id)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .map(|funding| {
+                Reach::new(
+                    candidates(&utxos, funding.asset, SpendableKeys::Any, |_| true),
+                    max_inputs,
+                )
+            })
             .collect();
-        trees.sort_by_key(|tree| {
-            Reverse(
+        // 2. Every mint funds on one shared set and a keyed shape holds its payments and change.
+        let mut ranked = TreeSearch {
+            trees: &RankedTrees::new(&reaches),
+            reaches: |set: &[u16]| {
                 fundings
                     .iter()
-                    .filter(|funding| {
-                        utxos.iter().any(|utxo| {
-                            utxo.tree_id == *tree && utxo.utxo.asset.asset == funding.asset
-                        })
+                    .zip(&reaches)
+                    .all(|(funding, reach)| reach.of(set) >= u128::from(funding.amount))
+            },
+            fund: |set: &[u16]| {
+                let funded = fundings
+                    .iter()
+                    .map(|funding| {
+                        funded_on(funding, set).map(|utxos| (funding.asset, funding.amount, utxos))
                     })
-                    .count(),
-            )
-        });
-        let pool = &trees[..trees.len().min(PAIR_POOL_TREES)];
-        // 2. Every mint funds on one shared set, a pair runs only when no tree alone funds them all.
-        let mut ranked = staged_tree_search(&trees, pool, |set| {
-            let funded = fundings
-                .iter()
-                .map(|funding| {
-                    funded_on(funding, set).map(|utxos| (funding.asset, funding.amount, utxos))
-                })
-                .collect::<Option<Vec<_>>>()?;
-            if spanned_trees(funded.iter().flat_map(|(_, _, utxos)| utxos)) < set.len() {
-                return None;
-            }
-            let notes = funded
-                .iter()
-                .map(|(_, _, utxos)| utxos.len())
-                .sum::<usize>();
-            if notes > max_inputs {
-                return None;
-            }
-            let total: u128 = funded
-                .iter()
-                .flat_map(|(_, _, utxos)| utxos)
-                .map(|utxo| u128::from(utxo.utxo.amount))
-                .sum();
-            Some(((notes, total, set.to_vec()), funded))
-        });
-        ranked.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
-        let attempts = ranked
-            .into_iter()
-            .map(|(_, funded)| {
-                let spent = self.spent_by_mint(funded)?;
-                let change = spent.iter().filter(|mint| mint.change > 0).count();
+                    .collect::<Option<Vec<_>>>()?;
+                // Picks on one tree repeat that tree's own trial.
+                if spanned_trees(funded.iter().flat_map(|(_, _, utxos)| utxos)) < set.len() {
+                    return None;
+                }
+                let notes = funded
+                    .iter()
+                    .map(|(_, _, utxos)| utxos.len())
+                    .sum::<usize>();
+                if notes > max_inputs {
+                    return None;
+                }
+                let totals: Vec<u128> = funded
+                    .iter()
+                    .map(|(_, _, utxos)| {
+                        utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum()
+                    })
+                    .collect();
+                let change = funded
+                    .iter()
+                    .zip(&totals)
+                    .filter(|((_, amount, _), total)| **total > u128::from(*amount))
+                    .count();
                 let shape = Candidate {
-                    utxos: spent.iter().flat_map(|mint| mint.utxos.clone()).collect(),
+                    utxos: funded
+                        .iter()
+                        .flat_map(|(_, _, utxos)| utxos.clone())
+                        .collect(),
                     change: false,
                 }
-                .shape(payments + change, keyed)
-                .ok_or_else(unkeyed)?;
-                self.transfer(spent)?.with_shape(shape)
+                .shape(payments + change, keyed);
+                let found = (notes, totals.iter().sum::<u128>(), set.to_vec());
+                Some(match shape {
+                    Some(_) => Trial::Feasible((found, funded, shape)),
+                    None => Trial::Infeasible((found, funded, shape)),
+                })
+            },
+        }
+        .run();
+        ranked.sort_unstable_by(|(left, ..), (right, ..)| left.cmp(right));
+        let attempts = ranked
+            .into_iter()
+            .map(|(_, funded, shape)| {
+                let shape = shape.ok_or_else(unkeyed)?;
+                self.transfer(self.spent_by_mint(funded)?)?
+                    .with_shape(shape)
             })
             .collect();
-        // With no tree set funding them all, the first short mint names the refusal.
+        // With no tree set funding them all, the first mint no set reaches names the refusal.
         let funding = fundings
             .iter()
-            .find(|funding| {
-                staged_tree_search(&trees, pool, |set| funded_on(funding, set)).is_empty()
-            })
+            .zip(&reaches)
+            .find(|(funding, reach)| !reach.reaches_anywhere(funding.amount))
+            .map(|(funding, _)| funding)
             .or_else(|| fundings.first())
             .ok_or(TransactionError::ZeroSpendAmount)?;
         funding.first_fit(attempts, client).await

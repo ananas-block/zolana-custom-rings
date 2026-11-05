@@ -48,6 +48,7 @@ import {
   ringProofInputs,
   ringSelectionErrors,
   selectAcrossTrees,
+  type Cover,
 } from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
@@ -370,44 +371,75 @@ function delegateCoSources(
   );
 }
 
-/** Plain ring notes of the source on one input tree, one cover per mint inside the widest authority shape holding the outputs. */
+/** Plain ring notes of the source, one cover per mint. */
 function selectSourceNotes(
   move: DelegateMove,
   wallet: Wallet,
   owners: readonly ShieldedAddress[],
   amounts: ReadonlyMap<Address, bigint>,
 ): readonly WalletUtxo[] {
-  // Every mint may return change, a withdrawal holds a slot of SPP's authority builder.
-  const outputs = move.outputs.length + amounts.size + (move.withdrawal === undefined ? 0 : 1);
+  const reserved = reservedUtxoKeys(wallet);
+  return selectAuthorityNotes({
+    wallet,
+    covers: [...amounts].map(([asset, amount]) => ({ asset, amount })),
+    // A withdrawal holds a slot of SPP's authority builder.
+    outputs: move.outputs.length + (move.withdrawal === undefined ? 0 : 1),
+    eligible: (entry) =>
+      unreserved(reserved)(entry) &&
+      entry.utxo.ringProgramId === move.ringProgramId &&
+      entry.dataHash === undefined &&
+      (entry.ringDataHash === undefined || equalBytes(entry.ringDataHash, ZERO_32)) &&
+      entry.utxo.data.utxoData() === undefined &&
+      entry.utxo.data.memo() === undefined &&
+      (entry.utxo.data.ringData()?.length ?? 0) === 0 &&
+      owners.some((owner) =>
+        equalBytes(
+          entry.utxo.owner.ownerProofInputHash(),
+          owner.signingPublicKey.ownerProofInputHash(),
+        ),
+      ),
+  });
+}
+
+/**
+ * @internal Rust `DelegateMove::select` on one tree, the widest authority shape holding `outputs`
+ * bounds the inputs and a selection fits only where a shape also holds each mint's change.
+ */
+export function selectAuthorityNotes(
+  input: Readonly<{
+    wallet: Wallet;
+    covers: readonly Cover[];
+    outputs: number;
+    eligible: (entry: WalletUtxo) => boolean;
+  }>,
+): readonly WalletUtxo[] {
+  const { covers, outputs } = input;
+  const holds = (inputs: number, needed: number) =>
+    RING_AUTHORITY_SHAPES.some((shape) => shape.inputs >= inputs && shape.outputs >= needed);
   const maxInputs = Math.max(
     0,
     ...RING_AUTHORITY_SHAPES.filter((shape) => shape.outputs >= outputs).map(
       (shape) => shape.inputs,
     ),
   );
-  const reserved = reservedUtxoKeys(wallet);
   return selectAcrossTrees({
-    wallet,
-    covers: [...amounts].map(([asset, amount]) => ({ asset, amount })),
+    wallet: input.wallet,
+    covers,
     policy: {
-      eligible: (entry) =>
-        unreserved(reserved)(entry) &&
-        entry.utxo.ringProgramId === move.ringProgramId &&
-        entry.dataHash === undefined &&
-        (entry.ringDataHash === undefined || equalBytes(entry.ringDataHash, ZERO_32)) &&
-        entry.utxo.data.utxoData() === undefined &&
-        entry.utxo.data.memo() === undefined &&
-        (entry.utxo.data.ringData()?.length ?? 0) === 0 &&
-        owners.some((owner) =>
-          equalBytes(
-            entry.utxo.owner.ownerProofInputHash(),
-            owner.signingPublicKey.ownerProofInputHash(),
-          ),
-        ),
+      eligible: input.eligible,
       ordering: "largestFirst",
       allowWideBalance: true,
       maxInputs,
       errors: ringSelectionErrors,
+    },
+    feasible: (entries) => {
+      const change = covers.filter(
+        (cover) =>
+          entries
+            .filter((entry) => entry.utxo.asset === cover.asset)
+            .reduce((sum, entry) => sum + entry.utxo.amount, 0n) > cover.amount,
+      ).length;
+      return holds(entries.length, outputs + change);
     },
     // The core `prepareRingAuthorityTransfer` refuses inputs on two trees.
     maxTrees: 1,
