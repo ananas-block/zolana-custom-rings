@@ -1,7 +1,9 @@
-use custom_ring_interface::{
-    AppMessage, RingPolicy, RingTransactData, MAX_CPI_DATA_LEN, MAX_FRAME_LEN,
-};
+use custom_ring_interface::{AppMessage, RingPolicy, RingTransactData, MAX_CPI_DATA_LEN};
+use solana_message::v1::MAX_TRANSACTION_SIZE;
 use spr_interface::instruction::TransactProof;
+
+/// An inline frame never passes the transaction it rides in, a bound above every settled frame.
+const FRAME_CEILING: usize = MAX_TRANSACTION_SIZE;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Payload {
@@ -18,7 +20,9 @@ pub struct MaximumPayload<'a, 'data> {
 }
 
 impl MaximumPayload<'_, '_> {
-    pub fn fill(self, payload: Payload) {
+    /// `false` when the frame passes the ceiling before any payload, no inline transfer carries it.
+    #[must_use]
+    pub fn fill(self, payload: Payload) -> bool {
         assert!(payload != Payload::Base);
         let Self {
             data,
@@ -35,6 +39,9 @@ impl MaximumPayload<'_, '_> {
             .spp_instruction_data_under(policy, TransactProof::zeroed())
             .unwrap()
             .len();
+        if compact > FRAME_CEILING {
+            return false;
+        }
         if payload == Payload::MaximumMessages {
             let empty = data.extensions.messages[0];
             data.extensions.messages.push(empty);
@@ -45,14 +52,14 @@ impl MaximumPayload<'_, '_> {
                 .len()
                 - expanded;
             data.extensions.messages.pop();
-            let extra = ((MAX_FRAME_LEN - compact) / compact_stride)
+            let extra = ((FRAME_CEILING - compact) / compact_stride)
                 .min((MAX_CPI_DATA_LEN - expanded) / expanded_stride)
                 .min(usize::from(u8::MAX) - 2 - usize::from(data.sender.is_some()));
             data.extensions.messages.extend((0..extra).map(|_| empty));
             compact += extra * compact_stride;
             expanded += extra * expanded_stride;
         }
-        let remaining = MAX_FRAME_LEN
+        let remaining = FRAME_CEILING
             .checked_sub(compact)
             .unwrap()
             .min(MAX_CPI_DATA_LEN.checked_sub(expanded).unwrap());
@@ -62,6 +69,7 @@ impl MaximumPayload<'_, '_> {
             .spp_instruction_data_under(policy, TransactProof::zeroed())
             .unwrap()
             .len();
-        assert!(compact == MAX_FRAME_LEN || expanded == MAX_CPI_DATA_LEN);
+        assert!(compact == FRAME_CEILING || expanded == MAX_CPI_DATA_LEN);
+        true
     }
 }

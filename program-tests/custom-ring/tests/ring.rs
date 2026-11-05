@@ -42,14 +42,8 @@ mod sanity_mixed_owners;
 
 #[path = "ring/anonymous.rs"]
 mod anonymous;
-#[cfg(feature = "proofs")]
-#[path = "ring/buffered_validation.rs"]
-mod buffered_validation;
 #[path = "ring/exemptions.rs"]
 mod exemptions;
-#[cfg(feature = "proofs")]
-#[path = "ring/full_load_validation.rs"]
-mod full_load_validation;
 #[path = "ring/lifecycle.rs"]
 mod lifecycle;
 #[path = "ring/merge.rs"]

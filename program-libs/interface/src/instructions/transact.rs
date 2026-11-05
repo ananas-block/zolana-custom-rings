@@ -1520,6 +1520,9 @@ impl TransactFlags {
     }
 }
 
+/// The runtime's ceiling on CPI instruction data, the expanded SPP call must fit it.
+pub const MAX_CPI_DATA_LEN: usize = 10 * 1024;
+
 /// SPP's `messages` vector has a `u8` length.
 pub const MAX_SPP_MESSAGES: usize = u8::MAX as usize;
 

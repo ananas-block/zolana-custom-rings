@@ -223,14 +223,6 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - The path touches no nullifier tree, and a transfer with a deposit leg stays valid beside it.
 - The tests are `TestDepositSlotRefusals`, `TestDepositRecordOffItsOpening`, `TestDepositZeroKeySurvivesEnrollment`, `TestDepositZeroKeyRetainsSaltedPayeeScreening`, `TestDepositAbsenceReadsTheFrameRoot`, `TestDepositScreensEachRecipientOnTheBlockList`, `TestDepositScreensEachAssetOnItsRecord` and `TestDepositReaderRebuildsEachNoteFromItsRecord` in `prover/circuits`.
 
-### A buffered frame is the frame its signers signed
-
-- `SettleBuffered` takes only the frame's digest as data, compares it with the buffer, and refuses another tag.
-- The program runs the same transfer path over the buffered bytes, and holds the SPP payer to the buffer's writer. The party check therefore covers the writer.
-- A self-CPI event carries the frame, so a reader recovers it after the buffer closes.
-- A buffer moves bytes and passes neither the address ceiling nor the CPI data ceiling.
-- The tests are `programs/custom-ring/tests/rules/buffer_rules.rs`.
-
 ## What no proof covers
 
 - The circuit constrains no recipient body, slot tag, sender bundle or reply. `the_external_data_hash_binds_every_delivery_byte` in `program-libs/interface/tests/transact.rs` pins the byte binding.

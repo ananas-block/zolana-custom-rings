@@ -1,4 +1,4 @@
-//! Buffered proof refusals do not establish settlement.
+//! Proof refusals at frames up to the transaction ceiling do not establish settlement.
 
 #[path = "../../../../program-tests/custom-ring/src/resource_frames.rs"]
 mod resource_frames;
@@ -8,11 +8,9 @@ use resource_frames::{MaximumPayload, Payload};
 use std::collections::HashSet;
 
 use custom_ring_interface::{
-    frame_digest,
     key_catalog::{FrameKey, TransferShape, TRANSFER_SHAPES},
-    settle_buffered_data, tag, CustomRingError, FrameBufferHeader, RecipientBody, Replies,
-    RingPolicy, RingRail, RingTransactData, RootRead, SlotBody, DATA_TAIL_LEN, MAX_CPI_DATA_LEN,
-    MAX_FRAME_LEN, MIN_REPLY_LEN,
+    tag, CustomRingError, RecipientBody, Replies, RingPolicy, RingRail, RingTransactData, RootRead,
+    SlotBody, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MIN_REPLY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -266,13 +264,7 @@ fn settlements(
     accounts
 }
 
-struct Sending {
-    case: Wide,
-    accounts: Vec<AccountMeta>,
-    bytes: Vec<u8>,
-}
-
-fn prepare(ring: &mut Ring, case: Wide) -> Sending {
+fn instruction(ring: &mut Ring, case: Wide) -> Option<Instruction> {
     let fixture = Fixture::new().with_identity_proof();
     let owners: Vec<[u8; 32]> = (0..MAX_INTERFACE_TRANSFERS)
         .map(|leg| [0x70 + leg as u8; 32])
@@ -298,13 +290,16 @@ fn prepare(ring: &mut Ring, case: Wide) -> Sending {
             data.replies = Some(Replies::new(MIN_REPLY_LEN as u16, &replies).unwrap());
         }
         fixture.fit_stream(&mut data);
-        MaximumPayload {
+        let filled = MaximumPayload {
             data: &mut data,
             policy: &policy,
             message: &message,
             view_tag: &message_tag,
         }
         .fill(case.payload);
+        if !filled {
+            return None;
+        }
     }
     let payer = ring.payer.pubkey();
     let owner_run = match (case.rail, case.in_proof) {
@@ -319,41 +314,16 @@ fn prepare(ring: &mut Ring, case: Wide) -> Sending {
         spp,
     ]
     .concat();
-    Sending {
-        case,
-        accounts,
-        bytes: data.encode().unwrap(),
-    }
-}
-
-fn buffered_instruction(ring: &mut Ring, sending: Sending) -> Instruction {
-    let buffer = Address::new_unique();
-    let frame = [vec![tag::TRANSFER], sending.bytes].concat();
-    assert!(frame.len() <= MAX_FRAME_LEN, "{}", sending.case.name());
-    let account = [
-        bytemuck::bytes_of(&FrameBufferHeader::new(ring.payer.pubkey())),
-        &frame,
-    ]
-    .concat();
-    ring.store(buffer, PROGRAM, account);
-    Instruction {
+    Some(Instruction {
         program_id: PROGRAM,
-        accounts: [
-            vec![
-                AccountMeta::new(buffer, false),
-                AccountMeta::new_readonly(PROGRAM, false),
-            ],
-            sending.accounts,
-        ]
-        .concat(),
-        data: settle_buffered_data(&frame_digest(&frame).unwrap()),
-    }
+        accounts,
+        data: [vec![tag::TRANSFER], data.encode().unwrap()].concat(),
+    })
 }
 
-fn send_widest(case: Wide) -> (Wide, usize, Sent) {
+fn send_widest(case: Wide) -> Option<(Wide, usize, Sent)> {
     let mut ring = Ring::new(case.setup);
-    let sending = prepare(&mut ring, case);
-    let instruction = buffered_instruction(&mut ring, sending);
+    let instruction = instruction(&mut ring, case)?;
     let addresses = instruction
         .accounts
         .iter()
@@ -361,15 +331,15 @@ fn send_widest(case: Wide) -> (Wide, usize, Sent) {
         .chain([PROGRAM, ring.payer.pubkey()])
         .collect::<HashSet<_>>()
         .len();
-    (case, addresses, ring.send(instruction, &[]))
+    Some((case, addresses, ring.send(instruction, &[])))
 }
 
 #[test]
-fn buffered_catalog_maxima_reach_pairing_or_refuse_excess_addresses() {
+fn catalog_maxima_at_the_transaction_ceiling_reach_pairing_or_refuse_excess_addresses() {
     let pairing = InstructionError::Custom(CustomRingError::ProofVerificationFailed as u32);
     let missed: Vec<String> = cases()
         .into_iter()
-        .map(send_widest)
+        .filter_map(send_widest)
         .filter(|(_, addresses, sent)| {
             if *addresses > usize::from(v1::MAX_ADDRESSES) {
                 !matches!(sent, Err((TransactionError::SanitizeFailure, _)))

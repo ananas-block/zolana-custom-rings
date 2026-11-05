@@ -20,10 +20,6 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
         tag::SET_DELEGATE,
         tag::AUTHORITY_TRANSFER,
         tag::DEPOSIT,
-        tag::WRITE_FRAME,
-        tag::CLOSE_FRAME_BUFFER,
-        tag::SETTLE_BUFFERED,
-        tag::FRAME_EVENT,
     ];
     let unique: std::collections::BTreeSet<_> = tags.into_iter().collect();
     assert_eq!(unique.len(), tags.len());
@@ -46,7 +42,7 @@ fn frame_tags_stay_pinned() {
 fn unassigned_tags_name_no_instruction() {
     for unassigned in [
         1, 2, 4, 5, 7, 8, 9, 10, 12, 18, 21, 22, 23, 24, 26, 28, 29, 30, 32, 33, 34, 35, 36, 37,
-        38, 39, 40, 41, 42, 48, 3, 25, 31, 43, 44, 45, 46, 47,
+        38, 39, 40, 41, 42, 48, 3, 25, 31, 43, 44, 45, 46, 47, 59, 60, 61, 63,
     ] {
         assert_eq!(
             InstructionTag::try_from(unassigned),
