@@ -1,4 +1,11 @@
 //! The anonymous rail's exit accounts and named parties, one reading for the program and the SDKs.
+//!
+//! A hidden sender's exit must name one key the proof can hold apart from the hidden owner. A SOL
+//! destination with data or a program owner, or a token account with a second authority or a keypair
+//! address, could name that owner behind another key, so each refuses.
+//!
+//! Read after `program-libs/interface/src/instructions/withdrawals.rs`. Read before `program-libs/interface/src/instructions/cosign.rs`,
+//! `programs/custom-ring/src/instructions/transfer/accounts.rs`.
 
 use solana_address::Address;
 use spl_token_2022_interface::{extension::PodStateWithExtensions, pod::PodAccount};

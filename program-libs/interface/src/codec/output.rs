@@ -1,4 +1,6 @@
 //! Ring output bodies in SPP's encrypted output framing, schemes SPP stores without parsing.
+//!
+//! Read after `program-libs/interface/src/proof/disclosure.rs`. Read before `program-libs/interface/src/codec/stream.rs`.
 
 use spr_event::{OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG};
 

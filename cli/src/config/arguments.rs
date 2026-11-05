@@ -81,7 +81,7 @@ pub enum Command {
     /// Enroll the member's nullifier key in the ring's tracking registry.
     #[command(subcommand)]
     Key(KeyCommand),
-    /// List the wallet enrolments that await the config authority, or approve one.
+    /// List the wallet enrolments that await the policy authority, or approve one.
     #[command(subcommand)]
     Enrolment(EnrolmentCommand),
     /// Read and write the list bits of member records.
@@ -147,7 +147,7 @@ pub enum PolicyCommand {
     Show,
     /// Compare ring.toml with the chain, exits non-zero on a difference.
     Check,
-    /// Replace the pinned table with ring.toml under the config authority.
+    /// Replace the pinned table with ring.toml under the policy authority.
     Set {
         /// Confirms the replacement, proofs built against the old table are refused from now on.
         #[arg(long)]
@@ -184,8 +184,7 @@ pub enum CoSignerCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum DelegateCommand {
-    /// Set the delegate once, signed by the delegate and by the config authority holding the ring
-    /// auditor key.
+    /// Set the delegate once, signed by the delegate and the admin, with the ring auditor key at hand.
     Set {
         /// The delegate's keypair, it signs the set and every later move.
         #[arg(long)]

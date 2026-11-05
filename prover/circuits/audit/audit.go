@@ -48,8 +48,8 @@
 //
 // It proves nothing about the freshness of tx_viewing_sk or the salt, see shared.Envelope.
 //
-// Read after shared/envelope.go, shared/derivation.go, shared/utxo.go, audit/layout.go.
-// Read before audit/record.go, audit/signer_data.go, transfer/transfer.go.
+// Read after transfer/transfer.go, shared/envelope.go, shared/derivation.go, shared/utxo.go,
+// audit/layout.go. Read before audit/record.go, transfer/input.go.
 package audit
 
 import (

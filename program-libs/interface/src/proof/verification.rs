@@ -1,3 +1,10 @@
+//! The one Groth16 check behind every ring proof, and the enrollment check the storage program runs.
+//!
+//! A ring proof has one public input, the statement hash the caller rebuilt, and a wrong element fails here.
+//!
+//! Read after `program-libs/interface/src/proof/key_catalog.rs`. Read before
+//! `programs/custom-ring/src/instructions/verification/verifier.rs`, `programs/storage/src/instructions/enroll.rs`.
+
 use groth16_solana::{
     decompression::{decompress_g1, decompress_g2},
     groth16::{Groth16Verifier, Groth16Verifyingkey},

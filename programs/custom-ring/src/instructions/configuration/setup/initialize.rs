@@ -122,7 +122,7 @@ pub fn process_initialize_ix(
     }
     Init(&*account).init(ring)?;
     let placed = RingAuth::derive(program_id)?.check_account(ring_auth)?;
-    // 5. Storage creates the registry at the address these seeds fix, the ring PDA's signature admits only this ring.
+    // 5. Storage creates the registry at the address these seeds fix, the ring PDA's signature admits no other ring.
     let tracking_data = [
         &[storage_tag::INITIALIZE_TRACKING][..],
         bytemuck::bytes_of(&InitializeTrackingIxData {

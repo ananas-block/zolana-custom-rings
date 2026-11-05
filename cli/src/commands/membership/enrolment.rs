@@ -1,4 +1,4 @@
-//! `enrolment`, the config authority's side of a wallet enrolment that awaits authority lists.
+//! `enrolment`, the policy authority's side of a wallet enrolment that awaits authority lists.
 
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_sdk::AuthorityRecordUpdate;
@@ -45,7 +45,7 @@ fn approve(ctx: &Context, wallet: Address) -> Result<()> {
         })?;
     ensure!(
         !lists.is_empty(),
-        "no enrolment of {wallet} awaits the config authority"
+        "no enrolment of {wallet} awaits the policy authority"
     );
     let authority = ctx.authority()?;
     let write = ListChange {

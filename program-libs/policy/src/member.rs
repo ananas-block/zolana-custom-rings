@@ -1,3 +1,9 @@
+//! The keys a record sits under, an owner's identity, a mint's asset field, a wallet's reader grant and an owner's salted key.
+//!
+//! A salted key names its owner only to a holder of the salt, so a private list entry shows no wallet in public.
+//!
+//! Read after `program-libs/policy/src/list.rs`. Read before `program-libs/policy/src/mint.rs`.
+
 use solana_address::Address;
 use spr_hasher::{
     primitives::{hash_bytes, right_align, solana_owner_identity},

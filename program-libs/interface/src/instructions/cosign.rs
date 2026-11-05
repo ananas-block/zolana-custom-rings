@@ -1,4 +1,10 @@
 //! One co-sign rule for the program and the SDKs.
+//!
+//! The operation and the proven approval bits demand classes, and each signed record covers a new
+//! one. An optional class falls away with no record on the ring, an approval class never does.
+//!
+//! Read after `program-libs/interface/src/instructions/anonymous_exit.rs`. Read before
+//! `programs/custom-ring/src/instructions/configuration/access/set_cosigner.rs`, `programs/custom-ring/src/instructions/accounts/loader.rs`.
 
 use crate::{CoSignScope, CoSigner, CustomRingError, RingPolicy};
 use solana_address::Address;

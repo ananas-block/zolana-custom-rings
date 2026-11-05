@@ -131,7 +131,7 @@ impl Context {
             .context("the ring has no config, run `zolana-ring init` first")
     }
 
-    /// The config authority, read once.
+    /// The policy authority, read once.
     pub fn authority(&self) -> Result<&Keypair> {
         if let Some(authority) = self.authority.get() {
             return Ok(authority);

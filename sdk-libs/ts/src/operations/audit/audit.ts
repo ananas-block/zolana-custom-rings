@@ -130,9 +130,7 @@ export interface AuditedSender {
 /** The ring or the default ring a spent UTXO belongs to, by its full commitment. */
 export type InputRing =
   | Readonly<{ kind: "ring"; commitment: Bytes32 }>
-  | Readonly<{ kind: "default"; commitment: Bytes32 }>
-  /** No known commitment told the candidates apart. */
-  | Readonly<{ kind: "unresolved"; ring: Bytes32; default: Bytes32 }>;
+  | Readonly<{ kind: "default"; commitment: Bytes32 }>;
 
 export interface AuditedInputOpening {
   readonly asset: Bytes32;

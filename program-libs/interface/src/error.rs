@@ -1,3 +1,7 @@
+//! Every refusal of the ring program, one enum for the program and its clients.
+//!
+//! Read after `program-libs/interface/src/lib.rs`. Read before `program-libs/interface/tests/error_codes.rs`.
+
 use solana_program_error::ProgramError;
 use spr_hasher::HasherError;
 use thiserror::Error;
@@ -47,21 +51,21 @@ ring_errors! {
     MissingFundingSigner = 8173 => "forwarded funding account must sign on entry",
     InvalidRingMode = 8174 => "the ring mode is unknown",
     InvalidAnonymousOutput = 8177 => "an anonymous ring output must carry a zero owner tag",
-    InvalidAnonymousSigner = 8178 => "an anonymous ring transaction takes no signer outside the payer, the owner run and the co-signer, and no owner run on the entry key",
+    InvalidAnonymousSigner = 8178 => "an anonymous ring transaction takes no signer outside the payer, the owner run, the co-signers and the funders",
     InvalidMergeDisclosure = 8179 =>
-        "the merge disclosure does not match the ring mode or the auditor key",
+        "the merge disclosure's ephemeral key is not tagged",
     InvalidDepositData = 8180 => "forwarded deposit data is invalid",
     MissingOwnerSigner = 8192 => "forwarded owner signer must sign on entry",
     MergeDisclosureWidth = 8199 => "the merge disclosure field count does not match the merge width",
     RingTransactLength = 8200 => "the compact transact data length disagrees with its flags and shape",
     RingShapeUnkeyed = 8201 => "no audit key or SPP rail key serves the shape on the rail",
     FlagNotAllowed = 8202 => "a transact flag the ring mode or policy forbids",
-    OwnerSignerCount = 8208 => "the owner run is empty under a policy or exceeds the key's signer slots",
+    OwnerSignerCount = 8208 => "the owner run is empty on a spend or exceeds the key's signer slots",
     MemberOutOfRange = 8209 => "the member lies outside the record range",
     ListBitNotWritable = 8210 => "the signer may not write a masked list bit",
     ValueOutsideMask = 8211 => "the list value leaves its mask or the mask is zero",
-    AuthorityBatchTooLarge = 8214 => "pending and authority writes exceed one batch",
-    PolicyNotSet = 8217 => "the policy ring has no policy yet",
+    AuthorityBatchTooLarge = 8214 => "the writes exceed one apply batch",
+    PolicyNotSet = 8217 => "the ring has no policy",
     InvalidSppProofPoint = 8218 => "the compressed SPP proof point does not decompress",
     PolicyAlreadySet = 8221 => "the policy ring already has a policy",
     DataFreeBodyLength = 8224 => "an exit payload is not a data-free scheme 3 body",
@@ -70,14 +74,14 @@ ring_errors! {
     PublicAmountOverflow = 8227 => "the net public amount of an asset exceeds a u64 magnitude",
     ZeroNetPublicAmount = 8228 => "the public legs of an asset net to zero",
     MissingPolicyProof = 8229 => "a policy ring transfer carries no policy proof",
-    UnexpectedPolicyProof = 8230 => "an audit-only ring transfer carries a policy proof",
+    UnexpectedPolicyProof = 8230 => "a transfer that reads no policy root carries a policy proof",
     CoSignerIsOwner = 8231 => "dual control needs a co-signer other than the owner",
     MemberWrittenListRule = 8233 => "a policy rule reads a list its members write",
     RingAuthOutOfSlot = 8234 => "the ring authority PDA sits outside its SPP slot",
     InvalidRingProofPoint = 8238 => "a ring proof point does not decompress",
     ThresholdsWithoutWithdrawals = 8239 => "co-signer thresholds need the withdrawal scope",
     UnexpectedMemberRegistryRoot = 8240 => "the statement binds no member registry root",
-    UnexpectedApproval = 8241 => "approval needs a member transfer under outflow limits",
+    UnexpectedApproval = 8241 => "a delegate frame carries no approval bit",
     InvalidSettlementAccounts = 8242 => "settlement accounts do not match the public legs",
     TooManyPublicLegs = 8243 => "too many public legs",
     InvalidAuditedDeposit = 8244 => "audited deposit does not wrap an SPP deposit",
@@ -91,9 +95,9 @@ ring_errors! {
         "an anonymous SPL withdrawal's token account address must be off the ed25519 curve",
     AnonymousExitTokenAccountInvalid = 8250 =>
         "an anonymous SPL withdrawal's destination is no initialized token program account",
-    OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
+    OutputBodyLength = 8253 => "a ring output body exceeds its length prefix",
     OutputCountOutOfRange = 8257 => "the published output count is zero or above the key's capacity",
-    InvalidChangeBits = 8258 => "change bits overlap an exit or are no prefix of two slots",
+    InvalidChangeBits = 8258 => "a bodiless slot is also an exit",
     ReplyLength = 8259 => "reply metadata is shorter than its keys or misses one reply per body-bearing slot",
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
     ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
@@ -127,7 +131,7 @@ ring_errors! {
     FrameWriteOutOfRange = 8524 => "the write falls outside the frame",
     UnsupportedBufferedTag = 8525 => "the frame's tag does not settle from a buffer",
     FramePayerNotWriter = 8526 => "the SPP payer of a settlement is not the buffer writer",
-    InvalidSignerDataCounts = 8527 => "signer data counts are zero under their bit or set a bit past the last entry",
+    InvalidSignerDataCounts = 8527 => "signer data counts are zero under their bit or pass the encoding",
     TooManyAnonymousParties = 8528 => "the co-signers and deposit funders pass the statement's party cells",
 }
 

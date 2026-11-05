@@ -167,7 +167,7 @@ func Wide16() World {
 // MemberWorlds is the honest world of every member key capacity.
 var MemberWorlds = map[int]func() World{2: Confidential, 4: Four, 8: Wide8, 16: Wide16}
 
-// Delegate is a move on the authority rail, every output escrowed and no outflow bounded.
+// Delegate is a move on the authority rail, no rule or cap binds it.
 func Delegate(outputs int) World {
 	w := Four()
 	w.Outputs, w.Delegate = outputs, true
@@ -179,7 +179,7 @@ func Require(subject, lists uint64) Rule {
 	return Rule{Subject: subject, Mode: policy.ModePresent, Mask: lists}
 }
 
-// Forbid refuses only a subject on every one of lists, as Rule::forbid_all does.
+// Forbid refuses only a subject on every one of lists, as Rule::forbid_only_on_all does.
 func Forbid(subject, lists uint64) Rule {
 	return Rule{Subject: subject, Mode: policy.ModeAbsent, Mask: lists}
 }

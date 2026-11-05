@@ -1,3 +1,12 @@
+//! The deposit statement and the key a deposit selects.
+//!
+//! SPP verifies no proof on a deposit, so the statement alone ties SPP's data, each owner commitment,
+//! each auditor record, the deposited assets and the roots together. `DepositContext` hashes SPP's
+//! data whole, a byte outside the hash would settle unproven.
+//!
+//! Read after `program-libs/interface/src/proof/statement.rs`. Read before `program-libs/interface/src/instructions/deposit_audit.rs`,
+//! `programs/custom-ring/src/instructions/settlement/deposit_audit.rs`, `prover/circuits/deposit.go`.
+
 use spr_hasher::{
     hash_chain::{create_hash_chain_4_from_slice, create_hash_chain_from_slice},
     primitives::{hash_bytes, pack_be, right_align, PACK_BE_CHUNK_BYTES},
@@ -50,7 +59,7 @@ pub struct DepositRegistry<'a> {
     pub own_root: &'a [u8; 32],
     /// `None` without a curator source.
     pub curator_root: Option<&'a [u8; 32]>,
-    /// Its table's asset rules screen every deposited asset, `None` before the first policy write.
+    /// Its table's asset rules screen every deposited asset, set on every policy ring.
     pub policy_hash: Option<&'a [u8; 32]>,
 }
 

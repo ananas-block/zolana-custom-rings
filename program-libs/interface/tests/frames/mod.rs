@@ -161,7 +161,7 @@ impl Fixture {
         self.with_audit_stream(data)
     }
 
-    /// No owner signs, SPP's anonymous rail hides the owner the delivered audit publishes.
+    /// No owner signs, SPP's anonymous rail hides the owner the frame names.
     pub fn confidential_in_proof_owner(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 2, 4);
         data.own_revision = Some(Revision::from(5));

@@ -1,4 +1,6 @@
 //! The totals a transfer proof binds for a co-signer, mirror `Screening.AssertApprovalTotals` in `prover/circuits/policy/screen.go`.
+//!
+//! Read after `program-libs/policy/src/quantities.rs`. Read before `prover/circuits/policy/screen.go`.
 
 use spr_hasher::{
     hash_chain::create_hash_chain_4_from_slice, primitives::right_align, HasherError,

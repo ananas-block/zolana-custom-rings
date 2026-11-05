@@ -56,7 +56,7 @@ const (
 	ListKeyDomain = 0x4352504c
 )
 
-// Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit/audit.ts.
+// The root of every auditor stream, mirrored by AUDIT_SHARED_SECRET in program-libs/interface/src/proof/domain.rs and DOM_SEP_CR_SHARED in sdk-libs/ts/src/crypto/audit/audit.ts.
 const (
 	// DomSepCRShared = "CR_S"
 	DomSepCRShared = 0x43525f53
@@ -74,7 +74,7 @@ const (
 	MergeEncInfo = "CRING/mrg"
 )
 
-// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a ring output under it holds its owner to no tracking row.
+// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a transfer or deposit output under it proves its owner absent from the tracking root, a merge output reads no row.
 var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c", 16)
 
 // SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.
