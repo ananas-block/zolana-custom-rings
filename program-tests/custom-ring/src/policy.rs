@@ -517,6 +517,7 @@ impl StorageRecords<'_> {
                 private_write: None,
                 apply: &apply,
             },
+            credential_trees: None,
         };
         let instruction = update.clone().instruction()?;
         let mut altered_apply = apply;
