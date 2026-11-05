@@ -97,7 +97,7 @@ describe("ApprovalTotals reads", () => {
   it("reads zero for an asset no slot names and for a dummy slot", () => {
     expect(totals.peakOf(identity(9))).toBe(0n);
     expect(totals.outflowOf(identity(9))).toBe(0n);
-    expect(totals.outputs[1]).toEqual({ asset: identity(0), peak: 0n, outflow: 0n });
+    expect(totals.outputs[1]).toEqual({ asset: identity(0), peak: 0n, chargedOutflow: 0n });
   });
 
   it("moves the commitment with the blinder and with a total", () => {

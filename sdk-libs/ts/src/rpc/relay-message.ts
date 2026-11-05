@@ -611,7 +611,7 @@ export function encodeApprovalOpening(opening: ApprovalOpening): string {
     outputs: opening.outputs.map((slot) => ({
       asset: encodeBase58(slot.asset),
       peak: slot.peak,
-      outflow: slot.outflow,
+      chargedOutflow: slot.chargedOutflow,
     })),
     public: opening.public.map((slot) => ({
       asset: encodeBase58(slot.asset),
@@ -633,11 +633,11 @@ function decodedApprovalOpening(wire: unknown): ApprovalOpening {
     blinder: hash32(row["blinder"]),
     outputs: Object.freeze(
       (row["outputs"] as readonly unknown[]).map((entry): OutputTotalsOpening => {
-        const slot = fields(entry, ["asset", "peak", "outflow"]);
+        const slot = fields(entry, ["asset", "peak", "chargedOutflow"]);
         return Object.freeze({
           asset: hash32(slot["asset"]),
           peak: text(slot["peak"]),
-          outflow: text(slot["outflow"]),
+          chargedOutflow: text(slot["chargedOutflow"]),
         });
       }),
     ),

@@ -51,6 +51,7 @@ Breaking
 - `recoverRingMemberNotes` returns a `RingRecoveryStep`, and at the `maxPages` cap a `paused` step in place of `RING_RECOVERY_INCOMPLETE` → read `notes` from a `complete` step and pass the `progress` of a `paused` step back as `progress` until the recovery completes, a progress resumes for its own member alone and raises `RING_RECOVERY_PROGRESS_MISMATCH` for another, and the same progress resumes again after an error.
 - The sender bundle is `output_seed`, one `ChangeCell` per bodiless slot and one recipient key per body-bearing slot, so `SenderBundle.change` replaces `mint`, `amount` and `solAmount`, `senderBundleLen` and `openSenderBundle` take the `BundleLayout` the frame's bodiless slots set, change is no longer limited to two cells, and nothing raises `RING_ANONYMOUS_CHANGE_COUNT` → deploy this release's ring program and Ring RPC with the SDK and read change from `SenderBundle.change`.
 - `OwnerDebit.outflow` → `chargedOutflow` and the `RING_OUTFLOW_CAP_EXCEEDED` detail `outflow` → `chargedOutflow`, the value is unchanged → read the new names.
+- `OutputTotals.outflow` and `OutputTotalsOpening.outflow` are `chargedOutflow`, and an approval opening's output rows carry `chargedOutflow` on the wire, a public row keeps `outflow` over debits → read the renamed field and deploy Ring RPC with the SDK.
 
 Added
 

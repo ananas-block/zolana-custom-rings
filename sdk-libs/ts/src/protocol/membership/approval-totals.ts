@@ -14,11 +14,14 @@ export interface OutputTotals {
   /** Zero on a dummy slot. */
   readonly asset: Bytes32;
   readonly peak: bigint;
-  readonly outflow: bigint;
+  readonly chargedOutflow: bigint;
 }
 
 /** `peak` and `outflow` read debits alone, a charged asset reads whole under its live output. */
-export interface PublicTotals extends OutputTotals {
+export interface PublicTotals {
+  readonly asset: Bytes32;
+  readonly peak: bigint;
+  readonly outflow: bigint;
   readonly gross: bigint;
 }
 
@@ -26,10 +29,13 @@ export interface PublicTotals extends OutputTotals {
 export interface OutputTotalsOpening {
   readonly asset: Bytes32;
   readonly peak: string;
-  readonly outflow: string;
+  readonly chargedOutflow: string;
 }
 
-export interface PublicTotalsOpening extends OutputTotalsOpening {
+export interface PublicTotalsOpening {
+  readonly asset: Bytes32;
+  readonly peak: string;
+  readonly outflow: string;
   readonly gross: string;
 }
 
@@ -64,32 +70,31 @@ export class ApprovalTotals {
     const { transfer } = input;
     const owners = orderedOwners(transfer);
     return new ApprovalTotals({
-      outputs: input.slotAssets.map((asset) =>
-        asset === undefined
-          ? Object.freeze({ asset: ZERO_32, peak: 0n, outflow: 0n })
-          : Object.freeze({
-              asset,
-              ...peakAndSum(assetFlows(transfer, owners, asset).map((row) => row.chargedOutflow)),
-            }),
-      ),
-      publicSlots: input.publicSlots.map(({ asset, gross }) =>
-        Object.freeze({
-          asset,
-          ...peakAndSum(assetFlows(transfer, owners, asset).map((row) => row.debit)),
-          gross,
-        }),
-      ),
+      outputs: input.slotAssets.map((asset) => {
+        if (asset === undefined)
+          return Object.freeze({ asset: ZERO_32, peak: 0n, chargedOutflow: 0n });
+        const { peak, sum } = peakAndSum(
+          assetFlows(transfer, owners, asset).map((row) => row.chargedOutflow),
+        );
+        return Object.freeze({ asset, peak, chargedOutflow: sum });
+      }),
+      publicSlots: input.publicSlots.map(({ asset, gross }) => {
+        const { peak, sum } = peakAndSum(
+          assetFlows(transfer, owners, asset).map((row) => row.debit),
+        );
+        return Object.freeze({ asset, peak, outflow: sum, gross });
+      }),
     });
   }
 
   /** Zero when no slot names `asset`. */
   peakOf(asset: Bytes32): bigint {
-    return this.#largest(asset, (slot) => slot.peak);
+    return this.#largest(asset, (peak) => peak);
   }
 
   /** Zero when no slot names `asset`. */
   outflowOf(asset: Bytes32): bigint {
-    return this.#largest(asset, (slot) => slot.outflow);
+    return this.#largest(asset, (_, total) => total);
   }
 
   /** The frame's `approvalTotals` extension, the blinder fresh per transaction. */
@@ -100,7 +105,7 @@ export class ApprovalTotals {
       ...this.outputs.flatMap((slot) => [
         slot.asset,
         amountField(slot.peak),
-        amountField(slot.outflow),
+        amountField(slot.chargedOutflow),
       ]),
       ...this.publicSlots.flatMap((slot) => [
         slot.asset,
@@ -111,10 +116,14 @@ export class ApprovalTotals {
     ]) as Bytes32;
   }
 
-  #largest(asset: Bytes32, read: (slot: OutputTotals) => bigint): bigint {
-    return [...this.outputs, ...this.publicSlots]
-      .filter((slot) => equalBytes(slot.asset, asset))
-      .map(read)
+  /** `total` is an output's charged outflow and a public slot's debits. */
+  #largest(asset: Bytes32, read: (peak: bigint, total: bigint) => bigint): bigint {
+    return [
+      ...this.outputs.map((slot) => [slot.asset, slot.peak, slot.chargedOutflow] as const),
+      ...this.publicSlots.map((slot) => [slot.asset, slot.peak, slot.outflow] as const),
+    ]
+      .filter(([slotAsset]) => equalBytes(slotAsset, asset))
+      .map(([, peak, total]) => read(peak, total))
       .reduce((largest, value) => (value > largest ? value : largest), 0n);
   }
 }
@@ -127,7 +136,7 @@ export function approvalOpeningOf(totals: ApprovalTotals, blinder: Bytes32): App
         Object.freeze({
           asset: slot.asset,
           peak: slot.peak.toString(),
-          outflow: slot.outflow.toString(),
+          chargedOutflow: slot.chargedOutflow.toString(),
         }),
       ),
     ),
@@ -148,9 +157,9 @@ export function approvalOpeningOf(totals: ApprovalTotals, blinder: Bytes32): App
 export function openingTotals(opening: ApprovalOpening): ApprovalTotals | undefined {
   const outputs: OutputTotals[] = [];
   for (const slot of opening.outputs) {
-    const [peak, outflow] = [parseAmount(slot.peak), parseAmount(slot.outflow)];
-    if (peak === undefined || outflow === undefined) return undefined;
-    outputs.push({ asset: slot.asset, peak, outflow });
+    const [peak, chargedOutflow] = [parseAmount(slot.peak), parseAmount(slot.chargedOutflow)];
+    if (peak === undefined || chargedOutflow === undefined) return undefined;
+    outputs.push({ asset: slot.asset, peak, chargedOutflow });
   }
   const publicSlots: PublicTotals[] = [];
   for (const slot of opening.public) {
@@ -172,13 +181,13 @@ function parseAmount(text: string): bigint | undefined {
   return amount > U128_MAX ? undefined : amount;
 }
 
-function peakAndSum(values: readonly bigint[]): Readonly<{ peak: bigint; outflow: bigint }> {
+function peakAndSum(values: readonly bigint[]): Readonly<{ peak: bigint; sum: bigint }> {
   return values.reduce(
-    ({ peak, outflow }, value) => ({
+    ({ peak, sum }, value) => ({
       peak: value > peak ? value : peak,
-      outflow: outflow + value,
+      sum: sum + value,
     }),
-    { peak: 0n, outflow: 0n },
+    { peak: 0n, sum: 0n },
   );
 }
 

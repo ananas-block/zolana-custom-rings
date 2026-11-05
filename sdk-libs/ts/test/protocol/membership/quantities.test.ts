@@ -29,7 +29,7 @@ type Case = Readonly<{
     debit: number;
     kept: number;
     charge: number;
-    outflow: number;
+    charged_outflow: number;
   }>[];
   guards: readonly Readonly<{ owner: number; asset: number; guard: number }>[];
   asset_guards: readonly Readonly<{ asset: number; guard: number }>[];
@@ -72,7 +72,7 @@ describe("quantities.json", () => {
         debit: BigInt(row.debit),
         kept: BigInt(row.kept),
         charge: BigInt(row.charge),
-        chargedOutflow: BigInt(row.outflow),
+        chargedOutflow: BigInt(row.charged_outflow),
       })),
     );
     const scope = new GuardScope({
