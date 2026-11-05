@@ -5,7 +5,6 @@ use std::{collections::VecDeque, time::Duration};
 use custom_ring_interface::{
     compute_unit_limit,
     storage::{Revision, StorageRegistry},
-    tracking::TrackingRegistry,
     CustomRingError, InstructionTag, RingPolicy,
 };
 use solana_address::Address;
@@ -21,11 +20,14 @@ use spr_client::{
     compile_message, sign_transaction, AsyncRpc, ClientError, ComputeBudgetConfig,
     RpcSendTransactionConfig,
 };
+use spr_interface::pda;
+use spr_tree::TreeAccount;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     address_ceiling::{FitSigners, FitTransport, TransactionFit},
     buffered::{write_budget, BufferedFrame},
+    credentials::{BoundCredentials, BoundTreeRoot},
     heap::boxed,
     AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer, PreparedRingDeposit,
     PublicOwnerTransfer, RingError, RingMergeOperation,
@@ -115,13 +117,6 @@ pub(crate) struct BoundRoot {
     pub registry: Address,
     pub revision: Revision,
     pub root: [u8; 32],
-    pub tree: RootTree,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RootTree {
-    Storage,
-    Tracking,
 }
 
 impl BoundRoot {
@@ -160,37 +155,57 @@ impl BoundRoot {
             registry,
             revision: newest.revision,
             root: newest.hash,
-            tree: RootTree::Storage,
-        })
-    }
-
-    /// The newest root of the ring's pinned tracking registry.
-    pub(crate) async fn tracking(
-        policy: &RingPolicy,
-        rpc: &(impl AsyncRpc + ?Sized),
-    ) -> Result<Self, RingError> {
-        let newest = live_tracking(policy.tracking, rpc).await?.newest();
-        Ok(Self {
-            registry: policy.tracking,
-            revision: newest.revision,
-            root: newest.hash,
-            tree: RootTree::Tracking,
         })
     }
 
     /// `true` once the registry no longer serves the root at its revision.
     async fn replaced(self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
-        let served = match self.tree {
-            RootTree::Storage => {
-                let registry = live_registry(self.registry, client).await?;
-                registry.root(self.revision, client.get_slot().await?)
-            }
-            RootTree::Tracking => {
-                let registry = live_tracking(self.registry, client).await?;
-                registry.root(self.revision, client.get_slot().await?)
-            }
-        };
+        let registry = live_registry(self.registry, client).await?;
+        let served = registry.root(self.revision, client.get_slot().await?);
         Ok(served != Ok(self.root))
+    }
+}
+
+impl BoundTreeRoot {
+    /// `true` once the tree's history no longer holds the root at its index.
+    async fn replaced(
+        self,
+        client: &(impl AsyncRpc + ?Sized),
+        read: impl FnOnce(&mut TreeAccount<'_>, u16) -> Option<[u8; 32]>,
+    ) -> Result<bool, RingError> {
+        let address = pda::tree(self.tree_id);
+        let mut data = client
+            .get_account(address)
+            .await?
+            .ok_or(RingError::MissingTree { address })?
+            .data;
+        let mut tree = TreeAccount::from_bytes(&mut data, address.to_bytes())
+            .map_err(|_| RingError::InvalidTree { address })?;
+        Ok(read(&mut tree, self.root_index) != Some(self.root))
+    }
+}
+
+impl BoundCredentials {
+    async fn moved(&self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
+        if let Some(address) = self.address {
+            if address
+                .replaced(client, |tree, index| {
+                    tree.nullifier_tree().root_by_index(index)
+                })
+                .await?
+            {
+                return Ok(true);
+            }
+        }
+        for state in &self.state {
+            if state
+                .replaced(client, |tree, index| tree.get_utxo_tree_root(index).ok())
+                .await?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -205,16 +220,6 @@ pub async fn live_registry(
         .ok_or(RingError::NotStorageRegistry { registry })
 }
 
-async fn live_tracking(
-    registry: Address,
-    rpc: &(impl AsyncRpc + ?Sized),
-) -> Result<TrackingRegistry, RingError> {
-    rpc.get_account(registry)
-        .await?
-        .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data))
-        .ok_or(RingError::NotStorageRegistry { registry })
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BoundPolicy {
     pub ring: CustomRing,
@@ -224,7 +229,7 @@ pub(crate) struct BoundPolicy {
 /// Ring refusals a fresh proof fixes, rows parsed verbatim by the TS parity test.
 const REPROOF: [(CustomRingError, Reproof); 4] = [
     (CustomRingError::RootNotServed, Reproof::Fixes),
-    (CustomRingError::TrackingRootBelowFloor, Reproof::Fixes),
+    (CustomRingError::AbsenceRootBelowFloor, Reproof::Fixes),
     (CustomRingError::UnboundRegistry, Reproof::Fixes),
     (CustomRingError::ProofVerificationFailed, Reproof::IfMoved),
 ];
@@ -241,6 +246,8 @@ enum Reproof {
 pub(crate) struct BoundState {
     pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
+    /// `None` on a frame that reads no credential.
+    pub credentials: Option<BoundCredentials>,
 }
 
 impl BoundState {
@@ -267,6 +274,11 @@ impl BoundState {
     async fn moved(&self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
         for root in &self.roots {
             if root.replaced(client).await? {
+                return Ok(true);
+            }
+        }
+        if let Some(credentials) = &self.credentials {
+            if credentials.moved(client).await? {
                 return Ok(true);
             }
         }
@@ -733,7 +745,7 @@ impl RingOperation<'_> {
                     proven.instruction(payer)?,
                     InstructionTag::Merge,
                     BoundState {
-                        roots: proven.bound_root().into_iter().collect(),
+                        credentials: proven.bound_credentials(),
                         ..BoundState::default()
                     },
                 )
@@ -746,6 +758,7 @@ impl RingOperation<'_> {
                     BoundState {
                         roots: proven.roots,
                         policy: proven.policy,
+                        credentials: Some(proven.credentials),
                     },
                 )
             }

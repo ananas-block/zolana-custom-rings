@@ -1,32 +1,25 @@
-use anyhow::Result;
-use custom_ring_interface::tracking::TrackingAuthorization;
-use custom_ring_sdk::{CustomRing, Enroll, EnrollPending};
+use anyhow::{bail, Result};
+use custom_ring_sdk::Enroll;
 use solana_signer::Signer;
-use spr_client::{BlockingIndexer, BlockingRpc};
+use spr_interface::pda;
 use spr_keypair::ShieldedKeypair;
-use zolana_ring_client::RingIndexer;
+use zolana_ring_client::{CredentialLookup, CredentialResolver};
 use zolana_ring_keys::ListSaltHolder;
 
-use crate::{line, Context, KeyCommand, Zolana};
+use crate::{line, Context, KeyCommand};
 
 const SEAL_PROMPT: &str = "seal the member key to the ring auditor and enroll it?";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Plan {
-    AlreadyRegistered,
+    AlreadyEnrolled,
     Enroll,
     Declined,
-}
-
-#[must_use]
-pub(crate) struct KeyEnrollment<'a> {
-    pub members: &'a [&'a ShieldedKeypair],
 }
 
 pub fn key(ctx: &Context, command: KeyCommand) -> Result<()> {
     match command {
         KeyCommand::Register => register_key(ctx),
-        KeyCommand::Apply => apply(ctx),
         KeyCommand::Rotate => crate::viewing_keys::rotate(ctx),
     }
 }
@@ -35,76 +28,76 @@ fn register_key(ctx: &Context) -> Result<()> {
     let sender = ctx.sender()?;
     let member = ShieldedKeypair::from_keypair(&sender)?;
     line("member", sender.pubkey());
-    let registered = registered(ctx.ring, &ctx.zolana, &member)?;
-    match plan(registered, || ctx.ask_yes(SEAL_PROMPT, true))? {
-        Plan::AlreadyRegistered => line("key", "already enrolled"),
+    match plan(enrolled(ctx, &member)?, || ctx.ask_yes(SEAL_PROMPT, true))? {
+        Plan::AlreadyEnrolled => line("key", "already enrolled"),
         Plan::Declined => line("key", "not enrolled"),
         Plan::Enroll => {
-            register(ctx, &member)?;
+            enroll(ctx, &member)?;
             line("key", "enrolled");
         }
     }
     Ok(())
 }
 
-impl KeyEnrollment<'_> {
-    pub(crate) fn ensure(self, ctx: &Context) -> Result<()> {
-        for member in self.members {
-            let outcome = if registered(ctx.ring, &ctx.zolana, member)? {
-                "already enrolled"
-            } else {
-                register(ctx, member)?;
+/// Enrolls each member that holds no credential.
+pub(crate) fn enroll_members(ctx: &Context, members: &[&ShieldedKeypair]) -> Result<()> {
+    for member in members {
+        let outcome = match enrolled(ctx, member)? {
+            true => "already enrolled",
+            false => {
+                enroll(ctx, member)?;
                 "enrolled"
-            };
-            line("member key", format_args!("{} {outcome}", member.pubkey()));
-        }
-        apply(ctx)
+            }
+        };
+        line("member key", format_args!("{} {outcome}", member.pubkey()));
     }
-}
-
-fn apply(ctx: &Context) -> Result<()> {
-    let applied = ctx.block(EnrollPending { ring: ctx.ring }.prove(ctx.ring_client()))?;
-    let Some(instruction) = applied else {
-        line("enrollments", "none pending");
-        return Ok(());
-    };
-    let signature = ctx.send(&[ctx.funded_authority()?], &[instruction])?;
-    line("enrollments", signature);
     Ok(())
 }
 
-fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {
-    let payer = ctx.funded_authority()?;
-    let instruction = ctx.block(
-        Enroll {
-            ring: ctx.ring,
-            payer: payer.pubkey(),
-            owner: member.pubkey(),
-            nullifier_key: &member.nullifier_key,
-            viewing_key: &member.viewing_key,
-            list_salt: member.list_salt(&ctx.ring.program_id())?,
-        }
-        .prove(ctx.ring_client()),
-    )?;
-    ctx.send(&[payer, member], &[instruction])?;
-    Ok(())
-}
-
-fn plan(registered: bool, confirm: impl FnOnce() -> Result<bool>) -> Result<Plan> {
-    Ok(match registered {
-        true => Plan::AlreadyRegistered,
-        false if confirm()? => Plan::Enroll,
-        false => Plan::Declined,
+/// An unknown lookup refuses, it never reads as unenrolled.
+pub(crate) fn enrolled(ctx: &Context, keys: &ShieldedKeypair) -> Result<bool> {
+    let resolver = CredentialResolver::new(ctx.ring.program_id(), keys.pubkey())
+        .with_nullifier_key(keys.nullifier_key.pubkey()?);
+    let lookup = ctx.block(async {
+        anyhow::Ok(
+            resolver
+                .resolve(ctx.chain().indexer(), ctx.chain().rpc())
+                .await?,
+        )
+    })?;
+    Ok(match lookup {
+        CredentialLookup::Present(_) => true,
+        CredentialLookup::Absent(_) => false,
+        CredentialLookup::Unknown(reason) => bail!(
+            "the credential of {} is unknown ({reason:?}), retry once the indexer serves it",
+            keys.pubkey()
+        ),
     })
 }
 
-/// The first key is final, the member's authorization account holds it.
-pub(crate) fn registered<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
-    ring: CustomRing,
-    zolana: &Zolana<R, I>,
-    keys: &ShieldedKeypair,
-) -> Result<bool> {
-    let policy = zolana.block_on(ring.require_policy(zolana.as_async().rpc()))?;
-    let (authorization, _) = TrackingAuthorization::find_address(&policy.tracking, &keys.pubkey());
-    Ok(zolana.rpc().get_account(authorization)?.is_some())
+fn enroll(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {
+    let payer = ctx.funded_authority()?;
+    let proven = ctx.block(
+        Enroll {
+            ring: ctx.ring,
+            owner: member.pubkey(),
+            payer: payer.pubkey(),
+            output_tree: pda::tree(0),
+            nullifier_key: &member.nullifier_key,
+            list_salt: member.list_salt(&ctx.ring.program_id())?,
+            viewing_pubkey: member.viewing_pubkey(),
+        }
+        .prove(ctx.ring_client()),
+    )?;
+    let signature = ctx.send(&[payer, member], &proven.instruction.instructions()?)?;
+    // A transfer reads the credential through the indexer, it must serve the enrollment first.
+    ctx.wait_for_indexed(signature)
+}
+
+fn plan(enrolled: bool, confirm: impl FnOnce() -> Result<bool>) -> Result<Plan> {
+    Ok(match enrolled {
+        true => Plan::AlreadyEnrolled,
+        false if confirm()? => Plan::Enroll,
+        false => Plan::Declined,
+    })
 }

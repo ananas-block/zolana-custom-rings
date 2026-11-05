@@ -24,7 +24,7 @@ pub struct GetListSaltRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetListSaltResponse {
-    /// Absent while the owner has no tracking row.
+    /// Absent while the owner holds no credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_salt: Option<Hash>,
 }

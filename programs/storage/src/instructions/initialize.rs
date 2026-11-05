@@ -8,7 +8,7 @@
 //! 2. `grace_slots`, `ring_id` and `private_ring_id` are final, no instruction writes them again.
 //!
 //! Relies on:
-//! 1. The ring checks `ring_id` in `load_records_registry` and `private_ring_id` in `RingPolicy::check_source_pair`.
+//! 1. `load_records_registry` checks the own registry ring id. `RegistrySlots::load` checks the private ring id of every salted source.
 //! 2. Storage authenticates the ring program preimage of `private_ring_id` on each credential write.
 
 use custom_ring_interface::{storage::StorageError, storage_instruction::InitializeIxData};

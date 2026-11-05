@@ -68,7 +68,7 @@ type World struct {
 	HasData bool
 	// Outputs replace slots by index before any hash reads them.
 	Outputs map[int]func(*ringaudit.Slot)
-	// Unenrolled owners hold no tracking row.
+	// Unenrolled owners hold no credential.
 	Unenrolled []*big.Int
 	// Enrolled maps an owner to the row key it holds in place of its note's key.
 	Enrolled map[string]*big.Int
@@ -115,7 +115,7 @@ func (w World) table() policy.Table {
 type Assembled struct {
 	Audit        ringaudit.Audit
 	Own, Curator *ringregistry.Registry
-	Tracking     *ringregistry.Tracking
+	Credentials  *ringregistry.Credentials
 	Sender       *big.Int
 	// Run is the signer set the program rebuilds.
 	Run      []*big.Int
@@ -223,10 +223,10 @@ func rows(a ringaudit.Audit, delegate bool, capacity int) []frontend.Variable {
 	return cells
 }
 
-// tracking enrolls every owner of a nonzero ring key.
-func (w World) tracking(t testing.TB, a ringaudit.Audit) *ringregistry.Tracking {
+// credentials enrolls every owner of a nonzero ring key.
+func (w World) credentials(t testing.TB, a ringaudit.Audit) *ringregistry.Credentials {
 	t.Helper()
-	tree := ringregistry.NewTracking(t)
+	tree := ringregistry.NewCredentials(t, a.RingProgramID)
 	enrolled := map[string]bool{}
 	enroll := func(utxo ringaudit.Utxo) {
 		owner := utxo.OwnerPkHash
@@ -333,7 +333,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 	c.SignerDataCounts = ringaudit.SignerDataCounts(run, a.Utxos())
 	c.Rows = rows(a, delegate, len(c.Rows))
 	c.ApprovalMask, c.ApprovalTotals, c.ApprovalBlinder = w.ApprovalMask, 0, 0
-	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Tracking: w.tracking(t, a), delegate: delegate}
+	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Credentials: w.credentials(t, a), delegate: delegate}
 	assembled.Own, assembled.Curator = w.registries(t, a, c.Rows)
 	w.reopen(t, c, assembled)
 	return assembled
@@ -347,7 +347,7 @@ func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
 	payments := make([]frontend.Variable, 0, len(c.OwnerEntries))
 	for o, slot := range a.Audit.Outputs {
 		outputOwners[o] = 0
-		if slot.Utxo.IsUtxo() && slot.Utxo.RingProgramID.Sign() != 0 {
+		if slot.Utxo.IsUtxo() && slot.Utxo.RingProgramID.Sign() != 0 && slot.Utxo.NullifierPk.Cmp(shared.ZeroNullifierPk) != 0 {
 			outputOwners[o] = slot.Utxo.OwnerPkHash
 		}
 		if !slot.Utxo.IsUtxo() {
@@ -359,7 +359,7 @@ func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
 	for _, leg := range c.Withdrawals {
 		payments = append(payments, leg.Owner)
 	}
-	ringpolicy.FillTracking(t, &c.Tracking, a.Tracking, c.Rows, outputOwners, &c.Policy, payments)
+	ringpolicy.FillCredentials(t, &c.Credentials, a.Credentials, c.Rows, outputOwners, &c.Policy, payments)
 }
 
 func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo, inputs []shared.UtxoWires) {
@@ -396,7 +396,7 @@ func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate 
 	for o, utxo := range utxos {
 		wires[o] = utxo.Wires()
 	}
-	ringpolicy.FillPools(t, p, wires, inputs, senders, a.Own, a.Curator, a.Tracking)
+	ringpolicy.FillPools(t, p, wires, inputs, senders, a.Own, a.Curator, a.Credentials)
 }
 
 // withdrawalHash mirrors policy openWithdrawals over the live legs.
@@ -438,8 +438,8 @@ func values(t testing.TB, c *transfer.Sections, a Assembled) Statement {
 		PrivateTxHash:       ringtest.AsBigInt(c.PrivateTxHash),
 		SignerCount:         len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
 		PolicyHash: ringtest.AsBigInt(c.PolicyHash), OwnRoot: ringtest.AsBigInt(c.OwnRoot), CuratorRoot: ringtest.AsBigInt(c.CuratorRoot),
-		TrackingRoot:   ringtest.AsBigInt(c.TrackingRoot),
-		WithdrawalHash: ringtest.AsBigInt(c.WithdrawalHash),
+		CredentialFields: ringtest.ToBigInts(c.Credentials.StatementFields()),
+		WithdrawalHash:   ringtest.AsBigInt(c.WithdrawalHash),
 	}
 	for k := range c.PublicAssets {
 		s.PublicAssets[k], s.PublicNets[k], s.PublicGross[k] = ringtest.AsBigInt(c.PublicAssets[k]), ringtest.AsBigInt(c.PublicAmounts[k]), ringtest.AsBigInt(c.PublicGross[k])

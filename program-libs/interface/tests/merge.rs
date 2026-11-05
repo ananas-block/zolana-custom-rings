@@ -1,11 +1,12 @@
 //! The ring merge request around its compressed SPP proof point.
 
 mod common;
+mod vector_credentials;
 
 use std::ops::Range;
 
 use custom_ring_interface::{
-    domain::MERGE_RECORD_LABEL, storage::Revision, AuditRecord, CustomRingError,
+    domain::MERGE_RECORD_LABEL, AuditRecord, CredentialRead, CustomRingError,
     CustomRingMergeIxData, CustomRingMergeIxDataRef, CustomRingProof, MergePublicInput,
     OpeningRecord, PlainGroth16Proof, RecordKind, SealedMergeRecord, OPENING_RECORD_LEN,
 };
@@ -51,7 +52,10 @@ fn merge_body() -> MergeTransactIxData {
 
 fn request(authority: MergeRingAuthority) -> CustomRingMergeIxData {
     CustomRingMergeIxData {
-        tracking_revision: Revision::from(3),
+        credential_read: match authority {
+            MergeRingAuthority::Ring => CredentialRead::new_state(3),
+            MergeRingAuthority::OwnerSigned => CredentialRead::empty(),
+        },
         output_ring_data_hash: [8; 32],
         authority,
         sealed: SealedMergeRecord {
@@ -94,13 +98,19 @@ fn the_view_rebuilds_the_exact_spp_body_from_the_compressed_point() {
         let bytes = request.serialize().unwrap();
         let spp_body = request.merge.serialize().unwrap();
         let view = CustomRingMergeIxDataRef::from_bytes(&bytes).unwrap();
-        assert_eq!(view.tracking_revision, Revision::from(3));
+        assert_eq!(view.credential_read, request.credential_read);
         assert_eq!(view.output_ring_data_hash, &[8; 32]);
         assert_eq!(view.authority, authority);
         assert_eq!(view.spp_merge_body().unwrap(), spp_body);
         assert_eq!(
             bytes.len() + 64,
-            8 + 32 + 1 + CustomRingProof::SIZE + 33 + OPENING_RECORD_LEN + spp_body.len()
+            1 + 2 * request.credential_read.state_root_indexes().len()
+                + 32
+                + 1
+                + CustomRingProof::SIZE
+                + 33
+                + OPENING_RECORD_LEN
+                + spp_body.len()
         );
         assert_eq!(view.proof, &request.sealed.proof);
         assert_eq!(view.eph_pk, &request.sealed.eph_pk);
@@ -200,8 +210,16 @@ fn merge_statement_matches_the_go_vector() {
         #[serde(rename = "ringProgramId")]
         ring_id: String,
         payer: String,
-        #[serde(rename = "trackingRoot")]
-        tracking_root: String,
+        #[serde(rename = "credentialOwner")]
+        credential_owner: String,
+        #[serde(rename = "stateRoot")]
+        state_root: StateRoot,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StateRoot {
+        tree_id: u16,
+        root: String,
     }
     #[derive(Deserialize)]
     struct Case {
@@ -214,6 +232,7 @@ fn merge_statement_matches_the_go_vector() {
     }
     #[derive(Deserialize)]
     struct Vector {
+        ring_program: String,
         auditor_pk: String,
         eph_pk: String,
         cases: Vec<Case>,
@@ -231,6 +250,16 @@ fn merge_statement_matches_the_go_vector() {
             .map(|element| field::<32>(element))
             .collect::<Vec<_>>();
         assert_eq!(elements[10] == [0; 32], case.name == "nonzero");
+        let credentials = vector_credentials::CredentialFields {
+            ring_program: &field(&vector.ring_program),
+            fields: &[
+                field(&request.credential_owner),
+                [0; 32],
+                spr_hasher::primitives::right_align(&request.state_root.tree_id.to_be_bytes()),
+                field(&request.state_root.root),
+            ],
+        }
+        .roots();
         let statement = MergePublicInput {
             output_utxo_hash: &field(&request.output_utxo_hash),
             first_nullifier: &field(&request.first_nullifier),
@@ -240,7 +269,7 @@ fn merge_statement_matches_the_go_vector() {
             ciphertext: &field(&case.ciphertext),
             payer: &field(&request.payer),
             published_owner: &elements[10],
-            tracking_root: &field(&request.tracking_root),
+            credentials: &credentials,
         };
         assert_eq!(elements, statement.elements().unwrap());
         assert_eq!(

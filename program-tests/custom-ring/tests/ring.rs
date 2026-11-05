@@ -831,11 +831,11 @@ impl AuditedSpends<'_> {
             .owners
             .iter()
             .map(|owner| {
-                let enrolled = owner_enrollment(env, self.ring, *owner)?
-                    .context("the owner holds an enrollment")?;
+                let credential = owner_enrollment(env, self.ring, *owner)?
+                    .context("the owner holds an audit credential")?;
                 Ok(SealedNullifierKey {
-                    eph_pk: X25519Pubkey::from_u(enrolled.eph_u)?,
-                    ciphertext: enrolled.ciphertext,
+                    eph_pk: X25519Pubkey::from_u(credential.eph_u)?,
+                    ciphertext: credential.ciphertext,
                 }
                 .open(self.auditor)?)
             })

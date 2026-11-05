@@ -19,19 +19,19 @@
 //
 // The auditor reads a transfer in three steps.
 //  1. X25519(auditor_sk, tx_u) and the salt give the stream's key and nonce.
-//  2. The envelope gives tx_viewing_sk, R and any entry evidence.
+//  2. The envelope gives tx_viewing_sk, note count R, absolute address bitmap A and any entry evidence.
 //  3. Each record, its tail, the derived blinding and the frame's tree id rebuild that slot's
 //     published hash. A dummy's record is zero and its hash rebuilds from the blinding and the
 //     frame's tree id.
 //
 // A statement built on the package proves the following.
 //  1. The stream is AES-256-CTR under a key schedule bound to the auditor key, tx_u and the salt,
-//     over the sealed tx_viewing_sk, R, the entry evidence, one record per slot and one tail per slot.
+//     over the sealed tx_viewing_sk, R, A, the entry evidence, one record per slot and one tail per slot.
 //  2. Each live slot's record and tail hold the opening its published commitment hashes, and a
 //     published slot's blinding derives from the sealed key. The auditor rebuilds every commitment
 //     from the stream and the frame.
-//  3. R counts the spent notes among the published inputs, and a default-ring input opens in the
-//     entry evidence.
+//  3. R counts spent notes and A selects address positions among the published inputs. Entry evidence
+//     opens each default ring note at its absolute input position, with zero openings elsewhere.
 //  4. A slot's kind derives from the domain and ring id its hash commits, no prover bit passes a note
 //     as a dummy.
 //  5. Every transmitted ciphertext byte is bound, the envelope through its counted digest and each
@@ -161,14 +161,14 @@ type Stream struct {
 	RecordChain frontend.Variable
 	// TailChain hashes every published tail's ciphertext, zero while has_data is clear.
 	TailChain frontend.Variable
-	// NoSpend is set at a zero R, the program then demands no owner signer.
+	// NoSpend is set at a zero R, address authorization remains with SPP.
 	NoSpend frontend.Variable
 }
 
 // SealStream mirrors AuditEnvelope::encode and the record layout in program-libs/interface/src/proof/audit_stream.rs.
 func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Envelope, shape StreamShape, opened Opened, spent SpentInputs) Stream {
 	ranges := shape.Ranges()
-	// 1. The circuit encrypts the key's full plaintext, tx_viewing_sk then the evidence.
+	// 1. The envelope binds tx_viewing_sk, the note count and absolute address positions before any entry openings.
 	evidence := spent.evidence(api, rc, ranges)
 	plaintext := slices.Concat(w.TxViewingSk[:], evidence.head, slices.Concat(evidence.entries...))
 	// The envelope's padding ends on the block before R0, the longest evidence never reaches a record's counter.

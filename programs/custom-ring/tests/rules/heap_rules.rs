@@ -295,10 +295,7 @@ fn prepare(ring: &mut Ring, case: Wide) -> Sending {
             output.body = SlotBody::Recipient(&body);
         }
         if case.rail == RingRail::Anonymous {
-            data.replies = Some(Replies {
-                len: MIN_REPLY_LEN as u16,
-                region: &replies,
-            });
+            data.replies = Some(Replies::new(MIN_REPLY_LEN as u16, &replies).unwrap());
         }
         fixture.fit_stream(&mut data);
         MaximumPayload {

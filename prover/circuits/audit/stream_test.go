@@ -277,6 +277,17 @@ func TestStreamVector(t *testing.T) {
 	data.HasData = true
 	data.Outputs[0].Utxo.DataHash = big.NewInt(0xda7a)
 	data.Outputs[0].Utxo.RingDataHash = big.NewInt(0x5ca1e)
+	addressOnly := ringaudit.NewSection(t, plainShape).Spending(t, 0)
+	addressOnly.Inputs[0] = addressInput()
+	addressOnly.InputCount = 1
+	interleaved := ringaudit.NewSection(t, audit.StreamShape{InputClass: 4, Outputs: 2}).Spending(t, 2)
+	interleaved.Inputs[2] = interleaved.Inputs[1]
+	interleaved.Inputs[1] = addressInput()
+	interleaved.InputCount = 4
+	interleavedEntry := ringaudit.NewSection(t, audit.StreamShape{InputClass: 4, Outputs: 2, Entry: true})
+	interleavedEntry.Inputs[2] = interleavedEntry.Inputs[1]
+	interleavedEntry.Inputs[1] = addressInput()
+	interleavedEntry.InputCount = 4
 	sections := []struct {
 		name    string
 		section ringaudit.Audit
@@ -285,6 +296,9 @@ func TestStreamVector(t *testing.T) {
 		{"compact", ringaudit.NewSection(t, plainShape).Omit(t, 1)},
 		{"data", data},
 		{"entry", ringaudit.NewSection(t, entryShape)},
+		{"address_only", addressOnly},
+		{"interleaved", interleaved},
+		{"interleaved_entry", interleavedEntry},
 	}
 	cases := make([]vectorCase, len(sections))
 	for k, tc := range sections {
@@ -312,7 +326,7 @@ func TestStreamVector(t *testing.T) {
 	}
 	txViewingSk, auditorSk := sections[0].section.Keys.TxViewingSk(), ringaudit.AuditorSk()
 	ringtest.PinVector(t, "audit/audit-stream.json", map[string]any{
-		"description":     "Auditor streams from solved witnesses. envelope = tx_viewing_sk || R || default_input_bits (entry keys) || entries, records at first_record_counter + 7 * i, tails at first_tail_counter + 4 * i under label CRING/adt. Produced by prover/circuits/audit/stream_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description":     "Auditor streams from solved witnesses. envelope = tx_viewing_sk || R || address_input_bits || default_input_bits (entry keys) || entries, records at first_record_counter + 7 * i, tails at first_tail_counter + 4 * i under label CRING/adt. Produced by prover/circuits/audit/stream_test.go with WRITE_AUDIT_VECTORS=1.",
 		"tx_viewing_sk":   hex.EncodeToString(txViewingSk[:]),
 		"auditor_sk":      hex.EncodeToString(auditorSk[:]),
 		"salt":            hex.EncodeToString(sections[0].section.Salt[:]),

@@ -94,7 +94,8 @@ type assetSplit struct {
 
 // constrainOutflow holds each row's outflow per asset to the asset's cap, the proven approval mask reads zero while active is off.
 func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active frontend.Variable, spend Spend, outputs []shared.Output, resolved subjects) Screening {
-	// 1. The gross of a slot is the program's fold of its legs. The range check gives every sum below the bound the comparator needs.
+	// 1. The program binds gross to settled withdrawal legs. The bound at debitBits admits gross above u64 and keeps policy comparisons over integers.
+	// Leg amounts, thresholds and net magnitudes have separate u64 bounds. Gross reads zero while inactive.
 	gross := make([]frontend.Variable, len(p.PublicGross))
 	for k := range gross {
 		gross[k] = api.Mul(active, p.PublicGross[k])

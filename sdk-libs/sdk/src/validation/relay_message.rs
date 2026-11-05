@@ -23,10 +23,7 @@ use spr_program::instruction::CreateAssociatedTokenAccount;
 use spr_transaction::{Mint, Utxo, WalletUtxo};
 use thiserror::Error;
 use zolana_ring_client::{
-    rpc::{
-        PrepareAuthorityTransferRequest, RelayEnrollInputs, RelayId, RelayQuote, TxViewingSecret,
-        ENROLL_COMPUTE_UNITS,
-    },
+    rpc::{RelayEnrollInputs, RelayId, TxViewingSecret},
     AuditEnvelope, OpenedAudit,
 };
 use zolana_ring_policy::{ApprovalTotals, Member, OutputTotals, PublicTotals};

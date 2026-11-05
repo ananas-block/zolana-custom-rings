@@ -7818,6 +7818,8 @@ dependencies = [
  "solana-keypair",
  "solana-transaction-error",
  "spr-client",
+ "spr-interface",
+ "spr-tree",
  "zolana-ring-policy",
 ]
 
@@ -9181,6 +9183,7 @@ dependencies = [
  "spr-keypair",
  "spr-program",
  "spr-transaction",
+ "spr-tree",
  "spr-user-registry-interface",
  "thiserror 2.0.20",
  "tokio",

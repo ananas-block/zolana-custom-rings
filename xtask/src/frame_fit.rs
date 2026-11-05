@@ -8,16 +8,16 @@ use anyhow::{Context, Result};
 use custom_ring_interface::{
     cosign::ApprovalMask,
     frame_digest,
-    key_catalog::{RecordPools, TransferShape, TransferSpend},
+    key_catalog::{RecordPools, TransferSpend},
     sender_bundle_len, settle_buffered_data, spl_withdrawal_count,
     storage::Revision,
     stream::slot_tag,
-    tag, AnonymousProofData, CustomRingMergeIxData, CustomRingProof, DepositPrefix,
-    FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof,
-    RecipientBody, Replies, RingDepositAuditCapsule, RingOutput, RingPolicy, RingRail,
-    RingTransactData, RootRead, SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
-    MAX_CPI_DATA_LEN, MAX_FRAME_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
-    OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    tag, AnonymousProofData, CredentialRead, CustomRingError, CustomRingMergeIxData,
+    CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
+    RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_FRAME_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS,
+    MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
     TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
@@ -50,12 +50,9 @@ const LEGS: usize = 4;
 const SPL_MINTS: usize = N_PUBLIC_SLOTS;
 
 const RING_PROGRAM: Address = address(0xa0);
-const TREE: Address = address(0xa1);
-const SECOND_TREE: Address = address(0xa2);
 const PAYER: Address = address(0xa3);
 const OWN: Address = address(0xa4);
 const CURATOR: Address = address(0xa5);
-const TRACKING: Address = address(0xa7);
 const DELEGATE: Address = address(0xa8);
 const COSIGNER_RECORD: Address = address(0xac);
 const COSIGNER: Address = address(0xad);
@@ -147,11 +144,17 @@ enum Legs {
     Spl,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CredentialPlacement {
+    Shared,
+    Disjoint,
+}
+
 #[derive(Clone, Copy)]
 struct Load {
     name: &'static str,
     outsider_payer: bool,
-    /// Own and curator roots beside the tracking root every frame names.
+    /// Own and curator roots precede the credential tree accounts.
     policy_roots: bool,
     co_signer: bool,
     legs: Legs,
@@ -161,6 +164,8 @@ struct Load {
     has_data: bool,
     replies: bool,
     second_tree: bool,
+    credential_state_trees: usize,
+    credential_placement: CredentialPlacement,
 }
 
 const MIN: Load = Load {
@@ -174,6 +179,8 @@ const MIN: Load = Load {
     has_data: false,
     replies: false,
     second_tree: false,
+    credential_state_trees: 1,
+    credential_placement: CredentialPlacement::Shared,
 };
 const FULL: Load = Load {
     name: "full",
@@ -183,9 +190,10 @@ const FULL: Load = Load {
     legs: Legs::Sol,
     priority_fee: true,
     every_body: true,
+    credential_state_trees: 2,
     ..MIN
 };
-const LOADS: [Load; 6] = [
+const LOADS: [Load; 8] = [
     MIN,
     FULL,
     Load {
@@ -205,6 +213,19 @@ const LOADS: [Load; 6] = [
     },
     Load {
         name: "full+2tree",
+        second_tree: true,
+        ..FULL
+    },
+    Load {
+        name: "full+4credential-shared",
+        credential_state_trees: 4,
+        second_tree: true,
+        ..FULL
+    },
+    Load {
+        name: "full+4credential-disjoint",
+        credential_state_trees: 4,
+        credential_placement: CredentialPlacement::Disjoint,
         second_tree: true,
         ..FULL
     },
@@ -276,22 +297,38 @@ struct Transfer {
     legs: usize,
 }
 
+enum TransferFit {
+    Measured(Measured),
+    Unkeyed,
+}
+
+enum CredentialFit {
+    Supported,
+    Excess { selected: usize, capacity: usize },
+}
+
 struct Measured {
     fit: Fit,
     buffered: Fit,
     frame_len: usize,
     spp_cpi_len: usize,
-    /// The catalog keys it and `parse` read it back.
-    keyed: bool,
+    credentials: CredentialFit,
 }
 
 impl Measured {
     const fn fits_inline(&self) -> bool {
-        self.fit.fits() && self.spp_cpi_len <= MAX_CPI_DATA_LEN
+        self.fit.fits()
+            && self.spp_cpi_len <= MAX_CPI_DATA_LEN
+            && !matches!(self.credentials, CredentialFit::Excess { .. })
     }
 
     fn buffered_limits(&self) -> Vec<String> {
         let mut limits = Vec::new();
+        if let CredentialFit::Excess { selected, capacity } = self.credentials {
+            limits.push(format!(
+                "credential trees {selected} exceed key capacity {capacity}"
+            ));
+        }
         if !self.buffered.fits() {
             limits.push(self.buffered.over());
         }
@@ -307,7 +344,7 @@ impl Measured {
         limits
     }
 
-    /// Transaction and CPI ceilings only, the catalog key apart.
+    /// Credential capacity and runtime ceilings both constrain a selected key.
     fn outcome(&self) -> Outcome {
         let limits = self.buffered_limits();
         if self.fits_inline() {
@@ -344,7 +381,7 @@ impl Outcome {
 }
 
 impl Transfer {
-    fn measure(&self) -> Result<Measured> {
+    fn measure(&self) -> Result<TransferFit> {
         let (frame, load) = (self.frame, self.load);
         let (inputs, outputs) = (self.shape.n_inputs(), self.shape.n_outputs());
         let rail = frame.rail();
@@ -436,7 +473,7 @@ impl Transfer {
             n_in: u8::try_from(inputs)?,
             n_out: u8::try_from(outputs)?,
             proof: &proof,
-            tracking_revision: revision,
+            credential_read: credential_read(load.credential_state_trees)?,
             own_revision: policy_roots.then_some(revision),
             policy: policy_roots.then_some(PolicyProof {
                 curator_revision: Some(revision),
@@ -468,10 +505,9 @@ impl Transfer {
             .fitted()
             .wide,
             outputs: slots,
-            replies: (load.replies && anonymous_frame).then_some(Replies {
-                len: MIN_REPLY_LEN as u16,
-                region: &reply_region,
-            }),
+            replies: (load.replies && anonymous_frame)
+                .then(|| Replies::new(MIN_REPLY_LEN as u16, &reply_region))
+                .transpose()?,
             sender: anonymous_frame.then_some(FramedSenderBundle {
                 tag: &field,
                 body: &bundle,
@@ -499,31 +535,38 @@ impl Transfer {
                 false => InputTrees::One(context),
             },
         };
-        let catalog = data.audit_stream();
+        let stream = match data.audit_stream() {
+            Ok(stream) => stream,
+            Err(CustomRingError::RingShapeUnkeyed) => return Ok(TransferFit::Unkeyed),
+            Err(error) => return Err(error.into()),
+        };
         let circuit_legs = if delegate {
             0
         } else {
             data.interface_transfers.len()
         };
-        let keyed = catalog.is_ok() && data.transfer_circuit(circuit_legs).is_ok();
-        // The shape's own key, a size the catalog may not list.
-        let key = TransferShape {
-            outputs: u8::try_from(outputs)?,
-            inputs: u8::try_from(inputs)?,
-            withdrawals: u8::try_from(LEGS)?,
-            owners: u8::try_from(inputs)?,
-            entry: frame.entry(),
-            wide: data.wide_owners,
+        let circuit = match data.transfer_circuit(circuit_legs) {
+            Ok(circuit) => circuit,
+            Err(CustomRingError::RingShapeUnkeyed) => return Ok(TransferFit::Unkeyed),
+            Err(error) => return Err(error.into()),
         };
-        let envelope = vec![14u8; data.stream_under(key).envelope().len];
+        let Some(capacity) = circuit.credential_capacity() else {
+            return Ok(TransferFit::Unkeyed);
+        };
+        let credentials = match data.credential_read.check_capacity(capacity) {
+            Ok(()) => CredentialFit::Supported,
+            Err(_) => CredentialFit::Excess {
+                selected: data.credential_read.state_root_indexes().len(),
+                capacity,
+            },
+        };
+        let envelope = vec![14u8; stream.envelope().len];
         data.envelope = &envelope;
         let encoded = data
-            .encode_under(key)
+            .encode()
             .with_context(|| format!("{} {:?}", frame.name(), self.shape))?;
-        if keyed {
-            let parsed = RingTransactData::parse(&encoded, rail)?;
-            anyhow::ensure!(parsed.data() == &data, "parse reads another frame");
-        }
+        let parsed = RingTransactData::parse(&encoded, rail)?;
+        anyhow::ensure!(parsed.data() == &data, "parse reads another frame");
 
         let payer = match (load.outsider_payer, frame) {
             (false, FrameRail::Signer | FrameRail::SignerEntry | FrameRail::PublicOwners) => {
@@ -534,9 +577,14 @@ impl Transfer {
         };
         let owner_signers: Vec<Address> =
             (0..self.owners).map(|owner| indexed(0xc0, owner)).collect();
+        let input_tree_id = match load.credential_placement {
+            CredentialPlacement::Shared => spr_program::ADDRESS_TREE_ID,
+            CredentialPlacement::Disjoint => u16::try_from(load.credential_state_trees + 1)?,
+        };
+        let input_tree = spr_interface::pda::tree(input_tree_id);
         let input_trees = match load.second_tree {
-            true => vec![TREE, SECOND_TREE],
-            false => vec![TREE],
+            true => vec![input_tree, spr_interface::pda::tree(input_tree_id + 1)],
+            false => vec![input_tree],
         };
         let accounts: Vec<TransactInterfaceTransferAccounts> =
             legs.iter().map(|(_, accounts)| *accounts).collect();
@@ -547,7 +595,7 @@ impl Transfer {
                 RingAuthorityTransact {
                     payer,
                     input_trees,
-                    output_tree: TREE,
+                    output_tree: input_tree,
                     ring_program_id: RING_PROGRAM,
                     interface_transfer_accounts: accounts,
                     data: expanded,
@@ -559,7 +607,7 @@ impl Transfer {
                 RingTransact {
                     payer,
                     input_trees,
-                    output_tree: TREE,
+                    output_tree: input_tree,
                     ring_program_id: RING_PROGRAM,
                     owner_signers,
                     interface_transfer_accounts: accounts,
@@ -584,7 +632,14 @@ impl Transfer {
             );
         }
 
-        let mut metas = ring_prefix(&config, read, co_signer);
+        let credential_accounts = load.credential_placement.accounts(&data.credential_read);
+        let mut metas = RingPrefix {
+            config: &config,
+            read,
+            credential_accounts: &credential_accounts,
+            co_signer,
+        }
+        .metas();
         if delegate {
             metas.push(AccountMeta::new_readonly(DELEGATE, true));
         }
@@ -612,13 +667,13 @@ impl Transfer {
                 load.priority_fee,
             )
         };
-        Ok(Measured {
+        Ok(TransferFit::Measured(Measured {
             fit: fit_of(metas, frame_bytes)?,
             buffered: fit_of(settling, settle)?,
             frame_len,
             spp_cpi_len,
-            keyed,
-        })
+            credentials,
+        }))
     }
 
     /// A hidden sender's exit names one destination.
@@ -662,7 +717,10 @@ impl Transfer {
         let mut widest = None;
         for owners in self.frame.required_owners()..=self.shape.n_inputs() {
             let attempt = Self { owners, ..*self };
-            if !attempt.measure()?.fit.fits() {
+            let TransferFit::Measured(measured) = attempt.measure()? else {
+                break;
+            };
+            if !measured.fits_inline() {
                 break;
             }
             widest = Some(owners);
@@ -674,7 +732,9 @@ impl Transfer {
     fn widest_settled_run(&self) -> Result<Option<(usize, Measured)>> {
         let mut widest = None;
         for owners in self.frame.required_owners()..=self.shape.n_inputs() {
-            let measured = Self { owners, ..*self }.measure()?;
+            let TransferFit::Measured(measured) = (Self { owners, ..*self }).measure()? else {
+                break;
+            };
             if matches!(measured.outcome(), Outcome::No(_)) {
                 break;
             }
@@ -688,24 +748,56 @@ fn ring_config() -> Box<RingPolicy> {
     let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
     config.auditor_pubkey[0] = 4;
     config.records = OWN;
-    config.tracking = TRACKING;
     config.sources[0].registry = CURATOR;
     config
 }
 
-fn ring_prefix(config: &RingPolicy, read: RootRead, co_signer: bool) -> Vec<AccountMeta> {
-    let (policy, _) = Address::find_program_address(&[RingPolicy::SEED], &RING_PROGRAM);
-    let mut metas = vec![AccountMeta::new_readonly(policy, false)];
-    metas.extend(
-        config
-            .root_registries(read)
-            .map(|registry| AccountMeta::new_readonly(registry, false)),
-    );
-    if co_signer {
-        metas.push(AccountMeta::new_readonly(COSIGNER_RECORD, false));
-        metas.push(AccountMeta::new_readonly(COSIGNER, true));
+fn address_tree() -> Address {
+    spr_interface::pda::tree(spr_program::ADDRESS_TREE_ID)
+}
+
+fn credential_read(state_trees: usize) -> Result<CredentialRead> {
+    Ok(CredentialRead::new(0, &vec![0; state_trees])?)
+}
+
+impl CredentialPlacement {
+    fn accounts(self, read: &CredentialRead) -> Vec<AccountMeta> {
+        let state_tree_start = usize::from(self == Self::Disjoint);
+        core::iter::once(address_tree())
+            .chain(
+                read.state_root_indexes()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| spr_interface::pda::tree((state_tree_start + index) as u16)),
+            )
+            .map(|tree| AccountMeta::new_readonly(tree, false))
+            .collect()
     }
-    metas
+}
+
+struct RingPrefix<'a> {
+    config: &'a RingPolicy,
+    read: RootRead,
+    credential_accounts: &'a [AccountMeta],
+    co_signer: bool,
+}
+
+impl RingPrefix<'_> {
+    fn metas(self) -> Vec<AccountMeta> {
+        let (policy, _) = Address::find_program_address(&[RingPolicy::SEED], &RING_PROGRAM);
+        let mut metas = vec![AccountMeta::new_readonly(policy, false)];
+        metas.extend(
+            self.config
+                .root_registries(self.read)
+                .map(|registry| AccountMeta::new_readonly(registry, false)),
+        );
+        metas.extend_from_slice(self.credential_accounts);
+        if self.co_signer {
+            metas.push(AccountMeta::new_readonly(COSIGNER_RECORD, false));
+            metas.push(AccountMeta::new_readonly(COSIGNER, true));
+        }
+        metas
+    }
 }
 
 fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
@@ -726,7 +818,10 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
         cache_slot: None,
     };
     let encoded = CustomRingMergeIxData {
-        tracking_revision: Revision::from(1),
+        credential_read: match authority {
+            MergeRingAuthority::Ring => CredentialRead::new_state(0),
+            MergeRingAuthority::OwnerSigned => CredentialRead::empty(),
+        },
         output_ring_data_hash: [8; 32],
         authority,
         sealed: SealedMergeRecord {
@@ -738,8 +833,8 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
     }
     .serialize()?;
     let spp = MergeRingV2 {
-        input_tree: TREE,
-        output_tree: TREE,
+        input_tree: address_tree(),
+        output_tree: address_tree(),
         ring_program_id: RING_PROGRAM,
         payer: PAYER,
         owner: matches!(authority, MergeRingAuthority::OwnerSigned).then_some(indexed(0xc0, 0)),
@@ -749,7 +844,17 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
     }
     .instruction()
     .accounts;
-    let mut metas = ring_prefix(&ring_config(), RootRead::merge(), false);
+    let credential_accounts = match authority {
+        MergeRingAuthority::Ring => vec![AccountMeta::new_readonly(address_tree(), false)],
+        MergeRingAuthority::OwnerSigned => Vec::new(),
+    };
+    let mut metas = RingPrefix {
+        config: &ring_config(),
+        read: RootRead::merge(),
+        credential_accounts: &credential_accounts,
+        co_signer: false,
+    }
+    .metas();
     metas.extend(spp);
     let instruction = Instruction {
         program_id: RING_PROGRAM,
@@ -797,7 +902,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
         })
         .collect::<Result<Vec<_>>>()?;
     let spp = RingDeposit {
-        tree: TREE,
+        tree: address_tree(),
         depositor: PAYER,
         ring_program_id: RING_PROGRAM,
         deposits,
@@ -807,7 +912,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
         tag: tag::DEPOSIT,
         key_capacity: u8::try_from(width)?,
         proof: bytemuck::Zeroable::zeroed(),
-        tracking_revision: Revision::from(1),
+        credential_read: credential_read(if full { width } else { 1 })?,
         own_revision: Revision::from(1),
         curator_revision: Revision::from(1),
     };
@@ -815,12 +920,19 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
         true => RootRead::Policy,
         false => RootRead::None,
     };
-    let mut metas = ring_prefix(&ring_config(), read, full);
+    let credential_accounts = CredentialPlacement::Shared.accounts(&prefix.credential_read);
+    let mut metas = RingPrefix {
+        config: &ring_config(),
+        read,
+        credential_accounts: &credential_accounts,
+        co_signer: full,
+    }
+    .metas();
     metas.extend(spp.accounts);
     let instruction = Instruction {
         program_id: RING_PROGRAM,
         accounts: metas,
-        data: [bytemuck::bytes_of(&prefix), &spp.data].concat(),
+        data: [prefix.encode()?.as_slice(), &spp.data].concat(),
     };
     Fit::of(&instruction, &PAYER, full)
 }
@@ -843,8 +955,8 @@ fn table() -> Result<String> {
         table,
         "Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings {MAX_TRANSACTION_SIZE} B, {MAX_ADDRESSES} accounts, {MAX_SIGNATURES} signatures."
     )?;
-    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The inline owner run is the inline ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
-    writeln!(table, "fits: the path that clears the transaction and CPI ceilings, the catalog key apart. limit: what stops a row with no path, rail for a shape the rail has no SPP key for, else the excess in accounts, signatures, bytes, buffer create or CPI data at that row's load. A missing catalog key is a choice of the catalog, no runtime limit.")?;
+    writeln!(table, "min: one credential state tree, no co-signer, no leg, no fee, the payer an owner where it may be. full: own and curator roots, two credential state trees, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. Shared loads start credential state trees at tree zero and reuse the first SPP input tree as the address tree. Both full+4credential loads carry four credential state trees and two SPP input trees. The disjoint load uses separate address, credential state and SPP input trees. Full deposits use one credential state tree per slot. Ring-authority merges read one credential state tree. Owner-signed merges read none. The inline owner run is the inline ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
+    writeln!(table, "fits: the path that clears the transaction and CPI ceilings and the selected key credential capacity. limit: what stops a row with no path, rail for a shape the rail has no SPP key for, else the excess in credential trees, accounts, signatures, bytes, buffer create or CPI data at that row's load. A missing catalog key has no encoded measurement.")?;
     writeln!(table, "| shape | rail | load | catalog key | inline bytes | inline accounts | signatures | inline owner run | inline over | frame | SPP CPI | buffered bytes | buffered accounts | fits | limit |")?;
     writeln!(
         table,
@@ -870,7 +982,17 @@ fn table() -> Result<String> {
                     owners: frame.required_owners(),
                     legs: LEGS,
                 };
-                let measured = transfer.measure()?;
+                let TransferFit::Measured(measured) = transfer.measure()? else {
+                    writeln!(
+                        table,
+                        "| {}x{} | {} | {} | none | - | - | - | - | - | - | - | - | - | no | catalog key |",
+                        shape.n_inputs(),
+                        shape.n_outputs(),
+                        frame.name(),
+                        load.name,
+                    )?;
+                    continue;
+                };
                 let widest = match frame.has_owner_run() && load.name == FULL.name {
                     true => transfer
                         .widest_owner_run()?
@@ -881,12 +1003,11 @@ fn table() -> Result<String> {
                 let outcome = measured.outcome();
                 writeln!(
                     table,
-                    "| {}x{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    "| {}x{} | {} | {} | yes | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                     shape.n_inputs(),
                     shape.n_outputs(),
                     frame.name(),
                     load.name,
-                    if measured.keyed { "yes" } else { "none" },
                     fit.bytes,
                     fit.addresses,
                     fit.signatures,
@@ -974,20 +1095,28 @@ fn entry_capacities(table: &mut String) -> Result<()> {
                         legs,
                     };
                     let Some((owners, measured)) = transfer.widest_settled_run()? else {
-                        let limit = transfer.measure()?.outcome().limit().to_owned();
+                        let limit = match transfer.measure()? {
+                            TransferFit::Measured(measured) => {
+                                measured.outcome().limit().to_owned()
+                            }
+                            TransferFit::Unkeyed => "catalog key".to_owned(),
+                        };
                         writeln!(table, "| {}x{} | {} | {} | {legs} | {name} | none | - | - | - | - | - | no | {limit} |", shape.n_inputs(), shape.n_outputs(), frame.name(), load.name)?;
                         break;
                     };
                     let over = match owners == shape.n_inputs() {
                         true => "inputs".to_owned(),
-                        false => Transfer {
+                        false => match (Transfer {
                             owners: owners + 1,
                             ..transfer
-                        }
+                        })
                         .measure()?
-                        .outcome()
-                        .limit()
-                        .to_owned(),
+                        {
+                            TransferFit::Measured(measured) => {
+                                measured.outcome().limit().to_owned()
+                            }
+                            TransferFit::Unkeyed => "catalog key".to_owned(),
+                        },
                     };
                     let path = match measured.fits_inline() {
                         true => measured.fit,
@@ -1016,6 +1145,88 @@ fn entry_capacities(table: &mut String) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn frame_construction_covers_declared_loads() {
+        use super::*;
+        use custom_ring_interface::MAX_CREDENTIAL_READS;
+
+        for shape in SPP_SUPPORTED_SHAPES {
+            for frame in FrameRail::ALL {
+                if !frame.rail().supports(shape) {
+                    continue;
+                }
+                for load in LOADS {
+                    Transfer {
+                        frame,
+                        shape,
+                        load,
+                        owners: frame.required_owners(),
+                        legs: LEGS,
+                    }
+                    .measure()
+                    .unwrap_or_else(|error| {
+                        panic!("{} {shape:?} {} {error:#}", frame.name(), load.name)
+                    });
+                }
+            }
+        }
+
+        let transfer = Transfer {
+            frame: FrameRail::Signer,
+            shape: Shape::new(2, 2),
+            load: Load {
+                credential_state_trees: 4,
+                second_tree: true,
+                ..FULL
+            },
+            owners: 1,
+            legs: LEGS,
+        };
+        let TransferFit::Measured(shared) = transfer.measure().unwrap() else {
+            panic!("shared fixture has no catalog key");
+        };
+        let disjoint = Transfer {
+            load: Load {
+                credential_placement: CredentialPlacement::Disjoint,
+                ..transfer.load
+            },
+            ..transfer
+        }
+        .measure()
+        .unwrap();
+        let TransferFit::Measured(disjoint) = disjoint else {
+            panic!("disjoint fixture has no catalog key");
+        };
+        assert_eq!(disjoint.fit.addresses, shared.fit.addresses + 3);
+        assert_eq!(disjoint.buffered.addresses, shared.buffered.addresses + 3);
+
+        let excess = Transfer {
+            load: Load {
+                credential_state_trees: MAX_CREDENTIAL_READS,
+                ..MIN
+            },
+            ..transfer
+        }
+        .measure()
+        .unwrap();
+        let TransferFit::Measured(excess) = excess else {
+            panic!("excess fixture has no catalog key");
+        };
+        assert!(matches!(excess.credentials, CredentialFit::Excess { .. }));
+        assert!(matches!(excess.outcome(), Outcome::No(_)));
+        assert!(!excess.fits_inline());
+
+        let unkeyed = Transfer {
+            frame: FrameRail::SignerEntry,
+            shape: Shape::new(1, 16),
+            load: MIN,
+            ..transfer
+        }
+        .measure()
+        .unwrap();
+        assert!(matches!(unkeyed, TransferFit::Unkeyed));
+    }
+
     #[test]
     fn the_table_is_the_committed_measurement() {
         let committed = include_str!("../../test-vectors/proof/ring-frame-fit.md");

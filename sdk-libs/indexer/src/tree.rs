@@ -6,8 +6,7 @@ use zolana_ring_member_registry::MemoryTree;
 pub use zolana_ring_member_registry::{
     ApplyProofInputs, Canopy, IndexedLeaf, IndexedRecord, MemberRecord, NodePosition, OpeningCheck,
     PoolSubject, QuadPath, QuadPathOf, RecordOpening, RecordPool, RecordPoolOf, RecordStore,
-    RecordTree, RecordTreeError, RecordWriteProofInput, SharedPath, SharedProof, TrackingOpening,
-    TrackingPath, TrackingPool, TrackingRecord, TrackingWriteProofInput, WritableLeaf,
+    RecordTree, RecordTreeError, RecordWriteProofInput, SharedPath, SharedProof, WritableLeaf,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

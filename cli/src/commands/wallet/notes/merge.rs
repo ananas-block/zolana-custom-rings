@@ -12,7 +12,7 @@ use spr_keypair::ShieldedKeypair;
 use spr_transaction::{SpendableDecryptionResult, WalletUtxo, SOL_MINT};
 
 use crate::{
-    assets, fund::MIN_AUTHORITY_BALANCE, line, member::KeyEnrollment, wallet::WalletScan, Context,
+    assets, fund::MIN_AUTHORITY_BALANCE, line, member::enroll_members, wallet::WalletScan, Context,
     MergeArgs,
 };
 
@@ -63,11 +63,8 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     let (output_hash, merged_amount) = (prepared.output().hash(tree_id)?, prepared.output().amount);
     let merge = RingMergeOperation::new(prepared, proof_input);
     ctx.fund(payer.pubkey(), MIN_AUTHORITY_BALANCE)?;
-    // A keyed merge proves the owner's tracking row.
-    KeyEnrollment {
-        members: &[&sender],
-    }
-    .ensure(ctx)?;
+    // A keyed merge proves the owner's credential.
+    enroll_members(ctx, &[&sender])?;
     let signature = ctx.submit(merge, payer, &[])?;
     ctx.wait_for_indexed(signature)?;
     let merged = scan()?;

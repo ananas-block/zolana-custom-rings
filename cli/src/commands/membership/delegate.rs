@@ -2,8 +2,8 @@
 
 use anyhow::{anyhow, ensure, Context as _, Result};
 use custom_ring_sdk::{
-    DelegateMove, DelegatePayment, DelegateSource, DelegateSourceError, ResolvedSource,
-    TrackingEnrollment, WideFrames,
+    CredentialEnrollment, DelegateMove, DelegatePayment, DelegateSource, DelegateSourceError,
+    ResolvedSource, WideFrames,
 };
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc};
@@ -39,9 +39,10 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
     // The auditor key decrypts recovery material, only the delegate signs.
     let auditor = ring_auditor_key(ctx, &args.auditor_key)?;
     let chain = ctx.chain();
-    let enrollment = TrackingEnrollment {
+    let enrollment = CredentialEnrollment {
+        photon: chain.indexer(),
         rpc: chain.rpc(),
-        tracking_registry: config.account().tracking,
+        ring: ctx.ring.program_id(),
         auditor: &auditor,
     };
     let resolved = ctx

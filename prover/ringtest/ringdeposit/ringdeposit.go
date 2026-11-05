@@ -42,11 +42,11 @@ type Note struct {
 }
 
 type Deposit struct {
-	Circuit  *circuits.DepositCircuit
-	Keys     ringaudit.Keys
-	Notes    []Note
-	Tracking *ringregistry.Tracking
-	spec     Spec
+	Circuit     *circuits.DepositCircuit
+	Keys        ringaudit.Keys
+	Notes       []Note
+	Credentials *ringregistry.Credentials
+	spec        Spec
 	// Plaintext is one record per slot of MaxDeposits, the bytes the stream seals.
 	Plaintext []byte
 }
@@ -138,9 +138,11 @@ func (s Spec) Build(t testing.TB) *Deposit {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &Deposit{Circuit: c, Keys: ringaudit.DefaultKeys(t), Tracking: ringregistry.NewTracking(t), spec: s}
+	ringProgram := ringregistry.CredentialProgram()
+	d := &Deposit{Circuit: c, Keys: ringaudit.DefaultKeys(t), Credentials: ringregistry.NewCredentials(t, ringtest.HashBytes(t, ringProgram[:])), spec: s}
 	c.ContextHash, c.Count = big.NewInt(0xabcdef), s.Count
 	zeroUnreadInputs(&c.Policy)
+	c.RingProgramID = d.Credentials.RingID
 	c.Table, c.PolicyHash = ringpolicy.Table{}.Wires(), 0
 	lists := own
 	if s.Policy.Curator {
@@ -182,8 +184,8 @@ func (s Spec) Build(t testing.TB) *Deposit {
 			ownerPkHash, asset = ringtest.MustSolanaPkField(t, note.OwnerKey), ringtest.AssetField(t, note.Mint)
 			if slices.Contains(s.ZeroKeys, i) {
 				note.NullifierPk = new(big.Int).Set(shared.ZeroNullifierPk)
-			} else if !d.Tracking.Opening(ownerPkHash).Present {
-				ringpolicy.Enroll(t, d.Tracking, ownerPkHash, note.NullifierPk)
+			} else if ringtest.AsBigInt(d.Credentials.Opening(t, ownerPkHash).Present).Sign() == 0 {
+				ringpolicy.Enroll(t, d.Credentials, ownerPkHash, note.NullifierPk)
 			}
 			if slices.Contains(s.Policy.SaltedBlocked, i) {
 				lists.Apply(t, ringregistry.Entry{Member: ringregistry.ListKey(t, ownerPkHash, ringpolicy.ListSaltOf(t, ownerPkHash)), Mask: big.NewInt(ringregistry.PrivateBlockBit), Value: big.NewInt(ringregistry.PrivateBlockBit)})
@@ -205,13 +207,16 @@ func (s Spec) Build(t testing.TB) *Deposit {
 		chunks := protocol.MintChunks(note.Mint)
 		c.MintChunks[i] = [2]frontend.Variable{chunks[0], chunks[1]}
 		owners[i] = ownerPkHash
+		if note.NullifierPk != nil && note.NullifierPk.Cmp(shared.ZeroNullifierPk) == 0 {
+			owners[i] = 0
+		}
 		outputs[i] = shared.UtxoWires{Domain: big.NewInt(0), OwnerPkHash: ownerPkHash, Asset: asset}
 		if i < s.Count {
 			outputs[i].Domain = big.NewInt(protocol.UtxoDomain)
 		}
 	}
-	ringpolicy.FillPools(t, &c.Policy, outputs, nil, nil, own, curator, d.Tracking)
-	ringpolicy.FillTracking(t, &c.Tracking, d.Tracking, nil, owners, &c.Policy, owners)
+	ringpolicy.FillPools(t, &c.Policy, outputs, nil, nil, own, curator, d.Credentials)
+	ringpolicy.FillCredentials(t, &c.Credentials, d.Credentials, nil, owners, &c.Policy, c.OwnerPkHashes)
 	c.OwnRoot, c.CuratorRoot = big.NewInt(0), big.NewInt(0)
 	if screened {
 		c.OwnRoot = own.Root()
@@ -225,7 +230,7 @@ func (s Spec) Build(t testing.TB) *Deposit {
 
 // zeroUnreadInputs assigns the wires a deposit shares with a transfer and never reads.
 func zeroUnreadInputs(p *policy.Policy) {
-	p.WithdrawalCount, p.WithdrawalHash, p.RingProgramID = 0, 0, 0
+	p.WithdrawalCount, p.WithdrawalHash = 0, 0
 	for k := range p.PublicAssets {
 		p.PublicAssets[k], p.PublicAmounts[k], p.PublicGross[k] = 0, 0, 0
 	}
@@ -262,7 +267,7 @@ func (d *Deposit) Elements(t testing.TB) []*big.Int {
 	t.Helper()
 	c, ciphertext := d.Circuit, d.Ciphertext(t)
 	sealed := d.Keys.Sealed(t, ciphertext)
-	chain := []*big.Int{big.NewInt(shared.DepositStatementDomain), ringtest.AsBigInt(c.ContextHash), big.NewInt(int64(len(d.Notes)))}
+	chain := []*big.Int{big.NewInt(shared.DepositStatementDomain), ringtest.AsBigInt(c.ContextHash), ringtest.AsBigInt(c.RingProgramID), big.NewInt(int64(len(d.Notes)))}
 	for i := range circuits.MaxDeposits {
 		if i >= len(d.Notes) {
 			chain = append(chain, big.NewInt(0), big.NewInt(0))
@@ -270,7 +275,9 @@ func (d *Deposit) Elements(t testing.TB) []*big.Int {
 		}
 		chain = append(chain, d.Notes[i].Commitment(t), ringtest.HashBytes(t, ciphertext[i*circuits.DepositRecordLen:(i+1)*circuits.DepositRecordLen]))
 	}
-	chain = append(chain, sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, ringtest.AsBigInt(c.TrackingRoot), ringtest.AsBigInt(c.OwnRoot), ringtest.AsBigInt(c.CuratorRoot), ringtest.AsBigInt(c.PolicyHash))
+	chain = append(chain, sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi)
+	chain = append(chain, ringtest.ToBigInts(c.Credentials.StatementFields())...)
+	chain = append(chain, ringtest.AsBigInt(c.OwnRoot), ringtest.AsBigInt(c.CuratorRoot), ringtest.AsBigInt(c.PolicyHash))
 	for i := range circuits.MaxDeposits {
 		if i >= c.Capacity {
 			chain = append(chain, big.NewInt(0), big.NewInt(0))
@@ -281,10 +288,17 @@ func (d *Deposit) Elements(t testing.TB) []*big.Int {
 	return chain
 }
 
-// RefillTracking opens every owner under the tree's current root and rebinds.
-func (d *Deposit) RefillTracking(t testing.TB) {
+// Credential queries use one state root table and one address checkpoint.
+func (d *Deposit) RefillCredentials(t testing.TB) {
 	t.Helper()
-	ringpolicy.FillTracking(t, &d.Circuit.Tracking, d.Tracking, nil, d.Circuit.OwnerPkHashes, &d.Circuit.Policy, d.Circuit.OwnerPkHashes)
+	owners := make([]frontend.Variable, len(d.Circuit.OwnerPkHashes))
+	for i, owner := range d.Circuit.OwnerPkHashes {
+		owners[i] = 0
+		if ringtest.AsBigInt(d.Circuit.NullifierPks[i]).Cmp(shared.ZeroNullifierPk) != 0 {
+			owners[i] = owner
+		}
+	}
+	ringpolicy.FillCredentials(t, &d.Circuit.Credentials, d.Credentials, nil, owners, &d.Circuit.Policy, d.Circuit.OwnerPkHashes)
 	d.Rebind(t)
 }
 
@@ -326,7 +340,7 @@ func (o Opened) Opens(t testing.TB, commitment *big.Int) bool {
 	return Note{OwnerKey: o.OwnerKey, NullifierPk: o.NullifierPk, Blinding: o.Blinding}.Commitment(t).Cmp(commitment) == 0
 }
 
-// Narrow rebuilds the deposit on a narrower key, whose pools hold the fixed statement's values.
+// A narrower key binds its own credential root table capacity.
 func (d *Deposit) Narrow(t testing.TB, capacity int) *Deposit {
 	t.Helper()
 	if d.spec.Count > capacity {

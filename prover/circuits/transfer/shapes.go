@@ -62,8 +62,8 @@ func (s Shape) entries() int {
 	return 0
 }
 
-// ownerAddresses mirrors OWNER_ADDRESSES in key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
-const ownerAddresses = 64 - 4 - 6
+// Must match the catalog bound in key_catalog.rs.
+const ownerAddresses = 54
 
 // publicOwners is the distinct signers and legs one transaction can name, each signer also takes a nullifier PDA.
 func (s Shape) publicOwners() int {

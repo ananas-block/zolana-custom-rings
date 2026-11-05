@@ -1,20 +1,13 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    key_catalog::RingCircuit,
     mint_policy_write,
+    owner_grant::OwnerGrant,
     storage::{RegistryId, Revision, RootUpdate, StorageError, StorageRegistry},
     storage_instruction::{
-        tag, ApplyEnrollmentsIxData, EnrollIxData, EnrollRequest, InitializeIxData,
-        InitializeTrackingIxData, OwnerGrantIxData, StorageUpdateIxData,
+        tag, InitializeIxData, OwnerGrantIxData, PrivateWriteCheckpoint, StorageUpdateIxData,
     },
-    tagged_x25519,
-    tracking::{
-        FirstEnrollment, OwnerGrant, TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY,
-        TRACKING_EMPTY_ROOT, ZERO_NULLIFIER_PUBKEY,
-    },
-    verifying_key, ApplyRecordsIxData, CustomRingProof, PlainGroth16Proof, RecordWriteData,
-    WriteRecordsIxData, READER_KEY_ED25519, ROOT_HISTORY, TAGGED_X25519_KEY_LEN,
-    VIEWING_PUBKEY_TAG,
+    ApplyRecordsIxData, CredentialRead, CustomRingError, CustomRingProof, PlainGroth16Proof,
+    RecordWriteData, WriteRecordsIxData, READER_KEY_ED25519, ROOT_HISTORY,
 };
 use litesvm::LiteSVM;
 use serde_json::Value;
@@ -27,7 +20,11 @@ use spr_client::{
     prover::{Proof, ProofCompressed},
     sign_transaction, ComputeBudgetConfig,
 };
-use zolana_ring_policy::ListId;
+use spr_interface::{
+    pda, state::discriminator::TREE_ACCOUNT_DISCRIMINATOR, SHIELDED_POOL_PROGRAM_ID,
+};
+use spr_tree::{NullifierTreeInitParams, TreeAccount, TreeFeeSchedule, UTXO_TREE_HEIGHT};
+use zolana_ring_policy::{ring_id_field, ListId, ListSet};
 
 const PROGRAM: Address = custom_ring_interface::STORAGE_PROGRAM_ID;
 const GRACE: u64 = 10;
@@ -35,32 +32,17 @@ const REGISTRY_ID: RegistryId = RegistryId([1; 32]);
 const CURATOR_ID: RegistryId = RegistryId([2; 32]);
 const PRIVATE_ID: RegistryId = RegistryId([3; 32]);
 const RING_ID: [u8; 32] = [7; 32];
+const RING_PROGRAM: Address = Address::new_from_array([0x52; 32]);
+const SPP: Address = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
 const SYSTEM: Address = Address::new_from_array([0; 32]);
 /// Any address serves the CPI owner.
 const CPI_OWNER_PROGRAM: Address = Address::new_from_array([0x63; 32]);
-
-fn auditor() -> [u8; TAGGED_X25519_KEY_LEN] {
-    let mut key = [9; TAGGED_X25519_KEY_LEN];
-    key[0] = VIEWING_PUBKEY_TAG;
-    key
-}
-
-fn enroll_ix(viewing_u: [u8; 32]) -> EnrollIxData {
-    EnrollIxData {
-        nullifier_pk: [3; 32],
-        list_tag: [4; 32],
-        viewing_u,
-        eph_u: [5; 32],
-        ciphertext: [6; 64],
-    }
-}
 
 struct Store {
     svm: LiteSVM,
     authority: Keypair,
     payer: Keypair,
     registry: Address,
-    tracking: Address,
     proofs: Value,
 }
 
@@ -77,7 +59,6 @@ impl Store {
         let payer = Keypair::new();
         svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
         let registry = StorageRegistry::find_address(&authority.pubkey(), &REGISTRY_ID).0;
-        let tracking = TrackingRegistry::find_address(&authority.pubkey(), &RING_ID).0;
         let proofs: Value = serde_json::from_str(include_str!("proofs.json")).unwrap();
         // The apply proofs bind the registry address.
         assert_eq!(hex::encode(registry), proofs["registry"].as_str().unwrap());
@@ -86,7 +67,6 @@ impl Store {
             authority,
             payer,
             registry,
-            tracking,
             proofs,
         }
     }
@@ -98,21 +78,20 @@ impl Store {
                 registry_id: REGISTRY_ID,
                 grace_slots: grace_slots.to_le_bytes(),
                 ring_id: RING_ID,
-                tracking_registry: Address::default(),
+                private_ring_id: [0; 32],
             },
         );
         self.send_as_authority(self.initialize_instruction(registry, &data))
             .unwrap();
     }
 
-    /// A source a salted list may read, `ring_id` zero makes it a curator's.
     fn initialize_pinned(&mut self, registry_id: RegistryId, ring_id: [u8; 32]) -> Address {
         let source = StorageRegistry::find_address(&self.authority.pubkey(), &registry_id).0;
         let data = InitializeIxData {
             registry_id,
             grace_slots: GRACE.to_le_bytes(),
             ring_id,
-            tracking_registry: self.tracking,
+            private_ring_id: ring_id_field(RING_PROGRAM.as_array()).unwrap(),
         };
         self.send_as_authority(self.initialize_instruction(source, &data))
             .unwrap();
@@ -132,67 +111,6 @@ impl Store {
         }
     }
 
-    fn initialize_tracking_instruction(&self, data: &InitializeTrackingIxData) -> Instruction {
-        Instruction {
-            program_id: PROGRAM,
-            accounts: vec![
-                AccountMeta::new(self.payer.pubkey(), true),
-                AccountMeta::new_readonly(self.authority.pubkey(), true),
-                AccountMeta::new(
-                    TrackingRegistry::find_address(&self.authority.pubkey(), &data.ring_id).0,
-                    false,
-                ),
-                AccountMeta::new_readonly(SYSTEM, false),
-            ],
-            data: [&[tag::INITIALIZE_TRACKING], bytemuck::bytes_of(data)].concat(),
-        }
-    }
-
-    fn initialize_tracking(&mut self) {
-        let data = InitializeTrackingIxData {
-            ring_id: RING_ID,
-            auditor_pubkey: auditor(),
-        };
-        self.send_as_authority(self.initialize_tracking_instruction(&data))
-            .unwrap();
-    }
-
-    fn enroll(
-        &self,
-        owner: &Address,
-        ix: &EnrollIxData,
-        proof: Option<&CustomRingProof>,
-    ) -> Instruction {
-        let tracking = self.tracking;
-        Instruction {
-            program_id: PROGRAM,
-            accounts: vec![
-                AccountMeta::new(self.payer.pubkey(), true),
-                AccountMeta::new_readonly(*owner, true),
-                AccountMeta::new_readonly(tracking, false),
-                AccountMeta::new(
-                    TrackingAuthorization::find_address(&tracking, owner).0,
-                    false,
-                ),
-                AccountMeta::new_readonly(SYSTEM, false),
-            ],
-            data: [&[tag::ENROLL][..], &EnrollRequest { ix, proof }.encode()].concat(),
-        }
-    }
-
-    /// An enrollment the program could only create with a real proof, written directly.
-    fn seed_enrollment(&mut self, owner: &Address) -> AccountMeta {
-        let (address, _) = TrackingAuthorization::find_address(&self.tracking, owner);
-        let account = FirstEnrollment {
-            registry: self.tracking,
-            owner: *owner,
-            ix: &enroll_ix([8; 32]),
-        }
-        .account();
-        self.seed(address, bytemuck::bytes_of(&account));
-        AccountMeta::new(address, false)
-    }
-
     fn seed(&mut self, address: Address, data: &[u8]) {
         let mut account = self.svm.get_account(&self.payer.pubkey()).unwrap();
         account.lamports = self.svm.minimum_balance_for_rent_exemption(data.len());
@@ -201,36 +119,47 @@ impl Store {
         self.svm.set_account(address, account).unwrap();
     }
 
-    fn apply_enrollments(&self, revision: u64, authorizations: &[AccountMeta]) -> Instruction {
-        let data = ApplyEnrollmentsIxData {
-            revision: revision.into(),
-            apply: ApplyRecordsIxData {
-                new_root: [8; 32],
-                new_next_index: 2u32.to_le_bytes(),
-                ..ApplyRecordsIxData::zeroed()
-            },
-        };
-        Instruction {
-            program_id: PROGRAM,
-            accounts: [
-                vec![AccountMeta::new(self.tracking, false)],
-                authorizations.to_vec(),
-            ]
-            .concat(),
-            data: [&[tag::APPLY_ENROLLMENTS], bytemuck::bytes_of(&data)].concat(),
-        }
+    fn seed_tree(&mut self, tree_id: u16) -> Address {
+        let address = pda::tree(tree_id);
+        let mut data = vec![0; TreeAccount::account_size()];
+        TreeAccount::init(
+            &mut data,
+            TREE_ACCOUNT_DISCRIMINATOR,
+            UTXO_TREE_HEIGHT as u8,
+            address.to_bytes(),
+            tree_id,
+            NullifierTreeInitParams::default(),
+            TreeFeeSchedule::default(),
+        )
+        .unwrap();
+        self.seed(address, &data);
+        let mut account = self.svm.get_account(&address).unwrap();
+        account.owner = SPP;
+        self.svm.set_account(address, account).unwrap();
+        address
+    }
+
+    fn private_update(&self, registry: Address) -> Instruction {
+        let mut instruction = self.zero_proof_update_of(registry, 0, ListId::PrivateBlock);
+        instruction.accounts.extend(
+            [pda::tree(0), pda::tree(1)].map(|address| AccountMeta::new_readonly(address, false)),
+        );
+        instruction
     }
 
     fn grant(&self, owner: &Address, reader: [u8; 34], active: u8) -> Instruction {
-        let data = OwnerGrantIxData { reader, active };
+        let data = OwnerGrantIxData {
+            ring_program: RING_PROGRAM,
+            reader,
+            active,
+        };
         Instruction {
             program_id: PROGRAM,
             accounts: vec![
                 AccountMeta::new(self.payer.pubkey(), true),
                 AccountMeta::new_readonly(*owner, true),
-                AccountMeta::new_readonly(self.tracking, false),
                 AccountMeta::new(
-                    OwnerGrant::find_address(&self.tracking, owner, &reader).0,
+                    OwnerGrant::find_address(&RING_PROGRAM, owner, &reader).0,
                     false,
                 ),
                 AccountMeta::new_readonly(SYSTEM, false),
@@ -260,6 +189,18 @@ impl Store {
                 },
                 mint_policy: mint_policy_write(None),
             }],
+            asset_writes: Vec::new(),
+            credential_read: if ListSet::PRIVATE_LISTS.contains(list) {
+                CredentialRead::new(0, &[0]).unwrap()
+            } else {
+                CredentialRead::empty()
+            },
+            private_write: ListSet::PRIVATE_LISTS.contains(list).then_some(
+                PrivateWriteCheckpoint {
+                    ring_program: RING_PROGRAM,
+                    sequence: 0,
+                },
+            ),
             apply: &apply,
         };
         Instruction {
@@ -290,6 +231,9 @@ impl Store {
         let data = StorageUpdateIxData {
             revision: revision.into(),
             writes,
+            asset_writes: Vec::new(),
+            credential_read: CredentialRead::empty(),
+            private_write: None,
             apply: &apply,
         };
         Instruction {
@@ -316,19 +260,6 @@ impl Store {
 
     fn registry(&self) -> StorageRegistry {
         *bytemuck::from_bytes(&self.svm.get_account(&self.registry).unwrap().data)
-    }
-
-    fn tracking_registry(&self) -> TrackingRegistry {
-        *bytemuck::from_bytes(&self.svm.get_account(&self.tracking).unwrap().data)
-    }
-
-    fn set_tracking_registry(&mut self, registry: &TrackingRegistry) {
-        self.seed(self.tracking, bytemuck::bytes_of(registry));
-    }
-
-    fn authorization(&self, owner: &Address) -> TrackingAuthorization {
-        let address = TrackingAuthorization::find_address(&self.tracking, owner).0;
-        *bytemuck::from_bytes(&self.svm.get_account(&address).unwrap().data)
     }
 
     fn root(&self, revision: u64) -> Result<[u8; 32], StorageError> {
@@ -395,14 +326,6 @@ fn through_cpi_owner(mut instruction: Instruction) -> Instruction {
     instruction
 }
 
-/// A zero proof's refusal, a circuit with no key yet refuses earlier and never passes.
-fn key_refusal(circuit: RingCircuit) -> StorageError {
-    match verifying_key(circuit) {
-        Some(_) => StorageError::ProofVerificationFailed,
-        None => StorageError::UnsupportedBatch,
-    }
-}
-
 fn allow_write() -> RecordWriteData {
     RecordWriteData {
         member: [1; 32],
@@ -414,10 +337,13 @@ fn allow_write() -> RecordWriteData {
     }
 }
 
-fn refusal(code: StorageError) -> Result<(), TransactionError> {
+fn refusal(code: impl Into<pinocchio::error::ProgramError>) -> Result<(), TransactionError> {
+    let pinocchio::error::ProgramError::Custom(code) = code.into() else {
+        panic!("expected a custom error");
+    };
     Err(TransactionError::InstructionError(
         0,
-        InstructionError::Custom(code as u32),
+        InstructionError::Custom(code),
     ))
 }
 
@@ -484,7 +410,7 @@ fn authority_rotates_and_the_old_authority_is_refused() {
 fn unknown_tags_are_refused() {
     let mut store = Store::new();
     store.initialize(GRACE);
-    for unknown in [2, 3, 5, 10] {
+    for unknown in [2, 3, 5, 6, 7, 9, 10] {
         let mut instruction = store.zero_proof_update(0, ListId::Block);
         instruction.data[0] = unknown;
         assert_eq!(
@@ -517,7 +443,7 @@ fn an_update_reaches_the_proof_past_its_revision_and_authority() {
 }
 
 #[test]
-fn a_full_history_stops_only_a_graced_update() {
+fn a_failed_proof_leaves_the_full_history_unchanged() {
     let mut store = Store::new();
     store.initialize(GRACE);
     let mut full = store.registry();
@@ -525,7 +451,7 @@ fn a_full_history_stops_only_a_graced_update() {
     store.seed(store.registry, bytemuck::bytes_of(&full));
     assert_eq!(
         store.send_as_authority(store.zero_proof_update(0, ListId::Reader)),
-        refusal(StorageError::HistoryFull)
+        refusal(StorageError::ProofVerificationFailed)
     );
     assert_eq!(
         store.send_as_authority(store.zero_proof_update(0, ListId::Block)),
@@ -536,395 +462,7 @@ fn a_full_history_stops_only_a_graced_update() {
         store.send_as_authority(store.zero_proof_update(0, ListId::Reader)),
         refusal(StorageError::ProofVerificationFailed)
     );
-}
-
-/// Own and curator sources alike, the floor comes only from the pinned registry.
-#[test]
-fn a_zero_grace_update_of_a_pinned_source_reads_its_tracking_registry() {
-    let mut store = Store::new();
-    store.initialize(GRACE);
-    store.initialize_tracking();
-    let tracking = store.tracking;
-    let other = store.registry;
-    for (registry_id, ring_id) in [(PRIVATE_ID, RING_ID), (CURATOR_ID, [0; 32])] {
-        let source = store.initialize_pinned(registry_id, ring_id);
-        let block = |store: &Store, extra: &[Address]| {
-            let mut instruction = store.zero_proof_update_of(source, 0, ListId::Block);
-            instruction.accounts.extend(
-                extra
-                    .iter()
-                    .map(|account| AccountMeta::new_readonly(*account, false)),
-            );
-            instruction
-        };
-        assert_eq!(
-            store.send_as_authority(block(&store, &[])),
-            refusal(StorageError::MissingAccounts)
-        );
-        assert_eq!(
-            store.send_as_authority(block(&store, &[other])),
-            refusal(StorageError::InvalidTrackingRegistry)
-        );
-        assert_eq!(
-            store.send_as_authority(block(&store, &[tracking])),
-            refusal(StorageError::ProofVerificationFailed)
-        );
-        assert_eq!(
-            store.send_as_authority(store.zero_proof_update_of(source, 0, ListId::Reader)),
-            refusal(StorageError::ProofVerificationFailed)
-        );
-    }
-}
-
-#[test]
-fn a_tracking_registry_pins_ring_and_auditor_at_its_canonical_address() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    let registry = store.tracking_registry();
-    assert_eq!(registry.ring_id, RING_ID);
-    assert_eq!(registry.auditor_pubkey, auditor());
-    assert_eq!(registry.newest().hash, TRACKING_EMPTY_ROOT);
-    let data = InitializeTrackingIxData {
-        ring_id: RING_ID,
-        auditor_pubkey: auditor(),
-    };
-    assert_eq!(
-        store.send_as_authority(store.initialize_tracking_instruction(&data)),
-        refusal(StorageError::AlreadyInitialized)
-    );
-    let mut unsigned = store.initialize_tracking_instruction(&data);
-    unsigned.accounts[1].is_signer = false;
-    assert_eq!(
-        store.send(unsigned, &[]),
-        refusal(StorageError::MissingSignature)
-    );
-    let other = InitializeTrackingIxData {
-        ring_id: [8; 32],
-        ..data
-    };
-    let mut misplaced = store.initialize_tracking_instruction(&other);
-    misplaced.accounts[2].pubkey = store.tracking;
-    assert_eq!(
-        store.send_as_authority(misplaced),
-        refusal(StorageError::InvalidTrackingRegistry)
-    );
-    let untagged = InitializeTrackingIxData {
-        ring_id: [8; 32],
-        auditor_pubkey: [9; TAGGED_X25519_KEY_LEN],
-    };
-    assert_eq!(
-        store.send_as_authority(store.initialize_tracking_instruction(&untagged)),
-        refusal(StorageError::InvalidAuditorKey)
-    );
-    let mut low_order_u = [0; 32];
-    low_order_u[0] = 1;
-    let low_order = InitializeTrackingIxData {
-        ring_id: [8; 32],
-        auditor_pubkey: tagged_x25519(&low_order_u),
-    };
-    assert_eq!(
-        store.send_as_authority(store.initialize_tracking_instruction(&low_order)),
-        refusal(StorageError::InvalidAuditorKey)
-    );
-}
-
-#[test]
-fn a_first_enrollment_needs_the_owner_and_a_proof_the_pairing_accepts() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    let owner = Keypair::new();
-    let proof = CustomRingProof::zeroed();
-    let ix = enroll_ix([8; 32]);
-    let mut unsigned = store.enroll(&owner.pubkey(), &ix, Some(&proof));
-    unsigned.accounts[1].is_signer = false;
-    assert_eq!(
-        store.send(unsigned, &[]),
-        refusal(StorageError::MissingSignature)
-    );
-    assert_eq!(
-        store.send(store.enroll(&owner.pubkey(), &ix, None), &[&owner]),
-        refusal(StorageError::EnrollmentProofShape)
-    );
-    assert_eq!(
-        store.send(store.enroll(&owner.pubkey(), &ix, Some(&proof)), &[&owner]),
-        refusal(StorageError::ProofVerificationFailed)
-    );
-    let address = TrackingAuthorization::find_address(&store.tracking, &owner.pubkey()).0;
-    assert!(store
-        .svm
-        .get_account(&address)
-        .is_none_or(|account| account.data.is_empty()));
-    assert_eq!(
-        store.send(
-            store.enroll(
-                &owner.pubkey(),
-                &EnrollIxData {
-                    nullifier_pk: ZERO_NULLIFIER_PUBKEY,
-                    ..ix
-                },
-                Some(&proof)
-            ),
-            &[&owner]
-        ),
-        refusal(StorageError::ZeroNullifierKey)
-    );
-    assert_eq!(
-        store.send(
-            store.enroll(&owner.pubkey(), &enroll_ix([0; 32]), Some(&proof)),
-            &[&owner]
-        ),
-        refusal(StorageError::NonCanonicalViewingKey)
-    );
-}
-
-#[test]
-fn a_first_enrollment_refuses_a_registry_that_is_no_tracking_registry() {
-    let mut store = Store::new();
-    store.initialize(GRACE);
-    store.initialize_tracking();
-    let owner = Keypair::new();
-    let proof = CustomRingProof::zeroed();
-    let ix = enroll_ix([8; 32]);
-    let mut policy = store.enroll(&owner.pubkey(), &ix, Some(&proof));
-    policy.accounts[2].pubkey = store.registry;
-    assert_eq!(
-        store.send(policy, &[&owner]),
-        refusal(StorageError::InvalidTrackingRegistry)
-    );
-}
-
-/// The runtime sets the signer flag a program's `invoke_signed` raises, one code path.
-#[test]
-fn a_program_owner_reaches_the_proof_through_cpi() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    let owner = store.add_cpi_owner();
-    let proof = CustomRingProof::zeroed();
-    let instruction = store.enroll(&owner, &enroll_ix([8; 32]), Some(&proof));
-    assert_eq!(
-        store.send(through_cpi_owner(instruction), &[]),
-        refusal(StorageError::ProofVerificationFailed)
-    );
-    store.seed_enrollment(&owner);
-    let rotation = store.enroll(&owner, &enroll_ix([9; 32]), None);
-    store.send(through_cpi_owner(rotation), &[]).unwrap();
-    assert_eq!(store.authorization(&owner).viewing_u, [9; 32]);
-}
-
-#[test]
-fn a_rotation_moves_the_viewing_key_with_no_proof() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    let owner = Keypair::new();
-    store.seed_enrollment(&owner.pubkey());
-    let rotated = enroll_ix([9; 32]);
-    let rotate = |store: &Store, ix: &EnrollIxData| store.enroll(&owner.pubkey(), ix, None);
-    let proof = CustomRingProof::zeroed();
-    assert_eq!(
-        store.send(
-            store.enroll(&owner.pubkey(), &rotated, Some(&proof)),
-            &[&owner]
-        ),
-        refusal(StorageError::EnrollmentProofShape)
-    );
-    for changed in [
-        EnrollIxData {
-            nullifier_pk: [1; 32],
-            ..rotated
-        },
-        EnrollIxData {
-            ciphertext: [1; 64],
-            ..rotated
-        },
-        EnrollIxData {
-            list_tag: [1; 32],
-            ..rotated
-        },
-    ] {
-        assert_eq!(
-            store.send(rotate(&store, &changed), &[&owner]),
-            refusal(StorageError::EnrollmentKeyFinal)
-        );
-    }
-    store.send(rotate(&store, &rotated), &[&owner]).unwrap();
-    let account = store.authorization(&owner.pubkey());
-    assert_eq!((account.viewing_u, account.revision()), ([9; 32], 2));
-    assert_eq!(account.applied_revision(), 0);
-    store
-        .send(rotate(&store, &enroll_ix([7; 32])), &[&owner])
-        .unwrap();
-    assert_eq!(store.authorization(&owner.pubkey()).revision(), 3);
-}
-
-#[test]
-fn a_rotation_refuses_another_owner_and_another_registry() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    store.initialize(GRACE);
-    let owner = Keypair::new();
-    let meta = store.seed_enrollment(&owner.pubkey());
-    let stranger = Keypair::new();
-    let mut foreign = store.enroll(&stranger.pubkey(), &enroll_ix([9; 32]), None);
-    foreign.accounts[3] = meta.clone();
-    assert_eq!(
-        store.send(foreign, &[&stranger]),
-        refusal(StorageError::InvalidTrackingAuthorization)
-    );
-    let mut other_registry = store.enroll(&owner.pubkey(), &enroll_ix([9; 32]), None);
-    other_registry.accounts[2].pubkey = store.registry;
-    assert_eq!(
-        store.send(other_registry, &[&owner]),
-        refusal(StorageError::InvalidTrackingAuthorization)
-    );
-    let mut unsigned = store.enroll(&owner.pubkey(), &enroll_ix([9; 32]), None);
-    unsigned.accounts[1].is_signer = false;
-    assert_eq!(
-        store.send(unsigned, &[]),
-        refusal(StorageError::MissingSignature)
-    );
-}
-
-/// No entry blocks another, a leaf past capacity stays pending and grants nothing.
-#[test]
-fn a_full_tree_leaves_enrollment_open_and_still_rotates() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    let enrolled = Keypair::new();
-    store.seed_enrollment(&enrolled.pubkey());
-    let mut full = store.tracking_registry();
-    full.next_index = (TRACKING_CAPACITY as u32).to_le_bytes();
-    store.set_tracking_registry(&full);
-    let stranger = Keypair::new();
-    let proof = CustomRingProof::zeroed();
-    assert_eq!(
-        store.send(
-            store.enroll(&stranger.pubkey(), &enroll_ix([8; 32]), Some(&proof)),
-            &[&stranger]
-        ),
-        refusal(StorageError::ProofVerificationFailed)
-    );
-    store
-        .send(
-            store.enroll(&enrolled.pubkey(), &enroll_ix([9; 32]), None),
-            &[&enrolled],
-        )
-        .unwrap();
-}
-
-/// The chain and the applied revision run ahead of the proof, past them only a key is missing.
-fn past_every_apply_check(store: &mut Store, instruction: Instruction, count: u64) {
-    let expected = key_refusal(RingCircuit::apply_enrollments(count));
-    assert_eq!(store.send(instruction, &[]), refusal(expected));
-}
-
-#[test]
-fn anyone_applies_named_enrollments_with_no_authority_signature() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    let [first, second] = [Keypair::new(), Keypair::new()];
-    let metas = [
-        store.seed_enrollment(&first.pubkey()),
-        store.seed_enrollment(&second.pubkey()),
-    ];
-    let instruction = store.apply_enrollments(0, &metas);
-    past_every_apply_check(&mut store, instruction, 2);
-    // In any order, no entry blocks another.
-    let reversed = [metas[1].clone(), metas[0].clone()];
-    let instruction = store.apply_enrollments(0, &reversed);
-    past_every_apply_check(&mut store, instruction, 2);
-    assert_eq!(store.authorization(&first.pubkey()).applied_revision(), 0);
-}
-
-#[test]
-fn an_apply_refuses_what_it_cannot_chain() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    store.initialize(GRACE);
-    let owner = Keypair::new();
-    let meta = store.seed_enrollment(&owner.pubkey());
-    assert_eq!(
-        store.send(store.apply_enrollments(0, &[]), &[]),
-        refusal(StorageError::NoEnrollmentsNamed)
-    );
-    assert_eq!(
-        store.send(
-            store.apply_enrollments(0, &[meta.clone(), meta.clone()]),
-            &[]
-        ),
-        refusal(StorageError::EnrollmentAlreadyApplied)
-    );
-    assert_eq!(
-        store.send(store.apply_enrollments(1, std::slice::from_ref(&meta)), &[]),
-        refusal(StorageError::RevisionChanged)
-    );
-    let read_only = AccountMeta::new_readonly(meta.pubkey, false);
-    assert_eq!(
-        store.send(store.apply_enrollments(0, &[read_only]), &[]),
-        refusal(StorageError::InvalidTrackingAuthorization)
-    );
-    let not_one = AccountMeta::new(store.registry, false);
-    assert_eq!(
-        store.send(store.apply_enrollments(0, &[not_one]), &[]),
-        refusal(StorageError::InvalidTrackingAuthorization)
-    );
-    let too_many = (0..17)
-        .map(|_| {
-            let owner = Keypair::new();
-            store.seed_enrollment(&owner.pubkey())
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        store.send(store.apply_enrollments(0, &too_many), &[]),
-        refusal(StorageError::BatchTooLarge)
-    );
-    let mut policy = store.apply_enrollments(0, std::slice::from_ref(&meta));
-    policy.accounts[0].pubkey = store.registry;
-    assert_eq!(
-        store.send(policy, &[]),
-        refusal(StorageError::InvalidTrackingRegistry)
-    );
-    let mut applied = store.authorization(&owner.pubkey());
-    applied.applied_revision = applied.revision;
-    store.seed(meta.pubkey, bytemuck::bytes_of(&applied));
-    assert_eq!(
-        store.send(store.apply_enrollments(0, &[meta]), &[]),
-        refusal(StorageError::EnrollmentAlreadyApplied)
-    );
-}
-
-#[test]
-fn an_authorization_of_another_registry_does_not_apply() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    let owner = Keypair::new();
-    let meta = store.seed_enrollment(&owner.pubkey());
-    let mut foreign = store.authorization(&owner.pubkey());
-    foreign.registry = Address::new_from_array([1; 32]);
-    store.seed(meta.pubkey, bytemuck::bytes_of(&foreign));
-    assert_eq!(
-        store.send(store.apply_enrollments(0, &[meta]), &[]),
-        refusal(StorageError::InvalidTrackingAuthorization)
-    );
-}
-
-/// An apply waits at a full history, so a flood never evicts a root an in-flight proof names.
-#[test]
-fn an_apply_never_evicts_a_served_root() {
-    let mut store = Store::new();
-    store.initialize_tracking();
-    let owner = Keypair::new();
-    let meta = store.seed_enrollment(&owner.pubkey());
-    let mut registry = store.tracking_registry();
-    registry.roots[ROOT_HISTORY - 1].hash = [5; 32];
-    registry.roots[ROOT_HISTORY - 1].expires_at = 1u64.to_le_bytes();
-    store.set_tracking_registry(&registry);
-    assert_eq!(
-        store.send(store.apply_enrollments(0, std::slice::from_ref(&meta)), &[]),
-        refusal(StorageError::HistoryFull)
-    );
-    store.svm.warp_to_slot(1);
-    let instruction = store.apply_enrollments(0, &[meta]);
-    past_every_apply_check(&mut store, instruction, 1);
+    assert_eq!(store.registry(), full);
 }
 
 fn reader(byte: u8) -> [u8; 34] {
@@ -936,13 +474,12 @@ fn reader(byte: u8) -> [u8; 34] {
 #[test]
 fn an_owner_grants_and_revokes_a_reader_alone() {
     let mut store = Store::new();
-    store.initialize_tracking();
     let owner = Keypair::new();
     let granted = reader(7);
     store
         .send(store.grant(&owner.pubkey(), granted, 1), &[&owner])
         .unwrap();
-    let (address, _) = OwnerGrant::find_address(&store.tracking, &owner.pubkey(), &granted);
+    let (address, _) = OwnerGrant::find_address(&RING_PROGRAM, &owner.pubkey(), &granted);
     let read = |store: &Store| {
         let account = store.svm.get_account(&address).unwrap();
         OwnerGrant::decode(&account.owner, &account.data).unwrap()
@@ -961,7 +498,6 @@ fn an_owner_grants_and_revokes_a_reader_alone() {
 #[test]
 fn a_grant_refuses_a_stranger_and_a_malformed_reader() {
     let mut store = Store::new();
-    store.initialize_tracking();
     store.initialize(GRACE);
     let owner = Keypair::new();
     let mut unsigned = store.grant(&owner.pubkey(), reader(7), 1);
@@ -972,8 +508,8 @@ fn a_grant_refuses_a_stranger_and_a_malformed_reader() {
     );
     let stranger = Keypair::new();
     let mut foreign = store.grant(&stranger.pubkey(), reader(7), 1);
-    foreign.accounts[3].pubkey =
-        OwnerGrant::find_address(&store.tracking, &owner.pubkey(), &reader(7)).0;
+    foreign.accounts[2].pubkey =
+        OwnerGrant::find_address(&RING_PROGRAM, &owner.pubkey(), &reader(7)).0;
     assert_eq!(
         store.send(foreign, &[&stranger]),
         refusal(StorageError::InvalidOwnerGrant)
@@ -992,25 +528,23 @@ fn a_grant_refuses_a_stranger_and_a_malformed_reader() {
     policy.accounts[2].pubkey = store.registry;
     assert_eq!(
         store.send(policy, &[&owner]),
-        refusal(StorageError::InvalidTrackingRegistry)
+        refusal(StorageError::InvalidOwnerGrant)
     );
 }
 
 #[test]
 fn a_program_owner_writes_its_grant_through_cpi() {
     let mut store = Store::new();
-    store.initialize_tracking();
     let owner = store.add_cpi_owner();
     let instruction = store.grant(&owner, reader(7), 1);
     store.send(through_cpi_owner(instruction), &[]).unwrap();
-    let address = OwnerGrant::find_address(&store.tracking, &owner, &reader(7)).0;
+    let address = OwnerGrant::find_address(&RING_PROGRAM, &owner, &reader(7)).0;
     let account = store.svm.get_account(&address).unwrap();
     assert!(OwnerGrant::decode(&account.owner, &account.data)
         .unwrap()
         .is_active());
 }
 
-/// Only a registry naming a ring is what a ring reads for enrollment, the tracking registry is separate.
 #[test]
 fn a_curator_initializes_without_a_ring() {
     let mut store = Store::new();
@@ -1019,7 +553,7 @@ fn a_curator_initializes_without_a_ring() {
         registry_id: CURATOR_ID,
         grace_slots: GRACE.to_le_bytes(),
         ring_id: [0; 32],
-        tracking_registry: Address::default(),
+        private_ring_id: [0; 32],
     };
     store
         .send_as_authority(store.initialize_instruction(curator, &data))
@@ -1075,10 +609,182 @@ fn the_program_rotates_roots_as_the_indexer_projects_them() {
             .update(RootUpdate {
                 slot,
                 data: &data,
-                tracking_revision: None,
+                absence_checkpoint: None,
             })
             .unwrap();
         store.send_as_authority(instruction).unwrap();
         assert_eq!(store.registry(), projected);
     }
+}
+
+#[test]
+fn a_private_write_requires_the_pinned_ring_program_before_reading_trees() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    assert_eq!(
+        store.send_as_authority(store.private_update(store.registry)),
+        refusal(StorageError::PrivateWriteWithoutRing)
+    );
+    let registry = store.initialize_pinned(PRIVATE_ID, RING_ID);
+    let mut instruction = store.private_update(registry);
+    let mut data = StorageUpdateIxData::parse(&instruction.data[1..]).unwrap();
+    data.private_write.as_mut().unwrap().ring_program = Address::new_from_array([8; 32]);
+    instruction.data = [vec![tag::UPDATE], data.encode().unwrap()].concat();
+    assert_eq!(
+        store.send_as_authority(instruction),
+        refusal(StorageError::InvalidPrivateRing)
+    );
+}
+
+#[test]
+fn a_private_write_refuses_missing_or_substituted_credential_accounts() {
+    let mut store = Store::new();
+    let registry = store.initialize_pinned(PRIVATE_ID, RING_ID);
+    let address_tree = store.seed_tree(0);
+    let state_tree = store.seed_tree(1);
+    let before = store.svm.get_account(&registry).unwrap();
+    let mut missing = store.private_update(registry);
+    missing.accounts.truncate(2);
+    assert_eq!(
+        store.send_as_authority(missing),
+        refusal(StorageError::MissingAccounts)
+    );
+    let mut missing_state = store.private_update(registry);
+    missing_state.accounts.pop();
+    assert_eq!(
+        store.send_as_authority(missing_state),
+        refusal(StorageError::InvalidCredentialRead)
+    );
+    let mut wrong_tree = store.private_update(registry);
+    wrong_tree.accounts[2].pubkey = state_tree;
+    assert_eq!(
+        store.send_as_authority(wrong_tree),
+        refusal(CustomRingError::InvalidAddressTree)
+    );
+    let mut queue = store.private_update(registry);
+    let queue_address = Address::new_from_array([0x71; 32]);
+    store.seed(queue_address, &[0; 64]);
+    let mut queued = store.svm.get_account(&queue_address).unwrap();
+    queued.owner = SPP;
+    store.svm.set_account(queue_address, queued).unwrap();
+    queue.accounts[2].pubkey = queue_address;
+    assert_eq!(
+        store.send_as_authority(queue),
+        refusal(CustomRingError::InvalidCredentialRoots)
+    );
+    let mut account = store.svm.get_account(&address_tree).unwrap();
+    account.owner = PROGRAM;
+    store.svm.set_account(address_tree, account).unwrap();
+    assert_eq!(
+        store.send_as_authority(store.private_update(registry)),
+        refusal(CustomRingError::InvalidCredentialRoots)
+    );
+    assert_eq!(store.svm.get_account(&registry).unwrap(), before);
+}
+
+#[test]
+fn private_proof_failure_and_stale_revision_keep_the_root_and_floor() {
+    let mut store = Store::new();
+    let registry = store.initialize_pinned(PRIVATE_ID, RING_ID);
+    let address = store.seed_tree(0);
+    store.seed_tree(1);
+    let mut account = store.svm.get_account(&address).unwrap();
+    {
+        let mut tree = TreeAccount::from_bytes(&mut account.data, address.to_bytes()).unwrap();
+        let history = tree.nullifier_tree();
+        history.sequence_number = 9;
+        history.root_history.current_index = 2;
+        history.root_history.roots[1] = [9; 32];
+    }
+    store.svm.set_account(address, account).unwrap();
+    let before = store.svm.get_account(&registry).unwrap();
+    for root_index in [0, 1] {
+        let mut instruction = store.private_update(registry);
+        let mut data = StorageUpdateIxData::parse(&instruction.data[1..]).unwrap();
+        data.credential_read = CredentialRead::new(root_index, &[0]).unwrap();
+        data.private_write.as_mut().unwrap().sequence = 8 + u64::from(root_index);
+        instruction.data = [vec![tag::UPDATE], data.encode().unwrap()].concat();
+        assert_eq!(
+            store.send_as_authority(instruction),
+            refusal(StorageError::ProofVerificationFailed)
+        );
+        assert_eq!(store.svm.get_account(&registry).unwrap(), before);
+    }
+    let mut stale = store.private_update(registry);
+    let mut data = StorageUpdateIxData::parse(&stale.data[1..]).unwrap();
+    data.revision = Revision::from(1);
+    stale.data = [vec![tag::UPDATE], data.encode().unwrap()].concat();
+    assert_eq!(
+        store.send_as_authority(stale),
+        refusal(StorageError::RevisionChanged)
+    );
+    assert_eq!(store.svm.get_account(&registry).unwrap(), before);
+}
+
+#[test]
+fn public_writes_refuse_extra_credential_accounts() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let tree = store.seed_tree(0);
+    let before = store.registry();
+    let mut instruction = store.zero_proof_update(0, ListId::Block);
+    instruction
+        .accounts
+        .push(AccountMeta::new_readonly(tree, false));
+    assert_eq!(
+        store.send_as_authority(instruction),
+        refusal(StorageError::InvalidCredentialRead)
+    );
+    assert_eq!(store.registry(), before);
+}
+
+#[test]
+fn owner_grants_are_bound_to_the_ring_namespace() {
+    let mut store = Store::new();
+    let owner = Keypair::new();
+    let reader = reader(7);
+    let mut instruction = store.grant(&owner.pubkey(), reader, 1);
+    let foreign_program = Address::new_from_array([0x55; 32]);
+    let data = OwnerGrantIxData {
+        ring_program: foreign_program,
+        reader,
+        active: 1,
+    };
+    instruction.data = [&[tag::OWNER_GRANT][..], bytemuck::bytes_of(&data)].concat();
+    assert_eq!(
+        store.send(instruction, &[&owner]),
+        refusal(StorageError::InvalidOwnerGrant)
+    );
+    store
+        .send(store.grant(&owner.pubkey(), reader, 1), &[&owner])
+        .unwrap();
+    let expected = OwnerGrant::find_address(&RING_PROGRAM, &owner.pubkey(), &reader).0;
+    let other = OwnerGrant::find_address(&foreign_program, &owner.pubkey(), &reader).0;
+    assert!(store.svm.get_account(&expected).is_some());
+    assert!(store.svm.get_account(&other).is_none());
+}
+
+#[test]
+fn a_private_write_refuses_a_false_checkpoint_sequence_before_the_proof() {
+    let mut store = Store::new();
+    let registry = store.initialize_pinned(PRIVATE_ID, RING_ID);
+    store.seed_tree(0);
+    store.seed_tree(1);
+    let before = store.svm.get_account(&registry).unwrap();
+    for sequence in [1, u64::MAX] {
+        let mut instruction = store.private_update(registry);
+        let mut data = StorageUpdateIxData::parse(&instruction.data[1..]).unwrap();
+        data.private_write.as_mut().unwrap().sequence = sequence;
+        instruction.data = [vec![tag::UPDATE], data.encode().unwrap()].concat();
+        assert_eq!(
+            store.send_as_authority(instruction),
+            refusal(StorageError::InvalidCredentialRead)
+        );
+        assert_eq!(store.svm.get_account(&registry).unwrap(), before);
+    }
+    assert_eq!(
+        store.send_as_authority(store.private_update(registry)),
+        refusal(StorageError::ProofVerificationFailed)
+    );
+    assert_eq!(store.svm.get_account(&registry).unwrap(), before);
 }

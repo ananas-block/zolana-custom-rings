@@ -1,4 +1,5 @@
 //! Ring output bodies in SPP's encrypted output framing, schemes SPP stores without parsing.
+//! Owned output buffers and borrowed SPP payloads share the same header and segment order.
 //!
 //! Read after `program-libs/interface/src/proof/disclosure.rs`. Read before `program-libs/interface/src/codec/stream.rs`.
 
@@ -37,6 +38,7 @@ pub(crate) struct OutputHeader {
 
 impl<'a> OutputPayload<'a> {
     pub(crate) fn header(self) -> Result<OutputHeader, CustomRingError> {
+        // 1. The recipient length covers its body alone, leaving reply bytes outside the inner `u16` boundary.
         let (scheme, body, reply, body_prefix) = match self {
             Self::Confidential(body) => (CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, body, &[][..], None),
             Self::Recipient { body, reply } => {
@@ -46,6 +48,7 @@ impl<'a> OutputPayload<'a> {
             }
             Self::SenderBundle(body) => (RING_SENDER_BUNDLE_SCHEME_TAG, body, &[][..], None),
         };
+        // 2. The outer `u32` length covers the scheme byte, optional recipient length, body and reply.
         let len = BODY_OFFSET + 1 + body_prefix.map_or(0, |prefix| prefix.len());
         let body_len = body
             .len()
@@ -53,6 +56,7 @@ impl<'a> OutputPayload<'a> {
             .and_then(|body_len| body_len.checked_add(len - BODY_OFFSET))
             .and_then(|body_len| u32::try_from(body_len).ok())
             .ok_or(CustomRingError::OutputBodyLength)?;
+        // 3. The shared header fixes the encrypted tag, little endian lengths and scheme position for both expansion paths.
         let mut bytes = [0; BODY_OFFSET + 1 + core::mem::size_of::<u16>()];
         bytes[0] = OutputDataEncoding::ENCRYPTED_TAG;
         bytes[1..BODY_OFFSET].copy_from_slice(&body_len.to_le_bytes());

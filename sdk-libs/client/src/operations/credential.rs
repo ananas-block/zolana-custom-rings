@@ -8,18 +8,24 @@
 //! PDA, hence inclusion proves the enrollment. A credential is absent once the address gap folds to
 //! an address root of tree 0 and the address has no queue PDA, both read in one account snapshot.
 //! Every other answer is unknown. Unknown never selects the zero key.
+//!
+//! A proof reads several credentials against one address root and one state root per tree, so
+//! `CredentialReads` asks Photon once per tree and checks every root in one account snapshot.
+
+use std::collections::BTreeMap;
 
 use custom_ring_interface::{
-    credential::owner_member, domain, storage::StorageError, AuditCredential, CREDENTIAL_PDA_SEED,
+    credential::{owner_member, CredentialAuthority, CredentialSeed},
+    domain,
+    storage::StorageError,
+    AddressRootSelection, AuditCredential, CustomRingError,
 };
+use serde::{Deserialize, Serialize};
 use solana_account::Account;
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
-    rpc::{
-        IndexerRpcConfig, MerkleProof, NonInclusionProof, ShieldedTransaction,
-        NULLIFIER_TREE_HEIGHT, STATE_TREE_HEIGHT,
-    },
+    rpc::{IndexerRpcConfig, ShieldedTransaction, NULLIFIER_TREE_HEIGHT, STATE_TREE_HEIGHT},
     AsyncRpc, ClientError, HistoryFilters,
 };
 use spr_event::OutputDataEncoding;
@@ -28,7 +34,7 @@ use spr_interface::{
     pda, state::discriminator::TREE_ACCOUNT_DISCRIMINATOR, SHIELDED_POOL_PROGRAM_ID,
     ZERO_NULLIFIER_PUBKEY,
 };
-use spr_keypair::{KeypairError, X25519Pubkey};
+use spr_keypair::{KeypairError, NullifierKey, X25519Keypair, X25519Pubkey};
 use spr_program::{
     program::{CompressedAccountError, NewAddress, PdaOwner, ACCOUNT_BLINDING_SEED},
     ADDRESS_TREE_ID,
@@ -42,7 +48,40 @@ use thiserror::Error;
 use zolana_ring_keys::{RingAddress, RingKeyError};
 use zolana_ring_policy::ring_id_field;
 
-use crate::viewing_key::{ViewingKeyError, ViewingKeyResolver};
+use crate::{
+    viewing_key::{ViewingKeyError, ViewingKeyResolver},
+    AuditError, SealedNullifierKey,
+};
+
+/// Distinct nonzero members of one proof.
+#[must_use]
+pub struct CredentialReads<'a> {
+    pub ring: Address,
+    pub members: &'a [[u8; 32]],
+}
+
+/// Every opening folds to a root of one account snapshot, a frame selects those roots by index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CredentialSnapshot {
+    /// In member order.
+    pub openings: Vec<CredentialOpening>,
+    /// The gaps' root, or the newest root of tree 0 without a gap.
+    pub address_root: AddressRoot,
+    /// Ascending distinct tree ids. Tree 0's newest root stands in without a present credential.
+    pub state_roots: Vec<TreeRoot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CredentialOpening {
+    Present(Box<PresentCredential>),
+    Absent(Box<AbsentCredential>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeRoot {
+    pub tree_id: u16,
+    pub root: StateRoot,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialLookup {
@@ -89,7 +128,8 @@ pub struct AddressRoot {
     pub sequence: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum UnknownCredential {
     /// The address holds a queue PDA and the indexer serves no enrollment for it.
     Queued,
@@ -123,7 +163,7 @@ pub enum RecipientKeys {
 #[derive(Debug, Error)]
 pub enum CredentialError {
     #[error(transparent)]
-    Rpc(#[from] ClientError),
+    Rpc(Box<ClientError>),
     #[error(transparent)]
     Hasher(#[from] HasherError),
     #[error(transparent)]
@@ -139,7 +179,11 @@ pub enum CredentialError {
     #[error(transparent)]
     RingKey(#[from] RingKeyError),
     #[error(transparent)]
-    ViewingKey(#[from] ViewingKeyError),
+    ViewingKey(Box<ViewingKeyError>),
+    #[error(transparent)]
+    Ring(#[from] CustomRingError),
+    #[error(transparent)]
+    Seal(Box<AuditError>),
     #[error("the indexer answered {0} enrollments for one credential address")]
     EnrollmentCount(usize),
     #[error("the enrollment output does not rebuild the credential leaf")]
@@ -158,6 +202,8 @@ pub enum CredentialError {
     InvalidAbsenceProof,
     #[error("the tree account at {address} is missing or not an SPP tree")]
     InvalidTree { address: Address },
+    #[error("the indexer answered one tree's proofs under different roots")]
+    SplitRoots,
     #[error("the state root is not in the root history of its tree")]
     StateRootNotAccepted,
     #[error("the address root is not in the root history of tree 0")]
@@ -172,7 +218,26 @@ pub enum CredentialError {
     EnrolledOwnerAtZeroKey,
     #[error("the enrolled owner holds no user record to seal a zero key note to")]
     UnverifiedViewingKey,
+    #[error("the credential seal opens to another key than the credential holds")]
+    SealMismatch,
 }
+
+/// Boxed so a caller's error enum stays small.
+macro_rules! boxed_from {
+    ($($variant:ident($source:ty)),*) => {$(
+        impl From<$source> for CredentialError {
+            fn from(error: $source) -> Self {
+                Self::$variant(Box::new(error))
+            }
+        }
+    )*};
+}
+
+boxed_from!(
+    Rpc(ClientError),
+    ViewingKey(ViewingKeyError),
+    Seal(AuditError)
+);
 
 #[must_use]
 pub struct CredentialResolver {
@@ -231,29 +296,16 @@ impl CredentialResolver {
         R: AsyncRpc,
     {
         let identity = CredentialIdentity::derive(&self.ring, &self.owner)?;
-        // The address is the nullifier of the enrollment's address slot, so the one transaction
-        // publishing it as a nullifier is the enrollment. An empty answer proves nothing yet.
-        let page = photon
-            .get_shielded_transactions_by_nullifiers(
-                vec![identity.address],
-                None,
-                None,
-                HistoryFilters::default(),
-                None,
-            )
-            .await?;
-        let mut enrollments = page
-            .data
-            .into_iter()
-            .flat_map(|group| group.events)
-            .filter(|transaction| transaction.nullifiers.contains(&identity.address));
-        match (enrollments.next(), enrollments.count()) {
-            (Some(enrollment), 0) => self.present(&identity, enrollment, photon, rpc).await,
-            (Some(_), more) => Err(CredentialError::EnrollmentCount(more + 1)),
-            (None, _) if page.pagination_token.is_some() => {
-                Ok(CredentialLookup::Unknown(UnknownCredential::PartialPage))
+        let page = enrollments(photon, &[identity.address]).await?;
+        let enrollment = match page {
+            EnrollmentPage::Complete(mut found) => found.remove(&identity.address),
+            EnrollmentPage::Partial => {
+                return Ok(CredentialLookup::Unknown(UnknownCredential::PartialPage))
             }
-            (None, _) => absent(&identity, photon, rpc).await,
+        };
+        match enrollment {
+            Some(enrollment) => self.present(&identity, enrollment, photon, rpc).await,
+            None => absent(&identity, photon, rpc).await,
         }
     }
 
@@ -268,91 +320,48 @@ impl CredentialResolver {
         P: AsyncRpc,
         R: AsyncRpc,
     {
-        // 1. The plaintext is untrusted until its rebuilt leaf folds to an on chain root, but a
-        //    credential naming another ring, owner, key or tag is refused before any proof read.
-        let (credential, output) = enrolled_credential(identity, &enrollment)?;
-        if credential.ring_id != identity.ring_id || credential.member != identity.member {
-            return Err(CredentialError::CredentialMismatch);
-        }
+        // 1. A credential naming another key or tag is refused before any proof read.
+        let enrolled = EnrolledLeaf::verify(identity, &enrollment)?;
         if self
             .nullifier_pk
-            .is_some_and(|nullifier_pk| nullifier_pk != credential.nullifier_pk)
+            .is_some_and(|nullifier_pk| nullifier_pk != enrolled.credential.nullifier_pk)
         {
             return Err(CredentialError::NullifierKeyMismatch);
         }
         if self
             .list_tag
-            .is_some_and(|list_tag| list_tag != credential.list_tag)
+            .is_some_and(|list_tag| list_tag != enrolled.credential.list_tag)
         {
             return Err(CredentialError::ListTagMismatch);
         }
-        // 2. `Enroll` writes the credential as its only output, so the blinding derives from the
-        //    address alone, and the leaf commits to the credential PDA and the tree it landed in.
-        let blinding = credential_blinding(&identity.address)?;
-        let leaf = ProofInputUtxo::new(
-            *identity.owner.owner_hash(),
-            &SOL_MINT,
-            0,
-            &blinding,
-            output.tree_id,
-        )?
-        .with_data_hash(credential.data_hash(&identity.address)?)
-        .hash()?;
-        if leaf != output.hash {
-            return Err(CredentialError::MalformedEnrollment);
-        }
-        // 3. Requiring the enrollment slot keeps a lagging indexer from answering without the leaf.
-        let tree = pda::tree(output.tree_id);
-        let proofs = photon
-            .get_merkle_proofs(
-                tree,
-                vec![leaf],
-                Some(IndexerRpcConfig::at_slot(enrollment.slot)),
-            )
-            .await?
-            .proofs;
-        let proof = match <[MerkleProof; 1]>::try_from(proofs) {
-            Ok([proof]) => proof,
-            Err(proofs) if proofs.is_empty() => {
-                return Ok(CredentialLookup::Unknown(
-                    UnknownCredential::StateProofMissing,
-                ));
-            }
-            Err(_) => return Err(CredentialError::MalformedProof),
+        // 2. The tree account read after the proof decides whether its root is still accepted. A
+        //    paused or full tree keeps its history, so its credentials stay readable.
+        let Some(openings) = state_openings(photon, &[enrolled], enrollment.slot).await? else {
+            return Ok(CredentialLookup::Unknown(
+                UnknownCredential::StateProofMissing,
+            ));
         };
-        if proof.leaf != leaf
-            || proof.merkle_context.tree != tree
-            || proof.leaf_index != output.leaf_index
-        {
-            return Err(CredentialError::MalformedProof);
-        }
-        let path = fixed_path::<STATE_TREE_HEIGHT>(&proof.path, proof.leaf_index)?;
-        if fold_path(leaf, proof.leaf_index, &path)? != proof.root {
-            return Err(CredentialError::InvalidStateProof);
-        }
-        // 4. The root must be in the history SPP accepts roots from. A paused or full tree keeps
-        //    its history, so its credentials stay readable.
+        let [opening] = <[PresentCredential; 1]>::try_from(openings)
+            .map_err(|_| CredentialError::MalformedProof)?;
+        let tree = pda::tree(opening.tree_id);
         let mut data = spp_tree(tree, rpc.get_account(tree).await?)?;
-        let account = TreeAccount::from_bytes(&mut data, tree.to_bytes())?;
-        if account.tree_id() != output.tree_id {
-            return Err(CredentialError::InvalidTree { address: tree });
+        check_state_root(&mut data, tree, opening.tree_id, opening.root)?;
+        Ok(CredentialLookup::Present(Box::new(opening)))
+    }
+}
+
+impl PresentCredential {
+    /// The seal's pad alone does not bind the opened key, the credential's key must match.
+    pub fn nullifier_key(&self, auditor: &X25519Keypair) -> Result<NullifierKey, CredentialError> {
+        let key = SealedNullifierKey {
+            eph_pk: X25519Pubkey::from_u(self.credential.eph_u)?,
+            ciphertext: self.credential.ciphertext,
         }
-        if account.get_utxo_tree_root(proof.root_index).ok() != Some(proof.root) {
-            return Err(CredentialError::StateRootNotAccepted);
+        .open(auditor)?;
+        match key.pubkey()? == self.credential.nullifier_pk {
+            true => Ok(key),
+            false => Err(CredentialError::SealMismatch),
         }
-        Ok(CredentialLookup::Present(Box::new(PresentCredential {
-            credential,
-            address: identity.address,
-            blinding,
-            tree_id: output.tree_id,
-            leaf_index: proof.leaf_index,
-            path,
-            root: StateRoot {
-                root_index: proof.root_index,
-                root: proof.root,
-            },
-            enrollment: enrollment.tx_signature,
-        })))
     }
 }
 
@@ -473,27 +482,362 @@ impl<'a> RecipientKeyResolver<'a> {
     }
 }
 
+impl CredentialReads<'_> {
+    pub async fn read<P, R>(
+        self,
+        photon: &P,
+        rpc: &R,
+    ) -> Result<CredentialSnapshot, CredentialError>
+    where
+        P: AsyncRpc,
+        R: AsyncRpc,
+    {
+        // 1. One history read names each member's enrollment. An empty answer proves nothing until
+        //    the gap and the queue PDA below agree.
+        let ring_id = ring_id_field(self.ring.as_array())?;
+        let authority = CredentialAuthority::derive(&self.ring)?;
+        let identities = self
+            .members
+            .iter()
+            .map(|member| CredentialIdentity::of_member(ring_id, *member, *authority.owner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let addresses: Vec<[u8; 32]> = identities.iter().map(|identity| identity.address).collect();
+        let mut found = match enrollments(photon, &addresses).await? {
+            EnrollmentPage::Complete(found) => found,
+            EnrollmentPage::Partial => {
+                return Err(CredentialError::Unknown(UnknownCredential::PartialPage))
+            }
+        };
+        let mut present: BTreeMap<u16, (Vec<EnrolledLeaf>, u64)> = BTreeMap::new();
+        let mut absent = Vec::new();
+        for identity in &identities {
+            match found.remove(&identity.address) {
+                Some(enrollment) => {
+                    let enrolled = EnrolledLeaf::verify(identity, &enrollment)?;
+                    let (leaves, slot) = present.entry(enrolled.output.tree_id).or_default();
+                    leaves.push(enrolled);
+                    *slot = (*slot).max(enrollment.slot);
+                }
+                None => absent.push(identity.address),
+            }
+        }
+        // 2. One proof request per tree and one for the gaps, each answered under a single root,
+        //    since the frame selects one root per tree and one address root.
+        let mut openings: BTreeMap<[u8; 32], CredentialOpening> = BTreeMap::new();
+        let mut state_roots = Vec::with_capacity(present.len());
+        for (tree_id, (leaves, slot)) in present {
+            let proved =
+                state_openings(photon, &leaves, slot)
+                    .await?
+                    .ok_or(CredentialError::Unknown(
+                        UnknownCredential::StateProofMissing,
+                    ))?;
+            let root = one_root(proved.iter().map(|opening| opening.root))?
+                .ok_or(CredentialError::MalformedProof)?;
+            state_roots.push(TreeRoot { tree_id, root });
+            openings.extend(proved.into_iter().map(|opening| {
+                (
+                    opening.address,
+                    CredentialOpening::Present(Box::new(opening)),
+                )
+            }));
+        }
+        let gaps = address_gaps(photon, &absent).await?;
+        let gap_root = one_root(gaps.iter().map(|gap| gap.root))?;
+        // 3. One snapshot holds tree 0, every state tree and every absent address's queue PDA.
+        //    An address enters the queue before any root holds it, so an empty PDA and a gap under
+        //    a root of the same snapshot cover both the queue and the tree.
+        let address_tree = pda::tree(ADDRESS_TREE_ID);
+        let trees: Vec<Address> = state_roots
+            .iter()
+            .map(|root| pda::tree(root.tree_id))
+            .collect();
+        let queues = absent
+            .iter()
+            .map(|address| pda::nullifier_pda(&address_tree, address).0);
+        let mut accounts = rpc
+            .get_multiple_accounts(
+                [address_tree]
+                    .into_iter()
+                    .chain(trees.iter().copied())
+                    .chain(queues)
+                    .collect(),
+            )
+            .await?
+            .into_iter();
+        let mut tree_zero = spp_tree(address_tree, accounts.next().flatten())?;
+        for (state, tree) in state_roots.iter().zip(&trees) {
+            let mut data = spp_tree(*tree, accounts.next().flatten())?;
+            check_state_root(&mut data, *tree, state.tree_id, state.root)?;
+        }
+        if accounts.any(|queue| {
+            queue.is_some_and(|account| {
+                account.owner != Address::default() || !account.data.is_empty()
+            })
+        }) {
+            return Err(CredentialError::Unknown(UnknownCredential::Queued));
+        }
+        let mut account = TreeAccount::from_bytes(&mut tree_zero, address_tree.to_bytes())?;
+        if account.tree_id() != ADDRESS_TREE_ID {
+            return Err(CredentialError::InvalidTree {
+                address: address_tree,
+            });
+        }
+        let address_root = match gap_root {
+            Some(root) => accepted_address_root(account.nullifier_tree(), root)?,
+            None => newest_address_root(account.nullifier_tree())?,
+        };
+        // 4. A frame needs a state root even when every opening proves absence.
+        if state_roots.is_empty() {
+            let root_index = account.utxo_tree().current_root_index();
+            state_roots.push(TreeRoot {
+                tree_id: ADDRESS_TREE_ID,
+                root: StateRoot {
+                    root_index,
+                    root: account.get_utxo_tree_root(root_index)?,
+                },
+            });
+        }
+        openings.extend(gaps.into_iter().map(|gap| {
+            let mut gap = gap;
+            gap.root = address_root;
+            (gap.address, CredentialOpening::Absent(Box::new(gap)))
+        }));
+        Ok(CredentialSnapshot {
+            openings: identities
+                .iter()
+                .map(|identity| openings.remove(&identity.address))
+                .collect::<Option<_>>()
+                .ok_or(CredentialError::MalformedProof)?,
+            address_root,
+            state_roots,
+        })
+    }
+}
+
 impl CredentialIdentity {
     fn derive(ring: &Address, owner: &Address) -> Result<Self, CredentialError> {
-        let ring_id = ring_id_field(ring.as_array())?;
-        let member = owner_member(owner)?;
-        let (credential_pda, _) = Address::find_program_address(&[CREDENTIAL_PDA_SEED], ring);
-        let pda_owner = PdaOwner::new(&credential_pda)?;
-        // The seed reads only the ring and member of a credential.
-        let seed = AuditCredential {
-            ring_id,
-            member,
-            ..AuditCredential::default()
+        let authority = CredentialAuthority::derive(ring)?;
+        Self::of_member(
+            ring_id_field(ring.as_array())?,
+            owner_member(owner)?,
+            *authority.owner(),
+        )
+    }
+
+    fn of_member(
+        ring_id: [u8; 32],
+        member: [u8; 32],
+        owner: PdaOwner,
+    ) -> Result<Self, CredentialError> {
+        let seed = CredentialSeed {
+            ring_id: &ring_id,
+            member: &member,
         }
-        .seed()?;
-        let address = *NewAddress::derive(&pda_owner, seed)?.address();
+        .derive()?;
+        let address = *NewAddress::derive(&owner, seed)?.address();
         Ok(Self {
             ring_id,
             member,
-            owner: pda_owner,
+            owner,
             address,
         })
     }
+}
+
+/// The plaintext `Enroll` output rebuilt to its leaf, untrusted until a state proof folds it to a root.
+struct EnrolledLeaf {
+    credential: AuditCredential,
+    address: [u8; 32],
+    output: spr_client::rpc::OutputContext,
+    blinding: [u8; 32],
+    leaf: [u8; 32],
+    enrollment: Signature,
+}
+
+impl EnrolledLeaf {
+    fn verify(
+        identity: &CredentialIdentity,
+        enrollment: &ShieldedTransaction,
+    ) -> Result<Self, CredentialError> {
+        // 1. The output must name the ring and member the address derives from.
+        let (credential, output) = enrolled_credential(identity, enrollment)?;
+        if credential.ring_id != identity.ring_id || credential.member != identity.member {
+            return Err(CredentialError::CredentialMismatch);
+        }
+        // 2. `Enroll` writes the credential as its only output, so the blinding derives from the
+        //    address alone, and the leaf commits to the credential PDA and the tree it landed in.
+        let blinding = credential_blinding(&identity.address)?;
+        let leaf = ProofInputUtxo::new(
+            *identity.owner.owner_hash(),
+            &SOL_MINT,
+            0,
+            &blinding,
+            output.tree_id,
+        )?
+        .with_data_hash(credential.data_hash(&identity.address)?)
+        .hash()?;
+        if leaf != output.hash {
+            return Err(CredentialError::MalformedEnrollment);
+        }
+        Ok(Self {
+            credential,
+            address: identity.address,
+            output,
+            blinding,
+            leaf,
+            enrollment: enrollment.tx_signature,
+        })
+    }
+}
+
+enum EnrollmentPage {
+    /// The one enrollment of each address that has one.
+    Complete(BTreeMap<[u8; 32], ShieldedTransaction>),
+    /// The indexer ended the answer with a continuation.
+    Partial,
+}
+
+/// Each address is the nullifier of its enrollment's address slot, only that enrollment publishes it.
+async fn enrollments<P: AsyncRpc>(
+    photon: &P,
+    addresses: &[[u8; 32]],
+) -> Result<EnrollmentPage, CredentialError> {
+    if addresses.is_empty() {
+        return Ok(EnrollmentPage::Complete(BTreeMap::new()));
+    }
+    let page = photon
+        .get_shielded_transactions_by_nullifiers(
+            addresses.to_vec(),
+            None,
+            None,
+            HistoryFilters::default(),
+            None,
+        )
+        .await?;
+    if page.pagination_token.is_some() {
+        return Ok(EnrollmentPage::Partial);
+    }
+    let mut found = BTreeMap::new();
+    for transaction in page.data.into_iter().flat_map(|group| group.events) {
+        for address in addresses
+            .iter()
+            .filter(|address| transaction.nullifiers.contains(address))
+        {
+            if found.insert(*address, transaction.clone()).is_some() {
+                return Err(CredentialError::EnrollmentCount(2));
+            }
+        }
+    }
+    Ok(EnrollmentPage::Complete(found))
+}
+
+/// The state proofs of one tree's leaves, `None` when the indexer serves none. Requiring the
+/// newest enrollment slot keeps a lagging indexer from answering without the leaves.
+async fn state_openings<P: AsyncRpc>(
+    photon: &P,
+    leaves: &[EnrolledLeaf],
+    slot: u64,
+) -> Result<Option<Vec<PresentCredential>>, CredentialError> {
+    let Some(first) = leaves.first() else {
+        return Ok(Some(Vec::new()));
+    };
+    let tree = pda::tree(first.output.tree_id);
+    let proofs = photon
+        .get_merkle_proofs(
+            tree,
+            leaves.iter().map(|leaf| leaf.leaf).collect(),
+            Some(IndexerRpcConfig::at_slot(slot)),
+        )
+        .await?
+        .proofs;
+    if proofs.is_empty() {
+        return Ok(None);
+    }
+    if proofs.len() != leaves.len() {
+        return Err(CredentialError::MalformedProof);
+    }
+    leaves
+        .iter()
+        .zip(proofs)
+        .map(|(enrolled, proof)| {
+            if proof.leaf != enrolled.leaf
+                || proof.merkle_context.tree != tree
+                || enrolled.output.tree_id != first.output.tree_id
+                || proof.leaf_index != enrolled.output.leaf_index
+            {
+                return Err(CredentialError::MalformedProof);
+            }
+            let path = fixed_path::<STATE_TREE_HEIGHT>(&proof.path, proof.leaf_index)?;
+            if fold_path(enrolled.leaf, proof.leaf_index, &path)? != proof.root {
+                return Err(CredentialError::InvalidStateProof);
+            }
+            Ok(PresentCredential {
+                credential: enrolled.credential,
+                address: enrolled.address,
+                blinding: enrolled.blinding,
+                tree_id: enrolled.output.tree_id,
+                leaf_index: proof.leaf_index,
+                path,
+                root: StateRoot {
+                    root_index: proof.root_index,
+                    root: proof.root,
+                },
+                enrollment: enrolled.enrollment,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// The gap of each address under the root the indexer served, its sequence not yet read.
+async fn address_gaps<P: AsyncRpc>(
+    photon: &P,
+    addresses: &[[u8; 32]],
+) -> Result<Vec<AbsentCredential>, CredentialError> {
+    if addresses.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tree = pda::tree(ADDRESS_TREE_ID);
+    let proofs = photon
+        .get_non_inclusion_proofs(tree, addresses.to_vec(), None)
+        .await?
+        .proofs;
+    if proofs.is_empty() {
+        return Err(CredentialError::Unknown(
+            UnknownCredential::AbsenceProofMissing,
+        ));
+    }
+    if proofs.len() != addresses.len() {
+        return Err(CredentialError::MalformedProof);
+    }
+    addresses
+        .iter()
+        .zip(proofs)
+        .map(|(address, gap)| {
+            if gap.leaf != *address || gap.merkle_context.tree != tree {
+                return Err(CredentialError::MalformedProof);
+            }
+            let path = fixed_path::<NULLIFIER_TREE_HEIGHT>(&gap.path, gap.low_element_index)?;
+            let brackets = gap.low_element < *address && *address < gap.high_element;
+            let low_leaf = Poseidon::hashv(&[&gap.low_element, &gap.high_element])?;
+            if !brackets || fold_path(low_leaf, gap.low_element_index, &path)? != gap.root {
+                return Err(CredentialError::InvalidAbsenceProof);
+            }
+            Ok(AbsentCredential {
+                address: *address,
+                low: gap.low_element,
+                next: gap.high_element,
+                low_index: gap.low_element_index,
+                path,
+                root: AddressRoot {
+                    root_index: gap.root_index,
+                    root: gap.root,
+                    sequence: 0,
+                },
+            })
+        })
+        .collect()
 }
 
 async fn absent<P, R>(
@@ -508,28 +852,13 @@ where
     let tree = pda::tree(ADDRESS_TREE_ID);
     let (queue, _) = pda::nullifier_pda(&tree, &identity.address);
     // 1. The gap is checked before the snapshot, the snapshot then decides the roots it may use.
-    let proofs = photon
-        .get_non_inclusion_proofs(tree, vec![identity.address], None)
-        .await?
-        .proofs;
-    let gap = match <[NonInclusionProof; 1]>::try_from(proofs) {
-        Ok([gap]) => gap,
-        Err(proofs) if proofs.is_empty() => {
-            return Ok(CredentialLookup::Unknown(
-                UnknownCredential::AbsenceProofMissing,
-            ));
-        }
-        Err(_) => return Err(CredentialError::MalformedProof),
+    let gap = match address_gaps(photon, &[identity.address]).await {
+        Ok(gaps) => gaps,
+        Err(CredentialError::Unknown(unknown)) => return Ok(CredentialLookup::Unknown(unknown)),
+        Err(error) => return Err(error),
     };
-    if gap.leaf != identity.address || gap.merkle_context.tree != tree {
-        return Err(CredentialError::MalformedProof);
-    }
-    let path = fixed_path::<NULLIFIER_TREE_HEIGHT>(&gap.path, gap.low_element_index)?;
-    let brackets = gap.low_element < identity.address && identity.address < gap.high_element;
-    let low_leaf = Poseidon::hashv(&[&gap.low_element, &gap.high_element])?;
-    if !brackets || fold_path(low_leaf, gap.low_element_index, &path)? != gap.root {
-        return Err(CredentialError::InvalidAbsenceProof);
-    }
+    let [mut gap] =
+        <[AbsentCredential; 1]>::try_from(gap).map_err(|_| CredentialError::MalformedProof)?;
     // 2. An address enters the queue before any root holds it. Its queue PDA closes only after
     //    every root in the history holds the address, so an empty PDA and a gap under a root of
     //    the same snapshot cover both the queue and the tree.
@@ -548,22 +877,77 @@ where
     if account.tree_id() != ADDRESS_TREE_ID {
         return Err(CredentialError::InvalidTree { address: tree });
     }
-    let sequence = match root_sequence(account.nullifier_tree(), gap.root_index) {
-        Some((root, sequence)) if root == gap.root => sequence,
-        _ => return Err(CredentialError::AddressRootNotAccepted),
+    gap.root = accepted_address_root(account.nullifier_tree(), gap.root)?;
+    Ok(CredentialLookup::Absent(Box::new(gap)))
+}
+
+/// One indexer answer names one root, `None` for no answer.
+fn one_root<T: PartialEq>(
+    mut roots: impl Iterator<Item = T>,
+) -> Result<Option<T>, CredentialError> {
+    let Some(first) = roots.next() else {
+        return Ok(None);
     };
-    Ok(CredentialLookup::Absent(Box::new(AbsentCredential {
-        address: identity.address,
-        low: gap.low_element,
-        next: gap.high_element,
-        low_index: gap.low_element_index,
-        path,
-        root: AddressRoot {
-            root_index: gap.root_index,
-            root: gap.root,
-            sequence,
-        },
-    })))
+    match roots.all(|root| root == first) {
+        true => Ok(Some(first)),
+        false => Err(CredentialError::SplitRoots),
+    }
+}
+
+fn check_state_root(
+    data: &mut [u8],
+    tree: Address,
+    tree_id: u16,
+    root: StateRoot,
+) -> Result<(), CredentialError> {
+    let account = TreeAccount::from_bytes(data, tree.to_bytes())?;
+    if account.tree_id() != tree_id {
+        return Err(CredentialError::InvalidTree { address: tree });
+    }
+    match account.get_utxo_tree_root(root.root_index).ok() == Some(root.root) {
+        true => Ok(()),
+        false => Err(CredentialError::StateRootNotAccepted),
+    }
+}
+
+/// The served root with its sequence, read from the same history the program reads.
+fn accepted_address_root<const ZKP_BATCHES: usize>(
+    tree: &NullifierTreeLayout<ZKP_BATCHES>,
+    served: AddressRoot,
+) -> Result<AddressRoot, CredentialError> {
+    let checkpoint = AddressRootSelection {
+        tree_id: ADDRESS_TREE_ID,
+        root_index: served.root_index,
+        history: tree,
+    }
+    .checkpoint()
+    .map_err(|_| CredentialError::AddressRootNotAccepted)?;
+    match *checkpoint.root() == served.root {
+        true => Ok(AddressRoot {
+            sequence: checkpoint.sequence(),
+            ..served
+        }),
+        false => Err(CredentialError::AddressRootNotAccepted),
+    }
+}
+
+fn newest_address_root<const ZKP_BATCHES: usize>(
+    tree: &NullifierTreeLayout<ZKP_BATCHES>,
+) -> Result<AddressRoot, CredentialError> {
+    let root_index = u16::try_from(tree.get_root_index())
+        .map_err(|_| CredentialError::AddressRootNotAccepted)?;
+    let checkpoint = AddressRootSelection {
+        tree_id: ADDRESS_TREE_ID,
+        root_index,
+        history: tree,
+    }
+    .checkpoint()
+    .map_err(|_| CredentialError::AddressRootNotAccepted)?;
+    Ok(AddressRoot {
+        root_index,
+        root: *checkpoint.root(),
+        sequence: checkpoint.sequence(),
+    })
 }
 
 /// The one plaintext output carrying `address || Borsh(credential)` and the context it landed in.
@@ -628,19 +1012,6 @@ fn fold_path(leaf: [u8; 32], leaf_index: u64, path: &[[u8; 32]]) -> Result<[u8; 
         })
 }
 
-/// Each apply adds one to `sequence_number` and writes one root at the history cursor, so a slot's
-/// distance behind the latest root is its distance behind the latest sequence.
-fn root_sequence<const ZKP_BATCHES: usize>(
-    tree: &NullifierTreeLayout<ZKP_BATCHES>,
-    root_index: u16,
-) -> Option<([u8; 32], u64)> {
-    let root = tree.root_by_index(root_index)?;
-    let capacity = u64::try_from(ZKP_BATCHES).ok()?;
-    let latest = u64::from(tree.get_root_index());
-    let distance = (latest + capacity - u64::from(root_index)) % capacity;
-    Some((root, tree.sequence_number.checked_sub(distance)?))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -649,8 +1020,8 @@ mod tests {
     use borsh::BorshSerialize;
     use spr_client::rpc::{
         Context, GetMerkleProofsResponse, GetNonInclusionProofsResponse,
-        GetShieldedTransactionsByNullifiersResponse, MerkleContext, OutputContext, OutputSlot,
-        PaginationToken, TransactionEvents,
+        GetShieldedTransactionsByNullifiersResponse, MerkleContext, MerkleProof, NonInclusionProof,
+        OutputContext, OutputSlot, PaginationToken, TransactionEvents,
     };
     use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
     use spr_keypair::{
@@ -665,6 +1036,7 @@ mod tests {
     use zolana_ring_keys::ListSaltHolder;
 
     use super::*;
+    use crate::NullifierKeyEnvelope;
 
     const RING: Address = Address::new_from_array([4; 32]);
     const TREE_ID: u16 = 3;
@@ -1000,6 +1372,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_auditor_opens_the_credential_key_and_a_foreign_seal_refuses() {
+        let (holder, auditor) = (holder(), X25519Keypair::new());
+        let list_salt = holder.list_salt(&RING).unwrap();
+        let envelope =
+            NullifierKeyEnvelope::new(&holder.nullifier_key, &list_salt, &auditor.pubkey())
+                .unwrap();
+        let credential = AuditCredential {
+            auditor_pubkey: *auditor.pubkey().as_bytes(),
+            eph_u: envelope.sealed.eph_pk.u(),
+            ciphertext: envelope.sealed.ciphertext,
+            ..credential()
+        };
+        let opened = present(
+            Ledger::enrolled(&credential)
+                .resolve(resolver())
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            opened.nullifier_key(&auditor).unwrap().pubkey().unwrap(),
+            credential.nullifier_pk
+        );
+        assert!(opened.nullifier_key(&X25519Keypair::new()).is_err());
+        let other_key = AuditCredential {
+            nullifier_pk: NullifierKey::from_secret([9; 31]).pubkey().unwrap(),
+            ..credential
+        };
+        let other_key = present(
+            Ledger::enrolled(&other_key)
+                .resolve(resolver())
+                .await
+                .unwrap(),
+        );
+        assert!(matches!(
+            other_key.nullifier_key(&auditor),
+            Err(CredentialError::SealMismatch)
+        ));
+    }
+
+    #[tokio::test]
     async fn an_owner_without_enrollment_is_absent_at_its_root_sequence() {
         let opened = absent(Ledger::absent().resolve(resolver()).await.unwrap());
         assert_eq!(opened.address, identity().address);
@@ -1155,10 +1567,9 @@ mod tests {
             .await;
         assert!(
             matches!(
-                result,
-                Err(CredentialError::ViewingKey(
-                    ViewingKeyError::NullifierKeyMismatch
-                ))
+                &result,
+                Err(CredentialError::ViewingKey(error))
+                    if matches!(**error, ViewingKeyError::NullifierKeyMismatch)
             ),
             "{result:?}"
         );

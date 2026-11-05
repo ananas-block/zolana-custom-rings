@@ -1,5 +1,5 @@
 //! `list-approval`, the policy authority's side of a wallet update pending list approval.
-//! Approval is the authority's own record update, the off chain check behind it stays with the authority. Not tracking enrollment, see `member`.
+//! Approval is the authority's own record update, the off chain check behind it stays with the authority. Not an enrollment, see `member`.
 
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_sdk::AuthorityRecordUpdate;

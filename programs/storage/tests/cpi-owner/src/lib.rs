@@ -1,4 +1,4 @@
-//! Forwards one instruction to the storage program under its `owner` PDA.
+//! Forwards one instruction under its `owner` PDA to the final executable account.
 
 use pinocchio::{
     address::address_eq,
@@ -10,7 +10,6 @@ use pinocchio::{
 
 pinocchio::entrypoint!(process_instruction);
 
-const STORAGE_PROGRAM_ID: Address = Address::new_from_array([0x53; 32]);
 const OWNER_SEED: &[u8] = b"owner";
 
 pub fn process_instruction(
@@ -20,7 +19,13 @@ pub fn process_instruction(
 ) -> ProgramResult {
     let (owner, bump) = Address::derive_program_address(&[OWNER_SEED], program_id)
         .ok_or(ProgramError::InvalidSeeds)?;
-    let metas: Vec<InstructionAccount> = accounts
+    let (target, forwarded) = accounts
+        .split_last()
+        .ok_or(ProgramError::NotEnoughAccountKeys)?;
+    if !target.executable() {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+    let metas: Vec<InstructionAccount> = forwarded
         .iter()
         .map(|account| {
             InstructionAccount::new(
@@ -33,7 +38,7 @@ pub fn process_instruction(
     let bump = [bump];
     let seeds = [Seed::from(OWNER_SEED), Seed::from(&bump)];
     let instruction = InstructionView {
-        program_id: &STORAGE_PROGRAM_ID,
+        program_id: target.address(),
         accounts: &metas,
         data,
     };

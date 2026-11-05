@@ -11,7 +11,7 @@
 // and a later write can change it.
 //
 // Read after ringgadget/canonical.go. Read before registry/shared_path.go,
-// registry/apply_records.go, registry/tracking.go.
+// registry/apply_records.go.
 
 // Package registry proves a ring's member registry, a 4-ary Poseidon tree whose records form one list sorted by member, and the writes a storage `Update` carries to it.
 package registry

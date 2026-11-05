@@ -6,7 +6,8 @@
 
 use custom_ring_interface::{
     mint_policy_write,
-    storage::{chain_start, Revision},
+    storage::{chain_start, RegistryId, Revision, StorageRegistry},
+    storage_instruction::InitializeIxData,
     write_chain, RecordWrite, RecordWriteData, WriteRecordsIxData, MEMBER_REGISTRY_EMPTY_ROOT,
     QUAD_HEIGHT,
 };
@@ -14,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use spr_hasher::primitives::{hash_bytes, solana_owner_identity};
 use zolana_ring_member_registry::{
-    MemberRecord, MemberRegistryTree, OpeningCheck, QuadPath, RecordOpening, RecordTree,
-    RecordWriteProofInput, ZERO_SUBTREES,
+    MemberRecord, MemberRegistryTree, OpeningCheck, QuadPath, RecordCredentials, RecordOpening,
+    RecordStatementContext, RecordTree, RecordWriteProofInput, ZERO_SUBTREES,
 };
 use zolana_ring_policy::{ListChange, ListId, ListSet};
 
@@ -49,6 +50,9 @@ struct Update {
     chain_end: String,
     count: u64,
     statement_hash: String,
+    credential_writes: u16,
+    private_ring_id: String,
+    credential_fields: Vec<String>,
     /// One per write, instruction order.
     proof_inputs: Vec<WriteInput>,
 }
@@ -128,6 +132,7 @@ struct Registry {
     tree: Option<MemberRegistryTree>,
     address: Address,
     revision: u64,
+    state: StorageRegistry,
 }
 
 impl Registry {
@@ -136,6 +141,15 @@ impl Registry {
             tree: Some(MemberRegistryTree::new().expect("tree")),
             address,
             revision: 0,
+            state: StorageRegistry::new(
+                address,
+                &InitializeIxData {
+                    registry_id: RegistryId::default(),
+                    grace_slots: [0; 8],
+                    ring_id: [0; 32],
+                    private_ring_id: [0; 32],
+                },
+            ),
         }
     }
 
@@ -172,7 +186,15 @@ impl Registry {
         self.tree = Some(applied.tree);
         let inputs = applied.proof;
         assert_eq!(inputs.chain_end, chain);
-        let statement = inputs.statement().expect("statement");
+        let statement = inputs
+            .statement(RecordStatementContext {
+                registry: &self.state,
+                asset_writes: &[],
+                credentials: RecordCredentials::Public,
+            })
+            .expect("statement");
+        self.state.roots[0].hash = inputs.new_root;
+        self.state.next_index = statement.new_next_index.to_le_bytes();
         let revision = self.revision;
         self.revision += 1;
         Update {
@@ -187,6 +209,9 @@ impl Registry {
             chain_end: hex::encode(inputs.chain_end),
             count: statement.count,
             statement_hash: hex::encode(statement.hash().expect("statement hash")),
+            credential_writes: statement.credential_writes,
+            private_ring_id: hex::encode(statement.private_ring_id),
+            credential_fields: statement.credentials.elements().map(hex::encode).collect(),
             proof_inputs: inputs.writes.iter().map(write_input).collect(),
         }
     }

@@ -23,8 +23,19 @@ import (
 	"github.com/consensys/gnark/frontend"
 )
 
-// debitBits bounds every amount sum the policy compares, SPP's range checks bind input amounts through their hash and UintBytesBE output amounts.
-// Leg amounts and the gross take their own range checks. Shapes and DepositCapacities hold a key under 64 inputs and 64 payments, so one side's sum of u64 amounts stays below 2^70. Distinct rows keep a total over rows on the same bound, repeated rows on the authority rail can only leave their own proof unsolvable.
+// debitBits keeps comparisons and division over integers below the BN254 scalar modulus.
+// SPP binds u64 input amounts through their hashes, and UintBytesBE bounds output amounts.
+// SPP's MAX_INTERFACE_TRANSFERS permits at most 32 u64 legs, giving gross < 2^69.
+// transfer.Shapes permits at most 49 inputs and 16 outputs, giving each owner's held < 2^70.
+// Exits plus gross and payment totals stay below 2^70, and DepositCapacities permits at most 8 payments.
+// While outflow is active, distinct sender rows prevent counting held amounts twice.
+// Each row's charge is at most its kept amount, giving outflow at most held and preserving the total bound.
+// Thresholds remain u64, and active outflow comparisons have differences with magnitude below 2^72.
+// The comparison offset then keeps its recomposition below 2^73.
+// With active outflow, displaced, running kept and the nonzero divisor stay below 2^72.
+// The numerator and checked quotient times divisor plus remainder then stay below 2^144.
+// Both recompositions stay below the field modulus, preventing modular wrap from changing a comparison or division result.
+// On the authority rail, repeated sender rows can cause the unconditional arithmetic constraints to refuse a witness.
 const debitBits = 72
 
 type comparator struct {

@@ -2,10 +2,10 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask, sender_bundle_len, storage::Revision, stream::slot_tag,
-    AnonymousProofData, AppMessage, CustomRingProof, FrameExtensions, FramedSenderBundle,
-    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingRail,
-    RingTransactData, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN,
-    RECIPIENT_BODY_LEN,
+    AnonymousProofData, AppMessage, CredentialRead, CustomRingProof, FrameExtensions,
+    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies,
+    RingOutput, RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN,
+    CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -81,7 +81,7 @@ impl Fixture {
             n_in,
             n_out,
             proof: &self.proofs[0],
-            tracking_revision: Revision::from(9),
+            credential_read: CredentialRead::new(0, &[0]).unwrap(),
             own_revision: None,
             policy: None,
             spl_withdrawal_owners: &[],

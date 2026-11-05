@@ -1,6 +1,6 @@
 //! One SPP deposit of one to eight ring notes under one proof of the narrowest deposit key holding them.
 //!
-//! The proof binds the SPP data, each owner's tracking row and any screened record. Every note of a batch
+//! The proof binds the SPP data, each keyed owner's credential and any screened record. Every note of a batch
 //! settles in the one SPP deposit or none does. A key's slots bound the notes and its pools bound the
 //! records, every distinct recipient, asset and salted key takes one.
 //!
@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use custom_ring_interface::{
     cosign::CoSignDemand, domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets,
-    tag, AuditRecord, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
-    DepositPublicInput, DepositRegistry, DepositSubjects, DepositedAsset, InstructionTag,
-    OpeningRecord, RecordKind, RingDepositAuditCapsule, RingMode,
+    tag, AuditRecord, CredentialRead, CustomRingError, CustomRingProof, DepositContext,
+    DepositPrefix, DepositPublicInput, DepositRegistry, DepositSubjects, DepositedAsset,
+    InstructionTag, OpeningRecord, RecordKind, RingDepositAuditCapsule, RingMode,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -24,7 +24,7 @@ use spr_hasher::primitives::{pack_be, right_align};
 use spr_indexer_api::SerializablePubkey;
 use spr_interface::{
     instruction::instruction_data::deposit::RingDepositIxDataRef, pda, state::SplAssetRegistry,
-    N_PUBLIC_SLOTS, PROGRAM_ID_PUBKEY,
+    N_PUBLIC_SLOTS, PROGRAM_ID_PUBKEY, ZERO_NULLIFIER_PUBKEY,
 };
 use spr_keypair::{
     random_blinding, viewing_key::ViewTag, ShieldedAddress, X25519Keypair, X25519Pubkey,
@@ -47,23 +47,22 @@ use zolana_ring_transaction::RingDepositPlaintext;
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     co_signer::CoSignerChoice,
+    credentials::{BoundCredentials, CredentialPool, CredentialPoolRead},
     pipeline::{
         pool_at_width, HiddenOwner, KnownSalts, OwnerQuery, PoolSubjects, RecordPlan, RingSender,
         SourceGates,
     },
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
-    records::{
-        check_output_key, check_recipient_viewing_key, PoolRead, TrackingPoolRead, TrackingRead,
-    },
+    records::{check_output_key, check_recipient_viewing_key, PoolRead},
     relay_message::{ExpectedDeposit, ExpectedMessage},
     request::{
         self, DepositRequest, MintChunks, OwnerEntry, PolicyParams, PolicyTable, PoolEntry,
-        RecordPools, TrackingParams,
+        RecordPools,
     },
     submission::{check_transaction_size, send_budget, BoundPolicy, BoundRoot},
-    CustomRing, CustomRingConfig, PinnedPolicy, PreparedRelay, RingError, RingSubmission,
-    SettledSubmission,
+    CredentialTrees, CustomRing, CustomRingConfig, PinnedPolicy, PreparedRelay, RingError,
+    RingSubmission, SettledSubmission,
 };
 
 #[cfg(test)]
@@ -218,9 +217,10 @@ struct NoteTerms {
 
 pub(crate) struct BoundDeposit {
     pub instruction: Instruction,
-    /// The tracking root, a policy ring's own and curator roots beside it.
+    /// A policy ring's own and curator roots.
     pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
+    pub credentials: BoundCredentials,
 }
 
 /// The proof binds the key's Solana owner identity into the owner hash.
@@ -244,8 +244,7 @@ struct SlotDisclosure {
     owner: DisclosedOwner,
     owner_utxo_hash: [u8; 32],
     owner_pk_hash: [u8; 32],
-    nullifier_pk: [u8; 32],
-    viewing_u: [u8; 32],
+    recipient: ShieldedAddress,
     /// Zero when unknown.
     list_salt: [u8; 32],
     blinding_secret: Zeroizing<[u8; 32]>,
@@ -256,8 +255,7 @@ struct SlotDisclosure {
 /// Every per slot column already padded to the key's slots.
 struct DepositRecords {
     ring_id: [u8; 32],
-    tracking: BoundRoot,
-    tracking_pool: TrackingPoolRead,
+    credentials: CredentialPool,
     key_capacity: u8,
     output_entries: Vec<u32>,
     owner_entries: Vec<OwnerEntry>,
@@ -690,8 +688,12 @@ impl PreparedRingDeposit {
             let frame = DepositFrame {
                 roots,
                 key_capacity: records.key_capacity,
+                credential_read: records.credentials.read()?,
+                credential_trees: records
+                    .credentials
+                    .trees(usize::from(records.key_capacity))?,
             };
-            self.check_size(frame)?;
+            self.check_size(&frame)?;
             let circuit = RingCircuit::Deposit {
                 capacity: frame.key_capacity,
             };
@@ -699,19 +701,20 @@ impl PreparedRingDeposit {
                 .prove(client, body.public_input_hash)
                 .await?;
             Ok(BoundDeposit {
-                instruction: self.instruction(to_instruction_proof(proof)?, frame)?,
+                instruction: self.instruction(to_instruction_proof(proof)?, &frame)?,
                 roots: roots.bound().collect(),
                 policy: records.policy.as_ref().map(|policy| BoundPolicy {
                     ring: self.ring,
                     hash: policy.policy_hash,
                 }),
+                credentials: records.credentials.bound(),
             })
         })
         .await
     }
 
     /// Sized as the proven instruction, the proof is of fixed width.
-    fn check_size(&self, frame: DepositFrame) -> Result<(), RingError> {
+    fn check_size(&self, frame: &DepositFrame) -> Result<(), RingError> {
         let payer = self
             .spp
             .accounts
@@ -724,34 +727,32 @@ impl PreparedRingDeposit {
         )
     }
 
-    /// `[policy, registries, co-signer?]`, then SPP's deposit list.
+    /// `[policy, registries, credential trees, co-signer?]`, then SPP's deposit list.
     fn instruction(
         &self,
         proof: CustomRingProof,
-        frame: DepositFrame,
+        frame: &DepositFrame,
     ) -> Result<Instruction, RingError> {
-        let DepositFrame {
-            roots,
-            key_capacity,
-        } = frame;
+        let roots = frame.roots;
         let mut instruction = self.spp.clone();
         let prefix = DepositPrefix {
             tag: tag::DEPOSIT,
-            key_capacity,
+            key_capacity: frame.key_capacity,
             proof,
-            tracking_revision: roots.tracking.revision,
+            credential_read: frame.credential_read.clone(),
             own_revision: roots.own.map_or_else(Default::default, |own| own.revision),
             curator_revision: roots
                 .curator
                 .map_or_else(Default::default, |curator| curator.revision),
         };
-        instruction.data = [bytemuck::bytes_of(&prefix), &instruction.data].concat();
+        instruction.data = [prefix.encode()?, instruction.data].concat();
         let mut accounts = vec![AccountMeta::new_readonly(self.ring.policy_pda(), false)];
         accounts.extend(
             roots
                 .bound()
                 .map(|root| AccountMeta::new_readonly(root.registry, false)),
         );
+        accounts.extend(frame.credential_trees.metas());
         accounts.extend(
             self.cosigner
                 .into_iter()
@@ -762,15 +763,15 @@ impl PreparedRingDeposit {
     }
 }
 
-#[derive(Clone, Copy)]
 struct DepositFrame {
     roots: DepositRoots,
     key_capacity: u8,
+    credential_read: CredentialRead,
+    credential_trees: CredentialTrees,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct DepositRoots {
-    pub tracking: BoundRoot,
     pub own: Option<BoundRoot>,
     pub curator: Option<BoundRoot>,
 }
@@ -778,17 +779,13 @@ pub(crate) struct DepositRoots {
 impl DepositRoots {
     /// The program's account order, `RingPolicy::root_registries`.
     fn bound(self) -> impl Iterator<Item = BoundRoot> {
-        self.own
-            .into_iter()
-            .chain(self.curator)
-            .chain([self.tracking])
+        self.own.into_iter().chain(self.curator)
     }
 }
 
 impl DepositRecords {
     fn roots(&self) -> DepositRoots {
         DepositRoots {
-            tracking: self.tracking,
             own: self.policy.as_ref().map(|policy| policy.root),
             curator: self.curator().map(|curator| curator.root),
         }
@@ -1077,8 +1074,7 @@ impl SealedBatch {
                     owner: note.owner,
                     owner_utxo_hash: note.deposit.owner_utxo_hash,
                     owner_pk_hash: note.address.signing_pubkey.owner_proof_input_hash()?,
-                    nullifier_pk: note.address.nullifier_pubkey,
-                    viewing_u: note.address.viewing_pubkey.u(),
+                    recipient: note.address,
                     list_salt: note.list_salt,
                     blinding_secret: note.blinding_secret,
                     mint: note.deposit.asset.mint().to_bytes(),
@@ -1108,41 +1104,12 @@ fn disclosed_owner(mode: RingMode, address: &ShieldedAddress) -> Result<Disclose
 }
 
 impl DepositDisclosure {
-    async fn records(
+    async fn records<R: AsyncRpc + AsyncRingIndexer>(
         &self,
         ring: CustomRing,
-        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+        rpc: &R,
     ) -> Result<DepositRecords, RingError> {
         let policy = ring.require_policy(rpc).await?;
-        let tracking = BoundRoot::tracking(&policy, rpc).await?;
-        // 1. Each distinct recipient opens one tracking row, a slot points at its recipient's row. A note
-        // sealed to a viewing key the row no longer names stays unread.
-        let mut tracked = PoolSubjects::default();
-        let mut output_entries: Vec<u32> = self
-            .slots
-            .iter()
-            .map(|slot| tracked.index(Some(slot.owner_pk_hash)))
-            .collect();
-        let members = tracked.opened();
-        let rows = TrackingRead {
-            root: tracking,
-            members,
-            openings: members.len(),
-        }
-        .read(rpc)
-        .await?;
-        for (slot_index, slot) in self.slots.iter().enumerate() {
-            check_output_key(
-                rows.record(&slot.owner_pk_hash),
-                &slot.nullifier_pk,
-                slot_index,
-            )?;
-            check_recipient_viewing_key(
-                rows.record(&slot.owner_pk_hash),
-                &slot.viewing_u,
-                slot_index,
-            )?;
-        }
         let pinned = match policy.written_policy_hash() {
             Some(_) => Some(PinnedPolicy::of(&policy)?),
             None => None,
@@ -1150,8 +1117,34 @@ impl DepositDisclosure {
         let gates = pinned.as_ref().map_or_else(SourceGates::default, |pinned| {
             SourceGates::of(&pinned.sources)
         });
-        // 2. Every distinct recipient and asset takes a pool record and an enrolled recipient on a salted
-        // list one more under its salted key, only the rows read above show who is enrolled.
+        // 1. A keyed recipient opens its credential, and under a salted read every recipient does.
+        //    A slot points at its recipient's opening, a zero-key slot outside a salted read at none.
+        let mut tracked = PoolSubjects::default();
+        let mut output_entries: Vec<u32> = self
+            .slots
+            .iter()
+            .map(|slot| {
+                let keyed = slot.recipient.nullifier_pubkey != ZERO_NULLIFIER_PUBKEY;
+                tracked.index((keyed || gates.any_salted()).then_some(slot.owner_pk_hash))
+            })
+            .collect();
+        let credentials = CredentialPoolRead {
+            ring,
+            members: tracked.members(),
+        }
+        .read(rpc)
+        .await?;
+        // 2. A note sealed to a viewing key the owner's record no longer names stays unread.
+        for (slot_index, slot) in self.slots.iter().enumerate() {
+            check_output_key(
+                credentials.credential(&slot.owner_pk_hash),
+                &slot.recipient.nullifier_pubkey,
+                slot_index,
+            )?;
+            check_recipient_viewing_key(rpc, &slot.recipient, slot_index).await?;
+        }
+        // 3. Every distinct recipient and asset takes a pool record and an enrolled recipient on a salted
+        // list one more under its salted key, only the credentials read above show who is enrolled.
         let salts = KnownSalts::new(
             self.slots
                 .iter()
@@ -1165,9 +1158,12 @@ impl DepositDisclosure {
         let mut assets: Vec<[u8; 32]> = Vec::new();
         let mut owner_entries = Vec::with_capacity(self.slots.len());
         let mut asset_entries = Vec::with_capacity(self.slots.len());
-        for (slot, &tracking_entry) in self.slots.iter().zip(&output_entries) {
+        for (slot, &credential_entry) in self.slots.iter().zip(&output_entries) {
             let salted = match gates.any_salted() {
-                true => salts.salted_key(&slot.owner_pk_hash, rows.record(&slot.owner_pk_hash))?,
+                true => salts.salted_key(
+                    &slot.owner_pk_hash,
+                    credentials.credential(&slot.owner_pk_hash),
+                )?,
                 false => None,
             };
             if !assets.contains(&slot.asset.asset) {
@@ -1176,7 +1172,7 @@ impl DepositDisclosure {
             if pinned.is_some() {
                 owner_entries.push(plan.owner(OwnerQuery {
                     member: slot.owner_pk_hash,
-                    tracking: tracking_entry,
+                    credential: credential_entry,
                     salted,
                 }));
                 asset_entries.push(plan.asset(slot.asset.asset));
@@ -1227,23 +1223,9 @@ impl DepositDisclosure {
             }
             None => None,
         };
-        // 3. The circuit opens one tracking path per slot of the key, the read's canopy covers only its openings.
-        let tracking_pool = match capacity == members.len() {
-            true => rows,
-            false => {
-                TrackingRead {
-                    root: tracking,
-                    members,
-                    openings: capacity,
-                }
-                .read(rpc)
-                .await?
-            }
-        };
         Ok(DepositRecords {
             ring_id: ring.ring_id()?,
-            tracking,
-            tracking_pool,
+            credentials,
             key_capacity,
             output_entries,
             owner_entries,
@@ -1263,6 +1245,8 @@ impl DepositDisclosure {
         let owner_utxo_hashes: Vec<_> =
             self.slots.iter().map(|slot| slot.owner_utxo_hash).collect();
         let assets: Vec<_> = self.slots.iter().map(|slot| slot.asset).collect();
+        let capacity = usize::from(records.key_capacity);
+        let credentials = records.credentials.roots(capacity)?;
         let public_input_hash = DepositPublicInput {
             context_hash: &self.context_hash,
             owner_utxo_hashes: &owner_utxo_hashes,
@@ -1270,7 +1254,8 @@ impl DepositDisclosure {
             assets: &assets,
             auditor_pk: self.auditor.as_bytes(),
             eph_pk: self.encryption.ephemeral_pk.as_bytes(),
-            tracking_root: &records.tracking.root,
+            ring_id: &records.ring_id,
+            credentials: &credentials,
             registry: policy.map(|policy| DepositRegistry {
                 own_root: &policy.root.root,
                 curator_root: curator.map(|curator| &curator.root.root),
@@ -1278,7 +1263,6 @@ impl DepositDisclosure {
             }),
         }
         .hash()?;
-        let capacity = usize::from(records.key_capacity);
         let width = DepositSubjects::pool_width(records.key_capacity);
         let mut mint_chunks: Vec<_> = self
             .slots
@@ -1292,7 +1276,7 @@ impl DepositDisclosure {
             count: u32::try_from(self.slots.len()).map_err(|_| RingError::DepositUnkeyed)?,
             owner_pk_hashes: self.slotted(capacity, |slot| slot.owner_pk_hash),
             owner_keys: self.slotted(capacity, |slot| slot.owner.key()),
-            nullifier_pks: self.slotted(capacity, |slot| slot.nullifier_pk),
+            nullifier_pks: self.slotted(capacity, |slot| slot.recipient.nullifier_pubkey),
             blinding_secrets: Zeroizing::new(self.slotted(capacity, |slot| *slot.blinding_secret)),
             eph_sk: self.encryption.ephemeral_sk.clone(),
             auditor_pk: self.auditor,
@@ -1301,12 +1285,11 @@ impl DepositDisclosure {
                 right_align(&slot.asset.amount.to_be_bytes())
             }),
             mint_chunks,
-            tracking: TrackingParams {
-                tracking_root: records.tracking.root,
-                pool: records.tracking_pool.pool().clone().padded(capacity)?,
-                row_entries: Vec::new(),
-                output_entries: records.output_entries.clone(),
-            },
+            credentials: records.credentials.params(
+                capacity,
+                Vec::new(),
+                records.output_entries.clone(),
+            )?,
             policy: PolicyParams {
                 withdrawal_count: 0,
                 withdrawal_hash: [0; 32],

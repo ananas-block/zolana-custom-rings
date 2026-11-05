@@ -9,9 +9,10 @@ use ring_policy::config;
 use custom_ring_interface::{
     cosign::ApprovalMask, input_flag, key_catalog::RingCircuit, output_flag, shape_flag,
     stream::slot_tag, transact_flag, AuditKey, AuditStreamLayout, AuditorMessage,
-    ConfidentialSender, CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof,
-    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerDataCounts, SignerSet,
-    SlotBody, TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
+    ConfidentialSender, CredentialRoots, CustomRingError, FramedSenderBundle, ParsedTransact,
+    PlainGroth16Proof, Replies, RingPolicy, RingRail, RingTransactData, Settlement,
+    SignerDataCounts, SignerSet, SlotBody, TransferBinding, TransferFamily, TransferRoots,
+    ANONYMOUS_PARTIES, APPROVAL_BYTE,
 };
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
@@ -104,8 +105,10 @@ fn compute_vectors() -> ExpansionVectors {
                       metadata and extension flags. Byte 1 indexes SPP_SUPPORTED_SHAPES below the \
                       default owner tag (bit 6) and public owners (bit 7). Byte 2 is the input \
                       count below has_data (bit 6) and entry (bit 7), byte 3 is m, byte 4 the \
-                      approval mask below the co-signer count. The ring proof and the tracking \
-                      revision follow, the own revision under the own root flag, the curator \
+                      approval mask below the co-signer count. The ring proof is followed by the \
+                      credential address root index as u16le, the state root count as u8 and \
+                      that many state root indexes as u16le. At least one state root is required. \
+                      The own revision follows under the own root flag, the curator \
                       revision under the curator flag, the expiry as a u32, the viewing key, the \
                       salt and the extensions under their flag. The interface transfers follow, \
                       the SPL withdrawal owners under the own root flag, exit_bits and bodiless_bits \
@@ -530,17 +533,16 @@ fn reply_metadata_is_one_length_on_the_anonymous_frame_alone() {
         ring_body_output(spp.outputs[3].data.as_deref().unwrap()),
         Some((&fixture.recipient_body[..], replies[3]))
     );
-    let mut short = fixture.anonymous();
-    short.replies = Some(Replies {
-        len: MIN_REPLY_LEN as u16 - 1,
-        region: &fixture.replies[..2 * (MIN_REPLY_LEN - 1)],
-    });
-    assert_eq!(short.encode(), Err(CustomRingError::ReplyLength));
+    assert_eq!(
+        Replies::new(
+            MIN_REPLY_LEN as u16 - 1,
+            &fixture.replies[..2 * (MIN_REPLY_LEN - 1)],
+        ),
+        Err(CustomRingError::ReplyLength),
+    );
     let mut uneven = fixture.anonymous();
-    uneven.replies = Some(Replies {
-        len: MIN_REPLY_LEN as u16,
-        region: &fixture.replies[..MIN_REPLY_LEN],
-    });
+    uneven.replies =
+        Some(Replies::new(MIN_REPLY_LEN as u16, &fixture.replies[..MIN_REPLY_LEN]).unwrap());
     assert_eq!(uneven.encode(), Err(CustomRingError::ReplyLength));
     let bare = fixture.anonymous().encode().unwrap();
     let mut claimed = bare.clone();
@@ -963,10 +965,8 @@ fn the_external_data_hash_binds_every_delivery_byte() {
     assert_ne!(hash(&bundle), hash(&honest), "bundle body");
     let replied = fixture.anonymous_replies(MIN_REPLY_LEN as u16);
     let mut reply = replied.clone();
-    reply.replies = Some(Replies {
-        len: MIN_REPLY_LEN as u16,
-        region: &fixture.envelope[..2 * MIN_REPLY_LEN],
-    });
+    reply.replies =
+        Some(Replies::new(MIN_REPLY_LEN as u16, &fixture.envelope[..2 * MIN_REPLY_LEN]).unwrap());
     assert_ne!(hash(&reply), hash(&replied), "reply");
 }
 
@@ -1033,10 +1033,12 @@ fn public_owners_select_the_confidential_circuit() {
     );
     let mut with_proof = data.clone();
     with_proof.anonymous = fixture.anonymous_compact().anonymous;
+    assert!(with_proof.anonymous.unwrap().default_owner_tag.is_none());
     assert_eq!(
-        with_proof.encode(),
-        Err(CustomRingError::RingTransactLength)
+        ParsedTransact::new(with_proof.clone()).err(),
+        Some(CustomRingError::FlagNotAllowed),
     );
+    assert_eq!(with_proof.encode(), Err(CustomRingError::FlagNotAllowed));
     let hidden = fixture.anonymous();
     assert!(matches!(
         hidden.circuit(),
@@ -1356,10 +1358,22 @@ fn binding<'a>(
 fn the_transfer_statement_reads_the_frame_and_names_its_family() {
     let fixture = Fixture::new();
     let config = config();
-    let roots = TransferRoots::default();
+    let roots_for = |data: &RingTransactData<'_>| TransferRoots {
+        policy_hash: [0; 32],
+        own_root: [0; 32],
+        curator_root: [0; 32],
+        credentials: CredentialRoots::empty(
+            data.transfer_circuit(0)
+                .unwrap()
+                .credential_capacity()
+                .unwrap(),
+        )
+        .unwrap(),
+    };
     let parties = [[0; 32]; ANONYMOUS_PARTIES];
     let parsed = ParsedTransact::new(fixture.anonymous()).unwrap();
     let data = parsed.data();
+    let roots = roots_for(data);
     let statement = parsed
         .transfer_statement(binding(&fixture, &config, &roots))
         .unwrap();
@@ -1452,6 +1466,7 @@ fn the_transfer_statement_reads_the_frame_and_names_its_family() {
         ),
     ] {
         let parsed = ParsedTransact::new(data).unwrap();
+        let roots = roots_for(parsed.data());
         let statement = parsed
             .transfer_statement(binding(&fixture, &config, &roots))
             .unwrap();

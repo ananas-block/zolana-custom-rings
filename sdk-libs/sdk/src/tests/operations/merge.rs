@@ -131,7 +131,6 @@ async fn a_merge_takes_every_input_one_transaction_carries() {
     assert_eq!(published, WIDEST_MERGE);
     assert_eq!(holder.calls.get(), 1);
 
-    let config = ring().require_config(&chain).await.unwrap();
     let one_more = CustomRingMerge::new(ring(), notes(published as u64 + 1), None)
         .unwrap()
         .with_output_tree_id(TREE_ID)
@@ -140,9 +139,7 @@ async fn a_merge_takes_every_input_one_transaction_carries() {
     assert!(matches!(
         crate::submission::check_transaction_size(
             &payer,
-            &one_more
-                .preview_instruction(&input, payer, &config)
-                .unwrap(),
+            &one_more.preview_instruction(&input, payer).unwrap(),
             crate::submission::send_budget(custom_ring_interface::InstructionTag::Merge, None),
         ),
         Err(RingError::TransactionTooLarge { .. })
@@ -299,7 +296,6 @@ async fn a_wide_zero_key_merge_asks_its_holder_once_for_the_prefix_it_fits() {
     use solana_address::Address;
     let owner = keypair(1);
     let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
-    let config = ring().require_config(&chain).await.unwrap();
     let input = proof_input(&owner);
     let payer = Address::new_from_array([7; 32]);
     let budget = crate::submission::send_budget(custom_ring_interface::InstructionTag::Merge, None);
@@ -320,7 +316,6 @@ async fn a_wide_zero_key_merge_asks_its_holder_once_for_the_prefix_it_fits() {
     .unwrap();
     assert_eq!(holder.calls.get(), 1);
     let published = prepared.published_inputs();
-    assert!(published < WIDEST_MERGE);
     let one_more = CustomRingMerge::new(ring(), notes[..=published].to_vec(), None)
         .unwrap()
         .with_output_tree_id(TREE_ID)
@@ -335,9 +330,7 @@ async fn a_wide_zero_key_merge_asks_its_holder_once_for_the_prefix_it_fits() {
     assert!(matches!(
         crate::submission::check_transaction_size(
             &payer,
-            &one_more
-                .preview_instruction(&input, payer, &config)
-                .unwrap(),
+            &one_more.preview_instruction(&input, payer).unwrap(),
             budget,
         ),
         Err(RingError::TransactionTooLarge { .. } | RingError::TooManyAddresses { .. })
@@ -412,7 +405,7 @@ async fn a_pda_owns_a_zero_key_and_a_keyed_merge_on_both_modes() {
             Some(program_owner),
             "{mode:?}"
         );
-        let instruction = zero.preview_instruction(&input, payer, &config).unwrap();
+        let instruction = zero.preview_instruction(&input, payer).unwrap();
         assert!(instruction
             .accounts
             .iter()

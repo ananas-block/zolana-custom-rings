@@ -9,7 +9,6 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
@@ -34,14 +33,13 @@ const (
 	entry8Key     common.CircuitType = "custom-ring-transfer-entry-8-in2-w4-s2"
 	applyKey      common.CircuitType = "custom-ring-apply-records-1"
 	batchKey      common.CircuitType = "custom-ring-apply-records-16"
-	enrollKey     common.CircuitType = "custom-ring-apply-enrollments-2"
 	registerKey   common.CircuitType = "custom-ring-register-key"
 	depositKey    common.CircuitType = "custom-ring-deposit-8"
 	mergeKey      common.CircuitType = "custom-ring-merge"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, wide49Key, entryKey, entry8Key, entry24Key, applyKey, batchKey, enrollKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, wide49Key, entryKey, entry8Key, entry24Key, applyKey, batchKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -70,8 +68,6 @@ func hostRequest(t testing.TB, k Key) any {
 		return requestOf[TransferParams](t, k.Circuit, w.Build(t).Circuit)
 	case ApplyRecords:
 		return applyRequest(t, k.Circuit, k.Inputs)
-	case ApplyEnrollments:
-		return enrollmentsRequest(t, k.Circuit, k.Inputs)
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
 	case Deposit:
@@ -134,56 +130,29 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 	p := &ApplyRecordsParams{
 		RequestHead: RequestHead{CircuitType: batch.circuit}, OldRoot: fb(members.Root()), OldNextIndex: uint32(members.NextIndex()),
 		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWriteProofInput, batch.capacity),
+		PrivateRingID: fi(0), CredentialOwner: fi(0), AddressRoot: fi(0),
+		StateRoots: make([]CredentialStateRoot, batch.capacity), Credentials: make([]*CredentialWriteParams, batch.capacity),
+	}
+	for i := range p.StateRoots {
+		p.StateRoots[i].Root = fi(0)
 	}
 	chain := p.ChainStart.Int
 	for i, e := range entries {
 		w := members.Apply(t, e)
 		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
-		p.Writes[i] = &RecordWriteProofInput{
-			Entry:  RecordWrite{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), MintPolicy: fz(e.MintPolicy), WithdrawalThreshold: fz(e.WithdrawalThreshold), AssetLimits: limitFields(e.AssetLimits)},
-			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldMintPolicy: fz(w.OldMintPolicy), OldWithdrawalThreshold: fz(w.OldWithdrawalThreshold), OldAssetLimits: limitFields(w.OldAssetLimits),
-			Index: w.Slot.Index, Path: flatPath(w.Slot),
-			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowMintPolicy: fz(w.Low.MintPolicy), LowWithdrawalThreshold: fz(w.Low.WithdrawalThreshold), LowAssetLimits: limitFields(w.Low.AssetLimits),
-			LowIndex: w.LowPath.Index, LowPath: flatPath(w.LowPath),
-		}
+		p.Writes[i] = requestValue[RecordWriteProofInput](t, w.Wires())
 	}
 	p.NewRoot, p.NewNextIndex, p.ChainEnd = fb(members.Root()), uint32(members.NextIndex()), fb(chain)
-	p.PublicInputHash = fb(spptest.MustHashChain4(t, []*big.Int{
+	fields := []*big.Int{
 		big.NewInt(shared.ApplyRecordsDomain), p.OldRoot.Int, p.NewRoot.Int, big.NewInt(int64(p.OldNextIndex)),
 		big.NewInt(int64(p.NewNextIndex)), p.ChainStart.Int, p.ChainEnd.Int, big.NewInt(int64(p.Count)),
-	}))
+		new(big.Int), p.PrivateRingID.Int, p.CredentialOwner.Int, p.AddressRoot.Int,
+	}
+	for range p.StateRoots {
+		fields = append(fields, new(big.Int), new(big.Int))
+	}
+	p.PublicInputHash = fb(spptest.MustHashChain4(t, fields))
 	return p
-}
-
-// enrollmentsRequest inserts one owner per slot and rotates the last in a batch wider than one.
-func enrollmentsRequest(t testing.TB, circuit common.CircuitType, capacity int) *ApplyEnrollmentsParams {
-	t.Helper()
-	tree := ringregistry.NewTracking(t)
-	entry := func(i int, revision int64) ringregistry.TrackingEntry {
-		owner := big.NewInt(0x100 + int64(i))
-		view0, view1 := ringregistry.PackedView(big.NewInt(0x100 + revision))
-		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), View0: view0, View1: view1, Revision: big.NewInt(revision), ListTag: big.NewInt(0xd0)}
-	}
-	assignment, err := registry.NewApplyEnrollmentsCircuit(capacity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assignment.OldRoot, assignment.OldNextIndex, assignment.ChainStart = tree.Root(), tree.NextIndex(), big.NewInt(0x5eed)
-	chain := big.NewInt(0x5eed)
-	for i := range assignment.Writes {
-		e := entry(i, 1)
-		if capacity > 1 && i == capacity-1 {
-			e = entry(0, 2)
-		}
-		assignment.Writes[i] = tree.Apply(t, e).Wires()
-		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
-	}
-	assignment.NewRoot, assignment.NewNextIndex, assignment.ChainEnd, assignment.Count = tree.Root(), tree.NextIndex(), chain, capacity
-	assignment.PublicInputHash = spptest.MustHashChain4(t, []*big.Int{
-		big.NewInt(shared.ApplyEnrollmentsDomain), ringtest.AsBigInt(assignment.OldRoot), ringtest.AsBigInt(assignment.NewRoot),
-		ringtest.AsBigInt(assignment.OldNextIndex), ringtest.AsBigInt(assignment.NewNextIndex), ringtest.AsBigInt(assignment.ChainStart), chain, big.NewInt(int64(capacity)),
-	})
-	return requestOf[ApplyEnrollmentsParams](t, circuit, assignment)
 }
 
 func flatPath(path ringregistry.Path) []Field {
