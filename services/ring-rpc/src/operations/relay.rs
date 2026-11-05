@@ -1353,7 +1353,8 @@ impl Relay {
         }
     }
 
-    pub(crate) async fn track(&self) -> Result<(), RingRpcError> {
+    /// One pass over the pending relays.
+    pub async fn track(&self) -> Result<(), RingRpcError> {
         for relay_id in self.relays().pending().await? {
             let tracked = async {
                 let row = self.row(&relay_id).await?;
