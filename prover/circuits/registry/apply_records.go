@@ -145,7 +145,7 @@ func (c *PrivateApplyRecordsCircuit) Define(api frontend.API) error {
 	}
 	// 1. The authenticated bitmap selects private owner writes inside the active prefix.
 	credentialBits := c.credentialBits(api)
-	roots := CredentialRoots{RingID: c.PrivateRingID, Owner: c.CredentialOwner, StateRoots: c.StateRoots}
+	roots := CredentialRoots{RingID: c.PrivateRingID, Owner: c.CredentialOwner, StateRoots: c.StateRoots}.Check(api)
 	// 2. A selected write must carry a private mask, then proves its owner's credential and address.
 	// The program derives the bitmap, the circuit only refuses a bit on a write it cannot cover.
 	c.transition(api, func(i int, active frontend.Variable, maskBits []frontend.Variable) {

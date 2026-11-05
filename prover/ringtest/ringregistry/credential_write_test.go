@@ -20,7 +20,7 @@ type credentialWriteCircuit struct {
 }
 
 func (c *credentialWriteCircuit) Define(api frontend.API) error {
-	c.Write.Assert(api, c.Active, c.Member, c.AddressRoot, c.Roots)
+	c.Write.Assert(api, c.Active, c.Member, c.AddressRoot, c.Roots.Check(api))
 	return nil
 }
 

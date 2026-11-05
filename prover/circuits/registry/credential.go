@@ -48,6 +48,11 @@ type CredentialRoots struct {
 	StateRoots    [][2]frontend.Variable
 }
 
+// CheckedRoots is the only table an opening reads, every tree id in it is range checked once.
+type CheckedRoots struct {
+	table CredentialRoots
+}
+
 type CredentialLeaf struct {
 	Credential
 	Blinding, TreeSlot, StateIndex frontend.Variable
@@ -97,14 +102,14 @@ func CredentialAddress(api frontend.API, credentialOwner, ringID, member fronten
 	return abstractor.Call(api, spp.NullifierGadget{UtxoHash: addressUtxo, Blinding: seed, NullifierSecret: 0})
 }
 
-func (c CredentialLeaf) AssertInclusion(api frontend.API, active frontend.Variable, roots CredentialRoots) frontend.Variable {
+func (c CredentialLeaf) AssertInclusion(api frontend.API, active frontend.Variable, roots CheckedRoots) frontend.Variable {
 	address, leaf, root := c.bind(api, active, roots)
 	assertCredentialPath(api, active, leaf, root, c.StateIndex, c.StatePath[:])
 	return address
 }
 
 // Open authenticates a present credential at state height or an absent address at address height through one fold.
-func (o CredentialOpening) Open(api frontend.API, active frontend.Variable, roots CredentialRoots, addressRoot frontend.Variable) {
+func (o CredentialOpening) Open(api frontend.API, active frontend.Variable, roots CheckedRoots, addressRoot frontend.Variable) {
 	// 1. A live slot is present or absent, and padding selects neither branch.
 	api.AssertIsBoolean(active)
 	api.AssertIsBoolean(o.Present)
@@ -142,14 +147,14 @@ func (o CredentialOpening) Open(api frontend.API, active frontend.Variable, root
 }
 
 // bind proves the credential columns and returns its address, SPP leaf and selected state root.
-func (c CredentialLeaf) bind(api frontend.API, active frontend.Variable, roots CredentialRoots) (address, leaf, root frontend.Variable) {
+func (c CredentialLeaf) bind(api frontend.API, active frontend.Variable, roots CheckedRoots) (address, leaf, root frontend.Variable) {
 	// 1. The statement ring and owner derive the same address as the sole Enroll output.
 	api.AssertIsBoolean(active)
-	address = CredentialAddress(api, roots.Owner, roots.RingID, c.Member)
+	address = CredentialAddress(api, roots.table.Owner, roots.table.RingID, c.Member)
 	// 2. Enroll writes one credential with the address as first nullifier and the SPP account seed.
 	seed := spp.DeriveOutputBlindingSeed(api, address, 1)
 	blinding := spp.DeriveOutputBlinding(api, address, seed, 0)
-	assertCredentialEqualWhen(api, active, c.RingID, roots.RingID)
+	assertCredentialEqualWhen(api, active, c.RingID, roots.table.RingID)
 	assertCredentialEqualWhen(api, active, c.Blinding, blinding)
 	assertCredentialEqualWhen(api, active, api.IsZero(c.Member), 0)
 	assertCredentialEqualWhen(api, active, api.IsZero(c.NullifierPk), 0)
@@ -161,7 +166,7 @@ func (c CredentialLeaf) bind(api frontend.API, active frontend.Variable, roots C
 	}
 	// 4. The selected root authenticates the same tree id that enters the SPP leaf hash.
 	treeID, root := roots.selectState(api, c.TreeSlot)
-	return address, c.utxoHash(api, roots.Owner, treeID, c.Blinding, address), root
+	return address, c.utxoHash(api, roots.table.Owner, treeID, c.Blinding, address), root
 }
 
 // orderedLeaf zeroes an inactive gap and orders an active one, the caller authenticates the returned leaf.
@@ -192,11 +197,19 @@ func (c Credential) utxoHash(api frontend.API, credentialOwner, treeID, blinding
 	}, treeID)
 }
 
-func (r CredentialRoots) selectState(api frontend.API, index frontend.Variable) (frontend.Variable, frontend.Variable) {
-	treeIDs := make([]frontend.Variable, len(r.StateRoots))
-	roots := make([]frontend.Variable, len(r.StateRoots))
-	for i, root := range r.StateRoots {
+// Check range checks each tree id once, every opening then binds to one checked entry by index.
+func (r CredentialRoots) Check(api frontend.API) CheckedRoots {
+	for _, root := range r.StateRoots {
 		api.ToBinary(root[0], 16)
+	}
+	return CheckedRoots{table: r}
+}
+
+// selectState's mux refuses an index outside the table, the tree id and the root come from one entry.
+func (r CheckedRoots) selectState(api frontend.API, index frontend.Variable) (frontend.Variable, frontend.Variable) {
+	treeIDs := make([]frontend.Variable, len(r.table.StateRoots))
+	roots := make([]frontend.Variable, len(r.table.StateRoots))
+	for i, root := range r.table.StateRoots {
 		treeIDs[i], roots[i] = root[0], root[1]
 	}
 	return selector.Mux(api, index, treeIDs...), selector.Mux(api, index, roots...)

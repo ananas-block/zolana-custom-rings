@@ -31,7 +31,7 @@ type CredentialWrite struct {
 	Address          AddressLeaf
 }
 
-func (w CredentialWrite) Assert(api frontend.API, active, member, addressRoot frontend.Variable, roots CredentialRoots) {
+func (w CredentialWrite) Assert(api frontend.API, active, member, addressRoot frontend.Variable, roots CheckedRoots) {
 	api.AssertIsBoolean(active)
 	// 1. CRPL binds the write key and CRPT binds its salt to the opened credential.
 	assertCredentialEqualWhen(api, active, w.Leaf.Member, w.Member)
