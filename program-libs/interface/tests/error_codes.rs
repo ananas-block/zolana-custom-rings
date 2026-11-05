@@ -43,12 +43,10 @@ pinned_codes! {
     UnauthorizedDelegate = 8151,
     DelegatePublicLeg = 8152,
     DelegateAlreadySet = 8153,
-    InvalidDepositDisclosure = 8166,
     MissingFundingSigner = 8173,
     InvalidRingMode = 8174,
     InvalidAnonymousSigner = 8178,
     InvalidMergeDisclosure = 8179,
-    InvalidDepositData = 8180,
     MissingOwnerSigner = 8192,
     RingTransactLength = 8200,
     RingShapeUnkeyed = 8201,
@@ -74,7 +72,6 @@ pinned_codes! {
     UnexpectedApproval = 8241,
     InvalidSettlementAccounts = 8242,
     TooManyPublicLegs = 8243,
-    InvalidAuditedDeposit = 8244,
     AnonymousExitDestinationsDiffer = 8246,
     AnonymousExitTokenAccountShared = 8247,
     AnonymousExitAccountHasData = 8248,
@@ -98,9 +95,6 @@ pinned_codes! {
     RingPolicyAlreadyExists = 8301,
     InvalidStorageRegistry = 8302,
     InvalidAssetLimits = 8390,
-    DepositMintAccountMissing = 8410,
-    DepositAssetIndexUnknown = 8411,
-    UnexpectedCuratorRevision = 8470,
     ZeroRoleKey = 8471,
     DuplicateRoleKey = 8472,
     UnboundRegistry = 8480,
@@ -111,7 +105,6 @@ pinned_codes! {
     SaltedSourceOtherTracking = 8504,
     InvalidSignerDataCounts = 8527,
     TooManyAnonymousParties = 8528,
-    TooManyDepositsForKey = 8537,
 }
 
 const ERROR_VECTORS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors/errors");

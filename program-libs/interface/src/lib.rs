@@ -15,7 +15,7 @@
 //! 5. `proof/statement.rs`, `proof/domain.rs`. The statement in element order, with its Go twins.
 //! 6. `proof/audit_stream.rs`, `proof/disclosure.rs`, `codec/output.rs`, `codec/stream.rs`. What the auditor and a recipient read of each slot.
 //! 7. `proof/key_catalog.rs`, `proof/ring_keys.rs`, `proof/verification.rs`. The key serving each frame.
-//! 8. `instructions/deposit.rs`, `instructions/deposit_audit.rs`, `instructions/merge.rs`, `instructions/withdrawals.rs`, `instructions/anonymous_exit.rs`, `instructions/cosign.rs`. The other paths.
+//! 8. `instructions/merge.rs`, `instructions/withdrawals.rs`, `instructions/anonymous_exit.rs`, `instructions/cosign.rs`. The other paths.
 //!
 //! Beside the crate, `program-libs/policy/src/rule_table/mod.rs` holds the rule table,
 //! `program-libs/member-registry/src/lib.rs` the trees, `programs/storage/src/lib.rs` the program
@@ -34,10 +34,6 @@ pub mod blinding;
 mod bytes;
 #[path = "instructions/cosign.rs"]
 pub mod cosign;
-#[path = "instructions/deposit.rs"]
-pub mod deposit;
-#[path = "instructions/deposit_audit.rs"]
-pub mod deposit_audit;
 #[path = "proof/disclosure.rs"]
 pub mod disclosure;
 #[path = "proof/domain.rs"]
@@ -94,8 +90,6 @@ pub fn proving_key_hashes() -> impl Iterator<Item = (&'static str, [u8; 32])> {
 pub use anonymous_exit::*;
 pub use audit_stream::*;
 pub use auditor_key::is_auditor_key;
-pub use deposit::*;
-pub use deposit_audit::*;
 pub use disclosure::*;
 pub use error::CustomRingError;
 pub use instruction::*;

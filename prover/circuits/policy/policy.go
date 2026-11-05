@@ -8,7 +8,7 @@
 // Read after transfer/transfer.go, shared/utxo.go, registry/registry.go, policy/record_pool.go,
 // policy/tracking.go, transfer/owners.go. Read before, in call order, policy/screen.go,
 // policy/withdrawals.go, policy/table.go, policy/subjects.go, policy/rules.go, policy/comparator.go,
-// policy/outflow.go, policy/deposit.go.
+// policy/outflow.go.
 //
 // Screen proves these properties over the slots SPP hashes and the roots the statement binds. Properties 2 to 5 hold while Screened.
 //  1. While Screened, the rules are the table the program hashed at policy_hash.

@@ -64,7 +64,7 @@ func TestMergeRefusals(t *testing.T) {
 	}
 }
 
-// A witness off the record's opening refuses inside the encoder deposits share.
+// A witness off the record's opening refuses inside the record encoder.
 func TestMergeRecordOffItsOpening(t *testing.T) {
 	for name, tamper := range map[string]func(*ringmerge.Statement){
 		"another owner key": func(s *ringmerge.Statement) { s.Circuit.OwnerKey[0] = 0 },

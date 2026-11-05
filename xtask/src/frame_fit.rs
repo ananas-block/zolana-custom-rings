@@ -13,12 +13,10 @@ use custom_ring_interface::{
     storage::Revision,
     stream::slot_tag,
     tag, AnonymousProofData, AppMessage, BundleLayout, CustomRingError, CustomRingMergeIxData,
-    CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
-    RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
-    OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
-    TAGGED_X25519_KEY_LEN,
+    CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingOutput, RingPolicy, RingRail,
+    RingTransactData, RootRead, SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    MAX_CPI_DATA_LEN, MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -35,14 +33,11 @@ use spr_interface::{
     shape::{Shape, SPP_SUPPORTED_SHAPES},
     MAX_INTERFACE_TRANSFERS, N_PUBLIC_SLOTS,
 };
-use spr_keypair::ViewingKey;
 use spr_program::instruction::{
-    DepositAsset, DepositSplAccounts, MergeRingV2, RingAssetDeposit, RingAuthorityTransact,
-    RingDeposit, RingTransact, TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
-    TransactSplWithdrawalAccounts,
+    MergeRingV2, RingAuthorityTransact, RingTransact, TransactInterfaceTransferAccounts,
+    TransactSolTransferAccounts, TransactSplWithdrawalAccounts,
 };
 use spr_transaction::{serialization::confidential::ConfidentialOutputPlaintext, Data, DataRecord};
-use zolana_ring_transaction::RingDepositPlaintext;
 
 pub mod inline_capacity;
 
@@ -766,77 +761,6 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
     Fit::of(&instruction, &PAYER, true)
 }
 
-fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
-    let recipient = ViewingKey::new().pubkey();
-    let capsule_ciphertext = [11u8; RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN];
-    let eph_pk = [12u8; TAGGED_X25519_KEY_LEN];
-    let deposits = (0..width)
-        .map(|slot| {
-            let mut encrypted = RingDepositPlaintext {
-                blinding: [13; 32],
-                utxo_data: None,
-                memo: None,
-                ring_data: Vec::new(),
-            }
-            .encrypt(&recipient)?;
-            encrypted.ciphertext = RingDepositAuditCapsule {
-                slot_index: slot as u8,
-                eph_pk: &eph_pk,
-                ciphertext: &capsule_ciphertext,
-                recipient_ciphertext: &encrypted.ciphertext,
-            }
-            .encode();
-            Ok(RingAssetDeposit {
-                asset: match full {
-                    true => DepositAsset::Spl(DepositSplAccounts {
-                        mint: indexed(0xa9, 0),
-                        user_token: indexed(0xd0, 0),
-                        token_program: TOKEN_PROGRAM,
-                    }),
-                    false => DepositAsset::Sol,
-                },
-                view_tag: [14; 32],
-                owner_utxo_hash: [15; 32],
-                amount: 1,
-                ring_data_hash: [16; 32],
-                encrypted,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let spp = RingDeposit {
-        tree: tree(),
-        depositor: PAYER,
-        ring_program_id: RING_PROGRAM,
-        deposits,
-    }
-    .instruction()?;
-    let prefix = DepositPrefix {
-        tag: tag::DEPOSIT,
-        key_capacity: u8::try_from(width)?,
-        proof: bytemuck::Zeroable::zeroed(),
-        tracking_revision: Revision::from(1),
-        own_revision: Revision::from(1),
-        curator_revision: Revision::from(1),
-    };
-    let read = match full {
-        true => RootRead::Policy,
-        false => RootRead::None,
-    };
-    let mut metas = RingPrefix {
-        config: &ring_config(true),
-        read,
-        co_signer: full,
-    }
-    .metas();
-    metas.extend(spp.accounts);
-    let instruction = Instruction {
-        program_id: RING_PROGRAM,
-        accounts: metas,
-        data: [prefix.encode()?.as_slice(), &spp.data].concat(),
-    };
-    Fit::of(&instruction, &PAYER, full)
-}
-
 pub fn run() -> Result<()> {
     print!("{}", table()?);
     Ok(())
@@ -918,20 +842,6 @@ fn table() -> Result<String> {
             writeln!(
                 table,
                 "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | - | - | {} | {} |",
-                fit.bytes,
-                fit.addresses,
-                fit.signatures,
-                fits_column(fit.fits()),
-                fit.over(),
-            )?;
-        }
-    }
-    for width in (1..=MAX_RING_DEPOSIT_AUDIT_SLOTS).filter(|width| width.is_power_of_two()) {
-        for (name, full) in [("min", false), ("full", true)] {
-            let fit = deposit_fit(width, full)?;
-            writeln!(
-                table,
-                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | - | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,

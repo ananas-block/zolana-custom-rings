@@ -57,9 +57,6 @@ impl CoSignDemand {
     pub const NONE: Self = Self {
         classes: CoSignScope::NONE,
     };
-    pub const DEPOSIT: Self = Self {
-        classes: CoSignScope::DEPOSITS,
-    };
 
     /// Approval classes never drop out.
     pub fn requirement(self, ring: &RingPolicy) -> Option<CoSignRequirement> {
@@ -153,7 +150,6 @@ mod tests {
         let transfers = ring(&[CoSignScope::TRANSFERS]);
         let no_spend = operation(false, CoSignScope::DEPOSITS, 0);
         assert_eq!(no_spend.requirement(&transfers), None);
-        assert_eq!(CoSignDemand::DEPOSIT.requirement(&transfers), None);
     }
 
     #[test]
