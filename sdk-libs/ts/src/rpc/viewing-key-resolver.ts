@@ -21,7 +21,6 @@ export type ViewingKeyClient = Pick<ChainReader, "getAccount">;
 
 export interface ResolvedViewingKey {
   readonly viewingPublicKey: X25519PublicKey;
-  readonly nullifierPublicKey: Bytes32;
 }
 
 /** `undefined` only when no record exists, a failed read throws. */
@@ -56,5 +55,5 @@ export async function resolveViewingKey(
     !equalBytes(record.nullifierPublicKey, input.nullifierPublicKey)
   )
     throw new RingError("RING_NULLIFIER_KEY_MISMATCH", { details: { owner: input.owner } });
-  return Object.freeze({ viewingPublicKey, nullifierPublicKey: record.nullifierPublicKey });
+  return Object.freeze({ viewingPublicKey });
 }

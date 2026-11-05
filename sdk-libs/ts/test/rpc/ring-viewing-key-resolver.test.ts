@@ -1,4 +1,12 @@
-import { address, getAddressEncoder, getProgramDerivedAddress, type Address } from "@solana/kit";
+import { sha256 } from "@noble/hashes/sha2.js";
+import {
+  address,
+  getAddressDecoder,
+  getAddressEncoder,
+  getProgramDerivedAddress,
+  isOffCurveAddress,
+  type Address,
+} from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import { USER_REGISTRY_PROGRAM_ID, type Bytes32 } from "@heliuslabs/zolana/interface";
@@ -16,11 +24,16 @@ const holder = (seed: number) =>
     SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(seed) as Bytes32),
   );
 
+const recordSeeds = (owner: Address) => [
+  new TextEncoder().encode("zolana/registry/v0"),
+  addressEncoder.encode(owner),
+];
+
 /** Derived apart from zolana so a drifted seed fails here. */
 async function canonicalPda(owner: Address) {
   const [pda, bump] = await getProgramDerivedAddress({
     programAddress: USER_REGISTRY_PROGRAM_ID,
-    seeds: [new TextEncoder().encode("zolana/registry/v0"), addressEncoder.encode(owner)],
+    seeds: recordSeeds(owner),
   });
   return { pda, bump };
 }
@@ -43,7 +56,8 @@ function recordData(fields: RecordFields): Uint8Array {
 }
 
 async function chain(
-  overrides: Partial<RecordFields> & Readonly<{ program?: Address; data?: Uint8Array }> = {},
+  overrides: Partial<RecordFields> &
+    Readonly<{ program?: Address; data?: Uint8Array; at?: Address }> = {},
 ) {
   const wallet = holder(7);
   const { pda, bump } = await canonicalPda(OWNER);
@@ -59,7 +73,7 @@ async function chain(
   const client: ViewingKeyClient = {
     getAccount: async (read) => {
       reads.push(read);
-      if (read !== pda) return undefined;
+      if (read !== (overrides.at ?? pda)) return undefined;
       return { owner: overrides.program ?? USER_REGISTRY_PROGRAM_ID, data, lamports: 1n };
     },
   };
@@ -71,7 +85,7 @@ function walletRefusal(causeCode: string) {
 }
 
 describe("resolveViewingKey", () => {
-  it("returns the record's keys from one read of the canonical PDA", async () => {
+  it("returns the record's viewing key from one read of the canonical PDA", async () => {
     const { client, reads, pda, wallet } = await chain();
     const resolved = await resolveViewingKey({
       client,
@@ -80,12 +94,31 @@ describe("resolveViewingKey", () => {
     });
     expect(reads).toEqual([pda]);
     expect(resolved?.viewingPublicKey.equals(wallet.viewingPublicKey())).toBe(true);
-    expect(resolved?.nullifierPublicKey).toEqual(wallet.nullifierPublicKey());
   });
 
   it("reports a missing record as undefined", async () => {
     const { client } = await chain();
     expect(await resolveViewingKey({ client, owner: OTHER })).toBeUndefined();
+  });
+
+  it("never reads a record stored at a non canonical PDA", async () => {
+    const { bump } = await canonicalPda(OWNER);
+    // Kit exports no single bump derivation, the hash follows the runtime's.
+    const other = Array.from({ length: bump }, (_, below) =>
+      getAddressDecoder().decode(
+        sha256(
+          new Uint8Array([
+            ...recordSeeds(OWNER).flatMap((seed) => [...seed]),
+            below,
+            ...addressEncoder.encode(USER_REGISTRY_PROGRAM_ID),
+            ...new TextEncoder().encode("ProgramDerivedAddress"),
+          ]),
+        ),
+      ),
+    ).findLast(isOffCurveAddress);
+    if (other === undefined) throw new Error("no off curve bump below the canonical one");
+    const { client } = await chain({ at: other });
+    expect(await resolveViewingKey({ client, owner: OWNER })).toBeUndefined();
   });
 
   it("throws on an RPC failure rather than report a missing record", async () => {
