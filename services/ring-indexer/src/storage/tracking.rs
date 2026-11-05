@@ -40,7 +40,7 @@ impl Enrollment {
 
 const ENROLLMENT_READ: &str = "SELECT owner, authorization_account, member, nullifier_pk, \
      ct_hash, list_tag, eph_u, ciphertext, \
-     CASE WHEN applied_slot IS NULL THEN 0 ELSE 1 END AS applied \
+     CAST(CASE WHEN applied_slot IS NULL THEN 0 ELSE 1 END AS BIGINT) AS applied \
      FROM tracking_authorizations";
 
 impl<C: ConnectionTrait> TrackingStore<'_, C> {
