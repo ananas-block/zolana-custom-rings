@@ -5,11 +5,14 @@ use std::{
 };
 
 use async_trait::async_trait;
+use custom_ring_sdk::{
+    PrivateStorageWrite, ProvenPrivateWrite, RingClient, RingError, RingIndexerBackend,
+};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_client::ClientError;
+use spr_client::{AsyncRpc, ClientError};
 use spr_keypair::X25519Keypair;
 use thiserror::Error;
 use tokio::sync::{watch, Mutex as AsyncMutex, Semaphore, SemaphorePermit};
@@ -39,7 +42,9 @@ use crate::{
     merge_settings::MergeSettingsBook,
     origins::Origins,
     record_update::RecordUpdateRefusal,
-    record_writer::{RecordWriter, WriterParts, RECORD_FLUSH_INTERVAL},
+    record_writer::{
+        CredentialWrites, RecordWriter, SaltedOwner, WriterParts, RECORD_FLUSH_INTERVAL,
+    },
     relay::{Relay, RelayError, RelayParts, ServedRings, RELAY_TRACK_INTERVAL},
     relay_reservations::RelayBudget,
     relay_services::{MergeParts, RelayServices},
@@ -554,7 +559,53 @@ impl<S: TransactionSource> Hub<S> {
     }
 }
 
+/// Resolves salted owners from the credentials the auditor key opens, proves through the ring SDK.
+struct HeldCredentialWrites<S, R, I> {
+    shared: Arc<Shared<S>>,
+    client: RingClient<R, I>,
+}
+
+#[async_trait]
+impl<S, R, I> CredentialWrites for HeldCredentialWrites<S, R, I>
+where
+    S: TransactionSource + 'static,
+    R: AsyncRpc + Send + Sync + 'static,
+    I: RingIndexerBackend + Send + Sync + 'static,
+{
+    async fn salted_owner(
+        &self,
+        ring: Address,
+        written_key: [u8; 32],
+    ) -> Result<Option<SaltedOwner>, RingRpcError> {
+        self.shared
+            .service(Some(ring))?
+            .salted_owner(&written_key)
+            .await
+    }
+
+    async fn prove(&self, write: PrivateStorageWrite<'_>) -> Result<ProvenPrivateWrite, RingError> {
+        write.prove(&self.client).await
+    }
+}
+
 impl<S: TransactionSource + 'static> Hub<S> {
+    /// A record writer without it refuses every salted owner write.
+    pub fn serve_credential_writes<R, I>(
+        &self,
+        client: RingClient<R, I>,
+    ) -> Result<(), RingRpcError>
+    where
+        R: AsyncRpc + Send + Sync + 'static,
+        I: RingIndexerBackend + Send + Sync + 'static,
+    {
+        self.record_writer()?
+            .serve_credential_writes(Arc::new(HeldCredentialWrites {
+                shared: self.shared.clone(),
+                client,
+            }))
+            .map_err(|_| RingRpcError::StateUnavailable)
+    }
+
     /// Every background worker except the managed merge, its caller picks the interval.
     pub fn spawn_workers(self: &Arc<Self>) {
         if let Some(relay) = self.relay() {

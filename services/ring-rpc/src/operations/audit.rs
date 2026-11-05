@@ -28,12 +28,13 @@ use zolana_ring_policy::Member;
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
-    credentials::{CredentialScan, OwnerCredential, ScanEnd},
+    credentials::{CredentialScan, HeldCredential, OwnerCredential, ScanEnd},
     error::{redacted, GrantRefusal, RingRpcError},
     grant_rows::{GrantPair, GrantRow},
     grants::{GrantQuery, Grants, ReadScope},
     hub::Shared,
     limits::ReaderPermit,
+    record_writer::SaltedOwner,
     replay::ReplayCheck,
     spend_machine::{InputRead, Observation},
     spent_index::{LoadSpends, NoteSeal, PageCommit},
@@ -190,16 +191,43 @@ impl<S: TransactionSource> AuditService<S> {
         let member = Member::owner_tag(owner_key)?;
         let held = self.shared.store(self.ring).credential(member.as_bytes());
         Ok(held
-            .map(|held| held.nullifier_key(&self.auditor))
-            .transpose()?)
+            .map(|held| held.secrets(&self.auditor))
+            .transpose()?
+            .map(|secrets| secrets.nullifier_key))
     }
 
     pub(crate) async fn scanned_credential(
         &self,
         owner_key: &[u8; 32],
     ) -> Result<OwnerCredential, RingRpcError> {
-        let store = self.shared.store(self.ring);
         let member = Member::owner_tag(owner_key)?;
+        self.scanned(|store| store.credential(member.as_bytes()))
+            .await
+    }
+
+    /// The owner whose list key `written_key` is, with the salt its credential seals.
+    pub(crate) async fn salted_owner(
+        &self,
+        written_key: &[u8; 32],
+    ) -> Result<Option<SaltedOwner>, RingRpcError> {
+        let held = self
+            .scanned(|store| store.credential_by_list_key(written_key))
+            .await?
+            .known()?;
+        held.map(|held| {
+            Ok(SaltedOwner {
+                owner: Address::new_from_array(held.owner_key),
+                list_salt: held.secrets(&self.auditor)?.list_salt,
+            })
+        })
+        .transpose()
+    }
+
+    async fn scanned(
+        &self,
+        lookup: impl Fn(&AuditStore) -> Option<HeldCredential>,
+    ) -> Result<OwnerCredential, RingRpcError> {
+        let store = self.shared.store(self.ring);
         // 1. The refresh holds the backfill lock, no other scan moves the position meanwhile.
         let scanned = {
             let mut backfill = store.backfill.lock().await;
@@ -207,7 +235,7 @@ impl<S: TransactionSource> AuditService<S> {
                 .await?
         };
         // 2. A held credential answers whatever the scan end, a missing one only after a complete scan.
-        Ok(match (store.credential(member.as_bytes()), scanned) {
+        Ok(match (lookup(&store), scanned) {
             (Some(held), _) => OwnerCredential::Held(Box::new(held)),
             (None, ScanEnd::Complete) => OwnerCredential::Absent,
             (None, ScanEnd::Partial) => OwnerCredential::Unknown,
@@ -219,7 +247,10 @@ impl<S: TransactionSource> AuditService<S> {
         owner_key: &[u8; 32],
     ) -> Result<Option<[u8; 32]>, RingRpcError> {
         let held = self.scanned_credential(owner_key).await?.known()?;
-        Ok(held.map(|held| held.list_salt(&self.auditor)).transpose()?)
+        Ok(held
+            .map(|held| held.secrets(&self.auditor))
+            .transpose()?
+            .map(|secrets| secrets.list_salt))
     }
 
     pub(crate) async fn escrowed_key(
@@ -228,8 +259,9 @@ impl<S: TransactionSource> AuditService<S> {
     ) -> Result<Option<NullifierKey>, RingRpcError> {
         let held = self.scanned_credential(owner_key).await?.known()?;
         Ok(held
-            .map(|held| held.nullifier_key(&self.auditor))
-            .transpose()?)
+            .map(|held| held.secrets(&self.auditor))
+            .transpose()?
+            .map(|secrets| secrets.nullifier_key))
     }
 
     /// `None` until the config exists, the config then fixes the key forever.

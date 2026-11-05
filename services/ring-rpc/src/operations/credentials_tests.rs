@@ -193,9 +193,15 @@ async fn a_complete_scan_holds_every_credential_across_pages() {
     for owner in [&first, &second] {
         let held = store.credential(&owner.member()).expect("held");
         assert_eq!(held.owner_key, owner.wallet.pubkey().to_bytes());
-        let opened = held.nullifier_key(&auditor).expect("opens");
-        assert_eq!(opened.secret(), owner.key.secret());
-        assert_eq!(held.list_salt(&auditor).expect("salt"), SALT);
+        let opened = held.secrets(&auditor).expect("opens");
+        assert_eq!(opened.nullifier_key.secret(), owner.key.secret());
+        assert_eq!(opened.list_salt, SALT);
+        let list_key = Member::salted(&Member::from_bytes(owner.member()).expect("member"), &SALT)
+            .expect("list key");
+        assert_eq!(
+            store.credential_by_list_key(list_key.as_bytes()),
+            Some(held)
+        );
     }
     assert_eq!(position, HistoryPosition::after_slot(CONTEXT));
 }
@@ -299,7 +305,11 @@ async fn a_restart_recovers_every_key_from_the_retained_ciphertext() {
         let recovered = restarted.credential(&owner.member()).expect("recovered");
         assert_eq!(Some(recovered), before.credential(&owner.member()));
         assert_eq!(
-            recovered.nullifier_key(&auditor).expect("opens").secret(),
+            recovered
+                .secrets(&auditor)
+                .expect("opens")
+                .nullifier_key
+                .secret(),
             owner.key.secret()
         );
     }

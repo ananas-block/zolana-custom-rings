@@ -11,8 +11,7 @@
 //! refuses whole. A missing credential reads as unknown until a scan ends on a terminal page.
 //!
 //! Read after `rpc/finalized_history.rs` and `program-libs/interface/src/accounts/credential.rs`.
-//! Read before `operations/audit.rs`, the caller holding the backfill lock, and
-//! `operations/credential_write.rs`.
+//! Read before `operations/audit.rs`, the caller holding the backfill lock.
 
 use std::{collections::HashMap, future::Future, num::NonZeroU32};
 
@@ -29,10 +28,11 @@ use spr_transaction::{OutputSlot, ShieldedTransaction};
 use thiserror::Error;
 use zolana_ring_client::{
     history::{HistoryPosition, PageEnd},
+    open_credential,
     rpc::WalletEnrollment,
-    SealedNullifierKey, UnknownCredential,
+    CredentialSecrets, UnknownCredential,
 };
-use zolana_ring_policy::{ring_id_field, Member};
+use zolana_ring_policy::{ring_id_field, Member, MemberError};
 
 use crate::{
     error::RingRpcError,
@@ -81,6 +81,8 @@ pub struct HeldCredential {
     pub(crate) address: [u8; 32],
     pub(crate) credential: AuditCredential,
     pub(crate) leaf: CredentialLeaf,
+    /// `Member::salted(member, list_salt)`, the key a salted list writes for the owner.
+    pub(crate) list_key: [u8; 32],
 }
 
 /// `utxo_hash` binds `tree_id`.
@@ -105,6 +107,8 @@ pub(crate) struct HeldCredentials {
     by_member: HashMap<[u8; 32], HeldCredential>,
     /// Owner hash to member, the deposit capsule names the owner by its hash.
     members: HashMap<[u8; 32], [u8; 32]>,
+    /// List key to member, a salted write names the owner by its list key.
+    list_keys: HashMap<[u8; 32], [u8; 32]>,
 }
 
 /// Rebuilt from its confirmed output, owner and opening still unchecked.
@@ -173,10 +177,6 @@ impl CredentialPda {
 
     pub fn view_tag(&self) -> [u8; 32] {
         self.pda.to_bytes()
-    }
-
-    pub fn owner_hash(&self) -> [u8; 32] {
-        *self.owner.owner_hash()
     }
 
     pub fn ring_id(&self) -> [u8; 32] {
@@ -255,39 +255,9 @@ impl HeldCredential {
         self.credential.member
     }
 
-    /// Opened per use, the secret never stays in the store.
-    pub fn nullifier_key(
-        &self,
-        auditor: &X25519Keypair,
-    ) -> Result<NullifierKey, CredentialRefusal> {
-        let key = self
-            .sealed()?
-            .open(auditor)
-            .map_err(|_| CredentialRefusal::Sealed)?;
-        match key.pubkey() {
-            Ok(pubkey) if pubkey == self.credential.nullifier_pk => Ok(key),
-            _ => Err(CredentialRefusal::Sealed),
-        }
-    }
-
-    /// RegisterKey binds only the tag, the opened salt must hash to it.
-    pub fn list_salt(&self, auditor: &X25519Keypair) -> Result<[u8; 32], CredentialRefusal> {
-        let salt = self
-            .sealed()?
-            .open_list_salt(auditor)
-            .map_err(|_| CredentialRefusal::Sealed)?;
-        match domain::list_tag(&salt) {
-            Ok(tag) if tag == self.credential.list_tag => Ok(salt),
-            _ => Err(CredentialRefusal::Sealed),
-        }
-    }
-
-    fn sealed(&self) -> Result<SealedNullifierKey, CredentialRefusal> {
-        Ok(SealedNullifierKey {
-            eph_pk: X25519Pubkey::from_u(self.credential.eph_u)
-                .map_err(|_| CredentialRefusal::Sealed)?,
-            ciphertext: self.credential.ciphertext,
-        })
+    /// Opened per use, the secrets never stay in the store.
+    pub fn secrets(&self, auditor: &X25519Keypair) -> Result<CredentialSecrets, CredentialRefusal> {
+        open_credential(&self.credential, auditor).map_err(|_| CredentialRefusal::Sealed)
     }
 }
 
@@ -326,6 +296,10 @@ impl HeldCredentials {
         self.by_member.get(self.members.get(owner_hash)?)
     }
 
+    pub fn by_list_key(&self, list_key: &[u8; 32]) -> Option<&HeldCredential> {
+        self.by_member.get(self.list_keys.get(list_key)?)
+    }
+
     /// All or nothing, returns the owner keys held for the first time.
     pub fn admit(
         &mut self,
@@ -350,6 +324,7 @@ impl HeldCredentials {
         let mut owners = Vec::with_capacity(fresh.len());
         for (member, held) in fresh {
             self.members.insert(held.owner_hash, member);
+            self.list_keys.insert(held.list_key, member);
             self.by_member.insert(member, held);
             owners.push(held.owner_key);
         }
@@ -420,20 +395,26 @@ impl<C: CredentialSource> CredentialScan<'_, C> {
                     .is_ok_and(|member| *member.as_bytes() == credential.member)
             })
             .ok_or(CredentialRefusal::OwnerUnresolved)?;
-        let held = HeldCredential {
+        // The credential opens once here, its list key derives from the opened salt.
+        let secrets =
+            open_credential(&credential, self.auditor).map_err(|_| CredentialRefusal::Sealed)?;
+        Ok(HeldCredential {
             owner_key: owner.to_bytes(),
             owner_hash: owner_hash(
                 &PublicKey::from_ed25519(owner.as_array()),
                 &credential.nullifier_pk,
             )?,
             address,
+            list_key: list_key(&credential, &secrets.list_salt)?,
             credential,
             leaf,
-        };
-        held.nullifier_key(self.auditor)?;
-        held.list_salt(self.auditor)?;
-        Ok(held)
+        })
     }
+}
+
+fn list_key(credential: &AuditCredential, list_salt: &[u8; 32]) -> Result<[u8; 32], MemberError> {
+    let key = Member::salted(&Member::from_bytes(credential.member)?, list_salt)?;
+    Ok(*key.as_bytes())
 }
 
 /// A short continued page is refused, the finalized history fills every page but the last.
@@ -542,6 +523,7 @@ pub mod fixture {
                 )
                 .expect("owner hash"),
                 address: payload_address(slot),
+                list_key: list_key(&credential, &self.list_salt).expect("list key"),
                 credential,
                 leaf: CredentialLeaf {
                     utxo_hash: slot.output_context.hash,

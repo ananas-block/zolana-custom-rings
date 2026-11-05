@@ -16,8 +16,6 @@ mod cosign;
 mod cosign_limits;
 #[path = "storage/cosign_usage.rs"]
 mod cosign_usage;
-#[path = "operations/credential_write.rs"]
-mod credential_write;
 #[path = "operations/credentials.rs"]
 mod credentials;
 #[path = "storage/database.rs"]
@@ -111,11 +109,6 @@ pub use cosign_limits::{
     TransferRead, WindowUsage,
 };
 pub use cosign_usage::Reservation;
-pub use credential_write::{
-    ActivationWait, AddressLeaf, AddressSnapshot, CredentialEvidence, CredentialStateRoot,
-    CredentialWriteBatch, CredentialWriteInput, CredentialWritePlan, CredentialWriteRefusal,
-    SaltedOwnerWrite, StateOpening, ADDRESS_TREE_HEIGHT, MAX_CREDENTIAL_WRITES,
-};
 #[cfg(feature = "test-fixtures")]
 pub use credentials::fixture as credential_fixture;
 pub use credentials::{CredentialLeaf, CredentialRefusal, HeldCredential};
@@ -147,7 +140,7 @@ pub use relay_reservations::RelayBudget;
 pub use relay_services::{RelayServices, RelayServicesInit};
 pub use relay_submit::CollectedSignature;
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
-pub use storage_chain::{LiveStorageChain, StorageChain};
+pub use storage_chain::{live_ring_client, LiveStorageChain, StorageChain};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
     RingHistoryPage, TransactionPage, TransactionSource, Upstreams,

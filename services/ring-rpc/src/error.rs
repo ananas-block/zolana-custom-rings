@@ -13,8 +13,7 @@ use zolana_ring_policy::MemberError;
 
 use crate::{
     authority_transfer::AuthorityTransferError, authorize::Unauthorized, cosign::CoSignError,
-    credential_write::CredentialWriteRefusal, credentials::CredentialRefusal,
-    record_update::RecordUpdateRefusal, relay::RelayError,
+    credentials::CredentialRefusal, record_update::RecordUpdateRefusal, relay::RelayError,
 };
 
 #[derive(Debug, Error)]
@@ -83,8 +82,6 @@ pub enum RingRpcError {
     StaleMergeSettings,
     #[error(transparent)]
     Credential(#[from] CredentialRefusal),
-    #[error(transparent)]
-    CredentialWrite(#[from] CredentialWriteRefusal),
     #[error("merge build failed because {0}")]
     MergeBuild(Box<custom_ring_sdk::RingError>),
 }
@@ -248,10 +245,6 @@ impl From<RingRpcError> for ErrorObjectOwned {
             Credential(inner) => {
                 error!("credential discovery refused {inner}");
                 (ErrorCode::InternalError, "credential discovery failed")
-            }
-            CredentialWrite(inner) => {
-                error!("credential write refused {inner}");
-                (ErrorCode::InternalError, "credential write failed")
             }
             MergeBuild(_) => {
                 error!("managed merge failed {}", redacted(&failure));
