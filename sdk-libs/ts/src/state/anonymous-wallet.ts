@@ -3,19 +3,14 @@ import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { bytesKey } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ViewTag } from "@heliuslabs/zolana/keypair";
-import {
-  deserializeWallet,
-  serializeWallet,
-  Wallet,
-  type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 
 import { RingError } from "../protocol/error.js";
 import { exactlyOne, unseen } from "./batch.js";
 import { mintBalances, noteState, type MintBalance, type NoteState } from "./exposed-notes.js";
 import { consumeScan, type AnonymousScan } from "./anonymous-sync.js";
-import { registeredMint } from "../operations/workflow/recover.js";
 import type { RingKeys } from "./ring-keys.js";
+import { RingWallet } from "./ring-wallet.js";
 import { parseExact, viewTagStream, ViewingHistory, type EntryStream } from "./viewing-history.js";
 
 /** A reply read from a note, what a sender wrote about itself and nothing the proof binds. */
@@ -27,34 +22,29 @@ export interface PendingClaim {
 }
 
 export class AnonymousWallet {
-  /** Holds the notes and spends, a transfer selects from it. */
-  readonly wallet: Wallet;
-  /** Notes under a mint the registry lacks, a transfer never selects from it. */
-  readonly #pending: Wallet;
+  readonly #notes: RingWallet;
   #history: ViewingHistory;
   #claims: readonly PendingClaim[];
 
   private constructor(
     fields: Readonly<{
-      wallet: Wallet;
-      pending: Wallet;
+      notes: RingWallet;
       history: ViewingHistory;
       claims: readonly PendingClaim[];
     }>,
   ) {
-    this.wallet = fields.wallet;
-    this.#pending = fields.pending;
+    this.#notes = fields.notes;
     this.#history = fields.history;
     this.#claims = fields.claims;
   }
 
   static create(wallet: Wallet, history: ViewingHistory): AnonymousWallet {
-    return new AnonymousWallet({
-      wallet,
-      pending: new Wallet({ identity: wallet.identity, registry: wallet.registry }),
-      history,
-      claims: [],
-    });
+    return new AnonymousWallet({ notes: RingWallet.create(wallet), history, claims: [] });
+  }
+
+  /** Holds the notes and spends, a transfer selects from it. */
+  get wallet(): Wallet {
+    return this.#notes.wallet;
   }
 
   history(): ViewingHistory {
@@ -78,9 +68,9 @@ export class AnonymousWallet {
     return mintBalances(this.wallet.utxos());
   }
 
-  /** Stored and unspendable, `promotePending` moves each once its mint registers, no rescan needed. */
+  /** Stored and unspendable, the next absorb or `promotePending` moves each once its mint registers. */
   pendingOpenings(): readonly WalletUtxo[] {
-    return this.#pending.utxos();
+    return this.#notes.pendingOpenings();
   }
 
   /** Replies the wallet has not confirmed, none reads as a verified sender. */
@@ -100,22 +90,6 @@ export class AnonymousWallet {
   async absorb(scan: AnonymousScan): Promise<void> {
     return this.wallet._withSyncLock(async () => {
       consumeScan(scan, this.#history);
-      const state = this.wallet._state();
-      const nullifiers = new Set([...state.nullifiers, ...scan.spentNullifiers.map(bytesKey)]);
-      const pendingState = this.#pending._state();
-      const hashes = new Set(
-        [...state.utxos, ...pendingState.utxos].map((entry) => bytesKey(entry.outputContext.hash)),
-      );
-      const fresh = scan.utxos.filter((entry) =>
-        unseen(hashes, bytesKey(entry.outputContext.hash)),
-      );
-      const freshPending = scan.pendingOpenings.filter((entry) =>
-        unseen(hashes, bytesKey(entry.outputContext.hash)),
-      );
-      const marked = (notes: readonly WalletUtxo[]): readonly WalletUtxo[] =>
-        notes.map((entry) =>
-          nullifiers.has(bytesKey(entry.nullifier)) ? { ...entry, spent: true } : entry,
-        );
       const claimed = new Set(this.#claims.map((claim) => bytesKey(claim.utxoHash)));
       const claims = scan.senderClaims
         .filter((claim) => unseen(claimed, bytesKey(claim.utxoHash)))
@@ -127,15 +101,14 @@ export class AnonymousWallet {
             claimedNullifierPk: reply.nullifierPk,
           }),
         );
-      this.wallet._replace({
-        ...state,
-        utxos: marked([...state.utxos, ...fresh]),
-        nullifiers,
-      });
-      this.#pending._replace({
-        ...pendingState,
-        utxos: marked([...pendingState.utxos, ...freshPending]),
-      });
+      this.#notes._absorb(
+        {
+          notes: [...scan.utxos, ...scan.pendingOpenings],
+          spentNullifiers: scan.spentNullifiers,
+        },
+        this.wallet,
+        (commit) => this.wallet._replace({ ...this.wallet._state(), ...commit }),
+      );
       this.#claims = [...this.#claims, ...claims];
       this.#history = this.#history._withScanProgress(scan.history);
     });
@@ -143,20 +116,7 @@ export class AnonymousWallet {
 
   /** Moves each pending note whose mint now registers into the spendable notes, the moved ones returned. */
   promotePending(): Promise<readonly WalletUtxo[]> {
-    return this.wallet._withSyncLock(async () => {
-      const state = this.wallet._state();
-      const pendingState = this.#pending._state();
-      const registered = (entry: WalletUtxo): boolean =>
-        registeredMint(this.wallet.registry, entry.utxo.asset) !== undefined;
-      const moved = pendingState.utxos.filter(registered);
-      if (moved.length === 0) return moved;
-      this.wallet._replace({ ...state, utxos: [...state.utxos, ...moved] });
-      this.#pending._replace({
-        ...pendingState,
-        utxos: pendingState.utxos.filter((entry) => !registered(entry)),
-      });
-      return moved;
-    });
+    return this.#notes.promotePending();
   }
 
   /** Only raises a tag counter or adds a key. */
@@ -203,10 +163,11 @@ export class AnonymousWallet {
       claimedOwnerKey: bytesToHex(claim.claimedOwnerKey),
       claimedNullifierPk: bytesToHex(claim.claimedNullifierPk),
     }));
+    const { wallet, pending } = this.#notes._documentFields();
     return (
       `{"history":${this.#history.toJson()},` +
-      `"wallet":${JSON.stringify(serializeWallet(this.wallet))},` +
-      `"pending":${JSON.stringify(serializeWallet(this.#pending))},` +
+      `"wallet":${JSON.stringify(wallet)},` +
+      `"pending":${JSON.stringify(pending)},` +
       `"claims":${JSON.stringify(claims)}}`
     );
   }
@@ -215,16 +176,11 @@ export class AnonymousWallet {
     const stored = document(parseExact(text));
     const { history, wallet, pending, claims } = stored;
     const known = ["history", "wallet", "pending", "claims"];
-    if (
-      Object.keys(stored).some((key) => !known.includes(key)) ||
-      typeof wallet !== "string" ||
-      typeof pending !== "string"
-    )
+    if (Object.keys(stored).some((key) => !known.includes(key)))
       throw invalid("the document names other fields");
     if (!Array.isArray(claims)) throw invalid("claims is not a list");
     return new AnonymousWallet({
-      wallet: deserializeWallet(wallet),
-      pending: deserializeWallet(pending),
+      notes: RingWallet._fromDocument(wallet, pending),
       history: ViewingHistory._fromValue(history),
       claims: claims.map(storedClaim),
     });

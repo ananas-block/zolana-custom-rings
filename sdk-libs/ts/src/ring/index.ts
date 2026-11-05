@@ -210,7 +210,8 @@ export type {
 } from "../state/anonymous-sync.js";
 export type { PlannedPayment } from "../operations/payments/output-rail.js";
 export { openRingNotes, syncRingWallet } from "../state/ring-sync.js";
-export type { RingNotes, RingSyncClient } from "../state/ring-sync.js";
+export type { RingNotes, RingSyncClient, RingSyncInput } from "../state/ring-sync.js";
+export { RingWallet } from "../state/ring-wallet.js";
 export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../state/ring-keys.js";
 export type {
   RingDeliveryRequest,
