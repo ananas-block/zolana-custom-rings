@@ -21,12 +21,16 @@ fn sources(entries: &[(ListId, [u8; 32])]) -> SourceMap {
     SourceMap::new(entries).unwrap()
 }
 
-/// `tail` is `[guard_tag, mask, mode, subject]`.
+/// `tail` is `[guard_tag, mask, mode, subject]`, mask and alternative in their low bytes.
 fn packed(tail: [u8; 4], threshold: u64, alternative: u8) -> [u8; 32] {
+    let [guard_tag, mask, mode, subject] = tail;
     let mut row = [0u8; 32];
-    row[19] = alternative;
-    row[20..28].copy_from_slice(&threshold.to_be_bytes());
-    row[28..].copy_from_slice(&tail);
+    row[18] = alternative;
+    row[19..27].copy_from_slice(&threshold.to_be_bytes());
+    row[27] = guard_tag;
+    row[29] = mask;
+    row[30] = mode;
+    row[31] = subject;
     row
 }
 
@@ -95,6 +99,12 @@ fn rows_pack_the_circuit_byte_positions() {
     assert_eq!(
         Rule::forbid(Subject::Sender, ListId::Frozen).encoded(),
         packed([0, 0b0000_0100, 2, 2], 0, 0)
+    );
+    let mut private_frozen = packed([0, 0, 2, 2], 0, 0);
+    private_frozen[28] = 1;
+    assert_eq!(
+        Rule::forbid(Subject::Sender, ListId::PrivateFrozen).encoded(),
+        private_frozen
     );
     assert_eq!(
         Rule::require(Subject::OutputOwner, ListId::Approval)
@@ -203,26 +213,28 @@ type Tamper = fn(&mut [u8; 32]);
 #[test]
 fn decode_refuses_every_row_encoded_never_emits() {
     let base = Rule::require(Subject::OutputOwner, ListId::Allow);
-    let cases: [(Tamper, RuleTableError); 16] = [
+    let cases: [(Tamper, RuleTableError); 18] = [
         (|row| row[0] = 1, RuleTableError::ReservedBytes),
-        (|row| row[18] = 1, RuleTableError::ReservedBytes),
+        (|row| row[16] = 1, RuleTableError::ReservedBytes),
         (|row| row[31] = 0, RuleTableError::UnknownSubject),
         (|row| row[31] = 3, RuleTableError::UnknownSubject),
         (|row| row[31] = 5, RuleTableError::UnknownSubject),
         (|row| row[30] = 0, RuleTableError::UnknownMode),
         (|row| row[30] = 3, RuleTableError::UnknownMode),
-        (|row| row[19] = 0b0000_0001, RuleTableError::ListInBothSets),
+        (|row| row[18] = 0b0000_0001, RuleTableError::ListInBothSets),
+        (|row| row[28] = 0b10, RuleTableError::UnknownList),
+        (|row| row[17] = 0b10, RuleTableError::UnknownList),
         (
             |row| {
                 row[30] = 2;
-                row[19] = 0b0000_0010;
+                row[18] = 0b0000_0010;
             },
             RuleTableError::NonCanonicalAlternative,
         ),
         (
             |row| {
                 row[29] = 0;
-                row[19] = 0b0000_0010;
+                row[18] = 0b0000_0010;
             },
             RuleTableError::EmptyLists,
         ),
@@ -234,14 +246,14 @@ fn decode_refuses_every_row_encoded_never_emits() {
             RuleTableError::EmptyLists,
         ),
         (|row| row[29] = 0, RuleTableError::EmptyLists),
-        (|row| row[28] = 3, RuleTableError::UnknownGuardTag),
-        (|row| row[27] = 1, RuleTableError::ThresholdWithoutGuard),
-        (|row| row[28] = 1, RuleTableError::ZeroThreshold),
+        (|row| row[27] = 3, RuleTableError::UnknownGuardTag),
+        (|row| row[26] = 1, RuleTableError::ThresholdWithoutGuard),
+        (|row| row[27] = 1, RuleTableError::ZeroThreshold),
         (
             |row| {
                 row[31] = 2;
-                row[28] = 1;
                 row[27] = 1;
+                row[26] = 1;
             },
             RuleTableError::SenderGuard,
         ),
@@ -506,10 +518,10 @@ fn table_fields_bind_sources_and_all_rules_without_mint_tables() {
     let fields = table.encode().fields(&map);
     assert_eq!(fields.len(), 44);
     assert_eq!(fields[0], right_align(b"CRTB"));
-    assert_eq!(fields[17], [0; 32]);
-    assert_eq!(fields[18], field_u8(16));
-    assert_eq!(fields[34], table.rules()[15].encoded());
-    assert!(fields[35..].iter().all(|field| *field == [0; 32]));
+    assert_eq!(fields[19], [0; 32]);
+    assert_eq!(fields[20], field_u8(16));
+    assert_eq!(fields[36], table.rules()[15].encoded());
+    assert!(fields[37..].iter().all(|field| *field == [0; 32]));
     assert_eq!(table.encode().decode(), Ok(table));
     let hash = table.hash(&map).unwrap();
     let mut changed = table.encode();
@@ -639,6 +651,7 @@ fn a_grant_over_several_lists_and_one_denial_per_list_pass() {
         (ListId::Block, [0; 32]),
         (ListId::Frozen, [0; 32]),
         (ListId::PrivateBlock, [0; 32]),
+        (ListId::PrivateFrozen, [0; 32]),
     ]);
     let table = RuleTable::builder()
         .rule(Rule::require_any(
@@ -674,11 +687,11 @@ fn a_salted_list_needs_a_slot_and_enters_the_table_fields() {
     let map = sources(&[(ListId::PrivateBlock, [0; 32])]);
     assert!(table.validate(&map).is_ok());
     assert_eq!(
-        table.fields(&map)[17],
-        field_u8(ListSet::single(ListId::PrivateBlock).bits())
+        table.fields(&map)[19],
+        right_align(&ListSet::single(ListId::PrivateBlock).bits().to_be_bytes())
     );
     let public = sources(&[(ListId::Block, [0; 32])]);
-    assert_eq!(table.fields(&public)[17], [0; 32]);
+    assert_eq!(table.fields(&public)[19], [0; 32]);
 }
 
 #[test]

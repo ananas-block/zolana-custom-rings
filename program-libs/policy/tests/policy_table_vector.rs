@@ -24,7 +24,7 @@ struct PolicyTableVectors {
 struct Case {
     name: String,
     sources: Vec<Source>,
-    salted: u8,
+    salted: u16,
     rules: Vec<String>,
     /// `rules[i]` split into its parts.
     rule_parts: Vec<RuleParts>,
@@ -46,10 +46,10 @@ struct RuleParts {
     subject: Subject,
     #[serde(with = "ModeName")]
     mode: Mode,
-    mask: u8,
+    mask: u16,
     guard: GuardTag,
     threshold: u64,
-    alternative: u8,
+    alternative: u16,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -124,10 +124,8 @@ impl RuleParts {
     }
 
     fn rule(&self) -> Rule {
-        let (mask, alternative) = (
-            ListSet::from_bits(self.mask),
-            ListSet::from_bits(self.alternative),
-        );
+        let lists = |bits| ListSet::from_record_bits(u64::from(bits)).expect("named lists");
+        let (mask, alternative) = (lists(self.mask), lists(self.alternative));
         let rule = match self.mode {
             Mode::Present => Rule::any_of(self.subject, mask, alternative),
             Mode::Absent => Rule::any_of(self.subject, ListSet::EMPTY, mask),

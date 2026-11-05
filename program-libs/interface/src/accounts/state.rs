@@ -714,7 +714,7 @@ fn source_map_of(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, Cu
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 1060);
+const _: () = assert!(RingPolicy::SIZE == 1093);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);

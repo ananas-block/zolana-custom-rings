@@ -185,7 +185,7 @@ serde_via_str!(ListName);
 
 impl ListName {
     /// The authority-written lists in `ListId::ALL` order, a lib test pins the set.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self(ListId::Allow),
         Self(ListId::Block),
         Self(ListId::Frozen),
@@ -193,15 +193,17 @@ impl ListName {
         Self(ListId::Reader),
         Self(ListId::Approval),
         Self(ListId::PrivateAllow),
+        Self(ListId::PrivateFrozen),
     ];
     /// The lists a rule reads in `ListId::ALL` order, a lib test pins the set.
-    pub const POLICY: [Self; 6] = [
+    pub const POLICY: [Self; 7] = [
         Self(ListId::Allow),
         Self(ListId::Block),
         Self(ListId::Frozen),
         Self(ListId::PrivateBlock),
         Self(ListId::Approval),
         Self(ListId::PrivateAllow),
+        Self(ListId::PrivateFrozen),
     ];
 
     pub const fn id(self) -> ListId {
@@ -653,7 +655,8 @@ mod tests {
                 "private-block",
                 "reader",
                 "approval",
-                "private-allow"
+                "private-allow",
+                "private-frozen"
             ]
         );
         for name in ListName::ALL {

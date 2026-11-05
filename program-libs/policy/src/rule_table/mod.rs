@@ -11,9 +11,9 @@
 //!
 //! Named list semantics a stored table holds.
 //! 1. `Allow`, `Approval` and `PrivateAllow` are grant lists, read by presence. A rule over several passes on any one, within the rule the lists join with OR.
-//! 2. `Block`, `Frozen` and `PrivateBlock` are deny lists, read by absence, one per rule. Rules join with AND, so a public and a private block are two rules.
+//! 2. `Block`, `Frozen`, `PrivateBlock` and `PrivateFrozen` are deny lists, read by absence, one per rule. Rules join with AND, so a public and a private block are two rules.
 //! 3. No rule reads `Reader` or the member written `RingViewing`, so an owner admits itself to nothing and a reader grant moves no funds.
-//! 4. `PrivateAllow` and `PrivateBlock` are always salted. An owner reads them at its salted key once its tracking row is present, and an asset reads its public record. An owner with no row reads no salted list, so a deny rule on one passes and an allow rule on one fails.
+//! 4. `PrivateAllow`, `PrivateBlock` and `PrivateFrozen` are always salted. An owner reads them at its salted key once its tracking row is present, and an asset reads its public record. An owner with no row reads no salted list, so a deny rule on one passes and an allow rule on one fails.
 //!
 //! Invariants of a stored table.
 //! 1. Every row is one `Rule::encoded` emits and no two rows share a signature, the circuit's equation alone admits more.
@@ -31,7 +31,7 @@ use crate::{field_u8, ListId, ListSet, Member};
 /// Rule slots compiled into the circuit, a new value rotates the proving key.
 pub const MAX_RULES: usize = 16;
 /// Source slots, one per list the enum can name.
-pub const MAX_SOURCES: usize = 8;
+pub const MAX_SOURCES: usize = 9;
 /// `"CRTB"`, the first field of the table hash, `domain::POLICY_TABLE` of the interface.
 pub const POLICY_TABLE_DOMAIN: u32 = 0x4352_5442;
 pub const POLICY_TABLE_FIELDS: usize =
@@ -169,17 +169,28 @@ pub struct Rule {
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct Row {
-    /// Zero, `decodeRule` recomposes the row from the 13 bytes below and a set bit here fails it.
-    reserved: [u8; 19],
-    alternative: u8,
+    /// Zero, `decodeRule` recomposes the row from the 15 bytes below and a set bit here fails it.
+    reserved: [u8; 17],
+    alternative: [u8; 2],
     threshold: [u8; 8],
     guard_tag: u8,
-    mask: u8,
+    mask: [u8; 2],
     mode: u8,
     subject: u8,
 }
 
 const _: () = assert!(core::mem::size_of::<Row>() == 32);
+
+impl Row {
+    /// `None` past the named lists, the circuit splits a mask into `MAX_SOURCES` bits and fails there.
+    const fn mask_lists(&self) -> Option<ListSet> {
+        ListSet::from_record_bits(u16::from_be_bytes(self.mask) as u64)
+    }
+
+    const fn alternative_lists(&self) -> Option<ListSet> {
+        ListSet::from_record_bits(u16::from_be_bytes(self.alternative) as u64)
+    }
+}
 
 impl Rule {
     /// Every live instance of the subject needs the list's bit.
@@ -267,11 +278,11 @@ impl Rule {
             Guard::AboveAmountByAsset => (2, 0),
         };
         bytemuck::cast(Row {
-            reserved: [0; 19],
-            alternative: alternative.bits(),
+            reserved: [0; 17],
+            alternative: alternative.bits().to_be_bytes(),
             threshold: threshold.to_be_bytes(),
             guard_tag,
-            mask: mask.bits(),
+            mask: mask.bits().to_be_bytes(),
             mode: self.primary_mode() as u8,
             subject: self.subject as u8,
         })
@@ -280,7 +291,7 @@ impl Rule {
     /// Refuses every row `encoded` never emits, the circuit equation alone admits them.
     pub fn decode(bytes: &[u8; 32]) -> Result<Self, RuleTableError> {
         let row: &Row = bytemuck::cast_ref(bytes);
-        if row.reserved != [0; 19] {
+        if row.reserved != [0; 17] {
             return Err(RuleTableError::ReservedBytes);
         }
         let subject = match row.subject {
@@ -294,8 +305,9 @@ impl Rule {
             2 => Mode::Absent,
             _ => return Err(RuleTableError::UnknownMode),
         };
-        let mask = ListSet::from_bits(row.mask);
-        let alternative = ListSet::from_bits(row.alternative);
+        let (Some(mask), Some(alternative)) = (row.mask_lists(), row.alternative_lists()) else {
+            return Err(RuleTableError::UnknownList);
+        };
         if mask.is_empty() {
             return Err(RuleTableError::EmptyLists);
         }
@@ -366,11 +378,11 @@ impl Rule {
         Ok(())
     }
 
-    const fn signature(&self) -> u32 {
+    const fn signature(&self) -> u64 {
         let (present, absent) = match self.source {
             RuleSource::Lists { present, absent } => (present.bits(), absent.bits()),
         };
-        ((self.subject as u32) << 16) | ((present as u32) << 8) | absent as u32
+        ((self.subject as u64) << 32) | ((present as u64) << 16) | absent as u64
     }
 
     const fn disabled() -> Self {
@@ -628,7 +640,8 @@ impl EncodedRuleTable {
             .take(usize::from(self.rule_count))
             .map(|bytes| {
                 let row: &Row = bytemuck::cast_ref(bytes);
-                ListSet::from_bits(row.mask | row.alternative)
+                let bits = u16::from_be_bytes(row.mask) | u16::from_be_bytes(row.alternative);
+                ListSet::named_in(u64::from(bits))
             })
             .fold(ListSet::EMPTY, ListSet::union)
     }
@@ -664,7 +677,10 @@ impl EncodedRuleTable {
                     .iter()
                     .flat_map(|slot| [field_u8(slot.list_id), slot.registry]),
             )
-            .chain([field_u8(sources.salted().bits()), field_u8(self.rule_count)])
+            .chain([
+                right_align(&sources.salted().bits().to_be_bytes()),
+                field_u8(self.rule_count),
+            ])
             .chain(self.rules.iter().copied());
         let mut fields = [[0u8; 32]; POLICY_TABLE_FIELDS];
         for (field, value) in fields.iter_mut().zip(values) {
@@ -756,6 +772,7 @@ rule_errors! {
     MultiListAbsence => "a rule reads more than one list by absence",
     InvertedPolarity => "a rule reads a grant list by absence or a deny list by presence",
     MixedPolarity => "a rule mixes presences and absences",
+    UnknownList => "a row names a list past the named lists",
 }
 
 const _: () = assert!(EncodedRuleTable::SIZE == 513);

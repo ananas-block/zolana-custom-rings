@@ -22,9 +22,9 @@ type Rows struct {
 }
 
 func (r Rule) Packed() *big.Int {
-	packed := new(big.Int).Lsh(new(big.Int).SetUint64(r.Alternative), 96)
-	packed.Or(packed, new(big.Int).Lsh(new(big.Int).SetUint64(r.Threshold), 32))
-	return packed.Or(packed, new(big.Int).SetUint64(r.Subject|r.Mode<<8|r.Mask<<16|r.Guard<<24))
+	packed := new(big.Int).Lsh(new(big.Int).SetUint64(r.Alternative), 104)
+	packed.Or(packed, new(big.Int).Lsh(new(big.Int).SetUint64(r.Threshold), 40))
+	return packed.Or(packed, new(big.Int).SetUint64(r.Subject|r.Mode<<8|r.Mask<<16|r.Guard<<32))
 }
 
 // TableHash mirrors EncodedRuleTable::hash, PolicyTableRate fields per call beside the accumulator.

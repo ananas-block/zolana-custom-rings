@@ -402,7 +402,7 @@ impl Serialize for PolicyTable<'_> {
         #[serde(rename_all = "camelCase")]
         struct Table<'a> {
             sources: [Source; MAX_SOURCES],
-            salted: u8,
+            salted: u16,
             policy_len: u8,
             #[serde(serialize_with = "fe::seq")]
             rules: &'a [[u8; 32]],

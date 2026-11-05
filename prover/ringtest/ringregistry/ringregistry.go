@@ -22,11 +22,12 @@ const (
 	AllowBit  = 1 << 0
 	BlockBit  = 1 << 1
 	FrozenBit = 1 << 2
-	// PrivateBlockBit and PrivateAllowBit are always salted.
-	PrivateBlockBit = 1 << 4
-	ReaderBit       = 1 << 5
-	ApprovalBit     = 1 << 6
-	PrivateAllowBit = 1 << 7
+	// PrivateBlockBit, PrivateAllowBit and PrivateFrozenBit are always salted.
+	PrivateBlockBit  = 1 << 4
+	ReaderBit        = 1 << 5
+	ApprovalBit      = 1 << 6
+	PrivateAllowBit  = 1 << 7
+	PrivateFrozenBit = 1 << 8
 )
 
 // Record mirrors registry.Record.

@@ -13,7 +13,7 @@ use zolana_ring_member_registry::{
     OpeningCheck, QuadPath, RecordCredentials, RecordOpening, RecordStatementContext,
     RecordStatementError, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
 };
-use zolana_ring_policy::{ListId, Member};
+use zolana_ring_policy::{ListId, ListSet, Member};
 
 fn member(byte: u8) -> [u8; 32] {
     right_align(&[byte])
@@ -490,7 +490,7 @@ fn public_statements_select_the_public_key_and_bind_no_credentials() {
 
 #[test]
 fn private_owner_writes_cannot_use_public_statement_context() {
-    for private in [ListId::PrivateAllow, ListId::PrivateBlock] {
+    for private in ListSet::PRIVATE_LISTS.iter() {
         for value in [0, private.record_bit()] {
             let proof = MemberRegistryTree::new()
                 .unwrap()

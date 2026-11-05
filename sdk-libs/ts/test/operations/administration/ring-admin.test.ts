@@ -224,7 +224,7 @@ describe("ring account", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(1060);
+    expect(data).toHaveLength(1093);
     expect(decodeRingPolicy(data)).toMatchObject({
       createdSlot: slot,
       roles: ROLES,

@@ -457,9 +457,8 @@ fn placeholders(first: usize, count: usize) -> String {
 }
 
 fn pending_approval(row: &QueryResult) -> Result<PendingApproval, DbErr> {
-    let lists = u8::try_from(unsigned(row, "awaited")?)
-        .map(ListSet::from_bits)
-        .map_err(|_| corrupt("awaited"))?;
+    let lists =
+        ListSet::from_record_bits(unsigned(row, "awaited")?).ok_or_else(|| corrupt("awaited"))?;
     Ok(PendingApproval {
         id: column_bytes(row, "id")?,
         wallet: address(row, "signer")?,

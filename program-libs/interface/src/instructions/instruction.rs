@@ -462,13 +462,13 @@ mod tests {
             write(allow, allow),
             Err(CustomRingError::ListBitNotWritable)
         );
-        for unwritable in [ListId::PrivateAllow, ListId::PrivateBlock] {
+        for unwritable in ListSet::PRIVATE_LISTS.iter() {
             assert_eq!(
                 write(unwritable.record_bit(), 0),
                 Err(CustomRingError::ListBitNotWritable)
             );
         }
-        assert_eq!(write(1 << 8, 0), Err(CustomRingError::ListBitNotWritable));
+        assert_eq!(write(1 << 9, 0), Err(CustomRingError::ListBitNotWritable));
         assert_eq!(
             write(viewing, viewing | allow),
             Err(CustomRingError::ValueOutsideMask)

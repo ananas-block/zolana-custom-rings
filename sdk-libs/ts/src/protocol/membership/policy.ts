@@ -40,6 +40,7 @@ export const ListId = Object.freeze({
   reader: 6,
   approval: 7,
   privateAllow: 8,
+  privateFrozen: 9,
 } as const);
 export type ListId = (typeof ListId)[keyof typeof ListId];
 
@@ -54,6 +55,7 @@ export const POLICY_LISTS: readonly ListId[] = Object.freeze([
   ListId.privateBlock,
   ListId.approval,
   ListId.privateAllow,
+  ListId.privateFrozen,
 ]);
 
 /** Presence satisfies a grant. */
@@ -67,10 +69,14 @@ const DENY_LISTS: readonly ListId[] = Object.freeze([
   ListId.block,
   ListId.frozen,
   ListId.privateBlock,
+  ListId.privateFrozen,
 ]);
 
 /** Rust `ListSet::PRIVATE_LISTS`, an owner reads them at a salted key on every ring. */
-const PRIVATE_LIST_BITS = (1 << (ListId.privateBlock - 1)) | (1 << (ListId.privateAllow - 1));
+export const PRIVATE_LIST_BITS =
+  (1 << (ListId.privateBlock - 1)) |
+  (1 << (ListId.privateAllow - 1)) |
+  (1 << (ListId.privateFrozen - 1));
 
 /** Owners read it at salted keys, its source holds an absence floor. */
 export function isPrivateList(id: ListId): boolean {
@@ -104,6 +110,9 @@ export function checkedListId(id: ListId): ListId {
 function listBits(ids: readonly ListId[]): number {
   return ids.reduce((bits, id) => bits | listBit(id), 0);
 }
+
+/** Rust `ListSet::NAMED`, a row bit past it names no list. */
+const NAMED_LIST_BITS = listBits(LIST_IDS);
 
 export type RuleSubject = "outputOwner" | "sender" | "asset";
 
@@ -210,11 +219,11 @@ export function encodeRule(rule: Rule): Bytes32 {
         : [2, 0n];
   if (threshold < 0n || threshold > U64_MAX) throw ruleTableInvalid("ThresholdRange");
   return new Writer()
-    .bytes(new Uint8Array(19))
-    .u8(alternative, "alternative")
+    .bytes(new Uint8Array(17))
+    .bytes(bigIntBytes(BigInt(alternative), 2))
     .bytes(bigIntBytes(threshold, 8))
     .u8(guardTag, "guardTag")
-    .u8(mask, "mask")
+    .bytes(bigIntBytes(BigInt(mask), 2))
     .u8(mode, "mode")
     .u8(SUBJECT_BYTES[rule.subject], "subject")
     .finish() as Bytes32;
@@ -223,11 +232,11 @@ export function encodeRule(rule: Rule): Bytes32 {
 /** Mirrors Rust `Rule::decode` and `Rule::check`, `details.reason` names the Rust variant. */
 export function decodeRule(row: Bytes32): Rule {
   const reader = new Reader(row);
-  const reserved = reader.bytes(19, "reserved");
-  const alternative = reader.u8("alternative");
+  const reserved = reader.bytes(17, "reserved");
+  const alternative = Number(bytesToBigInt(reader.bytes(2, "alternative")));
   const threshold = bytesToBigInt(reader.bytes(8, "threshold"));
   const guardTag = reader.u8("guardTag");
-  const mask = reader.u8("mask");
+  const mask = Number(bytesToBigInt(reader.bytes(2, "mask")));
   const mode = reader.u8("mode");
   const subjectByte = reader.u8("subject");
   reader.done();
@@ -237,6 +246,7 @@ export function decodeRule(row: Bytes32): Rule {
   );
   if (subject === undefined) throw ruleTableInvalid("UnknownSubject");
   if (mode !== 1 && mode !== 2) throw ruleTableInvalid("UnknownMode");
+  if (((mask | alternative) & ~NAMED_LIST_BITS) !== 0) throw ruleTableInvalid("UnknownList");
   let source: RuleSource;
   if (mask === 0) {
     throw ruleTableInvalid("EmptyLists");
@@ -617,7 +627,7 @@ export function policyTableFields(table: RuleTable, sources: PolicySources): rea
   const values = [
     domainField(RingDomain.policyTable),
     ...slots.sources.flatMap((owner) => [fieldU8(owner.listId), owner.registry]),
-    fieldU8(slots.salted),
+    rightAlign(bigIntBytes(BigInt(slots.salted), 2)),
     fieldU8(slots.policyLen),
     ...slots.rules,
   ];
@@ -715,6 +725,7 @@ export function listWriter(listId: ListId): ListWriter {
     case ListId.reader:
     case ListId.approval:
     case ListId.privateAllow:
+    case ListId.privateFrozen:
       return "authority";
   }
 }
