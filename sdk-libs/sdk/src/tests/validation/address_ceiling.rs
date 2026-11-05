@@ -1,7 +1,8 @@
 use custom_ring_interface::{
-    cosign::ApprovalMask, sender_bundle_len, stream::slot_tag, AnonymousProofData, CredentialRead,
-    CustomRingProof, FrameExtensions, FramedSenderBundle, InputTrees, PlainGroth16Proof, Replies,
-    RingOutput, SlotBody, AUDIT_RECORD_LEN, MAX_FRAME_LEN, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
+    cosign::ApprovalMask, sender_bundle_len, stream::slot_tag, AnonymousProofData, AppMessage,
+    CredentialRead, CustomRingProof, FrameExtensions, FramedSenderBundle, InputTrees,
+    PlainGroth16Proof, Replies, RingOutput, SlotBody, AUDIT_RECORD_LEN, MAX_FRAME_LEN,
+    MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -305,6 +306,15 @@ const WIDEST_ZERO_KEY_MERGE: usize = 45;
 
 /// An anonymous transfer of `inputs` x `outputs`, slot 0 change, each other slot a body and a reply.
 fn anonymous_transfer(inputs: usize, outputs: usize, reply_len: Option<usize>) -> Instruction {
+    anonymous_transfer_with(inputs, outputs, reply_len, FrameExtensions::default())
+}
+
+fn anonymous_transfer_with(
+    inputs: usize,
+    outputs: usize,
+    reply_len: Option<usize>,
+    extensions: FrameExtensions<'_>,
+) -> Instruction {
     let proof = CustomRingProof::zeroed();
     let spp_proof = PlainGroth16Proof::zeroed();
     let field = [1; 32];
@@ -330,7 +340,7 @@ fn anonymous_transfer(inputs: usize, outputs: usize, reply_len: Option<usize>) -
         expiry_unix_ts: u32::MAX,
         tx_viewing_u: &field,
         salt: &salt,
-        extensions: FrameExtensions::default(),
+        extensions,
         interface_transfers: Vec::new(),
         has_data: false,
         entry: false,
@@ -380,6 +390,40 @@ fn anonymous_transfer(inputs: usize, outputs: usize, reply_len: Option<usize>) -
         ]
         .concat(),
     }
+}
+
+/// A message count past SPP's list names the rail's limit, the fit never reads it as an unparsed frame.
+#[test]
+fn a_frame_past_the_application_message_limit_is_refused_by_name() {
+    let view_tag = [8; 32];
+    let message = AppMessage {
+        view_tag: &view_tag,
+        data: &[],
+    };
+    let one = anonymous_transfer_with(
+        1,
+        2,
+        None,
+        FrameExtensions {
+            messages: vec![message],
+            ..FrameExtensions::default()
+        },
+    );
+    assert!(fit(&one).is_ok());
+    let count = one
+        .data
+        .windows(32)
+        .position(|window| window == view_tag)
+        .unwrap()
+        - 1;
+    assert_eq!(one.data[count], 1);
+    let mut past = one;
+    past.data[count] = u8::MAX;
+    assert!(matches!(
+        fit(&past),
+        Err(FitError::ApplicationMessages { limit })
+            if limit == custom_ring_interface::max_application_messages(RingRail::Anonymous)
+    ));
 }
 
 fn budget() -> ComputeBudgetConfig {

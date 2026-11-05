@@ -2,8 +2,8 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    tag, CustomRingError, InstructionTag, RingMode, RingPolicy, RingRail, RingTransactData,
-    MAX_CPI_DATA_LEN,
+    max_application_messages, tag, CustomRingError, InstructionTag, RingMode, RingPolicy, RingRail,
+    RingTransactData, MAX_CPI_DATA_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -96,6 +96,8 @@ pub enum FitError {
     FrameTooLarge { bytes: usize, limit: usize },
     #[error("the transfer frame parses under neither rail of its tag")]
     UnparsedFrame,
+    #[error("the frame carries more application messages than SPP takes beside its own, {limit} on its rail")]
+    ApplicationMessages { limit: usize },
     #[error("the frame reads {trees} credential trees, its key reads 1 to {capacity}")]
     CredentialCapacity { trees: usize, capacity: usize },
     #[error(transparent)]
@@ -322,18 +324,30 @@ fn spp_cpi_bytes(instruction: &Instruction) -> Result<Option<usize>, FitError> {
         _ => return Ok(None),
     };
     let ring = RingPolicy::zeroed();
-    let expansion = |mode| -> Result<usize, CustomRingError> {
-        let parsed = RingTransactData::parse(frame, RingRail::of(tag, mode)?)?;
+    let expansion = |rail| -> Result<usize, CustomRingError> {
+        let parsed = RingTransactData::parse(frame, rail)?;
         let data = parsed
             .data()
             .spp_instruction_data_under(&ring, TransactProof::zeroed())?;
         Ok(data.len())
     };
-    let bytes = [RingMode::Confidential, RingMode::Anonymous]
-        .into_iter()
-        .filter_map(|mode| expansion(mode).ok())
-        .max()
-        .ok_or(FitError::UnparsedFrame)?;
+    // The frame parses under one rail of its tag. A rail refusing its message count names the
+    // limit, any other refusal leaves the frame unparsed.
+    let mut bytes = None;
+    let mut refusal = FitError::UnparsedFrame;
+    for mode in [RingMode::Confidential, RingMode::Anonymous] {
+        let rail = RingRail::of(tag, mode)?;
+        match expansion(rail) {
+            Ok(len) => bytes = bytes.max(Some(len)),
+            Err(CustomRingError::TooManyApplicationMessages) => {
+                refusal = FitError::ApplicationMessages {
+                    limit: max_application_messages(rail),
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    let bytes = bytes.ok_or(refusal)?;
     if bytes > MAX_CPI_DATA_LEN {
         return Err(FitError::CpiBytes {
             bytes,
