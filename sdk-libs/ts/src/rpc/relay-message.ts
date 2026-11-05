@@ -785,7 +785,7 @@ function checkDepositSnapshot(
   if (
     split < 0 ||
     !sameAccounts(accounts.slice(split), expected.spp.accounts) ||
-    !readsOnly(envelope, accounts.slice(0, split))
+    !readsOnly(envelope, accounts.slice(0, split), accounts.slice(split))
   )
     throw mismatch("Accounts");
   return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
@@ -1324,15 +1324,27 @@ function open(envelope: Envelope, bytes: Uint8Array): RingInstruction {
   };
 }
 
-/** The ring account first, then read only accounts that never name the signer. */
-function readsOnly(envelope: Envelope, prefix: readonly AccountMeta[]): boolean {
+/**
+ * Rust `Envelope::reads_only`. The ring account first, then accounts that never name the signer and
+ * compile writable only where the forwarded list writes the same address.
+ */
+function readsOnly(
+  envelope: Envelope,
+  prefix: readonly AccountMeta[],
+  forwarded: readonly AccountMeta[] = [],
+): boolean {
   const [ring, ...rest] = prefix;
+  const forwardedWrite = (meta: AccountMeta): boolean =>
+    forwarded.some((spp) => spp.address === meta.address && isWritableRole(spp.role));
   return (
     ring !== undefined &&
     ring.address === envelope.policy &&
     !isSignerRole(ring.role) &&
     !isWritableRole(ring.role) &&
-    rest.every((meta) => !isWritableRole(meta.role) && meta.address !== envelope.signer)
+    rest.every(
+      (meta) =>
+        (!isWritableRole(meta.role) || forwardedWrite(meta)) && meta.address !== envelope.signer,
+    )
   );
 }
 
