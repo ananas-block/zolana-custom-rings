@@ -1171,7 +1171,7 @@ fn relay_proof_inputs_refuse_to_encode_what_the_service_cannot_prove() {
                 spr_transaction::instructions::transact::SettlementTransfer::Sol {
                     is_deposit: true,
                     amount: 100,
-                    user_sol_account: Address::new_from_array([14; 32]),
+                    user_sol_account: Address::new_from_array([15; 32]),
                 },
             ];
         }),

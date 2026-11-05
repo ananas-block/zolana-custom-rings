@@ -918,6 +918,6 @@ mod tests {
         assert_eq!(wire.nullifier_secret, [0; BLINDING_LEN]);
         assert_eq!(wire.tx_viewing_secret, [0; 32]);
         assert_eq!(wire.blinding_seed, [0; 32]);
-        assert_eq!(wire.approval_blinder, Some([0; 32]));
+        assert_eq!(wire.approval_blinder, None);
     }
 }
