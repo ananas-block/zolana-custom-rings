@@ -417,18 +417,18 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 3x8 | anonymous public owners | full+data | yes | 4489 | 21 | 3 | - | 393 B | 3539 | 3720 | 1017 | 22 | buffered |  |
 | 3x8 | anonymous public owners | full+reply | yes | 4376 | 21 | 3 | - | 280 B | 3426 | 3621 | 1017 | 22 | buffered |  |
 | 3x8 | anonymous public owners | full+2tree | yes | 3733 | 22 | 3 | - |  | 2750 | 2946 | 1050 | 23 | inline |  |
-| 3x8 | confidential entry | min | none | 3380 | 11 | 1 | - |  | 2898 | 3129 | 549 | 12 | inline |  |
-| 3x8 | confidential entry | full | none | 3935 | 21 | 3 | 2 |  | 2985 | 3174 | 1017 | 22 | inline |  |
-| 3x8 | confidential entry | full+spl | none | 4303 | 28 | 3 | - | 207 B | 3117 | 3178 | 1253 | 29 | buffered |  |
-| 3x8 | confidential entry | full+data | none | 4729 | 21 | 3 | - | 633 B | 3779 | 3952 | 1017 | 22 | buffered |  |
-| 3x8 | confidential entry | full+reply | none | 3935 | 21 | 3 | - |  | 2985 | 3174 | 1017 | 22 | inline |  |
-| 3x8 | confidential entry | full+2tree | none | 3973 | 22 | 3 | - |  | 2990 | 3178 | 1050 | 23 | inline |  |
-| 3x8 | anonymous entry | min | none | 3771 | 11 | 1 | - |  | 3290 | 3520 | 548 | 12 | inline |  |
-| 3x8 | anonymous entry | full | none | 4206 | 17 | 2 | none | 110 B | 3449 | 3647 | 824 | 18 | buffered |  |
-| 3x8 | anonymous entry | full+spl | none | 4574 | 24 | 2 | - | 478 B | 3581 | 3651 | 1060 | 25 | buffered |  |
-| 3x8 | anonymous entry | full+data | none | 5000 | 17 | 2 | - | 904 B | 4243 | 4425 | 824 | 18 | buffered |  |
-| 3x8 | anonymous entry | full+reply | none | 4887 | 17 | 2 | - | 791 B | 4130 | 4326 | 824 | 18 | buffered |  |
-| 3x8 | anonymous entry | full+2tree | none | 4244 | 18 | 2 | - | 148 B | 3454 | 3651 | 857 | 19 | buffered |  |
+| 3x8 | confidential entry | min | yes | 3380 | 11 | 1 | - |  | 2898 | 3129 | 549 | 12 | inline |  |
+| 3x8 | confidential entry | full | yes | 3935 | 21 | 3 | 2 |  | 2985 | 3174 | 1017 | 22 | inline |  |
+| 3x8 | confidential entry | full+spl | yes | 4303 | 28 | 3 | - | 207 B | 3117 | 3178 | 1253 | 29 | buffered |  |
+| 3x8 | confidential entry | full+data | yes | 4729 | 21 | 3 | - | 633 B | 3779 | 3952 | 1017 | 22 | buffered |  |
+| 3x8 | confidential entry | full+reply | yes | 3935 | 21 | 3 | - |  | 2985 | 3174 | 1017 | 22 | inline |  |
+| 3x8 | confidential entry | full+2tree | yes | 3973 | 22 | 3 | - |  | 2990 | 3178 | 1050 | 23 | inline |  |
+| 3x8 | anonymous entry | min | yes | 3771 | 11 | 1 | - |  | 3290 | 3520 | 548 | 12 | inline |  |
+| 3x8 | anonymous entry | full | yes | 4206 | 17 | 2 | none | 110 B | 3449 | 3647 | 824 | 18 | buffered |  |
+| 3x8 | anonymous entry | full+spl | yes | 4574 | 24 | 2 | - | 478 B | 3581 | 3651 | 1060 | 25 | buffered |  |
+| 3x8 | anonymous entry | full+data | yes | 5000 | 17 | 2 | - | 904 B | 4243 | 4425 | 824 | 18 | buffered |  |
+| 3x8 | anonymous entry | full+reply | yes | 4887 | 17 | 2 | - | 791 B | 4130 | 4326 | 824 | 18 | buffered |  |
+| 3x8 | anonymous entry | full+2tree | yes | 4244 | 18 | 2 | - | 148 B | 3454 | 3651 | 857 | 19 | buffered |  |
 | 3x8 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 3x8 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 4x2 | confidential signer | min | yes | 1535 | 12 | 1 | - |  | 1020 | 1036 | 582 | 13 | inline |  |
@@ -541,18 +541,18 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 4x8 | anonymous public owners | full+data | yes | 4554 | 22 | 3 | - | 458 B | 3571 | 3753 | 1050 | 23 | buffered |  |
 | 4x8 | anonymous public owners | full+reply | yes | 4441 | 22 | 3 | - | 345 B | 3458 | 3654 | 1050 | 23 | buffered |  |
 | 4x8 | anonymous public owners | full+2tree | yes | 3798 | 23 | 3 | - |  | 2782 | 2979 | 1083 | 24 | inline |  |
-| 4x8 | confidential entry | min | none | 3645 | 12 | 1 | - |  | 3130 | 3362 | 582 | 13 | inline |  |
-| 4x8 | confidential entry | full | none | 4200 | 22 | 3 | none | 104 B | 3217 | 3407 | 1050 | 23 | buffered |  |
-| 4x8 | confidential entry | full+spl | none | 4568 | 29 | 3 | - | 472 B | 3349 | 3411 | 1286 | 30 | buffered |  |
-| 4x8 | confidential entry | full+data | none | 4994 | 22 | 3 | - | 898 B | 4011 | 4185 | 1050 | 23 | buffered |  |
-| 4x8 | confidential entry | full+reply | none | 4200 | 22 | 3 | - | 104 B | 3217 | 3407 | 1050 | 23 | buffered |  |
-| 4x8 | confidential entry | full+2tree | none | 4238 | 23 | 3 | - | 142 B | 3222 | 3411 | 1083 | 24 | buffered |  |
-| 4x8 | anonymous entry | min | none | 4036 | 12 | 1 | - |  | 3522 | 3753 | 581 | 13 | inline |  |
-| 4x8 | anonymous entry | full | none | 4471 | 18 | 2 | none | 375 B | 3681 | 3880 | 857 | 19 | buffered |  |
-| 4x8 | anonymous entry | full+spl | none | 4839 | 25 | 2 | - | 743 B | 3813 | 3884 | 1093 | 26 | buffered |  |
-| 4x8 | anonymous entry | full+data | none | 5265 | 18 | 2 | - | 1169 B | 4475 | 4658 | 857 | 19 | buffered |  |
-| 4x8 | anonymous entry | full+reply | none | 5152 | 18 | 2 | - | 1056 B | 4362 | 4559 | 857 | 19 | buffered |  |
-| 4x8 | anonymous entry | full+2tree | none | 4509 | 19 | 2 | - | 413 B | 3686 | 3884 | 890 | 20 | buffered |  |
+| 4x8 | confidential entry | min | yes | 3645 | 12 | 1 | - |  | 3130 | 3362 | 582 | 13 | inline |  |
+| 4x8 | confidential entry | full | yes | 4200 | 22 | 3 | none | 104 B | 3217 | 3407 | 1050 | 23 | buffered |  |
+| 4x8 | confidential entry | full+spl | yes | 4568 | 29 | 3 | - | 472 B | 3349 | 3411 | 1286 | 30 | buffered |  |
+| 4x8 | confidential entry | full+data | yes | 4994 | 22 | 3 | - | 898 B | 4011 | 4185 | 1050 | 23 | buffered |  |
+| 4x8 | confidential entry | full+reply | yes | 4200 | 22 | 3 | - | 104 B | 3217 | 3407 | 1050 | 23 | buffered |  |
+| 4x8 | confidential entry | full+2tree | yes | 4238 | 23 | 3 | - | 142 B | 3222 | 3411 | 1083 | 24 | buffered |  |
+| 4x8 | anonymous entry | min | yes | 4036 | 12 | 1 | - |  | 3522 | 3753 | 581 | 13 | inline |  |
+| 4x8 | anonymous entry | full | yes | 4471 | 18 | 2 | none | 375 B | 3681 | 3880 | 857 | 19 | buffered |  |
+| 4x8 | anonymous entry | full+spl | yes | 4839 | 25 | 2 | - | 743 B | 3813 | 3884 | 1093 | 26 | buffered |  |
+| 4x8 | anonymous entry | full+data | yes | 5265 | 18 | 2 | - | 1169 B | 4475 | 4658 | 857 | 19 | buffered |  |
+| 4x8 | anonymous entry | full+reply | yes | 5152 | 18 | 2 | - | 1056 B | 4362 | 4559 | 857 | 19 | buffered |  |
+| 4x8 | anonymous entry | full+2tree | yes | 4509 | 19 | 2 | - | 413 B | 3686 | 3884 | 890 | 20 | buffered |  |
 | 4x8 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 4x8 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 5x2 | confidential signer | min | yes | 1600 | 13 | 1 | - |  | 1052 | 1069 | 615 | 14 | inline |  |
@@ -973,30 +973,30 @@ fits: the path that clears the transaction and CPI ceilings, the catalog key apa
 | 8x8 | anonymous entry | full+2tree | none | 5569 | 23 | 2 | - | 1473 B | 4614 | 4816 | 1022 | 24 | buffered |  |
 | 8x8 | delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
 | 8x8 | anonymous delegate | - | - | - | - | - | - | - | - | - | - | - | no | rail |
-| 8x16 | confidential signer | min | none | 4835 | 16 | 1 | - | 739 B | 4188 | 4710 | 714 | 17 | buffered |  |
-| 8x16 | confidential signer | full | none | 5390 | 26 | 3 | none | 1294 B | 4275 | 4755 | 1182 | 27 | buffered |  |
-| 8x16 | confidential signer | full+spl | none | 5758 | 33 | 3 | - | 1662 B | 4407 | 4759 | 1418 | 34 | buffered |  |
-| 8x16 | confidential signer | full+data | none | 6976 | 26 | 3 | - | 2880 B | 5861 | 6309 | 1182 | 27 | buffered |  |
-| 8x16 | confidential signer | full+reply | none | 5390 | 26 | 3 | - | 1294 B | 4275 | 4755 | 1182 | 27 | buffered |  |
-| 8x16 | confidential signer | full+2tree | none | 5428 | 27 | 3 | - | 1332 B | 4280 | 4759 | 1215 | 28 | buffered |  |
-| 8x16 | confidential in-proof | min | none | 4930 | 16 | 1 | - | 834 B | 4284 | 4807 | 713 | 17 | buffered |  |
-| 8x16 | confidential in-proof | full | none | 5389 | 25 | 2 | none | 1293 B | 4371 | 4852 | 1085 | 26 | buffered |  |
-| 8x16 | confidential in-proof | full+spl | none | 5757 | 32 | 2 | - | 1661 B | 4503 | 4856 | 1321 | 33 | buffered |  |
-| 8x16 | confidential in-proof | full+data | none | 6975 | 25 | 2 | - | 2879 B | 5957 | 6406 | 1085 | 26 | buffered |  |
-| 8x16 | confidential in-proof | full+reply | none | 5389 | 25 | 2 | - | 1293 B | 4371 | 4852 | 1085 | 26 | buffered |  |
-| 8x16 | confidential in-proof | full+2tree | none | 5427 | 26 | 2 | - | 1331 B | 4376 | 4856 | 1118 | 27 | buffered |  |
-| 8x16 | anonymous hidden | min | none | 5450 | 16 | 1 | - | 1354 B | 4804 | 5357 | 713 | 17 | buffered |  |
-| 8x16 | anonymous hidden | full | none | 5885 | 22 | 2 | none | 1789 B | 4963 | 5484 | 989 | 23 | buffered |  |
-| 8x16 | anonymous hidden | full+spl | none | 6253 | 29 | 2 | - | 2157 B | 5095 | 5488 | 1225 | 30 | buffered |  |
-| 8x16 | anonymous hidden | full+data | none | 7471 | 22 | 2 | - | 3375 B | 6549 | 7038 | 989 | 23 | buffered |  |
-| 8x16 | anonymous hidden | full+reply | none | 7342 | 22 | 2 | - | 3246 B | 6420 | 6939 | 989 | 23 | buffered |  |
-| 8x16 | anonymous hidden | full+2tree | none | 5923 | 23 | 2 | - | 1827 B | 4968 | 5488 | 1022 | 24 | buffered |  |
-| 8x16 | anonymous public owners | min | none | 5387 | 16 | 1 | - | 1291 B | 4740 | 5260 | 714 | 17 | buffered |  |
-| 8x16 | anonymous public owners | full | none | 6014 | 26 | 3 | none | 1918 B | 4899 | 5387 | 1182 | 27 | buffered |  |
-| 8x16 | anonymous public owners | full+spl | none | 6382 | 33 | 3 | - | 2286 B | 5031 | 5391 | 1418 | 34 | buffered |  |
-| 8x16 | anonymous public owners | full+data | none | 7600 | 26 | 3 | - | 3504 B | 6485 | 6941 | 1182 | 27 | buffered |  |
-| 8x16 | anonymous public owners | full+reply | none | 7471 | 26 | 3 | - | 3375 B | 6356 | 6842 | 1182 | 27 | buffered |  |
-| 8x16 | anonymous public owners | full+2tree | none | 6052 | 27 | 3 | - | 1956 B | 4904 | 5391 | 1215 | 28 | buffered |  |
+| 8x16 | confidential signer | min | yes | 4835 | 16 | 1 | - | 739 B | 4188 | 4710 | 714 | 17 | buffered |  |
+| 8x16 | confidential signer | full | yes | 5390 | 26 | 3 | none | 1294 B | 4275 | 4755 | 1182 | 27 | buffered |  |
+| 8x16 | confidential signer | full+spl | yes | 5758 | 33 | 3 | - | 1662 B | 4407 | 4759 | 1418 | 34 | buffered |  |
+| 8x16 | confidential signer | full+data | yes | 6976 | 26 | 3 | - | 2880 B | 5861 | 6309 | 1182 | 27 | buffered |  |
+| 8x16 | confidential signer | full+reply | yes | 5390 | 26 | 3 | - | 1294 B | 4275 | 4755 | 1182 | 27 | buffered |  |
+| 8x16 | confidential signer | full+2tree | yes | 5428 | 27 | 3 | - | 1332 B | 4280 | 4759 | 1215 | 28 | buffered |  |
+| 8x16 | confidential in-proof | min | yes | 4930 | 16 | 1 | - | 834 B | 4284 | 4807 | 713 | 17 | buffered |  |
+| 8x16 | confidential in-proof | full | yes | 5389 | 25 | 2 | none | 1293 B | 4371 | 4852 | 1085 | 26 | buffered |  |
+| 8x16 | confidential in-proof | full+spl | yes | 5757 | 32 | 2 | - | 1661 B | 4503 | 4856 | 1321 | 33 | buffered |  |
+| 8x16 | confidential in-proof | full+data | yes | 6975 | 25 | 2 | - | 2879 B | 5957 | 6406 | 1085 | 26 | buffered |  |
+| 8x16 | confidential in-proof | full+reply | yes | 5389 | 25 | 2 | - | 1293 B | 4371 | 4852 | 1085 | 26 | buffered |  |
+| 8x16 | confidential in-proof | full+2tree | yes | 5427 | 26 | 2 | - | 1331 B | 4376 | 4856 | 1118 | 27 | buffered |  |
+| 8x16 | anonymous hidden | min | yes | 5450 | 16 | 1 | - | 1354 B | 4804 | 5357 | 713 | 17 | buffered |  |
+| 8x16 | anonymous hidden | full | yes | 5885 | 22 | 2 | none | 1789 B | 4963 | 5484 | 989 | 23 | buffered |  |
+| 8x16 | anonymous hidden | full+spl | yes | 6253 | 29 | 2 | - | 2157 B | 5095 | 5488 | 1225 | 30 | buffered |  |
+| 8x16 | anonymous hidden | full+data | yes | 7471 | 22 | 2 | - | 3375 B | 6549 | 7038 | 989 | 23 | buffered |  |
+| 8x16 | anonymous hidden | full+reply | yes | 7342 | 22 | 2 | - | 3246 B | 6420 | 6939 | 989 | 23 | buffered |  |
+| 8x16 | anonymous hidden | full+2tree | yes | 5923 | 23 | 2 | - | 1827 B | 4968 | 5488 | 1022 | 24 | buffered |  |
+| 8x16 | anonymous public owners | min | yes | 5387 | 16 | 1 | - | 1291 B | 4740 | 5260 | 714 | 17 | buffered |  |
+| 8x16 | anonymous public owners | full | yes | 6014 | 26 | 3 | none | 1918 B | 4899 | 5387 | 1182 | 27 | buffered |  |
+| 8x16 | anonymous public owners | full+spl | yes | 6382 | 33 | 3 | - | 2286 B | 5031 | 5391 | 1418 | 34 | buffered |  |
+| 8x16 | anonymous public owners | full+data | yes | 7600 | 26 | 3 | - | 3504 B | 6485 | 6941 | 1182 | 27 | buffered |  |
+| 8x16 | anonymous public owners | full+reply | yes | 7471 | 26 | 3 | - | 3375 B | 6356 | 6842 | 1182 | 27 | buffered |  |
+| 8x16 | anonymous public owners | full+2tree | yes | 6052 | 27 | 3 | - | 1956 B | 4904 | 5391 | 1215 | 28 | buffered |  |
 | 8x16 | confidential entry | min | none | 6443 | 16 | 1 | - | 2347 B | 5796 | 6318 | 714 | 17 | buffered |  |
 | 8x16 | confidential entry | full | none | 6998 | 26 | 3 | none | 2902 B | 5883 | 6363 | 1182 | 27 | buffered |  |
 | 8x16 | confidential entry | full+spl | none | 7366 | 33 | 3 | - | 3270 B | 6015 | 6367 | 1418 | 34 | buffered |  |
