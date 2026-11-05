@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use super::*;
 use crate::compact_assets::{
-    CompactAssetError, CompactAssetRead, CompactAssetResolution, CompactAssetResolver,
+    transient_read, CompactAssetError, CompactAssetRead, CompactAssetResolution,
+    CompactAssetResolver,
 };
 use crate::history::RecoveryWindow;
 use crate::tags::TAGS_PER_REQUEST;
@@ -669,7 +670,9 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
                     .await
                     {
                         Ok(opened) => *resolver = Some(opened),
-                        Err(CompactAssetError::Source(ref error)) if source.should_retry(error) => {
+                        Err(CompactAssetError::Source(ref error))
+                            if transient_read(source, error) =>
+                        {
                             return Ok(PageProgress::Paused);
                         }
                         Err(error) => return Err(error.into()),
@@ -684,7 +687,7 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
                     Ok(CompactAssetResolution::Resolved(asset)) => asset,
                     Ok(CompactAssetResolution::Foreign) => return Ok(PageProgress::Done),
                     Ok(CompactAssetResolution::Paused) => return Ok(PageProgress::Paused),
-                    Err(CompactAssetError::Source(ref error)) if source.should_retry(error) => {
+                    Err(CompactAssetError::Source(ref error)) if transient_read(source, error) => {
                         return Ok(PageProgress::Paused);
                     }
                     Err(error) => return Err(error.into()),
