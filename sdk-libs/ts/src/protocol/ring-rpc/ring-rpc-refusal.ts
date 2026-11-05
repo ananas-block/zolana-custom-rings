@@ -24,7 +24,6 @@ export const RingRpcRefusal = Object.freeze({
   unknownRing: -32145,
   registryNotServed: -32146,
   unauthorizedWriter: -32147,
-  escrowProof: -32148,
   unknownUpdate: -32149,
   coSignDisabled: -32160,
   overLimit: -32161,
@@ -34,8 +33,6 @@ export const RingRpcRefusal = Object.freeze({
   mergeSettingsUnavailable: -32170,
   staleMergeSettings: -32171,
   wrongCluster: -32190,
-  escrowOnAnonymousRing: -32191,
-  escrowRegistered: -32192,
   // -32193, -32243 and -32275 never reach clients as codes, only as refused status text.
   tokenAccountSetup: -32200,
   depositorIsFeePayer: -32201,
@@ -65,7 +62,6 @@ export const RingRpcRefusal = Object.freeze({
   invalidLimits: -32276,
   limitsWithoutRecord: -32277,
   addressNotAuthorized: -32278,
-  addressEscrowMismatch: -32279,
   unrecordedAsset: -32296,
 } as const);
 
