@@ -662,6 +662,50 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
     ));
 }
 
+/// Smaller default notes meeting the payments exactly fund an entry, no change enters the ring.
+#[tokio::test]
+async fn an_anonymous_entry_prefers_an_exact_funding_over_change() {
+    use crate::tests::support::{keypair, payer};
+    let sender = keypair(1);
+    let paid = ring_address(&keypair(2));
+    let client = enrolled(&[&sender, &keypair(2)]).client();
+    let utxos = vec![
+        default_ring_utxo(&sender, 40, 10),
+        default_ring_utxo(&sender, 15, 11),
+        default_ring_utxo(&sender, 10, 12),
+    ];
+    let owner = MoveSender {
+        sender: &sender,
+        payer: payer(),
+    };
+    let spent = |amount| {
+        let anonymous_move =
+            owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), amount)]);
+        let client = &client;
+        async move {
+            let assembled = anonymous_move
+                .select(client)
+                .await
+                .unwrap()
+                .assemble(client)
+                .await
+                .unwrap();
+            let mut amounts: Vec<u64> = assembled
+                .frame
+                .proof_inputs
+                .input_utxos
+                .iter()
+                .filter(|input| !input.is_dummy())
+                .map(|input| input.utxo.amount)
+                .collect();
+            amounts.sort_unstable();
+            amounts
+        }
+    };
+    assert_eq!(spent(25).await, vec![10, 15]);
+    assert_eq!(spent(30).await, vec![40]);
+}
+
 /// Only a mix of ring and default-ring UTXOs funds the move, the prover refuses one.
 #[tokio::test]
 async fn an_anonymous_move_never_mixes_ring_and_default_ring_utxos() {

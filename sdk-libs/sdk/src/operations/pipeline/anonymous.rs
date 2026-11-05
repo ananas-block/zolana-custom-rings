@@ -318,7 +318,7 @@ impl<'a> AnonymousMove<'a> {
                 max_inputs,
                 ..funding
             }
-            .candidates(|utxo| {
+            .exact_first(|utxo| {
                 // The prover refuses a spend that mixes ring and default-ring UTXOs.
                 utxo.utxo.owner == owner && utxo.is_default_ring_spendable()
             })

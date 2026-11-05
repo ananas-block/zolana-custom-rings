@@ -9,7 +9,11 @@ use spr_transaction::{TransactionError, WalletUtxo};
 
 use super::{Rail, RingTransfer};
 use crate::client::{RingClient, RingIndexerBackend};
-use crate::{projection::retry_projection_lag, select::select_spend_where, RingError};
+use crate::{
+    projection::retry_projection_lag,
+    select::{select_exact_where, select_spend_where},
+    RingError,
+};
 
 pub(super) struct Funding<'u> {
     pub utxos: &'u [WalletUtxo],
@@ -67,6 +71,35 @@ impl Funding<'_> {
             .collect();
         ranked.sort_unstable_by_key(|(order, _)| *order);
         ranked.into_iter().map(|(_, candidate)| candidate).collect()
+    }
+
+    /// Exact funding per tree ahead of [`Self::candidates`], the change of a default-ring spend enters the ring.
+    pub fn exact_first(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Vec<Candidate> {
+        let trees: BTreeSet<u16> = self.utxos.iter().map(|utxo| utxo.tree_id).collect();
+        let mut ranked: Vec<Candidate> = trees
+            .into_iter()
+            .filter_map(|tree| {
+                select_exact_where(
+                    self.utxos,
+                    self.asset,
+                    self.amount,
+                    self.max_inputs,
+                    |utxo| utxo.tree_id == tree && keep(utxo),
+                )
+            })
+            .map(|utxos| Candidate {
+                utxos,
+                change: false,
+            })
+            .collect();
+        ranked.sort_by_key(|candidate| candidate.utxos.len());
+        let covers: Vec<Candidate> = self
+            .candidates(keep)
+            .into_iter()
+            .filter(|cover| !ranked.contains(cover))
+            .collect();
+        ranked.extend(covers);
+        ranked
     }
 
     /// Only a size or key refusal moves on to the next attempt.

@@ -60,6 +60,32 @@ pub fn select_spend_where<'a>(
     select(admitted, asset, amount, max_inputs)
 }
 
+/// One largest first pass over the keyed UTXOs no larger than the remainder, `None` unless they meet `amount` exactly.
+pub(crate) fn select_exact_where<'a>(
+    utxos: impl IntoIterator<Item = &'a WalletUtxo>,
+    asset: Address,
+    amount: u64,
+    max_inputs: usize,
+    keep: impl Fn(&WalletUtxo) -> bool,
+) -> Option<Vec<WalletUtxo>> {
+    let mut admitted = candidates(utxos, asset, |utxo| {
+        SpendableKeys::Keyed.admits(utxo) && keep(utxo)
+    });
+    admitted.sort_by_key(|utxo| Reverse(utxo.utxo.amount));
+    let mut remainder = amount;
+    let mut selected = Vec::new();
+    for utxo in admitted {
+        if remainder == 0 || selected.len() == max_inputs {
+            break;
+        }
+        if let Some(rest) = remainder.checked_sub(utxo.utxo.amount) {
+            remainder = rest;
+            selected.push(utxo.clone());
+        }
+    }
+    (amount > 0 && remainder == 0).then_some(selected)
+}
+
 /// The smallest keyed UTXOs `keep` admits on the tree holding most of them, at most `max_inputs` up to [`MAX_MERGE_INPUTS`].
 pub fn select_merge_where<'a>(
     utxos: impl IntoIterator<Item = &'a WalletUtxo>,
