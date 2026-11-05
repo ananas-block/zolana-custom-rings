@@ -3,8 +3,9 @@
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, InitializeIxData, InstructionTag, PolicyBindingIxData,
-    PolicySourceIxData, PolicyTableIxData, RingKind, RingRole, RingRoles, SetCoSignerRecordIxData,
-    SetPausedIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
+    PolicySourceIxData, PolicyTableIxData, RingKind, RingPolicy, RingRole, RingRoles,
+    SetCoSignerRecordIxData, SetPausedIxData, SourceSpec, UpdateAuthorityIxData,
+    UpdatePolicyIxData,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -84,11 +85,14 @@ pub struct SetDelegate {
     pub delegate: Address,
 }
 
+/// The program loads every registry a salted list of the proposed account reads, matched by address.
 #[must_use]
 #[derive(Clone, Copy, Debug)]
 pub struct UpdatePolicy<'a> {
     pub ring: CustomRing,
     pub authority: Address,
+    /// The ring account as read, its records and curator are the registries the write does not name.
+    pub current: &'a RingPolicy,
     pub update: PolicyUpdate<'a>,
 }
 
@@ -241,6 +245,17 @@ impl UpdatePolicy<'_> {
                 UpdatePolicyIxData::Records
             }
         };
+        // A salted list of the proposed account reads a named registry or the records or curator the
+        // account holds now. The held ones follow the named ones, the program ignores one no salted list reads.
+        let held = Some(self.current.records)
+            .filter(|records| *records != Address::default())
+            .into_iter()
+            .chain(self.current.curator());
+        for registry in held {
+            if !accounts.iter().any(|meta| meta.pubkey == registry) {
+                accounts.push(AccountMeta::new_readonly(registry, false));
+            }
+        }
         let data = tagged(tag::UPDATE_POLICY, &update)?;
         SizedInstruction {
             payer: &self.authority,

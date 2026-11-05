@@ -3,8 +3,8 @@
 use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
 use custom_ring_interface::{
     CredentialRead, CustomRingMergeIxData, CustomRingMergeIxDataRef, InitializeIxData,
-    PolicyBindingIxData, PolicySourceIxData, RingRole, RingRoles, SealedMergeRecord,
-    SetCoSignerRecordIxData, SetPausedIxData, SourceSpec, UpdateAuthorityIxData,
+    PolicyBindingIxData, PolicySourceIxData, RingPolicy, RingRole, RingRoles, SealedMergeRecord,
+    SetCoSignerRecordIxData, SetPausedIxData, SourceSlot, SourceSpec, UpdateAuthorityIxData,
     UpdatePolicyIxData, OPENING_RECORD_LEN, RING_MERGE_OWNER_INDEX,
 };
 use custom_ring_sdk::{
@@ -69,12 +69,29 @@ fn replace_rules(
     UpdatePolicy {
         ring: ring(),
         authority: authority(),
+        current: &unbound(),
         update: PolicyUpdate::Rules(PolicyTable {
             rules,
             shared_sources,
         }),
     }
     .instruction()
+}
+
+/// A ring account that holds no records and no curator.
+fn unbound() -> RingPolicy {
+    bytemuck::Zeroable::zeroed()
+}
+
+/// A ring account whose records and Block curator a salted list may read.
+fn bound(records: Address, curator: Address) -> RingPolicy {
+    let mut held = unbound();
+    held.records = records;
+    held.sources[ListId::Block.slot()] = SourceSlot {
+        list_id: ListId::Block as u8,
+        registry: curator,
+    };
+    held
 }
 
 fn policy_write() -> Vec<AccountMeta> {
@@ -331,6 +348,7 @@ fn a_policy_source_names_a_curator_registry_only_when_shared() {
         let instruction = UpdatePolicy {
             ring: ring(),
             authority: authority(),
+            current: &unbound(),
             update: PolicyUpdate::Source {
                 list_id: ListId::Allow,
                 source: owner,
@@ -357,6 +375,7 @@ fn a_records_rebind_names_the_new_registry() {
     let instruction = UpdatePolicy {
         ring: ring(),
         authority: authority(),
+        current: &unbound(),
         update: PolicyUpdate::Records(records),
     }
     .instruction()
@@ -374,6 +393,49 @@ fn a_records_rebind_names_the_new_registry() {
     assert_eq!(
         parse::<UpdatePolicyIxData>(body),
         UpdatePolicyIxData::Records
+    );
+}
+
+/// The held records and curator follow the named registries once each, a salted list may read either.
+#[test]
+fn a_policy_write_appends_the_held_records_and_curator_after_the_named_registries() {
+    let (old_records, new_records) = (
+        Address::new_from_array([40; 32]),
+        Address::new_from_array([41; 32]),
+    );
+    let curator = Address::new_from_array([42; 32]);
+    let held = bound(old_records, curator);
+    let write = |update| {
+        UpdatePolicy {
+            ring: ring(),
+            authority: authority(),
+            current: &held,
+            update,
+        }
+        .instruction()
+        .unwrap()
+        .accounts[policy_write().len()..]
+            .iter()
+            .map(|meta| meta.pubkey)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        write(PolicyUpdate::Records(new_records)),
+        [new_records, old_records, curator]
+    );
+    assert_eq!(
+        write(PolicyUpdate::Source {
+            list_id: ListId::Block,
+            source: SourceOwner::Curator(curator),
+        }),
+        [curator, old_records]
+    );
+    assert_eq!(
+        write(PolicyUpdate::Source {
+            list_id: ListId::Block,
+            source: SourceOwner::Own,
+        }),
+        [old_records, curator]
     );
 }
 
