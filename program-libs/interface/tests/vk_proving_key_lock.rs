@@ -66,21 +66,24 @@ fn selectable_circuits() -> BTreeSet<String> {
                         for owners in 0..=n_in {
                             for wide in [false, true] {
                                 circuits.extend(
-                                    [DisclosureFormat::Standard, DisclosureFormat::SingleAssetPayout]
-                                        .into_iter()
-                                        .filter_map(|format| {
-                                            RingCircuit::transfer(TransferSpend {
-                                                format,
-                                                rail,
-                                                inputs,
-                                                outputs: n_out,
-                                                spends_default_ring,
-                                                legs,
-                                                owners,
-                                                pools: RecordPools::default(),
-                                                wide,
-                                            })
-                                        }),
+                                    [
+                                        DisclosureFormat::Standard,
+                                        DisclosureFormat::SingleAssetPayout,
+                                    ]
+                                    .into_iter()
+                                    .filter_map(|format| {
+                                        RingCircuit::transfer(TransferSpend {
+                                            format,
+                                            rail,
+                                            inputs,
+                                            outputs: n_out,
+                                            spends_default_ring,
+                                            legs,
+                                            owners,
+                                            pools: RecordPools::default(),
+                                            wide,
+                                        })
+                                    }),
                                 );
                             }
                         }

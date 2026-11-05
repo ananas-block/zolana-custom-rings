@@ -6,10 +6,10 @@ use custom_ring_interface::{
     funder_account_position, input_flag,
     key_catalog::{FrameKey, RingCircuit},
     shape_flag, spl_withdrawal_count, tag, transact_flag, AnonymousProofData, BundleLayout,
-    CoSignScope, CustomRingError, CustomRingProof, DisclosureFormat, FramedSenderBundle, InputTrees,
-    PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData,
-    RootRead, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
-    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    CoSignScope, CustomRingError, CustomRingProof, DisclosureFormat, FramedSenderBundle,
+    InputTrees, PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingRail, RingRole,
+    RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    RECIPIENT_BODY_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
