@@ -20,8 +20,8 @@ Ring RPC writes a ring's policy records when it holds the storage authority key.
 - One storage update carries at most `APPLY_BATCH` writes and never splits a record update.
 - An authority batch passes queued wallet updates unless one of them writes the same record.
 - A wallet batch goes out when it is full, when it has aged a window, or when an authority batch waits behind it.
-- The program decides the grace from the writes, see [root history](records-and-roots.md#root-history). A wallet's writes stay graced, so no wallet can void every member's proof in flight.
-- A graced batch waits while the root history is full.
+- The apply proof decides the grace from the writes, see [root history](records-and-roots.md#root-history). A wallet's writes stay graced, so no wallet can void every member's proof in flight.
+- A graced batch over a full history evicts the oldest kept root and never waits.
 - When the writer refuses an authority update whose signer lost the policy role, an update that approval joined turns pending list approval again.
 
 ## List approval
