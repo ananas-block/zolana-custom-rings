@@ -256,21 +256,31 @@ impl<S: TransactionSource> ManagedMerge<S> {
         pass: &RingPass<S>,
         OwnerSettings { owner, settings }: OwnerSettings,
     ) -> Result<Vec<RelayId>, RingRpcError> {
-        let targets: Vec<(Mint, MergeTarget)> = settings
-            .iter()
-            .filter_map(|settings| Some((settings.mint.0, MergeTarget::of(settings)?)))
-            .map(|(mint, target)| Ok((pass.assets.registry().mint(&mint)?, target)))
-            .collect::<Result<_, RingRpcError>>()?;
+        let ring = pass.service.ring();
+        // 1. A mint the registry does not know skips its own setting, the owner's other mints merge.
+        let mut targets: Vec<(Mint, MergeTarget)> = Vec::new();
+        for settings in &settings {
+            let Some(target) = MergeTarget::of(settings) else {
+                continue;
+            };
+            match pass.assets.registry().mint(&settings.mint.0) {
+                Ok(mint) => targets.push((mint, target)),
+                Err(error) => log::warn!(
+                    "managed merge of {owner} in {} on ring {ring} failed because {}",
+                    settings.mint.0,
+                    redacted(&RingRpcError::from(error))
+                ),
+            }
+        }
         if targets.is_empty() {
             return Ok(Vec::new());
         }
-        let ring = pass.service.ring();
         let owner_key = owner.to_bytes();
-        // 1. The secret opens to the nullifier key the registry record binds.
+        // 2. The secret opens to the nullifier key the registry record binds.
         let Some(nullifier_key) = pass.service.held_nullifier_key(&owner_key).await? else {
             return Ok(Vec::new());
         };
-        // 2. Each candidate is unspent and held by no merge in the store.
+        // 3. Each candidate is unspent and held by no merge in the store.
         let mints: Vec<Mint> = targets.iter().map(|(mint, _)| *mint).collect();
         let mut by_mint = self
             .hub
@@ -1100,5 +1110,22 @@ pub(crate) mod tests {
             .await
             .iter()
             .all(|input| input.phase == RelayPhase::Confirmed));
+    }
+
+    #[tokio::test]
+    async fn an_unknown_mint_setting_skips_itself_and_the_valid_mint_merges() {
+        let fixture = Fixture::new().await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        fixture.escrow_notes(&wallet, 3).await;
+        fixture
+            .settle_mint(&wallet, Address::new_from_array([0x26; 32]), 1)
+            .await;
+        fixture.settle(&wallet, 1).await;
+
+        assert_eq!(fixture.merge_due().await.len(), 1);
+        assert_eq!(
+            *fixture.builder.owners.lock().expect("owners"),
+            vec![(wallet.pubkey(), 3)]
+        );
     }
 }
