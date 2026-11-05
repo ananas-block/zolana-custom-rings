@@ -1,4 +1,5 @@
-//! The windowed caps a mint's record holds, Ring RPC checks them on the operations it co-signs.
+//! The windowed caps a mint's record holds, unproven Ring RPC policy binding only a transaction
+//! that needs its signature.
 //!
 //! Read after `program-libs/policy/src/mint.rs`. Read before `program-libs/policy/src/quantities.rs`.
 

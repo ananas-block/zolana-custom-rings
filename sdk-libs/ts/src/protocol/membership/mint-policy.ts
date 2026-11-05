@@ -2,7 +2,7 @@ import { bigIntBytes, bytesToBigInt, equalBytes } from "@heliuslabs/zolana/inter
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { RingError } from "../error.js";
 
-/** Rust `AssetLimits`, Ring RPC checks them only on operations it co-signs. */
+/** Rust `AssetLimits`, Ring RPC checks them only on transactions that need its signature. */
 export interface AssetLimits {
   readonly senderCap: bigint;
   readonly senderWindowSlots: bigint;
@@ -18,7 +18,9 @@ export interface AssetLimits {
 export interface MintPolicy {
   readonly threshold: bigint;
   readonly cap: bigint;
+  /** Caps nothing, a peak outflow above it sets the `OUTFLOW` approval bit. */
   readonly cosignAbove: bigint;
+  /** Caps nothing, a public gross above it sets the `WITHDRAWAL` approval bit. */
   readonly withdrawalThreshold: bigint;
   readonly limits: AssetLimits;
 }
