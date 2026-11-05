@@ -10,7 +10,6 @@ import {
   equalBytes,
   hashBytes,
   poseidon,
-  Writer,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
 import {
@@ -19,7 +18,7 @@ import {
   SigningKey,
   X25519Keypair,
 } from "@heliuslabs/zolana/keypair";
-import { ringPolicyPda, STORAGE_PROGRAM_ID } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { MEMBER_REGISTRY_EMPTY_ROOT } from "../../../src/protocol/membership/member-opening.js";
 import { memberOfTag } from "../../../src/protocol/membership/policy.js";
 import {
@@ -36,14 +35,18 @@ import {
   trackingRecordHash,
   type TrackingRecord,
 } from "../../../src/protocol/membership/tracking.js";
-import { QUAD_ARITY, ROOT_HISTORY } from "../../../src/protocol/membership/member-registry.js";
+import { QUAD_ARITY } from "../../../src/protocol/membership/member-registry.js";
 import type {
   ServedTrackingOpening,
   TrackingOpeningsRequest,
   TrackingSeal,
 } from "../../../src/protocol/indexer/tracking-codec.js";
 import { recordTree } from "../../helpers/member-registry.js";
-import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
+import {
+  ownedAccount,
+  ringPolicyData,
+  trackingRegistryAccount,
+} from "../../helpers/ring-accounts.js";
 
 // sdk-libs/client/src/crypto/encryption/mod.rs `the_sealed_key_matches_the_pinned_vector`.
 const AUDITOR_SK = hex("01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c");
@@ -125,7 +128,15 @@ async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | null 
         }),
       ),
     ],
-    [TRACKING, ownedAccount(STORAGE_PROGRAM_ID, trackingRegistryData(root))],
+    [
+      TRACKING,
+      trackingRegistryAccount({
+        root,
+        revision: REVISION,
+        nextIndex: 2,
+        auditorPubkey: AUDITOR.publicKey().toBytes(),
+      }),
+    ],
   ]);
   const getTrackingOpenings = vi.fn(async (request: TrackingOpeningsRequest) => ({
     slot: 1n,
@@ -149,21 +160,6 @@ async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | null 
       getTrackingOpenings,
     },
   };
-}
-
-/** Rust `TrackingRegistry` with `root` the newest of its history. */
-function trackingRegistryData(root: Bytes32): Uint8Array {
-  const writer = new Writer()
-    .u8(3, "discriminator")
-    .bytes(new Uint8Array(32), 32, "ringId")
-    .bytes(AUDITOR.publicKey().toBytes(), 33, "auditor")
-    .u32(2, "nextIndex");
-  for (let slot = 0; slot < ROOT_HISTORY; slot += 1)
-    writer
-      .bytes(slot === 0 ? root : new Uint8Array(32), 32, "hash")
-      .u64(slot === 0 ? REVISION : 0n, "revision")
-      .u64(0n, "expiresAt");
-  return writer.finish();
 }
 
 /** An owner whose applied tracking row binds its sealed key. */

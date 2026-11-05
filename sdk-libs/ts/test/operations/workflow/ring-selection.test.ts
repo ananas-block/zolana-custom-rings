@@ -1,6 +1,6 @@
 import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { LocalKeys, type ProofService } from "@heliuslabs/zolana/client";
-import { treeAddress } from "@heliuslabs/zolana/internal";
+import { SHIELDED_POOL_PROGRAM_ID, treeAddress } from "@heliuslabs/zolana/internal";
 import { type Bytes32 } from "@heliuslabs/zolana/interface";
 import { Data, SOL_MINT, Utxo, Wallet, AssetRegistry } from "@heliuslabs/zolana/transaction";
 import {
@@ -18,6 +18,7 @@ import {
   prepareRingEntryRelay,
   selectRingInputs,
 } from "../../../src/operations/payments/transfer.js";
+import { treeAccount } from "../../../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 import { ringTransferClient } from "../../helpers/clients.js";
 import { trackingTree } from "../../helpers/member-registry.js";
 import {
@@ -377,7 +378,18 @@ describe("ring approval summary", () => {
                   nextIndex: tracked.nextIndex,
                   auditorPubkey: new Uint8Array(33),
                 })
-              : authorizations.get(address),
+              : address === TREE
+                ? {
+                    owner: SHIELDED_POOL_PROGRAM_ID,
+                    lamports: 1n,
+                    data: treeAccount({
+                      stateCursor: 0,
+                      written: 0,
+                      nullifierCursor: 0n,
+                      treeId: 0,
+                    }),
+                  }
+                : authorizations.get(address),
       getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     });
   }

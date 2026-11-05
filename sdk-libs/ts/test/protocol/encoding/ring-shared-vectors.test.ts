@@ -416,7 +416,9 @@ describe("transfer key selection", () => {
     const width = transferPoolCapacity(narrow).own;
     const own = (records: number) => ({ own: records, curator: 0, tracking: 0 });
     expect(fittedSpend({ ...spend, pools: own(width) }).wide).toBe(false);
-    expect(ringTransferCircuit(fittedSpend({ ...spend, pools: own(width + 1) }))?.owners).toBe(24);
+    expect(ringTransferCircuit(fittedSpend({ ...spend, pools: own(width + 1) }))).toEqual(
+      ringTransferCircuit({ ...spend, wide: true }),
+    );
   });
 
   it("moves a spend past the narrow rows by its unmatched input assets", () => {

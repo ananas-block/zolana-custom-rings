@@ -90,6 +90,7 @@ import {
   matchesPage,
   transactionsPage,
 } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { treeAccount } from "../../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 import { confirmedAccountReads } from "./clients.js";
 import type { TrackingEntry } from "../../src/protocol/membership/tracking.js";
 import { recordTree, trackingTree, type FixtureRecord } from "./member-registry.js";
@@ -217,6 +218,13 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     ...options.registration,
   });
   accounts.set(ringAuth, registration);
+  accounts.set(
+    TREE,
+    ownedAccount(
+      SHIELDED_POOL_PROGRAM_ID,
+      treeAccount({ stateCursor: 0, written: 0, nullifierCursor: 0n, treeId: TREE_ID }),
+    ),
+  );
   if (options.coSigner !== undefined)
     accounts.set(...(await ringCoSignerAccount(ringProgramId, options.coSigner)));
   const ownRegistry = randomAddress();

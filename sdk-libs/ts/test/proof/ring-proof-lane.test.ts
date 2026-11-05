@@ -53,6 +53,8 @@ import {
 } from "../../src/protocol/proof/transfer-shapes.js";
 import { ApprovalMask } from "../../src/protocol/transaction/transact.js";
 import { RING_SOURCE_SLOTS } from "../../src/rpc/prover/types.js";
+import { canopyLevels, QUAD_ARITY } from "../../src/protocol/membership/member-registry.js";
+import { TRACKING_QUAD_HEIGHT } from "../../src/protocol/membership/tracking.js";
 import { unopenedRecordPool } from "../../src/protocol/membership/member-opening.js";
 import { transferPoolCapacity } from "../../src/protocol/proof/transfer-shapes.js";
 import { ringStreamLayout } from "../../src/protocol/transaction/transact.js";
@@ -743,10 +745,13 @@ describe("prover/ring/params.go", () => {
       trackingRoot: zero,
       trackingPool: {
         records: repeat(capacity.tracking, row0()),
-        canopy: repeat(16, zero),
+        canopy: repeat(QUAD_ARITY ** canopyLevels(capacity.tracking), zero),
         paths: repeat(capacity.tracking, {
           index: 0,
-          siblings: repeat(11, repeat(3, zero)),
+          siblings: repeat(
+            TRACKING_QUAD_HEIGHT - canopyLevels(capacity.tracking),
+            repeat(QUAD_ARITY - 1, zero),
+          ),
         }),
         subjects: pool.subjects,
       },

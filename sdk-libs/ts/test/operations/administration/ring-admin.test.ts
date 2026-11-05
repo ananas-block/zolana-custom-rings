@@ -25,7 +25,11 @@ import {
   type RingKind,
   type RingPolicyTableInput,
 } from "../../../src/operations/management/admin.js";
-import { RING_ROLES, decodeRingPolicy } from "../../../src/protocol/codec/ring-codecs.js";
+import {
+  RING_POLICY_SIZE,
+  RING_ROLES,
+  decodeRingPolicy,
+} from "../../../src/protocol/codec/ring-codecs.js";
 import { ringProgramDataAddress } from "../../../src/protocol/membership/config.js";
 import {
   ListId,
@@ -228,7 +232,7 @@ describe("ring account", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(1093);
+    expect(data).toHaveLength(RING_POLICY_SIZE);
     expect(decodeRingPolicy(data)).toMatchObject({
       createdSlot: slot,
       roles: ROLES,
