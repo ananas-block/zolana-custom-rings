@@ -8,7 +8,7 @@ use custom_ring_sdk::{
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc};
 use spr_transaction::SOL_MINT;
-use zolana_ring_client::{RingRecovery, SourceMember};
+use zolana_ring_client::{RecoveryStep, RingRecovery, SourceMember};
 
 use crate::{
     assets,
@@ -56,14 +56,23 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
             error => anyhow::Error::from(error).context(format!("delegate source {source}")),
         })?;
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
-    let recovery = RingRecovery::new(ctx.ring.program_id(), &auditor)
-        .with_mode(config.mode)
-        .with_indexer_config(IndexerRpcConfig::at_slot(ctx.rpc().get_slot()?))
-        .for_member(SourceMember {
-            address: &source,
-            nullifier_key: resolved.nullifier_key(),
-        });
-    let recovered = ctx.block(recovery.run(chain.indexer(), chain.rpc(), &assets))?;
+    let indexer_config = IndexerRpcConfig::at_slot(ctx.rpc().get_slot()?);
+    let start = || {
+        RingRecovery::new(ctx.ring.program_id(), &auditor)
+            .with_mode(config.mode)
+            .with_indexer_config(indexer_config)
+            .for_member(SourceMember {
+                address: &source,
+                nullifier_key: resolved.nullifier_key(),
+            })
+    };
+    let mut recovery = start();
+    let recovered = loop {
+        match ctx.block(recovery.run(chain.indexer(), chain.rpc(), &assets))? {
+            RecoveryStep::Complete(notes) => break notes,
+            RecoveryStep::Paused(progress) => recovery = start().with_progress(progress),
+        }
+    };
     resolved.check_notes(&recovered.utxos)?;
     if !recovered.unopened.is_empty() {
         line("unopened notes", recovered.unopened.len());

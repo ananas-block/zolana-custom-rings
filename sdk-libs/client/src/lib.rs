@@ -117,7 +117,9 @@ pub use crate::{
         member_record, quad_path, storage_apply_proof_inputs, MemberOpeningRead, RecordPoolCheck,
         RecordPoolRead, StorageTip,
     },
-    recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
+    recover::{
+        MemberRecovery, RecoveredNotes, RecoveryProgress, RecoveryStep, RingRecovery, SourceMember,
+    },
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
         AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,

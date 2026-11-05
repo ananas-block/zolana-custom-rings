@@ -352,11 +352,14 @@ impl RelayedRing {
                 address: &address,
                 nullifier_key: &owner.nullifier_key,
             });
-        let recovered = env.client.block_on(recovery.run(
+        let RecoveryStep::Complete(recovered) = env.client.block_on(recovery.run(
             client.indexer(),
             client.rpc(),
             &env.ring_assets()?,
-        ))?;
+        ))?
+        else {
+            bail!("the recovery paused at the page cap");
+        };
         ensure!(recovered.unopened.is_empty(), "every note opens");
         let mut amounts: Vec<u64> = recovered
             .utxos

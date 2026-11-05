@@ -468,11 +468,12 @@ export type {
   RingMergeRequest,
   SealedMergeRecord,
 } from "../crypto/audit/merge-disclosure.js";
-export { recoverRingMemberNotes } from "../operations/workflow/recover.js";
+export { RingRecoveryProgress, recoverRingMemberNotes } from "../operations/workflow/recover.js";
 export type {
   RecoveredRingNotes,
   RingRecoveryClient,
   RingRecoveryParams,
+  RingRecoveryStep,
 } from "../operations/workflow/recover.js";
 export {
   ConfirmedDeposit,

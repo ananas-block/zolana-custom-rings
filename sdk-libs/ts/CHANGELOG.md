@@ -47,9 +47,11 @@ Breaking
 - `MergeLedger`, its `ConfirmedMerge`, `MergeInput`, `KnownMergeInput`, `MergeTransition` and `AuditedMergeOutput` types, `recoverMergeOpening`, `MergeAuditorOpening`, `KnownUtxos.merged` and the `merged` kind of `InputOpening` are gone, a ring merge record opens its output in full → read a merge output from `KnownUtxoIndex.utxo` by its commitment.
 - `openAuditorRegions`, the `EscrowedKeys` type and the error code `RING_ANONYMOUS_RECIPIENT_CURVE` are gone, `openAuditorRegions` opened an unsalted schedule no transfer stream uses → open an auditor stream with `openRingDisclosure` and drop handling of that code.
 - The auditor envelope carries `AuditEnvelope.addressInputBits` after `R`, its head grows by eight bytes and every record and tail counter moves with it, `R` counts notes alone, `TransferProofRequest` sends `inputNullifierChain` and `inputNullifiers` in place of `addressChain`, the transfer statement binds `inputNullifierChain` after `inputCount`, `DecryptedRingInput.real` is `class`, and an audited address input reads the `address` kind of `InputOpening` → deploy this release's ring program, prover, keys and Ring RPC together and handle the `address` kind.
+- `recoverRingMemberNotes` returns a `RingRecoveryStep`, and at the `maxPages` cap a `paused` step in place of `RING_RECOVERY_INCOMPLETE` → read `notes` from a `complete` step and pass the `progress` of a `paused` step back as `progress` until the recovery completes, a progress resumes for its own member alone and raises `RING_RECOVERY_PROGRESS_MISMATCH` for another, and the same progress resumes again after an error.
 
 Added
 
+- `KnownUtxoIndex.clone` returns a copy whose later inserts stay apart from the original.
 - `syncRingWallet` raises `RING_HELD_KEY_NOT_IN_HISTORY` before any ring read when the keys hold a viewing key the wallet's `ViewingHistory` has no entry for, so add that key with `withRotatedKey` or `withImportedKey` first.
 - `RingRpcRefusal.budgetUnset` names `-32210`, a Ring RPC whose operator set no relay budget refuses a relayed enrollment and a token account create with it.
 - `RingRpcRefusal.alreadyEnrolled`, `registerKeyProof` and `enrollmentRefused` name `-32213` to `-32215`, a relayed enrollment of an owner already enrolled, one whose RegisterKey proof does not verify, and one the chain refuses in simulation.
