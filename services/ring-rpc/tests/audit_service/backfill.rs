@@ -1,5 +1,6 @@
 use super::*;
 use sea_orm::{ConnectionTrait, Statement, TransactionTrait};
+use std::{future::poll_fn, pin::pin, task::Poll};
 use zolana_ring_client::rpc::WalletNoteStatus;
 
 #[tokio::test]
@@ -582,13 +583,13 @@ async fn a_cancelled_table_read_loads_on_the_retry_and_keeps_the_checkpoint() {
     let source = durable_history(&fixture);
     let store = Store::open("sqlite::memory:", 1).await.expect("store");
     let restarted = restart_after_the_terminal_page(&fixture, &source, &store).await;
+    // The pool's one connection is the gate, the table read cannot pass it while held.
     let held = store.connection().begin().await.expect("hold");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), restarted.backfill_utxos())
-            .await
-            .is_err(),
-        "the read waits for the held connection"
-    );
+    {
+        let mut backfill = pin!(restarted.backfill_utxos());
+        let first = poll_fn(|cx| Poll::Ready(backfill.as_mut().poll(cx))).await;
+        assert!(first.is_pending(), "the table read waits at the gate");
+    }
     held.rollback().await.expect("release");
 
     assert_the_retry_loads_the_tables(&restarted, &source, &store).await;
