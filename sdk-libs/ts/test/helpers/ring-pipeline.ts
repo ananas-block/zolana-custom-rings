@@ -6,6 +6,7 @@ import {
   type RingRecordReader,
   type StorageMemberOpenings,
   type StorageRecordPool,
+  type TrackingReader,
 } from "../../src/rpc/ports.js";
 import type {
   AnonymousRingTransactInput,
@@ -52,7 +53,6 @@ import {
   Utxo,
 } from "@heliuslabs/zolana/transaction";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
-import type { CredentialClient } from "../../src/rpc/credential-resolver.js";
 import { ringAuthAddress, ringPolicyAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
 import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
 import { DUMMY_RECORD, RecordKind } from "../../src/protocol/codec/audit-stream.js";
@@ -90,14 +90,15 @@ import {
   matchesPage,
   transactionsPage,
 } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { recordTree, type FixtureRecord } from "./member-registry.js";
-import { CredentialChain } from "./credential-chain.js";
+import type { TrackingEntry } from "../../src/protocol/membership/tracking.js";
+import { recordTree, trackingTree, type FixtureRecord } from "./member-registry.js";
 import {
   ownedAccount,
   ringCoSignerAccount,
   ringPolicyData,
   sppRingRegistration,
   storageRegistryAccount,
+  trackingRegistryAccount,
 } from "./ring-accounts.js";
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
 import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
@@ -110,6 +111,8 @@ export const TREE = treeAddress(TREE_ID);
 /** Distinct, a swapped own and curator revision fails the asserts. */
 export const OWN_REVISION = 7n;
 export const CURATOR_REVISION = 11n;
+export const ADDRESS_REVISION = 3n;
+export const TRACKING_REVISION = 9n;
 const addressDecoder = getAddressDecoder();
 
 export function randomAddress(): Address {
@@ -160,6 +163,17 @@ export interface RingFixtureOptions {
   readonly registration?: Readonly<{ activated: boolean; paused: boolean }>;
 }
 
+export function trackingEntry(owner: ShieldedAddress, listTag: Bytes32 = ZERO_32): TrackingEntry {
+  return {
+    member: owner.signingPublicKey.ownerProofInputHash(),
+    nullifierPk: owner.nullifierPublicKey,
+    ctHash: filled(0x11),
+    viewingU: owner.viewingPublicKey.u(),
+    revision: ADDRESS_REVISION,
+    listTag,
+  };
+}
+
 /** The pinned rails beside SPP's anonymous one, where an in-proof owner also proves. */
 export type SppCircuit =
   | NonNullable<Parameters<typeof prepareTransfer>[1]>
@@ -207,11 +221,22 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   if (options.coSigner !== undefined)
     accounts.set(...(await ringCoSignerAccount(ringProgramId, options.coSigner)));
   const ownRegistry = randomAddress();
-  const credentials = await CredentialChain.create({
-    ringProgramId,
-    auditorPubkey: auditor.publicKey().toBytes(),
-    accounts,
-  });
+  const trackingRegistry = randomAddress();
+  const enrolled = new Map<string, TrackingEntry>();
+  let tracked = trackingTree();
+  const publishTracking = (): void => {
+    tracked = trackingTree([...enrolled.values()]);
+    accounts.set(
+      trackingRegistry,
+      trackingRegistryAccount({
+        root: tracked.root,
+        revision: TRACKING_REVISION,
+        nextIndex: tracked.nextIndex,
+        auditorPubkey: auditor.publicKey().toBytes(),
+      }),
+    );
+  };
+  publishTracking();
   const trees = new Map<
     Address,
     Readonly<{ tree: ReturnType<typeof recordTree>; revision: bigint }>
@@ -231,6 +256,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     roles: { admin: authority },
     auditorPublicKey: auditor.publicKey().toBytes(),
     mode: options.mode ?? "confidential",
+    tracking: trackingRegistry,
     ...(options.coSigner === undefined ? {} : { coSigner: options.coSigner }),
     ...(options.delegate === undefined ? {} : { delegate: options.delegate }),
   } as const;
@@ -291,9 +317,11 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       ownedAccount(ringProgramId, ringPolicyData({ bump: ringBump, ...config })),
     );
   }
-  /** Lands the owner's `Enroll`, its credential is final. */
+  /** Applies the owner's enrollment, a repeat replaces its row. */
   const enroll = (owner: ShieldedAddress, listTag: Bytes32 = ZERO_32): void => {
-    credentials.enroll(owner, listTag);
+    const entry = trackingEntry(owner, listTag);
+    enrolled.set(hex(entry.member), entry);
+    publishTracking();
   };
   const slot = options.slot ?? 1n;
   const context = Object.freeze({ slot, blockTime: 0n });
@@ -308,8 +336,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   };
   const reader: Pick<ChainReader, "getAccount"> &
     Pick<RingRecordReader, "getStorageMemberOpenings" | "getStorageRecordPool"> &
-    CredentialClient = {
-    ...credentials.reader(),
+    Pick<TrackingReader, "getTrackingOpenings" | "getTrackingRecordPool"> = {
     getAccount: async (address) => accounts.get(address),
     getStorageMemberOpenings: async (request): Promise<StorageMemberOpenings> => {
       const { tree, revision } = treeAt(request.registry, request.expectedRoot);
@@ -326,6 +353,21 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
         root: { root: tree.root, revision, nextIndex: tree.nextIndex },
         ...tree.pool(request.members, request.openings),
       };
+    },
+    getTrackingOpenings: async (request) => {
+      if (hex(request.expectedRoot) !== hex(tracked.root))
+        throw new Error("tracking openings under an unknown root");
+      return {
+        slot,
+        root: tracked.root,
+        revision: TRACKING_REVISION,
+        openings: request.members.map((member) => tracked.opening(member)),
+      };
+    },
+    getTrackingRecordPool: async (request) => {
+      if (hex(request.expectedRoot) !== hex(tracked.root))
+        throw new Error("tracking pool under an unknown root");
+      return tracked.pool(request.members, request.openings);
     },
   };
   const spp = (
@@ -389,12 +431,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     treeId: TREE_ID,
     ...reader,
     proveRing: async (request: RingProofRequest): Promise<Uint8Array> => {
-      // A clone keeps the request past the caller's wipe, the immutable root table stays shared.
-      ringRequests.push(
-        "credentialRoots" in request
-          ? { ...structuredClone(request), credentialRoots: request.credentialRoots }
-          : structuredClone(request),
-      );
+      ringRequests.push(structuredClone(request));
       proofs += 1;
       return new Uint8Array(192).fill(proofs);
     },
@@ -428,13 +465,17 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       return { ...proven, data: { ...proven.data, circuit }, ownerSigners: [] };
     },
     getShieldedTransactionsByTags: async () => transactionsPage(),
+    getShieldedTransactionsByNullifiers: async () => transactionsPage(),
     getEncryptedUtxosByTags: async () => matchesPage(),
   };
   return {
     ringProgramId,
     auditor,
     authority,
-    credentials,
+    trackingRegistry,
+    get trackingTree() {
+      return tracked;
+    },
     accounts,
     client,
     ringRequests,
@@ -544,7 +585,7 @@ export async function checkAccounts(
   expected: Readonly<{
     fixture: Fixture;
     data: RingTransactData;
-    /** The live registries before the credential trees, `ringRegistrySlots` order. */
+    /** The live registries before the tracking registry, `ringRegistrySlots` order. */
     registries?: readonly Address[];
     /** After the registries, the co-signers, delegate and anchor tree in order. */
     prefix: readonly AccountEntry[];
@@ -573,9 +614,7 @@ export async function checkAccounts(
   ).toEqual([
     readonly(await ringPolicyAddress(fixture.ringProgramId)),
     ...(expected.registries ?? []).map(readonly),
-    // Tree 0 serves the address root and the one state root every fixture credential lives under.
-    readonly(TREE),
-    readonly(TREE),
+    readonly(fixture.trackingRegistry),
     ...expected.prefix,
     { address: expected.payer, role: AccountRole.WRITABLE_SIGNER },
     writable(TREE),
@@ -634,7 +673,7 @@ export function checkTransferProof(fixture: Fixture, data: RingTransactData): Tr
           policyHash: request.policyHash,
           ownRoot: request.ownRoot,
           curatorRoot: request.curatorRoot,
-          credentials: request.credentialRoots,
+          trackingRoot: request.trackingRoot,
         },
         publicAssets: request.publicAssets,
         publicAmounts: request.publicAmounts,

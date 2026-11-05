@@ -28,7 +28,7 @@ interface RekeyCase {
   readonly outputs: number;
   readonly spendsDefaultRing: boolean;
   readonly hasData: boolean;
-  readonly readPools: Readonly<{ own: number; curator: number; credentials: number }>;
+  readonly readPools: Readonly<{ own: number; curator: number; tracking: number }>;
   readonly sealed: RustCircuit;
   readonly read: RustCircuit;
 }

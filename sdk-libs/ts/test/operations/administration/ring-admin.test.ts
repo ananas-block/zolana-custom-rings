@@ -9,6 +9,8 @@ import {
   ringAuthAddress,
   ringCoSignerAddress,
   ringPolicyAddress,
+  STORAGE_PROGRAM_ID,
+  trackingRegistryPda,
 } from "../../../src/protocol/pda/index.js";
 import {
   RingInstructionTag,
@@ -91,6 +93,8 @@ describe("initialize and policy update", () => {
       [await protocolConfigAddress(), READ],
       [await ringAuthAddress(RING), WRITE],
       [SHIELDED_POOL_PROGRAM_ID, READ],
+      [(await trackingRegistryPda(RING))[0], WRITE],
+      [STORAGE_PROGRAM_ID, READ],
     ];
     const policy = await initializeRingInstruction({
       ringProgramId: RING,

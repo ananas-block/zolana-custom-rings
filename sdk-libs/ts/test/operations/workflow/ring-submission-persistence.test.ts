@@ -32,11 +32,18 @@ import {
 } from "../../../src/operations/workflow/submission.js";
 import { ringTransferClient } from "../../helpers/clients.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { CredentialChain } from "../../helpers/credential-chain.js";
-import { ownedAccount, ringPolicyData, sppRingRegistration } from "../../helpers/ring-accounts.js";
+import { trackingTree } from "../../helpers/member-registry.js";
+import {
+  ownedAccount,
+  ringPolicyData,
+  sppRingRegistration,
+  trackingRegistryAccount,
+} from "../../helpers/ring-accounts.js";
+import { TRACKING_REVISION, trackingEntry } from "../../helpers/ring-pipeline.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+const TRACKING = address("Cura111111111111111111111111111111111111111");
 function field(value: number): Bytes32 {
   const bytes = new Uint8Array(32);
   bytes[31] = value;
@@ -74,18 +81,30 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
   const authority = f.owner.shieldedAddress().solanaAddress();
   const [ringAuth, registration] = await sppRingRegistration({ authority, ringProgramId: RING });
   const recipient = ShieldedKeypair.generate().shieldedAddress();
-  const chain = await CredentialChain.enrolled(RING, [f.owner.shieldedAddress(), recipient]);
+  const tracked = trackingTree(
+    [f.owner.shieldedAddress(), recipient].map((owner) => trackingEntry(owner)),
+  );
   let outputTreeId: number | undefined;
   const client = ringTransferClient({
-    ...chain.reader(),
     tree: treeAddress(7),
     treeId: 7,
     getAccount: async (key) =>
       key === ring
-        ? ownedAccount(RING, ringPolicyData({ bump, roles: { admin: authority } }))
+        ? ownedAccount(
+            RING,
+            ringPolicyData({ bump, roles: { admin: authority }, tracking: TRACKING }),
+          )
         : key === ringAuth
           ? registration
-          : chain.account(key),
+          : key === TRACKING
+            ? trackingRegistryAccount({
+                root: tracked.root,
+                revision: TRACKING_REVISION,
+                nextIndex: tracked.nextIndex,
+                auditorPubkey: new Uint8Array(33),
+              })
+            : undefined,
+    getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     proveRingTransact: async (inputs) => {
       outputTreeId = inputs.outputTreeId;
       throw new Error("prover boundary reached");

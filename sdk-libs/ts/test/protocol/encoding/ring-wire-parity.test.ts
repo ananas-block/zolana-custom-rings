@@ -14,6 +14,7 @@ import keyed from "../../../../../test-vectors/proof/ring_keyed_shapes.json" wit
 import statements from "../../../../../test-vectors/audit/transfer_statement.json" with { type: "json" };
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
 import {
+  applyEnrollmentsStatementHash,
   signerBinding,
   transferStatementElements,
   transferStatementHash,
@@ -24,7 +25,13 @@ import {
   fittedSpend,
   ringTransferCircuit,
 } from "../../../src/protocol/proof/transfer-shapes.js";
-import { vectorCredentialRoots } from "../../helpers/credential-chain.js";
+import {
+  trackingEntryChained,
+  trackingEntryHash,
+  trackingRecordHash,
+  type TrackingEntry,
+  type TrackingRecord,
+} from "../../../src/protocol/membership/tracking.js";
 import {
   RingTransactData,
   railShapes,
@@ -189,7 +196,7 @@ describe("transfer_statement.json", () => {
         policyHash: field(vector.policy_hash),
         ownRoot: field(vector.own_root),
         curatorRoot: field(vector.curator_root),
-        credentials: vectorCredentialRoots(vector.credential_fields),
+        trackingRoot: field(vector.tracking_root),
       },
       publicAssets: vector.public_assets.map(field),
       publicAmounts: vector.public_amounts.map(field),
@@ -217,7 +224,7 @@ describe("ring_keyed_shapes.json", () => {
             spendsDefaultRing,
             legs: 0,
             owners: 0,
-            pools: { own: 0, curator: 0, credentials: 0 },
+            pools: { own: 0, curator: 0, tracking: 0 },
             wide: false,
           }),
         ) !== undefined,
@@ -234,5 +241,86 @@ describe("ring_keyed_shapes.json", () => {
     expect(served("anonymous", false)).toEqual(keyed.anonymous_ring);
     expect(served("anonymous", true)).toEqual(keyed.anonymous_entry_ring);
     expect(served("delegate", false)).toEqual(keyed.ring_authority);
+  });
+});
+
+interface TrackingRow {
+  readonly member: string;
+  readonly next: string;
+  readonly nullifier_pk: string;
+  readonly ct_hash: string;
+  readonly viewing_u: string;
+  readonly revision: number | string;
+  readonly list_tag: string;
+  readonly leaf_hash: string;
+}
+
+interface TrackingApplication {
+  readonly name: string;
+  readonly old_root: string;
+  readonly new_root: string;
+  readonly old_next_index: number;
+  readonly new_next_index: number;
+  readonly chain_start: string;
+  readonly chain_end: string;
+  readonly count: number;
+  readonly statement_hash: string;
+  readonly writes: readonly Readonly<{
+    entry: Omit<TrackingRow, "next" | "leaf_hash"> & Readonly<{ entry_hash: string }>;
+    old: TrackingRow;
+    low: TrackingRow;
+  }>[];
+}
+
+describe("tracking-records.json", () => {
+  const entryOf = (row: Omit<TrackingRow, "next" | "leaf_hash">) =>
+    ({
+      member: field(row.member),
+      nullifierPk: field(row.nullifier_pk),
+      ctHash: field(row.ct_hash),
+      viewingU: field(row.viewing_u),
+      revision: BigInt(row.revision),
+      listTag: field(row.list_tag),
+    }) satisfies TrackingEntry;
+  const recordOf = (row: TrackingRow) =>
+    ({ ...entryOf(row), next: field(row.next) }) satisfies TrackingRecord;
+
+  it("hashes, chains and states every application as Rust does", () => {
+    const tracking = JSON.parse(
+      readFileSync(
+        new URL("../../../../../test-vectors/registry/tracking-records.json", import.meta.url),
+        "utf8",
+      ),
+    ) as Readonly<{ applications: readonly TrackingApplication[] }>;
+    for (const application of tracking.applications) {
+      let chain = field(application.chain_start);
+      for (const write of application.writes) {
+        expect(hex(trackingEntryHash(entryOf(write.entry))), application.name).toBe(
+          write.entry.entry_hash,
+        );
+        expect(hex(trackingRecordHash(recordOf(write.old))), application.name).toBe(
+          write.old.leaf_hash,
+        );
+        expect(hex(trackingRecordHash(recordOf(write.low))), application.name).toBe(
+          write.low.leaf_hash,
+        );
+        chain = trackingEntryChained(chain, entryOf(write.entry));
+      }
+      expect(hex(chain), application.name).toBe(application.chain_end);
+      expect(
+        hex(
+          applyEnrollmentsStatementHash({
+            oldRoot: field(application.old_root),
+            newRoot: field(application.new_root),
+            oldNextIndex: BigInt(application.old_next_index),
+            newNextIndex: BigInt(application.new_next_index),
+            chainStart: field(application.chain_start),
+            chainEnd: field(application.chain_end),
+            count: BigInt(application.count),
+          }),
+        ),
+        application.name,
+      ).toBe(application.statement_hash);
+    }
   });
 });

@@ -215,7 +215,7 @@ describe("ring submission ownership", () => {
 
   it("classifies stale proofs by the rows of Rust `REPROOF`", () => {
     expect([...REPROOF]).toEqual(RUST_REPROOF);
-    expect(REPROOF.get(RingProgramError.absenceRootBelowFloor)).toBe("fixes");
+    expect(REPROOF.get(RingProgramError.trackingRootBelowFloor)).toBe("fixes");
   });
 
   it.each([
