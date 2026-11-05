@@ -4490,12 +4490,10 @@ dependencies = [
  "solana-message",
  "spr-client",
  "spr-interface",
- "spr-keypair",
  "spr-program",
  "spr-transaction",
  "xtask",
  "zolana-cli-common",
- "zolana-ring-transaction",
 ]
 
 [[package]]

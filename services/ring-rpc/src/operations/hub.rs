@@ -35,10 +35,7 @@ use crate::{
     grants::{GrantQuery, GrantSource, Grants, ReadScope, TreeGrants},
     keyed_tasks::{KeyedTasks, MAX_CONCURRENT_KEYED_TASKS},
     keys::{AuditorKeyDerivation, KeySource},
-    limits::{
-        PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
-        MAX_CONCURRENT_READS,
-    },
+    limits::{RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_READS},
     managed_merge::{ManagedMerge, ManagedMergeInit},
     merge_settings::MergeSettingsBook,
     origins::Origins,
@@ -50,7 +47,7 @@ use crate::{
     replay::{LocalNonces, ReplayGuard},
     spent_index::NoteSeal,
     storage_chain::StorageChain,
-    upstream::{DepositHistory, DepositPage, Finality, TransactionSource},
+    upstream::{Finality, TransactionSource},
     utxos::{AuditStore, Backing, MAX_CACHED_ENTRIES, UTXO_BACKFILL_INTERVAL},
     wallet_snapshots::{SharedWalletSnapshots, WalletSnapshotCleanup, WalletSnapshotLimits},
 };
@@ -113,7 +110,6 @@ impl Clock {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Lane {
     Public,
-    Deposits(usize),
     Authentication,
     /// Held for a whole transfer or merge page.
     Read,
@@ -155,7 +151,7 @@ pub(crate) struct Shared<S> {
     pub(crate) origins: Origins,
     pub(crate) replay: ReplayGuard,
     pub(crate) active_readers: Mutex<HashSet<(Address, ReaderKey)>>,
-    lanes: [(RequestRate, Option<Semaphore>); 4],
+    lanes: [(RequestRate, Option<Semaphore>); 3],
     readiness: AsyncMutex<ReadinessCache>,
     /// One per ring an authorized read or the backfill opened.
     stores: Mutex<HashMap<Address, Arc<AuditStore>>>,
@@ -421,14 +417,13 @@ impl<S: TransactionSource> Hub<S> {
 
     /// The rate unit is spent even when every slot is taken.
     pub(crate) fn admit(&self, lane: Lane) -> Result<Option<SemaphorePermit<'_>>, RingRpcError> {
-        let (index, request) = match lane {
-            Lane::Public => (0, PublicRequest::Standard),
-            Lane::Deposits(signatures) => (1, PublicRequest::DepositScan { signatures }),
-            Lane::Authentication => (2, PublicRequest::Standard),
-            Lane::Read => (3, PublicRequest::Standard),
+        let index = match lane {
+            Lane::Public => 0,
+            Lane::Authentication => 1,
+            Lane::Read => 2,
         };
         let (rate, slots) = &self.shared.lanes[index];
-        rate.accept(Instant::now(), request)?;
+        rate.accept(Instant::now())?;
         slots
             .as_ref()
             .map(|slots| slots.try_acquire().map_err(|_| RingRpcError::Busy))
@@ -440,11 +435,6 @@ impl<S: TransactionSource> Hub<S> {
             KeySource::Local { .. } => KeyMode::Local,
             KeySource::Derived(_) => KeyMode::Derived,
         }
-    }
-
-    /// Value entering the ring, which no auditor message announces.
-    pub async fn ring_deposits(&self, page: DepositPage) -> Result<DepositHistory, RingRpcError> {
-        Ok(self.shared.source.ring_deposits(page).await?)
     }
 
     pub fn service_pubkey(&self) -> Address {
@@ -501,10 +491,6 @@ impl<S: TransactionSource> Hub<S> {
     /// `None` names the one ring a local key serves.
     pub fn service(&self, ring: Option<Address>) -> Result<AuditService<S>, RingRpcError> {
         self.shared.service(ring)
-    }
-
-    pub(crate) fn validate_ring(&self, ring: Address) -> Result<(), RingRpcError> {
-        self.shared.validate_ring(ring)
     }
 
     /// Every `interval`, the first at once, backfills the local ring and every ring a read opened.
@@ -848,7 +834,6 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
             active_readers: Mutex::new(HashSet::new()),
             lanes: [
                 (RequestRate::default(), None),
-                lane(MAX_CONCURRENT_DEPOSIT_SCANS),
                 lane(MAX_CONCURRENT_AUTHENTICATIONS),
                 lane(MAX_CONCURRENT_READS),
             ],

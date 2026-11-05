@@ -30,7 +30,7 @@ use spr_hasher::primitives::hash_bytes;
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
 use thiserror::Error;
 use zolana_ring_client::{
-    records::path_of, resolver::tracking_record, DepositOwner, RingIndexerError, SealedNullifierKey,
+    records::path_of, resolver::tracking_record, RingIndexerError, SealedNullifierKey,
 };
 use zolana_ring_indexer::tracking::{
     GetTrackingRecordsRequest, GetTrackingRecordsResponse, RingIndexedTrackingRecordView,
@@ -101,8 +101,6 @@ pub(crate) enum OwnerEnrollment {
 #[derive(Default)]
 pub(crate) struct HeldEnrollments {
     by_member: BoundedMap<[u8; 32], HeldEnrollment>,
-    /// Owner hash to member, the deposit capsule names the owner by its hash.
-    members: BoundedMap<[u8; 32], [u8; 32]>,
     /// List key to member, a salted write names the owner by its list key.
     list_keys: BoundedMap<[u8; 32], [u8; 32]>,
 }
@@ -170,13 +168,6 @@ impl<S: TransactionSource> TrackingSource for S {
 impl HeldEnrollment {
     pub fn member(&self) -> [u8; 32] {
         self.member
-    }
-
-    pub(crate) const fn deposit_owner(&self) -> DepositOwner {
-        DepositOwner {
-            owner_key: self.owner_key,
-            nullifier_pk: self.nullifier_pk,
-        }
     }
 
     /// The fields the first enrollment fixed, a rotation moves none of them.
@@ -263,23 +254,17 @@ impl HeldEnrollments {
     pub fn bounded(capacity: usize) -> Self {
         Self {
             by_member: BoundedMap::bounded(capacity),
-            members: BoundedMap::bounded(capacity),
             list_keys: BoundedMap::bounded(capacity),
         }
     }
 
     pub(crate) fn clear(&mut self) {
         self.by_member.clear();
-        self.members.clear();
         self.list_keys.clear();
     }
 
     pub fn by_member(&self, member: &[u8; 32]) -> Cached<HeldEnrollment> {
         self.by_member.cached(member)
-    }
-
-    pub fn by_owner_hash(&self, owner_hash: &[u8; 32]) -> Cached<HeldEnrollment> {
-        self.through(self.members.cached(owner_hash))
     }
 
     pub fn by_list_key(&self, list_key: &[u8; 32]) -> Cached<HeldEnrollment> {
@@ -325,7 +310,6 @@ impl HeldEnrollments {
     pub fn insert(&mut self, rows: impl IntoIterator<Item = HeldEnrollment>) -> Vec<[u8; 32]> {
         rows.into_iter()
             .map(|held| {
-                self.members.insert(held.owner_hash, held.member);
                 self.list_keys.insert(held.list_key, held.member);
                 self.by_member.insert(held.member, held);
                 held.owner_key
@@ -336,13 +320,9 @@ impl HeldEnrollments {
 
 #[cfg(test)]
 impl HeldEnrollments {
-    /// Entries the cache holds by member, owner hash and list key.
-    pub(crate) fn len(&self) -> [usize; 3] {
-        [
-            self.by_member.len(),
-            self.members.len(),
-            self.list_keys.len(),
-        ]
+    /// Entries the cache holds by member and list key.
+    pub(crate) fn len(&self) -> [usize; 2] {
+        [self.by_member.len(), self.list_keys.len()]
     }
 }
 

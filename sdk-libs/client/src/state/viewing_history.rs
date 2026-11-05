@@ -16,9 +16,6 @@ use crate::{exactly_one, AnonymousError, REDACTED};
 /// How far below its watermark a sync still reads an unobserved index.
 pub const PENDING_RETENTION: u64 = 256;
 
-/// Indices a stream's first round reads past its next index, doubled up to [`crate::TAGS_PER_REQUEST`] after every round that finds one.
-pub const TAG_GAP: u64 = 20;
-
 /// `scanned` never passes `next`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StreamCounter {
@@ -68,20 +65,6 @@ impl StreamCounter {
     /// Reserved indices below the watermark no sync has observed yet.
     pub fn pending(&self) -> impl Iterator<Item = u64> + '_ {
         self.pending.iter().copied()
-    }
-
-    /// A scan from `from` saw `observed`, an index it passed unseen stays pending.
-    pub(crate) fn observe(&mut self, from: u64, observed: &BTreeSet<u64>) {
-        let reached = observed
-            .range(from..)
-            .next_back()
-            .map_or(from, |highest| highest.saturating_add(1));
-        self.scanned = self.scanned.max(reached);
-        self.next = self.next.max(self.scanned);
-        let floor = self.scanned.saturating_sub(PENDING_RETENTION);
-        self.pending.extend(from.max(floor)..reached);
-        self.pending
-            .retain(|index| *index >= floor && !observed.contains(index));
     }
 
     fn same_progress(&self, stored: &Self) -> bool {
@@ -134,14 +117,6 @@ impl ViewingKeyEntry {
 
     pub fn tag_position(&self) -> Option<u64> {
         self.tag_position
-    }
-
-    pub(crate) fn tx_stream_mut(&mut self) -> &mut StreamCounter {
-        &mut self.tx
-    }
-
-    pub(crate) fn request_stream_mut(&mut self) -> &mut StreamCounter {
-        &mut self.request
     }
 
     /// Only a terminal page's `context.slot` reaches here.
@@ -545,34 +520,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_unseen_index_stays_pending_until_it_trails_past_the_retention() {
-        let mut counter = StreamCounter::default();
-        counter.observe(0, &BTreeSet::from([1, 3]));
-        assert_eq!((counter.scanned(), counter.next()), (4, 4));
-        assert_eq!(counter.pending().collect::<Vec<_>>(), [0, 2]);
-        counter.observe(4, &BTreeSet::from([2]));
-        assert_eq!(counter.pending().collect::<Vec<_>>(), [0]);
-        counter.observe(4, &BTreeSet::from([PENDING_RETENTION]));
-        assert_eq!(counter.scanned(), PENDING_RETENTION + 1);
-        assert_eq!(
-            counter.pending().collect::<Vec<_>>(),
-            (4..PENDING_RETENTION).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn a_full_rescan_keeps_the_watermark_and_the_pending_index_it_passes_unseen() {
-        let mut counter = StreamCounter::default();
-        counter.observe(0, &BTreeSet::from([1, 3]));
-        counter.observe(0, &BTreeSet::from([0, 1]));
-        assert_eq!(counter.scanned(), 4);
-        assert_eq!(counter.pending().collect::<Vec<_>>(), [2]);
-    }
-
-    #[test]
     fn a_stored_pending_index_outside_its_window_or_repeated_is_refused() {
-        let mut counter = StreamCounter::default();
-        counter.observe(0, &BTreeSet::from([PENDING_RETENTION + 1]));
+        let counter = StreamCounter {
+            next: PENDING_RETENTION + 2,
+            scanned: PENDING_RETENTION + 2,
+            pending: (2..=PENDING_RETENTION).collect(),
+        };
         let mut history = ViewingHistory::new(ViewingKey::new().pubkey(), 0);
         history.entries_mut()[0].tx = counter;
         let stored = history.to_json_value();

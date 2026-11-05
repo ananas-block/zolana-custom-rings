@@ -21,8 +21,8 @@ use zolana_ring_client::{
         SetReaderGrantRequest, SkippedReason, SkippedTransaction, SpendCoverageAttestation,
         WalletSnapshotReleaseAttestation, WalletStatusAttestation, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedInput, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, CreatedUtxos,
-    DepositNote, InputOpening, ReaderKey, RingOrigin, RowDisposition, TransactionAudit,
+    AuditError, AuditedInput, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, InputOpening,
+    ReaderKey, RingOrigin, RowDisposition, TransactionAudit,
 };
 use zolana_ring_policy::Member;
 
@@ -1086,7 +1086,6 @@ impl<S: TransactionSource> AuditService<S> {
         only: Option<CreatedIn>,
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
-        let store = self.shared.store(self.ring);
         let mut items = Vec::new();
         let mut skipped = Vec::new();
         let mut unfinished = None;
@@ -1172,38 +1171,17 @@ impl<S: TransactionSource> AuditService<S> {
                 continue;
             }
             if !origin.requires_audit() {
-                // A deposit carries no stream, its capsule opens the notes a later spend's nullifier resolves.
-                let created = bound.and_then(|()| {
-                    CreatedUtxos {
-                        transaction: &tx,
-                        origin: &origin,
-                        ring: self.ring,
-                    }
-                    .open_for(&self.auditor, &*store)
-                });
-                match created {
-                    Ok(mut created) => {
-                        store.resolve_deposits(&mut created).await?;
-                        observe_all(work, &tx, created_in, |_| InputRead::Real);
-                        work.open(created_in, created.utxos);
-                        work.open(
-                            created_in,
-                            created.unowned.iter().map(DepositNote::deposited),
-                        );
-                        work.mark_read(created_in);
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "ring {} event {}:{event_index} opened no UTXOs because {}",
-                            self.ring,
-                            tx.tx_signature,
-                            redacted(&error)
-                        );
-                        if error.disposition() == RowDisposition::Retry {
-                            unfinished.get_or_insert(error);
-                        } else {
-                            work.mark_unread(created_in);
-                        }
+                if let Err(error) = bound {
+                    log::warn!(
+                        "ring {} event {}:{event_index} opened no UTXOs because {}",
+                        self.ring,
+                        tx.tx_signature,
+                        redacted(&error)
+                    );
+                    if error.disposition() == RowDisposition::Retry {
+                        unfinished.get_or_insert(error);
+                    } else {
+                        work.mark_unread(created_in);
                     }
                 }
                 continue;

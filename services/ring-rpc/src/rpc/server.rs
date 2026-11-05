@@ -35,14 +35,14 @@ use zolana_ring_client::rpc::{
     GetPendingListApprovalsRequest, GetRecordUpdateStatusRequest, GetRelayQuoteRequest,
     GetRelayStatusRequest, GetSpendCoverageRequest, GetWalletActivityResponse,
     GetWalletStatusRequest, HealthResponse, PagedRead, PrepareAuthorityTransferRequest,
-    PrepareRelayRequest, RefuseListApprovalRequest, RingDepositsRequest, RingDepositsResponse,
-    RingState, RingStatusRequest, RingStatusResponse, SetMergeSettingsRequest,
-    SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest, CREATE_AUDITOR_KEY,
-    CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_DELEGATE_NOTES, GET_LIST_SALT,
-    GET_PENDING_LIST_APPROVALS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS,
-    GET_SPEND_COVERAGE, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY,
-    REFUSE_LIST_APPROVAL, RELEASE_DELEGATE_SNAPSHOT, RELEASE_WALLET_SNAPSHOT, RING_DEPOSITS,
-    RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
+    PrepareRelayRequest, RefuseListApprovalRequest, RingState, RingStatusRequest,
+    RingStatusResponse, SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest,
+    SubmitRelayRequest, CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS,
+    GET_DELEGATE_NOTES, GET_LIST_SALT, GET_PENDING_LIST_APPROVALS, GET_RECORD_UPDATE_STATUS,
+    GET_RELAY_QUOTE, GET_RELAY_STATUS, GET_SPEND_COVERAGE, GET_WALLET_STATUS, HEALTH,
+    PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, REFUSE_LIST_APPROVAL, RELEASE_DELEGATE_SNAPSHOT,
+    RELEASE_WALLET_SNAPSHOT, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
+    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -51,10 +51,9 @@ use crate::{
     client_rate::{ClientLayer, ClientLimits, ClientRate, ClientRateLimiter},
     error::RingRpcError,
     hub::{Hub, Lane, ReadinessStatus},
-    metering::{Metering, MeteringHeaderLayer},
     origins::{OriginError, Origins},
     relay::Relay,
-    upstream::{DepositPage, TransactionSource},
+    upstream::TransactionSource,
 };
 
 const MAX_REQUEST_BODY_SIZE: u32 = 64 * 1024;
@@ -110,7 +109,6 @@ pub async fn run_server<S: TransactionSource + 'static>(
             }
         }))
         .layer(ClientLayer::new(options.client_limits.identity))
-        .layer(MeteringHeaderLayer)
         .layer(ProxyGetRequestLayer::new([("/health", HEALTH)])?)
         .layer(MethodPathLayer {
             max_body_size: MAX_REQUEST_BODY_SIZE as usize,
@@ -128,12 +126,10 @@ pub async fn run_server<S: TransactionSource + 'static>(
         )
         .set_http_middleware(middleware)
         .set_rpc_middleware(
-            RpcServiceBuilder::new()
-                .layer_fn(move |service| ClientRate {
-                    service,
-                    limiter: limiter.clone(),
-                })
-                .layer_fn(Metering),
+            RpcServiceBuilder::new().layer_fn(move |service| ClientRate {
+                service,
+                limiter: limiter.clone(),
+            }),
         )
         .to_service_builder();
     let methods = Methods::from(rpc_module(hub)?);
@@ -209,25 +205,6 @@ pub fn rpc_module<S: TransactionSource + 'static>(
                 service_pubkey: hub.service_pubkey().into(),
                 signature: signature.into(),
             })
-        },
-    )?;
-    method(
-        &mut module,
-        RING_DEPOSITS,
-        |hub, request: RingDepositsRequest| async move {
-            let (limit, before) = (
-                request.page_limit(),
-                request.before().map_err(|_| RingRpcError::InvalidPage)?,
-            );
-            let ring = request.ring_program_id.0;
-            hub.validate_ring(ring)?;
-            let _scan = hub.admit(Lane::Deposits(limit))?;
-            let page = DepositPage {
-                ring,
-                limit,
-                before,
-            };
-            Ok(RingDepositsResponse::from(hub.ring_deposits(page).await?))
         },
     )?;
     method(
@@ -547,7 +524,7 @@ mod tests {
     use spr_keypair::X25519Keypair;
     use zolana_ring_client::RingIndexerError;
     use zolana_ring_client::{
-        rpc::{KeyMode, RingChainStatus, DEPOSITS_PAGE_LIMIT, GET_DECRYPTED_TRANSACTIONS},
+        rpc::{KeyMode, RingChainStatus, GET_DECRYPTED_TRANSACTIONS},
         AuditError, RingOrigin,
     };
     use zolana_ring_transaction::RingAssets;
@@ -562,14 +539,13 @@ mod tests {
         error::RingRpcError,
         hub::ServiceIdentity,
         limits::{
-            MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS, MAX_CONCURRENT_READS,
-            MAX_REQUEST_UNITS_PER_SECOND,
+            MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_READS, MAX_REQUEST_UNITS_PER_SECOND,
         },
         origins::OriginPolicy,
         record_update::RecordUpdateRefusal,
         upstream::{
-            DepositHistory, MergeAuditRequest, RecordsTip, RingConfiguration, RingFrame,
-            RingHistoryPage, TransactionPage,
+            MergeAuditRequest, RecordsTip, RingConfiguration, RingFrame, RingHistoryPage,
+            TransactionPage,
         },
     };
 
@@ -623,14 +599,6 @@ mod tests {
             Err(AuditError::Unavailable {
                 signature: _signature,
                 message: "unused source".to_owned(),
-            })
-        }
-
-        async fn ring_deposits(&self, _page: DepositPage) -> Result<DepositHistory, ClientError> {
-            Ok(DepositHistory {
-                deposits: Vec::new(),
-                cursor: None,
-                oldest_slot: None,
             })
         }
 
@@ -756,14 +724,6 @@ mod tests {
             panic!("expected JSON object");
         };
         map
-    }
-
-    fn deposits(ring: Address) -> RingDepositsRequest {
-        RingDepositsRequest {
-            ring_program_id: ring.to_bytes().into(),
-            limit: None,
-            cursor: None,
-        }
     }
 
     fn options(port: u16, timeout: Duration) -> ServerOptions {
@@ -994,67 +954,6 @@ mod tests {
         handle.stopped().await;
     }
 
-    /// A gateway bills a deposits page by the signatures it asks to examine,
-    /// and only for a successful answer.
-    #[tokio::test]
-    async fn a_deposits_page_reports_its_metering_units() {
-        let server_port = port();
-        let handle = run_server(
-            hub(source(), Origins::default()),
-            options(server_port, Duration::from_secs(1)),
-        )
-        .await
-        .expect("server");
-        let url = format!("http://127.0.0.1:{server_port}/v1/zolana/ring");
-        let client = reqwest::Client::new();
-        let units = |method: &str, params: serde_json::Value| {
-            let request = client
-                .post(format!("{url}/{method}"))
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": method,
-                    "params": params,
-                }));
-            async move {
-                let response = request.send().await.expect("call");
-                let units = response
-                    .headers()
-                    .get("x-helius-metering-units")
-                    .map(|units| units.to_str().expect("ascii").to_owned());
-                let body: serde_json::Value = response.json().await.expect("JSON-RPC answer");
-                (units, body)
-            }
-        };
-
-        let mut wide = deposits(SERVED_RING);
-        wide.limit = Some(200);
-        let (wide_units, body) =
-            units(RING_DEPOSITS, serde_json::to_value(wide).expect("params")).await;
-        assert!(body["result"].is_object(), "{body}");
-        assert_eq!(wide_units.as_deref(), Some("4"));
-
-        let (default_units, _) = units(
-            RING_DEPOSITS,
-            serde_json::to_value(deposits(SERVED_RING)).expect("params"),
-        )
-        .await;
-        assert_eq!(default_units.as_deref(), Some("1"));
-
-        let (failed_units, body) = units(
-            RING_DEPOSITS,
-            serde_json::to_value(deposits(Address::new_from_array([9; 32]))).expect("params"),
-        )
-        .await;
-        assert!(body["error"].is_object(), "{body}");
-        assert_eq!(failed_units, None);
-
-        let (health_units, _) = units(HEALTH, serde_json::Value::Null).await;
-        assert_eq!(health_units, None);
-        handle.stop().expect("stop");
-        handle.stopped().await;
-    }
-
     #[tokio::test]
     async fn a_path_runs_only_the_method_it_names() {
         let server_port = port();
@@ -1092,7 +991,7 @@ mod tests {
         for (path, method) in [
             ("/health", GET_DECRYPTED_TRANSACTIONS),
             ("/v1/zolana/ring/health", GET_DECRYPTED_TRANSACTIONS),
-            ("/v1/zolana/ring/ringStatus", RING_DEPOSITS),
+            ("/v1/zolana/ring/ringStatus", GET_RELAY_QUOTE),
         ] {
             let answer = call(path, named(method)).await;
             assert_eq!(answer["error"]["code"], -32601, "{path} {method}");
@@ -1223,30 +1122,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deposit_pages_are_metered_and_serve_one_ring() {
+    async fn health_and_status_answer_the_served_ring() {
         let module = rpc_module(hub(source(), Origins::default())).expect("module");
-
-        let foreign = module
-            .call::<_, RingDepositsResponse>(
-                RING_DEPOSITS,
-                params(deposits(Address::new_from_array([1; 32]))),
-            )
-            .await
-            .expect_err("another ring");
-        assert!(foreign.to_string().contains("not served"), "{foreign}");
-
-        for _ in 0..MAX_REQUEST_UNITS_PER_SECOND / DEPOSITS_PAGE_LIMIT as usize {
-            module
-                .call::<_, RingDepositsResponse>(RING_DEPOSITS, params(deposits(SERVED_RING)))
-                .await
-                .expect("page");
-        }
-        let busy = module
-            .call::<_, RingDepositsResponse>(RING_DEPOSITS, params(deposits(SERVED_RING)))
-            .await
-            .expect_err("exhausted window");
-        assert!(busy.to_string().contains("busy"), "{busy}");
-
         let health: HealthResponse = module.call(HEALTH, [(); 0]).await.expect("health");
         assert_eq!(health.mode, KeyMode::Local);
         let status: RingStatusResponse = module
@@ -1305,21 +1182,6 @@ mod tests {
         assert!(matches!(hub.admit(Lane::Read), Err(RingRpcError::Busy)));
         drop(held);
         let _reopened = hub.admit(Lane::Read).expect("released slot");
-    }
-
-    #[test]
-    fn concurrent_deposit_scans_are_capped() {
-        let hub = hub(source(), Origins::default());
-        let held = (0..MAX_CONCURRENT_DEPOSIT_SCANS)
-            .map(|_| hub.admit(Lane::Deposits(1)).expect("deposit slot"))
-            .collect::<Vec<_>>();
-
-        assert!(matches!(
-            hub.admit(Lane::Deposits(1)),
-            Err(RingRpcError::Busy)
-        ));
-        drop(held);
-        let _reopened = hub.admit(Lane::Deposits(1)).expect("released slot");
     }
 
     #[test]

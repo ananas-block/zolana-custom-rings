@@ -55,12 +55,6 @@ func OutputBlinding(t testing.TB, firstNullifier, seedOut *big.Int, i int) *big.
 	return spptest.MustHash(t, blinding, err)
 }
 
-// DepositBlinding mirrors shared.DepositBlinding.
-func DepositBlinding(t testing.TB, blindingSecret *big.Int) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.DepositBlindingDomain), blindingSecret)
-}
-
 // RecipientTag is the slot tag over its preimage.
 func RecipientTag(t testing.TB, preimage *big.Int) *big.Int {
 	t.Helper()

@@ -28,8 +28,7 @@ use zolana_ring_client::{
         GetWalletStatusResponse, InputParty, SpendCoverageTotals, WalletBalance, WalletEnrollment,
         WalletNote, WalletNoteStatus, WALLET_SNAPSHOT_CURSOR_VERSION,
     },
-    AuditedMergeOutput, ConfirmedMerge, CreatedNotes, DepositOwner, DepositOwners, KnownUtxo,
-    UtxoOwner,
+    AuditedMergeOutput, ConfirmedMerge, KnownUtxo, UtxoOwner,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
@@ -999,7 +998,6 @@ impl AuditStore {
             let cache = self.read_enrollments();
             split_cached(values, |value| match key {
                 EnrollmentKey::Member => cache.by_member(value),
-                EnrollmentKey::OwnerHash => cache.by_owner_hash(value),
                 EnrollmentKey::ListKey => cache.by_list_key(value),
             })
         };
@@ -1087,28 +1085,6 @@ impl AuditStore {
         for LateOwner { owner, resume } in owners.into_iter().map(Into::into) {
             late.entry(owner).or_insert(resume);
         }
-    }
-
-    /// Moves each capsule the cache could not name to its stored owner, the rest stay unowned.
-    pub(crate) async fn resolve_deposits(
-        &self,
-        created: &mut CreatedNotes,
-    ) -> Result<(), RingRpcError> {
-        let hashes: Vec<[u8; 32]> = created.unowned.iter().map(|note| note.owner_hash).collect();
-        if hashes.is_empty() {
-            return Ok(());
-        }
-        let held = self.enrollments(EnrollmentKey::OwnerHash, &hashes).await?;
-        let owners = StoredOwners(&held);
-        let mut unowned = Vec::new();
-        for note in std::mem::take(&mut created.unowned) {
-            match note.created(&owners) {
-                Some(utxo) => created.utxos.push(utxo),
-                None => unowned.push(note),
-            }
-        }
-        created.unowned = unowned;
-        Ok(())
     }
 
     /// Rows a reload read from storage, their notes derived when the row first committed.
@@ -1400,25 +1376,6 @@ impl<'a> SpendableScan<'a> {
     }
 }
 
-/// The cache alone, a capsule whose owner it misses resolves from storage after decryption.
-impl DepositOwners for AuditStore {
-    fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
-        match self.read_enrollments().by_owner_hash(owner_hash) {
-            Cached::Hit(held) => Some(held.deposit_owner()),
-            Cached::Absent | Cached::Unknown => None,
-        }
-    }
-}
-
-/// Enrollments by owner hash, as storage answered them.
-struct StoredOwners<'a>(&'a HashMap<[u8; 32], HeldEnrollment>);
-
-impl DepositOwners for StoredOwners<'_> {
-    fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
-        self.0.get(owner_hash).map(HeldEnrollment::deposit_owner)
-    }
-}
-
 /// Splits keys into cache hits and keys only storage can answer.
 fn split_cached<V>(
     keys: &[[u8; 32]],
@@ -1523,7 +1480,7 @@ impl AuditStore {
         self.commit_fixture(delta).await;
     }
 
-    pub(crate) fn cached_enrollments(&self) -> [usize; 3] {
+    pub(crate) fn cached_enrollments(&self) -> [usize; 2] {
         self.read_enrollments().len()
     }
 

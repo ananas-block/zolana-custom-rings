@@ -24,26 +24,22 @@ type ringSecretVectors struct {
 		OutputIndex int    `json:"output_index"`
 		Blinding    string `json:"blinding"`
 	} `json:"outputs"`
-	SenderKey             string `json:"sender_key"`
-	SenderPkHash          string `json:"sender_pk_hash"`
-	PrivateTxBlinding     string `json:"private_tx_blinding"`
-	DepositBlindingSecret string `json:"deposit_blinding_secret"`
-	DepositBlinding       string `json:"deposit_blinding"`
+	SenderKey         string `json:"sender_key"`
+	SenderPkHash      string `json:"sender_pk_hash"`
+	PrivateTxBlinding string `json:"private_tx_blinding"`
 }
 
 type ringSecretsCircuit struct {
-	OutputIndexes         []int `gnark:"-"`
-	TxViewingSk           [32]frontend.Variable
-	Salt                  [16]frontend.Variable
-	FirstNullifier        frontend.Variable
-	BlindingSeed          frontend.Variable
-	OutputBlindingSeed    frontend.Variable
-	Outputs               []ringSecretWires
-	SenderKey             [32]frontend.Variable
-	SenderPkHash          frontend.Variable
-	PrivateTxBlinding     frontend.Variable
-	DepositBlindingSecret frontend.Variable
-	DepositBlinding       frontend.Variable
+	OutputIndexes      []int `gnark:"-"`
+	TxViewingSk        [32]frontend.Variable
+	Salt               [16]frontend.Variable
+	FirstNullifier     frontend.Variable
+	BlindingSeed       frontend.Variable
+	OutputBlindingSeed frontend.Variable
+	Outputs            []ringSecretWires
+	SenderKey          [32]frontend.Variable
+	SenderPkHash       frontend.Variable
+	PrivateTxBlinding  frontend.Variable
 }
 
 type ringSecretWires struct {
@@ -64,7 +60,6 @@ func (c *ringSecretsCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(senderPkHash, c.SenderPkHash)
 	privateTxBlinding := transaction.DerivePrivateTxBlinding(api, c.FirstNullifier, seed)
 	api.AssertIsEqual(privateTxBlinding, c.PrivateTxBlinding)
-	api.AssertIsEqual(shared.DepositBlinding(api, c.DepositBlindingSecret), c.DepositBlinding)
 	return nil
 }
 
@@ -73,13 +68,11 @@ func TestRingSecretsMatchRustVectors(t *testing.T) {
 	var vectors ringSecretVectors
 	ringtest.ReadVector(t, "wallet/ring-secrets.json", &vectors)
 	witness := &ringSecretsCircuit{
-		FirstNullifier:        ringtest.VectorField(t, vectors.FirstNullifier),
-		BlindingSeed:          ringtest.VectorField(t, vectors.BlindingSeed),
-		OutputBlindingSeed:    ringtest.VectorField(t, vectors.OutputBlindingSeed),
-		SenderPkHash:          ringtest.VectorField(t, vectors.SenderPkHash),
-		PrivateTxBlinding:     ringtest.VectorField(t, vectors.PrivateTxBlinding),
-		DepositBlindingSecret: ringtest.VectorField(t, vectors.DepositBlindingSecret),
-		DepositBlinding:       ringtest.VectorField(t, vectors.DepositBlinding),
+		FirstNullifier:     ringtest.VectorField(t, vectors.FirstNullifier),
+		BlindingSeed:       ringtest.VectorField(t, vectors.BlindingSeed),
+		OutputBlindingSeed: ringtest.VectorField(t, vectors.OutputBlindingSeed),
+		SenderPkHash:       ringtest.VectorField(t, vectors.SenderPkHash),
+		PrivateTxBlinding:  ringtest.VectorField(t, vectors.PrivateTxBlinding),
 	}
 	copy(witness.TxViewingSk[:], ringtest.VectorWires(t, vectors.TxViewingSk, 32))
 	copy(witness.Salt[:], ringtest.VectorWires(t, vectors.Salt, 16))

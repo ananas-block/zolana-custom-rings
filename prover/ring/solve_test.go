@@ -13,7 +13,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringdeposit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
@@ -36,12 +35,11 @@ const (
 	privateKey   common.CircuitType = "custom-ring-apply-records-private-1"
 	enrollKey    common.CircuitType = "custom-ring-apply-enrollments-2"
 	registerKey  common.CircuitType = "custom-ring-register-key"
-	depositKey   common.CircuitType = "custom-ring-deposit-8"
 	mergeKey     common.CircuitType = "custom-ring-merge"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{payoutKey, transferKey, transfer4Key, transfer8Key, wideKey, wide40Key, entryKey, entry8Key, entryWideKey, applyKey, batchKey, privateKey, enrollKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{payoutKey, transferKey, transfer4Key, transfer8Key, wideKey, wide40Key, entryKey, entry8Key, entryWideKey, applyKey, batchKey, privateKey, enrollKey, registerKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -91,8 +89,6 @@ func hostRequest(t testing.TB, k Key) any {
 		return enrollmentsRequest(t, k.Circuit, k.Inputs)
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
-	case Deposit:
-		return requestOf[DepositParams](t, k.Circuit, ringdeposit.BuildScreened(t, k.Inputs, ringdeposit.Allowlisted(ringdeposit.MintA)).Narrow(t, k.Inputs).Circuit)
 	case Merge:
 		return requestOf[MergeParams](t, k.Circuit, ringmerge.Build(t).Circuit)
 	}

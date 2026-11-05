@@ -41,7 +41,6 @@ impl<'a> RingWallet<'a> {
             AnonymousSync::new(self.keys, &self.assets)
                 .with_full_rescan()
                 .with_indexer_config(config)
-                .with_deposit_payload(zolana_ring_client::deposit_payload)
                 .fetch(env.client.as_async().indexer(), &self.history)
                 .await
                 .map_err(anyhow::Error::from)

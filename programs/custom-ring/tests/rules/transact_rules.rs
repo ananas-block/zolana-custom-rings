@@ -1088,6 +1088,21 @@ fn separate_approvers_settle_a_transaction_past_both_thresholds() {
     reaches_verification(approved(&mut ring, both, &[&both_classes]));
 }
 
+/// A deposit enters through a transfer, tag 58 names no instruction.
+#[test]
+fn the_program_names_no_instruction_at_tag_58() {
+    let mut ring = Ring::new(Setup::AuditOnly);
+    let instruction = solana_instruction::Instruction {
+        program_id: PROGRAM,
+        accounts: vec![AccountMeta::new_readonly(policy_pda(), false)],
+        data: vec![58; 219],
+    };
+    refused(
+        ring.send(instruction, &[]),
+        CustomRingError::InvalidInstructionData,
+    );
+}
+
 #[test]
 fn optional_classes_follow_the_economic_operation() {
     let (transfers, co_signer) = (Keypair::new(), Keypair::new());

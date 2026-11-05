@@ -4,11 +4,10 @@ use custom_ring_interface::tracking::{TrackingEntry, TRACKING_EMPTY_ROOT};
 use custom_ring_interface::{
     ciphertext_digest, cosign::ApprovalMask, domain, record_chain, tail_chain,
     ApplyEnrollmentsStatement, ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout,
-    AuditStreamLayout, ConfidentialSender, CustomRingError, DepositContext, DepositPublicInput,
-    DepositRegistry, DepositedAsset, PrivateWrites, RegisterKeyStatement, RingOutput,
-    SignerDataCounts, SignerSet, SlotBody, TransferFamily, TransferRoots, TransferStatement,
-    ANONYMOUS_PARTIES, AUDIT_HEAD_ELEMENTS, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
-    DEPOSIT_PUBLIC_INPUT_ELEMENTS, OPENING_RECORD_LEN, RECIPIENT_BODY_LEN,
+    AuditStreamLayout, ConfidentialSender, CustomRingError, PrivateWrites, RegisterKeyStatement,
+    RingOutput, SignerDataCounts, SignerSet, SlotBody, TransferFamily, TransferRoots,
+    TransferStatement, ANONYMOUS_PARTIES, AUDIT_HEAD_ELEMENTS, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    RECIPIENT_BODY_LEN,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -37,7 +36,6 @@ struct StatementVectors {
     apply_enrollments: ApplyEnrollmentsCase,
     tracking: TrackingCase,
     register_key: RegisterKeyCase,
-    deposit: DepositCase,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -156,26 +154,6 @@ struct RegisterKeyCase {
     auditor_pubkey: String,
     eph_u: String,
     ciphertext: String,
-    elements: Vec<String>,
-    public_input_hash: String,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct DepositCase {
-    program_id: String,
-    tree: String,
-    spp_data: String,
-    context_hash: String,
-    owner_utxo_hashes: Vec<String>,
-    ciphertexts: Vec<String>,
-    auditor_pubkey: String,
-    eph_pk: String,
-    assets: Vec<String>,
-    amounts: Vec<u64>,
-    tracking_root: String,
-    member_registry_root: Option<String>,
-    curator_root: Option<String>,
-    policy_hash: Option<String>,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -579,56 +557,13 @@ fn compute_vectors() -> StatementVectors {
         eph_u: &values.keys[9],
         ciphertext: &register_ciphertext,
     };
-    let program_id = [0x77; 32];
-    let tree = [0x55; 32];
-    let spp_data: Vec<u8> = (0..75u8).map(|byte| byte ^ 0x3c).collect();
-    let context_hash = DepositContext {
-        program_id: &program_id,
-        tree: &tree,
-        spp_data: &spp_data,
-    }
-    .hash()
-    .unwrap();
-    let owners = [values.fields[14], values.fields[15]];
-    let ciphertexts = [[0x21; OPENING_RECORD_LEN], [0x22; OPENING_RECORD_LEN]];
-    let eph_pk = tagged(0xa2);
-    let deposited = [
-        DepositedAsset {
-            asset: values.fields[17],
-            amount: 1_000,
-        },
-        DepositedAsset {
-            asset: values.fields[18],
-            amount: 2_000,
-        },
-    ];
-    let deposit = DepositPublicInput {
-        context_hash: &context_hash,
-        key_capacity: 2,
-        owner_utxo_hashes: &owners,
-        ciphertexts: &ciphertexts,
-        assets: &deposited,
-        auditor_pk: &values.auditor_pubkey,
-        eph_pk: &eph_pk,
-        tracking_root: &values.fields[21],
-        registry: Some(DepositRegistry {
-            own_root: &values.fields[16],
-            curator_root: Some(&values.fields[20]),
-            policy_hash: &values.fields[19],
-        }),
-    };
     StatementVectors {
         description: "Every ring statement and its public input HashChain4(elements). The transfer \
                       head is [CRTX, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), \
                       digest(envelope), salt, layout] with the frame's \
                       random salt and layout = has_data | entry << 1. \
                       digest(ct) = Poseidon(u32 len(ct), HashChain4(pack_left31(ct))). Each \
-                      envelope has the length of its stream layout. The deposit statement is HashChain4(elements) \
-                      over CRDP, the context hash of the program id, tree and SPP data, the \
-                      count, each owner hash with its capsule ciphertext hash \
-                      zero padded to 8 slots, both tagged keys packed, the tracking root, the \
-                      registry root, the curator root, the policy hash, each asset hash with its amount zero \
-                      padded to 8 slots. The transfer statements are HashChain4 over the \
+                      envelope has the length of its stream layout. The transfer statements are HashChain4 over the \
                       audit head under CRTX, in_proof, hidden, delegate, \
                       approval_mask, no_spend, output_count, output_chain, record_chain \
                       HashChain4(hash_bytes(record_i)), tail_chain HashChain4(hash_bytes(tail_i)) or \
@@ -703,31 +638,6 @@ fn compute_vectors() -> StatementVectors {
             elements: hexes(&register.elements().unwrap()),
             public_input_hash: hex::encode(register.hash().unwrap()),
         },
-        deposit: DepositCase {
-            program_id: hex::encode(program_id),
-            tree: hex::encode(tree),
-            spp_data: hex::encode(&spp_data),
-            context_hash: hex::encode(context_hash),
-            owner_utxo_hashes: hexes(&owners),
-            ciphertexts: ciphertexts.iter().map(hex::encode).collect(),
-            auditor_pubkey: hex::encode(deposit.auditor_pk),
-            eph_pk: hex::encode(deposit.eph_pk),
-            assets: deposited.iter().map(|value| hex::encode(value.asset)).collect(),
-            amounts: deposited.iter().map(|value| value.amount).collect(),
-            tracking_root: hex::encode(deposit.tracking_root),
-            member_registry_root: deposit
-                .registry
-                .map(|registry| hex::encode(registry.own_root)),
-            curator_root: deposit
-                .registry
-                .and_then(|registry| registry.curator_root)
-                .map(hex::encode),
-            policy_hash: deposit
-                .registry
-                .map(|registry| hex::encode(registry.policy_hash)),
-            elements: hexes(&deposit.elements().unwrap()),
-            public_input_hash: hex::encode(deposit.hash().unwrap()),
-        },
     }
 }
 
@@ -747,10 +657,6 @@ fn ring_statements_vector() {
         .map(|case| case.elements.len())
         .collect();
     assert!(transfer.iter().all(|len| *len == 42 + ANONYMOUS_PARTIES));
-    assert_eq!(
-        committed.deposit.elements.len(),
-        DEPOSIT_PUBLIC_INPUT_ELEMENTS
-    );
 }
 
 #[test]

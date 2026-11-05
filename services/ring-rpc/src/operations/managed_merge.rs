@@ -552,8 +552,8 @@ pub(crate) mod tests {
             HeldEnrollment,
         },
         upstream::{
-            DepositHistory, DepositPage, Finality, MergeAuditRequest, RecordsTip,
-            RingConfiguration, RingFrame, RingHistoryPage, TrackingRoot, TransactionPage,
+            Finality, MergeAuditRequest, RecordsTip, RingConfiguration, RingFrame, RingHistoryPage,
+            TrackingRoot, TransactionPage,
         },
         utxos::CreatedIn,
     };
@@ -639,10 +639,6 @@ pub(crate) mod tests {
                     signature,
                     message: "unused source".to_owned(),
                 })
-        }
-
-        async fn ring_deposits(&self, _page: DepositPage) -> Result<DepositHistory, ClientError> {
-            unused()
         }
 
         async fn ring_config(

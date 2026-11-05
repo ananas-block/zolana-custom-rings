@@ -49,8 +49,6 @@ mod managed_merge;
 mod merge_inputs;
 #[path = "storage/merge_settings.rs"]
 mod merge_settings;
-#[path = "config/metering.rs"]
-mod metering;
 #[path = "storage/migration/mod.rs"]
 mod migration;
 #[path = "security/origins.rs"]
@@ -159,9 +157,8 @@ pub use storage_chain::{live_ring_client, LiveStorageChain, ProvedEnrollments, S
 pub use tracking::fixture as tracking_fixture;
 pub use tracking::{HeldEnrollment, TrackingRefusal, TrackingSource};
 pub use upstream::{
-    ChainSource, DepositHistory, DepositPage, Finality, MergeAuditRequest, RecordsTip,
-    RingConfiguration, RingFrame, RingHistoryPage, TrackingRoot, TransactionPage,
-    TransactionSource, Upstreams,
+    ChainSource, Finality, MergeAuditRequest, RecordsTip, RingConfiguration, RingFrame,
+    RingHistoryPage, TrackingRoot, TransactionPage, TransactionSource, Upstreams,
 };
 pub use utxos::UTXO_BACKFILL_INTERVAL;
 

@@ -1,12 +1,12 @@
 //! The confidential rail.
 
 use custom_ring_interface::{DisclosureFormat, RingMode, RingRail};
-use solana_address::Address;
 use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
-use spr_interface::{instruction::InterfaceTransfer, shape::Shape};
+use spr_interface::shape::Shape;
 use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
 use spr_transaction::instructions::transact::ConfidentialTransaction;
+pub(super) use zolana_ring_client::rpc::deposit_funder;
 use zolana_ring_client::rpc::TokenAccountSetup;
 use zolana_ring_transaction::RingOutputRail;
 
@@ -30,20 +30,6 @@ pub struct Owner<'a> {
     pub(super) token_account_setup: Vec<TokenAccountSetup>,
     /// The other owners of a signer rail spend, each signs the transaction.
     pub(super) co_owners: Vec<CoOwner<'a>>,
-}
-
-/// The key signing for a deposit leg, a withdrawal names none.
-pub(super) fn deposit_funder(
-    transfer: &InterfaceTransfer,
-    accounts: &TransactInterfaceTransferAccounts,
-) -> Option<Address> {
-    match accounts {
-        TransactInterfaceTransferAccounts::Sol(sol) => {
-            transfer.is_deposit().then_some(sol.recipient)
-        }
-        TransactInterfaceTransferAccounts::SplDeposit(spl) => Some(spl.token_authority),
-        TransactInterfaceTransferAccounts::SplWithdrawal(_) => None,
-    }
 }
 
 pub struct CustomRingTransferInput<'a> {

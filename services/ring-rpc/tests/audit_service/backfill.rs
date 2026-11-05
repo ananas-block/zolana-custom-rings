@@ -101,19 +101,14 @@ async fn audited_utxos_refuse_an_ungranted_reader_a_bad_count_a_changed_hash_and
 }
 
 #[tokio::test]
-async fn confirmed_deposit_and_merge_tag_collisions_do_not_poison_an_audit_page() {
+async fn a_confirmed_merge_tag_collision_does_not_poison_an_audit_page() {
     let fixture = Fixture::new();
-    let mut deposit = fixture.missing_message.clone();
-    deposit.tx_signature = Signature::from([11; 64]);
-    deposit.proofless = true;
-    deposit.tx_viewing_pk = None;
-    deposit.nullifiers.clear();
     let mut merge = fixture.missing_message.clone();
     merge.tx_signature = Signature::from([12; 64]);
     merge.tx_viewing_pk = None;
     let source = fixture
         .source()
-        .with_transactions(vec![fixture.audited.clone(), deposit, merge]);
+        .with_transactions(vec![fixture.audited.clone(), merge]);
     let service = fixture.hub(source).service(None).unwrap();
     let response = service
         .read(AuditRead {

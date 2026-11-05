@@ -1,5 +1,7 @@
 //! The Ring RPC relay a wallet sends its transfer through.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use async_trait::async_trait;
 use solana_address::Address;
 use solana_signer::Signer;
@@ -8,6 +10,8 @@ use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
     PrepareRelayRequest, RelayId, RelayQuote, RelayStatus, RelayStep, SubmitRelayRequest,
 };
+
+use zolana_ring_policy::OwnerDebit;
 
 use crate::{
     relay_message::{
@@ -41,6 +45,7 @@ pub struct PreparedRelay {
     request: PrepareRelayRequest,
     /// `None` on the rails that sign inside the proof.
     expected: Option<ExpectedMessage>,
+    sent: AtomicBool,
 }
 
 #[must_use = "prepare the authority transfer"]
@@ -78,6 +83,7 @@ impl PreparedRelay {
         Self {
             request,
             expected: None,
+            sent: AtomicBool::new(false),
         }
     }
 
@@ -92,10 +98,41 @@ impl PreparedRelay {
         Ok(self.request.relay_id()?)
     }
 
-    pub async fn send<R: RingRelay + ?Sized>(self, relay: &R) -> Result<RelaySent, RingError> {
+    #[cfg(test)]
+    pub(crate) fn request(&self) -> &PrepareRelayRequest {
+        &self.request
+    }
+
+    /// Per owner and asset, read before `send` hands the owner's signature over.
+    pub fn charged_outflows(&self) -> &[OwnerDebit] {
+        self.expected
+            .as_ref()
+            .map_or(&[], ExpectedMessage::charged_outflows)
+    }
+
+    /// Repeatable after a lost answer, Ring RPC keys every stored relay by its id.
+    pub async fn send<R: RingRelay + ?Sized>(&self, relay: &R) -> Result<RelaySent, RingError> {
         let relay_id = self.relay_id()?;
-        let step = relay.prepare_relay(self.request).await?;
-        Ok(RelaySent::accepted(step, &relay_id)?.expecting(self.expected))
+        // 1. A retry reconciles by the relay id first, a relay Ring RPC sent never prepares again.
+        if self.sent.swap(true, Ordering::AcqRel) {
+            match relay
+                .get_relay_status(GetRelayStatusRequest {
+                    relay_id: relay_id.clone(),
+                })
+                .await
+            {
+                Ok(RelayStatus::Sent { .. } | RelayStatus::Confirmed { .. }) => {
+                    return Ok(RelaySent::Submitted(relay_id))
+                }
+                Ok(RelayStatus::Failed { reason }) => {
+                    return Err(RingError::RelayFailed { reason })
+                }
+                // 2. Ring RPC answers a stored relay from its store, an unknown one proves once.
+                Ok(RelayStatus::AwaitingSignature) | Err(_) => {}
+            }
+        }
+        let step = relay.prepare_relay(self.request.clone()).await?;
+        Ok(RelaySent::accepted(step, &relay_id)?.expecting(self.expected.clone()))
     }
 }
 
@@ -200,6 +237,13 @@ impl PendingSignature {
     /// For a named co-signer that reads exact totals, the terms of no slot.
     pub fn approval_opening(&self) -> Option<&ApprovalOpening> {
         self.expected.as_deref()?.approval_opening()
+    }
+
+    /// Per owner and asset, read before a public owner signs.
+    pub fn charged_outflows(&self) -> &[OwnerDebit] {
+        self.expected
+            .as_deref()
+            .map_or(&[], ExpectedMessage::charged_outflows)
     }
 
     /// The expectation comes from the wallet's own request, never from Ring RPC's answer.

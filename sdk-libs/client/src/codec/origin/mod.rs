@@ -2,7 +2,6 @@
 
 use core::future::Future;
 
-use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_event::{tag, GeneralEvent};
@@ -10,7 +9,6 @@ use spr_event_parser::{
     event_parent, reconstruct_general_event, InstructionGroup, ParsedInstruction,
 };
 use spr_interface::{
-    instruction::instruction_data::deposit::RingDepositIxData,
     instruction::{settlement_accounts, InterfaceTransfer, TransactIxDataRef},
     SHIELDED_POOL_CPI_AUTHORITY, SHIELDED_POOL_PROGRAM_ID, SOL_INTERFACE,
 };
@@ -19,8 +17,7 @@ use spr_transaction::{ShieldedTransaction, SOL_MINT};
 use crate::AuditError;
 use custom_ring_interface::{
     tag as ring_tag, transact_flag, AuditStreamLayout, CheckedAuthorization, CustomRingError,
-    CustomRingMergeIxDataRef, DepositPrefix, InstructionTag, ParsedTransact,
-    RingDepositAuditCapsule, RingMode, RingRail, RingTransactData,
+    CustomRingMergeIxDataRef, InstructionTag, ParsedTransact, RingMode, RingRail, RingTransactData,
 };
 
 /// What a confirmed transaction says about its ring, its signers and the value it settled out.
@@ -32,8 +29,6 @@ pub struct RingOrigin {
     /// Fee payer first, every real input owner signs.
     pub signers: Vec<Address>,
     pub withdrawals: Vec<RingWithdrawal>,
-    /// Capsule bindings from this event's confirmed audited deposit instruction.
-    pub deposits: Vec<ConfirmedDeposit>,
     /// The anonymous merge disclosure whose proof the direct ring caller verified.
     pub merge_disclosure: Option<ConfirmedMergeDisclosure>,
     /// `tag || data` of the ring instruction that forwarded a transfer.
@@ -52,7 +47,6 @@ pub struct ConfirmedMergeDisclosure {
 /// The confirmed instruction selects the recovery path, never indexer metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfirmedEventKind {
-    Deposit,
     Transfer,
     Merge,
 }
@@ -111,7 +105,7 @@ impl ConfirmedEvent {
             .map(|key| *key.as_bytes())
             .unwrap_or([0; 33]);
         if self.slot.is_some_and(|slot| transaction.slot != slot)
-            || transaction.proofless != (self.kind == ConfirmedEventKind::Deposit)
+            || transaction.proofless
             || viewing_key != event.tx_viewing_pk
             || transaction.salt.unwrap_or_default() != event.salt
             || transaction.messages != event.messages
@@ -203,31 +197,6 @@ impl RingOrigin {
     }
 }
 
-/// An opening authenticated by successful execution of the ring's deposit proof.
-/// Only the confirmed instruction parser constructs this binding.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfirmedDeposit {
-    slot_index: u8,
-    owner_utxo_hash: [u8; 32],
-    capsule_hash: [u8; 32],
-}
-
-impl ConfirmedDeposit {
-    pub fn slot_index(&self) -> u8 {
-        self.slot_index
-    }
-
-    pub(crate) fn matches(
-        &self,
-        capsule: RingDepositAuditCapsule<'_>,
-        owner_utxo_hash: &[u8; 32],
-    ) -> bool {
-        self.slot_index == capsule.slot_index
-            && &self.owner_utxo_hash == owner_utxo_hash
-            && self.capsule_hash == <[u8; 32]>::from(Sha256::digest(capsule.encode()))
-    }
-}
-
 /// One public settlement leg out of the ring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingWithdrawal {
@@ -263,7 +232,6 @@ pub fn ring_event_origin_in(
         .iter()
         .any(|instruction| core::ptr::eq(*instruction, source));
     let kind = match source.data[0] {
-        tag::DEPOSIT | tag::RING_DEPOSIT => ConfirmedEventKind::Deposit,
         tag::MERGE_TRANSACT | tag::RING_MERGE_TRANSACT | tag::RING_MERGE_V2 => {
             ConfirmedEventKind::Merge
         }
@@ -285,7 +253,6 @@ pub fn ring_event_origin_in(
         event: ConfirmedEvent::new(kind, event),
         signers: Vec::new(),
         withdrawals,
-        deposits: confirmed_deposits(groups, source, ring)?,
         merge_disclosure: confirmed_merge_disclosure(groups, source, ring),
         transact,
         pool_accounts: source.accounts.clone(),
@@ -402,46 +369,6 @@ fn direct_caller<'a>(
             .position(|inner| core::ptr::eq(inner, source))?;
         event_parent(group, index)
     })
-}
-
-/// Bind only capsules whose proof ran in the direct caller of this exact event.
-/// A plain deposit may carry arbitrary capsule bytes and grants no binding.
-fn confirmed_deposits(
-    groups: &[InstructionGroup],
-    source: &ParsedInstruction,
-    ring: Address,
-) -> Result<Vec<ConfirmedDeposit>, AuditError> {
-    if source.data.first() != Some(&tag::RING_DEPOSIT) {
-        return Ok(Vec::new());
-    }
-    let Some(caller) = direct_caller(groups, source).filter(|caller| caller.program_id == ring)
-    else {
-        return Ok(Vec::new());
-    };
-    let mut spp_data = caller.data.as_slice();
-    if DepositPrefix::parse(&mut spp_data).is_err() || spp_data != source.data.as_slice() {
-        return Ok(Vec::new());
-    }
-    let deposit = RingDepositIxData::deserialize(&source.data[1..])
-        .map_err(|error| AuditError::InvalidDepositData(error.to_string()))?;
-    deposit
-        .deposits
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let capsule = RingDepositAuditCapsule::parse(&entry.encrypted.ciphertext)
-                .map_err(|error| AuditError::InvalidDepositData(error.to_string()))?
-                .filter(|capsule| usize::from(capsule.slot_index) == index)
-                .ok_or_else(|| {
-                    AuditError::InvalidDepositData("missing or misplaced capsule".into())
-                })?;
-            Ok(ConfirmedDeposit {
-                slot_index: capsule.slot_index,
-                owner_utxo_hash: entry.owner_utxo_hash,
-                capsule_hash: Sha256::digest(&entry.encrypted.ciphertext).into(),
-            })
-        })
-        .collect()
 }
 
 /// `ring_transact` needs the ring's `ring_auth` signer, so only the ring's direct callees count.

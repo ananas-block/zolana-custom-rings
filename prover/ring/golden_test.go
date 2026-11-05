@@ -91,8 +91,6 @@ func goldenPath(name string) string {
 		family = "transfer"
 	case strings.HasPrefix(name, "custom-ring-apply-"), name == "custom-ring-register-key":
 		family = "records"
-	case strings.HasPrefix(name, "custom-ring-deposit-"):
-		family = "deposit"
 	case strings.HasPrefix(name, "custom-ring-merge-"):
 		family = "merge"
 	default:

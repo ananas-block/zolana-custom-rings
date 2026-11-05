@@ -30,14 +30,10 @@ const (
 	ApplyRecordsDomain = 0x43524150
 	// RegisterKeyDomain = "CRRG"
 	RegisterKeyDomain = 0x43525247
-	// DepositStatementDomain = "CRDP"
-	DepositStatementDomain = 0x43524450
 	// MergeStatementDomain = "CRMG"
 	MergeStatementDomain = 0x43524d47
 	// ApprovalTotalsDomain = "CRAO"
 	ApprovalTotalsDomain = 0x4352414f
-	// DepositBlindingDomain = "CRDB"
-	DepositBlindingDomain = 0x43524442
 	// WithdrawalsDomain = "CRPW"
 	WithdrawalsDomain = 0x43525057
 	// TransferStatementDomain = "CRTX"
@@ -66,13 +62,11 @@ const (
 	AuditEncInfo = "CRING/adt"
 	// NfKeyEncInfo mirrors REGISTER_KEY_LABEL.
 	NfKeyEncInfo = "CRING/nfk"
-	// DepositEncInfo mirrors DEPOSIT_AUDIT_LABEL.
-	DepositEncInfo = "CRING/dep"
 	// MergeEncInfo mirrors MERGE_RECORD_LABEL.
 	MergeEncInfo = "CRING/mrg"
 )
 
-// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a transfer or deposit output under it proves its owner absent from the tracking root under a salted payee read, a merge output reads no row.
+// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a transfer output under it proves its owner absent from the tracking root under a salted payee read, a merge output reads no row.
 var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c", 16)
 
 // SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.
@@ -81,11 +75,6 @@ var SolAssetField, _ = new(big.Int).SetString("2098f5fb9e239eab3ceac3f27b81e481d
 // BlindingSeed is SPP's blinding_seed Poseidon(CRBS, sk0, sk1, salt), every output blinding rebuilds from tx_viewing_sk.
 func BlindingSeed(api frontend.API, txViewingSk [2]frontend.Variable, salt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{BlindingSeedDomain, txViewingSk[0], txViewingSk[1], salt})
-}
-
-// DepositBlinding is Poseidon(CRDB, blindingSecret), domain separated from every SPP output blinding.
-func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
 }
 
 // ListTag is Poseidon(CRPT, listSalt), the tracking leaf's commitment to the owner's one salt.

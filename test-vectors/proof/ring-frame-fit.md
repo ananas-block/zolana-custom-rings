@@ -1473,14 +1473,6 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 24x1 | merge | owner signed | yes | 2777 | 33 | 2 | - | - | - | yes |  |
 | 52x1 | merge | ring | yes | 4500 | 60 | 1 | - | - | - | no | 404 B |
 | 52x1 | merge | owner signed | yes | 4597 | 61 | 2 | - | - | - | no | 501 B |
-| 0x1 | deposit | min | yes | 1014 | 9 | 1 | - | - | - | yes |  |
-| 0x1 | deposit | full | yes | 1285 | 15 | 2 | - | - | - | yes |  |
-| 0x2 | deposit | min | yes | 1392 | 9 | 1 | - | - | - | yes |  |
-| 0x2 | deposit | full | yes | 1663 | 15 | 2 | - | - | - | yes |  |
-| 0x4 | deposit | min | yes | 2148 | 9 | 1 | - | - | - | yes |  |
-| 0x4 | deposit | full | yes | 2419 | 15 | 2 | - | - | - | yes |  |
-| 0x8 | deposit | min | yes | 3660 | 9 | 1 | - | - | - | yes |  |
-| 0x8 | deposit | full | yes | 3931 | 15 | 2 | - | - | - | yes |  |
 
 Entry capacities at two outputs. Each row is the widest owner run one transaction clears at that leg count, rows = run + a hidden sender. A confidential leg names its own destination, a hidden sender's legs name one. over: what stops the next owner.
 | shape | rail | load | legs | leg kind | owner run | rows | accounts | signatures | frame | SPP CPI | fits | over |

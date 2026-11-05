@@ -76,15 +76,6 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
     if !recovered.unopened.is_empty() {
         line("unopened notes", recovered.unopened.len());
     }
-    if !recovered.unsupported_deposits.is_empty() {
-        line(
-            "deposit recovery",
-            format_args!(
-                "{} recipient-tagged deposits lack auditor openings; their ownership and spent status are unknown",
-                recovered.unsupported_deposits.len(),
-            ),
-        );
-    }
     let authority = ctx.authority()?;
     let transfer = ctx.block(
         DelegateMove {

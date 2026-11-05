@@ -3,9 +3,8 @@
 use std::collections::HashMap;
 
 use custom_ring_interface::{
-    ring_deposit_assets, settlement_mints, tag, DepositPrefix, InstructionTag, ParsedTransact,
-    PublicLeg, PublicSlotError, PublicSlots, RingRail, RingTransactData,
-    RING_DEPOSIT_RING_CONFIG_INDEX, RING_TRANSACT_RING_CONFIG_INDEX,
+    settlement_mints, tag, InstructionTag, ParsedTransact, PublicLeg, PublicSlotError, PublicSlots,
+    RingRail, RingTransactData, RING_TRANSACT_RING_CONFIG_INDEX,
 };
 use custom_ring_sdk::CustomRing;
 use solana_address::Address;
@@ -13,14 +12,10 @@ use solana_message::VersionedMessage;
 use spr_hasher::primitives::hash_bytes;
 use spr_interface::SOL_ASSET_FIELD;
 use spr_interface::{
-    instruction::{
-        instruction_data::{deposit::RingDepositIxDataRef, settlement_accounts},
-        tag::RING_DEPOSIT,
-        InterfaceTransfer,
-    },
+    instruction::{instruction_data::settlement_accounts, InterfaceTransfer},
     pda, PROGRAM_ID_PUBKEY,
 };
-use spr_transaction::SOL_MINT;
+use spr_transaction::{instructions::transact::SettlementTransfer, SOL_MINT};
 use zolana_ring_client::{
     AuditedTransaction, FramedRow, InputOpening, OutputOpening, TransactionAudit,
 };
@@ -88,12 +83,8 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
         let service = self.shared.service(Some(self.ring))?;
         let config = service.served_config().await?.ok_or_else(unavailable)?;
         let assets = self.shared.cached_assets().await;
-        match frame.tag {
-            tag::AUTHORITY_TRANSFER => return Ok(FrameRead::Delegate),
-            tag::DEPOSIT => {
-                return deposit_read(&frame, self.ring, &assets).map(FrameRead::Transfer)
-            }
-            _ => {}
+        if frame.tag == tag::AUTHORITY_TRANSFER {
+            return Ok(FrameRead::Delegate);
         }
         let store = self.shared.store(self.ring);
         let rail = InstructionTag::try_from(frame.tag)
@@ -174,7 +165,7 @@ impl<'m> RingFrame<'m> {
         let instruction = holding.ok_or_else(scope)?;
         let (tag, data) = instruction.data.split_first().ok_or_else(scope)?;
         if key(instruction.program_id_index)? != ring
-            || !matches!(*tag, tag::TRANSFER | tag::AUTHORITY_TRANSFER | tag::DEPOSIT)
+            || !matches!(*tag, tag::TRANSFER | tag::AUTHORITY_TRANSFER)
         {
             return Err(scope());
         }
@@ -212,63 +203,6 @@ impl<'m> RingFrame<'m> {
     }
 }
 
-/// A deposit spends no note, its legs answer on the ring's own tag.
-fn deposit_read(
-    frame: &RingFrame<'_>,
-    ring: Address,
-    assets: &RingAssets,
-) -> Result<TransferRead, RingRpcError> {
-    let instruction = [&[frame.tag][..], frame.data].concat();
-    let mut spp_data = instruction.as_slice();
-    DepositPrefix::parse(&mut spp_data).map_err(|_| unavailable())?;
-    let body = match spp_data.split_first() {
-        Some((&RING_DEPOSIT, body)) => body,
-        _ => return Err(unavailable()),
-    };
-    let deposit = RingDepositIxDataRef::from_bytes(body).map_err(|_| unavailable())?;
-    let start = frame
-        .accounts
-        .iter()
-        .position(|account| *account == pda::ring_auth(&ring).0)
-        .and_then(|position| position.checked_sub(RING_DEPOSIT_RING_CONFIG_INDEX))
-        .ok_or_else(unavailable)?;
-    let spp = frame.accounts.get(start..).ok_or_else(unavailable)?;
-    let deposited = ring_deposit_assets(&deposit, |position| {
-        spp.get(position).map(|address| address.to_bytes())
-    })
-    .map_err(|_| unavailable())?;
-    let owner = Member::owner_tag(ring.as_array()).map_err(|_| unavailable())?;
-    let mut flows: Vec<OwnerFlow> = Vec::new();
-    for leg in deposited {
-        let asset = assets.by_field(&leg.asset).ok_or_else(unavailable)?.asset;
-        match flows.iter_mut().find(|flow| flow.flow.asset == asset) {
-            Some(flow) => {
-                flow.flow.deposited = flow
-                    .flow
-                    .deposited
-                    .checked_add(leg.amount.into())
-                    .ok_or_else(unavailable)?;
-            }
-            None => flows.push(OwnerFlow {
-                owner,
-                flow: AssetFlow {
-                    asset,
-                    debit: 0,
-                    charged_outflow: 0,
-                    deposited: leg.amount.into(),
-                    withdrawn: 0,
-                },
-            }),
-        }
-    }
-    Ok(TransferRead {
-        flows,
-        spends_note: false,
-        approval_bits: None,
-        co_signers: Vec::new(),
-    })
-}
-
 fn public_flows(
     parsed: &ParsedTransact<'_>,
     spp: &[Address],
@@ -283,6 +217,34 @@ fn public_flows(
         })
         .collect::<Result<Vec<_>, RingRpcError>>()?;
     fold_public_flows(data.interface_transfers.iter().copied().zip(named))
+}
+
+/// The rows of a relayed deposit, the frame the relay proves from these legs carries the same.
+pub(crate) fn deposit_flows(
+    ring: Address,
+    transfers: &[SettlementTransfer],
+) -> Result<Vec<OwnerFlow>, RingRpcError> {
+    let public = fold_public_flows(transfers.iter().map(|transfer| {
+        let mint = match transfer {
+            SettlementTransfer::Spl { mint, .. } => Some(*mint),
+            SettlementTransfer::Sol { .. } => None,
+        };
+        (transfer.interface_transfer(), mint)
+    }))?;
+    OwnerFlows {
+        inputs: &[],
+        outputs: &[],
+        owner_signers: &[],
+        public: &public,
+        no_spend_owner: Member::owner_tag(ring.as_array()).map_err(|_| unavailable())?,
+    }
+    .rows(|asset| {
+        public
+            .iter()
+            .find(|flow| flow.asset == *asset)
+            .map(|flow| flow.mint)
+            .ok_or_else(unavailable)
+    })
 }
 
 /// The program's fold bounds each net to a u64 magnitude, a gross past `u64::MAX` stays exact.
@@ -536,7 +498,6 @@ mod frame_flows_tests;
 
 #[cfg(test)]
 mod tests {
-    use custom_ring_interface::storage::Revision;
     use solana_instruction::{AccountMeta, Instruction};
     use spr_client::{compile_message, ComputeBudgetConfig};
 
@@ -873,71 +834,5 @@ mod tests {
             data: vec![9],
         };
         refuses_scope(&[unrelated]);
-    }
-
-    /// A SOL deposit of `amount` behind its audited prefix.
-    fn deposit_frame(amount: u64) -> Vec<u8> {
-        use spr_event::EncryptedRingDepositData;
-        use spr_interface::instruction::instruction_data::deposit::{
-            DepositAssetKind, RingDepositEntry, RingDepositIxData,
-        };
-        let prefix = DepositPrefix {
-            tag: tag::DEPOSIT,
-            key_capacity: 2,
-            proof: bytemuck::Zeroable::zeroed(),
-            tracking_revision: Revision::from(3),
-            own_revision: Default::default(),
-            curator_revision: Default::default(),
-        };
-        let deposit = RingDepositIxData {
-            assets: vec![DepositAssetKind::Sol],
-            deposits: vec![RingDepositEntry {
-                asset_index: 0,
-                view_tag: [0; 32],
-                owner_utxo_hash: [0; 32],
-                amount,
-                ring_data_hash: [0; 32],
-                encrypted: EncryptedRingDepositData {
-                    tx_viewing_pk: [0; 33],
-                    salt: [0; 16],
-                    ciphertext: Vec::new(),
-                },
-            }],
-        };
-        [
-            prefix.encode().expect("prefix"),
-            vec![RING_DEPOSIT],
-            deposit.serialize().expect("deposit"),
-        ]
-        .concat()
-    }
-
-    fn read_deposit(instruction: &[u8]) -> Result<TransferRead, RingRpcError> {
-        let (&tag, data) = instruction.split_first().expect("tag");
-        let frame = RingFrame {
-            tag,
-            data,
-            accounts: vec![PAYER, PAYER, pda::ring_auth(&RING).0],
-        };
-        deposit_read(&frame, RING, &RingAssets::new([]).expect("assets"))
-    }
-
-    #[test]
-    fn a_deposit_reads_its_legs_past_its_prefix() {
-        let read = read_deposit(&deposit_frame(7)).expect("deposit legs");
-        let [flow] = read.flows.as_slice() else {
-            panic!("one SOL leg, got {:?}", read.flows.len());
-        };
-        assert_eq!((flow.flow.asset, flow.flow.deposited), (SOL_MINT, 7));
-        assert!(!read.spends_note);
-    }
-
-    #[test]
-    fn a_deposit_cut_inside_its_prefix_refuses() {
-        let frame = deposit_frame(7);
-        assert!(matches!(
-            read_deposit(&frame[..size_of::<DepositPrefix>() - 1]),
-            Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
-        ));
     }
 }

@@ -85,6 +85,21 @@ impl Landing<'_> {
     /// Resent until the cluster settles it, a stale root is proved again.
     pub fn settle(self, zolana: &Zolana) -> Result<Signature> {
         let mut submission = RingSubmission::new(self.operation);
+        let charged =
+            zolana.block_on(submission.prove(zolana.ring_client(), self.payer, self.signers))?;
+        // A composed transfer can charge an owner for value another party moves out.
+        for flow in charged.iter().filter(|flow| flow.charge != 0) {
+            crate::line(
+                "charged outflow",
+                format_args!(
+                    "owner {} asset {} {} with {} charged beyond its debit",
+                    hex::encode(flow.owner),
+                    hex::encode(flow.asset),
+                    flow.charged_outflow,
+                    flow.charge
+                ),
+            );
+        }
         let settled = zolana.block_on(submission.send_until_settled(
             zolana.ring_client(),
             self.payer,

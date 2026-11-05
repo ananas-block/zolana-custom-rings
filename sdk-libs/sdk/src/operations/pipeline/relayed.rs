@@ -13,7 +13,6 @@ use super::{
     },
     audit::PresealedAudit,
     delegate::delegate_rail,
-    owner::deposit_funder,
     public_owners::check_zero_key_inputs,
     sealed, shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
     RingTransfer, SealRow, Spend, Staged, TransferAuthority,
@@ -107,16 +106,10 @@ impl Relayed<'_> {
         .validate()?;
         // The fee payer signs whatever the relay sends, a leg naming it would fund the wallet's note
         // from the relay.
-        let funds_deposit = proof_inputs
-            .external_data
-            .interface_transfers
-            .iter()
-            .zip(&relayed.interface_transfer_accounts)
-            .filter_map(|(transfer, accounts)| {
-                deposit_funder(&transfer.interface_transfer(), accounts)
-            })
-            .any(|funder| funder == self.fee_payer);
-        if funds_deposit {
+        if relayed
+            .deposit_funders()
+            .any(|funder| funder == self.fee_payer)
+        {
             return Err(RingError::RelayFeePayerFundsDeposit);
         }
         let sender = relayed.sender;
@@ -141,16 +134,7 @@ impl Relayed<'_> {
                     .ok_or(RingError::MissingAnonymousSigner)?;
                 let owner = HiddenOwner::of(&sender.signing_pubkey)?;
                 owner.check_signers([self.fee_payer])?;
-                owner.check_signers(
-                    proof_inputs
-                        .external_data
-                        .interface_transfers
-                        .iter()
-                        .zip(&relayed.interface_transfer_accounts)
-                        .filter_map(|(transfer, accounts)| {
-                            deposit_funder(&transfer.interface_transfer(), accounts)
-                        }),
-                )?;
+                owner.check_signers(relayed.deposit_funders())?;
                 check_anonymous_inputs(&proof_inputs, &sender)?;
                 let exits = AnonymousExits {
                     transfers: &proof_inputs.external_data.interface_transfers,
@@ -201,6 +185,33 @@ impl Relayed<'_> {
                         signature,
                     }),
                 )
+            }
+            RelayRail::Deposit { plan } => {
+                // No owner signs a deposit, a real input here would spend unauthorized.
+                if !proof_inputs
+                    .input_utxos
+                    .iter()
+                    .all(|input| input.is_dummy())
+                {
+                    return Err(RingError::DepositSpendsNote);
+                }
+                match (config.mode, plan) {
+                    (RingMode::Anonymous, Some(plan)) => (
+                        rail(RingDelivery::Anonymous(plan.clone())),
+                        Vec::new(),
+                        Spend::PublicOwners,
+                    ),
+                    (RingMode::Confidential, None) => {
+                        let delivery = DeliveredRail {
+                            outputs: n_outputs,
+                            rail: RingRail::Confidential,
+                        }
+                        .delivery()?;
+                        (rail(delivery), Vec::new(), Spend::Owner)
+                    }
+                    (RingMode::Anonymous, None) => return Err(RingError::AnonymousDepositUntagged),
+                    (RingMode::Confidential, Some(_)) => return Err(RingError::NotAnonymousRing),
+                }
             }
             RelayRail::Delegate { delegate, plan } => {
                 match config.delegate {

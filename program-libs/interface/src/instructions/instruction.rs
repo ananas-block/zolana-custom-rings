@@ -15,7 +15,6 @@ use crate::{
     error::CustomRingError,
     member_registry::{check_member, RecordWrite, APPLY_BATCH},
     state::{RingRole, RingRoles},
-    storage::Revision,
     TAGGED_X25519_KEY_LEN,
 };
 
@@ -61,12 +60,11 @@ instruction_tags! {
     Merge = MERGE: 57 => PROOF_UNITS,
     UpdateAuthority = UPDATE_AUTHORITY: 6 => ACCOUNT_UNITS,
     SetPaused = SET_PAUSED: 11 => ACCOUNT_UNITS,
-    /// Ring-local tags must not collide with the forwarded SPP deposit and merge tags.
+    /// Ring-local tags must not collide with the forwarded SPP tags.
     SetCoSigner = SET_CO_SIGNER: 27 => ACCOUNT_UNITS,
     ClearCoSigner = CLEAR_CO_SIGNER: 62 => ACCOUNT_UNITS,
     SetDelegate = SET_DELEGATE: 64 => ACCOUNT_UNITS,
     AuthorityTransfer = AUTHORITY_TRANSFER: 56 => PROOF_UNITS,
-    Deposit = DEPOSIT: 58 => PROOF_UNITS,
     /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.
     Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
@@ -150,50 +148,6 @@ impl CustomRingProof {
 }
 
 const _: () = assert!(CustomRingProof::SIZE == 192);
-const _: () = assert!(core::mem::align_of::<DepositPrefix>() == 1);
-const _: () = assert!(DepositPrefix::SIZE == 218);
-
-/// `tag || key_capacity || proof || tracking_revision || own_revision || curator_revision`, then the SPP deposit instruction unchanged.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct DepositPrefix {
-    pub tag: u8,
-    /// Every deposit key proves one statement, a key below the count cannot solve it.
-    pub key_capacity: u8,
-    pub proof: CustomRingProof,
-    pub tracking_revision: Revision,
-    /// Zero off a policy ring.
-    pub own_revision: Revision,
-    /// Zero without a curator source.
-    pub curator_revision: Revision,
-}
-
-impl DepositPrefix {
-    pub const SIZE: usize = core::mem::size_of::<Self>();
-
-    /// Leaves `data` on the SPP deposit that follows.
-    pub fn parse(data: &mut &[u8]) -> Result<Self, CustomRingError> {
-        let (prefix, rest) = data
-            .split_at_checked(Self::SIZE)
-            .ok_or(CustomRingError::InvalidInstructionData)?;
-        let prefix: Self = bytemuck::pod_read_unaligned(prefix);
-        prefix.check()?;
-        *data = rest;
-        Ok(prefix)
-    }
-
-    pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
-        self.check()?;
-        Ok(bytemuck::bytes_of(self).to_vec())
-    }
-
-    fn check(&self) -> Result<(), CustomRingError> {
-        match self.tag == tag::DEPOSIT {
-            true => Ok(()),
-            false => Err(CustomRingError::InvalidAuditedDeposit),
-        }
-    }
-}
 
 /// Compressed Groth16 points, `b` decompresses to SPP's raw 128 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable, SchemaRead, SchemaWrite)]

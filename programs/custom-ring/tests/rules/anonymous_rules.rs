@@ -9,7 +9,6 @@ use solana_keypair::{Keypair, Signer};
 
 use crate::{
     common::{reaches_verification, refused, Ring, Sent, Setup},
-    forward_rules::{deposit_instruction, ring_deposit},
     transact_rules::{send, spp_list, Fixture},
 };
 
@@ -110,18 +109,6 @@ fn a_short_sender_bundle_is_refused() {
         send(&mut ring, tag::TRANSFER, Vec::new(), compact, spp, &[]),
         CustomRingError::RingTransactLength,
     );
-}
-
-/// A salted commitment is the SDK's duty, the proof cannot read it.
-#[test]
-fn an_anonymous_policy_deposit_carries_ring_data() {
-    let mut ring = Ring::new(Setup::AnonymousPolicy);
-    let mut named = ring_deposit();
-    named.deposits[0].ring_data_hash = [1; 32];
-    let instruction = deposit_instruction(&ring, Some(0), &named);
-    reaches_verification(ring.send(instruction, &[]));
-    let instruction = deposit_instruction(&ring, Some(0), &ring_deposit());
-    reaches_verification(ring.send(instruction, &[]));
 }
 
 #[test]

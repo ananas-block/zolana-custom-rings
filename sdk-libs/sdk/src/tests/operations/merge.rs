@@ -38,12 +38,13 @@ impl Merge<'_> {
             },
         );
         RingSubmission::new(merge)
-            .send(
+            .prove(
                 &Chain::ring(self.settings).client(),
                 self.payer,
                 self.signers,
             )
             .await
+            .map(<[_]>::len)
             .unwrap_err()
     }
 }

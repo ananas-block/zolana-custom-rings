@@ -1030,7 +1030,7 @@ async fn a_follower_invalidates_changed_caches_without_loading_history() {
     );
     follower.refresh(changed.spends, changed.revision);
     assert_eq!(follower.cached_entries(), [0; 3]);
-    assert_eq!(follower.cached_enrollments(), [0; 3]);
+    assert_eq!(follower.cached_enrollments(), [0; 2]);
     assert!(follower
         .spend_rows(&[spent])
         .await

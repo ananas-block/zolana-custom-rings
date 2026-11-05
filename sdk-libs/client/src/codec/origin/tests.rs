@@ -944,8 +944,6 @@ fn confirmed_event_binds_every_indexed_audit_and_recovery_field() {
 fn confirmed_event_wire_fixture_matches_the_shared_parser() {
     let (group, indexed) = confirmed_transfer_fixture();
     check_event_wire_fixture("confirmed-event", group, indexed);
-    let (group, indexed) = confirmed_deposit_fixture();
-    check_event_wire_fixture("confirmed-deposit-event", group, indexed);
     let (group, indexed) = confirmed_merge_fixture();
     check_event_wire_fixture("confirmed-merge-event", group, indexed);
 }
@@ -983,72 +981,6 @@ fn check_event_wire_fixture(name: &str, group: InstructionGroup, mut indexed: Sh
     let pinned: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(fixture, pinned);
-}
-
-fn confirmed_deposit_fixture() -> (InstructionGroup, ShieldedTransaction) {
-    use spr_event::{
-        encode_encrypted_ring_deposit_output, encode_event_instruction, EncryptedRingDepositData,
-        EncryptedRingDepositOutput, EventKind, GeneralEvent, OutputUtxo, SplTransfer,
-    };
-    use spr_interface::instruction::instruction_data::deposit::{
-        DepositAssetKind, RingDepositEntry,
-    };
-    let (mut group, mut indexed) = confirmed_transfer_fixture();
-    indexed.proofless = true;
-    indexed.tx_viewing_pk = None;
-    indexed.salt = None;
-    indexed.nullifiers.clear();
-    indexed.messages.clear();
-    indexed.output_slots.truncate(1);
-    let encrypted = EncryptedRingDepositData {
-        tx_viewing_pk: *spr_keypair::X25519Keypair::from_bytes(&[7; 32])
-            .pubkey()
-            .as_bytes(),
-        salt: [8; 16],
-        ciphertext: vec![99, 100],
-    };
-    let deposit = RingDepositIxData {
-        assets: vec![DepositAssetKind::Sol],
-        deposits: vec![RingDepositEntry {
-            asset_index: 0,
-            view_tag: [7; 32],
-            owner_utxo_hash: [12; 32],
-            amount: 123,
-            ring_data_hash: [13; 32],
-            encrypted: encrypted.clone(),
-        }],
-    };
-    indexed.output_slots[0].payload =
-        encode_encrypted_ring_deposit_output(EncryptedRingDepositOutput {
-            owner_utxo_hash: [12; 32],
-            asset: SOL_MINT.to_bytes(),
-            amount: 123,
-            data_hash: None,
-            ring_program_id: RING.to_bytes(),
-            ring_data_hash: [13; 32],
-            encrypted,
-        });
-    let event = GeneralEvent {
-        inputs: Vec::new(),
-        outputs: vec![OutputUtxo {
-            view_tag: [7; 32],
-            utxo_hash: [6; 32],
-            data: indexed.output_slots[0].payload.clone(),
-        }],
-        messages: Vec::new(),
-        tx_viewing_pk: [0; 33],
-        salt: [0; 16],
-        first_output_leaf_index: 42,
-        output_tree: spr_interface::pda::tree(3).to_bytes(),
-        spl_transfers: vec![SplTransfer {
-            is_deposit: true,
-            amount: 123,
-            asset: None,
-        }],
-    };
-    group.inner[0].data = [vec![tag::RING_DEPOSIT], deposit.serialize().unwrap()].concat();
-    group.inner[1].data = encode_event_instruction(EventKind::Deposit, &event);
-    (group, indexed)
 }
 
 fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {

@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use spr_client::rpc::EncryptedUtxoMatch;
 
 use super::*;
 use crate::compact_assets::{
@@ -10,7 +9,6 @@ use crate::compact_assets::{
 };
 use crate::history::RecoveryWindow;
 use crate::tags::TAGS_PER_REQUEST;
-use crate::viewing_history::TAG_GAP;
 use custom_ring_interface::{ring_body_format, DisclosureFormat, RecipientBody};
 use zolana_ring_transaction::open_compact_recipient_body;
 
@@ -67,7 +65,6 @@ enum DiscoveryTask {
         window: RecoveryWindow,
         offset: PageOffset,
     },
-    Deposits(DepositTask),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,43 +79,6 @@ struct PageOffset {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SpendBatch {
     nullifiers: Vec<[u8; 32]>,
-    window: RecoveryWindow,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum DepositStream {
-    Bootstrap,
-    Sender,
-    Request,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct DepositTask {
-    entry: usize,
-    stream: DepositStream,
-    gap: Option<DepositGap>,
-    query: Option<DepositQuery>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct DepositGap {
-    next: u64,
-    end: u64,
-    gap: u64,
-    mandatory_end: u64,
-    late: VecDeque<u64>,
-    round_found: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct DepositQuery {
-    tags: Vec<[u8; 32]>,
-    indices: Vec<u64>,
-    seen: BTreeSet<u64>,
     window: RecoveryWindow,
 }
 
@@ -205,34 +165,16 @@ impl RecoverySession {
                         .contains(&hex::encode(entry.viewing_pubkey().as_bytes()))
                 })
             };
-            match task {
-                DiscoveryTask::Ring {
-                    entries, window, ..
-                } if entries.iter().any(|entry| !valid_entry(*entry))
-                    || window
-                        .page_limit
-                        .is_some_and(|limit| limit == 0 || limit > PAGE_LIMIT) =>
-                {
-                    return Err(AnonymousError::RecoveryScopeChanged);
-                }
-                DiscoveryTask::Deposits(task) if !valid_entry(task.entry) => {
-                    return Err(AnonymousError::RecoveryScopeChanged);
-                }
-                DiscoveryTask::Ring { window, .. } if window.target_slot != self.target_slot => {
-                    return Err(AnonymousError::RecoveryScopeChanged);
-                }
-                DiscoveryTask::Deposits(task) => {
-                    if let Some(query) = &task.query {
-                        if query.tags.len() > TAGS_PER_REQUEST
-                            || query.window.target_slot != self.target_slot
-                            || (task.stream != DepositStream::Bootstrap
-                                && query.tags.len() != query.indices.len())
-                        {
-                            return Err(AnonymousError::RecoveryScopeChanged);
-                        }
-                    }
-                }
-                _ => {}
+            let DiscoveryTask::Ring {
+                entries, window, ..
+            } = task;
+            if entries.iter().any(|entry| !valid_entry(*entry))
+                || window
+                    .page_limit
+                    .is_some_and(|limit| limit == 0 || limit > PAGE_LIMIT)
+                || window.target_slot != self.target_slot
+            {
+                return Err(AnonymousError::RecoveryScopeChanged);
             }
         }
         Ok(())
@@ -246,10 +188,8 @@ impl RecoverySession {
 
     fn set_target(&mut self, target: u64) {
         self.target_slot = Some(target);
-        for task in &mut self.tasks {
-            if let DiscoveryTask::Ring { window, .. } = task {
-                window.target_slot = Some(target);
-            }
+        for DiscoveryTask::Ring { window, .. } in &mut self.tasks {
+            window.target_slot = Some(target);
         }
     }
 
@@ -312,40 +252,6 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
                     offset: PageOffset::default(),
                 });
             } else {
-                for &entry in &held {
-                    tasks.push_back(DiscoveryTask::Deposits(DepositTask {
-                        entry,
-                        stream: DepositStream::Bootstrap,
-                        gap: None,
-                        query: None,
-                    }));
-                    for (stream, kind) in [
-                        (Stream::Sender, DepositStream::Sender),
-                        (Stream::Request, DepositStream::Request),
-                    ] {
-                        let counter = scan.counter_mut(entry, stream);
-                        let from = if self.from == ScanFrom::Start {
-                            0
-                        } else {
-                            counter.scanned()
-                        };
-                        tasks.push_back(DiscoveryTask::Deposits(DepositTask {
-                            entry,
-                            stream: kind,
-                            gap: Some(DepositGap {
-                                next: from,
-                                end: from
-                                    .checked_add(TAG_GAP)
-                                    .ok_or(AnonymousError::CounterOverflow)?,
-                                gap: TAG_GAP,
-                                mandatory_end: counter.next(),
-                                late: counter.pending().collect(),
-                                round_found: false,
-                            }),
-                            query: None,
-                        }));
-                    }
-                }
                 for read in scan.ring_reads(&held) {
                     tasks.push_back(DiscoveryTask::Ring {
                         ring: read.ring,
@@ -492,17 +398,6 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
             let (page, limit) = self.reads.recovery_ring_page(*ring, window).await?;
             window
                 .advance(&page, limit)
-                .map_err(|_| AnonymousError::InvalidHistoryPage)?;
-            return Ok(page.context.slot);
-        }
-        if let Some(DiscoveryTask::Deposits(task)) = session.tasks.front() {
-            let key = self.history.entries()[task.entry].viewing_pubkey();
-            let page = self
-                .reads
-                .recovery_deposit_page(vec![key.u()], window)
-                .await?;
-            window
-                .advance(&page, PAGE_LIMIT)
                 .map_err(|_| AnonymousError::InvalidHistoryPage)?;
             return Ok(page.context.slot);
         }
@@ -672,11 +567,6 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
                             }
                             offset.site = site + 1;
                         }
-                        if session.scope.full_scan.is_some() && row.proofless {
-                            for position in 0..row.output_slots.len() {
-                                self.open_deposit(entry, row, position, AnonymousStream::FullScan)?;
-                            }
-                        }
                         self.open_owner_merges(entry, slice)?;
                         offset.entry = entry_offset + 1;
                         offset.site = 0;
@@ -717,16 +607,6 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
                     PageProgress::More
                 })
             }
-            DiscoveryTask::Deposits(task) => self
-                .recovery_deposits(task, session.target_slot)
-                .await
-                .map(|done| {
-                    if done {
-                        PageProgress::Done
-                    } else {
-                        PageProgress::More
-                    }
-                }),
         }
     }
 
@@ -827,144 +707,5 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
             self.accept(entry, body.tx, body.found, position, note)?;
         }
         Ok(PageProgress::Done)
-    }
-
-    async fn recovery_deposits(
-        &mut self,
-        task: &mut DepositTask,
-        target_slot: Option<u64>,
-    ) -> Result<bool, AnonymousError> {
-        let key = self
-            .history
-            .entries()
-            .get(task.entry)
-            .ok_or(AnonymousError::RecoveryScopeChanged)?
-            .viewing_pubkey();
-        if task.query.is_none() {
-            let (tags, indices) = match task.stream {
-                DepositStream::Bootstrap => (
-                    vec![
-                        key.u(),
-                        custom_ring_interface::stream::confidential_slot_tag(key.u()),
-                    ],
-                    Vec::new(),
-                ),
-                DepositStream::Sender | DepositStream::Request => {
-                    let gap = task
-                        .gap
-                        .as_mut()
-                        .ok_or(AnonymousError::RecoveryScopeChanged)?;
-                    let mut indices: Vec<_> = gap
-                        .late
-                        .drain(..gap.late.len().min(TAGS_PER_REQUEST))
-                        .collect();
-                    let end = gap.end.min(
-                        gap.next
-                            .saturating_add((TAGS_PER_REQUEST - indices.len()) as u64),
-                    );
-                    indices.extend(gap.next..end);
-                    gap.next = end;
-                    let stream = if task.stream == DepositStream::Sender {
-                        Stream::Sender
-                    } else {
-                        Stream::Request
-                    };
-                    (self.tags(key, stream, &indices)?, indices)
-                }
-            };
-            task.query = Some(DepositQuery {
-                tags,
-                indices,
-                seen: BTreeSet::new(),
-                window: RecoveryWindow {
-                    target_slot,
-                    ..RecoveryWindow::default()
-                },
-            });
-        }
-        let query = task
-            .query
-            .as_mut()
-            .ok_or(AnonymousError::RecoveryScopeChanged)?;
-        let page = self
-            .reads
-            .recovery_deposit_page(query.tags.clone(), query.window)
-            .await?;
-        let done = query
-            .window
-            .advance(&page, PAGE_LIMIT)
-            .map_err(|_| AnonymousError::InvalidHistoryPage)?;
-        if page.data.iter().any(|row| {
-            row.validate_outputs(|output| (output.slot, output.tx_signature))
-                .is_err()
-        }) {
-            return Err(AnonymousError::InvalidHistoryPage);
-        }
-        let rows = page
-            .data
-            .into_iter()
-            .flat_map(|item| item.outputs)
-            .filter_map(EncryptedUtxoMatch::into_proofless_transaction);
-        let by_tag: HashMap<_, _> = query
-            .tags
-            .iter()
-            .enumerate()
-            .map(|(index, tag)| (*tag, index))
-            .collect();
-        for row in rows {
-            for (position, slot) in row.output_slots.iter().enumerate() {
-                let Some(&tag_index) = by_tag.get(&slot.view_tag) else {
-                    continue;
-                };
-                let found = match task.stream {
-                    DepositStream::Bootstrap => AnonymousStream::Bootstrap,
-                    DepositStream::Sender | DepositStream::Request => {
-                        let index = query.indices[tag_index];
-                        query.seen.insert(index);
-                        if task.stream == DepositStream::Sender {
-                            AnonymousStream::Sender { index }
-                        } else {
-                            AnonymousStream::Request { index }
-                        }
-                    }
-                };
-                self.open_deposit(task.entry, &row, position, found)?;
-            }
-        }
-        if !done {
-            return Ok(false);
-        }
-        if task.stream == DepositStream::Bootstrap {
-            return Ok(true);
-        }
-        let gap = task
-            .gap
-            .as_mut()
-            .ok_or(AnonymousError::RecoveryScopeChanged)?;
-        let stream = if task.stream == DepositStream::Sender {
-            Stream::Sender
-        } else {
-            Stream::Request
-        };
-        let counter = self.counter_mut(task.entry, stream);
-        counter.observe(counter.scanned(), &query.seen);
-        gap.round_found |= query
-            .seen
-            .iter()
-            .any(|index| *index >= gap.end.saturating_sub(gap.gap));
-        task.query = None;
-        if !gap.late.is_empty() || gap.next < gap.end {
-            return Ok(false);
-        }
-        if gap.end >= gap.mandatory_end && !gap.round_found {
-            return Ok(true);
-        }
-        gap.gap = gap.gap.saturating_mul(2).min(TAGS_PER_REQUEST as u64);
-        gap.end = gap
-            .end
-            .checked_add(gap.gap)
-            .ok_or(AnonymousError::CounterOverflow)?;
-        gap.round_found = false;
-        Ok(false)
     }
 }

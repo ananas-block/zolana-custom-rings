@@ -30,14 +30,6 @@ pub mod apply_records_private_2_verifying_key;
 pub mod apply_records_private_4_verifying_key;
 #[path = "records/apply_records_private_8_verifying_key.rs"]
 pub mod apply_records_private_8_verifying_key;
-#[path = "deposit/deposit_1_verifying_key.rs"]
-pub mod deposit_1_verifying_key;
-#[path = "deposit/deposit_2_verifying_key.rs"]
-pub mod deposit_2_verifying_key;
-#[path = "deposit/deposit_4_verifying_key.rs"]
-pub mod deposit_4_verifying_key;
-#[path = "deposit/deposit_8_verifying_key.rs"]
-pub mod deposit_8_verifying_key;
 #[path = "merge/merge_verifying_key.rs"]
 pub mod merge_verifying_key;
 #[path = "records/register_key_verifying_key.rs"]
@@ -166,22 +158,6 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
         "custom_ring_register_key.key",
         register_key_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_deposit_1.key",
-        deposit_1_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_deposit_2.key",
-        deposit_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_deposit_4.key",
-        deposit_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_deposit_8.key",
-        deposit_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_merge.key",
@@ -338,18 +314,6 @@ pub fn verifying_key(
             Some(&apply_enrollments_16_verifying_key::VERIFYINGKEY)
         }
         key_catalog::RingCircuit::RegisterKey => Some(&register_key_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::Deposit { capacity: 1 } => {
-            Some(&deposit_1_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::Deposit { capacity: 2 } => {
-            Some(&deposit_2_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::Deposit { capacity: 4 } => {
-            Some(&deposit_4_verifying_key::VERIFYINGKEY)
-        }
-        key_catalog::RingCircuit::Deposit { capacity: 8 } => {
-            Some(&deposit_8_verifying_key::VERIFYINGKEY)
-        }
         key_catalog::RingCircuit::Merge => Some(&merge_verifying_key::VERIFYINGKEY),
         _ => None,
     }

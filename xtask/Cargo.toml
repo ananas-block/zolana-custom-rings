@@ -17,9 +17,7 @@ solana-instruction = { workspace = true }
 solana-message = { workspace = true }
 spr-client = { workspace = true }
 spr-interface = { workspace = true }
-spr-keypair = { workspace = true }
 spr-program = { workspace = true }
 spr-transaction = { workspace = true }
 xtask = { path = "../zolana/xtask" }
 zolana-cli-common = { workspace = true }
-zolana-ring-transaction = { workspace = true }

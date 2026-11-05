@@ -11,8 +11,6 @@ mod backfill;
 mod cosign_relay;
 #[path = "audit_service/coverage_failures.rs"]
 mod coverage_failures;
-#[path = "audit_service/deposits.rs"]
-mod deposits;
 #[path = "audit_service/frame_repairs.rs"]
 mod frame_repairs;
 #[path = "audit_service/reader_grants.rs"]
@@ -62,18 +60,16 @@ use zolana_ring_client::{
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream},
     rpc::{
         unix_now, AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
-        DecryptedTransaction, DecryptedWithdrawal, DepositRecord, GetAuditedMergesResponse,
+        DecryptedTransaction, DecryptedWithdrawal, GetAuditedMergesResponse,
         GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsRequest,
         GetDecryptedTransactionsResponse, GetWalletActivityResponse, HealthResponse, KeyMode,
         PagedRead, ReadAttestation, ReadAuth, ReadBuildError, ReadSignature, ReadSigner,
-        ReadTarget, ReaderGrantAction, ReaderGrantAttestation, ReaderGrantRequest, RingActivation,
-        RingChainStatus, RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
-        RingStatusResponse, SkippedReason, WalletActivity, WalletStatusRequest, WalletView,
-        WebAuthnAssertion, AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES,
-        GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS,
-        SET_READER_GRANT,
+        ReadTarget, ReaderGrantAction, ReaderGrantAttestation, ReaderGrantRequest, RingChainStatus,
+        SkippedReason, WalletActivity, WalletStatusRequest, WalletView, WebAuthnAssertion,
+        AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
+        GET_DECRYPTED_TRANSACTIONS, HEALTH, SET_READER_GRANT,
     },
-    AuditError, ConfirmedDeposit, MergeAuditPage, ReaderKey, RingOrigin, RingWithdrawal,
+    AuditError, MergeAuditPage, ReaderKey, RingOrigin, RingWithdrawal,
 };
 use zolana_ring_client::{P256ReaderKey, RingIndexerError, StorageTip};
 use zolana_ring_indexer::rpc::{
@@ -82,11 +78,10 @@ use zolana_ring_indexer::rpc::{
     RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
 };
 use zolana_ring_rpc::{
-    rpc_module, ApproveClass, AuditRead, AuditService, Clock, CoSignerApproval, DepositHistory,
-    DepositPage, GrantRowsSecret, Hub, MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck,
-    ReaderGrantStore, RecordsTip, RingConfiguration, RingFrame, RingHistoryPage, RingRpcError,
-    RootSecret, ServiceIdentity, Store, TransactionPage, TransactionSource, Unauthorized,
-    AUTH_SKEW,
+    rpc_module, ApproveClass, AuditRead, AuditService, Clock, CoSignerApproval, GrantRowsSecret,
+    Hub, MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, ReaderGrantStore, RecordsTip,
+    RingConfiguration, RingFrame, RingHistoryPage, RingRpcError, RootSecret, ServiceIdentity,
+    Store, TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
 };
 use zolana_ring_transaction::RingAssets;
 
@@ -394,8 +389,6 @@ struct StaticSource {
     owner_signers: HashMap<Signature, Vec<Address>>,
     /// Confirmed deposits and merges do not carry transfer auditor messages.
     confirmed_events: HashMap<(Signature, u16), zolana_ring_client::ConfirmedEvent>,
-    /// The capsule bindings of each audited deposit.
-    deposits: HashMap<Signature, Vec<ConfirmedDeposit>>,
     next_cursor: Option<Vec<u8>>,
     scanned_through: Option<Vec<u8>>,
     /// Per ring, so a read can never be authorized against another ring's
@@ -416,9 +409,6 @@ struct StaticSource {
     assets: Arc<Mutex<Option<RingAssets>>>,
     asset_reads: Arc<AtomicUsize>,
     asset_delay: Option<Duration>,
-    /// Ring history, newest first.
-    history: Vec<Examined>,
-    examined_limit: Arc<AtomicUsize>,
     /// Per request cursor, empty when every read shares one page.
     pages: HashMap<Option<Vec<u8>>, Paged>,
     record_reads: Arc<AtomicUsize>,
@@ -451,14 +441,6 @@ struct Paged {
     transactions: Vec<ShieldedTransaction>,
     next_cursor: Option<Vec<u8>>,
     scanned_through: Option<Vec<u8>>,
-}
-
-/// One ring signature and the deposits it made.
-#[derive(Clone)]
-struct Examined {
-    signature: Signature,
-    slot: u64,
-    deposits: Vec<DepositRecord>,
 }
 
 impl StaticSource {
@@ -717,7 +699,6 @@ impl TransactionSource for StaticSource {
                     }),
                 ring_invoked,
                 signers: vec![SENDER],
-                deposits: self.deposits.get(&signature).cloned().unwrap_or_default(),
                 merge_disclosure: None,
                 transact: self.frames.lock().unwrap().get(&signature).cloned(),
                 pool_accounts: self.pool_accounts(signature),
@@ -747,37 +728,6 @@ impl TransactionSource for StaticSource {
                 (false, false) => origin,
             }
         }
-    }
-
-    async fn ring_deposits(&self, page: DepositPage) -> Result<DepositHistory, ClientError> {
-        self.examined_limit.store(page.limit, Ordering::Relaxed);
-        let start = match page.before {
-            Some(before) => self
-                .history
-                .iter()
-                .position(|entry| entry.signature == before)
-                .map(|index| index + 1)
-                .ok_or_else(|| ClientError::Rpc("unknown cursor".to_owned()))?,
-            None => 0,
-        };
-        let examined: Vec<_> = self
-            .history
-            .get(start..)
-            .unwrap_or_default()
-            .iter()
-            .take(page.limit)
-            .collect();
-        Ok(DepositHistory {
-            deposits: examined
-                .iter()
-                .flat_map(|entry| entry.deposits.clone())
-                .collect(),
-            cursor: examined
-                .last()
-                .map(|entry| entry.signature)
-                .filter(|_| examined.len() == page.limit),
-            oldest_slot: examined.last().map(|entry| entry.slot),
-        })
     }
 
     fn ring_config(
@@ -1117,7 +1067,6 @@ impl Fixture {
             frames: self.frames.clone(),
             owner_signers: HashMap::new(),
             confirmed_events: HashMap::new(),
-            deposits: HashMap::new(),
             next_cursor: Some(vec![7, 7]),
             scanned_through: None,
             configs: HashMap::from([(
@@ -1144,8 +1093,6 @@ impl Fixture {
             assets: Arc::new(Mutex::new(Some(RingAssets::new([]).expect("ring assets")))),
             asset_reads: Arc::new(AtomicUsize::new(0)),
             asset_delay: None,
-            history: Vec::new(),
-            examined_limit: Arc::new(AtomicUsize::new(0)),
             pages: HashMap::new(),
             record_reads: Arc::new(AtomicUsize::new(0)),
             history_reads: Arc::new(AtomicUsize::new(0)),
@@ -1521,30 +1468,4 @@ fn released(created: &CreateAuditorKeyResponse, request: &CreateAuditorKeyReques
 
 fn refused(result: Result<(), RingRpcError>, expected: Unauthorized) -> bool {
     matches!(result, Err(RingRpcError::Unauthorized(reason)) if reason == expected)
-}
-
-fn deposit(byte: u8, slot: u64, amount: u64) -> DepositRecord {
-    DepositRecord {
-        signature: Signature::from([byte; 64]).into(),
-        slot,
-        depositor: [byte; 32].into(),
-        asset: SOL_MINT.to_bytes().into(),
-        amount,
-    }
-}
-
-fn examined(byte: u8, slot: u64, deposits: Vec<DepositRecord>) -> Examined {
-    Examined {
-        signature: Signature::from([byte; 64]),
-        slot,
-        deposits,
-    }
-}
-
-fn deposits_request(limit: Option<u32>, cursor: Option<Base64String>) -> RingDepositsRequest {
-    RingDepositsRequest {
-        ring_program_id: RING.to_bytes().into(),
-        limit,
-        cursor,
-    }
 }

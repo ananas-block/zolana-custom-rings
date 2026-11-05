@@ -31,10 +31,6 @@ pub const TRACKING_LEAF: u32 = 0x4352_544b;
 pub const TRACKING_ENTRY: u32 = 0x4352_5451;
 /// `"CRTA"`
 pub const APPLY_ENROLLMENTS: u32 = 0x4352_5441;
-/// `"CRDB"`
-pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
-/// `"CRDP"`
-pub const DEPOSIT_STATEMENT: u32 = 0x4352_4450;
 /// `"CRMG"`
 pub const MERGE_STATEMENT: u32 = 0x4352_4d47;
 /// `"CRPW"`
@@ -54,7 +50,6 @@ pub const RECIPIENT_BODY_LABEL: &[u8; 9] = b"CRING/rcp";
 pub const REPLY_LABEL: &[u8; 9] = b"CRING/rpl";
 pub const SENDER_BUNDLE_LABEL: &[u8; 9] = b"CRING/snd";
 pub const REGISTER_KEY_LABEL: &[u8; 9] = b"CRING/nfk";
-pub const DEPOSIT_AUDIT_LABEL: &[u8; 9] = b"CRING/dep";
 pub const MERGE_RECORD_LABEL: &[u8; 9] = b"CRING/mrg";
 
 pub fn field(domain: u32) -> [u8; 32] {
@@ -64,9 +59,4 @@ pub fn field(domain: u32) -> [u8; 32] {
 /// `Poseidon(CRPT, list_salt)`, final in the tracking leaf.
 pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[&field(LIST_TAG), list_salt])
-}
-
-/// `Poseidon(CRDB, blinding_secret)`.
-pub fn deposit_blinding(blinding_secret: &[u8; 32]) -> Result<[u8; 32], HasherError> {
-    Poseidon::hashv(&[&field(DEPOSIT_BLINDING), blinding_secret])
 }
