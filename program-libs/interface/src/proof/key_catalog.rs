@@ -69,9 +69,6 @@ const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferS
     }
 }
 
-/// Mirror `ownerAddresses`.
-const OWNER_ADDRESSES: usize = 54;
-
 const fn entry(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
     TransferShape {
         outputs,
@@ -160,11 +157,46 @@ impl TransferShape {
                 .is_some_and(|pools| spend.pools.within(pools))
     }
 
-    /// Mirror `publicOwners`.
+    /// The most distinct rows and withdrawal owners one spend on the key names, mirror `publicOwners`.
     const fn public_owners(self) -> usize {
-        let fit = (OWNER_ADDRESSES - self.withdrawals as usize) / 2;
-        let owners = self.owners as usize;
-        (if owners < fit { owners } else { fit }) + self.withdrawals as usize
+        let mut most = 0;
+        let mut mode = 0;
+        while mode < RowAuthorization::ALL.len() {
+            let authorization = RowAuthorization::ALL[mode];
+            mode += 1;
+            if self.entry && !authorization.enters() {
+                continue;
+            }
+            let mut legs = 0;
+            while legs <= self.withdrawals as usize {
+                let named = self.fitted_rows(authorization, legs) + authorization.leg_owners(legs);
+                if named > most {
+                    most = named;
+                }
+                legs += 1;
+            }
+        }
+        most
+    }
+
+    /// The key's rows the addresses admit beside `legs`, each row spending one note, the fewest
+    /// nullifier PDAs a row can take.
+    const fn fitted_rows(self, authorization: RowAuthorization, legs: usize) -> usize {
+        let mut rows = self.owners as usize;
+        while rows > 0 {
+            let fit = TransferAddresses {
+                n_inputs: rows,
+                co_signers: 0,
+                legs,
+                credential_accounts: 0,
+            }
+            .owner_rows(authorization);
+            if rows <= fit {
+                break;
+            }
+            rows -= 1;
+        }
+        rows
     }
 
     /// Mirror `credentialWithdrawals`.
@@ -219,6 +251,42 @@ const SPP_ADDRESSES: usize = 4;
 /// Ring program, policy, config, own registry and curator registry.
 const RING_ADDRESSES: usize = 5;
 
+/// The only spend input that moves a row's address cost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowAuthorization {
+    /// Every row signs in the owner run.
+    Run,
+    /// One row signs inside SPP's anonymous proof and spends ring notes only.
+    InProof,
+    /// One row hides, every withdrawal names one destination.
+    Hidden,
+}
+
+impl RowAuthorization {
+    pub const ALL: [Self; 3] = [Self::Run, Self::InProof, Self::Hidden];
+
+    /// Rows outside the owner run, each takes its nullifier PDA alone.
+    pub const fn unsigned_rows(self) -> usize {
+        match self {
+            Self::Run => 0,
+            Self::InProof | Self::Hidden => 1,
+        }
+    }
+
+    /// Distinct withdrawal owners `legs` can name, `anonymous_exit_destination` holds a hidden spend to one.
+    pub const fn leg_owners(self, legs: usize) -> usize {
+        match self {
+            Self::Run | Self::InProof => legs,
+            Self::Hidden => (legs > 0) as usize,
+        }
+    }
+
+    /// `InProofOwner::proof_data` carries no default owner tag.
+    pub const fn enters(self) -> bool {
+        !matches!(self, Self::InProof)
+    }
+}
+
 /// What takes a v1 transaction's addresses beside its owner signers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TransferAddresses {
@@ -240,6 +308,12 @@ impl TransferAddresses {
             .saturating_sub(self.co_signers.saturating_mul(2))
             .saturating_sub(self.legs)
             .saturating_sub(self.credential_accounts)
+    }
+
+    /// The rows that fit, one bound for the catalog's pools and the SDK's refusal.
+    #[must_use]
+    pub const fn owner_rows(self, authorization: RowAuthorization) -> usize {
+        self.owner_signers() + authorization.unsigned_rows()
     }
 }
 
@@ -689,7 +763,6 @@ mod tests {
             .owner_signers(),
             0
         );
-        assert_eq!(OWNER_ADDRESSES, 54);
     }
 
     #[test]
@@ -724,7 +797,7 @@ mod tests {
             (pools.own, pools.curator, pools.credentials)
         };
         assert_eq!(pools(transfer(2, 24, 4, 4)), (15, 15, 6));
-        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (113, 113, 51));
+        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (115, 115, 52));
         assert_eq!(pools(transfer(16, 5, 8, 5)), (48, 48, 21));
         assert_eq!(pools(wide(16, 5, 8, 5).circuit()), (77, 77, 29));
         assert_eq!(pools(entry(4, 8, 4, 8).circuit()), (39, 39, 16));

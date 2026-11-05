@@ -1,9 +1,10 @@
 //! Pins every transfer key's credential pool to the most distinct subjects a spend on that key opens.
 //!
-//! A live row opens its owner's credential on every rail. A salted policy read also opens every output
-//! owner and every withdrawal owner, and each subject may need state inclusion or address absence. The SDK
-//! admits rows and legs by `TransferAddresses::owner_signers`, and the catalog then selects the key by
-//! the subject count. `go_vectors.rs` holds `credential_capacity` to the Go circuit's pool size.
+//! A live row opens its owner's credential, a delegate row only for a nonzero-key note. A salted
+//! policy read also opens every output owner and every withdrawal owner, and each subject may need
+//! state inclusion or address absence. The SDK admits rows and legs by
+//! `TransferAddresses::owner_rows`, and the catalog then selects the key by the subject count.
+//! `go_vectors.rs` holds `credential_capacity` to the Go circuit's pool size.
 
 use std::collections::BTreeMap;
 
@@ -26,7 +27,7 @@ enum Signing {
     Delegate,
 }
 
-/// One spend at the most rows its addresses admit for the row count it names.
+/// `rows` counts distinct live input owners, never past what the addresses admit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Spend {
     signing: Signing,
@@ -120,7 +121,7 @@ impl Spend {
         }
     }
 
-    /// The key the catalog selects, else the wide key the spend would take with room for its subjects.
+    /// The selected key and `true`, else the wide key with no credential demand and `false`.
     fn key(self) -> Option<(RingCircuit, bool)> {
         match RingCircuit::transfer(self.catalog(self.subjects(), false).fitted()) {
             Some(circuit) => Some((circuit, true)),
@@ -187,7 +188,7 @@ const BOUNDS: [(&str, usize, usize, usize); 12] = [
     ("custom-ring-transfer-4-in24-w4-s4", 8, 8, 8),
     ("custom-ring-transfer-8-in16-w4-s4", 12, 12, 12),
     ("custom-ring-transfer-16-in5-w8-s5", 21, 21, 21),
-    ("custom-ring-transfer-wide-8-in24-w32-s24", 51, 52, 51),
+    ("custom-ring-transfer-wide-8-in24-w32-s24", 52, 52, 51),
     ("custom-ring-transfer-wide-16-in5-w8-s5", 29, 29, 29),
     ("custom-ring-transfer-wide-16-in8-w8-s8", 32, 32, 32),
     ("custom-ring-transfer-wide-2-in49-w4-s12", 18, 18, 18),
@@ -214,18 +215,17 @@ fn each_key_pins_its_worst_subject_count() {
     assert_eq!(every_rail.len(), BOUNDS.len());
 }
 
-/// Each run rail subject can read absent, a row spending zero-key notes, a zero-key recipient and a leg
-/// owner, all unenrolled under a salted block list. Each can read present too. So the run rail alone
-/// fills every pool with absences or with inclusions, and no split pool is smaller than the capacity.
+/// Under a salted block list each run or in-proof subject can read absent or present, a row spending
+/// zero-key notes, a zero-key recipient and a leg owner alike, so either kind alone can fill each pool.
 #[test]
-fn the_run_rail_fills_every_pool() {
-    let run = worst(&[Signing::Run]);
+fn the_signing_rails_fill_every_pool() {
+    let signing = worst(&[Signing::Run, Signing::InProof]);
     for key in RING_KEYS
         .iter()
         .filter(|key| matches!(key.circuit, RingCircuit::Transfer { .. }))
     {
         assert_eq!(
-            run.get(key.name),
+            signing.get(key.name),
             Some(&capacity(key.circuit)),
             "{}",
             key.name
@@ -233,10 +233,10 @@ fn the_run_rail_fills_every_pool() {
     }
 }
 
-/// The catalog sizes withdrawal capacity by two addresses per row. An in-proof row takes one, so twelve
-/// rows, eight outputs and thirty two legs reach 52 subjects on a 51 opening pool and no key proves them.
+/// An in-proof row takes its nullifier PDA alone, so twelve rows, eight outputs and thirty two legs name
+/// 52 subjects.
 #[test]
-fn only_one_admitted_spend_outgrows_its_pool() {
+fn every_admitted_spend_fits_its_pool() {
     let shortfalls: Vec<Shortfall> = spends()
         .filter_map(|spend| match spend.key() {
             Some((circuit, false)) => Some(Shortfall {
@@ -248,20 +248,20 @@ fn only_one_admitted_spend_outgrows_its_pool() {
             _ => None,
         })
         .collect();
+    assert_eq!(shortfalls, []);
+    let in_proof = Spend {
+        signing: Signing::InProof,
+        inputs: 12,
+        outputs: 8,
+        legs: 32,
+        rows: 12,
+        entry: false,
+    };
+    assert_eq!(in_proof.subjects(), 52);
     assert_eq!(
-        shortfalls,
-        [Shortfall {
-            spend: Spend {
-                signing: Signing::InProof,
-                inputs: 12,
-                outputs: 8,
-                legs: 32,
-                rows: 12,
-                entry: false,
-            },
-            subjects: 52,
-            key: "custom-ring-transfer-wide-8-in24-w32-s24",
-            capacity: 51,
-        }]
+        in_proof
+            .key()
+            .map(|(circuit, landed)| (name(circuit), landed)),
+        Some(("custom-ring-transfer-wide-8-in24-w32-s24", true))
     );
 }

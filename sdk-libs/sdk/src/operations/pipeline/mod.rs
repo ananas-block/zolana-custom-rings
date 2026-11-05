@@ -20,7 +20,7 @@ mod tests;
 
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
-    key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend},
+    key_catalog::{RecordPools, RingCircuit, RowAuthorization, TransferAddresses, TransferSpend},
     AnonymousParties, CheckedAuthorization, CredentialRead, CustomRingError, CustomRingProof,
     FramedSenderBundle, InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof,
     PolicyProof, PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement,
@@ -188,6 +188,15 @@ impl Spend<'_> {
             Self::Owner | Self::InProofOwner(_) => RingRail::Confidential,
             Self::Anonymous(_) | Self::PublicOwners => RingRail::Anonymous,
             Self::Delegate { rail, .. } => *rail,
+        }
+    }
+
+    /// The delegate signs alone, its empty run takes no address.
+    const fn row_authorization(&self) -> RowAuthorization {
+        match self {
+            Self::Owner | Self::PublicOwners | Self::Delegate { .. } => RowAuthorization::Run,
+            Self::InProofOwner(_) => RowAuthorization::InProof,
+            Self::Anonymous(_) => RowAuthorization::Hidden,
         }
     }
 
@@ -892,8 +901,10 @@ impl<'a> Sealed<'a> {
                 .check_signers(co_signers.iter().copied())?;
         }
         let credential_trees = policy.credential_trees()?;
+        let authorization = spend.row_authorization();
         check_owner_capacity(&OwnerCapacity {
-            owners: owner_signers.len(),
+            rows: owner_signers.len() + authorization.unsigned_rows(),
+            authorization,
             n_inputs: published_inputs,
             co_signers: co_signers.len(),
             legs: transfers.len(),
@@ -1455,7 +1466,8 @@ impl DeliveredRail {
 }
 
 pub(crate) struct OwnerCapacity {
-    pub owners: usize,
+    pub rows: usize,
+    pub authorization: RowAuthorization,
     pub n_inputs: usize,
     pub co_signers: usize,
     pub legs: usize,
@@ -1469,10 +1481,10 @@ pub(crate) fn check_owner_capacity(capacity: &OwnerCapacity) -> Result<(), RingE
         legs: capacity.legs,
         credential_accounts: capacity.credential_accounts,
     }
-    .owner_signers();
-    match capacity.owners > limit {
+    .owner_rows(capacity.authorization);
+    match capacity.rows > limit {
         true => Err(RingError::TooManyOwnerSigners {
-            owners: capacity.owners,
+            owners: capacity.rows,
             limit,
         }),
         false => Ok(()),

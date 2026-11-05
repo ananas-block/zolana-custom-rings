@@ -3159,20 +3159,30 @@ fn each_input_takes_the_secret_its_own_nullifier_names() {
 
 #[test]
 fn a_transaction_past_the_account_bound_is_refused_before_proving() {
-    let capacity = |owners| OwnerCapacity {
-        owners,
+    let capacity = |rows, authorization| OwnerCapacity {
+        rows,
+        authorization,
         n_inputs: 24,
         co_signers: 2,
         legs: 4,
         credential_accounts: 1,
     };
     // 64 addresses less 4 for SPP, 5 for the ring, 24 nullifier PDAs, 2 co-signers with their records, 4 legs and 1 credential tree.
-    assert!(check_owner_capacity(&capacity(22)).is_ok());
+    assert!(check_owner_capacity(&capacity(22, RowAuthorization::Run)).is_ok());
     assert!(matches!(
-        check_owner_capacity(&capacity(23)),
+        check_owner_capacity(&capacity(23, RowAuthorization::Run)),
         Err(RingError::TooManyOwnerSigners {
             owners: 23,
             limit: 22
+        })
+    ));
+    // An in-proof row signs inside SPP's proof and takes no run address.
+    assert!(check_owner_capacity(&capacity(23, RowAuthorization::InProof)).is_ok());
+    assert!(matches!(
+        check_owner_capacity(&capacity(24, RowAuthorization::InProof)),
+        Err(RingError::TooManyOwnerSigners {
+            owners: 24,
+            limit: 23
         })
     ));
 }
