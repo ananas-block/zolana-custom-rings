@@ -204,11 +204,6 @@ export class AnonymousSync {
     return new AnonymousSync({ ...this.#fields, config });
   }
 
-  /** A framing of the deposit ciphertexts other than the audit capsule. */
-  withDepositPayload(depositPayload: DepositPayloadDecoder): AnonymousSync {
-    return new AnonymousSync({ ...this.#fields, depositPayload });
-  }
-
   /** Every stream from index 0 and every ring from its start, for a wallet that keeps no notes between syncs. */
   withFullRescan(): AnonymousSync {
     return new AnonymousSync({ ...this.#fields, fullRescan: true });

@@ -276,7 +276,7 @@ describe("the ring frame", () => {
     expect(RingTransactData.circuit(exit).kind).toBe("ringAuthorityExit");
   });
 
-  it("names the rail from the tag and refuses a retired tag", () => {
+  it("names the rail from the tag and refuses an unknown tag", () => {
     expect(RingInstructionTag.transfer).toBe(55);
     expect(RingInstructionTag.authorityTransfer).toBe(56);
     expect(RingInstructionTag.merge).toBe(57);

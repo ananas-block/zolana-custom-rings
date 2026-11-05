@@ -223,11 +223,6 @@ export class LocalRingKeys implements RingKeys {
     });
   }
 
-  /** The CRDS secret under the recipient key, the agreement never leaves the holder. */
-  ringDeliverySecret(request: RingDeliveryRequest): Bytes32 {
-    return exactlySecret(this.#tags.deliverySecrets([request]));
-  }
-
   destroy(): void {
     this.#keys.destroy();
     this.#tags.destroy();
@@ -348,10 +343,4 @@ class AgreementBatch {
     this.#agreements.set(key, agreement);
     return agreement;
   }
-}
-
-function exactlySecret(secrets: readonly Bytes32[]): Bytes32 {
-  const [secret] = secrets;
-  if (secret === undefined) throw new RingKeyError("KEYPAIR_UNKNOWN_VIEWING_KEY");
-  return secret;
 }

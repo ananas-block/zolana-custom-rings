@@ -381,7 +381,7 @@ describe("rule table builder", () => {
     expect(reason(() => decodeRuleTable(stored))).toBe("DuplicateRule");
   });
 
-  it("shares member witnesses across rules without the retired ten-answer limit", () => {
+  it("shares member witnesses across rules", () => {
     expect(
       buildRuleTable({
         rules: [

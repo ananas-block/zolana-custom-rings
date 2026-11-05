@@ -24,28 +24,6 @@ export interface RingMemberOpeningView {
   readonly path: RingRecordPathView;
 }
 
-export interface RingListWriteView {
-  readonly member: Hash;
-  readonly mask: bigint;
-  readonly value: bigint;
-  readonly mintPolicy: MintPolicy | null;
-}
-
-/** Paths are under the root the preceding writes reached. */
-export interface RingRecordWriteView {
-  readonly member: Hash;
-  readonly mask: bigint;
-  readonly value: bigint;
-  readonly exists: boolean;
-  readonly oldNext: Hash;
-  readonly oldLists: bigint;
-  readonly oldMintPolicy: MintPolicy;
-  readonly slot: RingRecordPathView;
-  readonly low: RingMemberRecordView;
-  readonly lowPath: RingRecordPathView;
-  readonly mintPolicy: MintPolicy | null;
-}
-
 /** Rust `StorageRootView`. */
 export interface StorageRootView {
   readonly root: Hash;
@@ -97,24 +75,3 @@ export interface StorageRecordPoolResponse {
   readonly subjects: readonly number[];
 }
 
-/** Rust `StorageWriteView`. */
-export type StorageWriteView = RingListWriteView;
-
-/** Rust `GetStorageApplyProofInputsRequest`. */
-export interface StorageApplyProofInputsRequest {
-  readonly registry: Address;
-  readonly writes: readonly StorageWriteView[];
-}
-
-export interface StorageApplyProofInputsResponse {
-  readonly context: IndexerContext;
-  readonly revision: bigint;
-  readonly oldRoot: Hash;
-  readonly newRoot: Hash;
-  readonly oldNextIndex: bigint;
-  readonly newNextIndex: bigint;
-  readonly chainStart: Hash;
-  readonly chainEnd: Hash;
-  /** In request order. */
-  readonly writes: readonly RingRecordWriteView[];
-}

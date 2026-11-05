@@ -4,7 +4,6 @@ import {
   Writer,
   concatBytes,
   equalBytes,
-  solanaOwnerIdentity,
 } from "@heliuslabs/zolana/internal";
 import {
   encodeRingTransactInstructionData,
@@ -406,13 +405,6 @@ export const RingTransactData = Object.freeze({
       ...data.outputs.map((output) => output.record),
       ...data.outputs.flatMap((output) => (output.tail === undefined ? [] : [output.tail])),
     );
-  },
-
-  /** The in-proof owner's identity, `undefined` off that rail. */
-  inProofSender(data: Pick<RingTransactData, "inProofOwner">): Bytes32 | undefined {
-    return data.inProofOwner === undefined
-      ? undefined
-      : (solanaOwnerIdentity(data.inProofOwner.owner) as Bytes32);
   },
 
   /** The SPP data the program forwards, `b` decompressed for SPP's verifier. */
@@ -1229,22 +1221,6 @@ export function ringTransactOutput(
     ownerTag: Object.freeze({ kind: "inline", value: checkedField(output.ownerTag, "ownerTag") }),
     ...(data === undefined ? {} : { data }),
   });
-}
-
-/** Bit `i` set when slot `i` carries a scheme 3 body, frame parsing alone reads it. */
-export function exitsBitmap(outputs: readonly Pick<RingOutput, "body">[]): bigint {
-  return outputs.reduce(
-    (bits, output, slot) => (output.body.kind === "exit" ? bits | (1n << BigInt(slot)) : bits),
-    0n,
-  );
-}
-
-/** Bit `i` set when slot `i` carries no body. */
-export function bodilessBitmap(outputs: readonly Pick<RingOutput, "body">[]): bigint {
-  return outputs.reduce(
-    (bits, output, slot) => (output.body.kind === "none" ? bits | (1n << BigInt(slot)) : bits),
-    0n,
-  );
 }
 
 function treeIndex(trees: InputTrees, input: number): number {

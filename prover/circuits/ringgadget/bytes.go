@@ -20,11 +20,3 @@ func (BoundedBytes) Check(frontend.Variable, int) {}
 func UintBytesBE(api frontend.API, value frontend.Variable, n int) []frontend.Variable {
 	return gadget.BitsToBytesBE(api, api.ToBinary(value, byteBits*n))
 }
-
-func ConstBytes(s string) []frontend.Variable {
-	out := make([]frontend.Variable, len(s))
-	for i := range s {
-		out[i] = s[i]
-	}
-	return out
-}
