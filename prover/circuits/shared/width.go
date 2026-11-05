@@ -1,4 +1,7 @@
-// A circuit of a size the ring ships no key for has no verifier on chain.
+// Checks that a circuit is built only at a size the ring ships keys for. A circuit of a size the ring
+// ships no key for has no verifier on chain.
+//
+// Read first. Read before deposit.go, transfer/transfer.go, registry/apply_records.go.
 
 package shared
 

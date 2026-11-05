@@ -1,6 +1,16 @@
+// SPP's merge proof ties every input to one owner, one asset and the sum, and it seals nothing to an
+// auditor. The ring proof adds one opening record of the output sealed to the ring's auditor key, and
+// it opens no input, so one key serves every merge width. Without it the auditor holds no proven
+// opening of a merged note.
+//
+// SPP derives the output blinding as TMOB(seed, n0). The seed is the owner's nullifier secret off the
+// zero key, and a private merge seed under it, zolana/prover/server/circuits/spp_merge/ring_v2.go. The
+// record seals that seed. The auditor already holds a hidden owner's secret through enrollment, so the
+// record gives it nothing new there, and a zero key's seed exists nowhere else for the auditor.
+//
 // The merge statement proves the following for one SPP merge output named by its hash and first nullifier.
 //  1. The ciphertext is the output's opening record under the ring's auditor key, the auditor rebuilds
-//     the published hash from the record and the first nullifier alone.
+//     the published hash from the record, the first nullifier and the tree id and ring data hash SPP publishes.
 //  2. A hidden owner's nullifier key is its enrolled row's under the tracking root and the public payer
 //     is another account. A zero key reads no row, and the statement names that owner for SPP's signature.
 //
@@ -9,6 +19,8 @@
 // SPP's merge publishes no auditor message and no external data hash covers the record. The auditor
 // reads the ciphertext from the ring instruction that called SPP in the confirmed transaction, and
 // the statement alone binds those bytes.
+//
+// Read after shared/envelope.go, audit/record.go, registry/tracking.go. Read before ../ring/ring.go.
 
 package circuits
 
@@ -66,14 +78,14 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(row.Present, hidden)
 	api.AssertIsEqual(row.NullifierPk, api.Mul(hidden, c.NullifierPk))
 
-	// 3. The output is the SPP merge output, the auditor rebuilds its hash from the record.
+	// 3. The output is the SPP merge output, the program reads OutputUtxoHash from the SPP body it forwards and the auditor rebuilds it from the record.
 	api.AssertIsEqual(c.OutputUtxoHash, transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
 		Domain: mergeshared.UtxoDomain, Owner: gadget.PoseidonHash(api, []frontend.Variable{c.OwnerPkHash, c.NullifierPk}),
 		Asset: c.Asset, Amount: c.Amount, Blinding: mergeshared.MergeOutputBlinding(api, c.Seed, c.FirstNullifier),
 		DataHash: 0, RingDataHash: c.OutputRingDataHash, RingProgramID: c.RingProgramID,
 	}, c.OutputTreeID))
 
-	// 4. One encoding per record, a transfer's record followed by the seed.
+	// 4. One encoding per record, a transfer's record followed by the seed, under the CRING/mrg label.
 	plaintext := audit.OpeningRecord{RecordOpening: audit.RecordOpening{
 		Live: 1, Kind: audit.KindRing, Amount: c.Amount, OwnerPkHash: c.OwnerPkHash, NullifierPk: c.NullifierPk, Asset: c.Asset,
 		OwnerKey: c.OwnerKey, MintChunks: c.MintChunks,

@@ -1,3 +1,9 @@
+// Packs bytes into field elements. Where a statement hashes one the program rebuilds it, a chunk or
+// pad off the mirror fails the statement. A byte above 8 bits would alias a packed element, so each
+// caller holds that bound where its bytes are produced.
+//
+// Read after ringgadget/bytes.go, shared/derivation.go. Read before shared/envelope.go, audit/audit.go.
+
 package shared
 
 import (

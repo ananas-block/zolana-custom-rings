@@ -1,5 +1,29 @@
 // Package audit proves what a ring auditor reads from a ring transfer.
 //
+// SPP gives an auditor nothing to read. Its transfer proof hides every opening behind the output
+// hashes, and its external data hash binds the ciphertext bytes a sender submits with no claim about
+// what they contain. A ring must let its auditor open every note it settles, so the ring proof adds
+// one AES stream sealed to the auditor and ties its plaintext to SPP's published hashes. Without
+// these constraints a sender could settle a note no auditor can read.
+//
+// Sealing. The stream needs no key of its own. SPP publishes a tx_viewing_pk per transaction, and the
+// program feeds its coordinate tx_u to SPP's external data hash and to the ring statement from the same
+// frame bytes. tx_viewing_sk is the ephemeral key of the auditor's agreement, and the plaintext opens
+// with tx_viewing_sk itself.
+//
+// One sealed key opens every blinding. SPP holds each output blinding to
+// TXOB(n0, TXOS(n0, BlindingSeed), i), with BlindingSeed a free private input. The ring holds the same
+// wire to that derivation at BlindingSeed = CRBS(tx_viewing_sk, salt). Both proofs hash the blinding
+// into the one output hash, so a Poseidon collision aside SPP's seed is the ring's, and a record
+// carries no blinding.
+//
+// The auditor reads a transfer in three steps.
+//  1. X25519(auditor_sk, tx_u) and the salt give the stream's key and nonce.
+//  2. The envelope gives tx_viewing_sk, R and any entry evidence.
+//  3. Each record, its tail, the derived blinding and the frame's tree id rebuild that slot's
+//     published hash. A dummy's record is zero and its hash rebuilds from the blinding and the
+//     frame's tree id.
+//
 // A statement built on the package proves the following.
 //  1. The stream is AES-256-CTR under a key schedule bound to the auditor key, tx_u and the salt,
 //     over the sealed tx_viewing_sk, R, the entry evidence, one record per slot and one tail per slot.
@@ -8,8 +32,24 @@
 //     from the stream and the frame.
 //  3. R counts the spent notes among the published inputs, and a default-ring input opens in the
 //     entry evidence.
+//  4. A slot's kind derives from the domain and ring id its hash commits, no prover bit passes a note
+//     as a dummy.
+//  5. Every transmitted ciphertext byte is bound, the envelope through its counted digest and each
+//     record and tail through its chain.
 //
-// It proves nothing about a recipient's body or tag, delivery stays outside the circuit.
+// It proves nothing about a recipient's body or tag, delivery stays outside the circuit. Those bytes
+// reach the proof only under SPP's external data hash, as on SPP, and no constraint reads them. A
+// transfer with a correct proof can therefore carry a body its recipient cannot open. The sender wants
+// its payment received, and delivery stays its own incentive. A bad body credits nobody, since a
+// reader accepts a note only when the commitment rebuilds under its own keys, and a full scan repairs
+// a bad tag. The auditor's copy is the proven one and holds the opening whatever the body says, and
+// Ring RPC can return it to the authorized owner. Nothing here promises delivery to an owner who has
+// no Ring RPC.
+//
+// It proves nothing about the freshness of tx_viewing_sk or the salt, see shared.Envelope.
+//
+// Read after shared/envelope.go, shared/derivation.go, shared/utxo.go, audit/layout.go.
+// Read before audit/record.go, audit/signer_data.go, transfer/transfer.go.
 package audit
 
 import (
@@ -25,6 +65,8 @@ import (
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
+// AuditWires are the values one stream reads. Head binds all but TxViewingSk, and the program
+// rebuilds the bound values from the frame, its own program id and the ring's configured auditor key.
 type AuditWires struct {
 	FirstNullifier frontend.Variable
 	// RingProgramID is hash_bytes(ring program address), the id SPP binds every ring output to.
@@ -47,10 +89,14 @@ func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Env
 	// 1. The salt is 16 bytes, one field below 2^128 the program rebuilds from the instruction.
 	salt := gadget.BytesToFieldWith(api, rc, w.Salt[:])
 	// 2. The auditor reads the recovered bytes as they are, an unclamped alias would key another stream.
+	// X25519 clamps before it multiplies, so an alias names one tx_u with another CRBS seed, and the
+	// reader refuses any encoding but the clamped one. A proof past the clamp could seal a stream
+	// its auditor refuses to read.
 	AssertClamped(api, w.TxViewingSk)
 	// 3. tx_u is the key of tx_viewing_sk, the generator bounds every secret byte the packings read.
 	txPk := shared.PackedKey(api, x25519.ScalarMulGenerator(api, w.TxViewingSk))
 	packedTxViewingSk := [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:]))
+	// 4. outputSeed is SPP's TXOS(n0, BlindingSeed) at the ring's seed, its inputs are the sealed key and two values the frame publishes.
 	return Envelope{
 		txViewingSk: w.TxViewingSk,
 		txPk:        [2]frontend.Variable(txPk),
@@ -59,85 +105,62 @@ func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Env
 	}
 }
 
-// StreamRanges mirrors AuditStreamLayout in program-libs/interface/src/proof/audit_stream.rs.
-type StreamRanges struct {
-	StreamShape
-}
-
-const (
-	streamBlockLen = 16
-	// StreamFirstCounter is aes.Cipher.CTREncrypt's first counter, mirrored by STREAM_FIRST_COUNTER.
-	StreamFirstCounter  = 2
-	EnvelopeKeyLen      = 32
-	RealInputCountLen   = 1
-	DefaultInputBitsLen = 8
-	fieldLen            = 32
-	amountLen           = 8
-	kindLen             = 1
-	// RecordLen is the bytes a transfer frame carries, mirrored by AUDIT_RECORD_LEN.
-	RecordLen = kindLen + amountLen + 3*fieldLen
-	TailLen   = 2 * fieldLen
-	// EntryInputLen mirrors ENTRY_INPUT_LEN.
-	EntryInputLen = amountLen + 6*fieldLen
-	RecordBlocks  = (RecordLen + streamBlockLen - 1) / streamBlockLen
-	// RecordStride mirrors RECORD_STRIDE, slot i keeps its counter and a transfer frame omits the padding.
-	RecordStride = RecordBlocks * streamBlockLen
-	TailBlocks   = TailLen / streamBlockLen
-)
-
-func (s StreamShape) Ranges() StreamRanges {
-	return StreamRanges{StreamShape: s}
-}
-
-func (r StreamRanges) EnvelopeHeadLen() int {
-	if r.Entry {
-		return EnvelopeKeyLen + RealInputCountLen + DefaultInputBitsLen
+// AssertClamped pins the RFC 7748 clamped encoding, the one byte string per X25519 key.
+func AssertClamped(api frontend.API, secret [32]frontend.Variable) {
+	low := api.ToBinary(secret[0], 8)
+	high := api.ToBinary(secret[31], 8)
+	// Bits 0 to 2 are clear, the scalar is a multiple of the cofactor.
+	for _, bit := range low[:3] {
+		api.AssertIsEqual(bit, 0)
 	}
-	return EnvelopeKeyLen + RealInputCountLen
+	// Bit 254 is set and bit 255 is clear, the top RFC 7748 fixes.
+	api.AssertIsEqual(high[6], 1)
+	api.AssertIsEqual(high[7], 0)
 }
 
-func (r StreamRanges) entryLen() int {
-	if r.Entry {
-		return EntryInputLen
+// Opened holds every output slot once, every section reads these wires.
+type Opened struct {
+	Slots []shared.Output
+	// OutputCount is the published m.
+	OutputCount frontend.Variable
+	Count       ringgadget.Count
+	// OutputChain covers every published slot hash, a dummy's included, zero past m as SPP's padded chain reads.
+	OutputChain frontend.Variable
+	hasData     frontend.Variable
+	records     [][]frontend.Variable
+	tails       [][]frontend.Variable
+}
+
+// OpenSlots holds each output wire to the hash SPP publishes, so a later section reads the note that settles.
+func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, shape StreamShape, layout Layout, outputs []OutputWires, outputCount frontend.Variable) Opened {
+	// 1. m selects the published slots, a key's capacity may exceed it and a slot past it publishes nothing.
+	count := ringgadget.SelectCount(api, outputCount, 1, len(outputs))
+	opened := Opened{Slots: make([]shared.Output, len(outputs)), OutputCount: outputCount, Count: count, hasData: layout.HasData, records: make([][]frontend.Variable, len(outputs))}
+	hashes := make([]frontend.Variable, len(outputs))
+	for i, output := range outputs {
+		slot := output.Output.Open(api)
+		active := count.Active[i]
+		// 2. An omitted slot holds no note, SPP's padded chain would miss it.
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: slot.Utxo})
+		// 3. The auditor rebuilds every commitment from the sealed key's blinding, another value leaves the slot unopened.
+		w.AssertBlinding(api, e, slot, active, i)
+		// 4. A clear has_data transmits no tail, a nonzero data hash would leave the commitment unrebuilt.
+		assertNoData(api, layout.HasData, slot)
+		// 5. The plaintext reads the opened wires, SealStream seals them with no second opening to disagree.
+		opened.records[i] = output.record(api, rc, slot)
+		if shape.Data {
+			opened.tails = append(opened.tails, dataTail(api, rc, slot))
+		}
+		opened.Slots[i], hashes[i] = slot, api.Mul(active, slot.Hash)
 	}
-	return 0
+	// 6. The program rebuilds the chain from the hashes it forwards to SPP, one opening off them fails the statement.
+	opened.OutputChain = gadget.HashChain4(api, hashes)
+	return opened
 }
 
-// EnvelopeLen is what the frame carries, with no padding.
-func (r StreamRanges) EnvelopeLen(count int) int {
-	return r.EnvelopeHeadLen() + count*r.entryLen()
-}
-
-// EnvelopeBlocks is fixed per shape, no published count moves a record's counter.
-func (r StreamRanges) EnvelopeBlocks() int {
-	return (r.EnvelopeLen(r.InputClass) + streamBlockLen - 1) / streamBlockLen
-}
-
-// RecordCounter must match the readers, another counter decrypts noise.
-func (r StreamRanges) RecordCounter(i int) int {
-	return StreamFirstCounter + r.EnvelopeBlocks() + i*RecordBlocks
-}
-
-// TailCounter must match the readers, a tail shares no counter with a record.
-func (r StreamRanges) TailCounter(i int) int {
-	return r.RecordCounter(r.Outputs) + i*TailBlocks
-}
-
-// CapacityBlocks covers every slot the key serves, a dataless key has no tail region.
-func (r StreamRanges) CapacityBlocks() int {
-	blocks := r.EnvelopeBlocks() + r.Outputs*RecordBlocks
-	if r.Data {
-		blocks += r.Outputs * TailBlocks
-	}
-	return blocks
-}
-
-func (r StreamRanges) RecordOffset(i int) int {
-	return (r.RecordCounter(i) - StreamFirstCounter) * streamBlockLen
-}
-
-func (r StreamRanges) TailOffset(i int) int {
-	return (r.TailCounter(i) - StreamFirstCounter) * streamBlockLen
+// AssertBlinding holds a published dummy's blinding too, an all dummy transfer has no other link to SPP's seed.
+func (w AuditWires) AssertBlinding(api frontend.API, e Envelope, slot shared.Output, active frontend.Variable, i int) {
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: slot.Blinding, B: transaction.DeriveOutputBlinding(api, w.FirstNullifier, e.outputSeed, i)})
 }
 
 type Stream struct {
@@ -150,12 +173,14 @@ type Stream struct {
 	TailChain frontend.Variable
 	// RealInputs is the sealed R, the count of spent notes.
 	RealInputs frontend.Variable
-	NoSpend    frontend.Variable
+	// NoSpend is set at a zero R, the program then demands no owner signer.
+	NoSpend frontend.Variable
 }
 
 // SealStream mirrors AuditEnvelope::encode and the record layout in program-libs/interface/src/proof/audit_stream.rs.
 func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Envelope, shape StreamShape, opened Opened, spent SpentInputs) Stream {
 	ranges := shape.Ranges()
+	// 1. The circuit encrypts the key's full plaintext, tx_viewing_sk then the evidence.
 	evidence := spent.evidence(api, rc, ranges)
 	plaintext := slices.Concat(w.TxViewingSk[:], evidence.head, slices.Concat(evidence.entries...))
 	// The envelope's padding ends on the block before R0, the longest evidence never reaches a record's counter.
@@ -166,8 +191,13 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Env
 	if len(plaintext) != ranges.CapacityBlocks()*streamBlockLen {
 		panic("audit: the stream plaintext differs from its ranges")
 	}
-	// One key expansion and nonce cover every block, the cipher's tables bound every plaintext and ciphertext byte.
+	// 2. One key expansion and nonce cover every block, the cipher's tables bound every plaintext and ciphertext byte.
+	// tx_viewing_sk is the ephemeral key and txPk its public key, a resend under one first nullifier repeats
+	// both, and the salt in the schedule keeps its keystream apart.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: w.TxViewingSk, AuditorPk: w.AuditorPk, Info: shared.AuditEncInfo}.SealSalted(api, e.txPk[:], e.salt)
+	// 3. Padding and unpublished slots never leave the prover, the statement binds only what the frame transmits.
+	// The program hashes those bytes in one form per region, the envelope's length moves with n and each
+	// record and tail has one length.
 	return Stream{
 		ranges:      ranges,
 		sealed:      sealed,
@@ -205,13 +235,13 @@ func tailChain(api frontend.API, ciphertext []frontend.Variable, ranges StreamRa
 // countedDigest mirrors ciphertext_digest in program-libs/interface/src/proof/statement.rs over the head and the count's entries.
 func countedDigest(api frontend.API, ciphertext []frontend.Variable, head, entry int, count ringgadget.Count) frontend.Variable {
 	transmitted := slices.Clone(ciphertext[:head+len(count.Active)*entry])
-	// An entry at or past the count packs as zero, the chunk the cut falls in then equals pack_left31 of the transmitted bytes.
+	// 1. An entry at or past the count packs as zero, the chunk the cut falls in then equals pack_left31 of the transmitted bytes.
 	for i, active := range count.Active {
 		offset := head + i*entry
 		copy(transmitted[offset:], masked(api, active, transmitted[offset:offset+entry]))
 	}
 	fields := shared.PackDisclosure(api, transmitted)
-	// SelectCount sets exactly one candidate, its flag falls on the last chunk of that count's bytes and HashPrefix4 ends the chain there.
+	// 2. SelectCount sets exactly one candidate, its flag falls on the last chunk of that count's bytes and HashPrefix4 ends the chain there.
 	ends := shared.Zeros(len(fields))
 	length := frontend.Variable(0)
 	for k, selected := range count.OneHot {
@@ -220,48 +250,16 @@ func countedDigest(api frontend.API, ciphertext []frontend.Variable, head, entry
 		ends[last] = api.Add(ends[last], selected)
 		length = api.Add(length, api.Mul(selected, byteLen))
 	}
-	// The tag is the selected count's transmitted length, two counts whose chains agree over trailing zero bytes hash apart.
+	// 3. The tag is the selected count's transmitted length, two counts whose chains agree over trailing zero bytes hash apart.
 	return gadget.PoseidonHash(api, []frontend.Variable{length, ringgadget.HashPrefix4(api, fields, ends)})
 }
 
-// Opened holds every output slot once, every section reads these wires.
-type Opened struct {
-	Slots []shared.Output
-	// OutputCount is the published m.
-	OutputCount frontend.Variable
-	Count       ringgadget.Count
-	// OutputChain covers every published slot hash, a dummy's included, zero past m as SPP's padded chain reads.
-	OutputChain frontend.Variable
-	hasData     frontend.Variable
-	records     [][]frontend.Variable
-	tails       [][]frontend.Variable
-}
-
-func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, shape StreamShape, layout Layout, outputs []OutputWires, outputCount frontend.Variable) Opened {
-	count := ringgadget.SelectCount(api, outputCount, 1, len(outputs))
-	opened := Opened{Slots: make([]shared.Output, len(outputs)), OutputCount: outputCount, Count: count, hasData: layout.HasData, records: make([][]frontend.Variable, len(outputs))}
-	hashes := make([]frontend.Variable, len(outputs))
-	for i, output := range outputs {
-		slot := output.Output.Open(api)
-		active := count.Active[i]
-		// An omitted slot holds no note, SPP's padded chain would miss it.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: slot.Utxo})
-		// The auditor rebuilds every commitment from the sealed key's blinding, another value leaves the slot unopened.
-		w.AssertBlinding(api, e, slot, active, i)
-		assertNoData(api, layout.HasData, slot)
-		opened.records[i] = output.record(api, rc, slot)
-		if shape.Data {
-			opened.tails = append(opened.tails, dataTail(api, rc, slot))
-		}
-		opened.Slots[i], hashes[i] = slot, api.Mul(active, slot.Hash)
+func masked(api frontend.API, flag frontend.Variable, bytes []frontend.Variable) []frontend.Variable {
+	out := make([]frontend.Variable, len(bytes))
+	for i, b := range bytes {
+		out[i] = api.Mul(flag, b)
 	}
-	opened.OutputChain = gadget.HashChain4(api, hashes)
-	return opened
-}
-
-// AssertBlinding holds a published dummy's blinding too, an all dummy transfer has no other link to SPP's seed.
-func (w AuditWires) AssertBlinding(api frontend.API, e Envelope, slot shared.Output, active frontend.Variable, i int) {
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: slot.Blinding, B: transaction.DeriveOutputBlinding(api, w.FirstNullifier, e.outputSeed, i)})
+	return out
 }
 
 // Head opens every audit statement under domain, mirrored by AuditHead in program-libs/interface/src/proof/statement.rs. The stream's ephemeral key is tx_u, txPk already binds it.
@@ -271,25 +269,4 @@ func (e Envelope) Head(w AuditWires, s Stream, domain frontend.Variable) []front
 		s.sealed.Auditor,
 		[]frontend.Variable{s.digest, e.salt, w.Layout},
 	)
-}
-
-// AssertClamped pins the RFC 7748 clamped encoding, the one byte string per X25519 key.
-func AssertClamped(api frontend.API, secret [32]frontend.Variable) {
-	low := api.ToBinary(secret[0], 8)
-	high := api.ToBinary(secret[31], 8)
-	// Bits 0 to 2 are clear, the scalar is a multiple of the cofactor.
-	for _, bit := range low[:3] {
-		api.AssertIsEqual(bit, 0)
-	}
-	// Bit 254 is set and bit 255 is clear, the top RFC 7748 fixes.
-	api.AssertIsEqual(high[6], 1)
-	api.AssertIsEqual(high[7], 0)
-}
-
-func masked(api frontend.API, flag frontend.Variable, bytes []frontend.Variable) []frontend.Variable {
-	out := make([]frontend.Variable, len(bytes))
-	for i, b := range bytes {
-		out[i] = api.Mul(flag, b)
-	}
-	return out
 }

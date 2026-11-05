@@ -1,12 +1,30 @@
 // Package circuits proves a ring deposit and an anonymous ring merge.
 //
+// SPP's ring_deposit takes each output's Poseidon(owner_hash, blinding) as an opaque value with a public
+// asset and amount, leaves the blinding's freshness to the ring and runs no proof. A depositor alone
+// could therefore credit a note no auditor opens. The ring proof gives each occupied slot the opening
+// record a transfer's auditor would read, and it spends nothing, so it reads no nullifier tree.
+//
+// No envelope key derives a deposit's blinding, so the record seals the blinding itself after a
+// transfer's record. BlindingSecret stays out of the record, and CRDB keeps the result off every SPP
+// output blinding. One batch shares one stream under one EphSk.
+//
 // The deposit statement proves the following per occupied slot of the Count it publishes.
 //  1. The owner commitment SPP receives is Poseidon(Poseidon(owner, key), CRDB blinding), and the slot's
 //     ciphertext seals the opening record that rebuilds it, under one CRING/dep stream.
-//  2. A nonzero key is the owner's enrolled row's under the tracking root, a zero key leaves the owner absent.
-//  3. On a policy ring the recipient and the deposited asset meet the rules under the bound roots.
+//  2. The record's asset and amount are the statement's public cells, the program rebuilds those from
+//     SPP's instruction.
+//  3. A nonzero key is the owner's enrolled row's under the tracking root, a zero key leaves the owner absent.
+//  4. On a policy ring the recipient and the deposited asset meet the rules under the bound roots.
 //
 // A padding slot carries nothing, its statement cells read zero.
+//
+// It proves nothing about the recipient's ciphertext a capsule also carries. Those bytes reach the
+// statement only through ContextHash, a hash of the program id, the tree and the whole SPP data, and no
+// constraint reads them. Delivery stays outside the circuit as on a transfer, see package audit.
+//
+// Read after shared/envelope.go, audit/record.go, registry/tracking.go, policy/deposit.go, transfer/owners.go.
+// Read before ../ring/ring.go.
 package circuits
 
 import (
@@ -31,7 +49,7 @@ const (
 	DepositRecordLen = audit.OpeningRecordLen
 )
 
-// DepositCircuit binds every deposited owner commitment to a record sealed for the auditor, it spends nothing and reads no nullifier tree.
+// DepositCircuit binds every deposited owner commitment to a record sealed for the auditor.
 type DepositCircuit struct {
 	Capacity        int               `gnark:"-"`
 	PublicInputHash frontend.Variable `gnark:",public"`
@@ -104,7 +122,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	slots := make([]shared.Output, c.Capacity)
 	for i := range slots {
 		active := count.Active[i]
-		// 2. A padding slot carries no owner, nullifier key, blinding secret, asset or amount.
+		// 2. A padding slot carries no owner, nullifier key, blinding secret, asset or amount, its statement cells read zero as the program hashes them.
 		for _, value := range []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i], c.BlindingSecrets[i], c.Assets[i], c.Amounts[i]} {
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: value})
 		}
@@ -112,7 +130,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 			UtxoWires: shared.UtxoWires{OwnerPkHash: c.OwnerPkHashes[i], NullifierPk: c.NullifierPks[i], Asset: c.Assets[i], Amount: c.Amounts[i]},
 			Utxo:      active, Ring: active, Exit: 0,
 		}
-		// 3. The blinding is derived in the CRDB domain, the commitment is the deposited UTXO's owner part.
+		// 3. The blinding is derived in the CRDB domain, the commitment is the deposited UTXO's owner part SPP hashes into the note.
 		owner := gadget.PoseidonHash(api, []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i]})
 		blinding := shared.DepositBlinding(api, c.BlindingSecrets[i])
 		commitments[i] = gadget.PoseidonHash(api, []frontend.Variable{owner, blinding})
@@ -122,7 +140,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 			OwnerKey: c.OwnerKeys[i], MintChunks: c.MintChunks[i],
 		}, Secret: blinding}.Encode(api, rc))
 	}
-	// 5. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under the root.
+	// 5. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under the root. The owners read the same check as a transfer's outputs.
 	tracking := c.OpenTracking(api)
 	transfer.AssertOutputOwners(api, tracking, slots, c.OutputEntries)
 	// 6. On a policy ring every recipient and deposited asset meets the rules under the bound roots.
