@@ -105,6 +105,20 @@ impl Relayed<'_> {
             accounts: &relayed.interface_transfer_accounts,
         }
         .validate()?;
+        // The fee payer signs whatever the relay sends, a leg naming it would fund the wallet's note
+        // from the relay.
+        let funds_deposit = proof_inputs
+            .external_data
+            .interface_transfers
+            .iter()
+            .zip(&relayed.interface_transfer_accounts)
+            .filter_map(|(transfer, accounts)| {
+                deposit_funder(&transfer.interface_transfer(), accounts)
+            })
+            .any(|funder| funder == self.fee_payer);
+        if funds_deposit {
+            return Err(RingError::RelayFeePayerFundsDeposit);
+        }
         let sender = relayed.sender;
         let rail = |delivery| {
             RingOutputRail::sealed(

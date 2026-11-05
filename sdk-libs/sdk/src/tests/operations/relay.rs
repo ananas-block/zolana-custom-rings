@@ -437,7 +437,8 @@ async fn an_unread_entry_takes_its_capacity_from_its_outputs() {
     use spr_transaction::{Data, Utxo};
 
     for (notes, outputs) in [(8, 4), (2, 8), (4, 8)] {
-        let load = FullLoad::new(notes, outputs, 0);
+        // The hidden owner's change takes the first output.
+        let load = FullLoad::new(notes, outputs - 1, 0);
         let client = Chain::ring(RingSettings {
             has_policy: true,
             ..RingSettings::new(RingMode::Anonymous)
@@ -461,25 +462,26 @@ async fn an_unread_entry_takes_its_capacity_from_its_outputs() {
                 )
             })
             .collect();
-        let mut transaction =
+        let transaction =
             ConfidentialTransaction::new_with_ring(utxos, payer(), ring().program_id()).unwrap();
-        for recipient in &load.recipients {
-            transaction
-                .transfer_with_ring(
-                    &recipient.shielded_address().unwrap(),
-                    Mint::SOL,
-                    1,
-                    Some(ring().program_id()),
-                )
-                .unwrap();
-        }
-        let transfer = CustomRingTransfer::new(CustomRingTransferInput {
-            ring: ring(),
-            sender: &load.sender,
-            nullifier_key: Some(&load.sender.nullifier_key),
-            transaction,
-        })
-        .with_buffered_settlement();
+        let transfer = load
+            .recipients
+            .iter()
+            .fold(
+                CustomRingTransfer::new(CustomRingTransferInput {
+                    ring: ring(),
+                    sender: &load.sender,
+                    nullifier_key: Some(&load.sender.nullifier_key),
+                    transaction,
+                })
+                .with_anonymous_signer(&load.sender.signing_key),
+                |transfer, recipient| {
+                    transfer
+                        .with_payment(public_signers::pay(recipient, 1))
+                        .unwrap()
+                },
+            )
+            .with_buffered_settlement();
         let sealed = transfer.seal_unread(client.zolana()).await.unwrap();
         assert!(!sealed.preview.wide_owners, "{notes}x{outputs}");
         let submitted = transfer.frame(&client).await.unwrap();
@@ -2003,6 +2005,63 @@ mod public_signers {
         }
     }
 
+    /// The fee payer signs what the relay sends, a leg naming it would fund the wallet from the relay.
+    #[tokio::test]
+    async fn a_relayed_deposit_leg_its_fee_payer_would_fund_is_refused() {
+        use spr_program::instruction::{
+            TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
+        };
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let mut transaction = ConfidentialTransaction::new_with_ring(
+            vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
+            FEE_PAYER,
+            ring().program_id(),
+        )
+        .unwrap();
+        transaction.deposit_sol(5, FEE_PAYER).unwrap();
+        let paying = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction,
+        })
+        .with_interface_transfer_accounts(vec![TransactInterfaceTransferAccounts::Sol(
+            TransactSolTransferAccounts {
+                recipient: FEE_PAYER,
+            },
+        )])
+        .with_anonymous_signer(&sender.signing_key)
+        .with_payment(pay(&payee, 4))
+        .unwrap();
+        let asked = sent(
+            paying
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let RelayIntent::Anonymous {
+            proof_inputs,
+            owner_signature,
+            ..
+        } = &asked.request.intent
+        else {
+            panic!("a wallet relay");
+        };
+        let inputs = RelayProofInputs::decode(proof_inputs.as_bytes()).unwrap();
+        let relayed = RingTransfer::relayed(crate::RelayedTransferInput {
+            ring: ring(),
+            proof_inputs: &inputs,
+            fee_payer: FEE_PAYER,
+        })
+        .with_owner_signature(<[u8; 64]>::from(owner_signature.0));
+        assert!(matches!(
+            relayed.assemble(&client).await,
+            Err(RingError::RelayFeePayerFundsDeposit)
+        ));
+    }
+
     /// The TypeScript check reads the same frames and reaches the same verdicts, `UPDATE_RELAY_MESSAGES=1` rewrites them.
     #[tokio::test]
     async fn the_shared_owner_messages_keep_their_verdicts() {
@@ -2093,6 +2152,99 @@ mod public_signers {
         .0;
         let known = [spent.nullifier, kept.nullifier];
 
+        let lead_note = ring_utxo(&co_owner, Mint::SOL, 10, 3);
+        let recipient_note = ring_utxo(&payee, Mint::SOL, 10, 4);
+        let repeating = transfer(
+            &sender,
+            vec![
+                ring_utxo(&sender, Mint::SOL, 10, 0),
+                lead_note,
+                recipient_note.clone(),
+            ],
+        )
+        .with_anonymous_signer(&sender.signing_key)
+        .with_co_owner(CoOwner {
+            owner: address(&co_owner),
+            nullifier_key: &co_owner.nullifier_key,
+        })
+        .with_co_owner(CoOwner {
+            owner: address(&payee),
+            nullifier_key: &payee.nullifier_key,
+        })
+        .with_payment(data_payment(&payee))
+        .unwrap();
+        let repeat_asked = sent(
+            repeating
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let repeat_terms = repeat_asked
+            .pending
+            .transfer_terms(address(&payee))
+            .unwrap()
+            .clone();
+        let omitted_terms = RelayTransferTerms {
+            slots: Vec::new(),
+            ..repeat_terms.clone()
+        };
+        let mut repeated = frame(&client, &repeat_asked.request).await;
+        let lead = repeated
+            .accounts
+            .iter()
+            .position(|meta| meta.pubkey == address(&co_owner))
+            .unwrap();
+        repeated
+            .accounts
+            .insert(lead, repeated.accounts[lead].clone());
+        let repeated_message = relay_message(&FEE_PAYER, &[repeated], UNITS).0;
+        let recipient_known = [recipient_note.nullifier];
+
+        let exit_note = ring_utxo(&co_owner, Mint::SOL, 10, 5);
+        let mut exiting = ConfidentialTransaction::new_with_ring(
+            vec![ring_utxo(&sender, Mint::SOL, 10, 0), exit_note.clone()],
+            FEE_PAYER,
+            ring().program_id(),
+        )
+        .unwrap();
+        exiting
+            .transfer_with_ring(&co_owner.shielded_address().unwrap(), Mint::SOL, 3, None)
+            .unwrap();
+        let exit_transfer = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction: exiting,
+        })
+        .with_anonymous_signer(&sender.signing_key)
+        .with_co_owner(CoOwner {
+            owner: address(&co_owner),
+            nullifier_key: &co_owner.nullifier_key,
+        })
+        .with_payment(pay(&payee, 4))
+        .unwrap();
+        let exit_asked = sent(
+            exit_transfer
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let exit_terms = exit_asked
+            .pending
+            .transfer_terms(address(&co_owner))
+            .unwrap()
+            .clone();
+        assert_eq!(exit_terms.slots.len(), 1);
+        let exit_message = relay_message(
+            &FEE_PAYER,
+            &[frame(&client, &exit_asked.request).await],
+            UNITS,
+        )
+        .0;
+        let exit_known = [exit_note.nullifier];
+
         let fresh = OwnerMessages {
             description: "Relayed anonymous transfers a public owner signs. A data recipient \
                           opens its own slot, a co-owner names its notes against the notes its \
@@ -2114,6 +2266,27 @@ mod public_signers {
                     "SpendsUnnamedNote",
                 ),
                 owner_case("noList", &co_terms, &[], &co_message, "Data"),
+                owner_case(
+                    "repeatedSignerHonest",
+                    &repeat_terms,
+                    &recipient_known,
+                    &repeated_message,
+                    "Accepted",
+                ),
+                owner_case(
+                    "repeatedSignerOmitsDataOutput",
+                    &omitted_terms,
+                    &recipient_known,
+                    &repeated_message,
+                    "DataOutputCount",
+                ),
+                owner_case(
+                    "exitHonest",
+                    &exit_terms,
+                    &exit_known,
+                    &exit_message,
+                    "Accepted",
+                ),
             ],
         };
         let vector = crate::tests::support::pinned_vector("relay_transfer_messages.json", fresh);
@@ -2186,6 +2359,7 @@ mod public_signers {
         mint: SerializablePubkey,
         peak: String,
         outflow: String,
+        gross: String,
     }
 
     /// `opening` unset is the threshold rule, `accepts` then names its bits.
@@ -2216,6 +2390,7 @@ mod public_signers {
             mint: SerializablePubkey(mint.asset),
             peak: peak.to_string(),
             outflow: outflow.to_string(),
+            gross: outflow.to_string(),
         }
     }
 
@@ -2234,6 +2409,7 @@ mod public_signers {
                             mint: limit.mint.0,
                             peak: limit.peak.parse().unwrap(),
                             outflow: limit.outflow.parse().unwrap(),
+                            gross: limit.gross.parse().unwrap(),
                         })
                         .collect(),
                     seen_blinders: self.seen_blinders.clone(),
@@ -2466,6 +2642,7 @@ mod public_signers {
                     mint: Mint::SOL.asset,
                     peak: 4,
                     outflow: 4,
+                    gross: 0,
                 }],
                 seen_blinders: Vec::new(),
             })
@@ -2595,6 +2772,7 @@ mod public_signers {
     /// The TypeScript check reads the same frames, neither rule opens a slot.
     #[tokio::test]
     async fn the_shared_co_signer_messages_keep_their_verdicts() {
+        const GROSS: u64 = 5;
         let (sender, payee, co_signer) = (keypair(1), keypair(2), keypair(6));
         let client = chain(
             RingMode::Anonymous,
@@ -2654,6 +2832,163 @@ mod public_signers {
 
         let mut false_opening = opening.clone();
         false_opening.outputs[0].outflow = "1".to_owned();
+
+        // Another key funds the withdrawal and the one spent note holds no value, so no owner debits
+        // the mint and the public row's gross alone shows the size.
+        let spl = Mint {
+            asset: Address::new_from_array([0x47; 32]),
+            asset_id: 7,
+        };
+        let token_account = Address::new_from_array([0x48; 32]);
+        let token_program = Address::new_from_array(spr_interface::SPL_TOKEN_PROGRAM_ID);
+        let spl_deposit = |authority: Address| {
+            TransactInterfaceTransferAccounts::SplDeposit(
+                spr_program::instruction::TransactSplDepositAccounts {
+                    mint: spl.asset,
+                    spl_interface: spr_interface::pda::spl_interface(&spl.asset),
+                    token_authority: authority,
+                    user_token_account: token_account,
+                    token_program,
+                },
+            )
+        };
+        let spl_ring = |scope| {
+            Chain::ring(RingSettings {
+                has_policy: true,
+                co_signer: Some((address(&co_signer), scope)),
+                ..RingSettings::new(RingMode::Anonymous)
+            })
+            .with_registry(
+                Registry::new(&[(&sender, 1), (&payee, 1), (&co_signer, 1)])
+                    .with_mint(spl.asset, Default::default()),
+                &pipeline_rules(),
+            )
+            .with(
+                spr_interface::pda::associated_token_address_with_program(
+                    &address(&payee),
+                    &spl.asset,
+                    &token_program,
+                ),
+                crate::tests::support::account(
+                    token_program,
+                    &spl_token_2022_interface::pod::PodAccount {
+                        mint: spl.asset.to_bytes().into(),
+                        owner: address(&payee).to_bytes().into(),
+                        state: spr_interface::SPL_TOKEN_ACCOUNT_INITIALIZED,
+                        ..Default::default()
+                    },
+                ),
+            )
+            .client()
+        };
+        let funder = keypair(7);
+        let through_client = spl_ring(CoSignScope::TRANSFERS);
+        let mut moving = ConfidentialTransaction::new_with_ring(
+            vec![ring_utxo(&sender, spl, 0, 0)],
+            FEE_PAYER,
+            ring().program_id(),
+        )
+        .unwrap();
+        moving.deposit(spl, GROSS + 1, token_account).unwrap();
+        let withdrawal = moving
+            .withdraw_to(spl.asset, GROSS, address(&payee), Some(token_program))
+            .unwrap();
+        let through = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction: moving,
+        })
+        .with_interface_transfer_accounts(vec![spl_deposit(address(&funder)), withdrawal])
+        .with_co_signer(address(&co_signer))
+        .with_anonymous_signer(&sender.signing_key)
+        .with_exit_token_owner(address(&payee))
+        .with_payment(AnonymousPayment {
+            asset: spl,
+            ..pay(&payee, 1)
+        })
+        .unwrap()
+        .with_exact_approval();
+        let through_asked = sent(
+            through
+                .prepare_relay(through_client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let through_opening = through_asked.pending.approval_opening().unwrap().clone();
+        let through_message = relay_message(
+            &FEE_PAYER,
+            &[frame(&through_client, &through_asked.request).await],
+            UNITS,
+        )
+        .0;
+        // Every other reading of the row stays inside these, only the gross bound decides.
+        let gross_limits = |gross: u64| {
+            vec![
+                LimitCase {
+                    gross: gross.to_string(),
+                    ..limit(spl, 0, 0)
+                },
+                LimitCase {
+                    gross: gross.to_string(),
+                    ..limit(Mint::SOL, 1, 1)
+                },
+            ]
+        };
+
+        // A ring asking the co-signer for an approval bit alone, mask 0 names it nowhere in the prefix.
+        let approval_client = spl_ring(CoSignScope::APPROVALS);
+        let mut funding = ConfidentialTransaction::new_with_ring(
+            vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
+            FEE_PAYER,
+            ring().program_id(),
+        )
+        .unwrap();
+        funding.deposit(spl, 5, token_account).unwrap();
+        let funded = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction: funding,
+        })
+        .with_interface_transfer_accounts(vec![spl_deposit(address(&co_signer))])
+        .with_anonymous_signer(&sender.signing_key)
+        .with_payment(AnonymousPayment {
+            asset: spl,
+            ..pay(&payee, 5)
+        })
+        .unwrap();
+        let funded_asked = sent(
+            funded
+                .prepare_relay(approval_client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let funded_message = relay_message(
+            &FEE_PAYER,
+            &[frame(&approval_client, &funded_asked.request).await],
+            UNITS,
+        )
+        .0;
+        let owning = transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 10, 0)])
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(data_payment(&co_signer))
+            .unwrap();
+        let owning_asked = sent(
+            owning
+                .prepare_relay(approval_client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let owning_message = relay_message(
+            &FEE_PAYER,
+            &[frame(&approval_client, &owning_asked.request).await],
+            UNITS,
+        )
+        .0;
         let bounds = vec![limit(Mint::SOL, 4, 4)];
         let exact_case =
             |name: &str, opening: &ApprovalOpening, limits, seen, verdict: &str| CoSignerCase {
@@ -2745,6 +3080,28 @@ mod public_signers {
                     &masked_message,
                     "Accepted",
                 ),
+                CoSignerCase {
+                    message: through_message.clone().into(),
+                    ..exact_case(
+                        "grossAtLimit",
+                        &through_opening,
+                        gross_limits(GROSS),
+                        Vec::new(),
+                        "Accepted",
+                    )
+                },
+                CoSignerCase {
+                    message: through_message.clone().into(),
+                    ..exact_case(
+                        "grossOverLimit",
+                        &through_opening,
+                        gross_limits(GROSS - 1),
+                        Vec::new(),
+                        "ApprovalOverLimit",
+                    )
+                },
+                threshold_case("coSignerFundsLeg", 0, &funded_message, "Accounts"),
+                threshold_case("coSignerInOwnerRun", 0, &owning_message, "Accounts"),
             ],
         };
         let vector = crate::tests::support::pinned_vector("relay_co_signer_messages.json", fresh);
@@ -2833,6 +3190,7 @@ mod public_signers {
                 mint: Mint::SOL.asset,
                 peak: 4,
                 outflow: 4,
+                gross: 0,
             }],
             seen_blinders: Vec::new(),
         });

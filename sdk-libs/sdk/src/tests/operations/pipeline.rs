@@ -2076,6 +2076,8 @@ struct Measure {
     spent_inputs: Option<usize>,
     /// The last note spends from another input tree.
     second_tree: bool,
+    /// The frame may settle from a buffer, `Fit::settled` then holds the acceptance rule's figures.
+    buffered: bool,
 }
 
 /// `addresses` stays `None` past the byte ceiling.
@@ -2083,6 +2085,7 @@ struct Measure {
 struct Fit {
     bytes: usize,
     addresses: Option<usize>,
+    settled: Option<crate::address_ceiling::Fit>,
 }
 
 impl Measure {
@@ -2103,6 +2106,7 @@ impl Measure {
             priority_fee: false,
             spent_inputs: None,
             second_tree: false,
+            buffered: false,
         }
     }
 
@@ -2134,6 +2138,7 @@ impl Measure {
             priority_fee,
             spent_inputs,
             second_tree,
+            buffered,
         } = self;
         let spent_notes = spent_inputs.unwrap_or(shape.n_inputs()) as u64;
         let policy = rail.policy();
@@ -2283,6 +2288,7 @@ impl Measure {
             payer,
             co_signer: co_signer.map(|(signer, _)| signer),
             priority_fee,
+            buffered,
         };
         let compact = published.is_some() || spent_inputs.is_some();
         let spent = |utxos: Vec<WalletUtxo>| match compact {
@@ -2397,6 +2403,7 @@ struct FrameSize<'c> {
     payer: Address,
     co_signer: Option<Address>,
     priority_fee: bool,
+    buffered: bool,
 }
 
 impl FrameSize<'_> {
@@ -2410,6 +2417,10 @@ impl FrameSize<'_> {
             true => transfer.with_priority_fee(1),
             false => transfer,
         };
+        let transfer = match self.buffered {
+            true => transfer.with_buffered_settlement(),
+            false => transfer,
+        };
         match transfer.frame(self.client).await {
             Ok(unwitnessed) => {
                 assert_eq!(
@@ -2420,20 +2431,30 @@ impl FrameSize<'_> {
                     true => spr_client::ComputeBudgetConfig::new(0).with_priority_fee(1),
                     false => spr_client::ComputeBudgetConfig::new(0),
                 };
+                let instruction = unwitnessed.instruction().unwrap();
                 let size = spr_client::transaction_size(
                     &self.payer,
-                    &[unwitnessed.instruction().unwrap()],
+                    core::slice::from_ref(&instruction),
                     budget,
                 )
                 .unwrap();
                 Fit {
                     bytes: size.bytes,
                     addresses: Some(size.addresses),
+                    settled: self.buffered.then(|| {
+                        crate::address_ceiling::TransactionFit::of(
+                            &instruction,
+                            crate::address_ceiling::FitSigners::new(self.payer),
+                            budget,
+                        )
+                        .unwrap()
+                    }),
                 }
             }
             Err(RingError::TransferTooWide { bytes, .. }) => Fit {
                 bytes,
                 addresses: None,
+                settled: None,
             },
             Err(error) => panic!("{:?} {:?}: {error}", self.rail, self.shape),
         }
@@ -2560,46 +2581,59 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
     assert_eq!(measured, SIZE_PINS, "measured:\n{table}");
 }
 
-/// Each confidential input class is the widest shape both rails fit without a policy, relayed.
+/// Each confidential input class settles on both rails without a policy, inline up to 8 outputs and
+/// from a buffer at 16, where no frame fits one transaction.
 #[tokio::test]
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
+    use crate::address_ceiling::FitTransport;
     let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES
         .into_iter()
         .filter(|shape| !shape.entry && !shape.wide);
     for family in narrow {
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {
-            // The in-proof rail stops one input short of the signer rail at 16 outputs.
-            let shape = match (rail, shape.n_outputs()) {
-                (Measured::InProofOwner, 16) => spr_client::Shape::new(4, 16),
-                _ => shape,
-            };
-            let payer = match (rail, shape.n_outputs()) {
-                (Measured::Confidential, 16) => Payer::Owner,
-                _ => Payer::Outsider,
-            };
-            let bytes = Measure {
-                payer,
-                ..Measure::relayed(rail, shape)
+            for payer in [rail.sweep_payer(), Payer::Outsider] {
+                let settled = Measure {
+                    payer,
+                    buffered: true,
+                    ..Measure::pinned(rail, shape)
+                }
+                .fit()
+                .await
+                .settled
+                .unwrap();
+                let transport = match shape.n_outputs() {
+                    16 => FitTransport::Buffered,
+                    _ => FitTransport::Inline,
+                };
+                assert_eq!(settled.transport, transport, "{rail:?} {payer:?} {shape:?}");
+                assert!(settled.cpi_bytes.is_some(), "{rail:?} {payer:?} {shape:?}");
             }
-            .bytes()
-            .await;
-            assert!(
-                bytes <= solana_message::v1::MAX_TRANSACTION_SIZE,
-                "{rail:?} {shape:?} takes {bytes}"
-            );
         }
     }
 }
 
-/// The class stops at 5 inputs and 32 inputs, a wider spend merges first.
+/// A class stops at its catalog row, a wider spend merges first.
 #[test]
 fn a_shape_past_a_confidential_class_is_unkeyed() {
     use crate::shape_keyed;
+    use custom_ring_interface::key_catalog::{RecordPools, TransferSpend};
     use spr_client::Shape;
     assert!(shape_keyed(RingRail::Confidential, Shape::IN49_OUT2));
-    assert!(shape_keyed(RingRail::Confidential, Shape::IN5_OUT16));
-    assert!(!shape_keyed(RingRail::Confidential, Shape::IN8_OUT16));
+    assert!(shape_keyed(RingRail::Confidential, Shape::IN8_OUT16));
+    for (inputs, outputs) in [(50, 2), (25, 4), (25, 8), (9, 16)] {
+        let spend = TransferSpend {
+            rail: RingRail::Confidential,
+            inputs,
+            outputs,
+            spends_default_ring: false,
+            legs: 0,
+            owners: 0,
+            pools: RecordPools::default(),
+            wide: false,
+        };
+        assert_eq!(super::transfer_key(spend), None, "{inputs}x{outputs}");
+    }
 }
 
 /// The limits the byte model names, each frame measured below and at its ceiling.
@@ -3728,7 +3762,12 @@ async fn a_program_owner_spends_public_under_either_key_class_on_both_modes() {
             };
             let transfer = public(pda(0x51));
             let staged = transfer.rail.stage(ring(), &config).await.unwrap();
-            assert!(matches!(staged.spend, Spend::PublicOwners), "{mode:?}");
+            // The frame admits its public owners flag on the anonymous rail alone.
+            let spends_public = match mode {
+                RingMode::Anonymous => matches!(staged.spend, Spend::PublicOwners),
+                RingMode::Confidential => matches!(staged.spend, Spend::Owner),
+            };
+            assert!(spends_public, "{mode:?}");
             assert_eq!(staged.owner_signers, [pda(0x51)], "{mode:?}");
             let misnamed = public(pda(0x52));
             assert!(matches!(
@@ -3880,7 +3919,11 @@ async fn a_recipient_the_rules_refuse_fails_before_proving_with_no_sender_row() 
     let funder = keypair(1);
     let recipient = keypair(2);
     let paying = |recipient: &ShieldedKeypair| {
-        let mut transaction = ring_transaction(Vec::new());
+        let address =
+            SppProofInputUtxo::new_address(funder.signing_pubkey(), [7; 32], TREE_ID).unwrap();
+        let mut transaction =
+            ConfidentialTransaction::new_with_addresses(Vec::new(), vec![address], payer())
+                .unwrap();
         transaction.deposit_sol(5, payer()).unwrap();
         transaction
             .transfer_with_ring(
