@@ -56,7 +56,7 @@ struct StrayLocalKey;
 struct ConfigCreation<'a> {
     deployer: Option<&'a Keypair>,
     /// Holds the policy role and pays.
-    config_authority: &'a Keypair,
+    policy_authority: &'a Keypair,
     auditor_pk: X25519Pubkey,
     policy: Option<&'a CompiledPolicy>,
     mode: ModeName,
@@ -67,7 +67,7 @@ struct ConfigCreation<'a> {
 #[must_use]
 struct RingInitialization<'a> {
     deployer: &'a Keypair,
-    config_authority: &'a Keypair,
+    policy_authority: &'a Keypair,
     roles: RingRoles,
     auditor_pk: X25519Pubkey,
     kind: RingKind,
@@ -85,7 +85,7 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
     let key_file = ctx.path(&expand_tilde(&args.auditor_pubkey_file)?);
     let compile = |spec: &PolicySpec| spec.compile(ctx.config.target);
     let policy = ctx.config.policy.as_ref().map(compile).transpose()?;
-    let config_authority = ctx.funded_authority()?;
+    let policy_authority = ctx.funded_authority()?;
     let existing = ctx.block(ctx.ring.config(ctx.chain()))?;
     // Only the upgrade authority creates the config, the policy authority pins the rest.
     let upgrade_authority = match existing {
@@ -151,7 +151,7 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
     let ring = ctx.ring;
     let created = ConfigCreation {
         deployer: upgrade_authority.as_ref(),
-        config_authority,
+        policy_authority,
         auditor_pk,
         policy: policy.as_ref(),
         mode: ctx.config.mode,
@@ -164,7 +164,7 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
         None if created == CREATED => "records only, created",
         None => "records only",
         Some(policy) => PolicyPin {
-            authority: config_authority,
+            authority: policy_authority,
             policy,
             outcome: created,
         }
@@ -211,7 +211,7 @@ impl KeySelection {
 
 impl ConfigCreation<'_> {
     fn send(self, ctx: &Context) -> Result<&'static str> {
-        let policy_key = self.config_authority.pubkey();
+        let policy_key = self.policy_authority.pubkey();
         if let Some(config) = self.existing {
             ensure!(
                 config.auditor_pubkey == self.auditor_pk && config.roles.policy == policy_key,
@@ -250,7 +250,7 @@ impl ConfigCreation<'_> {
         };
         RingInitialization {
             deployer,
-            config_authority: self.config_authority,
+            policy_authority: self.policy_authority,
             roles,
             auditor_pk: self.auditor_pk,
             kind,
@@ -263,7 +263,7 @@ impl ConfigCreation<'_> {
 
 impl RingInitialization<'_> {
     fn send(self, ctx: &Context) -> Result<()> {
-        let target = self.config_authority.pubkey();
+        let target = self.policy_authority.pubkey();
         let records = ctx
             .ring_rpc()
             .create_records_registry(ctx.ring_rpc_target()?, self.deployer)?;
@@ -305,7 +305,7 @@ impl RingInitialization<'_> {
             }
             result => result?,
         };
-        ctx.send(&[self.config_authority, self.deployer], &[initialize])?;
+        ctx.send(&[self.policy_authority, self.deployer], &[initialize])?;
         Ok(())
     }
 }

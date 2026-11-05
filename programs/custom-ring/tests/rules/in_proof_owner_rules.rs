@@ -1,6 +1,6 @@
 //! The in-proof owner rail, a relayer pays and the owner signs inside the proof.
 
-use custom_ring_interface::{tag, DELIVERED_AUDIT_CAPACITIES};
+use custom_ring_interface::{tag, TRANSFER_OUTPUT_CAPACITIES};
 use solana_keypair::Signer;
 
 use crate::{
@@ -43,9 +43,9 @@ fn a_relayer_pays_an_audit_only_transfer_its_owner_signs_in_the_proof() {
 }
 
 #[test]
-fn every_delivered_capacity_reaches_its_sender_key() {
+fn every_output_capacity_reaches_its_sender_key() {
     let fixture = Fixture::new();
-    for outputs in DELIVERED_AUDIT_CAPACITIES {
+    for outputs in TRANSFER_OUTPUT_CAPACITIES {
         let mut ring = Ring::new(Setup::AuditOnly);
         let data = fixture.in_proof_owner(&OWNER, 1, outputs as u8, false);
         let spp = spp_list(&ring.payer.pubkey(), &data, &[]);

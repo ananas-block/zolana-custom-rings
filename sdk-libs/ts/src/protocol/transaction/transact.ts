@@ -605,7 +605,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
     : [];
   const exits = readBitmap(bytes, outputCount);
   const bodiless = readBitmap(bytes, outputCount);
-  if ((exits & bodiless) !== 0n) throw invalid("InvalidChangeBits");
+  if ((exits & bodiless) !== 0n) throw invalid("BodilessExit");
   const slots = Array.from({ length: outputCount }, (_, slot) =>
     readSlot(bytes, stream.hasData, bitAt(exits, slot), bitAt(bodiless, slot)),
   );

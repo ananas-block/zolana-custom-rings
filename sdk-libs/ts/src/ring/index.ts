@@ -294,7 +294,7 @@ export type { RelayMessageMismatch } from "../rpc/relay-message.js";
 export type {
   AuthorityPayment,
   AuthorityTransfer,
-  ConfigAuthorityAuth,
+  PolicyAuthorityAuth,
   CreateRecordsRegistryRequest,
   GetPendingEnrolmentsRequest,
   PendingEnrolment,

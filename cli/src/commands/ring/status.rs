@@ -25,7 +25,7 @@ pub fn run(ctx: &Context) -> Result<()> {
     line("target", config.target);
     line("program id", config.program_id);
     for (label, key) in [
-        ("config key", config.config_authority()),
+        ("policy key", config.policy_authority()),
         ("upgrade key", config.upgrade_authority()),
     ] {
         match key {

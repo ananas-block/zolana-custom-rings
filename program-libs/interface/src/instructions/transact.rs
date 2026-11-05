@@ -621,7 +621,7 @@ impl<'a> RingTransactData<'a> {
         let exits = bytes.bitmap(output_count)?;
         let bodiless = bytes.bitmap(output_count)?;
         if exits & bodiless != 0 {
-            return Err(CustomRingError::InvalidChangeBits);
+            return Err(CustomRingError::BodilessExit);
         }
         let stream = AuditStreamLayout {
             key: shape.audit_key(),

@@ -1508,6 +1508,7 @@ dependencies = [
  "spr-transaction",
  "thiserror 2.0.20",
  "wincode",
+ "x25519-dalek",
  "zolana-ring-policy",
 ]
 

@@ -23,7 +23,7 @@ use custom_ring_interface::{
     AnonymousParties, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
     InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg,
     PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts, SignerSet,
-    TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, DELIVERED_AUDIT_CAPACITIES,
+    TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, TRANSFER_OUTPUT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -1456,7 +1456,7 @@ struct DeliveredRail {
 
 impl DeliveredRail {
     fn delivery(self) -> Result<RingDelivery, RingError> {
-        match DELIVERED_AUDIT_CAPACITIES.contains(&self.outputs) {
+        match TRANSFER_OUTPUT_CAPACITIES.contains(&self.outputs) {
             true => Ok(RingDelivery::Delivered),
             false => Err(RingError::ShapeUnkeyed { rail: self.rail }),
         }

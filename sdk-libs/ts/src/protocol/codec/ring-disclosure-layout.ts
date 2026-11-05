@@ -1,8 +1,8 @@
 /** Regions of the ring auditor stream, Rust `custom_ring_interface::audit_stream`. */
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 
-/** Rust `DELIVERED_AUDIT_CAPACITIES`, the output counts of the confidential keys. */
-export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
+/** Rust `TRANSFER_OUTPUT_CAPACITIES`, the output counts of the confidential keys. */
+export const TRANSFER_OUTPUT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
 /** Rust `PACK_BE_CHUNK_BYTES`, the bytes of one packed field. */
 export const DISCLOSURE_CHUNK_BYTES = 31;
 export const STREAM_BLOCK_LEN = 16;

@@ -438,9 +438,11 @@ fn a_tracking_registry_starts_at_the_sentinel_and_pins_ring_and_auditor() {
             Err(refusal)
         );
     }
-    let mut zero_key = ix;
-    zero_key.auditor_pubkey[1..].fill(0);
-    assert_eq!(zero_key.check(), Err(StorageError::InvalidAuditorKey));
+    let mut low_order = ix;
+    low_order.auditor_pubkey[1..].fill(0);
+    assert_eq!(low_order.check(), Err(StorageError::InvalidAuditorKey));
+    low_order.auditor_pubkey[1] = 1;
+    assert_eq!(low_order.check(), Err(StorageError::InvalidAuditorKey));
 }
 
 fn tracking_update(revision: u64, slot: u64, byte: u8) -> TrackingRootUpdate {

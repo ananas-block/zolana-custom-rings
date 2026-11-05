@@ -10,7 +10,7 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { encodeMintPolicy } from "../indexer/indexer-codec.js";
 import type {
   AuthorityTransfer,
-  ConfigAuthorityAuth,
+  PolicyAuthorityAuth,
   CreateRecordsRegistryRequest,
   GetPendingEnrolmentsRequest,
   MergeSettings,
@@ -350,7 +350,7 @@ export function encodeGetPendingEnrolmentsRequest(value: GetPendingEnrolmentsReq
   return {
     ring: checkedAddress(value.ring, "ring"),
     ...(value.cursor === undefined ? {} : { cursor: checkedHash(value.cursor, "cursor") }),
-    auth: encodeConfigAuthorityAuth(value.auth),
+    auth: encodePolicyAuthorityAuth(value.auth),
   };
 }
 
@@ -359,7 +359,7 @@ export function encodeRefuseEnrolmentRequest(value: RefuseEnrolmentRequest): Wir
   return {
     ring: checkedAddress(value.ring, "ring"),
     updateId: checkedHash(value.updateId, "updateId"),
-    auth: encodeConfigAuthorityAuth(value.auth),
+    auth: encodePolicyAuthorityAuth(value.auth),
   };
 }
 
@@ -369,7 +369,7 @@ export function encodeCreateRecordsRegistryRequest(
 ): WireObject {
   return {
     ring: checkedAddress(value.ring, "ring"),
-    auth: encodeConfigAuthorityAuth(value.auth),
+    auth: encodePolicyAuthorityAuth(value.auth),
   };
 }
 
@@ -411,7 +411,7 @@ export function decodePendingEnrolmentsPage(value: unknown): PendingEnrolmentsPa
     : { enrolments: rows, nextCursor: checkedHash(nextCursor, "nextCursor") };
 }
 
-function encodeConfigAuthorityAuth(value: ConfigAuthorityAuth): WireObject {
+function encodePolicyAuthorityAuth(value: PolicyAuthorityAuth): WireObject {
   return {
     authority: checkedAddress(value.authority, "auth.authority"),
     timestamp: toU64(value.timestamp, "auth.timestamp"),

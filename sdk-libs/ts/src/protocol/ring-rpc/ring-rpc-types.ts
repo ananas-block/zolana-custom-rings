@@ -150,8 +150,8 @@ export type RecordUpdateStatus =
   | Readonly<{ status: "applied"; signature: Signature; revision: bigint }>
   | Readonly<{ status: "refused"; reason: string }>;
 
-/** Rust `ConfigAuthorityAuth`. */
-export interface ConfigAuthorityAuth {
+/** Rust `PolicyAuthorityAuth`. */
+export interface PolicyAuthorityAuth {
   readonly authority: Address;
   readonly timestamp: bigint;
   readonly nonce: Base64String;
@@ -162,20 +162,20 @@ export interface ConfigAuthorityAuth {
 export interface GetPendingEnrolmentsRequest {
   readonly ring: Address;
   readonly cursor?: Hash;
-  readonly auth: ConfigAuthorityAuth;
+  readonly auth: PolicyAuthorityAuth;
 }
 
 /** Rust `RefuseEnrolmentRequest`. */
 export interface RefuseEnrolmentRequest {
   readonly ring: Address;
   readonly updateId: Hash;
-  readonly auth: ConfigAuthorityAuth;
+  readonly auth: PolicyAuthorityAuth;
 }
 
 /** Rust `CreateRecordsRegistryRequest`, signed by the policy authority or, before `Initialize`, the upgrade authority. */
 export interface CreateRecordsRegistryRequest {
   readonly ring: Address;
-  readonly auth: ConfigAuthorityAuth;
+  readonly auth: PolicyAuthorityAuth;
 }
 
 /** Rust `CreateRecordsRegistryResponse`, `registry` is the ring's records under `storageAuthority`. */

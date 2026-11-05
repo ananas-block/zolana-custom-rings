@@ -37,7 +37,7 @@ pub struct RingConfig {
     pub upgrade_authority_keypair: Option<PathBuf>,
     /// The policy role key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_authority_keypair: Option<PathBuf>,
+    pub policy_authority_keypair: Option<PathBuf>,
     /// `keys/admin.json` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin_keypair: Option<PathBuf>,
@@ -178,7 +178,7 @@ impl RoleName {
     pub const fn keypair_field(self) -> &'static str {
         match self {
             Self::Admin => "admin_keypair",
-            Self::Policy => "config_authority_keypair",
+            Self::Policy => "policy_authority_keypair",
             Self::Pauser => "pauser_keypair",
             Self::CosignAdmin => "cosign_admin_keypair",
         }
@@ -385,16 +385,16 @@ impl RingConfig {
         })
     }
 
-    pub fn config_authority(&self) -> Result<Keypair> {
-        file::read_keypair(&expand_tilde(self.config_authority_keypair())?)
+    pub fn policy_authority(&self) -> Result<Keypair> {
+        file::read_keypair(&expand_tilde(self.policy_authority_keypair())?)
     }
 
     pub fn upgrade_authority(&self) -> Result<Keypair> {
         file::read_keypair(&expand_tilde(self.upgrade_authority_keypair())?)
     }
 
-    pub fn config_authority_keypair(&self) -> &Path {
-        self.config_authority_keypair
+    pub fn policy_authority_keypair(&self) -> &Path {
+        self.policy_authority_keypair
             .as_deref()
             .unwrap_or(&self.authority_keypair)
     }
@@ -408,7 +408,7 @@ impl RingConfig {
     pub(crate) fn resolve_keypair_paths(&mut self, resolve: impl Fn(&Path) -> PathBuf) {
         self.authority_keypair = resolve(&self.authority_keypair);
         for path in [
-            &mut self.config_authority_keypair,
+            &mut self.policy_authority_keypair,
             &mut self.upgrade_authority_keypair,
             &mut self.admin_keypair,
             &mut self.pauser_keypair,
@@ -668,18 +668,18 @@ ring_rpc = "http://127.0.0.1:8785"
     fn authority_paths_split_or_share_one_key() {
         let split = EXAMPLE.replacen(
             "\n[localnet]",
-            "\nconfig_authority_keypair = \"config.json\"\nupgrade_authority_keypair = \"upgrade.json\"\n\n[localnet]",
+            "\npolicy_authority_keypair = \"policy.json\"\nupgrade_authority_keypair = \"upgrade.json\"\n\n[localnet]",
             1,
         );
         let config: RingConfig = toml::from_str(&split).expect("parse split authorities");
-        assert_eq!(config.config_authority_keypair(), Path::new("config.json"));
+        assert_eq!(config.policy_authority_keypair(), Path::new("policy.json"));
         assert_eq!(
             config.upgrade_authority_keypair(),
             Path::new("upgrade.json")
         );
 
         let shared: RingConfig = toml::from_str(EXAMPLE).expect("parse one authority");
-        assert_eq!(shared.config_authority_keypair(), shared.authority_keypair);
+        assert_eq!(shared.policy_authority_keypair(), shared.authority_keypair);
         assert_eq!(shared.upgrade_authority_keypair(), shared.authority_keypair);
     }
 

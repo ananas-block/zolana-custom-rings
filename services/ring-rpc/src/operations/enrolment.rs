@@ -1,9 +1,9 @@
 use solana_address::Address;
 use zolana_ring_client::rpc::{
-    ConfigAuthorityAuth, CreateRecords, CreateRecordsRegistryRequest,
-    CreateRecordsRegistryResponse, EnrolmentAction, EnrolmentAttestation,
-    GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse, ListEnrolments, ReadTarget,
-    RecordUpdateStatus, RefuseEnrolment, RefuseEnrolmentRequest,
+    CreateRecords, CreateRecordsRegistryRequest, CreateRecordsRegistryResponse, EnrolmentAction,
+    EnrolmentAttestation, GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse,
+    ListEnrolments, PolicyAuthorityAuth, ReadTarget, RecordUpdateStatus, RefuseEnrolment,
+    RefuseEnrolmentRequest,
 };
 
 use crate::{
@@ -65,7 +65,7 @@ impl<S: TransactionSource> Hub<S> {
     async fn authorize_enrolment<A: EnrolmentAction>(
         &self,
         ring: Address,
-        auth: &ConfigAuthorityAuth,
+        auth: &PolicyAuthorityAuth,
         action: A,
     ) -> Result<Address, RingRpcError> {
         let shared = self.shared();

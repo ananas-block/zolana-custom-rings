@@ -149,8 +149,8 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
         .ok_or_else(|| anyhow!("config after init"))?;
     assert_eq!(
         config.roles.policy,
-        demo.project.config_authority.pubkey(),
-        "the `config_authority` key holds the policy role"
+        demo.project.policy_authority.pubkey(),
+        "the `policy_authority` key holds the policy role"
     );
     assert!(config.has_policy, "policy tier");
     let policy = policy_registry(ring, &env)?;
@@ -269,7 +269,7 @@ impl<'a> DemoRing<'a> {
         self.project.run(&[
             "reader",
             "grant",
-            &self.project.config_authority.pubkey().to_string(),
+            &self.project.policy_authority.pubkey().to_string(),
         ])?;
         Ok(())
     }

@@ -65,11 +65,16 @@ pub fn process_deposit_ix(
         audited.curator_revision,
         CustomRingError::UnexpectedCuratorRevision,
     )?;
-    let registry = own_root.as_ref().map(|own_root| DepositRegistry {
-        own_root,
-        curator_root: curator_root.as_ref(),
-        policy_hash: ring.written_policy_hash(),
-    });
+    let registry = own_root
+        .as_ref()
+        .map(|own_root| {
+            Ok::<_, CustomRingError>(DepositRegistry {
+                own_root,
+                curator_root: curator_root.as_ref(),
+                policy_hash: ring.policy_hash()?,
+            })
+        })
+        .transpose()?;
     // 3. One record covering the deposit class signs when the ring configured one.
     if let Some(requirement) = CoSignDemand::DEPOSIT.requirement(&ring) {
         let _one_class = CoSignerSlot {

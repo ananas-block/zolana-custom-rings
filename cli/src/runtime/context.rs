@@ -136,7 +136,7 @@ impl Context {
         if let Some(authority) = self.authority.get() {
             return Ok(authority);
         }
-        let authority = self.config.config_authority()?;
+        let authority = self.config.policy_authority()?;
         Ok(self.authority.get_or_init(|| authority))
     }
 
@@ -162,11 +162,11 @@ impl Context {
         Ok(payer)
     }
 
-    /// The policy role reads `config_authority_keypair`.
+    /// The policy role reads `policy_authority_keypair`.
     pub fn role_keypair_path(&self, role: RingRole) -> Result<PathBuf> {
         let (configured, default) = match role {
             RingRole::Policy => {
-                return config::expand_tilde(self.config.config_authority_keypair())
+                return config::expand_tilde(self.config.policy_authority_keypair())
             }
             RingRole::Admin => (&self.config.admin_keypair, ADMIN_KEYPAIR_FILE),
             RingRole::Pauser => (&self.config.pauser_keypair, PAUSER_KEYPAIR_FILE),

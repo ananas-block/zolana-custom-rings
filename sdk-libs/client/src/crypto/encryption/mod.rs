@@ -562,7 +562,7 @@ mod tests {
             registry: Some(custom_ring_interface::DepositRegistry {
                 own_root: &hex_field(&request["ownRoot"]),
                 curator_root: Some(&hex_field(&request["curatorRoot"])),
-                policy_hash: Some(&hex_field(&request["policyHash"])),
+                policy_hash: &hex_field(&request["policyHash"]),
             }),
         }
         .hash()

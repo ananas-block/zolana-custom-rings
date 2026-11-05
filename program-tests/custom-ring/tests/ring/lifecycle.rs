@@ -219,7 +219,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
         other => Err(anyhow!("expected {expected:?}, got {other:?}")),
     };
     let stranger = Keypair::new();
-    let config_authority = Keypair::new();
+    let policy_authority = Keypair::new();
 
     // 1. No config yet, so only the program's upgrade authority is accepted.
     expect_refusal(
@@ -227,7 +227,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
         Unauthorized::NotRingAuthority,
     )?;
     expect_refusal(
-        authorize(&request(&config_authority, genesis_hash)?),
+        authorize(&request(&policy_authority, genesis_hash)?),
         Unauthorized::NotRingAuthority,
     )?;
     expect_refusal(
@@ -240,7 +240,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
 
     // 2. Once the ring exists its policy authority alone is accepted, the deployer holds no role.
     let roles = custom_ring_interface::RingRoles {
-        policy: config_authority.pubkey(),
+        policy: policy_authority.pubkey(),
         ..RingRoleKeys::of(&env.payer).roles(&env.payer)
     };
     rpc.create_and_send_transaction(
@@ -258,7 +258,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
         &[&env.payer],
         ComputeBudgetConfig::for_instruction_count(1),
     )?;
-    authorize(&request(&config_authority, genesis_hash)?)
+    authorize(&request(&policy_authority, genesis_hash)?)
         .map_err(|e| anyhow!("policy authority {e:?}"))?;
     for refused in [&env.payer, &stranger] {
         expect_refusal(
@@ -269,7 +269,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     Ok(())
 }
 
-/// The operator cli against the deployed program, the `config_authority` key holds the
+/// The operator cli against the deployed program, the `policy_authority` key holds the
 /// policy role and the rerun sees the ring through a hosted-looking ring rpc.
 #[test]
 fn cli_init_names_the_roles_and_reruns_from_the_chain() -> Result<()> {
@@ -286,7 +286,7 @@ fn cli_init_names_the_roles_and_reruns_from_the_chain() -> Result<()> {
     let init = || project.run(&["init"]);
 
     // 1. A local ring rpc lets the key file through, the deployer creates the
-    //    ring naming the `config_authority` key as its policy authority.
+    //    ring naming the `policy_authority` key as its policy authority.
     project.write_config(RingToml {
         env: &env,
         ring_rpc: &ring_rpc.url,
@@ -298,7 +298,7 @@ fn cli_init_names_the_roles_and_reruns_from_the_chain() -> Result<()> {
     let config = env
         .run(ring.config(env.client.as_async()))?
         .ok_or_else(|| anyhow!("config after init"))?;
-    assert_eq!(config.roles.policy, project.config_authority.pubkey());
+    assert_eq!(config.roles.policy, project.policy_authority.pubkey());
     assert_eq!(config.auditor_pubkey, auditor.pubkey());
 
     // 2. The rerun takes the key from the chain, so the hosted-looking rpc is
