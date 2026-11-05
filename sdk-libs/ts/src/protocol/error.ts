@@ -281,6 +281,7 @@ export const RingProgramError = Object.freeze({
   coSignerOutOfScope: 8262,
   coSignerCountOutOfRange: 8263,
   recordsRegistryOtherRing: 8266,
+  tooManyApplicationMessages: 8269,
   invalidRingPolicy: 8300,
   ringPolicyAlreadyExists: 8301,
   invalidStorageRegistry: 8302,

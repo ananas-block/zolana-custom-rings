@@ -279,6 +279,19 @@ export function isAnonymousFrame(rail: RingRail): boolean {
   return rail === "anonymous" || rail === "anonymousDelegate";
 }
 
+/** Rust `MAX_SPP_MESSAGES`, SPP's `messages` vector has a `u8` length. */
+export const MAX_SPP_MESSAGES = 0xff;
+
+/** Rust `max_application_messages`, SPP also receives the auditor message and an anonymous frame's sender bundle. */
+export function maxApplicationMessages(rail: RingRail): number {
+  return MAX_SPP_MESSAGES - 1 - (isAnonymousFrame(rail) ? 1 : 0);
+}
+
+/** Runs ahead of the message list's allocation, as Rust `check_message_count`. */
+function checkMessageCount(count: number, rail: RingRail): void {
+  if (count > maxApplicationMessages(rail)) throw invalid("TooManyApplicationMessages");
+}
+
 export function railSppTag(rail: RingRail): number {
   return isDelegateRail(rail) ? InstructionTag.ringAuthorityTransact : InstructionTag.ringTransact;
 }
@@ -598,7 +611,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
   const expiryUnixTs = bytes.u32("expiryUnixTs");
   const txViewingU = field32(bytes, "txViewingU");
   const salt = bytes.bytes(16, "salt") as Bytes16;
-  const extensions = has(flags, Flag.extensions) ? readExtensions(bytes) : NO_EXTENSIONS;
+  const extensions = has(flags, Flag.extensions) ? readExtensions(bytes, rail) : NO_EXTENSIONS;
   checkExtensions(extensions, rail);
   const interfaceTransfers = within("InvalidInstructionData", () =>
     Array.from({ length: bytes.u8("interfaceTransfers.length") }, () =>
@@ -751,15 +764,17 @@ const NO_EXTENSIONS: FrameExtensions = Object.freeze({});
 /** The cached selector's reads then its write slots, little endian. */
 const CACHE_ACCESS_WRITES = MAX_CACHE_WRITES;
 
-function readExtensions(bytes: Reader): FrameExtensions {
+function readExtensions(bytes: Reader, rail: RingRail): FrameExtensions {
   const flags = bytes.u8("extensions");
   if ((flags & ~KNOWN_EXTENSIONS) !== 0) throw invalid("FlagNotAllowed");
   const dataHash = has(flags, ExtensionFlag.dataHash) ? field32(bytes, "dataHash") : undefined;
   const ringDataHash = has(flags, ExtensionFlag.ringDataHash)
     ? field32(bytes, "ringDataHash")
     : undefined;
+  const count = has(flags, ExtensionFlag.messages) ? bytes.u8("messages.length") : 0;
+  if (has(flags, ExtensionFlag.messages)) checkMessageCount(count, rail);
   const messages = has(flags, ExtensionFlag.messages)
-    ? Array.from({ length: bytes.u8("messages.length") }, (): AppMessage => {
+    ? Array.from({ length: count }, (): AppMessage => {
         const viewTag = field32(bytes, "message.viewTag");
         const data = bytes.bytes(bytes.u16("message.length"), "message.data");
         return Object.freeze({ viewTag, data });
@@ -806,8 +821,9 @@ function extensionsEmpty(extensions: FrameExtensions): boolean {
   );
 }
 
-function writeExtensions(out: Writer, extensions: FrameExtensions): void {
+function writeExtensions(out: Writer, extensions: FrameExtensions, rail: RingRail): void {
   const messages = extensions.messages ?? [];
+  checkMessageCount(messages.length, rail);
   const bits: readonly (readonly [boolean, number])[] = [
     [extensions.dataHash !== undefined, ExtensionFlag.dataHash],
     [extensions.ringDataHash !== undefined, ExtensionFlag.ringDataHash],
@@ -905,7 +921,7 @@ function writeCompact(data: RingTransactData): Uint8Array {
     .u32(data.expiryUnixTs, "expiryUnixTs")
     .bytes(data.txViewingU, 32, "txViewingU")
     .bytes(data.salt, 16, "salt");
-  if (has(flags, Flag.extensions)) writeExtensions(out, data.extensions);
+  if (has(flags, Flag.extensions)) writeExtensions(out, data.extensions, data.rail);
   out.u8(data.interfaceTransfers.length, "interfaceTransfers.length");
   for (const transfer of data.interfaceTransfers) writeInterfaceTransfer(out, transfer);
   for (const owner of data.splWithdrawalOwners) out.bytes(owner, 32, "splWithdrawalOwner");

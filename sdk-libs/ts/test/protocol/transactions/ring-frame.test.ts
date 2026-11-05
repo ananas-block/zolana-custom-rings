@@ -30,6 +30,7 @@ import {
   ANONYMOUS_PARTIES,
   ApprovalMask,
   landedRingRail,
+  maxApplicationMessages,
   RingTransactData,
   ringRailOf,
   ringTransactOutput,
@@ -62,6 +63,13 @@ function binding(signers: readonly Bytes32[] = [], slots = 24): TransferBinding 
     publicGross: [ZERO, ZERO, ZERO],
     withdrawalHash: ZERO,
   };
+}
+
+/** The first offset of `needle` in `haystack`, -1 when absent. */
+function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
+  for (let at = 0; at + needle.length <= haystack.length; at += 1)
+    if (needle.every((byte, offset) => haystack[at + offset] === byte)) return at;
+  return -1;
 }
 
 function reason(run: () => unknown): unknown {
@@ -229,6 +237,31 @@ describe("the ring frame", () => {
         }),
       ),
     ).toBe("FlagNotAllowed");
+  });
+
+  it("refuses an application message count past SPP's list on each rail, writing and reading", () => {
+    for (const rail of ["confidential", "anonymous"] as const) {
+      const limit = maxApplicationMessages(rail);
+      expect(limit).toBe(rail === "anonymous" ? 253 : 254);
+      const message = { viewTag: field(84), data: new Uint8Array() };
+      const base = ringFrame({ rail, inputs: 1, outputs: 2 });
+      expect(
+        reason(() =>
+          RingTransactData.encode({
+            ...base,
+            extensions: { messages: Array.from({ length: limit + 1 }, () => message) },
+          }),
+        ),
+      ).toBe("TooManyApplicationMessages");
+      const bytes = RingTransactData.encode({ ...base, extensions: { messages: [message] } });
+      const count = indexOf(bytes, message.viewTag) - 1;
+      expect(bytes[count]).toBe(1);
+      const patched = bytes.slice();
+      patched[count] = limit + 1;
+      expect(reason(() => RingTransactData.parse(patched, rail))).toBe(
+        "TooManyApplicationMessages",
+      );
+    }
   });
 
   it("carries the extensions and forwards the application message ahead of the auditor's", () => {
