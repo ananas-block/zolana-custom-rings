@@ -137,6 +137,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
             },
             list_salts: Vec::new(),
             approval: ApprovalDisclosure::None,
+            seal_row: None,
         }
     }
 

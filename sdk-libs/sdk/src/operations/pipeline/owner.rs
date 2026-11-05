@@ -84,6 +84,7 @@ impl<'a> RingTransfer<Owner<'a>> {
             },
             list_salts: Vec::new(),
             approval: ApprovalDisclosure::None,
+            seal_row: None,
         }
     }
 

@@ -14,6 +14,7 @@ use spr_transaction::{
 use zolana_ring_client::AuditStreamSeal;
 use zolana_ring_transaction::{published_input_map, ClassifiedInput, RingOutputRail};
 
+use super::SealRow;
 use crate::{
     request::{owner_key, AuditParams, EntryOpening, Opening, OutputOpening},
     RingError,
@@ -31,8 +32,8 @@ pub(crate) struct SealedAudit {
 
 pub(crate) struct PresealedAudit {
     pub message: MessageData,
-    /// The owner sealed under the wide key.
-    pub wide_owners: bool,
+    /// The row the owner sealed under, a read keeps the seal only where its stream opens alike.
+    pub row: SealRow,
 }
 
 pub(super) struct AuditSeal<'a> {

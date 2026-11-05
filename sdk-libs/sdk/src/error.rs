@@ -301,6 +301,8 @@ pub enum RingError {
     RelayViewingKeyMismatch,
     #[error("the relayed external data does not close with the ring auditor's message")]
     RelayAuditorMessage,
+    #[error("the sealed auditor stream does not open under the {row:?} row the records select, seal under that row and sign again")]
+    ResealRequired { row: crate::SealRow },
     #[error("the relayed deposit ciphertext opens with no auditor capsule")]
     RelayDepositCapsule,
     #[error("the relayed audit secret does not derive the capsule's ephemeral key")]

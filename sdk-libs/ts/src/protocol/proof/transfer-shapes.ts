@@ -1,5 +1,4 @@
 /** The transfer key catalog, Rust `key_catalog.rs` and `Shapes` in `prover/circuits/transfer`. */
-import { firstRecordCounter } from "../codec/ring-disclosure-layout.js";
 import type { RingRail } from "../transaction/transact.js";
 import { N_PUBLIC_SLOTS } from "../transaction/spp.js";
 
@@ -122,40 +121,6 @@ export function fittedSpend(spend: TransferSpend): TransferSpend {
   return { ...spend, wide: narrow === undefined || !shapeHolds(narrow, spend) };
 }
 
-/**
- * The wide flag a wallet seals under ahead of every record read, `pools` from `unreadSubjectPools`.
- * The reasoning stands at Rust `TransferSpend::sealed_wide`.
- */
-export function sealedWide(spend: TransferSpend, hasData: boolean): boolean {
-  if (fittedSpend({ ...spend, pools: { own: 0, curator: 0, tracking: 0 } }).wide) return true;
-  const narrow = frameKeyShape({ ...spend, wide: false });
-  const wide = frameKeyShape({ ...spend, wide: true });
-  return (
-    fittedSpend(spend).wide &&
-    narrow !== undefined &&
-    wide !== undefined &&
-    !sealsLike(narrow, wide, hasData)
-  );
-}
-
-/** What a wallet counts ahead of its reads under a written policy, Rust `UnreadSubjects`. */
-export interface UnreadSubjects {
-  /** Distinct live input and output owners, plus one per leg since a destination stays unread. */
-  readonly owners: number;
-  /** Distinct live input, output and public assets. */
-  readonly assets: number;
-  /** The table reads a salted list, an owner may then open a salted record and a tracking row. */
-  readonly salted: boolean;
-}
-
-/** The widest read of these subjects, every owner enrolled with a public and a salted record on a salted table. */
-export function unreadSubjectPools(subjects: UnreadSubjects): PolicyPoolCapacity {
-  const records = (subjects.salted ? 2 : 1) * subjects.owners + subjects.assets;
-  // Rows and output owners fit the tracking pool by the shape, no owner reads a row.
-  const tracking = subjects.salted ? subjects.owners : 0;
-  return Object.freeze({ own: records, curator: records, tracking });
-}
-
 /** The one transfer key serving the spend, `undefined` when the catalog keys none. */
 export function ringTransferCircuit(spend: TransferSpend): TransferKeyCircuit | undefined {
   const found = frameKeyShape(spend);
@@ -260,15 +225,6 @@ function shapeHolds(entry: TransferShape, spend: TransferSpend): boolean {
     spend.pools.own <= pools.own &&
     spend.pools.curator <= pools.curator &&
     spend.pools.tracking <= pools.tracking
-  );
-}
-
-/** Rust `TransferShape::seals_like`. */
-function sealsLike(left: TransferShape, right: TransferShape, hasData: boolean): boolean {
-  const recordCounter = (entry: TransferShape): number =>
-    firstRecordCounter({ class: entry.inputs, entry: entry.entry });
-  return (
-    recordCounter(left) === recordCounter(right) && (!hasData || left.outputs === right.outputs)
   );
 }
 

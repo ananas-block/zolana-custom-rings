@@ -1,4 +1,9 @@
-import { generateKeyPairSigner, getBase64Decoder, type Address } from "@solana/kit";
+import {
+  generateKeyPairSigner,
+  getBase64Decoder,
+  getBase64Encoder,
+  type Address,
+} from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -22,6 +27,7 @@ import {
   prepareRingWithdrawalRelay,
 } from "../../../src/operations/payments/transfer.js";
 import { buildRuleTable } from "../../../src/protocol/membership/policy.js";
+import { decodeRelayProofInputs } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
 import { CustomRingClient } from "../../../src/rpc/client.js";
 import type { PreparedRelay } from "../../../src/rpc/relay.js";
 import { RingRpc } from "../../../src/rpc/ring-rpc.js";
@@ -126,6 +132,36 @@ function owner(fixture: Fixture, count: number, asset: Address = SOL_MINT) {
 }
 
 describe("wallet relay", () => {
+  it("seals under the row a reseal names and under the public counts' row unset", async () => {
+    const fixture = await ringFixture({ table: buildRuleTable({ rules: [] }) });
+    const sealedWide = async (sealRow?: "wide") => {
+      const sender = owner(fixture, 2);
+      const prepared = await prepareRingTransferRelay({
+        client: walletNetwork(fixture).client,
+        ringProgramId: fixture.ringProgramId,
+        wallet: sender.wallet,
+        keys: walletKeys(sender.keypair),
+        amount: 15n,
+        recipient: ShieldedKeypair.generate().shieldedAddress(),
+        confidential: {
+          quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+          nullifierKey: sender.keypair.nullifierKey(),
+          signer: signingKeySpendSigner(sender.signing),
+          ...(sealRow === undefined ? {} : { sealRow }),
+        },
+      });
+      const { intent } = prepared.relay.request;
+      if (intent.operation !== "confidential") throw new Error("a confidential relay");
+      const inputs = await decodeRelayProofInputs(
+        new Uint8Array(getBase64Encoder().encode(intent.proofInputs)),
+        sender.wallet.registry,
+      );
+      return inputs.wideOwners;
+    };
+    expect(await sealedWide()).toBe(false);
+    expect(await sealedWide("wide")).toBe(true);
+  });
+
   it("relays a confidential policy ring transfer and SPL withdrawal with no path, opening or pool request", async () => {
     const fixture = await ringFixture({ table: buildRuleTable({ rules: [] }) });
     const network = walletNetwork(fixture);

@@ -24,7 +24,7 @@ use crate::tests::{
 };
 use crate::{
     AnonymousPayment, CustomRingTransfer, CustomRingTransferInput, RelayedTransferInput, RingError,
-    RingRelay, RingTransfer,
+    RingRelay, RingTransfer, SealRow,
 };
 
 #[derive(Default)]
@@ -243,6 +243,16 @@ async fn relay_round_trip(
     transfer: &CustomRingTransfer<'_>,
     fee_payer: Address,
 ) -> (RelayProofInputs, Assembled) {
+    let (inputs, assembled) = relay_attempt(client, transfer, fee_payer).await;
+    (inputs, assembled.unwrap())
+}
+
+/// The relay's assembly of the wallet's seal, a refusal left for the caller to read.
+async fn relay_attempt(
+    client: &RingClient<Chain, Chain>,
+    transfer: &CustomRingTransfer<'_>,
+    fee_payer: Address,
+) -> (RelayProofInputs, Result<Assembled, RingError>) {
     let relay = StubRelay::default();
     transfer
         .prepare_relay(
@@ -286,8 +296,7 @@ async fn relay_round_trip(
     .with_owner_signature(signature.into())
     .with_buffered_settlement()
     .assemble(client)
-    .await
-    .unwrap();
+    .await;
     (inputs, assembled)
 }
 
@@ -428,6 +437,57 @@ async fn a_salted_read_raises_the_flag_on_a_frame_of_one_stream() {
     assert!(!inputs.wide_owners);
     assert!(relayed.frame.parts.wide_owners);
     assert!(submitted.frame.parts.wide_owners);
+    assert_eq!(
+        relayed.frame.policy.circuit(),
+        submitted.frame.policy.circuit()
+    );
+    // The relay proves the owner's signed auditor message as sealed.
+    assert_eq!(
+        relayed.frame.proof_inputs.external_data.messages.last(),
+        inputs.external_data.messages.last()
+    );
+}
+
+/// Ring data tails at two outputs take another `N` on the wide row, so the narrow seal cannot carry over.
+#[tokio::test]
+async fn a_salted_read_of_another_stream_refuses_until_the_owner_reseals() {
+    use custom_ring_interface::domain;
+    use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
+
+    let salt = [7; 32];
+    let load = FullLoad::new(24, 2, 4);
+    let rules = RuleTable::builder()
+        .rule(Rule::forbid(Subject::Sender, ListId::PrivateBlock))
+        .build();
+    let addresses: Vec<_> = load
+        .everyone()
+        .map(|owner| owner.shielded_address().unwrap())
+        .collect();
+    let client = Chain::ring(RingSettings::new(RingMode::Confidential))
+        .with_registry(load.registry(), &rules)
+        .with_tracking_tag(&addresses, domain::list_tag(&salt).unwrap())
+        .client();
+    let transfer = addresses.iter().fold(load.transfer(), |transfer, address| {
+        let member =
+            Member::from_bytes(address.signing_pubkey.owner_proof_input_hash().unwrap()).unwrap();
+        transfer.with_list_salt(member, salt)
+    });
+    let (inputs, refused) = relay_attempt(&client, &transfer, FULL_LOAD_PAYER).await;
+    assert!(!inputs.wide_owners);
+    let Err(RingError::ResealRequired { row }) = refused else {
+        panic!("the relay refuses a seal its read moves");
+    };
+    assert_eq!(row, SealRow::Wide);
+
+    let resealed = transfer.with_seal_row(row);
+    let (inputs, relayed) = relay_round_trip(&client, &resealed, FULL_LOAD_PAYER).await;
+    let submitted = resealed.frame(&client).await.unwrap();
+    assert!(inputs.wide_owners);
+    assert!(submitted.frame.parts.wide_owners);
+    assert_eq!(
+        relayed.frame.policy.circuit(),
+        submitted.frame.policy.circuit()
+    );
 }
 
 /// A policy entry past two outputs stays on its own key, the wide entry key takes two outputs alone.
@@ -483,7 +543,7 @@ async fn an_unread_entry_takes_its_capacity_from_its_outputs() {
             )
             .with_buffered_settlement();
         let sealed = transfer.seal_unread(client.zolana()).await.unwrap();
-        assert!(!sealed.preview.wide_owners, "{notes}x{outputs}");
+        assert!(!sealed.policy.key.wide, "{notes}x{outputs}");
         let submitted = transfer.frame(&client).await.unwrap();
         assert!(!submitted.frame.parts.wide_owners, "{notes}x{outputs}");
         assert!(submitted.frame.parts.entry, "{notes}x{outputs}");

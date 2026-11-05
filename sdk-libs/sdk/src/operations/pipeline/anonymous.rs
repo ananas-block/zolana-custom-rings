@@ -231,6 +231,7 @@ impl<'a> RingTransfer<Owner<'a>> {
             },
             list_salts: self.list_salts,
             approval: self.approval,
+            seal_row: self.seal_row,
         }
     }
 }
