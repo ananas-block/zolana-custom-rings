@@ -98,6 +98,7 @@ import {
   ringPolicyData,
   sppRingRegistration,
   storageRegistryAccount,
+  trackingAuthorizationAccount,
   trackingRegistryAccount,
 } from "./ring-accounts.js";
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
@@ -111,7 +112,6 @@ export const TREE = treeAddress(TREE_ID);
 /** Distinct, a swapped own and curator revision fails the asserts. */
 export const OWN_REVISION = 7n;
 export const CURATOR_REVISION = 11n;
-export const ADDRESS_REVISION = 3n;
 export const TRACKING_REVISION = 9n;
 const addressDecoder = getAddressDecoder();
 
@@ -168,8 +168,6 @@ export function trackingEntry(owner: ShieldedAddress, listTag: Bytes32 = ZERO_32
     member: owner.signingPublicKey.ownerProofInputHash(),
     nullifierPk: owner.nullifierPublicKey,
     ctHash: filled(0x11),
-    viewingU: owner.viewingPublicKey.u(),
-    revision: ADDRESS_REVISION,
     listTag,
   };
 }
@@ -317,11 +315,22 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       ownedAccount(ringProgramId, ringPolicyData({ bump: ringBump, ...config })),
     );
   }
-  /** Applies the owner's enrollment, a repeat replaces its row. */
+  // Authorization writes derive a PDA, `getAccount` waits for each before it reads.
+  const authorizations: Promise<void>[] = [];
+  /** Applies the owner's enrollment, a repeat rotates its authorization's viewing key. */
   const enroll = (owner: ShieldedAddress, listTag: Bytes32 = ZERO_32): void => {
     const entry = trackingEntry(owner, listTag);
     enrolled.set(hex(entry.member), entry);
     publishTracking();
+    authorizations.push(
+      trackingAuthorizationAccount({
+        registry: trackingRegistry,
+        owner: owner.solanaAddress(),
+        nullifierPk: entry.nullifierPk,
+        listTag,
+        viewingU: owner.viewingPublicKey.u(),
+      }).then(([at, account]) => void accounts.set(at, account)),
+    );
   };
   const slot = options.slot ?? 1n;
   const context = Object.freeze({ slot, blockTime: 0n });
@@ -337,7 +346,10 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   const reader: Pick<ChainReader, "getAccount"> &
     Pick<RingRecordReader, "getStorageMemberOpenings" | "getStorageRecordPool"> &
     Pick<TrackingReader, "getTrackingOpenings" | "getTrackingRecordPool"> = {
-    getAccount: async (address) => accounts.get(address),
+    getAccount: async (address) => {
+      await Promise.all(authorizations);
+      return accounts.get(address);
+    },
     getStorageMemberOpenings: async (request): Promise<StorageMemberOpenings> => {
       const { tree, revision } = treeAt(request.registry, request.expectedRoot);
       return {

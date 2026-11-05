@@ -1,4 +1,6 @@
-import { address } from "@solana/kit";
+import { address, type Address } from "@solana/kit";
+
+import type { RpcAccount } from "@heliuslabs/zolana/client";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -7,6 +9,7 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ShieldedAddress, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
 
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
+import { readOutputKeys } from "../../src/operations/workflow/ring-reads.js";
 import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
 import {
   TRACKING_QUAD_HEIGHT,
@@ -16,6 +19,7 @@ import {
   type TrackingRecord,
 } from "../../src/protocol/membership/tracking.js";
 import { resolveRingRecipient, type RingRecipientClient } from "../../src/rpc/tracking-resolver.js";
+import { trackingAuthorizationAccount } from "../helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const REGISTRY = address("Stor111111111111111111111111111111111111111");
@@ -33,8 +37,12 @@ function zeroSiblings(): readonly (readonly Bytes32[])[] {
   return levels;
 }
 
-/** The tree holding only `leaf` at index 0, served as `opening`. */
-function chain(leaf: TrackingRecord, kind: "present" | "absent"): RingRecipientClient {
+/** The tree holding only `leaf` at index 0, served as `opening`, beside the authorizations given. */
+function chain(
+  leaf: TrackingRecord,
+  kind: "present" | "absent",
+  authorizations: ReadonlyMap<Address, RpcAccount> = new Map(),
+): RingRecipientClient {
   const siblings = zeroSiblings();
   let root = trackingRecordHash(leaf);
   for (const level of siblings) root = poseidon([root, ...level]) as Bytes32;
@@ -46,9 +54,29 @@ function chain(leaf: TrackingRecord, kind: "present" | "absent"): RingRecipientC
   const opening: TrackingOpening =
     kind === "present" ? { kind, record: leaf, path } : { kind, low: leaf, path };
   return {
-    getAccount: async () => ({ data }),
+    getAccount: async (read: Address) => (read === REGISTRY ? { data } : authorizations.get(read)),
     getTrackingOpenings: async () => ({ slot: 1n, root, revision: 0n, openings: [opening] }),
   } as unknown as RingRecipientClient;
+}
+
+/** `fields` overrides the authorization the account holds for the addressed owner. */
+async function authorization(
+  to: RingAddress,
+  fields: Readonly<{ registry?: Address; owner?: Address; viewingU?: Uint8Array }> = {},
+  programOwner?: Address,
+): Promise<ReadonlyMap<Address, RpcAccount>> {
+  const owner = to.recipient.solanaAddress();
+  const [at, account] = await trackingAuthorizationAccount({
+    registry: REGISTRY,
+    owner,
+    nullifierPk: to.recipient.nullifierPublicKey,
+    listTag: listTagOf(to.listSalt),
+    viewingU: to.recipient.viewingPublicKey.u(),
+    ...fields,
+  });
+  return new Map([
+    [at, programOwner === undefined ? account : { ...account, owner: programOwner }],
+  ]);
 }
 
 async function addressed() {
@@ -59,40 +87,37 @@ async function addressed() {
     ...TRACKING_SENTINEL,
     member,
     nullifierPk: wallet.nullifierPublicKey(),
-    viewingU: to.recipient.viewingPublicKey.u(),
-    revision: 3n,
     listTag: listTagOf(to.listSalt),
   };
-  return { to, row, wallet };
+  return { to, row, wallet, accounts: await authorization(to) };
 }
 
 beforeAll(initializePoseidon);
 
 describe("resolveRingRecipient", () => {
-  it("returns the row's key, viewing key, revision and tag, never a salt", async () => {
-    const { to, row } = await addressed();
+  it("returns the row's key and tag and the authorization's viewing key, never a salt", async () => {
+    const { to, row, accounts } = await addressed();
     const resolved = await resolveRingRecipient({
-      client: chain(row, "present"),
+      client: chain(row, "present", accounts),
       trackingRegistry: REGISTRY,
       to,
     });
     if (resolved.kind !== "enrolled") throw new Error("enrolled");
     expect(resolved.nullifierPk).toEqual(row.nullifierPk);
-    expect(resolved.viewingPublicKey.u()).toEqual(row.viewingU);
-    expect(resolved.revision).toBe(3n);
+    expect(resolved.viewingPublicKey.u()).toEqual(to.recipient.viewingPublicKey.u());
     expect(resolved.listTag).toEqual(listTagOf(to.listSalt));
     expect(Object.keys(resolved)).not.toContain("listSalt");
   });
 
   it("refuses a key or salt the verified row does not hold", async () => {
-    const { to, row } = await addressed();
+    const { to, row, accounts } = await addressed();
     for (const [name, wrong] of [
       ["nullifierPk", { nullifierPk: new Uint8Array(32).fill(5) as Bytes32 }],
       ["listSalt", { listTag: new Uint8Array(32).fill(5) as Bytes32 }],
     ] as const)
       await expect(
         resolveRingRecipient({
-          client: chain({ ...row, ...wrong }, "present"),
+          client: chain({ ...row, ...wrong }, "present", accounts),
           trackingRegistry: REGISTRY,
           to,
         }),
@@ -110,18 +135,38 @@ describe("resolveRingRecipient", () => {
     ).rejects.toMatchObject({ code: "RING_RECIPIENT_NOT_ENROLLED" });
   });
 
-  it("resolves an address from before a rotation to the row's current viewing key", async () => {
+  it("resolves an address from before a rotation to the authorization's current viewing key", async () => {
     const { to, row } = await addressed();
     const rotated = ShieldedKeypair.generate().viewingPublicKey();
     const resolved = await resolveRingRecipient({
-      client: chain({ ...row, viewingU: rotated.u(), revision: 4n }, "present"),
+      client: chain(row, "present", await authorization(to, { viewingU: rotated.u() })),
       trackingRegistry: REGISTRY,
       to,
     });
     if (resolved.kind !== "enrolled") throw new Error("enrolled");
     expect(resolved.viewingPublicKey.u()).toEqual(rotated.u());
     expect(resolved.viewingPublicKey.u()).not.toEqual(to.recipient.viewingPublicKey.u());
-    expect(resolved.revision).toBe(4n);
+  });
+
+  it("refuses an authorization another program, registry or owner holds", async () => {
+    const { to, row } = await addressed();
+    const stranger = address("Cura111111111111111111111111111111111111111");
+    for (const [reason, accounts] of [
+      ["authorization program", await authorization(to, {}, stranger)],
+      ["authorization registry", await authorization(to, { registry: stranger })],
+      ["authorization owner", await authorization(to, { owner: stranger })],
+    ] as const) {
+      // The served account sits at the addressed owner's PDA whatever it names.
+      const [served] = [...accounts.values()];
+      const [at] = [...(await authorization(to)).keys()];
+      await expect(
+        resolveRingRecipient({
+          client: chain(row, "present", new Map([[at as Address, served as RpcAccount]])),
+          trackingRegistry: REGISTRY,
+          to,
+        }),
+      ).rejects.toMatchObject({ code: "RING_TRACKING_INVALID", details: { reason } });
+    }
   });
 
   describe("under the zero key", () => {
@@ -147,22 +192,37 @@ describe("resolveRingRecipient", () => {
       expect(resolved.kind).toBe("zeroKey");
     });
 
-    it("refuses an enrolled owner", async () => {
+    it("admits an enrolled owner, the payment path refuses it under a salted payee read", async () => {
       const { row, wallet } = await addressed();
-      await expect(
-        resolveRingRecipient({
-          client: chain(row, "present"),
-          trackingRegistry: REGISTRY,
-          to: zeroAddressed(wallet),
-        }),
-      ).rejects.toMatchObject({ code: "RING_RECIPIENT_ENROLLED" });
+      const resolved = await resolveRingRecipient({
+        client: chain(row, "present"),
+        trackingRegistry: REGISTRY,
+        to: zeroAddressed(wallet),
+      });
+      expect(resolved.kind).toBe("zeroKey");
+    });
+
+    it("lets a merge pay an enrolled owner at the zero key, a merge runs no salted payee read", async () => {
+      const { row } = await addressed();
+      const client = chain(row, "present");
+      const { root } = await client.getTrackingOpenings({
+        registry: REGISTRY,
+        members: [row.member],
+        expectedRoot: ZERO_32,
+      });
+      const [opening] = await readOutputKeys({
+        client,
+        root: { ringProgramId: RING, registry: REGISTRY, revision: 1n, root },
+        outputs: [{ member: row.member, nullifierPk: ZERO_NULLIFIER_PK as Bytes32 }],
+      });
+      expect(opening?.kind).toBe("present");
     });
   });
 
   it("refuses an opening under another root", async () => {
-    const { to, row } = await addressed();
-    const client = chain(row, "present");
-    const other = chain({ ...row, revision: 9n }, "present");
+    const { to, row, accounts } = await addressed();
+    const client = chain(row, "present", accounts);
+    const other = chain({ ...row, ctHash: new Uint8Array(32).fill(9) as Bytes32 }, "present");
     await expect(
       resolveRingRecipient({
         client: { ...client, getTrackingOpenings: other.getTrackingOpenings },

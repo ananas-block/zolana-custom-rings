@@ -14,7 +14,6 @@ import { InterfaceError } from "@heliuslabs/zolana/interface";
 import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { ClientError } from "@heliuslabs/zolana/client";
-import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import {
   APPLY_BATCH,
   MEMBER_REGISTRY_CAPACITY,
@@ -235,11 +234,9 @@ export interface PrivateOwnerProofInput {
   readonly path: QuadPath;
 }
 
-/** Go `TrackingWrite`, the witness of one applied entry. */
+/** Go `TrackingWrite`, the witness of one inserted entry. */
 export interface TrackingWriteProofInput {
   readonly entry: TrackingEntry;
-  readonly exists: boolean;
-  readonly oldRecord: TrackingRecord;
   readonly slot: QuadPath;
   readonly lowRecord: TrackingRecord;
   readonly lowPath: QuadPath;
@@ -657,13 +654,9 @@ function trackingRecordJson(record: TrackingRecord, name: string): Json {
 }
 
 function trackingFieldsJson(entry: TrackingEntry, name: string): Json {
-  const [view0, view1] = packBytesBe(checkedLength(entry.viewingU, 32, `${name}.viewingU`));
   return {
     nullifierPk: field(entry.nullifierPk, `${name}.nullifierPk`),
     ctHash: field(entry.ctHash, `${name}.ctHash`),
-    view0: field(view0 as Bytes32, `${name}.view0`),
-    view1: field(view1 as Bytes32, `${name}.view1`),
-    revision: field(bigIntBytes(entry.revision, 32) as Bytes32, `${name}.revision`),
     listTag: field(entry.listTag, `${name}.listTag`),
   };
 }
@@ -893,8 +886,6 @@ function trackingWriteJson(write: TrackingWriteProofInput, name: string): Json {
   return {
     member: field(write.entry.member, `${name}.member`),
     ...trackingFieldsJson(write.entry, name),
-    exists: flag(write.exists),
-    oldRecord: trackingRecordJson(write.oldRecord, `${name}.oldRecord`),
     ...trackingPathJson(write.slot, name, "index", "path"),
     lowRecord: trackingRecordJson(write.lowRecord, `${name}.lowRecord`),
     ...trackingPathJson(write.lowPath, name, "lowIndex", "lowPath"),

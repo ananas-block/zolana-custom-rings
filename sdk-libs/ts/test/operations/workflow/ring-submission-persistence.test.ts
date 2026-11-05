@@ -37,6 +37,7 @@ import {
   ownedAccount,
   ringPolicyData,
   sppRingRegistration,
+  trackingAuthorizations,
   trackingRegistryAccount,
 } from "../../helpers/ring-accounts.js";
 import { TRACKING_REVISION, trackingEntry } from "../../helpers/ring-pipeline.js";
@@ -81,9 +82,9 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
   const authority = f.owner.shieldedAddress().solanaAddress();
   const [ringAuth, registration] = await sppRingRegistration({ authority, ringProgramId: RING });
   const recipient = ShieldedKeypair.generate().shieldedAddress();
-  const tracked = trackingTree(
-    [f.owner.shieldedAddress(), recipient].map((owner) => trackingEntry(owner)),
-  );
+  const owners = [f.owner.shieldedAddress(), recipient];
+  const tracked = trackingTree(owners.map((owner) => trackingEntry(owner)));
+  const authorizations = await trackingAuthorizations(TRACKING, owners);
   let outputTreeId: number | undefined;
   const client = ringTransferClient({
     tree: treeAddress(7),
@@ -103,7 +104,7 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
                 nextIndex: tracked.nextIndex,
                 auditorPubkey: new Uint8Array(33),
               })
-            : undefined,
+            : authorizations.get(key),
     getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     proveRingTransact: async (inputs) => {
       outputTreeId = inputs.outputTreeId;

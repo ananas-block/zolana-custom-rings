@@ -305,13 +305,9 @@ function trackingRecord(value: unknown): TrackingRecord {
 }
 
 function trackingFields(item: Json): Omit<TrackingEntry, "member"> {
-  const view0 = field(item["view0"]);
-  const view1 = field(item["view1"]);
   return {
     nullifierPk: field(item["nullifierPk"]),
     ctHash: field(item["ctHash"]),
-    viewingU: Uint8Array.of(...view0.subarray(1), ...view1.subarray(31)) as Bytes32,
-    revision: amountOf(field(item["revision"])),
     listTag: field(item["listTag"]),
   };
 }
@@ -422,8 +418,6 @@ function trackingWrite(value: unknown): TrackingWriteProofInput {
   const item = record(value);
   return {
     entry: { member: field(item["member"]), ...trackingFields(item) },
-    exists: flag(item["exists"]),
-    oldRecord: trackingRecord(item["oldRecord"]),
     slot: quadPath(item["index"], item["path"]),
     lowRecord: trackingRecord(item["lowRecord"]),
     lowPath: quadPath(item["lowIndex"], item["lowPath"]),
@@ -1183,8 +1177,6 @@ describe("tracking apply requests", () => {
         writes: [
           {
             entry: TRACKING_SENTINEL,
-            exists: false,
-            oldRecord: TRACKING_SENTINEL,
             slot: ZERO_PATH(TRACKING_QUAD_HEIGHT),
             lowRecord: TRACKING_SENTINEL,
             lowPath: ZERO_PATH(TRACKING_QUAD_HEIGHT),

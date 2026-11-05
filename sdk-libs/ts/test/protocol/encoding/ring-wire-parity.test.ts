@@ -249,8 +249,6 @@ interface TrackingRow {
   readonly next: string;
   readonly nullifier_pk: string;
   readonly ct_hash: string;
-  readonly viewing_u: string;
-  readonly revision: number | string;
   readonly list_tag: string;
   readonly leaf_hash: string;
 }
@@ -267,7 +265,6 @@ interface TrackingApplication {
   readonly statement_hash: string;
   readonly writes: readonly Readonly<{
     entry: Omit<TrackingRow, "next" | "leaf_hash"> & Readonly<{ entry_hash: string }>;
-    old: TrackingRow;
     low: TrackingRow;
   }>[];
 }
@@ -278,8 +275,6 @@ describe("tracking-records.json", () => {
       member: field(row.member),
       nullifierPk: field(row.nullifier_pk),
       ctHash: field(row.ct_hash),
-      viewingU: field(row.viewing_u),
-      revision: BigInt(row.revision),
       listTag: field(row.list_tag),
     }) satisfies TrackingEntry;
   const recordOf = (row: TrackingRow) =>
@@ -297,9 +292,6 @@ describe("tracking-records.json", () => {
       for (const write of application.writes) {
         expect(hex(trackingEntryHash(entryOf(write.entry))), application.name).toBe(
           write.entry.entry_hash,
-        );
-        expect(hex(trackingRecordHash(recordOf(write.old))), application.name).toBe(
-          write.old.leaf_hash,
         );
         expect(hex(trackingRecordHash(recordOf(write.low))), application.name).toBe(
           write.low.leaf_hash,

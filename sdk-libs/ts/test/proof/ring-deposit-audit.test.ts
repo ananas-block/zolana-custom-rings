@@ -34,6 +34,7 @@ import {
   NullifierKey,
   ShieldedKeypair,
   ShieldedPda,
+  type ShieldedAddress,
   ViewingKey,
   X25519Keypair,
   type Bytes31,
@@ -100,6 +101,7 @@ import {
   ringCoSignerAccount,
   ringPolicyData,
   storageRegistryAccount,
+  trackingAuthorizationAccount,
   trackingRegistryAccount,
 } from "../helpers/ring-accounts.js";
 import { TRACKING_REVISION, trackingEntry } from "../helpers/ring-pipeline.js";
@@ -504,13 +506,20 @@ describe("audited deposit instruction", () => {
   });
 });
 
+/** A tracking row beside the address whose authorization holds its viewing key. */
+type EnrolledRow = TrackingEntry & Readonly<{ address: ShieldedAddress }>;
+
+function enrolledRow(address: ShieldedAddress): EnrolledRow {
+  return { ...trackingEntry(address), address };
+}
+
 describe("ring deposit builder", () => {
   const auditor = X25519Keypair.generate();
 
   async function fixture(
     input: Readonly<{
       mode: RingMode;
-      enrolled?: readonly TrackingEntry[];
+      enrolled?: readonly EnrolledRow[];
       table?: RuleTable;
       members?: readonly FixtureRecord[];
       coSigner?: RingCoSigner;
@@ -518,6 +527,19 @@ describe("ring deposit builder", () => {
   ) {
     const records = recordTree(input.members ?? []);
     const tracked = trackingTree(input.enrolled ?? []);
+    const authorizations = new Map(
+      await Promise.all(
+        (input.enrolled ?? []).map((row) =>
+          trackingAuthorizationAccount({
+            registry: TRACKING,
+            owner: row.address.solanaAddress(),
+            nullifierPk: row.nullifierPk,
+            listTag: row.listTag,
+            viewingU: row.address.viewingPublicKey.u(),
+          }),
+        ),
+      ),
+    );
     const [policy, policyBump] = await ringPolicyPda(RING);
     const requests: RingProofRequest[] = [];
     const proveRing = vi.fn(async (request: RingProofRequest) => {
@@ -565,7 +587,7 @@ describe("ring deposit builder", () => {
             nextIndex: tracked.nextIndex,
             auditorPubkey: auditor.publicKey().toBytes(),
           });
-        return undefined;
+        return authorizations.get(account);
       },
       getStorageRecordPool: async (request: StorageRecordPoolRequest) =>
         ({
@@ -587,8 +609,7 @@ describe("ring deposit builder", () => {
     return { client, ringProgramId: RING, feePayer: PAYER, recipient, amount: 5n, ...overrides };
   }
 
-  const enrolled = (member: ShieldedKeypair): TrackingEntry =>
-    trackingEntry(member.shieldedAddress());
+  const enrolled = (member: ShieldedKeypair): EnrolledRow => enrolledRow(member.shieldedAddress());
 
   /** A holder answering only what an anonymous deposit asks, every other call fails. */
   function remoteKeys(local: LocalRingKeys): RingKeys {
@@ -913,7 +934,7 @@ describe("ring deposit builder", () => {
     const owner = holder.shieldedAddress();
     const { client, requests } = await fixture({
       mode: "anonymous",
-      enrolled: [trackingEntry(owner)],
+      enrolled: [enrolledRow(owner)],
     });
     const viewing = holder.viewingKey();
     const depositTag = viewing.recipientRequestViewTag(0n);

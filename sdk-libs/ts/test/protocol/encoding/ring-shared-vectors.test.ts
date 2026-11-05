@@ -370,8 +370,6 @@ describe("ring-statements.json", () => {
       member: field(tracking.member),
       nullifierPk: field(tracking.nullifier_pk),
       ctHash: field(tracking.ct_hash),
-      viewingU: field(tracking.viewing_u),
-      revision: BigInt(tracking.revision),
       listTag: field(tracking.list_tag),
     };
     expect(hex(trackingEntryHash(entry))).toBe(tracking.entry_hash);

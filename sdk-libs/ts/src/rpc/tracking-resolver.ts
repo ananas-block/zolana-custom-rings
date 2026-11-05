@@ -3,17 +3,20 @@ import type { Address } from "@solana/kit";
 import type { ChainReader } from "@heliuslabs/zolana/client";
 import { equalBytes, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
 import { listTagOf } from "../crypto/keys/list-salt.js";
 import type { RingAddress } from "../crypto/keys/ring-address.js";
 import { x25519FromU } from "../crypto/keys/x25519.js";
 import { RingError } from "../protocol/error.js";
 import {
+  decodeTrackingAuthorization,
   decodeTrackingRegistry,
   verifyTrackingOpening,
+  type TrackingAuthorization,
   type TrackingRegistry,
 } from "../protocol/membership/tracking.js";
+import { STORAGE_PROGRAM_ID, trackingAuthorizationPda } from "../protocol/pda/index.js";
 import type { BoundRoot } from "./registered-record.js";
 import type { TrackingReader } from "./ports.js";
 
@@ -23,19 +26,24 @@ export type RingRecipientClient = Pick<ChainReader, "getAccount"> &
 export type TrackingRoot = BoundRoot;
 
 export type ResolvedRecipient =
-  /** The row's viewing key, an address from before a rotation resolves to the current one, Rust `RecipientResolver`. */
+  /** The authorization's viewing key, an address from before a rotation resolves to the current one, Rust `RecipientResolver`. */
   | Readonly<{
       kind: "enrolled";
       root: TrackingRoot;
       nullifierPk: Bytes32;
       viewingPublicKey: X25519PublicKey;
-      revision: bigint;
       listTag: Bytes32;
     }>
-  /** Named under the zero key, a row's absence under the frame's root admits it. */
+  /** Named under the zero key. The resolver runs no salted payee read, so an enrolled owner resolves too and the payment path refuses it under one. */
   | Readonly<{ kind: "zeroKey"; root: TrackingRoot }>;
 
-/** Refuses what the output rule refuses. */
+/**
+ * Refuses what the output rule refuses outside a salted payee read.
+ *
+ * Reads the authorization at `confirmed`, the commitment `ZolanaClient` reads at unless configured
+ * otherwise. A rotation that lands after the read leaves the payment sealed to the key read, no program
+ * check reads a viewing key.
+ */
 export async function resolveRingRecipient(
   input: Readonly<{ client: RingRecipientClient; trackingRegistry: Address; to: RingAddress }>,
   context?: RequestContext,
@@ -55,23 +63,68 @@ export async function resolveRingRecipient(
     throw new RingError("RING_TRACKING_INVALID", { details: { reason: "openings" } });
   const row = verifyTrackingOpening(opening, root.root, member);
   const named = to.recipient.nullifierPublicKey;
-  if (equalBytes(named, ZERO_NULLIFIER_PK)) {
-    if (row !== undefined) throw new RingError("RING_RECIPIENT_ENROLLED");
-    return Object.freeze({ kind: "zeroKey", root });
-  }
+  if (equalBytes(named, ZERO_NULLIFIER_PK)) return Object.freeze({ kind: "zeroKey", root });
   if (row === undefined) throw new RingError("RING_RECIPIENT_NOT_ENROLLED");
   if (!equalBytes(row.nullifierPk, named))
     throw new RingError("RING_ADDRESS_MISMATCH", { details: { field: "nullifierPk" } });
   if (!equalBytes(row.listTag, listTagOf(to.listSalt)))
     throw new RingError("RING_ADDRESS_MISMATCH", { details: { field: "listSalt" } });
+  const viewingU = await enrolledViewingKey(
+    { client, trackingRegistry, owner: to.recipient },
+    context,
+  );
   return Object.freeze({
     kind: "enrolled",
     root,
     nullifierPk: row.nullifierPk,
-    viewingPublicKey: x25519FromU(row.viewingU),
-    revision: row.revision,
+    viewingPublicKey: x25519FromU(viewingU),
     listTag: row.listTag,
   });
+}
+
+/** The viewing key an enrolled owner's authorization holds, its row present under the read root. */
+export async function enrolledViewingKey(
+  input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
+    trackingRegistry: Address;
+    owner: ShieldedAddress;
+  }>,
+  context?: RequestContext,
+): Promise<Bytes32> {
+  const authorization = await readTrackingAuthorization(
+    {
+      client: input.client,
+      trackingRegistry: input.trackingRegistry,
+      owner: input.owner.solanaAddress(),
+    },
+    context,
+  );
+  // A present row was inserted from the account, so a missing one is a forged or stale read.
+  if (authorization === undefined)
+    throw new RingError("RING_TRACKING_INVALID", { details: { reason: "authorization" } });
+  return authorization.viewingU;
+}
+
+/** `undefined` before the owner's first enrollment, an account another program, registry or owner holds refuses. */
+export async function readTrackingAuthorization(
+  input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
+    trackingRegistry: Address;
+    owner: Address;
+  }>,
+  context?: RequestContext,
+): Promise<TrackingAuthorization | undefined> {
+  const [address] = await trackingAuthorizationPda(input.trackingRegistry, input.owner);
+  const account = await input.client.getAccount(address, context);
+  if (account === undefined) return undefined;
+  if (account.owner !== STORAGE_PROGRAM_ID)
+    throw new RingError("RING_TRACKING_INVALID", { details: { reason: "authorization program" } });
+  const authorization = decodeTrackingAuthorization(account.data);
+  if (authorization.registry !== input.trackingRegistry)
+    throw new RingError("RING_TRACKING_INVALID", { details: { reason: "authorization registry" } });
+  if (authorization.owner !== input.owner)
+    throw new RingError("RING_TRACKING_INVALID", { details: { reason: "authorization owner" } });
+  return authorization;
 }
 
 export async function newestTrackingRoot(

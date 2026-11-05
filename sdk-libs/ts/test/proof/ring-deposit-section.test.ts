@@ -1,9 +1,10 @@
-import { address } from "@solana/kit";
+import { address, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { poseidon, ZERO_32, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
 import { listTagOf } from "../../src/crypto/keys/list-salt.js";
 import {
@@ -29,13 +30,20 @@ import {
   type TrackingRecord,
 } from "../../src/protocol/membership/tracking.js";
 import { recordTree } from "../helpers/member-registry.js";
-import { ownSources, storageRegistryAccount } from "../helpers/ring-accounts.js";
+import {
+  ownSources,
+  storageRegistryAccount,
+  trackingAuthorizationAccount,
+} from "../helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const RECORDS = address("Stor111111111111111111111111111111111111111");
 const TRACKING = address("Cura111111111111111111111111111111111111111");
 const RING_ID = new Uint8Array(32).fill(0) as Bytes32;
-const OWNER = Uint8Array.from({ length: 32 }, (_, at) => (at === 31 ? 9 : 0)) as Bytes32;
+const HOLDER = ShieldedKeypair.fromKeypair(
+  SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(9) as Bytes32),
+);
+const VIEWING_U = new Uint8Array(32).fill(0x15) as Bytes32;
 const NULLIFIER_PK = Uint8Array.from({ length: 32 }, (_, at) => (at === 31 ? 8 : 0)) as Bytes32;
 const SALT = Uint8Array.from({ length: 32 }, (_, at) => (at === 31 ? 7 : 0)) as Bytes32;
 const MINT = "So11111111111111111111111111111111111111112";
@@ -105,14 +113,26 @@ function saltedRing(list: ListId = ListId.privateBlock): RingPolicy {
   } as unknown as RingPolicy;
 }
 
-function client(leaf: TrackingRecord): PolicyReadClient {
+/** `viewingU` is the key the owner's authorization holds. */
+async function client(
+  leaf: TrackingRecord,
+  viewingU: Bytes32 = VIEWING_U,
+): Promise<PolicyReadClient> {
   const chain = trackingChain(leaf);
   const records = recordTree();
+  const [authorization, account] = await trackingAuthorizationAccount({
+    registry: TRACKING,
+    owner: RECIPIENT.solanaAddress(),
+    nullifierPk: leaf.nullifierPk,
+    listTag: leaf.listTag,
+    viewingU,
+  });
   return {
-    getAccount: async (account: string) =>
-      account === TRACKING
-        ? { data: chain.data }
-        : storageRegistryAccount([{ hash: records.root, revision: 3n, expiresAt: 0n }]),
+    getAccount: async (read: Address) => {
+      if (read === TRACKING) return { data: chain.data };
+      if (read === authorization) return account;
+      return storageRegistryAccount([{ hash: records.root, revision: 3n, expiresAt: 0n }]);
+    },
     getTrackingRecordPool: async (request: { openings: number }) => chain.pool(request.openings),
     getStorageRecordPool: async (request: { members: readonly Bytes32[]; openings: number }) => ({
       context: { slot: 1n, blockTime: 0n },
@@ -122,26 +142,33 @@ function client(leaf: TrackingRecord): PolicyReadClient {
   } as unknown as PolicyReadClient;
 }
 
-const enrolled: TrackingRecord = {
-  ...TRACKING_SENTINEL,
-  member: OWNER,
-  nullifierPk: NULLIFIER_PK,
-};
+let RECIPIENT: ShieldedAddress;
+let OWNER: Bytes32;
+let enrolled: TrackingRecord;
 
-const read = (leaf: TrackingRecord, listSalts: readonly { owner: Bytes32; salt: Bytes32 }[]) =>
+const read = async (
+  leaf: TrackingRecord,
+  listSalts: readonly { owner: Bytes32; salt: Bytes32 }[],
+  held: Bytes32 = VIEWING_U,
+) =>
   readDepositSection({
-    client: client(leaf),
+    client: await client(leaf, held),
     ringProgramId: RING,
     ringId: RING_ID,
     config: saltedRing(),
-    owner: OWNER,
+    recipient: RECIPIENT,
     nullifierPk: NULLIFIER_PK,
-    viewingU: enrolled.viewingU,
+    viewingU: VIEWING_U,
     asset: memberOfAsset(MINT as never),
     listSalts,
   });
 
-beforeAll(initializePoseidon);
+beforeAll(async () => {
+  await initializePoseidon();
+  RECIPIENT = HOLDER.shieldedAddress();
+  OWNER = RECIPIENT.signingPublicKey.ownerProofInputHash();
+  enrolled = { ...TRACKING_SENTINEL, member: OWNER, nullifierPk: NULLIFIER_PK };
+});
 
 describe("readDepositSection", () => {
   it("opens an enrolled recipient's salted key on the key holding it", async () => {
@@ -164,29 +191,24 @@ describe("readDepositSection", () => {
     });
   });
 
-  it("refuses a recipient viewing key off the row, naming the row's revision", async () => {
-    const leaf = {
-      ...enrolled,
-      listTag: listTagOf(SALT),
-      viewingU: new Uint8Array(32).fill(0xee) as Bytes32,
-      revision: 5n,
-    };
-    await expect(read(leaf, [{ owner: OWNER, salt: SALT }])).rejects.toMatchObject({
+  it("refuses a recipient viewing key off the owner's authorization", async () => {
+    const leaf = { ...enrolled, listTag: listTagOf(SALT) };
+    const rotated = new Uint8Array(32).fill(0xee) as Bytes32;
+    await expect(read(leaf, [{ owner: OWNER, salt: SALT }], rotated)).rejects.toMatchObject({
       code: "RING_RECIPIENT_VIEWING_KEY_STALE",
-      details: { rowRevision: "5" },
     });
   });
 
   it("refuses a zero-key recipient holding a row", async () => {
     await expect(
       readDepositSection({
-        client: client(enrolled),
+        client: await client(enrolled),
         ringProgramId: RING,
         ringId: RING_ID,
         config: saltedRing(),
-        owner: OWNER,
+        recipient: RECIPIENT,
         nullifierPk: ZERO_NULLIFIER_PK as Bytes32,
-        viewingU: enrolled.viewingU,
+        viewingU: VIEWING_U,
         asset: memberOfAsset(MINT as never),
         listSalts: [],
       }),
@@ -195,14 +217,14 @@ describe("readDepositSection", () => {
 });
 
 describe("relayListSalts", () => {
-  const salts = [{ owner: OWNER, salt: SALT }];
+  const salts = () => [{ owner: OWNER, salt: SALT }];
 
   it("sends a salt to a relay on a ring reading a salted list", () => {
-    expect(relayListSalts(saltedRing(), salts)).toEqual(salts);
+    expect(relayListSalts(saltedRing(), salts())).toEqual(salts());
   });
 
   it("sends none on a ring reading only public lists or no policy", () => {
-    expect(relayListSalts(saltedRing(ListId.block), salts)).toEqual([]);
-    expect(relayListSalts({ hasPolicy: false } as RingPolicy, salts)).toEqual([]);
+    expect(relayListSalts(saltedRing(ListId.block), salts())).toEqual([]);
+    expect(relayListSalts({ hasPolicy: false } as RingPolicy, salts())).toEqual([]);
   });
 });

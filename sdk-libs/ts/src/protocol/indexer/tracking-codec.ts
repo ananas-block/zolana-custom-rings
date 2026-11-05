@@ -46,15 +46,12 @@ export interface PendingEnrollmentsRequest {
   readonly limit: number;
 }
 
-/** Pending state grants nothing. */
+/** A first enrollment no apply has inserted, pending state grants nothing. */
 export interface PendingEnrollment {
   readonly owner: Address;
   readonly member: Bytes32;
   readonly nullifierPk: Bytes32;
   readonly ctHash: Bytes32;
-  readonly viewingU: Bytes32;
-  readonly revision: bigint;
-  readonly appliedRevision: bigint;
   readonly listTag: Bytes32;
 }
 
@@ -169,16 +166,7 @@ function servedRecord(
   value: unknown,
   path: string,
 ): Readonly<{ record: TrackingRecord; seal?: TrackingSeal }> {
-  const row = object(value, path, [
-    "member",
-    "next",
-    "nullifierPk",
-    "ctHash",
-    "viewingU",
-    "revision",
-    "listTag",
-    "seal",
-  ]);
+  const row = object(value, path, ["member", "next", "nullifierPk", "ctHash", "listTag", "seal"]);
   const seal = row["seal"];
   return {
     record: Object.freeze({
@@ -186,8 +174,6 @@ function servedRecord(
       next: field(row["next"], `${path}.next`),
       nullifierPk: field(row["nullifierPk"], `${path}.nullifierPk`),
       ctHash: field(row["ctHash"], `${path}.ctHash`),
-      viewingU: field(row["viewingU"], `${path}.viewingU`),
-      revision: u64(row["revision"], `${path}.revision`),
       listTag: field(row["listTag"], `${path}.listTag`),
     }),
     ...(seal == null ? {} : { seal: sealOf(seal, `${path}.seal`) }),
@@ -231,24 +217,12 @@ function poolPath(value: unknown, path: string): QuadPath {
 }
 
 function pendingEnrollment(value: unknown, path: string): PendingEnrollment {
-  const row = object(value, path, [
-    "owner",
-    "member",
-    "nullifierPk",
-    "ctHash",
-    "viewingU",
-    "revision",
-    "appliedRevision",
-    "listTag",
-  ]);
+  const row = object(value, path, ["owner", "member", "nullifierPk", "ctHash", "listTag"]);
   return Object.freeze({
     owner: checkedAddress(row["owner"], `${path}.owner`),
     member: field(row["member"], `${path}.member`),
     nullifierPk: field(row["nullifierPk"], `${path}.nullifierPk`),
     ctHash: field(row["ctHash"], `${path}.ctHash`),
-    viewingU: field(row["viewingU"], `${path}.viewingU`),
-    revision: u64(row["revision"], `${path}.revision`),
-    appliedRevision: u64(row["appliedRevision"], `${path}.appliedRevision`),
     listTag: field(row["listTag"], `${path}.listTag`),
   });
 }

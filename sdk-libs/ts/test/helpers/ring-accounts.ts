@@ -8,6 +8,7 @@ import {
   ringAuthAddress,
   ringCoSignerPda,
   STORAGE_PROGRAM_ID,
+  trackingAuthorizationPda,
 } from "../../src/protocol/pda/index.js";
 import { ROOT_HISTORY } from "../../src/protocol/membership/member-registry.js";
 import type {
@@ -22,7 +23,7 @@ import {
   RING_ROLES,
   STORAGE_REGISTRY_DISCRIMINATOR,
 } from "../../src/protocol/codec/ring-codecs.js";
-import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { X25519Keypair, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import {
   LIST_IDS,
   encodeRule,
@@ -101,6 +102,51 @@ export function trackingRegistryAccount(
       .u64(slot === 0 ? input.revision : 0n, "revision")
       .u64(0n, "expiresAt");
   return ownedAccount(STORAGE_PROGRAM_ID, writer.finish());
+}
+
+/** Rust `TrackingAuthorization` of an applied enrollment at its PDA, the seal fields filled. */
+export async function trackingAuthorizationAccount(
+  input: Readonly<{
+    registry: Address;
+    owner: Address;
+    nullifierPk: Uint8Array;
+    listTag: Uint8Array;
+    viewingU: Uint8Array;
+  }>,
+): Promise<readonly [Address, RpcAccount]> {
+  const data = new Writer()
+    .u8(4, "discriminator")
+    .bytes(addressBytes(input.registry))
+    .bytes(addressBytes(input.owner))
+    .bytes(input.nullifierPk, 32, "nullifierPk")
+    .bytes(input.listTag, 32, "listTag")
+    .bytes(input.viewingU, 32, "viewingU")
+    .bytes(new Uint8Array(32).fill(0x22), 32, "ephU")
+    .bytes(new Uint8Array(64).fill(0x33), 64, "ciphertext")
+    .u8(1, "applied")
+    .finish();
+  const [address] = await trackingAuthorizationPda(input.registry, input.owner);
+  return [address, ownedAccount(STORAGE_PROGRAM_ID, data)];
+}
+
+/** Each enrolled owner's authorization at its PDA, keyed by address, the zero list tag. */
+export async function trackingAuthorizations(
+  registry: Address,
+  owners: readonly ShieldedAddress[],
+): Promise<ReadonlyMap<Address, RpcAccount>> {
+  return new Map(
+    await Promise.all(
+      owners.map((owner) =>
+        trackingAuthorizationAccount({
+          registry,
+          owner: owner.solanaAddress(),
+          nullifierPk: owner.nullifierPublicKey,
+          listTag: new Uint8Array(32),
+          viewingU: owner.viewingPublicKey.u(),
+        }),
+      ),
+    ),
+  );
 }
 
 /** Rust `StorageRegistry` owned by the storage program, `roots` newest first. */

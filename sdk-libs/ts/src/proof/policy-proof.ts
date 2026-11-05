@@ -1,5 +1,5 @@
 /** The policy section of a ring transfer, every record read under a root the statement binds. */
-import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import { EMPTY_MINT_POLICY, type MintPolicy } from "../protocol/membership/mint-policy.js";
 import type { RecordPool } from "../protocol/membership/member-registry.js";
 import {
@@ -68,7 +68,7 @@ import {
 } from "../protocol/membership/policy.js";
 import { verifyTrackingPool, type TrackingRecord } from "../protocol/membership/tracking.js";
 import { fetchBoundRoot, readRecordPool, type BoundRoot } from "../rpc/registered-record.js";
-import { newestTrackingRoot } from "../rpc/tracking-resolver.js";
+import { enrolledViewingKey, newestTrackingRoot } from "../rpc/tracking-resolver.js";
 import type { TransferRoots } from "../protocol/proof/statement.js";
 import {
   depositKeyCapacity,
@@ -592,10 +592,27 @@ async function readTracking(
     publicOwners: input.publicOwners,
     rowOf,
   });
+  const spenders = publishedNotes(proofInputs).map((note) => note.utxo.owner);
+  const viewingKeys = await readPayeeViewingKeys(
+    {
+      client,
+      trackingRegistry: config.tracking,
+      owners: ringOutputs.flatMap((output) => {
+        const owner = output?.ownerAddress;
+        return owner === undefined ||
+          rowOf(owner.signingPublicKey.ownerProofInputHash()) === undefined ||
+          spenders.some((spender) => owner.signingPublicKey.equals(spender))
+          ? []
+          : [owner];
+      }),
+    },
+    context,
+  );
   checkOutputKeys({
     outputs: ringOutputs,
     rowOf,
-    spenders: publishedNotes(proofInputs).map((note) => note.utxo.owner),
+    viewingKeyOf: (member) => viewingKeys.get(bytesKey(member)),
+    spenders,
     saltedPayees: subjects.view !== undefined && subjects.view.salted !== 0,
   });
   const trackingEntry = (member: Bytes32 | undefined): number =>
@@ -628,7 +645,8 @@ export async function readDepositSection(
     ringProgramId: Address;
     ringId: Bytes32;
     config: RingPolicy;
-    owner: Bytes32;
+    /** The recipient, its authorization names the viewing key the deposit seals to. */
+    recipient: ShieldedAddress;
     nullifierPk: Bytes32;
     viewingU: Bytes32;
     asset: Bytes32;
@@ -640,7 +658,8 @@ export async function readDepositSection(
     PolicyProofInputs &
     Readonly<{ capacity: number; trackingBound: BoundRoot; own?: BoundRoot; curator?: BoundRoot }>
 > {
-  const { client, config, ringProgramId, owner, asset } = input;
+  const { client, config, ringProgramId, asset } = input;
+  const owner = input.recipient.signingPublicKey.ownerProofInputHash();
   const pinned = config.hasPolicy ? pinnedPolicy(config) : undefined;
   const view = pinned === undefined ? undefined : policySourceView(pinned.sources);
   const anySalted = view !== undefined && view.salted !== 0;
@@ -673,8 +692,13 @@ export async function readDepositSection(
   });
   const row = pool.rows[0];
   checkOutputKey({ member: owner, nullifierPk: input.nullifierPk, row, saltedPayees: anySalted });
-  if (row !== undefined && !equalBytes(row.viewingU, input.viewingU))
-    throw staleViewingKey(owner, row);
+  if (row !== undefined) {
+    const current = await enrolledViewingKey(
+      { client, trackingRegistry: config.tracking, owner: input.recipient },
+      context,
+    );
+    if (!equalBytes(current, input.viewingU)) throw staleViewingKey(owner);
+  }
   const pad = <T>(values: readonly T[], zero: T): readonly T[] =>
     Object.freeze([...values, ...Array.from({ length: capacity - values.length }, () => zero)]);
   const tracking: TrackingProofInputs = {
@@ -817,6 +841,8 @@ export function checkOutputKeys(
   input: Readonly<{
     outputs: readonly (ProofOutputUtxo | undefined)[];
     rowOf: (member: Bytes32) => TrackingRecord | undefined;
+    /** The key the owner's authorization held when read, `readPayeeViewingKeys`. */
+    viewingKeyOf: (member: Bytes32) => Bytes32 | undefined;
     /** A spending owner holds every key it ever enrolled. */
     spenders: readonly ShieldedPublicKey[];
     /** Set while a screened frame reads a salted list. */
@@ -835,12 +861,50 @@ export function checkOutputKeys(
       saltedPayees: input.saltedPayees,
     });
     if (
-      row !== undefined &&
-      !input.spenders.some((spender) => owner.signingPublicKey.equals(spender)) &&
-      !equalBytes(row.viewingU, owner.viewingPublicKey.u())
+      row === undefined ||
+      input.spenders.some((spender) => owner.signingPublicKey.equals(spender))
     )
-      throw staleViewingKey(member, row);
+      continue;
+    const current = input.viewingKeyOf(member);
+    if (current === undefined)
+      throw new RingError("RING_TRACKING_INVALID", { details: { reason: "authorization" } });
+    if (!equalBytes(current, owner.viewingPublicKey.u())) throw staleViewingKey(member);
   }
+}
+
+/**
+ * Each payee's viewing key from its authorization, keyed by member.
+ *
+ * Reads at `confirmed` as `resolveRingRecipient` does. A rotation that lands after the read leaves the
+ * payment sealed to the key read, no program check reads a viewing key.
+ */
+export async function readPayeeViewingKeys(
+  input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
+    trackingRegistry: Address;
+    owners: readonly ShieldedAddress[];
+  }>,
+  context?: RequestContext,
+): Promise<ReadonlyMap<string, Bytes32>> {
+  const distinct = new Map(
+    input.owners.map(
+      (owner) => [bytesKey(owner.signingPublicKey.ownerProofInputHash()), owner] as const,
+    ),
+  );
+  return new Map(
+    await Promise.all(
+      [...distinct].map(
+        async ([member, owner]) =>
+          [
+            member,
+            await enrolledViewingKey(
+              { client: input.client, trackingRegistry: input.trackingRegistry, owner },
+              context,
+            ),
+          ] as const,
+      ),
+    ),
+  );
 }
 
 function checkOutputKey(
@@ -863,9 +927,9 @@ function checkOutputKey(
     });
 }
 
-function staleViewingKey(member: Bytes32, row: TrackingRecord): RingError {
+function staleViewingKey(member: Bytes32): RingError {
   return new RingError("RING_RECIPIENT_VIEWING_KEY_STALE", {
-    details: { member: bytesKey(member), rowRevision: row.revision.toString() },
+    details: { member: bytesKey(member) },
   });
 }
 
