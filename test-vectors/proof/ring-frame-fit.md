@@ -2302,9 +2302,9 @@ Entry capacities at two outputs. Each row is the widest owner run any path clear
 Buffered maxima. Load max is full with data tails, every extension but the cache, two SPP input trees and four disjoint credential state trees, replies on anonymous frames. Each row widens one axis from that load to the largest value any path settles. reply: the reply length. messages: empty application messages. message bytes: one application message. writes: WriteFrame transactions the SDK sends before a buffered settle. over: what refuses one more step. Heap is not measured here.
 | shape | rail | axis | widest | frame | SPP CPI | buffered bytes | buffered accounts | signatures | writes | fits | over |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 1x2 | confidential signer | messages | 254 | 9969 | 9890 | 1116 | 25 | 3 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 1x2 | confidential signer | messages | 254 | 9969 | 9890 | 1116 | 25 | 3 | 3 | buffered | confidential signer Shape { n_inputs: 1, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 1x2 | confidential signer | message bytes | 8839 | 10206 | 10127 | 1116 | 25 | 3 | 3 | buffered | buffer create 1 B |
-| 1x2 | confidential in-proof | messages | 254 | 10065 | 9987 | 1019 | 24 | 2 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 1x2 | confidential in-proof | messages | 254 | 10065 | 9987 | 1019 | 24 | 2 | 3 | buffered | confidential in-proof Shape { n_inputs: 1, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 1x2 | confidential in-proof | message bytes | 8743 | 10206 | 10128 | 1019 | 24 | 2 | 3 | buffered | buffer create 1 B |
 | 1x2 | anonymous hidden | reply | 8632 | 10206 | 10167 | 923 | 21 | 2 | 3 | buffered | buffer create 1 B |
 | 1x2 | anonymous hidden | messages | 251 | 10206 | 10166 | 923 | 21 | 2 | 3 | buffered | buffer create 34 B |
@@ -2312,7 +2312,7 @@ Buffered maxima. Load max is full with data tails, every extension but the cache
 | 1x2 | anonymous public owners | reply | 8696 | 10206 | 10134 | 1116 | 25 | 3 | 3 | buffered | buffer create 1 B |
 | 1x2 | anonymous public owners | messages | 252 | 10176 | 10103 | 1116 | 25 | 3 | 3 | buffered | buffer create 4 B |
 | 1x2 | anonymous public owners | message bytes | 8564 | 10206 | 10133 | 1116 | 25 | 3 | 3 | buffered | buffer create 1 B |
-| 1x2 | confidential entry | messages | 254 | 10177 | 10098 | 1116 | 25 | 3 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 1x2 | confidential entry | messages | 254 | 10177 | 10098 | 1116 | 25 | 3 | 3 | buffered | confidential entry Shape { n_inputs: 1, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 1x2 | confidential entry | message bytes | 8631 | 10206 | 10127 | 1116 | 25 | 3 | 3 | buffered | buffer create 1 B |
 | 1x2 | anonymous entry | reply | 8392 | 10206 | 10135 | 923 | 21 | 2 | 3 | buffered | buffer create 1 B |
 | 1x2 | anonymous entry | messages | 243 | 10174 | 10102 | 923 | 21 | 2 | 3 | buffered | buffer create 2 B |
@@ -2347,9 +2347,9 @@ Buffered maxima. Load max is full with data tails, every extension but the cache
 | 1x8 | anonymous entry | reply | 886 | 10104 | 10237 | 923 | 21 | 2 | 3 | buffered | SPP CPI 4 B |
 | 1x8 | anonymous entry | messages | 162 | 10090 | 10222 | 923 | 21 | 2 | 3 | buffered | SPP CPI 16 B |
 | 1x8 | anonymous entry | message bytes | 5492 | 10108 | 10240 | 923 | 21 | 2 | 3 | buffered | SPP CPI 1 B |
-| 2x2 | confidential signer | messages | 254 | 10001 | 9923 | 1149 | 26 | 3 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 2x2 | confidential signer | messages | 254 | 10001 | 9923 | 1149 | 26 | 3 | 3 | buffered | confidential signer Shape { n_inputs: 2, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 2x2 | confidential signer | message bytes | 8807 | 10206 | 10128 | 1149 | 26 | 3 | 3 | buffered | buffer create 1 B |
-| 2x2 | confidential in-proof | messages | 254 | 10097 | 10020 | 1052 | 25 | 2 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 2x2 | confidential in-proof | messages | 254 | 10097 | 10020 | 1052 | 25 | 2 | 3 | buffered | confidential in-proof Shape { n_inputs: 2, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 2x2 | confidential in-proof | message bytes | 8711 | 10206 | 10129 | 1052 | 25 | 2 | 3 | buffered | buffer create 1 B |
 | 2x2 | anonymous hidden | reply | 8600 | 10206 | 10168 | 956 | 22 | 2 | 3 | buffered | buffer create 1 B |
 | 2x2 | anonymous hidden | messages | 250 | 10204 | 10165 | 956 | 22 | 2 | 3 | buffered | buffer create 32 B |
@@ -2362,10 +2362,10 @@ Buffered maxima. Load max is full with data tails, every extension but the cache
 | 2x2 | anonymous entry | reply | 8160 | 10206 | 10136 | 956 | 22 | 2 | 3 | buffered | buffer create 1 B |
 | 2x2 | anonymous entry | messages | 237 | 10202 | 10131 | 956 | 22 | 2 | 3 | buffered | buffer create 30 B |
 | 2x2 | anonymous entry | message bytes | 8028 | 10206 | 10135 | 956 | 22 | 2 | 3 | buffered | buffer create 1 B |
-| 2x2 | delegate | messages | 254 | 9945 | 9923 | 953 | 22 | 2 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 2x2 | delegate | messages | 254 | 9945 | 9923 | 953 | 22 | 2 | 3 | buffered | delegate Shape { n_inputs: 2, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 2x2 | delegate | message bytes | 8863 | 10206 | 10184 | 953 | 22 | 2 | 3 | buffered | buffer create 1 B |
 | 2x2 | anonymous delegate | reply | 8720 | 10206 | 10191 | 953 | 22 | 2 | 3 | buffered | buffer create 1 B |
-| 2x2 | anonymous delegate | messages | 253 | 10186 | 10170 | 953 | 22 | 2 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 2x2 | anonymous delegate | messages | 253 | 10186 | 10170 | 953 | 22 | 2 | 3 | buffered | anonymous delegate Shape { n_inputs: 2, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 2x2 | anonymous delegate | message bytes | 8588 | 10206 | 10190 | 953 | 22 | 2 | 3 | buffered | buffer create 1 B |
 | 2x4 | confidential signer | messages | 241 | 10191 | 10181 | 1149 | 26 | 3 | 3 | buffered | buffer create 19 B |
 | 2x4 | confidential signer | message bytes | 8175 | 10206 | 10196 | 1149 | 26 | 3 | 3 | buffered | buffer create 1 B |
@@ -2407,9 +2407,9 @@ Buffered maxima. Load max is full with data tails, every extension but the cache
 | 2x8 | anonymous entry | reply | 853 | 10105 | 10239 | 956 | 22 | 2 | 3 | buffered | SPP CPI 6 B |
 | 2x8 | anonymous entry | messages | 155 | 10084 | 10217 | 956 | 22 | 2 | 3 | buffered | SPP CPI 11 B |
 | 2x8 | anonymous entry | message bytes | 5259 | 10107 | 10240 | 956 | 22 | 2 | 3 | buffered | SPP CPI 1 B |
-| 3x2 | confidential signer | messages | 254 | 10033 | 9956 | 1182 | 27 | 3 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 3x2 | confidential signer | messages | 254 | 10033 | 9956 | 1182 | 27 | 3 | 3 | buffered | confidential signer Shape { n_inputs: 3, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 3x2 | confidential signer | message bytes | 8775 | 10206 | 10129 | 1182 | 27 | 3 | 3 | buffered | buffer create 1 B |
-| 3x2 | confidential in-proof | messages | 254 | 10129 | 10053 | 1085 | 26 | 2 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 3x2 | confidential in-proof | messages | 254 | 10129 | 10053 | 1085 | 26 | 2 | 3 | buffered | confidential in-proof Shape { n_inputs: 3, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 3x2 | confidential in-proof | message bytes | 8679 | 10206 | 10130 | 1085 | 26 | 2 | 3 | buffered | buffer create 1 B |
 | 3x2 | anonymous hidden | reply | 8568 | 10206 | 10169 | 989 | 23 | 2 | 3 | buffered | buffer create 1 B |
 | 3x2 | anonymous hidden | messages | 249 | 10202 | 10164 | 989 | 23 | 2 | 3 | buffered | buffer create 30 B |
@@ -2462,9 +2462,9 @@ Buffered maxima. Load max is full with data tails, every extension but the cache
 | 3x8 | anonymous entry | reply | 819 | 10099 | 10234 | 989 | 23 | 2 | 3 | buffered | SPP CPI 1 B |
 | 3x8 | anonymous entry | messages | 148 | 10078 | 10212 | 989 | 23 | 2 | 3 | buffered | SPP CPI 6 B |
 | 3x8 | anonymous entry | message bytes | 5026 | 10106 | 10240 | 989 | 23 | 2 | 3 | buffered | SPP CPI 1 B |
-| 4x2 | confidential signer | messages | 254 | 10065 | 9989 | 1215 | 28 | 3 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 4x2 | confidential signer | messages | 254 | 10065 | 9989 | 1215 | 28 | 3 | 3 | buffered | confidential signer Shape { n_inputs: 4, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 4x2 | confidential signer | message bytes | 8743 | 10206 | 10130 | 1215 | 28 | 3 | 3 | buffered | buffer create 1 B |
-| 4x2 | confidential in-proof | messages | 254 | 10161 | 10086 | 1118 | 27 | 2 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 4x2 | confidential in-proof | messages | 254 | 10161 | 10086 | 1118 | 27 | 2 | 3 | buffered | confidential in-proof Shape { n_inputs: 4, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 4x2 | confidential in-proof | message bytes | 8647 | 10206 | 10131 | 1118 | 27 | 2 | 3 | buffered | buffer create 1 B |
 | 4x2 | anonymous hidden | reply | 8536 | 10206 | 10170 | 1022 | 24 | 2 | 3 | buffered | buffer create 1 B |
 | 4x2 | anonymous hidden | messages | 248 | 10200 | 10163 | 1022 | 24 | 2 | 3 | buffered | buffer create 28 B |
@@ -2512,9 +2512,9 @@ Buffered maxima. Load max is full with data tails, every extension but the cache
 | 4x8 | anonymous entry | reply | 786 | 10100 | 10236 | 1022 | 24 | 2 | 3 | buffered | SPP CPI 3 B |
 | 4x8 | anonymous entry | messages | 141 | 10072 | 10207 | 1022 | 24 | 2 | 3 | buffered | SPP CPI 1 B |
 | 4x8 | anonymous entry | message bytes | 4793 | 10105 | 10240 | 1022 | 24 | 2 | 3 | buffered | SPP CPI 1 B |
-| 5x2 | confidential signer | messages | 254 | 10097 | 10022 | 1248 | 29 | 3 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 5x2 | confidential signer | messages | 254 | 10097 | 10022 | 1248 | 29 | 3 | 3 | buffered | confidential signer Shape { n_inputs: 5, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 5x2 | confidential signer | message bytes | 8711 | 10206 | 10131 | 1248 | 29 | 3 | 3 | buffered | buffer create 1 B |
-| 5x2 | confidential in-proof | messages | 254 | 10193 | 10119 | 1151 | 28 | 2 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 5x2 | confidential in-proof | messages | 254 | 10193 | 10119 | 1151 | 28 | 2 | 3 | buffered | confidential in-proof Shape { n_inputs: 5, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 5x2 | confidential in-proof | message bytes | 8615 | 10206 | 10132 | 1151 | 28 | 2 | 3 | buffered | buffer create 1 B |
 | 5x2 | anonymous hidden | reply | 8504 | 10206 | 10171 | 1055 | 25 | 2 | 3 | buffered | buffer create 1 B |
 | 5x2 | anonymous hidden | messages | 247 | 10198 | 10162 | 1055 | 25 | 2 | 3 | buffered | buffer create 26 B |
@@ -2562,7 +2562,7 @@ Buffered maxima. Load max is full with data tails, every extension but the cache
 | 5x8 | anonymous public owners | reply | 911 | 10103 | 10239 | 1248 | 29 | 3 | 3 | buffered | SPP CPI 6 B |
 | 5x8 | anonymous public owners | messages | 167 | 10084 | 10219 | 1248 | 29 | 3 | 3 | buffered | SPP CPI 13 B |
 | 5x8 | anonymous public owners | message bytes | 5665 | 10105 | 10240 | 1248 | 29 | 3 | 3 | buffered | SPP CPI 1 B |
-| 6x2 | confidential signer | messages | 254 | 10129 | 10055 | 1281 | 30 | 3 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 6x2 | confidential signer | messages | 254 | 10129 | 10055 | 1281 | 30 | 3 | 3 | buffered | confidential signer Shape { n_inputs: 6, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 6x2 | confidential signer | message bytes | 8679 | 10206 | 10132 | 1281 | 30 | 3 | 3 | buffered | buffer create 1 B |
 | 6x2 | confidential in-proof | messages | 253 | 10191 | 10118 | 1184 | 29 | 2 | 3 | buffered | buffer create 19 B |
 | 6x2 | confidential in-proof | message bytes | 8583 | 10206 | 10133 | 1184 | 29 | 2 | 3 | buffered | buffer create 1 B |
@@ -2612,7 +2612,7 @@ Buffered maxima. Load max is full with data tails, every extension but the cache
 | 6x8 | anonymous public owners | reply | 906 | 10100 | 10237 | 1281 | 30 | 3 | 3 | buffered | SPP CPI 4 B |
 | 6x8 | anonymous public owners | messages | 166 | 10082 | 10218 | 1281 | 30 | 3 | 3 | buffered | SPP CPI 12 B |
 | 6x8 | anonymous public owners | message bytes | 5632 | 10104 | 10240 | 1281 | 30 | 3 | 3 | buffered | SPP CPI 1 B |
-| 8x2 | confidential signer | messages | 254 | 10193 | 10121 | 1347 | 32 | 3 | 3 | buffered | Sequence length would overflow length encoding scheme: u8 |
+| 8x2 | confidential signer | messages | 254 | 10193 | 10121 | 1347 | 32 | 3 | 3 | buffered | confidential signer Shape { n_inputs: 8, n_outputs: 2 }: application messages exceed what SPP takes beside the auditor message and the sender bundle |
 | 8x2 | confidential signer | message bytes | 8615 | 10206 | 10134 | 1347 | 32 | 3 | 3 | buffered | buffer create 1 B |
 | 8x2 | confidential in-proof | messages | 251 | 10187 | 10116 | 1250 | 31 | 2 | 3 | buffered | buffer create 15 B |
 | 8x2 | confidential in-proof | message bytes | 8519 | 10206 | 10135 | 1250 | 31 | 2 | 3 | buffered | buffer create 1 B |
