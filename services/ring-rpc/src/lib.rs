@@ -22,8 +22,6 @@ mod credential_write;
 mod credentials;
 #[path = "storage/database.rs"]
 mod database;
-#[path = "operations/enrollment_applier.rs"]
-mod enrollment_applier;
 mod error;
 #[path = "operations/escrow_merge.rs"]
 mod escrow_merge;
@@ -118,9 +116,10 @@ pub use credential_write::{
     CredentialWriteBatch, CredentialWriteInput, CredentialWritePlan, CredentialWriteRefusal,
     SaltedOwnerWrite, StateOpening, ADDRESS_TREE_HEIGHT, MAX_CREDENTIAL_WRITES,
 };
+#[cfg(feature = "test-fixtures")]
+pub use credentials::fixture as credential_fixture;
 pub use credentials::{CredentialLeaf, CredentialRefusal, HeldCredential};
 pub use database::{Store, STORE_CONNECTIONS};
-pub use enrollment_applier::{EnrollmentApplier, EnrollmentApplierParts};
 pub use error::{GrantRefusal, RingRpcError};
 pub use escrow_merge::RingSdkMergeBuilder;
 pub use hub::{Clock, Hub, HubBuilder, NotReady, ServiceIdentity};
@@ -148,9 +147,9 @@ pub use relay_reservations::RelayBudget;
 pub use relay_services::{RelayServices, RelayServicesInit};
 pub use relay_submit::CollectedSignature;
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
-pub use storage_chain::{LiveStorageChain, ProvedEnrollments, StorageChain};
+pub use storage_chain::{LiveStorageChain, StorageChain};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
     RingHistoryPage, TransactionPage, TransactionSource, Upstreams,
 };
-pub use utxos::{TrackingRoot, UTXO_BACKFILL_INTERVAL};
+pub use utxos::UTXO_BACKFILL_INTERVAL;

@@ -29,7 +29,8 @@ use spr_transaction::{OutputSlot, ShieldedTransaction};
 use thiserror::Error;
 use zolana_ring_client::{
     history::{HistoryPosition, PageEnd},
-    SealedNullifierKey,
+    rpc::WalletEnrollment,
+    SealedNullifierKey, UnknownCredential,
 };
 use zolana_ring_policy::{ring_id_field, Member};
 
@@ -88,6 +89,14 @@ pub struct CredentialLeaf {
     pub utxo_hash: [u8; 32],
     pub tree_id: u16,
     pub leaf_index: u64,
+}
+
+/// `Unknown` only while the scan has not reached its terminal page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerCredential {
+    Held(Box<HeldCredential>),
+    Absent,
+    Unknown,
 }
 
 /// Mutated only by a scan, the scan runs under the backfill lock.
@@ -282,6 +291,32 @@ impl HeldCredential {
     }
 }
 
+impl OwnerCredential {
+    /// Refuses an unknown owner, an unscanned credential never reads as absent.
+    pub fn known(self) -> Result<Option<HeldCredential>, CredentialRefusal> {
+        match self {
+            Self::Held(held) => Ok(Some(*held)),
+            Self::Absent => Ok(None),
+            Self::Unknown => Err(CredentialRefusal::Incomplete),
+        }
+    }
+
+    pub fn held(&self) -> Option<&HeldCredential> {
+        match self {
+            Self::Held(held) => Some(held),
+            Self::Absent | Self::Unknown => None,
+        }
+    }
+
+    pub fn enrollment(&self) -> WalletEnrollment {
+        match self {
+            Self::Held(_) => WalletEnrollment::Enrolled,
+            Self::Absent => WalletEnrollment::NotEnrolled,
+            Self::Unknown => WalletEnrollment::Unknown(UnknownCredential::PartialPage),
+        }
+    }
+}
+
 impl HeldCredentials {
     pub fn by_member(&self, member: &[u8; 32]) -> Option<&HeldCredential> {
         self.by_member.get(member)
@@ -427,17 +462,18 @@ fn checked_page(
     Ok(end)
 }
 
-#[cfg(test)]
-pub(crate) mod fixture {
+/// Finalized Enroll events for tests outside the crate.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixture {
     use spr_transaction::OutputContext;
     use zolana_ring_client::NullifierKeyEnvelope;
 
     use super::*;
 
-    pub(crate) const TREE_ID: u16 = 1;
+    pub const TREE_ID: u16 = 1;
 
     #[must_use]
-    pub(crate) struct Enrollment<'a> {
+    pub struct Enrollment<'a> {
         pub ring: Address,
         pub owner: Address,
         pub key: &'a NullifierKey,
@@ -449,7 +485,7 @@ pub(crate) mod fixture {
 
     impl Enrollment<'_> {
         /// The credential Enroll builds, sealed to `auditor`.
-        pub(crate) fn credential(&self) -> AuditCredential {
+        pub fn credential(&self) -> AuditCredential {
             let sealed = NullifierKeyEnvelope::new(self.key, &self.list_salt, self.auditor)
                 .expect("envelope")
                 .sealed;
@@ -467,7 +503,7 @@ pub(crate) mod fixture {
         }
 
         /// The confirmed event of the Enroll writing `credential`.
-        pub(crate) fn event_of(&self, credential: &AuditCredential) -> ShieldedTransaction {
+        pub fn event_of(&self, credential: &AuditCredential) -> ShieldedTransaction {
             let pda = CredentialPda::of(&self.ring).expect("credential pda");
             let output = pda.output(credential, TREE_ID).expect("output");
             ShieldedTransaction {
@@ -494,7 +530,7 @@ pub(crate) mod fixture {
         }
 
         /// What a scan of `event_of(credential)` holds.
-        pub(crate) fn held(&self, credential: AuditCredential) -> HeldCredential {
+        pub fn held(&self, credential: AuditCredential) -> HeldCredential {
             let event = self.event_of(&credential);
             let slot = &event.output_slots[0];
             let nullifier_pk = credential.nullifier_pk;

@@ -81,8 +81,6 @@ pub enum RingRpcError {
     MergeSettingsUnavailable,
     #[error("stored merge settings are signed at the same time or later")]
     StaleMergeSettings,
-    #[error("tracked nullifier key does not open to its enrolled key")]
-    TrackedKey,
     #[error(transparent)]
     Credential(#[from] CredentialRefusal),
     #[error(transparent)]
@@ -239,10 +237,6 @@ impl From<RingRpcError> for ErrorObjectOwned {
             }
             CoSign(inner) => return (*inner).into(),
             AuthorityTransfer(refusal) => return (*refusal).into(),
-            TrackedKey => {
-                error!("escrowed nullifier key does not open");
-                (ErrorCode::InternalError, "escrowed key is unusable")
-            }
             Credential(CredentialRefusal::Incomplete) => {
                 let message = failure.to_string();
                 return ErrorObjectOwned::owned(
