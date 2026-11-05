@@ -8,7 +8,7 @@ use solana_message::Message;
 use zolana_ring_policy::AssetLimits;
 
 use super::*;
-use crate::{cosign::ApproveClass, record_update::MAX_LIMIT_WINDOW_SLOTS};
+use crate::cosign::ApproveClass;
 
 const RING: Address = Address::new_from_array([9; 32]);
 const SOL: Address = Address::new_from_array([3; 32]);
@@ -302,17 +302,6 @@ async fn the_summed_halves_read_alike_on_postgres() {
     assert_ring_total_sums_exactly_to_u64_max(&window).await;
     window.clear().await;
     assert_measure_past_u64_reads_past_every_later_cap(&window).await;
-}
-
-#[tokio::test]
-async fn a_reservation_prunes_rows_past_the_longest_window() {
-    let window = Window::open("sqlite::memory:").await;
-    window.signed(1, vec![flow(7, SOL, 1)]).await;
-    window
-        .slot
-        .store(START_SLOT + MAX_LIMIT_WINDOW_SLOTS + 1, Ordering::Relaxed);
-    window.signed(2, vec![flow(8, SOL, 1)]).await;
-    assert_eq!(window.rows().await.len(), 1);
 }
 
 #[tokio::test]

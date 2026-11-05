@@ -12,10 +12,7 @@ use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, Value};
 use solana_address::Address;
 use solana_signature::Signature;
 
-use crate::{
-    cosign::{AssetFlow, OwnerFlow},
-    record_update::MAX_LIMIT_WINDOW_SLOTS,
-};
+use crate::cosign::{AssetFlow, OwnerFlow};
 
 /// One past every u64 cap, the order of a capped total against a cap stays the order of the true total.
 const MEASURE_CEILING: u128 = 1 << 64;
@@ -138,13 +135,10 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
         Ok(totals)
     }
 
-    /// Rows past the longest window a record writer accepts count toward no cap and leave.
     pub async fn reserve(&self, reserve: Reserve<'_>) -> Result<(), DbErr> {
         let sql = "INSERT INTO cosign_usage(signature,asset,ring,owner,slot,outflow_hi,outflow_lo,\
                    deposited_hi,deposited_lo,withdrawn_hi,withdrawn_lo,confirmed) \
                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
-        let prune = "DELETE FROM cosign_usage WHERE ring=$1 AND asset=$2 AND slot<$3";
-        let oldest = reserve.slot.checked_sub(MAX_LIMIT_WINDOW_SLOTS);
         for OwnerFlow { owner, flow } in reserve.flows {
             let mut values = vec![
                 signature_value(reserve.signature),
@@ -158,14 +152,6 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
             }
             values.push(Value::from(false));
             self.conn.execute(self.statement(sql, values)).await?;
-            if let Some(oldest) = oldest {
-                let values = vec![
-                    address_value(reserve.ring),
-                    address_value(&flow.asset),
-                    slot_value(oldest)?,
-                ];
-                self.conn.execute(self.statement(prune, values)).await?;
-            }
         }
         Ok(())
     }
