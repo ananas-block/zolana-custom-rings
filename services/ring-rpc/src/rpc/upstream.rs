@@ -54,14 +54,6 @@ use crate::{
 };
 
 pub trait TransactionSource: Send + Sync {
-    /// A buffer the co-signer reads against its signed digest, an absent one refuses.
-    fn account(
-        &self,
-        _address: Address,
-    ) -> impl Future<Output = Result<Option<Account>, ClientError>> + Send {
-        async { Ok(None) }
-    }
-
     /// The authorities of the registries a salted list reads.
     fn salted_list_writers(
         &self,
@@ -410,10 +402,6 @@ impl ChainSource {
 }
 
 impl TransactionSource for ChainSource {
-    async fn account(&self, address: Address) -> Result<Option<Account>, ClientError> {
-        self.rpc.get_account(address).await
-    }
-
     async fn tree_id(&self, tree: Address) -> Result<u16, RingError> {
         custom_ring_sdk::tree_id(&self.rpc, tree).await
     }

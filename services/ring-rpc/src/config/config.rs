@@ -115,7 +115,7 @@ pub struct ServeArgs {
         requires_all = ["store_url", "prover_url"]
     )]
     pub fee_payer_key_file: Option<PathBuf>,
-    /// Lamports reserved and spent over the store's life on enrollments, buffers and token accounts, zero refuses every charge.
+    /// Lamports reserved and spent over the store's life on enrollments and token accounts, zero refuses every charge.
     #[arg(
         long,
         env = "RING_RPC_RELAY_BUDGET_LAMPORTS",

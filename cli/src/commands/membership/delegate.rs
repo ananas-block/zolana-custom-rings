@@ -3,7 +3,7 @@
 use anyhow::{anyhow, ensure, Context as _, Result};
 use custom_ring_sdk::{
     CredentialEnrollment, DelegateMove, DelegatePayment, DelegateSource, DelegateSourceError,
-    ResolvedSource, WideFrames,
+    ResolvedSource,
 };
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc};
@@ -98,7 +98,6 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
                 })
                 .collect(),
             assets: assets.registry(),
-            wide_frames: WideFrames::Buffer,
             tx_viewing_key: spr_keypair::ViewingKey::new(),
         }
         .select(ctx.ring_client()),

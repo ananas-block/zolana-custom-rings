@@ -612,18 +612,14 @@ mod tests {
             .is_err());
     }
 
-    /// A retry of the signed request passes its own nonce, proves nothing and resumes the upload.
+    /// A stranger's request leaves no row, the delegate's binds one under its own key.
     #[tokio::test]
-    async fn a_wide_delegate_frame_reserves_under_the_delegate_and_a_retry_resumes() {
+    async fn a_delegate_frame_reserves_under_the_delegate_alone() {
         let delegate = Keypair::new_from_array([21; 32]);
         let prover = Arc::new(SealingProver::default());
-        *prover.frame.lock().expect("frame") = Some(crate::relay::wide_frame::wide_frame(
-            custom_ring_interface::tag::AUTHORITY_TRANSFER,
-        ));
         let chain = Arc::new(ScriptedChain::default());
         *chain.outcome.lock().expect("outcome") =
             Some(crate::landing::ChainOutcome::Confirmed { slot: 1 });
-        *chain.down.lock().expect("down") = true;
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let relay = RelayParts {
             store: store.clone(),
@@ -652,25 +648,18 @@ mod tests {
 
         let signed = request(&fixture, &delegate, address(&wallet, &escrowed));
         let relay_id = signed.relay_id().expect("relay id");
-        assert!(fixture
+        let step = fixture
             .hub
             .prepare_authority_transfer(&signed)
             .await
-            .is_err());
+            .expect("the delegate's request");
+        assert!(matches!(step, RelayStep::SignMessage { .. }), "{step:?}");
         let held = reservations
             .by_relay(&relay_id)
             .await
             .expect("read")
             .expect("reservation");
         assert_eq!(held.signer, delegate.pubkey());
-
-        *chain.down.lock().expect("down") = false;
-        let step = fixture
-            .hub
-            .prepare_authority_transfer(&signed)
-            .await
-            .expect("the retry");
-        assert!(matches!(step, RelayStep::SignMessage { .. }), "{step:?}");
         assert_eq!(prover.proven.lock().expect("proven").len(), 1);
     }
 

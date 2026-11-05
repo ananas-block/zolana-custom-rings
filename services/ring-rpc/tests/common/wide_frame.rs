@@ -1,4 +1,4 @@
-//! A frame past one transaction that the strict parser reads, the fit refuses any other.
+//! A frame past one transaction that the strict parser reads.
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{

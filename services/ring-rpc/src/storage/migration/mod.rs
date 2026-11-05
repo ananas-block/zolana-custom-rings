@@ -52,10 +52,8 @@ impl MigrationTrait for Schema {
             format!(
                 "CREATE TABLE relay_reservations (key {blob} NOT NULL PRIMARY KEY, relay_id {blob} NOT NULL, \
                  signer {blob} NOT NULL, lamports BIGINT NOT NULL, fee_allowance BIGINT NOT NULL, \
-                 closing_fees BIGINT NOT NULL, landing_rent BIGINT NOT NULL, ring {blob}, buffer {blob}, \
-                 uploaded BIGINT NOT NULL, spent BIGINT NOT NULL, proven TEXT, phase TEXT NOT NULL, \
-                 generation BIGINT NOT NULL, lease_until_slot BIGINT NOT NULL, touched_slot BIGINT NOT NULL, \
-                 pending_signature {blob}, pending_valid_height BIGINT, pending_fee BIGINT, pending_upload BIGINT)"
+                 landing_rent BIGINT NOT NULL, spent BIGINT NOT NULL, phase TEXT NOT NULL, \
+                 generation BIGINT NOT NULL, lease_until_slot BIGINT NOT NULL, touched_slot BIGINT NOT NULL)"
             ),
             format!(
                 "CREATE TABLE relay_reserved (scope {blob} NOT NULL PRIMARY KEY, committed BIGINT NOT NULL)"

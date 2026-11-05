@@ -771,205 +771,27 @@ async fn a_merge_relays_with_one_wallet_call() {
     );
 }
 
-/// The relay writes and pays, the one message a co-signer signs carries the digest alone.
+/// Past one transaction the frame refuses under its own code, nothing is sent or charged.
 #[tokio::test]
-async fn a_frame_past_one_transaction_relays_through_a_buffer_the_relay_writes() {
+async fn a_frame_past_one_transaction_is_refused_before_any_send_or_charge() {
     use custom_ring_interface::tag as ring_tag;
-    relays_through_a_buffer(ring_tag::TRANSFER).await;
-    relays_through_a_buffer(ring_tag::AUTHORITY_TRANSFER).await;
-}
-
-async fn relays_through_a_buffer(frame_tag: u8) {
-    use custom_ring_interface::{
-        frame_digest, settle_buffered_data, tag as ring_tag, WriteFrameIxData,
-    };
-    let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    let frame = wide_frame(frame_tag);
-    *fixture.prover.frame.lock().expect("frame") = Some(frame.clone());
-    let quote = fixture.quote(RelayOperation::Anonymous).await;
-    let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
-
-    let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
-
-    assert!(matches!(step, RelayStep::Submitted { .. }), "{step:?}");
-    let sent = fixture.sent();
-    let (settle, writes) = sent.split_last().expect("a settlement");
-    assert!(writes.len() >= 2);
-    let mut rebuilt = vec![0; frame.len()];
-    for write in writes {
-        assert_eq!(write.message.static_account_keys()[0], fixture.fee_payer);
-        assert!(
-            write.message.instructions()[0].data.len() < solana_message::v1::MAX_TRANSACTION_SIZE
-        );
-        let data = &write.message.instructions()[0].data;
-        assert_eq!(data[0], ring_tag::WRITE_FRAME);
-        let parsed = WriteFrameIxData::parse(&data[1..]).unwrap();
-        let start = usize::from(parsed.offset);
-        rebuilt[start..start + parsed.bytes.len()].copy_from_slice(parsed.bytes);
-    }
-    assert_eq!(rebuilt, frame);
-    assert_eq!(settle.message.static_account_keys()[0], fixture.fee_payer);
-    assert_eq!(
-        settle.message.instructions()[0].data,
-        settle_buffered_data(&frame_digest(&frame).unwrap())
-    );
-}
-
-/// Past the CPI limit no buffer can settle it, nothing is written and nothing is paid.
-#[tokio::test]
-async fn a_frame_past_the_cpi_limit_is_refused_before_any_write() {
-    use custom_ring_interface::{tag as ring_tag, MAX_FRAME_LEN};
-    let fixture = Fixture::new().await;
-    let mut frame = vec![9; MAX_FRAME_LEN + 1];
-    frame[0] = ring_tag::TRANSFER;
-    *fixture.prover.frame.lock().expect("frame") = Some(frame);
-    let quote = fixture.quote(RelayOperation::Anonymous).await;
-    let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
-    let serde_json::Value::Object(params) = serde_json::to_value(request).expect("json") else {
-        panic!("request is no object");
-    };
-    let refused = fixture
-        .module
-        .call::<_, RelayStep>(PREPARE_RELAY, params)
-        .await;
-    assert!(
-        matches!(&refused, Err(jsonrpsee::MethodsError::JsonRpc(_))),
-        "{refused:?}"
-    );
-    assert!(fixture.sent().is_empty());
-}
-
-const FRAME_BUDGET: u64 = 1_000_000;
-
-#[tokio::test]
-async fn a_frame_over_budget_is_refused_before_any_write_and_budget_off_by_default() {
-    for (fixture, refusal) in [
-        (Fixture::new().await, RelayError::BudgetUnset),
-        (
-            Fixture::with_budget(RENT_LAMPORTS).await,
-            RelayError::Budget,
-        ),
-    ] {
-        *fixture.prover.frame.lock().expect("frame") =
-            Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+    for frame_tag in [ring_tag::TRANSFER, ring_tag::AUTHORITY_TRANSFER] {
+        let fixture = Fixture::with_budget(FRAME_BUDGET).await;
+        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(frame_tag));
         let quote = fixture.quote(RelayOperation::Anonymous).await;
         let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
         let refused = fixture.prepare(&request).await;
-        assert!(refused_with(&refused, refusal), "{refused:?}");
+        let oversized = RelayError::Oversized {
+            reason: String::new(),
+        };
+        assert!(refused_with(&refused, oversized), "{refused:?}");
         assert!(fixture.sent().is_empty());
         assert_eq!(fixture.outstanding().await, 0);
+        assert_eq!(fixture.committed().await, 0);
     }
 }
 
-/// A failed write stops the upload, the retry proves nothing and resends no landed write.
-#[tokio::test]
-async fn a_retried_frame_resumes_its_upload_and_is_charged_once() {
-    let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") =
-        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
-    fixture.chain.refuse_at.store(1, Ordering::Relaxed);
-    let quote = fixture.quote(RelayOperation::Anonymous).await;
-    let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
-
-    assert!(fixture.prepare(&request).await.is_err());
-    let charged = fixture.outstanding().await;
-    assert!(charged > 0);
-    assert_eq!(fixture.sent().len(), 1);
-
-    let step = fixture.prepare(&request).await.expect("the retry");
-    assert!(matches!(step, RelayStep::Submitted { .. }), "{step:?}");
-    assert_eq!(fixture.prover.requests.lock().expect("requests").len(), 1);
-    assert_eq!(fixture.outstanding().await, charged);
-    let sent = fixture.sent();
-    let (_, writes) = sent.split_last().expect("a settlement");
-    let offsets: std::collections::BTreeSet<_> = writes
-        .iter()
-        .map(|write| write.message.instructions()[0].data.clone())
-        .collect();
-    assert_eq!(offsets.len(), writes.len(), "no write went out twice");
-
-    // The rent returned with the settlement, the landed fees stay, a refused send paid nothing.
-    let RelayStep::Submitted { relay_id } = step else {
-        unreachable!();
-    };
-    let _: RelayStatus = fixture
-        .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
-        .await;
-    let signatures = writes.len() as i64
-        + i64::from(
-            sent.last()
-                .expect("settlement")
-                .message
-                .header()
-                .num_required_signatures,
-        );
-    assert_eq!(fixture.outstanding().await, 0);
-    assert_eq!(fixture.committed().await, signatures * 5_000);
-}
-
-/// A restart reads the reservation from the store, past the window its buffer closes and its charge returns.
-#[tokio::test]
-async fn a_crash_between_reserve_and_upload_is_swept_after_a_restart() {
-    use custom_ring_interface::tag as ring_tag;
-    for buffer_landed in [false, true] {
-        let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-        *fixture.prover.frame.lock().expect("frame") =
-            Some(wide_frame(custom_ring_interface::tag::TRANSFER));
-        fixture
-            .chain
-            .refuse_at
-            .store(u64::from(buffer_landed), Ordering::Relaxed);
-        let quote = fixture.quote(RelayOperation::Anonymous).await;
-        let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
-        assert!(fixture.prepare(&request).await.is_err());
-        let charged = fixture.outstanding().await;
-        assert!(charged > 0);
-        if buffer_landed {
-            let keys = fixture.sent()[0].message.static_account_keys().to_vec();
-            fixture
-                .chain
-                .accounts
-                .lock()
-                .expect("accounts")
-                .extend(keys);
-        }
-        let sent_before = fixture.sent().len();
-
-        let restarted = Relay::new(RelayParts {
-            store: fixture.store.clone(),
-            prover: fixture.prover.clone(),
-            fee_payer: Keypair::new_from_array([31; 32]),
-            chain: fixture.chain.clone(),
-        })
-        .with_rings(Arc::new(OneRing(RING)));
-        restarted
-            .sweep_abandoned()
-            .await
-            .expect("inside the window");
-        assert_eq!(fixture.outstanding().await, charged);
-
-        fixture
-            .chain
-            .slot
-            .store(SLOT + ABANDONED_AFTER_SLOTS + 1, Ordering::Relaxed);
-        restarted.sweep_abandoned().await.expect("past the window");
-        assert_eq!(fixture.outstanding().await, 0);
-        // The rent returned, the landed write and the close stay, a refused send paid nothing.
-        let signatures = if buffer_landed { 2 } else { 0 };
-        assert_eq!(fixture.committed().await, signatures * 5_000);
-        let sent = fixture.sent();
-        match buffer_landed {
-            true => {
-                let close = sent.last().expect("the close");
-                assert_eq!(
-                    close.message.instructions()[0].data,
-                    [ring_tag::CLOSE_FRAME_BUFFER]
-                );
-            }
-            false => assert_eq!(sent.len(), sent_before, "no buffer to close"),
-        }
-    }
-}
+const FRAME_BUDGET: u64 = 1_000_000;
 
 /// Landed rent and fees never return, only the operator's budget ends a repeated enrollment.
 #[tokio::test]
@@ -1068,10 +890,8 @@ fn delegate_inputs(delegate: Address) -> RelayProofInputs {
 }
 
 #[tokio::test]
-async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() {
+async fn a_delegate_frame_relays_under_the_delegates_signature() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") =
-        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     let delegate = ring_delegate();
     let quote = fixture.quote(RelayOperation::Delegate).await;
     let request = delegate_request(quote, &delegate_inputs(delegate.pubkey()), &delegate);
@@ -1079,8 +899,8 @@ async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() 
     let step = fixture.prepare(&request).await.expect("the delegate relay");
 
     assert!(matches!(step, RelayStep::SignMessage { .. }), "{step:?}");
-    assert!(!fixture.sent().is_empty());
-    assert!(fixture.outstanding().await > 0);
+    assert!(fixture.sent().is_empty());
+    assert_eq!(fixture.outstanding().await, 0);
     let connection = fixture.store.connection();
     let signer: Vec<u8> = connection
         .query_one(Statement::from_string(
@@ -1098,8 +918,6 @@ async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() 
 #[tokio::test]
 async fn an_unsigned_or_foreign_delegate_request_consumes_nothing() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") =
-        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     let delegate = ring_delegate();
     let stranger = Keypair::new_from_array([52; 32]);
     let quote = fixture.quote(RelayOperation::Delegate).await;

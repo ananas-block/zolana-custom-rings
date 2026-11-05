@@ -1,23 +1,17 @@
 use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{
-    compute_unit_limit, tag, EnrollRequest, InstructionTag, FRAME_BUFFER_HEADER_LEN,
-};
-use custom_ring_sdk::{
-    close_frame_buffer, BufferedFrame, FitError, FitSigners, FitTransport, RingError, SealRow,
-    TransactionFit,
-};
+use custom_ring_interface::{compute_unit_limit, tag, EnrollRequest, InstructionTag};
+use custom_ring_sdk::{FitError, FitSigners, RingError, SealRow, TransactionFit};
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
 use sea_orm::{
     sqlx::error::{Error as SqlxError, ErrorKind},
     DatabaseConnection, DbErr, RuntimeErr, TransactionTrait,
 };
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
-use solana_instruction::{AccountMeta, Instruction};
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
@@ -26,8 +20,7 @@ use spl_token_2022_interface::{
     extension::{BaseStateWithExtensions, ExtensionType, StateWithExtensions},
     state::{Account, Mint},
 };
-use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
-use spr_indexer_api::{Base64String, SerializablePubkey};
+use spr_client::{compile_message, ComputeBudgetConfig};
 use spr_instruction::instruction::CreateAssociatedTokenAccount;
 use spr_interface::{state::MAX_FEE_PER_NULLIFIER, SPL_TOKEN_ACCOUNT_LEN, SPL_TOKEN_PROGRAM_ID};
 use thiserror::Error;
@@ -53,9 +46,8 @@ use crate::{
     merge_inputs::{HoldInputs, MergeInputs},
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     relay_reservations::{
-        Admission, Admit, AttemptEnd, BeginSend, Bind, Claim, ClaimCleanup, Fund, FundOutcome,
-        Lease, PendingSend, RelayBudget, RelayReservations, Release, Reservation, ReservedBuffer,
-        SendEnd, SendKind, SpendCheck,
+        Admission, Admit, AttemptEnd, Bind, Claim, ClaimCleanup, Fund, FundOutcome, Lease,
+        RelayBudget, RelayReservations, Release, Reservation, SpendCheck,
     },
     relay_submit::{presigned_transaction, CollectedSignature},
     relays::{
@@ -70,9 +62,8 @@ pub const RELAY_TRACK_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_CONCURRENT_PROOFS: usize = 4;
 const EXPIRED: &str = "the relay message expired before it landed";
 
-const LANDING_POLL: Duration = Duration::from_millis(500);
 const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge";
-/// One blockhash lifetime for the last write to land and one for the wallet to sign.
+/// One quote window and one blockhash lifetime for the wallet to sign.
 pub const ABANDONED_AFTER_SLOTS: u64 = 2 * QUOTE_SLOTS;
 const SWEEP_PAGE: u64 = 16;
 const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
@@ -129,9 +120,7 @@ pub enum RelayError {
     LiveAttempt,
     #[error("the request does not carry the depositor's signature")]
     DepositorSignature,
-    #[error(
-        "the relay budget is unset, the operator funds no enrollment, buffer or token account"
-    )]
+    #[error("the relay budget is unset, the operator funds no enrollment or token account")]
     BudgetUnset,
     /// One code per row, a client reads the row from the code alone.
     #[error("the sealed auditor stream does not open under the key the records select, seal under the {row:?} row and sign again")]
@@ -142,6 +131,8 @@ pub enum RelayError {
     RegisterKeyProof,
     #[error("the chain simulation refuses the enrollment before any signature because {reason}")]
     EnrollmentRefused { reason: String },
+    #[error("the message does not fit one v1 transaction because {reason}")]
+    Oversized { reason: String },
 }
 
 pub enum RelayPayload {
@@ -277,6 +268,7 @@ impl RelayError {
             Self::AlreadyEnrolled => -32213,
             Self::RegisterKeyProof => -32214,
             Self::EnrollmentRefused { .. } => -32215,
+            Self::Oversized { .. } => -32216,
         }
     }
 
@@ -286,6 +278,12 @@ impl RelayError {
             RingError::Client(error) => RingRpcError::Upstream(error),
             RingError::Indexer(refused) => RingRpcError::Refused(refused),
             RingError::ResealRequired { row } => Self::Reseal { row }.into(),
+            oversized @ (RingError::TransferTooWide { .. }
+            | RingError::TransactionTooLarge { .. }
+            | RingError::TooManyAddresses { .. }) => Self::Oversized {
+                reason: oversized.to_string(),
+            }
+            .into(),
             refused => Self::Proof(refused.to_string()).into(),
         }
     }
@@ -322,7 +320,7 @@ impl Relay {
         }
     }
 
-    /// Without it the relay funds no enrollment and no buffer.
+    /// Without it the relay funds no enrollment and no token account.
     #[must_use = "use the updated relay"]
     pub const fn with_budget(mut self, budget: RelayBudget) -> Self {
         self.budget = budget;
@@ -415,21 +413,16 @@ impl Relay {
             None => None,
         };
         let lease = claim.as_ref().map(|claim| claim.lease);
-        // 2. The row's proof wins over a new one, the buffer it names holds that frame's bytes.
         let staged = async {
-            let stored = claim
-                .as_ref()
-                .and_then(|claim| claim.held.proven.as_deref());
-            let proven = match (&payload, stored) {
-                (_, Some(stored)) => StoredProof::read(stored)?,
+            let proven = match &payload {
                 // The wallet proved its seal, the relay only pays.
-                (RelayPayload::Enroll(enrollment), None) => {
+                RelayPayload::Enroll(enrollment) => {
                     self.prover.check_enrollment(enrollment).await?;
                     let proven = enrollment_step(enrollment, parties.fee_payer)?;
                     self.preflight(&proven).await?;
                     proven
                 }
-                (_, None) => {
+                _ => {
                     let _proof = self
                         .proofs
                         .try_acquire()
@@ -477,19 +470,9 @@ impl Relay {
                 })
                 .await?;
             match admission {
-                // 1. A claimed row may carry a send of an earlier holder. It reconciles first, the cursor
-                // then counts every write the chain took, and a send that can still land refuses here.
-                Admission::Claimed(claim) => {
-                    let lease = claim.lease;
-                    let reconciled = self.reconcile(*claim).await;
-                    return self
-                        .under_lease(Some(lease), async {
-                            reconciled?.ok_or(RingRpcError::RelayProverBusy)
-                        })
-                        .await;
-                }
+                Admission::Claimed(claim) => return Ok(*claim),
                 Admission::Busy => return Err(RingRpcError::RelayProverBusy),
-                // 2. A row bound to another relay holds a message that may land. A retry under a fresh
+                // A row bound to another relay holds a message that may land. A retry under a fresh
                 // quote would build a second message over one charge, so the row stays and the retry
                 // refuses until settlement or proven expiry frees the key. A freed key takes the second
                 // round of the loop, the old attempt's costs are settled by then.
@@ -528,56 +511,6 @@ impl Relay {
             }
         }
         result
-    }
-
-    /// `None` while the chain can still take the pending send. Past that the row holds no unknown. A
-    /// landed write raised the cursor, a landed failure kept its fee, and an expired send returned its
-    /// fee. Only the block height proves expiry, and a stale holder sending the persisted transaction
-    /// late cannot land it past that height.
-    async fn reconcile(&self, claim: Claim) -> Result<Option<Claim>, RingRpcError> {
-        let Claim { lease, held } = claim;
-        let Some(PendingSend {
-            signature,
-            last_valid_block_height,
-        }) = held.pending
-        else {
-            return Ok(Some(Claim { lease, held }));
-        };
-        let attempt = Attempt {
-            signature,
-            last_valid_block_height,
-        };
-        let end = match attempt.landing(self.chain.as_ref()).await? {
-            Landing::Pending => return Ok(None),
-            Landing::Landed(ChainOutcome::Confirmed { .. }) => SendEnd::Landed,
-            Landing::Landed(ChainOutcome::Failed { .. }) => SendEnd::Paid,
-            Landing::Expired => SendEnd::Unsent,
-        };
-        self.conclude(&lease, &signature, end).await?;
-        let held = self
-            .reservations()
-            .get(&lease.key)
-            .await?
-            .ok_or(RingRpcError::RelayProverBusy)?;
-        Ok(Some(Claim { lease, held }))
-    }
-
-    async fn conclude(
-        &self,
-        lease: &Lease,
-        signature: &Signature,
-        end: SendEnd,
-    ) -> Result<(), RingRpcError> {
-        let slot = self.chain.slot().await?;
-        match self
-            .reservations()
-            .conclude_send(lease, signature, end, slot)
-            .await?
-        {
-            true => Ok(()),
-            // The newer holder reconciles the same signature.
-            false => Err(RingRpcError::RelayProverBusy),
-        }
     }
 
     /// A held reservation resumes the same request, its nonce already passed.
@@ -654,19 +587,15 @@ impl Relay {
                         .map(|input| (input.input_class(), &input.nullifier)),
                 )?;
                 let payload = RelayPayload::Transfer(sealed);
-                let proven = match claim.held.proven.as_deref() {
-                    Some(stored) => StoredProof::read(stored)?,
-                    None => {
-                        self.prover
-                            .prove(RelayProofRequest {
-                                ring,
-                                parties: parties.clone(),
-                                payload: &payload,
-                                owner_signature: None,
-                            })
-                            .await?
-                    }
-                };
+                let proven = self
+                    .prover
+                    .prove(RelayProofRequest {
+                        ring,
+                        parties: parties.clone(),
+                        payload: &payload,
+                        owner_signature: None,
+                    })
+                    .await?;
                 (payload, proven)
             };
             self.stage(ProvenStep {
@@ -692,9 +621,8 @@ impl Relay {
             parties,
             lease,
         } = proven;
-        let mut proven = proven;
-        // 1. Every lamport the message and its upload can cost is held before the first send. The rent
-        // of a missing setup account and an enrollment's forester fee stay charged once it lands.
+        // 1. Every lamport the message can cost is held before the send. The rent of a missing setup
+        // account and an enrollment's forester fee stay charged once it lands.
         let MissingSetup {
             mut instructions,
             rent: setup_rent,
@@ -703,14 +631,14 @@ impl Relay {
             Some(cost) => Some(setup_rent.saturating_add(cost)),
             None => (setup_rent > 0).then_some(setup_rent),
         };
-        self.reserve_and_upload(RelaySpend {
-            proven: &mut proven,
+        self.reserve(RelaySpend {
+            proven: &proven,
             lease,
             setup: &instructions,
             landing_rent,
         })
         .await?;
-        // 2. The final message reads the settlement, the writes above hold what it digests.
+        // 2. The message compiles under a fresh blockhash, its fit was checked with the same setup.
         let fee_payer = self.fee_payer();
         let LatestBlockhash {
             blockhash,
@@ -746,7 +674,7 @@ impl Relay {
             Ok(AttemptWrite::Existing | AttemptWrite::Refused(_)) => Some(UnstoredWrite::Existing),
             Err(error) => Some(UnstoredWrite::Failed(error)),
         };
-        // A kept reservation resumes on a retry, the sweep closes its buffer otherwise.
+        // A kept reservation resumes on a retry, the sweep releases it otherwise.
         if let Some(write) = write {
             let read = self.relays().get(&relay_id).await;
             self.free_unless_stored(FailedWrite {
@@ -834,94 +762,35 @@ impl Relay {
         Ok(staged)
     }
 
-    /// A frame past one transaction settles from a buffer the relay writes and pays for. The fit reads
-    /// the final message with its setup, a transport that only setup breaks refuses here, ahead of any
-    /// charge or write.
-    fn wide_frame(
-        &self,
-        proven: &ProvenRelay,
-        setup: &[Instruction],
-    ) -> Result<Option<BufferedFrame>, RingRpcError> {
-        let writer = self.fee_payer();
-        let fit = TransactionFit::of(
-            &proven.instruction,
-            FitSigners::new(writer).with_setup(setup),
-            proven.budget,
-        )
-        .map_err(refused_fit)?;
-        match fit.transport {
-            FitTransport::Inline => Ok(None),
-            FitTransport::Buffered => BufferedFrame::for_writer(&proven.instruction, writer)
-                .map(Some)
-                .map_err(refused_fit),
-        }
-    }
-
-    /// Nothing is paid before its reservation commits.
-    async fn reserve_and_upload(&self, spend: RelaySpend<'_>) -> Result<(), RingRpcError> {
+    /// Nothing is paid before its reservation commits. The fit reads the final message with its setup,
+    /// a message past one transaction refuses here ahead of any charge.
+    async fn reserve(&self, spend: RelaySpend<'_>) -> Result<(), RingRpcError> {
         let RelaySpend {
             proven,
             lease,
             setup,
             landing_rent,
         } = spend;
-        // 1. The transport is decided, a frame the relay cannot carry costs nothing.
-        let Some(frame) = self.wide_frame(proven, setup)? else {
-            if let Some(landing_rent) = landing_rent {
-                let fee = message_fee_of(&proven.instruction, self.fee_payer());
-                self.fund(Fund {
-                    lease: lease.ok_or(RelayError::OwnerSignature)?,
-                    lamports: landing_rent.saturating_add(fee),
-                    fee_allowance: fee,
-                    closing_fees: fee,
-                    landing_rent,
-                    buffer: None,
-                    proven: None,
-                    budget: self.budget,
-                })
-                .await?;
-            }
+        let fee_payer = self.fee_payer();
+        TransactionFit::of(
+            &proven.instruction,
+            FitSigners::new(fee_payer).with_setup(setup),
+            proven.budget,
+        )
+        .map(drop)
+        .map_err(refused_fit)?;
+        let Some(landing_rent) = landing_rent else {
             return Ok(());
         };
-        let lease = lease.ok_or(RelayError::OwnerSignature)?;
-        let writes = frame.writes().map_err(RelayError::proof)?;
-        // 2. The row funds under the lease, the stored proof and buffer identity commit with the charge. A
-        // crash from here on leaves a row that names the buffer to close.
-        let cost = self.frame_cost(proven, &frame, writes.len()).await?;
-        let landing_rent = landing_rent.unwrap_or(0);
-        let held = self
-            .fund(Fund {
-                lease,
-                lamports: cost.lamports.saturating_add(landing_rent),
-                fee_allowance: cost.fee_allowance,
-                closing_fees: cost.closing_fees,
-                landing_rent,
-                buffer: Some(ReservedBuffer {
-                    ring: proven.instruction.program_id,
-                    buffer: frame.buffer(),
-                }),
-                proven: Some(StoredProof::of(proven)?),
-                budget: self.budget,
-            })
-            .await?;
-        // 3. Writes run past the cursor the row holds, reconciliation already advanced it over every write
-        // the chain took. No landed write goes out twice.
-        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::WriteFrame));
-        for (index, write) in writes.into_iter().enumerate().skip(held.uploaded) {
-            self.land(TrackedSend {
-                lease,
-                instruction: write,
-                budget,
-                kind: SendKind::Write {
-                    uploaded: index + 1,
-                },
-            })
-            .await?;
-        }
-        // 4. The settlement replaces the frame, the writes hold what it reads.
-        proven.instruction = frame.settle();
-        proven.budget =
-            ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::SettleBuffered));
+        let fee = message_fee_of(&proven.instruction, fee_payer);
+        self.fund(Fund {
+            lease: lease.ok_or(RelayError::OwnerSignature)?,
+            lamports: landing_rent.saturating_add(fee),
+            fee_allowance: fee,
+            landing_rent,
+            budget: self.budget,
+        })
+        .await?;
         Ok(())
     }
 
@@ -969,102 +838,9 @@ impl Relay {
         Ok(MissingSetup { instructions, rent })
     }
 
-    /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
-    /// The allowance is exact, a retry costs only when the chain took and failed a send, and a send past
-    /// the allowance refuses instead of spending the rent the row must return.
-    async fn frame_cost(
-        &self,
-        proven: &ProvenRelay,
-        frame: &BufferedFrame,
-        writes: usize,
-    ) -> Result<FrameCost, RingRpcError> {
-        let rent = self
-            .chain
-            .rent_exempt_lamports(FRAME_BUFFER_HEADER_LEN + proven.instruction.data.len())
-            .await?;
-        let closing_fees = closing_fees(frame, self.fee_payer());
-        let fee_allowance = signature_fees(writes).saturating_add(closing_fees);
-        Ok(FrameCost {
-            lamports: rent.saturating_add(fee_allowance),
-            fee_allowance,
-            closing_fees,
-        })
-    }
-
-    /// One transaction the relay alone signs, carried to its finalized outcome.
-    async fn land(&self, send: TrackedSend) -> Result<(), RingRpcError> {
-        let TrackedSend {
-            lease,
-            instruction,
-            budget,
-            kind,
-        } = send;
-        // 1. The transaction is signed first, its signature and height are what a restart reconciles.
-        let LatestBlockhash {
-            blockhash,
-            last_valid_block_height,
-        } = self.chain.latest_blockhash().await?;
-        let message = compile_message(&self.fee_payer(), &[instruction], blockhash, budget)?;
-        let fee = message_fee(&message);
-        let transaction = sign_transaction(message, &[&self.fee_payer])?;
-        let signature = transaction.signatures[0];
-        // 2. The row takes both and the fee in one statement. Past the allowance or past the lease nothing
-        // has left, and a crash from here on leaves the row reading a send that may be on the wire.
-        let begun = self
-            .reservations()
-            .begin_send(BeginSend {
-                lease,
-                pending: PendingSend {
-                    signature,
-                    last_valid_block_height,
-                },
-                fee,
-                kind,
-                slot: self.chain.slot().await?,
-            })
-            .await?;
-        match begun {
-            SpendCheck::Accepted => {}
-            SpendCheck::OverAllowance => return Err(RelayError::Allowance.into()),
-            SpendCheck::LeaseLost => return Err(RingRpcError::RelayProverBusy),
-        }
-        // 3. A preflight refusal forwards nothing and no other send carries the signature, the fee returns.
-        // Any other failure leaves the outcome unknown, the next holder reconciles the pending send.
-        if let Err(error) = self.chain.send(&transaction).await {
-            if matches!(error, RingRpcError::Relay(RelayError::SendRefused { .. })) {
-                self.conclude(&lease, &signature, SendEnd::Unsent).await?;
-            }
-            return Err(error);
-        }
-        // 4. Only a finalized outcome or a passed height ends the send.
-        let attempt = Attempt {
-            signature,
-            last_valid_block_height,
-        };
-        loop {
-            match attempt.landing(self.chain.as_ref()).await? {
-                Landing::Pending => tokio::time::sleep(LANDING_POLL).await,
-                Landing::Landed(ChainOutcome::Confirmed { .. }) => {
-                    return self.conclude(&lease, &signature, SendEnd::Landed).await;
-                }
-                Landing::Landed(ChainOutcome::Failed { reason }) => {
-                    self.conclude(&lease, &signature, SendEnd::Paid).await?;
-                    return Err(RelayError::SendRefused { reason }.into());
-                }
-                Landing::Expired => {
-                    self.conclude(&lease, &signature, SendEnd::Unsent).await?;
-                    return Err(RelayError::SendRefused {
-                        reason: EXPIRED.to_owned(),
-                    }
-                    .into());
-                }
-            }
-        }
-    }
-
     /// Ends a row whose attempt can no longer land, or an open row nobody resumed. The claim excludes
-    /// uploads and retries, a selection a retry overtook loses here and changes nothing, and so does a
-    /// claim another closer holds. A failure leaves the row closing for the next sweep.
+    /// retries, a selection a retry overtook loses here and changes nothing, and so does a claim
+    /// another closer holds. A failure leaves the row closing for the next sweep.
     async fn release(&self, held: &Reservation) -> Result<(), RingRpcError> {
         let slot = self.chain.slot().await?;
         let Some(claim) = self
@@ -1078,45 +854,22 @@ impl Relay {
         else {
             return Ok(());
         };
-        let lease = claim.lease;
-        self.under_lease(Some(lease), self.close_claimed(claim))
-            .await
-    }
-
-    async fn close_claimed(&self, claim: Claim) -> Result<(), RingRpcError> {
-        let lease = claim.lease;
-        // 1. A send that can still land keeps the row. Closing or refunding around it would forget a
-        // transaction able to create the funded buffer again.
-        let Some(Claim { held, .. }) = self.reconcile(claim).await? else {
-            return Ok(self.reservations().yield_lease(&lease).await?);
-        };
-        // 2. With no send left the buffer read is final. The rent returns before the charge does, a refused
-        // close stays for the next sweep.
-        if let Some(ReservedBuffer { ring, buffer }) = held.buffer {
-            if self.chain.account_data(buffer).await?.is_some() {
-                self.land(TrackedSend {
-                    lease,
-                    instruction: close_frame_buffer(ring, self.fee_payer(), buffer),
-                    budget: ComputeBudgetConfig::new(compute_unit_limit(
-                        InstructionTag::CloseFrameBuffer,
-                    )),
-                    kind: SendKind::Close,
+        let Claim { lease, held } = claim;
+        // The charge returns, every fee the chain took stays in the total.
+        let released = async {
+            Ok(self
+                .reservations()
+                .release(Release {
+                    key: &lease.key,
+                    relay_id: &held.relay_id,
+                    end: AttemptEnd::Unlanded,
                 })
-                .await?;
-            }
-        }
-        // 3. The charge returns, every fee the chain took stays in the total.
-        Ok(self
-            .reservations()
-            .release(Release {
-                key: &lease.key,
-                relay_id: &held.relay_id,
-                end: AttemptEnd::Unlanded,
-            })
-            .await?)
+                .await?)
+        };
+        self.under_lease(Some(lease), released).await
     }
 
-    /// The settlement closed the buffer into the writer, only its fee and setup rent stay spent.
+    /// Only the message fee and the landing rent stay spent.
     async fn release_landed(
         &self,
         held: &Reservation,
@@ -1156,7 +909,7 @@ impl Relay {
             None => None,
             Some(row) => Some(self.advance(&held.relay_id, row).await?.record),
         };
-        // 2. Closing a buffer waits on finality, and the cleanup claim already excludes another closer.
+        // 2. A release waits on a final state, and the cleanup claim already excludes another closer.
         match record {
             Some(RelayRecord {
                 state: RelayState::Confirmed { .. },
@@ -1324,7 +1077,7 @@ impl Relay {
         Ok(relay_status(&row.record.state))
     }
 
-    /// Closing a buffer waits on finality. A failed close stays for the next sweep.
+    /// A failed release stays for the next sweep.
     async fn release_failed(
         &self,
         relay_id: &RelayId,
@@ -1333,7 +1086,7 @@ impl Relay {
         if matches!(state, RelayState::Failed { .. }) {
             if let Some(held) = self.reservations().by_relay(relay_id).await? {
                 if let Err(error) = self.release(&held).await {
-                    warn!("relay buffer did not close {}", redacted(&error));
+                    warn!("relay reservation did not release {}", redacted(&error));
                 }
             }
         }
@@ -1665,10 +1418,10 @@ struct ProvenStep {
 }
 
 struct RelaySpend<'a> {
-    proven: &'a mut ProvenRelay,
+    proven: &'a ProvenRelay,
     lease: Option<Lease>,
     setup: &'a [Instruction],
-    /// `None` holds nothing for an inline message, `Some(0)` still holds its fee.
+    /// `None` holds nothing, `Some(0)` still holds its fee.
     landing_rent: Option<u64>,
 }
 
@@ -1689,19 +1442,6 @@ enum AttemptWrite {
 struct MissingSetup {
     instructions: Vec<Instruction>,
     rent: u64,
-}
-
-struct TrackedSend {
-    lease: Lease,
-    instruction: Instruction,
-    budget: ComputeBudgetConfig,
-    kind: SendKind,
-}
-
-struct FrameCost {
-    lamports: u64,
-    fee_allowance: u64,
-    closing_fees: u64,
 }
 
 struct CoSignStep<'a> {
@@ -2032,12 +1772,6 @@ fn message_fee_of(instruction: &Instruction, fee_payer: Address) -> u64 {
     signature_fees(signers.len())
 }
 
-/// A settlement that lands and fails still leaves the close paid for.
-fn closing_fees(frame: &BufferedFrame, fee_payer: Address) -> u64 {
-    message_fee_of(&frame.settle(), fee_payer)
-        .saturating_add(message_fee_of(&frame.close(), fee_payer))
-}
-
 /// The size the associated token program allocates for a mint, its required extensions included.
 fn token_2022_account_len(mint: &[u8]) -> Result<usize, RingRpcError> {
     let mint =
@@ -2071,62 +1805,6 @@ fn delegate_key(relay_id: &RelayId) -> [u8; 32] {
         .chain_update(relay_id.0 .0)
         .finalize()
         .into()
-}
-
-/// A proven frame kept with its reservation, public once it lands.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StoredProof {
-    program: SerializablePubkey,
-    accounts: Vec<(SerializablePubkey, bool, bool)>,
-    data: Base64String,
-    co_signers: Vec<SerializablePubkey>,
-    signers: Vec<SerializablePubkey>,
-}
-
-impl StoredProof {
-    fn of(proven: &ProvenRelay) -> Result<String, RingRpcError> {
-        serde_json::to_string(&Self {
-            program: proven.instruction.program_id.into(),
-            accounts: proven
-                .instruction
-                .accounts
-                .iter()
-                .map(|meta| (meta.pubkey.into(), meta.is_signer, meta.is_writable))
-                .collect(),
-            data: proven.instruction.data.clone().into(),
-            co_signers: proven.co_signers.iter().copied().map(Into::into).collect(),
-            signers: proven.signers.iter().copied().map(Into::into).collect(),
-        })
-        .map_err(|_| RingRpcError::StateUnavailable)
-    }
-
-    fn read(stored: &str) -> Result<ProvenRelay, RingRpcError> {
-        let Self {
-            program,
-            accounts,
-            data,
-            co_signers,
-            signers,
-        } = serde_json::from_str(stored).map_err(|_| RingRpcError::StateUnavailable)?;
-        Ok(ProvenRelay {
-            instruction: Instruction {
-                program_id: program.0,
-                accounts: accounts
-                    .into_iter()
-                    .map(|(pubkey, is_signer, is_writable)| AccountMeta {
-                        pubkey: pubkey.0,
-                        is_signer,
-                        is_writable,
-                    })
-                    .collect(),
-                data: data.0,
-            },
-            budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
-            co_signers: co_signers.into_iter().map(|signer| signer.0).collect(),
-            signers: signers.into_iter().map(|signer| signer.0).collect(),
-        })
-    }
 }
 
 /// The relay pays only a ring `Enroll` whose exact request parses, never one the payer owns.
@@ -2220,11 +1898,9 @@ fn relay_status(state: &RelayState) -> RelayStatus {
 }
 
 #[cfg(test)]
-#[path = "../../tests/common/wide_frame.rs"]
-pub(crate) mod wide_frame;
-
-#[cfg(test)]
 mod tests {
+    use solana_instruction::AccountMeta;
+
     use super::*;
 
     #[test]
@@ -2272,10 +1948,10 @@ mod tests {
 
     /// The payer heads SPP's list and a co-owner can repeat, each still signs once.
     #[test]
-    fn the_closing_fees_match_the_compiled_settlement_and_close() {
+    fn the_message_fee_matches_the_compiled_message() {
         let fee_payer = Address::new_from_array([1; 32]);
         let owner = Address::new_from_array([2; 32]);
-        let inline = Instruction {
+        let instruction = Instruction {
             program_id: Address::new_from_array([3; 32]),
             accounts: vec![
                 AccountMeta::new(fee_payer, true),
@@ -2283,23 +1959,36 @@ mod tests {
                 AccountMeta::new_readonly(owner, true),
                 AccountMeta::new_readonly(Address::new_from_array([4; 32]), false),
             ],
-            data: wide_frame::wide_frame(custom_ring_interface::tag::TRANSFER),
+            data: vec![custom_ring_interface::tag::TRANSFER],
         };
-        let frame = BufferedFrame::for_writer(&inline, fee_payer).expect("frame");
-        let compiled = |instruction: Instruction| {
-            let budget = ComputeBudgetConfig::new(200_000);
-            compile_message(&fee_payer, &[instruction], Default::default(), budget)
-                .map(|message| message_fee(&message))
-                .expect("compiled")
-        };
+        let budget = ComputeBudgetConfig::new(200_000);
+        let compiled = compile_message(
+            &fee_payer,
+            core::slice::from_ref(&instruction),
+            Default::default(),
+            budget,
+        )
+        .expect("compiled");
 
         assert_eq!(
-            message_fee_of(&frame.settle(), fee_payer),
+            message_fee_of(&instruction, fee_payer),
             2 * LAMPORTS_PER_SIGNATURE
         );
         assert_eq!(
-            closing_fees(&frame, fee_payer),
-            compiled(frame.settle()) + compiled(frame.close())
+            message_fee_of(&instruction, fee_payer),
+            message_fee(&compiled)
         );
+    }
+
+    #[test]
+    fn an_oversized_frame_refuses_under_its_own_code() {
+        let oversized = RelayError::proof(RingError::TransactionTooLarge {
+            bytes: 4_097,
+            limit: 4_096,
+        });
+        let RingRpcError::Relay(refused) = oversized else {
+            panic!("a relay refusal");
+        };
+        assert_eq!(ErrorObjectOwned::from(&refused).code(), -32216);
     }
 }

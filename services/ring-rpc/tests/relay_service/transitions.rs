@@ -2,7 +2,6 @@
 
 use std::{sync::Mutex, time::Duration};
 
-use custom_ring_interface::tag::{CLOSE_FRAME_BUFFER, TRANSFER};
 use tokio::sync::Notify;
 use zolana_ring_client::rpc::RelayId;
 use zolana_ring_rpc::{
@@ -308,64 +307,6 @@ async fn a_stale_worker_does_not_overwrite_a_settled_relay() {
         co_signer.settled(),
         [CoSignSettlement::Confirmed(co_signature)]
     );
-}
-
-/// A stale expiry leaves the buffer and the charge of a settlement that can still land.
-#[tokio::test]
-async fn a_stale_worker_does_not_close_a_live_buffered_settlement() {
-    let fixture = Fixture::new().await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(TRANSFER));
-    let stale_chain = Arc::new(WorkerChain {
-        height: Some(LAST_VALID_BLOCK_HEIGHT + 1),
-        ..WorkerChain::of(&fixture)
-    });
-    let live = Worker {
-        chain: Arc::new(WorkerChain::of(&fixture)),
-        co_signer: None,
-        budget: FRAME_BUDGET,
-    }
-    .start(&fixture);
-    let stale = Worker {
-        chain: stale_chain.clone(),
-        co_signer: None,
-        budget: FRAME_BUDGET,
-    }
-    .start(&fixture);
-    let submit = signed_deposit(&fixture, &live).await;
-    let relay_id = submit.relay_id.clone();
-    let buffer_keys = fixture.sent()[0].message.static_account_keys().to_vec();
-    fixture
-        .chain
-        .accounts
-        .lock()
-        .expect("accounts")
-        .extend(buffer_keys);
-    let charged = fixture.outstanding().await;
-    assert!(charged > 0);
-    stale_chain.height_gate.arm();
-    let parked = tokio::spawn({
-        let relay_id = relay_id.clone();
-        async move { status(&stale, &relay_id).await }
-    });
-    stale_chain.height_gate.parked().await;
-
-    // The settlement goes out and stays pending under a live blockhash.
-    *fixture.chain.outcome.lock().expect("outcome") = Some(None);
-    let sent = live.submit(&submit).await.expect("the submission");
-    stale_chain.height_gate.release();
-    let overtaken = parked.await.expect("joined");
-
-    assert!(matches!(sent, RelayStatus::Sent { .. }), "{sent:?}");
-    assert_eq!(overtaken, sent);
-    assert_eq!(fixture.outstanding().await, charged);
-    assert!(fixture
-        .sent()
-        .iter()
-        .all(|sent| sent.message.instructions()[0].data != [CLOSE_FRAME_BUFFER]));
-    *fixture.chain.outcome.lock().expect("outcome") = None;
-    let settlement = fixture.sent().last().expect("the settlement").clone();
-    assert_eq!(status(&live, &relay_id).await, confirmed(&settlement));
-    assert_eq!(fixture.outstanding().await, 0);
 }
 
 /// The attempt is stored before its send, a new process resends the same transaction.

@@ -119,8 +119,6 @@ pub struct RecordingChain {
     pub refuse_next: AtomicBool,
     /// Answers every outcome lookup, `None` reads as a sent transaction landing.
     pub outcome: Mutex<Option<Option<ChainOutcome>>>,
-    /// The send at the held count of landed transactions is refused.
-    pub refuse_at: AtomicU64,
     pub slot: AtomicU64,
     pub accounts: Mutex<Vec<Address>>,
     pub simulation_refusal: Mutex<Option<String>>,
@@ -134,7 +132,6 @@ impl Default for RecordingChain {
             reply_lost: AtomicBool::new(false),
             refuse_next: AtomicBool::new(false),
             outcome: Mutex::new(None),
-            refuse_at: AtomicU64::new(u64::MAX),
             slot: AtomicU64::new(SLOT),
             accounts: Mutex::default(),
             simulation_refusal: Mutex::default(),
@@ -188,13 +185,7 @@ impl ChainSubmit for RecordingChain {
     }
 
     async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
-        let landed = self.sent.lock().expect("sent").len() as u64;
-        if self.refuse_next.swap(false, Ordering::Relaxed)
-            || self
-                .refuse_at
-                .compare_exchange(landed, u64::MAX, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-        {
+        if self.refuse_next.swap(false, Ordering::Relaxed) {
             return Err(RelayError::SendRefused {
                 reason: "preflight refused".to_owned(),
             }

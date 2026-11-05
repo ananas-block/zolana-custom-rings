@@ -1,14 +1,13 @@
-//! One durable row per relay attempt, its budget charge, its upload lease and the send a restart must reconcile.
+//! One durable row per relay attempt, its budget charge and its lease.
 
 use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, TransactionTrait, Value};
 use solana_address::Address;
-use solana_signature::Signature;
 use zolana_ring_client::rpc::RelayId;
 
 const TOTAL_SCOPE: [u8; 32] = [0; 32];
 
 /// One blockhash lifetime of silence hands the attempt on. Expiry decides liveness alone. The generation
-/// fence and the persisted send keep a holder that overruns from spending, however long it stalls.
+/// fence keeps a holder that overruns from spending, however long it stalls.
 const LEASE_SLOTS: u64 = 150;
 
 const PHASE_OPEN: &str = "open";
@@ -31,13 +30,6 @@ impl RelayBudget {
     }
 }
 
-/// The account whose rent returns on release.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReservedBuffer {
-    pub ring: Address,
-    pub buffer: Address,
-}
-
 /// Every claim raises the generation, and every spending statement compares it. A holder whose lease
 /// lapsed and passed on loses at its next statement, before it can sign away another fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,21 +40,13 @@ pub(crate) struct Lease {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttemptPhase {
-    /// No message exists, the lease holder proves and uploads, a lapsed lease passes to a retry.
+    /// No message exists, the lease holder proves and funds, a lapsed lease passes to a retry.
     Open,
     /// A stored relay names the row. The relay id never moves again, so a message that can land keeps
     /// its charge until settlement or proven expiry.
     Bound,
-    /// Cleanup owns the row. A retry waits for the release, an upload can no longer resume.
+    /// Cleanup owns the row, a retry waits for the release.
     Closing,
-}
-
-/// A signed transaction that may be on the wire. Its last valid height decides expiry, slot age cannot,
-/// because skipped slots leave a blockhash valid past any slot count.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PendingSend {
-    pub signature: Signature,
-    pub last_valid_block_height: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,13 +57,8 @@ pub(crate) struct Reservation {
     /// Zero until funded. An unfunded row dedupes the request and answers for no budget.
     pub lamports: u64,
     pub landing_rent: u64,
-    pub buffer: Option<ReservedBuffer>,
-    /// Frame writes landed, a retry resumes past them.
-    pub uploaded: usize,
-    pub proven: Option<String>,
     pub generation: u64,
     pub phase: AttemptPhase,
-    pub pending: Option<PendingSend>,
 }
 
 /// The lease and the row as the claim left it.
@@ -112,15 +91,10 @@ pub(crate) enum Admission {
 pub(crate) struct Fund {
     pub lease: Lease,
     pub lamports: u64,
-    /// Every fee the attempt may pay. `lamports` less rent, so a spend inside it leaves rent whole.
+    /// Every fee the attempt may pay. `lamports` less rent, a spend inside it leaves rent whole.
     pub fee_allowance: u64,
-    /// Held back from writes for the settlement and the close, an upload never eats the way out.
-    pub closing_fees: u64,
     /// Rent the relay never recovers once its transaction lands.
     pub landing_rent: u64,
-    pub buffer: Option<ReservedBuffer>,
-    /// The proven frame, a retry of the request proves nothing again.
-    pub proven: Option<String>,
     pub budget: RelayBudget,
 }
 
@@ -142,41 +116,12 @@ pub(crate) struct Bind<'a> {
     pub slot: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SendKind {
-    /// Landing raises the upload cursor to `uploaded`.
-    Write {
-        uploaded: usize,
-    },
-    Close,
-}
-
-#[must_use]
-pub(crate) struct BeginSend {
-    pub lease: Lease,
-    pub pending: PendingSend,
-    pub fee: u64,
-    pub kind: SendKind,
-    pub slot: u64,
-}
-
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpendCheck {
     Accepted,
     OverAllowance,
     LeaseLost,
-}
-
-/// What the chain proved about a pending send.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SendEnd {
-    /// Finalized success, the fee stays and a write's cursor advances.
-    Landed,
-    /// Finalized failure, the fee stays and nothing advances.
-    Paid,
-    /// Refused at preflight or past its last valid height, the fee was never paid and returns.
-    Unsent,
 }
 
 /// Whether the attempt's message landed, and what the total keeps for it.
@@ -201,7 +146,7 @@ pub(crate) struct ClaimCleanup<'a> {
     /// As the caller selected it, a newer generation refuses the claim.
     pub held: &'a Reservation,
     pub slot: u64,
-    /// An open row must be untouched since, the other phases have no upload left to exclude.
+    /// An open row must be untouched since, the other phases have no proof left to exclude.
     pub abandoned_before: u64,
 }
 
@@ -234,18 +179,6 @@ fn read_reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
         <[u8; 32]>::try_from(row.try_get::<Vec<u8>>("", column)?)
             .map_err(|_| DbErr::Custom(format!("{column} has another length")))
     };
-    let optional = |column: &str| -> Result<Option<Address>, DbErr> {
-        row.try_get::<Option<Vec<u8>>>("", column)?
-            .map(|bytes| {
-                <[u8; 32]>::try_from(bytes)
-                    .map(Address::new_from_array)
-                    .map_err(|_| DbErr::Custom(format!("{column} has another length")))
-            })
-            .transpose()
-    };
-    let buffer = optional("ring")?
-        .zip(optional("buffer")?)
-        .map(|(ring, buffer)| ReservedBuffer { ring, buffer });
     let number = |column: &str| -> Result<u64, DbErr> {
         u64::try_from(row.try_get::<i64>("", column)?)
             .map_err(|_| DbErr::Custom(format!("{column} out of range")))
@@ -256,35 +189,18 @@ fn read_reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
         PHASE_CLOSING => AttemptPhase::Closing,
         _ => return Err(DbErr::Custom("phase is corrupt".into())),
     };
-    let pending = row
-        .try_get::<Option<Vec<u8>>>("", "pending_signature")?
-        .map(|signature| {
-            let signature = <[u8; 64]>::try_from(signature)
-                .map_err(|_| DbErr::Custom("pending_signature has another length".into()))?;
-            Ok::<_, DbErr>(PendingSend {
-                signature: Signature::from(signature),
-                last_valid_block_height: number("pending_valid_height")?,
-            })
-        })
-        .transpose()?;
     Ok(Reservation {
         key: bytes32("key")?,
         relay_id: RelayId(spr_indexer_api::Hash(bytes32("relay_id")?)),
         signer: Address::new_from_array(bytes32("signer")?),
         lamports: number("lamports")?,
         landing_rent: number("landing_rent")?,
-        buffer,
-        uploaded: usize::try_from(number("uploaded")?)
-            .map_err(|_| DbErr::Custom("uploaded out of range".into()))?,
-        proven: row.try_get("", "proven")?,
         generation: number("generation")?,
         phase,
-        pending,
     })
 }
 
-const COLUMNS: &str = "key,relay_id,signer,lamports,landing_rent,ring,buffer,uploaded,proven,\
-                       generation,phase,pending_signature,pending_valid_height";
+const COLUMNS: &str = "key,relay_id,signer,lamports,landing_rent,generation,phase";
 
 impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
     pub fn new(db: &'a C) -> Self {
@@ -309,9 +225,8 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             .db
             .execute(self.statement(
                 "INSERT INTO relay_reservations(key,relay_id,signer,lamports,fee_allowance,\
-                 closing_fees,landing_rent,uploaded,spent,phase,generation,lease_until_slot,\
-                 touched_slot) VALUES($1,$2,$3,0,0,0,0,0,0,$4,$7,$5,$6) \
-                 ON CONFLICT(key) DO NOTHING",
+                 landing_rent,spent,phase,generation,lease_until_slot,touched_slot) \
+                 VALUES($1,$2,$3,0,0,0,0,$4,$7,$5,$6) ON CONFLICT(key) DO NOTHING",
                 vec![
                     value(&key),
                     value(&relay_id.0 .0),
@@ -375,7 +290,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
     }
 
     /// Attaches the row to the stored relay, in the transaction that stores it. A holder that lost the
-    /// lease stores no message, and cleanup cannot close a buffer a stored settlement still reads.
+    /// lease stores no message, and cleanup cannot release a charge a stored message still spends.
     pub async fn bind(&self, bind: Bind<'_>) -> Result<SpendCheck, DbErr> {
         let Bind {
             lease,
@@ -388,7 +303,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             .execute(self.statement(
                 "UPDATE relay_reservations SET phase=$3, relay_id=$4, lease_until_slot=0, \
                  touched_slot=$5 WHERE key=$1 AND generation=$2 AND phase=$6 \
-                 AND pending_signature IS NULL AND (lamports=0 OR spent+$7 <= fee_allowance)",
+                 AND (lamports=0 OR spent+$7 <= fee_allowance)",
                 vec![
                     value(&lease.key),
                     lamports_value(lease.generation)?,
@@ -402,88 +317,6 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             .await?
             .rows_affected();
         self.spend_check(&lease, updated).await
-    }
-
-    /// Persists the signed send and charges its fee in one statement, before a byte leaves. A crash after
-    /// it leaves a signature to reconcile and a fee already counted, and a fee past the allowance never
-    /// sends. A write also leaves `closing_fees` untouched, retried writes cannot strand the buffer rent.
-    /// One send at a time, an unreconciled one refuses the next.
-    pub async fn begin_send(&self, send: BeginSend) -> Result<SpendCheck, DbErr> {
-        let BeginSend {
-            lease,
-            pending,
-            fee,
-            kind,
-            slot,
-        } = send;
-        let (kept, uploaded) = match kind {
-            SendKind::Write { uploaded } => (
-                "closing_fees",
-                Some(i64::try_from(uploaded).map_err(|_| DbErr::Custom("count range".into()))?),
-            ),
-            SendKind::Close => ("0", None),
-        };
-        let updated = self
-            .db
-            .execute(self.statement(
-                format!(
-                    "UPDATE relay_reservations SET spent=spent+$3, pending_signature=$4, \
-                     pending_valid_height=$5, pending_fee=$3, pending_upload=$6, touched_slot=$7, \
-                     lease_until_slot=$8 WHERE key=$1 AND generation=$2 \
-                     AND pending_signature IS NULL AND spent+$3+{kept} <= fee_allowance"
-                ),
-                vec![
-                    value(&lease.key),
-                    lamports_value(lease.generation)?,
-                    lamports_value(fee)?,
-                    value(pending.signature.as_ref()),
-                    lamports_value(pending.last_valid_block_height)?,
-                    Value::BigInt(uploaded),
-                    lamports_value(slot)?,
-                    lease_until(slot)?,
-                ],
-            ))
-            .await?
-            .rows_affected();
-        self.spend_check(&lease, updated).await
-    }
-
-    /// `false` when a newer holder took the row or the signature is no longer the pending one, the
-    /// caller stops without touching the cursor. Each landed send refreshes the window, a slow upload is
-    /// no abandoned one.
-    #[must_use = "a false outcome means the lease passed on"]
-    pub async fn conclude_send(
-        &self,
-        lease: &Lease,
-        signature: &Signature,
-        end: SendEnd,
-        slot: u64,
-    ) -> Result<bool, DbErr> {
-        let outcome = match end {
-            SendEnd::Landed => "uploaded=COALESCE(pending_upload,uploaded)",
-            SendEnd::Paid => "uploaded=uploaded",
-            SendEnd::Unsent => "spent=spent-pending_fee",
-        };
-        Ok(self
-            .db
-            .execute(self.statement(
-                format!(
-                    "UPDATE relay_reservations SET {outcome}, pending_signature=NULL, \
-                     pending_valid_height=NULL, pending_fee=NULL, pending_upload=NULL, \
-                     touched_slot=$4, lease_until_slot=$5 \
-                     WHERE key=$1 AND generation=$2 AND pending_signature=$3"
-                ),
-                vec![
-                    value(&lease.key),
-                    lamports_value(lease.generation)?,
-                    value(signature.as_ref()),
-                    lamports_value(slot)?,
-                    lease_until(slot)?,
-                ],
-            ))
-            .await?
-            .rows_affected()
-            != 0)
     }
 
     /// The fee of a relay message that landed and failed, in the transaction that stores the failure. A
@@ -524,9 +357,9 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             .collect()
     }
 
-    /// The one compare and update between upload and cleanup, each side rechecked at its own statement.
+    /// The one compare and update between a retry and cleanup, each side rechecked at its own statement.
     /// A retry that resumed raised the generation or refreshed the age, either refuses a stale selection.
-    /// A won claim raises the generation in turn, a still running upload stops at its next send.
+    /// A won claim raises the generation in turn, a still running holder stops at its next statement.
     pub async fn claim_cleanup(&self, claim: ClaimCleanup<'_>) -> Result<Option<Claim>, DbErr> {
         let ClaimCleanup {
             held,
@@ -571,7 +404,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             .db
             .execute(self.statement(
                 "DELETE FROM relay_reservations WHERE key=$1 AND generation=$2 AND phase=$3 \
-                 AND lamports=0 AND pending_signature IS NULL",
+                 AND lamports=0",
                 vec![
                     value(&lease.key),
                     lamports_value(lease.generation)?,
@@ -603,16 +436,13 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
         row.as_ref().map(read_reservation).transpose()
     }
 
-    /// Zero rows means a newer holder, a pending send or a spend past the allowance, the row tells them
-    /// apart. A pending send under the same lease reads as lost too, only a reconciling holder clears it.
+    /// Zero rows means a newer holder or a spend past the allowance, the row tells them apart.
     async fn spend_check(&self, lease: &Lease, updated: u64) -> Result<SpendCheck, DbErr> {
         if updated != 0 {
             return Ok(SpendCheck::Accepted);
         }
         Ok(match self.get(&lease.key).await? {
-            Some(held) if held.generation == lease.generation && held.pending.is_none() => {
-                SpendCheck::OverAllowance
-            }
+            Some(held) if held.generation == lease.generation => SpendCheck::OverAllowance,
             _ => SpendCheck::LeaseLost,
         })
     }
@@ -626,10 +456,7 @@ impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
             lease,
             lamports,
             fee_allowance,
-            closing_fees,
             landing_rent,
-            buffer,
-            proven,
             budget,
         } = fund;
         let backend = self.db.get_database_backend();
@@ -637,19 +464,14 @@ impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
         let updated = transaction
             .execute(Statement::from_sql_and_values(
                 backend,
-                "UPDATE relay_reservations SET lamports=$3, fee_allowance=$4, closing_fees=$5, \
-                 landing_rent=$6, ring=$7, buffer=$8, proven=$9 \
+                "UPDATE relay_reservations SET lamports=$3, fee_allowance=$4, landing_rent=$5 \
                  WHERE key=$1 AND generation=$2 AND lamports=0",
                 vec![
                     value(&lease.key),
                     lamports_value(lease.generation)?,
                     lamports_value(lamports)?,
                     lamports_value(fee_allowance)?,
-                    lamports_value(closing_fees)?,
                     lamports_value(landing_rent)?,
-                    Value::Bytes(buffer.map(|held| Box::new(held.ring.as_ref().to_vec()))),
-                    Value::Bytes(buffer.map(|held| Box::new(held.buffer.as_ref().to_vec()))),
-                    Value::String(proven.map(Box::new)),
                 ],
             ))
             .await?
@@ -710,7 +532,6 @@ impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
             .ok_or_else(|| DbErr::Custom("a reservation vanished".into()))
     }
 
-    /// A pending send keeps the row, its fee and the rent stay held until the chain proves its outcome.
     /// The delete reads what it removes in one statement, a concurrent charge cannot slip past it.
     pub async fn release(&self, release: Release<'_>) -> Result<(), DbErr> {
         let Release { key, relay_id, end } = release;
@@ -720,7 +541,7 @@ impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
             .query_one(Statement::from_sql_and_values(
                 backend,
                 "DELETE FROM relay_reservations WHERE key=$1 AND relay_id=$2 \
-                 AND pending_signature IS NULL RETURNING lamports,spent,signer",
+                 RETURNING lamports,spent,signer",
                 vec![value(key), value(&relay_id.0 .0)],
             ))
             .await?;
@@ -808,23 +629,6 @@ mod tests {
         Address::new_from_array([byte; 32])
     }
 
-    fn pending(byte: u8) -> PendingSend {
-        PendingSend {
-            signature: Signature::from([byte; 64]),
-            last_valid_block_height: 500,
-        }
-    }
-
-    fn write_of(lease: Lease, byte: u8, fee: u64) -> BeginSend {
-        BeginSend {
-            lease,
-            pending: pending(byte),
-            fee,
-            kind: SendKind::Write { uploaded: 1 },
-            slot: 11,
-        }
-    }
-
     type Store0<'a> = RelayReservations<'a, DatabaseConnection>;
 
     /// Releases the row a `key` of `claim` names, unlanded.
@@ -861,10 +665,7 @@ mod tests {
             lease,
             lamports,
             fee_allowance: lamports,
-            closing_fees: 0,
             landing_rent: 0,
-            buffer: None,
-            proven: None,
             budget,
         }
     }
@@ -877,13 +678,12 @@ mod tests {
             .expect("fund")
     }
 
-    /// A funded row, its allowance of 30 keeps 10 for the way out.
-    async fn uploading(store: &Store0<'_>) -> Claim {
+    /// A funded row with an allowance of 30.
+    async fn funded(store: &Store0<'_>) -> Claim {
         let claim = claim(store, 1, signer(1), 10).await;
         let funded = store
             .fund(Fund {
                 fee_allowance: 30,
-                closing_fees: 10,
                 ..funding(claim.lease, 50, NO_LIMIT)
             })
             .await
@@ -974,178 +774,13 @@ mod tests {
                 .expect("fund"),
             FundOutcome::LeaseLost
         );
-        assert_eq!(
-            store
-                .begin_send(write_of(first.lease, 7, 0))
-                .await
-                .expect("begin"),
-            SpendCheck::LeaseLost
-        );
-        assert!(!store
-            .conclude_send(&first.lease, &pending(7).signature, SendEnd::Landed, LATER)
-            .await
-            .expect("conclude"));
     }
 
     #[tokio::test]
-    async fn a_held_row_keeps_its_upload_progress_and_its_charge_across_a_resume() {
+    async fn a_stale_selection_loses_to_a_resumed_attempt() {
         let database = test_store().await;
         let store = RelayReservations::new(database.connection());
-        let first = uploading(&store).await;
-        assert_eq!(
-            store
-                .begin_send(write_of(first.lease, 7, 5))
-                .await
-                .expect("begin"),
-            SpendCheck::Accepted
-        );
-        assert!(store
-            .conclude_send(&first.lease, &pending(7).signature, SendEnd::Landed, 12)
-            .await
-            .expect("conclude"));
-        store.yield_lease(&first.lease).await.expect("yield");
-
-        let resumed = claim(&store, 1, signer(1), 13).await;
-        assert_eq!(resumed.held.uploaded, 1);
-        assert_eq!(resumed.held.lamports, 50);
-        assert!(matches!(
-            store
-                .fund(funding(resumed.lease, 999, NO_LIMIT))
-                .await
-                .expect("fund"),
-            FundOutcome::Held(held) if held.lamports == 50
-        ));
-    }
-
-    #[tokio::test]
-    async fn a_charge_past_the_allowance_refuses_and_a_write_cannot_spend_the_way_out() {
-        let database = test_store().await;
-        let store = RelayReservations::new(database.connection());
-        let held = uploading(&store).await;
-        assert_eq!(
-            store
-                .begin_send(write_of(held.lease, 7, 21))
-                .await
-                .expect("begin"),
-            SpendCheck::OverAllowance
-        );
-        assert_eq!(
-            store
-                .get(&held.lease.key)
-                .await
-                .expect("read")
-                .unwrap()
-                .pending,
-            None
-        );
-        assert_eq!(
-            store
-                .begin_send(write_of(held.lease, 7, 20))
-                .await
-                .expect("begin"),
-            SpendCheck::Accepted
-        );
-        assert!(store
-            .conclude_send(&held.lease, &pending(7).signature, SendEnd::Paid, 12)
-            .await
-            .expect("conclude"));
-        assert_eq!(
-            store
-                .begin_send(write_of(held.lease, 8, 1))
-                .await
-                .expect("begin"),
-            SpendCheck::OverAllowance
-        );
-        // The closing share still pays the close.
-        assert_eq!(
-            store
-                .begin_send(BeginSend {
-                    kind: SendKind::Close,
-                    fee: 10,
-                    ..write_of(held.lease, 8, 0)
-                })
-                .await
-                .expect("begin"),
-            SpendCheck::Accepted
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unsent_write_returns_its_fee_and_a_paid_one_keeps_it() {
-        let database = test_store().await;
-        let store = RelayReservations::new(database.connection());
-        let held = uploading(&store).await;
-        for _ in 0..3 {
-            assert_eq!(
-                store
-                    .begin_send(write_of(held.lease, 7, 20))
-                    .await
-                    .expect("begin"),
-                SpendCheck::Accepted
-            );
-            assert!(store
-                .conclude_send(&held.lease, &pending(7).signature, SendEnd::Unsent, 12)
-                .await
-                .expect("conclude"));
-        }
-        let row = store.get(&held.lease.key).await.expect("read").unwrap();
-        assert_eq!(row.uploaded, 0);
-        release_row(&store, 1).await;
-        // Nothing was spent, the whole charge returned.
-        assert!(matches!(
-            reserve(&store, 2, signer(2), 60).await,
-            FundOutcome::Held(_)
-        ));
-        assert!(matches!(
-            reserve(&store, 3, signer(3), 40).await,
-            FundOutcome::Held(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn a_pending_send_keeps_the_row_and_refuses_the_next_send_and_the_binding() {
-        let database = test_store().await;
-        let store = RelayReservations::new(database.connection());
-        let held = uploading(&store).await;
-        assert_eq!(
-            store
-                .begin_send(write_of(held.lease, 7, 5))
-                .await
-                .expect("begin"),
-            SpendCheck::Accepted
-        );
-        assert_eq!(
-            store
-                .begin_send(write_of(held.lease, 8, 5))
-                .await
-                .expect("begin"),
-            SpendCheck::LeaseLost
-        );
-        let bound = store
-            .bind(Bind {
-                lease: held.lease,
-                relay_id: &relay_id(1),
-                fee: 0,
-                slot: 12,
-            })
-            .await
-            .expect("bind");
-        assert_eq!(bound, SpendCheck::LeaseLost);
-
-        release_row(&store, 1).await;
-        let row = store
-            .get(&held.lease.key)
-            .await
-            .expect("read")
-            .expect("row");
-        assert_eq!(row.pending, Some(pending(7)));
-    }
-
-    #[tokio::test]
-    async fn a_stale_selection_loses_to_a_resumed_upload() {
-        let database = test_store().await;
-        let store = RelayReservations::new(database.connection());
-        let first = uploading(&store).await;
+        let first = funded(&store).await;
         store.yield_lease(&first.lease).await.expect("yield");
         let [selected] = store
             .abandoned(LATER, LATER, 8)
@@ -1164,13 +799,16 @@ mod tests {
             .await
             .expect("claim");
         assert_eq!(claim, None);
-        assert_eq!(
-            store
-                .begin_send(write_of(resumed.lease, 7, 5))
-                .await
-                .expect("begin"),
-            SpendCheck::Accepted
-        );
+        let bound = store
+            .bind(Bind {
+                lease: resumed.lease,
+                relay_id: &relay_id(1),
+                fee: 5,
+                slot: LATER,
+            })
+            .await
+            .expect("bind");
+        assert_eq!(bound, SpendCheck::Accepted);
     }
 
     /// A bound row has no lease and no age left to refuse, only the generation does.
@@ -1178,7 +816,7 @@ mod tests {
     async fn a_stale_selection_loses_to_a_row_a_retry_bound() {
         let database = test_store().await;
         let store = RelayReservations::new(database.connection());
-        let first = uploading(&store).await;
+        let first = funded(&store).await;
         store.yield_lease(&first.lease).await.expect("yield");
         let [selected] = store
             .abandoned(LATER, LATER, 8)
@@ -1302,19 +940,22 @@ mod tests {
     async fn a_stalled_holder_loses_to_the_next_row_of_its_key() {
         let database = test_store().await;
         let store = RelayReservations::new(database.connection());
-        let stalled = uploading(&store).await;
+        let stalled = funded(&store).await;
         release_row(&store, 1).await;
 
-        let next = uploading(&store).await;
+        let next = funded(&store).await;
 
         assert_ne!(stalled.lease, next.lease);
-        assert_eq!(
-            store
-                .begin_send(write_of(stalled.lease, 7, 5))
-                .await
-                .expect("begin"),
-            SpendCheck::LeaseLost
-        );
+        let bound = store
+            .bind(Bind {
+                lease: stalled.lease,
+                relay_id: &relay_id(1),
+                fee: 5,
+                slot: 11,
+            })
+            .await
+            .expect("bind");
+        assert_eq!(bound, SpendCheck::LeaseLost);
     }
 
     #[tokio::test]
@@ -1327,17 +968,18 @@ mod tests {
             .await
             .expect("fund");
         assert!(matches!(funded, FundOutcome::Held(_)));
-        assert_eq!(
-            store
-                .begin_send(write_of(held.lease, 7, 10))
-                .await
-                .expect("begin"),
-            SpendCheck::Accepted
-        );
-        assert!(store
-            .conclude_send(&held.lease, &pending(7).signature, SendEnd::Paid, 12)
+        let live = relay_id(1);
+        let bound = store
+            .bind(Bind {
+                lease: held.lease,
+                relay_id: &live,
+                fee: 10,
+                slot: 2,
+            })
             .await
-            .expect("conclude"));
+            .expect("bind");
+        assert_eq!(bound, SpendCheck::Accepted);
+        store.charge_landed(&live, 10).await.expect("charge");
         release_row(&store, 1).await;
 
         // The signer's 60 holds the 10 spent, a whole share past it refuses.
@@ -1352,10 +994,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_won_cleanup_stops_the_old_upload_and_turns_a_retry_away() {
+    async fn a_won_cleanup_fences_the_old_holder_and_turns_a_retry_away() {
         let database = test_store().await;
         let store = RelayReservations::new(database.connection());
-        let first = uploading(&store).await;
+        let first = funded(&store).await;
         store.yield_lease(&first.lease).await.expect("yield");
         let selected = store.get(&first.lease.key).await.expect("read").unwrap();
         let young = ClaimCleanup {
@@ -1375,13 +1017,16 @@ mod tests {
             .expect("claim")
             .expect("won");
 
-        assert_eq!(
-            store
-                .begin_send(write_of(first.lease, 7, 5))
-                .await
-                .expect("begin"),
-            SpendCheck::LeaseLost
-        );
+        let bound = store
+            .bind(Bind {
+                lease: first.lease,
+                relay_id: &relay_id(1),
+                fee: 5,
+                slot: LATER,
+            })
+            .await
+            .expect("bind");
+        assert_eq!(bound, SpendCheck::LeaseLost);
         let retry = relay_id(1);
         let admitted = store
             .admit(Admit {
@@ -1401,7 +1046,7 @@ mod tests {
     async fn a_bound_row_keeps_its_relay_and_only_the_message_fee_fits() {
         let database = test_store().await;
         let store = RelayReservations::new(database.connection());
-        let held = uploading(&store).await;
+        let held = funded(&store).await;
         let live = relay_id(1);
         let bind = |fee| Bind {
             lease: held.lease,
