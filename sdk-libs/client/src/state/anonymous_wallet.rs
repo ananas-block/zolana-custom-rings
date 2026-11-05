@@ -324,12 +324,14 @@ impl AnonymousWallet {
 
     /// Admits every pending note `assets` now names, nothing is read from history.
     pub fn resolve_pending(&mut self, assets: &RingAssets) {
-        self.revision.advance();
         let (registered, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
             .into_iter()
             .map(|note| (assets.by_mint(&note.mint()), note))
             .partition(|(asset, _)| asset.is_some());
         self.pending = waiting.into_iter().map(|(_, note)| note).collect();
+        if !registered.is_empty() {
+            self.revision.advance();
+        }
         self.notes.extend(
             registered
                 .into_iter()
@@ -366,40 +368,53 @@ impl AnonymousWallet {
         let scan = scan
             .commit_on(self)
             .ok_or(AnonymousError::ScanHistoryChanged)?;
+        let mut changed = self.history != scan.history;
         let mut held: HashSet<[u8; 32]> = self.notes.iter().map(|note| note.utxo_hash).collect();
-        self.notes.extend(
-            scan.decrypted
-                .utxos
-                .into_iter()
-                .filter(|note| held.insert(note.utxo_hash)),
-        );
-        self.pending
-            .retain(|note| !held.contains(&note.utxo_hash()));
+        self.notes
+            .extend(scan.decrypted.utxos.into_iter().filter(|note| {
+                let inserted = held.insert(note.utxo_hash);
+                changed |= inserted;
+                inserted
+            }));
+        self.pending.retain(|note| {
+            let retained = !held.contains(&note.utxo_hash());
+            changed |= !retained;
+            retained
+        });
         held.extend(self.pending.iter().map(PendingNote::utxo_hash));
-        self.pending.extend(
-            scan.pending
-                .into_iter()
-                .filter(|note| held.insert(note.utxo_hash())),
-        );
-        self.spent_nullifiers
-            .extend(scan.decrypted.spent_nullifiers);
+        self.pending.extend(scan.pending.into_iter().filter(|note| {
+            let inserted = held.insert(note.utxo_hash());
+            changed |= inserted;
+            inserted
+        }));
+        for nullifier in scan.decrypted.spent_nullifiers {
+            changed |= self.spent_nullifiers.insert(nullifier);
+        }
         let mut claimed: HashSet<[u8; 32]> =
             self.claims.iter().map(|claim| claim.utxo_hash).collect();
-        self.claims.extend(
-            scan.claims
-                .into_iter()
-                .filter(|claim| claimed.insert(claim.utxo_hash)),
-        );
-        self.merge_retries
-            .retain(|nullifier| !scan.retried.contains(nullifier));
-        self.merge_retries.extend(scan.unresolved);
+        self.claims.extend(scan.claims.into_iter().filter(|claim| {
+            let inserted = claimed.insert(claim.utxo_hash);
+            changed |= inserted;
+            inserted
+        }));
+        for nullifier in scan.retried.difference(&scan.unresolved) {
+            changed |= self.merge_retries.remove(nullifier);
+        }
+        for nullifier in scan.unresolved {
+            changed |= self.merge_retries.insert(nullifier);
+        }
         self.history = scan.history;
         match scan.recovery {
             RecoveryUpdate::Keep => {}
-            RecoveryUpdate::Paused(session) => self.recovery = Some(*session),
-            RecoveryUpdate::Complete => self.recovery = None,
+            RecoveryUpdate::Paused(session) => {
+                changed |= self.recovery.as_ref() != Some(session.as_ref());
+                self.recovery = Some(*session);
+            }
+            RecoveryUpdate::Complete => changed |= self.recovery.take().is_some(),
         }
-        self.revision.advance();
+        if changed {
+            self.revision.advance();
+        }
         Ok(())
     }
 
@@ -411,8 +426,10 @@ impl AnonymousWallet {
         if !updated.progress_matches(&self.history) {
             return Err(AnonymousError::ScanProgressMoved);
         }
-        self.history = updated;
-        self.revision.advance();
+        if self.history != updated {
+            self.history = updated;
+            self.revision.advance();
+        }
         Ok(())
     }
 

@@ -1,6 +1,9 @@
 /** Ring output bodies in SPP's output framing, Rust `custom_ring_interface::output`. */
-import { DisclosureFormat } from "../codec/ring-disclosure-layout.js";
-import { COMPACT_RECIPIENT_BODY_LEN, RECIPIENT_BODY_LEN } from "../codec/anonymous-delivery.js";
+import {
+  COMPACT_RECIPIENT_BODY_LEN,
+  DisclosureFormat,
+  RECIPIENT_BODY_LEN,
+} from "../codec/ring-disclosure-layout.js";
 import { TransactionError } from "@heliuslabs/zolana/transaction";
 
 /** The schemes a ring output publishes, SPP stores the ring-owned ones unparsed. */
@@ -20,9 +23,6 @@ const CONFIDENTIAL_PLAINTEXT_HEAD_LEN = 8 + 8 + 32;
 /** Scheme 3 body of an output with no data and no ring id, each one zero byte. */
 export const CONFIDENTIAL_DATA_FREE_BODY_LEN =
   RECIPIENT_KEY_LEN + CONFIDENTIAL_PLAINTEXT_HEAD_LEN + 2;
-
-/** `be32(blinding) ‖ u64be(amount) ‖ mint`. */
-const RING_BODY_MIN_LEN = RECIPIENT_BODY_LEN;
 
 const ENCODING_TAGS = ["plaintext", "encrypted", "verifiable"] as const;
 export type RingOutputEncoding = (typeof ENCODING_TAGS)[number];
@@ -103,7 +103,7 @@ export function ringBodyOutput(
     length > rest.length ||
     (format === DisclosureFormat.SingleAssetPayout
       ? length !== COMPACT_RECIPIENT_BODY_LEN || rest.length !== length
-      : length < RING_BODY_MIN_LEN)
+      : length < RECIPIENT_BODY_LEN)
   )
     return undefined;
   return Object.freeze({ body: rest.subarray(0, length), reply: rest.subarray(length), format });

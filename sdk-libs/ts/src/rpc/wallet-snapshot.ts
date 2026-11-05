@@ -63,6 +63,10 @@ export async function* snapshotPages<Page>(
     readFailure = { error };
     throw error;
   } finally {
+    await release();
+  }
+
+  async function release(): Promise<void> {
     if (releaseCursor !== undefined) {
       const context =
         reader.context?.timeoutMs === undefined

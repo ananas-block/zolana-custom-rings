@@ -23,14 +23,13 @@ import {
 import { checkedCounter } from "../../crypto/error.js";
 import { x25519FromU } from "../../crypto/keys/x25519.js";
 import { checkedViewingU } from "../membership/member-opening.js";
+import { COMPACT_RECIPIENT_BODY_LEN, RECIPIENT_BODY_LEN } from "./ring-disclosure-layout.js";
+export { COMPACT_RECIPIENT_BODY_LEN, RECIPIENT_BODY_LEN } from "./ring-disclosure-layout.js";
 const STREAM_FIRST_COUNTER = 2;
 import { RingError } from "../error.js";
 
 const FIELD_LEN = 32;
 const AMOUNT_LEN = 8;
-/** `be32(blinding) ‖ u64be(amount) ‖ mint`. */
-export const RECIPIENT_BODY_LEN = FIELD_LEN + AMOUNT_LEN + FIELD_LEN;
-export const COMPACT_RECIPIENT_BODY_LEN = FIELD_LEN + 2 * AMOUNT_LEN;
 
 export interface CompactRecipientBody {
   readonly blinding: Bytes32;

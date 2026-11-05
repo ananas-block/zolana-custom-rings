@@ -1,4 +1,9 @@
-import { decompileTransactionMessage, getCompiledTransactionMessageDecoder } from "@solana/kit";
+import {
+  decompileTransactionMessage,
+  getBase58Decoder,
+  getCompiledTransactionMessageDecoder,
+  signature,
+} from "@solana/kit";
 import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
 import { StateDiscriminator } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes32, Instruction } from "@heliuslabs/zolana/interface";
@@ -6,6 +11,7 @@ import {
   addressBytes,
   compileUnsignedTransaction,
   encodeBase58,
+  indexerScalars,
   treeAddress,
 } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair, ViewingKey } from "@heliuslabs/zolana/keypair";
@@ -29,6 +35,7 @@ import { ringProofInput } from "../../../src/operations/workflow/selection.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
 import { buildRuleTable } from "../../../src/protocol/membership/policy.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
+import type { PrepareAuthorityTransferRequest } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import {
   ringRailOf,
@@ -143,29 +150,30 @@ function messageOf(fixture: Fixture, instruction: Instruction): Uint8Array {
 
 const requestOf = (
   fixture: Fixture,
-  delegate: string,
+  delegate: Address,
   sources: readonly ShieldedKeypair[],
   payments: readonly Readonly<{ recipient: ShieldedKeypair; mint: Address; amount: bigint }>[],
-) =>
-  ({
-    ring: fixture.ringProgramId,
-    delegate,
-    transfer: {
-      sources: sources.map((source) => source.shieldedAddress()),
-      payments: payments.map((payment) => ({
-        ...payment,
-        recipient: payment.recipient.shieldedAddress(),
-      })),
-    },
-    txViewingKey: TX_VIEWING_KEY,
-    timestamp: 0n,
-    nonce: "",
-    signature: "",
-  }) as never;
+): PrepareAuthorityTransferRequest => ({
+  ring: fixture.ringProgramId,
+  delegate,
+  transfer: {
+    exits: [],
+    withdrawals: [],
+    sources: sources.map((source) => source.shieldedAddress()),
+    payments: payments.map((payment) => ({
+      ...payment,
+      recipient: payment.recipient.shieldedAddress(),
+    })),
+  },
+  txViewingKey: TX_VIEWING_KEY,
+  timestamp: 0n,
+  nonce: indexerScalars.base64String(new Uint8Array(32)),
+  signature: signature(getBase58Decoder().decode(new Uint8Array(64))),
+});
 
 const requestFor = (
   fixture: Fixture,
-  delegate: string,
+  delegate: Address,
   sources: readonly ShieldedKeypair[],
   payee: ShieldedKeypair,
   amount: bigint,

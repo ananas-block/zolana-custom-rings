@@ -257,7 +257,7 @@ impl Point {
                 epoch: self.slot / EPOCH_SLOTS,
                 node,
             });
-            node += node & node.wrapping_neg();
+            node += node.isolate_lowest_one();
         }
         keys
     }

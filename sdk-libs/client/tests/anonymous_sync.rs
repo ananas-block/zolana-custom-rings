@@ -58,7 +58,7 @@ use zolana_ring_transaction::{
     RingDelivery, RingDepositPlaintext, RingOutputRail,
 };
 
-use history_page::{position, EventsPage, OutputsPage};
+use history_page::{EventsPage, OutputsPage};
 
 const RING: Address = Address::new_from_array([4; 32]);
 const TREE: u16 = 2;
@@ -83,10 +83,29 @@ struct Indexer {
     /// Ring pages asked above the limit answer `-32008`.
     response_limit: Mutex<Option<u32>>,
     limits_asked: Mutex<Vec<u32>>,
+    ring_queries: Mutex<Vec<RingHistoryOptions>>,
+    nullifier_queries: Mutex<Vec<Vec<[u8; 32]>>>,
     /// The ring page at the index fails.
     failing_page: Mutex<Option<usize>>,
     ring_pages: AtomicUsize,
     transaction_tag_reads: AtomicUsize,
+}
+
+struct MockPageWindow {
+    token: Option<PaginationToken>,
+    limit: usize,
+}
+
+fn page_window<T: spr_indexer_api::Positioned>(
+    mut page: spr_indexer_api::Page<T>,
+    window: MockPageWindow,
+) -> spr_indexer_api::Page<T> {
+    page.data
+        .retain(|row| window.token.is_none_or(|token| row.position() > token));
+    let more = page.data.len() > window.limit;
+    page.data.truncate(window.limit);
+    page.pagination_token = page.data.last().filter(|_| more).map(|row| row.position());
+    page
 }
 
 impl Indexer {
@@ -119,6 +138,17 @@ impl Indexer {
             block_time: 0,
             slot: *self.tip.lock().unwrap(),
         }
+    }
+
+    fn require_context(&self, config: Option<IndexerRpcConfig>) -> Result<(), ClientError> {
+        let indexed = self.context().slot;
+        if config
+            .and_then(|config| config.require_slot)
+            .is_some_and(|required| indexed < required)
+        {
+            return Err(ClientError::IndexerMinimumContextSlot { indexed });
+        }
+        Ok(())
     }
 
     fn take_ring_pages(&self) -> usize {
@@ -155,8 +185,9 @@ impl AsyncRpc for Indexer {
         _pagination_token: Option<PaginationToken>,
         _limit: Option<u32>,
         filters: HistoryFilters,
-        _config: Option<IndexerRpcConfig>,
+        config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+        self.require_context(config)?;
         self.transaction_tag_reads.fetch_add(1, Ordering::Relaxed);
         Ok(self.page(filters, |_| false))
     }
@@ -164,8 +195,10 @@ impl AsyncRpc for Indexer {
     async fn get_shielded_transactions_by_ring(
         &self,
         options: RingHistoryOptions,
-        _config: Option<IndexerRpcConfig>,
+        config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+        self.require_context(config)?;
+        self.ring_queries.lock().unwrap().push(options.clone());
         let limit = options.limit.unwrap();
         self.limits_asked.lock().unwrap().push(limit);
         if self
@@ -180,7 +213,7 @@ impl AsyncRpc for Indexer {
         if *self.failing_page.lock().unwrap() == Some(page) {
             return Err(ClientError::Indexer("a failed page".to_owned()));
         }
-        let mut rows: Vec<ShieldedTransaction> = self
+        let rows: Vec<ShieldedTransaction> = self
             .transactions
             .lock()
             .unwrap()
@@ -188,73 +221,93 @@ impl AsyncRpc for Indexer {
             .filter(|tx| {
                 tx.ring_program_id == Some(options.ring_program_id)
                     && options.filters.slot.contains(tx.slot)
-                    && options
-                        .pagination_token
-                        .is_none_or(|token| position(tx) > token)
             })
             .cloned()
             .collect();
-        rows.sort_by_key(position);
         let cap = self
             .page_cap
             .lock()
             .unwrap()
             .map_or(limit as usize, |cap| cap.min(limit as usize));
-        let more = rows.len() > cap;
-        rows.truncate(cap);
-        Ok(EventsPage {
-            context: self.context(),
-            output_tree_id: Some(TREE),
-            rows,
-            more,
-        }
-        .response())
+        Ok(page_window(
+            EventsPage {
+                context: self.context(),
+                output_tree_id: Some(TREE),
+                rows,
+                more: false,
+            }
+            .response(),
+            MockPageWindow {
+                token: options.pagination_token,
+                limit: cap,
+            },
+        ))
     }
 
     async fn get_encrypted_utxos_by_tags(
         &self,
         tags: Vec<[u8; 32]>,
-        _pagination_token: Option<PaginationToken>,
-        _limit: Option<u32>,
+        pagination_token: Option<PaginationToken>,
+        limit: Option<u32>,
         filters: HistoryFilters,
-        _config: Option<IndexerRpcConfig>,
+        config: Option<IndexerRpcConfig>,
     ) -> Result<GetEncryptedUtxosByTagsResponse, ClientError> {
-        Ok(OutputsPage {
-            context: self.context(),
-            output_tree_id: Some(TREE),
-            rows: self
-                .deposits
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|deposit| {
-                    filters.slot.contains(deposit.slot)
-                        && tags.contains(&deposit.output_slot.view_tag)
-                })
-                .cloned()
-                .collect(),
-        }
-        .response())
+        self.require_context(config)?;
+        Ok(page_window(
+            OutputsPage {
+                context: self.context(),
+                output_tree_id: Some(TREE),
+                rows: self
+                    .deposits
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|deposit| {
+                        filters.slot.contains(deposit.slot)
+                            && tags.contains(&deposit.output_slot.view_tag)
+                    })
+                    .cloned()
+                    .collect(),
+            }
+            .response(),
+            MockPageWindow {
+                token: pagination_token,
+                limit: limit.unwrap_or(spr_indexer_api::PAGE_LIMIT as u32) as usize,
+            },
+        ))
     }
 
     async fn get_shielded_transactions_by_nullifiers(
         &self,
         nullifiers: Vec<[u8; 32]>,
-        _pagination_token: Option<PaginationToken>,
-        _limit: Option<u32>,
+        pagination_token: Option<PaginationToken>,
+        limit: Option<u32>,
         filters: HistoryFilters,
-        _config: Option<IndexerRpcConfig>,
+        config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByNullifiersResponse, ClientError> {
-        Ok(self.page(filters, |tx| {
-            tx.nullifiers.iter().any(|n| nullifiers.contains(n))
-        }))
+        self.require_context(config)?;
+        self.nullifier_queries
+            .lock()
+            .unwrap()
+            .push(nullifiers.clone());
+        Ok(page_window(
+            self.page(filters, |tx| {
+                tx.nullifiers
+                    .iter()
+                    .any(|nullifier| nullifiers.contains(nullifier))
+            }),
+            MockPageWindow {
+                token: pagination_token,
+                limit: limit.unwrap_or(spr_indexer_api::PAGE_LIMIT as u32) as usize,
+            },
+        ))
     }
 }
 
-struct RingHistoryOnly<'a>(&'a Indexer);
+struct RecoveryHistory<'a>(&'a Indexer);
 
 #[async_trait]
-impl AsyncRpc for RingHistoryOnly<'_> {
+impl AsyncRpc for RecoveryHistory<'_> {
     async fn get_shielded_transactions_by_ring(
         &self,
         options: RingHistoryOptions,
@@ -262,6 +315,24 @@ impl AsyncRpc for RingHistoryOnly<'_> {
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
         self.0
             .get_shielded_transactions_by_ring(options, config)
+            .await
+    }
+    async fn get_shielded_transactions_by_nullifiers(
+        &self,
+        nullifiers: Vec<[u8; 32]>,
+        pagination_token: Option<PaginationToken>,
+        limit: Option<u32>,
+        filters: HistoryFilters,
+        config: Option<IndexerRpcConfig>,
+    ) -> Result<GetShieldedTransactionsByNullifiersResponse, ClientError> {
+        self.0
+            .get_shielded_transactions_by_nullifiers(
+                nullifiers,
+                pagination_token,
+                limit,
+                filters,
+                config,
+            )
             .await
     }
 }
@@ -509,14 +580,13 @@ async fn tag_scan<K: ShieldedKeys + RingKeys + MergeSeedHolder>(
         .unwrap()
 }
 
-/// Reads the ring's history alone, no tag, nullifier, Ring RPC or auditor read.
 async fn restore<K: ShieldedKeys + RingKeys + MergeSeedHolder>(
     indexer: &Indexer,
     keys: &K,
     history: &ViewingHistory,
 ) -> AnonymousScan {
     AnonymousSync::new(keys, &assets())
-        .full_scan(&RingHistoryOnly(indexer), history, RING)
+        .full_scan(&RecoveryHistory(indexer), history, RING)
         .await
         .unwrap()
 }
@@ -1139,6 +1209,7 @@ async fn a_deposit_under_a_request_tag_is_found_by_the_tag_read() {
         .sync(&indexer, &minted.history.with_ring(RING, None))
         .await;
     assert_eq!(stream(&scan, hash), AnonymousStream::Request { index: 0 });
+    assert_eq!(scan.history().current().request_count(), 1);
 }
 
 #[tokio::test]
@@ -1784,7 +1855,12 @@ async fn an_every_site_recovery_opens_each_page_before_the_next_read() {
         .full_scan(&indexer, &fresh(&bob), RING)
         .await
         .is_err());
-    assert_eq!(indexer.take_ring_pages(), 1);
+    assert_eq!(indexer.take_ring_pages(), 2);
+    let queries = indexer.ring_queries.lock().unwrap();
+    assert_eq!(queries.len(), 2);
+    assert_eq!(queries[0].filters.slot.lte, None);
+    assert_eq!(queries[1].filters.slot.lte, Some(indexer.context().slot));
+    assert!(queries.iter().all(|query| query.pagination_token.is_none()));
 }
 
 /// Ring rows also spend notes of other owners, the stored wallet keeps only the spends of its own notes.
@@ -1815,6 +1891,16 @@ async fn the_stored_wallet_keeps_only_its_own_nullifiers() {
     let mut restored = AnonymousWallet::new(fresh(&bob));
     restored.absorb(bob.recover(&indexer).await).unwrap();
     assert_eq!(restored.decrypted().spent_nullifiers, own);
+    let queried: HashSet<_> = indexer
+        .nullifier_queries
+        .lock()
+        .unwrap()
+        .iter()
+        .flatten()
+        .copied()
+        .collect();
+    let owned: HashSet<_> = restored.notes().iter().map(|note| note.nullifier).collect();
+    assert_eq!(queried, owned);
 }
 
 /// Another device of the wallet spends a stored note, the next sync marks it spent with no held notes passed.
@@ -2741,12 +2827,32 @@ async fn keyed_unknown_mint_merge_promotes_without_history_replay() {
 async fn canonical_scan_refuses_a_stale_wallet_revision() {
     let indexer = Indexer::default();
     let bob = Wallet::new(2);
+    let unknown = Mint::new(Address::new_from_array([0xec; 32]), 8);
+    indexer.publish_deposit(deposit_row_in(
+        &bob.address(),
+        bob.keys.viewing_pubkey().u(),
+        field(4, 3),
+        unknown,
+    ));
     let mut wallet = AnonymousWallet::new(fresh(&bob));
+    let initial = AnonymousSync::new(&bob.keys, &assets())
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    wallet.absorb(initial).unwrap();
+    assert_eq!(wallet.pending_notes().len(), 1);
     let scan = AnonymousSync::new(&bob.keys, &assets())
         .fetch_wallet(&indexer, &wallet)
         .await
         .unwrap();
+    let before = wallet.to_json();
     wallet.resolve_pending(&assets());
+    wallet.update_history(wallet.history().clone()).unwrap();
+    assert_eq!(wallet.to_json(), before);
+    let history = wallet.history().clone();
+    wallet.resolve_pending(&RingAssets::new([unknown]).unwrap());
+    assert_eq!(wallet.history(), &history);
+    assert!(wallet.pending_notes().is_empty());
     assert!(matches!(
         wallet.absorb(scan),
         Err(AnonymousError::ScanHistoryChanged)
@@ -2757,6 +2863,9 @@ async fn canonical_scan_refuses_a_stale_wallet_revision() {
 async fn recovery_diagnostics_keep_a_bounded_sample_across_restarts() {
     let indexer = Indexer::default();
     let mut alice = Wallet::new(1);
+    alice.funding = (0..80)
+        .map(|index| funding_utxo(&alice.keys, 1, index))
+        .collect();
     let bob = Wallet::new(2);
     let carol = Wallet::new(3);
     for _ in 0..80 {

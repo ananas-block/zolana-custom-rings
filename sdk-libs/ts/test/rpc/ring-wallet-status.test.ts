@@ -339,6 +339,6 @@ describe("delegate snapshots", () => {
     expect(first.done).toBe(false);
     await pages.return();
     expect(bodies.map((body) => body["method"])).toEqual(["getDelegateNotes", "releaseDelegateSnapshot"]);
-    expect((bodies[1]?.["params"] as Record<string, unknown>)["owner"]).toBe(WALLET);
+    expect(bodies[1]?.["params"]).toEqual(expect.objectContaining({ owner: WALLET }));
   });
 });

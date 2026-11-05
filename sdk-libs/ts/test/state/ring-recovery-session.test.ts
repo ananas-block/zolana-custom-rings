@@ -12,6 +12,7 @@ import { TREE, TREE_ID, randomAddress } from "../helpers/ring-pipeline.js";
 import { AnonymousSync, type AnonymousSyncClient } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { RECOVERY_DIAGNOSTIC_SAMPLES } from "../../src/state/recovery-session.js";
+import { extended } from "../../src/operations/workflow/extended.js";
 import { selectRingInputs } from "../../src/operations/payments/transfer.js";
 import { ASSETS, RING, ScanIndexer, ScanWallet, field, hex, signature } from "../helpers/ring-scan.js";
 
@@ -301,18 +302,23 @@ describe("durable recovery", () => {
     const bob = new ScanWallet(2);
     await alice.pay(source.indexer, [{ to: bob.address, amount: 7n }]);
     const retained: Bytes32[] = [];
-    const derive = bob.keys.ringDeliverySecrets.bind(bob.keys);
-    const delivery = vi.spyOn(bob.keys, "ringDeliverySecrets").mockImplementation(async (requests, context) => {
-      const secrets = await derive(requests, context);
+    const delivery = vi.fn<typeof bob.keys.ringDeliverySecrets>(async (requests, context) => {
+      const secrets = await bob.keys.ringDeliverySecrets(requests, context);
       retained.push(...secrets);
       return secrets;
     });
-    const transaction = vi.spyOn(bob.keys, "transactionKeys").mockRejectedValue(new Error("key holder unavailable"));
-    try {
-      await expect(AnonymousSync.create(bob.keys, ASSETS).fullScan(source.client(), bob.fresh(), RING)).rejects.toThrow("key holder unavailable");
+    const transaction = vi.fn<typeof bob.keys.transactionKeys>(async () => {
       expect(retained.length).toBeGreaterThan(0);
-      expect(retained.every((secret) => secret.every((byte) => byte === 0))).toBe(true);
-    } finally { delivery.mockRestore(); transaction.mockRestore(); }
+      expect(retained.every((secret) => secret.some((byte) => byte !== 0))).toBe(true);
+      throw new Error("key holder unavailable");
+    });
+    const keys = extended(bob.keys, { ringDeliverySecrets: delivery, transactionKeys: transaction });
+    await expect(AnonymousSync.create(keys, ASSETS).fullScan(source.client(), bob.fresh(), RING)).rejects.toThrow("key holder unavailable");
+    expect(delivery).toHaveBeenCalledTimes(1);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(retained.length).toBeGreaterThan(0);
+    expect(retained.every((secret) => secret.every((byte) => byte === 0))).toBe(true);
+    expect(source.spendQueries).toEqual([]);
   });
 
   it("retains a completed target through reload and refuses an older source", async () => {

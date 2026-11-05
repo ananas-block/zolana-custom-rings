@@ -6,7 +6,7 @@ use custom_ring_interface::{
     funder_account_position, input_flag,
     key_catalog::{FrameKey, RingCircuit},
     shape_flag, spl_withdrawal_count, tag, transact_flag, AnonymousProofData, BundleLayout,
-    CoSignScope, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
+    CoSignScope, CustomRingError, CustomRingProof, DisclosureFormat, FramedSenderBundle, InputTrees,
     PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData,
     RootRead, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
     RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
@@ -38,6 +38,7 @@ fn field(seed: u8) -> [u8; 32] {
 }
 
 pub struct Fixture {
+    format: DisclosureFormat,
     proofs: [CustomRingProof; 2],
     spp_proof: PlainGroth16Proof,
     fields: Vec<[u8; 32]>,
@@ -65,6 +66,7 @@ impl Fixture {
             commitment_pok: [seed + 4; 32],
         };
         Self {
+            format: DisclosureFormat::Standard,
             proofs: [proof(0x10), proof(0x20)],
             spp_proof: PlainGroth16Proof {
                 proof_a: [0x31; 32],
@@ -88,6 +90,12 @@ impl Fixture {
             salt: [0x5c; 16],
             spl_owners: [[0x73; 32]; 8],
         }
+    }
+
+    #[must_use]
+    pub fn with_format(mut self, format: DisclosureFormat) -> Self {
+        self.format = format;
+        self
     }
 
     pub fn settle_legs<'a>(
@@ -131,12 +139,15 @@ impl Fixture {
             expiry_unix_ts: 1_800_000_000,
             tx_viewing_u: &self.keys[0],
             salt: &self.salt,
-            extensions: Default::default(),
+            extensions: custom_ring_interface::FrameExtensions {
+                format: self.format,
+                ..Default::default()
+            },
             interface_transfers: Vec::new(),
             has_data: false,
             entry: false,
             wide_owners: FrameKey {
-                format: custom_ring_interface::DisclosureFormat::Standard,
+                format: self.format,
                 rail,
                 inputs: usize::from(n_in),
                 outputs: usize::from(n_out),
@@ -170,8 +181,8 @@ impl Fixture {
             .map(|slot| RingOutput {
                 hash: &self.fields[10 + slot],
                 owner_tag: custom_ring_interface::stream::slot_tag(self.tags[slot]),
-                body: SlotBody::Recipient(&self.bodies[slot]),
-                record: &self.records[slot],
+                body: SlotBody::Recipient(&self.bodies[slot][..self.format.recipient_body_len()]),
+                record: &self.records[slot][..self.format.record_len()],
                 tail: None,
             })
             .collect();

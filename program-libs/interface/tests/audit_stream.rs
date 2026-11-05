@@ -573,13 +573,13 @@ fn the_solved_go_stream_reads_back_under_the_rust_layout() {
             .collect::<Vec<_>>(),
         [
             "plain_with_exit_and_dummy",
+            "single_asset_payout",
             "compact",
             "data",
             "entry",
             "address_only",
             "interleaved",
             "interleaved_entry",
-            "single_asset_payout",
         ]
     );
     for case in &vector.cases {

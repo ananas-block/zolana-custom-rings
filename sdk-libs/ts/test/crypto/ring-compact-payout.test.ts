@@ -53,6 +53,12 @@ describe("single asset payout", () => {
     const wrongScheme = output.slice();
     wrongScheme[5] = 10;
     expect(ringBodyOutput(wrongScheme)).toBeUndefined();
+    expect(
+      ringBodyOutput(encodeRingBodyOutput(new Uint8Array(71), new Uint8Array())),
+    ).toBeUndefined();
+    expect(ringBodyOutput(encodeRingBodyOutput(new Uint8Array(72), new Uint8Array()))?.format).toBe(
+      DisclosureFormat.Standard,
+    );
     expect(ringBodyOutput(encodeRingBodyOutput(bytes, Uint8Array.of(1)))).toBeUndefined();
   });
 

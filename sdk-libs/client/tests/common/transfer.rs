@@ -337,9 +337,26 @@ impl Transfer {
     }
 
     pub fn slots(&self, outputs: &[Output]) -> Vec<Slot> {
+        let has_data = outputs
+            .iter()
+            .any(|output| output.tail() != DataTail::default());
         (0u32..)
             .zip(outputs)
-            .map(|(index, output)| self.slot(index, output))
+            .map(|(index, output)| {
+                let mut slot = self.slot(index, output);
+                if let Some((body, reply)) =
+                    custom_ring_interface::ring_body_output(&slot.output.payload).filter(|_| has_data)
+                {
+                    let mut padded = body.to_vec();
+                    padded.resize(
+                        RECIPIENT_BODY_LEN + custom_ring_interface::RECIPIENT_BODY_LENGTH_LEN,
+                        ANONYMOUS_BODY[0],
+                    );
+                    slot.output.payload =
+                        custom_ring_interface::encode_ring_body_output(&padded, reply).unwrap();
+                }
+                slot
+            })
             .collect()
     }
 

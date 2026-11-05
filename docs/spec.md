@@ -323,6 +323,22 @@ A recipient wallet finds an anonymous note by scanning ring history, see [wallet
 
 A frame publishes `m` output slots up to the key's capacity, and omits the rest as a suffix. A ring output publishes no owner identity, and an exit's owner is public. Every ring program transaction is one inline v1 transaction, with no frame buffer and no lookup table. The SDKs refuse before proving a frame whose transaction passes 4,096 bytes or 64 addresses, or whose SPP CPI data passes 10 KiB. The key catalog in `program-libs/interface/src/proof/key_catalog.rs` fixes each key's input class. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg.
 
+The table names construction paths, subject to policy, key capacity and frame fit. Direct SDK paths build their own proofs. Hosted paths ask Ring RPC to prove and submit. Public co-owners still sign the transaction. A missing proving key refuses every path.
+
+| Transfer combination | Direct Rust | Direct TypeScript | Hosted Ring RPC | Proof and program boundary |
+|---|---|---|---|---|
+| Confidential signer, ring or default-ring inputs, optional public co-owners | Yes | Yes | No signer path | SPP verifies public owner signatures. Default-ring inputs select an entry key. |
+| Confidential in-proof owner, ring inputs, optional public co-owners | Yes | Yes | Yes | SPP verifies the owner's proof signature and each public co-owner's transaction signature. |
+| Confidential in-proof owner with a default-ring input | Refused | Refused | Refused | The ring entry proof permits the input, but the SDK paths refuse it. |
+| Anonymous hidden owner, ring inputs, optional public co-owners | Yes | Yes | Yes | Input zero belongs to the hidden owner. Its key is nonzero. Public co-owners sign. |
+| Anonymous entry, one owner, default-ring inputs only, no input data | Yes | Yes | Yes | SPP publishes the default-ring owner's identity. An entry key opens those inputs to the auditor. |
+| Anonymous entry with public co-owners or input data | Yes | Yes | Yes | The hidden owner cannot mix its own ring and default-ring notes. Public co-owners sign. |
+| Anonymous owner mixing its own ring and default-ring inputs | Refused | Refused | Refused | SPP refuses the mixture. Use the public-owner path. |
+| Anonymous public owners, ring or default-ring inputs | Yes | Yes | No public-owner path | Every spending owner signs. Default-ring inputs select an entry key. Recipients remain hidden. |
+| Delegate, ring inputs, payments, exits or withdrawals | Yes | Yes | Yes | The delegate signs. Policy checks and co-signer demand are bypassed. |
+| Delegate with default-ring inputs | Refused | Refused | Refused | The authority proof and key selector require ring inputs. |
+| Confidential single-asset payout | Yes | Yes | Refused | One public owner, one ring input and 16 real ring outputs of one asset. No entry, public legs, data or replies. |
+
 The capacity profiles below use one input, a separate payer, one co-signer and one curator, with no application data or replies.
 
 | Rail | Output capacity | Conditions |

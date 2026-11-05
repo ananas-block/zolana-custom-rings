@@ -164,7 +164,7 @@ impl RingTransactData<'_> {
     }
 
     fn auditor_ciphertexts(&self) -> impl Iterator<Item = &[u8]> + Clone {
-        let records = self.outputs.iter().map(|output| &output.record[..]);
+        let records = self.outputs.iter().map(|output| output.record);
         let tails = self
             .outputs
             .iter()

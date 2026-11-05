@@ -154,7 +154,7 @@ describe("selectTransferKey", () => {
     expect(entered(5, 8, 4, 4)).toMatchObject({ class: 5, outputs: 8, entry: true });
     const wide = entered(6, 8, 0, 1);
     expect(wide).toMatchObject({ class: 8, outputs: 8, withdrawals: 32, owners: 8, entry: true });
-    expect(transferPoolCapacity(wide)).toEqual({ own: 83, curator: 83, tracking: 38 });
+    expect(transferPoolCapacity(wide)).toEqual({ own: 91, curator: 91, tracking: 38 });
     expect(entered(1, 2, 5, 1)).toEqual(wide);
     expect(entered(8, 4, 32, 8)).toEqual(wide);
     expect(refusal(() => entered(9, 2, 0, 1)).code).toBe("RING_CATALOG_KEY_MISSING");

@@ -20,7 +20,7 @@ import {
 
 import { deliveredSlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
 import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
-import { AnonymousSync, ringFullScan } from "../../src/state/anonymous-sync.js";
+import { AnonymousSync, TAGS_PER_REQUEST, ringFullScan } from "../../src/state/anonymous-sync.js";
 import { openRingNotes } from "../../src/state/ring-sync.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
@@ -77,9 +77,7 @@ describe("full scan recovery", () => {
     const byTag = vi.fn(async () => {
       throw new Error("tag reads unavailable");
     });
-    const byNullifier = vi.fn(async () => {
-      throw new Error("nullifier reads unavailable");
-    });
+    const byNullifier = vi.fn(indexer.client().getShieldedTransactionsByNullifiers);
     const history = (await ViewingHistory.create(bob.viewingKey, 0n).requestTag(bob.keys)).history;
     const recovered = await AnonymousSync.create(bob.keys, ASSETS).fullScan(
       {
@@ -91,7 +89,11 @@ describe("full scan recovery", () => {
       RING,
     );
     expect(byTag).not.toHaveBeenCalled();
-    expect(byNullifier).not.toHaveBeenCalled();
+    expect(byNullifier).toHaveBeenCalledTimes(1);
+    expect(byNullifier.mock.calls.flatMap(([request]) => request.nullifiers).map(hex)).toEqual(recovered.utxos.map((note) => hex(note.nullifier)));
+    expect(byNullifier.mock.calls.every(([request]) => request.nullifiers.length <= TAGS_PER_REQUEST)).toBe(true);
+    expect(recovered.spentNullifiers).toEqual([]);
+    expect(recovered.status).toBe("Complete");
     expect(recovered.history.current().request).toEqual(history.current().request);
     expect(found(recovered)).toEqual([hex(output(wrong, 1))]);
     expect(recovered.found[0]?.stream).toEqual({ kind: "fullScan" });
@@ -220,7 +222,7 @@ describe("full scan recovery", () => {
     expect(recovered.utxos.map((note) => note.utxo.amount)).toEqual([25n]);
   });
 
-  it("opens merges and resolves spends locally from the same pages", async () => {
+  it("opens same-page merges and checks only recovered nullifiers", async () => {
     const indexer = new ScanIndexer();
     const alice = new ScanWallet(1);
     const bob = new ScanWallet(2);
@@ -269,13 +271,21 @@ describe("full scan recovery", () => {
       proofless: false,
       ringProgramId: RING,
     });
-    const byNullifier = vi.fn();
+    const byNullifier = vi.fn(indexer.client().getShieldedTransactionsByNullifiers);
+    const pagesBefore = indexer.ringReads.length;
     const recovered = await AnonymousSync.create(bob.keys, ASSETS).fullScan(
       { ...indexer.client(), getShieldedTransactionsByNullifiers: byNullifier },
       ViewingHistory.create(bob.viewingKey, 0n),
       RING,
     );
-    expect(byNullifier).not.toHaveBeenCalled();
+    expect(indexer.ringReads.length - pagesBefore).toBe(1);
+    expect(byNullifier).toHaveBeenCalledTimes(1);
+    const queried = byNullifier.mock.calls.flatMap(([request]) => request.nullifiers).map(hex);
+    expect(queried.sort()).toEqual([...nullifiers, merged.nullifier(mergedHash, nullifierKey)].map(hex).sort());
+    expect(new Set(queried).size).toBe(queried.length);
+    expect(byNullifier.mock.calls.every(([request]) => request.nullifiers.length <= TAGS_PER_REQUEST)).toBe(true);
+    expect(recovered.utxos).toHaveLength(3);
+    expect(recovered.status).toBe("Complete");
     expect(recovered.found.at(-1)?.stream).toEqual({ kind: "merge", firstNullifier: first });
     expect(recovered.utxos.filter((utxo) => !utxo.spent).map((utxo) => utxo.utxo.amount)).toEqual([
       100n,

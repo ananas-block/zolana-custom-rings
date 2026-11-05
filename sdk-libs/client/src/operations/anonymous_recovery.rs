@@ -946,9 +946,8 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
         } else {
             Stream::Request
         };
-        let from = query.indices.iter().min().copied().unwrap_or(gap.next);
-        self.counter_mut(task.entry, stream)
-            .observe(from, &query.seen);
+        let counter = self.counter_mut(task.entry, stream);
+        counter.observe(counter.scanned(), &query.seen);
         gap.round_found |= query
             .seen
             .iter()

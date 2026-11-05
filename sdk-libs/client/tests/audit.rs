@@ -218,6 +218,19 @@ fn a_data_bearing_note_rebuilds_from_its_tail() {
     let transfer = Transfer::fixture();
     let disclosure = Transfer::with_data(transfer.disclosure(Rail::Delivered, &outputs), &outputs);
     let built = publish(&transfer, Rail::Delivered, outputs, disclosure);
+    let body_lengths: Vec<_> = built
+        .transaction
+        .output_slots
+        .iter()
+        .map(|slot| {
+            custom_ring_interface::ring_body_output(&slot.payload)
+                .unwrap()
+                .0
+                .len()
+        })
+        .collect();
+    assert_eq!(body_lengths[0], body_lengths[1]);
+    assert!(body_lengths[0] > custom_ring_interface::RECIPIENT_BODY_LEN);
     let audited = audit(&built.transaction, built.layout).unwrap();
     expect_every_slot(&built, &audited);
     let opened = audited.outputs[0].opening.utxo().unwrap();

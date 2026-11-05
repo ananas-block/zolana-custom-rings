@@ -56,7 +56,12 @@ import {
   createdDepositUtxo,
   openConfirmedDeposit,
 } from "../../../src/operations/workflow/created-utxos.js";
-import { decodeAuditEnvelope, RecordKind } from "../../../src/protocol/codec/audit-stream.js";
+import {
+  decodeAuditEnvelope,
+  decodeAuditRecord,
+  decodeCompactAuditRecord,
+  RecordKind,
+} from "../../../src/protocol/codec/audit-stream.js";
 import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
 import {
   decodeRingDepositOutput,
@@ -187,15 +192,20 @@ describe("the transfer reader", () => {
   it("rebuilds every slot of every vector from the stream with no registry", () => {
     expect(equalBytes(ringIdField(ring), field(auditVector.ring_id))).toBe(true);
     for (const entry of auditVector.cases) {
+      const { evidence } = decodeAuditEnvelope(hex(entry.envelope_plaintext), layoutOf(entry));
       const { audited: row } = audited(entry);
       expect(row.payloadErrors).toEqual([]);
       expect(row.outputs).toHaveLength(entry.output_count);
       row.outputs.forEach((output, slot) => {
-        const record = hex(entry.records[slot] as string);
-        const expected = ["dummy", "ring", "exit"][record[0] as number];
+        const plaintext = hex(entry.records[slot] as string);
+        const record =
+          evidence.kind === "singleAssetPayout"
+            ? decodeCompactAuditRecord(plaintext, evidence.mint)
+            : decodeAuditRecord(plaintext);
+        const expected = ["dummy", "ring", "exit"][record.kind];
         expect(output.opening.kind).toBe(expected);
         if (output.opening.kind === "ring" || output.opening.kind === "exit")
-          expect(output.opening.utxo.mint).toBe(encodeBase58(record.subarray(41, 73)));
+          expect(output.opening.utxo.mint).toBe(record.mint);
       });
     }
   });

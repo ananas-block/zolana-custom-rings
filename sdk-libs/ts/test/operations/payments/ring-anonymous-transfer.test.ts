@@ -1,5 +1,10 @@
 import { openingTotals } from "../../../src/protocol/membership/approval-totals.js";
-import { encodeBase58 } from "@heliuslabs/zolana/internal";
+import {
+  authorizeHiddenOwner,
+  bytesToBigInt,
+  encodeBase58,
+  prepareTransfer,
+} from "@heliuslabs/zolana/internal";
 import type { NoteData } from "../../../src/operations/payments/anonymous.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
@@ -227,6 +232,19 @@ function anonymousTransfer(fixture: Fixture) {
   if (request?.kind !== "transfer" || !request.hidden)
     throw new Error("no anonymous transfer request");
   return { request, circuit: ringCircuitType(ringProofCircuit(request)) };
+}
+
+async function anonymousCoreInputs(fixture: Fixture) {
+  const call = itemAt(fixture.sppCalls, 0);
+  if (call.owner === undefined) throw new Error("missing owner authorization");
+  const prepared = prepareTransfer(call.proofInputs, {
+    kind: "anonymousRingEddsa",
+    ring: fixture.ringProgramId,
+    authorization: await authorizeHiddenOwner(call.proofInputs, call.owner),
+  });
+  if (prepared.inputs.circuit !== "transferAnonymousRingEddsa")
+    throw new Error("unexpected anonymous circuit");
+  return prepared.inputs.payload;
 }
 
 function noProofs(fixture: Fixture): void {
@@ -861,7 +879,7 @@ describe("anonymous ring exits and entries", () => {
     });
   });
 
-  it("refuses an entry input that carries data before any proof", async () => {
+  it("binds an entry input data hash in both proof requests", async () => {
     const fixture = await anonymousRing();
     const sender = anonymousSender();
     const input = ProofInputUtxo.fromKeypair(
@@ -880,10 +898,19 @@ describe("anonymous ring exits and entries", () => {
       [input],
       fixture.authority,
     );
-    await expect(rail({ fixture, sender, transfer }).prove(fixture.client)).rejects.toThrow(
-      ringError("RING_ENTRY_INPUT_DATA", { index: 0 }),
+    const to = await addressOf(fixture, ShieldedKeypair.generate());
+    const proven = await rail({ fixture, sender, transfer })
+      .withPayment({ to, asset: SOL_MINT, amount: 400n, reply: null })
+      .prove(fixture.client);
+    const { data, call } = await expanded(fixture, proven, "anonymous");
+    expect(data.entry).toBe(true);
+    expect(itemAt(checkTransferProof(fixture, data).inputs, 0).dataHash).toEqual(small(0x55));
+    const core = await anonymousCoreInputs(fixture);
+    expect(itemAt(core.inputs, 0).circuit.dataHash).toBe(0x55n);
+    expect(core.defaultOwnerPublicKeyHash).toBe(
+      bytesToBigInt(sender.keypair.signingPublicKey().ownerProofInputHash()),
     );
-    noProofs(fixture);
+    checkDisclosure(fixture, call, data);
   });
 
   it("refuses ring notes beside a default-ring note before the entry width and any proof", async () => {
@@ -991,7 +1018,79 @@ describe("anonymous ring exits and entries", () => {
     checkDisclosure(fixture, call, data);
   });
 
-  it("refuses a co-owner on the entry key", async () => {
+  it.each([
+    ["default", "default"],
+    ["default", "ring"],
+    ["ring", "default"],
+  ] as const)(
+    "binds a %s hidden input and a %s public input on the entry key",
+    async (hiddenRing, publicRing) => {
+      const fixture = await anonymousRing();
+      const sender = anonymousSender();
+      const coOwner = ShieldedKeypair.generate();
+      fixture.enroll(coOwner.shieldedAddress());
+      const transfer = ringSpendTransfer({
+        owner: sender.keypair.shieldedAddress(),
+        inputs: [
+          { owner: sender.keypair, ring: hiddenRing },
+          { owner: coOwner, ring: publicRing },
+        ].map(({ owner, ring }) =>
+          ProofInputUtxo.fromKeypair(
+            new Utxo({
+              owner: owner.signingPublicKey(),
+              asset: SOL_MINT,
+              amount: 5_000n,
+              blinding: randomBlinding(),
+              ...(ring === "ring" ? { ringProgramId: fixture.ringProgramId } : {}),
+            }),
+            owner,
+            ring === "ring" ? { ringDataHash: small(0x66) } : {},
+            TREE_ID,
+          ),
+        ),
+        feePayer: fixture.authority,
+      });
+      transfer.withShape({ inputs: 2, outputs: 2 });
+      const to = await addressOf(fixture, ShieldedKeypair.generate());
+      const proven = await rail({ fixture, sender, transfer })
+        .withCoOwner({
+          owner: coOwner.shieldedAddress().solanaAddress(),
+          nullifierKey: coOwner.nullifierKey(),
+        })
+        .withPayment({ to, asset: SOL_MINT, amount: 400n, reply: null })
+        .prove(fixture.client);
+      const { data, call } = await expanded(fixture, proven, "anonymous");
+      expect(data.entry).toBe(true);
+      const request = checkTransferProof(fixture, data);
+      const identity = coOwner.signingPublicKey().ownerProofInputHash();
+      expect(bindingSigners(request)).toEqual([identity]);
+      expect(proven.accounts.ownerSigners).toEqual([coOwner.shieldedAddress().solanaAddress()]);
+      const core = await anonymousCoreInputs(fixture);
+      for (const [index, ring] of [hiddenRing, publicRing].entries()) {
+        expect(itemAt(request.inputs, index).ringDataHash).toEqual(small(ring === "ring" ? 0x66 : 0));
+        expect(itemAt(core.inputs, index).circuit.ringDataHash).toBe(ring === "ring" ? 0x66n : 0n);
+      }
+      expect(core.signerPublicKeyHashes.filter((value) => value !== 0n)).toEqual([
+        bytesToBigInt(identity),
+      ]);
+      expect(core.defaultOwnerPublicKeyHash).toBe(
+        hiddenRing === "default"
+          ? bytesToBigInt(sender.keypair.signingPublicKey().ownerProofInputHash())
+          : 0n,
+      );
+      expect(itemAt(request.entries, 0).ownerKey).toEqual(
+        hiddenRing === "default"
+          ? sender.keypair.signingPublicKey().confidentialViewTag()
+          : small(0),
+      );
+      expect(itemAt(request.entries, 1).ownerKey).toEqual(
+        publicRing === "default" ? coOwner.signingPublicKey().confidentialViewTag() : small(0),
+      );
+      checkDisclosure(fixture, call, data);
+    },
+  );
+
+  it("refuses an entry without its public co-owner key before any proof", async () => {
     const fixture = await anonymousRing();
     const sender = anonymousSender();
     const transfer = ringSpendTransfer({
@@ -1001,7 +1100,7 @@ describe("anonymous ring exits and entries", () => {
     });
     transfer.withShape({ inputs: 2, outputs: 2 });
     await expect(rail({ fixture, sender, transfer }).prove(fixture.client)).rejects.toThrow(
-      ringError("RING_ENTRY_CO_OWNER"),
+      ringError("RING_MISSING_CO_OWNER_KEY", { index: 1 }),
     );
     noProofs(fixture);
   });

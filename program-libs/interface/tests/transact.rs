@@ -309,7 +309,17 @@ fn recipient_and_exit_slots_keep_the_borsh_framing_at_exact_capacity() {
         Some(&fixture.sender_body[..])
     );
     assert_eq!(ring_body_output(&bundle), None);
-    let short = encode_ring_body_output(&fixture.recipient_body[..71], &[]).unwrap();
+    let short_body = &fixture.recipient_body[..71];
+    assert_eq!(
+        encode_ring_body_output(short_body, &[]),
+        Err(CustomRingError::OutputBodyLength)
+    );
+    let short_payload = [
+        &(short_body.len() as u16).to_le_bytes()[..],
+        short_body,
+    ]
+    .concat();
+    let short = borsh_framing(RING_BODY_SCHEME_TAG, &short_payload);
     assert_eq!(ring_body_output(&short), None);
 }
 

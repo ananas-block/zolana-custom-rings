@@ -825,7 +825,7 @@ export class AnonymousTransfer {
       checkZeroKeyInputs(proofInputs.inputUtxos, sender.signingPublicKey);
       const coOwners = ownerSignerAddresses(proofInputs.inputUtxos, proofInputs.outputs, owner);
       checkHiddenOwnerSpends(proofInputs, sender);
-      checkEntryInputs(proofInputs, ownerSignerAddresses(proofInputs.inputUtxos, [], owner));
+      checkEntryInputs(proofInputs, sender);
       checkCoOwnerKeys(proofInputs, sender, this.#coOwners);
       const staged = {
         proofInputs,

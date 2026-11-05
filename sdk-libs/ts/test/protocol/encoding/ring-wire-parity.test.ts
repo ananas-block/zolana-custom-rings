@@ -112,7 +112,7 @@ describe("approval_totals_frame.json", () => {
 
       it("refuses the next extension bit", () => {
         const unknown = frame.slice();
-        unknown[entry.extension_offset] = entry.extension_byte | (APPROVAL_TOTALS_BIT << 2);
+        unknown[entry.extension_offset] = entry.extension_byte | 0x80;
         expect(() => RingTransactData.parse(unknown, "confidential")).toThrow(
           expect.objectContaining({
             code: "RING_TRANSACT_DATA_INVALID",

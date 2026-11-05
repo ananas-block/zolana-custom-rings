@@ -4218,9 +4218,8 @@ async fn a_policy_transfer_places_each_input_asset_past_every_payment() {
     assert_eq!(params.asset_entries[payments], params.asset_entries[0]);
 }
 
-/// Zero value notes in unmatched mints spend, 13 of them leave the 15 narrow rows for the wide key.
 #[tokio::test]
-async fn unmatched_zero_value_inputs_past_the_narrow_rows_select_the_wide_key() {
+async fn distinct_zero_value_input_assets_fit_each_input_capacity() {
     use crate::tests::support::{keypair, Registry};
     let sender = keypair(1);
     let recipient = keypair(2);
@@ -4251,16 +4250,38 @@ async fn unmatched_zero_value_inputs_past_the_narrow_rows_select_the_wide_key() 
             .unwrap();
         owner_transfer(&sender, transaction)
     };
-    let narrow = key_of(12).assemble(&client).await.unwrap();
-    assert!(matches!(
-        narrow.frame.policy.circuit(),
-        RingCircuit::Transfer { wide: false, .. }
-    ));
-    let wide = key_of(13).assemble(&client).await.unwrap();
-    assert!(matches!(
-        wide.frame.policy.circuit(),
-        RingCircuit::Transfer { wide: true, .. }
-    ));
+    for (unmatched, expected_wide) in [(23, false), (39, true)] {
+        let assembled = key_of(unmatched).assemble(&client).await.unwrap();
+        let RingCircuit::Transfer {
+            inputs,
+            outputs,
+            withdrawals,
+            wide,
+            ..
+        } = assembled.frame.policy.circuit()
+        else {
+            panic!("expected transfer key");
+        };
+        assert_eq!(inputs, unmatched + 1);
+        assert_eq!(wide, expected_wide);
+        let zero = [[0; 32]; N_PUBLIC_SLOTS];
+        let params = assembled
+            .frame
+            .policy
+            .params(&super::policy::PolicyProving {
+                ring_id: [0; 32],
+                public_assets: &zero,
+                public_amounts: &zero,
+                public_gross: &zero,
+            })
+            .unwrap();
+        let payments = usize::from(outputs) + usize::from(withdrawals);
+        let assets: std::collections::BTreeSet<_> = params.asset_entries[payments..]
+            .iter()
+            .map(|entry| entry.own)
+            .collect();
+        assert_eq!(assets.len(), usize::from(inputs));
+    }
 }
 
 /// A delisted note no payment moves refuses before proving, the guarded rule leaves it alone.
@@ -4586,4 +4607,23 @@ async fn confidential_payout_keeps_the_complete_transaction_within_inline_limits
         )
         .unwrap();
     assert!(cpi.len() <= custom_ring_interface::MAX_CPI_DATA_LEN);
+}
+
+#[tokio::test]
+async fn anonymous_payout_keeps_all_output_slots_within_inline_limits() {
+    for change_slots in [0, 1] {
+        let fit = Measure {
+            co_signer: Some(MEASURED_CO_SIGNER),
+            curator: true,
+            priority_fee: true,
+            change_slots,
+            ..Measure::relayed(Measured::AnonymousPolicy, spr_client::Shape::new(1, 8))
+        }
+        .fit()
+        .await;
+        assert!(fit.bytes <= solana_message::v1::MAX_TRANSACTION_SIZE);
+        assert!(fit
+            .addresses
+            .is_some_and(|count| count <= usize::from(solana_message::v1::MAX_ADDRESSES)));
+    }
 }

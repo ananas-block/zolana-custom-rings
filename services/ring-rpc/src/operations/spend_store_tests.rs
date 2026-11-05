@@ -1645,6 +1645,156 @@ async fn wallet_snapshot_cleanup_keeps_capacity_until_all_rows_are_removed() {
 }
 
 #[tokio::test]
+#[ignore = "needs RING_RPC_TEST_POSTGRES_URL"]
+async fn overlapping_wallet_snapshots_preserve_both_quotas_on_postgres() {
+    use sea_orm::{DatabaseBackend, Statement, TransactionTrait};
+    use sea_orm_migration::MigratorTrait;
+    use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+
+    let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
+    let coordinator = Store::open(&url, 2).await.expect("coordinator");
+    crate::Migrator::fresh(coordinator.connection())
+        .await
+        .expect("empty test store");
+    let stores = [
+        Store::open(&url, 1).await.expect("first capture pool"),
+        Store::open(&url, 1).await.expect("second capture pool"),
+    ];
+    let mut pids = Vec::new();
+    for store in &stores {
+        let row = store
+            .connection()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT pg_backend_pid() AS pid",
+            ))
+            .await
+            .expect("backend")
+            .expect("backend row");
+        pids.push(row.try_get::<i32>("", "pid").expect("backend pid"));
+    }
+    let owner = wallet(97);
+    let key = secret(7);
+    let keys = Keys::with(owner, 7);
+    let book = indexed_store(&coordinator);
+    commit_page(&coordinator, &book, &seal(), &keys, &|work| {
+        work.open(
+            frame(2),
+            [
+                indexed_note(owner, &key, 30_000, 10),
+                indexed_note(owner, &key, 30_001, 10),
+            ],
+        );
+        terminal(work, 5);
+    })
+    .await
+    .expect("wallet notes");
+    let baseline = count(&coordinator, "SELECT COUNT(*) FROM wallet_snapshots").await;
+
+    for same_principal in [false, true] {
+        let limits = WalletSnapshotLimits {
+            store: NonZeroUsize::new(baseline as usize + if same_principal { 2 } else { 1 })
+                .expect("store limit"),
+            principal_wallet: NonZeroUsize::new(if same_principal { 1 } else { 2 })
+                .expect("scope limit"),
+        };
+        let first = WalletStatusQuery {
+            principal: query(wallet(98)).principal,
+            limit: 1,
+            ..query(owner)
+        };
+        let second = WalletStatusQuery {
+            principal: if same_principal {
+                first.principal
+            } else {
+                query(wallet(99)).principal
+            },
+            ..first
+        };
+        let lock = coordinator
+            .connection()
+            .begin()
+            .await
+            .expect("admission lock");
+        lock.query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT id FROM wallet_snapshot_admission WHERE id=1 FOR UPDATE",
+        ))
+        .await
+        .expect("lock admission")
+        .expect("admission row");
+        let start = Arc::new(tokio::sync::Barrier::new(2));
+        let mut attempts = Vec::new();
+        for (store, query) in stores.iter().cloned().zip([first, second]) {
+            let start = start.clone();
+            attempts.push(tokio::spawn(async move {
+                let book = indexed_store(&store)
+                    .with_wallet_snapshots(SharedWalletSnapshots::default(), limits);
+                start.wait().await;
+                (query, book.wallet_status(query).await)
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let row = coordinator.connection().query_one(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "SELECT COUNT(*) AS blocked FROM pg_stat_activity WHERE pid IN ($1,$2) AND wait_event_type='Lock' AND query LIKE 'UPDATE wallet_snapshot_admission%'",
+                    vec![pids[0].into(), pids[1].into()],
+                )).await.expect("capture lock waits").expect("lock count");
+                if row.try_get::<i64>("", "blocked").expect("blocked captures") == 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both captures must reach admission before release");
+        lock.rollback().await.expect("release admission");
+        let mut admitted = Vec::new();
+        let mut refused = Vec::new();
+        for attempt in attempts {
+            let (query, result) = tokio::time::timeout(Duration::from_secs(10), attempt)
+                .await
+                .expect("capture completes")
+                .expect("capture task");
+            match result {
+                Ok(page) => admitted.push((query, page)),
+                Err(error) => refused.push((query, error)),
+            }
+        }
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(refused.len(), 1);
+        assert_eq!(
+            count(&coordinator, "SELECT COUNT(*) FROM wallet_snapshots").await,
+            baseline + 1
+        );
+        let book = indexed_store(&coordinator)
+            .with_wallet_snapshots(SharedWalletSnapshots::default(), limits);
+        assert!(matches!(
+            book.wallet_status(refused[0].0).await,
+            Err(RingRpcError::WalletSnapshotCapacity)
+        ));
+        let (query, page) = admitted.pop().expect("admitted snapshot");
+        book.release_wallet_snapshot(WalletSnapshotRelease {
+            ring: query.ring,
+            wallet: query.wallet,
+            principal: query.principal,
+            cursor: WalletCursor::decode(&page.cursor.expect("cursor").0).expect("cursor"),
+            now: query.now,
+        })
+        .await
+        .expect("release snapshot");
+        assert_eq!(
+            count(&coordinator, "SELECT COUNT(*) FROM wallet_snapshots").await,
+            baseline
+        );
+    }
+    crate::Migrator::fresh(coordinator.connection())
+        .await
+        .expect("restore empty test store");
+}
+
+#[tokio::test]
 async fn coverage_pages_visit_all_faults_without_retaining_database_history() {
     let database = Store::open("sqlite::memory:", 1).await.expect("store");
     let seal = seal();

@@ -914,10 +914,47 @@ mod delegate_message {
             transfer: &AuthorityTransfer,
             tx_viewing_key: &TxViewingSecret,
         ) -> Result<Instruction, RingError> {
+            let proof_inputs = self.seal(transfer, tx_viewing_key).await?;
+            let assembled = RingTransfer::relayed(RelayedTransferInput {
+                ring: ring(),
+                proof_inputs: &proof_inputs,
+                fee_payer: FEE_PAYER,
+            })
+            .assemble(&self.client)
+            .await?;
+            let frame = &assembled.frame;
+            frame
+                .accounts
+                .instruction(frame.ring, &assembled.config, &frame.parts)
+        }
+
+        async fn settlement_frame(
+            &self,
+            transfer: &AuthorityTransfer,
+            tx_viewing_key: &TxViewingSecret,
+        ) -> Result<Instruction, RingError> {
+            let proof_inputs = self.seal(transfer, tx_viewing_key).await?;
+            let transfer = RingTransfer::relayed(RelayedTransferInput {
+                ring: ring(),
+                proof_inputs: &proof_inputs,
+                fee_payer: FEE_PAYER,
+            });
+            let framed = transfer.frame(&self.client).await?;
+            let frame = &framed.frame;
+            frame
+                .accounts
+                .instruction(frame.ring, framed.config.account(), &frame.parts)
+        }
+
+        async fn seal(
+            &self,
+            transfer: &AuthorityTransfer,
+            tx_viewing_key: &TxViewingSecret,
+        ) -> Result<RelayProofInputs, RingError> {
             let mut assets = AssetRegistry::default();
             assets.insert(USDC.asset_id, USDC.asset).unwrap();
             assets.insert(EURC.asset_id, EURC.asset).unwrap();
-            let proof_inputs = DelegateMove {
+            DelegateMove {
                 exits: transfer.exits.iter().copied().map(Into::into).collect(),
                 withdrawals: transfer
                     .withdrawals
@@ -959,18 +996,7 @@ mod delegate_message {
             .select(&self.client)
             .await?
             .relay_proof_inputs(self.client.zolana())
-            .await?;
-            let assembled = RingTransfer::relayed(RelayedTransferInput {
-                ring: ring(),
-                proof_inputs: &proof_inputs,
-                fee_payer: FEE_PAYER,
-            })
-            .assemble(&self.client)
-            .await?;
-            let frame = &assembled.frame;
-            frame
-                .accounts
-                .instruction(frame.ring, &assembled.config, &frame.parts)
+            .await
         }
 
         /// A move the request never named, built on the member's note.
@@ -1391,8 +1417,15 @@ mod delegate_message {
                 data.has_data = true;
                 for output in &mut data.outputs {
                     output.tail = Some(&ZERO_TAIL);
+                    if matches!(output.body, custom_ring_interface::SlotBody::Recipient(_)) {
+                        output.body = custom_ring_interface::SlotBody::Recipient(
+                            &[0; custom_ring_interface::RECIPIENT_BODY_LEN
+                                + custom_ring_interface::RECIPIENT_BODY_LENGTH_LEN],
+                        );
+                    }
                 }
             });
+            assert_eq!(slot_owners(&tails, expected.rail, &expected)[..2], order);
             assert_eq!(verdict_of(tails), Err(MessageMismatch::Data), "{mode:?}");
 
             let mut unclamped = asked.clone();
@@ -1697,7 +1730,7 @@ mod delegate_message {
     }
 
     #[tokio::test]
-    async fn hosted_delegate_funds_payments_exits_and_withdrawals() {
+    async fn hosted_delegate_frames_bind_payments_exits_and_withdrawals() {
         for mode in [RingMode::Confidential, RingMode::Anonymous] {
             for mint in [Mint::SOL, USDC] {
                 let delegate = keypair(7);
@@ -1705,7 +1738,7 @@ mod delegate_message {
                 relay.members[0].1 = vec![ring_utxo(&keypair(1), mint, 10, 0)];
                 let asked = settlement_request(delegate.pubkey(), mint);
                 let frame = relay
-                    .build(&asked.transfer, &asked.tx_viewing_key)
+                    .settlement_frame(&asked.transfer, &asked.tx_viewing_key)
                     .await
                     .unwrap();
                 let config = ring().require_config(relay.client.zolana()).await.unwrap();
@@ -1763,7 +1796,7 @@ mod delegate_message {
                 let mut extra = asked.clone();
                 extra.transfer.withdrawals[0].amount = 11;
                 assert!(relay
-                    .build(&extra.transfer, &extra.tx_viewing_key)
+                    .settlement_frame(&extra.transfer, &extra.tx_viewing_key)
                     .await
                     .is_err());
             }
@@ -1771,14 +1804,14 @@ mod delegate_message {
     }
 
     #[tokio::test]
-    async fn shared_delegate_settlement_messages_bind_all_legs() {
+    async fn shared_delegate_settlement_frames_bind_all_legs() {
         let delegate = keypair(7);
         let mut relay = DelegateRelay::new(Answer::Honest, delegate.pubkey());
         relay.members[0].1 = vec![ring_utxo(&keypair(1), USDC, 10, 0)];
         let asked = settlement_request(delegate.pubkey(), USDC);
         let config = ring().require_config(relay.client.zolana()).await.unwrap();
         let honest = relay
-            .build(&asked.transfer, &asked.tx_viewing_key)
+            .settlement_frame(&asked.transfer, &asked.tx_viewing_key)
             .await
             .unwrap();
         let mut cases = vec![MessageCase {
@@ -1821,7 +1854,10 @@ mod delegate_message {
                 1 => transfer.exits[0].recipient = thief().into(),
                 _ => transfer.exits[0].amount += 1,
             }
-            let frame = relay.build(&transfer, &asked.tx_viewing_key).await.unwrap();
+            let frame = relay
+                .settlement_frame(&transfer, &asked.tx_viewing_key)
+                .await
+                .unwrap();
             cases.push(MessageCase {
                 name: name.into(),
                 message: relay_message(&FEE_PAYER, &[frame], UNITS),

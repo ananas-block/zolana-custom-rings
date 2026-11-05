@@ -22,11 +22,14 @@ import { SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID } from "@heliuslabs/zol
 import type { Address, Bytes32, Bytes64, RequestContext } from "@heliuslabs/zolana/interface";
 import { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import type { ShieldedAddress, SigningKey } from "@heliuslabs/zolana/keypair";
-import type { SettlementTransfer, SppProofInputs } from "@heliuslabs/zolana/transaction";
+import type {
+  ProofInputUtxo,
+  SettlementTransfer,
+  SppProofInputs,
+} from "@heliuslabs/zolana/transaction";
 import type { RingAddress } from "../../crypto/keys/ring-address.js";
 
 import { RingError, type RingErrorCode } from "../../protocol/error.js";
-import { spendsDefaultRing } from "../workflow/pipeline.js";
 import { inputClassOf } from "../../proof/audit-proof.js";
 import { InputClass } from "../../protocol/codec/audit-stream.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
@@ -156,18 +159,18 @@ export async function anonymousExitTokenOwner(
   return tokenOwner;
 }
 
-/** A hidden owner cannot be both hidden and named by a default-ring input, a mixed spend takes the public owner rail, Rust `check_entry_inputs`. */
-export function checkEntryInputs(proofInputs: SppProofInputs, coOwners: readonly Address[]): void {
-  if (!spendsDefaultRing(proofInputs)) return;
-  if (coOwners.length > 0)
-    throw new RingError("RING_ENTRY_CO_OWNER", { details: { use: "spendPublic" } });
-  proofInputs.inputUtxos.forEach((input, index) => {
-    if (input.isDummy()) return;
-    if (input.utxo.ringProgramId !== undefined)
-      throw new RingError("RING_ENTRY_RING_INPUT", { details: { index, use: "spendPublic" } });
-    if (!carriesNoData([input.dataHash, input.ringDataHash]))
-      throw new RingError("RING_ENTRY_INPUT_DATA", { details: { index } });
-  });
+export function checkEntryInputs(proofInputs: SppProofInputs, sender: ShieldedAddress): void {
+  const held = (input: ProofInputUtxo): boolean =>
+    inputClassOf(input) === InputClass.note && input.utxo.owner.equals(sender.signingPublicKey);
+  if (
+    !proofInputs.inputUtxos.some((input) => held(input) && input.utxo.ringProgramId === undefined)
+  )
+    return;
+  const index = proofInputs.inputUtxos.findIndex(
+    (input) => held(input) && input.utxo.ringProgramId !== undefined,
+  );
+  if (index >= 0)
+    throw new RingError("RING_ENTRY_RING_INPUT", { details: { index, use: "spendPublic" } });
 }
 
 /** Rust `carries_no_data`, a zero hash commits like an absent one. */

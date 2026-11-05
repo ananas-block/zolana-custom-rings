@@ -724,7 +724,6 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
-    #[must_use]
     pub fn with_snapshot_limits(mut self, limits: WalletSnapshotLimits) -> Self {
         self.snapshot_limits = limits;
         self

@@ -30,6 +30,8 @@ export const DEFAULT_INPUT_BITS_LEN = 8;
 /** `kind ‖ u64be(amount) ‖ owner_key ‖ mint ‖ be32(nullifier_pk)`. */
 export const AUDIT_RECORD_LEN = 105;
 export const COMPACT_AUDIT_RECORD_LEN = 73;
+export const RECIPIENT_BODY_LEN = 72;
+export const COMPACT_RECIPIENT_BODY_LEN = 48;
 
 export enum DisclosureFormat {
   Standard = 0,

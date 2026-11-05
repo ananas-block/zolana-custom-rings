@@ -14,7 +14,11 @@ import {
   RecordKind,
   type AuditRecord,
 } from "../../../src/protocol/codec/audit-stream.js";
-import { DATA_TAIL_LEN, recordRegion } from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  DATA_TAIL_LEN,
+  RECIPIENT_BODY_LEN,
+  recordRegion,
+} from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   RingTransactData,
   ringRailOf,
@@ -462,6 +466,10 @@ describe("relay message check", () => {
           hasData: true,
           outputs: frame.outputs.map((output) => ({
             ...output,
+            body:
+              output.body.kind === "recipient"
+                ? { kind: "recipient" as const, body: new Uint8Array(RECIPIENT_BODY_LEN + 2) }
+                : output.body,
             tail: new Uint8Array(DATA_TAIL_LEN),
           })),
         }),

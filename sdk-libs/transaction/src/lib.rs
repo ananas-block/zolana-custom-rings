@@ -103,7 +103,6 @@ impl RingOutputRail {
         }
     }
 
-    #[must_use]
     pub fn with_format(mut self, format: DisclosureFormat) -> Self {
         self.format = format;
         self

@@ -17,6 +17,10 @@ import {
 } from "../../../src/protocol/proof/statement.js";
 import { RECIPIENT_BODY_LEN } from "../../../src/protocol/codec/anonymous-delivery.js";
 import {
+  DATA_TAIL_LEN,
+  DisclosureFormat,
+} from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import {
   CONFIDENTIAL_DATA_FREE_BODY_LEN,
   encodeRingBodyOutput,
   ringBodyOutput,
@@ -171,14 +175,27 @@ describe("the ring frame", () => {
   });
 
   it("refuses a slot without its tail under has_data and a tail without it", () => {
-    const plain = ringFrame({ rail: "confidential", inputs: 1, outputs: 2 });
-    expect(reason(() => RingTransactData.encode({ ...plain, hasData: true }))).toBe(
-      "RingTransactLength",
-    );
     const data = ringFrame({ rail: "confidential", inputs: 1, outputs: 2, hasData: true });
-    expect(reason(() => RingTransactData.encode({ ...data, hasData: false }))).toBe(
-      "RingTransactLength",
-    );
+    expect(
+      reason(() =>
+        RingTransactData.encode({
+          ...data,
+          outputs: data.outputs.map(({ tail: _tail, ...output }) => output),
+        }),
+      ),
+    ).toBe("RingTransactLength");
+    const plain = ringFrame({ rail: "confidential", inputs: 1, outputs: 2 });
+    expect(
+      reason(() =>
+        RingTransactData.encode({
+          ...plain,
+          outputs: plain.outputs.map((output) => ({
+            ...output,
+            tail: new Uint8Array(DATA_TAIL_LEN),
+          })),
+        }),
+      ),
+    ).toBe("RingTransactLength");
   });
 
   it("refuses a body past its plain length without has_data and keeps it with the length prefix", () => {
@@ -278,7 +295,7 @@ describe("the ring frame", () => {
     // The extension byte follows the salt.
     const extensions = 4 + 1 + CUSTOM_RING_PROOF_LENGTH + 8 + 8 + 4 + 32 + 16;
     expect(bytes[extensions]).toBe(1 | 2 | 4 | 8);
-    bytes[extensions] = 1 | 2 | 4 | 8 | 64;
+    bytes[extensions] = 1 | 2 | 4 | 8 | 128;
     expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("FlagNotAllowed");
     const { messages } = RingTransactData.expand(frame, { auditorPubkey: AUDITOR });
     expect(messages.map((message) => message.viewTag)).toEqual([field(83), AUDITOR.slice(1)]);
@@ -445,7 +462,7 @@ describe("ring body", () => {
     const { data } = ringTransactOutput({ ...slot, body: { kind: "recipient", body } }, reply);
     if (data === undefined) throw new Error("a framed body");
     expect(readRingOutput(data).scheme).toBe(RingScheme.ringBody);
-    expect(ringBodyOutput(data)).toEqual({ body, reply });
+    expect(ringBodyOutput(data)).toEqual({ body, reply, format: DisclosureFormat.Standard });
   });
 
   it("refuses a length past the payload and below the plain body", () => {
