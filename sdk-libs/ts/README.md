@@ -26,14 +26,19 @@ selects the pinned Nitro Enclave prover of that cluster when `proverUrl` is
 omitted.
 
 `syncRingWallet` runs `syncWallet`, then opens the confidential Ring notes and
-Ring deposits it skips into the wallet. Keys that are also `RingKeys` open
-delivered notes too. An audited Ring deposit opens through its capsule:
+Ring deposits it skips into a `RingWallet`. Keys that are also `RingKeys` open
+delivered notes too. An audited Ring deposit opens through its capsule. A note
+of a mint the registry lacks waits in `pendingOpenings()` and becomes spendable
+on the first sync after its mint registers. Each sync resumes where the last one
+stopped, so store the `RingWallet` after every sync:
 
 ```ts
-import { createCustomRingClient, syncRingWallet } from "@heliuslabs/zolana-custom-rings";
+import { createCustomRingClient, RingWallet, syncRingWallet } from "@heliuslabs/zolana-custom-rings";
 
 const client = await createCustomRingClient({ solanaRpcUrl });
-await syncRingWallet({ client, wallet, keys });
+const ring = RingWallet.create(wallet);
+await syncRingWallet({ client, wallet: ring, keys });
+const stored = ring.toJson();
 ```
 
 Ring projection errors, such as a storage registry the indexer has not caught
