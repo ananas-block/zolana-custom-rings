@@ -1,7 +1,6 @@
 import { ClientError, type Bytes32, type RequestContext } from "@heliuslabs/zolana";
 import {
   ApiError,
-  equalBytes,
   indexerScalars,
   wrapIndexer,
   type ZolanaApi,
@@ -27,21 +26,9 @@ import {
   type QuadPath,
   type RecordOpening,
 } from "../protocol/membership/member-registry.js";
-import {
-  getPendingEnrollmentsMethod,
-  getTrackingOpeningsMethod,
-  getTrackingRecordPoolMethod,
-  type PendingEnrollments,
-  type PendingEnrollmentsRequest,
-  type TrackingOpenings,
-  type TrackingOpeningsRequest,
-  type TrackingRecordPoolRequest,
-} from "../protocol/indexer/tracking-codec.js";
-import type { ServedTrackingPool } from "../protocol/membership/tracking.js";
 import type {
   RingMemberOpening,
   RingRecordReader,
-  TrackingReader,
   RingServedRecord,
   StorageMemberOpenings,
   StorageMemberPage,
@@ -62,7 +49,7 @@ const RING_PROJECTION_CODES: ReadonlyMap<number, RingErrorCode> = new Map([
   [-32075, "RING_REGISTRY_PAGE_GAP"],
 ]);
 
-export class RingIndexer implements RingRecordReader, TrackingReader {
+export class RingIndexer implements RingRecordReader {
   readonly #api: ZolanaApi;
 
   constructor(api: ZolanaApi) {
@@ -85,48 +72,6 @@ export class RingIndexer implements RingRecordReader, TrackingReader {
         ...servedOpenings(response, wire, method),
         root: storageRoot(response.root),
       });
-    } catch (cause) {
-      throw ringIndexerError(cause, method);
-    }
-  }
-
-  async getTrackingOpenings(
-    request: TrackingOpeningsRequest,
-    context?: RequestContext,
-  ): Promise<TrackingOpenings> {
-    const method = "getTrackingOpenings";
-    try {
-      const response = await this.#api.call(getTrackingOpeningsMethod, request, context);
-      if (
-        !equalBytes(response.root, request.expectedRoot) ||
-        response.openings.length !== request.members.length
-      )
-        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
-      return response;
-    } catch (cause) {
-      throw ringIndexerError(cause, method);
-    }
-  }
-
-  async getTrackingRecordPool(
-    request: TrackingRecordPoolRequest,
-    context?: RequestContext,
-  ): Promise<ServedTrackingPool> {
-    const method = "getTrackingRecordPool";
-    try {
-      return await this.#api.call(getTrackingRecordPoolMethod, request, context);
-    } catch (cause) {
-      throw ringIndexerError(cause, method);
-    }
-  }
-
-  async getPendingEnrollments(
-    request: PendingEnrollmentsRequest,
-    context?: RequestContext,
-  ): Promise<PendingEnrollments> {
-    const method = "getPendingEnrollments";
-    try {
-      return await this.#api.call(getPendingEnrollmentsMethod, request, context);
     } catch (cause) {
       throw ringIndexerError(cause, method);
     }

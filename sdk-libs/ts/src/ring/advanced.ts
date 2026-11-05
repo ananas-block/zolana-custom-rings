@@ -181,18 +181,16 @@ export {
   applyRecordsStatementHash,
   ciphertextDigest,
   recordChain,
-  registerKeyStatementElements,
-  registerKeyStatementHash,
   ringTransferStatement,
   signerBinding,
   tailChain,
   transferStatementElements,
   transferStatementHash,
 } from "../protocol/proof/statement.js";
+export { credentialElements, registerKeyHash } from "../protocol/membership/credential.js";
 export type {
   ApplyRecordsStatement,
   AuditHead,
-  RegisterKeyStatement,
   SignerBinding,
   TransferBinding,
   TransferFamily,

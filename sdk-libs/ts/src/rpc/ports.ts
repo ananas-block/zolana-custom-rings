@@ -19,19 +19,11 @@ import type {
 } from "../protocol/membership/member-registry.js";
 import type { RingTransactInstructionData } from "../protocol/proof/circuit.js";
 import type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
-import type {
-  PendingEnrollments,
-  PendingEnrollmentsRequest,
-  TrackingOpenings,
-  TrackingOpeningsRequest,
-  TrackingRecordPoolRequest,
-} from "../protocol/indexer/tracking-codec.js";
-import type { ServedTrackingPool } from "../protocol/membership/tracking.js";
 import type { RingProofRequest } from "./prover/ring.js";
 
 /** The nullifier key an owner enrolled, sealed to the auditor. */
 export interface RingSealedKey {
-  /** The signer whose owner identity is the tracking row's member. */
+  /** The signer whose owner identity is the credential's member. */
   readonly owner: Address;
   readonly nullifierPk: Bytes32;
   readonly ephemeralPublicKey: X25519PublicKey;
@@ -113,21 +105,6 @@ export interface RingRecordReader {
     request: StorageRecordPoolRequest,
     context?: RequestContext,
   ): Promise<StorageRecordPool>;
-}
-
-export interface TrackingReader {
-  getTrackingOpenings(
-    request: TrackingOpeningsRequest,
-    context?: RequestContext,
-  ): Promise<TrackingOpenings>;
-  getPendingEnrollments(
-    request: PendingEnrollmentsRequest,
-    context?: RequestContext,
-  ): Promise<PendingEnrollments>;
-  getTrackingRecordPool(
-    request: TrackingRecordPoolRequest,
-    context?: RequestContext,
-  ): Promise<ServedTrackingPool>;
 }
 
 export type RingSubmissionStatus =

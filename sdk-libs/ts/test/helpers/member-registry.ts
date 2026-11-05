@@ -9,13 +9,6 @@ import {
   type QuadPath,
 } from "../../src/protocol/membership/member-registry.js";
 import { FIELD_MAX, memberRecordHash } from "../../src/protocol/membership/member-opening.js";
-import {
-  TRACKING_QUAD_HEIGHT,
-  TRACKING_SENTINEL,
-  trackingRecordHash,
-  type TrackingEntry,
-  type TrackingRecord,
-} from "../../src/protocol/membership/tracking.js";
 
 /** One record the fixture holds. */
 export interface FixtureRecord {
@@ -124,16 +117,4 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
     })),
   ];
   return indexedTree(rows, memberRecordHash, QUAD_HEIGHT);
-}
-
-export function trackingTree(entries: readonly TrackingEntry[] = []) {
-  const sorted = ascending(entries);
-  const rows: TrackingRecord[] = [
-    { ...TRACKING_SENTINEL, next: sorted[0]?.member ?? FIELD_MAX },
-    ...sorted.map((entry, index) => ({
-      ...entry,
-      next: sorted[index + 1]?.member ?? FIELD_MAX,
-    })),
-  ];
-  return indexedTree(rows, trackingRecordHash, TRACKING_QUAD_HEIGHT);
 }

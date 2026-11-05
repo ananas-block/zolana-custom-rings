@@ -1831,7 +1831,7 @@ export class RingRpc {
     );
   }
 
-  /** `undefined` while the owner has no tracking row. */
+  /** `undefined` while the owner holds no credential. */
   async getListSalt(
     request: GetListSaltRequest,
     context?: RequestContext,
