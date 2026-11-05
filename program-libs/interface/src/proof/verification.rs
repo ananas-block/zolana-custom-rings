@@ -4,7 +4,10 @@ use groth16_solana::{
 };
 use solana_program_error::ProgramError;
 
-use crate::{CustomRingError, CustomRingProof};
+use crate::{
+    key_catalog::RingCircuit, storage::StorageError, storage_instruction::EnrollIxData,
+    tracking::owner_member, verifying_key, CustomRingError, CustomRingProof, RegisterKeyStatement,
+};
 
 type ProgramResult = Result<(), ProgramError>;
 
@@ -36,6 +39,40 @@ impl RingProof<'_> {
     }
 }
 
+/// The registry supplies ring and auditor key and the signer the member, a proof for any other one fails here.
+#[must_use]
+pub struct RegisterKeyCheck<'a> {
+    pub ring_id: &'a [u8; 32],
+    pub auditor_pubkey: &'a [u8; crate::TAGGED_X25519_KEY_LEN],
+    pub owner: &'a solana_address::Address,
+    pub ix: &'a EnrollIxData,
+    pub proof: &'a CustomRingProof,
+}
+
+impl RegisterKeyCheck<'_> {
+    pub fn verify(self) -> ProgramResult {
+        let member = owner_member(self.owner)?;
+        let statement = RegisterKeyStatement {
+            ring_id: self.ring_id,
+            member: &member,
+            nullifier_pk: &self.ix.nullifier_pk,
+            list_tag: &self.ix.list_tag,
+            auditor_pubkey: self.auditor_pubkey,
+            eph_u: &self.ix.eph_u,
+            ciphertext: &self.ix.ciphertext,
+        }
+        .hash()
+        .map_err(|_| StorageError::HashingFailed)?;
+        RingProof {
+            proof: self.proof,
+            statement,
+            key: verifying_key(RingCircuit::RegisterKey).ok_or(StorageError::UnsupportedBatch)?,
+        }
+        .verify()
+        .map_err(|_| StorageError::ProofVerificationFailed.into())
+    }
+}
+
 fn undecodable<E>(_: E) -> CustomRingError {
     CustomRingError::InvalidRingProofPoint
 }
@@ -45,7 +82,6 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
-    use crate::{key_catalog::RingCircuit, verifying_key};
 
     fn verify(proof: &CustomRingProof, key: &Groth16Verifyingkey<'_>) -> ProgramResult {
         RingProof {

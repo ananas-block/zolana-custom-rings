@@ -2,6 +2,8 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `PreparedRingDeposit.prepareRelay` takes `depositorSigner` and `prepareRingMergeRelay` takes `signer`, each signs a digest of the proof inputs into the intent as `depositorSignature` or `ownerSignature`, and Ring RPC refuses an unsigned request before proving. `depositRequestDigest` and `mergeRequestDigest` name those digests, and the refusals add `depositorSignature`.
+- A wallet's relay check accepts a message that omits a token account create it named, in the named order, since Ring RPC omits the create of an account that already exists.
 - `exitsBitmap`, `bodilessBitmap`, `AnonymousSync.withDepositPayload`, `P256ReaderKey.toUncompressed`, `RingTransactData.inProofSender`, `KnownUtxoIndex.applyMerge` and `LocalRingKeys.ringDeliverySecret` are gone → read the frame through `RingTransactData.parse` and pass secrets through `ringDeliverySecrets`.
 - `createRingTransferSubmission`, `createRingExitSubmission`, `createRingEntrySubmission` and `createRingWithdrawalSubmission` now settle a transfer past one transaction from a buffer, a `send` result of `unknown` can name a write or a close, `RingSubmissionAttempt` gains `upload`, and a kit transport signs each transaction only with the held signers it names.
 - `closeAbandonedFrameBuffers` returns the rent of the buffers a writer left on a ring once the wallet holds no pending submission, refuses earlier with `RING_SUBMISSION_PENDING`, and a refused close throws `RING_FRAME_BUFFER_CLOSE`.

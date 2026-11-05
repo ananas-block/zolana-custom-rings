@@ -1,11 +1,7 @@
 use custom_ring_interface::{
-    key_catalog::RingCircuit,
-    storage::StorageError,
-    storage_instruction::{EnrollIxData, EnrollRequest},
-    tracking::owner_member,
-    verifying_key, CustomRingProof, RegisterKeyStatement, RingProof,
+    storage::StorageError, storage_instruction::EnrollRequest, RegisterKeyCheck,
 };
-use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
+use pinocchio::{AccountView, Address, ProgramResult};
 
 use crate::loader::{
     check_signer, load_owned_tracking_authorization_mut, load_tracking_registry,
@@ -46,13 +42,14 @@ pub fn process_enroll_ix(
     }
     let proof = proof.ok_or(StorageError::EnrollmentProofShape)?;
     let registry = load_tracking_registry(program_id, registry_account)?;
-    check_register_key(RegisterKeyCheck {
+    RegisterKeyCheck {
         ring_id: &registry.ring_id,
         auditor_pubkey: &registry.auditor_pubkey,
         owner: owner_account.address(),
         ix,
         proof,
-    })?;
+    }
+    .verify()?;
     TrackingAuthorizationInit {
         program_id,
         payer: payer_account,
@@ -61,36 +58,4 @@ pub fn process_enroll_ix(
         ix,
     }
     .init(authorization_account)
-}
-
-#[must_use]
-struct RegisterKeyCheck<'a> {
-    ring_id: &'a [u8; 32],
-    auditor_pubkey: &'a [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
-    owner: &'a Address,
-    ix: &'a EnrollIxData,
-    proof: &'a CustomRingProof,
-}
-
-/// The program supplies ring, member and auditor key, a proof for any other one fails here.
-fn check_register_key(check: RegisterKeyCheck<'_>) -> Result<(), ProgramError> {
-    let member = owner_member(check.owner)?;
-    let statement = RegisterKeyStatement {
-        ring_id: check.ring_id,
-        member: &member,
-        nullifier_pk: &check.ix.nullifier_pk,
-        list_tag: &check.ix.list_tag,
-        auditor_pubkey: check.auditor_pubkey,
-        eph_u: &check.ix.eph_u,
-        ciphertext: &check.ix.ciphertext,
-    }
-    .hash()
-    .map_err(|_| StorageError::HashingFailed)?;
-    RingProof {
-        proof: check.proof,
-        statement,
-        key: verifying_key(RingCircuit::RegisterKey).ok_or(StorageError::UnsupportedBatch)?,
-    }
-    .verify()
-    .map_err(|_| StorageError::ProofVerificationFailed.into())
 }

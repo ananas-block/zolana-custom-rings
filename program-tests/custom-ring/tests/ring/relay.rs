@@ -145,6 +145,7 @@ fn a_relayed_user_merge_lands_one_note_of_the_merged_value() -> Result<()> {
     let prepared = MergeRelay {
         ring: relayed.ring,
         sender: owner.shielded_address()?,
+        owner,
         nullifier_key: owner.nullifier_key.clone(),
         inputs,
     }

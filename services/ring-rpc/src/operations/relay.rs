@@ -124,6 +124,8 @@ pub enum RelayError {
     Allowance,
     #[error("an earlier relay of the request can still land")]
     LiveAttempt,
+    #[error("the request does not carry the depositor's signature")]
+    DepositorSignature,
 }
 
 pub enum RelayPayload {
@@ -246,6 +248,7 @@ impl RelayError {
             Self::DelegateSignature => -32206,
             Self::Allowance => -32207,
             Self::LiveAttempt => -32208,
+            Self::DepositorSignature => -32209,
         }
     }
 
@@ -406,6 +409,7 @@ impl Relay {
                         step.budget,
                     )
                     .map_err(refused_fit)?;
+                    self.prover.check_enrollment(enrollment).await?;
                     self.fund_enrollment(lease).await?;
                     step
                 }
@@ -1690,10 +1694,52 @@ impl PrepareCheck<'_> {
         };
         let proof_inputs = match payload {
             RelayPayload::Transfer(proof_inputs) => proof_inputs,
-            RelayPayload::Deposit(deposit) if deposit.depositor == fee_payer => {
-                return Err(RelayError::DepositorIsFeePayer.into())
+            RelayPayload::Deposit(deposit) => {
+                if deposit.depositor == fee_payer {
+                    return Err(RelayError::DepositorIsFeePayer.into());
+                }
+                let RelayIntent::Deposit {
+                    proof_inputs,
+                    depositor_signature,
+                } = &request.intent
+                else {
+                    return Err(RelayError::DepositorSignature.into());
+                };
+                if !depositor_signature.0.verify(
+                    deposit.depositor.as_ref(),
+                    &proof_inputs.deposit_request_digest(),
+                ) {
+                    return Err(RelayError::DepositorSignature.into());
+                }
+                return Ok(Checked {
+                    signer: Some(deposit.depositor),
+                    ..unsigned
+                });
             }
-            RelayPayload::Deposit(_) | RelayPayload::Merge(_) => return Ok(unsigned),
+            RelayPayload::Merge(merge) => {
+                let RelayIntent::Merge {
+                    proof_inputs,
+                    owner_signature,
+                } = &request.intent
+                else {
+                    return Err(RelayError::OwnerSignature.into());
+                };
+                if !merge.sender.signing_pubkey.verify_message(
+                    &proof_inputs.merge_request_digest(),
+                    &<[u8; 64]>::from(owner_signature.0),
+                ) {
+                    return Err(RelayError::OwnerSignature.into());
+                }
+                return Ok(Checked {
+                    signer: merge
+                        .sender
+                        .signing_pubkey
+                        .as_ed25519()
+                        .ok()
+                        .map(Address::new_from_array),
+                    ..unsigned
+                });
+            }
             RelayPayload::Enroll(enrollment) => {
                 check_enrollment(enrollment, fee_payer)?;
                 let RelayIntent::Enroll {

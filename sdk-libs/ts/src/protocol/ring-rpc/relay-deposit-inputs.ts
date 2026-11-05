@@ -1,5 +1,11 @@
 /** The sealed deposit `RelayIntent.proofInputs` carries, Rust `RelayDepositInputs` in wincode. */
-import { SALT_LENGTH, Writer, addressBytes } from "@heliuslabs/zolana/internal";
+import {
+  SALT_LENGTH,
+  Writer,
+  addressBytes,
+  concatBytes,
+  sha256,
+} from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RingAssetDeposit } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
@@ -15,6 +21,13 @@ export interface RelayDepositInputs {
   readonly blindingSecret: Bytes32;
   /** Ephemeral secret of the auditor capsule in `deposit.encrypted`. */
   readonly auditEphemeralKey: Bytes32;
+}
+
+const DEPOSIT_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-deposit");
+
+/** Rust `ProofInputBytes::deposit_request_digest`, over the bytes `encodeRelayDepositInputs` returns. */
+export function depositRequestDigest(encoded: Uint8Array): Bytes32 {
+  return sha256(concatBytes(DEPOSIT_REQUEST_DOMAIN, encoded)) as Bytes32;
 }
 
 /** The caller wipes the returned bytes, they hold the note's blinding secret. */

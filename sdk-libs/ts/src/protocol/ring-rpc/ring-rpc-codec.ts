@@ -118,6 +118,7 @@ function encodeRelayIntent(intent: RelayIntent): WireObject {
         ...encodeTokenAccountSetup(intent.tokenAccountSetup),
       };
     case "enroll":
+    case "merge":
       return {
         operation: intent.operation,
         proofInputs,
@@ -131,8 +132,14 @@ function encodeRelayIntent(intent: RelayIntent): WireObject {
         ...encodeTokenAccountSetup(intent.tokenAccountSetup),
       };
     case "deposit":
-    case "merge":
-      return { operation: intent.operation, proofInputs };
+      return {
+        operation: intent.operation,
+        proofInputs,
+        depositorSignature: checkedSignature(
+          intent.depositorSignature,
+          "intent.depositorSignature",
+        ),
+      };
   }
 }
 

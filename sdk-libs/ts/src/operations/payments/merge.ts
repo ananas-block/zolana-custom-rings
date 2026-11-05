@@ -1,4 +1,4 @@
-import { getBase64Decoder, type Instruction } from "@solana/kit";
+import { getBase58Decoder, getBase64Decoder, type Instruction } from "@solana/kit";
 
 import type { ProofDataSourceContext, TreeContext, WalletKeys } from "@heliuslabs/zolana/client";
 import type { LatestBlockhash } from "@heliuslabs/zolana/internal";
@@ -46,6 +46,7 @@ import type {
   Bytes128,
   MergeTransactInstructionData,
   RequestContext,
+  Signature,
   Transaction,
 } from "@heliuslabs/zolana/interface";
 import { ShieldedAddress, type NullifierKey } from "@heliuslabs/zolana/keypair";
@@ -60,7 +61,10 @@ import {
   checkKeysIdentity,
 } from "@heliuslabs/zolana/transaction";
 import type { PreparedMerge, Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
-import { encodeRelayMergeInputs } from "../../protocol/ring-rpc/relay-proof-inputs.js";
+import {
+  encodeRelayMergeInputs,
+  mergeRequestDigest,
+} from "../../protocol/ring-rpc/relay-proof-inputs.js";
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
 import type { RingMergeClient, TrackingReader } from "../../rpc/ports.js";
@@ -70,7 +74,11 @@ import { OPENING_RECORD_LEN } from "../../protocol/codec/ring-disclosure-layout.
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 import type { RingKeys } from "../../state/ring-keys.js";
 
-import { checkHiddenParties } from "./anonymous.js";
+import {
+  checkAnonymousSigner,
+  checkHiddenParties,
+  type AnonymousSpendSigner,
+} from "./anonymous.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { isZeroKeyNote } from "../../state/exposed-notes.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
@@ -138,6 +146,8 @@ export interface RingMergeRelayParams extends Pick<
   readonly client: TreeContext;
   /** Ring RPC proves with it and so links every spend of the owner. */
   readonly nullifierKey: NullifierKey;
+  /** The owner's key, Ring RPC proves nothing for an unsigned request. */
+  readonly signer: AnonymousSpendSigner;
   readonly quote: RelayQuote;
 }
 
@@ -150,7 +160,7 @@ export async function prepareRingMergeRelay(params: RingMergeRelayParams): Promi
     const sender = params.wallet.identity;
     const { feePayer } = params.quote;
     // The merge circuit keeps a hidden owner off the payer.
-    checkHiddenParties(sender.signingPublicKey.ed25519(), [feePayer]);
+    checkAnonymousSigner({ signer: params.signer, sender, payer: feePayer });
     const asset = params.asset ?? SOL_MINT;
     const notes = selectMergeNotes({
       wallet: params.wallet,
@@ -183,12 +193,16 @@ export async function prepareRingMergeRelay(params: RingMergeRelayParams): Promi
       leafIndexes: notes.map((note) => note.outputContext.leafIndex),
       assets: params.wallet.registry,
     });
+    const ownerSignature = getBase58Decoder().decode(
+      await params.signer.sign(mergeRequestDigest(payload)),
+    ) as Signature;
     return new PreparedRelay({
       ring: params.ringProgramId,
       quote: params.quote,
       intent: {
         operation: "merge",
         proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+        ownerSignature,
       },
     });
   } catch (cause) {

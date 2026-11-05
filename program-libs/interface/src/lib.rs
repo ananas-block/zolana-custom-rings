@@ -82,7 +82,7 @@ pub use spp::*;
 pub use state::*;
 pub use statement::*;
 pub use transact::*;
-pub use verification::RingProof;
+pub use verification::{RegisterKeyCheck, RingProof};
 
 /// Not a deployable key, no keypair exists for it.
 pub const STORAGE_PROGRAM_ID: solana_address::Address =

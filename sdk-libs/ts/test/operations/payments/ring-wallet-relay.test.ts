@@ -1,4 +1,4 @@
-import { getBase64Decoder, type Address } from "@solana/kit";
+import { generateKeyPairSigner, getBase64Decoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -178,10 +178,23 @@ describe("wallet relay", () => {
     const network = walletNetwork(fixture);
     const recipient = ShieldedKeypair.generate().shieldedAddress();
     const approvals: ApprovalRequest[] = [];
+    const depositorSigner = await generateKeyPairSigner();
+    await expect(
+      PreparedRingDeposit.prepareRelay({
+        client: network.client,
+        ringProgramId: fixture.ringProgramId,
+        depositor: randomAddress(),
+        depositorSigner,
+        recipient: { kind: "confidential", address: recipient },
+        amount: 5n,
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+      }),
+    ).rejects.toThrow();
     const prepared = await PreparedRingDeposit.prepareRelay({
       client: network.client,
       ringProgramId: fixture.ringProgramId,
-      depositor: randomAddress(),
+      depositor: depositorSigner.address,
+      depositorSigner,
       recipient: { kind: "confidential", address: recipient },
       amount: 5n,
       quote: { feePayer: fixture.authority, validUntilSlot: 100n },
@@ -219,6 +232,7 @@ describe("wallet relay", () => {
         ringProgramId: fixture.ringProgramId,
         wallet: sender.wallet,
         nullifierKey: sender.keypair.nullifierKey(),
+        signer: signingKeySpendSigner(sender.signing),
         quote: { feePayer, validUntilSlot: 100n },
         approve,
       });
@@ -226,6 +240,17 @@ describe("wallet relay", () => {
     await expect(merge(sender.keypair.shieldedAddress().solanaAddress())).rejects.toMatchObject({
       cause: { code: "RING_ANONYMOUS_SIGNER_LINKS_OWNER" },
     });
+    await expect(
+      prepareRingMergeRelay({
+        client: network.client,
+        ringProgramId: fixture.ringProgramId,
+        wallet: sender.wallet,
+        nullifierKey: sender.keypair.nullifierKey(),
+        signer: signingKeySpendSigner(SigningKey.generate()),
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+        approve: recorded,
+      }),
+    ).rejects.toMatchObject({ cause: { code: "RING_ANONYMOUS_SIGNER_MISMATCH" } });
     // A refused approval releases the lease, the next merge takes the same notes.
     await expect(
       merge(fixture.authority, () =>
