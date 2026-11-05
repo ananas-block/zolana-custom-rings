@@ -288,7 +288,8 @@ impl<'a> AnonymousMove<'a> {
         let payments = self.payments.len();
         let owner = self.sender.address()?.signing_pubkey;
         let ring = Some(self.ring.program_id());
-        let widest_spend = |key: AnonymousKey| widest(payments, |shape| key.serves(shape));
+        // Output 0 is always the sender change, its slot leaves the input budget first.
+        let widest_spend = |key: AnonymousKey| widest(payments + 1, |shape| key.serves(shape));
         let max_inputs = widest_spend(AnonymousKey::Commitment).ok_or(RingError::ShapeUnkeyed {
             rail: RingRail::Anonymous,
         })?;
@@ -298,8 +299,12 @@ impl<'a> AnonymousMove<'a> {
             amount,
             max_inputs,
         };
-        let ring_only = funding
-            .candidates(|utxo| utxo.utxo.owner == owner && utxo.utxo.ring_program_id == ring);
+        let fits =
+            |key: AnonymousKey| move |candidate: &Candidate| self.shape(key, candidate).is_some();
+        let ring_only = funding.candidates(
+            |utxo| utxo.utxo.owner == owner && utxo.utxo.ring_program_id == ring,
+            fits(AnonymousKey::Commitment),
+        );
         let entry_width = match self.entry {
             EntrySpend::Allow => widest_spend(AnonymousKey::Entry),
             EntrySpend::Refuse => None,
@@ -309,10 +314,13 @@ impl<'a> AnonymousMove<'a> {
                 max_inputs,
                 ..funding
             }
-            .exact_first(|utxo| {
-                // The prover refuses a spend that mixes ring and default-ring UTXOs.
-                utxo.utxo.owner == owner && utxo.is_default_ring_spendable()
-            })
+            .exact_first(
+                |utxo| {
+                    // The prover refuses a spend that mixes ring and default-ring UTXOs.
+                    utxo.utxo.owner == owner && utxo.is_default_ring_spendable()
+                },
+                fits(AnonymousKey::Entry),
+            )
         });
         let attempts = ring_only
             .iter()
@@ -331,16 +339,9 @@ impl<'a> AnonymousMove<'a> {
         key: AnonymousKey,
         candidate: &Candidate,
     ) -> Result<AnonymousTransfer<'a>, RingError> {
-        // Output 0 is always the sender change, a zero one when nothing returns.
-        let with_change = Candidate {
-            change: true,
-            ..candidate.clone()
-        };
-        let shape = with_change
-            .shape(self.payments.len(), |shape| key.serves(shape))
-            .ok_or(RingError::ShapeUnkeyed {
-                rail: RingRail::Anonymous,
-            })?;
+        let shape = self.shape(key, candidate).ok_or(RingError::ShapeUnkeyed {
+            rail: RingRail::Anonymous,
+        })?;
         let transaction = ConfidentialTransaction::new_with_ring(
             candidate.utxos.clone(),
             self.payer,
@@ -368,6 +369,14 @@ impl<'a> AnonymousMove<'a> {
                 })
             })?
             .with_shape(shape)
+    }
+
+    /// Output 0 is always the sender change, a zero one when nothing returns.
+    fn shape(&self, key: AnonymousKey, candidate: &Candidate) -> Option<Shape> {
+        let sender_change = usize::from(!candidate.change);
+        candidate.shape(self.payments.len() + sender_change, |shape| {
+            key.serves(shape)
+        })
     }
 }
 
