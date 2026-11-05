@@ -403,7 +403,6 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
 }
 
 #[test]
-#[ignore = "exact-artifact phase, real deposit proofs at keys 4 and 8"]
 fn an_sdk_batch_settles_at_keys_four_and_eight() -> Result<()> {
     let env = setup()?;
     let ring = CustomRing::new(custom_ring_program_id()?);
