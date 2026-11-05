@@ -9,6 +9,10 @@
 //! 2. An audit-only ring keeps no rules, the table and source writes refuse it.
 //! 3. A source moves only for a list the rules reference, and at most one curator serves the ring.
 //! 4. The records registry carries the ring's id.
+//! 5. Each salted source of the proposed account pairs with the ring, a refused write leaves the stored account unchanged.
+//!
+//! The trailing accounts hold the registries the write names, then each registry a salted list of the
+//! proposed account reads that the write does not name. Accounts match by address.
 //!
 //! Read after `instructions/verification/policy_binding.rs`. Read before `program-libs/interface/src/accounts/state.rs`.
 
@@ -25,8 +29,8 @@ use zolana_ring_policy::ListId;
 
 use crate::instructions::{
     instruction_runtime::parse,
-    loader::{load_records_registry, RoleHolder},
-    policy_binding::{curator_source, TableBinding},
+    loader::RoleHolder,
+    policy_binding::{ProposedSources, TableBinding},
 };
 
 #[inline(never)]
@@ -80,12 +84,14 @@ impl PolicyWrite<'_> {
             curators: self.trailing,
         }
         .bind()?;
-        self.policy.set_policy(PolicyUpdate {
-            sources: bound.sources,
-            rules: bound.rules,
-            slot: self.slot,
-        })?;
-        Ok(())
+        let slot = self.slot;
+        self.commit(Named::Curator, |proposed| {
+            proposed.set_policy(PolicyUpdate {
+                sources: bound.sources,
+                rules: bound.rules,
+                slot,
+            })
+        })
     }
 
     /// Only a list the rules reference has a source, the own records or one curator.
@@ -93,36 +99,74 @@ impl PolicyWrite<'_> {
     fn move_source(self, source: PolicySourceIxData) -> ProgramResult {
         let list_id =
             ListId::try_from(source.list_id).map_err(|_| CustomRingError::InvalidListId)?;
-        let registry = match (source.source, self.trailing) {
-            (0, []) => Address::default(),
-            (1, [curator]) => curator_source(curator)?,
+        let (registry, named) = match (source.source, self.trailing) {
+            (0, _) => (Address::default(), Named::Nothing),
+            (1, [curator, ..]) => (*curator.address(), Named::Curator),
             _ => return Err(CustomRingError::InvalidSource.into()),
         };
-        let mut sources = self.policy.sources;
-        if sources[list_id.slot()].list_id == 0 {
+        if self.policy.sources[list_id.slot()].list_id == 0 {
             return Err(CustomRingError::InvalidSource.into());
         }
-        sources[list_id.slot()] = SourceSlot {
-            list_id: list_id as u8,
-            registry,
-        };
+        let slot = self.slot;
         // The rehashed source map refuses a second distinct curator.
-        let rules = self.policy.rules;
-        self.policy.set_policy(PolicyUpdate {
-            sources,
-            rules,
-            slot: self.slot,
-        })?;
-        Ok(())
+        self.commit(named, |proposed| {
+            let mut sources = proposed.sources;
+            sources[list_id.slot()] = SourceSlot {
+                list_id: list_id as u8,
+                registry,
+            };
+            let rules = proposed.rules;
+            proposed.set_policy(PolicyUpdate {
+                sources,
+                rules,
+                slot,
+            })
+        })
     }
 
     #[inline(never)]
     fn rebind_records(self) -> ProgramResult {
-        let [records] = self.trailing else {
+        let [records, ..] = self.trailing else {
             return Err(CustomRingError::InvalidStorageRegistry.into());
         };
-        load_records_registry(self.program_id, records)?;
-        self.policy.rebind_records(*records.address(), self.slot)?;
+        let (records, slot) = (*records.address(), self.slot);
+        self.commit(Named::Records, |proposed| {
+            proposed.rebind_records(records, slot)
+        })
+    }
+
+    /// Stores the proposed account only after its named and salted registries pass.
+    #[inline(never)]
+    fn commit(
+        self,
+        named: Named,
+        write: impl FnOnce(&mut RingPolicy) -> Result<(), CustomRingError>,
+    ) -> ProgramResult {
+        // 1. Boxed off the SBF stack, the stored account stays untouched until every check passes.
+        let mut proposed: Box<RingPolicy> = bytemuck::zeroed_box();
+        *proposed = *self.policy;
+        write(&mut proposed)?;
+        // 2. The named registry and every salted source of the proposed account load once and pair with the ring.
+        let named = match named {
+            Named::Nothing => None,
+            Named::Curator => proposed.curator(),
+            Named::Records => Some(proposed.records),
+        };
+        ProposedSources {
+            program_id: self.program_id,
+            proposed: &proposed,
+            registries: self.trailing,
+        }
+        .check(named)?;
+        *self.policy = *proposed;
         Ok(())
     }
+}
+
+/// The registry a write sets, loaded even when no salted list reads it.
+#[derive(Clone, Copy)]
+enum Named {
+    Nothing,
+    Curator,
+    Records,
 }

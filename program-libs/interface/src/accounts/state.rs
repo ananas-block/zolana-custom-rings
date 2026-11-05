@@ -22,6 +22,7 @@ use spr_hasher::HasherError;
 use wincode::{SchemaRead, SchemaWrite};
 use zolana_ring_policy::{
     EncodedRuleTable, ListId, ListSet, PolicySource, RuleTable, SourceMap, registry_field,
+    ring_id_field,
 };
 
 use crate::{
@@ -355,6 +356,21 @@ impl RingPolicy {
         self.salted()
             .iter()
             .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address)
+    }
+
+    /// `SaltedSourceOtherRing` when a salted list reads `address` and `source` is not paired with `program_id`.
+    pub fn check_salted_source(
+        &self,
+        program_id: &Address,
+        address: &Address,
+        source: &StorageRegistry,
+    ) -> Result<(), CustomRingError> {
+        if self.reads_salted(address)
+            && source.private_ring_id != ring_id_field(program_id.as_array())?
+        {
+            return Err(CustomRingError::SaltedSourceOtherRing);
+        }
+        Ok(())
     }
 
     pub fn own_registry(&self, read: RootRead) -> Option<Address> {

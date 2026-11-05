@@ -438,7 +438,14 @@ fn both_policy_writes_take_a_grant_over_several_lists_and_one_denial_per_list() 
     upgrade_initialize(&mut ring, data).expect("consistent list operations");
     let mut ring = Ring::new(Setup::Policy);
     let policy = ring.roles.policy.pubkey();
-    ring.role_send(RingRole::Policy, rules_write(&policy, table))
+    // The salted denial reads the own records, the write passes them for the pairing check.
+    let write = UpdatePolicyIx {
+        authority: policy,
+        update: UpdatePolicyIxData::Rules(table),
+        trailing: &[RECORDS],
+    }
+    .instruction();
+    ring.role_send(RingRole::Policy, write)
         .expect("consistent list operations");
 }
 

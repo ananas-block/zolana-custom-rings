@@ -8,7 +8,8 @@
 //! 1. Only the deployed binary's upgrade authority creates the ring, at its one canonical PDA.
 //! 2. The auditor key is canonical and of large order, and four distinct nonzero keys hold the roles.
 //! 3. A policy ring stores a validated table and its hash, any other ring stores no rule.
-//! 4. `RingConfig` names `ring_auth` as its authority, so SPP's ring admin actions pass through the program.
+//! 4. Each salted source of the stored table pairs with the ring.
+//! 5. `RingConfig` names `ring_auth` as its authority, so SPP's ring admin actions pass through the program.
 //!
 //! The instruction relies on SPP for `RingConfig` derivation and activation.
 //!
@@ -29,8 +30,8 @@ use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
 use crate::{
     instructions::{
         instruction_runtime::{check_system_program, parse, Pda, RingAuth},
-        loader::{load_records_registry, validate_spp_program, UpgradeAuthorityCheck},
-        policy_binding::TableBinding,
+        loader::{validate_spp_program, UpgradeAuthorityCheck},
+        policy_binding::{ProposedSources, TableBinding},
     },
     state::Init,
 };
@@ -76,15 +77,17 @@ pub fn process_initialize_ix(
     }
     .create::<RingPolicy>(payer, ring)?;
     // 4. A policy ring pins its table, any other ring may bind records alone for its thresholds.
+    let registries = iter.remaining_unchecked()?;
     let records = match &ix.policy {
-        Some(binding) => PolicyCreation {
-            program_id,
-            binding,
-            kind: ix.kind,
-        }
-        .records(&mut iter)?,
+        Some(binding) => Some(
+            PolicyCreation {
+                binding,
+                kind: ix.kind,
+            }
+            .records(registries)?,
+        ),
         None if ix.kind.has_policy() => return Err(CustomRingError::PolicyNotSet.into()),
-        None => Address::default(),
+        None => None,
     };
     let slot = Clock::get()?.slot;
     let mut account = NewRing {
@@ -97,14 +100,14 @@ pub fn process_initialize_ix(
         roles: ix.roles,
         auditor_pubkey: ix.auditor_pubkey,
         created_slot: slot,
-        records,
+        records: records.map_or_else(Address::default, |records| *records.address()),
     }
     .account();
     if let Some(binding) = ix.policy.as_ref().filter(|_| ix.kind.has_policy()) {
         // Sources name exactly the lists the rules reference, the pinned hash binds every later policy proof.
         let bound = TableBinding {
             table: &binding.table,
-            curators: iter.remaining_unchecked()?,
+            curators: &registries[1..],
         }
         .bind()?;
         account.set_policy(PolicyUpdate {
@@ -113,9 +116,18 @@ pub fn process_initialize_ix(
             slot,
         })?;
     }
+    // 5. The records and the curator load once, each salted source pairs with the ring before the account exists.
+    if let Some(records) = records {
+        ProposedSources {
+            program_id,
+            proposed: &account,
+            registries,
+        }
+        .check([*records.address()].into_iter().chain(account.curator()))?;
+    }
     Init(&*account).init(ring)?;
     let placed = RingAuth::derive(program_id)?.check_account(ring_auth)?;
-    // 5. SPP binds the ring program to its canonical configuration account.
+    // 6. SPP binds the ring program to its canonical configuration account.
     let data = encode_instruction(
         tag::CREATE_RING_CONFIG,
         // SPP starts the authority rail off, and the config stays inert until `set_ring_activation`
@@ -132,20 +144,21 @@ pub fn process_initialize_ix(
 
 #[must_use]
 struct PolicyCreation<'a> {
-    program_id: &'a Address,
     binding: &'a PolicyBindingIxData,
     kind: RingKind,
 }
 
 impl PolicyCreation<'_> {
+    /// The records account leads the registries, `ProposedSources::check` loads it.
     #[inline(never)]
-    fn records(self, iter: &mut AccountIterator<'_>) -> Result<Address, ProgramError> {
-        let records = iter.next_account("records")?;
+    fn records(self, registries: &[AccountView]) -> Result<&AccountView, ProgramError> {
+        let records = registries
+            .first()
+            .ok_or(ProgramError::NotEnoughAccountKeys)?;
         let table = &self.binding.table;
         if !self.kind.has_policy() && !(table.sources.is_empty() && table.rules.is_empty()) {
             return Err(CustomRingError::PolicyOnAuditOnlyRing.into());
         }
-        load_records_registry(self.program_id, records)?;
-        Ok(*records.address())
+        Ok(records)
     }
 }
