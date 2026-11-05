@@ -72,7 +72,7 @@ const (
 	MergeEncInfo = "CRING/mrg"
 )
 
-// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a transfer or deposit output under it proves its owner absent from the tracking root, a merge output reads no row.
+// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a transfer or deposit output under it proves its owner absent from the tracking root under a salted payee read, a merge output reads no row.
 var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c", 16)
 
 // SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.

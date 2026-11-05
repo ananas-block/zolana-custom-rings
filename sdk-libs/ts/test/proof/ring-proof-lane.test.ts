@@ -617,10 +617,11 @@ describe("tracking predicates", () => {
     const checked = (
       outputs: readonly (ProofOutputUtxo | undefined)[],
       served: TrackingRecord | undefined,
-      spenders: readonly ShieldedPublicKey[] = [],
-    ) => checkOutputKeys({ outputs, rowOf: () => served, spenders });
+      saltedPayees = true,
+    ) => checkOutputKeys({ outputs, rowOf: () => served, spenders: [], saltedPayees });
     checked([output(fill(9)), undefined], row(fill(9)));
     checked([output(zero)], undefined);
+    checked([output(zero)], row(fill(9)), false);
     expect(refusal(() => checked([output(zero)], row(fill(9)))).code).toBe(
       "RING_RECIPIENT_ENROLLED",
     );
@@ -642,11 +643,21 @@ describe("tracking predicates", () => {
       },
     } as unknown as ProofOutputUtxo;
     const stale = refusal(() =>
-      checkOutputKeys({ outputs: [output], rowOf: () => row(fill(9)), spenders: [] }),
+      checkOutputKeys({
+        outputs: [output],
+        rowOf: () => row(fill(9)),
+        spenders: [],
+        saltedPayees: false,
+      }),
     );
     expect(stale.code).toBe("RING_RECIPIENT_VIEWING_KEY_STALE");
     expect(stale.details).toMatchObject({ rowRevision: "1" });
-    checkOutputKeys({ outputs: [output], rowOf: () => row(fill(9)), spenders: [spender] });
+    checkOutputKeys({
+      outputs: [output],
+      rowOf: () => row(fill(9)),
+      spenders: [spender],
+      saltedPayees: false,
+    });
   });
 });
 

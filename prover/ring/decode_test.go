@@ -2,11 +2,17 @@ package ring
 
 import (
 	"encoding/json"
+	"maps"
 	"strings"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark/frontend"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
@@ -78,5 +84,27 @@ func TestDecodeRejectsMalformedRequests(t *testing.T) {
 	}
 	if _, err := decode("custom-ring-transfer-4-in24-w4-s4", honest); err == nil {
 		t.Fatal("a request for the 2-output key decoded on the 4-output key")
+	}
+}
+
+// The Rust encoder's table for a PrivateFrozen source, spliced into a host transfer request, reaches the circuit wires.
+func TestRustPolicyTableReachesTheAssignment(t *testing.T) {
+	var request, table map[string]any
+	if err := json.Unmarshal(mustMarshal(t, hostRequest(t, keyOf(t, transferKey))), &request); err != nil {
+		t.Fatal(err)
+	}
+	ringtest.ReadVector(t, "proof/ring-request-policy-table.json", &table)
+	maps.Copy(request, table)
+	assignment, err := decode(transferKey, mustMarshal(t, request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wires := assignment.(*transfer.TransferCircuit).Table
+	sent := uint16(table["salted"].(float64))
+	if sent&ringregistry.PrivateFrozenBit == 0 || wires.Salted != frontend.Variable(sent) {
+		t.Fatalf("salted %v, the Rust table sends %d", wires.Salted, sent)
+	}
+	if wires.Sources[policy.NSources-1].ListID != frontend.Variable(uint8(policy.NSources)) {
+		t.Fatalf("the PrivateFrozen slot reads list %v", wires.Sources[policy.NSources-1].ListID)
 	}
 }

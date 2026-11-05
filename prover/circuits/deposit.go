@@ -139,11 +139,11 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 			OwnerKey: c.OwnerKeys[i], MintChunks: c.MintChunks[i],
 		}, Secret: blinding}.Encode(api, rc))
 	}
-	// 5. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under the root. The owners read the same check as a transfer's outputs.
+	// 5. On a policy ring every recipient and deposited asset meets the rules under the bound roots.
 	tracking := c.OpenTracking(api)
-	transfer.AssertOutputOwners(api, tracking, slots, c.OutputEntries)
-	// 6. On a policy ring every recipient and deposited asset meets the rules under the bound roots.
-	c.ScreenDeposit(api, rc, tracking, slots)
+	saltedPayees := c.ScreenDeposit(api, rc, tracking, slots)
+	// 6. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under a salted payee read. The owners read the same check as a transfer's outputs.
+	transfer.AssertOutputOwners(api, tracking, slots, c.OutputEntries, saltedPayees)
 	// 7. The statement binds each commitment SPP receives to the ciphertext the auditor opens, one CRING/dep stream puts slot i at counter 2 + 9i.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.SealStream(api)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(api, count, commitments, sealed)))

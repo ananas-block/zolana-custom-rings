@@ -121,7 +121,7 @@ type Source struct {
 type PolicyTable struct {
 	Sources []Source `json:"sources"`
 	// Bit i puts list i+1 at owners' salted keys.
-	Salted    uint8   `json:"salted"`
+	Salted    uint16  `json:"salted"`
 	PolicyLen uint8   `json:"policyLen"`
 	Rules     []Field `json:"rules"`
 }

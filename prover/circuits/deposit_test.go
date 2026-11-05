@@ -97,7 +97,7 @@ func TestDepositSlotRefusals(t *testing.T) {
 		{"a literal zero key with no row", ringdeposit.Spec{Count: 2, ZeroKeys: []int{0}}, func(d *ringdeposit.Deposit) {
 			d.Circuit.NullifierPks[0] = 0
 		}, []string{"gadget.AssertZeroWhen", outputKey}},
-		{"a zero key on an enrolled owner", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
+		{"a zero key on an enrolled owner under a salted payee read", ringdeposit.Spec{Count: 2, Policy: ringdeposit.SaltedBlock()}, func(d *ringdeposit.Deposit) {
 			d.Circuit.NullifierPks[1] = new(big.Int).Set(shared.ZeroNullifierPk)
 		}, []string{"gadget.AssertEqualWhen", outputKey}},
 		{"a zero key claiming absence over the owner's own leaf", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
@@ -149,9 +149,11 @@ func TestDepositZeroKeyHoldsAtTheRootTheFrameNames(t *testing.T) {
 	if err := solveDeposit(stale.Circuit); err != nil {
 		t.Fatalf("a zero key under the root before enrollment: %v", err)
 	}
-	// The row is present under the current root and no opening of it reads absent.
+	// Off a salted payee read the enrolled owner takes the zero key under the current root too.
 	stale.RefillTracking(t)
-	ringtest.RequireRefused(t, solveDeposit(stale.Circuit), "gadget.AssertEqualWhen", outputKey)
+	if err := solveDeposit(stale.Circuit); err != nil {
+		t.Fatalf("a zero key to an enrolled owner off a salted payee read: %v", err)
+	}
 }
 
 // A low record of the tree before enrollment proves no absence under the root after it.

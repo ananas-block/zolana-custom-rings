@@ -204,11 +204,10 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	hiddenOwner := c.hiddenOwner(api, section, signers)
 	// At most one term is nonzero, assertRail excludes the bits and zeroes Sender off InProof.
 	signers.AssertOwners(api, section, api.Sub(1, c.Delegate), api.Add(hiddenOwner, c.Sender))
-	// 5. Owner rows and output keys read the tracking root. The auditor derives a nullifier from the secret sealed behind an enrolled key or from the public zero secret, so after the step no ring note carries a key the auditor cannot read.
+	// 5. Owner rows read the tracking root. The auditor derives a nullifier from the secret sealed behind an enrolled key or from the public zero secret, so after the step no spent ring note carries a key the auditor cannot read.
 	tracking := c.OpenTracking(api)
 	rows := OpenOwnerRows(api, c.Rows, c.RowEntries, tracking)
 	rows.AssertInputOwners(api, InputRail{Delegate: c.Delegate, Hidden: c.Hidden, HiddenOwner: hiddenOwner}, section.Slots)
-	AssertOutputOwners(api, tracking, opened.Slots, c.OutputEntries)
 	// 6. Each run entry's data-bearing outputs are counted from the opened slots, a signer's check needs the run from step 4 and the slots from step 2.
 	audit.SignerDataCounts{Packed: c.SignerDataCounts, Members: signers.Members, Active: signers.Count.Active, Slots: opened.Slots}.Assert(api)
 	// 7. PrivateTxHash binds the opened notes and derived address subsequence to SPP. Together with
@@ -219,6 +218,8 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
+	// Output keys read the same root, a zero key proves absence only under the salted payee read the screen derived.
+	AssertOutputOwners(api, tracking, opened.Slots, c.OutputEntries, screening.SaltedPayees)
 	// The mask is equal and never at least. A short mask would drop a demanded co-signer, the program acts on these bits and derives no threshold.
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
