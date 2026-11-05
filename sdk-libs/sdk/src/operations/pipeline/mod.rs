@@ -891,11 +891,13 @@ impl<'a> Sealed<'a> {
             HiddenOwner::of(&anonymous.signer.public_key())?
                 .check_signers(co_signers.iter().copied())?;
         }
+        let credential_trees = policy.credential_trees()?;
         check_owner_capacity(&OwnerCapacity {
             owners: owner_signers.len(),
             n_inputs: published_inputs,
             co_signers: co_signers.len(),
             legs: transfers.len(),
+            credential_accounts: credential_trees.added_accounts(&trees.inputs, &trees.output),
         })?;
         let accounts = TransactAccounts {
             payer: proof_inputs.payer,
@@ -906,7 +908,7 @@ impl<'a> Sealed<'a> {
             read_cache: proof_inputs.cache_accounts.read,
             co_signers,
             delegate,
-            credential_trees: Some(policy.credential_trees()?),
+            credential_trees: Some(credential_trees),
         };
         let mut parts = preview.parts(&proof_inputs, &rail, &sender, policy.plan.key)?;
         parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);
@@ -1457,6 +1459,7 @@ pub(crate) struct OwnerCapacity {
     pub n_inputs: usize,
     pub co_signers: usize,
     pub legs: usize,
+    pub credential_accounts: usize,
 }
 
 pub(crate) fn check_owner_capacity(capacity: &OwnerCapacity) -> Result<(), RingError> {
@@ -1464,6 +1467,7 @@ pub(crate) fn check_owner_capacity(capacity: &OwnerCapacity) -> Result<(), RingE
         n_inputs: capacity.n_inputs,
         co_signers: capacity.co_signers,
         legs: capacity.legs,
+        credential_accounts: capacity.credential_accounts,
     }
     .owner_signers();
     match capacity.owners > limit {

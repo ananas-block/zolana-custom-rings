@@ -29,7 +29,7 @@ fn update(list: ListId) -> Result<Instruction, RingError> {
             writes: vec![write_of(list)],
             asset_writes: Vec::new(),
             credential_read: CredentialRead::empty(),
-            ring_program: None,
+            private_write: None,
             apply: &apply,
         },
     }

@@ -137,6 +137,18 @@ impl CredentialTrees {
             .chain(self.state.iter().copied())
             .map(|tree_id| AccountMeta::new_readonly(pda::tree(tree_id), false))
     }
+
+    /// Distinct tree accounts no SPP input or output tree already names.
+    pub fn added_accounts(&self, inputs: &[Address], output: &Address) -> usize {
+        let mut added: Vec<Address> = self
+            .metas()
+            .map(|meta| meta.pubkey)
+            .filter(|tree| tree != output && !inputs.contains(tree))
+            .collect();
+        added.sort_unstable();
+        added.dedup();
+        added.len()
+    }
 }
 
 impl<'a> TransactionFit<'a> {

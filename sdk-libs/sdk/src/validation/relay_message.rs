@@ -499,7 +499,7 @@ fn check_signer(envelope: &Envelope, accounts: &[AccountMeta]) -> Result<(), Mes
         (named.next(), named.next()),
         (Some(meta), None) if meta.is_signer && !meta.is_writable
     );
-    if !signs_once || !envelope.reads_only(accounts.get(..1).unwrap_or_default()) {
+    if !signs_once || !envelope.reads_only(accounts.get(..1).unwrap_or_default(), &[]) {
         return Err(MessageMismatch::Accounts);
     }
     Ok(())
@@ -517,11 +517,9 @@ impl ExpectedDeposit {
             setup: Vec::new(),
         };
         let instruction = envelope.open(message)?;
-        let spp_data = instruction
-            .data
-            .get(size_of::<DepositPrefix>()..)
-            .filter(|_| instruction.data.first() == Some(&tag::DEPOSIT));
-        if spp_data != Some(self.spp.data.as_slice()) {
+        // The prefix parser checks the tag and the credential read, the rest must be the wallet's SPP data.
+        let mut spp_data = instruction.data.as_slice();
+        if DepositPrefix::parse(&mut spp_data).is_err() || spp_data != self.spp.data.as_slice() {
             return Err(MessageMismatch::Data);
         }
         let ring_accounts = instruction
@@ -530,7 +528,9 @@ impl ExpectedDeposit {
             .checked_sub(self.spp.accounts.len())
             .ok_or(MessageMismatch::Accounts)?;
         let (prefix, spp_accounts) = instruction.accounts.split_at(ring_accounts);
-        if spp_accounts != self.spp.accounts.as_slice() || !envelope.reads_only(prefix) {
+        if spp_accounts != self.spp.accounts.as_slice()
+            || !envelope.reads_only(prefix, spp_accounts)
+        {
             return Err(MessageMismatch::Accounts);
         }
         Ok(envelope.verified(message))
@@ -1024,7 +1024,7 @@ impl ExpectedFrame for ExpectedFunder {
         }
         match self
             .envelope(signer, Self::TAG)?
-            .reads_only(accounts.get(..1).unwrap_or_default())
+            .reads_only(accounts.get(..1).unwrap_or_default(), &[])
         {
             true => Ok(()),
             false => Err(MessageMismatch::Accounts),
@@ -1335,14 +1335,20 @@ impl Envelope {
         })
     }
 
-    /// The ring account first, then read only accounts that never name the signer.
-    fn reads_only(&self, prefix: &[AccountMeta]) -> bool {
+    /// The ring account first, then accounts that never name the signer and compile writable only
+    /// where the forwarded list writes the same address.
+    fn reads_only(&self, prefix: &[AccountMeta], forwarded: &[AccountMeta]) -> bool {
+        let forwarded_write = |meta: &AccountMeta| {
+            forwarded
+                .iter()
+                .any(|spp| spp.pubkey == meta.pubkey && spp.is_writable)
+        };
         match prefix.split_first() {
             Some((ring, rest)) => {
                 *ring == AccountMeta::new_readonly(self.ring.policy_pda(), false)
-                    && rest
-                        .iter()
-                        .all(|meta| !meta.is_writable && meta.pubkey != self.signer)
+                    && rest.iter().all(|meta| {
+                        (!meta.is_writable || forwarded_write(meta)) && meta.pubkey != self.signer
+                    })
             }
             None => false,
         }
