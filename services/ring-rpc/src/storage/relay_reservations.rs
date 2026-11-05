@@ -24,6 +24,13 @@ pub struct RelayBudget {
     pub signer_lamports: u64,
 }
 
+impl RelayBudget {
+    /// Either bound at zero refuses every charge.
+    pub const fn is_set(&self) -> bool {
+        self.total_lamports > 0 && self.signer_lamports > 0
+    }
+}
+
 /// The account whose rent returns on release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ReservedBuffer {

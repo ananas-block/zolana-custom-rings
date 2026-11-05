@@ -56,6 +56,8 @@ const RING_RPC: Tool = Tool::new(
     "ring-rpc serve",
     "rerun `zolana-ring localnet`, it downloads the ring rpc of the release",
 );
+/// `serve` below passes no fee payer, the operator turns the relay on.
+const RELAY_OFF: &str = "off, relay enrollment, buffered frames and token account creates need ring-rpc serve with --fee-payer-key-file, --store-url, --prover-url, --relay-budget-lamports and --relay-signer-budget-lamports, see services/ring-rpc/README.md";
 const READY_TIMEOUT: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_secs(2);
 
@@ -199,6 +201,7 @@ fn bring_up_workspace(
     ui::heading(icon::RING, "workspace services ready");
     let next = "zolana-ring pipeline in a second terminal with the same environment";
     line("next", next);
+    line("relay", RELAY_OFF);
     let ring_rpc_binary = workspace.ring_rpc()?;
     ServiceKey {
         binary: &ring_rpc_binary,
@@ -408,6 +411,7 @@ fn start_ring_rpc(
     );
     let (url, program) = (&config.urls().ring_rpc, config.program_id);
     line("ring rpc", format_args!("{url} serving {program}, {shown}"));
+    line("relay", RELAY_OFF);
     Ok(())
 }
 

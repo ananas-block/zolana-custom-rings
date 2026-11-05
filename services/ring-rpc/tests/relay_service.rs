@@ -86,6 +86,14 @@ impl Fixture {
     }
 
     async fn with_budget(budget: u64) -> Self {
+        Self::with_budgets(RelayBudget {
+            total_lamports: budget,
+            signer_lamports: budget,
+        })
+        .await
+    }
+
+    async fn with_budgets(budget: RelayBudget) -> Self {
         let prover = Arc::new(RecordingProver::default());
         let chain = Arc::new(RecordingChain::default());
         let fee_payer = Keypair::new_from_array([31; 32]);
@@ -98,10 +106,7 @@ impl Fixture {
             chain: chain.clone(),
         })
         .with_rings(Arc::new(OneRing(RING)))
-        .with_budget(RelayBudget {
-            total_lamports: budget,
-            signer_lamports: budget,
-        });
+        .with_budget(budget);
         let relay = Arc::new(relay);
         Self {
             relay: relay.clone(),
@@ -383,7 +388,8 @@ fn enrollment_under(request: EnrollmentRequest<'_>) -> PrepareRelayRequest {
 }
 
 /// Rent and one signature for each of the payer and the owner.
-const ENROLLMENT_LAMPORTS: u64 = RENT_LAMPORTS + 2 * 5_000;
+const ENROLLMENT_LAMPORTS: u64 = RENT_LAMPORTS + ENROLLMENT_FEES;
+const ENROLLMENT_FEES: u64 = 2 * 5_000;
 
 /// A wallet with no SOL enrolls, the relay pays and the owner's signature authorizes.
 #[tokio::test]
@@ -463,27 +469,171 @@ fn refused_with(refused: &Result<RelayStep, jsonrpsee::MethodsError>, error: Rel
     )
 }
 
-/// The budget holds outstanding lamports, zero funds none.
+/// Either bound at zero refuses ahead of a proof the prover would refuse.
 #[tokio::test]
-async fn enrollment_stays_off_until_the_operator_budgets_it_and_stops_at_the_budget() {
+async fn a_disabled_budget_refuses_an_enrollment_before_any_row_or_proof_check() {
     let owner = Keypair::new_from_array([42; 32]);
-    let other = Keypair::new_from_array([43; 32]);
-    let off = Fixture::new().await;
-    let quote = off.quote(RelayOperation::Enroll).await;
-    let refused = off.prepare(&enrollment(&owner, vec![6, 1], quote)).await;
-    assert!(refused_with(&refused, RelayError::Budget), "{refused:?}");
+    for budget in [
+        RelayBudget::default(),
+        RelayBudget {
+            total_lamports: ENROLLMENT_LAMPORTS,
+            signer_lamports: 0,
+        },
+    ] {
+        let fixture = Fixture::with_budgets(budget).await;
+        fixture
+            .prover
+            .refuse_enrollment
+            .store(true, Ordering::Relaxed);
+        let quote = fixture.quote(RelayOperation::Enroll).await;
 
-    let fixture = Fixture::with_budget(ENROLLMENT_LAMPORTS).await;
+        let refused = fixture
+            .prepare(&enrollment(&owner, vec![6, 1], quote))
+            .await;
+
+        assert!(
+            refused_with(&refused, RelayError::BudgetUnset),
+            "{refused:?}"
+        );
+        assert_eq!(fixture.row_count().await, 0);
+        assert_eq!(fixture.committed().await, 0);
+        assert!(fixture.sent().is_empty());
+    }
+}
+
+/// The landed charge stays in the total and the signer's share returns.
+#[tokio::test]
+async fn an_enrollment_holds_its_reservation_until_it_settles() {
+    let fixture = Fixture::with_budgets(RelayBudget {
+        total_lamports: 2 * ENROLLMENT_LAMPORTS,
+        signer_lamports: ENROLLMENT_LAMPORTS,
+    })
+    .await;
+    let owner = Keypair::new_from_array([42; 32]);
     let quote = fixture.quote(RelayOperation::Enroll).await;
-    let first = fixture
+    let step = fixture
         .prepare(&enrollment(&owner, vec![6, 1], quote.clone()))
-        .await;
-    assert!(first.is_ok(), "{first:?}");
-    let second = fixture
-        .prepare(&enrollment(&other, vec![6, 2], quote))
-        .await;
-    assert!(refused_with(&second, RelayError::Budget), "{second:?}");
+        .await
+        .expect("the relay");
+    let RelayStep::SignMessage { relay_id, message } = step else {
+        panic!("the owner signs its enrollment, got {step:?}");
+    };
+    assert_eq!(fixture.row_count().await, 1);
     assert_eq!(fixture.outstanding().await, ENROLLMENT_LAMPORTS as i64);
+
+    let status: RelayStatus = fixture
+        .call(
+            SUBMIT_RELAY,
+            SubmitRelayRequest {
+                relay_id,
+                signer: owner.pubkey().into(),
+                signature: owner.sign_message(&message.0).into(),
+            },
+        )
+        .await;
+
+    assert!(
+        matches!(status, RelayStatus::Confirmed { .. }),
+        "{status:?}"
+    );
+    assert_eq!(fixture.row_count().await, 0);
+    assert_eq!(fixture.outstanding().await, 0);
+    assert_eq!(fixture.committed().await, ENROLLMENT_LAMPORTS as i64);
+    let next = fixture
+        .prepare(&enrollment(&owner, vec![6, 2], quote))
+        .await;
+    assert!(next.is_ok(), "the share returned, got {next:?}");
+}
+
+/// An enrolled owner's rotation creates no account, the budget pays its fees alone.
+#[tokio::test]
+async fn a_settled_rotation_spends_only_its_fees_from_the_budget() {
+    let fixture = Fixture::with_budget(ENROLLMENT_LAMPORTS).await;
+    let owner = Keypair::new_from_array([42; 32]);
+    let (authorization, _) = custom_ring_interface::tracking::TrackingAuthorization::find_address(
+        &TRACKING_REGISTRY,
+        &owner.pubkey(),
+    );
+    fixture
+        .chain
+        .filled
+        .lock()
+        .expect("filled")
+        .push(authorization);
+    let remaining = |committed: i64| ENROLLMENT_LAMPORTS as i64 - committed;
+    let before = remaining(fixture.committed().await);
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    let step = fixture
+        .prepare(&enrollment(&owner, vec![6, 1], quote))
+        .await
+        .expect("the rotation");
+    let RelayStep::SignMessage { relay_id, message } = step else {
+        panic!("the owner signs its rotation, got {step:?}");
+    };
+    assert_eq!(fixture.outstanding().await, ENROLLMENT_FEES as i64);
+
+    let status: RelayStatus = fixture
+        .call(
+            SUBMIT_RELAY,
+            SubmitRelayRequest {
+                relay_id,
+                signer: owner.pubkey().into(),
+                signature: owner.sign_message(&message.0).into(),
+            },
+        )
+        .await;
+
+    assert!(
+        matches!(status, RelayStatus::Confirmed { .. }),
+        "{status:?}"
+    );
+    assert_eq!(fixture.outstanding().await, 0);
+    assert_eq!(
+        remaining(fixture.committed().await),
+        before - ENROLLMENT_FEES as i64
+    );
+}
+
+/// The signer's share and the total each refuse at funding.
+#[tokio::test]
+async fn an_enrollment_past_the_allowance_refuses_before_any_send() {
+    let fixture = Fixture::with_budgets(RelayBudget {
+        total_lamports: 2 * ENROLLMENT_LAMPORTS,
+        signer_lamports: ENROLLMENT_LAMPORTS,
+    })
+    .await;
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    let [first, second, third] = [42, 43, 44].map(|seed| Keypair::new_from_array([seed; 32]));
+    let held = fixture
+        .prepare(&enrollment(&first, vec![6, 1], quote.clone()))
+        .await;
+    assert!(held.is_ok(), "{held:?}");
+
+    let over_signer = fixture
+        .prepare(&enrollment(&first, vec![6, 2], quote.clone()))
+        .await;
+    assert!(
+        refused_with(&over_signer, RelayError::SignerBudget),
+        "{over_signer:?}"
+    );
+    let filled = fixture
+        .prepare(&enrollment(&second, vec![6, 1], quote.clone()))
+        .await;
+    assert!(filled.is_ok(), "{filled:?}");
+    let over_total = fixture
+        .prepare(&enrollment(&third, vec![6, 1], quote))
+        .await;
+    assert!(
+        refused_with(&over_total, RelayError::Budget),
+        "{over_total:?}"
+    );
+
+    assert!(fixture.sent().is_empty());
+    assert_eq!(fixture.row_count().await, 2);
+    assert_eq!(
+        fixture.outstanding().await,
+        (2 * ENROLLMENT_LAMPORTS) as i64
+    );
 }
 
 /// Nobody spends a wallet's share without its key.
@@ -701,16 +851,19 @@ const FRAME_BUDGET: u64 = 1_000_000;
 
 #[tokio::test]
 async fn a_frame_over_budget_is_refused_before_any_write_and_budget_off_by_default() {
-    for fixture in [
-        Fixture::new().await,
-        Fixture::with_budget(RENT_LAMPORTS).await,
+    for (fixture, refusal) in [
+        (Fixture::new().await, RelayError::BudgetUnset),
+        (
+            Fixture::with_budget(RENT_LAMPORTS).await,
+            RelayError::Budget,
+        ),
     ] {
         *fixture.prover.frame.lock().expect("frame") =
             Some(wide_frame(custom_ring_interface::tag::TRANSFER));
         let quote = fixture.quote(RelayOperation::Anonymous).await;
         let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
         let refused = fixture.prepare(&request).await;
-        assert!(refused_with(&refused, RelayError::Budget), "{refused:?}");
+        assert!(refused_with(&refused, refusal), "{refused:?}");
         assert!(fixture.sent().is_empty());
         assert_eq!(fixture.outstanding().await, 0);
     }
@@ -1034,7 +1187,10 @@ async fn token_account_setup_reserves_the_rent_of_a_missing_account() {
         let prepared = fixture.prepare(&request).await;
 
         if budget == 0 && !exists {
-            assert!(refused_with(&prepared, RelayError::Budget), "{prepared:?}");
+            assert!(
+                refused_with(&prepared, RelayError::BudgetUnset),
+                "{prepared:?}"
+            );
             assert!(fixture.sent().is_empty());
             continue;
         }

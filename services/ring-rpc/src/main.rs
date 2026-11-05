@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
-use log::info;
+use log::{info, warn};
 use solana_signer::Signer;
 use zolana_ring_client::{
     auditor_view_tag,
@@ -127,13 +127,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         genesis_hash,
         service,
     };
+    let relay_budget = RelayBudget {
+        total_lamports: args.relay_budget_lamports,
+        signer_lamports: args.relay_signer_budget_lamports,
+    };
     let mut builder = Hub::builder(source, identity)
         .with_origins(origin_policy.build()?)
         .with_reader_grants(args.reader_grants)
-        .with_relay_budget(RelayBudget {
-            total_lamports: args.relay_budget_lamports,
-            signer_lamports: args.relay_signer_budget_lamports,
-        });
+        .with_relay_budget(relay_budget);
     if let Some(store) = store {
         builder = builder.with_store(store);
     }
@@ -169,8 +170,20 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         KeySource::Derived(root) => builder.derived(root)?,
     });
     info!("service pubkey {}", hub.service_pubkey());
-    if let Some(relay) = hub.relay() {
-        info!("relay fee payer {}", relay.fee_payer());
+    match hub.relay() {
+        None => warn!("relay off, relay enrollment, buffered frames and token account creates need --fee-payer-key-file and a relay budget"),
+        Some(relay) => {
+            info!("relay fee payer {}", relay.fee_payer());
+            match relay_budget.is_set() {
+                true => info!(
+                    "relay budget {} lamports, {} per signer",
+                    relay_budget.total_lamports, relay_budget.signer_lamports
+                ),
+                false => warn!(
+                    "relay enrollment, buffered frames and token account creates off, set --relay-budget-lamports and --relay-signer-budget-lamports and fund the fee payer to turn them on"
+                ),
+            }
+        }
     }
     if let Some(merge) = hub.managed_merge() {
         tokio::spawn(merge.run(MANAGED_MERGE_INTERVAL));
