@@ -10,9 +10,10 @@ use custom_ring_interface::{
     frame_digest,
     key_catalog::{RecordPools, TransferSpend},
     sender_bundle_len, settle_buffered_data, spl_withdrawal_count,
+    statement::SignerDataCounts,
     storage::Revision,
     stream::slot_tag,
-    tag, AnonymousProofData, CredentialRead, CustomRingError, CustomRingMergeIxData,
+    tag, AnonymousProofData, AppMessage, CredentialRead, CustomRingError, CustomRingMergeIxData,
     CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
     PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
     RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
@@ -20,6 +21,7 @@ use custom_ring_interface::{
     MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
     TAGGED_X25519_KEY_LEN,
 };
+use custom_ring_sdk::{BufferedFrame, FitError};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_message::v1::{MAX_ADDRESSES, MAX_SIGNATURES, MAX_TRANSACTION_SIZE};
@@ -163,6 +165,11 @@ struct Load {
     every_body: bool,
     has_data: bool,
     replies: bool,
+    reply_len: usize,
+    /// Every extension but the cache and the messages.
+    extensions: bool,
+    messages: usize,
+    message_len: usize,
     second_tree: bool,
     credential_state_trees: usize,
     credential_placement: CredentialPlacement,
@@ -178,6 +185,10 @@ const MIN: Load = Load {
     every_body: false,
     has_data: false,
     replies: false,
+    reply_len: MIN_REPLY_LEN,
+    extensions: false,
+    messages: 0,
+    message_len: 0,
     second_tree: false,
     credential_state_trees: 1,
     credential_placement: CredentialPlacement::Shared,
@@ -302,6 +313,15 @@ enum TransferFit {
     Unkeyed,
 }
 
+impl TransferFit {
+    fn limit(&self) -> String {
+        match self {
+            Self::Measured(measured) => measured.outcome().limit().to_owned(),
+            Self::Unkeyed => "catalog key".to_owned(),
+        }
+    }
+}
+
 enum CredentialFit {
     Supported,
     Excess { selected: usize, capacity: usize },
@@ -310,6 +330,8 @@ enum CredentialFit {
 struct Measured {
     fit: Fit,
     buffered: Fit,
+    /// `WriteFrame` transactions of the SDK's buffered path, none past the buffer create ceiling.
+    writes: Option<usize>,
     frame_len: usize,
     spp_cpi_len: usize,
     credentials: CredentialFit,
@@ -462,7 +484,26 @@ impl Transfer {
             .iter()
             .filter(|slot| matches!(slot.body, SlotBody::Recipient(_)))
             .count();
-        let reply_region = vec![13u8; MIN_REPLY_LEN * reply_bodies];
+        let reply_len = u16::try_from(load.reply_len)?;
+        let reply_region = vec![13u8; load.reply_len * reply_bodies];
+        let message_bytes = vec![15u8; load.message_len];
+        let extensions = match load.extensions {
+            true => FrameExtensions {
+                data_hash: Some(&field),
+                ring_data_hash: Some(&field),
+                messages: vec![
+                    AppMessage {
+                        view_tag: &field,
+                        data: &message_bytes,
+                    };
+                    load.messages
+                ],
+                cache: None,
+                approval_totals: co_signer.then_some(&field),
+                signer_data_counts: (!delegate).then(|| SignerDataCounts::new(1)).transpose()?,
+            },
+            false => FrameExtensions::default(),
+        };
 
         let context = TreeContext {
             utxo_tree_root_index: 0,
@@ -488,7 +529,7 @@ impl Transfer {
             expiry_unix_ts: u32::MAX,
             tx_viewing_u: &field,
             salt: &salt,
-            extensions: FrameExtensions::default(),
+            extensions,
             interface_transfers,
             has_data: load.has_data,
             entry: frame.entry(),
@@ -506,7 +547,7 @@ impl Transfer {
             .wide,
             outputs: slots,
             replies: (load.replies && anonymous_frame)
-                .then(|| Replies::new(MIN_REPLY_LEN as u16, &reply_region))
+                .then(|| Replies::new(reply_len, &reply_region))
                 .transpose()?,
             sender: anonymous_frame.then_some(FramedSenderBundle {
                 tag: &field,
@@ -656,20 +697,25 @@ impl Transfer {
         ];
         settling.extend_from_slice(&metas);
         let frame_len = frame_bytes.len();
-        let fit_of = |accounts, data| {
-            Fit::of(
-                &Instruction {
-                    program_id: RING_PROGRAM,
-                    accounts,
-                    data,
-                },
-                &payer,
-                load.priority_fee,
-            )
+        let inline = Instruction {
+            program_id: RING_PROGRAM,
+            accounts: metas,
+            data: frame_bytes,
+        };
+        let writes = match BufferedFrame::new(&inline, payer, 0) {
+            Ok(buffered) => Some(buffered.writes()?.len()),
+            Err(FitError::FrameTooLarge { .. }) => None,
+            Err(error) => return Err(error.into()),
+        };
+        let settling = Instruction {
+            program_id: RING_PROGRAM,
+            accounts: settling,
+            data: settle,
         };
         Ok(TransferFit::Measured(Measured {
-            fit: fit_of(metas, frame_bytes)?,
-            buffered: fit_of(settling, settle)?,
+            fit: Fit::of(&inline, &payer, load.priority_fee)?,
+            buffered: Fit::of(&settling, &payer, load.priority_fee)?,
+            writes,
             frame_len,
             spp_cpi_len,
             credentials,
@@ -1057,6 +1103,7 @@ fn table() -> Result<String> {
         }
     }
     entry_capacities(&mut table)?;
+    buffered_maxima(&mut table)?;
     Ok(table)
 }
 
@@ -1095,28 +1142,18 @@ fn entry_capacities(table: &mut String) -> Result<()> {
                         legs,
                     };
                     let Some((owners, measured)) = transfer.widest_settled_run()? else {
-                        let limit = match transfer.measure()? {
-                            TransferFit::Measured(measured) => {
-                                measured.outcome().limit().to_owned()
-                            }
-                            TransferFit::Unkeyed => "catalog key".to_owned(),
-                        };
+                        let limit = transfer.measure()?.limit();
                         writeln!(table, "| {}x{} | {} | {} | {legs} | {name} | none | - | - | - | - | - | no | {limit} |", shape.n_inputs(), shape.n_outputs(), frame.name(), load.name)?;
                         break;
                     };
                     let over = match owners == shape.n_inputs() {
                         true => "inputs".to_owned(),
-                        false => match (Transfer {
+                        false => (Transfer {
                             owners: owners + 1,
                             ..transfer
                         })
                         .measure()?
-                        {
-                            TransferFit::Measured(measured) => {
-                                measured.outcome().limit().to_owned()
-                            }
-                            TransferFit::Unkeyed => "catalog key".to_owned(),
-                        },
+                        .limit(),
                     };
                     let path = match measured.fits_inline() {
                         true => measured.fit,
@@ -1136,6 +1173,184 @@ fn entry_capacities(table: &mut String) -> Result<()> {
                         measured.spp_cpi_len,
                         measured.outcome().fits(),
                     )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+const MAXIMUM: Load = Load {
+    name: "max",
+    has_data: true,
+    replies: true,
+    extensions: true,
+    second_tree: true,
+    credential_state_trees: 4,
+    credential_placement: CredentialPlacement::Disjoint,
+    ..FULL
+};
+
+#[derive(Clone, Copy)]
+enum Axis {
+    Reply,
+    Messages,
+    MessageBytes,
+}
+
+impl Axis {
+    const ALL: [Self; 3] = [Self::Reply, Self::Messages, Self::MessageBytes];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Reply => "reply",
+            Self::Messages => "messages",
+            Self::MessageBytes => "message bytes",
+        }
+    }
+
+    /// A confidential frame carries no reply region.
+    const fn applies(self, frame: FrameRail) -> bool {
+        !matches!(self, Self::Reply) || frame.rail().anonymous_frame()
+    }
+
+    /// The wire field's own range, the frame ceilings refuse earlier.
+    fn range(self) -> core::ops::RangeInclusive<usize> {
+        match self {
+            Self::Reply => MIN_REPLY_LEN..=usize::from(u16::MAX),
+            Self::Messages => 0..=usize::from(u8::MAX),
+            Self::MessageBytes => 0..=usize::from(u16::MAX),
+        }
+    }
+
+    const fn load(self, value: usize) -> Load {
+        match self {
+            Self::Reply => Load {
+                reply_len: value,
+                ..MAXIMUM
+            },
+            Self::Messages => Load {
+                messages: value,
+                ..MAXIMUM
+            },
+            Self::MessageBytes => Load {
+                messages: 1,
+                message_len: value,
+                ..MAXIMUM
+            },
+        }
+    }
+}
+
+enum Widening {
+    Settled {
+        value: usize,
+        measured: Measured,
+        over: String,
+    },
+    Refused(String),
+}
+
+impl Transfer {
+    fn settles(&self) -> Option<Measured> {
+        match self.measure() {
+            Ok(TransferFit::Measured(measured))
+                if !matches!(measured.outcome(), Outcome::No(_)) =>
+            {
+                Some(measured)
+            }
+            _ => None,
+        }
+    }
+
+    fn refusal(&self) -> String {
+        match self.measure() {
+            Ok(fit) => fit.limit(),
+            Err(error) => format!("{error:#}"),
+        }
+    }
+
+    /// Bytes grow on every axis, so the largest settling value bisects.
+    fn widest(&self, axis: Axis) -> Widening {
+        let at = |value| Self {
+            load: axis.load(value),
+            ..*self
+        };
+        let range = axis.range();
+        let (mut low, mut high) = (*range.start(), *range.end());
+        let Some(mut measured) = at(low).settles() else {
+            return Widening::Refused(at(low).refusal());
+        };
+        while low < high {
+            let middle = low + (high - low).div_ceil(2);
+            match at(middle).settles() {
+                Some(wider) => (low, measured) = (middle, wider),
+                None => high = middle - 1,
+            }
+        }
+        let over = match low == *range.end() {
+            true => "wire field".to_owned(),
+            false => at(low + 1).refusal(),
+        };
+        Widening::Settled {
+            value: low,
+            measured,
+            over,
+        }
+    }
+}
+
+fn buffered_maxima(table: &mut String) -> Result<()> {
+    writeln!(table)?;
+    writeln!(table, "Buffered maxima. Load max is full with data tails, every extension but the cache, two SPP input trees and four disjoint credential state trees, replies on anonymous frames. Each row widens one axis from that load to the largest value any path settles. reply: the reply length. messages: empty application messages. message bytes: one application message. writes: WriteFrame transactions the SDK sends before a buffered settle. over: what refuses one more step. Heap is not measured here.")?;
+    writeln!(table, "| shape | rail | axis | widest | frame | SPP CPI | buffered bytes | buffered accounts | signatures | writes | fits | over |")?;
+    writeln!(table, "|---|---|---|---|---|---|---|---|---|---|---|---|")?;
+    for shape in SPP_SUPPORTED_SHAPES {
+        for frame in FrameRail::ALL {
+            if !frame.rail().supports(shape) {
+                continue;
+            }
+            let base = Transfer {
+                frame,
+                shape,
+                load: MAXIMUM,
+                owners: frame.required_owners(),
+                legs: LEGS,
+            };
+            if matches!(base.measure()?, TransferFit::Unkeyed) {
+                continue;
+            }
+            for axis in Axis::ALL.into_iter().filter(|axis| axis.applies(frame)) {
+                write!(
+                    table,
+                    "| {}x{} | {} | {} | ",
+                    shape.n_inputs(),
+                    shape.n_outputs(),
+                    frame.name(),
+                    axis.name(),
+                )?;
+                match base.widest(axis) {
+                    Widening::Refused(refusal) => {
+                        writeln!(table, "none | - | - | - | - | - | - | no | {refusal} |")?
+                    }
+                    Widening::Settled {
+                        value,
+                        measured,
+                        over,
+                    } => writeln!(
+                        table,
+                        "{value} | {} | {} | {} | {} | {} | {} | {} | {over} |",
+                        measured.frame_len,
+                        measured.spp_cpi_len,
+                        measured.buffered.bytes,
+                        measured.buffered.addresses,
+                        measured.fit.signatures,
+                        measured
+                            .writes
+                            .filter(|_| !measured.fits_inline())
+                            .map_or("-".to_owned(), |writes| writes.to_string()),
+                        measured.outcome().fits(),
+                    )?,
                 }
             }
         }
