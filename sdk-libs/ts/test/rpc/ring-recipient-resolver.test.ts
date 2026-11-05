@@ -4,17 +4,9 @@ import type { RpcAccount } from "@heliuslabs/zolana/client";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
-import {
-  poseidon,
-  ZERO_32,
-  ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
+import { poseidon, ZERO_32, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import {
-  ShieldedAddress,
-  ShieldedKeypair,
-  SigningKey,
-} from "@heliuslabs/zolana/keypair";
+import { ShieldedAddress, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
 
 import { withConfirmedReads } from "../helpers/clients.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
@@ -29,19 +21,14 @@ import {
   type TrackingOpening,
   type TrackingRecord,
 } from "../../src/protocol/membership/tracking.js";
-import {
-  resolveRingRecipient,
-  type RingRecipientClient,
-} from "../../src/rpc/tracking-resolver.js";
+import { resolveRingRecipient, type RingRecipientClient } from "../../src/rpc/tracking-resolver.js";
 import { trackingAuthorizationAccount } from "../helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const REGISTRY = address("Stor111111111111111111111111111111111111111");
 
 const holder = () =>
-  ShieldedKeypair.fromKeypair(
-    SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(7) as Bytes32),
-  );
+  ShieldedKeypair.fromKeypair(SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(7) as Bytes32));
 
 function zeroSiblings(): readonly (readonly Bytes32[])[] {
   const levels: Bytes32[][] = [];
@@ -68,12 +55,9 @@ function chain(
   data.set(root, 74);
   const path = { index: 0, siblings };
   const opening: TrackingOpening =
-    kind === "present"
-      ? { kind, record: leaf, path }
-      : { kind, low: leaf, path };
+    kind === "present" ? { kind, record: leaf, path } : { kind, low: leaf, path };
   return withConfirmedReads({
-    getAccount: async (read: Address) =>
-      read === REGISTRY ? { data } : authorizations.get(read),
+    getAccount: async (read: Address) => (read === REGISTRY ? { data } : authorizations.get(read)),
     getTrackingOpenings: async () => ({
       slot: 1n,
       root,
@@ -103,22 +87,13 @@ async function authorization(
     ...fields,
   });
   return new Map([
-    [
-      at,
-      programOwner === undefined
-        ? account
-        : { ...account, owner: programOwner },
-    ],
+    [at, programOwner === undefined ? account : { ...account, owner: programOwner }],
   ]);
 }
 
 async function addressed() {
   const wallet = holder();
-  const to = await RingAddress.enrolled(
-    wallet,
-    RING,
-    listSaltOf(wallet.viewingKey(), RING),
-  );
+  const to = await RingAddress.enrolled(wallet, RING, listSaltOf(wallet.viewingKey(), RING));
   const member = to.recipient.signingPublicKey.ownerProofInputHash();
   const row: TrackingRecord = {
     ...TRACKING_SENTINEL,
@@ -141,9 +116,7 @@ describe("resolveRingRecipient", () => {
     });
     if (resolved.kind !== "enrolled") throw new Error("enrolled");
     expect(resolved.nullifierPk).toEqual(row.nullifierPk);
-    expect(resolved.viewingPublicKey.u()).toEqual(
-      to.recipient.viewingPublicKey.u(),
-    );
+    expect(resolved.viewingPublicKey.u()).toEqual(to.recipient.viewingPublicKey.u());
     expect(resolved.listTag).toEqual(listTagOf(to.listSalt));
     expect(Object.keys(resolved)).not.toContain("listSalt");
   });
@@ -181,19 +154,13 @@ describe("resolveRingRecipient", () => {
     const { to, row } = await addressed();
     const rotated = ShieldedKeypair.generate().viewingPublicKey();
     const resolved = await resolveRingRecipient({
-      client: chain(
-        row,
-        "present",
-        await authorization(to, { viewingU: rotated.u() }),
-      ),
+      client: chain(row, "present", await authorization(to, { viewingU: rotated.u() })),
       trackingRegistry: REGISTRY,
       to,
     });
     if (resolved.kind !== "enrolled") throw new Error("enrolled");
     expect(resolved.viewingPublicKey.u()).toEqual(rotated.u());
-    expect(resolved.viewingPublicKey.u()).not.toEqual(
-      to.recipient.viewingPublicKey.u(),
-    );
+    expect(resolved.viewingPublicKey.u()).not.toEqual(to.recipient.viewingPublicKey.u());
   });
 
   it("refuses an authorization another program, registry or owner holds", async () => {
@@ -201,10 +168,7 @@ describe("resolveRingRecipient", () => {
     const stranger = address("Cura111111111111111111111111111111111111111");
     for (const [reason, accounts] of [
       ["authorization program", await authorization(to, {}, stranger)],
-      [
-        "authorization registry",
-        await authorization(to, { registry: stranger }),
-      ],
+      ["authorization registry", await authorization(to, { registry: stranger })],
       ["authorization owner", await authorization(to, { owner: stranger })],
     ] as const) {
       // The served account sits at the addressed owner's PDA whatever it names.
@@ -212,11 +176,7 @@ describe("resolveRingRecipient", () => {
       const [at] = [...(await authorization(to)).keys()];
       await expect(
         resolveRingRecipient({
-          client: chain(
-            row,
-            "present",
-            new Map([[at as Address, served as RpcAccount]]),
-          ),
+          client: chain(row, "present", new Map([[at as Address, served as RpcAccount]])),
           trackingRegistry: REGISTRY,
           to,
         }),
@@ -249,20 +209,14 @@ describe("resolveRingRecipient", () => {
         to,
       });
       expect(resolved.kind).toBe("zeroKey");
-      expect(resolved.viewingPublicKey.u()).toEqual(
-        to.recipient.viewingPublicKey.u(),
-      );
+      expect(resolved.viewingPublicKey.u()).toEqual(to.recipient.viewingPublicKey.u());
     });
 
     it("resolves a rotated enrolled owner's old address to the authorization's current key", async () => {
       const { to, row, wallet } = await addressed();
       const rotated = ShieldedKeypair.generate().viewingPublicKey();
       const resolved = await resolveRingRecipient({
-        client: chain(
-          row,
-          "present",
-          await authorization(to, { viewingU: rotated.u() }),
-        ),
+        client: chain(row, "present", await authorization(to, { viewingU: rotated.u() })),
         trackingRegistry: REGISTRY,
         to: zeroAddressed(wallet),
       });
@@ -285,11 +239,7 @@ describe("resolveRingRecipient", () => {
       const rotated = ShieldedKeypair.generate().viewingPublicKey();
       const old = zeroAddressed(wallet);
       const resolved = await resolveRingRecipient({
-        client: chain(
-          row,
-          "present",
-          await authorization(to, { viewingU: rotated.u() }),
-        ),
+        client: chain(row, "present", await authorization(to, { viewingU: rotated.u() })),
         trackingRegistry: REGISTRY,
         to: old,
       });
@@ -329,9 +279,7 @@ describe("resolveRingRecipient", () => {
       const [opening] = await readOutputKeys({
         client,
         root: { ringProgramId: RING, registry: REGISTRY, revision: 1n, root },
-        outputs: [
-          { member: row.member, nullifierPk: ZERO_NULLIFIER_PK as Bytes32 },
-        ],
+        outputs: [{ member: row.member, nullifierPk: ZERO_NULLIFIER_PK as Bytes32 }],
       });
       expect(opening?.kind).toBe("present");
     });
@@ -340,10 +288,7 @@ describe("resolveRingRecipient", () => {
   it("refuses an opening under another root", async () => {
     const { to, row, accounts } = await addressed();
     const client = chain(row, "present", accounts);
-    const other = chain(
-      { ...row, ctHash: new Uint8Array(32).fill(9) as Bytes32 },
-      "present",
-    );
+    const other = chain({ ...row, ctHash: new Uint8Array(32).fill(9) as Bytes32 }, "present");
     await expect(
       resolveRingRecipient({
         client: { ...client, getTrackingOpenings: other.getTrackingOpenings },

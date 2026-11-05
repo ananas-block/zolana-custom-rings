@@ -1,16 +1,9 @@
 import { getBase64Encoder, type Address } from "@solana/kit";
 
 import type { ChainReader, ZolanaClient } from "@heliuslabs/zolana/client";
-import {
-  equalBytes,
-  runKitRpc,
-  ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
+import { equalBytes, runKitRpc, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type {
-  ShieldedAddress,
-  X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
 import { listTagOf } from "../crypto/keys/list-salt.js";
 import type { RingAddress } from "../crypto/keys/ring-address.js";
@@ -23,10 +16,7 @@ import {
   type TrackingAuthorization,
   type TrackingRegistry,
 } from "../protocol/membership/tracking.js";
-import {
-  STORAGE_PROGRAM_ID,
-  trackingAuthorizationPda,
-} from "../protocol/pda/index.js";
+import { STORAGE_PROGRAM_ID, trackingAuthorizationPda } from "../protocol/pda/index.js";
 import type { BoundRoot } from "./registered-record.js";
 import type { TrackingReader } from "./ports.js";
 
@@ -91,10 +81,7 @@ export async function resolveRingRecipient(
       row === undefined
         ? to.recipient.viewingPublicKey
         : x25519FromU(
-            await enrolledViewingKey(
-              { client, trackingRegistry, owner: to.recipient },
-              context,
-            ),
+            await enrolledViewingKey({ client, trackingRegistry, owner: to.recipient }, context),
           );
     return Object.freeze({ kind: "zeroKey", root, viewingPublicKey });
   }
@@ -154,20 +141,14 @@ export async function readTrackingAuthorization(
   }>,
   context?: RequestContext,
 ): Promise<TrackingAuthorization | undefined> {
-  const [address] = await trackingAuthorizationPda(
-    input.trackingRegistry,
-    input.owner,
-  );
-  const { value: account } = await runKitRpc(
-    "getAccountInfo",
-    context,
-    (abortSignal) =>
-      input.client.solanaRpc
-        .getAccountInfo(address, {
-          commitment: "confirmed",
-          encoding: "base64",
-        })
-        .send({ abortSignal }),
+  const [address] = await trackingAuthorizationPda(input.trackingRegistry, input.owner);
+  const { value: account } = await runKitRpc("getAccountInfo", context, (abortSignal) =>
+    input.client.solanaRpc
+      .getAccountInfo(address, {
+        commitment: "confirmed",
+        encoding: "base64",
+      })
+      .send({ abortSignal }),
   );
   if (account === null) return undefined;
   if (account.owner !== STORAGE_PROGRAM_ID)
@@ -196,11 +177,7 @@ export async function newestTrackingRoot(
   }>,
   context?: RequestContext,
 ): Promise<TrackingRoot> {
-  const registry = await fetchTrackingRegistry(
-    input.client,
-    input.trackingRegistry,
-    context,
-  );
+  const registry = await fetchTrackingRegistry(input.client, input.trackingRegistry, context);
   const newest = registry.roots[0];
   if (newest === undefined)
     throw new RingError("RING_TRACKING_INVALID", {
