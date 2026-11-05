@@ -425,7 +425,7 @@ async fn a_salted_read_raises_the_flag_on_a_frame_of_one_stream() {
         .collect();
     let client = Chain::ring(RingSettings::new(RingMode::Confidential))
         .with_registry(load.registry(), &rules)
-        .with_tracking_tag(&addresses, domain::list_tag(&salt).unwrap())
+        .with_credential_tag(&addresses, domain::list_tag(&salt).unwrap())
         .client();
     let transfer = addresses.iter().fold(load.transfer(), |transfer, address| {
         let member =
@@ -465,7 +465,7 @@ async fn a_salted_read_of_another_stream_refuses_until_the_owner_reseals() {
         .collect();
     let client = Chain::ring(RingSettings::new(RingMode::Confidential))
         .with_registry(load.registry(), &rules)
-        .with_tracking_tag(&addresses, domain::list_tag(&salt).unwrap())
+        .with_credential_tag(&addresses, domain::list_tag(&salt).unwrap())
         .client();
     let transfer = addresses.iter().fold(load.transfer(), |transfer, address| {
         let member =

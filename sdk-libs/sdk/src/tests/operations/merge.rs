@@ -131,7 +131,6 @@ async fn a_merge_takes_every_input_one_transaction_carries() {
     assert_eq!(published, WIDEST_MERGE);
     assert_eq!(holder.calls.get(), 1);
 
-    let config = ring().require_config(&chain).await.unwrap();
     let one_more = CustomRingMerge::new(ring(), notes(published as u64 + 1), None)
         .unwrap()
         .with_output_tree_id(TREE_ID)
@@ -297,7 +296,6 @@ async fn a_wide_zero_key_merge_asks_its_holder_once_for_the_prefix_it_fits() {
     use solana_address::Address;
     let owner = keypair(1);
     let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
-    let config = ring().require_config(&chain).await.unwrap();
     let input = proof_input(&owner);
     let payer = Address::new_from_array([7; 32]);
     let budget = crate::submission::send_budget(custom_ring_interface::InstructionTag::Merge, None);

@@ -153,7 +153,7 @@ pub enum RingError {
     #[error(transparent)]
     AddressCeiling(#[from] crate::AddressCeilingError),
     #[error(transparent)]
-    Credential(#[from] zolana_ring_client::CredentialError),
+    Credential(Box<zolana_ring_client::CredentialError>),
     #[error(transparent)]
     RecordStatement(#[from] zolana_ring_member_registry::RecordStatementError),
     #[error("tree 0 moved its root history between the credential read and the root check")]
@@ -343,6 +343,12 @@ pub enum RingError {
     AttemptUnreadable,
     #[error("the enrollment attempt reconciles to {0:?}, only an expired attempt goes again")]
     AttemptNotExpired(crate::enrollment::EnrollmentOutcome),
+}
+
+impl From<zolana_ring_client::CredentialError> for RingError {
+    fn from(error: zolana_ring_client::CredentialError) -> Self {
+        Self::Credential(Box::new(error))
+    }
 }
 
 impl From<RingIndexerError> for RingError {

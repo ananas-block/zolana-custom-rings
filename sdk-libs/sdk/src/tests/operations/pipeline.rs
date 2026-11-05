@@ -1901,11 +1901,13 @@ async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving()
 
 /// A payment a recipient cannot open is refused before proving, a rotated row names the current key.
 #[tokio::test]
-async fn a_payment_names_the_viewing_key_of_its_owners_row() {
+async fn a_payment_names_the_viewing_key_of_its_owners_user_record() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let recipient = keypair(2);
-    let client = enrolled(&[&sender, &recipient]).client();
+    let client = enrolled(&[&sender, &recipient])
+        .with_user_record(&recipient.shielded_address().unwrap())
+        .client();
     let utxos = vec![ring_utxo(&sender, Mint::SOL, 10, 0)];
     let owner = MoveSender {
         sender: &sender,
@@ -3186,7 +3188,7 @@ async fn a_keyed_input_spends_under_its_owners_enrolled_key_and_a_zero_key_waive
     let keyed = || ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
     let on_chain = |rows: &[spr_keypair::ShieldedAddress]| {
         Chain::ring(RingSettings::new(RingMode::Confidential))
-            .with_tracking(rows)
+            .with_credentials(rows)
             .client()
     };
     let enrolled = on_chain(&[address]);
@@ -3205,7 +3207,8 @@ async fn a_keyed_input_spends_under_its_owners_enrolled_key_and_a_zero_key_waive
 }
 
 #[tokio::test]
-async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
+/// The zero key needs no credential, the sender's key resolution owns its opt in.
+async fn an_output_takes_its_owners_credential_key_or_the_zero_key() {
     use crate::tests::support::keypair;
     let (sender, payee) = (keypair(1), keypair(2));
     let (from, to) = (
@@ -3221,7 +3224,7 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
     };
     let client = |rows: &[spr_keypair::ShieldedAddress]| {
         Chain::ring(RingSettings::new(RingMode::Confidential))
-            .with_tracking(rows)
+            .with_credentials(rows)
             .client()
     };
     let zero = spr_keypair::ShieldedAddress {
@@ -3235,10 +3238,7 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
         paying(&to).frame(&client(&[from])).await.err(),
         Some(RingError::RecipientNotEnrolled { .. })
     ));
-    assert!(matches!(
-        paying(&zero).frame(&enrolled).await.err(),
-        Some(RingError::EnrolledRecipientAtZeroKey { .. })
-    ));
+    assert!(paying(&zero).frame(&enrolled).await.is_ok());
     let rekeyed = spr_keypair::ShieldedAddress {
         nullifier_pubkey: from.nullifier_pubkey,
         ..to
@@ -3456,7 +3456,7 @@ async fn a_public_spend_on_an_anonymous_ring_publishes_its_owners_alone() {
         spr_interface::instruction::CircuitId::ConfidentialRingEddsa(..)
     ));
     let unenrolled = Chain::ring(anonymous())
-        .with_tracking(&[keypair(2).shielded_address().unwrap()])
+        .with_credentials(&[keypair(2).shielded_address().unwrap()])
         .client();
     assert!(matches!(
         transfer().frame(&unenrolled).await.err(),
@@ -3504,7 +3504,7 @@ async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
         .build();
     let client = Chain::ring(RingSettings::new(RingMode::Confidential))
         .with_registry(Registry::new(&[(&sender, 0)]), &rules)
-        .with_tracking(&[address])
+        .with_credentials(&[address])
         .client();
     let transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
     let member =
@@ -3525,28 +3525,21 @@ async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
     ));
 }
 
-/// A wrong salt would write an entry no proof reads, only the row's own salt passes.
+/// A wrong salt would write an entry no proof reads, only the credential's own salt passes.
 #[tokio::test]
-async fn a_salted_owner_passes_under_its_rows_tag_alone() {
+async fn a_salted_owner_passes_under_its_credentials_tag_alone() {
     use crate::{tests::support::keypair, SaltedOwnerCheck};
     use custom_ring_interface::domain;
-    use zolana_ring_client::ResolveError;
+    use zolana_ring_client::CredentialError;
     let owner = keypair(1);
     let salt = [7; 32];
     let address = ring_address(&owner);
     assert_eq!(address.list_salt, salt);
     let enrolled = [address.recipient];
     let chain = Chain::ring(RingSettings::new(RingMode::Confidential))
-        .with_tracking_tag(&enrolled, domain::list_tag(&salt).unwrap());
+        .with_credential_tag(&enrolled, domain::list_tag(&salt).unwrap());
     let client = &chain;
-    let read = |address| async move {
-        SaltedOwnerCheck {
-            ring: ring(),
-            address,
-        }
-        .run(client)
-        .await
-    };
+    let read = |address| async move { SaltedOwnerCheck { address }.run(client).await };
     assert!(read(&address).await.is_ok());
 
     let forged = RingAddress {
@@ -3555,13 +3548,13 @@ async fn a_salted_owner_passes_under_its_rows_tag_alone() {
     };
     assert!(matches!(
         read(&forged).await,
-        Err(RingError::Resolve(ResolveError::ListTagMismatch))
+        Err(RingError::Credential(error)) if matches!(*error, CredentialError::ListTagMismatch)
     ));
 
     let unenrolled = ring_address(&keypair(2));
     assert!(matches!(
         read(&unenrolled).await,
-        Err(RingError::Resolve(ResolveError::NotEnrolled))
+        Err(RingError::Credential(error)) if matches!(*error, CredentialError::NotEnrolled)
     ));
 }
 

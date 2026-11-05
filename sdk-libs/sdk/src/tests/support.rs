@@ -66,7 +66,7 @@ use zolana_ring_indexer::rpc::{
 use zolana_ring_member_registry::{
     Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,
 };
-use zolana_ring_policy::{Member, RuleTable};
+use zolana_ring_policy::RuleTable;
 
 use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
@@ -109,16 +109,6 @@ pub(crate) fn keypair(seed: u8) -> ShieldedKeypair {
 
 pub(crate) fn history(owner: &ShieldedKeypair) -> ViewingHistory {
     ViewingHistory::new(owner.viewing_pubkey(), 0)
-}
-
-pub(crate) fn owner_identity(owner: &ShieldedKeypair) -> Member {
-    let identity = owner
-        .shielded_address()
-        .unwrap()
-        .signing_pubkey
-        .owner_proof_input_hash()
-        .unwrap();
-    Member::from_bytes(identity).unwrap()
 }
 
 pub(crate) fn wallet(utxo: Utxo, key: &NullifierKey, tree_id: u16, leaf_index: u64) -> WalletUtxo {
