@@ -160,7 +160,6 @@ export interface RelayMergeInputs {
   readonly assets: AssetRegistry;
 }
 
-/** The caller wipes the returned bytes, they hold the nullifier secret. */
 const MERGE_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-merge");
 
 /** Rust `ProofInputBytes::merge_request_digest`, over the bytes `encodeRelayMergeInputs` returns. */
@@ -168,6 +167,7 @@ export function mergeRequestDigest(encoded: Uint8Array): Bytes32 {
   return sha256(concatBytes(MERGE_REQUEST_DOMAIN, encoded)) as Bytes32;
 }
 
+/** The caller wipes the returned bytes, they hold the nullifier secret. */
 export function encodeRelayMergeInputs(value: RelayMergeInputs): Uint8Array {
   const writer = new Writer();
   const nullifierSecret = value.nullifierKey.secretBytes();
