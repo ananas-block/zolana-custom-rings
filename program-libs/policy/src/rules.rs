@@ -1,5 +1,13 @@
 //! The list rules one transfer meets before proving, mirror
 //! `prover/circuits/policy/rules.go` and `subjects.go`.
+//!
+//! No program runs it. The proof enforces the rules, and a client reads a refusal by name here before
+//! it spends a proof, where the circuit could only fail to solve. It mirrors the circuit's list
+//! screening. Caps, outflow and co-signing stay the circuit's, and a check missing here surfaces as a
+//! failed proof.
+//!
+//! Read after `program-libs/policy/src/rule_table/mod.rs`. Read before `prover/circuits/policy/rules.go`,
+//! `sdk-libs/sdk/src/operations/pipeline/policy.rs`.
 
 use core::fmt;
 
@@ -213,6 +221,7 @@ impl fmt::Display for TransferSubject {
 
 impl RecordLists {
     /// List `i + 1` reads the curator record when a curator serves it, else the own record.
+    /// A salted list then reads `salted`, and an asset's caller leaves that set empty.
     fn on(self, foreign: ListSet, salted: ListSet) -> ListSet {
         let (foreign, salted) = (foreign.record_bits(), salted.record_bits());
         let public = (self.own & !foreign) | (self.curator & foreign);
