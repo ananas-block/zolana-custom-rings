@@ -217,7 +217,7 @@ const SPP_ADDRESSES = 4;
 /** Ring program, ring, ring config, own, curator, tracking. */
 const RING_ADDRESSES = 6;
 /** Rust `MAX_TRANSACTION_ADDRESSES`, the v1 ceiling. */
-const MAX_TRANSACTION_ADDRESSES = 64;
+export const MAX_TRANSACTION_ADDRESSES = 64;
 /** Go `ownerAddresses`. */
 const OWNER_ADDRESSES = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - RING_ADDRESSES;
 
