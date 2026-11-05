@@ -1,6 +1,9 @@
 //! The fewest UTXOs over the fewest input trees whose framed transfer fits one transaction.
 
-use std::collections::BTreeSet;
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use solana_address::Address;
 use spr_client::{AsyncRpc, Shape, SPP_SUPPORTED_SHAPES};
@@ -84,45 +87,50 @@ pub(super) fn spanned_trees<'u>(utxos: impl IntoIterator<Item = &'u WalletUtxo>)
         .len()
 }
 
-impl Funding<'_> {
-    /// One per tree set, one tree before two, then the fewest UTXOs, then the least change.
+/// The most trees a pair search draws from, the best by reach.
+pub(super) const PAIR_POOL_TREES: usize = 8;
+
+// The staged search tries singles then pairs, a third input tree would need a third stage.
+const _: () = assert!(MAX_INPUT_TREES == 2);
+
+/// Each tree alone, then only when none funds, each pair within `pool`.
+pub(super) fn staged_tree_search<T>(
+    trees: &[u16],
+    pool: &[u16],
+    mut fund: impl FnMut(&[u16]) -> Option<T>,
+) -> Vec<T> {
+    let singles: Vec<T> = trees.iter().filter_map(|tree| fund(&[*tree])).collect();
+    if !singles.is_empty() {
+        return singles;
+    }
+    pool.iter()
+        .enumerate()
+        .flat_map(|(at, first)| pool[at + 1..].iter().map(move |second| [*first, *second]))
+        .filter_map(|mut pair| {
+            pair.sort_unstable();
+            fund(&pair)
+        })
+        .collect()
+}
+
+impl<'u> Funding<'u> {
+    /// The fewest UTXOs on one tree, two trees only when no tree alone funds, then the least change.
     pub fn candidates(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Vec<Candidate> {
-        let mut ranked: Vec<_> = tree_sets(self.utxos)
-            .into_iter()
-            .filter_map(|trees| {
-                let utxos = select_spend_where(
-                    self.utxos,
-                    self.asset,
-                    self.amount,
-                    self.max_inputs,
-                    |utxo| trees.contains(&utxo.tree_id) && keep(utxo),
-                )
-                .ok()
-                .filter(|utxos| spanned_trees(utxos) == trees.len())?;
-                let total: u128 = utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum();
-                let change = total > u128::from(self.amount);
-                Some((
-                    (trees.len(), utxos.len(), total, trees),
-                    Candidate { utxos, change },
-                ))
-            })
-            .collect();
-        ranked.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
-        ranked.into_iter().map(|(_, candidate)| candidate).collect()
+        self.covers(&self.by_tree(keep))
     }
 
     /// Exact funding per tree ahead of [`Self::candidates`], the change of a default-ring spend enters the ring.
     pub fn exact_first(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Vec<Candidate> {
-        let trees: BTreeSet<u16> = self.utxos.iter().map(|utxo| utxo.tree_id).collect();
-        let mut ranked: Vec<Candidate> = trees
-            .into_iter()
-            .filter_map(|tree| {
+        let by_tree = self.by_tree(keep);
+        let mut ranked: Vec<Candidate> = by_tree
+            .values()
+            .filter_map(|notes| {
                 select_exact_where(
-                    self.utxos,
+                    notes.iter().copied(),
                     self.asset,
                     self.amount,
                     self.max_inputs,
-                    |utxo| utxo.tree_id == tree && keep(utxo),
+                    |_| true,
                 )
             })
             .map(|utxos| Candidate {
@@ -132,7 +140,7 @@ impl Funding<'_> {
             .collect();
         ranked.sort_by_key(|candidate| candidate.utxos.len());
         let covers: Vec<Candidate> = self
-            .candidates(keep)
+            .covers(&by_tree)
             .into_iter()
             .filter(|cover| !ranked.contains(cover))
             .collect();
@@ -166,6 +174,62 @@ impl Funding<'_> {
             }
         }
         Err(first_refusal.unwrap_or_else(|| self.unfunded()))
+    }
+
+    /// The keyed notes of the asset `keep` admits, by tree.
+    fn by_tree(&self, keep: impl Fn(&WalletUtxo) -> bool) -> BTreeMap<u16, Vec<&'u WalletUtxo>> {
+        let mut by_tree: BTreeMap<u16, Vec<&'u WalletUtxo>> = BTreeMap::new();
+        for utxo in self.utxos.iter().filter(|utxo| {
+            utxo.utxo.asset.asset == self.asset
+                && utxo.utxo.amount > 0
+                && utxo.nullifier_pubkey != ZERO_NULLIFIER_PUBKEY
+                && keep(utxo)
+        }) {
+            by_tree.entry(utxo.tree_id).or_default().push(utxo);
+        }
+        by_tree
+    }
+
+    /// One per funding tree set from [`staged_tree_search`], ranked by UTXO count, total, then tree ids.
+    fn covers(&self, by_tree: &BTreeMap<u16, Vec<&'u WalletUtxo>>) -> Vec<Candidate> {
+        // 1. Rank trees by the value their largest notes hold within the input budget.
+        //    The sort is stable, an equal reach keeps the lower tree id first.
+        let mut ranked: Vec<_> = by_tree.iter().collect();
+        ranked.sort_by_cached_key(|(_, notes)| {
+            let mut amounts: Vec<u64> = notes.iter().map(|utxo| utxo.utxo.amount).collect();
+            amounts.sort_unstable_by_key(|amount| Reverse(*amount));
+            Reverse(
+                amounts
+                    .into_iter()
+                    .take(self.max_inputs)
+                    .map(u128::from)
+                    .sum::<u128>(),
+            )
+        });
+        let trees: Vec<u16> = ranked.into_iter().map(|(tree, _)| *tree).collect();
+        let pool = &trees[..trees.len().min(PAIR_POOL_TREES)];
+        // 2. A pair runs only when no tree alone funds, its picks always span both trees.
+        let mut funded = staged_tree_search(&trees, pool, |set| {
+            let utxos = select_spend_where(
+                set.iter()
+                    .filter_map(|tree| by_tree.get(tree))
+                    .flatten()
+                    .copied(),
+                self.asset,
+                self.amount,
+                self.max_inputs,
+                |_| true,
+            )
+            .ok()?;
+            let total: u128 = utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum();
+            let change = total > u128::from(self.amount);
+            Some((
+                (utxos.len(), total, set.to_vec()),
+                Candidate { utxos, change },
+            ))
+        });
+        funded.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        funded.into_iter().map(|(_, candidate)| candidate).collect()
     }
 
     /// Names the zero-key funds only a public spend reaches.
@@ -202,3 +266,7 @@ impl Candidate {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/operations/selection.rs"]
+mod tests;

@@ -24,7 +24,10 @@ export interface Cover {
   readonly amount: bigint;
 }
 
-/** Every mint from one shared tree set, the fewest trees, then UTXOs, then change. */
+/** The most trees a pair search draws from per mint, Rust `PAIR_POOL_TREES`. */
+export const PAIR_POOL_TREES = 8;
+
+/** Every mint from one tree, two trees only when no tree alone funds, then the fewest UTXOs, then change. */
 export function selectAcrossTrees(
   input: Readonly<{
     wallet: Wallet;
@@ -35,19 +38,24 @@ export function selectAcrossTrees(
   }>,
 ): readonly WalletUtxo[] {
   const { wallet, covers, policy, maxTrees = MAX_INPUT_TREES } = input;
-  const eligible = wallet
-    .utxos()
-    .filter(
-      (entry) =>
-        !entry.spent &&
-        entry.utxo.amount > 0n &&
-        covers.some((cover) => cover.asset === entry.utxo.asset) &&
-        policy.eligible(entry),
-    );
+  // 1. Group covered unspent notes by tree, a tree with no covered mint never enters the search.
+  const byTree = new Map<Address, WalletUtxo[]>();
+  for (const entry of wallet.utxos()) {
+    if (
+      !entry.spent &&
+      entry.utxo.amount > 0n &&
+      covers.some((cover) => cover.asset === entry.utxo.asset) &&
+      policy.eligible(entry)
+    ) {
+      const notes = byTree.get(entry.outputContext.tree);
+      if (notes === undefined) byTree.set(entry.outputContext.tree, [entry]);
+      else notes.push(entry);
+    }
+  }
   const held = (trees: readonly Address[], asset: Address) =>
     covered(
-      eligible.filter(
-        (entry) => entry.utxo.asset === asset && trees.includes(entry.outputContext.tree),
+      trees.flatMap((tree) =>
+        (byTree.get(tree) ?? []).filter((entry) => entry.utxo.asset === asset),
       ),
     );
   // Each mint in turn takes what the earlier mints leave of the input budget.
@@ -75,27 +83,65 @@ export function selectAcrossTrees(
     }
     return { kind: "funded" as const, entries };
   };
-  const sets = treeSets(
-    [...new Set(eligible.map((entry) => entry.outputContext.tree))],
-    Math.min(maxTrees, MAX_INPUT_TREES),
+  // 2. Each mint's best trees by reach within the input budget form the pair pool.
+  const trees = [...byTree.keys()];
+  const pool = new Set(
+    covers.flatMap((cover) => {
+      const reach = (tree: Address) =>
+        (byTree.get(tree) ?? [])
+          .filter((entry) => entry.utxo.asset === cover.asset)
+          .map((entry) => entry.utxo.amount)
+          .sort(descending)
+          .slice(0, policy.maxInputs)
+          .reduce((sum, amount) => sum + amount, 0n);
+      // The sort is stable, an equal reach keeps the first-seen tree first.
+      return trees
+        .map((tree) => ({ tree, reach: reach(tree) }))
+        .sort((left, right) => descending(left.reach, right.reach))
+        .slice(0, PAIR_POOL_TREES)
+        .map(({ tree }) => tree);
+    }),
   );
-  let best: { rank: readonly bigint[]; entries: readonly WalletUtxo[] } | undefined;
   let furthest: { rank: readonly bigint[]; error: unknown } | undefined;
-  // With no eligible note the empty set still runs, its selection names the refusal.
-  for (const trees of sets.length === 0 ? [[]] : sets) {
-    const outcome = attempt(trees);
+  // 3. A pair runs only when no tree alone funds, its picks always span both trees.
+  const consider = (set: readonly Address[]) => {
+    const outcome = attempt(set);
     if (outcome.kind === "short") {
       if (furthest === undefined || precedes(furthest.rank, outcome.rank)) furthest = outcome;
-      continue;
+      return undefined;
     }
-    // A pair whose picks sit on one tree repeats that tree's own selection.
-    if (spannedTrees(outcome.entries) !== trees.length) continue;
-    const rank = [BigInt(trees.length), BigInt(outcome.entries.length), covered(outcome.entries)];
-    if (best === undefined || precedes(rank, best.rank)) best = { rank, entries: outcome.entries };
+    return outcome.entries;
+  };
+  // With no eligible note the empty set still runs, its selection names the refusal.
+  const funded =
+    trees.length === 0
+      ? found(consider([]))
+      : stagedTreeSearch(
+          trees,
+          maxTrees >= 2 ? trees.filter((tree) => pool.has(tree)) : [],
+          consider,
+        );
+  let best: { rank: readonly bigint[]; entries: readonly WalletUtxo[] } | undefined;
+  for (const entries of funded) {
+    const rank = [BigInt(entries.length), covered(entries)];
+    if (best === undefined || precedes(rank, best.rank)) best = { rank, entries };
   }
   if (best !== undefined) return best.entries;
   // The set funding the most mints, then holding the most of the short one, names the refusal.
   throw furthest?.error;
+}
+
+/** @internal Each tree alone, then only when none funds, each pair within `pool` in its order. */
+export function stagedTreeSearch<T>(
+  trees: readonly Address[],
+  pool: readonly Address[],
+  fund: (set: readonly Address[]) => T | undefined,
+): readonly T[] {
+  const singles = trees.flatMap((tree) => found(fund([tree])));
+  if (singles.length > 0) return singles;
+  return pool.flatMap((first, at) =>
+    pool.slice(at + 1).flatMap((second) => found(fund([first, second]))),
+  );
 }
 
 /** Proof inputs at each note's own tree, a second tree's id read once from its account. */
@@ -169,26 +215,16 @@ export const ringSelectionErrors: SpendSelectionErrors = {
     }),
 };
 
-/** Every set of up to `maxTrees` trees, one tree before two, each in first-seen order. */
-function treeSets(trees: readonly Address[], maxTrees: number): readonly (readonly Address[])[] {
-  const sets: Address[][] = [];
-  let frontier: { set: Address[]; next: number }[] = [{ set: [], next: 0 }];
-  for (let size = 1; size <= maxTrees; size += 1) {
-    // A set grows only by a later tree, no set repeats in another order.
-    frontier = frontier.flatMap(({ set, next }) =>
-      trees.slice(next).map((tree, offset) => ({ set: [...set, tree], next: next + offset + 1 })),
-    );
-    sets.push(...frontier.map(({ set }) => set));
-  }
-  return sets;
+function descending(left: bigint, right: bigint): number {
+  return left < right ? 1 : left > right ? -1 : 0;
+}
+
+function found<T>(value: T | undefined): readonly T[] {
+  return value === undefined ? [] : [value];
 }
 
 function covered(entries: readonly WalletUtxo[]): bigint {
   return entries.reduce((sum, entry) => sum + entry.utxo.amount, 0n);
-}
-
-function spannedTrees(entries: readonly WalletUtxo[]): number {
-  return new Set(entries.map((entry) => entry.outputContext.tree)).size;
 }
 
 /** Lexicographic, a tie keeps the earlier option. */
