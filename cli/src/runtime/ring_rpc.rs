@@ -15,11 +15,12 @@ use zolana_ring_client::{
         DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
         GetDecryptedTransactionsResponse, GetListSaltResponse, GetPendingListApprovalsRequest,
         GetPendingListApprovalsResponse, GetRecordUpdateStatusRequest, HealthResponse,
-        ListApprovalScope, ListSaltAttestation, ListSaltRequest, PendingListApproval, ReadTarget, RecordUpdateStatus,
-        RingState, RingStatusRequest, RingStatusResponse, SubmitRecordUpdateRequest,
-        SubmitRecordUpdateResponse, CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY,
-        GET_DECRYPTED_TRANSACTIONS, GET_LIST_SALT, GET_PENDING_LIST_APPROVALS,
-        GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS, SUBMIT_RECORD_UPDATE,
+        ListApprovalScope, ListSaltAttestation, ListSaltRequest, PendingListApproval, ReadTarget,
+        RecordUpdateStatus, RingState, RingStatusRequest, RingStatusResponse,
+        SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, CREATE_AUDITOR_KEY,
+        CREATE_RECORDS_REGISTRY, GET_DECRYPTED_TRANSACTIONS, GET_LIST_SALT,
+        GET_PENDING_LIST_APPROVALS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS,
+        SUBMIT_RECORD_UPDATE,
     },
 };
 

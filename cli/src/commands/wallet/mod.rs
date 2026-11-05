@@ -1,6 +1,6 @@
 //! A member's viewing history, notes and scan positions between runs, and the scans that read them.
 //!
-//! Every ring mode keeps one ledger per viewing key, an anonymous ring adds the anonymous sync.
+//! Every ring mode keeps one ledger per identity, an anonymous ring adds the anonymous sync.
 
 use std::{
     collections::BTreeSet,
