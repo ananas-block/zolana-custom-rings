@@ -322,22 +322,8 @@ pub enum StorageError {
     RevisionOverflow = 9015,
     #[error("no apply key serves the write count")]
     UnsupportedBatch = 9016,
-    #[error("viewing key is zero or not canonical")]
-    NonCanonicalViewingKey = 9021,
-    #[error("tracking registry is invalid")]
-    InvalidTrackingRegistry = 9022,
-    #[error("tracking authorization is invalid")]
-    InvalidTrackingAuthorization = 9023,
-    #[error("the enrollment's revision is already applied")]
-    EnrollmentAlreadyApplied = 9024,
-    #[error("the enrolled nullifier key, list tag and ciphertext are final")]
-    EnrollmentKeyFinal = 9025,
     #[error("a zero nullifier key does not enroll")]
     ZeroNullifierKey = 9028,
-    #[error("a first enrollment carries a proof and a rotation none")]
-    EnrollmentProofShape = 9029,
-    #[error("an apply names no enrollment")]
-    NoEnrollmentsNamed = 9030,
     #[error("owner grant account is invalid")]
     InvalidOwnerGrant = 9031,
     #[error("reader key names no scheme")]
