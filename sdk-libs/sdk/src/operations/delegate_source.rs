@@ -1,17 +1,22 @@
-//! The key a delegate move spends a source's notes under. The public zero key needs no
-//! enrollment, any other key comes only from the source's enrollment and must derive the
-//! address the request names.
+//! The key a delegate move spends a source's notes under, and the notes the move may spend. The
+//! public zero key needs no enrollment, any other key comes only from the source's enrollment and
+//! must derive the address the request names.
 //!
 //! Read [`ResolvedSource::resolve`] first, then [`ResolvedSource::check_notes`] on the recovered
-//! notes before they reach a [`DelegateSource`](crate::DelegateSource).
+//! notes before they reach a [`DelegateSource`](crate::DelegateSource), or
+//! [`AllowedNullifiers::admit`] per requested source on the relay path.
+
+use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use custom_ring_interface::tracking::TrackingAuthorization;
+use custom_ring_interface::{tracking::TrackingAuthorization, InputClass};
 use solana_address::Address;
 use spr_client::{AsyncRpc, ClientError};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
-use spr_keypair::{KeypairError, NullifierKey, ShieldedAddress, X25519Keypair, X25519Pubkey};
-use spr_transaction::WalletUtxo;
+use spr_keypair::{
+    KeypairError, NullifierKey, ShieldedAddress, X25519Keypair, X25519Pubkey, SHIELDED_ADDRESS_LEN,
+};
+use spr_transaction::{TransactionError, WalletUtxo};
 use thiserror::Error;
 use zolana_ring_client::{AuditError, SealedNullifierKey};
 
@@ -27,8 +32,16 @@ pub enum DelegateSourceError {
     SealMismatch,
     #[error("note {index} belongs to another owner or key than the source")]
     ForeignNote { index: usize },
+    #[error("note {index} does not rebuild the hash or nullifier it carries")]
+    UnboundOpening { index: usize },
+    #[error("the allowed notes cover other sources than the request names")]
+    SourcesMismatch,
+    #[error("input {position} spends a note no requested source opening derives")]
+    UnrequestedInput { position: usize },
     #[error(transparent)]
     Keypair(#[from] KeypairError),
+    #[error(transparent)]
+    Transaction(#[from] TransactionError),
     #[error(transparent)]
     Client(#[from] ClientError),
     #[error(transparent)]
@@ -117,18 +130,43 @@ impl ResolvedSource {
 
     /// Refuses the first note another owner holds or another key nullifies.
     pub fn check_notes(&self, notes: &[WalletUtxo]) -> Result<(), DelegateSourceError> {
-        for (index, note) in notes.iter().enumerate() {
-            let nullifier = self
-                .nullifier_key
-                .nullifier(&note.utxo_hash, &note.utxo.blinding)?;
-            let owned = same_owner(&note.utxo.owner, &self.address.signing_pubkey)
-                && note.nullifier_pubkey == self.address.nullifier_pubkey
-                && note.nullifier == nullifier;
-            if !owned {
-                return Err(DelegateSourceError::ForeignNote { index });
-            }
+        self.nullifiers(notes).map(drop)
+    }
+
+    fn nullifiers(&self, notes: &[WalletUtxo]) -> Result<Vec<[u8; 32]>, DelegateSourceError> {
+        notes
+            .iter()
+            .enumerate()
+            .map(|(index, note)| self.nullifier_of(index, note))
+            .collect()
+    }
+
+    fn nullifier_of(
+        &self,
+        index: usize,
+        note: &WalletUtxo,
+    ) -> Result<[u8; 32], DelegateSourceError> {
+        // 1. Owner and key are opening fields the rebuilt hash commits, so a match binds the note.
+        if !same_owner(&note.utxo.owner, &self.address.signing_pubkey)
+            || note.nullifier_pubkey != self.address.nullifier_pubkey
+        {
+            return Err(DelegateSourceError::ForeignNote { index });
         }
-        Ok(())
+        // 2. Rebuilt, not read, any carried hash yields its live nullifier under the shared zero key.
+        let rebuilt = note.utxo.hash(
+            &note.nullifier_pubkey,
+            &note.data_hash.unwrap_or_default(),
+            &note.ring_data_hash.unwrap_or_default(),
+            note.tree_id,
+        )?;
+        let nullifier = self
+            .nullifier_key
+            .nullifier(&rebuilt, &note.utxo.blinding)?;
+        // 3. Selection and the prover read the carried values, they must be the rebuilt ones.
+        if rebuilt != note.utxo_hash || nullifier != note.nullifier {
+            return Err(DelegateSourceError::UnboundOpening { index });
+        }
+        Ok(nullifier)
     }
 
     pub fn nullifier_key(&self) -> &NullifierKey {
@@ -140,6 +178,55 @@ impl ResolvedSource {
     }
 }
 
+/// Filled only by [`Self::admit`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AllowedNullifiers {
+    sources: BTreeSet<[u8; SHIELDED_ADDRESS_LEN]>,
+    nullifiers: BTreeSet<[u8; 32]>,
+}
+
+impl AllowedNullifiers {
+    /// Admits nothing of `source` when one of its openings fails.
+    pub fn admit(
+        &mut self,
+        source: &ResolvedSource,
+        notes: &[WalletUtxo],
+    ) -> Result<(), DelegateSourceError> {
+        let nullifiers = source.nullifiers(notes)?;
+        self.sources.insert(source.address.to_bytes());
+        self.nullifiers.extend(nullifiers);
+        Ok(())
+    }
+
+    pub fn check_sources<'s>(
+        &self,
+        requested: impl IntoIterator<Item = &'s ShieldedAddress>,
+    ) -> Result<(), DelegateSourceError> {
+        let requested: BTreeSet<_> = requested
+            .into_iter()
+            .map(ShieldedAddress::to_bytes)
+            .collect();
+        match requested == self.sources {
+            true => Ok(()),
+            false => Err(DelegateSourceError::SourcesMismatch),
+        }
+    }
+
+    /// `inputs` in published order, only note positions answer to the set.
+    pub fn check_inputs<'n>(
+        &self,
+        inputs: impl IntoIterator<Item = (InputClass, &'n [u8; 32])>,
+    ) -> Result<(), DelegateSourceError> {
+        let unrequested = inputs.into_iter().position(|(class, nullifier)| {
+            class == InputClass::Note && !self.nullifiers.contains(nullifier)
+        });
+        match unrequested {
+            Some(position) => Err(DelegateSourceError::UnrequestedInput { position }),
+            None => Ok(()),
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/operations/delegate_source.rs"]
-mod tests;
+pub(crate) mod tests;

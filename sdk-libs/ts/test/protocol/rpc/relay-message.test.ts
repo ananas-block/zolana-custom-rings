@@ -15,7 +15,11 @@ import {
   type AuditRecord,
 } from "../../../src/protocol/codec/audit-stream.js";
 import { DATA_TAIL_LEN, recordRegion } from "../../../src/protocol/codec/ring-disclosure-layout.js";
-import { RingTransactData, type Replies } from "../../../src/protocol/transaction/transact.js";
+import {
+  RingTransactData,
+  ringRailOf,
+  type Replies,
+} from "../../../src/protocol/transaction/transact.js";
 import { replyLength, sealReply } from "../../../src/protocol/codec/anonymous-delivery.js";
 import { ringInstructionData } from "../../helpers/ring-frame.js";
 import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
@@ -46,6 +50,7 @@ import { ShieldedAddress, ShieldedKeypair, X25519PublicKey } from "@heliuslabs/z
 import { Data } from "@heliuslabs/zolana/transaction";
 
 import {
+  type AllowedNullifiers,
   checkRelayMessage,
   checkSettledMessage,
   settledBufferOf,
@@ -168,8 +173,8 @@ function auditorOf(request: DelegateRequest): X25519PublicKey {
 function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
   const shielded = (text: string) => ShieldedAddress.fromBytes(new Uint8Array(base58.encode(text)));
   const { prepare } = request;
-  return expectedDelegate(
-    {
+  return expectedDelegate({
+    request: {
       ring: prepare.ring,
       delegate: prepare.delegate,
       txViewingKey: new Uint8Array(base64.encode(prepare.txViewingKey)),
@@ -182,9 +187,32 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
         })),
       },
     } as unknown as PrepareAuthorityTransferRequest,
-    { feePayer: request.feePayer, validUntilSlot: 0n },
-    { mode: "confidential", auditorPublicKey: auditorOf(request) },
+    quote: { feePayer: request.feePayer, validUntilSlot: 0n },
+    config: { mode: "confidential", auditorPublicKey: auditorOf(request) },
+    allowed: pinnedAllowed(delegates.cases),
+  });
+}
+
+/** The vector holds no openings, the honest frame's published nullifiers stand in as in Rust. */
+function pinnedAllowed(cases: readonly MessageCase[]): AllowedNullifiers {
+  const compiled = getCompiledTransactionMessageDecoder().decode(message(cases, "honest"));
+  const { instructions } = decompileTransactionMessage(
+    compiled as Parameters<typeof decompileTransactionMessage>[0] & { version: 1 },
   );
+  const rail = ringRailOf(RingInstructionTag.authorityTransfer, "confidential");
+  const honest = new Set(
+    (instructions as readonly Instruction[])
+      .map((instruction) => Uint8Array.from(instruction.data ?? []))
+      .filter((data) => data[0] === RingInstructionTag.authorityTransfer)
+      .flatMap((data) =>
+        RingTransactData.parse(data.subarray(1), rail).nullifiers.map(encodeBase58),
+      ),
+  );
+  return {
+    checkSources: () => undefined,
+    spendsOnly: (notes: Iterable<Bytes32>) =>
+      [...notes].every((nullifier) => honest.has(encodeBase58(nullifier))),
+  } as unknown as AllowedNullifiers;
 }
 
 function verdict(

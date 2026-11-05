@@ -25,6 +25,7 @@ Breaking
 - `openReply` returns a `ReplyClaim` holding the `claimed` metadata, and `AnonymousScan.replyClaims` of `ReplyClaim` is `senderClaims` of `SenderClaim` with a `claim` → read a claimed sender through `claim.claimed`, an unverified claim no authorization reads.
 - A wallet reads its zero-key notes apart from its balance through `AnonymousWallet.exposedNotes`, spending one raises `RING_ZERO_KEY_INPUT_UNNAMED` off the `spendPublic` rail, and a shortfall they could cover raises `RING_UNFUNDED_PAST_EXPOSURE` → pass `spendPublic` when the user accepts that the wallet becomes public, on `CustomRingTransfer` it returns a `PublicOwnerTransfer`.
 - `PendingRelaySignature.sign` signs only a message that holds what the wallet requested and raises `RING_RELAY_MESSAGE_INVALID` naming a `RelayMessageMismatch`, `PendingRelaySignature.verify` takes the signer, and `PreparedRingDeposit.prepareRelay` takes `depositorSigner` and `prepareRingMergeRelay` takes `signer` → pass those signers and handle each mismatch.
+- `PreparedAuthorityTransfer` takes one `RequestedAuthorityTransfer` whose `AllowedNullifiers` the delegate admits from its own openings of exactly the requested sources, and a message that spends any other note raises the mismatch `SpendsUnrequestedNote` → admit each source's notes with `AllowedNullifiers.admit` and pass the set.
 - `CompressedProof.toCustomRingProof()` is gone → call `customRingProof(proof)`
   with the prover's proof.
 - `syncRingWallet` and `openRingNotes` open ring deposits, an audited one

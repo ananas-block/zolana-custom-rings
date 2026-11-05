@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use custom_ring_sdk::{DelegatePayment, DelegateSourceError, ResolvedSource, SourceEnrollment};
+use custom_ring_sdk::{
+    AllowedNullifiers, DelegatePayment, DelegateSourceError, ResolvedSource, SourceEnrollment,
+};
 use jsonrpsee::types::ErrorObjectOwned;
 use solana_address::Address;
 use spr_indexer_api::Hash;
@@ -41,6 +43,8 @@ pub enum AuthorityTransferError {
     NotListWriter = -32226,
     #[error("a stored note of the source belongs to another owner or key")]
     SourceNote = -32227,
+    #[error("the sealed move spends a note no requested source holds")]
+    UnrequestedInput = -32228,
 }
 
 impl AuthorityTransferError {
@@ -60,9 +64,16 @@ impl From<DelegateSourceError> for RingRpcError {
         match error {
             DelegateSourceError::Unenrolled => AuthorityTransferError::SourceUnescrowed.into(),
             DelegateSourceError::KeyMismatch => AuthorityTransferError::SourceKey.into(),
-            DelegateSourceError::ForeignNote { .. } => AuthorityTransferError::SourceNote.into(),
+            DelegateSourceError::ForeignNote { .. }
+            | DelegateSourceError::UnboundOpening { .. } => {
+                AuthorityTransferError::SourceNote.into()
+            }
+            DelegateSourceError::SourcesMismatch | DelegateSourceError::UnrequestedInput { .. } => {
+                AuthorityTransferError::UnrequestedInput.into()
+            }
             DelegateSourceError::SealMismatch => Self::TrackedKey,
             DelegateSourceError::Keypair(error) => error.into(),
+            DelegateSourceError::Transaction(error) => error.into(),
             DelegateSourceError::Client(error) => error.into(),
             DelegateSourceError::Seal(error) => error.into(),
         }
@@ -270,6 +281,7 @@ impl<S: TransactionSource> Hub<S> {
                 .await?;
         }
         // 3. Each source key is the public zero key or its escrowed key, and only its own notes follow.
+        // The same openings fill the allowed set the sealed inputs answer to.
         let assets = shared.due_assets().await;
         let mut mints: Vec<Address> = Vec::new();
         for payment in &transfer.payments {
@@ -278,6 +290,7 @@ impl<S: TransactionSource> Hub<S> {
             }
         }
         let enrollment = TrackedEnrollment { service: &service };
+        let mut allowed = AllowedNullifiers::default();
         let mut sources = Vec::with_capacity(transfer.sources.len());
         for source in &transfer.sources {
             let source = source.0;
@@ -295,7 +308,7 @@ impl<S: TransactionSource> Hub<S> {
                     nullifier_key: resolved.nullifier_key(),
                 })?);
             }
-            resolved.check_notes(&notes)?;
+            allowed.admit(&resolved, &notes)?;
             sources.push(SealedSource {
                 address: source,
                 nullifier_key: resolved.into_nullifier_key(),
@@ -309,6 +322,7 @@ impl<S: TransactionSource> Hub<S> {
                     ring,
                     delegate,
                     sources: &sources,
+                    allowed: &allowed,
                     tx_viewing_key,
                     payments: transfer
                         .payments
@@ -337,7 +351,7 @@ mod tests {
     use solana_signer::Signer;
     use spr_client::ComputeBudgetConfig;
     use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
-    use spr_transaction::instructions::transact::ExternalData;
+    use spr_transaction::{instructions::transact::ExternalData, utxo::SppProofInputUtxo};
     use zolana_ring_client::rpc::{
         unix_now, AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation,
         AuthorityTransferRequest, ReadTarget, RelayProofInputs, RelayRail, SignedRequest,
@@ -359,6 +373,8 @@ mod tests {
         sealed: Mutex<Vec<Sealed>>,
         proven: Mutex<Vec<(Address, [u8; 31])>>,
         frame: Mutex<Option<Vec<u8>>>,
+        /// An input the sealer adds at a position among the sources' notes.
+        inserted: Mutex<Option<(usize, SppProofInputUtxo)>>,
     }
 
     struct Sealed {
@@ -426,6 +442,14 @@ mod tests {
                     .flat_map(|source| source.notes.iter().map(|note| note.nullifier))
                     .collect(),
             });
+            let mut inputs: Vec<SppProofInputUtxo> = seal
+                .sources
+                .iter()
+                .flat_map(|source| source.notes.iter().map(SppProofInputUtxo::from))
+                .collect();
+            if let Some((position, input)) = self.inserted.lock().expect("inserted").take() {
+                inputs.insert(position, input);
+            }
             let tx_viewing_key = seal.tx_viewing_key;
             Ok(RelayProofInputs {
                 rail: RelayRail::Delegate {
@@ -445,7 +469,7 @@ mod tests {
                     Vec::new(),
                 ),
                 tx_viewing_key,
-                inputs: Vec::new(),
+                inputs,
                 outputs: Vec::new(),
                 interface_transfer_accounts: Vec::new(),
                 blinding_seed: [0; 32],
@@ -724,6 +748,50 @@ mod tests {
             .await
             .expect("no row reads nothing");
         assert_eq!(none.list_salt, None);
+    }
+
+    /// The sealed outputs never reach the check, another member's note fails before any proof.
+    #[tokio::test]
+    async fn a_sealed_note_no_requested_source_holds_is_refused() {
+        let delegate = Keypair::new_from_array([21; 32]);
+        let (fixture, prover) = served(delegate.pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let mut victim = SppProofInputUtxo::dummy(0).expect("dummy");
+        victim.utxo.owner = PublicKey::from_ed25519(&[12; 32]);
+        victim.nullifier = [12; 32];
+        *prover.inserted.lock().expect("inserted") = Some((1, victim));
+
+        let refused = fixture
+            .hub
+            .prepare_authority_transfer(&request(&fixture, &delegate, address(&wallet, &escrowed)))
+            .await
+            .expect_err("a note of an unrequested owner is refused");
+
+        assert_eq!(ErrorObjectOwned::from(refused).code(), -32228);
+        assert!(prover.proven.lock().expect("proven").is_empty());
+    }
+
+    /// SPP authorizes an address on its own, it passes between the source's notes.
+    #[tokio::test]
+    async fn an_address_between_the_requested_notes_passes() {
+        let delegate = Keypair::new_from_array([21; 32]);
+        let (fixture, prover) = served(delegate.pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let address_input =
+            SppProofInputUtxo::new_address(PublicKey::from_ed25519(&[4; 32]), [5; 32], 0)
+                .expect("address input");
+        *prover.inserted.lock().expect("inserted") = Some((1, address_input));
+
+        let step = fixture
+            .hub
+            .prepare_authority_transfer(&request(&fixture, &delegate, address(&wallet, &escrowed)))
+            .await
+            .expect("prepared transfer");
+
+        assert!(matches!(step, RelayStep::SignMessage { .. }), "{step:?}");
+        assert_eq!(prover.proven.lock().expect("proven").len(), 1);
     }
 
     #[tokio::test]

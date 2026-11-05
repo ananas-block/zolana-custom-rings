@@ -14,7 +14,7 @@ use crate::{
     relay_message::{
         ApprovalOpening, ExpectedDelegate, ExpectedMessage, RelayFunderTerms, RelayTransferTerms,
     },
-    CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
+    AllowedNullifiers, CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
 };
 
 #[async_trait]
@@ -42,6 +42,15 @@ pub struct PreparedRelay {
     request: PrepareRelayRequest,
     /// `None` on the rails that sign inside the proof.
     expected: Option<ExpectedMessage>,
+}
+
+#[must_use = "prepare the authority transfer"]
+pub struct RequestedAuthorityTransfer<'a> {
+    pub request: PrepareAuthorityTransferRequest,
+    pub quote: &'a RelayQuote,
+    pub config: &'a CustomRingConfig,
+    /// Every note of each requested source, a note Ring RPC selects outside it is refused.
+    pub allowed: AllowedNullifiers,
 }
 
 /// Ring RPC selects the source's notes and proves, the delegate signs the message it returns.
@@ -91,17 +100,18 @@ impl PreparedRelay {
     }
 }
 
-impl PreparedAuthorityTransfer {
+impl RequestedAuthorityTransfer<'_> {
     /// The delegate signs only a message the quoted fee payer pays.
-    pub fn new(
-        request: PrepareAuthorityTransferRequest,
-        quote: &RelayQuote,
-        config: &CustomRingConfig,
-    ) -> Result<Self, RingError> {
-        let expected = ExpectedDelegate::new(&request, quote, config)?;
-        Ok(Self { request, expected })
+    pub fn prepare(self) -> Result<PreparedAuthorityTransfer, RingError> {
+        let expected = ExpectedDelegate::new(&self)?;
+        Ok(PreparedAuthorityTransfer {
+            request: self.request,
+            expected,
+        })
     }
+}
 
+impl PreparedAuthorityTransfer {
     /// A retried request names the same relay.
     pub fn relay_id(&self) -> Result<RelayId, RingError> {
         Ok(self.request.relay_id()?)

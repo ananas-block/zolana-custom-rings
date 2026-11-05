@@ -313,7 +313,7 @@ pub(crate) mod tests {
         compile_message, ClientError, ComputeBudgetConfig, GetShieldedTransactionsByTagsResponse,
     };
     use spr_keypair::X25519Keypair;
-    use spr_transaction::Mint;
+    use spr_transaction::{Data, Mint, Utxo};
     use zolana_ring_client::{
         rpc::{unix_now, MergeSettingsRequest, ReadTarget, RingChainStatus, SignedRequest},
         AuditError, CreatedUtxo, KnownUtxo, MergeAuditPage, NullifierKeyEnvelope, RingIndexerError,
@@ -568,14 +568,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// A leading zero byte keeps the commitment inside the field.
-    fn commitment(owner: u8, index: u8) -> [u8; 32] {
-        let mut commitment = [0; 32];
-        commitment[1] = owner;
-        commitment[2] = index;
-        commitment
-    }
-
     fn assets() -> RingAssets {
         RingAssets::new([Mint::new(MINT, 7)]).expect("assets")
     }
@@ -719,6 +711,19 @@ pub(crate) mod tests {
             let owner_key = wallet.pubkey().to_bytes();
             let nullifier_pk = key.pubkey().expect("nullifier pk");
             let asset = *assets().fields().next().expect("field");
+            // The delegate path rebuilds each opening's hash, a stand in commitment would fail it.
+            let commitment = |index: u8| {
+                Utxo {
+                    owner: spr_keypair::PublicKey::from_ed25519(&owner_key),
+                    asset: Mint::new(MINT, 7),
+                    amount: 10,
+                    blinding: [index; 32],
+                    ring_program_id: Some(RING),
+                    data: Data::default(),
+                }
+                .hash(&nullifier_pk, &[0; 32], &[0; 32], 1)
+                .expect("commitment")
+            };
             store.record(
                 CreatedIn {
                     slot: 1,
@@ -726,7 +731,7 @@ pub(crate) mod tests {
                     event_index: 0,
                 },
                 (0..notes).map(|index| CreatedUtxo {
-                    commitment: commitment(owner_key[0], index),
+                    commitment: commitment(index),
                     slot_index: u32::from(index),
                     leaf_index: u64::from(index),
                     utxo: KnownUtxo {

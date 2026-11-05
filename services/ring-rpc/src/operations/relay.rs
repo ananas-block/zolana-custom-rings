@@ -41,6 +41,7 @@ use zolana_ring_client::rpc::{
     TokenAccountSetupError, ENROLL_COMPUTE_UNITS,
 };
 use zolana_ring_policy::Member;
+use zolana_ring_transaction::ClassifiedInput;
 
 use crate::{
     cosign::{
@@ -616,6 +617,7 @@ impl Relay {
     ) -> Result<RelayStep, RingRpcError> {
         let ring = seal.ring;
         let delegate = seal.delegate;
+        let allowed = seal.allowed;
         self.rings.check(ring).await?;
         let parties = self.parties(&[]);
         let claim = self
@@ -633,8 +635,17 @@ impl Relay {
                     .proofs
                     .try_acquire()
                     .map_err(|_| RingRpcError::RelayProverBusy)?;
-                let payload =
-                    RelayPayload::Transfer(self.prover.seal_delegate(seal, parties.clone()).await?);
+                let sealed = self.prover.seal_delegate(seal, parties.clone()).await?;
+                // Sealed inputs answer to the resolved openings before proving, compact padding
+                // publishes no position.
+                allowed.check_inputs(
+                    sealed
+                        .inputs
+                        .iter()
+                        .filter(|input| !input.is_compact())
+                        .map(|input| (input.input_class(), &input.nullifier)),
+                )?;
+                let payload = RelayPayload::Transfer(sealed);
                 let proven = match claim.held.proven.as_deref() {
                     Some(stored) => StoredProof::read(stored)?,
                     None => {
