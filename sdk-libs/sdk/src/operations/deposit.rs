@@ -53,9 +53,7 @@ use crate::{
     },
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
-    records::{
-        check_output_key, check_recipient_viewing_key, PoolRead, TrackingPoolRead, TrackingRead,
-    },
+    records::{check_recipient_viewing_key, OutputKey, PoolRead, TrackingPoolRead, TrackingRead},
     relay_message::{ExpectedDeposit, ExpectedMessage},
     request::{
         self, DepositRequest, MintChunks, OwnerEntry, PolicyParams, PolicyTable, PoolEntry,
@@ -1131,18 +1129,6 @@ impl DepositDisclosure {
         }
         .read(rpc)
         .await?;
-        for (slot_index, slot) in self.slots.iter().enumerate() {
-            check_output_key(
-                rows.record(&slot.owner_pk_hash),
-                &slot.nullifier_pk,
-                slot_index,
-            )?;
-            check_recipient_viewing_key(
-                rows.record(&slot.owner_pk_hash),
-                &slot.viewing_u,
-                slot_index,
-            )?;
-        }
         let pinned = match policy.written_policy_hash() {
             Some(_) => Some(PinnedPolicy::of(&policy)?),
             None => None,
@@ -1150,6 +1136,20 @@ impl DepositDisclosure {
         let gates = pinned.as_ref().map_or_else(SourceGates::default, |pinned| {
             SourceGates::of(&pinned.sources)
         });
+        for (slot_index, slot) in self.slots.iter().enumerate() {
+            OutputKey {
+                row: rows.record(&slot.owner_pk_hash),
+                nullifier_pk: &slot.nullifier_pk,
+                slot_index,
+                gates,
+            }
+            .check()?;
+            check_recipient_viewing_key(
+                rows.record(&slot.owner_pk_hash),
+                &slot.viewing_u,
+                slot_index,
+            )?;
+        }
         // 2. Every distinct recipient and asset takes a pool record and an enrolled recipient on a salted
         // list one more under its salted key, only the rows read above show who is enrolled.
         let salts = KnownSalts::new(

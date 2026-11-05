@@ -57,10 +57,12 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
     );
 }
 
-/// A keyed note needs its owner's row, a zero key needs no row.
+/// A keyed note needs its owner's row, a salted payee read refuses an enrolled owner the zero key.
 #[tokio::test]
 async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
+    use crate::tests::support::Registry;
     use spr_interface::ZERO_NULLIFIER_PUBKEY;
+    use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
     let (stranger, payer) = (keypair(2), keypair(9));
     let keyed = stranger.shielded_address().unwrap();
     let zero = spr_keypair::ShieldedAddress {
@@ -76,7 +78,14 @@ async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
         refused.prove_bound(&unenrolled.client()).await,
         Err(RingError::RecipientNotEnrolled { slot_index: 0 })
     ));
-    let enrolled = Chain::ring(RingSettings::new(RingMode::Confidential));
+    let salted = RuleTable::builder()
+        .rule(Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock))
+        .build();
+    let enrolled = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    })
+    .with_registry(Registry::new(&[]), &salted);
     let at_zero = deposit(&payer, DepositRecipient::Confidential(zero))
         .prepare(&enrolled)
         .await

@@ -24,9 +24,7 @@ use super::{
 };
 use crate::{
     limits::Outflows,
-    records::{
-        check_output_key, check_recipient_viewing_key, PoolRead, TrackingPoolRead, TrackingRead,
-    },
+    records::{check_recipient_viewing_key, OutputKey, PoolRead, TrackingPoolRead, TrackingRead},
     request::{
         OwnerEntry, PolicyParams, PolicyTable, PolicyWithdrawalRequest, PoolEntry, RecordPools,
         TrackingParams,
@@ -211,7 +209,7 @@ impl PolicyRead<'_> {
         .read(client)
         .await?;
         self.check_input_keys(&tracking_pool)?;
-        self.check_output_keys(&tracking_pool, &ring_owners)?;
+        self.check_output_keys(&tracking_pool, &ring_owners, gates)?;
         let mut sender_entries = core::mem::take(&mut planned.senders);
         sender_entries.resize(capacity, OwnerEntry::default());
         let public_asset_entries = core::mem::take(&mut planned.public_assets);
@@ -346,6 +344,7 @@ impl PolicyRead<'_> {
         &self,
         pool: &TrackingPoolRead,
         owners: &[Option<[u8; 32]>],
+        gates: SourceGates,
     ) -> Result<(), RingError> {
         for (slot_index, (output, owner)) in self.inputs.output_utxos.iter().zip(owners).enumerate()
         {
@@ -353,7 +352,13 @@ impl PolicyRead<'_> {
                 continue;
             };
             let row = pool.record(member);
-            check_output_key(row, &address.nullifier_pubkey, slot_index)?;
+            OutputKey {
+                row,
+                nullifier_pk: &address.nullifier_pubkey,
+                slot_index,
+                gates,
+            }
+            .check()?;
             // A spending owner holds every key it ever enrolled.
             let spends = self
                 .inputs

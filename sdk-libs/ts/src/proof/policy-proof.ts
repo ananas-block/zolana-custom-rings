@@ -592,6 +592,7 @@ async function readTracking(
     outputs: ringOutputs,
     rowOf,
     spenders: publishedNotes(proofInputs).map((note) => note.utxo.owner),
+    saltedPayees: subjects.view !== undefined && subjects.view.salted !== 0,
   });
   const trackingEntry = (member: Bytes32 | undefined): number =>
     member === undefined || isZero(member) ? 0 : (position.get(bytesKey(member)) ?? 0);
@@ -667,7 +668,7 @@ export async function readDepositSection(
     openings: capacity,
   });
   const row = pool.rows[0];
-  checkOutputKey(owner, input.nullifierPk, row);
+  checkOutputKey({ member: owner, nullifierPk: input.nullifierPk, row, saltedPayees: anySalted });
   if (row !== undefined && !equalBytes(row.viewingU, input.viewingU))
     throw staleViewingKey(owner, row);
   const pad = <T>(values: readonly T[], zero: T): readonly T[] =>
@@ -807,13 +808,15 @@ export function checkInputKeys(
   }
 }
 
-/** A nonzero key needs its row, a zero key needs none under the frame's root. */
+/** A nonzero key needs its row, a zero key needs none under a salted payee read, Go `AssertOutputOwners`. */
 export function checkOutputKeys(
   input: Readonly<{
     outputs: readonly (ProofOutputUtxo | undefined)[];
     rowOf: (member: Bytes32) => TrackingRecord | undefined;
     /** A spending owner holds every key it ever enrolled. */
     spenders: readonly ShieldedPublicKey[];
+    /** Set while a screened frame reads a salted list. */
+    saltedPayees: boolean;
   }>,
 ): void {
   for (const output of input.outputs) {
@@ -821,7 +824,12 @@ export function checkOutputKeys(
     if (owner === undefined) continue;
     const member = owner.signingPublicKey.ownerProofInputHash();
     const row = input.rowOf(member);
-    checkOutputKey(member, owner.nullifierPublicKey, row);
+    checkOutputKey({
+      member,
+      nullifierPk: owner.nullifierPublicKey,
+      row,
+      saltedPayees: input.saltedPayees,
+    });
     if (
       row !== undefined &&
       !input.spenders.some((spender) => owner.signingPublicKey.equals(spender)) &&
@@ -832,12 +840,16 @@ export function checkOutputKeys(
 }
 
 function checkOutputKey(
-  member: Bytes32,
-  nullifierPk: Bytes32,
-  row: TrackingRecord | undefined,
+  input: Readonly<{
+    member: Bytes32;
+    nullifierPk: Bytes32;
+    row: TrackingRecord | undefined;
+    saltedPayees: boolean;
+  }>,
 ): void {
+  const { member, nullifierPk, row } = input;
   if (equalBytes(nullifierPk, ZERO_NULLIFIER_PK)) {
-    if (row !== undefined) throw new RingError("RING_RECIPIENT_ENROLLED");
+    if (row !== undefined && input.saltedPayees) throw new RingError("RING_RECIPIENT_ENROLLED");
     return;
   }
   if (row === undefined) throw new RingError("RING_RECIPIENT_NOT_ENROLLED");

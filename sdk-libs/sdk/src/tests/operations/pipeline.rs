@@ -3279,7 +3279,7 @@ async fn a_keyed_input_spends_under_its_owners_enrolled_key_and_a_zero_key_waive
 }
 
 #[tokio::test]
-async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
+async fn an_output_takes_the_tracking_rows_key_or_zero_off_a_salted_read() {
     use crate::tests::support::keypair;
     let (sender, payee) = (keypair(1), keypair(2));
     let (from, to) = (
@@ -3309,10 +3309,7 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
         paying(&to).frame(&client(&[from])).await.err(),
         Some(RingError::RecipientNotEnrolled { .. })
     ));
-    assert!(matches!(
-        paying(&zero).frame(&enrolled).await.err(),
-        Some(RingError::EnrolledRecipientAtZeroKey { .. })
-    ));
+    assert!(paying(&zero).frame(&enrolled).await.is_ok());
     let rekeyed = spr_keypair::ShieldedAddress {
         nullifier_pubkey: from.nullifier_pubkey,
         ..to
@@ -3320,6 +3317,32 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
     assert!(matches!(
         paying(&rekeyed).frame(&enrolled).await.err(),
         Some(RingError::RecipientKeyMismatch { .. })
+    ));
+}
+
+/// Mirror the circuit, only a salted payee read refuses an enrolled owner the zero key.
+#[test]
+fn a_salted_payee_read_alone_refuses_an_enrolled_owner_the_zero_key() {
+    use crate::{pipeline::SourceGates, records::OutputKey};
+    use zolana_ring_member_registry::TrackingRecord;
+    use zolana_ring_policy::{ListId, SourceMap};
+    let row = TrackingRecord::default();
+    let check = |gates| {
+        OutputKey {
+            row: Some(&row),
+            nullifier_pk: &ZERO_NULLIFIER_PUBKEY,
+            slot_index: 1,
+            gates,
+        }
+        .check()
+    };
+    let public = SourceMap::new(&[(ListId::Block, [0; 32])]).unwrap();
+    let salted = SourceMap::new(&[(ListId::PrivateBlock, [0; 32])]).unwrap();
+    assert!(check(SourceGates::default()).is_ok());
+    assert!(check(SourceGates::of(&public)).is_ok());
+    assert!(matches!(
+        check(SourceGates::of(&salted)),
+        Err(RingError::EnrolledRecipientAtZeroKey { slot_index: 1 })
     ));
 }
 
