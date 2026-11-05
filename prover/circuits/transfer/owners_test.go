@@ -1,4 +1,4 @@
-// Owner predicates bind nonzero keys to credentials and refuse hidden zero-key inputs.
+// Refusals of the owner predicates, a key off the enrolled row and a zero key for an enrolled owner.
 
 package transfer_test
 
@@ -29,7 +29,7 @@ const (
 
 // ownersCircuit runs the owner sections alone.
 type ownersCircuit struct {
-	policy.Credentials
+	policy.Tracking
 	Members          []frontend.Variable
 	Inputs, Outputs  []shared.UtxoWires
 	Delegate, Hidden frontend.Variable
@@ -38,18 +38,18 @@ type ownersCircuit struct {
 
 func newOwnersCircuit(t testing.TB) *ownersCircuit {
 	t.Helper()
-	credentials, err := policy.NewCredentials(testRows, testOutputs, 0)
+	tracking, err := policy.NewTracking(testRows, testOutputs, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &ownersCircuit{Credentials: credentials, Members: make([]frontend.Variable, testRows), Inputs: make([]shared.UtxoWires, testInputs), Outputs: make([]shared.UtxoWires, testOutputs)}
+	return &ownersCircuit{Tracking: tracking, Members: make([]frontend.Variable, testRows), Inputs: make([]shared.UtxoWires, testInputs), Outputs: make([]shared.UtxoWires, testOutputs)}
 }
 
 func (c *ownersCircuit) Define(api frontend.API) error {
-	if err := c.ValidateCredentials(testRows, testOutputs, 0); err != nil {
+	if err := c.ValidateTracking(testRows, testOutputs, 0); err != nil {
 		return err
 	}
-	pool := c.OpenCredentials(api, testRing)
+	pool := c.OpenTracking(api)
 	rows := transfer.OpenOwnerRows(api, c.Members, c.RowEntries, pool)
 	inputs := make([]shared.Output, len(c.Inputs))
 	for i, input := range c.Inputs {
@@ -97,7 +97,7 @@ type ownersWorld struct {
 func (w ownersWorld) build(t testing.TB) *ownersCircuit {
 	t.Helper()
 	c := newOwnersCircuit(t)
-	tree := ringregistry.NewCredentials(t, big.NewInt(testRing))
+	tree := ringregistry.NewTracking(t)
 	ringpolicy.Enroll(t, tree, alice, enrolledKey(t, alice))
 	ringpolicy.Enroll(t, tree, bob, enrolledKey(t, bob))
 	for j := range c.Members {
@@ -117,12 +117,12 @@ func (w ownersWorld) build(t testing.TB) *ownersCircuit {
 		c.Outputs[o], outputOwners[o] = dummySlot(), 0
 		if o < len(w.outputs) {
 			c.Outputs[o], outputOwners[o] = w.outputs[o], w.outputs[o].OwnerPkHash
-			if ringtest.AsBigInt(w.outputs[o].RingProgramID).Sign() == 0 || ringtest.AsBigInt(w.outputs[o].NullifierPk).Cmp(shared.ZeroNullifierPk) == 0 {
+			if ringtest.AsBigInt(w.outputs[o].RingProgramID).Sign() == 0 {
 				outputOwners[o] = 0
 			}
 		}
 	}
-	ringpolicy.FillCredentials(t, &c.Credentials, tree, c.Members, outputOwners, nil, nil)
+	ringpolicy.FillTracking(t, &c.Tracking, tree, c.Members, outputOwners, nil, nil)
 	c.Delegate, c.Hidden, c.HiddenOwner = ringtest.Bit(w.delegate), ringtest.Bit(w.hidden), 0
 	if w.hiddenOwner != nil {
 		c.HiddenOwner = w.hiddenOwner
@@ -209,7 +209,7 @@ func TestOwnerPredicates(t *testing.T) {
 		{name: "a nonzero key to an enrolled owner other than its own", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{outputs: []shared.UtxoWires{note(alice, enrolledKey(t, bob), testRing)}}
 		}},
-		{name: "a zero key to an enrolled owner", world: func(t testing.TB) ownersWorld {
+		{name: "a zero key to an enrolled owner", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{outputs: []shared.UtxoWires{note(alice, zero, testRing)}}
 		}},
 		{name: "a nonzero key to an unenrolled owner", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {

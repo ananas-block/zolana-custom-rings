@@ -52,6 +52,8 @@ pub enum RingError {
     #[error(transparent)]
     Records(#[from] RecordTreeError),
     #[error(transparent)]
+    RecordStatement(#[from] zolana_ring_member_registry::RecordStatementError),
+    #[error(transparent)]
     Audit(#[from] zolana_ring_client::AuditError),
     #[error(transparent)]
     Encoding(#[from] wincode::WriteError),
@@ -156,15 +158,7 @@ pub enum RingError {
     #[error(transparent)]
     AddressCeiling(#[from] crate::AddressCeilingError),
     #[error(transparent)]
-    Credential(Box<zolana_ring_client::CredentialError>),
-    #[error(transparent)]
-    RecordStatement(#[from] zolana_ring_member_registry::RecordStatementError),
-    #[error("tree 0 moved its root history between the credential read and the root check")]
-    CredentialRootMoved,
-    #[error("the credential pool reads {members} members, the key opens {capacity}")]
-    CredentialCapacity { members: usize, capacity: usize },
-    #[error("a pool entry names a member the credential read did not answer")]
-    CredentialNotRead,
+    Resolve(#[from] zolana_ring_client::ResolveError),
     #[error(transparent)]
     DelegateSource(#[from] crate::DelegateSourceError),
     #[error("a deposit frame proves once, a retry draws a new blinding secret")]
@@ -189,7 +183,7 @@ pub enum RingError {
     DepositUnkeyed,
     #[error("a salted list reads enrolled owner {member:?} and no list salt is known")]
     ListSaltUnknown { member: [u8; 32] },
-    #[error("no known list salt of owner {member:?} opens its credential's list tag")]
+    #[error("no known list salt of owner {member:?} opens its tracking leaf's list tag")]
     ListSaltMismatch { member: [u8; 32] },
     #[error("the policy refuses the transfer, {0}")]
     PolicyRuleUnsatisfied(#[from] RuleRefusal),
@@ -205,14 +199,19 @@ pub enum RingError {
     RepeatedDelegateSource,
     #[error(transparent)]
     TokenAccountSetup(#[from] zolana_ring_client::rpc::TokenAccountSetupError),
-    #[error("input {index} spends under a key its owner's credential does not hold")]
+    #[error("input {index} spends under a key its owner's tracking row does not hold")]
     InputKeyNotEnrolled { index: usize },
-    #[error("the owner at output {slot_index} holds no credential, only the zero key pays it")]
+    #[error("the owner at output {slot_index} holds no tracking row, only the zero key pays it")]
     RecipientNotEnrolled { slot_index: usize },
-    #[error("output {slot_index} names another key than its owner's credential")]
+    #[error("the owner at output {slot_index} is enrolled, the zero key does not pay it")]
+    EnrolledRecipientAtZeroKey { slot_index: usize },
+    #[error("output {slot_index} names another key than its owner's tracking row")]
     RecipientKeyMismatch { slot_index: usize },
-    #[error("output {slot_index} names a viewing key other than its owner's user record, ask for a new address")]
-    RecipientViewingKeyStale { slot_index: usize },
+    #[error("output {slot_index} names a viewing key other than its owner's row at revision {row_revision}, ask for a new address")]
+    RecipientViewingKeyStale {
+        slot_index: usize,
+        row_revision: u64,
+    },
     #[error("the transfer has {owners} owner signers, its accounts leave room for {limit}")]
     TooManyOwnerSigners { owners: usize, limit: usize },
     #[error("an anonymous transfer leads with its hidden owner's note, a frame of only public owners takes the confidential family")]
@@ -326,32 +325,22 @@ pub enum RingError {
         signature: Signature,
         error: solana_transaction_error::TransactionError,
     },
-    #[error(transparent)]
-    CompressedAccount(#[from] spr_program::program::CompressedAccountError),
-    #[error("an enrollment holds the credential address of {owner}, a credential never changes")]
+    #[error("{owner} holds a tracking authorization under another nullifier key, the first key is final")]
     AlreadyEnrolled { owner: Address },
-    #[error("the proven SPP transaction differs from the one the ring program builds")]
-    EnrollmentMismatch,
     #[error("the journal did not record the enrollment attempt, nothing was sent")]
     AttemptNotRecorded(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("preflight refused the enrollment with {0}")]
     EnrollmentRefused(solana_transaction_error::TransactionError),
-    #[error("the user record of {owner} holds another nullifier key, no enrollment can match it")]
-    UserRecordKeyMismatch { owner: Address },
-    #[error(transparent)]
-    UserRecord(#[from] zolana_ring_client::ViewingKeyError),
-    #[error("{owner} holds no user record, a relayed enrollment carries no REGISTER")]
-    RelayNeedsUserRecord { owner: Address },
     #[error("the recorded enrollment attempt does not decode")]
     AttemptUnreadable,
     #[error("the enrollment attempt reconciles to {0:?}, only an expired attempt goes again")]
     AttemptNotExpired(crate::enrollment::EnrollmentOutcome),
-}
-
-impl From<zolana_ring_client::CredentialError> for RingError {
-    fn from(error: zolana_ring_client::CredentialError) -> Self {
-        Self::Credential(Box::new(error))
-    }
+    #[error("the owner of write {write_index} holds no applied tracking row")]
+    WriteOwnerNotEnrolled { write_index: u8 },
+    #[error("write {write_index} is not the list key of its owner under the salt")]
+    ListKeyMismatch { write_index: u8 },
+    #[error("the salted owners name other write positions than the private writes")]
+    PrivateWritesMismatch,
 }
 
 impl From<RingIndexerError> for RingError {

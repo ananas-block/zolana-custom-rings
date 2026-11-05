@@ -6,7 +6,7 @@
 //!
 //! Read after `program-libs/member-registry/src/lib.rs`, `program-libs/member-registry/src/path.rs`.
 //! Read before `program-libs/member-registry/src/memory.rs`, `program-libs/member-registry/src/record.rs`,
-//! `prover/circuits/registry/apply_records.go`.
+//! `prover/circuits/registry/apply_records.go`, `prover/circuits/registry/apply_enrollments.go`.
 
 use core::marker::PhantomData;
 

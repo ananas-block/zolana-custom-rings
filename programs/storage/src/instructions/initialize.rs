@@ -5,11 +5,11 @@
 //!
 //! Guarantees:
 //! 1. The creator signs and becomes the authority, its key in the seeds keeps every other signer off the address.
-//! 2. `grace_slots`, `ring_id` and `private_ring_id` are final, no instruction writes them again.
+//! 2. `grace_slots`, `ring_id` and `tracking_registry` are final, no instruction writes them again.
 //!
 //! Relies on:
-//! 1. `load_records_registry` checks the own registry ring id. `RegistrySlots::load` checks the private ring id of every salted source.
-//! 2. Storage authenticates the ring program preimage of `private_ring_id` on each credential write.
+//! 1. The ring checks `ring_id` in `load_records_registry` and `tracking_registry` in `RingPolicy::check_source_pair`, neither is checked here.
+//! 2. A pin that names no tracking registry fails its own private writes and harms its creator alone.
 
 use custom_ring_interface::{storage::StorageError, storage_instruction::InitializeIxData};
 use pinocchio::{AccountView, Address, ProgramResult};

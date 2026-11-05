@@ -21,11 +21,10 @@ mod tests;
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
     key_catalog::{RecordPools, RingCircuit, RowAuthorization, TransferAddresses, TransferSpend},
-    AnonymousParties, CheckedAuthorization, CredentialRead, CustomRingError, CustomRingProof,
-    FramedSenderBundle, InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof,
-    PolicyProof, PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement,
-    SignerDataCounts, SignerSet, TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN,
-    TRANSFER_OUTPUT_CAPACITIES,
+    AnonymousParties, CheckedAuthorization, CustomRingError, CustomRingProof, FramedSenderBundle,
+    InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof,
+    PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts,
+    SignerSet, TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, TRANSFER_OUTPUT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -637,7 +636,7 @@ impl<'a> Pipeline<'a> {
 }
 
 impl<'a> Prepared<'a> {
-    async fn read_policy<R: AsyncRpc + AsyncRingIndexer>(
+    async fn read_policy<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
         &self,
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
@@ -653,7 +652,6 @@ impl<'a> Prepared<'a> {
             .map(|presealed| planner.plan_at(presealed.row))
             .transpose()?;
         PolicyRead {
-            ring: self.pipeline.ring,
             token_owner_hint: match &staged.spend {
                 Spend::Anonymous(a) => a.token_owner,
                 _ => None,
@@ -881,7 +879,6 @@ impl<'a> Sealed<'a> {
             HiddenOwner::of(&anonymous.signer.public_key())?
                 .check_signers(co_signers.iter().copied())?;
         }
-        let credential_trees = policy.credential_trees()?;
         let authorization = spend.row_authorization();
         check_owner_capacity(&OwnerCapacity {
             rows: owner_signers.len() + authorization.unsigned_rows(),
@@ -889,7 +886,6 @@ impl<'a> Sealed<'a> {
             n_inputs: published_inputs,
             co_signers: co_signers.len(),
             legs: transfers.len(),
-            credential_accounts: credential_trees.added_accounts(&trees.inputs, &trees.output),
         })?;
         let accounts = TransactAccounts {
             payer: proof_inputs.payer,
@@ -900,7 +896,6 @@ impl<'a> Sealed<'a> {
             read_cache: proof_inputs.cache_accounts.read,
             co_signers,
             delegate,
-            credential_trees: Some(credential_trees),
         };
         let mut parts = preview.parts(&proof_inputs, &rail, &sender, policy.plan.key)?;
         parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);
@@ -913,7 +908,7 @@ impl<'a> Sealed<'a> {
             }
             None => None,
         };
-        parts.credential_read = policy.credentials.read()?;
+        parts.tracking_revision = policy.tracking.revision;
         parts.own_revision = policy.own.map(|own| own.revision);
         parts.policy = (policy.read == RootRead::Policy).then(|| PolicyProof {
             curator_revision: policy.curator.map(|curator| curator.revision),
@@ -1081,7 +1076,7 @@ impl Unwitnessed<'_> {
                 sender: &sender,
                 signers,
                 party_identities: &party_identities,
-                roots: &frame.policy.roots()?,
+                roots: &frame.policy.roots(),
                 public_assets: &frame.public_assets,
                 public_amounts: &frame.public_amount_fields,
                 public_gross: &frame.public_gross,
@@ -1094,12 +1089,12 @@ impl Unwitnessed<'_> {
                 .own
                 .into_iter()
                 .chain(frame.policy.curator)
+                .chain([frame.policy.tracking])
                 .collect(),
             policy: frame.policy.screened().then_some(BoundPolicy {
                 ring,
                 hash: frame.policy.policy_hash,
             }),
-            credentials: Some(frame.policy.credentials.bound()),
         };
         Ok(Assembled {
             frame,
@@ -1267,8 +1262,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
         n_in: preview.n_in,
         n_out: preview.n_out,
         proof: zeroed_proof(),
-        // One state tree, the common read, sizes the frame until the pool is read.
-        credential_read: CredentialRead::new_state(0),
+        tracking_revision: Default::default(),
         own_revision: None,
         policy: None,
         spl_withdrawal_owners: Vec::new(),
@@ -1428,7 +1422,6 @@ pub(crate) struct OwnerCapacity {
     pub n_inputs: usize,
     pub co_signers: usize,
     pub legs: usize,
-    pub credential_accounts: usize,
 }
 
 pub(crate) fn check_owner_capacity(capacity: &OwnerCapacity) -> Result<(), RingError> {
@@ -1436,7 +1429,6 @@ pub(crate) fn check_owner_capacity(capacity: &OwnerCapacity) -> Result<(), RingE
         n_inputs: capacity.n_inputs,
         co_signers: capacity.co_signers,
         legs: capacity.legs,
-        credential_accounts: capacity.credential_accounts,
     }
     .owner_rows(capacity.authorization);
     match capacity.rows > limit {

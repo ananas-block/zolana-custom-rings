@@ -1,6 +1,6 @@
-//! Owner signatures authorize reader grants within one ring program namespace.
+//! Owner signatures authorize reader grants within one tracking registry namespace.
 //!
-//! Read after `program-libs/interface/src/instructions/storage.rs`.
+//! Read after `program-libs/interface/src/accounts/tracking.rs`.
 //! Read before `programs/storage/src/instructions/owner_grant.rs`.
 
 use bytemuck::{Pod, Zeroable};
@@ -25,31 +25,22 @@ impl OwnerGrant {
     pub const SEED: &'static [u8] = b"owner_grant";
     pub const SIZE: usize = core::mem::size_of::<Self>();
 
-    /// Ring program, owner and complete reader encoding bind the grant namespace.
+    /// One account per owner per reader, the key splits because a seed holds 32 bytes.
     pub fn seeds<'a>(
-        ring_program: &'a Address,
+        registry: &'a Address,
         owner: &'a Address,
         reader: &'a ReaderKeyBytes,
     ) -> [&'a [u8]; 5] {
         let (scheme, key) = reader.split_at(2);
-        [
-            Self::SEED,
-            ring_program.as_ref(),
-            owner.as_ref(),
-            scheme,
-            key,
-        ]
+        [Self::SEED, registry.as_ref(), owner.as_ref(), scheme, key]
     }
 
     pub fn find_address(
-        ring_program: &Address,
+        registry: &Address,
         owner: &Address,
         reader: &ReaderKeyBytes,
     ) -> (Address, u8) {
-        Address::find_program_address(
-            &Self::seeds(ring_program, owner, reader),
-            &STORAGE_PROGRAM_ID,
-        )
+        Address::find_program_address(&Self::seeds(registry, owner, reader), &STORAGE_PROGRAM_ID)
     }
 
     pub fn from_data(data: &[u8]) -> Option<&Self> {

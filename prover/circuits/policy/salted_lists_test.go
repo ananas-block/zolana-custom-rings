@@ -160,7 +160,7 @@ func TestPrivateBlockAndPrivateFreezeInOneRing(t *testing.T) {
 	})
 }
 
-// A present credential forces the salt, the key and the salted read, each honest world below listed.
+// A present tracking row forces the salt, the key and the salted read, each honest world below listed.
 func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 	listed := func(t *testing.T) ringpolicy.Witness {
 		t.Helper()
@@ -189,16 +189,21 @@ func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 		b.Circuit.OwnerEntries[0].ListSalt = 0
 		ringtest.RequireRefused(t, solveSalted(b), "policy.(*Policy).resolveSubjects")
 	})
-	t.Run("another owner's credential opening fails the member", func(t *testing.T) {
+	t.Run("another owner's tracking subject fails the member", func(t *testing.T) {
 		b := listed(t)
-		b.Circuit.OwnerEntries[0].Credential = credentialOpening(t, b, big.NewInt(ringpolicy.Sender))
+		b.Circuit.OwnerEntries[0].Tracking = trackingSubject(t, b, big.NewInt(ringpolicy.Sender))
 		ringtest.RequireRefused(t, solveSalted(b), "policy.subjectPool.read")
 	})
-	t.Run("a credential with another member fails state inclusion", func(t *testing.T) {
+	t.Run("a low tracking record cannot call the owner absent", func(t *testing.T) {
 		b := listed(t)
-		index := ringtest.AsBigInt(b.Circuit.OwnerEntries[0].Credential).Int64()
-		b.Circuit.Openings[index].Leaf.Member = big.NewInt(0x7712)
-		ringtest.RequireRefused(t, solveSalted(b), "registry.CredentialLeaf.bind")
+		index := ringtest.AsBigInt(b.Circuit.OwnerEntries[0].Tracking).Int64()
+		for i, subject := range b.Circuit.TrackingSubjects {
+			if ringtest.AsBigInt(subject.Member).Cmp(alice) != 0 {
+				b.Circuit.TrackingSubjects[index].RecordIndex = i
+				break
+			}
+		}
+		ringtest.RequireRefused(t, solveSalted(b), "policy.recordPool.read")
 	})
 	t.Run("another owner's salted subject fails the key", func(t *testing.T) {
 		b := listed(t)
@@ -250,14 +255,14 @@ func TestSaltedKeyMatchesRust(t *testing.T) {
 	}
 }
 
-func credentialOpening(t *testing.T, b ringpolicy.Witness, member *big.Int) int {
+func trackingSubject(t *testing.T, b ringpolicy.Witness, member *big.Int) int {
 	t.Helper()
-	for i, subject := range b.Circuit.Openings {
-		if ringtest.AsBigInt(subject.Leaf.Member).Cmp(member) == 0 {
+	for i, subject := range b.Circuit.TrackingSubjects {
+		if ringtest.AsBigInt(subject.Member).Cmp(member) == 0 {
 			return i
 		}
 	}
-	t.Fatalf("no credential opening for %v", member)
+	t.Fatalf("no tracking subject for %v", member)
 	return 0
 }
 

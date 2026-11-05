@@ -22,7 +22,7 @@ use crate::{CustomRing, CustomRingConfig, RingError};
 pub struct PublicOwners<'a> {
     pub(super) owner: Owner<'a>,
     wallet: Address,
-    /// The only key of a wallet without a credential.
+    /// An unenrolled wallet's only key on a tracking root.
     zero_key_change: bool,
     /// In declared order, the order of their ring outputs.
     payments: Vec<AnonymousPayment>,
@@ -63,7 +63,7 @@ impl<'a> RingTransfer<Owner<'a>> {
 }
 
 impl RingTransfer<PublicOwners<'_>> {
-    /// For a wallet without a credential, a keyed change refuses at the output check.
+    /// For a wallet with no tracking row, a keyed change refuses at the output check.
     #[must_use = "use the updated transfer"]
     pub fn with_zero_key_change(mut self) -> Self {
         self.rail.zero_key_change = true;

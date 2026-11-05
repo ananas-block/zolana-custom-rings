@@ -35,13 +35,14 @@ const (
 	applyKey      common.CircuitType = "custom-ring-apply-records-1"
 	batchKey      common.CircuitType = "custom-ring-apply-records-16"
 	privateKey    common.CircuitType = "custom-ring-apply-records-private-1"
+	enrollKey     common.CircuitType = "custom-ring-apply-enrollments-2"
 	registerKey   common.CircuitType = "custom-ring-register-key"
 	depositKey    common.CircuitType = "custom-ring-deposit-8"
 	mergeKey      common.CircuitType = "custom-ring-merge"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, wide49Key, entryKey, entry8Key, entry24Key, applyKey, batchKey, privateKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, wide49Key, entryKey, entry8Key, entry24Key, applyKey, batchKey, privateKey, enrollKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -64,11 +65,11 @@ func TestHostRequestsDecodeAndSolve(t *testing.T) {
 func TestApplyRequestsDecodeOnlyUnderTheirMode(t *testing.T) {
 	public := applyRequest(t, privateKey, 1)
 	if _, err := decode(privateKey, mustMarshal(t, public)); err == nil {
-		t.Fatal("a private key decoded a body without credential fields")
+		t.Fatal("a private key decoded a body without private fields")
 	}
 	private := requestOf[PrivateApplyRecordsParams](t, applyKey, ringregistry.PrivateBatch(t, 1, ringregistry.PrivateBlockBit))
 	if _, err := decode(applyKey, mustMarshal(t, private)); err == nil {
-		t.Fatal("a public key decoded a body with credential fields")
+		t.Fatal("a public key decoded a body with private fields")
 	}
 }
 
@@ -85,6 +86,8 @@ func hostRequest(t testing.TB, k Key) any {
 			return requestOf[PrivateApplyRecordsParams](t, k.Circuit, ringregistry.PrivateBatch(t, k.Inputs, ringregistry.PrivateBlockBit))
 		}
 		return applyRequest(t, k.Circuit, k.Inputs)
+	case ApplyEnrollments:
+		return enrollmentsRequest(t, k.Circuit, k.Inputs)
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
 	case Deposit:
@@ -165,6 +168,37 @@ func (batch registryBatch) request(t testing.TB) (*ApplyRecordsParams, bool) {
 	}
 	p.PublicInputHash = fb(spptest.MustHashChain4(t, fields))
 	return p, fields[len(fields)-1].Sign() != 0
+}
+
+// enrollmentsRequest inserts one owner per slot and rotates the last in a batch wider than one.
+func enrollmentsRequest(t testing.TB, circuit common.CircuitType, capacity int) *ApplyEnrollmentsParams {
+	t.Helper()
+	tree := ringregistry.NewTracking(t)
+	entry := func(i int, revision int64) ringregistry.TrackingEntry {
+		owner := big.NewInt(0x100 + int64(i))
+		view0, view1 := ringregistry.PackedView(big.NewInt(0x100 + revision))
+		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), View0: view0, View1: view1, Revision: big.NewInt(revision), ListTag: big.NewInt(0xd0)}
+	}
+	assignment, err := registry.NewApplyEnrollmentsCircuit(capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment.OldRoot, assignment.OldNextIndex, assignment.ChainStart = tree.Root(), tree.NextIndex(), big.NewInt(0x5eed)
+	chain := big.NewInt(0x5eed)
+	for i := range assignment.Writes {
+		e := entry(i, 1)
+		if capacity > 1 && i == capacity-1 {
+			e = entry(0, 2)
+		}
+		assignment.Writes[i] = tree.Apply(t, e).Wires()
+		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
+	}
+	assignment.NewRoot, assignment.NewNextIndex, assignment.ChainEnd, assignment.Count = tree.Root(), tree.NextIndex(), chain, capacity
+	assignment.PublicInputHash = spptest.MustHashChain4(t, []*big.Int{
+		big.NewInt(shared.ApplyEnrollmentsDomain), ringtest.AsBigInt(assignment.OldRoot), ringtest.AsBigInt(assignment.NewRoot),
+		ringtest.AsBigInt(assignment.OldNextIndex), ringtest.AsBigInt(assignment.NewNextIndex), ringtest.AsBigInt(assignment.ChainStart), chain, big.NewInt(int64(capacity)),
+	})
+	return requestOf[ApplyEnrollmentsParams](t, circuit, assignment)
 }
 
 func flatPath(path ringregistry.Path) []Field {

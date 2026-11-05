@@ -6,11 +6,11 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    key_catalog::apply_width,
     mint_policy_write,
     storage::{chain_start, RegistryId, Revision, StorageRegistry},
-    storage_instruction::{tag, InitializeIxData, PrivateWriteCheckpoint, StorageUpdateIxData},
-    ApplyRecordsIxData, CredentialRead, RecordWriteData, WriteRecordsIxData, STORAGE_PROGRAM_ID,
+    storage_instruction::{tag, InitializeIxData, InitializeTrackingIxData, StorageUpdateIxData},
+    tracking::TrackingRegistry,
+    ApplyRecordsIxData, RecordWriteData, WriteRecordsIxData, STORAGE_PROGRAM_ID,
 };
 use jsonrpsee::{server::ServerHandle, types::ErrorObjectOwned};
 use sea_orm::DatabaseConnection;
@@ -34,6 +34,9 @@ use crate::{
     storage::{StorageState, StorageStore},
     tests::{database, field},
 };
+
+#[path = "tracking_replay_tests.rs"]
+mod tracking_replay;
 
 /// Mutable confirmed RPC history, including failures between replay commits.
 #[derive(Default)]
@@ -225,7 +228,7 @@ fn initialize_transaction(
         registry_id,
         grace_slots: 100u64.to_le_bytes(),
         ring_id,
-        private_ring_id: [0; 32],
+        tracking_registry: Address::default(),
     };
     let wire = [&[tag::INITIALIZE][..], bytemuck::bytes_of(&data)].concat();
     let accounts = [
@@ -266,8 +269,7 @@ impl StorageReplay {
                 revision: Revision::default(),
                 writes,
                 asset_writes: vec![],
-                credential_read: CredentialRead::new(0, &[]).unwrap(),
-                private_write: None,
+                tracking_revision: None,
                 apply: &apply_data(&inputs),
             },
         );
@@ -366,14 +368,14 @@ const PRIVATE_ALLOW_MASK: u64 = ListSet::single(ListId::PrivateAllow).record_bit
 impl PolicySource {
     const CREATOR: Address = Address::new_from_array([41; 32]);
 
-    fn new(private_ring_id: [u8; 32]) -> Self {
+    fn new(tracking: Address) -> Self {
         let registry_id = RegistryId([42; 32]);
         let (source, _) = StorageRegistry::find_address(&Self::CREATOR, &registry_id);
         let data = InitializeIxData {
             registry_id,
             grace_slots: 100u64.to_le_bytes(),
             ring_id: field(9),
-            private_ring_id,
+            tracking_registry: tracking,
         };
         let wire = [&[tag::INITIALIZE][..], bytemuck::bytes_of(&data)].concat();
         let accounts = [Self::CREATOR, Self::CREATOR, source];
@@ -384,12 +386,12 @@ impl PolicySource {
         }
     }
 
-    /// The root an honest proof reaches, a private write names `sequence` as its checkpoint.
+    /// The root an honest proof reaches, a private write names `tracking` as its tracking revision.
     fn update(
         &mut self,
         revision: u64,
         mask: u64,
-        sequence: u64,
+        tracking: u64,
         accounts: &[Address],
     ) -> ([u8; 32], Value) {
         let revision = Revision::from(revision);
@@ -411,26 +413,13 @@ impl PolicySource {
             .unwrap();
         self.tree = applied.tree;
         let inputs = applied.proof;
-        // A private list write names its credential roots, the indexer verifies no proof.
-        let (credential_read, private_write) = match mask & PRIVATE_MASK {
-            0 => (CredentialRead::new(0, &[]).unwrap(), None),
-            _ => {
-                let state_roots = vec![0; usize::from(apply_width(1))];
-                (
-                    CredentialRead::new(0, &state_roots).unwrap(),
-                    Some(PrivateWriteCheckpoint {
-                        ring_program: Address::new_from_array([43; 32]),
-                        sequence,
-                    }),
-                )
-            }
-        };
+        // A private list write names its tracking revision, the indexer verifies no proof.
+        let tracking_revision = (mask & PRIVATE_MASK != 0).then(|| Revision::from(tracking));
         let data = StorageUpdateIxData {
             revision,
             writes: vec![write],
             asset_writes: vec![],
-            credential_read,
-            private_write,
+            tracking_revision,
             apply: &apply_data(&inputs),
         };
         let wire = [&[tag::UPDATE][..], &data.encode().unwrap()].concat();
@@ -458,7 +447,7 @@ async fn replayed(blocks: Vec<Vec<Value>>) -> (Indexer, ServerHandle) {
 
 #[tokio::test]
 async fn a_write_a_rule_can_read_stops_every_older_root_in_the_same_slot() {
-    let mut source = PolicySource::new([0; 32]);
+    let mut source = PolicySource::new(Address::default());
     let accounts = [PolicySource::CREATOR, source.source];
     let (graced_root, graced) = source.update(0, READER_MASK, 0, &accounts);
     let (policy_root, policy) = source.update(1, BLOCK_MASK, 0, &accounts);
@@ -497,28 +486,48 @@ async fn projected(indexer: &Indexer, registry: Address) -> StorageState {
         .unwrap()
 }
 
+fn tracking_initialized() -> (Address, Value) {
+    let ring_id = field(9);
+    let creator = PolicySource::CREATOR;
+    let (tracking, _) = TrackingRegistry::find_address(&creator, &ring_id);
+    let data = InitializeTrackingIxData {
+        ring_id,
+        auditor_pubkey: [9; 33],
+    };
+    let wire = [&[tag::INITIALIZE_TRACKING][..], bytemuck::bytes_of(&data)].concat();
+    let sent = transaction(STORAGE_PROGRAM_ID, &[creator, creator, tracking], &wire);
+    (tracking, sent)
+}
+
+/// A pinned policy source with its tracking registry created in the first block.
+fn pinned() -> (PolicySource, Address, Vec<Address>) {
+    let (tracking, created) = tracking_initialized();
+    let mut source = PolicySource::new(tracking);
+    source.initialized.insert(0, created);
+    let accounts = vec![PolicySource::CREATOR, source.source, tracking];
+    (source, tracking, accounts)
+}
+
 #[tokio::test]
-async fn a_credential_write_raises_the_floor_and_a_lower_sequence_or_public_write_keeps_it() {
-    let mut source = PolicySource::new(field(9));
-    let accounts = [PolicySource::CREATOR, source.source];
+async fn a_private_write_raises_the_tracking_floor_and_a_lower_or_public_write_keeps_it() {
+    let (mut source, _, accounts) = pinned();
     let (_, raised) = source.update(0, PRIVATE_ALLOW_MASK, 7, &accounts);
     let (_, lower) = source.update(1, PRIVATE_ALLOW_MASK, 3, &accounts);
-    let (root, public) = source.update(2, READER_MASK, 0, &accounts);
+    let (root, public) = source.update(2, READER_MASK, 0, &accounts[..2]);
     let initialized = std::mem::take(&mut source.initialized);
     let blocks = vec![initialized, vec![raised], vec![lower], vec![public]];
     let (indexer, handle) = replayed(blocks).await;
     let state = projected(&indexer, source.source).await;
     assert_eq!(state.fault, None);
     assert_eq!(state.account.newest().hash, root);
-    assert_eq!(state.account.absence_floor(), 7);
+    assert_eq!(state.account.tracking_floor, Revision::from(7));
     handle.stop().unwrap();
     handle.stopped().await;
 }
 
 #[tokio::test]
-async fn a_failed_credential_write_leaves_the_root_and_the_floor() {
-    let mut source = PolicySource::new(field(9));
-    let accounts = [PolicySource::CREATOR, source.source];
+async fn a_failed_private_write_leaves_the_root_and_the_floor() {
+    let (mut source, _, accounts) = pinned();
     let (root, raised) = source.update(0, PRIVATE_ALLOW_MASK, 4, &accounts);
     let (_, mut failed) = source.update(1, PRIVATE_ALLOW_MASK, 9, &accounts);
     failed["meta"]["err"] = json!({"InstructionError": [0, {"Custom": 1}]});
@@ -528,20 +537,20 @@ async fn a_failed_credential_write_leaves_the_root_and_the_floor() {
     let state = projected(&indexer, source.source).await;
     assert_eq!(state.fault, None);
     assert_eq!(state.account.newest().hash, root);
-    assert_eq!(state.account.absence_floor(), 4);
+    assert_eq!(state.account.tracking_floor, Revision::from(4));
     handle.stop().unwrap();
     handle.stopped().await;
 }
 
 #[tokio::test]
-async fn a_credential_write_on_a_registry_without_a_ring_stops_the_projection() {
-    let mut source = PolicySource::new([0; 32]);
-    let accounts = [PolicySource::CREATOR, source.source];
-    let (_, update) = source.update(0, PRIVATE_ALLOW_MASK, 5, &accounts);
+async fn a_private_write_naming_another_tracking_registry_stops_the_projection() {
+    let (mut source, _, mut accounts) = pinned();
+    accounts[2] = Address::new_from_array([60; 32]);
+    let (_, named) = source.update(0, PRIVATE_ALLOW_MASK, 1, &accounts);
     let initialized = std::mem::take(&mut source.initialized);
-    let (indexer, handle) = replayed(vec![initialized, vec![update]]).await;
+    let (indexer, handle) = replayed(vec![initialized, vec![named]]).await;
     let fault = projected(&indexer, source.source).await.fault.unwrap();
-    assert!(fault.contains("update refused"), "{fault}");
+    assert!(fault.contains("another tracking registry"), "{fault}");
     handle.stop().unwrap();
     handle.stopped().await;
 }

@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use spr_hasher::primitives::{hash_bytes, solana_owner_identity};
 use zolana_ring_member_registry::{
-    MemberRecord, MemberRegistryTree, OpeningCheck, QuadPath, RecordCredentials, RecordOpening,
-    RecordStatementContext, RecordTree, RecordWriteProofInput, ZERO_SUBTREES,
+    MemberRecord, MemberRegistryTree, OpeningCheck, QuadPath, RecordOpening,
+    RecordStatementContext, RecordTracking, RecordTree, RecordWriteProofInput, ZERO_SUBTREES,
 };
 use zolana_ring_policy::{ListChange, ListId, ListSet};
 
@@ -147,7 +147,7 @@ impl Registry {
                     registry_id: RegistryId::default(),
                     grace_slots: [0; 8],
                     ring_id: [0; 32],
-                    private_ring_id: [0; 32],
+                    tracking_registry: Address::default(),
                 },
             ),
         }
@@ -190,7 +190,7 @@ impl Registry {
             .statement(RecordStatementContext {
                 registry: &self.state,
                 asset_writes: &[],
-                credentials: RecordCredentials::Public,
+                tracking: RecordTracking::Public,
             })
             .expect("statement");
         self.state.roots[0].hash = inputs.new_root;

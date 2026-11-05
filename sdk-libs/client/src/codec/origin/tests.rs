@@ -795,36 +795,6 @@ fn ring_transfer_outer_tags_preserve_confirmed_ring_origin() {
     }
 }
 
-#[test]
-fn a_transact_under_the_ring_enroll_reads_as_an_enrollment() {
-    let origin = |caller: Address, caller_tag: u8| {
-        let mut outer = instruction(caller, 1);
-        outer.data = vec![caller_tag];
-        let mut source = instruction(POOL, 2);
-        source.data = ring_transact_bytes(Vec::new());
-        source.data[0] = tag::TRANSACT;
-        let mut event = instruction(POOL, 3);
-        event.data = bs58::decode(event_data()).into_vec().unwrap();
-        let groups = [InstructionGroup {
-            outer,
-            inner: vec![source, event],
-        }];
-        ring_event_origin_in(&groups, 0, RING).unwrap()
-    };
-    let enrolled = origin(RING, custom_ring_interface::tag::ENROLL);
-    assert_eq!(enrolled.event.kind(), ConfirmedEventKind::Enrollment);
-    assert!(enrolled.ring_invoked && !enrolled.requires_audit());
-    for (caller, caller_tag) in [
-        (RING, custom_ring_interface::tag::TRANSFER),
-        (OTHER, custom_ring_interface::tag::ENROLL),
-    ] {
-        assert_eq!(
-            origin(caller, caller_tag).event.kind(),
-            ConfirmedEventKind::Transfer
-        );
-    }
-}
-
 fn confirmed_transfer_fixture() -> (InstructionGroup, ShieldedTransaction) {
     use spr_event::{encode_event_instruction, EventKind, InputTreeSequence, TransactEvent};
     use spr_transaction::{OutputContext, OutputSlot};
@@ -1155,7 +1125,7 @@ fn v2_merge_group() -> (
     let (mut group, _) = confirmed_merge_fixture();
     let spp = MergeRingIxData::deserialize(&group.inner[0].data[1..]).unwrap();
     let request = CustomRingMergeIxData {
-        credential_read: custom_ring_interface::CredentialRead::new_state(0),
+        tracking_revision: Default::default(),
         output_ring_data_hash: spp.output_ring_data_hash,
         authority: MergeRingAuthority::Ring,
         sealed: SealedMergeRecord {
@@ -1328,7 +1298,7 @@ fn origin_of_frame(
         n_in: 1,
         n_out: 2,
         proof: &proof,
-        credential_read: custom_ring_interface::CredentialRead::new_state(0),
+        tracking_revision: Default::default(),
         own_revision: None,
         policy: None,
         spl_withdrawal_owners: &[],

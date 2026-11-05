@@ -9,7 +9,6 @@ proofs = ["spr-client/proofs"]
 
 [dependencies]
 async-trait = { workspace = true }
-borsh = { workspace = true }
 spr-event.workspace = true
 custom-ring-interface = { workspace = true }
 bytemuck = { workspace = true }
@@ -23,7 +22,7 @@ solana-message = { workspace = true, features = ["wincode"] }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-solana-transaction = { workspace = true, features = ["serde", "wincode"] }
+solana-transaction = { workspace = true, features = ["serde"] }
 solana-transaction-error = { workspace = true }
 solana-transaction-status-client-types = { workspace = true }
 thiserror = { workspace = true }
@@ -34,7 +33,7 @@ zeroize = { workspace = true }
 spr-api = { workspace = true }
 spr-client = { workspace = true }
 spr-interface = { workspace = true }
-spr-program = { workspace = true, features = ["compression"] }
+spr-program = { workspace = true }
 spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
 spr-keypair = { workspace = true }
@@ -46,7 +45,6 @@ zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
 spr-transaction = { workspace = true }
 spr-tree = { workspace = true }
-spr-user-registry-interface = { workspace = true, features = ["solana"] }
 
 [dev-dependencies]
 num-bigint = { workspace = true }

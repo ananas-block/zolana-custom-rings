@@ -1,5 +1,5 @@
-//! `key rotate`, a new viewing key in the member's user record, and the key holder every wallet
-//! command loads.
+//! `key rotate`, a new viewing key in the member's user record and tracking row, and the key holder
+//! every wallet command loads.
 //!
 //! Read before `wallet`, whose scans and stores take the holder [`Context::ring_keys`] returns.
 //! Read after `zolana_ring_client::UpdateViewingKey`, the send and record check `rotate` runs.
@@ -12,11 +12,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context as _, Result};
+use custom_ring_sdk::Enroll;
 use solana_signer::Signer;
 use spr_keypair::{ShieldedKeypair, ViewingKey};
 use spr_transaction::ShieldedKeys;
 use zolana_ring_client::{UpdateViewingKey, ViewingKeyResolver, ViewingRotation};
-use zolana_ring_keys::RotatingRingKeys;
+use zolana_ring_keys::{ListSaltHolder, RotatingRingKeys};
 use zolana_secret_file::{create_key32, read_key32, Access};
 
 use crate::{line, wallet::unix_now, Context};
@@ -110,6 +111,26 @@ pub fn rotate(ctx: &Context) -> Result<()> {
         Some(signature) => line("signature", signature),
         None => line("record", "already current"),
     }
+    // 4. Senders read a recipient's viewing key from its tracking row, the rotation moves it there
+    //    too. The row grants the new key once an apply lands it in a root.
+    let payer = ctx.member_payer(config.mode, owner.pubkey())?;
+    let rotation = ctx.block(
+        Enroll {
+            ring: ctx.ring,
+            payer: payer.pubkey(),
+            owner: owner.pubkey(),
+            nullifier_key: &identity.nullifier_key,
+            viewing_pubkey: updated.viewing_pubkey,
+            list_salt: identity.list_salt(&ctx.ring.program_id())?,
+        }
+        .prove(ctx.ring_client()),
+    )?;
+    ensure!(
+        rotation.parsed()?.proof.is_none(),
+        "the sender has no tracking authorization, register its key before a rotation"
+    );
+    let signature = ctx.send(&[payer, &owner], &[rotation.instruction()])?;
+    line("tracking rotation", signature);
     Ok(())
 }
 

@@ -18,10 +18,10 @@ mod cosign;
 mod cosign_limits;
 #[path = "storage/cosign_usage.rs"]
 mod cosign_usage;
-#[path = "operations/credentials.rs"]
-mod credentials;
 #[path = "storage/database.rs"]
 mod database;
+#[path = "operations/enrollment_applier.rs"]
+mod enrollment_applier;
 mod error;
 #[path = "operations/escrow_merge.rs"]
 mod escrow_merge;
@@ -91,6 +91,8 @@ mod spend_machine;
 mod spent_index;
 #[path = "rpc/storage_chain.rs"]
 mod storage_chain;
+#[path = "operations/tracking.rs"]
+mod tracking;
 #[path = "operations/transfer_debits.rs"]
 mod transfer_debits;
 #[path = "storage/update_queue.rs"]
@@ -121,10 +123,8 @@ pub use cosign_limits::{
     TransferRead, WindowUsage,
 };
 pub use cosign_usage::Reservation;
-#[cfg(feature = "test-fixtures")]
-pub use credentials::fixture as credential_fixture;
-pub use credentials::{CredentialLeaf, CredentialRefusal, HeldCredential};
 pub use database::{Store, STORE_CONNECTIONS};
+pub use enrollment_applier::{EnrollmentApplier, EnrollmentApplierParts};
 pub use error::{GrantRefusal, RingRpcError};
 pub use escrow_merge::RingSdkMergeBuilder;
 pub use hub::{Clock, Hub, HubBuilder, NotReady, ServiceIdentity};
@@ -140,7 +140,7 @@ pub use record_update::{
     RecordUpdateRefusal, BATCH_WINDOW_SLOTS, MAX_BATCH_ATTEMPTS, MAX_LIMIT_WINDOW_SLOTS,
     MAX_LIST_APPROVAL_WINDOW_SLOTS,
 };
-pub use record_writer::{CredentialWrites, RecordWriter, SaltedOwner, RECORD_FLUSH_INTERVAL};
+pub use record_writer::{PrivateWrites, RecordWriter, SaltedOwner, RECORD_FLUSH_INTERVAL};
 pub use relay::{
     Relay, RelayError, RelayParts, RelayPayload, ServedRings, ABANDONED_AFTER_SLOTS, QUOTE_SLOTS,
     RELAY_TRACK_INTERVAL,
@@ -152,9 +152,12 @@ pub use relay_reservations::RelayBudget;
 pub use relay_services::{RelayServices, RelayServicesInit};
 pub use relay_submit::CollectedSignature;
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
-pub use storage_chain::{live_ring_client, LiveStorageChain, StorageChain};
+pub use storage_chain::{live_ring_client, LiveStorageChain, ProvedEnrollments, StorageChain};
+#[cfg(feature = "test-fixtures")]
+pub use tracking::fixture as tracking_fixture;
+pub use tracking::{HeldEnrollment, TrackingRefusal};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
-    RingFrame, RingHistoryPage, TransactionPage, TransactionSource, Upstreams,
+    RingFrame, RingHistoryPage, TrackingRoot, TransactionPage, TransactionSource, Upstreams,
 };
 pub use utxos::UTXO_BACKFILL_INTERVAL;

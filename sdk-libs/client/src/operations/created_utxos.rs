@@ -207,9 +207,7 @@ impl CreatedUtxos<'_> {
                 }
                 Ok(notes)
             }
-            ConfirmedEventKind::Merge
-            | ConfirmedEventKind::Transfer
-            | ConfirmedEventKind::Enrollment => Ok(CreatedNotes::default()),
+            ConfirmedEventKind::Merge | ConfirmedEventKind::Transfer => Ok(CreatedNotes::default()),
         }
     }
 

@@ -405,7 +405,7 @@ async fn relay_and_submission_pick_one_key_at_full_load() {
     }
 }
 
-/// Past the narrow row's credential capacity only if every destination holds a credential, a read the wallet cannot make.
+/// Past the narrow row's tracking only if every destination holds a row, a read the wallet cannot make.
 #[tokio::test]
 async fn a_salted_read_raises_the_flag_on_a_frame_of_one_stream() {
     use custom_ring_interface::domain;
@@ -422,7 +422,7 @@ async fn a_salted_read_raises_the_flag_on_a_frame_of_one_stream() {
         .collect();
     let client = Chain::ring(RingSettings::new(RingMode::Confidential))
         .with_registry(load.registry(), &rules)
-        .with_credential_tag(&addresses, domain::list_tag(&salt).unwrap())
+        .with_tracking_tag(&addresses, domain::list_tag(&salt).unwrap())
         .client();
     let transfer = addresses.iter().fold(load.transfer(), |transfer, address| {
         let member =
@@ -462,7 +462,7 @@ async fn a_salted_read_of_another_stream_refuses_until_the_owner_reseals() {
         .collect();
     let client = Chain::ring(RingSettings::new(RingMode::Confidential))
         .with_registry(load.registry(), &rules)
-        .with_credential_tag(&addresses, domain::list_tag(&salt).unwrap())
+        .with_tracking_tag(&addresses, domain::list_tag(&salt).unwrap())
         .client();
     let transfer = addresses.iter().fold(load.transfer(), |transfer, address| {
         let member =
@@ -3773,36 +3773,30 @@ mod request_fixtures {
 mod enroll_message {
     //! The enrollment an owner with no SOL signs, read against what it proved.
 
-    use custom_ring_interface::{compute_unit_limit, tag, InstructionTag};
     use solana_instruction::Instruction;
     use solana_signer::Signer;
-    use zolana_ring_client::rpc::{EnrollAccounts, RelayEnrollInputs};
+    use zolana_ring_client::rpc::{RelayEnrollInputs, ENROLL_COMPUTE_UNITS};
 
     use super::*;
     use crate::{
-        enrollment::{EnrollInstruction, EnrollRelay},
         tests::support::{pinned_vector, relay_message, verdict, MessageCase, MessageVector},
-        MessageMismatch, RelaySent,
+        EnrollInstruction, EnrollRelay, MessageMismatch, RelaySent,
     };
 
     const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
-    const OUTPUT_TREE: Address = Address::new_from_array([0x55; 32]);
+    const REGISTRY: Address = Address::new_from_array([0x55; 32]);
 
     fn inputs(owner: Address) -> RelayEnrollInputs {
         RelayEnrollInputs {
             ring_program_id: ring().program_id(),
             owner,
-            output_tree: OUTPUT_TREE,
-            instruction_data: vec![tag::ENROLL, 1, 2],
+            tracking_registry: REGISTRY,
+            instruction_data: vec![
+                custom_ring_interface::storage_instruction::tag::ENROLL,
+                1,
+                2,
+            ],
         }
-    }
-
-    fn honest(owner: Address) -> Instruction {
-        inputs(owner).instruction(FEE_PAYER).unwrap()
-    }
-
-    fn units() -> u32 {
-        compute_unit_limit(InstructionTag::Enroll)
     }
 
     async fn signed(answer: Instruction) -> Result<RelayStatus, RingError> {
@@ -3813,7 +3807,7 @@ mod enroll_message {
         };
         let relay = StubRelay {
             asks_signature: true,
-            message: relay_message(&FEE_PAYER, &[answer], units()).0,
+            message: relay_message(&FEE_PAYER, &[answer], ENROLL_COMPUTE_UNITS).0,
             ..StubRelay::default()
         };
         let prepared = EnrollRelay {
@@ -3833,7 +3827,7 @@ mod enroll_message {
     struct EnrollRequest {
         ring_program_id: SerializablePubkey,
         owner: SerializablePubkey,
-        output_tree: SerializablePubkey,
+        tracking_registry: SerializablePubkey,
         instruction_data: spr_indexer_api::Base64String,
         fee_payer: SerializablePubkey,
     }
@@ -3843,39 +3837,31 @@ mod enroll_message {
     fn the_shared_enroll_messages_keep_their_verdicts() {
         let owner = keypair(1).pubkey();
         let asked = inputs(owner);
-        let honest = honest(owner);
-        let mut swapped_tree = honest.clone();
-        swapped_tree.accounts[3].pubkey = Address::new_from_array([0x56; 32]);
-        let mut swapped_credential = honest.clone();
-        swapped_credential.accounts[8].pubkey = Address::new_from_array([0x57; 32]);
+        let honest = asked.instruction(FEE_PAYER);
+        let mut swapped = honest.clone();
+        swapped.accounts[2].pubkey = Address::new_from_array([0x56; 32]);
         let mut rewritten = honest.clone();
         rewritten.data[1] ^= 1;
         let case = |name: &str, payer: &Address, answer: Instruction, verdict: &str| MessageCase {
             name: name.to_owned(),
-            message: relay_message(payer, &[answer], units()),
+            message: relay_message(payer, &[answer], ENROLL_COMPUTE_UNITS),
             verdict: verdict.to_owned(),
         };
         let fresh = MessageVector {
-            description: "One relayed ring Enroll the owner proved and signed, and the messages \
+            description: "One relayed enrollment the owner proved and signed, and the messages \
                           Ring RPC could answer with. Each verdict names the MessageMismatch the \
                           Rust ExpectedEnroll and the TypeScript check return."
                 .to_owned(),
             request: EnrollRequest {
                 ring_program_id: SerializablePubkey(asked.ring_program_id),
                 owner: SerializablePubkey(asked.owner),
-                output_tree: SerializablePubkey(asked.output_tree),
+                tracking_registry: SerializablePubkey(asked.tracking_registry),
                 instruction_data: asked.instruction_data.clone().into(),
                 fee_payer: SerializablePubkey(FEE_PAYER),
             },
             cases: vec![
                 case("honest", &FEE_PAYER, honest.clone(), "Accepted"),
-                case("swappedOutputTree", &FEE_PAYER, swapped_tree, "Accounts"),
-                case(
-                    "swappedCredentialPda",
-                    &FEE_PAYER,
-                    swapped_credential,
-                    "Accounts",
-                ),
+                case("swappedRegistry", &FEE_PAYER, swapped, "Accounts"),
                 case("rewrittenData", &FEE_PAYER, rewritten, "Data"),
                 case("ownerPaysFee", &owner, honest, "FeePayer"),
             ],
@@ -3886,11 +3872,11 @@ mod enroll_message {
             inputs: RelayEnrollInputs {
                 ring_program_id: vector.request.ring_program_id.0,
                 owner: vector.request.owner.0,
-                output_tree: vector.request.output_tree.0,
+                tracking_registry: vector.request.tracking_registry.0,
                 instruction_data: vector.request.instruction_data.0.clone(),
             },
         };
-        assert_eq!(vector.cases.len(), 5);
+        assert_eq!(vector.cases.len(), 4);
         for case in &vector.cases {
             assert_eq!(
                 verdict(expected.check(&case.message.0)),
@@ -3901,41 +3887,35 @@ mod enroll_message {
         }
     }
 
-    /// The wallet's builder and the relay's inputs name one account list, the payer apart.
     #[tokio::test]
     async fn the_enrollment_the_owner_proved_is_signed() {
-        let owner = keypair(1).pubkey();
+        let honest = inputs(keypair(1).pubkey()).instruction(FEE_PAYER);
         assert!(matches!(
-            signed(honest(owner)).await,
+            signed(honest.clone()).await,
             Ok(RelayStatus::Sent { .. })
         ));
         let built = EnrollInstruction {
-            accounts: EnrollAccounts {
-                ring_program_id: ring().program_id(),
-                owner,
-                payer: FEE_PAYER,
-                output_tree: OUTPUT_TREE,
-            },
-            data: vec![tag::ENROLL, 1, 2],
-            registration: None,
+            payer: FEE_PAYER,
+            owner: keypair(1).pubkey(),
+            tracking_registry: REGISTRY,
+            request: Vec::new(),
         }
-        .instructions()
-        .unwrap();
-        assert_eq!(built, [honest(owner)]);
+        .instruction();
+        assert_eq!(honest.accounts, built.accounts);
+        assert_eq!(honest.program_id, built.program_id);
     }
 
-    /// A substituted ciphertext rewrites the request bytes the owner signed.
     #[tokio::test]
     async fn a_relay_that_swaps_an_account_or_a_byte_is_refused() {
-        let owner = keypair(1).pubkey();
-        let mut swapped = honest(owner);
-        swapped.accounts[7].pubkey = Address::new_from_array([0x56; 32]);
+        let honest = inputs(keypair(1).pubkey()).instruction(FEE_PAYER);
+        let mut swapped = honest.clone();
+        swapped.accounts[2].pubkey = Address::new_from_array([0x56; 32]);
         assert!(matches!(
             signed(swapped).await,
             Err(RingError::RelayMessage(MessageMismatch::Accounts))
         ));
-        let mut rewritten = honest(owner);
-        rewritten.data[2] ^= 1;
+        let mut rewritten = honest;
+        rewritten.data[1] ^= 1;
         assert!(matches!(
             signed(rewritten).await,
             Err(RingError::RelayMessage(MessageMismatch::Data))

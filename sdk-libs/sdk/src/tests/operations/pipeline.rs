@@ -1997,13 +1997,11 @@ async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving()
 
 /// A payment a recipient cannot open is refused before proving, a rotated row names the current key.
 #[tokio::test]
-async fn a_payment_names_the_viewing_key_of_its_owners_user_record() {
+async fn a_payment_names_the_viewing_key_of_its_owners_row() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let recipient = keypair(2);
-    let client = enrolled(&[&sender, &recipient])
-        .with_user_record(&recipient.shielded_address().unwrap())
-        .client();
+    let client = enrolled(&[&sender, &recipient]).client();
     let utxos = vec![ring_utxo(&sender, Mint::SOL, 10, 0)];
     let owner = MoveSender {
         sender: &sender,
@@ -2036,7 +2034,7 @@ fn ceiling_entry(reply_len: usize) -> Measure {
 }
 
 /// Sets [`ceiling_entry`] at the transaction ceiling exactly.
-const CEILING_REPLY_LEN: usize = 2300;
+const CEILING_REPLY_LEN: usize = 2306;
 
 include!("size_pins.rs");
 
@@ -2724,19 +2722,19 @@ async fn every_frame_limit_of_the_byte_model_holds() {
         payer: Payer::Outsider,
         ..Measure::pinned(Measured::InProofOwnerPolicy, Shape::new(24, 4))
     };
-    assert_eq!(pin(signer_policy).await, 3412);
-    assert_eq!(pin(in_proof_policy).await, 3411);
+    assert_eq!(pin(signer_policy).await, 3406);
+    assert_eq!(pin(in_proof_policy).await, 3405);
 
     // An outsider payer adds its signature and key.
     let owner_paid = Measure::pinned(Measured::Confidential, Shape::IN5_OUT16);
-    assert_eq!(pin(owner_paid).await, 4687);
+    assert_eq!(pin(owner_paid).await, 4681);
     assert_eq!(
         pin(Measure {
             payer: Payer::Outsider,
             ..owner_paid
         })
         .await,
-        4783
+        4777
     );
 
     // Past 8 outputs a frame fits only through compact padding.
@@ -2807,33 +2805,33 @@ async fn every_frame_boundary_takes_its_modelled_bytes() {
         ..relayed(Measured::ConfidentialPolicy, Shape::new(16, 8))
     };
     for (measure, bytes) in [
-        (with_reply(Measured::AnonymousEntry, 2), 4234),
-        (with_reply(Measured::Anonymous, 5), 3989),
+        (with_reply(Measured::AnonymousEntry, 2), 4228),
+        (with_reply(Measured::Anonymous, 5), 3983),
         (
             relayed(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            3760,
+            3754,
         ),
         (
             relayed(Measured::InProofOwnerPolicy, Shape::new(16, 8)),
-            3759,
+            3753,
         ),
-        (compact_fifteen, 3695),
-        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4782),
+        (compact_fifteen, 3689),
+        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4776),
         (
             relayed(Measured::InProofOwnerEscrow, Shape::IN5_OUT16),
-            4782,
+            4776,
         ),
         (
             Measure::pinned(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4687,
+            4681,
         ),
         (
             relayed(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4783,
+            4777,
         ),
-        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4717),
-        (key_escrow_co_signed, 3542),
-        (loaded_commitment, 3287),
+        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4711),
+        (key_escrow_co_signed, 3536),
+        (loaded_commitment, 3281),
     ] {
         assert_eq!(
             measure.bytes().await,
@@ -2908,23 +2906,23 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
     for (measure, bytes) in [
         (
             Measure::pinned(Measured::Confidential, Shape::new(2, 2)),
-            1452 + 38,
+            1446 + 38,
         ),
         (
             Measure::pinned(Measured::Anonymous, Shape::new(2, 2)),
-            1619 + 38,
+            1613 + 38,
         ),
         (
             Measure::pinned(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            3664 + 39,
+            3658 + 39,
         ),
         (
             Measure::relayed(Measured::ConfidentialPolicy, Shape::new(24, 4)),
-            3412 + 40,
+            3406 + 40,
         ),
         (
             Measure::relayed(Measured::InProofOwnerPolicy, Shape::new(24, 4)),
-            3411 + 40,
+            3405 + 40,
         ),
     ] {
         let second_tree = Measure {
@@ -3229,9 +3227,8 @@ fn a_transaction_past_the_account_bound_is_refused_before_proving() {
         n_inputs: 24,
         co_signers: 2,
         legs: 4,
-        credential_accounts: 1,
     };
-    // 64 addresses less 4 for SPP, 5 for the ring, 24 nullifier PDAs, 2 co-signers with their records, 4 legs and 1 credential tree.
+    // 64 addresses less 4 for SPP, 6 for the ring, 24 nullifier PDAs, 2 co-signers with their records and 4 legs.
     assert!(check_owner_capacity(&capacity(22, RowAuthorization::Run)).is_ok());
     assert!(matches!(
         check_owner_capacity(&capacity(23, RowAuthorization::Run)),
@@ -3263,7 +3260,7 @@ async fn a_keyed_input_spends_under_its_owners_enrolled_key_and_a_zero_key_waive
     let keyed = || ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
     let on_chain = |rows: &[spr_keypair::ShieldedAddress]| {
         Chain::ring(RingSettings::new(RingMode::Confidential))
-            .with_credentials(rows)
+            .with_tracking(rows)
             .client()
     };
     let enrolled = on_chain(&[address]);
@@ -3282,8 +3279,7 @@ async fn a_keyed_input_spends_under_its_owners_enrolled_key_and_a_zero_key_waive
 }
 
 #[tokio::test]
-/// The zero key needs no credential, the sender's key resolution owns its opt in.
-async fn an_output_takes_its_owners_credential_key_or_the_zero_key() {
+async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
     use crate::tests::support::keypair;
     let (sender, payee) = (keypair(1), keypair(2));
     let (from, to) = (
@@ -3299,7 +3295,7 @@ async fn an_output_takes_its_owners_credential_key_or_the_zero_key() {
     };
     let client = |rows: &[spr_keypair::ShieldedAddress]| {
         Chain::ring(RingSettings::new(RingMode::Confidential))
-            .with_credentials(rows)
+            .with_tracking(rows)
             .client()
     };
     let zero = spr_keypair::ShieldedAddress {
@@ -3313,7 +3309,10 @@ async fn an_output_takes_its_owners_credential_key_or_the_zero_key() {
         paying(&to).frame(&client(&[from])).await.err(),
         Some(RingError::RecipientNotEnrolled { .. })
     ));
-    assert!(paying(&zero).frame(&enrolled).await.is_ok());
+    assert!(matches!(
+        paying(&zero).frame(&enrolled).await.err(),
+        Some(RingError::EnrolledRecipientAtZeroKey { .. })
+    ));
     let rekeyed = spr_keypair::ShieldedAddress {
         nullifier_pubkey: from.nullifier_pubkey,
         ..to
@@ -3531,7 +3530,7 @@ async fn a_public_spend_on_an_anonymous_ring_publishes_its_owners_alone() {
         spr_interface::instruction::CircuitId::ConfidentialRingEddsa(..)
     ));
     let unenrolled = Chain::ring(anonymous())
-        .with_credentials(&[keypair(2).shielded_address().unwrap()])
+        .with_tracking(&[keypair(2).shielded_address().unwrap()])
         .client();
     assert!(matches!(
         transfer().frame(&unenrolled).await.err(),
@@ -3579,7 +3578,7 @@ async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
         .build();
     let client = Chain::ring(RingSettings::new(RingMode::Confidential))
         .with_registry(Registry::new(&[(&sender, 0)]), &rules)
-        .with_credentials(&[address])
+        .with_tracking(&[address])
         .client();
     let transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
     let member =
@@ -3600,21 +3599,28 @@ async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
     ));
 }
 
-/// A wrong salt would write an entry no proof reads, only the credential's own salt passes.
+/// A wrong salt would write an entry no proof reads, only the row's own salt passes.
 #[tokio::test]
-async fn a_salted_owner_passes_under_its_credentials_tag_alone() {
+async fn a_salted_owner_passes_under_its_rows_tag_alone() {
     use crate::{tests::support::keypair, SaltedOwnerCheck};
     use custom_ring_interface::domain;
-    use zolana_ring_client::CredentialError;
+    use zolana_ring_client::ResolveError;
     let owner = keypair(1);
     let salt = [7; 32];
     let address = ring_address(&owner);
     assert_eq!(address.list_salt, salt);
     let enrolled = [address.recipient];
     let chain = Chain::ring(RingSettings::new(RingMode::Confidential))
-        .with_credential_tag(&enrolled, domain::list_tag(&salt).unwrap());
+        .with_tracking_tag(&enrolled, domain::list_tag(&salt).unwrap());
     let client = &chain;
-    let read = |address| async move { SaltedOwnerCheck { address }.run(client).await };
+    let read = |address| async move {
+        SaltedOwnerCheck {
+            ring: ring(),
+            address,
+        }
+        .run(client)
+        .await
+    };
     assert!(read(&address).await.is_ok());
 
     let forged = RingAddress {
@@ -3623,13 +3629,13 @@ async fn a_salted_owner_passes_under_its_credentials_tag_alone() {
     };
     assert!(matches!(
         read(&forged).await,
-        Err(RingError::Credential(error)) if matches!(*error, CredentialError::ListTagMismatch)
+        Err(RingError::Resolve(ResolveError::ListTagMismatch))
     ));
 
     let unenrolled = ring_address(&keypair(2));
     assert!(matches!(
         read(&unenrolled).await,
-        Err(RingError::Credential(error)) if matches!(*error, CredentialError::NotEnrolled)
+        Err(RingError::Resolve(ResolveError::NotEnrolled))
     ));
 }
 
@@ -4169,73 +4175,5 @@ async fn a_zero_value_input_of_a_delisted_asset_fails_before_proving() {
             subject: TransferSubject::Asset(_) | TransferSubject::InputAsset(_),
             ..
         }))
-    ));
-}
-
-/// The key's credential capacity admits each tree set below, only the compiled accounts refuse.
-#[tokio::test]
-async fn credential_trees_follow_the_registries_and_refuse_past_the_address_ceiling_before_proving()
-{
-    use crate::CredentialTrees;
-    let sender = &crate::tests::support::keypair(1);
-    let recipient = &crate::tests::support::keypair(2);
-    let transfer = owner_transfer(
-        sender,
-        ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
-    )
-    .with_anonymous_signer(&sender.signing_key)
-    .with_payment(payment(&ring_address(recipient), 4))
-    .unwrap();
-    let mut unwitnessed = transfer
-        .frame(&enrolled(&[sender, recipient]).client())
-        .await
-        .unwrap();
-    unwitnessed.frame.accounts.credential_trees = None;
-    let bare = unwitnessed.instruction().unwrap();
-    let payer = unwitnessed.frame.proof_inputs.payer;
-    let addresses = |instruction: &Instruction| {
-        spr_client::transaction_size(
-            &payer,
-            core::slice::from_ref(instruction),
-            spr_client::ComputeBudgetConfig::new(0),
-        )
-        .unwrap()
-        .addresses
-    };
-    let read = |trees: core::ops::Range<u16>, unwitnessed: &mut Unwitnessed<'_>| {
-        let capacity = trees.len() + 1;
-        unwitnessed.frame.accounts.credential_trees =
-            Some(CredentialTrees::new(trees, capacity).unwrap());
-    };
-
-    // 1. The address tree is tree 0 and holds the frame's notes, so only the state trees add addresses, right after the registries.
-    read(100..102, &mut unwitnessed);
-    let named = unwitnessed.instruction().unwrap();
-    let registries = 1 + unwitnessed
-        .config
-        .account()
-        .root_registries(RootRead::transfer(unwitnessed.config.account(), false))
-        .count();
-    let trees: Vec<_> = CredentialTrees::new(100..102, 2).unwrap().metas().collect();
-    assert_eq!(named.accounts[..registries], bare.accounts[..registries]);
-    assert_eq!(named.accounts[registries..registries + 3], trees[..]);
-    assert_eq!(
-        named.accounts[registries + 3..],
-        bare.accounts[registries..]
-    );
-    assert_eq!(addresses(&named), addresses(&bare) + 2);
-
-    // 2. The largest set fits at the ceiling and one more tree refuses.
-    let fitting = (usize::from(solana_message::v1::MAX_ADDRESSES) - addresses(&bare)) as u16;
-    read(100..100 + fitting, &mut unwitnessed);
-    assert_eq!(addresses(&unwitnessed.instruction().unwrap()), 64);
-    unwitnessed.check_size().unwrap();
-    read(100..101 + fitting, &mut unwitnessed);
-    assert!(matches!(
-        unwitnessed.check_size(),
-        Err(RingError::TooManyAddresses {
-            addresses: 65,
-            limit: 64
-        })
     ));
 }

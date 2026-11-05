@@ -170,7 +170,7 @@ impl CappedRelay {
         }
         .delivered();
         let mut source = fixture.source().with_transactions(vec![note_row]);
-        source.credentials.enroll(
+        source.tracking.enroll(
             &sender_fields(SENDER_CAP).owner_key,
             &sender.nullifier_key,
             &fixture.auditor.pubkey(),

@@ -8,8 +8,6 @@ mod anonymous_wallet;
 mod confidential;
 #[path = "operations/created_utxos.rs"]
 mod created;
-#[path = "operations/credential.rs"]
-mod credential;
 #[path = "crypto/decrypt/mod.rs"]
 mod decrypt;
 #[path = "operations/delivered_utxos.rs"]
@@ -45,6 +43,8 @@ mod reader;
 pub mod records;
 #[path = "operations/recover.rs"]
 mod recover;
+#[path = "operations/resolver.rs"]
+pub mod resolver;
 #[cfg(feature = "rpc")]
 #[path = "rpc/mod.rs"]
 pub mod rpc;
@@ -84,12 +84,6 @@ pub use crate::{
         CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
         DepositOwners,
     },
-    credential::{
-        open_credential, AbsentCredential, AddressActivation, AddressInclusion, AddressInclusions,
-        AddressRoot, CredentialError, CredentialLookup, CredentialOpening, CredentialReads,
-        CredentialResolver, CredentialSecrets, CredentialSnapshot, PresentCredential,
-        RecipientKeyResolver, RecipientKeys, StateRoot, TreeRoot, UnknownCredential,
-    },
     decrypt::{FramedRow, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,
@@ -120,6 +114,7 @@ pub use crate::{
     recover::{
         MemberRecovery, RecoveredNotes, RecoveryProgress, RecoveryStep, RingRecovery, SourceMember,
     },
+    resolver::{RecipientResolver, ResolveError, ResolvedRecipient},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
         AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,

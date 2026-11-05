@@ -19,7 +19,7 @@
 // A padded pool cycles real rows, see RecordPoolOf::padded in program-libs/member-registry/src/record_pool.rs.
 //
 // Read after registry/registry.go, registry/shared_path.go, registry/apply_records.go. Read before
-// policy/credentials.go, policy/subjects.go.
+// policy/tracking.go, policy/subjects.go.
 //
 // Properties:
 // 1. Every record row of an active pool is a leaf under the pool's root.
@@ -63,7 +63,7 @@ type PoolEntry struct {
 
 type OwnerEntry struct {
 	PoolEntry
-	Credential    frontend.Variable
+	Tracking      frontend.Variable
 	ListSalt      frontend.Variable
 	OwnSalted     frontend.Variable
 	CuratorSalted [1]frontend.Variable

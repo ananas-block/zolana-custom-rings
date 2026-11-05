@@ -1,49 +1,54 @@
-//! Storage registry builders and the apply proof of a record batch.
+//! Storage registry builders, the apply proof of a record batch and the tracking applier.
 //!
-//! A public batch proves under the public apply key and binds no credential section. A batch with
-//! salted owner writes uses the private apply key of its width and proves, for each one, the
-//! owner's credential in a state tree, its address applied in tree 0 and the written key
-//! `ListKey(member, salt)` under the credential's list tag. All addresses share one tree 0 root.
-//! The update names that root's sequence, Storage compares it to tree 0 and raises the absence floor
-//! in the same instruction. An owner whose address is still queued is refused before any proof.
+//! A public batch proves under the public apply key. A batch with salted owner writes uses the
+//! private apply key of its width and proves, for each one, the owner's enrolled tracking row under
+//! one tracking root and the written key `ListKey(member, salt)` under the row's list tag. The update
+//! names that root's revision, Storage reads it from the pinned tracking registry and raises
+//! `tracking_floor` to it in the same instruction, so no frame proves absence under an older root.
 //!
-//! Read after `program-libs/interface/src/instructions/storage.rs`,
-//! `program-libs/member-registry/src/record.rs` and `sdk-libs/client/src/operations/address_inclusion.rs`.
+//! Read after `program-libs/interface/src/instructions/storage.rs` and
+//! `program-libs/member-registry/src/record.rs`.
 //! Read before `programs/storage/src/instructions/update.rs`.
 
-use std::collections::BTreeMap;
-
 use custom_ring_interface::{
-    credential::owner_member,
     domain,
-    key_catalog::{apply_width, RingCircuit},
-    storage::{RegistryId, StorageError, StorageRegistry},
+    key_catalog::RingCircuit,
+    member_registry::APPLY_BATCH,
+    storage::{RegistryId, Revision, StorageRegistry},
     storage_instruction::{
-        tag, AssetWrite, InitializeIxData, PrivateWriteCheckpoint, RecordWriteClassification,
+        tag, ApplyEnrollmentsIxData, AssetWrite, InitializeIxData, RecordWriteClassification,
         StorageUpdateIxData,
     },
-    ApplyRecordsIxData, ApplyRecordsStatement, CredentialRead, CredentialRootSelection,
-    CredentialStateRoot, CustomRingError, GRACE_SLOTS, STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
+    tracking::{TrackingAuthorization, TrackingEntry},
+    ApplyRecordsIxData, ApplyRecordsStatement, CustomRingError, GRACE_SLOTS, STORAGE_PROGRAM_ID,
+    SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use spr_client::AsyncRpc;
-use zolana_ring_client::{
-    AddressActivation, AddressInclusion, AddressInclusions, CredentialError, CredentialOpening,
-    CredentialReads,
+use spr_hasher::primitives::solana_owner_identity;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
+use zolana_ring_client::{records::path_of, resolver::tracking_record, AsyncRingIndexer};
+use zolana_ring_indexer::tracking::{
+    GetPendingEnrollmentsRequest, GetTrackingApplyProofInputsRequest,
+    GetTrackingApplyProofInputsResponse,
 };
-use zolana_ring_member_registry::{ApplyProofInputs, RecordCredentials, RecordStatementContext};
+use zolana_ring_member_registry::{
+    ApplyProofInputs, RecordStatementContext, RecordTracking, TrackingOpening,
+    TrackingWriteProofInput,
+};
 use zolana_ring_policy::Member;
 
 use crate::{
     client::{RingClient, RingIndexerBackend},
-    credentials::credential_leaf,
     prover::{to_instruction_proof, RingRequest},
+    records::TrackingMemberRead,
     request::{
-        ApplyRecords, CredentialWriteRequest, PrivateApplyRecords, RecordWriteProofInputRequest,
-        StateRootRequest,
+        ApplyEnrollments as ApplyEnrollmentsBody, ApplyRecords, PrivateApplyRecords,
+        PrivateOwnerRequest, RecordWriteProofInputRequest,
     },
-    CredentialTrees, CustomRing, RingError,
+    submission::BoundRoot,
+    CustomRing, RingError,
 };
 
 #[cfg(test)]
@@ -60,20 +65,19 @@ pub struct InitializeStorage {
     pub grace_slots: u64,
     /// `ring_id_field` of the ring it serves, immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-    /// Nonzero lets salted writes prove credentials of that ring, immutable.
-    pub private_ring_id: [u8; 32],
+    /// Nonzero creates a private source paired with the named tracking registry.
+    pub tracking_registry: Address,
 }
 
-/// `credential_trees` names tree 0 and each state tree a private write reads, `None` for a public batch.
+/// `tracking_registry` is the registry's pin, read only by a batch with private writes.
 #[must_use]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateStorage<'a> {
     pub authority: Address,
     pub registry: Address,
+    pub tracking_registry: Address,
     pub data: StorageUpdateIxData<'a>,
-    pub credential_trees: Option<CredentialTrees>,
 }
-
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpdateStorageAuthority {
@@ -114,13 +118,11 @@ pub struct PrivateStorageWrite<'a> {
     pub owners: &'a [SaltedOwnerWrite],
 }
 
-/// The proof and the credential section the update carries beside its writes.
+/// The proof and the tracking revision the update names beside its writes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProvenPrivateWrite {
     pub apply: ApplyRecordsIxData,
-    pub credential_read: CredentialRead,
-    pub private_write: PrivateWriteCheckpoint,
-    pub credential_trees: CredentialTrees,
+    pub tracking_revision: Revision,
 }
 
 /// Everything ahead of the prover, a refusal here sends no request.
@@ -128,26 +130,24 @@ pub(crate) struct PrivateWritePlan {
     pub circuit: RingCircuit,
     pub statement: ApplyRecordsStatement,
     pub body: ApplyRecords,
-    pub credential_read: CredentialRead,
-    pub private_write: PrivateWriteCheckpoint,
-    pub credential_trees: CredentialTrees,
+    pub tracking_revision: Revision,
 }
 
 impl InitializeStorage {
     /// The ring's records, keyed by the ring program id under the creator who pays.
     ///
-    /// The private ring id is immutable and a later policy can serve a private list from these
-    /// records, so every ring binds its own credentials at creation. A source without one refuses
-    /// every frame reading a private list.
+    /// The pin is immutable and a later policy can serve a private list from these records, so
+    /// every ring pins its tracking registry at creation. An unpinned source refuses every frame
+    /// reading a private list, and without the floor a blocked enrolled owner could prove itself
+    /// unenrolled under an old tracking root.
     pub fn records(ring: CustomRing, creator: Address) -> Self {
-        let ring_id = ring.ring_id().unwrap_or_default();
         Self {
             payer: creator,
             creator,
             registry_id: RegistryId(ring.program_id().to_bytes()),
             grace_slots: GRACE_SLOTS,
-            ring_id,
-            private_ring_id: ring_id,
+            ring_id: ring.ring_id().unwrap_or_default(),
+            tracking_registry: ring.tracking_registry().unwrap_or_default(),
         }
     }
 
@@ -160,7 +160,7 @@ impl InitializeStorage {
             registry_id: self.registry_id,
             grace_slots: self.grace_slots.to_le_bytes(),
             ring_id: self.ring_id,
-            private_ring_id: self.private_ring_id,
+            tracking_registry: self.tracking_registry,
         };
         storage_ix(
             vec![
@@ -175,30 +175,18 @@ impl InitializeStorage {
 }
 
 impl UpdateStorage<'_> {
-    /// `encode` refuses a private write without its credential read.
+    /// The pinned tracking registry rides exactly with a private batch, Storage refuses any other.
     pub fn instruction(self) -> Result<Instruction, RingError> {
-        let data = [vec![tag::UPDATE], self.data.encode()?].concat();
-        // Storage reads tree 0 and one tree per state root index, a public batch reads none.
-        let trees: Vec<AccountMeta> = self
-            .credential_trees
-            .iter()
-            .flat_map(CredentialTrees::metas)
-            .collect();
-        let expected = match self.data.private_write {
-            Some(_) => 1 + self.data.credential_read.state_root_indexes().len(),
-            None => 0,
-        };
-        if trees.len() != expected {
-            return Err(StorageError::InvalidCredentialRead.into());
-        }
-        let accounts = [
+        let private = self.data.private_writes()? != 0;
+        let mut accounts = vec![
             AccountMeta::new_readonly(self.authority, true),
             AccountMeta::new(self.registry, false),
-        ]
-        .into_iter()
-        .chain(trees)
-        .collect();
-        Ok(storage_ix(accounts, data))
+        ];
+        accounts.extend(private.then(|| AccountMeta::new_readonly(self.tracking_registry, false)));
+        Ok(storage_ix(
+            accounts,
+            [vec![tag::UPDATE], self.data.encode()?].concat(),
+        ))
     }
 }
 
@@ -223,7 +211,7 @@ impl StorageApplyProof<'_> {
         let statement = self.inputs.statement(RecordStatementContext {
             registry: self.registry,
             asset_writes: self.asset_writes,
-            credentials: RecordCredentials::Public,
+            tracking: RecordTracking::Public,
         })?;
         let key = ApplyKey::of(&statement)?;
         let body = key.body(self.inputs, &statement, Vec::new())?;
@@ -239,17 +227,20 @@ impl PrivateStorageWrite<'_> {
         let plan = self.plan(client.zolana()).await?;
         Ok(ProvenPrivateWrite {
             apply: prove_apply(client, plan.circuit, &plan.statement, &plan.body).await?,
-            credential_read: plan.credential_read,
-            private_write: plan.private_write,
-            credential_trees: plan.credential_trees,
+            tracking_revision: plan.tracking_revision,
         })
     }
 
-    pub(crate) async fn plan<R: AsyncRpc>(self, rpc: &R) -> Result<PrivateWritePlan, RingError> {
-        // 1. The salted owners must name exactly the writes Storage classifies as credential writes,
-        //    and each written key must be its owner's list key, so a wrong salt fails before any read.
-        let width = usize::from(apply_width(self.inputs.writes.len() as u64));
-        let credential_writes = RecordWriteClassification {
+    pub(crate) async fn plan(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<PrivateWritePlan, RingError> {
+        // 1. The salted owners must name exactly the writes Storage classifies as private, and each
+        //    written key must be its owner's list key, so a wrong salt fails before any read.
+        let width = usize::from(custom_ring_interface::key_catalog::apply_width(
+            self.inputs.writes.len() as u64,
+        ));
+        let private_writes = RecordWriteClassification {
             entries: self
                 .inputs
                 .writes
@@ -257,7 +248,7 @@ impl PrivateStorageWrite<'_> {
                 .map(|write| Ok::<_, CustomRingError>(write.entry)),
             asset_writes: self.asset_writes,
         }
-        .credential_writes()?;
+        .private_writes()?;
         let owners = self
             .owners
             .iter()
@@ -267,130 +258,59 @@ impl PrivateStorageWrite<'_> {
             1u16.checked_shl(u32::from(owner.write.write_index))
                 .filter(|bit| mask & bit == 0)
                 .map(|bit| mask | bit)
-                .ok_or(CredentialError::CredentialWritesMismatch)
+                .ok_or(RingError::PrivateWritesMismatch)
         })?;
-        if named != credential_writes || named == 0 {
-            return Err(CredentialError::CredentialWritesMismatch.into());
+        if named != private_writes || named == 0 {
+            return Err(RingError::PrivateWritesMismatch);
         }
-        // 2. One snapshot proves every credential in its state tree, an absent owner cannot write.
-        let mut members: Vec<[u8; 32]> = owners.iter().map(|owner| owner.member).collect();
-        members.sort_unstable();
-        members.dedup();
-        let snapshot = CredentialReads {
-            ring: self.ring.program_id(),
-            members: &members,
-        }
-        .read(rpc, rpc)
-        .await?;
-        let mut present = BTreeMap::new();
-        for (member, opening) in members.iter().zip(&snapshot.openings) {
-            let CredentialOpening::Present(credential) = opening else {
-                let owner = owners.iter().find(|owner| owner.member == *member);
-                return Err(CredentialError::WriteOwnerNotEnrolled {
-                    write_index: owner.map_or(0, |owner| owner.write.write_index),
-                }
-                .into());
-            };
-            present.insert(*member, &**credential);
-        }
+        // 2. One tracking root answers every owner. Storage raises the floor to its revision, so a
+        //    frame never proves absence under a root older than the rows the write relies on.
+        let tracking = BoundRoot::tracking(&*self.ring.require_policy(rpc).await?, rpc).await?;
+        let mut requests = vec![None; width];
         for owner in &owners {
-            if domain::list_tag(&owner.write.list_salt)?
-                != present[&owner.member].credential.list_tag
-            {
-                return Err(CredentialError::ListTagMismatch.into());
+            let opening = TrackingMemberRead {
+                root: tracking,
+                member: owner.member,
             }
-        }
-        // 3. Every address applied under one tree 0 root, a queued one refuses before any proof.
-        //    The root's history index fixes the sequence Storage compares and records as the floor.
-        let addresses: Vec<[u8; 32]> = present
-            .values()
-            .map(|credential| credential.address)
-            .collect();
-        let activation = AddressInclusions {
-            addresses: &addresses,
-        }
-        .read(rpc, rpc)
-        .await?;
-        let (root, checkpoint, inclusions) = match activation {
-            AddressActivation::Active {
-                root,
-                checkpoint,
-                inclusions,
-            } => (root, checkpoint, inclusions),
-            AddressActivation::Queued { address } => {
-                let write_index = owners
-                    .iter()
-                    .filter(|owner| present[&owner.member].address == address)
-                    .map(|owner| owner.write.write_index)
-                    .min()
-                    .ok_or(CredentialError::MalformedProof)?;
-                return Err(CredentialError::AddressQueued {
-                    address,
-                    write_index,
-                }
-                .into());
+            .read(rpc)
+            .await?;
+            // 3. Only an enrolled row under a nonzero key carries a list tag the salt can match.
+            let TrackingOpening::Present { record, path } = opening else {
+                return Err(RingError::WriteOwnerNotEnrolled {
+                    write_index: owner.write.write_index,
+                });
+            };
+            if record.nullifier_pk == ZERO_NULLIFIER_PUBKEY {
+                return Err(RingError::WriteOwnerNotEnrolled {
+                    write_index: owner.write.write_index,
+                });
             }
-        };
-        // 4. The statement takes the authenticated checkpoint and the snapshot's state roots,
-        //    the frame names the same roots by index.
-        let state_roots: Vec<CredentialStateRoot> = snapshot
-            .state_roots
-            .iter()
-            .map(|tree| CredentialStateRoot {
-                tree_id: tree.tree_id,
-                root: tree.root.root,
-            })
-            .collect();
-        let state_indexes: Vec<u16> = snapshot
-            .state_roots
-            .iter()
-            .map(|tree| tree.root.root_index)
-            .collect();
-        let credential_read = CredentialRead::new(root.root_index, &state_indexes)?;
-        let credential_trees =
-            CredentialTrees::new(snapshot.state_roots.iter().map(|tree| tree.tree_id), width)?;
+            if domain::list_tag(&owner.write.list_salt)? != record.list_tag {
+                return Err(RingError::ListSaltMismatch {
+                    member: owner.member,
+                });
+            }
+            requests[usize::from(owner.write.write_index)] = Some(PrivateOwnerRequest {
+                list_salt: owner.write.list_salt,
+                record: (&record).into(),
+                index: path.index,
+                path: path.siblings.as_flattened().to_vec(),
+            });
+        }
         let statement = self.inputs.statement(RecordStatementContext {
             registry: self.registry,
             asset_writes: self.asset_writes,
-            credentials: RecordCredentials::Private(CredentialRootSelection {
-                ring_program: &self.ring.program_id(),
-                address_checkpoint: checkpoint,
-                state_roots: &state_roots,
-                capacity: width,
-            }),
+            tracking: RecordTracking::Private {
+                tracking_root: tracking.root,
+            },
         })?;
-        // 5. Each salted write opens its owner's leaf at its tree's table slot and its address leaf.
-        let inclusions: BTreeMap<&[u8; 32], &AddressInclusion> =
-            present.keys().zip(&inclusions).collect();
-        let mut credentials = vec![None; width];
-        for owner in &owners {
-            let credential = present[&owner.member];
-            let inclusion = inclusions[&owner.member];
-            let tree_slot = state_roots
-                .iter()
-                .position(|root| root.tree_id == credential.tree_id)
-                .ok_or(RingError::CredentialNotRead)?;
-            credentials[usize::from(owner.write.write_index)] = Some(CredentialWriteRequest {
-                member: owner.member,
-                list_salt: owner.write.list_salt,
-                leaf: credential_leaf(credential, tree_slot)?,
-                address_next: inclusion.next,
-                address_index: inclusion.index,
-                address_path: inclusion.path.to_vec(),
-            });
-        }
         let key = ApplyKey::of(&statement)?;
-        let body = key.body(self.inputs, &statement, credentials)?;
+        let body = key.body(self.inputs, &statement, requests)?;
         Ok(PrivateWritePlan {
             circuit: key.circuit,
             statement,
             body,
-            credential_read,
-            private_write: PrivateWriteCheckpoint {
-                ring_program: self.ring.program_id(),
-                sequence: checkpoint.sequence(),
-            },
-            credential_trees,
+            tracking_revision: tracking.revision,
         })
     }
 }
@@ -406,17 +326,16 @@ impl BoundOwner {
         inputs: &ApplyProofInputs,
     ) -> impl Fn(&SaltedOwnerWrite) -> Result<Self, RingError> + '_ {
         move |write| {
-            let member = owner_member(&write.owner)?;
+            let member = solana_owner_identity(write.owner.as_array())?;
             let key = Member::salted(&Member::from_bytes(member)?, &write.list_salt)?;
             match inputs.writes.get(usize::from(write.write_index)) {
                 Some(written) if written.entry.member == *key.as_bytes() => Ok(Self {
                     write: *write,
                     member,
                 }),
-                _ => Err(CredentialError::ListKeyMismatch {
+                _ => Err(RingError::ListKeyMismatch {
                     write_index: write.write_index,
-                }
-                .into()),
+                }),
             }
         }
     }
@@ -440,12 +359,12 @@ impl ApplyKey {
         }
     }
 
-    /// Writes and credentials past the batch assign zeros, a public key takes no credential.
+    /// Writes and owners past the batch assign zeros, a public key takes no owner.
     fn body(
         &self,
         inputs: &ApplyProofInputs,
         statement: &ApplyRecordsStatement,
-        mut credentials: Vec<Option<CredentialWriteRequest>>,
+        mut owners: Vec<Option<PrivateOwnerRequest>>,
     ) -> Result<ApplyRecords, RingError> {
         let mut writes: Vec<Option<RecordWriteProofInputRequest>> = inputs
             .writes
@@ -454,19 +373,11 @@ impl ApplyKey {
             .collect();
         writes.resize(self.width, None);
         let private = statement.private.as_ref().map(|private| {
-            credentials.resize(self.width, None);
+            owners.resize(self.width, None);
             PrivateApplyRecords {
-                credential_writes: u64::from(private.credential_writes),
-                private_ring_id: private.private_ring_id,
-                credential_owner: *private.credentials.owner_hash(),
-                address_root: *private.credentials.address_root(),
-                state_roots: private
-                    .credentials
-                    .state_roots()
-                    .iter()
-                    .map(StateRootRequest::from)
-                    .collect(),
-                credentials,
+                private_writes: u64::from(private.private_writes),
+                tracking_root: private.tracking_root,
+                owners,
             }
         });
         Ok(ApplyRecords {
@@ -498,6 +409,154 @@ async fn prove_apply<R: AsyncRpc, I: RingIndexerBackend>(
         new_root: statement.new_root,
         new_next_index: statement.new_next_index.to_le_bytes(),
         restrictive: u8::from(statement.restrictive),
+    })
+}
+
+/// Anyone may send it.
+#[must_use]
+pub struct ApplyEnrollments<'a> {
+    pub tracking_registry: Address,
+    /// The registry revision `chain_start` binds.
+    pub revision: Revision,
+    /// In chain order.
+    pub owners: &'a [Address],
+    pub inputs: &'a ApplyProofInputs<TrackingWriteProofInput>,
+}
+
+impl ApplyEnrollments<'_> {
+    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
+        self,
+        client: &RingClient<R, I>,
+    ) -> Result<Instruction, RingError> {
+        let statement = self.inputs.statement();
+        let circuit = RingCircuit::apply_enrollments(statement.count);
+        let RingCircuit::ApplyEnrollments { writes: batch } = circuit else {
+            return Err(RingError::UnpinnedProvingKey(circuit));
+        };
+        let public_input_hash = statement.hash()?;
+        let mut writes: Vec<_> = self
+            .inputs
+            .writes
+            .iter()
+            .map(|write| Some(write.into()))
+            .collect();
+        writes.resize_with(usize::from(batch), || None);
+        let body = ApplyEnrollmentsBody {
+            public_input_hash,
+            old_root: statement.old_root,
+            new_root: statement.new_root,
+            old_next_index: statement.old_next_index,
+            new_next_index: statement.new_next_index,
+            chain_start: statement.chain_start,
+            chain_end: statement.chain_end,
+            count: u8::try_from(statement.count).map_err(|_| RingError::RecordProjectionStale)?,
+            writes,
+        };
+        let proof = RingRequest::new(circuit, &body)?
+            .prove(client, public_input_hash)
+            .await?;
+        let data = ApplyEnrollmentsIxData {
+            revision: self.revision,
+            proof: to_instruction_proof(proof)?,
+            new_root: statement.new_root,
+            new_next_index: statement.new_next_index.to_le_bytes(),
+        };
+        let mut accounts = vec![AccountMeta::new(self.tracking_registry, false)];
+        accounts.extend(self.owners.iter().map(|owner| {
+            let (authorization, _) =
+                TrackingAuthorization::find_address(&self.tracking_registry, owner);
+            AccountMeta::new(authorization, false)
+        }));
+        Ok(storage_ix(
+            accounts,
+            [&[tag::APPLY_ENROLLMENTS][..], bytemuck::bytes_of(&data)].concat(),
+        ))
+    }
+}
+
+/// Oldest first, up to one apply key's batch.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnrollPending {
+    pub ring: CustomRing,
+}
+
+impl EnrollPending {
+    /// `None` when nothing is pending, a pending enrollment grants nothing until its root lands.
+    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
+        self,
+        client: &RingClient<R, I>,
+    ) -> Result<Option<Instruction>, RingError> {
+        let policy = self.ring.require_policy(client.zolana()).await?;
+        let registry = policy.tracking;
+        let pending = client
+            .zolana()
+            .get_pending_enrollments(GetPendingEnrollmentsRequest {
+                registry: registry.into(),
+                after: None,
+                limit: u64::from(APPLY_BATCH as u32),
+            })
+            .await?;
+        if pending.enrollments.is_empty() {
+            return Ok(None);
+        }
+        let owners: Vec<Address> = pending
+            .enrollments
+            .iter()
+            .map(|enrollment| enrollment.owner.0)
+            .collect();
+        let response = client
+            .zolana()
+            .get_tracking_apply_proof_inputs(GetTrackingApplyProofInputsRequest {
+                registry: registry.into(),
+                owners: owners.iter().copied().map(Into::into).collect(),
+            })
+            .await?;
+        let inputs = tracking_apply_inputs(&response)?;
+        let instruction = ApplyEnrollments {
+            tracking_registry: registry,
+            revision: Revision(response.revision.to_le_bytes()),
+            owners: &owners,
+            inputs: &inputs,
+        }
+        .prove(client)
+        .await?;
+        Ok(Some(instruction))
+    }
+}
+
+pub fn tracking_apply_inputs(
+    response: &GetTrackingApplyProofInputsResponse,
+) -> Result<ApplyProofInputs<TrackingWriteProofInput>, RingError> {
+    let writes = response
+        .writes
+        .iter()
+        .map(|write| {
+            Ok(TrackingWriteProofInput {
+                entry: TrackingEntry {
+                    member: write.member.0,
+                    nullifier_pk: write.nullifier_pk.0,
+                    ct_hash: write.ct_hash.0,
+                    viewing_u: write.viewing_u.0,
+                    revision: write.revision,
+                    list_tag: write.list_tag.0,
+                },
+                exists: write.exists,
+                old: tracking_record(&write.old),
+                slot: path_of(&write.slot)?,
+                low: tracking_record(&write.low),
+                low_path: path_of(&write.low_path)?,
+            })
+        })
+        .collect::<Result<_, RingError>>()?;
+    Ok(ApplyProofInputs {
+        old_root: response.old_root.0,
+        new_root: response.new_root.0,
+        old_next_index: response.old_next_index,
+        new_next_index: response.new_next_index,
+        chain_start: response.chain_start.0,
+        chain_end: response.chain_end.0,
+        writes,
     })
 }
 

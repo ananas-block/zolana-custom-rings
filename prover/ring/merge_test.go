@@ -9,7 +9,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 )
 
 // Rust and TypeScript pin the same file.
@@ -19,7 +18,7 @@ const mergeVectorDescription = "Known-answer vector for the ring merge record an
 	"record = kind 1, u64be(amount), owner_key, mint, be32(nullifier_pk), 7 zero bytes, be32(seed), 144 bytes. " +
 	"ciphertext seals the record from eph to auditor under the audit stream schedule of label CRING/mrg at counter 2. " +
 	"output_blinding = Poseidon(TMOB, seed, first_nullifier). " +
-	"elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(ciphertext), payer, published_owner, credential_owner, state_tree_id, state_root. " +
+	"elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(ciphertext), payer, published_owner, tracking_root, " +
 	"public_input_hash = hash_chain(elements). published_owner is zero off ZERO_NULLIFIER_PUBKEY and the owner identity under it. " +
 	"request is the prover body. Produced by prover/ring/merge_test.go with WRITE_AUDIT_VECTORS=1."
 
@@ -35,7 +34,6 @@ type mergeVectorCase struct {
 
 type mergeVector struct {
 	Description string            `json:"description"`
-	RingProgram Bytes             `json:"ring_program"`
 	AuditorSk   Bytes             `json:"auditor_sk"`
 	AuditorPk   Bytes             `json:"auditor_pk"`
 	EphPk       Bytes             `json:"eph_pk"`
@@ -61,10 +59,8 @@ func TestMergeVectorPinsHostAndCircuit(t *testing.T) {
 	auditorU := s.Keys.AuditorPk()
 	auditorPk := ringprotocol.Tagged(auditorU[:])
 	ephPk := s.Keys.EphPk()
-	ringProgram := ringregistry.CredentialProgram()
 	want := mergeVector{
 		Description: mergeVectorDescription,
-		RingProgram: ringProgram[:],
 		AuditorSk:   auditorSk[:],
 		AuditorPk:   auditorPk[:],
 		EphPk:       ephPk[:],

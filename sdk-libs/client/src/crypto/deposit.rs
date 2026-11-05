@@ -155,7 +155,7 @@ impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
             return Ok(None);
         }
         // An enrollment finalizes the key for later notes and leaves a zero-key commitment valid, so only the
-        // published commitment selects the key, never the current credential. A third key rebuilds nothing.
+        // published commitment selects the key, never the current tracking record. A third key rebuilds nothing.
         let Some(nullifier_pubkey) = [self.address.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY]
             .into_iter()
             .find(|candidate| {

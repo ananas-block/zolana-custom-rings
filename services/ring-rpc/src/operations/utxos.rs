@@ -1,4 +1,4 @@
-//! The notes a ring's auditor opened, their nullifiers, and the keys its credentials hold.
+//! The notes a ring's auditor opened, their nullifiers, and the keys its enrollments hold.
 //!
 //! Each page also names the notes it moved in an owner's active set, the page commit writes them
 //! to `storage/owner_notes.rs`. Wallet reads page over that set.
@@ -35,7 +35,6 @@ use zolana_ring_transaction::RingAssets;
 
 use crate::{
     bounded_map::{BoundedMap, Cached},
-    credentials::{CredentialRefusal, HeldCredential, HeldCredentials},
     database::Store,
     error::RingRpcError,
     frame_repairs::RepairBook,
@@ -44,6 +43,7 @@ use crate::{
     projection_reads::ProjectionReads,
     spend_machine::{NoteRead, SpendRow, SpendState},
     spent_index::{state_name, Checkpoint, HistoryScope, LoadedSpends, NoteSeal},
+    tracking::{HeldEnrollment, HeldEnrollments, TrackingRefusal},
 };
 
 #[path = "page_work.rs"]
@@ -63,7 +63,7 @@ pub(crate) const MAX_CACHED_ENTRIES: usize = 65_536;
 #[derive(Default)]
 pub(crate) struct AuditStore {
     book: RwLock<SpendBook>,
-    credentials: RwLock<HeldCredentials>,
+    enrollments: RwLock<HeldEnrollments>,
     /// The registry last named on the notes, a different one names them again.
     assets: RwLock<Option<RingAssets>>,
     /// Owners whose key arrived, kept until a committed page derived their notes.
@@ -92,8 +92,8 @@ pub(crate) enum Backing {
 pub(crate) struct Backfill {
     /// `None` until the durable tables load.
     pub history: Option<HistoryPosition>,
-    /// Durable on the lease holder, a restart resumes the scan where its last page committed.
-    pub credentials: HistoryPosition,
+    /// The tracking leaf the next scan reads first, durable on the lease holder.
+    pub tracking_cursor: u64,
     pub repairs: RepairBook,
     /// The lease the last claim returned, `None` while another replica writes the ring.
     pub writer: Option<ProjectionLease>,
@@ -698,16 +698,16 @@ impl AuditStore {
             .collect())
     }
 
-    pub(crate) fn credential(&self, member: &[u8; 32]) -> Option<HeldCredential> {
-        self.credentials
+    pub(crate) fn enrollment(&self, member: &[u8; 32]) -> Option<HeldEnrollment> {
+        self.enrollments
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .by_member(member)
             .copied()
     }
 
-    pub(crate) fn credential_by_list_key(&self, list_key: &[u8; 32]) -> Option<HeldCredential> {
-        self.credentials
+    pub(crate) fn enrollment_by_list_key(&self, list_key: &[u8; 32]) -> Option<HeldEnrollment> {
+        self.enrollments
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .by_list_key(list_key)
@@ -715,12 +715,12 @@ impl AuditStore {
     }
 
     /// A refused page holds nothing, a new owner's notes derive on the next page.
-    pub(crate) fn admit_credentials(
+    pub(crate) fn admit_enrollments(
         &self,
-        found: Vec<HeldCredential>,
-    ) -> Result<(), CredentialRefusal> {
+        found: Vec<HeldEnrollment>,
+    ) -> Result<(), TrackingRefusal> {
         let owners = self
-            .credentials
+            .enrollments
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .admit(found)?;
@@ -898,14 +898,14 @@ impl StoredUtxo {
 
 impl DepositOwners for AuditStore {
     fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
-        let credentials = self
-            .credentials
+        let enrollments = self
+            .enrollments
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        let held = credentials.by_owner_hash(owner_hash)?;
+        let held = enrollments.by_owner_hash(owner_hash)?;
         Some(DepositOwner {
             owner_key: held.owner_key,
-            nullifier_pk: held.credential.nullifier_pk,
+            nullifier_pk: held.nullifier_pk,
         })
     }
 }

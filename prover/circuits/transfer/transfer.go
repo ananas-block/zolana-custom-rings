@@ -9,7 +9,7 @@
 //
 // Read after zolana/prover/server/circuits/spp_transaction/shared/transaction.go, the statement
 // the ring extends. Read before, in the order Define calls them, shared/utxo.go, audit/audit.go,
-// transfer/input.go, policy/record_pool.go, policy/credentials.go, transfer/owners.go,
+// transfer/input.go, policy/record_pool.go, policy/tracking.go, transfer/owners.go,
 // audit/signer_data.go, policy/policy.go. Then prover/ring/ring.go, outside Define.
 //
 // Both proofs reopen private_tx_hash over the note, output and address chains and the transaction blinding.
@@ -28,7 +28,7 @@
 //   - Outflow, charge, peak and the telescoping floor are in policy/outflow.go.
 //   - The bound behind every amount comparison is in policy/comparator.go.
 //   - The record pool, absence proofs and deduplication are in policy/record_pool.go.
-//   - Salted reads and the absence floor are in policy/subjects.go.
+//   - Salted reads and the tracking floor are in policy/subjects.go.
 //   - Input asset subjects are in policy/subjects.go and policy/rules.go.
 //   - Owner rows and the zero key rule are in transfer/owners.go.
 //   - Approval totals are in policy/screen.go, signer data counts in audit/signer_data.go.
@@ -41,16 +41,17 @@
 //  3. Every input note belongs to the bound ring, or to the default ring on an entry key. Its owner
 //     is in the published signer run, the hidden owner or the in-proof sender, the delegate rail excepted.
 //  4. A hidden owner owns the note at input zero, stays out of the run and differs from every public party.
-//  5. A ring note key outside ZeroNullifierPk equals its owner's permanent credential key. Zero-key outputs need no
-//     credential for the key check, applicable salted rules still require an authenticated owner opening.
+//  5. A ring note's nonzero key is its owner's row key under the tracking root, a zero key on an
+//     output leaves its owner absent.
 //  6. Each entry of the signer run counts its data-bearing outputs, per audit.SignerDataCounts.
 //  7. The policy's rules, limits and approval bits hold under the bound roots, off the delegate rail.
 //  8. InputCount and the exact capacity of ordered nullifiers enter input_nullifier_chain, with a zero tail.
 //     Notes and addresses may interleave before the dummy suffix. SPP alone authorizes address creation.
 //
 // The statement relies on the program for what no circuit can see. The program hashes the run from
-// the signed owner accounts, authenticates the credential PDA owner and reads accepted SPP state roots.
-// It refuses an address root below any salted source's absence floor, folds the settled gross and reads legs from their accounts.
+// the signed owner accounts, reads each root live at the frame's revision, refuses a tracking root
+// below a salted source's floor, folds the gross from the settled legs and reads the legs from their
+// accounts.
 //
 // It proves nothing about a recipient's body or tag, SPP's external data hash binds those bytes alone.
 package transfer
@@ -117,7 +118,7 @@ type Sections struct {
 	SignerDataCounts frontend.Variable
 	// Rows hold every input note owner, a delegate's zero key note aside, ascending with zero rows last off the authority rail. They stay private, the constraints alone hold them. A row with no input holds nothing and only adds its own sender rules.
 	Rows []frontend.Variable
-	policy.Credentials
+	policy.Tracking
 	// ApprovalMask is the proven approval bits, the program demands their co-signers.
 	ApprovalMask frontend.Variable
 	// ApprovalTotals is zero unless the frame discloses the totals to a co-signer.
@@ -142,7 +143,7 @@ func NewSections(shape Shape) (Sections, error) {
 	if err != nil {
 		return Sections{}, err
 	}
-	credentials, err := policy.NewCredentials(shape.Owners, shape.Outputs, shape.credentialWithdrawals())
+	tracking, err := policy.NewTracking(shape.Owners, shape.Outputs, shape.trackedWithdrawals())
 	if err != nil {
 		return Sections{}, err
 	}
@@ -153,7 +154,7 @@ func NewSections(shape Shape) (Sections, error) {
 		Entries:         make([]audit.EntryWires, shape.entries()),
 		Signers:         make([]frontend.Variable, shape.Inputs),
 		Rows:            make([]frontend.Variable, shape.Owners),
-		Credentials:     credentials,
+		Tracking:        tracking,
 		Policy:          p,
 	}, nil
 }
@@ -171,7 +172,7 @@ func (c *Sections) validate(shape Shape) error {
 		shared.ValidateLength("transfer", "signer", len(c.Signers), shape.Inputs),
 		shared.ValidateLength("transfer", "owner row", len(c.Rows), shape.Owners),
 		shared.ValidateLength("transfer", "withdrawal", len(c.Withdrawals), shape.Withdrawals),
-		c.ValidateCredentials(shape.Owners, shape.Outputs, shape.credentialWithdrawals()),
+		c.ValidateTracking(shape.Owners, shape.Outputs, shape.trackedWithdrawals()),
 	)
 }
 
@@ -203,12 +204,11 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	hiddenOwner := c.hiddenOwner(api, section, signers)
 	// At most one term is nonzero, assertRail excludes the bits and zeroes Sender off InProof.
 	signers.AssertOwners(api, section, api.Sub(1, c.Delegate), api.Add(hiddenOwner, c.Sender))
-	// 5. Every sender row authenticates its credential result, and every output key outside ZeroNullifierPk needs a matching credential.
-	// A zero-key output stays auditable without an opening here, the policy still enforces any salted payee read.
-	credentials := c.OpenCredentials(api, c.RingProgramID)
-	rows := OpenOwnerRows(api, c.Rows, c.RowEntries, credentials)
+	// 5. Owner rows and output keys read the tracking root. The auditor derives a nullifier from the secret sealed behind an enrolled key or from the public zero secret, so after the step no ring note carries a key the auditor cannot read.
+	tracking := c.OpenTracking(api)
+	rows := OpenOwnerRows(api, c.Rows, c.RowEntries, tracking)
 	rows.AssertInputOwners(api, InputRail{Delegate: c.Delegate, Hidden: c.Hidden, HiddenOwner: hiddenOwner}, section.Slots)
-	AssertOutputOwners(api, credentials, opened.Slots, c.OutputEntries)
+	AssertOutputOwners(api, tracking, opened.Slots, c.OutputEntries)
 	// 6. Each run entry's data-bearing outputs are counted from the opened slots, a signer's check needs the run from step 4 and the slots from step 2.
 	audit.SignerDataCounts{Packed: c.SignerDataCounts, Members: signers.Members, Active: signers.Count.Active, Slots: opened.Slots}.Assert(api)
 	// 7. PrivateTxHash binds the opened notes and derived address subsequence to SPP. Together with
@@ -218,7 +218,7 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// 8. The policy screens the bound slots. The rows hold every input note owner by step 5, so no owner's funds escape the sender rules or the attribution.
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
-	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Credentials: credentials}, opened.Slots)
+	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
 	// The mask is equal and never at least. A short mask would drop a demanded co-signer, the program acts on these bits and derives no threshold.
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
@@ -273,8 +273,8 @@ func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audi
 		c.InputCount, c.InputNullifierChain, c.PrivateTxHash, c.Sender,
 	}, c.PartyIdentities[:], []frontend.Variable{
 		c.SignerCount, signers.Chain,
-		c.PolicyHash, c.OwnRoot, c.CuratorRoot,
-	}, c.Credentials.StatementFields(), publicSlots(c.PublicAssets[:], c.PublicAmounts[:], c.PublicGross[:]), []frontend.Variable{c.WithdrawalHash})
+		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot,
+	}, publicSlots(c.PublicAssets[:], c.PublicAmounts[:], c.PublicGross[:]), []frontend.Variable{c.WithdrawalHash})
 	return closeStatement(fields)
 }
 

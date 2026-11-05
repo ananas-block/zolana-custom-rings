@@ -1,4 +1,4 @@
-//! Creates the ring account and SPP's `RingConfig` in one instruction.
+//! Creates the ring account, its tracking registry and SPP's `RingConfig` in one instruction.
 //!
 //! The ring account fixes the auditor key and the mode for the ring's life. SPP admits any program's
 //! `RingConfig` and reads no auditor key, so the check of who sets those values lives here.
@@ -8,16 +8,18 @@
 //! 1. Only the deployed binary's upgrade authority creates the ring, at its one canonical PDA.
 //! 2. The auditor key is canonical and of large order, and four distinct nonzero keys hold the roles.
 //! 3. A policy ring stores a validated table and its hash, any other ring stores no rule.
-//! 4. Each salted source of the stored table pairs with the ring.
+//! 4. The ring pins the tracking registry that storage derives from `ring_auth`, a registry of another creator fails that derivation, and each salted source of the stored table pins that registry.
 //! 5. `RingConfig` names `ring_auth` as its authority, so SPP's ring admin actions pass through the program.
 //!
-//! The instruction relies on SPP for `RingConfig` derivation and activation.
+//! The instruction relies on storage for the registry's derivation, and on SPP for `RingConfig`'s derivation and activation.
 //!
 //! Read after `instructions/accounts/loader.rs`, `state.rs`. Read before `instructions/verification/policy_binding.rs`.
 
 use custom_ring_interface::{
-    is_auditor_key, CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, PolicyUpdate,
-    RingKind, RingMode, RingPolicy,
+    is_auditor_key,
+    storage_instruction::{tag as storage_tag, InitializeTrackingIxData},
+    CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, PolicyUpdate, RingKind,
+    RingMode, RingPolicy, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     error::ProgramError,
@@ -26,6 +28,7 @@ use pinocchio::{
 };
 use spr_account_checks::AccountIterator;
 use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
+use zolana_ring_policy::ring_id_field;
 
 use crate::{
     instructions::{
@@ -54,6 +57,9 @@ pub fn process_initialize_ix(
     let protocol_config = iter.next_account("protocol_config")?;
     let ring_auth = iter.next_mut("ring_auth")?;
     let spp_program = iter.next_account("spp_program")?;
+    let tracking = iter.next_mut("tracking_registry")?;
+    // Only the runtime reads it, the CPI names the storage program by id.
+    iter.next_account("storage_program")?;
 
     // 1. The signer holds the upgrade authority of the deployed binary.
     check_system_program(system_program)?;
@@ -101,6 +107,7 @@ pub fn process_initialize_ix(
         auditor_pubkey: ix.auditor_pubkey,
         created_slot: slot,
         records: records.map_or_else(Address::default, |records| *records.address()),
+        tracking: *tracking.address(),
     }
     .account();
     if let Some(binding) = ix.policy.as_ref().filter(|_| ix.kind.has_policy()) {
@@ -127,7 +134,22 @@ pub fn process_initialize_ix(
     }
     Init(&*account).init(ring)?;
     let placed = RingAuth::derive(program_id)?.check_account(ring_auth)?;
-    // 6. SPP binds the ring program to its canonical configuration account.
+    // 6. Storage creates the registry at the address these seeds fix, the ring PDA's signature admits no other ring.
+    let tracking_data = [
+        &[storage_tag::INITIALIZE_TRACKING][..],
+        bytemuck::bytes_of(&InitializeTrackingIxData {
+            ring_id: ring_id_field(program_id.as_array()).map_err(CustomRingError::from)?,
+            auditor_pubkey: ix.auditor_pubkey,
+        }),
+    ]
+    .concat();
+    let tracking_accounts = [&*payer, &*ring_auth, &*tracking, &*system_program];
+    placed.invoke_program(
+        &STORAGE_PROGRAM_ID,
+        tracking_accounts.as_slice(),
+        &tracking_data,
+    )?;
+    // 7. SPP binds the ring program to its canonical configuration account.
     let data = encode_instruction(
         tag::CREATE_RING_CONFIG,
         // SPP starts the authority rail off, and the config stays inert until `set_ring_activation`

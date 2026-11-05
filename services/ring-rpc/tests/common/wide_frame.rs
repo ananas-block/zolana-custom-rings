@@ -2,7 +2,7 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    cosign::ApprovalMask, stream::slot_tag, AppMessage, CredentialRead, CustomRingProof,
+    cosign::ApprovalMask, storage::Revision, stream::slot_tag, AppMessage, CustomRingProof,
     FrameExtensions, InputTrees, InstructionTag, PlainGroth16Proof, RingMode, RingOutput, RingRail,
     RingTransactData, SlotBody, AUDIT_RECORD_LEN, RECIPIENT_BODY_LEN,
 };
@@ -35,7 +35,7 @@ pub fn wide_frame(tag: u8) -> Vec<u8> {
         n_in: 2,
         n_out: 2,
         proof: &proof,
-        credential_read: CredentialRead::new(1, &[1]).expect("credential read"),
+        tracking_revision: Revision::from(1),
         own_revision: None,
         policy: None,
         spl_withdrawal_owners: &[],

@@ -7,8 +7,8 @@
 //!
 //! Each order here is the circuit's, a change on one side alone fails every proof. The Go twins are
 //! `TransferCircuit.statement` in `prover/circuits/transfer/transfer.go`, `Envelope.Head` in
-//! `prover/circuits/audit/audit.go`, and `statement` in `prover/circuits/registry/apply_records.go`.
-//! `program-libs/interface/tests/statements.rs` and
+//! `prover/circuits/audit/audit.go`, and `statement` in each of `prover/circuits/registry/apply_records.go`,
+//! `apply_enrollments.go` and `register_key.go`. `program-libs/interface/tests/statements.rs` and
 //! `go_vectors.rs` pin them through `test-vectors/proof/ring-statements.json`.
 //!
 //! Read after `program-libs/interface/src/instructions/transact.rs`, `docs/design/proof-composition.md`.
@@ -24,14 +24,13 @@ use spr_interface::N_PUBLIC_SLOTS;
 use crate::{
     anonymous_exit::ANONYMOUS_PARTIES,
     cosign::ApprovalMask,
-    credential_read::CredentialRoots,
     disclosure::{pack_disclosure, AuditLayout},
     domain,
     error::CustomRingError,
     key_catalog::{ApplyMode, RingCircuit},
     tagged_x25519,
     transact::RingOutput,
-    TAGGED_X25519_KEY_LEN,
+    REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
@@ -105,25 +104,21 @@ pub struct TransferStatement<'a> {
     pub withdrawal_hash: &'a [u8; 32],
 }
 
-/// Unread policy roots are zero, credential roots follow the selected proof capacity.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Zero where the frame reads none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TransferRoots {
     pub policy_hash: [u8; 32],
     pub own_root: [u8; 32],
     pub curator_root: [u8; 32],
-    pub credentials: CredentialRoots,
+    pub tracking_root: [u8; 32],
 }
 
 /// Everything but the party cells, the public slots and the close.
 const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 4 + 4 + 3 + 1 + 2 + 4 + 1;
 
 impl TransferStatement<'_> {
-    pub fn element_count(&self) -> usize {
-        TRANSFER_FIXED_ELEMENTS
-            + ANONYMOUS_PARTIES
-            + 3 * N_PUBLIC_SLOTS
-            + 2 * self.roots.credentials.capacity()
-            + 2
+    pub const fn element_count(&self) -> usize {
+        TRANSFER_FIXED_ELEMENTS + ANONYMOUS_PARTIES + 3 * N_PUBLIC_SLOTS + 1
     }
 
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
@@ -162,9 +157,8 @@ impl TransferStatement<'_> {
             self.roots.policy_hash,
             self.roots.own_root,
             self.roots.curator_root,
+            self.roots.tracking_root,
         ]);
-        // The credential owner, address root and padded state tree pairs bind the same enrollment namespace and accepted roots on every read.
-        elements.extend(self.roots.credentials.elements());
         // 8. SPP's public slots, then the legs the policy screens. The program folds both from settled legs, the circuit consumes them.
         for (slot, asset) in self.public_assets.iter().enumerate() {
             elements.extend([*asset, self.public_amounts[slot], self.public_gross[slot]]);
@@ -406,12 +400,12 @@ pub struct ApplyRecordsStatement {
     pub private: Option<PrivateWrites>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivateWrites {
     /// The private key refuses zero, a batch without a private owner write is public.
-    pub credential_writes: u16,
-    pub private_ring_id: [u8; 32],
-    pub credentials: CredentialRoots,
+    pub private_writes: u16,
+    /// The pinned tracking registry's root at the instruction's revision, each selected owner's row opens under it.
+    pub tracking_root: [u8; 32],
 }
 
 impl ApplyRecordsStatement {
@@ -427,11 +421,7 @@ impl ApplyRecordsStatement {
     }
 
     pub fn elements(&self) -> Vec<[u8; 32]> {
-        let credential_fields = self
-            .private
-            .as_ref()
-            .map_or(0, |private| 2 + 2 * private.credentials.capacity());
-        let mut elements = Vec::with_capacity(9 + credential_fields);
+        let mut elements = Vec::with_capacity(11);
         // 1. CRAP binds the record transition, the exact write chain under the selected write count and the proven retirement class.
         elements.extend([
             domain::field(domain::APPLY_RECORDS),
@@ -444,20 +434,91 @@ impl ApplyRecordsStatement {
             right_align(&self.count.to_be_bytes()),
             bit(self.restrictive),
         ]);
-        // 2. A private key also binds the registry's ring and the authenticated credential roots.
+        // 2. A private key also binds the selected writes and the tracking root their rows open under.
         // The two families verify under distinct keys, so the shorter public statement needs no separate domain.
         if let Some(private) = &self.private {
             elements.extend([
-                right_align(&private.credential_writes.to_be_bytes()),
-                private.private_ring_id,
+                right_align(&private.private_writes.to_be_bytes()),
+                private.tracking_root,
             ]);
-            elements.extend(private.credentials.elements());
         }
         elements
     }
 
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         create_hash_chain_4_from_slice(&self.elements())
+    }
+}
+
+/// An application of `count` entries to the tracking tree, mirror
+/// `prover/circuits/registry/apply_enrollments.go`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApplyEnrollmentsStatement {
+    pub old_root: [u8; 32],
+    pub new_root: [u8; 32],
+    pub old_next_index: u64,
+    pub new_next_index: u64,
+    pub chain_start: [u8; 32],
+    pub chain_end: [u8; 32],
+    pub count: u64,
+}
+
+impl ApplyEnrollmentsStatement {
+    /// `[CRTA, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`.
+    pub fn elements(&self) -> [[u8; 32]; 8] {
+        [
+            domain::field(domain::APPLY_ENROLLMENTS),
+            self.old_root,
+            self.new_root,
+            right_align(&self.old_next_index.to_be_bytes()),
+            right_align(&self.new_next_index.to_be_bytes()),
+            self.chain_start,
+            self.chain_end,
+            right_align(&self.count.to_be_bytes()),
+        ]
+    }
+
+    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
+        create_hash_chain_4_from_slice(&self.elements())
+    }
+}
+
+/// The auditor envelope of an enrolled nullifier key, mirror
+/// `prover/circuits/registry/register_key.go`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegisterKeyStatement<'a> {
+    /// The tracking registry's, a proof for another ring fails.
+    pub ring_id: &'a [u8; 32],
+    /// The owner identity of the signing member.
+    pub member: &'a [u8; 32],
+    pub nullifier_pk: &'a [u8; 32],
+    pub list_tag: &'a [u8; 32],
+    pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
+    pub eph_u: &'a [u8; 32],
+    pub ciphertext: &'a [u8; REGISTER_KEY_CIPHERTEXT_LEN],
+}
+
+impl RegisterKeyStatement<'_> {
+    /// `[CRRG, ring_id, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`.
+    pub fn elements(&self) -> Result<[[u8; 32]; 10], HasherError> {
+        let [aud0, aud1] = pack_be(self.auditor_pubkey);
+        let [eph0, eph1] = pack_be(&tagged_x25519(self.eph_u));
+        Ok([
+            domain::field(domain::REGISTER_KEY),
+            *self.ring_id,
+            *self.member,
+            *self.nullifier_pk,
+            *self.list_tag,
+            aud0,
+            aud1,
+            eph0,
+            eph1,
+            hash_bytes(self.ciphertext)?,
+        ])
+    }
+
+    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
+        create_hash_chain_4_from_slice(&self.elements()?)
     }
 }
 

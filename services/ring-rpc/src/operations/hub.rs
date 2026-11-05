@@ -43,9 +43,7 @@ use crate::{
     merge_settings::MergeSettingsBook,
     origins::Origins,
     record_update::RecordUpdateRefusal,
-    record_writer::{
-        CredentialWrites, RecordWriter, SaltedOwner, WriterParts, RECORD_FLUSH_INTERVAL,
-    },
+    record_writer::{PrivateWrites, RecordWriter, SaltedOwner, WriterParts, RECORD_FLUSH_INTERVAL},
     relay::{Relay, RelayError, RelayParts, ServedRings, RELAY_TRACK_INTERVAL},
     relay_reservations::RelayBudget,
     relay_services::{MergeParts, RelayServices},
@@ -287,6 +285,15 @@ impl<S: TransactionSource + 'static> ServedRings for HubRings<S> {
             true => Ok(()),
             false => Err(RelayError::RingNotServed.into()),
         }
+    }
+
+    async fn tracking_registry(&self, ring: Address) -> Result<Address, RingRpcError> {
+        self.0
+            .source
+            .tracking_root(ring)
+            .await?
+            .map(|root| root.registry)
+            .ok_or_else(|| RelayError::RingNotServed.into())
     }
 
     async fn delegate(&self, ring: Address) -> Result<Option<Address>, RingRpcError> {
@@ -605,14 +612,14 @@ impl<S: TransactionSource> Hub<S> {
     }
 }
 
-/// Resolves salted owners from the credentials the auditor key opens, proves through the ring SDK.
-struct HeldCredentialWrites<S, R, I> {
+/// Resolves salted owners from the enrollments the auditor key opens, proves through the ring SDK.
+struct HeldPrivateWrites<S, R, I> {
     shared: Arc<Shared<S>>,
     client: RingClient<R, I>,
 }
 
 #[async_trait]
-impl<S, R, I> CredentialWrites for HeldCredentialWrites<S, R, I>
+impl<S, R, I> PrivateWrites for HeldPrivateWrites<S, R, I>
 where
     S: TransactionSource + 'static,
     R: AsyncRpc + Send + Sync + 'static,
@@ -636,16 +643,13 @@ where
 
 impl<S: TransactionSource + 'static> Hub<S> {
     /// A record writer without it refuses every salted owner write.
-    pub fn serve_credential_writes<R, I>(
-        &self,
-        client: RingClient<R, I>,
-    ) -> Result<(), RingRpcError>
+    pub fn serve_private_writes<R, I>(&self, client: RingClient<R, I>) -> Result<(), RingRpcError>
     where
         R: AsyncRpc + Send + Sync + 'static,
         I: RingIndexerBackend + Send + Sync + 'static,
     {
         self.record_writer()?
-            .serve_credential_writes(Arc::new(HeldCredentialWrites {
+            .serve_private_writes(Arc::new(HeldPrivateWrites {
                 shared: self.shared.clone(),
                 client,
             }))

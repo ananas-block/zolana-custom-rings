@@ -74,7 +74,7 @@ impl Assembled {
             delegate: parts.rail.is_delegate(),
             sender: self.sender,
             party_identities: self.party_identities.to_vec(),
-            credentials: frame.policy.credential_params()?,
+            tracking: frame.policy.tracking_params()?,
             policy: frame.policy.params(&PolicyProving {
                 ring_id: frame.ring_id,
                 public_assets: &frame.public_assets,

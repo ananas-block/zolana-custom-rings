@@ -83,13 +83,13 @@ impl Case {
         }
     }
 
-    /// One credential opening past the narrow row, a salted read the wallet cannot make.
+    /// One tracking record past the narrow row, a salted read the wallet cannot make.
     fn read_pools(&self) -> RecordPools {
         let narrow = RingCircuit::transfer(self.subjects())
             .and_then(RingCircuit::record_pools)
             .expect("a narrow row");
         RecordPools {
-            credentials: narrow.credentials + 1,
+            tracking: narrow.tracking + 1,
             ..RecordPools::default()
         }
     }
@@ -182,7 +182,7 @@ fn a_read_keeps_a_seal_of_one_stream_and_refuses_another() {
             "spendsDefaultRing": case.spends_default_ring,
             "hasData": case.has_data,
             "approval": case.approval,
-            "readPools": { "own": pools.own, "curator": pools.curator, "credentials": pools.credentials },
+            "readPools": { "own": pools.own, "curator": pools.curator, "tracking": pools.tracking },
             "sealed": circuit_json(unread.key.circuit),
             "read": circuit_json(read.key.circuit),
             "outcome": outcome,

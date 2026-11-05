@@ -55,8 +55,6 @@ pub enum ConfirmedEventKind {
     Deposit,
     Transfer,
     Merge,
-    /// The ring's `Enroll` creates a public credential, no auditor message belongs to it.
-    Enrollment,
 }
 
 /// Canonical event contents from a trusted confirmed transaction provider.
@@ -269,9 +267,6 @@ pub fn ring_event_origin_in(
         tag::MERGE_TRANSACT | tag::RING_MERGE_TRANSACT | tag::RING_MERGE_V2 => {
             ConfirmedEventKind::Merge
         }
-        tag::TRANSACT if confirmed_enrollment(groups, source, ring) => {
-            ConfirmedEventKind::Enrollment
-        }
         _ => ConfirmedEventKind::Transfer,
     };
     let event = reconstruct_general_event(source, &emitted.data)
@@ -393,17 +388,6 @@ fn confirmed_merge_disclosure(
     (forwarded == source.data).then_some(ConfirmedMergeDisclosure {
         eph_pk: *request.eph_pk,
         ciphertext: *request.ciphertext,
-    })
-}
-
-/// Only the ring program's `Enroll` signs a plain transact for its credential PDA.
-fn confirmed_enrollment(
-    groups: &[InstructionGroup],
-    source: &ParsedInstruction,
-    ring: Address,
-) -> bool {
-    direct_caller(groups, source).is_some_and(|caller| {
-        caller.program_id == ring && caller.data.first() == Some(&ring_tag::ENROLL)
     })
 }
 

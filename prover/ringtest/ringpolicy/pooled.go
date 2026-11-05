@@ -30,7 +30,7 @@ func (b Witness) OwnRecord(entry policy.PoolEntry) *circuitregistry.Record {
 }
 
 // FillPools opens each live subject and record once and fills the pools cyclically to capacity.
-func FillPools(t testing.TB, policyWitness *policy.Policy, outputs, inputs []shared.UtxoWires, senders []frontend.Variable, ownTree, curatorTree *ringregistry.Registry, credentials *ringregistry.Credentials) {
+func FillPools(t testing.TB, policyWitness *policy.Policy, outputs, inputs []shared.UtxoWires, senders []frontend.Variable, ownTree, curatorTree *ringregistry.Registry, tracking *ringregistry.Tracking) {
 	t.Helper()
 	own, curator := newCollector(ownTree), newCollector(curatorTree)
 	foreign, saltedOwn, saltedCurated := false, false, false
@@ -46,9 +46,9 @@ func FillPools(t testing.TB, policyWitness *policy.Policy, outputs, inputs []sha
 		return policy.PoolEntry{Own: own.add(member, active), Curator: [1]frontend.Variable{curator.add(member, active && foreign)}}
 	}
 	owner := func(member frontend.Variable, active bool) policy.OwnerEntry {
-		ownerEntry := policy.OwnerEntry{PoolEntry: entry(member, active), Credential: 0, ListSalt: 0, OwnSalted: 0, CuratorSalted: [1]frontend.Variable{0}}
+		ownerEntry := policy.OwnerEntry{PoolEntry: entry(member, active), Tracking: 0, ListSalt: 0, OwnSalted: 0, CuratorSalted: [1]frontend.Variable{0}}
 		identity := ringtest.AsBigInt(member)
-		if !active || !(saltedOwn || saltedCurated) || ringtest.AsBigInt(credentials.Opening(t, identity).Present).Sign() == 0 {
+		if !active || !(saltedOwn || saltedCurated) || !tracking.Opening(identity).Present {
 			return ownerEntry
 		}
 		salt := ListSaltOf(t, identity)

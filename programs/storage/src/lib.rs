@@ -1,24 +1,34 @@
-//! Stores authenticated policy roots and owner grants for ring readers.
+//! Keeps the roots a ring proof opens records under, and verifies the apply proof behind every root it accepts.
 //!
-//! A ring reads policy records under roots loaded from its pinned storage registries.
-//! The authority signature permits a root transition, and the apply proof binds its ordered writes.
-//! Owner grants authorize readers in the namespace of the named ring program.
+//! SPP proves a spend against its own trees and knows no list, mint setting or enrolled key. A ring
+//! proof opens those from the two trees kept here, and the ring program hands it the root it read
+//! from the account. A policy registry holds an authority's lists and mint settings. A tracking
+//! registry holds one ring's enrolled owners, and anyone may apply its pending enrollments. The two
+//! stay apart because a stale apply proof fails on revision, and one shared tree would let
+//! enrollment traffic delay a restrictive write.
 //!
-//! Read after `program-libs/interface/src/accounts/storage.rs` and
-//! `program-libs/interface/src/accounts/owner_grant.rs`.
-//! Read before `programs/storage/src/instructions/update.rs` and
-//! `programs/storage/src/instructions/owner_grant.rs`.
+//! Read after `docs/design/records-and-roots.md`, `program-libs/interface/src/accounts/storage.rs`,
+//! `program-libs/interface/src/accounts/tracking.rs`. Read before
+//! `programs/storage/src/loader.rs`, `programs/storage/src/instructions/update.rs`,
+//! `programs/storage/src/instructions/enroll.rs`, `programs/storage/src/instructions/apply_enrollments.rs`.
 //!
-//! 1. A root transition starts from the registry's current root and revision.
-//! 2. The apply proof binds the new root to the ordered writes the program hashes.
-//! 3. Each owner grant binds the ring program, owner and complete reader key at its canonical PDA.
+//! Guarantees:
+//! 1. A root enters a registry only with an apply proof over the registry's current root, next index and revision, and the program chains the writes that proof covers.
+//! 2. A policy root moves under the registry authority's signature alone. A tracking root moves with no signature, over entries the program computes from authorization accounts.
+//! 3. A revision names at most one root at a slot, `StorageRegistry::root` and `TrackingRegistry::root` share one rule.
+//!
+//! Relies on:
+//! 1. The consumer pins a registry by address and reads its root itself. Nothing here knows the ring reading a registry, and transfer authorization remains the consumer's responsibility.
+//! 2. The apply circuits in `prover/circuits/registry` keep each tree sorted and move only what the chained writes name.
 
 use bytemuck::Pod;
 use custom_ring_interface::{storage::StorageError, storage_instruction::tag};
 use pinocchio::{AccountView, Address, ProgramResult};
 
 use instructions::{
-    process_initialize_ix, process_owner_grant_ix, process_update_authority_ix, process_update_ix,
+    process_apply_enrollments_ix, process_enroll_ix, process_initialize_ix,
+    process_initialize_tracking_ix, process_owner_grant_ix, process_update_authority_ix,
+    process_update_ix,
 };
 
 #[cfg(all(feature = "bpf-entrypoint", not(feature = "no-entrypoint")))]
@@ -41,7 +51,10 @@ pub fn process_instruction(
         tag::INITIALIZE => process_initialize_ix(program_id, accounts, data),
         tag::UPDATE => process_update_ix(program_id, accounts, data),
         tag::UPDATE_AUTHORITY => process_update_authority_ix(program_id, accounts, data),
+        tag::ENROLL => process_enroll_ix(program_id, accounts, data),
+        tag::APPLY_ENROLLMENTS => process_apply_enrollments_ix(program_id, accounts, data),
         tag::OWNER_GRANT => process_owner_grant_ix(program_id, accounts, data),
+        tag::INITIALIZE_TRACKING => process_initialize_tracking_ix(program_id, accounts, data),
         _ => Err(StorageError::InvalidInstructionData.into()),
     }
 }

@@ -2,8 +2,9 @@ use std::{future::Future, num::NonZeroU32, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    storage::StorageRegistry, CoSignScope, OwnerGrant, ReaderKeyBytes, RingAccount, RingMode,
-    RingPolicy, RingRoles,
+    storage::StorageRegistry,
+    tracking::{TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY},
+    CoSignScope, OwnerGrant, ReaderKeyBytes, RingAccount, RingMode, RingPolicy, RingRoles,
 };
 use custom_ring_sdk::{CustomRing, RingError};
 use solana_account::Account;
@@ -15,9 +16,6 @@ use solana_rpc_client::{
     rpc_client::GetConfirmedSignaturesForAddress2Config,
 };
 use solana_signature::Signature;
-use solana_transaction_status_client_types::{
-    option_serializer::OptionSerializer, EncodedTransaction, UiMessage,
-};
 use spr_api::ZolanaApi;
 use spr_client::{
     rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
@@ -34,7 +32,7 @@ use spr_transaction::{AssetRegistry, Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
     history::HistoryPosition, program_data, ring_deposits_in, AsyncRingIndexer, AuditError,
     ConfirmedEventKind, MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError,
-    RingOrigin, StorageTip, TransactionOrigin, ORIGIN_TRANSACTION_CONFIG,
+    RingOrigin, StorageTip, TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
@@ -42,7 +40,10 @@ use zolana_ring_indexer::rpc::{
 };
 use zolana_ring_transaction::RingAssets;
 
-use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
+use zolana_ring_client::rpc::{
+    DepositRecord, RingChainStatus, RingDepositsResponse, WalletEnrollment,
+};
+use zolana_ring_indexer::tracking::{GetTrackingRecordsRequest, GetTrackingRecordsResponse};
 
 use crate::{
     audit::Page,
@@ -148,12 +149,29 @@ pub trait TransactionSource: Send + Sync {
         async { Ok(None) }
     }
 
-    /// Every account key of a finalized transaction.
-    fn transaction_accounts(
+    /// The newest root of the ring's pinned tracking registry, `None` reads no owner's secret.
+    fn tracking_root(
         &self,
-        _signature: Signature,
-    ) -> impl Future<Output = Result<Vec<Address>, ClientError>> + Send {
-        async { Ok(Vec::new()) }
+        _ring: Address,
+    ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// Unverified, `TrackingScan` checks every page against the registry root.
+    fn tracking_records(
+        &self,
+        _request: GetTrackingRecordsRequest,
+    ) -> impl Future<Output = Result<GetTrackingRecordsResponse, RingIndexerError>> + Send {
+        async { Err(ClientError::Rpc("no tracking records".to_owned()).into()) }
+    }
+
+    /// The owner's own authorization under the ring's pinned registry, read from the account.
+    fn tracking_enrollment(
+        &self,
+        _ring: Address,
+        _owner: Address,
+    ) -> impl Future<Output = Result<WalletEnrollment, ClientError>> + Send {
+        async { Ok(WalletEnrollment::NotEnrolled) }
     }
 
     /// Whether the owner's own `OwnerGrant` account names `reader`, a PDA grants through CPI.
@@ -205,6 +223,30 @@ impl<S: OpeningFetch + ?Sized> VerifiedOpenings for S {
         let response = self.fetch_openings(tip.openings_request(members)).await?;
         tip.verify_openings(&response, members)
             .map_err(|_| RingRpcError::InvalidIndexerResponse)
+    }
+}
+
+/// The newest root of a pinned tracking registry and the leaf count under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrackingRoot {
+    pub registry: Address,
+    pub root: [u8; 32],
+    pub revision: u64,
+    pub next_index: u64,
+}
+
+/// A pending revision grants nothing, a first enrollment past capacity never applies.
+fn enrollment_of(
+    authorization: Option<&TrackingAuthorization>,
+    tree_full: bool,
+) -> WalletEnrollment {
+    match authorization {
+        None => WalletEnrollment::NotEnrolled,
+        Some(held) if !held.is_pending() => WalletEnrollment::Applied,
+        Some(held) if held.applied_revision() == 0 && tree_full => {
+            WalletEnrollment::PendingPastCapacity
+        }
+        Some(_) => WalletEnrollment::Pending,
     }
 }
 
@@ -637,45 +679,61 @@ impl TransactionSource for ChainSource {
     }
 
     /// A v1 message carries every key, a loaded address list is refused.
-    async fn transaction_accounts(
-        &self,
-        signature: Signature,
-    ) -> Result<Vec<Address>, ClientError> {
-        let mut config = ORIGIN_TRANSACTION_CONFIG;
-        config.commitment = Some(CommitmentConfig::finalized());
-        let transaction = self
-            .rpc
-            .client()
-            .get_transaction_with_config(&signature, config)
-            .await
-            .map_err(|error| ClientError::Rpc(error.to_string()))?
-            .transaction;
-        let EncodedTransaction::Json(encoded) = transaction.transaction else {
-            return Err(ClientError::Rpc(
-                "transaction is not JSON encoded".to_owned(),
-            ));
+    async fn tracking_root(&self, ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+        let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+        let Some(account) = self.owned_account(address, ring).await? else {
+            return Ok(None);
         };
-        let UiMessage::Raw(message) = encoded.message else {
-            return Err(ClientError::Rpc(
-                "transaction message is not raw".to_owned(),
-            ));
-        };
-        let loaded = transaction.meta.map(|meta| meta.loaded_addresses);
-        if matches!(loaded, Some(OptionSerializer::Some(loaded)) if !loaded.writable.is_empty() || !loaded.readonly.is_empty())
-        {
-            return Err(ClientError::Rpc(
-                "a v1 transaction names loaded addresses".to_owned(),
-            ));
+        let tracking = CanonicalAccount {
+            account: &account,
+            ring,
+            bump,
         }
-        message
-            .account_keys
-            .iter()
-            .map(|key| {
-                key.parse().map_err(|_| {
-                    ClientError::Rpc("transaction account key is malformed".to_owned())
-                })
-            })
-            .collect()
+        .decode::<RingPolicy>()
+        .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?
+        .tracking;
+        // The pin names the registry, an account it does not decode to serves no root.
+        Ok(self
+            .rpc
+            .get_account(tracking)
+            .await?
+            .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data))
+            .map(|registry| {
+                let newest = registry.newest();
+                TrackingRoot {
+                    registry: tracking,
+                    root: newest.hash,
+                    revision: newest.revision.value(),
+                    next_index: registry.next_index(),
+                }
+            }))
+    }
+
+    async fn tracking_records(
+        &self,
+        request: GetTrackingRecordsRequest,
+    ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
+        self.indexer.get_tracking_records(request).await
+    }
+
+    async fn tracking_enrollment(
+        &self,
+        ring: Address,
+        owner: Address,
+    ) -> Result<WalletEnrollment, ClientError> {
+        let Some(root) = self.tracking_root(ring).await? else {
+            return Ok(WalletEnrollment::NotEnrolled);
+        };
+        let (address, _) = TrackingAuthorization::find_address(&root.registry, &owner);
+        let authorization = self
+            .rpc
+            .get_account(address)
+            .await?
+            .and_then(|account| TrackingAuthorization::decode(&account.owner, &account.data));
+        Ok(enrollment_of(
+            authorization.as_ref(),
+            root.next_index >= TRACKING_CAPACITY,
+        ))
     }
 
     async fn owner_grant_held(
@@ -684,7 +742,10 @@ impl TransactionSource for ChainSource {
         owner: Address,
         reader: ReaderKeyBytes,
     ) -> Result<bool, ClientError> {
-        let (address, _) = OwnerGrant::find_address(&ring, &owner, &reader);
+        let Some(root) = self.tracking_root(ring).await? else {
+            return Ok(false);
+        };
+        let (address, _) = OwnerGrant::find_address(&root.registry, &owner, &reader);
         Ok(self
             .rpc
             .get_account(address)

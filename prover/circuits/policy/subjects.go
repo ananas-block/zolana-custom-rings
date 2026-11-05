@@ -6,14 +6,14 @@
 // It also resolves the private lists. A public record names its member on chain, a private list holds an
 // owner under a salted key the chain cannot tie to the owner.
 //
-// Read after policy/table.go, policy/record_pool.go, policy/credentials.go. Read before policy/rules.go,
+// Read after policy/table.go, policy/record_pool.go, policy/tracking.go. Read before policy/rules.go,
 // policy/outflow.go.
 //
 // Properties:
 // 1. The gates follow from statement values alone, no prover bit clears a section. Screened is a nonzero policy_hash off the authority rail. On a transfer Outflow is a nonzero own root, on a deposit it stays clear.
 // 2. Each read goes through a pool under the bound root of its source, own or curator per list, present or proven absent.
-// 3. An enrolled owner reads each private list at the one key its permanent credential fixes.
-// 4. An owner with address absence under a floor-checked root reads off every applicable private list.
+// 3. An enrolled owner reads each private list at the one key its tracking row fixes.
+// 4. An owner proven absent under the tracking root reads off every private list.
 // 5. A padded row, a dummy, an unused payment and an unused public slot close their gates and read zeros.
 // 6. A live input's asset reads its lists under Screened alone and decodes no mint policy.
 // 7. A mint policy reads from the own record alone, an asset with no record reads no limit.
@@ -87,20 +87,18 @@ func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, spe
 		foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curatedRead), member: member, index: entry.Curator[0]})
 		return subjectView{onList: table.sources.lists(api, record.onList, [NSources]frontend.Variable(foreign))}, record
 	}
-	// 2. A salted read authenticates the owner's credential result independently of the note's key.
-	// A present credential fixes ListTag, and therefore the salt in ListKey(owner, salt).
-	// An absent credential reads off every private list, an allow list refuses it and a block list admits it.
+	// 2. An owner also reads its salted key, the tracking row forces the salt once the owner has enrolled.
 	//
-	// Private owner writes prove credential state inclusion and address inclusion before raising the source's absence floor.
-	// The program accepts only address roots at or above every salted source's floor and retires policy roots on restrictive writes.
-	// A credential can enter state before its address enters the address tree, but no private entry can target it during that interval.
-	// Address absence therefore proves the salted result required here, not that no credential exists in the queue.
+	// A private list holds an owner at ListKey(owner, salt). A free salt would pick an empty key, and a blocked owner would prove itself off its list. The row's ListTag commits to the one salt enrollment fixed, registry/register_key.go seals that salt to the auditor, a list writer needs it to name the key, and a rotation keeps the tag.
+	//
+	// The tracking floor closes the skip for an owner a private write names. An owner absent under the tracking root has no salt to read under, so it reads off every private list, an allow list refuses it and a block list admits it. An old root could prove a blocked owner unenrolled, and no constraint here can see the root's age.
+	// A private write proves the owner's row under the tracking root it names, registry/apply_records.go, and the program raises the source's floor to that root's revision. The program refuses a tracking root below a salted source's floor in LiveRoots::tracking, program-libs/interface/src/accounts/state.rs, and refuses a salted source pinned to another tracking registry in RingPolicy::check_source_pair. Every root at or above the floor holds the row, a row stays under every later root.
 	anySalted := api.Or(table.sources.saltedOwn, table.sources.saltedCurated)
 	ownerCurated := api.Mul(curated, table.sources.publicForeign)
 	resolveOwner := func(entry OwnerEntry, active, member frontend.Variable) subjectView {
 		view, _ := resolve(entry.PoolEntry, active, ownerCurated, member)
-		// Address absence permits the private-list skip, a present credential forces its fixed salt and key.
-		row := spend.Credentials.Row(api, api.Mul(active, anySalted), member, entry.Credential)
+		// A proven absent tracking row is the one skip, a present row forces its salt and so its key.
+		row := spend.Tracking.Row(api, api.Mul(active, anySalted), member, entry.Tracking)
 		enrolled := ringgadget.IsNonZero(api, row.NullifierPk)
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: enrolled, A: shared.ListTag(api, entry.ListSalt), B: row.ListTag})
 		key := shared.ListKey(api, member, entry.ListSalt)

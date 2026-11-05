@@ -9,16 +9,16 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use custom_ring_interface::InputClass;
+use custom_ring_interface::{tracking::TrackingAuthorization, InputClass};
 use solana_address::Address;
 use spr_client::{AsyncRpc, ClientError};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
-    KeypairError, NullifierKey, ShieldedAddress, X25519Keypair, SHIELDED_ADDRESS_LEN,
+    KeypairError, NullifierKey, ShieldedAddress, X25519Keypair, X25519Pubkey, SHIELDED_ADDRESS_LEN,
 };
 use spr_transaction::{TransactionError, WalletUtxo};
 use thiserror::Error;
-use zolana_ring_client::{CredentialError, CredentialLookup, CredentialResolver};
+use zolana_ring_client::{AuditError, SealedNullifierKey};
 
 use crate::pipeline::same_owner;
 
@@ -28,6 +28,8 @@ pub enum DelegateSourceError {
     Unenrolled,
     #[error("the enrolled key derives another nullifier key than the source address names")]
     KeyMismatch,
+    #[error("the enrollment seal opens to another key than its record holds")]
+    SealMismatch,
     #[error("note {index} belongs to another owner or key than the source")]
     ForeignNote { index: usize },
     #[error("note {index} does not rebuild the hash or nullifier it carries")]
@@ -43,7 +45,7 @@ pub enum DelegateSourceError {
     #[error(transparent)]
     Client(#[from] ClientError),
     #[error(transparent)]
-    Credential(#[from] CredentialError),
+    Seal(#[from] AuditError),
 }
 
 /// The single enrollment read every nonzero source resolves through.
@@ -58,16 +60,15 @@ pub trait SourceEnrollment: Sync {
     ) -> Result<Option<NullifierKey>, Self::Error>;
 }
 
-/// The auditor opens the sealed key of the source's credential, only a present credential holds one.
-pub struct CredentialEnrollment<'a, P, R> {
-    pub photon: &'a P,
+/// The auditor opens the seal on the source's tracking authorization, only an enrolled owner holds one.
+pub struct TrackingEnrollment<'a, R> {
     pub rpc: &'a R,
-    pub ring: Address,
+    pub tracking_registry: Address,
     pub auditor: &'a X25519Keypair,
 }
 
 #[async_trait]
-impl<P: AsyncRpc, R: AsyncRpc> SourceEnrollment for CredentialEnrollment<'_, P, R> {
+impl<R: AsyncRpc> SourceEnrollment for TrackingEnrollment<'_, R> {
     type Error = DelegateSourceError;
 
     async fn escrowed_key(
@@ -75,15 +76,26 @@ impl<P: AsyncRpc, R: AsyncRpc> SourceEnrollment for CredentialEnrollment<'_, P, 
         source: &ShieldedAddress,
     ) -> Result<Option<NullifierKey>, DelegateSourceError> {
         let owner = source.solana_address()?;
-        match CredentialResolver::new(self.ring, owner)
-            .resolve(self.photon, self.rpc)
+        let (authorization, _) =
+            TrackingAuthorization::find_address(&self.tracking_registry, &owner);
+        let Some(enrolled) = self
+            .rpc
+            .get_account(authorization)
             .await?
-        {
-            CredentialLookup::Present(present) => Ok(Some(present.nullifier_key(self.auditor)?)),
-            CredentialLookup::Absent(_) => Ok(None),
-            // A queued or partly served enrollment is no evidence of a missing one.
-            CredentialLookup::Unknown(unknown) => Err(CredentialError::Unknown(unknown).into()),
+            .and_then(|account| TrackingAuthorization::decode(&account.owner, &account.data))
+        else {
+            return Ok(None);
+        };
+        let key = SealedNullifierKey {
+            eph_pk: X25519Pubkey::from_u(enrolled.eph_u)?,
+            ciphertext: enrolled.ciphertext,
         }
+        .open(self.auditor)?;
+        // The seal's pad alone does not bind the opened key to the storage program's record.
+        if key.pubkey()? != enrolled.nullifier_pk {
+            return Err(DelegateSourceError::SealMismatch);
+        }
+        Ok(Some(key))
     }
 }
 

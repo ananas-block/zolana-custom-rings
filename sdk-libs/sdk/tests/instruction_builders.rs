@@ -2,10 +2,10 @@
 
 use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
 use custom_ring_interface::{
-    CredentialRead, CustomRingMergeIxData, CustomRingMergeIxDataRef, InitializeIxData,
+    tracking::TrackingRegistry, CustomRingMergeIxData, CustomRingMergeIxDataRef, InitializeIxData,
     PolicyBindingIxData, PolicySourceIxData, RingPolicy, RingRole, RingRoles, SealedMergeRecord,
     SetCoSignerRecordIxData, SetPausedIxData, SourceSlot, SourceSpec, UpdateAuthorityIxData,
-    UpdatePolicyIxData, OPENING_RECORD_LEN, RING_MERGE_OWNER_INDEX,
+    UpdatePolicyIxData, OPENING_RECORD_LEN, RING_MERGE_OWNER_INDEX, STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::{
     tag, ClearCoSigner, CoSignScope, CustomRing, CustomRingMergeInstruction, InitialPolicy,
@@ -123,6 +123,8 @@ fn parse<'a, T: SchemaRead<'a, DefaultConfig, Dst = T>>(body: &'a [u8]) -> T {
 #[test]
 fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with_a_policy() {
     let auditor_pubkey = X25519Keypair::from_bytes(&[5; 32]).pubkey();
+    let tracking_registry =
+        TrackingRegistry::find_address(&ring_auth(), &ring().ring_id().unwrap()).0;
     let accounts = vec![
         AccountMeta::new(payer(), true),
         AccountMeta::new_readonly(authority(), true),
@@ -133,6 +135,8 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with
         AccountMeta::new_readonly(pda::protocol_config(), false),
         AccountMeta::new(ring_auth(), false),
         AccountMeta::new_readonly(pda::shielded_pool_program_id(), false),
+        AccountMeta::new(tracking_registry, false),
+        AccountMeta::new_readonly(STORAGE_PROGRAM_ID, false),
     ];
     let initialize = |kind, policy| {
         Initialize {
@@ -501,7 +505,7 @@ fn a_rule_over_a_list_members_write_is_refused_before_the_transaction() {
 }
 
 #[test]
-fn a_keyed_merge_names_its_credential_tree_ahead_of_spp() {
+fn a_keyed_merge_names_its_tracking_registry_ahead_of_spp() {
     let (input_tree, output_tree) = (pda::tree(1), pda::tree(2));
     let merge = MergeTransactIxData {
         expiry_unix_ts: u64::MAX,
@@ -533,10 +537,10 @@ fn a_keyed_merge_names_its_credential_tree_ahead_of_spp() {
         input_tree,
         output_tree,
         payer: payer(),
-        credential_tree: Some(credential_tree()),
+        tracking_registry: tracking(),
         owner: None,
         data: CustomRingMergeIxData {
-            credential_read: CredentialRead::new_state(4),
+            tracking_revision: Default::default(),
             output_ring_data_hash: [0; 32],
             authority: MergeRingAuthority::Ring,
             sealed: zero_record(),
@@ -550,7 +554,7 @@ fn a_keyed_merge_names_its_credential_tree_ahead_of_spp() {
         [
             vec![
                 AccountMeta::new_readonly(ring().policy_pda(), false),
-                AccountMeta::new_readonly(credential_tree(), false),
+                AccountMeta::new_readonly(tracking(), false),
             ],
             spp.accounts
         ]
@@ -563,7 +567,7 @@ fn a_zero_key_merge_puts_its_signing_owner_on_spp_and_reads_the_authority_back()
     let (input_tree, output_tree) = (pda::tree(1), pda::tree(2));
     let owner = Address::new_from_array([50; 32]);
     let data = CustomRingMergeIxData {
-        credential_read: CredentialRead::empty(),
+        tracking_revision: 3.into(),
         output_ring_data_hash: [9; 32],
         authority: MergeRingAuthority::OwnerSigned,
         sealed: zero_record(),
@@ -598,20 +602,23 @@ fn a_zero_key_merge_puts_its_signing_owner_on_spp_and_reads_the_authority_back()
         input_tree,
         output_tree,
         payer: payer(),
-        credential_tree: None,
+        tracking_registry: tracking(),
         owner: Some(owner),
         data: data.clone(),
     }
     .instruction()
     .unwrap();
-    let prefix = vec![AccountMeta::new_readonly(ring().policy_pda(), false)];
+    let prefix = vec![
+        AccountMeta::new_readonly(ring().policy_pda(), false),
+        AccountMeta::new_readonly(tracking(), false),
+    ];
     assert_eq!(
         instruction.accounts,
         [prefix, spp.accounts.clone()].concat()
     );
-    assert!(instruction.accounts[1 + RING_MERGE_OWNER_INDEX].is_signer);
+    assert!(instruction.accounts[2 + RING_MERGE_OWNER_INDEX].is_signer);
     assert_eq!(
-        instruction.accounts[1 + RING_MERGE_OWNER_INDEX].pubkey,
+        instruction.accounts[2 + RING_MERGE_OWNER_INDEX].pubkey,
         owner
     );
     let (ix_tag, body) = split(&instruction);
@@ -619,20 +626,16 @@ fn a_zero_key_merge_puts_its_signing_owner_on_spp_and_reads_the_authority_back()
     let parsed = CustomRingMergeIxDataRef::from_bytes(body).unwrap();
     assert_eq!(
         (
-            parsed.credential_read,
+            parsed.tracking_revision.value(),
             *parsed.output_ring_data_hash,
             parsed.authority,
         ),
-        (
-            CredentialRead::empty(),
-            [9; 32],
-            MergeRingAuthority::OwnerSigned
-        )
+        (3, [9; 32], MergeRingAuthority::OwnerSigned)
     );
 }
 
-fn credential_tree() -> Address {
-    pda::tree(3)
+fn tracking() -> Address {
+    Address::new_from_array([0x5b; 32])
 }
 
 fn zero_record() -> SealedMergeRecord {

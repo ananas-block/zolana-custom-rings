@@ -57,12 +57,17 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
     );
 }
 
-/// A keyed note needs its owner's credential under the same key.
+/// A keyed note needs its owner's row, a zero key needs no row.
 #[tokio::test]
-async fn a_deposit_takes_the_owners_credential_key_before_any_proof() {
+async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
+    use spr_interface::ZERO_NULLIFIER_PUBKEY;
     let (stranger, payer) = (keypair(2), keypair(9));
     let keyed = stranger.shielded_address().unwrap();
-    let unenrolled = Chain::ring(RingSettings::new(RingMode::Confidential)).with_credentials(&[]);
+    let zero = spr_keypair::ShieldedAddress {
+        nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+        ..keyed
+    };
+    let unenrolled = Chain::ring(RingSettings::new(RingMode::Confidential)).with_tracking(&[]);
     let refused = deposit(&payer, DepositRecipient::Confidential(keyed))
         .prepare(&unenrolled)
         .await
@@ -71,39 +76,37 @@ async fn a_deposit_takes_the_owners_credential_key_before_any_proof() {
         refused.prove_bound(&unenrolled.client()).await,
         Err(RingError::RecipientNotEnrolled { slot_index: 0 })
     ));
-    let other_key = custom_ring_interface::AuditCredential {
-        nullifier_pk: keypair(3).shielded_address().unwrap().nullifier_pubkey,
-        ..crate::tests::support::credential_of(&keyed, [0x06; 32])
-    };
-    let rekeyed =
-        Chain::ring(RingSettings::new(RingMode::Confidential)).with_enrolled(&[other_key]);
-    let mismatched = deposit(&payer, DepositRecipient::Confidential(keyed))
-        .prepare(&rekeyed)
+    let enrolled = Chain::ring(RingSettings::new(RingMode::Confidential));
+    let at_zero = deposit(&payer, DepositRecipient::Confidential(zero))
+        .prepare(&enrolled)
         .await
         .unwrap();
     assert!(matches!(
-        mismatched.prove_bound(&rekeyed.client()).await,
-        Err(RingError::RecipientKeyMismatch { slot_index: 0 })
+        at_zero.prove_bound(&enrolled.client()).await,
+        Err(RingError::EnrolledRecipientAtZeroKey { slot_index: 0 })
     ));
 }
 
-/// A note sealed to a viewing key the recipient's user record no longer names stays unread.
+/// A note sealed to a viewing key the recipient's row no longer names stays unread.
 #[tokio::test]
-async fn a_deposit_refuses_a_viewing_key_its_recipients_record_replaced() {
+async fn a_deposit_refuses_a_viewing_key_its_recipients_row_replaced() {
     let (member, payer) = (keypair(2), keypair(9));
     let enrolled = member.shielded_address().unwrap();
     let rotated = spr_keypair::ShieldedAddress {
         viewing_pubkey: keypair(3).shielded_address().unwrap().viewing_pubkey,
         ..enrolled
     };
-    let chain = Chain::ring(RingSettings::new(RingMode::Confidential)).with_user_record(&enrolled);
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential)).with_tracking(&[enrolled]);
     let stale = deposit(&payer, DepositRecipient::Confidential(rotated))
         .prepare(&chain)
         .await
         .unwrap();
     assert!(matches!(
         stale.prove_bound(&chain.clone().client()).await,
-        Err(RingError::RecipientViewingKeyStale { slot_index: 0 })
+        Err(RingError::RecipientViewingKeyStale {
+            slot_index: 0,
+            row_revision: 1
+        })
     ));
 }
 
@@ -510,17 +513,17 @@ mod relay_message {
             .await?
             .instruction(
                 CustomRingProof::zeroed(),
-                &crate::deposit::DepositFrame {
+                crate::deposit::DepositFrame {
                     roots: crate::deposit::DepositRoots {
+                        tracking: crate::submission::BoundRoot::tracking(
+                            &*ring().require_policy(&self.chain).await?,
+                            &self.chain,
+                        )
+                        .await?,
                         own: None,
                         curator: None,
                     },
                     key_capacity: 1,
-                    credential_read: custom_ring_interface::CredentialRead::new(0, &[0])?,
-                    credential_trees: crate::CredentialTrees::new(
-                        [crate::tests::support::CREDENTIAL_TREE_ID],
-                        1,
-                    )?,
                 },
             )?;
             let message = self.answer.message(&honest, inputs.depositor);
@@ -673,31 +676,6 @@ mod relay_message {
         hex::decode(text).unwrap().try_into().unwrap()
     }
 
-    /// Tree 0 compiles writable because SPP writes it, the credential tree has no such write.
-    #[tokio::test]
-    async fn a_ring_prefix_account_writable_outside_the_spp_list_is_refused() {
-        let relay = DepositRelay::new(Answer::Honest);
-        relayed_signature(&relay, &keypair(9)).await.unwrap();
-        let (honest, inputs) = relay.honest.lock().unwrap().take().unwrap();
-        let owner_utxo_hash = spr_transaction::owner_utxo_hash(
-            &inputs.recipient.owner_hash().unwrap(),
-            &custom_ring_interface::domain::deposit_blinding(&inputs.blinding_secret).unwrap(),
-        )
-        .unwrap();
-        let expected = DepositRequest::of(&inputs, owner_utxo_hash).expected();
-        let honest_message = Answer::Honest.message(&honest, inputs.depositor);
-        assert_eq!(verdict(expected.check(&honest_message.0)), "Accepted");
-        let credential_tree = pda::tree(crate::tests::support::CREDENTIAL_TREE_ID);
-        let mut widened = honest;
-        widened
-            .accounts
-            .iter_mut()
-            .filter(|meta| meta.pubkey == credential_tree)
-            .for_each(|meta| meta.is_writable = true);
-        let message = relay_message(&FEE_PAYER, &[widened], UNITS);
-        assert_eq!(verdict(expected.check(&message.0)), "Accounts");
-    }
-
     /// The TypeScript check reads the same file and reaches the same verdicts.
     #[tokio::test]
     async fn the_shared_deposit_messages_keep_their_verdicts() {
@@ -762,7 +740,6 @@ async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
     assert_eq!(
         keys,
         [
-            "addressRoot",
             "amounts",
             "assetEntries",
             "assets",
@@ -770,8 +747,6 @@ async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
             "blindingSecrets",
             "contextHash",
             "count",
-            "credentialOpenings",
-            "credentialOwner",
             "curatorProof",
             "curatorRecords",
             "curatorRoot",
@@ -800,7 +775,10 @@ async fn a_deposit_request_carries_the_go_fields_at_the_key_capacity() {
             "salted",
             "senderEntries",
             "sources",
-            "stateRoots",
+            "trackingProof",
+            "trackingRecords",
+            "trackingRoot",
+            "trackingSubjects",
             "withdrawalCount",
             "withdrawalHash",
             "withdrawals",
@@ -855,7 +833,7 @@ async fn an_anonymous_batch_funds_a_pda_beside_a_wallet() {
         ..holder.shielded_address().unwrap()
     };
     let chain = Chain::ring(RingSettings::new(RingMode::Anonymous))
-        .with_credentials(&[wallet, program_address]);
+        .with_tracking(&[wallet, program_address]);
     let to = |recipient| RingAddress {
         recipient,
         ring_program_id: ring().program_id(),
@@ -951,7 +929,7 @@ mod capacities {
             ..RingSettings::new(RingMode::Confidential)
         })
         .with_registry(Registry::new(&[]), &rules)
-        .with_credential_tag(&addresses, domain::list_tag(&SALT).unwrap())
+        .with_tracking_tag(&addresses, domain::list_tag(&SALT).unwrap())
         .with(
             pda::spl_asset_registry(&MINT),
             account(
@@ -991,21 +969,21 @@ mod capacities {
             assert_eq!(length(field), capacity, "{field}");
         }
         assert_eq!(length("ownRecords"), DepositSubjects::pool_width(key));
-        assert_eq!(length("credentialOpenings"), capacity);
-        assert_eq!(length("stateRoots"), capacity);
+        assert_eq!(length("trackingRecords"), capacity);
         // 2. The frame names the key and fits a transaction, each capsule at its slot under one ephemeral key.
         let frame = DepositFrame {
             roots: records.roots(),
             key_capacity: key,
-            credential_read: records.credentials.read().unwrap(),
-            credential_trees: records.credentials.trees(capacity).unwrap(),
         };
-        prepared.check_size(&frame).unwrap();
+        prepared.check_size(frame).unwrap();
         let instruction = prepared
-            .instruction(CustomRingProof::zeroed(), &frame)
+            .instruction(CustomRingProof::zeroed(), frame)
             .unwrap();
-        let mut spp = instruction.data.as_slice();
-        assert_eq!(DepositPrefix::parse(&mut spp).unwrap().key_capacity, key);
+        let (prefix, spp) = instruction.data.split_at(DepositPrefix::SIZE);
+        assert_eq!(
+            DepositPrefix::parse(&mut &prefix[..]).unwrap().key_capacity,
+            key
+        );
         let deposit = RingDepositIxDataRef::from_bytes(&spp[1..]).unwrap();
         assert_eq!(deposit.deposits.len(), count);
         let capsules: Vec<_> = deposit

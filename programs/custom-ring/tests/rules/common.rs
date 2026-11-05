@@ -3,10 +3,12 @@ use custom_ring_interface::{
     compute_unit_limit,
     storage::{Revision, Root, StorageRegistry},
     storage_instruction::InitializeIxData as StorageInitialize,
-    tag, CredentialRead, CustomRingError, InitializeIxData, InstructionTag, PolicyBindingIxData,
-    PolicyTableIxData, RingKind, RingPolicy, RingRole, RingRoles, RootRead,
-    SetCoSignerRecordIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
-    CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
+    tag,
+    tracking::TrackingRegistry,
+    CustomRingError, InitializeIxData, InstructionTag, PolicyBindingIxData, PolicyTableIxData,
+    RingKind, RingPolicy, RingRole, RingRoles, RootRead, SetCoSignerRecordIxData, SourceSpec,
+    UpdateAuthorityIxData, UpdatePolicyIxData, CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED,
+    STORAGE_PROGRAM_ID,
 };
 use litesvm::{
     types::{FailedTransactionMetadata, TransactionMetadata},
@@ -26,7 +28,6 @@ use spr_interface::{
     state::{discriminator::PROTOCOL_CONFIG, ProtocolConfig},
     BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
 };
-use spr_tree::{NullifierTreeInitParams, TreeAccount, TreeFeeSchedule, UTXO_TREE_HEIGHT};
 use zolana_ring_policy::{ring_id_field, ListId, Member, OutflowLimit, Rule, RuleTable, Subject};
 
 /// Any address serves as the ring program.
@@ -52,34 +53,9 @@ pub fn ring_auth() -> Address {
     pda(RING_AUTH_PDA_SEED)
 }
 
-pub fn address_tree() -> Address {
-    spr_interface::pda::tree(spr_program::ADDRESS_TREE_ID)
-}
-
-pub fn credential_tree() -> Address {
-    spr_interface::pda::tree(1)
-}
-
-pub fn credential_accounts() -> Vec<AccountMeta> {
-    [address_tree(), credential_tree()]
-        .into_iter()
-        .map(|address| AccountMeta::new_readonly(address, false))
-        .collect()
-}
-
-pub fn credential_tree_data(tree_id: u16) -> Vec<u8> {
-    let mut data = vec![0; TreeAccount::account_size()];
-    TreeAccount::init(
-        &mut data,
-        spr_interface::state::discriminator::TREE_ACCOUNT_DISCRIMINATOR,
-        UTXO_TREE_HEIGHT as u8,
-        spr_interface::pda::tree(tree_id).to_bytes(),
-        tree_id,
-        NullifierTreeInitParams::default(),
-        TreeFeeSchedule::default(),
-    )
-    .unwrap();
-    data
+pub fn tracking_registry() -> Address {
+    let ring_id = ring_id_field(PROGRAM.as_array()).expect("ring id");
+    TrackingRegistry::find_address(&ring_auth(), &ring_id).0
 }
 
 pub fn program_data() -> Address {
@@ -98,6 +74,7 @@ pub enum Setup {
     LimitedPolicy,
     Anonymous,
     AnonymousPolicy,
+    /// Bound to no records, it holds no thresholds and reads the tracking root alone.
     Bare,
     BareAnonymous,
 }
@@ -202,8 +179,8 @@ impl Ring {
         };
         let policy_key = ring.roles.policy.pubkey();
         ring.store_registry(RECORDS, &policy_key, &[root(0, [0x0e; 32])]);
-        // The SDK creates the records paired with their ring.
-        ring.pair_registry(RECORDS, PROGRAM, 0);
+        // The SDK creates the records pinned to their ring's tracking registry.
+        ring.pair_registry(RECORDS, tracking_registry(), 0);
         let table = match setup.kind().has_policy() {
             true => allow_list_table(limits),
             false => PolicyTableIxData {
@@ -228,21 +205,14 @@ impl Ring {
             InstructionTag::Initialize,
             ring.send(initialize, &[&authority]),
         );
-        for tree_id in [spr_program::ADDRESS_TREE_ID, 1] {
-            ring.store(
-                spr_interface::pda::tree(tree_id),
-                SHIELDED_POOL,
-                credential_tree_data(tree_id),
-            );
-        }
         ring
     }
 
+    /// The registry accounts `read` passes after the ring account.
     pub fn registries(&self, read: RootRead) -> Vec<AccountMeta> {
         self.read::<RingPolicy>(&policy_pda())
             .root_registries(read)
             .map(|registry| AccountMeta::new_readonly(registry, false))
-            .chain(credential_accounts())
             .collect()
     }
 
@@ -275,15 +245,11 @@ impl Ring {
         );
     }
 
-    /// Rewrites the private ring and absence floor of `address`, zero `ring_program` unpairs it.
-    pub fn pair_registry(&mut self, address: Address, ring_program: Address, floor: u64) {
+    /// Rewrites the tracking pin and floor of `address`, a zero `tracking` unpins it.
+    pub fn pair_registry(&mut self, address: Address, tracking: Address, floor: u64) {
         let mut registry: StorageRegistry = self.read(&address);
-        registry.private_ring_id = if ring_program == Address::default() {
-            [0; 32]
-        } else {
-            ring_id_field(ring_program.as_array()).expect("ring id")
-        };
-        registry.absence_floor = floor.to_le_bytes();
+        registry.tracking_registry = tracking;
+        registry.tracking_floor = Revision::from(floor);
         self.store(
             address,
             STORAGE_PROGRAM_ID,
@@ -291,27 +257,14 @@ impl Ring {
         );
     }
 
-    pub fn serve_credentials(&mut self, read: &CredentialRead) {
-        assert_eq!(read.state_root_indexes().len(), 1);
-        let address = address_tree();
-        let mut data = credential_tree_data(spr_program::ADDRESS_TREE_ID);
-        let mut tree = TreeAccount::from_bytes(&mut data, address.to_bytes()).unwrap();
-        let history = tree.nullifier_tree();
-        let index = usize::from(read.address_root_index());
-        history.root_history.roots[..=index].fill([9; 32]);
-        history.sequence_number = index as u64;
-        history.root_history.current_index =
-            ((index + 1) % history.root_history.roots.len()) as u64;
-        self.store(address, SHIELDED_POOL, data);
-        let address = credential_tree();
-        let mut data = credential_tree_data(1);
-        let mut tree = TreeAccount::from_bytes(&mut data, address.to_bytes()).unwrap();
-        let history = tree.utxo_tree();
-        let index = read.state_root_indexes()[0];
-        history.root_history[..=usize::from(index)].fill([9; 32]);
-        history.root_history_cursor = index;
-        history.root_history_len = index + 1;
-        self.store(address, SHIELDED_POOL, data);
+    pub fn serve_tracking(&mut self, revision: Revision) {
+        let mut tracking: TrackingRegistry = self.read(&tracking_registry());
+        tracking.roots[0] = root(revision.value(), [0x09; 32]);
+        self.store(
+            tracking_registry(),
+            STORAGE_PROGRAM_ID,
+            bytemuck::bytes_of(&tracking).to_vec(),
+        );
     }
 
     /// The registry after the storage program applies a restrictive update.
@@ -597,6 +550,8 @@ impl InitializeIx<'_> {
             AccountMeta::new_readonly(protocol_config(), false),
             AccountMeta::new(ring_auth(), false),
             AccountMeta::new_readonly(SHIELDED_POOL, false),
+            AccountMeta::new(tracking_registry(), false),
+            AccountMeta::new_readonly(STORAGE_PROGRAM_ID, false),
         ];
         if self.data.policy.is_some() {
             accounts.push(AccountMeta::new_readonly(RECORDS, false));

@@ -78,7 +78,7 @@ pub enum Command {
     /// Set or show the permanent delegate, or move a note as the delegate.
     #[command(subcommand)]
     Delegate(DelegateCommand),
-    /// Enroll the member's nullifier key in a ring credential, or rotate its viewing key.
+    /// Enroll the member's nullifier key in the ring's tracking registry, apply pending enrollments, or rotate its viewing key.
     #[command(subcommand)]
     Key(KeyCommand),
     /// List the wallet updates pending list approval, or approve one.
@@ -237,6 +237,8 @@ pub enum ListApprovalCommand {
 pub enum KeyCommand {
     /// Seal the member's nullifier key to the ring auditor and enroll it, `transfer` does it on first use.
     Register,
+    /// Prove the pending enrollments into the tracking tree, anyone may.
+    Apply,
     /// Replace the member's viewing key in its user record, earlier keys stay held for old notes.
     Rotate,
 }
