@@ -189,7 +189,7 @@ A frame names each real input by its published nullifier alone, and an entry fra
 
 A real input the note index cannot name stays `unresolvedReal` in `getSpendCoverage`, the outputs stay open, and the spend stays unresolved until the note or its secret opens. `getWalletActivity` reads such an input as another party's.
 
-`getAuditedUtxos` serves the same notes from memory. A held output reads `null` until it opens, and the response context can already be past its slot. Its read authorization binds the cluster, the service key, the ring, the timestamp, the nonce and the SHA-256 digest of the hashes in request order.
+`getAuditedUtxos` serves the same notes from the service's projection. With a store, memory keeps a bounded cache of it and the store answers every other note. A held output reads `null` until it opens, and the response context can already be past its slot. Its read authorization binds the cluster, the service key, the ring, the timestamp, the nonce and the SHA-256 digest of the hashes in request order.
 
 A transaction that carries the auditor view tag but did not run under this ring is not reported. It reaches neither the audited items nor the skipped rows, and the page cursor still advances past it, so an empty page is not the end of the history.
 

@@ -209,15 +209,21 @@ impl<S: TransactionSource> ManagedMerge<S> {
     async fn held_inputs(&self, ring: Address) -> Result<HashSet<[u8; 32]>, RingRpcError> {
         let synced = self.hub.shared().store(ring);
         let inputs = self.relay.merge_inputs();
-        let (settled, held): (Vec<HeldInput>, Vec<HeldInput>) = inputs
-            .held(&ring)
-            .await?
-            .into_iter()
-            .partition(|input| match input.phase {
-                RelayPhase::Pending => false,
-                RelayPhase::Confirmed => synced.is_spent(&input.nullifier),
-                RelayPhase::Failed => true,
-            });
+        let held_inputs = inputs.held(&ring).await?;
+        let confirmed: Vec<[u8; 32]> = held_inputs
+            .iter()
+            .filter(|input| input.phase == RelayPhase::Confirmed)
+            .map(|input| input.nullifier)
+            .collect();
+        let spent = synced.spend_rows(&confirmed).await?;
+        let (settled, held): (Vec<HeldInput>, Vec<HeldInput>) =
+            held_inputs
+                .into_iter()
+                .partition(|input| match input.phase {
+                    RelayPhase::Pending => false,
+                    RelayPhase::Confirmed => spent.contains_key(&input.nullifier),
+                    RelayPhase::Failed => true,
+                });
         let settled: Vec<[u8; 32]> = settled.iter().map(|input| input.nullifier).collect();
         inputs.release(&settled).await?;
         Ok(held.iter().map(|input| input.nullifier).collect())
@@ -700,7 +706,8 @@ pub(crate) mod tests {
         }
 
         pub(crate) async fn serving(delegate: Option<Address>, relay: Option<RelayParts>) -> Self {
-            let auditor = X25519Keypair::new();
+            // One ring keeps one auditor key, a restart on the same store opens its rows.
+            let auditor = X25519Keypair::from_bytes(&[0x5a; 32]);
             let source = EscrowRingSource {
                 config: RingConfiguration {
                     auditor_pubkey: auditor.pubkey(),

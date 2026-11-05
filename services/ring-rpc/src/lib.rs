@@ -4,6 +4,8 @@ mod audit;
 mod authority_transfer;
 #[path = "security/authorize.rs"]
 mod authorize;
+#[path = "operations/bounded_map.rs"]
+mod bounded_map;
 #[path = "security/client_identity.rs"]
 mod client_identity;
 #[path = "config/client_rate.rs"]
@@ -59,6 +61,8 @@ mod owner_notes;
 mod policy_authority;
 #[path = "storage/projection_lease.rs"]
 mod projection_lease;
+#[path = "storage/projection_reads.rs"]
+mod projection_reads;
 #[path = "operations/record_update.rs"]
 mod record_update;
 #[path = "operations/record_writer.rs"]

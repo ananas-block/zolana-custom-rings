@@ -39,7 +39,7 @@ async fn claim(store: &Store, now: u64) -> Option<ProjectionLease> {
 }
 
 /// A page through `slot`, spending `nullifier` when one is named.
-fn page(slot: u64, nullifier: Option<[u8; 32]>) -> PageDelta {
+async fn page(slot: u64, nullifier: Option<[u8; 32]>) -> PageDelta {
     let book = AuditStore::default();
     let opener = |_: &[u8; 32]| -> Option<NullifierKey> { None };
     let mut work = PageWork::new(&book, &opener);
@@ -63,7 +63,7 @@ fn page(slot: u64, nullifier: Option<[u8; 32]>) -> PageDelta {
             block_time: 0,
         }),
     );
-    work.finish()
+    work.finish().await.expect("page")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -80,19 +80,20 @@ async fn a_spend_committed_between_two_reads_shows_in_neither() {
         clock: Clock::Fixed(NOW),
     };
     writer
-        .commit_page(&page(5, None))
+        .commit_page(&page(5, None).await)
         .await
         .expect("first page");
     let tables = LoadSpends {
         db: store.connection(),
         ring: RING,
         seal: &seal,
+        scope: HistoryScope::Everything,
     };
 
     let snapshot = read_snapshot(store.connection()).await.expect("snapshot");
     let first = tables.read(&snapshot).await.expect("first read");
     writer
-        .commit_page(&page(9, Some([0x33; 32])))
+        .commit_page(&page(9, Some([0x33; 32])).await)
         .await
         .expect("a spend between the reads");
     let second = tables.read(&snapshot).await.expect("second read");
@@ -128,7 +129,10 @@ async fn a_second_replica_is_refused_and_a_taken_lease_fences_the_first() {
         lease: held,
         clock: Clock::Fixed(NOW + 1),
     };
-    assert!(stale.commit_page(&page(5, Some([0x33; 32]))).await.is_err());
+    assert!(stale
+        .commit_page(&page(5, Some([0x33; 32])).await)
+        .await
+        .is_err());
     ProjectionWriter {
         db: second.connection(),
         ring: RING,
@@ -136,7 +140,7 @@ async fn a_second_replica_is_refused_and_a_taken_lease_fences_the_first() {
         lease: taken,
         clock: Clock::Fixed(expired),
     }
-    .commit_page(&page(7, None))
+    .commit_page(&page(7, None).await)
     .await
     .expect("the holder commits");
 
@@ -144,6 +148,7 @@ async fn a_second_replica_is_refused_and_a_taken_lease_fences_the_first() {
         db: first.connection(),
         ring: RING,
         seal: &seal,
+        scope: HistoryScope::Everything,
     }
     .load()
     .await
@@ -180,7 +185,7 @@ async fn a_restarted_replica_writes_at_once_and_fences_its_old_instance() {
         lease: taken,
         clock: Clock::Fixed(NOW + 1),
     }
-    .commit_page(&page(7, None))
+    .commit_page(&page(7, None).await)
     .await
     .expect("the restarted instance commits");
     let stale = ProjectionWriter {
@@ -190,5 +195,8 @@ async fn a_restarted_replica_writes_at_once_and_fences_its_old_instance() {
         lease: held,
         clock: Clock::Fixed(NOW + 2),
     };
-    assert!(stale.commit_page(&page(9, Some([0x33; 32]))).await.is_err());
+    assert!(stale
+        .commit_page(&page(9, Some([0x33; 32])).await)
+        .await
+        .is_err());
 }

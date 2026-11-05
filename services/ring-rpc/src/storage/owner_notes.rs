@@ -22,12 +22,13 @@ use crate::{
 
 const INDEX_TAG_INFO: &[u8] = b"zolana/ring-rpc-owner-index";
 
-/// The two tag domains, an owner tag never equals a note tag of the same bytes.
+/// One domain per tagged value, a tag of one kind never equals a tag of another of the same bytes.
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum TagDomain {
     Owner = 0,
     Note = 1,
+    Nullifier = 2,
 }
 
 /// HKDF expand under the ring salt is the PRF, the tags of another ring or auditor never match.
@@ -39,6 +40,11 @@ impl IndexTags {
             Some(ring.as_ref()),
             auditor.secret_bytes().as_slice(),
         ))
+    }
+
+    /// Finds a note row by its nullifier, the row names neither the nullifier nor its spend.
+    pub(crate) fn nullifier_tag(&self, nullifier: &[u8; 32]) -> Result<[u8; 32], DbErr> {
+        self.tag(TagDomain::Nullifier, nullifier)
     }
 
     fn tag(&self, domain: TagDomain, value: &[u8; 32]) -> Result<[u8; 32], DbErr> {

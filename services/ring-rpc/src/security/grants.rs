@@ -59,12 +59,19 @@ impl WalletScope {
         Self { wallet }
     }
 
-    pub(crate) fn activity(
+    /// Reads the page's input rows once, then names each input's party from them.
+    pub(crate) async fn activity(
         self,
         response: GetDecryptedTransactionsResponse,
         store: &AuditStore,
-    ) -> GetWalletActivityResponse {
-        GetWalletActivityResponse {
+    ) -> Result<GetWalletActivityResponse, RingRpcError> {
+        let parties = store
+            .input_parties(
+                &self.wallet,
+                response.value.items.iter().flat_map(|item| &item.inputs),
+            )
+            .await?;
+        Ok(GetWalletActivityResponse {
             context: response.context,
             value: WalletActivityPage {
                 items: response
@@ -73,13 +80,13 @@ impl WalletScope {
                     .into_iter()
                     .filter_map(|item| {
                         WalletActivity::of(self.wallet, item, |input| {
-                            store.input_party(&self.wallet, input)
+                            parties.party(&self.wallet, input)
                         })
                     })
                     .collect(),
                 cursor: response.value.cursor,
             },
-        }
+        })
     }
 }
 

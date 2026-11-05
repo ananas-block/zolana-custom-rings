@@ -53,7 +53,7 @@ use crate::{
     spent_index::NoteSeal,
     storage_chain::StorageChain,
     upstream::{DepositHistory, DepositPage, TransactionSource},
-    utxos::{AuditStore, OwnerIndex, UTXO_BACKFILL_INTERVAL},
+    utxos::{AuditStore, Backing, MAX_CACHED_ENTRIES, UTXO_BACKFILL_INTERVAL},
 };
 
 const READINESS_CACHE_INTERVAL: Duration = Duration::from_secs(1);
@@ -185,30 +185,31 @@ impl<S> Shared<S> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         stores
             .entry(ring)
-            .or_insert_with(|| Arc::new(AuditStore::new(self.owner_index(ring))))
+            .or_insert_with(|| Arc::new(AuditStore::new(self.backing(ring))))
             .clone()
     }
 
-    /// A store beside a database reads wallets from its sealed index, never from the mirror alone.
-    fn owner_index(&self, ring: Address) -> OwnerIndex {
+    /// Beside a database the mirror is a bounded cache, storage answers what it evicted.
+    fn backing(&self, ring: Address) -> Backing {
         let Some(store) = &self.database else {
-            return OwnerIndex::Memory;
+            return Backing::Memory;
         };
         let seal = self
             .auditor(Some(ring))
             .and_then(|(ring, auditor)| Ok(NoteSeal::derive(&auditor, ring)?));
         match seal {
-            Ok(seal) => OwnerIndex::Database {
+            Ok(seal) => Backing::Database {
                 store: store.clone(),
                 ring,
                 seal: Box::new(seal),
+                capacity: MAX_CACHED_ENTRIES,
             },
             Err(error) => {
                 log::error!(
-                    "the owner index of ring {ring} is unusable because {}",
+                    "the projection of ring {ring} is unusable because {}",
                     redacted(&error)
                 );
-                OwnerIndex::Unavailable
+                Backing::Unavailable
             }
         }
     }

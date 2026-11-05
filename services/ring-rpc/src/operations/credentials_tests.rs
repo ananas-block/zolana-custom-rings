@@ -12,7 +12,7 @@ use crate::{
     database::Store,
     hub::Clock,
     projection_lease::LeaseClaim,
-    spent_index::{LoadSpends, NoteSeal},
+    spent_index::{HistoryScope, LoadSpends, NoteSeal},
 };
 
 const RING: Address = Address::new_from_array([8; 32]);
@@ -455,6 +455,7 @@ async fn a_restart_resumes_the_scan_after_its_last_committed_page() {
         db: database.connection(),
         ring: RING,
         seal: &seal,
+        scope: HistoryScope::Everything,
     }
     .load()
     .await

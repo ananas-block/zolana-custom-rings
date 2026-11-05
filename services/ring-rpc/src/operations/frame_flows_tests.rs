@@ -8,7 +8,7 @@ use zolana_ring_client::{
 };
 
 use super::*;
-use crate::utxos::{CreatedIn, PageWork};
+use crate::utxos::{block_on, CreatedIn, PageWork};
 
 const ALICE: [u8; 32] = [0xa1; 32];
 const BOB: [u8; 32] = [0xb2; 32];
@@ -74,7 +74,7 @@ fn store_with(notes: &[CreatedUtxo]) -> AuditStore {
     let opener = |owner: &[u8; 32]| Some(key_of(owner));
     let mut work = PageWork::new(&store, &opener);
     work.open(frame(), notes.iter().copied());
-    store.commit(work.finish());
+    store.commit(block_on(work.finish()).expect("page"));
     store
 }
 
@@ -142,9 +142,10 @@ fn read(
     audited: &AuditedTransaction,
     public: Vec<PublicFlow>,
 ) -> Result<TransferRead, RingRpcError> {
+    let notes = block_on(real_input_notes(store, audited))?;
     FrameFlows {
         audited,
-        store,
+        notes: &notes,
         owner_signers: Vec::new(),
         public,
         assets: &assets(),
@@ -296,10 +297,11 @@ fn an_unread_slot_or_an_unknown_mint_refuses_the_whole_read() {
     assert!(refused(read(&store, &transaction, Vec::new())));
     let no_mints = RingAssets::new([]).expect("assets");
     let transaction = audited(vec![spend(&alice)], vec![ring_slot(0, BOB, 30)]);
+    let notes = block_on(real_input_notes(&store, &transaction)).expect("notes");
     assert!(refused(
         FrameFlows {
             audited: &transaction,
-            store: &store,
+            notes: &notes,
             owner_signers: Vec::new(),
             public: Vec::new(),
             assets: &no_mints,

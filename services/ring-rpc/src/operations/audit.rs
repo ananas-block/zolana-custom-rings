@@ -1,9 +1,4 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    num::NonZeroU32,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Duration};
 
 use custom_ring_interface::RingMode;
 use solana_address::Address;
@@ -378,7 +373,7 @@ impl<S: TransactionSource> AuditService<S> {
                 now,
             })
             .await?;
-        Ok(self.shared.store(self.ring).spend_coverage())
+        self.shared.store(self.ring).spend_coverage().await
     }
 
     /// A limited co-signer opens the frame it signs under the served ring's key.
@@ -644,7 +639,9 @@ impl<S: TransactionSource> AuditService<S> {
 
     /// Moves the mirror and every backfill position to one snapshot of the durable tables.
     ///
-    /// A failed or cancelled read changes nothing, the next pass reloads before any page commits.
+    /// A cache reads only rows written past the revision it holds, so a follower pass costs the
+    /// history committed since its last pass. A failed or cancelled read changes nothing, the next
+    /// pass reloads before any page commits.
     async fn reload(
         &self,
         store: &AuditStore,
@@ -659,30 +656,18 @@ impl<S: TransactionSource> AuditService<S> {
             repairs,
             credentials,
             credential_position,
+            revision,
         } = LoadSpends {
             db: database.connection(),
             ring: self.ring,
             seal,
+            scope: store.history_scope(),
         }
         .load()
         .await?;
-        // 1. Seeding keeps every unread frame, a frame the holder read since leaves by a read mark.
-        let unread: BTreeSet<CreatedIn> = spends.unread.iter().copied().collect();
-        let read: Vec<CreatedIn> = store
-            .unread_frames()
-            .into_iter()
-            .filter(|frame| !unread.contains(frame))
-            .collect();
+        // 1. The snapshot's unread frames replace the mirror's, a frame the holder read since leaves.
         let position = spends.checkpoint.position;
-        store.seed(spends);
-        if !read.is_empty() {
-            let opener = |_: &[u8; 32]| -> Option<NullifierKey> { None };
-            let mut work = PageWork::new(store, &opener);
-            for frame in read {
-                work.mark_read(frame);
-            }
-            store.commit(work.finish());
-        }
+        store.refresh(spends, revision);
         // 2. A held credential equals its row, a differing row refuses the reload.
         store.admit_credentials(credentials)?;
         backfill.history = Some(position);
@@ -702,9 +687,13 @@ impl<S: TransactionSource> AuditService<S> {
         durable: Option<&ProjectionWriter<'_>>,
         delta: PageDelta,
     ) -> Result<(), RingRpcError> {
-        if let Some(writer) = durable {
-            writer.commit_page(&delta).await?;
-        }
+        let delta = match durable {
+            Some(writer) => {
+                let revision = writer.commit_page(&delta).await?;
+                delta.at_revision(revision)
+            }
+            None => delta,
+        };
         store.commit(delta);
         Ok(())
     }
@@ -766,7 +755,8 @@ impl<S: TransactionSource> AuditService<S> {
                 PageEnd::More => None,
             };
             work.checkpoint(next, terminal);
-            self.commit_page(store, durable, work.finish()).await?;
+            self.commit_page(store, durable, work.finish().await?)
+                .await?;
             *position = next;
             if terminal.is_some() {
                 return Ok(());
@@ -863,7 +853,7 @@ impl<S: TransactionSource> AuditService<S> {
         if let Some(error) = rows.unfinished {
             return Err(error.into());
         }
-        let delta = work.finish();
+        let delta = work.finish().await?;
         let read = delta.read_frames().any(|read| *read == frame);
         self.commit_page(store, durable, delta).await?;
         Ok(read)
@@ -1245,7 +1235,9 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
         let response = service
             .decrypted_transactions(self.page, self.grant.mode)
             .await?;
-        Ok(scope.activity(response, &service.shared.store(service.ring)))
+        scope
+            .activity(response, &service.shared.store(service.ring))
+            .await
     }
 
     pub(crate) async fn execute_merges(self) -> Result<GetAuditedMergesResponse, RingRpcError> {
@@ -1272,7 +1264,7 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
         };
         for merge in page.merges {
             // A merge the checkpoint has not opened stays out, no reader learns it is unresolved.
-            if let Some(output) = store.merge_output(&merge) {
+            if let Some(output) = store.merge_output(&merge).await? {
                 value.opened.push((&output).into());
             }
         }
@@ -1290,15 +1282,13 @@ impl<S: TransactionSource> AuthorizedUtxos<'_, S> {
         let service = self.grant.service;
         self.grant.spend().await?;
         let store = service.shared.store(service.ring);
+        let mut utxos = Vec::with_capacity(self.utxo_hashes.len());
+        for hash in self.utxo_hashes.iter() {
+            utxos.push(self.grant.scope.utxo(store.view(hash).await?));
+        }
         Ok(GetAuditedUtxosResponse {
             context: store.context(),
-            value: AuditedUtxosPage {
-                utxos: self
-                    .utxo_hashes
-                    .iter()
-                    .map(|hash| self.grant.scope.utxo(store.view(hash)))
-                    .collect(),
-            },
+            value: AuditedUtxosPage { utxos },
         })
     }
 }

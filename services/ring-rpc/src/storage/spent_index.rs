@@ -57,6 +57,19 @@ pub(crate) struct LoadedProjection {
     pub repairs: Vec<(CreatedIn, RepairAttempt)>,
     pub credentials: Vec<HeldCredential>,
     pub credential_position: HistoryPosition,
+    /// The snapshot's revision, every row the load read was written at or below it.
+    pub revision: i64,
+}
+
+/// The note and spend rows a load reads beside the unread frames, faults and checkpoints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HistoryScope {
+    /// Every row, for a mirror that holds the whole projection.
+    Everything,
+    /// Rows written after a revision the cache already holds, credentials too.
+    ChangedSince(i64),
+    /// No row, a bounded cache fills from lookups.
+    Cold,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -216,7 +229,7 @@ pub(crate) fn note_from_body(body: &[u8]) -> Result<StoredUtxo, DbErr> {
     })
 }
 
-fn state_name(state: SpendState) -> &'static str {
+pub(crate) fn state_name(state: SpendState) -> &'static str {
     match state {
         SpendState::Observed => "observed",
         SpendState::Padding => "padding",
@@ -265,12 +278,15 @@ fn frame_values(ring: &Address, frame: &CreatedIn) -> Result<Vec<Value>, DbErr> 
     ])
 }
 
-fn read_bytes<const N: usize>(row: &QueryResult, column: &str) -> Result<[u8; N], DbErr> {
+pub(crate) fn read_bytes<const N: usize>(
+    row: &QueryResult,
+    column: &str,
+) -> Result<[u8; N], DbErr> {
     <[u8; N]>::try_from(row.try_get::<Vec<u8>>("", column)?)
         .map_err(|_| DbErr::Custom(format!("spend column {column} has another length")))
 }
 
-fn read_frame(row: &QueryResult) -> Result<CreatedIn, DbErr> {
+pub(crate) fn read_frame(row: &QueryResult) -> Result<CreatedIn, DbErr> {
     Ok(CreatedIn {
         slot: u64::try_from(row.try_get::<i64>("", "slot")?)
             .map_err(|_| DbErr::Custom("negative spend slot".into()))?,
@@ -360,34 +376,58 @@ pub(crate) struct ProjectionWriter<'a> {
 }
 
 impl ProjectionWriter<'_> {
-    async fn begin(&self) -> Result<DatabaseTransaction, DbErr> {
+    /// Fences the lease, then takes the next revision. The revision row lock orders the writer's
+    /// transactions, so a follower that read revision `r` holds every row written at or below it.
+    async fn begin(&self) -> Result<(DatabaseTransaction, i64), DbErr> {
         let now = self
             .clock
             .now()
             .map_err(|_| DbErr::Custom("the clock is unreadable".into()))?;
         let transaction = self.db.begin().await?;
         self.lease.fence(&transaction, now).await?;
-        Ok(transaction)
+        let backend = transaction.get_database_backend();
+        transaction
+            .execute(Statement::from_sql_and_values(
+                backend,
+                "INSERT INTO projection_revisions(ring,revision) VALUES($1,1) ON CONFLICT(ring) \
+                 DO UPDATE SET revision=projection_revisions.revision+1",
+                vec![self.ring_value()],
+            ))
+            .await?;
+        let revision = read_revision(&transaction, &self.ring).await?;
+        Ok((transaction, revision))
     }
 
     fn ring_value(&self) -> Value {
         Value::from(self.ring.as_ref().to_vec())
     }
 
-    /// Every write of one page commits together, or none does.
-    pub(crate) async fn commit_page(&self, delta: &PageDelta) -> Result<(), DbErr> {
+    /// Every write of one page commits together, or none does. Returns the page's revision.
+    pub(crate) async fn commit_page(&self, delta: &PageDelta) -> Result<i64, DbErr> {
         let Self { ring, seal, .. } = self;
-        let transaction = self.begin().await?;
+        let (transaction, revision) = self.begin().await?;
         let backend = transaction.get_database_backend();
         let run =
             |sql: &str, values: Vec<Value>| Statement::from_sql_and_values(backend, sql, values);
         for (commitment, note) in delta.notes() {
             let sealed = seal.seal(commitment, &note_body(note))?;
+            let nullifier_tag = note
+                .nullifier
+                .map(|nullifier| seal.tags.nullifier_tag(&nullifier))
+                .transpose()?;
             transaction
                 .execute(run(
-                    "INSERT INTO finalized_notes(ring,commitment,sealed) VALUES($1,$2,$3) \
-                     ON CONFLICT(ring,commitment) DO UPDATE SET sealed=excluded.sealed",
-                    vec![self.ring_value(), commitment.to_vec().into(), sealed.into()],
+                    "INSERT INTO finalized_notes(ring,commitment,sealed,nullifier_tag,revision) \
+                     VALUES($1,$2,$3,$4,$5) ON CONFLICT(ring,commitment) DO UPDATE SET \
+                     sealed=excluded.sealed,nullifier_tag=excluded.nullifier_tag, \
+                     revision=excluded.revision",
+                    vec![
+                        self.ring_value(),
+                        commitment.to_vec().into(),
+                        sealed.into(),
+                        Value::Bytes(nullifier_tag.map(|tag| Box::new(tag.to_vec()))),
+                        revision.into(),
+                    ],
                 ))
                 .await?;
         }
@@ -403,13 +443,15 @@ impl ProjectionWriter<'_> {
                 i32::from(row.position).into(),
                 state_name(row.state).into(),
                 Value::Bytes(link.map(Box::new)),
+                revision.into(),
             ]);
             transaction
                 .execute(run(
                     "INSERT INTO finalized_spent_nullifiers(ring,nullifier,slot,tx_signature, \
-                     event_index,position,state,sealed_note) VALUES($1,$2,$3,$4,$5,$6,$7,$8) \
-                     ON CONFLICT(ring,nullifier) DO UPDATE SET state=excluded.state, \
-                     sealed_note=excluded.sealed_note",
+                     event_index,position,state,sealed_note,revision) \
+                     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(ring,nullifier) DO UPDATE SET \
+                     state=excluded.state,sealed_note=excluded.sealed_note, \
+                     revision=excluded.revision",
                     values,
                 ))
                 .await?;
@@ -474,7 +516,8 @@ impl ProjectionWriter<'_> {
                 ))
                 .await?;
         }
-        transaction.commit().await
+        transaction.commit().await?;
+        Ok(revision)
     }
 
     /// A page's credentials and the scan position past it commit together.
@@ -483,7 +526,7 @@ impl ProjectionWriter<'_> {
         held: &[HeldCredential],
         position: &HistoryPosition,
     ) -> Result<(), DbErr> {
-        let transaction = self.begin().await?;
+        let (transaction, revision) = self.begin().await?;
         let backend = transaction.get_database_backend();
         for credential in held {
             let member = credential.member();
@@ -491,9 +534,14 @@ impl ProjectionWriter<'_> {
             transaction
                 .execute(Statement::from_sql_and_values(
                     backend,
-                    "INSERT INTO held_credentials(ring,member,sealed) VALUES($1,$2,$3) \
-                     ON CONFLICT(ring,member) DO NOTHING",
-                    vec![self.ring_value(), member.to_vec().into(), sealed.into()],
+                    "INSERT INTO held_credentials(ring,member,sealed,revision) \
+                     VALUES($1,$2,$3,$4) ON CONFLICT(ring,member) DO NOTHING",
+                    vec![
+                        self.ring_value(),
+                        member.to_vec().into(),
+                        sealed.into(),
+                        revision.into(),
+                    ],
                 ))
                 .await?;
         }
@@ -514,7 +562,7 @@ impl ProjectionWriter<'_> {
         &self,
         attempts: &[(CreatedIn, RepairAttempt)],
     ) -> Result<(), DbErr> {
-        let transaction = self.begin().await?;
+        let (transaction, _) = self.begin().await?;
         for (frame, attempt) in attempts {
             transaction
                 .execute(Statement::from_sql_and_values(
@@ -541,6 +589,7 @@ pub(crate) struct LoadSpends<'a> {
     pub db: &'a DatabaseConnection,
     pub ring: Address,
     pub seal: &'a NoteSeal,
+    pub scope: HistoryScope,
 }
 
 impl LoadSpends<'_> {
@@ -552,7 +601,9 @@ impl LoadSpends<'_> {
     }
 
     async fn read(&self, snapshot: &DatabaseTransaction) -> Result<LoadedProjection, DbErr> {
-        let Self { ring, seal, .. } = self;
+        let Self {
+            ring, seal, scope, ..
+        } = self;
         let query = |sql: &str| {
             Statement::from_sql_and_values(
                 snapshot.get_database_backend(),
@@ -560,41 +611,41 @@ impl LoadSpends<'_> {
                 vec![Value::from(ring.as_ref().to_vec())],
             )
         };
-        let mut loaded = LoadedProjection::default();
+        let since = match scope {
+            HistoryScope::ChangedSince(revision) => *revision,
+            HistoryScope::Everything | HistoryScope::Cold => 0,
+        };
+        let changed = |sql: &str| {
+            Statement::from_sql_and_values(
+                snapshot.get_database_backend(),
+                sql,
+                vec![Value::from(ring.as_ref().to_vec()), since.into()],
+            )
+        };
+        let mut loaded = LoadedProjection {
+            revision: read_revision(snapshot, ring).await?,
+            ..LoadedProjection::default()
+        };
         let spends = &mut loaded.spends;
-        for row in snapshot
-            .query_all(query(
-                "SELECT commitment,sealed FROM finalized_notes WHERE ring=$1",
-            ))
-            .await?
-        {
-            let commitment: [u8; 32] = read_bytes(&row, "commitment")?;
-            let body = seal.open(&commitment, &row.try_get::<Vec<u8>>("", "sealed")?)?;
-            spends.notes.push((commitment, note_from_body(&body)?));
-        }
-        for row in snapshot
-            .query_all(query(
-                "SELECT nullifier,slot,tx_signature,event_index,position,state,sealed_note \
-                 FROM finalized_spent_nullifiers WHERE ring=$1",
-            ))
-            .await?
-        {
-            let nullifier: [u8; 32] = read_bytes(&row, "nullifier")?;
-            let link = row
-                .try_get::<Option<Vec<u8>>>("", "sealed_note")?
-                .map(|sealed| {
-                    let opened = seal.open(&nullifier, &sealed)?;
-                    <[u8; 32]>::try_from(opened)
-                        .map_err(|_| DbErr::Custom("spend link has another length".into()))
-                })
-                .transpose()?;
-            spends.rows.push(SpendRow {
-                nullifier,
-                frame: read_frame(&row)?,
-                position: u16::try_from(row.try_get::<i32>("", "position")?)
-                    .map_err(|_| DbErr::Custom("spend position out of range".into()))?,
-                state: state_of(&row.try_get::<String>("", "state")?, link)?,
-            });
+        // 1. Only rows past the cache's revision, a follower pass costs its new history alone.
+        if *scope != HistoryScope::Cold {
+            for row in snapshot
+                .query_all(changed(&format!(
+                    "SELECT {NOTE_COLUMNS} FROM finalized_notes WHERE ring=$1 AND revision>$2"
+                )))
+                .await?
+            {
+                spends.notes.push(read_note(&row, seal)?);
+            }
+            for row in snapshot
+                .query_all(changed(&format!(
+                    "SELECT {ROW_COLUMNS} FROM finalized_spent_nullifiers \
+                     WHERE ring=$1 AND revision>$2"
+                )))
+                .await?
+            {
+                spends.rows.push(read_spend_row(&row, seal)?);
+            }
         }
         for row in snapshot
             .query_all(query(
@@ -646,8 +697,8 @@ impl LoadSpends<'_> {
             };
         }
         for row in snapshot
-            .query_all(query(
-                "SELECT member,sealed FROM held_credentials WHERE ring=$1",
+            .query_all(changed(
+                "SELECT member,sealed FROM held_credentials WHERE ring=$1 AND revision>$2",
             ))
             .await?
         {
@@ -669,6 +720,52 @@ impl LoadSpends<'_> {
         }
         Ok(loaded)
     }
+}
+
+pub(crate) const NOTE_COLUMNS: &str = "commitment,sealed";
+pub(crate) const ROW_COLUMNS: &str =
+    "nullifier,slot,tx_signature,event_index,position,state,sealed_note";
+
+/// One note row selected with `NOTE_COLUMNS`.
+pub(crate) fn read_note(
+    row: &QueryResult,
+    seal: &NoteSeal,
+) -> Result<([u8; 32], StoredUtxo), DbErr> {
+    let commitment: [u8; 32] = read_bytes(row, "commitment")?;
+    let body = seal.open(&commitment, &row.try_get::<Vec<u8>>("", "sealed")?)?;
+    Ok((commitment, note_from_body(&body)?))
+}
+
+/// One spend row selected with `ROW_COLUMNS`, its resolved note link opened under the seal.
+pub(crate) fn read_spend_row(row: &QueryResult, seal: &NoteSeal) -> Result<SpendRow, DbErr> {
+    let nullifier: [u8; 32] = read_bytes(row, "nullifier")?;
+    let link = row
+        .try_get::<Option<Vec<u8>>>("", "sealed_note")?
+        .map(|sealed| {
+            let opened = seal.open(&nullifier, &sealed)?;
+            <[u8; 32]>::try_from(opened)
+                .map_err(|_| DbErr::Custom("spend link has another length".into()))
+        })
+        .transpose()?;
+    Ok(SpendRow {
+        nullifier,
+        frame: read_frame(row)?,
+        position: u16::try_from(row.try_get::<i32>("", "position")?)
+            .map_err(|_| DbErr::Custom("spend position out of range".into()))?,
+        state: state_of(&row.try_get::<String>("", "state")?, link)?,
+    })
+}
+
+/// Zero before the ring's first commit.
+async fn read_revision(db: &impl ConnectionTrait, ring: &Address) -> Result<i64, DbErr> {
+    let row = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT revision FROM projection_revisions WHERE ring=$1",
+            vec![ring.as_ref().to_vec().into()],
+        ))
+        .await?;
+    row.map_or(Ok(0), |row| row.try_get("", "revision"))
 }
 
 /// Postgres pins one snapshot for the transaction, a SQLite read transaction pins it at its
