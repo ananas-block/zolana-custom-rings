@@ -1,7 +1,4 @@
-//! Enumerates what one inline transaction holds per rail and SPP shape through the real encoder.
-//!
-//! Rows, withdrawal legs, outputs and inputs take bytes and accounts from
-//! one v1 transaction. Each is measured jointly here, before the catalog sizes any key from it.
+//! What one inline transaction holds per rail and SPP shape, every axis measured jointly through the real encoder.
 
 use std::fmt::Write;
 
@@ -14,7 +11,7 @@ use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
 
 use super::{FrameRail, Legs, Load, Shape, Transfer, TransferFit, MIN};
 
-/// The least load a salted read can carry, an own root and no curator.
+/// The least load a salted read carries.
 const SALTED: Load = Load {
     name: "salted",
     policy_roots: true,
@@ -145,7 +142,7 @@ pub(super) struct KeyReach {
 }
 
 /// A key of fixed width holds a spend within its legs at no more than its rows, the wide key of the
-/// same frame takes every other spend. The wide entry key is the only entry fallback.
+/// same frame takes every other spend.
 fn holds(shape: TransferShape, reach: Reach) -> Option<Reach> {
     match fixed_width(shape) {
         false => (reach.frame_key(true).shape() == Some(shape)).then_some(reach),
@@ -313,7 +310,6 @@ pub fn run() -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Each key's widths and pools are exactly what the inline transactions it serves reach.
     #[test]
     fn every_key_holds_exactly_its_inline_reach() {
         let reaches = reaches().unwrap();

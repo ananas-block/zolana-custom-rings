@@ -32,7 +32,7 @@ import (
 const (
 	// SignerDataEntries mirrors SignerDataCounts::ENTRIES, a v1 transaction's signature limit.
 	SignerDataEntries = 12
-	// SignerDataEntryBits mirrors SignerDataCounts::ENTRY_BITS, a key's outputs fit below 2^5.
+	// SignerDataEntryBits mirrors SignerDataCounts::ENTRY_BITS, SPP's widest output count fits below 2^5.
 	SignerDataEntryBits = 5
 )
 

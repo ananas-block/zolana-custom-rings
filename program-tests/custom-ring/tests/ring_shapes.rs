@@ -229,7 +229,7 @@ const CONFIDENTIAL_POLICY_CAPACITY: &[KeyCase] = &[
 /// An audit only ring opens no record and takes the fewest accounts.
 const CONFIDENTIAL_CAPACITY: &[KeyCase] =
     &[KeyCase::of(wide(2, 40, 4, 8), Shape::IN40_OUT2, 40, 4)];
-/// Every leg of a hidden sender names one destination, each entry case at the most inputs its key settles inline.
+/// Every leg of a hidden sender names one destination, each entry case at the most inputs its legs leave inline.
 const ANONYMOUS_POLICY_CAPACITY: &[KeyCase] = &[
     KeyCase::of(wide(8, 24, 32, 13), Shape::IN8_OUT8, 8, 32),
     KeyCase::of(entry(4, 8, 4, 8), Shape::IN6_OUT4, 6, 4),

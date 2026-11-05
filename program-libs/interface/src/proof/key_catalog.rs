@@ -128,8 +128,7 @@ const ENTRY_SHAPES: [TransferShape; 3] = [
 ];
 const WIDE_ENTRY_SHAPE: TransferShape = entry(8, 8, 32, 8, [38, 80]);
 
-/// Each key's widths and pools are exactly what the inline transactions it serves reach, pinned
-/// by `ring-xtask inline-capacity`.
+/// Each key's widths and pools equal its inline reach, pinned by the ring-xtask `inline_capacity` test.
 pub const TRANSFER_SHAPES: [TransferShape; 9] = [
     NARROW_SHAPES[0],
     NARROW_SHAPES[1],

@@ -5,7 +5,7 @@
 //
 // Properties:
 // 1. Every shape a key compiles from is a row of TRANSFER_SHAPES, the program selects its verifying key by that row.
-// 2. Tracking and Records are the most one inline transaction on the key reaches, pinned by `ring-xtask inline-capacity`.
+// 2. Tracking and Records are the most one inline transaction on the key reaches, pinned by the ring-xtask `inline_capacity` test.
 
 package transfer
 

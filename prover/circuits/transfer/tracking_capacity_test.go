@@ -9,7 +9,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 )
 
-// Eight signing rows, two outputs and thirty two unenrolled withdrawal owners under a salted list fill the wide key's pool.
+// Eight signing rows, two outputs and thirty two unenrolled withdrawal owners under a salted list fill the wide key's tracking pool.
 func TestTheWidestInlineSpendOpensEveryTrackingRow(t *testing.T) {
 	w := ringtransfer.Signed(wideOwners2)
 	w.SaltedBlock, w.Exits, w.Omitted = []*big.Int{}, []int{}, wideOwners2.Outputs-2
