@@ -33,7 +33,7 @@ fn flow(owner: u8, asset: Address, debit: u64) -> OwnerFlow {
         owner: member(owner),
         flow: AssetFlow {
             asset,
-            outflow: debit.into(),
+            charged_outflow: debit.into(),
             deposited: 0,
             withdrawn: 0,
         },

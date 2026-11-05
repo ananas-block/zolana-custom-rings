@@ -106,7 +106,7 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
                 address_value(reserve.ring),
                 Value::from(owner.as_bytes().to_vec()),
                 slot_value(reserve.slot)?,
-                amount_value(flow.outflow),
+                amount_value(flow.charged_outflow),
                 amount_value(flow.deposited),
                 amount_value(flow.withdrawn),
                 Value::from(false),
@@ -147,7 +147,7 @@ fn reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
         slot: u64::try_from(slot).map_err(|_| DbErr::Custom("negative usage slot".into()))?,
         flow: AssetFlow {
             asset: Address::new_from_array(bytes(row, "asset")?),
-            outflow: amount("outflow")?,
+            charged_outflow: amount("outflow")?,
             deposited: amount("deposited")?,
             withdrawn: amount("withdrawn")?,
         },

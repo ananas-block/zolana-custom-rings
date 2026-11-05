@@ -166,7 +166,7 @@ fn read(
 fn outflows(flows: &[OwnerFlow]) -> Vec<([u8; 32], u128)> {
     flows
         .iter()
-        .map(|flow| (*flow.owner.as_bytes(), flow.flow.outflow))
+        .map(|flow| (*flow.owner.as_bytes(), flow.flow.charged_outflow))
         .collect()
 }
 
@@ -333,7 +333,7 @@ fn a_public_funded_transfer_with_no_sender_reads_as_no_spend() {
     let [row] = read.flows.as_slice() else {
         panic!("one public row, {:?}", read.flows);
     };
-    assert_eq!(row.flow.outflow, 0);
+    assert_eq!(row.flow.charged_outflow, 0);
     assert_eq!(row.flow.deposited, 15);
     assert_eq!(*row.owner.as_bytes(), owner_identity(RING.as_array()));
 }
@@ -389,23 +389,23 @@ fn the_reserved_figure_matches_the_circuit_quantities() {
         .expect("rows");
         let reserved: Vec<([u8; 32], [u8; 32], u128)> = rows
             .iter()
-            .filter(|row| row.flow.outflow != 0)
+            .filter(|row| row.flow.charged_outflow != 0)
             .map(|row| {
                 (
                     *row.owner.as_bytes(),
                     row.flow.asset.to_bytes(),
-                    row.flow.outflow,
+                    row.flow.charged_outflow,
                 )
             })
             .collect();
         let circuit: Vec<([u8; 32], [u8; 32], u128)> = notes("rows")
             .iter()
-            .filter(|row| row["outflow"].as_u64() != Some(0))
+            .filter(|row| row["charged_outflow"].as_u64() != Some(0))
             .map(|row| {
                 (
                     identity(&row["owner"]),
                     identity(&row["asset"]),
-                    u128::from(row["outflow"].as_u64().expect("outflow")),
+                    u128::from(row["charged_outflow"].as_u64().expect("charged outflow")),
                 )
             })
             .collect();

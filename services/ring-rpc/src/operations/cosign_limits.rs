@@ -357,10 +357,10 @@ fn approval_mask(flows: &[OwnerFlow], checks: &[AssetCheck]) -> ApprovalMask {
         .map(|flow| OwnerDebit {
             owner: *flow.owner.as_bytes(),
             asset: flow.flow.asset.to_bytes(),
-            debit: flow.flow.outflow,
+            debit: flow.flow.charged_outflow,
             kept: 0,
             charge: 0,
-            charged_outflow: flow.flow.outflow,
+            charged_outflow: flow.flow.charged_outflow,
         })
         .collect();
     let public_gross: Vec<PublicGross> = flows
@@ -478,8 +478,8 @@ impl LimitDecision<'_> {
 impl Measure {
     fn of(self, flow: &AssetFlow) -> Option<u128> {
         match self {
-            Self::Outflow => Some(flow.outflow),
-            Self::Volume => flow.outflow.checked_add(flow.deposited),
+            Self::Outflow => Some(flow.charged_outflow),
+            Self::Volume => flow.charged_outflow.checked_add(flow.deposited),
             Self::Deposited => Some(flow.deposited),
             Self::Withdrawn => Some(flow.withdrawn),
         }
@@ -559,7 +559,7 @@ mod tests {
             owner: member(owner),
             flow: AssetFlow {
                 asset: ASSET,
-                outflow: amount.into(),
+                charged_outflow: amount.into(),
                 deposited: 0,
                 withdrawn: 0,
             },
@@ -900,6 +900,62 @@ mod tests {
         );
     }
 
+    /// The owner spends 100 and takes 100 back while a public leg withdraws 100, its debit is zero and
+    /// its charged outflow 100.
+    #[tokio::test]
+    async fn a_returned_spend_beside_a_withdrawal_demands_approval_by_its_charged_outflow() {
+        use zolana_ring_policy::{DebitInput, DebitOutput};
+
+        use crate::transfer_debits::{OwnerFlows, PublicFlow};
+
+        let (owner, asset) = ([7; 32], [3; 32]);
+        let flows = OwnerFlows {
+            inputs: &[DebitInput {
+                owner,
+                asset,
+                amount: 100,
+            }],
+            outputs: &[DebitOutput {
+                ring: true,
+                owner,
+                asset,
+                amount: 100,
+            }],
+            owner_signers: &[owner],
+            public: &[PublicFlow {
+                mint: ASSET,
+                asset,
+                deposited: 100,
+                withdrawn: 100,
+            }],
+            no_spend_owner: member(0xee),
+        }
+        .rows(|_| Ok(ASSET))
+        .expect("rows");
+        assert_eq!(flows[0].flow.charged_outflow, 100);
+        let read = || {
+            FrameRead::Transfer(TransferRead {
+                flows: flows.clone(),
+                spends_note: true,
+                approval_bits: None,
+                co_signers: Vec::new(),
+            })
+        };
+        let over = MintPolicy {
+            cosign_above: 99,
+            ..MintPolicy::EMPTY
+        };
+        assert_eq!(
+            decided(over, read(), CoSignerApproval::new([])).await,
+            CoSignDecision::Refused(CoSignRefusal::NotApproved),
+            "a zero debit demands no approval, the charged outflow does"
+        );
+        assert!(matches!(
+            decided(over, read(), CoSignerApproval::new([ApproveClass::Outflow])).await,
+            CoSignDecision::Signed(_)
+        ));
+    }
+
     #[tokio::test]
     async fn a_threshold_passes_demand_its_approval_class() {
         let over = MintPolicy {
@@ -913,7 +969,7 @@ mod tests {
                     owner: member(7),
                     flow: AssetFlow {
                         asset: ASSET,
-                        outflow,
+                        charged_outflow: outflow,
                         deposited: 0,
                         withdrawn,
                     },
@@ -959,7 +1015,7 @@ mod tests {
                     owner: member(7),
                     flow: AssetFlow {
                         asset: ASSET,
-                        outflow: 101,
+                        charged_outflow: 101,
                         deposited: 0,
                         withdrawn: 101,
                     },

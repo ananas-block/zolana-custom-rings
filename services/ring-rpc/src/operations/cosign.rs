@@ -51,7 +51,7 @@ pub struct OwnerFlow {
 pub struct AssetFlow {
     pub asset: Address,
     /// `zolana_ring_policy::owner_debits`, compared with owner caps and `cosign_above`.
-    pub outflow: u128,
+    pub charged_outflow: u128,
     /// A sum of u64 legs, past `u64::MAX` while the net stays a u64 magnitude.
     pub deposited: u128,
     pub withdrawn: u128,

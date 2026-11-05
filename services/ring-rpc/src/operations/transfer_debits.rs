@@ -57,12 +57,12 @@ struct RingFrame<'m> {
 }
 
 /// One asset's public legs, a deposit joins the volume and a withdrawal stays gross.
-struct PublicFlow {
-    mint: Address,
+pub(super) struct PublicFlow {
+    pub(super) mint: Address,
     /// The field the statement's gross and every note of the mint hash under.
-    asset: [u8; 32],
-    deposited: u128,
-    withdrawn: u128,
+    pub(super) asset: [u8; 32],
+    pub(super) deposited: u128,
+    pub(super) withdrawn: u128,
 }
 
 /// Unknown input refuses, the wallet retries once the auditor ingested the note.
@@ -253,7 +253,7 @@ fn deposit_read(
                 owner,
                 flow: AssetFlow {
                     asset,
-                    outflow: 0,
+                    charged_outflow: 0,
                     deposited: leg.amount.into(),
                     withdrawn: 0,
                 },
@@ -330,18 +330,18 @@ fn fold_public_flows(
 }
 
 /// A public leg has no owner on the frame, it joins the first sender or a no-spend frame's ring tag.
-struct OwnerFlows<'a> {
-    inputs: &'a [DebitInput],
-    outputs: &'a [DebitOutput],
-    owner_signers: &'a [[u8; 32]],
-    public: &'a [PublicFlow],
+pub(super) struct OwnerFlows<'a> {
+    pub(super) inputs: &'a [DebitInput],
+    pub(super) outputs: &'a [DebitOutput],
+    pub(super) owner_signers: &'a [[u8; 32]],
+    pub(super) public: &'a [PublicFlow],
     /// Only ring caps read a public leg, the tag answers for no owner cap.
-    no_spend_owner: Member,
+    pub(super) no_spend_owner: Member,
 }
 
 impl OwnerFlows<'_> {
     /// One row per nonzero debit or public leg, each owner and asset once.
-    fn rows(
+    pub(super) fn rows(
         self,
         mint_of: impl Fn(&[u8; 32]) -> Result<Address, RingRpcError>,
     ) -> Result<Vec<OwnerFlow>, RingRpcError> {
@@ -380,7 +380,7 @@ impl OwnerFlows<'_> {
                 owner: member(debit.owner)?,
                 flow: AssetFlow {
                     asset: mint_of(&debit.asset)?,
-                    outflow: debit.charged_outflow,
+                    charged_outflow: debit.charged_outflow,
                     deposited: 0,
                     withdrawn: 0,
                 },
@@ -401,7 +401,7 @@ impl OwnerFlows<'_> {
                         owner,
                         flow: AssetFlow {
                             asset: public.mint,
-                            outflow: 0,
+                            charged_outflow: 0,
                             deposited: 0,
                             withdrawn: 0,
                         },
@@ -697,7 +697,7 @@ mod tests {
             serde_json::json!({
                 "owner": hex::encode(row.owner.as_bytes()),
                 "mint": hex::encode(row.flow.asset.to_bytes()),
-                "debit": row.flow.outflow,
+                "debit": row.flow.charged_outflow,
                 "deposited": row.flow.deposited,
                 "withdrawn": row.flow.withdrawn,
             })
