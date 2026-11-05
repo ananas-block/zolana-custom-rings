@@ -27,7 +27,7 @@ import {
   type ApplyProofInputs,
   type MemberRecord,
   type QuadPath,
-  type QueueEntry,
+  type RecordWrite,
   type RecordOpening,
   type RecordPool,
   type RecordWriteProofInput,
@@ -230,9 +230,9 @@ export function verifyRecordPool(
   });
 }
 
-export function queueEntryHash(entry: QueueEntry): Bytes32 {
+export function recordWriteHash(entry: RecordWrite): Bytes32 {
   return poseidon([
-    domainField(RingDomain.queueWrite),
+    domainField(RingDomain.recordWrite),
     checkedBytes<Bytes32>(entry.member, 32, "entry member"),
     u64Field(entry.mask, "mask"),
     u64Field(entry.value, "value"),
@@ -243,8 +243,8 @@ export function queueEntryHash(entry: QueueEntry): Bytes32 {
 }
 
 /** `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain_start` of the registry and revision. */
-export function queueChain(previous: Bytes32, entry: QueueEntry): Bytes32 {
-  return poseidon([checkedBytes<Bytes32>(previous, 32, "chain"), queueEntryHash(entry)]);
+export function writeChain(previous: Bytes32, entry: RecordWrite): Bytes32 {
+  return poseidon([checkedBytes<Bytes32>(previous, 32, "chain"), recordWriteHash(entry)]);
 }
 
 /**
@@ -265,7 +265,7 @@ export function replayRecordWrites(
   for (const write of input.writes) {
     checkEntry(write.entry);
     [root, nextIndex] = replayWrite(write, root, nextIndex);
-    chain = queueChain(chain, write.entry);
+    chain = writeChain(chain, write.entry);
   }
   return Object.freeze({
     oldRoot: copy(input.oldRoot),
@@ -292,7 +292,7 @@ export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsSta
 }
 
 /** List bits outside the mask keep their value. */
-function writtenRecord(record: MemberRecord, entry: QueueEntry): MemberRecord {
+function writtenRecord(record: MemberRecord, entry: RecordWrite): MemberRecord {
   return Object.freeze({
     ...record,
     lists: (record.lists & ~entry.mask & U64_MAX) | entry.value,
@@ -350,7 +350,7 @@ function replayWrite(
 }
 
 /** An entry the program refuses fails before the first write. */
-function checkEntry(entry: QueueEntry): void {
+function checkEntry(entry: RecordWrite): void {
   checkMember(entry.member);
   checkedU64(entry.mask, "mask");
   if ((checkedU64(entry.value, "value") & ~entry.mask) !== 0n) invalid("ValueOutsideMask");

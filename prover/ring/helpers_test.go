@@ -133,7 +133,7 @@ func (v enrollmentView) request() any {
 
 func (v writeView) request() any {
 	old, low := v.Old, v.Low
-	return RecordWrite{
+	return RecordWriteProofInput{
 		Entry: v.Entry, Exists: v.Exists, OldNext: old.Next, OldLists: old.Lists, OldMintPolicy: old.MintPolicy, OldWithdrawalThreshold: old.WithdrawalThreshold, OldAssetLimits: old.AssetLimits,
 		Index: v.Slot.Index, Path: v.Slot.flat(),
 		LowMember: low.Member, LowNext: low.Next, LowLists: low.Lists, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits,

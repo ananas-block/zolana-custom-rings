@@ -24,13 +24,13 @@ import {
   QUAD_HEIGHT,
   type MemberRecord,
   type QuadPath,
-  type QueueEntry,
+  type RecordWrite,
   type RecordWriteProofInput,
 } from "../../../src/protocol/membership/member-registry.js";
 import {
   applyRecordsStatement,
-  queueChain,
-  queueEntryHash,
+  writeChain,
+  recordWriteHash,
   replayRecordWrites,
   verifyRecordOpening,
 } from "../../../src/protocol/membership/member-opening.js";
@@ -103,7 +103,7 @@ describe("ring-records.json", () => {
     next: field(vector.next),
     lists: BigInt(vector.lists),
   });
-  const entry = (queued: QueuedWrite): QueueEntry => ({
+  const entry = (queued: QueuedWrite): RecordWrite => ({
     member:
       queued.signer === null
         ? field(queued.member)
@@ -118,8 +118,8 @@ describe("ring-records.json", () => {
       for (const queued of [...application.pending, ...application.authority_writes]) {
         const queuedEntry = entry(queued);
         expect(hex(queuedEntry.member)).toBe(queued.member);
-        expect(hex(queueEntryHash(queuedEntry))).toBe(queued.entry_hash);
-        chain = queueChain(chain, queuedEntry);
+        expect(hex(recordWriteHash(queuedEntry))).toBe(queued.entry_hash);
+        chain = writeChain(chain, queuedEntry);
         expect(hex(chain)).toBe(queued.chain);
       }
     }

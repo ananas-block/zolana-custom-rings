@@ -115,10 +115,10 @@ type Entry struct {
 	AssetLimits                                          Limits
 }
 
-// Hash mirrors registry.QueueEntry.Hash.
+// Hash mirrors registry.RecordWrite.Hash.
 func (e Entry) Hash(t testing.TB) *big.Int {
 	t.Helper()
-	fields := []*big.Int{big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, copied(e.MintPolicy), copied(e.WithdrawalThreshold)}
+	fields := []*big.Int{big.NewInt(shared.RecordWriteDomain), e.Member, e.Mask, e.Value, copied(e.MintPolicy), copied(e.WithdrawalThreshold)}
 	for _, field := range e.AssetLimits {
 		fields = append(fields, copied(field))
 	}

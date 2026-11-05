@@ -19,7 +19,9 @@ use zolana_ring_member_registry::{ApplyProofInputs, TrackingWriteProofInput};
 use crate::{
     client::{RingClient, RingIndexerBackend},
     prover::{to_instruction_proof, RingRequest},
-    request::{ApplyEnrollments as ApplyEnrollmentsBody, ApplyRecords, RecordWrite},
+    request::{
+        ApplyEnrollments as ApplyEnrollmentsBody, ApplyRecords, RecordWriteProofInputRequest,
+    },
     CustomRing, RingError,
 };
 
@@ -150,7 +152,7 @@ impl StorageApplyProof<'_> {
             return Err(RingError::UnpinnedProvingKey(circuit));
         };
         let public_input_hash = statement.hash()?;
-        let mut writes: Vec<Option<RecordWrite>> = self
+        let mut writes: Vec<Option<RecordWriteProofInputRequest>> = self
             .inputs
             .writes
             .iter()

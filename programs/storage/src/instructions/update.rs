@@ -19,10 +19,9 @@
 
 use custom_ring_interface::{
     key_catalog::RingCircuit,
-    queue_chain,
     storage::{chain_start, RootUpdate, StorageError},
     storage_instruction::StorageUpdateIxData,
-    verifying_key, ApplyRecordsStatement, RingProof,
+    verifying_key, write_chain, ApplyRecordsStatement, RingProof,
 };
 use pinocchio::{
     error::ProgramError,
@@ -68,7 +67,7 @@ pub fn process_update_ix(
         chain_start,
         |chain, entry| -> Result<[u8; 32], ProgramError> {
             let entry = entry.map_err(|_| StorageError::InvalidWrite)?;
-            queue_chain(&chain, &entry).map_err(|_| StorageError::HashingFailed.into())
+            write_chain(&chain, &entry).map_err(|_| StorageError::HashingFailed.into())
         },
     )?;
     // 5. A failed proof reverts the root step 3 moved.

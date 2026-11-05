@@ -49,7 +49,7 @@ pub fn check_member(member: &[u8; 32]) -> Result<(), CustomRingError> {
 
 /// One masked write, `lists' = (lists & !mask) | value`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct QueueEntry {
+pub struct RecordWrite {
     pub member: [u8; 32],
     pub mask: u64,
     /// `RecordWriteData::storage_entry` keeps it inside `mask`, the apply circuit takes it as given.
@@ -58,14 +58,14 @@ pub struct QueueEntry {
     pub mint_policy: Option<MintPolicy>,
 }
 
-impl QueueEntry {
+impl RecordWrite {
     /// `Poseidon(CRQW, member, mask, value, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2)`, mirror
     /// `prover/circuits/registry/apply_records.go`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         let policy = self.mint_policy.unwrap_or_default();
         let [limits_0, limits_1, limits_2] = policy.limits.fields();
         Poseidon::hashv(&[
-            &domain::field(domain::QUEUE_WRITE),
+            &domain::field(domain::RECORD_WRITE),
             &self.member,
             &right_align(&self.mask.to_be_bytes()),
             &right_align(&self.value.to_be_bytes()),
@@ -91,7 +91,7 @@ impl QueueEntry {
 }
 
 /// `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain_start` of the registry and revision.
-pub fn queue_chain(previous: &[u8; 32], entry: &QueueEntry) -> Result<[u8; 32], HasherError> {
+pub fn write_chain(previous: &[u8; 32], entry: &RecordWrite) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[previous, &entry.hash()?])
 }
 

@@ -9,7 +9,7 @@ export const RingDomain = Object.freeze({
   blindingSeed: 0x4352_4253, // "CRBS"
   transferStatement: 0x4352_5458, // "CRTX"
   policyTable: 0x4352_5442, // "CRTB"
-  queueWrite: 0x4352_5157, // "CRQW"
+  recordWrite: 0x4352_5157, // "CRQW"
   applyRecords: 0x4352_4150, // "CRAP"
   registerKey: 0x4352_5247, // "CRRG"
   depositBlinding: 0x4352_4442, // "CRDB"

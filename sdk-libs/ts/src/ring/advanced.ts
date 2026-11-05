@@ -203,8 +203,8 @@ export {
   applyRecordsStatement,
   checkMember,
   memberRecordHash,
-  queueChain,
-  queueEntryHash,
+  writeChain,
+  recordWriteHash,
   quadPathRoot,
   replayRecordWrites,
   verifyRecordOpening,
@@ -259,7 +259,7 @@ export {
 } from "../protocol/membership/policy.js";
 export {
   ENROLMENT_LISTS,
-  recordUpdateQueueEntry,
+  recordUpdateWrite,
   recordUpdateStatementHash,
   signRecordUpdate,
   verifyRecordUpdate,

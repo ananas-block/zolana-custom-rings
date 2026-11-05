@@ -132,9 +132,9 @@ type lowView struct {
 	bodyView
 }
 
-// writeView mirrors registry.RecordWrite field for field.
+// writeView mirrors registry.RecordWriteProofInput field for field.
 type writeView struct {
-	Entry   QueueEntry
+	Entry   RecordWrite
 	Exists  bool
 	Old     bodyView
 	Slot    quadPath
@@ -168,7 +168,7 @@ func (w TrackingWrite) view() any {
 	}
 }
 
-func (w RecordWrite) view() any {
+func (w RecordWriteProofInput) view() any {
 	return writeView{
 		Entry:  w.Entry,
 		Exists: w.Exists,

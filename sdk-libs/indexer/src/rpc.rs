@@ -181,8 +181,8 @@ pub struct StorageWriteView {
     pub mint_policy: Option<zolana_ring_policy::MintPolicy>,
 }
 
-impl From<&custom_ring_interface::QueueEntry> for StorageWriteView {
-    fn from(entry: &custom_ring_interface::QueueEntry) -> Self {
+impl From<&custom_ring_interface::RecordWrite> for StorageWriteView {
+    fn from(entry: &custom_ring_interface::RecordWrite) -> Self {
         Self {
             member: Hash(entry.member),
             mask: entry.mask,

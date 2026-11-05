@@ -1,5 +1,5 @@
 //! Shared nonzero mint settings and asset limits, including full u64 values and records beyond eight.
-use custom_ring_interface::QueueEntry;
+use custom_ring_interface::RecordWrite;
 use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{MemberRegistryTree, RecordTree};
 use zolana_ring_policy::{AssetLimits, MintPolicy};
@@ -32,7 +32,7 @@ fn vector() -> serde_json::Value {
         };
         assert_eq!(MintPolicy::from_bytes(policy.bytes()), policy);
         let member = right_align(&mint.to_be_bytes());
-        let entry = QueueEntry {
+        let entry = RecordWrite {
             member,
             mask: 0,
             value: 0,

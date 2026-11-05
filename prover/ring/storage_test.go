@@ -65,7 +65,7 @@ func TestStorageFixtures(t *testing.T) {
 			circuit: circuit, capacity: capacity, members: members, entries: entries,
 			chainStart: spptest.MustHashChain4(t, []*big.Int{big.NewInt(shared.ApplyRecordsDomain), instance, big.NewInt(int64(revision))}),
 		}).request(t)
-		writes := make([]QueueEntry, len(entries))
+		writes := make([]RecordWrite, len(entries))
 		for i, write := range request.Writes[:len(entries)] {
 			writes[i] = write.Entry
 		}

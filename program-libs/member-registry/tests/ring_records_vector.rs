@@ -1,7 +1,7 @@
 //! Pins `test-vectors/registry/ring-records.json` for the Go circuits, Photon and the TS SDK.
 
 use custom_ring_interface::{
-    queue_chain, QueueEntry, RecordWriteData, WriteRecordsIxData, MEMBER_REGISTRY_EMPTY_ROOT,
+    write_chain, RecordWrite, RecordWriteData, WriteRecordsIxData, MEMBER_REGISTRY_EMPTY_ROOT,
     QUAD_HEIGHT,
 };
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ enum Queued {
 }
 
 impl Queued {
-    fn entry(&self) -> QueueEntry {
+    fn entry(&self) -> RecordWrite {
         let lists = |set: ListSet, clear: ListSet| {
             WriteRecordsIxData::new(ListChange { set, clear }.check().expect("list write"))
         };
@@ -134,7 +134,7 @@ impl Queued {
         }
     }
 
-    fn vector(&self, position: u64, entry: &QueueEntry, chain: &[u8; 32]) -> QueuedWrite {
+    fn vector(&self, position: u64, entry: &RecordWrite, chain: &[u8; 32]) -> QueuedWrite {
         let (kind, signer) = match self {
             Self::Member { signer, .. } => ("member_write", Some(signer)),
             Self::Authority { .. } => ("authority_write", None),
@@ -175,7 +175,7 @@ struct Registry {
     chain: [u8; 32],
     /// `chain(head - 1)`.
     chain_head: [u8; 32],
-    pending: Vec<(QueueEntry, QueuedWrite)>,
+    pending: Vec<(RecordWrite, QueuedWrite)>,
 }
 
 impl Registry {
@@ -189,9 +189,9 @@ impl Registry {
         }
     }
 
-    fn queue(&mut self, queued: Queued) -> (QueueEntry, QueuedWrite) {
+    fn queue(&mut self, queued: Queued) -> (RecordWrite, QueuedWrite) {
         let entry = queued.entry();
-        self.chain = queue_chain(&self.chain, &entry).expect("chain");
+        self.chain = write_chain(&self.chain, &entry).expect("chain");
         let vector = queued.vector(self.position, &entry, &self.chain);
         self.position += 1;
         (entry, vector)
@@ -209,7 +209,7 @@ impl Registry {
             .into_iter()
             .map(|queued| self.queue(queued))
             .collect();
-        let entries: Vec<QueueEntry> = pending
+        let entries: Vec<RecordWrite> = pending
             .iter()
             .chain(&authority_writes)
             .map(|(entry, _)| *entry)

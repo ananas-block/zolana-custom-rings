@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use custom_ring_interface::{
-    QueueEntry, FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
+    RecordWrite, FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
 };
 use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{
@@ -14,8 +14,8 @@ fn member(byte: u8) -> [u8; 32] {
     right_align(&[byte])
 }
 
-fn write(byte: u8, mask: u64, value: u64) -> QueueEntry {
-    QueueEntry {
+fn write(byte: u8, mask: u64, value: u64) -> RecordWrite {
+    RecordWrite {
         mint_policy: Default::default(),
         member: member(byte),
         mask,
@@ -99,7 +99,7 @@ fn an_absent_member_whose_write_leaves_no_list_stays_absent() {
 }
 
 #[test]
-fn the_tree_refuses_writes_the_program_never_queues() {
+fn the_tree_refuses_writes_the_program_never_chains() {
     let mut tree = MemberRegistryTree::new().unwrap();
     let before = tree.clone();
     assert_eq!(
@@ -197,7 +197,7 @@ fn a_record_pool_opens_each_record_once_and_refuses_a_forged_subject() {
 #[test]
 fn records_rebuild_the_tree_they_came_from() {
     let mut tree = MemberRegistryTree::new().unwrap();
-    let entries: Vec<QueueEntry> = (1..=40).map(|byte| write(byte * 5, ALLOW, ALLOW)).collect();
+    let entries: Vec<RecordWrite> = (1..=40).map(|byte| write(byte * 5, ALLOW, ALLOW)).collect();
     tree.apply([0; 32], &entries).unwrap();
     let rebuilt = MemberRegistryTree::from_records(tree.records().to_vec()).unwrap();
     assert_eq!(rebuilt, tree);
@@ -221,7 +221,7 @@ struct PreloadedStore {
 }
 
 impl PreloadedStore {
-    fn for_batch(tree: &MemberRegistryTree, entries: &[QueueEntry]) -> Self {
+    fn for_batch(tree: &MemberRegistryTree, entries: &[RecordWrite]) -> Self {
         let next_index = tree.next_index().unwrap();
         let mut store = Self {
             next_index,
@@ -297,7 +297,7 @@ impl RecordStore for PreloadedStore {
 #[test]
 fn a_store_preloaded_by_sibling_positions_applies_like_the_full_tree() {
     let mut tree = MemberRegistryTree::new().unwrap();
-    let seeded: Vec<QueueEntry> = (1..=30).map(|byte| write(byte * 7, ALLOW, ALLOW)).collect();
+    let seeded: Vec<RecordWrite> = (1..=30).map(|byte| write(byte * 7, ALLOW, ALLOW)).collect();
     tree.apply([0; 32], &seeded).unwrap();
     let batch = [
         write(50, BLOCK, BLOCK),
@@ -381,7 +381,7 @@ fn mint_settings_survive_relinks_and_list_writes_and_clear_explicitly() {
     };
     tree.apply(
         [0; 32],
-        &[QueueEntry {
+        &[RecordWrite {
             mint_policy: Some(policy),
             ..write(5, 0, 0)
         }],
@@ -394,7 +394,7 @@ fn mint_settings_survive_relinks_and_list_writes_and_clear_explicitly() {
     assert_eq!(before.next, member(7));
     tree.apply(
         [0; 32],
-        &[QueueEntry {
+        &[RecordWrite {
             mint_policy: Some(MintPolicy::EMPTY),
             ..write(5, 0, 0)
         }],

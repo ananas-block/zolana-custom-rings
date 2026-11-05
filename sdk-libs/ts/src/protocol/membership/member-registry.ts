@@ -53,7 +53,7 @@ export type RecordOpening =
   | Readonly<{ kind: "absent"; low: MemberRecord; path: QuadPath }>;
 
 /** `lists' = (lists & !mask) | value`. */
-export interface QueueEntry {
+export interface RecordWrite {
   readonly member: Bytes32;
   readonly mask: bigint;
   readonly value: bigint;
@@ -62,7 +62,7 @@ export interface QueueEntry {
 
 /** One write's apply proof input, Rust `RecordWriteProofInput`. */
 export interface RecordWriteProofInput {
-  readonly entry: QueueEntry;
+  readonly entry: RecordWrite;
   readonly exists: boolean;
   /** An absent member reads its low record's `next` and empty lists. */
   readonly oldNext: Bytes32;

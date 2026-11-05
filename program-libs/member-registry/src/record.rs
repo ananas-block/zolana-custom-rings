@@ -8,7 +8,7 @@
 //! 2. A write that would leave a new member's record empty inserts nothing, the member stays absent and the root stays.
 
 use custom_ring_interface::{
-    queue_chain, ApplyRecordsStatement, QueueEntry, FIELD_MAX, QUAD_HEIGHT,
+    write_chain, ApplyRecordsStatement, RecordWrite, FIELD_MAX, QUAD_HEIGHT,
 };
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use zolana_ring_policy::MintPolicy;
@@ -28,11 +28,11 @@ pub struct MemberRecord {
     pub mint_policy: MintPolicy,
 }
 
-/// One write's proof input, mirror `RecordWrite` of
+/// One write's proof input, mirror `RecordWriteProofInput` of
 /// `prover/circuits/registry/apply_records.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordWriteProofInput {
-    pub entry: QueueEntry,
+    pub entry: RecordWrite,
     pub exists: bool,
     /// The old record's fields, an absent member reads its low record's `next` and nothing else.
     pub old_next: [u8; 32],
@@ -71,7 +71,7 @@ impl MemberRecord {
 
     /// List bits outside the mask keep their value.
     #[must_use]
-    pub fn written(self, entry: &QueueEntry) -> Self {
+    pub fn written(self, entry: &RecordWrite) -> Self {
         Self {
             lists: (self.lists & !entry.mask) | entry.value,
             mint_policy: entry.mint_policy.unwrap_or(self.mint_policy),
@@ -123,14 +123,14 @@ impl IndexedLeaf for MemberRecord {
 }
 
 impl WritableLeaf<QUAD_HEIGHT> for MemberRecord {
-    type Entry = QueueEntry;
+    type Entry = RecordWrite;
     type WriteProof = RecordWriteProofInput;
 
-    fn entry_member(entry: &QueueEntry) -> &[u8; 32] {
+    fn entry_member(entry: &RecordWrite) -> &[u8; 32] {
         &entry.member
     }
 
-    fn check_entry(entry: &QueueEntry) -> Result<(), RecordTreeError> {
+    fn check_entry(entry: &RecordWrite) -> Result<(), RecordTreeError> {
         check_member(&entry.member)?;
         if entry.value & !entry.mask != 0 {
             return Err(RecordTreeError::ValueOutsideMask);
@@ -138,15 +138,18 @@ impl WritableLeaf<QUAD_HEIGHT> for MemberRecord {
         Ok(())
     }
 
-    fn chained(previous: &[u8; 32], entry: &QueueEntry) -> Result<[u8; 32], HasherError> {
-        queue_chain(previous, entry)
+    fn chained(previous: &[u8; 32], entry: &RecordWrite) -> Result<[u8; 32], HasherError> {
+        write_chain(previous, entry)
     }
 
-    fn after(self, entry: &QueueEntry) -> Result<Self, RecordTreeError> {
+    fn after(self, entry: &RecordWrite) -> Result<Self, RecordTreeError> {
         Ok(self.written(entry))
     }
 
-    fn write_proof(entry: QueueEntry, step: WriteStep<Self, QUAD_HEIGHT>) -> RecordWriteProofInput {
+    fn write_proof(
+        entry: RecordWrite,
+        step: WriteStep<Self, QUAD_HEIGHT>,
+    ) -> RecordWriteProofInput {
         match step {
             WriteStep::Present { old, slot } => RecordWriteProofInput {
                 entry,

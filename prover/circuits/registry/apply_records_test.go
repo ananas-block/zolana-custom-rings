@@ -60,14 +60,14 @@ func (b *batch) bind(t *testing.T) {
 	c.PublicInputHash = spptest.MustHashChain4(t, statement)
 }
 
-func writeWires(w ringregistry.Write) registry.RecordWrite {
+func writeWires(w ringregistry.Write) registry.RecordWriteProofInput {
 	e := w.Entry
 	exists := 0
 	if w.Exists {
 		exists = 1
 	}
-	return registry.RecordWrite{
-		Entry:  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires()},
+	return registry.RecordWriteProofInput{
+		Entry:  registry.RecordWrite{Member: e.Member, Mask: e.Mask, Value: e.Value, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires()},
 		Exists: exists,
 		Old: registry.RecordBody{
 			Next: w.OldNext, Lists: w.OldLists, MintPolicy: policyValue(w.OldMintPolicy),
@@ -79,7 +79,7 @@ func writeWires(w ringregistry.Write) registry.RecordWrite {
 	}
 }
 
-func zeroWrite() registry.RecordWrite {
+func zeroWrite() registry.RecordWriteProofInput {
 	zero := ringregistry.Write{
 		Entry:   entry(0, 0, 0),
 		OldNext: big.NewInt(0), OldLists: big.NewInt(0),
@@ -107,7 +107,7 @@ func seeded(t *testing.T) *ringregistry.Registry {
 	return members
 }
 
-func TestApplyRecordsAppliesTheQueueInOrder(t *testing.T) {
+func TestApplyRecordsAppliesWritesInOrder(t *testing.T) {
 	members := seeded(t)
 	b := applyBatch(t, members, registry.ApplyBatch, big.NewInt(0x5eed),
 		entry(0x20, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.BlockBit),                       // insert between alice and carol
@@ -141,9 +141,9 @@ func TestApplyRecordsAppliesTheQueueInOrder(t *testing.T) {
 
 // Each case forges a batch consistent with every rule but the one it names, whose frames refuse it.
 func TestApplyRecordsRefusals(t *testing.T) {
-	gate := []string{"gadget.AssertEqualWhen", "registry.RecordWrite.apply"}
-	empty := []string{"gadget.AssertZeroWhen", "registry.RecordWrite.apply"}
-	bracket := []string{"ringgadget.AssertOrderedWhen", "registry.RecordWrite.apply"}
+	gate := []string{"gadget.AssertEqualWhen", "registry.RecordWriteProofInput.apply"}
+	empty := []string{"gadget.AssertZeroWhen", "registry.RecordWriteProofInput.apply"}
+	bracket := []string{"ringgadget.AssertOrderedWhen", "registry.RecordWriteProofInput.apply"}
 	define := []string{"[assertIsEqual]", "registry.(*ApplyRecordsCircuit).Define"}
 	insert := entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit)
 	tests := []struct {
@@ -305,7 +305,7 @@ func TestApplyRecordsKeys(t *testing.T) {
 	if _, err := registry.NewApplyRecordsCircuit(3); err == nil {
 		t.Fatal("built a capacity no apply key ships")
 	}
-	unchecked := &registry.ApplyRecordsCircuit{NumWrites: 3, Writes: make([]registry.RecordWrite, 3)}
+	unchecked := &registry.ApplyRecordsCircuit{NumWrites: 3, Writes: make([]registry.RecordWriteProofInput, 3)}
 	if _, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, unchecked); err == nil {
 		t.Fatal("compiled a capacity no apply key ships")
 	}

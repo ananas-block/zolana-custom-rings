@@ -35,7 +35,7 @@ describe("ring domains", () => {
       blindingSeed: ascii("CRBS"),
       transferStatement: ascii("CRTX"),
       policyTable: ascii("CRTB"),
-      queueWrite: ascii("CRQW"),
+      recordWrite: ascii("CRQW"),
       applyRecords: ascii("CRAP"),
       registerKey: ascii("CRRG"),
       depositBlinding: ascii("CRDB"),

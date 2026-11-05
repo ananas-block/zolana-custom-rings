@@ -310,7 +310,7 @@ impl Records {
     }
 
     /// The entry lands under the registry's newest root.
-    fn recorded(&self, entry: QueueEntry) {
+    fn recorded(&self, entry: RecordWrite) {
         self.chain.records.apply(entry);
         let mut accounts = self.chain.accounts.lock().unwrap();
         let account = accounts.get_mut(&REGISTRY).expect("registry");
@@ -688,13 +688,13 @@ async fn an_invalid_mint_limits_update_is_refused_at_admission() {
         RecordUpdateRefusal::LimitsWithoutRecord.code()
     );
 
-    records.recorded(QueueEntry {
+    records.recorded(RecordWrite {
         member: asset,
         mint_policy: Some(MintPolicy {
             threshold: 5,
             ..MintPolicy::EMPTY
         }),
-        ..QueueEntry::default()
+        ..RecordWrite::default()
     });
     records.submit(longest()).await.expect("queued");
 }

@@ -20,8 +20,8 @@ import {
   MEMBER_WRITABLE_LISTS,
 } from "../../operations/management/record-writes.js";
 import { RingError } from "../error.js";
-import type { QueueEntry } from "../membership/member-registry.js";
-import { checkMember, queueChain } from "../membership/member-opening.js";
+import type { RecordWrite } from "../membership/member-registry.js";
+import { checkMember, writeChain } from "../membership/member-opening.js";
 import { ListId, recordBit, walletGrantMember, type Member } from "../membership/policy.js";
 import type {
   RecordUpdate,
@@ -51,7 +51,7 @@ export interface UnsignedRecordUpdate {
 }
 
 /** Rust `RecordUpdateEntry::entry`, the leaf write the apply proof hashes. */
-export function recordUpdateQueueEntry(entry: RecordUpdateEntry): QueueEntry {
+export function recordUpdateWrite(entry: RecordUpdateEntry): RecordWrite {
   switch (entry.kind) {
     case "write": {
       const member = checkMember(indexerScalars.hashBytes(entry.member));
@@ -97,7 +97,7 @@ export function recordUpdateStatementHash(input: UnsignedRecordUpdate): Bytes32 
     hashBytes(indexerScalars.hashBytes(genesisHash)) as Bytes32,
     ringIdField(ring),
     hashBytes(addressBytes(input.registry, "registry")) as Bytes32,
-    entries.map(recordUpdateQueueEntry).reduce(queueChain, ZERO_32),
+    entries.map(recordUpdateWrite).reduce(writeChain, ZERO_32),
     bigIntBytes(validUntilSlot) as Bytes32,
     // The width separates an enrolment's hash from a plain update's.
     ...(awaitedLists === 0n ? [] : [bigIntBytes(awaitedLists) as Bytes32]),

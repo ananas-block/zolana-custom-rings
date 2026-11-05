@@ -20,7 +20,7 @@ pub const AUDIT_SHARED_SECRET: u32 = 0x4352_5f53;
 /// `"CRTB"`, defined beside the table hash in the policy crate the interface depends on.
 pub use zolana_ring_policy::POLICY_TABLE_DOMAIN as POLICY_TABLE;
 /// `"CRQW"`
-pub const QUEUE_WRITE: u32 = 0x4352_5157;
+pub const RECORD_WRITE: u32 = 0x4352_5157;
 /// `"CRAP"`
 pub const APPLY_RECORDS: u32 = 0x4352_4150;
 /// `"CRRG"`

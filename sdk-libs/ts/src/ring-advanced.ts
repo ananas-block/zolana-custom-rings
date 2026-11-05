@@ -11,7 +11,7 @@ export type {
   MemberRecord,
   PoolSubject,
   QuadPath,
-  QueueEntry,
+  RecordWrite,
   RecordOpening,
   RecordPool,
   RecordWriteProofInput,

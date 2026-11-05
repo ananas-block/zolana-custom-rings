@@ -42,8 +42,8 @@ const ApplyBatch = 16
 // ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/proof/key_catalog.rs.
 var ApplyWidths = []int{1, 2, 4, 8, ApplyBatch}
 
-// QueueEntry's MintPolicy packs the settings below bit 192 and marks a replacement at bit 192, mirrored by QueueEntry::mint_policy_field in program-libs/interface/src/accounts/member_registry.rs.
-type QueueEntry struct {
+// RecordWrite's MintPolicy packs the settings below bit 192 and marks a replacement at bit 192, mirrored by RecordWrite::mint_policy_field in program-libs/interface/src/accounts/member_registry.rs.
+type RecordWrite struct {
 	Member              frontend.Variable
 	Mask                frontend.Variable
 	Value               frontend.Variable
@@ -53,13 +53,13 @@ type QueueEntry struct {
 }
 
 // Hash is the entry the program chains at write time in program-libs/interface/src/accounts/member_registry.rs.
-func (e QueueEntry) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, slices.Concat([]frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.MintPolicy, e.WithdrawalThreshold}, e.AssetLimits[:]))
+func (e RecordWrite) Hash(api frontend.API) frontend.Variable {
+	return gadget.PoseidonHash(api, slices.Concat([]frontend.Variable{shared.RecordWriteDomain, e.Member, e.Mask, e.Value, e.MintPolicy, e.WithdrawalThreshold}, e.AssetLimits[:]))
 }
 
-// RecordWrite's Slot opens the member's leaf, or the empty leaf an insert takes.
-type RecordWrite struct {
-	Entry   QueueEntry
+// RecordWriteProofInput's Slot opens the member's leaf, or the empty leaf an insert takes.
+type RecordWriteProofInput struct {
+	Entry   RecordWrite
 	Exists  frontend.Variable
 	Old     RecordBody
 	Slot    QuadPath
@@ -80,7 +80,7 @@ type ApplyRecordsCircuit struct {
 	ChainStart   frontend.Variable
 	ChainEnd     frontend.Variable
 	Count        frontend.Variable
-	Writes       []RecordWrite
+	Writes       []RecordWriteProofInput
 }
 
 type registryState struct {
@@ -91,7 +91,7 @@ func NewApplyRecordsCircuit(writes int) (*ApplyRecordsCircuit, error) {
 	if err := shared.ValidateWidth("registry", writes, ApplyWidths); err != nil {
 		return nil, err
 	}
-	return &ApplyRecordsCircuit{NumWrites: writes, Writes: make([]RecordWrite, writes)}, nil
+	return &ApplyRecordsCircuit{NumWrites: writes, Writes: make([]RecordWriteProofInput, writes)}, nil
 }
 
 func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
@@ -114,7 +114,7 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 }
 
 // apply moves s by w while active is set, an unset active leaves it.
-func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
+func (w RecordWriteProofInput) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
 	// 1. List bits outside the mask keep their old value, the program keeps the chained Value inside the mask.
 	maskBits := api.ToBinary(w.Entry.Mask, ListBits)
 	updated := RecordBody{Next: w.Old.Next, Lists: api.Add(keptLists(api, w.Old.Lists, maskBits), w.Entry.Value)}
