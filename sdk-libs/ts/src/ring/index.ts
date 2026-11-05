@@ -417,7 +417,6 @@ export type {
   AuditedSender,
   AuditedUtxo,
   CreatedRingUtxo,
-  EscrowedKeys,
   InputOpening,
   InputRing,
   KnownNote,

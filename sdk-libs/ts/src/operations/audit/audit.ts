@@ -266,11 +266,6 @@ export class KnownUtxoIndex implements KnownUtxos {
   }
 }
 
-/** By raw Solana key, the audit tries the zero key after it. */
-export interface EscrowedKeys {
-  nullifierPk(ownerKey: Bytes32): Bytes32 | undefined;
-}
-
 export interface RingAuditPage {
   readonly transactions: readonly AuditedRingTransaction[];
   /** Landed rows that fail to decode or fail their audit, each opens nothing. */
