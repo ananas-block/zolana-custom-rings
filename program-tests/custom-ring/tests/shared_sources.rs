@@ -4,6 +4,7 @@
 //! the source re-admits it.
 
 use anyhow::Result;
+use custom_ring_interface::CustomRingError;
 use custom_ring_sdk::{DepositAsset, ListRegistry, SourceOwner};
 use custom_ring_test_validator::{
     policy::{
@@ -11,12 +12,13 @@ use custom_ring_test_validator::{
         BLOCK_ONLY, DEPOSIT, TRANSFER_AMOUNT,
     },
     ring_rpc::RingRpcSpec,
-    shared::{send, RegisterRing, Tier},
+    shared::{send, ExpectRejection, RegisterRing, Tier},
 };
 use solana_signer::Signer;
 use spr_keypair::X25519Keypair;
+use spr_program_test::Rejection;
 use spr_transaction::Utxo;
-use zolana_ring_policy::ListId;
+use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
 
 #[test]
 fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
@@ -121,6 +123,7 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
         &[custom_ring_sdk::UpdatePolicy {
             ring: subscriber,
             authority,
+            current: &*policy_registry(subscriber, env)?,
             update: custom_ring_sdk::PolicyUpdate::Source {
                 list_id: ListId::Block,
                 source: SourceOwner::Own,
@@ -138,5 +141,56 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
     assert!(repointed.generation_slot() > stored.generation_slot());
     transfer(&notes[2]).land()?;
 
+    Ok(())
+}
+
+const PRIVATE_BLOCK_ONLY: RuleTable = RuleTable::builder()
+    .rule(Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock))
+    .build();
+
+/// A private list read through another ring's records pairs with that ring's credentials, a
+/// subscriber's absence floor would count the wrong ring's writes.
+#[test]
+fn a_private_list_on_another_rings_records_is_refused() -> Result<()> {
+    let rings = CuratedRings::setup()?;
+    let CuratedRings {
+        ref env,
+        curator,
+        subscriber,
+    } = rings;
+    RegisterRing {
+        ring: subscriber,
+        payer: &env.payer,
+        auditor_pubkey: X25519Keypair::new().pubkey(),
+        tier: Tier::Policy {
+            rules: &PRIVATE_BLOCK_ONLY,
+            shared_sources: Vec::new(),
+        },
+    }
+    .send(&env.client)?;
+    let current = policy_registry(subscriber, env)?;
+    let foreign = policy_registry(curator, env)?.records;
+    let rejection = ExpectRejection {
+        payer: &env.payer,
+        instructions: &[custom_ring_sdk::UpdatePolicy {
+            ring: subscriber,
+            authority: env.payer.pubkey(),
+            current: &current,
+            update: custom_ring_sdk::PolicyUpdate::Source {
+                list_id: ListId::PrivateBlock,
+                source: SourceOwner::Curator(foreign),
+            },
+        }
+        .instruction()?],
+    }
+    .send(env.client.rpc())?;
+    Rejection::custom(CustomRingError::SaltedSourceOtherRing as u32)
+        .at(0)
+        .assert_client(&rejection);
+    assert_eq!(
+        policy_registry(subscriber, env)?.registry_for(ListId::PrivateBlock),
+        Some(ListRegistry::Own),
+        "a refused write leaves the stored account"
+    );
     Ok(())
 }

@@ -163,6 +163,7 @@ fn the_policy_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
         instructions: &[custom_ring_sdk::UpdatePolicy {
             ring,
             authority: stranger.pubkey(),
+            current: &*policy_registry(ring, env)?,
             update: custom_ring_sdk::PolicyUpdate::Rules(custom_ring_sdk::PolicyTable {
                 rules: &BLOCK_ONLY,
                 shared_sources: &[],
