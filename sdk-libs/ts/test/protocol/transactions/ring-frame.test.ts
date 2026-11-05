@@ -331,7 +331,6 @@ describe("the ring frame", () => {
     expect(RingInstructionTag.transfer).toBe(55);
     expect(RingInstructionTag.authorityTransfer).toBe(56);
     expect(RingInstructionTag.merge).toBe(57);
-    expect(RingInstructionTag.deposit).toBe(58);
     expect(ringRailOf(55, "anonymous")).toBe("anonymous");
     expect(ringRailOf(56, "anonymous")).toBe("anonymousDelegate");
     expect(ringRailOf(56, "confidential")).toBe("delegate");

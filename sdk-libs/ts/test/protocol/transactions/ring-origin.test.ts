@@ -5,7 +5,6 @@ import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/c
 
 import {
   encodeMergeOutputData,
-  encodeRingDepositInstructionData,
   wireDecoder,
   Reader,
   Writer,
@@ -30,10 +29,7 @@ import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
 import { RingError } from "../../../src/protocol/error.js";
 import { readMergeData } from "../../../src/protocol/codec/codecs.js";
-import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
-import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "../../../src/protocol/transaction/deposit-instruction.js";
 import {
-  ConfirmedDeposit,
   confirmedInstructionGroups,
   confirmedRingWithdrawals,
   ringInvokedIn,
@@ -874,7 +870,7 @@ function rustFixture(name: string) {
     slot: 7n,
     txSignature: SIGNATURE,
     eventIndex: 0,
-    proofless: sourceBytes[0] === InstructionTag.ringDeposit,
+    proofless: false,
     ringProgramId: ring,
     ...(hasViewingKey ? { txViewingPublicKey: X25519PublicKey.fromBytes(viewingKey) } : {}),
     // A Photon row omits a zero salt, the confirmed source bytes restore it.
@@ -917,30 +913,27 @@ function rustFixture(name: string) {
 }
 
 describe("RpcTransactionOrigin", () => {
-  it.each(["confirmed-event", "confirmed-deposit-event"])(
+  it.each(["confirmed-event"])(
     "matches Rust's %s codec and rejects substituted recovery data",
     async (name) => {
       const { ring, accounts, sourceBytes, eventBytes, indexed, hasViewingKey, saltHex } =
         rustFixture(name);
-      const transfer = name === "confirmed-event";
       const confirmed = confirmedEvent(
         ring,
         accounts,
         sourceBytes,
         eventBytes,
-        transfer
-          ? ringInstructionData(
-              ringFrame({
-                rail: "confidential",
-                inputs: indexed.nullifiers.length,
-                outputs: indexed.outputSlots.length,
-              }),
-            )
-          : undefined,
+        ringInstructionData(
+          ringFrame({
+            rail: "confidential",
+            inputs: indexed.nullifiers.length,
+            outputs: indexed.outputSlots.length,
+          }),
+        ),
       );
       const origin = new RpcTransactionOrigin(rpcWith(confirmed));
       const bound = await origin.confirmedTransaction(indexed, ring);
-      expect(bound?.kind).toBe(name === "confirmed-deposit-event" ? "deposit" : "transfer");
+      expect(bound?.kind).toBe("transfer");
       expect(bound?.transaction).toEqual({
         ...indexed,
         ...(hasViewingKey ? { salt: saltHex } : {}),
@@ -1068,64 +1061,6 @@ describe("RpcTransactionOrigin", () => {
       await expect(
         new RpcTransactionOrigin(rpcWith(sppTag.confirmed)).confirmedTransaction(row, RING),
       ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
-    });
-  });
-
-  describe("tag 58", () => {
-    const capsule = encodeRingDepositCapsule({
-      slotIndex: 0,
-      ephemeralPublicKey: new Uint8Array(33).fill(4) as Bytes33,
-      ciphertext: new Uint8Array(144).fill(5),
-      recipientCiphertext: Uint8Array.of(1),
-    });
-    const source = Uint8Array.of(
-      InstructionTag.ringDeposit,
-      ...encodeRingDepositInstructionData({
-        assets: [{ kind: "sol" }],
-        deposits: [
-          {
-            assetIndex: 0,
-            viewTag: zeros(32) as Bytes32,
-            ownerUtxoHash: new Uint8Array(32).fill(7) as Bytes32,
-            amount: 1n,
-            ringDataHash: zeros(32) as Bytes32,
-            encrypted: {
-              txViewingPublicKey: new Uint8Array(33).fill(4) as Bytes33,
-              salt: zeros(16) as Bytes16,
-              ciphertext: capsule,
-            },
-          },
-        ],
-      }),
-    );
-    const bound = (forwarded: Uint8Array) =>
-      ConfirmedDeposit.fromTransaction(
-        confirmedEvent(
-          RING,
-          [],
-          source,
-          Uint8Array.of(InstructionTag.emitEvent, 0),
-          Uint8Array.of(
-            RingInstructionTag.deposit,
-            ...zeros(AUDITED_DEPOSIT_PREFIX_LENGTH - 1),
-            ...forwarded,
-          ),
-        ),
-        SIGNATURE,
-        0,
-        RING,
-      );
-
-    it("binds a CRDEPOST capsule and refuses another forwarded byte", () => {
-      expect(bound(source)).toHaveLength(1);
-      const tampered = source.slice();
-      tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 1;
-      expect(() => bound(tampered)).toThrow(
-        expect.objectContaining({
-          code: "RING_ORIGIN_DECODE",
-          details: { path: "auditedDeposit" },
-        }),
-      );
     });
   });
 

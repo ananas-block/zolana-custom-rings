@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { bytesKey, hashChain4 } from "@heliuslabs/zolana/internal";
+import { hexToBytes } from "@noble/hashes/utils.js";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { bytesKey } from "@heliuslabs/zolana/internal";
 import type { Address } from "@solana/kit";
 
 import {
@@ -29,7 +29,6 @@ import {
   DisclosureFormat,
   type AuditStreamLayout,
 } from "../../src/protocol/codec/ring-disclosure-layout.js";
-import { depositStatementElements } from "../../src/proof/deposit-audit.js";
 import { checkInputKeys, checkOutputKeys } from "../../src/proof/policy-proof.js";
 import { enrolledSalt } from "../../src/proof/policy-proof.js";
 import { anonymousPartyIdentities } from "../../src/protocol/membership/parties.js";
@@ -47,13 +46,9 @@ import { RingError } from "../../src/protocol/error.js";
 import {
   RING_KEYS,
   ringAuthorityExitKeyName,
-  ringCircuitType,
   ringProvingKey,
 } from "../../src/protocol/proof/proving-keys.js";
-import {
-  depositKeyCapacity,
-  ownerSignerCapacity,
-} from "../../src/protocol/proof/transfer-shapes.js";
+import { ownerSignerCapacity } from "../../src/protocol/proof/transfer-shapes.js";
 import { ApprovalMask } from "../../src/protocol/transaction/transact.js";
 import { RING_SOURCE_SLOTS } from "../../src/rpc/prover/types.js";
 import { canopyLevels, QUAD_ARITY } from "../../src/protocol/membership/member-registry.js";
@@ -232,25 +227,11 @@ describe("enrolledSalt", () => {
   });
 });
 
-describe("depositKeyCapacity", () => {
-  const subjects = { slots: 1, recipients: 1, assets: 1, saltedKeys: 0 };
-
-  it("takes the narrowest key holding every subject", () => {
-    expect(depositKeyCapacity(subjects)).toBe(1);
-    expect(depositKeyCapacity({ ...subjects, saltedKeys: 1 })).toBe(2);
-  });
-
-  it("refuses a deposit past every key", () => {
-    expect(depositKeyCapacity({ ...subjects, slots: 9 })).toBeUndefined();
-  });
-});
-
 describe("the key table", () => {
   it("serves one merge key under its pinned name", () => {
     expect(
       RING_KEYS.filter((key) => key.circuit.family === "merge").map((key) => key.name),
     ).toEqual(["custom-ring-merge"]);
-    expect(ringCircuitType({ family: "deposit", capacity: 4 })).toBe("custom-ring-deposit-4");
     expect(ringProvingKey({ family: "merge" }).name).toBe("custom_ring_merge.key");
   });
 
@@ -340,48 +321,6 @@ describe("co-sign", () => {
     ).rejects.toMatchObject({
       code: "RING_COSIGNER_REQUIRED",
     });
-  });
-});
-
-describe("deposit.json", () => {
-  type Case = Readonly<{
-    name: string;
-    context_hash: string;
-    ciphertexts: readonly string[];
-    owner_utxo_hashes: readonly string[];
-    assets: readonly string[];
-    amounts: readonly number[];
-    auditor_pubkey: string;
-    eph_pk: string;
-    tracking_root: string;
-    own_root: string;
-    curator_root: string;
-    policy_hash: string;
-    elements: readonly string[];
-    public_input_hash: string;
-  }>;
-  const { cases } = vector("deposit/deposit.json") as Readonly<{ cases: readonly Case[] }>;
-
-  it.each(cases.map((entry) => [entry.name, entry] as const))("%s", (_, entry) => {
-    const elements = depositStatementElements({
-      contextHash: field(entry.context_hash),
-      ownerUtxoHashes: entry.owner_utxo_hashes.map(field),
-      ciphertexts: entry.ciphertexts.map(field),
-      assets: entry.assets.map((asset, slot) => ({
-        asset: field(asset),
-        amount: BigInt(entry.amounts[slot] ?? 0),
-      })),
-      auditorPk: field(entry.auditor_pubkey) as unknown as Bytes33,
-      ephPk: field(entry.eph_pk) as unknown as Bytes33,
-      trackingRoot: field(entry.tracking_root),
-      registry: {
-        ownRoot: field(entry.own_root),
-        curatorRoot: field(entry.curator_root),
-        policyHash: field(entry.policy_hash),
-      },
-    });
-    expect(elements.map((element) => bytesToHex(element))).toEqual(entry.elements);
-    expect(bytesToHex(hashChain4(elements))).toBe(entry.public_input_hash);
   });
 });
 

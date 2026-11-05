@@ -21,6 +21,15 @@ export function answered<R, V>(
   });
 }
 
+/** A malformed body is another key's or a forgery, it is skipped. */
+export function decoded<T>(decode: () => T | undefined): T | undefined {
+  try {
+    return decode();
+  } catch {
+    return undefined;
+  }
+}
+
 /** `seen` takes `key`, `false` when it already held it. */
 export function unseen(seen: Set<string>, key: string): boolean {
   if (seen.has(key)) return false;

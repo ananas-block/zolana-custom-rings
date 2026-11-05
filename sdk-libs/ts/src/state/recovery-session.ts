@@ -2,13 +2,7 @@ import { address } from "@solana/kit";
 import { U64_MAX, PAGE_LIMIT } from "@heliuslabs/zolana/internal";
 import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 import { RingError } from "../protocol/error.js";
-import {
-  GapScan,
-  ViewingHistory,
-  type EntryStream,
-  type GapScanState,
-  PENDING_RETENTION,
-} from "./viewing-history.js";
+import { ViewingHistory } from "./viewing-history.js";
 
 export const RECOVERY_DIAGNOSTIC_SAMPLES = 64;
 
@@ -35,18 +29,7 @@ export interface RecoveryRing extends RecoveryPage {
   afterSlot: bigint | null;
 }
 
-export interface RecoveryDeposits extends RecoveryPage {
-  kind: "deposits";
-  key: string;
-  stream: EntryStream | "bootstrap";
-  gap: GapScanState | null;
-  indices: bigint[];
-  tags: string[];
-  observed: bigint[];
-  chunk: number;
-}
-
-export type RecoveryTask = RecoveryRing | RecoveryDeposits;
+export type RecoveryTask = RecoveryRing;
 
 export interface RecoverySession {
   version: 1;
@@ -134,15 +117,13 @@ export function restoreRecoverySession(value: unknown): RecoverySession | null {
   )
     throw invalid();
   for (const item of tasks) {
-    if (item.kind === "ring") {
-      if (
-        item.keys.length === 0 ||
-        new Set(item.keys).size !== item.keys.length ||
-        (session.mode === "everySite" && item.ring !== session.ring)
-      )
-        throw invalid();
-      if (item.keys.some((held) => !keys.includes(held))) throw invalid();
-    } else if (!keys.includes(item.key)) throw invalid();
+    if (
+      item.keys.length === 0 ||
+      new Set(item.keys).size !== item.keys.length ||
+      (session.mode === "everySite" && item.ring !== session.ring) ||
+      item.keys.some((held) => !keys.includes(held))
+    )
+      throw invalid();
   }
   return session;
 }
@@ -159,55 +140,14 @@ export function recoveryAllows(
 
 function task(value: unknown): RecoveryTask {
   const stored = record(value);
-  if (stored.kind === "ring")
-    return {
-      ...page(stored),
-      kind: "ring",
-      ring: address(string(stored.ring)),
-      keys: strings(stored.keys).map(key),
-      afterSlot: optionalSlot(stored.afterSlot),
-    };
-  if (stored.kind !== "deposits" || !["tx", "request", "bootstrap"].includes(string(stored.stream)))
-    throw invalid();
-  const indices = list(stored.indices).map(u64);
-  const tags = strings(stored.tags).map(hash);
-  const chunk = integer(stored.chunk);
-  if (
-    indices.length > Number(PAGE_LIMIT + PENDING_RETENTION) ||
-    tags.length !== indices.length ||
-    chunk > tags.length
-  )
-    throw invalid();
-  const gap = stored.gap === null ? null : gapState(stored.gap);
-  const stream = stored.stream as EntryStream | "bootstrap";
-  if (integer(stored.workOffset) !== 0) throw invalid();
-  if ((stream === "bootstrap") !== (gap === null)) throw invalid();
+  if (stored.kind !== "ring") throw invalid();
   return {
     ...page(stored),
-    kind: "deposits",
-    key: key(stored.key),
-    stream,
-    gap,
-    indices,
-    tags,
-    observed: list(stored.observed).map(u64),
-    chunk,
+    kind: "ring",
+    ring: address(string(stored.ring)),
+    keys: strings(stored.keys).map(key),
+    afterSlot: optionalSlot(stored.afterSlot),
   };
-}
-
-function gapState(value: unknown): GapScanState {
-  const stored = record(value);
-  const state: GapScanState = {
-    from: u64(stored.from),
-    start: u64(stored.start),
-    end: u64(stored.end),
-    gap: u64(stored.gap),
-    requiredEnd: u64(stored.requiredEnd),
-    late: list(stored.late).map(u64),
-    observed: list(stored.observed).map(u64),
-  };
-  GapScan.restore(state);
-  return state;
 }
 
 function page(stored: Record<string, unknown>): RecoveryPage {

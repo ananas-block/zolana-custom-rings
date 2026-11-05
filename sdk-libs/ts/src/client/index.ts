@@ -22,7 +22,6 @@ export type {
   PrivateOwnerProofInput,
   AuditEnvelopeProofInputs,
   TransferProofRequest,
-  DepositProofRequest,
   EntryOpeningProofInput,
   MergeProofRequest,
   OutputOpeningProofInput,

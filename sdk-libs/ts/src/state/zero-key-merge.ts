@@ -18,7 +18,7 @@ import {
 
 import { answered } from "./batch.js";
 import { zeroKeyNullifier } from "./exposed-notes.js";
-import { decoded } from "./ring-deposit.js";
+import { decoded } from "./batch.js";
 import { isRingMergeRow } from "./ring-sync.js";
 import type { RingKeys } from "./ring-keys.js";
 

@@ -10,7 +10,6 @@ import {
   treeAddress,
   mergeOutputBlinding,
   mergeOutputKey,
-  solanaOwnerIdentity,
   hashBytes,
   addressBytes,
   poseidon,
@@ -45,9 +44,7 @@ import {
   openedUtxo,
   type KnownUtxos,
 } from "../../../src/operations/audit/audit.js";
-import { sealRingDepositOpenings } from "../../../src/proof/deposit-audit.js";
 import {
-  ConfirmedDeposit,
   type ConfirmedRingTransaction,
   type TransactionOrigin,
 } from "../../../src/protocol/transaction/origin.js";
@@ -59,10 +56,6 @@ import {
 } from "../../../src/operations/workflow/recover.js";
 import { ringAuditReader } from "../../helpers/clients.js";
 import { transactionsPage } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import {
-  confirmedDepositTransaction,
-  ringDepositPayload,
-} from "../../helpers/confirmed-deposits.js";
 import { x25519FromU } from "../../../src/crypto/keys/x25519.js";
 import { transactionItems } from "../../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
 import { historyCursor } from "../../../src/rpc/history.js";
@@ -424,17 +417,14 @@ describe("auditRing", () => {
   it("audits the ring's confirmed transfers and skips every other event", async () => {
     const auditor = X25519Keypair.generate();
     const { transaction: transfer } = sealedTransfer({ auditor: auditor.publicKey() });
-    const deposit = { ...transfer, txSignature: "2".repeat(64) as Signature };
     const foreign = { ...transfer, txSignature: "3".repeat(64) as Signature };
     const origin: TransactionOrigin = {
       confirmedTransaction: async (transaction): Promise<ConfirmedRingTransaction | undefined> => {
         if (transaction.txSignature === foreign.txSignature) return undefined;
-        if (transaction.txSignature === deposit.txSignature)
-          return { kind: "deposit", transaction, deposits: [] };
         return transfers.confirmedTransaction(transaction, ring);
       },
     };
-    const page = await scan([transfer, deposit, foreign], origin, { auditor });
+    const page = await scan([transfer, foreign], origin, { auditor });
     expect(page.transactions.map((audited) => audited.signature)).toEqual([SIGNATURE]);
     expect(page.nextCursor).toBeUndefined();
   });
@@ -807,77 +797,6 @@ describe("recoverRingMemberNotes", () => {
     return { transaction, unreadable, commitment, row };
   }
 
-  /** A tag 58 deposit of `record`, its capsule sealed to `auditor`. */
-  function depositOf(auditor: X25519PublicKey, record: AuditRecord, blinding: Bytes32) {
-    const signature = "2".repeat(87) as Signature;
-    const sealed = sealRingDepositOpenings(
-      [{ record, blinding, recipientCiphertext: Uint8Array.of(1) }],
-      auditor,
-    );
-    const owner = ownerUtxoHash(
-      poseidon([solanaOwnerIdentity(record.ownerKey), record.nullifierPk]) as Bytes32,
-      blinding,
-    );
-    const deposits = ConfirmedDeposit.fromTransaction(
-      confirmedDepositTransaction(RING, signature, sealed.capsules, [owner]),
-      signature,
-      0,
-      RING,
-    );
-    const commitment = noteHash(record, blinding);
-    const transaction: IndexedShieldedTransaction = {
-      slot: 5n,
-      txSignature: signature,
-      eventIndex: 0,
-      proofless: true,
-      ringProgramId: RING,
-      nullifiers: [],
-      messages: [],
-      outputSlots: [
-        {
-          viewTag: ZERO_32,
-          outputContext: leaf(commitment, 0n),
-          payload: ringDepositPayload({
-            ring: RING,
-            ownerCommitment: owner,
-            asset: record.mint,
-            amount: record.amount,
-            capsule: sealed.capsules[0]!,
-          }),
-        },
-      ],
-    };
-    const row = (indexed: IndexedShieldedTransaction): ConfirmedRingTransaction => ({
-      kind: "deposit",
-      transaction: indexed,
-      deposits,
-    });
-    return { transaction, commitment, row, ephemeralSecret: sealed.ephemeralSecret };
-  }
-
-  it("recovers the source's unspent ring note and drops it once a confirmed spend names its nullifier", async () => {
-    const auditor = X25519Keypair.generate();
-    const owner = ShieldedKeypair.generate();
-    const { transaction, commitment, amount } = ownedTransfer(owner, auditor.publicKey());
-    const recovered = await recover({ owner, auditor, transaction });
-    expect(recovered.notes.map((note) => [note.outputContext.hash, note.utxo.amount])).toEqual([
-      [commitment, amount],
-    ]);
-    expect(recovered.unopened).toEqual([]);
-    const spend = sealedTransfer({
-      auditor: auditor.publicKey(),
-      nullifiers: [recovered.notes[0]!.nullifier],
-      txSignature: "5".repeat(64) as Signature,
-    }).transaction;
-    const spent = await recover({
-      owner,
-      auditor,
-      transaction,
-      spends: [spend],
-    });
-    expect(spent.notes).toEqual([]);
-  });
-
   it("records a note whose mint no registry names as unopened and goes on", async () => {
     const auditor = X25519Keypair.generate();
     const owner = ShieldedKeypair.generate();
@@ -957,82 +876,6 @@ describe("recoverRingMemberNotes", () => {
       },
     });
     expect(recovered.notes.map((note) => note.outputContext.hash)).toEqual([commitment]);
-  });
-
-  it("lists each anonymous input no member note answers, another owner's zero-key deposit among them", async () => {
-    const auditor = X25519Keypair.generate();
-    const blinding = field(`${"00".repeat(31)}0b`);
-    const deposit = depositOf(
-      auditor.publicKey(),
-      { ...otherRecords[0]!, nullifierPk: ZERO_NULLIFIER_PK as Bytes32 },
-      blinding,
-    );
-    const { transaction } = sealedTransfer({
-      auditor: auditor.publicKey(),
-      nullifiers: [zeroKeyNullifier(deposit.commitment, blinding), OTHER_NULLIFIER],
-    });
-    const anonymousRows = transferRows("anonymous");
-    try {
-      const recovered = await recover({
-        owner: ShieldedKeypair.generate(),
-        auditor,
-        transaction,
-        history: [deposit.transaction],
-        origin: {
-          confirmedTransaction: async (indexed, ring) =>
-            indexed.txSignature === deposit.transaction.txSignature
-              ? deposit.row(indexed)
-              : anonymousRows.confirmedTransaction(indexed, ring),
-        },
-      });
-      expect(recovered).toEqual({
-        notes: [],
-        unopened: [],
-        unsupportedDeposits: [],
-        unknownMints: [],
-        unseenInputs: [zeroKeyNullifier(deposit.commitment, blinding), OTHER_NULLIFIER],
-        unseenInputCount: 2n,
-      });
-    } finally {
-      deposit.ephemeralSecret.fill(0);
-      auditor.destroy();
-    }
-  });
-
-  it("reports a deposit that does not open and stops at an error no row explains", async () => {
-    const auditor = X25519Keypair.generate();
-    const deposit = depositOf(auditor.publicKey(), otherRecords[0]!, field(`${"00".repeat(31)}0b`));
-    const { transaction } = sealedTransfer({ auditor: auditor.publicKey() });
-    const recovered = () =>
-      recover({
-        owner: ShieldedKeypair.generate(),
-        auditor,
-        transaction,
-        history: [deposit.transaction],
-        origin: {
-          confirmedTransaction: async (indexed, ring) =>
-            indexed.txSignature === deposit.transaction.txSignature
-              ? deposit.row(indexed)
-              : TRANSFERS.confirmedTransaction(indexed, ring),
-        },
-      });
-    const authenticate = vi.spyOn(ConfirmedDeposit.prototype, "authenticate");
-    try {
-      authenticate.mockImplementation(() => {
-        throw new RingError("RING_AUDIT_MESSAGE");
-      });
-      await expect(recovered()).resolves.toMatchObject({
-        unsupportedDeposits: [deposit.commitment],
-      });
-      const bug = new TypeError("no row explains it");
-      authenticate.mockImplementation(() => {
-        throw bug;
-      });
-      await expect(recovered()).rejects.toBe(bug);
-    } finally {
-      vi.restoreAllMocks();
-      deposit.ephemeralSecret.fill(0);
-    }
   });
 
   it("follows a spend into the merge that folded the note and recovers the merged output", async () => {
@@ -1238,52 +1081,6 @@ describe("recoverRingMemberNotes", () => {
       expect(result.unknownMints).toEqual([FOREIGN_MINT]);
     },
   );
-
-  it("refreshes unseen inputs after recovering a native merge from complete deposit history", async () => {
-    const auditor = X25519Keypair.generate();
-    const owner = ShieldedKeypair.generate();
-    const blinding = field(`${"00".repeat(31)}0b`);
-    const deposit = depositOf(auditor.publicKey(), ownedRecord(owner), blinding);
-    const merge = mergeOf(
-      owner,
-      auditor.publicKey(),
-      owner.nullifierKey().nullifier(deposit.commitment, blinding),
-    );
-    const mergedBlinding = mergeOutputBlinding(
-      owner.nullifierKey(),
-      merge.transaction.nullifiers[0]!,
-    );
-    const spend = {
-      ...sealedTransfer({
-        auditor: auditor.publicKey(),
-        nullifiers: [owner.nullifierKey().nullifier(merge.commitment, mergedBlinding)],
-      }).transaction,
-      slot: merge.transaction.slot + 1n,
-    };
-    const anonymousRows = transferRows("anonymous");
-    try {
-      const result = await recover({
-        owner,
-        auditor,
-        transaction: spend,
-        history: [deposit.transaction, merge.transaction],
-        origin: {
-          confirmedTransaction: async (transaction, ring) =>
-            transaction.txSignature === deposit.transaction.txSignature
-              ? deposit.row(transaction)
-              : transaction.txSignature === merge.transaction.txSignature
-                ? merge.row(transaction)
-                : anonymousRows.confirmedTransaction(transaction, ring),
-        },
-      });
-      expect(result.notes).toEqual([]);
-      expect(result.unopened).toEqual([]);
-      expect(result.unseenInputs).toEqual([]);
-    } finally {
-      deposit.ephemeralSecret.fill(0);
-      auditor.destroy();
-    }
-  });
 
   it("refuses another nullifier key, an output the auditor cannot open and a scan the page cap cuts", async () => {
     const auditor = X25519Keypair.generate();

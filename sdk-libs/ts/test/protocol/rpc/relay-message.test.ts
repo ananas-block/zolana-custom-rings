@@ -42,12 +42,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
-import {
-  DepositAsset,
-  type Bytes16,
-  type Bytes32,
-  type Bytes33,
-} from "@heliuslabs/zolana/interface";
+import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import { ShieldedAddress, ShieldedKeypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { Data } from "@heliuslabs/zolana/transaction";
@@ -57,7 +52,6 @@ import {
   checkRelayMessage,
   decodeRelayTransferTerms,
   expectedDelegate,
-  expectedDeposit,
   expectedEnroll,
   expectedPublicOwner,
   openingHash,
@@ -84,20 +78,6 @@ interface MessageCase {
 interface Vector<R> {
   readonly request: R;
   readonly cases: readonly MessageCase[];
-}
-
-interface DepositRequest {
-  readonly ring: Address;
-  readonly feePayer: Address;
-  readonly tree: Address;
-  readonly depositor: Address;
-  readonly viewTag: string;
-  readonly ownerUtxoHash: string;
-  readonly amount: number;
-  readonly ringDataHash: string;
-  readonly txViewingPk: string;
-  readonly salt: string;
-  readonly ciphertext: string;
 }
 
 interface DelegateRequest {
@@ -146,31 +126,6 @@ function fixture<V>(name: string): V {
 
 function vector<R>(name: string): Vector<R> {
   return fixture<Vector<R>>(name);
-}
-
-function hex(text: string): Uint8Array {
-  return Uint8Array.from(text.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
-}
-
-function deposit(request: DepositRequest): Promise<ExpectedRelayMessage> {
-  return expectedDeposit({
-    ringProgramId: request.ring,
-    feePayer: request.feePayer,
-    tree: request.tree,
-    depositor: request.depositor,
-    deposit: {
-      asset: DepositAsset.sol(),
-      viewTag: hex(request.viewTag) as Bytes32,
-      ownerUtxoHash: hex(request.ownerUtxoHash) as Bytes32,
-      amount: BigInt(request.amount),
-      ringDataHash: hex(request.ringDataHash) as Bytes32,
-      encrypted: {
-        txViewingPublicKey: hex(request.txViewingPk) as Bytes33,
-        salt: hex(request.salt) as Bytes16,
-        ciphertext: new Uint8Array(base64.encode(request.ciphertext)),
-      },
-    },
-  });
 }
 
 function auditorOf(request: DelegateRequest): X25519PublicKey {
@@ -294,7 +249,6 @@ function relay(): RingRelayClient & { submitRelay: ReturnType<typeof vi.fn> } {
 }
 
 const RELAY_ID = "11111111111111111111111111111111" as indexerTypes.Hash;
-const deposits = vector<DepositRequest>("relay_deposit_messages.json");
 const delegates = vector<DelegateRequest>("relay_delegate_messages.json");
 const settlements = vector<DelegateRequest>("relay_delegate_settlement_messages.json");
 const DELEGATE = delegates.request.prepare.delegate;
@@ -302,10 +256,6 @@ const owners = fixture<{ readonly cases: readonly OwnerCase[] }>("relay_transfer
 const enrolls = vector<EnrollRequest>("relay_enroll_messages.json");
 
 describe("relay message check", () => {
-  it.each(deposits.cases)("reaches the Rust verdict on deposit message $name", async (entry) => {
-    expect(verdict(await deposit(deposits.request), entry.message)).toBe(entry.verdict);
-  });
-
   it.each(delegates.cases)("reaches the Rust verdict on delegate message $name", async (entry) => {
     expect(verdict(await delegate(delegates.request), entry.message)).toBe(entry.verdict);
   });
@@ -334,23 +284,6 @@ describe("relay message check", () => {
       feePayer,
     );
     expect(verdict(expected, entry.message)).toBe(entry.verdict);
-  });
-
-  it("refuses a deposit message with an extra SPL transfer from the depositor before signing", async () => {
-    const expected = await deposit(deposits.request);
-    const depositor = signer(deposits.request.depositor);
-    const ringRpc = relay();
-    const pending = new PendingRelaySignature(
-      RELAY_ID,
-      message(deposits.cases, "extraSplTransfer"),
-      expected,
-    );
-    await expect(pending.sign(ringRpc, depositor)).rejects.toMatchObject({
-      code: "RING_RELAY_MESSAGE_INVALID",
-      details: { mismatch: "Instructions" },
-    });
-    expect(depositor.calls).toBe(0);
-    expect(ringRpc.submitRelay).not.toHaveBeenCalled();
   });
 
   it("refuses a delegate message with a swapped recipient before signing", async () => {
@@ -651,14 +584,13 @@ describe("relay message check", () => {
     });
   });
 
-  it("signs the checked inline, deposit and enroll bytes after the caller overwrites its array", async () => {
+  it("signs the checked inline and enroll bytes after the caller overwrites its array", async () => {
     const { feePayer, instructionData, ...named } = enrolls.request;
     const enroll = await expectedEnroll(
       { ...named, instructionData: new Uint8Array(base64.encode(instructionData)) },
       feePayer,
     );
     for (const [expected, cases, address] of [
-      [await deposit(deposits.request), deposits.cases, deposits.request.depositor],
       [await delegate(delegates.request), delegates.cases, DELEGATE],
       [enroll, enrolls.cases, enrolls.request.owner],
     ] as const) {
@@ -674,7 +606,6 @@ describe("relay message check", () => {
 
   it("signs the honest messages the relay builds", async () => {
     for (const [expected, cases, address] of [
-      [await deposit(deposits.request), deposits.cases, deposits.request.depositor],
       [await delegate(delegates.request), delegates.cases, delegates.request.prepare.delegate],
     ] as const) {
       const ringRpc = relay();

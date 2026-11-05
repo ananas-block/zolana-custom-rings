@@ -168,6 +168,7 @@ export const RING_ERROR_CODES = [
   "RING_PUBLIC_SPEND_WALLET_MISMATCH",
   "RING_PUBLIC_SPEND_IN_PROOF_OWNER",
   "RING_DEPOSIT_FRAME_REUSED",
+  // Reserved, nothing raises it and the snapshot keeps later codes in place.
   "RING_DEPOSIT_BOOTSTRAP_TAG",
   "RING_TRANSFER_PAST_ACCOUNT_BOUND",
   "RING_COSIGNER_OUT_OF_SCOPE",
@@ -208,6 +209,9 @@ export const RING_ERROR_CODES = [
   "RING_VIEWING_KEY_UNVERIFIED",
   "RING_OWNER_GRANT_INVALID",
   "RING_RECOVERY_PROGRESS_MISMATCH",
+  "RING_RELAY_FAILED",
+  "RING_SUBMISSION_UNPROVED",
+  "RING_RELAY_FEE_PAYER_FUNDS_DEPOSIT",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
@@ -240,12 +244,10 @@ export const RingProgramError = Object.freeze({
   unauthorizedDelegate: 8151,
   delegatePublicLeg: 8152,
   delegateAlreadySet: 8153,
-  invalidDepositDisclosure: 8166,
   missingFundingSigner: 8173,
   invalidRingMode: 8174,
   invalidAnonymousSigner: 8178,
   invalidMergeDisclosure: 8179,
-  invalidDepositData: 8180,
   missingOwnerSigner: 8192,
   ringTransactLength: 8200,
   ringShapeUnkeyed: 8201,
@@ -271,7 +273,6 @@ export const RingProgramError = Object.freeze({
   unexpectedApproval: 8241,
   invalidSettlementAccounts: 8242,
   tooManyPublicLegs: 8243,
-  invalidAuditedDeposit: 8244,
   anonymousExitDestinationsDiffer: 8246,
   anonymousExitTokenAccountShared: 8247,
   anonymousExitAccountHasData: 8248,
@@ -295,8 +296,6 @@ export const RingProgramError = Object.freeze({
   ringPolicyAlreadyExists: 8301,
   invalidStorageRegistry: 8302,
   invalidAssetLimits: 8390,
-  depositMintAccountMissing: 8410,
-  depositAssetIndexUnknown: 8411,
   unexpectedCuratorRevision: 8470,
   zeroRoleKey: 8471,
   duplicateRoleKey: 8472,
@@ -308,7 +307,6 @@ export const RingProgramError = Object.freeze({
   saltedSourceOtherTracking: 8504,
   invalidSignerDataCounts: 8527,
   tooManyAnonymousParties: 8528,
-  tooManyDepositsForKey: 8537,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

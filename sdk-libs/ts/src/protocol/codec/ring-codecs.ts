@@ -114,8 +114,8 @@ export interface RingPolicy {
   readonly generationSlot: bigint;
 }
 
-/** The instructions that bind roots, Rust `RootRead::transfer`, `deposit` and `merge`. */
-export type RootReader = "transfer" | "delegateTransfer" | "deposit" | "merge";
+/** The instructions that bind roots, Rust `RootRead::transfer` and `merge`. */
+export type RootReader = "transfer" | "delegateTransfer" | "merge";
 
 /** Rust `GRACE_SLOTS`, the grace a new storage registry gives an outgoing root. */
 export const GRACE_SLOTS = 750n;
@@ -320,8 +320,6 @@ function rootRead(policy: RingPolicy, reader: RootReader): "none" | "own" | "pol
     case "transfer":
       if (policy.hasPolicy) return "policy";
       return isZeroAddress(policy.records) ? "none" : "own";
-    case "deposit":
-      return policy.hasPolicy ? "policy" : "none";
     case "delegateTransfer":
     case "merge":
       return "none";

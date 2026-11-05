@@ -11,7 +11,7 @@ import records from "../../../../../test-vectors/registry/ring-records.json" wit
 import statements from "../../../../../test-vectors/proof/ring-statements.json" with { type: "json" };
 import poolCapacity from "../../../../../test-vectors/policy/pool_capacity.json" with { type: "json" };
 import { ZERO_32, encodeBase58 } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes16, Bytes64, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import type { Bytes16, Bytes64, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
   fittedSpend,
@@ -50,7 +50,6 @@ import {
   type TransferFamily,
   type TransferStatement,
 } from "../../../src/protocol/proof/statement.js";
-import { ringDepositContextHash } from "../../../src/proof/deposit-audit.js";
 import { RingInstructionTag } from "../../../src/operations/management/admin.js";
 import { ringRail, ringRailOf } from "../../../src/protocol/transaction/transact.js";
 
@@ -383,19 +382,6 @@ describe("ring-statements.json", () => {
     expect(hex(trackingEntryHash(entry))).toBe(tracking.entry_hash);
     expect(hex(trackingEntryChained(ZERO_32, entry))).toBe(tracking.chain_from_zero);
     expect(hex(TRACKING_EMPTY_ROOT)).toBe(tracking.empty_root);
-  });
-
-  it("hashes the deposit context of its SPP data", () => {
-    const deposit = statements.deposit;
-    expect(
-      hex(
-        ringDepositContextHash(
-          encodeBase58(bytes(deposit.program_id, 32)) as Address,
-          encodeBase58(bytes(deposit.tree, 32)) as Address,
-          bytes(deposit.spp_data),
-        ),
-      ),
-    ).toBe(deposit.context_hash);
   });
 });
 

@@ -7,11 +7,9 @@ import {
   wireDecoder,
   Reader,
   Writer,
-  sha256,
   addressBytes,
   encodeBase58,
   treeAddress,
-  decodeRingDepositInstructionData,
   equalBytes,
   encodeMergeOutputData,
 } from "@heliuslabs/zolana/internal";
@@ -35,13 +33,6 @@ import type {
   Signature,
 } from "@heliuslabs/zolana/interface";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
-import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "./deposit-instruction.js";
-import {
-  encodeRingDepositCapsule,
-  readRingDepositCapsule,
-  RING_DEPOSIT_AUDIT_SLOTS,
-  type RingDepositCapsule,
-} from "../codec/deposit-capsule.js";
 import type { AuditStreamLayout } from "../codec/ring-disclosure-layout.js";
 
 import { RingError } from "../error.js";
@@ -58,7 +49,7 @@ import { readMergeData, writeInterfaceTransfer } from "../codec/codecs.js";
 const base58Encoder = getBase58Encoder();
 
 /** Mirrors Rust `ConfirmedEventKind`, the confirmed instruction selects it, never indexer metadata. */
-export type ConfirmedEventKind = "deposit" | "transfer" | "merge";
+export type ConfirmedEventKind = "transfer" | "merge";
 
 /** Rust `RingOrigin` after `bind_transaction`, the indexed event bound to its confirmed instruction. */
 export type ConfirmedRingTransaction =
@@ -76,12 +67,6 @@ export type ConfirmedRingTransaction =
       entry: boolean;
     }>
   | Readonly<{
-      kind: "deposit";
-      transaction: IndexedShieldedTransaction;
-      /** The capsule bindings of the audited deposit behind the event, empty for a plain one. */
-      deposits: readonly ConfirmedDeposit[];
-    }>
-  | Readonly<{
       kind: "merge";
       transaction: IndexedShieldedTransaction;
       /** The record whose proof the direct ring caller verified. */
@@ -91,7 +76,7 @@ export type ConfirmedRingTransaction =
 
 /** Mirrors Rust `TransactionOrigin`, an unknown signature is an error, never absent. */
 export interface TransactionOrigin {
-  /** Binds indexed data to the exact confirmed transfer, deposit or merge. Other-ring events return undefined. */
+  /** Binds indexed data to the exact confirmed transfer or merge. Other-ring events return undefined. */
   confirmedTransaction(
     transaction: IndexedShieldedTransaction,
     ring: Address,
@@ -121,78 +106,6 @@ function confirmedMergeRecordOf(
     sealedRecord: Object.freeze({ ephemeralPublicKey, ciphertext }),
     authority: request.authority,
   };
-}
-
-const CONFIRMED_DEPOSIT = Symbol("confirmed audited deposit");
-
-/** Authenticates one capsule against the successful audited deposit that published it. */
-export class ConfirmedDeposit {
-  readonly #ownerCommitment: Bytes32;
-  readonly #capsuleHash: Uint8Array;
-  private constructor(
-    token: symbol,
-    readonly slotIndex: number,
-    ownerCommitment: Uint8Array,
-    capsule: Uint8Array,
-  ) {
-    if (token !== CONFIRMED_DEPOSIT) throw invalid("confirmedDeposit");
-    if (ownerCommitment.length !== 32) throw invalid("ownerCommitment");
-    this.#ownerCommitment = ownerCommitment.slice() as Bytes32;
-    this.#capsuleHash = sha256(capsule);
-    Object.freeze(this);
-  }
-
-  /** Checks the private runtime brand, which a copied prototype cannot supply. */
-  static is(value: unknown): value is ConfirmedDeposit {
-    return typeof value === "object" && value !== null && #ownerCommitment in value;
-  }
-
-  /** Only exact successful event ancestry can mint a binding, never an indexed capsule alone. */
-  static fromTransaction(
-    transaction: unknown,
-    signature: Signature,
-    eventIndex: number,
-    ring: Address,
-  ): readonly ConfirmedDeposit[] {
-    const wire = record(transaction, "transaction");
-    if (record(wire["meta"], "meta")["err"] !== null) throw invalid("meta.err");
-    const encoded = record(wire["transaction"], "transaction.transaction");
-    if (list(encoded["signatures"], "signatures")[0] !== signature) throw invalid("signatures");
-    const found = ringEventIn(confirmedInstructionGroups(transaction), eventIndex, ring);
-    if (found === undefined || found.source.data[0] !== InstructionTag.ringDeposit) return [];
-    const wrapper = found.wrapper?.data;
-    if (wrapper?.[0] !== RingInstructionTag.deposit) return [];
-    if (!equalBytes(wrapper.subarray(AUDITED_DEPOSIT_PREFIX_LENGTH), found.source.data))
-      throw invalid("auditedDeposit");
-    return ConfirmedDeposit.#decode(found.source.data);
-  }
-
-  /** The digest covers the entire capsule, including recipient ciphertext and slot. */
-  authenticate(capsule: RingDepositCapsule, ownerCommitment: Bytes32): void {
-    const encoded = encodeRingDepositCapsule(capsule);
-    if (
-      capsule.slotIndex !== this.slotIndex ||
-      !equalBytes(ownerCommitment, this.#ownerCommitment) ||
-      !equalBytes(sha256(encoded), this.#capsuleHash)
-    ) {
-      throw new RingError("RING_AUDIT_MESSAGE", {
-        details: { reason: "unconfirmed deposit capsule" },
-      });
-    }
-  }
-
-  static #decode(data: Uint8Array): readonly ConfirmedDeposit[] {
-    const decoded = decodeRingDepositInstructionData(data.subarray(1));
-    if (decoded.deposits.length < 1 || decoded.deposits.length > RING_DEPOSIT_AUDIT_SLOTS)
-      throw invalid("deposits.length");
-    const deposits = decoded.deposits.map((deposit, slot) => {
-      const ciphertext = deposit.encrypted.ciphertext;
-      const capsule = readRingDepositCapsule(ciphertext);
-      if (capsule === undefined || capsule.slotIndex !== slot) throw invalid("deposit capsule");
-      return new ConfirmedDeposit(CONFIRMED_DEPOSIT, slot, deposit.ownerUtxoHash, ciphertext);
-    });
-    return Object.freeze(deposits);
-  }
 }
 
 export interface OriginInstruction {
@@ -646,51 +559,7 @@ function readConfirmedEvent(
       outputs: [{ hash: merge.outputUtxoHash, viewTag, payload }],
     };
   }
-  if (tag !== InstructionTag.ringDeposit) return undefined;
-  if (kind !== 1) throw invalid("event.kind");
-  // Deposit emits a complete Borsh GeneralEvent. Counts are bounded by the instruction's u8 vectors.
-  const count = (name: string): number => {
-    const length = event.u32(name);
-    if (length > 255) throw invalid(name);
-    return length;
-  };
-  const payload = (): Uint8Array => {
-    const length = event.u32("event.data.length");
-    if (length > 0xffff) throw invalid("event.data.length");
-    return event.bytes(length, "event.data");
-  };
-  const nullifiers = Array.from({ length: count("event.inputs.length") }, () => {
-    event.bytes(40, "event.inputTreeAndSequence");
-    return event.bytes(32, "event.nullifier") as Bytes32;
-  });
-  const outputs = Array.from({ length: count("event.outputs.length") }, () => ({
-    viewTag: event.bytes(32, "event.viewTag") as Bytes32,
-    hash: event.bytes(32, "event.outputHash") as Bytes32,
-    payload: payload(),
-  }));
-  const messages = Array.from({ length: count("event.messages.length") }, () => ({
-    viewTag: event.bytes(32, "event.messageTag") as Bytes32,
-    data: payload(),
-  }));
-  if (event.bytes(49, "event.zeroViewingKeyAndSalt").some((byte) => byte !== 0))
-    throw invalid("event.depositKey");
-  const firstLeaf = event.u64("event.firstOutputLeafIndex");
-  const outputTree = encodeBase58(event.bytes(32, "event.outputTree"));
-  for (let index = 0, length = count("event.transfers.length"); index < length; index++) {
-    event.bool("event.transfer.isDeposit");
-    event.u64("event.transfer.amount");
-    event.option("event.transfer.asset", (reader) => reader.bytes(32, "event.transfer.asset"));
-  }
-  event.done();
-  return {
-    kind: "deposit",
-    inputTrees: [],
-    outputTree,
-    firstLeaf,
-    outputs,
-    messages,
-    nullifiers,
-  };
+  return undefined;
 }
 
 /** Reconstructs the exact indexed view from its successful SPP source and self-CPI event. */
@@ -711,10 +580,9 @@ function bindConfirmedTransaction(
     // Solana Kit promotes RPC u64 values to bigint. Raw JSON fixtures use number/string.
     const slot = typeof rawSlot === "bigint" ? rawSlot : integer(rawSlot, "slot");
     if (slot < 0n || slot > 0xffff_ffff_ffff_ffffn) throw invalid("slot");
-    const proofless = data.kind === "deposit";
     if (
       indexed.slot !== slot ||
-      indexed.proofless !== proofless ||
+      indexed.proofless ||
       indexed.ringProgramId !== ring ||
       (data.txViewingPk === undefined
         ? indexed.txViewingPublicKey !== undefined
@@ -768,7 +636,7 @@ function bindConfirmedTransaction(
       txSignature: indexed.txSignature,
       eventIndex: indexed.eventIndex,
       ringProgramId: ring,
-      proofless,
+      proofless: false,
       ...(data.txViewingPk === undefined
         ? {}
         : { txViewingPublicKey: X25519PublicKey.fromBytes(data.txViewingPk) }),
@@ -777,17 +645,6 @@ function bindConfirmedTransaction(
       messages: Object.freeze(data.messages),
       nullifiers: Object.freeze(data.nullifiers),
     });
-    if (data.kind === "deposit")
-      return Object.freeze({
-        kind: data.kind,
-        transaction,
-        deposits: ConfirmedDeposit.fromTransaction(
-          confirmed,
-          indexed.txSignature,
-          indexed.eventIndex,
-          ring,
-        ),
-      });
     if (data.kind === "merge") {
       return Object.freeze({
         kind: data.kind,

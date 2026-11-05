@@ -67,7 +67,6 @@ import {
 import { isAnonymousFrame, type RingRail } from "../../protocol/transaction/transact.js";
 import { RowOrigins, rowEventIndex } from "./row-origins.js";
 import { openRingMerge } from "./audit-merge.js";
-import { createdRingUtxos } from "../workflow/created-utxos.js";
 import { ringBlindingSeed, ringOutputBlinding } from "../../crypto/derivation/blinding.js";
 import { dummyUtxoHash, fieldUtxoHash } from "../../protocol/membership/utxo-hash.js";
 import { outputTreeId } from "../../protocol/membership/trees.js";
@@ -567,14 +566,7 @@ export function auditConfirmedRingHistory(
   const { known, rows } = input;
   for (const confirmed of input.history) {
     rows.attempt(confirmed.transaction, () => {
-      if (confirmed.kind === "deposit") {
-        for (const { commitment, utxo } of createdRingUtxos({
-          confirmed,
-          ringProgramId: input.ringProgramId,
-          auditor: input.auditor,
-        }))
-          known.insert(commitment, utxo);
-      } else if (confirmed.kind === "merge") {
+      if (confirmed.kind === "merge") {
         const merge = openRingMerge({
           confirmed,
           eventIndex: rowEventIndex(confirmed.transaction),

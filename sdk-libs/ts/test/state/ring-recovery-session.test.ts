@@ -47,17 +47,7 @@ class RecoverySource {
     return {
       getEncryptedUtxosByTags: async (request) => {
         this.tagQueries.push(request);
-        const wanted = new Set(request.tags.map(hex));
-        const rows = this.indexer.deposits.filter((row) => wanted.has(hex(row.outputSlot.viewTag)));
-        const page = this.page(rows, request);
-        return {
-          ...page,
-          data: page.data.map((row) => ({
-            slot: row.slot,
-            signature: row.txSignature,
-            outputs: [row],
-          })),
-        };
+        return { ...this.page([], request), data: [] };
       },
       getShieldedTransactionsByTags: async (request) => {
         this.ringQueries.push(request);
@@ -215,29 +205,6 @@ describe("durable recovery", () => {
       expect(query.minContextSlot).toBe(100n);
     }
     expect(restored.recoveryCoverage().status).toBe("Complete");
-  });
-
-  it("keeps a tag round and its counter together through capped pages", async () => {
-    const source = new RecoverySource();
-    const bob = new ScanWallet(2);
-    const tag = await bob.fresh().senderTag(bob.keys);
-    const { depositRow } = await import("../helpers/ring-scan.js");
-    source.indexer.deposits.push(
-      depositRow(bob.address, tag.tag, true, field(7, 1)),
-      depositRow(bob.address, tag.tag, true, field(7, 2)),
-    );
-    const held = AnonymousWallet.create(
-      new Wallet({ identity: bob.address, registry: ASSETS }),
-      tag.history,
-    );
-    const sync = AnonymousSync.create(bob.keys, ASSETS).withScanLimits({
-      pageSize: 1,
-      maxPages: 1,
-    });
-    const restored = await complete(sync, source, held);
-    expect(restored.notes()).toHaveLength(2);
-    expect(restored.history().current().tx.scanned).toBe(1n);
-    expect(source.tagQueries.some((query) => query.paginationToken === "1")).toBe(true);
   });
 
   it("refuses a scan after a wallet revision changes", async () => {

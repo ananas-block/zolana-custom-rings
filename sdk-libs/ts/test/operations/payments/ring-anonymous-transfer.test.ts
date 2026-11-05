@@ -1544,10 +1544,10 @@ describe("anonymous ring relay", () => {
   }
 
   async function payload(relay: PreparedRingRelay) {
-    if (relay.relay.request.intent.operation !== "anonymous")
-      throw new Error("no anonymous intent");
+    const { intent } = (await relay.relay.sign()).request;
+    if (intent.operation !== "anonymous") throw new Error("no anonymous intent");
     return decodeRelayProofInputs(
-      new Uint8Array(getBase64Encoder().encode(relay.relay.request.intent.proofInputs)),
+      new Uint8Array(getBase64Encoder().encode(intent.proofInputs)),
       assets,
     );
   }
@@ -1567,7 +1567,7 @@ describe("anonymous ring relay", () => {
     });
     const prepared = await relay;
     const stub = stubRelay();
-    const relayIdSent = submittedRelay(await prepared.relay.send(stub.relay));
+    const relayIdSent = submittedRelay(await (await prepared.relay.sign()).send(stub.relay));
 
     expect(params.client.reads.count).toBe(0);
     noProofs(fixture);
@@ -1757,6 +1757,7 @@ describe("anonymous ring relay", () => {
       recipient,
       anonymous: owner,
     });
+    submission.prove();
     const result = await submission.send({
       sign: (transaction) => signTransactionWithSigners([payer], transaction),
       send: async () => undefined,

@@ -29,7 +29,6 @@ import { RingKeyError } from "../error.js";
 /** Schedule labels, one secret under two labels gives two unrelated keys. */
 export const AUDIT_ENC_INFO = new TextEncoder().encode("CRING/adt");
 export const NF_KEY_ENC_INFO = new TextEncoder().encode("CRING/nfk");
-export const DEPOSIT_ENC_INFO = new TextEncoder().encode("CRING/dep");
 export const RECIPIENT_BODY_ENC_INFO = new TextEncoder().encode("CRING/rcp");
 export const REPLY_ENC_INFO = new TextEncoder().encode("CRING/rpl");
 export const SENDER_BUNDLE_ENC_INFO = new TextEncoder().encode("CRING/snd");

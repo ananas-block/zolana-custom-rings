@@ -204,5 +204,8 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_VIEWING_KEY_UNVERIFIED",
   "RING_OWNER_GRANT_INVALID",
   "RING_RECOVERY_PROGRESS_MISMATCH",
+  "RING_RELAY_FAILED",
+  "RING_SUBMISSION_UNPROVED",
+  "RING_RELAY_FEE_PAYER_FUNDS_DEPOSIT",
 ]
 `;

@@ -8,7 +8,7 @@ import {
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { outputBlindingSeed, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { RingDomain, depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
+import { RingDomain } from "../../src/crypto/derivation/ring-domain.js";
 import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
 import { ringBlindingSeed, ringOutputBlinding } from "../../src/crypto/derivation/blinding.js";
 
@@ -38,8 +38,6 @@ describe("ring domains", () => {
       recordWrite: ascii("CRQW"),
       applyRecords: ascii("CRAP"),
       registerKey: ascii("CRRG"),
-      depositBlinding: ascii("CRDB"),
-      depositStatement: ascii("CRDP"),
       mergeStatement: ascii("CRMG"),
       withdrawals: ascii("CRPW"),
       recordUpdate: ascii("CRRU"),
@@ -104,8 +102,5 @@ describe("ring-secrets.json", () => {
         output.blinding,
       );
     }
-    expect(hex(depositBlinding(bytes<Bytes32>(secrets.deposit_blinding_secret, 32)))).toBe(
-      secrets.deposit_blinding,
-    );
   });
 });

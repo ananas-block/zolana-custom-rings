@@ -24,11 +24,6 @@ export function transferRootRead(
   return isZeroAddress(config.records) ? "none" : "own";
 }
 
-/** Rust `RootRead::deposit`. */
-export function depositRootRead(config: Pick<RingPolicy, "hasPolicy">): RootRead {
-  return config.hasPolicy ? "policy" : "none";
-}
-
 /** Rust `RootRead::merge`, a merge runs no rules. */
 export const MERGE_ROOT_READ: RootRead = "none";
 

@@ -5,12 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { Writer, addressBytes, splInterfaceWithBump } from "@heliuslabs/zolana/internal";
-import {
-  TransactWithdrawal,
-  type Bytes16,
-  type Bytes32,
-  type Bytes33,
-} from "@heliuslabs/zolana/interface";
+import { TransactWithdrawal, type Bytes32 } from "@heliuslabs/zolana/interface";
 import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
   AssetRegistry,
@@ -30,7 +25,6 @@ import {
   type RelayProofInputs,
   type RelayRail,
 } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
-import { encodeRelayDepositInputs } from "../../../src/protocol/ring-rpc/relay-deposit-inputs.js";
 
 await initializePoseidon();
 
@@ -319,41 +313,16 @@ describe("relay proof inputs", () => {
     expect(encoded).toEqual(new Uint8Array(getBase64Encoder().encode(vector.proofInputs)));
   });
 
-  it("encodes the deposit payload byte for byte as the Rust vector", () => {
-    const vector = JSON.parse(
-      readFileSync(
-        new URL("../../../../../test-vectors/rpc/relay_deposit_inputs.json", import.meta.url),
-        "utf8",
-      ),
-    ) as { proofInputs: string };
-    const encoded = encodeRelayDepositInputs({
-      ringProgramId: address(6),
-      tree: address(42),
-      depositor: address(41),
-      recipient: ownerSpend().sender,
-      listSalt: filled(0) as Bytes32,
-      deposit: {
-        asset: {
-          kind: "spl",
-          accounts: {
-            mint: address(48),
-            sourceTokenAccount: address(49),
-            tokenProgram: address(50),
-          },
-        },
-        amount: 700n,
-        viewTag: filled(43) as Bytes32,
-        ownerUtxoHash: filled(0) as Bytes32,
-        ringDataHash: filled(0) as Bytes32,
-        encrypted: {
-          txViewingPublicKey: filled(44, 33) as Bytes33,
-          salt: filled(45, 16) as Bytes16,
-          ciphertext: filled(46, 8),
-        },
-      },
-      blindingSecret: filled(47) as Bytes32,
-      auditEphemeralKey: filled(51) as Bytes32,
-    });
-    expect(encoded).toEqual(new Uint8Array(getBase64Encoder().encode(vector.proofInputs)));
+  it("writes the deposit rail as tag 3, its plan exactly on an anonymous ring", async () => {
+    const { proofInputs } = anonymousPayload();
+    const { plan } = proofInputs.rail as Extract<RelayRail, { kind: "anonymous" }>;
+    for (const rail of [{ kind: "deposit" } as const, { kind: "deposit", plan } as const]) {
+      const wire = encodeRelayProofInputs({ ...proofInputs, rail });
+      expect(wire[0]).toBe(3);
+      expect(wire[1]).toBe(rail.plan === undefined ? 0 : 1);
+      const read = await decodeRelayProofInputs(wire, new AssetRegistry());
+      expect(read.rail.kind).toBe("deposit");
+      expect(encodeRelayProofInputs(read)).toEqual(wire);
+    }
   });
 });

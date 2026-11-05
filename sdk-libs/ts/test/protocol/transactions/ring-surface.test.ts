@@ -118,9 +118,9 @@ describe("RING_PROVING_KEY_SHA256S", () => {
   it("names the key file the prover proves each ring circuit with", () => {
     expect([
       ringProvingKey({ family: "registerKey" }),
-      ringProvingKey({ family: "deposit", capacity: 8 }),
+      ringProvingKey({ family: "merge" }),
     ]).toEqual(
-      ["custom_ring_register_key.key", "custom_ring_deposit_8.key"].map((name) => ({
+      ["custom_ring_register_key.key", "custom_ring_merge.key"].map((name) => ({
         name,
         sha256: lock.keys[name]?.sha256,
       })),
@@ -150,8 +150,7 @@ describe("public package surface", () => {
       "proveEnrollment",
       "recoverRingMemberNotes",
       "createCustomRingClient",
-      "decryptRingDepositUtxo",
-      "customRingDepositPayload",
+      "buildRingDepositTransaction",
       "enrollInstruction",
       "decodeTrackingAuthorization",
     ] as const) {

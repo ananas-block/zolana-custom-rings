@@ -157,6 +157,7 @@ it("retains unknown submissions after the lease interval and confirmation until 
       };
     },
   });
+  submission.prove();
   const send = vi.fn(async () => undefined);
   const transport = {
     sign: async (transaction: Parameters<typeof signTransactionWithSigners>[1]) =>
@@ -240,6 +241,7 @@ async function persistedFixture(count = 1) {
     send: vi.fn(async () => undefined),
     status: vi.fn(async () => ({ kind: "unknown" as const })),
   };
+  submission.prove();
   return { ...f, store, cipher, submission, transport };
 }
 

@@ -2,6 +2,7 @@
 import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
 import {
   type Address,
+  type Signature,
   getBase58Decoder,
   getBase64Encoder,
   type TransactionPartialSigner,
@@ -17,9 +18,11 @@ import {
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
 } from "../protocol/ring-rpc/ring-rpc-codec.js";
+import type { OwnerDebit } from "../protocol/membership/owner-debits.js";
 import type {
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
+  RelayIntent,
   RelayStatus,
   RelayStep,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
@@ -30,6 +33,7 @@ import {
   type RelayTransferTerms,
   type DelegateRingConfig,
   type ExpectedRelayMessage,
+  type ExpectedSealed,
   expectedDelegate,
   mismatch,
   type RequestedAuthorityTransfer,
@@ -65,11 +69,60 @@ function wireRelayId(wire: Readonly<Record<string, unknown>>): Hash {
   );
 }
 
+/** Rust `UnsignedRelay`, the owner's signature waits on `sign`, the charges read first. */
+export class UnsignedRelay {
+  readonly #signer: RelayOwnerSigner;
+  readonly #messageHash: Uint8Array;
+  readonly #request: Omit<PrepareRelayRequest, "intent"> &
+    Readonly<{ intent: Omit<OwnerRelayIntent, "ownerSignature"> }>;
+  readonly #expected: ExpectedSealed;
+
+  /** @internal */
+  constructor(
+    input: Readonly<{
+      signer: RelayOwnerSigner;
+      messageHash: Uint8Array;
+      request: Omit<PrepareRelayRequest, "intent"> &
+        Readonly<{ intent: Omit<OwnerRelayIntent, "ownerSignature"> }>;
+      expected: ExpectedSealed;
+    }>,
+  ) {
+    this.#signer = input.signer;
+    this.#messageHash = input.messageHash.slice();
+    this.#request = input.request;
+    this.#expected = input.expected;
+    Object.freeze(this);
+  }
+
+  /** Per owner and asset, Rust `charged_outflows`. */
+  chargedOutflows(): readonly OwnerDebit[] {
+    return this.#expected.chargedOutflows;
+  }
+
+  async sign(context?: RequestContext): Promise<PreparedRelay> {
+    const ownerSignature = base58.decode(
+      await this.#signer.sign(this.#messageHash, context),
+    ) as Signature;
+    return new PreparedRelay(
+      { ...this.#request, intent: { ...this.#request.intent, ownerSignature } },
+      this.#expected,
+    );
+  }
+}
+
+/** Signs the transfer's `messageHash`, Rust `SigningKey`. */
+export interface RelayOwnerSigner {
+  sign(message: Uint8Array, context?: RequestContext): Promise<Uint8Array>;
+}
+
+type OwnerRelayIntent = Extract<RelayIntent, { operation: "anonymous" | "confidential" }>;
+
 /** Rust `PreparedRelay`. */
 export class PreparedRelay {
   readonly request: PrepareRelayRequest;
   /** `undefined` on the rails that sign inside the proof. */
   readonly #expected: ExpectedRelayMessage | undefined;
+  #sent = false;
 
   /** @internal */
   constructor(request: PrepareRelayRequest, expected?: ExpectedRelayMessage) {
@@ -82,10 +135,44 @@ export class PreparedRelay {
     return relayId(this.request);
   }
 
-  async send(relay: RingRelayClient, context?: RequestContext): Promise<RelaySent> {
-    const step = await relay.prepareRelay(this.request, context);
-    return accepted({ step, relayId: this.relayId(), expected: this.#expected });
+  /** Per owner and asset, read before `send` hands the owner's signature over. */
+  chargedOutflows(): readonly OwnerDebit[] {
+    return chargedOutflowsOf(this.#expected);
   }
+
+  /** Repeatable after a lost answer, Ring RPC keys every stored relay by its id. */
+  async send(relay: RingRelayClient, context?: RequestContext): Promise<RelaySent> {
+    const relayId = this.relayId();
+    // 1. A retry reconciles by the relay id first, a relay Ring RPC sent never prepares again.
+    if (this.#sent) {
+      const status = await relayStatus(relay, relayId, context);
+      if (status?.status === "sent" || status?.status === "confirmed")
+        return Object.freeze({ step: "submitted", relayId });
+      if (status?.status === "failed")
+        throw new RingError("RING_RELAY_FAILED", { details: { reason: status.reason } });
+      // 2. Ring RPC answers a stored relay from its store, an unknown one proves once.
+    }
+    this.#sent = true;
+    const step = await relay.prepareRelay(this.request, context);
+    return accepted({ step, relayId, expected: this.#expected });
+  }
+}
+
+/** `undefined` when Ring RPC cannot answer, the relay then prepares once more. */
+async function relayStatus(
+  relay: RingRelayClient,
+  relayId: Hash,
+  context: RequestContext | undefined,
+): Promise<RelayStatus | undefined> {
+  try {
+    return await relay.getRelayStatus(relayId, context);
+  } catch {
+    return undefined;
+  }
+}
+
+function chargedOutflowsOf(expected: ExpectedRelayMessage | undefined): readonly OwnerDebit[] {
+  return expected?.kind === "sealed" ? expected.chargedOutflows : [];
 }
 
 /** Rust `PreparedAuthorityTransfer`, the delegate signs only a message the quoted fee payer pays. */
@@ -167,6 +254,11 @@ export class PendingRelaySignature {
     return this.#expected?.kind === "funder" && this.#expected.terms.signer === signer
       ? this.#expected.terms
       : undefined;
+  }
+
+  /** Per owner and asset, read before a public owner signs. */
+  chargedOutflows(): readonly OwnerDebit[] {
+    return chargedOutflowsOf(this.#expected);
   }
 
   /** What opens the sealed frame's digest, for the wallet to hand to its co-signer, Rust `approval_opening`. */

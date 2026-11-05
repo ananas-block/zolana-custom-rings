@@ -19,7 +19,7 @@ import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.j
 import { AnonymousSync } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
-import { ViewingHistory } from "../../src/state/viewing-history.js";
+import { StreamCounter, ViewingHistory } from "../../src/state/viewing-history.js";
 import { ClientError } from "@heliuslabs/zolana/client";
 import {
   ASSETS,
@@ -377,7 +377,7 @@ describe("atomic progress", () => {
       .history()
       .withEntry(
         wallet.history().entries.length - 1,
-        entry.withCounter("tx", entry.tx.observe(0n, new Set([3n]))),
+        entry.withCounter("tx", StreamCounter.restore({ next: 4n, scanned: 4n, pending: [] })),
       );
     expect(() => wallet.updateHistory(watermark)).toThrow("RING_SCAN_PROGRESS_MOVED");
   });
@@ -623,28 +623,5 @@ describe("page too large", () => {
     };
     await expect(bob.sync(indexer, bob.fresh())).rejects.toMatchObject({ code: "CLIENT_INDEXER" });
     expect(indexer.ringReads).toHaveLength(1);
-  });
-
-  it("halves a deposit read from the same request", async () => {
-    const indexer = new ScanIndexer();
-    const bob = new ScanWallet(2);
-    const client = indexer.client();
-    const limits: (number | undefined)[] = [];
-    const scan = await AnonymousSync.create(bob.keys, ASSETS).fetch(
-      {
-        ...client,
-        getEncryptedUtxosByTags: (request, config, context) => {
-          limits.push(request.limit);
-          if (limits.length === 1)
-            throw new ClientError("CLIENT_INDEXER_RESPONSE_TOO_LARGE", {
-              details: { method: "getEncryptedUtxosByTags" },
-            });
-          return client.getEncryptedUtxosByTags(request, config, context);
-        },
-      },
-      bob.fresh(),
-    );
-    expect(scan.found).toEqual([]);
-    expect(limits).toEqual([1000, 500]);
   });
 });
