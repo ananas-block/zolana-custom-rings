@@ -562,7 +562,7 @@ export class RingOutputRail {
     }
   }
 
-  /** Sealed to the sender at index `m`. */
+  /** Sealed to the sender at index `m`, opens under a retained or reproducible viewing key and published values alone. */
   #senderBundle(seal: AnonymousSeal): Uint8Array {
     const { outputs, sender } = seal;
     const change = outputs.slice(0, leadingChange(outputs, sender));

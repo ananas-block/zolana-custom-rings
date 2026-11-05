@@ -382,17 +382,11 @@ impl Wallet {
     }
 
     async fn sync(&self, indexer: &Indexer, history: &ViewingHistory) -> AnonymousScan {
-        AnonymousSync::new(&self.keys, &assets())
-            .fetch(indexer, history)
-            .await
-            .unwrap()
+        tag_scan(indexer, &self.keys, history).await
     }
 
     async fn recover(&self, indexer: &Indexer) -> AnonymousScan {
-        AnonymousSync::new(&self.keys, &assets())
-            .full_scan(&RingHistoryOnly(indexer), &fresh(self), RING)
-            .await
-            .unwrap()
+        restore(indexer, &self.keys, &fresh(self)).await
     }
 }
 
@@ -465,6 +459,51 @@ fn output(tx: &ShieldedTransaction, position: usize) -> [u8; 32] {
 /// A wallet that never synced, reading `RING` from its start.
 fn fresh(wallet: &Wallet) -> ViewingHistory {
     ViewingHistory::new(wallet.keys.viewing_pubkey(), 0).with_ring(RING, None)
+}
+
+/// The keys and history of a wallet rebuilt from its seed and its retained rotated keys alone.
+fn wiped(seed: u8, retained: &[ViewingKey]) -> (RotatingRingKeys, ViewingHistory) {
+    let identity = keypair(seed);
+    let mut keys = RotatingRingKeys::new(&identity).unwrap();
+    let mut history = ViewingHistory::new(identity.viewing_pubkey(), 0);
+    for (created_at, key) in (1..).zip(retained) {
+        keys = keys.rotate(key.clone()).unwrap();
+        history = history.with_rotated_key(key.pubkey(), created_at).unwrap();
+    }
+    (keys, history.with_ring(RING, None))
+}
+
+async fn tag_scan<K: ShieldedKeys + RingKeys + MergeSeedHolder>(
+    indexer: &Indexer,
+    keys: &K,
+    history: &ViewingHistory,
+) -> AnonymousScan {
+    AnonymousSync::new(keys, &assets())
+        .fetch(indexer, history)
+        .await
+        .unwrap()
+}
+
+/// Reads the ring's history alone, no tag, nullifier, Ring RPC or auditor read.
+async fn restore<K: ShieldedKeys + RingKeys + MergeSeedHolder>(
+    indexer: &Indexer,
+    keys: &K,
+    history: &ViewingHistory,
+) -> AnonymousScan {
+    AnonymousSync::new(keys, &assets())
+        .full_scan(&RingHistoryOnly(indexer), history, RING)
+        .await
+        .unwrap()
+}
+
+fn unspent(keys: &RotatingRingKeys, scan: &AnonymousScan) -> Vec<[u8; 32]> {
+    let mut hashes: Vec<[u8; 32]> = verify_spendable(keys, scan.decrypted())
+        .unwrap()
+        .utxos()
+        .map(|utxo| utxo.utxo_hash)
+        .collect();
+    hashes.sort_unstable();
+    hashes
 }
 
 fn pay<'a>(to: &'a ShieldedAddress, amount: u64) -> Pay<'a> {
@@ -946,6 +985,83 @@ async fn a_sender_with_no_change_recovers_its_payment_row_after_a_wipe() {
         .decrypted()
         .spent_nullifiers
         .contains(&paid.nullifiers[0]));
+}
+
+/// The second transfer spends the first change, the wiped sender restores the chain from its seed.
+#[tokio::test]
+async fn a_wiped_sender_restores_its_change_chain_and_payment_rows_from_the_seed() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let (bob, carol) = (Wallet::new(2), Wallet::new(3));
+    let first = alice.pay(&indexer, &[pay(&bob.address(), 30)]);
+    let change = alice.sync(&indexer, &fresh(&alice)).await.decrypted().utxos[0].clone();
+    alice.funding.insert(0, change);
+    let second = alice.pay(&indexer, &[pay(&carol.address(), 20)]);
+
+    let (keys, history) = wiped(1, &[]);
+    let restored = restore(&indexer, &keys, &history).await;
+    assert_eq!(found(&restored), [output(&first, 0), output(&second, 0)]);
+    assert_eq!(unspent(&keys, &restored), [output(&second, 0)]);
+    let sent: Vec<u64> = restored.sent.iter().map(|row| row.amount).collect();
+    assert_eq!(sent, [30, 20]);
+    let tagged = tag_scan(&indexer, &keys, &history).await;
+    assert_eq!(unspent(&keys, &tagged), [output(&second, 0)]);
+}
+
+/// The merge spends a change only the bundle rebuilds and a received note.
+#[tokio::test]
+async fn a_wiped_wallet_restores_a_merge_of_its_change_and_a_payment_from_the_seed() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let mut bob = Wallet::new(2);
+    let carol = Wallet::new(3);
+    alice.pay(&indexer, &[pay(&bob.address(), 30)]);
+    let paid = bob.pay(&indexer, &[pay(&carol.address(), 40)]);
+    let held = bob.sync(&indexer, &fresh(&bob)).await;
+    let nullifiers: Vec<[u8; 32]> = held
+        .decrypted()
+        .utxos
+        .iter()
+        .map(|utxo| utxo.nullifier)
+        .collect();
+    assert_eq!(nullifiers.len(), 2, "the payment and the change");
+    let merged = publish_merge(&indexer, &bob, nullifiers, 90);
+
+    let (keys, history) = wiped(2, &[]);
+    let restored = restore(&indexer, &keys, &history).await;
+    assert!(found(&restored).contains(&output(&paid, 0)));
+    assert_eq!(unspent(&keys, &restored), [merged]);
+    let tagged = tag_scan(&indexer, &keys, &history).await;
+    assert_eq!(unspent(&keys, &tagged), [merged]);
+}
+
+/// The seed derives no rotated key, a note under a lost one stays closed to the wallet.
+#[tokio::test]
+async fn a_wiped_rotated_wallet_restores_every_note_only_with_its_retained_key() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let mut bob = Wallet::new(2);
+    let carol = Wallet::new(3);
+    let to_old = alice.pay(&indexer, &[pay(&bob.address(), 30)]);
+    let next = ViewingKey::new();
+    bob.keys.viewing_key = next.clone();
+    let to_new = alice.pay(&indexer, &[pay(&bob.address(), 10)]);
+    let sent = bob.pay(&indexer, &[pay(&carol.address(), 40)]);
+    let mut held = [output(&to_old, 1), output(&to_new, 1), output(&sent, 0)];
+    held.sort_unstable();
+
+    let (keys, history) = wiped(2, &[next]);
+    let restored = restore(&indexer, &keys, &history).await;
+    assert_eq!(unspent(&keys, &restored), held);
+    assert_eq!(restored.sent.len(), 1);
+
+    let (seed_only, history) = wiped(2, &[]);
+    let restored = restore(&indexer, &seed_only, &history).await;
+    assert_eq!(found(&restored), [output(&to_old, 1)]);
+    assert!(restored
+        .auditor_recovery
+        .unopened
+        .contains(&output(&to_new, 1)));
 }
 
 /// Past the tag gap the deposit's stream stops, the ring's history still names the row.
@@ -1583,52 +1699,7 @@ async fn recovery_opens_a_merge_whose_inputs_the_wallet_never_saw() {
     let indexer = Indexer::default();
     let bob = Wallet::new(2);
     let first = [0x11; 32];
-    let owner = bob.address();
-    let nullifier_key = &bob.keys.nullifier_key;
-    let merged = Utxo {
-        owner: owner.signing_pubkey,
-        asset: Mint::SOL,
-        amount: 100,
-        blinding: merge_output_blinding(nullifier_key, &first).unwrap(),
-        ring_program_id: Some(RING),
-        data: Default::default(),
-    };
-    let merged_hash = merged
-        .hash(&owner.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
-        .unwrap();
-    let salt = [8; 16];
-    let ciphertext = MergeOutputPlaintext {
-        amount: 100,
-        mint: Mint::SOL.asset,
-    }
-    .encrypt(&merge_output_key(nullifier_key, &first).unwrap(), &salt)
-    .unwrap();
-    indexer.publish(ShieldedTransaction {
-        slot: 99,
-        tx_signature: Signature::from([0x99; 64]),
-        event_index: Some(0),
-        tx_viewing_pk: None,
-        salt: None,
-        output_slots: vec![OutputSlot {
-            view_tag: first,
-            output_context: OutputContext {
-                hash: merged_hash,
-                tree_id: TREE,
-                leaf_index: indexer.leaves(1),
-            },
-            payload: encode_merge_output_data(MergeOutputDataRef {
-                salt: &salt,
-                ciphertext: &ciphertext,
-                prefix: &[[0; 32]],
-                binding: spr_event::MergeCiphertextBinding::Unverified,
-            }),
-        }],
-        messages: Vec::new(),
-        nullifiers: vec![first],
-        proofless: false,
-        ring_config: None,
-        ring_program_id: Some(RING),
-    });
+    let merged_hash = publish_merge(&indexer, &bob, vec![first], 100);
     let scan = AnonymousSync::new(&bob.keys, &assets())
         .full_scan(&indexer, &fresh(&bob), RING)
         .await
@@ -1712,52 +1783,7 @@ async fn a_merge_of_the_wallets_notes_is_found_by_recovery_and_marks_them_spent(
     let notes = &held.decrypted().utxos;
     let nullifiers: Vec<[u8; 32]> = notes.iter().map(|utxo| utxo.nullifier).collect();
     let first = nullifiers[0];
-    let owner = bob.address();
-    let nullifier_key = &bob.keys.nullifier_key;
-    let merged = Utxo {
-        owner: owner.signing_pubkey,
-        asset: Mint::SOL,
-        amount: 100,
-        blinding: merge_output_blinding(nullifier_key, &first).unwrap(),
-        ring_program_id: Some(RING),
-        data: Default::default(),
-    };
-    let merged_hash = merged
-        .hash(&owner.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
-        .unwrap();
-    let salt = [8; 16];
-    let ciphertext = MergeOutputPlaintext {
-        amount: 100,
-        mint: Mint::SOL.asset,
-    }
-    .encrypt(&merge_output_key(nullifier_key, &first).unwrap(), &salt)
-    .unwrap();
-    indexer.publish(ShieldedTransaction {
-        slot: 99,
-        tx_signature: Signature::from([0x99; 64]),
-        event_index: Some(0),
-        tx_viewing_pk: None,
-        salt: None,
-        output_slots: vec![OutputSlot {
-            view_tag: first,
-            output_context: OutputContext {
-                hash: merged_hash,
-                tree_id: TREE,
-                leaf_index: indexer.leaves(1),
-            },
-            payload: encode_merge_output_data(MergeOutputDataRef {
-                salt: &salt,
-                ciphertext: &ciphertext,
-                prefix: &[[0; 32]],
-                binding: spr_event::MergeCiphertextBinding::Unverified,
-            }),
-        }],
-        messages: Vec::new(),
-        nullifiers,
-        proofless: false,
-        ring_config: None,
-        ring_program_id: Some(RING),
-    });
+    let merged_hash = publish_merge(&indexer, &bob, nullifiers, 100);
     let next = AnonymousSync::new(&bob.keys, &assets())
         .with_held_notes(&held.decrypted().utxos)
         .fetch(&indexer, held.history())
@@ -1994,6 +2020,64 @@ fn deposit_of(
         tx_viewing_pk: None,
         salt: None,
     }
+}
+
+/// A merge of `nullifiers` into one SOL note of `owner` under its registered nullifier key.
+fn publish_merge(
+    indexer: &Indexer,
+    owner: &Wallet,
+    nullifiers: Vec<[u8; 32]>,
+    amount: u64,
+) -> [u8; 32] {
+    let first = nullifiers[0];
+    let address = owner.address();
+    let nullifier_key = &owner.keys.nullifier_key;
+    let merged = Utxo {
+        owner: address.signing_pubkey,
+        asset: Mint::SOL,
+        amount,
+        blinding: merge_output_blinding(nullifier_key, &first).unwrap(),
+        ring_program_id: Some(RING),
+        data: Data::default(),
+    };
+    let hash = merged
+        .hash(&address.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
+        .unwrap();
+    let salt = [8; 16];
+    let ciphertext = MergeOutputPlaintext {
+        amount,
+        mint: Mint::SOL.asset,
+    }
+    .encrypt(&merge_output_key(nullifier_key, &first).unwrap(), &salt)
+    .unwrap();
+    let leaf = indexer.leaves(1);
+    indexer.publish(ShieldedTransaction {
+        slot: leaf + 1,
+        tx_signature: Signature::from(signature(leaf)),
+        event_index: Some(0),
+        tx_viewing_pk: None,
+        salt: None,
+        output_slots: vec![OutputSlot {
+            view_tag: first,
+            output_context: OutputContext {
+                hash,
+                tree_id: TREE,
+                leaf_index: leaf,
+            },
+            payload: encode_merge_output_data(MergeOutputDataRef {
+                salt: &salt,
+                ciphertext: &ciphertext,
+                prefix: &[[0; 32]],
+                binding: spr_event::MergeCiphertextBinding::Unverified,
+            }),
+        }],
+        messages: Vec::new(),
+        nullifiers,
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
+    });
+    hash
 }
 
 fn publish_owner_merge(

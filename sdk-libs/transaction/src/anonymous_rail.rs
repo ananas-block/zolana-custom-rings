@@ -255,7 +255,7 @@ impl AnonymousSeal<'_> {
         Ok(Some(SealedBody { body, reply }))
     }
 
-    /// The bundle at index `m`, its cells rebuild the change and name each recipient.
+    /// The bundle at index `m` opens under a retained or reproducible sender viewing key and published values alone, its cells rebuild the change and name each recipient.
     pub fn sender_bundle(&self, blindings: &OutputBlindings) -> Result<Vec<u8>, RingRailError> {
         let change = |slot: usize| {
             self.slots

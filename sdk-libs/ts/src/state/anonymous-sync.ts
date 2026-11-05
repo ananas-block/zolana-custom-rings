@@ -1109,7 +1109,7 @@ class BodyRead {
     this.#note(body, position, opening, replyOf(body.reply, secret));
   }
 
-  /** Each change slot the bundle rebuilds, then the payments only the sender's own key proves. */
+  /** Each change slot the bundle rebuilds from the seed and retained chain history with no auditor read, then the payments only the sender's own key proves. */
   senderBundle(body: Body, secret: Bytes32, txViewingKey: ViewingKey | undefined): void {
     const bundle = decoded(() =>
       openSenderBundle(secret, body.ciphertext, body.tx.outputSlots.length),

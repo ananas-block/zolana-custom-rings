@@ -863,7 +863,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         Ok(())
     }
 
-    /// Each change slot its cells rebuild, under the wallet's own address and `TXOB(i)`.
+    /// Each change slot its cells rebuild under the wallet's own address and `TXOB(i)`, from the seed and retained chain history with no auditor read.
     fn open_bundle(
         &mut self,
         index: usize,
