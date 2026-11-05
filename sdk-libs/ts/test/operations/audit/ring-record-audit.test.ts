@@ -219,21 +219,26 @@ describe("the transfer reader", () => {
     expect(row.payloadErrors).toEqual([{ slotIndex: 0, kind: "commitment" }]);
   });
 
-  it("refuses R past the frame, a default bit past R and a clear noSpend under R zero", () => {
+  it("refuses R past the frame, a default bit past the notes and a clear noSpend under R zero", () => {
     const entry = caseNamed("entry");
     const refusal = (reason: string) =>
       expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason } });
     const pastFrame = envelopeOf(entry, (bytes) => {
       bytes[32] = 3;
     });
-    expect(() => audited(entry, { envelope: pastFrame })).toThrow(refusal("real input count"));
-    const bitPastR = envelopeOf(entry, (bytes) => {
+    expect(() => audited(entry, { envelope: pastFrame })).toThrow(refusal("envelope"));
+    const bitPastNotes = envelopeOf(entry, (bytes) => {
       bytes[32] = 1;
     });
-    expect(() => audited(entry, { envelope: bitPastR })).toThrow(refusal("default input bits"));
+    expect(() => audited(entry, { envelope: bitPastNotes })).toThrow(refusal("envelope"));
+    const onAddress = envelopeOf(entry, (bytes) => {
+      bytes[32] = 1;
+      bytes[40] = 2;
+    });
+    expect(() => audited(entry, { envelope: onAddress })).toThrow(refusal("envelope"));
     const noReal = envelopeOf(entry, (bytes) => {
       bytes[32] = 0;
-      bytes[40] = 0;
+      bytes.fill(0, 33);
     });
     expect(() => audited(entry, { envelope: noReal })).toThrow(refusal("no spend"));
   });
@@ -251,7 +256,7 @@ describe("the transfer reader", () => {
     );
   });
 
-  it("reads padding past R, a default bit from its evidence and a real unknown input as unresolved", () => {
+  it("reads padding past the notes, an address apart, a default bit from its evidence and an unknown note as unresolved", () => {
     const entry = caseNamed("entry");
     const { audited: row, realInputs } = audited(entry);
     expect(realInputs).toBe(2);
@@ -267,6 +272,14 @@ describe("the transfer reader", () => {
     expect(
       audited(entry, { envelope: padded }).audited.inputs.map((input) => input.opening.kind),
     ).toEqual(["unresolvedReal", "dummy"]);
+    // Input 0 an address, the default note at input 1 still opens from its evidence.
+    const address = envelopeOf(entry, (bytes) => {
+      bytes[32] = 1;
+      bytes[40] = 1;
+    });
+    expect(
+      audited(entry, { envelope: address }).audited.inputs.map((input) => input.opening.kind),
+    ).toEqual(["address", "opened"]);
   });
 });
 

@@ -36,6 +36,8 @@ import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 
 import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
+import { InputClass } from "../protocol/codec/audit-stream.js";
+import { inputClassOf } from "./audit-proof.js";
 import {
   unopenedRecordPool,
   type MemberOpeningRead,
@@ -237,7 +239,7 @@ function policySubjects(
   );
   // Only the rules read an input's asset, so the thresholds alone open none.
   const inputAssets = publishedNotes(proofInputs).map((spent) =>
-    pinned === undefined || spent.isDummy() || spent.isAddress()
+    pinned === undefined || inputClassOf(spent) !== InputClass.note
       ? undefined
       : memberOfAsset(spent.utxo.asset),
   );
@@ -973,7 +975,7 @@ export function publishedNotes(proofInputs: SppProofInputs): readonly ProofInput
 /** Live notes, `ring` clear on a default-ring note, held for debit and no same-ring input. */
 function spentNotes(proofInputs: SppProofInputs): readonly (DebitInput & { ring: boolean })[] {
   return publishedNotes(proofInputs)
-    .filter((input) => !input.isDummy() && !input.isAddress())
+    .filter((input) => inputClassOf(input) === InputClass.note)
     .map((input) => ({
       owner: input.utxo.owner.ownerProofInputHash(),
       asset: assetField(input.utxo.asset),

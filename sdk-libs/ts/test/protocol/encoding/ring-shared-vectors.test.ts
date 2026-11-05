@@ -254,6 +254,9 @@ describe("ring-statements.json", () => {
     outputs,
     signers: { count: vector.signer_count, chain: field(vector.signer_chain) },
     inputCount: vector.input_count,
+    inputNullifierChain: field(
+      (vector as unknown as { input_nullifier_chain: string }).input_nullifier_chain,
+    ),
     privateTxHash: field(vector.private_tx_hash),
     roots: {
       policyHash: field(vector.policy_hash),

@@ -9,8 +9,14 @@ export const STREAM_BLOCK_LEN = 16;
 export const STREAM_FIRST_COUNTER = 2;
 /** The sealed `tx_viewing_sk`, the envelope's first bytes. */
 export const ENVELOPE_KEY_LEN = 32;
-/** `R`, spent notes among the published inputs, dummies last. */
+/** `R`, spent notes among the published inputs, addresses excluded. */
 export const REAL_INPUT_COUNT_LEN = 1;
+/** `A` as a big-endian u64, bit `i` set when published input `i` is an address. */
+export const ADDRESS_INPUT_BITS_LEN = 8;
+/** `tx_viewing_sk ‖ R ‖ A`, the same on every key. */
+export const ENVELOPE_HEAD_LEN = ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + ADDRESS_INPUT_BITS_LEN;
+/** The address and default bitmaps are u64, a wider input class needs a new layout. */
+export const MAX_INPUT_CLASS = 64;
 /** Keys with entry capacity alone, bit `i` set when input `i` is a default-ring note. */
 export const DEFAULT_INPUT_BITS_LEN = 8;
 /** `kind ‖ u64be(amount) ‖ owner_key ‖ mint ‖ be32(nullifier_pk)`. */
@@ -78,13 +84,14 @@ export interface AuditStreamLayout {
   readonly hasData: boolean;
 }
 
-/** Refuses an input count off the key and an output count off the capacity. */
+/** Refuses an input count off the key, a key past the bitmaps and an output count off the capacity. */
 export function checkedStreamLayout(layout: AuditStreamLayout): AuditStreamLayout {
   const { key, inputs, outputs, capacity } = layout;
   const counted =
     Number.isInteger(inputs) &&
     inputs >= 1 &&
     inputs <= key.class &&
+    key.class <= MAX_INPUT_CLASS &&
     Number.isInteger(capacity) &&
     Number.isInteger(outputs) &&
     outputs >= 1 &&
@@ -94,7 +101,7 @@ export function checkedStreamLayout(layout: AuditStreamLayout): AuditStreamLayou
 }
 
 function headLen(key: AuditKey): number {
-  return ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + (key.entry ? DEFAULT_INPUT_BITS_LEN : 0);
+  return ENVELOPE_HEAD_LEN + (key.entry ? DEFAULT_INPUT_BITS_LEN : 0);
 }
 
 function entryLen(key: AuditKey): number {

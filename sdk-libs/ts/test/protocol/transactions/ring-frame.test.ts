@@ -8,6 +8,7 @@ import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-rin
 import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
 import { RingError } from "../../../src/protocol/error.js";
 import {
+  inputNullifierChain,
   ringTransferStatement,
   signerBinding,
   transferStatementElements,
@@ -295,7 +296,7 @@ describe("the ring frame", () => {
 });
 
 describe("the transfer statement", () => {
-  const STATEMENT_LENGTH = 48;
+  const STATEMENT_LENGTH = 49;
 
   it("orders the confidential elements and closes on the length", () => {
     const frame: Frame = {
@@ -312,7 +313,10 @@ describe("the transfer statement", () => {
     expect(bigint(elements[16])).toBe(1n);
     expect(bigint(elements[17])).toBe(2n);
     expect(bigint(elements[21])).toBe(2n);
-    expect(bigint(elements[31])).toBe(1n);
+    expect(elements[22]).toEqual(
+      inputNullifierChain(frame.nullifiers, RingTransactData.streamLayout(frame).key.class),
+    );
+    expect(bigint(elements[32])).toBe(1n);
     expect(bigint(elements.at(-1))).toBe(BigInt(elements.length));
     const disclosed: Frame = { ...frame, extensions: { approvalTotals: field(88) } };
     expect(
