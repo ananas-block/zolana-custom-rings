@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use crate::ZolanaServices;
 use custom_ring_interface::{
     blinding::ring_blinding_seed, encode_ring_body_output, encode_ring_sender_bundle_output,
-    stream::DeliveredSlot, RecipientBody, SenderBundle,
+    stream::DeliveredSlot, ChangeCell, RecipientBody, SenderBundle,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -183,11 +183,12 @@ impl Ledger {
         let secret = slot_secret(&tx, &owner, &sealed.first_nullifier, 1);
         let ciphertext = seal_sender_bundle(
             &SenderBundle {
-                mint: sealed.asset.asset.to_bytes(),
-                amount: sealed.amount,
-                sol_amount: 0,
                 output_seed: *blindings.output_seed(),
-                recipient_keys: vec![[0; 32]],
+                change: vec![ChangeCell {
+                    mint: sealed.asset.asset.to_bytes(),
+                    amount: sealed.amount,
+                }],
+                recipient_keys: Vec::new(),
             },
             &secret,
         )

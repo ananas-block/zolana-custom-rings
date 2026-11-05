@@ -1,5 +1,5 @@
 use custom_ring_interface::{
-    cosign::ApprovalMask, sender_bundle_len, stream::slot_tag, AnonymousProofData, AppMessage,
+    cosign::ApprovalMask, stream::slot_tag, AnonymousProofData, AppMessage, BundleLayout,
     CredentialRead, CustomRingProof, FrameExtensions, FramedSenderBundle, InputTrees,
     PlainGroth16Proof, Replies, RingOutput, SlotBody, AUDIT_RECORD_LEN, MAX_FRAME_LEN,
     MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
@@ -321,7 +321,7 @@ fn anonymous_transfer_with(
     let salt = [2; 16];
     let record = [3; AUDIT_RECORD_LEN];
     let body = [4; RECIPIENT_BODY_LEN];
-    let bundle = vec![5; sender_bundle_len(outputs)];
+    let bundle = vec![5; BundleLayout { outputs, change: 1 }.byte_len()];
     let nullifiers = vec![field; inputs];
     let region = vec![6; reply_len.unwrap_or(0) * (outputs - 1)];
     let envelope_room = vec![7; 8192];

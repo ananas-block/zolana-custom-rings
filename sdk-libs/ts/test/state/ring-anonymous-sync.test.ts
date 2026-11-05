@@ -266,11 +266,9 @@ describe("anonymous sync", () => {
     });
     // Opens under bob's key, its change rebuilds no published hash.
     const bundle = sealSenderBundle(secret(3), {
-      mint: SOL_MINT,
-      amount: 0n,
-      solAmount: 5n,
       outputSeed: new Uint8Array(32).fill(0x0b) as Bytes32,
-      recipientKeys: [ZERO, ZERO, keypair(8).shieldedAddress().viewingPublicKey.u()],
+      change: [{ mint: SOL_MINT, amount: 5n }],
+      recipientKeys: [ZERO, keypair(8).shieldedAddress().viewingPublicKey.u()],
     });
     const payloads = [
       new Uint8Array(),
@@ -502,7 +500,9 @@ describe("anonymous sync", () => {
     expect(paid.outputSlots).toHaveLength(2);
     const [message] = paid.messages;
     if (message === undefined) throw new Error("no bundle");
-    expect(senderBundleOutputBody(message.data)).toHaveLength(senderBundleLen(2));
+    expect(senderBundleOutputBody(message.data)).toHaveLength(
+      senderBundleLen({ outputs: 2, change: 1 }),
+    );
 
     indexer.publish(paid);
     const opened = await alice.sync(indexer, alice.fresh());

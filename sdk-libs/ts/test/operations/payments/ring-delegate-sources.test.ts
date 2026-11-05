@@ -450,7 +450,7 @@ describe("delegate sources", () => {
       },
     );
 
-    it("refuses one owner's change on two SPL mints on the anonymous rail alone", async () => {
+    it("returns one owner's change on two SPL mints on both rails", async () => {
       const [member, payee] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
       const build = async (mode: RingMode) => {
         const { fixture, delegate } = await moveRing(mode, [member, payee]);
@@ -468,10 +468,7 @@ describe("delegate sources", () => {
         });
       };
       await expect(build("confidential")).resolves.toBeDefined();
-      await expect(build("anonymous")).rejects.toMatchObject({
-        code: "RING_BUILD_TRANSFER",
-        causeCode: "RING_ANONYMOUS_CHANGE_COUNT",
-      });
+      await expect(build("anonymous")).resolves.toBeDefined();
     });
 
     it("refuses a source named twice and no source", async () => {

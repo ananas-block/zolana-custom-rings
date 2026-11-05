@@ -28,6 +28,7 @@ import {
   senderBundleLen,
   type RecipientBody,
   type ReplyMetadata,
+  type BundleLayout,
   type SenderBundle,
 } from "../../../src/protocol/codec/anonymous-delivery.js";
 import { STREAM_FIRST_COUNTER } from "../../../src/protocol/codec/ring-disclosure-layout.js";
@@ -70,14 +71,16 @@ function reply(data = new Data()): ReplyMetadata {
   };
 }
 
-function bundle(outputs: number): SenderBundle {
+/** `change` leading cells, then one key per other slot. */
+function bundle(layout: BundleLayout): SenderBundle {
   return {
-    mint: encodeBase58(filled(0x66)),
-    amount: 7n,
-    solAmount: 11n,
     outputSeed: filled(0x77),
-    recipientKeys: Array.from({ length: outputs }, (_, slot) =>
-      slot === 0 ? ZERO_32 : filled(0x80 + slot),
+    change: Array.from({ length: layout.change }, (_, cell) => ({
+      mint: encodeBase58(filled(0x66 + cell)),
+      amount: 7n + BigInt(cell),
+    })),
+    recipientKeys: Array.from({ length: layout.outputs - layout.change }, (_, key) =>
+      filled(0x80 + key),
     ),
   };
 }
@@ -202,17 +205,24 @@ describe("the shared reply vector", () => {
 });
 
 describe("sender bundle", () => {
-  it.each([1, 2, 4, 8])("opens what it sealed at %i published outputs", (outputs) => {
-    const sealed = sealSenderBundle(SECRET, bundle(outputs));
-    expect(sealed).toHaveLength(senderBundleLen(outputs));
-    expect(sealed).toHaveLength(80 + 32 * outputs);
-    expect(openSenderBundle(SECRET, sealed, outputs)).toEqual(bundle(outputs));
+  it.each([
+    { outputs: 1, change: 0 },
+    { outputs: 2, change: 1 },
+    { outputs: 4, change: 2 },
+    { outputs: 8, change: 8 },
+  ])("opens what it sealed at $outputs outputs and $change change cells", (layout) => {
+    const sealed = sealSenderBundle(SECRET, bundle(layout));
+    expect(sealed).toHaveLength(senderBundleLen(layout));
+    expect(sealed).toHaveLength(32 + 40 * layout.change + 32 * (layout.outputs - layout.change));
+    expect(openSenderBundle(SECRET, sealed, layout)).toEqual(bundle(layout));
   });
 
-  it("refuses a bundle off the length the published outputs fix", () => {
-    const sealed = sealSenderBundle(SECRET, bundle(2));
-    expect(() => openSenderBundle(SECRET, sealed, 3)).toThrow();
-    expect(() => openSenderBundle(SECRET, sealed.subarray(1), 2)).toThrow();
+  it("refuses a bundle off the length the published counts fix", () => {
+    const sealed = sealSenderBundle(SECRET, bundle({ outputs: 2, change: 1 }));
+    expect(() => openSenderBundle(SECRET, sealed, { outputs: 3, change: 1 })).toThrow();
+    expect(() => openSenderBundle(SECRET, sealed, { outputs: 2, change: 2 })).toThrow();
+    expect(() => openSenderBundle(SECRET, sealed.subarray(1), { outputs: 2, change: 1 })).toThrow();
+    expect(() => openSenderBundle(SECRET, sealed, { outputs: 1, change: 2 })).toThrow();
   });
 });
 

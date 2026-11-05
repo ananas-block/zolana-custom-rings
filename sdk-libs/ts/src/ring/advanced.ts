@@ -111,6 +111,8 @@ export {
   sealReply,
   sealSenderBundle,
   senderBundleLen,
+  type BundleLayout,
+  type ChangeCell,
   type RecipientBody,
   type ReplyClaim,
   type ReplyMetadata,

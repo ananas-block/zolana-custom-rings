@@ -1549,11 +1549,11 @@ mod delegate_message {
         }
     }
 
-    /// The anonymous frame's bundle holds one SPL change and the SOL change of its sender.
+    /// The anonymous frame's bundle holds one cell per change output of any mint.
     #[tokio::test]
-    async fn one_owners_change_on_two_spl_mints_needs_the_confidential_frame() {
+    async fn one_owners_change_on_two_spl_mints_fits_both_frames() {
         let delegate = keypair(7);
-        for (mode, fits) in [(RingMode::Confidential, true), (RingMode::Anonymous, false)] {
+        for mode in [RingMode::Confidential, RingMode::Anonymous] {
             let mut relay = DelegateRelay::on_mode(Answer::Honest, delegate.pubkey(), mode);
             let member = keypair(1);
             relay.members[0].1 = vec![
@@ -1562,22 +1562,10 @@ mod delegate_message {
             ];
             let mut asked = request(delegate.pubkey());
             asked.transfer.payments = vec![payment_of(USDC, 3), payment_of(EURC, 3)];
-            let built = relay.build(&asked.transfer, &asked.tx_viewing_key).await;
-            match fits {
-                true => {
-                    built.unwrap();
-                }
-                false => assert!(
-                    matches!(
-                        built,
-                        Err(RingError::Rail(
-                            zolana_ring_transaction::RingRailError::AnonymousChangeCount
-                        ))
-                    ),
-                    "{:?}",
-                    built.err()
-                ),
-            }
+            relay
+                .build(&asked.transfer, &asked.tx_viewing_key)
+                .await
+                .unwrap_or_else(|error| panic!("{mode:?} {error:?}"));
         }
     }
 
@@ -3721,14 +3709,21 @@ mod request_fixtures {
     ) -> custom_ring_interface::SenderBundle {
         let inputs = &assembled.frame.proof_inputs;
         let external = &inputs.external_data;
-        let published = external.outputs.len();
+        let layout = custom_ring_interface::BundleLayout {
+            outputs: external.outputs.len(),
+            change: external
+                .outputs
+                .iter()
+                .filter(|output| output.data.is_none())
+                .count(),
+        };
         let tx_viewing_pk = X25519Pubkey::from_bytes(external.tx_viewing_pk).unwrap();
         let secret = DeliveredSlot {
             agreement: &sender.viewing_key.ecdh(&tx_viewing_pk).unwrap(),
             tx_viewing_pk: tx_viewing_pk.as_bytes(),
             recipient_viewing_pk: sender.viewing_pubkey().as_bytes(),
             salt: &external.salt,
-            output_index: published as u32,
+            output_index: layout.outputs as u32,
             first_nullifier: &inputs.input_utxos[0].nullifier(),
         }
         .secret()
@@ -3736,7 +3731,7 @@ mod request_fixtures {
         let body =
             custom_ring_interface::ring_sender_bundle_output_body(&external.messages[0].data)
                 .unwrap();
-        zolana_ring_transaction::open_sender_bundle(body, &secret, published).unwrap()
+        zolana_ring_transaction::open_sender_bundle(body, &secret, layout).unwrap()
     }
 
     fn assert_opens(built: &serde_json::Value, opening: &ApprovalOpening) {
@@ -3818,11 +3813,13 @@ mod request_fixtures {
             );
             let bundle = sender_bundle(assembled, &sender);
             assert_eq!(
-                (bundle.mint, bundle.amount, bundle.sol_amount),
-                (Mint::SOL.asset.to_bytes(), 15, 0)
+                bundle.change,
+                [custom_ring_interface::ChangeCell {
+                    mint: Mint::SOL.asset.to_bytes(),
+                    amount: 15
+                }]
             );
-            assert_eq!(bundle.recipient_keys[0], [0; 32]);
-            assert_eq!(bundle.recipient_keys[1], payee.viewing_pubkey().u());
+            assert_eq!(bundle.recipient_keys[0], payee.viewing_pubkey().u());
         };
         let direct = build().assemble(&client).await.unwrap();
         let (_, circuit) = pinned("anonymous-entry", &direct);

@@ -9,17 +9,17 @@ use custom_ring_interface::{
     cosign::ApprovalMask,
     frame_digest,
     key_catalog::{RecordPools, TransferSpend},
-    sender_bundle_len, settle_buffered_data, spl_withdrawal_count,
+    settle_buffered_data, spl_withdrawal_count,
     statement::SignerDataCounts,
     storage::Revision,
     stream::slot_tag,
-    tag, AnonymousProofData, AppMessage, CredentialRead, CustomRingError, CustomRingMergeIxData,
-    CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
-    RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_FRAME_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS,
-    MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
-    TAGGED_X25519_KEY_LEN,
+    tag, AnonymousProofData, AppMessage, BundleLayout, CredentialRead, CustomRingError,
+    CustomRingMergeIxData, CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle,
+    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, RecipientBody, Replies,
+    RingDepositAuditCapsule, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead,
+    SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_FRAME_LEN,
+    MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN,
+    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 use custom_ring_sdk::{BufferedFrame, FitError};
 use solana_address::Address;
@@ -459,7 +459,8 @@ impl Transfer {
         let nullifiers: Vec<[u8; 32]> = (0..inputs)
             .map(|input| indexed(0xb0, input).to_bytes())
             .collect();
-        let bundle = vec![12u8; sender_bundle_len(outputs)];
+        let change = usize::from(anonymous_frame && !load.every_body);
+        let bundle = vec![12u8; BundleLayout { outputs, change }.byte_len()];
         let revision = Revision::from(1);
 
         let legs = self.legs(frame);

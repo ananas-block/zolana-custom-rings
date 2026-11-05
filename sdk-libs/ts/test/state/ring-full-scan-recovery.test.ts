@@ -35,6 +35,7 @@ import {
   keypair,
   output,
   RING,
+  SCAN_USDC,
   ScanIndexer,
   ScanWallet,
 } from "../helpers/ring-scan.js";
@@ -190,6 +191,19 @@ describe("full scan recovery", () => {
     const recovered = await recover(alice, indexer);
     expect(recovered.utxos.map((note) => note.utxo.amount)).toEqual([0n, 60n]);
     expect(recovered.sent.map((row) => row.amount)).toEqual([100n, 40n]);
+  });
+
+  it("recovers two SPL change outputs, each from its own bundle cell", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    alice.fundFirst(SCAN_USDC, 40n);
+    const paid = await alice.pay(indexer, [{ to: alice.address, amount: 25n }]);
+    expect(paid.outputSlots.slice(0, 2).map((slot) => slot.payload.length)).toEqual([0, 0]);
+    const recovered = await recover(alice, indexer);
+    expect(recovered.utxos.map((note) => [note.utxo.asset, note.utxo.amount]).toSorted()).toEqual([
+      [SCAN_USDC, 15n],
+      [SCAN_USDC, 25n],
+    ]);
   });
 
   it("opens deposits by trial on proofless rows, whatever their tag", async () => {

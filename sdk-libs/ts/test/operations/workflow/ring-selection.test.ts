@@ -402,31 +402,28 @@ describe("ring approval summary", () => {
     return { error, requests };
   }
 
-  it("refuses an SPL entry with change on the anonymous rail, the bundle's second cell is SOL", async () => {
+  it("takes an SPL entry with two SPL returns to approval on the anonymous rail", async () => {
     const keypair = spendingKeypair();
     const mint = address("Mint111111111111111111111111111111111111111");
     const { approve, requests } = recordingApproval();
-    await expect(
-      prepareRingEntryRelay({
-        client: await approvalClient([keypair.shieldedAddress()], "anonymous"),
-        ringProgramId: RING,
-        wallet: fundedWallet(keypair, [40n], { asset: mint }),
-        keys: localKeys(keypair),
-        approve,
-        asset: mint,
-        amount: 25n,
-        anonymous: {
-          quote: { feePayer: PAYER, validUntilSlot: 1n },
-          nullifierKey: keypair.nullifierKey(),
-          signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
-          history: ViewingHistory.create(keypair.shieldedAddress().viewingPublicKey, 0n),
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "RING_BUILD_ENTRY",
-      causeCode: "RING_ANONYMOUS_CHANGE_COUNT",
-    });
-    expect(requests).toEqual([]);
+    await prepareRingEntryRelay({
+      client: await approvalClient([keypair.shieldedAddress()], "anonymous"),
+      ringProgramId: RING,
+      wallet: fundedWallet(keypair, [40n], { asset: mint }),
+      keys: localKeys(keypair),
+      approve,
+      asset: mint,
+      amount: 25n,
+      anonymous: {
+        quote: { feePayer: PAYER, validUntilSlot: 1n },
+        nullifierKey: keypair.nullifierKey(),
+        signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
+        history: ViewingHistory.create(keypair.shieldedAddress().viewingPublicKey, 0n),
+      },
+    }).catch((cause: unknown) => cause);
+    expect(requests.map((request) => request.intent)).toMatchObject([
+      { kind: "ringEntry", amount: 25n },
+    ]);
   });
 
   it("funds an anonymous ring's entry from at most 24 default notes, the widest entry key", async () => {

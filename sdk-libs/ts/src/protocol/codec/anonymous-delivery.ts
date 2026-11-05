@@ -34,12 +34,19 @@ export const RECIPIENT_BODY_LEN = FIELD_LEN + AMOUNT_LEN + FIELD_LEN;
 const REPLY_HEAD_LEN = 3 * FIELD_LEN;
 /** A reply holding empty data. */
 export const MIN_REPLY_LEN = REPLY_HEAD_LEN + 1;
-/** `mint0 ‖ u64be(amount0) ‖ u64be(amount1) ‖ output_seed`, ahead of one key per slot. */
-const SENDER_BUNDLE_HEAD_LEN = FIELD_LEN + 2 * AMOUNT_LEN + FIELD_LEN;
+/** `mint ‖ u64be(amount)`, one per bodiless slot. */
+const CHANGE_CELL_LEN = FIELD_LEN + AMOUNT_LEN;
 
-/** The length follows the published slots alone. */
-export function senderBundleLen(outputs: number): number {
-  return SENDER_BUNDLE_HEAD_LEN + FIELD_LEN * outputs;
+/** Rust `BundleLayout`, the frame publishes both counts and the bundle spends no byte on them. */
+export interface BundleLayout {
+  /** The frame's `m`. */
+  readonly outputs: number;
+  /** The frame's bodiless slots, at most `outputs`. */
+  readonly change: number;
+}
+
+export function senderBundleLen(layout: BundleLayout): number {
+  return FIELD_LEN + CHANGE_CELL_LEN * layout.change + FIELD_LEN * (layout.outputs - layout.change);
 }
 
 /** A ring body plaintext, the recipient rebuilds the commitment with its own bound keys, Rust `RecipientBody`. */
@@ -66,16 +73,17 @@ export interface ReplyClaim {
   readonly claimed: ReplyMetadata;
 }
 
-/** What the sender bundle opens to, the sender rebuilds its change from it. */
-export interface SenderBundle {
-  /** Slot 0's mint under `change_bits` bit 0, else the zero address. */
+/** A bodiless slot's mint and amount, its blinding derives from the bundle's seed at the slot index. */
+export interface ChangeCell {
   readonly mint: Address;
-  /** Slot 0's amount under `change_bits` bit 0, else zero. */
   readonly amount: bigint;
-  /** Slot 1's SOL amount under `change_bits` bit 1, else zero. */
-  readonly solAmount: bigint;
+}
+
+/** `output_seed ‖ change cells ‖ recipient keys`, cell k rebuilds bodiless slot k, key k names body-bearing slot k. */
+export interface SenderBundle {
   readonly outputSeed: Bytes32;
-  /** One per published slot, zero on change, exit and dummy. */
+  readonly change: readonly ChangeCell[];
+  /** Zero on exit and dummy. */
   readonly recipientKeys: readonly Bytes32[];
 }
 
@@ -173,42 +181,47 @@ export function openReply(slotSecret: Bytes32, ciphertext: Uint8Array): ReplyCla
 export function sealSenderBundle(slotSecret: Bytes32, bundle: SenderBundle): Uint8Array {
   return seal(slotSecret, SENDER_BUNDLE_ENC_INFO, () =>
     concatBytes(
-      addressBytes(bundle.mint, "mint"),
-      u64be(checkedCounter(bundle.amount, "amount")),
-      u64be(checkedCounter(bundle.solAmount, "solAmount")),
       checkedBytes<Bytes32>(bundle.outputSeed, FIELD_LEN, "outputSeed"),
+      ...bundle.change.flatMap((cell) => [
+        addressBytes(cell.mint, "mint"),
+        u64be(checkedCounter(cell.amount, "amount")),
+      ]),
       ...bundle.recipientKeys.map((key) => checkedBytes<Bytes32>(key, FIELD_LEN, "recipientKey")),
     ),
   );
 }
 
-/** `publishedOutputs` is the frame's `m`, the secret's index, past every body's index. */
+/** `layout` holds the frame's published counts, never counts a reader inferred from the ciphertext. */
 export function openSenderBundle(
   slotSecret: Bytes32,
   ciphertext: Uint8Array,
-  publishedOutputs: number,
+  layout: BundleLayout,
 ): SenderBundle {
+  if (layout.change > layout.outputs) throw bodyInvalid("senderBundle.change");
   return open(
     slotSecret,
     SENDER_BUNDLE_ENC_INFO,
     ciphertext,
-    senderBundleLen(publishedOutputs),
+    senderBundleLen(layout),
     (plaintext) => {
-      const seedAt = FIELD_LEN + 2 * AMOUNT_LEN;
-      const keysAt = seedAt + FIELD_LEN;
+      const cellAt = (index: number): number => FIELD_LEN + CHANGE_CELL_LEN * index;
+      const keyAt = (index: number): number => cellAt(layout.change) + FIELD_LEN * index;
       return Object.freeze({
-        mint: encodeBase58(plaintext.subarray(0, FIELD_LEN)),
-        amount: bytesToBigInt(plaintext.subarray(FIELD_LEN, FIELD_LEN + AMOUNT_LEN)),
-        solAmount: bytesToBigInt(plaintext.subarray(FIELD_LEN + AMOUNT_LEN, seedAt)),
-        outputSeed: plaintext.slice(seedAt, keysAt) as Bytes32,
+        outputSeed: plaintext.slice(0, FIELD_LEN) as Bytes32,
+        change: Object.freeze(
+          Array.from({ length: layout.change }, (_, index) =>
+            Object.freeze({
+              mint: encodeBase58(plaintext.subarray(cellAt(index), cellAt(index) + FIELD_LEN)),
+              amount: bytesToBigInt(
+                plaintext.subarray(cellAt(index) + FIELD_LEN, cellAt(index + 1)),
+              ),
+            }),
+          ),
+        ),
         recipientKeys: Object.freeze(
           Array.from(
-            { length: publishedOutputs },
-            (_, slot) =>
-              plaintext.slice(
-                keysAt + FIELD_LEN * slot,
-                keysAt + FIELD_LEN * (slot + 1),
-              ) as Bytes32,
+            { length: layout.outputs - layout.change },
+            (_, index) => plaintext.slice(keyAt(index), keyAt(index + 1)) as Bytes32,
           ),
         ),
       });

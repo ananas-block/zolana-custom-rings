@@ -1,8 +1,8 @@
 //! A child of `pipeline`, every rail stages and assembles through its private items.
 
 use custom_ring_interface::{
-    ring_body_output, ring_sender_bundle_output_body, CustomRingError, RecipientBody, RingMode,
-    RingRail, RingTransactData, SenderBundle,
+    ring_body_output, ring_sender_bundle_output_body, BundleLayout, ChangeCell, CustomRingError,
+    RecipientBody, RingMode, RingRail, RingTransactData, SenderBundle,
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
@@ -327,11 +327,18 @@ fn bundle(staged: &Staged<'_>, sender: &ShieldedKeypair) -> SenderBundle {
     let external = &staged.proof_inputs.external_data;
     let message = &external.messages[0];
     let body = ring_sender_bundle_output_body(&message.data).expect("a sender bundle");
-    let published = external.outputs.len();
-    open_sender_bundle(body, &slot_secret(staged, sender, published), published).unwrap()
+    let layout = BundleLayout {
+        outputs: external.outputs.len(),
+        change: external
+            .outputs
+            .iter()
+            .filter(|output| output.data.is_none())
+            .count(),
+    };
+    open_sender_bundle(body, &slot_secret(staged, sender, layout.outputs), layout).unwrap()
 }
 
-/// Change leads with no body, SPL before SOL.
+/// Change leads with no body, one bundle cell per change output.
 #[tokio::test]
 async fn an_anonymous_transfer_publishes_each_payment_and_the_sender_bundle() {
     use crate::tests::support::keypair;
@@ -384,13 +391,21 @@ async fn an_anonymous_transfer_publishes_each_payment_and_the_sender_bundle() {
     }
     let sent = bundle(&staged, sender);
     assert_eq!(
-        (sent.mint, sent.amount, sent.sol_amount),
-        (usdc.asset.to_bytes(), 7, 8)
+        sent.change,
+        [
+            ChangeCell {
+                mint: usdc.asset.to_bytes(),
+                amount: 7
+            },
+            ChangeCell {
+                mint: Mint::SOL.asset.to_bytes(),
+                amount: 8
+            }
+        ]
     );
-    assert_eq!(sent.recipient_keys.len(), outputs.len());
-    assert_eq!(sent.recipient_keys[0], [0; 32], "a change cell reads zero");
-    assert_eq!(sent.recipient_keys[2], bootstrap.viewing_pubkey().u());
-    assert_eq!(sent.recipient_keys[3], requester.viewing_pubkey().u());
+    assert_eq!(sent.recipient_keys.len(), slots.len() - 2);
+    assert_eq!(sent.recipient_keys[0], bootstrap.viewing_pubkey().u());
+    assert_eq!(sent.recipient_keys[1], requester.viewing_pubkey().u());
     let paid = payment_at(&staged, &bootstrap, 2);
     assert_eq!((paid.mint, paid.amount), (usdc.asset.to_bytes(), 3));
 }
@@ -416,7 +431,13 @@ async fn a_transfer_returning_nothing_leads_with_a_zero_sol_change() {
         (Some(sender.shielded_address().unwrap()), Mint::SOL, 0)
     );
     let sent = bundle(&staged, sender);
-    assert_eq!(sent.amount, 0);
+    assert_eq!(
+        sent.change,
+        [ChangeCell {
+            mint: Mint::SOL.asset.to_bytes(),
+            amount: 0
+        }]
+    );
     assert_eq!(
         sent.recipient_keys
             .iter()

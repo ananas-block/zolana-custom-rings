@@ -43,7 +43,12 @@ import {
   type AuditLayout,
   type AuditStreamLayout,
 } from "../codec/ring-disclosure-layout.js";
-import { MIN_REPLY_LEN, RECIPIENT_BODY_LEN, senderBundleLen } from "../codec/anonymous-delivery.js";
+import {
+  type BundleLayout,
+  MIN_REPLY_LEN,
+  RECIPIENT_BODY_LEN,
+  senderBundleLen,
+} from "../codec/anonymous-delivery.js";
 import {
   SLOT_TAG_LEN,
   framedSlotTag,
@@ -633,7 +638,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
   const sender: PublishedSenderBundle | undefined = isAnonymousFrame(rail)
     ? Object.freeze({
         tag: field32(bytes, "sender.tag"),
-        body: bytes.bytes(senderBundleLen(outputCount), "sender.body"),
+        body: bytes.bytes(senderBundleLen(bundleLayout(slots)), "sender.body"),
       })
     : undefined;
   const envelope = bytes.bytes(envelopeRegion(stream).length, "envelope");
@@ -706,6 +711,14 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
 }
 
 type FramedSlot = Omit<RingOutput, "record" | "tail">;
+
+/** Rust `RingTransactData::bundle_layout`, one change cell per bodiless slot. */
+export function bundleLayout(slots: readonly { readonly body: SlotBody }[]): BundleLayout {
+  return Object.freeze({
+    outputs: slots.length,
+    change: slots.filter((slot) => slot.body.kind === "none").length,
+  });
+}
 
 /** A plain frame fixes each body's length, a data frame prefixes it. */
 function readSlot(bytes: Reader, hasData: boolean, exit: boolean, bodiless: boolean): FramedSlot {
@@ -898,7 +911,7 @@ function writeCompact(data: RingTransactData): Uint8Array {
     (data.anonymous !== undefined) !== hiddenOwnerProof ||
     (data.sender !== undefined) !== anonymousFrame ||
     (data.sender !== undefined &&
-      data.sender.body.length !== senderBundleLen(data.outputs.length)) ||
+      data.sender.body.length !== senderBundleLen(bundleLayout(data.outputs))) ||
     data.envelope.length !== envelopeRegion(stream).length ||
     !data.outputs.every((output) => slotFits(output, data.hasData))
   )

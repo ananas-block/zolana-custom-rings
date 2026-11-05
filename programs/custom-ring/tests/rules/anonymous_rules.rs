@@ -78,6 +78,7 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
             tag: &tags[1],
             ..sender
         });
+        fixture.fit_bundle(&mut data);
         let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
         reaches_verification(send(
             &mut ring,
@@ -90,7 +91,7 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
     }
 }
 
-/// `m` fixes the bundle, a byte fewer shifts every later section.
+/// `m` and the bodiless count fix the bundle, a byte fewer shifts every later section.
 #[test]
 fn a_short_sender_bundle_is_refused() {
     let fixture = Fixture::new();

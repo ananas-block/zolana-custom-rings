@@ -59,6 +59,10 @@ use history_page::{position, EventsPage, OutputsPage};
 
 const RING: Address = Address::new_from_array([4; 32]);
 const TREE: u16 = 2;
+const USDC: Mint = Mint {
+    asset: Address::new_from_array([6; 32]),
+    asset_id: 3,
+};
 const RESPONSE_TOO_LARGE: &str = "JSON-RPC error from ring: code=Some(-32008) message=\"large\"";
 
 fn keypair(seed: u8) -> ShieldedKeypair {
@@ -323,14 +327,21 @@ impl Wallet {
             nullifier_pk: self.address().nullifier_pubkey,
             data: Data::default(),
         };
-        let plan = payments.iter().fold(AnonymousPlan::new(), |plan, pay| {
-            let plan = plan.with_payment(pay.to.viewing_pubkey);
-            match self.replies {
-                true => plan.with_reply(reply.clone()),
-                false => plan,
-            }
-        });
+        // A payment to the wallet itself is change, the plan lists other recipients alone.
+        let own = self.address();
+        let plan =
+            payments
+                .iter()
+                .filter(|pay| *pay.to != own)
+                .fold(AnonymousPlan::new(), |plan, pay| {
+                    let plan = plan.with_payment(pay.to.viewing_pubkey);
+                    match self.replies {
+                        true => plan.with_reply(reply.clone()),
+                        false => plan,
+                    }
+                });
         let input = self.funding.remove(0);
+        let asset = input.utxo.asset;
         let mut transaction = ConfidentialTransaction::new_with_ring(
             vec![input],
             self.address().solana_address().unwrap(),
@@ -341,7 +352,7 @@ impl Wallet {
         .unwrap();
         for pay in payments {
             transaction
-                .transfer_with_ring(pay.to, Mint::SOL, pay.amount, Some(RING))
+                .transfer_with_ring(pay.to, asset, pay.amount, Some(RING))
                 .unwrap();
         }
         let rail = RingOutputRail::new(tx_key, RingDelivery::Anonymous(Box::new(plan)));
@@ -391,7 +402,7 @@ impl Wallet {
 }
 
 fn assets() -> RingAssets {
-    RingAssets::new([]).unwrap()
+    RingAssets::new([USDC]).unwrap()
 }
 
 fn signature(leaf: u64) -> [u8; 64] {
@@ -410,25 +421,36 @@ fn funding_utxo(owner: &ShieldedKeypair, seed: u8, index: u8) -> WalletUtxo {
         ring_program_id: Some(RING),
         data: Data::default(),
     };
-    let nullifier_pubkey = owner.shielded_address().unwrap().nullifier_pubkey;
-    let utxo_hash = utxo
-        .hash(&nullifier_pubkey, &[0; 32], &[0; 32], TREE)
+    rehashed(
+        owner,
+        WalletUtxo {
+            nullifier: [0; 32],
+            utxo,
+            nullifier_pubkey: owner.shielded_address().unwrap().nullifier_pubkey,
+            utxo_hash: [0; 32],
+            tx_viewing_key: None,
+            data_hash: None,
+            ring_data_hash: None,
+            tree_id: TREE,
+            leaf_index: u64::from(index),
+            latest_tree_id: None,
+            slot: 0,
+            tx_signature: Signature::from([seed; 64]),
+            slot_index: 0,
+        },
+    )
+}
+
+/// `note` with its hash and nullifier rebuilt over its fields.
+fn rehashed(owner: &ShieldedKeypair, mut note: WalletUtxo) -> WalletUtxo {
+    note.utxo_hash = note
+        .utxo
+        .hash(&note.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
         .unwrap();
-    WalletUtxo {
-        nullifier: owner.nullifier(&utxo_hash, &utxo.blinding).unwrap(),
-        utxo,
-        nullifier_pubkey,
-        utxo_hash,
-        tx_viewing_key: None,
-        data_hash: None,
-        ring_data_hash: None,
-        tree_id: TREE,
-        leaf_index: u64::from(index),
-        latest_tree_id: None,
-        slot: 0,
-        tx_signature: Signature::from([seed; 64]),
-        slot_index: 0,
-    }
+    note.nullifier = owner
+        .nullifier(&note.utxo_hash, &note.utxo.blinding)
+        .unwrap();
+    note
 }
 
 /// A canonical field value distinct per pair.
@@ -952,6 +974,36 @@ async fn a_relayed_proof_under_another_transaction_key_is_not_missed_by_the_fast
     assert_eq!(scan.sent[0].tx_signature, own.tx_signature);
 }
 
+/// A payment to itself and the change are two SPL change outputs, each rebuilt from its own cell.
+#[tokio::test]
+async fn a_sender_recovers_two_spl_change_outputs_after_a_wipe() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let mut note = funding_utxo(&alice.keys, 1, 9);
+    note.utxo.asset = USDC;
+    note.utxo.amount = 40;
+    alice.funding.insert(0, rehashed(&alice.keys, note));
+    let paid = alice.pay(&indexer, &[pay(&alice.address(), 25)]);
+    assert!(paid.output_slots[..2]
+        .iter()
+        .all(|slot| slot.payload.is_empty()));
+    let (keys, history) = wiped(1, &[]);
+    let restored = restore(&indexer, &keys, &history).await;
+    let mut amounts: Vec<(Mint, u64)> = restored
+        .decrypted()
+        .utxos
+        .iter()
+        .map(|note| (note.utxo.asset, note.utxo.amount))
+        .collect();
+    amounts.sort_unstable_by_key(|(_, amount)| *amount);
+    assert_eq!(amounts, [(USDC, 15), (USDC, 25)]);
+    assert_eq!(unspent(&keys, &restored), {
+        let mut both = [output(&paid, 0), output(&paid, 1)];
+        both.sort_unstable();
+        both
+    });
+}
+
 #[tokio::test]
 async fn a_sender_recovers_its_change_after_a_wipe() {
     let indexer = Indexer::default();
@@ -1250,10 +1302,8 @@ async fn sender_chosen_garbage_under_a_tag_hint_never_fails_the_sync() {
     )
     .unwrap();
     let bundle = |recipient_keys: Vec<[u8; 32]>| SenderBundle {
-        mint: Mint::SOL.asset.to_bytes(),
-        amount: 0,
-        sol_amount: 5,
         output_seed: [0x0b; 32],
+        change: Vec::new(),
         recipient_keys,
     };
     // Rebuilds under a mint the registry does not name.

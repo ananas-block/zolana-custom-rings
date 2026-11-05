@@ -10,7 +10,7 @@ import (
 
 const anonymousBodiesDescription = "One ring body and one sender bundle of an honest 4 slot frame, change in slot 0, payments in slots 1 and 3, an exit in slot 2. " +
 	"Body plaintext be32(blinding) || u64be(amount) || mint under label CRING/rcp and the CRDS slot secret of recipient_key and index. " +
-	"Bundle plaintext mint0 || u64be(amount0) || u64be(amount1) || output_seed || recipient_u * m under label CRING/snd and the CRDS slot secret of sender_viewing_key and index m, recipient_u zero on change and exit. " +
+	"Bundle plaintext output_seed || (mint || u64be(amount)) per bodiless slot || recipient_u per body-bearing slot under label CRING/snd and the CRDS slot secret of sender_viewing_key and index m, recipient_u zero on exit. " +
 	"bundle_digest = ciphertext_digest(bundle). body_tag = Poseidon(CRRT, body_slot_secret), bundle_tag = Poseidon(CRST, bundle_slot_secret), dummy_tag = Poseidon(CRRT, dummy_tag_preimage). " +
 	"body, bundle and bundle_digest produced by prover/ringtest/ringprotocol/anonymous_bodies_vector_test.go with WRITE_AUDIT_VECTORS=1, slot secrets and tags stay pinned in the file."
 
@@ -44,9 +44,8 @@ func TestAnonymousBodiesVector(t *testing.T) {
 		keys = append(keys, recipient)
 	}
 	bundle := SenderBundle{
-		Mint:          bytes32("change_mint"),
-		Amount:        uint64(vector["change_amount"].(float64)),
 		OutputSeed:    field("output_seed"),
+		Change:        []ChangeCell{{Mint: bytes32("change_mint"), Amount: uint64(vector["change_amount"].(float64))}},
 		RecipientKeys: keys,
 	}.Seal(t, field("bundle_slot_secret"))
 	vector["description"] = anonymousBodiesDescription

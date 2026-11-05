@@ -1,13 +1,13 @@
 //! The anonymous rail's slots, the sender's change leading at output 0, one body per
 //! recipient output and the sender bundle after them.
 
-use custom_ring_interface::{SenderBundle, MIN_REPLY_LEN, RECIPIENT_BODY_LEN};
+use custom_ring_interface::{ChangeCell, SenderBundle, MIN_REPLY_LEN, RECIPIENT_BODY_LEN};
 use rand::{rngs::OsRng, RngCore};
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_interface::MAX_OUTPUTS;
 use spr_keypair::{ShieldedAddress, X25519Pubkey};
 use spr_transaction::{
-    instructions::transact::SppProofInputs, Mint, SppProofOutputUtxo, TransactionError,
+    instructions::transact::SppProofInputs, SppProofOutputUtxo, TransactionError,
 };
 
 use crate::{
@@ -103,9 +103,6 @@ impl AnonymousPlan {
     ) -> Result<Vec<AnonymousSlot>, RingRailError> {
         let published = published(outputs);
         let change = leading_change(published, sender);
-        if change > 2 || (change == 2 && published[1].asset.asset != Mint::SOL.asset) {
-            return Err(RingRailError::AnonymousChangeCount);
-        }
         let mut recipients = self.recipients.iter();
         let mut slots = Vec::with_capacity(published.len());
         for (slot_index, output) in published.iter().enumerate() {
@@ -168,7 +165,7 @@ impl AnonymousSlot {
         matches!(self, Self::Change)
     }
 
-    /// The bundle cell, zero on change, exit and dummy.
+    /// The bundle key of a body-bearing slot, zero on exit and dummy.
     fn recipient_key(&self) -> [u8; 32] {
         match self {
             Self::Payment { recipient } => recipient.u(),
@@ -177,20 +174,13 @@ impl AnonymousSlot {
     }
 }
 
-/// Moves the sender's change to the front, SPL before SOL, and rederives every blinding at its slot.
+/// Moves the sender's change to the front and rederives every blinding at its slot.
 pub(crate) fn lead_change(
     inputs: &mut SppProofInputs,
     sender: &ShieldedAddress,
 ) -> Result<(), RingRailError> {
     let mut order: Vec<usize> = (0..inputs.output_utxos.len()).collect();
-    order.sort_by_key(|index| {
-        let output = &inputs.output_utxos[*index];
-        match is_change(output, sender) {
-            true if output.asset.asset != Mint::SOL.asset => 0,
-            true => 1,
-            false => 2,
-        }
-    });
+    order.sort_by_key(|index| !is_change(&inputs.output_utxos[*index], sender));
     let outputs: Vec<SppProofOutputUtxo> = order
         .iter()
         .map(|index| inputs.output_utxos[*index].clone())
@@ -257,21 +247,24 @@ impl AnonymousSeal<'_> {
 
     /// The bundle at index `m` opens under a retained or reproducible sender viewing key and published values alone, its cells rebuild the change and name each recipient.
     pub fn sender_bundle(&self, blindings: &OutputBlindings) -> Result<Vec<u8>, RingRailError> {
-        let change = |slot: usize| {
-            self.slots
-                .get(slot)
-                .filter(|slot| slot.is_change())
-                .map(|_| &self.outputs[slot])
-        };
+        // A change slot publishes no body, so the frame's bodiless count is the bundle's cell count.
+        let (change, bearing): (Vec<_>, Vec<_>) = self
+            .slots
+            .iter()
+            .zip(self.outputs)
+            .partition(|(slot, _)| slot.is_change());
         let bundle = SenderBundle {
-            mint: change(0).map_or([0; 32], |output| output.asset.asset.to_bytes()),
-            amount: change(0).map_or(0, |output| output.amount),
-            sol_amount: change(1).map_or(0, |output| output.amount),
             output_seed: *blindings.output_seed(),
-            recipient_keys: self
-                .slots
-                .iter()
-                .map(AnonymousSlot::recipient_key)
+            change: change
+                .into_iter()
+                .map(|(_, output)| ChangeCell {
+                    mint: output.asset.asset.to_bytes(),
+                    amount: output.amount,
+                })
+                .collect(),
+            recipient_keys: bearing
+                .into_iter()
+                .map(|(slot, _)| slot.recipient_key())
                 .collect(),
         };
         let published =

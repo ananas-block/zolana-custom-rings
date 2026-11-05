@@ -5,12 +5,11 @@ use custom_ring_interface::{
     blinding::ring_blinding_seed,
     encode_ring_sender_bundle_output,
     key_catalog::FrameKey,
-    sender_bundle_len,
     stream::{DeliveredSlot, SlotSecret},
     tag as ring_tag, tagged_x25519, AnonymousProofData, AuditEvidence, AuditKey, AuditRecord,
-    AuditStreamLayout, AuditorMessage, CredentialRead, CustomRingProof, DataTail, EntryInput,
-    FrameExtensions, FramedSenderBundle, InProofOwner, InputClassification, InputMap, InputTrees,
-    PlainGroth16Proof, RecordKind, RingOutput, RingRail, RingTransactData, SlotBody,
+    AuditStreamLayout, AuditorMessage, BundleLayout, CredentialRead, CustomRingProof, DataTail,
+    EntryInput, FrameExtensions, FramedSenderBundle, InProofOwner, InputClassification, InputMap,
+    InputTrees, PlainGroth16Proof, RecordKind, RingOutput, RingRail, RingTransactData, SlotBody,
     AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
@@ -366,9 +365,15 @@ impl Transfer {
             view_tag: SENDER_TAG,
             data: encode_ring_sender_bundle_output(&vec![
                 SENDER_BUNDLE_BYTE;
-                sender_bundle_len(
-                    publish.disclosure.layout.outputs
-                )
+                BundleLayout {
+                    outputs: publish.disclosure.layout.outputs,
+                    change: publish
+                        .slots
+                        .iter()
+                        .filter(|slot| slot.payload.is_empty())
+                        .count(),
+                }
+                .byte_len()
             ])
             .unwrap(),
         };

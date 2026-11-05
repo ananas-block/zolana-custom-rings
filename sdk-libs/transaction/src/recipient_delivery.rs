@@ -2,9 +2,8 @@
 
 use custom_ring_interface::{
     domain::{RECIPIENT_BODY_LABEL, REPLY_LABEL, SENDER_BUNDLE_LABEL},
-    sender_bundle_len,
     stream::SlotSecret,
-    RecipientBody, SenderBundle,
+    BundleLayout, ChangeCell, RecipientBody, SenderBundle,
 };
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_x25519_public_key;
@@ -142,20 +141,20 @@ pub fn seal_sender_bundle(
     Ok(ciphertext)
 }
 
-/// `published_outputs` is the frame's `m`, never an output count a reader inferred.
+/// `layout` holds the frame's published counts, never counts a reader inferred from the ciphertext.
 pub fn open_sender_bundle(
     ciphertext: &[u8],
     slot_secret: &SlotSecret,
-    published_outputs: usize,
+    layout: BundleLayout,
 ) -> Result<SenderBundle, RingRailError> {
-    if ciphertext.len() != sender_bundle_len(published_outputs) {
+    if ciphertext.len() != layout.byte_len() {
         return Err(RingRailError::SenderBundleLength {
             len: ciphertext.len(),
         });
     }
     let mut plaintext = Zeroizing::new(ciphertext.to_vec());
     symmetric_apply_audit(slot_secret.as_bytes(), SENDER_BUNDLE_LABEL, &mut plaintext)?;
-    Ok(SenderBundle::decode(&plaintext, published_outputs)?)
+    Ok(SenderBundle::decode(&plaintext, layout)?)
 }
 
 /// Shares slot `i`'s secret, its own label keeps the body's counter from restarting.
@@ -266,24 +265,16 @@ impl AnonymousOutput<'_> {
         Ok(None)
     }
 
-    /// Rebuilds slot `position` of the sender's change, `None` when the cells miss its commitment.
+    /// `None` when the cell misses its commitment.
     pub fn open_change(
         &self,
-        bundle: &SenderBundle,
-        first_nullifier: &[u8; 32],
-        position: u32,
+        cell: &ChangeCell,
+        blinding: Blinding,
     ) -> Result<Option<OpenedBody>, RingRailError> {
-        let (mint, amount) = match position {
-            0 => (bundle.mint, bundle.amount),
-            1 => (Mint::SOL.asset.to_bytes(), bundle.sol_amount),
-            _ => return Ok(None),
-        };
-        let blinding =
-            derive_transact_output_blinding(first_nullifier, &bundle.output_seed, position)?;
         self.open_body(&RecipientBody {
             blinding,
-            amount,
-            mint,
+            amount: cell.amount,
+            mint: cell.mint,
             ..RecipientBody::default()
         })
     }
@@ -302,6 +293,13 @@ impl OutputBlindings {
                 blinding_seed,
             )?),
         })
+    }
+
+    pub fn published(first_nullifier: &[u8; 32], output_seed: &[u8; 32]) -> Self {
+        Self {
+            first_nullifier: *first_nullifier,
+            output_seed: Zeroizing::new(*output_seed),
+        }
     }
 
     pub fn at(&self, position: u32) -> Result<Blinding, RingRailError> {
