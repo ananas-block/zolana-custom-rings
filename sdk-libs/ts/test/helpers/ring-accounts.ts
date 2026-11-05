@@ -82,28 +82,6 @@ export async function ringCoSignerAccount(
 }
 
 /** Rust `StorageRegistry` owned by the storage program, `roots` newest first. */
-/** Rust `TrackingRegistry`, the newest root in slot 0. */
-export function trackingRegistryAccount(
-  input: Readonly<{
-    root: Bytes32;
-    revision: bigint;
-    nextIndex: number;
-    auditorPubkey: Uint8Array;
-  }>,
-): RpcAccount {
-  const writer = new Writer()
-    .u8(3, "discriminator")
-    .bytes(new Uint8Array(32), 32, "ringId")
-    .bytes(input.auditorPubkey, 33, "auditorPubkey")
-    .u32(input.nextIndex, "nextIndex");
-  for (let slot = 0; slot < ROOT_HISTORY; slot += 1)
-    writer
-      .bytes(slot === 0 ? input.root : new Uint8Array(32), 32, "hash")
-      .u64(slot === 0 ? input.revision : 0n, "revision")
-      .u64(0n, "expiresAt");
-  return ownedAccount(STORAGE_PROGRAM_ID, writer.finish());
-}
-
 export function storageRegistryAccount(
   roots: readonly StorageRegistryRoot[],
   authority: Address = ZERO_ADDRESS,

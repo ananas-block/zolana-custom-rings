@@ -104,6 +104,25 @@ export class CredentialChain {
     return new CredentialChain({ ...input, pda: await credentialPda(input.ringProgramId) });
   }
 
+  /** A chain on its own accounts with `owners` enrolled, for a client built by hand. */
+  static async enrolled(
+    ringProgramId: Address,
+    owners: readonly ShieldedAddress[],
+  ): Promise<CredentialChain> {
+    const chain = await CredentialChain.create({
+      ringProgramId,
+      auditorPubkey: new Uint8Array(33) as Bytes33,
+      accounts: new Map(),
+    });
+    for (const owner of owners) chain.enroll(owner);
+    return chain;
+  }
+
+  /** Tree 0 and any account the chain was given. */
+  account(address: Address): RpcAccount | undefined {
+    return this.#accounts.get(address);
+  }
+
   /** `Enroll` landed and its leaf is under the newest state root, a repeat is refused. */
   enroll(owner: ShieldedAddress, listTag: Bytes32 = ZERO_32): AuditCredential {
     const credential: AuditCredential = Object.freeze({
