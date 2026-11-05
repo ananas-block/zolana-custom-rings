@@ -739,7 +739,7 @@ export class AnonymousTransfer {
           wideOwners: sealed.wideOwners,
           assets: this.#owner.assets,
           listSalts: relayListSalts(config, this.#owner.listSalts ?? []),
-          coOwners: spendingCoOwners(staged.ownerSigners, proofInputs.inputUtxos, this.#coOwners),
+          coOwners: this.#coOwners,
           ...stagedBlinder(approvalBlinder),
         });
         const coSigners = this.#owner.coSigners ?? [];
@@ -1368,19 +1368,6 @@ function suppliedCoSigners(
   coSigners: readonly Address[] | undefined,
 ): Pick<StagedTransferInput, "coSigners"> {
   return coSigners === undefined ? {} : { coSigners };
-}
-
-/** A held co-owner spending nothing keeps its secret from Ring RPC. */
-function spendingCoOwners(
-  ownerSigners: readonly Address[],
-  inputs: readonly ProofInputUtxo[],
-  coOwners: readonly CoOwner[],
-): readonly CoOwner[] {
-  return ownerSigners.flatMap((owner) => {
-    const held = coOwners.find((coOwner) => coOwner.owner === owner);
-    const spends = inputs.some((spent) => !spent.isDummy() && ownedBy(spent, owner));
-    return held !== undefined && spends ? [held] : [];
-  });
 }
 
 /** A Solana address names a wallet or a PDA alike, a key rebuilt as Ed25519 never equals a PDA owner. */

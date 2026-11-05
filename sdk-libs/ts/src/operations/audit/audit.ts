@@ -54,13 +54,6 @@ import { canonicalViewingKey } from "../../crypto/audit/ring-disclosure.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../../protocol/error.js";
-import {
-  MergeLedger,
-  mergeInputOf,
-  type AuditedMergeOutput,
-  type ConfirmedMerge,
-  type MergeInput,
-} from "../../state/merge-ledger.js";
 import { zeroKeyNullifier } from "../../state/exposed-notes.js";
 import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
@@ -146,14 +139,6 @@ export type InputOpening =
   /** A position at or past `R`. */
   | Readonly<{ kind: "dummy" }>
   | (Readonly<{ kind: "opened" }> & AuditedInputOpening)
-  /** A merge output's audit record with no blinding, a wallet cannot spend from it. */
-  | Readonly<{
-      kind: "merged";
-      ownerKey: Bytes32;
-      asset: Bytes32;
-      mint?: Address;
-      amount: bigint;
-    }>
   /** The evidence names a note the auditor lacks, the outputs still open. */
   | Readonly<{ kind: "unseenHash"; hash: Bytes32 }>
   /** A real spend no known note answers, never a dummy or an unspent balance. */
@@ -214,8 +199,6 @@ export interface KnownUtxos {
   utxo(commitment: Bytes32): KnownUtxo | undefined;
   /** A real input resolves by its nullifier alone. */
   byNullifier?(nullifier: Bytes32): KnownNote | undefined;
-  /** The inherited fields of a merge output the ledger resolved. */
-  merged?(commitment: Bytes32): MergeInput | undefined;
 }
 
 /** An enrolled key's secret, right aligned, read to derive and never held. */
@@ -233,7 +216,6 @@ export class KnownUtxoIndex implements KnownUtxos {
   readonly #notes = new Map<string, KnownNote>();
   /** Notes under a key whose secret is not yet readable. */
   readonly #waiting = new Map<string, KnownNote>();
-  readonly #merges = new MergeLedger();
   readonly #fallback: KnownUtxos | undefined;
   readonly #secrets: NullifierSecrets | undefined;
 
@@ -253,7 +235,6 @@ export class KnownUtxoIndex implements KnownUtxos {
     if (kept !== undefined && (kept.mint !== undefined || utxo.mint === undefined)) return;
     this.#utxos.set(key, utxo);
     if (!this.#indexNote({ commitment, utxo })) this.#waiting.set(key, { commitment, utxo });
-    this.#resolveMerges();
   }
 
   /** A late key recomputes its owner's notes. */
@@ -267,23 +248,6 @@ export class KnownUtxoIndex implements KnownUtxos {
 
   byNullifier(nullifier: Bytes32): KnownNote | undefined {
     return this.#notes.get(bytesKey(nullifier)) ?? this.#fallback?.byNullifier?.(nullifier);
-  }
-
-  /** Tag 47 alone, a later merge's record names its output directly. */
-  applyMerge(merge: ConfirmedMerge): void {
-    this.#merges.apply(merge, (commitment) => this.#mergeInput(commitment));
-  }
-
-  merged(commitment: Bytes32): MergeInput | undefined {
-    return this.#merges.output(commitment) ?? this.#fallback?.merged?.(commitment);
-  }
-
-  mergeRecord(output: AuditedMergeOutput): void {
-    this.#merges.applyRecord(output);
-  }
-
-  mergeOutput(commitment: Bytes32): AuditedMergeOutput | undefined {
-    return this.#merges.output(commitment);
   }
 
   /** False while the owner's secret is unreadable, a `deposited` owner names no key and stays out. */
@@ -300,20 +264,6 @@ export class KnownUtxoIndex implements KnownUtxos {
     this.#notes.set(bytesKey(poseidon([commitment, utxo.blinding, secret])), note);
     return true;
   }
-
-  #resolveMerges(): void {
-    this.#merges.resolve((commitment) => this.#mergeInput(commitment));
-  }
-
-  #mergeInput(commitment: Bytes32): MergeInput | undefined {
-    const utxo = this.utxo(commitment);
-    return utxo === undefined ? this.#fallback?.merged?.(commitment) : mergeInputOf(utxo);
-  }
-}
-
-/** By raw Solana key, the audit tries the zero key after it. */
-export interface EscrowedKeys {
-  nullifierPk(ownerKey: Bytes32): Bytes32 | undefined;
 }
 
 export interface RingAuditPage {
@@ -620,27 +570,11 @@ export function auditConfirmedRingHistory(
           eventIndex: rowEventIndex(confirmed.transaction),
           auditor: input.auditor,
         });
+        // The record's seed rebuilt the published commitment, the full opening needs no input history.
         known.insert(
           merge.outputContext.hash,
           openedUtxo(merge.utxo, outputTreeId(merge.outputContext)),
         );
-        const { utxo, outputContext } = merge;
-        known.mergeRecord({
-          commitment: outputContext.hash,
-          slot: merge.slot,
-          signature: merge.signature,
-          eventIndex: merge.eventIndex,
-          treeId: outputTreeId(outputContext),
-          leafIndex: outputContext.leafIndex,
-          inputs: [],
-          firstNullifier: confirmed.transaction.nullifiers[0] as Bytes32,
-          ringDataHash: utxo.ringDataHash,
-          ownerKey: utxo.ownerKey,
-          owner: Object.freeze({ kind: "keyed", nullifierPk: utxo.nullifierPk }),
-          asset: utxo.asset,
-          ...(utxo.mint === undefined ? {} : { mint: utxo.mint }),
-          amount: utxo.amount,
-        });
       }
     });
   }

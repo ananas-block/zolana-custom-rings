@@ -36,6 +36,9 @@ Breaking
   service clients reject malformed or conflicting credentials during construction
   and preserve unrelated URL queries → forward method paths unchanged and supply
   the API key in one place.
+- `syncRingWallet` takes a `RingWallet` holding the wallet beside its notes of unregistered mints, and `openRingNotes` returns those notes in `pendingOpenings` in place of a `pending` count → wrap each wallet with `RingWallet.create(wallet)`, store it with `RingWallet.toJson()` and read waiting notes through `RingWallet.pendingOpenings()`.
+- `MergeLedger`, its `ConfirmedMerge`, `MergeInput`, `KnownMergeInput`, `MergeTransition` and `AuditedMergeOutput` types, `recoverMergeOpening`, `MergeAuditorOpening`, `KnownUtxos.merged` and the `merged` kind of `InputOpening` are gone, a ring merge record opens its output in full → read a merge output from `KnownUtxoIndex.utxo` by its commitment.
+- `openAuditorRegions`, the `EscrowedKeys` type and the error code `RING_ANONYMOUS_RECIPIENT_CURVE` are gone, `openAuditorRegions` opened an unsalted schedule no transfer stream uses → open an auditor stream with `openRingDisclosure` and drop handling of that code.
 
 Added
 
@@ -44,8 +47,12 @@ Added
 - `BufferedFrame` and `withBufferedSettlement` settle a frame past one transaction from a buffer its payer writes, `closeAbandonedFrameBuffers` returns the rent of an abandoned buffer, and `TransactionFit` and `decideAddressCeiling` report and refuse a transaction before any proof.
 - `CoSignerApproval` with `CoSignerRule` and `ApprovalOpening` lets an outside co-signer read the proven bits or exact totals under `withExactApproval`, `OwnerApproval` with `RelayTransferTerms` lets a public owner check its own slots, and `FunderApproval` with `RelayFunderTerms` lets a public funder check its deposit legs.
 - `RingRpc.getWalletStatus`, `RingRpc.getWalletActivity` and `RingRpc.getSpendCoverage` read a wallet's notes, its history and a ring's unresolved spends, and `ringFullScan` and `RingAuditPage.skipped` read a whole ring with no tag read and list each row that does not open.
+- `RingMergeSettingsRequest` signs an owner's merge settings for a mint and `RingRpc.setMergeSettings` sends them, a zero `targetNoteCount` stops Ring RPC merging that mint, and `RingRpcRefusal.sourceNote` names `-32227`, a recovered delegate note its source does not own.
 
 Fixed
 
-- `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, now that commitment stays in `unopened` and a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done.
+- `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, and it lost every zero-key note and every merge output whose seed the nullifier key does not derive, now that commitment stays in `unopened`, a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done, and each owned note opens from the auditor's record alone.
+- `syncRingWallet` refused every sync after a payment of an unregistered mint arrived and read the whole ring history on each sync, now that note waits in `RingWallet.pendingOpenings()` until its mint registers and a later sync reads only rows past its last position.
 - A hand-built `RuleTable` skipped the checks `decodeRuleTable` runs, now policy writes, `policyTableProofInputs` and its hash rerun `buildRuleTable` and refuse such a table with `RING_RULE_TABLE_INVALID`.
+- `buildRingMergeTransaction` and `PreparedRingDeposit.prepare` on an anonymous ring refused a PDA owner before any proof, now both build for one, and a zero-key merge names the PDA as the signer its program signs through CPI.
+- `LocalRingKeys.destroy` left the list salt key usable, now it wipes that key too and every method needing a secret raises `KEYPAIR_INVALID_SECRET_KEY` afterward.

@@ -52,6 +52,7 @@ export const RingRpcRefusal = Object.freeze({
   relayUnavailable: -32224,
   txViewingKey: -32225,
   notListWriter: -32226,
+  sourceNote: -32227,
   readerGrantsInDatabase: -32230,
   invalidAwaitedLists: -32240,
   notPolicyAuthority: -32241,

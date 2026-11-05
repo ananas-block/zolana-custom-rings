@@ -252,38 +252,6 @@ export function sealedAuditorSchedule(
   }
 }
 
-/** The caller destroys the schedule. */
-function auditorSchedule(
-  auditor: X25519Keypair,
-  ephemeralPublicKey: X25519PublicKey,
-): AuditSchedule {
-  const shared = envelopeSecret(
-    auditor,
-    ephemeralPublicKey,
-    ephemeralPublicKey,
-    auditor.publicKey(),
-  );
-  try {
-    return AuditSchedule.derive(shared, AUDIT_ENC_INFO);
-  } finally {
-    shared.fill(0);
-  }
-}
-
-/** One plaintext per region. */
-export function openAuditorRegions(
-  auditor: X25519Keypair,
-  ephemeralPublicKey: X25519PublicKey,
-  regions: readonly AuditorRegion[],
-): readonly Uint8Array[] {
-  const schedule = auditorSchedule(auditor, ephemeralPublicKey);
-  try {
-    return regions.map(({ counter, bytes }) => schedule.apply(counter, bytes));
-  } finally {
-    schedule.destroy();
-  }
-}
-
 /** The envelope's leading bytes, the evidence behind them opens with the transfer's layout. */
 export function openTransactionViewingSecret(
   auditor: X25519Keypair,

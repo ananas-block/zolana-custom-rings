@@ -546,28 +546,33 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     /// Reads the durable tables once per store, a restart resumes where the last commit stopped.
-    async fn load_tables(
+    ///
+    /// A failed or cancelled read leaves the position `None`, the retry reads the tables before
+    /// any page commits behind the durable checkpoint.
+    async fn load_tables<'a>(
         &self,
         store: &AuditStore,
-        position: &mut HistoryPosition,
-    ) -> Result<(), RingRpcError> {
+        loaded: &'a mut Option<HistoryPosition>,
+    ) -> Result<&'a mut HistoryPosition, RingRpcError> {
         let Some(database) = self.shared.database.as_ref() else {
-            return Ok(());
+            return Ok(loaded.get_or_insert_default());
         };
-        if !store.loads_tables() {
-            return Ok(());
+        match loaded {
+            Some(position) => Ok(position),
+            None => {
+                let seal = self.note_seal()?;
+                let tables = LoadSpends {
+                    db: database.connection(),
+                    ring: self.ring,
+                    seal: &seal,
+                }
+                .load()
+                .await?;
+                let position = tables.checkpoint.position;
+                store.seed(tables);
+                Ok(loaded.insert(position))
+            }
         }
-        let seal = self.note_seal()?;
-        let loaded = LoadSpends {
-            db: database.connection(),
-            ring: self.ring,
-            seal: &seal,
-        }
-        .load()
-        .await?;
-        *position = loaded.checkpoint.position;
-        store.seed(loaded);
-        Ok(())
     }
 
     fn note_seal(&self) -> Result<NoteSeal, RingRpcError> {
@@ -605,8 +610,8 @@ impl<S: TransactionSource> AuditService<S> {
     async fn read_history(&self, store: &AuditStore, mode: RingMode) -> Result<(), RingRpcError> {
         let source = &self.shared.source;
         let limit = Page::new(None, None)?.limit();
-        let mut position = store.backfill.lock().await;
-        self.load_tables(store, &mut position).await?;
+        let mut backfill = store.backfill.lock().await;
+        let position = self.load_tables(store, &mut backfill).await?;
         self.retry_unread(store, mode, limit).await?;
         let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
         for _ in 0..MAX_BACKFILL_PAGES {

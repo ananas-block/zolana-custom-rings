@@ -1,5 +1,11 @@
 import { RingListSaltRequest, RingRpc, listSaltAttestation } from "../../../src/rpc/ring-rpc.js";
+import {
+  RingMergeSettingsRequest,
+  encodeSetMergeSettingsRequest,
+  mergeSettingsAttestation,
+} from "../../../src/ring-advanced.js";
 import { encodeGetListSaltRequest } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
+import { ringRpcRefusalName } from "../../../src/protocol/ring-rpc/ring-rpc-refusal.js";
 import type { RelayIntent } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
 import {
   encodeRelayEnrollInputs,
@@ -7,11 +13,17 @@ import {
 } from "../../../src/protocol/ring-rpc/relay-enroll-inputs.js";
 import { readFileSync } from "node:fs";
 
-import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
+import {
+  createKeyPairSignerFromPrivateKeyBytes,
+  getBase58Decoder,
+  getBase58Encoder,
+} from "@solana/kit";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Address, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/interface";
-import type { indexerTypes } from "@heliuslabs/zolana/internal";
+import { addressBytes, type indexerTypes } from "@heliuslabs/zolana/internal";
+import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
   encodeCreateRecordsRegistryRequest,
@@ -264,7 +276,10 @@ describe("policy authority requests", () => {
     type Signed = { message: string; wire: string };
     const vector = JSON.parse(
       readFileSync(
-        new URL("../../../../../test-vectors/rpc/policy_authority_attestation.json", import.meta.url),
+        new URL(
+          "../../../../../test-vectors/rpc/policy_authority_attestation.json",
+          import.meta.url,
+        ),
         "utf8",
       ),
     ) as {
@@ -299,14 +314,24 @@ describe("policy authority requests", () => {
       return array;
     });
     try {
-      const list = await signPendingListApprovalsRequest(target, authority, undefined, 1_700_000_000n);
+      const list = await signPendingListApprovalsRequest(
+        target,
+        authority,
+        undefined,
+        1_700_000_000n,
+      );
       const listAfter = await signPendingListApprovalsRequest(
         target,
         authority,
         updateId,
         1_700_000_000n,
       );
-      const refuse = await signRefuseListApprovalRequest(target, authority, updateId, 1_700_000_000n);
+      const refuse = await signRefuseListApprovalRequest(
+        target,
+        authority,
+        updateId,
+        1_700_000_000n,
+      );
       expect(JSON.stringify(encodeGetPendingListApprovalsRequest(list))).toBe(vector.list.wire);
       expect(JSON.stringify(encodeGetPendingListApprovalsRequest(listAfter))).toBe(
         vector.listAfter.wire,
@@ -406,5 +431,119 @@ describe("setReaderGrant", () => {
         }),
       ),
     ).toBe(vector.walletUtxos);
+  });
+});
+
+describe("setMergeSettings", () => {
+  const target = {
+    cluster: new Uint8Array(32).fill(1) as Bytes32,
+    service: filled(2, 32) as Address,
+    ringProgramId: filled(7, 32) as Address,
+  };
+  const settings = { mint: SOL_MINT, targetNoteCount: 4, minAverageAmount: 9n };
+  const timestamp = 1_700_000_000n;
+  const nonce = new Uint8Array(32).fill(4) as Bytes32;
+  const signed = async () => {
+    const owner = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(8));
+    const random = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
+      (array as Uint8Array).fill(4);
+      return array;
+    });
+    const request = await RingMergeSettingsRequest.forSettings(target, settings)
+      .at(timestamp)
+      .sign(owner)
+      .finally(() => random.mockRestore());
+    return { owner, request };
+  };
+
+  it("signs the owner's settings over the Rust attestation lines", async () => {
+    const { owner, request } = await signed();
+    // Rust `MergeSettingsAttestation::message`.
+    const rust = [
+      "zolana/ring-rpc-merge-settings",
+      `cluster: ${filled(1, 32)}`,
+      `service: ${filled(2, 32)}`,
+      `ring: ${filled(7, 32)}`,
+      `owner: ${owner.address}`,
+      `mint: ${SOL_MINT}`,
+      "target notes: 4",
+      "minimum average: 9",
+      "timestamp: 1700000000",
+      `nonce: ${Buffer.from(nonce).toString("base64")}`,
+    ].join("\n");
+    const message = mergeSettingsAttestation({
+      target,
+      owner: owner.address,
+      settings,
+      timestamp,
+      nonce,
+    });
+    expect(new TextDecoder().decode(message)).toBe(rust);
+    expect(request).toMatchObject({ ring: target.ringProgramId, owner: owner.address, settings });
+    expect(
+      ed25519.verify(
+        Uint8Array.from(base58Bytes(request.signature)),
+        message,
+        addressBytes(owner.address),
+      ),
+    ).toBe(true);
+    expect(Object.keys(encodeSetMergeSettingsRequest(request))).toEqual([
+      "ring",
+      "owner",
+      "settings",
+      "timestamp",
+      "nonce",
+      "signature",
+    ]);
+  });
+
+  it("sends the request and reads the stored settings, a stale write names its refusal", async () => {
+    const { request } = await signed();
+    const sent: unknown[] = [];
+    const answering = (body: unknown) =>
+      new RingRpc("http://ring.example", {
+        allowInsecureHttp: true,
+        fetch: (async (_url: unknown, init?: RequestInit) => {
+          sent.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, ...(body as object) }), {
+            headers: { "content-type": "application/json" },
+          });
+        }) as typeof globalThis.fetch,
+      });
+    await expect(
+      answering({
+        result: { mint: SOL_MINT, targetNoteCount: 4, minAverageAmount: 9 },
+      }).setMergeSettings(request),
+    ).resolves.toEqual(settings);
+    expect(sent[0]).toMatchObject({
+      method: "setMergeSettings",
+      params: JSON.parse(JSON.stringify(encodeSetMergeSettingsRequest(request))),
+    });
+    await expect(
+      answering({ error: { code: -32171, message: "stale" } }).setMergeSettings(request),
+    ).rejects.toMatchObject({
+      code: "RING_RPC_REFUSED",
+      details: { method: "setMergeSettings", refusal: "staleMergeSettings" },
+    });
+  });
+
+  it("refuses settings the Rust request cannot carry before any signature", () => {
+    expect(() =>
+      RingMergeSettingsRequest.forSettings(target, { ...settings, targetNoteCount: 2 ** 32 }),
+    ).toThrow();
+    expect(() =>
+      RingMergeSettingsRequest.forSettings(target, { ...settings, mint: "mint" as Address }),
+    ).toThrow();
+  });
+});
+
+function base58Bytes(text: string): Uint8Array {
+  return getBase58Encoder().encode(text) as Uint8Array;
+}
+
+describe("ring rpc refusals", () => {
+  it("names -32227 as a recovered delegate note its source does not own", () => {
+    expect(ringRpcRefusalName(-32227)).toBe("sourceNote");
+    expect(ringRpcRefusalName(-32228)).toBeUndefined();
   });
 });

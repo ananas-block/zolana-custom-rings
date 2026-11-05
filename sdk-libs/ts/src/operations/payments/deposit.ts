@@ -728,11 +728,8 @@ async function depositRecipient(
     };
   }
   if (!anonymous) throw new RingError("RING_NOT_ANONYMOUS", { details: { operation: "deposit" } });
-  const tagged = await anonymousRecipient(recipient, params.ringProgramId, context);
-  // An anonymous ring spends only through the hidden Ed25519 proof.
-  if (tagged.address.signingPublicKey.signatureType() !== "ed25519")
-    throw new RingError("RING_ANONYMOUS_RECIPIENT_CURVE");
-  return tagged;
+  // The recipient signs nothing in a deposit, a PDA owner is valid.
+  return anonymousRecipient(recipient, params.ringProgramId, context);
 }
 
 async function anonymousRecipient(

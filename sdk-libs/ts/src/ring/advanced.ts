@@ -5,7 +5,6 @@ export {
   auditSharedSecret,
   auditorMessageData,
   auditorViewTag,
-  openAuditorRegions,
   packDisclosure,
   unpackDisclosure,
   parseAuditorMessage,
@@ -218,7 +217,6 @@ export {
   verifyRecordOpening,
 } from "../protocol/membership/member-opening.js";
 export { historyCursor, historyCursorToken, type HistoryStream } from "../rpc/history.js";
-export { recoverMergeOpening, type MergeAuditorOpening } from "../operations/audit/audit-merge.js";
 
 export {
   RING_DEPOSIT_AUDIT_SLOTS,
@@ -282,6 +280,7 @@ export type {
   MergeSettings,
   SetMergeSettingsRequest,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
+export { RingMergeSettingsRequest, mergeSettingsAttestation } from "../rpc/ring-rpc.js";
 export {
   decodeStorageApplyProofInputs,
   encodeStorageApplyProofInputsRequest,

@@ -427,7 +427,7 @@ pub struct DecryptedTransaction {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<DecryptedInput>,
     pub nullifiers: Vec<Hash>,
-    /// The input owners of a confidential transfer, by owner signature or in proof.
+    /// Owner signers or in-proof owner of a confidential transfer, a data output owner among them may spend no input.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spenders: Vec<SerializablePubkey>,
     /// Required signers, fee payer first.

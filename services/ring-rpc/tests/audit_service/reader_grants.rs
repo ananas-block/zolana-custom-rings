@@ -483,6 +483,63 @@ async fn a_fee_payer_that_owns_no_input_sees_nothing_on_either_rail() {
     assert!(wallet_activity(source, &fixture, SENDER).await.is_empty());
 }
 
+/// A deposit-funded confidential transfer of dummy inputs, `OWNER` signing for its own output beside a stranger's.
+fn deposit_funded(fixture: &Fixture) -> StaticSource {
+    let transfer = ring_transfer(0x64);
+    let outputs = [
+        paid(sol(0xb0, 500), fixture.recipient_u),
+        paid(owned_note(7), fixture.recipient_u),
+    ];
+    let mut disclosure = transfer.disclosure(Rail::Delivered, &outputs);
+    disclosure.real_inputs = 0;
+    let funded = Indexed {
+        transfer: &transfer,
+        outputs: &outputs,
+        auditor: &fixture.auditor.pubkey(),
+        signature: 0x64,
+        frames: &fixture.frames,
+    }
+    .publish(Rail::Delivered, &outputs, &disclosure);
+    let deposit = spr_interface::instruction::InterfaceTransfer::SolDeposit { amount: 507 };
+    let mut frames = fixture.frames.lock().unwrap();
+    let frame = frames.get_mut(&funded.tx_signature).expect("frame");
+    let mut data = RingTransactData::parse(&frame[1..], RingRail::Confidential)
+        .expect("frame")
+        .into_data();
+    data.interface_transfers = vec![deposit];
+    *frame = [vec![frame[0]], data.encode().expect("frame")].concat();
+    drop(frames);
+    let mut source = fixture.source().with_transactions(vec![funded.clone()]);
+    // The settlement group of the deposit ends the account list after the owner signer run.
+    let settlement = vec![Address::default(); deposit.settlement_account_count()];
+    source
+        .owner_signers
+        .insert(funded.tx_signature, [vec![OWNER], settlement].concat());
+    source
+}
+
+#[tokio::test]
+async fn a_data_output_signer_of_dummy_inputs_reads_only_its_own_output() {
+    let fixture = Fixture::new();
+    let [item] = wallet_activity(deposit_funded(&fixture), &fixture, OWNER)
+        .await
+        .try_into()
+        .expect("the signer's transfer");
+    let WalletView::Sender {
+        inputs, outputs, ..
+    } = item.view
+    else {
+        panic!("a sender view")
+    };
+    assert!(inputs.is_empty());
+    let amounts: Vec<u64> = outputs
+        .iter()
+        .flat_map(|output| &output.utxo)
+        .map(|utxo| utxo.amount)
+        .collect();
+    assert_eq!(amounts, [7], "the stranger's output stays closed");
+}
+
 #[tokio::test]
 async fn each_co_spender_of_an_audit_only_ring_sees_no_input_opening() {
     let fixture = Fixture::new();

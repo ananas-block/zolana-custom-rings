@@ -32,6 +32,7 @@ import {
   messageSignerReader,
   ringAuthAddress,
   ringWalletKeys,
+  RingWallet,
   syncRingWallet,
   createKitRingSubmissionTransport,
   type RingReadTarget,
@@ -240,10 +241,16 @@ export function ringKeys(actor: Actor) {
   return ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair));
 }
 
+/** One pending store per actor wallet across its syncs. */
+const ringWallets = new WeakMap<Wallet, RingWallet>();
+
 export async function sync(client: CustomRingClient, actor: Actor): Promise<void> {
+  let wallet = ringWallets.get(actor.wallet);
+  if (wallet === undefined)
+    ringWallets.set(actor.wallet, (wallet = RingWallet.create(actor.wallet)));
   await syncRingWallet({
     client,
-    wallet: actor.wallet,
+    wallet,
     keys: ringKeys(actor),
     config: { requireSlot: await currentSlot(client) },
   });

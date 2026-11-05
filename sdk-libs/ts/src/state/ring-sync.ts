@@ -1,14 +1,19 @@
-/** Ring notes and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
-import { syncWallet, WalletError, type SyncReport, type SyncWalletInput } from "@heliuslabs/zolana";
-import type { IndexerReader } from "@heliuslabs/zolana/client";
+/**
+ * Ring notes and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`.
+ *
+ * Read `syncRingWallet` first. Each ring tag keeps its own cursor beside the core sync's checkpoints, `RingWallet._absorb` stores both with the notes.
+ */
+import { syncWallet, type SyncReport, type SyncWalletInput } from "@heliuslabs/zolana";
+import type { IndexerReader, IndexerRpcConfig } from "@heliuslabs/zolana/client";
 import {
   bytesKey,
   equalBytes,
   fetchSplAssetRegistrations,
   createIndexerRpcConfig,
   isCanonicalField,
-  PAGE_LIMIT,
   ZERO_NULLIFIER_PK,
+  type CheckpointStream,
+  type SyncCheckpointAdvances,
 } from "@heliuslabs/zolana/internal";
 import { confidentialSlotTag } from "../crypto/derivation/ring-stream.js";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
@@ -26,7 +31,7 @@ import { ringBodyOutput, readRingOutput, RingScheme } from "../protocol/transact
 import { openRecipientNote } from "../crypto/derivation/blinding.js";
 import { openRecipientBody } from "../protocol/codec/anonymous-delivery.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
-import { registeredMint, spendingTransactions } from "../operations/workflow/recover.js";
+import { spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys, type RingTagFrame } from "./ring-keys.js";
 import { isSmallOrder } from "../crypto/keys/x25519.js";
@@ -35,11 +40,12 @@ import { answered, exactlyOne, unseen } from "./batch.js";
 import { zeroKeyNullifier } from "./exposed-notes.js";
 import { openZeroKeyMerges } from "./zero-key-merge.js";
 import { HalvingPageLimit, nextHistoryToken } from "../rpc/history.js";
+import { isPendingNote, type RingWallet } from "./ring-wallet.js";
 
 export interface RingNotes {
   readonly utxos: readonly WalletUtxo[];
-  /** Slots sent to a held key that no registered mint rebuilds, the caller registers mints and opens again. */
-  readonly pending: number;
+  /** Notes sent to a held key under a mint the registry lacks, a transfer never selects one. */
+  readonly pendingOpenings: readonly WalletUtxo[];
 }
 
 /** Every note is unspent, a ring body opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
@@ -51,9 +57,7 @@ export async function openRingNotes(
   }>,
   context?: RequestContext,
 ): Promise<RingNotes> {
-  const deposits = await ringDeposits(input, context);
-  const notes = deposits.notes;
-  let pending = deposits.pending;
+  const notes = await ringDeposits(input, context);
   for (const tx of input.transactions) {
     const { ringProgramId: ring, txViewingPublicKey, salt } = tx;
     if (ring === undefined || txViewingPublicKey === undefined || salt === undefined) continue;
@@ -67,8 +71,7 @@ export async function openRingNotes(
         slot,
       };
       const opened = await openSlot(input, site, context);
-      if (opened === PENDING) pending += 1;
-      else if (opened !== undefined) notes.push(opened);
+      if (opened !== undefined) notes.push(opened);
     }
   }
   const keyed = notes.filter(
@@ -86,81 +89,79 @@ export async function openRingNotes(
           context,
         );
   const nullifiers = new Map(answered(keyed, derived));
-  return Object.freeze({
-    utxos: Object.freeze(
-      notes.map((note) => {
-        const { utxoHash, slot, nullifierPublicKey: _key, ...fields } = note;
-        return Object.freeze({
-          ...fields,
-          outputContext: Object.freeze({
-            hash: utxoHash,
-            tree: slot.outputContext.tree,
-            leafIndex: slot.outputContext.leafIndex,
-          }),
-          nullifier: nullifiers.get(note) ?? zeroKeyNullifier(utxoHash, note.utxo.blinding),
-          spent: false,
-        });
+  const opened = notes.map((note): WalletUtxo => {
+    const { utxoHash, slot, nullifierPublicKey: _key, ...fields } = note;
+    return Object.freeze({
+      ...fields,
+      outputContext: Object.freeze({
+        hash: utxoHash,
+        tree: slot.outputContext.tree,
+        leafIndex: slot.outputContext.leafIndex,
       }),
-    ),
-    pending,
+      nullifier: nullifiers.get(note) ?? zeroKeyNullifier(utxoHash, note.utxo.blinding),
+      spent: false,
+    });
+  });
+  return Object.freeze({
+    utxos: Object.freeze(opened.filter((note) => !isPendingNote(input.assets, note))),
+    pendingOpenings: Object.freeze(opened.filter((note) => isPendingNote(input.assets, note))),
   });
 }
 
-/** Notes and scan positions commit together after every ring read succeeds. */
+export type RingSyncInput = Omit<SyncWalletInput, "wallet"> &
+  Readonly<{ wallet: RingWallet; client: RingSyncClient }>;
+
+/** Notes, pending notes and every scan cursor commit together after every read succeeds. */
 export async function syncRingWallet(
-  input: SyncWalletInput & Readonly<{ client: RingSyncClient }>,
+  input: RingSyncInput,
   context?: RequestContext,
 ): Promise<SyncReport> {
-  return input.wallet._withSyncLock(async () => {
-    const { wallet, keys, client } = input;
+  const { wallet: ring, keys, client } = input;
+  const { wallet } = ring;
+  return wallet._withSyncLock(async () => {
     const revision = wallet._revision;
-    const staging = stageRingHistory(wallet);
-    const initialHashes = new Set(
-      staging.utxos().map((entry) => bytesKey(entry.outputContext.hash)),
+    // 1. The core sync resumes from its checkpoints on a copy, nothing reaches the wallet before step 5.
+    const staging = wallet._clone();
+    const reads = new RingReads(input, staging, context);
+    const report = await syncWallet({ ...input, wallet: staging, client: reads.client }, context);
+    // 2. Ring outputs publish tags the core sync never reads, each tag resumes at its own cursor.
+    const opened = await openRingNotes(
+      { keys, assets: staging.registry, transactions: await reads.deliveries() },
+      context,
     );
-    const pages = new RingSyncPages(input);
-    const report = await syncWallet({ ...input, wallet: staging, client: pages.client }, context);
-    const open = () =>
-      openRingNotes({ keys, assets: staging.registry, transactions: pages.transactions }, context);
-    let notes = await open();
+    const notes = [...opened.utxos, ...opened.pendingOpenings];
+    if (isRingKeys(keys)) notes.push(...(await reads.zeroKeyMerges(keys)));
+    // 3. One registry refresh per sync, a note the refresh leaves unnamed is stored pending and its cursor still advances.
     const { solanaRpc, commitment } = client;
-    if (notes.pending > 0 && solanaRpc !== undefined && commitment !== undefined) {
+    if (
+      [...notes, ...ring.pendingOpenings()].some((note) => isPendingNote(staging.registry, note)) &&
+      solanaRpc !== undefined &&
+      commitment !== undefined
+    )
       for (const { assetId, mint } of await fetchSplAssetRegistrations(
         { solanaRpc, commitment },
         context,
       ))
         staging.ensureAsset(assetId, mint);
-      notes = await open();
-    }
-    if (notes.pending > 0) throw new WalletError("WALLET_UNRESOLVED_ASSET");
-
-    const state = staging._state();
-    const held = new Set(state.utxos.map((entry) => bytesKey(entry.outputContext.hash)));
-    const unheld = (entry: WalletUtxo): boolean => unseen(held, bytesKey(entry.outputContext.hash));
-    const fresh = notes.utxos.filter(unheld);
-    if (isRingKeys(keys))
-      fresh.push(
-        ...(
-          await zeroKeyMergeNotes(
-            {
-              keys,
-              client: pages.client,
-              owner: keys.address(),
-              pageLimit: input.config?.pageLimit ?? Number(PAGE_LIMIT),
-            },
-            context,
-          )
-        ).filter(unheld),
-      );
+    // 4. A note new to the wallet or promoted now has unread spends, a merge folding it opens another.
+    const held = new Set(
+      [...staging.utxos(), ...ring.pendingOpenings()].map((note) =>
+        bytesKey(note.outputContext.hash),
+      ),
+    );
+    const fresh = notes.filter((note) => unseen(held, bytesKey(note.outputContext.hash)));
+    const promoted = ring
+      .pendingOpenings()
+      .filter((note) => !isPendingNote(staging.registry, note));
     const owner = keys.address();
     const budget = { remaining: Number.MAX_SAFE_INTEGER };
     const chunkSize = input.config?.queryChunk ?? 64;
-    for (let frontier = fresh; frontier.length > 0;) {
+    for (let frontier = [...fresh, ...promoted]; frontier.length > 0;) {
       const spends: IndexedShieldedTransaction[] = [];
       for (let offset = 0; offset < frontier.length; offset += chunkSize)
         spends.push(
           ...(await spendingTransactions(
-            pages.client,
+            reads.client,
             frontier.slice(offset, offset + chunkSize).map((entry) => entry.nullifier),
             budget,
             context,
@@ -170,36 +171,30 @@ export async function syncRingWallet(
         { keys, owner, assets: staging.registry, spends },
         context,
       );
-      frontier = merged.utxos.filter(unheld);
+      frontier = merged.utxos.filter((note) => unseen(held, bytesKey(note.outputContext.hash)));
       fresh.push(...frontier);
     }
-    const nullifiers = new Set(state.nullifiers);
-    for (const transaction of pages.transactions)
-      for (const nullifier of transaction.nullifiers) nullifiers.add(bytesKey(nullifier));
-    const utxos = [...state.utxos, ...fresh].map((entry) => ({
-      ...entry,
-      spent: entry.spent || nullifiers.has(bytesKey(entry.nullifier)),
-    }));
-    wallet._commitSync(
-      {
-        ...staging._state(),
-        utxos,
-        nullifiers,
-        lastSynced: staging.lastSynced,
-        checkpoints: {
-          transactions: new Map(staging._checkpointEntries("transactions")),
-          proofless: new Map(staging._checkpointEntries("proofless")),
-          nullifiers: new Map(staging._checkpointEntries("nullifiers")),
+    // 5. The core rows, the ring notes and every cursor land in one commit.
+    const initial = new Set(wallet.utxos().map((note) => bytesKey(note.outputContext.hash)));
+    let storedUtxos = 0;
+    ring._absorb({ notes: fresh, spentNullifiers: reads.spentNullifiers() }, staging, (commit) => {
+      wallet._commitSync(
+        {
+          ...staging._state(),
+          ...commit,
+          lastSynced: staging.lastSynced,
+          checkpoints: reads.checkpoints(),
+          registryAdditions: staging.registry
+            .entries()
+            .map(([assetId, mint]) => ({ assetId, mint })),
         },
-        registryAdditions: staging.registry.entries().map(([assetId, mint]) => ({ assetId, mint })),
-      },
-      revision,
-    );
-    return Object.freeze({
-      ...report,
-      storedUtxos: utxos.filter((entry) => !initialHashes.has(bytesKey(entry.outputContext.hash)))
-        .length,
+        revision,
+      );
+      storedUtxos = commit.utxos.filter(
+        (note) => !initial.has(bytesKey(note.outputContext.hash)),
+      ).length;
     });
+    return Object.freeze({ ...report, storedUtxos });
   });
 }
 
@@ -216,40 +211,6 @@ interface Site {
 }
 
 type Note = RingDepositNote & Readonly<{ utxoHash: Bytes32 }> & Readonly<{ slot: Site["slot"] }>;
-
-const PENDING = Symbol("pending");
-
-/** Tagged by the owner's identity, the tag read covers every ring the wallet holds notes on. */
-async function zeroKeyMergeNotes(
-  input: Readonly<{
-    keys: RingKeys;
-    client: Pick<RingSyncClient, "getShieldedTransactionsByTags">;
-    owner: ShieldedAddress;
-    pageLimit: number;
-  }>,
-  context: RequestContext | undefined,
-): Promise<readonly WalletUtxo[]> {
-  const tag = input.owner.signingPublicKey.ownerProofInputHash();
-  const rows: IndexedShieldedTransaction[] = [];
-  const pageLimit = new HalvingPageLimit(input.pageLimit);
-  let token: string | undefined;
-  for (;;) {
-    const asked = token === undefined ? {} : { paginationToken: token };
-    const page = await pageLimit.read((limit) =>
-      input.client.getShieldedTransactionsByTags(
-        { tags: [tag], limit, ...asked },
-        undefined,
-        context,
-      ),
-    );
-    rows.push(...page.data.flatMap((item) => item.events));
-    const next = nextHistoryToken(token, page);
-    if (next === undefined) break;
-    token = next;
-  }
-  const opened = await openZeroKeyMerges({ keys: input.keys, owner: input.owner, rows }, context);
-  return opened.map(({ utxo }) => utxo);
-}
 
 /** The ring merges among `spends` and the notes they open to `owner`, Rust `RingMerges`. */
 /** A merge publishes no transaction key or salt, a deposit no proof. */
@@ -288,7 +249,7 @@ export async function openRingMerges(
   return { merges, utxos: opened._state().utxos };
 }
 
-/** Deposits of any ring, Rust `DepositOpener::open_held`, one of an unregistered mint is pending. */
+/** Deposits of any ring, Rust `DepositOpener::open_held`. */
 async function ringDeposits(
   input: Readonly<{
     keys: ShieldedKeys;
@@ -296,11 +257,10 @@ async function ringDeposits(
     transactions: readonly IndexedShieldedTransaction[];
   }>,
   context: RequestContext | undefined,
-): Promise<Readonly<{ notes: Note[]; pending: number }>> {
+): Promise<Note[]> {
   const owner = input.keys.address();
   const held = input.keys.viewingPublicKeys();
   const notes: Note[] = [];
-  let pending = 0;
   const seen = new Set<string>();
   for (const tx of input.transactions)
     for (const slot of tx.outputSlots) {
@@ -318,10 +278,9 @@ async function ringDeposits(
       );
       if (opened === undefined) continue;
       seen.add(bytesKey(slot.outputContext.hash));
-      if (registeredMint(input.assets, opened.utxo.asset) === undefined) pending += 1;
-      else notes.push({ ...opened, utxoHash: slot.outputContext.hash, slot });
+      notes.push({ ...opened, utxoHash: slot.outputContext.hash, slot });
     }
-  return { notes, pending };
+  return notes;
 }
 
 /** `undefined` for a slot sent to no held key. */
@@ -329,7 +288,7 @@ async function openSlot(
   input: Readonly<{ keys: ShieldedKeys; assets: AssetRegistry }>,
   site: Site,
   context: RequestContext | undefined,
-): Promise<Note | typeof PENDING | undefined> {
+): Promise<Note | undefined> {
   let frame: ReturnType<typeof readRingOutput>;
   try {
     frame = readRingOutput(site.slot.payload);
@@ -347,7 +306,7 @@ async function recipientNote(
   input: Readonly<{ keys: RingKeys; assets: AssetRegistry }>,
   site: Site,
   context: RequestContext | undefined,
-): Promise<Note | typeof PENDING | undefined> {
+): Promise<Note | undefined> {
   const parts = ringBodyOutput(site.slot.payload);
   if (parts === undefined) return undefined;
   const slotSecret = await heldSlotSecret(input.keys, site, context);
@@ -367,7 +326,6 @@ async function recipientNote(
       ),
     );
     if (note === undefined) return undefined;
-    if (!note.registered) return PENDING;
     const { registered: _registered, ...opened } = note;
     return Object.freeze({ ...opened, slot: site.slot });
   } finally {
@@ -404,70 +362,156 @@ async function heldSlotSecret(
   return answered(frame.probes, answers)[0]?.[1];
 }
 
-function stageRingHistory(wallet: Wallet): Wallet {
-  // Core tag checkpoints can cover unopened ring bodies.
-  const staging = new Wallet({ identity: wallet.identity, registry: wallet.registry });
-  staging._replace({ ...wallet._state(), lastSynced: wallet.lastSynced });
-  for (const [key, slot] of wallet._checkpointEntries("nullifiers"))
-    staging._setSyncCheckpoint("nullifiers", key, slot);
-  return staging;
-}
+/** A ring cursor sits beside the core sync's checkpoints under a key the core sync never names. */
+type RingCursorStream = Exclude<CheckpointStream, "nullifiers">;
 
-class RingSyncPages {
-  readonly transactions: IndexedShieldedTransaction[] = [];
+/** The reads one sync makes, the spends they returned and the cursors they reached. */
+class RingReads {
   readonly client: RingSyncClient;
+  readonly #keys: ShieldedKeys;
+  readonly #staging: Wallet;
+  readonly #context: RequestContext | undefined;
+  readonly #rpcConfig: IndexerRpcConfig;
+  readonly #pageLimit: HalvingPageLimit;
+  readonly #spends: IndexedShieldedTransaction[] = [];
+  readonly #reached: Record<RingCursorStream, Map<string, bigint>> = {
+    transactions: new Map(),
+    proofless: new Map(),
+  };
 
-  constructor(input: SyncWalletInput & Readonly<{ client: RingSyncClient }>) {
+  constructor(input: RingSyncInput, staging: Wallet, context: RequestContext | undefined) {
     const { client, config } = input;
-    const fallback = createIndexerRpcConfig(
+    this.#keys = input.keys;
+    this.#staging = staging;
+    this.#context = context;
+    this.#rpcConfig = createIndexerRpcConfig(
       config?.retry ?? client.indexerConfig?.poll,
       config?.requireSlot ?? client.indexerConfig?.requireSlot,
     );
     const limit = config?.pageLimit ?? 1_000;
-    const held = input.keys.viewingPublicKeys();
-    // The core sync names a held key whole, a delivered slot publishes its slot tag.
-    const withSlotTags = (tags: readonly Bytes32[]): readonly Bytes32[] =>
-      tags.flatMap((tag) => {
-        const key = held.find((candidate) => equalBytes(candidate.u(), tag));
-        return key === undefined ? [tag] : [tag, confidentialSlotTag(key.u())];
-      });
+    this.#pageLimit = new HalvingPageLimit(limit);
     this.client = {
       ...(client.solanaRpc === undefined ? {} : { solanaRpc: client.solanaRpc }),
       ...(client.commitment === undefined ? {} : { commitment: client.commitment }),
       ...(client.indexerConfig === undefined ? {} : { indexerConfig: client.indexerConfig }),
-      getEncryptedUtxosByTags: async (request, rpcConfig, context) => {
-        const page = await client.getEncryptedUtxosByTags(request, rpcConfig, context);
-        for (const match of page.data.flatMap((item) => item.outputs)) {
-          if (match.txViewingPk !== undefined || match.salt !== undefined) continue;
-          this.transactions.push({
-            slot: match.slot,
-            txSignature: match.txSignature,
-            outputSlots: [match.outputSlot],
-            messages: [],
-            nullifiers: [],
-            proofless: true,
-          });
-        }
-        return page;
-      },
-      getShieldedTransactionsByTags: async (request, rpcConfig, context) => {
-        const page = await client.getShieldedTransactionsByTags(
-          { ...request, tags: withSlotTags(request.tags) },
-          rpcConfig,
-          context,
-        );
-        this.transactions.push(...page.data.flatMap((item) => item.events));
-        return page;
-      },
+      getEncryptedUtxosByTags: (request, rpcConfig, context) =>
+        client.getEncryptedUtxosByTags(request, rpcConfig, context),
+      getShieldedTransactionsByTags: (request, rpcConfig, context) =>
+        client.getShieldedTransactionsByTags(request, rpcConfig, context),
+      // Every spend read, the core sync's and the ring's, marks the notes it names.
       getShieldedTransactionsByNullifiers: async (request, rpcConfig, context) => {
         const page = await client.getShieldedTransactionsByNullifiers(
           { limit, ...request },
-          rpcConfig ?? fallback,
+          rpcConfig ?? this.#rpcConfig,
           context,
         );
-        this.transactions.push(...page.data.flatMap((item) => item.events));
+        this.#spends.push(...page.data.flatMap((item) => item.events));
         return page;
       },
     };
   }
+
+  /** Deposits and delivered bodies to each held key above that key's ring cursors. */
+  async deliveries(): Promise<readonly IndexedShieldedTransaction[]> {
+    const rows: IndexedShieldedTransaction[] = [];
+    for (const key of this.#keys.viewingPublicKeys()) {
+      const slotTag = confidentialSlotTag(key.u());
+      // A deposit names the key itself, the core sync's cursor there can pass a deposit it drops.
+      rows.push(...(await this.#read("proofless", slotTag, key.u())));
+      // Only ring keys open a body, the cursor waits for a sync that holds them.
+      if (isRingKeys(this.#keys))
+        rows.push(...(await this.#read("transactions", slotTag, slotTag)));
+    }
+    return rows;
+  }
+
+  /** The owner tag covers every ring, a seed no held key derives leaves the note to `OwnerGrant`. */
+  async zeroKeyMerges(keys: RingKeys): Promise<readonly WalletUtxo[]> {
+    const owner = keys.address();
+    const tag = owner.signingPublicKey.ownerProofInputHash();
+    const rows = await this.#read("transactions", tag, tag);
+    const opened = await openZeroKeyMerges({ keys, owner, rows }, this.#context);
+    return opened.map(({ utxo }) => utxo);
+  }
+
+  spentNullifiers(): readonly Bytes32[] {
+    return this.#spends.flatMap((transaction) => transaction.nullifiers);
+  }
+
+  /** The staged core checkpoints with the ring cursors this sync reached. */
+  checkpoints(): SyncCheckpointAdvances {
+    const staged = (stream: CheckpointStream) => new Map(this.#staging._checkpointEntries(stream));
+    const transactions = staged("transactions");
+    const proofless = staged("proofless");
+    for (const [key, slot] of this.#reached.transactions) transactions.set(key, slot);
+    for (const [key, slot] of this.#reached.proofless) proofless.set(key, slot);
+    return { transactions, proofless, nullifiers: staged("nullifiers") };
+  }
+
+  /**
+   * Every row of `tag` above the cursor under `cursor` on `stream`.
+   *
+   * The terminal page's snapshot slot covers every match at or below it and becomes the cursor. A page behind the stored cursor never moves it back.
+   */
+  async #read(
+    stream: RingCursorStream,
+    cursor: Bytes32,
+    tag: Bytes32,
+  ): Promise<readonly IndexedShieldedTransaction[]> {
+    const key = bytesKey(cursor);
+    const after = this.#staging._syncCheckpoint(stream, key);
+    const rows: IndexedShieldedTransaction[] = [];
+    let token: string | undefined;
+    for (;;) {
+      const asked = {
+        tags: [tag],
+        ...(after === undefined ? {} : { filters: { slot: { gt: after } } }),
+        ...(token === undefined ? {} : { paginationToken: token }),
+      };
+      const page =
+        stream === "transactions"
+          ? await this.#pageLimit.read(async (limit) => {
+              const read = await this.client.getShieldedTransactionsByTags(
+                { ...asked, limit },
+                this.#rpcConfig,
+                this.#context,
+              );
+              rows.push(...read.data.flatMap((item) => item.events));
+              return read;
+            })
+          : await this.#pageLimit.read(async (limit) => {
+              const read = await this.client.getEncryptedUtxosByTags(
+                { ...asked, limit },
+                this.#rpcConfig,
+                this.#context,
+              );
+              rows.push(...prooflessRows(read));
+              return read;
+            });
+      const next = nextHistoryToken(token, page);
+      if (next === undefined) {
+        const reached = page.context.slot;
+        this.#reached[stream].set(key, after !== undefined && after > reached ? after : reached);
+        return rows;
+      }
+      token = next;
+    }
+  }
+}
+
+/** A match carrying a transaction key or salt is a transfer slot, not a deposit. */
+function prooflessRows(
+  page: Awaited<ReturnType<RingSyncClient["getEncryptedUtxosByTags"]>>,
+): readonly IndexedShieldedTransaction[] {
+  return page.data
+    .flatMap((item) => item.outputs)
+    .filter((match) => match.txViewingPk === undefined && match.salt === undefined)
+    .map((match) => ({
+      slot: match.slot,
+      txSignature: match.txSignature,
+      outputSlots: [match.outputSlot],
+      messages: [],
+      nullifiers: [],
+      proofless: true,
+    }));
 }

@@ -116,10 +116,13 @@ export interface ReservationHold {
 export type RingSubmissionBuild = (context?: RequestContext) => Promise<RingSubmissionAttempt>;
 
 const MAX_ATTEMPTS = 3;
-/** Rust `reproof_fixes` codes, a fresh proof fixes a revoked root or a rebound registry. */
-const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
-  RingProgramError.rootNotServed,
-  RingProgramError.unboundRegistry,
+
+/** @internal Rust `REPROOF`, pinned row for row by the parity test. */
+export const REPROOF: ReadonlyMap<number, "fixes" | "ifMoved"> = new Map([
+  [RingProgramError.rootNotServed, "fixes"],
+  [RingProgramError.trackingRootBelowFloor, "fixes"],
+  [RingProgramError.unboundRegistry, "fixes"],
+  [RingProgramError.proofVerificationFailed, "ifMoved"],
 ]);
 const NO_RESERVATION: ReservationHold = Object.freeze({ release() {}, extend() {} });
 
@@ -170,14 +173,39 @@ export async function provenRingAttempt(
   });
 }
 
-/** One broadcast and what the chain says of it so far. */
-type Landing = Readonly<{ signature: Signature; status: RingSubmissionStatus }>;
+type WriteLanding = Readonly<{
+  signature: Signature;
+  status: Exclude<RingSubmissionStatus, { kind: "confirmed" }>;
+}>;
 
 /** An attempt that can no longer land, held until its buffer is gone. */
 type ConcludedAttempt = Readonly<{
   signature: Signature;
   status: Extract<RingSubmissionStatus, { kind: "failed" | "expired" }>;
   retry: boolean;
+}>;
+
+interface HeldTransaction extends RingSubmissionPending {
+  unsent: Transaction | undefined;
+}
+
+/** Rust `Stage`, with the close the wallet record also waits on. */
+type AttemptPhase = UploadPhase | SettlePhase | ClosePhase;
+type UploadPhase = Readonly<{
+  kind: "upload";
+  settlement: HeldTransaction;
+  upload: RingFrameUpload;
+  /** Confirmed writes, a write landing resumes after them. */
+  written: number;
+  write: HeldTransaction | undefined;
+}>;
+type SettlePhase = Readonly<{ kind: "settle"; settlement: HeldTransaction }>;
+type ClosePhase = Readonly<{
+  kind: "close";
+  settlement: HeldTransaction;
+  upload: RingFrameUpload | undefined;
+  concluded: ConcludedAttempt;
+  close: HeldTransaction | undefined;
 }>;
 
 /** Resolves each broadcast before retrying an unchanged payment intent. */
@@ -190,16 +218,12 @@ export class RingTransactionSubmission {
   readonly #id: string;
   readonly #utxoHashes: readonly Bytes32[];
   #persistence: WalletPersistence | undefined;
-  #persistedSignature: Signature | undefined;
   #attempt: RingSubmissionAttempt;
-  #pending: Signature | undefined;
-  /** Signed and not yet broadcast, cleared ahead of the one broadcast. */
-  #unsent: Transaction | undefined;
-  /** The current attempt's confirmed writes, a write landing resumes after them. */
-  #written = 0;
-  /** The write or close on its way, read and never resent until it resolves. */
-  #inFlight: RingSubmissionPending | undefined;
-  #concluded: ConcludedAttempt | undefined;
+  /** `undefined` until the attempt's settlement signs and its record saves. */
+  #phase: AttemptPhase | undefined;
+  #record: (RingSubmissionPending & { saved: boolean }) | undefined;
+  /** A record the wallet held and no longer lists was settled by `reconcileRingSubmissions`. */
+  #held = false;
   #attempts = 0;
   #terminal = false;
   #busy = false;
@@ -293,20 +317,280 @@ export class RingTransactionSubmission {
     return this.send(input.transport, context);
   }
 
-  async #checkpoint(signature: Signature): Promise<void> {
-    const wallet = this.#wallet ?? this.#persistence?.wallet;
-    wallet?._setPendingSubmission({
-      id: this.#id,
-      intentHash: this.#intent,
-      utxoHashes: this.#utxoHashes,
-      attempts: this.#attempts,
-      signature,
-      lastValidBlockHeight: this.#attempt.lastValidBlockHeight,
-    });
-    if (this.#persistence !== undefined) {
-      await savePersistedWallet(this.#persistence);
-      this.#persistedSignature = signature;
+  cancel(): void {
+    if (this.#busy || this.#phase !== undefined) throw new RingError("RING_SUBMISSION_PENDING");
+    this.#terminal = true;
+    this.#reservation.release();
+  }
+
+  /** Unknown submissions must resolve before another broadcast. */
+  async send(
+    transport: RingSubmissionTransport,
+    context?: RequestContext,
+  ): Promise<RingSubmissionResult> {
+    if (this.#busy || this.#terminal) throw new RingError("RING_SUBMISSION_PENDING");
+    this.#busy = true;
+    try {
+      await this.#save();
+      for (;;) {
+        // 1. The settlement signs and its record saves ahead of any write. A wallet holding no record then has no
+        // upload still relying on a buffer, `closeAbandonedFrameBuffers` reads exactly that.
+        let phase = this.#phase ?? (await this.#signSettlement(transport, context));
+        // 2. Writes land in order, each lifetime recorded ahead of its broadcast. A refused or expired write never
+        // lets the settlement broadcast.
+        if (phase.kind === "upload") {
+          const write = await this.#landWrites(phase, transport, context);
+          if (write === undefined) {
+            phase = this.#enter({ kind: "settle", settlement: phase.settlement });
+          } else {
+            const { signature, status } = write;
+            if (status.kind === "unknown") return this.#unknown(signature);
+            phase = await this.#conclude(phase, { signature, status }, context);
+          }
+        }
+        // 3. The settlement broadcasts once, nothing else spends.
+        if (phase.kind === "settle") {
+          const { signature } = phase.settlement;
+          const status = await land(phase.settlement, transport, context);
+          if (status.kind === "unknown") return this.#unknown(signature);
+          if (status.kind === "confirmed") {
+            this.#terminal = true;
+            return { kind: "confirmed", signature, slot: status.slot, attempts: this.#attempts };
+          }
+          phase = await this.#conclude(phase, { signature, status }, context);
+        }
+        // 4. Conclusive by here, an expired or refused settlement can no longer land and a failed write never let it
+        // broadcast. A rebuilt frame takes another digest and another buffer, so the rent of the old one returns now.
+        const closing = await this.#closeBuffer(phase, transport, context);
+        if (closing !== undefined) return this.#unknown(closing);
+        // 5. The record leaves last, an interruption before here keeps the wallet from reading the buffer as abandoned.
+        const { concluded } = phase;
+        this.#phase = undefined;
+        await this.#dropRecord();
+        if (!concluded.retry || this.#attempts >= MAX_ATTEMPTS) {
+          this.#terminal = true;
+          this.#reservation.release();
+          return failedSubmission(
+            { signature: concluded.signature, attempts: this.#attempts },
+            concluded.status,
+          );
+        }
+        this.#attempt = await this.#build(context);
+      }
+    } catch (cause) {
+      if (this.#phase === undefined) {
+        this.#holder()?._removePendingSubmission(this.#id);
+        this.#record = undefined;
+        this.#held = false;
+        this.#terminal = true;
+        this.#reservation.release();
+      }
+      throw cause;
+    } finally {
+      this.#busy = false;
     }
+  }
+
+  async #signSettlement(
+    transport: RingSubmissionTransport,
+    context: RequestContext | undefined,
+  ): Promise<UploadPhase | SettlePhase> {
+    if (!equalBytes(this.#intent, this.#attempt.intentHash))
+      throw new RingError("RING_INTENT_MISMATCH");
+    this.#reservation.extend();
+    const { signed, signature } = await signUnchanged(
+      transport,
+      this.#attempt.transaction,
+      context,
+    );
+    this.#attempts += 1;
+    const { lastValidBlockHeight, upload } = this.#attempt;
+    const settlement = { signature, lastValidBlockHeight, unsent: signed };
+    await this.#checkpoint(settlement, lastValidBlockHeight);
+    return this.#enter(
+      upload === undefined
+        ? { kind: "settle", settlement }
+        : { kind: "upload", settlement, upload, written: 0, write: undefined },
+    );
+  }
+
+  /** `undefined` once every write is confirmed, each overwrites its own range so an unresolved one is only read. */
+  async #landWrites(
+    phase: UploadPhase,
+    transport: RingSubmissionTransport,
+    context: RequestContext | undefined,
+  ): Promise<WriteLanding | undefined> {
+    for (const instruction of phase.upload.frame.writes().slice(phase.written)) {
+      const write =
+        phase.write ??
+        (await this.#signBufferTransaction(
+          {
+            settlement: phase.settlement,
+            upload: phase.upload,
+            instruction,
+            tag: RingInstructionTag.writeFrame,
+          },
+          transport,
+          context,
+        ));
+      phase = this.#enter({ ...phase, write });
+      const status = await land(write, transport, context);
+      if (status.kind !== "confirmed") return { signature: write.signature, status };
+      phase = this.#enter({ ...phase, written: phase.written + 1, write: undefined });
+    }
+    return undefined;
+  }
+
+  /** Runs without a priority fee, `BufferedFrame.writes` sizes each chunk to the header alone. */
+  async #signBufferTransaction(
+    owed: Readonly<{
+      settlement: RingSubmissionPending;
+      upload: RingFrameUpload;
+      instruction: Instruction;
+      tag: RingInstructionTag;
+    }>,
+    transport: RingSubmissionTransport,
+    context: RequestContext | undefined,
+  ): Promise<HeldTransaction> {
+    const { settlement, upload, instruction, tag } = owed;
+    const { writer, chain } = upload;
+    const lifetime = await chain.getLatestBlockhash(context);
+    const { signed, signature } = await signUnchanged(
+      transport,
+      compileUnsignedTransaction({
+        feePayer: writer,
+        lifetime,
+        computeUnitLimit: ringComputeUnitLimit(tag),
+        instructions: [instruction],
+      }),
+      context,
+    );
+    await this.#checkpoint(settlement, lifetime.lastValidBlockHeight);
+    return { signature, lastValidBlockHeight: lifetime.lastValidBlockHeight, unsent: signed };
+  }
+
+  /** Enters the close phase only once the retry decision is made, a failed read keeps the signature to read again. */
+  async #conclude(
+    phase: UploadPhase | SettlePhase,
+    landed: Readonly<{ signature: Signature; status: ConcludedAttempt["status"] }>,
+    context: RequestContext | undefined,
+  ): Promise<ClosePhase> {
+    const { signature, status } = landed;
+    const ringCode =
+      status.kind === "failed" && status.instructionIndex === this.#attempt.ringInstructionIndex
+        ? status.customCode
+        : undefined;
+    const reproof = ringCode === undefined ? undefined : REPROOF.get(ringCode);
+    const retry =
+      status.kind === "expired" ||
+      reproof === "fixes" ||
+      (reproof === "ifMoved" && (await this.#moved(context)));
+    return this.#enter({
+      kind: "close",
+      settlement: phase.settlement,
+      upload: this.#attempt.upload,
+      concluded: { signature, status, retry },
+      close: undefined,
+    });
+  }
+
+  /**
+   * `undefined` once the buffer is gone, else the close still on its way. An expired close signs again on the next
+   * call, and a buffer no write created stays a miss. A refused close throws with the record kept, its rent and the
+   * notes wait on the writer, `reconcileRingSubmissions` settles the record and leaves the buffer to a later close.
+   */
+  async #closeBuffer(
+    phase: ClosePhase,
+    transport: RingSubmissionTransport,
+    context: RequestContext | undefined,
+  ): Promise<Signature | undefined> {
+    const { upload } = phase;
+    if (upload === undefined) return undefined;
+    const { frame, chain } = upload;
+    if (phase.close === undefined && !(await bufferHeld(chain, frame.buffer, context)))
+      return undefined;
+    const close =
+      phase.close ??
+      (await this.#signBufferTransaction(
+        {
+          settlement: phase.settlement,
+          upload,
+          instruction: frame.close(),
+          tag: RingInstructionTag.closeFrameBuffer,
+        },
+        transport,
+        context,
+      ));
+    this.#enter({ ...phase, close });
+    const status = await land(close, transport, context);
+    if (status.kind === "unknown") return close.signature;
+    this.#enter({ ...phase, close: undefined });
+    if (status.kind === "confirmed") return undefined;
+    if (status.kind === "expired") return close.signature;
+    if (!(await bufferHeld(chain, frame.buffer, context))) return undefined;
+    throw new RingError("RING_FRAME_BUFFER_CLOSE", {
+      details: { buffer: frame.buffer, transactionId: close.signature },
+    });
+  }
+
+  #enter<Phase extends AttemptPhase>(phase: Phase): Phase {
+    this.#phase = phase;
+    return phase;
+  }
+
+  #unknown(signature: Signature): RingSubmissionResult {
+    return { kind: "unknown", signature, attempts: this.#attempts };
+  }
+
+  #holder(): Wallet | undefined {
+    return this.#wallet ?? this.#persistence?.wallet;
+  }
+
+  /** The height only rises while the record names one settlement, a restored record outlives every write and close. */
+  async #checkpoint(
+    settlement: RingSubmissionPending,
+    lastValidBlockHeight: bigint,
+  ): Promise<void> {
+    const held =
+      this.#record?.signature === settlement.signature ? this.#record.lastValidBlockHeight : 0n;
+    this.#record = {
+      signature: settlement.signature,
+      lastValidBlockHeight: held > lastValidBlockHeight ? held : lastValidBlockHeight,
+      saved: false,
+    };
+    await this.#save();
+  }
+
+  async #save(): Promise<void> {
+    const record = this.#record;
+    if (record === undefined || record.saved) return;
+    const holder = this.#holder();
+    if (holder !== undefined) {
+      // A record written back after its reservation was released leaves a snapshot that no longer loads.
+      if (this.#held && !holder.pendingSubmissions().some((pending) => pending.id === this.#id)) {
+        this.#terminal = true;
+        throw new RingError("RING_SUBMISSION_PENDING", { details: { reason: "reconciled" } });
+      }
+      holder._setPendingSubmission({
+        id: this.#id,
+        intentHash: this.#intent,
+        utxoHashes: this.#utxoHashes,
+        attempts: this.#attempts,
+        signature: record.signature,
+        lastValidBlockHeight: record.lastValidBlockHeight,
+      });
+      this.#held = true;
+    }
+    if (this.#persistence === undefined) return;
+    await savePersistedWallet(this.#persistence);
+    record.saved = true;
+  }
+
+  async #dropRecord(): Promise<void> {
+    this.#record = undefined;
+    this.#held = false;
+    this.#holder()?._removePendingSubmission(this.#id);
+    if (this.#persistence !== undefined) await savePersistedWallet(this.#persistence);
   }
 
   /** Rust `BoundState::moved`. */
@@ -333,234 +617,6 @@ export class RingTransactionSubmission {
     if (policy === undefined) return false;
     const ringPolicy = await fetchRingPolicy(chain, policy.ringProgramId, context);
     return !equalBytes(ringPolicy.policyHash, policy.policyHash);
-  }
-
-  async #settleFailed(): Promise<void> {
-    (this.#wallet ?? this.#persistence?.wallet)?._removePendingSubmission(this.#id);
-    if (this.#persistence !== undefined) await savePersistedWallet(this.#persistence);
-  }
-
-  cancel(): void {
-    if (this.#busy || this.#pending !== undefined) throw new RingError("RING_SUBMISSION_PENDING");
-    this.#terminal = true;
-    this.#reservation.release();
-  }
-
-  /** Unknown submissions must resolve before another broadcast. */
-  async send(
-    transport: RingSubmissionTransport,
-    context?: RequestContext,
-  ): Promise<RingSubmissionResult> {
-    if (this.#busy || this.#terminal) throw new RingError("RING_SUBMISSION_PENDING");
-    this.#busy = true;
-    try {
-      if (
-        this.#pending !== undefined &&
-        this.#persistence !== undefined &&
-        this.#persistedSignature !== this.#pending
-      )
-        await this.#checkpoint(this.#pending);
-      for (;;) {
-        let concluded = this.#concluded;
-        if (concluded === undefined) {
-          // 1. The attempt signs and checkpoints ahead of any write. A wallet holding no record then has no upload
-          // still relying on a buffer, `closeAbandonedFrameBuffers` reads exactly that.
-          const signature = this.#pending ?? (await this.#signAttempt(transport, context));
-          // 2. Writes land in order, then the settlement broadcasts once, nothing else spends.
-          const landed = await this.#land(signature, transport, context);
-          if (landed.status.kind === "unknown")
-            return { kind: "unknown", signature: landed.signature, attempts: this.#attempts };
-          if (landed.status.kind === "confirmed") {
-            this.#terminal = true;
-            return {
-              kind: "confirmed",
-              signature: landed.signature,
-              slot: landed.status.slot,
-              attempts: this.#attempts,
-            };
-          }
-          concluded = await this.#conclude(landed.signature, landed.status, context);
-          this.#concluded = concluded;
-        }
-        // 3. Conclusive by here, an expired or refused settlement can no longer land and a failed write never let it
-        // broadcast. A rebuilt frame takes another digest and another buffer, so the rent of the old one returns now.
-        const closing = await this.#closeBuffer(transport, context);
-        if (closing !== undefined)
-          return { kind: "unknown", signature: closing, attempts: this.#attempts };
-        // 4. The record leaves last, an interruption before here keeps the wallet from reading the buffer as abandoned.
-        this.#pending = undefined;
-        this.#unsent = undefined;
-        this.#written = 0;
-        this.#concluded = undefined;
-        await this.#settleFailed();
-        if (!concluded.retry || this.#attempts >= MAX_ATTEMPTS) {
-          this.#terminal = true;
-          this.#reservation.release();
-          return failedSubmission(
-            { signature: concluded.signature, attempts: this.#attempts },
-            concluded.status,
-          );
-        }
-        this.#attempt = await this.#build(context);
-      }
-    } catch (cause) {
-      if (this.#pending === undefined) {
-        (this.#wallet ?? this.#persistence?.wallet)?._removePendingSubmission(this.#id);
-        this.#terminal = true;
-        this.#reservation.release();
-      }
-      throw cause;
-    } finally {
-      this.#busy = false;
-    }
-  }
-
-  async #signAttempt(
-    transport: RingSubmissionTransport,
-    context: RequestContext | undefined,
-  ): Promise<Signature> {
-    if (!equalBytes(this.#intent, this.#attempt.intentHash))
-      throw new RingError("RING_INTENT_MISMATCH");
-    this.#reservation.extend();
-    const { signed, signature } = await signUnchanged(
-      transport,
-      this.#attempt.transaction,
-      context,
-    );
-    this.#attempts += 1;
-    await this.#checkpoint(signature);
-    this.#pending = signature;
-    this.#unsent = signed;
-    return signature;
-  }
-
-  async #land(
-    signature: Signature,
-    transport: RingSubmissionTransport,
-    context: RequestContext | undefined,
-  ): Promise<Landing> {
-    const unsent = this.#unsent;
-    let status: RingSubmissionStatus | undefined;
-    if (unsent !== undefined) {
-      const write = await this.#landWrites(transport, context);
-      if (write !== undefined) return write;
-      // Cleared first, an aborted broadcast stays pending and never sends again.
-      this.#unsent = undefined;
-      status = await broadcast(transport, unsent, context);
-    }
-    return {
-      signature,
-      status:
-        status ??
-        (await readStatus(
-          transport,
-          { signature, lastValidBlockHeight: this.#attempt.lastValidBlockHeight },
-          context,
-        )),
-    };
-  }
-
-  /** `undefined` once every write is confirmed, each overwrites its own range so an unresolved one is only read. */
-  async #landWrites(
-    transport: RingSubmissionTransport,
-    context: RequestContext | undefined,
-  ): Promise<Landing | undefined> {
-    const upload = this.#attempt.upload;
-    if (upload === undefined) return undefined;
-    const writes = upload.frame.writes();
-    for (const write of writes.slice(this.#written)) {
-      const landed = await this.#landWriter(
-        upload,
-        write,
-        RingInstructionTag.writeFrame,
-        transport,
-        context,
-      );
-      if (landed.status.kind !== "confirmed") return landed;
-      this.#written += 1;
-    }
-    return undefined;
-  }
-
-  /** Runs without a priority fee, `BufferedFrame.writes` sizes each chunk to the header alone. */
-  async #landWriter(
-    upload: RingFrameUpload,
-    instruction: Instruction,
-    tag: RingInstructionTag,
-    transport: RingSubmissionTransport,
-    context: RequestContext | undefined,
-  ): Promise<Landing> {
-    let status: RingSubmissionStatus | undefined;
-    if (this.#inFlight === undefined) {
-      const lifetime = await upload.chain.getLatestBlockhash(context);
-      const { signed, signature } = await signUnchanged(
-        transport,
-        compileUnsignedTransaction({
-          feePayer: upload.writer,
-          lifetime,
-          computeUnitLimit: ringComputeUnitLimit(tag),
-          instructions: [instruction],
-        }),
-        context,
-      );
-      this.#inFlight = { signature, lastValidBlockHeight: lifetime.lastValidBlockHeight };
-      status = await broadcast(transport, signed, context);
-    }
-    const inFlight = this.#inFlight;
-    status ??= await readStatus(transport, inFlight, context);
-    if (status.kind !== "unknown") this.#inFlight = undefined;
-    return { signature: inFlight.signature, status };
-  }
-
-  async #conclude(
-    signature: Signature,
-    status: ConcludedAttempt["status"],
-    context: RequestContext | undefined,
-  ): Promise<ConcludedAttempt> {
-    const ringCode =
-      status.kind === "failed" && status.instructionIndex === this.#attempt.ringInstructionIndex
-        ? status.customCode
-        : undefined;
-    // A failed registry, tree or slot read keeps the signature pending for the next call.
-    const moved =
-      ringCode === RingProgramError.proofVerificationFailed && (await this.#moved(context));
-    return {
-      signature,
-      status,
-      retry:
-        status.kind === "expired" ||
-        moved ||
-        (ringCode !== undefined && STALE_PROOF_CODES.has(ringCode)),
-    };
-  }
-
-  /**
-   * `undefined` once the buffer is gone, else the close still on its way. An expired close sends again on the next
-   * call, and a buffer no write created stays a miss. A refused close throws with the record kept, its rent and the
-   * notes wait on the writer, `reconcileRingSubmissions` settles the record and leaves the buffer to a later close.
-   */
-  async #closeBuffer(
-    transport: RingSubmissionTransport,
-    context: RequestContext | undefined,
-  ): Promise<Signature | undefined> {
-    const upload = this.#attempt.upload;
-    if (upload === undefined) return undefined;
-    const { frame, chain } = upload;
-    if (this.#inFlight === undefined && !(await bufferHeld(chain, frame.buffer, context)))
-      return undefined;
-    const close = await this.#landWriter(
-      upload,
-      frame.close(),
-      RingInstructionTag.closeFrameBuffer,
-      transport,
-      context,
-    );
-    if (close.status.kind === "confirmed") return undefined;
-    if (close.status.kind !== "failed") return close.signature;
-    if (!(await bufferHeld(chain, frame.buffer, context))) return undefined;
-    throw new RingError("RING_FRAME_BUFFER_CLOSE", {
-      details: { buffer: frame.buffer, transactionId: close.signature },
-    });
   }
 }
 
@@ -608,10 +664,11 @@ export async function reconcileRingSubmissions(
  * Returns the rent of the buffers `writer` left on the ring, the signatures of the closes sent, empty once none stands.
  *
  * A wallet's record holds no buffer address and a digest nonce names a frame it does not keep, so the chain names them.
- * Every upload checkpoints its record ahead of its first write, so a wallet holding no record has no upload of its own
- * still relying on one, and any record refuses with `RING_SUBMISSION_PENDING`. A writer another wallet shares can lose
- * a buffer that wallet's upload still needs, its settlement then fails before spending and the submission retries.
- * A close still on its way is sent again, a repeat costs at most its fee.
+ * Every upload saves its record ahead of its first write, at the latest lifetime of any write or close it signed. A
+ * wallet holding no record then has no write of its own that can still land, and any record refuses with
+ * `RING_SUBMISSION_PENDING`. A writer another wallet shares can lose a buffer that wallet's upload still needs, its
+ * settlement then fails before spending and the submission retries. A refused settlement's record settles at once,
+ * so its close can still be on its way and is sent again, a repeat costs at most its fee.
  */
 export async function closeAbandonedFrameBuffers(
   input: RingBufferReclaim & Readonly<{ wallet: Wallet }>,
@@ -681,6 +738,18 @@ async function broadcast(
     if (isClientError(cause) && cause.code === "CLIENT_ABORTED") throw cause;
     return undefined;
   }
+}
+
+async function land(
+  held: HeldTransaction,
+  transport: RingSubmissionTransport,
+  context: RequestContext | undefined,
+): Promise<RingSubmissionStatus> {
+  const { signature, lastValidBlockHeight, unsent } = held;
+  // Cleared first, an aborted broadcast stays held and never sends again.
+  held.unsent = undefined;
+  const status = unsent === undefined ? undefined : await broadcast(transport, unsent, context);
+  return status ?? (await readStatus(transport, { signature, lastValidBlockHeight }, context));
 }
 
 async function readStatus(

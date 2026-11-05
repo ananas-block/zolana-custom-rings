@@ -24,11 +24,10 @@ import { AssetRegistry, SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/trans
 import type { IndexedShieldedTransaction, OutputSlot } from "@heliuslabs/zolana/transaction";
 import { STREAM_FIRST_COUNTER } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
-  AUDIT_ENC_INFO,
-  AuditSchedule,
   auditSharedSecret,
   auditorMessageData,
-  openAuditorRegions,
+  AUDIT_ENC_INFO,
+  AuditSchedule,
 } from "../../../src/crypto/audit/audit.js";
 import { ringBlindingSeed, ringOutputBlinding } from "../../../src/crypto/derivation/blinding.js";
 import { sealRingDisclosure as sealStream } from "../../../src/crypto/audit/ring-disclosure.js";
@@ -118,11 +117,14 @@ describe("auditor envelope", () => {
       field("2590b2b949a2f87b9201e4d065167ea9282c4bd06a32e888e24e33c5bddae54f"),
     );
     const envelope = field("48537b94c6262ed3b45768a5d0f065edbb25515039bef17bacf99386f7f55e6a");
-    expect(
-      openAuditorRegions(auditor, ephemeralPublicKey, [
-        { counter: STREAM_FIRST_COUNTER, bytes: envelope },
-      ])[0],
-    ).toEqual(field("001013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f4e"));
+    const schedule = AuditSchedule.derive(
+      auditSharedSecret(dh, ephemeralPublicKey, auditor.publicKey()),
+      AUDIT_ENC_INFO,
+    );
+    expect(schedule.apply(STREAM_FIRST_COUNTER, envelope)).toEqual(
+      field("001013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f4e"),
+    );
+    schedule.destroy();
   });
 });
 
@@ -1051,6 +1053,105 @@ describe("recoverRingMemberNotes", () => {
       [merge.commitment, AMOUNT],
     ]);
     expect(result.unopened).toEqual([]);
+  });
+
+  /** An owner-signed zero-key merge under a private seed, its native body opens under no key. */
+  function zeroKeyMergeOf(owner: ShieldedKeypair, auditor: X25519PublicKey) {
+    const seed = field(`00${"5a".repeat(31)}`);
+    const firstNullifier = field(`${"00".repeat(31)}61`);
+    const ringDataHash = new Uint8Array(32).fill(5) as Bytes32;
+    const blinding = seededMergeOutputBlinding(seed, firstNullifier);
+    const commitment = ownerUtxoHash({
+      owner: poseidon([
+        owner.shieldedAddress().signingPublicKey.ownerProofInputHash(),
+        ZERO_NULLIFIER_PK,
+      ]),
+      asset: SOL_MINT,
+      amount: AMOUNT,
+      blinding,
+      treeId: TREE_ID,
+      ringDataHash,
+      ringProgramId: RING,
+    });
+    const { sealed } = sealMergeRecord({
+      auditorPublicKey: auditor,
+      opening: {
+        record: { ...ownedRecord(owner), nullifierPk: ZERO_NULLIFIER_PK as Bytes32 },
+        secret: seed,
+      },
+    });
+    const transaction: IndexedShieldedTransaction = {
+      slot: 8n,
+      txSignature: "7".repeat(64) as Signature,
+      eventIndex: 0,
+      proofless: false,
+      ringProgramId: RING,
+      nullifiers: [firstNullifier, new Uint8Array(32).fill(7) as Bytes32],
+      messages: [],
+      outputSlots: [
+        {
+          viewTag: owner.shieldedAddress().signingPublicKey.ownerProofInputHash(),
+          payload: encodeMergeOutputData({
+            salt: new Uint8Array(16).fill(3) as Bytes16,
+            ciphertext: [new Uint8Array(32).fill(255) as Bytes32, ZERO_32, ZERO_32],
+            ringDataHash,
+            ringV2: true,
+          }),
+          outputContext: leaf(commitment, 9n),
+        },
+      ],
+    };
+    const origin: TransactionOrigin = {
+      confirmedTransaction: async (indexed, ring) =>
+        indexed.txSignature === transaction.txSignature
+          ? {
+              kind: "merge",
+              transaction: indexed,
+              sealedRecord: sealed,
+              authority: MergeRingAuthority.ownerSigned,
+            }
+          : TRANSFERS.confirmedTransaction(indexed, ring),
+    };
+    return { transaction, commitment, blinding, origin };
+  }
+
+  it("recovers a zero-key merge from its record alone, with no input history or nullifier-key seed", async () => {
+    const auditor = X25519Keypair.generate();
+    const owner = ShieldedKeypair.generate();
+    const merge = zeroKeyMergeOf(owner, auditor.publicKey());
+    const result = await recover({
+      owner,
+      auditor,
+      transaction: merge.transaction,
+      origin: merge.origin,
+    });
+    expect(
+      result.notes.map((note) => [note.outputContext.hash, note.utxo.amount, note.nullifier]),
+    ).toEqual([[merge.commitment, AMOUNT, zeroKeyNullifier(merge.commitment, merge.blinding)]]);
+    expect(result.unopened).toEqual([]);
+    // Another member's recovery reads the same record and keeps nothing.
+    const stranger = await recover({
+      owner: ShieldedKeypair.generate(),
+      auditor,
+      transaction: merge.transaction,
+      origin: merge.origin,
+    });
+    expect(stranger.notes).toEqual([]);
+    expect(stranger.unopened).toEqual([]);
+  });
+
+  it("keeps one note for a merge event the history repeats", async () => {
+    const auditor = X25519Keypair.generate();
+    const owner = ShieldedKeypair.generate();
+    const merge = zeroKeyMergeOf(owner, auditor.publicKey());
+    const result = await recover({
+      owner,
+      auditor,
+      transaction: merge.transaction,
+      history: [merge.transaction],
+      origin: merge.origin,
+    });
+    expect(result.notes.map((note) => note.outputContext.hash)).toEqual([merge.commitment]);
   });
 
   it("refuses a merge record off the confirmed output", async () => {
