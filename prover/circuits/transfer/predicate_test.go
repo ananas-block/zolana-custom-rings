@@ -70,8 +70,9 @@ func keyedOutputs(outputs int, owner, key *big.Int) map[int]func(*ringaudit.Slot
 func TestWrongAuditorRecordFailsAtTheStatement(t *testing.T) {
 	for _, f := range fixtures(t) {
 		t.Run(f.name, func(t *testing.T) {
+			honest, _ := f.world(unchanged)
+			requireSolved(t, honest)
 			circuit, rebind := f.world(unchanged)
-			requireSolved(t, circuit)
 			rebind(func(s *ringtransfer.Statement) {
 				s.Outputs[recipientSlot].Record = append([]byte{}, s.Outputs[recipientSlot].Record...)
 				s.Outputs[recipientSlot].Record[0] ^= 1
