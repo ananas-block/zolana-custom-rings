@@ -1,4 +1,4 @@
-//! The notes a ring's auditor opened, their nullifiers, and the keys its registry tracks.
+//! The notes a ring's auditor opened, their nullifiers, and the keys its credentials and registry hold.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -27,6 +27,7 @@ use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
+    credentials::{CredentialRefusal, HeldCredential, HeldCredentials},
     error::RingRpcError,
     spend_machine::{NoteRead, Observation, SpendRow, SpendState, Transition},
     spent_index::{Checkpoint, LoadedSpends},
@@ -42,12 +43,21 @@ pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 pub(crate) struct AuditStore {
     book: RwLock<SpendBook>,
     tracked: RwLock<TrackedKeys>,
+    credentials: RwLock<HeldCredentials>,
     /// The registry last named on the notes, a different one names them again.
     assets: RwLock<Option<RingAssets>>,
     /// Owners whose key arrived, kept until a committed page derived their notes.
     late_owners: RwLock<BTreeSet<[u8; 32]>>,
-    /// One backfill and tracked key refresh at a time, `None` until the durable tables load.
-    pub(crate) backfill: AsyncMutex<Option<HistoryPosition>>,
+    /// One backfill and key refresh at a time.
+    pub(crate) backfill: AsyncMutex<Backfill>,
+}
+
+#[derive(Default)]
+pub(crate) struct Backfill {
+    /// `None` until the durable tables load.
+    pub history: Option<HistoryPosition>,
+    /// In memory, a restart scans every credential from the first finalized slot.
+    pub credentials: HistoryPosition,
 }
 
 #[derive(Default)]
@@ -629,6 +639,31 @@ impl AuditStore {
             .collect()
     }
 
+    pub(crate) fn credential(&self, member: &[u8; 32]) -> Option<HeldCredential> {
+        self.credentials
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .by_member(member)
+            .copied()
+    }
+
+    /// A refused page holds nothing, a new owner's notes derive on the next page.
+    pub(crate) fn admit_credentials(
+        &self,
+        found: Vec<HeldCredential>,
+    ) -> Result<(), CredentialRefusal> {
+        let owners = self
+            .credentials
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .admit(found)?;
+        self.late_owners
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(owners);
+        Ok(())
+    }
+
     pub(crate) fn tracked(&self, owner_key: &[u8; 32]) -> Option<TrackedOwner> {
         self.tracked
             .read()
@@ -777,7 +812,19 @@ impl StoredUtxo {
 }
 
 impl DepositOwners for AuditStore {
+    /// A credential answers first, the tracking registry only an owner with none.
     fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
+        let credentials = self
+            .credentials
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(held) = credentials.by_owner_hash(owner_hash) {
+            return Some(DepositOwner {
+                owner_key: held.owner_key,
+                nullifier_pk: held.credential.nullifier_pk,
+            });
+        }
+        drop(credentials);
         let tracked = self.tracked.read().unwrap_or_else(PoisonError::into_inner);
         let owner = tracked.keys.get(tracked.owner_keys.get(owner_hash)?)?;
         Some(DepositOwner {

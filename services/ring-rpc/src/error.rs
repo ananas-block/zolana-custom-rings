@@ -13,6 +13,7 @@ use zolana_ring_policy::MemberError;
 
 use crate::{
     authority_transfer::AuthorityTransferError, authorize::Unauthorized, cosign::CoSignError,
+    credential_write::CredentialWriteRefusal, credentials::CredentialRefusal,
     record_update::RecordUpdateRefusal, relay::RelayError,
 };
 
@@ -82,6 +83,10 @@ pub enum RingRpcError {
     StaleMergeSettings,
     #[error("tracked nullifier key does not open to its enrolled key")]
     TrackedKey,
+    #[error(transparent)]
+    Credential(#[from] CredentialRefusal),
+    #[error(transparent)]
+    CredentialWrite(#[from] CredentialWriteRefusal),
     #[error("merge build failed because {0}")]
     MergeBuild(Box<custom_ring_sdk::RingError>),
 }
@@ -237,6 +242,22 @@ impl From<RingRpcError> for ErrorObjectOwned {
             TrackedKey => {
                 error!("escrowed nullifier key does not open");
                 (ErrorCode::InternalError, "escrowed key is unusable")
+            }
+            Credential(CredentialRefusal::Incomplete) => {
+                let message = failure.to_string();
+                return ErrorObjectOwned::owned(
+                    ErrorCode::ServerIsBusy.code(),
+                    message,
+                    None::<()>,
+                );
+            }
+            Credential(inner) => {
+                error!("credential discovery refused {inner}");
+                (ErrorCode::InternalError, "credential discovery failed")
+            }
+            CredentialWrite(inner) => {
+                error!("credential write refused {inner}");
+                (ErrorCode::InternalError, "credential write failed")
             }
             MergeBuild(_) => {
                 error!("managed merge failed {}", redacted(&failure));
