@@ -74,8 +74,8 @@ pub use crate::{
     buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
     deposit::{
-        fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RelayedDeposit, RingDeposit,
-        RingDepositReceipt,
+        fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RelayedDeposit,
+        RingDeposit, RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
     },
     error::RingError,
     merge::{

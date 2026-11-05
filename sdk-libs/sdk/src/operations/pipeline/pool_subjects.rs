@@ -236,8 +236,12 @@ impl RecordPlan {
         }
     }
 
-    pub fn has_salted_key(&self) -> bool {
-        !self.salted_keys.is_empty()
+    /// Each distinct salted key takes its own pool record.
+    pub fn salted_key_count(&self) -> usize {
+        let mut keys: Vec<_> = self.salted_keys.iter().map(|(_, key)| key).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys.len()
     }
 
     /// Mirror `sourceView.lists` over the salted record.

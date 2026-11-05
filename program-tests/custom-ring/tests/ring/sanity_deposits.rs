@@ -401,3 +401,54 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "exact-artifact phase, real deposit proofs at keys 4 and 8"]
+fn an_sdk_batch_settles_at_keys_four_and_eight() -> Result<()> {
+    let env = setup()?;
+    let ring = CustomRing::new(custom_ring_program_id()?);
+    RegisterRing {
+        ring,
+        payer: &env.payer,
+        auditor_pubkey: X25519Keypair::new().pubkey(),
+        tier: Tier::AuditOnly,
+    }
+    .send(&env.client)?;
+    enroll_actors(&env, ring)?;
+    let recipients = [
+        env.sender.keypair.shielded_address()?,
+        env.recipient.keypair.shielded_address()?,
+    ];
+    let client = env.client.ring_client();
+    for (notes, key) in [(3_usize, 4_u8), (5, 8)] {
+        let batch = custom_ring_sdk::RingDepositBatch {
+            ring,
+            payer: &env.payer,
+            tree: env.tree,
+            outputs: (0..notes)
+                .map(|slot| custom_ring_sdk::DepositOutput {
+                    recipient: DepositRecipient::Confidential(recipients[slot % 2]),
+                    asset: DepositAsset::Sol,
+                    amount: AMOUNT,
+                    list_salt: None,
+                })
+                .collect(),
+            cosigner: None,
+        };
+        let prepared = env.run(batch.prepare(client.zolana()))?;
+        let instruction = env.run(prepared.prove(client))?;
+        let prefix = DepositPrefix::parse(&instruction.data[..DepositPrefix::SIZE])?;
+        ensure!(
+            prefix.key_capacity == key,
+            "{notes} notes took key {}",
+            prefix.key_capacity
+        );
+        let tree_before = fetch_account(env.client.rpc(), &env.tree)?;
+        send(env.client.rpc(), &env.payer, &[instruction])?;
+        ensure!(
+            fetch_account(env.client.rpc(), &env.tree)?.data != tree_before.data,
+            "the key {key} batch did not change the tree"
+        );
+    }
+    Ok(())
+}
