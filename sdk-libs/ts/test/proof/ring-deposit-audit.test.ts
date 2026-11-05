@@ -32,6 +32,7 @@ import {
 } from "@heliuslabs/zolana/interface";
 import {
   NullifierKey,
+  ShieldedAddress,
   ShieldedKeypair,
   ShieldedPda,
   ViewingKey,
@@ -76,9 +77,11 @@ import {
   RING_DEPOSIT_OPENING_LENGTH,
 } from "../../src/protocol/codec/deposit-capsule.js";
 import {
-  AUDITED_DEPOSIT_PREFIX_LENGTH,
+  depositSppData,
   ringDepositInstruction,
 } from "../../src/protocol/transaction/deposit-instruction.js";
+import { CredentialRead, CredentialRoots } from "../../src/protocol/codec/credential-read.js";
+import { CredentialTrees } from "../../src/operations/workflow/address-ceiling.js";
 import { decryptRingDepositUtxo } from "../../src/protocol/transaction/deposit-payload.js";
 import { encodeRingDepositPlaintext } from "../../src/protocol/codec/ring-deposit-plaintext.js";
 import { ConfirmedDeposit } from "../../src/protocol/transaction/origin.js";
@@ -90,19 +93,20 @@ import {
   recordBit,
   type RuleTable,
 } from "../../src/protocol/membership/policy.js";
-import type { TrackingEntry } from "../../src/protocol/membership/tracking.js";
 import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { confirmedDepositTransaction } from "../helpers/confirmed-deposits.js";
-import { recordTree, trackingTree, type FixtureRecord } from "../helpers/member-registry.js";
+import {
+  confirmedDepositTransaction,
+  ZERO_READ_DEPOSIT_PREFIX_LENGTH,
+} from "../helpers/confirmed-deposits.js";
+import { CredentialChain } from "../helpers/credential-chain.js";
+import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";
 import {
   ownedAccount,
   ownSources,
   ringCoSignerAccount,
   ringPolicyData,
   storageRegistryAccount,
-  trackingRegistryAccount,
 } from "../helpers/ring-accounts.js";
-import { TRACKING_REVISION, trackingEntry } from "../helpers/ring-pipeline.js";
 import { type RingKeys } from "../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
 import { RingAddress, RingPaymentRequest } from "../../src/crypto/keys/ring-address.js";
@@ -114,7 +118,6 @@ const PAYER = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
 const CONTEXT = Object.freeze({ slot: 1n, blockTime: 1n });
 const RECORDS = address("Stor111111111111111111111111111111111111111");
 const RECORDS_REVISION = 3n;
-const TRACKING = address("Cura111111111111111111111111111111111111111");
 function field(value: bigint): Bytes32 {
   return bigIntToBytes(value) as Bytes32;
 }
@@ -123,6 +126,15 @@ function hex(value: Uint8Array): string {
 }
 function vectorBytes(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(value, "hex"));
+}
+/** A one tree table at a deposit key's `K`, distinct by its state root. */
+function credentialRoots(root: Bytes32, capacity = 1): CredentialRoots {
+  return CredentialRoots.selected({
+    ownerHash: field(20n),
+    addressRoot: field(21n),
+    stateRoots: [{ treeId: 0, root }],
+    capacity,
+  });
 }
 function u64le(value: bigint): Uint8Array {
   const bytes = new Uint8Array(8);
@@ -229,7 +241,7 @@ describe("deposit disclosure", () => {
       }));
       const confirmed = confirmedAudited({
         tag: RingInstructionTag.deposit,
-        prefixLength: AUDITED_DEPOSIT_PREFIX_LENGTH,
+        prefixLength: ZERO_READ_DEPOSIT_PREFIX_LENGTH,
         ciphertexts: capsules.map(encodeRingDepositCapsule),
         ephemeralPublicKey,
         owners,
@@ -335,10 +347,18 @@ describe("deposit disclosure", () => {
         capsules: sealed.capsules,
         assets: [{ asset: field(4n), amount: 5n }],
         auditorPublicKey: auditor.publicKey(),
-        trackingRoot: field(8n),
+        ringId: field(10n),
+        credentials: credentialRoots(field(8n)),
       };
       const hash = ringDepositPublicInputHash(input);
-      expect(ringDepositPublicInputHash({ ...input, trackingRoot: field(7n) })).not.toEqual(hash);
+      expect(
+        ringDepositPublicInputHash({ ...input, credentials: credentialRoots(field(7n)) }),
+      ).not.toEqual(hash);
+      expect(ringDepositPublicInputHash({ ...input, ringId: field(11n) })).not.toEqual(hash);
+      // A table wider than any deposit key states no deposit statement.
+      expect(() =>
+        ringDepositPublicInputHash({ ...input, credentials: credentialRoots(field(8n), 3) }),
+      ).toThrow(expect.objectContaining({ code: "RING_BUILD_DEPOSIT" }));
       expect(ringDepositPublicInputHash({ ...input, ownerCommitments: [field(3n)] })).not.toEqual(
         hash,
       );
@@ -446,8 +466,9 @@ describe("audited deposit instruction", () => {
         depositor: PAYER,
         deposits,
         keyCapacity: 8,
-        registries: [TRACKING],
-        trackingRevision: 4n,
+        registries: [],
+        credentialRead: CredentialRead.create(4, [3]),
+        credentialTrees: CredentialTrees.of([0], 8).metas(),
       };
       const proof = new Uint8Array(192).fill(7);
       const plain = await ringDepositInstruction({ ...input, proof });
@@ -455,36 +476,45 @@ describe("audited deposit instruction", () => {
       const registered = await ringDepositInstruction({
         ...input,
         proof,
-        registries: [RECORDS, curator, TRACKING],
+        registries: [RECORDS, curator],
         ownRevision: 5n,
         curatorRevision: 6n,
         cosigner: RING,
       });
       const [ring] = await ringPolicyPda(RING);
-      expect(AUDITED_DEPOSIT_PREFIX_LENGTH).toBe(218);
       expect(plain.data?.[0]).toBe(RingInstructionTag.deposit);
       expect(plain.data?.[1]).toBe(8);
       expect(plain.data?.slice(2, 194)).toEqual(proof);
-      expect(plain.data?.slice(194, 202)).toEqual(u64le(4n));
-      expect(plain.data?.slice(202, 218)).toEqual(new Uint8Array(16));
-      expect(plain.data?.[218]).toBe(InstructionTag.ringDeposit);
-      expect(registered.data?.slice(194, 202)).toEqual(u64le(4n));
-      expect(registered.data?.slice(202, 210)).toEqual(u64le(5n));
-      expect(registered.data?.slice(210, 218)).toEqual(u64le(6n));
-      expect(registered.data?.slice(218)).toEqual(plain.data?.slice(218));
-      expect(plain.accounts?.slice(0, 2)).toEqual([
+      // Address root index 4, one state root index 3, then the two revisions.
+      expect(plain.data?.slice(194, 199)).toEqual(Uint8Array.of(4, 0, 1, 3, 0));
+      expect(plain.data?.slice(199, 215)).toEqual(new Uint8Array(16));
+      expect(plain.data?.[215]).toBe(InstructionTag.ringDeposit);
+      expect(depositSppData(Uint8Array.from(plain.data ?? []))?.[0]).toBe(
+        InstructionTag.ringDeposit,
+      );
+      expect(registered.data?.slice(194, 199)).toEqual(Uint8Array.of(4, 0, 1, 3, 0));
+      expect(registered.data?.slice(199, 207)).toEqual(u64le(5n));
+      expect(registered.data?.slice(207, 215)).toEqual(u64le(6n));
+      expect(registered.data?.slice(215)).toEqual(plain.data?.slice(215));
+      expect(plain.accounts?.slice(0, 3)).toEqual([
         { address: ring, role: AccountRole.READONLY },
-        { address: TRACKING, role: AccountRole.READONLY },
+        { address: TREE, role: AccountRole.READONLY },
+        { address: TREE, role: AccountRole.READONLY },
       ]);
-      expect(registered.accounts?.slice(0, 6)).toEqual([
+      expect(registered.accounts?.slice(0, 7)).toEqual([
         { address: ring, role: AccountRole.READONLY },
         { address: RECORDS, role: AccountRole.READONLY },
         { address: curator, role: AccountRole.READONLY },
-        { address: TRACKING, role: AccountRole.READONLY },
+        { address: TREE, role: AccountRole.READONLY },
+        { address: TREE, role: AccountRole.READONLY },
         { address: await ringCoSignerAddress(RING, RING), role: AccountRole.READONLY },
         { address: RING, role: AccountRole.READONLY_SIGNER },
       ]);
-      expect(registered.accounts?.slice(6)).toEqual(plain.accounts?.slice(2));
+      expect(registered.accounts?.slice(7)).toEqual(plain.accounts?.slice(3));
+      // A deposit key reads at least one state root.
+      await expect(
+        ringDepositInstruction({ ...input, proof, credentialRead: CredentialRead.empty() }),
+      ).rejects.toMatchObject({ details: { reason: "InvalidCredentialRead" } });
       await expect(
         ringDepositInstruction({ ...input, proof, deposits: [...deposits, deposits[0]!] }),
       ).rejects.toMatchObject({ code: "INTERFACE_CODEC", details: { field: "deposit count" } });
@@ -510,14 +540,19 @@ describe("ring deposit builder", () => {
   async function fixture(
     input: Readonly<{
       mode: RingMode;
-      enrolled?: readonly TrackingEntry[];
+      enrolled?: readonly ShieldedAddress[];
       table?: RuleTable;
       members?: readonly FixtureRecord[];
       coSigner?: RingCoSigner;
     }>,
   ) {
     const records = recordTree(input.members ?? []);
-    const tracked = trackingTree(input.enrolled ?? []);
+    const chain = await CredentialChain.create({
+      ringProgramId: RING,
+      auditorPubkey: auditor.publicKey().toBytes(),
+      accounts: new Map(),
+    });
+    for (const owner of input.enrolled ?? []) chain.enroll(owner);
     const [policy, policyBump] = await ringPolicyPda(RING);
     const requests: RingProofRequest[] = [];
     const proveRing = vi.fn(async (request: RingProofRequest) => {
@@ -526,6 +561,7 @@ describe("ring deposit builder", () => {
     });
     const sources = input.table === undefined ? undefined : ownSources(input.table);
     const client: RingDepositClient = {
+      ...chain.reader(),
       tree: TREE,
       treeId: 0,
       getLatestBlockhash: async () => BLOCKHASH,
@@ -543,7 +579,6 @@ describe("ring deposit builder", () => {
               mode: input.mode,
               ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
               records: RECORDS,
-              tracking: TRACKING,
               ...(input.table === undefined || sources === undefined
                 ? {}
                 : {
@@ -558,14 +593,7 @@ describe("ring deposit builder", () => {
           return storageRegistryAccount([
             { hash: records.root, revision: RECORDS_REVISION, expiresAt: 0n },
           ]);
-        if (account === TRACKING)
-          return trackingRegistryAccount({
-            root: tracked.root,
-            revision: TRACKING_REVISION,
-            nextIndex: tracked.nextIndex,
-            auditorPubkey: auditor.publicKey().toBytes(),
-          });
-        return undefined;
+        return chain.account(account);
       },
       getStorageRecordPool: async (request: StorageRecordPoolRequest) =>
         ({
@@ -573,7 +601,6 @@ describe("ring deposit builder", () => {
           root: { root: records.root, revision: RECORDS_REVISION, nextIndex: records.nextIndex },
           ...records.pool(request.members, request.openings),
         }) satisfies StorageRecordPool,
-      getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
       proveRing,
     };
     return { client, requests, proveRing };
@@ -587,8 +614,7 @@ describe("ring deposit builder", () => {
     return { client, ringProgramId: RING, feePayer: PAYER, recipient, amount: 5n, ...overrides };
   }
 
-  const enrolled = (member: ShieldedKeypair): TrackingEntry =>
-    trackingEntry(member.shieldedAddress());
+  const enrolled = (member: ShieldedKeypair): ShieldedAddress => member.shieldedAddress();
 
   /** A holder answering only what an anonymous deposit asks, every other call fails. */
   function remoteKeys(local: LocalRingKeys): RingKeys {
@@ -626,7 +652,7 @@ describe("ring deposit builder", () => {
     return hex(Uint8Array.from(proven.instruction.data ?? [])).includes(hex(tag));
   }
 
-  it("binds a policy ring deposit to the recipient's tracking row under the newest roots", async () => {
+  it("binds a policy ring deposit to the recipient's credential under the newest roots", async () => {
     const recipient = ShieldedKeypair.generate();
     const member = recipient.signingPublicKey().ownerProofInputHash();
     const members = [{ member, lists: recordBit(ListId.allow) }];
@@ -654,11 +680,10 @@ describe("ring deposit builder", () => {
       if (request?.kind !== "deposit") throw new Error("expected one deposit request");
       expect(request.ownerKeys[0]).toEqual(recipient.signingPublicKey().confidentialViewTag());
       expect(request.nullifierPks[0]).toEqual(recipient.nullifierPublicKey());
-      const trackingRoot = trackingTree([row]).root;
-      expect(request.trackingRoot).toEqual(trackingRoot);
-      const opened = request.trackingPool.records[request.outputEntries[0] ?? -1];
-      expect(opened?.member).toEqual(member);
+      const opened = request.credentialOpenings[request.outputEntries[0] ?? -1];
+      expect(opened).toMatchObject({ present: true, member, treeSlot: 0 });
       expect(opened?.nullifierPk).toEqual(recipient.nullifierPublicKey());
+      expect(request.credentialRoots.capacity).toBe(request.capacity);
       const ownRoot = recordTree(members).root;
       expect(request.ownRoot).toEqual(ownRoot);
       const owner = request.ownerEntries[0];
@@ -672,25 +697,29 @@ describe("ring deposit builder", () => {
           root: ownRoot,
         },
       ]);
-      expect(proven.trackingRoot).toEqual({
-        ringProgramId: RING,
-        registry: TRACKING,
-        revision: TRACKING_REVISION,
-        root: trackingRoot,
-      });
-      const data = proven.instruction.data ?? new Uint8Array();
+      expect(proven.credentialRoots).toEqual([
+        { tree: TREE, kind: "address", rootIndex: 0, root: request.credentialRoots.addressRoot },
+        {
+          tree: TREE,
+          kind: "state",
+          rootIndex: 0,
+          root: request.credentialRoots.stateRoots[0]?.root,
+        },
+      ]);
+      const data = Uint8Array.from(proven.instruction.data ?? []);
       expect(data[1]).toBe(request.capacity);
-      expect(data.slice(194, 202)).toEqual(u64le(TRACKING_REVISION));
-      expect(data.slice(202, 210)).toEqual(u64le(RECORDS_REVISION));
-      expect(data.slice(210, 218)).toEqual(new Uint8Array(8));
+      expect(data.slice(194, 199)).toEqual(Uint8Array.of(0, 0, 1, 0, 0));
+      expect(data.slice(199, 207)).toEqual(u64le(RECORDS_REVISION));
+      expect(data.slice(207, 215)).toEqual(new Uint8Array(8));
       const [registry] = await ringPolicyPda(RING);
-      expect(proven.instruction.accounts?.slice(0, 3)).toEqual([
+      expect(proven.instruction.accounts?.slice(0, 4)).toEqual([
         { address: registry, role: AccountRole.READONLY },
         { address: RECORDS, role: AccountRole.READONLY },
-        { address: TRACKING, role: AccountRole.READONLY },
+        { address: TREE, role: AccountRole.READONLY },
+        { address: TREE, role: AccountRole.READONLY },
       ]);
       // The recipient opens its note from the ciphertext behind the capsule.
-      const spp = data.slice(AUDITED_DEPOSIT_PREFIX_LENGTH);
+      const spp = depositSppData(data) ?? new Uint8Array();
       expect(spp[0]).toBe(InstructionTag.ringDeposit);
       expect(prepared.utxo.blinding).toEqual(
         depositBlinding(request.blindingSecrets[0] ?? field(0n)),
@@ -711,9 +740,8 @@ describe("ring deposit builder", () => {
     );
     try {
       const proven = await prepared.prove(client);
-      const spp = (proven.instruction.data ?? new Uint8Array()).slice(
-        AUDITED_DEPOSIT_PREFIX_LENGTH,
-      );
+      const spp =
+        depositSppData(Uint8Array.from(proven.instruction.data ?? [])) ?? new Uint8Array();
       const [entry] = decodeRingDepositInstructionData(spp.slice(1)).deposits;
       const capsule = readRingDepositCapsule(entry?.encrypted.ciphertext ?? new Uint8Array());
       if (entry === undefined || capsule === undefined) throw new Error("missing capsule");
@@ -734,10 +762,16 @@ describe("ring deposit builder", () => {
     }
   });
 
-  it("refuses a recipient off its tracking row before any proof", async () => {
+  it("refuses a recipient off its credential before any proof", async () => {
     const recipient = ShieldedKeypair.generate();
+    const address = recipient.shieldedAddress();
+    const foreign = ShieldedAddress.fromPublicKeys(
+      address.signingPublicKey,
+      ShieldedKeypair.generate().shieldedAddress().nullifierPublicKey,
+      address.viewingPublicKey,
+    );
     for (const [rows, causeCode] of [
-      [[{ ...enrolled(recipient), nullifierPk: field(77n) }], "RING_ADDRESS_MISMATCH"],
+      [[foreign], "RING_ADDRESS_MISMATCH"],
       [[], "RING_RECIPIENT_NOT_ENROLLED"],
     ] as const) {
       const { client, proveRing } = await fixture({ mode: "confidential", enrolled: rows });
@@ -780,9 +814,8 @@ describe("ring deposit builder", () => {
       expect(
         proven.instruction.accounts?.filter((account) => account.address === ring),
       ).toHaveLength(1);
-      const spp = (proven.instruction.data ?? new Uint8Array()).slice(
-        AUDITED_DEPOSIT_PREFIX_LENGTH,
-      );
+      const spp =
+        depositSppData(Uint8Array.from(proven.instruction.data ?? [])) ?? new Uint8Array();
       const [lowest, next, stored] = tags.map(hex);
       expect(hex(spp)).toContain(stored);
       expect(hex(spp)).not.toContain(lowest);
@@ -913,7 +946,7 @@ describe("ring deposit builder", () => {
     const owner = holder.shieldedAddress();
     const { client, requests } = await fixture({
       mode: "anonymous",
-      enrolled: [trackingEntry(owner)],
+      enrolled: [owner],
     });
     const viewing = holder.viewingKey();
     const depositTag = viewing.recipientRequestViewTag(0n);
@@ -1078,7 +1111,8 @@ describe("ring deposit builder", () => {
       try {
         const withCoSigner = await signed.prove(covered.client);
         const withoutCoSigner = await unsigned.prove(outside.client);
-        expect(withCoSigner.instruction.accounts?.slice(2, 4)).toEqual([
+        // The ring, tree 0 for the address root and tree 0 for the state root, then the co-signer.
+        expect(withCoSigner.instruction.accounts?.slice(3, 5)).toEqual([
           { address: await ringCoSignerAddress(RING, cosigner), role: AccountRole.READONLY },
           { address: cosigner, role: AccountRole.READONLY_SIGNER },
         ]);
