@@ -1,5 +1,5 @@
-// Attributes a transfer's flows to the owners who spent, and holds each owner's outflow of each asset
-// to the asset's cap.
+// Attributes a transfer's flows to the owners who spent, and holds each owner's charged outflow of each
+// asset to the asset's cap.
 //
 // SPP conserves each asset over the whole transaction and publishes a signed net per public slot. It
 // says nothing about who lost what, and a net hides a withdrawal that a deposit offsets. A per owner cap
@@ -11,27 +11,36 @@
 // program-libs/policy/src/quantities.rs, its mirror.
 //
 // The quantities, per row and asset unless named per asset.
-//   held       the row's live inputs, a default-ring note included. Rows key on owner identity, so one
-//              owner's notes add across nullifier keys.
-//   returned   the row's live ring outputs.
-//   debit      held less returned, never below zero.
-//   kept       held less debit.
-//   leaving    per asset, every exit whoever receives it, plus the statement's gross with no deposit
-//              subtracted.
-//   displaced  per asset, min(leaving, total held) less min(leaving, total debit). What leaves beyond
-//              the debits, capped at what the rows held.
-//   charge     displaced split over kept by the running floors in flowsOf.
-//   outflow    debit plus charge.
-//   peak       per asset, the largest outflow of any row.
+//   held             the row's live inputs, a default-ring note included. Rows key on owner identity,
+//                    so one owner's notes add across nullifier keys.
+//   returned         the row's live ring outputs.
+//   debit            held less returned, never below zero. The owner's net outflow, its actual decrease.
+//   kept             held less debit.
+//   leaving          per asset, every exit whoever receives it, plus the statement's gross with no
+//                    deposit subtracted.
+//   displaced        per asset, min(leaving, total held) less min(leaving, total debit). What leaves
+//                    beyond the debits, capped at what the rows held.
+//   charge           displaced split over kept by the running floors in flowsOf.
+//   charged outflow  debit plus charge, at most held. The cap and cosign_above read it.
+//   peak             per asset, the largest charged outflow of any row.
 //
 // Why a charge exists. S spends 1000, a public deposit of 1000 joins, S receives 1000 back and 1000
 // exits to X. S's debit is zero and no debit pays for what left. S's charge is 1000, and a cap of 100
 // refuses the transfer. Public funds that pass straight through charge only what the rows held.
 //
+// The charge is a policy definition, not a trace of whose funds left. Leaving names no payer, so a
+// transaction that composes payments charges an owner for exits another party funds. A spends 100 and
+// receives 100 back, B's public deposit of 100 joins, and the transaction withdraws 100 in public. A's
+// net outflow is zero and its charged outflow is 100. The SDKs report each owner's charged outflow
+// before signing, a caller splits independent payments into separate transactions to avoid the charge.
+//
+// The withdrawal threshold reads each public slot's gross and no row. It bounds what the transaction
+// withdraws in public whoever funds it, and the charge bounds what one owner's funds answer for.
+//
 // Properties:
-// 1. Every row's debit, kept, charge and outflow follow from the slots, the gross and the row order alone.
+// 1. Every row's debit, kept, charge and charged outflow follow from the slots, the gross and the row order alone.
 // 2. The charges sum to displaced exactly, and no row's charge passes its kept.
-// 3. While active, every live output's asset and every public asset holds its peak outflow to a nonzero cap.
+// 3. While active, every live output's asset and every public asset holds its peak charged outflow to a nonzero cap.
 // 4. ApprovalOutflow is set exactly when such a peak passes a nonzero cosign_above, ApprovalWithdrawal exactly when a gross passes a nonzero withdrawal threshold, and both read zero off active.
 // 5. The rows ascend strictly while the rail reads them, one owner holds one row.
 //
@@ -68,9 +77,9 @@ type limitedAsset struct {
 }
 
 // held = debit + kept.
-type ownerFlow struct{ debit, kept, charge, outflow frontend.Variable }
+type ownerFlow struct{ debit, kept, charge, chargedOutflow frontend.Variable }
 
-type assetTotals struct{ peak, outflow frontend.Variable }
+type assetTotals struct{ peak, chargedOutflow frontend.Variable }
 
 type flowSource struct {
 	inputs, outputs []shared.Output
@@ -87,12 +96,12 @@ type flowSource struct {
 type slotFlags struct{ inputs, outputs []frontend.Variable }
 
 type assetSplit struct {
-	// A row's outflow reads its debit until flowsOf charges it.
+	// A row's charged outflow reads its debit until flowsOf charges it.
 	rows              []ownerFlow
 	held, debit, kept frontend.Variable
 }
 
-// constrainOutflow holds each row's outflow per asset to the asset's cap, the proven approval mask reads zero while active is off.
+// constrainOutflow holds each row's charged outflow per asset to the asset's cap, the proven approval mask reads zero while active is off.
 func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active frontend.Variable, spend Spend, outputs []shared.Output, resolved subjects) Screening {
 	// 1. The program binds gross to settled withdrawal legs. The bound at debitBits admits gross above u64 and keeps policy comparisons over integers.
 	// Leg amounts, thresholds and net magnitudes have separate u64 bounds. Gross reads zero while inactive.
@@ -102,33 +111,33 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 		cmp.rc.Check(gross[k], cmp.width)
 	}
 	source := newFlowSource(api, spend, outputs, p.PublicAssets[:], gross)
-	// 2. One peak per asset stands for one comparison per row. A peak within the cap holds every row within it, and the peak equals some row's outflow.
+	// 2. One peak per asset stands for one comparison per row. A peak within the cap holds every row within it, and the peak equals some row's charged outflow.
 	overOutflow := frontend.Variable(0)
 	bound := func(limit limitedAsset, flows []ownerFlow) assetTotals {
 		outflows, total := make([]frontend.Variable, len(flows)), frontend.Variable(0)
 		for j, flow := range flows {
-			outflows[j] = flow.outflow
-			total = api.Add(total, flow.outflow)
+			outflows[j] = flow.chargedOutflow
+			total = api.Add(total, flow.chargedOutflow)
 		}
 		peak := cmp.peak(api, outflows)
 		bounded := api.Mul(active, limit.active)
 		transaction.AssertWhen(api, api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cap)), cmp.atMost(api, peak, limit.policy.cap))
 		cosigned := api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cosignAbove))
 		overOutflow = api.Or(overOutflow, api.Mul(cosigned, cmp.above(api, peak, limit.policy.cosignAbove)))
-		return assetTotals{peak: peak, outflow: total}
+		return assetTotals{peak: peak, chargedOutflow: total}
 	}
 	// 3. Every live output's asset meets its bound with the charge included.
 	totals := make([]frontend.Variable, 0, 3*len(outputs)+4*len(resolved.publicAssets))
 	for o, out := range outputs {
 		slot := bound(limitedAsset{asset: out.Asset, active: out.Utxo, policy: resolved.mintPolicies[o]}, source.flowsOf(api, cmp, out.Asset))
 		// An unpublished slot's asset stays free and may share a live one, zeros keep its slot from reading as live.
-		totals = append(totals, api.Mul(out.Utxo, out.Asset), api.Mul(out.Utxo, slot.peak), api.Mul(out.Utxo, slot.outflow))
+		totals = append(totals, api.Mul(out.Utxo, out.Asset), api.Mul(out.Utxo, slot.peak), api.Mul(out.Utxo, slot.chargedOutflow))
 	}
 	// 4. Every public asset meets its bound over the debits. SPP's balance leaves an asset with neither a live output nor a public slot holding zero, so steps 3 and 4 cover every asset that moves.
 	for k, public := range resolved.publicAssets {
 		// An asset any row keeps is a live output's asset, whose flow above holds the charge.
 		slot := bound(public.limitedAsset, source.splitOf(api, cmp, source.flagsOf(api, public.asset)).rows)
-		totals = append(totals, public.asset, slot.peak, slot.outflow, gross[k])
+		totals = append(totals, public.asset, slot.peak, slot.chargedOutflow, gross[k])
 	}
 	// 5. A gross past the asset's withdrawal threshold sets its bit whatever the debits read, a paired deposit lowers no gross.
 	overWithdrawal := frontend.Variable(0)
@@ -190,7 +199,7 @@ func (s flowSource) flowsOf(api frontend.API, cmp comparator, asset frontend.Var
 			share = cmp.floorDiv(api, api.Mul(displaced, running), divisor)
 		}
 		flows[j].charge = api.Sub(share, previous)
-		flows[j].outflow = api.Add(flows[j].debit, flows[j].charge)
+		flows[j].chargedOutflow = api.Add(flows[j].debit, flows[j].charge)
 		previous = share
 	}
 	return flows
@@ -207,7 +216,7 @@ func (s flowSource) splitOf(api frontend.API, cmp comparator, flags slotFlags) a
 		held := innerProduct(api, s.heldBy[j], heldAmounts)
 		debit := cmp.saturatingSub(api, held, innerProduct(api, s.returnedBy[j], returnedAmounts))
 		kept := api.Sub(held, debit)
-		split.rows[j] = ownerFlow{debit: debit, kept: kept, charge: 0, outflow: debit}
+		split.rows[j] = ownerFlow{debit: debit, kept: kept, charge: 0, chargedOutflow: debit}
 		split.held, split.debit, split.kept = api.Add(split.held, held), api.Add(split.debit, debit), api.Add(split.kept, kept)
 	}
 	return split

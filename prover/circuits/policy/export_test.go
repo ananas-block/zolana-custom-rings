@@ -15,14 +15,14 @@ func DecodeTable(t Table, api frontend.API, rc frontend.Rangechecker, policyHash
 }
 
 // Quantities are one row's flows of one asset.
-type Quantities struct{ Debit, Kept, Charge, Outflow frontend.Variable }
+type Quantities struct{ Debit, Kept, Charge, ChargedOutflow frontend.Variable }
 
 // RowFlows runs flowsOf over the rows for one asset.
 func RowFlows(api frontend.API, rc frontend.Rangechecker, rows []frontend.Variable, inputs, outputs []shared.Output, publicAssets, gross []frontend.Variable, asset frontend.Variable) []Quantities {
 	flows := newFlowSource(api, Spend{Senders: rows, Inputs: inputs}, outputs, publicAssets, gross).flowsOf(api, newComparator(rc), asset)
 	quantities := make([]Quantities, len(flows))
 	for j, flow := range flows {
-		quantities[j] = Quantities{Debit: flow.debit, Kept: flow.kept, Charge: flow.charge, Outflow: flow.outflow}
+		quantities[j] = Quantities{Debit: flow.debit, Kept: flow.kept, Charge: flow.charge, ChargedOutflow: flow.chargedOutflow}
 	}
 	return quantities
 }

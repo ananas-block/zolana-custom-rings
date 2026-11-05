@@ -155,6 +155,15 @@ func TestOutflowSettlesAtItselfAndRefusesOneBelow(t *testing.T) {
 	}
 }
 
+// The intended composition cost, A's net outflow is zero and its charged outflow is 100.
+func TestReturnedSpendBesideAPublicWithdrawalIsCharged(t *testing.T) {
+	// A spends 100 and receives 100 back, B's public deposit of 100 funds a public withdrawal of 100.
+	inputs, outputs := []ringpolicy.Slot{slot(s, 100)}, []ringpolicy.Slot{slot(s, 100)}
+	public := []ringpolicy.PublicSlot{{Asset: mintA, Amount: 0, Gross: 100}}
+	requireSolved(t, outflowWorld(inputs, outputs, public, 100).Build(t))
+	requireRefusedIn(t, outflowWorld(inputs, outputs, public, 99), outflow)
+}
+
 // One owner past the cap refuses the transfer whichever row holds it, a lower row cannot hide it.
 func TestOwnerPastTheCapBesideOneUnderIt(t *testing.T) {
 	for name, inputs := range map[string][]ringpolicy.Slot{
@@ -246,12 +255,12 @@ type quantityNote struct {
 }
 
 type quantityRow struct {
-	Owner   int64  `json:"owner"`
-	Asset   int64  `json:"asset"`
-	Debit   uint64 `json:"debit"`
-	Kept    uint64 `json:"kept"`
-	Charge  uint64 `json:"charge"`
-	Outflow uint64 `json:"outflow"`
+	Owner          int64  `json:"owner"`
+	Asset          int64  `json:"asset"`
+	Debit          uint64 `json:"debit"`
+	Kept           uint64 `json:"kept"`
+	Charge         uint64 `json:"charge"`
+	ChargedOutflow uint64 `json:"outflow"`
 }
 
 type guardRow struct {
@@ -299,8 +308,8 @@ func (n noteWires) output() shared.Output {
 }
 
 type quantityExpect struct {
-	Asset                        frontend.Variable
-	Debit, Charge, Outflow, Held []frontend.Variable
+	Asset                               frontend.Variable
+	Debit, Charge, ChargedOutflow, Held []frontend.Variable
 }
 
 type quantityCircuit struct {
@@ -333,7 +342,7 @@ func (c *quantityCircuit) Define(api frontend.API) error {
 		for j, flow := range policy.RowFlows(api, rc, c.Rows, inputs, outputs, c.PublicAssets, c.Gross, expect.Asset) {
 			api.AssertIsEqual(flow.Debit, expect.Debit[j])
 			api.AssertIsEqual(flow.Charge, expect.Charge[j])
-			api.AssertIsEqual(flow.Outflow, expect.Outflow[j])
+			api.AssertIsEqual(flow.ChargedOutflow, expect.ChargedOutflow[j])
 			api.AssertIsEqual(api.Add(flow.Debit, flow.Kept), expect.Held[j])
 		}
 	}
@@ -399,7 +408,7 @@ func (tc quantityCase) circuit(t *testing.T) *quantityCircuit {
 				}
 			}
 			expect.Debit, expect.Charge = append(expect.Debit, want.Debit), append(expect.Charge, want.Charge)
-			expect.Outflow, expect.Held = append(expect.Outflow, want.Outflow), append(expect.Held, held)
+			expect.ChargedOutflow, expect.Held = append(expect.ChargedOutflow, want.ChargedOutflow), append(expect.Held, held)
 		}
 		c.Expect = append(c.Expect, expect)
 	}
