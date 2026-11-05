@@ -56,7 +56,7 @@ The confidential mode and the anonymous mode differ at the sender and the recipi
 - A zero-key note's sender computes its nullifier and sees when the note is spent.
 - A reader sees what its grant covers, blindings included, and keeps it after a revocation.
 - Ring RPC as relayer receives every secret the proofs need. It links the owner's spends and opens the outputs, so a relayed transfer is anonymous only toward a trusted Ring RPC.
-- Ring RPC as co-signer sees each owner's outflow of each asset. It reads them from the frame with the auditor key.
+- Ring RPC as co-signer sees each owner's charged outflow of each asset. It reads them from the frame with the auditor key.
 - An outside co-signer that reads exact totals sees each asset's totals and no sender list.
 - The ring indexer sees which members a client opens, before the transfer lands.
 - Photon sees which leaf each nullifier spends, and the deposit tags of one viewing key grouped per request. It sees which ring history a scanning wallet reads, and from which slot.

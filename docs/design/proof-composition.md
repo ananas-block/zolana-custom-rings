@@ -149,10 +149,10 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - No constraint binds a nullifier to an earlier record. The auditor's link is a reader check.
 - The tests in `prover/circuits/audit` are `TestRealInputCountIsSealed`, `TestInputMapsBindAbsolutePositions`, `TestInputMapRefusesWitnessClassChangeWithSealedEvidence`, `TestAddressOnlyInputsSetNoSpend`, `TestNoSpendEqualsAZeroCount`, `TestDefaultInputNeedsEntryCapacity`, `TestDefaultBitsAndEvidenceFollowTheSlots`, `TestEntryEvidenceServesMixedOwners` and `TestReaderRebuildsADefaultInput`.
 
-### Each owner's outflow stays within the asset's limits
+### Each owner's charged outflow stays within the asset's limits
 
-- The circuit computes `debit`, `kept`, `charge` and `outflow` per row and asset in `constrainOutflow`. The rows' order alone fixes each share.
-- The circuit holds each asset's peak outflow to a nonzero `cap`. It consumes the statement's gross and does not rebuild it from legs.
+- The circuit computes `debit`, `kept`, `charge` and the charged outflow per row and asset in `constrainOutflow`. The rows' order alone fixes each share.
+- The circuit holds each asset's peak charged outflow to a nonzero `cap`. It consumes the statement's gross and does not rebuild it from legs.
 - The program folds settled legs into `PublicSlots`, and the gross per asset excludes deposits.
 - The tests in `prover/circuits/policy` are `TestDebitKeepsOwnersApart`, `TestSameOwnerExitCountsAsLeaving`, `TestDepositOffsetsASingleOwnersDebit`, `TestOutflowSettlesAtItselfAndRefusesOneBelow`, `TestOwnerPastTheCapBesideOneUnderIt`, `TestOutflowWithNothingLeaving`, `TestDebitVector` and `TestQuantitiesVector`.
 

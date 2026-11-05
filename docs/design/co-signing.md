@@ -23,17 +23,18 @@ The limits bind on every ring with its own registry, with or without a policy ha
 - `leaving` is the exits of the asset plus its statement-bound gross withdrawal. An exit counts whoever receives it.
 - `displaced` is what leaves beyond the debits, capped at the rows' input amount. It arises only when a deposit funds a same-owner return.
 - `charge` splits `displaced` over the kept funds by running floors over the ascending rows. It conserves amounts, and no prover input selects a share.
-- `outflow` is `debit` plus `charge`. The peak outflow of each asset stays at or below its `cap`, and a zero cap turns the check off.
+- The charged outflow is `debit` plus `charge`, and the net outflow is `debit` alone. The peak charged outflow of each asset stays at or below its `cap`, and a zero cap turns the check off.
 - A peak above `cosign_above` sets the `OUTFLOW` bit. A gross withdrawal above `withdrawal_threshold` sets the `WITHDRAWAL` bit, with no deposit subtracted.
-- Neither threshold caps outflow. Above one a transfer needs an approver's signature, and `cap` is the only outflow bound.
+- Neither threshold caps the charged outflow. Above one a transfer needs an approver's signature, and `cap` is the only bound on it.
+- The withdrawal threshold reads the gross and no owner. It limits what a transaction withdraws in public, and `cap` limits what one owner's funds answer for.
 - A zero threshold and an asset with no record set no threshold in the proof.
 - The program demands the approval class of each proven bit, and refuses a bit on the delegate rail.
 
-As an example, S spends 1000, deposits 1000, returns 1000 to S and exits 1000 to X. S has a zero debit and a charge of 1000, so a cap of 100 refuses the transfer.
+As an example, S spends 1000, deposits 1000, returns 1000 to S and exits 1000 to X. S has a net outflow of 0 and a charged outflow of 1000, so a cap of 100 refuses the transfer.
 
 ## Exact approval totals
 
-- A co-signer that needs exact amounts opens one digest off chain. The digest covers each output and public asset's identifier, peak outflow and total outflow, and each public asset's gross.
+- A co-signer that needs exact amounts opens one digest off chain. The digest covers each output asset's identifier and its peak and total charged outflow. It covers each public asset's identifier, its peak and total debit and its gross.
 - The proof binds the digest over the values the outflow section computes, under a fresh blinder independent of the transaction key.
 - A frame carries the digest only under exact approval, and a zero digest discloses nothing. Every key carries the digest constraints.
 - The opening names no sender. Exact amounts and asset combinations can still identify a sender through outside information.
@@ -58,7 +59,7 @@ As an example, S spends 1000, deposits 1000, returns 1000 to S and exits 1000 to
 - A co-signer key outside Ring RPC whose scope covers the demanded classes signs with no window limit.
 - Each signing key is its own sender, so one person with many keys passes a sender cap once per key.
 - Outflow caps and amount guards sum one transfer. A payment split across transfers passes each part.
-- A deposit-funded payment to another ring owner, where nothing leaves, keeps `outflow` at `debit`.
+- A deposit-funded payment to another ring owner, where nothing leaves, keeps the charged outflow at `debit`.
 - The delegate rail runs no cap, no amount guard and no approval.
 
 ## Real-world controls

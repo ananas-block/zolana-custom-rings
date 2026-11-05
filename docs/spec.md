@@ -49,7 +49,31 @@ An asset rule over the allowlist admits only listed assets to deposits and trans
 
 ### 1.5. Outflow limits per transfer
 
-An asset's record can hold a cap and a co-sign bound. The transfer proof keeps each owner's `outflow` of the asset at or below the cap. It sets the `OUTFLOW` approval bit when an `outflow` passes the bound. An asset with no record has neither. An owner's `debit` is what its spent notes held of the asset, less what same-ring outputs return to it, never below zero. An exit and a public withdrawal count as leaving, an exit to the same owner included. `outflow = debit + charge`. `charge` shares out what leaves beyond the summed debits, up to what the owners held. It goes to the owners whose funds a same-ring output returned, by a floor over rows in ascending owner order. The charges sum exactly to that amount, and no prover input picks a share. A deposit-funded return to the sender therefore cannot hide funds that leave. Limits over time are Ring RPC's, see 3.2. Differs from the PR 15 draft: per-transfer outflow limits live in the transfer proof. [Co-signing](design/co-signing.md)
+An asset's record can hold a cap and a co-sign bound. The transfer proof keeps each owner's charged outflow of the asset at or below the cap. It sets the `OUTFLOW` approval bit when a charged outflow passes the co-sign bound. An asset with no record has neither, and a ring with no own records bounds no outflow. An owner's net outflow is its actual decrease, `debit`. Its charged outflow adds `charge`, a share of what leaves the ring beyond every owner's debit. The two differ only when an owner's spend returns to it while something else leaves in the same transaction.
+
+Per asset `a`, over the sender rows `j` in ascending owner identity order:
+
+```text
+held_j     = row j's live inputs of a, default-ring notes included
+returned_j = row j's live ring outputs of a
+leaving    = every exit of a, whoever receives it, + the gross public withdrawal of a
+debit_j    = max(held_j - returned_j, 0)               net outflow
+kept_j     = held_j - debit_j
+H = sum held_j, T = sum debit_j, K = sum kept_j
+D          = min(leaving, H) - min(leaving, T)
+R_j        = kept_0 + ... + kept_j
+share_j    = floor(D * R_j / K), D on the last row, share_-1 = 0
+charge_j   = share_j - share_(j-1)
+charged_j  = debit_j + charge_j                        charged outflow
+```
+
+`D` is at most `K`, and `K = 0` forces every charge to zero. Each charge is `floor(D * kept_j / K)` or one more, the charges sum to `D` exactly, and no charge passes `kept_j`. The row order alone places a rounding unit, and no prover input picks a share. The gross public withdrawal subtracts no deposit. An asset with no live ring output is bound over its debits, since no row keeps it.
+
+`leaving` names no payer. A transaction that composes independent payments can therefore charge an owner for an exit or a withdrawal another party funds. The charge stays within what that owner kept. Payments in separate transactions never charge each other. The SDKs report each owner's charge before signing, so a caller can split such payments.
+
+As an example, A spends 100 of an asset and receives 100 back in a ring output. B deposits 100, and the transaction withdraws 100 in public. A's net outflow is 0 and its charged outflow is 100. A cap of 100 proves and a cap of 99 refuses. The charge is intended.
+
+Limits over time are Ring RPC's, see 3.2. Differs from the PR 15 draft: per-transfer outflow limits live in the transfer proof. [Co-signing](design/co-signing.md)
 
 ### 1.6. Auditor
 
@@ -76,8 +100,8 @@ A co-signer is a key that the co-signer admin designates to approve selected ope
 - **`TRANSFERS`**: a transfer that spends a note. A frame with `no_spend` set, a merge and a delegate move never demand it.
 - **`DEPOSITS`**: a deposit, and a transfer with a deposit leg.
 - **`WITHDRAWALS`**: a transfer with a public withdrawal.
-- **`APPROVE_OUTFLOW`**: an owner's `outflow` of an asset above the asset's co-sign bound, see 1.5.
-- **`APPROVE_WITHDRAWAL`**: the gross withdrawn of an asset, with no deposit subtracted, above the asset's withdrawal threshold.
+- **`APPROVE_OUTFLOW`**: an owner's charged outflow of an asset above the asset's co-sign bound, see 1.5.
+- **`APPROVE_WITHDRAWAL`**: the gross withdrawn of an asset, with no deposit subtracted, above the asset's withdrawal threshold. It reads no owner and limits what a transaction withdraws in public, whoever funds it.
 
 The first three demand a co-signer only when the ring configured a co-signer of that class. The proof sets the two approval bits in `approval_mask`. A set bit demands its approver whether or not the ring configured one, so it fails closed without one. A delegate move sets no bit.
 

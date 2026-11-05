@@ -132,7 +132,7 @@ fields  = [CRAO, blinder]
 digest  = HashChain4(fields)
 ```
 
-Each amount is a u128 under `right_align`. An output slot reads the largest single owner outflow of its asset as `peak` and the sum over owners as `outflow`. A public slot reads the same two values over owner debits, and `gross` is the slot's gross public withdrawal. A dummy or unused slot is all zero. The SDK draws `blinder` as a fresh random field element for each transaction, apart from `tx_viewing_sk`. No proof constrains it.
+Each amount is a u128 under `right_align`. An output slot reads the largest charged outflow of one owner of its asset as `peak` and the sum of charged outflows as `outflow`. A public slot reads the same two values over owner debits, and `gross` is the slot's gross public withdrawal. A dummy or unused slot is all zero. The SDK draws `blinder` as a fresh random field element for each transaction, apart from `tx_viewing_sk`. No proof constrains it.
 
 ## Domain tags
 
