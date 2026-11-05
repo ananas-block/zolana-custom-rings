@@ -9,7 +9,6 @@ use bytemuck::Pod;
 use custom_ring_interface::{
     state::ROOT_HISTORY,
     storage::{Revision, Root, StorageError, StorageRegistry},
-    tracking::TrackingRegistry,
 };
 use sea_orm::{
     AccessMode, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction,
@@ -17,15 +16,9 @@ use sea_orm::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solana_address::Address;
-use zolana_ring_indexer::tree::{
-    IndexedLeaf, IndexedRecord, MemberRecord, NodePosition, TrackingRecord,
-};
+use zolana_ring_indexer::tree::{IndexedLeaf, IndexedRecord, MemberRecord, NodePosition};
 
 use crate::{block::BlockMetadata, indexer::Quarantine};
-
-mod tracking;
-
-pub(crate) use tracking::{AppliedRevision, Enrollment, EnrollmentRevision};
 
 /// A read takes each row's newest version at or below `version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,8 +68,6 @@ impl RingCursor {
 pub(crate) struct BlockUndo {
     #[serde(default)]
     pub storage: Vec<StorageUndo>,
-    #[serde(default)]
-    pub tracking: Vec<TrackingUndo>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,36 +110,6 @@ impl StoredLeaf for MemberRecord {
     }
 }
 
-impl StoredLeaf for TrackingRecord {
-    const TABLE: &'static str = "tracking_records";
-    const COLUMNS: &'static str =
-        "member, next_member, nullifier_pk, ct_hash, viewing_u, revision, list_tag";
-
-    fn from_row(row: &QueryResult) -> Result<Self> {
-        Ok(Self {
-            member: field(row, "member")?,
-            next: field(row, "next_member")?,
-            nullifier_pk: field(row, "nullifier_pk")?,
-            ct_hash: field(row, "ct_hash")?,
-            viewing_u: field(row, "viewing_u")?,
-            revision: uint(row, "revision")?,
-            list_tag: field(row, "list_tag")?,
-        })
-    }
-
-    fn values(&self) -> Result<Vec<Value>> {
-        Ok(vec![
-            bytes(&self.member),
-            bytes(&self.next),
-            bytes(&self.nullifier_pk),
-            bytes(&self.ct_hash),
-            bytes(&self.viewing_u),
-            int(self.revision)?,
-            bytes(&self.list_tag),
-        ])
-    }
-}
-
 /// A registry account the projection mirrors, one state table and one leaf table per kind.
 pub(crate) trait ProjectedAccount: Pod + Eq + Send + Sync {
     type Leaf: StoredLeaf;
@@ -181,27 +142,6 @@ impl ProjectedAccount for StorageRegistry {
     }
 }
 
-impl ProjectedAccount for TrackingRegistry {
-    type Leaf = TrackingRecord;
-    const STATES: &'static str = "tracking_registries";
-
-    fn from_image(data: &[u8]) -> Option<&Self> {
-        Self::from_data(data)
-    }
-
-    fn roots(&self) -> &[Root; ROOT_HISTORY] {
-        &self.roots
-    }
-
-    fn root_at(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
-        self.root(revision, slot)
-    }
-
-    fn leaves(&self) -> u32 {
-        self.next_index()
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "A: ProjectedAccount", deserialize = "A: ProjectedAccount"))]
 pub(crate) struct RegistryState<A> {
@@ -216,7 +156,6 @@ pub(crate) struct RegistryState<A> {
 }
 
 pub(crate) type StorageState = RegistryState<StorageRegistry>;
-pub(crate) type TrackingState = RegistryState<TrackingRegistry>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StorageRoot {
@@ -252,7 +191,6 @@ pub(crate) struct RegistryUndo<A> {
 }
 
 pub(crate) type StorageUndo = RegistryUndo<StorageRegistry>;
-pub(crate) type TrackingUndo = RegistryUndo<TrackingRegistry>;
 
 /// Lookups read every table from one Postgres snapshot.
 pub(crate) async fn begin_read(
@@ -317,11 +255,7 @@ pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) 
     for undo in journal.undo.storage.iter().rev() {
         StorageStore::new(tx, undo.registry).restore(undo).await?;
     }
-    for undo in journal.undo.tracking.iter().rev() {
-        TrackingStore::new(tx, undo.registry).restore(undo).await?;
-    }
     let slot = vec![int(journal.metadata.slot)?];
-    tracking::rollback_slot(tx, journal.metadata.slot).await?;
     exec(tx, "DELETE FROM ring_blocks WHERE slot=$1", slot).await?;
     cursor.tip = journal.previous_tip;
     cursor.scanned_slot = cursor.tip_slot();
@@ -498,13 +432,6 @@ pub(crate) struct ProjectedStore<'c, C, A: ProjectedAccount> {
 }
 
 pub(crate) type StorageStore<'c, C> = ProjectedStore<'c, C, StorageRegistry>;
-pub(crate) type TrackingStore<'c, C> = ProjectedStore<'c, C, TrackingRegistry>;
-
-impl<C: ConnectionTrait> StorageStore<'_, C> {
-    pub async fn tracking_state(&self, registry: [u8; 32]) -> Result<Option<TrackingState>> {
-        TrackingStore::new(self.tree.conn, registry).state().await
-    }
-}
 
 impl<'c, C: ConnectionTrait, A: ProjectedAccount> ProjectedStore<'c, C, A> {
     pub fn new(conn: &'c C, registry: [u8; 32]) -> Self {
