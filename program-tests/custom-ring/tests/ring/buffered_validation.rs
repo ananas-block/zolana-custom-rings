@@ -26,7 +26,7 @@ use spr_transaction::Mint;
 use zolana_ring_client::ring_event_origin_in;
 use zolana_ring_member_registry::RecordTree;
 
-const KEY: RingCircuit = RingCircuit::Transfer {
+pub(super) const KEY: RingCircuit = RingCircuit::Transfer {
     outputs: 16,
     inputs: 5,
     withdrawals: 8,
@@ -299,7 +299,7 @@ fn buffered_validation_settles_the_oversized_frame_and_refuses_changes_and_a_res
         rail: RingRail::Anonymous,
         policy: &policy,
     }
-    .check("6360 byte fixture")?;
+    .check("buffered data fixture")?;
     let data = frame(&inline, RingRail::Anonymous)?;
     ensure!(data.has_data, "the frame carries no data tail");
     assert_eq!(

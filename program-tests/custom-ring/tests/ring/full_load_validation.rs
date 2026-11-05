@@ -3,7 +3,7 @@
 use std::{convert::Infallible, net::Ipv4Addr, sync::Arc};
 
 use super::{
-    buffered_validation::finalized_transaction,
+    buffered_validation::{finalized_transaction, KEY as FULL_LOAD_KEY},
     one_key::{
         context, newest_root, own_tree, tracking_tree, AccountEdit, FrameReport, Landed, NoteSeed,
         Seeded, SeededIndexer, SettledState,
@@ -15,8 +15,9 @@ use custom_ring_interface::{
     PolicyWithdrawal, FRAME_BUFFER_HEADER_LEN,
 };
 use custom_ring_sdk::{
-    ApprovalLimit, CoSignerApproval, CoSignerRule, CustomRingConfig, ExactApproval,
-    MessageMismatch, RelaySent, RingRelay, RingSubmission, SetCoSigner, SettledSubmission,
+    ApplicationData, ApprovalLimit, CoSignerApproval, CoSignerRule, CustomRingConfig,
+    ExactApproval, MessageMismatch, OwnerApproval, PendingSignature, RelaySent, RelayTransferTerms,
+    RingRelay, RingSubmission, SetCoSigner, SettledSubmission, SlotOpening,
 };
 use custom_ring_test_validator::{
     policy::{CuratedRings, RELEASED},
@@ -44,7 +45,7 @@ use spr_program::instruction::TransactSolTransferAccounts;
 use spr_transaction::Mint;
 use zolana_ring_client::{
     ring_event_origin_in,
-    rpc::{GetRelayStatusRequest, RelayOperation, RelayStatus},
+    rpc::{GetRelayStatusRequest, RelayId, RelayOperation, RelayStatus},
     RingIndexer,
 };
 use zolana_ring_indexer::{
@@ -66,6 +67,12 @@ const EXIT: u64 = SPENT_TOTAL - PAYMENTS as u64 * PAID - LEGS as u64 * LEG;
 const PRIORITY_FEE: u64 = 1_000;
 const DESTINATION_FUNDING: u64 = 1_000_000;
 const RING_DATA_HASH: [u8; 32] = field_value(0x42);
+/// One submission and three relay legs spend their own notes.
+const FIXTURES: usize = 4;
+/// The data owner's payments carrying an application hash, a third pays it with none.
+const DATA_OUTPUTS: usize = 2;
+const DATA_OWNER_SLOT: usize = 1;
+const APP_DATA: &[u8] = b"full load data output";
 
 const fn field_value(byte: u8) -> [u8; 32] {
     let mut value = [0; 32];
@@ -218,6 +225,8 @@ struct FullLoad<'a> {
     payer: Address,
     notes: &'a [WalletUtxo],
     destination: Address,
+    /// Payments from `DATA_OWNER_SLOT` carrying an application hash, each makes its owner a public signer.
+    data_outputs: usize,
 }
 
 impl<'a> FullLoad<'a> {
@@ -248,7 +257,13 @@ impl<'a> FullLoad<'a> {
         })
         .with_interface_transfer_accounts(settlements)
         .with_anonymous_signer(&self.sender.signing_key);
-        for recipient in self.recipients {
+        for (slot, recipient) in self.recipients.iter().enumerate() {
+            let application = (DATA_OWNER_SLOT..DATA_OWNER_SLOT + self.data_outputs)
+                .contains(&slot)
+                .then(|| ApplicationData {
+                    hash: field_value(0x50 + slot as u8),
+                    bytes: APP_DATA.to_vec(),
+                });
             transfer = transfer.with_payment(custom_ring_sdk::AnonymousPayment {
                 to: ring_address(recipient, ring)?,
                 asset: Mint::SOL,
@@ -256,7 +271,7 @@ impl<'a> FullLoad<'a> {
                 reply: None,
                 data: custom_ring_sdk::NoteData {
                     ring_data_hash: Some(RING_DATA_HASH),
-                    application: None,
+                    application,
                 },
             })?;
         }
@@ -282,6 +297,8 @@ struct Settlement<'a> {
     writer: Address,
     signature: Signature,
     before: &'a Account,
+    /// The first run entry's proved count, the frame carries none at zero.
+    data_count: Option<u8>,
 }
 
 impl Settlement<'_> {
@@ -307,6 +324,21 @@ impl Settlement<'_> {
         let (_, body) = frame.split_first().context("a tagged frame")?;
         let data = RingTransactData::parse(body, RingRail::Anonymous)?.into_data();
         ensure!(data.has_data, "{} carries no data tail", self.label);
+        let selected = data.transfer_circuit(LEGS)?;
+        ensure!(
+            selected == FULL_LOAD_KEY,
+            "{} proved {selected:?}, the narrow row holds its reads",
+            self.label
+        );
+        let proved = data
+            .extensions
+            .signer_data_counts
+            .map(|counts| counts.count(0));
+        ensure!(
+            proved == self.data_count,
+            "{} proves data count {proved:?}",
+            self.label
+        );
         let digest = data.extensions.approval_totals.copied();
         ensure!(
             match self.approval {
@@ -373,6 +405,21 @@ impl Settlement<'_> {
             "{} opened no data hashes",
             self.label
         );
+        let data_outputs = audited
+            .outputs
+            .iter()
+            .filter(|output| {
+                matches!(
+                    &output.opening,
+                    OutputOpening::Ring { utxo, .. } if utxo.data_hash != [0; 32]
+                )
+            })
+            .count();
+        ensure!(
+            data_outputs == usize::from(self.data_count.unwrap_or_default()),
+            "{} audits {data_outputs} data outputs",
+            self.label
+        );
         println!(
             "{}: settled and audited after its buffer closed",
             self.label
@@ -395,6 +442,141 @@ struct RelayLeg<'a> {
     recipients: &'a [ShieldedKeypair],
     notes: &'a [WalletUtxo],
     destination: Address,
+    /// Signs for its data outputs beside the co-signer, its terms must open as many as the proof counts.
+    data_owner: Option<&'a ShieldedKeypair>,
+}
+
+/// A relay awaiting signatures, a refusal must leave it and the tree as they stand.
+struct HeldRelay<'a> {
+    env: &'a TestEnv,
+    label: &'a str,
+    ring_rpc: &'a RelayedRingRpc,
+    relay_id: &'a RelayId,
+    before: &'a Account,
+}
+
+impl HeldRelay<'_> {
+    fn refused(
+        &self,
+        case: &str,
+        verdict: Result<RelayStatus, RingError>,
+        expected: MessageMismatch,
+    ) -> Result<()> {
+        let env = self.env;
+        ensure!(
+            matches!(&verdict, Err(RingError::RelayMessage(found)) if *found == expected),
+            "{} {case} reached {:?}",
+            self.label,
+            verdict.map(|_| ())
+        );
+        self.awaiting(case)?;
+        ensure!(
+            fetch_account(env.client.rpc(), &env.tree)? == *self.before,
+            "{} {case} moved the tree",
+            self.label
+        );
+        println!("{}: {case} refused, state unchanged", self.label);
+        Ok(())
+    }
+
+    fn awaiting(&self, case: &str) -> Result<()> {
+        let status = self
+            .env
+            .run(self.ring_rpc.relay.get_relay_status(GetRelayStatusRequest {
+                relay_id: self.relay_id.clone(),
+            }))?;
+        ensure!(
+            matches!(status, RelayStatus::AwaitingSignature),
+            "{} {case} moved the relay to {status:?}",
+            self.label
+        );
+        Ok(())
+    }
+}
+
+/// What the sealing wallet hands one data owner, and the terms that must not earn its signature.
+struct DataTerms<'a> {
+    held: &'a HeldRelay<'a>,
+    pending: &'a PendingSignature,
+    owner: &'a ShieldedKeypair,
+    config: &'a CustomRingConfig,
+}
+
+impl DataTerms<'_> {
+    fn approval(&self, terms: RelayTransferTerms) -> PendingSignature {
+        OwnerApproval {
+            relay_id: self.held.relay_id.clone(),
+            message: self.pending.message().to_vec(),
+            terms,
+            config: self.config,
+            known_notes: &[],
+        }
+        .pending()
+    }
+
+    fn sign(&self, terms: RelayTransferTerms) -> Result<RelayStatus, RingError> {
+        let env = self.held.env;
+        env.run(self.approval(terms).sign_on_chain(
+            &self.held.ring_rpc.relay,
+            env.client.as_async(),
+            self.owner,
+        ))
+    }
+
+    /// The honest terms, after each altered set of openings fails on the proved count or its slot.
+    fn checked(&self) -> Result<RelayTransferTerms> {
+        let terms = self
+            .pending
+            .transfer_terms(self.owner.pubkey())
+            .context("the data owner's terms")?
+            .clone();
+        let (data, ordinary): (Vec<SlotOpening>, Vec<SlotOpening>) = terms
+            .slots
+            .iter()
+            .cloned()
+            .partition(|opening| opening.data_hash.0 != [0; 32]);
+        let ([first, second], [payment]) = (data.as_slice(), ordinary.as_slice()) else {
+            bail!(
+                "the data owner holds {} and {} slots",
+                data.len(),
+                ordinary.len()
+            );
+        };
+        let claiming = SlotOpening {
+            data_hash: second.data_hash.clone(),
+            ..payment.clone()
+        };
+        let cases = [
+            (
+                "an omitted data output",
+                vec![first.clone()],
+                MessageMismatch::DataOutputCount,
+            ),
+            (
+                "a repeated data opening",
+                vec![first.clone(), first.clone()],
+                MessageMismatch::DataOutputCount,
+            ),
+            (
+                "an ordinary payment standing in for a data output",
+                vec![first.clone(), payment.clone()],
+                MessageMismatch::DataOutputCount,
+            ),
+            (
+                "an ordinary opening claiming a data hash",
+                vec![first.clone(), claiming],
+                MessageMismatch::Recipients,
+            ),
+        ];
+        for (case, slots, expected) in cases {
+            let altered = RelayTransferTerms {
+                slots,
+                ..terms.clone()
+            };
+            self.held.refused(case, self.sign(altered), expected)?;
+        }
+        Ok(terms)
+    }
 }
 
 impl RelayLeg<'_> {
@@ -408,6 +590,7 @@ impl RelayLeg<'_> {
             payer: ring_rpc.fee_payer,
             notes: self.notes,
             destination: self.destination,
+            data_outputs: self.data_owner.map_or(0, |_| DATA_OUTPUTS),
         }
         .transfer()?
         .with_co_signer(self.co_signer.pubkey());
@@ -421,6 +604,13 @@ impl RelayLeg<'_> {
             bail!("{} asked no co-signature", self.label);
         };
         let relay_id = pending.relay_id().clone();
+        let held = HeldRelay {
+            env,
+            label: self.label,
+            ring_rpc,
+            relay_id: &relay_id,
+            before: &before,
+        };
         let holding = |rule| {
             CoSignerApproval {
                 relay_id: relay_id.clone(),
@@ -468,39 +658,30 @@ impl RelayLeg<'_> {
                     env.client.as_async(),
                     self.co_signer,
                 ));
-                ensure!(
-                    matches!(
-                        refused,
-                        Err(RingError::RelayMessage(
-                            MessageMismatch::FalseApprovalOpening
-                        ))
-                    ),
-                    "a false opening reached {:?}",
-                    refused.map(|_| ())
-                );
-                let status = env.run(ring_rpc.relay.get_relay_status(GetRelayStatusRequest {
-                    relay_id: relay_id.clone(),
-                }))?;
-                ensure!(
-                    matches!(status, RelayStatus::AwaitingSignature),
-                    "a false opening moved the relay to {status:?}"
-                );
-                ensure!(
-                    fetch_account(env.client.rpc(), &env.tree)? == before,
-                    "a false opening moved the tree"
-                );
-                println!(
-                    "{}: false opening refused by the co-signer, state unchanged",
-                    self.label
-                );
+                held.refused(
+                    "a false opening",
+                    refused,
+                    MessageMismatch::FalseApprovalOpening,
+                )?;
                 exact(opening)
             }
         };
+        let data_terms = self.data_owner.map(|owner| DataTerms {
+            held: &held,
+            pending: &pending,
+            owner,
+            config: self.config,
+        });
+        let owner_terms = data_terms.as_ref().map(DataTerms::checked).transpose()?;
         env.run(holding(rule).sign_on_chain(
             &ring_rpc.relay,
             env.client.as_async(),
             self.co_signer,
         ))?;
+        if let (Some(data_terms), Some(terms)) = (&data_terms, owner_terms) {
+            held.awaiting("the co-signer alone")?;
+            data_terms.sign(terms)?;
+        }
         let signature = ring_rpc.confirmed(env, &relay_id)?;
         let frame_len = Settlement {
             env,
@@ -512,6 +693,7 @@ impl RelayLeg<'_> {
             writer: ring_rpc.fee_payer,
             signature,
             before: &before,
+            data_count: self.data_owner.map(|_| DATA_OUTPUTS as u8),
         }
         .check()?;
         let rent = env
@@ -568,7 +750,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
     env.fund(destination, DESTINATION_FUNDING)?;
     env.fund(
         Address::new_from_array(SOL_INTERFACE),
-        3 * LEGS as u64 * LEG,
+        FIXTURES as u64 * LEGS as u64 * LEG,
     )?;
     let rows = std::iter::once(&sender)
         .chain(&recipients)
@@ -601,10 +783,13 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         env: &env,
         ring,
         owner: &sender,
-        amounts: &[NOTE; 3 * SPENT_NOTES],
+        amounts: &[NOTE; FIXTURES * SPENT_NOTES],
     }
     .write()?;
-    println!("seeded: own, curator and tracking roots, fifteen unbacked ring notes, a funded SOL interface, throwaway key setup");
+    println!(
+        "seeded: own, curator and tracking roots, {} unbacked ring notes, a funded SOL interface, throwaway key setup",
+        notes.len()
+    );
 
     let indexer = SeededHttp::serve(SeededService {
         seeded: SeededIndexer {
@@ -647,6 +832,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         payer: writer.pubkey(),
         notes: &notes[..SPENT_NOTES],
         destination,
+        data_outputs: 0,
     }
     .transfer()?
     .with_co_signer(co_signer.pubkey());
@@ -668,6 +854,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         writer: writer.pubkey(),
         signature,
         before: &before,
+        data_count: None,
     }
     .check()?;
 
@@ -692,6 +879,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         recipients: &recipients,
         notes,
         destination,
+        data_owner: None,
     };
     relay_leg(
         "relay threshold",
@@ -702,8 +890,21 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
     relay_leg(
         "relay exact",
         ApprovalRead::Opening,
-        &notes[2 * SPENT_NOTES..],
+        &notes[2 * SPENT_NOTES..3 * SPENT_NOTES],
     )
+    .run()?;
+    let data_owner = recipients[DATA_OWNER_SLOT].clone();
+    let mut data_recipients = recipients.clone();
+    data_recipients[DATA_OWNER_SLOT..=DATA_OWNER_SLOT + DATA_OUTPUTS].fill(data_owner.clone());
+    RelayLeg {
+        recipients: &data_recipients,
+        data_owner: Some(&data_owner),
+        ..relay_leg(
+            "relay data owner",
+            ApprovalRead::ProvenMask,
+            &notes[3 * SPENT_NOTES..],
+        )
+    }
     .run()?;
 
     let mut wallet = RingWallet::new(&recipients[0], env.ring_assets()?, ring.program_id());
@@ -713,9 +914,19 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
             .unspent()
             .filter(|held| held.utxo.amount == PAID && held.ring_data_hash == Some(RING_DATA_HASH))
             .count()
-            == 3,
+            == FIXTURES,
         "the recipient rebuilt another note count"
     );
-    println!("recipient: reconstructed every paid note");
+    let mut owner_wallet = RingWallet::new(&data_owner, env.ring_assets()?, ring.program_id());
+    owner_wallet.sync(&env)?;
+    ensure!(
+        owner_wallet
+            .unspent()
+            .filter(|held| held.data_hash.is_some_and(|hash| hash != [0; 32]))
+            .count()
+            == DATA_OUTPUTS,
+        "the data owner rebuilt another data note count"
+    );
+    println!("recipient and data owner: reconstructed every paid note");
     Ok(())
 }
