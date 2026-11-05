@@ -116,7 +116,10 @@ pub use crate::{
         RelayFunderTerms, RelayTransferTerms, SlotOpening, TokenAccountCreate, VerifiedMessage,
     },
     select::{select_merge_where, select_spend_where},
-    storage::{InitializeStorage, StorageApplyProof, UpdateStorage, UpdateStorageAuthority},
+    storage::{
+        InitializeStorage, PrivateStorageWrite, ProvenPrivateWrite, SaltedOwnerWrite,
+        StorageApplyProof, UpdateStorage, UpdateStorageAuthority,
+    },
     submission::{
         live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,
     },

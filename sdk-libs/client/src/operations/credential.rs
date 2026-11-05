@@ -18,7 +18,7 @@ use custom_ring_interface::{
     credential::{owner_member, CredentialAuthority, CredentialSeed},
     domain,
     storage::StorageError,
-    AddressRootSelection, AuditCredential, CustomRingError,
+    AddressCheckpoint, AddressRootSelection, AuditCredential, CustomRingError,
 };
 use serde::{Deserialize, Serialize};
 use solana_account::Account;
@@ -53,6 +53,11 @@ use crate::{
     AuditError, SealedNullifierKey,
 };
 
+#[path = "address_inclusion.rs"]
+mod address_inclusion;
+
+pub use address_inclusion::{AddressActivation, AddressInclusion, AddressInclusions};
+
 /// Distinct nonzero members of one proof.
 #[must_use]
 pub struct CredentialReads<'a> {
@@ -67,6 +72,8 @@ pub struct CredentialSnapshot {
     pub openings: Vec<CredentialOpening>,
     /// The gaps' root, or the newest root of tree 0 without a gap.
     pub address_root: AddressRoot,
+    /// `address_root` as the program reads it from tree 0, for the statement's root selection.
+    pub address_checkpoint: AddressCheckpoint,
     /// Ascending distinct tree ids. Tree 0's newest root stands in without a present credential.
     pub state_roots: Vec<TreeRoot>,
 }
@@ -126,6 +133,16 @@ pub struct AddressRoot {
     pub root_index: u16,
     pub root: [u8; 32],
     pub sequence: u64,
+}
+
+impl AddressRoot {
+    fn held(root_index: u16, checkpoint: &AddressCheckpoint) -> Self {
+        Self {
+            root_index,
+            root: *checkpoint.root(),
+            sequence: checkpoint.sequence(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +237,14 @@ pub enum CredentialError {
     UnverifiedViewingKey,
     #[error("the credential seal opens to another key than the credential holds")]
     SealMismatch,
+    #[error("no applied tree 0 root holds credential address {address:?} yet, the write waits")]
+    AddressQueued { address: [u8; 32] },
+    #[error("the owner of write {write_index} holds no credential")]
+    WriteOwnerNotEnrolled { write_index: u8 },
+    #[error("write {write_index} is not the list key of its owner under the salt")]
+    ListKeyMismatch { write_index: u8 },
+    #[error("the salted owners name other write positions than the private writes")]
+    CredentialWritesMismatch,
 }
 
 /// Boxed so a caller's error enum stays small.
@@ -351,18 +376,38 @@ impl CredentialResolver {
 }
 
 impl PresentCredential {
-    /// The seal's pad alone does not bind the opened key, the credential's key must match.
     pub fn nullifier_key(&self, auditor: &X25519Keypair) -> Result<NullifierKey, CredentialError> {
-        let key = SealedNullifierKey {
-            eph_pk: X25519Pubkey::from_u(self.credential.eph_u)?,
-            ciphertext: self.credential.ciphertext,
-        }
-        .open(auditor)?;
-        match key.pubkey()? == self.credential.nullifier_pk {
-            true => Ok(key),
-            false => Err(CredentialError::SealMismatch),
-        }
+        open_credential(&self.credential, auditor).map(|secrets| secrets.nullifier_key)
     }
+}
+
+/// The nullifier key and list salt `Enroll` sealed to the auditor.
+pub struct CredentialSecrets {
+    pub nullifier_key: NullifierKey,
+    pub list_salt: [u8; 32],
+}
+
+/// The seal's pad alone binds neither opened value, each must match the credential's public hash of it.
+pub fn open_credential(
+    credential: &AuditCredential,
+    auditor: &X25519Keypair,
+) -> Result<CredentialSecrets, CredentialError> {
+    let sealed = SealedNullifierKey {
+        eph_pk: X25519Pubkey::from_u(credential.eph_u)?,
+        ciphertext: credential.ciphertext,
+    };
+    let nullifier_key = sealed.open(auditor)?;
+    if nullifier_key.pubkey()? != credential.nullifier_pk {
+        return Err(CredentialError::SealMismatch);
+    }
+    let list_salt = sealed.open_list_salt(auditor)?;
+    if domain::list_tag(&list_salt)? != credential.list_tag {
+        return Err(CredentialError::ListTagMismatch);
+    }
+    Ok(CredentialSecrets {
+        nullifier_key,
+        list_salt,
+    })
 }
 
 impl AbsentCredential {
@@ -583,10 +628,16 @@ impl CredentialReads<'_> {
                 address: address_tree,
             });
         }
-        let address_root = match gap_root {
-            Some(root) => accepted_address_root(account.nullifier_tree(), root)?,
-            None => newest_address_root(account.nullifier_tree())?,
+        let history = account.nullifier_tree();
+        let (root_index, address_checkpoint) = match gap_root {
+            Some(served) => (served.root_index, accepted_checkpoint(history, &served)?),
+            None => {
+                let newest = u16::try_from(history.get_root_index())
+                    .map_err(|_| CredentialError::AddressRootNotAccepted)?;
+                (newest, checkpoint_at(history, newest)?)
+            }
         };
+        let address_root = AddressRoot::held(root_index, &address_checkpoint);
         // 4. A frame needs a state root even when every opening proves absence.
         if state_roots.is_empty() {
             let root_index = account.utxo_tree().current_root_index();
@@ -610,6 +661,7 @@ impl CredentialReads<'_> {
                 .collect::<Option<_>>()
                 .ok_or(CredentialError::MalformedProof)?,
             address_root,
+            address_checkpoint,
             state_roots,
         })
     }
@@ -877,7 +929,8 @@ where
     if account.tree_id() != ADDRESS_TREE_ID {
         return Err(CredentialError::InvalidTree { address: tree });
     }
-    gap.root = accepted_address_root(account.nullifier_tree(), gap.root)?;
+    let checkpoint = accepted_checkpoint(account.nullifier_tree(), &gap.root)?;
+    gap.root = AddressRoot::held(gap.root.root_index, &checkpoint);
     Ok(CredentialLookup::Absent(Box::new(gap)))
 }
 
@@ -910,44 +963,29 @@ fn check_state_root(
     }
 }
 
-/// The served root with its sequence, read from the same history the program reads.
-fn accepted_address_root<const ZKP_BATCHES: usize>(
+/// The served root's checkpoint, read from the same history the program reads.
+fn accepted_checkpoint<const ZKP_BATCHES: usize>(
     tree: &NullifierTreeLayout<ZKP_BATCHES>,
-    served: AddressRoot,
-) -> Result<AddressRoot, CredentialError> {
-    let checkpoint = AddressRootSelection {
-        tree_id: ADDRESS_TREE_ID,
-        root_index: served.root_index,
-        history: tree,
-    }
-    .checkpoint()
-    .map_err(|_| CredentialError::AddressRootNotAccepted)?;
+    served: &AddressRoot,
+) -> Result<AddressCheckpoint, CredentialError> {
+    let checkpoint = checkpoint_at(tree, served.root_index)?;
     match *checkpoint.root() == served.root {
-        true => Ok(AddressRoot {
-            sequence: checkpoint.sequence(),
-            ..served
-        }),
+        true => Ok(checkpoint),
         false => Err(CredentialError::AddressRootNotAccepted),
     }
 }
 
-fn newest_address_root<const ZKP_BATCHES: usize>(
+fn checkpoint_at<const ZKP_BATCHES: usize>(
     tree: &NullifierTreeLayout<ZKP_BATCHES>,
-) -> Result<AddressRoot, CredentialError> {
-    let root_index = u16::try_from(tree.get_root_index())
-        .map_err(|_| CredentialError::AddressRootNotAccepted)?;
-    let checkpoint = AddressRootSelection {
+    root_index: u16,
+) -> Result<AddressCheckpoint, CredentialError> {
+    AddressRootSelection {
         tree_id: ADDRESS_TREE_ID,
         root_index,
         history: tree,
     }
     .checkpoint()
-    .map_err(|_| CredentialError::AddressRootNotAccepted)?;
-    Ok(AddressRoot {
-        root_index,
-        root: *checkpoint.root(),
-        sequence: checkpoint.sequence(),
-    })
+    .map_err(|_| CredentialError::AddressRootNotAccepted)
 }
 
 /// The one plaintext output carrying `address || Borsh(credential)` and the context it landed in.
@@ -1045,12 +1083,12 @@ mod tests {
 
     /// One account store and one indexer, a test passes it as Photon and as RPC.
     #[derive(Default)]
-    struct Ledger {
-        accounts: HashMap<Address, Account>,
+    pub(super) struct Ledger {
+        pub(super) accounts: HashMap<Address, Account>,
         enrollments: Vec<ShieldedTransaction>,
         continuation: Option<PaginationToken>,
         state_proofs: Vec<MerkleProof>,
-        gaps: Vec<NonInclusionProof>,
+        pub(super) gaps: Vec<NonInclusionProof>,
     }
 
     #[async_trait]
@@ -1251,7 +1289,7 @@ mod tests {
         }
     }
 
-    fn tree_bytes(tree_id: u16) -> Vec<u8> {
+    pub(super) fn tree_bytes(tree_id: u16) -> Vec<u8> {
         let mut data = vec![0; TreeAccount::account_size()];
         TreeAccount::init(
             &mut data,
@@ -1266,7 +1304,7 @@ mod tests {
         data
     }
 
-    fn spp_account(data: Vec<u8>) -> Account {
+    pub(super) fn spp_account(data: Vec<u8>) -> Account {
         Account {
             lamports: 1,
             data,
@@ -1395,6 +1433,18 @@ mod tests {
             credential.nullifier_pk
         );
         assert!(opened.nullifier_key(&X25519Keypair::new()).is_err());
+        assert_eq!(
+            open_credential(&credential, &auditor).unwrap().list_salt,
+            list_salt
+        );
+        let other_tag = AuditCredential {
+            list_tag: [1; 32],
+            ..credential
+        };
+        assert!(matches!(
+            open_credential(&other_tag, &auditor),
+            Err(CredentialError::ListTagMismatch)
+        ));
         let other_key = AuditCredential {
             nullifier_pk: NullifierKey::from_secret([9; 31]).pubkey().unwrap(),
             ..credential
