@@ -14,9 +14,9 @@ use custom_ring_interface::{
     policy_withdrawal_hash,
     storage::{Revision, Root, StorageRegistry},
     tracking::{TrackingAuthorization, TrackingRegistry},
-    verifying_key, RingProof, SignerSet, TransferBinding, TransferRoots, ANONYMOUS_PARTIES,
-    MAX_CPI_DATA_LEN, PROVING_KEY_SHA256S, REGISTER_KEY_CIPHERTEXT_LEN, STORAGE_PROGRAM_ID,
-    TAGGED_X25519_KEY_LEN,
+    verifying_key, DisclosureFormat, RingProof, SignerSet, TransferBinding, TransferRoots,
+    ANONYMOUS_PARTIES, MAX_CPI_DATA_LEN, PROVING_KEY_SHA256S, REGISTER_KEY_CIPHERTEXT_LEN,
+    STORAGE_PROGRAM_ID, TAGGED_X25519_KEY_LEN,
 };
 use custom_ring_test_validator::policy::RELEASED;
 use serde_json::Value;
@@ -51,6 +51,7 @@ use zolana_ring_member_registry::{
 };
 
 const KEY: RingCircuit = RingCircuit::Transfer {
+    format: DisclosureFormat::Standard,
     outputs: 2,
     inputs: 24,
     withdrawals: 4,
