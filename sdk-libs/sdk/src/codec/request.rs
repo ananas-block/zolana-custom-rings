@@ -790,8 +790,6 @@ pub(crate) struct DepositRequest<'a> {
     #[serde(with = "fe")]
     pub context_hash: [u8; 32],
     pub count: u32,
-    #[serde(skip_serializing_if = "core::ops::Not::not")]
-    pub anonymous: bool,
     #[serde(serialize_with = "fe::seq")]
     pub owner_pk_hashes: Vec<[u8; 32]>,
     #[serde(serialize_with = "fe::seq")]

@@ -148,7 +148,7 @@ func (s Spec) Build(t testing.TB) *Deposit {
 		t.Fatal(err)
 	}
 	d := &Deposit{Circuit: c, Keys: ringaudit.DefaultKeys(t), Tracking: ringregistry.NewTracking(t), spec: s}
-	c.ContextHash, c.Count, c.Anonymous = big.NewInt(0xabcdef), s.Count, ringtest.Bit(s.Mode == ModeAnonymous)
+	c.ContextHash, c.Count = big.NewInt(0xabcdef), s.Count
 	zeroUnreadInputs(&c.Policy)
 	c.Table, c.PolicyHash = ringpolicy.Table{}.Wires(), 0
 	lists := own
@@ -271,7 +271,7 @@ func (d *Deposit) Elements(t testing.TB) []*big.Int {
 	t.Helper()
 	c, ciphertext := d.Circuit, d.Ciphertext(t)
 	sealed := d.Keys.Sealed(t, ciphertext)
-	chain := []*big.Int{big.NewInt(shared.DepositStatementDomain), ringtest.AsBigInt(c.ContextHash), big.NewInt(int64(len(d.Notes))), ringtest.AsBigInt(c.Anonymous)}
+	chain := []*big.Int{big.NewInt(shared.DepositStatementDomain), ringtest.AsBigInt(c.ContextHash), big.NewInt(int64(len(d.Notes)))}
 	for i := range circuits.MaxDeposits {
 		if i >= len(d.Notes) {
 			chain = append(chain, big.NewInt(0), big.NewInt(0))

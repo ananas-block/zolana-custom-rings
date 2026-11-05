@@ -52,7 +52,6 @@ pub(crate) struct DepositVerification<'a> {
     pub program_id: &'a Address,
     pub tree: &'a Address,
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub anonymous: bool,
     pub tracking_root: &'a [u8; 32],
     pub registry: Option<DepositRegistry<'a>>,
     pub assets: &'a [DepositedAsset],
@@ -97,7 +96,6 @@ impl DepositVerification<'_> {
         .map_err(CustomRingError::from)?;
         let public_input = DepositPublicInput {
             context_hash: &context_hash,
-            anonymous: self.anonymous,
             owner_utxo_hashes: &owners[..count],
             ciphertexts: &ciphertexts[..count],
             assets: self.assets,

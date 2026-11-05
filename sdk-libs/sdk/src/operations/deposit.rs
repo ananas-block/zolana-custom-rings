@@ -773,10 +773,6 @@ impl DisclosedOwner {
             Self::Confidential(_) => Ok(()),
         }
     }
-
-    fn is_anonymous(self) -> bool {
-        matches!(self, Self::Anonymous(_))
-    }
 }
 
 impl DepositAssembly<'_> {
@@ -1007,7 +1003,6 @@ impl DepositDisclosure {
         let curator = records.curator();
         let public_input_hash = DepositPublicInput {
             context_hash: &self.context_hash,
-            anonymous: self.owner.is_anonymous(),
             owner_utxo_hashes: &[self.owner_utxo_hash],
             ciphertexts: &self.encryption.ciphertexts,
             assets: &[self.asset],
@@ -1038,7 +1033,6 @@ impl DepositDisclosure {
             public_input_hash,
             context_hash: self.context_hash,
             count: 1,
-            anonymous: self.owner.is_anonymous(),
             owner_pk_hashes: slotted(self.owner_pk_hash),
             owner_keys: slotted(self.owner.key()),
             nullifier_pks: slotted(self.nullifier_pk),

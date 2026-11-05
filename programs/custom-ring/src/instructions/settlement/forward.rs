@@ -16,8 +16,8 @@
 //! Read after `instructions/accounts/loader.rs`. Read before `instructions/settlement/deposit_audit.rs`.
 
 use custom_ring_interface::{
-    cosign::CoSignDemand, ring_deposit_assets, CustomRingError, DepositRegistry, RingMode,
-    RootRead, RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
+    cosign::CoSignDemand, ring_deposit_assets, CustomRingError, DepositRegistry, RootRead,
+    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
 };
 use pinocchio::{
     error::ProgramError,
@@ -48,7 +48,6 @@ pub fn process_deposit_ix(
 
     let mut iter = AccountIterator::new(accounts);
     let ring = load_policy(program_id, iter.next_account("ring")?)?;
-    let mode = ring.mode()?;
     let registries = RegistrySlots {
         ring: &ring,
         read: RootRead::deposit(&ring),
@@ -81,8 +80,6 @@ pub fn process_deposit_ix(
         .verify(requirement)?;
     }
     let spp_accounts = iter.remaining()?;
-    // The statement binds the mode bit, the deposit circuit reads it in no predicate.
-    let anonymous = mode == RingMode::Anonymous;
     // 4. The ring PDA sits in its SPP slot alone and the depositor SPP debits signs.
     let ring_auth =
         RingAuth::derive(program_id)?.check_slot(spp_accounts, RING_DEPOSIT_RING_CONFIG_INDEX)?;
@@ -102,7 +99,6 @@ pub fn process_deposit_ix(
         program_id,
         tree: tree.address(),
         auditor_pubkey: &ring.auditor_pubkey,
-        anonymous,
         tracking_root: &tracking_root,
         registry,
         assets: &assets,

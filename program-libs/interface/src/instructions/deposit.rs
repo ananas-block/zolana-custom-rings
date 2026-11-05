@@ -56,8 +56,6 @@ pub struct DepositRegistry<'a> {
 
 pub struct DepositPublicInput<'a> {
     pub context_hash: &'a [u8; 32],
-    /// Binds the proof to the ring's on-chain owner admission rule.
-    pub anonymous: bool,
     pub owner_utxo_hashes: &'a [[u8; 32]],
     pub ciphertexts: &'a [[u8; RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN]],
     pub assets: &'a [DepositedAsset],
@@ -105,7 +103,7 @@ impl DepositSubjects {
 }
 
 /// Every deposit slot padded to the maximum.
-pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 8;
+pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 3 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 8;
 
 impl DepositPublicInput<'_> {
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
@@ -126,17 +124,16 @@ impl DepositPublicInput<'_> {
         chain[0] = crate::domain::field(crate::domain::DEPOSIT_STATEMENT);
         chain[1] = *self.context_hash;
         chain[2] = right_align(&(count as u64).to_be_bytes());
-        chain[3] = right_align(&[u8::from(self.anonymous)]);
         for (slot, (owner, ciphertext)) in self
             .owner_utxo_hashes
             .iter()
             .zip(self.ciphertexts)
             .enumerate()
         {
-            chain[4 + slot * 2] = *owner;
-            chain[5 + slot * 2] = hash_bytes(ciphertext)?;
+            chain[3 + slot * 2] = *owner;
+            chain[4 + slot * 2] = hash_bytes(ciphertext)?;
         }
-        let keys = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 2;
+        let keys = 3 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 2;
         chain[keys..keys + 4].copy_from_slice(&[
             auditor_lo,
             auditor_hi,

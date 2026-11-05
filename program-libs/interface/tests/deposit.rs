@@ -49,7 +49,6 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
     let assets = [asset(10, 11), asset(12, 13)];
     let input = DepositPublicInput {
         context_hash: &[5; 32],
-        anonymous: false,
         owner_utxo_hashes: &owners,
         ciphertexts: &ciphertexts,
         assets: &assets,
@@ -69,10 +68,6 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
     for changed in [
         DepositPublicInput {
             context_hash: &[6; 32],
-            ..input
-        },
-        DepositPublicInput {
-            anonymous: true,
             ..input
         },
         DepositPublicInput {
@@ -141,7 +136,6 @@ fn asset(asset: u8, amount: u64) -> DepositedAsset {
 fn statement_rejects_empty_oversized_and_mismatched_batches() {
     let input = DepositPublicInput {
         context_hash: &[0; 32],
-        anonymous: false,
         owner_utxo_hashes: &[],
         ciphertexts: &[],
         assets: &[],
@@ -200,7 +194,6 @@ fn proof_prefix_size_matches_the_instruction_serializer() {
 #[derive(Deserialize)]
 struct VectorCase {
     context_hash: String,
-    anonymous: bool,
     records: Vec<String>,
     ciphertexts: Vec<String>,
     owner_utxo_hashes: Vec<String>,
@@ -267,7 +260,6 @@ fn solved_go_deposits_reach_the_program_statement_and_the_reader() {
         );
         let input = DepositPublicInput {
             context_hash: &array(&case.context_hash),
-            anonymous: case.anonymous,
             owner_utxo_hashes: &owners,
             ciphertexts: &ciphertexts,
             assets: &assets,
@@ -296,7 +288,6 @@ fn a_zero_tail_stays_injective_at_the_one_length() {
     let chain = |count: usize| {
         DepositPublicInput {
             context_hash: &[5; 32],
-            anonymous: false,
             owner_utxo_hashes: &owners[..count],
             ciphertexts: &ciphertexts[..count],
             assets: &assets[..count],
@@ -310,11 +301,12 @@ fn a_zero_tail_stays_injective_at_the_one_length() {
     };
     let hash = |elements: &[[u8; 32]]| create_hash_chain_4_from_slice(elements).unwrap();
     let one = chain(1);
-    assert_eq!(one.last(), Some(&[0; 32]));
+    assert_eq!(one[one.len() - 2..], [[0; 32]; 2]);
     let reference = hash(&one);
-    let padded = |zeros: usize| hash(&[one.to_vec(), vec![[0; 32]; zeros]].concat());
-    assert_eq!((padded(1), padded(2)), (reference, reference));
-    assert_ne!(padded(3), reference);
+    let cut = |dropped: usize| hash(&one[..one.len() - dropped]);
+    assert_eq!((cut(1), cut(2)), (reference, reference));
+    assert_ne!(cut(3), reference);
+    assert_ne!(hash(&[one.to_vec(), vec![[0; 32]]].concat()), reference);
     let mut moved = one;
     moved.last_mut().unwrap()[31] = 1;
     assert_ne!(hash(&moved), reference);

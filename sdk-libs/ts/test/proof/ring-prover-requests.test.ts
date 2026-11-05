@@ -184,7 +184,6 @@ function quadPath(index: unknown, flat: unknown): QuadPath {
   };
 }
 
-/** Go `RecordOpening` carries no member, the test names the subject it opens. */
 function table(item: Json): PolicyTableProofInputs {
   return {
     sources: list(item["sources"]).map((value) => {
@@ -503,7 +502,6 @@ function request(item: Json): RingProofRequest {
       capacity: ownerPkHashes.length,
       contextHash: field(item["contextHash"]),
       count: count(item["count"]),
-      anonymous: item["anonymous"] === undefined ? false : flag(item["anonymous"]),
       ownerPkHashes,
       ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)),
       nullifierPks: fields(item["nullifierPks"]),

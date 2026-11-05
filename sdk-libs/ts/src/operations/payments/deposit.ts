@@ -366,7 +366,6 @@ export class PreparedRingDeposit {
     try {
       const records = await this.#records(client, context);
       const { capacity, own, curator, trackingBound } = records;
-      const anonymous = this.#owner.kind === "anonymous";
       const commitment = this.#deposit.ownerUtxoHash;
       const pad = (values: readonly Bytes32[]): readonly Bytes32[] => [
         ...values,
@@ -384,7 +383,6 @@ export class PreparedRingDeposit {
         kind: "deposit",
         publicInputHash: ringDepositPublicInputHash({
           contextHash: this.#contextHash,
-          anonymous,
           ownerCommitments: [commitment],
           capsules: [this.#capsule],
           assets: [this.#asset],
@@ -402,7 +400,6 @@ export class PreparedRingDeposit {
         }),
         contextHash: this.#contextHash,
         count: 1,
-        anonymous,
         ownerPkHashes: pad([this.#ownerPkHash]),
         ownerKeys: pad([this.#owner.key]),
         nullifierPks: pad([this.#nullifierPk]),

@@ -310,7 +310,6 @@ type DepositParams struct {
 	RequestHead
 	ContextHash     Field     `json:"contextHash"`
 	Count           uint32    `json:"count"`
-	Anonymous       bool      `json:"anonymous,omitempty"`
 	OwnerPkHashes   []Field   `json:"ownerPkHashes"`
 	OwnerKeys       []Bytes   `json:"ownerKeys"`
 	NullifierPks    []Field   `json:"nullifierPks"`

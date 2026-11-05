@@ -55,7 +55,6 @@ type DepositCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	ContextHash     frontend.Variable
 	Count           frontend.Variable
-	Anonymous       frontend.Variable
 	OwnerPkHashes   []frontend.Variable
 	OwnerKeys       [][32]frontend.Variable
 	NullifierPks    []frontend.Variable
@@ -153,7 +152,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 
 // statement mirrors DepositPublicInput::elements in program-libs/interface/src/instructions/deposit.rs.
 func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, commitments []frontend.Variable, sealed shared.Sealed) []frontend.Variable {
-	chain := []frontend.Variable{shared.DepositStatementDomain, c.ContextHash, c.Count, c.Anonymous}
+	chain := []frontend.Variable{shared.DepositStatementDomain, c.ContextHash, c.Count}
 	ciphertexts := audit.SlotRegions{Stride: DepositRecordLen, Length: DepositRecordLen}.Hashes(api, sealed.Ciphertext, count.Active)
 	for i, commitment := range commitments {
 		chain = append(chain, api.Mul(count.Active[i], commitment), ciphertexts[i])

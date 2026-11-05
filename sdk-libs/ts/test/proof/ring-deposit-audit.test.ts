@@ -304,7 +304,7 @@ describe("deposit disclosure", () => {
     }
   });
 
-  it("binds the SPP wire, both addresses, the anonymous flag, the commitments and the ciphertext", () => {
+  it("binds the SPP wire, both addresses, the commitments and the ciphertext", () => {
     const auditor = X25519Keypair.generate();
     const sealed = sealRingDepositOpenings(
       [
@@ -322,7 +322,6 @@ describe("deposit disclosure", () => {
       expect(ringDepositContextHash(TREE, RING, Uint8Array.of(18, 1))).not.toEqual(contextHash);
       const input = {
         contextHash,
-        anonymous: false,
         ownerCommitments: [ownerUtxoHash(field(1n), field(2n))],
         capsules: sealed.capsules,
         assets: [{ asset: field(4n), amount: 5n }],
@@ -331,7 +330,6 @@ describe("deposit disclosure", () => {
       };
       const hash = ringDepositPublicInputHash(input);
       expect(ringDepositPublicInputHash({ ...input, trackingRoot: field(7n) })).not.toEqual(hash);
-      expect(ringDepositPublicInputHash({ ...input, anonymous: true })).not.toEqual(hash);
       expect(ringDepositPublicInputHash({ ...input, ownerCommitments: [field(3n)] })).not.toEqual(
         hash,
       );
@@ -645,7 +643,6 @@ describe("ring deposit builder", () => {
       const proven = await prepared.prove(client);
       const [request] = requests;
       if (request?.kind !== "deposit") throw new Error("expected one deposit request");
-      expect(request.anonymous).toBe(false);
       expect(request.ownerKeys[0]).toEqual(recipient.signingPublicKey().confidentialViewTag());
       expect(request.nullifierPks[0]).toEqual(recipient.nullifierPublicKey());
       const trackingRoot = trackingTree([row]).root;
@@ -766,7 +763,6 @@ describe("ring deposit builder", () => {
       const proven = await prepared.prove(client);
       const [request] = requests;
       if (request?.kind !== "deposit") throw new Error("expected one deposit request");
-      expect(request.anonymous).toBe(true);
       expect(request.ownerKeys[0]).toEqual(owner.signingPublicKey().ed25519());
       expect(request.ownRoot).toEqual(field(0n));
       expect(request.policyHash).toEqual(field(0n));

@@ -23,7 +23,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-const depositElements = 4 + 2*circuits.MaxDeposits + 4 + 4 + 2*circuits.MaxDeposits
+const depositElements = 3 + 2*circuits.MaxDeposits + 4 + 4 + 2*circuits.MaxDeposits
 
 const (
 	depositDefine = "circuits.(*DepositCircuit).Define"
@@ -220,9 +220,8 @@ func TestDepositStatementBindsEveryElement(t *testing.T) {
 	}
 }
 
-// HashChain4 pads zeros, every capacity holds one length and refuses a shorter chain.
+// HashChain4 pads zeros, every capacity holds one length and refuses a chain one round shorter.
 func TestDepositZeroTailStaysInjectiveAtTheOneLength(t *testing.T) {
-	zero := new(big.Int)
 	for _, capacity := range circuits.DepositCapacities {
 		for _, count := range []int{1, capacity} {
 			d := ringdeposit.Build(t, count, ringdeposit.ModeConfidential).Narrow(t, capacity)
@@ -233,19 +232,22 @@ func TestDepositZeroTailStaysInjectiveAtTheOneLength(t *testing.T) {
 			if tail := elements[len(elements)-1]; (count < circuits.MaxDeposits) != (tail.Sign() == 0) {
 				t.Fatalf("count %d ends the chain on %v", count, tail)
 			}
-			d.Circuit.PublicInputHash = spptest.MustHashChain4(t, elements[:len(elements)-1])
+			d.Circuit.PublicInputHash = spptest.MustHashChain4(t, elements[:len(elements)-3])
 			requireStatementRefused(t, d)
 		}
 	}
 	chain := ringdeposit.Build(t, 1, ringdeposit.ModeConfidential).Elements(t)
 	reference := spptest.MustHashChain4(t, chain)
-	for _, padded := range [][]*big.Int{append(slices.Clone(chain), zero), append(slices.Clone(chain), zero, zero)} {
-		if spptest.MustHashChain4(t, padded).Cmp(reference) != 0 {
+	for _, dropped := range []int{1, 2} {
+		if spptest.MustHashChain4(t, chain[:len(chain)-dropped]).Cmp(reference) != 0 {
 			t.Fatal("the zero tail no longer pads")
 		}
 	}
-	if spptest.MustHashChain4(t, append(slices.Clone(chain), zero, zero, zero)).Cmp(reference) == 0 {
-		t.Fatal("a third zero opens a new round")
+	if spptest.MustHashChain4(t, chain[:len(chain)-3]).Cmp(reference) == 0 {
+		t.Fatal("a dropped round moves the hash")
+	}
+	if spptest.MustHashChain4(t, append(slices.Clone(chain), new(big.Int))).Cmp(reference) == 0 {
+		t.Fatal("an appended zero opens a new round")
 	}
 	moved := slices.Clone(chain)
 	moved[len(moved)-1] = big.NewInt(1)
@@ -295,7 +297,6 @@ func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 	type vectorCase struct {
 		Name            string   `json:"name"`
 		ContextHash     string   `json:"context_hash"`
-		Anonymous       bool     `json:"anonymous"`
 		Records         []string `json:"records"`
 		Ciphertexts     []string `json:"ciphertexts"`
 		OwnerUtxoHashes []string `json:"owner_utxo_hashes"`
@@ -327,7 +328,7 @@ func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 		auditor, eph := d.Keys.AuditorPk(), d.Keys.EphPk()
 		tagged := ringprotocol.Tagged(auditor[:])
 		v := vectorCase{
-			Name: tc.name, ContextHash: ringtest.FieldHex(ringtest.AsBigInt(c.ContextHash)), Anonymous: tc.spec.Mode == ringdeposit.ModeAnonymous,
+			Name: tc.name, ContextHash: ringtest.FieldHex(ringtest.AsBigInt(c.ContextHash)),
 			AuditorPubkey: hex.EncodeToString(tagged[:]), EphPk: hex.EncodeToString(eph[:]),
 			TrackingRoot: ringtest.FieldHex(ringtest.AsBigInt(c.TrackingRoot)), OwnRoot: ringtest.FieldHex(ringtest.AsBigInt(c.OwnRoot)), CuratorRoot: ringtest.FieldHex(ringtest.AsBigInt(c.CuratorRoot)), PolicyHash: ringtest.FieldHex(ringtest.AsBigInt(c.PolicyHash)),
 			PublicInputHash: ringtest.FieldHex(ringtest.AsBigInt(c.PublicInputHash)),

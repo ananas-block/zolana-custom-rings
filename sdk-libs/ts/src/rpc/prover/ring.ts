@@ -259,7 +259,6 @@ export interface DepositProofRequest extends TrackingProofInputs, PolicyProofInp
   readonly capacity: number;
   readonly contextHash: Bytes32;
   readonly count: number;
-  readonly anonymous: boolean;
   readonly ownerPkHashes: readonly Bytes32[];
   readonly ownerKeys: readonly Bytes32[];
   readonly nullifierPks: readonly Bytes32[];
@@ -400,7 +399,6 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ...head,
         contextHash: field(request.contextHash, "contextHash"),
         count: integer(request.count, "count", 1, capacity),
-        ...(flag(request.anonymous) ? { anonymous: true } : {}),
         ownerPkHashes: fields(request.ownerPkHashes, capacity, "ownerPkHashes"),
         ownerKeys: sized(request.ownerKeys, capacity, "ownerKeys").map((key, i) =>
           hexBytes(key, 32, `ownerKeys[${i}]`),

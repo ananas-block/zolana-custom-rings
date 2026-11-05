@@ -2,6 +2,7 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `DepositProofRequest` and `ringDepositPublicInputHash` drop `anonymous`, the deposit statement no longer carries it.
 - `exitsBitmap`, `bodilessBitmap` and `P256ReaderKey.toUncompressed` are gone → read the frame through `RingTransactData.parse`.
 - `ring-advanced` exports the merge settings and storage apply proof input codecs and `isRingAuthorityShape`.
 - `PreparedRingDeposit.prepareRelay` takes `depositorSigner` and `prepareRingMergeRelay` takes `signer`, each signs a digest of the proof inputs into the intent as `depositorSignature` or `ownerSignature`, and Ring RPC refuses an unsigned request before proving. `depositRequestDigest` and `mergeRequestDigest` name those digests, and the refusals add `depositorSignature`.

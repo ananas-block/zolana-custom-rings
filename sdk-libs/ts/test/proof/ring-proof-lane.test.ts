@@ -336,7 +336,6 @@ describe("deposit.json", () => {
   type Case = Readonly<{
     name: string;
     context_hash: string;
-    anonymous: boolean;
     ciphertexts: readonly string[];
     owner_utxo_hashes: readonly string[];
     assets: readonly string[];
@@ -355,7 +354,6 @@ describe("deposit.json", () => {
   it.each(cases.map((entry) => [entry.name, entry] as const))("%s", (_, entry) => {
     const elements = depositStatementElements({
       contextHash: field(entry.context_hash),
-      anonymous: entry.anonymous,
       ownerUtxoHashes: entry.owner_utxo_hashes.map(field),
       ciphertexts: entry.ciphertexts.map(field),
       assets: entry.assets.map((asset, slot) => ({

@@ -553,7 +553,6 @@ mod tests {
             .collect();
         let hash = custom_ring_interface::DepositPublicInput {
             context_hash: &hex_field(&request["contextHash"]),
-            anonymous: request["anonymous"].as_u64().unwrap_or(0) != 0,
             owner_utxo_hashes: &owners,
             ciphertexts: &sealed.ciphertexts,
             assets: &assets,

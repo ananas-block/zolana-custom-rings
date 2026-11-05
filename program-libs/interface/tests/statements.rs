@@ -149,7 +149,6 @@ struct DepositCase {
     tree: String,
     spp_data: String,
     context_hash: String,
-    anonymous: bool,
     owner_utxo_hashes: Vec<String>,
     ciphertexts: Vec<String>,
     auditor_pubkey: String,
@@ -572,7 +571,6 @@ fn compute_vectors() -> StatementVectors {
     ];
     let deposit = DepositPublicInput {
         context_hash: &context_hash,
-        anonymous: false,
         owner_utxo_hashes: &owners,
         ciphertexts: &ciphertexts,
         assets: &deposited,
@@ -593,7 +591,7 @@ fn compute_vectors() -> StatementVectors {
                       digest(ct) = Poseidon(u32 len(ct), HashChain4(pack_left31(ct))). Each \
                       envelope has the length of its stream layout. The deposit statement is HashChain4(elements) \
                       over CRDP, the context hash of the program id, tree and SPP data, the \
-                      count, the anonymous flag, each owner hash with its capsule ciphertext hash \
+                      count, each owner hash with its capsule ciphertext hash \
                       zero padded to 8 slots, both tagged keys packed, the tracking root, the \
                       registry root, the curator root, the policy hash, each asset hash with its amount zero \
                       padded to 8 slots. The transfer statements are HashChain4 over the \
@@ -662,7 +660,6 @@ fn compute_vectors() -> StatementVectors {
             tree: hex::encode(tree),
             spp_data: hex::encode(&spp_data),
             context_hash: hex::encode(context_hash),
-            anonymous: deposit.anonymous,
             owner_utxo_hashes: hexes(&owners),
             ciphertexts: ciphertexts.iter().map(hex::encode).collect(),
             auditor_pubkey: hex::encode(deposit.auditor_pk),

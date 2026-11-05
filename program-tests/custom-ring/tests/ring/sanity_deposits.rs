@@ -248,7 +248,6 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
                 })?;
         let statement = DepositPublicInput {
             context_hash: &context,
-            anonymous: false,
             owner_utxo_hashes: &commitments,
             ciphertexts: &encryption.ciphertexts,
             assets: &assets,
