@@ -81,10 +81,10 @@ export interface StorageRegistry {
   readonly nextIndex: number;
   /** Immutable, zero serves as a curator only. */
   readonly ringId: Bytes32;
-  /** Immutable, the zero address on a public source. */
-  readonly trackingRegistry: Address;
-  /** The pinned registry's newest revision at the last zero grace update, frames name no older tracking root. */
-  readonly trackingFloor: bigint;
+  /** Immutable, zero on a public source, a salted read requires the reading ring's id. */
+  readonly privateRingId: Bytes32;
+  /** Tree 0 address sequence, a salted read takes no address root below it. */
+  readonly absenceFloor: bigint;
   /** Newest first, `undefined` where the history holds no root. */
   readonly roots: readonly (StorageRegistryRoot | undefined)[];
 }
@@ -102,8 +102,6 @@ export interface RingPolicy {
   readonly createdSlot: bigint;
   /** The ring's own `StorageRegistry`, the zero address on an audit-only ring bound to none. */
   readonly records: Address;
-  /** Every read compares it, a forged registry would prove any wallet absent. */
-  readonly tracking: Address;
   /** Zero on an audit-only ring. */
   readonly policyHash: Bytes32;
   /** Rust `RingPolicy::has_policy`, a written `policyHash`. */
@@ -126,7 +124,7 @@ export const RING_CO_SIGNER_SIZE = 35;
 /** Rust `CoSignerCounts::CLASSES`. */
 const RING_COSIGN_CLASSES = [RING_COSIGN_TRANSFERS, RING_COSIGN_DEPOSITS, RING_COSIGN_WITHDRAWALS];
 export const RING_POLICY_DISCRIMINATOR = 15;
-export const RING_POLICY_SIZE = 1092;
+export const RING_POLICY_SIZE = 1060;
 export const STORAGE_REGISTRY_DISCRIMINATOR = 1;
 export const STORAGE_REGISTRY_SIZE = 1653;
 
@@ -166,7 +164,6 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
   const auditorPublicKey = auditorKey(reader.bytes(33, "auditorPubkey") as Bytes33);
   const createdSlot = reader.u64("createdSlot");
   const records = encodeBase58(reader.bytes(32, "records"));
-  const tracking = encodeBase58(reader.bytes(32, "tracking"));
   const policy = readPolicyFields(reader, "RING_POLICY_INVALID");
   reader.done();
   const classes = RING_COSIGN_CLASSES.reduce(
@@ -182,7 +179,6 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
     auditorPublicKey,
     createdSlot,
     records,
-    tracking,
     ...policy,
     hasPolicy: !equalBytes(policy.policyHash, ZERO_32),
   });
@@ -212,8 +208,8 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
   const graceSlots = reader.u64("graceSlots");
   const nextIndex = reader.u32("nextIndex");
   const ringId = reader.bytes(32, "ringId") as Bytes32;
-  const trackingRegistry = encodeBase58(reader.bytes(32, "trackingRegistry"));
-  const trackingFloor = reader.u64("trackingFloor");
+  const privateRingId = reader.bytes(32, "privateRingId") as Bytes32;
+  const absenceFloor = reader.u64("absenceFloor");
   const roots = Array.from({ length: ROOT_HISTORY }, () => {
     const hash = reader.bytes(32, "root.hash") as Bytes32;
     const revision = reader.u64("root.revision");
@@ -228,8 +224,8 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
     graceSlots,
     nextIndex,
     ringId,
-    trackingRegistry,
-    trackingFloor,
+    privateRingId,
+    absenceFloor,
     roots: Object.freeze(roots),
   });
 }

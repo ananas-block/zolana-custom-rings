@@ -6,7 +6,7 @@ import {
   bytesKey,
   rightAlign,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
+import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { poseidon } from "@heliuslabs/zolana/keypair";
 import { packDisclosure } from "../../crypto/audit/audit.js";
 import { u32Field } from "../../crypto/error.js";
@@ -24,6 +24,7 @@ import {
   type RingOutput,
 } from "../transaction/transact.js";
 import { N_PUBLIC_SLOTS } from "../transaction/spp.js";
+import type { CredentialRoots } from "../codec/credential-read.js";
 
 /** The values every transfer statement opens with, Rust `AuditHead`. */
 export interface AuditHead {
@@ -65,12 +66,12 @@ export interface SignerBinding {
   readonly chain: Bytes32;
 }
 
-/** Zero where the frame reads none, Rust `TransferRoots`. */
+/** Unread policy roots are zero, the credential table follows the key's `K`, Rust `TransferRoots`. */
 export interface TransferRoots {
   readonly policyHash: Bytes32;
   readonly ownRoot: Bytes32;
   readonly curatorRoot: Bytes32;
-  readonly trackingRoot: Bytes32;
+  readonly credentials: CredentialRoots;
 }
 
 /** One ring transfer's proof, Rust `TransferStatement`. */
@@ -119,22 +120,12 @@ export interface ApplyRecordsStatement {
   /** The chain past the last write. */
   readonly chainEnd: Bytes32;
   readonly count: bigint;
-}
-
-/** An application of named enrollments, Rust `ApplyEnrollmentsStatement`. */
-export type ApplyEnrollmentsStatement = ApplyRecordsStatement;
-
-/** The auditor envelope of an enrolled nullifier key, Rust `RegisterKeyStatement`. */
-export interface RegisterKeyStatement {
-  /** The tracking registry's. */
-  readonly ringId: Bytes32;
-  /** The owner identity of the signing member. */
-  readonly member: Bytes32;
-  readonly nullifierPk: Bytes32;
-  readonly listTag: Bytes32;
-  readonly auditorPubkey: Bytes33;
-  readonly ephU: Bytes32;
-  readonly ciphertext: Bytes64;
+  /** Bit `i` marks write `i` a private owner write the circuit proves a credential for. */
+  readonly credentialWrites: number;
+  /** The registry's `private_ring_id`, zero on a public source. */
+  readonly privateRingId: Bytes32;
+  /** `CredentialRoots.empty(writes)` when no write is private. */
+  readonly credentials: CredentialRoots;
 }
 
 export function transferStatementElements(statement: TransferStatement): readonly Bytes32[] {
@@ -188,7 +179,7 @@ export function transferStatementElements(statement: TransferStatement): readonl
     checkedBytes<Bytes32>(statement.roots.policyHash, 32, "policy hash"),
     checkedBytes<Bytes32>(statement.roots.ownRoot, 32, "own root"),
     checkedBytes<Bytes32>(statement.roots.curatorRoot, 32, "curator root"),
-    checkedBytes<Bytes32>(statement.roots.trackingRoot, 32, "tracking root"),
+    ...statement.roots.credentials.elements(),
     ...publicAssets.flatMap((asset, slot) => [
       checkedBytes<Bytes32>(asset, 32, "public asset"),
       checkedBytes<Bytes32>(publicAmounts[slot] as Bytes32, 32, "public amount"),
@@ -308,30 +299,15 @@ export function signerBinding(identities: readonly Bytes32[], slots: number): Si
   return Object.freeze({ count: unique.length, chain: filledChain(unique, slots) });
 }
 
-/** `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`. */
+/**
+ * `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count,
+ * credential_writes, private_ring_id, credential_owner, address_root, tree_id_i, root_i ...]`.
+ */
 export function applyRecordsStatementElements(
   statement: ApplyRecordsStatement,
 ): readonly Bytes32[] {
-  return applyStatementHead(RingDomain.applyRecords, statement);
-}
-
-/** `[CRTA, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`. */
-export function applyEnrollmentsStatementElements(
-  statement: ApplyEnrollmentsStatement,
-): readonly Bytes32[] {
-  return applyStatementHead(RingDomain.applyEnrollments, statement);
-}
-
-export function applyEnrollmentsStatementHash(statement: ApplyEnrollmentsStatement): Bytes32 {
-  return chain(applyEnrollmentsStatementElements(statement));
-}
-
-function applyStatementHead(
-  domain: RingDomain,
-  statement: ApplyEnrollmentsStatement,
-): readonly Bytes32[] {
   return [
-    domainField(domain),
+    domainField(RingDomain.applyRecords),
     checkedBytes<Bytes32>(statement.oldRoot, 32, "old root"),
     checkedBytes<Bytes32>(statement.newRoot, 32, "new root"),
     u64Field(BigInt(statement.oldNextIndex), "old next index", U32_MAX),
@@ -339,6 +315,9 @@ function applyStatementHead(
     checkedBytes<Bytes32>(statement.chainStart, 32, "chain start"),
     checkedBytes<Bytes32>(statement.chainEnd, 32, "chain end"),
     u64Field(statement.count, "count"),
+    u64Field(BigInt(statement.credentialWrites), "credential writes", U16_MAX),
+    checkedBytes<Bytes32>(statement.privateRingId, 32, "private ring id"),
+    ...statement.credentials.elements(),
   ];
 }
 
@@ -346,25 +325,8 @@ export function applyRecordsStatementHash(statement: ApplyRecordsStatement): Byt
   return chain(applyRecordsStatementElements(statement));
 }
 
-/** `[CRRG, ring_id, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`. */
-export function registerKeyStatementElements(statement: RegisterKeyStatement): readonly Bytes32[] {
-  return [
-    domainField(RingDomain.registerKey),
-    checkedBytes<Bytes32>(statement.ringId, 32, "ring id"),
-    checkedBytes<Bytes32>(statement.member, 32, "member"),
-    checkedBytes<Bytes32>(statement.nullifierPk, 32, "nullifier pk"),
-    checkedBytes<Bytes32>(statement.listTag, 32, "list tag"),
-    ...packedKey(checkedBytes<Bytes33>(statement.auditorPubkey, 33, "auditor pubkey")),
-    ...packedKey(taggedX25519(statement.ephU)),
-    hashBytes(checkedBytes<Bytes64>(statement.ciphertext, 64, "ciphertext")) as Bytes32,
-  ];
-}
-
-export function registerKeyStatementHash(statement: RegisterKeyStatement): Bytes32 {
-  return chain(registerKeyStatementElements(statement));
-}
-
 const ZERO_FIELD = new Uint8Array(32) as Bytes32;
+const U16_MAX = 0xffffn;
 const U32_MAX = 0xffff_ffffn;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 

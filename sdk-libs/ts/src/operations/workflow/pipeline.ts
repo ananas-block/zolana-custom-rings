@@ -543,7 +543,7 @@ async function assembleStagedTransfer<T>(
       },
       context,
     );
-    const noSpend = inputMapOf(inputs, layout).noteCount === 0;
+    const noSpend = inputMapOf(inputs, plan.layout).noteCount === 0;
     const coSignDemand = delegate
       ? NO_DEMAND
       : operationDemand({

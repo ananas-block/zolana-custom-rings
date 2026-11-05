@@ -39,6 +39,8 @@ import { STREAM_FIRST_COUNTER } from "../protocol/codec/ring-disclosure-layout.j
 import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
 import { ConfirmedDeposit } from "../protocol/transaction/origin.js";
+import type { CredentialRoots } from "../protocol/codec/credential-read.js";
+import { credentialCapacity } from "../protocol/proof/proving-keys.js";
 
 const PAYLOAD_LENGTH = RING_DEPOSIT_OPENING_LENGTH * RING_DEPOSIT_AUDIT_SLOTS;
 const ZERO = new Uint8Array(32) as Bytes32;
@@ -206,13 +208,15 @@ export interface DepositRegistry {
 /** Rust `DepositPublicInput`, the tagged keys as the statement packs them. */
 export interface DepositStatement {
   readonly contextHash: Bytes32;
+  /** `ringIdField` of the ring program, every credential address derives from it. */
+  readonly ringId: Bytes32;
   readonly ownerUtxoHashes: readonly Bytes32[];
   readonly ciphertexts: readonly Uint8Array[];
   readonly assets: readonly DepositedAsset[];
   readonly auditorPk: Bytes33;
   readonly ephPk: Bytes33;
-  /** Holds each output key to its tracking row or its absence. */
-  readonly trackingRoot: Bytes32;
+  /** Its capacity is the deposit key's, a key below the count cannot solve it. */
+  readonly credentials: CredentialRoots;
   readonly registry?: DepositRegistry;
 }
 
@@ -222,6 +226,8 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
   if (
     count < 1 ||
     count > RING_DEPOSIT_AUDIT_SLOTS ||
+    count > input.credentials.capacity ||
+    credentialCapacity({ family: "deposit", capacity: input.credentials.capacity }) === undefined ||
     input.ciphertexts.length !== count ||
     input.assets.length !== count ||
     input.ciphertexts.some((ciphertext) => ciphertext.length !== RING_DEPOSIT_OPENING_LENGTH)
@@ -229,7 +235,7 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     throw new RingError("RING_BUILD_DEPOSIT", { details: { reason: "deposit count" } });
   if (
     !isCanonicalField(input.contextHash) ||
-    !isCanonicalField(input.trackingRoot) ||
+    !isCanonicalField(input.ringId) ||
     !input.ownerUtxoHashes.every(isCanonicalField) ||
     !input.assets.every(
       ({ asset, amount }) => isCanonicalField(asset) && amount >= 0n && amount <= U64_MAX,
@@ -240,6 +246,7 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
   return Object.freeze([
     domainField(RingDomain.depositStatement),
     input.contextHash,
+    input.ringId,
     bigIntBytes(BigInt(count)) as Bytes32,
     ...Array.from({ length: RING_DEPOSIT_AUDIT_SLOTS }, (_, slot) => {
       const owner = input.ownerUtxoHashes[slot];
@@ -250,7 +257,7 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     }).flat(),
     ...pack33(input.auditorPk),
     ...pack33(input.ephPk),
-    input.trackingRoot,
+    ...input.credentials.elements(),
     registry?.ownRoot ?? ZERO,
     registry?.curatorRoot ?? ZERO,
     registry?.policyHash ?? ZERO,
@@ -271,7 +278,8 @@ export function ringDepositPublicInputHash(
     capsules: readonly RingDepositCapsule[];
     assets: readonly DepositedAsset[];
     auditorPublicKey: X25519PublicKey;
-    trackingRoot: Bytes32;
+    ringId: Bytes32;
+    credentials: CredentialRoots;
     registry?: DepositRegistry;
   }>,
 ): Bytes32 {
@@ -290,12 +298,13 @@ export function ringDepositPublicInputHash(
   return hashChain4(
     depositStatementElements({
       contextHash: input.contextHash,
+      ringId: input.ringId,
       ownerUtxoHashes: input.ownerCommitments,
       ciphertexts: input.capsules.map((capsule) => capsule.ciphertext),
       assets: input.assets,
       auditorPk: input.auditorPublicKey.toBytes(),
       ephPk: first.ephemeralPublicKey,
-      trackingRoot: input.trackingRoot,
+      credentials: input.credentials,
       ...(input.registry === undefined ? {} : { registry: input.registry }),
     }),
   );

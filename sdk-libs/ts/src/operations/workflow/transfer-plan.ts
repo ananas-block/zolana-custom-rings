@@ -21,7 +21,7 @@ export type SealRow = "narrow" | "wide";
 export const NO_RECORD_POOLS: PolicyPoolCapacity = Object.freeze({
   own: 0,
   curator: 0,
-  tracking: 0,
+  credentials: 0,
 });
 
 /** Rust `PlannedTransfer`. */

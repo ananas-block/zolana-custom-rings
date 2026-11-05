@@ -16,7 +16,7 @@ import {
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import type { Address, RingAssetDeposit } from "@heliuslabs/zolana/interface";
 import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../pda/index.js";
-import { REVISION_LENGTH } from "./transact.js";
+import type { CredentialRead } from "../codec/credential-read.js";
 
 import { RING_DEPOSIT_AUDIT_SLOTS, readRingDepositCapsule } from "../codec/deposit-capsule.js";
 import { RingInstructionTag } from "./instruction-tag.js";
@@ -28,10 +28,20 @@ export interface RingDepositSpp {
   readonly accounts: readonly AccountMeta[];
 }
 
-/** Rust `DepositPrefix`, ahead of the forwarded SPP deposit. */
-export const AUDITED_DEPOSIT_PREFIX_LENGTH = 2 + CUSTOM_RING_PROOF_LENGTH + 3 * REVISION_LENGTH;
+/** Tag, key capacity and proof, then the credential read's address index and state count. */
+const DEPOSIT_PREFIX_HEAD = 2 + CUSTOM_RING_PROOF_LENGTH;
+/** The own and curator revisions past the credential read. */
+const DEPOSIT_PREFIX_TAIL = 16;
 
-/** The accounts `[ring, registries, co_signer?]` ahead of SPP's deposit list. */
+/** The SPP deposit a ring deposit forwards, Rust `DepositPrefix::parse` rest, `undefined` off the layout. */
+export function depositSppData(data: Uint8Array): Uint8Array | undefined {
+  const stateReads = data[DEPOSIT_PREFIX_HEAD + 2];
+  if (data[0] !== RingInstructionTag.deposit || stateReads === undefined) return undefined;
+  const length = DEPOSIT_PREFIX_HEAD + 3 + 2 * stateReads + DEPOSIT_PREFIX_TAIL;
+  return data.length < length ? undefined : data.subarray(length);
+}
+
+/** The accounts `[ring, registries, address tree, state trees, co_signer?]` ahead of SPP's deposit list. */
 export async function ringDepositInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -41,9 +51,12 @@ export async function ringDepositInstruction(
     /** The deposit key's slots, every key proves one statement. */
     keyCapacity: number;
     proof: Uint8Array;
-    /** Read only, right after the ring account, tracking last. */
+    /** Read only, the policy registries right after the ring account. */
     registries: readonly Address[];
-    trackingRevision: bigint;
+    /** Its state reads fit the deposit key's `K`. */
+    credentialRead: CredentialRead;
+    /** Tree 0, then each state tree the read names, in table order. */
+    credentialTrees: readonly Address[];
     /** Policy rings only. */
     ownRevision?: bigint;
     /** Rings with a curator source only. */
@@ -59,8 +72,10 @@ export async function ringDepositInstruction(
   ]);
   const prefix = new Writer()
     .u8(input.keyCapacity, "keyCapacity")
-    .bytes(input.proof, CUSTOM_RING_PROOF_LENGTH, "deposit proof")
-    .u64(input.trackingRevision, "trackingRevision")
+    .bytes(input.proof, CUSTOM_RING_PROOF_LENGTH, "deposit proof");
+  input.credentialRead.checkCapacity(input.keyCapacity);
+  input.credentialRead
+    .write(prefix)
     .u64(input.ownRevision ?? 0n, "ownRevision")
     .u64(input.curatorRevision ?? 0n, "curatorRevision")
     .finish();
@@ -69,6 +84,7 @@ export async function ringDepositInstruction(
     [
       meta(ring, false, false),
       ...input.registries.map((registry) => meta(registry, false, false)),
+      ...input.credentialTrees.map((tree) => meta(tree, false, false)),
       ...cosigner,
       ...spp.accounts,
     ],
