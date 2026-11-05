@@ -611,7 +611,7 @@ impl<S: TransactionSource> AuditService<S> {
         let lease = LeaseClaim {
             db: database.connection(),
             ring: self.ring,
-            holder: database.replica(),
+            holder: database.lease_holder(),
             now: self.shared.clock.now()?,
         }
         .claim()

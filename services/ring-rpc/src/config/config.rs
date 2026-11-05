@@ -138,6 +138,9 @@ pub struct ServeArgs {
         requires_all = ["prover_url", "storage_authority_key_file"]
     )]
     pub store_url: Option<String>,
+    /// Stable per deployed replica and unique among live ones, a restart then writes at once.
+    #[arg(long, env = "RING_RPC_REPLICA_ID", requires = "store_url")]
+    pub replica_id: Option<String>,
     /// Serves the ring keys the record writer and the relay prove with.
     #[arg(long, env = "RING_RPC_PROVER_URL", requires = "store_url")]
     pub prover_url: Option<String>,

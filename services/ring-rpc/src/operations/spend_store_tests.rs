@@ -488,7 +488,7 @@ async fn commit_page(
     let lease = LeaseClaim {
         db: store.connection(),
         ring: RING,
-        holder: store.replica(),
+        holder: store.lease_holder(),
         now: NOW,
     }
     .claim()

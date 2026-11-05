@@ -30,7 +30,7 @@ async fn claim(store: &Store, now: u64) -> Option<ProjectionLease> {
     LeaseClaim {
         db: store.connection(),
         ring: RING,
-        holder: store.replica(),
+        holder: store.lease_holder(),
         now,
     }
     .claim()
@@ -153,4 +153,42 @@ async fn a_second_replica_is_refused_and_a_taken_lease_fences_the_first() {
         "the fenced page wrote nothing"
     );
     assert_eq!(loaded.spends.checkpoint.through.slot, 7);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_replica_writes_at_once_and_fences_its_old_instance() {
+    let url = shared_file("restart");
+    let before = Store::open(&url, 2)
+        .await
+        .expect("before the restart")
+        .with_replica("replica-a");
+    let seal = seal();
+    let held = claim(&before, NOW).await.expect("held before the restart");
+
+    let after = Store::open(&url, 2)
+        .await
+        .expect("after the restart")
+        .with_replica("replica-a");
+    let taken = claim(&after, NOW + 1)
+        .await
+        .expect("no wait for the expiry");
+    assert_ne!(taken, held);
+    ProjectionWriter {
+        db: after.connection(),
+        ring: RING,
+        seal: &seal,
+        lease: taken,
+        clock: Clock::Fixed(NOW + 1),
+    }
+    .commit_page(&page(7, None))
+    .await
+    .expect("the restarted instance commits");
+    let stale = ProjectionWriter {
+        db: before.connection(),
+        ring: RING,
+        seal: &seal,
+        lease: held,
+        clock: Clock::Fixed(NOW + 2),
+    };
+    assert!(stale.commit_page(&page(9, Some([0x33; 32]))).await.is_err());
 }

@@ -419,7 +419,7 @@ async fn a_restart_resumes_the_scan_after_its_last_committed_page() {
     let lease = LeaseClaim {
         db: database.connection(),
         ring: RING,
-        holder: database.replica(),
+        holder: database.lease_holder(),
         now: 1_000,
     }
     .claim()
