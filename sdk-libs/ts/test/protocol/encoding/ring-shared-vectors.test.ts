@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
 import statements from "../../../../../test-vectors/proof/ring-statements.json" with { type: "json" };
 import poolCapacity from "../../../../../test-vectors/policy/pool_capacity.json" with { type: "json" };
-import { ZERO_32, solanaOwnerIdentity, encodeBase58 } from "@heliuslabs/zolana/internal";
+import { ZERO_32, encodeBase58 } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes16, Bytes64, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
@@ -24,13 +24,13 @@ import {
   QUAD_HEIGHT,
   type MemberRecord,
   type QuadPath,
-  type QueueEntry,
+  type RecordWrite,
   type RecordWriteProofInput,
 } from "../../../src/protocol/membership/member-registry.js";
 import {
   applyRecordsStatement,
-  queueChain,
-  queueEntryHash,
+  writeChain,
+  recordWriteHash,
   replayRecordWrites,
   verifyRecordOpening,
 } from "../../../src/protocol/membership/member-opening.js";
@@ -86,13 +86,6 @@ function ringError(reason: string): unknown {
 describe("ring-records.json", () => {
   type VectorPath = (typeof records.openings)[number]["path"];
   type VectorRecord = (typeof records.openings)[number]["record"];
-  interface QueuedWrite {
-    readonly signer: string | null;
-    readonly member: string;
-    readonly mask: number;
-    readonly value: number;
-  }
-
   const path = (vector: VectorPath): QuadPath => ({
     index: vector.index,
     siblings: vector.siblings.map((level) => level.map(field)),
@@ -103,31 +96,27 @@ describe("ring-records.json", () => {
     next: field(vector.next),
     lists: BigInt(vector.lists),
   });
-  const entry = (queued: QueuedWrite): QueueEntry => ({
-    member:
-      queued.signer === null
-        ? field(queued.member)
-        : (solanaOwnerIdentity(field(queued.signer)) as Bytes32),
-    mask: BigInt(queued.mask),
-    value: BigInt(queued.value),
+  const entry = (write: (typeof records.updates)[number]["writes"][number]): RecordWrite => ({
+    member: field(write.member),
+    mask: BigInt(write.mask),
+    value: BigInt(write.value),
   });
 
-  it("hashes every queued write and chains it from its position", () => {
-    let chain = new Uint8Array(32) as Bytes32;
-    for (const application of records.applications) {
-      for (const queued of [...application.pending, ...application.authority_writes]) {
-        const queuedEntry = entry(queued);
-        expect(hex(queuedEntry.member)).toBe(queued.member);
-        expect(hex(queueEntryHash(queuedEntry))).toBe(queued.entry_hash);
-        chain = queueChain(chain, queuedEntry);
-        expect(hex(chain)).toBe(queued.chain);
+  it("hashes every write of an update and chains it from the update's chain start", () => {
+    for (const update of records.updates) {
+      let chain = field(update.chain_start);
+      for (const write of update.writes) {
+        expect(hex(recordWriteHash(entry(write)))).toBe(write.entry_hash);
+        chain = writeChain(chain, entry(write));
+        expect(hex(chain)).toBe(write.chain);
       }
+      expect(hex(chain)).toBe(update.chain_end);
     }
   });
 
-  it("replays every application to the root, next index and statement the apply proof binds", () => {
-    for (const application of records.applications) {
-      const writes: RecordWriteProofInput[] = application.writes.map((write) => ({
+  it("replays every update to the root, next index and statement the apply proof binds", () => {
+    for (const update of records.updates) {
+      const writes: RecordWriteProofInput[] = update.proof_inputs.map((write) => ({
         oldMintPolicy: EMPTY_MINT_POLICY,
         entry: {
           member: field(write.member),
@@ -143,17 +132,17 @@ describe("ring-records.json", () => {
       }));
       expect(writes.length).toBeLessThanOrEqual(APPLY_BATCH);
       const inputs = replayRecordWrites({
-        oldRoot: field(application.old_root),
-        oldNextIndex: application.old_next_index,
-        chainStart: field(application.chain_start),
+        oldRoot: field(update.old_root),
+        oldNextIndex: update.old_next_index,
+        chainStart: field(update.chain_start),
         writes,
       });
-      expect(hex(inputs.newRoot)).toBe(application.new_root);
-      expect(inputs.newNextIndex).toBe(application.new_next_index);
-      expect(hex(inputs.chainEnd)).toBe(application.chain_end);
+      expect(hex(inputs.newRoot)).toBe(update.new_root);
+      expect(inputs.newNextIndex).toBe(update.new_next_index);
+      expect(hex(inputs.chainEnd)).toBe(update.chain_end);
       const statement = applyRecordsStatement(inputs);
-      expect(statement.count).toBe(BigInt(application.count));
-      expect(hex(applyRecordsStatementHash(statement))).toBe(application.statement_hash);
+      expect(statement.count).toBe(BigInt(update.count));
+      expect(hex(applyRecordsStatementHash(statement))).toBe(update.statement_hash);
     }
   });
 
@@ -194,14 +183,14 @@ describe("ring-records.json", () => {
   });
 
   it("refuses a write whose value leaves its mask before the first write", () => {
-    const application = records.applications[0];
-    const write = application?.writes[0];
-    if (application === undefined || write === undefined) throw new Error("vector has no write");
+    const update = records.updates[0];
+    const write = update?.proof_inputs[0];
+    if (update === undefined || write === undefined) throw new Error("vector has no write");
     expect(() =>
       replayRecordWrites({
-        oldRoot: field(application.old_root),
-        oldNextIndex: application.old_next_index,
-        chainStart: field(application.chain_start),
+        oldRoot: field(update.old_root),
+        oldNextIndex: update.old_next_index,
+        chainStart: field(update.chain_start),
         writes: [
           {
             oldMintPolicy: EMPTY_MINT_POLICY,

@@ -11,7 +11,7 @@ use custom_ring_interface::{
     check_member, mint_policy_write,
     storage::{chain_start, Revision, StorageRegistry},
     tracking::TrackingRegistry,
-    CustomRingError, QueueEntry, RecordWriteData, WriteRecordsIxData, APPLY_BATCH, QUAD_ARITY,
+    CustomRingError, RecordWrite, RecordWriteData, WriteRecordsIxData, APPLY_BATCH, QUAD_ARITY,
     QUAD_HEIGHT, STORAGE_PROGRAM_ID,
 };
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction};
@@ -647,7 +647,7 @@ fn storage_root_view(root: &StorageRoot) -> StorageRootView {
     }
 }
 
-fn storage_entry(write: &StorageWriteView) -> Result<QueueEntry, CustomRingError> {
+fn storage_entry(write: &StorageWriteView) -> Result<RecordWrite, CustomRingError> {
     RecordWriteData {
         member: write.member.0,
         lists: WriteRecordsIxData {

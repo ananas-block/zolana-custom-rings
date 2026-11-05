@@ -23,7 +23,7 @@ mod relay_fixture;
 pub mod transfer;
 
 use custom_ring_interface::{tracking::TrackingEntry, CoSignScope};
-use custom_ring_interface::{QueueEntry, RingMode, RING_TRANSACT_ACCOUNT_PREFIX_LEN};
+use custom_ring_interface::{RecordWrite, RingMode, RING_TRANSACT_ACCOUNT_PREFIX_LEN};
 use spr_keypair::NullifierKey;
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
@@ -1423,7 +1423,7 @@ impl Records {
     /// The source serves the new root at once, as the registry does once storage applies it.
     fn list_reader(&self, member: Member, listed: bool) {
         let bit = ListId::Reader.record_bit();
-        self.apply(QueueEntry {
+        self.apply(RecordWrite {
             member: *member.as_bytes(),
             mask: bit,
             value: if listed { bit } else { 0 },
@@ -1432,14 +1432,14 @@ impl Records {
     }
 
     fn write_mint_policy(&self, member: Member, policy: MintPolicy) {
-        self.apply(QueueEntry {
+        self.apply(RecordWrite {
             member: *member.as_bytes(),
             mint_policy: Some(policy),
-            ..QueueEntry::default()
+            ..RecordWrite::default()
         });
     }
 
-    fn apply(&self, entry: QueueEntry) {
+    fn apply(&self, entry: RecordWrite) {
         let mut own = self.0.lock().unwrap();
         own.tree.apply([0; 32], &[entry]).expect("record write");
         own.revision += 1;

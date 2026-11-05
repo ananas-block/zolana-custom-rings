@@ -25,7 +25,7 @@ import {
   type MemberRecord,
   type PoolSubject,
   type QuadPath,
-  type QueueEntry,
+  type RecordWrite,
   type RecordPool,
   type RecordWriteProofInput,
 } from "../../protocol/membership/member-registry.js";
@@ -813,7 +813,7 @@ function paddedWrites<T>(
 
 function writeJson(write: RecordWriteProofInput, name: string): Json {
   return {
-    entry: queueEntryJson(write.entry, `${name}.entry`),
+    entry: recordWriteJson(write.entry, `${name}.entry`),
     exists: flag(write.exists),
     oldNext: field(write.oldNext, `${name}.oldNext`),
     oldLists: u64(write.oldLists, `${name}.oldLists`),
@@ -850,7 +850,7 @@ function trackingPathJson(path: QuadPath, name: string, index: string, siblings:
   };
 }
 
-function queueEntryJson(entry: QueueEntry, name: string): Json {
+function recordWriteJson(entry: RecordWrite, name: string): Json {
   return {
     member: field(entry.member, `${name}.member`),
     mask: u64(entry.mask, `${name}.mask`),

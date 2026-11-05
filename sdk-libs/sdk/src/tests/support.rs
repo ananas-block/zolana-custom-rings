@@ -842,7 +842,7 @@ impl Registry {
         self.tree
             .apply(
                 [0; 32],
-                &[custom_ring_interface::QueueEntry {
+                &[custom_ring_interface::RecordWrite {
                     member: *zolana_ring_policy::Member::asset(&mint).unwrap().as_bytes(),
                     mask: 0,
                     value: 0,

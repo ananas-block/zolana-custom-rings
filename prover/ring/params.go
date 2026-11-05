@@ -198,7 +198,7 @@ type PolicyParams struct {
 	PublicAssetEntries []uint32           `json:"publicAssetEntries"`
 }
 
-type QueueEntry struct {
+type RecordWrite struct {
 	Member              Field   `json:"member"`
 	Mask                uint64  `json:"mask"`
 	Value               uint64  `json:"value"`
@@ -207,14 +207,14 @@ type QueueEntry struct {
 	AssetLimits         []Field `json:"assetLimits"`
 }
 
-type RecordWrite struct {
-	Entry                  QueueEntry `json:"entry"`
-	Exists                 bool       `json:"exists"`
-	OldNext                Field      `json:"oldNext"`
-	OldLists               uint64     `json:"oldLists"`
-	OldMintPolicy          Field      `json:"oldMintPolicy"`
-	OldWithdrawalThreshold Field      `json:"oldWithdrawalThreshold"`
-	OldAssetLimits         []Field    `json:"oldAssetLimits"`
+type RecordWriteProofInput struct {
+	Entry                  RecordWrite `json:"entry"`
+	Exists                 bool        `json:"exists"`
+	OldNext                Field       `json:"oldNext"`
+	OldLists               uint64      `json:"oldLists"`
+	OldMintPolicy          Field       `json:"oldMintPolicy"`
+	OldWithdrawalThreshold Field       `json:"oldWithdrawalThreshold"`
+	OldAssetLimits         []Field     `json:"oldAssetLimits"`
 	// Index and Path open the member's leaf or the leaf an insert takes.
 	Index                  uint64  `json:"index"`
 	Path                   []Field `json:"path"`
@@ -239,7 +239,7 @@ type ApplyRecordsParams struct {
 	ChainEnd     Field  `json:"chainEnd"`
 	Count        uint8  `json:"count"`
 	// A nil write past Count assigns zeros.
-	Writes []*RecordWrite `json:"writes"`
+	Writes []*RecordWriteProofInput `json:"writes"`
 }
 
 // TrackingWrite is the witness of one applied entry.

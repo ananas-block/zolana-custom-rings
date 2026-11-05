@@ -133,14 +133,14 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 	members, entries := batch.members, batch.entries
 	p := &ApplyRecordsParams{
 		RequestHead: RequestHead{CircuitType: batch.circuit}, OldRoot: fb(members.Root()), OldNextIndex: uint32(members.NextIndex()),
-		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWrite, batch.capacity),
+		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWriteProofInput, batch.capacity),
 	}
 	chain := p.ChainStart.Int
 	for i, e := range entries {
 		w := members.Apply(t, e)
 		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
-		p.Writes[i] = &RecordWrite{
-			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), MintPolicy: fz(e.MintPolicy), WithdrawalThreshold: fz(e.WithdrawalThreshold), AssetLimits: limitFields(e.AssetLimits)},
+		p.Writes[i] = &RecordWriteProofInput{
+			Entry:  RecordWrite{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), MintPolicy: fz(e.MintPolicy), WithdrawalThreshold: fz(e.WithdrawalThreshold), AssetLimits: limitFields(e.AssetLimits)},
 			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldMintPolicy: fz(w.OldMintPolicy), OldWithdrawalThreshold: fz(w.OldWithdrawalThreshold), OldAssetLimits: limitFields(w.OldAssetLimits),
 			Index: w.Slot.Index, Path: flatPath(w.Slot),
 			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowMintPolicy: fz(w.Low.MintPolicy), LowWithdrawalThreshold: fz(w.Low.WithdrawalThreshold), LowAssetLimits: limitFields(w.Low.AssetLimits),

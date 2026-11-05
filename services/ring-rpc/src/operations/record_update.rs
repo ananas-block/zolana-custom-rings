@@ -5,7 +5,7 @@
 
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
-    ListRegistry, QueueEntry, RecordWriteData, RingPolicy, APPLY_BATCH,
+    ListRegistry, RecordWrite, RecordWriteData, RingPolicy, APPLY_BATCH,
 };
 use solana_address::Address;
 use spr_indexer_api::Hash;
@@ -98,7 +98,7 @@ pub(crate) struct CheckedUpdate {
     pub id: RecordUpdateId,
     pub writes: Vec<RecordWriteData>,
     /// The leaf write of each entry.
-    pub entries: Vec<QueueEntry>,
+    pub entries: Vec<RecordWrite>,
     pub signer: UpdateSigner,
     /// `Some` puts the update pending list approval.
     pub awaited: Option<AwaitedLists>,
@@ -176,7 +176,7 @@ pub(crate) struct PlannedBatch<'a> {
 pub(crate) struct ApplyInputsCheck<'a> {
     pub response: &'a GetStorageApplyProofInputsResponse,
     pub registry: &'a StorageRegistry,
-    pub entries: &'a [QueueEntry],
+    pub entries: &'a [RecordWrite],
 }
 
 pub(crate) struct CheckedInputs {

@@ -24,8 +24,8 @@ const (
 	BlindingSeedDomain = 0x43524253
 	// PolicyTableDomain = "CRTB"
 	PolicyTableDomain = 0x43525442
-	// QueueWriteDomain = "CRQW"
-	QueueWriteDomain = 0x43525157
+	// RecordWriteDomain = "CRQW"
+	RecordWriteDomain = 0x43525157
 	// ApplyRecordsDomain = "CRAP"
 	ApplyRecordsDomain = 0x43524150
 	// RegisterKeyDomain = "CRRG"

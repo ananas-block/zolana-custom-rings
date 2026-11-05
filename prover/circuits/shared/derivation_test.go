@@ -23,7 +23,7 @@ func TestRingDomainsAreTheAsciiTags(t *testing.T) {
 	}{
 		{"CRBS", shared.BlindingSeedDomain},
 		{"CRTB", shared.PolicyTableDomain},
-		{"CRQW", shared.QueueWriteDomain},
+		{"CRQW", shared.RecordWriteDomain},
 		{"CRAP", shared.ApplyRecordsDomain},
 		{"CRRG", shared.RegisterKeyDomain},
 		{"CRDP", shared.DepositStatementDomain},

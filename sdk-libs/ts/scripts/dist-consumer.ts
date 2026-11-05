@@ -109,7 +109,7 @@ export { PublicOwnerTransfer } from "@heliuslabs/zolana-custom-rings";
 export { MEMBER_REGISTRY_CAPACITY } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   MemberRecord,
-  QueueEntry,
+  RecordWrite,
   RecordOpening,
   RecordWriteProofInput,
 } from "@heliuslabs/zolana-custom-rings/advanced";

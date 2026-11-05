@@ -7,11 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
@@ -24,7 +21,6 @@ func TestStorageFixtures(t *testing.T) {
 	if err != nil || len(raw) != 32 {
 		t.Fatal("invalid registry address")
 	}
-	instance := ringtest.HashBytes(t, raw)
 	prove := func(circuit common.CircuitType, params any) *common.Proof {
 		ps := loadRingSystem(t, circuit)
 		requestJSON := mustMarshal(t, params)
@@ -63,9 +59,9 @@ func TestStorageFixtures(t *testing.T) {
 		}
 		request := (registryBatch{
 			circuit: circuit, capacity: capacity, members: members, entries: entries,
-			chainStart: spptest.MustHashChain4(t, []*big.Int{big.NewInt(shared.ApplyRecordsDomain), instance, big.NewInt(int64(revision))}),
+			chainStart: ringregistry.ChainStart(t, raw, uint64(revision)),
 		}).request(t)
-		writes := make([]QueueEntry, len(entries))
+		writes := make([]RecordWrite, len(entries))
 		for i, write := range request.Writes[:len(entries)] {
 			writes[i] = write.Entry
 		}

@@ -1,5 +1,5 @@
 use custom_ring_interface::{
-    domain, mint_policy_write, queue_chain, CustomRingError, QueueEntry, RecordWriteData,
+    domain, mint_policy_write, write_chain, CustomRingError, RecordWrite, RecordWriteData,
     WriteRecordsIxData, GRACE_SLOTS,
 };
 use serde::{Deserialize, Serialize};
@@ -159,7 +159,7 @@ pub mod method {
 
 impl RecordUpdateEntry {
     /// The leaf write the apply proof hashes for the entry.
-    pub fn entry(&self) -> Result<QueueEntry, RecordUpdateError> {
+    pub fn entry(&self) -> Result<RecordWrite, RecordUpdateError> {
         Ok(self.write()?.storage_entry()?)
     }
 
@@ -197,7 +197,7 @@ impl RecordUpdate {
     pub fn statement(&self, registry: Address) -> Result<RecordUpdateStatement, RecordUpdateError> {
         let entries_hash = self.entries.iter().try_fold([0; 32], |chain, entry| {
             Ok::<_, RecordUpdateError>(
-                queue_chain(&chain, &entry.entry()?).map_err(CustomRingError::from)?,
+                write_chain(&chain, &entry.entry()?).map_err(CustomRingError::from)?,
             )
         })?;
         Ok(RecordUpdateStatement {

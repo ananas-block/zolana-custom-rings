@@ -32,7 +32,7 @@ func TestAnApplyProofOverAssetLimitsVerifies(t *testing.T) {
 		AssetLimits: ringregistry.VectorLimits(t, row.Limits),
 	}
 	if write.Hash(t).Cmp(row.EntryHash.Int) != 0 {
-		t.Fatal("queue entry differs from Rust")
+		t.Fatal("record write differs from Rust")
 	}
 	params := (registryBatch{circuit: circuit, capacity: 2, members: ringregistry.New(t), entries: []ringregistry.Entry{write}, chainStart: big.NewInt(0)}).request(t)
 	system := loadRingSystem(t, circuit)

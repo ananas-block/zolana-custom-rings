@@ -13,7 +13,7 @@ use zolana_ring_policy::ListSet;
 use crate::{
     error::CustomRingError,
     instruction::{list_and_mint_entry, write_count},
-    member_registry::QueueEntry,
+    member_registry::RecordWrite,
     storage::{RegistryId, Revision, StorageError},
     ApplyRecordsIxData, CustomRingProof, ReaderKeyBytes, RecordWriteData,
     REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
@@ -195,14 +195,14 @@ impl<'a> StorageUpdateIxData<'a> {
     }
 
     /// The leaf writes the apply proof hashes, a mint settings tag above 1 refused.
-    pub fn entries(&self) -> impl Iterator<Item = Result<QueueEntry, CustomRingError>> + '_ {
+    pub fn entries(&self) -> impl Iterator<Item = Result<RecordWrite, CustomRingError>> + '_ {
         self.writes.iter().map(RecordWriteData::storage_entry)
     }
 }
 
 impl RecordWriteData {
     /// The authority's write, the storage program takes no other.
-    pub fn storage_entry(&self) -> Result<QueueEntry, CustomRingError> {
+    pub fn storage_entry(&self) -> Result<RecordWrite, CustomRingError> {
         list_and_mint_entry(
             self.member,
             &self.lists,

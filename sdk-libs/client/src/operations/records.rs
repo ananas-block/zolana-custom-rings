@@ -1,6 +1,6 @@
 //! Member record views as record tree types, every opening checked against its root.
 
-use custom_ring_interface::{storage::StorageRegistry, QueueEntry, QUAD_ARITY};
+use custom_ring_interface::{storage::StorageRegistry, RecordWrite, QUAD_ARITY};
 use solana_address::Address;
 use spr_indexer_api::Hash;
 use zolana_ring_indexer::rpc::{
@@ -263,7 +263,7 @@ fn record_writes(views: &[RingRecordWriteView]) -> Result<Vec<RecordWriteProofIn
 
 fn record_write(view: &RingRecordWriteView) -> Result<RecordWriteProofInput, AuditError> {
     Ok(RecordWriteProofInput {
-        entry: QueueEntry {
+        entry: RecordWrite {
             member: view.member.0,
             mask: view.mask,
             value: view.value,

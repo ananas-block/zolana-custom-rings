@@ -10,23 +10,25 @@ import (
 
 // Vector is test-vectors/registry/ring-records.json, written by program-libs/member-registry/tests/ring_records_vector.rs.
 type Vector struct {
-	EmptyRoot    ringtest.Hex  `json:"empty_root"`
-	Applications []Application `json:"applications"`
+	EmptyRoot ringtest.Hex `json:"empty_root"`
+	Registry  string       `json:"registry"`
+	Updates   []Update     `json:"updates"`
 }
 
-type Application struct {
-	Name            string         `json:"name"`
-	Pending         []QueuedWrite  `json:"pending"`
-	AuthorityWrites []QueuedWrite  `json:"authority_writes"`
-	OldRoot         ringtest.Hex   `json:"old_root"`
-	NewRoot         ringtest.Hex   `json:"new_root"`
-	OldNextIndex    uint64         `json:"old_next_index"`
-	NewNextIndex    uint64         `json:"new_next_index"`
-	ChainStart      ringtest.Hex   `json:"chain_start"`
-	ChainEnd        ringtest.Hex   `json:"chain_end"`
-	Count           int            `json:"count"`
-	StatementHash   ringtest.Hex   `json:"statement_hash"`
-	Writes          []AppliedWrite `json:"writes"`
+// Update is one ordered batch of the storage program's Update instruction.
+type Update struct {
+	Name          string         `json:"name"`
+	Revision      uint64         `json:"revision"`
+	Writes        []BatchWrite   `json:"writes"`
+	OldRoot       ringtest.Hex   `json:"old_root"`
+	NewRoot       ringtest.Hex   `json:"new_root"`
+	OldNextIndex  uint64         `json:"old_next_index"`
+	NewNextIndex  uint64         `json:"new_next_index"`
+	ChainStart    ringtest.Hex   `json:"chain_start"`
+	ChainEnd      ringtest.Hex   `json:"chain_end"`
+	Count         int            `json:"count"`
+	StatementHash ringtest.Hex   `json:"statement_hash"`
+	ProofInputs   []AppliedWrite `json:"proof_inputs"`
 }
 
 type VectorEntry struct {
@@ -35,7 +37,8 @@ type VectorEntry struct {
 	Value  uint64       `json:"value"`
 }
 
-type QueuedWrite struct {
+// BatchWrite's Chain is the chain after the write.
+type BatchWrite struct {
 	VectorEntry
 	EntryHash ringtest.Hex `json:"entry_hash"`
 	Chain     ringtest.Hex `json:"chain"`

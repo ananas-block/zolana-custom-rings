@@ -1,6 +1,6 @@
 //! The ring prover's request bodies, field for field the Go `prover/ring` params.
 
-use custom_ring_interface::{QueueEntry, QUAD_ARITY};
+use custom_ring_interface::{RecordWrite, QUAD_ARITY};
 use serde::{Serialize, Serializer};
 use spr_hasher::primitives::{pack_be, right_align};
 use spr_keypair::{PublicKey, X25519Pubkey};
@@ -535,8 +535,8 @@ pub(crate) struct TransferParams<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RecordWrite {
-    pub entry: QueueEntryRequest,
+pub(crate) struct RecordWriteProofInputRequest {
+    pub entry: RecordWriteRequest,
     pub exists: bool,
     #[serde(with = "fe")]
     pub old_next: [u8; 32],
@@ -568,7 +568,7 @@ pub(crate) struct RecordWrite {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct QueueEntryRequest {
+pub(crate) struct RecordWriteRequest {
     #[serde(with = "fe")]
     pub member: [u8; 32],
     pub mask: u64,
@@ -581,8 +581,8 @@ pub(crate) struct QueueEntryRequest {
     pub asset_limits: [[u8; 32]; AssetLimits::FIELDS],
 }
 
-impl From<&QueueEntry> for QueueEntryRequest {
-    fn from(entry: &QueueEntry) -> Self {
+impl From<&RecordWrite> for RecordWriteRequest {
+    fn from(entry: &RecordWrite) -> Self {
         let policy = entry.mint_policy.unwrap_or_default();
         Self {
             member: entry.member,
@@ -595,7 +595,7 @@ impl From<&QueueEntry> for QueueEntryRequest {
     }
 }
 
-impl From<&RecordWriteProofInput> for RecordWrite {
+impl From<&RecordWriteProofInput> for RecordWriteProofInputRequest {
     fn from(write: &RecordWriteProofInput) -> Self {
         let MemberRecord {
             member: low_member,
@@ -646,7 +646,7 @@ pub(crate) struct ApplyRecords {
     pub chain_end: [u8; 32],
     pub count: u8,
     /// The key's batch, writes past `count` assign zeros.
-    pub writes: Vec<Option<RecordWrite>>,
+    pub writes: Vec<Option<RecordWriteProofInputRequest>>,
 }
 
 #[derive(Serialize)]

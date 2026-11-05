@@ -5,7 +5,7 @@ use std::{
 };
 
 use custom_ring_interface::{
-    storage::StorageRegistry, storage_instruction::StorageUpdateIxData, QueueEntry,
+    storage::StorageRegistry, storage_instruction::StorageUpdateIxData, RecordWrite,
     RecordWriteData, RingAccount, RingPolicy, ROOT_HISTORY,
 };
 use custom_ring_sdk::{CustomRing, InitializeStorage, UpdateStorage};
@@ -336,7 +336,7 @@ impl RecordWriter {
         let entries = writes
             .iter()
             .map(RecordWriteData::storage_entry)
-            .collect::<Result<Vec<QueueEntry>, _>>()
+            .collect::<Result<Vec<RecordWrite>, _>>()
             .map_err(|_| DbErr::Custom("stored record update writes are invalid".to_owned()))?;
         let state = self
             .registry(registry)

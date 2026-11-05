@@ -18,38 +18,44 @@ func TestApplyRecordsMatchesRustVectors(t *testing.T) {
 	if members.Root().Cmp(v.EmptyRoot.Int) != 0 {
 		t.Fatalf("empty root %x, Rust %x", members.Root(), v.EmptyRoot.Int)
 	}
-	for _, app := range v.Applications {
-		t.Run(app.Name, func(t *testing.T) {
-			queued := slices.Concat(app.Pending, app.AuthorityWrites)
-			entries := make([]ringregistry.Entry, len(queued))
-			chain := app.ChainStart.Int
-			for i, q := range queued {
-				entries[i] = q.Entry()
+	registryAddress := ringtest.VectorBytes(t, v.Registry, 32)
+	for _, update := range v.Updates {
+		t.Run(update.Name, func(t *testing.T) {
+			// 1. The chain starts at the registry and revision the program binds, never at an earlier update's end.
+			if start := ringregistry.ChainStart(t, registryAddress, update.Revision); start.Cmp(update.ChainStart.Int) != 0 {
+				t.Fatalf("chain start %x, Rust %x", start, update.ChainStart.Int)
+			}
+			// 2. Every write of the batch enters the chain in instruction order.
+			entries := make([]ringregistry.Entry, len(update.Writes))
+			chain := update.ChainStart.Int
+			for i, write := range update.Writes {
+				entries[i] = write.Entry()
 				hash := entries[i].Hash(t)
 				chain = ringtest.MustPoseidonHash(t, chain, hash)
-				if hash.Cmp(q.EntryHash.Int) != 0 || chain.Cmp(q.Chain.Int) != 0 {
-					t.Fatalf("entry %d hash %x chain %x, Rust %x %x", i, hash, chain, q.EntryHash.Int, q.Chain.Int)
+				if hash.Cmp(write.EntryHash.Int) != 0 || chain.Cmp(write.Chain.Int) != 0 {
+					t.Fatalf("write %d hash %x chain %x, Rust %x %x", i, hash, chain, write.EntryHash.Int, write.Chain.Int)
 				}
 			}
+			// 3. The host twin replays the batch to the Rust statement and proof inputs, and the circuit accepts them.
 			n := registry.ApplyBatch
-			if app.Count == 1 {
+			if update.Count == 1 {
 				n = 1
 			}
-			b := applyBatch(t, members, n, app.ChainStart.Int, entries...)
+			b := applyBatch(t, members, n, update.ChainStart.Int, entries...)
 			c := b.circuit
 			for name, pair := range map[string][2]*big.Int{
-				"old root":       {ringtest.AsBigInt(c.OldRoot), app.OldRoot.Int},
-				"new root":       {ringtest.AsBigInt(c.NewRoot), app.NewRoot.Int},
-				"old next index": {ringtest.AsBigInt(c.OldNextIndex), new(big.Int).SetUint64(app.OldNextIndex)},
-				"new next index": {ringtest.AsBigInt(c.NewNextIndex), new(big.Int).SetUint64(app.NewNextIndex)},
-				"chain end":      {ringtest.AsBigInt(c.ChainEnd), app.ChainEnd.Int},
-				"statement":      {ringtest.AsBigInt(c.PublicInputHash), app.StatementHash.Int},
+				"old root":       {ringtest.AsBigInt(c.OldRoot), update.OldRoot.Int},
+				"new root":       {ringtest.AsBigInt(c.NewRoot), update.NewRoot.Int},
+				"old next index": {ringtest.AsBigInt(c.OldNextIndex), new(big.Int).SetUint64(update.OldNextIndex)},
+				"new next index": {ringtest.AsBigInt(c.NewNextIndex), new(big.Int).SetUint64(update.NewNextIndex)},
+				"chain end":      {ringtest.AsBigInt(c.ChainEnd), update.ChainEnd.Int},
+				"statement":      {ringtest.AsBigInt(c.PublicInputHash), update.StatementHash.Int},
 			} {
 				if pair[0].Cmp(pair[1]) != 0 {
 					t.Fatalf("%s %x, Rust %x", name, pair[0], pair[1])
 				}
 			}
-			for i, w := range app.Writes {
+			for i, w := range update.ProofInputs {
 				rust := w.Write(t)
 				if !sameWrite(b.writes[i], rust) {
 					t.Fatalf("write %d differs from the Rust witness", i)

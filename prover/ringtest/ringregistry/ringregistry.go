@@ -11,6 +11,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/poseidon"
+	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 // fieldMax is q-1, the sentinel's next, above every member.
@@ -115,14 +116,20 @@ type Entry struct {
 	AssetLimits                                          Limits
 }
 
-// Hash mirrors registry.QueueEntry.Hash.
+// Hash mirrors registry.RecordWrite.Hash.
 func (e Entry) Hash(t testing.TB) *big.Int {
 	t.Helper()
-	fields := []*big.Int{big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, copied(e.MintPolicy), copied(e.WithdrawalThreshold)}
+	fields := []*big.Int{big.NewInt(shared.RecordWriteDomain), e.Member, e.Mask, e.Value, copied(e.MintPolicy), copied(e.WithdrawalThreshold)}
 	for _, field := range e.AssetLimits {
 		fields = append(fields, copied(field))
 	}
 	return ringtest.MustPoseidonHash(t, fields...)
+}
+
+// ChainStart mirrors chain_start in program-libs/interface/src/accounts/storage.rs.
+func ChainStart(t testing.TB, registry []byte, revision uint64) *big.Int {
+	t.Helper()
+	return spptest.MustHashChain4(t, []*big.Int{big.NewInt(shared.ApplyRecordsDomain), ringtest.HashBytes(t, registry), new(big.Int).SetUint64(revision)})
 }
 
 type Write struct {

@@ -8,7 +8,7 @@ import {
   mintPolicyWrite,
 } from "../../../src/protocol/membership/mint-policy.js";
 import {
-  queueEntryHash,
+  recordWriteHash,
   verifyRecordOpening,
 } from "../../../src/protocol/membership/member-opening.js";
 import { recordTree } from "../../helpers/member-registry.js";
@@ -50,7 +50,7 @@ describe("mint records shared with Rust and Go", () => {
       expect(Buffer.from(mintPolicyWrite(record.mintPolicy).subarray(1)).toString("hex")).toBe(
         vector.rows[i]!.wire,
       );
-      expect(Buffer.from(queueEntryHash({ ...record, mask: 0n, value: 0n })).toString("hex")).toBe(
+      expect(Buffer.from(recordWriteHash({ ...record, mask: 0n, value: 0n })).toString("hex")).toBe(
         vector.rows[i]!.entry_hash,
       );
       expect(() =>

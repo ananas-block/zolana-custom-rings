@@ -13,7 +13,7 @@ use zolana_ring_policy::{ListSet, ListWrite, MintPolicy, Writer};
 
 use crate::{
     error::CustomRingError,
-    member_registry::{check_member, QueueEntry, APPLY_BATCH},
+    member_registry::{check_member, RecordWrite, APPLY_BATCH},
     state::{RingRole, RingRoles},
     storage::Revision,
     TAGGED_X25519_KEY_LEN,
@@ -286,7 +286,7 @@ impl WriteRecordsIxData {
     }
 
     /// The entry of `writer` changing `member`'s lists, only the lists `writer` owns.
-    pub fn entry(&self, member: [u8; 32], writer: Writer) -> Result<QueueEntry, CustomRingError> {
+    pub fn entry(&self, member: [u8; 32], writer: Writer) -> Result<RecordWrite, CustomRingError> {
         self.entry_within(member, writer.writable())
     }
 
@@ -294,7 +294,7 @@ impl WriteRecordsIxData {
         &self,
         member: [u8; 32],
         writable: ListSet,
-    ) -> Result<QueueEntry, CustomRingError> {
+    ) -> Result<RecordWrite, CustomRingError> {
         check_member(&member)?;
         let (mask, value) = (self.mask(), self.value());
         if mask == 0 || value & !mask != 0 {
@@ -303,7 +303,7 @@ impl WriteRecordsIxData {
         if !ListSet::from_record_bits(mask).is_some_and(|lists| lists.is_subset(writable)) {
             return Err(CustomRingError::ListBitNotWritable);
         }
-        Ok(QueueEntry {
+        Ok(RecordWrite {
             member,
             mask,
             value,
@@ -315,7 +315,7 @@ impl WriteRecordsIxData {
 impl RecordWriteData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 
-    pub fn entry(&self) -> Result<QueueEntry, CustomRingError> {
+    pub fn entry(&self) -> Result<RecordWrite, CustomRingError> {
         list_and_mint_entry(
             self.member,
             &self.lists,
@@ -343,12 +343,12 @@ pub(crate) fn list_and_mint_entry(
     lists: &WriteRecordsIxData,
     mint_policy: &MintPolicyWrite,
     writable: ListSet,
-) -> Result<QueueEntry, CustomRingError> {
+) -> Result<RecordWrite, CustomRingError> {
     check_member(&member)?;
     let mut entry = if *lists == WriteRecordsIxData::default() {
-        QueueEntry {
+        RecordWrite {
             member,
-            ..QueueEntry::default()
+            ..RecordWrite::default()
         }
     } else {
         lists.entry_within(member, writable)?
