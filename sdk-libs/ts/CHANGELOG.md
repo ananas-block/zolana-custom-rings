@@ -68,9 +68,11 @@ Added
 - `RingProgramError.tooManyApplicationMessages` names `8269`, a frame with more application messages than SPP takes beside the auditor message and an anonymous frame's sender bundle, 254 or 253 with a sender bundle, and the frame codec refuses such a frame before it reads the list.
 - `RingProgramError.tooManyDepositsForKey` names `8537`, a deposit with more notes than its key opens credentials for.
 - `RingRelaySpend.sealRow` and `RingRelayInput.sealRow` seal a relayed transfer under a named `SealRow`, and `RingRpcRefusal.resealNarrow` and `resealWide` name `-32211` and `-32212`.
+- `prepareRingEntryRelay` takes only the `anonymous` rail, typed `RingAnonymousRelayRail`, so an entry on a confidential ring proves and sends through `createRingEntrySubmission`.
 
 Fixed
 
+- A ring entry from a default note larger than its amount asked approval for the amount alone while the change also entered the ring, now the `ringEntry` intent and its summary name every unit entering the ring, and default notes that meet the amount exactly fund the entry first.
 - `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, and it lost every zero-key note and every merge output whose seed the nullifier key does not derive, now that commitment stays in `unopened`, a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done, and each owned note opens from the auditor's record alone.
 - `syncRingWallet` refused every sync after a payment of an unregistered mint arrived and read the whole ring history on each sync, now that note waits in `AnonymousWallet.pendingOpenings()` until its mint registers and a later sync reads only rows past its last position.
 - A hand-built `RuleTable` skipped the checks `decodeRuleTable` runs, now policy writes, `policyTableProofInputs` and its hash rerun `buildRuleTable` and refuse such a table with `RING_RULE_TABLE_INVALID`.

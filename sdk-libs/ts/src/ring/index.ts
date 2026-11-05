@@ -345,6 +345,7 @@ export type {
   AnonymousSpendOwner,
   PreparedSpendRelay,
   RingAnonymousRail,
+  RingAnonymousRelayRail,
   RingDirectRail,
   RingOwnerRail,
   RingPublicOwnerRail,

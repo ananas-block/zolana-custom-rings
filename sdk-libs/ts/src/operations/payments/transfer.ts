@@ -425,7 +425,7 @@ export function selectRingInputs(
   }).entries;
 }
 
-/** One largest first pass over the notes no larger than the remainder, not a full subset sum search. */
+/** One largest first pass over the notes no larger than the remainder, a full subset sum search is out of scope. */
 function exactCover(
   input: Readonly<{ candidates: readonly WalletUtxo[]; amount: bigint; maxInputs: number }>,
 ): readonly WalletUtxo[] | undefined {
