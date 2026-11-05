@@ -40,7 +40,9 @@ use crate::{
     replay::ReplayCheck,
     spend_machine::{InputRead, Observation},
     spent_index::{LoadSpends, LoadedProjection, NoteSeal, ProjectionWriter},
-    tracking::{HeldEnrollment, OwnerEnrollment, ScanEnd, TrackingCursor, TrackingScan},
+    tracking::{
+        HeldEnrollment, OwnerEnrollment, ScanEnd, TrackingCursor, TrackingScan, TrackingSource,
+    },
     upstream::{
         MergeAuditRequest, RingConfiguration, RingFrame, RingHistoryPage, TransactionPage,
         TransactionSource,
@@ -242,14 +244,22 @@ impl<S: TransactionSource> AuditService<S> {
         value: &[u8; 32],
     ) -> Result<OwnerEnrollment, RingRpcError> {
         let store = self.shared.store(self.ring);
-        // 1. The refresh holds the backfill lock, no other scan moves the cursor meanwhile.
-        //    The holder commits each page, another replica scans into memory until its next reload.
         let scanned = {
             let mut backfill = store.backfill.lock().await;
             let seal = self.note_seal()?;
             let durable = self.writer(backfill.writer, &seal);
-            self.refresh_enrollments(&store, &mut backfill.tracking_cursor, durable.as_ref())
-                .await?
+            if self.shared.database.is_some() && durable.is_none() {
+                self.reload(&store, &mut backfill, &seal).await?;
+                match self.shared.source.root(self.ring).await? {
+                    Some(root) if backfill.tracking_cursor.next_leaf() < root.next_index => {
+                        ScanEnd::Partial
+                    }
+                    _ => ScanEnd::Complete,
+                }
+            } else {
+                self.refresh_enrollments(&store, &mut backfill.tracking_cursor, durable.as_ref())
+                    .await?
+            }
         };
         // 2. A held enrollment answers whatever the scan end, a missing one only after a complete scan.
         Ok(match (store.enrollment(key, value).await?, scanned) {
@@ -892,6 +902,9 @@ impl<S: TransactionSource> AuditService<S> {
         cursor: &mut TrackingCursor,
         durable: Option<&ProjectionWriter<'_>>,
     ) -> Result<ScanEnd, RingRpcError> {
+        if let Some(writer) = durable {
+            store.queue_late_owners(writer.pending_owners().await?);
+        }
         TrackingScan {
             ring: self.ring,
             auditor: &self.auditor,

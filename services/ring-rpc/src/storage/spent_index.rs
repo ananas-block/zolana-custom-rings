@@ -494,6 +494,16 @@ impl ProjectionWriter<'_> {
         }
         .write(&transaction)
         .await?;
+        for owner in delta.derived_owners() {
+            let member = zolana_ring_policy::Member::owner_tag(owner)
+                .map_err(|_| DbErr::Custom("owner tag is invalid".into()))?;
+            transaction
+                .execute(run(
+                    "DELETE FROM pending_derivations WHERE ring=$1 AND member=$2",
+                    vec![self.ring_value(), member.as_bytes().to_vec().into()],
+                ))
+                .await?;
+        }
         if let Some(checkpoint) = delta.checkpoint() {
             let [after_slot, token] = position_values(&checkpoint.position)?;
             transaction
@@ -527,7 +537,7 @@ impl ProjectionWriter<'_> {
         for enrollment in held {
             let member = enrollment.member();
             let sealed = self.seal.seal(&member, &enrollment_body(enrollment))?;
-            transaction
+            let inserted = transaction
                 .execute(Statement::from_sql_and_values(
                     backend,
                     "INSERT INTO held_enrollments(ring,member,sealed,owner_hash_tag,list_key_tag, \
@@ -549,7 +559,15 @@ impl ProjectionWriter<'_> {
                         revision.into(),
                     ],
                 ))
-                .await?;
+                .await?
+                .rows_affected();
+            if inserted != 0 {
+                transaction.execute(Statement::from_sql_and_values(
+                    backend,
+                    "INSERT INTO pending_derivations(ring,member) VALUES($1,$2) ON CONFLICT(ring,member) DO NOTHING",
+                    vec![self.ring_value(), member.to_vec().into()],
+                )).await?;
+            }
         }
         let cursor = i64::try_from(cursor.next_leaf())
             .map_err(|_| DbErr::Custom("tracking cursor past i64".into()))?;
@@ -562,6 +580,20 @@ impl ProjectionWriter<'_> {
             ))
             .await?;
         transaction.commit().await
+    }
+
+    pub(crate) async fn pending_owners(&self) -> Result<Vec<[u8; 32]>, DbErr> {
+        self.db
+            .query_all(Statement::from_sql_and_values(
+                self.db.get_database_backend(),
+                "SELECT e.member,e.sealed FROM held_enrollments e JOIN pending_derivations p \
+             ON e.ring=p.ring AND e.member=p.member WHERE e.ring=$1 ORDER BY e.member LIMIT 256",
+                vec![self.ring_value()],
+            ))
+            .await?
+            .iter()
+            .map(|row| read_enrollment(row, self.seal).map(|held| held.owner_key))
+            .collect()
     }
 
     pub(crate) async fn record_attempts(

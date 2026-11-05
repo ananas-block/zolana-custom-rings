@@ -377,9 +377,9 @@ impl<S: TrackingSource> TrackingScan<'_, S> {
                 .collect::<Result<Vec<_>, _>>()?;
             // 4. The page applies whole and commits with the cursor past it, a restart resumes there.
             //    The check reads every stored row the page names, an evicted member still conflicts.
-            let admission = self.store.enrollment_admission(found).await?;
+            let admission = self.store.enrollment_admission(found.clone()).await?;
             if let Some(writer) = self.durable {
-                writer.commit_enrollments(admission.rows(), next).await?;
+                writer.commit_enrollments(&found, next).await?;
             }
             self.store.admit_enrollments(admission);
             *cursor = next;
