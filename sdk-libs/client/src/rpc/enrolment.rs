@@ -10,7 +10,7 @@ const ENROLMENT_DOMAIN: &str = "zolana/ring-rpc-enrolment";
 /// Raw Ed25519 over the `EnrolmentAttestation` message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ConfigAuthorityAuth {
+pub struct PolicyAuthorityAuth {
     pub authority: SerializablePubkey,
     pub timestamp: u64,
     pub nonce: Base64String,
@@ -24,7 +24,7 @@ pub struct GetPendingEnrolmentsRequest {
     /// The last enrolment of the previous page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<RecordUpdateId>,
-    pub auth: ConfigAuthorityAuth,
+    pub auth: PolicyAuthorityAuth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +32,7 @@ pub struct GetPendingEnrolmentsRequest {
 pub struct RefuseEnrolmentRequest {
     pub ring: SerializablePubkey,
     pub update_id: RecordUpdateId,
-    pub auth: ConfigAuthorityAuth,
+    pub auth: PolicyAuthorityAuth,
 }
 
 /// Signed by the policy authority, or by the upgrade authority before `Initialize`.
@@ -40,7 +40,7 @@ pub struct RefuseEnrolmentRequest {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateRecordsRegistryRequest {
     pub ring: SerializablePubkey,
-    pub auth: ConfigAuthorityAuth,
+    pub auth: PolicyAuthorityAuth,
 }
 
 /// `registry` is the ring's records PDA under `storage_authority`.
@@ -97,7 +97,7 @@ pub trait EnrolmentAction: sealed::Sealed {
 
     fn line(&self) -> String;
 
-    fn request(self, ring: Address, auth: ConfigAuthorityAuth) -> Self::Request;
+    fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> Self::Request;
 }
 
 mod sealed {
@@ -118,7 +118,7 @@ impl EnrolmentAction for ListEnrolments {
         }
     }
 
-    fn request(self, ring: Address, auth: ConfigAuthorityAuth) -> GetPendingEnrolmentsRequest {
+    fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> GetPendingEnrolmentsRequest {
         GetPendingEnrolmentsRequest {
             ring: ring.into(),
             cursor: self.cursor,
@@ -134,7 +134,7 @@ impl EnrolmentAction for RefuseEnrolment {
         format!("refuse {}", self.0 .0.to_base58())
     }
 
-    fn request(self, ring: Address, auth: ConfigAuthorityAuth) -> RefuseEnrolmentRequest {
+    fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> RefuseEnrolmentRequest {
         RefuseEnrolmentRequest {
             ring: ring.into(),
             update_id: self.0,
@@ -150,7 +150,7 @@ impl EnrolmentAction for CreateRecords {
         "create records".to_owned()
     }
 
-    fn request(self, ring: Address, auth: ConfigAuthorityAuth) -> CreateRecordsRegistryRequest {
+    fn request(self, ring: Address, auth: PolicyAuthorityAuth) -> CreateRecordsRegistryRequest {
         CreateRecordsRegistryRequest {
             ring: ring.into(),
             auth,
@@ -185,7 +185,7 @@ impl<A: EnrolmentAction> SignedRequest<EnrolmentAttestation<A>> {
         } = self.attestation;
         Ok(action.request(
             target.ring,
-            ConfigAuthorityAuth {
+            PolicyAuthorityAuth {
                 authority: authority.into(),
                 timestamp,
                 nonce: self.nonce.to_vec().into(),

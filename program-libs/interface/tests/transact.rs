@@ -406,7 +406,7 @@ fn the_frame_bitmaps_are_disjoint_and_stay_inside_the_count() {
     assert_eq!(compact[exit_bits], 0b0100);
     assert_eq!(compact[exit_bits + 1], 0b0001);
     for (exits, bodiless, refusal) in [
-        (0b0100, 0b0100, CustomRingError::InvalidChangeBits),
+        (0b0100, 0b0100, CustomRingError::BodilessExit),
         (0b0100, 1 << 4, CustomRingError::InvalidInstructionData),
         (1 << 4, 0b0001, CustomRingError::InvalidInstructionData),
     ] {

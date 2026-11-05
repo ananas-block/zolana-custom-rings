@@ -1012,7 +1012,7 @@ impl DepositDisclosure {
             registry: policy.map(|policy| DepositRegistry {
                 own_root: &policy.root.root,
                 curator_root: curator.map(|curator| &curator.root.root),
-                policy_hash: Some(&policy.policy_hash),
+                policy_hash: &policy.policy_hash,
             }),
         }
         .hash()?;

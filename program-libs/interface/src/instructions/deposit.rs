@@ -59,8 +59,8 @@ pub struct DepositRegistry<'a> {
     pub own_root: &'a [u8; 32],
     /// `None` without a curator source.
     pub curator_root: Option<&'a [u8; 32]>,
-    /// Its table's asset rules screen every deposited asset, set on every policy ring.
-    pub policy_hash: Option<&'a [u8; 32]>,
+    /// Its table's asset rules screen every deposited asset.
+    pub policy_hash: &'a [u8; 32],
 }
 
 pub struct DepositPublicInput<'a> {
@@ -156,10 +156,7 @@ impl DepositPublicInput<'_> {
             .and_then(|registry| registry.curator_root)
             .copied()
             .unwrap_or_default();
-        chain[keys + 7] = registry
-            .and_then(|registry| registry.policy_hash)
-            .copied()
-            .unwrap_or_default();
+        chain[keys + 7] = registry.map_or([0; 32], |registry| *registry.policy_hash);
         let assets = keys + 8;
         for (slot, deposited) in self.assets.iter().enumerate() {
             chain[assets + slot * 2] = deposited.asset;

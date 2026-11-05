@@ -6,6 +6,8 @@ The custom ring surface of `@heliuslabs/zolana` moves into `@heliuslabs/zolana-c
 
 Breaking
 
+- `DELIVERED_AUDIT_CAPACITIES` → `TRANSFER_OUTPUT_CAPACITIES`, `ConfigAuthorityAuth` → `PolicyAuthorityAuth`, the refusal key `notConfigAuthority` → `notPolicyAuthority` and the error key `invalidChangeBits` → `bodilessExit`.
+- The error keys `invalidCuratorRegistry`, `invalidCoSignerThresholds`, `invalidAnonymousOutput`, `mergeDisclosureWidth`, `policyAlreadySet`, `dataFreeBodyLength`, `thresholdsWithoutWithdrawals` and `changeTagNotZero` are gone, no program path raises them.
 - `@heliuslabs/zolana/ring` and the custom ring, auditor and key registry
   exports of the `@heliuslabs/zolana` entry points move here → import them from
   `@heliuslabs/zolana-custom-rings` or its `client` and `keypair` entry points.

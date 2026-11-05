@@ -99,18 +99,18 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
             ..input
         },
         DepositPublicInput {
-            registry: registry(&[9; 32], None),
+            registry: registry(&[9; 32], &[0; 32]),
             ..input
         },
         DepositPublicInput {
-            registry: registry(&[0; 32], Some(&[9; 32])),
+            registry: registry(&[0; 32], &[9; 32]),
             ..input
         },
         DepositPublicInput {
             registry: Some(DepositRegistry {
                 own_root: &[0; 32],
                 curator_root: Some(&[9; 32]),
-                policy_hash: None,
+                policy_hash: &[0; 32],
             }),
             ..input
         },
@@ -269,7 +269,7 @@ fn solved_go_deposits_reach_the_program_statement_and_the_reader() {
             registry: (policy_hash != [0; 32]).then_some(DepositRegistry {
                 own_root: &own_root,
                 curator_root: (curator_root != [0; 32]).then_some(&curator_root),
-                policy_hash: Some(&policy_hash),
+                policy_hash: &policy_hash,
             }),
         };
         let elements: Vec<String> = input.elements().unwrap().iter().map(hex::encode).collect();

@@ -882,7 +882,7 @@ async fn a_wallet_reader_revocation_goes_out_graced_and_a_block_entry_immediate_
 }
 
 #[tokio::test]
-async fn a_wallet_enrolment_awaits_the_config_authority_then_lands_with_its_allow_entry() {
+async fn a_wallet_enrolment_awaits_the_policy_authority_then_lands_with_its_allow_entry() {
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
     let wallet = wallet();

@@ -88,7 +88,7 @@ async fn auditor_keys_are_released_to_the_ring_authorities_only() {
     let hub = fixture.hub(fixture.source());
     authorize(&hub, &signed_by(&authority()))
         .await
-        .expect("config authority");
+        .expect("policy authority");
     for signer in [deployer(), stranger(), delegate()] {
         assert!(refused(
             authorize(&hub, &signed_by(&signer)).await,

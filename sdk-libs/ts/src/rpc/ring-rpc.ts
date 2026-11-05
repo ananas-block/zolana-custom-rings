@@ -81,7 +81,7 @@ import {
 import {
   RingRpcMethod,
   type AuthorityTransfer,
-  type ConfigAuthorityAuth,
+  type PolicyAuthorityAuth,
   type CreateRecordsRegistryRequest,
   type GetPendingEnrolmentsRequest,
   type PendingEnrolmentsPage,
@@ -520,7 +520,7 @@ export async function signPendingEnrolmentsRequest(
   return Object.freeze({
     ring: checked.ringProgramId,
     ...(cursor === undefined ? {} : { cursor }),
-    auth: await configAuthorityAuth(checked, authority, action, timestamp),
+    auth: await policyAuthorityAuth(checked, authority, action, timestamp),
   });
 }
 
@@ -535,7 +535,7 @@ export async function signRefuseEnrolmentRequest(
   return Object.freeze({
     ring: checked.ringProgramId,
     updateId,
-    auth: await configAuthorityAuth(checked, authority, { kind: "refuse", updateId }, timestamp),
+    auth: await policyAuthorityAuth(checked, authority, { kind: "refuse", updateId }, timestamp),
   });
 }
 
@@ -548,16 +548,16 @@ export async function signCreateRecordsRegistryRequest(
   const checked = checkedReadTarget(target);
   return Object.freeze({
     ring: checked.ringProgramId,
-    auth: await configAuthorityAuth(checked, authority, { kind: "createRecords" }, timestamp),
+    auth: await policyAuthorityAuth(checked, authority, { kind: "createRecords" }, timestamp),
   });
 }
 
-async function configAuthorityAuth(
+async function policyAuthorityAuth(
   target: RingReadTarget,
   authority: MessagePartialSigner,
   action: RingEnrolmentAction,
   timestamp: bigint | undefined,
-): Promise<ConfigAuthorityAuth> {
+): Promise<PolicyAuthorityAuth> {
   const signedAt = timestampOrNow(
     timestamp === undefined ? undefined : checkedUnixTimestamp(timestamp, "timestamp"),
   );

@@ -285,7 +285,7 @@ fn block(literal: &str, rings: &CuratedRings) -> String {
     literal.replace("$CURATOR", &rings.curator.program_id().to_string())
 }
 
-/// After `init` the project's `config_authority` key holds the policy role.
+/// After `init` the project's `policy_authority` key holds the policy role.
 fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<Subscriber> {
     let auditor = X25519Keypair::new();
     let ring_rpc = RingRpcSpec {

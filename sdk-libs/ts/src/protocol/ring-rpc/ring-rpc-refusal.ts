@@ -56,7 +56,7 @@ export const RingRpcRefusal = Object.freeze({
   notListWriter: -32226,
   readerGrantsInDatabase: -32230,
   enrolmentLists: -32240,
-  notConfigAuthority: -32241,
+  notPolicyAuthority: -32241,
   enrolmentBatch: -32242,
   unknownEnrolment: -32244,
   enrolmentWindow: -32245,

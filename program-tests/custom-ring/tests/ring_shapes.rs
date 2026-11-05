@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use super::*;
 use custom_ring_interface::{
     key_catalog::{FrameKey, RingCircuit, RingKey, TransferShape, RING_KEYS, TRANSFER_SHAPES},
-    ParsedTransact, DELIVERED_AUDIT_CAPACITIES,
+    ParsedTransact, TRANSFER_OUTPUT_CAPACITIES,
 };
 use custom_ring_sdk::BufferedFrame;
 use custom_ring_test_validator::{
@@ -924,7 +924,7 @@ impl ShapeRing<'_> {
 
     /// Each delivered capacity holds the in-proof owner's spent note once.
     fn in_proof_owners(&self, coverage: &mut Coverage) -> Result<()> {
-        for outputs in DELIVERED_AUDIT_CAPACITIES {
+        for outputs in TRANSFER_OUTPUT_CAPACITIES {
             restart_prover()?;
             let transfer = ShapeTransfer {
                 shape: Shape::new(1, outputs),

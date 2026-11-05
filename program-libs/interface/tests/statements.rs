@@ -580,7 +580,7 @@ fn compute_vectors() -> StatementVectors {
         registry: Some(DepositRegistry {
             own_root: &values.fields[16],
             curator_root: Some(&values.fields[20]),
-            policy_hash: Some(&values.fields[19]),
+            policy_hash: &values.fields[19],
         }),
     };
     StatementVectors {
@@ -676,8 +676,7 @@ fn compute_vectors() -> StatementVectors {
                 .map(hex::encode),
             policy_hash: deposit
                 .registry
-                .and_then(|registry| registry.policy_hash)
-                .map(hex::encode),
+                .map(|registry| hex::encode(registry.policy_hash)),
             elements: hexes(&deposit.elements().unwrap()),
             public_input_hash: hex::encode(deposit.hash().unwrap()),
         },

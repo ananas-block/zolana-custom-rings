@@ -260,7 +260,7 @@ describe("prepareAuthorityTransfer", () => {
 });
 
 describe("enrolment requests", () => {
-  it("signs the config authority's list and refusal byte for byte as the Rust vector", async () => {
+  it("signs the policy authority's list and refusal byte for byte as the Rust vector", async () => {
     type Signed = { message: string; wire: string };
     const vector = JSON.parse(
       readFileSync(

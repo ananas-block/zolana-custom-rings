@@ -71,7 +71,7 @@ pub fn run(args: NewArgs, ask: &mut dyn Ask, catalogue: Option<&str>) -> Result<
         program_id: Base58Address(program.pubkey()),
         authority_keypair: PathBuf::from(&args.authority_keypair),
         upgrade_authority_keypair: None,
-        config_authority_keypair: None,
+        policy_authority_keypair: None,
         admin_keypair: None,
         pauser_keypair: None,
         cosign_admin_keypair: None,
