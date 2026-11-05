@@ -8,7 +8,7 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import { SHIELDED_POOL_PROGRAM_ID, type Bytes16, type Bytes32 } from "@heliuslabs/zolana";
-import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "../../src/protocol/transaction/deposit-instruction.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
 import { RingInstructionTag } from "../../src/protocol/transaction/instruction-tag.js";
 import {
   encodeRingDepositCapsule,
@@ -16,6 +16,9 @@ import {
 } from "../../src/protocol/codec/deposit-capsule.js";
 
 /** Borsh `RingDepositOutput`, the capsule as its ciphertext. */
+
+/** A deposit prefix of zero bytes, its credential read names no state root, the wrapper parse only measures it. */
+export const ZERO_READ_DEPOSIT_PREFIX_LENGTH = 2 + CUSTOM_RING_PROOF_LENGTH + 3 + 16;
 export function ringDepositPayload(
   input: Readonly<{
     ring: Address;
@@ -73,7 +76,7 @@ export function confirmedDepositTransaction(
   const encode = getBase58Decoder();
   const wrapper = Uint8Array.of(
     RingInstructionTag.deposit,
-    ...new Uint8Array(AUDITED_DEPOSIT_PREFIX_LENGTH - 1),
+    ...new Uint8Array(ZERO_READ_DEPOSIT_PREFIX_LENGTH - 1),
     ...wire,
   );
   return {

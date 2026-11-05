@@ -20,10 +20,11 @@ import {
 import { OPENING_RECORD_LEN } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
+import { CredentialRead } from "../../../src/protocol/codec/credential-read.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
-const TRACKING = address("Stor111111111111111111111111111111111111111");
+const CREDENTIAL_TREE = address("Tree111111111111111111111111111111111111111");
 const PAYER = address("So11111111111111111111111111111111111111112");
 const OWNER = address("SysvarC1ock11111111111111111111111111111111");
 
@@ -68,8 +69,8 @@ async function instruction(owner?: typeof OWNER) {
     data: data(),
     outputRingDataHash: ZERO_32,
     sealed,
-    tracking: TRACKING,
-    trackingRevision: owner === undefined ? 7n : 0n,
+    credentialRead: owner === undefined ? CredentialRead.state(7) : CredentialRead.empty(),
+    ...(owner === undefined ? { credentialTree: CREDENTIAL_TREE } : {}),
     ...(owner === undefined ? {} : { owner }),
   });
 }
@@ -77,14 +78,14 @@ async function instruction(owner?: typeof OWNER) {
 describe("ring merge tag 57", () => {
   beforeAll(initializePoseidon);
 
-  it("a nonzero key names the ring authority and binds the tracking revision", async () => {
+  it("a nonzero key names the ring authority and reads one credential state root", async () => {
     const built = await instruction();
     const bytes = Uint8Array.from(built.data ?? []);
     expect(bytes[0]).toBe(RingInstructionTag.merge);
     const request = decodeRingMergeRequest(bytes.subarray(1));
     expect(request.authority).toBe(MergeRingAuthority.ring);
-    expect(request.trackingRevision).toBe(7n);
-    expect(built.accounts?.[1]?.address).toBe(TRACKING);
+    expect(request.credentialRead.stateRootIndexes).toEqual([7]);
+    expect(built.accounts?.[1]?.address).toBe(CREDENTIAL_TREE);
     expect(built.accounts).toHaveLength(8 + 2);
   });
 
@@ -92,9 +93,9 @@ describe("ring merge tag 57", () => {
     const built = await instruction(OWNER);
     const request = decodeRingMergeRequest(Uint8Array.from(built.data ?? []).subarray(1));
     expect(request.authority).toBe(MergeRingAuthority.ownerSigned);
-    expect(request.trackingRevision).toBe(0n);
-    // `[ring, tracking]` ahead of SPP's list, Rust `RING_MERGE_OWNER_INDEX` 6.
-    expect(built.accounts?.[2 + 6]?.address).toBe(OWNER);
+    expect(request.credentialRead.isEmpty).toBe(true);
+    // The ring alone ahead of SPP's list, Rust `RING_MERGE_OWNER_INDEX` 6.
+    expect(built.accounts?.[1 + 6]?.address).toBe(OWNER);
     expect(encodeMergeTransactInstructionData(data()).length).toBeGreaterThan(0);
   });
 

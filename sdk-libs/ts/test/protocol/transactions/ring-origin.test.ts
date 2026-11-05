@@ -32,7 +32,7 @@ import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction"
 import { RingError } from "../../../src/protocol/error.js";
 import { readMergeData } from "../../../src/protocol/codec/codecs.js";
 import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
-import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "../../../src/protocol/transaction/deposit-instruction.js";
+import { ZERO_READ_DEPOSIT_PREFIX_LENGTH } from "../../helpers/confirmed-deposits.js";
 import {
   ConfirmedDeposit,
   confirmedInstructionGroups,
@@ -1170,7 +1170,7 @@ describe("RpcTransactionOrigin", () => {
           Uint8Array.of(InstructionTag.emitEvent, 0),
           Uint8Array.of(
             RingInstructionTag.deposit,
-            ...zeros(AUDITED_DEPOSIT_PREFIX_LENGTH - 1),
+            ...zeros(ZERO_READ_DEPOSIT_PREFIX_LENGTH - 1),
             ...forwarded,
           ),
         ),
