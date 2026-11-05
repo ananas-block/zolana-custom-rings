@@ -14,6 +14,7 @@ import {
 import { STORAGE_PROGRAM_ID, trackingAuthorizationPda } from "../../../src/protocol/pda/index.js";
 import { LocalRingKeys } from "../../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../../src/state/viewing-history.js";
+import { withConfirmedReads } from "../../helpers/clients.js";
 
 const OWNER = address("7xKqmYUZ7pQHXcQnaZaZzR1oPjQb8kk8gA7XN3XxKzKq");
 const PAYER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
@@ -38,10 +39,10 @@ async function enrolled(holder: ShieldedKeypair, applied = 1) {
   data.fill(0x22, 161, 193);
   data.fill(0x33, 193, 257);
   data[257] = applied;
-  const client = {
+  const client = withConfirmedReads({
     getAccount: async (read: Address) =>
       read === pda ? { owner: STORAGE_PROGRAM_ID, data: data.slice(), lamports: 1n } : undefined,
-  };
+  });
   // A rotation writes the key alone, the applied flag stays.
   const enroll = (viewingU: Uint8Array) => data.set(viewingU, 129);
   return { client, enroll };

@@ -9,6 +9,7 @@ import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
 import { ShieldedKeypair, SigningKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
+import { withConfirmedReads } from "../../helpers/clients.js";
 import { listTagOf } from "../../../src/crypto/keys/list-salt.js";
 import {
   applyEnrollmentsInstruction,
@@ -66,9 +67,9 @@ function stored(fields: Partial<TrackingAuthorization> = {}): TrackingAuthorizat
   };
 }
 
-const unenrolled = {
+const unenrolled = withConfirmedReads({
   getAccount: async () => undefined,
-} as never;
+}) as never;
 
 function authorizationBytes(applied = 0, owner: Address = OWNER): Uint8Array {
   const data = new Uint8Array(258);
@@ -262,12 +263,12 @@ describe("enrollment instructions", () => {
   it("checks the stored authorization of the signing owner before it builds", async () => {
     const owner = await generateKeyPairSigner();
     const [authorization] = await trackingAuthorizationPda(REGISTRY, owner.address);
-    const enrolled = {
+    const enrolled = withConfirmedReads({
       getAccount: async (key: Address) =>
         key === authorization
           ? { owner: STORAGE_PROGRAM_ID, data: authorizationBytes(1, owner.address) }
           : undefined,
-    } as never;
+    }) as never;
     const enroll = (seal: EnrollmentSeal) =>
       enrollInstruction(
         { payer: owner, owner, trackingRegistry: REGISTRY, seal, viewingU: field(0x15) },
@@ -422,14 +423,16 @@ describe("proveEnrollment", () => {
     const getAccount = vi.fn(async (key: Address) =>
       key === account ? { owner: STORAGE_PROGRAM_ID, data: authorizationBytes(1) } : undefined,
     );
-    const state = await enrollmentState({ trackingRegistry: REGISTRY, owner: OWNER }, {
-      getAccount,
-    } as never);
+    const state = await enrollmentState(
+      { trackingRegistry: REGISTRY, owner: OWNER },
+      withConfirmedReads({ getAccount }) as never,
+    );
     expect(state?.applied).toBe(true);
     expect(
-      await enrollmentState({ trackingRegistry: REGISTRY, owner: REGISTRY }, {
-        getAccount,
-      } as never),
+      await enrollmentState(
+        { trackingRegistry: REGISTRY, owner: REGISTRY },
+        withConfirmedReads({ getAccount }) as never,
+      ),
     ).toBeUndefined();
   });
 });

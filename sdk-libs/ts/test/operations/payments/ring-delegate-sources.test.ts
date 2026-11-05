@@ -18,6 +18,7 @@ import {
 } from "@heliuslabs/zolana/transaction";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { withConfirmedReads } from "../../helpers/clients.js";
 import { openSealedDisclosure } from "../../../src/crypto/audit/ring-disclosure.js";
 import { x25519FromU } from "../../../src/crypto/keys/x25519.js";
 import { RecordKind } from "../../../src/protocol/codec/audit-stream.js";
@@ -317,24 +318,25 @@ describe("delegate sources", () => {
         spent: false,
       };
     };
-    const clientOf = (fixture: Fixture) => ({
-      ...fixture.client,
-      proofService: PROOF_SERVICE,
-      getLatestBlockhash: async () => BLOCKHASH,
-      ...kitReads({
-        solanaRpc: {
-          getProgramAccounts: () => ({
-            send: async () =>
-              SPL_MINTS.map(({ mint, assetId }) => ({
-                account: {
-                  owner: SHIELDED_POOL_PROGRAM_ID,
-                  data: [registryAccount(mint, assetId), "base64"],
-                },
-              })),
-          }),
-        },
-      }),
-    });
+    const clientOf = (fixture: Fixture) =>
+      withConfirmedReads({
+        ...fixture.client,
+        proofService: PROOF_SERVICE,
+        getLatestBlockhash: async () => BLOCKHASH,
+        ...kitReads({
+          solanaRpc: {
+            getProgramAccounts: () => ({
+              send: async () =>
+                SPL_MINTS.map(({ mint, assetId }) => ({
+                  account: {
+                    owner: SHIELDED_POOL_PROGRAM_ID,
+                    data: [registryAccount(mint, assetId), "base64"],
+                  },
+                })),
+            }),
+          },
+        }),
+      });
     const sourceOf = (
       fixture: Fixture,
       owner: ShieldedKeypair,
@@ -361,11 +363,11 @@ describe("delegate sources", () => {
       });
       const move = (notes: readonly WalletUtxo[]) =>
         buildRingDelegateRecoveredTransaction({
-          client: {
+          client: withConfirmedReads({
             ...client,
             getAccount: async (address: Address) =>
               address === second ? { ...first, data } : client.getAccount(address),
-          },
+          }),
           ringProgramId: fixture.ringProgramId,
           delegate: delegate as never,
           feePayer: fixture.authority,

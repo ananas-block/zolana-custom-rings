@@ -1,3 +1,4 @@
+import { withConfirmedReads } from "../../helpers/clients.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
 import {
@@ -1212,7 +1213,7 @@ describe("delegate move builder", () => {
     const ring = await ringPolicyAddress(fixture.ringProgramId);
     const reads = { ring: 0, openings: 0, proofsAtApproval: [] as number[] };
     const build = buildRingDelegateTransferTransaction({
-      client: {
+      client: withConfirmedReads({
         ...fixture.client,
         getAccount: async (address) => {
           if (address === ring) reads.ring += 1;
@@ -1226,7 +1227,7 @@ describe("delegate move builder", () => {
         ...kitReads({
           solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) },
         }),
-      },
+      }),
       ringProgramId: fixture.ringProgramId,
       wallet,
       source: walletKeys(source),

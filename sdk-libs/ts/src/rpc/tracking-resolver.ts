@@ -1,7 +1,7 @@
-import type { Address } from "@solana/kit";
+import { getBase64Encoder, type Address } from "@solana/kit";
 
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import { equalBytes, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
+import type { ChainReader, ZolanaClient } from "@heliuslabs/zolana/client";
+import { equalBytes, runKitRpc, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
@@ -20,7 +20,11 @@ import { STORAGE_PROGRAM_ID, trackingAuthorizationPda } from "../protocol/pda/in
 import type { BoundRoot } from "./registered-record.js";
 import type { TrackingReader } from "./ports.js";
 
+/** Reads a tracking authorization at `confirmed` whatever the client reads at, Rust `AsyncRpc::get_account`. */
+export type AuthorizationReader = Pick<ZolanaClient, "solanaRpc">;
+
 export type RingRecipientClient = Pick<ChainReader, "getAccount"> &
+  AuthorizationReader &
   Pick<TrackingReader, "getTrackingOpenings">;
 
 export type TrackingRoot = BoundRoot;
@@ -40,9 +44,8 @@ export type ResolvedRecipient =
 /**
  * Refuses what the output rule refuses outside a salted payee read.
  *
- * Reads the authorization at `confirmed`, the commitment `ZolanaClient` reads at unless configured
- * otherwise. A rotation that lands after the read leaves the payment sealed to the key read, no program
- * check reads a viewing key.
+ * Reads the authorization at `confirmed`. A rotation that lands after the read leaves the payment
+ * sealed to the key read, no program check reads a viewing key.
  */
 export async function resolveRingRecipient(
   input: Readonly<{ client: RingRecipientClient; trackingRegistry: Address; to: RingAddress }>,
@@ -85,7 +88,7 @@ export async function resolveRingRecipient(
 /** The viewing key an enrolled owner's authorization holds, its row present under the read root. */
 export async function enrolledViewingKey(
   input: Readonly<{
-    client: Pick<ChainReader, "getAccount">;
+    client: AuthorizationReader;
     trackingRegistry: Address;
     owner: ShieldedAddress;
   }>,
@@ -108,18 +111,24 @@ export async function enrolledViewingKey(
 /** `undefined` before the owner's first enrollment, an account another program, registry or owner holds refuses. */
 export async function readTrackingAuthorization(
   input: Readonly<{
-    client: Pick<ChainReader, "getAccount">;
+    client: AuthorizationReader;
     trackingRegistry: Address;
     owner: Address;
   }>,
   context?: RequestContext,
 ): Promise<TrackingAuthorization | undefined> {
   const [address] = await trackingAuthorizationPda(input.trackingRegistry, input.owner);
-  const account = await input.client.getAccount(address, context);
-  if (account === undefined) return undefined;
+  const { value: account } = await runKitRpc("getAccountInfo", context, (abortSignal) =>
+    input.client.solanaRpc
+      .getAccountInfo(address, { commitment: "confirmed", encoding: "base64" })
+      .send({ abortSignal }),
+  );
+  if (account === null) return undefined;
   if (account.owner !== STORAGE_PROGRAM_ID)
     throw new RingError("RING_TRACKING_INVALID", { details: { reason: "authorization program" } });
-  const authorization = decodeTrackingAuthorization(account.data);
+  const authorization = decodeTrackingAuthorization(
+    getBase64Encoder().encode(account.data[0]) as Uint8Array,
+  );
   if (authorization.registry !== input.trackingRegistry)
     throw new RingError("RING_TRACKING_INVALID", { details: { reason: "authorization registry" } });
   if (authorization.owner !== input.owner)

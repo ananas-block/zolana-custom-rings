@@ -109,6 +109,7 @@ import { type RingKeys } from "../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
 import { RingAddress, RingPaymentRequest } from "../../src/crypto/keys/ring-address.js";
 import { RingProgramError, createRingDepositSubmission } from "../../src/index.js";
+import { withConfirmedReads } from "../helpers/clients.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = treeAddress(0);
@@ -547,7 +548,7 @@ describe("ring deposit builder", () => {
       return new Uint8Array(192).fill(9);
     });
     const sources = input.table === undefined ? undefined : ownSources(input.table);
-    const client: RingDepositClient = {
+    const client: RingDepositClient = withConfirmedReads({
       tree: TREE,
       treeId: 0,
       getLatestBlockhash: async () => BLOCKHASH,
@@ -597,7 +598,7 @@ describe("ring deposit builder", () => {
         }) satisfies StorageRecordPool,
       getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
       proveRing,
-    };
+    });
     return { client, requests, proveRing };
   }
 

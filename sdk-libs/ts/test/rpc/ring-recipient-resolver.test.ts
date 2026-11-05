@@ -8,6 +8,7 @@ import { poseidon, ZERO_32, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/interna
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ShieldedAddress, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
 
+import { withConfirmedReads } from "../helpers/clients.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
 import { readOutputKeys } from "../../src/operations/workflow/ring-reads.js";
 import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
@@ -53,10 +54,10 @@ function chain(
   const path = { index: 0, siblings };
   const opening: TrackingOpening =
     kind === "present" ? { kind, record: leaf, path } : { kind, low: leaf, path };
-  return {
+  return withConfirmedReads({
     getAccount: async (read: Address) => (read === REGISTRY ? { data } : authorizations.get(read)),
     getTrackingOpenings: async () => ({ slot: 1n, root, revision: 0n, openings: [opening] }),
-  } as unknown as RingRecipientClient;
+  } as unknown as RingRecipientClient);
 }
 
 /** `fields` overrides the authorization the account holds for the addressed owner. */

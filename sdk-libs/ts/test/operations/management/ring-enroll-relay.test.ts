@@ -32,6 +32,7 @@ import {
 import type { RelayStatus } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
 import { PendingRelaySignature, type RingRelayClient } from "../../../src/rpc/relay.js";
 import { filled, ringFixture } from "../../helpers/ring-pipeline.js";
+import { withConfirmedReads } from "../../helpers/clients.js";
 
 const address = (byte: number): Address => encodeBase58(new Uint8Array(32).fill(byte)) as Address;
 const FEE_PAYER = address(0x44);
@@ -123,7 +124,7 @@ describe("relayed enrollment", () => {
         seal: SEAL,
         viewingU: filled(5),
       },
-      { getAccount: async () => undefined },
+      withConfirmedReads({ getAccount: async () => undefined }),
     );
     const relayed = await relayEnrollInstruction(inputsOf(owner.address), FEE_PAYER);
     expect(relayed.accounts).toEqual(built.accounts);
@@ -183,7 +184,7 @@ describe("relayed enrollment", () => {
           owner,
           quote,
         },
-        { getAccount: async () => undefined },
+        withConfirmedReads({ getAccount: async () => undefined }),
       ),
     ).rejects.toMatchObject({ code: "RING_RELAY_PAYER_MISMATCH" });
   });

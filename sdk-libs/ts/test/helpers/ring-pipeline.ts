@@ -90,6 +90,7 @@ import {
   matchesPage,
   transactionsPage,
 } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { confirmedAccountReads } from "./clients.js";
 import type { TrackingEntry } from "../../src/protocol/membership/tracking.js";
 import { recordTree, trackingTree, type FixtureRecord } from "./member-registry.js";
 import {
@@ -442,6 +443,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     tree: TREE,
     treeId: TREE_ID,
     ...reader,
+    solanaRpc: confirmedAccountReads(reader.getAccount),
     proveRing: async (request: RingProofRequest): Promise<Uint8Array> => {
       ringRequests.push(structuredClone(request));
       proofs += 1;

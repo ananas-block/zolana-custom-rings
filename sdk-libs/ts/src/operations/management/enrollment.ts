@@ -35,7 +35,10 @@ import {
 import { registerKeyStatementHash } from "../../protocol/proof/statement.js";
 import { enrollAccounts } from "../../protocol/ring-rpc/relay-enroll-inputs.js";
 import type { RingProver } from "../../rpc/ports.js";
-import { readTrackingAuthorization } from "../../rpc/tracking-resolver.js";
+import {
+  readTrackingAuthorization,
+  type AuthorizationReader,
+} from "../../rpc/tracking-resolver.js";
 import { readerKeyBytes, type ReaderKey } from "./reader-access.js";
 import { sealNullifierKey } from "./register-key.js";
 
@@ -85,7 +88,7 @@ export async function enrollInstruction(
   return instruction(writer.finish(), await enrollAccounts(input, owner), STORAGE_PROGRAM_ID);
 }
 
-export type EnrollmentReadClient = Pick<ChainReader, "getAccount">;
+export type EnrollmentReadClient = Pick<ChainReader, "getAccount"> & AuthorizationReader;
 
 /** `undefined` before the owner's first enrollment. */
 export async function enrollmentState(

@@ -6,6 +6,7 @@ import { poseidon, ZERO_32, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/interna
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
+import { withConfirmedReads } from "../helpers/clients.js";
 import { listTagOf } from "../../src/crypto/keys/list-salt.js";
 import {
   readDepositSection,
@@ -127,7 +128,7 @@ async function client(
     listTag: leaf.listTag,
     viewingU,
   });
-  return {
+  return withConfirmedReads({
     getAccount: async (read: Address) => {
       if (read === TRACKING) return { data: chain.data };
       if (read === authorization) return account;
@@ -139,7 +140,7 @@ async function client(
       root: { root: records.root, revision: 3n, nextIndex: records.nextIndex },
       ...records.pool(request.members, request.openings),
     }),
-  } as unknown as PolicyReadClient;
+  } as unknown as PolicyReadClient);
 }
 
 let RECIPIENT: ShieldedAddress;

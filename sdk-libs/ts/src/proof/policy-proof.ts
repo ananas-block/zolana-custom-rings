@@ -68,7 +68,11 @@ import {
 } from "../protocol/membership/policy.js";
 import { verifyTrackingPool, type TrackingRecord } from "../protocol/membership/tracking.js";
 import { fetchBoundRoot, readRecordPool, type BoundRoot } from "../rpc/registered-record.js";
-import { enrolledViewingKey, newestTrackingRoot } from "../rpc/tracking-resolver.js";
+import {
+  enrolledViewingKey,
+  newestTrackingRoot,
+  type AuthorizationReader,
+} from "../rpc/tracking-resolver.js";
 import type { TransferRoots } from "../protocol/proof/statement.js";
 import {
   depositKeyCapacity,
@@ -96,6 +100,7 @@ export interface BoundPolicy {
 
 /** Rust `GetTrackingRecordPool`, the pool's canopy needs nodes no single opening's path holds. */
 export type PolicyReadClient = Pick<ChainReader, "getAccount"> &
+  AuthorizationReader &
   Pick<RingRecordReader, "getStorageRecordPool"> &
   Pick<TrackingReader, "getTrackingRecordPool">;
 
@@ -880,7 +885,7 @@ export function checkOutputKeys(
  */
 export async function readPayeeViewingKeys(
   input: Readonly<{
-    client: Pick<ChainReader, "getAccount">;
+    client: AuthorizationReader;
     trackingRegistry: Address;
     owners: readonly ShieldedAddress[];
   }>,
